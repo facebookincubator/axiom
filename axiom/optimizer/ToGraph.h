@@ -441,21 +441,36 @@ class ToGraph {
       const logical_plan::ExprPtr& expr,
       bool& mayFinalize);
 
+  // Batched variant: extracts subqueries from all expressions into a single
+  // batch, then deduplicates and merges across the full set. Use this instead
+  // of calling the single-expression variant in a loop — it enables
+  // deduplication and merging across expressions (e.g., across projection
+  // columns).
+  void processSubqueries(
+      const logical_plan::LogicalPlanNode& input,
+      const std::vector<logical_plan::ExprPtr>& exprs,
+      bool& mayFinalize);
+
   // Processes scalar subqueries, creating DTs and joins for each.
   // Populates subqueries_ with mappings from subquery expressions to columns.
+  // mergeMapping maps each original subquery in a merge group to its aggregate
+  // output index in the merged representative.
   void processScalarSubqueries(
       const logical_plan::LogicalPlanNode& input,
-      const std::vector<logical_plan::SubqueryExprPtr>& scalars);
+      const std::vector<logical_plan::SubqueryExprPtr>& scalars,
+      const folly::F14FastMap<
+          logical_plan::SubqueryExprPtr,
+          std::pair<logical_plan::SubqueryExprPtr, size_t>>& mergeMapping);
 
   // Processes an uncorrelated scalar subquery. Attempts constant folding,
-  // otherwise ensures single row. Returns the expression to map to the
-  // subquery.
-  ExprCP processUncorrelatedScalarSubquery(DerivedTableP subqueryDt);
+  // otherwise ensures single row. Returns one expression per aggregate output.
+  std::vector<ExprCP> processUncorrelatedScalarSubquery(
+      DerivedTableP subqueryDt);
 
   // Processes a correlated scalar subquery. Creates LEFT join with
   // decorrelation, handling both equi-only and non-equi correlation.
-  // Returns the expression to map to the subquery.
-  ExprCP processCorrelatedScalarSubquery(
+  // Returns one expression per aggregate output (possibly COALESCE-wrapped).
+  std::vector<ExprCP> processCorrelatedScalarSubquery(
       const logical_plan::LogicalPlanNode& input,
       DerivedTableP subqueryDt);
 
@@ -508,6 +523,12 @@ class ToGraph {
   DerivedTableP translateSubquery(
       const logical_plan::LogicalPlanNode& node,
       bool finalize = true);
+
+  // Registers all output channels of a LogicalPlanNode tree as used in the
+  // subfield tracker. Used for synthetic merged nodes that were not part of
+  // the original plan traversal, so that translateSubquery and
+  // translateAggregation can process them correctly.
+  void registerAllChannelsAsUsed(const logical_plan::LogicalPlanNode& node);
 
   // Appends `arbitrary` aggregates for all columns used from 'input'.
   // Used when decorrelating non-equi correlated subqueries. Since the
@@ -566,6 +587,13 @@ class ToGraph {
   // Maps an expression that contains a subquery to a column or constant that
   // should be used instead. Populated in 'processSubqueries()'.
   folly::F14FastMap<logical_plan::ExprPtr, ExprCP> subqueries_;
+
+  // For merged scalar subqueries, maps the merged SubqueryExprPtr to all its
+  // aggregate result columns (one per original aggregate in the merged plan).
+  // Populated in processScalarSubqueries, consumed in processSubqueries to map
+  // each original subquery to its specific column.
+  folly::F14FastMap<logical_plan::SubqueryExprPtr, std::vector<ExprCP>>
+      mergedColumns_;
 
   folly::
       F14FastMap<TypedVariant, ExprCP, TypedVariantHasher, TypedVariantComparer>

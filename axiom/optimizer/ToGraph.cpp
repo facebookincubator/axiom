@@ -1461,25 +1461,24 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
   const auto numGroupingKeys = agg.groupingKeys().size();
   const auto channels = usedChannels(agg);
   {
-    bool mayFinalize = true;
+    std::vector<lp::ExprPtr> allExprs;
     for (const auto& key : agg.groupingKeys()) {
-      processSubqueries(input, key, mayFinalize);
+      allExprs.push_back(key);
     }
-
     for (auto channel : channels) {
       if (channel < numGroupingKeys) {
         continue;
       }
-
       const auto& aggregate = agg.aggregates()[channel - numGroupingKeys];
-
       for (const auto& expr : aggregate->inputs()) {
-        processSubqueries(input, expr, mayFinalize);
+        allExprs.push_back(expr);
       }
       if (aggregate->filter()) {
-        processSubqueries(input, aggregate->filter(), mayFinalize);
+        allExprs.push_back(aggregate->filter());
       }
     }
+    bool mayFinalize = true;
+    processSubqueries(input, allExprs, mayFinalize);
   }
 
   ColumnVector columns;
@@ -2295,8 +2294,13 @@ void ToGraph::addProjection(const lp::ProjectNode& project) {
   });
 
   bool mayFinalize = true;
-  for (auto i : channels) {
-    processSubqueries(input, exprs[i], mayFinalize);
+  {
+    std::vector<lp::ExprPtr> allExprs;
+    allExprs.reserve(channels.size());
+    for (auto i : channels) {
+      allExprs.push_back(exprs[i]);
+    }
+    processSubqueries(input, allExprs, mayFinalize);
   }
 
   QGVector<WindowFunctionCP> windowFunctions;
@@ -2713,6 +2717,57 @@ bool isSameComputation(
   }
 }
 
+// Compares two scalar subquery plans for merge compatibility. Returns true if
+// the plans are identical below the top-level node, and the top-level node has
+// the same kind and (for aggregates) the same grouping keys. The top-level
+// aggregate functions or project expressions may differ — those will be merged.
+bool isSameMergeKey(
+    const lp::LogicalPlanNode& left,
+    const lp::LogicalPlanNode& right) {
+  if (&left == &right) {
+    return true;
+  }
+  if (left.kind() != right.kind()) {
+    return false;
+  }
+
+  // Inputs must be fully identical (same computation below the top node).
+  if (left.inputs().size() != right.inputs().size()) {
+    return false;
+  }
+  for (size_t i = 0; i < left.inputs().size(); ++i) {
+    if (!isSameComputation(*left.inputs()[i], *right.inputs()[i])) {
+      return false;
+    }
+  }
+
+  // Top-level node: compare structure but not outputs.
+  switch (left.kind()) {
+    case lp::NodeKind::kAggregate: {
+      // Same grouping keys + grouping sets, but aggregates may differ.
+      const auto* leftAgg = left.as<lp::AggregateNode>();
+      const auto* rightAgg = right.as<lp::AggregateNode>();
+      auto leftOrdinals = buildNameToOrdinal(*left.inputs()[0]->outputType());
+      auto rightOrdinals = buildNameToOrdinal(*right.inputs()[0]->outputType());
+      if (!exprVectorsEquivalent(
+              leftAgg->groupingKeys(),
+              rightAgg->groupingKeys(),
+              leftOrdinals,
+              rightOrdinals)) {
+        return false;
+      }
+      return leftAgg->groupingSets() == rightAgg->groupingSets();
+    }
+    case lp::NodeKind::kProject: {
+      // Same input, but project expressions may differ.
+      return true;
+    }
+    default:
+      // For other top-level nodes, fall back to full comparison.
+      return isSameComputation(left, right);
+  }
+}
+
 // Compares two SubqueryExpr objects for computational equivalence. Handles
 // scalar subqueries directly. For IN and EXISTS (wrapped in SpecialFormExpr),
 // compares the entire SpecialFormExpr structure including both the left key
@@ -2767,7 +2822,152 @@ bool subqueryExprEquivalent(const lp::Expr& left, const lp::Expr& right) {
   return false;
 }
 
+// Remaps InputReferenceExpr names in an AggregateExpr. Used when merging
+// aggregate expressions from different subquery plans that reference the same
+// data through different column names.
+lp::AggregateExprPtr remapAggregateInputNames(
+    const lp::AggregateExpr& agg,
+    const folly::F14FastMap<std::string, std::string>& nameMapping) {
+  // Remap each input of the aggregate expression.
+  std::vector<lp::ExprPtr> remappedInputs;
+  remappedInputs.reserve(agg.inputs().size());
+  for (const auto& input : agg.inputs()) {
+    if (input->isInputReference()) {
+      const auto& name = input->as<lp::InputReferenceExpr>()->name();
+      auto it = nameMapping.find(name);
+      remappedInputs.push_back(
+          std::make_shared<lp::InputReferenceExpr>(
+              input->type(), it != nameMapping.end() ? it->second : name));
+    } else {
+      // For constants and other non-reference expressions, keep as-is.
+      remappedInputs.push_back(input);
+    }
+  }
+
+  lp::ExprPtr remappedFilter;
+  if (agg.filter()) {
+    if (agg.filter()->isInputReference()) {
+      const auto& name = agg.filter()->as<lp::InputReferenceExpr>()->name();
+      auto it = nameMapping.find(name);
+      remappedFilter = std::make_shared<lp::InputReferenceExpr>(
+          agg.filter()->type(), it != nameMapping.end() ? it->second : name);
+    } else {
+      remappedFilter = agg.filter();
+    }
+  }
+
+  return std::make_shared<lp::AggregateExpr>(
+      agg.type(),
+      agg.name(),
+      std::move(remappedInputs),
+      std::move(remappedFilter),
+      agg.ordering(),
+      agg.isDistinct());
+}
+
+// Builds a merged LogicalPlanNode for a group of scalar subqueries that share
+// the same merge key (same subtree below the top-level aggregate/project).
+// Returns a new SubqueryExpr wrapping an AggregateNode with combined aggregates
+// and a vector mapping each original subquery index to its aggregate output
+// index in the merged node (relative to the first aggregate, after grouping
+// keys).
+std::pair<lp::SubqueryExprPtr, std::vector<size_t>> buildMergedPlan(
+    const std::vector<lp::SubqueryExprPtr>& group) {
+  VELOX_CHECK_GE(group.size(), 2);
+
+  // All top-level nodes must be AggregateNodes (merge for ProjectNodes is a
+  // future extension).
+  const auto* representative = group[0]->subquery()->as<lp::AggregateNode>();
+  VELOX_CHECK_NOT_NULL(representative);
+
+  // Collect combined aggregates and output names from all group members.
+  auto groupingKeys = representative->groupingKeys();
+  auto groupingSets = representative->groupingSets();
+  const auto& representativeChild = *representative->inputs()[0];
+
+  std::vector<lp::AggregateExprPtr> mergedAggregates;
+  std::vector<std::string> mergedOutputNames;
+  std::vector<size_t> outputIndices;
+
+  // Add grouping key output names from the representative.
+  for (size_t i = 0; i < groupingKeys.size(); ++i) {
+    mergedOutputNames.push_back(representative->outputNames()[i]);
+  }
+
+  // Add aggregates from each group member. Non-representative members need
+  // their InputReferenceExpr names remapped to the representative child's
+  // column names (they share the same structure by position but have different
+  // planner-generated name suffixes).
+  for (size_t groupIdx = 0; groupIdx < group.size(); ++groupIdx) {
+    const auto* aggNode = group[groupIdx]->subquery()->as<lp::AggregateNode>();
+    VELOX_CHECK_NOT_NULL(aggNode);
+
+    outputIndices.push_back(mergedAggregates.size());
+
+    // Build name mapping from this member's child output names to the
+    // representative's child output names (by position).
+    folly::F14FastMap<std::string, std::string> nameMapping;
+    if (groupIdx > 0) {
+      const auto& memberChild = *aggNode->inputs()[0];
+      const auto& repType = *representativeChild.outputType();
+      const auto& memType = *memberChild.outputType();
+      VELOX_CHECK_EQ(repType.size(), memType.size());
+      for (size_t i = 0; i < repType.size(); ++i) {
+        if (repType.nameOf(i) != memType.nameOf(i)) {
+          nameMapping[memType.nameOf(i)] = repType.nameOf(i);
+        }
+      }
+    }
+
+    for (size_t i = 0; i < aggNode->aggregates().size(); ++i) {
+      if (nameMapping.empty()) {
+        // Representative or no name differences — use as-is.
+        mergedAggregates.push_back(aggNode->aggregates()[i]);
+      } else {
+        // Remap input references to use the representative's column names.
+        mergedAggregates.push_back(
+            remapAggregateInputNames(*aggNode->aggregates()[i], nameMapping));
+      }
+
+      // Use a unique output name to avoid collisions between subqueries.
+      auto outputName =
+          aggNode->outputNames()[aggNode->groupingKeys().size() + i];
+      // Append group index suffix for non-representative members to ensure
+      // uniqueness.
+      if (groupIdx > 0) {
+        outputName += "_m" + std::to_string(groupIdx);
+      }
+      mergedOutputNames.push_back(std::move(outputName));
+    }
+  }
+
+  // Create merged AggregateNode reusing the representative's child.
+  auto mergedNode = std::make_shared<lp::AggregateNode>(
+      representative->id() + "_merged",
+      representative->inputs()[0],
+      std::move(groupingKeys),
+      std::move(groupingSets),
+      std::move(mergedAggregates),
+      std::move(mergedOutputNames));
+
+  return {
+      std::make_shared<lp::SubqueryExpr>(std::move(mergedNode)),
+      std::move(outputIndices),
+  };
+}
+
 } // namespace
+
+void ToGraph::registerAllChannelsAsUsed(const lp::LogicalPlanNode& node) {
+  auto& fields = controlSubfields_.nodeFields[&node];
+  for (int32_t i = 0; i < static_cast<int32_t>(node.outputType()->size());
+       ++i) {
+    fields.resultPaths.try_emplace(i);
+  }
+  for (const auto& child : node.inputs()) {
+    registerAllChannelsAsUsed(*child);
+  }
+}
 
 DerivedTableP ToGraph::translateSubquery(
     const logical_plan::LogicalPlanNode& node,
@@ -3021,8 +3221,17 @@ void ToGraph::processSubqueries(
     const lp::LogicalPlanNode& input,
     const lp::ExprPtr& expr,
     bool& mayFinalize) {
+  processSubqueries(input, std::vector<lp::ExprPtr>{expr}, mayFinalize);
+}
+
+void ToGraph::processSubqueries(
+    const lp::LogicalPlanNode& input,
+    const std::vector<lp::ExprPtr>& exprs,
+    bool& mayFinalize) {
   Subqueries subqueries;
-  extractSubqueries(expr, subqueries);
+  for (const auto& expr : exprs) {
+    extractSubqueries(expr, subqueries);
+  }
 
   if (subqueries.empty()) {
     return;
@@ -3067,6 +3276,78 @@ void ToGraph::processSubqueries(
   dedupBatch(subqueries.inPredicates);
   dedupBatch(subqueries.exists);
 
+  // Within-batch merge: group scalar subqueries that share the same merge key
+  // (same subtree below the top-level aggregate, same grouping keys, but
+  // different aggregate functions). Each merge group produces a single merged
+  // SubqueryExpr with combined aggregates.
+  // Maps each original SubqueryExprPtr to (merged representative, aggregate
+  // output index in the merged plan).
+  folly::F14FastMap<lp::SubqueryExprPtr, std::pair<lp::SubqueryExprPtr, size_t>>
+      mergeMapping;
+  {
+    // Group scalar subqueries by merge key.
+    std::vector<std::vector<size_t>> mergeGroups;
+    for (size_t i = 0; i < subqueries.scalars.size(); ++i) {
+      // Only merge subqueries whose top-level node is an AggregateNode.
+      if (subqueries.scalars[i]->subquery()->kind() !=
+          lp::NodeKind::kAggregate) {
+        continue;
+      }
+
+      // Skip uncorrelated global aggregations (no grouping keys, child is a
+      // bare scan or values). These are typically constant-foldable and should
+      // remain separate for independent constant folding.
+      const auto* aggNode =
+          subqueries.scalars[i]->subquery()->as<lp::AggregateNode>();
+      if (aggNode->groupingKeys().empty() &&
+          aggNode->inputs()[0]->kind() == lp::NodeKind::kTableScan) {
+        continue;
+      }
+
+      bool found = false;
+      for (auto& group : mergeGroups) {
+        if (isSameMergeKey(
+                *subqueries.scalars[group[0]]->subquery(),
+                *subqueries.scalars[i]->subquery())) {
+          group.push_back(i);
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        mergeGroups.push_back({i});
+      }
+    }
+
+    // For groups with >1 member, build merged plans and replace in the list.
+    // Process groups in reverse order so erasing doesn't invalidate indices.
+    for (const auto& group : mergeGroups) {
+      if (group.size() < 2) {
+        continue;
+      }
+
+      std::vector<lp::SubqueryExprPtr> groupExprs;
+      groupExprs.reserve(group.size());
+      for (auto idx : group) {
+        groupExprs.push_back(subqueries.scalars[idx]);
+      }
+
+      auto [mergedExpr, outputIndices] = buildMergedPlan(groupExprs);
+
+      // Map each original to its output index in the merged plan.
+      for (size_t i = 0; i < groupExprs.size(); ++i) {
+        mergeMapping[groupExprs[i]] = {mergedExpr, outputIndices[i]};
+      }
+
+      // Replace group members in subqueries.scalars: keep the first slot for
+      // the merged representative, erase the rest.
+      subqueries.scalars[group[0]] = mergedExpr;
+      for (size_t i = group.size() - 1; i >= 1; --i) {
+        subqueries.scalars.erase(subqueries.scalars.begin() + group[i]);
+      }
+    }
+  }
+
   if (subqueries.empty()) {
     return;
   }
@@ -3101,7 +3382,7 @@ void ToGraph::processSubqueries(
     }
   }
 
-  processScalarSubqueries(input, subqueries.scalars);
+  processScalarSubqueries(input, subqueries.scalars, mergeMapping);
   processInPredicates(subqueries.inPredicates);
   processExistsSubqueries(subqueries.exists);
 
@@ -3114,47 +3395,90 @@ void ToGraph::processSubqueries(
     auto result = it->second;
     subqueries_.emplace(duplicate, result);
   }
+
+  // Map merged originals to their specific output columns.
+  for (const auto& [original, mergeInfo] : mergeMapping) {
+    const auto& [merged, outputIndex] = mergeInfo;
+    auto it = mergedColumns_.find(merged);
+    VELOX_CHECK(
+        it != mergedColumns_.end(),
+        "Merged subquery columns not found after processing");
+    VELOX_CHECK_LT(outputIndex, it->second.size());
+    subqueries_.emplace(original, it->second[outputIndex]);
+  }
 }
 
 void ToGraph::processScalarSubqueries(
     const lp::LogicalPlanNode& input,
-    const std::vector<lp::SubqueryExprPtr>& scalars) {
+    const std::vector<lp::SubqueryExprPtr>& scalars,
+    const folly::F14FastMap<
+        lp::SubqueryExprPtr,
+        std::pair<lp::SubqueryExprPtr, size_t>>& mergeMapping) {
+  // Collect merged representatives for quick lookup.
+  folly::F14FastSet<lp::SubqueryExprPtr> mergedRepresentatives;
+  for (const auto& [original, mergeInfo] : mergeMapping) {
+    mergedRepresentatives.insert(mergeInfo.first);
+  }
+
   for (const auto& subquery : scalars) {
+    // For merged representatives (synthetic nodes not in the subfield tracker),
+    // register all channels as used so that translateSubquery and
+    // translateAggregation process all aggregates and columns.
+    if (mergedRepresentatives.contains(subquery)) {
+      registerAllChannelsAsUsed(*subquery->subquery());
+    }
+
     auto subqueryDt = translateSubquery(*subquery->subquery());
 
-    ExprCP column;
+    std::vector<ExprCP> columns;
     if (correlatedConjuncts_.empty()) {
-      column = processUncorrelatedScalarSubquery(subqueryDt);
+      columns = processUncorrelatedScalarSubquery(subqueryDt);
     } else {
-      column = processCorrelatedScalarSubquery(input, subqueryDt);
+      columns = processCorrelatedScalarSubquery(input, subqueryDt);
     }
-    subqueries_.emplace(subquery, column);
+
+    // For merged representatives, store all result columns for later mapping.
+    // For non-merged subqueries, store the single result column directly.
+    if (mergedRepresentatives.contains(subquery)) {
+      mergedColumns_[subquery] = std::move(columns);
+    } else {
+      VELOX_CHECK_EQ(columns.size(), 1);
+      subqueries_.emplace(subquery, columns.front());
+    }
   }
 }
 
-ExprCP ToGraph::processUncorrelatedScalarSubquery(DerivedTableP subqueryDt) {
-  VELOX_CHECK_EQ(1, subqueryDt->columns.size());
+std::vector<ExprCP> ToGraph::processUncorrelatedScalarSubquery(
+    DerivedTableP subqueryDt) {
+  if (subqueryDt->columns.size() == 1) {
+    if (auto valuesNode = tryFoldConstantDt(subqueryDt, evaluator_.pool())) {
+      VELOX_CHECK_EQ(1, valuesNode->outputType()->size());
+      if (valuesNode->cardinality() == 1) {
+        // Replace subquery with a constant value.
+        const auto value =
+            std::get<std::vector<velox::RowVectorPtr>>(valuesNode->data())
+                .front()
+                ->childAt(0)
+                ->variantAt(0);
+        const auto* literal = make<Literal>(
+            toConstantValue(valuesNode->outputType()->childAt(0)),
+            registerVariant(value));
 
-  if (auto valuesNode = tryFoldConstantDt(subqueryDt, evaluator_.pool())) {
-    VELOX_CHECK_EQ(1, valuesNode->outputType()->size());
-    if (valuesNode->cardinality() == 1) {
-      // Replace subquery with a constant value.
-      const auto value =
-          std::get<std::vector<velox::RowVectorPtr>>(valuesNode->data())
-              .front()
-              ->childAt(0)
-              ->variantAt(0);
-      const auto* literal = make<Literal>(
-          toConstantValue(valuesNode->outputType()->childAt(0)),
-          registerVariant(value));
-
-      currentDt_->removeLastTable(subqueryDt);
-      return literal;
+        currentDt_->removeLastTable(subqueryDt);
+        return {literal};
+      }
     }
   }
 
   subqueryDt->ensureSingleRow();
-  return subqueryDt->columns.front();
+
+  // Return all columns (one per aggregate for merged subqueries).
+  std::vector<ExprCP> results;
+  results.reserve(subqueryDt->columns.size());
+  for (auto* column : subqueryDt->columns) {
+    results.push_back(column);
+  }
+  return results;
 }
 
 namespace {
@@ -3171,7 +3495,7 @@ Literal* tryMakeLiteralForEmptyInput(AggregateCP agg) {
 }
 } // namespace
 
-ExprCP ToGraph::processCorrelatedScalarSubquery(
+std::vector<ExprCP> ToGraph::processCorrelatedScalarSubquery(
     const lp::LogicalPlanNode& input,
     DerivedTableP subqueryDt) {
   auto correlation =
@@ -3184,8 +3508,9 @@ ExprCP ToGraph::processCorrelatedScalarSubquery(
     VELOX_CHECK_EQ(1, subqueryDt->columns.size());
   } else if (hasAggregation) {
     // For equi-only correlation with aggregation, expect grouping keys +
-    // aggregate result.
-    VELOX_CHECK_EQ(correlatedConjuncts_.size() + 1, subqueryDt->columns.size());
+    // aggregate result(s). A merged subquery may have multiple aggregate
+    // results.
+    VELOX_CHECK_GE(subqueryDt->columns.size(), correlatedConjuncts_.size() + 1);
   } else {
     // For equi-only correlation without aggregation, expect only 1 column (the
     // subquery result).
@@ -3206,21 +3531,32 @@ ExprCP ToGraph::processCorrelatedScalarSubquery(
 
     currentDt_->joins.push_back(join);
 
-    auto* aggregateResult = subqueryDt->columns.back();
+    // Build result columns for each aggregate output. Aggregate columns start
+    // after the grouping key columns.
+    const auto numGroupingKeys = correlation.leftKeys.size();
+    const auto numAggregates = subqueryDt->columns.size() - numGroupingKeys;
+    std::vector<ExprCP> results;
+    results.reserve(numAggregates);
 
-    auto* agg = subqueryDt->aggregation->aggregates().back();
-    if (auto* literal = tryMakeLiteralForEmptyInput(agg)) {
-      // Wrap with COALESCE for aggregates that return non-NULL for empty input.
-      // LEFT JOIN returns NULL for outer rows with no matches, but count-like
-      // aggregates should return 0 (or similar default) instead.
-      return make<Call>(
-          SpecialFormCallNames::kCoalesce,
-          aggregateResult->value(),
-          ExprVector{aggregateResult, literal},
-          FunctionSet());
+    for (size_t i = 0; i < numAggregates; ++i) {
+      auto* aggregateResult = subqueryDt->columns[numGroupingKeys + i];
+      auto* agg = subqueryDt->aggregation->aggregates()[i];
+      if (auto* literal = tryMakeLiteralForEmptyInput(agg)) {
+        // Wrap with COALESCE for aggregates that return non-NULL for empty
+        // input. LEFT JOIN returns NULL for outer rows with no matches, but
+        // count-like aggregates should return 0 (or similar default) instead.
+        results.push_back(
+            make<Call>(
+                SpecialFormCallNames::kCoalesce,
+                aggregateResult->value(),
+                ExprVector{aggregateResult, literal},
+                FunctionSet()));
+      } else {
+        results.push_back(aggregateResult);
+      }
     }
 
-    return aggregateResult;
+    return results;
   }
 
   if (!hasAggregation) {
@@ -3257,7 +3593,7 @@ ExprCP ToGraph::processCorrelatedScalarSubquery(
     // The first column is the subquery's original output (the SELECT
     // expression). Subsequent columns are correlation keys added via
     // exportExpr.
-    return subqueryDt->columns.front();
+    return {subqueryDt->columns.front()};
   }
 
   // Non-equi correlation with aggregation: use AssignUniqueId + LEFT JOIN +
@@ -3299,7 +3635,7 @@ ExprCP ToGraph::processCorrelatedScalarSubquery(
   currentDt_->aggregation = make<AggregationPlan>(
       ExprVector{rowNumberColumn}, allAggregates, allColumns, allColumns);
 
-  return aggResultColumn;
+  return {aggResultColumn};
 }
 
 void ToGraph::processInPredicates(

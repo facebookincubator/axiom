@@ -1206,33 +1206,174 @@ TEST_F(SubqueryTest, subqueryDedupInUnionBranches) {
 }
 
 // TODO: Enable when subquery merging is implemented.
-TEST_F(SubqueryTest, DISABLED_correlatedScalarMerge) {
+TEST_F(SubqueryTest, correlatedScalarMerge) {
   // Two correlated scalar subqueries with the same FROM table and correlation
   // but different aggregates (avg vs max). After merging, a single LEFT JOIN
   // with both aggregates should be produced instead of two separate joins.
-  auto query =
-      "SELECT * FROM region "
-      "WHERE r_regionkey > (SELECT avg(n_nationkey) FROM nation "
-      "                     WHERE n_regionkey = r_regionkey) "
-      "  AND r_regionkey < (SELECT max(n_nationkey) FROM nation "
-      "                     WHERE n_regionkey = r_regionkey)";
+  {
+    auto query =
+        "SELECT * FROM region "
+        "WHERE r_regionkey > (SELECT avg(n_nationkey) FROM nation "
+        "                     WHERE n_regionkey = r_regionkey) "
+        "  AND r_regionkey < (SELECT max(n_nationkey) FROM nation "
+        "                     WHERE n_regionkey = r_regionkey)";
 
-  auto matcher =
-      matchHiveScan("region")
-          .hashJoin(
-              matchHiveScan("nation")
-                  .singleAggregation(
-                      {"n_regionkey"}, {"avg(n_nationkey)", "max(n_nationkey)"})
-                  .project()
-                  .build(),
-              velox::core::JoinType::kLeft)
-          .filter()
-          .project()
-          .build();
+    auto matcher = matchHiveScan("region")
+                       .hashJoin(
+                           matchHiveScan("nation")
+                               .singleAggregation(
+                                   {"n_regionkey"},
+                                   {"avg(n_nationkey)", "max(n_nationkey)"})
+                               .project()
+                               .build(),
+                           velox::core::JoinType::kLeft)
+                       .filter()
+                       .project()
+                       .build();
 
-  SCOPED_TRACE(query);
-  auto plan = toSingleNodePlan(query);
-  AXIOM_ASSERT_PLAN(plan, matcher);
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Two mergeable correlated scalar subqueries in the same projection
+  // expression. Both are extracted in the same processSubqueries call, so
+  // within-batch merge applies.
+  {
+    auto query =
+        "SELECT r_name, "
+        "   (SELECT avg(n_nationkey) FROM nation "
+        "    WHERE n_regionkey = r_regionkey) "
+        " + (SELECT max(n_nationkey) FROM nation "
+        "    WHERE n_regionkey = r_regionkey) AS combined "
+        "FROM region";
+
+    // Merged into a single LEFT JOIN with both avg and max aggregates.
+    // The optimizer may swap join sides (RIGHT instead of LEFT).
+    auto matcher =
+        matchHiveScan("nation")
+            .singleAggregation()
+            .project()
+            .hashJoin(
+                matchHiveScan("region").build(), velox::core::JoinType::kRight)
+            .project()
+            .build();
+
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Two mergeable correlated scalar subqueries in separate projection
+  // expressions. Both are extracted in the same batched processSubqueries call,
+  // so within-batch merge applies.
+  {
+    auto query =
+        "SELECT r_name, "
+        "   (SELECT avg(n_nationkey) FROM nation "
+        "    WHERE n_regionkey = r_regionkey) AS avg_key, "
+        "   (SELECT max(n_nationkey) FROM nation "
+        "    WHERE n_regionkey = r_regionkey) AS max_key "
+        "FROM region";
+
+    // Merged into a single LEFT JOIN with both avg and max aggregates.
+    // The optimizer may swap join sides (RIGHT instead of LEFT).
+    auto matcher =
+        matchHiveScan("nation")
+            .singleAggregation()
+            .project()
+            .hashJoin(
+                matchHiveScan("region").build(), velox::core::JoinType::kRight)
+            .project()
+            .build();
+
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Mergeable subqueries split across filter and projection. These are in
+  // different processSubqueries calls, so within-batch merge does not apply.
+  // Each produces a separate LEFT JOIN.
+  {
+    auto query =
+        "SELECT "
+        "   (SELECT avg(n_nationkey) FROM nation "
+        "    WHERE n_regionkey = r_regionkey) AS avg_key "
+        "FROM region "
+        "WHERE r_regionkey < (SELECT max(n_nationkey) FROM nation "
+        "                     WHERE n_regionkey = r_regionkey)";
+
+    // Two LEFT JOINs — one from filter, one from projection. Cross-call merge
+    // is not yet supported.
+    auto matcher = matchHiveScan("nation")
+                       .singleAggregation()
+                       .project()
+                       .hashJoin(
+                           matchHiveScan("nation")
+                               .singleAggregation()
+                               .project()
+                               .hashJoin(
+                                   matchHiveScan("region").build(),
+                                   velox::core::JoinType::kRight)
+                               .filter()
+                               .project()
+                               .build(),
+                           velox::core::JoinType::kRight)
+                       .project()
+                       .build();
+
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Two uncorrelated scalar subqueries with same FROM and filter but different
+  // aggregates in WHERE. Merged into a single cross-joined aggregation.
+  {
+    auto query =
+        "SELECT * FROM region "
+        "WHERE r_regionkey > (SELECT avg(n_nationkey) FROM nation "
+        "                     WHERE n_nationkey > 0) "
+        "  AND r_regionkey < (SELECT max(n_nationkey) FROM nation "
+        "                     WHERE n_nationkey > 0)";
+
+    // The uncorrelated merged subquery produces a single Aggregation with both
+    // avg and max, cross-joined with the outer table.
+    auto matcher =
+        matchHiveScan("region")
+            .nestedLoopJoin(matchHiveScan("nation").singleAggregation().build())
+            .filter()
+            .filter()
+            .project()
+            .build();
+
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Two uncorrelated scalar subqueries with same FROM and filter but different
+  // aggregates in the same projection expression. Merged into a single
+  // cross-joined aggregation.
+  {
+    auto query =
+        "SELECT r_name, "
+        "   (SELECT avg(n_nationkey) FROM nation WHERE n_nationkey > 0) "
+        " + (SELECT max(n_nationkey) FROM nation WHERE n_nationkey > 0) "
+        "   AS combined "
+        "FROM region";
+
+    auto matcher =
+        matchHiveScan("region")
+            .nestedLoopJoin(matchHiveScan("nation").singleAggregation().build())
+            .project()
+            .build();
+
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
 }
 
 TEST_F(SubqueryTest, correlatedProject) {
@@ -1276,7 +1417,9 @@ TEST_F(SubqueryTest, correlatedProject) {
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
-  // Multiple scalar subqueries in projection.
+  // Multiple scalar subqueries in projection. With batched subquery
+  // processing, count(*) and max(n_nationkey) are merged into a single
+  // LEFT JOIN with both aggregates.
   {
     auto query =
         "SELECT r_name, "
@@ -1284,13 +1427,15 @@ TEST_F(SubqueryTest, correlatedProject) {
         "   (SELECT max(n_nationkey) FROM nation WHERE n_regionkey = r_regionkey) AS max_key "
         "FROM region";
 
-    // Each subquery produces a separate LEFT JOIN.
-    auto matcher = matchHiveScan("region")
-                       // TODO Optimize to combine the two LEFT JOINs into one.
-                       .hashJoin(matchAggNation(), velox::core::JoinType::kLeft)
-                       .hashJoin(matchAggNation(), velox::core::JoinType::kLeft)
-                       .project()
-                       .build();
+    // The optimizer may swap join sides (RIGHT instead of LEFT).
+    auto matcher =
+        matchHiveScan("nation")
+            .singleAggregation()
+            .project()
+            .hashJoin(
+                matchHiveScan("region").build(), velox::core::JoinType::kRight)
+            .project()
+            .build();
 
     SCOPED_TRACE(query);
     auto plan = toSingleNodePlan(query);
