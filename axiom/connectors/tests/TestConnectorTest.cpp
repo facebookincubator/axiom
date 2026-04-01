@@ -55,7 +55,7 @@ TEST_F(TestConnectorTest, connectorRegister) {
   const auto connectorId = "registration-test";
   VELOX_ASSERT_THROW(
       velox::connector::getConnector(connectorId),
-      "Connector with ID 'registration-test' not registered");
+      "Connector with ID is not registered: registration-test");
 
   auto connector = std::make_shared<TestConnector>(connectorId);
   EXPECT_EQ(connector->connectorId(), connectorId);
@@ -68,7 +68,7 @@ TEST_F(TestConnectorTest, connectorRegister) {
   velox::connector::unregisterConnector(connectorId);
   VELOX_ASSERT_THROW(
       velox::connector::getConnector(connectorId),
-      "Connector with ID 'registration-test' not registered");
+      "Connector with ID is not registered: registration-test");
 }
 
 TEST_F(TestConnectorTest, table) {
