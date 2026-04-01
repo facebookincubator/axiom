@@ -76,6 +76,10 @@ class GroupByPlanner {
       const OrderByPtr& orderBy);
   void addAggregate(bool useGroupingSets);
   void rewritePostAggregateExprs();
+  // Materializes window functions as a separate projection node, then
+  // replaces window sub-expressions in projections_ and sortingKeys_ with
+  // column references to the window output.
+  void addWindowProjection();
   std::vector<size_t> resolveSortOrdinals(const OrderByPtr& orderBy);
   bool isIdentityProjection() const;
 
@@ -108,8 +112,23 @@ class GroupByPlanner {
   // Must outlive aggregates_ since aggregates_ holds pointers into this map.
   AggregateOptionsMap aggregateOptionsMap_;
 
+  // Maps each window function IExpr* to its WindowSpec. Populated by
+  // collectAggregates() via toExpr with windowOptions. Must outlive
+  // addWindowProjection() which reads from this map.
+  folly::F14FastMap<const facebook::velox::core::IExpr*, lp::WindowSpec>
+      windowOptions_;
+
   std::optional<lp::ExprApi> filter_;
+
+  // ORDER BY sorting keys with direction info. Populated by
+  // collectAggregates(). Used in rewritePostAggregateExprs() and
+  // addWindowProjection() for window-aware rewriting.
+  std::vector<lp::SortKey> sortingKeys_;
+
+  // ORDER BY expressions (without direction). Used by resolveSortOrdinals()
+  // and SortProjection::widenProjections().
   std::vector<lp::ExprApi> sortingKeyExprs_;
+
   std::vector<std::string> outputNames_;
 };
 

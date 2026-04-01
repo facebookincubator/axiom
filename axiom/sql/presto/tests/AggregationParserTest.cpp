@@ -655,14 +655,20 @@ TEST_F(AggregationParserTest, groupByWithWindowFunction) {
           })
           .output());
 
-  // Window function in ORDER BY with GROUP BY.
+  // Window function in ORDER BY with GROUP BY. The window function is used
+  // only for sorting and does not appear in the SELECT output.
   testSelect(
-      "SELECT a, sum(b) FROM t GROUP BY a ORDER BY row_number() OVER (ORDER BY a)",
+      "SELECT a, sum(b) FROM t GROUP BY a "
+      "ORDER BY row_number() OVER (ORDER BY a)",
       matchScan("t")
           .aggregate({"a"}, {"sum(b)"})
-          .project()
-          .sort()
-          .project()
+          .project({
+              "a",
+              "sum",
+              "row_number() OVER (ORDER BY a ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+          })
+          .sort({"expr ASC NULLS LAST"})
+          .project({"a", "sum"})
           .output());
 
   // TODO: Aggregate references inside window specs are not yet rewritten to
@@ -673,15 +679,121 @@ TEST_F(AggregationParserTest, groupByWithWindowFunction) {
       "Cannot resolve column: a");
 
   // Window function call with the same signature as a plain aggregate.
+  // The window projection adds all input columns plus the window output,
+  // then a final projection selects the output columns in SELECT order.
   testSelect(
       "SELECT sum(a) OVER (ORDER BY b), sum(a) FROM t GROUP BY a, b",
       matchScan("t")
           .aggregate({"a", "b"}, {"sum(a)"})
           .project({
-              "sum(a) OVER (ORDER BY b)",
+              "a",
+              "b",
+              "sum",
+              "sum(a) OVER (ORDER BY b ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+          })
+          .project({
+              "expr",
               "sum",
           })
           .output());
+}
+
+TEST_F(AggregationParserTest, groupByWithNestedWindowFunction) {
+  connector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
+
+  // Window function nested inside an expression with GROUP BY.
+  testSelect(
+      "SELECT a, row_number() OVER (ORDER BY a) + sum(b) FROM t GROUP BY a",
+      matchScan("t")
+          .aggregate({"a"}, {"sum(b)"})
+          .project({
+              "a",
+              "sum",
+              "row_number() OVER (ORDER BY a ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+          })
+          .project({
+              "a",
+              "plus(expr, sum)",
+          })
+          .output());
+
+  // Deeply nested window function inside arithmetic.
+  testSelect(
+      "SELECT a, 1 + (2 * row_number() OVER (ORDER BY a)) FROM t GROUP BY a",
+      matchScan("t")
+          .aggregate({"a"}, {})
+          .project({
+              "a",
+              "row_number() OVER (ORDER BY a ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+          })
+          .project({
+              "a",
+              "plus(CAST(1 AS BIGINT), multiply(CAST(2 AS BIGINT), expr))",
+          })
+          .output());
+
+  // Window function sharing a name with an aggregate. sum(b) is an aggregate,
+  // sum(a) OVER (...) is a window function — they must not be conflated even
+  // though both use the sum() function name.
+  testSelect(
+      "SELECT a, sum(b), sum(a) OVER (ORDER BY a) FROM t GROUP BY a",
+      matchScan("t")
+          .aggregate({"a"}, {"sum(b)"})
+          .project({
+              "a",
+              "sum",
+              "sum(a) OVER (ORDER BY a ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+          })
+          .output());
+
+  // Nested window function with PARTITION BY and GROUP BY. PARTITION BY adds
+  // additional sub-expressions to the window spec tree, exercising pointer
+  // identity matching in findExprPtrs and replaceWindowInputs.
+  testSelect(
+      "SELECT a, row_number() OVER (PARTITION BY a ORDER BY a) + sum(b) "
+      "FROM t GROUP BY a",
+      matchScan("t")
+          .aggregate({"a"}, {"sum(b)"})
+          .project({
+              "a",
+              "sum",
+              "row_number() OVER (PARTITION BY a ORDER BY a ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+          })
+          .project({
+              "a",
+              "plus(expr, sum)",
+          })
+          .output());
+
+  // Multiple distinct window functions in same GROUP BY query.
+  testSelect(
+      "SELECT a, row_number() OVER (ORDER BY a) + sum(b), "
+      "rank() OVER (ORDER BY a) FROM t GROUP BY a",
+      matchScan("t")
+          .aggregate({"a"}, {"sum(b)"})
+          .project({
+              "a",
+              "sum",
+              "row_number() OVER (ORDER BY a ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+              "rank() OVER (ORDER BY a ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+          })
+          .project({
+              "a",
+              "plus(expr, sum)",
+              "expr_0",
+          })
+          .output());
+}
+
+TEST_F(AggregationParserTest, windowFunctionInHavingRejected) {
+  connector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
+
+  // Window functions in HAVING are invalid SQL.
+  VELOX_ASSERT_THROW(
+      parseSql(
+          "SELECT a, sum(b) FROM t GROUP BY a "
+          "HAVING row_number() OVER (ORDER BY a) > 1"),
+      "Window function cannot be an argument to a scalar function");
 }
 
 } // namespace

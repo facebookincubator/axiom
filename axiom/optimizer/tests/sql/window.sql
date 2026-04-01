@@ -134,3 +134,15 @@ SELECT a, b, lead(null, 1) OVER (PARTITION BY a ORDER BY b) AS ld FROM t
 ----
 -- Window function output used as GROUP BY key in outer query.
 SELECT a, max_a, sum(b) FROM (SELECT a, b, max(a) OVER (ORDER BY b) AS max_a FROM t) GROUP BY 1, 2
+----
+-- Window function nested inside expression with GROUP BY.
+SELECT a, row_number() OVER (ORDER BY a) + sum(b) FROM t GROUP BY a
+----
+-- Deeply nested window function in arithmetic with GROUP BY.
+SELECT a, 1 + (2 * row_number() OVER (ORDER BY a)) FROM t GROUP BY a
+----
+-- Multiple distinct window functions in same GROUP BY query.
+SELECT a, row_number() OVER (ORDER BY a) + sum(b), rank() OVER (ORDER BY a) FROM t GROUP BY a
+----
+-- Window function sharing a name with an aggregate (sum as window vs sum as aggregate).
+SELECT a, sum(b), sum(a) OVER (ORDER BY a) FROM t GROUP BY a

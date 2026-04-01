@@ -235,7 +235,7 @@ bool hasNestedWindowFunction(const std::vector<SelectItemPtr>& selectItems) {
 // for deterministic plan generation.
 void findExprPtrs(
     const core::ExprPtr& expr,
-    const std::unordered_map<const core::IExpr*, lp::WindowSpec>& targets,
+    const folly::F14FastMap<const core::IExpr*, lp::WindowSpec>& targets,
     std::unordered_map<const core::IExpr*, core::ExprPtr>& found,
     std::vector<const core::IExpr*>& order) {
   if (targets.count(expr.get())) {
@@ -302,7 +302,7 @@ class RelationPlanner : public AstVisitor {
       const ExpressionPtr& node,
       std::unordered_map<const core::IExpr*, lp::PlanBuilder::AggregateOptions>*
           aggregateOptions = nullptr,
-      std::unordered_map<const core::IExpr*, lp::WindowSpec>* windowOptions =
+      folly::F14FastMap<const core::IExpr*, lp::WindowSpec>* windowOptions =
           nullptr) {
     return exprPlanner_.toExpr(node, aggregateOptions, windowOptions);
   }
@@ -608,7 +608,7 @@ class RelationPlanner : public AstVisitor {
   // window call IExpr* to column reference ExprPtr for replacing window
   // calls in downstream expressions.
   std::unordered_map<const core::IExpr*, core::ExprPtr> addWindowProjection(
-      const std::unordered_map<const core::IExpr*, lp::WindowSpec>&
+      const folly::F14FastMap<const core::IExpr*, lp::WindowSpec>&
           windowOptions,
       const std::vector<lp::ExprApi>& exprs) {
     auto inputColumns =
@@ -670,7 +670,7 @@ class RelationPlanner : public AstVisitor {
     // windowOptions (keyed by IExpr*) and returned as plain function calls.
     // Post-hoc, we extract them and replace with column references, similar
     // to how GroupByPlanner handles aggregates in expressions.
-    std::unordered_map<const core::IExpr*, lp::WindowSpec> windowOptions;
+    folly::F14FastMap<const core::IExpr*, lp::WindowSpec> windowOptions;
 
     // Lateral column alias map: alias name → expression. When friendlySql is
     // enabled, aliases defined in earlier SELECT items can be referenced in

@@ -278,7 +278,7 @@ lp::ExprApi ExpressionPlanner::toExpr(
     const ExpressionPtr& node,
     std::unordered_map<const core::IExpr*, lp::PlanBuilder::AggregateOptions>*
         aggregateOptions,
-    std::unordered_map<const core::IExpr*, lp::WindowSpec>* windowOptions) {
+    folly::F14FastMap<const core::IExpr*, lp::WindowSpec>* windowOptions) {
   switch (node->type()) {
     case NodeType::kIdentifier: {
       auto name = canonicalizeIdentifier(*node->as<Identifier>());

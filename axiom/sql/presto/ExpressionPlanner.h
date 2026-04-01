@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
@@ -76,7 +77,7 @@ class ExpressionPlanner {
       std::unordered_map<
           const facebook::velox::core::IExpr*,
           lp::PlanBuilder::AggregateOptions>* aggregateOptions = nullptr,
-      std::unordered_map<const facebook::velox::core::IExpr*, lp::WindowSpec>*
+      folly::F14FastMap<const facebook::velox::core::IExpr*, lp::WindowSpec>*
           windowOptions = nullptr);
 
   /// Sets alias-to-expression mappings for lateral column alias resolution.
