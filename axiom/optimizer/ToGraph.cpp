@@ -2406,6 +2406,367 @@ void extractSubqueries(const lp::ExprPtr& expr, Subqueries& subqueries) {
     extractSubqueries(input, subqueries);
   }
 }
+
+using NameToOrdinal = folly::F14FastMap<std::string, size_t>;
+
+// Builds a mapping from column name to ordinal position in the output type.
+NameToOrdinal buildNameToOrdinal(const velox::RowType& type) {
+  NameToOrdinal result;
+  for (size_t i = 0; i < type.size(); ++i) {
+    result[type.nameOf(i)] = i;
+  }
+  return result;
+}
+
+// Forward declaration.
+bool isSameComputation(
+    const lp::LogicalPlanNode& left,
+    const lp::LogicalPlanNode& right);
+
+// Compares two expressions resolving InputReferenceExpr names to ordinal
+// positions. Two expressions are equivalent if they perform the same
+// computation regardless of planner-generated column name suffixes.
+bool exprEquivalent(
+    const lp::Expr& left,
+    const lp::Expr& right,
+    const NameToOrdinal& leftOrdinals,
+    const NameToOrdinal& rightOrdinals) {
+  if (&left == &right) {
+    return true;
+  }
+  if (left.kind() != right.kind()) {
+    return false;
+  }
+  if (*left.type() != *right.type()) {
+    return false;
+  }
+
+  // InputReferenceExpr: compare by ordinal position, not name.
+  // Outer references (from the correlation predicate) won't be found in the
+  // ordinal maps — they have the same name in both plans, so compare by name.
+  if (left.isInputReference()) {
+    const auto& leftName = left.as<lp::InputReferenceExpr>()->name();
+    const auto& rightName = right.as<lp::InputReferenceExpr>()->name();
+    auto leftIt = leftOrdinals.find(leftName);
+    auto rightIt = rightOrdinals.find(rightName);
+
+    // Both are outer references (not in ordinal maps) — compare by name.
+    if (leftIt == leftOrdinals.end() && rightIt == rightOrdinals.end()) {
+      return leftName == rightName;
+    }
+    // Both are inner references — compare by ordinal position.
+    if (leftIt != leftOrdinals.end() && rightIt != rightOrdinals.end()) {
+      return leftIt->second == rightIt->second;
+    }
+    // One inner, one outer — not equivalent.
+    return false;
+  }
+
+  // SubqueryExpr: compare the underlying plans recursively.
+  if (left.isSubquery()) {
+    return isSameComputation(
+        *left.as<lp::SubqueryExpr>()->subquery(),
+        *right.as<lp::SubqueryExpr>()->subquery());
+  }
+
+  // Recursively compare inputs.
+  if (left.inputs().size() != right.inputs().size()) {
+    return false;
+  }
+  for (size_t i = 0; i < left.inputs().size(); ++i) {
+    if (!exprEquivalent(
+            *left.inputs()[i],
+            *right.inputs()[i],
+            leftOrdinals,
+            rightOrdinals)) {
+      return false;
+    }
+  }
+
+  // Kind-specific field comparison.
+  if (left.isCall()) {
+    return left.as<lp::CallExpr>()->name() == right.as<lp::CallExpr>()->name();
+  }
+  if (left.isSpecialForm()) {
+    return left.as<lp::SpecialFormExpr>()->form() ==
+        right.as<lp::SpecialFormExpr>()->form();
+  }
+  if (left.isConstant()) {
+    return *left.as<lp::ConstantExpr>()->value() ==
+        *right.as<lp::ConstantExpr>()->value();
+  }
+  if (left.isAggregate()) {
+    const auto* leftAgg = left.as<lp::AggregateExpr>();
+    const auto* rightAgg = right.as<lp::AggregateExpr>();
+    if (leftAgg->name() != rightAgg->name()) {
+      return false;
+    }
+    if (leftAgg->isDistinct() != rightAgg->isDistinct()) {
+      return false;
+    }
+    if (leftAgg->filter() && rightAgg->filter()) {
+      if (!exprEquivalent(
+              *leftAgg->filter(),
+              *rightAgg->filter(),
+              leftOrdinals,
+              rightOrdinals)) {
+        return false;
+      }
+    } else if (leftAgg->filter() || rightAgg->filter()) {
+      return false;
+    }
+    if (leftAgg->ordering().size() != rightAgg->ordering().size()) {
+      return false;
+    }
+    for (size_t i = 0; i < leftAgg->ordering().size(); ++i) {
+      if (leftAgg->ordering()[i].order != rightAgg->ordering()[i].order) {
+        return false;
+      }
+      if (!exprEquivalent(
+              *leftAgg->ordering()[i].expression,
+              *rightAgg->ordering()[i].expression,
+              leftOrdinals,
+              rightOrdinals)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Unhandled expression kinds: conservative false.
+  return false;
+}
+
+// Compares two expression vectors positionally.
+template <typename T, typename U>
+bool exprVectorsEquivalent(
+    const std::vector<T>& left,
+    const std::vector<U>& right,
+    const NameToOrdinal& leftOrdinals,
+    const NameToOrdinal& rightOrdinals) {
+  if (left.size() != right.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < left.size(); ++i) {
+    if (!exprEquivalent(*left[i], *right[i], leftOrdinals, rightOrdinals)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Compares two LogicalPlanNode trees positionally. Two plans are equivalent if
+// they perform the same computation regardless of planner-generated column name
+// suffixes or node IDs. Column references are resolved by ordinal position in
+// the parent's output type, not by name. This enables detecting duplicate
+// subqueries that the SQL parser planned independently with different
+// disambiguated names.
+bool isSameComputation(
+    const lp::LogicalPlanNode& left,
+    const lp::LogicalPlanNode& right) {
+  if (&left == &right) {
+    return true;
+  }
+  if (left.kind() != right.kind()) {
+    return false;
+  }
+
+  // Compare output types by position: same number of columns, same types.
+  const auto& leftType = *left.outputType();
+  const auto& rightType = *right.outputType();
+  if (leftType.size() != rightType.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < leftType.size(); ++i) {
+    if (*leftType.childAt(i) != *rightType.childAt(i)) {
+      return false;
+    }
+  }
+
+  // Recursively compare inputs.
+  if (left.inputs().size() != right.inputs().size()) {
+    return false;
+  }
+  for (size_t i = 0; i < left.inputs().size(); ++i) {
+    if (!isSameComputation(*left.inputs()[i], *right.inputs()[i])) {
+      return false;
+    }
+  }
+
+  // Node-specific comparison with positional name resolution.
+  switch (left.kind()) {
+    case lp::NodeKind::kTableScan: {
+      const auto* leftScan = left.as<lp::TableScanNode>();
+      const auto* rightScan = right.as<lp::TableScanNode>();
+      return leftScan->connectorId() == rightScan->connectorId() &&
+          leftScan->tableName() == rightScan->tableName();
+    }
+    case lp::NodeKind::kFilter: {
+      const auto* leftFilter = left.as<lp::FilterNode>();
+      const auto* rightFilter = right.as<lp::FilterNode>();
+      auto leftOrdinals = buildNameToOrdinal(*left.inputs()[0]->outputType());
+      auto rightOrdinals = buildNameToOrdinal(*right.inputs()[0]->outputType());
+      return exprEquivalent(
+          *leftFilter->predicate(),
+          *rightFilter->predicate(),
+          leftOrdinals,
+          rightOrdinals);
+    }
+    case lp::NodeKind::kProject: {
+      const auto* leftProject = left.as<lp::ProjectNode>();
+      const auto* rightProject = right.as<lp::ProjectNode>();
+      auto leftOrdinals = buildNameToOrdinal(*left.inputs()[0]->outputType());
+      auto rightOrdinals = buildNameToOrdinal(*right.inputs()[0]->outputType());
+      return exprVectorsEquivalent(
+          leftProject->expressions(),
+          rightProject->expressions(),
+          leftOrdinals,
+          rightOrdinals);
+    }
+    case lp::NodeKind::kAggregate: {
+      const auto* leftAgg = left.as<lp::AggregateNode>();
+      const auto* rightAgg = right.as<lp::AggregateNode>();
+      auto leftOrdinals = buildNameToOrdinal(*left.inputs()[0]->outputType());
+      auto rightOrdinals = buildNameToOrdinal(*right.inputs()[0]->outputType());
+      if (!exprVectorsEquivalent(
+              leftAgg->groupingKeys(),
+              rightAgg->groupingKeys(),
+              leftOrdinals,
+              rightOrdinals)) {
+        return false;
+      }
+      if (leftAgg->groupingSets() != rightAgg->groupingSets()) {
+        return false;
+      }
+      return exprVectorsEquivalent(
+          leftAgg->aggregates(),
+          rightAgg->aggregates(),
+          leftOrdinals,
+          rightOrdinals);
+    }
+    case lp::NodeKind::kValues: {
+      const auto* leftValues = left.as<lp::ValuesNode>();
+      const auto* rightValues = right.as<lp::ValuesNode>();
+      return leftValues->cardinality() == rightValues->cardinality();
+    }
+    case lp::NodeKind::kJoin: {
+      const auto* leftJoin = left.as<lp::JoinNode>();
+      const auto* rightJoin = right.as<lp::JoinNode>();
+      if (leftJoin->joinType() != rightJoin->joinType()) {
+        return false;
+      }
+      if (!leftJoin->condition() && !rightJoin->condition()) {
+        return true;
+      }
+      if (!leftJoin->condition() || !rightJoin->condition()) {
+        return false;
+      }
+      // Build combined ordinals from both inputs.
+      auto leftOrdinals = buildNameToOrdinal(*left.inputs()[0]->outputType());
+      auto leftRightOrdinals =
+          buildNameToOrdinal(*left.inputs()[1]->outputType());
+      for (const auto& [name, ordinal] : leftRightOrdinals) {
+        leftOrdinals[name] = ordinal + left.inputs()[0]->outputType()->size();
+      }
+      auto rightOrdinals = buildNameToOrdinal(*right.inputs()[0]->outputType());
+      auto rightRightOrdinals =
+          buildNameToOrdinal(*right.inputs()[1]->outputType());
+      for (const auto& [name, ordinal] : rightRightOrdinals) {
+        rightOrdinals[name] = ordinal + right.inputs()[0]->outputType()->size();
+      }
+      return exprEquivalent(
+          *leftJoin->condition(),
+          *rightJoin->condition(),
+          leftOrdinals,
+          rightOrdinals);
+    }
+    case lp::NodeKind::kSort: {
+      const auto* leftSort = left.as<lp::SortNode>();
+      const auto* rightSort = right.as<lp::SortNode>();
+      if (leftSort->ordering().size() != rightSort->ordering().size()) {
+        return false;
+      }
+      auto leftOrdinals = buildNameToOrdinal(*left.inputs()[0]->outputType());
+      auto rightOrdinals = buildNameToOrdinal(*right.inputs()[0]->outputType());
+      for (size_t i = 0; i < leftSort->ordering().size(); ++i) {
+        if (leftSort->ordering()[i].order != rightSort->ordering()[i].order) {
+          return false;
+        }
+        if (!exprEquivalent(
+                *leftSort->ordering()[i].expression,
+                *rightSort->ordering()[i].expression,
+                leftOrdinals,
+                rightOrdinals)) {
+          return false;
+        }
+      }
+      return true;
+    }
+    case lp::NodeKind::kLimit: {
+      const auto* leftLimit = left.as<lp::LimitNode>();
+      const auto* rightLimit = right.as<lp::LimitNode>();
+      return leftLimit->offset() == rightLimit->offset() &&
+          leftLimit->count() == rightLimit->count();
+    }
+    default:
+      return false;
+  }
+}
+
+// Compares two SubqueryExpr objects for computational equivalence. Handles
+// scalar subqueries directly. For IN and EXISTS (wrapped in SpecialFormExpr),
+// compares the entire SpecialFormExpr structure including both the left key
+// and the subquery plan.
+bool subqueryExprEquivalent(const lp::Expr& left, const lp::Expr& right) {
+  if (&left == &right) {
+    return true;
+  }
+  if (left.kind() != right.kind()) {
+    return false;
+  }
+
+  // Scalar SubqueryExpr: compare the underlying plans.
+  if (left.isSubquery()) {
+    return isSameComputation(
+        *left.as<lp::SubqueryExpr>()->subquery(),
+        *right.as<lp::SubqueryExpr>()->subquery());
+  }
+
+  // SpecialFormExpr (IN, EXISTS): compare form, then compare inputs
+  // recursively. For IN, inputs are [leftKey, SubqueryExpr]. For EXISTS,
+  // inputs are [SubqueryExpr]. The leftKey comparison uses empty ordinal maps
+  // since IN left keys are outer-scope references (same names in both).
+  if (left.isSpecialForm()) {
+    if (left.as<lp::SpecialFormExpr>()->form() !=
+        right.as<lp::SpecialFormExpr>()->form()) {
+      return false;
+    }
+    if (left.inputs().size() != right.inputs().size()) {
+      return false;
+    }
+    for (size_t i = 0; i < left.inputs().size(); ++i) {
+      const auto& leftInput = *left.inputs()[i];
+      const auto& rightInput = *right.inputs()[i];
+      if (leftInput.isSubquery()) {
+        if (!isSameComputation(
+                *leftInput.as<lp::SubqueryExpr>()->subquery(),
+                *rightInput.as<lp::SubqueryExpr>()->subquery())) {
+          return false;
+        }
+      } else {
+        // For non-subquery inputs (e.g., IN left key), use name-based
+        // comparison since they reference outer-scope columns (same names).
+        if (leftInput != rightInput) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  return false;
+}
+
 } // namespace
 
 DerivedTableP ToGraph::translateSubquery(
@@ -2667,6 +3028,49 @@ void ToGraph::processSubqueries(
     return;
   }
 
+  // Cross-call dedup: remove subqueries already in subqueries_ (same ExprPtr
+  // from a prior processSubqueries call). Collect them so we can rewrite their
+  // stale entries if finalizeDt wraps the current DT.
+  std::vector<lp::ExprPtr> alreadyProcessed;
+  auto removeProcessed = [&](auto& exprs) {
+    std::erase_if(exprs, [&](const auto& exprPtr) {
+      if (subqueries_.contains(exprPtr)) {
+        alreadyProcessed.push_back(exprPtr);
+        return true;
+      }
+      return false;
+    });
+  };
+  removeProcessed(subqueries.scalars);
+  removeProcessed(subqueries.inPredicates);
+  removeProcessed(subqueries.exists);
+
+  // Within-batch dedup: detect computationally equivalent subqueries extracted
+  // from the same expression. The SQL parser plans each subquery independently
+  // with unique column name suffixes, so ExprPtr identity and
+  // LogicalPlanNode::operator== both fail. isSameComputation compares plans
+  // positionally, resolving column references by ordinal instead of name.
+  std::vector<std::pair<lp::ExprPtr, lp::ExprPtr>> batchDuplicates;
+  auto dedupBatch = [&](auto& exprs) {
+    for (size_t i = 0; i < exprs.size(); ++i) {
+      for (size_t j = i + 1; j < exprs.size();) {
+        if (subqueryExprEquivalent(*exprs[i], *exprs[j])) {
+          batchDuplicates.emplace_back(exprs[j], exprs[i]);
+          exprs.erase(exprs.begin() + j);
+        } else {
+          ++j;
+        }
+      }
+    }
+  };
+  dedupBatch(subqueries.scalars);
+  dedupBatch(subqueries.inPredicates);
+  dedupBatch(subqueries.exists);
+
+  if (subqueries.empty()) {
+    return;
+  }
+
   if (mayFinalize) {
     mayFinalize = false;
 
@@ -2675,7 +3079,14 @@ void ToGraph::processSubqueries(
       // scalar subquery results) that belong to the current DT. If a new
       // subquery references such a column as a join key, it would create a
       // self-referencing join edge. Wrapping the current DT avoids this.
+      auto* wrappedDt = currentDt_;
       finalizeDt(input);
+
+      // Rewrite stale entries for cross-call duplicates through the wrapped DT.
+      // Same pattern as finalizeDtWithCorrelatedConjuncts.
+      for (const auto& exprPtr : alreadyProcessed) {
+        subqueries_[exprPtr] = wrappedDt->exportExpr(subqueries_[exprPtr]);
+      }
     } else if (currentDt_->hasAggregation()) {
       // Scalar subqueries are placed as joins. Joins cannot be added after
       // aggregation.
@@ -2693,6 +3104,16 @@ void ToGraph::processSubqueries(
   processScalarSubqueries(input, subqueries.scalars);
   processInPredicates(subqueries.inPredicates);
   processExistsSubqueries(subqueries.exists);
+
+  // Map within-batch duplicates to the representative's result.
+  for (const auto& [duplicate, representative] : batchDuplicates) {
+    auto it = subqueries_.find(representative);
+    VELOX_CHECK(
+        it != subqueries_.end(),
+        "Representative subquery not found after processing");
+    auto result = it->second;
+    subqueries_.emplace(duplicate, result);
+  }
 }
 
 void ToGraph::processScalarSubqueries(

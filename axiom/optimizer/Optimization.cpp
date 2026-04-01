@@ -3244,7 +3244,11 @@ bool Optimization::placeConjuncts(
       if (!placeable.empty()) {
         state.place(conjunct);
         for (auto* subquery : placeable) {
-          plan = placeSingleRowDt(plan, subquery, state);
+          // Avoid placing the same subquery twice that could create self-join
+          // of the subquery result column.
+          if (!state.isPlaced(subquery)) {
+            plan = placeSingleRowDt(plan, subquery, state);
+          }
         }
 
         plan = make<Filter>(plan, ExprVector{conjunct});
