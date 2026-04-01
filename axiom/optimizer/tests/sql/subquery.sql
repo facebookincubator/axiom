@@ -32,3 +32,9 @@ SELECT T.* FROM (VALUES (1)) t(a) JOIN (VALUES (2)) u(b) ON true
 -- null-aware semi-project join with extra filter; the optimizer must not flip
 -- this to a right semi-project join that is unsupported in Velox.
 SELECT CASE WHEN a.x IN (SELECT t.a FROM t WHERE t.b < a.y) THEN 'p' ELSE 'f' END FROM ( VALUES ( 1, 100 ) ) a ( x, y )
+----
+-- Scalar subquery whose output column name collides with an outer table
+-- column. Decorrelation produces a CROSS JOIN where both sides have column
+-- "a", which without deduplication causes "Duplicate column name found on
+-- join's left and right sides" in the Velox plan (T261156659).
+SELECT a, (SELECT sum(b) AS a FROM t) FROM t

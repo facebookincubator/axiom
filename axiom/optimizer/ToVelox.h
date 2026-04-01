@@ -132,6 +132,12 @@ class ToVelox {
     return optimizerOptions_.isMapAsStruct(tableName, column);
   }
 
+  // Returns the Velox column name for 'column'. If the column has been
+  // renamed to avoid duplicate names in a join output type, returns the
+  // deduplicated name from columnRenames_. Otherwise returns outputName()
+  // (or name() when makeVeloxExprWithNoAlias_ is set for scan columns).
+  std::string veloxName(ColumnCP column) const;
+
   // Makes an output type for use in PlanNode et al. If 'columnType' is set,
   // only considers base relation columns of the given type.
   velox::RowTypePtr makeOutputType(const ColumnVector& columns) const;
@@ -352,6 +358,13 @@ class ToVelox {
   // common subexpressions, maps from ExprCP to the FieldAccessTypedExppr with
   // the value.
   folly::F14FastMap<ExprCP, velox::core::TypedExprPtr> projectedExprs_;
+
+  // Maps columns with duplicate outputName() in join output to unique
+  // table-qualified names. Populated in makeJoin() before building child
+  // plans, so all downstream references (makeOutputType, toFieldRef,
+  // toTypedExpr) produce consistent unique names. addOutputRenames() at
+  // the plan root maps these internal names back to user-facing names.
+  folly::F14FastMap<ColumnCP, std::string> columnRenames_;
 
   folly::F14FastMap<int32_t, LeafTableData> leafData_;
 

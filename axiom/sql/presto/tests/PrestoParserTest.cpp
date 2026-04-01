@@ -502,10 +502,18 @@ TEST_F(PrestoParserTest, join) {
         parseSql("SELECT * FROM t1 JOIN t2 ON id = id"),
         "Cannot resolve column");
 
-    // Qualified references are not ambiguous.
+    // Qualified references are not ambiguous. Both sides share "id", so
+    // output contains duplicate column names matching SQL semantics.
     auto matcher =
         matchScan().join(matchScan().build()).output({"id", "a", "id", "b"});
     testSelect("SELECT * FROM t1 JOIN t2 ON t1.id = t2.id", matcher);
+
+    // Explicit column references from both sides resolve correctly.
+    auto explicitMatcher =
+        matchScan().join(matchScan().build()).project().output({"id", "id"});
+    testSelect(
+        "SELECT t1.id, t2.id FROM t1 JOIN t2 ON t1.id = t2.id",
+        explicitMatcher);
 
     // Non-existent column in ON clause.
     VELOX_ASSERT_THROW(

@@ -321,6 +321,7 @@ PlanAndStats ToVelox::toVeloxPlan(
 
   prediction_.clear();
   nodeHistory_.clear();
+  columnRenames_.clear();
 
   if (options_.numWorkers > 1 && !options_.remoteOutput) {
     plan = addGather(plan);
@@ -371,6 +372,17 @@ PlanAndStats ToVelox::toVeloxPlan(
       std::move(finishWrite)};
 }
 
+std::string ToVelox::veloxName(ColumnCP column) const {
+  if (makeVeloxExprWithNoAlias_) {
+    return std::string(column->name());
+  }
+  auto it = columnRenames_.find(column);
+  if (it != columnRenames_.end()) {
+    return it->second;
+  }
+  return column->outputName();
+}
+
 velox::RowTypePtr ToVelox::makeOutputType(const ColumnVector& columns) const {
   std::vector<std::string> names;
   std::vector<velox::TypePtr> types;
@@ -392,9 +404,7 @@ velox::RowTypePtr ToVelox::makeOutputType(const ColumnVector& columns) const {
         VELOX_CHECK_NOT_NULL(runnerColumn);
       }
     }
-    auto name = makeVeloxExprWithNoAlias_ ? std::string(column->name())
-                                          : column->outputName();
-    names.push_back(name);
+    names.push_back(veloxName(column));
     types.push_back(toTypePtr(columns[i]->value().type));
   }
   return ROW(std::move(names), std::move(types));
@@ -596,8 +606,7 @@ velox::core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
         auto field = toTypedExpr(column->topColumn());
         return pathToGetter(column->topColumn(), column->path(), field);
       }
-      auto name = makeVeloxExprWithNoAlias_ ? std::string(column->name())
-                                            : column->outputName();
+      auto name = veloxName(column);
       // Check if a top level map should be retrieved as struct.
       auto it = columnAlteredTypes_.find(column);
       if (it != columnAlteredTypes_.end()) {
@@ -789,7 +798,7 @@ velox::core::FieldAccessTypedExprPtr ToVelox::toFieldRef(ExprCP expr) {
 
   auto column = expr->as<Column>();
   return std::make_shared<velox::core::FieldAccessTypedExpr>(
-      toTypePtr(column->value().type), column->outputName());
+      toTypePtr(column->value().type), veloxName(column));
 }
 
 std::vector<velox::core::FieldAccessTypedExprPtr> ToVelox::toFieldRefs(
@@ -1087,6 +1096,10 @@ velox::core::PlanNodePtr ToVelox::makeSubfieldProjections(
   std::vector<std::string> names;
   std::vector<velox::core::TypedExprPtr> exprs;
   for (auto* column : scan.columns()) {
+    // Use outputName() directly — not veloxName() — because the noAlias
+    // scope above makes veloxName() return name(), which differs from
+    // outputName() for subfield columns (e.g., "f1" vs "m.f1"). The
+    // output names here must match what downstream operators expect.
     names.push_back(column->outputName());
     exprs.push_back(toTypedExpr(column));
   }
@@ -1204,7 +1217,7 @@ velox::core::PlanNodePtr ToVelox::makeScan(
     // No correlation name in scan output if pushed down subfield projection
     // follows.
     auto scanColumnName =
-        isSubfieldPushdown ? column->name() : column->outputName();
+        isSubfieldPushdown ? column->name() : veloxName(column);
     assignments[scanColumnName] = scan.index->layout->createColumnHandle(
         connectorSession, column->name(), std::move(subfields));
   }
@@ -1264,7 +1277,7 @@ velox::core::PlanNodePtr ToVelox::makeProject(
   names.reserve(numOutputs);
   exprs.reserve(numOutputs);
   for (auto i = 0; i < numOutputs; ++i) {
-    names.push_back(project.columns()[i]->outputName());
+    names.push_back(veloxName(project.columns()[i]));
     exprs.push_back(toTypedExpr(project.exprs()[i]));
   }
 
@@ -1276,6 +1289,27 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
     const Join& join,
     ExecutableFragment& fragment,
     std::vector<ExecutableFragment>& stages) {
+  // Deduplicate column names for join output. When both sides of a join
+  // have columns with the same outputName() (e.g., both aliased as
+  // "entries"), Velox's checkJoinOutput() rejects the plan. Use
+  // table-qualified toString() for duplicates so all downstream references
+  // (makeOutputType, toFieldRef, toTypedExpr) produce consistent unique
+  // names. addOutputRenames() at the plan root maps these back to
+  // user-facing names via positional index.
+  {
+    folly::F14FastMap<std::string, std::vector<ColumnCP>> nameToColumns;
+    for (auto* col : join.columns()) {
+      nameToColumns[col->outputName()].push_back(col);
+    }
+    for (auto& [name, cols] : nameToColumns) {
+      if (cols.size() > 1) {
+        for (auto* col : cols) {
+          columnRenames_[col] = col->toString();
+        }
+      }
+    }
+  }
+
   auto left = makeFragment(join.input(), fragment, stages);
   auto right = makeFragment(join.right, fragment, stages);
   if (join.method == JoinMethod::kCross) {
@@ -1343,7 +1377,7 @@ velox::core::PlanNodePtr ToVelox::makeUnnest(
   std::vector<std::string> unnestNames;
   unnestNames.reserve(op.unnestedColumns.size());
   for (const auto* column : op.unnestedColumns) {
-    unnestNames.emplace_back(column->outputName());
+    unnestNames.emplace_back(veloxName(column));
   }
 
   return std::make_shared<velox::core::UnnestNode>(
@@ -1352,7 +1386,7 @@ velox::core::PlanNodePtr ToVelox::makeUnnest(
       toFieldRefs(op.unnestExprs),
       std::move(unnestNames),
       op.ordinalityColumn
-          ? std::optional<std::string>(op.ordinalityColumn->outputName())
+          ? std::optional<std::string>(veloxName(op.ordinalityColumn))
           : std::nullopt,
       std::nullopt,
       std::move(input));
@@ -1377,7 +1411,7 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
     const auto* column = op.columns()[i + numKeys];
     const auto& type = toTypePtr(column->value().type);
 
-    aggregateNames.push_back(column->outputName());
+    aggregateNames.push_back(veloxName(column));
 
     const auto* aggregate = op.aggregates[i];
 
@@ -1539,7 +1573,7 @@ velox::core::PlanNodePtr ToVelox::makeWindow(
 
   for (size_t i = 0; i < op.windowFunctions.size(); ++i) {
     const auto* column = op.columns()[numInputColumns + i];
-    windowColumnNames.push_back(column->outputName());
+    windowColumnNames.push_back(veloxName(column));
     windowFunctions.push_back(
         toVeloxWindowFunction(op.windowFunctions[i], column));
   }
@@ -1564,7 +1598,7 @@ velox::core::PlanNodePtr ToVelox::makeRowNumber(
   return std::make_shared<velox::core::RowNumberNode>(
       nextId(),
       toFieldRefs(op.partitionKeys),
-      op.outputColumn->outputName(),
+      veloxName(op.outputColumn),
       op.limit,
       std::move(input));
 }
@@ -1581,7 +1615,7 @@ velox::core::PlanNodePtr ToVelox::makeTopNRowNumber(
       toFieldRefs(op.partitionKeys),
       toFieldRefs(op.orderKeys),
       toSortOrders(op.orderTypes),
-      op.outputColumn->outputName(),
+      veloxName(op.outputColumn),
       op.limit,
       std::move(input));
 }
@@ -1810,7 +1844,7 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
   inputNames.reserve(tableWrite.inputColumns.size());
   inputTypes.reserve(tableWrite.inputColumns.size());
   for (const auto* column : tableWrite.inputColumns) {
-    inputNames.push_back(column->as<Column>()->outputName());
+    inputNames.push_back(veloxName(column->as<Column>()));
     inputTypes.push_back(toTypePtr(column->value().type));
   }
 
