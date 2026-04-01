@@ -453,14 +453,9 @@ class ToGraph {
 
   // Processes scalar subqueries, creating DTs and joins for each.
   // Populates subqueries_ with mappings from subquery expressions to columns.
-  // mergeMapping maps each original subquery in a merge group to its aggregate
-  // output index in the merged representative.
   void processScalarSubqueries(
       const logical_plan::LogicalPlanNode& input,
-      const std::vector<logical_plan::SubqueryExprPtr>& scalars,
-      const folly::F14FastMap<
-          logical_plan::SubqueryExprPtr,
-          std::pair<logical_plan::SubqueryExprPtr, size_t>>& mergeMapping);
+      const std::vector<logical_plan::SubqueryExprPtr>& scalars);
 
   // Processes an uncorrelated scalar subquery. Attempts constant folding,
   // otherwise ensures single row. Returns one expression per aggregate output.
@@ -530,6 +525,12 @@ class ToGraph {
   // translateAggregation can process them correctly.
   void registerAllChannelsAsUsed(const logical_plan::LogicalPlanNode& node);
 
+  // Pre-pass: scans the logical plan tree for all subquery expressions,
+  // deduplicates identical subqueries, and merges compatible scalar subqueries
+  // (same child structure, different aggregates). Populates subqueryMap_.
+  // Called once before makeQueryGraph.
+  void buildSubqueryMap(const logical_plan::LogicalPlanNode& root);
+
   // Appends `arbitrary` aggregates for all columns used from 'input'.
   // Used when decorrelating non-equi correlated subqueries. Since the
   // decorrelation strategy groups by a unique ID (one group per outer row),
@@ -588,12 +589,22 @@ class ToGraph {
   // should be used instead. Populated in 'processSubqueries()'.
   folly::F14FastMap<logical_plan::ExprPtr, ExprCP> subqueries_;
 
-  // For merged scalar subqueries, maps the merged SubqueryExprPtr to all its
-  // aggregate result columns (one per original aggregate in the merged plan).
-  // Populated in processScalarSubqueries, consumed in processSubqueries to map
-  // each original subquery to its specific column.
-  folly::F14FastMap<logical_plan::SubqueryExprPtr, std::vector<ExprCP>>
-      mergedColumns_;
+  // Pre-computed dedup/merge map: maps each original subquery expression to its
+  // representative. For dedup, the representative is an identical subquery
+  // (outputIndex=0). For merge, it's a synthetic SubqueryExpr with combined
+  // aggregates. Populated by buildSubqueryMap() before makeQueryGraph().
+  struct SubqueryMapEntry {
+    // The representative subquery expression. For dedup, this is one of the
+    // original ExprPtrs. For merge, this is a synthetic SubqueryExprPtr.
+    logical_plan::ExprPtr representative;
+
+    // Output column index within the representative's result. Always 0 for
+    // dedup and single-aggregate merge entries. For merge with multiple
+    // aggregates, this identifies which aggregate column belongs to this
+    // original.
+    size_t outputIndex;
+  };
+  folly::F14FastMap<logical_plan::ExprPtr, SubqueryMapEntry> subqueryMap_;
 
   folly::
       F14FastMap<TypedVariant, ExprCP, TypedVariantHasher, TypedVariantComparer>

@@ -2822,38 +2822,78 @@ bool subqueryExprEquivalent(const lp::Expr& left, const lp::Expr& right) {
   return false;
 }
 
-// Remaps InputReferenceExpr names in an AggregateExpr. Used when merging
-// aggregate expressions from different subquery plans that reference the same
-// data through different column names.
+// Recursively remaps InputReferenceExpr names in an expression tree. Used when
+// merging aggregate expressions from different subquery plans that reference
+// the same data through different column names.
+lp::ExprPtr remapInputNames(
+    const lp::ExprPtr& expr,
+    const folly::F14FastMap<std::string, std::string>& nameMapping) {
+  if (!expr) {
+    return nullptr;
+  }
+
+  if (expr->isInputReference()) {
+    const auto& name = expr->as<lp::InputReferenceExpr>()->name();
+    auto it = nameMapping.find(name);
+    return std::make_shared<lp::InputReferenceExpr>(
+        expr->type(), it != nameMapping.end() ? it->second : name);
+  }
+
+  if (expr->isConstant()) {
+    return expr;
+  }
+
+  // Recurse into inputs.
+  std::vector<lp::ExprPtr> remappedInputs;
+  remappedInputs.reserve(expr->inputs().size());
+  bool changed = false;
+  for (const auto& input : expr->inputs()) {
+    auto remapped = remapInputNames(input, nameMapping);
+    changed |= (remapped != input);
+    remappedInputs.push_back(std::move(remapped));
+  }
+
+  if (!changed) {
+    return expr;
+  }
+
+  if (expr->isCall()) {
+    return std::make_shared<lp::CallExpr>(
+        expr->type(),
+        expr->as<lp::CallExpr>()->name(),
+        std::move(remappedInputs));
+  }
+
+  if (expr->isSpecialForm()) {
+    return std::make_shared<lp::SpecialFormExpr>(
+        expr->type(),
+        expr->as<lp::SpecialFormExpr>()->form(),
+        std::move(remappedInputs));
+  }
+
+  VELOX_UNREACHABLE(
+      "Unexpected expression kind in aggregate input: {}",
+      lp::ExprKindName::toName(expr->kind()));
+}
+
+// Remaps InputReferenceExpr names in an AggregateExpr, including nested
+// expressions in inputs, filter, and ordering.
 lp::AggregateExprPtr remapAggregateInputNames(
     const lp::AggregateExpr& agg,
     const folly::F14FastMap<std::string, std::string>& nameMapping) {
-  // Remap each input of the aggregate expression.
   std::vector<lp::ExprPtr> remappedInputs;
   remappedInputs.reserve(agg.inputs().size());
   for (const auto& input : agg.inputs()) {
-    if (input->isInputReference()) {
-      const auto& name = input->as<lp::InputReferenceExpr>()->name();
-      auto it = nameMapping.find(name);
-      remappedInputs.push_back(
-          std::make_shared<lp::InputReferenceExpr>(
-              input->type(), it != nameMapping.end() ? it->second : name));
-    } else {
-      // For constants and other non-reference expressions, keep as-is.
-      remappedInputs.push_back(input);
-    }
+    remappedInputs.push_back(remapInputNames(input, nameMapping));
   }
 
-  lp::ExprPtr remappedFilter;
-  if (agg.filter()) {
-    if (agg.filter()->isInputReference()) {
-      const auto& name = agg.filter()->as<lp::InputReferenceExpr>()->name();
-      auto it = nameMapping.find(name);
-      remappedFilter = std::make_shared<lp::InputReferenceExpr>(
-          agg.filter()->type(), it != nameMapping.end() ? it->second : name);
-    } else {
-      remappedFilter = agg.filter();
-    }
+  auto remappedFilter = remapInputNames(agg.filter(), nameMapping);
+
+  std::vector<lp::SortingField> remappedOrdering;
+  remappedOrdering.reserve(agg.ordering().size());
+  for (const auto& field : agg.ordering()) {
+    remappedOrdering.push_back(
+        {remapInputNames(field.expression, nameMapping), field.order});
   }
 
   return std::make_shared<lp::AggregateExpr>(
@@ -2861,7 +2901,7 @@ lp::AggregateExprPtr remapAggregateInputNames(
       agg.name(),
       std::move(remappedInputs),
       std::move(remappedFilter),
-      agg.ordering(),
+      std::move(remappedOrdering),
       agg.isDistinct());
 }
 
@@ -2966,6 +3006,166 @@ void ToGraph::registerAllChannelsAsUsed(const lp::LogicalPlanNode& node) {
   }
   for (const auto& child : node.inputs()) {
     registerAllChannelsAsUsed(*child);
+  }
+}
+
+namespace {
+// Collects all subquery expressions (scalar, IN, EXISTS) from an expression
+// tree into a single list.
+void collectSubqueryExprs(
+    const lp::ExprPtr& expr,
+    std::vector<lp::ExprPtr>& result) {
+  if (!expr) {
+    return;
+  }
+  if (expr->isSubquery()) {
+    result.push_back(expr);
+    return;
+  }
+  if (expr->isSpecialForm()) {
+    const auto* specialForm = expr->as<lp::SpecialFormExpr>();
+    if (specialForm->form() == lp::SpecialForm::kExists) {
+      result.push_back(expr);
+      return;
+    }
+    if (specialForm->form() == lp::SpecialForm::kIn &&
+        specialForm->inputs().size() == 2 &&
+        specialForm->inputAt(1)->isSubquery()) {
+      result.push_back(expr);
+      return;
+    }
+  }
+  for (const auto& input : expr->inputs()) {
+    collectSubqueryExprs(input, result);
+  }
+}
+
+// Collects all subquery expressions from a logical plan tree.
+void collectAllSubqueries(
+    const lp::LogicalPlanNode& node,
+    std::vector<lp::ExprPtr>& result) {
+  auto visitExpr = [&](const lp::ExprPtr& expr) {
+    collectSubqueryExprs(expr, result);
+  };
+
+  if (node.kind() == lp::NodeKind::kProject) {
+    for (const auto& expr : node.as<lp::ProjectNode>()->expressions()) {
+      visitExpr(expr);
+    }
+  } else if (node.kind() == lp::NodeKind::kFilter) {
+    visitExpr(node.as<lp::FilterNode>()->predicate());
+  } else if (node.kind() == lp::NodeKind::kAggregate) {
+    const auto* agg = node.as<lp::AggregateNode>();
+    for (const auto& key : agg->groupingKeys()) {
+      visitExpr(key);
+    }
+    for (const auto& aggregate : agg->aggregates()) {
+      for (const auto& input : aggregate->inputs()) {
+        visitExpr(input);
+      }
+      visitExpr(aggregate->filter());
+    }
+  }
+
+  // Recurse into child nodes, but NOT into subquery plans (independent plan
+  // trees) or set operation branches (each branch has its own scope).
+  if (node.kind() == lp::NodeKind::kSet) {
+    return;
+  }
+  for (const auto& child : node.inputs()) {
+    collectAllSubqueries(*child, result);
+  }
+}
+} // namespace
+
+void ToGraph::buildSubqueryMap(const lp::LogicalPlanNode& root) {
+  // Handle set operation nodes (UNION, INTERSECT, etc.) by recursing into
+  // each branch independently — each branch has its own scope.
+  if (root.kind() == lp::NodeKind::kSet) {
+    for (const auto& child : root.inputs()) {
+      buildSubqueryMap(*child);
+    }
+    return;
+  }
+
+  std::vector<lp::ExprPtr> allSubqueries;
+  collectAllSubqueries(root, allSubqueries);
+
+  // Dedup all subquery types using a single comparison function.
+  for (size_t i = 0; i < allSubqueries.size(); ++i) {
+    if (subqueryMap_.contains(allSubqueries[i])) {
+      continue;
+    }
+    for (size_t j = i + 1; j < allSubqueries.size(); ++j) {
+      if (subqueryMap_.contains(allSubqueries[j])) {
+        continue;
+      }
+      if (subqueryExprEquivalent(*allSubqueries[i], *allSubqueries[j])) {
+        subqueryMap_[allSubqueries[j]] = {allSubqueries[i], 0};
+      }
+    }
+  }
+
+  // Merge: group non-identical scalar subqueries by merge key. Only considers
+  // subqueries not already mapped as duplicates.
+  std::vector<std::vector<size_t>> mergeGroups;
+  for (size_t i = 0; i < allSubqueries.size(); ++i) {
+    if (subqueryMap_.contains(allSubqueries[i])) {
+      continue;
+    }
+    if (!allSubqueries[i]->isSubquery()) {
+      continue;
+    }
+    const auto* subqueryPlan =
+        allSubqueries[i]->as<lp::SubqueryExpr>()->subquery().get();
+    if (subqueryPlan->kind() != lp::NodeKind::kAggregate) {
+      continue;
+    }
+
+    // Skip uncorrelated global aggregations over a bare scan (typically
+    // constant-foldable).
+    const auto* aggNode = subqueryPlan->as<lp::AggregateNode>();
+    if (aggNode->groupingKeys().empty() &&
+        aggNode->inputs()[0]->kind() == lp::NodeKind::kTableScan) {
+      continue;
+    }
+
+    bool found = false;
+    for (auto& group : mergeGroups) {
+      if (isSameMergeKey(
+              *allSubqueries[group[0]]->as<lp::SubqueryExpr>()->subquery(),
+              *subqueryPlan)) {
+        group.push_back(i);
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      mergeGroups.push_back({i});
+    }
+  }
+
+  // Build merged plans for groups with >1 member.
+  for (const auto& group : mergeGroups) {
+    if (group.size() < 2) {
+      continue;
+    }
+
+    std::vector<lp::SubqueryExprPtr> groupExprs;
+    groupExprs.reserve(group.size());
+    for (auto idx : group) {
+      groupExprs.push_back(
+          std::static_pointer_cast<const lp::SubqueryExpr>(allSubqueries[idx]));
+    }
+
+    auto [mergedExpr, outputIndices] = buildMergedPlan(groupExprs);
+
+    // Register merged node in subfield tracker.
+    registerAllChannelsAsUsed(*mergedExpr->subquery());
+
+    for (size_t i = 0; i < groupExprs.size(); ++i) {
+      subqueryMap_[groupExprs[i]] = {mergedExpr, outputIndices[i]};
+    }
   }
 }
 
@@ -3238,8 +3438,9 @@ void ToGraph::processSubqueries(
   }
 
   // Cross-call dedup: remove subqueries already in subqueries_ (same ExprPtr
-  // from a prior processSubqueries call). Collect them so we can rewrite their
-  // stale entries if finalizeDt wraps the current DT.
+  // from a prior processSubqueries call, or stored by the subqueryMap_
+  // integration below). Collect them so we can rewrite their stale entries if
+  // finalizeDt wraps the current DT.
   std::vector<lp::ExprPtr> alreadyProcessed;
   auto removeProcessed = [&](auto& exprs) {
     std::erase_if(exprs, [&](const auto& exprPtr) {
@@ -3254,96 +3455,58 @@ void ToGraph::processSubqueries(
   removeProcessed(subqueries.inPredicates);
   removeProcessed(subqueries.exists);
 
-  // Within-batch dedup: detect computationally equivalent subqueries extracted
-  // from the same expression. The SQL parser plans each subquery independently
-  // with unique column name suffixes, so ExprPtr identity and
-  // LogicalPlanNode::operator== both fail. isSameComputation compares plans
-  // positionally, resolving column references by ordinal instead of name.
-  std::vector<std::pair<lp::ExprPtr, lp::ExprPtr>> batchDuplicates;
-  auto dedupBatch = [&](auto& exprs) {
-    for (size_t i = 0; i < exprs.size(); ++i) {
-      for (size_t j = i + 1; j < exprs.size();) {
-        if (subqueryExprEquivalent(*exprs[i], *exprs[j])) {
-          batchDuplicates.emplace_back(exprs[j], exprs[i]);
-          exprs.erase(exprs.begin() + j);
-        } else {
-          ++j;
-        }
-      }
-    }
-  };
-  dedupBatch(subqueries.scalars);
-  dedupBatch(subqueries.inPredicates);
-  dedupBatch(subqueries.exists);
-
-  // Within-batch merge: group scalar subqueries that share the same merge key
-  // (same subtree below the top-level aggregate, same grouping keys, but
-  // different aggregate functions). Each merge group produces a single merged
-  // SubqueryExpr with combined aggregates.
-  // Maps each original SubqueryExprPtr to (merged representative, aggregate
-  // output index in the merged plan).
-  folly::F14FastMap<lp::SubqueryExprPtr, std::pair<lp::SubqueryExprPtr, size_t>>
-      mergeMapping;
+  // Apply pre-computed subqueryMap_: replace originals with their
+  // representatives (for both dedup and merge). The map is built by
+  // buildSubqueryMap() before makeQueryGraph().
+  folly::F14FastSet<lp::ExprPtr> mergedRepresentatives;
   {
-    // Group scalar subqueries by merge key.
-    std::vector<std::vector<size_t>> mergeGroups;
-    for (size_t i = 0; i < subqueries.scalars.size(); ++i) {
-      // Only merge subqueries whose top-level node is an AggregateNode.
-      if (subqueries.scalars[i]->subquery()->kind() !=
-          lp::NodeKind::kAggregate) {
-        continue;
-      }
-
-      // Skip uncorrelated global aggregations (no grouping keys, child is a
-      // bare scan or values). These are typically constant-foldable and should
-      // remain separate for independent constant folding.
-      const auto* aggNode =
-          subqueries.scalars[i]->subquery()->as<lp::AggregateNode>();
-      if (aggNode->groupingKeys().empty() &&
-          aggNode->inputs()[0]->kind() == lp::NodeKind::kTableScan) {
-        continue;
-      }
-
-      bool found = false;
-      for (auto& group : mergeGroups) {
-        if (isSameMergeKey(
-                *subqueries.scalars[group[0]]->subquery(),
-                *subqueries.scalars[i]->subquery())) {
-          group.push_back(i);
-          found = true;
-          break;
+    auto applyMap = [&](auto& exprs) {
+      folly::F14FastSet<lp::ExprPtr> replaced;
+      for (const auto& expr : exprs) {
+        auto it = subqueryMap_.find(expr);
+        if (it != subqueryMap_.end()) {
+          replaced.insert(expr);
+          mergedRepresentatives.insert(it->second.representative);
         }
       }
-      if (!found) {
-        mergeGroups.push_back({i});
+      if (!replaced.empty()) {
+        std::erase_if(
+            exprs, [&](const auto& s) { return replaced.contains(s); });
       }
-    }
+    };
+    applyMap(subqueries.scalars);
+    applyMap(subqueries.inPredicates);
+    applyMap(subqueries.exists);
 
-    // For groups with >1 member, build merged plans and replace in the list.
-    // Process groups in reverse order so erasing doesn't invalidate indices.
-    for (const auto& group : mergeGroups) {
-      if (group.size() < 2) {
+    // Add representatives that haven't been processed yet and aren't already
+    // in the work list. For dedup, the representative is an original ExprPtr
+    // that may already be in the list. For merge, the representative is a
+    // synthetic node that's never in the list.
+    auto containsExpr = [](const auto& exprs, const lp::ExprPtr& target) {
+      return std::any_of(exprs.begin(), exprs.end(), [&](const auto& e) {
+        return static_cast<lp::ExprPtr>(e) == target;
+      });
+    };
+    for (const auto& repr : mergedRepresentatives) {
+      if (subqueries_.contains(repr)) {
         continue;
       }
-
-      std::vector<lp::SubqueryExprPtr> groupExprs;
-      groupExprs.reserve(group.size());
-      for (auto idx : group) {
-        groupExprs.push_back(subqueries.scalars[idx]);
-      }
-
-      auto [mergedExpr, outputIndices] = buildMergedPlan(groupExprs);
-
-      // Map each original to its output index in the merged plan.
-      for (size_t i = 0; i < groupExprs.size(); ++i) {
-        mergeMapping[groupExprs[i]] = {mergedExpr, outputIndices[i]};
-      }
-
-      // Replace group members in subqueries.scalars: keep the first slot for
-      // the merged representative, erase the rest.
-      subqueries.scalars[group[0]] = mergedExpr;
-      for (size_t i = group.size() - 1; i >= 1; --i) {
-        subqueries.scalars.erase(subqueries.scalars.begin() + group[i]);
+      if (repr->isSubquery()) {
+        if (!containsExpr(subqueries.scalars, repr)) {
+          subqueries.scalars.push_back(
+              std::static_pointer_cast<const lp::SubqueryExpr>(repr));
+        }
+      } else if (repr->isSpecialForm()) {
+        const auto* sf = repr->as<lp::SpecialFormExpr>();
+        if (sf->form() == lp::SpecialForm::kExists) {
+          if (!containsExpr(subqueries.exists, repr)) {
+            subqueries.exists.push_back(repr);
+          }
+        } else {
+          if (!containsExpr(subqueries.inPredicates, repr)) {
+            subqueries.inPredicates.push_back(repr);
+          }
+        }
       }
     }
   }
@@ -3382,52 +3545,15 @@ void ToGraph::processSubqueries(
     }
   }
 
-  processScalarSubqueries(input, subqueries.scalars, mergeMapping);
+  processScalarSubqueries(input, subqueries.scalars);
   processInPredicates(subqueries.inPredicates);
   processExistsSubqueries(subqueries.exists);
-
-  // Map within-batch duplicates to the representative's result.
-  for (const auto& [duplicate, representative] : batchDuplicates) {
-    auto it = subqueries_.find(representative);
-    VELOX_CHECK(
-        it != subqueries_.end(),
-        "Representative subquery not found after processing");
-    auto result = it->second;
-    subqueries_.emplace(duplicate, result);
-  }
-
-  // Map merged originals to their specific output columns.
-  for (const auto& [original, mergeInfo] : mergeMapping) {
-    const auto& [merged, outputIndex] = mergeInfo;
-    auto it = mergedColumns_.find(merged);
-    VELOX_CHECK(
-        it != mergedColumns_.end(),
-        "Merged subquery columns not found after processing");
-    VELOX_CHECK_LT(outputIndex, it->second.size());
-    subqueries_.emplace(original, it->second[outputIndex]);
-  }
 }
 
 void ToGraph::processScalarSubqueries(
     const lp::LogicalPlanNode& input,
-    const std::vector<lp::SubqueryExprPtr>& scalars,
-    const folly::F14FastMap<
-        lp::SubqueryExprPtr,
-        std::pair<lp::SubqueryExprPtr, size_t>>& mergeMapping) {
-  // Collect merged representatives for quick lookup.
-  folly::F14FastSet<lp::SubqueryExprPtr> mergedRepresentatives;
-  for (const auto& [original, mergeInfo] : mergeMapping) {
-    mergedRepresentatives.insert(mergeInfo.first);
-  }
-
+    const std::vector<lp::SubqueryExprPtr>& scalars) {
   for (const auto& subquery : scalars) {
-    // For merged representatives (synthetic nodes not in the subfield tracker),
-    // register all channels as used so that translateSubquery and
-    // translateAggregation process all aggregates and columns.
-    if (mergedRepresentatives.contains(subquery)) {
-      registerAllChannelsAsUsed(*subquery->subquery());
-    }
-
     auto subqueryDt = translateSubquery(*subquery->subquery());
 
     std::vector<ExprCP> columns;
@@ -3437,10 +3563,24 @@ void ToGraph::processScalarSubqueries(
       columns = processCorrelatedScalarSubquery(input, subqueryDt);
     }
 
-    // For merged representatives, store all result columns for later mapping.
-    // For non-merged subqueries, store the single result column directly.
-    if (mergedRepresentatives.contains(subquery)) {
-      mergedColumns_[subquery] = std::move(columns);
+    // Store result for all originals in subqueryMap_ that map to this
+    // representative (for both dedup and merge).
+    bool isRepresentative = false;
+    for (const auto& [original, entry] : subqueryMap_) {
+      if (entry.representative == subquery) {
+        isRepresentative = true;
+        VELOX_CHECK_LT(entry.outputIndex, columns.size());
+        subqueries_.emplace(original, columns[entry.outputIndex]);
+      }
+    }
+
+    if (isRepresentative) {
+      // Also store the representative's own result. For dedup, the
+      // representative is an original that also needs to be in subqueries_.
+      // For merge, the representative is synthetic and not looked up directly,
+      // but storing it is harmless.
+      VELOX_CHECK_GE(columns.size(), 1);
+      subqueries_.emplace(subquery, columns.front());
     } else {
       VELOX_CHECK_EQ(columns.size(), 1);
       subqueries_.emplace(subquery, columns.front());
@@ -3664,6 +3804,13 @@ void ToGraph::processInPredicates(
           subqueryDt, markColumn, leftKey, leftTable);
     }
     subqueries_.emplace(predicate, column);
+
+    // Store result for all duplicates of this IN predicate.
+    for (const auto& [original, entry] : subqueryMap_) {
+      if (entry.representative == predicate) {
+        subqueries_.emplace(original, column);
+      }
+    }
   }
 }
 
@@ -3765,6 +3912,12 @@ void ToGraph::processExistsSubqueries(const std::vector<lp::ExprPtr>& exists) {
             FunctionSet());
       }
       subqueries_.emplace(existsExpr, result);
+      // Store result for all duplicates of this EXISTS.
+      for (const auto& [original, entry] : subqueryMap_) {
+        if (entry.representative == existsExpr) {
+          subqueries_.emplace(original, result);
+        }
+      }
       continue;
     }
 
@@ -3775,6 +3928,12 @@ void ToGraph::processExistsSubqueries(const std::vector<lp::ExprPtr>& exists) {
       column = processCorrelatedExists(subqueryDt);
     }
     subqueries_.emplace(existsExpr, column);
+    // Store result for all duplicates of this EXISTS.
+    for (const auto& [original, entry] : subqueryMap_) {
+      if (entry.representative == existsExpr) {
+        subqueries_.emplace(original, column);
+      }
+    }
   }
 }
 
@@ -4296,6 +4455,7 @@ DerivedTableP ToGraph::makeQueryGraph(const lp::LogicalPlanNode& logicalPlan) {
       SubfieldTracker([&](const auto& expr) {
         return tryFoldConstant(expr);
       }).markAll(logicalPlan);
+  buildSubqueryMap(logicalPlan);
   currentDt_ = newDt();
   makeQueryGraph(logicalPlan, kAllAllowedInDt);
   setDtUsedOutput(currentDt_, logicalPlan);
