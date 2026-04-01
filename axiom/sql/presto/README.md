@@ -122,6 +122,20 @@ including named ROW constructors, `EXCEPT ALL` / `INTERSECT ALL`, and
 additional `EXPLAIN` types. See
 [docs/PrestoSqlExtensions.md](docs/PrestoSqlExtensions.md) for details.
 
+## Parametric String Types
+
+The parser accepts `VARCHAR(n)`, `CHAR(n)`, and `VARBINARY(n)` syntax. Velox types are unbounded, so length enforcement is handled at the expression level during `CAST`:
+
+| Cast target | Velox type | Expression wrapper |
+|---|---|---|
+| `VARCHAR(n)` | `VARCHAR` | `substr(cast, 1, n)` — truncates to n |
+| `CHAR(n)` | `VARCHAR` | `rpad(cast, n, ' ')` — pads/truncates to exactly n |
+| `VARBINARY(n)` | `VARBINARY` | None — syntax accepted, length ignored |
+
+`CHAR` without a length parameter resolves to `VARCHAR` (matching Presto behavior). Inside nested types (`ARRAY(VARCHAR(10))`), the length parameter is accepted but dropped — no expression wrapper is added.
+
+See `ExpressionPlanner::toExpr()` (the `kCast` case) for the implementation.
+
 ## Differences from Presto Java
 
 ### No Separate Analysis Phase

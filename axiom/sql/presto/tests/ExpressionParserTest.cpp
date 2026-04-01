@@ -112,11 +112,101 @@ TEST_F(ExpressionParserTest, types) {
   test("null as qdigest(real)", QDIGEST(REAL()));
   test("null as qdigest(double)", QDIGEST(DOUBLE()));
 
+  // CHAR without length parameter resolves to VARCHAR.
+  test("null as char", VARCHAR());
+
   test("null as int array", ARRAY(INTEGER()));
   test("null as varchar array", ARRAY(VARCHAR()));
   test("null as map(integer, real)", MAP(INTEGER(), REAL()));
   test("null as row(int, double)", ROW({INTEGER(), DOUBLE()}));
   test("null as row(a int, b double)", ROW({"a", "b"}, {INTEGER(), DOUBLE()}));
+}
+
+// Verifies that VARCHAR(n) wraps the inner cast in substr(expr, 1, n).
+TEST_F(ExpressionParserTest, varcharN) {
+  auto testTruncation = [&](std::string_view sql, int64_t expectedMaxLength) {
+    SCOPED_TRACE(sql);
+    auto expr = parseExpr(sql);
+    VELOX_EXPECT_EQ_TYPES(expr->type(), VARCHAR());
+    ASSERT_TRUE(expr->isCall());
+    auto* call = expr->as<lp::CallExpr>();
+    EXPECT_EQ(call->name(), "substr");
+    ASSERT_EQ(call->inputs().size(), 3);
+    // First argument is the inner cast.
+    ASSERT_TRUE(call->inputAt(0)->isSpecialForm());
+    // Second argument: start position = 1.
+    auto* startLit = call->inputs()[1]->as<lp::ConstantExpr>();
+    ASSERT_NE(startLit, nullptr);
+    EXPECT_EQ(startLit->value()->value<int64_t>(), 1);
+    // Third argument: max length.
+    auto* lengthLit = call->inputs()[2]->as<lp::ConstantExpr>();
+    ASSERT_NE(lengthLit, nullptr);
+    EXPECT_EQ(lengthLit->value()->value<int64_t>(), expectedMaxLength);
+  };
+
+  testTruncation("cast(null as varchar(10))", 10);
+  testTruncation("cast(null as varchar(255))", 255);
+  testTruncation("try_cast(null as varchar(10))", 10);
+
+  // Nested in complex types — length is dropped, no substr wrapper.
+  auto testType = [&](std::string_view castArgs, const TypePtr& expectedType) {
+    SCOPED_TRACE(castArgs);
+    auto expr = parseExpr(fmt::format("cast({})", castArgs));
+    VELOX_EXPECT_EQ_TYPES(expr->type(), expectedType);
+    // Verify the expression is a plain cast, not wrapped in substr/rpad.
+    ASSERT_TRUE(expr->isSpecialForm());
+    ASSERT_FALSE(expr->isCall());
+  };
+  testType("null as array(varchar(10))", ARRAY(VARCHAR()));
+  testType("null as array(char(10))", ARRAY(VARCHAR()));
+  testType("null as map(varchar(5), integer)", MAP(VARCHAR(), INTEGER()));
+
+  // Zero length is rejected.
+  VELOX_ASSERT_THROW(
+      parseExpr("cast(null as varchar(0))"), "Length must be positive");
+}
+
+// Verifies that CHAR(n) wraps the inner cast in rpad(expr, n, ' ').
+TEST_F(ExpressionParserTest, charN) {
+  auto testPadding = [&](std::string_view sql, int64_t expectedLength) {
+    SCOPED_TRACE(sql);
+    auto expr = parseExpr(sql);
+    VELOX_EXPECT_EQ_TYPES(expr->type(), VARCHAR());
+    ASSERT_TRUE(expr->isCall());
+    auto* call = expr->as<lp::CallExpr>();
+    EXPECT_EQ(call->name(), "rpad");
+    ASSERT_EQ(call->inputs().size(), 3);
+    // First argument is the inner cast.
+    ASSERT_TRUE(call->inputAt(0)->isSpecialForm());
+    // Second argument: target length.
+    auto* lengthLit = call->inputs()[1]->as<lp::ConstantExpr>();
+    ASSERT_NE(lengthLit, nullptr);
+    EXPECT_EQ(lengthLit->value()->value<int64_t>(), expectedLength);
+    // Third argument: pad character = ' '.
+    auto* padLit = call->inputs()[2]->as<lp::ConstantExpr>();
+    ASSERT_NE(padLit, nullptr);
+    EXPECT_EQ(padLit->value()->value<StringView>(), " ");
+  };
+
+  testPadding("cast(null as char(20))", 20);
+  testPadding("cast(null as char(5))", 5);
+  testPadding("try_cast(null as char(20))", 20);
+
+  // Zero length is rejected.
+  VELOX_ASSERT_THROW(
+      parseExpr("cast(null as char(0))"), "Length must be positive");
+}
+
+// Verifies that VARBINARY(n) resolves to unbounded VARBINARY with no wrapper.
+TEST_F(ExpressionParserTest, varbinaryN) {
+  auto expr = parseExpr("cast(null as varbinary(100))");
+  VELOX_EXPECT_EQ_TYPES(expr->type(), VARBINARY());
+  ASSERT_TRUE(expr->isSpecialForm());
+  ASSERT_FALSE(expr->isCall());
+
+  // Zero length is rejected.
+  VELOX_ASSERT_THROW(
+      parseExpr("cast(null as varbinary(0))"), "Length must be positive");
 }
 
 TEST_F(ExpressionParserTest, intervalDayTime) {

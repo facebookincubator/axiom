@@ -185,6 +185,12 @@ TEST_F(DdlParserTest, createTable) {
       "t",
       ROW({"price"}, {DECIMAL(10, 2)}));
 
+  // Parametric string types resolve to unbounded Velox types.
+  testCreateTable(
+      "CREATE TABLE t (name VARCHAR(255), code CHAR(10), data VARBINARY(100))",
+      "t",
+      ROW({"name", "code", "data"}, {VARCHAR(), VARCHAR(), VARBINARY()}));
+
   // like clause
   {
     auto likeSchema =
