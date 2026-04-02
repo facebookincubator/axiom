@@ -123,6 +123,13 @@ TEST_F(TestConnectorTest, columnHandle) {
 TEST_F(TestConnectorTest, splitManager) {
   auto schema = ROW({"a"}, {INTEGER()});
   auto table = connector_->addTable("test_table", schema);
+
+  auto vector = makeRowVector({makeFlatVector<int>({1})});
+  constexpr size_t kNumSplits = 1024;
+  for (size_t i = 0; i < kNumSplits; ++i) {
+    connector_->appendData("test_table", vector);
+  }
+
   auto& layout = *table->layouts()[0];
 
   auto splitManager = metadata_->splitManager();
@@ -142,18 +149,6 @@ TEST_F(TestConnectorTest, splitManager) {
   EXPECT_NE(splitSource, nullptr);
 
   auto splits = splitSource->getSplits(0);
-  EXPECT_EQ(splits.size(), 1);
-  EXPECT_EQ(splits[0].split, nullptr);
-
-  auto vector = makeRowVector({makeFlatVector<int>({1})});
-  constexpr size_t kNumSplits = 1024;
-  for (size_t i = 0; i < kNumSplits; ++i) {
-    connector_->appendData("test_table", vector);
-  }
-
-  splitSource =
-      splitManager->getSplitSource(nullptr, tableHandle, partitions, {});
-  splits = splitSource->getSplits(0);
   EXPECT_EQ(splits.size(), kNumSplits);
   for (size_t i = 0; i < kNumSplits; ++i) {
     auto split = std::dynamic_pointer_cast<TestConnectorSplit>(splits[i].split);

@@ -20,6 +20,7 @@
 #include <folly/container/F14Set.h>
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "velox/core/ITypedExpr.h"
 
 namespace facebook::axiom::connector {
 
@@ -197,6 +198,26 @@ class TestColumnHandle : public velox::connector::ColumnHandle {
     return type_;
   }
 
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = TestColumnHandle::getClassName();
+    obj["columnName"] = name_;
+    obj["columnType"] = type_->serialize();
+    return obj;
+  }
+
+  static std::shared_ptr<TestColumnHandle> create(const folly::dynamic& obj) {
+    auto name = obj["columnName"].asString();
+    auto type = velox::Type::create(obj["columnType"]);
+    return std::make_shared<TestColumnHandle>(name, type);
+  }
+
+  static void registerSerDe() {
+    velox::registerDeserializer<TestColumnHandle>();
+  }
+
+  VELOX_DEFINE_CLASS_NAME(TestColumnHandle)
+
  private:
   const std::string name_;
   const velox::TypePtr type_;
@@ -214,6 +235,26 @@ class TestConnectorSplit : public velox::connector::ConnectorSplit {
     return index_;
   }
 
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = TestConnectorSplit::getClassName();
+    obj["connectorId"] = connectorId;
+    obj["index"] = index_;
+    return obj;
+  }
+
+  static std::shared_ptr<TestConnectorSplit> create(const folly::dynamic& obj) {
+    auto connectorId = obj["connectorId"].asString();
+    auto index = obj["index"].asInt();
+    return std::make_shared<TestConnectorSplit>(connectorId, index);
+  }
+
+  static void registerSerDe() {
+    velox::registerDeserializer<TestConnectorSplit>();
+  }
+
+  VELOX_DEFINE_CLASS_NAME(TestConnectorSplit)
+
  private:
   const size_t index_;
 };
@@ -223,25 +264,48 @@ class TestConnectorSplit : public velox::connector::ConnectorSplit {
 class TestTableHandle : public velox::connector::ConnectorTableHandle {
  public:
   TestTableHandle(
+      const std::string& connectorId,
+      const SchemaTableName& name,
+      int64_t size,
+      std::vector<velox::connector::ColumnHandlePtr> columnHandles,
+      std::vector<velox::core::TypedExprPtr> filters = {})
+      : ConnectorTableHandle(connectorId),
+        name_(name),
+        size_(size),
+        columnHandles_(std::move(columnHandles)),
+        filters_(std::move(filters)),
+        nameString_(name.toString()) {}
+
+  TestTableHandle(
       const TableLayout& layout,
       std::vector<velox::connector::ColumnHandlePtr> columnHandles,
       std::vector<velox::core::TypedExprPtr> filters = {})
-      : ConnectorTableHandle(layout.connector()->connectorId()),
-        layout_(layout),
-        name_(layout.table().name().toString()),
-        columnHandles_(std::move(columnHandles)),
-        filters_(std::move(filters)) {}
+      : TestTableHandle(
+            layout.connector()->connectorId(),
+            layout.table().name(),
+            getTableSize(layout),
+            std::move(columnHandles),
+            std::move(filters)) {}
+
+  static int64_t getTableSize(const TableLayout& layout) {
+    auto& table = dynamic_cast<const TestTable&>(layout.table());
+    return table.data().size();
+  }
+
+  const SchemaTableName& schemaTableName() const {
+    return name_;
+  }
 
   const std::string& name() const override {
-    return name_;
+    return nameString_;
+  }
+
+  int64_t size() const {
+    return size_;
   }
 
   std::string toString() const override {
     return name();
-  }
-
-  const TableLayout& layout() const {
-    return layout_;
   }
 
   const std::vector<velox::core::TypedExprPtr>& filters() const {
@@ -252,11 +316,69 @@ class TestTableHandle : public velox::connector::ConnectorTableHandle {
     return columnHandles_;
   }
 
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = TestTableHandle::getClassName();
+    obj["connectorId"] = connectorId();
+    obj["schemaName"] = name_.schema;
+    obj["tableName"] = name_.table;
+    obj["size"] = size_;
+    folly::dynamic columns = folly::dynamic::array;
+    for (const auto& handle : columnHandles_) {
+      columns.push_back(handle->serialize());
+    }
+    obj["columnHandles"] = std::move(columns);
+    folly::dynamic filterArray = folly::dynamic::array;
+    for (const auto& filter : filters_) {
+      filterArray.push_back(filter->serialize());
+    }
+    obj["filters"] = std::move(filterArray);
+    return obj;
+  }
+
+  static velox::connector::ConnectorTableHandlePtr create(
+      const folly::dynamic& obj,
+      void* context) {
+    auto connectorId = obj["connectorId"].asString();
+    auto schema = obj["schemaName"].asString();
+    auto tableName = obj["tableName"].asString();
+    auto size = obj["size"].asInt();
+    std::vector<velox::connector::ColumnHandlePtr> columnHandles;
+    if (obj.count("columnHandles")) {
+      for (const auto& col : obj["columnHandles"]) {
+        columnHandles.push_back(
+            velox::ISerializable::deserialize<velox::connector::ColumnHandle>(
+                col));
+      }
+    }
+    std::vector<velox::core::TypedExprPtr> filters;
+    if (obj.count("filters")) {
+      for (const auto& f : obj["filters"]) {
+        filters.push_back(
+            velox::ISerializable::deserialize<velox::core::ITypedExpr>(
+                f, context));
+      }
+    }
+    return std::make_shared<TestTableHandle>(
+        connectorId,
+        SchemaTableName(schema, tableName),
+        size,
+        std::move(columnHandles),
+        std::move(filters));
+  }
+
+  static void registerSerDe() {
+    velox::registerDeserializerWithContext<TestTableHandle>();
+  }
+
+  VELOX_DEFINE_CLASS_NAME(TestTableHandle)
+
  private:
-  const TableLayout& layout_;
-  const std::string name_;
+  const SchemaTableName name_;
+  const int64_t size_;
   const std::vector<velox::connector::ColumnHandlePtr> columnHandles_;
   const std::vector<velox::core::TypedExprPtr> filters_;
+  const std::string nameString_;
 };
 
 /// The TestInsertTableHandle should be populated using the table
@@ -473,6 +595,7 @@ class TestConnector : public velox::connector::Connector {
       std::shared_ptr<const velox::config::ConfigBase> config = nullptr)
       : Connector(id, std::move(config)),
         metadata_{std::make_shared<TestConnectorMetadata>(this)} {
+    registerSerDe();
     ConnectorMetadata::registerMetadata(id, metadata_);
   }
 
@@ -560,7 +683,8 @@ class TestConnector : public velox::connector::Connector {
         {std::string(kDefaultSchema), std::string(tableName)});
   }
 
-  /// Registers all 8 TPC-H tables with their canonical schemas.
+  static void registerSerDe();
+
   void addTpchTables();
 
   /// Register a view with the given name, output schema, and SQL text.

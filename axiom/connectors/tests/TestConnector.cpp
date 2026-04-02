@@ -265,10 +265,8 @@ std::shared_ptr<SplitSource> TestSplitManager::getSplitSource(
   auto maybeTableHandle =
       std::dynamic_pointer_cast<const TestTableHandle>(tableHandle);
   VELOX_CHECK(maybeTableHandle, "Expected TestTableHandle");
-  auto& table =
-      dynamic_cast<const TestTable&>(maybeTableHandle->layout().table());
   return std::make_shared<TestSplitSource>(
-      tableHandle->connectorId(), table.data().size());
+      tableHandle->connectorId(), maybeTableHandle->size());
 }
 
 std::shared_ptr<Table> TestConnectorMetadata::findTableInternal(
@@ -640,7 +638,7 @@ std::unique_ptr<velox::connector::DataSource> TestConnector::createDataSource(
   auto* testHandle = dynamic_cast<const TestTableHandle*>(tableHandle.get());
   VELOX_CHECK_NOT_NULL(
       testHandle, "Expected TestTableHandle, got: {}", tableHandle->name());
-  auto table = metadata_->findTable(testHandle->layout().table().name());
+  auto table = metadata_->findTable(testHandle->schemaTableName());
   VELOX_CHECK(
       table,
       "cannot create data source for nonexistent table {}",
@@ -675,6 +673,17 @@ std::shared_ptr<TestTable> TestConnector::addTable(
 
 bool TestConnector::dropTableIfExists(const SchemaTableName& name) {
   return metadata_->dropTableIfExists(name);
+}
+
+void TestConnector::registerSerDe() {
+  static bool registered = false;
+  if (registered) {
+    return;
+  }
+  TestTableHandle::registerSerDe();
+  TestColumnHandle::registerSerDe();
+  TestConnectorSplit::registerSerDe();
+  registered = true;
 }
 
 void TestConnector::addTpchTables() {
