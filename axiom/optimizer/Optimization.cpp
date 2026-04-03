@@ -1186,9 +1186,9 @@ void Optimization::addPostprocess(
     plan = limit;
   }
 
-  if (!dt->outputColumns.empty()) {
+  if (dt->outputColumns.has_value()) {
     ExprVector outputExprs;
-    for (auto* column : dt->outputColumns) {
+    for (auto* column : *dt->outputColumns) {
       bool found = false;
       for (size_t i = 0; i < dt->columns.size(); ++i) {
         if (dt->columns[i] == column) {
@@ -1203,8 +1203,8 @@ void Optimization::addPostprocess(
     plan = make<Project>(
         maybeDropProject(plan),
         outputExprs,
-        dt->outputColumns,
-        Project::isRedundant(plan, outputExprs, dt->outputColumns));
+        *dt->outputColumns,
+        Project::isRedundant(plan, outputExprs, *dt->outputColumns));
   }
 
   if (!limitConsumedByWindow && !dt->hasOrderBy() &&
@@ -3272,8 +3272,11 @@ namespace {
 
 // Restricts dt->outputColumns to only those present in 'needed'.
 void pruneOutputColumns(DerivedTableP dt, const PlanObjectSet& needed) {
+  if (!dt->outputColumns.has_value()) {
+    return;
+  }
   ColumnVector output;
-  for (auto* column : dt->outputColumns) {
+  for (auto* column : *dt->outputColumns) {
     if (needed.contains(column)) {
       output.push_back(column);
     }

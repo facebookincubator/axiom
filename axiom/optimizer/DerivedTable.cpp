@@ -201,8 +201,10 @@ void DerivedTable::checkSetOpConsistency() const {
       cname);
 
   // Union DT: outputColumns must equal columns (no intermediate columns).
+  VELOX_CHECK(
+      outputColumns.has_value(), "union DT outputColumns not set: {}", cname);
   VELOX_CHECK_EQ(
-      outputColumns.size(),
+      outputColumns->size(),
       columns.size(),
       "union DT outputColumns must match columns: {}",
       cname);
@@ -256,11 +258,11 @@ void DerivedTable::checkConsistency() const {
   }
 
   // outputColumns must be a subset of columns with no duplicates.
-  {
+  if (outputColumns.has_value()) {
     PlanObjectSet columnSet;
     columnSet.unionObjects(columns);
     PlanObjectSet seen;
-    for (const auto* column : outputColumns) {
+    for (const auto* column : *outputColumns) {
       VELOX_CHECK(
           columnSet.contains(column),
           "outputColumn not found in columns: {}, {}",
@@ -504,22 +506,22 @@ void DerivedTable::updateConstraints(const RelationOp& plan) {
     return;
   }
 
-  // A DT may have zero output columns (e.g. a child DT whose parent only
-  // needs a row count). Only cardinality is useful for such DTs.
-  if (outputColumns.empty()) {
+  // A DT may have unitialized or zero output columns (e.g. a child DT whose
+  // parent only needs a row count). Only cardinality is useful for such DTs.
+  if (!outputColumns.has_value() || outputColumns->empty()) {
     return;
   }
 
   const auto& planColumns = plan.columns();
   const auto& constraints = plan.constraints();
-  VELOX_CHECK_EQ(outputColumns.size(), planColumns.size());
-  for (size_t i = 0; i < outputColumns.size(); ++i) {
+  VELOX_CHECK_EQ(outputColumns->size(), planColumns.size());
+  for (size_t i = 0; i < outputColumns->size(); ++i) {
     auto it = constraints.find(planColumns[i]->id());
     VELOX_CHECK(
         it != constraints.end(),
         "Missing constraint for column: {}",
         planColumns[i]->toString());
-    const_cast<Value&>(outputColumns[i]->value()) = it->second;
+    const_cast<Value&>((*outputColumns)[i]->value()) = it->second;
   }
 }
 
@@ -753,7 +755,10 @@ std::pair<DerivedTableCP, JoinEdgeP> makeExistsDtAndJoin(
           key->value());
       newExistsDt->columns.push_back(existsColumn);
       newExistsDt->exprs.push_back(key);
-      newExistsDt->outputColumns.push_back(existsColumn);
+      if (!newExistsDt->outputColumns.has_value()) {
+        newExistsDt->outputColumns.emplace();
+      }
+      newExistsDt->outputColumns->push_back(existsColumn);
     }
     newExistsDt->noImportOfExists = true;
     newExistsDt->initializePlans();
@@ -1135,7 +1140,7 @@ AggregateCP DerivedTable::exportSingleAggregate(Name markName) {
   // results) become invalid once aggregation is cleared. exportExpr and the
   // mark column addition below will repopulate outputColumns with only the
   // columns this DT can produce post-export.
-  outputColumns.clear();
+  outputColumns = ColumnVector{};
 
   const Value constantBoolean{toType(velox::BOOLEAN()), 1};
 
@@ -1145,7 +1150,7 @@ AggregateCP DerivedTable::exportSingleAggregate(Name markName) {
       make<Literal>(constantBoolean, registerVariant(velox::Variant(true)));
   columns.push_back(markColumn);
   exprs.push_back(trueLiteral);
-  outputColumns.push_back(markColumn);
+  outputColumns->push_back(markColumn);
 
   const auto* onlyAgg = aggregation->aggregates().front();
 
@@ -1182,18 +1187,23 @@ AggregateCP DerivedTable::exportSingleAggregate(Name markName) {
 
 ExprCP DerivedTable::exportExpr(ExprCP expr) {
   // Only update outputColumns if it has been initialized (by setDtUsedOutput or
-  // exportSingleAggregate). When uninitialized (empty), adding a single column
-  // would create a partial output specification missing the other columns.
-  const bool hasOutputColumns = !outputColumns.empty();
-
+  // exportSingleAggregate). When uninitialized (null), adding a single column
+  // would create a partial output specification missing other columns.
   expr->columns().forEach<Column>([&](auto* column) {
     if (tableSet.contains(column->relation())) {
       if (pushBackUnique(exprs, column)) {
-        auto outer = make<Column>(
+        auto* outer = make<Column>(
             column->name(), this, column->value(), column->alias());
         columns.push_back(outer);
-        if (hasOutputColumns) {
-          outputColumns.push_back(outer);
+        if (outputColumns.has_value()) {
+          outputColumns->push_back(outer);
+        }
+      }
+    } else if (column->relation() == this) {
+      if (pushBackUnique(exprs, column)) {
+        columns.push_back(column);
+        if (outputColumns.has_value()) {
+          outputColumns->push_back(column);
         }
       }
     }
@@ -1866,7 +1876,7 @@ bool DerivedTable::isZeroRows() const {
 void DerivedTable::clearState() {
   columns.clear();
   exprs.clear();
-  outputColumns.clear();
+  outputColumns.reset();
   tables.clear();
   tableSet = PlanObjectSet{};
   joins.clear();
@@ -1886,7 +1896,7 @@ void DerivedTable::makeEmpty() {
   auto* emptyData = &registerVariant(velox::Variant::array({}))->array();
 
   // Build ValuesTable matching outputColumns schema.
-  auto savedOutputColumns = outputColumns;
+  auto savedOutputColumns = outputColumns.value_or(ColumnVector{});
 
   std::vector<std::string> names;
   std::vector<velox::TypePtr> types;
@@ -1913,7 +1923,7 @@ void DerivedTable::makeEmpty() {
 
   columns = savedOutputColumns;
   exprs = std::move(newExprs);
-  outputColumns = savedOutputColumns;
+  outputColumns = std::move(savedOutputColumns);
   addTable(valuesTable);
 }
 

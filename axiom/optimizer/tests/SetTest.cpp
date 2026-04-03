@@ -957,18 +957,72 @@ TEST_F(SetTest, unionDistinctWithUnnestMultipleReferences) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(SetTest, unionAllColumnCountMismatchCrash) {
-  createEmptyTable("t", ROW("a", BIGINT()));
+TEST_F(SetTest, unionAllWithDistinctAndCountStar) {
+  testConnector_->addTable("t", ROW("a", BIGINT()));
 
-  auto sql =
-      "SELECT COUNT(*) = 0 as is_empty FROM ("
-      "  SELECT DISTINCT a FROM t WHERE a > 0"
-      "  UNION ALL"
-      "  SELECT 1 AS a"
-      ")";
+  {
+    auto logicalPlan = parseSelect(
+        "SELECT COUNT(*) FROM ("
+        "  SELECT DISTINCT a FROM t"
+        "  UNION ALL"
+        "  SELECT 1"
+        ")",
+        kTestConnectorId);
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(
+        plan,
+        matchScan("t")
+            .singleAggregation({"a"}, {})
+            .project({})
+            .localPartition(core::PlanMatcherBuilder().values(ROW({})).build())
+            .singleAggregation({}, {"count(*) as c"})
+            .build());
+  }
 
-  auto logicalPlan = parseSelect(sql);
-  VELOX_ASSERT_THROW(toSingleNodePlan(logicalPlan), "");
+  {
+    auto logicalPlan = parseSelect(
+        "SELECT COUNT(*) FROM ("
+        "  SELECT DISTINCT a FROM t"
+        "  UNION ALL"
+        "  SELECT 1"
+        "  UNION ALL"
+        "  SELECT 2"
+        ")",
+        kTestConnectorId);
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(
+        plan,
+        matchScan("t")
+            .singleAggregation({"a"}, {})
+            .project({})
+            .localPartition(
+                {core::PlanMatcherBuilder().values(ROW({})).build(),
+                 core::PlanMatcherBuilder().values(ROW({})).build()})
+            .singleAggregation({}, {"count(*) as c"})
+            .build());
+  }
+
+  {
+    auto logicalPlan = parseSelect(
+        "SELECT * FROM ("
+        "  SELECT COUNT(*) as cnt FROM ("
+        "    SELECT DISTINCT a FROM t"
+        "    UNION ALL"
+        "    SELECT 1"
+        "  )"
+        ") WHERE cnt > 0",
+        kTestConnectorId);
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(
+        plan,
+        matchScan("t")
+            .singleAggregation({"a"}, {})
+            .project({})
+            .localPartition(core::PlanMatcherBuilder().values(ROW({})).build())
+            .singleAggregation({}, {"count(*) as cnt"})
+            .filter("cnt > 0")
+            .build());
+  }
 }
 
 } // namespace

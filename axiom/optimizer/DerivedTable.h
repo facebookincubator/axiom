@@ -87,8 +87,10 @@ struct DerivedTable : public PlanObject {
   ExprVector exprs;
 
   /// Ordered list of columns this DT produces as output. Subset of 'columns'.
-  /// Determines the schema visible to the enclosing query.
-  ColumnVector outputColumns;
+  /// Determines the schema visible to the enclosing query. Uninitialized (null)
+  /// means output columns have not been set (keep all columns from the plan).
+  /// An empty vector means produce zero output columns.
+  std::optional<ColumnVector> outputColumns;
 
   /// True if this DT is expected to produce exactly 1 row and must be validated
   /// at runtime. Set for scalar subqueries that don't naturally guarantee
