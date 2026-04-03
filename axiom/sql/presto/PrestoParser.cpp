@@ -939,17 +939,6 @@ class RelationPlanner : public AstVisitor {
     return exprs;
   }
 
-  // Adds a project node if projection list is non-null (i.e. not SELECT *). If
-  // projection list is null, drop hidden columns and exit early.
-  void addProject(const std::vector<SelectItemPtr>& selectItems) {
-    auto projections = buildSelectProjections(selectItems);
-    if (!projections.has_value()) {
-      builder_->dropHiddenColumns();
-      return;
-    }
-    builder_->project(projections.value());
-  }
-
   // Build sort key expressions. Ordinals are resolved to the corresponding
   // SELECT projection expression so widenProjectionsForSort can match them
   // by expression identity.
@@ -1007,6 +996,45 @@ class RelationPlanner : public AstVisitor {
     auto ordinals = SortProjection::widenProjections(
         sortKeyExprs, preResolved, projections.value());
     builder_->project(projections.value());
+    SortProjection::sortAndTrim(
+        *builder_, orderBy->sortItems(), ordinals, numSelectItems);
+  }
+
+  // Adds project, distinct, and sort nodes. Uses
+  // SortProjection::widenProjections to resolve ORDER BY expressions against
+  // SELECT-list expressions by expression identity, then validates that no
+  // widening occurred since DISTINCT requires ORDER BY to reference only
+  // SELECT-list columns.
+  void addDistinctAndOrderBy(
+      const std::vector<SelectItemPtr>& selectItems,
+      const OrderByPtr& orderBy) {
+    auto projections = buildSelectProjections(selectItems);
+    if (!projections.has_value()) {
+      builder_->dropHiddenColumns();
+      builder_->distinct();
+      addOrderBy(orderBy);
+      return;
+    }
+    if (orderBy == nullptr) {
+      builder_->project(projections.value());
+      builder_->distinct();
+      return;
+    }
+
+    const size_t numSelectItems = projections->size();
+    auto [sortKeyExprs, preResolved] =
+        buildSortKeyExprs(orderBy, projections.value());
+
+    auto ordinals = SortProjection::widenProjections(
+        sortKeyExprs, preResolved, projections.value());
+
+    VELOX_USER_CHECK_EQ(
+        projections->size(),
+        numSelectItems,
+        "For SELECT DISTINCT, ORDER BY expressions must be output expressions");
+
+    builder_->project(projections.value());
+    builder_->distinct();
     SortProjection::sortAndTrim(
         *builder_, orderBy->sortItems(), ordinals, numSelectItems);
   }
@@ -1135,11 +1163,7 @@ class RelationPlanner : public AstVisitor {
         // aggregations without a group by are 1 row output.
         addOrderBy(orderBy);
       } else if (distinct) {
-        // With DISTINCT, ORDER BY can only reference SELECT-list columns.
-        // Project first, then sort.
-        addProject(selectItems);
-        builder_->distinct();
-        addOrderBy(orderBy);
+        addDistinctAndOrderBy(selectItems, orderBy);
       } else {
         // Widen the projection to include any ORDER BY columns not in the
         // SELECT list, sort, then project again using only the SELECT list.

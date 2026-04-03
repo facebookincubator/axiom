@@ -286,14 +286,14 @@ TEST_F(SortParserTest, distinct) {
           "SELECT DISTINCT a "
           "FROM (VALUES (1, 2), (3, 4)) AS t(a, b) "
           "ORDER BY b DESC"),
-      "Cannot resolve column: b not in");
+      "ORDER BY expressions must be output expressions");
 
   VELOX_ASSERT_THROW(
       parseSql(
           "SELECT DISTINCT a + b "
           "FROM (VALUES (1, 2), (3, 4)) AS t(a, b) "
           "ORDER BY a DESC"),
-      "Cannot resolve column: a not in");
+      "ORDER BY expressions must be output expressions");
 
   VELOX_ASSERT_THROW(
       parseSql(
@@ -309,6 +309,26 @@ TEST_F(SortParserTest, distinct) {
           "GROUP BY 1 "
           "ORDER BY a DESC"),
       "Cannot resolve column: a not in [expr -> expr]");
+}
+
+TEST_F(SortParserTest, distinctOrderByOriginalName) {
+  connector_->addTable("t", ROW({"a", "b"}, INTEGER()));
+
+  testSelect(
+      "SELECT DISTINCT a AS id FROM t ORDER BY a",
+      matchScan("t")
+          .project({"a"})
+          .aggregate({"id"}, {})
+          .sort({"id"})
+          .output({"id"}));
+
+  testSelect(
+      "SELECT DISTINCT a AS x, b AS y FROM t ORDER BY b",
+      matchScan("t")
+          .project({"a", "b"})
+          .aggregate({"x", "y"}, {})
+          .sort({"y"})
+          .output({"x", "y"}));
 }
 
 TEST_F(SortParserTest, complexExpressionIdentity) {
