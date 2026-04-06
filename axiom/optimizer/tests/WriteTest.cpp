@@ -695,8 +695,7 @@ TEST_F(WriteTest, ctasValuesNoMerge) {
       [](const auto& plan) {
         ASSERT_EQ(1, plan.fragments().size());
 
-        auto matcher =
-            core::PlanMatcherBuilder().values().project().tableWrite().build();
+        auto matcher = matchValues().project().tableWrite().build();
         AXIOM_ASSERT_PLAN(nodeAt(plan, 0), matcher);
       },
       {.numWorkers = 4, .numDrivers = 4});

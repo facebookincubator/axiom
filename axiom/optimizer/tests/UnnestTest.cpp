@@ -184,8 +184,7 @@ TEST_F(UnnestTest, unnest) {
     auto plan = toSingleNodePlan(logicalPlan);
 
     auto matcher =
-        core::PlanMatcherBuilder()
-            .values()
+        matchValues()
             .project(
                 {"x",
                  "array_distinct(a_a_y) as a_y",
@@ -242,8 +241,7 @@ TEST_F(UnnestTest, unnest) {
                              .planNode();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher =
-        core::PlanMatcherBuilder().values().project().unnest().build();
+    auto matcher = matchValues().project().unnest().build();
     ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
 
     checkSame(logicalPlan, referencePlan);
@@ -274,12 +272,7 @@ TEST_F(UnnestTest, unnest) {
                              .planNode();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder()
-                       .values()
-                       .project()
-                       .unnest()
-                       .project({"v", "e"})
-                       .build();
+    auto matcher = matchValues().project().unnest().project({"v", "e"}).build();
     ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
 
     checkSame(logicalPlan, referencePlan);
@@ -1204,8 +1197,7 @@ TEST_F(UnnestTest, ordinality) {
     auto logicalPlan = parseSelect(query, kTestConnectorId);
 
     // Two arrays are unnested with ordinality column.
-    auto matcher = core::PlanMatcherBuilder()
-                       .values()
+    auto matcher = matchValues()
                        .project({"array[1, 2, 3] as foo", "array[4, 5] as bar"})
                        .unnest({}, {"foo", "bar"}, "ordinality")
                        .project({"e", "e_0", "ordinality"})
@@ -1222,8 +1214,7 @@ TEST_F(UnnestTest, ordinality) {
     auto logicalPlan = parseSelect(query, kTestConnectorId);
 
     // Ordinality column is pruned because it's not used.
-    auto matcher = core::PlanMatcherBuilder()
-                       .values()
+    auto matcher = matchValues()
                        .project({"array[1, 2, 3] as foo", "array[4, 5] as bar"})
                        .unnest({}, {"foo", "bar"}, std::nullopt)
                        .project({"e", "e_0"})
@@ -1240,8 +1231,7 @@ TEST_F(UnnestTest, ordinality) {
     auto logicalPlan = parseSelect(query, kTestConnectorId);
 
     // Ordinality column is pruned because it's not used.
-    auto matcher = core::PlanMatcherBuilder()
-                       .values()
+    auto matcher = matchValues()
                        .project({"array[1, 2, 3] as foo", "array[4, 5] as bar"})
                        .unnest({}, {"foo", "bar"}, std::nullopt)
                        .project({"1"})

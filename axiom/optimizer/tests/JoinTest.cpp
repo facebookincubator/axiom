@@ -516,8 +516,7 @@ TEST_F(JoinTest, crossThenLeft) {
   SCOPED_TRACE(query);
 
   auto matcher =
-      core::PlanMatcherBuilder()
-          .values()
+      matchValues()
           .aggregation()
           // TODO Remove redundant projection.
           .project()
@@ -587,8 +586,7 @@ TEST_F(JoinTest, filterPushdownThroughCrossJoinUnnest) {
         "SELECT * FROM (VALUES row(row(1, 2))) as t(x), UNNEST(array[1,2,3]) WHERE x.field0 > 0";
     SCOPED_TRACE(query);
 
-    auto matcher = core::PlanMatcherBuilder()
-                       .values()
+    auto matcher = matchValues()
                        .filter()
                        // TODO Combine 2 projects into one.
                        .project()
@@ -638,11 +636,8 @@ TEST_F(JoinTest, leftJoinOverValues) {
       "SELECT * FROM (VALUES 1, 2, 3, 4) as t(x) LEFT JOIN (VALUES 1, 2) as u(y) ON x = y";
   SCOPED_TRACE(query);
 
-  auto matcher = core::PlanMatcherBuilder()
-                     .values()
-                     .hashJoin(
-                         core::PlanMatcherBuilder().values().build(),
-                         core::JoinType::kLeft)
+  auto matcher = matchValues()
+                     .hashJoin(matchValues().build(), core::JoinType::kLeft)
                      .project()
                      .build();
 

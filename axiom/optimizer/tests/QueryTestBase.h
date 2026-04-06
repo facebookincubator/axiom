@@ -228,6 +228,15 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
         SchemaTableName{"default", tableName}.toString(), outputType);
   }
 
+  static velox::core::PlanMatcherBuilder matchValues() {
+    return velox::core::PlanMatcherBuilder().values();
+  }
+
+  static velox::core::PlanMatcherBuilder matchValues(
+      const velox::RowTypePtr& outputType) {
+    return velox::core::PlanMatcherBuilder().values(outputType);
+  }
+
   /// Creates a QueryCtx with the specified query ID.
   std::shared_ptr<velox::core::QueryCtx> makeQueryCtx(
       const std::string& queryId);

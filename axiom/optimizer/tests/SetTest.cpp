@@ -671,8 +671,8 @@ TEST_F(SetTest, filterOnDuplicateConstantInUnionAll) {
 
   // Constant filters ('x' <> '' and 'y' <> '') are folded and eliminated.
   auto buildMatcher = [&] {
-    return core::PlanMatcherBuilder().values().project().localPartition(
-        core::PlanMatcherBuilder().values().project().build());
+    return matchValues().project().localPartition(
+        matchValues().project().build());
   };
 
   auto plan = toSingleNodePlan(logicalPlan);
@@ -705,7 +705,7 @@ TEST_F(SetTest, filterOnDuplicateColumnInUnionAll) {
     return core::PlanMatcherBuilder()
         .hiveScan("t", test::gt("x", int64_t{0}))
         .project()
-        .localPartition(core::PlanMatcherBuilder().values().project().build());
+        .localPartition(matchValues().project().build());
   };
 
   auto plan = toSingleNodePlan(logicalPlan);
@@ -811,7 +811,6 @@ TEST_F(SetTest, constantFalseFilterInUnionAll) {
   }
 
   // All branches constant-false (0 > 0 and -1 > 0).
-  auto matchValues = [&]() { return core::PlanMatcherBuilder().values(); };
   {
     auto logicalPlan = parseSelect(
         "SELECT b FROM ("
@@ -949,8 +948,7 @@ TEST_F(SetTest, unionDistinctWithUnnestMultipleReferences) {
   };
 
   // TODO: Deduplicate identical scalar subqueries.
-  auto matcher = core::PlanMatcherBuilder()
-                     .values()
+  auto matcher = matchValues()
                      .nestedLoopJoin(matchUnion().build())
                      .nestedLoopJoin(matchUnion().build())
                      .build();

@@ -34,10 +34,7 @@ TEST_F(ValuesTest, columnPruning) {
           makeFlatVector<int32_t>({3, 30}),
       });
 
-  auto matcher = core::PlanMatcherBuilder()
-                     .values(ROW({"a", "c"}, INTEGER()))
-                     .project()
-                     .build();
+  auto matcher = matchValues(ROW({"a", "c"}, INTEGER())).project().build();
 
   {
     auto logicalPlan =
@@ -79,7 +76,7 @@ TEST_F(ValuesTest, complexTypes) {
       ROW({BIGINT(), VARCHAR()}),
   });
 
-  auto matcher = core::PlanMatcherBuilder().values(expectedType).build();
+  auto matcher = matchValues(expectedType).build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
@@ -102,7 +99,7 @@ TEST_F(ValuesTest, expressions) {
           makeNullableFlatVector<std::string>({"foo", std::nullopt}),
       });
 
-  auto matcher = core::PlanMatcherBuilder().values(expected->rowType()).build();
+  auto matcher = matchValues(expected->rowType()).build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   checkSame(logicalPlan, {expected});

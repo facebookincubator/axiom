@@ -342,7 +342,7 @@ TEST_F(SubqueryTest, correlatedExists) {
             .hashJoin(
                 matchHiveScan("region").build(), velox::core::JoinType::kFull)
             .hashJoin(
-                core::PlanMatcherBuilder().values().project().build(),
+                matchValues().project().build(),
                 velox::core::JoinType::kLeftSemiFilter)
             .build();
 
@@ -1828,19 +1828,18 @@ TEST_F(SubqueryTest, nestedInSubqueries) {
       " FROM nation"
       ") t";
 
-  auto matcher =
-      matchHiveScan("nation")
-          .hashJoin(
-              matchHiveScan("region").build(),
-              velox::core::JoinType::kLeftSemiProject,
-              /*nullAware=*/true)
-          .project()
-          .hashJoin(
-              velox::core::PlanMatcherBuilder().values().project().build(),
-              velox::core::JoinType::kLeftSemiProject,
-              /*nullAware=*/true)
-          .project()
-          .build();
+  auto matcher = matchHiveScan("nation")
+                     .hashJoin(
+                         matchHiveScan("region").build(),
+                         velox::core::JoinType::kLeftSemiProject,
+                         /*nullAware=*/true)
+                     .project()
+                     .hashJoin(
+                         matchValues().project().build(),
+                         velox::core::JoinType::kLeftSemiProject,
+                         /*nullAware=*/true)
+                     .project()
+                     .build();
 
   SCOPED_TRACE(query);
   auto plan = toSingleNodePlan(query);

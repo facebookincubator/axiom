@@ -842,13 +842,12 @@ TEST_P(SubfieldTest, subquery) {
 
     auto plan = toSingleNodePlan(logicalPlan);
 
-    auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("t_subquery")
-            .project()
-            .hashJoin(core::PlanMatcherBuilder().values().project().build())
-            .project()
-            .build();
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("t_subquery")
+                       .project()
+                       .hashJoin(matchValues().project().build())
+                       .project()
+                       .build();
     AXIOM_ASSERT_PLAN(plan, matcher);
     verifyRequiredSubfields(plan, {{"a", {".x", ".y"}}});
   }
@@ -863,12 +862,7 @@ TEST_P(SubfieldTest, subquery) {
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
                        .project()
-                       .hashJoin(
-                           core::PlanMatcherBuilder()
-                               .values()
-                               .aggregation()
-                               .project()
-                               .build())
+                       .hashJoin(matchValues().aggregation().project().build())
                        .filter()
                        .project()
                        .build();
