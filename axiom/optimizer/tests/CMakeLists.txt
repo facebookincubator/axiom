@@ -100,7 +100,8 @@ target_link_libraries(
 
 add_executable(
   axiom_optimizer_tests
-  AggregationPlanTest.cpp
+  AggregationTest.cpp
+  DistinctAggregationTest.cpp
   CardinalityEstimationTest.cpp
   CsvReadWriteTest.cpp
   DerivedTablePrinterTest.cpp
