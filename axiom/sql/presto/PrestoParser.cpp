@@ -118,6 +118,15 @@ class ParserHelper {
   ErrorListener errorListener_;
 };
 
+// Strips the Hive table-link suffix from a table name. Hive encodes
+// cross-namespace references as "table_name:origin_namespace"; the suffix is
+// routing metadata for Metastore, not part of the logical table name.
+// TODO: Move to connector layer if cross-namespace table links are needed.
+std::string stripTableLinkSuffix(const std::string& name) {
+  auto pos = name.find(':');
+  return pos == std::string::npos ? name : name.substr(0, pos);
+}
+
 std::pair<std::string, facebook::axiom::SchemaTableName> toConnectorTable(
     const QualifiedName& name,
     const std::string& defaultConnectorId,
@@ -127,17 +136,18 @@ std::pair<std::string, facebook::axiom::SchemaTableName> toConnectorTable(
 
   if (parts.size() == 1) {
     // name
-    return {defaultConnectorId, {defaultSchema, parts[0]}};
+    return {
+        defaultConnectorId, {defaultSchema, stripTableLinkSuffix(parts[0])}};
   }
 
   if (parts.size() == 2) {
     // schema.name
-    return {defaultConnectorId, {parts[0], parts[1]}};
+    return {defaultConnectorId, {parts[0], stripTableLinkSuffix(parts[1])}};
   }
 
   // connector.schema.name
   VELOX_CHECK_EQ(3, parts.size());
-  return {parts[0], {parts[1], parts[2]}};
+  return {parts[0], {parts[1], stripTableLinkSuffix(parts[2])}};
 }
 
 // Resolves a column reference against both sides of a JOIN. Raises an error

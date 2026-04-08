@@ -1564,5 +1564,33 @@ TEST_F(PrestoParserTest, friendlySqlFromFirst) {
       "FROM-first syntax requires Friendly SQL mode");
 }
 
+TEST_F(PrestoParserTest, tableLinkSuffix) {
+  auto matcher = matchScan("nation").output(
+      {"n_nationkey", "n_name", "n_regionkey", "n_comment"});
+
+  testSelect("SELECT * FROM nation:some_namespace", matcher);
+  testSelect("SELECT * FROM \"nation:some_namespace\"", matcher);
+  testSelect("SELECT * FROM default.nation:origin_ns", matcher);
+  testSelect("SELECT * FROM test.default.nation:origin_ns", matcher);
+
+  testSelect("SELECT * FROM \"nation:\"", matcher);
+  testSelect("SELECT * FROM nation:ns1:ns2", matcher);
+
+  testSelect("SELECT * FROM nation", matcher);
+
+  testSelect(
+      "SELECT * FROM nation:ns JOIN region:ns ON n_regionkey = r_regionkey",
+      matchScan("nation")
+          .join(matchScan("region").build())
+          .output(
+              {"n_nationkey",
+               "n_name",
+               "n_regionkey",
+               "n_comment",
+               "r_regionkey",
+               "r_name",
+               "r_comment"}));
+}
+
 } // namespace
 } // namespace axiom::sql::presto::test

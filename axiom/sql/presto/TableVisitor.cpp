@@ -20,6 +20,15 @@
 
 namespace axiom::sql::presto {
 
+namespace {
+// Strips the Hive table-link suffix (":origin_namespace") from a table name.
+// See stripTableLinkSuffix in PrestoParser.cpp for full documentation.
+std::string stripTableLinkSuffix(const std::string& name) {
+  auto pos = name.find(':');
+  return pos == std::string::npos ? name : name.substr(0, pos);
+}
+} // namespace
+
 TableVisitor::TableVisitor(
     const std::string& defaultConnectorId,
     const std::string& defaultSchema)
@@ -103,11 +112,13 @@ facebook::axiom::CatalogSchemaTableName TableVisitor::constructTableName(
       name.fullyQualifiedName());
   switch (parts.size()) {
     case 1:
-      return {defaultConnectorId_, {defaultSchema_, parts[0]}};
+      return {
+          defaultConnectorId_,
+          {defaultSchema_, stripTableLinkSuffix(parts[0])}};
     case 2:
-      return {defaultConnectorId_, {parts[0], parts[1]}};
+      return {defaultConnectorId_, {parts[0], stripTableLinkSuffix(parts[1])}};
     case 3:
-      return {parts[0], {parts[1], parts[2]}};
+      return {parts[0], {parts[1], stripTableLinkSuffix(parts[2])}};
     default:
       VELOX_UNREACHABLE();
   }
