@@ -19,6 +19,7 @@
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/ToVelox.h"
 #include "axiom/runner/LocalRunner.h"
+#include "axiom/sql/presto/PrestoParser.h"
 #include "axiom/sql/presto/SqlStatement.h"
 #include "velox/common/file/TokenProvider.h"
 
@@ -26,6 +27,8 @@ namespace axiom::sql {
 
 class SqlQueryRunner {
  public:
+  ~SqlQueryRunner();
+
   /// @param initializeConnectors Lambda to call to initialize connectors and
   /// return a pair of default {connector ID, schema}.
   void initialize(
@@ -224,6 +227,12 @@ class SqlQueryRunner {
   std::shared_ptr<facebook::velox::memory::MemoryPool> executorPool_;
   std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
   std::unordered_map<std::string, std::string> config_;
+
+  // Cached parser, reused when connector/schema defaults don't change.
+  std::unique_ptr<presto::PrestoParser> parser_;
+  // Connector ID and schema used to construct parser_.
+  std::string parserConnectorId_;
+  std::string parserSchema_;
   std::string defaultConnectorId_;
   std::string defaultSchema_;
   std::atomic<int32_t> queryCounter_{0};

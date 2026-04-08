@@ -82,6 +82,8 @@ std::string getLocalTimezone() {
 
 namespace axiom::sql {
 
+SqlQueryRunner::~SqlQueryRunner() = default;
+
 void SqlQueryRunner::initialize(
     const std::function<std::pair<std::string, std::string>()>&
         initializeConnectors) {
@@ -280,9 +282,14 @@ std::vector<presto::SqlStatementPtr> SqlQueryRunner::parseMultiple(
       options.defaultConnectorId.value_or(defaultConnectorId_);
   const auto& defaultSchema = options.defaultSchema.value_or(defaultSchema_);
 
-  auto prestoParser =
-      std::make_unique<presto::PrestoParser>(defaultConnectorId, defaultSchema);
-  return prestoParser->parseMultiple(sql, /*enableTracing=*/options.debugMode);
+  if (!parser_ || parserConnectorId_ != defaultConnectorId ||
+      parserSchema_ != defaultSchema) {
+    parser_ = std::make_unique<presto::PrestoParser>(
+        defaultConnectorId, defaultSchema);
+    parserConnectorId_ = defaultConnectorId;
+    parserSchema_ = defaultSchema;
+  }
+  return parser_->parseMultiple(sql, /*enableTracing=*/options.debugMode);
 }
 
 presto::SqlStatementPtr SqlQueryRunner::parseSingle(
