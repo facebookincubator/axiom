@@ -328,8 +328,20 @@ TEST_F(AggregationPlanTest, repartitionForAggPartitionSubset) {
 // 2. Outer: Regular aggregation without DISTINCT flag
 // This avoids the overhead of tracking distinct values in each aggregate.
 TEST_F(AggregationPlanTest, singleDistinctToGroupBy) {
-  testConnector_->addTable(
+  auto table = testConnector_->addTable(
       "t", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), DOUBLE()}));
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  // Set table statistics with high duplicate ratio for grouping key + distinct
+  // args. The inner GROUP BY should deduplicate aggressively, making the
+  // GroupBy plan cheaper than the MarkDistinct plan.
+  table->setStats(
+      10'000,
+      {{"a", {.numDistinct = 10}},
+       {"b", {.numDistinct = 5}},
+       {"c", {.numDistinct = 5}}});
 
   auto buildMatcher = [](const std::vector<std::string>& projections,
                          const std::vector<std::string>& innerGroupingKeys,
@@ -527,62 +539,230 @@ TEST_F(AggregationPlanTest, singleDistinctToGroupBy) {
   }
 }
 
+// Verifies that when there are multiple DISTINCT aggregates with different
+// sets of arguments, the optimizer uses the MarkDistinct transformation.
+TEST_F(AggregationPlanTest, multipleDistinctToMarkDistinct) {
+  testConnector_->addTable(
+      "t", ROW({"a", "b", "c", "d"}, {BIGINT(), DOUBLE(), DOUBLE(), BIGINT()}));
+
+  auto buildMatcher =
+      [](const std::vector<std::string>& projections,
+         const std::vector<std::vector<std::string>>& markDistinctKeys,
+         const std::vector<std::string>& groupingKeys,
+         bool singleStep,
+         const std::vector<std::string>& aggregates) {
+        auto builder = core::PlanMatcherBuilder().tableScan();
+        if (!projections.empty()) {
+          builder.project(projections);
+        }
+
+        for (const auto& keys : markDistinctKeys) {
+          builder.shuffle().markDistinct(keys);
+        }
+        if (singleStep) {
+          builder.shuffle().localPartition().singleAggregation(
+              groupingKeys, aggregates);
+        } else {
+          builder.partialAggregation(groupingKeys, aggregates)
+              .shuffle()
+              .localPartition()
+              .finalAggregation();
+        }
+        if (!groupingKeys.empty()) {
+          builder.shuffle();
+        }
+        return builder.build();
+      };
+
+  auto assertPlan =
+      [&](const std::vector<std::string>& groupingKeys,
+          const std::vector<std::string>& aggregates,
+          const std::shared_ptr<core::PlanMatcher>& expectedMatcher) {
+        auto logicalPlan = lp::PlanBuilder(makeContext())
+                               .tableScan("t")
+                               .aggregate(groupingKeys, aggregates)
+                               .build();
+
+        OptimizerOptions options{.alwaysPlanPartialAggregation = true};
+        auto plan = planVelox(
+            logicalPlan,
+            MultiFragmentPlan::Options{.numWorkers = 4, .numDrivers = 4},
+            options);
+        AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, expectedMatcher);
+      };
+
+  {
+    // Test multiple DISTINCT aggregates with different argument sets.
+    assertPlan(
+        {"a"},
+        {"count(DISTINCT b)", "sum(DISTINCT d % 5)"},
+        buildMatcher(
+            {"a as g", "b as p0", "d % 5 as p1"},
+            {{"g", "p0"}, {"g", "p1"}},
+            {"g"},
+            /*singleStep=*/false,
+            {"count(p0) filter (where m0)", "sum(p1) filter (where m1)"}));
+  }
+
+  {
+    // Test global aggregation with multiple DISTINCT sets.
+    assertPlan(
+        {},
+        {"count(DISTINCT b)", "sum(DISTINCT d % 5)"},
+        buildMatcher(
+            {"b as p0", "d % 5 as p1"},
+            {{"p0"}, {"p1"}},
+            {},
+            /*singleStep=*/false,
+            {"count(p0) filter (where m0)", "sum(p1) filter (where m1)"}));
+  }
+
+  {
+    // Test mix of DISTINCT with different args and non-DISTINCT.
+    assertPlan(
+        {"a"},
+        {"count(DISTINCT b)", "sum(DISTINCT d % 5)", "avg(b)"},
+        buildMatcher(
+            {"a as g", "b as p0", "d % 5 as p1"},
+            {{"g", "p0"}, {"g", "p1"}},
+            {"g"},
+            /*singleStep=*/false,
+            {"count(p0) filter (where m0)",
+             "sum(p1) filter (where m1)",
+             "avg(p0)"}));
+  }
+
+  {
+    // Test DISTINCT with ORDER BY uses single aggregation step.
+    assertPlan(
+        {"a"},
+        {"array_agg(DISTINCT b ORDER BY b)",
+         "array_agg(DISTINCT d % 5 ORDER BY d % 5)",
+         "array_agg(b ORDER BY b)"},
+        buildMatcher(
+            {"a as g", "b as p0", "d % 5 as p1"},
+            {{"g", "p0"}, {"g", "p1"}},
+            {"g"},
+            /*singleStep=*/true,
+            {"array_agg(p0 ORDER BY p0 ASC NULLS LAST) filter (where m0)",
+             "array_agg(p1 ORDER BY p1 ASC NULLS LAST) filter (where m1)",
+             "array_agg(p0 ORDER BY p0 ASC NULLS LAST)"}));
+  }
+
+  {
+    // Test DISTINCT aggregates with the same set of non-grouping-key arguments
+    // share a single marker column. Grouping keys in distinct arguments are
+    // ignored since they always have unique values during aggregation.
+    assertPlan(
+        {"b"},
+        {"count(DISTINCT c)", "covar_pop(DISTINCT b, c)"},
+        buildMatcher(
+            {},
+            {{"b", "c"}},
+            {"b"},
+            /*singleStep=*/false,
+            {"count(c) filter (where m0)",
+             "covar_pop(b, c) filter (where m0)"}));
+  }
+
+  {
+    // Test DISTINCT args overlapping with grouping keys are deduplicated in
+    // MarkDistinct keys.
+    assertPlan(
+        {"a"},
+        {"count(DISTINCT a)", "sum(DISTINCT b)"},
+        buildMatcher(
+            {},
+            {{"a", "b"}},
+            {"a"},
+            /*singleStep=*/false,
+            {"count(DISTINCT a)", "sum(b) filter (where m0)"}));
+
+    assertPlan(
+        {"a"},
+        {"count(DISTINCT a)", "sum(DISTINCT a)"},
+        buildMatcher(
+            {},
+            {},
+            {"a"},
+            /*singleStep=*/false,
+            {"count(DISTINCT a)", "sum(DISTINCT a)"}));
+  }
+
+  {
+    // Test multi-argument DISTINCT aggregates with different arg sets.
+    assertPlan(
+        {"a"},
+        {"covar_pop(DISTINCT b, c)", "count(DISTINCT d)"},
+        buildMatcher(
+            {},
+            {{"a", "b", "c"}, {"a", "d"}},
+            {"a"},
+            /*singleStep=*/false,
+            {"covar_pop(b, c) filter (where m0)",
+             "count(d) filter (where m1)"}));
+  }
+
+  {
+    // Test DISTINCT aggregate with literal in args alongside different DISTINCT
+    // sets. The literal should be skipped from markDistinctKeys.
+    assertPlan(
+        {"a"},
+        {"count(DISTINCT b)", "max_by(DISTINCT d, 1)"},
+        buildMatcher(
+            {},
+            {{"a", "b"}, {"a", "d"}},
+            {"a"},
+            /*singleStep=*/false,
+            {"count(b) filter (where m0)", "max_by(d, 1) filter (where m1)"}));
+  }
+
+  {
+    // Test DISTINCT aggregate whose column args are all grouping keys plus a
+    // literal. After filtering the literal, inputSet becomes empty and no
+    // marker is created.
+    assertPlan(
+        {"a"},
+        {"max_by(DISTINCT a, 1)", "count(DISTINCT b)"},
+        buildMatcher(
+            {},
+            {{"a", "b"}},
+            {"a"},
+            /*singleStep=*/false,
+            {"max_by(DISTINCT a, 1)", "count(b) filter (where m0)"}));
+  }
+
+  {
+    // Test DISTINCT aggregate with all-literal args alongside DISTINCT
+    // aggregate with column args. The all-literal aggregate gets no marker
+    // since its column arg set is empty after filtering literals.
+    assertPlan(
+        {"a"},
+        {"count(DISTINCT 1)", "count(DISTINCT b)"},
+        buildMatcher(
+            {},
+            {{"a", "b"}},
+            {"a"},
+            /*singleStep=*/false,
+            {"count(DISTINCT 1)", "count(b) filter (where m0)"}));
+  }
+}
+
 TEST_F(AggregationPlanTest, unsupportedAggregationOverDistinct) {
   testConnector_->addTable(
       "t", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), DOUBLE()}));
 
   {
-    // Different DISTINCT arguments across aggregates is not supported yet.
+    // DISTINCT aggregate with a filter condition is not supported yet.
     auto logicalPlan =
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makeContext(), /*enableCoercions=*/true)
             .tableScan("t")
-            .aggregate({"a"}, {"count(DISTINCT b)", "sum(DISTINCT c)"})
+            .aggregate({"a"}, {"count(DISTINCT b) FILTER (WHERE c > 0)"})
             .build();
 
     VELOX_ASSERT_THROW(
         test::QueryTestBase::planVelox(logicalPlan),
-        "DISTINCT aggregates have multiple sets of arguments");
-  }
-
-  {
-    // Different DISTINCT argument sets: {b, c} vs {b}.
-    auto logicalPlan =
-        lp::PlanBuilder(makeContext())
-            .tableScan("t")
-            .aggregate(
-                {"a"},
-                {"covar_pop(DISTINCT b, c)", "covar_samp(DISTINCT b, b)"})
-            .build();
-
-    VELOX_ASSERT_THROW(
-        test::QueryTestBase::planVelox(logicalPlan),
-        "DISTINCT aggregates have multiple sets of arguments");
-  }
-
-  {
-    // Mix of DISTINCT and non-DISTINCT aggregates is not supported yet.
-    auto logicalPlan = lp::PlanBuilder(makeContext())
-                           .tableScan("t")
-                           .aggregate({"a"}, {"count(DISTINCT b)", "sum(c)"})
-                           .build();
-
-    VELOX_ASSERT_THROW(
-        test::QueryTestBase::planVelox(logicalPlan),
-        "Mix of DISTINCT and non-DISTINCT aggregates");
-  }
-
-  {
-    // First aggregate has all-literal args, second has column args. The column
-    // arg sets differ (empty vs {b}), so this is unsupported.
-    auto logicalPlan =
-        lp::PlanBuilder(makeContext())
-            .tableScan("t")
-            .aggregate({"a"}, {"count(DISTINCT 1)", "count(DISTINCT b)"})
-            .build();
-
-    VELOX_ASSERT_THROW(
-        test::QueryTestBase::planVelox(logicalPlan),
-        "DISTINCT aggregates have multiple sets of arguments");
+        "Distinct aggregation plan not eligible for transformation to GroupBy or MarkDistinct.");
   }
 }
 

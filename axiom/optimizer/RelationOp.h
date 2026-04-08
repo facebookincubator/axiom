@@ -44,6 +44,13 @@ struct PlanCost {
     cardinality = other.cardinality;
   }
 
+  bool operator<(const PlanCost& other) const {
+    if (cost != other.cost) {
+      return cost < other.cost;
+    }
+    return cardinality < other.cardinality;
+  }
+
   std::string toString() const {
     return fmt::format(
         std::locale("en_US.UTF-8"),
@@ -125,6 +132,7 @@ enum class RelType {
   kWindow,
   kRowNumber,
   kTopNRowNumber,
+  kMarkDistinct,
 };
 
 AXIOM_DECLARE_ENUM_NAME(RelType)
@@ -894,5 +902,38 @@ struct TopNRowNumber : public RelationOp {
 };
 
 using TopNRowNumberCP = const TopNRowNumber*;
+
+/// Marks unique rows based on distinct keys. Produces a boolean marker column
+/// that is true for the first row seen for each unique combination of distinct
+/// keys.
+struct MarkDistinct : public RelationOp {
+  /// @param input The input relation.
+  /// @param markerColumn The output boolean column that marks distinct rows.
+  /// @param distinctKeys The columns that define distinctness.
+  MarkDistinct(
+      RelationOpPtr input,
+      ColumnCP markerColumn,
+      ExprVector distinctKeys);
+
+  ColumnCP markerColumn() const {
+    return markerColumn_;
+  }
+
+  const ExprVector& distinctKeys() const {
+    return distinctKeys_;
+  }
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
+
+ private:
+  // The output boolean column that marks distinct rows.
+  ColumnCP const markerColumn_;
+  // The columns that define distinctness.
+  const ExprVector distinctKeys_;
+};
+
+using MarkDistinctCP = const MarkDistinct*;
 
 } // namespace facebook::axiom::optimizer

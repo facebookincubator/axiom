@@ -168,20 +168,17 @@ std::string Aggregate::toString() const {
   return out.str();
 }
 
-const Aggregate* Aggregate::dropDistinct() const {
-  if (!isDistinct_) {
-    return this;
-  }
+const Aggregate* Aggregate::copyWith(Overrides overrides) const {
   return make<Aggregate>(
       name(),
       value_,
       args(),
       functions(),
-      /*isDistinct=*/false,
-      condition_,
+      overrides.isDistinct.value_or(isDistinct_),
+      overrides.condition.value_or(condition_),
       intermediateType_,
-      orderKeys_,
-      orderTypes_);
+      std::move(overrides.orderKeys).value_or(orderKeys_),
+      std::move(overrides.orderTypes).value_or(orderTypes_));
 }
 
 std::string WindowFunction::toString() const {

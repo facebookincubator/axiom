@@ -1151,9 +1151,16 @@ class Aggregate : public Call {
     return orderTypes_;
   }
 
-  /// Returns a copy of 'this' with 'isDistinct' set to false. If 'isDistinct'
-  /// of this instance is already false, return 'this' directly.
-  const Aggregate* dropDistinct() const;
+  /// Overrides for creating modified copies of an Aggregate via copyWith().
+  struct Overrides {
+    std::optional<bool> isDistinct;
+    std::optional<ExprCP> condition;
+    std::optional<ExprVector> orderKeys;
+    std::optional<OrderTypeVector> orderTypes;
+  };
+
+  /// Returns a copy of 'this' with the specified fields overridden.
+  const Aggregate* copyWith(Overrides overrides) const;
 
   std::string toString() const override;
 
