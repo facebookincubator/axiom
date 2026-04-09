@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <fmt/format.h>
+
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
@@ -1020,6 +1022,25 @@ TEST_F(SetTest, unionAllWithDistinctAndCountStar) {
             .singleAggregation({}, {"count(*) as cnt"})
             .filter("cnt > 0")
             .build());
+  }
+}
+
+TEST_F(SetTest, unionAllWithDistinctWidthMismatch) {
+  std::vector<std::string> widthConstrainingInputs = {
+      "SELECT 1",
+      "SELECT COUNT(*) as n_regionkey FROM nation",
+      "SELECT n_regionkey FROM (SELECT n_regionkey FROM nation LIMIT 3)",
+  };
+  for (const auto& input : widthConstrainingInputs) {
+    auto plan = parseSelect(
+        fmt::format(
+            "SELECT COUNT(*) FROM ("
+            "  SELECT DISTINCT n_regionkey FROM nation"
+            "  UNION ALL"
+            "  {}"
+            ")",
+            input));
+    VELOX_ASSERT_THROW(planVelox(plan), "Partition count mismatch");
   }
 }
 

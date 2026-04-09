@@ -178,6 +178,39 @@ RelationOpPtr addGather(const RelationOpPtr& op) {
   return gather;
 }
 
+void checkStageWidths(const std::vector<ExecutableFragment>& stages) {
+  folly::F14FastMap<std::string, size_t> stageIndex;
+  for (size_t i = 0; i < stages.size(); ++i) {
+    stageIndex[stages[i].taskPrefix] = i;
+  }
+  for (const auto& consumer : stages) {
+    for (const auto& inputStage : consumer.inputStages) {
+      auto stageIt = stageIndex.find(inputStage.producerTaskPrefix);
+      VELOX_CHECK(
+          stageIt != stageIndex.end(),
+          "Cannot find producer stage {}",
+          inputStage.producerTaskPrefix);
+      const auto& producer = stages[stageIt->second];
+      auto* partitionedOutput =
+          dynamic_cast<const velox::core::PartitionedOutputNode*>(
+              producer.fragment.planNode.get());
+      VELOX_CHECK_NOT_NULL(
+          partitionedOutput,
+          "Expected PartitionedOutputNode at the root of producer stage {}",
+          producer.taskPrefix);
+      // Broadcast sends data to all consumer partitions regardless of
+      // consumer width.
+      if (partitionedOutput->isBroadcast()) {
+        continue;
+      }
+      VELOX_CHECK_EQ(
+          partitionedOutput->numPartitions(),
+          consumer.width,
+          "Partition count mismatch between producer and consumer stage");
+    }
+  }
+}
+
 } // namespace
 
 void ToVelox::filterUpdated(BaseTableCP table) {
@@ -355,6 +388,7 @@ PlanAndStats ToVelox::toVeloxPlan(
   for (const auto& stage : stages) {
     velox::core::PlanConsistencyChecker::check(stage.fragment.planNode);
   }
+  checkStageWidths(stages);
 
   if (options.remoteOutput) {
     rootPlanNode = velox::core::PartitionedOutputNode::single(
@@ -1645,7 +1679,7 @@ velox::core::PlanNodePtr ToVelox::makeUnionAll(
     std::vector<ExecutableFragment>& stages) {
   // If no inputs have a repartition, this is a local exchange. If
   // some have repartition and more than one have no repartition,
-  // this is a local exchange with a remote exchaneg as input. All the
+  // this is a local exchange with a remote exchange as input. All the
   // inputs with repartition go to one remote exchange.
   std::vector<velox::core::PlanNodePtr> localSources;
   std::shared_ptr<velox::core::ExchangeNode> exchange;
