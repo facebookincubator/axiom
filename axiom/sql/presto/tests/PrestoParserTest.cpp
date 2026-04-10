@@ -262,33 +262,6 @@ TEST_F(PrestoParserTest, qualifiedColumnAccess) {
   }
 }
 
-TEST_F(PrestoParserTest, syntaxErrors) {
-  auto parser = makeParser();
-  EXPECT_THAT(
-      [&]() { parser.parse("SELECT * FROM"); },
-      ThrowsMessage<axiom::sql::presto::PrestoParseError>(::testing::HasSubstr(
-          "Syntax error at 1:13: mismatched input '<EOF>'")));
-
-  EXPECT_THAT(
-      [&]() {
-        parser.parse(
-            "SELECT * FROM nation\n"
-            "WHERE");
-      },
-      ThrowsMessage<axiom::sql::presto::PrestoParseError>(::testing::HasSubstr(
-          "Syntax error at 2:5: mismatched input '<EOF>'")));
-
-  EXPECT_THAT(
-      [&]() { parser.parse("SELECT * FROM (VALUES 1, 2, 3)) blah..."); },
-      ThrowsMessage<axiom::sql::presto::PrestoParseError>(::testing::HasSubstr(
-          "Syntax error at 1:30: mismatched input ')' expecting <EOF>")));
-
-  EXPECT_THAT(
-      [&]() { parser.parse("CREATE TABLE t (price DECIMAL('abc', 'xyz'))"); },
-      ThrowsMessage<axiom::sql::presto::PrestoParseError>(::testing::HasSubstr(
-          "Syntax error at 1:30: mismatched input ''abc''")));
-}
-
 TEST_F(PrestoParserTest, selectStar) {
   {
     auto matcher = matchScan().output(

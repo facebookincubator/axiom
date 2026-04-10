@@ -55,10 +55,14 @@ class PrestoParser {
   /// semicolons.
   /// @param enableTracing If true, enables tracing for debugging purposes.
   /// @return Vector of parsed statements.
+  /// @throws PrestoParseError if any statement fails to parse. The error's
+  /// line and column are relative to the full input @p sql, not the individual
+  /// sub-statement.
   std::vector<SqlStatementPtr> parseMultiple(
       std::string_view sql,
       bool enableTracing = false);
 
+  /// @throws PrestoParseError if any statement fails to parse.
   facebook::axiom::logical_plan::ExprPtr parseExpression(
       std::string_view sql,
       bool enableTracing = false);
@@ -68,6 +72,7 @@ class PrestoParser {
   /// do not affect the query output (e.g., an unreferenced CTE).
   /// @param sql SQL query statement
   /// @return input and output tables which the query references.
+  /// @throws PrestoParseError if any statement fails to parse.
   ReferencedTables getReferencedTables(std::string_view sql);
 
   /// Splits SQL text into individual statements by semicolon delimiters.

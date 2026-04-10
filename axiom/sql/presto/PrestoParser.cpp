@@ -46,6 +46,26 @@ namespace lp = facebook::axiom::logical_plan;
 
 class ErrorListener : public antlr4::BaseErrorListener {
  public:
+  void reset() {
+    firstError_.reset();
+  }
+
+  const std::string& firstError() const {
+    return firstError_.value();
+  }
+
+  size_t line() const {
+    return line_;
+  }
+
+  size_t column() const {
+    return column_;
+  }
+
+  const std::string& token() const {
+    return token_;
+  }
+
   void syntaxError(
       antlr4::Recognizer* recognizer,
       antlr4::Token* offendingSymbol,
@@ -53,13 +73,22 @@ class ErrorListener : public antlr4::BaseErrorListener {
       size_t charPositionInLine,
       const std::string& msg,
       std::exception_ptr e) override {
-    if (firstError.empty()) {
-      firstError = fmt::format(
-          "Syntax error at {}:{}: {}", line, charPositionInLine, msg);
+    if (firstError_.has_value()) {
+      return; // only capture first error
     }
+
+    line_ = line - 1; // 0-based
+    column_ = charPositionInLine; // 0-based
+    firstError_ = msg;
+    token_ =
+        offendingSymbol != nullptr ? offendingSymbol->getText() : std::string();
   }
 
-  std::string firstError;
+ private:
+  std::optional<std::string> firstError_;
+  size_t line_{};
+  size_t column_{};
+  std::string token_;
 };
 
 class ParserHelper {
@@ -98,13 +127,21 @@ class ParserHelper {
 
     // Fall back to LL mode (slower but handles all valid SQL).
     tokenStream_->seek(0);
+    // Reset both the parser and errorListener so that errors from the SLL
+    // attempt are discarded. Either the LL path succeeds and we return a
+    // valid AST, or it fails and we capture fresh LL error info.
     parser_->reset();
+    errorListener_.reset();
     parser_->getInterpreter<antlr4::atn::ParserATNSimulator>()
         ->setPredictionMode(antlr4::atn::PredictionMode::LL);
 
     auto ctx = parser_->singleStatement();
     if (parser_->getNumberOfSyntaxErrors() > 0) {
-      throw PrestoParseError(errorListener_.firstError);
+      throw PrestoParseError(
+          errorListener_.firstError(),
+          errorListener_.line(),
+          errorListener_.column(),
+          errorListener_.token());
     }
 
     return ctx->statement();
@@ -1194,6 +1231,28 @@ SqlStatementPtr PrestoParser::parse(std::string_view sql, bool enableTracing) {
   return doParse(sql, enableTracing);
 }
 
+namespace {
+
+// Computes line and column offsets for adjusting a parse error that occurred
+// within a sub-statement back to the original multi-statement SQL string.
+// Returns {lineOffset, columnOffset}. columnOffset is non-zero only when the
+// error is on line 0 of the sub-statement (same line as the statement start).
+std::pair<size_t, size_t>
+computeOffset(std::string_view sql, size_t statementOffset, size_t errorLine) {
+  size_t linesBeforeStatement = 0;
+  size_t lastLineStart = 0;
+  for (size_t i = 0; i < statementOffset; ++i) {
+    if (sql[i] == '\n') {
+      ++linesBeforeStatement;
+      lastLineStart = i + 1;
+    }
+  }
+  size_t columnOffset = (errorLine == 0) ? statementOffset - lastLineStart : 0;
+  return {linesBeforeStatement, columnOffset};
+}
+
+} // namespace
+
 std::vector<SqlStatementPtr> PrestoParser::parseMultiple(
     std::string_view sql,
     bool enableTracing) {
@@ -1202,8 +1261,15 @@ std::vector<SqlStatementPtr> PrestoParser::parseMultiple(
   results.reserve(statements.size());
 
   for (const auto& statement : statements) {
-    if (!statement.empty()) {
+    if (statement.empty()) {
+      continue;
+    }
+    try {
       results.push_back(doParse(statement, enableTracing));
+    } catch (const PrestoParseError& e) {
+      auto [lineOffset, columnOffset] =
+          computeOffset(sql, statement.data() - sql.data(), e.line());
+      throw e.withOffset(lineOffset, columnOffset);
     }
   }
 

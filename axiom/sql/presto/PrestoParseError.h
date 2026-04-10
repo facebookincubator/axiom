@@ -22,22 +22,61 @@
 namespace axiom::sql::presto {
 
 /// Exception thrown when parsing a Presto SQL query fails.
-/// The message contains the detailed error message from the parser.
 class PrestoParseError : public std::exception {
  public:
-  /* implicit */ PrestoParseError(std::string_view message)
-      : message_(message) {}
+  PrestoParseError(
+      const std::string& message,
+      size_t line,
+      size_t column,
+      std::string token)
+      : formatted_(
+            "Syntax error at " + std::to_string(line) + ":" +
+            std::to_string(column) + ": " + message),
+        messageLength_(message.size()),
+        line_(line),
+        column_(column),
+        token_(std::move(token)) {}
 
+  /// 0-based line number.
+  size_t line() const {
+    return line_;
+  }
+
+  /// 0-based column number.
+  size_t column() const {
+    return column_;
+  }
+
+  /// Offending token text. May be empty.
+  const std::string& token() const {
+    return token_;
+  }
+
+  /// Raw error description from the parser, without the line:column prefix.
   std::string_view message() const noexcept {
-    return message_;
+    return std::string_view(formatted_)
+        .substr(formatted_.size() - messageLength_);
   }
 
   const char* what() const noexcept override {
-    return message_.data();
+    return formatted_.data();
+  }
+
+  /// Returns a copy with adjusted line and column.
+  PrestoParseError withOffset(size_t lineOffset, size_t columnOffset) const {
+    return PrestoParseError(
+        std::string(message()),
+        line_ + lineOffset,
+        column_ + columnOffset,
+        token_);
   }
 
  private:
-  std::string message_;
+  std::string formatted_;
+  size_t messageLength_;
+  size_t line_;
+  size_t column_;
+  std::string token_;
 };
 
 } // namespace axiom::sql::presto
