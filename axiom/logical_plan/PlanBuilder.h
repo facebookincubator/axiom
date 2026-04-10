@@ -524,7 +524,7 @@ class PlanBuilder {
   }
 
   /// Adds a Limit node returning at most 'count' rows.
-  PlanBuilder& limit(int32_t count) {
+  PlanBuilder& limit(int64_t count) {
     return limit(0, count);
   }
 

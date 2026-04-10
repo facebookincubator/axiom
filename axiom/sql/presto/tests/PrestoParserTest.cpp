@@ -1406,6 +1406,21 @@ TEST_F(PrestoParserTest, limit) {
         matcher);
   }
 
+  {
+    auto matcher = matchScan().limit(0, 2'147'483'647).output(nationColumns);
+    testSelect("SELECT * FROM nation LIMIT 2147483647", matcher);
+  }
+
+  {
+    auto matcher = matchScan().limit(0, 2'147'483'648).output(nationColumns);
+    testSelect("SELECT * FROM nation LIMIT 2147483648", matcher);
+  }
+
+  {
+    auto matcher = matchScan().limit(0, 24'859'023'574).output(nationColumns);
+    testSelect("SELECT * FROM nation LIMIT 24859023574", matcher);
+  }
+
   // LIMIT ALL means "no limit" — should not add a LimitNode.
   {
     auto matcher = matchScan().output(nationColumns);
