@@ -24,6 +24,7 @@
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/LocalTableMetadata.h"
 #include "axiom/optimizer/JsonUtil.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
@@ -1311,7 +1312,7 @@ bool dirExists(const std::string& path) {
 // Create directory (recursively).
 void createDir(const std::string& path) {
   if (mkdir(path.c_str(), 0755) != 0 && errno != EEXIST) {
-    throw std::runtime_error("Failed to create directory: " + path);
+    VELOX_USER_FAIL("Failed to create directory: {}", path);
   }
 }
 

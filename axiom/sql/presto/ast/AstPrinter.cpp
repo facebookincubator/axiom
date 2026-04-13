@@ -17,6 +17,7 @@
 #include "axiom/sql/presto/ast/AstPrinter.h"
 #include <fmt/format.h>
 #include <fmt/ranges.h>
+#include "velox/common/base/Exceptions.h"
 
 namespace axiom::sql::presto {
 
@@ -94,7 +95,7 @@ std::string toString(ArithmeticBinaryExpression::Operator op) {
     case ArithmeticBinaryExpression::Operator::kModulus:
       return "%";
   }
-  throw std::runtime_error("Unsupported arithmetic operator");
+  VELOX_FAIL("Unsupported arithmetic operator");
 }
 
 std::string toString(LogicalBinaryExpression::Operator op) {
@@ -105,7 +106,7 @@ std::string toString(LogicalBinaryExpression::Operator op) {
       return "or";
   }
 
-  throw std::runtime_error("Unsupported logical operator");
+  VELOX_FAIL("Unsupported logical operator");
 }
 
 std::string toString(ComparisonExpression::Operator op) {
@@ -125,7 +126,7 @@ std::string toString(ComparisonExpression::Operator op) {
     case ComparisonExpression::Operator::kIsDistinctFrom:
       return "IS DISTINCT FROM";
     default:
-      throw std::runtime_error("Unsupported comparison operator");
+      VELOX_FAIL("Unsupported comparison operator");
   }
 }
 
@@ -136,7 +137,7 @@ std::string toString(SortItem::Ordering ordering) {
     case SortItem::Ordering::kDescending:
       return "DESC";
     default:
-      throw std::runtime_error("Unsupported sort ordering");
+      VELOX_FAIL("Unsupported sort ordering");
   }
 }
 
@@ -149,7 +150,7 @@ std::string toString(SortItem::NullOrdering nullOrdering) {
     case SortItem::NullOrdering::kUndefined:
       return "NULLS UNDEFINED";
     default:
-      throw std::runtime_error("Unsupported null ordering");
+      VELOX_FAIL("Unsupported null ordering");
   }
 }
 } // namespace

@@ -22,6 +22,7 @@
 #include "axiom/sql/presto/ast/AstNodesAll.h"
 #include "axiom/sql/presto/grammar/PrestoSqlParser.h"
 #include "axiom/sql/presto/grammar/PrestoSqlVisitor.h"
+#include "velox/common/base/Exceptions.h"
 
 namespace axiom::sql::presto {
 
@@ -670,15 +671,14 @@ class AstBuilder : public PrestoSqlVisitor {
 
   std::any aggregateResult(std::any aggregate, std::any nextResult) override {
     if (aggregate.has_value()) {
-      throw std::runtime_error(
-          "aggregateResult called with non-null aggregate");
+      VELOX_FAIL("aggregateResult called with non-null aggregate");
     }
 
     return nextResult;
   }
 
   std::any visitChildren(antlr4::tree::ParseTree* node) override {
-    throw std::runtime_error("Unexpected call to visitChildren");
+    VELOX_FAIL("Unexpected call to visitChildren");
   }
 
   std::any visitChildren(std::string_view name, antlr4::tree::ParseTree* node) {
@@ -689,11 +689,10 @@ class AstBuilder : public PrestoSqlVisitor {
     }
 
     if (numChildren > 1) {
-      throw std::runtime_error(
-          fmt::format(
-              "visitChildren called with more than one child: {} ({})",
-              numChildren,
-              name));
+      VELOX_FAIL(
+          "visitChildren called with more than one child: {} ({})",
+          numChildren,
+          name);
     }
 
     ++tracingIndent_;

@@ -397,8 +397,8 @@ std::any AstBuilder::visitSampledRelation(
   } else if (ctx->sampleType()->SYSTEM() != nullptr) {
     sampleType = SampledRelation::Type::kSystem;
   } else {
-    throw std::runtime_error(
-        "Unsupported table sample type: " + ctx->sampleType()->getText());
+    VELOX_USER_FAIL(
+        "Unsupported table sample type: {}", ctx->sampleType()->getText());
   }
 
   return std::static_pointer_cast<Relation>(std::make_shared<SampledRelation>(
@@ -1097,8 +1097,7 @@ std::string getIntervalFieldType(
   } else if (intervalField->SECOND() != nullptr) {
     return "SECOND";
   } else {
-    throw std::runtime_error(
-        "Unsupported interval field: " + intervalField->getText());
+    VELOX_USER_FAIL("Unsupported interval field: {}", intervalField->getText());
   }
 }
 
@@ -1172,7 +1171,7 @@ TypeSignaturePtr toTypeSignature(
     }
   }
 
-  throw std::runtime_error("Unsupported type specification: " + ctx->getText());
+  VELOX_USER_FAIL("Unsupported type specification: {}", ctx->getText());
 }
 
 TypeSignaturePtr toTypeSignature(
@@ -1187,7 +1186,7 @@ TypeSignaturePtr toTypeSignature(
     return toTypeSignature(ctx->type(), rowFieldName);
   }
 
-  throw std::runtime_error("Unsupported typeParameter: " + ctx->getText());
+  VELOX_USER_FAIL("Unsupported typeParameter: {}", ctx->getText());
 }
 
 } // namespace
@@ -1357,7 +1356,7 @@ std::any AstBuilder::visitSetOperation(
         std::make_shared<Intersect>(getLocation(ctx), left, right, distinct));
   }
 
-  throw std::runtime_error("Unsupported set operation: " + ctx->op->getText());
+  VELOX_USER_FAIL("Unsupported set operation: {}", ctx->op->getText());
 }
 
 std::any AstBuilder::visitQueryPrimaryDefault(
@@ -1553,7 +1552,7 @@ std::any AstBuilder::visitJoinRelation(
       joinCriteria = std::make_shared<JoinUsing>(
           getLocation(ctx->joinCriteria()), columns);
     } else {
-      throw std::runtime_error("Unsupported join criteria");
+      VELOX_USER_FAIL("Unsupported join criteria");
     }
   }
 
@@ -1666,8 +1665,7 @@ ComparisonExpression::Operator toComparisonOperator(size_t tokenType) {
     case PrestoSqlParser::GTE:
       return ComparisonExpression::Operator::kGreaterThanOrEqual;
     default:
-      throw std::runtime_error(
-          "Unsupported comparison operator: " + std::to_string(tokenType));
+      VELOX_USER_FAIL("Unsupported comparison operator: {}", tokenType);
   }
 }
 
@@ -1819,8 +1817,7 @@ ArithmeticBinaryExpression::Operator toArithmeticBinaryOperator(
     case PrestoSqlParser::PERCENT:
       return ArithmeticBinaryExpression::Operator::kModulus;
     default:
-      throw std::runtime_error(
-          "Unsupported arithmetic operator: " + std::to_string(tokenType));
+      VELOX_USER_FAIL("Unsupported arithmetic operator: {}", tokenType);
   }
 }
 
@@ -1848,8 +1845,7 @@ ArithmeticUnaryExpression::Sign toArithmeticSign(size_t tokenType) {
     case PrestoSqlParser::MINUS:
       return ArithmeticUnaryExpression::Sign::kMinus;
     default:
-      throw std::runtime_error(
-          "Unsupported sign: " + std::to_string(tokenType));
+      VELOX_USER_FAIL("Unsupported sign: {}", tokenType);
   }
 }
 
@@ -2238,7 +2234,7 @@ Extract::Field toField(std::string_view name) {
     return Extract::Field::kTimezoneMinute;
   }
 
-  throw std::runtime_error(fmt::format("Invalid EXTRACT field: {}", name));
+  VELOX_USER_FAIL("Invalid EXTRACT field: {}", name);
 }
 } // namespace
 
