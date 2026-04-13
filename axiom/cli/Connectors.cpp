@@ -62,14 +62,19 @@ Connectors::~Connectors() {
   }
 }
 
+// static
+std::shared_ptr<folly::IOThreadPoolExecutor> Connectors::getSharedIoExecutor() {
+  static auto executor = std::make_shared<folly::IOThreadPoolExecutor>(
+      folly::available_concurrency(),
+      std::make_shared<folly::NamedThreadFactory>("io"));
+  return executor;
+}
+
 void Connectors::initialize() {
   static folly::once_flag kInitialized;
-  folly::call_once(kInitialized, [this]() {
-    initializeFileFormats();
-    ioExecutor_ = std::make_unique<folly::IOThreadPoolExecutor>(
-        folly::available_concurrency(),
-        std::make_shared<folly::NamedThreadFactory>("io"));
-  });
+  folly::call_once(kInitialized, []() { initializeFileFormats(); });
+  // Every instance gets a shared_ptr to the singleton executor.
+  ioExecutor_ = getSharedIoExecutor();
 }
 
 std::shared_ptr<velox::connector::Connector> Connectors::registerTpchConnector(

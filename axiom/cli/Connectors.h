@@ -91,7 +91,8 @@ class Connectors {
   std::vector<std::string> connectorIds_{};
 
  private:
-  std::unique_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
+  static std::shared_ptr<folly::IOThreadPoolExecutor> getSharedIoExecutor();
+  std::shared_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
 };
 
 } // namespace facebook::axiom
