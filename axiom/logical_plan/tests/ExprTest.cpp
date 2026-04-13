@@ -69,14 +69,14 @@ TEST_F(ExprTest, looksConstant) {
 
 TEST_F(ExprTest, aggregateExprDistinctOrderBy) {
   auto makeAggregate =
-      [this](const ExprApi& expr, std::vector<SortKey> ordering = {}) {
+      [this](const ExprApi& expr, const std::vector<SortKey>& ordering = {}) {
         return ExprResolver(nullptr, false)
             .resolveAggregateTypes(
                 expr.expr(), inputResolver(schema_), nullptr, ordering, false);
       };
 
   auto makeDistinctAggregate =
-      [this](const ExprApi& expr, std::vector<SortKey> ordering = {}) {
+      [this](const ExprApi& expr, const std::vector<SortKey>& ordering = {}) {
         return ExprResolver(nullptr, false)
             .resolveAggregateTypes(
                 expr.expr(), inputResolver(schema_), nullptr, ordering, true);
@@ -124,6 +124,104 @@ TEST_F(ExprTest, aggregateExprDistinctOrderBy) {
           {SortKey(Col("x"), ASC_NULLS_FIRST),
            SortKey(Col("y"), ASC_NULLS_FIRST)}),
       "For DISTINCT aggregations, ORDER BY keys must appear in aggregation arguments");
+}
+
+TEST_F(ExprTest, aggregateWithLambda) {
+  auto makeAggregate = [this](const ExprApi& expr) {
+    return ExprResolver(nullptr, false)
+        .resolveAggregateTypes(
+            expr.expr(), inputResolver(schema_), nullptr, {}, false);
+  };
+
+  // reduce_agg(x, 0, (s, x) -> s + x, (s1, s2) -> s1 + s2).
+  auto reduceAgg = makeAggregate(Call(
+      "reduce_agg",
+      Col("x"),
+      Lit(0LL),
+      Lambda({"s", "x"}, Call("plus", Col("s"), Col("x"))),
+      Lambda({"s1", "s2"}, Call("plus", Col("s1"), Col("s2")))));
+
+  EXPECT_EQ(*reduceAgg->type(), *BIGINT());
+  EXPECT_EQ(reduceAgg->inputs().size(), 4);
+  EXPECT_TRUE(reduceAgg->inputAt(2)->isLambda());
+  EXPECT_TRUE(reduceAgg->inputAt(3)->isLambda());
+}
+
+TEST_F(ExprTest, aggregateWithLambdaEquality) {
+  auto makeAggregate = [this](const ExprApi& expr) {
+    return ExprResolver(nullptr, false)
+        .resolveAggregateTypes(
+            expr.expr(), inputResolver(schema_), nullptr, {}, false);
+  };
+
+  auto reduceAgg = makeAggregate(Call(
+      "reduce_agg",
+      Col("x"),
+      Lit(0LL),
+      Lambda({"s", "x"}, Call("plus", Col("s"), Col("x"))),
+      Lambda({"s1", "s2"}, Call("plus", Col("s1"), Col("s2")))));
+
+  auto reduceAggCopy = makeAggregate(Call(
+      "reduce_agg",
+      Col("x"),
+      Lit(0LL),
+      Lambda({"s", "x"}, Call("plus", Col("s"), Col("x"))),
+      Lambda({"s1", "s2"}, Call("plus", Col("s1"), Col("s2")))));
+
+  EXPECT_EQ(*reduceAgg, *reduceAggCopy);
+
+  // Different lambda body.
+  auto reduceAggDifferent = makeAggregate(Call(
+      "reduce_agg",
+      Col("x"),
+      Lit(0LL),
+      Lambda({"s", "x"}, Call("minus", Col("s"), Col("x"))),
+      Lambda({"s1", "s2"}, Call("plus", Col("s1"), Col("s2")))));
+
+  EXPECT_NE(*reduceAgg, *reduceAggDifferent);
+}
+
+TEST_F(ExprTest, aggregateWithLambdaCoercion) {
+  auto schema = ROW({"a", "b"}, {BIGINT(), SMALLINT()});
+
+  auto makeAggregate = [&](const ExprApi& expr) {
+    return ExprResolver(nullptr, true)
+        .resolveAggregateTypes(
+            expr.expr(), inputResolver(schema), nullptr, {}, false);
+  };
+
+  // reduce_agg with coercions enabled and mixed types (SMALLINT input,
+  // BIGINT initial state). Since reduce_agg has independent type variables
+  // (T, S), no inter-argument coercion is needed. This exercises the
+  // coercion-enabled code path but not the lambda re-resolution sub-path
+  // (no known aggregate function with lambdas currently triggers it).
+  auto reduceAgg = makeAggregate(Call(
+      "reduce_agg",
+      Col("b"),
+      Lit(0LL),
+      Lambda({"s", "x"}, Call("plus", Col("s"), Col("x"))),
+      Lambda({"s1", "s2"}, Call("plus", Col("s1"), Col("s2")))));
+
+  EXPECT_EQ(*reduceAgg->type(), *BIGINT());
+  EXPECT_EQ(reduceAgg->inputs().size(), 4);
+  EXPECT_EQ(*reduceAgg->inputAt(0)->type(), *SMALLINT());
+  EXPECT_TRUE(reduceAgg->inputAt(2)->isLambda());
+  EXPECT_TRUE(reduceAgg->inputAt(3)->isLambda());
+}
+
+TEST_F(ExprTest, aggregateWithLambdaUnknownFunction) {
+  auto makeAggregate = [this](const ExprApi& expr) {
+    return ExprResolver(nullptr, false)
+        .resolveAggregateTypes(
+            expr.expr(), inputResolver(schema_), nullptr, {}, false);
+  };
+
+  VELOX_ASSERT_THROW(
+      makeAggregate(Call(
+          "nonexistent_agg",
+          Col("x"),
+          Lambda({"s", "x"}, Call("plus", Col("s"), Col("x"))))),
+      "Cannot resolve Aggregate with lambda arguments: nonexistent_agg");
 }
 
 } // namespace

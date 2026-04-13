@@ -91,6 +91,31 @@ class ExprResolver {
       const InputNameResolver& inputNameResolver) const;
 
  private:
+  using ResolveFunc = velox::TypePtr (*)(
+      const std::string&,
+      const std::vector<velox::TypePtr>&);
+
+  using ResolveWithCoercionsFunc = velox::TypePtr (*)(
+      const std::string&,
+      const std::vector<velox::TypePtr>&,
+      std::vector<velox::TypePtr>&);
+
+  struct ResolvedCall {
+    std::string name;
+    std::vector<ExprPtr> inputs;
+    velox::TypePtr type;
+  };
+
+  // Resolves function call arguments (including lambdas) and determines the
+  // return type using the provided resolve functions. Used by both
+  // resolveAggregateTypes and resolveWindowTypes.
+  ResolvedCall resolveCallTypes(
+      const velox::core::ExprPtr& expr,
+      const InputNameResolver& inputNameResolver,
+      const char* label,
+      ResolveFunc resolveFunc,
+      ResolveWithCoercionsFunc resolveWithCoercionsFunc) const;
+
   ExprPtr resolveLambdaExpr(
       const velox::core::LambdaExpr& lambdaExpr,
       const std::vector<velox::TypePtr>& lambdaInputTypes,

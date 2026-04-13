@@ -849,59 +849,89 @@ ExprPtr ExprResolver::resolveScalarTypes(
   VELOX_NYI("Can't resolve {}", expr->toString());
 }
 
-namespace {
-
-// Resolves function call arguments to typed expressions and determines the
-// return type using the provided resolve functions.
-struct ResolvedCall {
-  std::string name;
-  std::vector<ExprPtr> inputs;
-  velox::TypePtr type;
-};
-
-using ResolveFunc =
-    velox::TypePtr (*)(const std::string&, const std::vector<velox::TypePtr>&);
-
-using ResolveWithCoercionsFunc = velox::TypePtr (*)(
-    const std::string&,
-    const std::vector<velox::TypePtr>&,
-    std::vector<velox::TypePtr>&);
-
-ResolvedCall resolveCallTypes(
+ExprResolver::ResolvedCall ExprResolver::resolveCallTypes(
     const velox::core::ExprPtr& expr,
-    const ExprResolver::InputNameResolver& inputNameResolver,
-    const ExprResolver& resolver,
-    bool enableCoercions,
+    const InputNameResolver& inputNameResolver,
     const char* label,
     ResolveFunc resolveFunc,
-    ResolveWithCoercionsFunc resolveWithCoercionsFunc) {
+    ResolveWithCoercionsFunc resolveWithCoercionsFunc) const {
   const auto* call = dynamic_cast<const velox::core::CallExpr*>(expr.get());
   VELOX_USER_CHECK_NOT_NULL(
       call, "{} must be a call expression: {}", label, expr->toString());
 
   auto name = velox::exec::sanitizeName(call->name());
 
+  // Find the matching lambda signature if any arguments are lambdas.
+  const velox::exec::FunctionSignature* lambdaSignature{nullptr};
+  if (std::ranges::any_of(call->inputs(), [](const auto& input) {
+        return input->is(velox::core::IExpr::Kind::kLambda);
+      })) {
+    auto callExpr = std::static_pointer_cast<const velox::core::CallExpr>(expr);
+    lambdaSignature = findLambdaSignature(callExpr);
+    VELOX_CHECK_NOT_NULL(
+        lambdaSignature,
+        "Cannot resolve {} with lambda arguments: {}",
+        label,
+        call->toString());
+  }
+
+  // Resolve arguments.
+  const auto numArgs = call->inputs().size();
   std::vector<ExprPtr> inputs;
-  inputs.reserve(expr->inputs().size());
-  for (const auto& input : expr->inputs()) {
-    inputs.push_back(resolver.resolveScalarTypes(input, inputNameResolver));
-  }
-
-  auto inputTypes = toTypes(inputs);
-
-  velox::TypePtr type;
-  if (enableCoercions) {
-    std::vector<velox::TypePtr> coercions;
-    type = resolveWithCoercionsFunc(name, inputTypes, coercions);
-    applyCoercions(inputs, coercions);
+  if (lambdaSignature == nullptr) {
+    inputs.reserve(numArgs);
+    for (const auto& input : call->inputs()) {
+      inputs.push_back(resolveScalarTypes(input, inputNameResolver));
+    }
   } else {
-    type = resolveFunc(name, inputTypes);
+    // Resolve non-lambda arguments first, then infer lambda parameter types
+    // from the function signature.
+    inputs.resize(numArgs);
+    for (size_t i = 0; i < numArgs; ++i) {
+      if (!isLambdaArgument(lambdaSignature->argumentTypes()[i])) {
+        inputs[i] = resolveScalarTypes(call->inputAt(i), inputNameResolver);
+      }
+    }
+    VELOX_CHECK(
+        resolveLambdaArguments(
+            call->inputs(), *lambdaSignature, inputs, inputNameResolver),
+        "Cannot resolve lambda arguments for {}",
+        call->toString());
   }
 
-  return {std::move(name), std::move(inputs), type};
-}
+  // Resolve return type.
+  if (!enableCoercions_) {
+    auto returnType = resolveFunc(name, toTypes(inputs));
+    return {std::move(name), std::move(inputs), returnType};
+  }
+  // Apply implicit type widening. For lambda-bearing calls, null out lambda
+  // coercions (lambdas can't be cast) and re-resolve lambdas if non-lambda
+  // inputs were coerced.
+  std::vector<velox::TypePtr> coercions;
+  auto returnType = resolveWithCoercionsFunc(name, toTypes(inputs), coercions);
+  bool reResolveLambdas = false;
+  if (lambdaSignature != nullptr && !coercions.empty()) {
+    for (size_t i = 0; i < numArgs; ++i) {
+      if (isLambdaArgument(lambdaSignature->argumentTypes()[i])) {
+        coercions[i] = nullptr;
+      } else if (coercions[i] != nullptr) {
+        reResolveLambdas = true;
+      }
+    }
+  }
+  applyCoercions(inputs, coercions);
 
-} // namespace
+  if (reResolveLambdas) {
+    VELOX_CHECK(
+        resolveLambdaArguments(
+            call->inputs(), *lambdaSignature, inputs, inputNameResolver),
+        "Cannot re-resolve lambda arguments after coercion for {}",
+        call->toString());
+    returnType = resolveFunc(name, toTypes(inputs));
+  }
+
+  return {std::move(name), std::move(inputs), returnType};
+}
 
 AggregateExprPtr ExprResolver::resolveAggregateTypes(
     const velox::core::ExprPtr& expr,
@@ -912,8 +942,6 @@ AggregateExprPtr ExprResolver::resolveAggregateTypes(
   auto resolved = resolveCallTypes(
       expr,
       inputNameResolver,
-      *this,
-      enableCoercions_,
       "Aggregate",
       velox::exec::resolveResultType,
       velox::exec::resolveResultTypeWithCoercions);
@@ -985,8 +1013,6 @@ WindowExprPtr ExprResolver::resolveWindowTypes(
   auto resolved = resolveCallTypes(
       callExpr,
       inputNameResolver,
-      *this,
-      enableCoercions_,
       "Window function",
       velox::exec::resolveWindowResultType,
       velox::exec::resolveWindowResultTypeWithCoercions);
