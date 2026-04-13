@@ -16,6 +16,8 @@
 #pragma once
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
+#include <chrono>
+#include <functional>
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/ToVelox.h"
 #include "axiom/runner/LocalRunner.h"
@@ -24,26 +26,87 @@
 
 namespace axiom::sql {
 
+/// Checks permissions before query execution. Throws on denial and may return
+/// a per-query token provider. No-op (nullptr) by default.
+using PermissionCheck =
+    std::function<std::shared_ptr<facebook::velox::filesystems::TokenProvider>(
+        std::string_view queryId,
+        std::string_view sql,
+        std::string_view catalog,
+        std::optional<std::string_view> schema,
+        const presto::ViewMap& views)>;
+
+/// Holds query metadata captured at query start time.
+struct QueryStartInfo {
+  /// Unique identifier for this query execution.
+  std::string queryId;
+
+  /// SQL text of the query.
+  std::string query;
+
+  /// Wall-clock time when the query was created.
+  std::chrono::system_clock::time_point createTime;
+};
+
+/// Holds error details when a query fails.
+struct ErrorInfo {
+  /// Human-readable error message from the caught exception.
+  std::string message;
+};
+
+/// Per-phase wall-clock timing in microseconds, ordered by lifecycle stage.
+struct QueryTiming {
+  uint64_t onStart{0};
+  uint64_t parse{0};
+  uint64_t checkPermission{0};
+  uint64_t optimize{0};
+  uint64_t execute{0};
+  /// End-to-end time from query creation through execution, excluding
+  /// onComplete. Includes onStart, parse, permission check, optimize,
+  /// and execute.
+  uint64_t total{0};
+};
+
+/// Holds query metadata at completion time (success or failure).
+struct QueryCompletionInfo {
+  /// Carries query ID, SQL text, and creation timestamp from the start event.
+  QueryStartInfo startInfo;
+
+  /// Contains error details when the query fails; std::nullopt on success.
+  std::optional<ErrorInfo> errorInfo;
+
+  /// Serialized Velox execution plan.
+  std::string planString;
+
+  /// Per-phase wall-clock and CPU timing.
+  QueryTiming timing;
+
+  /// Number of rows in the query result.
+  int64_t numOutputRows{0};
+
+  /// Wall-clock time when the query finished, excluding onComplete.
+  std::chrono::system_clock::time_point endTime;
+};
+
+/// Invoked when a query starts, before parsing.
+using QueryStartCallback = std::function<void(const QueryStartInfo&)>;
+
+/// Invoked when a query completes, whether it succeeded or failed.
+using QueryCompletionCallback = std::function<void(const QueryCompletionInfo&)>;
+
+/// Executes SQL queries.
 class SqlQueryRunner {
  public:
-  /// @param initializeConnectors Lambda to call to initialize connectors and
-  /// return a pair of default {connector ID, schema}.
+  virtual ~SqlQueryRunner() = default;
+
+  /// Initializes the runner with connectors, an optional permission check, and
+  /// a query ID generator (defaults to QueryIdGenerator if not provided).
+  /// Call once before running queries.
   void initialize(
       const std::function<std::pair<std::string, std::string>()>&
-          initializeConnectors);
-
-  /// Results of running a query. SELECT queries return a vector of results.
-  /// Other queries return a message. SELECT query that returns no rows returns
-  /// std::nullopt message and empty vector of results.
-  struct SqlResult {
-    std::optional<std::string> message;
-    std::vector<facebook::velox::RowVectorPtr> results;
-    /// Human-readable distributed Velox plan with optimizer cardinality and
-    /// memory estimates. Empty for DDL statements.
-    std::optional<std::string> planString;
-    /// Time spent in the optimizer, in microseconds. Zero for DDL statements.
-    uint64_t optimizeMicros{0};
-  };
+          initializeConnectors,
+      PermissionCheck permissionCheck = {},
+      std::function<std::string()> queryIdGenerator = {});
 
   struct RunOptions {
     int32_t numWorkers{4};
@@ -57,18 +120,47 @@ class SqlQueryRunner {
 
     std::optional<std::string> defaultConnectorId;
     std::optional<std::string> defaultSchema;
+
+    /// Query ID override. If set, run() uses this value instead of generating
+    /// a new one. Useful for correlating queries across systems.
     std::optional<std::string> queryId;
+
+    /// Token provider for authenticated file system access.
+    /// Used by runUnchecked() as-is. Overwritten by run() with the result of
+    /// the permission check callback.
     std::shared_ptr<facebook::velox::filesystems::TokenProvider> tokenProvider;
 
     /// If true, EXPLAIN ANALYZE output includes custom operator stats.
     bool debugMode{false};
+
+    /// Called before parsing. Receives query metadata (query ID, SQL text,
+    /// creation time).
+    QueryStartCallback onStart;
+
+    /// Called after execution completes (success or failure). Carries
+    /// telemetry only: timing, query ID, error info, row counts. Results
+    /// are returned from run(), not passed through callbacks.
+    QueryCompletionCallback onComplete;
   };
 
-  /// Runs a single SQL statement and returns the result.
-  SqlResult run(std::string_view sql, const RunOptions& options);
+  /// Results of running a query. SELECT queries return a vector of results.
+  /// Other queries return a message. SELECT query that returns no rows returns
+  /// std::nullopt message and empty vector of results.
+  struct SqlResult {
+    std::optional<std::string> message;
+    std::vector<facebook::velox::RowVectorPtr> results;
+  };
 
-  /// Runs a single parsed SQL statement and returns the result.
-  SqlResult run(
+  /// Runs a single SQL statement with full lifecycle: generates a query ID,
+  /// fires onStart, parses, checks permissions, executes, fires onComplete,
+  /// and returns the result. On failure, fires onComplete with error telemetry
+  /// then re-throws.
+  virtual SqlResult run(std::string_view sql, const RunOptions& options);
+
+  /// Runs a single parsed SQL statement without lifecycle hooks (no permission
+  /// check, no callbacks). Use run(string_view, RunOptions) for the full
+  /// lifecycle.
+  SqlResult runUnchecked(
       const presto::SqlStatement& statement,
       const RunOptions& options);
 
@@ -140,6 +232,13 @@ class SqlQueryRunner {
   }
 
  private:
+  // Checks permissions for the query via the configured PermissionCheck
+  // callback. Returns a TokenProvider for authenticated file system access.
+  std::shared_ptr<facebook::velox::filesystems::TokenProvider> checkPermission(
+      const RunOptions& options,
+      QueryCompletionInfo& completionInfo,
+      const presto::ViewMap& views);
+
   std::shared_ptr<facebook::velox::core::QueryCtx> newQuery(
       const RunOptions& options);
 
@@ -192,15 +291,27 @@ class SqlQueryRunner {
       const std::shared_ptr<facebook::velox::core::QueryCtx>& queryCtx,
       const RunOptions& options);
 
+  // Runs a parsed SQL statement, writing optimize/execute timing into 'timing'
+  // and the serialized Velox plan into 'planString'.
+  SqlResult runUnchecked(
+      const presto::SqlStatement& statement,
+      const RunOptions& options,
+      QueryTiming& timing,
+      std::string& planString);
+
   SqlResult showSession(
       const presto::ShowSessionStatement& statement,
-      const RunOptions& options);
+      const RunOptions& options,
+      QueryTiming& timing,
+      std::string& planString);
 
-  // Optimizes and executes a logical plan, returning results and the
-  // serialized Velox plan string.
+  // Optimizes and executes a logical plan. Writes timing and plan string
+  // directly into the passed-in references so values survive exceptions.
   SqlResult runLogicalPlan(
       const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
       const RunOptions& options,
+      QueryTiming& timing,
+      std::string& planString,
       std::shared_ptr<facebook::axiom::connector::SchemaResolver>
           schemaResolver = nullptr);
 
@@ -218,6 +329,11 @@ class SqlQueryRunner {
     }
   }
 
+  // Permission check callback invoked before query execution.
+  PermissionCheck permissionCheck_;
+
+  // Generates unique query IDs.
+  std::function<std::string()> queryIdGenerator_;
   std::shared_ptr<facebook::velox::cache::AsyncDataCache> cache_;
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool_;
   std::shared_ptr<facebook::velox::memory::MemoryPool> optimizerPool_;

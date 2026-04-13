@@ -20,9 +20,11 @@
 #include <folly/json.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <thread>
+#include "axiom/cli/QueryIdGenerator.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/common/time/Timer.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -45,7 +47,7 @@ class SqlQueryRunnerTest : public ::testing::Test, public test::VectorTestBase {
   void TearDown() override {
     runner_.reset();
     for (const auto& id : connectorIds_) {
-      facebook::velox::connector::unregisterConnector(id);
+      facebook::velox::connector::ConnectorRegistry::global().erase(id);
     }
   }
 
@@ -53,19 +55,27 @@ class SqlQueryRunnerTest : public ::testing::Test, public test::VectorTestBase {
       facebook::axiom::connector::TestConnector::kDefaultSchema};
 
   std::unique_ptr<SqlQueryRunner> makeRunner(
-      const std::string& connectorId = "test") {
+      const std::string& connectorId = "test",
+      std::function<std::string()> queryIdGenerator = {},
+      PermissionCheck permissionCheck = {}) {
     auto runner = std::make_unique<SqlQueryRunner>();
 
-    runner->initialize([&]() {
+    auto initConnectors = [&]() {
       testConnector_ =
           std::make_shared<facebook::axiom::connector::TestConnector>(
               connectorId);
-      facebook::velox::connector::registerConnector(testConnector_);
+      facebook::velox::connector::ConnectorRegistry::global().insert(
+          testConnector_->connectorId(), testConnector_);
 
       connectorIds_.emplace_back(testConnector_->connectorId());
 
       return std::make_pair(testConnector_->connectorId(), kDefaultSchema);
-    });
+    };
+
+    runner->initialize(
+        initConnectors,
+        std::move(permissionCheck),
+        std::move(queryIdGenerator));
 
     return runner;
   }
@@ -114,16 +124,16 @@ TEST_F(SqlQueryRunnerTest, parseAndRunMixedStatementTypes) {
       "SELECT 42; EXPLAIN (TYPE LOGICAL) SELECT 1; select 7", {});
   ASSERT_EQ(3, statements.size());
 
-  auto selectResult = runner_->run(*statements[0], {});
+  auto selectResult = runner_->runUnchecked(*statements[0], {});
   ASSERT_FALSE(selectResult.message.has_value());
   test::assertEqualVectors(
       selectResult.results[0], makeRowVector({makeFlatVector<int32_t>({42})}));
 
-  auto explainResult = runner_->run(*statements[1], {});
+  auto explainResult = runner_->runUnchecked(*statements[1], {});
   ASSERT_TRUE(explainResult.message.has_value());
   ASSERT_FALSE(explainResult.message.value().empty());
 
-  auto lastResult = runner_->run(*statements[2], {});
+  auto lastResult = runner_->runUnchecked(*statements[2], {});
   ASSERT_FALSE(lastResult.message.has_value());
   test::assertEqualVectors(
       lastResult.results[0], makeRowVector({makeFlatVector<int32_t>({7})}));
@@ -798,6 +808,264 @@ TEST_F(SqlQueryRunnerTest, showCreateTable) {
   // Non-existent table.
   VELOX_ASSERT_USER_THROW(
       run("SHOW CREATE TABLE no_such_table"), "Table not found");
+}
+
+TEST_F(SqlQueryRunnerTest, generateQueryIdDefault) {
+  // Default generator produces non-empty, unique IDs via run().
+  std::string queryId1;
+  std::string queryId2;
+  SqlQueryRunner::RunOptions options;
+  options.onComplete = [&](const QueryCompletionInfo& info) {
+    queryId1 = info.startInfo.queryId;
+  };
+  runner_->run("SELECT 1", options);
+  options.onComplete = [&](const QueryCompletionInfo& info) {
+    queryId2 = info.startInfo.queryId;
+  };
+  runner_->run("SELECT 2", options);
+  EXPECT_FALSE(queryId1.empty());
+  EXPECT_FALSE(queryId2.empty());
+  EXPECT_NE(queryId1, queryId2);
+}
+
+TEST_F(SqlQueryRunnerTest, generateQueryIdCustomGenerator) {
+  auto generator = std::make_shared<cli::QueryIdGenerator>();
+  auto runner = makeRunner("test_custom_gen", [generator]() {
+    return generator->createNextQueryId();
+  });
+
+  std::string queryId;
+  SqlQueryRunner::RunOptions options;
+  options.onComplete = [&](const QueryCompletionInfo& info) {
+    queryId = info.startInfo.queryId;
+  };
+  runner->run("SELECT 1", options);
+  EXPECT_FALSE(queryId.empty());
+  // Custom generator's suffix should appear in the generated ID.
+  EXPECT_THAT(queryId, ::testing::HasSubstr(generator->suffix()));
+}
+
+TEST_F(SqlQueryRunnerTest, completionCallbackReceivesTiming) {
+  QueryCompletionInfo captured;
+  runner_->run("SELECT 1", {.onComplete = [&](const QueryCompletionInfo& info) {
+                 captured = info;
+               }});
+
+  EXPECT_GT(captured.timing.parse, 0);
+  EXPECT_GT(captured.timing.total, 0);
+  EXPECT_GE(captured.timing.total, captured.timing.parse);
+  EXPECT_GE(
+      captured.timing.total,
+      captured.timing.parse + captured.timing.optimize +
+          captured.timing.execute);
+}
+
+TEST_F(SqlQueryRunnerTest, startCallbackFiredBeforeCompletion) {
+  std::string startQueryId;
+  std::string completionQueryId;
+
+  runner_->run(
+      "SELECT 1",
+      {.onStart =
+           [&](const QueryStartInfo& info) {
+             startQueryId = info.queryId;
+             EXPECT_EQ(info.query, "SELECT 1");
+           },
+       .onComplete =
+           [&](const QueryCompletionInfo& info) {
+             completionQueryId = info.startInfo.queryId;
+           }});
+
+  EXPECT_FALSE(startQueryId.empty());
+  EXPECT_EQ(startQueryId, completionQueryId);
+}
+
+TEST_F(SqlQueryRunnerTest, completionCallbackOnError) {
+  QueryCompletionInfo captured;
+
+  EXPECT_THROW(
+      runner_->run(
+          "SELECT * FROM nonexistent_table",
+          {.onComplete =
+               [&](const QueryCompletionInfo& info) { captured = info; }}),
+      std::exception);
+
+  EXPECT_TRUE(captured.errorInfo.has_value());
+  EXPECT_FALSE(captured.errorInfo->message.empty());
+}
+
+TEST_F(SqlQueryRunnerTest, multiStatementTimingPerStatement) {
+  std::vector<QueryCompletionInfo> completions;
+
+  for (const auto& sqlText : runner_->splitStatements("SELECT 1; SELECT 2")) {
+    if (sqlText.empty()) {
+      continue;
+    }
+    runner_->run(sqlText, {.onComplete = [&](const QueryCompletionInfo& info) {
+                   completions.push_back(info);
+                 }});
+  }
+
+  ASSERT_EQ(completions.size(), 2);
+  for (const auto& info : completions) {
+    EXPECT_GT(info.timing.parse, 0);
+    EXPECT_GT(info.timing.total, 0);
+    EXPECT_GE(info.timing.total, info.timing.parse);
+  }
+}
+
+TEST_F(SqlQueryRunnerTest, totalTimingIncludesAllPhases) {
+  QueryCompletionInfo captured;
+
+  // Inject a permission check that sleeps 10ms to create a measurable gap
+  // between parse and execute timers.
+  auto runner = makeRunner(
+      "test_timing",
+      {},
+      [&](std::string_view /*queryId*/,
+          std::string_view /*sql*/,
+          std::string_view /*catalog*/,
+          std::optional<std::string_view> /*schema*/,
+          const auto& /*views*/) {
+        // NOLINTNEXTLINE(facebook-hte-BadCall-sleep_for)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        return std::shared_ptr<facebook::velox::filesystems::TokenProvider>{};
+      });
+
+  runner->run("SELECT 1", {.onComplete = [&](const QueryCompletionInfo& info) {
+                captured = info;
+              }});
+
+  auto phaseSum = captured.timing.parse + captured.timing.optimize +
+      captured.timing.execute;
+  EXPECT_GT(captured.timing.total, 0);
+  EXPECT_GE(captured.timing.total, phaseSum);
+  // The permission check timing is now tracked explicitly.
+  EXPECT_GT(captured.timing.checkPermission, 5'000)
+      << "Expected at least 5ms from the slow permission check, got "
+      << captured.timing.checkPermission << "us";
+}
+
+TEST_F(SqlQueryRunnerTest, onStartExceptionSwallowed) {
+  QueryCompletionInfo captured;
+  bool completionFired = false;
+
+  auto result = runner_->run(
+      "SELECT 1",
+      {.onStart =
+           [](const QueryStartInfo&) {
+             throw std::runtime_error("start error");
+           },
+       .onComplete =
+           [&](const QueryCompletionInfo& info) {
+             captured = info;
+             completionFired = true;
+           }});
+
+  // Query should still succeed despite onStart throwing.
+  EXPECT_FALSE(result.message.has_value());
+  ASSERT_EQ(result.results.size(), 1);
+  EXPECT_TRUE(completionFired);
+  EXPECT_FALSE(captured.errorInfo.has_value());
+}
+
+TEST_F(SqlQueryRunnerTest, completionCallbackOnParseFailure) {
+  QueryCompletionInfo captured;
+
+  EXPECT_THROW(
+      runner_->run(
+          "INVALID SYNTAX HERE",
+          {.onComplete =
+               [&](const QueryCompletionInfo& info) { captured = info; }}),
+      std::exception);
+
+  EXPECT_TRUE(captured.errorInfo.has_value());
+  EXPECT_GT(captured.timing.parse, 0);
+  EXPECT_EQ(captured.timing.optimize, 0);
+  EXPECT_EQ(captured.timing.execute, 0);
+}
+
+TEST_F(SqlQueryRunnerTest, completionCallbackOnPermissionCheckFailure) {
+  QueryCompletionInfo captured;
+
+  auto runner = makeRunner(
+      "test_perm_fail",
+      {},
+      [](std::string_view,
+         std::string_view,
+         std::string_view,
+         std::optional<std::string_view>,
+         const auto&)
+          -> std::shared_ptr<facebook::velox::filesystems::TokenProvider> {
+        throw std::runtime_error("permission denied");
+      });
+
+  EXPECT_THROW(
+      runner->run(
+          "SELECT 1",
+          {.onComplete =
+               [&](const QueryCompletionInfo& info) { captured = info; }}),
+      std::exception);
+
+  EXPECT_TRUE(captured.errorInfo.has_value());
+  EXPECT_THAT(captured.errorInfo->message, ::testing::HasSubstr("permission"));
+  EXPECT_GT(captured.timing.parse, 0);
+  EXPECT_GT(captured.timing.checkPermission, 0);
+  EXPECT_EQ(captured.timing.optimize, 0);
+  EXPECT_EQ(captured.timing.execute, 0);
+}
+
+TEST_F(SqlQueryRunnerTest, completionCallbackOnOptimizationFailure) {
+  // SELECT * FROM nonexistent_table fails during optimization (table not
+  // found). Verify onComplete fires with error info and partial timing.
+  QueryCompletionInfo captured;
+
+  EXPECT_THROW(
+      runner_->run(
+          "SELECT * FROM nonexistent_table",
+          {.onComplete =
+               [&](const QueryCompletionInfo& info) { captured = info; }}),
+      std::exception);
+
+  EXPECT_TRUE(captured.errorInfo.has_value());
+  EXPECT_GT(captured.timing.parse, 0);
+  // Optimization started but failed — timing may be > 0.
+  EXPECT_EQ(captured.timing.execute, 0);
+  EXPECT_GT(captured.timing.total, 0);
+}
+
+TEST_F(SqlQueryRunnerTest, startCallbackFiredBeforeCompletionOrdering) {
+  int counter = 0;
+  int startOrder = -1;
+  int completeOrder = -1;
+
+  runner_->run(
+      "SELECT 1",
+      {.onStart = [&](const QueryStartInfo&) { startOrder = counter++; },
+       .onComplete =
+           [&](const QueryCompletionInfo&) { completeOrder = counter++; }});
+
+  EXPECT_EQ(startOrder, 0);
+  EXPECT_EQ(completeOrder, 1);
+}
+
+TEST_F(SqlQueryRunnerTest, timingFieldsOnParseError) {
+  QueryCompletionInfo captured;
+
+  EXPECT_THROW(
+      runner_->run(
+          "TOTALLY INVALID SQL",
+          {.onComplete =
+               [&](const QueryCompletionInfo& info) { captured = info; }}),
+      std::exception);
+
+  EXPECT_TRUE(captured.errorInfo.has_value());
+  EXPECT_GT(captured.timing.parse, 0);
+  EXPECT_EQ(captured.timing.checkPermission, 0);
+  EXPECT_EQ(captured.timing.optimize, 0);
+  EXPECT_EQ(captured.timing.execute, 0);
+  EXPECT_GT(captured.timing.total, 0);
+  EXPECT_GE(captured.timing.total, captured.timing.parse);
 }
 
 } // namespace

@@ -18,6 +18,7 @@
 #include <folly/system/HardwareConcurrency.h>
 #include <cmath>
 #include <map>
+#include "axiom/cli/QueryIdGenerator.h"
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/logical_plan/LogicalPlanDotPrinter.h"
@@ -84,7 +85,9 @@ namespace axiom::sql {
 
 void SqlQueryRunner::initialize(
     const std::function<std::pair<std::string, std::string>()>&
-        initializeConnectors) {
+        initializeConnectors,
+    PermissionCheck permissionCheck,
+    std::function<std::string()> queryIdGenerator) {
   static folly::once_flag kInitialized;
 
   folly::call_once(kInitialized, []() {
@@ -121,6 +124,17 @@ void SqlQueryRunner::initialize(
   config_[velox::core::QueryConfig::kAdjustTimestampToTimezone] = "true";
   config_[velox::core::QueryConfig::kSessionStartTime] =
       std::to_string(velox::getCurrentTimeMs());
+
+  permissionCheck_ = std::move(permissionCheck);
+
+  if (queryIdGenerator) {
+    queryIdGenerator_ = std::move(queryIdGenerator);
+  } else {
+    auto generator = std::make_shared<cli::QueryIdGenerator>();
+    queryIdGenerator_ = [generator]() {
+      return generator->createNextQueryId();
+    };
+  }
 }
 
 namespace {
@@ -130,6 +144,41 @@ std::vector<velox::RowVectorPtr> fetchResults(runner::LocalRunner& runner) {
     results.push_back(rows);
   }
   return results;
+}
+
+int64_t countRows(const std::vector<velox::RowVectorPtr>& results) {
+  int64_t numRows{0};
+  for (const auto& rowVector : results) {
+    numRows += rowVector->size();
+  }
+  return numRows;
+}
+
+// Fires the start callback if set, swallowing exceptions.
+void onStart(
+    const sql::SqlQueryRunner::RunOptions& options,
+    sql::QueryCompletionInfo& completionInfo) {
+  if (options.onStart) {
+    velox::MicrosecondTimer t(&completionInfo.timing.onStart);
+    try {
+      options.onStart(completionInfo.startInfo);
+    } catch (const std::exception& ex) {
+      LOG(WARNING) << "Start callback failed: " << ex.what();
+    }
+  }
+}
+
+// Fires the completion callback if set, swallowing exceptions.
+void onComplete(
+    const sql::SqlQueryRunner::RunOptions& options,
+    const sql::QueryCompletionInfo& completionInfo) {
+  if (options.onComplete) {
+    try {
+      options.onComplete(completionInfo);
+    } catch (const std::exception& ex) {
+      LOG(WARNING) << "Completion callback failed: " << ex.what();
+    }
+  }
 }
 
 } // namespace
@@ -223,8 +272,50 @@ std::string SqlQueryRunner::dropSchema(
 SqlQueryRunner::SqlResult SqlQueryRunner::run(
     std::string_view sql,
     const RunOptions& options) {
-  auto statement = parseSingle(sql, options);
-  return run(*statement, options);
+  auto runOptions = options;
+  runOptions.queryId = options.queryId.value_or(queryIdGenerator_());
+
+  QueryCompletionInfo completionInfo{
+      .startInfo = {
+          *runOptions.queryId,
+          std::string(sql),
+          std::chrono::system_clock::now()}};
+
+  onStart(runOptions, completionInfo);
+
+  auto finalize = [&]() {
+    completionInfo.endTime = std::chrono::system_clock::now();
+    completionInfo.timing.total =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            completionInfo.endTime - completionInfo.startInfo.createTime)
+            .count();
+    onComplete(runOptions, completionInfo);
+  };
+
+  try {
+    presto::SqlStatementPtr statement;
+    {
+      velox::MicrosecondTimer parseTimer(&completionInfo.timing.parse);
+      statement = parseSingle(sql, runOptions);
+    }
+
+    runOptions.tokenProvider =
+        checkPermission(runOptions, completionInfo, statement->views());
+
+    auto result = runUnchecked(
+        *statement,
+        runOptions,
+        completionInfo.timing,
+        completionInfo.planString);
+
+    completionInfo.numOutputRows = countRows(result.results);
+    finalize();
+    return result;
+  } catch (const std::exception& e) {
+    completionInfo.errorInfo = ErrorInfo{e.what()};
+    finalize();
+    throw;
+  }
 }
 
 std::string SqlQueryRunner::toQueryGraphDot(std::string_view sql) {
@@ -297,9 +388,19 @@ presto::SqlStatementPtr SqlQueryRunner::parseSingle(
   return statements.front();
 }
 
-SqlQueryRunner::SqlResult SqlQueryRunner::run(
+SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
     const presto::SqlStatement& sqlStatement,
     const RunOptions& options) {
+  QueryTiming timing;
+  std::string planString;
+  return runUnchecked(sqlStatement, options, timing, planString);
+}
+
+SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
+    const presto::SqlStatement& sqlStatement,
+    const RunOptions& options,
+    QueryTiming& timing,
+    std::string& planString) {
   if (sqlStatement.isExplain()) {
     const auto* explain = sqlStatement.as<presto::ExplainStatement>();
 
@@ -415,12 +516,12 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
     auto schema = std::make_shared<connector::SchemaResolver>();
     schema->setTargetTable(ctas->connectorId(), ctas->tableName(), table);
 
-    return runLogicalPlan(ctas->plan(), options, schema);
+    return runLogicalPlan(ctas->plan(), options, timing, planString, schema);
   }
 
   if (sqlStatement.isInsert()) {
     const auto* insert = sqlStatement.as<presto::InsertStatement>();
-    return runLogicalPlan(insert->plan(), options);
+    return runLogicalPlan(insert->plan(), options, timing, planString);
   }
 
   if (sqlStatement.isDropTable()) {
@@ -445,7 +546,10 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
 
   if (sqlStatement.isShowSession()) {
     return showSession(
-        *sqlStatement.as<presto::ShowSessionStatement>(), options);
+        *sqlStatement.as<presto::ShowSessionStatement>(),
+        options,
+        timing,
+        planString);
   }
 
   if (sqlStatement.isSetSession()) {
@@ -478,7 +582,7 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
 
   const auto logicalPlan = sqlStatement.as<presto::SelectStatement>()->plan();
 
-  return runLogicalPlan(logicalPlan, options);
+  return runLogicalPlan(logicalPlan, options, timing, planString);
 }
 
 std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
@@ -725,7 +829,9 @@ std::shared_ptr<runner::LocalRunner> SqlQueryRunner::makeLocalRunner(
 
 SqlQueryRunner::SqlResult SqlQueryRunner::showSession(
     const presto::ShowSessionStatement& statement,
-    const RunOptions& options) {
+    const RunOptions& options,
+    QueryTiming& timing,
+    std::string& planString) {
   std::map<std::string, std::string> sorted(config_.begin(), config_.end());
 
   std::vector<velox::Variant> data;
@@ -746,20 +852,23 @@ SqlQueryRunner::SqlResult SqlQueryRunner::showSession(
             "like", lp::Col("Name"), lp::Lit(statement.likePattern().value())));
   }
 
-  return runLogicalPlan(builder.build(), options);
+  return runLogicalPlan(builder.build(), options, timing, planString);
 }
 
 SqlQueryRunner::SqlResult SqlQueryRunner::runLogicalPlan(
     const logical_plan::LogicalPlanNodePtr& logicalPlan,
     const RunOptions& options,
+    QueryTiming& timing,
+    std::string& planString,
     std::shared_ptr<facebook::axiom::connector::SchemaResolver>
         schemaResolver) {
   auto queryCtx = newQuery(options);
 
-  uint64_t optimizeMicros{0};
+  SqlResult result;
+
   optimizer::PlanAndStats planAndStats;
   {
-    velox::MicrosecondTimer timer(&optimizeMicros);
+    velox::MicrosecondTimer timer(&timing.optimize);
     planAndStats = optimize(
         logicalPlan,
         queryCtx,
@@ -769,18 +878,19 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runLogicalPlan(
         std::move(schemaResolver));
   }
 
-  auto planString = planAndStats.toString();
+  planString = planAndStats.toString();
 
   auto runner = makeLocalRunner(planAndStats, queryCtx, options);
   SCOPE_EXIT {
     waitForCompletion(runner, options.timeoutMicros);
   };
 
-  return {
-      .results = fetchResults(*runner),
-      .planString = std::move(planString),
-      .optimizeMicros = optimizeMicros,
-  };
+  {
+    velox::MicrosecondTimer timer(&timing.execute);
+    result.results = fetchResults(*runner);
+  }
+
+  return result;
 }
 
 std::vector<velox::RowVectorPtr> SqlQueryRunner::runShowStatsForQuery(
@@ -823,6 +933,25 @@ std::vector<velox::RowVectorPtr> SqlQueryRunner::runShowStatsForQuery(
       velox::BaseVector::createFromVariants(
           presto::ShowStatsBuilder::outputType(), data, optimizerPool_.get()));
   return {result};
+}
+
+std::shared_ptr<velox::filesystems::TokenProvider>
+SqlQueryRunner::checkPermission(
+    const RunOptions& options,
+    QueryCompletionInfo& completionInfo,
+    const presto::ViewMap& views) {
+  if (permissionCheck_) {
+    velox::MicrosecondTimer timer(&completionInfo.timing.checkPermission);
+    return permissionCheck_(
+        completionInfo.startInfo.queryId,
+        completionInfo.startInfo.query,
+        options.defaultConnectorId.value_or(defaultConnectorId_),
+        options.defaultSchema
+            ? std::optional<std::string_view>{*options.defaultSchema}
+            : std::optional<std::string_view>{defaultSchema_},
+        views);
+  }
+  return nullptr;
 }
 
 } // namespace axiom::sql

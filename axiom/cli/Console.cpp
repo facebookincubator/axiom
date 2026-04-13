@@ -15,13 +15,13 @@
  */
 
 #include "axiom/cli/Console.h"
+#include <fmt/core.h>
 #include <folly/FileUtil.h>
 #include <unistd.h>
 #include <algorithm>
 #include <iostream>
 #include <optional>
 #include <set>
-#include "axiom/cli/QueryIdGenerator.h"
 #include "axiom/cli/ResultPrinter.h"
 #include "axiom/cli/StdinReader.h"
 #include "axiom/cli/Timing.h"
@@ -88,19 +88,7 @@ std::optional<std::string> getHistoryFilePath() {
 
 namespace axiom::sql {
 
-Console::Console(
-    SqlQueryRunner& runner,
-    PermissionCheck permissionCheck,
-    std::shared_ptr<cli::QueryIdGenerator> queryIdGenerator,
-    QueryStartCallback startCallback,
-    QueryCompletionCallback completionCallback)
-    : runner_{runner},
-      permissionCheck_{std::move(permissionCheck)},
-      queryIdGenerator_{
-          queryIdGenerator ? std::move(queryIdGenerator)
-                           : std::make_shared<cli::QueryIdGenerator>()},
-      startCallback_{std::move(startCallback)},
-      completionCallback_{std::move(completionCallback)} {}
+Console::Console(SqlQueryRunner& runner) : runner_{runner} {}
 
 void Console::initialize() {
   gflags::SetUsageMessage(
@@ -132,35 +120,7 @@ void Console::run() {
   }
 }
 
-void Console::notifyStart(const QueryStartInfo& info) {
-  if (startCallback_) {
-    try {
-      startCallback_(info);
-    } catch (const std::exception& ex) {
-      LOG(WARNING) << "Start callback failed: " << ex.what();
-    }
-  }
-}
-
-void Console::notifyCompletion(const QueryCompletionInfo& info) {
-  if (completionCallback_) {
-    try {
-      completionCallback_(info);
-    } catch (const std::exception& ex) {
-      LOG(WARNING) << "Completion callback failed: " << ex.what();
-    }
-  }
-}
-
 void Console::runNoThrow(std::string_view sql, bool isInteractive) {
-  const SqlQueryRunner::RunOptions defaultOptions{
-      .numWorkers = FLAGS_num_workers,
-      .numDrivers = FLAGS_num_drivers,
-      .splitTargetBytes = FLAGS_split_target_bytes,
-      .optimizerTraceFlags = FLAGS_optimizer_trace,
-      .debugMode = FLAGS_debug,
-  };
-
   // Parse and execute statements one at a time so that DDL statements
   // (e.g. CREATE TABLE) take effect before subsequent statements (e.g.
   // INSERT) are parsed.
@@ -169,52 +129,33 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
       continue;
     }
 
-    const auto queryId = queryIdGenerator_->createNextQueryId();
-    auto options = defaultOptions;
-    options.queryId = queryId;
-    const auto createTime = std::chrono::system_clock::now();
+    // The completion callback captures telemetry for error reporting.
+    QueryCompletionInfo completionInfo;
 
-    // Notify start callback before parse so that every query gets a start
-    // event. Parse or permission failures are handled by completionCallback_
-    // in the catch block.
-    notifyStart({queryId, std::string(sqlText), createTime});
+    SqlQueryRunner::RunOptions options{
+        .numWorkers = FLAGS_num_workers,
+        .numDrivers = FLAGS_num_drivers,
+        .splitTargetBytes = FLAGS_split_target_bytes,
+        .optimizerTraceFlags = FLAGS_optimizer_trace,
+        .debugMode = FLAGS_debug,
+        .onComplete =
+            [&](const QueryCompletionInfo& info) { completionInfo = info; },
+    };
 
+    auto formatTiming = [](const QueryTiming& timing,
+                           const cli::Timing& cpuTiming) {
+      return fmt::format(
+          "Parsing: {} | Optimizing: {} | Executing: {} | Total: {}",
+          facebook::velox::succinctMicros(timing.parse),
+          facebook::velox::succinctMicros(timing.optimize),
+          facebook::velox::succinctMicros(timing.execute),
+          cpuTiming.toString());
+    };
+
+    cli::Timing cpuTiming;
     try {
-      cli::Timing parseTiming;
-      cli::Timing statementTiming;
-      cli::Timing totalTiming;
       auto result = cli::time<SqlQueryRunner::SqlResult>(
-          [&]() {
-            auto statement = cli::time<presto::SqlStatementPtr>(
-                [&]() { return runner_.parseSingle(sqlText, options); },
-                parseTiming);
-
-            if (isInteractive) {
-              std::cout << "Query ID: " << queryId
-                        << " | Parsing: " << parseTiming.toString()
-                        << std::endl;
-            }
-
-            // Permission check after parsing, before execution.
-            if (permissionCheck_) {
-              const auto& schema = options.defaultSchema
-                  ? options.defaultSchema
-                  : runner_.defaultSchema();
-              options.tokenProvider = permissionCheck_(
-                  queryId,
-                  sqlText,
-                  options.defaultConnectorId.value_or(
-                      runner_.defaultConnectorId()),
-                  schema ? std::optional<std::string_view>{*schema}
-                         : std::nullopt,
-                  statement->views());
-            }
-
-            return cli::time<SqlQueryRunner::SqlResult>(
-                [&]() { return runner_.run(*statement, options); },
-                statementTiming);
-          },
-          totalTiming);
+          [&]() { return runner_.run(sqlText, options); }, cpuTiming);
 
       if (result.message.has_value()) {
         std::cout << result.message.value() << std::endl;
@@ -226,44 +167,21 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
         cli::printResults(result.results, FLAGS_max_rows);
       }
 
-      // Notify completion callback on success.
-      int64_t numOutputRows{0};
-      for (const auto& rowVector : result.results) {
-        numOutputRows += rowVector->size();
-      }
-      uint64_t executionMicros{
-          statementTiming.micros > result.optimizeMicros
-              ? statementTiming.micros - result.optimizeMicros
-              : 0};
       if (isInteractive) {
-        std::cout << "Query ID: " << queryId << " | Optimizing: "
-                  << facebook::velox::succinctNanos(
-                         result.optimizeMicros * 1'000)
-                  << " | Executing: "
-                  << facebook::velox::succinctNanos(executionMicros * 1'000)
-                  << " | Total: " << totalTiming.toString() << std::endl;
+        std::cout << "Query ID: " << completionInfo.startInfo.queryId << " | "
+                  << formatTiming(completionInfo.timing, cpuTiming)
+                  << std::endl;
       }
-      notifyCompletion(
-          QueryCompletionInfo{
-              .startInfo = {queryId, std::string(sqlText), createTime},
-              .planString = std::move(result.planString),
-              .parseMicros = parseTiming.micros,
-              .optimizeMicros = result.optimizeMicros,
-              .executionMicros = executionMicros,
-              .totalMicros = totalTiming.micros,
-              .numOutputRows = numOutputRows,
-              .endTime = std::chrono::system_clock::now(),
-          });
-    } catch (std::exception& e) {
-      // Notify completion callback on failure.
-      notifyCompletion(
-          QueryCompletionInfo{
-              .startInfo = {queryId, std::string(sqlText), createTime},
-              .errorInfo = ErrorInfo{e.what()},
-              .endTime = std::chrono::system_clock::now(),
-          });
-      std::cerr << "Query ID: " << queryId << " | Query failed: " << e.what()
+    } catch (const std::exception&) {
+      // run() threw after firing the completion callback, so telemetry
+      // was captured.
+      std::cerr << "Query failed: " << completionInfo.errorInfo->message
                 << std::endl;
+      if (isInteractive) {
+        std::cerr << "Query ID: " << completionInfo.startInfo.queryId << " | "
+                  << formatTiming(completionInfo.timing, cpuTiming)
+                  << std::endl;
+      }
       return;
     }
   }

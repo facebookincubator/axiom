@@ -279,6 +279,13 @@ session_timezone                     | UTC
 
 ```
 
+## Error message for non-existent table
+
+```scrut
+$ $CLI --query "SELECT * FROM nonexistent_table" 2>&1 >/dev/null | grep 'Query failed:'
+Query failed: * (glob)
+```
+
 ## Cleanly log dictionary wrapped result vectors (window functions produce encoded vectors)
 
 ```scrut
