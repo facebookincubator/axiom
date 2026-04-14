@@ -235,26 +235,27 @@ std::unique_ptr<ColumnStatistics> TestTable::ColumnTracker::toColumnStatistics(
   return stats;
 }
 
-std::vector<SplitSource::SplitAndGroup> TestSplitSource::getSplits(uint64_t) {
-  std::vector<SplitAndGroup> result;
-  if (!done_) {
-    for (size_t i = 0; i < splitCount_; ++i) {
-      result.push_back(
-          {std::make_shared<TestConnectorSplit>(connectorId_, i),
-           kUngroupedGroupId});
-    }
-    done_ = true;
+folly::coro::Task<SplitBatch> TestSplitSource::co_getSplits(
+    uint32_t maxSplitCount,
+    int32_t /*bucket*/) {
+  SplitBatch batch;
+  auto end =
+      std::min(nextIndex_ + static_cast<size_t>(maxSplitCount), splitCount_);
+  for (auto i = nextIndex_; i < end; ++i) {
+    batch.splits.push_back(
+        std::make_shared<TestConnectorSplit>(connectorId_, i));
   }
-  if (result.empty()) {
-    result.push_back({nullptr, kUngroupedGroupId});
-  }
-  return result;
+  nextIndex_ = end;
+  batch.noMoreSplits = (nextIndex_ >= splitCount_);
+  co_return batch;
 }
 
-std::vector<PartitionHandlePtr> TestSplitManager::listPartitions(
+folly::coro::Task<std::vector<PartitionHandlePtr>>
+TestSplitManager::co_listPartitions(
     const ConnectorSessionPtr& /*session*/,
     const velox::connector::ConnectorTableHandlePtr&) {
-  return {std::make_shared<PartitionHandle>()};
+  co_return std::vector<PartitionHandlePtr>{
+      std::make_shared<PartitionHandle>()};
 }
 
 std::shared_ptr<SplitSource> TestSplitManager::getSplitSource(

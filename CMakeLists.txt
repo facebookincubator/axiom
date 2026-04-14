@@ -169,6 +169,10 @@ include_directories(SYSTEM velox/velox/external/xxhash axiom)
 include_directories(SYSTEM ${CMAKE_BINARY_DIR}/_deps/xsimd-src/include/)
 include_directories(${ANTLR4_INCLUDE_DIR})
 
+if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fcoroutines>)
+endif()
+
 add_subdirectory(velox)
 add_subdirectory(axiom/common)
 add_subdirectory(axiom/sql/presto)

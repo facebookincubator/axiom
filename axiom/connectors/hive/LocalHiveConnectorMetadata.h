@@ -45,8 +45,9 @@ class LocalHiveSplitSource : public SplitSource {
         files_(std::move(files)),
         serdeParameters_(std::move(serdeParameters)) {}
 
-  std::vector<SplitSource::SplitAndGroup> getSplits(
-      uint64_t targetBytes) override;
+  folly::coro::Task<SplitBatch> co_getSplits(
+      uint32_t maxSplitCount,
+      int32_t /*bucket*/) override;
 
  private:
   const SplitOptions options_;
@@ -54,9 +55,8 @@ class LocalHiveSplitSource : public SplitSource {
   const std::string connectorId_;
   std::vector<const FileInfo*> files_;
   const std::unordered_map<std::string, std::string> serdeParameters_;
-  std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> fileSplits_;
-  int32_t currentFile_{-1};
-  int32_t currentSplit_{0};
+  size_t fileIdx_{0};
+  int64_t splitWithinFile_{0};
 };
 
 class LocalHiveConnectorMetadata;
@@ -65,7 +65,7 @@ class LocalHiveSplitManager : public ConnectorSplitManager {
  public:
   explicit LocalHiveSplitManager(LocalHiveConnectorMetadata* /* metadata */) {}
 
-  std::vector<PartitionHandlePtr> listPartitions(
+  folly::coro::Task<std::vector<PartitionHandlePtr>> co_listPartitions(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle) override;
 

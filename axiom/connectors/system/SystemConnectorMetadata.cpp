@@ -99,25 +99,24 @@ SystemTable::SystemTable(velox::connector::Connector* connector)
 // ===================== SystemSplitSource / SystemSplitManager
 // =====================
 
-std::vector<SplitSource::SplitAndGroup> SystemSplitSource::getSplits(
-    uint64_t /*targetBytes*/) {
-  std::vector<SplitAndGroup> result;
+folly::coro::Task<SplitBatch> SystemSplitSource::co_getSplits(
+    uint32_t /*maxSplitCount*/,
+    int32_t /*bucket*/) {
+  SplitBatch batch;
   if (!done_) {
-    result.push_back(
-        {std::make_shared<SystemSplit>(connectorId_), kUngroupedGroupId});
+    batch.splits.push_back(std::make_shared<SystemSplit>(connectorId_));
     done_ = true;
   }
-  if (result.empty()) {
-    // Signal end-of-splits.
-    result.push_back({nullptr, kUngroupedGroupId});
-  }
-  return result;
+  batch.noMoreSplits = true;
+  co_return batch;
 }
 
-std::vector<PartitionHandlePtr> SystemSplitManager::listPartitions(
+folly::coro::Task<std::vector<PartitionHandlePtr>>
+SystemSplitManager::co_listPartitions(
     const ConnectorSessionPtr& /*session*/,
     const velox::connector::ConnectorTableHandlePtr& /*tableHandle*/) {
-  return {std::make_shared<PartitionHandle>()};
+  co_return std::vector<PartitionHandlePtr>{
+      std::make_shared<PartitionHandle>()};
 }
 
 std::shared_ptr<SplitSource> SystemSplitManager::getSplitSource(

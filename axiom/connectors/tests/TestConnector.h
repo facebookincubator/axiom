@@ -160,21 +160,23 @@ class TestSplitSource : public SplitSource {
   TestSplitSource(const std::string& connectorId, size_t splitCount)
       : connectorId_(connectorId), splitCount_(splitCount) {}
 
-  std::vector<SplitAndGroup> getSplits(uint64_t targetBytes) override;
+  folly::coro::Task<SplitBatch> co_getSplits(
+      uint32_t maxSplitCount,
+      int32_t /*bucket*/) override;
 
  private:
   const std::string connectorId_;
   const size_t splitCount_;
-  bool done_{false};
+  size_t nextIndex_{0};
 };
 
 /// SplitManager embedded in the TestConnector. Returns one
-/// default-initialized PartitionHandle upon call to listPartitions.
+/// default-initialized PartitionHandle upon call to co_listPartitions.
 /// Generates a TestSplitSource that produces one TestConnectorSplit
 /// per RowVector in the table's data_ vector.
 class TestSplitManager : public ConnectorSplitManager {
  public:
-  std::vector<PartitionHandlePtr> listPartitions(
+  folly::coro::Task<std::vector<PartitionHandlePtr>> co_listPartitions(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle) override;
 

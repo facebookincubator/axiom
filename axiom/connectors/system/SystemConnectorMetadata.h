@@ -88,7 +88,9 @@ class SystemSplitSource : public SplitSource {
   explicit SystemSplitSource(const std::string& connectorId)
       : connectorId_(connectorId) {}
 
-  std::vector<SplitAndGroup> getSplits(uint64_t targetBytes) override;
+  folly::coro::Task<SplitBatch> co_getSplits(
+      uint32_t maxSplitCount,
+      int32_t /*bucket*/) override;
 
  private:
   const std::string connectorId_;
@@ -98,7 +100,7 @@ class SystemSplitSource : public SplitSource {
 /// SplitManager that returns a single partition and a single split.
 class SystemSplitManager : public ConnectorSplitManager {
  public:
-  std::vector<PartitionHandlePtr> listPartitions(
+  folly::coro::Task<std::vector<PartitionHandlePtr>> co_listPartitions(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle) override;
 

@@ -23,8 +23,6 @@
 
 namespace facebook::axiom::connector::tpch {
 
-inline const SplitSource::SplitAndGroup kNoMoreSplits{nullptr, 0};
-
 class TpchConnectorMetadata;
 
 class TpchSplitSource : public SplitSource {
@@ -39,23 +37,24 @@ class TpchSplitSource : public SplitSource {
         scaleFactor_(scaleFactor),
         connectorId_(connectorId) {}
 
-  std::vector<SplitSource::SplitAndGroup> getSplits(
-      uint64_t targetBytes) override;
+  folly::coro::Task<SplitBatch> co_getSplits(
+      uint32_t maxSplitCount,
+      int32_t /*bucket*/) override;
 
  private:
   const SplitOptions options_;
   const velox::tpch::Table table_;
   const double scaleFactor_;
   const std::string connectorId_;
-  std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits_;
-  size_t currentSplit_{0};
+  int64_t nextSplitIdx_{0};
+  int64_t numSplits_{-1};
 };
 
 class TpchSplitManager : public ConnectorSplitManager {
  public:
   explicit TpchSplitManager(TpchConnectorMetadata* /* metadata */) {}
 
-  std::vector<PartitionHandlePtr> listPartitions(
+  folly::coro::Task<std::vector<PartitionHandlePtr>> co_listPartitions(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle) override;
 

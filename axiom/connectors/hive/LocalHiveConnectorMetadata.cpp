@@ -33,12 +33,14 @@
 
 namespace facebook::axiom::connector::hive {
 
-std::vector<PartitionHandlePtr> LocalHiveSplitManager::listPartitions(
+folly::coro::Task<std::vector<PartitionHandlePtr>>
+LocalHiveSplitManager::co_listPartitions(
     const ConnectorSessionPtr& /*session*/,
     const velox::connector::ConnectorTableHandlePtr& /*tableHandle*/) {
   // All tables are unpartitioned.
   folly::F14FastMap<std::string, std::optional<std::string>> empty;
-  return {std::make_shared<HivePartitionHandle>(empty, std::nullopt)};
+  co_return std::vector<PartitionHandlePtr>{
+      std::make_shared<HivePartitionHandle>(empty, std::nullopt)};
 }
 
 namespace {
@@ -353,71 +355,53 @@ T ceil2(T x, T y) {
 }
 } // namespace
 
-std::vector<SplitSource::SplitAndGroup> LocalHiveSplitSource::getSplits(
-    uint64_t targetBytes) {
-  std::vector<SplitAndGroup> result;
-  uint64_t bytes = 0;
-  for (;;) {
-    if (currentFile_ >= static_cast<int32_t>(files_.size())) {
-      result.push_back(SplitSource::SplitAndGroup{nullptr, 0});
-      return result;
-    }
-
-    if (currentSplit_ >= fileSplits_.size()) {
-      fileSplits_.clear();
-      ++currentFile_;
-      if (currentFile_ >= files_.size()) {
-        result.push_back(SplitSource::SplitAndGroup{nullptr, 0});
-        return result;
-      }
-
-      currentSplit_ = 0;
-      const auto& filePath = files_[currentFile_]->path;
-      const auto fileSize = fs::file_size(filePath);
-      int64_t splitsPerFile =
-          ceil2<uint64_t>(fileSize, options_.fileBytesPerSplit);
-      if (options_.targetSplitCount) {
-        auto numFiles = files_.size();
-        if (splitsPerFile * numFiles < options_.targetSplitCount) {
-          // Divide the file into more splits but still not smaller than 64MB.
-          auto perFile = ceil2<uint64_t>(options_.targetSplitCount, numFiles);
-          int64_t bytesInSplit = ceil2<uint64_t>(fileSize, perFile);
-          splitsPerFile = ceil2<uint64_t>(
-              fileSize, std::max<uint64_t>(bytesInSplit, 32 << 20));
-        }
-      }
-      // Take the upper bound.
-      const int64_t splitSize = ceil2<uint64_t>(fileSize, splitsPerFile);
-      for (int i = 0; i < splitsPerFile; ++i) {
-        auto builder =
-            velox::connector::hive::HiveConnectorSplitBuilder(filePath)
-                .connectorId(connectorId_)
-                .fileFormat(format_)
-                .start(i * splitSize)
-                .length(splitSize);
-
-        auto* info = files_[currentFile_];
-        if (info->bucketNumber.has_value()) {
-          builder.tableBucketNumber(info->bucketNumber.value());
-        }
-        for (auto& pair : info->partitionKeys) {
-          builder.partitionKey(pair.first, pair.second);
-        }
-        if (!serdeParameters_.empty()) {
-          builder.serdeParameters(serdeParameters_);
-        }
-        fileSplits_.push_back(builder.build());
+folly::coro::Task<SplitBatch> LocalHiveSplitSource::co_getSplits(
+    uint32_t maxSplitCount,
+    int32_t /*bucket*/) {
+  SplitBatch batch;
+  const size_t limit = maxSplitCount;
+  while (batch.splits.size() < limit && fileIdx_ < files_.size()) {
+    const auto& filePath = files_[fileIdx_]->path;
+    const auto fileSize = fs::file_size(filePath);
+    int64_t splitsPerFile =
+        ceil2<uint64_t>(fileSize, options_.fileBytesPerSplit);
+    if (options_.targetSplitCount) {
+      auto numFiles = files_.size();
+      if (splitsPerFile * numFiles < options_.targetSplitCount) {
+        auto perFile = ceil2<uint64_t>(options_.targetSplitCount, numFiles);
+        int64_t bytesInSplit = ceil2<uint64_t>(fileSize, perFile);
+        splitsPerFile = ceil2<uint64_t>(
+            fileSize, std::max<uint64_t>(bytesInSplit, 32 << 20));
       }
     }
-    result.push_back(SplitAndGroup{std::move(fileSplits_[currentSplit_++]), 0});
-    bytes +=
-        reinterpret_cast<const velox::connector::hive::HiveConnectorSplit*>(
-            result.back().split.get())
-            ->length;
-    if (bytes > targetBytes) {
-      return result;
+    const int64_t splitSize = ceil2<uint64_t>(fileSize, splitsPerFile);
+    while (splitWithinFile_ < splitsPerFile && batch.splits.size() < limit) {
+      auto builder = velox::connector::hive::HiveConnectorSplitBuilder(filePath)
+                         .connectorId(connectorId_)
+                         .fileFormat(format_)
+                         .start(splitWithinFile_ * splitSize)
+                         .length(splitSize);
+
+      auto* info = files_[fileIdx_];
+      if (info->bucketNumber.has_value()) {
+        builder.tableBucketNumber(info->bucketNumber.value());
+      }
+      for (auto& pair : info->partitionKeys) {
+        builder.partitionKey(pair.first, pair.second);
+      }
+      if (!serdeParameters_.empty()) {
+        builder.serdeParameters(serdeParameters_);
+      }
+      batch.splits.push_back(builder.build());
+      ++splitWithinFile_;
+    }
+    if (splitWithinFile_ >= splitsPerFile) {
+      ++fileIdx_;
+      splitWithinFile_ = 0;
     }
   }
+  batch.noMoreSplits = (fileIdx_ >= files_.size());
+  co_return batch;
 }
 
 LocalHiveConnectorMetadata::LocalHiveConnectorMetadata(

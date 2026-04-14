@@ -75,10 +75,12 @@ double getScaleFactor(const std::string& schema) {
 
 } // namespace
 
-std::vector<PartitionHandlePtr> TpchSplitManager::listPartitions(
+folly::coro::Task<std::vector<PartitionHandlePtr>>
+TpchSplitManager::co_listPartitions(
     const connector::ConnectorSessionPtr& /*session*/,
     const velox::connector::ConnectorTableHandlePtr& /*tableHandle*/) {
-  return {std::make_shared<connector::PartitionHandle>()};
+  co_return std::vector<PartitionHandlePtr>{
+      std::make_shared<connector::PartitionHandle>()};
 }
 
 std::shared_ptr<SplitSource> TpchSplitManager::getSplitSource(
@@ -99,53 +101,28 @@ std::shared_ptr<SplitSource> TpchSplitManager::getSplitSource(
       options);
 }
 
-std::vector<SplitSource::SplitAndGroup> TpchSplitSource::getSplits(
-    uint64_t targetBytes) {
-  std::vector<SplitAndGroup> result;
-
-  if (splits_.empty()) {
-    // Generate splits if not already done
+folly::coro::Task<SplitBatch> TpchSplitSource::co_getSplits(
+    uint32_t maxSplitCount,
+    int32_t /*bucket*/) {
+  if (numSplits_ < 0) {
     auto rowType = velox::tpch::getTableSchema(table_);
-    size_t rowSize = 0;
-    for (size_t i = 0; i < rowType->children().size(); i++) {
-      // TODO: use actual size
-      rowSize += 10;
-    }
+    size_t rowSize = rowType->children().size() * 10;
     const auto totalRows = velox::tpch::getRowCount(table_, scaleFactor_);
     const auto rowsPerSplit = options_.fileBytesPerSplit / rowSize;
-    const auto numSplits = (totalRows + rowsPerSplit - 1) / rowsPerSplit;
-
-    // TODO: adjust numSplits based on options_.targetSplitCount
-    for (int64_t i = 0; i < numSplits; ++i) {
-      splits_.push_back(
-          std::make_shared<velox::connector::tpch::TpchConnectorSplit>(
-              connectorId_, numSplits, i));
-    }
+    numSplits_ = (totalRows + rowsPerSplit - 1) / rowsPerSplit;
   }
 
-  if (currentSplit_ >= splits_.size()) {
-    result.push_back(kNoMoreSplits);
-    return result;
+  SplitBatch batch;
+  auto end =
+      std::min(nextSplitIdx_ + static_cast<int64_t>(maxSplitCount), numSplits_);
+  for (auto i = nextSplitIdx_; i < end; ++i) {
+    batch.splits.push_back(
+        std::make_shared<velox::connector::tpch::TpchConnectorSplit>(
+            connectorId_, numSplits_, i));
   }
-
-  uint64_t bytes = 0;
-  while (currentSplit_ < splits_.size()) {
-    auto split = splits_[currentSplit_++];
-    result.emplace_back(SplitAndGroup{split, 0});
-
-    // TODO: use a more accurate size for the split
-    bytes += options_.fileBytesPerSplit;
-
-    if (bytes > targetBytes) {
-      break;
-    }
-  }
-
-  if (result.empty()) {
-    result.push_back(SplitSource::SplitAndGroup{nullptr, 0});
-  }
-
-  return result;
+  nextSplitIdx_ = end;
+  batch.noMoreSplits = (nextSplitIdx_ >= numSplits_);
+  co_return batch;
 }
 
 TpchConnectorMetadata::TpchConnectorMetadata(

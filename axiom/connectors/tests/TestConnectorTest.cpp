@@ -17,6 +17,8 @@
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/common/SchemaTableName.h"
 
+#include <folly/coro/GtestHelpers.h>
+#include <folly/init/Init.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -120,7 +122,7 @@ TEST_F(TestConnectorTest, columnHandle) {
   EXPECT_EQ(testColumnHandle->type()->kind(), TypeKind::INTEGER);
 }
 
-TEST_F(TestConnectorTest, splitManager) {
+CO_TEST_F(TestConnectorTest, splitManager) {
   auto schema = ROW({"a"}, {INTEGER()});
   auto table = connector_->addTable("test_table", schema);
 
@@ -143,22 +145,28 @@ TEST_F(TestConnectorTest, splitManager) {
   auto tableHandle = layout.createTableHandle(
       nullptr, std::move(columns), *evaluator, empty, empty);
 
-  auto partitions = splitManager->listPartitions(nullptr, tableHandle);
+  auto partitions =
+      co_await splitManager->co_listPartitions(nullptr, tableHandle);
   auto splitSource =
       splitManager->getSplitSource(nullptr, tableHandle, partitions, {});
   EXPECT_NE(splitSource, nullptr);
 
-  auto splits = splitSource->getSplits(0);
+  std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
+  while (true) {
+    auto batch = co_await splitSource->co_getSplits(/*maxSplitCount=*/1000);
+    for (auto& split : batch.splits) {
+      splits.push_back(std::move(split));
+    }
+    if (batch.noMoreSplits) {
+      break;
+    }
+  }
   EXPECT_EQ(splits.size(), kNumSplits);
   for (size_t i = 0; i < kNumSplits; ++i) {
-    auto split = std::dynamic_pointer_cast<TestConnectorSplit>(splits[i].split);
+    auto split = std::dynamic_pointer_cast<TestConnectorSplit>(splits[i]);
     EXPECT_NE(split, nullptr);
     EXPECT_EQ(split->index(), i);
   }
-
-  splits = splitSource->getSplits(0);
-  EXPECT_EQ(splits.size(), 1);
-  EXPECT_EQ(splits[0].split, nullptr);
 }
 
 TEST_F(TestConnectorTest, splits) {

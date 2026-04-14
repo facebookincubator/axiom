@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include <folly/coro/Task.h>
+#include <folly/coro/BlockingWait.h>
 #include <gtest/gtest.h>
 
 #include "axiom/connectors/ConnectorMetadata.h"
@@ -166,22 +166,26 @@ TEST_F(SystemConnectorMetadataTest, splitSource) {
       session, {}, evaluator, std::move(filters), rejectedFilters);
 
   auto* splitManager = metadata_->splitManager();
-  auto partitions = splitManager->listPartitions(session, tableHandle);
+  auto partitions = folly::coro::blockingWait(
+      splitManager->co_listPartitions(session, tableHandle));
   EXPECT_EQ(partitions.size(), 1);
 
   auto splitSource =
       splitManager->getSplitSource(session, tableHandle, partitions);
   ASSERT_NE(splitSource, nullptr);
 
-  // First call should return one split.
-  auto splits1 = splitSource->getSplits(1024);
-  ASSERT_EQ(splits1.size(), 1);
-  ASSERT_NE(splits1[0].split, nullptr);
-
-  // Second call should signal done (nullptr split).
-  auto splits2 = splitSource->getSplits(1024);
-  ASSERT_EQ(splits2.size(), 1);
-  EXPECT_EQ(splits2[0].split, nullptr);
+  std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
+  while (true) {
+    auto batch = folly::coro::blockingWait(splitSource->co_getSplits(1000));
+    for (auto& split : batch.splits) {
+      splits.push_back(std::move(split));
+    }
+    if (batch.noMoreSplits) {
+      break;
+    }
+  }
+  ASSERT_EQ(splits.size(), 1);
+  ASSERT_NE(splits[0], nullptr);
 }
 
 TEST_F(SystemConnectorMetadataTest, dataSourceAllColumns) {

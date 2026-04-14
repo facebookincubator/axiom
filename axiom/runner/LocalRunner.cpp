@@ -15,6 +15,9 @@
  */
 
 #include "axiom/runner/LocalRunner.h"
+#include <folly/coro/AsyncScope.h>
+#include <folly/coro/BlockingWait.h>
+#include <folly/coro/Task.h>
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "velox/common/time/Timer.h"
 #include "velox/exec/Exchange.h"
@@ -31,16 +34,23 @@ class SimpleSplitSource : public connector::SplitSource {
       std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits)
       : splits_(std::move(splits)) {}
 
-  std::vector<SplitAndGroup> getSplits(uint64_t /* targetBytes */) override {
-    if (splitIdx_ >= splits_.size()) {
-      return {{nullptr, 0}};
+  folly::coro::Task<connector::SplitBatch> co_getSplits(
+      uint32_t maxSplitCount,
+      int32_t /*bucket*/) override {
+    connector::SplitBatch batch;
+    auto end = std::min(
+        nextIndex_ + static_cast<size_t>(maxSplitCount), splits_.size());
+    for (auto i = nextIndex_; i < end; ++i) {
+      batch.splits.push_back(std::move(splits_[i]));
     }
-    return {SplitAndGroup{std::move(splits_[splitIdx_++]), 0}};
+    nextIndex_ = end;
+    batch.noMoreSplits = (nextIndex_ >= splits_.size());
+    co_return batch;
   }
 
  private:
   std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits_;
-  int32_t splitIdx_{0};
+  size_t nextIndex_{0};
 };
 } // namespace
 
@@ -63,7 +73,8 @@ ConnectorSplitSourceFactory::splitSourceForScan(
   auto metadata = connector::ConnectorMetadata::metadata(handle->connectorId());
   auto splitManager = metadata->splitManager();
 
-  auto partitions = splitManager->listPartitions(session, handle);
+  auto partitions = folly::coro::blockingWait(
+      splitManager->co_listPartitions(session, handle));
   return splitManager->getSplitSource(session, handle, partitions, options_);
 }
 
@@ -74,20 +85,33 @@ std::shared_ptr<velox::exec::RemoteConnectorSplit> remoteSplit(
   return std::make_shared<velox::exec::RemoteConnectorSplit>(taskId);
 }
 
-std::vector<velox::exec::Split> listAllSplits(
-    const std::shared_ptr<connector::SplitSource>& source) {
-  std::vector<velox::exec::Split> result;
-  for (;;) {
-    auto splits = source->getSplits(std::numeric_limits<uint64_t>::max());
-    VELOX_CHECK(!splits.empty());
-    for (auto& split : splits) {
-      if (split.split == nullptr) {
-        return result;
+// Streams splits from the source and distributes them round-robin across tasks.
+folly::coro::Task<void> co_generateAndDistributeSplits(
+    std::shared_ptr<connector::SplitSource> source,
+    velox::core::PlanNodeId scanId,
+    std::vector<std::shared_ptr<velox::exec::Task>> tasks,
+    std::function<void(std::exception_ptr)> onError) {
+  try {
+    VELOX_CHECK(!tasks.empty(), "tasks must not be empty");
+
+    size_t taskIdx = 0;
+    for (;;) {
+      auto batch = co_await source->co_getSplits(1);
+      for (auto& split : batch.splits) {
+        tasks[taskIdx]->addSplit(scanId, velox::exec::Split(std::move(split)));
+        taskIdx = (taskIdx + 1) % tasks.size();
       }
-      result.push_back(velox::exec::Split(std::move(split.split)));
+      if (batch.noMoreSplits) {
+        break;
+      }
     }
+    for (auto& task : tasks) {
+      task->noMoreSplits(scanId);
+    }
+  } catch (...) {
+    onError(std::current_exception());
+    throw;
   }
-  VELOX_UNREACHABLE();
 }
 
 void getTopologicalOrder(
@@ -153,6 +177,12 @@ LocalRunner::LocalRunner(
 
   VELOX_CHECK_NOT_NULL(splitSourceFactory_);
   VELOX_CHECK(!finishWrite_ || params_.outputPool != nullptr);
+}
+
+LocalRunner::~LocalRunner() {
+  if (!splitScopeJoined_) {
+    folly::coro::blockingWait(splitScope_.joinAsync());
+  }
 }
 
 velox::RowVectorPtr LocalRunner::next() {
@@ -284,6 +314,12 @@ void LocalRunner::abort() {
 
 bool LocalRunner::waitForCompletion(int32_t maxWaitMicros) {
   VELOX_CHECK_NE(state_, State::kInitialized);
+
+  if (!splitScopeJoined_) {
+    folly::coro::blockingWait(splitScope_.joinAsync());
+    splitScopeJoined_ = true;
+  }
+
   std::vector<velox::ContinueFuture> futures;
   {
     std::lock_guard<std::mutex> l(mutex_);
@@ -398,34 +434,11 @@ void LocalRunner::makeStages(
 
       for (const auto& scan : scans) {
         auto source = splitSourceForScan(/*session=*/nullptr, *scan);
-
-        std::vector<connector::SplitSource::SplitAndGroup> splits;
-        int32_t splitIdx = 0;
-        auto getNextSplit = [&]() {
-          if (splitIdx < splits.size()) {
-            return velox::exec::Split(std::move(splits[splitIdx++].split));
-          }
-          splits = source->getSplits(std::numeric_limits<int64_t>::max());
-          splitIdx = 1;
-          return velox::exec::Split(std::move(splits[0].split));
-        };
-
-        // Distribute splits across tasks using round-robin.
-        bool allDone = false;
-        do {
-          for (auto& task : stage) {
-            auto split = getNextSplit();
-            if (!split.hasConnectorSplit()) {
-              allDone = true;
-              break;
-            }
-            task->addSplit(scan->id(), std::move(split));
-          }
-        } while (!allDone);
-
-        for (auto& task : stage) {
-          task->noMoreSplits(scan->id());
-        }
+        splitScope_.add(
+            folly::coro::co_withExecutor(
+                params_.queryCtx->executor(),
+                co_generateAndDistributeSplits(
+                    source, scan->id(), stage, onError)));
       }
 
       for (const auto& input : fragment.inputStages) {

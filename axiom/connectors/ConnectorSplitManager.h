@@ -15,30 +15,38 @@
  */
 #pragma once
 
+#include <folly/coro/Task.h>
 #include <velox/connectors/Connector.h>
 #include "axiom/connectors/ConnectorSession.h"
 
 namespace facebook::axiom::connector {
 
+/// A batch of splits returned by SplitSource::co_getSplits.
+struct SplitBatch {
+  std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
+
+  /// True when there are no more splits to return (for the requested bucket,
+  /// or globally if no bucket was specified).
+  bool noMoreSplits{false};
+};
+
 /// Enumerates splits. The table and partitions to cover are given to
 /// ConnectorSplitManager.
 class SplitSource {
  public:
-  static constexpr uint32_t kUngroupedGroupId =
-      std::numeric_limits<uint32_t>::max();
-
-  /// Result of getSplits. Each split belongs to a group. A nullptr split for
-  /// group means that there are no more splits for the group. In ungrouped
-  /// execution, the group is always kUngroupedGroupId.
-  struct SplitAndGroup {
-    std::shared_ptr<velox::connector::ConnectorSplit> split;
-    uint32_t group{kUngroupedGroupId};
-  };
+  static constexpr int32_t kNoBucket = -1;
 
   virtual ~SplitSource() = default;
 
-  /// Returns a set of splits that cover up to 'targetBytes' of data.
-  virtual std::vector<SplitAndGroup> getSplits(uint64_t targetBytes) = 0;
+  /// Returns up to 'maxSplitCount' splits, or fewer if the source is
+  /// exhausted. Sets SplitBatch::noMoreSplits when no further splits remain.
+  /// If 'bucket' is specified, returns only splits for that bucket.
+  virtual folly::coro::Task<SplitBatch> co_getSplits(
+      uint32_t maxSplitCount,
+      int32_t bucket = kNoBucket) = 0;
+
+  /// Cancel the split source and interrupt all background activity.
+  virtual void cancel() {}
 };
 
 /// Options for split generation.
@@ -69,7 +77,7 @@ class ConnectorSplitManager {
 
   /// Returns a list of all partitions that match the filters in
   /// 'tableHandle'. A non-partitioned table returns one partition.
-  virtual std::vector<PartitionHandlePtr> listPartitions(
+  virtual folly::coro::Task<std::vector<PartitionHandlePtr>> co_listPartitions(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle) = 0;
 

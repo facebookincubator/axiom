@@ -34,8 +34,8 @@ target_link_libraries(
   velox_connector
   velox_exec
   velox_vector_test_lib
-  gtest
-  gtest_main
+  GTest::gtest
+  GTest::gtest_main
 )
 
 add_executable(axiom_connectors_tests SchemaResolverTest.cpp)
