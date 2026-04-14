@@ -12,12 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(axiom_system_connector_metadata_test SystemConnectorMetadataTest.cpp)
+add_executable(
+  axiom_system_connector_test
+  SystemConnectorMetadataTest.cpp
+  SystemConnectorSerDeTest.cpp
+)
 
-add_test(axiom_system_connector_metadata_test axiom_system_connector_metadata_test)
+add_test(axiom_system_connector_test axiom_system_connector_test)
 
 target_link_libraries(
-  axiom_system_connector_metadata_test
+  axiom_system_connector_test
   axiom_system_connector
   axiom_connectors
   velox_connector
