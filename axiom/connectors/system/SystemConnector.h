@@ -84,17 +84,40 @@ class SystemColumnHandle : public velox::connector::ColumnHandle {
     return name_;
   }
 
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = SystemColumnHandle::getClassName();
+    obj["columnName"] = name_;
+    return obj;
+  }
+
+  static std::shared_ptr<SystemColumnHandle> create(const folly::dynamic& obj) {
+    return std::make_shared<SystemColumnHandle>(obj["columnName"].asString());
+  }
+
+  static void registerSerDe() {
+    velox::registerDeserializer<SystemColumnHandle>();
+  }
+
+  VELOX_DEFINE_CLASS_NAME(SystemColumnHandle)
+
  private:
   const std::string name_;
 };
 
-/// Table handle for the system connector. References the layout
-/// and holds the set of column handles for the query.
+/// Table handle for the system connector. Holds a reference to the layout
+/// and the set of column handles for the query.
 class SystemTableHandle : public velox::connector::ConnectorTableHandle {
  public:
   SystemTableHandle(
       const std::string& connectorId,
       const TableLayout& layout,
+      std::vector<velox::connector::ColumnHandlePtr> columnHandles);
+
+  /// Constructor for deserialization. Does not require a layout reference.
+  SystemTableHandle(
+      const std::string& connectorId,
+      std::string tableName,
       std::vector<velox::connector::ColumnHandlePtr> columnHandles);
 
   const std::string& name() const override {
@@ -105,7 +128,7 @@ class SystemTableHandle : public velox::connector::ConnectorTableHandle {
     return name();
   }
 
-  const TableLayout& layout() const {
+  const TableLayout* layout() const {
     return layout_;
   }
 
@@ -113,9 +136,32 @@ class SystemTableHandle : public velox::connector::ConnectorTableHandle {
     return columnHandles_;
   }
 
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = SystemTableHandle::getClassName();
+    obj["connectorId"] = connectorId();
+    obj["tableName"] = name_;
+    folly::dynamic handles = folly::dynamic::array;
+    for (const auto& handle : columnHandles_) {
+      handles.push_back(handle->serialize());
+    }
+    obj["columnHandles"] = handles;
+    return obj;
+  }
+
+  static velox::connector::ConnectorTableHandlePtr create(
+      const folly::dynamic& obj,
+      void* context);
+
+  static void registerSerDe() {
+    velox::registerDeserializerWithContext<SystemTableHandle>();
+  }
+
+  VELOX_DEFINE_CLASS_NAME(SystemTableHandle)
+
  private:
   const std::string name_;
-  const TableLayout& layout_;
+  const TableLayout* layout_;
   const std::vector<velox::connector::ColumnHandlePtr> columnHandles_;
 };
 
@@ -124,6 +170,23 @@ class SystemTableHandle : public velox::connector::ConnectorTableHandle {
 struct SystemSplit : public velox::connector::ConnectorSplit {
   explicit SystemSplit(const std::string& connectorId)
       : ConnectorSplit(connectorId) {}
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = SystemSplit::getClassName();
+    obj["connectorId"] = connectorId;
+    return obj;
+  }
+
+  static std::shared_ptr<SystemSplit> create(const folly::dynamic& obj) {
+    return std::make_shared<SystemSplit>(obj["connectorId"].asString());
+  }
+
+  static void registerSerDe() {
+    velox::registerDeserializer<SystemSplit>();
+  }
+
+  VELOX_DEFINE_CLASS_NAME(SystemSplit)
 };
 
 /// DataSource that reads live query state from a QueryInfoProvider.
@@ -201,6 +264,13 @@ class SystemConnector : public velox::connector::Connector {
       velox::connector::ConnectorQueryCtx*,
       velox::connector::CommitStrategy) override {
     VELOX_UNSUPPORTED("SystemConnector does not support writes");
+  }
+
+  /// Registers deserialization functions for all system connector types.
+  static void registerSerDe() {
+    SystemTableHandle::registerSerDe();
+    SystemColumnHandle::registerSerDe();
+    SystemSplit::registerSerDe();
   }
 
  private:
