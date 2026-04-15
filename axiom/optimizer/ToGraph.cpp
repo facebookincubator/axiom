@@ -2711,7 +2711,21 @@ void ToGraph::processSubqueries(
 void ToGraph::processScalarSubqueries(
     const lp::LogicalPlanNode& input,
     const std::vector<lp::SubqueryExprPtr>& scalars) {
+  // Band-aid:
+  //
+  // NULLIF(x, y) is desugared into IF(eq(x, y), null, x) which
+  // references x twice. When x is a scalar subquery, ExprResolver creates
+  // distinct SubqueryExpr pointers for each reference but they share the same
+  // LogicalPlanNodePtr. Without dedup, we create duplicate cross joins.
+  // https://github.com/facebookincubator/axiom/issues/1229
+  folly::F14FastMap<lp::LogicalPlanNodePtr, ExprCP> processedSubqueries;
   for (const auto& subquery : scalars) {
+    auto it = processedSubqueries.find(subquery->subquery());
+    if (it != processedSubqueries.end()) {
+      subqueries_.emplace(subquery, it->second);
+      continue;
+    }
+
     auto subqueryDt = translateSubquery(*subquery->subquery());
 
     ExprCP column;
@@ -2721,6 +2735,7 @@ void ToGraph::processScalarSubqueries(
       column = processCorrelatedScalarSubquery(input, subqueryDt);
     }
     subqueries_.emplace(subquery, column);
+    processedSubqueries.emplace(subquery->subquery(), column);
   }
 }
 
