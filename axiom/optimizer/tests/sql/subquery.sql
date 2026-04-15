@@ -35,3 +35,7 @@ SELECT T.* FROM (VALUES (1)) t(a) JOIN (VALUES (2)) u(b) ON true
 -- null-aware semi-project join with extra filter; the optimizer must not flip
 -- this to a right semi-project join that is unsupported in Velox.
 SELECT CASE WHEN a.x IN (SELECT t.a FROM t WHERE t.b < a.y) THEN 'p' ELSE 'f' END FROM ( VALUES ( 1, 100 ) ) a ( x, y )
+----
+-- NULLIF with scalar subquery. The subquery appears twice in the desugared
+-- IF(eq(x, y), null, x) expression; it must not create duplicate join columns.
+SELECT NULLIF((SELECT 1), 2)
