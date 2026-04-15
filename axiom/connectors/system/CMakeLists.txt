@@ -19,6 +19,7 @@ target_link_libraries(
   axiom_connectors
   velox_connector
   velox_exception
+  velox_serialization
   velox_vector
 )
 

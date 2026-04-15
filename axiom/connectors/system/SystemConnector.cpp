@@ -87,8 +87,31 @@ SystemTableHandle::SystemTableHandle(
     std::vector<velox::connector::ColumnHandlePtr> columnHandles)
     : ConnectorTableHandle(connectorId),
       name_(layout.table().name().toString()),
-      layout_(layout),
+      layout_(&layout),
       columnHandles_(std::move(columnHandles)) {}
+
+SystemTableHandle::SystemTableHandle(
+    const std::string& connectorId,
+    std::string tableName,
+    std::vector<velox::connector::ColumnHandlePtr> columnHandles)
+    : ConnectorTableHandle(connectorId),
+      name_(std::move(tableName)),
+      layout_(nullptr),
+      columnHandles_(std::move(columnHandles)) {}
+
+velox::connector::ConnectorTableHandlePtr SystemTableHandle::create(
+    const folly::dynamic& obj,
+    void* /*context*/) {
+  auto connectorId = obj["connectorId"].asString();
+  auto tableName = obj["tableName"].asString();
+  std::vector<velox::connector::ColumnHandlePtr> handles;
+  for (const auto& handleObj : obj["columnHandles"]) {
+    handles.push_back(
+        velox::ISerializable::deserialize<SystemColumnHandle>(handleObj));
+  }
+  return std::make_shared<SystemTableHandle>(
+      connectorId, std::move(tableName), std::move(handles));
+}
 
 // ===================== SystemDataSource =====================
 
