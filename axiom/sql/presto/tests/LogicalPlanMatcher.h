@@ -17,6 +17,7 @@
 #pragma once
 
 #include <unordered_map>
+#include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 
 namespace facebook::axiom::logical_plan::test {
@@ -149,6 +150,14 @@ class LogicalPlanMatcherBuilder {
   /// lp::ExprPrinter, then compared against expressionAt(i)->toString().
   LogicalPlanMatcherBuilder& project(
       const std::vector<std::string>& expressions);
+
+  /// Matches a ProjectNode with the specified ExprApi expressions. Each
+  /// expected expression is compared directly against
+  /// expressionAt(i)->toString() without DuckDB parsing. Use this when DuckDB
+  /// parsing produces a different expression tree than Axiom (e.g. CASE WHEN
+  /// becomes if() vs SWITCH()).
+  LogicalPlanMatcherBuilder& project(
+      std::initializer_list<ExprApi> expressions);
 
   /// Matches an AggregateNode.
   LogicalPlanMatcherBuilder& aggregate(OnMatchCallback onMatch = nullptr);

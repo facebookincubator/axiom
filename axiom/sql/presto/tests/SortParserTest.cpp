@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "axiom/logical_plan/ExprApi.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
@@ -338,17 +339,17 @@ TEST_F(SortParserTest, complexExpressionIdentity) {
       "SELECT CASE WHEN a > 0 THEN b ELSE c END AS result "
       "FROM t "
       "ORDER BY result",
-      lp::test::LogicalPlanMatcherBuilder()
-          .tableScan()
-          .project()
+      matchScan()
+          .project(
+              {lp::Call("switch", lp::Col("a") > 0, lp::Col("b"), lp::Col("c"))
+                   .as("result")})
           .sort({"result"})
           .output({"result"}));
 
   testSelect(
       "SELECT COALESCE(a, b) AS coalesced FROM t ORDER BY coalesced",
-      lp::test::LogicalPlanMatcherBuilder()
-          .tableScan()
-          .project()
+      matchScan()
+          .project({"COALESCE(a, b) AS coalesced"})
           .sort({"coalesced"})
           .output({"coalesced"}));
 }

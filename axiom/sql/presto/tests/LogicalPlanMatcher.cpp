@@ -16,7 +16,9 @@
 
 #include "axiom/sql/presto/tests/LogicalPlanMatcher.h"
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <set>
+#include <unordered_set>
 #include "velox/parse/ExprRewriter.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
@@ -46,7 +48,22 @@ std::string toExprString(const velox::core::IExpr& expr);
 // kAggregate, and the function-call part of kWindow.
 std::string callToString(const velox::core::CallExpr& call) {
   auto name = call.name();
-  if (name == "and" || name == "or") {
+  // DuckDB and ExprApi produce lowercase special form names, but
+  // ExprResolver converts these to SpecialFormExprs which print as
+  // uppercase. "if" is not included because ExprResolver resolves it to
+  // "SWITCH".
+  static const std::unordered_set<std::string> kSpecialForms = {
+      "and",
+      "or",
+      "switch",
+      "coalesce",
+      "cast",
+      "try_cast",
+      "try",
+      "dereference",
+      "in",
+      "exists"};
+  if (kSpecialForms.contains(name)) {
     std::transform(name.begin(), name.end(), name.begin(), ::toupper);
   }
   std::string result = name + "(";
@@ -186,6 +203,58 @@ std::string toExprString(const velox::core::IExpr& expr) {
       VELOX_UNREACHABLE(
           "Unsupported IExpr kind in toExprString: {}", expr.toString());
   }
+}
+
+// Corrects DuckDB's wrong default window frame end bound. DuckDB always
+// defaults to CURRENT_ROW, but the SQL standard specifies UNBOUNDED_FOLLOWING
+// when no ORDER BY is present.
+velox::core::ExprPtr correctDuckDbWindowFrame(
+    const velox::core::ExprPtr& expr) {
+  auto* window = expr->as<velox::core::WindowCallExpr>();
+  if (!window->frame().has_value()) {
+    return expr;
+  }
+
+  auto frame = window->frame().value();
+  if (!window->orderByKeys().empty() ||
+      frame.endType != velox::core::WindowCallExpr::BoundType::kCurrentRow) {
+    return expr;
+  }
+
+  frame.endType = velox::core::WindowCallExpr::BoundType::kUnboundedFollowing;
+  return std::make_shared<velox::core::WindowCallExpr>(
+      window->name(),
+      window->inputs(),
+      window->partitionKeys(),
+      window->orderByKeys(),
+      frame,
+      window->isIgnoreNulls());
+}
+
+// Fills in the SQL standard default window frame when ExprApi has no explicit
+// frame (nullopt). The default is RANGE UNBOUNDED PRECEDING to CURRENT ROW
+// when ORDER BY is present, or RANGE UNBOUNDED PRECEDING to UNBOUNDED
+// FOLLOWING when no ORDER BY is specified.
+velox::core::ExprPtr applyDefaultWindowFrame(const velox::core::ExprPtr& expr) {
+  auto* window = expr->as<velox::core::WindowCallExpr>();
+  if (window->frame().has_value()) {
+    return expr;
+  }
+
+  velox::core::WindowCallExpr::Frame frame;
+  frame.type = velox::core::WindowCallExpr::WindowType::kRange;
+  frame.startType = velox::core::WindowCallExpr::BoundType::kUnboundedPreceding;
+  frame.endType = window->orderByKeys().empty()
+      ? velox::core::WindowCallExpr::BoundType::kUnboundedFollowing
+      : velox::core::WindowCallExpr::BoundType::kCurrentRow;
+
+  return std::make_shared<velox::core::WindowCallExpr>(
+      window->name(),
+      window->inputs(),
+      window->partitionKeys(),
+      window->orderByKeys(),
+      frame,
+      window->isIgnoreNulls());
 }
 
 // Rewrites field access names in an IExpr tree using the given mapping.
@@ -417,23 +486,34 @@ class LimitMatcher : public LogicalPlanMatcherImpl<LimitNode> {
   const int64_t count_;
 };
 
-// Matches a ProjectNode with the specified expressions. Each expected
-// expression is parsed with DuckDB and printed in a format compatible with
-// lp::ExprPrinter, then compared against expressionAt(i)->toString().
+// Matches a ProjectNode with the specified expressions.
+// - String constructor: parses with DuckDB, corrects window frame defaults.
+// - ExprApi constructor: uses the expression directly, applies SQL standard
+//   default frame when none is specified.
+// Both paths compare against expressionAt(i)->toString().
 class ProjectMatcher : public LogicalPlanMatcherImpl<ProjectNode> {
  public:
   ProjectMatcher(
       const std::shared_ptr<LogicalPlanMatcher>& inputMatcher,
       std::vector<std::string> expressions)
       : LogicalPlanMatcherImpl<ProjectNode>(inputMatcher, nullptr),
-        expressions_{std::move(expressions)} {}
+        expressionStrings_{std::move(expressions)} {}
+
+  ProjectMatcher(
+      const std::shared_ptr<LogicalPlanMatcher>& inputMatcher,
+      std::vector<ExprApi> expressions)
+      : LogicalPlanMatcherImpl<ProjectNode>(inputMatcher, nullptr),
+        expressionApis_{std::move(expressions)} {}
 
  private:
   MatchResult matchDetails(
       const ProjectNode& plan,
       const std::unordered_map<std::string, std::string>& symbols)
       const override {
-    EXPECT_EQ(expressions_.size(), plan.expressions().size());
+    const bool isExprApi = !expressionApis_.empty();
+    const auto numExprs =
+        isExprApi ? expressionApis_.size() : expressionStrings_.size();
+    EXPECT_EQ(numExprs, plan.expressions().size());
     AXIOM_RETURN_IF_FAILURE;
 
     std::unordered_map<std::string, std::string> newSymbols;
@@ -441,16 +521,25 @@ class ProjectMatcher : public LogicalPlanMatcherImpl<ProjectNode> {
     parseOptions.correctWindowFrameDefault = true;
     velox::parse::DuckSqlExpressionsParser parser(parseOptions);
 
-    for (auto i = 0; i < expressions_.size(); ++i) {
+    for (auto i = 0; i < numExprs; ++i) {
       const auto& actual = plan.expressionAt(i);
-      auto parsed = parser.parseScalarOrWindowExpr(expressions_[i]);
 
-      // Capture alias for symbol propagation.
-      if (parsed->alias()) {
-        newSymbols[parsed->alias().value()] = plan.names()[i];
+      velox::core::ExprPtr expectedExpr;
+      if (isExprApi) {
+        expectedExpr = expressionApis_[i].expr();
+      } else {
+        expectedExpr = parser.parseScalarOrWindowExpr(expressionStrings_[i]);
       }
 
-      auto expectedExpr = parsed;
+      if (expectedExpr->alias()) {
+        newSymbols[expectedExpr->alias().value()] = plan.names()[i];
+      }
+
+      if (expectedExpr->is(velox::core::IExpr::Kind::kWindow)) {
+        expectedExpr = isExprApi ? applyDefaultWindowFrame(expectedExpr)
+                                 : correctDuckDbWindowFrame(expectedExpr);
+      }
+
       if (!symbols.empty()) {
         expectedExpr = rewriteInputNames(expectedExpr, symbols);
       }
@@ -463,7 +552,8 @@ class ProjectMatcher : public LogicalPlanMatcherImpl<ProjectNode> {
     return MatchResult::success(newSymbols);
   }
 
-  const std::vector<std::string> expressions_;
+  const std::vector<std::string> expressionStrings_;
+  const std::vector<ExprApi> expressionApis_;
 };
 
 class AggregateMatcher : public LogicalPlanMatcherImpl<AggregateNode> {
@@ -717,6 +807,14 @@ LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::project(
     const std::vector<std::string>& expressions) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<ProjectMatcher>(matcher_, expressions);
+  return *this;
+}
+
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::project(
+    std::initializer_list<ExprApi> expressions) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<ProjectMatcher>(
+      matcher_, std::vector<ExprApi>(expressions.begin(), expressions.end()));
   return *this;
 }
 
