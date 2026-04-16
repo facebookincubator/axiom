@@ -386,58 +386,59 @@ TEST_F(ExpressionParserTest, unicodeStringLiteral) {
   test(R"(U&'')", "");
 
   // Incomplete 4-digit escape sequence.
-  VELOX_ASSERT_THROW(
-      parseExpr(R"(U&'hello\6dB\8Bd5')"), "Incomplete escape sequence: 6dB");
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
+      parseExpr(R"(U&'hello\6dB\8Bd5')"), "Incomplete escape sequence");
 
   // Incomplete escape at end of string.
-  VELOX_ASSERT_THROW(parseExpr(R"(U&'hello\')"), "Incomplete escape sequence");
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
+      parseExpr(R"(U&'hello\')"), "Incomplete escape sequence");
 
   // Incomplete 6-digit escape with +.
-  VELOX_ASSERT_THROW(parseExpr(R"(U&'hello\+')"), "Incomplete escape sequence");
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
+      parseExpr(R"(U&'hello\+')"), "Incomplete escape sequence");
 
   // Invalid hex digit.
-  VELOX_ASSERT_THROW(
-      parseExpr(R"(U&'hello\K6B\8Bd5')"), "Invalid hexadecimal digit: K");
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
+      parseExpr(R"(U&'hello\K6B\8Bd5')"), "Invalid hexadecimal digit");
 
   // Invalid code point (out of range).
-  VELOX_ASSERT_THROW(
-      parseExpr(R"(U&'hello\+FFFFFD\8Bd5')"),
-      "Invalid escaped character: FFFFFD");
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
+      parseExpr(R"(U&'hello\+FFFFFD\8Bd5')"), "Invalid escaped character");
 
   // Surrogate code point (4-digit).
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       parseExpr(R"(U&'hello\DBFF')"),
-      "Invalid escaped character: DBFF. Escaped character is a surrogate");
+      "Invalid escaped character. Escaped character is a surrogate");
 
   // Surrogate code point (6-digit).
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       parseExpr(R"(U&'hello\+00DBFF')"),
-      "Invalid escaped character: 00DBFF. Escaped character is a surrogate");
+      "Invalid escaped character. Escaped character is a surrogate");
 
   // Invalid UESCAPE: multi-character.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       parseExpr(R"(U&'hello\8Bd5' UESCAPE '%%')"),
-      "Invalid Unicode escape character: %%");
+      "Invalid Unicode escape character");
 
   // Invalid UESCAPE: single quote.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       parseExpr("U&'hello\\8Bd5' UESCAPE ''''"),
-      "Invalid Unicode escape character: '");
+      "Invalid Unicode escape character");
 
   // Invalid UESCAPE: space.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       parseExpr(R"(U&'hello\8Bd5' UESCAPE ' ')"),
-      "Invalid Unicode escape character:");
+      "Invalid Unicode escape character");
 
   // Invalid UESCAPE: hex digit.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       parseExpr(R"(U&'hello\8Bd5' UESCAPE '1')"),
-      "Invalid Unicode escape character: 1");
+      "Invalid Unicode escape character");
 
   // Invalid UESCAPE: plus.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       parseExpr(R"(U&'hello\8Bd5' UESCAPE '+')"),
-      "Invalid Unicode escape character: +");
+      "Invalid Unicode escape character");
 }
 
 TEST_F(ExpressionParserTest, timestampLiteral) {

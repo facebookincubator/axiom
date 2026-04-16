@@ -22,7 +22,7 @@ add_executable(
   ColumnFilteringTest.cpp
   DdlParserTest.cpp
   ExpressionParserTest.cpp
-  PrestoParseErrorTest.cpp
+  PrestoSqlErrorTest.cpp
   PrestoParserTest.cpp
   PrestoParserTestBase.cpp
   SortParserTest.cpp

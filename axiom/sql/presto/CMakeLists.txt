@@ -13,6 +13,10 @@
 # limitations under the License.
 
 add_subdirectory(grammar)
+
+add_library(axiom_sql_presto_error PrestoSqlError.cpp)
+target_link_libraries(axiom_sql_presto_error Folly::folly velox_exception fmt::fmt)
+
 add_subdirectory(ast)
 add_subdirectory(example)
 
@@ -32,6 +36,7 @@ target_link_libraries(
   axiom_sql_presto_parser
   axiom_logical_plan_builder
   axiom_sql_presto_ast
+  axiom_sql_presto_error
   velox_common_base
   velox_presto_types
   antlr4_shared

@@ -24,7 +24,7 @@
 #include "axiom/sql/presto/ColumnsExpansion.h"
 #include "axiom/sql/presto/ExpressionPlanner.h"
 #include "axiom/sql/presto/GroupByPlanner.h"
-#include "axiom/sql/presto/PrestoParseError.h"
+#include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/ShowStatsBuilder.h"
 #include "axiom/sql/presto/SortProjection.h"
 #include "axiom/sql/presto/TableVisitor.h"
@@ -137,7 +137,7 @@ class ParserHelper {
 
     auto ctx = parser_->singleStatement();
     if (parser_->getNumberOfSyntaxErrors() > 0) {
-      throw PrestoParseError(
+      throw PrestoSqlError(
           errorListener_.firstError(),
           errorListener_.line(),
           errorListener_.column(),
@@ -383,9 +383,10 @@ class RelationPlanner : public AstVisitor {
       case NodeType::kJoin:
         return processJoin(*relation->as<Join>());
       default:
-        VELOX_NYI(
-            "Relation type is not supported yet: {}",
-            NodeTypeName::toName(relation->type()));
+        AXIOM_PRESTO_SYNTAX_FAIL(
+            relation->location(),
+            std::string(NodeTypeName::toName(relation->type())),
+            "Relation type is not supported yet");
     }
   }
 
@@ -453,7 +454,10 @@ class RelationPlanner : public AstVisitor {
         sampleMethod = lp::SampleNode::SampleMethod::kSystem;
         break;
       default:
-        VELOX_USER_FAIL("Unsupported sample type");
+        AXIOM_PRESTO_SYNTAX_FAIL(
+            sampledRelation.location(),
+            std::nullopt,
+            "Unsupported sample type");
     }
 
     auto percentage = toExpr(sampledRelation.samplePercentage());
@@ -500,9 +504,10 @@ class RelationPlanner : public AstVisitor {
       return;
     }
 
-    VELOX_NYI(
-        "Subquery type is not supported yet: {}",
-        NodeTypeName::toName(query->type()));
+    AXIOM_PRESTO_SYNTAX_FAIL(
+        query->location(),
+        std::string(NodeTypeName::toName(query->type())),
+        "Subquery type is not supported yet");
   }
 
   void processUnnest(const Unnest& unnest) {
@@ -567,7 +572,9 @@ class RelationPlanner : public AstVisitor {
         builder_->joinUsing(
             *rightBuilder, columns, toJoinType(join.joinType()));
       } else {
-        VELOX_NYI(
+        AXIOM_PRESTO_SYNTAX_FAIL(
+            criteria->location(),
+            std::nullopt,
             "Join criteria type is not supported yet: {}",
             NodeTypeName::toName(criteria->type()));
       }
@@ -1032,7 +1039,11 @@ class RelationPlanner : public AstVisitor {
     };
 
     if (const auto& with = query->with()) {
-      VELOX_USER_CHECK(!with->isRecursive(), "WITH RECURSIVE is not supported");
+      AXIOM_PRESTO_SYNTAX_CHECK(
+          !with->isRecursive(),
+          with->location(),
+          "RECURSIVE",
+          "WITH RECURSIVE is not supported");
       for (const auto& query : with->queries()) {
         withQueries_.insert_or_assign(
             canonicalizeIdentifier(*query->name()), query);
@@ -1266,7 +1277,7 @@ std::vector<SqlStatementPtr> PrestoParser::parseMultiple(
     }
     try {
       results.push_back(doParse(statement, enableTracing));
-    } catch (const PrestoParseError& e) {
+    } catch (const PrestoSqlError& e) {
       auto [lineOffset, columnOffset] =
           computeOffset(sql, statement.data() - sql.data(), e.line());
       throw e.withOffset(lineOffset, columnOffset);
@@ -1991,8 +2002,10 @@ SqlStatementPtr parseDropSchema(
       "Invalid schema name: {}",
       dropSchema.schemaName()->fullyQualifiedName());
 
-  VELOX_USER_CHECK(
+  AXIOM_PRESTO_SYNTAX_CHECK(
       dropSchema.behavior() != DropSchema::DropBehavior::kCascade,
+      dropSchema.location(),
+      "CASCADE",
       "DROP SCHEMA CASCADE is not supported");
 
   std::string connectorId = parts.size() == 2 ? parts[0] : defaultConnectorId;
@@ -2138,8 +2151,10 @@ SqlStatementPtr doPlan(
     return std::make_shared<SelectStatement>(planner.plan(), planner.views());
   }
 
-  VELOX_NYI(
-      "Unsupported statement type: {}", NodeTypeName::toName(query->type()));
+  AXIOM_PRESTO_SYNTAX_FAIL(
+      query->location(),
+      std::string(NodeTypeName::toName(query->type())),
+      "Unsupported statement type");
 }
 } // namespace
 
