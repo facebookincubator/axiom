@@ -537,11 +537,14 @@ std::pair<VariantCP, VariantCP> findArrayMinMax(
 }
 
 // Computes the maximum cardinality for an integer range: 1 + (max - min).
+// Operands are cast to double to avoid signed integer overflow when the
+// range spans a large portion of the integer domain.
 template <velox::TypeKind KIND>
 float rangeCardinality(VariantCP minPtr, VariantCP maxPtr) {
   auto upperVal = maxPtr->value<KIND>();
   auto lowerVal = minPtr->value<KIND>();
-  return 1.0f + static_cast<float>(upperVal - lowerVal);
+  return static_cast<float>(
+      1.0 + static_cast<double>(upperVal) - static_cast<double>(lowerVal));
 }
 
 // Returns true if the given TypeKind represents an integer type

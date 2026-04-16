@@ -534,6 +534,43 @@ TEST_F(FiltersTest, rangeSelectivity) {
       });
 }
 
+TEST_F(FiltersTest, rangeCardinalityMaxMin) {
+  static constexpr auto kTestConnectorId = "test_range_overflow";
+
+  auto testConnector =
+      std::make_shared<connector::TestConnector>(kTestConnectorId);
+  velox::connector::registerConnector(testConnector);
+
+  SCOPE_EXIT {
+    velox::connector::unregisterConnector(kTestConnectorId);
+  };
+
+  testConnector->addTable("t_overflow", ROW({"x"}, BIGINT()));
+  testConnector->setStats(
+      "t_overflow",
+      10'000,
+      {{"x",
+        {.nonNull = true,
+         .min = velox::Variant::create<int64_t>(
+             std::numeric_limits<int64_t>::min()),
+         .max = velox::Variant::create<int64_t>(
+             std::numeric_limits<int64_t>::max()),
+         .numDistinct = 1000}}});
+
+  verifyQueryGraph(
+      "SELECT * FROM t_overflow WHERE x > 0",
+      [&](DerivedTableCP rootDt) {
+        auto allFilters = getAllFilters(rootDt, "t_overflow");
+        ASSERT_FALSE(allFilters.empty());
+
+        auto constraints = makeSchemaConstraints(allFilters);
+        auto selectivity = conjunctsSelectivity(constraints, allFilters, true);
+
+        EXPECT_NEAR(selectivity.trueFraction, 0.5, 0.1);
+      },
+      kTestConnectorId);
+}
+
 TEST_F(FiltersTest, strictInequalityIntegerBounds) {
   // n_nationkey is BIGINT with min=0, max=24, cardinality=25.
   verifyFilterTestCases(
