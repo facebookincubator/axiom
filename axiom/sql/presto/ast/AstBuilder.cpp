@@ -19,6 +19,7 @@
 #include <unordered_set>
 
 #include <folly/Unicode.h>
+#include "axiom/sql/presto/PrestoSqlError.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace axiom::sql::presto {
@@ -82,19 +83,21 @@ bool isValidUnicodeEscape(char c) {
 // Decode a Unicode string literal (U&'...' with optional UESCAPE).
 std::string decodeUnicodeLiteral(
     PrestoSqlParser::UnicodeStringLiteralContext& ctx) {
+  auto location = getLocation(&ctx);
   char escape = '\\';
   if (ctx.UESCAPE() != nullptr) {
     auto escapeString = unquote(ctx.STRING()->getText());
-    VELOX_USER_CHECK_EQ(
-        escapeString.size(),
-        1,
-        "Invalid Unicode escape character: {}",
-        escapeString);
+    AXIOM_PRESTO_SYNTAX_CHECK(
+        escapeString.size() == 1,
+        location,
+        escapeString,
+        "Invalid Unicode escape character");
     escape = escapeString[0];
-    VELOX_USER_CHECK(
+    AXIOM_PRESTO_SYNTAX_CHECK(
         isValidUnicodeEscape(escape),
-        "Invalid Unicode escape character: {}",
-        escapeString);
+        location,
+        escapeString,
+        "Invalid Unicode escape character");
   }
 
   // Strip 'U&' prefix and quotes: U&'content' -> content.
@@ -125,27 +128,36 @@ std::string decodeUnicodeLiteral(
           state = kUnicodeSequence;
           charsNeeded = 6;
         } else {
-          VELOX_USER_CHECK(isHexDigit(ch), "Invalid hexadecimal digit: {}", ch);
+          AXIOM_PRESTO_SYNTAX_CHECK(
+              isHexDigit(ch),
+              location,
+              std::string(1, ch),
+              "Invalid hexadecimal digit");
           state = kUnicodeSequence;
           charsNeeded = 4;
           escapedChars += ch;
         }
         break;
       case kUnicodeSequence:
-        VELOX_USER_CHECK(
-            isHexDigit(ch), "Incomplete escape sequence: {}", escapedChars);
+        AXIOM_PRESTO_SYNTAX_CHECK(
+            isHexDigit(ch),
+            location,
+            escapedChars,
+            "Incomplete escape sequence");
         escapedChars += ch;
         if (escapedChars.size() == charsNeeded) {
           auto codePoint =
               static_cast<int32_t>(std::stoul(escapedChars, nullptr, 16));
-          VELOX_USER_CHECK(
+          AXIOM_PRESTO_SYNTAX_CHECK(
               codePoint >= 0 && codePoint <= 0x10FFFF,
-              "Invalid escaped character: {}",
-              escapedChars);
-          VELOX_USER_CHECK(
+              location,
+              escapedChars,
+              "Invalid escaped character");
+          AXIOM_PRESTO_SYNTAX_CHECK(
               codePoint < 0xD800 || codePoint > 0xDFFF,
-              "Invalid escaped character: {}. Escaped character is a surrogate. Use '\\+123456' instead.",
-              escapedChars);
+              location,
+              escapedChars,
+              "Invalid escaped character. Escaped character is a surrogate. Use '\\+123456' instead.");
           folly::appendCodePointToUtf8(codePoint, result);
           escapedChars.clear();
           state = kEmpty;
@@ -154,8 +166,8 @@ std::string decodeUnicodeLiteral(
     }
   }
 
-  VELOX_USER_CHECK(
-      state == kEmpty, "Incomplete escape sequence: {}", escapedChars);
+  AXIOM_PRESTO_SYNTAX_CHECK(
+      state == kEmpty, location, escapedChars, "Incomplete escape sequence");
   return result;
 }
 
@@ -168,21 +180,32 @@ extractStarModifiers(
   std::vector<std::shared_ptr<Identifier>> excludeColumns;
   std::vector<ReplaceItem> replaceItems;
 
+  auto location = getLocation(ctx);
+
   const auto& excludeClauses = ctx->excludeClause();
-  VELOX_USER_CHECK_LE(excludeClauses.size(), 1, "Duplicate EXCLUDE clause");
+  AXIOM_PRESTO_SYNTAX_CHECK(
+      excludeClauses.size() <= 1,
+      location,
+      "EXCLUDE",
+      "Duplicate EXCLUDE clause");
 
   const auto& replaceClauses = ctx->replaceClause();
-  VELOX_USER_CHECK_LE(replaceClauses.size(), 1, "Duplicate REPLACE clause");
+  AXIOM_PRESTO_SYNTAX_CHECK(
+      replaceClauses.size() <= 1,
+      location,
+      "REPLACE",
+      "Duplicate REPLACE clause");
 
   for (auto* excludeCtx : excludeClauses) {
     std::unordered_set<std::string> seenNames;
     for (auto* identCtx : excludeCtx->identifier()) {
       auto column =
           std::any_cast<std::shared_ptr<Identifier>>(builder.visit(identCtx));
-      VELOX_USER_CHECK(
+      AXIOM_PRESTO_SYNTAX_CHECK(
           seenNames.insert(column->value()).second,
-          "Duplicate column in EXCLUDE: {}",
-          column->value());
+          getLocation(identCtx),
+          column->value(),
+          "Duplicate column in EXCLUDE");
       excludeColumns.emplace_back(std::move(column));
     }
   }
@@ -196,10 +219,11 @@ extractStarModifiers(
           builder.visit(itemCtx->identifier()));
 
       auto name = column->value();
-      VELOX_USER_CHECK(
+      AXIOM_PRESTO_SYNTAX_CHECK(
           seenNames.insert(name).second,
-          "Duplicate column in REPLACE: {}",
-          name);
+          getLocation(itemCtx),
+          name,
+          "Duplicate column in REPLACE");
 
       replaceItems.emplace_back(ReplaceItem{expression, column});
     }
@@ -325,8 +349,10 @@ std::any AstBuilder::visitQuerySpecification(
 
   // FROM-first syntax: FROM t WHERE ... (no SELECT clause).
   const bool fromFirst = ctx->SELECT() == nullptr;
-  VELOX_USER_CHECK(
+  AXIOM_PRESTO_SYNTAX_CHECK(
       !fromFirst || options_.friendlySql,
+      getLocation(ctx),
+      "FROM",
       "FROM-first syntax requires Friendly SQL mode. "
       "Use SELECT * FROM ... instead.");
 
@@ -342,8 +368,10 @@ std::any AstBuilder::visitQuerySpecification(
   } else {
     selectItems = visitTyped<SelectItem>(ctx->selectItem());
 
-    VELOX_USER_CHECK(
+    AXIOM_PRESTO_SYNTAX_CHECK(
         options_.friendlySql || !hasTrailingComma(ctx, selectItems.size()),
+        getLocation(ctx),
+        ",",
         "Trailing commas in SELECT list require Friendly SQL mode.");
   }
 
@@ -397,8 +425,10 @@ std::any AstBuilder::visitSampledRelation(
   } else if (ctx->sampleType()->SYSTEM() != nullptr) {
     sampleType = SampledRelation::Type::kSystem;
   } else {
-    VELOX_USER_FAIL(
-        "Unsupported table sample type: {}", ctx->sampleType()->getText());
+    AXIOM_PRESTO_SYNTAX_FAIL(
+        getLocation(ctx->sampleType()),
+        ctx->sampleType()->getText(),
+        "Unsupported table sample type");
   }
 
   return std::static_pointer_cast<Relation>(std::make_shared<SampledRelation>(
@@ -444,8 +474,10 @@ std::any AstBuilder::visitSelectAll(PrestoSqlParser::SelectAllContext* ctx) {
   std::vector<std::shared_ptr<Identifier>> excludeColumns;
   std::vector<ReplaceItem> replaceItems;
   if (ctx->starModifiers() != nullptr) {
-    VELOX_USER_CHECK(
+    AXIOM_PRESTO_SYNTAX_CHECK(
         options_.friendlySql,
+        getLocation(ctx),
+        "*",
         "EXCLUDE and REPLACE modifiers require Friendly SQL mode.");
     std::tie(excludeColumns, replaceItems) =
         extractStarModifiers(ctx->starModifiers(), *this);
@@ -462,8 +494,11 @@ std::any AstBuilder::visitSelectColumns(
     PrestoSqlParser::SelectColumnsContext* ctx) {
   trace("visitSelectColumns");
 
-  VELOX_USER_CHECK(
-      options_.friendlySql, "COLUMNS() requires Friendly SQL mode.");
+  AXIOM_PRESTO_SYNTAX_CHECK(
+      options_.friendlySql,
+      getLocation(ctx),
+      "COLUMNS",
+      "COLUMNS() requires Friendly SQL mode.");
 
   // Extract pattern string (remove quotes from string literal).
   auto pattern = unquote(ctx->pattern->getText());
@@ -1084,7 +1119,8 @@ std::any AstBuilder::visitTableElement(
 
 namespace {
 std::string getIntervalFieldType(
-    PrestoSqlParser::IntervalFieldContext* intervalField) {
+    PrestoSqlParser::IntervalFieldContext* intervalField,
+    NodeLocation location) {
   if (intervalField->YEAR() != nullptr) {
     return "YEAR";
   } else if (intervalField->MONTH() != nullptr) {
@@ -1098,7 +1134,8 @@ std::string getIntervalFieldType(
   } else if (intervalField->SECOND() != nullptr) {
     return "SECOND";
   } else {
-    VELOX_USER_FAIL("Unsupported interval field: {}", intervalField->getText());
+    AXIOM_PRESTO_SYNTAX_FAIL(
+        location, intervalField->getText(), "Unsupported interval field");
   }
 }
 
@@ -1166,13 +1203,18 @@ TypeSignaturePtr toTypeSignature(
     if (intervalFields.size() >= 2) {
       return std::make_shared<TypeSignature>(
           getLocation(ctx),
-          "INTERVAL " + getIntervalFieldType(intervalFields[0]) + " TO " +
-              getIntervalFieldType(intervalFields[1]),
+          "INTERVAL " +
+              getIntervalFieldType(
+                  intervalFields[0], getLocation(intervalFields[0])) +
+              " TO " +
+              getIntervalFieldType(
+                  intervalFields[1], getLocation(intervalFields[1])),
           rowFieldName);
     }
   }
 
-  VELOX_USER_FAIL("Unsupported type specification: {}", ctx->getText());
+  AXIOM_PRESTO_SYNTAX_FAIL(
+      getLocation(ctx), ctx->getText(), "Unsupported type specification");
 }
 
 TypeSignaturePtr toTypeSignature(
@@ -1187,7 +1229,8 @@ TypeSignaturePtr toTypeSignature(
     return toTypeSignature(ctx->type(), rowFieldName);
   }
 
-  VELOX_USER_FAIL("Unsupported typeParameter: {}", ctx->getText());
+  AXIOM_PRESTO_SYNTAX_FAIL(
+      getLocation(ctx), ctx->getText(), "Unsupported typeParameter");
 }
 
 } // namespace
@@ -1357,7 +1400,8 @@ std::any AstBuilder::visitSetOperation(
         std::make_shared<Intersect>(getLocation(ctx), left, right, distinct));
   }
 
-  VELOX_USER_FAIL("Unsupported set operation: {}", ctx->op->getText());
+  AXIOM_PRESTO_SYNTAX_FAIL(
+      getLocation(ctx->op), ctx->op->getText(), "Unsupported set operation");
 }
 
 std::any AstBuilder::visitQueryPrimaryDefault(

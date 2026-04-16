@@ -18,6 +18,7 @@
 #include <folly/String.h>
 #include <algorithm>
 #include <cctype>
+#include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/ast/DefaultTraversalVisitor.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
@@ -344,9 +345,10 @@ lp::ExprApi ExpressionPlanner::toExpr(const ExpressionPtr& node) {
         return lp::Subquery(subqueryPlanner_(query->as<Query>()));
       }
 
-      VELOX_NYI(
-          "Subquery type is not supported yet: {}",
-          NodeTypeName::toName(query->type()));
+      AXIOM_PRESTO_SYNTAX_FAIL(
+          query->location(),
+          std::string(NodeTypeName::toName(query->type())),
+          "Subquery type is not supported yet");
     }
 
     case NodeType::kComparisonExpression: {
@@ -774,7 +776,9 @@ lp::ExprApi ExpressionPlanner::toExpr(const ExpressionPtr& node) {
     }
 
     default:
-      VELOX_NYI(
+      AXIOM_PRESTO_SYNTAX_FAIL(
+          node->location(),
+          std::nullopt,
           "Unsupported expression type: {}",
           NodeTypeName::toName(node->type()));
   }
@@ -888,7 +892,10 @@ lp::WindowSpec ExpressionPlanner::convertWindow(
             startType, std::move(startValue), endType, std::move(endValue));
         break;
       case WindowFrame::Type::kGroups:
-        VELOX_NYI("GROUPS frame type is not supported yet");
+        AXIOM_PRESTO_SYNTAX_FAIL(
+            window->location(),
+            "GROUPS",
+            "GROUPS frame type is not supported yet");
     }
   }
 

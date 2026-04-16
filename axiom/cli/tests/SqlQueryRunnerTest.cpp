@@ -23,6 +23,7 @@
 #include <thread>
 #include "axiom/cli/QueryIdGenerator.h"
 #include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
@@ -705,7 +706,7 @@ TEST_F(SqlQueryRunnerTest, dropSchemaErrors) {
   VELOX_ASSERT_THROW(run("DROP SCHEMA default"), "Cannot drop the default");
   assertSchemas({kDefaultSchema});
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       run("DROP SCHEMA default CASCADE"), "CASCADE is not supported");
 }
 

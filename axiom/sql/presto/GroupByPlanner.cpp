@@ -17,6 +17,7 @@
 #include "axiom/sql/presto/GroupByPlanner.h"
 #include <set>
 #include "axiom/sql/presto/ColumnsExpansion.h"
+#include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/SortProjection.h"
 #include "axiom/sql/presto/ast/DefaultTraversalVisitor.h"
 #include "folly/container/F14Set.h"
@@ -467,7 +468,9 @@ std::vector<std::vector<lp::ExprApi>> GroupByPlanner::expandGroupingSets(
       }
 
       default:
-        VELOX_NYI(
+        AXIOM_PRESTO_SYNTAX_FAIL(
+            element->location(),
+            std::nullopt,
             "Grouping element type not supported: {}",
             NodeTypeName::toName(element->type()));
     }

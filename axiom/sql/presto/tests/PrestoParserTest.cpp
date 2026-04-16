@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "axiom/sql/presto/PrestoParseError.h"
+#include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
@@ -479,7 +479,7 @@ TEST_F(PrestoParserTest, withReferencedMultipleTimes) {
 }
 
 TEST_F(PrestoParserTest, withRecursiveNotSupported) {
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       parseSql("WITH RECURSIVE t AS (SELECT 1 AS x) SELECT * FROM t"),
       "WITH RECURSIVE is not supported");
 }
@@ -1531,7 +1531,7 @@ TEST_F(PrestoParserTest, friendlySqlTrailingComma) {
 
   // Rejected when Friendly SQL is disabled.
   auto strictParser = makeStrictParser();
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       strictParser.parse("SELECT 1, 2, FROM nation"),
       "Trailing commas in SELECT list require Friendly SQL mode");
 
@@ -1551,7 +1551,7 @@ TEST_F(PrestoParserTest, friendlySqlFromFirst) {
   ASSERT_TRUE(statement->isSelect());
 
   // Rejected when Friendly SQL is disabled.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       makeStrictParser().parse("FROM nation"),
       "FROM-first syntax requires Friendly SQL mode");
 }

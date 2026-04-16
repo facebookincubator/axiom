@@ -158,12 +158,12 @@ TEST_F(ColumnFilteringTest, selectColumns) {
 
 TEST_F(ColumnFilteringTest, selectStarModifiersErrors) {
   // Duplicate EXCLUDE clauses.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       parseSelect("SELECT * EXCLUDE (n_name) EXCLUDE (n_comment) FROM nation"),
       "Duplicate EXCLUDE clause");
 
   // Duplicate REPLACE clauses.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       parseSelect(
           "SELECT * REPLACE (1 AS n_name) REPLACE (2 AS n_comment) FROM nation"),
       "Duplicate REPLACE clause");
@@ -176,14 +176,14 @@ TEST_F(ColumnFilteringTest, selectStarModifiersErrors) {
       "EXCLUDE removed all columns");
 
   // REPLACE same column twice → error.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       parseSelect("SELECT * REPLACE (1 AS n_name, 2 AS n_name) FROM nation"),
-      "Duplicate column in REPLACE: n_name");
+      "Duplicate column in REPLACE");
 
   // EXCLUDE same column twice → error.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       parseSelect("SELECT * EXCLUDE (n_name, n_name) FROM nation"),
-      "Duplicate column in EXCLUDE: n_name");
+      "Duplicate column in EXCLUDE");
 
   // Invalid regex pattern.
   VELOX_ASSERT_THROW(
@@ -193,12 +193,12 @@ TEST_F(ColumnFilteringTest, selectStarModifiersErrors) {
 
 TEST_F(ColumnFilteringTest, friendlySqlDisabled) {
   // EXCLUDE requires friendlySql.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       makeStrictParser().parse("SELECT * EXCLUDE (n_name) FROM nation"),
       "EXCLUDE and REPLACE modifiers require Friendly SQL mode");
 
   // COLUMNS requires friendlySql.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       makeStrictParser().parse("SELECT COLUMNS('.*') FROM nation"),
       "COLUMNS() requires Friendly SQL mode");
 }
@@ -256,7 +256,7 @@ TEST_F(ColumnFilteringTest, duplicateColumnNames) {
       matchOutput({"n_nationkey", "n_name", "n_regionkey", "n_comment"}));
 
   // Qualified name as REPLACE target is a syntax error.
-  AXIOM_EXPECT_PARSE_ERROR(
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       parseSelect("SELECT * REPLACE (1 AS a.n_name) FROM nation a, nation b"),
       "mismatched input '.'");
 }

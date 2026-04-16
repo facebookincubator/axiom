@@ -19,8 +19,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "axiom/connectors/tests/TestConnector.h"
-#include "axiom/sql/presto/PrestoParseError.h"
 #include "axiom/sql/presto/PrestoParser.h"
+#include "axiom/sql/presto/PrestoSqlError.h"
+#include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "axiom/sql/presto/tests/LogicalPlanMatcher.h"
 
 namespace axiom::sql::presto::test {
@@ -135,13 +136,5 @@ class PrestoParserTestBase : public testing::Test {
   /// and dropView for test-specific customization.
   std::shared_ptr<facebook::axiom::connector::TestConnector> connector_;
 };
-
-/// Verifies that a statement fails to parse with a message containing the
-/// expected substring.
-#define AXIOM_EXPECT_PARSE_ERROR(statement, expectedMessage)        \
-  EXPECT_THAT(                                                      \
-      [&]() { statement; },                                         \
-      testing::ThrowsMessage<axiom::sql::presto::PrestoParseError>( \
-          testing::HasSubstr(expectedMessage)))
 
 } // namespace axiom::sql::presto::test
