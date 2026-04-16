@@ -1292,7 +1292,6 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
     if (!translated.empty()) {
       functionSubfields_[call] =
           SubfieldProjections{.pathToExpr = std::move(translated)};
-      return nullptr;
     }
   }
   auto* callExpr =

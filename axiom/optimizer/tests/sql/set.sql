@@ -184,3 +184,11 @@ SELECT * FROM (VALUES (1, null, 'b')) t(x, y, z)
 SELECT * FROM (VALUES (1, null, 'a')) t(x, y, z)
 INTERSECT
 SELECT * FROM (VALUES (1, null, 'b')) t(x, y, z)
+----
+-- ROW subfield access in UNION ALL with positional subscript.
+-- duckdb: VALUES (1), (3)
+SELECT x[1] FROM (SELECT ROW(1, 2) AS x UNION ALL SELECT ROW(3, 4))
+----
+-- ROW subfield access in UNION ALL with named field.
+-- duckdb: VALUES (1), (3)
+SELECT x.a FROM (SELECT ROW(1 AS a, 2 AS b) AS x UNION ALL SELECT ROW(3 AS a, 4 AS b))

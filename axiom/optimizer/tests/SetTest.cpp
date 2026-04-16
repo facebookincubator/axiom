@@ -1025,6 +1025,75 @@ TEST_F(SetTest, unionAllWithDistinctAndCountStar) {
   }
 }
 
+TEST_F(SetTest, rowSubfieldAccessInUnionAll) {
+  {
+    auto logicalPlan = parseSelect(
+        "SELECT x.a FROM ("
+        "  SELECT ROW(1 AS a, 2 AS b) AS x"
+        "  UNION ALL"
+        "  SELECT ROW(3 AS a, 4 AS b)"
+        ")");
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    AXIOM_ASSERT_PLAN(
+        plan,
+        matchValues(ROW({}))
+            .project({"row_constructor(1, null)"})
+            .localPartition(matchValues(ROW({}))
+                                .project({"row_constructor(3, null)"})
+                                .build())
+            .project({"x.a"})
+            .build());
+  }
+
+  {
+    auto logicalPlan = parseSelect(
+        "SELECT x[1] FROM ("
+        "  SELECT ROW(1, 2) AS x"
+        "  UNION ALL"
+        "  SELECT ROW(3, 4)"
+        ") WHERE x[1] > 0");
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    AXIOM_ASSERT_PLAN(
+        plan,
+        matchValues(ROW({}))
+            .filter()
+            .project({"row_constructor(1, null)"})
+            .localPartition(matchValues(ROW({}))
+                                .filter()
+                                .project({"row_constructor(3, null)"})
+                                .build())
+            .project({"x[1]"})
+            .build());
+  }
+
+  {
+    auto logicalPlan = parseSelect(
+        "SELECT y FROM ("
+        "  SELECT x[1] AS y FROM ("
+        "    SELECT ROW(1, 2) AS x"
+        "    UNION ALL"
+        "    SELECT ROW(3, 4)"
+        "  )"
+        "  UNION ALL"
+        "  SELECT 5"
+        ")");
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    AXIOM_ASSERT_PLAN(
+        plan,
+        matchValues(ROW({}))
+            .project({"row_constructor(1, null)"})
+            .localPartition(matchValues(ROW({}))
+                                .project({"row_constructor(3, null)"})
+                                .build())
+            .project({"x[1]"})
+            .localPartition(matchValues(ROW({})).project({"5 as y"}).build())
+            .build());
+  }
+}
+
 TEST_F(SetTest, unionAllWithDistinctWidthMismatch) {
   std::vector<std::string> widthConstrainingInputs = {
       "SELECT 1",

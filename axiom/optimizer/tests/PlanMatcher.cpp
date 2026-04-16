@@ -135,6 +135,79 @@ velox::core::ExprPtr rewriteInputNames(
       });
 }
 
+// Normalizes toStrings to match Velox exprs to DuckDB. Velox uses bracket
+// notation for dereferences while DuckDB uses special forms names explicitly.
+// In addition, Velox constant folds rows into a constant typed expr with curly
+// bracket notation while DuckDB uses "row_constructor".
+std::string toExprString(const TypedExprPtr& expr) {
+  if (auto* deref = dynamic_cast<const DereferenceTypedExpr*>(expr.get())) {
+    return fmt::format(
+        "subscript({},{})",
+        toExprString(expr->inputs()[0]),
+        deref->index() + 1);
+  }
+
+  if (auto* field = dynamic_cast<const FieldAccessTypedExpr*>(expr.get())) {
+    if (!field->inputs().empty() && !field->inputs()[0]->isInputKind()) {
+      return fmt::format(
+          "dot({},\"{}\")", toExprString(field->inputs()[0]), field->name());
+    }
+  }
+
+  if (auto* call = dynamic_cast<const CallTypedExpr*>(expr.get())) {
+    std::string result = call->name() + "(";
+    for (size_t i = 0; i < expr->inputs().size(); ++i) {
+      if (i > 0) {
+        result += ",";
+      }
+      result += toExprString(expr->inputs()[i]);
+    }
+    result += ")";
+    return result;
+  }
+
+  if (auto* cast = dynamic_cast<const CastTypedExpr*>(expr.get())) {
+    return fmt::format(
+        "{}({} as {})",
+        cast->isTryCast() ? "try_cast" : "cast",
+        toExprString(expr->inputs()[0]),
+        cast->type()->toString());
+  }
+
+  if (auto* constant = dynamic_cast<const ConstantTypedExpr*>(expr.get())) {
+    if (constant->type()->isRow()) {
+      std::string result = "row_constructor(";
+      if (constant->hasValueVector()) {
+        const auto& vec = constant->valueVector();
+        const auto* row = vec->wrappedVector()->as<RowVector>();
+        auto idx = vec->wrappedIndex(0);
+        for (vector_size_t i = 0; i < row->childrenSize(); ++i) {
+          if (i > 0) {
+            result += ",";
+          }
+          if (row->childAt(i)->isNullAt(idx)) {
+            result += "null";
+          } else {
+            result += row->childAt(i)->toString(idx);
+          }
+        }
+      } else {
+        const auto& rowValues = constant->value().row();
+        for (size_t i = 0; i < rowValues.size(); ++i) {
+          if (i > 0) {
+            result += ",";
+          }
+          result += rowValues[i].toStringAsVector(constant->type()->childAt(i));
+        }
+      }
+      result += ")";
+      return result;
+    }
+  }
+
+  return expr->toString();
+}
+
 class TableScanMatcher : public PlanMatcherImpl<TableScanNode> {
  public:
   explicit TableScanMatcher() : PlanMatcherImpl<TableScanNode>() {}
@@ -295,7 +368,7 @@ class FilterMatcher : public PlanMatcherImpl<FilterNode> {
       if (!symbols.empty()) {
         expected = rewriteInputNames(expected, symbols);
       }
-      EXPECT_EQ(plan.filter()->toString(), expected->toString());
+      EXPECT_EQ(toExprString(plan.filter()), expected->toString());
     }
 
     AXIOM_TEST_RETURN
@@ -339,7 +412,7 @@ class ProjectMatcher : public PlanMatcherImpl<ProjectNode> {
         }
 
         EXPECT_EQ(
-            plan.projections()[i]->toString(),
+            toExprString(plan.projections()[i]),
             expected->dropAlias()->toString());
       }
       AXIOM_TEST_RETURN_IF_FAILURE
