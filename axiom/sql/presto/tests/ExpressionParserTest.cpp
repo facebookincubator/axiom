@@ -15,6 +15,7 @@
  */
 
 #include <fmt/format.h>
+#include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/types/QDigestRegistration.h"
@@ -720,10 +721,10 @@ TEST_F(ExpressionParserTest, dereference) {
       "DEREFERENCE(row_constructor(1, 2), 1)",
       parseExpr("row(1, 2).field01")->toString());
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseExpr("row(1, 2).field2"), "Invalid legacy field name: field2");
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseExpr("cast(row(1, 2) as row(a int, b int)).field0"),
       "Cannot access named field using legacy field name: field0 vs. a");
 
@@ -816,17 +817,17 @@ TEST_F(ExpressionParserTest, lateralColumnAlias) {
 
 TEST_F(ExpressionParserTest, lateralColumnAliasErrors) {
   // Forward reference: j is used before it's defined.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT j + 2 AS k, n_regionkey + 1 AS j FROM nation"),
       "Cannot resolve column: j");
 
   // Self-reference: j is not yet in the alias map when the expression is
   // evaluated, so it resolves as a (non-existent) column reference.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT j + 1 AS j FROM nation"), "Cannot resolve column: j");
 
   // Lateral column aliases are not available when Friendly SQL is disabled.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       makeStrictParser().parse(
           "SELECT n_regionkey + 1 AS j, j + 2 AS k FROM nation", true),
       "Cannot resolve column: j");

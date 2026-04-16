@@ -1797,6 +1797,21 @@ std::vector<lp::ExprApi> toColumnExprs(
   return exprs;
 }
 
+// Rethrows a VeloxUserError as a PrestoSqlError with kSemantic kind, using
+// the AST node's location for the error position. Callers must check that
+// loc.line > 0 before calling; this is verified with VELOX_CHECK.
+[[noreturn]] void rethrowAsSemanticError(
+    const NodeLocation& loc,
+    const VeloxUserError& e) {
+  VELOX_CHECK_GT(loc.line, 0, "Location must have 1-based line");
+  throw PrestoSqlError(
+      std::string(e.message()),
+      static_cast<size_t>(loc.line - 1),
+      static_cast<size_t>(std::max(0, loc.charPosition)),
+      std::nullopt,
+      PrestoSqlErrorKind::kSemantic);
+}
+
 SqlStatementPtr parseInsert(
     const Insert& insert,
     const std::string& defaultConnectorId,
@@ -1832,18 +1847,27 @@ SqlStatementPtr parseInsert(
   }
 
   RelationPlanner planner(defaultConnectorId, defaultSchema, parseSql);
-  insert.query()->accept(&planner);
+  try {
+    insert.query()->accept(&planner);
 
-  auto inputColumns = planner.builder().findOrAssignOutputNames();
-  VELOX_CHECK_EQ(inputColumns.size(), columnNames.size());
+    auto inputColumns = planner.builder().findOrAssignOutputNames();
+    VELOX_CHECK_EQ(inputColumns.size(), columnNames.size());
 
-  planner.builder().tableWrite(
-      connectorId,
-      connectorTable.schema,
-      connectorTable.table,
-      lp::WriteKind::kInsert,
-      columnNames,
-      toColumnExprs(inputColumns));
+    planner.builder().tableWrite(
+        connectorId,
+        connectorTable.schema,
+        connectorTable.table,
+        lp::WriteKind::kInsert,
+        columnNames,
+        toColumnExprs(inputColumns));
+  } catch (const VeloxUserError& e) {
+    // No valid SQL location — let the original VeloxUserError propagate
+    // rather than creating a PrestoSqlError with a misleading position.
+    if (insert.location().line <= 0) {
+      throw;
+    }
+    rethrowAsSemanticError(insert.location(), e);
+  }
 
   return std::make_shared<InsertStatement>(planner.plan(), planner.views());
 }
@@ -1876,7 +1900,16 @@ SqlStatementPtr parseCreateTableAsSelect(
       toConnectorTable(*ctas.name(), defaultConnectorId, defaultSchema);
 
   RelationPlanner planner(defaultConnectorId, defaultSchema, parseSql);
-  ctas.query()->accept(&planner);
+  try {
+    ctas.query()->accept(&planner);
+  } catch (const VeloxUserError& e) {
+    // No valid SQL location — let the original VeloxUserError propagate
+    // rather than creating a PrestoSqlError with a misleading position.
+    if (ctas.location().line <= 0) {
+      throw;
+    }
+    rethrowAsSemanticError(ctas.location(), e);
+  }
 
   auto properties = parseTableProperties(ctas.properties());
 
@@ -2201,7 +2234,16 @@ SqlStatementPtr doPlan(
   if (query->is(NodeType::kShowStatsForQuery)) {
     auto* showStats = query->as<ShowStatsForQuery>();
     RelationPlanner planner(defaultConnectorId, defaultSchema, parseSql);
-    showStats->query()->accept(&planner);
+    try {
+      showStats->query()->accept(&planner);
+    } catch (const VeloxUserError& e) {
+      // No valid SQL location — let the original VeloxUserError propagate
+      // rather than creating a PrestoSqlError with a misleading position.
+      if (query->location().line <= 0) {
+        throw;
+      }
+      rethrowAsSemanticError(query->location(), e);
+    }
     auto innerStatement =
         std::make_shared<SelectStatement>(planner.plan(), planner.views());
     return std::make_shared<ShowStatsForQueryStatement>(
@@ -2215,7 +2257,16 @@ SqlStatementPtr doPlan(
   if (query->is(NodeType::kQuery)) {
     RelationPlanner planner(
         defaultConnectorId, defaultSchema, parseSql, friendlySql);
-    query->accept(&planner);
+    try {
+      query->accept(&planner);
+    } catch (const VeloxUserError& e) {
+      // No valid SQL location — let the original VeloxUserError propagate
+      // rather than creating a PrestoSqlError with a misleading position.
+      if (query->location().line <= 0) {
+        throw;
+      }
+      rethrowAsSemanticError(query->location(), e);
+    }
     return std::make_shared<SelectStatement>(planner.plan(), planner.views());
   }
 
