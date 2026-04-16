@@ -19,7 +19,7 @@
 #include <chrono>
 #include <optional>
 
-#include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/common/SchemaTableName.h"
 #include "velox/connectors/Connector.h"
 
 namespace facebook::axiom::connector::system {
@@ -27,10 +27,15 @@ namespace facebook::axiom::connector::system {
 /// Schema and table name constants for the system connector.
 static constexpr std::string_view kRuntimeSchema = "runtime";
 static constexpr std::string_view kMetadataSchema = "metadata";
-static constexpr std::string_view kQueriesTable = "queries";
-static constexpr std::string_view kSessionPropertiesTable =
-    "session_properties";
-static constexpr std::string_view kFunctionsTable = "functions";
+inline const SchemaTableName kQueriesTable{
+    std::string(kRuntimeSchema),
+    "queries"};
+inline const SchemaTableName kSessionPropertiesTable{
+    std::string(kMetadataSchema),
+    "session_properties"};
+inline const SchemaTableName kFunctionsTable{
+    std::string(kMetadataSchema),
+    "functions"};
 
 /// Snapshot of a single query's state, used by the system connector to
 /// populate the system.runtime.queries table.
@@ -131,31 +136,25 @@ class SystemColumnHandle : public velox::connector::ColumnHandle {
   const std::string name_;
 };
 
-/// Table handle for the system connector. Holds a reference to the layout
-/// and the set of column handles for the query.
+/// Table handle for the system connector. Holds the schema-qualified table
+/// name and the set of column handles for the query.
 class SystemTableHandle : public velox::connector::ConnectorTableHandle {
  public:
   SystemTableHandle(
       const std::string& connectorId,
-      const TableLayout& layout,
-      std::vector<velox::connector::ColumnHandlePtr> columnHandles);
-
-  /// Constructor for deserialization. Does not require a layout reference.
-  SystemTableHandle(
-      const std::string& connectorId,
-      std::string tableName,
+      SchemaTableName schemaTableName,
       std::vector<velox::connector::ColumnHandlePtr> columnHandles);
 
   const std::string& name() const override {
-    return name_;
+    return qualifiedName_;
   }
 
   std::string toString() const override {
     return name();
   }
 
-  const TableLayout* layout() const {
-    return layout_;
+  const SchemaTableName& schemaTableName() const {
+    return schemaTableName_;
   }
 
   const std::vector<velox::connector::ColumnHandlePtr>& columnHandles() const {
@@ -166,7 +165,8 @@ class SystemTableHandle : public velox::connector::ConnectorTableHandle {
     folly::dynamic obj = folly::dynamic::object;
     obj["name"] = SystemTableHandle::getClassName();
     obj["connectorId"] = connectorId();
-    obj["tableName"] = name_;
+    obj["schemaName"] = schemaTableName_.schema;
+    obj["tableName"] = schemaTableName_.table;
     folly::dynamic handles = folly::dynamic::array;
     for (const auto& handle : columnHandles_) {
       handles.push_back(handle->serialize());
@@ -186,8 +186,8 @@ class SystemTableHandle : public velox::connector::ConnectorTableHandle {
   VELOX_DEFINE_CLASS_NAME(SystemTableHandle)
 
  private:
-  const std::string name_;
-  const TableLayout* layout_;
+  const SchemaTableName schemaTableName_;
+  const std::string qualifiedName_;
   const std::vector<velox::connector::ColumnHandlePtr> columnHandles_;
 };
 

@@ -107,7 +107,7 @@ velox::connector::ConnectorTableHandlePtr SystemTableLayout::createTableHandle(
   // System connector does not support filter pushdown.
   rejectedFilters = std::move(filters);
   return std::make_shared<SystemTableHandle>(
-      connectorId(), *this, std::move(columnHandles));
+      connectorId(), table().name(), std::move(columnHandles));
 }
 
 // ===================== SystemTable =====================
@@ -155,7 +155,7 @@ std::shared_ptr<SplitSource> SystemSplitManager::getSplitSource(
 // ===================== SystemConnectorMetadata =====================
 
 TablePtr SystemConnectorMetadata::findTable(const SchemaTableName& tableName) {
-  if (tableName.schema == kRuntimeSchema && tableName.table == kQueriesTable) {
+  if (tableName == kQueriesTable) {
     if (!queriesTable_) {
       queriesTable_ = std::make_shared<SystemTable>(
           tableName, queriesTableSchema(), connector_);
@@ -163,8 +163,7 @@ TablePtr SystemConnectorMetadata::findTable(const SchemaTableName& tableName) {
     return queriesTable_;
   }
 
-  if (tableName.schema == kMetadataSchema &&
-      tableName.table == kSessionPropertiesTable) {
+  if (tableName == kSessionPropertiesTable) {
     if (!sessionPropertiesTable_) {
       sessionPropertiesTable_ = std::make_shared<SystemTable>(
           tableName, sessionPropertiesTableSchema(), connector_);
@@ -172,8 +171,7 @@ TablePtr SystemConnectorMetadata::findTable(const SchemaTableName& tableName) {
     return sessionPropertiesTable_;
   }
 
-  if (tableName.schema == kMetadataSchema &&
-      tableName.table == kFunctionsTable) {
+  if (tableName == kFunctionsTable) {
     if (!functionsTable_) {
       functionsTable_ = std::make_shared<SystemTable>(
           tableName, functionsTableSchema(), connector_);

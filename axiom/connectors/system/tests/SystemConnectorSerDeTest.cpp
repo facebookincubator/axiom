@@ -15,6 +15,7 @@
  */
 
 #include <gtest/gtest.h>
+#include "axiom/common/SchemaTableName.h"
 #include "axiom/connectors/system/SystemConnector.h"
 
 namespace facebook::axiom::connector::system {
@@ -42,6 +43,7 @@ class SystemConnectorSerDeTest : public testing::Test {
     auto clone =
         velox::ISerializable::deserialize<SystemTableHandle>(obj, nullptr);
     ASSERT_EQ(handle.connectorId(), clone->connectorId());
+    ASSERT_EQ(handle.schemaTableName(), clone->schemaTableName());
     ASSERT_EQ(handle.name(), clone->name());
     ASSERT_EQ(handle.columnHandles().size(), clone->columnHandles().size());
     for (size_t i = 0; i < handle.columnHandles().size(); ++i) {
@@ -53,8 +55,6 @@ class SystemConnectorSerDeTest : public testing::Test {
       ASSERT_NE(cloned, nullptr);
       ASSERT_EQ(original->name(), cloned->name());
     }
-    // Deserialized handle should have null layout.
-    ASSERT_EQ(clone->layout(), nullptr);
   }
 
   static void testSerde(const SystemSplit& split) {
@@ -74,7 +74,8 @@ TEST_F(SystemConnectorSerDeTest, tableHandle) {
   const std::string connectorId = "system";
 
   // No column handles.
-  auto handle1 = SystemTableHandle(connectorId, "queries", {});
+  auto handle1 =
+      SystemTableHandle(connectorId, SchemaTableName{"runtime", "queries"}, {});
   testSerde(handle1);
 
   // With column handles.
@@ -83,7 +84,10 @@ TEST_F(SystemConnectorSerDeTest, tableHandle) {
       std::make_shared<SystemColumnHandle>("state"),
       std::make_shared<SystemColumnHandle>("user"),
   };
-  auto handle2 = SystemTableHandle(connectorId, "queries", std::move(columns));
+  auto handle2 = SystemTableHandle(
+      connectorId,
+      SchemaTableName{"metadata", "session_properties"},
+      std::move(columns));
   testSerde(handle2);
 }
 

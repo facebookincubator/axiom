@@ -234,37 +234,29 @@ class SystemConnectorMetadataTest : public ::testing::Test {
 // ===================== system.runtime.queries tests =====================
 
 TEST_F(SystemConnectorMetadataTest, findTable) {
-  auto table = metadata_->findTable(
-      {std::string(kRuntimeSchema), std::string(kQueriesTable)});
+  auto table = metadata_->findTable(kQueriesTable);
   ASSERT_NE(table, nullptr);
-  EXPECT_EQ(
-      table->name(),
-      (SchemaTableName{
-          std::string(kRuntimeSchema), std::string(kQueriesTable)}));
+  EXPECT_EQ(table->name(), kQueriesTable);
 }
 
 TEST_F(SystemConnectorMetadataTest, findTableCaching) {
-  auto table1 = metadata_->findTable(
-      {std::string(kRuntimeSchema), std::string(kQueriesTable)});
-  auto table2 = metadata_->findTable(
-      {std::string(kRuntimeSchema), std::string(kQueriesTable)});
+  auto table1 = metadata_->findTable(kQueriesTable);
+  auto table2 = metadata_->findTable(kQueriesTable);
   EXPECT_EQ(table1.get(), table2.get());
 }
 
 TEST_F(SystemConnectorMetadataTest, findTableUnknown) {
   EXPECT_EQ(
-      metadata_->findTable({std::string(kRuntimeSchema), "nonexistent"}),
-      nullptr);
+      metadata_->findTable({kQueriesTable.schema, "nonexistent"}), nullptr);
   EXPECT_EQ(
       metadata_->findTable(
-          {std::string(kMetadataSchema), std::string(kQueriesTable)}),
+          {kSessionPropertiesTable.schema, kQueriesTable.table}),
       nullptr);
   EXPECT_EQ(metadata_->findTable({"", ""}), nullptr);
 }
 
 TEST_F(SystemConnectorMetadataTest, schema) {
-  auto table = metadata_->findTable(
-      {std::string(kRuntimeSchema), std::string(kQueriesTable)});
+  auto table = metadata_->findTable(kQueriesTable);
   ASSERT_NE(table, nullptr);
 
   auto expectedSchema = queriesTableSchema();
@@ -281,8 +273,7 @@ TEST_F(SystemConnectorMetadataTest, splitManager) {
 }
 
 TEST_F(SystemConnectorMetadataTest, tableLayout) {
-  auto table = metadata_->findTable(
-      {std::string(kRuntimeSchema), std::string(kQueriesTable)});
+  auto table = metadata_->findTable(kQueriesTable);
   ASSERT_NE(table, nullptr);
 
   const auto& layouts = table->layouts();
@@ -299,8 +290,7 @@ TEST_F(SystemConnectorMetadataTest, tableLayout) {
 }
 
 TEST_F(SystemConnectorMetadataTest, tableHandle) {
-  auto table = metadata_->findTable(
-      {std::string(kRuntimeSchema), std::string(kQueriesTable)});
+  auto table = metadata_->findTable(kQueriesTable);
   ASSERT_NE(table, nullptr);
 
   const auto& layouts = table->layouts();
@@ -318,12 +308,11 @@ TEST_F(SystemConnectorMetadataTest, tableHandle) {
       session, {columnHandle}, evaluator, std::move(filters), rejectedFilters);
   ASSERT_NE(tableHandle, nullptr);
   EXPECT_EQ(tableHandle->connectorId(), kSystemCatalog);
-  EXPECT_EQ(tableHandle->name(), R"("runtime"."queries")");
+  EXPECT_EQ(tableHandle->name(), "runtime.queries");
 }
 
 TEST_F(SystemConnectorMetadataTest, splitSource) {
-  auto table = metadata_->findTable(
-      {std::string(kRuntimeSchema), std::string(kQueriesTable)});
+  auto table = metadata_->findTable(kQueriesTable);
   ASSERT_NE(table, nullptr);
 
   auto session = std::make_shared<ConnectorSession>("test-query");
@@ -384,9 +373,7 @@ TEST_F(SystemConnectorMetadataTest, dataSourceAllColumns) {
 
   queryProvider_->addQuery(std::move(snapshot));
 
-  auto vector = readTable(
-      {std::string(kRuntimeSchema), std::string(kQueriesTable)},
-      queriesTableSchema());
+  auto vector = readTable(kQueriesTable, queriesTableSchema());
   ASSERT_NE(vector, nullptr);
   ASSERT_EQ(vector->size(), 1);
 
@@ -426,8 +413,7 @@ TEST_F(SystemConnectorMetadataTest, dataSourceColumnPruning) {
 
   auto outputType =
       velox::ROW({{"query_id", velox::VARCHAR()}, {"state", velox::VARCHAR()}});
-  auto vector = readTable(
-      {std::string(kRuntimeSchema), std::string(kQueriesTable)}, outputType);
+  auto vector = readTable(kQueriesTable, outputType);
   ASSERT_NE(vector, nullptr);
   ASSERT_EQ(vector->size(), 1);
   ASSERT_EQ(vector->type()->size(), 2);
@@ -440,9 +426,7 @@ TEST_F(SystemConnectorMetadataTest, dataSourceColumnPruning) {
 }
 
 TEST_F(SystemConnectorMetadataTest, dataSourceEmpty) {
-  auto vector = readTable(
-      {std::string(kRuntimeSchema), std::string(kQueriesTable)},
-      queriesTableSchema());
+  auto vector = readTable(kQueriesTable, queriesTableSchema());
   ASSERT_NE(vector, nullptr);
   EXPECT_EQ(vector->size(), 0);
 }
@@ -460,8 +444,7 @@ TEST_F(SystemConnectorMetadataTest, dataSourceNullSource) {
   queryProvider_->addQuery(std::move(snapshot));
 
   auto outputType = velox::ROW({{"source", velox::VARCHAR()}});
-  auto vector = readTable(
-      {std::string(kRuntimeSchema), std::string(kQueriesTable)}, outputType);
+  auto vector = readTable(kQueriesTable, outputType);
   ASSERT_NE(vector, nullptr);
   ASSERT_EQ(vector->size(), 1);
 
@@ -470,23 +453,19 @@ TEST_F(SystemConnectorMetadataTest, dataSourceNullSource) {
 }
 
 TEST_F(SystemConnectorMetadataTest, findSessionPropertiesTable) {
-  SchemaTableName tableName{
-      std::string(kMetadataSchema), std::string(kSessionPropertiesTable)};
-
-  auto table = metadata_->findTable(tableName);
+  auto table = metadata_->findTable(kSessionPropertiesTable);
   ASSERT_NE(table, nullptr);
-  EXPECT_EQ(table->name(), tableName);
+  EXPECT_EQ(table->name(), kSessionPropertiesTable);
 
   // Wrong schema.
   EXPECT_EQ(
       metadata_->findTable(
-          {std::string(kRuntimeSchema), std::string(kSessionPropertiesTable)}),
+          {kQueriesTable.schema, kSessionPropertiesTable.table}),
       nullptr);
 }
 
 TEST_F(SystemConnectorMetadataTest, sessionPropertiesSchema) {
-  auto table = metadata_->findTable(
-      {std::string(kMetadataSchema), std::string(kSessionPropertiesTable)});
+  auto table = metadata_->findTable(kSessionPropertiesTable);
   ASSERT_NE(table, nullptr);
 
   auto expectedSchema = sessionPropertiesTableSchema();
@@ -503,9 +482,9 @@ TEST_F(SystemConnectorMetadataTest, schemas) {
   EXPECT_THAT(
       metadata_->listSchemaNames(session),
       testing::UnorderedElementsAre(
-          std::string(kRuntimeSchema), std::string(kMetadataSchema)));
-  EXPECT_TRUE(metadata_->schemaExists(session, std::string(kRuntimeSchema)));
-  EXPECT_TRUE(metadata_->schemaExists(session, std::string(kMetadataSchema)));
+          kQueriesTable.schema, kSessionPropertiesTable.schema));
+  EXPECT_TRUE(metadata_->schemaExists(session, kQueriesTable.schema));
+  EXPECT_TRUE(metadata_->schemaExists(session, kSessionPropertiesTable.schema));
   EXPECT_FALSE(metadata_->schemaExists(session, "information_schema"));
 }
 
@@ -522,34 +501,26 @@ TEST_F(SystemConnectorMetadataTest, sessionPropertiesAllColumns) {
       },
       pool_.get());
 
-  auto actual = readTable(
-      {std::string(kMetadataSchema), std::string(kSessionPropertiesTable)},
-      sessionPropertiesTableSchema());
+  auto actual =
+      readTable(kSessionPropertiesTable, sessionPropertiesTableSchema());
   velox::test::assertEqualVectors(expected, actual);
 }
 
 // ===================== system.metadata.functions tests =====================
 
 TEST_F(SystemConnectorMetadataTest, findFunctionsTable) {
-  SchemaTableName tableName{
-      std::string(kMetadataSchema), std::string(kFunctionsTable)};
-
-  auto table = metadata_->findTable(tableName);
+  auto table = metadata_->findTable(kFunctionsTable);
   ASSERT_NE(table, nullptr);
-  EXPECT_EQ(table->name(), tableName);
+  EXPECT_EQ(table->name(), kFunctionsTable);
 
   // Wrong schema.
   EXPECT_EQ(
-      metadata_->findTable(
-          {std::string(kRuntimeSchema), std::string(kFunctionsTable)}),
+      metadata_->findTable({kQueriesTable.schema, kFunctionsTable.table}),
       nullptr);
 }
 
 TEST_F(SystemConnectorMetadataTest, functionsDataSource) {
-  SchemaTableName tableName{
-      std::string(kMetadataSchema), std::string(kFunctionsTable)};
-
-  auto actual = readTable(tableName, functionsTableSchema());
+  auto actual = readTable(kFunctionsTable, functionsTableSchema());
   ASSERT_NE(actual, nullptr);
 
   folly::json::serialization_opts opts;

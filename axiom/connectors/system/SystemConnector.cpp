@@ -260,34 +260,30 @@ class FunctionsDataSource : public SystemDataSourceBase {
 
 SystemTableHandle::SystemTableHandle(
     const std::string& connectorId,
-    const TableLayout& layout,
+    SchemaTableName schemaTableName,
     std::vector<velox::connector::ColumnHandlePtr> columnHandles)
     : ConnectorTableHandle(connectorId),
-      name_(layout.table().name().toString()),
-      layout_(&layout),
-      columnHandles_(std::move(columnHandles)) {}
-
-SystemTableHandle::SystemTableHandle(
-    const std::string& connectorId,
-    std::string tableName,
-    std::vector<velox::connector::ColumnHandlePtr> columnHandles)
-    : ConnectorTableHandle(connectorId),
-      name_(std::move(tableName)),
-      layout_(nullptr),
+      schemaTableName_(std::move(schemaTableName)),
+      qualifiedName_(
+          fmt::format(
+              "{}.{}",
+              schemaTableName_.schema,
+              schemaTableName_.table)),
       columnHandles_(std::move(columnHandles)) {}
 
 velox::connector::ConnectorTableHandlePtr SystemTableHandle::create(
     const folly::dynamic& obj,
     void* /*context*/) {
   auto connectorId = obj["connectorId"].asString();
-  auto tableName = obj["tableName"].asString();
+  SchemaTableName schemaTableName{
+      obj["schemaName"].asString(), obj["tableName"].asString()};
   std::vector<velox::connector::ColumnHandlePtr> handles;
   for (const auto& handleObj : obj["columnHandles"]) {
     handles.push_back(
         velox::ISerializable::deserialize<SystemColumnHandle>(handleObj));
   }
   return std::make_shared<SystemTableHandle>(
-      connectorId, std::move(tableName), std::move(handles));
+      connectorId, std::move(schemaTableName), std::move(handles));
 }
 
 // ===================== SystemDataSource =====================
@@ -878,24 +874,9 @@ std::unique_ptr<velox::connector::DataSource> SystemConnector::createDataSource(
       dynamic_cast<const SystemTableHandle*>(tableHandle.get());
   VELOX_CHECK_NOT_NULL(systemHandle, "Expected SystemTableHandle");
 
-  // Dispatch based on which table is being scanned. Use the handle's name
-  // (always available) rather than layout() which is null after
-  // deserialization.
-  const auto& name = systemHandle->name();
+  const auto& schemaTableName = systemHandle->schemaTableName();
 
-  static const auto kSessionPropertiesName =
-      SchemaTableName{
-          std::string(kMetadataSchema), std::string(kSessionPropertiesTable)}
-          .toString();
-  static const auto kFunctionsName =
-      SchemaTableName{
-          std::string(kMetadataSchema), std::string(kFunctionsTable)}
-          .toString();
-  static const auto kQueriesName =
-      SchemaTableName{std::string(kRuntimeSchema), std::string(kQueriesTable)}
-          .toString();
-
-  if (name == kSessionPropertiesName) {
+  if (schemaTableName == kSessionPropertiesTable) {
     return std::make_unique<SessionPropertiesDataSource>(
         outputType,
         columnHandles,
@@ -903,12 +884,12 @@ std::unique_ptr<velox::connector::DataSource> SystemConnector::createDataSource(
         connectorQueryCtx->memoryPool());
   }
 
-  if (name == kFunctionsName) {
+  if (schemaTableName == kFunctionsTable) {
     return std::make_unique<FunctionsDataSource>(
         outputType, columnHandles, connectorQueryCtx->memoryPool());
   }
 
-  if (name == kQueriesName) {
+  if (schemaTableName == kQueriesTable) {
     return std::make_unique<SystemDataSource>(
         outputType,
         columnHandles,
@@ -916,7 +897,7 @@ std::unique_ptr<velox::connector::DataSource> SystemConnector::createDataSource(
         connectorQueryCtx->memoryPool());
   }
 
-  VELOX_FAIL("Unknown system table: {}", name);
+  VELOX_FAIL("Unknown system table: {}", systemHandle->name());
 }
 
 } // namespace facebook::axiom::connector::system
