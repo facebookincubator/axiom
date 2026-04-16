@@ -70,10 +70,10 @@ TEST_F(AggregationParserTest, simpleGroupBy) {
       "Cannot resolve column: x");
 
   // GROUP BY ordinal out of range.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT 1 GROUP BY 1, 2"),
       "GROUP BY position is not in select list: 2");
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT 1 GROUP BY 0"),
       "GROUP BY position is not in select list: 0");
 }
@@ -114,12 +114,12 @@ TEST_F(AggregationParserTest, groupByOrdinalWithSelectStar) {
       matchScan().aggregate({"n_nationkey", "n_regionkey"}, {}).output());
 
   // GROUP BY ordinal out of range for expanded SELECT *.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT * FROM nation GROUP BY 1, 2, 3, 4, 5"),
       "GROUP BY position is not in select list: 5");
 
   // GROUP BY ordinal out of range for SELECT COLUMNS(...).
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT COLUMNS('n_.*key') FROM nation GROUP BY 1, 2, 3"),
       "GROUP BY position is not in select list: 3");
 
@@ -361,7 +361,8 @@ TEST_F(AggregationParserTest, cubeColumnLimit) {
       columns,
       columns);
 
-  VELOX_ASSERT_THROW(parseSql(sql), "CUBE supports at most 30 columns");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(sql), "CUBE supports at most 30 columns");
 }
 
 TEST_F(AggregationParserTest, groupByDistinct) {

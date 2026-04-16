@@ -17,6 +17,7 @@
 #include "axiom/sql/presto/ColumnsExpansion.h"
 
 #include <re2/re2.h>
+#include "axiom/sql/presto/PrestoSqlError.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace axiom::sql::presto {
@@ -81,7 +82,8 @@ void findColumnsCalls(
 std::vector<lp::PlanBuilder::OutputColumnName> ColumnsExpansion::matchByRegex(
     const lp::PlanBuilder& builder,
     const std::string& pattern,
-    const std::optional<std::string>& prefix) {
+    const std::optional<std::string>& prefix,
+    NodeLocation location) {
   re2::RE2 regex(pattern);
   VELOX_USER_CHECK(regex.ok(), "Invalid regex pattern: {}", regex.error());
 
@@ -90,15 +92,20 @@ std::vector<lp::PlanBuilder::OutputColumnName> ColumnsExpansion::matchByRegex(
   std::erase_if(columns, [&](const auto& column) {
     return !re2::RE2::FullMatch(column.name, regex);
   });
-  VELOX_USER_CHECK(
-      !columns.empty(), "COLUMNS('{}') matched no columns", pattern);
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      !columns.empty(),
+      location,
+      pattern,
+      "COLUMNS('{}') matched no columns",
+      pattern);
 
   return columns;
 }
 
 std::vector<lp::ExprApi> ColumnsExpansion::expand(
     const lp::ExprApi& expr,
-    const lp::PlanBuilder& builder) {
+    const lp::PlanBuilder& builder,
+    NodeLocation location) {
   std::vector<std::pair<const core::IExpr*, std::string>> columnsCalls;
   findColumnsCalls(expr.expr(), columnsCalls);
   if (columnsCalls.empty()) {
@@ -111,7 +118,7 @@ std::vector<lp::ExprApi> ColumnsExpansion::expand(
   matchedColumnsPerCall.reserve(columnsCalls.size());
   for (const auto& [callNode, pattern] : columnsCalls) {
     matchedColumnsPerCall.push_back(
-        matchByRegex(builder, pattern, /*prefix=*/std::nullopt));
+        matchByRegex(builder, pattern, /*prefix=*/std::nullopt, location));
   }
 
   // All COLUMNS() calls must match the same number of columns.

@@ -167,7 +167,7 @@ TEST_F(PrestoParserTest, unnest) {
       matchValues().unnest().project().output({"x"}));
 
   // Alias count must match total column count (including ordinality).
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       testSelect(
           "SELECT * FROM unnest(array[1, 2, 3], array[4, 5]) with ordinality as t(x, y)",
           matchValues().unnest().output()),
@@ -438,7 +438,7 @@ TEST_F(PrestoParserTest, withShadowingCte) {
 
 TEST_F(PrestoParserTest, withNoLeaking) {
   // CTE defined inside a subquery is not visible outside.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT * FROM (WITH t AS (SELECT 1 AS x) SELECT * FROM t) sub "
           "CROSS JOIN t"),
@@ -1142,7 +1142,7 @@ TEST_F(PrestoParserTest, showStats) {
   auto matcher = matchValues();
   testSelect("SHOW STATS FOR nation", matcher);
 
-  VELOX_ASSERT_USER_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSelect("SHOW STATS FOR no_such_table"), "Table not found");
 
   // SHOW STATS FOR (<query>) returns a ShowStatsForQueryStatement wrapping

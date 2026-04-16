@@ -261,11 +261,13 @@ std::vector<std::vector<lp::ExprApi>> expandRollup(
 
 // CUBE(a,b) -> {(a,b), (a), (b), ()}
 std::vector<std::vector<lp::ExprApi>> expandCube(
-    const std::vector<lp::ExprApi>& expressions) {
+    const std::vector<lp::ExprApi>& expressions,
+    NodeLocation location) {
   const size_t n = expressions.size();
   // Presto limits CUBE to 30 columns (2^30 possible grouping sets).
   // https://github.com/prestodb/presto/issues/27096
-  VELOX_USER_CHECK_LE(n, 30, "CUBE supports at most 30 columns");
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      n <= 30, location, "CUBE", "CUBE supports at most 30 columns, got {}", n);
   const size_t numGroupingSets = 1ULL << n;
   std::vector<std::vector<lp::ExprApi>> groupingSets;
   groupingSets.reserve(numGroupingSets);
@@ -448,8 +450,9 @@ std::vector<std::vector<lp::ExprApi>> GroupByPlanner::expandGroupingSets(
 
       case NodeType::kCube: {
         const auto* cube = element->as<Cube>();
-        auto cubeSets =
-            expandCube(resolveWithCache(cube->expressions(), selectExprs));
+        auto cubeSets = expandCube(
+            resolveWithCache(cube->expressions(), selectExprs),
+            element->location());
         groupingSets =
             crossProductGroupingSets(groupingSets, std::move(cubeSets));
         break;
@@ -710,12 +713,18 @@ lp::ExprApi GroupByPlanner::resolveGroupingExpression(
     const std::vector<lp::ExprApi>& selectExprs) {
   if (expr->is(NodeType::kLongLiteral)) {
     const auto n = expr->as<LongLiteral>()->value();
-    VELOX_USER_CHECK_GE(n, 1, "GROUP BY position is not in select list: {}", n);
-    VELOX_USER_CHECK_LE(
+    AXIOM_PRESTO_SEMANTIC_CHECK_GE(
         n,
-        selectExprs.size(),
-        "GROUP BY position is not in select list: {}",
-        n);
+        static_cast<int64_t>(1),
+        expr->location(),
+        std::to_string(n),
+        "GROUP BY position is not in select list");
+    AXIOM_PRESTO_SEMANTIC_CHECK_LE(
+        n,
+        static_cast<int64_t>(selectExprs.size()),
+        expr->location(),
+        std::to_string(n),
+        "GROUP BY position is not in select list");
     return selectExprs.at(n - 1);
   }
   return exprPlanner_.toExpr(expr);
@@ -743,7 +752,8 @@ std::vector<lp::ExprApi> GroupByPlanner::resolveWithCache(
     auto resolved = resolveWithCache(expr, selectExprs);
 
     // Expand COLUMNS() calls to multiple grouping keys.
-    auto expanded = ColumnsExpansion::expand(resolved, *builder_);
+    auto expanded =
+        ColumnsExpansion::expand(resolved, *builder_, expr->location());
     if (!expanded.empty()) {
       result.insert(
           result.end(),
