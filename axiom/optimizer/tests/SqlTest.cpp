@@ -122,6 +122,7 @@ int main(int argc, char** argv) {
   facebook::axiom::optimizer::test::registerQueryFile("limit.sql");
   facebook::axiom::optimizer::test::registerQueryFile("aggregation.sql");
   facebook::axiom::optimizer::test::registerQueryFile("subfield.sql");
+  facebook::axiom::optimizer::test::registerQueryFile("coercion.sql");
   facebook::axiom::optimizer::test::registerQueryFile(
       "distinctAggregation.sql");
 
