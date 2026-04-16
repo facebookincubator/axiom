@@ -75,5 +75,13 @@ SELECT MAP(ARRAY[CAST(1.0 AS DOUBLE)], ARRAY['hello'])[1.0]
 -- duckdb: SELECT true FROM t
 SELECT ROW(a, CAST(null AS BIGINT)) IS NOT NULL FROM t
 ----
+-- VALUES with compatible types coerced to common supertype.
+-- duckdb: VALUES (1::bigint), (2::bigint)
+SELECT * FROM (VALUES ROW(1), ROW(CAST(2 AS bigint))) AS t(x)
+----
+-- VALUES with complex types requiring mixed-direction coercion per child.
+-- duckdb: VALUES (MAP {1::bigint: 1.0}), (MAP {2::bigint: 2.0})
+SELECT * FROM (VALUES ROW(MAP(ARRAY[1], ARRAY[1.0])), ROW(MAP(ARRAY[CAST(2 AS bigint)], ARRAY[CAST(2.0 AS real)]))) AS t(x)
+----
 -- error: Grouping sets are not supported yet
 SELECT count(*) FROM t GROUP BY GROUPING SETS ((a), ())

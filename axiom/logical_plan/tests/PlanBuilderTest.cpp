@@ -669,5 +669,76 @@ TEST_F(PlanBuilderTest, cubeThreeKeys) {
           std::vector<int32_t>{}));
 }
 
+namespace {
+LogicalPlanNodePtr buildValues(
+    const std::vector<std::string>& columns,
+    const std::vector<std::vector<std::string>>& rows,
+    bool enableCoercions = true) {
+  PlanBuilder::Context context;
+  return PlanBuilder(context, enableCoercions).values(columns, rows).build();
+}
+} // namespace
+
+TEST_F(PlanBuilderTest, valuesTypeCoercion) {
+  // Scalar: BIGINT + INTEGER → BIGINT, with nulls.
+  EXPECT_EQ(
+      *buildValues(
+           {"a", "b"},
+           {{"CAST(123 AS bigint)", "CAST(1 AS integer)"},
+            {"CAST(null AS integer)", "CAST(null AS bigint)"}})
+           ->outputType(),
+      *ROW({"a", "b"}, {BIGINT(), BIGINT()}));
+
+  // Progressive widening: INTEGER → BIGINT → DOUBLE.
+  EXPECT_EQ(
+      *buildValues(
+           {"x"},
+           {{"CAST(1 AS integer)"},
+            {"CAST(2 AS bigint)"},
+            {"CAST(3.0 AS double)"}})
+           ->outputType(),
+      *ROW({"x"}, {DOUBLE()}));
+
+  // Complex type with mixed-direction coercion per child.
+  // MAP(INTEGER, DOUBLE) + MAP(BIGINT, REAL): key widens INT→BIGINT,
+  // value widens REAL→DOUBLE. leastCommonSuperType picks direction per child.
+  EXPECT_EQ(
+      *buildValues(
+           {"x"},
+           {{"MAP(ARRAY[CAST(1 AS integer)], ARRAY[CAST(1.0 AS double)])"},
+            {"MAP(ARRAY[CAST(2 AS bigint)], ARRAY[CAST(2.0 AS real)])"}})
+           ->outputType(),
+      *ROW({"x"}, {MAP(BIGINT(), DOUBLE())}));
+}
+
+TEST_F(PlanBuilderTest, valuesTypeCoercionErrors) {
+  // Incompatible scalar types.
+  VELOX_ASSERT_THROW(
+      buildValues({"x"}, {{"true"}, {"CAST(123 AS bigint)"}}),
+      "Incompatible types in VALUES row 2, column 1: "
+      "expected BOOLEAN, got BIGINT");
+
+  // Incompatible null types.
+  VELOX_ASSERT_THROW(
+      buildValues({"x"}, {{"CAST(null AS boolean)"}, {"CAST(null AS bigint)"}}),
+      "Incompatible types in VALUES row 2, column 1: "
+      "expected BOOLEAN, got BIGINT");
+
+  // Incompatible complex types.
+  VELOX_ASSERT_THROW(
+      buildValues(
+          {"x"}, {{"ARRAY[CAST(1 AS integer)]"}, {"MAP(ARRAY[1], ARRAY[2])"}}),
+      "Incompatible types in VALUES row 2, column 1: "
+      "expected ARRAY<INTEGER>, got MAP<INTEGER,INTEGER>");
+
+  // Coercions disabled.
+  VELOX_ASSERT_THROW(
+      buildValues(
+          {"x"},
+          {{"CAST(null AS boolean)"}, {"CAST(null AS bigint)"}},
+          /*enableCoercions=*/false),
+      "All values should have equivalent types: BIGINT vs. ROW<x:BOOLEAN>");
+}
+
 } // namespace
 } // namespace facebook::axiom::logical_plan

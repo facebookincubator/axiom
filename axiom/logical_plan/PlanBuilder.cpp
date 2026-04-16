@@ -167,22 +167,31 @@ PlanBuilder& PlanBuilder::values(
   }
 
   if (enableCoercions_) {
-    for (auto i = 0; i < numRows; ++i) {
-      auto& row = exprs[i];
+    for (auto i = 1; i < numRows; ++i) {
       for (auto j = 0; j < numColumns; ++j) {
-        const auto& type = row[j]->type();
-        if (types[j]->equivalent(*type)) {
+        const auto& colType = exprs[i][j]->type();
+        if (types[j]->equivalent(*colType)) {
           continue;
         }
 
-        if (velox::TypeCoercer::coercible(type, types[j])) {
-          row[j] = applyCoercion(row[j], types[j]);
-        } else if (velox::TypeCoercer::coercible(types[j], type)) {
-          types[j] = type;
+        auto common =
+            velox::TypeCoercer::leastCommonSuperType(types[j], colType);
+        VELOX_USER_CHECK_NOT_NULL(
+            common,
+            "Incompatible types in VALUES row {}, column {}: expected {}, got {}",
+            i + 1,
+            j + 1,
+            types[j]->toString(),
+            colType->toString());
+        types[j] = common;
+      }
+    }
 
-          for (auto k = 0; k < i; ++k) {
-            exprs[k][j] = applyCoercion(exprs[k][j], types[j]);
-          }
+    // Coerce expressions whose type differs from the resolved column type.
+    for (auto& row : exprs) {
+      for (auto j = 0; j < numColumns; ++j) {
+        if (!row[j]->type()->equivalent(*types[j])) {
+          row[j] = applyCoercion(row[j], types[j]);
         }
       }
     }
