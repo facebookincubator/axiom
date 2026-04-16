@@ -48,12 +48,13 @@ target_link_libraries(
   gtest_main
 )
 
-add_library(axiom_optimizer_tests_plan_matcher PlanMatcher.cpp)
+add_library(axiom_optimizer_tests_plan_matcher PlanMatcher.cpp ExpressionMatcher.cpp)
 
 target_link_libraries(
   axiom_optimizer_tests_plan_matcher
   velox_hive_connector
   velox_parse_parser
+  velox_type
   GTest::gmock
   glog::glog
   GTest::gtest
@@ -106,6 +107,7 @@ add_executable(
   CsvReadWriteTest.cpp
   DerivedTablePrinterTest.cpp
   DomainTest.cpp
+  ExpressionMatcherTest.cpp
   ExistencePushdownTest.cpp
   FilterPushdownTest.cpp
   FiltersTest.cpp

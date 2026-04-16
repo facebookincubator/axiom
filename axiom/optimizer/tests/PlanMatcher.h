@@ -17,6 +17,7 @@
 #pragma once
 
 #include "axiom/optimizer/MultiFragmentPlan.h"
+#include "axiom/optimizer/tests/ExpressionMatcher.h"
 #include "velox/core/PlanNode.h"
 #include "velox/type/Filter.h"
 
@@ -141,16 +142,16 @@ class PlanMatcherBuilder {
       const RowTypePtr& outputType);
 
   /// Matches a Hive TableScan node with the specified table name, subfield
-  /// filters, and optional remaining filter.
+  /// filters, and an optional structurally matched remaining filter.
   /// @param tableName The name of the table.
   /// @param subfieldFilters Filters pushed down into the scan as subfield
   /// filters.
-  /// @param remainingFilter Optional filter expression that couldn't be pushed
-  /// down into the scan.
+  /// @param remainingFilter Optional ExpressionMatcher for the remaining
+  /// filter. When omitted, asserts that no remaining filter exists.
   PlanMatcherBuilder& hiveScan(
       const std::string& tableName,
       common::SubfieldFilters subfieldFilters,
-      const std::string& remainingFilter = "");
+      std::optional<ExpressionMatcher> remainingFilter = std::nullopt);
 
   /// Matches any Values node regardless of type.
   PlanMatcherBuilder& values();

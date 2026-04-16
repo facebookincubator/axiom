@@ -23,6 +23,7 @@ namespace facebook::axiom::optimizer {
 namespace {
 
 using namespace velox;
+using namespace core::em;
 namespace lp = facebook::axiom::logical_plan;
 
 class SubqueryTest : public test::HiveQueriesTestBase {
@@ -47,14 +48,15 @@ TEST_F(SubqueryTest, uncorrelatedScalar) {
 
     SCOPED_TRACE(query);
     auto plan = toSingleNodePlan(query);
-    auto matcher = matchHiveScan("nation")
-                       .hashJoin(
-                           core::PlanMatcherBuilder()
-                               .hiveScan("region", {}, "r_name like 'AF%'")
-                               .enforceSingleRow()
-                               .build(),
-                           velox::core::JoinType::kInner)
-                       .build();
+    auto matcher =
+        matchHiveScan("nation")
+            .hashJoin(
+                core::PlanMatcherBuilder()
+                    .hiveScan("region", {}, col("r_name").like(constant("AF%")))
+                    .enforceSingleRow()
+                    .build(),
+                velox::core::JoinType::kInner)
+            .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
   }

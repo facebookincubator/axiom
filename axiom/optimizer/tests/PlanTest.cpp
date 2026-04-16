@@ -28,6 +28,7 @@ namespace facebook::axiom::optimizer {
 namespace {
 
 using namespace facebook::velox;
+using namespace core::em;
 namespace lp = facebook::axiom::logical_plan;
 
 class PlanTest : public test::HiveQueriesTestBase {
@@ -543,22 +544,30 @@ TEST_F(PlanTest, filterBreakup) {
             .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher =
-        core::PlanMatcherBuilder()
-            .hiveScan("lineitem", std::move(lineitemFilters))
-            .hashJoin(
-                core::PlanMatcherBuilder()
-                    .hiveScan(
-                        "part",
-                        {},
-                        "\"or\"(\"and\"(p_size between 1 and 15, (p_brand = 'Brand#34' AND p_container LIKE 'LG%')), "
-                        "   \"or\"(\"and\"(p_size between 1 and 5, (p_brand = 'Brand#12' AND p_container LIKE 'SM%')), "
-                        "          \"and\"(p_size between 1 and 10, (p_brand = 'Brand#23' AND p_container LIKE 'MED%'))))")
-                    .build())
-            .filter()
-            .project()
-            .singleAggregation()
-            .build();
+    auto brand = [](const char* b, int32_t sizeHi, const char* prefix) {
+      return call(
+          "and",
+          {col("p_size").between(constant(int32_t(1)), constant(sizeHi)),
+           col("p_brand")
+               .eq(constant(b))
+               .and_(col("p_container").like(constant(prefix)))});
+    };
+    auto partFilter = call(
+        "or",
+        {brand("Brand#34", 15, "LG%"),
+         call(
+             "or",
+             {brand("Brand#12", 5, "SM%"), brand("Brand#23", 10, "MED%")})});
+    auto matcher = core::PlanMatcherBuilder()
+                       .hiveScan("lineitem", std::move(lineitemFilters))
+                       .hashJoin(
+                           core::PlanMatcherBuilder()
+                               .hiveScan("part", {}, partFilter)
+                               .build())
+                       .filter()
+                       .project()
+                       .singleAggregation()
+                       .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
   }

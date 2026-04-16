@@ -27,6 +27,7 @@ namespace facebook::axiom::optimizer {
 namespace {
 
 using namespace velox;
+using namespace core::em;
 namespace lp = facebook::axiom::logical_plan;
 
 class SetTest : public test::HiveQueriesTestBase {
@@ -60,21 +61,24 @@ TEST_F(SetTest, unionAll) {
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder()
-                       .hiveScan(
-                           "nation",
-                           test::lte("n_nationkey", 10),
-                           "(n_regionkey + 1) % 3 = 1")
-                       .localPartition(
-                           core::PlanMatcherBuilder()
-                               .hiveScan(
-                                   "nation",
-                                   test::gte("n_nationkey", 14),
-                                   "(n_regionkey + 1) % 3 = 1")
-                               .project()
-                               .build())
-                       .project()
-                       .build();
+    auto remainingFilter = call(
+        "eq",
+        {call(
+             "mod",
+             {call("plus", {col("n_regionkey"), constant(int64_t(1))}),
+              constant(int64_t(3))}),
+         constant(int64_t(1))});
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .hiveScan("nation", test::lte("n_nationkey", 10), remainingFilter)
+            .localPartition(
+                core::PlanMatcherBuilder()
+                    .hiveScan(
+                        "nation", test::gte("n_nationkey", 14), remainingFilter)
+                    .project()
+                    .build())
+            .project()
+            .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
@@ -349,11 +353,17 @@ TEST_F(SetTest, intersect) {
           .build();
 
   {
-    auto startMatcher = [&](auto&& filters,
-                            const std::string& remainingFilter = "") {
-      return core::PlanMatcherBuilder().hiveScan(
-          "nation", std::move(filters), remainingFilter);
+    auto startMatcher = [&](auto&& filters) {
+      return core::PlanMatcherBuilder().hiveScan("nation", std::move(filters));
     };
+
+    auto remainingFilter = call(
+        "eq",
+        {call(
+             "mod",
+             {call("plus", {col("n_regionkey"), constant(int64_t(1))}),
+              constant(int64_t(3))}),
+         constant(int64_t(1))});
 
     // TODO Fix this plan to push down (n_regionkey + 1) % 3
     // = 1 to all branches of 'intersect'.
@@ -363,9 +373,11 @@ TEST_F(SetTest, intersect) {
                        .hashJoin(
                            startMatcher(test::gte("n_nationkey", 12))
                                .hashJoin(
-                                   startMatcher(
-                                       test::lte("n_nationkey", 20),
-                                       "(n_regionkey + 1) % 3 = 1")
+                                   core::PlanMatcherBuilder()
+                                       .hiveScan(
+                                           "nation",
+                                           test::lte("n_nationkey", 20),
+                                           remainingFilter)
                                        .build(),
                                    core::JoinType::kRightSemiFilter)
                                .build(),
@@ -414,26 +426,32 @@ TEST_F(SetTest, except) {
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder()
-                       .hiveScan(
-                           "nation",
-                           test::lte("n_nationkey", 20),
-                           "(n_regionkey + 1) % 3 = 1")
-                       .hashJoin(
-                           core::PlanMatcherBuilder()
-                               // TODO Fix this plan to push down (n_regionkey +
-                               // 1) % 3 = 1 to all branches of 'except'.
-                               .hiveScan("nation", test::gte("n_nationkey", 17))
-                               .build(),
-                           core::JoinType::kAnti)
-                       .hashJoin(
-                           core::PlanMatcherBuilder()
-                               .hiveScan("nation", test::lte("n_nationkey", 5))
-                               .build(),
-                           core::JoinType::kAnti)
-                       .singleAggregation()
-                       .project()
-                       .build();
+    auto exceptRemainingFilter = call(
+        "eq",
+        {call(
+             "mod",
+             {call("plus", {col("n_regionkey"), constant(int64_t(1))}),
+              constant(int64_t(3))}),
+         constant(int64_t(1))});
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .hiveScan(
+                "nation", test::lte("n_nationkey", 20), exceptRemainingFilter)
+            .hashJoin(
+                core::PlanMatcherBuilder()
+                    // TODO Fix this plan to push down (n_regionkey +
+                    // 1) % 3 = 1 to all branches of 'except'.
+                    .hiveScan("nation", test::gte("n_nationkey", 17))
+                    .build(),
+                core::JoinType::kAnti)
+            .hashJoin(
+                core::PlanMatcherBuilder()
+                    .hiveScan("nation", test::lte("n_nationkey", 5))
+                    .build(),
+                core::JoinType::kAnti)
+            .singleAggregation()
+            .project()
+            .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
@@ -737,11 +755,23 @@ TEST_F(SetTest, filterOnDuplicateExpressionInUnionAll) {
   // on the respective scan branches.
   auto buildMatcher = [&] {
     return core::PlanMatcherBuilder()
-        .hiveScan("t", {}, "x + 1 > 0")
+        .hiveScan(
+            "t",
+            {},
+            call(
+                "gt",
+                {call("plus", {col("x"), constant(int64_t(1))}),
+                 constant(int64_t(0))}))
         .project()
         .localPartition(
             core::PlanMatcherBuilder()
-                .hiveScan("t", {}, "x + 2 > 0")
+                .hiveScan(
+                    "t",
+                    {},
+                    call(
+                        "gt",
+                        {call("plus", {col("x"), constant(int64_t(2))}),
+                         constant(int64_t(0))}))
                 .project()
                 .build());
   };

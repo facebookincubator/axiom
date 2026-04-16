@@ -259,11 +259,11 @@ class HiveScanMatcher : public PlanMatcherImpl<TableScanNode> {
   HiveScanMatcher(
       const std::string& tableName,
       common::SubfieldFilters subfieldFilters,
-      const std::string& remainingFilter)
+      std::optional<ExpressionMatcher> remainingFilter = std::nullopt)
       : PlanMatcherImpl<TableScanNode>(),
         tableName_{tableName},
         subfieldFilters_{std::move(subfieldFilters)},
-        remainingFilter_{remainingFilter} {}
+        remainingFilterMatcher_{std::move(remainingFilter)} {}
 
   MatchResult matchDetails(
       const TableScanNode& plan,
@@ -299,17 +299,14 @@ class HiveScanMatcher : public PlanMatcherImpl<TableScanNode> {
     }
 
     const auto& remainingFilter = hiveTableHandle->remainingFilter();
-    if (remainingFilter == nullptr) {
-      EXPECT_TRUE(remainingFilter_.empty())
-          << "Expected remaining filter: " << remainingFilter_;
-    } else if (remainingFilter_.empty()) {
+    if (remainingFilterMatcher_) {
+      remainingFilterMatcher_->match(remainingFilter);
+      AXIOM_TEST_RETURN_IF_FAILURE
+    } else {
       EXPECT_TRUE(remainingFilter == nullptr)
           << "Expected no remaining filter, but got "
           << remainingFilter->toString();
-    } else {
-      auto expected =
-          parse::DuckSqlExpressionsParser().parseExpr(remainingFilter_);
-      EXPECT_EQ(remainingFilter->toString(), expected->toString());
+      AXIOM_TEST_RETURN_IF_FAILURE
     }
 
     AXIOM_TEST_RETURN
@@ -318,7 +315,7 @@ class HiveScanMatcher : public PlanMatcherImpl<TableScanNode> {
  private:
   const std::string tableName_;
   const common::SubfieldFilters subfieldFilters_;
-  const std::string remainingFilter_;
+  const std::optional<ExpressionMatcher> remainingFilterMatcher_;
 };
 
 class ValuesMatcher : public PlanMatcherImpl<ValuesNode> {
@@ -1593,10 +1590,10 @@ PlanMatcherBuilder& PlanMatcherBuilder::tableScan(
 PlanMatcherBuilder& PlanMatcherBuilder::hiveScan(
     const std::string& tableName,
     common::SubfieldFilters subfieldFilters,
-    const std::string& remainingFilter) {
+    std::optional<ExpressionMatcher> remainingFilter) {
   VELOX_USER_CHECK_NULL(matcher_);
   matcher_ = std::make_shared<HiveScanMatcher>(
-      tableName, std::move(subfieldFilters), remainingFilter);
+      tableName, std::move(subfieldFilters), std::move(remainingFilter));
   return *this;
 }
 

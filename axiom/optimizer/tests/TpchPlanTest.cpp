@@ -33,6 +33,7 @@ namespace facebook::axiom::optimizer {
 namespace {
 
 using namespace facebook::velox;
+using namespace core::em;
 namespace lp = facebook::axiom::logical_plan;
 
 class TpchPlanTest : public virtual test::HiveQueriesTestBase {
@@ -232,21 +233,23 @@ TEST_F(TpchPlanTest, q04) {
   // side. If we had shared key order between lineitem and orders we could look
   // at other plans but in the hash based plan space we have the best outcome.
 
-  auto matcher = core::PlanMatcherBuilder()
-                     .hiveScan("lineitem", {}, "l_commitdate < l_receiptdate")
-                     .hashJoin(
-                         core::PlanMatcherBuilder()
-                             .hiveScan(
-                                 "orders",
-                                 test::between(
-                                     "o_orderdate",
-                                     DATE()->toDays("1993-07-01"),
-                                     DATE()->toDays("1993-09-30")))
-                             .build(),
-                         core::JoinType::kRightSemiFilter)
-                     .aggregation()
-                     .orderBy()
-                     .build();
+  auto matcher =
+      core::PlanMatcherBuilder()
+          .hiveScan(
+              "lineitem", {}, col("l_commitdate").lt(col("l_receiptdate")))
+          .hashJoin(
+              core::PlanMatcherBuilder()
+                  .hiveScan(
+                      "orders",
+                      test::between(
+                          "o_orderdate",
+                          DATE()->toDays("1993-07-01"),
+                          DATE()->toDays("1993-09-30")))
+                  .build(),
+              core::JoinType::kRightSemiFilter)
+          .aggregation()
+          .orderBy()
+          .build();
 
   auto plan = planTpch(4);
   AXIOM_ASSERT_PLAN(plan, matcher);
@@ -450,7 +453,9 @@ TEST_F(TpchPlanTest, q12) {
                   .hiveScan(
                       "lineitem",
                       std::move(subfieldFilters),
-                      "l_commitdate < l_receiptdate AND l_shipdate < l_commitdate")
+                      col("l_commitdate")
+                          .lt(col("l_receiptdate"))
+                          .and_(col("l_shipdate").lt(col("l_commitdate"))))
                   .build(),
               core::JoinType::kInner)
           .project()
@@ -650,23 +655,30 @@ TEST_F(TpchPlanTest, q19) {
           .add("l_quantity", exec::betweenDouble(1.0, 30.0))
           .build();
 
-  auto matcher =
-      core::PlanMatcherBuilder()
-          .hiveScan("lineitem", std::move(lineitemFilters))
-          .hashJoin(
-              core::PlanMatcherBuilder()
-                  .hiveScan(
-                      "part",
-                      {},
-                      "\"or\"(\"and\"(p_size between 1 and 15, (p_brand = 'Brand#34' AND p_container in ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG'))), "
-                      "   \"or\"(\"and\"(p_size between 1 and 5, (p_brand = 'Brand#12' AND p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG'))), "
-                      "          \"and\"(p_size between 1 and 10, (p_brand = 'Brand#23' AND p_container in ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')))))")
-                  .build(),
-              core::JoinType::kInner)
-          .filter()
-          .project()
-          .aggregation()
-          .build();
+  auto brand = [](const char* b, int32_t sizeHi) {
+    return call(
+        "and",
+        {col("p_size").between(constant(int32_t(1)), constant(sizeHi)),
+         col("p_brand")
+             .eq(constant(b))
+             .and_(call("in", {col("p_container"), any()}))});
+  };
+  auto partFilter = call(
+      "or",
+      {brand("Brand#34", 15),
+       call("or", {brand("Brand#12", 5), brand("Brand#23", 10)})});
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .hiveScan("lineitem", std::move(lineitemFilters))
+                     .hashJoin(
+                         core::PlanMatcherBuilder()
+                             .hiveScan("part", {}, partFilter)
+                             .build(),
+                         core::JoinType::kInner)
+                     .filter()
+                     .project()
+                     .aggregation()
+                     .build();
 
   auto plan = planTpch(19);
   AXIOM_ASSERT_PLAN(plan, matcher);
