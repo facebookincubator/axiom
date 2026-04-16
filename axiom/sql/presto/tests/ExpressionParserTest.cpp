@@ -307,10 +307,11 @@ TEST_F(ExpressionParserTest, binaryLiteral) {
   test("X'AB CD'", "\xAB\xCD");
 
   // Odd number of hex digits.
-  VELOX_ASSERT_THROW(parseExpr("X'a b c'"), "even number of digits");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseExpr("X'a b c'"), "even number of digits");
 
   // Non-hexadecimal character.
-  VELOX_ASSERT_THROW(parseExpr("X'az'"), "hexadecimal digits");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(parseExpr("X'az'"), "hexadecimal digits");
 }
 
 TEST_F(ExpressionParserTest, stringLiteralEscapedQuotes) {
@@ -456,7 +457,7 @@ TEST_F(ExpressionParserTest, timestampLiteral) {
       "TIMESTAMP '2020-01-01 00:00 America/Los_Angeles'",
       TIMESTAMP_WITH_TIME_ZONE());
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseExpr("TIMESTAMP 'foo'"), "Not a valid timestamp literal");
 }
 
@@ -521,10 +522,10 @@ TEST_F(ExpressionParserTest, specialDateTimeFunctions) {
   EXPECT_EQ("localtimestamp()", parseExpr("LOCALTIMESTAMP")->toString());
 
   // Precision is not supported.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseExpr("CURRENT_TIME(3)"),
       "Precision for date/time functions is not supported yet");
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseExpr("CURRENT_TIMESTAMP(6)"),
       "Precision for date/time functions is not supported yet");
 }

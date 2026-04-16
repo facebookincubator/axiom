@@ -186,7 +186,7 @@ TEST_F(ColumnFilteringTest, selectStarModifiersErrors) {
       "Duplicate column in EXCLUDE");
 
   // Invalid regex pattern.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSelect("SELECT COLUMNS('[invalid') FROM nation"),
       "Invalid regex pattern: missing ]: [invalid");
 }

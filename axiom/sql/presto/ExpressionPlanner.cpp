@@ -31,12 +31,17 @@ using namespace facebook::velox;
 namespace {
 
 int32_t parseInt(const TypeSignaturePtr& type) {
-  VELOX_USER_CHECK_EQ(type->parameters().size(), 0);
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      type->parameters().size() == 0,
+      type->location(),
+      type->baseName(),
+      "Type must not have parameters");
   const auto& str = type->baseName();
   try {
     return folly::to<int32_t>(str);
   } catch (const folly::ConversionError&) {
-    VELOX_USER_FAIL("'{}' could not be converted to INTEGER_LITERAL", str);
+    AXIOM_PRESTO_SEMANTIC_FAIL(
+        type->location(), str, "Could not be converted to INTEGER_LITERAL");
   }
 }
 
@@ -81,11 +86,13 @@ std::string toFunctionName(ArithmeticBinaryExpression::Operator op) {
 int32_t parseYearMonthInterval(
     const std::string& value,
     IntervalLiteral::IntervalField start,
-    std::optional<IntervalLiteral::IntervalField> end) {
-  VELOX_USER_CHECK(
+    std::optional<IntervalLiteral::IntervalField> end,
+    NodeLocation location) {
+  AXIOM_PRESTO_SEMANTIC_CHECK(
       !end.has_value() || start == end.value(),
-      "Multi-part intervals are not supported yet: {}",
-      value);
+      location,
+      value,
+      "Multi-part intervals are not supported yet");
 
   if (value.empty()) {
     return 0;
@@ -106,11 +113,13 @@ int32_t parseYearMonthInterval(
 int64_t parseDayTimeInterval(
     const std::string& value,
     IntervalLiteral::IntervalField start,
-    std::optional<IntervalLiteral::IntervalField> end) {
-  VELOX_USER_CHECK(
+    std::optional<IntervalLiteral::IntervalField> end,
+    NodeLocation location) {
+  AXIOM_PRESTO_SEMANTIC_CHECK(
       !end.has_value() || start == end.value(),
-      "Multi-part intervals are not supported yet: {}",
-      value);
+      location,
+      value,
+      "Multi-part intervals are not supported yet");
 
   if (value.empty()) {
     return 0;
@@ -132,8 +141,9 @@ int64_t parseDayTimeInterval(
   }
 }
 
-lp::ExprApi parseDecimal(std::string_view value) {
-  VELOX_USER_CHECK(!value.empty(), "Invalid decimal value: '{}'", value);
+lp::ExprApi parseDecimal(std::string_view value, NodeLocation location) {
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      !value.empty(), location, std::string(value), "Invalid decimal value");
 
   size_t startPos = 0;
   if (value.at(0) == '+' || value.at(0) == '-') {
@@ -145,11 +155,18 @@ lp::ExprApi parseDecimal(std::string_view value) {
 
   for (auto i = startPos; i < value.size(); ++i) {
     if (value.at(i) == '.') {
-      VELOX_USER_CHECK_EQ(periodPos, -1, "Invalid decimal value: '{}'", value);
+      AXIOM_PRESTO_SEMANTIC_CHECK(
+          periodPos == -1,
+          location,
+          std::string(value),
+          "Invalid decimal value");
       periodPos = i;
     } else {
-      VELOX_USER_CHECK(
-          std::isdigit(value.at(i)), "Invalid decimal value: '{}'", value);
+      AXIOM_PRESTO_SEMANTIC_CHECK(
+          std::isdigit(value.at(i)),
+          location,
+          std::string(value),
+          "Invalid decimal value");
 
       if (firstNonZeroPos == -1 && value.at(i) != '0') {
         firstNonZeroPos = i;
@@ -195,9 +212,10 @@ lp::ExprApi parseDecimal(std::string_view value) {
         folly::to<int128_t>(unscaledValue), DECIMAL(precision, scale));
   }
 
-  VELOX_USER_FAIL(
-      "Invalid decimal value: '{}'. Precision exceeds maximum: {} > {}.",
-      value,
+  AXIOM_PRESTO_SEMANTIC_FAIL(
+      location,
+      std::string(value),
+      "Invalid decimal value. Precision exceeds maximum: {} > {}.",
       precision,
       LongDecimalType::kMaxPrecision);
 }
@@ -263,10 +281,20 @@ TypePtr parseType(const TypeSignaturePtr& type) {
     parameters.reserve(numParams);
 
     if (baseName == "ARRAY") {
-      VELOX_USER_CHECK_EQ(1, numParams);
+      AXIOM_PRESTO_SEMANTIC_CHECK_EQ(
+          numParams,
+          static_cast<size_t>(1),
+          type->location(),
+          baseName,
+          "ARRAY expects 1 parameter");
       parameters.emplace_back(parseType(type->parameters().at(0)));
     } else if (baseName == "MAP") {
-      VELOX_USER_CHECK_EQ(2, numParams);
+      AXIOM_PRESTO_SEMANTIC_CHECK_EQ(
+          numParams,
+          static_cast<size_t>(2),
+          type->location(),
+          baseName,
+          "MAP expects 2 parameters");
       parameters.emplace_back(parseType(type->parameters().at(0)));
       parameters.emplace_back(parseType(type->parameters().at(1)));
     } else if (baseName == "ROW") {
@@ -285,20 +313,32 @@ TypePtr parseType(const TypeSignaturePtr& type) {
         parameters.emplace_back(parseType(param), fieldName);
       }
     } else if (baseName == "DECIMAL") {
-      VELOX_USER_CHECK_EQ(2, numParams);
+      AXIOM_PRESTO_SEMANTIC_CHECK_EQ(
+          numParams,
+          static_cast<size_t>(2),
+          type->location(),
+          baseName,
+          "DECIMAL expects 2 parameters");
       parameters.emplace_back(parseInt(type->parameters().at(0)));
       parameters.emplace_back(parseInt(type->parameters().at(1)));
     } else if (baseName == "TDIGEST" || baseName == "QDIGEST") {
-      VELOX_USER_CHECK_EQ(1, numParams);
+      AXIOM_PRESTO_SEMANTIC_CHECK_EQ(
+          numParams,
+          static_cast<size_t>(1),
+          type->location(),
+          baseName,
+          "Expects 1 parameter");
       parameters.emplace_back(parseType(type->parameters().at(0)));
     } else {
-      VELOX_USER_FAIL("Unknown parametric type: {}", baseName);
+      AXIOM_PRESTO_SEMANTIC_FAIL(
+          type->location(), baseName, "Unknown parametric type");
     }
   }
 
   auto veloxType = getType(baseName, parameters);
 
-  VELOX_CHECK_NOT_NULL(veloxType, "Cannot resolve type: {}", baseName);
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      veloxType != nullptr, type->location(), baseName, "Cannot resolve type");
   return veloxType;
 }
 
@@ -441,7 +481,9 @@ lp::ExprApi ExpressionPlanner::toExpr(const ExpressionPtr& node) {
         return lp::Call("in", value, toExpr(valueList));
       }
 
-      VELOX_USER_FAIL(
+      AXIOM_PRESTO_SEMANTIC_FAIL(
+          valueList->location(),
+          std::nullopt,
           "Unexpected IN predicate: {}",
           NodeTypeName::toName(valueList->type()));
     }
@@ -584,7 +626,9 @@ lp::ExprApi ExpressionPlanner::toExpr(const ExpressionPtr& node) {
       return lp::Lit(node->as<DoubleLiteral>()->value());
 
     case NodeType::kDecimalLiteral:
-      return parseDecimal(node->as<DecimalLiteral>()->value());
+      return parseDecimal(
+          node->as<DecimalLiteral>()->value(),
+          node->as<DecimalLiteral>()->location());
 
     case NodeType::kStringLiteral:
       return lp::Lit(node->as<StringLiteral>()->value());
@@ -593,15 +637,16 @@ lp::ExprApi ExpressionPlanner::toExpr(const ExpressionPtr& node) {
       auto hexString = node->as<BinaryLiteral>()->value();
       std::erase_if(hexString, [](char c) { return std::isspace(c); });
       std::string bytes;
-      VELOX_USER_CHECK_EQ(
-          hexString.size() % 2,
-          0,
-          "Binary literal must contain an even number of digits: X'{}'",
-          hexString);
-      VELOX_USER_CHECK(
+      AXIOM_PRESTO_SEMANTIC_CHECK(
+          hexString.size() % 2 == 0,
+          node->location(),
+          hexString,
+          "Binary literal must contain an even number of digits");
+      AXIOM_PRESTO_SEMANTIC_CHECK(
           folly::unhexlify(hexString, bytes),
-          "Binary literal can only contain hexadecimal digits: X'{}'",
-          hexString);
+          node->location(),
+          hexString,
+          "Binary literal can only contain hexadecimal digits");
       return lp::Lit(Variant::binary(std::move(bytes)));
     }
 
@@ -612,11 +657,17 @@ lp::ExprApi ExpressionPlanner::toExpr(const ExpressionPtr& node) {
 
       if (interval->isYearToMonth()) {
         const auto months = parseYearMonthInterval(
-            interval->value(), interval->startField(), interval->endField());
+            interval->value(),
+            interval->startField(),
+            interval->endField(),
+            interval->location());
         return lp::Lit(multiplier * months, INTERVAL_YEAR_MONTH());
       } else {
         const auto seconds = parseDayTimeInterval(
-            interval->value(), interval->startField(), interval->endField());
+            interval->value(),
+            interval->startField(),
+            interval->endField(),
+            interval->location());
         return lp::Lit(multiplier * seconds * 1'000, INTERVAL_DAY_TIME());
       }
     }
@@ -641,10 +692,11 @@ lp::ExprApi ExpressionPlanner::toExpr(const ExpressionPtr& node) {
           literal->value().size(),
           util::TimestampParseMode::kPrestoCast);
 
-      VELOX_USER_CHECK(
+      AXIOM_PRESTO_SEMANTIC_CHECK(
           !timestamp.hasError(),
-          "Not a valid timestamp literal: {} - {}",
+          literal->location(),
           literal->value(),
+          "Not a valid timestamp literal: {}",
           timestamp.error());
 
       if (timestamp.value().timeZone != nullptr) {
@@ -699,8 +751,12 @@ lp::ExprApi ExpressionPlanner::toExpr(const ExpressionPtr& node) {
       // TODO: Verify that NULLIF is semantically equivalent with IF(a = b,
       // null, a). https://github.com/prestodb/presto/issues/27024
       if (lowerFuncName == "nullif") {
-        VELOX_USER_CHECK_EQ(
-            args.size(), 2, "NULLIF requires exactly 2 arguments");
+        AXIOM_PRESTO_SEMANTIC_CHECK(
+            args.size() == 2,
+            node->location(),
+            lowerFuncName,
+            "NULLIF requires exactly 2 arguments, got {}",
+            args.size());
         return lp::Call(
             "if",
             lp::Call("eq", args[0], args[1]),
@@ -756,8 +812,10 @@ lp::ExprApi ExpressionPlanner::toExpr(const ExpressionPtr& node) {
     case NodeType::kCurrentTime: {
       auto* currentTime = node->as<CurrentTime>();
 
-      VELOX_USER_CHECK(
+      AXIOM_PRESTO_SEMANTIC_CHECK(
           !currentTime->precision().has_value(),
+          node->location(),
+          std::nullopt,
           "Precision for date/time functions is not supported yet.");
 
       switch (currentTime->function()) {

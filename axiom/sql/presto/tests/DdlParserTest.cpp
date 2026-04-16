@@ -253,14 +253,13 @@ TEST_F(DdlParserTest, createTable) {
       "Duplicate column name: ID");
 
   // unknown type
-  VELOX_ASSERT_THROW(
-      parseSql("CREATE TABLE t (id UNKNOWNTYPE)"),
-      "Cannot resolve type: UNKNOWNTYPE");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("CREATE TABLE t (id UNKNOWNTYPE)"), "Cannot resolve type");
 
   // invalid decimal type parameters
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("CREATE TABLE t (price DECIMAL(VARCHAR, ARRAY<INTEGER>))"),
-      "'VARCHAR' could not be converted to INTEGER_LITERAL");
+      "Could not be converted to INTEGER_LITERAL");
 
   // unknown constraint column
   VELOX_ASSERT_THROW(
@@ -276,10 +275,10 @@ TEST_F(DdlParserTest, createTable) {
       "Duplicate constraint column: ID");
 
   // duplicate table property
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "CREATE TABLE t (id INTEGER) WITH (format = 'ORC', format = 'PARQUET')"),
-      "Duplicate property: format");
+      "Duplicate property");
 }
 
 TEST_F(DdlParserTest, dropTable) {

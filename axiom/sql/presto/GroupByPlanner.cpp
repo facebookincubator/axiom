@@ -220,11 +220,12 @@ class ExprAnalyzer : public DefaultTraversalVisitor {
   void visitFunctionCall(FunctionCall* node) override {
     const auto& name = node->name()->suffix();
     if (exec::getAggregateFunctionEntry(name) && node->window() == nullptr) {
-      VELOX_USER_CHECK(
+      AXIOM_PRESTO_SEMANTIC_CHECK(
           !aggregateName_.has_value(),
-          "Cannot nest aggregations inside aggregation: {}({})",
-          aggregateName_.value(),
-          name);
+          node->location(),
+          name,
+          "Cannot nest aggregations inside aggregation: {}",
+          aggregateName_.value());
 
       aggregateName_ = name;
       ++numAggregates_;

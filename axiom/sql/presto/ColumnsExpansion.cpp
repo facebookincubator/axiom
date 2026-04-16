@@ -85,7 +85,12 @@ std::vector<lp::PlanBuilder::OutputColumnName> ColumnsExpansion::matchByRegex(
     const std::optional<std::string>& prefix,
     NodeLocation location) {
   re2::RE2 regex(pattern);
-  VELOX_USER_CHECK(regex.ok(), "Invalid regex pattern: {}", regex.error());
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      regex.ok(),
+      location,
+      pattern,
+      "Invalid regex pattern: {}",
+      regex.error());
 
   auto columns =
       builder.findOrAssignOutputNames(/*includeHiddenColumns=*/false, prefix);

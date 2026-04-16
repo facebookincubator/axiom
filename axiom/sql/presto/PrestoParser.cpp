@@ -1854,13 +1854,14 @@ std::unordered_map<std::string, lp::ExprPtr> parseTableProperties(
   for (const auto& p : props) {
     const auto& name = p->name()->value();
     auto expr = parseSqlExpression(p->value());
-    VELOX_USER_CHECK(
+    AXIOM_PRESTO_SEMANTIC_CHECK(
         expr->looksConstant(),
-        "Property {} = {} is not constant",
+        p->location(),
         name,
+        "Property value is not constant: {}",
         expr->toString());
     bool ok = properties.emplace(name, std::move(expr)).second;
-    VELOX_USER_CHECK(ok, "Duplicate property: {}", name);
+    AXIOM_PRESTO_SEMANTIC_CHECK(ok, p->location(), name, "Duplicate property");
   }
   return properties;
 }
@@ -1958,10 +1959,11 @@ SqlStatementPtr parseCreateTable(
         names.push_back(columnDef->name()->value());
 
         auto type = parseType(columnDef->columnType());
-        VELOX_USER_CHECK_NOT_NULL(
-            type,
-            "Unknown type specifier: {}",
-            columnDef->columnType()->baseName());
+        AXIOM_PRESTO_SEMANTIC_CHECK(
+            type != nullptr,
+            columnDef->location(),
+            columnDef->columnType()->baseName(),
+            "Unknown type specifier");
         types.push_back(type);
         break;
       }
@@ -2127,7 +2129,8 @@ SqlStatementPtr parseSetSession(const SetSession* setSession) {
   } else if (value->is(NodeType::kDoubleLiteral)) {
     valueString = std::to_string(value->as<DoubleLiteral>()->value());
   } else {
-    VELOX_USER_FAIL("SET SESSION value must be a literal: {}", name);
+    AXIOM_PRESTO_SEMANTIC_FAIL(
+        value->location(), name, "SET SESSION value must be a literal");
   }
 
   return std::make_shared<SetSessionStatement>(
