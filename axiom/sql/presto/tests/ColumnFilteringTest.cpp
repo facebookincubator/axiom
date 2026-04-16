@@ -64,7 +64,7 @@ TEST_F(ColumnFilteringTest, selectStarExclude) {
           .output({"n_nationkey", "n_name", "n_regionkey"}));
 
   // EXCLUDE non-existent column raises error.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSelect("SELECT * EXCLUDE (no_such_column) FROM nation"),
       "Column not found for EXCLUDE: no_such_column");
 }
@@ -98,12 +98,12 @@ TEST_F(ColumnFilteringTest, selectStarReplace) {
           .output({"n_nationkey", "n_name", "n_regionkey"}));
 
   // REPLACE non-existent column raises error.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSelect("SELECT * REPLACE (1 AS no_such_column) FROM nation"),
       "Column not found for REPLACE: no_such_column");
 
   // REPLACE column that was excluded raises error.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSelect(
           "SELECT * EXCLUDE (n_name) REPLACE (upper(n_name) AS n_name) FROM nation"),
       "Column not found for REPLACE: n_name");
@@ -151,7 +151,7 @@ TEST_F(ColumnFilteringTest, selectColumns) {
           .output({"n_nationkey", "n_name"}));
 
   // No columns match -> error.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSelect("SELECT COLUMNS('xyz.*') FROM nation"),
       "COLUMNS('xyz.*') matched no columns");
 }
@@ -169,7 +169,7 @@ TEST_F(ColumnFilteringTest, selectStarModifiersErrors) {
       "Duplicate REPLACE clause");
 
   // EXCLUDE all columns → error.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSelect(
           "SELECT * EXCLUDE (n_nationkey, n_name, n_regionkey, n_comment) "
           "FROM nation"),
@@ -244,7 +244,7 @@ TEST_F(ColumnFilteringTest, duplicateColumnNames) {
       matchOutput({"n_nationkey", "n_name"}));
 
   // REPLACE with ambiguous column name fails.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSelect(
           "SELECT * REPLACE (upper(n_name) AS n_name) FROM nation a, nation b"),
       "Column is ambiguous for REPLACE");
@@ -288,7 +288,7 @@ TEST_F(ColumnFilteringTest, selectColumnsInExpression) {
           .output());
 
   // No columns match in expression context.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSelect("SELECT COLUMNS('xyz') + 1 FROM nation"),
       "COLUMNS('xyz') matched no columns");
 }
@@ -361,7 +361,7 @@ TEST_F(ColumnFilteringTest, columnsInGroupBy) {
           .output());
 
   // No columns match in GROUP BY.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSelect("SELECT count(*) FROM nation GROUP BY COLUMNS('xyz')"),
       "COLUMNS('xyz') matched no columns");
 }
@@ -403,7 +403,7 @@ TEST_F(ColumnFilteringTest, columnsInOrderBy) {
           .output({"n_name"}));
 
   // No columns match in ORDER BY.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSelect("SELECT * FROM nation ORDER BY COLUMNS('xyz')"),
       "COLUMNS('xyz') matched no columns");
 }
@@ -435,7 +435,7 @@ TEST_F(ColumnFilteringTest, columnsInWhere) {
           .output({"n_nationkey", "n_name", "n_regionkey", "n_comment"}));
 
   // No columns match in WHERE.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSelect("SELECT * FROM nation WHERE COLUMNS('xyz') > 0"),
       "COLUMNS('xyz') matched no columns");
 }

@@ -76,7 +76,7 @@ TEST_F(DdlParserTest, createTableAsSelect) {
       matcher);
 
   // Missing column names.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "CREATE TABLE t AS SELECT n_nationkey * 100, n_name FROM nation"),
       "Column name not specified at position 1");

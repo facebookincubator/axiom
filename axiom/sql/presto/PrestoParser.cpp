@@ -273,7 +273,8 @@ class RelationPlanner : public AstVisitor {
     }
 
     auto expr = toExpr(filter);
-    auto expanded = ColumnsExpansion::expand(expr, *builder_);
+    auto expanded =
+        ColumnsExpansion::expand(expr, *builder_, filter->location());
     if (expanded.empty()) {
       builder_->filter(expr);
       return;
@@ -433,8 +434,13 @@ class RelationPlanner : public AstVisitor {
         auto query = parseSql_(view->text());
         processQuery(dynamic_cast<Query*>(query.get()));
       } else {
-        VELOX_USER_FAIL(
-            "Table not found: {}", table.name()->fullyQualifiedName());
+        AXIOM_PRESTO_SEMANTIC_FAIL(
+            table.location(),
+            // Use suffix (unqualified name) as token — the user rarely writes
+            // the fully qualified form.
+            table.name()->suffix(),
+            "Table not found: {}",
+            table.name()->fullyQualifiedName());
       }
     }
 
@@ -472,9 +478,11 @@ class RelationPlanner : public AstVisitor {
     const auto& columnAliases = aliasedRelation.columnNames();
     if (!columnAliases.empty()) {
       const size_t numOutput = builder_->numOutput();
-      VELOX_USER_CHECK_EQ(
+      AXIOM_PRESTO_SEMANTIC_CHECK_EQ(
           columnAliases.size(),
           numOutput,
+          aliasedRelation.location(),
+          alias,
           "Column alias list size does not match the number of columns available for '{}'",
           alias);
 
@@ -590,8 +598,9 @@ class RelationPlanner : public AstVisitor {
   bool tryExpandColumnsInExpression(
       const lp::ExprApi& expr,
       const std::optional<std::string>& alias,
-      std::vector<lp::ExprApi>& exprs) {
-    auto expanded = ColumnsExpansion::expand(expr, *builder_);
+      std::vector<lp::ExprApi>& exprs,
+      NodeLocation location) {
+    auto expanded = ColumnsExpansion::expand(expr, *builder_, location);
     if (expanded.empty()) {
       return false;
     }
@@ -627,8 +636,10 @@ class RelationPlanner : public AstVisitor {
         std::unordered_set<std::string> excludeSet;
         for (const auto& excluded : excludeColumns) {
           auto name = canonicalizeIdentifier(*excluded);
-          VELOX_USER_CHECK(
+          AXIOM_PRESTO_SEMANTIC_CHECK(
               columnNameSet.contains(name),
+              excluded->location(),
+              name,
               "Column not found for EXCLUDE: {}",
               name);
           excludeSet.insert(name);
@@ -637,7 +648,11 @@ class RelationPlanner : public AstVisitor {
         std::erase_if(columns, [&](const auto& column) {
           return excludeSet.contains(column.name);
         });
-        VELOX_USER_CHECK(!columns.empty(), "EXCLUDE removed all columns");
+        AXIOM_PRESTO_SEMANTIC_CHECK(
+            !columns.empty(),
+            excludeColumns.front()->location(),
+            "EXCLUDE",
+            "EXCLUDE removed all columns");
 
         for (const auto& name : excludeSet) {
           columnNameSet.erase(name);
@@ -649,17 +664,20 @@ class RelationPlanner : public AstVisitor {
       // tables) which would make the REPLACE expression unresolvable.
       for (const auto& replaceItem : replaceItems) {
         auto name = canonicalizeIdentifier(*replaceItem.column);
-        VELOX_USER_CHECK(
+        AXIOM_PRESTO_SEMANTIC_CHECK(
             columnNameSet.contains(name),
+            replaceItem.column->location(),
+            name,
             "Column not found for REPLACE: {}",
             name);
         auto numMatches = std::count_if(
             columns.begin(), columns.end(), [&](const auto& column) {
               return column.name == name;
             });
-        VELOX_USER_CHECK_EQ(
-            numMatches,
-            1,
+        AXIOM_PRESTO_SEMANTIC_CHECK(
+            numMatches == 1,
+            replaceItem.column->location(),
+            name,
             "Column is ambiguous for REPLACE, use qualified name (e.g., t.{}): {}",
             name,
             name);
@@ -742,7 +760,10 @@ class RelationPlanner : public AstVisitor {
         }
 
         auto selectedColumns = ColumnsExpansion::matchByRegex(
-            *builder_, selectColumns->pattern(), prefix);
+            *builder_,
+            selectColumns->pattern(),
+            prefix,
+            selectColumns->location());
 
         applyExcludeReplaceAndBuild(
             selectedColumns,
@@ -760,7 +781,8 @@ class RelationPlanner : public AstVisitor {
           alias = canonicalizeIdentifier(*singleColumn->alias());
         }
 
-        if (tryExpandColumnsInExpression(expr, alias, exprs)) {
+        if (tryExpandColumnsInExpression(
+                expr, alias, exprs, singleColumn->expression()->location())) {
           // COLUMNS('regex') was found and expanded.
         } else {
           // Normal SingleColumn handling.
@@ -857,20 +879,26 @@ class RelationPlanner : public AstVisitor {
       const auto& sortExpr = item->sortKey();
       if (sortExpr->is(NodeType::kLongLiteral)) {
         const auto n = sortExpr->as<LongLiteral>()->value();
-        VELOX_USER_CHECK_GE(
-            n, 1, "ORDER BY position is not in the select list: {}", n);
-        VELOX_USER_CHECK_LE(
+        AXIOM_PRESTO_SEMANTIC_CHECK_GE(
             n,
-            numSelectItems,
-            "ORDER BY position is not in the select list: {}",
-            n);
+            static_cast<int64_t>(1),
+            sortExpr->location(),
+            std::to_string(n),
+            "ORDER BY position is not in the select list");
+        AXIOM_PRESTO_SEMANTIC_CHECK_LE(
+            n,
+            static_cast<int64_t>(numSelectItems),
+            sortExpr->location(),
+            std::to_string(n),
+            "ORDER BY position is not in the select list");
         result.preResolved.push_back(n);
         result.sortKeyExprs.emplace_back(projections.at(n - 1));
         result.ascending.push_back(item->isAscending());
         result.nullsFirst.push_back(item->isNullsFirst());
       } else {
         auto expr = toExpr(sortExpr);
-        auto expanded = ColumnsExpansion::expand(expr, *builder_);
+        auto expanded =
+            ColumnsExpansion::expand(expr, *builder_, sortExpr->location());
         if (!expanded.empty()) {
           for (auto& expandedExpr : expanded) {
             result.preResolved.push_back(0);
@@ -952,9 +980,11 @@ class RelationPlanner : public AstVisitor {
     auto ordinals = SortProjection::widenProjections(
         expansion.sortKeyExprs, expansion.preResolved, projections.value());
 
-    VELOX_USER_CHECK_EQ(
+    AXIOM_PRESTO_SEMANTIC_CHECK_EQ(
         projections->size(),
         numSelectItems,
+        orderBy->location(),
+        "ORDER BY",
         "For SELECT DISTINCT, ORDER BY expressions must be output expressions");
 
     builder_->project(projections.value());
@@ -970,13 +1000,18 @@ class RelationPlanner : public AstVisitor {
   lp::ExprApi toSortingKey(const ExpressionPtr& expr) {
     if (expr->is(NodeType::kLongLiteral)) {
       const auto n = expr->as<LongLiteral>()->value();
-      VELOX_USER_CHECK_GE(
-          n, 1, "ORDER BY position is not in the select list: {}", n);
-      VELOX_USER_CHECK_LE(
+      AXIOM_PRESTO_SEMANTIC_CHECK_GE(
           n,
-          builder_->numOutput(),
-          "ORDER BY position is not in the select list: {}",
-          n);
+          static_cast<int64_t>(1),
+          expr->location(),
+          std::to_string(n),
+          "ORDER BY position is not in the select list");
+      AXIOM_PRESTO_SEMANTIC_CHECK_LE(
+          n,
+          static_cast<int64_t>(builder_->numOutput()),
+          expr->location(),
+          std::to_string(n),
+          "ORDER BY position is not in the select list");
       const auto column = builder_->findOrAssignOutputNameAt(n - 1);
 
       return column.toCol();
@@ -998,7 +1033,8 @@ class RelationPlanner : public AstVisitor {
 
       // Expand COLUMNS() calls to multiple sort keys with the same
       // ordering direction.
-      auto expanded = ColumnsExpansion::expand(expr, *builder_);
+      auto expanded = ColumnsExpansion::expand(
+          expr, *builder_, item->sortKey()->location());
       if (!expanded.empty()) {
         for (auto& expandedExpr : expanded) {
           keys.emplace_back(
@@ -1468,8 +1504,14 @@ static facebook::axiom::connector::TablePtr findTable(
       facebook::axiom::connector::ConnectorMetadata::metadata(connectorId)
           ->findTable(connectorTable);
 
-  VELOX_USER_CHECK_NOT_NULL(
-      table, "Table not found: {}", name.fullyQualifiedName());
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      table != nullptr,
+      name.location(),
+      // Use suffix (unqualified name) as token — the user rarely writes the
+      // fully qualified form.
+      name.suffix(),
+      "Table not found: {}",
+      name.fullyQualifiedName());
   return table;
 }
 
@@ -1768,8 +1810,14 @@ SqlStatementPtr parseInsert(
       facebook::axiom::connector::ConnectorMetadata::metadata(connectorId)
           ->findTable(connectorTable);
 
-  VELOX_USER_CHECK_NOT_NULL(
-      table, "Table not found: {}", insert.target()->fullyQualifiedName());
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      table != nullptr,
+      insert.location(),
+      // Use suffix (unqualified name) as token — the user rarely writes the
+      // fully qualified form.
+      insert.target()->suffix(),
+      "Table not found: {}",
+      insert.target()->fullyQualifiedName());
 
   const auto& columns = insert.columns();
 
@@ -1843,8 +1891,12 @@ SqlStatementPtr parseCreateTableAsSelect(
     columnNames.reserve(numInputColumns);
     for (auto i = 0; i < numInputColumns; ++i) {
       const auto& name = inputColumns[i];
-      VELOX_USER_CHECK(
-          name.has_value(), "Column name not specified at position {}", i + 1);
+      AXIOM_PRESTO_SEMANTIC_CHECK(
+          name.has_value(),
+          ctas.location(),
+          std::to_string(i + 1),
+          "Column name not specified at position {}",
+          i + 1);
       columnNames.emplace_back(name.value());
     }
 
@@ -1856,7 +1908,12 @@ SqlStatementPtr parseCreateTableAsSelect(
         columnNames,
         toColumnExprs(planBuilder.findOrAssignOutputNames()));
   } else {
-    VELOX_USER_CHECK_EQ(ctas.columns().size(), numInputColumns);
+    AXIOM_PRESTO_SEMANTIC_CHECK_EQ(
+        ctas.columns().size(),
+        numInputColumns,
+        ctas.location(),
+        ctas.name()->fullyQualifiedName(),
+        "Column alias list size does not match query output");
 
     columnNames.reserve(numInputColumns);
     for (const auto& column : ctas.columns()) {
@@ -1976,8 +2033,12 @@ SqlStatementPtr parseCreateSchema(
     const CreateSchema& createSchema,
     const std::string& defaultConnectorId) {
   const auto& parts = createSchema.schemaName()->parts();
-  VELOX_USER_CHECK(
+  AXIOM_PRESTO_SEMANTIC_CHECK(
       parts.size() == 1 || parts.size() == 2,
+      createSchema.schemaName()->location(),
+      // Use suffix (unqualified name) as token — the user rarely writes the
+      // fully qualified form.
+      createSchema.schemaName()->suffix(),
       "Invalid schema name: {}",
       createSchema.schemaName()->fullyQualifiedName());
 
@@ -1997,8 +2058,12 @@ SqlStatementPtr parseDropSchema(
     const DropSchema& dropSchema,
     const std::string& defaultConnectorId) {
   const auto& parts = dropSchema.schemaName()->parts();
-  VELOX_USER_CHECK(
+  AXIOM_PRESTO_SEMANTIC_CHECK(
       parts.size() == 1 || parts.size() == 2,
+      dropSchema.schemaName()->location(),
+      // Use suffix (unqualified name) as token — the user rarely writes the
+      // fully qualified form.
+      dropSchema.schemaName()->suffix(),
       "Invalid schema name: {}",
       dropSchema.schemaName()->fullyQualifiedName());
 

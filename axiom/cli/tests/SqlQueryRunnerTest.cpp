@@ -16,6 +16,7 @@
 
 #include "axiom/cli/SqlQueryRunner.h"
 #include <folly/dynamic.h>
+// NOLINTNEXTLINE(facebook-unused-include-check)
 #include <folly/init/Init.h>
 #include <folly/json.h>
 #include <gmock/gmock.h>
@@ -201,7 +202,8 @@ TEST_F(SqlQueryRunnerTest, explainCtas) {
   }
 
   // EXPLAIN is side-effect-free.
-  VELOX_ASSERT_THROW(run("SELECT * FROM t"), "Table not found: t");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      run("SELECT * FROM t"), "Table not found: t");
 
   // EXPLAIN ANALYZE runs the query and creates the table.
   {
@@ -224,7 +226,8 @@ TEST_F(SqlQueryRunnerTest, explainCreateTable) {
   EXPECT_EQ(result.message, R"(CREATE TABLE test."default"."t")");
 
   // EXPLAIN is side-effect-free.
-  VELOX_ASSERT_THROW(run("SELECT * FROM t"), "Table not found: t");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      run("SELECT * FROM t"), "Table not found: t");
 
   // Fails if the table already exists.
   run("CREATE TABLE t(x int)");
@@ -807,7 +810,7 @@ TEST_F(SqlQueryRunnerTest, showCreateTable) {
   }
 
   // Non-existent table.
-  VELOX_ASSERT_USER_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       run("SHOW CREATE TABLE no_such_table"), "Table not found");
 }
 

@@ -182,7 +182,7 @@ TEST_F(SortParserTest, nonSelectedColumn) {
   testOrderBy("3", {}, {"product"});
   testOrderBy("e, x, 1", {"e"}, {"e", "x", "b"});
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(baseSelect + " ORDER BY 5"), "is not in the select list");
 }
 
@@ -282,21 +282,21 @@ TEST_F(SortParserTest, distinct) {
   testSelect("SELECT DISTINCT a FROM t ORDER BY a", matcher);
   testSelect("SELECT DISTINCT a FROM t ORDER BY 1", matcher);
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT DISTINCT a "
           "FROM (VALUES (1, 2), (3, 4)) AS t(a, b) "
           "ORDER BY b DESC"),
       "ORDER BY expressions must be output expressions");
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT DISTINCT a + b "
           "FROM (VALUES (1, 2), (3, 4)) AS t(a, b) "
           "ORDER BY a DESC"),
       "ORDER BY expressions must be output expressions");
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT DISTINCT a "
           "FROM (VALUES (1, 2), (3, 4)) AS t(a, b) "

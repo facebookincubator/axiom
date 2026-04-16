@@ -19,6 +19,7 @@
 #include <vector>
 #include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/PlanBuilder.h"
+#include "axiom/sql/presto/ast/AstNode.h"
 
 namespace axiom::sql::presto {
 
@@ -33,7 +34,8 @@ class ColumnsExpansion {
   matchByRegex(
       const facebook::axiom::logical_plan::PlanBuilder& builder,
       const std::string& pattern,
-      const std::optional<std::string>& prefix);
+      const std::optional<std::string>& prefix,
+      NodeLocation location);
 
   /// Expands COLUMNS('regex') pseudo-function calls in an expression. Each
   /// COLUMNS() call is matched against the builder's visible output columns.
@@ -45,7 +47,8 @@ class ColumnsExpansion {
   /// expression contains no COLUMNS() calls.
   static std::vector<facebook::axiom::logical_plan::ExprApi> expand(
       const facebook::axiom::logical_plan::ExprApi& expr,
-      const facebook::axiom::logical_plan::PlanBuilder& builder);
+      const facebook::axiom::logical_plan::PlanBuilder& builder,
+      NodeLocation location);
 };
 
 } // namespace axiom::sql::presto
