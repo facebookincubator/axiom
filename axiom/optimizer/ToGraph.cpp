@@ -129,7 +129,7 @@ namespace {
 
 std::shared_ptr<velox::core::QueryCtx> constantQueryCtx(
     const velox::core::QueryCtx& original) {
-  std::atomic<int64_t> kQueryCounter;
+  static std::atomic<int64_t> kQueryCounter{0};
 
   std::unordered_map<std::string, std::string> empty;
   return velox::core::QueryCtx::create(
