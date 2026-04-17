@@ -381,6 +381,119 @@ TEST_F(LocalHiveConnectorMetadataTest, createTable) {
       "test", data, {{"ds", partition}}, dwio::common::FileFormat::PARQUET);
 }
 
+TEST_F(LocalHiveConnectorMetadataTest, addColumn) {
+  auto tableType =
+      ROW({{"id", BIGINT()}, {"name", VARCHAR()}, {"ds", VARCHAR()}});
+
+  folly::F14FastMap<std::string, velox::Variant> options = {
+      {HiveWriteOptions::kPartitionedBy, velox::Variant::array({"ds"})},
+      {HiveWriteOptions::kFileFormat, "parquet"}};
+
+  auto session = std::make_shared<ConnectorSession>("q-test");
+  auto table = metadata_->createTable(
+      session,
+      {kDefaultSchema, "add_col_test"},
+      tableType,
+      options,
+      /*explain=*/false);
+
+  // Write some data before adding the column.
+  auto data = makeRowVector(
+      tableType->names(),
+      {
+          makeFlatVector<int64_t>(100, [](auto row) { return row; }),
+          makeFlatVector<StringView>(100, [](auto /*row*/) { return "test"; }),
+          makeFlatVector<StringView>(
+              100, [](auto /*row*/) { return "2025-01-01"; }),
+      });
+  writeToTable(
+      table, data, WriteKind::kCreate, dwio::common::FileFormat::PARQUET);
+
+  // Add a column.
+  auto added = metadata_->addColumn(
+      session,
+      {kDefaultSchema, "add_col_test"},
+      "score",
+      DOUBLE(),
+      /*ifTableExists=*/false,
+      /*ifNotExists=*/false);
+  ASSERT_TRUE(added.has_value());
+  EXPECT_TRUE(*added);
+
+  // Verify schema has the new column.
+  auto updated = metadata_->findTable({kDefaultSchema, "add_col_test"});
+  ASSERT_NE(updated, nullptr);
+  ASSERT_EQ(4, updated->type()->size());
+  EXPECT_EQ("id", updated->type()->nameOf(0));
+  EXPECT_EQ("name", updated->type()->nameOf(1));
+  EXPECT_EQ("score", updated->type()->nameOf(2));
+  EXPECT_EQ("ds", updated->type()->nameOf(3));
+  EXPECT_EQ(*DOUBLE(), *updated->type()->childAt(2));
+
+  // Layout should exist (not empty).
+  ASSERT_FALSE(updated->layouts().empty());
+
+  // Partition columns should be preserved.
+  auto* layout =
+      dynamic_cast<const LocalHiveTableLayout*>(updated->layouts()[0]);
+  ASSERT_NE(layout, nullptr);
+  EXPECT_EQ(1, layout->hivePartitionColumns().size());
+  EXPECT_EQ("ds", layout->hivePartitionColumns()[0]->name());
+
+  // Duplicate column without IF NOT EXISTS throws.
+  VELOX_ASSERT_THROW(
+      metadata_->addColumn(
+          session,
+          {kDefaultSchema, "add_col_test"},
+          "score",
+          INTEGER(),
+          /*ifTableExists=*/false,
+          /*ifNotExists=*/false),
+      "already exists");
+
+  // IF NOT EXISTS on existing column is a no-op.
+  auto noOp = metadata_->addColumn(
+      session,
+      {kDefaultSchema, "add_col_test"},
+      "score",
+      INTEGER(),
+      /*ifTableExists=*/false,
+      /*ifNotExists=*/true);
+  ASSERT_TRUE(noOp.has_value());
+  EXPECT_FALSE(*noOp);
+  ASSERT_EQ(
+      4,
+      metadata_->findTable({kDefaultSchema, "add_col_test"})->type()->size());
+
+  // Non-existent table throws.
+  VELOX_ASSERT_THROW(
+      metadata_->addColumn(
+          session,
+          {kDefaultSchema, "no_such_table"},
+          "col",
+          BIGINT(),
+          /*ifTableExists=*/false,
+          /*ifNotExists=*/false),
+      "does not exist");
+
+  // IF TABLE EXISTS on missing table returns nullopt.
+  auto missing = metadata_->addColumn(
+      session,
+      {kDefaultSchema, "no_such_table"},
+      "col",
+      BIGINT(),
+      /*ifTableExists=*/true,
+      /*ifNotExists=*/false);
+  EXPECT_FALSE(missing.has_value());
+
+  // Schema persists after reload.
+  metadata_->reloadTableFromPath({kDefaultSchema, "add_col_test"});
+  auto reloaded = metadata_->findTable({kDefaultSchema, "add_col_test"});
+  ASSERT_NE(reloaded, nullptr);
+  ASSERT_EQ(4, reloaded->type()->size());
+  EXPECT_EQ("score", reloaded->type()->nameOf(2));
+}
+
 TEST_F(LocalHiveConnectorMetadataTest, createEmptyTable) {
   auto tableType = ROW(
       {{"key1", BIGINT()},

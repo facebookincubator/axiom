@@ -230,6 +230,8 @@ class SqlQueryRunner {
 
   std::string dropTable(const presto::DropTableStatement& statement);
 
+  std::string addColumn(const presto::AddColumnStatement& statement);
+
   std::string createSchema(const presto::CreateSchemaStatement& statement);
 
   std::string dropSchema(const presto::DropSchemaStatement& statement);
