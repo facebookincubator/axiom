@@ -22,11 +22,13 @@
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
+#include "velox/serializers/RegisterAllVectorSerdes.h"
 
 namespace facebook::axiom::runner::test {
 
 void LocalRunnerTestBase::SetUpTestCase() {
   HiveConnectorTestBase::SetUpTestCase();
+  velox::registerAllNamedVectorSerdes();
   executor_ = std::make_unique<folly::CPUThreadPoolExecutor>(4);
 }
 
