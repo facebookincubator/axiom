@@ -243,7 +243,7 @@ connector::TablePtr SqlQueryRunner::createTable(
         optimizer::ConstantExprEvaluator::evaluateConstantExpr(*value);
   }
 
-  auto session = std::make_shared<connector::ConnectorSession>("test");
+  auto session = std::make_shared<connector::ConnectorSession>("test", user_);
   return metadata->createTable(
       session,
       statement.tableName(),
@@ -264,7 +264,7 @@ connector::TablePtr SqlQueryRunner::createTable(
         optimizer::ConstantExprEvaluator::evaluateConstantExpr(*value);
   }
 
-  auto session = std::make_shared<connector::ConnectorSession>("test");
+  auto session = std::make_shared<connector::ConnectorSession>("test", user_);
   return metadata->createTable(
       session,
       statement.tableName(),

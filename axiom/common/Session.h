@@ -23,17 +23,26 @@ namespace facebook::axiom {
 /// Read-only query-specific information.
 class Session final {
  public:
-  Session(std::string queryId) : queryId_{queryId} {}
+  explicit Session(std::string queryId, std::string user = {})
+      : queryId_{std::move(queryId)}, user_{std::move(user)} {}
 
+  /// Returns the query identifier.
   const std::string& queryId() const {
     return queryId_;
   }
 
+  /// Returns the identity of the user who submitted the query.
+  const std::string& user() const {
+    return user_;
+  }
+
+  /// Creates a connector-scoped session carrying the query ID and user.
   connector::ConnectorSessionPtr toConnectorSession(
       std::string_view connectorId) const;
 
  private:
   const std::string queryId_;
+  const std::string user_;
 };
 
 using SessionPtr = std::shared_ptr<Session>;

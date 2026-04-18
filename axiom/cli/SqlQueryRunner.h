@@ -244,6 +244,12 @@ class SqlQueryRunner {
     return defaultSchema_;
   }
 
+  /// Sets the user identity for DDL operations. Used as the default table
+  /// owner in CREATE TABLE when the WITH clause does not specify one.
+  void setUser(std::string user) {
+    user_ = std::move(user);
+  }
+
  private:
   // Checks permissions for the query via the configured PermissionCheck
   // callback. Returns a TokenProvider for authenticated file system access.
@@ -356,6 +362,8 @@ class SqlQueryRunner {
   std::shared_ptr<facebook::axiom::SessionConfig> sessionConfig_;
   std::string defaultConnectorId_;
   std::string defaultSchema_;
+  // Identity of the user running queries. Used as table owner in CREATE TABLE.
+  std::string user_;
   std::atomic<int32_t> queryCounter_{0};
 };
 
