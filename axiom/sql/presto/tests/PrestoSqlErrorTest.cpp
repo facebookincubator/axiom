@@ -15,6 +15,7 @@
  */
 
 #include "axiom/sql/presto/PrestoSqlError.h"
+#include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 
 namespace axiom::sql::presto::test {
@@ -159,6 +160,25 @@ TEST_F(PrestoSqlErrorTest, messageForInvalidDecimalTypeArgs) {
           testing::Property(
               &PrestoSqlError::what,
               testing::HasSubstr("mismatched input ''abc''")))));
+}
+
+TEST_F(PrestoSqlErrorTest, typeErrorThrowsSemanticError) {
+  auto parser = makeParser();
+  // Type mismatch: integer + varchar. ExprResolver throws VeloxUserError;
+  // doPlan() should catch it and rethrow as PrestoSqlError with kSemantic kind.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parser.parse("SELECT 1 + 'a' FROM nation"),
+      "Scalar function signature is not supported");
+}
+
+TEST_F(PrestoSqlErrorTest, insertTypeErrorThrowsSemanticError) {
+  auto parser = makeParser();
+  // Column type mismatch in INSERT sub-query. tableWrite() throws
+  // VeloxUserError; parseInsert() should catch it and rethrow as
+  // PrestoSqlError with kSemantic kind.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parser.parse("INSERT INTO nation SELECT 100, 'n-100', 2, 3"),
+      "Wrong column type");
 }
 
 } // namespace

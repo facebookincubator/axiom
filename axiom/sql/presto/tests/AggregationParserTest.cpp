@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
@@ -65,7 +66,7 @@ TEST_F(AggregationParserTest, simpleGroupBy) {
   }
 
   // GROUP BY resolves against FROM columns, not SELECT aliases.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT n_name AS x FROM nation GROUP BY x"),
       "Cannot resolve column: x");
 
@@ -523,17 +524,17 @@ TEST_F(AggregationParserTest, having) {
       "SELECT n_name FROM nation GROUP BY 1 HAVING count(*) > 5", matcher);
 
   // HAVING cannot reference SELECT aliases.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT sum(n_regionkey) AS s FROM nation HAVING s > 10"),
       "HAVING clause cannot reference column: s");
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT n_regionkey AS k, count(*) FROM nation GROUP BY 1 HAVING k > 2"),
       "HAVING clause cannot reference column: k");
 
   // HAVING cannot reference non-grouped columns.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT n_regionkey FROM nation GROUP BY 1 HAVING n_comment = 'x'"),
       "HAVING clause cannot reference column: n_comment");
@@ -541,7 +542,7 @@ TEST_F(AggregationParserTest, having) {
   // HAVING with alias-on-aggregate shadowing a FROM column must not silently
   // resolve to the aggregate. 'n_regionkey' in HAVING refers to the FROM
   // column, which is not a grouping key ('n_regionkey + 1' is).
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT n_regionkey + 1, count(*) AS n_regionkey FROM nation "
           "GROUP BY 1 HAVING n_regionkey > 10"),
@@ -550,7 +551,7 @@ TEST_F(AggregationParserTest, having) {
   // HAVING with alias-on-grouping-key shadowing a FROM column must not
   // silently resolve to the grouping key. 'n_nationkey' in HAVING refers to
   // the FROM column, which is not a grouping key ('n_regionkey' is).
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT n_regionkey AS n_nationkey, count(*) FROM nation "
           "GROUP BY 1 HAVING n_nationkey > 10"),
@@ -1015,7 +1016,7 @@ TEST_F(AggregationParserTest, columnCanonicalization) {
     connector_->addTable(
         "st",
         ROW({"x", "s"}, {INTEGER(), ROW({"x", "y"}, {VARCHAR(), DOUBLE()})}));
-    VELOX_ASSERT_THROW(
+    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
         parseSql(
             "SELECT s.x, count(*) FROM st "
             "GROUP BY 1 HAVING x > 0"),
@@ -1037,7 +1038,7 @@ TEST_F(AggregationParserTest, columnCanonicalization) {
         "GROUP BY t.a HAVING t.a > 0",
         matchScan().join(matchScan().build()).aggregate().filter().output());
 
-    VELOX_ASSERT_THROW(
+    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
         parseSql(
             "SELECT t.a, count(*) FROM t JOIN u ON t.b = u.c "
             "GROUP BY t.a HAVING a > 0"),

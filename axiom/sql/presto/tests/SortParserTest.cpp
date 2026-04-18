@@ -15,6 +15,7 @@
  */
 
 #include "axiom/logical_plan/ExprApi.h"
+#include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
@@ -134,7 +135,7 @@ TEST_F(SortParserTest, groupBy) {
     testSelect("SELECT a AS b, sum(b) FROM t GROUP BY a ORDER BY b", matcher);
   }
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT a, sum(b) FROM t GROUP BY a ORDER BY b"),
       "Cannot resolve column: b");
 }
@@ -189,7 +190,7 @@ TEST_F(SortParserTest, nonSelectedColumn) {
 TEST_F(SortParserTest, ambiguousAlias) {
   connector_->addTable("t", ROW({"a", "b", "c"}, INTEGER()));
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT a as b, b FROM t ORDER BY b"), "Column is ambiguous: b");
 
   testSelect(
@@ -303,7 +304,7 @@ TEST_F(SortParserTest, distinct) {
           "ORDER BY 2 DESC"),
       "ORDER BY position is not in the select list: 2");
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT a + b "
           "FROM (VALUES (1, 2), (3, 4)) AS t(a, b) "
@@ -418,7 +419,7 @@ TEST_F(SortParserTest, outputAliasInExpression) {
           .project({"x"})
           .output({"x"}));
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT 1 AS a, a FROM t2 ORDER BY a + 1"),
       "Column is ambiguous: a");
 

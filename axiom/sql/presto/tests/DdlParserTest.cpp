@@ -15,6 +15,7 @@
  */
 
 #include "axiom/common/SchemaTableName.h"
+#include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
@@ -50,7 +51,7 @@ TEST_F(DdlParserTest, insertIntoTable) {
   }
 
   // Wrong types.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("INSERT INTO nation SELECT 100, 'n-100', 2, 3"),
       "Wrong column type: INTEGER vs. VARCHAR, column 'n_comment' in table \"default\".\"nation\"");
 }

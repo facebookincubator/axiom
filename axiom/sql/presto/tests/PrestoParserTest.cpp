@@ -15,6 +15,7 @@
  */
 
 #include "axiom/sql/presto/PrestoSqlError.h"
+#include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
@@ -256,7 +257,7 @@ TEST_F(PrestoParserTest, qualifiedColumnAccess) {
 
     // Struct field 'x' is shadowed by the table-qualified column. Legacy
     // positional access also fails because the struct has named fields.
-    VELOX_ASSERT_THROW(
+    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
         parseSql("SELECT t.field0 FROM u AS t"),
         "Cannot access named field using legacy field name");
   }
@@ -312,7 +313,8 @@ TEST_F(PrestoParserTest, selectStar) {
         matcher);
   }
 
-  VELOX_ASSERT_THROW(parseSql("SELECT r.* FROM region"), "Alias not found: r");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("SELECT r.* FROM region"), "Alias not found: r");
 }
 
 // Tests for star expansion with duplicate column names from joins.
@@ -523,7 +525,7 @@ TEST_F(PrestoParserTest, join) {
         "t3", ROW({"x", "y", "z"}, {INTEGER(), INTEGER(), VARCHAR()}));
 
     // Unqualified reference to a column on both sides is ambiguous.
-    VELOX_ASSERT_THROW(
+    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
         parseSql("SELECT * FROM t1 JOIN t2 ON id = id"),
         "Cannot resolve column");
 
@@ -533,7 +535,7 @@ TEST_F(PrestoParserTest, join) {
     testSelect("SELECT * FROM t1 JOIN t2 ON t1.id = t2.id", matcher);
 
     // Non-existent column in ON clause.
-    VELOX_ASSERT_THROW(
+    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
         parseSql("SELECT * FROM t1 JOIN t2 ON t1.id = no_such_column"),
         "Cannot resolve column");
 
@@ -541,7 +543,7 @@ TEST_F(PrestoParserTest, join) {
     // that exists on both sides of the join is ambiguous. This exercises the
     // joinScope lambda (resolveJoinColumn) rather than the NameMappings::merge
     // path used for simple ON conditions.
-    VELOX_ASSERT_THROW(
+    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
         parseSql(
             "SELECT * FROM t1 JOIN t2 "
             "ON t1.id = (SELECT max(x) FROM t3 WHERE t3.y = id)"),
@@ -1201,8 +1203,8 @@ TEST_F(PrestoParserTest, duplicateAliases) {
         matcher);
   }
 
-  // Referencing a duplicate column shoud fail.
-  VELOX_ASSERT_THROW(
+  // Referencing a duplicate column should fail.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT x FROM (SELECT a as x, b as x FROM (VALUES (1, 2)) AS t(a, b))"),
       "Cannot resolve column: x");

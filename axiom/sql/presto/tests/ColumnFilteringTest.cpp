@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
@@ -332,7 +333,7 @@ TEST_F(ColumnFilteringTest, multipleColumnsInExpression) {
           .output());
 
   // Mismatched column counts: 'x_.*' matches 3 columns, 'y_a' matches 1.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSelect("SELECT COLUMNS('x_.*') + COLUMNS('y_a') FROM t"),
       "All COLUMNS() calls in a single expression must match the same number "
       "of columns");
