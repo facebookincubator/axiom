@@ -1993,5 +1993,16 @@ TEST_F(SubqueryTest, inReplicateNullsAndAny) {
   }
 }
 
+TEST_F(SubqueryTest, constantFoldingWithoutExecutor) {
+  auto& ctx = getQueryCtx();
+  ctx = velox::core::QueryCtx::create(nullptr, velox::core::QueryConfig{{}});
+
+  auto logicalPlan =
+      parseSelect("SELECT * FROM nation WHERE n_regionkey > (SELECT 1)");
+
+  auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
+  EXPECT_EQ(3, plan.plan->fragments().size());
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer
