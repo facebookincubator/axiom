@@ -253,6 +253,7 @@ void LocalRunner::start() {
 
   params_.maxDrivers = plan_->options().numDrivers;
   params_.planNode = fragments_.back().fragment.planNode;
+  params_.serialExecution = !params_.queryCtx->isExecutorSupplied();
 
   VELOX_CHECK_LE(fragments_.back().width, 1);
 

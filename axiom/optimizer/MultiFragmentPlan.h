@@ -173,6 +173,13 @@ class MultiFragmentPlan {
     /// collect results onto a single node. With a single worker, no
     /// additional nodes are added.
     bool remoteOutput{false};
+
+    /// Returns options for single-node, single-threaded local execution.
+    /// Used by constant folding and join sampling which always run via
+    /// LocalRunner regardless of the query's distributed options.
+    static Options singleNode() {
+      return Options{.numWorkers = 1, .numDrivers = 1, .remoteOutput = false};
+    }
   };
 
   MultiFragmentPlan(std::vector<ExecutableFragment> fragments, Options options)
