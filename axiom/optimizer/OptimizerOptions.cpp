@@ -18,6 +18,7 @@
 #include <fmt/format.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/config/ConfigProperty.h"
 
 namespace facebook::axiom::optimizer {
 
