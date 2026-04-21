@@ -16,11 +16,9 @@
 
 #pragma once
 
-#include <unordered_set>
 #include "axiom/common/CatalogSchemaTableName.h"
 #include "axiom/common/Enums.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
-#include "velox/common/base/Exceptions.h"
 
 namespace axiom::sql::presto {
 
