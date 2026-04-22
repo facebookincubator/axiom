@@ -30,3 +30,14 @@ SELECT * FROM t LIMIT ALL
 -- count 0
 WITH final AS (SELECT a, SUM(b) AS total FROM t GROUP BY 1 LIMIT 0)
 SELECT x.total FROM final x, final y WHERE x.a = y.a AND x.a = 1
+----
+SELECT a, b FROM t OFFSET 0
+----
+-- ordered
+SELECT a, b FROM t ORDER BY b OFFSET 0
+----
+-- ordered
+SELECT a, b FROM t ORDER BY b OFFSET 0 LIMIT 3
+----
+-- count 0
+SELECT a, b FROM t OFFSET 0 LIMIT 0

@@ -1426,6 +1426,33 @@ TEST_F(PrestoParserTest, offset) {
     testSelect(
         "SELECT * FROM nation OFFSET 5 FETCH FIRST 10 ROWS ONLY", matcher);
   }
+
+  {
+    auto matcher = matchScan()
+                       .limit(1, std::numeric_limits<int64_t>::max())
+                       .output(nationColumns);
+    testSelect("SELECT * FROM nation OFFSET 1", matcher);
+  }
+
+  {
+    auto matcher = matchScan().output(nationColumns);
+    testSelect("SELECT * FROM nation OFFSET 0", matcher);
+  }
+
+  {
+    auto matcher = matchScan().sort({"n_name"}).output(nationColumns);
+    testSelect("SELECT * FROM nation ORDER BY n_name OFFSET 0", matcher);
+  }
+
+  {
+    auto matcher = matchScan().limit(0, 10).output(nationColumns);
+    testSelect("SELECT * FROM nation OFFSET 0 LIMIT 10", matcher);
+  }
+
+  {
+    auto matcher = matchScan().limit(0, 0).output(nationColumns);
+    testSelect("SELECT * FROM nation OFFSET 0 LIMIT 0", matcher);
+  }
 }
 
 TEST_F(PrestoParserTest, use) {
