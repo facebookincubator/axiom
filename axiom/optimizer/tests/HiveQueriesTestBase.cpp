@@ -162,7 +162,13 @@ void HiveQueriesTestBase::createEmptyTable(
 
   auto session = std::make_shared<connector::ConnectorSession>("test");
   auto table = hiveMetadata().createTable(
-      session, {kDefaultSchema, name}, tableType, options, /*explain=*/false);
+      session,
+      {kDefaultSchema, name},
+      tableType,
+      options,
+      /*ifNotExists=*/false,
+      /*explain=*/false);
+  VELOX_CHECK_NOT_NULL(table);
   auto handle = hiveMetadata().beginWrite(
       session, table, connector::WriteKind::kCreate, /*explain=*/false);
   hiveMetadata().finishWrite(session, handle, {}, nullptr, {}).get();
@@ -194,6 +200,7 @@ void HiveQueriesTestBase::createTableFromFiles(
       {kDefaultSchema, tableName},
       tableType,
       options,
+      /*ifNotExists=*/false,
       /*explain=*/false);
 
   auto tablePath = hiveMetadata().tablePath({kDefaultSchema, tableName});
@@ -229,7 +236,9 @@ void HiveQueriesTestBase::runCtas(const std::string& sql) {
       ctasStatement->tableName(),
       ctasStatement->tableSchema(),
       options,
+      /*ifNotExists=*/false,
       /*explain=*/false);
+  VELOX_CHECK_NOT_NULL(table);
 
   connector::SchemaResolver schemaResolver;
   schemaResolver.setTargetTable(
