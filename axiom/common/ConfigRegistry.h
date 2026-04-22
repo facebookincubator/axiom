@@ -20,6 +20,7 @@
 #include <vector>
 
 #include <folly/container/F14Map.h>
+#include "velox/common/config/ConfigProperty.h"
 #include "velox/common/config/ConfigProvider.h"
 
 namespace facebook::axiom {
