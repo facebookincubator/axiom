@@ -125,6 +125,7 @@ enum class RelType {
   kWindow,
   kRowNumber,
   kTopNRowNumber,
+  kGroupId,
 };
 
 AXIOM_DECLARE_ENUM_NAME(RelType)
@@ -601,13 +602,17 @@ struct Aggregation : public RelationOp {
   /// @param step Aggregation step (partial, final, single, intermediate).
   /// @param columns Output columns: groupingKeys followed by aggregate result
   ///   columns. Must have size == groupingKeys.size() + aggregates.size().
+  /// @param globalGroupingSets Indices of global (empty) grouping sets, if any.
+  /// @param groupIdColumn The group ID column from upstream GroupId, if any.
   Aggregation(
       RelationOpPtr input,
       ExprVector groupingKeys,
       ExprVector preGroupedKeys,
       AggregateVector aggregates,
       velox::core::AggregationNode::Step step,
-      ColumnVector columns);
+      ColumnVector columns,
+      GroupingSet globalGroupingSets = {},
+      ColumnCP groupIdColumn = nullptr);
 
   const ExprVector groupingKeys;
   const AggregateVector aggregates;
@@ -617,6 +622,17 @@ struct Aggregation : public RelationOp {
   /// that matches the input's clusterKeys. When non-empty, the aggregation
   /// can be executed in streaming manner without building a hash table.
   const ExprVector preGroupedKeys;
+
+  /// Indices of global grouping sets (empty sets) within the grouping sets
+  /// array. Non-empty only for aggregations over GROUPING SETS/ROLLUP/CUBE
+  /// that contain a global (no-key) set. Used to generate a default output row
+  /// for empty inputs.
+  const GroupingSet globalGroupingSets;
+
+  /// The group ID column from the upstream GroupId operator, if present.
+  /// Used to pass grouping set info to the Velox AggregationNode without
+  /// requiring a dynamic_cast of the input.
+  const ColumnCP groupIdColumn{nullptr};
 
   /// Returns true if the aggregation is pre-grouped (streaming).
   bool isPreGrouped() const {
@@ -897,4 +913,60 @@ struct TopNRowNumber : public RelationOp {
 
 using TopNRowNumberCP = const TopNRowNumber*;
 
+/// Duplicates each input row once per grouping set. For each copy, grouping key
+/// columns not participating in that set are set to NULL, and a grouping set ID
+/// column is appended. Used to implement GROUPING SETS, ROLLUP, and CUBE.
+///
+/// Output columns: [grouping keys..., aggregation inputs..., groupIdColumn].
+struct GroupId : public RelationOp {
+  /// @param groupingSets List of grouping sets, each containing indices into
+  ///   groupingKeys that are active for that set.
+  /// @param groupingKeys Output columns for grouping keys with auto-generated
+  ///   names.
+  /// @param aggregationInputs Columns that are inputs to aggregate functions.
+  /// @param groupIdColumn The output column for the grouping set ID.
+  /// @param inputGroupingKeys Original input key columns before replacement
+  ///   with auto-generated output columns. Used by ToVelox to produce correct
+  ///   input field references.
+  GroupId(
+      RelationOpPtr input,
+      GroupingSets groupingSets,
+      ColumnVector groupingKeys,
+      ExprVector aggregationInputs,
+      ColumnCP groupIdColumn,
+      ColumnVector inputGroupingKeys);
+
+  const GroupingSets& groupingSets() const {
+    return groupingSets_;
+  }
+
+  const ColumnVector& groupingKeys() const {
+    return groupingKeys_;
+  }
+
+  const ExprVector& aggregationInputs() const {
+    return aggregationInputs_;
+  }
+
+  ColumnCP groupIdColumn() const {
+    return groupIdColumn_;
+  }
+
+  const ColumnVector& inputGroupingKeys() const {
+    return inputGroupingKeys_;
+  }
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
+
+ private:
+  const GroupingSets groupingSets_;
+  const ColumnVector groupingKeys_;
+  const ExprVector aggregationInputs_;
+  const ColumnCP groupIdColumn_;
+  const ColumnVector inputGroupingKeys_;
+};
+
+using GroupIdCP = const GroupId*;
 } // namespace facebook::axiom::optimizer

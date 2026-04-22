@@ -406,6 +406,12 @@ class AggregateNode : public LogicalPlanNode {
     return aggregates_[index];
   }
 
+  /// Returns the output index of the grouping set ID column. Only valid when
+  /// groupingSets() is non-empty.
+  size_t groupIdColumnIndex() const {
+    return groupingKeys_.size() + aggregates_.size();
+  }
+
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
 
