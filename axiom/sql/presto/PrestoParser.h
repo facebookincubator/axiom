@@ -50,6 +50,12 @@ class PrestoParser {
 
   SqlStatementPtr parse(std::string_view sql, bool enableTracing = false);
 
+  /// Detects the statement kind by running the ANTLR grammar parse only,
+  /// without building the AST or logical plan. Returns std::nullopt for
+  /// statement types not represented in SqlStatementKind (e.g. ALTER TABLE).
+  /// @throws PrestoSqlError on syntax errors.
+  static std::optional<SqlStatementKind> parseKind(std::string_view sql);
+
   /// Parses multiple semicolon-separated SQL statements.
   /// @param sql SQL text containing one or more statements separated by
   /// semicolons.

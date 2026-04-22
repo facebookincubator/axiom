@@ -1556,5 +1556,54 @@ TEST_F(PrestoParserTest, friendlySqlFromFirst) {
       "FROM-first syntax requires Friendly SQL mode");
 }
 
+TEST_F(PrestoParserTest, parseKind) {
+  auto parser = makeParser();
+
+  // Verifies parseKind detects the correct kind and that the subsequent
+  // parse(string_view) produces a matching SqlStatement.
+  auto verifyKind = [&](std::string_view sql, SqlStatementKind expectedKind) {
+    SCOPED_TRACE(sql);
+    auto kind = PrestoParser::parseKind(sql);
+    ASSERT_TRUE(kind.has_value());
+    EXPECT_EQ(*kind, expectedKind);
+
+    auto statement = parser.parse(sql);
+    EXPECT_EQ(statement->kind(), expectedKind);
+  };
+
+  verifyKind("SELECT * FROM nation", SqlStatementKind::kSelect);
+  verifyKind(
+      "WITH cte AS (SELECT 1) SELECT * FROM cte", SqlStatementKind::kSelect);
+
+  connector_->addTable("target", ROW({"a"}, {BIGINT()}));
+  verifyKind("INSERT INTO target SELECT 1", SqlStatementKind::kInsert);
+
+  verifyKind(
+      "CREATE TABLE t (a bigint, b varchar)", SqlStatementKind::kCreateTable);
+  verifyKind(
+      "CREATE TABLE t AS SELECT * FROM nation",
+      SqlStatementKind::kCreateTableAsSelect);
+  verifyKind("DROP TABLE t", SqlStatementKind::kDropTable);
+  verifyKind("CREATE SCHEMA s", SqlStatementKind::kCreateSchema);
+  verifyKind("DROP SCHEMA s", SqlStatementKind::kDropSchema);
+  verifyKind("EXPLAIN SELECT * FROM nation", SqlStatementKind::kExplain);
+  verifyKind("USE test.default", SqlStatementKind::kUse);
+  verifyKind("SET SESSION optimize = true", SqlStatementKind::kSetSession);
+  verifyKind("SHOW SESSION", SqlStatementKind::kShowSession);
+  verifyKind("RESET SESSION optimize", SqlStatementKind::kResetSession);
+  verifyKind(
+      "SHOW STATS FOR (SELECT * FROM nation)",
+      SqlStatementKind::kShowStatsForQuery);
+
+  // Unrecognized statement types return nullopt.
+  EXPECT_FALSE(PrestoParser::parseKind("SHOW TABLES").has_value());
+  EXPECT_FALSE(
+      PrestoParser::parseKind("GRANT SELECT ON t TO user1").has_value());
+
+  // Syntax errors throw PrestoSqlError.
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
+      PrestoParser::parseKind("SELECTT 1"), "mismatched input 'SELECTT'");
+}
+
 } // namespace
 } // namespace axiom::sql::presto::test

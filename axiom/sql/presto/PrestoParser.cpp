@@ -155,6 +155,53 @@ class ParserHelper {
   ErrorListener errorListener_;
 };
 
+// Maps an ANTLR StatementContext subclass to SqlStatementKind.
+std::optional<SqlStatementKind> detectStatementKind(
+    PrestoSqlParser::StatementContext* context) {
+  using P = PrestoSqlParser;
+  using K = SqlStatementKind;
+  if (dynamic_cast<P::StatementDefaultContext*>(context)) {
+    return K::kSelect;
+  }
+  if (dynamic_cast<P::InsertIntoContext*>(context)) {
+    return K::kInsert;
+  }
+  if (dynamic_cast<P::CreateTableAsSelectContext*>(context)) {
+    return K::kCreateTableAsSelect;
+  }
+  if (dynamic_cast<P::CreateTableContext*>(context)) {
+    return K::kCreateTable;
+  }
+  if (dynamic_cast<P::DropTableContext*>(context)) {
+    return K::kDropTable;
+  }
+  if (dynamic_cast<P::CreateSchemaContext*>(context)) {
+    return K::kCreateSchema;
+  }
+  if (dynamic_cast<P::DropSchemaContext*>(context)) {
+    return K::kDropSchema;
+  }
+  if (dynamic_cast<P::ExplainContext*>(context)) {
+    return K::kExplain;
+  }
+  if (dynamic_cast<P::ShowStatsForQueryContext*>(context)) {
+    return K::kShowStatsForQuery;
+  }
+  if (dynamic_cast<P::ShowSessionContext*>(context)) {
+    return K::kShowSession;
+  }
+  if (dynamic_cast<P::SetSessionContext*>(context)) {
+    return K::kSetSession;
+  }
+  if (dynamic_cast<P::ResetSessionContext*>(context)) {
+    return K::kResetSession;
+  }
+  if (dynamic_cast<P::UseContext*>(context)) {
+    return K::kUse;
+  }
+  return std::nullopt;
+}
+
 std::pair<std::string, facebook::axiom::SchemaTableName> toConnectorTable(
     const QualifiedName& name,
     const std::string& defaultConnectorId,
@@ -2225,6 +2272,12 @@ SqlStatementPtr doPlan(
       "Unsupported statement type");
 }
 } // namespace
+
+std::optional<SqlStatementKind> PrestoParser::parseKind(std::string_view sql) {
+  ParserHelper helper(sql);
+  auto* context = helper.parse();
+  return detectStatementKind(context);
+}
 
 SqlStatementPtr PrestoParser::doParse(
     std::string_view sql,
