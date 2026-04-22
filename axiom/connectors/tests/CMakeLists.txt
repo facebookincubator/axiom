@@ -38,7 +38,7 @@ target_link_libraries(
   GTest::gtest_main
 )
 
-add_executable(axiom_connectors_tests SchemaResolverTest.cpp)
+add_executable(axiom_connectors_tests SchemaResolverTest.cpp SplitWeightTest.cpp)
 
 add_test(axiom_connectors_tests axiom_connectors_tests)
 

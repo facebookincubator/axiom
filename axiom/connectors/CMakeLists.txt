@@ -26,7 +26,8 @@ if(AXIOM_BUILD_TESTING)
   add_subdirectory(tests)
 endif()
 
-add_library(axiom_connectors ConnectorMetadata.cpp SchemaResolver.cpp)
+add_library(axiom_connectors ConnectorMetadata.cpp SchemaResolver.cpp
+                             SplitWeight.cpp)
 
 target_link_libraries(
   axiom_connectors
