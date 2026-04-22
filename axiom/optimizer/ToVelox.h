@@ -103,7 +103,8 @@ class ToVelox {
  private:
   // Adds a Velox ProjectNode that renames or reorders output columns per the
   // given OutputNode entries. Returns the input unchanged if all names and
-  // positions already match.
+  // positions already match. input->outputType() may contain more columns than
+  // outputNames; extra columns are dropped by the projection.
   velox::core::PlanNodePtr addOutputRenames(
       velox::core::PlanNodePtr input,
       const std::vector<logical_plan::OutputNode::Entry>& outputNames);
@@ -280,6 +281,12 @@ class ToVelox {
   velox::core::WindowNode::Function toVeloxWindowFunction(
       WindowFunctionCP windowFunc,
       ColumnCP outputColumn);
+
+  // Converts a GroupId operator to a Velox GroupIdNode.
+  velox::core::PlanNodePtr makeGroupId(
+      const GroupId& op,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
 
   // Makes a tree of PlanNode for a tree of
   // RelationOp. 'fragment' is the fragment that 'op'
