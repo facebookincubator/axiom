@@ -158,7 +158,11 @@ std::optional<PersistedStats> PersistedStats::read(
   std::string content(
       (std::istreambuf_iterator<char>(inputFile)),
       std::istreambuf_iterator<char>());
-  return persistedStatsFromJson(folly::parseJson(content));
+  try {
+    return persistedStatsFromJson(folly::parseJson(content));
+  } catch (const folly::json::parse_error& e) {
+    VELOX_FAIL("Failed to parse persisted stats JSON: {}", e.what());
+  }
 }
 
 void PersistedStats::write(const std::string& directory, PersistedStats stats) {

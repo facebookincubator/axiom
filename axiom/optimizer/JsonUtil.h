@@ -40,7 +40,11 @@ inline std::vector<folly::dynamic> readConcatenatedDynamicsFromFile(
       --braceCount;
       if (braceCount == 0) {
         std::string obj = content.substr(start, i - start + 1);
-        result.push_back(folly::parseJson(obj));
+        try {
+          result.push_back(folly::parseJson(obj));
+        } catch (const folly::json::parse_error& e) {
+          VELOX_FAIL("Failed to parse JSON object: {}", e.what());
+        }
       }
     }
   }
