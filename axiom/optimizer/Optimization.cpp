@@ -259,9 +259,10 @@ PlanAndStats Optimization::toVeloxPlan(
     MultiFragmentPlan::Options runnerOptions) {
   auto allocator = std::make_unique<velox::HashStringAllocator>(&pool);
   auto context = std::make_unique<QueryGraphContext>(*allocator);
+  auto* prevQueryCtx = queryCtx();
   queryCtx() = context.get();
   SCOPE_EXIT {
-    queryCtx() = nullptr;
+    queryCtx() = prevQueryCtx;
   };
 
   auto veloxQueryCtx = velox::core::QueryCtx::create();
