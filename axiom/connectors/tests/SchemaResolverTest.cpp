@@ -66,7 +66,12 @@ class SchemaResolverTest : public ::testing::Test {
 
 TEST_F(SchemaResolverTest, bareTable) {
   ConnectorMetadata::metadata("base")->createTable(
-      nullptr, {"baseschema", "table"}, ROW({}), {}, /*explain=*/false);
+      nullptr,
+      {"baseschema", "table"},
+      ROW({}),
+      {},
+      /*ifNotExists=*/false,
+      /*explain=*/false);
 
   auto table = resolver_->findTable("base", {"baseschema", "table"});
   ASSERT_NE(table, nullptr);
@@ -79,7 +84,12 @@ TEST_F(SchemaResolverTest, tablePlusSchema) {
   ConnectorMetadata::metadata("base")->createSchema(
       nullptr, "newschema", /*ifNotExists=*/false, {});
   ConnectorMetadata::metadata("base")->createTable(
-      nullptr, {"newschema", "table"}, ROW({}), {}, /*explain=*/false);
+      nullptr,
+      {"newschema", "table"},
+      ROW({}),
+      {},
+      /*ifNotExists=*/false,
+      /*explain=*/false);
 
   auto table = resolver_->findTable("base", {"newschema", "table"});
   ASSERT_NE(table, nullptr);
@@ -94,12 +104,18 @@ TEST_F(SchemaResolverTest, tablePlusSchemaPlusCatalog) {
       {"otherschema", "other_table"},
       ROW({}),
       {},
+      /*ifNotExists=*/false,
       /*explain=*/false);
   auto table = resolver_->findTable("other", {"otherschema", "other_table"});
   ASSERT_NE(table, nullptr);
 
   ConnectorMetadata::metadata("base")->createTable(
-      nullptr, {"baseschema", "base_table"}, ROW({}), {}, /*explain=*/false);
+      nullptr,
+      {"baseschema", "base_table"},
+      ROW({}),
+      {},
+      /*ifNotExists=*/false,
+      /*explain=*/false);
   table = resolver_->findTable("base", {"baseschema", "base_table"});
   ASSERT_NE(table, nullptr);
 }
@@ -111,6 +127,7 @@ TEST_F(SchemaResolverTest, catalogMismatch) {
       {"otherschema", "table"},
       ROW({}),
       {},
+      /*ifNotExists=*/false,
       /*explain=*/false);
   auto table = resolver_->findTable("base", {"otherschema", "table"});
   ASSERT_EQ(table, nullptr);

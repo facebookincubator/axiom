@@ -437,6 +437,7 @@ std::shared_ptr<TestTable> TestConnectorMetadata::addTable(
     SchemaTableName tableName,
     const velox::RowTypePtr& schema,
     const velox::RowTypePtr& hiddenColumns) {
+  schemas_.insert(tableName.schema);
   auto table = std::make_shared<TestTable>(
       tableName,
       schema,
@@ -453,17 +454,19 @@ TablePtr TestConnectorMetadata::createTable(
     const SchemaTableName& tableName,
     const velox::RowTypePtr& rowType,
     const folly::F14FastMap<std::string, velox::Variant>& options,
+    bool ifNotExists,
     bool explain) {
-  for (const auto& [key, value] : options) {
-    VELOX_USER_CHECK(
-        key == kHidden || key == kExplainIo,
-        "TestConnector does not support CREATE TABLE property: {}",
-        key);
-  }
   VELOX_USER_CHECK(
       schemas_.contains(tableName.schema),
       "Schema does not exist: {}",
       tableName.schema);
+
+  if (tables_.contains(tableName)) {
+    if (ifNotExists) {
+      return nullptr;
+    }
+    VELOX_USER_FAIL("Table already exists: {}", tableName.toString());
+  }
 
   // Parse optional 'hidden' property to add hidden VARCHAR columns.
   // Hidden columns are not part of the schema — they are created implicitly.
@@ -491,7 +494,7 @@ TablePtr TestConnectorMetadata::createTable(
     return table;
   }
   auto [it, ok] = tables_.emplace(tableName, std::move(table));
-  VELOX_CHECK(ok, "Table already exists: {}", tableName.toString());
+  VELOX_CHECK(ok);
   return it->second;
 }
 

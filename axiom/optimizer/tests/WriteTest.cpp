@@ -53,7 +53,13 @@ class WriteTest : public test::HiveQueriesTestBase {
 
     auto session = std::make_shared<connector::ConnectorSession>("test");
     auto table = metadata.createTable(
-        session, {kDefaultSchema, name}, tableType, options, /*explain=*/false);
+        session,
+        {kDefaultSchema, name},
+        tableType,
+        options,
+        /*ifNotExists=*/false,
+        /*explain=*/false);
+    VELOX_CHECK_NOT_NULL(table);
     auto handle = metadata.beginWrite(
         session, table, connector::WriteKind::kCreate, /*explain=*/false);
     metadata.finishWrite(session, handle, {}, nullptr, {}).get();
@@ -70,12 +76,15 @@ class WriteTest : public test::HiveQueriesTestBase {
     }
 
     auto session = std::make_shared<connector::ConnectorSession>("test");
-    return metadata.createTable(
+    auto table = metadata.createTable(
         session,
         statement.tableName(),
         statement.tableSchema(),
         options,
+        /*ifNotExists=*/false,
         /*explain=*/false);
+    VELOX_CHECK_NOT_NULL(table);
+    return table;
   }
 
   void runCtas(
