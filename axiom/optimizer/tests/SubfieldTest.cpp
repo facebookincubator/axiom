@@ -35,6 +35,7 @@ namespace {
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
 using namespace facebook::axiom::optimizer::test;
+using namespace core::em;
 namespace lp = facebook::axiom::logical_plan;
 
 template <typename T>
@@ -294,17 +295,39 @@ class SubfieldTest : public HiveQueriesTestBase,
     verifyRequiredSubfields(
         plan, {{"float_features", {subfield("10010"), subfield("10020")}}});
 
-    auto matcher =
-        core::PlanMatcherBuilder()
-            .hiveScan("features", {}, "float_features[10010] + 1 < 10000")
-            .localPartition(
-                core::PlanMatcherBuilder()
-                    .hiveScan(
-                        "features", {}, "float_features[10010] + 1 < 10000")
-                    .project()
-                    .build())
-            .project()
-            .build();
+    auto matcher = core::PlanMatcherBuilder()
+                       .hiveScan(
+                           "features",
+                           {},
+                           call(
+                               "lt",
+                               {call(
+                                    "plus",
+                                    {call(
+                                         "subscript",
+                                         {col("float_features"),
+                                          constant(int32_t(10010))}),
+                                     constant(float(1))}),
+                                constant(float(10000))}))
+                       .localPartition(
+                           core::PlanMatcherBuilder()
+                               .hiveScan(
+                                   "features",
+                                   {},
+                                   call(
+                                       "lt",
+                                       {call(
+                                            "plus",
+                                            {call(
+                                                 "subscript",
+                                                 {col("float_features"),
+                                                  constant(int32_t(10010))}),
+                                             constant(float(1))}),
+                                        constant(float(10000))}))
+                               .project()
+                               .build())
+                       .project()
+                       .build();
 
     ASSERT_TRUE(matcher->match(plan));
   }
