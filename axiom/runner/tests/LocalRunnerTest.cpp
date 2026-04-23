@@ -259,5 +259,26 @@ TEST_F(LocalRunnerTest, lastStageWithMultipleInputs) {
   ASSERT_TRUE(localRunner->waitForCompletion(kWaitTimeoutUs));
 }
 
+TEST_F(LocalRunnerTest, spillDirectoryWiring) {
+  auto spillDir = velox::common::testutil::TempDirectoryPath::create();
+
+  auto join = makeJoinPlan();
+  const auto queryId = join->options().queryId;
+  auto queryCtx = makeQueryCtx(queryId);
+
+  auto localRunner = std::make_shared<LocalRunner>(
+      std::move(join),
+      optimizer::FinishWrite{},
+      std::move(queryCtx),
+      std::make_shared<ConnectorSplitSourceFactory>(),
+      /*outputPool=*/nullptr,
+      spillDir->getPath());
+
+  auto results = readCursor(localRunner);
+  EXPECT_EQ(1, results.size());
+  EXPECT_EQ(kNumRows, extractSingleInt64(results));
+  EXPECT_EQ(Runner::State::kFinished, localRunner->state());
+}
+
 } // namespace
 } // namespace facebook::axiom::runner

@@ -19,6 +19,8 @@
 #include <folly/coro/BlockingWait.h>
 #include <folly/coro/Task.h>
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "velox/common/base/SpillConfig.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/common/time/Timer.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -83,6 +85,25 @@ namespace {
 std::shared_ptr<velox::exec::RemoteConnectorSplit> remoteSplit(
     const std::string& taskId) {
   return std::make_shared<velox::exec::RemoteConnectorSplit>(taskId);
+}
+
+// Builds per-task SpillDiskOptions under the base spill directory. Each task
+// gets a unique subdirectory created lazily on first spill.
+std::optional<velox::common::SpillDiskOptions> makeSpillDiskOptions(
+    const std::string& baseSpillDirectory,
+    const std::string& taskId) {
+  if (baseSpillDirectory.empty()) {
+    return std::nullopt;
+  }
+  velox::common::SpillDiskOptions options;
+  options.spillDirPath = fmt::format("{}/{}", baseSpillDirectory, taskId);
+  options.spillDirCreated = false;
+  options.spillDirCreateCb = [path = options.spillDirPath]() {
+    auto fileSystem = velox::filesystems::getFileSystem(path, nullptr);
+    fileSystem->mkdir(path);
+    return path;
+  };
+  return options;
 }
 
 // Streams splits from the source and distributes them round-robin across tasks.
@@ -167,13 +188,18 @@ LocalRunner::LocalRunner(
     optimizer::FinishWrite finishWrite,
     std::shared_ptr<velox::core::QueryCtx> queryCtx,
     std::shared_ptr<SplitSourceFactory> splitSourceFactory,
-    std::shared_ptr<velox::memory::MemoryPool> outputPool)
+    std::shared_ptr<velox::memory::MemoryPool> outputPool,
+    std::string baseSpillDirectory)
     : plan_{std::move(plan)},
       fragments_{topologicalSort(plan_->fragments())},
       finishWrite_{std::move(finishWrite)},
-      splitSourceFactory_{std::move(splitSourceFactory)} {
+      splitSourceFactory_{std::move(splitSourceFactory)},
+      baseSpillDirectory_{std::move(baseSpillDirectory)} {
   params_.queryCtx = std::move(queryCtx);
   params_.outputPool = std::move(outputPool);
+  if (!baseSpillDirectory_.empty()) {
+    params_.spillDirectory = baseSpillDirectory_;
+  }
 
   VELOX_CHECK_NOT_NULL(splitSourceFactory_);
   VELOX_CHECK(!finishWrite_ || params_.outputPool != nullptr);
@@ -402,19 +428,20 @@ void LocalRunner::makeStages(
     stages_.emplace_back();
 
     for (auto i = 0; i < fragment.width; ++i) {
+      auto taskId = fmt::format(
+          "local://{}/{}.{}",
+          params_.queryCtx->queryId(),
+          fragment.taskPrefix,
+          i);
       auto task = velox::exec::Task::create(
-          fmt::format(
-              "local://{}/{}.{}",
-              params_.queryCtx->queryId(),
-              fragment.taskPrefix,
-              i),
+          taskId,
           fragment.fragment,
           i,
           params_.queryCtx,
           velox::exec::Task::ExecutionMode::kParallel,
           velox::exec::ConsumerSupplier{},
           /*memoryArbitrationPriority=*/0,
-          /*spillDiskOpts=*/std::nullopt,
+          makeSpillDiskOptions(baseSpillDirectory_, taskId),
           onError);
       stages_.back().push_back(task);
 

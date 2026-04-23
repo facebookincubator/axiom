@@ -21,6 +21,7 @@
 #include "axiom/connectors/ConnectorSplitManager.h"
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/runner/Runner.h"
+#include "velox/common/base/SpillConfig.h"
 #include "velox/connectors/Connector.h"
 #include "velox/exec/Cursor.h"
 
@@ -80,13 +81,17 @@ class LocalRunner : public Runner,
  public:
   /// @param outputPool Optional memory pool to use for allocating memory for
   /// query results. Required if 'finishWrite' is set.
+  /// @param baseSpillDirectory Base directory for spill files. If non-empty,
+  /// each task gets a unique subdirectory under this path. Empty disables
+  /// spilling at the task level.
   LocalRunner(
       optimizer::MultiFragmentPlanPtr plan,
       optimizer::FinishWrite finishWrite,
       std::shared_ptr<velox::core::QueryCtx> queryCtx,
       std::shared_ptr<SplitSourceFactory> splitSourceFactory =
           std::make_shared<ConnectorSplitSourceFactory>(),
-      std::shared_ptr<velox::memory::MemoryPool> outputPool = nullptr);
+      std::shared_ptr<velox::memory::MemoryPool> outputPool = nullptr,
+      std::string baseSpillDirectory = "");
 
   ~LocalRunner() override;
 
@@ -175,6 +180,8 @@ class LocalRunner : public Runner,
   std::vector<std::vector<std::shared_ptr<velox::exec::Task>>> stages_;
   std::exception_ptr error_;
   std::shared_ptr<SplitSourceFactory> splitSourceFactory_;
+  // Base directory for task spill files. Empty disables spilling.
+  std::string baseSpillDirectory_;
   folly::coro::AsyncScope splitScope_{/*throwOnJoin=*/true};
   bool splitScopeJoined_{false};
 };
