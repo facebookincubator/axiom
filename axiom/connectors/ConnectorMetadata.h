@@ -19,6 +19,7 @@
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/connectors/ConnectorSession.h"
 #include "axiom/connectors/ConnectorSplitManager.h"
+#include "axiom/connectors/MaterializedViewDefinition.h"
 #include "folly/CppAttributes.h"
 #include "folly/coro/Task.h"
 #include "velox/common/memory/HashStringAllocator.h"
@@ -733,6 +734,8 @@ class View {
 };
 
 using ViewPtr = std::shared_ptr<const View>;
+using MaterializedViewDefinitionPtr =
+    std::shared_ptr<const MaterializedViewDefinition>;
 
 /// Contains the information for an in-progress write operation. This may
 /// include insert, update, or delete of an existing table, or insertion into a
@@ -825,6 +828,15 @@ class ConnectorMetadata {
   ///
   /// @return nullptr if view doesn't exist.
   virtual ViewPtr findView(const SchemaTableName& /*tableName*/) {
+    return nullptr;
+  }
+
+  /// Return a MaterializedViewDefinitionPtr given the MV name. MV name is
+  /// provided without the connector ID / catalog prefix, but may include the
+  /// schema.
+  /// @return nullptr if MV doesn't exist.
+  virtual MaterializedViewDefinitionPtr getMaterializedViewDefinition(
+      std::string_view /*name*/) const {
     return nullptr;
   }
 
