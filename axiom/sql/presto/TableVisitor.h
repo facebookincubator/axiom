@@ -52,6 +52,7 @@ class TableVisitor : public DefaultTraversalVisitor {
   void visitCreateView(CreateView* node) override;
   void visitCreateMaterializedView(CreateMaterializedView* node) override;
   void visitDropTable(DropTable* node) override;
+  void visitAddColumn(AddColumn* node) override;
   void visitDropView(DropView* node) override;
   void visitDropMaterializedView(DropMaterializedView* node) override;
 

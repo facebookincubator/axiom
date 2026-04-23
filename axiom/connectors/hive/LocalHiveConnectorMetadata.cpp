@@ -1488,4 +1488,55 @@ bool LocalHiveConnectorMetadata::dropTable(
   return tables_.erase(tableName.table) == 1;
 }
 
+std::optional<bool> LocalHiveConnectorMetadata::addColumn(
+    const ConnectorSessionPtr& /* session */,
+    const SchemaTableName& tableName,
+    const std::string& columnName,
+    const velox::TypePtr& columnType,
+    bool ifTableExists,
+    bool ifNotExists) {
+  ensureInitialized();
+
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = tables_.find(tableName.table);
+  if (it == tables_.end()) {
+    if (ifTableExists) {
+      return std::nullopt;
+    }
+    VELOX_USER_FAIL("Table does not exist: {}", tableName);
+  }
+
+  auto existingTable = it->second;
+  auto existingType = existingTable->type();
+
+  if (existingType->containsChild(columnName)) {
+    if (ifNotExists) {
+      return false;
+    }
+    VELOX_USER_FAIL(
+        "Column already exists in table {}: {}", tableName, columnName);
+  }
+
+  auto path = tablePath(tableName);
+  auto schemaFile = schemaPath(path);
+  if (std::filesystem::exists(schemaFile)) {
+    auto jsons = readConcatenatedDynamicsFromFile(schemaFile);
+    if (!jsons.empty()) {
+      auto& schema = jsons[0];
+      folly::dynamic newCol = folly::dynamic::object;
+      newCol["name"] = columnName;
+      newCol["type"] = columnType->serialize();
+      schema["dataColumns"].push_back(newCol);
+
+      std::ofstream outputFile(schemaFile);
+      VELOX_CHECK(outputFile.is_open());
+      outputFile << folly::toPrettyJson(schema);
+      outputFile.close();
+    }
+  }
+
+  loadTable(tableName.table, path);
+  return true;
+}
+
 } // namespace facebook::axiom::connector::hive

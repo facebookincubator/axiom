@@ -349,5 +349,83 @@ TEST_F(DdlParserTest, createTableAndInsert) {
   ASSERT_EQ(lp::WriteKind::kInsert, insertWrite->writeKind());
 }
 
+TEST_F(DdlParserTest, addColumn) {
+  // basic
+  {
+    auto statement = parseSql("ALTER TABLE t ADD COLUMN c BIGINT");
+    ASSERT_TRUE(statement->isAddColumn());
+
+    const auto* add = statement->as<AddColumnStatement>();
+    ASSERT_EQ("t", add->tableName().table);
+    ASSERT_EQ("c", add->columnName());
+    ASSERT_EQ(*BIGINT(), *add->columnType());
+    ASSERT_FALSE(add->ifTableExists());
+    ASSERT_FALSE(add->ifNotExists());
+  }
+
+  // IF NOT EXISTS on column
+  {
+    auto statement =
+        parseSql("ALTER TABLE t ADD COLUMN IF NOT EXISTS c VARCHAR");
+    const auto* add = statement->as<AddColumnStatement>();
+    ASSERT_FALSE(add->ifTableExists());
+    ASSERT_TRUE(add->ifNotExists());
+  }
+
+  // IF EXISTS on table
+  {
+    auto statement = parseSql("ALTER TABLE IF EXISTS t ADD COLUMN c DOUBLE");
+    const auto* add = statement->as<AddColumnStatement>();
+    ASSERT_TRUE(add->ifTableExists());
+    ASSERT_FALSE(add->ifNotExists());
+  }
+
+  // both IF clauses
+  {
+    auto statement =
+        parseSql("ALTER TABLE IF EXISTS t ADD COLUMN IF NOT EXISTS c INTEGER");
+    const auto* add = statement->as<AddColumnStatement>();
+    ASSERT_TRUE(add->ifTableExists());
+    ASSERT_TRUE(add->ifNotExists());
+  }
+
+  // complex types
+  {
+    auto statement = parseSql("ALTER TABLE t ADD COLUMN c ARRAY<INTEGER>");
+    const auto* add = statement->as<AddColumnStatement>();
+    ASSERT_EQ(*ARRAY(INTEGER()), *add->columnType());
+  }
+  {
+    auto statement =
+        parseSql("ALTER TABLE t ADD COLUMN c MAP<VARCHAR, BIGINT>");
+    const auto* add = statement->as<AddColumnStatement>();
+    ASSERT_EQ(*MAP(VARCHAR(), BIGINT()), *add->columnType());
+  }
+  {
+    auto statement =
+        parseSql("ALTER TABLE t ADD COLUMN c ROW(a INTEGER, b VARCHAR)");
+    const auto* add = statement->as<AddColumnStatement>();
+    ASSERT_EQ(*ROW({"a", "b"}, {INTEGER(), VARCHAR()}), *add->columnType());
+  }
+
+  // schema-qualified table name
+  {
+    auto statement = parseSql("ALTER TABLE myschema.t ADD COLUMN c BIGINT");
+    const auto* add = statement->as<AddColumnStatement>();
+    ASSERT_EQ("myschema", add->tableName().schema);
+    ASSERT_EQ("t", add->tableName().table);
+    ASSERT_EQ("test", add->connectorId());
+  }
+
+  // catalog.schema.table
+  {
+    auto statement = parseSql("ALTER TABLE cat.myschema.t ADD COLUMN c BIGINT");
+    const auto* add = statement->as<AddColumnStatement>();
+    ASSERT_EQ("myschema", add->tableName().schema);
+    ASSERT_EQ("t", add->tableName().table);
+    ASSERT_EQ("cat", add->connectorId());
+  }
+}
+
 } // namespace
 } // namespace axiom::sql::presto::test

@@ -82,6 +82,11 @@ void TableVisitor::visitDropTable(DropTable* node) {
   DefaultTraversalVisitor::visitDropTable(node);
 }
 
+void TableVisitor::visitAddColumn(AddColumn* node) {
+  setOutputTable(*node->tableName());
+  DefaultTraversalVisitor::visitAddColumn(node);
+}
+
 void TableVisitor::visitDropView(DropView* node) {
   setOutputTable(*node->viewName());
   DefaultTraversalVisitor::visitDropView(node);

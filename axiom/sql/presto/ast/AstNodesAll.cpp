@@ -648,6 +648,16 @@ void DropSchema::accept(AstVisitor* visitor) {
   visitor->visitDropSchema(this);
 }
 
+void AddColumn::accept(AstVisitor* visitor) {
+  visitor->visitAddColumn(this);
+}
+
+ColumnDefinition* AddColumn::column() const {
+  auto* result = column_->as<ColumnDefinition>();
+  VELOX_DCHECK_NOT_NULL(result);
+  return result;
+}
+
 // DML Statement implementations
 void Insert::accept(AstVisitor* visitor) {
   visitor->visitInsert(this);

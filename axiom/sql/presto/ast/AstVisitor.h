@@ -438,6 +438,10 @@ class AstVisitor {
     defaultVisit(node);
   }
 
+  virtual void visitAddColumn(AddColumn* node) {
+    defaultVisit(node);
+  }
+
   // DML Statements
   virtual void visitInsert(Insert* node) {
     defaultVisit(node);

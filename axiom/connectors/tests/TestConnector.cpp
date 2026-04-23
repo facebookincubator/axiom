@@ -537,6 +537,64 @@ bool TestConnectorMetadata::dropTable(
   return dropped;
 }
 
+std::optional<bool> TestConnectorMetadata::addColumn(
+    const ConnectorSessionPtr& /* session */,
+    const SchemaTableName& tableName,
+    const std::string& columnName,
+    const velox::TypePtr& columnType,
+    bool ifTableExists,
+    bool ifNotExists) {
+  auto it = tables_.find(tableName);
+  if (it == tables_.end()) {
+    if (ifTableExists) {
+      return std::nullopt;
+    }
+    VELOX_USER_FAIL("Table does not exist: {}", tableName.toString());
+  }
+
+  auto existingType = it->second->type();
+  if (existingType->containsChild(columnName)) {
+    if (ifNotExists) {
+      return false;
+    }
+    VELOX_USER_FAIL(
+        "Column already exists in table {}: {}",
+        tableName.toString(),
+        columnName);
+  }
+
+  VELOX_CHECK(
+      it->second->data().empty(),
+      "Cannot add column to table '{}' that already has data",
+      tableName.toString());
+
+  auto names = existingType->names();
+  auto types = existingType->children();
+  names.push_back(columnName);
+  types.push_back(columnType);
+  auto newType = velox::ROW(std::move(names), std::move(types));
+
+  std::vector<std::string> hiddenNames;
+  for (const auto* col : it->second->allColumns()) {
+    if (col->hidden()) {
+      hiddenNames.push_back(col->name());
+    }
+  }
+  auto hiddenColumns = velox::ROW(std::move(hiddenNames), velox::VARCHAR());
+
+  auto savedOptions = it->second->options();
+  tables_.erase(it);
+
+  auto newTable = std::make_shared<TestTable>(
+      tableName,
+      std::move(newType),
+      std::move(hiddenColumns),
+      connector_,
+      std::move(savedOptions));
+  tables_[tableName] = std::move(newTable);
+  return true;
+}
+
 void TestConnectorMetadata::appendData(
     const SchemaTableName& tableName,
     const velox::RowVectorPtr& data) {
