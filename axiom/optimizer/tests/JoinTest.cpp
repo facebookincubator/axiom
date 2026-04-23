@@ -17,6 +17,7 @@
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
+#include "velox/common/base/tests/GTestUtils.h"
 
 namespace facebook::axiom::optimizer {
 namespace {
@@ -1353,6 +1354,30 @@ TEST_F(JoinTest, duplicateJoinOutputColumns) {
 
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
+}
+
+TEST_F(JoinTest, leftJoinWithUnmaterializedSubfield) {
+  testConnector_->addTable("t", ROW({"k", "v"}, {INTEGER(), INTEGER()}));
+  testConnector_->addTable(
+      "u",
+      ROW({"k", "m"}, {INTEGER(), MAP(INTEGER(), MAP(INTEGER(), REAL()))}));
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .project({"k", "v"})
+                         .join(
+                             lp::PlanBuilder(makeContext())
+                                 .tableScan("u")
+                                 .project({"k as uk", "m[100::int] as nested"}),
+                             "k = uk",
+                             lp::JoinType::kLeft)
+                         .project({"v", "nested[1::int] as val"})
+                         .build();
+  SCOPED_TRACE("leftJoinWithUnmaterializedSubfield");
+
+  optimizerOptions_.pushdownSubfields = true;
+  VELOX_ASSERT_THROW(
+      toSingleNodePlan(logicalPlan), "Null expression for join column: nested");
 }
 
 } // namespace
