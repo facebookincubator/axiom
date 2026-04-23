@@ -23,6 +23,7 @@
 
 #include "axiom/common/SessionConfig.h"
 #include <gtest/gtest.h>
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
 using namespace facebook::axiom;
