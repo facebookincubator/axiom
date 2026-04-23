@@ -1464,25 +1464,24 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
   const auto numGroupingKeys = agg.groupingKeys().size();
   const auto channels = usedChannels(agg);
   {
-    bool mayFinalize = true;
+    std::vector<lp::ExprPtr> allExprs;
     for (const auto& key : agg.groupingKeys()) {
-      processSubqueries(input, key, mayFinalize);
+      allExprs.push_back(key);
     }
-
     for (auto channel : channels) {
       if (channel < numGroupingKeys) {
         continue;
       }
-
       const auto& aggregate = agg.aggregates()[channel - numGroupingKeys];
-
       for (const auto& expr : aggregate->inputs()) {
-        processSubqueries(input, expr, mayFinalize);
+        allExprs.push_back(expr);
       }
       if (aggregate->filter()) {
-        processSubqueries(input, aggregate->filter(), mayFinalize);
+        allExprs.push_back(aggregate->filter());
       }
     }
+    bool mayFinalize = true;
+    processSubqueries(input, allExprs, mayFinalize);
   }
 
   ColumnVector columns;
@@ -2307,8 +2306,13 @@ void ToGraph::addProjection(const lp::ProjectNode& project) {
   });
 
   bool mayFinalize = true;
-  for (auto i : channels) {
-    processSubqueries(input, exprs[i], mayFinalize);
+  {
+    std::vector<lp::ExprPtr> allExprs;
+    allExprs.reserve(channels.size());
+    for (auto i : channels) {
+      allExprs.push_back(exprs[i]);
+    }
+    processSubqueries(input, allExprs, mayFinalize);
   }
 
   QGVector<WindowFunctionCP> windowFunctions;
@@ -2418,7 +2422,764 @@ void extractSubqueries(const lp::ExprPtr& expr, Subqueries& subqueries) {
     extractSubqueries(input, subqueries);
   }
 }
+
+using NameToOrdinal = folly::F14FastMap<std::string, size_t>;
+
+// Builds a mapping from column name to ordinal position in the output type.
+NameToOrdinal buildNameToOrdinal(const velox::RowType& type) {
+  NameToOrdinal result;
+  for (size_t i = 0; i < type.size(); ++i) {
+    result[type.nameOf(i)] = i;
+  }
+  return result;
+}
+
+// Forward declaration.
+bool isSameComputation(
+    const lp::LogicalPlanNode& left,
+    const lp::LogicalPlanNode& right);
+
+// Compares two expressions resolving InputReferenceExpr names to ordinal
+// positions. Two expressions are equivalent if they perform the same
+// computation regardless of planner-generated column name suffixes.
+bool exprEquivalent(
+    const lp::Expr& left,
+    const lp::Expr& right,
+    const NameToOrdinal& leftOrdinals,
+    const NameToOrdinal& rightOrdinals) {
+  if (&left == &right) {
+    return true;
+  }
+  if (left.kind() != right.kind()) {
+    return false;
+  }
+  if (*left.type() != *right.type()) {
+    return false;
+  }
+
+  // InputReferenceExpr: compare by ordinal position, not name.
+  // Outer references (from the correlation predicate) won't be found in the
+  // ordinal maps — they have the same name in both plans, so compare by name.
+  if (left.isInputReference()) {
+    const auto& leftName = left.as<lp::InputReferenceExpr>()->name();
+    const auto& rightName = right.as<lp::InputReferenceExpr>()->name();
+    auto leftIt = leftOrdinals.find(leftName);
+    auto rightIt = rightOrdinals.find(rightName);
+
+    // Both are outer references (not in ordinal maps) — compare by name.
+    if (leftIt == leftOrdinals.end() && rightIt == rightOrdinals.end()) {
+      return leftName == rightName;
+    }
+    // Both are inner references — compare by ordinal position.
+    if (leftIt != leftOrdinals.end() && rightIt != rightOrdinals.end()) {
+      return leftIt->second == rightIt->second;
+    }
+    // One inner, one outer — not equivalent.
+    return false;
+  }
+
+  // SubqueryExpr: compare the underlying plans recursively.
+  if (left.isSubquery()) {
+    return isSameComputation(
+        *left.as<lp::SubqueryExpr>()->subquery(),
+        *right.as<lp::SubqueryExpr>()->subquery());
+  }
+
+  // Recursively compare inputs.
+  if (left.inputs().size() != right.inputs().size()) {
+    return false;
+  }
+  for (size_t i = 0; i < left.inputs().size(); ++i) {
+    if (!exprEquivalent(
+            *left.inputs()[i],
+            *right.inputs()[i],
+            leftOrdinals,
+            rightOrdinals)) {
+      return false;
+    }
+  }
+
+  // Kind-specific field comparison.
+  if (left.isCall()) {
+    return left.as<lp::CallExpr>()->name() == right.as<lp::CallExpr>()->name();
+  }
+  if (left.isSpecialForm()) {
+    return left.as<lp::SpecialFormExpr>()->form() ==
+        right.as<lp::SpecialFormExpr>()->form();
+  }
+  if (left.isConstant()) {
+    return *left.as<lp::ConstantExpr>()->value() ==
+        *right.as<lp::ConstantExpr>()->value();
+  }
+  if (left.isAggregate()) {
+    const auto* leftAgg = left.as<lp::AggregateExpr>();
+    const auto* rightAgg = right.as<lp::AggregateExpr>();
+    if (leftAgg->name() != rightAgg->name()) {
+      return false;
+    }
+    if (leftAgg->isDistinct() != rightAgg->isDistinct()) {
+      return false;
+    }
+    if (leftAgg->filter() && rightAgg->filter()) {
+      if (!exprEquivalent(
+              *leftAgg->filter(),
+              *rightAgg->filter(),
+              leftOrdinals,
+              rightOrdinals)) {
+        return false;
+      }
+    } else if (leftAgg->filter() || rightAgg->filter()) {
+      return false;
+    }
+    if (leftAgg->ordering().size() != rightAgg->ordering().size()) {
+      return false;
+    }
+    for (size_t i = 0; i < leftAgg->ordering().size(); ++i) {
+      if (leftAgg->ordering()[i].order != rightAgg->ordering()[i].order) {
+        return false;
+      }
+      if (!exprEquivalent(
+              *leftAgg->ordering()[i].expression,
+              *rightAgg->ordering()[i].expression,
+              leftOrdinals,
+              rightOrdinals)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Unhandled expression kinds: conservative false.
+  return false;
+}
+
+// Compares two expression vectors positionally.
+template <typename T, typename U>
+bool exprVectorsEquivalent(
+    const std::vector<T>& left,
+    const std::vector<U>& right,
+    const NameToOrdinal& leftOrdinals,
+    const NameToOrdinal& rightOrdinals) {
+  if (left.size() != right.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < left.size(); ++i) {
+    if (!exprEquivalent(*left[i], *right[i], leftOrdinals, rightOrdinals)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Compares two LogicalPlanNode trees positionally. Two plans are equivalent if
+// they perform the same computation regardless of planner-generated column name
+// suffixes or node IDs. Column references are resolved by ordinal position in
+// the parent's output type, not by name. This enables detecting duplicate
+// subqueries that the SQL parser planned independently with different
+// disambiguated names.
+bool isSameComputation(
+    const lp::LogicalPlanNode& left,
+    const lp::LogicalPlanNode& right) {
+  if (&left == &right) {
+    return true;
+  }
+  if (left.kind() != right.kind()) {
+    return false;
+  }
+
+  // Compare output types by position: same number of columns, same types.
+  const auto& leftType = *left.outputType();
+  const auto& rightType = *right.outputType();
+  if (leftType.size() != rightType.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < leftType.size(); ++i) {
+    if (*leftType.childAt(i) != *rightType.childAt(i)) {
+      return false;
+    }
+  }
+
+  // Recursively compare inputs.
+  if (left.inputs().size() != right.inputs().size()) {
+    return false;
+  }
+  for (size_t i = 0; i < left.inputs().size(); ++i) {
+    if (!isSameComputation(*left.inputs()[i], *right.inputs()[i])) {
+      return false;
+    }
+  }
+
+  // Node-specific comparison with positional name resolution.
+  switch (left.kind()) {
+    case lp::NodeKind::kTableScan: {
+      const auto* leftScan = left.as<lp::TableScanNode>();
+      const auto* rightScan = right.as<lp::TableScanNode>();
+      return leftScan->connectorId() == rightScan->connectorId() &&
+          leftScan->tableName() == rightScan->tableName();
+    }
+    case lp::NodeKind::kFilter: {
+      const auto* leftFilter = left.as<lp::FilterNode>();
+      const auto* rightFilter = right.as<lp::FilterNode>();
+      auto leftOrdinals = buildNameToOrdinal(*left.inputs()[0]->outputType());
+      auto rightOrdinals = buildNameToOrdinal(*right.inputs()[0]->outputType());
+      return exprEquivalent(
+          *leftFilter->predicate(),
+          *rightFilter->predicate(),
+          leftOrdinals,
+          rightOrdinals);
+    }
+    case lp::NodeKind::kProject: {
+      const auto* leftProject = left.as<lp::ProjectNode>();
+      const auto* rightProject = right.as<lp::ProjectNode>();
+      auto leftOrdinals = buildNameToOrdinal(*left.inputs()[0]->outputType());
+      auto rightOrdinals = buildNameToOrdinal(*right.inputs()[0]->outputType());
+      return exprVectorsEquivalent(
+          leftProject->expressions(),
+          rightProject->expressions(),
+          leftOrdinals,
+          rightOrdinals);
+    }
+    case lp::NodeKind::kAggregate: {
+      const auto* leftAgg = left.as<lp::AggregateNode>();
+      const auto* rightAgg = right.as<lp::AggregateNode>();
+      auto leftOrdinals = buildNameToOrdinal(*left.inputs()[0]->outputType());
+      auto rightOrdinals = buildNameToOrdinal(*right.inputs()[0]->outputType());
+      if (!exprVectorsEquivalent(
+              leftAgg->groupingKeys(),
+              rightAgg->groupingKeys(),
+              leftOrdinals,
+              rightOrdinals)) {
+        return false;
+      }
+      if (leftAgg->groupingSets() != rightAgg->groupingSets()) {
+        return false;
+      }
+      return exprVectorsEquivalent(
+          leftAgg->aggregates(),
+          rightAgg->aggregates(),
+          leftOrdinals,
+          rightOrdinals);
+    }
+    case lp::NodeKind::kValues: {
+      const auto* leftValues = left.as<lp::ValuesNode>();
+      const auto* rightValues = right.as<lp::ValuesNode>();
+      return leftValues->cardinality() == rightValues->cardinality();
+    }
+    case lp::NodeKind::kJoin: {
+      const auto* leftJoin = left.as<lp::JoinNode>();
+      const auto* rightJoin = right.as<lp::JoinNode>();
+      if (leftJoin->joinType() != rightJoin->joinType()) {
+        return false;
+      }
+      if (!leftJoin->condition() && !rightJoin->condition()) {
+        return true;
+      }
+      if (!leftJoin->condition() || !rightJoin->condition()) {
+        return false;
+      }
+      // Build combined ordinals from both inputs.
+      auto leftOrdinals = buildNameToOrdinal(*left.inputs()[0]->outputType());
+      auto leftRightOrdinals =
+          buildNameToOrdinal(*left.inputs()[1]->outputType());
+      for (const auto& [name, ordinal] : leftRightOrdinals) {
+        leftOrdinals[name] = ordinal + left.inputs()[0]->outputType()->size();
+      }
+      auto rightOrdinals = buildNameToOrdinal(*right.inputs()[0]->outputType());
+      auto rightRightOrdinals =
+          buildNameToOrdinal(*right.inputs()[1]->outputType());
+      for (const auto& [name, ordinal] : rightRightOrdinals) {
+        rightOrdinals[name] = ordinal + right.inputs()[0]->outputType()->size();
+      }
+      return exprEquivalent(
+          *leftJoin->condition(),
+          *rightJoin->condition(),
+          leftOrdinals,
+          rightOrdinals);
+    }
+    case lp::NodeKind::kSort: {
+      const auto* leftSort = left.as<lp::SortNode>();
+      const auto* rightSort = right.as<lp::SortNode>();
+      if (leftSort->ordering().size() != rightSort->ordering().size()) {
+        return false;
+      }
+      auto leftOrdinals = buildNameToOrdinal(*left.inputs()[0]->outputType());
+      auto rightOrdinals = buildNameToOrdinal(*right.inputs()[0]->outputType());
+      for (size_t i = 0; i < leftSort->ordering().size(); ++i) {
+        if (leftSort->ordering()[i].order != rightSort->ordering()[i].order) {
+          return false;
+        }
+        if (!exprEquivalent(
+                *leftSort->ordering()[i].expression,
+                *rightSort->ordering()[i].expression,
+                leftOrdinals,
+                rightOrdinals)) {
+          return false;
+        }
+      }
+      return true;
+    }
+    case lp::NodeKind::kLimit: {
+      const auto* leftLimit = left.as<lp::LimitNode>();
+      const auto* rightLimit = right.as<lp::LimitNode>();
+      return leftLimit->offset() == rightLimit->offset() &&
+          leftLimit->count() == rightLimit->count();
+    }
+    default:
+      return false;
+  }
+}
+
+// Compares two scalar subquery plans for merge compatibility. Returns true if
+// the plans are identical below the top-level node, and the top-level node has
+// the same kind and (for aggregates) the same grouping keys. The top-level
+// aggregate functions or project expressions may differ — those will be merged.
+bool isSameMergeKey(
+    const lp::LogicalPlanNode& left,
+    const lp::LogicalPlanNode& right) {
+  if (&left == &right) {
+    return true;
+  }
+  if (left.kind() != right.kind()) {
+    return false;
+  }
+
+  // Inputs must be fully identical (same computation below the top node).
+  if (left.inputs().size() != right.inputs().size()) {
+    return false;
+  }
+  for (size_t i = 0; i < left.inputs().size(); ++i) {
+    if (!isSameComputation(*left.inputs()[i], *right.inputs()[i])) {
+      return false;
+    }
+  }
+
+  // Top-level node: compare structure but not outputs.
+  switch (left.kind()) {
+    case lp::NodeKind::kAggregate: {
+      // Same grouping keys + grouping sets, but aggregates may differ.
+      const auto* leftAgg = left.as<lp::AggregateNode>();
+      const auto* rightAgg = right.as<lp::AggregateNode>();
+      auto leftOrdinals = buildNameToOrdinal(*left.inputs()[0]->outputType());
+      auto rightOrdinals = buildNameToOrdinal(*right.inputs()[0]->outputType());
+      if (!exprVectorsEquivalent(
+              leftAgg->groupingKeys(),
+              rightAgg->groupingKeys(),
+              leftOrdinals,
+              rightOrdinals)) {
+        return false;
+      }
+      return leftAgg->groupingSets() == rightAgg->groupingSets();
+    }
+    case lp::NodeKind::kProject: {
+      // Same input, but project expressions may differ.
+      return true;
+    }
+    default:
+      // For other top-level nodes, fall back to full comparison.
+      return isSameComputation(left, right);
+  }
+}
+
+// Compares two SubqueryExpr objects for computational equivalence. Handles
+// scalar subqueries directly. For IN and EXISTS (wrapped in SpecialFormExpr),
+// compares the entire SpecialFormExpr structure including both the left key
+// and the subquery plan.
+bool subqueryExprEquivalent(const lp::Expr& left, const lp::Expr& right) {
+  if (&left == &right) {
+    return true;
+  }
+  if (left.kind() != right.kind()) {
+    return false;
+  }
+
+  // Scalar SubqueryExpr: compare the underlying plans.
+  if (left.isSubquery()) {
+    return isSameComputation(
+        *left.as<lp::SubqueryExpr>()->subquery(),
+        *right.as<lp::SubqueryExpr>()->subquery());
+  }
+
+  // SpecialFormExpr (IN, EXISTS): compare form, then compare inputs
+  // recursively. For IN, inputs are [leftKey, SubqueryExpr]. For EXISTS,
+  // inputs are [SubqueryExpr]. The leftKey comparison uses empty ordinal maps
+  // since IN left keys are outer-scope references (same names in both).
+  if (left.isSpecialForm()) {
+    if (left.as<lp::SpecialFormExpr>()->form() !=
+        right.as<lp::SpecialFormExpr>()->form()) {
+      return false;
+    }
+    if (left.inputs().size() != right.inputs().size()) {
+      return false;
+    }
+    for (size_t i = 0; i < left.inputs().size(); ++i) {
+      const auto& leftInput = *left.inputs()[i];
+      const auto& rightInput = *right.inputs()[i];
+      if (leftInput.isSubquery()) {
+        if (!isSameComputation(
+                *leftInput.as<lp::SubqueryExpr>()->subquery(),
+                *rightInput.as<lp::SubqueryExpr>()->subquery())) {
+          return false;
+        }
+      } else {
+        // For non-subquery inputs (e.g., IN left key), use name-based
+        // comparison since they reference outer-scope columns (same names).
+        if (leftInput != rightInput) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  return false;
+}
+
+// Recursively remaps InputReferenceExpr names in an expression tree. Used when
+// merging aggregate expressions from different subquery plans that reference
+// the same data through different column names.
+lp::ExprPtr remapInputNames(
+    const lp::ExprPtr& expr,
+    const folly::F14FastMap<std::string, std::string>& nameMapping) {
+  if (!expr) {
+    return nullptr;
+  }
+
+  if (expr->isInputReference()) {
+    const auto& name = expr->as<lp::InputReferenceExpr>()->name();
+    auto it = nameMapping.find(name);
+    return std::make_shared<lp::InputReferenceExpr>(
+        expr->type(), it != nameMapping.end() ? it->second : name);
+  }
+
+  if (expr->isConstant()) {
+    return expr;
+  }
+
+  // Recurse into inputs.
+  std::vector<lp::ExprPtr> remappedInputs;
+  remappedInputs.reserve(expr->inputs().size());
+  bool changed = false;
+  for (const auto& input : expr->inputs()) {
+    auto remapped = remapInputNames(input, nameMapping);
+    changed |= (remapped != input);
+    remappedInputs.push_back(std::move(remapped));
+  }
+
+  if (!changed) {
+    return expr;
+  }
+
+  if (expr->isCall()) {
+    return std::make_shared<lp::CallExpr>(
+        expr->type(),
+        expr->as<lp::CallExpr>()->name(),
+        std::move(remappedInputs));
+  }
+
+  if (expr->isSpecialForm()) {
+    return std::make_shared<lp::SpecialFormExpr>(
+        expr->type(),
+        expr->as<lp::SpecialFormExpr>()->form(),
+        std::move(remappedInputs));
+  }
+
+  VELOX_UNREACHABLE(
+      "Unexpected expression kind in aggregate input: {}",
+      lp::ExprKindName::toName(expr->kind()));
+}
+
+// Remaps InputReferenceExpr names in an AggregateExpr, including nested
+// expressions in inputs, filter, and ordering.
+lp::AggregateExprPtr remapAggregateInputNames(
+    const lp::AggregateExpr& agg,
+    const folly::F14FastMap<std::string, std::string>& nameMapping) {
+  std::vector<lp::ExprPtr> remappedInputs;
+  remappedInputs.reserve(agg.inputs().size());
+  for (const auto& input : agg.inputs()) {
+    remappedInputs.push_back(remapInputNames(input, nameMapping));
+  }
+
+  auto remappedFilter = remapInputNames(agg.filter(), nameMapping);
+
+  std::vector<lp::SortingField> remappedOrdering;
+  remappedOrdering.reserve(agg.ordering().size());
+  for (const auto& field : agg.ordering()) {
+    remappedOrdering.push_back(
+        {remapInputNames(field.expression, nameMapping), field.order});
+  }
+
+  return std::make_shared<lp::AggregateExpr>(
+      agg.type(),
+      agg.name(),
+      std::move(remappedInputs),
+      std::move(remappedFilter),
+      std::move(remappedOrdering),
+      agg.isDistinct());
+}
+
+// Builds a merged LogicalPlanNode for a group of scalar subqueries that share
+// the same merge key (same subtree below the top-level aggregate/project).
+// Returns a new SubqueryExpr wrapping an AggregateNode with combined aggregates
+// and a vector mapping each original subquery index to its aggregate output
+// index in the merged node (relative to the first aggregate, after grouping
+// keys).
+std::pair<lp::SubqueryExprPtr, std::vector<size_t>> buildMergedPlan(
+    const std::vector<lp::SubqueryExprPtr>& group) {
+  VELOX_CHECK_GE(group.size(), 2);
+
+  // All top-level nodes must be AggregateNodes (merge for ProjectNodes is a
+  // future extension).
+  const auto* representative = group[0]->subquery()->as<lp::AggregateNode>();
+  VELOX_CHECK_NOT_NULL(representative);
+
+  // Collect combined aggregates and output names from all group members.
+  auto groupingKeys = representative->groupingKeys();
+  auto groupingSets = representative->groupingSets();
+  const auto& representativeChild = *representative->inputs()[0];
+
+  std::vector<lp::AggregateExprPtr> mergedAggregates;
+  std::vector<std::string> mergedOutputNames;
+  std::vector<size_t> outputIndices;
+
+  // Add grouping key output names from the representative.
+  for (size_t i = 0; i < groupingKeys.size(); ++i) {
+    mergedOutputNames.push_back(representative->outputNames()[i]);
+  }
+
+  // Add aggregates from each group member. Non-representative members need
+  // their InputReferenceExpr names remapped to the representative child's
+  // column names (they share the same structure by position but have different
+  // planner-generated name suffixes).
+  for (size_t groupIdx = 0; groupIdx < group.size(); ++groupIdx) {
+    const auto* aggNode = group[groupIdx]->subquery()->as<lp::AggregateNode>();
+    VELOX_CHECK_NOT_NULL(aggNode);
+
+    outputIndices.push_back(mergedAggregates.size());
+
+    // Build name mapping from this member's child output names to the
+    // representative's child output names (by position).
+    folly::F14FastMap<std::string, std::string> nameMapping;
+    if (groupIdx > 0) {
+      const auto& memberChild = *aggNode->inputs()[0];
+      const auto& repType = *representativeChild.outputType();
+      const auto& memType = *memberChild.outputType();
+      VELOX_CHECK_EQ(repType.size(), memType.size());
+      for (size_t i = 0; i < repType.size(); ++i) {
+        if (repType.nameOf(i) != memType.nameOf(i)) {
+          nameMapping[memType.nameOf(i)] = repType.nameOf(i);
+        }
+      }
+    }
+
+    for (size_t i = 0; i < aggNode->aggregates().size(); ++i) {
+      if (nameMapping.empty()) {
+        // Representative or no name differences — use as-is.
+        mergedAggregates.push_back(aggNode->aggregates()[i]);
+      } else {
+        // Remap input references to use the representative's column names.
+        mergedAggregates.push_back(
+            remapAggregateInputNames(*aggNode->aggregates()[i], nameMapping));
+      }
+
+      // Use a unique output name to avoid collisions between subqueries.
+      auto outputName =
+          aggNode->outputNames()[aggNode->groupingKeys().size() + i];
+      // Append group index suffix for non-representative members to ensure
+      // uniqueness.
+      if (groupIdx > 0) {
+        outputName += "_m" + std::to_string(groupIdx);
+      }
+      mergedOutputNames.push_back(std::move(outputName));
+    }
+  }
+
+  // Create merged AggregateNode reusing the representative's child.
+  auto mergedNode = std::make_shared<lp::AggregateNode>(
+      representative->id() + "_merged",
+      representative->inputs()[0],
+      std::move(groupingKeys),
+      std::move(groupingSets),
+      std::move(mergedAggregates),
+      std::move(mergedOutputNames));
+
+  return {
+      std::make_shared<lp::SubqueryExpr>(std::move(mergedNode)),
+      std::move(outputIndices),
+  };
+}
+
 } // namespace
+
+void ToGraph::registerAllChannelsAsUsed(const lp::LogicalPlanNode& node) {
+  auto& fields = controlSubfields_.nodeFields[&node];
+  for (int32_t i = 0; i < static_cast<int32_t>(node.outputType()->size());
+       ++i) {
+    fields.resultPaths.try_emplace(i);
+  }
+  for (const auto& child : node.inputs()) {
+    registerAllChannelsAsUsed(*child);
+  }
+}
+
+namespace {
+// Collects all subquery expressions (scalar, IN, EXISTS) from an expression
+// tree into a single list.
+void collectSubqueryExprs(
+    const lp::ExprPtr& expr,
+    std::vector<lp::ExprPtr>& result) {
+  if (!expr) {
+    return;
+  }
+  if (expr->isSubquery()) {
+    result.push_back(expr);
+    return;
+  }
+  if (expr->isSpecialForm()) {
+    const auto* specialForm = expr->as<lp::SpecialFormExpr>();
+    if (specialForm->form() == lp::SpecialForm::kExists) {
+      result.push_back(expr);
+      return;
+    }
+    if (specialForm->form() == lp::SpecialForm::kIn &&
+        specialForm->inputs().size() == 2 &&
+        specialForm->inputAt(1)->isSubquery()) {
+      result.push_back(expr);
+      return;
+    }
+  }
+  for (const auto& input : expr->inputs()) {
+    collectSubqueryExprs(input, result);
+  }
+}
+
+// Collects all subquery expressions from a logical plan tree.
+void collectAllSubqueries(
+    const lp::LogicalPlanNode& node,
+    std::vector<lp::ExprPtr>& result) {
+  auto visitExpr = [&](const lp::ExprPtr& expr) {
+    collectSubqueryExprs(expr, result);
+  };
+
+  if (node.kind() == lp::NodeKind::kProject) {
+    for (const auto& expr : node.as<lp::ProjectNode>()->expressions()) {
+      visitExpr(expr);
+    }
+  } else if (node.kind() == lp::NodeKind::kFilter) {
+    visitExpr(node.as<lp::FilterNode>()->predicate());
+  } else if (node.kind() == lp::NodeKind::kAggregate) {
+    const auto* agg = node.as<lp::AggregateNode>();
+    for (const auto& key : agg->groupingKeys()) {
+      visitExpr(key);
+    }
+    for (const auto& aggregate : agg->aggregates()) {
+      for (const auto& input : aggregate->inputs()) {
+        visitExpr(input);
+      }
+      visitExpr(aggregate->filter());
+    }
+  }
+
+  // Recurse into child nodes, but NOT into subquery plans (independent plan
+  // trees) or set operation branches (each branch has its own scope).
+  if (node.kind() == lp::NodeKind::kSet) {
+    return;
+  }
+  for (const auto& child : node.inputs()) {
+    collectAllSubqueries(*child, result);
+  }
+}
+} // namespace
+
+void ToGraph::buildSubqueryMap(const lp::LogicalPlanNode& root) {
+  // Handle set operation nodes (UNION, INTERSECT, etc.) by recursing into
+  // each branch independently — each branch has its own scope.
+  if (root.kind() == lp::NodeKind::kSet) {
+    for (const auto& child : root.inputs()) {
+      buildSubqueryMap(*child);
+    }
+    return;
+  }
+
+  std::vector<lp::ExprPtr> allSubqueries;
+  collectAllSubqueries(root, allSubqueries);
+
+  // Dedup all subquery types using a single comparison function.
+  for (size_t i = 0; i < allSubqueries.size(); ++i) {
+    if (subqueryMap_.contains(allSubqueries[i])) {
+      continue;
+    }
+    for (size_t j = i + 1; j < allSubqueries.size(); ++j) {
+      if (subqueryMap_.contains(allSubqueries[j])) {
+        continue;
+      }
+      if (subqueryExprEquivalent(*allSubqueries[i], *allSubqueries[j])) {
+        subqueryMap_[allSubqueries[j]] = {allSubqueries[i], 0};
+      }
+    }
+  }
+
+  // Merge: group non-identical scalar subqueries by merge key. Only considers
+  // subqueries not already mapped as duplicates.
+  std::vector<std::vector<size_t>> mergeGroups;
+  for (size_t i = 0; i < allSubqueries.size(); ++i) {
+    if (subqueryMap_.contains(allSubqueries[i])) {
+      continue;
+    }
+    if (!allSubqueries[i]->isSubquery()) {
+      continue;
+    }
+    const auto* subqueryPlan =
+        allSubqueries[i]->as<lp::SubqueryExpr>()->subquery().get();
+    if (subqueryPlan->kind() != lp::NodeKind::kAggregate) {
+      continue;
+    }
+
+    // Skip uncorrelated global aggregations over a bare scan (typically
+    // constant-foldable).
+    const auto* aggNode = subqueryPlan->as<lp::AggregateNode>();
+    if (aggNode->groupingKeys().empty() &&
+        aggNode->inputs()[0]->kind() == lp::NodeKind::kTableScan) {
+      continue;
+    }
+
+    bool found = false;
+    for (auto& group : mergeGroups) {
+      if (isSameMergeKey(
+              *allSubqueries[group[0]]->as<lp::SubqueryExpr>()->subquery(),
+              *subqueryPlan)) {
+        group.push_back(i);
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      mergeGroups.push_back({i});
+    }
+  }
+
+  // Build merged plans for groups with >1 member.
+  for (const auto& group : mergeGroups) {
+    if (group.size() < 2) {
+      continue;
+    }
+
+    std::vector<lp::SubqueryExprPtr> groupExprs;
+    groupExprs.reserve(group.size());
+    for (auto idx : group) {
+      groupExprs.push_back(
+          std::static_pointer_cast<const lp::SubqueryExpr>(allSubqueries[idx]));
+    }
+
+    auto [mergedExpr, outputIndices] = buildMergedPlan(groupExprs);
+
+    // Register merged node in subfield tracker.
+    registerAllChannelsAsUsed(*mergedExpr->subquery());
+
+    for (size_t i = 0; i < groupExprs.size(); ++i) {
+      subqueryMap_[groupExprs[i]] = {mergedExpr, outputIndices[i]};
+    }
+  }
+}
 
 DerivedTableP ToGraph::translateSubquery(
     const logical_plan::LogicalPlanNode& node,
@@ -2672,8 +3433,95 @@ void ToGraph::processSubqueries(
     const lp::LogicalPlanNode& input,
     const lp::ExprPtr& expr,
     bool& mayFinalize) {
+  processSubqueries(input, std::vector<lp::ExprPtr>{expr}, mayFinalize);
+}
+
+void ToGraph::processSubqueries(
+    const lp::LogicalPlanNode& input,
+    const std::vector<lp::ExprPtr>& exprs,
+    bool& mayFinalize) {
   Subqueries subqueries;
-  extractSubqueries(expr, subqueries);
+  for (const auto& expr : exprs) {
+    extractSubqueries(expr, subqueries);
+  }
+
+  if (subqueries.empty()) {
+    return;
+  }
+
+  // Cross-call dedup: remove subqueries already in subqueries_ (same ExprPtr
+  // from a prior processSubqueries call, or stored by the subqueryMap_
+  // integration below). Collect them so we can rewrite their stale entries if
+  // finalizeDt wraps the current DT.
+  std::vector<lp::ExprPtr> alreadyProcessed;
+  auto removeProcessed = [&](auto& exprs) {
+    std::erase_if(exprs, [&](const auto& exprPtr) {
+      if (subqueries_.contains(exprPtr)) {
+        alreadyProcessed.push_back(exprPtr);
+        return true;
+      }
+      return false;
+    });
+  };
+  removeProcessed(subqueries.scalars);
+  removeProcessed(subqueries.inPredicates);
+  removeProcessed(subqueries.exists);
+
+  // Apply pre-computed subqueryMap_: replace originals with their
+  // representatives (for both dedup and merge). The map is built by
+  // buildSubqueryMap() before makeQueryGraph().
+  folly::F14FastSet<lp::ExprPtr> mergedRepresentatives;
+  {
+    auto applyMap = [&](auto& exprs) {
+      folly::F14FastSet<lp::ExprPtr> replaced;
+      for (const auto& expr : exprs) {
+        auto it = subqueryMap_.find(expr);
+        if (it != subqueryMap_.end()) {
+          replaced.insert(expr);
+          mergedRepresentatives.insert(it->second.representative);
+        }
+      }
+      if (!replaced.empty()) {
+        std::erase_if(
+            exprs, [&](const auto& s) { return replaced.contains(s); });
+      }
+    };
+    applyMap(subqueries.scalars);
+    applyMap(subqueries.inPredicates);
+    applyMap(subqueries.exists);
+
+    // Add representatives that haven't been processed yet and aren't already
+    // in the work list. For dedup, the representative is an original ExprPtr
+    // that may already be in the list. For merge, the representative is a
+    // synthetic node that's never in the list.
+    auto containsExpr = [](const auto& exprs, const lp::ExprPtr& target) {
+      return std::any_of(exprs.begin(), exprs.end(), [&](const auto& e) {
+        return static_cast<lp::ExprPtr>(e) == target;
+      });
+    };
+    for (const auto& repr : mergedRepresentatives) {
+      if (subqueries_.contains(repr)) {
+        continue;
+      }
+      if (repr->isSubquery()) {
+        if (!containsExpr(subqueries.scalars, repr)) {
+          subqueries.scalars.push_back(
+              std::static_pointer_cast<const lp::SubqueryExpr>(repr));
+        }
+      } else if (repr->isSpecialForm()) {
+        const auto* sf = repr->as<lp::SpecialFormExpr>();
+        if (sf->form() == lp::SpecialForm::kExists) {
+          if (!containsExpr(subqueries.exists, repr)) {
+            subqueries.exists.push_back(repr);
+          }
+        } else {
+          if (!containsExpr(subqueries.inPredicates, repr)) {
+            subqueries.inPredicates.push_back(repr);
+          }
+        }
+      }
+    }
+  }
 
   if (subqueries.empty()) {
     return;
@@ -2687,7 +3535,14 @@ void ToGraph::processSubqueries(
       // scalar subquery results) that belong to the current DT. If a new
       // subquery references such a column as a join key, it would create a
       // self-referencing join edge. Wrapping the current DT avoids this.
+      auto* wrappedDt = currentDt_;
       finalizeDt(input);
+
+      // Rewrite stale entries for cross-call duplicates through the wrapped DT.
+      // Same pattern as finalizeDtWithCorrelatedConjuncts.
+      for (const auto& exprPtr : alreadyProcessed) {
+        subqueries_[exprPtr] = wrappedDt->exportExpr(subqueries_[exprPtr]);
+      }
     } else if (currentDt_->hasAggregation()) {
       // Scalar subqueries are placed as joins. Joins cannot be added after
       // aggregation.
@@ -2713,39 +3568,69 @@ void ToGraph::processScalarSubqueries(
   for (const auto& subquery : scalars) {
     auto subqueryDt = translateSubquery(*subquery->subquery());
 
-    ExprCP column;
+    std::vector<ExprCP> columns;
     if (correlatedConjuncts_.empty()) {
-      column = processUncorrelatedScalarSubquery(subqueryDt);
+      columns = processUncorrelatedScalarSubquery(subqueryDt);
     } else {
-      column = processCorrelatedScalarSubquery(input, subqueryDt);
+      columns = processCorrelatedScalarSubquery(input, subqueryDt);
     }
-    subqueries_.emplace(subquery, column);
+
+    // Store result for all originals in subqueryMap_ that map to this
+    // representative (for both dedup and merge).
+    bool isRepresentative = false;
+    for (const auto& [original, entry] : subqueryMap_) {
+      if (entry.representative == subquery) {
+        isRepresentative = true;
+        VELOX_CHECK_LT(entry.outputIndex, columns.size());
+        subqueries_.emplace(original, columns[entry.outputIndex]);
+      }
+    }
+
+    if (isRepresentative) {
+      // Also store the representative's own result. For dedup, the
+      // representative is an original that also needs to be in subqueries_.
+      // For merge, the representative is synthetic and not looked up directly,
+      // but storing it is harmless.
+      VELOX_CHECK_GE(columns.size(), 1);
+      subqueries_.emplace(subquery, columns.front());
+    } else {
+      VELOX_CHECK_EQ(columns.size(), 1);
+      subqueries_.emplace(subquery, columns.front());
+    }
   }
 }
 
-ExprCP ToGraph::processUncorrelatedScalarSubquery(DerivedTableP subqueryDt) {
-  VELOX_CHECK_EQ(1, subqueryDt->columns.size());
+std::vector<ExprCP> ToGraph::processUncorrelatedScalarSubquery(
+    DerivedTableP subqueryDt) {
+  if (subqueryDt->columns.size() == 1) {
+    if (auto valuesNode = tryFoldConstantDt(subqueryDt, evaluator_.pool())) {
+      VELOX_CHECK_EQ(1, valuesNode->outputType()->size());
+      if (valuesNode->cardinality() == 1) {
+        // Replace subquery with a constant value.
+        const auto value =
+            std::get<std::vector<velox::RowVectorPtr>>(valuesNode->data())
+                .front()
+                ->childAt(0)
+                ->variantAt(0);
+        const auto* literal = make<Literal>(
+            toConstantValue(valuesNode->outputType()->childAt(0)),
+            registerVariant(value));
 
-  if (auto valuesNode = tryFoldConstantDt(subqueryDt, evaluator_.pool())) {
-    VELOX_CHECK_EQ(1, valuesNode->outputType()->size());
-    if (valuesNode->cardinality() == 1) {
-      // Replace subquery with a constant value.
-      const auto value =
-          std::get<std::vector<velox::RowVectorPtr>>(valuesNode->data())
-              .front()
-              ->childAt(0)
-              ->variantAt(0);
-      const auto* literal = make<Literal>(
-          toConstantValue(valuesNode->outputType()->childAt(0)),
-          registerVariant(value));
-
-      currentDt_->removeLastTable(subqueryDt);
-      return literal;
+        currentDt_->removeLastTable(subqueryDt);
+        return {literal};
+      }
     }
   }
 
   subqueryDt->ensureSingleRow();
-  return subqueryDt->columns.front();
+
+  // Return all columns (one per aggregate for merged subqueries).
+  std::vector<ExprCP> results;
+  results.reserve(subqueryDt->columns.size());
+  for (auto* column : subqueryDt->columns) {
+    results.push_back(column);
+  }
+  return results;
 }
 
 namespace {
@@ -2762,7 +3647,7 @@ Literal* tryMakeLiteralForEmptyInput(AggregateCP agg) {
 }
 } // namespace
 
-ExprCP ToGraph::processCorrelatedScalarSubquery(
+std::vector<ExprCP> ToGraph::processCorrelatedScalarSubquery(
     const lp::LogicalPlanNode& input,
     DerivedTableP subqueryDt) {
   auto correlation =
@@ -2775,8 +3660,9 @@ ExprCP ToGraph::processCorrelatedScalarSubquery(
     VELOX_CHECK_EQ(1, subqueryDt->columns.size());
   } else if (hasAggregation) {
     // For equi-only correlation with aggregation, expect grouping keys +
-    // aggregate result.
-    VELOX_CHECK_EQ(correlatedConjuncts_.size() + 1, subqueryDt->columns.size());
+    // aggregate result(s). A merged subquery may have multiple aggregate
+    // results.
+    VELOX_CHECK_GE(subqueryDt->columns.size(), correlatedConjuncts_.size() + 1);
   } else {
     // For equi-only correlation without aggregation, expect only 1 column (the
     // subquery result).
@@ -2797,21 +3683,32 @@ ExprCP ToGraph::processCorrelatedScalarSubquery(
 
     currentDt_->joins.push_back(join);
 
-    auto* aggregateResult = subqueryDt->columns.back();
+    // Build result columns for each aggregate output. Aggregate columns start
+    // after the grouping key columns.
+    const auto numGroupingKeys = correlation.leftKeys.size();
+    const auto numAggregates = subqueryDt->columns.size() - numGroupingKeys;
+    std::vector<ExprCP> results;
+    results.reserve(numAggregates);
 
-    auto* agg = subqueryDt->aggregation->aggregates().back();
-    if (auto* literal = tryMakeLiteralForEmptyInput(agg)) {
-      // Wrap with COALESCE for aggregates that return non-NULL for empty input.
-      // LEFT JOIN returns NULL for outer rows with no matches, but count-like
-      // aggregates should return 0 (or similar default) instead.
-      return make<Call>(
-          SpecialFormCallNames::kCoalesce,
-          aggregateResult->value(),
-          ExprVector{aggregateResult, literal},
-          FunctionSet());
+    for (size_t i = 0; i < numAggregates; ++i) {
+      auto* aggregateResult = subqueryDt->columns[numGroupingKeys + i];
+      auto* agg = subqueryDt->aggregation->aggregates()[i];
+      if (auto* literal = tryMakeLiteralForEmptyInput(agg)) {
+        // Wrap with COALESCE for aggregates that return non-NULL for empty
+        // input. LEFT JOIN returns NULL for outer rows with no matches, but
+        // count-like aggregates should return 0 (or similar default) instead.
+        results.push_back(
+            make<Call>(
+                SpecialFormCallNames::kCoalesce,
+                aggregateResult->value(),
+                ExprVector{aggregateResult, literal},
+                FunctionSet()));
+      } else {
+        results.push_back(aggregateResult);
+      }
     }
 
-    return aggregateResult;
+    return results;
   }
 
   if (!hasAggregation) {
@@ -2848,7 +3745,7 @@ ExprCP ToGraph::processCorrelatedScalarSubquery(
     // The first column is the subquery's original output (the SELECT
     // expression). Subsequent columns are correlation keys added via
     // exportExpr.
-    return subqueryDt->columns.front();
+    return {subqueryDt->columns.front()};
   }
 
   // Non-equi correlation with aggregation: use AssignUniqueId + LEFT JOIN +
@@ -2890,7 +3787,7 @@ ExprCP ToGraph::processCorrelatedScalarSubquery(
   currentDt_->aggregation = make<AggregationPlan>(
       ExprVector{rowNumberColumn}, allAggregates, allColumns, allColumns);
 
-  return aggResultColumn;
+  return {aggResultColumn};
 }
 
 void ToGraph::processInPredicates(
@@ -2919,6 +3816,13 @@ void ToGraph::processInPredicates(
           subqueryDt, markColumn, leftKey, leftTable);
     }
     subqueries_.emplace(predicate, column);
+
+    // Store result for all duplicates of this IN predicate.
+    for (const auto& [original, entry] : subqueryMap_) {
+      if (entry.representative == predicate) {
+        subqueries_.emplace(original, column);
+      }
+    }
   }
 }
 
@@ -3030,6 +3934,12 @@ void ToGraph::processExistsSubqueries(const std::vector<lp::ExprPtr>& exists) {
             FunctionSet());
       }
       subqueries_.emplace(existsExpr, result);
+      // Store result for all duplicates of this EXISTS.
+      for (const auto& [original, entry] : subqueryMap_) {
+        if (entry.representative == existsExpr) {
+          subqueries_.emplace(original, result);
+        }
+      }
       continue;
     }
 
@@ -3040,6 +3950,12 @@ void ToGraph::processExistsSubqueries(const std::vector<lp::ExprPtr>& exists) {
       column = processCorrelatedExists(subqueryDt);
     }
     subqueries_.emplace(existsExpr, column);
+    // Store result for all duplicates of this EXISTS.
+    for (const auto& [original, entry] : subqueryMap_) {
+      if (entry.representative == existsExpr) {
+        subqueries_.emplace(original, column);
+      }
+    }
   }
 }
 
@@ -3562,6 +4478,7 @@ DerivedTableP ToGraph::makeQueryGraph(const lp::LogicalPlanNode& logicalPlan) {
       SubfieldTracker([&](const auto& expr) {
         return tryFoldConstant(expr);
       }).markAll(logicalPlan);
+  buildSubqueryMap(logicalPlan);
   currentDt_ = newDt();
   makeQueryGraph(logicalPlan, kAllAllowedInDt);
   setDtUsedOutput(currentDt_, logicalPlan);
