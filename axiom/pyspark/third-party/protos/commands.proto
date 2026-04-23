@@ -1,0 +1,176 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+syntax = 'proto3';
+
+import "google/protobuf/any.proto";
+import "axiom/pyspark/third-party/protos/expressions.proto";
+import "axiom/pyspark/third-party/protos/relations.proto";
+
+package spark.connect;
+
+option java_multiple_files = true;
+option java_package = "org.apache.spark.connect.proto";
+
+// A [[Command]] is an operation that is executed by the server that does not directly consume or
+// produce a relational result.
+message Command {
+  oneof command_type {
+    CommonInlineUserDefinedFunction register_function = 1;
+    WriteOperation write_operation = 2;
+    CreateDataFrameViewCommand create_dataframe_view = 3;
+    WriteOperationV2 write_operation_v2 = 4;
+    SqlCommand sql_command = 5;
+
+    // This field is used to mark extensions to the protocol. When plugins generate arbitrary
+    // Commands they can add them here. During the planning the correct resolution is done.
+    google.protobuf.Any extension = 999;
+
+  }
+}
+
+// A SQL Command is used to trigger the eager evaluation of SQL commands in Spark.
+//
+// When the SQL provide as part of the message is a command it will be immediately evaluated
+// and the result will be collected and returned as part of a LocalRelation. If the result is
+// not a command, the operation will simply return a SQL Relation. This allows the client to be
+// almost oblivious to the server-side behavior.
+message SqlCommand {
+  // (Required) SQL Query.
+  string sql = 1;
+
+  // (Optional) A map of parameter names to literal expressions.
+  map<string, Expression.Literal> args = 2;
+}
+
+// A command that can create DataFrame global temp view or local temp view.
+message CreateDataFrameViewCommand {
+  // (Required) The relation that this view will be built on.
+  Relation input = 1;
+
+  // (Required) View name.
+  string name = 2;
+
+  // (Required) Whether this is global temp view or local temp view.
+  bool is_global = 3;
+
+  // (Required)
+  //
+  // If true, and if the view already exists, updates it; if false, and if the view
+  // already exists, throws exception.
+  bool replace = 4;
+}
+
+// As writes are not directly handled during analysis and planning, they are modeled as commands.
+message WriteOperation {
+  // (Required) The output of the `input` relation will be persisted according to the options.
+  Relation input = 1;
+
+  // (Optional) Format value according to the Spark documentation. Examples are: text, parquet, delta.
+  optional string source = 2;
+
+  // (Optional)
+  //
+  // The destination of the write operation can be either a path or a table.
+  // If the destination is neither a path nor a table, such as jdbc and noop,
+  // the `save_type` should not be set.
+  oneof save_type {
+    string path = 3;
+    SaveTable table = 4;
+  }
+
+  // (Required) the save mode.
+  SaveMode mode = 5;
+
+  // (Optional) List of columns to sort the output by.
+  repeated string sort_column_names = 6;
+
+  // (Optional) List of columns for partitioning.
+  repeated string partitioning_columns = 7;
+
+  // (Optional) Bucketing specification. Bucketing must set the number of buckets and the columns
+  // to bucket by.
+  BucketBy bucket_by = 8;
+
+  // (Optional) A list of configuration options.
+  map<string, string> options = 9;
+
+  message SaveTable {
+    // (Required) The table name.
+    string table_name = 1;
+    // (Required) The method to be called to write to the table.
+    TableSaveMethod save_method = 2;
+
+    enum TableSaveMethod {
+      TABLE_SAVE_METHOD_UNSPECIFIED = 0;
+      TABLE_SAVE_METHOD_SAVE_AS_TABLE = 1;
+      TABLE_SAVE_METHOD_INSERT_INTO = 2;
+    }
+  }
+
+  message BucketBy {
+    repeated string bucket_column_names = 1;
+    int32 num_buckets = 2;
+  }
+
+  enum SaveMode {
+    SAVE_MODE_UNSPECIFIED = 0;
+    SAVE_MODE_APPEND = 1;
+    SAVE_MODE_OVERWRITE = 2;
+    SAVE_MODE_ERROR_IF_EXISTS = 3;
+    SAVE_MODE_IGNORE = 4;
+  }
+}
+
+// As writes are not directly handled during analysis and planning, they are modeled as commands.
+message WriteOperationV2 {
+  // (Required) The output of the `input` relation will be persisted according to the options.
+  Relation input = 1;
+
+  // (Required) The destination of the write operation must be either a path or a table.
+  string table_name = 2;
+
+  // (Optional) A provider for the underlying output data source. Spark's default catalog supports
+  // "parquet", "json", etc.
+  optional string provider = 3;
+
+  // (Optional) List of columns for partitioning for output table created by `create`,
+  // `createOrReplace`, or `replace`
+  repeated Expression partitioning_columns = 4;
+
+  // (Optional) A list of configuration options.
+  map<string, string> options = 5;
+
+  // (Optional) A list of table properties.
+  map<string, string> table_properties = 6;
+
+  // (Required) Write mode.
+  Mode mode = 7;
+
+  enum Mode {
+    MODE_UNSPECIFIED = 0;
+    MODE_CREATE = 1;
+    MODE_OVERWRITE = 2;
+    MODE_OVERWRITE_PARTITIONS = 3;
+    MODE_APPEND = 4;
+    MODE_REPLACE = 5;
+    MODE_CREATE_OR_REPLACE = 6;
+  }
+
+  // (Optional) A condition for overwrite saving mode
+  Expression overwrite_condition = 8;
+}

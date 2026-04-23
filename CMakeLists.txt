@@ -50,6 +50,7 @@ set(VELOX_BUILD_TESTING OFF)
 set(VELOX_DEPENDENCY_SOURCE AUTO CACHE STRING "Default dependency source: AUTO SYSTEM or BUNDLED.")
 
 option(AXIOM_ENABLE_CCACHE "Use ccache if installed." ON)
+option(AXIOM_ENABLE_COLLAGEN "Build Collagen (Spark Connect server)." OFF)
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
@@ -160,6 +161,18 @@ velox_resolve_dependency(antlr4-runtime)
 
 message(STATUS "Using ANTLR4 runtime from ${ANTLR4_INCLUDE_DIR}")
 
+# Dependencies for the PySpark/Collagen server.
+if(AXIOM_ENABLE_COLLAGEN)
+  velox_set_source(protobuf)
+  velox_resolve_dependency(protobuf)
+
+  velox_set_source(gRPC)
+  velox_resolve_dependency(gRPC)
+
+  velox_set_source(Arrow)
+  velox_resolve_dependency(Arrow)
+endif()
+
 # Use xxhash and xsimd from Velox for now.
 include_directories(.)
 include_directories(${CMAKE_BINARY_DIR})
@@ -181,6 +194,9 @@ add_subdirectory(axiom/runner)
 add_subdirectory(axiom/connectors)
 add_subdirectory(axiom/optimizer)
 add_subdirectory(axiom/cli)
+if(AXIOM_ENABLE_COLLAGEN)
+  add_subdirectory(axiom/pyspark)
+endif()
 
 add_library(axiom_mono INTERFACE)
 add_library(Axiom::axiom ALIAS axiom_mono)
@@ -189,3 +205,7 @@ target_link_libraries(
   axiom_mono
   INTERFACE axiom_connector_metadata axiom_optimizer axiom_runner_local_runner
 )
+
+if(AXIOM_ENABLE_COLLAGEN)
+  target_link_libraries(axiom_mono INTERFACE collagen_service)
+endif()
