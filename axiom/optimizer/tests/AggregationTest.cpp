@@ -215,14 +215,12 @@ TEST_F(AggregationTest, orderBy) {
           .tableScan("t")
           .aggregate({"k"}, {"array_agg(v1 ORDER BY v2)", "sum(v1)"})
           .build();
-  auto matcher =
-      core::PlanMatcherBuilder()
-          .tableScan()
-          .shuffle()
-          .localPartition()
-          .singleAggregation({"k"}, {"array_agg(v1 ORDER BY v2)", "sum(v1)"})
-          .shuffle()
-          .build();
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .distributedSingleAggregation(
+                         {"k"}, {"array_agg(v1 ORDER BY v2)", "sum(v1)"})
+                     .shuffle()
+                     .build();
 
   for (auto i = 0; i < 2; ++i) {
     OptimizerOptions option;
@@ -269,8 +267,9 @@ TEST_F(AggregationTest, repartitionForAggPartitionSubset) {
     testConnector_->dropTableIfExists("t");
   };
 
-  // Test current partitionKeys ⊆ required groupingKeys --> no shuffle needed.
   {
+    SCOPED_TRACE(
+        "partitionKeys is a subset of groupingKeys, no shuffle needed");
     auto logicalPlan = lp::PlanBuilder(makeContext())
                            .tableScan("t")
                            .aggregate({"a", "b"}, {})
@@ -284,9 +283,7 @@ TEST_F(AggregationTest, repartitionForAggPartitionSubset) {
     // because partitionKeys [a, b] ⊆ groupingKeys [a, b, d].
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
-                       .shuffle()
-                       .localPartition()
-                       .singleAggregation({"a", "b"}, {})
+                       .distributedSingleAggregation({"a", "b"}, {})
                        .project()
                        // No shuffle here - partitionKeys ⊆ groupingKeys
                        .localPartition()
@@ -296,8 +293,9 @@ TEST_F(AggregationTest, repartitionForAggPartitionSubset) {
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
   }
 
-  // Test current partitionKeys ⊄ required groupingKeys --> shuffle is needed.
   {
+    SCOPED_TRACE(
+        "partitionKeys is not a subset of groupingKeys, shuffle needed");
     auto logicalPlan = lp::PlanBuilder(makeContext())
                            .tableScan("t")
                            .aggregate({"a", "b", "c"}, {})
@@ -310,18 +308,19 @@ TEST_F(AggregationTest, repartitionForAggPartitionSubset) {
     // [a, b].
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
-                       .shuffle()
-                       .localPartition()
-                       .singleAggregation({"a", "b", "c"}, {})
+                       .distributedSingleAggregation({"a", "b", "c"}, {})
                        .project()
-                       .shuffle()
-                       .localPartition()
-                       .singleAggregation({"a", "b"}, {})
+                       .distributedSingleAggregation({"a", "b"}, {})
                        .shuffle()
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
   }
 }
+
+// TODO: Add tests for maybeProject() cost tracking once Project::unitCost is
+// implemented (currently 0, see the TODO in Project::Project). The
+// optimizationCost() helper is available for verifying cost differences between
+// plans with and without projections.
 
 } // namespace
 } // namespace facebook::axiom::optimizer

@@ -155,9 +155,7 @@ TEST_F(HiveAggregationQueriesTest, orderBy) {
   auto distributedPlan = planVelox(logicalPlan);
   matcher = core::PlanMatcherBuilder()
                 .tableScan("nation")
-                .shuffle()
-                .localPartition()
-                .singleAggregation(
+                .distributedSingleAggregation(
                     {"n_regionkey"},
                     {"array_agg(n_nationkey ORDER BY n_nationkey DESC)",
                      "array_agg(n_name ORDER BY n_nationkey)"})

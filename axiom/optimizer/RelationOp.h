@@ -125,6 +125,7 @@ enum class RelType {
   kWindow,
   kRowNumber,
   kTopNRowNumber,
+  kMarkDistinct,
 };
 
 AXIOM_DECLARE_ENUM_NAME(RelType)
@@ -896,5 +897,33 @@ struct TopNRowNumber : public RelationOp {
 };
 
 using TopNRowNumberCP = const TopNRowNumber*;
+
+/// Marks unique rows based on distinct keys. Produces a boolean marker column
+/// that is true for the first row seen for each unique combination of distinct
+/// keys.
+struct MarkDistinct : public RelationOp {
+  /// @param input The input relation.
+  /// @param marker The output boolean column that marks distinct rows.
+  /// @param keys The columns that define distinctness.
+  MarkDistinct(RelationOpPtr input, ColumnCP marker, ExprVector keys);
+
+  ColumnCP marker() const {
+    return marker_;
+  }
+
+  const ExprVector& keys() const {
+    return keys_;
+  }
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
+
+ private:
+  ColumnCP const marker_;
+  const ExprVector keys_;
+};
+
+using MarkDistinctCP = const MarkDistinct*;
 
 } // namespace facebook::axiom::optimizer

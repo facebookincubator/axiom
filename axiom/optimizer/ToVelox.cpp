@@ -2012,6 +2012,41 @@ velox::core::PlanNodePtr ToVelox::makeEnforceDistinct(
   return node;
 }
 
+velox::core::PlanNodePtr ToVelox::makeMarkDistinct(
+    const MarkDistinct& op,
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
+  auto input = makeFragment(op.input(), fragment, stages);
+  if (options_.numDrivers > 1) {
+    // If the input is a repartition, always add a local partition after it. If
+    // the input is not a repartition, check if the input's distribution
+    // partition keys are a subset of MarkDistinct's keys. If so, rows with the
+    // same MarkDistinct keys are already co-located, so no need for an
+    // additional local partition.
+    bool needsLocalPartition = true;
+    if (op.input()->relType() != RelType::kRepartition) {
+      const auto& existingKeys = op.input()->distribution().partitionKeys();
+      if (!existingKeys.empty()) {
+        needsLocalPartition =
+            !PlanObjectSet::fromObjects(existingKeys)
+                 .isSubset(PlanObjectSet::fromObjects(op.keys()));
+      }
+    }
+    if (needsLocalPartition) {
+      input = addLocalPartition(nextId(), input, toFieldRefs(op.keys()));
+    }
+  }
+
+  auto node = std::make_shared<velox::core::MarkDistinctNode>(
+      nextId(),
+      op.marker()->outputName(),
+      toFieldRefs(op.keys()),
+      std::move(input));
+
+  makePredictionAndHistory(node->id(), &op);
+  return node;
+}
+
 void ToVelox::makePredictionAndHistory(
     const velox::core::PlanNodeId& id,
     const RelationOp* op) {
@@ -2065,6 +2100,8 @@ velox::core::PlanNodePtr ToVelox::makeFragment(
       return makeRowNumber(*op->as<RowNumber>(), fragment, stages);
     case RelType::kTopNRowNumber:
       return makeTopNRowNumber(*op->as<TopNRowNumber>(), fragment, stages);
+    case RelType::kMarkDistinct:
+      return makeMarkDistinct(*op->as<MarkDistinct>(), fragment, stages);
     default:
       VELOX_FAIL(
           "Unsupported RelationOp {}", static_cast<int32_t>(op->relType()));

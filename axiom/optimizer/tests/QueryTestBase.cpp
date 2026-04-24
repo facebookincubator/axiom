@@ -166,6 +166,33 @@ std::shared_ptr<core::QueryCtx>& QueryTestBase::getQueryCtx() {
   return queryCtx_;
 }
 
+PlanCost QueryTestBase::optimizationCost(
+    const logical_plan::LogicalPlanNodePtr& logicalPlan,
+    const MultiFragmentPlan::Options& options,
+    const std::optional<OptimizerOptions>& optimizerOptions) {
+  auto& queryCtx = getQueryCtx();
+  auto allocator = std::make_unique<HashStringAllocator>(optimizerPool_.get());
+  auto context = std::make_unique<optimizer::QueryGraphContext>(*allocator);
+  optimizer::queryCtx() = context.get();
+  SCOPE_EXIT {
+    optimizer::queryCtx() = nullptr;
+  };
+  exec::SimpleExpressionEvaluator evaluator(
+      queryCtx.get(), optimizerPool_.get());
+  auto session = std::make_shared<Session>(queryCtx->queryId());
+  connector::SchemaResolver schemaResolver;
+  Optimization opt(
+      session,
+      *logicalPlan,
+      schemaResolver,
+      *history_,
+      queryCtx,
+      evaluator,
+      optimizerOptions.value_or(optimizerOptions_),
+      options);
+  return opt.bestPlan()->cost;
+}
+
 void QueryTestBase::verifyOptimization(
     const logical_plan::LogicalPlanNode& logicalPlan,
     const std::function<void(Optimization&)>& callback,
