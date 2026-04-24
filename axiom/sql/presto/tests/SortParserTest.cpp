@@ -375,7 +375,7 @@ TEST_F(SortParserTest, outputAliasInExpression) {
       "SELECT a * 2 AS b FROM t ORDER BY b * -1",
       lp::test::LogicalPlanMatcherBuilder()
           .tableScan()
-          .project({"a * 2 as b", "a * 2 * negate(1) as sortFun"})
+          .project({"a * 2 as b", "a * 2 * -1 as sortFun"})
           .sort({"sortFun"})
           .project({"b"})
           .output({"b"}));
@@ -392,9 +392,7 @@ TEST_F(SortParserTest, outputAliasInExpression) {
       "SELECT a * -2 AS a FROM t ORDER BY a * -1",
       lp::test::LogicalPlanMatcherBuilder()
           .tableScan()
-          .project(
-              {"a * negate(2) as selectFun",
-               "a * negate(2) * negate(1) as sortFun"})
+          .project({"a * -2 as selectFun", "a * -2 * -1 as sortFun"})
           .sort({"sortFun"})
           .project({"selectFun"})
           .output({"a"}));
@@ -403,8 +401,7 @@ TEST_F(SortParserTest, outputAliasInExpression) {
       "SELECT a AS b, a * -2 AS c FROM t ORDER BY b + c",
       lp::test::LogicalPlanMatcherBuilder()
           .tableScan()
-          .project(
-              {"a as b", "a * negate(2) as c", "a + a * negate(2) as sortFun"})
+          .project({"a as b", "a * -2 as c", "a + a * -2 as sortFun"})
           .sort({"sortFun"})
           .project({"b", "c"})
           .output({"b", "c"}));

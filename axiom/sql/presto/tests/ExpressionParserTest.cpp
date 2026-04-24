@@ -15,6 +15,7 @@
  */
 
 #include <fmt/format.h>
+#include <limits>
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/types/QDigestRegistration.h"
@@ -269,6 +270,13 @@ TEST_F(ExpressionParserTest, digitSeparators) {
   ASSERT_TRUE(expr->isConstant());
   VELOX_EXPECT_EQ_TYPES(expr->type(), INTEGER());
   EXPECT_EQ(expr->as<lp::ConstantExpr>()->value()->value<int32_t>(), 10'000);
+
+  // Negative integer with underscores. Exercises stripDigitSeparators on the
+  // fold path for negative literals (tryFoldNegatedIntegerLiteral).
+  expr = parseExpr("-10_000");
+  ASSERT_TRUE(expr->isConstant());
+  VELOX_EXPECT_EQ_TYPES(expr->type(), INTEGER());
+  EXPECT_EQ(expr->as<lp::ConstantExpr>()->value()->value<int32_t>(), -10'000);
 
   // Double with underscores.
   expr = parseExpr("1_000.5E2");
@@ -584,8 +592,30 @@ TEST_F(ExpressionParserTest, null) {
 }
 
 TEST_F(ExpressionParserTest, unaryArithmetic) {
-  EXPECT_EQ("negate(1)", parseExpr("-1")->toString());
+  EXPECT_EQ("-1", parseExpr("-1")->toString());
   EXPECT_EQ("1", parseExpr("+1")->toString());
+  EXPECT_EQ("negate(plus(1, 1))", parseExpr("-(1+1)")->toString());
+}
+
+TEST_F(ExpressionParserTest, integerLiteralBoundaries) {
+  auto expectInt64 = [&](std::string_view sql, int64_t expected) {
+    SCOPED_TRACE(sql);
+    auto expr = parseExpr(sql);
+    ASSERT_TRUE(expr->isConstant());
+    VELOX_EXPECT_EQ_TYPES(expr->type(), BIGINT());
+    auto value = expr->as<lp::ConstantExpr>()->value();
+    ASSERT_FALSE(value->isNull());
+    EXPECT_EQ(value->value<int64_t>(), expected);
+  };
+
+  expectInt64("9223372036854775807", std::numeric_limits<int64_t>::max());
+  expectInt64("-9223372036854775808", std::numeric_limits<int64_t>::min());
+  expectInt64("-9223372036854775807", std::numeric_limits<int64_t>::min() + 1);
+
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseExpr("9223372036854775808"), "out of range");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseExpr("-99999999999999999999"), "out of range");
 }
 
 TEST_F(ExpressionParserTest, distinctFrom) {

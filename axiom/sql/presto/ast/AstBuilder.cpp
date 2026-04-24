@@ -18,6 +18,7 @@
 
 #include <unordered_set>
 
+#include <folly/Conv.h>
 #include <folly/Unicode.h>
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "velox/common/base/Exceptions.h"
@@ -230,6 +231,55 @@ extractStarModifiers(
   }
 
   return {std::move(excludeColumns), std::move(replaceItems)};
+}
+
+// Strips underscores from a numeric literal text. If the text contains
+// underscores and friendlySql is false, throws a user error.
+std::string stripDigitSeparators(std::string_view text, bool friendlySql) {
+  if (text.find('_') == std::string_view::npos) {
+    return std::string(text);
+  }
+
+  VELOX_USER_CHECK(
+      friendlySql,
+      "Underscores in numeric literals require Friendly SQL mode: {}",
+      text);
+
+  std::string result;
+  result.reserve(text.size());
+  for (char ch : text) {
+    if (ch != '_') {
+      result.push_back(ch);
+    }
+  }
+  return result;
+}
+
+PrestoSqlParser::IntegerLiteralContext* asIntegerLiteral(
+    PrestoSqlParser::ValueExpressionContext* valueExpr) {
+  auto* defaultCtx =
+      dynamic_cast<PrestoSqlParser::ValueExpressionDefaultContext*>(valueExpr);
+  if (defaultCtx == nullptr) {
+    return nullptr;
+  }
+  auto* numericCtx = dynamic_cast<PrestoSqlParser::NumericLiteralContext*>(
+      defaultCtx->primaryExpression());
+  if (numericCtx == nullptr) {
+    return nullptr;
+  }
+  return dynamic_cast<PrestoSqlParser::IntegerLiteralContext*>(
+      numericCtx->number());
+}
+
+int64_t parseIntegerLiteral(
+    std::string_view text,
+    const NodeLocation& location) {
+  auto result = folly::tryTo<int64_t>(text);
+  if (result.hasError()) {
+    AXIOM_PRESTO_SEMANTIC_FAIL(
+        location, std::string(text), "Integer literal out of range: {}", text);
+  }
+  return result.value();
 }
 
 } // namespace
@@ -1923,17 +1973,39 @@ ArithmeticUnaryExpression::Sign toArithmeticSign(size_t tokenType) {
   }
 }
 
+std::shared_ptr<LongLiteral> tryFoldNegatedIntegerLiteral(
+    PrestoSqlParser::ArithmeticUnaryContext* ctx,
+    ArithmeticUnaryExpression::Sign sign,
+    bool friendlySql) {
+  if (sign != ArithmeticUnaryExpression::Sign::kMinus) {
+    return nullptr;
+  }
+  auto* integerCtx = asIntegerLiteral(ctx->valueExpression());
+  if (integerCtx == nullptr) {
+    return nullptr;
+  }
+  auto text = stripDigitSeparators(integerCtx->getText(), friendlySql);
+  auto value = parseIntegerLiteral("-" + text, getLocation(ctx));
+  return std::make_shared<LongLiteral>(getLocation(ctx), value);
+}
+
 } // namespace
 
 std::any AstBuilder::visitArithmeticUnary(
     PrestoSqlParser::ArithmeticUnaryContext* ctx) {
   trace("visitArithmeticUnary");
 
+  auto sign = toArithmeticSign(ctx->op->getType());
+  if (auto folded =
+          tryFoldNegatedIntegerLiteral(ctx, sign, options_.friendlySql)) {
+    return std::static_pointer_cast<Expression>(folded);
+  }
+
   auto expr = visitExpression(ctx->valueExpression());
 
   return std::static_pointer_cast<Expression>(
       std::make_shared<ArithmeticUnaryExpression>(
-          getLocation(ctx), toArithmeticSign(ctx->op->getType()), expr));
+          getLocation(ctx), sign, expr));
 }
 
 std::any AstBuilder::visitAtTimeZone(PrestoSqlParser::AtTimeZoneContext* ctx) {
@@ -2856,30 +2928,6 @@ std::any AstBuilder::visitDigitIdentifier(
   return visitChildren("visitDigitIdentifier", ctx);
 }
 
-namespace {
-// Strips underscores from a numeric literal text. If the text contains
-// underscores and friendlySql is false, throws a user error.
-std::string stripDigitSeparators(std::string_view text, bool friendlySql) {
-  if (text.find('_') == std::string_view::npos) {
-    return std::string(text);
-  }
-
-  VELOX_USER_CHECK(
-      friendlySql,
-      "Underscores in numeric literals require Friendly SQL mode: {}",
-      text);
-
-  std::string result;
-  result.reserve(text.size());
-  for (char ch : text) {
-    if (ch != '_') {
-      result.push_back(ch);
-    }
-  }
-  return result;
-}
-} // namespace
-
 std::any AstBuilder::visitDecimalLiteral(
     PrestoSqlParser::DecimalLiteralContext* ctx) {
   trace("visitDecimalLiteral");
@@ -2906,7 +2954,7 @@ std::any AstBuilder::visitIntegerLiteral(
   trace("visitIntegerLiteral");
 
   auto text = stripDigitSeparators(ctx->getText(), options_.friendlySql);
-  int64_t value = std::stoll(text);
+  auto value = parseIntegerLiteral(text, getLocation(ctx));
 
   return std::static_pointer_cast<Expression>(
       std::make_shared<LongLiteral>(getLocation(ctx), value));
