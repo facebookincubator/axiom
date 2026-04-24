@@ -1145,8 +1145,11 @@ void Optimization::addPostprocess(
     VELOX_DCHECK(!dt->hasLimit());
     PrecomputeProjection precompute{plan, dt, /*projectAllInputs=*/false};
     auto writeColumns = precompute.toColumns(dt->write->columnExprs());
-    plan = std::move(precompute).maybeProject();
-    state.addCost(*plan);
+    auto projected = std::move(precompute).maybeProject();
+    if (projected != plan) {
+      state.addCost(*projected);
+    }
+    plan = std::move(projected);
 
     plan = repartitionForWrite(plan, state);
     plan = make<TableWrite>(plan, std::move(writeColumns), dt->write);
@@ -1514,7 +1517,11 @@ void Optimization::addAggregation(
       precompute.toColumns(aggPlan->groupingKeys(), &aggPlan->columns());
   auto aggregates = flattenAggregates(aggPlan->aggregates(), precompute);
 
-  plan = std::move(precompute).maybeProject();
+  auto projected = std::move(precompute).maybeProject();
+  if (projected != plan) {
+    state.addCost(*projected);
+  }
+  plan = std::move(projected);
   state.place(aggPlan);
 
   auto preGroupedKeys = computePreGroupedKeys(*plan, groupingKeys);
@@ -2028,12 +2035,13 @@ bool Optimization::addWindow(
     auto orderKeys = precompute.toColumns(group.orderKeys);
     auto planBeforeProject = plan;
     plan = std::move(precompute).maybeProject();
-
-    // Velox WindowNode passes through all input columns. When precompute
-    // didn't add a Project (all needed columns are simple pass-throughs of
-    // input columns), drop columns not needed by this or subsequent window
-    // groups or by downstream operators.
-    if (plan == planBeforeProject) {
+    if (plan != planBeforeProject) {
+      state.addCost(*plan);
+    } else {
+      // Velox WindowNode passes through all input columns. When precompute
+      // didn't add a Project (all needed columns are simple pass-throughs of
+      // input columns), drop columns not needed by this or subsequent window
+      // groups or by downstream operators.
       maybeDropColumns(plan, downstream);
     }
 
@@ -2103,8 +2111,12 @@ void Optimization::addOrderBy(
     }
   }
 
+  auto projected = std::move(precompute).maybeProject();
+  if (projected != plan) {
+    state.addCost(*projected);
+  }
   auto* orderBy = make<OrderBy>(
-      std::move(precompute).maybeProject(),
+      std::move(projected),
       std::move(orderKeys),
       dt->orderTypes,
       dt->limit,
