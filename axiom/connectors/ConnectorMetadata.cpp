@@ -16,7 +16,7 @@
 
 #include "axiom/connectors/ConnectorMetadata.h"
 
-#include "folly/Synchronized.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 
 namespace facebook::axiom::connector {
 namespace {
@@ -181,28 +181,12 @@ TableLayout::findColumn(std::string_view name) const {
   return nullptr;
 }
 
-namespace {
-
-using MetadataMap = folly::Synchronized<
-    folly::F14FastMap<std::string, std::shared_ptr<ConnectorMetadata>>>;
-
-MetadataMap& metadataRegistry() {
-  static MetadataMap kRegistry;
-  return kRegistry;
-}
-} // namespace
-
 // static
 ConnectorMetadata* FOLLY_NULLABLE
 ConnectorMetadata::tryMetadata(std::string_view connectorId) {
-  return metadataRegistry().withRLock(
-      [&](const auto& registry) -> ConnectorMetadata* {
-        auto it = registry.find(connectorId);
-        if (it != registry.end()) {
-          return it->second.get();
-        }
-        return nullptr;
-      });
+  auto metadata =
+      ConnectorMetadataRegistry::global().find(std::string(connectorId));
+  return metadata == nullptr ? nullptr : metadata.get();
 }
 
 // static
@@ -219,41 +203,31 @@ void ConnectorMetadata::registerMetadata(
     std::shared_ptr<ConnectorMetadata> metadata) {
   VELOX_CHECK_NOT_NULL(metadata);
   VELOX_CHECK(!connectorId.empty());
-  metadataRegistry().withWLock([&](auto& registry) {
-    registry.emplace(connectorId, std::move(metadata));
-  });
+  if (!ConnectorMetadataRegistry::global().find(std::string(connectorId))) {
+    ConnectorMetadataRegistry::global().insert(
+        std::string(connectorId), std::move(metadata));
+  }
 }
 
 // static
 void ConnectorMetadata::unregisterMetadata(std::string_view connectorId) {
-  metadataRegistry().withWLock(
-      [&](auto& registry) { registry.erase(connectorId); });
+  ConnectorMetadataRegistry::global().erase(std::string(connectorId));
 }
 
 // static
 void ConnectorMetadata::unregisterAllMetadata() {
-  // Move entries out of the registry under the lock, then destroy them
-  // outside the lock to avoid holding it during potentially slow destructors.
-  std::vector<std::shared_ptr<ConnectorMetadata>> entries;
-  metadataRegistry().withWLock([&](auto& registry) {
-    entries.reserve(registry.size());
-    for (auto& [_, metadata] : registry) {
-      entries.push_back(std::move(metadata));
-    }
-    registry.clear();
-  });
+  ConnectorMetadataRegistry::global().clear();
 }
 
 // static
 std::vector<std::string> ConnectorMetadata::allMetadataIds() {
-  return metadataRegistry().withRLock([](const auto& registry) {
-    std::vector<std::string> ids;
-    ids.reserve(registry.size());
-    for (const auto& [id, _] : registry) {
-      ids.emplace_back(id);
-    }
-    return ids;
-  });
+  auto entries = ConnectorMetadataRegistry::global().snapshot();
+  std::vector<std::string> ids;
+  ids.reserve(entries.size());
+  for (auto&& [id, _] : entries) {
+    ids.emplace_back(id);
+  }
+  return ids;
 }
 
 } // namespace facebook::axiom::connector
