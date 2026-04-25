@@ -789,6 +789,10 @@ void ShowCatalogs::accept(AstVisitor* visitor) {
   visitor->visitShowCatalogs(this);
 }
 
+void ShowTables::accept(AstVisitor* visitor) {
+  visitor->visitShowTables(this);
+}
+
 void ShowSchemas::accept(AstVisitor* visitor) {
   visitor->visitShowSchemas(this);
 }

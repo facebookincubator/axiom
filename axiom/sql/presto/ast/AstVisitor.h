@@ -579,6 +579,10 @@ class AstVisitor {
     defaultVisit(node);
   }
 
+  virtual void visitShowTables(ShowTables* node) {
+    defaultVisit(node);
+  }
+
   virtual void visitShowSchemas(ShowSchemas* node) {
     defaultVisit(node);
   }

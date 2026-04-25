@@ -2114,6 +2114,56 @@ SqlStatementPtr parseShowSchemas(
   return std::make_shared<SelectStatement>(builder.build());
 }
 
+SqlStatementPtr parseShowTables(
+    const ShowTables& showTables,
+    const std::string& defaultConnectorId,
+    const std::string& defaultSchema) {
+  std::string connectorId;
+  std::string schemaName;
+
+  if (showTables.schema().has_value()) {
+    // Qualified name can be "schema" or "catalog.schema".
+    const auto& parts = *showTables.schema();
+    auto dotPos = parts.find('.');
+    if (dotPos != std::string::npos) {
+      connectorId = parts.substr(0, dotPos);
+      schemaName = parts.substr(dotPos + 1);
+    } else {
+      connectorId = defaultConnectorId;
+      schemaName = parts;
+    }
+  } else {
+    connectorId = defaultConnectorId;
+    schemaName = defaultSchema;
+  }
+
+  auto metadata =
+      facebook::axiom::connector::ConnectorMetadata::metadata(connectorId);
+  auto session = std::make_shared<facebook::axiom::connector::ConnectorSession>(
+      "show-tables");
+  auto tableNames = metadata->listTableNames(session, schemaName);
+  std::sort(tableNames.begin(), tableNames.end());
+
+  std::vector<Variant> data;
+  data.reserve(tableNames.size());
+  for (const auto& name : tableNames) {
+    data.emplace_back(Variant::row({name}));
+  }
+
+  lp::PlanBuilder::Context ctx(connectorId);
+  lp::PlanBuilder builder(ctx);
+  builder.values(ROW({"Table"}, VARCHAR()), std::move(data));
+
+  if (showTables.getLikePattern().has_value()) {
+    builder.filter(makeLikeExpr(
+        "Table",
+        showTables.getLikePattern().value(),
+        showTables.getEscape()));
+  }
+
+  return std::make_shared<SelectStatement>(builder.build());
+}
+
 // Extracts the literal value from a SET SESSION statement.
 SqlStatementPtr parseSetSession(const SetSession* setSession) {
   auto name = setSession->name()->fullyQualifiedName();
@@ -2177,6 +2227,11 @@ SqlStatementPtr doPlan(
 
   if (query->is(NodeType::kShowSchemas)) {
     return parseShowSchemas(*query->as<ShowSchemas>(), defaultConnectorId);
+  }
+
+  if (query->is(NodeType::kShowTables)) {
+    return parseShowTables(
+        *query->as<ShowTables>(), defaultConnectorId, defaultSchema);
   }
 
   if (query->is(NodeType::kShowCatalogs)) {

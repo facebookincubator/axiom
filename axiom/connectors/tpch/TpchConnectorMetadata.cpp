@@ -226,6 +226,19 @@ std::vector<std::string> TpchConnectorMetadata::listSchemaNames(
   };
 }
 
+std::vector<std::string> TpchConnectorMetadata::listTableNames(
+    const ConnectorSessionPtr& /*session*/,
+    const std::string& schemaName) {
+  if (!isValidTpchSchema(schemaName) && !schemaName.empty()) {
+    return {};
+  }
+  std::vector<std::string> names;
+  for (auto tpchTable : velox::tpch::tables) {
+    names.push_back(std::string(velox::tpch::toTableName(tpchTable)));
+  }
+  return names;
+}
+
 bool TpchConnectorMetadata::schemaExists(
     const ConnectorSessionPtr& /*session*/,
     const std::string& schemaName) {
