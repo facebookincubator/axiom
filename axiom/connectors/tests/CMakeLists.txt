@@ -22,7 +22,7 @@ target_link_libraries(
   velox_connector
 )
 
-add_executable(axiom_test_connector_test TestConnectorTest.cpp)
+add_executable(axiom_test_connector_test TestConnectorTest.cpp ConnectorMetadataRegistryTest.cpp)
 
 add_test(axiom_test_connector_test axiom_test_connector_test)
 
@@ -43,3 +43,5 @@ add_executable(axiom_connectors_tests SchemaResolverTest.cpp)
 add_test(axiom_connectors_tests axiom_connectors_tests)
 
 target_link_libraries(axiom_connectors_tests axiom_connectors axiom_test_connector gtest gtest_main)
+
+target_link_libraries(axiom_connectors velox_core gtest gtest_main gmock)

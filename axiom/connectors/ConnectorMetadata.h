@@ -21,7 +21,6 @@
 #include "axiom/connectors/ConnectorSplitManager.h"
 #include "folly/CppAttributes.h"
 #include "folly/coro/Task.h"
-#include "velox/common/memory/HashStringAllocator.h"
 #include "velox/connectors/Connector.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
@@ -786,25 +785,34 @@ using ConnectorWriteHandlePtr = std::shared_ptr<ConnectorWriteHandle>;
 class ConnectorMetadata {
  public:
   /// Return the metadata for a given connector ID. Throws if not registered.
+  [[deprecated("Use ConnectorMetadataRegistry::tryGet() instead.")]]
   static ConnectorMetadata* metadata(std::string_view connectorId);
 
   /// Return the metadata for a given connector ID, or nullptr if not
   /// registered.
+  [[deprecated("Use ConnectorMetadataRegistry::tryGet() instead.")]]
   static ConnectorMetadata* FOLLY_NULLABLE
   tryMetadata(std::string_view connectorId);
 
   /// Register metadata for a connector ID.
+  ///
+  /// NOT THREADSAFE: If two processes register the same connector ID, one may
+  /// raise a VeloxError.
+  [[deprecated("Use ConnectorMetadataRegistry::global().insert() instead.")]]
   static void registerMetadata(
       std::string_view connectorId,
       std::shared_ptr<ConnectorMetadata> metadata);
 
   /// Unregister metadata for a connector ID.
+  [[deprecated("Use ConnectorMetadataRegistry::global().erase() instead.")]]
   static void unregisterMetadata(std::string_view connectorId);
 
   /// Unregister all metadata.
+  [[deprecated("Use ConnectorMetadataRegistry::global().clear() instead.")]]
   static void unregisterAllMetadata();
 
   /// Return all registered connector IDs.
+  [[deprecated("Use ConnectorMetadataRegistry::allMetadataIds() instead.")]]
   static std::vector<std::string> allMetadataIds();
 
   virtual ~ConnectorMetadata() = default;
