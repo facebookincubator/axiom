@@ -305,11 +305,11 @@ const auto& columnStatFieldNames() {
 AXIOM_DEFINE_ENUM_NAME(ColumnStatField, columnStatFieldNames);
 
 FinishWrite::FinishWrite(
-    connector::ConnectorMetadata* metadata,
+    std::shared_ptr<connector::ConnectorMetadata> metadata,
     connector::ConnectorSessionPtr session,
     connector::ConnectorWriteHandlePtr handle,
     WriteStatsMapping statsMapping)
-    : metadata_{metadata},
+    : metadata_{std::move(metadata)},
       session_{std::move(session)},
       handle_{std::move(handle)},
       statsMapping_{std::move(statsMapping)} {

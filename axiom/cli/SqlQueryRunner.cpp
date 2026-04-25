@@ -20,6 +20,7 @@
 
 #include "axiom/cli/QueryIdGenerator.h"
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/logical_plan/LogicalPlanDotPrinter.h"
 #include "axiom/logical_plan/PlanBuilder.h"
@@ -51,6 +52,7 @@
 
 namespace velox = facebook::velox;
 using namespace facebook::axiom;
+using connector::ConnectorMetadataRegistry;
 
 namespace {
 
@@ -234,8 +236,7 @@ void onComplete(
 connector::TablePtr SqlQueryRunner::createTable(
     const presto::CreateTableStatement& statement,
     bool explain) {
-  auto metadata =
-      connector::ConnectorMetadata::metadata(statement.connectorId());
+  auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
 
   folly::F14FastMap<std::string, velox::Variant> options;
   for (const auto& [key, value] : statement.properties()) {
@@ -255,8 +256,7 @@ connector::TablePtr SqlQueryRunner::createTable(
 connector::TablePtr SqlQueryRunner::createTable(
     const presto::CreateTableAsSelectStatement& statement,
     bool explain) {
-  auto metadata =
-      connector::ConnectorMetadata::metadata(statement.connectorId());
+  auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
 
   folly::F14FastMap<std::string, velox::Variant> options;
   for (const auto& [key, value] : statement.properties()) {
@@ -275,8 +275,7 @@ connector::TablePtr SqlQueryRunner::createTable(
 
 std::string SqlQueryRunner::dropTable(
     const presto::DropTableStatement& statement) {
-  auto metadata =
-      connector::ConnectorMetadata::metadata(statement.connectorId());
+  auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
 
   const auto& tableName = statement.tableName();
 
@@ -293,8 +292,7 @@ std::string SqlQueryRunner::dropTable(
 
 std::string SqlQueryRunner::createSchema(
     const presto::CreateSchemaStatement& statement) {
-  auto metadata =
-      connector::ConnectorMetadata::metadata(statement.connectorId());
+  auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
 
   folly::F14FastMap<std::string, velox::Variant> properties;
   for (const auto& [key, value] : statement.properties()) {
@@ -310,8 +308,7 @@ std::string SqlQueryRunner::createSchema(
 
 std::string SqlQueryRunner::dropSchema(
     const presto::DropSchemaStatement& statement) {
-  auto metadata =
-      connector::ConnectorMetadata::metadata(statement.connectorId());
+  auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
   auto session = std::make_shared<connector::ConnectorSession>("test");
   metadata->dropSchema(session, statement.schemaName(), statement.ifExists());
   return fmt::format("Dropped schema: {}", statement.schemaName());
@@ -474,8 +471,7 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
     } else if (statement->isCreateTable()) {
       const auto* create = statement->as<presto::CreateTableStatement>();
       if (!create->ifNotExists()) {
-        auto* metadata =
-            connector::ConnectorMetadata::metadata(create->connectorId());
+        auto metadata = ConnectorMetadataRegistry::get(create->connectorId());
         VELOX_USER_CHECK(
             !metadata->findTable(create->tableName()),
             "Table already exists: {}.{}",
@@ -491,8 +487,7 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
     } else if (statement->isDropTable()) {
       const auto* drop = statement->as<presto::DropTableStatement>();
       if (!drop->ifExists()) {
-        auto* metadata =
-            connector::ConnectorMetadata::metadata(drop->connectorId());
+        auto metadata = ConnectorMetadataRegistry::get(drop->connectorId());
         VELOX_USER_CHECK(
             metadata->findTable(drop->tableName()),
             "Table does not exist: {}.{}",
@@ -622,7 +617,7 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
         ? use->catalog().value()
         : defaultConnectorId_;
     VELOX_USER_CHECK(
-        connector::ConnectorMetadata::tryMetadata(connectorId) != nullptr,
+        ConnectorMetadataRegistry::tryGet(connectorId) != nullptr,
         "Catalog does not exist: {}",
         connectorId);
     defaultConnectorId_ = connectorId;

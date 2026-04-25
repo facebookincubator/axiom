@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/tests/TestConnector.h"
 
@@ -50,8 +51,8 @@ class SchemaResolverTest : public ::testing::Test {
       const std::string& schema) {
     auto connector = std::make_shared<connector::TestConnector>(id);
     velox::connector::registerConnector(connector);
-    ConnectorMetadata::metadata(id)->createSchema(
-        nullptr, schema, /*ifNotExists=*/false, {});
+    auto metadata = ConnectorMetadataRegistry::get(id);
+    metadata->createSchema(nullptr, schema, /*ifNotExists=*/false, {});
     return Catalog{
         .id = id,
         .schema = schema,
@@ -65,7 +66,8 @@ class SchemaResolverTest : public ::testing::Test {
 };
 
 TEST_F(SchemaResolverTest, bareTable) {
-  ConnectorMetadata::metadata("base")->createTable(
+  auto metadata = ConnectorMetadataRegistry::get("base");
+  metadata->createTable(
       nullptr, {"baseschema", "table"}, ROW({}), {}, /*explain=*/false);
 
   auto table = resolver_->findTable("base", {"baseschema", "table"});
@@ -76,9 +78,9 @@ TEST_F(SchemaResolverTest, bareTable) {
 }
 
 TEST_F(SchemaResolverTest, tablePlusSchema) {
-  ConnectorMetadata::metadata("base")->createSchema(
-      nullptr, "newschema", /*ifNotExists=*/false, {});
-  ConnectorMetadata::metadata("base")->createTable(
+  auto metadata = ConnectorMetadataRegistry::get("base");
+  metadata->createSchema(nullptr, "newschema", /*ifNotExists=*/false, {});
+  metadata->createTable(
       nullptr, {"newschema", "table"}, ROW({}), {}, /*explain=*/false);
 
   auto table = resolver_->findTable("base", {"newschema", "table"});
@@ -89,7 +91,8 @@ TEST_F(SchemaResolverTest, tablePlusSchema) {
 }
 
 TEST_F(SchemaResolverTest, tablePlusSchemaPlusCatalog) {
-  ConnectorMetadata::metadata("other")->createTable(
+  auto otherMetadata = ConnectorMetadataRegistry::get("other");
+  otherMetadata->createTable(
       /*session=*/nullptr,
       {"otherschema", "other_table"},
       ROW({}),
@@ -98,7 +101,8 @@ TEST_F(SchemaResolverTest, tablePlusSchemaPlusCatalog) {
   auto table = resolver_->findTable("other", {"otherschema", "other_table"});
   ASSERT_NE(table, nullptr);
 
-  ConnectorMetadata::metadata("base")->createTable(
+  auto baseMetadata = ConnectorMetadataRegistry::get("base");
+  baseMetadata->createTable(
       nullptr, {"baseschema", "base_table"}, ROW({}), {}, /*explain=*/false);
   table = resolver_->findTable("base", {"baseschema", "base_table"});
   ASSERT_NE(table, nullptr);
@@ -106,7 +110,8 @@ TEST_F(SchemaResolverTest, tablePlusSchemaPlusCatalog) {
 
 TEST_F(SchemaResolverTest, catalogMismatch) {
   // Table exists in "other" catalog but not in "base".
-  ConnectorMetadata::metadata("other")->createTable(
+  auto metadata = ConnectorMetadataRegistry::get("other");
+  metadata->createTable(
       /*session=*/nullptr,
       {"otherschema", "table"},
       ROW({}),

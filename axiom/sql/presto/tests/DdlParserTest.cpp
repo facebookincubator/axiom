@@ -15,6 +15,7 @@
  */
 
 #include "axiom/common/SchemaTableName.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
@@ -57,8 +58,11 @@ TEST_F(DdlParserTest, insertIntoTable) {
 
 TEST_F(DdlParserTest, createTableAsSelect) {
   {
+    auto ctasMetadata =
+        facebook::axiom::connector::ConnectorMetadataRegistry::get(
+            kConnectorId);
     auto nationSchema =
-        facebook::axiom::connector::ConnectorMetadata::metadata(kConnectorId)
+        ctasMetadata
             ->findTable(facebook::axiom::SchemaTableName{"default", "nation"})
             ->type();
 
@@ -187,8 +191,11 @@ TEST_F(DdlParserTest, createTable) {
 
   // like clause
   {
+    auto likeMetadata =
+        facebook::axiom::connector::ConnectorMetadataRegistry::get(
+            kConnectorId);
     auto likeSchema =
-        facebook::axiom::connector::ConnectorMetadata::metadata(kConnectorId)
+        likeMetadata
             ->findTable(facebook::axiom::SchemaTableName{"default", "nation"})
             ->type();
     testCreateTable("CREATE TABLE copy (LIKE nation)", "copy", likeSchema);
@@ -196,8 +203,11 @@ TEST_F(DdlParserTest, createTable) {
 
   // like clause + some more columns
   {
+    auto likeMetadata2 =
+        facebook::axiom::connector::ConnectorMetadataRegistry::get(
+            kConnectorId);
     auto likeSchema =
-        facebook::axiom::connector::ConnectorMetadata::metadata(kConnectorId)
+        likeMetadata2
             ->findTable(facebook::axiom::SchemaTableName{"default", "nation"})
             ->type();
 

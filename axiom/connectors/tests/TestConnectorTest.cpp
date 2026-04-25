@@ -16,6 +16,7 @@
 
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/common/SchemaTableName.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 
 #include <folly/coro/GtestHelpers.h>
 #include <folly/init/Init.h>
@@ -42,15 +43,16 @@ class TestConnectorTest : public ::testing::Test, public test::VectorTestBase {
   void SetUp() override {
     connector_ = std::make_shared<TestConnector>("test");
     velox::connector::registerConnector(connector_);
-    metadata_ = ConnectorMetadata::metadata(connector_->connectorId());
+    metadata_ = ConnectorMetadataRegistry::get(connector_->connectorId());
   }
 
   void TearDown() override {
+    metadata_.reset();
     velox::connector::unregisterConnector(connector_->connectorId());
   }
 
   std::shared_ptr<TestConnector> connector_;
-  ConnectorMetadata* metadata_{};
+  std::shared_ptr<ConnectorMetadata> metadata_;
 };
 
 TEST_F(TestConnectorTest, connectorRegister) {
@@ -65,7 +67,7 @@ TEST_F(TestConnectorTest, connectorRegister) {
   registerConnector(connector);
 
   EXPECT_EQ(velox::connector::getConnector(connectorId).get(), connector.get());
-  EXPECT_NE(ConnectorMetadata::metadata(connectorId), nullptr);
+  EXPECT_NE(ConnectorMetadataRegistry::tryGet(connectorId), nullptr);
 
   velox::connector::unregisterConnector(connectorId);
   VELOX_ASSERT_THROW(

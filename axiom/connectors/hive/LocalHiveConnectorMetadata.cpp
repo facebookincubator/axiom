@@ -21,6 +21,7 @@
 #include <folly/json.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/LocalTableMetadata.h"
 #include "axiom/optimizer/JsonUtil.h"
@@ -322,7 +323,7 @@ std::shared_ptr<SplitSource> LocalHiveSplitManager::getSplitSource(
     SplitOptions options) {
   // Since there are only unpartitioned tables now, always makes a SplitSource
   // that goes over all the files in the handle's layout.
-  auto* metadata = ConnectorMetadata::metadata(tableHandle->connectorId());
+  auto metadata = ConnectorMetadataRegistry::get(tableHandle->connectorId());
   auto table = metadata->findTable(
       {std::string(LocalHiveConnectorMetadata::kDefaultSchema),
        tableHandle->name()});
@@ -535,9 +536,9 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
 
   const auto outputType = ROW(std::move(names), std::move(types));
 
+  auto metadataPtr = ConnectorMetadataRegistry::get(connector()->connectorId());
   auto connectorQueryCtx =
-      reinterpret_cast<LocalHiveConnectorMetadata*>(
-          ConnectorMetadata::metadata(connector()->connectorId()))
+      dynamic_cast<const LocalHiveConnectorMetadata*>(metadataPtr.get())
           ->connectorQueryCtx();
 
   const auto maxRowsToScan = table().numRows() * (pct / 100);
@@ -599,10 +600,10 @@ LocalHiveTableLayout::co_estimateStats(
     partitionColumnsByName[column->name()] = column;
   }
 
-  auto* connectorMetadata =
-      ConnectorMetadata::metadata(connector()->connectorId());
+  auto connectorMetadata =
+      ConnectorMetadataRegistry::get(connector()->connectorId());
   auto* localHiveMetadata =
-      dynamic_cast<const LocalHiveConnectorMetadata*>(connectorMetadata);
+      dynamic_cast<const LocalHiveConnectorMetadata*>(connectorMetadata.get());
   auto& evaluator =
       *localHiveMetadata->connectorQueryCtx()->expressionEvaluator();
 

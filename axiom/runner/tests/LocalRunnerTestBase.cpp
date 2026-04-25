@@ -15,6 +15,7 @@
  */
 
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/hive/LocalTableMetadata.h"
@@ -44,7 +45,7 @@ void LocalRunnerTestBase::SetUp() {
 }
 
 void LocalRunnerTestBase::TearDown() {
-  connector::ConnectorMetadata::unregisterMetadata(
+  connector::ConnectorMetadataRegistry::global().erase(
       velox::exec::test::kHiveConnectorId);
   velox::exec::ExchangeSource::factories().clear();
   velox::parquet::unregisterParquetWriterFactory();
@@ -82,7 +83,7 @@ void LocalRunnerTestBase::setupConnector() {
   auto hiveConnector =
       velox::connector::getConnector(velox::exec::test::kHiveConnectorId);
 
-  connector::ConnectorMetadata::registerMetadata(
+  connector::ConnectorMetadataRegistry::global().insert(
       velox::exec::test::kHiveConnectorId,
       std::make_shared<connector::hive::LocalHiveConnectorMetadata>(
           dynamic_cast<velox::connector::hive::HiveConnector*>(

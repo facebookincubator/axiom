@@ -18,10 +18,13 @@
 #include <numeric>
 #include <vector>
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/logical_plan/NameMappings.h"
 #include "velox/type/TypeCoercer.h"
 
 namespace facebook::axiom::logical_plan {
+
+using connector::ConnectorMetadataRegistry;
 
 PlanBuilder& PlanBuilder::values(
     const velox::RowTypePtr& rowType,
@@ -242,7 +245,7 @@ PlanBuilder& PlanBuilder::tableScan(
   VELOX_USER_CHECK_NULL(node_, "Table scan node must be the leaf node");
 
   SchemaTableName schemaTableName{schemaName, tableName};
-  auto* metadata = connector::ConnectorMetadata::metadata(connectorId);
+  auto metadata = ConnectorMetadataRegistry::get(connectorId);
   auto table = metadata->findTable(schemaTableName);
   VELOX_USER_CHECK_NOT_NULL(
       table, "Table not found: {}", schemaTableName.toString());
@@ -335,7 +338,7 @@ PlanBuilder& PlanBuilder::tableScan(
   VELOX_USER_CHECK_NULL(node_, "Table scan node must be the leaf node");
 
   SchemaTableName schemaTableName{schemaName, tableName};
-  auto* metadata = connector::ConnectorMetadata::metadata(connectorId);
+  auto metadata = ConnectorMetadataRegistry::get(connectorId);
   auto table = metadata->findTable(schemaTableName);
   VELOX_USER_CHECK_NOT_NULL(
       table, "Table not found: {}", schemaTableName.toString());
@@ -1611,7 +1614,7 @@ PlanBuilder& PlanBuilder::tableWrite(
 
   if (kind == WriteKind::kInsert) {
     // Check input types.
-    auto* metadata = connector::ConnectorMetadata::metadata(connectorId);
+    auto metadata = ConnectorMetadataRegistry::get(connectorId);
     auto table = metadata->findTable(schemaTableName);
     VELOX_USER_CHECK_NOT_NULL(
         table, "Table not found: {}", schemaTableName.toString());

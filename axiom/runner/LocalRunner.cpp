@@ -19,6 +19,7 @@
 #include <folly/coro/BlockingWait.h>
 #include <folly/coro/Task.h>
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/time/Timer.h"
@@ -72,7 +73,8 @@ ConnectorSplitSourceFactory::splitSourceForScan(
     const connector::ConnectorSessionPtr& session,
     const velox::core::TableScanNode& scan) {
   const auto& handle = scan.tableHandle();
-  auto metadata = connector::ConnectorMetadata::metadata(handle->connectorId());
+  auto metadata =
+      connector::ConnectorMetadataRegistry::get(handle->connectorId());
   auto splitManager = metadata->splitManager();
 
   auto partitions = folly::coro::blockingWait(

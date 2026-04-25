@@ -21,6 +21,7 @@
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <iostream>
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
@@ -239,7 +240,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     auto connector = factory.newConnector("tpch", emptyConfig);
     velox::connector::registerConnector(connector);
 
-    connector::ConnectorMetadata::registerMetadata(
+    connector::ConnectorMetadataRegistry::global().insert(
         connector->connectorId(),
         std::make_shared<connector::tpch::TpchConnectorMetadata>(
             dynamic_cast<velox::connector::tpch::TpchConnector*>(
@@ -266,7 +267,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
         factory.newConnector(kHiveConnectorId, config, ioExecutor_.get());
     velox::connector::registerConnector(connector);
 
-    connector::ConnectorMetadata::registerMetadata(
+    connector::ConnectorMetadataRegistry::global().insert(
         kHiveConnectorId,
         std::make_shared<connector::hive::LocalHiveConnectorMetadata>(
             dynamic_cast<velox::connector::hive::HiveConnector*>(
@@ -315,7 +316,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
   connector::TablePtr createTable(
       const ::axiom::sql::presto::CreateTableAsSelectStatement& statement) {
     auto metadata =
-        connector::ConnectorMetadata::metadata(connector_->connectorId());
+        connector::ConnectorMetadataRegistry::get(connector_->connectorId());
 
     folly::F14FastMap<std::string, velox::Variant> options;
     for (const auto& [key, value] : statement.properties()) {
@@ -334,7 +335,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
 
   void dropTable(const ::axiom::sql::presto::DropTableStatement& statement) {
     auto metadata =
-        connector::ConnectorMetadata::metadata(connector_->connectorId());
+        connector::ConnectorMetadataRegistry::get(connector_->connectorId());
 
     const auto& tableName = statement.tableName();
 

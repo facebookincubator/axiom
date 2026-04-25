@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/ConstantExprEvaluator.h"
@@ -73,7 +74,7 @@ void HiveQueriesTestBase::createTpchTables(
 
 void HiveQueriesTestBase::TearDown() {
   hiveMetadata_ = nullptr;
-  connector::ConnectorMetadata::unregisterMetadata(
+  connector::ConnectorMetadataRegistry::global().erase(
       velox::exec::test::kHiveConnectorId);
 
   test::QueryTestBase::TearDown();
@@ -97,7 +98,7 @@ void HiveQueriesTestBase::setupHiveConnector() {
       hiveConnector);
   hiveMetadata_ = metadata.get();
 
-  connector::ConnectorMetadata::registerMetadata(
+  connector::ConnectorMetadataRegistry::global().insert(
       velox::exec::test::kHiveConnectorId, std::move(metadata));
 }
 

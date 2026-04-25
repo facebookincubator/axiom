@@ -16,6 +16,8 @@
 
 #include "axiom/connectors/SchemaResolver.h"
 
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
+
 namespace facebook::axiom::connector {
 
 void SchemaResolver::setTargetTable(
@@ -37,7 +39,8 @@ TablePtr SchemaResolver::findTable(
     return targetTable_;
   }
 
-  return ConnectorMetadata::metadata(connectorId)->findTable(tableName);
+  auto metadata = ConnectorMetadataRegistry::get(connectorId);
+  return metadata->findTable(tableName);
 }
 
 } // namespace facebook::axiom::connector

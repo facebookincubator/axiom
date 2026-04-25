@@ -20,6 +20,7 @@
 #include <folly/container/F14Set.h>
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "velox/core/ITypedExpr.h"
 
 namespace facebook::axiom::connector {
@@ -621,11 +622,11 @@ class TestConnector : public velox::connector::Connector {
       : Connector(id, std::move(config)),
         metadata_{std::make_shared<TestConnectorMetadata>(this)} {
     registerSerDe();
-    ConnectorMetadata::registerMetadata(id, metadata_);
+    ConnectorMetadataRegistry::global().insert(id, metadata_);
   }
 
   ~TestConnector() override {
-    ConnectorMetadata::unregisterMetadata(connectorId());
+    ConnectorMetadataRegistry::global().erase(connectorId());
   }
 
   const velox::config::ConfigProvider* configProvider() const override {

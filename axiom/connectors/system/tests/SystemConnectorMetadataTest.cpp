@@ -20,6 +20,7 @@
 #include <gtest/gtest.h>
 
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/system/SystemConnector.h"
 #include "axiom/connectors/system/SystemConnectorMetadata.h"
 #include "velox/connectors/Connector.h"
@@ -146,7 +147,7 @@ class SystemConnectorMetadataTest : public ::testing::Test {
     velox::connector::registerConnector(connector_);
 
     metadata_ = std::make_shared<SystemConnectorMetadata>(connector_.get());
-    ConnectorMetadata::registerMetadata(kSystemCatalog, metadata_);
+    ConnectorMetadataRegistry::global().insert(kSystemCatalog, metadata_);
 
     pool_ = velox::memory::memoryManager()->addLeafPool();
     queryCtx_ = velox::core::QueryCtx::create();
@@ -154,7 +155,7 @@ class SystemConnectorMetadataTest : public ::testing::Test {
 
   void TearDown() override {
     metadata_.reset();
-    ConnectorMetadata::unregisterMetadata(kSystemCatalog);
+    ConnectorMetadataRegistry::global().erase(kSystemCatalog);
     velox::connector::unregisterConnector(kSystemCatalog);
     connector_.reset();
   }

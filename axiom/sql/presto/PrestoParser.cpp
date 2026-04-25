@@ -20,6 +20,7 @@
 #include <unordered_set>
 #include "axiom/common/CatalogSchemaTableName.h"
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/sql/presto/ColumnsExpansion.h"
 #include "axiom/sql/presto/ExpressionPlanner.h"
@@ -415,8 +416,9 @@ class RelationPlanner : public AstVisitor {
       const auto [connectorId, connectorTable] = toConnectorTable(
           *table.name(), context_.defaultConnectorId.value(), defaultSchema_);
 
-      auto* metadata =
-          facebook::axiom::connector::ConnectorMetadata::metadata(connectorId);
+      auto metadata =
+          facebook::axiom::connector::ConnectorMetadataRegistry::get(
+              connectorId);
 
       if (metadata->findTable(connectorTable) != nullptr) {
         builder_->tableScan(
@@ -1500,9 +1502,10 @@ static facebook::axiom::connector::TablePtr findTable(
   const auto [connectorId, connectorTable] =
       toConnectorTable(name, defaultConnectorId, defaultSchema);
 
-  auto table =
-      facebook::axiom::connector::ConnectorMetadata::metadata(connectorId)
-          ->findTable(connectorTable);
+  auto metadata =
+      facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId);
+
+  auto table = metadata->findTable(connectorTable);
 
   AXIOM_PRESTO_SEMANTIC_CHECK(
       table != nullptr,
@@ -1533,7 +1536,7 @@ SqlStatementPtr parseShowCatalogs(
     const ShowCatalogs& showCatalogs,
     const std::string& defaultConnectorId) {
   const auto connectorIds =
-      facebook::axiom::connector::ConnectorMetadata::allMetadataIds();
+      facebook::axiom::connector::ConnectorMetadataRegistry::allMetadataIds();
 
   std::vector<Variant> data;
   data.reserve(connectorIds.size());
@@ -1806,9 +1809,10 @@ SqlStatementPtr parseInsert(
   const auto [connectorId, connectorTable] =
       toConnectorTable(*insert.target(), defaultConnectorId, defaultSchema);
 
-  const auto table =
-      facebook::axiom::connector::ConnectorMetadata::metadata(connectorId)
-          ->findTable(connectorTable);
+  auto insertMetadata =
+      facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId);
+
+  const auto table = insertMetadata->findTable(connectorTable);
 
   AXIOM_PRESTO_SEMANTIC_CHECK(
       table != nullptr,
@@ -2088,7 +2092,7 @@ SqlStatementPtr parseShowSchemas(
   const auto connectorId = showSchemas.catalog().value_or(defaultConnectorId);
 
   auto metadata =
-      facebook::axiom::connector::ConnectorMetadata::metadata(connectorId);
+      facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId);
   auto session = std::make_shared<facebook::axiom::connector::ConnectorSession>(
       "show-schemas");
   auto schemaNames = metadata->listSchemaNames(session);

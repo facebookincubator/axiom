@@ -15,6 +15,7 @@
  */
 
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
@@ -62,9 +63,20 @@ class LocalHiveConnectorMetadataTest
         }}});
 
     runner::test::LocalRunnerTestBase::SetUp();
-    metadata_ = dynamic_cast<LocalHiveConnectorMetadata*>(
-        ConnectorMetadata::metadata(velox::exec::test::kHiveConnectorId));
+    auto metadataPtr =
+        ConnectorMetadataRegistry::tryGet(velox::exec::test::kHiveConnectorId);
+    VELOX_CHECK_NOT_NULL(
+        metadataPtr,
+        "ConnectorMetadata not registered: {}",
+        velox::exec::test::kHiveConnectorId);
+    metadata_ =
+        std::dynamic_pointer_cast<LocalHiveConnectorMetadata>(metadataPtr);
     ASSERT_TRUE(metadata_ != nullptr);
+  }
+
+  void TearDown() override {
+    metadata_.reset();
+    runner::test::LocalRunnerTestBase::TearDown();
   }
 
   static const LocalHiveTableLayout* getLayout(const TablePtr& table) {
@@ -204,7 +216,7 @@ class LocalHiveConnectorMetadataTest
   }
 
   RowTypePtr rowType_;
-  LocalHiveConnectorMetadata* metadata_{};
+  std::shared_ptr<LocalHiveConnectorMetadata> metadata_;
 };
 
 TEST_F(LocalHiveConnectorMetadataTest, basic) {

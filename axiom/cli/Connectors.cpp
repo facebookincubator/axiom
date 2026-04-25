@@ -19,6 +19,7 @@
 #include <folly/system/HardwareConcurrency.h>
 #include "axiom/common/SessionConfig.h"
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/system/SystemConnector.h"
@@ -91,7 +92,7 @@ Connectors::Connectors() {
 Connectors::~Connectors() {
   for (const auto& connectorId : connectorIds_) {
     // Unregister metadata first since it may reference the connector.
-    connector::ConnectorMetadata::unregisterMetadata(connectorId);
+    connector::ConnectorMetadataRegistry::global().erase(connectorId);
     velox::connector::ConnectorRegistry::global().erase(connectorId);
   }
 }
@@ -130,7 +131,7 @@ std::shared_ptr<velox::connector::Connector> Connectors::registerTpchConnector(
   auto tpchConnector =
       dynamic_cast<velox::connector::tpch::TpchConnector*>(connector.get());
   VELOX_CHECK_NOT_NULL(tpchConnector);
-  connector::ConnectorMetadata::registerMetadata(
+  connector::ConnectorMetadataRegistry::global().insert(
       connector->connectorId(),
       std::make_shared<connector::tpch::TpchConnectorMetadata>(tpchConnector));
 
@@ -157,7 +158,7 @@ Connectors::registerLocalHiveConnector(
   auto hiveConnector =
       dynamic_cast<velox::connector::hive::HiveConnector*>(connector.get());
   VELOX_CHECK_NOT_NULL(hiveConnector);
-  connector::ConnectorMetadata::registerMetadata(
+  connector::ConnectorMetadataRegistry::global().insert(
       connector->connectorId(),
       std::make_shared<connector::hive::LocalHiveConnectorMetadata>(
           hiveConnector));
@@ -184,7 +185,7 @@ void Connectors::registerSystemConnector(
       /*queryInfoProvider=*/nullptr,
       sessionPropertiesProvider_.get());
   registerConnector(connector);
-  connector::ConnectorMetadata::registerMetadata(
+  connector::ConnectorMetadataRegistry::global().insert(
       connector->connectorId(),
       std::make_shared<connector::system::SystemConnectorMetadata>(
           connector.get()));

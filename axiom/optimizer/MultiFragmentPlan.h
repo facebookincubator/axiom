@@ -87,7 +87,7 @@ class FinishWrite {
   FinishWrite& operator=(FinishWrite&& other) noexcept = default;
 
   FinishWrite(
-      connector::ConnectorMetadata* metadata,
+      std::shared_ptr<connector::ConnectorMetadata> metadata,
       connector::ConnectorSessionPtr session,
       connector::ConnectorWriteHandlePtr handle,
       WriteStatsMapping statsMapping = {});
@@ -108,7 +108,7 @@ class FinishWrite {
   [[nodiscard]] velox::ContinueFuture abort() && noexcept;
 
  private:
-  connector::ConnectorMetadata* metadata_{nullptr};
+  std::shared_ptr<connector::ConnectorMetadata> metadata_;
   connector::ConnectorSessionPtr session_;
   connector::ConnectorWriteHandlePtr handle_;
   WriteStatsMapping statsMapping_;
