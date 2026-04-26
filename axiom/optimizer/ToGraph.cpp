@@ -3714,16 +3714,104 @@ void ToGraph::makeQueryGraph(
     case lp::NodeKind::kAggregate: {
       const auto& input = *node.onlyInput();
       makeQueryGraph(input, allowedInDt, excludeOuterJoins);
-      if (currentDt_->hasAggregation() || currentDt_->hasLimit() ||
-          currentDt_->windowPlan) {
-        finalizeDtWithCorrelatedConjuncts(input);
-      } else if (currentDt_->hasOrderBy()) {
-        currentDt_->dropOrderBy();
+
+      // Eliminate redundant nested DISTINCT-only aggregations. When both the
+      // existing and new aggregations have no aggregate functions, one of them
+      // may be unnecessary:
+      // - If outer keys ⊆ inner keys, the inner aggregation is redundant.
+      // - If inner keys ⊂ outer keys and the extra outer keys are deterministic
+      //   functions of the inner keys, the outer aggregation is redundant.
+      bool skipOuterAggregation = false;
+      if (currentDt_->hasAggregation() && !currentDt_->hasLimit() &&
+          !currentDt_->windowPlan && correlatedConjuncts_.empty()) {
+        const auto* existingAgg = currentDt_->aggregation;
+        const auto* aggNode = node.as<lp::AggregateNode>();
+        if (existingAgg->aggregates().empty() &&
+            aggNode->aggregates().empty()) {
+          folly::F14FastSet<std::string> innerKeyNames;
+          for (const auto* key : existingAgg->groupingKeys()) {
+            if (key->is(PlanType::kColumnExpr)) {
+              innerKeyNames.insert(std::string(key->as<Column>()->name()));
+            }
+          }
+
+          folly::F14FastSet<std::string> outerKeyNames;
+          bool allOuterAreColumnRefs = true;
+          for (const auto& key : aggNode->groupingKeys()) {
+            const auto* inputRef =
+                dynamic_cast<const lp::InputReferenceExpr*>(key.get());
+            if (inputRef != nullptr) {
+              outerKeyNames.insert(inputRef->name());
+            } else {
+              allOuterAreColumnRefs = false;
+              break;
+            }
+          }
+
+          if (allOuterAreColumnRefs && !innerKeyNames.empty()) {
+            // Check if outer keys ⊆ inner keys → inner is redundant.
+            bool outerIsSubsetOfInner = true;
+            for (const auto& name : outerKeyNames) {
+              if (!innerKeyNames.contains(name)) {
+                outerIsSubsetOfInner = false;
+                break;
+              }
+            }
+
+            if (outerIsSubsetOfInner) {
+              currentDt_->aggregation = nullptr;
+            } else {
+              // Check if inner keys ⊂ outer keys → outer may be redundant.
+              bool innerIsSubsetOfOuter = true;
+              for (const auto& name : innerKeyNames) {
+                if (!outerKeyNames.contains(name)) {
+                  innerIsSubsetOfOuter = false;
+                  break;
+                }
+              }
+
+              if (innerIsSubsetOfOuter) {
+                // Extra outer keys are deterministic functions of inner keys
+                // because after an aggregation, only grouping keys are
+                // available as columns. Verify the extra keys exist in the
+                // rename map and are deterministic.
+                bool allExtraAreValid = true;
+                for (const auto& name : outerKeyNames) {
+                  if (innerKeyNames.contains(name)) {
+                    continue;
+                  }
+                  auto it = renames_.find(name);
+                  if (it == renames_.end()) {
+                    allExtraAreValid = false;
+                    break;
+                  }
+                  if (it->second->containsNonDeterministic()) {
+                    allExtraAreValid = false;
+                    break;
+                  }
+                }
+
+                if (allExtraAreValid) {
+                  skipOuterAggregation = true;
+                }
+              }
+            }
+          }
+        }
       }
 
-      auto* agg = translateAggregation(*node.as<lp::AggregateNode>());
-      if (auto* result = processCorrelatedAggregation(agg)) {
-        currentDt_->aggregation = result;
+      if (!skipOuterAggregation) {
+        if (currentDt_->hasAggregation() || currentDt_->hasLimit() ||
+            currentDt_->windowPlan) {
+          finalizeDtWithCorrelatedConjuncts(input);
+        } else if (currentDt_->hasOrderBy()) {
+          currentDt_->dropOrderBy();
+        }
+
+        auto* agg = translateAggregation(*node.as<lp::AggregateNode>());
+        if (auto* result = processCorrelatedAggregation(agg)) {
+          currentDt_->aggregation = result;
+        }
       }
 
     } break;
