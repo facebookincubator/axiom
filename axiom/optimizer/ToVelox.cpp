@@ -212,6 +212,69 @@ void checkStageWidths(const std::vector<ExecutableFragment>& stages) {
   }
 }
 
+// Verifies that no fragment mixes inline table scans with hash-partitioned
+// exchange inputs in a LocalPartition. Hash-partitioned exchanges require
+// exactly width consumer tasks, but scans trigger DYNAMIC scheduling which
+// can create fewer tasks — causing silent data loss for unserved partitions.
+// Round-robin exchanges are safe because they distribute evenly regardless
+// of consumer task count.
+void checkNoMixedScanHashExchange(
+    const std::vector<ExecutableFragment>& stages) {
+  folly::F14FastMap<std::string, const ExecutableFragment*> stageByPrefix;
+  for (const auto& stage : stages) {
+    stageByPrefix[stage.taskPrefix] = &stage;
+  }
+
+  for (const auto& stage : stages) {
+    // Check if this fragment has inline scans.
+    bool hasInlineScan = false;
+    std::function<void(const velox::core::PlanNode*)> findScan;
+    findScan = [&](const velox::core::PlanNode* node) {
+      if (dynamic_cast<const velox::core::TableScanNode*>(node)) {
+        hasInlineScan = true;
+        return;
+      }
+      // Don't recurse into Exchange — those are in other fragments.
+      if (dynamic_cast<const velox::core::ExchangeNode*>(node)) {
+        return;
+      }
+      for (const auto& child : node->sources()) {
+        findScan(child.get());
+      }
+    };
+    findScan(stage.fragment.planNode.get());
+
+    if (!hasInlineScan) {
+      continue;
+    }
+
+    // This fragment has scans → DYNAMIC scheduling. Check if any input
+    // stage uses hash partitioning (not round-robin or broadcast).
+    for (const auto& input : stage.inputStages) {
+      auto it = stageByPrefix.find(input.producerTaskPrefix);
+      if (it == stageByPrefix.end()) {
+        continue;
+      }
+      auto* output = dynamic_cast<const velox::core::PartitionedOutputNode*>(
+          it->second->fragment.planNode.get());
+      if (!output || output->isBroadcast()) {
+        continue;
+      }
+      // Round-robin is safe — data distributes evenly to any task count.
+      if (dynamic_cast<const velox::exec::RoundRobinPartitionFunctionSpec*>(
+              &output->partitionFunctionSpec())) {
+        continue;
+      }
+      VELOX_FAIL(
+          "Stage has inline scans (DYNAMIC scheduling) but receives "
+          "hash-partitioned exchange. This can silently drop data if fewer "
+          "tasks are created than the exchange expects: stage={}, producer={}",
+          stage.taskPrefix,
+          input.producerTaskPrefix);
+    }
+  }
+}
+
 } // namespace
 
 void ToVelox::filterUpdated(BaseTableCP table) {
@@ -390,6 +453,7 @@ PlanAndStats ToVelox::toVeloxPlan(
     velox::core::PlanConsistencyChecker::check(stage.fragment.planNode);
   }
   checkStageWidths(stages);
+  checkNoMixedScanHashExchange(stages);
 
   if (options.remoteOutput) {
     rootPlanNode = velox::core::PartitionedOutputNode::single(
@@ -1694,18 +1758,88 @@ velox::core::PlanNodePtr ToVelox::makeUnionAll(
     const UnionAll& unionAll,
     ExecutableFragment& fragment,
     std::vector<ExecutableFragment>& stages) {
-  // If no inputs have a repartition, this is a local exchange. If
-  // some have repartition and more than one have no repartition,
-  // this is a local exchange with a remote exchange as input. All the
-  // inputs with repartition go to one remote exchange.
-  std::vector<velox::core::PlanNodePtr> localSources;
+  // Phase 1: classify inputs.
+  struct LocalInput {
+    velox::core::PlanNodePtr plan; // Root plan node from makeFragment.
+    ExecutableFragment source; // Fragment holding plan, width, inputStages.
+    bool constrained; // True when source.width != fragment.width after
+                      // processing.
+  };
+  std::vector<LocalInput> localInputs;
   std::shared_ptr<velox::core::ExchangeNode> exchange;
+  bool needsIsolation{false}; // Constrained inputs need wrapping.
+  // Snapshot before the loop — makeRepartition can mutate fragment.width.
+  const auto originalWidth = fragment.width;
+
   for (const auto& input : unionAll.inputs) {
     if (input->relType() == RelType::kRepartition) {
       makeRepartition(*input->as<Repartition>(), fragment, stages, exchange);
+      // Repartition creates exchange inputs on the consumer, so any
+      // constrained siblings must be isolated to avoid width contamination.
+      needsIsolation = true;
     } else {
-      localSources.push_back(makeFragment(input, fragment, stages));
+      auto source = newFragment();
+      auto plan = makeFragment(input, source, stages);
+      bool constrained = source.width != originalWidth;
+      if (!constrained || !source.inputStages.empty()) {
+        needsIsolation = true;
+      }
+      localInputs.push_back({std::move(plan), std::move(source), constrained});
     }
+  }
+
+  // Phase 2: build local sources. Wrap constrained inputs (width=1) when
+  // they would contaminate unconstrained siblings, and inputs with sub-stages
+  // (their exchanges need matching partition counts). Plain table scans
+  // stay inline.
+  int32_t constrainedWidth{0};
+  std::vector<velox::core::PlanNodePtr> localSources;
+  for (auto& localInput : localInputs) {
+    bool isolateConstrained = localInput.constrained && needsIsolation;
+    bool hasSubStages = !localInput.source.inputStages.empty();
+    if (isolateConstrained || hasSubStages) {
+      // Wrap in a producer stage (round-robin to fragment.width partitions).
+      VELOX_CHECK_GT(fragment.width, 0);
+      localInput.source.fragment.planNode =
+          std::make_shared<velox::core::PartitionedOutputNode>(
+              nextId(),
+              velox::core::PartitionedOutputNode::Kind::kPartitioned,
+              std::vector<velox::core::TypedExprPtr>{},
+              fragment.width,
+              false,
+              std::make_shared<velox::exec::RoundRobinPartitionFunctionSpec>(),
+              localInput.plan->outputType(),
+              exchangeSerdeKind_,
+              localInput.plan);
+      auto localExchange = std::make_shared<velox::core::ExchangeNode>(
+          nextId(), localInput.plan->outputType(), exchangeSerdeKind_);
+      fragment.inputStages.emplace_back(
+          localExchange->id(), localInput.source.taskPrefix);
+      stages.push_back(std::move(localInput.source));
+      localSources.push_back(localExchange);
+    } else {
+      // Safe to inline — either not constrained or all inputs agree on width.
+      if (localInput.constrained) {
+        VELOX_CHECK(
+            constrainedWidth == 0 ||
+                constrainedWidth == localInput.source.width,
+            "UnionAll has inlined constrained inputs with incompatible widths. "
+            "Consumer fragment can only run with one width: "
+            "existing={}, new={}",
+            constrainedWidth,
+            localInput.source.width);
+        constrainedWidth = localInput.source.width;
+      }
+      for (auto& inputStage : localInput.source.inputStages) {
+        fragment.inputStages.push_back(std::move(inputStage));
+      }
+      localSources.push_back(std::move(localInput.plan));
+    }
+  }
+
+  // Apply the agreed-upon constrained width to the consumer fragment.
+  if (constrainedWidth != 0) {
+    fragment.width = constrainedWidth;
   }
 
   if (localSources.empty()) {
