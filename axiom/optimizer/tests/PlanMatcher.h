@@ -459,6 +459,41 @@ class PlanMatcherBuilder {
       const std::vector<std::string>& sortingKeys,
       int32_t limit);
 
+  /// Matches the distributed mark-distinct pattern:
+  /// shuffle → localPartition(keys) → markDistinct(keys, markerAlias).
+  PlanMatcherBuilder& distributedMarkDistinct(
+      const std::vector<std::string>& keys,
+      const std::string& markerAlias);
+
+  /// Matches the split aggregation pattern:
+  /// partialAggregation(groupingKeys, aggregates) → shuffle →
+  /// localPartition(groupingKeys) → finalAggregation.
+  /// For empty groupingKeys, uses localGather instead of localPartition.
+  PlanMatcherBuilder& splitAggregation(
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates);
+
+  /// Matches the distributed single-step aggregation pattern:
+  /// shuffle → localPartition(groupingKeys) → singleAggregation(groupingKeys,
+  /// aggregates). For empty groupingKeys, uses localGather instead of
+  /// localPartition.
+  PlanMatcherBuilder& distributedSingleAggregation(
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates);
+
+  /// Matches any MarkDistinct node regardless of distinct keys.
+  PlanMatcherBuilder& markDistinct();
+
+  /// Matches a MarkDistinct node with the specified distinct keys.
+  /// @param distinctKeys List of expected distinct keys. Supports symbol
+  /// rewriting from child matchers.
+  /// @param markerAlias If provided, registers a symbol mapping from this
+  /// alias to the marker column name, so downstream matchers can reference the
+  /// marker by alias.
+  PlanMatcherBuilder& markDistinct(
+      const std::vector<std::string>& distinctKeys,
+      std::optional<std::string> markerAlias = std::nullopt);
+
   /// Builds and returns the constructed PlanMatcher.
   /// @throws VeloxUserError if matcher is empty.
   std::shared_ptr<PlanMatcher> build() {

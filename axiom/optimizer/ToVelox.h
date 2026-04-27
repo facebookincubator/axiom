@@ -281,6 +281,12 @@ class ToVelox {
       WindowFunctionCP windowFunc,
       ColumnCP outputColumn);
 
+  // Makes a Velox MarkDistinctNode for a RelationOp.
+  velox::core::PlanNodePtr makeMarkDistinct(
+      const MarkDistinct& op,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
   // Makes a tree of PlanNode for a tree of
   // RelationOp. 'fragment' is the fragment that 'op'
   // belongs to. If op or children are repartitions then the

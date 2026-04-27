@@ -186,6 +186,21 @@ const Aggregate* Aggregate::dropDistinct() const {
       orderTypes_);
 }
 
+const Aggregate* Aggregate::replaceDistinctWithMarker(ExprCP marker) const {
+  VELOX_CHECK(isDistinct_);
+  VELOX_CHECK_NULL(condition_);
+  return make<Aggregate>(
+      name(),
+      value_,
+      args(),
+      functions(),
+      /*isDistinct=*/false,
+      marker,
+      intermediateType_,
+      orderKeys_,
+      orderTypes_);
+}
+
 std::string WindowFunction::toString() const {
   std::stringstream out;
   out << name() << "(";

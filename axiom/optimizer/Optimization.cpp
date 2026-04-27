@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <iostream>
 #include <utility>
+#include "axiom/optimizer/AggregationPlanner.h"
 #include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Plan.h"
@@ -52,6 +53,10 @@ Optimization::Optimization(
       history_(history),
       veloxQueryCtx_(std::move(veloxQueryCtx)),
       topState_{*this, nullptr},
+      aggregationPlanner_{
+          isSingleWorker_,
+          isSingleDriver_,
+          options_.alwaysPlanPartialAggregation},
       toGraph_{schema, evaluator, options_},
       toVelox_{session_, runnerOptions_, options_} {
   queryCtx()->optimization() = this;
@@ -774,69 +779,6 @@ bool isSingleWorker() {
   return queryCtx()->optimization()->runnerOptions().numWorkers == 1;
 }
 
-// Repartitions 'plan' by 'desiredKeys' if needed. Adds a gather if
-// desiredKeys is empty. Adds a shuffle if existing partition keys are not a
-// superset of desiredKeys. Does nothing if data is already gathered or
-// partitioned correctly.
-void maybeRepartition(
-    RelationOpPtr& plan,
-    ExprVector desiredKeys,
-    PlanCost& cost) {
-  if (plan->distribution().isGather()) {
-    return;
-  }
-
-  if (desiredKeys.empty()) {
-    auto* gather =
-        make<Repartition>(plan, Distribution::gather(), plan->columns());
-    cost.add(*gather);
-    plan = gather;
-    return;
-  }
-
-  // Check if existing partition keys are a superset of desired keys. If
-  // partition keys are empty or contain columns not in desired keys, shuffle.
-  bool shuffle = plan->distribution().partitionKeys().empty();
-  if (!shuffle) {
-    const auto& existingKeys = plan->distribution().partitionKeys();
-    shuffle = std::any_of(
-        existingKeys.begin(),
-        existingKeys.end(),
-        [&desiredKeys](const auto& key) {
-          return position(desiredKeys, *key) == kNotFound;
-        });
-  }
-
-  if (shuffle) {
-    Distribution distribution{
-        plan->distribution().distributionType(), std::move(desiredKeys)};
-    auto* repartition =
-        make<Repartition>(plan, std::move(distribution), plan->columns());
-    cost.add(*repartition);
-    plan = repartition;
-  }
-}
-
-void repartitionForAgg(
-    RelationOpPtr& plan,
-    const ExprVector& groupingKeys,
-    const ColumnVector& intermediateColumns,
-    PlanCost& cost) {
-  if (isSingleWorker()) {
-    return;
-  }
-
-  // 'intermediateColumns' contains grouping keys followed by partial agg
-  // results.
-  ExprVector keyValues;
-  keyValues.reserve(groupingKeys.size());
-  for (auto i = 0; i < groupingKeys.size(); ++i) {
-    keyValues.push_back(intermediateColumns[i]);
-  }
-
-  maybeRepartition(plan, std::move(keyValues), cost);
-}
-
 CPSpan<Column> leadingColumns(const ExprVector& exprs) {
   size_t i = 0;
   for (; i < exprs.size(); ++i) {
@@ -1151,8 +1093,11 @@ void Optimization::addPostprocess(
     VELOX_DCHECK(!dt->hasLimit());
     PrecomputeProjection precompute{plan, dt, /*projectAllInputs=*/false};
     auto writeColumns = precompute.toColumns(dt->write->columnExprs());
-    plan = std::move(precompute).maybeProject();
-    state.addCost(*plan);
+    auto projected = std::move(precompute).maybeProject();
+    if (projected != plan) {
+      state.addCost(*projected);
+    }
+    plan = std::move(projected);
 
     plan = repartitionForWrite(plan, state);
     plan = make<TableWrite>(plan, std::move(writeColumns), dt->write);
@@ -1223,432 +1168,11 @@ void Optimization::addPostprocess(
   }
 }
 
-namespace {
-
-AggregateVector flattenAggregates(
-    const AggregateVector& aggregates,
-    PrecomputeProjection& precompute) {
-  AggregateVector flatAggregates;
-  flatAggregates.reserve(aggregates.size());
-
-  for (const auto& agg : aggregates) {
-    ExprCP condition = nullptr;
-    if (agg->condition()) {
-      condition = precompute.toColumn(agg->condition());
-    }
-    ExprVector args;
-    args.reserve(agg->args().size());
-    for (const auto& arg : agg->args()) {
-      if (arg->is(PlanType::kLambdaExpr)) {
-        args.push_back(arg);
-      } else {
-        args.push_back(precompute.toColumn(arg, nullptr, true));
-      }
-    }
-    auto orderKeys = precompute.toColumns(agg->orderKeys());
-    flatAggregates.emplace_back(
-        make<Aggregate>(
-            agg->name(),
-            agg->value(),
-            std::move(args),
-            agg->functions(),
-            agg->isDistinct(),
-            condition,
-            agg->intermediateType(),
-            std::move(orderKeys),
-            agg->orderTypes()));
-  }
-
-  return flatAggregates;
-}
-
-// Computes the pre-grouped keys for streaming aggregation based on input's
-// orderKeys and clusterKeys. For orderKeys, returns the longest prefix that
-// is also a grouping key (order guarantees break at the first non-grouping
-// key). For clusterKeys, returns any subset that are grouping keys (clustering
-// only requires contiguous values, not ordering). Returns whichever set is
-// larger to maximize streaming benefit.
-ExprVector computePreGroupedKeys(
-    const RelationOp& input,
-    const ExprVector& groupingKeys) {
-  if (groupingKeys.empty()) {
-    return {};
-  }
-
-  auto isGroupingKey = [&](ExprCP key) {
-    for (const auto& groupingKey : groupingKeys) {
-      if (key->sameOrEqual(*groupingKey)) {
-        return true;
-      }
-    }
-    return false;
-  };
-
-  // Check orderKeys - find the longest prefix that is in groupingKeys.
-  // For ordered data, we can only use a prefix because the order guarantee
-  // breaks once we hit a key not in groupingKeys.
-  ExprVector fromOrderKeys;
-  const auto& orderKeys = input.distribution().orderKeys();
-  for (const auto& key : orderKeys) {
-    if (isGroupingKey(key)) {
-      fromOrderKeys.push_back(key);
-    } else {
-      break; // Must be a prefix for ordered data.
-    }
-  }
-
-  // Check clusterKeys - any subset of groupingKeys works.
-  // Clustering doesn't require prefix matching since rows with the same
-  // cluster key values are contiguous regardless of other columns.
-  ExprVector fromClusterKeys;
-  const auto& clusterKeys = input.distribution().clusterKeys();
-  for (const auto& key : clusterKeys) {
-    if (isGroupingKey(key)) {
-      fromClusterKeys.push_back(key);
-    }
-  }
-
-  // Return the larger subset for maximum streaming benefit.
-  // When equal, prefer orderKeys. Ideally we'd choose the set that produces
-  // the smallest hash table, but we lack data to make that determination.
-  return fromOrderKeys.size() >= fromClusterKeys.size() ? fromOrderKeys
-                                                        : fromClusterKeys;
-}
-
-// Creates a two-phase (partial + final) aggregation plan for distributed
-// execution. First applies a partial aggregation on local data, then
-// repartitions by grouping keys and performs the final aggregation. Returns a
-// pair of the root to the aggregation plan and cost of this aggregation.
-std::pair<Aggregation*, PlanCost> makeSplitAggregationPlan(
-    RelationOpPtr plan,
-    const ExprVector& groupingKeys,
-    const AggregateVector& aggregates,
-    const ColumnVector& intermediateColumns,
-    const ColumnVector& outputColumns) {
-  PlanCost splitAggCost;
-  Aggregation* splitAggPlan;
-
-  plan = make<Aggregation>(
-      plan,
-      groupingKeys,
-      /*preGroupedKeys*/ ExprVector{},
-      aggregates,
-      velox::core::AggregationNode::Step::kPartial,
-      intermediateColumns);
-  splitAggCost.add(*plan);
-
-  repartitionForAgg(plan, groupingKeys, intermediateColumns, splitAggCost);
-
-  const auto numKeys = groupingKeys.size();
-
-  ExprVector finalGroupingKeys;
-  finalGroupingKeys.reserve(numKeys);
-  for (auto i = 0; i < numKeys; ++i) {
-    finalGroupingKeys.push_back(intermediateColumns[i]);
-  }
-
-  splitAggPlan = make<Aggregation>(
-      plan,
-      std::move(finalGroupingKeys),
-      /*preGroupedKeys*/ ExprVector{},
-      aggregates,
-      velox::core::AggregationNode::Step::kFinal,
-      outputColumns);
-  splitAggCost.add(*splitAggPlan);
-
-  return {splitAggPlan, splitAggCost};
-}
-
-// Creates a single-phase aggregation plan where data is first repartitioned by
-// grouping keys and then aggregated in one step. Returns a pair of the root to
-// the aggregation plan and the cost of this aggregation.
-std::pair<Aggregation*, PlanCost> makeSingleAggregationPlan(
-    RelationOpPtr plan,
-    const ExprVector& groupingKeys,
-    const AggregateVector& aggregates,
-    const ColumnVector& intermediateColumns,
-    const ColumnVector& outputColumns) {
-  PlanCost singleAggCost;
-  repartitionForAgg(plan, groupingKeys, intermediateColumns, singleAggCost);
-  auto* singleAgg = make<Aggregation>(
-      plan,
-      groupingKeys,
-      /*preGroupedKeys*/ ExprVector{},
-      aggregates,
-      velox::core::AggregationNode::Step::kSingle,
-      outputColumns);
-  singleAggCost.add(*singleAgg);
-
-  return {singleAgg, singleAggCost};
-}
-
-// Makes a split (two-phase) or single (one-phase) aggregation plan.
-// If groupingKeys is empty or alwaysPlanPartialAggregation is true, always
-// uses split aggregation. Otherwise, compares both plans and returns the one
-// with lower cost. Returns a pair of the root to the aggregation plan and its
-// cost.
-std::pair<Aggregation*, PlanCost> makeSplitOrSingleAggregationPlan(
-    const RelationOpPtr& plan,
-    const ExprVector& groupingKeys,
-    const AggregateVector& aggregates,
-    const ColumnVector& intermediateColumns,
-    const ColumnVector& outputColumns,
-    bool alwaysPlanPartialAggregation) {
-  const auto& [splitAggPlan, splitAggCost] = makeSplitAggregationPlan(
-      plan, groupingKeys, aggregates, intermediateColumns, outputColumns);
-
-  if (groupingKeys.empty() || alwaysPlanPartialAggregation) {
-    return {splitAggPlan, splitAggCost};
-  }
-
-  const auto& [singleAgg, singleAggCost] = makeSingleAggregationPlan(
-      plan, groupingKeys, aggregates, intermediateColumns, outputColumns);
-
-  if (singleAggCost.cost < splitAggCost.cost) {
-    return {singleAgg, singleAggCost};
-  }
-  return {splitAggPlan, splitAggCost};
-}
-
-} // namespace
-
-// static
-RelationOpPtr Optimization::planSingleAggregation(
-    DerivedTableCP dt,
-    RelationOpPtr& input) {
-  const auto* aggPlan = dt->aggregation;
-
-  PrecomputeProjection precompute(input, dt, /*projectAllInputs=*/false);
-  auto groupingKeys =
-      precompute.toColumns(aggPlan->groupingKeys(), &aggPlan->columns());
-  auto aggregates = flattenAggregates(aggPlan->aggregates(), precompute);
-
-  return make<Aggregation>(
-      std::move(precompute).maybeProject(),
-      std::move(groupingKeys),
-      /*preGroupedKeys*/ ExprVector{},
-      std::move(aggregates),
-      velox::core::AggregationNode::Step::kSingle,
-      aggPlan->columns());
-}
-
-namespace {
-
-// Returns the union of 'groupingKeys' and column expressions from 'args',
-// skipping literals. Throws on unexpected expression types.
-ExprVector unionColumnArgs(
-    const ExprVector& groupingKeys,
-    const ExprVector& args) {
-  ExprVector keys = groupingKeys;
-  auto keySet = PlanObjectSet::fromObjects(keys);
-  for (const auto* arg : args) {
-    if (arg->is(PlanType::kLiteralExpr)) {
-      continue;
-    }
-    VELOX_CHECK(
-        arg->is(PlanType::kColumnExpr),
-        "Expected column or literal expression: {}",
-        arg->toString());
-    if (!keySet.contains(arg)) {
-      keySet.add(arg);
-      keys.push_back(arg);
-    }
-  }
-  return keys;
-}
-
-// Returns the common distinct arguments if all aggregates are DISTINCT with
-// the same set of arguments and no filters. Throws if any of these conditions
-// is not met.
-ExprVector getSingleDistinctArgs(const AggregateVector& aggregates) {
-  VELOX_CHECK(!aggregates.empty());
-
-  for (const auto* agg : aggregates) {
-    // Must be DISTINCT
-    if (!agg->isDistinct()) {
-      VELOX_UNSUPPORTED("Mix of DISTINCT and non-DISTINCT aggregates");
-    }
-    // No filter
-    if (agg->condition() != nullptr) {
-      VELOX_UNSUPPORTED("DISTINCT aggregates have filters");
-    }
-  }
-
-  // Check same column args across all aggregates (as a set, using pointer
-  // equality since exprs are deduplicated). Literals are ignored since they are
-  // constant and do not affect which rows are considered distinct.
-  auto commonArgs = unionColumnArgs({}, aggregates[0]->args());
-  auto commonColumnArgSet = PlanObjectSet::fromObjects(commonArgs);
-  PlanObjectSet currentColumnArgSet;
-  for (size_t i = 1; i < aggregates.size(); ++i) {
-    currentColumnArgSet.clear();
-    currentColumnArgSet.unionObjects(
-        unionColumnArgs({}, aggregates[i]->args()));
-    if (currentColumnArgSet != commonColumnArgSet) {
-      VELOX_UNSUPPORTED("DISTINCT aggregates have multiple sets of arguments");
-    }
-  }
-
-  return commonArgs;
-}
-
-// Returns a copy of aggregates with isDistinct set to false.
-AggregateVector dropDistinctFromAggregates(const AggregateVector& aggregates) {
-  AggregateVector result;
-  result.reserve(aggregates.size());
-  for (const auto* aggregate : aggregates) {
-    result.push_back(aggregate->dropDistinct());
-  }
-  return result;
-}
-
-} // namespace
-
 void Optimization::addAggregation(
     DerivedTableCP dt,
     RelationOpPtr& plan,
     PlanState& state) const {
-  const auto* aggPlan = dt->aggregation;
-
-  PrecomputeProjection precompute(plan, dt, /*projectAllInputs=*/false);
-  auto groupingKeys =
-      precompute.toColumns(aggPlan->groupingKeys(), &aggPlan->columns());
-  auto aggregates = flattenAggregates(aggPlan->aggregates(), precompute);
-
-  plan = std::move(precompute).maybeProject();
-  state.place(aggPlan);
-
-  auto preGroupedKeys = computePreGroupedKeys(*plan, groupingKeys);
-  if ((isSingleWorker_ && isSingleDriver_) || !preGroupedKeys.empty()) {
-    auto* singleAgg = make<Aggregation>(
-        plan,
-        std::move(groupingKeys),
-        std::move(preGroupedKeys),
-        std::move(aggregates),
-        velox::core::AggregationNode::Step::kSingle,
-        aggPlan->columns());
-
-    state.addCost(*singleAgg);
-    plan = singleAgg;
-    return;
-  }
-
-  const auto hasDistinct =
-      std::any_of(aggregates.begin(), aggregates.end(), [](const auto& agg) {
-        return agg->isDistinct();
-      });
-  const auto hasOrderBy =
-      std::any_of(aggregates.begin(), aggregates.end(), [](const auto& agg) {
-        return !agg->orderKeys().empty();
-      });
-  if (hasDistinct) {
-    auto distinctArgs = getSingleDistinctArgs(aggregates);
-    transformDistinctToGroupBy(
-        plan,
-        state.cost,
-        groupingKeys,
-        distinctArgs,
-        aggregates,
-        aggPlan,
-        hasOrderBy);
-    return;
-  }
-
-  // Check if any aggregate has ORDER BY keys. If so, we must use single-step
-  // aggregation because partial aggregation cannot preserve global ordering.
-  if (hasOrderBy) {
-    const auto& [singleAgg, singleAggCost] = makeSingleAggregationPlan(
-        plan,
-        groupingKeys,
-        aggregates,
-        aggPlan->intermediateColumns(),
-        aggPlan->columns());
-    plan = singleAgg;
-    state.cost.add(singleAggCost);
-    return;
-  }
-
-  // We make a plan with partial agg and one without and pick the better
-  // according to cost model. We use the cost functions of the RelationOps to
-  // get details of the width of intermediate results, shuffles and so forth. A
-  // simpler but less precise way would be to simply not make a partial agg if
-  // expected total cardinality is more than so much. But the capacity of
-  // partial agg also depends on the width of the data and configs so instead of
-  // unbundling the cost functions we make different kinds of plans and use the
-  // plan's functions.
-  const auto& [selectedPlan, selectedCost] = makeSplitOrSingleAggregationPlan(
-      plan,
-      groupingKeys,
-      aggregates,
-      aggPlan->intermediateColumns(),
-      aggPlan->columns(),
-      options_.alwaysPlanPartialAggregation);
-  plan = selectedPlan;
-  state.cost.add(selectedCost);
-}
-
-void Optimization::transformDistinctToGroupBy(
-    RelationOpPtr& plan,
-    PlanCost& cost,
-    const ExprVector& groupingKeys,
-    const ExprVector& distinctArgs,
-    const AggregateVector& aggregates,
-    AggregationPlanCP aggPlan,
-    bool hasOrderBy) const {
-  // Build inner GROUP BY keys: groupingKeys union distinctArgs. We put
-  // groupingKeys at the beginning, followed by distinctArgs not appearing in
-  // groupingKeys.
-  ExprVector innerKeys = groupingKeys;
-  PlanObjectSet innerKeySet = PlanObjectSet::fromObjects(groupingKeys);
-  for (const auto* arg : distinctArgs) {
-    if (!innerKeySet.contains(arg)) {
-      innerKeySet.add(arg);
-      innerKeys.push_back(arg);
-    }
-  }
-
-  // Make output columns of inner aggregation.
-  ColumnVector innerColumns;
-  innerColumns.reserve(innerKeys.size());
-  for (const auto* key : innerKeys) {
-    const auto* keyColumn = key->as<Column>();
-    VELOX_CHECK_NOT_NULL(keyColumn);
-    innerColumns.push_back(keyColumn);
-  }
-
-  const auto& [innerAgg, innerAggCost] = makeSplitOrSingleAggregationPlan(
-      plan,
-      innerKeys,
-      AggregateVector{},
-      innerColumns,
-      innerColumns,
-      options_.alwaysPlanPartialAggregation);
-  cost.add(innerAggCost);
-  plan = innerAgg;
-
-  // Make non-distinct aggregation calls for the outer level.
-  auto nonDistinctAggregates = dropDistinctFromAggregates(aggregates);
-
-  if (hasOrderBy) {
-    const auto& [outerPlan, outerCost] = makeSingleAggregationPlan(
-        plan,
-        groupingKeys,
-        nonDistinctAggregates,
-        aggPlan->intermediateColumns(),
-        aggPlan->columns());
-    plan = outerPlan;
-    cost.add(outerCost);
-  } else {
-    const auto& [outerPlan, outerCost] = makeSplitOrSingleAggregationPlan(
-        plan,
-        groupingKeys,
-        nonDistinctAggregates,
-        aggPlan->intermediateColumns(),
-        aggPlan->columns(),
-        options_.alwaysPlanPartialAggregation);
-    plan = outerPlan;
-    cost.add(outerCost);
-  }
+  aggregationPlanner_.plan(dt, plan, state);
 }
 
 namespace {
@@ -2029,17 +1553,21 @@ bool Optimization::addWindow(
     auto orderKeys = precompute.toColumns(group.orderKeys);
     auto planBeforeProject = plan;
     plan = std::move(precompute).maybeProject();
-
-    // Velox WindowNode passes through all input columns. When precompute
-    // didn't add a Project (all needed columns are simple pass-throughs of
-    // input columns), drop columns not needed by this or subsequent window
-    // groups or by downstream operators.
-    if (plan == planBeforeProject) {
+    if (plan != planBeforeProject) {
+      state.addCost(*plan);
+    } else {
+      // Velox WindowNode passes through all input columns. When precompute
+      // didn't add a Project (all needed columns are simple pass-throughs of
+      // input columns), drop columns not needed by this or subsequent window
+      // groups or by downstream operators.
       maybeDropColumns(plan, downstream);
     }
 
     if (!isSingleWorker_) {
-      maybeRepartition(plan, ExprVector(partitionKeys), state.cost);
+      PlanCost repartitionCost;
+      std::tie(plan, repartitionCost) =
+          maybeRepartition(plan, ExprVector(partitionKeys));
+      state.cost.add(repartitionCost);
     }
 
     // Build output columns: all input columns + window function result columns.
@@ -2101,8 +1629,12 @@ void Optimization::addOrderBy(
     }
   }
 
+  auto projected = std::move(precompute).maybeProject();
+  if (projected != plan) {
+    state.addCost(*projected);
+  }
   auto* orderBy = make<OrderBy>(
-      std::move(precompute).maybeProject(),
+      std::move(projected),
       std::move(orderKeys),
       dt->orderTypes,
       dt->limit,
