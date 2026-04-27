@@ -210,8 +210,22 @@ class ToVelox {
       std::vector<ExecutableFragment>& stages,
       std::shared_ptr<velox::core::ExchangeNode>& exchange);
 
-  // Makes a union all with a mix of remote and local inputs. Combines all
-  // remote inputs into one ExchangeNode.
+  // Converts a UnionAll into a mix of remote exchanges and local sources.
+  //
+  // Phase 1 — Classify inputs:
+  //   Repartition inputs become a shared remote ExchangeNode.
+  //   Other inputs are collected as local sources.
+  //
+  // Phase 2 — Isolate width-constraining local inputs:
+  //   Width-constraining inputs (Values, Limit, global Aggregation) produce
+  //   fewer rows than the consumer's partition count. If mixed with
+  //   unconstrained siblings (table scans) or remote exchanges, they are
+  //   wrapped in their own producer stages with round-robin distribution to
+  //   match the consumer's width. Inputs with sub-stages (their own exchange
+  //   dependencies) are also isolated so partition counts stay consistent.
+  //   Plain table scans without sub-stages stay inline.
+  //
+  // Phase 3 — Assemble LocalPartitionNode from all local sources + exchange.
   velox::core::PlanNodePtr makeUnionAll(
       const UnionAll& unionAll,
       ExecutableFragment& fragment,

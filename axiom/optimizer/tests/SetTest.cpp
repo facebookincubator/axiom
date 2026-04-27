@@ -694,8 +694,8 @@ TEST_F(SetTest, filterOnDuplicateColumnInUnionAll) {
   createEmptyTable("t", ROW("x", BIGINT()));
 
   auto sql =
-      "SELECT b FROM ("
-      "  SELECT x as a, x as b FROM t"
+      "SELECT a, b FROM ("
+      "  SELECT x as a, x + 1 as b FROM t"
       "  UNION ALL"
       "  SELECT 2, 3"
       ") WHERE a > 0";
@@ -704,19 +704,29 @@ TEST_F(SetTest, filterOnDuplicateColumnInUnionAll) {
 
   // Filter is pushed into the HiveScan as a subfield filter on x.
   // The Values child's constant filter (2 > 0) is folded and eliminated.
-  auto buildMatcher = [&] {
-    return core::PlanMatcherBuilder()
-        .hiveScan("t", test::gt("x", int64_t{0}))
-        .project()
-        .localPartition(matchValues().project().build());
-  };
-
+  // Both columns a and b are referenced in the outer SELECT, so neither
+  // is pruned — the project outputs both.
   auto plan = toSingleNodePlan(logicalPlan);
-  AXIOM_ASSERT_PLAN(plan, buildMatcher().build());
+  AXIOM_ASSERT_PLAN(
+      plan,
+      core::PlanMatcherBuilder()
+          .hiveScan("t", test::gt("x", int64_t{0}))
+          .project({"x as a", "x + 1 as b"})
+          .localPartition(matchValues().project({"2 as a", "3 as b"}).build())
+          .build());
 
+  // In distributed mode, the constrained Values input is wrapped in a
+  // separate producer stage (shuffle) to prevent width contamination.
   auto distributedPlan = planVelox(logicalPlan);
   AXIOM_ASSERT_DISTRIBUTED_PLAN(
-      distributedPlan.plan, buildMatcher().gather().build());
+      distributedPlan.plan,
+      core::PlanMatcherBuilder()
+          .hiveScan("t", test::gt("x", int64_t{0}))
+          .project({"x as a", "x + 1 as b"})
+          .localPartition(
+              matchValues().project({"2 as a", "3 as b"}).shuffle({}).build())
+          .gather()
+          .build());
 }
 
 // Same as above but with a non-trivial expression referenced twice
@@ -830,7 +840,7 @@ TEST_F(SetTest, constantFalseFilterInUnionAll) {
   // true. False branch pruned, two surviving branches have no filters.
   {
     auto logicalPlan = parseSelect(
-        "SELECT b FROM ("
+        "SELECT a, b FROM ("
         "  SELECT 5 as a, 1 as b"
         "  UNION ALL"
         "  SELECT 0, 2"
@@ -842,8 +852,8 @@ TEST_F(SetTest, constantFalseFilterInUnionAll) {
     AXIOM_ASSERT_PLAN(
         plan,
         matchValues()
-            .project()
-            .localPartition(matchValues().project().build())
+            .project({"5 as a", "1 as b"})
+            .localPartition(matchValues().project({"3 as a", "3 as b"}).build())
             .build());
   }
 }
@@ -1095,7 +1105,33 @@ TEST_F(SetTest, rowSubfieldAccessInUnionAll) {
   }
 }
 
-TEST_F(SetTest, unionAllWithDistinctWidthMismatch) {
+TEST_F(SetTest, unionAllWithWidthConstrainingInputs) {
+  // Verify single-node plan shape: DISTINCT (GROUP BY n_regionkey) feeds into
+  // LocalPartition (UNION ALL) alongside the VALUES input, then COUNT(*).
+  {
+    auto logicalPlan = parseSelect(
+        "SELECT COUNT(*) FROM ("
+        "  SELECT DISTINCT n_regionkey FROM nation"
+        "  UNION ALL"
+        "  SELECT 1"
+        ")");
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(
+        plan,
+        core::PlanMatcherBuilder()
+            .hiveScan("nation", {})
+            .singleAggregation({"n_regionkey"}, {})
+            .project()
+            .localPartition(core::PlanMatcherBuilder().values(ROW({})).build())
+            .singleAggregation({}, {"count(*) as cnt"})
+            .build());
+
+    // Verify distributed plan produces the same results as single-node.
+    checkSame(logicalPlan, toSingleNodePlan(logicalPlan));
+  }
+
+  // Each width-constraining input type (previously threw "Partition count
+  // mismatch").
   std::vector<std::string> widthConstrainingInputs = {
       "SELECT 1",
       "SELECT COUNT(*) as n_regionkey FROM nation",
@@ -1110,7 +1146,54 @@ TEST_F(SetTest, unionAllWithDistinctWidthMismatch) {
             "  {}"
             ")",
             input));
-    VELOX_ASSERT_THROW(planVelox(plan), "Partition count mismatch");
+    checkSame(plan, toSingleNodePlan(plan));
+  }
+
+  // Multiple constrained inputs in the same UNION ALL.
+  {
+    auto plan = parseSelect(
+        "SELECT COUNT(*) FROM ("
+        "  SELECT DISTINCT n_regionkey FROM nation"
+        "  UNION ALL SELECT 1"
+        "  UNION ALL SELECT 2"
+        ")");
+    checkSame(plan, toSingleNodePlan(plan));
+  }
+
+  // Table scan + constrained input (no repartition in UNION ALL). The
+  // constrained VALUES input must be wrapped in a producer stage to avoid
+  // contaminating the table scan's width.
+  {
+    auto logicalPlan = parseSelect(
+        "SELECT COUNT(*) FROM ("
+        "  SELECT n_nationkey FROM nation"
+        "  UNION ALL"
+        "  SELECT 1"
+        ")");
+    // The constrained VALUES input is wrapped in a producer stage (shuffle)
+    // while the table scan stays inline at the original width.
+    checkSame(logicalPlan, toSingleNodePlan(logicalPlan));
+  }
+
+  // All-constrained inputs: no wrapping needed since all agree on width=1.
+  {
+    auto plan = parseSelect(
+        "SELECT COUNT(*) FROM ("
+        "  SELECT 1"
+        "  UNION ALL SELECT 2"
+        ")");
+    checkSame(plan, toSingleNodePlan(plan));
+  }
+
+  // 3 inputs: table scan + VALUES + GROUP BY with internal repartition.
+  {
+    auto plan = parseSelect(
+        "SELECT COUNT(*) FROM ("
+        "  SELECT n_nationkey FROM nation"
+        "  UNION ALL SELECT 123"
+        "  UNION ALL (SELECT n_regionkey FROM nation GROUP BY n_regionkey)"
+        ")");
+    checkSame(plan, toSingleNodePlan(plan));
   }
 }
 

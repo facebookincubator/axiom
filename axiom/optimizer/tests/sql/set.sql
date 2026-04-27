@@ -192,3 +192,30 @@ SELECT x[1] FROM (SELECT ROW(1, 2) AS x UNION ALL SELECT ROW(3, 4))
 -- ROW subfield access in UNION ALL with named field.
 -- duckdb: VALUES (1), (3)
 SELECT x.a FROM (SELECT ROW(1 AS a, 2 AS b) AS x UNION ALL SELECT ROW(3 AS a, 4 AS b))
+----
+-- EXCEPT nested inside UNION ALL.
+SELECT * FROM (
+  SELECT a FROM t WHERE a <= 2
+  EXCEPT
+  SELECT a FROM t WHERE a = 1
+) UNION ALL SELECT 42
+----
+-- INTERSECT nested inside UNION ALL.
+SELECT * FROM (
+  SELECT a FROM t WHERE a <= 2
+  INTERSECT
+  SELECT a FROM t WHERE a = 1
+) UNION ALL SELECT 42
+----
+-- EXCEPT inside UNION ALL with multiple literal inputs.
+SELECT * FROM (
+  SELECT a FROM t WHERE a <= 2
+  EXCEPT
+  SELECT a FROM t WHERE a = 1
+) UNION ALL SELECT 42 UNION ALL SELECT 99
+----
+-- Table scan + literal in UNION ALL.
+SELECT * FROM (
+  SELECT a FROM t
+  UNION ALL SELECT 42
+) ORDER BY 1
