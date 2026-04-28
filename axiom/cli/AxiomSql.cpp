@@ -19,6 +19,8 @@
 #include <iostream>
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/Console.h"
+#include "velox/common/file/FileSystems.h"
+#include "velox/exec/tests/utils/LocalExchangeSource.h"
 
 DEFINE_string(
     catalog,
@@ -31,6 +33,10 @@ int main(int argc, char** argv) {
 
   facebook::velox::memory::MemoryManager::initialize(
       facebook::velox::memory::MemoryManager::Options{});
+
+  facebook::velox::filesystems::registerLocalFileSystem();
+  facebook::velox::exec::ExchangeSource::registerFactory(
+      facebook::velox::exec::test::createLocalExchangeSource);
 
   facebook::axiom::Connectors connectors;
   axiom::sql::SqlQueryRunner runner;

@@ -21,6 +21,7 @@
 
 #include "axiom/common/SchemaTableName.h"
 #include "velox/common/config/ConfigProvider.h"
+#include "velox/exec/Task.h"
 
 namespace facebook::axiom::optimizer {
 
@@ -97,6 +98,11 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
   /// When true, connectors skip side effects in createTable() and
   /// beginWrite(). Used for EXPLAIN queries.
   bool explain{false};
+
+  /// Execution mode for runners spawned during optimization (e.g. constant
+  /// folding). Should match the outer query's mode. Defaults to kParallel.
+  velox::exec::Task::ExecutionMode mode{
+      velox::exec::Task::ExecutionMode::kParallel};
 
   /// Constructs options from session property name-value pairs.
   /// Keys are unqualified property names (e.g., "sample_joins").

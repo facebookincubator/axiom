@@ -141,6 +141,29 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
         std::move(plan), optimizer::FinishWrite{}, makeQueryCtx(queryId));
   }
 
+  std::shared_ptr<LocalRunner> makeSerialRunner(
+      optimizer::MultiFragmentPlanPtr plan) {
+    const auto queryId = plan->options().queryId;
+
+    auto queryCtx = velox::core::QueryCtx::create(
+        /*executor=*/nullptr,
+        velox::core::QueryConfig({}),
+        {},
+        velox::cache::AsyncDataCache::getInstance(),
+        /*pool=*/nullptr,
+        /*spillExecutor=*/nullptr,
+        queryId);
+
+    return std::make_shared<LocalRunner>(
+        std::move(plan),
+        optimizer::FinishWrite{},
+        std::move(queryCtx),
+        std::make_shared<runner::ConnectorSplitSourceFactory>(),
+        /*outputPool=*/nullptr,
+        /*baseSpillDirectory=*/"",
+        velox::exec::Task::ExecutionMode::kSerial);
+  }
+
   // Fetches all remaining data from the runner.
   static std::vector<velox::RowVectorPtr> readCursor(
       const std::shared_ptr<LocalRunner>& runner) {
@@ -277,7 +300,38 @@ TEST_F(LocalRunnerTest, spillDirectoryWiring) {
   auto results = readCursor(localRunner);
   EXPECT_EQ(1, results.size());
   EXPECT_EQ(kNumRows, extractSingleInt64(results));
+  results.clear();
   EXPECT_EQ(Runner::State::kFinished, localRunner->state());
+  ASSERT_TRUE(localRunner->waitForCompletion(kWaitTimeoutUs));
+}
+
+TEST_F(LocalRunnerTest, serialScan) {
+  auto scan = makeScanPlan(1);
+  auto localRunner = makeSerialRunner(scan);
+
+  auto results = readCursor(localRunner);
+
+  int32_t count = 0;
+  for (auto& rows : results) {
+    count += rows->size();
+  }
+  EXPECT_EQ(kNumRows, count);
+  EXPECT_EQ(Runner::State::kFinished, localRunner->state());
+  ASSERT_TRUE(localRunner->waitForCompletion(kWaitTimeoutUs));
+}
+
+TEST_F(LocalRunnerTest, serialError) {
+  optimizer::MultiFragmentPlan::Options options = {
+      .queryId = makeQueryId(), .numWorkers = 1, .numDrivers = 1};
+  test::DistributedPlanBuilder builder(options, idGenerator_, pool_.get());
+  builder.tableScan("t", rowType_)
+      .project({"if (c0 = 111, c0 / 0, c0 + 1) as c0"});
+
+  auto localRunner = makeSerialRunner(builder.build());
+
+  VELOX_ASSERT_THROW(readCursor(localRunner), "division by zero");
+  EXPECT_EQ(Runner::State::kError, localRunner->state());
+  ASSERT_TRUE(localRunner->waitForCompletion(kWaitTimeoutUs));
 }
 
 } // namespace
