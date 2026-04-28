@@ -137,6 +137,48 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
   }
 }
 
+void gatherScans(
+    const velox::core::PlanNodePtr& plan,
+    std::vector<velox::core::TableScanNodePtr>& scans) {
+  if (auto scan =
+          std::dynamic_pointer_cast<const velox::core::TableScanNode>(plan)) {
+    scans.push_back(scan);
+    return;
+  }
+  for (const auto& source : plan->sources()) {
+    gatherScans(source, scans);
+  }
+}
+
+void generateSplits(
+    SplitSourceFactory& splitSourceFactory,
+    const velox::core::PlanNodePtr& planNode,
+    const std::vector<std::shared_ptr<velox::exec::Task>>& tasks) {
+  std::vector<velox::core::TableScanNodePtr> scans;
+  gatherScans(planNode, scans);
+
+  for (const auto& scan : scans) {
+    auto source =
+        splitSourceFactory.splitSourceForScan(/*session=*/nullptr, *scan);
+    size_t taskIdx = 0;
+    for (;;) {
+      auto batch = folly::coro::blockingWait(source->co_getSplits(1));
+      for (auto& split : batch.splits) {
+        tasks[taskIdx]->addSplit(
+            scan->id(), velox::exec::Split(std::move(split)));
+        taskIdx = (taskIdx + 1) % tasks.size();
+      }
+      if (batch.noMoreSplits) {
+        break;
+      }
+    }
+
+    for (auto& task : tasks) {
+      task->noMoreSplits(scan->id());
+    }
+  }
+}
+
 void getTopologicalOrder(
     const std::vector<optimizer::ExecutableFragment>& fragments,
     int32_t index,
@@ -190,20 +232,28 @@ LocalRunner::LocalRunner(
     std::shared_ptr<velox::core::QueryCtx> queryCtx,
     std::shared_ptr<SplitSourceFactory> splitSourceFactory,
     std::shared_ptr<velox::memory::MemoryPool> outputPool,
-    std::string baseSpillDirectory)
+    std::string baseSpillDirectory,
+    velox::exec::Task::ExecutionMode mode)
     : plan_{std::move(plan)},
       fragments_{topologicalSort(plan_->fragments())},
       finishWrite_{std::move(finishWrite)},
       splitSourceFactory_{std::move(splitSourceFactory)},
+      mode_{mode},
       baseSpillDirectory_{std::move(baseSpillDirectory)} {
   params_.queryCtx = std::move(queryCtx);
   params_.outputPool = std::move(outputPool);
   if (!baseSpillDirectory_.empty()) {
     params_.spillDirectory = baseSpillDirectory_;
   }
+  params_.serialExecution =
+      (mode_ == velox::exec::Task::ExecutionMode::kSerial);
 
   VELOX_CHECK_NOT_NULL(splitSourceFactory_);
   VELOX_CHECK(!finishWrite_ || params_.outputPool != nullptr);
+  VELOX_CHECK_EQ(
+      params_.serialExecution,
+      params_.queryCtx->executor() == nullptr,
+      "Serial mode requires no executor; parallel mode requires one");
 }
 
 LocalRunner::~LocalRunner() {
@@ -217,16 +267,29 @@ velox::RowVectorPtr LocalRunner::next() {
     return nextWrite();
   }
 
-  if (!cursor_) {
-    start();
-  }
+  try {
+    if (!cursor_) {
+      start();
+    }
 
-  if (!cursor_->moveNext()) {
-    state_ = State::kFinished;
-    return nullptr;
-  }
+    if (!cursor_->moveNext()) {
+      state_ = State::kFinished;
+      return nullptr;
+    }
 
-  return cursor_->current();
+    return cursor_->current();
+  } catch (...) {
+    setErrorIfNone(std::current_exception());
+    throw;
+  }
+}
+
+void LocalRunner::setErrorIfNone(std::exception_ptr error) {
+  std::lock_guard<std::mutex> l(mutex_);
+  if (!error_) {
+    state_ = State::kError;
+    error_ = std::move(error);
+  }
 }
 
 int64_t LocalRunner::runWrite() {
@@ -280,15 +343,28 @@ void LocalRunner::start() {
 
   params_.maxDrivers = plan_->options().numDrivers;
   params_.planNode = fragments_.back().fragment.planNode;
-  params_.serialExecution = !params_.queryCtx->isExecutorSupplied();
 
   VELOX_CHECK_LE(
       fragments_.back().width.value_or(1),
       1,
       "Last fragment must be single-task");
+  if (mode_ == velox::exec::Task::ExecutionMode::kSerial) {
+    VELOX_CHECK_EQ(
+        fragments_.size(),
+        1,
+        "Serial execution requires a single-fragment plan");
+  }
 
   auto cursor = velox::exec::TaskCursor::create(params_);
-  makeStages(cursor->task());
+
+  switch (mode_) {
+    case velox::exec::Task::ExecutionMode::kSerial:
+      generateSplits(*splitSourceFactory_, params_.planNode, {cursor->task()});
+      break;
+    case velox::exec::Task::ExecutionMode::kParallel:
+      makeStages(cursor->task());
+      break;
+  }
 
   {
     std::lock_guard<std::mutex> l(mutex_);
@@ -346,6 +422,10 @@ void LocalRunner::abort() {
 bool LocalRunner::waitForCompletion(int32_t maxWaitMicros) {
   VELOX_CHECK_NE(state_, State::kInitialized);
 
+  if (mode_ == velox::exec::Task::ExecutionMode::kSerial) {
+    return true;
+  }
+
   if (!splitScopeJoined_) {
     folly::coro::blockingWait(splitScope_.joinAsync());
     splitScopeJoined_ = true;
@@ -384,18 +464,6 @@ bool isBroadcast(const velox::core::PlanFragment& fragment) {
   return false;
 }
 
-void gatherScans(
-    const velox::core::PlanNodePtr& plan,
-    std::vector<velox::core::TableScanNodePtr>& scans) {
-  if (auto scan =
-          std::dynamic_pointer_cast<const velox::core::TableScanNode>(plan)) {
-    scans.push_back(scan);
-    return;
-  }
-  for (const auto& source : plan->sources()) {
-    gatherScans(source, scans);
-  }
-}
 } // namespace
 
 void LocalRunner::makeStages(
