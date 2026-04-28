@@ -489,7 +489,11 @@ velox::core::TypedExprPtr tryCreateConstantInList(const Call& call) {
         "All elements of the IN list must have the same type got {} and {}",
         elementType->toString(),
         arg->value().type->toString());
-    arrayElements.push_back(arg->as<Literal>()->literal());
+    auto& literal = arg->as<Literal>()->literal();
+    if (std::find(arrayElements.begin(), arrayElements.end(), literal) ==
+        arrayElements.end()) {
+      arrayElements.push_back(literal);
+    }
   }
   auto arrayVector = variantToVector(
       ARRAY(elementType),
