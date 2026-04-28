@@ -382,6 +382,15 @@ TEST_F(PlanTest, inList) {
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
+  {
+    auto logicalPlan =
+        scan().filter("a in (1, 1, 2, 2, 3)").map({"a + 2"}).build();
+
+    auto matcher = scanMatcher().filter("a in (1, 2, 3)").project().build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
 }
 
 TEST_F(PlanTest, multipleConnectors) {
