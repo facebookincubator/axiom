@@ -118,7 +118,12 @@ CreateTableStatement::CreateTableStatement(
     std::unordered_map<std::string, lp::ExprPtr> properties,
     bool ifNotExists,
     std::vector<Constraint> constraints)
-    : SqlStatement(SqlStatementKind::kCreateTable),
+    : SqlStatement(
+          SqlStatementKind::kCreateTable,
+          /*views=*/{},
+          ReferencedTables{
+              /*inputTables=*/{},
+              facebook::axiom::CatalogSchemaTableName{connectorId, tableName}}),
       connectorId_{std::move(connectorId)},
       tableName_{std::move(tableName)},
       tableSchema_{std::move(tableSchema)},
@@ -151,8 +156,14 @@ CreateTableAsSelectStatement::CreateTableAsSelectStatement(
     RowTypePtr tableSchema,
     std::unordered_map<std::string, lp::ExprPtr> properties,
     lp::LogicalPlanNodePtr plan,
-    ViewMap views)
-    : SqlStatement(SqlStatementKind::kCreateTableAsSelect, std::move(views)),
+    ViewMap views,
+    std::unordered_set<facebook::axiom::CatalogSchemaTableName> inputTables)
+    : SqlStatement(
+          SqlStatementKind::kCreateTableAsSelect,
+          std::move(views),
+          ReferencedTables{
+              std::move(inputTables),
+              facebook::axiom::CatalogSchemaTableName{connectorId, tableName}}),
       connectorId_{std::move(connectorId)},
       tableName_{std::move(tableName)},
       tableSchema_{std::move(tableSchema)},

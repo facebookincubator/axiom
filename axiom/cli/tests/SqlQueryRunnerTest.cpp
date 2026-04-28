@@ -947,7 +947,8 @@ TEST_F(SqlQueryRunnerTest, totalTimingIncludesAllPhases) {
           std::string_view /*sql*/,
           std::string_view /*catalog*/,
           std::optional<std::string_view> /*schema*/,
-          const auto& /*views*/) {
+          const auto& /*views*/,
+          const auto& /*referencedTables*/) {
         // NOLINTNEXTLINE(facebook-hte-BadCall-sleep_for)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         return std::shared_ptr<facebook::velox::filesystems::TokenProvider>{};
@@ -1016,6 +1017,7 @@ TEST_F(SqlQueryRunnerTest, completionCallbackOnPermissionCheckFailure) {
          std::string_view,
          std::string_view,
          std::optional<std::string_view>,
+         const auto&,
          const auto&)
           -> std::shared_ptr<facebook::velox::filesystems::TokenProvider> {
         throw std::runtime_error("permission denied");

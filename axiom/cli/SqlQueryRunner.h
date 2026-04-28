@@ -36,7 +36,8 @@ using PermissionCheck =
         std::string_view sql,
         std::string_view catalog,
         std::optional<std::string_view> schema,
-        const presto::ViewMap& views)>;
+        const presto::ViewMap& views,
+        const presto::ReferencedTables& referencedTables)>;
 
 /// Holds query metadata captured at query start time.
 struct QueryStartInfo {
@@ -256,7 +257,8 @@ class SqlQueryRunner {
   std::shared_ptr<facebook::velox::filesystems::TokenProvider> checkPermission(
       const RunOptions& options,
       QueryCompletionInfo& completionInfo,
-      const presto::ViewMap& views);
+      const presto::ViewMap& views,
+      const presto::ReferencedTables& referencedTables);
 
   std::shared_ptr<facebook::velox::core::QueryCtx> newQuery(
       const RunOptions& options);
