@@ -12,11 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(axiom_ducklake_connector_metadata DuckLakeMetadataConfig.cpp)
+add_library(
+  axiom_ducklake_connector_metadata
+  DuckLakeCatalogClient.cpp
+  DuckLakeMetadataConfig.cpp
+)
 
 target_link_libraries(
   axiom_ducklake_connector_metadata
   axiom_connectors
+  duckdb_static
   Folly::folly
 )
 

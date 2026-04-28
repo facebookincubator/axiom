@@ -34,7 +34,10 @@ enum class DuckLakeCatalogBackend {
 
 /// Describes the metadata database location from a DuckLake catalog URL.
 struct DuckLakeCatalogSpec {
+  /// Selects the relational database backend that stores metadata.
   DuckLakeCatalogBackend backend;
+
+  /// Identifies the backend-specific metadata database location.
   std::string metadataPath;
 
   /// Parses a DuckLake catalog URL such as `ducklake:metadata.ducklake`.
