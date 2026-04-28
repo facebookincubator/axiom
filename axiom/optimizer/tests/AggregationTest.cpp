@@ -273,9 +273,9 @@ TEST_F(AggregationTest, repartitionForAggPartitionSubset) {
   {
     auto logicalPlan = lp::PlanBuilder(makeContext())
                            .tableScan("t")
-                           .aggregate({"a", "b"}, {})
+                           .aggregate({"a", "b"}, {"sum(v) as sv"})
                            .with({"a + b as d"})
-                           .aggregate({"a", "b", "d"}, {})
+                           .aggregate({"a", "b", "d"}, {"sum(sv)"})
                            .build();
     auto plan = planVelox(logicalPlan);
 
@@ -286,11 +286,11 @@ TEST_F(AggregationTest, repartitionForAggPartitionSubset) {
                        .tableScan()
                        .shuffle()
                        .localPartition()
-                       .singleAggregation({"a", "b"}, {})
+                       .singleAggregation({"a", "b"}, {"sum(v)"})
                        .project()
                        // No shuffle here - partitionKeys ⊆ groupingKeys
                        .localPartition()
-                       .singleAggregation({"a", "b", "d"}, {})
+                       .singleAggregation({"a", "b", "d"}, {"sum(sv)"})
                        .shuffle()
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
@@ -300,8 +300,8 @@ TEST_F(AggregationTest, repartitionForAggPartitionSubset) {
   {
     auto logicalPlan = lp::PlanBuilder(makeContext())
                            .tableScan("t")
-                           .aggregate({"a", "b", "c"}, {})
-                           .aggregate({"a", "b"}, {})
+                           .aggregate({"a", "b", "c"}, {"sum(v) as sv"})
+                           .aggregate({"a", "b"}, {"sum(sv)"})
                            .build();
     auto plan = planVelox(logicalPlan);
 
@@ -312,15 +312,76 @@ TEST_F(AggregationTest, repartitionForAggPartitionSubset) {
                        .tableScan()
                        .shuffle()
                        .localPartition()
-                       .singleAggregation({"a", "b", "c"}, {})
+                       .singleAggregation({"a", "b", "c"}, {"sum(v)"})
                        .project()
                        .shuffle()
                        .localPartition()
-                       .singleAggregation({"a", "b"}, {})
+                       .singleAggregation({"a", "b"}, {"sum(sv)"})
                        .shuffle()
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
   }
+}
+
+// Verifies that a redundant outer DISTINCT-only aggregation is eliminated
+// when the inner aggregation already deduplicates by a subset of the outer's
+// grouping keys and the extra keys are deterministic expressions of the
+// inner keys.
+TEST_F(AggregationTest, eliminateRedundantOuterDistinct) {
+  auto schema = ROW({"a", "b", "c"}, BIGINT());
+  testConnector_->addTable("t", schema);
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .aggregate({"a", "b"}, {})
+                         .with({"a + b as d"})
+                         .aggregate({"a", "b", "d"}, {})
+                         .build();
+  auto plan = planVelox(logicalPlan);
+
+  // The 2nd aggregation is unnecessary because the 1st aggregation already
+  // deduplicates (a, b), and d = a + b is deterministic. So the plan should
+  // have only one aggregation on {a, b}.
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .shuffle()
+                     .localPartition()
+                     .singleAggregation({"a", "b"}, {})
+                     .project({"a", "b", "a + b as d"})
+                     .shuffle()
+                     .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+}
+
+// Verifies that a redundant inner DISTINCT-only aggregation is eliminated
+// when the outer aggregation groups by a subset of the inner's grouping keys.
+TEST_F(AggregationTest, eliminateRedundantInnerDistinct) {
+  auto schema = ROW({"a", "b", "c"}, BIGINT());
+  testConnector_->addTable("t", schema);
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .aggregate({"a", "b", "c"}, {})
+                         .aggregate({"a", "b"}, {})
+                         .build();
+  auto plan = planVelox(logicalPlan);
+
+  // The 1st aggregation is unnecessary because grouping by (a, b, c) and
+  // then by (a, b) is equivalent to just grouping by (a, b).
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .shuffle()
+                     .localPartition()
+                     .singleAggregation({"a", "b"}, {})
+                     .shuffle()
+                     .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
 }
 
 } // namespace
