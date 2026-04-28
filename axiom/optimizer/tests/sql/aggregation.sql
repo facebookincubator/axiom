@@ -71,3 +71,7 @@ SELECT reduce_agg(a, 0, (s, x) -> s + x, (s1, s2) -> s1 + s2), reduce_agg(a, 1, 
 -- Lambda aggregate functions with lambda captures are not supported.
 -- error: Lambda captures are not supported in aggregate functions
 SELECT reduce_agg(a, 0, (s, x) -> s + x, (s1, s2) -> s1 + s2 + b) FROM t GROUP BY b
+----
+-- DISTINCT applied on top of a GROUP BY, ordered by the grouping key.
+-- ordered
+SELECT DISTINCT a, COUNT(*) AS cnt FROM t GROUP BY a ORDER BY a
