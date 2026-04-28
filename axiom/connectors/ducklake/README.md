@@ -40,6 +40,15 @@ The connector does not need a DuckLake data path flag. DuckLake stores the data
 path in catalog metadata, and Axiom resolves table and file paths from that
 metadata.
 
+DuckLake enables data inlining by default for small writes. To create test data
+for the current Axiom connector, either disable inlining on attach or flush
+inlined data to Parquet before querying through Axiom:
+
+```sql
+ATTACH 'ducklake:metadata.ducklake' AS lake
+  (DATA_PATH 'data', DATA_INLINING_ROW_LIMIT 0);
+```
+
 ## Current Scope
 
 The first implementation supports read-only scans with:

@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(axiom_ducklake_connector_metadata_test DuckLakeMetadataConfigTest.cpp)
+add_executable(
+  axiom_ducklake_connector_metadata_test
+  DuckLakeMetadataConfigTest.cpp
+  DuckLakeQueryTest.cpp
+)
 
 add_test(
   NAME axiom_ducklake_connector_metadata_test
@@ -21,7 +25,11 @@ add_test(
 
 target_link_libraries(
   axiom_ducklake_connector_metadata_test
+  axiom_cli
   axiom_ducklake_connector_metadata
+  velox_exec_test_lib
+  velox_test_util
+  velox_vector_test_lib
   GTest::gmock
   GTest::gtest
   GTest::gtest_main
