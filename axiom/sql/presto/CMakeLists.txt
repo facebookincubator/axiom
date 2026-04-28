@@ -29,7 +29,6 @@ add_library(
   PrestoParser.cpp
   ShowStatsBuilder.cpp
   SqlStatement.cpp
-  TableVisitor.cpp
 )
 
 target_link_libraries(

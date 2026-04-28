@@ -344,8 +344,11 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
       statement = parseSingle(sql, runOptions);
     }
 
-    runOptions.tokenProvider =
-        checkPermission(runOptions, completionInfo, statement->views());
+    runOptions.tokenProvider = checkPermission(
+        runOptions,
+        completionInfo,
+        statement->views(),
+        statement->referencedTables());
 
     auto result = runUnchecked(
         *statement,
@@ -1035,7 +1038,8 @@ std::shared_ptr<velox::filesystems::TokenProvider>
 SqlQueryRunner::checkPermission(
     const RunOptions& options,
     QueryCompletionInfo& completionInfo,
-    const presto::ViewMap& views) {
+    const presto::ViewMap& views,
+    const presto::ReferencedTables& referencedTables) {
   if (permissionCheck_) {
     velox::MicrosecondTimer timer(&completionInfo.timing.checkPermission);
     return permissionCheck_(
@@ -1045,7 +1049,8 @@ SqlQueryRunner::checkPermission(
         options.defaultSchema
             ? std::optional<std::string_view>{*options.defaultSchema}
             : std::optional<std::string_view>{defaultSchema_},
-        views);
+        views,
+        referencedTables);
   }
   return nullptr;
 }

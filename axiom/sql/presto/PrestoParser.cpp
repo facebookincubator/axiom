@@ -28,7 +28,6 @@
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/ShowStatsBuilder.h"
 #include "axiom/sql/presto/SortProjection.h"
-#include "axiom/sql/presto/TableVisitor.h"
 #include "axiom/sql/presto/ast/AstBuilder.h"
 #include "axiom/sql/presto/ast/AstPrinter.h"
 #include "axiom/sql/presto/ast/UpperCaseInputStream.h"
@@ -259,6 +258,11 @@ class RelationPlanner : public AstVisitor {
     return views_;
   }
 
+  const std::unordered_set<facebook::axiom::CatalogSchemaTableName>&
+  inputTables() const {
+    return inputTables_;
+  }
+
   lp::PlanBuilder& builder() {
     return *builder_;
   }
@@ -421,6 +425,9 @@ class RelationPlanner : public AstVisitor {
               connectorId);
 
       if (metadata->findTable(connectorTable) != nullptr) {
+        inputTables_.insert(
+            facebook::axiom::CatalogSchemaTableName{
+                connectorId, connectorTable});
         builder_->tableScan(
             connectorId,
             connectorTable.schema,
@@ -1271,6 +1278,7 @@ class RelationPlanner : public AstVisitor {
       }};
   std::unordered_map<std::string, std::shared_ptr<WithQuery>> withQueries_;
   ViewMap views_;
+  std::unordered_set<facebook::axiom::CatalogSchemaTableName> inputTables_;
   bool friendlySql_;
 };
 
@@ -1518,6 +1526,22 @@ static facebook::axiom::connector::TablePtr findTable(
   return table;
 }
 
+static facebook::axiom::connector::TablePtr findTable(
+    const QualifiedName& name,
+    const std::string& connectorId,
+    const facebook::axiom::SchemaTableName& connectorTable) {
+  auto table =
+      facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId)
+          ->findTable(connectorTable);
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      table != nullptr,
+      name.location(),
+      name.suffix(),
+      "Table not found: {}",
+      name.fullyQualifiedName());
+  return table;
+}
+
 lp::ExprApi makeLikeExpr(
     const std::string& name,
     const std::string& pattern,
@@ -1557,16 +1581,19 @@ SqlStatementPtr parseShowCatalogs(
         showCatalogs.getEscape()));
   }
 
-  return std::make_shared<SelectStatement>(builder.build());
+  return std::make_shared<SelectStatement>(
+      builder.build(), ViewMap{}, ReferencedTables{});
 }
 
 SqlStatementPtr parseShowColumns(
     const ShowColumns& showColumns,
     const std::string& defaultConnectorId,
     const std::string& defaultSchema) {
+  const auto [connectorId, connectorTable] =
+      toConnectorTable(*showColumns.table(), defaultConnectorId, defaultSchema);
+
   const auto schema =
-      findTable(*showColumns.table(), defaultConnectorId, defaultSchema)
-          ->type();
+      findTable(*showColumns.table(), connectorId, connectorTable)->type();
 
   std::vector<Variant> data;
   data.reserve(schema->size());
@@ -1579,7 +1606,13 @@ SqlStatementPtr parseShowColumns(
   return std::make_shared<SelectStatement>(
       lp::PlanBuilder(ctx)
           .values(ROW({"column", "type"}, VARCHAR()), data)
-          .build());
+          .build(),
+      ViewMap{},
+      ReferencedTables{
+          {facebook::axiom::CatalogSchemaTableName{
+              connectorId, connectorTable}},
+          std::nullopt,
+      });
 }
 
 // Formats a Variant value as a Presto SQL literal for use in WITH clauses.
@@ -1623,13 +1656,13 @@ SqlStatementPtr parseShowCreateTable(
     const std::string& defaultSchema) {
   using facebook::velox::PrestoTypes;
 
-  const auto table =
-      findTable(*showCreateTable.name(), defaultConnectorId, defaultSchema);
-  const auto& schema = table->type();
-  const auto& options = table->options();
-
   const auto [connectorId, schemaTableName] = toConnectorTable(
       *showCreateTable.name(), defaultConnectorId, defaultSchema);
+
+  const auto table =
+      findTable(*showCreateTable.name(), connectorId, schemaTableName);
+  const auto& schema = table->type();
+  const auto& options = table->options();
 
   std::stringstream ddl;
   ddl << "CREATE TABLE " << connectorId << "."
@@ -1668,15 +1701,23 @@ SqlStatementPtr parseShowCreateTable(
   return std::make_shared<SelectStatement>(
       lp::PlanBuilder()
           .values(ROW({"Create Table"}, VARCHAR()), {Variant::row({ddl.str()})})
-          .build());
+          .build(),
+      ViewMap{},
+      ReferencedTables{
+          {facebook::axiom::CatalogSchemaTableName{
+              connectorId, schemaTableName}},
+          std::nullopt,
+      });
 }
 
 SqlStatementPtr parseShowStats(
     const ShowStats& showStats,
     const std::string& defaultConnectorId,
     const std::string& defaultSchema) {
-  const auto table =
-      findTable(*showStats.table(), defaultConnectorId, defaultSchema);
+  const auto [connectorId, connectorTable] =
+      toConnectorTable(*showStats.table(), defaultConnectorId, defaultSchema);
+
+  const auto table = findTable(*showStats.table(), connectorId, connectorTable);
   const auto schema = table->type();
 
   ShowStatsBuilder builder(static_cast<int64_t>(table->numRows()));
@@ -1718,7 +1759,13 @@ SqlStatementPtr parseShowStats(
   return std::make_shared<SelectStatement>(
       lp::PlanBuilder(ctx)
           .values(ShowStatsBuilder::outputType(), builder.rows())
-          .build());
+          .build(),
+      ViewMap{},
+      ReferencedTables{
+          {facebook::axiom::CatalogSchemaTableName{
+              connectorId, connectorTable}},
+          std::nullopt,
+      });
 }
 
 SqlStatementPtr parseShowFunctions(
@@ -1787,7 +1834,8 @@ SqlStatementPtr parseShowFunctions(
         showFunctions.getEscape()));
   }
 
-  return std::make_shared<SelectStatement>(builder.build());
+  return std::make_shared<SelectStatement>(
+      builder.build(), ViewMap{}, ReferencedTables{});
 };
 
 std::vector<lp::ExprApi> toColumnExprs(
@@ -1849,7 +1897,13 @@ SqlStatementPtr parseInsert(
       columnNames,
       toColumnExprs(inputColumns));
 
-  return std::make_shared<InsertStatement>(planner.plan(), planner.views());
+  return std::make_shared<InsertStatement>(
+      planner.plan(),
+      planner.views(),
+      ReferencedTables{
+          planner.inputTables(),
+          facebook::axiom::CatalogSchemaTableName{connectorId, connectorTable},
+      });
 }
 
 std::unordered_map<std::string, lp::ExprPtr> parseTableProperties(
@@ -1940,7 +1994,8 @@ SqlStatementPtr parseCreateTableAsSelect(
       ROW(std::move(columnNames), std::move(columnTypes)),
       std::move(properties),
       planner.plan(),
-      planner.views());
+      planner.views(),
+      planner.inputTables());
 }
 
 SqlStatementPtr parseCreateTable(
@@ -2115,7 +2170,8 @@ SqlStatementPtr parseShowSchemas(
         showSchemas.getEscape()));
   }
 
-  return std::make_shared<SelectStatement>(builder.build());
+  return std::make_shared<SelectStatement>(
+      builder.build(), ViewMap{}, ReferencedTables{});
 }
 
 // Extracts the literal value from a SET SESSION statement.
@@ -2206,8 +2262,10 @@ SqlStatementPtr doPlan(
     auto* showStats = query->as<ShowStatsForQuery>();
     RelationPlanner planner(defaultConnectorId, defaultSchema, parseSql);
     showStats->query()->accept(&planner);
-    auto innerStatement =
-        std::make_shared<SelectStatement>(planner.plan(), planner.views());
+    auto innerStatement = std::make_shared<SelectStatement>(
+        planner.plan(),
+        planner.views(),
+        ReferencedTables{planner.inputTables(), std::nullopt});
     return std::make_shared<ShowStatsForQueryStatement>(
         std::move(innerStatement));
   }
@@ -2220,7 +2278,10 @@ SqlStatementPtr doPlan(
     RelationPlanner planner(
         defaultConnectorId, defaultSchema, parseSql, friendlySql);
     query->accept(&planner);
-    return std::make_shared<SelectStatement>(planner.plan(), planner.views());
+    return std::make_shared<SelectStatement>(
+        planner.plan(),
+        planner.views(),
+        ReferencedTables{planner.inputTables(), std::nullopt});
   }
 
   AXIOM_PRESTO_SYNTAX_FAIL(
@@ -2254,17 +2315,7 @@ SqlStatementPtr PrestoParser::doParse(
 
   auto query = parseSql(sql);
 
-  if (query->is(NodeType::kExplain)) {
-    auto* explain = query->as<Explain>();
-    auto sqlStatement = doPlan(
-        explain->statement(),
-        defaultConnectorId_,
-        defaultSchema_,
-        parseSql,
-        options_.friendlySql);
-    return parseExplain(*explain, sqlStatement);
-  }
-
+  // Statements that don't reference tables and don't need planning.
   if (query->is(NodeType::kShowSession)) {
     auto* showSession = query->as<ShowSession>();
     return std::make_shared<ShowSessionStatement>(showSession->likePattern());
@@ -2290,27 +2341,23 @@ SqlStatementPtr PrestoParser::doParse(
         std::move(catalog), use->schema()->value());
   }
 
+  if (query->is(NodeType::kExplain)) {
+    auto* explain = query->as<Explain>();
+    auto sqlStatement = doPlan(
+        explain->statement(),
+        defaultConnectorId_,
+        defaultSchema_,
+        parseSql,
+        options_.friendlySql);
+    return parseExplain(*explain, sqlStatement);
+  }
+
   return doPlan(
       query,
       defaultConnectorId_,
       defaultSchema_,
       parseSql,
       options_.friendlySql);
-}
-
-ReferencedTables PrestoParser::getReferencedTables(std::string_view sql) {
-  ParserHelper helper(sql);
-  auto* context = helper.parse();
-
-  AstBuilder astBuilder(options_, false);
-  auto statement =
-      std::any_cast<std::shared_ptr<Statement>>(astBuilder.visit(context));
-
-  TableVisitor visitor(defaultConnectorId_, defaultSchema_);
-  visitor.process(statement.get());
-  return ReferencedTables{
-      .inputTables = visitor.inputTables(),
-      .outputTable = visitor.outputTable()};
 }
 
 } // namespace axiom::sql::presto

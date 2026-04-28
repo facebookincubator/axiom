@@ -80,7 +80,8 @@ TEST_F(ConsoleTest, permissionCheckCalledBeforeExecution) {
                                std::string_view sql,
                                std::string_view catalog,
                                std::optional<std::string_view> /*schema*/,
-                               const auto& /*views*/) {
+                               const auto& /*views*/,
+                               const auto& /*referencedTables*/) {
     called = true;
     capturedSql = std::string(sql);
     capturedCatalog = std::string(catalog);

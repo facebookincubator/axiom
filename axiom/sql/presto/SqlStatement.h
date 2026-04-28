@@ -44,11 +44,26 @@ enum class SqlStatementKind {
 
 AXIOM_DECLARE_ENUM_NAME(SqlStatementKind);
 
+/// Tables referenced by a SQL statement, extracted during parsing.
+/// Each table is a CatalogSchemaTableName with three parts:
+///   - catalogName: the connector ID (e.g., "prism", "impulse", "tpch").
+///   - schemaTableName.schema: the schema or namespace (e.g., "di", "default").
+///   - schemaTableName.table: the table name (e.g., "orders", "lineitem").
+///
+/// Uses the same CatalogSchemaTableName format as ViewMap keys.
+struct ReferencedTables {
+  /// Tables read by the query (e.g., FROM, JOIN, subquery sources),
+  /// or empty if the query does not read any tables.
+  std::unordered_set<facebook::axiom::CatalogSchemaTableName> inputTables;
+
+  /// Table or view modified by the query (e.g., INSERT INTO, CREATE TABLE AS
+  /// SELECT, CREATE VIEW, DROP VIEW), or nullopt if the query does not target
+  /// any table or view.
+  std::optional<facebook::axiom::CatalogSchemaTableName> outputTable;
+};
+
 class SqlStatement {
  public:
-  explicit SqlStatement(SqlStatementKind kind, ViewMap views = {})
-      : kind_{kind}, views_{std::move(views)} {}
-
   virtual ~SqlStatement() = default;
 
   std::string_view kindName() const;
@@ -121,19 +136,44 @@ class SqlStatement {
     return views_;
   }
 
+  /// Tables referenced by this statement. Each table is identified by
+  /// connector ID (catalogName), schema, and table name — the same
+  /// CatalogSchemaTableName format used as ViewMap keys.
+  const ReferencedTables& referencedTables() const {
+    return referencedTables_;
+  }
+
+ protected:
+  explicit SqlStatement(SqlStatementKind kind)
+      : kind_{kind}, views_{}, referencedTables_{} {}
+
+  explicit SqlStatement(
+      SqlStatementKind kind,
+      ViewMap views,
+      ReferencedTables referencedTables)
+      : kind_{kind},
+        views_{std::move(views)},
+        referencedTables_{std::move(referencedTables)} {}
+
  private:
   const SqlStatementKind kind_;
   const ViewMap views_;
+  // Tables referenced by this statement, populated during construction.
+  const ReferencedTables referencedTables_;
 };
 
 using SqlStatementPtr = std::shared_ptr<const SqlStatement>;
 
 class SelectStatement : public SqlStatement {
  public:
-  explicit SelectStatement(
+  SelectStatement(
       facebook::axiom::logical_plan::LogicalPlanNodePtr plan,
-      ViewMap views = {})
-      : SqlStatement(SqlStatementKind::kSelect, std::move(views)),
+      ViewMap views,
+      ReferencedTables referencedTables)
+      : SqlStatement(
+            SqlStatementKind::kSelect,
+            std::move(views),
+            std::move(referencedTables)),
         plan_{std::move(plan)} {}
 
   const facebook::axiom::logical_plan::LogicalPlanNodePtr& plan() const {
@@ -146,10 +186,14 @@ class SelectStatement : public SqlStatement {
 
 class InsertStatement : public SqlStatement {
  public:
-  explicit InsertStatement(
+  InsertStatement(
       facebook::axiom::logical_plan::LogicalPlanNodePtr plan,
-      ViewMap views = {})
-      : SqlStatement(SqlStatementKind::kInsert, std::move(views)),
+      ViewMap views,
+      ReferencedTables referencedTables)
+      : SqlStatement(
+            SqlStatementKind::kInsert,
+            std::move(views),
+            std::move(referencedTables)),
         plan_{std::move(plan)} {}
 
   const facebook::axiom::logical_plan::LogicalPlanNodePtr& plan() const {
@@ -247,7 +291,8 @@ class CreateTableAsSelectStatement : public SqlStatement {
       std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>
           properties,
       facebook::axiom::logical_plan::LogicalPlanNodePtr plan,
-      ViewMap views = {});
+      ViewMap views,
+      std::unordered_set<facebook::axiom::CatalogSchemaTableName> inputTables);
 
   const std::string& connectorId() const {
     return connectorId_;
@@ -286,7 +331,13 @@ class DropTableStatement : public SqlStatement {
       std::string connectorId,
       facebook::axiom::SchemaTableName tableName,
       bool ifExists)
-      : SqlStatement(SqlStatementKind::kDropTable),
+      : SqlStatement(
+            SqlStatementKind::kDropTable,
+            /*views=*/{},
+            ReferencedTables{/*inputTables=*/{},
+                             facebook::axiom::CatalogSchemaTableName{
+                                 connectorId,
+                                 tableName}}),
         connectorId_{std::move(connectorId)},
         tableName_{std::move(tableName)},
         ifExists_{ifExists} {}
@@ -411,7 +462,10 @@ class ExplainStatement : public SqlStatement {
       bool analyze,
       Type type,
       Format format)
-      : SqlStatement(SqlStatementKind::kExplain),
+      : SqlStatement(
+            SqlStatementKind::kExplain,
+            statement->views(),
+            statement->referencedTables()),
         statement_{std::move(statement)},
         analyze_{analyze},
         type_{type},
@@ -445,7 +499,10 @@ class ExplainStatement : public SqlStatement {
 class ShowStatsForQueryStatement : public SqlStatement {
  public:
   explicit ShowStatsForQueryStatement(SqlStatementPtr statement)
-      : SqlStatement(SqlStatementKind::kShowStatsForQuery),
+      : SqlStatement(
+            SqlStatementKind::kShowStatsForQuery,
+            statement->views(),
+            statement->referencedTables()),
         statement_{std::move(statement)} {}
 
   const SqlStatementPtr& statement() const {
