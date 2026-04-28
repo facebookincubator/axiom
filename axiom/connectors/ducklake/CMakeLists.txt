@@ -15,13 +15,17 @@
 add_library(
   axiom_ducklake_connector_metadata
   DuckLakeCatalogClient.cpp
+  DuckLakeConnectorMetadata.cpp
   DuckLakeMetadataConfig.cpp
 )
 
 target_link_libraries(
   axiom_ducklake_connector_metadata
   axiom_connectors
-  duckdb_static
+  axiom_hive_connector_metadata
+  velox_duckdb_conversion
+  velox_hive_connector
+  velox_hive_iceberg_splitreader
   Folly::folly
 )
 

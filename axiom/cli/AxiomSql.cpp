@@ -23,7 +23,7 @@
 DEFINE_string(
     catalog,
     "",
-    "Default catalog (connector). If empty, uses tpch or hive if --data_path is set.");
+    "Default catalog (connector). If empty, uses tpch, hive if --data_path is set, or ducklake if --ducklake_catalog is set.");
 DEFINE_string(schema, "", "Default schema.");
 
 int main(int argc, char** argv) {
@@ -40,10 +40,24 @@ int main(int argc, char** argv) {
 
     connectors.registerTestConnector();
 
+    if (!FLAGS_data_path.empty() && !FLAGS_ducklake_catalog.empty() &&
+        FLAGS_catalog.empty()) {
+      std::cerr
+          << "Specify --catalog when both --data_path and --ducklake_catalog are set."
+          << std::endl;
+      exit(1);
+    }
+
     if (!FLAGS_data_path.empty()) {
       defaultConnector = connectors.registerLocalHiveConnector(
           FLAGS_data_path, FLAGS_data_format);
       defaultSchema = "default";
+    }
+
+    if (!FLAGS_ducklake_catalog.empty()) {
+      defaultConnector =
+          connectors.registerDuckLakeConnector(FLAGS_ducklake_catalog);
+      defaultSchema = "main";
     }
 
     std::string connectorId =

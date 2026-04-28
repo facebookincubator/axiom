@@ -20,6 +20,8 @@
 #include "axiom/common/SessionConfig.h"
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/connectors/ducklake/DuckLakeConnectorMetadata.h"
+#include "axiom/connectors/ducklake/DuckLakeMetadataConfig.h"
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/system/SystemConnector.h"
@@ -29,6 +31,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
@@ -162,6 +165,33 @@ Connectors::registerLocalHiveConnector(
       connector->connectorId(),
       std::make_shared<connector::hive::LocalHiveConnectorMetadata>(
           hiveConnector));
+
+  return connector;
+}
+
+std::shared_ptr<velox::connector::Connector>
+Connectors::registerDuckLakeConnector(
+    const std::string& catalogUrl,
+    const std::string& connectorId) {
+  std::unordered_map<std::string, std::string> connectorConfig = {
+      {connector::ducklake::DuckLakeMetadataConfig::kCatalogUrl, catalogUrl},
+  };
+
+  auto config =
+      std::make_shared<velox::config::ConfigBase>(std::move(connectorConfig));
+
+  velox::connector::hive::iceberg::IcebergConnectorFactory factory;
+  auto connector = factory.newConnector(connectorId, config, ioExecutor());
+  registerConnector(connector);
+
+  auto icebergConnector =
+      dynamic_cast<velox::connector::hive::iceberg::IcebergConnector*>(
+          connector.get());
+  VELOX_CHECK_NOT_NULL(icebergConnector);
+  connector::ConnectorMetadataRegistry::global().insert(
+      connector->connectorId(),
+      std::make_shared<connector::ducklake::DuckLakeConnectorMetadata>(
+          icebergConnector));
 
   return connector;
 }

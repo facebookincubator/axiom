@@ -32,6 +32,7 @@ target_link_libraries(
   axiom_optimizer_multifragment_plan
   axiom_optimizer
   axiom_graphviz_printers
+  axiom_ducklake_connector_metadata
   axiom_hive_connector_metadata
   axiom_tpch_connector_metadata
   axiom_system_connector

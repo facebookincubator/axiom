@@ -39,6 +39,7 @@ class Connectors {
  public:
   static constexpr const char* kTpchConnectorId = "tpch";
   static constexpr const char* kLocalHiveConnectorId = "hive";
+  static constexpr const char* kDuckLakeConnectorId = "ducklake";
   static constexpr const char* kTestConnectorId = "test";
   static constexpr const char* kSystemConnectorId = "system";
 
@@ -70,6 +71,14 @@ class Connectors {
       const std::string& dataPath,
       const std::string& dataFormat,
       const std::string& connectorId = kLocalHiveConnectorId);
+
+  /// Registers a DuckLake connector backed by a DuckLake catalog URL.
+  /// The connector uses Axiom metadata planning and Velox Iceberg Parquet
+  /// execution. Queries can access tables like
+  /// "${connectorId}.main.table_name".
+  std::shared_ptr<velox::connector::Connector> registerDuckLakeConnector(
+      const std::string& catalogUrl,
+      const std::string& connectorId = kDuckLakeConnectorId);
 
   /// Registers an in-memory test connector under `connectorId`.
   std::shared_ptr<velox::connector::Connector> registerTestConnector(
