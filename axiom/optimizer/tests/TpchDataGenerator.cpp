@@ -17,6 +17,8 @@
 #include "axiom/optimizer/tests/TpchDataGenerator.h"
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/SqlQueryRunner.h"
+#include "velox/common/file/FileSystems.h"
+#include "velox/exec/tests/utils/LocalExchangeSource.h"
 
 using namespace facebook::velox;
 
@@ -30,6 +32,10 @@ void TpchDataGenerator::createTables(
     dwio::common::FileFormat format,
     const TableStartingCallback& onTableStarting,
     const TableCreatedCallback& onTableCreated) {
+  velox::filesystems::registerLocalFileSystem();
+  velox::exec::ExchangeSource::registerFactory(
+      velox::exec::test::createLocalExchangeSource);
+
   Connectors connectors;
   ::axiom::sql::SqlQueryRunner runner;
   runner.initialize([&]() {
