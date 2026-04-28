@@ -52,22 +52,20 @@ ConnectorMetadataRegistry::create(const Registry* parent) {
 }
 
 // static
-std::shared_ptr<ConnectorMetadata> FOLLY_NULLABLE
-ConnectorMetadataRegistry::tryGet(
+std::shared_ptr<ConnectorMetadata> ConnectorMetadataRegistry::tryGet(
     const QueryCtx& queryCtx,
     const std::string& connectorId) {
   return registryFor(queryCtx).find(std::string(connectorId));
 }
 
 // static
-std::shared_ptr<ConnectorMetadata> FOLLY_NULLABLE
-ConnectorMetadataRegistry::tryGet(const std::string& connectorId) {
+std::shared_ptr<ConnectorMetadata> ConnectorMetadataRegistry::tryGet(
+    const std::string& connectorId) {
   return global().find(std::string(connectorId));
 }
 
 // static
-std::shared_ptr<ConnectorMetadata> FOLLY_NULLABLE
-ConnectorMetadataRegistry::get(
+std::shared_ptr<ConnectorMetadata> ConnectorMetadataRegistry::get(
     const QueryCtx& queryCtx,
     const std::string& connectorId) {
   auto metadata = tryGet(queryCtx, connectorId);
@@ -77,8 +75,8 @@ ConnectorMetadataRegistry::get(
 }
 
 // static
-std::shared_ptr<ConnectorMetadata> FOLLY_NULLABLE
-ConnectorMetadataRegistry::get(const std::string& connectorId) {
+std::shared_ptr<ConnectorMetadata> ConnectorMetadataRegistry::get(
+    const std::string& connectorId) {
   auto metadata = tryGet(connectorId);
   VELOX_CHECK_NOT_NULL(
       metadata, "ConnectorMetadata not registered: {}", connectorId);
