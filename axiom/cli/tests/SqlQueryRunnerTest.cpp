@@ -794,6 +794,69 @@ TEST_F(SqlQueryRunnerTest, showSchemasWithLike) {
           {"Schema"}, {makeFlatVector<std::string>({kDefaultSchema, "dev"})}));
 }
 
+TEST_F(SqlQueryRunnerTest, showTables) {
+  auto result = run("SHOW TABLES");
+  ASSERT_FALSE(result.message.has_value());
+  // No tables yet — produces an empty result.
+  ASSERT_EQ(0, result.results.size());
+
+  run("CREATE TABLE t1 (id INTEGER, name VARCHAR)");
+  run("CREATE TABLE t2 (x BIGINT)");
+
+  result = run("SHOW TABLES");
+  ASSERT_FALSE(result.message.has_value());
+  test::assertEqualVectors(
+      result.results[0],
+      makeRowVector(
+          {"Table"}, {makeFlatVector<std::string>({"t1", "t2"})}));
+}
+
+TEST_F(SqlQueryRunnerTest, showTablesWithLike) {
+  run("CREATE TABLE foo (id INTEGER)");
+  run("CREATE TABLE bar (x BIGINT)");
+  run("CREATE TABLE baz (name VARCHAR)");
+
+  auto result = run("SHOW TABLES LIKE 'b%'");
+  ASSERT_FALSE(result.message.has_value());
+  ASSERT_EQ(1, result.results.size());
+  test::assertEqualVectors(
+      result.results[0],
+      makeRowVector(
+          {"Table"}, {makeFlatVector<std::string>({"bar", "baz"})}));
+}
+
+TEST_F(SqlQueryRunnerTest, showTablesLikeWithEscape) {
+  run("CREATE TABLE file_a (id INTEGER)");
+  run("CREATE TABLE filea (x BIGINT)");
+
+  // 'file\_%' ESCAPE '\' treats _ as literal. Matches "file_a" (underscore
+  // present) but not "filea" (no underscore). Without escape, 'file_%' would
+  // match both since _ is a single-character wildcard.
+  auto result = run("SHOW TABLES LIKE 'file\\_%' ESCAPE '\\'");
+  ASSERT_FALSE(result.message.has_value());
+  ASSERT_EQ(1, result.results.size());
+  test::assertEqualVectors(
+      result.results[0],
+      makeRowVector(
+          {"Table"}, {makeFlatVector<std::string>({"file_a"})}));
+}
+
+TEST_F(SqlQueryRunnerTest, showTablesFromSchema) {
+  run("CREATE SCHEMA test_schema");
+  run("CREATE TABLE default_t (x BIGINT)");
+  run("CREATE TABLE test_schema.in_schema (id INTEGER)");
+  run("CREATE TABLE test_schema.also_in_schema (name VARCHAR)");
+
+  auto result = run("SHOW TABLES FROM test_schema");
+  ASSERT_FALSE(result.message.has_value());
+  ASSERT_EQ(1, result.results.size());
+  test::assertEqualVectors(
+      result.results[0],
+      makeRowVector(
+          {"Table"},
+          {makeFlatVector<std::string>({"also_in_schema", "in_schema"})}));
+}
+
 TEST_F(SqlQueryRunnerTest, showCreateTable) {
   {
     run("CREATE TABLE t1 (id INTEGER, name VARCHAR)");

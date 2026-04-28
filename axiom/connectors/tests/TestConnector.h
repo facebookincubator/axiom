@@ -511,6 +511,10 @@ class TestConnectorMetadata : public ConnectorMetadata {
       const ConnectorSessionPtr& session,
       const std::string& schemaName) override;
 
+  std::vector<std::string> listTableNames(
+      const ConnectorSessionPtr& session,
+      const std::string& schemaName) override;
+
   void createSchema(
       const ConnectorSessionPtr& session,
       const std::string& schemaName,

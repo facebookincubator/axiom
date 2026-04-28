@@ -896,6 +896,8 @@ class DefaultTraversalVisitor : public AstVisitor {
 
   void visitShowCatalogs(ShowCatalogs* /*node*/) override {}
 
+  void visitShowTables(ShowTables* /*node*/) override {}
+
   void visitShowColumns(ShowColumns* node) override {
     if (node->table()) {
       node->table()->accept(this);

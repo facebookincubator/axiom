@@ -944,6 +944,12 @@ class ConnectorMetadata {
   virtual std::vector<std::string> listSchemaNames(
       const ConnectorSessionPtr& session) = 0;
 
+  /// Returns the list of table names available in the specified schema.
+  /// Schemas that do not exist return an empty vector.
+  virtual std::vector<std::string> listTableNames(
+      const ConnectorSessionPtr& session,
+      const std::string& schemaName) = 0;
+
   /// Returns true if the specified schema exists. This may accept schemas
   /// not listed by listSchemaNames() (e.g., TPC-H accepts any valid
   /// scale-factor schema like "sf42").
