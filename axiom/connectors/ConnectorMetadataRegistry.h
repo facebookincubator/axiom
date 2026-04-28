@@ -58,26 +58,27 @@ class ConnectorMetadataRegistry {
   /// Return the metadata connector with the specified ID, or nullptr if
   /// not registered.  Checks per-query override on QueryCtx first, falls back
   /// to the global registry if no override is set.
-  static std::shared_ptr<ConnectorMetadata> FOLLY_NULLABLE
-  tryGet(const velox::core::QueryCtx& queryCtx, const std::string& connectorId);
+  static std::shared_ptr<ConnectorMetadata> tryGet(
+      const velox::core::QueryCtx& queryCtx,
+      const std::string& connectorId);
 
   /// Return the metadata connector with the specified ID from the global
   /// registry, or nullptr if not registered.
-  static std::shared_ptr<ConnectorMetadata> FOLLY_NULLABLE
-  tryGet(const std::string& connectorId);
+  static std::shared_ptr<ConnectorMetadata> tryGet(
+      const std::string& connectorId);
 
   /// Return the metadata connector with the specified ID, or an exception if
   /// not registered.  Checks per-query override on QueryCtx first, falls back
   /// to the global registry if no override is set.
   /// @throws VeloxError if the shared_ptr is null.
-  static std::shared_ptr<ConnectorMetadata> FOLLY_NULLABLE
-  get(const velox::core::QueryCtx& queryCtx, const std::string& connectorId);
+  static std::shared_ptr<ConnectorMetadata> get(
+      const velox::core::QueryCtx& queryCtx,
+      const std::string& connectorId);
 
   /// Return the metadata connector with the specified ID from the global
   /// registry, or an exception if not registered.
   /// @throws VeloxError if the shared_ptr is null.
-  static std::shared_ptr<ConnectorMetadata> FOLLY_NULLABLE
-  get(const std::string& connectorId);
+  static std::shared_ptr<ConnectorMetadata> get(const std::string& connectorId);
 
   /// Return all metadata connectors whose implementation is of type T. Checks
   /// per-query override on QueryCtx first, falls back to the global registry if
