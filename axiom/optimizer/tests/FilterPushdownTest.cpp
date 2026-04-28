@@ -167,6 +167,20 @@ TEST_F(FilterPushdownTest, throughJoin) {
   }
 }
 
+// Duplicate literals in an IN list should be deduplicated.
+TEST_F(FilterPushdownTest, inListWithDuplicates) {
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("nation")
+                         .filter("n_nationkey in (5, 5)")
+                         .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+  auto matcher = core::PlanMatcherBuilder()
+                     .hiveScan("nation", test::eq("n_nationkey", 5LL))
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 // Verify that OR with a disjunct that is fully subsumed by extracted common
 // factors does not crash. E.g. A OR (A AND B): the first disjunct is fully
 // subsumed, leaving an empty residual. The result should be just A.
