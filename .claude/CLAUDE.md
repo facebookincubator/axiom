@@ -140,15 +140,15 @@ for the complete guide. Key rules are summarized below.
 
 ## Commit Messages
 
-Use conventional commit prefixes with `[Project]` tags:
+Use conventional commit format:
 
 ```
-[Axiom] feat(optimizer): Add support for window functions
-[Axiom] fix: Validate HAVING column references in SQL parser
-[Axiom] refactor(parser): Extract GroupByPlanner class
+feat(optimizer): Add support for window functions
+fix: Validate HAVING column references in SQL parser
+refactor(parser): Extract GroupByPlanner class
 ```
 
-Format: `[Project] type(scope): Description`
+Format: `type(scope): Description`
 - Types: `feat`, `fix`, `refactor`, `test`, `docs`
 - Scope is optional, use for subsystem clarity (e.g., `parser`, `optimizer`)
 - Description starts with a capital letter, no trailing period
