@@ -12,29 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(axiom_connectors ConnectorMetadata.cpp ConnectorMetadataRegistry.cpp SchemaResolver.cpp)
+add_executable(axiom_ducklake_connector_metadata_test DuckLakeMetadataConfigTest.cpp)
 
-target_link_libraries(
-  axiom_connectors
-  axiom_common
-  velox_common_base
-  velox_memory
-  velox_connector
-  velox_core
-  Folly::folly
+add_test(
+  NAME axiom_ducklake_connector_metadata_test
+  COMMAND axiom_ducklake_connector_metadata_test
 )
 
-add_subdirectory(system)
-
-if(VELOX_ENABLE_HIVE_CONNECTOR)
-  add_subdirectory(hive)
-  add_subdirectory(ducklake)
-endif()
-
-if(VELOX_ENABLE_TPCH_CONNECTOR)
-  add_subdirectory(tpch)
-endif()
-
-if(AXIOM_BUILD_TESTING)
-  add_subdirectory(tests)
-endif()
+target_link_libraries(
+  axiom_ducklake_connector_metadata_test
+  axiom_ducklake_connector_metadata
+  GTest::gmock
+  GTest::gtest
+  GTest::gtest_main
+)
