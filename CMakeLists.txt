@@ -152,6 +152,53 @@ velox_resolve_dependency(Boost 1.77.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
 velox_set_source(folly)
 velox_resolve_dependency(folly)
 
+# The prebuilt Folly CMake export from Velox deps-install can name static
+# gflags/glog archives even when Velox itself is built shared. Axiom executables
+# then load shared gflags through Velox and static gflags through Folly, causing
+# duplicate flag registration before tests start.
+if(TARGET Folly::folly_deps)
+  get_target_property(
+    AXIOM_FOLLY_LINK_LIBRARIES
+    Folly::folly_deps
+    INTERFACE_LINK_LIBRARIES
+  )
+  if(AXIOM_FOLLY_LINK_LIBRARIES)
+    set(AXIOM_FOLLY_SHARED_LINK_LIBRARIES)
+    foreach(AXIOM_FOLLY_LINK_LIBRARY IN LISTS AXIOM_FOLLY_LINK_LIBRARIES)
+      if(
+        AXIOM_FOLLY_LINK_LIBRARY STREQUAL "gflags_static"
+        OR AXIOM_FOLLY_LINK_LIBRARY STREQUAL "gflags::gflags_static"
+        OR AXIOM_FOLLY_LINK_LIBRARY MATCHES "/libgflags(_nothreads)?\\.a$"
+      )
+        continue()
+      endif()
+      if(AXIOM_FOLLY_LINK_LIBRARY MATCHES "/libglog\\.a$")
+        continue()
+      endif()
+      list(APPEND AXIOM_FOLLY_SHARED_LINK_LIBRARIES "${AXIOM_FOLLY_LINK_LIBRARY}")
+    endforeach()
+
+    if(TARGET glog::glog)
+      list(APPEND AXIOM_FOLLY_SHARED_LINK_LIBRARIES glog::glog)
+    endif()
+    if(TARGET gflags)
+      list(APPEND AXIOM_FOLLY_SHARED_LINK_LIBRARIES gflags)
+    elseif(TARGET gflags::gflags)
+      list(APPEND AXIOM_FOLLY_SHARED_LINK_LIBRARIES gflags::gflags)
+    elseif(TARGET gflags_shared)
+      list(APPEND AXIOM_FOLLY_SHARED_LINK_LIBRARIES gflags_shared)
+    elseif(TARGET gflags::gflags_shared)
+      list(APPEND AXIOM_FOLLY_SHARED_LINK_LIBRARIES gflags::gflags_shared)
+    endif()
+    list(REMOVE_DUPLICATES AXIOM_FOLLY_SHARED_LINK_LIBRARIES)
+    set_target_properties(
+      Folly::folly_deps
+      PROPERTIES
+        INTERFACE_LINK_LIBRARIES "${AXIOM_FOLLY_SHARED_LINK_LIBRARIES}"
+    )
+  endif()
+endif()
+
 velox_set_source(re2)
 velox_resolve_dependency(re2)
 
