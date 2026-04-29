@@ -20,6 +20,7 @@
 
 #include <cctype>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <regex>
 
@@ -280,9 +281,18 @@ class DuckDbDuckLakeCatalogClient : public DuckLakeCatalogClient {
   explicit DuckDbDuckLakeCatalogClient(DuckLakeCatalogSpec spec)
       : spec_{std::move(spec)},
         catalogDirectory_{catalogDirectory(spec_.metadataPath)},
-        config_{makeReadOnlyConfig()},
-        db_{spec_.metadataPath, config_.get()},
-        connection_{db_} {}
+        config_{makeReadOnlyConfig()} {
+    try {
+      db_ = std::make_unique<duckdb::DuckDB>(
+          spec_.metadataPath, config_.get());
+      connection_ = std::make_unique<duckdb::Connection>(*db_);
+    } catch (const std::exception& error) {
+      VELOX_USER_FAIL(
+          "Failed to open DuckLake DuckDB catalog: {}. Catalog path: {}",
+          error.what(),
+          spec_.metadataPath);
+    }
+  }
 
   std::vector<std::string> listSchemaNames() override {
     std::lock_guard<std::mutex> lock{mutex_};
@@ -357,7 +367,7 @@ class DuckDbDuckLakeCatalogClient : public DuckLakeCatalogClient {
  private:
   std::unique_ptr<duckdb::MaterializedQueryResult> query(
       std::string_view sql) {
-    auto result = connection_.Query(std::string{sql});
+    auto result = connection_->Query(std::string{sql});
     VELOX_USER_CHECK(
         !result->HasError(),
         "DuckLake catalog query failed: {}. SQL: {}",
@@ -512,8 +522,8 @@ class DuckDbDuckLakeCatalogClient : public DuckLakeCatalogClient {
   DuckLakeCatalogSpec spec_;
   std::string catalogDirectory_;
   std::unique_ptr<duckdb::DBConfig> config_;
-  duckdb::DuckDB db_;
-  duckdb::Connection connection_;
+  std::unique_ptr<duckdb::DuckDB> db_;
+  std::unique_ptr<duckdb::Connection> connection_;
   std::mutex mutex_;
 };
 

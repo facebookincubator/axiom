@@ -14,6 +14,7 @@
 
 add_executable(
   axiom_ducklake_connector_metadata_test
+  DuckLakeCatalogClientTest.cpp
   DuckLakeMetadataConfigTest.cpp
   DuckLakeQueryTest.cpp
 )
