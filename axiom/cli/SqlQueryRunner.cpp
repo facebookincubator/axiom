@@ -185,6 +185,10 @@ void SqlQueryRunner::initialize(
       kExecutionPrefix,
       velox::core::QueryConfig::kAdjustTimestampToTimezone,
       "true");
+  sessionConfig_->set(
+      kExecutionPrefix,
+      velox::core::QueryConfig::kPrestoArrayAggIgnoreNulls,
+      "true");
 }
 
 namespace {
