@@ -290,8 +290,11 @@ std::string SqlQueryRunner::dropTable(
   const auto& tableName = statement.tableName();
 
   auto session = std::make_shared<connector::ConnectorSession>("test");
-  const bool dropped =
-      metadata->dropTable(session, statement.tableName(), statement.ifExists());
+  const bool dropped = metadata->dropTable(
+      session,
+      statement.tableName(),
+      statement.ifExists(),
+      /*explain=*/false);
 
   if (dropped) {
     return fmt::format("Dropped table: {}", tableName);

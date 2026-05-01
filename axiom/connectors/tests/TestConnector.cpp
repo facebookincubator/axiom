@@ -538,7 +538,17 @@ RowsFuture TestConnectorMetadata::finishWrite(
 bool TestConnectorMetadata::dropTable(
     const ConnectorSessionPtr& /* session */,
     const SchemaTableName& tableName,
-    bool ifExists) {
+    bool ifExists,
+    bool explain) {
+  if (explain) {
+    const bool exists = tables_.contains(tableName);
+    if (!exists) {
+      VELOX_USER_CHECK(
+          ifExists, "Table doesn't exist: {}", tableName.toString());
+    }
+    return exists;
+  }
+
   const bool dropped = tables_.erase(tableName) == 1;
   if (!ifExists) {
     VELOX_USER_CHECK(dropped, "Table doesn't exist: {}", tableName.toString());

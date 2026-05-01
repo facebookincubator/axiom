@@ -618,6 +618,77 @@ TEST_F(LocalHiveConnectorMetadataTest, createTableIfNotExistsExplain) {
       metadata_->findTable({kDefaultSchema, "test_ine_explain"}), nullptr);
 }
 
+TEST_F(LocalHiveConnectorMetadataTest, dropTableIfExists) {
+  auto tableType = ROW({{"col1", BIGINT()}});
+  auto session = std::make_shared<ConnectorSession>("q-test");
+
+  auto table = metadata_->createTable(
+      session,
+      {kDefaultSchema, "test_drop"},
+      tableType,
+      /*options=*/{},
+      /*ifNotExists=*/false,
+      /*explain=*/false);
+  ASSERT_NE(table, nullptr);
+
+  ASSERT_TRUE(metadata_->dropTable(
+      session,
+      {kDefaultSchema, "test_drop"},
+      /*ifExists=*/false,
+      /*explain=*/false));
+  ASSERT_EQ(metadata_->findTable({kDefaultSchema, "test_drop"}), nullptr);
+
+  VELOX_ASSERT_THROW(
+      metadata_->dropTable(
+          session,
+          {kDefaultSchema, "test_drop"},
+          /*ifExists=*/false,
+          /*explain=*/false),
+      "Table doesn't exist: \"default\".\"test_drop\"");
+
+  ASSERT_FALSE(metadata_->dropTable(
+      session,
+      {kDefaultSchema, "test_drop"},
+      /*ifExists=*/true,
+      /*explain=*/false));
+}
+
+TEST_F(LocalHiveConnectorMetadataTest, dropTableExplain) {
+  auto tableType = ROW({{"col1", BIGINT()}});
+  auto session = std::make_shared<ConnectorSession>("q-test");
+
+  auto table = metadata_->createTable(
+      session,
+      {kDefaultSchema, "test_drop_explain"},
+      tableType,
+      /*options=*/{},
+      /*ifNotExists=*/false,
+      /*explain=*/false);
+  ASSERT_NE(table, nullptr);
+
+  ASSERT_TRUE(metadata_->dropTable(
+      session,
+      {kDefaultSchema, "test_drop_explain"},
+      /*ifExists=*/false,
+      /*explain=*/true));
+  ASSERT_NE(
+      metadata_->findTable({kDefaultSchema, "test_drop_explain"}), nullptr);
+
+  VELOX_ASSERT_THROW(
+      metadata_->dropTable(
+          session,
+          {kDefaultSchema, "test_drop_missing_explain"},
+          /*ifExists=*/false,
+          /*explain=*/true),
+      "Table doesn't exist: \"default\".\"test_drop_missing_explain\"");
+
+  ASSERT_FALSE(metadata_->dropTable(
+      session,
+      {kDefaultSchema, "test_drop_missing_explain"},
+      /*ifExists=*/true,
+      /*explain=*/true));
+}
+
 } // namespace
 } // namespace facebook::axiom::connector::hive
 

@@ -932,10 +932,14 @@ class ConnectorMetadata {
   /// Drops a table with the specified name. If table doesn't exist and
   /// 'ifExists' is false, raises an error. Otherwise, returns true if table
   /// was dropped and false if table didn't exist.
+  ///
+  /// When 'explain' is true, the connector must perform the same existence
+  /// check (respecting 'ifExists') but must not drop the table.
   virtual bool dropTable(
       const ConnectorSessionPtr& /*session*/,
       const SchemaTableName& /*tableName*/,
-      bool /*ifExists*/) {
+      bool /*ifExists*/,
+      bool /*explain*/) {
     VELOX_UNSUPPORTED();
   }
 

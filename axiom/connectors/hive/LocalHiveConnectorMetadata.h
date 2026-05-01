@@ -313,11 +313,12 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   bool dropTable(
       const ConnectorSessionPtr& session,
       const SchemaTableName& tableName,
-      bool ifExists) override;
+      bool ifExists,
+      bool explain) override;
 
-  /// Shortcut for dropTable(session, tableName, true).
+  /// Shortcut for dropTable(session, tableName, true, false).
   bool dropTableIfExists(const SchemaTableName& tableName) {
-    return dropTable(nullptr, tableName, true);
+    return dropTable(nullptr, tableName, true, /*explain=*/false);
   }
 
   bool dropTableIfExists(std::string_view tableName) {

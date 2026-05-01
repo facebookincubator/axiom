@@ -343,8 +343,8 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     const auto& tableName = statement.tableName();
 
     auto session = std::make_shared<connector::ConnectorSession>("test");
-    const bool dropped =
-        metadata->dropTable(session, tableName, statement.ifExists());
+    const bool dropped = metadata->dropTable(
+        session, tableName, statement.ifExists(), /*explain=*/false);
 
     if (dropped) {
       std::cout << "Dropped table: " << tableName.toString() << std::endl;

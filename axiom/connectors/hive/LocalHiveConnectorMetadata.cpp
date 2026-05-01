@@ -1490,15 +1490,24 @@ std::optional<std::string> LocalHiveConnectorMetadata::makeStagingDirectory(
 bool LocalHiveConnectorMetadata::dropTable(
     const ConnectorSessionPtr& /* session */,
     const SchemaTableName& tableName,
-    bool ifExists) {
+    bool ifExists,
+    bool explain) {
   ensureInitialized();
 
   std::lock_guard<std::mutex> l(mutex_);
-  if (!tables_.contains(tableName.table)) {
+  const bool exists = tables_.contains(tableName.table);
+  if (explain) {
+    if (!exists) {
+      VELOX_USER_CHECK(ifExists, "Table doesn't exist: {}", tableName);
+    }
+    return exists;
+  }
+
+  if (!exists) {
     if (ifExists) {
       return false;
     }
-    VELOX_USER_FAIL("Table does not exist: {}", tableName);
+    VELOX_USER_FAIL("Table doesn't exist: {}", tableName);
   }
 
   deleteDirectoryRecursive(tablePath(tableName));
