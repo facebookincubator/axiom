@@ -937,6 +937,36 @@ class ConnectorMetadata {
     VELOX_UNSUPPORTED();
   }
 
+  /// Adds 'columnName' of 'columnType' to an existing table.
+  ///
+  /// Outcomes (combinations of inputs and table state):
+  ///   - Table missing, ifTableExists=false: throws "table missing".
+  ///   - Table missing, ifTableExists=true:  returns std::nullopt (no-op).
+  ///   - Column missing, any flags:          adds column, returns true.
+  ///   - Column exists, ifNotExists=false:   throws "column exists".
+  ///   - Column exists, ifNotExists=true:    returns false (no-op).
+  ///
+  /// When 'explain' is true, the connector must perform the same validation
+  /// checks and return the same value (or throw the same user error) as a
+  /// real call, but must not write to disk or mutate in-memory state. No
+  /// cleanup is needed after an explain call.
+  ///
+  /// Returns:
+  ///   - std::nullopt: table did not exist and 'ifTableExists' is true.
+  ///   - true:         column was added (or would be added when 'explain' is
+  ///                   true).
+  ///   - false:        column already existed and 'ifNotExists' is true.
+  virtual std::optional<bool> addColumn(
+      const ConnectorSessionPtr& /*session*/,
+      const SchemaTableName& /*tableName*/,
+      const std::string& /*columnName*/,
+      const velox::TypePtr& /*columnType*/,
+      bool /*ifTableExists*/,
+      bool /*ifNotExists*/,
+      bool /*explain*/) {
+    VELOX_UNSUPPORTED();
+  }
+
   /// Returns the list of schema names available in this connector. Some
   /// connectors may return only a representative subset of schemas (e.g.,
   /// TPC-H returns a fixed list of scale-factor schemas). Use schemaExists()

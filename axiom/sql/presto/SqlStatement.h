@@ -40,6 +40,7 @@ enum class SqlStatementKind {
   kSetSession,
   kResetSession,
   kUse,
+  kAddColumn,
 };
 
 AXIOM_DECLARE_ENUM_NAME(SqlStatementKind);
@@ -122,6 +123,10 @@ class SqlStatement {
 
   bool isUse() const {
     return kind_ == SqlStatementKind::kUse;
+  }
+
+  bool isAddColumn() const {
+    return kind_ == SqlStatementKind::kAddColumn;
   }
 
   template <typename T>
@@ -358,6 +363,62 @@ class DropTableStatement : public SqlStatement {
   const std::string connectorId_;
   const facebook::axiom::SchemaTableName tableName_;
   const bool ifExists_;
+};
+
+class AddColumnStatement : public SqlStatement {
+ public:
+  AddColumnStatement(
+      std::string connectorId,
+      facebook::axiom::SchemaTableName tableName,
+      std::string columnName,
+      facebook::velox::TypePtr columnType,
+      bool ifTableExists,
+      bool ifNotExists)
+      : SqlStatement(
+            SqlStatementKind::kAddColumn,
+            /*views=*/{},
+            ReferencedTables{/*inputTables=*/{},
+                             facebook::axiom::CatalogSchemaTableName{
+                                 connectorId,
+                                 tableName}}),
+        connectorId_{std::move(connectorId)},
+        tableName_{std::move(tableName)},
+        columnName_{std::move(columnName)},
+        columnType_{std::move(columnType)},
+        ifTableExists_{ifTableExists},
+        ifNotExists_{ifNotExists} {}
+
+  const std::string& connectorId() const {
+    return connectorId_;
+  }
+
+  const facebook::axiom::SchemaTableName& tableName() const {
+    return tableName_;
+  }
+
+  const std::string& columnName() const {
+    return columnName_;
+  }
+
+  const facebook::velox::TypePtr& columnType() const {
+    return columnType_;
+  }
+
+  bool ifTableExists() const {
+    return ifTableExists_;
+  }
+
+  bool ifNotExists() const {
+    return ifNotExists_;
+  }
+
+ private:
+  const std::string connectorId_;
+  const facebook::axiom::SchemaTableName tableName_;
+  const std::string columnName_;
+  const facebook::velox::TypePtr columnType_;
+  const bool ifTableExists_;
+  const bool ifNotExists_;
 };
 
 class CreateSchemaStatement : public SqlStatement {

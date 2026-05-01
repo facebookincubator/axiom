@@ -40,6 +40,7 @@ const auto& statementKindNames() {
       {SqlStatementKind::kSetSession, "SET SESSION"},
       {SqlStatementKind::kResetSession, "RESET SESSION"},
       {SqlStatementKind::kUse, "USE"},
+      {SqlStatementKind::kAddColumn, "ALTER TABLE ADD COLUMN"},
   };
 
   return kNames;

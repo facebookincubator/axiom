@@ -294,6 +294,38 @@ std::string SqlQueryRunner::dropTable(
   }
 }
 
+std::string SqlQueryRunner::addColumn(
+    const presto::AddColumnStatement& statement,
+    bool explain) {
+  auto metadata =
+      connector::ConnectorMetadata::metadata(statement.connectorId());
+
+  auto session = std::make_shared<connector::ConnectorSession>("test");
+  auto result = metadata->addColumn(
+      session,
+      statement.tableName(),
+      statement.columnName(),
+      statement.columnType(),
+      statement.ifTableExists(),
+      statement.ifNotExists(),
+      explain);
+
+  if (!result.has_value()) {
+    return fmt::format(
+        "Table does not exist: {}.{}",
+        statement.connectorId(),
+        statement.tableName());
+  }
+  if (!result.value()) {
+    return fmt::format(
+        "Column '{}' already exists in {} (no-op)",
+        statement.columnName(),
+        statement.tableName());
+  }
+  return fmt::format(
+      "Added column '{}' to {}", statement.columnName(), statement.tableName());
+}
+
 std::string SqlQueryRunner::createSchema(
     const presto::CreateSchemaStatement& statement) {
   auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
@@ -507,6 +539,18 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
               drop->ifExists() ? "IF EXISTS " : "",
               drop->connectorId(),
               drop->tableName())};
+    } else if (statement->isAddColumn()) {
+      const auto* add = statement->as<presto::AddColumnStatement>();
+      addColumn(*add, /*explain=*/true);
+      return {
+          .message = fmt::format(
+              "ALTER TABLE {}{}.{} ADD COLUMN {}{} {}",
+              add->ifTableExists() ? "IF EXISTS " : "",
+              add->connectorId(),
+              add->tableName(),
+              add->ifNotExists() ? "IF NOT EXISTS " : "",
+              add->columnName(),
+              add->columnType()->toString())};
     } else {
       VELOX_NYI("Unsupported EXPLAIN query: {}", statement->kindName());
     }
@@ -578,6 +622,12 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
     const auto* drop = sqlStatement.as<presto::DropTableStatement>();
 
     return {.message = dropTable(*drop)};
+  }
+
+  if (sqlStatement.isAddColumn()) {
+    const auto* add = sqlStatement.as<presto::AddColumnStatement>();
+
+    return {.message = addColumn(*add)};
   }
 
   if (sqlStatement.isCreateSchema()) {
