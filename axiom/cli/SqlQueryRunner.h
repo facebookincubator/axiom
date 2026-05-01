@@ -49,6 +49,16 @@ struct QueryStartInfo {
 
   /// Wall-clock time when the query was created.
   std::chrono::system_clock::time_point createTime;
+
+  /// Holds the session catalog in effect when the query started.
+  std::string catalog;
+
+  /// Holds the session schema in effect when the query started.
+  std::string schema;
+
+  /// Statement kind resolved during parsing. Remains empty in the start
+  /// callback because parsing happens after onStart fires.
+  std::optional<presto::SqlStatementKind> queryType;
 };
 
 /// Holds error details when a query fails.
@@ -147,7 +157,7 @@ class SqlQueryRunner {
     bool debugMode{false};
 
     /// Called before parsing. Receives query metadata (query ID, SQL text,
-    /// creation time).
+    /// creation time, and session catalog/schema).
     QueryStartCallback onStart;
 
     /// Called after execution completes (success or failure). Carries

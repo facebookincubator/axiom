@@ -332,12 +332,18 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
     const RunOptions& options) {
   auto runOptions = options;
   runOptions.queryId = options.queryId.value_or(queryIdGenerator_());
+  const auto& catalog =
+      runOptions.defaultConnectorId.value_or(defaultConnectorId_);
+  const auto& schema = runOptions.defaultSchema.value_or(defaultSchema_);
 
   QueryCompletionInfo completionInfo{
       .startInfo = {
           *runOptions.queryId,
           std::string(sql),
-          std::chrono::system_clock::now()}};
+          std::chrono::system_clock::now(),
+          std::string(catalog),
+          std::string(schema),
+          std::nullopt}};
 
   onStart(runOptions, completionInfo);
 
@@ -356,6 +362,7 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
       velox::MicrosecondTimer parseTimer(&completionInfo.timing.parse);
       statement = parseSingle(sql, runOptions);
     }
+    completionInfo.startInfo.queryType = statement->kind();
 
     runOptions.tokenProvider = checkPermission(
         runOptions,

@@ -901,6 +901,30 @@ TEST_F(SqlQueryRunnerTest, startCallbackFiredBeforeCompletion) {
   EXPECT_EQ(startQueryId, completionQueryId);
 }
 
+TEST_F(SqlQueryRunnerTest, callbacksReceiveQueryMetadata) {
+  QueryStartInfo capturedStart;
+  QueryCompletionInfo capturedCompletion;
+
+  runner_->run(
+      "SELECT 1",
+      {.onStart = [&](const QueryStartInfo& info) { capturedStart = info; },
+       .onComplete =
+           [&](const QueryCompletionInfo& info) {
+             capturedCompletion = info;
+           }});
+
+  EXPECT_EQ(capturedStart.catalog, runner_->defaultConnectorId());
+  EXPECT_EQ(capturedStart.schema, runner_->defaultSchema());
+  EXPECT_FALSE(capturedStart.queryType.has_value());
+  EXPECT_EQ(
+      capturedCompletion.startInfo.catalog, runner_->defaultConnectorId());
+  EXPECT_EQ(capturedCompletion.startInfo.schema, runner_->defaultSchema());
+  ASSERT_TRUE(capturedCompletion.startInfo.queryType.has_value());
+  EXPECT_EQ(
+      *capturedCompletion.startInfo.queryType,
+      presto::SqlStatementKind::kSelect);
+}
+
 TEST_F(SqlQueryRunnerTest, completionCallbackOnError) {
   QueryCompletionInfo captured;
 
