@@ -845,25 +845,27 @@ class ConnectorMetadata {
   /// ConnectorSession in a connector dependent manner, then call createTable
   /// to retrieve a Table object. Any transaction semantics are
   /// connector-dependent, and the ConnectorSession may be null for connectors
-  /// which do not require it. Throws an error if the table exists. finishWrite
-  /// should be called to commit the new table and any writes even if no data
-  /// is added. To create an empty table, call createTable, then
-  /// beginWrite/finishWrite with the generated table object. To create the
-  /// table with data, call createTable to generate a Table, call beginWrite
-  /// with the Table object, perform writes against the table using the
-  /// returned insert handle, then finishWrite to commit the changes. The table
-  /// is not available via the findTable interface until after finishWrite
-  /// completes.
+  /// which do not require it. finishWrite should be called to commit the new
+  /// table and any writes even if no data is added. To create an empty table,
+  /// call createTable, then beginWrite/finishWrite with the generated table
+  /// object. To create the table with data, call createTable to generate a
+  /// Table, call beginWrite with the Table object, perform writes against the
+  /// table using the returned insert handle, then finishWrite to commit the
+  /// changes. The table is not available via the findTable interface until
+  /// after finishWrite completes.
   ///
-  /// When 'explain' is true, the connector must interpret properties and
-  /// return a valid Table with correct layout metadata, but must not create
-  /// directories, write files, or register the table. No cleanup is needed
-  /// after an explain call.
+  /// When 'ifNotExists' is true and the table already exists, returns nullptr.
+  /// When 'ifNotExists' is false and the table already exists, raises an
+  /// error. When 'explain' is true, the connector must interpret properties
+  /// and return a valid Table with correct layout metadata, but must not
+  /// create directories, write files, or register the table. No cleanup is
+  /// needed after an explain call.
   virtual TablePtr createTable(
       const ConnectorSessionPtr& /*session*/,
       const SchemaTableName& /*tableName*/,
       const velox::RowTypePtr& /*rowType*/,
       const folly::F14FastMap<std::string, velox::Variant>& /*options*/,
+      bool /*ifNotExists*/,
       bool /*explain*/) {
     VELOX_UNSUPPORTED();
   }

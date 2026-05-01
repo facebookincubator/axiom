@@ -249,12 +249,15 @@ connector::TablePtr SqlQueryRunner::createTable(
   }
 
   auto session = std::make_shared<connector::ConnectorSession>("test", user_);
-  return metadata->createTable(
+  auto table = metadata->createTable(
       session,
       statement.tableName(),
       statement.tableSchema(),
       options,
+      statement.ifNotExists(),
       explain);
+  VELOX_CHECK(table != nullptr || statement.ifNotExists());
+  return table;
 }
 
 connector::TablePtr SqlQueryRunner::createTable(
@@ -269,12 +272,15 @@ connector::TablePtr SqlQueryRunner::createTable(
   }
 
   auto session = std::make_shared<connector::ConnectorSession>("test", user_);
-  return metadata->createTable(
+  auto table = metadata->createTable(
       session,
       statement.tableName(),
       statement.tableSchema(),
       options,
+      /*ifNotExists=*/false,
       explain);
+  VELOX_CHECK_NOT_NULL(table);
+  return table;
 }
 
 std::string SqlQueryRunner::dropTable(
@@ -477,14 +483,7 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
           ctas->connectorId(), ctas->tableName(), table);
     } else if (statement->isCreateTable()) {
       const auto* create = statement->as<presto::CreateTableStatement>();
-      if (!create->ifNotExists()) {
-        auto metadata = ConnectorMetadataRegistry::get(create->connectorId());
-        VELOX_USER_CHECK(
-            !metadata->findTable(create->tableName()),
-            "Table already exists: {}.{}",
-            create->connectorId(),
-            create->tableName());
-      }
+      createTable(*create, /*explain=*/true);
       return {
           .message = fmt::format(
               "CREATE TABLE {}{}.{}",
@@ -555,7 +554,14 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
 
   if (sqlStatement.isCreateTable()) {
     const auto* create = sqlStatement.as<presto::CreateTableStatement>();
-    createTable(*create);
+    auto table = createTable(*create);
+    if (!table) {
+      return {
+          .message = fmt::format(
+              "Table already exists: {}.{}",
+              create->connectorId(),
+              create->tableName())};
+    }
     return {.message = fmt::format("Created table: {}", create->tableName())};
   }
 

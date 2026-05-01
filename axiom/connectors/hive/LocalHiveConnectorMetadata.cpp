@@ -1308,6 +1308,7 @@ TablePtr LocalHiveConnectorMetadata::createTable(
     const SchemaTableName& tableName,
     const velox::RowTypePtr& rowType,
     const folly::F14FastMap<std::string, velox::Variant>& options,
+    bool ifNotExists,
     bool explain) {
   VELOX_USER_CHECK(
       schemaExists(nullptr, tableName.schema),
@@ -1318,6 +1319,15 @@ TablePtr LocalHiveConnectorMetadata::createTable(
   auto createTableOptions = parseCreateTableOptions(options, format_);
 
   if (explain) {
+    {
+      std::lock_guard<std::mutex> l(mutex_);
+      if (findTableLocked(tableName.table)) {
+        if (ifNotExists) {
+          return nullptr;
+        }
+        VELOX_USER_FAIL("Table already exists: {}", tableName.toString());
+      }
+    }
     return createLocalTable(
         tableName.table,
         rowType,
@@ -1328,7 +1338,10 @@ TablePtr LocalHiveConnectorMetadata::createTable(
 
   auto path = tablePath(tableName);
   if (dirExists(path)) {
-    VELOX_USER_FAIL("Table {} already exists", tableName.toString());
+    if (ifNotExists) {
+      return nullptr;
+    }
+    VELOX_USER_FAIL("Table already exists: {}", tableName.toString());
   } else {
     createDir(path);
   }
@@ -1338,10 +1351,13 @@ TablePtr LocalHiveConnectorMetadata::createTable(
   const std::string filePath = schemaPath(path);
 
   std::lock_guard<std::mutex> l(mutex_);
-  VELOX_USER_CHECK_NULL(
-      findTableLocked(tableName.table),
-      "table {} already exists",
-      tableName.toString());
+  if (findTableLocked(tableName.table)) {
+    deleteDirectoryRecursive(path);
+    if (ifNotExists) {
+      return nullptr;
+    }
+    VELOX_USER_FAIL("Table already exists: {}", tableName.toString());
+  }
   {
     std::ofstream outputFile(filePath);
     VELOX_CHECK(outputFile.is_open());

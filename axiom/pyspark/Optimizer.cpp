@@ -81,8 +81,15 @@ facebook::axiom::connector::TablePtr createTable(
 
   auto session = std::make_shared<facebook::axiom::connector::ConnectorSession>(
       "pyspark_session");
-  return metadata->createTable(
-      session, writeNode.tableName(), tableSchema, options, /*explain=*/false);
+  auto table = metadata->createTable(
+      session,
+      writeNode.tableName(),
+      tableSchema,
+      options,
+      /*ifNotExists=*/false,
+      /*explain=*/false);
+  VELOX_CHECK_NOT_NULL(table);
+  return table;
 }
 
 } // namespace

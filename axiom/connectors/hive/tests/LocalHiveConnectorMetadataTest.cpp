@@ -319,7 +319,12 @@ TEST_F(LocalHiveConnectorMetadataTest, createTable) {
 
   auto session = std::make_shared<ConnectorSession>("q-test");
   auto table = metadata_->createTable(
-      session, {kDefaultSchema, "test"}, tableType, options, /*explain=*/false);
+      session,
+      {kDefaultSchema, "test"},
+      tableType,
+      options,
+      /*ifNotExists=*/false,
+      /*explain=*/false);
 
   // Table should be findable immediately after createTable, before
   // beginWrite/finishWrite. This is the flow for plain CREATE TABLE (no data).
@@ -407,6 +412,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createEmptyTable) {
       {kDefaultSchema, "test_empty"},
       tableType,
       /*options=*/{},
+      /*ifNotExists=*/false,
       /*explain=*/false);
 
   auto emptyData = makeRowVector(tableType, 0);
@@ -441,6 +447,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
       {kDefaultSchema, "test_insert"},
       tableType,
       /*options=*/{},
+      /*ifNotExists=*/false,
       /*explain=*/false);
   auto handle = metadata_->beginWrite(
       session, staged, WriteKind::kCreate, /*explain=*/false);
@@ -491,6 +498,7 @@ TEST_F(LocalHiveConnectorMetadataTest, abortCreateWithRetry) {
       SchemaTableName{kDefaultSchema, "test_abort"},
       tableType,
       /*options=*/{},
+      /*ifNotExists=*/false,
       /*explain=*/false);
   auto handle = metadata_->beginWrite(
       session, table, WriteKind::kCreate, /*explain=*/false);
@@ -502,8 +510,9 @@ TEST_F(LocalHiveConnectorMetadataTest, abortCreateWithRetry) {
           SchemaTableName{kDefaultSchema, "test_abort"},
           tableType,
           /*options=*/{},
+          /*ifNotExists=*/false,
           /*explain=*/false),
-      "Table \"default\".\"test_abort\" already exists");
+      "Table already exists: \"default\".\"test_abort\"");
   metadata_->abortWrite(session, handle).get();
   EXPECT_FALSE(std::filesystem::exists(tablePath));
 
@@ -512,6 +521,7 @@ TEST_F(LocalHiveConnectorMetadataTest, abortCreateWithRetry) {
       SchemaTableName{kDefaultSchema, "test_abort"},
       tableType,
       /*options=*/{},
+      /*ifNotExists=*/false,
       /*explain=*/false);
   handle = metadata_->beginWrite(
       session, table, WriteKind::kCreate, /*explain=*/false);
@@ -520,6 +530,92 @@ TEST_F(LocalHiveConnectorMetadataTest, abortCreateWithRetry) {
   EXPECT_TRUE(std::filesystem::exists(tablePath));
   auto created = metadata_->findTable({kDefaultSchema, "test_abort"});
   EXPECT_NE(created, nullptr);
+}
+
+TEST_F(LocalHiveConnectorMetadataTest, createTableIfNotExists) {
+  auto tableType = ROW({{"col1", BIGINT()}, {"col2", VARCHAR()}});
+  auto session = std::make_shared<ConnectorSession>("q-test");
+
+  auto table = metadata_->createTable(
+      session,
+      {kDefaultSchema, "test_ine"},
+      tableType,
+      /*options=*/{},
+      /*ifNotExists=*/false,
+      /*explain=*/false);
+  ASSERT_NE(table, nullptr);
+
+  auto table2 = metadata_->createTable(
+      session,
+      {kDefaultSchema, "test_ine"},
+      tableType,
+      /*options=*/{},
+      /*ifNotExists=*/true,
+      /*explain=*/false);
+  ASSERT_EQ(table2, nullptr);
+
+  VELOX_ASSERT_THROW(
+      metadata_->createTable(
+          session,
+          {kDefaultSchema, "test_ine"},
+          tableType,
+          /*options=*/{},
+          /*ifNotExists=*/false,
+          /*explain=*/false),
+      "Table already exists: \"default\".\"test_ine\"");
+}
+
+TEST_F(LocalHiveConnectorMetadataTest, createTableIfNotExistsNewTable) {
+  auto tableType = ROW({{"col1", BIGINT()}});
+  auto session = std::make_shared<ConnectorSession>("q-test");
+
+  auto table = metadata_->createTable(
+      session,
+      {kDefaultSchema, "test_ine_new"},
+      tableType,
+      /*options=*/{},
+      /*ifNotExists=*/true,
+      /*explain=*/false);
+  ASSERT_NE(table, nullptr);
+
+  auto found = metadata_->findTable({kDefaultSchema, "test_ine_new"});
+  ASSERT_NE(found, nullptr);
+}
+
+TEST_F(LocalHiveConnectorMetadataTest, createTableIfNotExistsExplain) {
+  auto tableType = ROW({{"col1", BIGINT()}});
+  auto session = std::make_shared<ConnectorSession>("q-test");
+
+  auto table = metadata_->createTable(
+      session,
+      {kDefaultSchema, "test_ine_explain"},
+      tableType,
+      /*options=*/{},
+      /*ifNotExists=*/false,
+      /*explain=*/false);
+  ASSERT_NE(table, nullptr);
+
+  auto explained = metadata_->createTable(
+      session,
+      {kDefaultSchema, "test_ine_explain"},
+      tableType,
+      /*options=*/{},
+      /*ifNotExists=*/true,
+      /*explain=*/true);
+  ASSERT_EQ(explained, nullptr);
+
+  VELOX_ASSERT_THROW(
+      metadata_->createTable(
+          session,
+          {kDefaultSchema, "test_ine_explain"},
+          tableType,
+          /*options=*/{},
+          /*ifNotExists=*/false,
+          /*explain=*/true),
+      "Table already exists: \"default\".\"test_ine_explain\"");
+
+  ASSERT_NE(
+      metadata_->findTable({kDefaultSchema, "test_ine_explain"}), nullptr);
 }
 
 } // namespace
