@@ -36,6 +36,32 @@ using namespace facebook;
 namespace axiom::collagen {
 namespace {
 
+bool isGeneratorFunction(const std::string& functionName) {
+  return functionName == "explode" || functionName == "posexplode" ||
+      functionName == "explode_outer" || functionName == "posexplode_outer";
+}
+
+bool isOuterGenerator(const std::string& functionName) {
+  return functionName == "explode_outer" || functionName == "posexplode_outer";
+}
+
+/// Extracts the generator function name from an expression (direct or aliased).
+/// Returns empty string if no generator is found.
+std::string findGeneratorFunction(
+    const spark::connect::Expression& expression) {
+  if (expression.has_unresolved_function() &&
+      isGeneratorFunction(expression.unresolved_function().function_name())) {
+    return expression.unresolved_function().function_name();
+  }
+  if (expression.has_alias() &&
+      expression.alias().expr().has_unresolved_function() &&
+      isGeneratorFunction(
+          expression.alias().expr().unresolved_function().function_name())) {
+    return expression.alias().expr().unresolved_function().function_name();
+  }
+  return "";
+}
+
 // Tries to resolve a function signature. Returns the return type if the
 // signature was found, or throws a descriptive error message.
 velox::TypePtr resolveFunction(
@@ -170,6 +196,13 @@ void SparkToAxiom::visit(
 void SparkToAxiom::visit(
     const spark::connect::Project& project,
     SparkPlanVisitorContext& context) {
+  for (const auto& expression : project.expressions()) {
+    if (!findGeneratorFunction(expression).empty()) {
+      visitProjectWithGenerator(project, context);
+      return;
+    }
+  }
+
   // Note that we first visit the project input subtree, before visiting the
   // expressions themselves. This ensures that by the time we visit the
   // expressions, we are ready to bind attributes to the output of the current
@@ -201,6 +234,177 @@ void SparkToAxiom::visit(
   auto planNode = std::make_shared<facebook::axiom::logical_plan::ProjectNode>(
       nextId(), std::move(planNode_), std::move(exprNames), std::move(exprs));
   setPlanNode(planNode, context.planId);
+}
+
+void SparkToAxiom::visitProjectWithGenerator(
+    const spark::connect::Project& project,
+    SparkPlanVisitorContext& context) {
+  SparkPlanVisitor::visit(project.input(), context);
+
+  LOG(INFO) << "Creating unnest node from generator in project ["
+            << context.planId << "]";
+
+  const spark::connect::Expression* generatorExpr = nullptr;
+  std::string generatorName;
+  std::vector<std::string> aliasNames;
+  int generatorCount = 0;
+
+  std::vector<const spark::connect::Expression*> nonGeneratorExprs;
+
+  for (const auto& expression : project.expressions()) {
+    auto genFunc = findGeneratorFunction(expression);
+    if (!genFunc.empty()) {
+      ++generatorCount;
+      if (generatorExpr == nullptr) {
+        generatorExpr = &expression;
+        generatorName = genFunc;
+
+        if (expression.has_alias()) {
+          for (const auto& name : expression.alias().name()) {
+            aliasNames.push_back(name);
+          }
+        }
+      }
+    } else {
+      nonGeneratorExprs.push_back(&expression);
+    }
+  }
+
+  COLLAGEN_CHECK(
+      generatorExpr != nullptr,
+      "Expected generator expression in project but none found");
+
+  // Spark rejects multiple generators in a single SELECT.
+  COLLAGEN_CHECK(
+      generatorCount == 1,
+      "Only one generator allowed per select clause but found {}. "
+      "Use separate select() calls for multiple explode operations.",
+      generatorCount);
+
+  COLLAGEN_CHECK(
+      !isOuterGenerator(generatorName),
+      "{} is not supported yet. UnnestNode uses inner semantics "
+      "(rows with empty arrays/maps are dropped). Use explode/posexplode instead.",
+      generatorName);
+
+  const spark::connect::Expression::UnresolvedFunction* genFuncPtr;
+  if (generatorExpr->has_alias()) {
+    genFuncPtr = &generatorExpr->alias().expr().unresolved_function();
+  } else {
+    genFuncPtr = &generatorExpr->unresolved_function();
+  }
+
+  COLLAGEN_CHECK(
+      genFuncPtr->arguments().size() >= 1,
+      "{} requires at least 1 argument",
+      generatorName);
+
+  visit(genFuncPtr->arguments(0), context);
+  auto unnestExpr = std::move(expr_);
+  auto unnestExprType = unnestExpr->type();
+
+  std::vector<std::vector<std::string>> unnestedNames;
+  const bool isPosExplode = generatorName == "posexplode";
+  std::optional<std::string> ordinalityName;
+
+  // Spark's posexplode alias order is (pos, element[, value]). The first alias
+  // names the position column; subsequent aliases name the unnested columns.
+  // For plain explode, all aliases name the unnested columns.
+  const size_t aliasOffset = isPosExplode ? 1 : 0;
+  if (isPosExplode) {
+    ordinalityName = !aliasNames.empty() ? aliasNames[0] : "pos";
+  }
+
+  const auto aliasAt = [&](size_t index, std::string_view fallback) {
+    return index < aliasNames.size() ? aliasNames[index]
+                                     : std::string{fallback};
+  };
+
+  if (unnestExprType->isArray()) {
+    unnestedNames.push_back({aliasAt(aliasOffset, "col")});
+  } else if (unnestExprType->isMap()) {
+    unnestedNames.push_back(
+        {aliasAt(aliasOffset, "key"), aliasAt(aliasOffset + 1, "value")});
+  } else {
+    COLLAGEN_NYI(
+        "{} on type {} is not supported",
+        generatorName,
+        unnestExprType->toString());
+  }
+
+  auto unnestNode = std::make_shared<facebook::axiom::logical_plan::UnnestNode>(
+      nextId(),
+      std::move(planNode_),
+      std::vector<ExprPtr>{unnestExpr},
+      unnestedNames,
+      ordinalityName);
+
+  // posexplode requires a wrapping ProjectNode to convert Velox's 1-based
+  // ordinality to Spark's 0-based position.
+  const bool needsWrapper = !nonGeneratorExprs.empty() || isPosExplode;
+  if (!needsWrapper) {
+    setPlanNode(unnestNode, context.planId);
+    return;
+  }
+
+  planNode_ = unnestNode;
+
+  std::vector<ExprPtr> projExprs;
+  std::vector<std::string> projNames;
+
+  for (const auto* expr : nonGeneratorExprs) {
+    visit(*expr, context);
+    auto name = std::move(exprName_);
+    if (name.empty()) {
+      name = expr_->type()->toString();
+      folly::toLowerAscii(name);
+    }
+    projNames.emplace_back(std::move(name));
+    projExprs.emplace_back(std::move(expr_));
+  }
+
+  // UnnestNode emits all input columns followed by unnested columns, with the
+  // ordinality column last when present.
+  auto unnestOutputType = unnestNode->outputType();
+  auto numOutputCols = static_cast<uint32_t>(unnestOutputType->size());
+  auto numInputCols =
+      static_cast<uint32_t>(unnestNode->onlyInput()->outputType()->size());
+  const uint32_t ordinalityIdx =
+      isPosExplode ? numOutputCols - 1 : numOutputCols;
+
+  for (uint32_t i = numInputCols; i < numOutputCols; ++i) {
+    auto colType = unnestOutputType->childAt(i);
+    std::string colName{unnestOutputType->nameOf(i)};
+    if (i == ordinalityIdx) {
+      // Convert Velox's 1-based ordinality to Spark's 0-based position by
+      // subtracting 1.
+      auto posRef =
+          std::make_shared<facebook::axiom::logical_plan::InputReferenceExpr>(
+              colType, colName);
+      auto oneConst =
+          std::make_shared<facebook::axiom::logical_plan::ConstantExpr>(
+              velox::BIGINT(),
+              std::make_shared<velox::variant>(velox::variant(int64_t{1})));
+      projExprs.emplace_back(
+          std::make_shared<facebook::axiom::logical_plan::CallExpr>(
+              colType,
+              "minus",
+              std::vector<ExprPtr>{std::move(posRef), std::move(oneConst)}));
+    } else {
+      projExprs.emplace_back(
+          std::make_shared<facebook::axiom::logical_plan::InputReferenceExpr>(
+              colType, colName));
+    }
+    projNames.emplace_back(std::move(colName));
+  }
+
+  auto projectNode =
+      std::make_shared<facebook::axiom::logical_plan::ProjectNode>(
+          nextId(),
+          std::move(planNode_),
+          std::move(projNames),
+          std::move(projExprs));
+  setPlanNode(projectNode, context.planId);
 }
 
 void SparkToAxiom::visit(
