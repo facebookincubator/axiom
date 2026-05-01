@@ -2090,6 +2090,27 @@ SqlStatementPtr parseDropTable(
       std::move(connectorId), std::move(connectorTable), dropTable.isExists());
 }
 
+SqlStatementPtr parseAddColumn(
+    const AddColumn& addColumn,
+    const std::string& defaultConnectorId,
+    const std::string& defaultSchema) {
+  auto [connectorId, connectorTable] = toConnectorTable(
+      *addColumn.tableName(), defaultConnectorId, defaultSchema);
+  auto* colDef = addColumn.column();
+  auto columnType = parseType(colDef->columnType());
+  VELOX_USER_CHECK_NOT_NULL(
+      columnType,
+      "Unknown type specifier: {}",
+      colDef->columnType()->baseName());
+  return std::make_shared<AddColumnStatement>(
+      std::move(connectorId),
+      std::move(connectorTable),
+      colDef->name()->value(),
+      std::move(columnType),
+      addColumn.isTableExists(),
+      addColumn.isColumnNotExists());
+}
+
 SqlStatementPtr parseCreateSchema(
     const CreateSchema& createSchema,
     const std::string& defaultConnectorId) {
@@ -2225,6 +2246,11 @@ SqlStatementPtr doPlan(
   if (query->is(NodeType::kDropTable)) {
     return parseDropTable(
         *query->as<DropTable>(), defaultConnectorId, defaultSchema);
+  }
+
+  if (query->is(NodeType::kAddColumn)) {
+    return parseAddColumn(
+        *query->as<AddColumn>(), defaultConnectorId, defaultSchema);
   }
 
   if (query->is(NodeType::kCreateSchema)) {

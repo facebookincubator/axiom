@@ -20,6 +20,7 @@
 
 #include <folly/Conv.h>
 #include <folly/Unicode.h>
+#include <algorithm>
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "velox/common/base/Exceptions.h"
 
@@ -807,7 +808,31 @@ std::any AstBuilder::visitDropColumn(PrestoSqlParser::DropColumnContext* ctx) {
 
 std::any AstBuilder::visitAddColumn(PrestoSqlParser::AddColumnContext* ctx) {
   trace("visitAddColumn");
-  return visitChildren("visitAddColumn", ctx);
+  auto column = std::any_cast<std::shared_ptr<TableElement>>(
+      visit(ctx->columnDefinition()));
+  // Grammar: ALTER TABLE (IF EXISTS)? name ADD COLUMN (IF NOT EXISTS)? col
+  // Disambiguate by position relative to COLUMN: EXISTS before COLUMN belongs
+  // to the table clause, EXISTS after COLUMN belongs to the column clause.
+  auto columnIndex = ctx->COLUMN()->getSymbol()->getTokenIndex();
+  auto existsTokens = ctx->EXISTS();
+  bool ifTableExists = std::any_of(
+      existsTokens.begin(),
+      existsTokens.end(),
+      [columnIndex](antlr4::tree::TerminalNode* node) {
+        return node->getSymbol()->getTokenIndex() < columnIndex;
+      });
+  bool ifNotExists = std::any_of(
+      existsTokens.begin(),
+      existsTokens.end(),
+      [columnIndex](antlr4::tree::TerminalNode* node) {
+        return node->getSymbol()->getTokenIndex() > columnIndex;
+      });
+  return std::static_pointer_cast<Statement>(std::make_shared<AddColumn>(
+      getLocation(ctx),
+      getQualifiedName(ctx->qualifiedName()),
+      column,
+      ifTableExists,
+      ifNotExists));
 }
 
 std::any AstBuilder::visitAddConstraint(
