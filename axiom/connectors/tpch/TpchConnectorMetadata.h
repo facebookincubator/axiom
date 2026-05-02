@@ -27,27 +27,29 @@ class TpchConnectorMetadata;
 
 class TpchSplitSource : public SplitSource {
  public:
+  /// Constructs a TpchSplitSource with the specified number of splits.
   TpchSplitSource(
       velox::tpch::Table table,
       double scaleFactor,
       const std::string& connectorId,
-      SplitOptions options)
-      : options_(options),
-        table_(table),
+      int64_t numSplits = -1)
+      : table_(table),
         scaleFactor_(scaleFactor),
-        connectorId_(connectorId) {}
+        connectorId_(connectorId),
+        numSplits_(numSplits) {}
 
   folly::coro::Task<SplitBatch> co_getSplits(
       uint32_t maxSplitCount,
       int32_t /*bucket*/) override;
 
  private:
-  const SplitOptions options_;
+  static constexpr uint64_t kFileBytesPerSplit{128ULL << 20U};
+
   const velox::tpch::Table table_;
   const double scaleFactor_;
   const std::string connectorId_;
   int64_t nextSplitIdx_{0};
-  int64_t numSplits_{-1};
+  int64_t numSplits_;
 };
 
 class TpchSplitManager : public ConnectorSplitManager {
@@ -61,8 +63,7 @@ class TpchSplitManager : public ConnectorSplitManager {
   std::shared_ptr<SplitSource> getSplitSource(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
-      const std::vector<PartitionHandlePtr>& partitions,
-      SplitOptions options = {}) override;
+      const std::vector<PartitionHandlePtr>& partitions) override;
 };
 
 /// A TableLayout for TPCH tables. Implements sampling by generating TPCH data.

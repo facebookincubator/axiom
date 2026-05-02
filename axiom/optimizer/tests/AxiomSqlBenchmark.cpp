@@ -646,17 +646,11 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
   std::shared_ptr<runner::LocalRunner> makeRunner(
       optimizer::PlanAndStats& planAndStats,
       const std::shared_ptr<core::QueryCtx>& queryCtx) {
-    connector::SplitOptions splitOptions{
-        .targetSplitCount =
-            static_cast<int32_t>(FLAGS_num_workers * FLAGS_num_drivers * 2),
-        .fileBytesPerSplit = static_cast<uint64_t>(FLAGS_split_target_bytes),
-    };
-
     return std::make_shared<runner::LocalRunner>(
         planAndStats.plan,
         std::move(planAndStats.finishWrite),
         queryCtx,
-        std::make_shared<runner::ConnectorSplitSourceFactory>(splitOptions),
+        std::make_shared<runner::ConnectorSplitSourceFactory>(),
         optimizerPool_);
   }
 

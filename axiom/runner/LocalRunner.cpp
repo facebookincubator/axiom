@@ -79,7 +79,7 @@ ConnectorSplitSourceFactory::splitSourceForScan(
 
   auto partitions = folly::coro::blockingWait(
       splitManager->co_listPartitions(session, handle));
-  return splitManager->getSplitSource(session, handle, partitions, options_);
+  return splitManager->getSplitSource(session, handle, partitions);
 }
 
 namespace {

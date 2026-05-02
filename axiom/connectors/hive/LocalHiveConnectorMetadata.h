@@ -37,10 +37,8 @@ class LocalHiveSplitSource : public SplitSource {
       std::vector<const FileInfo*> files,
       velox::dwio::common::FileFormat format,
       const std::string& connectorId,
-      SplitOptions options,
       std::unordered_map<std::string, std::string> serdeParameters = {})
-      : options_(options),
-        format_(format),
+      : format_(format),
         connectorId_(connectorId),
         files_(std::move(files)),
         serdeParameters_(std::move(serdeParameters)) {}
@@ -50,7 +48,9 @@ class LocalHiveSplitSource : public SplitSource {
       int32_t /*bucket*/) override;
 
  private:
-  const SplitOptions options_;
+  // Target number of bytes per split when partitioning files.
+  static constexpr uint64_t kFileBytesPerSplit{128ULL << 20U};
+
   const velox::dwio::common::FileFormat format_;
   const std::string connectorId_;
   std::vector<const FileInfo*> files_;
@@ -72,8 +72,7 @@ class LocalHiveSplitManager : public ConnectorSplitManager {
   std::shared_ptr<SplitSource> getSplitSource(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
-      const std::vector<PartitionHandlePtr>& partitions,
-      SplitOptions options = {}) override;
+      const std::vector<PartitionHandlePtr>& partitions) override;
 };
 
 // Write-time stats for a single partition (or the whole table if

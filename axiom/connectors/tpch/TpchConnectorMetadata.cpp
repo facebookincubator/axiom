@@ -86,8 +86,7 @@ TpchSplitManager::co_listPartitions(
 std::shared_ptr<SplitSource> TpchSplitManager::getSplitSource(
     const connector::ConnectorSessionPtr& /*session*/,
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
-    const std::vector<PartitionHandlePtr>& /*partitions*/,
-    SplitOptions options) {
+    const std::vector<PartitionHandlePtr>& /*partitions*/) {
   auto* tpchTableHandle =
       dynamic_cast<const velox::connector::tpch::TpchTableHandle*>(
           tableHandle.get());
@@ -97,8 +96,7 @@ std::shared_ptr<SplitSource> TpchSplitManager::getSplitSource(
   return std::make_shared<TpchSplitSource>(
       tpchTableHandle->getTable(),
       tpchTableHandle->getScaleFactor(),
-      tpchTableHandle->connectorId(),
-      options);
+      tpchTableHandle->connectorId());
 }
 
 folly::coro::Task<SplitBatch> TpchSplitSource::co_getSplits(
@@ -108,7 +106,7 @@ folly::coro::Task<SplitBatch> TpchSplitSource::co_getSplits(
     auto rowType = velox::tpch::getTableSchema(table_);
     size_t rowSize = rowType->children().size() * 10;
     const auto totalRows = velox::tpch::getRowCount(table_, scaleFactor_);
-    const auto rowsPerSplit = options_.fileBytesPerSplit / rowSize;
+    const auto rowsPerSplit = kFileBytesPerSplit / rowSize;
     numSplits_ = (totalRows + rowsPerSplit - 1) / rowsPerSplit;
   }
 

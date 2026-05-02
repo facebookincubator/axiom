@@ -49,19 +49,6 @@ class SplitSource {
   virtual void cancel() {}
 };
 
-/// Options for split generation.
-struct SplitOptions {
-  /// Make no more than one split per file.
-  bool wholeFile{false};
-
-  /// If non-0, gives a minimum number of splits to generate, e.g. at least one
-  /// for each driver of each worker.
-  int32_t targetSplitCount{0};
-
-  /// Target size of split.
-  uint64_t fileBytesPerSplit{128ULL << 20U};
-};
-
 /// Describes a single partition of a TableLayout. A TableLayout has at least
 /// one partition, even if it has no partitioning columns.
 class PartitionHandle {
@@ -88,8 +75,7 @@ class ConnectorSplitManager {
   virtual std::shared_ptr<SplitSource> getSplitSource(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
-      const std::vector<PartitionHandlePtr>& partitions,
-      SplitOptions = {}) = 0;
+      const std::vector<PartitionHandlePtr>& partitions) = 0;
 };
 
 } // namespace facebook::axiom::connector

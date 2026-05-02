@@ -319,8 +319,7 @@ FilteredTableStats estimateStatsFromPartitionStats(
 std::shared_ptr<SplitSource> LocalHiveSplitManager::getSplitSource(
     const ConnectorSessionPtr& /*session*/,
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
-    const std::vector<PartitionHandlePtr>& /*partitions*/,
-    SplitOptions options) {
+    const std::vector<PartitionHandlePtr>& /*partitions*/) {
   // Since there are only unpartitioned tables now, always makes a SplitSource
   // that goes over all the files in the handle's layout.
   auto metadata = ConnectorMetadataRegistry::get(tableHandle->connectorId());
@@ -344,7 +343,6 @@ std::shared_ptr<SplitSource> LocalHiveSplitManager::getSplitSource(
       std::move(selectedFiles),
       layout->fileFormat(),
       layout->connector()->connectorId(),
-      options,
       layout->serdeParameters());
 }
 
@@ -364,17 +362,7 @@ folly::coro::Task<SplitBatch> LocalHiveSplitSource::co_getSplits(
   while (batch.splits.size() < limit && fileIdx_ < files_.size()) {
     const auto& filePath = files_[fileIdx_]->path;
     const auto fileSize = fs::file_size(filePath);
-    int64_t splitsPerFile =
-        ceil2<uint64_t>(fileSize, options_.fileBytesPerSplit);
-    if (options_.targetSplitCount) {
-      auto numFiles = files_.size();
-      if (splitsPerFile * numFiles < options_.targetSplitCount) {
-        auto perFile = ceil2<uint64_t>(options_.targetSplitCount, numFiles);
-        int64_t bytesInSplit = ceil2<uint64_t>(fileSize, perFile);
-        splitsPerFile = ceil2<uint64_t>(
-            fileSize, std::max<uint64_t>(bytesInSplit, 32 << 20));
-      }
-    }
+    int64_t splitsPerFile = ceil2<uint64_t>(fileSize, kFileBytesPerSplit);
     const int64_t splitSize = ceil2<uint64_t>(fileSize, splitsPerFile);
     while (splitWithinFile_ < splitsPerFile && batch.splits.size() < limit) {
       auto builder = velox::connector::hive::HiveConnectorSplitBuilder(filePath)

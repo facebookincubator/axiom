@@ -64,15 +64,9 @@ class SimpleSplitSourceFactory : public SplitSourceFactory {
 /// Generic SplitSourceFactory that delegates the work to ConnectorSplitManager.
 class ConnectorSplitSourceFactory : public SplitSourceFactory {
  public:
-  ConnectorSplitSourceFactory(connector::SplitOptions options = {})
-      : options_(std::move(options)) {}
-
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
       const connector::ConnectorSessionPtr& session,
       const velox::core::TableScanNode& scan) override;
-
- protected:
-  const connector::SplitOptions options_;
 };
 
 /// Runner for in-process execution of a distributed plan.

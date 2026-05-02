@@ -186,8 +186,7 @@ class TestSplitManager : public ConnectorSplitManager {
   std::shared_ptr<SplitSource> getSplitSource(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
-      const std::vector<PartitionHandlePtr>& partitions,
-      SplitOptions options = {}) override;
+      const std::vector<PartitionHandlePtr>& partitions) override;
 };
 
 class TestColumnHandle : public velox::connector::ColumnHandle {

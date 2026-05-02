@@ -93,14 +93,8 @@ std::vector<velox::RowVectorPtr> LocalRunner::execute(
       velox::cache::AsyncDataCache::getInstance(),
       aggregatePool_);
 
-  // Todo: pass executor to queryCtx
-  facebook::axiom::connector::SplitOptions splitOptions{
-      .targetSplitCount = FLAGS_num_workers * FLAGS_num_drivers * 2,
-      .fileBytesPerSplit = static_cast<uint64_t>(FLAGS_split_target_bytes)};
-
   auto splitSourceFactory =
-      std::make_shared<facebook::axiom::runner::ConnectorSplitSourceFactory>(
-          splitOptions);
+      std::make_shared<facebook::axiom::runner::ConnectorSplitSourceFactory>();
 
   auto runner = std::make_shared<facebook::axiom::runner::LocalRunner>(
       plan_, std::move(finishWrite_), queryCtx, splitSourceFactory, leafPool_);

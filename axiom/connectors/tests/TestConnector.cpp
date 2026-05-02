@@ -267,8 +267,7 @@ TestSplitManager::co_listPartitions(
 std::shared_ptr<SplitSource> TestSplitManager::getSplitSource(
     const ConnectorSessionPtr& /*session*/,
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
-    const std::vector<PartitionHandlePtr>&,
-    SplitOptions) {
+    const std::vector<PartitionHandlePtr>&) {
   auto maybeTableHandle =
       std::dynamic_pointer_cast<const TestTableHandle>(tableHandle);
   VELOX_CHECK(maybeTableHandle, "Expected TestTableHandle");

@@ -147,8 +147,7 @@ SystemSplitManager::co_listPartitions(
 std::shared_ptr<SplitSource> SystemSplitManager::getSplitSource(
     const ConnectorSessionPtr& /*session*/,
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
-    const std::vector<PartitionHandlePtr>& /*partitions*/,
-    SplitOptions /*options*/) {
+    const std::vector<PartitionHandlePtr>& /*partitions*/) {
   return std::make_shared<SystemSplitSource>(tableHandle->connectorId());
 }
 

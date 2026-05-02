@@ -912,18 +912,12 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
 std::shared_ptr<runner::LocalRunner> SqlQueryRunner::makeLocalRunner(
     optimizer::PlanAndStats& planAndStats,
     const std::shared_ptr<velox::core::QueryCtx>& queryCtx,
-    const RunOptions& options) {
-  connector::SplitOptions splitOptions{
-      .targetSplitCount =
-          static_cast<int32_t>(options.numWorkers * options.numDrivers * 2),
-      .fileBytesPerSplit = options.splitTargetBytes,
-  };
-
+    const RunOptions& /*options*/) {
   return std::make_shared<runner::LocalRunner>(
       planAndStats.plan,
       std::move(planAndStats.finishWrite),
       queryCtx,
-      std::make_shared<runner::ConnectorSplitSourceFactory>(splitOptions),
+      std::make_shared<runner::ConnectorSplitSourceFactory>(),
       executorPool_);
 }
 
