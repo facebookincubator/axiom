@@ -43,9 +43,7 @@ class LocalHiveSplitSource : public SplitSource {
         files_(std::move(files)),
         serdeParameters_(std::move(serdeParameters)) {}
 
-  folly::coro::Task<SplitBatch> co_getSplits(
-      uint32_t maxSplitCount,
-      int32_t /*bucket*/) override;
+  folly::coro::Task<SplitBatch> co_getSplits(uint32_t maxSplitCount) override;
 
  private:
   // Target number of bytes per split when partitioning files.

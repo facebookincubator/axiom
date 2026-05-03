@@ -163,9 +163,7 @@ class TestSplitSource : public SplitSource {
   TestSplitSource(const std::string& connectorId, size_t splitCount)
       : connectorId_(connectorId), splitCount_(splitCount) {}
 
-  folly::coro::Task<SplitBatch> co_getSplits(
-      uint32_t maxSplitCount,
-      int32_t /*bucket*/) override;
+  folly::coro::Task<SplitBatch> co_getSplits(uint32_t maxSplitCount) override;
 
  private:
   const std::string connectorId_;

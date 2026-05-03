@@ -355,8 +355,7 @@ T ceil2(T x, T y) {
 } // namespace
 
 folly::coro::Task<SplitBatch> LocalHiveSplitSource::co_getSplits(
-    uint32_t maxSplitCount,
-    int32_t /*bucket*/) {
+    uint32_t maxSplitCount) {
   SplitBatch batch;
   const size_t limit = maxSplitCount;
   while (batch.splits.size() < limit && fileIdx_ < files_.size()) {

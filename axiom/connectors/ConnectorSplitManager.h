@@ -25,8 +25,7 @@ namespace facebook::axiom::connector {
 struct SplitBatch {
   std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
 
-  /// True when there are no more splits to return (for the requested bucket,
-  /// or globally if no bucket was specified).
+  /// True when there are no more splits to return.
   bool noMoreSplits{false};
 };
 
@@ -34,16 +33,12 @@ struct SplitBatch {
 /// ConnectorSplitManager.
 class SplitSource {
  public:
-  static constexpr int32_t kNoBucket = -1;
-
   virtual ~SplitSource() = default;
 
   /// Returns up to 'maxSplitCount' splits, or fewer if the source is
   /// exhausted. Sets SplitBatch::noMoreSplits when no further splits remain.
-  /// If 'bucket' is specified, returns only splits for that bucket.
   virtual folly::coro::Task<SplitBatch> co_getSplits(
-      uint32_t maxSplitCount,
-      int32_t bucket = kNoBucket) = 0;
+      uint32_t maxSplitCount) = 0;
 
   /// Cancel the split source and interrupt all background activity.
   virtual void cancel() {}

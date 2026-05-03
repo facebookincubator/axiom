@@ -38,9 +38,7 @@ class TpchSplitSource : public SplitSource {
         connectorId_(connectorId),
         numSplits_(numSplits) {}
 
-  folly::coro::Task<SplitBatch> co_getSplits(
-      uint32_t maxSplitCount,
-      int32_t /*bucket*/) override;
+  folly::coro::Task<SplitBatch> co_getSplits(uint32_t maxSplitCount) override;
 
  private:
   static constexpr uint64_t kFileBytesPerSplit{128ULL << 20U};

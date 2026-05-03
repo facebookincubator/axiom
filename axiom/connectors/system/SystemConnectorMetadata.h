@@ -99,9 +99,7 @@ class SystemSplitSource : public SplitSource {
   explicit SystemSplitSource(const std::string& connectorId)
       : connectorId_(connectorId) {}
 
-  folly::coro::Task<SplitBatch> co_getSplits(
-      uint32_t maxSplitCount,
-      int32_t /*bucket*/) override;
+  folly::coro::Task<SplitBatch> co_getSplits(uint32_t maxSplitCount) override;
 
  private:
   const std::string connectorId_;

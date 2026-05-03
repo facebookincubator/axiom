@@ -242,8 +242,7 @@ std::unique_ptr<ColumnStatistics> TestTable::ColumnTracker::toColumnStatistics(
 }
 
 folly::coro::Task<SplitBatch> TestSplitSource::co_getSplits(
-    uint32_t maxSplitCount,
-    int32_t /*bucket*/) {
+    uint32_t maxSplitCount) {
   SplitBatch batch;
   auto end =
       std::min(nextIndex_ + static_cast<size_t>(maxSplitCount), splitCount_);

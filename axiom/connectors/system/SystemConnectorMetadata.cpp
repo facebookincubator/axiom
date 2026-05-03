@@ -125,8 +125,7 @@ SystemTable::SystemTable(
 // =====================
 
 folly::coro::Task<SplitBatch> SystemSplitSource::co_getSplits(
-    uint32_t /*maxSplitCount*/,
-    int32_t /*bucket*/) {
+    uint32_t /*maxSplitCount*/) {
   SplitBatch batch;
   if (!done_) {
     batch.splits.push_back(std::make_shared<SystemSplit>(connectorId_));

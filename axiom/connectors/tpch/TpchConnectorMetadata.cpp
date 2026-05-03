@@ -100,8 +100,7 @@ std::shared_ptr<SplitSource> TpchSplitManager::getSplitSource(
 }
 
 folly::coro::Task<SplitBatch> TpchSplitSource::co_getSplits(
-    uint32_t maxSplitCount,
-    int32_t /*bucket*/) {
+    uint32_t maxSplitCount) {
   if (numSplits_ < 0) {
     auto rowType = velox::tpch::getTableSchema(table_);
     size_t rowSize = rowType->children().size() * 10;

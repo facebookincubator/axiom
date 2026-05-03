@@ -38,8 +38,7 @@ class SimpleSplitSource : public connector::SplitSource {
       : splits_(std::move(splits)) {}
 
   folly::coro::Task<connector::SplitBatch> co_getSplits(
-      uint32_t maxSplitCount,
-      int32_t /*bucket*/) override {
+      uint32_t maxSplitCount) override {
     connector::SplitBatch batch;
     auto end = std::min(
         nextIndex_ + static_cast<size_t>(maxSplitCount), splits_.size());
