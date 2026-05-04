@@ -215,8 +215,18 @@ Distribution TableScan::outputDistribution(
     orderTypes.resize(numPrefix);
     replace(orderKeys, schemaColumns, columns.data());
   }
+
+  // Without bucketed execution the runner round-robins splits, so claiming a
+  // partitioned distribution would let later passes skip needed shuffles.
+  auto distributionType = distribution.distributionType();
+  if (!queryCtx()->optimization()->options().enableBucketedExecution &&
+      distributionType.partitionType() != nullptr) {
+    distributionType = DistributionType{};
+    partitionKeys.clear();
+  }
+
   return Distribution(
-      distribution.distributionType(),
+      distributionType,
       std::move(partitionKeys),
       std::move(orderKeys),
       std::move(orderTypes),
@@ -1885,7 +1895,8 @@ AssignUniqueId::AssignUniqueId(RelationOpPtr input, ColumnCP uniqueIdColumn)
               input->distribution().orderKeys(),
               input->distribution().orderTypes(),
               input->distribution().numKeysUnique(),
-              ExprVector{uniqueIdColumn}),
+              ExprVector{uniqueIdColumn},
+              input->distribution().isReplicateNullsAndAny()),
           appendColumn(input->columns(), uniqueIdColumn)),
       uniqueIdColumn_(uniqueIdColumn) {
   // Fanout is 1 (cardinality neutral).

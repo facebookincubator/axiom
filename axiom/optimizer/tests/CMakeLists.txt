@@ -125,6 +125,8 @@ add_executable(
   SyntacticJoinOrderTest.cpp
   FeatureGen.cpp
   Genies.cpp
+  BucketedExecutionTest.cpp
+  HiveBucketedExecutionTest.cpp
   TestConnectorQueryTest.cpp
   TpchConnectorQueryTest.cpp
   UnnestTest.cpp
