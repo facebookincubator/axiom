@@ -1885,15 +1885,14 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
     const auto& partitionColumns = layout->partitionColumns();
     if (!partitionColumns.empty()) {
       std::vector<velox::column_index_t> channels;
-      std::vector<velox::VectorPtr> constants;
+      channels.reserve(partitionColumns.size());
       for (auto i = 0; i < partitionColumns.size(); ++i) {
         channels.push_back(
             input->outputType()->getChildIdx(partitionColumns[i]->name()));
-        constants.push_back(nullptr);
       }
 
       auto spec = layout->partitionType()->makeSpec(
-          channels, constants, /*isLocal=*/true);
+          channels, /*constants=*/{}, /*isLocal=*/true);
       auto inputs = std::vector<velox::core::PlanNodePtr>{input};
       input = std::make_shared<velox::core::LocalPartitionNode>(
           nextId(),
