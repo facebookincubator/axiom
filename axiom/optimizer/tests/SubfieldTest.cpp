@@ -957,6 +957,23 @@ TEST_P(SubfieldTest, subfieldAcrossDtBoundary) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+TEST_P(SubfieldTest, leftJoinWithUnmaterializedSubfield) {
+  testConnector_->addTable("t", ROW({"k", "v"}, INTEGER()));
+  testConnector_->addTable(
+      "u",
+      ROW({"k", "m"}, {INTEGER(), MAP(INTEGER(), MAP(INTEGER(), REAL()))}));
+
+  auto logicalPlan = parseSelect(
+      "SELECT v, nested[1] as val "
+      "FROM t "
+      "LEFT JOIN (SELECT k as uk, m[100] as nested FROM u) ON k = uk",
+      kTestConnectorId);
+
+  optimizerOptions_.pushdownSubfields = true;
+  VELOX_ASSERT_THROW(
+      toSingleNodePlan(logicalPlan), "Null expression for join column: nested");
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     SubfieldTests,
     SubfieldTest,
