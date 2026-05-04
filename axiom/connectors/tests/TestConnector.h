@@ -22,10 +22,18 @@
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "velox/core/ITypedExpr.h"
+#include "velox/core/PlanNode.h"
 
 namespace facebook::axiom::connector {
 
 class TestConnector;
+
+/// Hash-bucketing spec for a TestTable. Routes appended rows into buckets
+/// using the Hive partition function over 'bucketColumns'.
+struct TestBucketSpec {
+  std::vector<std::string> bucketColumns;
+  int32_t numBuckets;
+};
 
 /// The Table and Connector objects to which this layout correspond
 /// are specified explicitly at init time.
@@ -46,6 +54,32 @@ class TestTableLayout : public TableLayout {
             /*sortOrder=*/{},
             /*lookupKeys=*/{},
             /*supportsScan=*/true) {}
+
+  TestTableLayout(
+      const std::string& label,
+      Table* table,
+      velox::connector::Connector* connector,
+      std::vector<const Column*> columns,
+      std::vector<const Column*> partitionColumns,
+      std::unique_ptr<PartitionType> partitionType)
+      : TableLayout(
+            label,
+            table,
+            connector,
+            std::move(columns),
+            std::move(partitionColumns),
+            /*orderColumns=*/{},
+            /*sortOrder=*/{},
+            /*lookupKeys=*/{},
+            /*supportsScan=*/true),
+        partitionType_(std::move(partitionType)) {}
+
+  const PartitionType* partitionType() const override {
+    return partitionType_.get();
+  }
+
+  int32_t splitBucket(
+      const velox::connector::ConnectorSplit& split) const override;
 
   /// Records discrete values to use in 'discretePredicateColumns' and
   /// 'discretePredicates' APIs. If called repeatedly, overwrites previous
@@ -78,6 +112,7 @@ class TestTableLayout : public TableLayout {
  private:
   std::vector<const Column*> discreteValueColumns_;
   std::vector<velox::Variant> discreteValues_;
+  std::unique_ptr<PartitionType> partitionType_;
 };
 
 /// RowVectors are appended using the addData() interface and the vector
@@ -92,7 +127,8 @@ class TestTable : public Table {
       const velox::RowTypePtr& schema,
       const velox::RowTypePtr& hiddenColumns,
       TestConnector* connector,
-      folly::F14FastMap<std::string, velox::Variant> options);
+      folly::F14FastMap<std::string, velox::Variant> options,
+      std::optional<TestBucketSpec> bucketSpec = std::nullopt);
 
   const std::vector<const TableLayout*>& layouts() const override {
     return layouts_;
@@ -106,11 +142,21 @@ class TestTable : public Table {
     return data_;
   }
 
+  /// Bucket id of the i-th entry in 'data'. Empty for unbucketed tables.
+  const std::vector<int32_t>& dataBucketIds() const {
+    return dataBucketIds_;
+  }
+
+  const std::optional<TestBucketSpec>& bucketSpec() const {
+    return bucketSpec_;
+  }
+
   /// Appends a RowVector to the table's data. Each appended vector generates
   /// a separate TestConnectorSplit. Data is copied into the table's internal
   /// memory pool. When 'collectColumnStatistics' is true, computes per-column
   /// statistics incrementally (numDistinct, min/max, nullPct, maxLength).
-  /// Cannot be combined with setStats on the same table.
+  /// Cannot be combined with setStats on the same table. For bucketed tables,
+  /// each non-empty bucket of the input becomes one entry in 'data'.
   void addData(
       const velox::RowVectorPtr& data,
       bool collectColumnStatistics = true);
@@ -150,31 +196,37 @@ class TestTable : public Table {
   std::unique_ptr<TestTableLayout> exportedLayout_;
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::vector<velox::RowVectorPtr> data_;
+  std::vector<int32_t> dataBucketIds_;
   uint64_t numRows_{0};
   uint64_t dataRows_{0};
   std::vector<ColumnTracker> columnTrackers_;
+
+  std::optional<TestBucketSpec> bucketSpec_;
+  std::unique_ptr<velox::core::PartitionFunction> partitionFunction_;
 };
 
-/// SplitSource generated via the TestSplitManager embedded in the
-/// TestConnector. Generates one TestConnectorSplit for each RowVector
-/// in the table's data_ vector.
+/// Emits one TestConnectorSplit per index in 'dataIndices'. Each index points
+/// into the table's data_ vector.
 class TestSplitSource : public SplitSource {
  public:
-  TestSplitSource(const std::string& connectorId, size_t splitCount)
-      : connectorId_(connectorId), splitCount_(splitCount) {}
+  TestSplitSource(
+      const std::string& connectorId,
+      std::vector<size_t> dataIndices)
+      : connectorId_(connectorId), dataIndices_(std::move(dataIndices)) {}
 
   folly::coro::Task<SplitBatch> co_getSplits(uint32_t maxSplitCount) override;
 
  private:
   const std::string connectorId_;
-  const size_t splitCount_;
-  size_t nextIndex_{0};
+  const std::vector<size_t> dataIndices_;
+  size_t nextOffset_{0};
 };
 
-/// SplitManager embedded in the TestConnector. Returns one
-/// default-initialized PartitionHandle upon call to co_listPartitions.
-/// Generates a TestSplitSource that produces one TestConnectorSplit
-/// per RowVector in the table's data_ vector.
+class TestConnectorMetadata;
+
+/// Unbucketed: one PartitionHandle covering the whole table.
+/// Bucketed: one HivePartitionHandle per bucket; getSplitSource emits splits
+/// only for the requested buckets' entries.
 class TestSplitManager : public ConnectorSplitManager {
  public:
   folly::coro::Task<std::vector<PartitionHandlePtr>> co_listPartitions(
@@ -436,13 +488,13 @@ class TestConnectorMetadata : public ConnectorMetadata {
     return splitManager_.get();
   }
 
-  /// Creates and returns a TestTable with the specified name and schema in the
-  /// in-memory map maintained in the connector metadata. Throws if the table
-  /// already exists.
+  /// Registers a TestTable in the connector metadata. Throws if the name is
+  /// already taken. When 'bucketSpec' is set, appended rows are hash-bucketed.
   std::shared_ptr<TestTable> addTable(
       SchemaTableName tableName,
       const velox::RowTypePtr& schema,
-      const velox::RowTypePtr& hiddenColumns);
+      const velox::RowTypePtr& hiddenColumns,
+      std::optional<TestBucketSpec> bucketSpec = std::nullopt);
 
   /// Appends data to the table with the specified name.
   void appendData(
@@ -654,19 +706,25 @@ class TestConnector : public velox::connector::Connector {
       velox::connector::ConnectorQueryCtx* connectorQueryCtx,
       velox::connector::CommitStrategy commitStrategy) override;
 
-  /// Adds a TestTable with the specified name and schema. Throws if a table
-  /// with the same name already exists.
+  /// Registers a TestTable. Throws if the name is already taken. When
+  /// 'bucketSpec' is set, the table is hash-bucketed.
   std::shared_ptr<TestTable> addTable(
       SchemaTableName tableName,
       const velox::RowTypePtr& schema,
-      const velox::RowTypePtr& hiddenColumns = velox::ROW({}));
+      const velox::RowTypePtr& hiddenColumns = velox::ROW({}),
+      std::optional<TestBucketSpec> bucketSpec = std::nullopt);
 
   /// Convenience overload that uses kDefaultSchema as the schema.
   std::shared_ptr<TestTable> addTable(
       const std::string& name,
       const velox::RowTypePtr& schema,
-      const velox::RowTypePtr& hiddenColumns = velox::ROW({})) {
-    return addTable({std::string(kDefaultSchema), name}, schema, hiddenColumns);
+      const velox::RowTypePtr& hiddenColumns = velox::ROW({}),
+      std::optional<TestBucketSpec> bucketSpec = std::nullopt) {
+    return addTable(
+        {std::string(kDefaultSchema), name},
+        schema,
+        hiddenColumns,
+        std::move(bucketSpec));
   }
 
   /// Appends data to the table with the specified name.

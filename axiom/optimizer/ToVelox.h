@@ -355,6 +355,10 @@ class ToVelox {
 
   folly::F14FastMap<int32_t, LeafTableData> leafData_;
 
+  // Maps PlanNodeId of each emitted TableScanNode to its optimizer BaseTable
+  // so routeBucketedSplits can recover the connector layout per scan.
+  folly::F14FastMap<velox::core::PlanNodeId, BaseTableCP> scanIdToBaseTable_;
+
   // Serial number for plan nodes in executable plan.
   int32_t nodeCounter_{0};
 
@@ -370,6 +374,11 @@ class ToVelox {
   // when numWorkers > 1, consumed by toVeloxPlan to add a
   // TableWriteMerge(kFinal) after the gather exchange.
   std::optional<velox::core::ColumnStatsSpec> finalMergeSpec_;
+
+  // Stamps splitToWorkerFns on each fragment that contains bucketed leaf
+  // scans. The routing function is supplied by the PartitionType produced
+  // by chaining copartition() across the fragment's bucketed scans.
+  void routeBucketedSplits(std::vector<ExecutableFragment>& stages);
 };
 
 } // namespace facebook::axiom::optimizer
