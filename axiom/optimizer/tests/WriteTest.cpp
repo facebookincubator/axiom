@@ -717,6 +717,8 @@ TEST_F(WriteTest, ctasBucketedSql) {
     }
   };
 
+  optimizerOptions_.enableBucketedExecution = true;
+
   runCtas(
       "CREATE TABLE test WITH (bucket_count = 8, bucketed_by = ARRAY['key']) AS "
       "SELECT rand() as key, l_orderkey, l_partkey, l_linenumber FROM lineitem",
