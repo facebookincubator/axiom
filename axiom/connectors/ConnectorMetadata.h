@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <functional>
 #include "axiom/common/Enums.h"
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/connectors/ConnectorSession.h"
@@ -49,6 +50,8 @@ using PartitionFunctionSpecPtr =
 /// the above connect to different metadata stores and provide different
 /// metadata, e.g. order, partitioning, bucketing etc.
 namespace facebook::axiom::connector {
+
+class TableLayout;
 
 /// Represents statistics of a column. The statistics may represent the column
 /// across the table or may be calculated over a sample of a layout of the
@@ -250,6 +253,23 @@ class PartitionType {
 
   virtual std::string toString() const = 0;
 
+  /// Returns the fixed partition (bucket) count. Must be a positive integer.
+  virtual int32_t numPartitions() const = 0;
+
+  /// Function mapping a split for 'layout' to a worker index in
+  /// [0, numWorkers).
+  using SplitToWorkerFn =
+      std::function<int32_t(const velox::connector::ConnectorSplit&)>;
+
+  /// Builds a closure that routes a split from a scan with 'layout' to a
+  /// worker index in [0, numWorkers). 'common' is the PartitionType produced
+  /// by chaining copartition() across the bucketed scans in the fragment;
+  /// implementations decide how (or whether) to use it.
+  virtual SplitToWorkerFn makeSplitToWorkerFn(
+      const TableLayout& layout,
+      const PartitionType& common,
+      int32_t numWorkers) const = 0;
+
   template <typename T>
   const T* as() const {
     return dynamic_cast<const T*>(this);
@@ -429,6 +449,13 @@ class TableLayout {
   virtual const PartitionType* partitionType() const {
     VELOX_CHECK(partitionColumns_.empty());
     return nullptr;
+  }
+
+  /// Returns the bucket index for 'split' as defined by this layout. Layouts
+  /// that participate in bucketed scheduling must override.
+  virtual int32_t splitBucket(
+      const velox::connector::ConnectorSplit& /*split*/) const {
+    VELOX_UNSUPPORTED("Bucketed scheduling is not supported for this layout");
   }
 
   /// Columns on which content is ordered within the range of rows covered by a
