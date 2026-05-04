@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <utility>
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/TableWriter.h"
@@ -203,6 +204,34 @@ void extractInputFields(
 }
 
 } // namespace
+
+int32_t HiveTableLayout::splitBucket(
+    const velox::connector::ConnectorSplit& split) const {
+  const auto& hiveSplit =
+      dynamic_cast<const velox::connector::hive::HiveConnectorSplit&>(split);
+  VELOX_USER_CHECK(
+      hiveSplit.tableBucketNumber.has_value(),
+      "Bucketed scheduling requires a bucketed split");
+  VELOX_USER_CHECK_GE(
+      *hiveSplit.tableBucketNumber,
+      0,
+      "Bucketed split has negative tableBucketNumber");
+  return *hiveSplit.tableBucketNumber;
+}
+
+PartitionType::SplitToWorkerFn HivePartitionType::makeSplitToWorkerFn(
+    const TableLayout& layout,
+    const PartitionType& common,
+    int32_t numWorkers) const {
+  VELOX_CHECK_GT(numWorkers, 0);
+  const int32_t modulus = common.numPartitions();
+  VELOX_CHECK_GT(modulus, 0);
+  auto tablePtr = layout.table().shared_from_this();
+  return [tablePtr = std::move(tablePtr), modulus, numWorkers](
+             const velox::connector::ConnectorSplit& split) -> int32_t {
+    return (tablePtr->layouts()[0]->splitBucket(split) % modulus) % numWorkers;
+  };
+}
 
 velox::connector::ColumnHandlePtr HiveTableLayout::createColumnHandle(
     const ConnectorSessionPtr& /*session*/,
