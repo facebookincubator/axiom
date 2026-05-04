@@ -113,6 +113,7 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
     velox::core::PlanNodeId scanId,
     std::vector<std::shared_ptr<velox::exec::Task>> tasks,
     std::function<void(std::exception_ptr)> onError) {
+  std::exception_ptr ex;
   try {
     VELOX_CHECK(!tasks.empty(), "tasks must not be empty");
 
@@ -131,8 +132,12 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
       task->noMoreSplits(scanId);
     }
   } catch (...) {
-    onError(std::current_exception());
-    throw;
+    ex = std::current_exception();
+  }
+  co_await source->co_close();
+  if (ex) {
+    onError(ex);
+    std::rethrow_exception(ex);
   }
 }
 

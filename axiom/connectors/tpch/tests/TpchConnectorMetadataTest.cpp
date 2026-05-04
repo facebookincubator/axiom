@@ -191,6 +191,7 @@ CO_TEST_F(TpchConnectorMetadataTest, splitGeneration) {
       break;
     }
   }
+  co_await splitSource->co_close();
   EXPECT_FALSE(splits.empty());
 }
 } // namespace

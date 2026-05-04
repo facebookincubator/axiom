@@ -163,6 +163,7 @@ CO_TEST_F(TestConnectorTest, splitManager) {
       break;
     }
   }
+  co_await splitSource->co_close();
   EXPECT_EQ(splits.size(), kNumSplits);
   for (size_t i = 0; i < kNumSplits; ++i) {
     auto split = std::dynamic_pointer_cast<TestConnectorSplit>(splits[i]);

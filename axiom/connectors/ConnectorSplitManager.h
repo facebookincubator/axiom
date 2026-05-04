@@ -30,18 +30,44 @@ struct SplitBatch {
 };
 
 /// Enumerates splits. The table and partitions to cover are given to
-/// ConnectorSplitManager.
+/// ConnectorSplitManager. Callers must invoke co_close() when done consuming
+/// splits, before the SplitSource is destroyed. co_close() releases background
+/// resources and waits for any in-flight work to complete.
 class SplitSource {
  public:
-  virtual ~SplitSource() = default;
+  SplitSource() = default;
+  SplitSource(const SplitSource&) = delete;
+  SplitSource& operator=(const SplitSource&) = delete;
+  SplitSource(SplitSource&&) = delete;
+  SplitSource& operator=(SplitSource&&) = delete;
+
+  virtual ~SplitSource() {
+    VELOX_CHECK(
+        closed_, "co_close() must be called before destroying SplitSource");
+  }
 
   /// Returns up to 'maxSplitCount' splits, or fewer if the source is
   /// exhausted. Sets SplitBatch::noMoreSplits when no further splits remain.
   virtual folly::coro::Task<SplitBatch> co_getSplits(
       uint32_t maxSplitCount) = 0;
 
-  /// Cancel the split source and interrupt all background activity.
-  virtual void cancel() {}
+  /// Close the split source and interrupt all background activity.
+  /// Must be called exactly once before the SplitSource is destroyed.
+  folly::coro::Task<void> co_close() noexcept {
+    if (closed_) {
+      co_return;
+    }
+    co_await co_closeImpl();
+    closed_ = true;
+  }
+
+ protected:
+  virtual folly::coro::Task<void> co_closeImpl() noexcept {
+    co_return;
+  }
+
+ private:
+  bool closed_{false};
 };
 
 /// Describes a single partition of a TableLayout. A TableLayout has at least

@@ -345,6 +345,7 @@ TEST_F(SystemConnectorMetadataTest, splitSource) {
       break;
     }
   }
+  folly::coro::blockingWait(splitSource->co_close());
   ASSERT_EQ(splits.size(), 1);
   ASSERT_NE(splits[0], nullptr);
 }
