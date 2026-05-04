@@ -431,6 +431,19 @@ std::shared_ptr<Table> TestConnectorMetadata::findTableInternal(
   return it->second;
 }
 
+int32_t TestTableLayout::splitBucket(
+    const velox::connector::ConnectorSplit& split) const {
+  const auto& testTable = static_cast<const TestTable&>(table());
+  VELOX_CHECK(
+      testTable.bucketSpec().has_value(),
+      "Bucketed scheduling requires a bucketed table");
+  const auto& testSplit = dynamic_cast<const TestConnectorSplit&>(split);
+  const auto& dataBucketIds = testTable.dataBucketIds();
+  VELOX_CHECK_LT(
+      testSplit.index(), dataBucketIds.size(), "Split index out of range");
+  return dataBucketIds[testSplit.index()];
+}
+
 TablePtr TestConnectorMetadata::findTable(const SchemaTableName& tableName) {
   return findTableInternal(tableName);
 }

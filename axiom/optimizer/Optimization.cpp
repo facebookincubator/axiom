@@ -1100,7 +1100,9 @@ RelationOpPtr repartitionForWrite(const RelationOpPtr& plan, PlanState& state) {
 
   // Copartitioning is possible if PartitionTypes are compatible and the table
   // has no fewer partitions than the plan.
-  bool shuffle = !copartition || copartition != planPartitionType;
+  bool shuffle =
+      !queryCtx()->optimization()->options().enableBucketedExecution ||
+      !copartition || copartition != planPartitionType;
   if (!shuffle) {
     // Check that the partition keys of the plan are assigned pairwise to the
     // partition columns of the layout.
@@ -1510,6 +1512,12 @@ void Optimization::addAggregation(
     PlanState& state) const {
   const auto* aggPlan = dt->aggregation;
 
+  const bool isBucketedAggregation = options_.enableBucketedExecution &&
+      !options_.alwaysPlanPartialAggregation && !isSingleWorker_ &&
+      !aggPlan->groupingKeys().empty() &&
+      plan->distribution().distributionType().partitionType() != nullptr &&
+      !joinKeyPartition(plan, aggPlan->groupingKeys()).empty();
+
   PrecomputeProjection precompute(plan, dt, /*projectAllInputs=*/false);
   auto groupingKeys =
       precompute.toColumns(aggPlan->groupingKeys(), &aggPlan->columns());
@@ -1541,6 +1549,19 @@ void Optimization::addAggregation(
       std::any_of(aggregates.begin(), aggregates.end(), [](const auto& agg) {
         return !agg->orderKeys().empty();
       });
+
+  if (isBucketedAggregation && !hasDistinct && !hasOrderBy) {
+    auto* singleAgg = make<Aggregation>(
+        plan,
+        std::move(groupingKeys),
+        /*preGroupedKeys=*/ExprVector{},
+        std::move(aggregates),
+        velox::core::AggregationNode::Step::kSingle,
+        aggPlan->columns());
+    state.addCost(*singleAgg);
+    plan = singleAgg;
+    return;
+  }
   if (hasDistinct) {
     auto distinctArgs = getSingleDistinctArgs(aggregates);
     transformDistinctToGroupBy(
@@ -1554,8 +1575,8 @@ void Optimization::addAggregation(
     return;
   }
 
-  // Check if any aggregate has ORDER BY keys. If so, we must use single-step
-  // aggregation because partial aggregation cannot preserve global ordering.
+  // Partial aggregation cannot preserve order across drivers — array_agg /
+  // multimap_agg with ORDER BY require single-step aggregation.
   if (hasOrderBy) {
     const auto& [singleAgg, singleAggCost] = makeSingleAggregationPlan(
         plan,

@@ -471,6 +471,8 @@ PlanP PlanSet::best(
   float matchCost = -1;
 
   const bool checkDistribution = !isSingleWorker() && distribution.has_value();
+  const bool bucketedEnabled =
+      queryCtx()->optimization()->options().enableBucketedExecution;
 
   for (const auto& plan : plans) {
     const float cost = plan->cost.cost;
@@ -483,9 +485,14 @@ PlanP PlanSet::best(
     };
 
     update(best, bestCost);
-    if (checkDistribution &&
-        plan->op->distribution().isSamePartition(distribution.value())) {
-      update(match, matchCost);
+    if (checkDistribution) {
+      const auto& dist = plan->op->distribution();
+      const bool matches = bucketedEnabled
+          ? dist.isCopartitionedWith(distribution.value())
+          : dist.isSamePartition(distribution.value());
+      if (matches) {
+        update(match, matchCost);
+      }
     }
   }
 

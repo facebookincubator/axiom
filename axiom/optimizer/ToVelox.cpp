@@ -360,6 +360,7 @@ PlanAndStats ToVelox::toVeloxPlan(
 
   prediction_.clear();
   nodeHistory_.clear();
+  scanIdToBaseTable_.clear();
 
   if (options_.numWorkers > 1 && !options_.remoteOutput) {
     plan = addGather(plan);
@@ -395,6 +396,10 @@ PlanAndStats ToVelox::toVeloxPlan(
     velox::core::PlanConsistencyChecker::check(stage.fragment.planNode);
   }
   checkStageWidths(stages);
+
+  if (optimizerOptions_.enableBucketedExecution) {
+    routeBucketedSplits(stages);
+  }
 
   if (options.remoteOutput) {
     rootPlanNode = velox::core::PartitionedOutputNode::single(
@@ -1256,9 +1261,14 @@ velox::core::PlanNodePtr ToVelox::makeScan(
         connectorSession, column->name(), std::move(subfields));
   }
 
+  auto scanId = nextId();
   velox::core::PlanNodePtr result =
       std::make_shared<velox::core::TableScanNode>(
-          nextId(), outputType, tableHandle, assignments);
+          scanId, outputType, tableHandle, assignments);
+
+  if (optimizerOptions_.enableBucketedExecution) {
+    scanIdToBaseTable_.emplace(scanId, scan.baseTable);
+  }
 
   if (filter != nullptr) {
     result =
@@ -2085,6 +2095,76 @@ velox::core::PlanNodePtr ToVelox::makeFragment(
 
 extern std::string veloxToString(const velox::core::PlanNode* plan) {
   return plan->toString(true, true);
+}
+
+namespace {
+void collectTableScans(
+    const velox::core::PlanNode* node,
+    std::vector<const velox::core::TableScanNode*>& result) {
+  if (auto* scan = dynamic_cast<const velox::core::TableScanNode*>(node)) {
+    result.push_back(scan);
+    return;
+  }
+  for (const auto& child : node->sources()) {
+    collectTableScans(child.get(), result);
+  }
+}
+} // namespace
+
+void ToVelox::routeBucketedSplits(std::vector<ExecutableFragment>& stages) {
+  for (auto& stage : stages) {
+    std::vector<const velox::core::TableScanNode*> scans;
+    collectTableScans(stage.fragment.planNode.get(), scans);
+
+    std::vector<
+        std::pair<velox::core::PlanNodeId, const connector::TableLayout*>>
+        bucketedScans;
+    for (const auto* scan : scans) {
+      auto it = scanIdToBaseTable_.find(scan->id());
+      if (it == scanIdToBaseTable_.end()) {
+        continue;
+      }
+      const auto* layout =
+          it->second->schemaTable->connectorTable->layouts().at(0);
+      if (layout->partitionType() == nullptr) {
+        continue;
+      }
+      bucketedScans.emplace_back(scan->id(), layout);
+    }
+
+    if (bucketedScans.empty()) {
+      continue;
+    }
+
+    // copartition() can be non-transitive across larger pairs (for Hive,
+    // copartition(8, 12) is nullptr but copartition(4, 8) and
+    // copartition(4, 12) are 4). Reduce starting from the smallest so the
+    // chain converges on the divisor compatible with the rest.
+    std::sort(
+        bucketedScans.begin(),
+        bucketedScans.end(),
+        [](const auto& lhs, const auto& rhs) {
+          return lhs.second->partitionType()->numPartitions() <
+              rhs.second->partitionType()->numPartitions();
+        });
+
+    const auto* common = bucketedScans.front().second->partitionType();
+    for (size_t i = 1; i < bucketedScans.size(); ++i) {
+      common = common->copartition(*bucketedScans[i].second->partitionType());
+      VELOX_CHECK_NOT_NULL(
+          common, "Bucketed scans in a fragment must be co-partitionable");
+    }
+
+    const int32_t numWorkers = stage.width.value_or(
+        stage.type == FragmentType::kSource ? options_.numWorkers : 1);
+    stage.splitToWorkerFns.reserve(bucketedScans.size());
+    for (const auto& [scanId, layout] : bucketedScans) {
+      stage.splitToWorkerFns.emplace(
+          scanId,
+          layout->partitionType()->makeSplitToWorkerFn(
+              *layout, *common, numWorkers));
+    }
+  }
 }
 
 extern std::string planString(const MultiFragmentPlan* plan) {

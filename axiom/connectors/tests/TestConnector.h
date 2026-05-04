@@ -78,6 +78,9 @@ class TestTableLayout : public TableLayout {
     return partitionType_.get();
   }
 
+  int32_t splitBucket(
+      const velox::connector::ConnectorSplit& split) const override;
+
   /// Records discrete values to use in 'discretePredicateColumns' and
   /// 'discretePredicates' APIs. If called repeatedly, overwrites previous
   /// values.
@@ -218,6 +221,8 @@ class TestSplitSource : public SplitSource {
   const std::vector<size_t> dataIndices_;
   size_t nextOffset_{0};
 };
+
+class TestConnectorMetadata;
 
 /// Unbucketed: one PartitionHandle covering the whole table.
 /// Bucketed: one HivePartitionHandle per bucket; getSplitSource emits splits
