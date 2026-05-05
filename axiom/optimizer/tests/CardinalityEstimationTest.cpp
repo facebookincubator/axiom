@@ -494,6 +494,37 @@ TEST_F(CardinalityEstimationTest, innerJoin) {
   });
 }
 
+// Verifies that a join with an aggregation plans without throwing when the
+// join key is constrained by a literal outside the connector-reported
+// [min, max] range (zero-cardinality constraint must not divide by zero in
+// estimateFanout).
+TEST_F(CardinalityEstimationTest, joinWithFilterOutsideMinMax) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(
+          1'000,
+          {{"a",
+            {.min = velox::Variant::create<int64_t>(1),
+             .max = velox::Variant::create<int64_t>(100),
+             .numDistinct = 100}},
+           {"b", {.numDistinct = 500}}});
+
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(
+          1'000,
+          {{"x",
+            {.min = velox::Variant::create<int64_t>(1),
+             .max = velox::Variant::create<int64_t>(100),
+             .numDistinct = 100}},
+           {"y", {.numDistinct = 500}}});
+
+  // 999 is outside [1, 100] for both join keys.
+  const auto sql =
+      "SELECT a, sum(y) FROM t JOIN u ON a = x "
+      "WHERE a = 999 AND x = 999 GROUP BY a";
+
+  EXPECT_NO_THROW(verifyPlan(sql, [](const Plan&) {}));
+}
+
 // Verifies that inner join with a unique right side (DerivedTable with GROUP
 // BY) uses the right fanout to scale cardinality. The right side's fanout
 // reflects that not all left key values exist in the right side.
