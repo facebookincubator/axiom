@@ -76,8 +76,17 @@ ConnectorSplitSourceFactory::splitSourceForScan(
       connector::ConnectorMetadataRegistry::get(handle->connectorId());
   auto splitManager = metadata->splitManager();
 
+  auto listStart = std::chrono::steady_clock::now();
   auto partitions = folly::coro::blockingWait(
       splitManager->co_listPartitions(session, handle));
+  if (runtimeStats_) {
+    runtimeStats_->recordTiming(
+        QueryRuntimeStats::kListPartitionsWallNanos,
+        std::chrono::steady_clock::now() - listStart);
+    runtimeStats_->recordCount(
+        QueryRuntimeStats::kListPartitionsCount, partitions.size());
+  }
+
   return splitManager->getSplitSource(session, handle, partitions);
 }
 
@@ -112,17 +121,21 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
     std::shared_ptr<connector::SplitSource> source,
     velox::core::PlanNodeId scanId,
     std::vector<std::shared_ptr<velox::exec::Task>> tasks,
-    std::function<void(std::exception_ptr)> onError) {
+    std::function<void(std::exception_ptr)> onError,
+    std::shared_ptr<QueryRuntimeStats> runtimeStats) {
   std::exception_ptr ex;
   try {
     VELOX_CHECK(!tasks.empty(), "tasks must not be empty");
 
+    auto getSplitsStart = std::chrono::steady_clock::now();
+    int64_t splitCount = 0;
     size_t taskIdx = 0;
     for (;;) {
       auto batch = co_await source->co_getSplits(1);
       for (auto& split : batch.splits) {
         tasks[taskIdx]->addSplit(scanId, velox::exec::Split(std::move(split)));
         taskIdx = (taskIdx + 1) % tasks.size();
+        ++splitCount;
       }
       if (batch.noMoreSplits) {
         break;
@@ -130,6 +143,13 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
     }
     for (auto& task : tasks) {
       task->noMoreSplits(scanId);
+    }
+
+    if (runtimeStats) {
+      runtimeStats->recordTiming(
+          QueryRuntimeStats::kGetSplitsWallNanos,
+          std::chrono::steady_clock::now() - getSplitsStart);
+      runtimeStats->recordCount(QueryRuntimeStats::kGetSplitsCount, splitCount);
     }
   } catch (...) {
     ex = std::current_exception();
@@ -194,12 +214,14 @@ LocalRunner::LocalRunner(
     std::shared_ptr<velox::core::QueryCtx> queryCtx,
     std::shared_ptr<SplitSourceFactory> splitSourceFactory,
     std::shared_ptr<velox::memory::MemoryPool> outputPool,
-    std::string baseSpillDirectory)
+    std::string baseSpillDirectory,
+    std::shared_ptr<QueryRuntimeStats> runtimeStats)
     : plan_{std::move(plan)},
       fragments_{topologicalSort(plan_->fragments())},
       finishWrite_{std::move(finishWrite)},
       splitSourceFactory_{std::move(splitSourceFactory)},
-      baseSpillDirectory_{std::move(baseSpillDirectory)} {
+      baseSpillDirectory_{std::move(baseSpillDirectory)},
+      runtimeStats_{std::move(runtimeStats)} {
   params_.queryCtx = std::move(queryCtx);
   params_.outputPool = std::move(outputPool);
   if (!baseSpillDirectory_.empty()) {
@@ -478,7 +500,7 @@ void LocalRunner::makeStages(
             folly::coro::co_withExecutor(
                 params_.queryCtx->executor(),
                 co_generateAndDistributeSplits(
-                    source, scan->id(), stage, onError)));
+                    source, scan->id(), stage, onError, runtimeStats_)));
       }
 
       for (const auto& input : fragment.inputStages) {

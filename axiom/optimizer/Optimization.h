@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/common/Session.h"
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/optimizer/AggregationPlanner.h"
@@ -42,7 +43,8 @@ class Optimization {
       std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx,
       velox::core::ExpressionEvaluator& evaluator,
       OptimizerOptions options = {},
-      MultiFragmentPlan::Options runnerOptions = {});
+      MultiFragmentPlan::Options runnerOptions = {},
+      std::shared_ptr<QueryRuntimeStats> runtimeStats = nullptr);
 
   /// Simplified API for usage in testing and tooling.
   static PlanAndStats toVeloxPlan(
@@ -381,6 +383,9 @@ class Optimization {
   // duplicate processing when the same BaseTable appears in multiple DTs
   // (e.g., via existence pushdown).
   folly::F14FastSet<int32_t> estimatedBaseTables_;
+
+  // Pipeline metrics recorder. May be nullptr.
+  std::shared_ptr<QueryRuntimeStats> runtimeStats_;
 };
 
 } // namespace facebook::axiom::optimizer

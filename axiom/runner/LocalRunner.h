@@ -18,6 +18,7 @@
 
 #include <folly/coro/AsyncScope.h>
 
+#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/connectors/ConnectorSplitManager.h"
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/runner/Runner.h"
@@ -64,9 +65,18 @@ class SimpleSplitSourceFactory : public SplitSourceFactory {
 /// Generic SplitSourceFactory that delegates the work to ConnectorSplitManager.
 class ConnectorSplitSourceFactory : public SplitSourceFactory {
  public:
+  ConnectorSplitSourceFactory(
+      connector::SplitOptions options = {},
+      std::shared_ptr<QueryRuntimeStats> runtimeStats = nullptr)
+      : options_(std::move(options)), runtimeStats_(std::move(runtimeStats)) {}
+
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
       const connector::ConnectorSessionPtr& session,
       const velox::core::TableScanNode& scan) override;
+
+ protected:
+  const connector::SplitOptions options_;
+  std::shared_ptr<QueryRuntimeStats> runtimeStats_;
 };
 
 /// Runner for in-process execution of a distributed plan.
@@ -78,6 +88,7 @@ class LocalRunner : public Runner,
   /// @param baseSpillDirectory Base directory for spill files. If non-empty,
   /// each task gets a unique subdirectory under this path. Empty disables
   /// spilling at the task level.
+  /// @param runtimeStats Optional recorder for split enumeration metrics.
   LocalRunner(
       optimizer::MultiFragmentPlanPtr plan,
       optimizer::FinishWrite finishWrite,
@@ -85,7 +96,8 @@ class LocalRunner : public Runner,
       std::shared_ptr<SplitSourceFactory> splitSourceFactory =
           std::make_shared<ConnectorSplitSourceFactory>(),
       std::shared_ptr<velox::memory::MemoryPool> outputPool = nullptr,
-      std::string baseSpillDirectory = "");
+      std::string baseSpillDirectory = "",
+      std::shared_ptr<QueryRuntimeStats> runtimeStats = nullptr);
 
   ~LocalRunner() override;
 
@@ -176,6 +188,7 @@ class LocalRunner : public Runner,
   std::shared_ptr<SplitSourceFactory> splitSourceFactory_;
   // Base directory for task spill files. Empty disables spilling.
   std::string baseSpillDirectory_;
+  std::shared_ptr<QueryRuntimeStats> runtimeStats_;
   folly::coro::AsyncScope splitScope_{/*throwOnJoin=*/true};
   bool splitScopeJoined_{false};
 };

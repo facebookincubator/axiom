@@ -21,6 +21,15 @@
 
 namespace facebook::axiom::connector {
 
+/// Controls split granularity for the split source factory.
+struct SplitOptions {
+  // Target number of splits to generate across all partitions.
+  int32_t targetSplitCount{0};
+
+  // Target number of file bytes per split.
+  uint64_t fileBytesPerSplit{0};
+};
+
 /// A batch of splits returned by SplitSource::co_getSplits.
 struct SplitBatch {
   std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
