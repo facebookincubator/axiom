@@ -26,6 +26,7 @@
 #include "axiom/optimizer/JsonUtil.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/config/Config.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/common/BufferedInput.h"
@@ -280,7 +281,10 @@ void LocalTableBuilder::build(const std::string& tablePath) {
   folly::F14FastMap<std::string, ColumnStatistics> aggregatedStats;
 
   for (auto& info : files) {
-    velox::dwio::common::ReaderOptions readerOptions{pool_};
+    velox::io::IoStatistics dataIoStats;
+    velox::io::IoStatistics metadataIoStats;
+    velox::dwio::common::ReaderOptions readerOptions{
+        pool_, &dataIoStats, &metadataIoStats};
     readerOptions.setFileFormat(fileFormat_);
 
     if (fileFormat_ == velox::dwio::common::FileFormat::TEXT && tableType) {
