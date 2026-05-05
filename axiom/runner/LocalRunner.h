@@ -85,7 +85,9 @@ class LocalRunner : public Runner,
       std::shared_ptr<SplitSourceFactory> splitSourceFactory =
           std::make_shared<ConnectorSplitSourceFactory>(),
       std::shared_ptr<velox::memory::MemoryPool> outputPool = nullptr,
-      std::string baseSpillDirectory = "");
+      std::string baseSpillDirectory = "",
+      velox::exec::Task::ExecutionMode mode =
+          velox::exec::Task::ExecutionMode::kParallel);
 
   ~LocalRunner() override;
 
@@ -159,6 +161,10 @@ class LocalRunner : public Runner,
       const connector::ConnectorSessionPtr& session,
       const velox::core::TableScanNode& scan);
 
+  // No-op if an error was already recorded (e.g., by the parallel-mode
+  // onError callback registered in makeStages).
+  void setErrorIfNone(std::exception_ptr error);
+
   // Serializes 'cursor_' and 'error_'.
   mutable std::mutex mutex_;
 
@@ -174,6 +180,7 @@ class LocalRunner : public Runner,
   std::vector<std::vector<std::shared_ptr<velox::exec::Task>>> stages_;
   std::exception_ptr error_;
   std::shared_ptr<SplitSourceFactory> splitSourceFactory_;
+  const velox::exec::Task::ExecutionMode mode_;
   // Base directory for task spill files. Empty disables spilling.
   std::string baseSpillDirectory_;
   folly::coro::AsyncScope splitScope_{/*throwOnJoin=*/true};
