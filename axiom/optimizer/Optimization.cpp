@@ -776,26 +776,27 @@ bool isSingleWorker() {
 
 // Repartitions 'plan' by 'desiredKeys' if needed. Adds a gather if
 // desiredKeys is empty. Adds a shuffle if existing partition keys are not a
-// superset of desiredKeys. Does nothing if data is already gathered or
-// partitioned correctly.
-void maybeRepartition(
-    RelationOpPtr& plan,
-    ExprVector desiredKeys,
-    PlanCost& cost) {
+// subset of desiredKeys. Does nothing if data is already gathered or
+// partitioned correctly. Returns the possibly repartitioned plan and cost. If
+// no shuffle is added, the returned cost is 0.
+std::pair<RelationOpPtr, PlanCost> maybeRepartition(
+    const RelationOpPtr& plan,
+    ExprVector desiredKeys) {
   if (plan->distribution().isGather()) {
-    return;
+    return {plan, {}};
   }
 
+  PlanCost cost;
   if (desiredKeys.empty()) {
     auto* gather =
         make<Repartition>(plan, Distribution::gather(), plan->columns());
     cost.add(*gather);
-    plan = gather;
-    return;
+    return {gather, cost};
   }
 
-  // Check if existing partition keys are a superset of desired keys. If
+  // Check if existing partition keys are a subset of desired keys. If
   // partition keys are empty or contain columns not in desired keys, shuffle.
+  // Uses sameOrEqual to account for equivalence classes from join predicates.
   bool shuffle = plan->distribution().partitionKeys().empty();
   if (!shuffle) {
     const auto& existingKeys = plan->distribution().partitionKeys();
@@ -813,28 +814,21 @@ void maybeRepartition(
     auto* repartition =
         make<Repartition>(plan, std::move(distribution), plan->columns());
     cost.add(*repartition);
-    plan = repartition;
+    return {repartition, cost};
   }
+
+  return {plan, {}};
 }
 
-void repartitionForAgg(
-    RelationOpPtr& plan,
-    const ExprVector& groupingKeys,
-    const ColumnVector& intermediateColumns,
-    PlanCost& cost) {
-  if (isSingleWorker()) {
-    return;
+std::pair<RelationOpPtr, PlanCost> repartitionForAgg(
+    const RelationOpPtr& plan,
+    const ColumnVector& partitionKeys) {
+  if (isSingleWorker() || plan->distribution().isGather()) {
+    return {plan, {}};
   }
 
-  // 'intermediateColumns' contains grouping keys followed by partial agg
-  // results.
-  ExprVector keyValues;
-  keyValues.reserve(groupingKeys.size());
-  for (auto i = 0; i < groupingKeys.size(); ++i) {
-    keyValues.push_back(intermediateColumns[i]);
-  }
-
-  maybeRepartition(plan, std::move(keyValues), cost);
+  ExprVector keyExprs(partitionKeys.begin(), partitionKeys.end());
+  return maybeRepartition(plan, std::move(keyExprs));
 }
 
 CPSpan<Column> leadingColumns(const ExprVector& exprs) {
@@ -1319,14 +1313,13 @@ ExprVector computePreGroupedKeys(
 // execution. First applies a partial aggregation on local data, then
 // repartitions by grouping keys and performs the final aggregation. Returns a
 // pair of the root to the aggregation plan and cost of this aggregation.
-std::pair<Aggregation*, PlanCost> makeSplitAggregationPlan(
+std::pair<RelationOpPtr, PlanCost> makeSplitAggregationPlan(
     RelationOpPtr plan,
     const ExprVector& groupingKeys,
     const AggregateVector& aggregates,
     const ColumnVector& intermediateColumns,
     const ColumnVector& outputColumns) {
   PlanCost splitAggCost;
-  Aggregation* splitAggPlan;
 
   plan = make<Aggregation>(
       plan,
@@ -1337,17 +1330,16 @@ std::pair<Aggregation*, PlanCost> makeSplitAggregationPlan(
       intermediateColumns);
   splitAggCost.add(*plan);
 
-  repartitionForAgg(plan, groupingKeys, intermediateColumns, splitAggCost);
+  ColumnVector partitionKeys(
+      intermediateColumns.begin(),
+      intermediateColumns.begin() + groupingKeys.size());
 
-  const auto numKeys = groupingKeys.size();
+  PlanCost repartitionCost;
+  std::tie(plan, repartitionCost) = repartitionForAgg(plan, partitionKeys);
+  splitAggCost.add(repartitionCost);
 
-  ExprVector finalGroupingKeys;
-  finalGroupingKeys.reserve(numKeys);
-  for (auto i = 0; i < numKeys; ++i) {
-    finalGroupingKeys.push_back(intermediateColumns[i]);
-  }
-
-  splitAggPlan = make<Aggregation>(
+  ExprVector finalGroupingKeys(partitionKeys.begin(), partitionKeys.end());
+  auto* splitAggPlan = make<Aggregation>(
       plan,
       std::move(finalGroupingKeys),
       /*preGroupedKeys*/ ExprVector{},
@@ -1362,14 +1354,21 @@ std::pair<Aggregation*, PlanCost> makeSplitAggregationPlan(
 // Creates a single-phase aggregation plan where data is first repartitioned by
 // grouping keys and then aggregated in one step. Returns a pair of the root to
 // the aggregation plan and the cost of this aggregation.
-std::pair<Aggregation*, PlanCost> makeSingleAggregationPlan(
+std::pair<RelationOpPtr, PlanCost> makeSingleAggregationPlan(
     RelationOpPtr plan,
     const ExprVector& groupingKeys,
     const AggregateVector& aggregates,
     const ColumnVector& intermediateColumns,
     const ColumnVector& outputColumns) {
   PlanCost singleAggCost;
-  repartitionForAgg(plan, groupingKeys, intermediateColumns, singleAggCost);
+
+  ColumnVector partitionKeys(
+      intermediateColumns.begin(),
+      intermediateColumns.begin() + groupingKeys.size());
+  PlanCost repartitionCost;
+  std::tie(plan, repartitionCost) = repartitionForAgg(plan, partitionKeys);
+  singleAggCost.add(repartitionCost);
+
   auto* singleAgg = make<Aggregation>(
       plan,
       groupingKeys,
@@ -1387,7 +1386,7 @@ std::pair<Aggregation*, PlanCost> makeSingleAggregationPlan(
 // uses split aggregation. Otherwise, compares both plans and returns the one
 // with lower cost. Returns a pair of the root to the aggregation plan and its
 // cost.
-std::pair<Aggregation*, PlanCost> makeSplitOrSingleAggregationPlan(
+std::pair<RelationOpPtr, PlanCost> makeSplitOrSingleAggregationPlan(
     const RelationOpPtr& plan,
     const ExprVector& groupingKeys,
     const AggregateVector& aggregates,
@@ -2039,7 +2038,10 @@ bool Optimization::addWindow(
     }
 
     if (!isSingleWorker_) {
-      maybeRepartition(plan, ExprVector(partitionKeys), state.cost);
+      PlanCost repartitionCost;
+      std::tie(plan, repartitionCost) =
+          maybeRepartition(plan, ExprVector(partitionKeys));
+      state.cost.add(repartitionCost);
     }
 
     // Build output columns: all input columns + window function result columns.
