@@ -20,6 +20,7 @@
 #include <gflags/gflags.h>
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/optimizer/RelationOp.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/runner/LocalRunner.h"
@@ -198,6 +199,17 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
   velox::memory::MemoryPool& optimizerPool() const {
     return *optimizerPool_;
   }
+
+  /// Returns the optimizer's total cost for the best plan. Useful for verifying
+  /// that cost tracking includes specific operators (e.g., projections).
+  optimizer::PlanCost optimizationCost(
+      const logical_plan::LogicalPlanNodePtr& logicalPlan,
+      const MultiFragmentPlan::Options& options =
+          {
+              .numWorkers = 1,
+              .numDrivers = 1,
+          },
+      const std::optional<OptimizerOptions>& optimizerOptions = std::nullopt);
 
   /// Builds Optimization from 'logicalPlan' and invokes 'callback'. The
   /// Optimization instance stays alive for the duration of the callback.

@@ -56,6 +56,7 @@ const auto& relTypeNames() {
       {RelType::kWindow, "Window"},
       {RelType::kRowNumber, "RowNumber"},
       {RelType::kTopNRowNumber, "TopNRowNumber"},
+      {RelType::kMarkDistinct, "MarkDistinct"},
   };
 
   return kNames;
@@ -2119,6 +2120,61 @@ const QGString& TopNRowNumber::historyKey() const {
 }
 
 void TopNRowNumber::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+MarkDistinct::MarkDistinct(
+    RelationOpPtr input,
+    ColumnCP marker,
+    ExprVector keys)
+    : RelationOp(
+          RelType::kMarkDistinct,
+          input,
+          [&]() {
+            // Output columns = input columns + marker column.
+            ColumnVector cols = input->columns();
+            cols.push_back(marker);
+            return cols;
+          }()),
+      marker_(marker),
+      keys_(std::move(keys)) {
+  VELOX_CHECK_NOT_NULL(marker_);
+  VELOX_CHECK(!keys_.empty());
+  auto* optimization = queryCtx()->optimization();
+  const auto& runnerOptions = optimization->runnerOptions();
+
+  cost_.inputCardinality = inputCardinality();
+  // MarkDistinct doesn't reduce rows.
+  cost_.fanout = 1;
+
+  const auto maxCardinality =
+      std::max<double>(1, maxGroups(keys_, input_->constraints()));
+  const auto numGroups =
+      expectedNumDistincts(cost_.inputCardinality, maxCardinality);
+  const auto rowBytes = byteSize(keys_) + Costs::kHashRowBytes;
+  cost_.totalBytes = numGroups * rowBytes;
+
+  // Cost is similar to a hash aggregation for tracking distinct values. Each
+  // input row probes the hash table to check if its key combination has been
+  // seen, and inserts a new entry if not. Estimated localExchangeCost to be
+  // 1/3 of a remote shuffle, following the same cost modeling of Aggregation.
+  float localExchangeCost = 0;
+  if (runnerOptions.numDrivers > 1) {
+    localExchangeCost = shuffleCost(input_->columns()) / 3;
+  }
+  auto markDistinctCost = Costs::kHashColumnCost * keys_.size() +
+      Costs::hashTableCost(numGroups) + Costs::kKeyCompareCost * keys_.size() +
+      Costs::hashRowCost(numGroups, rowBytes);
+  cost_.unitCost = localExchangeCost + markDistinctCost;
+
+  // Set constraints_. Result cardinality is the same as input cardinality.
+  constraints_ = input->constraints();
+  constraints_.emplace(marker->id(), marker_->value());
+}
+
+void MarkDistinct::accept(
     const RelationOpVisitor& visitor,
     RelationOpVisitorContext& context) const {
   visitor.visit(*this, context);

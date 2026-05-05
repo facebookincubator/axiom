@@ -19,6 +19,7 @@
 #include <ranges>
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/PlanPrinter.h"
+#include "axiom/optimizer/AggregationPlanner.h"
 #include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
@@ -302,7 +303,7 @@ lp::ValuesNodePtr tryFoldConstantDt(
     plan = make<Filter>(plan, combinedFilters);
   }
 
-  plan = Optimization::planSingleAggregation(dt, plan);
+  plan = AggregationPlanner::planSingle(dt, plan);
 
   if (!dt->having.empty()) {
     plan = make<Filter>(plan, dt->having);

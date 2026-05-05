@@ -22,6 +22,7 @@ target_link_libraries(axiom_optimizer_multifragment_plan velox_common_base velox
 
 add_library(
   axiom_optimizer
+  AggregationPlanner.cpp
   BitSet.cpp
   ConstantExprEvaluator.cpp
   Cost.cpp

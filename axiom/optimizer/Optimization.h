@@ -17,6 +17,7 @@
 
 #include "axiom/common/Session.h"
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/optimizer/AggregationPlanner.h"
 #include "axiom/optimizer/Cost.h"
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/optimizer/OptimizerOptions.h"
@@ -112,12 +113,6 @@ class Optimization {
   /// non-union DTs. Assumes child DTs already have plans in the memo.
   /// Returns the plan's RelationOp.
   RelationOpPtr makeInitialPlan(const DerivedTable& dt);
-
-  /// Adds single aggregation on top of 'input'.
-  /// @param dt Derived table with an aggregation.
-  static RelationOpPtr planSingleAggregation(
-      DerivedTableCP dt,
-      RelationOpPtr& input);
 
   const std::shared_ptr<velox::core::QueryCtx>& veloxQueryCtx() const {
     return veloxQueryCtx_;
@@ -242,19 +237,6 @@ class Optimization {
 
   void addAggregation(DerivedTableCP dt, RelationOpPtr& plan, PlanState& state)
       const;
-
-  // Transforms aggregations where all aggregates are DISTINCT with the same
-  // args into a two-level aggregation: inner level GROUP BY (keys +
-  // distinct_args) -> outer level AGG without DISTINCT. If 'hasOrderBy' is
-  // true, the outer level AGG always takes the single aggregation step.
-  void transformDistinctToGroupBy(
-      RelationOpPtr& plan,
-      PlanCost& cost,
-      const ExprVector& groupingKeys,
-      const ExprVector& distinctArgs,
-      const AggregateVector& aggregates,
-      AggregationPlanCP aggPlan,
-      bool hasOrderBy) const;
 
   // Adds window function operators to 'plan'. Groups window functions by
   // specification and emits one Window operator per group. Returns true if the
@@ -388,6 +370,8 @@ class Optimization {
   int32_t traceFlags_{0};
 
   bool cnamesInExpr_{true};
+
+  AggregationPlanner aggregationPlanner_;
 
   ToGraph toGraph_;
 

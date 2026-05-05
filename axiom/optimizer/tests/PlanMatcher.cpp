@@ -1491,6 +1491,47 @@ class LocalPartitionTypeMatcher : public PlanMatcherImpl<LocalPartitionNode> {
   const std::vector<std::string> partitionKeys_;
 };
 
+class MarkDistinctMatcher : public PlanMatcherImpl<MarkDistinctNode> {
+ public:
+  MarkDistinctMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      const std::vector<std::string>& distinctKeys,
+      std::optional<std::string> markerAlias)
+      : PlanMatcherImpl<MarkDistinctNode>({matcher}),
+        distinctKeys_{distinctKeys},
+        markerAlias_{std::move(markerAlias)} {
+    VELOX_CHECK(!distinctKeys_.empty());
+  }
+
+  MatchResult matchDetails(
+      const MarkDistinctNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
+    EXPECT_EQ(plan.distinctKeys().size(), distinctKeys_.size());
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    for (size_t i = 0; i < distinctKeys_.size(); ++i) {
+      auto it = symbols.find(distinctKeys_[i]);
+      const auto& expected =
+          it != symbols.end() ? it->second : distinctKeys_[i];
+      EXPECT_EQ(plan.distinctKeys()[i]->name(), expected);
+    }
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    std::unordered_map<std::string, std::string> newSymbols = symbols;
+    if (markerAlias_.has_value()) {
+      newSymbols[*markerAlias_] = plan.markerName();
+    }
+    return MatchResult::success(std::move(newSymbols));
+  }
+
+ private:
+  const std::vector<std::string> distinctKeys_;
+  const std::optional<std::string> markerAlias_;
+};
+
 #undef AXIOM_TEST_RETURN
 #undef AXIOM_TEST_RETURN_IF_FAILURE
 #undef AXIOM_TEST_RETURN_IF_FAILURE_VOID
@@ -1938,6 +1979,51 @@ PlanMatcherBuilder& PlanMatcherBuilder::topNRowNumber(
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<TopNRowNumberMatcher>(
       matcher_, partitionKeys, sortingKeys, limit);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::distributedMarkDistinct(
+    const std::vector<std::string>& keys,
+    const std::string& markerAlias) {
+  return shuffle().localPartition(keys).markDistinct(keys, markerAlias);
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::splitAggregation(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates) {
+  partialAggregation(groupingKeys, aggregates).shuffle();
+  if (groupingKeys.empty()) {
+    localGather();
+  } else {
+    localPartition(groupingKeys);
+  }
+  return finalAggregation();
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::distributedSingleAggregation(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates) {
+  shuffle();
+  if (groupingKeys.empty()) {
+    localGather();
+  } else {
+    localPartition(groupingKeys);
+  }
+  return singleAggregation(groupingKeys, aggregates);
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::markDistinct() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<PlanMatcherImpl<MarkDistinctNode>>(matcher_);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::markDistinct(
+    const std::vector<std::string>& distinctKeys,
+    std::optional<std::string> markerAlias) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<MarkDistinctMatcher>(
+      matcher_, distinctKeys, std::move(markerAlias));
   return *this;
 }
 
