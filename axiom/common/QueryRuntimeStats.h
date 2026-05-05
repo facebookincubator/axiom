@@ -60,6 +60,8 @@ class QueryRuntimeStats {
       "axiom-permissionCheckWallNanos"};
 
   // Connector.
+  static constexpr std::string_view kFindTableWallNanos{
+      "axiom-findTableWallNanos"};
   static constexpr std::string_view kEstimateStatsWallNanos{
       "axiom-estimateStatsWallNanos"};
 

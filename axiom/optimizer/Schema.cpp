@@ -130,7 +130,13 @@ SchemaTableCP Schema::findTable(
 
   VELOX_CHECK_NOT_NULL(source_);
 
+  auto findStart = std::chrono::steady_clock::now();
   auto connectorTable = source_->findTable(std::string(connectorId), tableName);
+  if (runtimeStats_) {
+    runtimeStats_->recordTiming(
+        QueryRuntimeStats::kFindTableWallNanos,
+        std::chrono::steady_clock::now() - findStart);
+  }
   if (!connectorTable) {
     return nullptr;
   }

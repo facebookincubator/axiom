@@ -58,7 +58,7 @@ Optimization::Optimization(
           isSingleWorker_,
           isSingleDriver_,
           options_.alwaysPlanPartialAggregation},
-      toGraph_{schema, evaluator, options_},
+      toGraph_{schema, evaluator, options_, runtimeStats},
       toVelox_{session_, runnerOptions_, options_},
       runtimeStats_{std::move(runtimeStats)} {
   queryCtx()->optimization() = this;
