@@ -3565,11 +3565,13 @@ NormalizedJoin normalizeLogicalJoin(const lp::JoinNode& join) {
 
 } // namespace
 
-DerivedTableP ToGraph::makeQueryGraph(const lp::LogicalPlanNode& logicalPlan) {
+DerivedTableP ToGraph::makeQueryGraph(
+    const lp::LogicalPlanNode& logicalPlan,
+    std::vector<int32_t> outputOrdinals) {
   std::tie(controlSubfields_, payloadSubfields_) =
       SubfieldTracker([&](const auto& expr) {
         return tryFoldConstant(expr);
-      }).markAll(logicalPlan);
+      }).markAll(logicalPlan, std::move(outputOrdinals));
   currentDt_ = newDt();
   makeQueryGraph(logicalPlan, kAllAllowedInDt);
   setDtUsedOutput(currentDt_, logicalPlan);
