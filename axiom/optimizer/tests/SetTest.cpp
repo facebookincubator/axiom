@@ -1095,6 +1095,53 @@ TEST_F(SetTest, rowSubfieldAccessInUnionAll) {
   }
 }
 
+// UNION ALL where one leg is a constant and another contains a UNION (distinct)
+// over constants. The inner UNION skips Repartitions since all inputs are
+// Values — dedup runs locally without exchanges.
+TEST_F(SetTest, unionAllWithValuesOnlyUnionSubquery) {
+  auto logicalPlan = parseSelect(
+      "SELECT 'x'"
+      " UNION ALL"
+      " SELECT * FROM (SELECT 'a' UNION SELECT 'b') c");
+
+  // Single-node plan: inner UNION is a round-robin LocalPartition (2 sources)
+  // followed by Aggregation for dedup. No hash LocalPartition.
+  auto plan = toSingleNodePlan(logicalPlan);
+  AXIOM_ASSERT_PLAN(
+      plan,
+      matchValues()
+          .project()
+          .localPartition(
+              matchValues()
+                  .project()
+                  .localPartition(matchValues().project().build())
+                  .aggregation()
+                  .project()
+                  .build())
+          .build());
+
+  // Distributed plan: same structure with a gather at the root. No remote
+  // exchanges for the inner UNION because all inputs are Values (width=1).
+  // Without this fix, planVelox would throw "Non-empty partitioning keys
+  // require more than one partition" because the inner UNION's Repartitions
+  // target a width=1 consumer.
+  auto distributedPlan = planVelox(logicalPlan);
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      distributedPlan.plan,
+      matchValues()
+          .project()
+          .localPartition(
+              matchValues()
+                  .project()
+                  .localPartition(matchValues().project().build())
+                  .localPartition()
+                  .aggregation()
+                  .project()
+                  .build())
+          .gather()
+          .build());
+}
+
 TEST_F(SetTest, unionAllWithDistinctWidthMismatch) {
   std::vector<std::string> widthConstrainingInputs = {
       "SELECT 1",
