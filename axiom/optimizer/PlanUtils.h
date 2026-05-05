@@ -102,6 +102,18 @@ inline bool pushBackUnique(V& vector, E& element) {
   return true;
 }
 
+/// True if 'exprs' contains an expression structurally equal to 'expr'.
+/// Uses Expr::sameOrEqual, so columns from the same equivalence class match.
+template <typename V>
+inline bool hasExpression(const V& exprs, ExprCP expr) {
+  for (auto* candidate : exprs) {
+    if (candidate->sameOrEqual(*expr)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /// Returns the integer value of 'variant'. The variant must be non-null and
 /// hold an integer type. Throws otherwise.
 int64_t integerValue(const velox::Variant* variant);

@@ -416,6 +416,9 @@ struct DerivedTable : public PlanObject {
   // Updates cardinality and column constraints from the plan.
   void updateConstraints(const RelationOp& plan);
 
+  // Synthesizes single-column predicates implied by column equivalences.
+  void inferTransitivePredicates();
+
   // Completes 'joins' with edges implied by column equivalences.
   void addImpliedJoins();
 
