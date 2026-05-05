@@ -170,6 +170,10 @@ struct Costs {
   // complete cost model will need to consider the count of
   // destinations, number of partition keys etc.
   static constexpr float kByteShuffleCost = 0.3;
+
+  /// Minimal per-row cost for operators that do trivial per-row work (e.g.,
+  /// passing rows through, generating a unique ID).
+  static constexpr double kMinimalUnitCost = 0.01;
 };
 
 /// Returns shuffle cost for a single row. Depends on the number of types of

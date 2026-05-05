@@ -303,6 +303,13 @@ class ToGraph {
 
   void addUnnest(const logical_plan::UnnestNode& unnest);
 
+  // Creates a Column for the grouping set ID with the given name, type, and
+  // number of grouping sets.
+  ColumnCP createGroupIdColumn(
+      Name name,
+      const velox::TypePtr& type,
+      size_t numGroupingSets);
+
   AggregationPlanCP translateAggregation(
       const logical_plan::AggregateNode& aggregation);
 

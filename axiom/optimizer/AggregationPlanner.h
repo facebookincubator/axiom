@@ -66,7 +66,9 @@ class AggregationPlanner {
       const ExprVector& groupingKeys,
       const AggregateVector& aggregates,
       const ColumnVector& intermediateColumns,
-      const ColumnVector& outputColumns) const;
+      const ColumnVector& outputColumns,
+      GroupingSet globalGroupingSets = {},
+      ColumnCP groupIdColumn = nullptr) const;
 
   // Creates a single-phase aggregation plan following repartitioning by
   // groupingKeys.
@@ -75,7 +77,9 @@ class AggregationPlanner {
       const ExprVector& groupingKeys,
       const AggregateVector& aggregates,
       const ColumnVector& intermediateColumns,
-      const ColumnVector& outputColumns) const;
+      const ColumnVector& outputColumns,
+      GroupingSet globalGroupingSets = {},
+      ColumnCP groupIdColumn = nullptr) const;
 
   // Chooses between split and single aggregation plans based on cost.
   std::pair<RelationOpPtr, PlanCost> makeSplitOrSingleAggregationPlan(
@@ -84,6 +88,16 @@ class AggregationPlanner {
       const AggregateVector& aggregates,
       const ColumnVector& intermediateColumns,
       const ColumnVector& outputColumns) const;
+
+  // Plans aggregation with grouping sets (ROLLUP, CUBE, GROUPING SETS).
+  void addGroupingSetsAggregation(
+      const AggregationPlan* aggPlan,
+      RelationOpPtr& plan,
+      const ExprVector& groupingKeys,
+      const AggregateVector& aggregates,
+      PlanState& state,
+      bool useSingleStep,
+      bool hasOrderBy) const;
 
   // Transforms distinct aggregation into a two-level GROUP BY + non-distinct
   // aggregation plan.

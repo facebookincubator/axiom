@@ -205,7 +205,13 @@ void SubfieldTracker::markFieldAccessed(
     return;
   }
 
-  const auto& aggregate = agg.aggregateAt(ordinal - keys.size());
+  const auto numKeys = keys.size();
+  if (ordinal >= numKeys + agg.aggregates().size()) {
+    return;
+  }
+
+  const auto& aggregate = agg.aggregates()[ordinal - numKeys];
+
   for (auto i = 0; i < aggregate->inputs().size(); ++i) {
     const auto& aggregateInput = aggregate->inputAt(i);
     if (aggregateInput->isLambda()) {

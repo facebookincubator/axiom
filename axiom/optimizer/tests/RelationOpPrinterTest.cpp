@@ -456,5 +456,37 @@ TEST_F(RelationOpPrinterTest, maxDepth) {
   }
 }
 
+TEST_F(RelationOpPrinterTest, groupId) {
+  connector_->addTable(
+      "t", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), DOUBLE()}));
+
+  auto lines =
+      toLines("SELECT a, b, sum(c) AS total FROM t GROUP BY ROLLUP(a, b)");
+  // $grouping_set_id is pruned from the final Project by SubfieldTracker
+  // (D103705097) because OutputNode does not export it.
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("Project"),
+          testing::StartsWith("    "), // dt1.a := dt1.gk3
+          testing::StartsWith("    "), // dt1.b := dt1.gk4
+          testing::StartsWith("    "), // dt1.total := dt1.total
+          testing::StartsWith("  Aggregation"),
+          testing::HasSubstr("sum(t2.c)"),
+          testing::AllOf(
+              testing::StartsWith("    GroupId"),
+              testing::HasSubstr("[gk3, gk4], [gk3], []")),
+          testing::HasSubstr("gk3 := "),
+          testing::HasSubstr("gk4 := "),
+          testing::HasSubstr("groupIdColumn:"),
+          testing::StartsWith("      TableScan"),
+          testing::HasSubstr("table:"),
+          testing::Eq("")));
+
+  auto oneline =
+      toOneline("SELECT a, b, sum(c) AS total FROM t GROUP BY ROLLUP(a, b)");
+  EXPECT_THAT(oneline, testing::HasSubstr("groupid("));
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer
