@@ -27,6 +27,7 @@
 #include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/ConnectorRegistry.h"
+#include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -40,6 +41,8 @@ class SqlQueryRunnerTest : public ::testing::Test, public test::VectorTestBase {
   static void SetUpTestCase() {
     facebook::velox::memory::MemoryManager::testingSetInstance(
         facebook::velox::memory::MemoryManager::Options{});
+    facebook::velox::exec::ExchangeSource::registerFactory(
+        facebook::velox::exec::test::createLocalExchangeSource);
   }
 
   void SetUp() override {

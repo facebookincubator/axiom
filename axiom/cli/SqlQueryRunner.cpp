@@ -36,12 +36,10 @@
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/sql/presto/PrestoParser.h"
 #include "axiom/sql/presto/ShowStatsBuilder.h"
-#include "velox/common/file/FileSystems.h"
 #include "velox/common/time/Timer.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/core/QueryConfigProvider.h"
-#include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -126,10 +124,6 @@ void SqlQueryRunner::initialize(
 
     optimizer::FunctionRegistry::registerPrestoFunctions();
 
-    velox::filesystems::registerLocalFileSystem();
-
-    velox::exec::ExchangeSource::registerFactory(
-        velox::exec::test::createLocalExchangeSource);
     if (!velox::isRegisteredVectorSerde()) {
       velox::serializer::presto::PrestoVectorSerde::registerVectorSerde();
     }
