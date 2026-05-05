@@ -210,6 +210,12 @@ class SparkToAxiom : public SparkPlanVisitor {
       SparkPlanVisitorContext& context,
       std::vector<ExprPtr>& params,
       std::vector<facebook::velox::TypePtr>& paramTypes);
+
+  /// Handles a Project containing a generator function (explode/posexplode)
+  /// by creating an UnnestNode instead of a ProjectNode.
+  void visitProjectWithGenerator(
+      const spark::connect::Project& project,
+      SparkPlanVisitorContext& context);
 };
 
 } // namespace axiom::collagen
