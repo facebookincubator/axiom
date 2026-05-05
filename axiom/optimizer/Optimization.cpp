@@ -3200,12 +3200,20 @@ PlanP Optimization::makeUnionPlan(
 
   if (!distribution.has_value()) {
     if (isDistinct) {
-      // Pick some partitioning key and shuffle on that and make distinct.
-      Distribution someDistribution = somePartition(inputs);
-      for (auto i = 0; i < inputs.size(); ++i) {
-        inputs[i] = make<Repartition>(
-            inputs[i], someDistribution, inputs[i]->columns());
-        inputStates[i].addCost(*inputs[i]);
+      // Skip Repartitions when all inputs have gather distribution (e.g.,
+      // Values, global aggregation, Limit). All data is already on a single
+      // node, so hash-partitioning for dedup is unnecessary.
+      const bool allGather =
+          std::all_of(inputs.begin(), inputs.end(), [](const auto& input) {
+            return input->distribution().isGather();
+          });
+      if (!allGather) {
+        Distribution someDistribution = somePartition(inputs);
+        for (auto i = 0; i < inputs.size(); ++i) {
+          inputs[i] = make<Repartition>(
+              inputs[i], someDistribution, inputs[i]->columns());
+          inputStates[i].addCost(*inputs[i]);
+        }
       }
     }
   } else {
