@@ -165,6 +165,32 @@ TEST_F(FilterPushdownTest, throughJoin) {
 
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
+
+  // Filter on a join key propagates to the other side via the equivalence.
+  {
+    lp::PlanBuilder::Context ctx(exec::test::kHiveConnectorId, kDefaultSchema);
+    auto logicalPlan =
+        lp::PlanBuilder(ctx)
+            .from({"nation", "region"})
+            .filter("n_regionkey = r_regionkey AND n_regionkey = 1")
+            .aggregate({}, {"count(*)"})
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .hiveScan("nation", test::eq("n_regionkey", (int64_t)1))
+            .hashJoin(
+                core::PlanMatcherBuilder()
+                    .hiveScan("region", test::eq("r_regionkey", (int64_t)1))
+                    .build(),
+                velox::core::JoinType::kInner)
+            .aggregation()
+            .build();
+
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
 }
 
 // Duplicate literals in an IN list should be deduplicated.

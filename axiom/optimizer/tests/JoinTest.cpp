@@ -1213,6 +1213,77 @@ TEST_F(JoinTest, impliedJoins) {
   }
 }
 
+TEST_F(JoinTest, impliedFilters) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(1'000, {{"x", {.numDistinct = 100}}});
+
+  // Equality propagates from t.a to u.x via the join equivalence.
+  {
+    auto query = "SELECT * FROM t, u WHERE t.a = u.x AND t.a = 5";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("u")
+            .filter("x = 5")
+            .hashJoin(
+                matchScan("t").filter("a = 5").build(), core::JoinType::kInner)
+            .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Range propagates similarly.
+  {
+    auto query = "SELECT * FROM t, u WHERE t.a = u.x AND t.a > 100";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .filter("a > 100")
+                       .hashJoin(
+                           matchScan("u").filter("x > 100").build(),
+                           core::JoinType::kInner)
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // IN propagates across the equivalence.
+  {
+    auto query = "SELECT * FROM t, u WHERE t.a = u.x AND t.a IN (1, 2, 3)";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("u")
+                       .filter("x IN (1, 2, 3)")
+                       .hashJoin(
+                           matchScan("t").filter("a IN (1, 2, 3)").build(),
+                           core::JoinType::kInner)
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Non-deterministic predicates do not propagate.
+  {
+    auto query =
+        "SELECT * FROM t, u "
+        "WHERE t.a = u.x AND t.a = cast(random() * 100 as bigint)";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .hashJoin(matchScan("u").build(), core::JoinType::kInner)
+                       .filter("a = cast(random() * 100.0 as bigint)")
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
 // LEFT JOIN with no equalities when the DT has 3+ tables. The comma join
 // between nation and region is inlined into the same DT. The EXISTS semi-join
 // adds a 3rd table. The subsequent LEFT JOIN ON clause uses contains() which

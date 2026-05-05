@@ -706,6 +706,62 @@ void DerivedTable::addImpliedJoins() {
 
 namespace {
 
+// Appends (target table, cloned filter) pairs for predicates implied by
+// 'filter' across its source column's equivalence class.
+void collectImpliedFilters(
+    ExprCP filter,
+    const PlanObjectSet& tableSet,
+    std::vector<std::pair<PlanObjectP, ExprCP>>& out) {
+  if (filter->containsNonDeterministic() || filter->columns().size() != 1) {
+    return;
+  }
+  auto* source = filter->columns().onlyObject<Column>();
+  auto* equivalence = source->equivalence();
+  if (!equivalence) {
+    return;
+  }
+
+  folly::F14FastSet<ColumnCP> visited{source};
+  for (auto* target : equivalence->columns) {
+    if (!visited.insert(target).second) {
+      continue;
+    }
+    auto* targetTable = target->singleTable();
+    if (!targetTable || !tableSet.contains(targetTable)) {
+      continue;
+    }
+    out.emplace_back(
+        const_cast<PlanObject*>(targetTable),
+        DerivedTableFlattener::replaceInputs(
+            filter, ColumnVector{source}, ExprVector{target}));
+  }
+}
+
+} // namespace
+
+void DerivedTable::inferTransitivePredicates() {
+  std::vector<std::pair<PlanObjectP, ExprCP>> implied;
+  for (auto* table : tables) {
+    if (!table->is(PlanType::kTableNode)) {
+      continue;
+    }
+    for (auto* filter : table->as<BaseTable>()->columnFilters) {
+      collectImpliedFilters(filter, tableSet, implied);
+    }
+  }
+
+  std::vector<DerivedTableP> changedDts;
+  for (auto& [target, expr] : implied) {
+    if (target->is(PlanType::kTableNode) &&
+        hasExpression(target->as<BaseTable>()->columnFilters, expr)) {
+      continue;
+    }
+    tryPushdownConjunct(expr, target, changedDts);
+  }
+}
+
+namespace {
+
 bool isSingleRowDt(PlanObjectCP object) {
   if (object->is(PlanType::kDerivedTableNode)) {
     auto dt = object->as<DerivedTable>();
@@ -2155,6 +2211,8 @@ void DerivedTable::distributeConjuncts() {
       }
     }
   }
+
+  inferTransitivePredicates();
 }
 
 void DerivedTable::tryConvertOuterJoins(bool allowNondeterministic) {

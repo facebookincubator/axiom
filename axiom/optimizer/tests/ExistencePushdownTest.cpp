@@ -286,19 +286,24 @@ TEST_F(ExistencePushdownTest, chainJoin) {
   auto plan = toSingleNodePlan(logicalPlan);
 
   // r + s wrapped into a chainDt, pushed as existence inside the aggregation.
+  // Transitive predicate inference also pushes 'a_0 < 100' on s.
   auto matcher =
       matchScan("u")
           .hashJoin(
               matchScan("r")
                   .filter("b < 100")
-                  .hashJoin(matchScan("s").build(), core::JoinType::kInner)
+                  .hashJoin(
+                      matchScan("s").filter("a_0 < 100").build(),
+                      core::JoinType::kInner)
                   .project()
                   .build(),
               core::JoinType::kLeftSemiFilter)
           .singleAggregation({"x"}, {"count(*) as cnt"})
           .hashJoin(
               matchScan("r").filter("b < 100").build(), core::JoinType::kInner)
-          .hashJoin(matchScan("s").build(), core::JoinType::kInner)
+          .hashJoin(
+              matchScan("s").filter("a_0 < 100").build(),
+              core::JoinType::kInner)
           .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 
@@ -308,14 +313,19 @@ TEST_F(ExistencePushdownTest, chainJoin) {
   auto distributedMatcher =
       matchScan("r")
           .filter("b < 100")
-          .hashJoin(matchScan("s").broadcast().build(), core::JoinType::kInner)
+          .hashJoin(
+              matchScan("s").filter("a_0 < 100").broadcast().build(),
+              core::JoinType::kInner)
           .hashJoin(
               matchScan("u")
                   .hashJoin(
                       matchScan("r")
                           .filter("b < 100")
                           .hashJoin(
-                              matchScan("s").broadcast().build(),
+                              matchScan("s")
+                                  .filter("a_0 < 100")
+                                  .broadcast()
+                                  .build(),
                               core::JoinType::kInner)
                           .project()
                           .broadcast()
