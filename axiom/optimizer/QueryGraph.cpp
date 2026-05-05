@@ -695,10 +695,15 @@ float estimateFanout(
   }
 
   auto fanout = scanCardinality /
-      std::max(keys[0]->value().cardinality, otherKeys[0]->value().cardinality);
+      std::max(
+                    {1.0f,
+                     keys[0]->value().cardinality,
+                     otherKeys[0]->value().cardinality});
   for (size_t i = 1; i < keys.size(); ++i) {
     auto distinctValues = std::max(
-        keys[i]->value().cardinality, otherKeys[i]->value().cardinality);
+        {1.0f,
+         keys[i]->value().cardinality,
+         otherKeys[i]->value().cardinality});
     if (distinctValues > fanout) {
       fanout = 1;
     } else {
