@@ -344,6 +344,7 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
           std::string(catalog),
           std::string(schema),
           std::nullopt}};
+  completionInfo.runtimeStats = std::make_shared<QueryRuntimeStats>();
 
   onStart(runOptions, completionInfo);
 
@@ -363,18 +364,25 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
       statement = parseSingle(sql, runOptions);
     }
     completionInfo.startInfo.queryType = statement->kind();
+    completionInfo.runtimeStats->recordTiming(
+        QueryRuntimeStats::kParseWallNanos,
+        std::chrono::microseconds(completionInfo.timing.parse));
 
     runOptions.tokenProvider = checkPermission(
         runOptions,
         completionInfo,
         statement->views(),
         statement->referencedTables());
+    completionInfo.runtimeStats->recordTiming(
+        QueryRuntimeStats::kPermissionCheckWallNanos,
+        std::chrono::microseconds(completionInfo.timing.checkPermission));
 
     auto result = runUnchecked(
         *statement,
         runOptions,
         completionInfo.timing,
-        completionInfo.planString);
+        completionInfo.planString,
+        completionInfo.runtimeStats);
 
     completionInfo.numOutputRows = countRows(result.results);
     finalize();
@@ -468,7 +476,8 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
     const presto::SqlStatement& sqlStatement,
     const RunOptions& options,
     QueryTiming& timing,
-    std::string& planString) {
+    std::string& planString,
+    std::shared_ptr<QueryRuntimeStats> runtimeStats) {
   if (sqlStatement.isExplain()) {
     const auto* explain = sqlStatement.as<presto::ExplainStatement>();
 
@@ -582,12 +591,14 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
     auto schema = std::make_shared<connector::SchemaResolver>();
     schema->setTargetTable(ctas->connectorId(), ctas->tableName(), table);
 
-    return runLogicalPlan(ctas->plan(), options, timing, planString, schema);
+    return runLogicalPlan(
+        ctas->plan(), options, timing, planString, schema, runtimeStats);
   }
 
   if (sqlStatement.isInsert()) {
     const auto* insert = sqlStatement.as<presto::InsertStatement>();
-    return runLogicalPlan(insert->plan(), options, timing, planString);
+    return runLogicalPlan(
+        insert->plan(), options, timing, planString, nullptr, runtimeStats);
   }
 
   if (sqlStatement.isDropTable()) {
@@ -654,7 +665,8 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
 
   const auto logicalPlan = sqlStatement.as<presto::SelectStatement>()->plan();
 
-  return runLogicalPlan(logicalPlan, options, timing, planString);
+  return runLogicalPlan(
+      logicalPlan, options, timing, planString, nullptr, runtimeStats);
 }
 
 std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
@@ -861,7 +873,8 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
         checkDerivedTable,
     const std::function<bool(const optimizer::RelationOp&)>& checkBestPlan,
     std::shared_ptr<facebook::axiom::connector::SchemaResolver> schemaResolver,
-    bool explain) {
+    bool explain,
+    std::shared_ptr<QueryRuntimeStats> runtimeStats) {
   optimizer::MultiFragmentPlan::Options opts;
   opts.numWorkers = options.numWorkers;
   opts.numDrivers = options.numDrivers;
@@ -887,6 +900,8 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
   auto optimizerOptions = optimizer::OptimizerOptions::from(optimizerProps);
   optimizerOptions.explain = explain;
 
+  uint64_t toGraphNanos{0};
+  auto toGraphStart = std::chrono::steady_clock::now();
   optimizer::Optimization optimization(
       session,
       *logicalPlan,
@@ -900,25 +915,55 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
   if (checkDerivedTable && !checkDerivedTable(*optimization.rootDt())) {
     return {};
   }
+  toGraphNanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                     std::chrono::steady_clock::now() - toGraphStart)
+                     .count();
 
-  auto best = optimization.bestPlan();
+  uint64_t bestPlanNanos{0};
+  optimizer::PlanP best;
+  {
+    velox::NanosecondTimer timer(&bestPlanNanos);
+    best = optimization.bestPlan();
+  }
   if (checkBestPlan && !checkBestPlan(*best->op)) {
     return {};
   }
 
-  return optimization.toVeloxPlan(best->op);
+  uint64_t toVeloxNanos{0};
+  optimizer::PlanAndStats result;
+  {
+    velox::NanosecondTimer timer(&toVeloxNanos);
+    result = optimization.toVeloxPlan(best->op);
+  }
+
+  if (runtimeStats) {
+    runtimeStats->recordTiming(
+        QueryRuntimeStats::kOptimizeToGraphWallNanos,
+        std::chrono::nanoseconds(toGraphNanos));
+    runtimeStats->recordTiming(
+        QueryRuntimeStats::kOptimizeBestPlanWallNanos,
+        std::chrono::nanoseconds(bestPlanNanos));
+    runtimeStats->recordTiming(
+        QueryRuntimeStats::kOptimizeToVeloxWallNanos,
+        std::chrono::nanoseconds(toVeloxNanos));
+  }
+
+  return result;
 }
 
 std::shared_ptr<runner::LocalRunner> SqlQueryRunner::makeLocalRunner(
     optimizer::PlanAndStats& planAndStats,
     const std::shared_ptr<velox::core::QueryCtx>& queryCtx,
-    const RunOptions& /*options*/) {
+    const RunOptions& options,
+    std::shared_ptr<QueryRuntimeStats> runtimeStats) {
   return std::make_shared<runner::LocalRunner>(
       planAndStats.plan,
       std::move(planAndStats.finishWrite),
       queryCtx,
-      std::make_shared<runner::ConnectorSplitSourceFactory>(),
-      executorPool_);
+      std::make_shared<runner::ConnectorSplitSourceFactory>(runtimeStats),
+      executorPool_,
+      /*baseSpillDirectory=*/"",
+      runtimeStats);
 }
 
 SqlQueryRunner::SqlResult SqlQueryRunner::showSession(
@@ -973,8 +1018,8 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runLogicalPlan(
     const RunOptions& options,
     QueryTiming& timing,
     std::string& planString,
-    std::shared_ptr<facebook::axiom::connector::SchemaResolver>
-        schemaResolver) {
+    std::shared_ptr<facebook::axiom::connector::SchemaResolver> schemaResolver,
+    std::shared_ptr<QueryRuntimeStats> runtimeStats) {
   auto queryCtx = newQuery(options);
 
   SqlResult result;
@@ -988,12 +1033,19 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runLogicalPlan(
         options,
         nullptr,
         nullptr,
-        std::move(schemaResolver));
+        std::move(schemaResolver),
+        /*explain=*/false,
+        runtimeStats);
+  }
+  if (runtimeStats) {
+    runtimeStats->recordTiming(
+        QueryRuntimeStats::kOptimizeWallNanos,
+        std::chrono::microseconds(timing.optimize));
   }
 
   planString = planAndStats.toString();
 
-  auto runner = makeLocalRunner(planAndStats, queryCtx, options);
+  auto runner = makeLocalRunner(planAndStats, queryCtx, options, runtimeStats);
   SCOPE_EXIT {
     waitForCompletion(runner, options.timeoutMicros);
   };
@@ -1001,6 +1053,11 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runLogicalPlan(
   {
     velox::MicrosecondTimer timer(&timing.execute);
     result.results = fetchResults(*runner);
+  }
+  if (runtimeStats) {
+    runtimeStats->recordTiming(
+        QueryRuntimeStats::kExecuteWallNanos,
+        std::chrono::microseconds(timing.execute));
   }
 
   return result;

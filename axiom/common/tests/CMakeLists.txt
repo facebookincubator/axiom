@@ -15,6 +15,7 @@
 add_executable(
   axiom_common_tests
   CatalogSchemaTableNameTest.cpp
+  QueryRuntimeStatsTest.cpp
   SchemaTableNameTest.cpp
   SessionConfigTest.cpp
 )
