@@ -322,5 +322,227 @@ TEST_F(AggregationTest, repartitionForAggPartitionSubset) {
 // optimizationCost() helper is available for verifying cost differences between
 // plans with and without projections.
 
+TEST_F(AggregationTest, groupingSets) {
+  testConnector_->addTable(
+      "t", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), DOUBLE()}));
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .rollup({"a", "b"}, {"sum(c) as total"}, "gid")
+                         .build();
+
+  // Single-node plan shape.
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    // ROLLUP(a, b) expands to grouping sets: {a, b}, {a}, {}.
+    // Grouping keys get auto-generated output names in GroupId.
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan()
+            .groupId({{"a", "b"}, {"a"}, {}}, {"c"}, "gid")
+            .singleAggregation({"a", "b", "gid"}, {"sum(c) as total"})
+            .project({"a", "b", "total", "gid"})
+            .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Distributed plan shape.
+  {
+    auto plan = planVelox(logicalPlan);
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan()
+            .groupId({{"a", "b"}, {"a"}, {}}, {"c"}, "gid")
+            .partialAggregation({"a", "b", "gid"}, {"sum(c) as total"})
+            .shuffle()
+            .localPartition()
+            .finalAggregation({"a", "b", "gid"}, {"sum(total) as total"})
+            .project({"a", "b", "total", "gid"})
+            .gather()
+            .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+  }
+}
+
+// Verifies that a grouping key can also be an aggregation input.
+// SELECT a, SUM(a) FROM t GROUP BY ROLLUP(a) requires 'a' to appear both as
+// a grouping key (subject to NULL-ing) and as an aggregation input (preserved).
+TEST_F(AggregationTest, groupingSetsKeyIsAggInput) {
+  testConnector_->addTable("t", ROW({"a", "b"}, {BIGINT(), DOUBLE()}));
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .rollup({"a"}, {"sum(a) as total"}, "gid")
+                         .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  // 'a' is both a grouping key and an aggregate input. Capture the
+  // auto-generated key name via keyAliases to avoid hardcoding it.
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .groupId({{"a"}, {}}, {"a"}, "gid", {{"a", "key_a"}})
+                     .singleAggregation({"key_a", "gid"}, {"sum(a) as total"})
+                     .project({"key_a as a", "total", "gid"})
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+// TODO: Identical grouping sets compute separately today. Follow-up
+// optimization: detect identical sets, compute once, and replicate rows.
+TEST_F(AggregationTest, groupingSetsCrossSetOptimization) {
+  testConnector_->addTable(
+      "t", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), DOUBLE()}));
+
+  // GROUP BY GROUPING SETS ((a, b), (b, a), (a, b)) — all three sets are
+  // order-insensitively identical but treated as separate sets today.
+  auto logicalPlan =
+      lp::PlanBuilder(makeContext())
+          .tableScan("t")
+          .aggregate(
+              {{"a", "b"}, {"b", "a"}, {"a", "b"}}, {"count(1) as c"}, "gid")
+          .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  // Three separate grouping sets in GroupId. Follow-up: collapse to one set
+  // with row replication.
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .groupId({{"a", "b"}, {"b", "a"}, {"a", "b"}}, {}, "gid")
+                     .singleAggregation({"a", "b", "gid"}, {"count(1) as c"})
+                     .project({"a", "b", "c", "gid"})
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+// No global (empty) grouping set — all sets have at least one key.
+// This exercises the globalGroupingSets.empty() branch where aggGroupIdColumn
+// is nullptr and forcePartial is not triggered by global sets.
+TEST_F(AggregationTest, groupingSetsNoGlobalSet) {
+  testConnector_->addTable(
+      "t", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), DOUBLE()}));
+
+  // GROUPING SETS ((a), (b)) — no empty set.
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .aggregate({{"a"}, {"b"}}, {"count(1) as c"}, "gid")
+                         .build();
+
+  // Single-node plan.
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan()
+                       .groupId({{"a"}, {"b"}}, {}, "gid")
+                       .singleAggregation({"a", "b", "gid"}, {"count(1) as c"})
+                       .project({"a", "b", "c", "gid"})
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Distributed plan — without global sets, the optimizer chooses
+  // split (partial + final) aggregation based on cost.
+  {
+    auto plan = planVelox(logicalPlan);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan()
+                       .groupId({{"a"}, {"b"}}, {}, "gid")
+                       .partialAggregation({"a", "b", "gid"}, {"count(1) as c"})
+                       .shuffle()
+                       .localPartition()
+                       .finalAggregation({"a", "b", "gid"}, {"count(c) as c"})
+                       .project({"a", "b", "c", "gid"})
+                       .gather()
+                       .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+  }
+}
+
+// ORDER BY in aggregates requires single-step aggregation (partial aggregation
+// cannot preserve ORDER BY semantics), but global grouping sets require
+// partial+final. With kSingle, empty driver partitions emit spurious default
+// rows for the global set.
+TEST_F(AggregationTest, groupingSetsOrderByWithGlobalSet) {
+  testConnector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .rollup({"a"}, {"array_agg(b ORDER BY b)"}, "gid")
+                         .build();
+
+  VELOX_ASSERT_THROW(
+      planVelox(
+          logicalPlan,
+          MultiFragmentPlan::Options{.numWorkers = 4, .numDrivers = 4}),
+      "ORDER BY in aggregate functions is not supported with global grouping sets");
+}
+
+TEST_F(AggregationTest, groupingSetsDistinctAggregation) {
+  testConnector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .rollup({"a"}, {"count(DISTINCT b)"}, "gid")
+                         .build();
+
+  VELOX_ASSERT_THROW(
+      planVelox(
+          logicalPlan,
+          MultiFragmentPlan::Options{.numWorkers = 4, .numDrivers = 4}),
+      "DISTINCT aggregation with grouping sets is not supported yet");
+}
+
+// Literal-only aggregate args (count(1)) — aggregation inputs list passed to
+// GroupId should be empty since literals are not column references.
+TEST_F(AggregationTest, groupingSetsLiteralArgs) {
+  testConnector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .rollup({"a"}, {"count(1) as c"}, "gid")
+                         .build();
+
+  // Single-node plan — GroupId has empty aggregation inputs.
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan()
+                       .groupId({{"a"}, {}}, {}, "gid")
+                       .singleAggregation({"a", "gid"}, {"count(1) as c"})
+                       .project({"a", "c", "gid"})
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Distributed plan.
+  {
+    auto plan = planVelox(logicalPlan);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan()
+                       .groupId({{"a"}, {}}, {}, "gid")
+                       .partialAggregation({"a", "gid"}, {"count(1) as c"})
+                       .shuffle()
+                       .localPartition()
+                       .finalAggregation({"a", "gid"}, {"count(c) as c"})
+                       .project({"a", "c", "gid"})
+                       .gather()
+                       .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+  }
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

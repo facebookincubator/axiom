@@ -34,6 +34,12 @@ namespace facebook::axiom::optimizer {
 /// instance must stay live as long as a returned plan is live.
 class Optimization {
  public:
+  /// @param outputOrdinals If non-empty, only these ordinals of the root plan
+  ///   node are marked as payload-accessed in SubfieldTracker, enabling pruning
+  ///   of columns that OutputNode does not export (e.g. $grouping_set_id).
+  ///   When empty AND the plan root is an OutputNode, ordinals are extracted
+  ///   automatically. Callers that strip OutputNode before passing the plan
+  ///   should extract and forward ordinals explicitly.
   Optimization(
       SessionPtr session,
       const logical_plan::LogicalPlanNode& logicalPlan,
@@ -42,7 +48,8 @@ class Optimization {
       std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx,
       velox::core::ExpressionEvaluator& evaluator,
       OptimizerOptions options = {},
-      MultiFragmentPlan::Options runnerOptions = {});
+      MultiFragmentPlan::Options runnerOptions = {},
+      std::vector<int32_t> outputOrdinals = {});
 
   /// Simplified API for usage in testing and tooling.
   static PlanAndStats toVeloxPlan(

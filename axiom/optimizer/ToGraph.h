@@ -110,7 +110,8 @@ class ToGraph {
   /// Converts 'logicalPlan' to a tree of DerivedTables. Returns the root
   /// DerivedTable.
   DerivedTableP makeQueryGraph(
-      const logical_plan::LogicalPlanNode& logicalPlan);
+      const logical_plan::LogicalPlanNode& logicalPlan,
+      std::vector<int32_t> outputOrdinals = {});
 
   Name newCName(std::string_view prefix) {
     return toName(fmt::format("{}{}", prefix, ++nameCounter_));
@@ -301,6 +302,13 @@ class ToGraph {
   void translateUnion(const logical_plan::SetNode& set);
 
   void addUnnest(const logical_plan::UnnestNode& unnest);
+
+  // Creates a Column for the grouping set ID with the given name, type, and
+  // number of grouping sets.
+  ColumnCP createGroupIdColumn(
+      Name name,
+      const velox::TypePtr& type,
+      size_t numGroupingSets);
 
   AggregationPlanCP translateAggregation(
       const logical_plan::AggregateNode& aggregation);

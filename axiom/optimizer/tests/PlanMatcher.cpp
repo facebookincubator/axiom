@@ -1532,6 +1532,114 @@ class MarkDistinctMatcher : public PlanMatcherImpl<MarkDistinctNode> {
   const std::optional<std::string> markerAlias_;
 };
 
+// Matches a GroupIdNode and verifies grouping sets, aggregation inputs, and
+// group ID column name.
+class GroupIdMatcher : public PlanMatcherImpl<GroupIdNode> {
+ public:
+  explicit GroupIdMatcher(const std::shared_ptr<PlanMatcher>& matcher)
+      : PlanMatcherImpl<GroupIdNode>({matcher}) {}
+
+  GroupIdMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      std::vector<std::vector<std::string>> groupingSets,
+      std::vector<std::string> aggregationInputs,
+      const std::string& groupIdColumnAlias,
+      std::vector<std::pair<std::string, std::string>> keyAliases)
+      : PlanMatcherImpl<GroupIdNode>({matcher}),
+        groupingSets_{std::move(groupingSets)},
+        aggregationInputs_{std::move(aggregationInputs)},
+        groupIdColumnAlias_{groupIdColumnAlias},
+        keyAliases_{std::move(keyAliases)} {}
+
+  MatchResult matchDetails(
+      const GroupIdNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
+    std::unordered_map<std::string, std::string> newSymbols = symbols;
+    if (groupIdColumnAlias_.has_value()) {
+      newSymbols[groupIdColumnAlias_.value()] = plan.groupIdName();
+    }
+
+    // Propagate input→output key mappings so downstream matchers can use
+    // original column names (e.g., "a" instead of "gk3"). Skip keys that
+    // also appear as aggregate inputs — those pass through as-is.
+    std::unordered_set<std::string> aggInputNames;
+    for (const auto& input : plan.aggregationInputs()) {
+      aggInputNames.insert(input->name());
+    }
+    for (const auto& info : plan.groupingKeyInfos()) {
+      if (!aggInputNames.contains(info.input->name())) {
+        newSymbols[info.input->name()] = info.output;
+      }
+    }
+
+    // Capture explicit key aliases for keys that overlap with aggregate inputs.
+    for (const auto& [originalName, alias] : keyAliases_) {
+      for (const auto& info : plan.groupingKeyInfos()) {
+        if (info.input->name() == originalName) {
+          newSymbols[alias] = info.output;
+          break;
+        }
+      }
+    }
+
+    if (groupingSets_.has_value()) {
+      const auto& planSets = plan.groupingSets();
+
+      EXPECT_EQ(planSets.size(), groupingSets_->size());
+      AXIOM_TEST_RETURN_IF_FAILURE
+
+      for (auto i = 0; i < groupingSets_->size(); ++i) {
+        const auto& expectedSet = (*groupingSets_)[i];
+        const auto& actualSet = planSets[i];
+
+        EXPECT_EQ(actualSet.size(), expectedSet.size())
+            << "Grouping set " << i << " size mismatch";
+        AXIOM_TEST_RETURN_IF_FAILURE
+
+        for (auto j = 0; j < expectedSet.size(); ++j) {
+          // Resolve input column name → output key name via groupingKeyInfos.
+          auto expected = expectedSet[j];
+          for (const auto& info : plan.groupingKeyInfos()) {
+            if (info.input->name() == expected) {
+              expected = info.output;
+              break;
+            }
+          }
+          EXPECT_EQ(actualSet[j], expected)
+              << "Grouping set " << i << ", key " << j;
+          AXIOM_TEST_RETURN_IF_FAILURE
+        }
+      }
+    }
+
+    if (aggregationInputs_.has_value()) {
+      EXPECT_EQ(plan.aggregationInputs().size(), aggregationInputs_->size());
+      AXIOM_TEST_RETURN_IF_FAILURE
+
+      for (auto i = 0; i < aggregationInputs_->size(); ++i) {
+        auto expected = parse::DuckSqlExpressionsParser().parseExpr(
+            (*aggregationInputs_)[i]);
+        if (!symbols.empty()) {
+          expected = rewriteInputNames(expected, symbols);
+        }
+        EXPECT_EQ(
+            plan.aggregationInputs()[i]->toString(), expected->toString());
+      }
+      AXIOM_TEST_RETURN_IF_FAILURE
+    }
+
+    return MatchResult::success(std::move(newSymbols));
+  }
+
+ private:
+  const std::optional<std::vector<std::vector<std::string>>> groupingSets_;
+  const std::optional<std::vector<std::string>> aggregationInputs_;
+  const std::optional<std::string> groupIdColumnAlias_;
+  const std::vector<std::pair<std::string, std::string>> keyAliases_;
+};
 #undef AXIOM_TEST_RETURN
 #undef AXIOM_TEST_RETURN_IF_FAILURE
 #undef AXIOM_TEST_RETURN_IF_FAILURE_VOID
@@ -2024,6 +2132,21 @@ PlanMatcherBuilder& PlanMatcherBuilder::markDistinct(
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<MarkDistinctMatcher>(
       matcher_, distinctKeys, std::move(markerAlias));
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::groupId(
+    const std::vector<std::vector<std::string>>& groupingSets,
+    const std::vector<std::string>& aggregationInputs,
+    const std::string& groupIdColumnAlias,
+    const std::vector<std::pair<std::string, std::string>>& keyAliases) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<GroupIdMatcher>(
+      matcher_,
+      groupingSets,
+      aggregationInputs,
+      groupIdColumnAlias,
+      keyAliases);
   return *this;
 }
 

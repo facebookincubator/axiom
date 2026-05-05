@@ -460,21 +460,21 @@ class PlanMatcherBuilder {
       int32_t limit);
 
   /// Matches the distributed mark-distinct pattern:
-  /// shuffle → localPartition(keys) → markDistinct(keys, markerAlias).
+  /// shuffle -> localPartition(keys) -> markDistinct(keys, markerAlias).
   PlanMatcherBuilder& distributedMarkDistinct(
       const std::vector<std::string>& keys,
       const std::string& markerAlias);
 
   /// Matches the split aggregation pattern:
-  /// partialAggregation(groupingKeys, aggregates) → shuffle →
-  /// localPartition(groupingKeys) → finalAggregation.
+  /// partialAggregation(groupingKeys, aggregates) -> shuffle ->
+  /// localPartition(groupingKeys) -> finalAggregation.
   /// For empty groupingKeys, uses localGather instead of localPartition.
   PlanMatcherBuilder& splitAggregation(
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates);
 
   /// Matches the distributed single-step aggregation pattern:
-  /// shuffle → localPartition(groupingKeys) → singleAggregation(groupingKeys,
+  /// shuffle -> localPartition(groupingKeys) -> singleAggregation(groupingKeys,
   /// aggregates). For empty groupingKeys, uses localGather instead of
   /// localPartition.
   PlanMatcherBuilder& distributedSingleAggregation(
@@ -493,6 +493,14 @@ class PlanMatcherBuilder {
   PlanMatcherBuilder& markDistinct(
       const std::vector<std::string>& distinctKeys,
       std::optional<std::string> markerAlias = std::nullopt);
+
+  /// Matches a GroupId node with the specified grouping sets, aggregation
+  /// inputs, and group ID column alias.
+  PlanMatcherBuilder& groupId(
+      const std::vector<std::vector<std::string>>& groupingSets,
+      const std::vector<std::string>& aggregationInputs,
+      const std::string& groupIdColumnAlias,
+      const std::vector<std::pair<std::string, std::string>>& keyAliases = {});
 
   /// Builds and returns the constructed PlanMatcher.
   /// @throws VeloxUserError if matcher is empty.

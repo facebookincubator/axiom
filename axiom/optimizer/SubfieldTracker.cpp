@@ -205,7 +205,13 @@ void SubfieldTracker::markFieldAccessed(
     return;
   }
 
-  const auto& aggregate = agg.aggregateAt(ordinal - keys.size());
+  const auto numKeys = keys.size();
+  if (ordinal >= numKeys + agg.aggregates().size()) {
+    return;
+  }
+
+  const auto& aggregate = agg.aggregates()[ordinal - numKeys];
+
   for (auto i = 0; i < aggregate->inputs().size(); ++i) {
     const auto& aggregateInput = aggregate->inputAt(i);
     if (aggregateInput->isLambda()) {
@@ -660,6 +666,20 @@ void SubfieldTracker::markAllSubfields(
   LogicalContextSource source = {.planNode = &node};
   std::vector<Step> steps;
   for (auto i = 0; i < node.outputType()->size(); ++i) {
+    markFieldAccessed(source, i, steps, /*isControl=*/false, context);
+    VELOX_CHECK(steps.empty());
+  }
+}
+
+void SubfieldTracker::markSelectedSubfields(
+    const lp::LogicalPlanNode& node,
+    const std::vector<int32_t>& ordinals,
+    const MarkFieldsAccessedContext& context) {
+  markControl(node, context);
+
+  LogicalContextSource source = {.planNode = &node};
+  std::vector<Step> steps;
+  for (auto i : ordinals) {
     markFieldAccessed(source, i, steps, /*isControl=*/false, context);
     VELOX_CHECK(steps.empty());
   }

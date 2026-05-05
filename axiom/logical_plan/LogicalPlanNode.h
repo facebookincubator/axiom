@@ -406,6 +406,15 @@ class AggregateNode : public LogicalPlanNode {
     return aggregates_[index];
   }
 
+  /// Returns the output index of the grouping set ID column, or std::nullopt
+  /// for regular GROUP BY (no grouping sets).
+  std::optional<size_t> groupIdIndex() const {
+    if (groupingSets_.empty()) {
+      return std::nullopt;
+    }
+    return groupingKeys_.size() + aggregates_.size();
+  }
+
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
 
