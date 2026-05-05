@@ -19,6 +19,7 @@
 #include <chrono>
 #include <functional>
 #include "axiom/common/ConfigRegistry.h"
+#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/common/SessionConfig.h"
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/ToVelox.h"
@@ -99,6 +100,10 @@ struct QueryCompletionInfo {
 
   /// Wall-clock time when the query finished, excluding onComplete.
   std::chrono::system_clock::time_point endTime;
+
+  /// Per-component runtime metrics (timing, counters) collected across the
+  /// query pipeline. Populated during execution and serialized by loggers.
+  std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats;
 };
 
 /// Invoked when a query starts, before parsing.
@@ -315,12 +320,16 @@ class SqlQueryRunner {
           checkBestPlan = nullptr,
       std::shared_ptr<facebook::axiom::connector::SchemaResolver>
           schemaResolver = nullptr,
-      bool explain = false);
+      bool explain = false,
+      std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats =
+          nullptr);
 
   std::shared_ptr<facebook::axiom::runner::LocalRunner> makeLocalRunner(
       facebook::axiom::optimizer::PlanAndStats& planAndStats,
       const std::shared_ptr<facebook::velox::core::QueryCtx>& queryCtx,
-      const RunOptions& options);
+      const RunOptions& options,
+      std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats =
+          nullptr);
 
   // Runs a parsed SQL statement, writing optimize/execute timing into 'timing'
   // and the serialized Velox plan into 'planString'.
@@ -328,7 +337,9 @@ class SqlQueryRunner {
       const presto::SqlStatement& statement,
       const RunOptions& options,
       QueryTiming& timing,
-      std::string& planString);
+      std::string& planString,
+      std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats =
+          nullptr);
 
   SqlResult showSession(
       const presto::ShowSessionStatement& statement,
@@ -344,7 +355,9 @@ class SqlQueryRunner {
       QueryTiming& timing,
       std::string& planString,
       std::shared_ptr<facebook::axiom::connector::SchemaResolver>
-          schemaResolver = nullptr);
+          schemaResolver = nullptr,
+      std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats =
+          nullptr);
 
   // Wait maxWaitMicros microseconds for the LocalRunner to complete.  If
   // `maxWaitMicros <= 0` this will check if the LocalRunner is completed and

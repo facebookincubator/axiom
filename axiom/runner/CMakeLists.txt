@@ -20,6 +20,7 @@ add_library(axiom_runner_local_runner LocalRunner.cpp Runner.cpp)
 
 target_link_libraries(
   axiom_runner_local_runner
+  axiom_common
   axiom_optimizer_multifragment_plan
   axiom_connectors
   velox_common_base
