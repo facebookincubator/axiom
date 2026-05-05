@@ -146,10 +146,15 @@ std::shared_ptr<velox::core::QueryCtx> constantQueryCtx(
 std::vector<velox::RowVectorPtr> runConstantPlan(
     PlanAndStats& veloxPlan,
     velox::memory::MemoryPool* pool) {
+  auto& optimization = queryCtx()->optimization();
   auto runner = std::make_shared<runner::LocalRunner>(
       veloxPlan.plan,
       std::move(veloxPlan.finishWrite),
-      constantQueryCtx(*queryCtx()->optimization()->veloxQueryCtx()));
+      constantQueryCtx(*optimization->veloxQueryCtx()),
+      std::make_shared<runner::ConnectorSplitSourceFactory>(),
+      /*outputPool=*/nullptr,
+      /*baseSpillDirectory=*/"",
+      optimization->options().mode);
 
   std::vector<velox::RowVectorPtr> results;
   while (auto rows = runner->next()) {
