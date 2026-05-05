@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "axiom/optimizer/ToVelox.h"
+#include <folly/container/F14Set.h>
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
@@ -482,6 +483,8 @@ velox::core::TypedExprPtr tryCreateConstantInList(const Call& call) {
 
   std::vector<velox::Variant> arrayElements;
   arrayElements.reserve(args.size() - 1);
+  folly::F14FastSet<velox::Variant, velox::Variant::Hasher> seen;
+  seen.reserve(args.size() - 1);
   for (size_t i = 1; i < args.size(); ++i) {
     auto arg = args.at(i);
     VELOX_USER_CHECK(
@@ -489,7 +492,10 @@ velox::core::TypedExprPtr tryCreateConstantInList(const Call& call) {
         "All elements of the IN list must have the same type got {} and {}",
         elementType->toString(),
         arg->value().type->toString());
-    arrayElements.push_back(arg->as<Literal>()->literal());
+    auto& literal = arg->as<Literal>()->literal();
+    if (seen.insert(literal).second) {
+      arrayElements.push_back(literal);
+    }
   }
   auto arrayVector = variantToVector(
       ARRAY(elementType),
