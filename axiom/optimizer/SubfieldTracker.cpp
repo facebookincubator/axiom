@@ -652,6 +652,17 @@ void SubfieldTracker::markControl(
   }
 }
 
+std::pair<PlanSubfields, PlanSubfields> SubfieldTracker::markAll(
+    const lp::LogicalPlanNode& node,
+    const std::vector<int32_t>& outputOrdinals) && {
+  if (outputOrdinals.empty()) {
+    markAllSubfields(node, {});
+  } else {
+    markSelectedSubfields(node, outputOrdinals, {});
+  }
+  return {controlSubfields_, payloadSubfields_};
+}
+
 void SubfieldTracker::markAllSubfields(
     const lp::LogicalPlanNode& node,
     const MarkFieldsAccessedContext& context) {
@@ -660,6 +671,20 @@ void SubfieldTracker::markAllSubfields(
   LogicalContextSource source = {.planNode = &node};
   std::vector<Step> steps;
   for (auto i = 0; i < node.outputType()->size(); ++i) {
+    markFieldAccessed(source, i, steps, /*isControl=*/false, context);
+    VELOX_CHECK(steps.empty());
+  }
+}
+
+void SubfieldTracker::markSelectedSubfields(
+    const lp::LogicalPlanNode& node,
+    const std::vector<int32_t>& ordinals,
+    const MarkFieldsAccessedContext& context) {
+  markControl(node, context);
+
+  LogicalContextSource source = {.planNode = &node};
+  std::vector<Step> steps;
+  for (auto i : ordinals) {
     markFieldAccessed(source, i, steps, /*isControl=*/false, context);
     VELOX_CHECK(steps.empty());
   }

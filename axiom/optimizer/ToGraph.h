@@ -110,7 +110,8 @@ class ToGraph {
   /// Converts 'logicalPlan' to a tree of DerivedTables. Returns the root
   /// DerivedTable.
   DerivedTableP makeQueryGraph(
-      const logical_plan::LogicalPlanNode& logicalPlan);
+      const logical_plan::LogicalPlanNode& logicalPlan,
+      const std::vector<int32_t>& outputOrdinals = {});
 
   Name newCName(std::string_view prefix) {
     return toName(fmt::format("{}{}", prefix, ++nameCounter_));
