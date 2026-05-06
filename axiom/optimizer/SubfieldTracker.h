@@ -75,11 +75,14 @@ class SubfieldTracker {
 
   /// Goes over the local plan and collects all accessed columns and subfields.
   /// Reports 'control' and 'payload' columns and subfields separately.
+  ///
+  /// @param outputOrdinals If non-empty, only these ordinals of the root node
+  /// are marked as payload-accessed, enabling pruning of columns that
+  /// OutputNode does not export. When empty, all root output columns are
+  /// marked.
   std::pair<PlanSubfields, PlanSubfields> markAll(
-      const logical_plan::LogicalPlanNode& node) && {
-    markAllSubfields(node, {});
-    return {controlSubfields_, payloadSubfields_};
-  }
+      const logical_plan::LogicalPlanNode& node,
+      const std::vector<int32_t>& outputOrdinals = {}) &&;
 
   /// If 'step' applied to result of the function of 'metadata'
   /// corresponds to an argument, returns the ordinal of the argument.
@@ -136,6 +139,11 @@ class SubfieldTracker {
 
   void markAllSubfields(
       const logical_plan::LogicalPlanNode& node,
+      const MarkFieldsAccessedContext& context);
+
+  void markSelectedSubfields(
+      const logical_plan::LogicalPlanNode& node,
+      const std::vector<int32_t>& ordinals,
       const MarkFieldsAccessedContext& context);
 
   void markControl(

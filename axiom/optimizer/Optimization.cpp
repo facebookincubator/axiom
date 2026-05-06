@@ -43,7 +43,8 @@ Optimization::Optimization(
     std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx,
     velox::core::ExpressionEvaluator& evaluator,
     OptimizerOptions options,
-    MultiFragmentPlan::Options runnerOptions)
+    MultiFragmentPlan::Options runnerOptions,
+    std::vector<int32_t> outputOrdinals)
     : session_{std::move(session)},
       options_(std::move(options)),
       runnerOptions_(std::move(runnerOptions)),
@@ -63,11 +64,19 @@ Optimization::Optimization(
 
   const auto* planRoot = logicalPlan_;
   if (logicalPlan_->is(logical_plan::NodeKind::kOutput)) {
-    outputNames_ = logicalPlan_->as<logical_plan::OutputNode>()->entries();
+    const auto& entries =
+        logicalPlan_->as<logical_plan::OutputNode>()->entries();
+    outputNames_ = entries;
     planRoot = logicalPlan_->onlyInput().get();
+    if (outputOrdinals.empty()) {
+      outputOrdinals.reserve(entries.size());
+      for (const auto& entry : entries) {
+        outputOrdinals.push_back(entry.index);
+      }
+    }
   }
 
-  root_ = toGraph_.makeQueryGraph(*planRoot);
+  root_ = toGraph_.makeQueryGraph(*planRoot, outputOrdinals);
   root_->initializePlans();
 }
 

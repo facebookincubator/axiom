@@ -317,6 +317,23 @@ TEST_F(AggregationTest, repartitionForAggPartitionSubset) {
   }
 }
 
+// Columns not exported by OutputNode are pruned before addOutputRenames.
+TEST_F(AggregationTest, outputNodePrunesUnexportedColumns) {
+  testConnector_->addTable(
+      "t", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), DOUBLE()}));
+
+  auto inner = lp::PlanBuilder(makeContext()).tableScan("t").planNode();
+  auto logicalPlan = std::make_shared<lp::OutputNode>(
+      "output_0",
+      inner,
+      std::vector<lp::OutputNode::Entry>{{0, "a"}, {1, "b"}});
+
+  auto plan = toSingleNodePlan(logicalPlan);
+  ASSERT_EQ(plan->outputType()->size(), 2);
+  ASSERT_EQ(plan->outputType()->nameOf(0), "a");
+  ASSERT_EQ(plan->outputType()->nameOf(1), "b");
+}
+
 // TODO: Add tests for maybeProject() cost tracking once Project::unitCost is
 // implemented (currently 0, see the TODO in Project::Project). The
 // optimizationCost() helper is available for verifying cost differences between
