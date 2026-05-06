@@ -36,6 +36,75 @@ using namespace facebook;
 namespace axiom::collagen {
 namespace {
 
+bool isGeneratorFunction(const std::string& functionName) {
+  return functionName == "explode" || functionName == "posexplode" ||
+      functionName == "explode_outer" || functionName == "posexplode_outer";
+}
+
+bool isOuterGenerator(const std::string& functionName) {
+  return functionName == "explode_outer" || functionName == "posexplode_outer";
+}
+
+/// Extracts the generator function name from an expression (direct or aliased).
+/// Returns empty string if no generator is found.
+std::string findGeneratorFunction(
+    const spark::connect::Expression& expression) {
+  if (expression.has_unresolved_function() &&
+      isGeneratorFunction(expression.unresolved_function().function_name())) {
+    return expression.unresolved_function().function_name();
+  }
+  if (expression.has_alias() &&
+      expression.alias().expr().has_unresolved_function() &&
+      isGeneratorFunction(
+          expression.alias().expr().unresolved_function().function_name())) {
+    return expression.alias().expr().unresolved_function().function_name();
+  }
+  return "";
+}
+
+struct UnnestColumnNames {
+  std::vector<std::vector<std::string>> unnestedNames;
+  std::optional<std::string> ordinalityName;
+};
+
+// Picks the unnested column names from explode/posexplode aliases, falling
+// back to "col" (array) or ("key", "value") (map) defaults. For posexplode
+// the first alias names the ordinality column and subsequent aliases name
+// the unnested columns.
+UnnestColumnNames resolveUnnestColumnNames(
+    const std::string& generatorName,
+    const velox::TypePtr& unnestExprType,
+    const std::vector<std::string>& aliasNames) {
+  UnnestColumnNames result;
+  const bool isPosExplode = generatorName == "posexplode";
+  const size_t aliasOffset = isPosExplode ? 1 : 0;
+  if (isPosExplode) {
+    if (aliasNames.empty()) {
+      result.ordinalityName = "pos";
+    } else {
+      result.ordinalityName = aliasNames[0];
+    }
+  }
+
+  const auto aliasAt = [&](size_t index, std::string_view fallback) {
+    return index < aliasNames.size() ? aliasNames[index]
+                                     : std::string{fallback};
+  };
+
+  if (unnestExprType->isArray()) {
+    result.unnestedNames.push_back({aliasAt(aliasOffset, "col")});
+  } else if (unnestExprType->isMap()) {
+    result.unnestedNames.push_back(
+        {aliasAt(aliasOffset, "key"), aliasAt(aliasOffset + 1, "value")});
+  } else {
+    COLLAGEN_NYI(
+        "{} on type {} is not supported",
+        generatorName,
+        unnestExprType->toString());
+  }
+  return result;
+}
+
 // Tries to resolve a function signature. Returns the return type if the
 // signature was found, or throws a descriptive error message.
 velox::TypePtr resolveFunction(
@@ -170,6 +239,13 @@ void SparkToAxiom::visit(
 void SparkToAxiom::visit(
     const spark::connect::Project& project,
     SparkPlanVisitorContext& context) {
+  for (const auto& expression : project.expressions()) {
+    if (!findGeneratorFunction(expression).empty()) {
+      visitProjectWithGenerator(project, context);
+      return;
+    }
+  }
+
   // Note that we first visit the project input subtree, before visiting the
   // expressions themselves. This ensures that by the time we visit the
   // expressions, we are ready to bind attributes to the output of the current
@@ -201,6 +277,160 @@ void SparkToAxiom::visit(
   auto planNode = std::make_shared<facebook::axiom::logical_plan::ProjectNode>(
       nextId(), std::move(planNode_), std::move(exprNames), std::move(exprs));
   setPlanNode(planNode, context.planId);
+}
+
+void SparkToAxiom::visitProjectWithGenerator(
+    const spark::connect::Project& project,
+    SparkPlanVisitorContext& context) {
+  SparkPlanVisitor::visit(project.input(), context);
+
+  LOG(INFO) << "Creating unnest node from generator in project ["
+            << context.planId << "]";
+
+  const spark::connect::Expression* generatorExpr = nullptr;
+  std::string generatorName;
+  std::vector<std::string> aliasNames;
+  int generatorCount = 0;
+
+  std::vector<const spark::connect::Expression*> nonGeneratorExprs;
+
+  for (const auto& expression : project.expressions()) {
+    auto genFunc = findGeneratorFunction(expression);
+    if (!genFunc.empty()) {
+      ++generatorCount;
+      if (generatorExpr == nullptr) {
+        generatorExpr = &expression;
+        generatorName = genFunc;
+
+        if (expression.has_alias()) {
+          for (const auto& name : expression.alias().name()) {
+            aliasNames.push_back(name);
+          }
+        }
+      }
+    } else {
+      nonGeneratorExprs.push_back(&expression);
+    }
+  }
+
+  COLLAGEN_CHECK(
+      generatorExpr != nullptr,
+      "Expected generator expression in project but none found");
+
+  // Spark rejects multiple generators in a single SELECT.
+  COLLAGEN_CHECK(
+      generatorCount == 1,
+      "Only one generator allowed per select clause but found {}. "
+      "Use separate select() calls for multiple explode operations.",
+      generatorCount);
+
+  COLLAGEN_CHECK(
+      !isOuterGenerator(generatorName),
+      "{} is not supported yet. UnnestNode uses inner semantics "
+      "(rows with empty arrays/maps are dropped). Use explode/posexplode instead.",
+      generatorName);
+
+  const spark::connect::Expression::UnresolvedFunction* genFuncPtr;
+  if (generatorExpr->has_alias()) {
+    genFuncPtr = &generatorExpr->alias().expr().unresolved_function();
+  } else {
+    genFuncPtr = &generatorExpr->unresolved_function();
+  }
+
+  COLLAGEN_CHECK(
+      genFuncPtr->arguments().size() >= 1,
+      "{} requires at least 1 argument",
+      generatorName);
+
+  visit(genFuncPtr->arguments(0), context);
+  auto unnestExpr = std::move(expr_);
+
+  auto names =
+      resolveUnnestColumnNames(generatorName, unnestExpr->type(), aliasNames);
+
+  auto unnestNode = std::make_shared<facebook::axiom::logical_plan::UnnestNode>(
+      nextId(),
+      std::move(planNode_),
+      std::vector<ExprPtr>{unnestExpr},
+      std::move(names.unnestedNames),
+      std::move(names.ordinalityName));
+
+  // Always wrap with a ProjectNode. UnnestNode's output type also includes the
+  // pre-unnest input columns, but Spark's select(explode(...)) emits only the
+  // unnested columns (plus any explicitly selected pass-throughs). The
+  // wrapper also converts posexplode's 1-based ordinality to Spark's 0-based
+  // position via (pos - 1).
+  const bool isPosExplode = generatorName == "posexplode";
+  setPlanNode(
+      buildProjectAroundUnnest(
+          std::move(unnestNode), nonGeneratorExprs, isPosExplode, context),
+      context.planId);
+}
+
+SparkToAxiom::LogicalPlanNodePtr SparkToAxiom::buildProjectAroundUnnest(
+    std::shared_ptr<facebook::axiom::logical_plan::UnnestNode> unnestNode,
+    const std::vector<const spark::connect::Expression*>& nonGeneratorExprs,
+    bool isPosExplode,
+    SparkPlanVisitorContext& context) {
+  // Make the unnest node visible to nested visit() calls so non-generator
+  // expressions (typically simple field references) can be resolved against
+  // its output schema.
+  planNode_ = unnestNode;
+
+  std::vector<ExprPtr> projExprs;
+  std::vector<std::string> projNames;
+
+  for (const auto* expr : nonGeneratorExprs) {
+    visit(*expr, context);
+    auto name = std::move(exprName_);
+    if (name.empty()) {
+      name = expr_->type()->toString();
+      folly::toLowerAscii(name);
+    }
+    projNames.emplace_back(std::move(name));
+    projExprs.emplace_back(std::move(expr_));
+  }
+
+  // UnnestNode emits all input columns followed by unnested columns, with the
+  // ordinality column last when present.
+  const auto& unnestOutputType = unnestNode->outputType();
+  const auto numOutputCols = static_cast<uint32_t>(unnestOutputType->size());
+  const auto numInputCols =
+      static_cast<uint32_t>(unnestNode->onlyInput()->outputType()->size());
+  const uint32_t ordinalityIdx =
+      isPosExplode ? numOutputCols - 1 : numOutputCols;
+
+  for (uint32_t i = numInputCols; i < numOutputCols; ++i) {
+    auto colType = unnestOutputType->childAt(i);
+    std::string colName{unnestOutputType->nameOf(i)};
+    if (i == ordinalityIdx) {
+      // Convert Velox's 1-based ordinality to Spark's 0-based position by
+      // subtracting 1.
+      auto posRef =
+          std::make_shared<facebook::axiom::logical_plan::InputReferenceExpr>(
+              colType, colName);
+      auto oneConst =
+          std::make_shared<facebook::axiom::logical_plan::ConstantExpr>(
+              velox::BIGINT(),
+              std::make_shared<velox::variant>(velox::variant(int64_t{1})));
+      projExprs.emplace_back(
+          std::make_shared<facebook::axiom::logical_plan::CallExpr>(
+              colType,
+              "minus",
+              std::vector<ExprPtr>{std::move(posRef), std::move(oneConst)}));
+    } else {
+      projExprs.emplace_back(
+          std::make_shared<facebook::axiom::logical_plan::InputReferenceExpr>(
+              colType, colName));
+    }
+    projNames.emplace_back(std::move(colName));
+  }
+
+  return std::make_shared<facebook::axiom::logical_plan::ProjectNode>(
+      nextId(),
+      std::move(unnestNode),
+      std::move(projNames),
+      std::move(projExprs));
 }
 
 void SparkToAxiom::visit(

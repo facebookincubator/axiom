@@ -210,6 +210,40 @@ class SparkToAxiom : public SparkPlanVisitor {
       SparkPlanVisitorContext& context,
       std::vector<ExprPtr>& params,
       std::vector<facebook::velox::TypePtr>& paramTypes);
+
+  /// Translates a Spark Connect Project containing a generator function
+  /// (explode, posexplode) into the equivalent Axiom logical plan.
+  ///
+  /// A generator like posexplode(arr) does not fit the ProjectNode shape
+  /// because it emits multiple rows per input row. The translation produces
+  /// two nodes:
+  ///   1. UnnestNode  - flattens the generator's array or map argument,
+  ///      emitting one row per element, optionally with a 1-based
+  ///      ordinality column.
+  ///   2. ProjectNode (wrapping) - drops input columns that are not in the
+  ///      SELECT list (Spark's select(explode(...)) keeps only the unnested
+  ///      columns), converts posexplode's 1-based ordinality to Spark's
+  ///      0-based position via (pos - 1), and applies user-supplied aliases.
+  ///
+  /// Spark allows at most one generator per SELECT clause and this is
+  /// enforced with COLLAGEN_CHECK. The _outer variants are not yet
+  /// supported and raise COLLAGEN_NYI until Axiom's UnnestNode exposes
+  /// outer-unnest semantics.
+  void visitProjectWithGenerator(
+      const spark::connect::Project& project,
+      SparkPlanVisitorContext& context);
+
+  /// Builds the wrapping ProjectNode for visitProjectWithGenerator. Selects
+  /// only the columns that should appear in the Project's output: any
+  /// pass-through columns from 'nonGeneratorExprs' followed by the unnested
+  /// columns (and the converted 0-based position for posexplode). Also sets
+  /// planNode_ to 'unnestNode' so non-generator expressions can be resolved
+  /// against its output schema.
+  LogicalPlanNodePtr buildProjectAroundUnnest(
+      std::shared_ptr<facebook::axiom::logical_plan::UnnestNode> unnestNode,
+      const std::vector<const spark::connect::Expression*>& nonGeneratorExprs,
+      bool isPosExplode,
+      SparkPlanVisitorContext& context);
 };
 
 } // namespace axiom::collagen
