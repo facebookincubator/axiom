@@ -590,6 +590,11 @@ TEST_F(SubqueryTest, correlatedIn) {
   // optimizer must not flip this to a right semi-project join because Velox
   // does not support null-aware right semi project join with extra filter.
   {
+    SCOPE_EXIT {
+      testConnector_->dropTableIfExists("t");
+      testConnector_->dropTableIfExists("u");
+    };
+
     // Make t small and u large so the optimizer prefers the right-hash variant.
     testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))->setStats(100, {});
     testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
@@ -615,6 +620,149 @@ TEST_F(SubqueryTest, correlatedIn) {
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
+}
+
+// Correlated IN subquery where correlation equalities differ from the IN key.
+// Correlation equalities must be moved to the join filter to satisfy Velox's
+// single-key constraint for null-aware joins.
+TEST_F(SubqueryTest, correlatedInWithCorrelationFilter) {
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+    testConnector_->dropTableIfExists("u");
+  };
+
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  testConnector_->appendData(
+      "t",
+      makeRowVector(
+          {"a", "b", "c"},
+          {
+              makeNullableFlatVector<int64_t>({1, 1, 1, std::nullopt}),
+              makeFlatVector<int64_t>({10, 20, 20, 20}),
+              makeFlatVector<int64_t>({200, 200, 999, 200}),
+          }));
+
+  testConnector_->addTable("u", ROW({"x", "y", "z"}, BIGINT()));
+  testConnector_->appendData(
+      "u",
+      makeRowVector(
+          {"x", "y", "z"},
+          {
+              makeFlatVector<int64_t>({1, 1}),
+              makeNullableFlatVector<int64_t>({std::nullopt, 20}),
+              makeFlatVector<int64_t>({200, 200}),
+          }));
+
+  // Single correlation equality.
+  {
+    auto query =
+        "SELECT t.a IN ("
+        "  SELECT u.x FROM u "
+        "  WHERE u.y = t.b"
+        ") FROM t";
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u").build(),
+                           core::JoinType::kLeftSemiProject,
+                           /*nullAware=*/true)
+                       .joinKeys("a", "x")
+                       .joinFilter("b = y")
+                       .project()
+                       .build();
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+
+    // Row 0: a=1 matches u.x, filter b=y: 10=NULL→false, 10=20→false → false.
+    // Row 1: a=1 matches u.x, filter b=y: 20=20→true → true.
+    // Row 2: a=1 matches u.x, filter b=y: 20=20→true → true.
+    // Row 3: probe key is NULL → NULL.
+    auto expected = makeRowVector(
+        {makeNullableFlatVector<bool>({false, true, true, std::nullopt})});
+    checkSame(logicalPlan, {expected});
+  }
+
+  // Two correlation equalities. Row 2 now fails because c=999 != u.z=200.
+  {
+    auto query =
+        "SELECT t.a IN ("
+        "  SELECT u.x FROM u "
+        "  WHERE u.y = t.b AND u.z = t.c"
+        ") FROM t";
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u").build(),
+                           core::JoinType::kLeftSemiProject,
+                           /*nullAware=*/true)
+                       .joinKeys("a", "x")
+                       .joinFilter("b = y AND c = z")
+                       .project()
+                       .build();
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+
+    auto expected = makeRowVector(
+        {makeNullableFlatVector<bool>({false, true, false, std::nullopt})});
+    checkSame(logicalPlan, {expected});
+  }
+}
+
+// Correlated IN subquery where the correlation equality duplicates the IN key.
+// The redundant correlation equality should be dropped, leaving only the IN
+// equality as the single null-aware join key with no filter.
+TEST_F(SubqueryTest, correlatedInWithRedundantCorrelationFilter) {
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+    testConnector_->dropTableIfExists("u");
+  };
+
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  testConnector_->appendData(
+      "t",
+      makeRowVector(
+          {"a", "b"},
+          {
+              makeNullableFlatVector<int64_t>({1, 2, std::nullopt}),
+              makeFlatVector<int64_t>({10, 20, 30}),
+          }));
+
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
+  testConnector_->appendData(
+      "u",
+      makeRowVector(
+          {"x", "y"},
+          {
+              makeFlatVector<int64_t>({1, 3}),
+              makeFlatVector<int64_t>({10, 30}),
+          }));
+
+  auto query =
+      "SELECT t.a IN ("
+      "  SELECT u.x FROM u "
+      "  WHERE u.x = t.a"
+      ") FROM t";
+  auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+  auto matcher = matchScan("t")
+                     .hashJoin(
+                         matchScan("u").build(),
+                         core::JoinType::kLeftSemiProject,
+                         /*nullAware=*/true)
+                     .joinKeys("a", "x")
+                     .project()
+                     .build();
+  auto plan = toSingleNodePlan(logicalPlan);
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  // Row 0: a=1 IN {1, 3} → true.
+  // Row 1: a=2 IN {1, 3} → false.
+  // Row 2: a=NULL → NULL.
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<bool>({true, false, std::nullopt})});
+  checkSame(logicalPlan, {expected});
 }
 
 // IN subquery where the left-side expression references multiple tables.

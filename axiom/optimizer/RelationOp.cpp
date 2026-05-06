@@ -1699,8 +1699,31 @@ void Limit::accept(
   visitor.visit(*this, context);
 }
 
+namespace {
+// Propagates distribution through UnionAll: if all inputs share the same gather
+// or hash-partition distribution, the UnionAll preserves it.
+Distribution unionAllDistribution(const RelationOpPtrVector& inputs) {
+  if (std::all_of(inputs.begin(), inputs.end(), [](const auto& input) {
+        return input->distribution().isGather();
+      })) {
+    return Distribution::gather();
+  }
+
+  const auto& first = inputs[0]->distribution();
+  if (!first.isBroadcast() && !first.isGather() &&
+      std::all_of(inputs.begin() + 1, inputs.end(), [&](const auto& input) {
+        return !input->distribution().isBroadcast() &&
+            input->distribution().isSamePartition(first);
+      })) {
+    return Distribution{first.distributionType(), first.partitionKeys()};
+  }
+
+  return Distribution{};
+}
+} // namespace
+
 UnionAll::UnionAll(RelationOpPtrVector inputsVector)
-    : RelationOp{RelType::kUnionAll, nullptr, Distribution{}, inputsVector[0]->columns()},
+    : RelationOp{RelType::kUnionAll, nullptr, unionAllDistribution(inputsVector), inputsVector[0]->columns()},
       inputs{std::move(inputsVector)} {
   cost_.inputCardinality = 0;
   for (auto& input : inputs) {
