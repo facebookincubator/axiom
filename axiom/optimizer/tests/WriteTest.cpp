@@ -25,6 +25,23 @@ namespace {
 using namespace velox;
 namespace lp = facebook::axiom::logical_plan;
 
+// Asserts that each fragment in 'plan' round-trips through serialize and
+// deserialize and produces an equivalent plan tree.
+void verifyPlanSerde(
+    const MultiFragmentPlan& plan,
+    velox::memory::MemoryPool* pool) {
+  for (const auto& fragment : plan.fragments()) {
+    SCOPED_TRACE(fragment.taskPrefix);
+    auto serialized = fragment.fragment.planNode->serialize();
+    auto deserialized =
+        velox::ISerializable::deserialize<velox::core::PlanNode>(
+            serialized, pool);
+    ASSERT_EQ(
+        fragment.fragment.planNode->toString(true, true),
+        deserialized->toString(true, true));
+  }
+}
+
 class WriteTest : public test::HiveQueriesTestBase {
  protected:
   const std::string kDefaultSchema{
@@ -32,6 +49,11 @@ class WriteTest : public test::HiveQueriesTestBase {
 
   static void SetUpTestCase() {
     test::HiveQueriesTestBase::SetUpTestCase();
+    velox::Type::registerSerDe();
+    velox::common::Filter::registerSerDe();
+    velox::core::ITypedExpr::registerSerDe();
+    velox::core::PlanNode::registerSerDe();
+    velox::connector::hive::HiveConnector::registerSerDe();
     createTpchTables(
         {velox::tpch::Table::TBL_NATION, velox::tpch::Table::TBL_LINEITEM});
   }
@@ -117,6 +139,8 @@ class WriteTest : public test::HiveQueriesTestBase {
         return;
       }
     }
+
+    verifyPlanSerde(*plan.plan, pool());
 
     auto result = runFragmentedPlan(plan);
 
