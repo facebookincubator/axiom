@@ -1715,6 +1715,9 @@ void ToGraph::addJoinColumns(
   for (auto channel : usedChannels(joinSide)) {
     const auto& name = names[channel];
     auto* expr = translateColumn(name);
+    // TODO: Remove once https://github.com/facebookincubator/axiom/issues/1325
+    // is fixed.
+    VELOX_CHECK_NOT_NULL(expr, "Null expression for join column: {}", name);
 
     // Check if we already created a column for this expression (e.g., two
     // aliases of the same source column: v AS x, v AS y).
