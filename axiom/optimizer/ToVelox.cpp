@@ -180,44 +180,6 @@ RelationOpPtr addGather(const RelationOpPtr& op) {
   return gather;
 }
 
-void checkStageWidths(const std::vector<ExecutableFragment>& stages) {
-  folly::F14FastMap<std::string, size_t> stageIndex;
-  for (size_t i = 0; i < stages.size(); ++i) {
-    stageIndex[stages[i].taskPrefix] = i;
-  }
-  for (const auto& consumer : stages) {
-    for (const auto& inputStage : consumer.inputStages) {
-      auto stageIt = stageIndex.find(inputStage.producerTaskPrefix);
-      VELOX_CHECK(
-          stageIt != stageIndex.end(),
-          "Cannot find producer stage {}",
-          inputStage.producerTaskPrefix);
-      const auto& producer = stages[stageIt->second];
-      auto* partitionedOutput =
-          dynamic_cast<const velox::core::PartitionedOutputNode*>(
-              producer.fragment.planNode.get());
-      VELOX_CHECK_NOT_NULL(
-          partitionedOutput,
-          "Expected PartitionedOutputNode at the root of producer stage {}",
-          producer.taskPrefix);
-      // Broadcast sends data to all consumer partitions regardless of
-      // consumer width.
-      if (partitionedOutput->isBroadcast()) {
-        continue;
-      }
-      // Skip width check for kSource consumers (task count determined at
-      // runtime by splits).
-      if (consumer.type == FragmentType::kSource) {
-        continue;
-      }
-      VELOX_CHECK_EQ(
-          partitionedOutput->numPartitions(),
-          consumer.width.value_or(1),
-          "Partition count mismatch between producer and consumer stage");
-    }
-  }
-}
-
 } // namespace
 
 void ToVelox::filterUpdated(BaseTableCP table) {
@@ -395,7 +357,6 @@ PlanAndStats ToVelox::toVeloxPlan(
   for (const auto& stage : stages) {
     velox::core::PlanConsistencyChecker::check(stage.fragment.planNode);
   }
-  checkStageWidths(stages);
 
   if (options.remoteOutput) {
     rootPlanNode = velox::core::PartitionedOutputNode::single(
@@ -405,8 +366,12 @@ PlanAndStats ToVelox::toVeloxPlan(
   auto finishWrite = std::move(finishWrite_);
   VELOX_DCHECK(!finishWrite_);
 
+  auto multiFragmentPlan =
+      std::make_shared<MultiFragmentPlan>(std::move(stages), options);
+  multiFragmentPlan->checkConsistency();
+
   return PlanAndStats{
-      std::make_shared<MultiFragmentPlan>(std::move(stages), options),
+      std::move(multiFragmentPlan),
       std::move(nodeHistory_),
       std::move(prediction_),
       std::move(finishWrite)};

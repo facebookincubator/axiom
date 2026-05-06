@@ -15,7 +15,11 @@
  */
 
 #include "axiom/optimizer/MultiFragmentPlan.h"
+#include "velox/core/PlanNode.h"
 #include "velox/core/TableWriteTraits.h"
+
+#include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
 
 namespace facebook::axiom::optimizer {
 
@@ -460,6 +464,166 @@ std::string MultiFragmentPlan::toSummaryString(
     }
   }
   return out.str();
+}
+
+namespace {
+
+// Checks that each fragment's type is consistent with its width and that width
+// does not exceed numWorkers.
+void checkFragmentTypes(
+    const std::vector<ExecutableFragment>& fragments,
+    int32_t numWorkers) {
+  for (const auto& fragment : fragments) {
+    const auto& width = fragment.width;
+    const auto& taskPrefix = fragment.taskPrefix;
+
+    switch (fragment.type) {
+      case FragmentType::kFixed:
+        VELOX_CHECK(
+            width.has_value(),
+            "kFixed fragment must have width set: {}",
+            taskPrefix);
+        break;
+      case FragmentType::kSingle:
+      case FragmentType::kCoordinator:
+        VELOX_CHECK(
+            !width.has_value(),
+            "{} fragment must not have width set: {}",
+            FragmentTypeName::toName(fragment.type),
+            taskPrefix);
+        break;
+      case FragmentType::kSource:
+        break;
+    }
+
+    if (width.has_value()) {
+      VELOX_CHECK_GT(
+          width.value(), 0, "Fragment width must be positive: {}", taskPrefix);
+      VELOX_CHECK_LE(
+          width.value(),
+          numWorkers,
+          "Fragment width exceeds numWorkers: {}",
+          taskPrefix);
+    }
+  }
+}
+
+// Checks producer-consumer linkage: task prefixes are non-empty and unique,
+// each InputStage references a valid ExchangeNode and an existing producer
+// whose root is a PartitionedOutputNode with matching partition count. Also
+// checks for self-links, that the last fragment is not a producer, that each
+// producer has a single consumer, and that every non-last fragment is
+// referenced.
+void checkProducerConsumerLinkage(
+    const std::vector<ExecutableFragment>& fragments) {
+  folly::F14FastMap<std::string, size_t> fragmentIndices;
+  for (size_t i = 0; i < fragments.size(); ++i) {
+    const auto& prefix = fragments[i].taskPrefix;
+    VELOX_CHECK(!prefix.empty(), "Fragment task prefix must not be empty");
+    auto [_, inserted] = fragmentIndices.emplace(prefix, i);
+    VELOX_CHECK(inserted, "Duplicate fragment task prefix: {}", prefix);
+  }
+
+  folly::F14FastSet<size_t> referencedProducers;
+
+  for (const auto& consumer : fragments) {
+    for (const auto& inputStage : consumer.inputStages) {
+      auto* consumerNode = velox::core::PlanNode::findNodeById(
+          consumer.fragment.planNode.get(), inputStage.consumerNodeId);
+      VELOX_CHECK_NOT_NULL(
+          consumerNode,
+          "Consumer node not found: {}, fragment: {}",
+          inputStage.consumerNodeId,
+          consumer.taskPrefix);
+      VELOX_CHECK_NOT_NULL(
+          dynamic_cast<const velox::core::ExchangeNode*>(consumerNode),
+          "Consumer node must be an ExchangeNode: {}, fragment: {}",
+          inputStage.consumerNodeId,
+          consumer.taskPrefix);
+
+      auto it = fragmentIndices.find(inputStage.producerTaskPrefix);
+      VELOX_CHECK(
+          it != fragmentIndices.end(),
+          "Producer fragment not found: {}, consumer: {}",
+          inputStage.producerTaskPrefix,
+          consumer.taskPrefix);
+
+      VELOX_CHECK_NE(
+          it->second,
+          fragments.size() - 1,
+          "Last fragment cannot be a producer: {}",
+          inputStage.producerTaskPrefix);
+
+      VELOX_CHECK_NE(
+          inputStage.producerTaskPrefix,
+          consumer.taskPrefix,
+          "Fragment cannot be its own producer: {}",
+          consumer.taskPrefix);
+
+      auto [_, isNew] = referencedProducers.insert(it->second);
+      VELOX_CHECK(
+          isNew,
+          "Producer fragment referenced by multiple consumers: {}",
+          inputStage.producerTaskPrefix);
+
+      const auto& producer = fragments[it->second];
+      const auto* partitionedOutput =
+          dynamic_cast<const velox::core::PartitionedOutputNode*>(
+              producer.fragment.planNode.get());
+      VELOX_CHECK_NOT_NULL(
+          partitionedOutput,
+          "Expected PartitionedOutputNode at root of producer fragment: {}",
+          producer.taskPrefix);
+
+      if (partitionedOutput->isBroadcast()) {
+        continue;
+      }
+
+      if (consumer.type == FragmentType::kSource) {
+        continue;
+      }
+
+      VELOX_CHECK_EQ(
+          partitionedOutput->numPartitions(),
+          consumer.width.value_or(1),
+          "Partition count mismatch between producer {} and consumer {}",
+          producer.taskPrefix,
+          consumer.taskPrefix);
+    }
+  }
+
+  for (size_t i = 0; i < fragments.size() - 1; ++i) {
+    VELOX_CHECK(
+        referencedProducers.contains(i),
+        "Non-last fragment must be referenced by exactly one consumer: {}",
+        fragments[i].taskPrefix);
+  }
+}
+
+// Checks that the last fragment has a type compatible with local result
+// consumption.
+void checkLastFragment(const ExecutableFragment& last, int32_t numWorkers) {
+  VELOX_CHECK(
+      last.type == FragmentType::kSingle ||
+          last.type == FragmentType::kCoordinator ||
+          (last.type == FragmentType::kSource && numWorkers == 1),
+      "Last fragment must be kSingle or kCoordinator "
+      "when remoteOutput is false (kSource allowed only with numWorkers == 1): {}",
+      last.taskPrefix);
+}
+
+} // namespace
+
+void MultiFragmentPlan::checkConsistency() const {
+  VELOX_CHECK(!fragments_.empty(), "Plan must have at least one fragment");
+
+  checkFragmentTypes(fragments_, options_.numWorkers);
+
+  checkProducerConsumerLinkage(fragments_);
+
+  if (!options_.remoteOutput) {
+    checkLastFragment(fragments_.back(), options_.numWorkers);
+  }
 }
 
 } // namespace facebook::axiom::optimizer

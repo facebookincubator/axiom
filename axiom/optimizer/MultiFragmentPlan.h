@@ -224,6 +224,10 @@ class MultiFragmentPlan {
   std::string toSummaryString(
       velox::core::PlanSummaryOptions options = {}) const;
 
+  /// Validates structural consistency of the plan. Checks fragment types,
+  /// widths, producer-consumer linkage, and partition count alignment.
+  void checkConsistency() const;
+
  private:
   const std::vector<ExecutableFragment> fragments_;
   const Options options_;

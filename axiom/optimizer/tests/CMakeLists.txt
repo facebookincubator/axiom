@@ -114,9 +114,11 @@ add_executable(
   HiveLimitQueriesTest.cpp
   HiveQueriesTest.cpp
   JoinTest.cpp
+  MultiFragmentPlanTest.cpp
   TpchDataGenerator.cpp
   PrecomputeProjectionTest.cpp
   PlanTest.cpp
+  RemoteOutputTest.cpp
   QueryGraphContextTest.cpp
   RelationOpPrinterTest.cpp
   SetTest.cpp
@@ -130,7 +132,6 @@ add_executable(
   UnnestTest.cpp
   ValuesTest.cpp
   WriteTest.cpp
-  RemoteOutputTest.cpp
 )
 
 add_test(
