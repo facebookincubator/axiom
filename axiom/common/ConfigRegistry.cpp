@@ -24,7 +24,8 @@ using velox::config::ConfigProvider;
 
 void ConfigRegistry::add(
     std::string_view prefix,
-    std::shared_ptr<ConfigProvider> provider) {
+    std::shared_ptr<ConfigProvider> provider,
+    const std::unordered_map<std::string, std::string>& configFileOverrides) {
   const auto key = std::string(prefix);
   VELOX_USER_CHECK(
       providers_.find(key) == providers_.end(),
@@ -34,6 +35,11 @@ void ConfigRegistry::add(
   folly::F14FastMap<std::string, ConfigProperty> propertyMap;
   for (auto& prop : provider->properties()) {
     auto name = prop.name;
+    // Override code default with config-file value if available.
+    auto fileIt = configFileOverrides.find(name);
+    if (fileIt != configFileOverrides.end()) {
+      prop.defaultValue = fileIt->second;
+    }
     VELOX_CHECK(
         propertyMap.emplace(name, std::move(prop)).second,
         "Duplicate config property: {}.{}",

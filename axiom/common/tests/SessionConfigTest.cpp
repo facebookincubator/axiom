@@ -169,4 +169,53 @@ TEST_F(SessionConfigTest, duplicatePrefix) {
       "Config prefix already registered");
 }
 
+TEST(ConfigRegistryTest, configFileDefaults) {
+  auto registry = std::make_shared<ConfigRegistry>();
+  registry->add(
+      "test",
+      std::make_shared<TestConfigProvider>(),
+      {{"flag_a", "false"}, {"count", "99"}});
+
+  // Verify overridden defaults via resolve().
+  auto flagResolution = registry->resolve("test.flag_a");
+  EXPECT_EQ(flagResolution.property.defaultValue, "false");
+
+  auto countResolution = registry->resolve("test.count");
+  EXPECT_EQ(countResolution.property.defaultValue, "99");
+
+  // Properties not in the config file retain their code defaults.
+  auto ratioResolution = registry->resolve("test.ratio");
+  EXPECT_EQ(ratioResolution.property.defaultValue, "0.5");
+
+  // SessionConfig sees the config-file defaults.
+  SessionConfig config(registry);
+  EXPECT_EQ(config.effectiveValue("test.flag_a"), "false");
+  EXPECT_EQ(config.effectiveValue("test.count"), "99");
+  EXPECT_EQ(config.effectiveValue("test.ratio"), "0.5");
+
+  // Session override still wins over config-file default.
+  config.set("test.flag_a", "true");
+  EXPECT_EQ(config.effectiveValue("test.flag_a"), "true");
+
+  // Reset returns to config-file default, not code default.
+  config.reset("test.flag_a");
+  EXPECT_EQ(config.effectiveValue("test.flag_a"), "false");
+
+  // effectiveValues returns config-file defaults for unset properties.
+  auto props = config.effectiveValues("test");
+  EXPECT_EQ(props["flag_a"], "false");
+  EXPECT_EQ(props["count"], "99");
+  EXPECT_EQ(props["ratio"], "0.5");
+
+  // all() shows config-file default as the default value.
+  auto entries = config.all();
+  for (const auto& entry : entries) {
+    if (entry.property.name == "flag_a") {
+      EXPECT_EQ(entry.property.defaultValue, "false");
+      EXPECT_EQ(entry.currentValue, "false");
+      EXPECT_FALSE(entry.isOverridden);
+    }
+  }
+}
+
 } // namespace

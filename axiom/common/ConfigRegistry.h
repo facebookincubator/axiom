@@ -33,9 +33,16 @@ class ConfigRegistry {
   /// to the provider's property list are not reflected. Throws if the
   /// prefix is already registered. Not thread-safe — call only during
   /// single-threaded startup before sharing the registry.
+  ///
+  /// If 'configFileOverrides' is provided, its values override the code
+  /// defaults in ConfigProperty::defaultValue for matching property names.
+  /// This enables a three-layer config cascade: code default → config file
+  /// → session override.
   void add(
       std::string_view prefix,
-      std::shared_ptr<velox::config::ConfigProvider> provider);
+      std::shared_ptr<velox::config::ConfigProvider> provider,
+      const std::unordered_map<std::string, std::string>& configFileOverrides =
+          {});
 
   /// Result of resolving a prefix-qualified property name.
   struct Resolution {
