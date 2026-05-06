@@ -789,6 +789,15 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
         "Duplicate column names in outputColumnNames");
   }
 
+  void addKey(const std::string& leftKey, const std::string& rightKey) {
+    leftKeys_.push_back(leftKey);
+    rightKeys_.push_back(rightKey);
+  }
+
+  void setFilter(const std::string& filter) {
+    filter_ = filter;
+  }
+
   MatchResult matchDetails(
       const HashJoinNode& plan,
       const std::unordered_map<std::string, std::string>& symbols)
@@ -806,6 +815,41 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
     }
 
     AXIOM_TEST_RETURN_IF_FAILURE
+
+    if (!leftKeys_.empty()) {
+      EXPECT_EQ(plan.leftKeys().size(), leftKeys_.size());
+      AXIOM_TEST_RETURN_IF_FAILURE
+
+      for (auto i = 0; i < leftKeys_.size(); ++i) {
+        auto it = symbols.find(leftKeys_[i]);
+        auto expected = it != symbols.end() ? it->second : leftKeys_[i];
+        EXPECT_EQ(plan.leftKeys()[i]->name(), expected);
+      }
+
+      EXPECT_EQ(plan.rightKeys().size(), rightKeys_.size());
+      AXIOM_TEST_RETURN_IF_FAILURE
+
+      for (auto i = 0; i < rightKeys_.size(); ++i) {
+        auto it = symbols.find(rightKeys_[i]);
+        auto expected = it != symbols.end() ? it->second : rightKeys_[i];
+        EXPECT_EQ(plan.rightKeys()[i]->name(), expected);
+      }
+
+      AXIOM_TEST_RETURN_IF_FAILURE
+    }
+
+    if (filter_.has_value()) {
+      EXPECT_NE(plan.filter(), nullptr);
+      AXIOM_TEST_RETURN_IF_FAILURE
+
+      auto expected =
+          parse::DuckSqlExpressionsParser().parseExpr(filter_.value());
+      if (!symbols.empty()) {
+        expected = rewriteInputNames(expected, symbols);
+      }
+      ExprMatcher::match(plan.filter(), expected->dropAlias());
+      AXIOM_TEST_RETURN_IF_FAILURE
+    }
 
     if (outputColumnNames_.has_value()) {
       const auto& outputType = plan.outputType();
@@ -833,6 +877,9 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
  private:
   const std::optional<JoinType> joinType_;
   const std::optional<bool> nullAware_;
+  std::vector<std::string> leftKeys_;
+  std::vector<std::string> rightKeys_;
+  std::optional<std::string> filter_;
   const std::optional<std::set<std::string>> outputColumnNames_;
 };
 
@@ -1714,6 +1761,24 @@ PlanMatcherBuilder& PlanMatcherBuilder::hashJoin(
     const std::shared_ptr<PlanMatcher>& rightMatcher) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<HashJoinMatcher>(matcher_, rightMatcher);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::joinKeys(
+    const std::string& leftKey,
+    const std::string& rightKey) {
+  auto* joinMatcher = dynamic_cast<HashJoinMatcher*>(matcher_.get());
+  VELOX_USER_CHECK_NOT_NULL(
+      joinMatcher, "joinKeys() must be called after hashJoin()");
+  joinMatcher->addKey(leftKey, rightKey);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::joinFilter(const std::string& filter) {
+  auto* joinMatcher = dynamic_cast<HashJoinMatcher*>(matcher_.get());
+  VELOX_USER_CHECK_NOT_NULL(
+      joinMatcher, "joinFilter() must be called after hashJoin()");
+  joinMatcher->setFilter(filter);
   return *this;
 }
 

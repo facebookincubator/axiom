@@ -272,6 +272,18 @@ class PlanMatcherBuilder {
       JoinType joinType,
       bool nullAware = false);
 
+  /// Adds a join key pair to the most recent hash join matcher. Must be called
+  /// immediately after hashJoin(). Can be called multiple times for multiple
+  /// key pairs. Key names support symbol rewriting.
+  PlanMatcherBuilder& joinKeys(
+      const std::string& leftKey,
+      const std::string& rightKey);
+
+  /// Sets the join filter expression on the most recent hash join matcher. Must
+  /// be called immediately after hashJoin() or joinKeys(). The filter is
+  /// specified in DuckDB SQL syntax and supports symbol rewriting.
+  PlanMatcherBuilder& joinFilter(const std::string& filter);
+
   /// Matches a HashJoin node with the specified right side matcher, join type,
   /// and expected output column names. Column names are verified as a set —
   /// order does not matter. Supports symbol rewriting from child matchers.

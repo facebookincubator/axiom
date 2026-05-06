@@ -53,3 +53,6 @@ SELECT
      WHERE b > u.a AND b > u.x AND b < v.y)
    FROM (SELECT 5 AS a, 10 AS x) u)
 FROM (SELECT 20 AS x, 30 AS y) v
+----
+-- Correlated IN subquery with correlation filter.
+SELECT t.a IN (SELECT t2.a FROM t t2 WHERE t2.b = t.b) FROM t

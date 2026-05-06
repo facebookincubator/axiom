@@ -2955,7 +2955,8 @@ ExprCP ToGraph::processCorrelatedInPredicate(
     ExprCP leftKey,
     PlanObjectCP leftTable) {
   // Correlated IN subquery: process correlation conditions and create
-  // semi-join with both correlation equalities and IN equality.
+  // semi-join with the IN equality as the sole null-aware join key and
+  // correlation equalities moved to the join filter.
   auto decorrelated =
       extractDecorrelatedJoin(functionNames_, correlatedConjuncts_, subqueryDt);
   if (leftTable) {
@@ -2971,6 +2972,24 @@ ExprCP ToGraph::processCorrelatedInPredicate(
     joinLeftTable = decorrelated.leftTables.onlyObject();
   }
 
+  // Only the IN equality should be a null-aware join key. Correlation
+  // equalities are standard WHERE clause predicates with different null
+  // semantics, so they belong in the filter. Correlation equalities that match
+  // the IN key are redundant and dropped.
+  auto inRightKey = subqueryDt->columns.front();
+  for (auto i = 0; i < decorrelated.leftKeys.size(); ++i) {
+    if (decorrelated.leftKeys[i] == leftKey &&
+        decorrelated.rightKeys[i] == inRightKey) {
+      continue;
+    }
+    decorrelated.filter.push_back(
+        make<Call>(
+            functionNames_.equality,
+            toValue(velox::BOOLEAN(), 2),
+            ExprVector{decorrelated.leftKeys[i], decorrelated.rightKeys[i]},
+            FunctionSet()));
+  }
+
   auto* edge = JoinEdge::makeExists(
       joinLeftTable,
       subqueryDt,
@@ -2979,13 +2998,8 @@ ExprCP ToGraph::processCorrelatedInPredicate(
       /*nullAwareIn=*/true);
   currentDt_->joins.push_back(edge);
 
-  // Add correlation equalities.
-  for (auto i = 0; i < decorrelated.leftKeys.size(); ++i) {
-    edge->addEquality(decorrelated.leftKeys[i], decorrelated.rightKeys[i]);
-  }
-
-  // Add IN equality.
-  edge->addEquality(leftKey, subqueryDt->columns.front());
+  // Add IN equality as the single join key.
+  edge->addEquality(leftKey, inRightKey);
 
   return markColumn;
 }
