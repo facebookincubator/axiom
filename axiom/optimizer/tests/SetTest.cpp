@@ -681,11 +681,11 @@ TEST_F(SetTest, filterOnDuplicateConstantInUnionAll) {
   auto plan = toSingleNodePlan(logicalPlan);
   AXIOM_ASSERT_PLAN(plan, buildMatcher().build());
 
-  // TODO: The distributed plan has a redundant gather since there are no
-  // table scans. Check isSingleThreadedPipeline in ToVelox.
+  // Distributed plan: all Values inputs have gather distribution, so the
+  // UnionAll also has gather distribution. No remote exchanges, single
+  // fragment, same as the single-node plan.
   auto distributedPlan = planVelox(logicalPlan);
-  AXIOM_ASSERT_DISTRIBUTED_PLAN(
-      distributedPlan.plan, buildMatcher().gather().build());
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, buildMatcher().build());
 }
 
 // Same as above but with a table column referenced twice (SELECT x as a, x as
@@ -1095,6 +1095,51 @@ TEST_F(SetTest, rowSubfieldAccessInUnionAll) {
   }
 }
 
+// UNION ALL where one leg is a constant and another contains a UNION (distinct)
+// over constants. The inner UNION skips Repartitions since all inputs are
+// Values — dedup runs locally without exchanges.
+TEST_F(SetTest, unionAllWithValuesOnlyUnionSubquery) {
+  auto logicalPlan = parseSelect(
+      "SELECT 'x'"
+      " UNION ALL"
+      " SELECT * FROM (SELECT 'a' UNION SELECT 'b') c");
+
+  // Single-node plan: inner UNION is a round-robin LocalPartition (2 sources)
+  // followed by Aggregation for dedup. No hash LocalPartition.
+  auto plan = toSingleNodePlan(logicalPlan);
+  AXIOM_ASSERT_PLAN(
+      plan,
+      matchValues()
+          .project()
+          .localPartition(
+              matchValues()
+                  .project()
+                  .localPartition(matchValues().project().build())
+                  .aggregation()
+                  .project()
+                  .build())
+          .build());
+
+  // Distributed plan: all Values inputs have gather distribution, so the
+  // UnionAll also has gather distribution. No remote exchanges, single
+  // fragment, same structure as the single-node plan plus the inner hash
+  // LocalPartition before dedup.
+  auto distributedPlan = planVelox(logicalPlan);
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      distributedPlan.plan,
+      matchValues()
+          .project()
+          .localPartition(
+              matchValues()
+                  .project()
+                  .localPartition(matchValues().project().build())
+                  .localPartition()
+                  .aggregation()
+                  .project()
+                  .build())
+          .build());
+}
+
 TEST_F(SetTest, unionAllWithDistinctWidthMismatch) {
   std::vector<std::string> widthConstrainingInputs = {
       "SELECT 1",
@@ -1112,6 +1157,58 @@ TEST_F(SetTest, unionAllWithDistinctWidthMismatch) {
             input));
     VELOX_ASSERT_THROW(planVelox(plan), "Partition count mismatch");
   }
+}
+
+// Both inner GROUP BYs shuffle on n_regionkey, so both legs have
+// hash(n_regionkey) distribution. unionAllDistribution propagates it, so the
+// outer GROUP BY needs no additional shuffle.
+TEST_F(SetTest, unionAllPreservesMatchingHashDistribution) {
+  auto logicalPlan = parseSelect(
+      "SELECT n_regionkey, SUM(cnt) FROM ("
+      "  SELECT n_regionkey, COUNT(n_name) as cnt"
+      "    FROM nation GROUP BY n_regionkey"
+      "  UNION ALL"
+      "  SELECT n_regionkey, COUNT(n_nationkey) as cnt"
+      "    FROM nation GROUP BY n_regionkey"
+      ") t GROUP BY n_regionkey");
+
+  auto distributedPlan = planVelox(logicalPlan);
+
+  // The second leg's columns are disambiguated (n_regionkey_2) because both
+  // legs scan the same table.
+  auto innerLeg = [](const std::string& key) {
+    return core::PlanMatcherBuilder()
+        .tableScan("nation")
+        .partialAggregation()
+        .shuffle({key})
+        .localPartition({key})
+        .finalAggregation();
+  };
+
+  // Outer GROUP BY: localPartition → aggregation with NO shuffle.
+  // Without hash propagation, the optimizer would add a redundant shuffle here.
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      distributedPlan.plan,
+      innerLeg("n_regionkey")
+          .localPartition(innerLeg("n_regionkey_2").project().build())
+          .localPartition({"n_regionkey"})
+          .aggregation()
+          .gather()
+          .build());
+}
+
+// All inputs are gather distribution. unionAllDistribution propagates
+// gather, so the distributed plan needs no root gather exchange.
+TEST_F(SetTest, unionAllPreservesMatchingGatherDistribution) {
+  auto logicalPlan = parseSelect("SELECT 1 UNION ALL SELECT 2");
+
+  auto distributedPlan = planVelox(logicalPlan);
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      distributedPlan.plan,
+      matchValues()
+          .project()
+          .localPartition({matchValues().project().build()})
+          .build());
 }
 
 } // namespace

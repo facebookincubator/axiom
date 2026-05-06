@@ -192,3 +192,22 @@ SELECT x[1] FROM (SELECT ROW(1, 2) AS x UNION ALL SELECT ROW(3, 4))
 -- ROW subfield access in UNION ALL with named field.
 -- duckdb: VALUES (1), (3)
 SELECT x.a FROM (SELECT ROW(1 AS a, 2 AS b) AS x UNION ALL SELECT ROW(3 AS a, 4 AS b))
+----
+-- UNION ALL with nested UNION subquery over constants.
+-- Regression test: UNION over Values skips Repartitions, avoiding a crash
+-- when the consumer fragment has width=1.
+-- duckdb: VALUES ('x'), ('a'), ('b')
+SELECT 'x'
+UNION ALL
+SELECT * FROM (SELECT 'a' UNION SELECT 'b') c
+----
+-- UNION ALL of two GROUP BYs on the same key. UNION ALL preserves the distribution so the outer
+-- GROUP BY needs no additional shuffle.
+SELECT a, SUM(cnt) FROM (
+  SELECT a, COUNT(b) as cnt FROM t GROUP BY a
+  UNION ALL
+  SELECT a, COUNT(c) as cnt FROM t GROUP BY a
+) sub GROUP BY a
+----
+-- UNION ALL of two gather distributions. No shuffle required.
+SELECT 1 UNION ALL SELECT 2
