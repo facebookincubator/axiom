@@ -43,7 +43,8 @@ Optimization::Optimization(
     std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx,
     velox::core::ExpressionEvaluator& evaluator,
     OptimizerOptions options,
-    MultiFragmentPlan::Options runnerOptions)
+    MultiFragmentPlan::Options runnerOptions,
+    std::shared_ptr<QueryRuntimeStats> runtimeStats)
     : session_{std::move(session)},
       options_(std::move(options)),
       runnerOptions_(std::move(runnerOptions)),
@@ -57,8 +58,9 @@ Optimization::Optimization(
           isSingleWorker_,
           isSingleDriver_,
           options_.alwaysPlanPartialAggregation},
-      toGraph_{schema, evaluator, options_},
-      toVelox_{session_, runnerOptions_, options_} {
+      toGraph_{schema, evaluator, options_, runtimeStats},
+      toVelox_{session_, runnerOptions_, options_},
+      runtimeStats_{std::move(runtimeStats)} {
   queryCtx()->optimization() = this;
 
   const auto* planRoot = logicalPlan_;
@@ -161,9 +163,15 @@ void Optimization::estimateAllBaseTableSelectivity(DerivedTable& dt) {
   // query context executor if available, otherwise run inline.
   auto collectTask = folly::coro::collectAllRange(std::move(tasks));
   auto* executor = veloxQueryCtx_->executor();
+  auto estimateStart = std::chrono::steady_clock::now();
   auto results = executor ? folly::coro::blockingWait(co_withExecutor(
                                 executor, std::move(collectTask)))
                           : folly::coro::blockingWait(std::move(collectTask));
+  if (runtimeStats_) {
+    runtimeStats_->recordTiming(
+        QueryRuntimeStats::kEstimateStatsWallNanos,
+        std::chrono::steady_clock::now() - estimateStart);
+  }
 
   // Apply results.
   for (auto& [baseTable, taskIndex, columnIndices] : tableTasks) {

@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/PathSet.h"
@@ -105,7 +106,8 @@ class ToGraph {
   ToGraph(
       const connector::SchemaResolver& schemaResolver,
       velox::core::ExpressionEvaluator& evaluator,
-      const OptimizerOptions& options);
+      const OptimizerOptions& options,
+      std::shared_ptr<QueryRuntimeStats> runtimeStats = nullptr);
 
   /// Converts 'logicalPlan' to a tree of DerivedTables. Returns the root
   /// DerivedTable.

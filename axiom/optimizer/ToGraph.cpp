@@ -92,8 +92,9 @@ velox::ExceptionContext makeExceptionContext(ToGraphContext* ctx) {
 ToGraph::ToGraph(
     const connector::SchemaResolver& schema,
     velox::core::ExpressionEvaluator& evaluator,
-    const OptimizerOptions& options)
-    : schema_{schema},
+    const OptimizerOptions& options,
+    std::shared_ptr<QueryRuntimeStats> runtimeStats)
+    : schema_{schema, std::move(runtimeStats)},
       evaluator_{evaluator},
       options_{options},
       functionNames_{queryCtx()->functionNames()} {

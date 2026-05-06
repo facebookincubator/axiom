@@ -910,7 +910,8 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
       queryCtx,
       evaluator,
       optimizerOptions,
-      opts);
+      opts,
+      runtimeStats);
 
   if (checkDerivedTable && !checkDerivedTable(*optimization.rootDt())) {
     return {};
