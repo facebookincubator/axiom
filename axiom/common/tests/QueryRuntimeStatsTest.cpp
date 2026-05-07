@@ -82,12 +82,14 @@ TEST(QueryRuntimeStatsTest, toDynamic) {
 
   auto parseKey = std::string(QueryRuntimeStats::kParseWallNanos);
   ASSERT_TRUE(dynamic.count(parseKey));
+  EXPECT_EQ(dynamic[parseKey]["name"].asString(), parseKey);
   EXPECT_EQ(dynamic[parseKey]["sum"].asInt(), 1000);
   EXPECT_EQ(dynamic[parseKey]["count"].asInt(), 1);
   EXPECT_EQ(dynamic[parseKey]["unit"].asString(), "NANO");
 
   auto splitsKey = std::string(QueryRuntimeStats::kGetSplitsCount);
   ASSERT_TRUE(dynamic.count(splitsKey));
+  EXPECT_EQ(dynamic[splitsKey]["name"].asString(), splitsKey);
   EXPECT_EQ(dynamic[splitsKey]["sum"].asInt(), 42);
   EXPECT_EQ(dynamic[splitsKey]["unit"].asString(), "NONE");
 }

@@ -106,6 +106,7 @@ folly::dynamic QueryRuntimeStats::toDynamic() const {
   folly::dynamic result = folly::dynamic::object();
   for (const auto& [name, metric] : metrics_) {
     folly::dynamic entry = folly::dynamic::object();
+    entry["name"] = name;
     entry["sum"] = metric.sum;
     entry["count"] = static_cast<int64_t>(metric.count);
     entry["min"] = metric.min;
