@@ -216,8 +216,18 @@ Distribution TableScan::outputDistribution(
     orderTypes.resize(numPrefix);
     replace(orderKeys, schemaColumns, columns.data());
   }
+
+  // Without bucketed execution the runner round-robins splits, so claiming a
+  // partitioned distribution would let later passes skip needed shuffles.
+  const auto* partitionType = distribution.partitionType();
+  if (!queryCtx()->optimization()->options().enableBucketedExecution &&
+      partitionType != nullptr) {
+    partitionType = nullptr;
+    partitionKeys.clear();
+  }
+
   return Distribution(
-      distribution.partitionType(),
+      partitionType,
       std::move(partitionKeys),
       std::move(orderKeys),
       std::move(orderTypes),

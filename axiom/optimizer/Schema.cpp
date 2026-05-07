@@ -350,6 +350,32 @@ bool Distribution::isSamePartition(const DesiredDistribution& other) const {
   return true;
 }
 
+bool Distribution::isCopartitionedWith(const DesiredDistribution& other) const {
+  auto* myPartType = partitionType();
+  if (myPartType != other.partitionType) {
+    if (myPartType == nullptr || other.partitionType == nullptr ||
+        myPartType->copartition(*other.partitionType) == nullptr) {
+      return false;
+    }
+  }
+
+  if (partitionKeys().size() != other.partitionKeys.size()) {
+    return false;
+  }
+
+  if (partitionKeys().empty()) {
+    return false;
+  }
+
+  for (auto i = 0; i < partitionKeys().size(); ++i) {
+    if (!partitionKeys()[i]->sameOrEqual(*other.partitionKeys[i])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 bool Distribution::isSamePartition(const Distribution& other) const {
   if (kind() != other.kind() || partitionType() != other.partitionType()) {
     return false;

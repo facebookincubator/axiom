@@ -63,6 +63,15 @@ class HivePartitionType : public connector::PartitionType {
 
   std::string toString() const override;
 
+  int32_t numPartitions() const override {
+    return numPartitions_;
+  }
+
+  SplitToWorkerFn makeSplitToWorkerFn(
+      const connector::TableLayout& layout,
+      const PartitionType& common,
+      int32_t numWorkers) const override;
+
  private:
   const int32_t numPartitions_;
   const std::vector<velox::TypePtr> partitionKeyTypes_;
@@ -127,6 +136,9 @@ class HiveTableLayout : public TableLayout {
   const PartitionType* partitionType() const override {
     return partitionType_.has_value() ? &partitionType_.value() : nullptr;
   }
+
+  int32_t splitBucket(
+      const velox::connector::ConnectorSplit& split) const override;
 
   /// Returns SerDe parameters for this layout. Default implementation returns
   /// empty map. Derived classes can override to provide actual parameters.

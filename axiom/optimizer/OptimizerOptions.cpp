@@ -77,6 +77,13 @@ std::vector<ConfigProperty> OptimizerOptions::properties() const {
           "Enable reducing semi joins.",
       },
       {
+          std::string(kEnableBucketedExecution),
+          ConfigPropertyType::kBoolean,
+          fmt::to_string(defaults.enableBucketedExecution),
+          "Skip shuffles for copartition-compatible bucketed scans; "
+          "requires runner support for per-bucket split routing.",
+      },
+      {
           std::string(kParallelProjectWidth),
           ConfigPropertyType::kInteger,
           std::to_string(defaults.parallelProjectWidth),
@@ -128,6 +135,7 @@ OptimizerOptions OptimizerOptions::from(
   setBool(kSyntacticJoinOrder, options.syntacticJoinOrder);
   setBool(kAlwaysPlanPartialAggregation, options.alwaysPlanPartialAggregation);
   setBool(kEnableReducingExistences, options.enableReducingExistences);
+  setBool(kEnableBucketedExecution, options.enableBucketedExecution);
   setInt(kParallelProjectWidth, options.parallelProjectWidth);
 
   auto setUint = [&](std::string_view key, uint32_t& field) {

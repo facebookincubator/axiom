@@ -304,6 +304,7 @@ const auto& columnStatFieldNames() {
   };
   return kNames;
 }
+
 } // namespace
 
 AXIOM_DEFINE_ENUM_NAME(ColumnStatField, columnStatFieldNames);
@@ -379,21 +380,20 @@ velox::ContinueFuture FinishWrite::abort() && noexcept {
   return metadata_->abortWrite(session_, handle_);
 }
 
-namespace {
-// Formats the header line for a fragment in toString/toSummaryString.
-std::string formatFragmentHeader(
-    int32_t index,
-    const ExecutableFragment& fragment) {
+std::string ExecutableFragment::toHeader(int32_t index) const {
+  std::string bucketedSuffix;
+  if (!splitToWorkerFns.empty()) {
+    bucketedSuffix =
+        fmt::format(" bucketed(scans={})", splitToWorkerFns.size());
+  }
   return fmt::format(
-      "Fragment {}: {} {}{}:",
+      "Fragment {}: {} {}{}{}:",
       index,
-      fragment.taskPrefix,
-      FragmentTypeName::toName(fragment.type),
-      fragment.width.has_value()
-          ? fmt::format(" numWorkers={}", fragment.width.value())
-          : "");
+      taskPrefix,
+      FragmentTypeName::toName(type),
+      width.has_value() ? fmt::format(" numWorkers={}", width.value()) : "",
+      bucketedSuffix);
 }
-} // namespace
 
 std::string MultiFragmentPlan::toString(
     bool detailed,
@@ -420,7 +420,7 @@ std::string MultiFragmentPlan::toString(
   std::stringstream out;
   for (auto i = 0; i < fragments_.size(); ++i) {
     const auto& fragment = fragments_[i];
-    out << formatFragmentHeader(i, fragment) << std::endl;
+    out << fragment.toHeader(i) << std::endl;
 
     out << fragment.fragment.planNode->toString(
                detailed,
@@ -452,7 +452,7 @@ std::string MultiFragmentPlan::toSummaryString(
   std::stringstream out;
   for (auto i = 0; i < fragments_.size(); ++i) {
     const auto& fragment = fragments_[i];
-    out << formatFragmentHeader(i, fragment) << std::endl;
+    out << fragment.toHeader(i) << std::endl;
     out << fragment.fragment.planNode->toSummaryString(options) << std::endl;
     if (!fragment.inputStages.empty()) {
       out << "Inputs: ";

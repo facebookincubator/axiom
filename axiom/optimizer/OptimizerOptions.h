@@ -43,6 +43,8 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
       "always_plan_partial_aggregation";
   static constexpr std::string_view kEnableReducingExistences =
       "enable_reducing_existences";
+  static constexpr std::string_view kEnableBucketedExecution =
+      "enable_bucketed_execution";
   static constexpr std::string_view kParallelProjectWidth =
       "parallel_project_width";
   static constexpr std::string_view kTraceFlags = "trace_flags";
@@ -93,6 +95,12 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
   /// Disable cost-based decision re: whether to split an aggregation into
   /// partial + final or not.
   bool alwaysPlanPartialAggregation{false};
+
+  /// Skip shuffles and use single-step aggregation when scans are bucketed
+  /// on the join/grouping keys. Affected fragments carry per-scan routing
+  /// closures in ExecutableFragment::splitToWorkerFns; the runner uses these
+  /// to send each split to a fixed worker. Requires runner support.
+  bool enableBucketedExecution{false};
 
   /// When true, connectors skip side effects in createTable() and
   /// beginWrite(). Used for EXPLAIN queries.
