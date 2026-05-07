@@ -1095,6 +1095,51 @@ TEST_F(SetTest, rowSubfieldAccessInUnionAll) {
   }
 }
 
+// UNION ALL where one leg is a constant and another contains a UNION (distinct)
+// over constants.
+TEST_F(SetTest, unionAllWithValuesOnlyUnionSubquery) {
+  auto logicalPlan = parseSelect(
+      "SELECT 'x'"
+      " UNION ALL"
+      " SELECT * FROM (SELECT 'a' UNION SELECT 'b')");
+
+  // Single-node plan: inner UNION is a round-robin LocalPartition (2 sources)
+  // followed by Aggregation for dedup.
+  auto plan = toSingleNodePlan(logicalPlan);
+  AXIOM_ASSERT_PLAN(
+      plan,
+      matchValues()
+          .project({"'x' as x"})
+          .localPartition(
+              matchValues()
+                  .project({"'a' as a"})
+                  .localPartition(matchValues().project({"'b'"}).build())
+                  .singleAggregation({"a"}, {})
+                  .project({"a"})
+                  .build())
+          .build());
+
+  // Distributed plan: All inputs of the inner UNION are Values
+  // (gather-distributed), so no remote exchanges before aggregation.
+  // TODO: the localPartition by 'a' added by ToVelox is redundant with
+  // localPartition of inner UNION. Remove the extra localPartition by 'a'.
+  auto distributedPlan = planVelox(logicalPlan);
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      distributedPlan.plan,
+      matchValues()
+          .project({"'x' as x"})
+          .localPartition(
+              matchValues()
+                  .project({"'a' as a"})
+                  .localPartition(matchValues().project({"'b'"}).build())
+                  .localPartition({"a"})
+                  .singleAggregation({"a"}, {})
+                  .project({"a"})
+                  .build())
+          .gather()
+          .build());
+}
+
 TEST_F(SetTest, unionAllWithDistinctWidthMismatch) {
   std::vector<std::string> widthConstrainingInputs = {
       "SELECT 1",
