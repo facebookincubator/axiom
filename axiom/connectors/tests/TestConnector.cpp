@@ -17,7 +17,9 @@
 #include "axiom/connectors/tests/TestConnector.h"
 
 #include <algorithm>
+#include <utility>
 
+#include "axiom/connectors/hive/HiveConnectorMetadata.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/tpch/gen/TpchGen.h"
 #include "velox/vector/ComplexVector.h"
@@ -87,15 +89,45 @@ TestTable::TestTable(
     const velox::RowTypePtr& schema,
     const velox::RowTypePtr& hiddenColumns,
     TestConnector* connector,
-    folly::F14FastMap<std::string, velox::Variant> options)
+    folly::F14FastMap<std::string, velox::Variant> options,
+    std::optional<TestBucketSpec> bucketSpec)
     : Table(
           std::move(name),
           makeTestTableColumns(schema, hiddenColumns, options),
           options),
-      connector_(connector) {
+      connector_(connector),
+      bucketSpec_(std::move(bucketSpec)) {
   const auto& label = this->name().table;
-  exportedLayout_ =
-      std::make_unique<TestTableLayout>(label, this, connector_, allColumns());
+  if (bucketSpec_.has_value()) {
+    std::vector<const Column*> partitionColumns;
+    std::vector<velox::TypePtr> partitionKeyTypes;
+    std::vector<velox::column_index_t> bucketChannels;
+    for (const auto& columnName : bucketSpec_->bucketColumns) {
+      auto* column = findColumn(columnName);
+      VELOX_CHECK_NOT_NULL(
+          column, "Bucket column does not exist: {}", columnName);
+      partitionColumns.push_back(column);
+      partitionKeyTypes.push_back(column->type());
+      bucketChannels.push_back(schema->getChildIdx(columnName));
+    }
+
+    auto partitionType = std::make_unique<hive::HivePartitionType>(
+        bucketSpec_->numBuckets, std::move(partitionKeyTypes));
+    partitionFunction_ =
+        partitionType->makeSpec(bucketChannels, /*constants=*/{}, false)
+            ->create(bucketSpec_->numBuckets, /*localExchange=*/false);
+
+    exportedLayout_ = std::make_unique<TestTableLayout>(
+        label,
+        this,
+        connector_,
+        allColumns(),
+        std::move(partitionColumns),
+        std::move(partitionType));
+  } else {
+    exportedLayout_ = std::make_unique<TestTableLayout>(
+        label, this, connector_, allColumns());
+  }
   layouts_.push_back(exportedLayout_.get());
   pool_ = velox::memory::memoryManager()->addLeafPool(label + "_table");
   columnTrackers_.resize(schema->size());
@@ -140,6 +172,62 @@ void TestTable::setStats(
   }
 }
 
+namespace {
+
+struct BucketedRows {
+  velox::RowVectorPtr rows;
+  int32_t bucketId;
+};
+
+std::vector<BucketedRows> splitByBucket(
+    const velox::RowVectorPtr& input,
+    velox::core::PartitionFunction& partitionFunction,
+    int32_t numBuckets,
+    velox::memory::MemoryPool* pool) {
+  std::vector<uint32_t> bucketIds;
+  if (auto single = partitionFunction.partition(*input, bucketIds);
+      single.has_value()) {
+    bucketIds.assign(input->size(), single.value());
+  }
+  VELOX_CHECK_EQ(bucketIds.size(), static_cast<size_t>(input->size()));
+
+  std::vector<std::vector<velox::vector_size_t>> indicesPerBucket(numBuckets);
+  for (velox::vector_size_t row = 0; row < input->size(); ++row) {
+    indicesPerBucket[bucketIds[row]].push_back(row);
+  }
+
+  std::vector<BucketedRows> result;
+  result.reserve(numBuckets);
+  for (int32_t bucket = 0; bucket < numBuckets; ++bucket) {
+    const auto& rows = indicesPerBucket[bucket];
+    if (rows.empty()) {
+      continue;
+    }
+    const auto rowCount = static_cast<velox::vector_size_t>(rows.size());
+    auto indices = velox::allocateIndices(rowCount, pool);
+    auto* indicesData = indices->asMutable<velox::vector_size_t>();
+    std::copy(rows.begin(), rows.end(), indicesData);
+    std::vector<velox::VectorPtr> wrappedChildren;
+    wrappedChildren.reserve(input->childrenSize());
+    for (auto& child : input->children()) {
+      wrappedChildren.push_back(
+          velox::BaseVector::wrapInDictionary(
+              /*nulls=*/nullptr, indices, rowCount, child));
+    }
+    result.push_back(
+        {std::make_shared<velox::RowVector>(
+             pool,
+             input->type(),
+             /*nulls=*/nullptr,
+             rowCount,
+             std::move(wrappedChildren)),
+         bucket});
+  }
+  return result;
+}
+
+} // namespace
+
 void TestTable::addData(
     const velox::RowVectorPtr& data,
     bool collectColumnStatistics) {
@@ -156,7 +244,16 @@ void TestTable::addData(
   VELOX_CHECK_GT(data->size(), 0, "Cannot append empty RowVector");
   auto copy = std::dynamic_pointer_cast<velox::RowVector>(
       velox::BaseVector::copy(*data, pool_.get()));
-  data_.push_back(copy);
+
+  if (partitionFunction_ != nullptr) {
+    for (auto& bucketed : splitByBucket(
+             copy, *partitionFunction_, bucketSpec_->numBuckets, pool_.get())) {
+      data_.push_back(std::move(bucketed.rows));
+      dataBucketIds_.push_back(bucketed.bucketId);
+    }
+  } else {
+    data_.push_back(copy);
+  }
   dataRows_ += data->size();
 
   if (!collectColumnStatistics) {
@@ -244,34 +341,85 @@ std::unique_ptr<ColumnStatistics> TestTable::ColumnTracker::toColumnStatistics(
 folly::coro::Task<SplitBatch> TestSplitSource::co_getSplits(
     uint32_t maxSplitCount) {
   SplitBatch batch;
-  auto end =
-      std::min(nextIndex_ + static_cast<size_t>(maxSplitCount), splitCount_);
-  for (auto i = nextIndex_; i < end; ++i) {
+  const auto end = std::min(
+      nextOffset_ + static_cast<size_t>(maxSplitCount), dataIndices_.size());
+  for (auto i = nextOffset_; i < end; ++i) {
     batch.splits.push_back(
-        std::make_shared<TestConnectorSplit>(connectorId_, i));
+        std::make_shared<TestConnectorSplit>(connectorId_, dataIndices_[i]));
   }
-  nextIndex_ = end;
-  batch.noMoreSplits = (nextIndex_ >= splitCount_);
+  nextOffset_ = end;
+  batch.noMoreSplits = (nextOffset_ >= dataIndices_.size());
   co_return batch;
 }
+
+namespace {
+
+const TestTable& findTestTableForHandle(
+    const velox::connector::ConnectorTableHandlePtr& tableHandle) {
+  auto testHandle =
+      std::dynamic_pointer_cast<const TestTableHandle>(tableHandle);
+  VELOX_CHECK(testHandle, "Expected TestTableHandle");
+  auto table = ConnectorMetadata::metadata(testHandle->connectorId())
+                   ->findTable(testHandle->schemaTableName());
+  VELOX_CHECK(table, "Table does not exist: {}", testHandle->name());
+  return dynamic_cast<const TestTable&>(*table);
+}
+
+} // namespace
 
 folly::coro::Task<std::vector<PartitionHandlePtr>>
 TestSplitManager::co_listPartitions(
     const ConnectorSessionPtr& /*session*/,
-    const velox::connector::ConnectorTableHandlePtr&) {
-  co_return std::vector<PartitionHandlePtr>{
-      std::make_shared<PartitionHandle>()};
+    const velox::connector::ConnectorTableHandlePtr& tableHandle) {
+  const auto& testTable = findTestTableForHandle(tableHandle);
+  if (!testTable.bucketSpec().has_value()) {
+    co_return std::vector<PartitionHandlePtr>{
+        std::make_shared<PartitionHandle>()};
+  }
+  const auto numBuckets = testTable.bucketSpec()->numBuckets;
+  std::vector<PartitionHandlePtr> partitions;
+  partitions.reserve(numBuckets);
+  for (int32_t bucket = 0; bucket < numBuckets; ++bucket) {
+    partitions.push_back(
+        std::make_shared<hive::HivePartitionHandle>(
+            folly::F14FastMap<std::string, std::optional<std::string>>{},
+            bucket));
+  }
+  co_return partitions;
 }
 
 std::shared_ptr<SplitSource> TestSplitManager::getSplitSource(
     const ConnectorSessionPtr& /*session*/,
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
-    const std::vector<PartitionHandlePtr>&) {
-  auto maybeTableHandle =
-      std::dynamic_pointer_cast<const TestTableHandle>(tableHandle);
-  VELOX_CHECK(maybeTableHandle, "Expected TestTableHandle");
+    const std::vector<PartitionHandlePtr>& partitions) {
+  const auto& testTable = findTestTableForHandle(tableHandle);
+
+  std::vector<size_t> dataIndices;
+  if (testTable.bucketSpec().has_value()) {
+    folly::F14FastSet<int32_t> selectedBuckets;
+    for (const auto& partition : partitions) {
+      auto hivePartition =
+          std::dynamic_pointer_cast<const hive::HivePartitionHandle>(partition);
+      VELOX_CHECK(
+          hivePartition && hivePartition->tableBucketNumber.has_value(),
+          "Bucketed scans require HivePartitionHandle with tableBucketNumber");
+      selectedBuckets.insert(hivePartition->tableBucketNumber.value());
+    }
+    const auto& bucketIds = testTable.dataBucketIds();
+    for (size_t i = 0; i < bucketIds.size(); ++i) {
+      if (selectedBuckets.contains(bucketIds[i])) {
+        dataIndices.push_back(i);
+      }
+    }
+  } else {
+    const auto numEntries = testTable.data().size();
+    dataIndices.reserve(numEntries);
+    for (size_t i = 0; i < numEntries; ++i) {
+      dataIndices.push_back(i);
+    }
+  }
   return std::make_shared<TestSplitSource>(
-      tableHandle->connectorId(), maybeTableHandle->size());
+      tableHandle->connectorId(), std::move(dataIndices));
 }
 
 std::shared_ptr<Table> TestConnectorMetadata::findTableInternal(
@@ -434,14 +582,16 @@ velox::connector::ConnectorTableHandlePtr TestTableLayout::createTableHandle(
 std::shared_ptr<TestTable> TestConnectorMetadata::addTable(
     SchemaTableName tableName,
     const velox::RowTypePtr& schema,
-    const velox::RowTypePtr& hiddenColumns) {
+    const velox::RowTypePtr& hiddenColumns,
+    std::optional<TestBucketSpec> bucketSpec) {
   schemas_.insert(tableName.schema);
   auto table = std::make_shared<TestTable>(
       tableName,
       schema,
       hiddenColumns,
       connector_,
-      folly::F14FastMap<std::string, velox::Variant>{});
+      folly::F14FastMap<std::string, velox::Variant>{},
+      std::move(bucketSpec));
   auto [it, ok] = tables_.emplace(std::move(tableName), std::move(table));
   VELOX_CHECK(ok, "Table already exists: {}", it->first.toString());
   return it->second;
@@ -695,8 +845,10 @@ std::unique_ptr<velox::connector::DataSink> TestConnector::createDataSink(
 std::shared_ptr<TestTable> TestConnector::addTable(
     SchemaTableName tableName,
     const velox::RowTypePtr& schema,
-    const velox::RowTypePtr& hiddenColumns) {
-  return metadata_->addTable(std::move(tableName), schema, hiddenColumns);
+    const velox::RowTypePtr& hiddenColumns,
+    std::optional<TestBucketSpec> bucketSpec) {
+  return metadata_->addTable(
+      std::move(tableName), schema, hiddenColumns, std::move(bucketSpec));
 }
 
 bool TestConnector::dropTableIfExists(const SchemaTableName& name) {
