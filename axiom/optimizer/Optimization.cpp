@@ -64,12 +64,30 @@ Optimization::Optimization(
   queryCtx()->optimization() = this;
 
   const auto* planRoot = logicalPlan_;
+  std::vector<int32_t> outputOrdinals;
   if (logicalPlan_->is(logical_plan::NodeKind::kOutput)) {
-    outputNames_ = logicalPlan_->as<logical_plan::OutputNode>()->entries();
+    const auto& entries =
+        logicalPlan_->as<logical_plan::OutputNode>()->entries();
+    outputNames_ = entries;
     planRoot = logicalPlan_->onlyInput().get();
+    outputOrdinals.reserve(entries.size());
+    for (const auto& entry : entries) {
+      outputOrdinals.push_back(entry.index);
+    }
+
+    // Remap outputNames_ indices to sequential positions after pruning.
+    std::sort(
+        outputNames_.begin(),
+        outputNames_.end(),
+        [](const auto& left, const auto& right) {
+          return left.index < right.index;
+        });
+    for (auto i = 0; i < outputNames_.size(); ++i) {
+      outputNames_[i].index = i;
+    }
   }
 
-  root_ = toGraph_.makeQueryGraph(*planRoot);
+  root_ = toGraph_.makeQueryGraph(*planRoot, std::move(outputOrdinals));
   root_->initializePlans();
 }
 

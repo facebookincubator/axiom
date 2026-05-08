@@ -317,6 +317,24 @@ TEST_F(AggregationTest, repartitionForAggPartitionSubset) {
   }
 }
 
+TEST_F(AggregationTest, outputNodePrunesUnexportedColumns) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+
+  auto ctx = makeContext();
+  auto scan = lp::PlanBuilder(ctx).tableScan("t").planNode();
+  auto logicalPlan = std::make_shared<lp::OutputNode>(
+      ctx.planNodeIdGenerator->next(),
+      scan,
+      std::vector<lp::OutputNode::Entry>{{0, "a"}, {2, "c"}});
+
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto matcher = matchScan("t", ROW({"a", "c"}, BIGINT())).build();
+
+  AXIOM_ASSERT_PLAN(plan, matcher);
+  VELOX_EXPECT_EQ_TYPES(plan->outputType(), ROW({"a", "c"}, BIGINT()));
+}
+
 // TODO: Add tests for maybeProject() cost tracking once Project::unitCost is
 // implemented (currently 0, see the TODO in Project::Project). The
 // optimizationCost() helper is available for verifying cost differences between

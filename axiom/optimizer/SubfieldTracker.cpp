@@ -665,6 +665,20 @@ void SubfieldTracker::markAllSubfields(
   }
 }
 
+void SubfieldTracker::markSelectedSubfields(
+    const lp::LogicalPlanNode& node,
+    const std::vector<int32_t>& ordinals,
+    const MarkFieldsAccessedContext& context) {
+  markControl(node, context);
+
+  LogicalContextSource source = {.planNode = &node};
+  std::vector<Step> steps;
+  for (auto i : ordinals) {
+    markFieldAccessed(source, i, steps, /*isControl=*/false, context);
+    VELOX_CHECK(steps.empty());
+  }
+}
+
 bool PlanSubfields::hasColumn(
     const logical_plan::LogicalPlanNode* node,
     int32_t ordinal) const {
