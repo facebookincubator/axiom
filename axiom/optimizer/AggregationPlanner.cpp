@@ -589,7 +589,18 @@ void AggregationPlanner::plan(
       return;
     }
 
-    VELOX_USER_FAIL("Distinct aggregation with FILTER is not supported");
+    // When neither GroupBy nor MarkDistinct
+    // can apply (e.g. DISTINCT with FILTER), fall back to single-step distinct
+    // aggregation.
+    auto [result, cost] = makeSingleAggregationPlan(
+        plan,
+        groupingKeys,
+        aggregates,
+        aggPlan->intermediateColumns(),
+        aggPlan->columns());
+    plan = std::move(result);
+    state.cost.add(cost);
+    return;
   }
 
   // Check if any aggregate has ORDER BY keys. If so, we must use single-step

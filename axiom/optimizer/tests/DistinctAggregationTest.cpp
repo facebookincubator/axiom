@@ -18,7 +18,6 @@
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
-#include "velox/common/base/tests/GTestUtils.h"
 
 namespace facebook::axiom::optimizer {
 namespace {
@@ -724,25 +723,205 @@ TEST_F(DistinctAggregationTest, multipleMarkDistinctWithNoShuffleInBetween) {
           .build());
 }
 
-TEST_F(DistinctAggregationTest, unsupportedAggregationOverDistinct) {
-  testConnector_->addTable(
-      "t", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), DOUBLE()}));
+TEST_F(DistinctAggregationTest, basicDistinctSingleFilter) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
   SCOPE_EXIT {
     testConnector_->dropTableIfExists("t");
   };
 
   {
     SCOPED_TRACE(
-        "DISTINCT aggregate with a filter condition is not supported yet.");
+        "Grouped: DISTINCT with FILTER falls back to basic single-step plan.");
     auto logicalPlan =
-        lp::PlanBuilder(makeContext(), /*enableCoercions=*/true)
+        lp::PlanBuilder(makeContext())
             .tableScan("t")
             .aggregate({"a"}, {"count(DISTINCT b) FILTER (WHERE c > 0)"})
             .build();
+    auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchScan("t")
+            .project({"a", "c > 0 as p0", "b"})
+            .distributedSingleAggregation(
+                {"a"}, {"count(DISTINCT b) filter (where p0)"})
+            .shuffle()
+            .build());
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(logicalPlan),
+        matchScan("t")
+            .project({"a", "c > 0 as p0", "b"})
+            .singleAggregation({"a"}, {"count(DISTINCT b) filter (where p0)"})
+            .build());
+  }
 
-    VELOX_ASSERT_THROW(
-        test::QueryTestBase::planVelox(logicalPlan),
-        "Distinct aggregation with FILTER is not supported");
+  {
+    SCOPED_TRACE(
+        "Global: DISTINCT with FILTER falls back to basic single-step plan.");
+    auto logicalPlan =
+        lp::PlanBuilder(makeContext())
+            .tableScan("t")
+            .aggregate({}, {"count(DISTINCT b) FILTER (WHERE c > 0)"})
+            .build();
+    auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchScan("t")
+            .project({"c > 0 as p0", "b"})
+            .distributedSingleAggregation(
+                {}, {"count(DISTINCT b) filter (where p0)"})
+            .build());
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(logicalPlan),
+        matchScan("t")
+            .project({"c > 0 as p0", "b"})
+            .singleAggregation({}, {"count(DISTINCT b) filter (where p0)"})
+            .build());
+  }
+}
+
+TEST_F(DistinctAggregationTest, basicDistinctMultipleFilters) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  {
+    SCOPED_TRACE(
+        "Multiple DISTINCT aggregates with different filters fall back to basic plan.");
+    auto logicalPlan = lp::PlanBuilder(makeContext())
+                           .tableScan("t")
+                           .aggregate(
+                               {"a"},
+                               {"count(DISTINCT b) FILTER (WHERE c > 0)",
+                                "sum(DISTINCT b) FILTER (WHERE c > 5)"})
+                           .build();
+    auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchScan("t")
+            .project({"a", "c > 0 as p0", "b", "c > 5 as p1"})
+            .distributedSingleAggregation(
+                {"a"},
+                {"count(DISTINCT b) filter (where p0)",
+                 "sum(DISTINCT b) filter (where p1)"})
+            .shuffle()
+            .build());
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(logicalPlan),
+        matchScan("t")
+            .project({"a", "c > 0 as p0", "b", "c > 5 as p1"})
+            .singleAggregation(
+                {"a"},
+                {"count(DISTINCT b) filter (where p0)",
+                 "sum(DISTINCT b) filter (where p1)"})
+            .build());
+  }
+}
+
+TEST_F(DistinctAggregationTest, basicDistinctMixedFilterAndNonDistinct) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  {
+    SCOPED_TRACE(
+        "Mix of DISTINCT with filter and non-DISTINCT falls back to basic plan.");
+    auto logicalPlan =
+        lp::PlanBuilder(makeContext())
+            .tableScan("t")
+            .aggregate(
+                {"a"}, {"count(DISTINCT b) FILTER (WHERE c > 0)", "avg(b)"})
+            .build();
+    auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchScan("t")
+            .project({"a", "c > 0 as p0", "b"})
+            .distributedSingleAggregation(
+                {"a"}, {"count(DISTINCT b) filter (where p0)", "avg(b)"})
+            .shuffle()
+            .build());
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(logicalPlan),
+        matchScan("t")
+            .project({"a", "c > 0 as p0", "b"})
+            .singleAggregation(
+                {"a"}, {"count(DISTINCT b) filter (where p0)", "avg(b)"})
+            .build());
+  }
+}
+
+TEST_F(DistinctAggregationTest, basicDistinctFilterWithOrderBy) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  {
+    SCOPED_TRACE(
+        "DISTINCT with FILTER and ORDER BY falls back to basic single-step plan.");
+    auto logicalPlan =
+        lp::PlanBuilder(makeContext())
+            .tableScan("t")
+            .aggregate(
+                {"a"},
+                {"array_agg(DISTINCT b ORDER BY b) FILTER (WHERE c > 0)"})
+            .build();
+    auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchScan("t")
+            .project({"a", "c > 0 as p0", "b"})
+            .distributedSingleAggregation(
+                {"a"},
+                {"array_agg(DISTINCT b ORDER BY b ASC NULLS LAST) filter (where p0)"})
+            .shuffle()
+            .build());
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(logicalPlan),
+        matchScan("t")
+            .project({"a", "c > 0 as p0", "b"})
+            .singleAggregation(
+                {"a"}, {"array_agg(DISTINCT b ORDER BY b) filter (where p0)"})
+            .build());
+  }
+}
+
+TEST_F(DistinctAggregationTest, basicDistinctMixedFilterAndNoFilter) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  {
+    SCOPED_TRACE(
+        "DISTINCT with filter + DISTINCT without filter on different columns falls back to basic plan.");
+    auto logicalPlan =
+        lp::PlanBuilder(makeContext())
+            .tableScan("t")
+            .aggregate(
+                {"a"},
+                {"count(DISTINCT b) FILTER (WHERE c > 0)", "sum(DISTINCT c)"})
+            .build();
+    auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchScan("t")
+            .project({"a", "c > 0 as p0", "b", "c"})
+            .distributedSingleAggregation(
+                {"a"},
+                {"count(DISTINCT b) filter (where p0)", "sum(DISTINCT c)"})
+            .shuffle()
+            .build());
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(logicalPlan),
+        matchScan("t")
+            .project({"a", "c > 0 as p0", "b", "c"})
+            .singleAggregation(
+                {"a"},
+                {"count(DISTINCT b) filter (where p0)", "sum(DISTINCT c)"})
+            .build());
   }
 }
 
