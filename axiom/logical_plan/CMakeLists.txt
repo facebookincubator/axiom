@@ -24,6 +24,7 @@ add_library(
 
 target_link_libraries(
   axiom_logical_plan
+  axiom_common
   velox_type
   velox_serialization
   velox_common_base

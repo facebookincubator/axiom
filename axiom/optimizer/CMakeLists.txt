@@ -62,5 +62,6 @@ target_link_libraries(
   axiom_connectors
   axiom_logical_plan
   axiom_optimizer_multifragment_plan
+  axiom_runner_local_runner
   velox_connector
 )

@@ -37,6 +37,7 @@ add_library(axiom_optimizer_tests_query_test_base QueryTestBase.cpp)
 target_link_libraries(
   axiom_optimizer_tests_query_test_base
   axiom_optimizer
+  axiom_sql_presto_parser
   axiom_test_connector
   velox_tpch_gen
   axiom_hive_connector_metadata
