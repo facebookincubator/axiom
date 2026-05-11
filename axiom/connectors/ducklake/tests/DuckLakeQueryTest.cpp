@@ -88,6 +88,10 @@ std::optional<DuckLakeCreationError> createDuckLakeTable(
       "USE lake",
       "CREATE TABLE numbers(id INTEGER, name VARCHAR)",
       "INSERT INTO numbers VALUES (1, 'one'), (2, 'two'), (3, 'three')",
+      "CREATE TABLE partitioned_numbers(id INTEGER, region VARCHAR)",
+      "ALTER TABLE partitioned_numbers SET PARTITIONED BY (region)",
+      "INSERT INTO partitioned_numbers VALUES "
+      "(1, 'US'), (2, 'EU'), (3, 'APAC'), (4, 'US')",
   };
 
   if (auto error = runDuckDb(connection, "INSTALL ducklake")) {
@@ -196,6 +200,33 @@ TEST_F(DuckLakeQueryTest, readsDataFilesThroughAxiom) {
 
 TEST_F(DuckLakeQueryTest, readsFilteredAggregatesThroughAxiom) {
   auto result = run("SELECT count(*), sum(id) FROM numbers WHERE id >= 2");
+
+  assertResultEquals(
+      result,
+      makeRowVector({
+          makeFlatVector<int64_t>({2}),
+          makeFlatVector<int64_t>({5}),
+      }));
+}
+
+TEST_F(DuckLakeQueryTest, readsIdentityPartitionedTableThroughAxiom) {
+  auto result =
+      run("SELECT region, count(*), sum(id) FROM partitioned_numbers "
+          "GROUP BY region ORDER BY region");
+
+  assertResultEquals(
+      result,
+      makeRowVector({
+          makeFlatVector<std::string>({"APAC", "EU", "US"}),
+          makeFlatVector<int64_t>({1, 1, 2}),
+          makeFlatVector<int64_t>({3, 2, 5}),
+      }));
+}
+
+TEST_F(DuckLakeQueryTest, prunesIdentityPartitionsThroughAxiom) {
+  auto result =
+      run("SELECT count(*), sum(id) FROM partitioned_numbers "
+          "WHERE region = 'US'");
 
   assertResultEquals(
       result,

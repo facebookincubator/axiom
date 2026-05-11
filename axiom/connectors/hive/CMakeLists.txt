@@ -19,6 +19,7 @@ add_library(
   LocalHiveConnectorMetadata.cpp
   LocalTableBuilder.cpp
   LocalTableMetadata.cpp
+  PartitionValue.cpp
   StatisticsBuilder.cpp
 )
 

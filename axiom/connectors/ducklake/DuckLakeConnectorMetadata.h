@@ -27,9 +27,10 @@ namespace facebook::axiom::connector::ducklake {
 
 /// Enumerates Velox scan splits for DuckLake table layouts.
 ///
-/// DuckLake tables are not exposed as Hive directory partitions. The split
-/// manager therefore returns a single logical partition and then expands the
-/// live data files from DuckLake metadata into Iceberg-compatible Hive splits.
+/// DuckLake stores partition specs and file partition values in the catalog
+/// instead of requiring partition values to appear in directory paths. The
+/// split manager reads those catalog rows, exposes matching partition handles
+/// to Axiom, and expands selected files into Iceberg-compatible Hive splits.
 class DuckLakeSplitManager : public ConnectorSplitManager {
  public:
   /// Creates a split manager backed by shared DuckLake and Iceberg state.
@@ -38,7 +39,7 @@ class DuckLakeSplitManager : public ConnectorSplitManager {
       std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>
           icebergConnector);
 
-  /// Lists the single unpartitioned DuckLake partition for a table scan.
+  /// Lists DuckLake partitions that match partition-column filters.
   folly::coro::Task<std::vector<PartitionHandlePtr>> co_listPartitions(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle) override;
@@ -73,6 +74,7 @@ class DuckLakeTableLayout : public hive::HiveTableLayout {
       std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>
           icebergConnector,
       std::vector<const Column*> columns,
+      std::vector<const Column*> hivePartitionColumns,
       std::vector<DuckLakeColumnMetadata> duckLakeColumns,
       std::vector<DuckLakeDataFile> dataFiles);
 

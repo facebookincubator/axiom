@@ -24,6 +24,7 @@
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/LocalTableMetadata.h"
+#include "axiom/connectors/hive/PartitionValue.h"
 #include "axiom/optimizer/JsonUtil.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/connectors/Connector.h"
@@ -145,34 +146,6 @@ std::vector<const FileInfo*> filterFilesByTableHandle(
     selectedFiles.push_back(file.get());
   }
   return selectedFiles;
-}
-
-// Tests a partition key value against a filter. 'value' is the string from the
-// directory name (e.g. "2" from "k=2"). 'type' determines how to convert the
-// string before testing.
-bool testPartitionValue(
-    const velox::common::Filter& filter,
-    const std::optional<std::string>& value,
-    const velox::Type& type) {
-  if (!value.has_value()) {
-    return filter.testNull();
-  }
-
-  switch (type.kind()) {
-    case velox::TypeKind::BOOLEAN:
-      return filter.testBool(folly::to<bool>(value.value()));
-    case velox::TypeKind::TINYINT:
-    case velox::TypeKind::SMALLINT:
-    case velox::TypeKind::INTEGER:
-    case velox::TypeKind::BIGINT:
-      return filter.testInt64(folly::to<int64_t>(value.value()));
-    case velox::TypeKind::VARCHAR:
-      return filter.testBytes(
-          value.value().c_str(), static_cast<int32_t>(value.value().size()));
-    default:
-      VELOX_UNREACHABLE(
-          "Unsupported partition column type: {}", type.toString());
-  }
 }
 
 // Represents a filter extracted from a filter conjunct that can be evaluated

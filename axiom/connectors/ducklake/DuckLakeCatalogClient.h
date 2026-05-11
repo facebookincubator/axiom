@@ -16,9 +16,11 @@
 
 #pragma once
 
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "axiom/common/SchemaTableName.h"
@@ -67,6 +69,40 @@ struct DuckLakeDataFile {
 
   /// Stores the first DuckLake logical row id for the file when available.
   std::optional<int64_t> rowIdStart;
+
+  /// Identifies the DuckLake partition spec used for this file when present.
+  std::optional<int64_t> partitionId;
+
+  /// Maps partition key indexes to their encoded DuckLake partition values.
+  ///
+  /// Values are stored in key-index order so split enumeration can distinguish
+  /// different partitions even when partition transforms do not map directly to
+  /// table columns.
+  std::map<int64_t, std::optional<std::string>> partitionValues;
+
+  /// Maps identity partition column names to their encoded values.
+  ///
+  /// Velox uses these values to materialize partition columns from split
+  /// metadata when the data file omits the partition column value.
+  std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
+};
+
+/// Describes a partition key defined by a DuckLake partition spec.
+struct DuckLakePartitionColumnMetadata {
+  /// Identifies the DuckLake partition spec that owns this key.
+  int64_t partitionId;
+
+  /// Orders the key within the partition tuple using 0-based indexing.
+  int64_t partitionKeyIndex;
+
+  /// Stores the source DuckLake column id referenced by this partition key.
+  int64_t columnId;
+
+  /// Stores the current visible column name for the source column.
+  std::string columnName;
+
+  /// Stores the DuckLake partition transform, such as identity or year.
+  std::string transform;
 };
 
 /// Describes the table metadata needed by Axiom planning and split generation.
@@ -97,6 +133,9 @@ struct DuckLakeTableMetadata {
 
   /// Lists the live Parquet data files for the selected snapshot.
   std::vector<DuckLakeDataFile> dataFiles;
+
+  /// Lists partition keys for partition specs visible in the selected snapshot.
+  std::vector<DuckLakePartitionColumnMetadata> partitionColumns;
 
   /// Records the table-level row count when DuckLake metadata provides it.
   uint64_t numRows{0};
