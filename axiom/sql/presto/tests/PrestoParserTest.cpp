@@ -1591,5 +1591,28 @@ TEST_F(PrestoParserTest, friendlySqlFromFirst) {
       "FROM-first syntax requires Friendly SQL mode");
 }
 
+TEST_F(PrestoParserTest, syntaxErrorHasMessageTemplate) {
+  try {
+    parseSql("SELECT * FROM WHERE");
+    ADD_FAILURE() << "Expected PrestoSqlError";
+  } catch (const PrestoSqlError& e) {
+    EXPECT_EQ(e.kind(), PrestoSqlErrorKind::kSyntax);
+    EXPECT_FALSE(std::string_view(e.messageTemplate()).empty())
+        << "ANTLR syntax errors must have a messageTemplate for Scuba grouping";
+  }
+}
+
+TEST_F(PrestoParserTest, semanticErrorHasMessageTemplate) {
+  try {
+    parseSql("SELECT * FROM nonexistent_table_xyz");
+    ADD_FAILURE() << "Expected PrestoSqlError";
+  } catch (const PrestoSqlError& e) {
+    EXPECT_EQ(e.kind(), PrestoSqlErrorKind::kSemantic);
+    EXPECT_FALSE(std::string_view(e.messageTemplate()).empty())
+        << "Semantic errors must have a messageTemplate for Scuba grouping";
+    EXPECT_EQ(std::string(e.messageTemplate()), "Table not found: {}");
+  }
+}
+
 } // namespace
 } // namespace axiom::sql::presto::test

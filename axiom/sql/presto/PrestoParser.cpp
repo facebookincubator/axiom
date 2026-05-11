@@ -141,7 +141,9 @@ class ParserHelper {
           errorListener_.firstError(),
           errorListener_.line(),
           errorListener_.column(),
-          errorListener_.token());
+          errorListener_.token(),
+          PrestoSqlErrorKind::kSyntax,
+          errorListener_.firstError());
     }
 
     return ctx->statement();
