@@ -1055,6 +1055,23 @@ void AstPrinter::visitDropSchema(DropSchema* node) {
   });
 }
 
+// ALTER TABLE Statements
+void AstPrinter::visitAddColumn(AddColumn* node) {
+  printHeader("AddColumn", node, [&](std::ostream& out) {
+    out << node->tableName()->suffix();
+    if (node->isTableExists()) {
+      out << " IF EXISTS";
+    }
+    if (node->isColumnNotExists()) {
+      out << " IF NOT EXISTS";
+    }
+  });
+
+  indent_++;
+  node->columnElement()->accept(this);
+  indent_--;
+}
+
 // DML Statements
 void AstPrinter::visitInsert(Insert* node) {
   printHeader("Insert", node, [&](std::ostream& out) {

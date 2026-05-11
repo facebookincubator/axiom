@@ -475,6 +475,15 @@ class DefaultTraversalVisitor : public AstVisitor {
     }
   }
 
+  void visitAddColumn(AddColumn* node) override {
+    if (node->tableName()) {
+      node->tableName()->accept(this);
+    }
+    if (node->columnElement()) {
+      node->columnElement()->accept(this);
+    }
+  }
+
   void visitExplain(Explain* node) override {
     if (node->statement()) {
       node->statement()->accept(this);

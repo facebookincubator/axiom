@@ -22,6 +22,8 @@
 #include <string_view>
 #include <vector>
 
+#include <folly/dynamic.h>
+
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "folly/container/F14Map.h"
 #include "velox/dwio/common/Options.h"
@@ -83,5 +85,9 @@ void writeSchemaFile(
     const std::string& tablePath,
     const velox::RowTypePtr& rowType,
     velox::dwio::common::FileFormat fileFormat);
+
+/// Builds the {"name": ..., "type": ...} JSON object used in .schema files for
+/// a single column.
+folly::dynamic columnToJson(std::string_view name, const velox::TypePtr& type);
 
 } // namespace facebook::axiom::connector::hive

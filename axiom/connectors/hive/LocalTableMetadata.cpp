@@ -220,16 +220,21 @@ void FileInfo::listFiles(
   }
 }
 
+folly::dynamic columnToJson(std::string_view name, const velox::TypePtr& type) {
+  folly::dynamic column = folly::dynamic::object;
+  column["name"] = std::string(name);
+  column["type"] = type->serialize();
+  return column;
+}
+
 void writeSchemaFile(
     const std::string& tablePath,
     const velox::RowTypePtr& rowType,
     velox::dwio::common::FileFormat fileFormat) {
   folly::dynamic dataColumns = folly::dynamic::array();
   for (auto i = 0; i < rowType->size(); ++i) {
-    folly::dynamic col = folly::dynamic::object();
-    col["name"] = rowType->nameOf(i);
-    col["type"] = rowType->childAt(i)->serialize();
-    dataColumns.push_back(col);
+    dataColumns.push_back(
+        columnToJson(rowType->nameOf(i), rowType->childAt(i)));
   }
 
   folly::dynamic schema = folly::dynamic::object;

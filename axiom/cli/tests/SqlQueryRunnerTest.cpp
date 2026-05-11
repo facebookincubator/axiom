@@ -1271,6 +1271,108 @@ TEST_F(SqlQueryRunnerTest, connectorSessionPropertyEffect) {
   }
 }
 
+TEST_F(SqlQueryRunnerTest, addColumn) {
+  auto findTable = [&]() {
+    auto metadata = facebook::axiom::connector::ConnectorMetadataRegistry::get(
+        testConnector_->connectorId());
+    return metadata->findTable({"default", "t"});
+  };
+
+  // Basic add followed by schema verification.
+  run("CREATE TABLE t(x BIGINT)");
+  auto result = run("ALTER TABLE t ADD COLUMN y VARCHAR");
+  EXPECT_EQ(result.message.value(), R"(Added column 'y' to "default"."t")");
+  VELOX_ASSERT_EQ_TYPES(
+      findTable()->type(), ROW({"x", "y"}, {BIGINT(), VARCHAR()}));
+
+  // Multiple sequential adds with complex types.
+  run("ALTER TABLE t ADD COLUMN z DOUBLE");
+  run("ALTER TABLE t ADD COLUMN w ARRAY(INTEGER)");
+  VELOX_ASSERT_EQ_TYPES(
+      findTable()->type(),
+      ROW({"x", "y", "z", "w"},
+          {BIGINT(), VARCHAR(), DOUBLE(), ARRAY(INTEGER())}));
+
+  // Duplicate column without IF NOT EXISTS throws.
+  VELOX_ASSERT_THROW(
+      run("ALTER TABLE t ADD COLUMN x INTEGER"), "already exists");
+
+  // IF NOT EXISTS is idempotent: only the name is checked, and a type mismatch
+  // is ignored.
+  result = run("ALTER TABLE t ADD COLUMN IF NOT EXISTS x VARCHAR");
+  EXPECT_EQ(
+      result.message.value(),
+      R"(Column 'x' already exists in "default"."t" (no-op))");
+  VELOX_ASSERT_EQ_TYPES(
+      findTable()->type(),
+      ROW({"x", "y", "z", "w"},
+          {BIGINT(), VARCHAR(), DOUBLE(), ARRAY(INTEGER())}));
+
+  // Without IF NOT EXISTS, ADD COLUMN still throws after an idempotent call.
+  VELOX_ASSERT_THROW(
+      run("ALTER TABLE t ADD COLUMN x VARCHAR"), "already exists");
+
+  run("DROP TABLE t");
+
+  // IF TABLE EXISTS on a missing table is a no-op.
+  result = run("ALTER TABLE IF EXISTS no_such_table ADD COLUMN y VARCHAR");
+  EXPECT_EQ(
+      result.message.value(),
+      R"(Table does not exist: test."default"."no_such_table")");
+
+  // Without IF TABLE EXISTS, ADD COLUMN on a missing table throws.
+  VELOX_ASSERT_THROW(
+      run("ALTER TABLE no_such_table ADD COLUMN y VARCHAR"),
+      "Table does not exist");
+}
+
+TEST_F(SqlQueryRunnerTest, explainAddColumn) {
+  auto findTable = [&]() {
+    auto metadata = facebook::axiom::connector::ConnectorMetadataRegistry::get(
+        testConnector_->connectorId());
+    return metadata->findTable({"default", "t"});
+  };
+
+  run("CREATE TABLE t(x BIGINT)");
+
+  auto result = run("EXPLAIN ALTER TABLE t ADD COLUMN y VARCHAR");
+  EXPECT_EQ(
+      result.message.value(),
+      R"(ALTER TABLE test."default"."t" ADD COLUMN y VARCHAR)");
+
+  // EXPLAIN must not have side effects.
+  ASSERT_NE(nullptr, findTable());
+  VELOX_ASSERT_EQ_TYPES(findTable()->type(), ROW({"x"}, {BIGINT()}));
+
+  VELOX_ASSERT_THROW(
+      run("EXPLAIN ALTER TABLE no_such_table ADD COLUMN y VARCHAR"),
+      "Table does not exist");
+
+  result =
+      run("EXPLAIN ALTER TABLE IF EXISTS no_such_table ADD COLUMN y VARCHAR");
+  EXPECT_EQ(
+      result.message.value(),
+      R"(ALTER TABLE IF EXISTS test."default"."no_such_table" ADD COLUMN y VARCHAR)");
+
+  // EXPLAIN throws when column already exists and !ifNotExists.
+  run("ALTER TABLE t ADD COLUMN dup VARCHAR");
+  VELOX_ASSERT_THROW(
+      run("EXPLAIN ALTER TABLE t ADD COLUMN dup INTEGER"),
+      "Column already exists");
+
+  // EXPLAIN with IF NOT EXISTS on existing column is a no-op (no throw).
+  result = run("EXPLAIN ALTER TABLE t ADD COLUMN IF NOT EXISTS dup INTEGER");
+  EXPECT_EQ(
+      result.message.value(),
+      R"(ALTER TABLE test."default"."t" ADD COLUMN IF NOT EXISTS dup INTEGER)");
+
+  // EXPLAIN must not have mutated the column type.
+  VELOX_EXPECT_EQ_TYPES(
+      findTable()->type(), ROW({"x", "dup"}, {BIGINT(), VARCHAR()}));
+
+  run("DROP TABLE t");
+}
+
 } // namespace
 } // namespace axiom::sql
 

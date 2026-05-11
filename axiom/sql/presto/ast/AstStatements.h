@@ -570,6 +570,48 @@ class DropSchema : public Statement {
   DropBehavior behavior_;
 };
 
+// ALTER TABLE Statements
+class AddColumn : public Statement {
+ public:
+  AddColumn(
+      NodeLocation location,
+      const std::shared_ptr<QualifiedName>& tableName,
+      const std::shared_ptr<TableElement>& column,
+      bool ifTableExists,
+      bool ifNotExists)
+      : Statement(NodeType::kAddColumn, location),
+        tableName_(tableName),
+        column_(column),
+        ifTableExists_(ifTableExists),
+        ifNotExists_(ifNotExists) {}
+
+  const std::shared_ptr<QualifiedName>& tableName() const {
+    return tableName_;
+  }
+
+  const std::shared_ptr<TableElement>& columnElement() const {
+    return column_;
+  }
+
+  ColumnDefinition* column() const;
+
+  bool isTableExists() const {
+    return ifTableExists_;
+  }
+
+  bool isColumnNotExists() const {
+    return ifNotExists_;
+  }
+
+  void accept(AstVisitor* visitor) override;
+
+ private:
+  std::shared_ptr<QualifiedName> tableName_;
+  std::shared_ptr<TableElement> column_;
+  bool ifTableExists_;
+  bool ifNotExists_;
+};
+
 // DML Statements
 class Insert : public Statement {
  public:

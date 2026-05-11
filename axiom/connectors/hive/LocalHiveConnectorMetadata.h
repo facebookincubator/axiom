@@ -313,6 +313,15 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
       bool ifExists,
       bool explain) override;
 
+  std::optional<bool> addColumn(
+      const ConnectorSessionPtr& session,
+      const SchemaTableName& tableName,
+      const std::string& columnName,
+      const velox::TypePtr& columnType,
+      bool ifTableExists,
+      bool ifNotExists,
+      bool explain) override;
+
   /// Shortcut for dropTable(session, tableName, true, false).
   bool dropTableIfExists(const SchemaTableName& tableName) {
     return dropTable(nullptr, tableName, true, /*explain=*/false);

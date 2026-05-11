@@ -233,6 +233,9 @@ class AstPrinter : public AstVisitor {
 
   void visitDropSchema(DropSchema* node) override;
 
+  // ALTER TABLE Statements
+  void visitAddColumn(AddColumn* node) override;
+
   // DML Statements
   void visitInsert(Insert* node) override;
 

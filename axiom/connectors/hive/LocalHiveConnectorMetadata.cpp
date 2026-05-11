@@ -897,17 +897,14 @@ folly::dynamic toSchemaJson(
   bool isPartition = false;
   for (auto i = 0; i < rowType->size(); ++i) {
     const auto& name = rowType->nameOf(i);
-
-    folly::dynamic column = folly::dynamic::object();
-    column["name"] = name;
-    column["type"] = rowType->childAt(i)->serialize();
+    auto column = columnToJson(name, rowType->childAt(i));
 
     if (partitionedByColumns.contains(name)) {
-      partitionColumns.push_back(column);
+      partitionColumns.push_back(std::move(column));
       isPartition = true;
     } else {
       VELOX_USER_CHECK(!isPartition, "Partitioning columns must be last");
-      dataColumns.push_back(column);
+      dataColumns.push_back(std::move(column));
     }
   }
 
@@ -1499,6 +1496,67 @@ bool LocalHiveConnectorMetadata::dropTable(
 
   deleteDirectoryRecursive(tablePath(tableName));
   return tables_.erase(tableName.table) == 1;
+}
+
+std::optional<bool> LocalHiveConnectorMetadata::addColumn(
+    const ConnectorSessionPtr& /* session */,
+    const SchemaTableName& tableName,
+    const std::string& columnName,
+    const velox::TypePtr& columnType,
+    bool ifTableExists,
+    bool ifNotExists,
+    bool explain) {
+  ensureInitialized();
+
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = tables_.find(tableName.table);
+  if (it == tables_.end()) {
+    if (ifTableExists) {
+      return std::nullopt;
+    }
+    VELOX_USER_FAIL("Table does not exist: {}", tableName);
+  }
+
+  const auto& existingTable = it->second;
+  const auto& existingType = existingTable->type();
+
+  if (existingType->containsChild(columnName)) {
+    if (ifNotExists) {
+      return false;
+    }
+    VELOX_USER_FAIL(
+        "Column already exists in table {}: {}", tableName, columnName);
+  }
+
+  if (explain) {
+    return true;
+  }
+
+  auto path = tablePath(tableName);
+  auto schemaFile = schemaPath(path);
+  VELOX_CHECK(
+      std::filesystem::exists(schemaFile),
+      "Schema file is missing for table {}: {}",
+      tableName,
+      schemaFile);
+
+  auto jsons = readConcatenatedDynamicsFromFile(schemaFile);
+  VELOX_CHECK(
+      !jsons.empty(),
+      "Schema file is empty for table {}: {}",
+      tableName,
+      schemaFile);
+
+  auto& schema = jsons[0];
+  schema["dataColumns"].push_back(columnToJson(columnName, columnType));
+
+  std::ofstream outputFile(schemaFile);
+  VELOX_CHECK(outputFile.is_open());
+  outputFile << folly::toPrettyJson(schema);
+  outputFile.close();
+
+  loadTable(tableName.table, path);
+  return true;
 }
 
 } // namespace facebook::axiom::connector::hive
