@@ -534,11 +534,11 @@ class DuckDbDuckLakeCatalogClient : public DuckLakeCatalogClient {
   std::mutex mutex_;
 };
 
-std::unique_ptr<DuckLakeCatalogClient> DuckLakeCatalogClient::create(
+std::shared_ptr<DuckLakeCatalogClient> DuckLakeCatalogClient::create(
     DuckLakeCatalogSpec spec) {
   switch (spec.backend) {
     case DuckLakeCatalogBackend::kDuckDb:
-      return std::make_unique<DuckDbDuckLakeCatalogClient>(std::move(spec));
+      return std::make_shared<DuckDbDuckLakeCatalogClient>(std::move(spec));
     case DuckLakeCatalogBackend::kSqlite:
       VELOX_USER_FAIL(
           "DuckLake SQLite catalog backend is not supported yet: {}",

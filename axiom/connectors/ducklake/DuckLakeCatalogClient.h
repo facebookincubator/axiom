@@ -116,7 +116,7 @@ class DuckLakeCatalogClient {
   ///
   /// DuckDB catalogs are opened read-only. Other parsed backends currently
   /// throw explicit user-facing errors until their clients are implemented.
-  static std::unique_ptr<DuckLakeCatalogClient> create(
+  static std::shared_ptr<DuckLakeCatalogClient> create(
       DuckLakeCatalogSpec spec);
 
   /// Lists schema names visible in the latest DuckLake snapshot.

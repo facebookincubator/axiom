@@ -205,6 +205,18 @@ TEST_F(DuckLakeQueryTest, readsFilteredAggregatesThroughAxiom) {
       }));
 }
 
+TEST_F(DuckLakeQueryTest, readsSynthesizedFileColumnsThroughAxiom) {
+  auto result =
+      run("SELECT count(*) FROM numbers "
+          "WHERE \"$path\" LIKE '%.parquet' AND \"$file_size\" > 0");
+
+  assertResultEquals(
+      result,
+      makeRowVector({
+          makeFlatVector<int64_t>({3}),
+      }));
+}
+
 TEST_F(DuckLakeQueryTest, supportsQualifiedTableName) {
   auto result = run("SELECT count(*) FROM ducklake.main.numbers");
 

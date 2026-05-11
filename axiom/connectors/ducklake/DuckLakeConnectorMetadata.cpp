@@ -38,13 +38,13 @@ constexpr uint64_t kFileBytesPerSplit{128ULL << 20U};
 
 velox::connector::hive::HiveColumnHandle::ColumnType columnType(
     const hive::HiveTableLayout& layout,
-    const Column* column) {
-  if (column->hidden()) {
+    const Column& column) {
+  if (column.hidden()) {
     return velox::connector::hive::HiveColumnHandle::ColumnType::kSynthesized;
   }
 
   for (const auto* partitionColumn : layout.hivePartitionColumns()) {
-    if (column->name() == partitionColumn->name()) {
+    if (column.name() == partitionColumn->name()) {
       return velox::connector::hive::HiveColumnHandle::ColumnType::
           kPartitionKey;
     }
@@ -87,6 +87,32 @@ std::unordered_map<std::string, std::string> infoColumns(
         std::to_string(file.fileSizeBytes.value());
   }
   return columns;
+}
+
+velox::connector::Connector* connectorPointer(
+    const std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>&
+        icebergConnector) {
+  VELOX_CHECK_NOT_NULL(icebergConnector);
+  return icebergConnector.get();
+}
+
+TablePtr makeDuckLakeTable(
+    DuckLakeTableMetadata tableMetadata,
+    const std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>&
+        icebergConnector) {
+  VELOX_CHECK_NOT_NULL(icebergConnector);
+  auto duckLakeColumns = std::move(tableMetadata.columns);
+  auto dataFiles = std::move(tableMetadata.dataFiles);
+  auto table = std::make_shared<DuckLakeTable>(std::move(tableMetadata));
+  table->addLayout(
+      std::make_unique<DuckLakeTableLayout>(
+          "ducklake",
+          table.get(),
+          icebergConnector,
+          table->allColumns(),
+          std::move(duckLakeColumns),
+          std::move(dataFiles)));
+  return table;
 }
 
 } // namespace
@@ -162,9 +188,14 @@ class DuckLakeSplitSource : public SplitSource {
   uint64_t splitsInCurrentFile_{0};
 };
 
-DuckLakeSplitManager::DuckLakeSplitManager(DuckLakeConnectorMetadata* metadata)
-    : metadata_{metadata} {
-  VELOX_CHECK_NOT_NULL(metadata_);
+DuckLakeSplitManager::DuckLakeSplitManager(
+    std::shared_ptr<DuckLakeCatalogClient> catalog,
+    std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>
+        icebergConnector)
+    : catalog_{std::move(catalog)},
+      icebergConnector_{std::move(icebergConnector)} {
+  VELOX_CHECK_NOT_NULL(catalog_);
+  VELOX_CHECK_NOT_NULL(icebergConnector_);
 }
 
 folly::coro::Task<std::vector<PartitionHandlePtr>>
@@ -191,9 +222,14 @@ std::shared_ptr<SplitSource> DuckLakeSplitManager::getSplitSource(
   const auto schema = hiveTableHandle->dbName().empty()
       ? std::string{"main"}
       : hiveTableHandle->dbName();
-  auto table = metadata_->findTable({schema, tableHandle->name()});
-  VELOX_CHECK_NOT_NULL(
-      table, "Could not find {} in its ConnectorMetadata", tableHandle->name());
+  auto tableMetadata = catalog_->loadTable({schema, tableHandle->name()});
+  VELOX_CHECK(
+      tableMetadata.has_value(),
+      "Could not find table in DuckLake catalog: {}.{}",
+      schema,
+      tableHandle->name());
+  auto table =
+      makeDuckLakeTable(std::move(tableMetadata.value()), icebergConnector_);
   auto* layout = dynamic_cast<const DuckLakeTableLayout*>(table->layouts()[0]);
   VELOX_CHECK_NOT_NULL(layout);
 
@@ -204,14 +240,15 @@ std::shared_ptr<SplitSource> DuckLakeSplitManager::getSplitSource(
 DuckLakeTableLayout::DuckLakeTableLayout(
     const std::string& label,
     const Table* table,
-    velox::connector::Connector* connector,
+    std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>
+        icebergConnector,
     std::vector<const Column*> columns,
     std::vector<DuckLakeColumnMetadata> duckLakeColumns,
     std::vector<DuckLakeDataFile> dataFiles)
     : hive::HiveTableLayout(
           label,
           table,
-          connector,
+          connectorPointer(icebergConnector),
           std::move(columns),
           std::nullopt,
           {},
@@ -220,7 +257,9 @@ DuckLakeTableLayout::DuckLakeTableLayout(
           {},
           {},
           velox::dwio::common::FileFormat::PARQUET),
+      icebergConnector_{std::move(icebergConnector)},
       dataFiles_{std::move(dataFiles)} {
+  VELOX_CHECK_NOT_NULL(icebergConnector_);
   for (const auto& column : duckLakeColumns) {
     VELOX_USER_CHECK_LE(
         column.columnId,
@@ -249,24 +288,20 @@ velox::connector::ColumnHandlePtr DuckLakeTableLayout::createColumnHandle(
   VELOX_CHECK_NOT_NULL(
       column, "Column not found: {} in table {}", columnName, table().name());
 
-  const auto handleType = columnType(*this, column);
-  if (handleType !=
+  const auto handleType = columnType(*this, *column);
+  velox::parquet::ParquetFieldId fieldId{-1, {}};
+  if (handleType ==
       velox::connector::hive::HiveColumnHandle::ColumnType::kRegular) {
-    return std::make_shared<velox::connector::hive::HiveColumnHandle>(
-        columnName,
-        handleType,
-        column->type(),
-        column->type(),
-        std::move(subfields));
+    auto it = fieldIds_.find(columnName);
+    VELOX_CHECK(
+        it != fieldIds_.end(),
+        "DuckLake column is missing field id: {}",
+        columnName);
+    fieldId = it->second;
   }
 
-  auto it = fieldIds_.find(columnName);
-  VELOX_CHECK(
-      it != fieldIds_.end(),
-      "DuckLake column is missing field id: {}",
-      columnName);
   return std::make_shared<velox::connector::hive::iceberg::IcebergColumnHandle>(
-      columnName, handleType, column->type(), it->second, std::move(subfields));
+      columnName, handleType, column->type(), fieldId, std::move(subfields));
 }
 
 DuckLakeTable::DuckLakeTable(DuckLakeTableMetadata metadata)
@@ -286,22 +321,26 @@ void DuckLakeTable::addLayout(std::unique_ptr<DuckLakeTableLayout> layout) {
 DuckLakeConnectorMetadata::DuckLakeConnectorMetadata(
     std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>
         icebergConnector)
-    : splitManager_{this}, icebergConnector_{std::move(icebergConnector)} {
+    : icebergConnector_{std::move(icebergConnector)} {
   VELOX_CHECK_NOT_NULL(icebergConnector_);
   catalog_ = DuckLakeCatalogClient::create(
       DuckLakeMetadataConfig(icebergConnector_->connectorConfig())
           .catalogSpec());
+  VELOX_CHECK_NOT_NULL(catalog_);
+  splitManager_ =
+      std::make_unique<DuckLakeSplitManager>(catalog_, icebergConnector_);
 }
 
 DuckLakeConnectorMetadata::DuckLakeConnectorMetadata(
     std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>
         icebergConnector,
-    std::unique_ptr<DuckLakeCatalogClient> catalog)
-    : splitManager_{this},
-      icebergConnector_{std::move(icebergConnector)},
+    std::shared_ptr<DuckLakeCatalogClient> catalog)
+    : icebergConnector_{std::move(icebergConnector)},
       catalog_{std::move(catalog)} {
   VELOX_CHECK_NOT_NULL(icebergConnector_);
   VELOX_CHECK_NOT_NULL(catalog_);
+  splitManager_ =
+      std::make_unique<DuckLakeSplitManager>(catalog_, icebergConnector_);
 }
 
 TablePtr DuckLakeConnectorMetadata::findTable(
@@ -327,18 +366,7 @@ bool DuckLakeConnectorMetadata::schemaExists(
 
 TablePtr DuckLakeConnectorMetadata::makeTable(
     DuckLakeTableMetadata tableMetadata) const {
-  auto duckLakeColumns = std::move(tableMetadata.columns);
-  auto dataFiles = std::move(tableMetadata.dataFiles);
-  auto table = std::make_shared<DuckLakeTable>(std::move(tableMetadata));
-  table->addLayout(
-      std::make_unique<DuckLakeTableLayout>(
-          "ducklake",
-          table.get(),
-          icebergConnector_.get(),
-          table->allColumns(),
-          std::move(duckLakeColumns),
-          std::move(dataFiles)));
-  return table;
+  return makeDuckLakeTable(std::move(tableMetadata), icebergConnector_);
 }
 
 } // namespace facebook::axiom::connector::ducklake
