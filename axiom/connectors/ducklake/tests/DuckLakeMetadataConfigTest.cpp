@@ -40,7 +40,8 @@ TEST(DuckLakeMetadataConfigTest, parsesDuckDbCatalogUrls) {
 }
 
 TEST(DuckLakeMetadataConfigTest, parsesOtherCatalogBackends) {
-  auto spec = DuckLakeCatalogSpec::parse("ducklake:sqlite:/tmp/metadata.sqlite");
+  auto spec =
+      DuckLakeCatalogSpec::parse("ducklake:sqlite:/tmp/metadata.sqlite");
 
   EXPECT_THAT(spec.backend, Eq(DuckLakeCatalogBackend::kSqlite));
   EXPECT_THAT(spec.metadataPath, Eq("/tmp/metadata.sqlite"));

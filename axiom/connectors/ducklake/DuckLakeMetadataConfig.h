@@ -25,38 +25,53 @@ class ConfigBase;
 
 namespace facebook::axiom::connector::ducklake {
 
-/// Identifies the catalog database backend encoded in a DuckLake URL.
+/// Identifies the relational database backend that stores DuckLake metadata.
 enum class DuckLakeCatalogBackend {
+  /// Uses a DuckDB database file or in-memory DuckDB database as the catalog.
   kDuckDb,
+
+  /// Uses a SQLite database as the catalog. This is parsed but not read yet.
   kSqlite,
+
+  /// Uses a PostgreSQL database as the catalog. This is parsed but not read
+  /// yet.
   kPostgres,
 };
 
-/// Describes the metadata database location from a DuckLake catalog URL.
+/// Describes the backend and location encoded in a DuckLake catalog URL.
+///
+/// Axiom accepts URLs with the `ducklake:` prefix and an optional backend
+/// prefix, for example `ducklake:metadata.ducklake` or
+/// `ducklake:duckdb:/tmp/metadata.ducklake`. When the backend prefix is
+/// omitted, DuckDB is assumed to match DuckLake's default local catalog form.
 struct DuckLakeCatalogSpec {
-  /// Selects the relational database backend that stores metadata.
+  /// Selects which relational database implementation stores catalog metadata.
   DuckLakeCatalogBackend backend;
 
-  /// Identifies the backend-specific metadata database location.
+  /// Identifies the backend-specific metadata location or connection string.
   std::string metadataPath;
 
-  /// Parses a DuckLake catalog URL such as `ducklake:metadata.ducklake`.
+  /// Parses and validates a DuckLake catalog URL.
+  ///
+  /// Throws a user-facing Velox exception when the URL is empty, does not start
+  /// with `ducklake:`, or omits the backend-specific metadata location.
   static DuckLakeCatalogSpec parse(std::string_view catalogUrl);
 };
 
-/// Reads DuckLake metadata settings from a connector configuration.
+/// Reads DuckLake connector settings from Velox connector configuration.
 class DuckLakeMetadataConfig {
  public:
-  /// DuckLake catalog URL, e.g. `ducklake:metadata.ducklake`.
+  /// Names the connector config entry containing the DuckLake catalog URL.
   static constexpr const char* kCatalogUrl = "ducklake_catalog_url";
 
+  /// Creates a config wrapper over the immutable Velox connector config.
   explicit DuckLakeMetadataConfig(
       std::shared_ptr<const velox::config::ConfigBase> config);
 
-  /// Returns the configured DuckLake catalog URL.
+  /// Returns the configured DuckLake catalog URL or an empty string if absent.
   std::string catalogUrl() const;
 
-  /// Returns the parsed DuckLake catalog location.
+  /// Parses and returns the configured DuckLake catalog backend and location.
   DuckLakeCatalogSpec catalogSpec() const;
 
  private:

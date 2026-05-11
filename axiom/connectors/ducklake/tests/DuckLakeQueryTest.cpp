@@ -26,11 +26,9 @@
 
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/SqlQueryRunner.h"
+#include "axiom/connectors/ducklake/DuckLakeCatalogSql.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
-#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
-
-using namespace facebook::velox;
 
 namespace facebook::axiom::connector::ducklake {
 namespace {
@@ -48,20 +46,6 @@ std::optional<std::string> runDuckDb(
     return result->GetError();
   }
   return std::nullopt;
-}
-
-std::string quoteSqlString(std::string_view value) {
-  std::string result{"'"};
-  result.reserve(value.size() + 2);
-  for (const auto c : value) {
-    if (c == '\'') {
-      result += "''";
-    } else {
-      result.push_back(c);
-    }
-  }
-  result.push_back('\'');
-  return result;
 }
 
 bool isDuckLakeExtensionSetupFailure(
@@ -99,7 +83,8 @@ std::optional<DuckLakeCreationError> createDuckLakeTable(
   std::vector<std::string> statements{
       fmt::format(
           "ATTACH {} AS lake (DATA_INLINING_ROW_LIMIT 0)",
-          quoteSqlString(fmt::format("ducklake:{}", catalogPath.string()))),
+          quoteDuckLakeCatalogSqlString(
+              fmt::format("ducklake:{}", catalogPath.string()))),
       "USE lake",
       "CREATE TABLE numbers(id INTEGER, name VARCHAR)",
       "INSERT INTO numbers VALUES (1, 'one'), (2, 'two'), (3, 'three')",
@@ -142,14 +127,16 @@ std::optional<DuckLakeCreationError> createDuckLakeTable(
   return std::nullopt;
 }
 
-class DuckLakeQueryTest : public ::testing::Test, public test::VectorTestBase {
+class DuckLakeQueryTest : public ::testing::Test,
+                          public facebook::velox::test::VectorTestBase {
  protected:
   static void SetUpTestSuite() {
-    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    facebook::velox::memory::MemoryManager::testingSetInstance(
+        facebook::velox::memory::MemoryManager::Options{});
   }
 
   void SetUp() override {
-    directory_ = common::testutil::TempDirectoryPath::create();
+    directory_ = facebook::velox::common::testutil::TempDirectoryPath::create();
     if (auto error = createDuckLakeTable(directory_->getPath())) {
       if (error->isEnvironmentIssue) {
         GTEST_SKIP() << "DuckLake extension is not available in Axiom-linked "
@@ -182,7 +169,16 @@ class DuckLakeQueryTest : public ::testing::Test, public test::VectorTestBase {
     return runner_->run(sql, options);
   }
 
-  std::shared_ptr<common::testutil::TempDirectoryPath> directory_;
+  void assertResultEquals(
+      const ::axiom::sql::SqlQueryRunner::SqlResult& result,
+      const facebook::velox::RowVectorPtr& expected) {
+    ASSERT_FALSE(result.message.has_value()) << result.message.value_or("");
+    ASSERT_THAT(result.results, testing::SizeIs(1));
+    facebook::velox::test::assertEqualVectors(result.results[0], expected);
+  }
+
+  std::shared_ptr<facebook::velox::common::testutil::TempDirectoryPath>
+      directory_;
   std::unique_ptr<Connectors> connectors_;
   std::unique_ptr<::axiom::sql::SqlQueryRunner> runner_;
 };
@@ -190,23 +186,30 @@ class DuckLakeQueryTest : public ::testing::Test, public test::VectorTestBase {
 TEST_F(DuckLakeQueryTest, readsDataFilesThroughAxiom) {
   auto result = run("SELECT id, name FROM numbers ORDER BY id");
 
-  ASSERT_FALSE(result.message.has_value()) << result.message.value_or("");
-  ASSERT_THAT(result.results, testing::SizeIs(1));
-  test::assertEqualVectors(
-      result.results[0],
+  assertResultEquals(
+      result,
       makeRowVector({
           makeFlatVector<int32_t>({1, 2, 3}),
           makeFlatVector<std::string>({"one", "two", "three"}),
       }));
 }
 
+TEST_F(DuckLakeQueryTest, readsFilteredAggregatesThroughAxiom) {
+  auto result = run("SELECT count(*), sum(id) FROM numbers WHERE id >= 2");
+
+  assertResultEquals(
+      result,
+      makeRowVector({
+          makeFlatVector<int64_t>({2}),
+          makeFlatVector<int64_t>({5}),
+      }));
+}
+
 TEST_F(DuckLakeQueryTest, supportsQualifiedTableName) {
   auto result = run("SELECT count(*) FROM ducklake.main.numbers");
 
-  ASSERT_FALSE(result.message.has_value()) << result.message.value_or("");
-  ASSERT_THAT(result.results, testing::SizeIs(1));
-  test::assertEqualVectors(
-      result.results[0],
+  assertResultEquals(
+      result,
       makeRowVector({
           makeFlatVector<int64_t>({3}),
       }));

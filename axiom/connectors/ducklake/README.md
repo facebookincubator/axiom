@@ -49,6 +49,25 @@ ATTACH 'ducklake:metadata.ducklake' AS lake
   (DATA_PATH 'data', DATA_INLINING_ROW_LIMIT 0);
 ```
 
+## How It Works
+
+The CLI registers the DuckLake connector with a `ducklake_catalog` URL. Axiom
+passes that URL into the connector config and registers a Velox Iceberg
+connector under the `ducklake` catalog name.
+
+At planning time, `DuckLakeCatalogClient` opens the DuckLake catalog database
+read-only and reads the latest snapshot metadata. It resolves the catalog,
+schema, table, and file paths from DuckLake metadata tables, converts top-level
+DuckLake column types to Velox types, rejects unsupported DuckLake features, and
+returns the live Parquet files for the table.
+
+`DuckLakeConnectorMetadata` turns that metadata into Axiom table and layout
+objects. The layout creates Iceberg column handles using DuckLake column ids as
+Parquet field ids, so Velox can bind file columns by stable ids. The split
+manager exposes one logical partition and expands the live DuckLake files into
+Velox Iceberg/Hive splits. The actual Parquet reads are then executed by the
+existing Velox Iceberg reader path.
+
 ## Current Scope
 
 The first implementation supports read-only scans with:

@@ -20,6 +20,7 @@
 #include <limits>
 
 #include "axiom/connectors/ducklake/DuckLakeMetadataConfig.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
@@ -32,6 +33,8 @@ template <typename T>
 T ceilDivide(T value, T divisor) {
   return (value + divisor - 1) / divisor;
 }
+
+constexpr uint64_t kFileBytesPerSplit{128ULL << 20U};
 
 velox::connector::hive::HiveColumnHandle::ColumnType columnType(
     const hive::HiveTableLayout& layout,
@@ -50,27 +53,13 @@ velox::connector::hive::HiveColumnHandle::ColumnType columnType(
   return velox::connector::hive::HiveColumnHandle::ColumnType::kRegular;
 }
 
-uint64_t splitCountForFile(
-    const DuckLakeDataFile& file,
-    const SplitOptions& options,
-    size_t numFiles) {
-  if (options.wholeFile || !file.fileSizeBytes.has_value() ||
-      file.fileSizeBytes.value() == 0) {
+uint64_t splitCountForFile(const DuckLakeDataFile& file) {
+  if (!file.fileSizeBytes.has_value() || file.fileSizeBytes.value() == 0) {
     return 1;
   }
 
-  auto splits = ceilDivide<uint64_t>(
-      file.fileSizeBytes.value(), options.fileBytesPerSplit);
-  if (options.targetSplitCount > 0 &&
-      splits * numFiles < static_cast<uint64_t>(options.targetSplitCount)) {
-    const auto perFile = ceilDivide<uint64_t>(
-        static_cast<uint64_t>(options.targetSplitCount), numFiles);
-    const auto bytesInSplit =
-        ceilDivide<uint64_t>(file.fileSizeBytes.value(), perFile);
-    splits = ceilDivide<uint64_t>(
-        file.fileSizeBytes.value(),
-        std::max<uint64_t>(bytesInSplit, 32ULL << 20U));
-  }
+  auto splits =
+      ceilDivide<uint64_t>(file.fileSizeBytes.value(), kFileBytesPerSplit);
   return std::max<uint64_t>(splits, 1);
 }
 
@@ -107,22 +96,16 @@ class DuckLakeSplitSource : public SplitSource {
  public:
   DuckLakeSplitSource(
       std::vector<DuckLakeDataFile> files,
-      std::string connectorId,
-      SplitOptions options)
-      : files_{std::move(files)},
-        connectorId_{std::move(connectorId)},
-        options_{options} {}
+      std::string connectorId)
+      : files_{std::move(files)}, connectorId_{std::move(connectorId)} {}
 
-  folly::coro::Task<SplitBatch> co_getSplits(
-      uint32_t maxSplitCount,
-      int32_t /*bucket*/) override {
+  folly::coro::Task<SplitBatch> co_getSplits(uint32_t maxSplitCount) override {
     SplitBatch batch;
     const auto limit = static_cast<size_t>(maxSplitCount);
     while (batch.splits.size() < limit && fileIndex_ < files_.size()) {
       const auto& file = files_[fileIndex_];
       if (splitIndex_ == 0) {
-        splitsInCurrentFile_ =
-            splitCountForFile(file, options_, files_.size());
+        splitsInCurrentFile_ = splitCountForFile(file);
       }
 
       const auto splitSize = file.fileSizeBytes.has_value()
@@ -137,13 +120,11 @@ class DuckLakeSplitSource : public SplitSource {
                   splitIndex_ * splitSize, file.fileSizeBytes.value())
             : 0;
         const auto length = file.fileSizeBytes.has_value()
-            ? std::min<uint64_t>(
-                  splitSize, file.fileSizeBytes.value() - start)
+            ? std::min<uint64_t>(splitSize, file.fileSizeBytes.value() - start)
             : std::numeric_limits<uint64_t>::max();
 
         batch.splits.push_back(
-            std::make_shared<
-                velox::connector::hive::iceberg::HiveIcebergSplit>(
+            std::make_shared<velox::connector::hive::iceberg::HiveIcebergSplit>(
                 connectorId_,
                 file.path,
                 velox::dwio::common::FileFormat::PARQUET,
@@ -176,11 +157,15 @@ class DuckLakeSplitSource : public SplitSource {
  private:
   std::vector<DuckLakeDataFile> files_;
   std::string connectorId_;
-  SplitOptions options_;
   size_t fileIndex_{0};
   uint64_t splitIndex_{0};
   uint64_t splitsInCurrentFile_{0};
 };
+
+DuckLakeSplitManager::DuckLakeSplitManager(DuckLakeConnectorMetadata* metadata)
+    : metadata_{metadata} {
+  VELOX_CHECK_NOT_NULL(metadata_);
+}
 
 folly::coro::Task<std::vector<PartitionHandlePtr>>
 DuckLakeSplitManager::co_listPartitions(
@@ -197,8 +182,7 @@ DuckLakeSplitManager::co_listPartitions(
 std::shared_ptr<SplitSource> DuckLakeSplitManager::getSplitSource(
     const ConnectorSessionPtr& /*session*/,
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
-    const std::vector<PartitionHandlePtr>& /*partitions*/,
-    SplitOptions options) {
+    const std::vector<PartitionHandlePtr>& /*partitions*/) {
   auto* hiveTableHandle =
       dynamic_cast<const velox::connector::hive::HiveTableHandle*>(
           tableHandle.get());
@@ -214,7 +198,7 @@ std::shared_ptr<SplitSource> DuckLakeSplitManager::getSplitSource(
   VELOX_CHECK_NOT_NULL(layout);
 
   return std::make_shared<DuckLakeSplitSource>(
-      layout->dataFiles(), layout->connectorId(), options);
+      layout->dataFiles(), layout->connectorId());
 }
 
 DuckLakeTableLayout::DuckLakeTableLayout(
@@ -281,8 +265,7 @@ velox::connector::ColumnHandlePtr DuckLakeTableLayout::createColumnHandle(
       it != fieldIds_.end(),
       "DuckLake column is missing field id: {}",
       columnName);
-  return std::make_shared<
-      velox::connector::hive::iceberg::IcebergColumnHandle>(
+  return std::make_shared<velox::connector::hive::iceberg::IcebergColumnHandle>(
       columnName, handleType, column->type(), it->second, std::move(subfields));
 }
 
@@ -344,13 +327,14 @@ TablePtr DuckLakeConnectorMetadata::makeTable(
   auto duckLakeColumns = std::move(tableMetadata.columns);
   auto dataFiles = std::move(tableMetadata.dataFiles);
   auto table = std::make_shared<DuckLakeTable>(std::move(tableMetadata));
-  table->addLayout(std::make_unique<DuckLakeTableLayout>(
-      "ducklake",
-      table.get(),
-      icebergConnector_,
-      table->allColumns(),
-      std::move(duckLakeColumns),
-      std::move(dataFiles)));
+  table->addLayout(
+      std::make_unique<DuckLakeTableLayout>(
+          "ducklake",
+          table.get(),
+          icebergConnector_,
+          table->allColumns(),
+          std::move(duckLakeColumns),
+          std::move(dataFiles)));
   return table;
 }
 

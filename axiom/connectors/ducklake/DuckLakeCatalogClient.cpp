@@ -24,6 +24,7 @@
 #include <mutex>
 #include <regex>
 
+#include "axiom/connectors/ducklake/DuckLakeCatalogSql.h"
 #include "folly/String.h"
 #include "velox/common/base/Exceptions.h"
 
@@ -32,20 +33,6 @@ namespace facebook::axiom::connector::ducklake {
 namespace {
 
 using duckdb::idx_t;
-
-std::string quoteSqlString(std::string_view value) {
-  std::string result{"'"};
-  result.reserve(value.size() + 2);
-  for (const auto c : value) {
-    if (c == '\'') {
-      result += "''";
-    } else {
-      result.push_back(c);
-    }
-  }
-  result.push_back('\'');
-  return result;
-}
 
 std::string livePredicate(std::string_view alias, int64_t snapshotId) {
   return fmt::format(
@@ -70,8 +57,8 @@ bool hasUriScheme(std::string_view path) {
 
   for (auto i = size_t{0}; i < schemeSeparator; ++i) {
     const auto c = path[i];
-    if (!std::isalnum(static_cast<unsigned char>(c)) && c != '+' &&
-        c != '-' && c != '.') {
+    if (!std::isalnum(static_cast<unsigned char>(c)) && c != '+' && c != '-' &&
+        c != '.') {
       return false;
     }
   }
@@ -131,64 +118,80 @@ uint64_t toUnsigned(int64_t value, std::string_view columnName) {
   return static_cast<uint64_t>(value);
 }
 
+duckdb::Value valueAt(
+    const duckdb::MaterializedQueryResult& result,
+    idx_t column,
+    idx_t row) {
+  return const_cast<duckdb::MaterializedQueryResult&>(result).GetValue(
+      column, row);
+}
+
+template <typename T>
+std::optional<T> optionalValue(
+    const duckdb::MaterializedQueryResult& result,
+    idx_t column,
+    idx_t row) {
+  auto value = valueAt(result, column, row);
+  if (value.IsNull()) {
+    return std::nullopt;
+  }
+  return value.GetValue<T>();
+}
+
+template <typename T>
+T requiredValue(
+    const duckdb::MaterializedQueryResult& result,
+    idx_t column,
+    idx_t row) {
+  auto value = valueAt(result, column, row);
+  VELOX_USER_CHECK(
+      !value.IsNull(),
+      "DuckLake metadata value is unexpectedly null. Column index: {}, row index: {}",
+      column,
+      row);
+  return value.GetValue<T>();
+}
+
 std::optional<int64_t> optionalInt64(
     const duckdb::MaterializedQueryResult& result,
     idx_t column,
     idx_t row) {
-  auto value = const_cast<duckdb::MaterializedQueryResult&>(result).GetValue(
-      column, row);
-  if (value.IsNull()) {
-    return std::nullopt;
-  }
-  return value.GetValue<int64_t>();
+  return optionalValue<int64_t>(result, column, row);
 }
 
 bool isNull(
     const duckdb::MaterializedQueryResult& result,
     idx_t column,
     idx_t row) {
-  return const_cast<duckdb::MaterializedQueryResult&>(result)
-      .GetValue(column, row)
-      .IsNull();
+  return valueAt(result, column, row).IsNull();
 }
 
 std::optional<std::string> optionalString(
     const duckdb::MaterializedQueryResult& result,
     idx_t column,
     idx_t row) {
-  auto value = const_cast<duckdb::MaterializedQueryResult&>(result).GetValue(
-      column, row);
-  if (value.IsNull()) {
-    return std::nullopt;
-  }
-  return value.GetValue<std::string>();
+  return optionalValue<std::string>(result, column, row);
 }
 
 bool boolValue(
     const duckdb::MaterializedQueryResult& result,
     idx_t column,
     idx_t row) {
-  return const_cast<duckdb::MaterializedQueryResult&>(result)
-      .GetValue(column, row)
-      .GetValue<bool>();
+  return requiredValue<bool>(result, column, row);
 }
 
 int64_t int64Value(
     const duckdb::MaterializedQueryResult& result,
     idx_t column,
     idx_t row) {
-  return const_cast<duckdb::MaterializedQueryResult&>(result)
-      .GetValue(column, row)
-      .GetValue<int64_t>();
+  return requiredValue<int64_t>(result, column, row);
 }
 
 std::string stringValue(
     const duckdb::MaterializedQueryResult& result,
     idx_t column,
     idx_t row) {
-  return const_cast<duckdb::MaterializedQueryResult&>(result)
-      .GetValue(column, row)
-      .GetValue<std::string>();
+  return requiredValue<std::string>(result, column, row);
 }
 
 velox::TypePtr parsePrimitiveType(std::string typeName) {
@@ -225,8 +228,7 @@ velox::TypePtr parsePrimitiveType(std::string typeName) {
   if (normalized == "float64") {
     return velox::DOUBLE();
   }
-  if (normalized == "varchar" || normalized == "json" ||
-      normalized == "uuid") {
+  if (normalized == "varchar" || normalized == "json" || normalized == "uuid") {
     return velox::VARCHAR();
   }
   if (normalized == "blob") {
@@ -283,8 +285,7 @@ class DuckDbDuckLakeCatalogClient : public DuckLakeCatalogClient {
         catalogDirectory_{catalogDirectory(spec_.metadataPath)},
         config_{makeReadOnlyConfig()} {
     try {
-      db_ = std::make_unique<duckdb::DuckDB>(
-          spec_.metadataPath, config_.get());
+      db_ = std::make_unique<duckdb::DuckDB>(spec_.metadataPath, config_.get());
       connection_ = std::make_unique<duckdb::Connection>(*db_);
     } catch (const std::exception& error) {
       VELOX_USER_FAIL(
@@ -301,9 +302,10 @@ class DuckDbDuckLakeCatalogClient : public DuckLakeCatalogClient {
       return {};
     }
 
-    auto result = query(fmt::format(
-        "SELECT schema_name FROM ducklake_schema WHERE {} ORDER BY schema_name",
-        livePredicate("ducklake_schema", snapshotId.value())));
+    auto result = query(
+        fmt::format(
+            "SELECT schema_name FROM ducklake_schema WHERE {} ORDER BY schema_name",
+            livePredicate("ducklake_schema", snapshotId.value())));
 
     std::vector<std::string> schemas;
     schemas.reserve(result->RowCount());
@@ -321,20 +323,21 @@ class DuckDbDuckLakeCatalogClient : public DuckLakeCatalogClient {
       return std::nullopt;
     }
 
-    auto tableResult = query(fmt::format(
-        "SELECT "
-        "s.schema_id, s.path, s.path_is_relative, "
-        "t.table_id, t.path, t.path_is_relative, "
-        "COALESCE(ts.record_count, 0) "
-        "FROM ducklake_schema s "
-        "JOIN ducklake_table t ON t.schema_id = s.schema_id "
-        "LEFT JOIN ducklake_table_stats ts ON ts.table_id = t.table_id "
-        "WHERE {} AND {} AND s.schema_name = {} AND t.table_name = {} "
-        "ORDER BY t.table_id LIMIT 1",
-        livePredicate("s", snapshotId.value()),
-        livePredicate("t", snapshotId.value()),
-        quoteSqlString(tableName.schema),
-        quoteSqlString(tableName.table)));
+    auto tableResult = query(
+        fmt::format(
+            "SELECT "
+            "s.schema_id, s.path, s.path_is_relative, "
+            "t.table_id, t.path, t.path_is_relative, "
+            "COALESCE(ts.record_count, 0) "
+            "FROM ducklake_schema s "
+            "JOIN ducklake_table t ON t.schema_id = s.schema_id "
+            "LEFT JOIN ducklake_table_stats ts ON ts.table_id = t.table_id "
+            "WHERE {} AND {} AND s.schema_name = {} AND t.table_name = {} "
+            "ORDER BY t.table_id LIMIT 1",
+            livePredicate("s", snapshotId.value()),
+            livePredicate("t", snapshotId.value()),
+            quoteDuckLakeCatalogSqlString(tableName.schema),
+            quoteDuckLakeCatalogSqlString(tableName.table)));
 
     if (tableResult->RowCount() == 0) {
       return std::nullopt;
@@ -365,8 +368,7 @@ class DuckDbDuckLakeCatalogClient : public DuckLakeCatalogClient {
   }
 
  private:
-  std::unique_ptr<duckdb::MaterializedQueryResult> query(
-      std::string_view sql) {
+  std::unique_ptr<duckdb::MaterializedQueryResult> query(std::string_view sql) {
     auto result = connection_->Query(std::string{sql});
     VELOX_USER_CHECK(
         !result->HasError(),
@@ -385,10 +387,11 @@ class DuckDbDuckLakeCatalogClient : public DuckLakeCatalogClient {
   }
 
   std::optional<std::string> loadGlobalMetadataValue(std::string_view key) {
-    auto result = query(fmt::format(
-        "SELECT value FROM ducklake_metadata "
-        "WHERE \"key\" = {} AND scope IS NULL LIMIT 1",
-        quoteSqlString(key)));
+    auto result = query(
+        fmt::format(
+            "SELECT value FROM ducklake_metadata "
+            "WHERE \"key\" = {} AND scope IS NULL LIMIT 1",
+            quoteDuckLakeCatalogSqlString(key)));
     if (result->RowCount() == 0) {
       return std::nullopt;
     }
@@ -414,20 +417,22 @@ class DuckDbDuckLakeCatalogClient : public DuckLakeCatalogClient {
         !encrypted.has_value() || lower(encrypted.value()) != "true",
         "Encrypted DuckLake tables are not supported yet");
 
-    const auto numDeleteFiles = countRows(fmt::format(
-        "SELECT COUNT(*) FROM ducklake_delete_file "
-        "WHERE table_id = {} AND {}",
-        tableId,
-        livePredicate("ducklake_delete_file", snapshotId)));
+    const auto numDeleteFiles = countRows(
+        fmt::format(
+            "SELECT COUNT(*) FROM ducklake_delete_file "
+            "WHERE table_id = {} AND {}",
+            tableId,
+            livePredicate("ducklake_delete_file", snapshotId)));
     VELOX_USER_CHECK_EQ(
         numDeleteFiles,
         0,
         "DuckLake delete files are not supported yet for table id: {}",
         tableId);
 
-    const auto numInlinedTables = countRows(fmt::format(
-        "SELECT COUNT(*) FROM ducklake_inlined_data_tables WHERE table_id = {}",
-        tableId));
+    const auto numInlinedTables = countRows(
+        fmt::format(
+            "SELECT COUNT(*) FROM ducklake_inlined_data_tables WHERE table_id = {}",
+            tableId));
     VELOX_USER_CHECK_EQ(
         numInlinedTables,
         0,
@@ -436,14 +441,15 @@ class DuckDbDuckLakeCatalogClient : public DuckLakeCatalogClient {
   }
 
   void loadColumns(DuckLakeTableMetadata& table) {
-    auto result = query(fmt::format(
-        "SELECT column_id, column_order, column_name, column_type, "
-        "nulls_allowed "
-        "FROM ducklake_column "
-        "WHERE table_id = {} AND {} AND parent_column IS NULL "
-        "ORDER BY column_order",
-        table.tableId,
-        livePredicate("ducklake_column", table.snapshotId)));
+    auto result = query(
+        fmt::format(
+            "SELECT column_id, column_order, column_name, column_type, "
+            "nulls_allowed "
+            "FROM ducklake_column "
+            "WHERE table_id = {} AND {} AND parent_column IS NULL "
+            "ORDER BY column_order",
+            table.tableId,
+            livePredicate("ducklake_column", table.snapshotId)));
 
     std::vector<std::string> names;
     std::vector<velox::TypePtr> types;
@@ -470,15 +476,16 @@ class DuckDbDuckLakeCatalogClient : public DuckLakeCatalogClient {
   }
 
   void loadDataFiles(DuckLakeTableMetadata& table) {
-    auto result = query(fmt::format(
-        "SELECT data_file_id, path, path_is_relative, file_format, "
-        "record_count, file_size_bytes, footer_size, row_id_start, "
-        "encryption_key, partial_max "
-        "FROM ducklake_data_file "
-        "WHERE table_id = {} AND {} "
-        "ORDER BY file_order, data_file_id",
-        table.tableId,
-        livePredicate("ducklake_data_file", table.snapshotId)));
+    auto result = query(
+        fmt::format(
+            "SELECT data_file_id, path, path_is_relative, file_format, "
+            "record_count, file_size_bytes, footer_size, row_id_start, "
+            "encryption_key, partial_max "
+            "FROM ducklake_data_file "
+            "WHERE table_id = {} AND {} "
+            "ORDER BY file_order, data_file_id",
+            table.tableId,
+            livePredicate("ducklake_data_file", table.snapshotId)));
 
     table.dataFiles.reserve(result->RowCount());
     for (auto row = idx_t{0}; row < result->RowCount(); ++row) {

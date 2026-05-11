@@ -25,32 +25,40 @@ namespace facebook::axiom::connector::ducklake {
 
 class DuckLakeConnectorMetadata;
 
-/// Enumerates splits for DuckLake tables.
+/// Enumerates Velox scan splits for DuckLake table layouts.
+///
+/// DuckLake tables are not exposed as Hive directory partitions. The split
+/// manager therefore returns a single logical partition and then expands the
+/// live data files from DuckLake metadata into Iceberg-compatible Hive splits.
 class DuckLakeSplitManager : public ConnectorSplitManager {
  public:
-  explicit DuckLakeSplitManager(DuckLakeConnectorMetadata* metadata)
-      : metadata_{metadata} {}
+  /// Creates a split manager backed by non-null DuckLake connector metadata.
+  explicit DuckLakeSplitManager(DuckLakeConnectorMetadata* metadata);
 
   /// Lists the single unpartitioned DuckLake partition for a table scan.
   folly::coro::Task<std::vector<PartitionHandlePtr>> co_listPartitions(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle) override;
 
-  /// Returns a split source over live DuckLake data files.
+  /// Returns a split source over the live DuckLake data files in the layout.
   std::shared_ptr<SplitSource> getSplitSource(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
-      const std::vector<PartitionHandlePtr>& partitions,
-      SplitOptions options = {}) override;
+      const std::vector<PartitionHandlePtr>& partitions) override;
 
  private:
   // Provides access to the DuckLake catalog and table layouts.
   DuckLakeConnectorMetadata* metadata_;
 };
 
-/// Describes the default DuckLake table layout.
+/// Describes the default physical layout for a DuckLake table.
+///
+/// The layout inherits Hive layout behavior so Axiom can reuse existing Hive
+/// metadata abstractions, but it creates Iceberg column handles so Velox reads
+/// Parquet columns by DuckLake column id instead of by name alone.
 class DuckLakeTableLayout : public hive::HiveTableLayout {
  public:
+  /// Creates a layout with visible columns, DuckLake field ids, and live files.
   DuckLakeTableLayout(
       const std::string& label,
       const Table* table,
@@ -59,12 +67,16 @@ class DuckLakeTableLayout : public hive::HiveTableLayout {
       std::vector<DuckLakeColumnMetadata> duckLakeColumns,
       std::vector<DuckLakeDataFile> dataFiles);
 
-  /// Returns the live data files for this layout.
+  /// Returns the live data files selected from the DuckLake snapshot.
   const std::vector<DuckLakeDataFile>& dataFiles() const {
     return dataFiles_;
   }
 
-  /// Creates Hive or Iceberg column handles for this layout.
+  /// Creates Velox column handles for visible and hidden DuckLake columns.
+  ///
+  /// Visible DuckLake columns use Iceberg column handles carrying Parquet field
+  /// ids. Hidden Hive-style columns such as `$path` and `$file_size` use Hive
+  /// synthesized column handles.
   velox::connector::ColumnHandlePtr createColumnHandle(
       const ConnectorSessionPtr& session,
       const std::string& columnName,
@@ -80,9 +92,13 @@ class DuckLakeTableLayout : public hive::HiveTableLayout {
   std::vector<DuckLakeDataFile> dataFiles_;
 };
 
-/// Represents a DuckLake table loaded from the catalog.
+/// Represents a DuckLake table loaded from catalog metadata.
+///
+/// The table owns its physical layouts and exposes stable layout pointers to
+/// the optimizer through the base ConnectorMetadata APIs.
 class DuckLakeTable : public hive::HiveTable {
  public:
+  /// Creates a table from snapshot-consistent DuckLake metadata.
   explicit DuckLakeTable(DuckLakeTableMetadata metadata);
 
   /// Returns the physical layouts for this table.
@@ -110,25 +126,36 @@ class DuckLakeTable : public hive::HiveTable {
 };
 
 /// Provides Axiom metadata for DuckLake tables backed by Velox Iceberg reads.
+///
+/// This class is the bridge between DuckLake catalog metadata and Velox scan
+/// execution. It resolves schemas, table definitions, column ids, and live file
+/// lists from the catalog client, then presents them through Axiom's generic
+/// ConnectorMetadata interface.
 class DuckLakeConnectorMetadata : public ConnectorMetadata {
  public:
   /// Creates DuckLake metadata from an Iceberg connector configuration.
+  ///
+  /// The catalog URL is read from the connector config, parsed as a DuckLake
+  /// catalog spec, and opened through DuckLakeCatalogClient.
   explicit DuckLakeConnectorMetadata(
       velox::connector::hive::iceberg::IcebergConnector* icebergConnector);
 
   /// Creates DuckLake metadata with an injected catalog client.
+  ///
+  /// This constructor is intended for tests and for future catalog backends
+  /// that want to provide a specialized DuckLakeCatalogClient implementation.
   DuckLakeConnectorMetadata(
       velox::connector::hive::iceberg::IcebergConnector* icebergConnector,
       std::unique_ptr<DuckLakeCatalogClient> catalog);
 
-  /// Finds a DuckLake table in the current catalog snapshot.
+  /// Finds a DuckLake table in the latest catalog snapshot.
   TablePtr findTable(const SchemaTableName& tableName) override;
 
-  /// Lists schemas in the current DuckLake catalog snapshot.
+  /// Lists schemas in the latest DuckLake catalog snapshot.
   std::vector<std::string> listSchemaNames(
       const ConnectorSessionPtr& session) override;
 
-  /// Returns true when a DuckLake schema exists in the current snapshot.
+  /// Returns true when a DuckLake schema exists in the latest snapshot.
   bool schemaExists(
       const ConnectorSessionPtr& session,
       const std::string& schemaName) override;

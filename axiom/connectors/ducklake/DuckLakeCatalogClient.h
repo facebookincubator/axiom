@@ -27,36 +27,36 @@
 
 namespace facebook::axiom::connector::ducklake {
 
-/// Describes a top-level DuckLake table column.
+/// Describes a top-level DuckLake table column from catalog metadata.
 struct DuckLakeColumnMetadata {
-  /// Stores the stable DuckLake column id.
+  /// Stores the stable DuckLake column id used as the Parquet field id.
   int64_t columnId;
 
-  /// Orders the column within the DuckLake table schema.
+  /// Orders the column within the visible DuckLake table schema.
   int64_t columnOrder;
 
-  /// Stores the visible SQL column name.
+  /// Stores the visible SQL column name used by Axiom planning.
   std::string name;
 
-  /// Stores the original DuckLake type string.
+  /// Stores the original DuckLake type string before conversion to Velox type.
   std::string duckLakeType;
 
-  /// Stores the Velox type used for query planning and execution.
+  /// Stores the Velox type used by the optimizer and scan operator.
   velox::TypePtr type;
 
-  /// Records whether the DuckLake schema allows null values.
+  /// Records whether the DuckLake column definition allows null values.
   bool nullsAllowed;
 };
 
-/// Describes a live DuckLake data file.
+/// Describes a live DuckLake data file selected from the current snapshot.
 struct DuckLakeDataFile {
-  /// Stores the stable DuckLake data file id.
+  /// Stores the stable DuckLake data file id from catalog metadata.
   int64_t dataFileId;
 
-  /// Stores the resolved file path passed to Velox splits.
+  /// Stores the fully resolved file path passed to Velox scan splits.
   std::string path;
 
-  /// Records the number of rows in the file.
+  /// Records the number of logical rows stored in the file.
   uint64_t recordCount{0};
 
   /// Records the file size when DuckLake metadata provides it.
@@ -65,56 +65,69 @@ struct DuckLakeDataFile {
   /// Records the Parquet footer size when DuckLake metadata provides it.
   std::optional<uint64_t> footerSize;
 
-  /// Stores the first DuckLake logical row id when available.
+  /// Stores the first DuckLake logical row id for the file when available.
   std::optional<int64_t> rowIdStart;
 };
 
 /// Describes the table metadata needed by Axiom planning and split generation.
 struct DuckLakeTableMetadata {
-  /// Stores the schema-qualified table name.
+  /// Stores the schema-qualified table name requested by the query.
   SchemaTableName name;
 
-  /// Stores the stable DuckLake table id.
+  /// Stores the stable DuckLake table id used to join catalog metadata tables.
   int64_t tableId;
 
-  /// Identifies the DuckLake snapshot used to read metadata.
+  /// Identifies the DuckLake snapshot that all table metadata was read from.
   int64_t snapshotId;
 
-  /// Stores the resolved catalog-level data path.
+  /// Stores the resolved catalog-level data path from global metadata.
   std::string dataPath;
 
-  /// Stores the resolved schema-level data path.
+  /// Stores the resolved schema-level data path for the table schema.
   std::string schemaPath;
 
-  /// Stores the resolved table-level data path.
+  /// Stores the resolved table-level data path used as the base for files.
   std::string tablePath;
 
-  /// Stores the visible table schema as a Velox row type.
+  /// Stores the visible table schema converted to a Velox row type.
   velox::RowTypePtr rowType;
 
-  /// Lists the visible top-level columns in table order.
+  /// Lists the visible top-level columns in DuckLake column order.
   std::vector<DuckLakeColumnMetadata> columns;
 
-  /// Lists the live data files for the selected snapshot.
+  /// Lists the live Parquet data files for the selected snapshot.
   std::vector<DuckLakeDataFile> dataFiles;
 
   /// Records the table-level row count when DuckLake metadata provides it.
   uint64_t numRows{0};
 };
 
-/// Reads table metadata from a DuckLake catalog database.
+/// Reads DuckLake table metadata from a relational catalog database.
+///
+/// The catalog client owns all backend-specific metadata access. It returns
+/// snapshot-consistent table schemas, table paths, and live data files, but it
+/// does not read table data. Data file reads are delegated to Velox through the
+/// connector metadata and split manager.
 class DuckLakeCatalogClient {
  public:
   virtual ~DuckLakeCatalogClient() = default;
 
-  /// Creates a catalog client for the specified backend.
+  /// Creates a catalog client for the specified backend and metadata location.
+  ///
+  /// DuckDB catalogs are opened read-only. Other parsed backends currently
+  /// throw explicit user-facing errors until their clients are implemented.
   static std::unique_ptr<DuckLakeCatalogClient> create(
       DuckLakeCatalogSpec spec);
 
-  /// Lists schemas visible in the current DuckLake snapshot.
+  /// Lists schema names visible in the latest DuckLake snapshot.
   virtual std::vector<std::string> listSchemaNames() = 0;
 
-  /// Loads table metadata for the current DuckLake snapshot.
+  /// Loads table metadata for the latest DuckLake snapshot.
+  ///
+  /// Returns std::nullopt when the table is not present in the current
+  /// snapshot. Implementations throw user-facing errors when the table uses a
+  /// DuckLake feature that this connector cannot read yet, such as delete
+  /// files, encrypted files, inlined data, or unsupported column types.
   virtual std::optional<DuckLakeTableMetadata> loadTable(
       const SchemaTableName& tableName) = 0;
 };
