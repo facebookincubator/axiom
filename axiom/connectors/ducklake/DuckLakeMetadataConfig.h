@@ -30,19 +30,20 @@ enum class DuckLakeCatalogBackend {
   /// Uses a DuckDB database file or in-memory DuckDB database as the catalog.
   kDuckDb,
 
-  /// Uses a SQLite database as the catalog. This is parsed but not read yet.
+  /// Uses a SQLite database as the catalog. This is parsed but not supported yet.
   kSqlite,
 
-  /// Uses a PostgreSQL database as the catalog. This is parsed but not read
-  /// yet.
+  /// Uses a PostgreSQL database as the catalog. This is parsed but not supported yet.
   kPostgres,
 };
 
 /// Describes the backend and location encoded in a DuckLake catalog URL.
 ///
 /// Axiom accepts URLs with the `ducklake:` prefix and an optional backend
-/// prefix, for example `ducklake:metadata.ducklake` or
-/// `ducklake:duckdb:/tmp/metadata.ducklake`. When the backend prefix is
+/// prefix, for example `ducklake:metadata.ducklake`,
+/// `ducklake:duckdb:/tmp/metadata.ducklake`,
+/// `ducklake:sqlite:/tmp/metadata.sqlite`, or
+/// `ducklake:postgres:host=localhost dbname=lake`. When the backend prefix is
 /// omitted, DuckDB is assumed to match DuckLake's default local catalog form.
 struct DuckLakeCatalogSpec {
   /// Selects which relational database implementation stores catalog metadata.
@@ -62,7 +63,7 @@ struct DuckLakeCatalogSpec {
 class DuckLakeMetadataConfig {
  public:
   /// Names the connector config entry containing the DuckLake catalog URL.
-  static constexpr const char* kCatalogUrl = "ducklake_catalog_url";
+  static constexpr const char* kCatalog = "ducklake_catalog";
 
   /// Creates a config wrapper over the immutable Velox connector config.
   explicit DuckLakeMetadataConfig(

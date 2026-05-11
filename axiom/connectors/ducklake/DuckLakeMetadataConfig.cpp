@@ -88,7 +88,7 @@ DuckLakeMetadataConfig::DuckLakeMetadataConfig(
 }
 
 std::string DuckLakeMetadataConfig::catalogUrl() const {
-  return config_->get<std::string>(kCatalogUrl, "");
+  return config_->get<std::string>(kCatalog, "");
 }
 
 DuckLakeCatalogSpec DuckLakeMetadataConfig::catalogSpec() const {

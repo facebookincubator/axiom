@@ -174,7 +174,7 @@ Connectors::registerDuckLakeConnector(
     const std::string& catalogUrl,
     const std::string& connectorId) {
   std::unordered_map<std::string, std::string> connectorConfig = {
-      {connector::ducklake::DuckLakeMetadataConfig::kCatalogUrl, catalogUrl},
+      {connector::ducklake::DuckLakeMetadataConfig::kCatalog, catalogUrl},
   };
 
   auto config =
@@ -184,14 +184,13 @@ Connectors::registerDuckLakeConnector(
   auto connector = factory.newConnector(connectorId, config, ioExecutor());
   registerConnector(connector);
 
-  auto icebergConnector =
-      dynamic_cast<velox::connector::hive::iceberg::IcebergConnector*>(
-          connector.get());
+  auto icebergConnector = std::dynamic_pointer_cast<
+      velox::connector::hive::iceberg::IcebergConnector>(connector);
   VELOX_CHECK_NOT_NULL(icebergConnector);
   connector::ConnectorMetadataRegistry::global().insert(
       connector->connectorId(),
       std::make_shared<connector::ducklake::DuckLakeConnectorMetadata>(
-          icebergConnector));
+          std::move(icebergConnector)));
 
   return connector;
 }

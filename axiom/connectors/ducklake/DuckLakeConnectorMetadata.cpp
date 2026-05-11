@@ -284,18 +284,21 @@ void DuckLakeTable::addLayout(std::unique_ptr<DuckLakeTableLayout> layout) {
 }
 
 DuckLakeConnectorMetadata::DuckLakeConnectorMetadata(
-    velox::connector::hive::iceberg::IcebergConnector* icebergConnector)
-    : DuckLakeConnectorMetadata(
-          icebergConnector,
-          DuckLakeCatalogClient::create(
-              DuckLakeMetadataConfig(icebergConnector->connectorConfig())
-                  .catalogSpec())) {}
+    std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>
+        icebergConnector)
+    : splitManager_{this}, icebergConnector_{std::move(icebergConnector)} {
+  VELOX_CHECK_NOT_NULL(icebergConnector_);
+  catalog_ = DuckLakeCatalogClient::create(
+      DuckLakeMetadataConfig(icebergConnector_->connectorConfig())
+          .catalogSpec());
+}
 
 DuckLakeConnectorMetadata::DuckLakeConnectorMetadata(
-    velox::connector::hive::iceberg::IcebergConnector* icebergConnector,
+    std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>
+        icebergConnector,
     std::unique_ptr<DuckLakeCatalogClient> catalog)
     : splitManager_{this},
-      icebergConnector_{icebergConnector},
+      icebergConnector_{std::move(icebergConnector)},
       catalog_{std::move(catalog)} {
   VELOX_CHECK_NOT_NULL(icebergConnector_);
   VELOX_CHECK_NOT_NULL(catalog_);
@@ -331,7 +334,7 @@ TablePtr DuckLakeConnectorMetadata::makeTable(
       std::make_unique<DuckLakeTableLayout>(
           "ducklake",
           table.get(),
-          icebergConnector_,
+          icebergConnector_.get(),
           table->allColumns(),
           std::move(duckLakeColumns),
           std::move(dataFiles)));

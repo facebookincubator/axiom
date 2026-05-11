@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <memory>
+
 #include "axiom/connectors/ducklake/DuckLakeCatalogClient.h"
 #include "axiom/connectors/hive/HiveConnectorMetadata.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
@@ -136,16 +138,21 @@ class DuckLakeConnectorMetadata : public ConnectorMetadata {
   /// Creates DuckLake metadata from an Iceberg connector configuration.
   ///
   /// The catalog URL is read from the connector config, parsed as a DuckLake
-  /// catalog spec, and opened through DuckLakeCatalogClient.
+  /// catalog spec, and opened through DuckLakeCatalogClient. The shared pointer
+  /// keeps the Velox connector alive for table layout and split generation.
   explicit DuckLakeConnectorMetadata(
-      velox::connector::hive::iceberg::IcebergConnector* icebergConnector);
+      std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>
+          icebergConnector);
 
   /// Creates DuckLake metadata with an injected catalog client.
   ///
   /// This constructor is intended for tests and for future catalog backends
   /// that want to provide a specialized DuckLakeCatalogClient implementation.
+  /// The shared pointer keeps the Velox connector alive for table layout and
+  /// split generation.
   DuckLakeConnectorMetadata(
-      velox::connector::hive::iceberg::IcebergConnector* icebergConnector,
+      std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>
+          icebergConnector,
       std::unique_ptr<DuckLakeCatalogClient> catalog);
 
   /// Finds a DuckLake table in the latest catalog snapshot.
@@ -165,8 +172,9 @@ class DuckLakeConnectorMetadata : public ConnectorMetadata {
     return &splitManager_;
   }
 
-  /// Returns the Iceberg connector used for Velox scan execution.
-  velox::connector::hive::iceberg::IcebergConnector* icebergConnector() const {
+  /// Returns shared ownership of the Iceberg connector used for scan execution.
+  std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>
+  icebergConnector() const {
     return icebergConnector_;
   }
 
@@ -177,8 +185,9 @@ class DuckLakeConnectorMetadata : public ConnectorMetadata {
   // Owns split enumeration for this connector.
   DuckLakeSplitManager splitManager_;
 
-  // Points to the Velox connector used to create Iceberg data sources.
-  velox::connector::hive::iceberg::IcebergConnector* icebergConnector_;
+  // Keeps the Velox connector alive while layouts create Iceberg data sources.
+  std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>
+      icebergConnector_;
 
   // Reads DuckLake metadata from the catalog database.
   std::unique_ptr<DuckLakeCatalogClient> catalog_;
