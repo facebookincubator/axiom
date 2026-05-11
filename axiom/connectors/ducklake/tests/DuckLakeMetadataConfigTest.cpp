@@ -25,35 +25,33 @@
 namespace facebook::axiom::connector::ducklake {
 namespace {
 
-using ::testing::Eq;
-
-TEST(DuckLakeMetadataConfigTest, parsesDuckDbCatalogUrls) {
+TEST(DuckLakeMetadataConfigTest, duckdbBackends) {
   auto spec = DuckLakeCatalogSpec::parse("ducklake:metadata.ducklake");
 
-  EXPECT_THAT(spec.backend, Eq(DuckLakeCatalogBackend::kDuckDb));
-  EXPECT_THAT(spec.metadataPath, Eq("metadata.ducklake"));
+  ASSERT_EQ(spec.backend, DuckLakeCatalogBackend::kDuckDb);
+  ASSERT_EQ(spec.metadataPath, "metadata.ducklake");
 
   spec = DuckLakeCatalogSpec::parse(" ducklake:duckdb:/tmp/metadata.ducklake ");
 
-  EXPECT_THAT(spec.backend, Eq(DuckLakeCatalogBackend::kDuckDb));
-  EXPECT_THAT(spec.metadataPath, Eq("/tmp/metadata.ducklake"));
+  ASSERT_EQ(spec.backend, DuckLakeCatalogBackend::kDuckDb);
+  ASSERT_EQ(spec.metadataPath, "/tmp/metadata.ducklake");
 }
 
-TEST(DuckLakeMetadataConfigTest, parsesOtherCatalogBackends) {
+TEST(DuckLakeMetadataConfigTest, otherBackends) {
   auto spec =
       DuckLakeCatalogSpec::parse("ducklake:sqlite:/tmp/metadata.sqlite");
 
-  EXPECT_THAT(spec.backend, Eq(DuckLakeCatalogBackend::kSqlite));
-  EXPECT_THAT(spec.metadataPath, Eq("/tmp/metadata.sqlite"));
+  ASSERT_EQ(spec.backend, DuckLakeCatalogBackend::kSqlite);
+  ASSERT_EQ(spec.metadataPath, "/tmp/metadata.sqlite");
 
   spec = DuckLakeCatalogSpec::parse(
       "ducklake:postgres:host=localhost dbname=lake");
 
-  EXPECT_THAT(spec.backend, Eq(DuckLakeCatalogBackend::kPostgres));
-  EXPECT_THAT(spec.metadataPath, Eq("host=localhost dbname=lake"));
+  ASSERT_EQ(spec.backend, DuckLakeCatalogBackend::kPostgres);
+  ASSERT_EQ(spec.metadataPath, "host=localhost dbname=lake");
 }
 
-TEST(DuckLakeMetadataConfigTest, rejectsInvalidUrls) {
+TEST(DuckLakeMetadataConfigTest, invalidUrls) {
   VELOX_ASSERT_THROW(
       DuckLakeCatalogSpec::parse(""), "DuckLake catalog URL is empty");
   VELOX_ASSERT_THROW(

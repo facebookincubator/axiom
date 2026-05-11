@@ -24,6 +24,7 @@
 #include "axiom/connectors/ducklake/DuckLakeMetadataConfig.h"
 #include "axiom/connectors/hive/PartitionValue.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/Casts.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
@@ -244,8 +245,8 @@ std::vector<DuckLakeDataFile> selectedDataFiles(
   std::vector<DuckLakeDataFile> selectedFiles;
   for (const auto& file : files) {
     for (const auto& partition : partitions) {
-      auto* duckLakePartition =
-          dynamic_cast<const DuckLakePartitionHandle*>(partition.get());
+      auto duckLakePartition =
+          velox::checkedPointerCast<const DuckLakePartitionHandle>(partition.get());
       VELOX_CHECK_NOT_NULL(duckLakePartition);
       if (fileMatchesPartition(file, duckLakePartition->partition())) {
         selectedFiles.push_back(file);
@@ -364,8 +365,8 @@ folly::coro::Task<std::vector<PartitionHandlePtr>>
 DuckLakeSplitManager::co_listPartitions(
     const ConnectorSessionPtr& /*session*/,
     const velox::connector::ConnectorTableHandlePtr& tableHandle) {
-  auto* hiveTableHandle =
-      dynamic_cast<const velox::connector::hive::HiveTableHandle*>(
+  auto hiveTableHandle =
+      velox::checkedPointerCast<const velox::connector::hive::HiveTableHandle>(
           tableHandle.get());
   VELOX_CHECK_NOT_NULL(hiveTableHandle);
 
@@ -385,8 +386,8 @@ std::shared_ptr<SplitSource> DuckLakeSplitManager::getSplitSource(
     const ConnectorSessionPtr& /*session*/,
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
     const std::vector<PartitionHandlePtr>& partitions) {
-  auto* hiveTableHandle =
-      dynamic_cast<const velox::connector::hive::HiveTableHandle*>(
+  auto hiveTableHandle =
+      velox::checkedPointerCast<const velox::connector::hive::HiveTableHandle>(
           tableHandle.get());
   VELOX_CHECK_NOT_NULL(hiveTableHandle);
 
@@ -401,7 +402,7 @@ std::shared_ptr<SplitSource> DuckLakeSplitManager::getSplitSource(
       tableHandle->name());
   auto table =
       makeDuckLakeTable(std::move(tableMetadata.value()), icebergConnector_);
-  auto* layout = dynamic_cast<const DuckLakeTableLayout*>(table->layouts()[0]);
+  auto* layout = velox::checkedPointerCast<const DuckLakeTableLayout>(table->layouts()[0]);
   VELOX_CHECK_NOT_NULL(layout);
 
   return std::make_shared<DuckLakeSplitSource>(

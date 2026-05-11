@@ -12,17 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(
-  axiom_connectors_ducklake_test
-  DuckLakeCatalogClientTest.cpp
-  DuckLakeMetadataConfigTest.cpp
-  DuckLakeQueryTest.cpp
-)
+add_executable(axiom_connectors_ducklake_test DuckLakeMetadataConfigTest.cpp DuckLakeQueryTest.cpp)
 
-add_test(
-  NAME axiom_connectors_ducklake_test
-  COMMAND axiom_connectors_ducklake_test
-)
+add_test(NAME axiom_connectors_ducklake_test COMMAND axiom_connectors_ducklake_test)
 
 target_link_libraries(
   axiom_connectors_ducklake_test

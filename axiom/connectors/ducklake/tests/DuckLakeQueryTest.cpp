@@ -187,7 +187,7 @@ class DuckLakeQueryTest : public ::testing::Test,
   std::unique_ptr<::axiom::sql::SqlQueryRunner> runner_;
 };
 
-TEST_F(DuckLakeQueryTest, readsDataFilesThroughAxiom) {
+TEST_F(DuckLakeQueryTest, all) {
   auto result = run("SELECT id, name FROM numbers ORDER BY id");
 
   assertResultEquals(
@@ -198,7 +198,7 @@ TEST_F(DuckLakeQueryTest, readsDataFilesThroughAxiom) {
       }));
 }
 
-TEST_F(DuckLakeQueryTest, readsFilteredAggregatesThroughAxiom) {
+TEST_F(DuckLakeQueryTest, aggregates) {
   auto result = run("SELECT count(*), sum(id) FROM numbers WHERE id >= 2");
 
   assertResultEquals(
@@ -209,7 +209,7 @@ TEST_F(DuckLakeQueryTest, readsFilteredAggregatesThroughAxiom) {
       }));
 }
 
-TEST_F(DuckLakeQueryTest, readsIdentityPartitionedTableThroughAxiom) {
+TEST_F(DuckLakeQueryTest, identityPartitionedTable) {
   auto result =
       run("SELECT region, count(*), sum(id) FROM partitioned_numbers "
           "GROUP BY region ORDER BY region");
@@ -223,7 +223,7 @@ TEST_F(DuckLakeQueryTest, readsIdentityPartitionedTableThroughAxiom) {
       }));
 }
 
-TEST_F(DuckLakeQueryTest, prunesIdentityPartitionsThroughAxiom) {
+TEST_F(DuckLakeQueryTest, prunesIdentityPartitions) {
   auto result =
       run("SELECT count(*), sum(id) FROM partitioned_numbers "
           "WHERE region = 'US'");
@@ -236,7 +236,7 @@ TEST_F(DuckLakeQueryTest, prunesIdentityPartitionsThroughAxiom) {
       }));
 }
 
-TEST_F(DuckLakeQueryTest, readsSynthesizedFileColumnsThroughAxiom) {
+TEST_F(DuckLakeQueryTest, synthesizedColumns) {
   auto result =
       run("SELECT count(*) FROM numbers "
           "WHERE \"$path\" LIKE '%.parquet' AND \"$file_size\" > 0");
@@ -248,7 +248,7 @@ TEST_F(DuckLakeQueryTest, readsSynthesizedFileColumnsThroughAxiom) {
       }));
 }
 
-TEST_F(DuckLakeQueryTest, supportsQualifiedTableName) {
+TEST_F(DuckLakeQueryTest, qualifiedTableName) {
   auto result = run("SELECT count(*) FROM ducklake.main.numbers");
 
   assertResultEquals(
