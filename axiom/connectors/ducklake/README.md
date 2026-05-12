@@ -6,6 +6,41 @@ Velox's Iceberg reader path.
 
 ## Usage
 
+Before querying from Axiom, create and populate the DuckLake catalog in DuckDB.
+DuckLake's DuckDB introduction has more background and examples:
+[DuckLake DuckDB Introduction](https://ducklake.select/docs/stable/duckdb/introduction).
+
+Build Axiom:
+
+```bash
+make debug
+```
+
+Create a local DuckLake catalog and load a non-partitioned table from DuckDB:
+
+```sql
+INSTALL ducklake;
+LOAD ducklake;
+
+ATTACH 'ducklake:metadata.ducklake' AS lake
+  (DATA_PATH 'metadata.ducklake.files', DATA_INLINING_ROW_LIMIT 0);
+USE lake;
+
+CREATE TABLE numbers(id INTEGER, name VARCHAR);
+INSERT INTO numbers VALUES (1, 'one'), (2, 'two'), (3, 'three');
+```
+
+You can also create a table from an existing file:
+
+```sql
+CREATE TABLE my_table AS
+SELECT *
+FROM 'input.parquet';
+```
+
+Use regular DuckLake tables only. The current Axiom connector rejects
+partitioned DuckLake tables.
+
 Run `axiom_sql` with a DuckLake catalog URL:
 
 ```bash
@@ -34,9 +69,9 @@ The connector does not need a DuckLake data path flag. DuckLake stores the data
 path in catalog metadata, and Axiom resolves table and file paths from that
 metadata.
 
-DuckLake enables data inlining by default for small writes. To create test data
-for the current Axiom connector, either disable inlining on attach or flush
-inlined data to Parquet before querying through Axiom:
+DuckLake enables data inlining by default for small writes. To make sure Axiom
+can read the generated Parquet files, either disable inlining on attach or
+flush inlined data to Parquet before querying through Axiom:
 
 From duckdb:
 ```sql
