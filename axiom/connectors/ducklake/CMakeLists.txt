@@ -15,9 +15,9 @@
 add_library(
   axiom_ducklake_connector_metadata
   DuckLakeCatalogClient.cpp
-  DuckLakeCatalogSql.cpp
   DuckLakeConnectorMetadata.cpp
   DuckLakeMetadataConfig.cpp
+  SqlStringLiteral.cpp
 )
 
 target_link_libraries(

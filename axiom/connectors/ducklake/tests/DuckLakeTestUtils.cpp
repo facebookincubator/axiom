@@ -19,7 +19,7 @@
 #include <vector>
 
 #include <fmt/core.h>
-#include "axiom/connectors/ducklake/DuckLakeCatalogSql.h"
+#include "axiom/connectors/ducklake/SqlStringLiteral.h"
 
 namespace facebook::axiom::connector::ducklake {
 
@@ -68,15 +68,11 @@ std::optional<DuckLakeCreationError> createDuckLakeTable(
   std::vector<std::string> statements{
       fmt::format(
           "ATTACH {} AS lake (DATA_INLINING_ROW_LIMIT 0)",
-          quoteDuckLakeCatalogSqlString(
+          quoteSqlStringLiteral(
               fmt::format("ducklake:{}", catalogPath.string()))),
       "USE lake",
       "CREATE TABLE numbers(id INTEGER, name VARCHAR)",
       "INSERT INTO numbers VALUES (1, 'one'), (2, 'two'), (3, 'three')",
-      "CREATE TABLE partitioned_numbers(id INTEGER, region VARCHAR)",
-      "ALTER TABLE partitioned_numbers SET PARTITIONED BY (region)",
-      "INSERT INTO partitioned_numbers VALUES "
-      "(1, 'US'), (2, 'EU'), (3, 'APAC'), (4, 'US')",
   };
 
   if (auto error = runDuckDb(connection, "INSTALL ducklake")) {

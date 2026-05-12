@@ -20,9 +20,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "axiom/connectors/ducklake/DuckLakeCatalogSql.h"
-#include "axiom/connectors/ducklake/DuckLakeMetadataConfig.h"
-#include "velox/common/base/Exceptions.h"
+#include <fmt/core.h>
+
 #include "velox/common/testutil/TempDirectoryPath.h"
 
 #include "axiom/connectors/ducklake/tests/DuckLakeTestUtils.h"
@@ -76,8 +75,8 @@ TEST_F(DuckLakeCatalogClientTest, loadTable) {
   ASSERT_EQ(metadata->columns.size(), 2);
   EXPECT_EQ(metadata->columns[0].name, "id");
   EXPECT_EQ(metadata->columns[1].name, "name");
-  EXPECT_EQ(metadata->columns[0].duckLakeType, "INTEGER");
-  EXPECT_EQ(metadata->columns[1].duckLakeType, "VARCHAR");
+  EXPECT_EQ(metadata->columns[0].type->kind(), velox::TypeKind::INTEGER);
+  EXPECT_EQ(metadata->columns[1].type->kind(), velox::TypeKind::VARCHAR);
 
   ASSERT_EQ(metadata->dataFiles.size(), 1);
   EXPECT_EQ(metadata->dataFiles[0].recordCount, 3);

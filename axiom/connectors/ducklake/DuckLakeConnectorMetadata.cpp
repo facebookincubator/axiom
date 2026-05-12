@@ -16,15 +16,12 @@
 
 #include "axiom/connectors/ducklake/DuckLakeConnectorMetadata.h"
 
-#include <folly/String.h>
 #include <algorithm>
 #include <limits>
-#include <unordered_set>
 
 #include "axiom/connectors/ducklake/DuckLakeMetadataConfig.h"
-#include "axiom/connectors/hive/PartitionValue.h"
-#include "velox/common/base/Exceptions.h"
 #include "velox/common/Casts.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
@@ -41,19 +38,10 @@ T ceilDivide(T value, T divisor) {
 constexpr uint64_t kFileBytesPerSplit{128ULL << 20U};
 
 velox::connector::hive::HiveColumnHandle::ColumnType columnType(
-    const hive::HiveTableLayout& layout,
     const Column& column) {
   if (column.hidden()) {
     return velox::connector::hive::HiveColumnHandle::ColumnType::kSynthesized;
   }
-
-  for (const auto* partitionColumn : layout.hivePartitionColumns()) {
-    if (column.name() == partitionColumn->name()) {
-      return velox::connector::hive::HiveColumnHandle::ColumnType::
-          kPartitionKey;
-    }
-  }
-
   return velox::connector::hive::HiveColumnHandle::ColumnType::kRegular;
 }
 
@@ -93,47 +81,6 @@ std::unordered_map<std::string, std::string> infoColumns(
   return columns;
 }
 
-bool isIdentityPartitionColumn(
-    const DuckLakePartitionColumnMetadata& partitionColumn) {
-  return partitionColumn.transform == "identity";
-}
-
-std::vector<std::string> identityPartitionColumnNames(
-    const std::vector<DuckLakePartitionColumnMetadata>& partitionColumns) {
-  std::vector<std::string> columnNames;
-  std::unordered_set<std::string> seen;
-  for (const auto& partitionColumn : partitionColumns) {
-    if (!isIdentityPartitionColumn(partitionColumn) ||
-        seen.count(partitionColumn.columnName) != 0) {
-      continue;
-    }
-    seen.insert(partitionColumn.columnName);
-    columnNames.push_back(partitionColumn.columnName);
-  }
-  return columnNames;
-}
-
-std::vector<const Column*> hivePartitionColumns(
-    const DuckLakeTable& table,
-    const std::vector<DuckLakePartitionColumnMetadata>& partitionColumns) {
-  std::vector<const Column*> columns;
-  std::unordered_set<std::string> seen;
-  for (const auto& partitionColumn : partitionColumns) {
-    if (!isIdentityPartitionColumn(partitionColumn) ||
-        seen.count(partitionColumn.columnName) != 0) {
-      continue;
-    }
-    auto* column = table.findColumn(partitionColumn.columnName);
-    VELOX_CHECK_NOT_NULL(
-        column,
-        "DuckLake partition column is missing from the table schema: {}",
-        partitionColumn.columnName);
-    seen.insert(partitionColumn.columnName);
-    columns.push_back(column);
-  }
-  return columns;
-}
-
 velox::connector::Connector* connectorPointer(
     const std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>&
         icebergConnector) {
@@ -141,128 +88,13 @@ velox::connector::Connector* connectorPointer(
   return icebergConnector.get();
 }
 
-struct DuckLakePartitionKey {
-  std::optional<int64_t> partitionId;
-  std::map<int64_t, std::optional<std::string>> partitionValues;
-  std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
-};
-
-class DuckLakePartitionHandle : public PartitionHandle {
- public:
-  explicit DuckLakePartitionHandle(DuckLakePartitionKey partition)
-      : partition_{std::move(partition)} {}
-
-  const DuckLakePartitionKey& partition() const {
-    return partition_;
-  }
-
- private:
-  DuckLakePartitionKey partition_;
-};
-
-std::string partitionFingerprint(const DuckLakePartitionKey& partition) {
-  std::vector<std::string> parts;
-  parts.reserve(partition.partitionValues.size() + 1);
-  parts.push_back(
-      partition.partitionId.has_value()
-          ? fmt::format("id={}", partition.partitionId.value())
-          : std::string{"id=null"});
-  for (const auto& [index, value] : partition.partitionValues) {
-    parts.push_back(
-        value.has_value()
-            ? fmt::format("{}:{}:{}", index, value->size(), value.value())
-            : fmt::format("{}:null", index));
-  }
-  return folly::join("|", parts);
-}
-
-bool partitionMatchesFilters(
-    const DuckLakePartitionKey& partition,
-    const DuckLakeTableMetadata& tableMetadata,
-    const velox::connector::hive::HiveTableHandle& tableHandle) {
-  for (const auto& [columnName, value] : partition.partitionKeys) {
-    auto filterIt =
-        tableHandle.subfieldFilters().find(velox::common::Subfield(columnName));
-    if (filterIt == tableHandle.subfieldFilters().end()) {
-      continue;
-    }
-
-    auto columnType = tableMetadata.rowType->findChild(columnName);
-    VELOX_CHECK_NOT_NULL(
-        columnType,
-        "DuckLake partition column is missing from the table row type: {}",
-        columnName);
-    if (!hive::testPartitionValue(*filterIt->second, value, *columnType)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-std::vector<PartitionHandlePtr> makePartitionHandles(
-    const DuckLakeTableMetadata& tableMetadata,
-    const velox::connector::hive::HiveTableHandle& tableHandle) {
-  if (tableMetadata.dataFiles.empty()) {
-    if (tableMetadata.partitionColumns.empty()) {
-      return {
-          std::make_shared<DuckLakePartitionHandle>(DuckLakePartitionKey{})};
-    }
-    return {};
-  }
-
-  std::vector<PartitionHandlePtr> partitions;
-  std::unordered_set<std::string> seen;
-  for (const auto& file : tableMetadata.dataFiles) {
-    DuckLakePartitionKey partition{
-        .partitionId = file.partitionId,
-        .partitionValues = file.partitionValues,
-        .partitionKeys = file.partitionKeys,
-    };
-    auto fingerprint = partitionFingerprint(partition);
-    if (seen.count(fingerprint) != 0) {
-      continue;
-    }
-    seen.insert(std::move(fingerprint));
-
-    if (partitionMatchesFilters(partition, tableMetadata, tableHandle)) {
-      partitions.push_back(
-          std::make_shared<DuckLakePartitionHandle>(std::move(partition)));
-    }
-  }
-  return partitions;
-}
-
-bool fileMatchesPartition(
-    const DuckLakeDataFile& file,
-    const DuckLakePartitionKey& partition) {
-  return file.partitionId == partition.partitionId &&
-      file.partitionValues == partition.partitionValues;
-}
-
-std::vector<DuckLakeDataFile> selectedDataFiles(
-    const std::vector<DuckLakeDataFile>& files,
-    const std::vector<PartitionHandlePtr>& partitions) {
-  std::vector<DuckLakeDataFile> selectedFiles;
-  for (const auto& file : files) {
-    for (const auto& partition : partitions) {
-      auto duckLakePartition =
-          velox::checkedPointerCast<const DuckLakePartitionHandle>(partition.get());
-      VELOX_CHECK_NOT_NULL(duckLakePartition);
-      if (fileMatchesPartition(file, duckLakePartition->partition())) {
-        selectedFiles.push_back(file);
-        break;
-      }
-    }
-  }
-  return selectedFiles;
-}
+class DuckLakePartitionHandle : public PartitionHandle {};
 
 TablePtr makeDuckLakeTable(
     DuckLakeTableMetadata tableMetadata,
     const std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>&
         icebergConnector) {
   VELOX_CHECK_NOT_NULL(icebergConnector);
-  auto partitionColumns = tableMetadata.partitionColumns;
   auto duckLakeColumns = std::move(tableMetadata.columns);
   auto dataFiles = std::move(tableMetadata.dataFiles);
   auto table = std::make_shared<DuckLakeTable>(std::move(tableMetadata));
@@ -272,7 +104,6 @@ TablePtr makeDuckLakeTable(
           table.get(),
           icebergConnector,
           table->allColumns(),
-          hivePartitionColumns(*table, partitionColumns),
           std::move(duckLakeColumns),
           std::move(dataFiles)));
   return table;
@@ -319,7 +150,7 @@ class DuckLakeSplitSource : public SplitSource {
                 velox::dwio::common::FileFormat::PARQUET,
                 start,
                 length,
-                file.partitionKeys,
+                std::unordered_map<std::string, std::optional<std::string>>{},
                 std::nullopt,
                 std::unordered_map<std::string, std::string>{},
                 std::shared_ptr<std::string>{},
@@ -379,7 +210,8 @@ DuckLakeSplitManager::co_listPartitions(
       "Could not find table in DuckLake catalog: {}.{}",
       schema,
       tableHandle->name());
-  co_return makePartitionHandles(tableMetadata.value(), *hiveTableHandle);
+  co_return std::vector<PartitionHandlePtr>{
+      std::make_shared<DuckLakePartitionHandle>()};
 }
 
 std::shared_ptr<SplitSource> DuckLakeSplitManager::getSplitSource(
@@ -400,14 +232,16 @@ std::shared_ptr<SplitSource> DuckLakeSplitManager::getSplitSource(
       "Could not find table in DuckLake catalog: {}.{}",
       schema,
       tableHandle->name());
+  VELOX_CHECK_EQ(partitions.size(), 1);
+
   auto table =
       makeDuckLakeTable(std::move(tableMetadata.value()), icebergConnector_);
-  auto* layout = velox::checkedPointerCast<const DuckLakeTableLayout>(table->layouts()[0]);
+  auto* layout =
+      velox::checkedPointerCast<const DuckLakeTableLayout>(table->layouts()[0]);
   VELOX_CHECK_NOT_NULL(layout);
 
   return std::make_shared<DuckLakeSplitSource>(
-      selectedDataFiles(layout->dataFiles(), partitions),
-      layout->connectorId());
+      layout->dataFiles(), layout->connectorId());
 }
 
 DuckLakeTableLayout::DuckLakeTableLayout(
@@ -416,8 +250,7 @@ DuckLakeTableLayout::DuckLakeTableLayout(
     std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>
         icebergConnector,
     std::vector<const Column*> columns,
-    std::vector<const Column*> hivePartitionColumns,
-    std::vector<DuckLakeColumnMetadata> duckLakeColumns,
+    std::vector<DuckLakeColumn> duckLakeColumns,
     std::vector<DuckLakeDataFile> dataFiles)
     : hive::HiveTableLayout(
           label,
@@ -429,7 +262,7 @@ DuckLakeTableLayout::DuckLakeTableLayout(
           {},
           {},
           {},
-          std::move(hivePartitionColumns),
+          {},
           velox::dwio::common::FileFormat::PARQUET),
       icebergConnector_{std::move(icebergConnector)},
       dataFiles_{std::move(dataFiles)} {
@@ -462,7 +295,7 @@ velox::connector::ColumnHandlePtr DuckLakeTableLayout::createColumnHandle(
   VELOX_CHECK_NOT_NULL(
       column, "Column not found: {} in table {}", columnName, table().name());
 
-  const auto handleType = columnType(*this, *column);
+  const auto handleType = columnType(*column);
   velox::parquet::ParquetFieldId fieldId{-1, {}};
   if (handleType ==
       velox::connector::hive::HiveColumnHandle::ColumnType::kRegular) {
@@ -485,7 +318,7 @@ DuckLakeTable::DuckLakeTable(DuckLakeTableMetadata metadata)
           false,
           true,
           {},
-          identityPartitionColumnNames(metadata.partitionColumns)),
+          {}),
       numRows_{metadata.numRows} {}
 
 void DuckLakeTable::addLayout(std::unique_ptr<DuckLakeTableLayout> layout) {

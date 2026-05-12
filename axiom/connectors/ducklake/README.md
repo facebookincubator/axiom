@@ -6,12 +6,6 @@ Velox's Iceberg reader path.
 
 ## Usage
 
-Build Axiom:
-
-```bash
-make debug
-```
-
 Run `axiom_sql` with a DuckLake catalog URL:
 
 ```bash
@@ -44,6 +38,7 @@ DuckLake enables data inlining by default for small writes. To create test data
 for the current Axiom connector, either disable inlining on attach or flush
 inlined data to Parquet before querying through Axiom:
 
+From duckdb:
 ```sql
 ATTACH 'ducklake:metadata.ducklake' AS lake
   (DATA_PATH 'data', DATA_INLINING_ROW_LIMIT 0);
@@ -56,7 +51,7 @@ passes that URL into the connector config and registers a Velox Iceberg
 connector under the `ducklake` catalog name.
 
 At planning time, `DuckLakeCatalogClient` opens the DuckLake catalog database
-read-only and reads the latest snapshot metadata. It resolves the catalog,
+in read-only mode and reads the latest snapshot metadata. It resolves the catalog,
 schema, table, and file paths from DuckLake metadata tables, converts top-level
 DuckLake column types to Velox types, rejects unsupported DuckLake features, and
 returns the live Parquet files for the table.
@@ -64,9 +59,9 @@ returns the live Parquet files for the table.
 `DuckLakeConnectorMetadata` turns that metadata into Axiom table and layout
 objects. The layout creates Iceberg column handles using DuckLake column ids as
 Parquet field ids, so Velox can bind file columns by stable ids. The split
-manager exposes one logical partition and expands the live DuckLake files into
-Velox Iceberg/Hive splits. The actual Parquet reads are then executed by the
-existing Velox Iceberg reader path.
+manager expands the live DuckLake files into Velox Iceberg/Hive splits. The
+actual Parquet reads are then executed by the existing Velox Iceberg reader
+path.
 
 ## Current Scope
 
@@ -75,8 +70,9 @@ The first implementation supports read-only scans with:
 - DuckDB-backed DuckLake catalog metadata.
 - Parquet data files.
 - Top-level primitive columns.
-- Hidden Hive-style columns such as `$path` and `$file_size`.
+- Metadata columns such as `$path` and `$file_size`.
 
 The connector rejects unsupported features with explicit errors, including
-SQLite/PostgreSQL catalog backends, encrypted tables or files, delete files,
-inlined data tables, partial data files, and unsupported column types.
+SQLite/PostgreSQL catalog backends, partitioned tables, encrypted tables or
+files, delete files, inlined data tables, partial data files, and unsupported
+column types.

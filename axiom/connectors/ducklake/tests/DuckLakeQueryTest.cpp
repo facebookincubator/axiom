@@ -26,7 +26,6 @@
 
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/SqlQueryRunner.h"
-#include "axiom/connectors/ducklake/DuckLakeCatalogSql.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -104,33 +103,6 @@ TEST_F(DuckLakeQueryTest, all) {
 
 TEST_F(DuckLakeQueryTest, aggregates) {
   auto result = run("SELECT count(*), sum(id) FROM numbers WHERE id >= 2");
-
-  assertResultEquals(
-      result,
-      makeRowVector({
-          makeFlatVector<int64_t>({2}),
-          makeFlatVector<int64_t>({5}),
-      }));
-}
-
-TEST_F(DuckLakeQueryTest, identityPartitionedTable) {
-  auto result =
-      run("SELECT region, count(*), sum(id) FROM partitioned_numbers "
-          "GROUP BY region ORDER BY region");
-
-  assertResultEquals(
-      result,
-      makeRowVector({
-          makeFlatVector<std::string>({"APAC", "EU", "US"}),
-          makeFlatVector<int64_t>({1, 1, 2}),
-          makeFlatVector<int64_t>({3, 2, 5}),
-      }));
-}
-
-TEST_F(DuckLakeQueryTest, prunesIdentityPartitions) {
-  auto result =
-      run("SELECT count(*), sum(id) FROM partitioned_numbers "
-          "WHERE region = 'US'");
 
   assertResultEquals(
       result,

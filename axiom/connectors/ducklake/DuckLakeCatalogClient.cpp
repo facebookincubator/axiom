@@ -18,14 +18,13 @@
 
 #include <duckdb.hpp>
 
-#include <folly/container/F14Map.h>
 #include <cctype>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <regex>
 
-#include "axiom/connectors/ducklake/DuckLakeCatalogSql.h"
+#include "axiom/connectors/ducklake/SqlStringLiteral.h"
 #include "folly/String.h"
 #include "velox/common/base/Exceptions.h"
 
@@ -241,9 +240,7 @@ velox::TypePtr parsePrimitiveType(std::string typeName) {
   if (normalized == "time") {
     return velox::TIME_MICRO_UTC();
   }
-  if (normalized == "timestamp" || normalized == "timestamptz" ||
-      normalized == "timestamp_s" || normalized == "timestamp_ms" ||
-      normalized == "timestamp_ns") {
+  if (normalized == "timestamp") {
     return velox::TIMESTAMP();
   }
 
@@ -268,6 +265,7 @@ velox::TypePtr parsePrimitiveType(std::string typeName) {
         static_cast<uint8_t>(precision), static_cast<uint8_t>(scale));
   }
 
+  //"timestamptz", "timestamp_s", "timestamp_ms", "timestamp_ns"
   VELOX_USER_FAIL("DuckLake column type is not supported yet: {}", typeName);
 }
 
@@ -337,8 +335,8 @@ class DuckDbDuckLakeCatalogClient : public DuckLakeCatalogClient {
             "ORDER BY t.table_id LIMIT 1",
             livePredicate("s", snapshotId.value()),
             livePredicate("t", snapshotId.value()),
-            quoteDuckLakeCatalogSqlString(tableName.schema),
-            quoteDuckLakeCatalogSqlString(tableName.table)));
+            quoteSqlStringLiteral(tableName.schema),
+            quoteSqlStringLiteral(tableName.table)));
 
     if (tableResult->RowCount() == 0) {
       return std::nullopt;
@@ -364,9 +362,8 @@ class DuckDbDuckLakeCatalogClient : public DuckLakeCatalogClient {
 
     validateReadableTable(table.tableId, snapshotId.value());
     loadColumns(table);
-    loadPartitionColumns(table);
+    validateNotPartitioned(tableName, table.tableId, snapshotId.value());
     loadDataFiles(table);
-    loadPartitionValues(table);
     return table;
   }
 
@@ -394,7 +391,7 @@ class DuckDbDuckLakeCatalogClient : public DuckLakeCatalogClient {
         fmt::format(
             "SELECT value FROM ducklake_metadata "
             "WHERE \"key\" = {} AND scope IS NULL LIMIT 1",
-            quoteDuckLakeCatalogSqlString(key)));
+            quoteSqlStringLiteral(key)));
     if (result->RowCount() == 0) {
       return std::nullopt;
     }
@@ -443,6 +440,30 @@ class DuckDbDuckLakeCatalogClient : public DuckLakeCatalogClient {
         tableId);
   }
 
+  void validateNotPartitioned(
+      const SchemaTableName& tableName,
+      int64_t tableId,
+      int64_t snapshotId) {
+    const auto numPartitionSpecs = countRows(
+        fmt::format(
+            "SELECT COUNT(*) FROM ducklake_partition_info "
+            "WHERE table_id = {} AND {}",
+            tableId,
+            livePredicate("ducklake_partition_info", snapshotId)));
+    const auto numPartitionedFiles = countRows(
+        fmt::format(
+            "SELECT COUNT(*) FROM ducklake_data_file "
+            "WHERE table_id = {} AND {} AND partition_id IS NOT NULL",
+            tableId,
+            livePredicate("ducklake_data_file", snapshotId)));
+    VELOX_USER_CHECK_EQ(
+        numPartitionSpecs + numPartitionedFiles,
+        0,
+        "Partitioned DuckLake tables are not supported yet: {}.{}",
+        tableName.schema,
+        tableName.table);
+  }
+
   void loadColumns(DuckLakeTableMetadata& table) {
     auto result = query(
         fmt::format(
@@ -461,7 +482,7 @@ class DuckDbDuckLakeCatalogClient : public DuckLakeCatalogClient {
     table.columns.reserve(result->RowCount());
 
     for (auto row = idx_t{0}; row < result->RowCount(); ++row) {
-      DuckLakeColumnMetadata column{
+      DuckLakeColumn column{
           .columnId = int64Value(*result, 0, row),
           .columnOrder = int64Value(*result, 1, row),
           .name = stringValue(*result, 2, row),
@@ -478,40 +499,12 @@ class DuckDbDuckLakeCatalogClient : public DuckLakeCatalogClient {
     table.rowType = velox::ROW(std::move(names), std::move(types));
   }
 
-  void loadPartitionColumns(DuckLakeTableMetadata& table) {
-    auto result = query(
-        fmt::format(
-            "SELECT pc.partition_id, pc.partition_key_index, pc.column_id, "
-            "c.column_name, pc.transform "
-            "FROM ducklake_partition_info pi "
-            "JOIN ducklake_partition_column pc "
-            "ON pc.partition_id = pi.partition_id AND pc.table_id = pi.table_id "
-            "JOIN ducklake_column c "
-            "ON c.table_id = pc.table_id AND c.column_id = pc.column_id "
-            "WHERE pi.table_id = {} AND {} AND {} AND c.parent_column IS NULL "
-            "ORDER BY pc.partition_id, pc.partition_key_index",
-            table.tableId,
-            livePredicate("pi", table.snapshotId),
-            livePredicate("c", table.snapshotId)));
-
-    table.partitionColumns.reserve(result->RowCount());
-    for (auto row = idx_t{0}; row < result->RowCount(); ++row) {
-      table.partitionColumns.push_back({
-          .partitionId = int64Value(*result, 0, row),
-          .partitionKeyIndex = int64Value(*result, 1, row),
-          .columnId = int64Value(*result, 2, row),
-          .columnName = stringValue(*result, 3, row),
-          .transform = lower(stringValue(*result, 4, row)),
-      });
-    }
-  }
-
   void loadDataFiles(DuckLakeTableMetadata& table) {
     auto result = query(
         fmt::format(
             "SELECT data_file_id, path, path_is_relative, file_format, "
             "record_count, file_size_bytes, footer_size, row_id_start, "
-            "partition_id, encryption_key, partial_max "
+            "encryption_key, partial_max "
             "FROM ducklake_data_file "
             "WHERE table_id = {} AND {} "
             "ORDER BY file_order, data_file_id",
@@ -527,10 +520,10 @@ class DuckDbDuckLakeCatalogClient : public DuckLakeCatalogClient {
           "DuckLake data file format is not supported yet: {}",
           format);
       VELOX_USER_CHECK(
-          isNull(*result, 9, row),
+          isNull(*result, 8, row),
           "Encrypted DuckLake data files are not supported yet");
       VELOX_USER_CHECK(
-          isNull(*result, 10, row),
+          isNull(*result, 9, row),
           "DuckLake partial data files are not supported yet");
 
       const auto path = stringValue(*result, 1, row);
@@ -552,74 +545,8 @@ class DuckDbDuckLakeCatalogClient : public DuckLakeCatalogClient {
                     toUnsigned(footerSize.value(), "footer_size"))
               : std::nullopt,
           .rowIdStart = optionalInt64(*result, 7, row),
-          .partitionId = optionalInt64(*result, 8, row),
       };
       table.dataFiles.push_back(std::move(file));
-    }
-  }
-
-  const DuckLakePartitionColumnMetadata* partitionColumn(
-      const DuckLakeTableMetadata& table,
-      int64_t partitionId,
-      int64_t partitionKeyIndex) {
-    for (const auto& column : table.partitionColumns) {
-      if (column.partitionId == partitionId &&
-          column.partitionKeyIndex == partitionKeyIndex) {
-        return &column;
-      }
-    }
-    VELOX_USER_FAIL(
-        "DuckLake partition value references an unknown partition key. Partition id: {}, partition key index: {}",
-        partitionId,
-        partitionKeyIndex);
-  }
-
-  void loadPartitionValues(DuckLakeTableMetadata& table) {
-    if (table.dataFiles.empty()) {
-      return;
-    }
-
-    folly::F14FastMap<int64_t, DuckLakeDataFile*> filesById;
-    for (auto& file : table.dataFiles) {
-      filesById[file.dataFileId] = &file;
-    }
-
-    auto result = query(
-        fmt::format(
-            "SELECT fpv.data_file_id, df.partition_id, "
-            "fpv.partition_key_index, fpv.partition_value "
-            "FROM ducklake_file_partition_value fpv "
-            "JOIN ducklake_data_file df "
-            "ON df.data_file_id = fpv.data_file_id AND df.table_id = fpv.table_id "
-            "WHERE fpv.table_id = {} AND {} "
-            "ORDER BY fpv.data_file_id, fpv.partition_key_index",
-            table.tableId,
-            livePredicate("df", table.snapshotId)));
-
-    for (auto row = idx_t{0}; row < result->RowCount(); ++row) {
-      const auto dataFileId = int64Value(*result, 0, row);
-      auto fileIt = filesById.find(dataFileId);
-      VELOX_USER_CHECK(
-          fileIt != filesById.end(),
-          "DuckLake partition value references an unknown data file: {}",
-          dataFileId);
-      auto* file = fileIt->second;
-      const auto partitionId = int64Value(*result, 1, row);
-      const auto partitionKeyIndex = int64Value(*result, 2, row);
-      VELOX_USER_CHECK(
-          file->partitionId.has_value() &&
-              file->partitionId.value() == partitionId,
-          "DuckLake data file partition id does not match its partition value entry. Data file id: {}",
-          dataFileId);
-
-      auto value = optionalString(*result, 3, row);
-      file->partitionValues[partitionKeyIndex] = value;
-
-      const auto* column =
-          partitionColumn(table, partitionId, partitionKeyIndex);
-      if (column->transform == "identity") {
-        file->partitionKeys[column->columnName] = std::move(value);
-      }
     }
   }
 

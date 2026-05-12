@@ -21,12 +21,14 @@
 
 namespace facebook::axiom::connector::ducklake {
 
-/// Formats a value as a DuckDB SQL string literal for catalog metadata queries.
+/// Formats a value as a single-quoted SQL string literal.
 ///
 /// The returned string includes the surrounding single quotes and escapes any
-/// embedded single quotes using DuckDB SQL literal escaping. Use this only for
-/// literal values; SQL identifiers require a separate quoting or validation
-/// path.
-std::string quoteDuckLakeCatalogSqlString(std::string_view value);
+/// embedded single quotes by doubling them. Use this only for literal values;
+/// SQL identifiers require a separate quoting or validation path.
+///
+/// @param value Literal value to format for SQL text.
+/// @returns Quoted SQL string literal.
+std::string quoteSqlStringLiteral(std::string_view value);
 
 } // namespace facebook::axiom::connector::ducklake

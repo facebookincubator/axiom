@@ -30,10 +30,12 @@ enum class DuckLakeCatalogBackend {
   /// Uses a DuckDB database file or in-memory DuckDB database as the catalog.
   kDuckDb,
 
-  /// Uses a SQLite database as the catalog. This is parsed but not supported yet.
+  /// Uses a SQLite database as the catalog. This is parsed but not supported
+  /// yet.
   kSqlite,
 
-  /// Uses a PostgreSQL database as the catalog. This is parsed but not supported yet.
+  /// Uses a PostgreSQL database as the catalog. This is parsed but not
+  /// supported yet.
   kPostgres,
 };
 
@@ -56,6 +58,9 @@ struct DuckLakeCatalogSpec {
   ///
   /// Throws a user-facing Velox exception when the URL is empty, does not start
   /// with `ducklake:`, or omits the backend-specific metadata location.
+  ///
+  /// @param catalogUrl URL to parse, including the `ducklake:` prefix.
+  /// @returns Parsed catalog backend and metadata location.
   static DuckLakeCatalogSpec parse(std::string_view catalogUrl);
 };
 
@@ -66,13 +71,19 @@ class DuckLakeMetadataConfig {
   static constexpr const char* kCatalog = "ducklake_catalog";
 
   /// Creates a config wrapper over the immutable Velox connector config.
+  ///
+  /// @param config Velox connector configuration that owns DuckLake settings.
   explicit DuckLakeMetadataConfig(
       std::shared_ptr<const velox::config::ConfigBase> config);
 
   /// Returns the configured DuckLake catalog URL or an empty string if absent.
+  ///
+  /// @returns Raw catalog URL from the connector configuration.
   std::string catalogUrl() const;
 
   /// Parses and returns the configured DuckLake catalog backend and location.
+  ///
+  /// @returns Parsed catalog backend and metadata location.
   DuckLakeCatalogSpec catalogSpec() const;
 
  private:

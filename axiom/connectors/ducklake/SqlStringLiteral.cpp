@@ -14,21 +14,30 @@
  * limitations under the License.
  */
 
-#include "axiom/connectors/ducklake/DuckLakeCatalogSql.h"
+#include "axiom/connectors/ducklake/SqlStringLiteral.h"
 
 namespace facebook::axiom::connector::ducklake {
 
-std::string quoteDuckLakeCatalogSqlString(std::string_view value) {
-  std::string result{"'"};
+std::string quoteSqlStringLiteral(std::string_view value) {
+  static constexpr char kSingleQuote = '\'';
+
+  std::string result;
   result.reserve(value.size() + 2);
-  for (const auto c : value) {
-    if (c == '\'') {
-      result += "''";
-    } else {
-      result.push_back(c);
-    }
+  result.push_back(kSingleQuote);
+
+  size_t previousPosition{0};
+  size_t quotePosition = value.find(kSingleQuote);
+  while (quotePosition != std::string_view::npos) {
+    result.append(
+        value.substr(previousPosition, quotePosition - previousPosition));
+    result.push_back(kSingleQuote);
+    result.push_back(kSingleQuote);
+    previousPosition = quotePosition + 1;
+    quotePosition = value.find(kSingleQuote, previousPosition);
   }
-  result.push_back('\'');
+
+  result.append(value.substr(previousPosition));
+  result.push_back(kSingleQuote);
   return result;
 }
 

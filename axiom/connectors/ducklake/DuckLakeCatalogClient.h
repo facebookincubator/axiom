@@ -16,11 +16,9 @@
 
 #pragma once
 
-#include <map>
 #include <memory>
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "axiom/common/SchemaTableName.h"
@@ -30,7 +28,7 @@
 namespace facebook::axiom::connector::ducklake {
 
 /// Describes a top-level DuckLake table column from catalog metadata.
-struct DuckLakeColumnMetadata {
+struct DuckLakeColumn {
   /// Stores the stable DuckLake column id used as the Parquet field id.
   int64_t columnId;
 
@@ -69,40 +67,6 @@ struct DuckLakeDataFile {
 
   /// Stores the first DuckLake logical row id for the file when available.
   std::optional<int64_t> rowIdStart;
-
-  /// Identifies the DuckLake partition spec used for this file when present.
-  std::optional<int64_t> partitionId;
-
-  /// Maps partition key indexes to their encoded DuckLake partition values.
-  ///
-  /// Values are stored in key-index order so split enumeration can distinguish
-  /// different partitions even when partition transforms do not map directly to
-  /// table columns.
-  std::map<int64_t, std::optional<std::string>> partitionValues;
-
-  /// Maps identity partition column names to their encoded values.
-  ///
-  /// Velox uses these values to materialize partition columns from split
-  /// metadata when the data file omits the partition column value.
-  std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
-};
-
-/// Describes a partition key defined by a DuckLake partition spec.
-struct DuckLakePartitionColumnMetadata {
-  /// Identifies the DuckLake partition spec that owns this key.
-  int64_t partitionId;
-
-  /// Orders the key within the partition tuple using 0-based indexing.
-  int64_t partitionKeyIndex;
-
-  /// Stores the source DuckLake column id referenced by this partition key.
-  int64_t columnId;
-
-  /// Stores the current visible column name for the source column.
-  std::string columnName;
-
-  /// Stores the DuckLake partition transform, such as identity or year.
-  std::string transform;
 };
 
 /// Describes the table metadata needed by Axiom planning and split generation.
@@ -129,13 +93,10 @@ struct DuckLakeTableMetadata {
   velox::RowTypePtr rowType;
 
   /// Lists the visible top-level columns in DuckLake column order.
-  std::vector<DuckLakeColumnMetadata> columns;
+  std::vector<DuckLakeColumn> columns;
 
   /// Lists the live Parquet data files for the selected snapshot.
   std::vector<DuckLakeDataFile> dataFiles;
-
-  /// Lists partition keys for partition specs visible in the selected snapshot.
-  std::vector<DuckLakePartitionColumnMetadata> partitionColumns;
 
   /// Records the table-level row count when DuckLake metadata provides it.
   uint64_t numRows{0};
@@ -155,18 +116,27 @@ class DuckLakeCatalogClient {
   ///
   /// DuckDB catalogs are opened read-only. Other parsed backends currently
   /// throw explicit user-facing errors until their clients are implemented.
+  ///
+  /// @param spec Backend kind and backend-specific metadata location.
+  /// @returns Shared catalog client for reading DuckLake metadata.
   static std::shared_ptr<DuckLakeCatalogClient> create(
       DuckLakeCatalogSpec spec);
 
   /// Lists schema names visible in the latest DuckLake snapshot.
+  ///
+  /// @returns Schema names ordered by catalog name.
   virtual std::vector<std::string> listSchemaNames() = 0;
 
   /// Loads table metadata for the latest DuckLake snapshot.
   ///
   /// Returns std::nullopt when the table is not present in the current
   /// snapshot. Implementations throw user-facing errors when the table uses a
-  /// DuckLake feature that this connector cannot read yet, such as delete
-  /// files, encrypted files, inlined data, or unsupported column types.
+  /// DuckLake feature that this connector cannot read yet, such as
+  /// partitioning, delete files, encrypted files, inlined data, or unsupported
+  /// column types.
+  ///
+  /// @param tableName Schema-qualified table name to resolve.
+  /// @returns Snapshot-consistent metadata when the table exists.
   virtual std::optional<DuckLakeTableMetadata> loadTable(
       const SchemaTableName& tableName) = 0;
 };

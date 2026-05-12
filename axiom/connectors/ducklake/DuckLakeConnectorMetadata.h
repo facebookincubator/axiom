@@ -27,24 +27,34 @@ namespace facebook::axiom::connector::ducklake {
 
 /// Enumerates Velox scan splits for DuckLake table layouts.
 ///
-/// DuckLake stores partition specs and file partition values in the catalog
-/// instead of requiring partition values to appear in directory paths. The
-/// split manager reads those catalog rows, exposes matching partition handles
-/// to Axiom, and expands selected files into Iceberg-compatible Hive splits.
+/// The split manager reads live DuckLake data files from the catalog and
+/// expands them into Iceberg-compatible Hive splits.
 class DuckLakeSplitManager : public ConnectorSplitManager {
  public:
   /// Creates a split manager backed by shared DuckLake and Iceberg state.
+  ///
+  /// @param catalog Catalog client used to load DuckLake metadata snapshots.
+  /// @param icebergConnector Velox Iceberg connector used for Parquet reads.
   DuckLakeSplitManager(
       std::shared_ptr<DuckLakeCatalogClient> catalog,
       std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>
           icebergConnector);
 
-  /// Lists DuckLake partitions that match partition-column filters.
+  /// Returns the single logical partition used for DuckLake scans.
+  ///
+  /// @param session Connector session for the query.
+  /// @param tableHandle Velox Hive table handle containing the table name.
+  /// @returns A single partition handle for the table scan.
   folly::coro::Task<std::vector<PartitionHandlePtr>> co_listPartitions(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle) override;
 
   /// Returns a split source over the live DuckLake data files in the layout.
+  ///
+  /// @param session Connector session for the query.
+  /// @param tableHandle Velox Hive table handle containing the table name.
+  /// @param partitions Partition handles selected by co_listPartitions.
+  /// @returns Split source over the table's live DuckLake Parquet files.
   std::shared_ptr<SplitSource> getSplitSource(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
@@ -68,17 +78,25 @@ class DuckLakeSplitManager : public ConnectorSplitManager {
 class DuckLakeTableLayout : public hive::HiveTableLayout {
  public:
   /// Creates a layout with visible columns, DuckLake field ids, and live files.
+  ///
+  /// @param label Human-readable layout label.
+  /// @param table Owning DuckLake table.
+  /// @param icebergConnector Velox Iceberg connector used for Parquet reads.
+  /// @param columns Columns exposed through this table layout.
+  /// @param duckLakeColumns DuckLake columns carrying stable field ids.
+  /// @param dataFiles Live data files selected from the DuckLake snapshot.
   DuckLakeTableLayout(
       const std::string& label,
       const Table* table,
       std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>
           icebergConnector,
       std::vector<const Column*> columns,
-      std::vector<const Column*> hivePartitionColumns,
-      std::vector<DuckLakeColumnMetadata> duckLakeColumns,
+      std::vector<DuckLakeColumn> duckLakeColumns,
       std::vector<DuckLakeDataFile> dataFiles);
 
   /// Returns the live data files selected from the DuckLake snapshot.
+  ///
+  /// @returns Data files owned by this layout.
   const std::vector<DuckLakeDataFile>& dataFiles() const {
     return dataFiles_;
   }
@@ -89,6 +107,15 @@ class DuckLakeTableLayout : public hive::HiveTableLayout {
   /// ids. Hidden Hive-style columns such as `$path` and `$file_size` use
   /// synthesized Iceberg column handles because Velox routes them from split
   /// metadata instead of Parquet fields.
+  ///
+  /// @param session Connector session for the query.
+  /// @param columnName Column to resolve to a Velox handle.
+  /// @param subfields Required subfields for complex column pruning.
+  /// @param castToType Optional requested read type. DuckLake does not support
+  /// this yet.
+  /// @param subfieldMapping Optional mapping for complex-type casts. DuckLake
+  /// does not support this yet.
+  /// @returns Velox Iceberg column handle for the requested column.
   velox::connector::ColumnHandlePtr createColumnHandle(
       const ConnectorSessionPtr& session,
       const std::string& columnName,
@@ -116,17 +143,25 @@ class DuckLakeTableLayout : public hive::HiveTableLayout {
 class DuckLakeTable : public hive::HiveTable {
  public:
   /// Creates a table from snapshot-consistent DuckLake metadata.
+  ///
+  /// @param metadata DuckLake table metadata for one snapshot.
   explicit DuckLakeTable(DuckLakeTableMetadata metadata);
 
   /// Returns the physical layouts for this table.
+  ///
+  /// @returns Layouts owned by this table.
   const std::vector<const TableLayout*>& layouts() const override {
     return exportedLayouts_;
   }
 
   /// Adds a DuckLake table layout owned by this table.
+  ///
+  /// @param layout Layout to own and expose through layouts().
   void addLayout(std::unique_ptr<DuckLakeTableLayout> layout);
 
   /// Returns the table row count from DuckLake metadata.
+  ///
+  /// @returns Catalog row count, or zero when DuckLake has no table stats.
   uint64_t numRows() const override {
     return numRows_;
   }
@@ -155,6 +190,8 @@ class DuckLakeConnectorMetadata : public ConnectorMetadata {
   /// The catalog URL is read from the connector config, parsed as a DuckLake
   /// catalog spec, and opened through DuckLakeCatalogClient. The shared pointer
   /// keeps the Velox connector alive for table layout and split generation.
+  ///
+  /// @param icebergConnector Velox Iceberg connector used for Parquet reads.
   explicit DuckLakeConnectorMetadata(
       std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>
           icebergConnector);
@@ -165,29 +202,46 @@ class DuckLakeConnectorMetadata : public ConnectorMetadata {
   /// that want to provide a specialized DuckLakeCatalogClient implementation.
   /// The shared pointer keeps the Velox connector alive for table layout and
   /// split generation.
+  ///
+  /// @param icebergConnector Velox Iceberg connector used for Parquet reads.
+  /// @param catalog DuckLake catalog client to use for metadata reads.
   DuckLakeConnectorMetadata(
       std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>
           icebergConnector,
       std::shared_ptr<DuckLakeCatalogClient> catalog);
 
   /// Finds a DuckLake table in the latest catalog snapshot.
+  ///
+  /// @param tableName Schema-qualified table name to resolve.
+  /// @returns Loaded table, or nullptr when the table does not exist.
   TablePtr findTable(const SchemaTableName& tableName) override;
 
   /// Lists schemas in the latest DuckLake catalog snapshot.
+  ///
+  /// @param session Connector session for the query.
+  /// @returns Schema names visible in the latest snapshot.
   std::vector<std::string> listSchemaNames(
       const ConnectorSessionPtr& session) override;
 
   /// Returns true when a DuckLake schema exists in the latest snapshot.
+  ///
+  /// @param session Connector session for the query.
+  /// @param schemaName Schema name to look up.
+  /// @returns True when the schema exists in the latest snapshot.
   bool schemaExists(
       const ConnectorSessionPtr& session,
       const std::string& schemaName) override;
 
   /// Returns the DuckLake split manager.
+  ///
+  /// @returns Split manager owned by this metadata instance.
   ConnectorSplitManager* splitManager() override {
     return splitManager_.get();
   }
 
   /// Returns shared ownership of the Iceberg connector used for scan execution.
+  ///
+  /// @returns Velox Iceberg connector used for Parquet reads.
   std::shared_ptr<velox::connector::hive::iceberg::IcebergConnector>
   icebergConnector() const {
     return icebergConnector_;
