@@ -30,106 +30,10 @@
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include "axiom/connectors/ducklake/tests/DuckLakeTestUtils.h"
+
 namespace facebook::axiom::connector::ducklake {
 namespace {
-
-struct DuckLakeCreationError {
-  std::string message;
-  bool isEnvironmentIssue{false};
-};
-
-std::optional<std::string> runDuckDb(
-    duckdb::Connection& connection,
-    std::string_view sql) {
-  auto result = connection.Query(std::string{sql});
-  if (result->HasError()) {
-    return result->GetError();
-  }
-  return std::nullopt;
-}
-
-bool isDuckLakeExtensionSetupFailure(
-    std::string_view sql,
-    std::string_view error) {
-  if (sql == "INSTALL ducklake" || sql == "LOAD ducklake") {
-    return true;
-  }
-  return sql.find("ATTACH 'ducklake:") != std::string_view::npos &&
-      (error.find("Extension") != std::string_view::npos ||
-       error.find("extension") != std::string_view::npos ||
-       error.find("ducklake") != std::string_view::npos);
-}
-
-bool hasParquetFile(const std::filesystem::path& directory) {
-  if (!std::filesystem::exists(directory)) {
-    return false;
-  }
-  for (const auto& entry :
-       std::filesystem::recursive_directory_iterator(directory)) {
-    if (entry.is_regular_file() && entry.path().extension() == ".parquet") {
-      return true;
-    }
-  }
-  return false;
-}
-
-std::optional<DuckLakeCreationError> createDuckLakeTable(
-    const std::filesystem::path& directory) {
-  const auto catalogPath = directory / "metadata.ducklake";
-  const auto dataDirectory = directory / "metadata.ducklake.files";
-
-  duckdb::DuckDB db(nullptr);
-  duckdb::Connection connection{db};
-  std::vector<std::string> statements{
-      fmt::format(
-          "ATTACH {} AS lake (DATA_INLINING_ROW_LIMIT 0)",
-          quoteDuckLakeCatalogSqlString(
-              fmt::format("ducklake:{}", catalogPath.string()))),
-      "USE lake",
-      "CREATE TABLE numbers(id INTEGER, name VARCHAR)",
-      "INSERT INTO numbers VALUES (1, 'one'), (2, 'two'), (3, 'three')",
-      "CREATE TABLE partitioned_numbers(id INTEGER, region VARCHAR)",
-      "ALTER TABLE partitioned_numbers SET PARTITIONED BY (region)",
-      "INSERT INTO partitioned_numbers VALUES "
-      "(1, 'US'), (2, 'EU'), (3, 'APAC'), (4, 'US')",
-  };
-
-  if (auto error = runDuckDb(connection, "INSTALL ducklake")) {
-    return DuckLakeCreationError{
-        fmt::format("DuckDB failed to install DuckLake: {}", error.value()),
-        true,
-    };
-  }
-  if (auto error = runDuckDb(connection, "LOAD ducklake")) {
-    return DuckLakeCreationError{
-        fmt::format("DuckDB failed to load DuckLake: {}", error.value()),
-        true,
-    };
-  }
-  for (const auto& sql : statements) {
-    if (auto error = runDuckDb(connection, sql)) {
-      return DuckLakeCreationError{
-          fmt::format("DuckDB failed to run '{}': {}", sql, error.value()),
-          isDuckLakeExtensionSetupFailure(sql, error.value()),
-      };
-    }
-  }
-
-  if (!std::filesystem::exists(catalogPath)) {
-    return DuckLakeCreationError{
-        fmt::format(
-            "DuckLake catalog was not created: {}", catalogPath.string()),
-    };
-  }
-  if (!hasParquetFile(dataDirectory)) {
-    return DuckLakeCreationError{
-        fmt::format(
-            "DuckLake data file was not created: {}", dataDirectory.string()),
-    };
-  }
-
-  return std::nullopt;
-}
 
 class DuckLakeQueryTest : public ::testing::Test,
                           public facebook::velox::test::VectorTestBase {

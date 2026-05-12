@@ -58,7 +58,7 @@ struct DuckLakeDataFile {
   /// Stores the fully resolved file path passed to Velox scan splits.
   std::string path;
 
-  /// Records the number of logical rows stored in the file.
+  /// Records the number of rows stored in the file.
   uint64_t recordCount{0};
 
   /// Records the file size when DuckLake metadata provides it.
