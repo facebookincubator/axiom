@@ -32,6 +32,8 @@ class HiveMetadataConfig {
   static constexpr const char* kLocalDataPath = "hive_local_data_path";
 
   /// The name of the file format to use for processing data at kLocalDataPath.
+  /// Supported values: "parquet", "dwrf", "text". Defaults to "parquet" if
+  /// not specified.
   static constexpr const char* kLocalFileFormat = "hive_local_file_format";
 
   std::string localDataPath() const;

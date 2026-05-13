@@ -14,9 +14,12 @@
  * limitations under the License.
  */
 
+#include <fmt/ranges.h>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
-#include <iostream>
+#include <set>
+#include <unordered_map>
+#include "axiom/cli/CatalogProperties.h"
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/Console.h"
 
@@ -35,27 +38,75 @@ int main(int argc, char** argv) {
   facebook::axiom::Connectors connectors;
   axiom::sql::SqlQueryRunner runner;
   runner.initialize([&]() {
+    VELOX_USER_CHECK(
+        FLAGS_data_path.empty() || FLAGS_etc_dir.empty(),
+        "--data_path and --etc_dir are mutually exclusive. Use --data_path for "
+        "the local Hive shorthand or --etc_dir for catalog .properties files.");
+
     auto defaultConnector = connectors.registerTpchConnector();
-    auto defaultSchema = "tiny";
+    std::unordered_map<std::string, std::string> defaultSchemas = {
+        {
+            defaultConnector->connectorId(),
+            "tiny",
+        },
+    };
+    std::set<std::string> catalogIds = {defaultConnector->connectorId()};
 
     connectors.registerTestConnector();
+    catalogIds.insert(facebook::axiom::Connectors::kTestConnectorId);
+    defaultSchemas.emplace(
+        facebook::axiom::Connectors::kTestConnectorId, "default");
+
+    auto registerConnector =
+        [&](std::string id,
+            std::string_view name,
+            const std::unordered_map<std::string, std::string>& config) {
+          VELOX_USER_CHECK(
+              catalogIds.insert(id).second,
+              "Catalog is already registered: {}",
+              id);
+          connectors.registerConnector(name, config, id);
+          if (name == "tpch") {
+            defaultSchemas.emplace(id, "tiny");
+          } else if (name == "hive" || name == "test") {
+            defaultSchemas.emplace(id, "default");
+          }
+        };
 
     if (!FLAGS_data_path.empty()) {
-      defaultConnector = connectors.registerLocalHiveConnector(
-          FLAGS_data_path, FLAGS_data_format);
-      defaultSchema = "default";
+      connectors.registerLocalHiveConnector(FLAGS_data_path, FLAGS_data_format);
+      catalogIds.insert(facebook::axiom::Connectors::kLocalHiveConnectorId);
+      defaultSchemas.emplace(
+          facebook::axiom::Connectors::kLocalHiveConnectorId, "default");
     }
 
-    std::string connectorId =
-        FLAGS_catalog.empty() ? defaultConnector->connectorId() : FLAGS_catalog;
-
-    if (FLAGS_schema.empty() &&
-        connectorId != defaultConnector->connectorId()) {
-      std::cerr << "Schema must be specified for connector " << connectorId;
-      exit(1);
+    for (auto& catalogProperties :
+         axiom::sql::loadCatalogProperties(FLAGS_etc_dir)) {
+      registerConnector(
+          std::move(catalogProperties.catalogName),
+          catalogProperties.connectorName,
+          catalogProperties.connectorConfig);
     }
 
-    std::string schema = FLAGS_schema.empty() ? defaultSchema : FLAGS_schema;
+    std::string connectorId;
+    if (!FLAGS_catalog.empty()) {
+      connectorId = FLAGS_catalog;
+    } else if (!FLAGS_data_path.empty()) {
+      connectorId = facebook::axiom::Connectors::kLocalHiveConnectorId;
+    } else {
+      connectorId = defaultConnector->connectorId();
+    }
+
+    std::string schema = FLAGS_schema;
+    if (schema.empty()) {
+      auto defaultSchemaIterator = defaultSchemas.find(connectorId);
+      VELOX_USER_CHECK(
+          defaultSchemaIterator != defaultSchemas.end() &&
+              !defaultSchemaIterator->second.empty(),
+          "Schema must be specified for connector {}",
+          connectorId);
+      schema = defaultSchemaIterator->second;
+    }
 
     return std::make_pair(connectorId, schema);
   });

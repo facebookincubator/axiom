@@ -14,6 +14,7 @@
 
 add_library(
   axiom_cli
+  CatalogProperties.cpp
   Connectors.cpp
   Console.cpp
   QueryIdGenerator.cpp

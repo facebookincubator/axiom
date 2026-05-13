@@ -28,7 +28,8 @@ The examples below use `axiom_sql` for brevity. With Buck, replace
 | `--init` | | Path to a SQL file with semicolon-separated statements to execute on startup before entering interactive mode or running `--query`. |
 | `--catalog` | | Default catalog (connector). If not specified, defaults to `hive` when `--data_path` is set, `tpch` otherwise. |
 | `--schema` | | Default schema. If not specified, defaults to `tiny` for TPC-H and `default` for Hive and Test connectors. |
-| `--data_path` | | Hive specific: root path for Hive-style partitioned data. Registers local Hive connector. |
+| `--etc_dir` | | Path to a directory of catalog `.properties` files. Mutually exclusive with `--data_path`. External catalogs are not selected automatically; use `--catalog` or fully-qualified names in SQL. |
+| `--data_path` | | Hive specific: root path for Hive-style partitioned data. Registers local Hive connector. Mutually exclusive with `--etc_dir`. |
 | `--data_format` | `parquet` | Hive specific: data format, `parquet`, `dwrf`, or `text`. |
 | `--split_target_bytes` | `16MB` | Hive specific: approximate bytes per split. |
 | `--num_workers` | `4` | Number of in-process workers. |
@@ -58,14 +59,32 @@ $ ./axiom_sql --query "select count(*) from sf1.orders"
 1500000
 ```
 
-**[Hive](../connectors/hive/README.md)** (`hive.default`) — Registered when `--data_path` is set. Reads and writes
-Parquet, DWRF, or TEXT (including CSV) files in a local directory with Hive-style partitioning. Supports
-`CREATE TABLE`, `CREATE TABLE AS SELECT`, `INSERT`, and `DROP TABLE`. Becomes the
-default catalog when registered.
+**[Hive](../connectors/hive/README.md)** (`hive.default`) — Registered via `--data_path` or configured through `.properties` files.
+Reads and writes Parquet, DWRF, or TEXT (including CSV) files in a local directory with Hive-style partitioning. Supports
+`CREATE TABLE`, `CREATE TABLE AS SELECT`, `INSERT`, and `DROP TABLE`.
+
+Using `--data_path`:
 
 ```
 $ ./axiom_sql --data_path /path/to/data --data_format parquet
 ```
+
+Configuring through `--etc_dir`:
+
+```properties
+# etc/hive.properties
+connector.name=hive
+hive_local_data_path=/path/to/data
+hive_local_file_format=parquet
+```
+
+```bash
+$ ./axiom_sql --etc_dir etc/
+```
+
+When `--etc_dir` is used, catalogs are available by name, but the
+CLI does not auto-select one. Use `--catalog <name>` or a fully qualified
+catalog.schema name in SQL, for example `USE hive2.default;`.
 
 **[System](../connectors/system/README.md)** (`system`) — Always registered. Read-only. Provides metadata tables
 such as session properties (`system.metadata.session_properties`).
@@ -84,6 +103,29 @@ create table t as select * from unnest(array[1,2,3], array[10,20,30]) as t(a, b)
 ```
 $ ./axiom_sql --init start.sql
 SQL> select * from t;
+```
+
+## Catalog Configuration Files
+
+Configuration files (`.properties` files) define catalogs for use with `--etc_dir`.
+Each file name (without `.properties` extension) becomes the catalog name.
+
+**Format:**
+- One property per line in `key=value` format
+- Lines starting with `#` are comments and are ignored
+- Whitespace before and after keys and values is trimmed
+- All whitespace is preserved within keys and values
+
+**Required properties:**
+- `connector.name` — The connector type: `hive`, `tpch`, or `test`
+
+**Example:**
+
+```properties
+# Hive connector for local data
+connector.name=hive
+hive_local_data_path=/path/to/data
+hive_local_file_format=parquet
 ```
 
 ## Examples

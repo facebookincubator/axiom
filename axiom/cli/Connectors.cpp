@@ -18,7 +18,6 @@
 
 #include <folly/system/HardwareConcurrency.h>
 #include "axiom/common/SessionConfig.h"
-#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
@@ -26,6 +25,7 @@
 #include "axiom/connectors/system/SystemConnectorMetadata.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
@@ -148,11 +148,11 @@ Connectors::registerLocalHiveConnector(
       {connector::hive::HiveMetadataConfig::kLocalFileFormat, dataFormat},
   };
 
-  auto config =
+  auto configBase =
       std::make_shared<velox::config::ConfigBase>(std::move(connectorConfig));
 
   velox::connector::hive::HiveConnectorFactory factory;
-  auto connector = factory.newConnector(connectorId, config, ioExecutor());
+  auto connector = factory.newConnector(connectorId, configBase, ioExecutor());
   registerConnector(connector);
 
   auto hiveConnector =
@@ -164,6 +164,43 @@ Connectors::registerLocalHiveConnector(
           hiveConnector));
 
   return connector;
+}
+
+std::shared_ptr<velox::connector::Connector> Connectors::registerConnector(
+    std::string_view connectorName,
+    const std::unordered_map<std::string, std::string>& connectorConfig,
+    const std::string& connectorId) {
+  if (connectorName == "tpch") {
+    return registerTpchConnector(connectorId);
+  }
+
+  if (connectorName == "hive") {
+    auto dataPathIterator = connectorConfig.find(
+        connector::hive::HiveMetadataConfig::kLocalDataPath);
+    VELOX_USER_CHECK(
+        dataPathIterator != connectorConfig.end(),
+        "Hive catalog config is missing required property {}: {}",
+        connector::hive::HiveMetadataConfig::kLocalDataPath,
+        connectorId);
+
+    auto fileFormatIterator = connectorConfig.find(
+        connector::hive::HiveMetadataConfig::kLocalFileFormat);
+    const std::string fileFormat = fileFormatIterator == connectorConfig.end()
+        ? "parquet"
+        : fileFormatIterator->second;
+
+    return registerLocalHiveConnector(
+        dataPathIterator->second, fileFormat, connectorId);
+  }
+
+  if (connectorName == "test") {
+    return registerTestConnector(connectorId);
+  }
+
+  VELOX_USER_FAIL(
+      "Unsupported connector.name in catalog config: {} for {}",
+      connectorName,
+      connectorId);
 }
 
 std::shared_ptr<velox::connector::Connector> Connectors::registerTestConnector(
