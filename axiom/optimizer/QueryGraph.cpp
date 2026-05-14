@@ -694,6 +694,13 @@ float estimateFanout(
     return scanCardinality;
   }
 
+  for (size_t i = 0; i < keys.size(); ++i) {
+    if (keys[i]->value().cardinality == 0 ||
+        otherKeys[i]->value().cardinality == 0) {
+      return 0;
+    }
+  }
+
   auto fanout = scanCardinality /
       std::max(keys[0]->value().cardinality, otherKeys[0]->value().cardinality);
   for (size_t i = 1; i < keys.size(); ++i) {
