@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
@@ -51,11 +52,15 @@ class SparkToAxiomUnnestTest : public ::testing::Test {
             {velox::BIGINT(), velox::MAP(velox::VARCHAR(), velox::INTEGER())}));
     velox::connector::ConnectorRegistry::global().insert(
         connectorId_, connector);
+    facebook::axiom::connector::ConnectorMetadataRegistry::global().insert(
+        connectorId_, connector->metadata());
 
     pool_ = velox::memory::memoryManager()->addLeafPool();
   }
 
   void TearDown() override {
+    facebook::axiom::connector::ConnectorMetadataRegistry::global().erase(
+        connectorId_);
     velox::connector::ConnectorRegistry::global().erase(connectorId_);
   }
 

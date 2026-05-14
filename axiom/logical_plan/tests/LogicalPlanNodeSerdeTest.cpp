@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/logical_plan/ExprApi.h"
@@ -53,9 +54,12 @@ class LogicalPlanNodeSerdeTest : public testing::Test {
     connector_->addTable(
         "output_table", ROW({"col_a", "col_b"}, {BIGINT(), VARCHAR()}));
     velox::connector::registerConnector(connector_);
+    connector::ConnectorMetadataRegistry::global().insert(
+        kTestConnectorId, connector_->metadata());
   }
 
   void TearDown() override {
+    connector::ConnectorMetadataRegistry::global().erase(kTestConnectorId);
     velox::connector::unregisterConnector(kTestConnectorId);
     connector_.reset();
     pool_.reset();

@@ -16,6 +16,7 @@
 
 #include "axiom/cli/Console.h"
 #include <gtest/gtest.h>
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "velox/connectors/ConnectorRegistry.h"
 
@@ -37,6 +38,7 @@ class ConsoleTest : public ::testing::Test {
     // Restore FLAGS_query to avoid polluting other tests.
     FLAGS_query = "";
     for (const auto& id : connectorIds_) {
+      facebook::axiom::connector::ConnectorMetadataRegistry::global().erase(id);
       facebook::velox::connector::ConnectorRegistry::global().erase(id);
     }
   }
@@ -54,6 +56,8 @@ class ConsoleTest : public ::testing::Test {
                   fmt::format("console_test{}", kCounter++));
           facebook::velox::connector::ConnectorRegistry::global().insert(
               testConnector->connectorId(), testConnector);
+          facebook::axiom::connector::ConnectorMetadataRegistry::global()
+              .insert(testConnector->connectorId(), testConnector->metadata());
 
           connectorIds_.emplace_back(testConnector->connectorId());
 

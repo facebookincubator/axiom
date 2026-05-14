@@ -23,6 +23,7 @@
 #include <gtest/gtest.h>
 #include <thread>
 #include "axiom/cli/QueryIdGenerator.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -49,6 +50,7 @@ class SqlQueryRunnerTest : public ::testing::Test, public test::VectorTestBase {
   void TearDown() override {
     runner_.reset();
     for (const auto& id : connectorIds_) {
+      facebook::axiom::connector::ConnectorMetadataRegistry::global().erase(id);
       facebook::velox::connector::ConnectorRegistry::global().erase(id);
     }
   }
@@ -68,6 +70,8 @@ class SqlQueryRunnerTest : public ::testing::Test, public test::VectorTestBase {
               connectorId);
       facebook::velox::connector::ConnectorRegistry::global().insert(
           testConnector_->connectorId(), testConnector_);
+      facebook::axiom::connector::ConnectorMetadataRegistry::global().insert(
+          testConnector_->connectorId(), testConnector_->metadata());
 
       connectorIds_.emplace_back(testConnector_->connectorId());
 

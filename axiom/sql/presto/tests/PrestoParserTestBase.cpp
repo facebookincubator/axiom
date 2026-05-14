@@ -15,6 +15,7 @@
  */
 
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -39,10 +40,14 @@ void PrestoParserTestBase::SetUp() {
   connector_ =
       std::make_shared<facebook::axiom::connector::TestConnector>(kConnectorId);
   facebook::velox::connector::registerConnector(connector_);
+  facebook::axiom::connector::ConnectorMetadataRegistry::global().insert(
+      kConnectorId, connector_->metadata());
   connector_->addTpchTables();
 }
 
 void PrestoParserTestBase::TearDown() {
+  facebook::axiom::connector::ConnectorMetadataRegistry::global().erase(
+      kConnectorId);
   facebook::velox::connector::unregisterConnector(kConnectorId);
   connector_.reset();
 }

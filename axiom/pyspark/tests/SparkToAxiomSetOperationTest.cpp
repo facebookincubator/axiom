@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include <memory>
 
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/pyspark/SparkToAxiom.h"
@@ -30,7 +31,8 @@ using namespace facebook;
 namespace axiom::collagen::test {
 namespace {
 
-void registerTestConnector(const std::string& connectorId) {
+std::shared_ptr<facebook::axiom::connector::TestConnector>
+registerTestConnector(const std::string& connectorId) {
   auto connector =
       std::make_shared<facebook::axiom::connector::TestConnector>(connectorId);
 
@@ -40,6 +42,9 @@ void registerTestConnector(const std::string& connectorId) {
       "feature_table", velox::ROW({"primary_rid"}, {velox::BIGINT()}));
 
   velox::connector::registerConnector(connector);
+  facebook::axiom::connector::ConnectorMetadataRegistry::global().insert(
+      connectorId, connector->metadata());
+  return connector;
 }
 
 class SparkToAxiomSetOperationTest : public ::testing::Test {
@@ -52,13 +57,16 @@ class SparkToAxiomSetOperationTest : public ::testing::Test {
     pool_ = velox::memory::MemoryManager::getInstance()->addLeafPool();
 
     // Set up test connector
-    registerTestConnector("test_connector");
+    connector_ = registerTestConnector("test_connector");
   }
 
   void TearDown() override {
-    // Cleanup is handled by the connector destructor
+    facebook::axiom::connector::ConnectorMetadataRegistry::global().erase(
+        connector_->connectorId());
+    velox::connector::unregisterConnector(connector_->connectorId());
   }
 
+  std::shared_ptr<facebook::axiom::connector::TestConnector> connector_;
   std::shared_ptr<velox::memory::MemoryPool> pool_;
 };
 

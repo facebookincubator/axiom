@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include <memory>
 
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/pyspark/SparkToAxiom.h"
@@ -42,16 +43,20 @@ class SparkToAxiomLambdaTest : public ::testing::Test {
     pool_ = velox::memory::MemoryManager::getInstance()->addLeafPool();
 
     // Set up test connector
-    auto connector =
-        std::make_shared<facebook::axiom::connector::TestConnector>(
-            "test_connector");
-    velox::connector::registerConnector(connector);
+    connector_ = std::make_shared<facebook::axiom::connector::TestConnector>(
+        "test_connector");
+    velox::connector::registerConnector(connector_);
+    facebook::axiom::connector::ConnectorMetadataRegistry::global().insert(
+        connector_->connectorId(), connector_->metadata());
   }
 
   void TearDown() override {
-    // Cleanup is handled by the connector destructor
+    facebook::axiom::connector::ConnectorMetadataRegistry::global().erase(
+        connector_->connectorId());
+    velox::connector::unregisterConnector(connector_->connectorId());
   }
 
+  std::shared_ptr<facebook::axiom::connector::TestConnector> connector_;
   std::shared_ptr<velox::memory::MemoryPool> pool_;
 };
 

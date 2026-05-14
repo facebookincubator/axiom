@@ -16,6 +16,7 @@
 
 #include "axiom/optimizer/tests/SqlTestBase.h"
 #include "axiom/common/Session.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
@@ -59,6 +60,8 @@ void SqlTestBase::SetUp() {
     connector_ = std::make_shared<connector::TestConnector>(kTestConnectorId);
     velox::connector::ConnectorRegistry::global().insert(
         kTestConnectorId, connector_);
+    connector::ConnectorMetadataRegistry::global().insert(
+        kTestConnectorId, connector_->metadata());
   }
 
   optimizerPool_ = rootPool_->addLeafChild("optimizer");
@@ -68,6 +71,7 @@ void SqlTestBase::SetUp() {
 void SqlTestBase::TearDown() {
   optimizerPool_.reset();
   if (createsConnectorPerTest()) {
+    connector::ConnectorMetadataRegistry::global().erase(kTestConnectorId);
     velox::connector::ConnectorRegistry::global().erase(kTestConnectorId);
     connector_.reset();
   }

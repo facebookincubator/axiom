@@ -171,6 +171,13 @@ std::shared_ptr<velox::connector::Connector> Connectors::registerTestConnector(
   connector::TestConnectorFactory factory(connectorId.c_str());
   auto connector = factory.newConnector(connectorId);
   registerConnector(connector);
+
+  auto* testConnector =
+      dynamic_cast<connector::TestConnector*>(connector.get());
+  VELOX_CHECK_NOT_NULL(testConnector);
+  connector::ConnectorMetadataRegistry::global().insert(
+      connector->connectorId(), testConnector->metadata());
+
   return connector;
 }
 

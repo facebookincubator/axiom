@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/pyspark/SparkToAxiom.h"
@@ -39,6 +40,8 @@ void registerTestConnector(const std::string& connectorId) {
           {"viewer_rid", "feature_a"}, {velox::BIGINT(), velox::DOUBLE()}));
 
   velox::connector::registerConnector(connector);
+  facebook::axiom::connector::ConnectorMetadataRegistry::global().insert(
+      connectorId, connector->metadata());
 }
 
 class SparkToAxiomWithColumnsTest : public ::testing::Test {
@@ -54,6 +57,8 @@ class SparkToAxiomWithColumnsTest : public ::testing::Test {
   }
 
   void TearDown() override {
+    facebook::axiom::connector::ConnectorMetadataRegistry::global().erase(
+        connectorId_);
     velox::connector::unregisterConnector(connectorId_);
   }
 

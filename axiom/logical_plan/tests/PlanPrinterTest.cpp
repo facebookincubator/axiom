@@ -17,6 +17,7 @@
 #include "axiom/logical_plan/PlanPrinter.h"
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
@@ -53,9 +54,12 @@ class PlanPrinterTest : public testing::Test {
              ARRAY(BIGINT()),
              MAP(INTEGER(), REAL())}));
     velox::connector::registerConnector(connector_);
+    connector::ConnectorMetadataRegistry::global().insert(
+        kTestConnectorId, connector_->metadata());
   }
 
   void TearDown() override {
+    connector::ConnectorMetadataRegistry::global().erase(kTestConnectorId);
     velox::connector::unregisterConnector(kTestConnectorId);
     connector_.reset();
   }

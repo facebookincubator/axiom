@@ -17,6 +17,7 @@
 #include "axiom/optimizer/DerivedTablePrinter.h"
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/Optimization.h"
@@ -54,9 +55,12 @@ class DerivedTablePrinterTest : public ::testing::Test {
 
     connector_ = std::make_shared<connector::TestConnector>(kTestConnectorId);
     velox::connector::registerConnector(connector_);
+    connector::ConnectorMetadataRegistry::global().insert(
+        kTestConnectorId, connector_->metadata());
   }
 
   void TearDown() override {
+    connector::ConnectorMetadataRegistry::global().erase(kTestConnectorId);
     velox::connector::unregisterConnector(kTestConnectorId);
   }
 

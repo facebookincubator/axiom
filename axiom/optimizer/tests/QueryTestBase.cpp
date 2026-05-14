@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/tests/QueryTestBase.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
@@ -64,6 +65,8 @@ void QueryTestBase::SetUp() {
 
   testConnector_ = std::make_shared<connector::TestConnector>(kTestConnectorId);
   velox::connector::registerConnector(testConnector_);
+  connector::ConnectorMetadataRegistry::global().insert(
+      kTestConnectorId, testConnector_->metadata());
   testConnector_->addTpchTables();
 
   optimizerPool_ = rootPool_->addLeafChild("optimizer");
@@ -86,6 +89,7 @@ void QueryTestBase::TearDown() {
   }
   queryCtx_.reset();
   optimizerPool_.reset();
+  connector::ConnectorMetadataRegistry::global().erase(kTestConnectorId);
   velox::connector::unregisterConnector(kTestConnectorId);
   testConnector_.reset();
   velox::exec::ExchangeSource::factories().clear();

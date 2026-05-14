@@ -17,6 +17,7 @@
 #include <folly/init/Init.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
@@ -396,7 +397,10 @@ TEST_F(PlanTest, inList) {
 TEST_F(PlanTest, multipleConnectors) {
   auto extraConnector = std::make_shared<connector::TestConnector>("extra");
   velox::connector::registerConnector(extraConnector);
+  connector::ConnectorMetadataRegistry::global().insert(
+      "extra", extraConnector->metadata());
   SCOPE_EXIT {
+    connector::ConnectorMetadataRegistry::global().erase("extra");
     velox::connector::unregisterConnector("extra");
   };
 

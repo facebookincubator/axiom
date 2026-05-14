@@ -36,6 +36,8 @@ class SchemaResolverTest : public ::testing::Test {
   }
 
   void TearDown() override {
+    ConnectorMetadataRegistry::global().erase("base");
+    ConnectorMetadataRegistry::global().erase("other");
     velox::connector::unregisterConnector("base");
     velox::connector::unregisterConnector("other");
   }
@@ -51,8 +53,9 @@ class SchemaResolverTest : public ::testing::Test {
       const std::string& schema) {
     auto connector = std::make_shared<connector::TestConnector>(id);
     velox::connector::registerConnector(connector);
-    auto metadata = ConnectorMetadataRegistry::get(id);
-    metadata->createSchema(nullptr, schema, /*ifNotExists=*/false, {});
+    ConnectorMetadataRegistry::global().insert(id, connector->metadata());
+    connector->metadata()->createSchema(
+        nullptr, schema, /*ifNotExists=*/false, {});
     return Catalog{
         .id = id,
         .schema = schema,

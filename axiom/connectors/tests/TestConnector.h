@@ -20,7 +20,6 @@
 #include <folly/container/F14Set.h>
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/connectors/ConnectorMetadata.h"
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "velox/core/ITypedExpr.h"
 
 namespace facebook::axiom::connector {
@@ -632,11 +631,12 @@ class TestConnector : public velox::connector::Connector {
         rootPool_{std::move(rootPool)},
         metadata_{std::make_shared<TestConnectorMetadata>(this)} {
     registerSerDe();
-    ConnectorMetadataRegistry::global().insert(id, metadata_);
   }
 
-  ~TestConnector() override {
-    ConnectorMetadataRegistry::global().erase(connectorId());
+  /// Returns the metadata instance owned by this connector. Callers are
+  /// responsible for inserting it into a ConnectorMetadataRegistry.
+  const std::shared_ptr<TestConnectorMetadata>& metadata() const {
+    return metadata_;
   }
 
   /// Returns the parent pool to use for TestTable allocations, or nullptr

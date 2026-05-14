@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <filesystem>
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/optimizer/tests/SqlFile.h"
 #include "axiom/optimizer/tests/SqlTestBase.h"
 #include "axiom/optimizer/tests/TestDataPath.h"
@@ -96,6 +97,8 @@ class SqlTest : public SqlTestBase {
         suiteRootPool_);
     velox::connector::ConnectorRegistry::global().insert(
         kTestConnectorId, suiteConnector_);
+    connector::ConnectorMetadataRegistry::global().insert(
+        kTestConnectorId, suiteConnector_->metadata());
 
     suiteDuckDbRunner_ = std::make_unique<exec::test::DuckDbQueryRunner>();
 
@@ -117,6 +120,7 @@ class SqlTest : public SqlTestBase {
 
   static void TearDownTestCase() {
     suiteDuckDbRunner_.reset();
+    connector::ConnectorMetadataRegistry::global().erase(kTestConnectorId);
     velox::connector::ConnectorRegistry::global().erase(kTestConnectorId);
     suiteConnector_.reset();
     suiteOptimizerPool_.reset();

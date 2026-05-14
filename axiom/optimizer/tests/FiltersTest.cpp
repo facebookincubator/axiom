@@ -18,6 +18,7 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 #include <functional>
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/QueryGraph.h"
@@ -540,8 +541,11 @@ TEST_F(FiltersTest, rangeCardinalityMaxMin) {
   auto testConnector =
       std::make_shared<connector::TestConnector>(kTestConnectorId);
   velox::connector::registerConnector(testConnector);
+  connector::ConnectorMetadataRegistry::global().insert(
+      kTestConnectorId, testConnector->metadata());
 
   SCOPE_EXIT {
+    connector::ConnectorMetadataRegistry::global().erase(kTestConnectorId);
     velox::connector::unregisterConnector(kTestConnectorId);
   };
 
@@ -1010,8 +1014,11 @@ TEST_F(FiltersTest, cardinalityBasedSelectivity) {
   auto testConnector =
       std::make_shared<connector::TestConnector>(kTestConnectorId);
   velox::connector::registerConnector(testConnector);
+  connector::ConnectorMetadataRegistry::global().insert(
+      kTestConnectorId, testConnector->metadata());
 
   SCOPE_EXIT {
+    connector::ConnectorMetadataRegistry::global().erase(kTestConnectorId);
     velox::connector::unregisterConnector(kTestConnectorId);
   };
 

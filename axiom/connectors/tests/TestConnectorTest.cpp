@@ -43,11 +43,14 @@ class TestConnectorTest : public ::testing::Test, public test::VectorTestBase {
   void SetUp() override {
     connector_ = std::make_shared<TestConnector>("test");
     velox::connector::registerConnector(connector_);
-    metadata_ = ConnectorMetadataRegistry::get(connector_->connectorId());
+    ConnectorMetadataRegistry::global().insert(
+        connector_->connectorId(), connector_->metadata());
+    metadata_ = connector_->metadata();
   }
 
   void TearDown() override {
     metadata_.reset();
+    ConnectorMetadataRegistry::global().erase(connector_->connectorId());
     velox::connector::unregisterConnector(connector_->connectorId());
   }
 
@@ -65,10 +68,14 @@ TEST_F(TestConnectorTest, connectorRegister) {
   EXPECT_EQ(connector->connectorId(), connectorId);
 
   registerConnector(connector);
+  EXPECT_EQ(ConnectorMetadataRegistry::tryGet(connectorId), nullptr);
 
+  ConnectorMetadataRegistry::global().insert(
+      connectorId, connector->metadata());
   EXPECT_EQ(velox::connector::getConnector(connectorId).get(), connector.get());
   EXPECT_NE(ConnectorMetadataRegistry::tryGet(connectorId), nullptr);
 
+  ConnectorMetadataRegistry::global().erase(connectorId);
   velox::connector::unregisterConnector(connectorId);
   VELOX_ASSERT_THROW(
       velox::connector::getConnector(connectorId),

@@ -141,6 +141,8 @@ void CollagenMain::registerTestConnector() {
       facebook::velox::ROW({"primary_rid"}, {facebook::velox::BIGINT()}));
 
   facebook::velox::connector::registerConnector(connector);
+  facebook::axiom::connector::ConnectorMetadata::registerMetadata(
+      catalog_, connector->metadata());
 }
 
 void CollagenMain::registerTpchConnector() {
