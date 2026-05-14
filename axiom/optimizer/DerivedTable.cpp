@@ -704,6 +704,106 @@ void DerivedTable::addImpliedJoins() {
   }
 }
 
+namespace {
+
+// Appends (target table, cloned predicate) pairs for predicates implied by
+// 'filter' across its source column's equivalence class. 'mutableTables' maps
+// the const handle returned by Column::singleTable() to the non-const handle
+// accepted by tryPushdownConjunct.
+void collectImpliedPredicates(
+    ExprCP filter,
+    const folly::F14FastMap<PlanObjectCP, PlanObjectP>& mutableTables,
+    std::vector<std::pair<PlanObjectP, ExprCP>>& impliedPredicatesOut) {
+  if (filter->containsNonDeterministic()) {
+    return;
+  }
+  // Multi-column predicates need Cartesian-product enumeration over
+  // per-column equivalence classes gated to the same target — a
+  // different design from the per-column propagation here.
+  if (filter->columns().size() != 1) {
+    return;
+  }
+  auto* source = filter->columns().onlyObject<Column>();
+  auto* equivalence = source->equivalence();
+  if (!equivalence) {
+    return;
+  }
+
+  folly::F14FastSet<ColumnCP> visited{source};
+  for (auto* target : equivalence->columns) {
+    if (!visited.insert(target).second) {
+      continue;
+    }
+    auto* targetTable = target->singleTable();
+    if (!targetTable) {
+      continue;
+    }
+    auto it = mutableTables.find(targetTable);
+    if (it == mutableTables.end()) {
+      continue;
+    }
+    impliedPredicatesOut.emplace_back(
+        it->second,
+        DerivedTableFlattener::replaceInputs(
+            filter, ColumnVector{source}, ExprVector{target}));
+  }
+}
+
+} // namespace
+
+void DerivedTable::inferImpliedPredicates() {
+  folly::F14FastMap<PlanObjectCP, PlanObjectP> mutableTables;
+  tableSet.forEachMutable(
+      [&](PlanObjectP table) { mutableTables.emplace(table, table); });
+
+  std::vector<std::pair<PlanObjectP, ExprCP>> implied;
+  for (auto* table : tables) {
+    if (table->is(PlanType::kTableNode)) {
+      for (auto* filter : table->as<BaseTable>()->columnFilters) {
+        collectImpliedPredicates(filter, mutableTables, implied);
+      }
+    } else if (table->is(PlanType::kDerivedTableNode)) {
+      auto* innerDt = table->as<DerivedTable>();
+      for (auto* filter : innerDt->conjuncts) {
+        if (filter->columns().size() != 1) {
+          continue;
+        }
+        auto* innerColumn = filter->columns().onlyObject<Column>();
+        for (size_t i = 0;
+             i < innerDt->columns.size() && i < innerDt->exprs.size();
+             ++i) {
+          if (innerDt->exprs[i] != innerColumn) {
+            continue;
+          }
+          auto* outerColumn = innerDt->columns[i];
+          auto outerFilter = DerivedTableFlattener::replaceInputs(
+              filter, ColumnVector{innerColumn}, ExprVector{outerColumn});
+          collectImpliedPredicates(outerFilter, mutableTables, implied);
+        }
+      }
+    }
+  }
+
+  for (auto& [target, expr] : implied) {
+    if (target->is(PlanType::kTableNode)) {
+      const auto& existing = target->as<BaseTable>()->columnFilters;
+      if (std::ranges::any_of(existing, [&](ExprCP candidate) {
+            return candidate->sameOrEqual(*expr);
+          })) {
+        continue;
+      }
+    } else if (target->is(PlanType::kDerivedTableNode)) {
+      const auto& existing = target->as<DerivedTable>()->conjuncts;
+      if (std::ranges::any_of(existing, [&](ExprCP candidate) {
+            return candidate->sameOrEqual(*expr);
+          })) {
+        continue;
+      }
+    }
+    tryPushdownConjunct(expr, target);
+  }
+}
+
 bool DerivedTable::isSingleRow() const {
   return aggregation && aggregation->groupingKeys().empty() && having.empty() &&
       limit != 0 && offset == 0;
@@ -2056,7 +2156,6 @@ bool DerivedTable::addFilter(ExprCP conjunct) {
 }
 
 void DerivedTable::distributeConjuncts() {
-  std::vector<DerivedTableP> changedDts;
   if (!having.empty()) {
     VELOX_CHECK_NOT_NULL(aggregation);
 
@@ -2129,7 +2228,7 @@ void DerivedTable::distributeConjuncts() {
                   // existence flags. Leave in place.
       }
 
-      if (!tryPushdownConjunct(conjunct, tables[0], changedDts)) {
+      if (!tryPushdownConjunct(conjunct, tables[0])) {
         continue;
       }
 
@@ -2167,6 +2266,8 @@ void DerivedTable::distributeConjuncts() {
       }
     }
   }
+
+  inferImpliedPredicates();
 }
 
 void DerivedTable::tryConvertOuterJoins(bool allowNondeterministic) {
@@ -2248,10 +2349,7 @@ void DerivedTable::tryConvertOuterJoins(bool allowNondeterministic) {
   }
 }
 
-bool DerivedTable::tryPushdownConjunct(
-    ExprCP conjunct,
-    PlanObjectP table,
-    std::vector<DerivedTableP>& changedDts) {
+bool DerivedTable::tryPushdownConjunct(ExprCP conjunct, PlanObjectP table) {
   if (table->is(PlanType::kValuesTableNode)) {
     return false; // ValuesTable does not have filter push-down.
   }
@@ -2268,14 +2366,6 @@ bool DerivedTable::tryPushdownConjunct(
     auto innerDt = table->as<DerivedTable>();
     if (!innerDt->addFilter(conjunct)) {
       return false;
-    }
-
-    if (innerDt->isUnion()) {
-      for (auto* child : innerDt->unionInputs) {
-        pushBackUnique(changedDts, child);
-      }
-    } else {
-      pushBackUnique(changedDts, innerDt);
     }
     return true;
   }

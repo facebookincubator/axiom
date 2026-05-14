@@ -239,6 +239,7 @@ TEST_F(ExistencePushdownTest, otherIsDerivedTable) {
   auto plan = toSingleNodePlan(logicalPlan);
 
   auto matcher = matchScan("u")
+                     .filter("x < 10")
                      .singleAggregation({"x"}, {"count(*) as cnt"})
                      .hashJoin(
                          matchScan("v")
@@ -254,6 +255,7 @@ TEST_F(ExistencePushdownTest, otherIsDerivedTable) {
   auto distributedPlan = planVelox(logicalPlan);
 
   auto distributedMatcher = matchScan("u")
+                                .filter("x < 10")
                                 .shuffle({"x"})
                                 .localPartition({"x"})
                                 .singleAggregation({"x"}, {"count(*) as cnt"})
@@ -285,20 +287,26 @@ TEST_F(ExistencePushdownTest, chainJoin) {
   // Single-node plan.
   auto plan = toSingleNodePlan(logicalPlan);
 
-  // r + s wrapped into a chainDt, pushed as existence inside the aggregation.
   auto matcher =
       matchScan("u")
           .hashJoin(
               matchScan("r")
                   .filter("b < 100")
-                  .hashJoin(matchScan("s").build(), core::JoinType::kInner)
+                  .hashJoin(
+                      matchScan("s")
+                          .aliases({"s_a"})
+                          .filter("s_a < 100")
+                          .build(),
+                      core::JoinType::kInner)
                   .project()
                   .build(),
               core::JoinType::kLeftSemiFilter)
           .singleAggregation({"x"}, {"count(*) as cnt"})
           .hashJoin(
               matchScan("r").filter("b < 100").build(), core::JoinType::kInner)
-          .hashJoin(matchScan("s").build(), core::JoinType::kInner)
+          .hashJoin(
+              matchScan("s").aliases({"s_a"}).filter("s_a < 100").build(),
+              core::JoinType::kInner)
           .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 
@@ -308,14 +316,24 @@ TEST_F(ExistencePushdownTest, chainJoin) {
   auto distributedMatcher =
       matchScan("r")
           .filter("b < 100")
-          .hashJoin(matchScan("s").broadcast().build(), core::JoinType::kInner)
+          .hashJoin(
+              matchScan("s")
+                  .aliases({"s_a"})
+                  .filter("s_a < 100")
+                  .broadcast()
+                  .build(),
+              core::JoinType::kInner)
           .hashJoin(
               matchScan("u")
                   .hashJoin(
                       matchScan("r")
                           .filter("b < 100")
                           .hashJoin(
-                              matchScan("s").broadcast().build(),
+                              matchScan("s")
+                                  .aliases({"s_a"})
+                                  .filter("s_a < 100")
+                                  .broadcast()
+                                  .build(),
                               core::JoinType::kInner)
                           .project()
                           .broadcast()

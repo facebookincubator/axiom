@@ -97,7 +97,19 @@ class PlanMatcherImpl : public PlanMatcher {
       newSymbols.erase(alias);
     }
 
-    return matchDetails(*specificNode, newSymbols);
+    auto result = matchDetails(*specificNode, newSymbols);
+    if (!result.match || aliases_.empty()) {
+      return result;
+    }
+    const auto& names = plan->outputType()->names();
+    VELOX_USER_CHECK_LE(aliases_.size(), names.size());
+    auto resultSymbols = result.symbols;
+    for (size_t i = 0; i < aliases_.size(); ++i) {
+      if (aliases_[i].has_value()) {
+        resultSymbols[*aliases_[i]] = names[i];
+      }
+    }
+    return MatchResult::success(std::move(resultSymbols));
   }
 
   int32_t shuffleBoundaryCount() const override {
@@ -1997,6 +2009,22 @@ PlanMatcherBuilder& PlanMatcherBuilder::assignUniqueId(
     const std::string& alias) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<AssignUniqueIdMatcher>(matcher_, alias);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::aliases(
+    const std::vector<std::optional<std::string>>& aliases) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  std::unordered_set<std::string> seen;
+  for (const auto& alias : aliases) {
+    if (alias.has_value()) {
+      VELOX_USER_CHECK(
+          seen.insert(*alias).second,
+          "Duplicate alias in PlanMatcherBuilder::aliases(): {}",
+          *alias);
+    }
+  }
+  matcher_->setAliases(aliases);
   return *this;
 }
 

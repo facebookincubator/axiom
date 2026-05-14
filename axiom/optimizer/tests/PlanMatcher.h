@@ -121,6 +121,17 @@ class PlanMatcher {
   virtual int32_t shuffleBoundaryCount() const {
     return 0;
   }
+
+  /// Binds aliases to the matched node's output columns by position. See
+  /// PlanMatcherBuilder::aliases() for usage. nullopt entries are skipped.
+  void setAliases(std::vector<std::optional<std::string>> aliases) {
+    aliases_ = std::move(aliases);
+  }
+
+ protected:
+  // Aliases bound to the matched node's output columns by position.
+  // Applied on successful match by PlanMatcherImpl::match().
+  std::vector<std::optional<std::string>> aliases_;
 };
 
 /// Match details for a HashJoin node beyond join type. Each field is
@@ -452,6 +463,17 @@ class PlanMatcherBuilder {
   /// as a symbol alias for use in parent matchers via symbol rewriting.
   /// @param alias The alias to use for the unique ID column.
   PlanMatcherBuilder& assignUniqueId(const std::string& alias);
+
+  /// Binds aliases to the previous matcher's output columns by position so
+  /// downstream matchers can reference them by stable names regardless of
+  /// optimizer-generated internal names. For each i where aliases[i] is set,
+  /// maps the alias to the i-th output column name. nullopt entries are
+  /// skipped. Fails at match time if aliases.size() exceeds the matched
+  /// node's output column count.
+  /// @param aliases The aliases to register, indexed by output column
+  /// position. Use std::nullopt to skip a column.
+  PlanMatcherBuilder& aliases(
+      const std::vector<std::optional<std::string>>& aliases);
 
   /// Matches an EnforceDistinct node, which validates that input has unique
   /// values for the specified key columns. Throws if duplicates are found.

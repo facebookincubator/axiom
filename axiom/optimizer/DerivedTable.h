@@ -430,6 +430,13 @@ struct DerivedTable : public PlanObject {
   // Updates cardinality and column constraints from the plan.
   void updateConstraints(const RelationOp& plan);
 
+  // Synthesizes single-column predicates implied by inner-join
+  // column equivalences. For each single-column filter on a
+  // BaseTable or inner DerivedTable, clones it to other columns
+  // in the same equivalence class. Skips non-deterministic and
+  // multi-column filters; see implementation for rationale.
+  void inferImpliedPredicates();
+
   // Completes 'joins' with edges implied by column equivalences.
   void addImpliedJoins();
 
@@ -521,13 +528,8 @@ struct DerivedTable : public PlanObject {
   //
   // @param conjunct The filter expression to push down.
   // @param table The target table (BaseTable, DerivedTable, etc.).
-  // @param changedDts Output parameter collecting DerivedTables that were
-  // modified.
   // @return true if the conjunct was successfully pushed down, false otherwise.
-  bool tryPushdownConjunct(
-      ExprCP conjunct,
-      PlanObjectP table,
-      std::vector<DerivedTable*>& changedDts);
+  bool tryPushdownConjunct(ExprCP conjunct, PlanObjectP table);
 
   // Returns true if 'imported' depends only on columns that are partition keys
   // of every window function in windowPlan.

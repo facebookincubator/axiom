@@ -153,9 +153,10 @@ class Column : public Expr {
     return alias_ != nullptr ? alias_ : toString();
   }
 
-  /// Asserts that 'this' and 'other' are joined on equality. This has a
-  /// transitive effect, so if a and b are previously asserted equal and c is
-  /// asserted equal to b, a and c are also equal.
+  /// Asserts that 'this' and 'other' are joined on equality under inner-join
+  /// semantics (NULLs do not match). The relation is transitive, so if a and
+  /// b are previously asserted equal and c is asserted equal to b, a and c
+  /// are also equal.
   void equals(ColumnCP other) const;
 
   std::string toString() const override;
@@ -185,8 +186,7 @@ class Column : public Expr {
   // Optional alias copied from the the logical plan.
   Name alias_;
 
-  // Equivalence class. Lists all columns directly or indirectly asserted equal
-  // to 'this'.
+  // Equivalence class. See Column::equals.
   mutable EquivalenceP equivalence_{nullptr};
 
   // If this is a column of a BaseTable, points to the corresponding
