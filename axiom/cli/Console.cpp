@@ -33,6 +33,10 @@ DEFINE_string(
     "",
     "Root path of data. Data layout must follow Hive-style partitioning. ");
 DEFINE_string(data_format, "parquet", "Data format: parquet or dwrf.");
+DEFINE_string(
+    ducklake_catalog,
+    "",
+    "DuckLake catalog URL. Example: ducklake:metadata.ducklake.");
 DEFINE_uint64(
     split_target_bytes,
     16 << 20,

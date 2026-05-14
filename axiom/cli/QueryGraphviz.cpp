@@ -82,6 +82,10 @@ DEFINE_int32(
     num_drivers,
     4,
     "Number of drivers per worker (only used by --mode=distributed).");
+DEFINE_string(
+    ducklake_catalog,
+    "",
+    "DuckLake catalog URL. Example: ducklake:metadata.ducklake.");
 
 namespace facebook::axiom {
 namespace {
@@ -153,6 +157,8 @@ int main(int argc, char** argv) {
               << std::endl;
     std::cerr << "  --data_path     Path to local tables (default: TPC-H)"
               << std::endl;
+    std::cerr << "  --ducklake_catalog DuckLake catalog URL (default: TPC-H)"
+              << std::endl;
     std::cerr
         << "  --data_format   Format: parquet, dwrf, text (default: parquet)"
         << std::endl;
@@ -181,12 +187,24 @@ int main(int argc, char** argv) {
   facebook::axiom::Connectors connectors;
   axiom::sql::SqlQueryRunner runner;
   runner.initialize([&]() {
+    if (!FLAGS_data_path.empty() && !FLAGS_ducklake_catalog.empty()) {
+      std::cerr
+          << "Specify only one of --data_path or --ducklake_catalog for graphviz."
+          << std::endl;
+      exit(1);
+    }
+
     auto defaultConnector = connectors.registerTpchConnector();
     auto defaultSchema = "tiny";
     if (!FLAGS_data_path.empty()) {
       defaultConnector = connectors.registerLocalHiveConnector(
           FLAGS_data_path, FLAGS_data_format);
       defaultSchema = "default";
+    }
+    if (!FLAGS_ducklake_catalog.empty()) {
+      defaultConnector =
+          connectors.registerDuckLakeConnector(FLAGS_ducklake_catalog);
+      defaultSchema = "main";
     }
     return std::make_pair(defaultConnector->connectorId(), defaultSchema);
   });

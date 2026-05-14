@@ -16,56 +16,81 @@
 
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
+#include <exception>
 #include <iostream>
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/Console.h"
+#include "velox/common/base/VeloxException.h"
 
 DEFINE_string(
     catalog,
     "",
-    "Default catalog (connector). If empty, uses tpch or hive if --data_path is set.");
+    "Default catalog (connector). If empty, uses tpch, hive if --data_path is set, or ducklake if --ducklake_catalog is set.");
 DEFINE_string(schema, "", "Default schema.");
 
 int main(int argc, char** argv) {
-  folly::Init init(&argc, &argv, false);
+  try {
+    folly::Init init(&argc, &argv, false);
 
-  facebook::velox::memory::MemoryManager::initialize(
-      facebook::velox::memory::MemoryManager::Options{});
+    facebook::velox::memory::MemoryManager::initialize(
+        facebook::velox::memory::MemoryManager::Options{});
 
-  facebook::axiom::Connectors connectors;
-  axiom::sql::SqlQueryRunner runner;
-  runner.initialize([&]() {
-    auto defaultConnector = connectors.registerTpchConnector();
-    auto defaultSchema = "tiny";
+    facebook::axiom::Connectors connectors;
+    axiom::sql::SqlQueryRunner runner;
+    runner.initialize([&]() {
+      auto defaultConnector = connectors.registerTpchConnector();
+      auto defaultSchema = "tiny";
 
-    connectors.registerTestConnector();
+      connectors.registerTestConnector();
 
-    if (!FLAGS_data_path.empty()) {
-      defaultConnector = connectors.registerLocalHiveConnector(
-          FLAGS_data_path, FLAGS_data_format);
-      defaultSchema = "default";
-    }
+      if (!FLAGS_data_path.empty() && !FLAGS_ducklake_catalog.empty() &&
+          FLAGS_catalog.empty()) {
+        std::cerr
+            << "Specify --catalog when both --data_path and --ducklake_catalog are set."
+            << std::endl;
+        exit(1);
+      }
 
-    std::string connectorId =
-        FLAGS_catalog.empty() ? defaultConnector->connectorId() : FLAGS_catalog;
+      if (!FLAGS_data_path.empty()) {
+        defaultConnector = connectors.registerLocalHiveConnector(
+            FLAGS_data_path, FLAGS_data_format);
+        defaultSchema = "default";
+      }
 
-    if (FLAGS_schema.empty() &&
-        connectorId != defaultConnector->connectorId()) {
-      std::cerr << "Schema must be specified for connector " << connectorId;
-      exit(1);
-    }
+      if (!FLAGS_ducklake_catalog.empty()) {
+        defaultConnector =
+            connectors.registerDuckLakeConnector(FLAGS_ducklake_catalog);
+        defaultSchema = "main";
+      }
 
-    std::string schema = FLAGS_schema.empty() ? defaultSchema : FLAGS_schema;
+      std::string connectorId = FLAGS_catalog.empty()
+          ? defaultConnector->connectorId()
+          : FLAGS_catalog;
 
-    return std::make_pair(connectorId, schema);
-  });
+      if (FLAGS_schema.empty() &&
+          connectorId != defaultConnector->connectorId()) {
+        std::cerr << "Schema must be specified for connector " << connectorId;
+        exit(1);
+      }
 
-  // Register after initialize() so sessionConfig() is available.
-  connectors.registerSystemConnector(runner.sessionConfig());
+      std::string schema = FLAGS_schema.empty() ? defaultSchema : FLAGS_schema;
 
-  axiom::sql::Console console{runner};
-  console.initialize();
-  console.run();
+      return std::make_pair(connectorId, schema);
+    });
 
-  return 0;
+    // Register after initialize() so sessionConfig() is available.
+    connectors.registerSystemConnector(runner.sessionConfig());
+
+    axiom::sql::Console console{runner};
+    console.initialize();
+    console.run();
+
+    return 0;
+  } catch (const facebook::velox::VeloxException& error) {
+    std::cerr << "Error: " << error.message() << std::endl;
+    return 1;
+  } catch (const std::exception& error) {
+    std::cerr << "Error: " << error.what() << std::endl;
+    return 1;
+  }
 }
