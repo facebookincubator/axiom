@@ -123,6 +123,29 @@ class PlanMatcher {
   }
 };
 
+/// Match details for a HashJoin node beyond join type. Each field is
+/// optional: leave as nullopt to skip the check, set a value to assert it.
+struct HashJoinDetails {
+  /// When set, asserts plan.isNullAware() matches.
+  std::optional<bool> nullAware;
+
+  /// When set, asserts left-side join keys (must have same size as
+  /// rightKeys when both are set).
+  std::optional<std::vector<std::string>> leftKeys;
+
+  /// When set, asserts right-side join keys (must have same size as
+  /// leftKeys when both are set).
+  std::optional<std::vector<std::string>> rightKeys;
+
+  /// When set, asserts the join filter expression (e.g., "a = b AND c > 0").
+  /// Empty string asserts no filter.
+  std::optional<std::string> filter;
+
+  /// When set, asserts output column names (order-insensitive, duplicates
+  /// rejected).
+  std::optional<std::vector<std::string>> outputColumnNames;
+};
+
 class PlanMatcherBuilder {
  public:
   /// Matches any TableScan node regardless of table name or output type.
@@ -271,6 +294,16 @@ class PlanMatcherBuilder {
       const std::shared_ptr<PlanMatcher>& rightMatcher,
       JoinType joinType,
       bool nullAware = false);
+
+  /// Matches a HashJoin node with the specified right side matcher, join type,
+  /// and details.
+  /// @param rightMatcher Matcher for the right side of the join.
+  /// @param joinType Type of join.
+  /// @param details Join details. See HashJoinDetails.
+  PlanMatcherBuilder& hashJoin(
+      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      JoinType joinType,
+      const HashJoinDetails& details);
 
   /// Matches a HashJoin node with the specified right side matcher, join type,
   /// and expected output column names. Column names are verified as a set —

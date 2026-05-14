@@ -767,24 +767,20 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
       const std::shared_ptr<PlanMatcher>& left,
       const std::shared_ptr<PlanMatcher>& right,
       JoinType joinType,
-      bool nullAware)
+      const HashJoinDetails& details)
       : PlanMatcherImpl<HashJoinNode>({left, right}),
         joinType_{joinType},
-        nullAware_{nullAware} {}
-
-  HashJoinMatcher(
-      const std::shared_ptr<PlanMatcher>& left,
-      const std::shared_ptr<PlanMatcher>& right,
-      JoinType joinType,
-      const std::vector<std::string>& outputColumnNames)
-      : PlanMatcherImpl<HashJoinNode>({left, right}),
-        joinType_{joinType},
-        outputColumnNames_(
-            {outputColumnNames.begin(), outputColumnNames.end()}) {
-    VELOX_USER_CHECK_EQ(
-        outputColumnNames_->size(),
-        outputColumnNames.size(),
-        "Duplicate column names in outputColumnNames");
+        nullAware_{details.nullAware},
+        leftKeys_{details.leftKeys},
+        rightKeys_{details.rightKeys},
+        filter_{details.filter},
+        outputColumnNames_{details.outputColumnNames} {
+    if (leftKeys_.has_value() && rightKeys_.has_value()) {
+      VELOX_CHECK_EQ(
+          leftKeys_->size(),
+          rightKeys_->size(),
+          "leftKeys and rightKeys must have the same size");
+    }
   }
 
   MatchResult matchDetails(
@@ -805,6 +801,47 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
 
     AXIOM_TEST_RETURN_IF_FAILURE
 
+    if (leftKeys_.has_value()) {
+      EXPECT_EQ(plan.leftKeys().size(), leftKeys_->size());
+      AXIOM_TEST_RETURN_IF_FAILURE
+
+      for (auto i = 0; i < leftKeys_->size(); ++i) {
+        auto it = symbols.find((*leftKeys_)[i]);
+        auto expected = it != symbols.end() ? it->second : (*leftKeys_)[i];
+        EXPECT_EQ(plan.leftKeys()[i]->name(), expected);
+      }
+      AXIOM_TEST_RETURN_IF_FAILURE
+    }
+
+    if (rightKeys_.has_value()) {
+      EXPECT_EQ(plan.rightKeys().size(), rightKeys_->size());
+      AXIOM_TEST_RETURN_IF_FAILURE
+
+      for (auto i = 0; i < rightKeys_->size(); ++i) {
+        auto it = symbols.find((*rightKeys_)[i]);
+        auto expected = it != symbols.end() ? it->second : (*rightKeys_)[i];
+        EXPECT_EQ(plan.rightKeys()[i]->name(), expected);
+      }
+      AXIOM_TEST_RETURN_IF_FAILURE
+    }
+
+    if (filter_.has_value()) {
+      if (filter_->empty()) {
+        EXPECT_EQ(plan.filter(), nullptr);
+      } else {
+        EXPECT_NE(plan.filter(), nullptr);
+        AXIOM_TEST_RETURN_IF_FAILURE
+
+        auto expected =
+            parse::DuckSqlExpressionsParser().parseExpr(filter_.value());
+        if (!symbols.empty()) {
+          expected = rewriteInputNames(expected, symbols);
+        }
+        ExprMatcher::match(plan.filter(), expected->dropAlias());
+      }
+      AXIOM_TEST_RETURN_IF_FAILURE
+    }
+
     if (outputColumnNames_.has_value()) {
       const auto& outputType = plan.outputType();
 
@@ -812,7 +849,13 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
       std::set<std::string> expectedColumns;
       for (const auto& name : *outputColumnNames_) {
         auto it = symbols.find(name);
-        expectedColumns.insert(it != symbols.end() ? it->second : name);
+        const auto& resolved = it != symbols.end() ? it->second : name;
+        VELOX_USER_CHECK_EQ(
+            expectedColumns.count(resolved),
+            0,
+            "Duplicate output column name: {}",
+            resolved);
+        expectedColumns.insert(resolved);
       }
 
       std::set<std::string> actualColumns;
@@ -831,7 +874,10 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
  private:
   const std::optional<JoinType> joinType_;
   const std::optional<bool> nullAware_;
-  const std::optional<std::set<std::string>> outputColumnNames_;
+  const std::optional<std::vector<std::string>> leftKeys_;
+  const std::optional<std::vector<std::string>> rightKeys_;
+  const std::optional<std::string> filter_;
+  const std::optional<std::vector<std::string>> outputColumnNames_;
 };
 
 class NestedLoopJoinMatcher : public PlanMatcherImpl<NestedLoopJoinNode> {
@@ -1736,9 +1782,17 @@ PlanMatcherBuilder& PlanMatcherBuilder::hashJoin(
     const std::shared_ptr<PlanMatcher>& rightMatcher,
     JoinType joinType,
     bool nullAware) {
+  return hashJoin(
+      rightMatcher, joinType, HashJoinDetails{.nullAware = nullAware});
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::hashJoin(
+    const std::shared_ptr<PlanMatcher>& rightMatcher,
+    JoinType joinType,
+    const HashJoinDetails& details) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<HashJoinMatcher>(
-      matcher_, rightMatcher, joinType, nullAware);
+      matcher_, rightMatcher, joinType, details);
   return *this;
 }
 
@@ -1746,10 +1800,10 @@ PlanMatcherBuilder& PlanMatcherBuilder::hashJoin(
     const std::shared_ptr<PlanMatcher>& rightMatcher,
     JoinType joinType,
     const std::vector<std::string>& outputColumnNames) {
-  VELOX_USER_CHECK_NOT_NULL(matcher_);
-  matcher_ = std::make_shared<HashJoinMatcher>(
-      matcher_, rightMatcher, joinType, outputColumnNames);
-  return *this;
+  return hashJoin(
+      rightMatcher,
+      joinType,
+      HashJoinDetails{.outputColumnNames = outputColumnNames});
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::nestedLoopJoin(

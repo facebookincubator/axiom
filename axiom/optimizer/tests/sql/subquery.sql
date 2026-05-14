@@ -242,3 +242,33 @@ SELECT
     END AS r,
     (SELECT count(*) FROM u WHERE u.a < t.c) AS z
 FROM t
+----
+-- Correlated IN subquery with single correlation equality.
+SELECT t.a IN (SELECT t2.a FROM t t2 WHERE t2.b = t.b) FROM t
+----
+-- Correlated NOT IN subquery with single correlation equality.
+SELECT t.a NOT IN (SELECT t2.a FROM t t2 WHERE t2.b = t.b) FROM t
+----
+-- Correlated IN subquery with multiple correlation equalities.
+SELECT t.a IN (SELECT t2.a FROM t t2 WHERE t2.b = t.b AND t2.c = t.c) FROM t
+----
+-- Correlated NOT IN subquery with multiple correlation equalities.
+SELECT t.a NOT IN (SELECT t2.a FROM t t2 WHERE t2.b = t.b AND t2.c = t.c) FROM t
+----
+-- Correlated IN subquery with mixed equality and non-equality correlation.
+SELECT t.a IN (SELECT t2.a FROM t t2 WHERE t2.b = t.b AND t2.c < t.c) FROM t
+----
+-- Correlated NOT IN subquery with mixed equality and non-equality correlation.
+SELECT t.a NOT IN (SELECT t2.a FROM t t2 WHERE t2.b = t.b AND t2.c < t.c) FROM t
+----
+-- Correlated IN subquery where correlation equality is redundant with IN key.
+SELECT t.a IN (SELECT t2.a FROM t t2 WHERE t2.a = t.a) FROM t
+----
+-- Correlated NOT IN subquery where correlation equality is redundant with IN key.
+SELECT t.a NOT IN (SELECT t2.a FROM t t2 WHERE t2.a = t.a) FROM t
+----
+-- Correlated IN subquery with reversed operand order in correlation.
+SELECT t.a IN (SELECT t2.a FROM t t2 WHERE t.b = t2.b) FROM t
+----
+-- Correlated NOT IN subquery with reversed operand order in correlation.
+SELECT t.a NOT IN (SELECT t2.a FROM t t2 WHERE t.b = t2.b) FROM t

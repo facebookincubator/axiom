@@ -617,6 +617,108 @@ TEST_F(SubqueryTest, correlatedIn) {
   }
 }
 
+// Correlated IN subquery where the correlation predicate is an equality
+// on different columns than the IN equality.
+TEST_F(SubqueryTest, correlatedInWithCorrelationFilter) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x", "y", "z"}, BIGINT()));
+
+  // Single correlation equality.
+  {
+    auto query =
+        "SELECT t.a IN ("
+        "  SELECT u.x FROM u "
+        "  WHERE u.y = t.b"
+        ") FROM t";
+
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u").build(),
+                           core::JoinType::kLeftSemiProject,
+                           {.nullAware = true,
+                            .leftKeys = std::vector<std::string>{"a"},
+                            .rightKeys = std::vector<std::string>{"x"},
+                            .filter = "b = y"})
+                       .project()
+                       .build();
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Two correlation equalities.
+  {
+    auto query =
+        "SELECT t.a IN ("
+        "  SELECT u.x FROM u "
+        "  WHERE u.y = t.b AND u.z = t.c"
+        ") FROM t";
+
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u").build(),
+                           core::JoinType::kLeftSemiProject,
+                           {.nullAware = true,
+                            .leftKeys = std::vector<std::string>{"a"},
+                            .rightKeys = std::vector<std::string>{"x"},
+                            .filter = "b = y AND c = z"})
+                       .project()
+                       .build();
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+// Correlated IN subquery with both equality and non-equality correlation
+// predicates.
+TEST_F(SubqueryTest, correlatedInWithMixedCorrelationFilter) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x", "y", "z"}, BIGINT()));
+
+  auto query =
+      "SELECT t.a IN ("
+      "  SELECT u.x FROM u "
+      "  WHERE u.y = t.b AND u.z < t.c"
+      ") FROM t";
+
+  auto matcher = matchScan("t")
+                     .hashJoin(
+                         matchScan("u").build(),
+                         core::JoinType::kLeftSemiProject,
+                         {.nullAware = true,
+                          .leftKeys = std::vector<std::string>{"a"},
+                          .rightKeys = std::vector<std::string>{"x"},
+                          .filter = "c > z AND b = y"})
+                     .project()
+                     .build();
+  auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+// Correlated IN subquery where the correlation equality duplicates the IN key.
+TEST_F(SubqueryTest, correlatedInWithRedundantCorrelationFilter) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
+
+  auto query =
+      "SELECT t.a IN ("
+      "  SELECT u.x FROM u "
+      "  WHERE u.x = t.a"
+      ") FROM t";
+
+  auto matcher = matchScan("t")
+                     .hashJoin(
+                         matchScan("u").build(),
+                         core::JoinType::kLeftSemiProject,
+                         {.nullAware = true,
+                          .leftKeys = std::vector<std::string>{"a"},
+                          .rightKeys = std::vector<std::string>{"x"},
+                          .filter = ""})
+                     .project()
+                     .build();
+  auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 // IN subquery where the left-side expression references multiple tables.
 TEST_F(SubqueryTest, multiTableInSubquery) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
