@@ -1339,7 +1339,7 @@ void ToGraph::addUnnest(const lp::UnnestNode& unnest) {
 
   auto* unnestDt = currentDt_;
   const bool needsSeparateUnnest = unnestDt->hasAggregation() ||
-      unnestDt->hasOrderBy() || unnestDt->hasLimit();
+      unnestDt->hasOrderBy() || unnestDt->hasLimit() || unnestDt->hasWindow();
   if (needsSeparateUnnest) {
     finalizeDt(*unnest.onlyInput());
   }

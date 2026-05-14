@@ -1381,5 +1381,26 @@ TEST_F(UnnestTest, leftJoinFilterOnSingleRowSubquerySmallPreservedSide) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+TEST_F(UnnestTest, crossJoinUnnestOnWindowFunctionOutput) {
+  testConnector_->addTable("t", ROW({"a"}, {INTEGER()}));
+
+  auto query =
+      "SELECT x "
+      "FROM ("
+      "  SELECT count(*) OVER () n "
+      "  FROM t"
+      ") CROSS JOIN UNNEST(sequence(1, n)) AS _(x)";
+
+  auto logicalPlan = parseSelect(query, kTestConnectorId);
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto matcher = matchScan("t")
+                     .window({"count(*) OVER () as n"})
+                     .project({"sequence(1, n) as seq"})
+                     .unnest({}, {"seq"})
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer
