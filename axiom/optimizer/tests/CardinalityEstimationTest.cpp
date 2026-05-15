@@ -494,6 +494,57 @@ TEST_F(CardinalityEstimationTest, innerJoin) {
   });
 }
 
+// Verifies join cardinality estimation when a join key is constrained by a
+// literal outside the connector-reported [min, max] range. The join should
+// produce an empty result (cardinality clamped to a minimum of 1).
+TEST_F(CardinalityEstimationTest, joinWithFilterOutsideMinMax) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(
+          1'000,
+          {{"a",
+            {.min = velox::Variant::create<int64_t>(1),
+             .max = velox::Variant::create<int64_t>(100),
+             .numDistinct = 100}},
+           {"b",
+            {.min = velox::Variant::create<int64_t>(1),
+             .max = velox::Variant::create<int64_t>(100),
+             .numDistinct = 100}}});
+
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(
+          1'000,
+          {{"x",
+            {.min = velox::Variant::create<int64_t>(1),
+             .max = velox::Variant::create<int64_t>(100),
+             .numDistinct = 100}},
+           {"y",
+            {.min = velox::Variant::create<int64_t>(1),
+             .max = velox::Variant::create<int64_t>(100),
+             .numDistinct = 100}}});
+
+  auto verify = [&](const std::string& sql) {
+    SCOPED_TRACE(sql);
+    verifyPlan(sql, [](const Plan& plan) {
+      const auto& join = findOp<Join>(*plan.op, RelType::kJoin);
+      EXPECT_NEAR(join.resultCardinality(), 1, kCardinalityTolerance);
+    });
+  };
+
+  // Both join keys constrained to a literal outside [1, 100].
+  verify(
+      "SELECT a, b, x, y FROM t JOIN u ON a = x "
+      "WHERE a = 999 AND x = 999");
+
+  // Only the left join key constrained outside [1, 100].
+  verify("SELECT a, b, x, y FROM t JOIN u ON a = x WHERE a = 999");
+
+  // Only the right join key constrained outside [1, 100].
+  verify("SELECT a, b, x, y FROM t JOIN u ON a = x WHERE x = 999");
+
+  // Multi-key join with only one key pair contradicted.
+  verify("SELECT a, b, x, y FROM t JOIN u ON a = x AND b = y WHERE a = 999");
+}
+
 // Verifies that inner join with a unique right side (DerivedTable with GROUP
 // BY) uses the right fanout to scale cardinality. The right side's fanout
 // reflects that not all left key values exist in the right side.
