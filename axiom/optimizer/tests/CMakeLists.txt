@@ -226,3 +226,23 @@ target_link_libraries(
   GTest::gtest_main
   pthread
 )
+
+add_executable(axiom_aggregation_planner_test AggregationPlannerTest.cpp)
+
+add_test(
+  NAME axiom_aggregation_planner_test
+  COMMAND axiom_aggregation_planner_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(
+  axiom_aggregation_planner_test
+  axiom_logical_plan_builder
+  axiom_optimizer
+  velox_aggregates
+  velox_expression
+  velox_functions_prestosql
+  GTest::gmock
+  GTest::gtest
+  GTest::gtest_main
+)
