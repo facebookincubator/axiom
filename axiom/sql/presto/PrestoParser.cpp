@@ -2194,11 +2194,66 @@ SqlStatementPtr parseShowSchemas(
   lp::PlanBuilder builder(ctx);
   builder.values(ROW({"Schema"}, VARCHAR()), std::move(data));
 
-  if (showSchemas.getLikePattern().has_value()) {
+  if (showSchemas.likePattern().has_value()) {
     builder.filter(makeLikeExpr(
-        "Schema",
-        showSchemas.getLikePattern().value(),
-        showSchemas.getEscape()));
+        "Schema", showSchemas.likePattern().value(), showSchemas.escape()));
+  }
+
+  return std::make_shared<SelectStatement>(
+      builder.build(), ViewMap{}, ReferencedTables{});
+}
+
+SqlStatementPtr parseShowTables(
+    const ShowTables& showTables,
+    const std::string& defaultConnectorId,
+    const std::string& defaultSchema) {
+  static constexpr std::string_view kTableColumnName = "Table";
+
+  std::string connectorId = defaultConnectorId;
+  std::string schema = defaultSchema;
+
+  if (showTables.schemaName()) {
+    const auto& parts = showTables.schemaName()->parts();
+    VELOX_USER_CHECK_LE(
+        parts.size(),
+        2,
+        "Invalid schema reference: {}",
+        showTables.schemaName()->fullyQualifiedName());
+    if (parts.size() == 1) {
+      schema = parts[0];
+    } else if (parts.size() == 2) {
+      connectorId = parts[0];
+      schema = parts[1];
+    }
+  }
+
+  auto metadata =
+      facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId);
+  auto session = std::make_shared<facebook::axiom::connector::ConnectorSession>(
+      "show-tables");
+  VELOX_USER_CHECK(
+      metadata->schemaExists(session, schema),
+      "Schema does not exist: {}",
+      schema);
+  auto tableNames = metadata->listTableNames(session, schema);
+  std::sort(tableNames.begin(), tableNames.end());
+
+  std::vector<Variant> data;
+  data.reserve(tableNames.size());
+  for (const auto& tableName : tableNames) {
+    data.emplace_back(Variant::row({tableName}));
+  }
+
+  lp::PlanBuilder::Context ctx(connectorId);
+  lp::PlanBuilder builder(ctx);
+  builder.values(
+      ROW({std::string(kTableColumnName)}, VARCHAR()), std::move(data));
+
+  if (showTables.likePattern().has_value()) {
+    builder.filter(makeLikeExpr(
+        std::string(kTableColumnName),
+        showTables.likePattern().value(),
+        showTables.escape()));
   }
 
   return std::make_shared<SelectStatement>(
@@ -2273,6 +2328,11 @@ SqlStatementPtr doPlan(
 
   if (query->is(NodeType::kShowSchemas)) {
     return parseShowSchemas(*query->as<ShowSchemas>(), defaultConnectorId);
+  }
+
+  if (query->is(NodeType::kShowTables)) {
+    return parseShowTables(
+        *query->as<ShowTables>(), defaultConnectorId, defaultSchema);
   }
 
   if (query->is(NodeType::kShowCatalogs)) {

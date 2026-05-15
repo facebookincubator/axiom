@@ -1174,6 +1174,22 @@ TablePtr LocalHiveConnectorMetadata::findTable(
   return findTableLocked(tableName.table);
 }
 
+std::vector<std::string> LocalHiveConnectorMetadata::listTableNames(
+    const ConnectorSessionPtr& /*session*/,
+    const std::string& schemaName) {
+  if (schemaName != kDefaultSchema) {
+    return {};
+  }
+  ensureInitialized();
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::vector<std::string> result;
+  result.reserve(tables_.size());
+  for (const auto& [name, _] : tables_) {
+    result.push_back(name);
+  }
+  return result;
+}
+
 std::shared_ptr<LocalTable> LocalHiveConnectorMetadata::findTableLocked(
     std::string_view name) const {
   auto it = tables_.find(name);

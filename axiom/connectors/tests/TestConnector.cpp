@@ -325,6 +325,19 @@ bool TestConnectorMetadata::schemaExists(
   return schemas_.contains(schemaName);
 }
 
+std::vector<std::string> TestConnectorMetadata::listTableNames(
+    const ConnectorSessionPtr& /*session*/,
+    const std::string& schemaName) {
+  std::vector<std::string> result;
+  result.reserve(tables_.size());
+  for (const auto& [name, _] : tables_) {
+    if (name.schema == schemaName) {
+      result.push_back(name.table);
+    }
+  }
+  return result;
+}
+
 void TestConnectorMetadata::createSchema(
     const ConnectorSessionPtr& /*session*/,
     const std::string& schemaName,

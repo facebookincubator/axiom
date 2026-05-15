@@ -58,6 +58,12 @@ class StubConnectorMetadata : public ConnectorMetadata {
     return false;
   }
 
+  std::vector<std::string> listTableNames(
+      const ConnectorSessionPtr& /*session*/,
+      const std::string& /*schemaName*/) override {
+    return {};
+  }
+
  private:
   std::string label_;
 };

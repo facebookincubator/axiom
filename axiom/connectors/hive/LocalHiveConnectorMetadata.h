@@ -240,6 +240,10 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
     return schemaName == kDefaultSchema;
   }
 
+  std::vector<std::string> listTableNames(
+      const ConnectorSessionPtr& session,
+      const std::string& schemaName) override;
+
   ConnectorSplitManager* splitManager() override {
     ensureInitialized();
     return &splitManager_;

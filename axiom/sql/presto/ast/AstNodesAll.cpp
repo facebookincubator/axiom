@@ -803,6 +803,10 @@ void ShowSchemas::accept(AstVisitor* visitor) {
   visitor->visitShowSchemas(this);
 }
 
+void ShowTables::accept(AstVisitor* visitor) {
+  visitor->visitShowTables(this);
+}
+
 void ShowCreateTable::accept(AstVisitor* visitor) {
   visitor->visitShowCreateTable(this);
 }

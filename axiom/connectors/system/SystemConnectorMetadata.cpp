@@ -180,4 +180,19 @@ TablePtr SystemConnectorMetadata::findTable(const SchemaTableName& tableName) {
   return nullptr;
 }
 
+std::vector<std::string> SystemConnectorMetadata::listTableNames(
+    const ConnectorSessionPtr& /*session*/,
+    const std::string& schemaName) {
+  if (schemaName == kRuntimeSchema) {
+    return {std::string(kQueriesTable.table)};
+  }
+  if (schemaName == kMetadataSchema) {
+    return {
+        std::string(kSessionPropertiesTable.table),
+        std::string(kFunctionsTable.table),
+    };
+  }
+  return {};
+}
+
 } // namespace facebook::axiom::connector::system

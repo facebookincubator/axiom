@@ -229,6 +229,21 @@ bool TpchConnectorMetadata::schemaExists(
   return isValidTpchSchema(schemaName);
 }
 
+std::vector<std::string> TpchConnectorMetadata::listTableNames(
+    const ConnectorSessionPtr& /*session*/,
+    const std::string& schemaName) {
+  if (!isValidTpchSchema(schemaName)) {
+    return {};
+  }
+
+  std::vector<std::string> result;
+  result.reserve(std::size(velox::tpch::tables));
+  for (auto tpchTable : velox::tpch::tables) {
+    result.emplace_back(velox::tpch::toTableName(tpchTable));
+  }
+  return result;
+}
+
 ViewPtr TpchConnectorMetadata::findView(const SchemaTableName& tableName) {
   if (!tableName.schema.empty() && !isValidTpchSchema(tableName.schema)) {
     return nullptr;

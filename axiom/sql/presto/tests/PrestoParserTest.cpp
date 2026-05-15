@@ -1068,6 +1068,8 @@ TEST_F(PrestoParserTest, explainShow) {
   auto matcher = matchValues();
   testExplain("EXPLAIN SHOW CATALOGS", matcher);
 
+  testExplain("EXPLAIN SHOW TABLES", matcher);
+
   testExplain("EXPLAIN SHOW COLUMNS FROM nation", matcher);
 
   testExplain("EXPLAIN SHOW FUNCTIONS", matcher);
@@ -1115,6 +1117,23 @@ TEST_F(PrestoParserTest, showCatalogs) {
     auto matcher = matchValues().filter();
     testSelect("SHOW CATALOGS LIKE 'tpch'", matcher);
   }
+}
+
+TEST_F(PrestoParserTest, showTables) {
+  testSelect("SHOW TABLES", matchValues());
+  testSelect("SHOW TABLES FROM default", matchValues());
+  testSelect("SHOW TABLES LIKE 'line%'", matchValues().filter());
+  testSelect("SHOW TABLES FROM default LIKE 'nation'", matchValues().filter());
+
+  VELOX_ASSERT_THROW(
+      parseSelect("SHOW TABLES FROM a.b.c"), "Invalid schema reference");
+
+  VELOX_ASSERT_THROW(
+      parseSelect("SHOW TABLES FROM unknown_catalog.tiny"), "not registered");
+
+  VELOX_ASSERT_THROW(
+      parseSelect("SHOW TABLES FROM nonexistent_schema"),
+      "Schema does not exist");
 }
 
 TEST_F(PrestoParserTest, describe) {

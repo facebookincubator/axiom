@@ -143,6 +143,10 @@ class SystemConnectorMetadata : public ConnectorMetadata {
     return schemaName == kRuntimeSchema || schemaName == kMetadataSchema;
   }
 
+  std::vector<std::string> listTableNames(
+      const ConnectorSessionPtr& session,
+      const std::string& schemaName) override;
+
   ConnectorSplitManager* splitManager() override {
     return splitManager_.get();
   }

@@ -490,6 +490,19 @@ TEST_F(SystemConnectorMetadataTest, schemas) {
   EXPECT_FALSE(metadata_->schemaExists(session, "information_schema"));
 }
 
+TEST_F(SystemConnectorMetadataTest, listTableNames) {
+  auto session = std::make_shared<ConnectorSession>("test-query");
+  EXPECT_THAT(
+      metadata_->listTableNames(session, std::string(kRuntimeSchema)),
+      testing::ElementsAre(kQueriesTable.table));
+  EXPECT_THAT(
+      metadata_->listTableNames(session, std::string(kMetadataSchema)),
+      testing::UnorderedElementsAre(
+          kSessionPropertiesTable.table, kFunctionsTable.table));
+  EXPECT_THAT(
+      metadata_->listTableNames(session, "unknown"), testing::IsEmpty());
+}
+
 TEST_F(SystemConnectorMetadataTest, sessionPropertiesAllColumns) {
   sessionProvider_->addProperty(
       {"a", "x", "boolean", "true", "false", "First."});

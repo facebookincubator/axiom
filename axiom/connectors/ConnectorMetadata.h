@@ -987,6 +987,13 @@ class ConnectorMetadata {
       const ConnectorSessionPtr& session,
       const std::string& schemaName) = 0;
 
+  /// Returns table names in the given schema. Connectors with unbounded
+  /// table sets (e.g., dynamic resolution) return empty. Results are not
+  /// guaranteed to be in any particular order.
+  virtual std::vector<std::string> listTableNames(
+      const ConnectorSessionPtr& session,
+      const std::string& schemaName) = 0;
+
   /// Creates a schema with the given name and properties. If 'ifNotExists' is
   /// true, succeeds silently when the schema already exists. Otherwise, raises
   /// a user error if the schema already exists.

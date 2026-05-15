@@ -110,6 +110,17 @@ class SqlQueryRunnerTest : public ::testing::Test, public test::VectorTestBase {
         makeRowVector({"Schema"}, {makeFlatVector(expected)}));
   }
 
+  void assertTables(
+      const std::vector<std::string>& expected,
+      const std::string& query = "SHOW TABLES") {
+    auto result = run(query);
+    ASSERT_FALSE(result.message.has_value());
+    ASSERT_EQ(1, result.results.size());
+    test::assertEqualVectors(
+        result.results[0],
+        makeRowVector({"Table"}, {makeFlatVector(expected)}));
+  }
+
   void assertSessionProperty(
       std::string_view name,
       std::string_view expectedValue,
@@ -796,6 +807,18 @@ TEST_F(SqlQueryRunnerTest, showSchemasWithLike) {
       result.results[0],
       makeRowVector(
           {"Schema"}, {makeFlatVector<std::string>({kDefaultSchema, "dev"})}));
+}
+
+TEST_F(SqlQueryRunnerTest, showTables) {
+  run("CREATE TABLE alpha AS SELECT 1 AS x");
+  run("CREATE TABLE beta AS SELECT 2 AS y");
+  SCOPE_EXIT {
+    run("DROP TABLE IF EXISTS alpha");
+    run("DROP TABLE IF EXISTS beta");
+  };
+
+  assertTables({"alpha", "beta"});
+  assertTables({"alpha"}, "SHOW TABLES LIKE 'a%'");
 }
 
 TEST_F(SqlQueryRunnerTest, showCreateTable) {

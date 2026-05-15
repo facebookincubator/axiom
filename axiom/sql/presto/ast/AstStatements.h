@@ -892,11 +892,11 @@ class ShowSchemas : public Statement {
     return catalog_;
   }
 
-  const std::optional<std::string>& getLikePattern() const {
+  const std::optional<std::string>& likePattern() const {
     return likePattern_;
   }
 
-  const std::optional<std::string>& getEscape() const {
+  const std::optional<std::string>& escape() const {
     return escape_;
   }
 
@@ -904,6 +904,41 @@ class ShowSchemas : public Statement {
 
  private:
   std::optional<std::string> catalog_;
+  std::optional<std::string> likePattern_;
+  std::optional<std::string> escape_;
+};
+
+/// SHOW TABLES with optional schema qualifier and LIKE filter. The qualifier
+/// is a QualifiedName that can be `schema` or `catalog.schema`. LIKE applies
+/// to the table name only.
+class ShowTables : public Statement {
+ public:
+  ShowTables(
+      NodeLocation location,
+      std::shared_ptr<QualifiedName> schemaName,
+      std::optional<std::string> likePattern,
+      std::optional<std::string> escape)
+      : Statement(NodeType::kShowTables, location),
+        schemaName_(std::move(schemaName)),
+        likePattern_(std::move(likePattern)),
+        escape_(std::move(escape)) {}
+
+  const std::shared_ptr<QualifiedName>& schemaName() const {
+    return schemaName_;
+  }
+
+  const std::optional<std::string>& likePattern() const {
+    return likePattern_;
+  }
+
+  const std::optional<std::string>& escape() const {
+    return escape_;
+  }
+
+  void accept(AstVisitor* visitor) override;
+
+ private:
+  std::shared_ptr<QualifiedName> schemaName_;
   std::optional<std::string> likePattern_;
   std::optional<std::string> escape_;
 };

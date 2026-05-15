@@ -17,6 +17,7 @@
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include <folly/coro/GtestHelpers.h>
 #include <folly/init/Init.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/connectors/tpch/TpchConnector.h"
@@ -154,6 +155,37 @@ TEST_F(TpchConnectorMetadataTest, createTableHandle) {
   EXPECT_EQ(tpchTableHandle->getTable(), tpchLayout->getTpchTable());
   EXPECT_DOUBLE_EQ(
       tpchTableHandle->getScaleFactor(), tpchLayout->getScaleFactor());
+}
+
+TEST_F(TpchConnectorMetadataTest, listTablesDefault) {
+  auto session = std::make_shared<ConnectorSession>("test");
+  auto tables = metadata_->listTableNames(session, "tiny");
+  EXPECT_THAT(
+      tables,
+      testing::ElementsAre(
+          "part",
+          "supplier",
+          "partsupp",
+          "customer",
+          "orders",
+          "lineitem",
+          "nation",
+          "region"));
+}
+
+TEST_F(TpchConnectorMetadataTest, listTablesWithSchema) {
+  auto session = std::make_shared<ConnectorSession>("test");
+  auto tables = metadata_->listTableNames(session, "sf1");
+  ASSERT_EQ(tables.size(), 8);
+  for (const auto& table : tables) {
+    EXPECT_EQ(table.find('.'), std::string::npos) << table;
+  }
+}
+
+TEST_F(TpchConnectorMetadataTest, listTablesInvalidSchema) {
+  auto session = std::make_shared<ConnectorSession>("test");
+  auto tables = metadata_->listTableNames(session, "invalid");
+  EXPECT_THAT(tables, testing::IsEmpty());
 }
 
 CO_TEST_F(TpchConnectorMetadataTest, splitGeneration) {
