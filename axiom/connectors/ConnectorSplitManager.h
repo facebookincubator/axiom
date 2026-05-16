@@ -15,18 +15,91 @@
  */
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include <folly/coro/Task.h>
 #include <velox/connectors/Connector.h>
+
 #include "axiom/connectors/ConnectorSession.h"
+
+#define AXIOM_HAS_SPLIT_SCHEDULING_INFO 1
 
 namespace facebook::axiom::connector {
 
+/// Describes whether a split has a scheduler placement preference.
+enum class SplitNodeSelectionStrategy {
+  kNoPreference,
+  kSoftAffinity,
+};
+
+/// Carries connector-provided scheduler hints for a split.
+class SplitSchedulingInfo {
+ public:
+  /// Returns a hint with no placement preference.
+  static SplitSchedulingInfo noPreference();
+
+  /// Returns a soft-affinity hint keyed by stable split data identity.
+  static SplitSchedulingInfo softAffinity(std::string affinityKey);
+
+  SplitNodeSelectionStrategy nodeSelectionStrategy() const {
+    return nodeSelectionStrategy_;
+  }
+
+  const std::optional<std::string>& affinityKey() const {
+    return affinityKey_;
+  }
+
+ private:
+  SplitSchedulingInfo(
+      SplitNodeSelectionStrategy nodeSelectionStrategy,
+      std::optional<std::string> affinityKey);
+
+  SplitNodeSelectionStrategy nodeSelectionStrategy_{
+      SplitNodeSelectionStrategy::kNoPreference};
+  std::optional<std::string> affinityKey_;
+};
+
+/// Bundles a Velox split with connector-provided scheduler hints.
+struct ConnectorSplitWithScheduling {
+  /// Split payload consumed by workers.
+  std::shared_ptr<velox::connector::ConnectorSplit> connectorSplit;
+
+  /// Coordinator-only metadata used by the scheduler.
+  SplitSchedulingInfo schedulingInfo{SplitSchedulingInfo::noPreference()};
+};
+
 /// A batch of splits returned by SplitSource::co_getSplits.
 struct SplitBatch {
+  /// Split payloads consumed by workers.
   std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
+
+  /// Optional scheduler metadata parallel to 'splits'. Leave empty when every
+  /// split has no placement preference; otherwise keep the same size as
+  /// 'splits'.
+  std::vector<SplitSchedulingInfo> schedulingInfo;
 
   /// True when there are no more splits to return.
   bool noMoreSplits{false};
+
+  /// Adds a split with no placement preference.
+  void addSplit(std::shared_ptr<velox::connector::ConnectorSplit> split);
+
+  /// Adds a split with scheduler metadata.
+  void addSplit(
+      std::shared_ptr<velox::connector::ConnectorSplit> split,
+      SplitSchedulingInfo info);
+
+  /// Adds a split and scheduler metadata pair.
+  void addSplit(ConnectorSplitWithScheduling split);
+
+  /// Returns scheduler metadata for the split at 'index'.
+  const SplitSchedulingInfo& schedulingInfoAt(size_t index) const;
 };
 
 /// Enumerates splits. The table and partitions to cover are given to

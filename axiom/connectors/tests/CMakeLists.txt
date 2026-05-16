@@ -38,10 +38,14 @@ target_link_libraries(
   GTest::gtest_main
 )
 
-add_executable(axiom_connectors_tests SchemaResolverTest.cpp)
+set(AXIOM_CONNECTORS_TESTS_SOURCES SchemaResolverTest.cpp)
+list(APPEND AXIOM_CONNECTORS_TESTS_SOURCES ConnectorSplitManagerTest.cpp)
 
+add_executable(axiom_connectors_tests ${AXIOM_CONNECTORS_TESTS_SOURCES})
 add_test(axiom_connectors_tests axiom_connectors_tests)
 
-target_link_libraries(axiom_connectors_tests axiom_connectors axiom_test_connector gtest gtest_main)
+target_link_libraries(axiom_connectors_tests axiom_connectors)
+target_link_libraries(axiom_connectors_tests axiom_test_connector)
+target_link_libraries(axiom_connectors_tests gtest gtest_main)
 
 target_link_libraries(axiom_connectors velox_core gtest gtest_main gmock)

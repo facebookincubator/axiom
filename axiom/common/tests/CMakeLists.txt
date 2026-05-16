@@ -17,9 +17,11 @@ add_executable(
   CatalogSchemaTableNameTest.cpp
   QueryRuntimeStatsTest.cpp
   SchemaTableNameTest.cpp
+  SessionTest.cpp
   SessionConfigTest.cpp
 )
 
 add_test(axiom_common_tests axiom_common_tests)
 
-target_link_libraries(axiom_common_tests axiom_common GTest::gtest GTest::gtest_main)
+target_link_libraries(axiom_common_tests axiom_common)
+target_link_libraries(axiom_common_tests GTest::gtest GTest::gtest_main)

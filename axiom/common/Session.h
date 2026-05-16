@@ -15,16 +15,30 @@
  */
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include <memory>
+#include <string>
+#include <string_view>
+#include <utility>
+
 #include "axiom/connectors/ConnectorSession.h"
 
+#define AXIOM_HAS_SESSION_PROPERTIES 1
+
 namespace facebook::axiom {
+
+using SessionProperties = folly::F14FastMap<std::string, std::string>;
 
 /// Read-only query-specific information.
 class Session final {
  public:
-  explicit Session(std::string queryId, std::string user = {})
-      : queryId_{std::move(queryId)}, user_{std::move(user)} {}
+  explicit Session(
+      std::string queryId,
+      std::string user = {},
+      SessionProperties sessionProperties = {})
+      : queryId_{std::move(queryId)},
+        user_{std::move(user)},
+        sessionProperties_{std::move(sessionProperties)} {}
 
   /// Returns the query identifier.
   const std::string& queryId() const {
@@ -43,6 +57,7 @@ class Session final {
  private:
   const std::string queryId_;
   const std::string user_;
+  const SessionProperties sessionProperties_;
 };
 
 using SessionPtr = std::shared_ptr<Session>;

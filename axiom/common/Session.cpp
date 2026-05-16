@@ -19,7 +19,15 @@
 namespace facebook::axiom {
 
 connector::ConnectorSessionPtr Session::toConnectorSession(
-    std::string_view /* connectorId */) const {
-  return std::make_shared<connector::ConnectorSession>(queryId_, user_);
+    std::string_view connectorId) const {
+  folly::F14FastMap<std::string, std::string> connectorProperties;
+  const auto connectorPrefix = std::string(connectorId) + ".";
+  for (const auto& [key, value] : sessionProperties_) {
+    if (key.compare(0, connectorPrefix.size(), connectorPrefix) == 0) {
+      connectorProperties[key.substr(connectorPrefix.size())] = value;
+    }
+  }
+  return std::make_shared<connector::ConnectorSession>(
+      queryId_, user_, std::move(connectorProperties));
 }
 } // namespace facebook::axiom

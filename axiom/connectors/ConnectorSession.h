@@ -15,17 +15,27 @@
  */
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace facebook::axiom::connector {
 
+using ConnectorSessionProperties = folly::F14FastMap<std::string, std::string>;
+
 /// Read-only query-specific information passed to connectors.
 class ConnectorSession final {
  public:
-  explicit ConnectorSession(std::string queryId, std::string user = {})
-      : queryId_{std::move(queryId)}, user_{std::move(user)} {}
+  explicit ConnectorSession(
+      std::string queryId,
+      std::string user = {},
+      ConnectorSessionProperties properties = {})
+      : queryId_{std::move(queryId)},
+        user_{std::move(user)},
+        properties_{std::move(properties)} {}
 
   /// Returns the query identifier.
   const std::string& queryId() const {
@@ -38,9 +48,18 @@ class ConnectorSession final {
     return user_;
   }
 
+  /// Returns a connector-scoped session property value.
+  std::optional<std::string> property(std::string_view name) const;
+
+  /// Returns all connector-scoped session properties.
+  const ConnectorSessionProperties& properties() const {
+    return properties_;
+  }
+
  private:
   const std::string queryId_;
   const std::string user_;
+  const ConnectorSessionProperties properties_;
 };
 
 using ConnectorSessionPtr = std::shared_ptr<ConnectorSession>;
