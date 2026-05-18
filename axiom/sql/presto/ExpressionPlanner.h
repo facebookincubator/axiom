@@ -18,6 +18,9 @@
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
+
+#include <folly/container/F14Map.h>
+
 #include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/sql/presto/ast/AstNodesAll.h"
@@ -63,18 +66,27 @@ class ExpressionPlanner {
   using ShouldDropQualifier = std::function<
       bool(const std::string& qualifier, const std::string& name)>;
 
+  /// Checks if a dotted name prefix resolves to a column or table alias in the
+  /// current scope. Returns true if 'first' is a column name OR if 'first' is
+  /// a table alias qualifying 'second' as a column. Used for column-first enum
+  /// literal resolution. Can be nullptr when no column scope is available.
+  using ColumnResolver =
+      std::function<bool(const std::string& first, const std::string& second)>;
+
   ExpressionPlanner(
       SubqueryPlanner subqueryPlanner,
       SortingKeyResolver sortingKeyResolver,
-      ShouldDropQualifier shouldDropQualifier = nullptr)
+      ShouldDropQualifier shouldDropQualifier = nullptr,
+      ColumnResolver columnResolver = nullptr)
       : subqueryPlanner_(std::move(subqueryPlanner)),
         sortingKeyResolver_(std::move(sortingKeyResolver)),
-        shouldDropQualifier_(std::move(shouldDropQualifier)) {}
+        shouldDropQualifier_(std::move(shouldDropQualifier)),
+        columnResolver_(std::move(columnResolver)) {}
 
   /// Finds WindowCallExpr nodes nested inside non-window expressions.
   /// Skips top-level window projections (where the ExprApi itself is a
   /// WindowCallExpr). Populates 'windowExprs' with pointers to the found
-  /// WindowCallExpr nodes (raw pointer → shared pointer) and
+  /// WindowCallExpr nodes (raw pointer -> shared pointer) and
   /// 'traversalOrder' with raw pointers in left-to-right order for
   /// deterministic plan generation.
   static void findNestedWindowExprs(
@@ -128,9 +140,18 @@ class ExpressionPlanner {
       const std::string& funcName,
       const std::vector<lp::ExprApi>& args);
 
+  // Resolves a type signature, trying built-in Velox types first, then
+  // connector-based resolution for dotted names (e.g., "catalog.schema.Type").
+  facebook::velox::TypePtr resolveType(const TypeSignaturePtr& type);
+
   SubqueryPlanner subqueryPlanner_;
   SortingKeyResolver sortingKeyResolver_;
   ShouldDropQualifier shouldDropQualifier_;
+  ColumnResolver columnResolver_;
+
+  // Per-query cache for user-defined type lookups. Entries with nullptr values
+  // represent negatively cached (not-found) types.
+  folly::F14FastMap<std::string, facebook::velox::TypePtr> typeCache_;
 
   // Lateral column alias mappings. When non-null, Identifier nodes matching
   // a key are resolved to the corresponding expression, unless the name also

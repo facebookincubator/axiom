@@ -1306,6 +1306,10 @@ class RelationPlanner : public AstVisitor {
         // struct field dereference) and the unqualified name is unambiguous.
         return builder_->hasQualifiedColumn(qualifier, name) &&
             builder_->hasColumn(name);
+      },
+      [this](const std::string& first, const std::string& second) -> bool {
+        return builder_->hasColumn(first) ||
+            builder_->hasQualifiedColumn(first, second);
       }};
   std::unordered_map<std::string, std::shared_ptr<WithQuery>> withQueries_;
   ViewMap views_;

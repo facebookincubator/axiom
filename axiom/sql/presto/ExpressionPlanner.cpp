@@ -15,14 +15,21 @@
  */
 
 #include "axiom/sql/presto/ExpressionPlanner.h"
+
 #include <folly/ScopeGuard.h>
 #include <folly/String.h>
+
 #include <algorithm>
 #include <cctype>
+
+#include "axiom/common/SchemaTypeName.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/ast/DefaultTraversalVisitor.h"
+#include "velox/functions/prestosql/types/BigintEnumType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/functions/prestosql/types/VarcharEnumType.h"
 #include "velox/parse/Expressions.h"
 
 namespace axiom::sql::presto {
@@ -221,51 +228,137 @@ lp::ExprApi parseDecimal(std::string_view value, NodeLocation location) {
       LongDecimalType::kMaxPrecision);
 }
 
-} // namespace
-
-void ExpressionPlanner::findWindowExprs(
-    const core::ExprPtr& expr,
-    std::unordered_map<const core::IExpr*, core::ExprPtr>& windowExprs,
-    std::vector<const core::IExpr*>& traversalOrder) {
-  if (expr->is(core::IExpr::Kind::kWindow)) {
-    if (windowExprs.emplace(expr.get(), expr).second) {
-      traversalOrder.push_back(expr.get());
+// Flattens a nested DereferenceExpression chain into dot-separated parts.
+// Returns true if the entire chain consists of identifiers and dereferences.
+// Returns false and clears 'parts' if any node is a different expression type.
+bool extractQualifiedParts(
+    const ExpressionPtr& node,
+    std::vector<std::string>& parts) {
+  if (node->is(NodeType::kIdentifier)) {
+    auto* identifier = node->as<Identifier>();
+    parts.push_back(canonicalizeName(identifier->value()));
+    return true;
+  }
+  if (node->is(NodeType::kDereferenceExpression)) {
+    auto* deref = node->as<DereferenceExpression>();
+    if (!extractQualifiedParts(deref->base(), parts)) {
+      return false;
     }
-    return;
+    parts.push_back(canonicalizeName(deref->field()->value()));
+    return true;
   }
-  for (const auto& input : expr->inputs()) {
-    findWindowExprs(input, windowExprs, traversalOrder);
+  parts.clear();
+  return false;
+}
+
+// Resolves a user-defined type from ConnectorMetadata. Returns the TypePtr,
+// or nullptr if not found. Uses the per-query cache to avoid repeated lookups.
+TypePtr findQualifiedType(
+    const std::string& catalog,
+    const facebook::axiom::SchemaTypeName& typeName,
+    folly::F14FastMap<std::string, TypePtr>& typeCache) {
+  auto qualifiedName =
+      fmt::format("{}.{}.{}", catalog, typeName.schema, typeName.type);
+
+  auto it = typeCache.find(qualifiedName);
+  if (it != typeCache.end()) {
+    return it->second;
   }
-}
 
-void ExpressionPlanner::findNestedWindowExprs(
-    const std::vector<lp::ExprApi>& exprs,
-    std::unordered_map<const core::IExpr*, core::ExprPtr>& windowExprs,
-    std::vector<const core::IExpr*>& traversalOrder) {
-  for (const auto& expr : exprs) {
-    if (!expr.expr()->is(core::IExpr::Kind::kWindow)) {
-      findWindowExprs(expr.expr(), windowExprs, traversalOrder);
-    }
+  auto metadata =
+      facebook::axiom::connector::ConnectorMetadataRegistry::tryGet(catalog);
+  if (metadata == nullptr) {
+    typeCache.emplace(qualifiedName, nullptr);
+    return nullptr;
   }
+
+  auto type = metadata->findType(typeName);
+  typeCache.emplace(qualifiedName, type);
+  return type;
 }
 
-std::string canonicalizeName(const std::string& name) {
-  std::string canonicalName;
-  canonicalName.resize(name.size());
-  std::transform(
-      name.begin(), name.end(), canonicalName.begin(), [](unsigned char c) {
-        return std::tolower(c);
-      });
-
-  return canonicalName;
+// Tries to resolve a dotted base name (e.g., "CATALOG.SCHEMA.TYPE") as a
+// connector-provided user-defined type. Returns nullptr if the name has
+// fewer than two dots or the connector does not know the type.
+TypePtr tryConnectorBasedTypeResolution(
+    std::string_view baseName,
+    folly::F14FastMap<std::string, TypePtr>& typeCache) {
+  auto firstDot = baseName.find('.');
+  if (firstDot == std::string_view::npos) {
+    return nullptr;
+  }
+  auto secondDot = baseName.find('.', firstDot + 1);
+  if (secondDot == std::string_view::npos) {
+    return nullptr;
+  }
+  auto catalog = canonicalizeName(std::string{baseName.substr(0, firstDot)});
+  auto schema = canonicalizeName(
+      std::string{baseName.substr(firstDot + 1, secondDot - firstDot - 1)});
+  auto typeName = canonicalizeName(std::string{baseName.substr(secondDot + 1)});
+  if (catalog.empty() || schema.empty() || typeName.empty()) {
+    return nullptr;
+  }
+  return findQualifiedType(
+      catalog, {std::move(schema), std::move(typeName)}, typeCache);
 }
 
-std::string canonicalizeIdentifier(const Identifier& identifier) {
-  // TODO: Figure out whether 'delimited' identifiers should be kept as is.
-  return canonicalizeName(identifier.value());
+// Attempts to resolve a qualified name (e.g., "catalog.schema.status.active")
+// as an enum literal. Returns nullopt if the type is not found. Throws
+// PrestoSqlError if the type is found but the value is not a valid enum member,
+// or if the resolved type is not an enum type.
+std::optional<lp::ExprApi> tryResolveEnumLiteral(
+    const std::vector<std::string>& parts,
+    folly::F14FastMap<std::string, TypePtr>& typeCache,
+    NodeLocation location) {
+  if (parts.size() < 4) {
+    return std::nullopt;
+  }
+
+  const auto& catalog = parts[0];
+  auto schema = parts[1];
+  auto typeName = folly::join('.', parts.begin() + 2, parts.end() - 1);
+  const auto& valueName = parts.back();
+
+  auto type = findQualifiedType(
+      catalog,
+      facebook::axiom::SchemaTypeName{std::move(schema), std::move(typeName)},
+      typeCache);
+  if (type == nullptr) {
+    return std::nullopt;
+  }
+
+  if (isBigintEnumType(*type)) {
+    auto enumType = asBigintEnum(type);
+    auto value = enumType->valueAt(valueName);
+    AXIOM_PRESTO_SEMANTIC_CHECK(
+        value.has_value(),
+        location,
+        valueName,
+        "Enum value not found in type: {}",
+        enumType->enumName());
+    return lp::Lit(*value, type);
+  }
+
+  if (isVarcharEnumType(*type)) {
+    auto enumType = asVarcharEnum(type);
+    auto value = enumType->valueAt(valueName);
+    AXIOM_PRESTO_SEMANTIC_CHECK(
+        value.has_value(),
+        location,
+        valueName,
+        "Enum value not found in type: {}",
+        enumType->enumName());
+    return lp::Lit(std::move(*value), type);
+  }
+
+  AXIOM_PRESTO_SEMANTIC_FAIL(
+      location, valueName, "Type is not an enum type: {}", type->toString());
 }
 
-TypePtr parseType(const TypeSignaturePtr& type) {
+// Resolves a TypeSignature to a Velox built-in type. Returns nullptr for
+// unknown non-parametric types. Nested types (ARRAY, MAP, etc.) use parseType
+// (declared in the header) which throws on failure.
+TypePtr tryResolveBuiltinType(const TypeSignaturePtr& type) {
   auto baseName = type->baseName();
   std::transform(
       baseName.begin(), baseName.end(), baseName.begin(), [](char c) {
@@ -341,10 +434,73 @@ TypePtr parseType(const TypeSignaturePtr& type) {
     }
   }
 
-  auto veloxType = getType(baseName, parameters);
+  return getType(baseName, parameters);
+}
 
+} // namespace
+
+void ExpressionPlanner::findWindowExprs(
+    const core::ExprPtr& expr,
+    std::unordered_map<const core::IExpr*, core::ExprPtr>& windowExprs,
+    std::vector<const core::IExpr*>& traversalOrder) {
+  if (expr->is(core::IExpr::Kind::kWindow)) {
+    if (windowExprs.emplace(expr.get(), expr).second) {
+      traversalOrder.push_back(expr.get());
+    }
+    return;
+  }
+  for (const auto& input : expr->inputs()) {
+    findWindowExprs(input, windowExprs, traversalOrder);
+  }
+}
+
+void ExpressionPlanner::findNestedWindowExprs(
+    const std::vector<lp::ExprApi>& exprs,
+    std::unordered_map<const core::IExpr*, core::ExprPtr>& windowExprs,
+    std::vector<const core::IExpr*>& traversalOrder) {
+  for (const auto& expr : exprs) {
+    if (!expr.expr()->is(core::IExpr::Kind::kWindow)) {
+      findWindowExprs(expr.expr(), windowExprs, traversalOrder);
+    }
+  }
+}
+
+std::string canonicalizeName(const std::string& name) {
+  std::string canonicalName;
+  canonicalName.resize(name.size());
+  std::transform(
+      name.begin(), name.end(), canonicalName.begin(), [](unsigned char c) {
+        return std::tolower(c);
+      });
+
+  return canonicalName;
+}
+
+std::string canonicalizeIdentifier(const Identifier& identifier) {
+  // TODO: Figure out whether 'delimited' identifiers should be kept as is.
+  return canonicalizeName(identifier.value());
+}
+
+TypePtr parseType(const TypeSignaturePtr& type) {
+  auto veloxType = tryResolveBuiltinType(type);
   AXIOM_PRESTO_SEMANTIC_CHECK(
-      veloxType != nullptr, type->location(), baseName, "Cannot resolve type");
+      veloxType != nullptr,
+      type->location(),
+      type->baseName(),
+      "Cannot resolve type");
+  return veloxType;
+}
+
+TypePtr ExpressionPlanner::resolveType(const TypeSignaturePtr& type) {
+  auto veloxType = tryResolveBuiltinType(type);
+  if (veloxType == nullptr) {
+    veloxType = tryConnectorBasedTypeResolution(type->baseName(), typeCache_);
+  }
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      veloxType != nullptr,
+      type->location(),
+      type->baseName(),
+      "Cannot resolve type");
   return veloxType;
 }
 
@@ -367,6 +523,25 @@ lp::ExprApi ExpressionPlanner::toExpr(const ExpressionPtr& node) {
 
     case NodeType::kDereferenceExpression: {
       auto* dereference = node->as<DereferenceExpression>();
+
+      // Try to resolve as an enum literal (e.g., catalog.schema.Type.VALUE).
+      // When columnResolver_ is nullptr (e.g., parseSqlExpression for CREATE
+      // TABLE property values), there is no column scope to compete with — a
+      // 4-part dotted name can only be an enum literal.
+      std::vector<std::string> parts;
+      if (extractQualifiedParts(node, parts) && parts.size() >= 4) {
+        bool isColumn =
+            columnResolver_ != nullptr && columnResolver_(parts[0], parts[1]);
+
+        if (!isColumn) {
+          auto resolved =
+              tryResolveEnumLiteral(parts, typeCache_, node->location());
+          if (resolved.has_value()) {
+            return *resolved;
+          }
+        }
+      }
+
       auto field = canonicalizeIdentifier(*dereference->field());
       // The base of a dereference is a scope qualifier (table alias or
       // struct-typed column), not a value-producing expression. Lateral
@@ -518,7 +693,7 @@ lp::ExprApi ExpressionPlanner::toExpr(const ExpressionPtr& node) {
 
     case NodeType::kCast: {
       auto* cast = node->as<Cast>();
-      const auto type = parseType(cast->toType());
+      const auto type = resolveType(cast->toType());
 
       if (cast->isSafe()) {
         return lp::TryCast(type, toExpr(cast->expression()));
@@ -697,7 +872,7 @@ lp::ExprApi ExpressionPlanner::toExpr(const ExpressionPtr& node) {
 
     case NodeType::kGenericLiteral: {
       auto literal = node->as<GenericLiteral>();
-      auto type = parseType(literal->valueType());
+      auto type = resolveType(literal->valueType());
       // JSON literals use json_parse, not CAST. CAST(VARCHAR AS JSON)
       // wraps the value as a JSON string, while json_parse interprets the
       // value as JSON.

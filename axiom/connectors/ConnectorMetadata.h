@@ -17,6 +17,7 @@
 
 #include "axiom/common/Enums.h"
 #include "axiom/common/SchemaTableName.h"
+#include "axiom/common/SchemaTypeName.h"
 #include "axiom/connectors/ConnectorSession.h"
 #include "axiom/connectors/ConnectorSplitManager.h"
 #include "folly/CppAttributes.h"
@@ -833,6 +834,15 @@ class ConnectorMetadata {
   ///
   /// @return nullptr if view doesn't exist.
   virtual ViewPtr findView(const SchemaTableName& /*tableName*/) {
+    return nullptr;
+  }
+
+  /// Finds a user-defined type by schema-qualified name. Connectors that serve
+  /// user-defined types (e.g., enums from an external type registry) override
+  /// this method.
+  ///
+  /// @return nullptr if the type is not found.
+  virtual velox::TypePtr findType(const SchemaTypeName& /*typeName*/) {
     return nullptr;
   }
 

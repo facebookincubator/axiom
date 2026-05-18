@@ -500,6 +500,12 @@ class TestConnectorMetadata : public ConnectorMetadata {
     return dropTable(nullptr, tableName, true, /*explain=*/false);
   }
 
+  velox::TypePtr findType(const SchemaTypeName& typeName) override;
+
+  /// Registers a user-defined type for findType() resolution. Throws if a type
+  /// with the same name is already registered.
+  void addType(const SchemaTypeName& typeName, velox::TypePtr type);
+
   ViewPtr findView(const SchemaTableName& tableName) override;
 
   /// Register a view with the given name, output schema, and SQL text.
@@ -546,6 +552,7 @@ class TestConnectorMetadata : public ConnectorMetadata {
   folly::F14FastMap<SchemaTableName, ViewDefinition> views_;
 
   folly::F14FastSet<std::string> schemas_{"default"};
+  folly::F14FastMap<SchemaTypeName, velox::TypePtr> types_;
 };
 
 /// At DataSource creation time, the data contained in the corresponding Table

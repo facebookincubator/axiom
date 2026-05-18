@@ -293,6 +293,21 @@ TablePtr TestConnectorMetadata::findTable(const SchemaTableName& tableName) {
   return findTableInternal(tableName);
 }
 
+velox::TypePtr TestConnectorMetadata::findType(const SchemaTypeName& typeName) {
+  auto it = types_.find(typeName);
+  if (it != types_.end()) {
+    return it->second;
+  }
+  return nullptr;
+}
+
+void TestConnectorMetadata::addType(
+    const SchemaTypeName& typeName,
+    velox::TypePtr type) {
+  auto [_, inserted] = types_.emplace(typeName, std::move(type));
+  VELOX_CHECK(inserted, "Type already registered: {}", typeName);
+}
+
 ViewPtr TestConnectorMetadata::findView(const SchemaTableName& tableName) {
   auto it = views_.find(tableName);
   if (it == views_.end()) {
