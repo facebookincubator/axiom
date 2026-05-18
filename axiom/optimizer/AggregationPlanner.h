@@ -33,6 +33,20 @@ std::pair<RelationOpPtr, PlanCost> maybeRepartition(
     const RelationOpPtr& plan,
     ExprVector desiredKeys);
 
+namespace detail {
+// Computes the pre-grouped keys for streaming aggregation based on
+// 'distribution'. For orderKeys, returns the longest prefix that is also a
+// grouping key (order guarantees break at the first non-grouping key). For
+// clusterKeys, returns any subset that are grouping keys (clustering only
+// requires contiguous values, not ordering). Returns whichever set is larger
+// to maximize streaming benefit. Semantic duplicates (different `ExprCP`
+// pointers that `sameOrEqual`) are dropped to keep the result no larger than
+// `groupingKeys` — exposed for unit testing.
+ExprVector computePreGroupedKeys(
+    const Distribution& distribution,
+    const ExprVector& groupingKeys);
+} // namespace detail
+
 /// Plans aggregation operators for a derived table.
 class AggregationPlanner {
  public:

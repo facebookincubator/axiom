@@ -66,14 +66,12 @@ AggregateVector flattenAggregates(
   return flatAggregates;
 }
 
-// Computes the pre-grouped keys for streaming aggregation based on input's
-// orderKeys and clusterKeys. For orderKeys, returns the longest prefix that
-// is also a grouping key (order guarantees break at the first non-grouping
-// key). For clusterKeys, returns any subset that are grouping keys (clustering
-// only requires contiguous values, not ordering). Returns whichever set is
-// larger to maximize streaming benefit.
+} // namespace
+
+namespace detail {
+
 ExprVector computePreGroupedKeys(
-    const RelationOp& input,
+    const Distribution& distribution,
     const ExprVector& groupingKeys) {
   if (groupingKeys.empty()) {
     return {};
@@ -88,28 +86,43 @@ ExprVector computePreGroupedKeys(
     return false;
   };
 
+  // Distinct ExprCP pointers can refer to the same logical column after a
+  // rename or project; pointer identity is not enough.
+  auto alreadyAdded = [](ExprCP key, const ExprVector& result) {
+    for (const auto& existing : result) {
+      if (existing->sameOrEqual(*key)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   // Check orderKeys - find the longest prefix that is in groupingKeys.
   // For ordered data, we can only use a prefix because the order guarantee
   // breaks once we hit a key not in groupingKeys.
   ExprVector fromOrderKeys;
-  const auto& orderKeys = input.distribution().orderKeys();
-  for (const auto& key : orderKeys) {
-    if (isGroupingKey(key)) {
-      fromOrderKeys.push_back(key);
-    } else {
+  for (const auto& key : distribution.orderKeys()) {
+    if (!isGroupingKey(key)) {
       break; // Must be a prefix for ordered data.
     }
+    if (alreadyAdded(key, fromOrderKeys)) {
+      continue;
+    }
+    fromOrderKeys.push_back(key);
   }
 
   // Check clusterKeys - any subset of groupingKeys works.
   // Clustering doesn't require prefix matching since rows with the same
   // cluster key values are contiguous regardless of other columns.
   ExprVector fromClusterKeys;
-  const auto& clusterKeys = input.distribution().clusterKeys();
-  for (const auto& key : clusterKeys) {
-    if (isGroupingKey(key)) {
-      fromClusterKeys.push_back(key);
+  for (const auto& key : distribution.clusterKeys()) {
+    if (!isGroupingKey(key)) {
+      continue;
     }
+    if (alreadyAdded(key, fromClusterKeys)) {
+      continue;
+    }
+    fromClusterKeys.push_back(key);
   }
 
   // Return the larger subset for maximum streaming benefit.
@@ -118,6 +131,10 @@ ExprVector computePreGroupedKeys(
   return fromOrderKeys.size() >= fromClusterKeys.size() ? fromOrderKeys
                                                         : fromClusterKeys;
 }
+
+} // namespace detail
+
+namespace {
 
 // Returns the union of column expressions from groupingKeys and args,
 // skipping literals. Throws on unexpected expression types other than column
@@ -548,7 +565,8 @@ void AggregationPlanner::plan(
   plan = std::move(precompute).maybeProject();
   state.place(aggPlan);
 
-  auto preGroupedKeys = computePreGroupedKeys(*plan, groupingKeys);
+  auto preGroupedKeys =
+      detail::computePreGroupedKeys(plan->distribution(), groupingKeys);
   if ((isSingleWorker_ && isSingleDriver_) || !preGroupedKeys.empty()) {
     auto* singleAgg = make<Aggregation>(
         plan,
