@@ -124,9 +124,21 @@ class ToGraph {
   }
 
   /// Creates or returns pre-existing function call with name+args. If
-  /// deterministic, a new ExprCP is remembered for reuse.
-  ExprCP
-  deduppedCall(Name name, Value value, ExprVector args, FunctionSet flags);
+  /// deterministic, a new ExprCP is remembered for reuse. 'functions'
+  /// on the resulting Call is computed as 'functionBits(name,
+  /// specialForm) | <each arg's functions()>'.
+  ExprCP deduppedCall(
+      Name name,
+      Value value,
+      ExprVector args,
+      bool specialForm = false);
+
+  /// Shorthand for 'deduppedCall(name, value, args, /*specialForm=*/
+  /// true)' — use at sites that construct a named special form (kIf,
+  /// kAnd, kCoalesce, ...).
+  ExprCP deduppedSpecialForm(Name name, Value value, ExprVector args) {
+    return deduppedCall(name, value, std::move(args), /*specialForm=*/true);
+  }
 
   /// True if 'expr' is of the form a = b where a depends on leftTable and b on
   /// rightTable or vice versa. If true, returns the side depending on
@@ -150,6 +162,92 @@ class ToGraph {
   }
 
  private:
+  // State for translating a (possibly correlated) subquery's body.
+  // Held as a single 'applyContext_' member on 'ToGraph'. Populated by
+  // producers during body translation; drained by the outer scope's
+  // 'process*Subqueries' code after 'translateSubquery' returns.
+  // 'outerDt' is save/restored by 'translateSubqueryBody' on body entry;
+  // 'lifted' is save/restored by call sites that invoke
+  // 'translateSubquery' while their own scope already has pending lifted
+  // state (nested subqueries inside a body that already lifted state of
+  // its own). All three lifted fields are asserted empty at
+  // 'translateSubqueryBody' entry.
+  struct ApplyContext {
+    // The DT one scope out: where this body's lifted (correlated)
+    // accumulators will eventually be drained into as join predicates /
+    // outer aggregation / projection substitutions.
+    DerivedTableP outerDt{nullptr};
+
+    // The three lifted accumulators for this scope's body. Bundled in
+    // one struct so a single value captures the full snapshot for
+    // save/restore across nested 'translateSubquery' calls.
+    struct Lifted {
+      // Filter conjuncts found in the subquery body that reference
+      // outer-scope columns. Drained by the outer scope's
+      // 'processCorrelatedScalarSubquery' (and friends) to become join
+      // keys or filter on the decorrelating LEFT JOIN.
+      ExprVector predicates;
+
+      // Residual projection expressions from the subquery's SELECT that
+      // reference outer-scope columns. Each entry combines pure-inner
+      // exported columns of the inner DT with outer-column references
+      // and is evaluated above the decorrelated join (typically by
+      // being substituted as the subquery's value in the outer
+      // expression).
+      ExprVector projections;
+
+      // An aggregation from the subquery body whose aggregate body
+      // references outer-scope columns. It is not attached to the inner
+      // DT (its body would fail the inner DT's tableSet check). Its
+      // output columns are created with relation set to 'outerDt' so
+      // the SELECT projection split classifies them as correlated.
+      // 'processCorrelatedScalarSubquery' attaches it to the outer DT
+      // above the decorrelating LEFT JOIN.
+      AggregationPlanCP aggregation{nullptr};
+    };
+    Lifted lifted;
+
+    // Moves the lifted-state fields into a snapshot and clears them
+    // in place so the next nested 'translateSubquery' starts with a
+    // clean slate. Restore via `applyContext_.lifted = std::move(saved)`
+    // — that overwrites any current state, which is the desired
+    // behavior during exceptional unwind when the inner's state was
+    // not drained by its consumer.
+    Lifted saveAndClearLifted();
+  };
+
+  // For each column referenced by 'outerLifted->predicates' that
+  // lives in 'currentDt_'s tableSet, append an 'arbitrary()' aggregate
+  // over it to 'aggregates'/'columns', add the resulting post-aggregation
+  // column to 'currentDt_->columns', and rewrite the predicates in place
+  // to reference the post-aggregation column. No-op when 'outerLifted' is
+  // null or has empty predicates. Used by
+  // 'appendOuterAggregationCarryForwards' to thread the enclosing scope's
+  // correlation keys through an injected outer aggregation.
+  void carryForwardOuterCorrelationKeys(
+      ApplyContext::Lifted* outerLifted,
+      AggregateVector& aggregates,
+      ColumnVector& columns);
+
+  // Outer-side join keys, inner-side join keys, and remaining non-equi
+  // conjuncts extracted from a subquery's correlated WHERE conjuncts.
+  // 'leftTable' is the single outer table the conjuncts reference, or
+  // null when there are no correlated conjuncts.
+  struct CorrelationKeys {
+    PlanObjectCP leftTable{nullptr};
+    ExprVector leftKeys;
+    ExprVector rightKeys;
+    ExprVector nonEquiConjuncts;
+  };
+
+  // Extracts equi join keys + non-equi conjuncts from
+  // 'correlatedConjuncts' into a CorrelationKeys, classifying each
+  // conjunct's tables against 'subqueryDt'.
+  static CorrelationKeys extractCorrelationKeys(
+      const FunctionNames& funcs,
+      const ExprVector& correlatedConjuncts,
+      DerivedTableP subqueryDt);
+
   // For comparisons, swaps the args to have a canonical form for
   // deduplication. E.g column op constant, and smaller plan object id
   // to the left.
@@ -160,10 +258,12 @@ class ToGraph {
   // be skipped (e.g., DISTINCT in EXISTS).
   //
   // Side effects for equi-correlated aggregations:
-  // - Clears correlatedConjuncts_ and repopulates it with new equality
+  // - Clears 'liftedPredicates' and repopulates it with new equality
   //   expressions that reference the new grouping key columns.
   // - Adds grouping key columns to currentDt_->exprs and currentDt_->columns.
-  AggregationPlanCP processCorrelatedAggregation(AggregationPlanCP agg);
+  AggregationPlanCP processCorrelatedAggregation(
+      AggregationPlanCP agg,
+      ExprVector& liftedPredicates);
 
   // Converts 'plan' to PlanObjects and records join edges into
   // 'currentDt_'. Wraps 'node' in a new Derived table f 'node' does not match
@@ -409,17 +509,35 @@ class ToGraph {
       DerivedTableP outerDt = nullptr);
 
   // Wraps currentDt_ via finalizeDt, preserving any pending
-  // correlatedConjuncts_. After wrapping, rewrites the conjuncts so their
-  // inner column references point to the wrapped DT's output columns.
-  void finalizeDtWithCorrelatedConjuncts(
+  // applyContext_.lifted.predicates and applyContext_.lifted.projections. After
+  // wrapping, rewrites their column references so they point to the wrapped
+  // DT's output columns.
+  void finalizeDtPreservingCorrelations(
       const logical_plan::LogicalPlanNode& node);
 
   // Creates a wrapper DerivedTable with a COUNT(*) aggregation over 'inputDt'.
   // Returns the count column. The wrapper DT is added to currentDt_.
   ColumnCP makeCountStarWrapper(DerivedTableP inputDt);
 
-  // Adds a column 'name' from current DerivedTable to 'dt'.
+  // Adds a column 'name' from current DerivedTable to 'dt'. The looked-up
+  // expression usually references only tables owned by 'dt'; that case
+  // appends to 'dt->exprs' / 'dt->columns' and updates 'renames_'. In
+  // subquery scope the expression may also reference outer-query tables
+  // via 'correlations_'; in that case it is routed to
+  // 'applyContext_.lifted.projections' (via 'splitCorrelatedProjection' for the
+  // mixed-reference variant), and 'dt' is not extended with the unsplit
+  // form (which would violate DerivedTable::checkConsistency).
   void addDtColumn(DerivedTableP dt, std::string_view name);
+
+  // Splits a subquery projection expression that references both 'dt's
+  // own tables and tables from an enclosing scope. Local-only maximal
+  // sub-trees are appended to 'dt->exprs' / 'dt->columns' as new columns;
+  // the returned residual replaces each such sub-tree with a reference to
+  // its new column, and still carries the original correlated references
+  // for evaluation above the decorrelated join. The walk does not descend
+  // into aggregate bodies, so an outer-column reference inside an
+  // aggregate cannot be split out and triggers a VELOX_NYI.
+  ExprCP splitCorrelatedProjection(ExprCP expr, DerivedTableP dt);
 
   void setDtUsedOutput(
       DerivedTableP dt,
@@ -467,6 +585,21 @@ class ToGraph {
     std::vector<logical_plan::ExprPtr> carryForwards;
   };
 
+  // Appends carry-forward aggregates needed by an injected outer
+  // aggregation: 'arbitrary()' over downstream-referenced outer columns
+  // ('appendArbitraryAggregates'); 'arbitrary()' over prior chain-mate
+  // subquery results (updating their 'subqueries_' entries); and the
+  // enclosing scope's correlation keys via
+  // 'carryForwardOuterCorrelationKeys'. Used by
+  // 'processCorrelatedScalarSubquery' and 'buildCorrelatedAggregation'
+  // to keep their post-join aggregation construction in lock-step.
+  void appendOuterAggregationCarryForwards(
+      const logical_plan::LogicalPlanNode& input,
+      SubqueryChain& chain,
+      ApplyContext::Lifted* outerLifted,
+      AggregateVector& aggregates,
+      ColumnVector& columns);
+
   // Process subqueries used in filter's predicate or projection expressions
   // and populate subqueries_ map. For each IN <subquery> expression, create a
   // separate DT for the subquery and add a semi-join edge. Replace the whole IN
@@ -512,6 +645,21 @@ class ToGraph {
       const logical_plan::LogicalPlanNode& input,
       SubqueryChain& chain);
 
+  // Attaches a scalar subquery's translated body ('subqueryDt') to the
+  // outer scope, picking the decorrelation shape from 'applyContext_':
+  // pure uncorrelated, correlated WHERE / outer-referencing aggregate, or
+  // correlated projection. Returns the expression to substitute for the
+  // subquery in the outer expression. Drains 'applyContext_'.
+  //
+  // 'outerLifted' holds the enclosing scope's pending lifted state saved
+  // before this call. See 'carryForwardOuterCorrelationKeys' for how it
+  // is used by the branches that inject an aggregation into 'currentDt_'.
+  ExprCP attachScalarSubqueryToOuter(
+      const logical_plan::LogicalPlanNode& input,
+      DerivedTableP subqueryDt,
+      SubqueryChain& chain,
+      ApplyContext::Lifted* outerLifted);
+
   // Processes an uncorrelated scalar subquery. Attempts constant folding,
   // otherwise ensures single row. Returns the expression to map to the
   // subquery.
@@ -523,11 +671,44 @@ class ToGraph {
   // between consecutive heavy-path subqueries in the caller's loop; the
   // heavy path reads it on entry and updates it on exit. The caller is
   // responsible for appending the produced expression to chain.carryForwards
-  // so subsequent wraps and aggregations preserve the result.
+  // so subsequent wraps and aggregations preserve the result. 'outerLifted'
+  // is the enclosing scope's pending lifted state; the non-equi-with-
+  // aggregation branch routes it through 'carryForwardOuterCorrelationKeys'.
   ExprCP processCorrelatedScalarSubquery(
       const logical_plan::LogicalPlanNode& input,
       DerivedTableP subqueryDt,
-      SubqueryChain& chain);
+      SubqueryChain& chain,
+      ApplyContext::Lifted* outerLifted);
+
+  // Builds the AssignUniqueId + LEFT JOIN + outer aggregation that
+  // decorrelates a scalar subquery whose aggregate body references outer
+  // columns. The aggregate is held in 'applyContext_.lifted.aggregation'
+  // (set by 'translateAggregation'). Drains 'applyContext_.lifted.aggregation'
+  // and 'applyContext_.lifted.predicates' on return. 'outerLifted' is the
+  // enclosing scope's pending lifted state, routed through
+  // 'carryForwardOuterCorrelationKeys' so its correlation keys are
+  // exposed on the synthesized aggregation.
+  ExprCP buildCorrelatedAggregation(
+      const logical_plan::LogicalPlanNode& input,
+      DerivedTableP subqueryDt,
+      SubqueryChain& chain,
+      const CorrelationKeys& correlation,
+      ApplyContext::Lifted* outerLifted);
+
+  // Processes a scalar subquery whose SELECT references outer-query
+  // columns. Returns the expression to substitute for the subquery: a
+  // residual that combines pure-inner exports of subqueryDt with
+  // outer-column references, evaluated above the decorrelated join.
+  // The inner DT is integrated into the join graph (or dropped) as
+  // appropriate for its shape. Must be called only when
+  // 'applyContext_.lifted.projections' is non-empty; drains it on return.
+  // 'outerLifted' is forwarded to 'processCorrelatedScalarSubquery' when
+  // this method delegates to the heavy path.
+  ExprCP processProjectionCorrelatedScalarSubquery(
+      const logical_plan::LogicalPlanNode& input,
+      DerivedTableP subqueryDt,
+      SubqueryChain& chain,
+      ApplyContext::Lifted* outerLifted);
 
   // Processes IN <subquery> predicates, creating semi-joins with mark columns.
   // Populates subqueries_ with mappings from IN predicates to mark columns.
@@ -575,7 +756,7 @@ class ToGraph {
 
   // Translates a subquery into a DerivedTable. Sets up correlations_ to allow
   // the subquery to reference columns from the outer query. After translation,
-  // correlatedConjuncts_ contains any correlated predicates found.
+  // applyContext_.lifted.predicates contains any correlated predicates found.
   //
   // @param node The logical plan node representing the subquery.
   // @param finalize If true (default), adds the subquery DT to currentDt_ and
@@ -586,6 +767,14 @@ class ToGraph {
   DerivedTableP translateSubquery(
       const logical_plan::LogicalPlanNode& node,
       bool finalize = true);
+
+  // Translates the body of a subquery. Asserts that 'applyContext_' has
+  // no leftover lifted accumulators on entry, swaps 'currentDt_' for a
+  // fresh inner DT (save/restoring 'applyContext_.outerDt'), recursively
+  // translates 'node' into it, then restores 'currentDt_' and returns
+  // the inner DT.
+  DerivedTableP translateSubqueryBody(
+      const logical_plan::LogicalPlanNode& node);
 
   // Appends `arbitrary` aggregates for all columns used from 'input'.
   // Used when decorrelating non-equi correlated subqueries. Since the
@@ -646,9 +835,12 @@ class ToGraph {
   // True if expression is allowed to reference symbols from the 'outer' query.
   bool allowCorrelations_{false};
 
-  // Filter conjuncts found in a subquery that reference symbols from the
-  // 'outer' query.
-  ExprVector correlatedConjuncts_;
+  // Correlated-subquery accumulators for the currently active subquery
+  // body translation. Populated by producers (correlated predicates,
+  // projections, aggregations) and drained by the outer scope's
+  // 'process*Subqueries' code after 'translateSubquery' returns. At top
+  // level (outside any subquery scope), this is empty.
+  ApplyContext applyContext_;
 
   // Maps an expression that contains a subquery to a column or constant that
   // should be used instead. Populated in 'processSubqueries()'.

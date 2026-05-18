@@ -269,6 +269,16 @@ class Call : public Expr {
       FunctionSet functions);
 
  public:
+  /// 'functions' should be the call's own function-property bits
+  /// (deterministic, default-null-behavior, aggregate kind, etc.)
+  /// OR-ed with each arg's 'functions()'. The Call ctor stores
+  /// 'functions' as-is and does not aggregate from args, so the caller
+  /// is responsible for OR-ing. 'functions' is queried by
+  /// 'containsFunction' to decide whether a subtree contains, e.g., a
+  /// non-deterministic call. Build the call's own bits with
+  /// 'functionBits(name, /*specialForm=*/false)' for regular function
+  /// calls and 'functionBits(name, /*specialForm=*/true)' for special
+  /// forms.
   Call(Name name, Value value, ExprVector args, FunctionSet functions)
       : Call(PlanType::kCallExpr, name, value, std::move(args), functions) {}
 
@@ -321,6 +331,11 @@ class Call : public Expr {
 
 using CallCP = const Call*;
 
+/// Canonical names for special-form calls. Each member is a stable
+/// 'Name' pointer that 'QueryGraphContext' pre-registers in its
+/// interning table, so 'toName("__and")' returns the same address as
+/// 'SpecialFormCallNames::kAnd'. Use these constants directly wherever
+/// a 'Name' is expected — no 'toName()' wrapper needed.
 struct SpecialFormCallNames {
   static const char* kAnd;
   static const char* kOr;

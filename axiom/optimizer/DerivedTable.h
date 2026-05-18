@@ -363,6 +363,10 @@ struct DerivedTable : public PlanObject {
     return limit >= 0;
   }
 
+  bool hasOffset() const {
+    return offset > 0;
+  }
+
   bool hasUnnestTable() const {
     return std::ranges::any_of(tables, [](PlanObjectCP table) {
       return table->is(PlanType::kUnnestTableNode);
@@ -376,6 +380,26 @@ struct DerivedTable : public PlanObject {
   /// Returns true if this DT is known to produce zero rows (e.g., an empty
   /// ValuesTable with no data).
   bool isZeroRows() const;
+
+  /// Returns true if 'tables' is exactly one ValuesTable that produces a
+  /// single row with no columns. Does not look at postprocessing.
+  bool isSingleRowNoColumnsValues() const;
+
+  /// Returns true if this DT has no postprocessing — no filter,
+  /// aggregation, having, window, order by, limit, or offset. See
+  /// 'Optimization::addPostprocess' for the corresponding planning step.
+  bool hasNoPostprocess() const;
+
+  /// Returns true if this DT's postprocessing has no filter, HAVING,
+  /// LIMIT, or OFFSET. Aggregation, window, or ORDER BY may still be
+  /// present. The "cardinality-neutral" claim holds only relative to a
+  /// single-row input — a global aggregate (no grouping keys) produces
+  /// exactly one row, window and ORDER BY are 1:1. With a multi-row
+  /// input, aggregation with GROUP BY reduces cardinality and this
+  /// method's name is misleading; the current caller
+  /// ('processProjectionCorrelatedScalarSubquery' no-FROM branch)
+  /// guarantees a single-row input.
+  bool hasCardinalityNeutralPostprocess() const;
 
   /// Sets enforceSingleRow flag if this DT doesn't naturally guarantee
   /// single-row output. A global aggregation (no grouping keys) without

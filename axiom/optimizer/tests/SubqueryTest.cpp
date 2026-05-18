@@ -1123,14 +1123,54 @@ TEST_F(SubqueryTest, enforceSingleRow) {
   }
 
   {
-    auto matcher =
-        matchHiveScan("region")
-            .nestedLoopJoin(
-                matchHiveScan("nation").enforceSingleRow().broadcast().build())
-            .filter()
-            .project()
-            .gather()
-            .build();
+    auto matcher = matchHiveScan("region")
+                       .nestedLoopJoin(matchHiveScan("nation")
+                                           .gather()
+                                           .enforceSingleRow()
+                                           .broadcast()
+                                           .build())
+                       .filter()
+                       .project()
+                       .gather()
+                       .build();
+
+    auto distributedPlan = planVelox(logicalPlan);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
+  }
+}
+
+TEST_F(SubqueryTest, enforceSingleRowInProjection) {
+  auto query =
+      "SELECT (SELECT r_regionkey FROM region WHERE r_name = 'AFRICA') "
+      "FROM nation";
+  auto logicalPlan = parseSelect(query);
+
+  {
+    auto matcher = core::PlanMatcherBuilder()
+                       .hiveScan("region", test::eq("r_name", "AFRICA"))
+                       .enforceSingleRow()
+                       .nestedLoopJoin(matchHiveScan("nation").build())
+                       .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    // TODO: Plan has an extra fragment and an extra shuffle. A
+    // broadcast-then-EnforceSingleRow shape would collapse the gather
+    // + broadcast pair into a single broadcast with EnforceSingleRow
+    // running on each consumer.
+    auto matcher = core::PlanMatcherBuilder()
+                       .hiveScan("region", test::eq("r_name", "AFRICA"))
+                       .gather()
+                       .enforceSingleRow()
+                       .nestedLoopJoin(
+                           core::PlanMatcherBuilder()
+                               .tableScan("nation")
+                               .broadcast()
+                               .build())
+                       .build();
 
     auto distributedPlan = planVelox(logicalPlan);
     AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);

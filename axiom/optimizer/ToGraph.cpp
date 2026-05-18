@@ -20,6 +20,7 @@
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/optimizer/AggregationPlanner.h"
+#include "axiom/optimizer/DerivedTableFlattener.h"
 #include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
@@ -110,21 +111,131 @@ ToGraph::ToGraph(
   reversibleFunctions_[SpecialFormCallNames::kOr] = SpecialFormCallNames::kOr;
 }
 
-void ToGraph::addDtColumn(DerivedTableP dt, std::string_view name) {
-  const auto* inner = translateColumn(name);
+namespace {
+// Classifies which scope an expression references relative to a target
+// DerivedTable 'dt':
+//   - hasLocal: 'expr' touches a table that belongs to 'dt' (its tableSet,
+//     or 'dt' itself). These are the only references allowed by
+//     DerivedTable::checkConsistency.
+//   - hasCorrelation: 'expr' touches a table from an enclosing query
+//     scope. Only valid in subquery contexts where allowCorrelations_ was
+//     enabled around the subquery body's projection translation.
+struct DerivedTableScopeUse {
+  bool hasLocal{false};
+  bool hasCorrelation{false};
+};
 
-  ColumnCP outer = nullptr;
-  if (inner->isColumn() && inner->as<Column>()->relation() == dt &&
-      inner->as<Column>()->outputName() == name) {
-    outer = inner->as<Column>();
-  } else {
-    const auto* columnName = toName(name);
-    outer = make<Column>(columnName, dt, inner->value(), columnName);
+// True if 'table' belongs to a scope outside of 'dt' (neither 'dt'
+// itself nor a member of 'dt->tableSet').
+bool isOutsideDt(PlanObjectCP table, DerivedTableCP dt) {
+  return table != dt && !dt->tableSet.contains(table);
+}
+
+// True if 'tables' contains any object outside of 'dt'.
+bool anyOutsideDt(const PlanObjectSet& tables, DerivedTableCP dt) {
+  bool outside = false;
+  tables.forEach([&](PlanObjectCP table) {
+    if (isOutsideDt(table, dt)) {
+      outside = true;
+    }
+  });
+  return outside;
+}
+
+DerivedTableScopeUse classifyScope(ExprCP expr, DerivedTableP dt) {
+  DerivedTableScopeUse result;
+  expr->allTables().forEach([&](PlanObjectCP table) {
+    if (isOutsideDt(table, dt)) {
+      result.hasCorrelation = true;
+    } else {
+      result.hasLocal = true;
+    }
+  });
+  return result;
+}
+} // namespace
+
+void ToGraph::addDtColumn(DerivedTableP dt, std::string_view name) {
+  const auto* expr = translateColumn(name);
+
+  const auto scope = classifyScope(expr, dt);
+
+  if (scope.hasCorrelation) {
+    // Only reachable from a subquery scope: 'correlations_' must be set
+    // for translateColumn to have produced a non-local reference.
+    VELOX_DCHECK_NOT_NULL(
+        correlations_,
+        "Correlated reference outside a subquery scope: {}",
+        expr->toString());
+    ExprCP residual =
+        scope.hasLocal ? splitCorrelatedProjection(expr, dt) : expr;
+    applyContext_.lifted.projections.push_back(residual);
+    return;
   }
 
-  dt->exprs.push_back(inner);
-  dt->columns.push_back(outer);
-  renames_[name] = outer;
+  ColumnCP dtColumn = nullptr;
+  if (expr->isColumn() && expr->as<Column>()->relation() == dt &&
+      expr->as<Column>()->outputName() == name) {
+    dtColumn = expr->as<Column>();
+  } else {
+    const auto* columnName = toName(name);
+    dtColumn = make<Column>(columnName, dt, expr->value(), columnName);
+  }
+
+  dt->exprs.push_back(expr);
+  dt->columns.push_back(dtColumn);
+  renames_[name] = dtColumn;
+}
+
+ExprCP ToGraph::splitCorrelatedProjection(ExprCP expr, DerivedTableP dt) {
+  const auto scope = classifyScope(expr, dt);
+
+  // No local references: nothing to export to dt. Keep 'expr' inline in
+  // the residual. Covers pure constants and pure-correlation subtrees.
+  if (!scope.hasLocal) {
+    return expr;
+  }
+
+  if (!scope.hasCorrelation) {
+    // Maximal local-only subtree: export as a column on dt, reusing if
+    // it is already a Column on dt.
+    if (expr->is(PlanType::kColumnExpr) &&
+        expr->as<Column>()->relation() == dt) {
+      // Column may not yet be in dt->columns; register it so the outer
+      // scope can see it.
+      auto* column = expr->as<Column>();
+      if (std::find(dt->columns.begin(), dt->columns.end(), column) ==
+          dt->columns.end()) {
+        dt->exprs.push_back(expr);
+        dt->columns.push_back(column);
+      }
+      return expr;
+    }
+    auto* column = make<Column>(newCName("__cp"), dt, expr->value());
+    dt->exprs.push_back(expr);
+    dt->columns.push_back(column);
+    return column;
+  }
+
+  if (expr->is(PlanType::kCallExpr)) {
+    const auto* call = expr->as<Call>();
+    ExprVector newArgs;
+    newArgs.reserve(call->args().size());
+    for (auto* arg : call->args()) {
+      newArgs.push_back(splitCorrelatedProjection(arg, dt));
+    }
+    return deduppedCall(
+        call->name(),
+        call->value(),
+        std::move(newArgs),
+        SpecialFormCallNames::isSpecialForm(call->name()));
+  }
+
+  // Invariant: a mixed-scope expression at this point is a Call.
+  VELOX_UNREACHABLE(
+      "Mixed outer/inner subquery projection expression with unhandled "
+      "shape: {}",
+      expr->toString());
 }
 
 namespace {
@@ -862,13 +973,17 @@ ExprCP ToGraph::deduppedCall(
     Name name,
     Value value,
     ExprVector args,
-    FunctionSet flags) {
+    bool specialForm) {
   canonicalizeCall(name, args);
   ExprDedupKey key = {name, args, value.type};
 
   auto [it, emplaced] = functionDedup_.try_emplace(key);
   if (it->second) {
     return it->second;
+  }
+  FunctionSet flags = functionBits(name, specialForm);
+  for (auto* arg : args) {
+    flags = flags | arg->functions();
   }
   auto* call = make<Call>(name, value, std::move(args), flags);
   if (emplaced && !call->containsNonDeterministic()) {
@@ -1036,7 +1151,6 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
       expr->isSpecialForm() ? expr->as<lp::SpecialFormExpr>() : nullptr;
 
   if (call || specialForm) {
-    FunctionSet funcs;
     const auto& inputs = expr->inputs();
     ExprVector args;
     args.reserve(inputs.size());
@@ -1046,9 +1160,6 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
       auto arg = translateExpr(input);
       args.emplace_back(arg);
       allConstant &= arg->is(PlanType::kLiteralExpr);
-      if (arg->is(PlanType::kCallExpr)) {
-        funcs = funcs | arg->as<Call>()->functions();
-      }
     }
 
     auto cardinality = estimateCallCardinality(args);
@@ -1061,11 +1172,10 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
       }
     }
 
-    auto callFuncs = functionBits(name, specialForm != nullptr);
-
     // Propagate null for default-null-behavior functions: if any argument is a
     // null literal, the result is null.
-    if (!callFuncs.contains(FunctionSet::kNonDefaultNullBehavior) &&
+    if (!functionBits(name, specialForm != nullptr)
+             .contains(FunctionSet::kNonDefaultNullBehavior) &&
         hasNullLiteral(args)) {
       return makeNullConstant(expr->type());
     }
@@ -1080,10 +1190,11 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
       }
     }
 
-    funcs = funcs | callFuncs;
-    auto* callExpr = deduppedCall(
-        name, Value(exprType, cardinality), std::move(args), funcs);
-    return callExpr;
+    return deduppedCall(
+        name,
+        Value(exprType, cardinality),
+        std::move(args),
+        specialForm != nullptr);
   }
 
   if (expr->isWindow()) {
@@ -1537,6 +1648,16 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
   folly::F14FastMap<AggregateDedupKey, ColumnCP, AggregateDedupHasher>
       uniqueAggregates;
 
+  // Inside a subquery, allow aggregate arguments to resolve against
+  // outer-query columns.
+  const bool wasAllowCorrelations = allowCorrelations_;
+  if (correlations_ != nullptr) {
+    allowCorrelations_ = true;
+  }
+  SCOPE_EXIT {
+    allowCorrelations_ = wasAllowCorrelations;
+  };
+
   // The keys for intermediate are the same as for final.
   ColumnVector intermediateColumns = columns;
   for (auto channel : channels) {
@@ -1614,14 +1735,20 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
           std::move(orderKeys),
           std::move(orderTypes));
 
-      auto* column =
-          make<Column>(name, currentDt_, aggregateExpr->value(), name);
+      // When the aggregate body references outer columns inside a subquery
+      // scope, the result column belongs to the outer DT — that is where
+      // the aggregation will be attached, above the decorrelating join.
+      auto* relation = (applyContext_.outerDt != nullptr &&
+                        anyOutsideDt(aggregateExpr->allTables(), currentDt_))
+          ? applyContext_.outerDt
+          : currentDt_;
+      auto* column = make<Column>(name, relation, aggregateExpr->value(), name);
       columns.push_back(column);
 
       auto intermediateValue = aggregateExpr->value();
       intermediateValue.type = accumulatorType;
       auto* intermediateColumn =
-          make<Column>(name, currentDt_, intermediateValue, name);
+          make<Column>(name, relation, intermediateValue, name);
       intermediateColumns.push_back(intermediateColumn);
 
       deduppedAggregates.push_back(aggregateExpr);
@@ -1839,7 +1966,7 @@ lp::ExprPtr ToGraph::processLeftJoinSubqueries(
   makeQueryGraph(right, kAllAllowedInDt, /*orderObservedAbove=*/false);
   addFilter(right, combineConjuncts(std::move(subqueryConjuncts)));
 
-  if (!correlatedConjuncts_.empty()) {
+  if (!applyContext_.lifted.predicates.empty()) {
     VELOX_NYI(
         "Unsupported subqueries in the ON clause of a LEFT or RIGHT join");
   }
@@ -2040,7 +2167,8 @@ void ToGraph::wrapInDt(
 void ToGraph::finalizeDt(
     const lp::LogicalPlanNode& node,
     DerivedTableP outerDt) {
-  VELOX_CHECK_EQ(0, correlatedConjuncts_.size());
+  VELOX_CHECK_EQ(0, applyContext_.lifted.predicates.size());
+  VELOX_CHECK_EQ(0, applyContext_.lifted.projections.size());
 
   if (!outerDt) {
     outerDt = newDt();
@@ -2054,27 +2182,42 @@ void ToGraph::finalizeDt(
   currentDt_->addTable(dt);
 }
 
-void ToGraph::finalizeDtWithCorrelatedConjuncts(
+void ToGraph::finalizeDtPreservingCorrelations(
     const lp::LogicalPlanNode& node) {
-  if (correlatedConjuncts_.empty()) {
+  // Defensive guard: rewriting 'applyContext_.lifted.aggregation' through
+  // a wrap is not implemented (the deferred aggregate's args would need
+  // to be re-exported through the wrapped DT's output columns). No
+  // caller reaches this with a deferred aggregate pending today; fail
+  // loudly if that invariant breaks.
+  VELOX_CHECK_NULL(
+      applyContext_.lifted.aggregation,
+      "Pending correlated aggregation during finalizeDtPreservingCorrelations is not supported yet");
+
+  if (applyContext_.lifted.predicates.empty() &&
+      applyContext_.lifted.projections.empty()) {
     finalizeDt(node);
     return;
   }
 
   // In correlated subqueries with nested aggregations (e.g., a correlated
   // scalar subquery over a source that has GROUP BY), the correlated filter
-  // between the two aggregations populates correlatedConjuncts_ before the
-  // outer aggregation triggers finalizeDt. After wrapping, rewrite the
-  // conjuncts so their inner column references point to the wrapped DT's
-  // output columns rather than deeply nested base-table columns.
+  // between the two aggregations populates applyContext_.lifted.predicates
+  // before the outer aggregation triggers finalizeDt. After wrapping, rewrite
+  // the conjuncts so their inner column references point to the wrapped DT's
+  // output columns rather than deeply nested base-table columns. The same
+  // treatment applies to applyContext_.lifted.projections — a correlated
+  // projection expression collected before the outer aggregation also
+  // references pre-wrap columns and must be re-exported through the wrap.
   auto* dt = currentDt_;
-  auto saved = std::move(correlatedConjuncts_);
-  correlatedConjuncts_.clear();
+  auto saved = applyContext_.saveAndClearLifted();
   finalizeDt(node);
-  correlatedConjuncts_ = std::move(saved);
+  applyContext_.lifted = std::move(saved);
 
-  for (auto& conjunct : correlatedConjuncts_) {
+  for (auto& conjunct : applyContext_.lifted.predicates) {
     conjunct = dt->exportExpr(conjunct);
+  }
+  for (auto& projection : applyContext_.lifted.projections) {
+    projection = dt->exportExpr(projection);
   }
 }
 
@@ -2342,12 +2485,25 @@ void ToGraph::addProjection(const lp::ProjectNode& project) {
   QGVector<WindowFunctionCP> windowFunctions;
   ColumnVector windowColumns;
 
+  // Inside a subquery body, allow projection expressions to resolve names
+  // against outer-query columns. The outer scope leaves allowCorrelations_
+  // off, so a no-op for top-level projections.
+  const bool wasAllowCorrelations = allowCorrelations_;
+  if (correlations_ != nullptr) {
+    allowCorrelations_ = true;
+  }
+  SCOPE_EXIT {
+    allowCorrelations_ = wasAllowCorrelations;
+  };
+
   for (auto i : channels) {
     if (exprs[i]->isInputReference()) {
       const auto& name = exprs[i]->as<lp::InputReferenceExpr>()->name();
       // A variable projected to itself adds no renames. Inputs contain this
-      // all the time.
-      if (name == names[i]) {
+      // all the time. The renames_ check excludes correlated input refs
+      // whose value comes from the outer scope's correlations_ rather than
+      // the subquery's own input.
+      if (name == names[i] && renames_.contains(name)) {
         continue;
       }
     }
@@ -2448,6 +2604,87 @@ void extractSubqueries(const lp::ExprPtr& expr, Subqueries& subqueries) {
 }
 } // namespace
 
+ToGraph::ApplyContext::Lifted ToGraph::ApplyContext::saveAndClearLifted() {
+  Lifted saved = std::move(lifted);
+  lifted = {};
+  return saved;
+}
+
+void ToGraph::carryForwardOuterCorrelationKeys(
+    ApplyContext::Lifted* outerLifted,
+    AggregateVector& aggregates,
+    ColumnVector& columns) {
+  if (outerLifted == nullptr || outerLifted->predicates.empty()) {
+    return;
+  }
+
+  ColumnVector sources;
+  for (const auto* conjunct : outerLifted->predicates) {
+    conjunct->columns().forEach<Column>([&](ColumnCP col) {
+      if (!isOutsideDt(col->relation(), currentDt_) &&
+          std::find(sources.begin(), sources.end(), col) == sources.end()) {
+        sources.push_back(col);
+      }
+    });
+  }
+  if (sources.empty()) {
+    return;
+  }
+
+  ExprVector targets;
+  targets.reserve(sources.size());
+  for (auto* source : sources) {
+    auto* aggOutput = appendArbitraryAggregate(source, aggregates, columns);
+    // The DT-output column is a separate alias so 'exprs' references the
+    // post-aggregation column (available after Layer 4 of
+    // checkConsistency) rather than the pre-aggregation 'source'.
+    auto* dtOutput =
+        make<Column>(newCName("__cf"), currentDt_, aggOutput->value());
+    currentDt_->exprs.push_back(aggOutput);
+    currentDt_->columns.push_back(dtOutput);
+    targets.push_back(dtOutput);
+  }
+
+  for (auto& conjunct : outerLifted->predicates) {
+    conjunct = DerivedTableFlattener::replaceInputs(conjunct, sources, targets);
+  }
+}
+
+void ToGraph::appendOuterAggregationCarryForwards(
+    const lp::LogicalPlanNode& input,
+    SubqueryChain& chain,
+    ApplyContext::Lifted* outerLifted,
+    AggregateVector& aggregates,
+    ColumnVector& columns) {
+  appendArbitraryAggregates(input, aggregates, columns);
+  for (const auto& priorKey : chain.carryForwards) {
+    auto& expression = subqueries_.at(priorKey);
+    expression = appendArbitraryAggregate(expression, aggregates, columns);
+  }
+  carryForwardOuterCorrelationKeys(outerLifted, aggregates, columns);
+}
+
+DerivedTableP ToGraph::translateSubqueryBody(
+    const logical_plan::LogicalPlanNode& node) {
+  VELOX_CHECK(applyContext_.lifted.predicates.empty());
+  VELOX_CHECK(applyContext_.lifted.projections.empty());
+  VELOX_CHECK_NULL(applyContext_.lifted.aggregation);
+
+  // 'outerDt' is the only ApplyContext field saved here; the lifted
+  // accumulators are scoped at the call site via 'saveAndClearLifted'.
+  auto* savedOuterDt =
+      std::exchange(applyContext_.outerDt, std::exchange(currentDt_, newDt()));
+  SCOPE_EXIT {
+    applyContext_.outerDt = savedOuterDt;
+  };
+  makeQueryGraph(node, kAllAllowedInDt, /*orderObservedAbove=*/false);
+  auto* subqueryDt = currentDt_;
+
+  setDtUsedOutput(subqueryDt, node);
+  currentDt_ = applyContext_.outerDt;
+  return subqueryDt;
+}
+
 DerivedTableP ToGraph::translateSubquery(
     const logical_plan::LogicalPlanNode& node,
     bool finalize) {
@@ -2466,14 +2703,8 @@ DerivedTableP ToGraph::translateSubquery(
     correlations_ = savedCorrelations;
   };
 
-  VELOX_CHECK(correlatedConjuncts_.empty());
+  auto* subqueryDt = translateSubqueryBody(node);
 
-  auto* outerDt = std::exchange(currentDt_, newDt());
-  makeQueryGraph(node, kAllAllowedInDt, /*orderObservedAbove=*/false);
-  auto* subqueryDt = currentDt_;
-
-  setDtUsedOutput(subqueryDt, node);
-  currentDt_ = outerDt;
   if (finalize) {
     currentDt_->addTable(subqueryDt);
   }
@@ -2538,16 +2769,9 @@ DecorrelatedJoin extractDecorrelatedJoin(
   return result;
 }
 
-// Holds extracted correlation keys from correlatedConjuncts.
-// Used internally during scalar subquery processing.
-struct CorrelationKeys {
-  PlanObjectCP leftTable{nullptr};
-  ExprVector leftKeys;
-  ExprVector rightKeys;
-  ExprVector nonEquiConjuncts;
-};
+} // namespace
 
-CorrelationKeys extractCorrelationKeys(
+ToGraph::CorrelationKeys ToGraph::extractCorrelationKeys(
     const FunctionNames& funcs,
     const ExprVector& correlatedConjuncts,
     DerivedTableP subqueryDt) {
@@ -2559,7 +2783,8 @@ CorrelationKeys extractCorrelationKeys(
 
     ExprCP left = nullptr;
     ExprCP right = nullptr;
-    if (isJoinEquality(funcs, conjunct, tables[0], tables[1], left, right)) {
+    if (optimizer::isJoinEquality(
+            funcs, conjunct, tables[0], tables[1], left, right)) {
       if (tables[1] == subqueryDt || subqueryDt->tableSet.contains(tables[1])) {
         result.leftKeys.push_back(left);
         result.rightKeys.push_back(right);
@@ -2581,8 +2806,6 @@ CorrelationKeys extractCorrelationKeys(
 
   return result;
 }
-
-} // namespace
 
 ColumnCP ToGraph::appendArbitraryAggregate(
     ExprCP expr,
@@ -2622,8 +2845,25 @@ void ToGraph::appendArbitraryAggregates(
   }
 }
 
-AggregationPlanCP ToGraph::processCorrelatedAggregation(AggregationPlanCP agg) {
-  if (correlatedConjuncts_.empty()) {
+namespace {
+// True if any aggregate's body references columns outside 'innerDt'
+// (i.e., outer-query columns).
+bool anyAggregateReferencesOuter(
+    AggregationPlanCP agg,
+    DerivedTableCP innerDt) {
+  for (const auto* aggregate : agg->aggregates()) {
+    if (anyOutsideDt(aggregate->allTables(), innerDt)) {
+      return true;
+    }
+  }
+  return false;
+}
+} // namespace
+
+AggregationPlanCP ToGraph::processCorrelatedAggregation(
+    AggregationPlanCP agg,
+    ExprVector& liftedPredicates) {
+  if (liftedPredicates.empty()) {
     return agg;
   }
 
@@ -2641,7 +2881,7 @@ AggregationPlanCP ToGraph::processCorrelatedAggregation(AggregationPlanCP agg) {
 
   // Check if all conjuncts are equalities. If any are non-equi, we'll
   // handle decorrelation at the outer level using AssignUniqueId.
-  if (!areAllJoinEqualities(functionNames_, correlatedConjuncts_)) {
+  if (!areAllJoinEqualities(functionNames_, liftedPredicates)) {
     // Non-equi correlation: keep the aggregation as-is (global agg).
     // The decorrelation will be handled at the outer level using
     // AssignUniqueId + LEFT JOIN + outer aggregation.
@@ -2652,7 +2892,7 @@ AggregationPlanCP ToGraph::processCorrelatedAggregation(AggregationPlanCP agg) {
   ExprVector groupingKeys;
   ColumnVector columns;
   ExprVector leftKeys;
-  for (const auto* conjunct : correlatedConjuncts_) {
+  for (const auto* conjunct : liftedPredicates) {
     const auto tables = conjunct->allTables().toObjects();
     VELOX_CHECK_EQ(2, tables.size());
 
@@ -2679,13 +2919,13 @@ AggregationPlanCP ToGraph::processCorrelatedAggregation(AggregationPlanCP agg) {
     }
   }
 
-  correlatedConjuncts_.clear();
+  liftedPredicates.clear();
   for (auto i = 0; i < leftKeys.size(); ++i) {
     currentDt_->exprs.push_back(columns[i]);
     currentDt_->columns.push_back(
         make<Column>(newCName("__gk"), currentDt_, columns[i]->value()));
 
-    correlatedConjuncts_.push_back(
+    liftedPredicates.push_back(
         make<Call>(
             functionNames_.equality,
             toValue(velox::BOOLEAN(), 2),
@@ -2754,14 +2994,13 @@ void ToGraph::processScalarSubqueries(
   for (const auto& subquery : scalars) {
     maybeWrapForChainedSubquery(input, chain);
 
+    auto savedLifted = applyContext_.saveAndClearLifted();
+    SCOPE_EXIT {
+      applyContext_.lifted = std::move(savedLifted);
+    };
     auto subqueryDt = translateSubquery(*subquery->subquery());
-
-    ExprCP column;
-    if (correlatedConjuncts_.empty()) {
-      column = processUncorrelatedScalarSubquery(subqueryDt);
-    } else {
-      column = processCorrelatedScalarSubquery(input, subqueryDt, chain);
-    }
+    auto* column =
+        attachScalarSubqueryToOuter(input, subqueryDt, chain, &savedLifted);
     subqueries_.emplace(subquery, column);
 
     // Track every subquery's result so any later heavy-path subquery in
@@ -2772,6 +3011,23 @@ void ToGraph::processScalarSubqueries(
       chain.carryForwards.push_back(subquery);
     }
   }
+}
+
+ExprCP ToGraph::attachScalarSubqueryToOuter(
+    const lp::LogicalPlanNode& input,
+    DerivedTableP subqueryDt,
+    SubqueryChain& chain,
+    ApplyContext::Lifted* outerLifted) {
+  if (!applyContext_.lifted.projections.empty()) {
+    return processProjectionCorrelatedScalarSubquery(
+        input, subqueryDt, chain, outerLifted);
+  }
+  if (!applyContext_.lifted.predicates.empty() ||
+      applyContext_.lifted.aggregation != nullptr) {
+    return processCorrelatedScalarSubquery(
+        input, subqueryDt, chain, outerLifted);
+  }
+  return processUncorrelatedScalarSubquery(subqueryDt);
 }
 
 void ToGraph::maybeWrapForChainedSubquery(
@@ -2838,26 +3094,35 @@ Literal* tryMakeLiteralForEmptyInput(AggregateCP agg) {
 ExprCP ToGraph::processCorrelatedScalarSubquery(
     const lp::LogicalPlanNode& input,
     DerivedTableP subqueryDt,
-    SubqueryChain& chain) {
-  auto correlation =
-      extractCorrelationKeys(functionNames_, correlatedConjuncts_, subqueryDt);
+    SubqueryChain& chain,
+    ApplyContext::Lifted* outerLifted) {
+  auto correlation = extractCorrelationKeys(
+      functionNames_, applyContext_.lifted.predicates, subqueryDt);
+
+  if (applyContext_.lifted.aggregation != nullptr) {
+    return buildCorrelatedAggregation(
+        input, subqueryDt, chain, correlation, outerLifted);
+  }
+
+  auto makeRowNumberColumn = [&]() {
+    return makeColumn(
+        "__rownum",
+        toValue(velox::BIGINT(), std::numeric_limits<int64_t>::max()));
+  };
 
   const bool hasAggregation = subqueryDt->hasAggregation();
 
-  if (!correlation.nonEquiConjuncts.empty()) {
-    // For non-equi correlation, expect only 1 column (the aggregate result).
-    VELOX_CHECK_EQ(1, subqueryDt->columns.size());
-  } else if (hasAggregation) {
-    // For equi-only correlation with aggregation, expect grouping keys +
-    // aggregate result.
-    VELOX_CHECK_EQ(correlatedConjuncts_.size() + 1, subqueryDt->columns.size());
+  // The equi-with-aggregation branch promoted correlation keys to grouping
+  // keys, so the inner DT exposes those keys alongside the aggregate result.
+  // Every other branch produces a single subquery-result column.
+  if (correlation.nonEquiConjuncts.empty() && hasAggregation) {
+    VELOX_CHECK_EQ(
+        applyContext_.lifted.predicates.size() + 1, subqueryDt->columns.size());
   } else {
-    // For equi-only correlation without aggregation, expect only 1 column (the
-    // subquery result).
     VELOX_CHECK_EQ(1, subqueryDt->columns.size());
   }
 
-  correlatedConjuncts_.clear();
+  applyContext_.lifted.predicates.clear();
 
   if (correlation.nonEquiConjuncts.empty() && hasAggregation) {
     // Equi-join only with aggregation: create LEFT join with correlation keys.
@@ -2878,21 +3143,14 @@ ExprCP ToGraph::processCorrelatedScalarSubquery(
       // Wrap with COALESCE for aggregates that return non-NULL for empty input.
       // LEFT JOIN returns NULL for outer rows with no matches, but count-like
       // aggregates should return 0 (or similar default) instead.
-      return make<Call>(
+      return deduppedSpecialForm(
           SpecialFormCallNames::kCoalesce,
           aggregateResult->value(),
-          ExprVector{aggregateResult, literal},
-          FunctionSet());
+          ExprVector{aggregateResult, literal});
     }
 
     return aggregateResult;
   }
-
-  auto makeRowNumberColumn = [&]() {
-    return makeColumn(
-        "__rownum",
-        toValue(velox::BIGINT(), std::numeric_limits<int64_t>::max()));
-  };
 
   if (!hasAggregation) {
     // Correlation without aggregation: use AssignUniqueId + LEFT JOIN +
@@ -2964,17 +3222,12 @@ ExprCP ToGraph::processCorrelatedScalarSubquery(
   currentDt_->joins.push_back(join);
 
   // Build the outer aggregation: this subquery's count(...) plus
-  // arbitrary(...) carry-forwards for outer columns and for prior
-  // chain-mate subquery results.
+  // carry-forwards.
   auto* aggResultColumn = makeColumn("__agg", exportedAgg->value());
   AggregateVector allAggregates{exportedAgg};
   ColumnVector allColumns{chain.rowNumberColumn, aggResultColumn};
-  appendArbitraryAggregates(input, allAggregates, allColumns);
-  for (const auto& priorKey : chain.carryForwards) {
-    auto& expression = subqueries_.at(priorKey);
-    expression =
-        appendArbitraryAggregate(expression, allAggregates, allColumns);
-  }
+  appendOuterAggregationCarryForwards(
+      input, chain, outerLifted, allAggregates, allColumns);
 
   // The caller wraps currentDt_ before each subsequent heavy-path subquery,
   // so the aggregation slot must be fresh here.
@@ -2985,6 +3238,216 @@ ExprCP ToGraph::processCorrelatedScalarSubquery(
   return aggResultColumn;
 }
 
+ExprCP ToGraph::buildCorrelatedAggregation(
+    const lp::LogicalPlanNode& input,
+    DerivedTableP subqueryDt,
+    SubqueryChain& chain,
+    const CorrelationKeys& correlation,
+    ApplyContext::Lifted* outerLifted) {
+  auto* correlatedAgg = applyContext_.lifted.aggregation;
+  applyContext_.lifted.aggregation = nullptr;
+  applyContext_.lifted.predicates.clear();
+
+  // The LEFT JOIN below emits an outer row with NULL inner columns when
+  // no inner row matches the correlation. An aggregate argument that
+  // references only outer columns is non-NULL on that synthetic row,
+  // so the outer aggregation incorrectly processes it (e.g.,
+  // 'count(t.a)' returns 1 instead of 0). Mixed inner+outer arguments
+  // are safe — the NULL inner makes the whole arg NULL, which
+  // aggregates skip. Reject the pure-outer case.
+  for (const auto* agg : correlatedAgg->aggregates()) {
+    DerivedTableScopeUse aggScope;
+    for (const auto* arg : agg->args()) {
+      auto argScope = classifyScope(arg, subqueryDt);
+      aggScope.hasLocal |= argScope.hasLocal;
+      aggScope.hasCorrelation |= argScope.hasCorrelation;
+    }
+    if (aggScope.hasCorrelation && !aggScope.hasLocal) {
+      VELOX_NYI(
+          "Correlated subquery with an aggregate whose arguments reference only outer columns is not supported yet");
+    }
+  }
+
+  // Outer table for AssignUniqueId: prefer the one identified from
+  // equi-conjuncts, otherwise any outer table referenced by the
+  // aggregate body.
+  PlanObjectCP leftTable = correlation.leftTable;
+  if (leftTable == nullptr) {
+    for (const auto* agg : correlatedAgg->aggregates()) {
+      agg->allTables().forEach([&](PlanObjectCP table) {
+        if (leftTable == nullptr && isOutsideDt(table, subqueryDt)) {
+          leftTable = table;
+        }
+      });
+    }
+    VELOX_CHECK_NOT_NULL(leftTable);
+  }
+
+  // Rewrite each aggregate's args/orderKeys/condition so inner-column
+  // references come through subqueryDt's output (exportExpr promotes
+  // them). Outer-column references pass through unchanged.
+  AggregateVector rewrittenAggregates;
+  for (const auto* agg : correlatedAgg->aggregates()) {
+    ExprVector exportedArgs;
+    for (const auto* arg : agg->args()) {
+      exportedArgs.push_back(subqueryDt->exportExpr(arg));
+    }
+    ExprVector exportedOrderKeys;
+    for (const auto* orderKey : agg->orderKeys()) {
+      exportedOrderKeys.push_back(subqueryDt->exportExpr(orderKey));
+    }
+    ExprCP exportedCondition = agg->condition() != nullptr
+        ? subqueryDt->exportExpr(agg->condition())
+        : nullptr;
+    rewrittenAggregates.push_back(
+        make<Aggregate>(
+            agg->name(),
+            agg->value(),
+            exportedArgs,
+            agg->functions(),
+            agg->isDistinct(),
+            exportedCondition,
+            agg->intermediateType(),
+            exportedOrderKeys,
+            agg->orderTypes()));
+  }
+
+  ExprVector exportedFilter;
+  for (auto* conjunct : correlation.nonEquiConjuncts) {
+    exportedFilter.push_back(subqueryDt->exportExpr(conjunct));
+  }
+
+  ColumnCP joinRowNumberColumn = nullptr;
+  if (chain.rowNumberColumn == nullptr) {
+    chain.rowNumberColumn = makeColumn(
+        "__rownum",
+        toValue(velox::BIGINT(), std::numeric_limits<int64_t>::max()));
+    joinRowNumberColumn = chain.rowNumberColumn;
+  }
+
+  auto* join = make<JoinEdge>(
+      leftTable,
+      subqueryDt,
+      JoinEdge::Spec{
+          .filter = exportedFilter,
+          .joinType = velox::core::JoinType::kLeft,
+          .rowNumberColumn = joinRowNumberColumn,
+      });
+  for (auto i = 0; i < correlation.leftKeys.size(); ++i) {
+    join->addEquality(
+        subqueryDt->exportExpr(correlation.leftKeys[i]),
+        subqueryDt->exportExpr(correlation.rightKeys[i]));
+  }
+  currentDt_->joins.push_back(join);
+
+  // Output columns are already owned by currentDt_; reuse them as the
+  // outer aggregation's outputs.
+  ColumnVector allColumns{chain.rowNumberColumn};
+  for (const auto* col : correlatedAgg->columns()) {
+    allColumns.push_back(col);
+  }
+  appendOuterAggregationCarryForwards(
+      input, chain, outerLifted, rewrittenAggregates, allColumns);
+
+  VELOX_CHECK_NULL(currentDt_->aggregation);
+  currentDt_->aggregation = make<AggregationPlan>(
+      ExprVector{chain.rowNumberColumn},
+      rewrittenAggregates,
+      allColumns,
+      allColumns);
+
+  return correlatedAgg->columns().back();
+}
+
+ExprCP ToGraph::processProjectionCorrelatedScalarSubquery(
+    const lp::LogicalPlanNode& input,
+    DerivedTableP subqueryDt,
+    SubqueryChain& chain,
+    ApplyContext::Lifted* outerLifted) {
+  // Scalar subqueries produce exactly one SELECT expression, so
+  // 'addDtColumn' pushes at most one residual into 'liftedProjections'
+  // for this scope.
+  VELOX_CHECK_EQ(1, applyContext_.lifted.projections.size());
+  auto* column = applyContext_.lifted.projections.front();
+  applyContext_.lifted.projections.clear();
+
+  if (subqueryDt->isSingleRowNoColumnsValues()) {
+    if (!applyContext_.lifted.predicates.empty()) {
+      // The body has no FROM, so the WHERE filters the single empty-tuple
+      // row. Per outer row the scalar subquery returns 'column' if all
+      // predicates pass, NULL otherwise. Rewrite as 'IF(AND(predicates),
+      // column)'.
+      ExprVector conjuncts = std::move(applyContext_.lifted.predicates);
+      applyContext_.lifted.predicates.clear();
+      ExprCP condition = conjuncts.size() == 1
+          ? conjuncts.front()
+          : deduppedSpecialForm(
+                SpecialFormCallNames::kAnd,
+                toValue(velox::BOOLEAN(), 2),
+                std::move(conjuncts));
+      column = deduppedSpecialForm(
+          SpecialFormCallNames::kIf,
+          column->value(),
+          ExprVector{condition, column});
+    }
+    if (applyContext_.lifted.aggregation != nullptr) {
+      VELOX_NYI(
+          "Correlated aggregate in a no-FROM subquery body is not supported yet");
+    }
+    if (subqueryDt->hasNoPostprocess()) {
+      // The residual references no columns of subqueryDt; the DT can be
+      // dropped and the residual evaluated in the outer scope alone.
+      currentDt_->removeLastTable(subqueryDt);
+    } else if (!subqueryDt->hasCardinalityNeutralPostprocess()) {
+      subqueryDt->ensureSingleRow();
+    }
+    // Cardinality-neutral postprocess (agg/window/order by) is left in
+    // place: the DT must stay in the graph so the residual can reference
+    // its produced columns.
+    return column;
+  }
+
+  if (!applyContext_.lifted.predicates.empty() ||
+      applyContext_.lifted.aggregation != nullptr) {
+    // The decorrelating join may wrap the agg-result column and may push
+    // outer columns through a new outer aggregation as arbitrary()
+    // carry-forwards. Propagate both rewrites into the residual: the
+    // original references would otherwise be invisible above the
+    // aggregation.
+    ColumnCP originalAgg =
+        subqueryDt->columns.empty() ? nullptr : subqueryDt->columns.back();
+    const auto renamesBefore = renames_;
+    auto* wrappedAgg =
+        processCorrelatedScalarSubquery(input, subqueryDt, chain, outerLifted);
+    ColumnVector sources;
+    ExprVector targets;
+    if (originalAgg != nullptr && wrappedAgg != originalAgg) {
+      sources.push_back(originalAgg);
+      targets.push_back(wrappedAgg);
+    }
+    for (const auto& [name, newExpr] : renames_) {
+      auto it = renamesBefore.find(name);
+      if (it != renamesBefore.end() && it->second != newExpr) {
+        // Carry-forwards always replace a Column with another Column /
+        // Expr; other renames diffs that change a non-Column source
+        // would need a broader substitution mechanism.
+        VELOX_DCHECK(
+            it->second->isColumn(),
+            "Non-column renames source in correlated-projection substitution");
+        sources.push_back(it->second->as<Column>());
+        targets.push_back(newExpr);
+      }
+    }
+    if (!sources.empty()) {
+      column = DerivedTableFlattener::replaceInputs(column, sources, targets);
+    }
+    return column;
+  }
+
+  subqueryDt->ensureSingleRow();
+  return column;
+}
+
 void ToGraph::processInPredicates(
     const lp::LogicalPlanNode& input,
     const std::vector<lp::ExprPtr>& inPredicates,
@@ -2992,8 +3455,20 @@ void ToGraph::processInPredicates(
   for (const auto& predicate : inPredicates) {
     maybeWrapForChainedSubquery(input, chain);
 
+    auto savedLifted = applyContext_.saveAndClearLifted();
+    SCOPE_EXIT {
+      applyContext_.lifted = std::move(savedLifted);
+    };
     auto subqueryDt = translateSubquery(
         *predicate->inputAt(1)->as<lp::SubqueryExpr>()->subquery());
+    if (!applyContext_.lifted.projections.empty()) {
+      VELOX_NYI(
+          "Outer-column reference in the SELECT of an IN subquery is not supported yet");
+    }
+    if (applyContext_.lifted.aggregation != nullptr) {
+      VELOX_NYI(
+          "Outer-column reference in the aggregate body of an IN subquery is not supported yet");
+    }
     VELOX_CHECK_EQ(1, subqueryDt->columns.size());
 
     // Add a join edge and replace 'expr' with 'mark' column in the join
@@ -3002,13 +3477,13 @@ void ToGraph::processInPredicates(
 
     auto leftKey = translateExpr(predicate->inputAt(0));
     // May be nullptr when the left expression references multiple tables
-    // (e.g., ROW(t.a, u.b) IN (SELECT ...)). Both processUncorrelated and
-    // processCorrelated handle nullptr by creating a join edge without a
-    // specific left table; the optimizer resolves it from the equality keys.
+    // (e.g., ROW(t.a, u.b) IN (SELECT ...)). The downstream IN-subquery
+    // processors handle nullptr by creating a join edge without a specific
+    // left table; the optimizer resolves it from the equality keys.
     auto* leftTable = leftKey->singleTable();
 
     ExprCP column;
-    if (correlatedConjuncts_.empty()) {
+    if (applyContext_.lifted.predicates.empty()) {
       column = processUncorrelatedInPredicate(
           subqueryDt, markColumn, leftKey, leftTable);
     } else {
@@ -3051,15 +3526,15 @@ ExprCP ToGraph::processCorrelatedInPredicate(
   // Correlated IN subquery: process correlation conditions and create
   // semi-join with the IN equality as the sole null-aware join key and
   // correlation equalities moved to the join filter.
-  auto decorrelated =
-      extractDecorrelatedJoin(functionNames_, correlatedConjuncts_, subqueryDt);
+  auto decorrelated = extractDecorrelatedJoin(
+      functionNames_, applyContext_.lifted.predicates, subqueryDt);
   if (leftTable) {
     decorrelated.leftTables.add(leftTable);
   } else {
     // Multi-table left expression: add all referenced tables.
     decorrelated.leftTables.unionSet(leftKey->allTables());
   }
-  correlatedConjuncts_.clear();
+  applyContext_.lifted.predicates.clear();
 
   PlanObjectCP joinLeftTable = nullptr;
   if (decorrelated.leftTables.size() == 1) {
@@ -3105,13 +3580,25 @@ void ToGraph::processExistsSubqueries(
   for (const auto& existsExpr : exists) {
     maybeWrapForChainedSubquery(input, chain);
 
+    auto savedLifted = applyContext_.saveAndClearLifted();
+    SCOPE_EXIT {
+      applyContext_.lifted = std::move(savedLifted);
+    };
     auto subqueryDt = translateSubquery(
         *existsExpr->inputAt(0)->as<lp::SubqueryExpr>()->subquery(),
         /*finalize=*/false);
+    if (!applyContext_.lifted.projections.empty()) {
+      VELOX_NYI(
+          "Outer-column reference in the SELECT of an EXISTS subquery is not supported yet");
+    }
+    if (applyContext_.lifted.aggregation != nullptr) {
+      VELOX_NYI(
+          "Outer-column reference in the aggregate body of an EXISTS subquery is not supported yet");
+    }
 
     // A subquery that produces zero rows (e.g., LIMIT 0) makes EXISTS false.
     if (subqueryDt->isZeroRows()) {
-      correlatedConjuncts_.clear();
+      applyContext_.lifted.predicates.clear();
       subqueries_.emplace(
           existsExpr,
           make<Literal>(
@@ -3127,16 +3614,14 @@ void ToGraph::processExistsSubqueries(
     // number of rows, so it can be ignored. Replace the EXISTS with the
     // conjunction of all conjuncts (correlated and uncorrelated), or TRUE if
     // there are none.
-    if (subqueryDt->tables.size() == 1 &&
-        subqueryDt->tables[0]->is(PlanType::kValuesTableNode) &&
-        subqueryDt->tables[0]->as<ValuesTable>()->columns.empty() &&
-        !subqueryDt->hasLimit() && !subqueryDt->hasAggregation()) {
+    if (subqueryDt->isSingleRowNoColumnsValues() && !subqueryDt->hasLimit() &&
+        !subqueryDt->hasOffset() && !subqueryDt->hasAggregation()) {
       ExprVector allConjuncts = std::move(subqueryDt->conjuncts);
       allConjuncts.insert(
           allConjuncts.end(),
-          correlatedConjuncts_.begin(),
-          correlatedConjuncts_.end());
-      correlatedConjuncts_.clear();
+          applyContext_.lifted.predicates.begin(),
+          applyContext_.lifted.predicates.end());
+      applyContext_.lifted.predicates.clear();
 
       ExprCP result;
       if (allConjuncts.empty()) {
@@ -3145,11 +3630,10 @@ void ToGraph::processExistsSubqueries(
       } else if (allConjuncts.size() == 1) {
         result = allConjuncts[0];
       } else {
-        result = deduppedCall(
-            toName(SpecialFormCallNames::kAnd),
+        result = deduppedSpecialForm(
+            SpecialFormCallNames::kAnd,
             toValue(velox::BOOLEAN(), 2),
-            std::move(allConjuncts),
-            FunctionSet());
+            std::move(allConjuncts));
       }
       subqueries_.emplace(existsExpr, result);
       if (!result->columns().empty()) {
@@ -3159,7 +3643,7 @@ void ToGraph::processExistsSubqueries(
     }
 
     ExprCP column;
-    if (correlatedConjuncts_.empty()) {
+    if (applyContext_.lifted.predicates.empty()) {
       column = processUncorrelatedExists(subqueryDt);
     } else {
       column = processCorrelatedExists(subqueryDt);
@@ -3216,12 +3700,12 @@ ExprCP ToGraph::processCorrelatedExists(DerivedTableP subqueryDt) {
   // Finalize the subqueryDt (add to currentDt_).
   currentDt_->addTable(subqueryDt);
 
-  auto decorrelated =
-      extractDecorrelatedJoin(functionNames_, correlatedConjuncts_, subqueryDt);
+  auto decorrelated = extractDecorrelatedJoin(
+      functionNames_, applyContext_.lifted.predicates, subqueryDt);
   if (decorrelated.leftKeys.empty()) {
     VELOX_CHECK_EQ(decorrelated.leftTables.size(), 1);
   }
-  correlatedConjuncts_.clear();
+  applyContext_.lifted.predicates.clear();
 
   const auto* markColumn = addMarkColumn();
 
@@ -3398,7 +3882,7 @@ void ToGraph::addFilter(
       if (conjunct->allTables().isSubset(tables)) {
         return false;
       }
-      correlatedConjuncts_.push_back(conjunct);
+      applyContext_.lifted.predicates.push_back(conjunct);
       return true;
     });
   }
@@ -3870,11 +4354,19 @@ void ToGraph::makeQueryGraph(
           input, allowedInDt, /*orderObservedAbove=*/false, excludeOuterJoins);
       if (currentDt_->hasAggregation() || currentDt_->hasLimit() ||
           currentDt_->windowPlan) {
-        finalizeDtWithCorrelatedConjuncts(input);
+        finalizeDtPreservingCorrelations(input);
       }
 
       auto* agg = translateAggregation(*node.as<lp::AggregateNode>());
-      if (auto* result = processCorrelatedAggregation(agg)) {
+      if (anyAggregateReferencesOuter(agg, currentDt_)) {
+        // The aggregate body references outer columns. It cannot validate
+        // against the inner DT's tableSet; defer to be attached to the
+        // outer DT by processCorrelatedScalarSubquery.
+        VELOX_CHECK_NULL(applyContext_.lifted.aggregation);
+        applyContext_.lifted.aggregation = agg;
+      } else if (
+          auto* result = processCorrelatedAggregation(
+              agg, applyContext_.lifted.predicates)) {
         currentDt_->aggregation = result;
       }
 

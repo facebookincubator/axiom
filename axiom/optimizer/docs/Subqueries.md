@@ -251,10 +251,13 @@ into a filter (e.g., it appears inside an aggregation or below a LIMIT):
    to a join key.
 
    ```sql
-   -- Not supported: correlation inside COUNT
+   -- Not supported by basic decorrelation: correlation inside COUNT
    SELECT * FROM customers c
    WHERE (SELECT COUNT(o.order_id + c.customer_id) FROM orders o) > 10
    ```
+
+   Scalar subqueries with this shape are decorrelated by an alternative
+   path — see "Outer-column reference inside an aggregate" below.
 
 4. **Correlation with LIMIT**: When a correlated subquery uses LIMIT to
    restrict results per outer row, decorrelation is not straightforward because
@@ -724,10 +727,12 @@ hash join key, while the inequality `u.b > t.b` becomes the join filter. When
 a correlation has only non-equality conditions (no equalities), a nested-loop
 join is used instead.
 
-#### Correlated Scalar Subquery in Projection
+#### Correlated Scalar Subquery in Projection — Correlation in WHERE Only
 
-Correlated scalar subqueries in the SELECT list are decorrelated the same way
-as in filters. With aggregation, the correlation key becomes a GROUP BY key:
+When the **inner WHERE clause** references outer columns but the **inner
+SELECT** references only inner columns, decorrelation works the same way as
+for correlated subqueries in filters. With aggregation, the correlation key
+becomes a GROUP BY key:
 
 ```sql
 -- Original
@@ -761,6 +766,190 @@ EnforceDistinct(keys=[__rownum], error="Scalar sub-query has returned multiple r
        │    └─ Scan(t)
        └─ Scan(u)
 ```
+
+#### Correlated Scalar Subquery with Outer Columns in the Projection
+
+A scalar subquery's **own SELECT expression** can also reference outer-query
+columns, independently of any correlation in its WHERE clause:
+
+```sql
+-- 'u.x' is inner, 't.a' is outer; both appear in the inner SELECT.
+SELECT (SELECT t.a + u.x FROM u WHERE u.k = t.k)
+FROM t;
+```
+
+Naively translating the subquery body would store `t.a + u.x` as a projection
+expression owned by the subquery's `DerivedTable`, violating the invariant
+that a `DerivedTable`'s expressions reference only its own tables. The
+optimizer therefore **splits** each correlated projection expression into:
+
+1. A set of **inner-only sub-expressions**, exported as additional columns
+   of the inner `DerivedTable`.
+2. A **residual outer expression** that combines those exported columns with
+   outer-column references. The residual is recorded in
+   `applyContext_.lifted.projections` (sibling of
+   `applyContext_.lifted.predicates`) and evaluated above the decorrelated
+   join by substituting it into the outer SELECT's expression tree.
+
+##### Split algorithm
+
+Walking the projection expression top-down, at each node:
+
+| Node references          | Action                                                                                       |
+|--------------------------|----------------------------------------------------------------------------------------------|
+| Inner cols only          | Export the whole subtree as an inner DT column; replace with a reference to that column.     |
+| Outer cols only          | Keep in the residual expression. Stop descending.                                            |
+| Both outer and inner     | Keep the node in the residual; recurse into children.                                        |
+| Aggregate (any contents) | Treat as opaque. See "Outer-column reference inside an aggregate" below.                     |
+
+##### Trivial pass-through (no inner FROM)
+
+When the subquery body has no FROM clause, the inner DT has no tables and the
+split produces no inner-only exports. The residual is the outer expression
+itself:
+
+```sql
+-- Original
+SELECT (SELECT a) FROM t;
+
+-- Rewritten as
+SELECT a FROM t;
+```
+
+The subquery disappears entirely. `EnforceSingleRow` is trivially satisfied
+because the empty-tuple input has cardinality 1.
+
+##### Top-level outer/inner mix, no correlated WHERE
+
+```sql
+-- Original
+SELECT (SELECT t.a + u.x FROM u WHERE u.x = 1)
+FROM t;
+
+-- Split: inner export {u_x = u.x}; residual {t.a + u_x}.
+-- Rewritten plan
+Project[ t.a + sub.u_x ]
+  └─ CrossJoin
+       ├─ Scan(t)
+       └─ EnforceSingleRow
+            └─ Filter[ u.x = 1 ]
+                 └─ Scan(u)
+```
+
+##### Outer ref combined with an aggregate result
+
+```sql
+-- Original
+SELECT (SELECT max(u.x) + t.a FROM u WHERE u.k = t.k)
+FROM t;
+
+-- Split: inner export {max_x = max(u.x)}; residual {max_x + t.a}.
+-- Inner WHERE correlation 'u.k = t.k' goes through the existing
+-- applyContext_.lifted.predicates path; applyContext_.lifted.projections
+-- carries 'max_x + t.a'.
+-- Rewritten as
+SELECT subq.max_x + t.a
+FROM t
+LEFT JOIN (
+    SELECT u.k, max(u.x) AS max_x
+    FROM u
+    GROUP BY u.k
+) AS subq ON subq.k = t.k;
+```
+
+##### Correlated projection but no correlated WHERE
+
+```sql
+-- Original
+SELECT (SELECT t.a + max(u.x) FROM u)
+FROM t;
+
+-- Split: inner export {max_x = max(u.x)}; residual {t.a + max_x}.
+-- Rewritten plan
+Project[ t.a + sub.max_x ]
+  └─ CrossJoin
+       ├─ Scan(t)
+       └─ Aggregate[ max(u.x) AS max_x ]
+            └─ Scan(u)
+```
+
+Cross join + single-row guarantee from the inner global aggregation. The
+residual `t.a + sub.max_x` evaluates above the join.
+
+##### Outer-column reference inside an aggregate
+
+```sql
+-- Original: 't.a' is inside max(...).
+SELECT (SELECT max(u.x + t.a) FROM u WHERE u.k = t.k)
+FROM t;
+```
+
+An aggregate whose body references outer columns cannot live on the inner
+DT — its body would fail the inner DT's `tableSet` check, which requires
+every referenced table to be in the DT's own `tableSet`. The aggregation
+is captured during translation in `applyContext_.lifted.aggregation`
+(sibling of `applyContext_.lifted.predicates` and
+`applyContext_.lifted.projections`) and never attached to the inner DT.
+Its result column is created with relation set to the outer DT at
+`translateAggregation` time, so the SELECT-projection split classifies
+references to it as correlated. When the subquery is processed,
+`buildCorrelatedAggregation` builds the LEFT JOIN + outer aggregation on
+the outer DT directly, using AssignUniqueId on the outer table to group
+one row per outer row:
+
+```
+-- Rewritten plan
+Project[ subq.result ]
+  └─ Aggregate GROUP BY t.__rownum,
+                max(u.x + t.a) AS result,
+                arbitrary(...) outer-column carry-forwards
+       └─ LeftJoin (t.k = u.k)
+            ├─ AssignUniqueId(__rownum)
+            │    └─ Scan(t)
+            └─ Scan(u)
+```
+
+The same shape applies when the subquery has no correlated WHERE clause:
+the join becomes a cross join (no equality keys, no filter), and any outer
+table referenced by the aggregate body serves as the AssignUniqueId target.
+
+```sql
+-- No correlated WHERE; t.b reference inside max() still triggers deferral.
+SELECT (SELECT max(u.x + t.b) FROM u) FROM t;
+```
+
+**Future optimization.** Algebraic identities such as
+`max(x + c) = max(x) + c` (with `c` constant per outer row) can rewrite the
+inner aggregate body to remove the outer reference, converting this case to
+the cheaper "outer ref combined with an aggregate result" form. Not required
+for correctness.
+
+##### Implementation notes
+
+- All correlation accumulators are fields of the `ApplyContext` struct,
+  held as a single `applyContext_` member on `ToGraph`. The
+  `outerDt` field is save/restored on entry to a subquery scope; the
+  lifted accumulators are shared across the `translateSubquery` call
+  boundary (asserted empty at entry).
+- `allowCorrelations_` is extended to be enabled around projection and
+  aggregate translation inside subquery bodies, in addition to
+  `translateConjuncts`.
+- `applyContext_.lifted.projections` is drained at the same boundaries as
+  `applyContext_.lifted.predicates` (e.g., precondition of `finalizeDt`;
+  saved and restored by `finalizeDtPreservingCorrelations`).
+- `applyContext_.lifted.aggregation` holds the deferred AggregationPlan;
+  its result column's relation is set to `applyContext_.outerDt` at
+  `translateAggregation` time so split classification treats references
+  to it as correlated.
+- `applyContext_.outerDt` is captured on entry to every subquery scope
+  (the enclosing DT, saved/restored via SCOPE_EXIT). Used as the
+  relation for `applyContext_.lifted.aggregation`'s output columns.
+- `processCorrelatedScalarSubquery` dispatches: if
+  `applyContext_.lifted.aggregation` is set, `buildCorrelatedAggregation`
+  builds the AssignUniqueId + LEFT JOIN + outer aggregation; otherwise
+  the existing equi-aggregation / no-aggregation / non-equi paths run.
+  Residual expressions from `applyContext_.lifted.projections` are
+  substituted into the outer expression via `subqueries_`.
 
 ### IN Subqueries
 
@@ -1033,6 +1222,8 @@ directly.
 |---------------|----------|--------------|
 | Scalar (with agg) | Filter/Projection/GROUP BY | Left join + GROUP BY correlation key |
 | Scalar (without agg) | Filter/Projection/GROUP BY | AssignUniqueId + Left join + EnforceDistinct |
+| Scalar (correlated projection, no aggregate over outer cols) | Projection | Split + same join shape as above + residual Project on top |
+| Scalar (aggregate body references outer cols) | Any | AssignUniqueId + Left join + outer Aggregate grouped by `__rownum` |
 | IN | Filter | Semi-join with correlation keys |
 | IN | Projection | Mark semi-join with correlation keys |
 | NOT IN | Filter | Anti-join with correlation keys |
@@ -1084,9 +1275,54 @@ const folly::F14FastMap<std::string, ExprCP>* correlations_;
 // True if expression is allowed to reference symbols from the 'outer' query.
 bool allowCorrelations_{false};
 
-// Filter conjuncts found in a subquery that reference symbols from the
-// 'outer' query.
-ExprVector correlatedConjuncts_;
+// Per-scope state for a (possibly correlated) subquery body translation.
+// Populated by producers during body translation, drained by the outer
+// scope's 'process*Subqueries' code after 'translateSubquery' returns.
+// 'outerDt' is save/restored on body entry; 'lifted' is save/restored
+// at every nested 'translateSubquery' call site via
+// 'saveAndClearLifted' so nested scopes start with a clean slate. All
+// three lifted fields are asserted empty at 'translateSubqueryBody'
+// entry.
+struct ApplyContext {
+  // The enclosing DT when translating inside a subquery scope. Drives
+  // placement of columns produced inside the subquery body that
+  // conceptually belong to the outer scope (e.g. 'lifted.aggregation'
+  // output columns).
+  DerivedTableP outerDt{nullptr};
+
+  // The three lifted accumulators for this scope's body. Bundled so a
+  // single value captures the full snapshot for save/restore across
+  // nested 'translateSubquery' calls.
+  struct Lifted {
+    // Filter conjuncts found in a subquery that reference outer-scope
+    // columns.
+    ExprVector predicates;
+
+    // Residual outer-side expressions from a subquery's SELECT that
+    // reference outer-scope columns. The inner DT owns only pure-inner
+    // sub-trees, materialized as exported columns; each entry here
+    // combines those exported columns with outer-column references and
+    // is evaluated above the decorrelated join.
+    ExprVector projections;
+
+    // A subquery's aggregation whose body references outer columns. It
+    // is not attached to the inner DT (its body would fail the inner
+    // DT's tableSet check). Its output columns are created with
+    // relation set to 'outerDt' so the SELECT-projection split
+    // classifies them as correlated.
+    // 'processCorrelatedScalarSubquery' attaches it to the outer DT
+    // above the decorrelating LEFT JOIN.
+    AggregationPlanCP aggregation{nullptr};
+  };
+  Lifted lifted;
+
+  // Moves the lifted-state fields into a snapshot and clears them so
+  // the next nested 'translateSubquery' starts with a clean slate.
+  // Restore via `applyContext_.lifted = std::move(snapshot)`.
+  Lifted saveAndClearLifted();
+};
+
+ApplyContext applyContext_;
 
 // Maps an expression that contains a subquery to a column or constant that
 // should be used instead. Populated in 'processSubqueries()'.
@@ -1136,7 +1372,7 @@ struct DecorrelatedJoin {
 };
 ```
 
-The `extractDecorrelatedJoin()` helper processes `correlatedConjuncts_` and
+The `extractDecorrelatedJoin()` helper processes `applyContext_.lifted.predicates` and
 separates equality conditions (which become join keys) from non-equality
 conditions (which become join filters).
 
@@ -1291,6 +1527,12 @@ DerivedTableP ToGraph::translateSubquery(
    ```
    TODO: Support by pre-computing subquery conjuncts as projected boolean
    columns on the appropriate side.
+
+6. **Multi-column scalar subqueries**
+   ```sql
+   -- Not supported: scalar context expects exactly one output column
+   SELECT (SELECT t.a, max(u.x) FROM u WHERE u.k = t.k) FROM t;
+   ```
 
 ## Architectural Notes
 

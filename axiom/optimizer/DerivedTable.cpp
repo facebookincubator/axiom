@@ -2024,6 +2024,25 @@ bool DerivedTable::isZeroRows() const {
       tables[0]->as<ValuesTable>()->cardinality() == 0;
 }
 
+bool DerivedTable::isSingleRowNoColumnsValues() const {
+  if (tables.size() != 1 || !tables[0]->is(PlanType::kValuesTableNode)) {
+    return false;
+  }
+  const auto* values = tables[0]->as<ValuesTable>();
+  return values->columns.empty() && values->cardinality() == 1;
+}
+
+bool DerivedTable::hasNoPostprocess() const {
+  // HAVING requires aggregation, so it is implied empty when aggregation
+  // is null.
+  return conjuncts.empty() && aggregation == nullptr && windowPlan == nullptr &&
+      !hasOrderBy() && !hasLimit() && !hasOffset();
+}
+
+bool DerivedTable::hasCardinalityNeutralPostprocess() const {
+  return conjuncts.empty() && having.empty() && !hasLimit() && !hasOffset();
+}
+
 void DerivedTable::clearState() {
   columns.clear();
   exprs.clear();
