@@ -116,9 +116,9 @@ std::optional<velox::common::SpillDiskOptions> makeSpillDiskOptions(
   return options;
 }
 
-// Streams splits from the source and distributes them round-robin across tasks.
 folly::coro::Task<void> co_generateAndDistributeSplits(
     std::shared_ptr<connector::SplitSource> source,
+    const connector::PartitionType::SplitToWorkerFn* splitToWorkerFn,
     velox::core::PlanNodeId scanId,
     std::vector<std::shared_ptr<velox::exec::Task>> tasks,
     std::function<void(std::exception_ptr)> onError,
@@ -133,8 +133,19 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
     for (;;) {
       auto batch = co_await source->co_getSplits(1);
       for (auto& split : batch.splits) {
-        tasks[taskIdx]->addSplit(scanId, velox::exec::Split(std::move(split)));
-        taskIdx = (taskIdx + 1) % tasks.size();
+        size_t targetTask;
+        if (splitToWorkerFn != nullptr) {
+          targetTask = static_cast<size_t>((*splitToWorkerFn)(*split));
+          VELOX_CHECK_LT(
+              targetTask,
+              tasks.size(),
+              "SplitToWorkerFn returned out-of-range worker index");
+        } else {
+          targetTask = taskIdx;
+          taskIdx = (taskIdx + 1) % tasks.size();
+        }
+        tasks[targetTask]->addSplit(
+            scanId, velox::exec::Split(std::move(split)));
         ++splitCount;
       }
       if (batch.noMoreSplits) {
@@ -481,7 +492,6 @@ void LocalRunner::makeStages(
           makeSpillDiskOptions(baseSpillDirectory_, taskId),
           onError);
       stages_.back().push_back(task);
-
       task->start(plan_->options().numDrivers);
     }
   }
@@ -499,11 +509,20 @@ void LocalRunner::makeStages(
 
       for (const auto& scan : scans) {
         auto source = splitSourceForScan(/*session=*/nullptr, *scan);
+        // nullptr selects round-robin distribution; non-null routes via the
+        // function's bucket → worker mapping.
+        const auto* splitToWorkerFn =
+            folly::get_ptr(fragment.splitToWorkerFns, scan->id());
         splitScope_.add(
             folly::coro::co_withExecutor(
                 params_.queryCtx->executor(),
                 co_generateAndDistributeSplits(
-                    source, scan->id(), stage, onError, runtimeStats_)));
+                    source,
+                    splitToWorkerFn,
+                    scan->id(),
+                    stage,
+                    onError,
+                    runtimeStats_)));
       }
 
       for (const auto& input : fragment.inputStages) {

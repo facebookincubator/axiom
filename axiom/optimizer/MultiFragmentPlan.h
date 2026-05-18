@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include "axiom/common/Enums.h"
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "velox/core/PlanFragment.h"
@@ -151,6 +152,16 @@ struct ExecutableFragment {
   /// Source fragments and Exchange node ids for remote shuffles producing input
   /// for 'this'.
   std::vector<InputStage> inputStages;
+
+  /// Per-scan closures mapping a split to a worker index in [0, width). The
+  /// runner consults this map when distributing splits; scans absent from
+  /// the map fall back to round-robin.
+  folly::F14FastMap<
+      velox::core::PlanNodeId,
+      connector::PartitionType::SplitToWorkerFn>
+      splitToWorkerFns;
+
+  std::string toHeader(int32_t index) const;
 };
 
 /// Describes a distributed plan handed to a Runner for parallel/distributed

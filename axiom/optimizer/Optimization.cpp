@@ -57,7 +57,8 @@ Optimization::Optimization(
       aggregationPlanner_{
           isSingleWorker_,
           isSingleDriver_,
-          options_.alwaysPlanPartialAggregation},
+          options_.alwaysPlanPartialAggregation,
+          options_.enableBucketedExecution},
       toGraph_{schema, evaluator, options_, runtimeStats},
       toVelox_{session_, runnerOptions_, options_},
       runtimeStats_{std::move(runtimeStats)} {
@@ -877,23 +878,6 @@ RelationOpPtr repartitionForIndex(
   return repartition;
 }
 
-// Returns the positions in 'keys' for the expressions that determine the
-// partition. empty if the partition is not decided by 'keys'
-std::vector<uint32_t> joinKeyPartition(
-    const RelationOpPtr& op,
-    const ExprVector& keys) {
-  const auto& partitionKeys = op->distribution().partitionKeys();
-  std::vector<uint32_t> positions;
-  for (unsigned i = 0; i < partitionKeys.size(); ++i) {
-    auto nthKey = position(keys, *partitionKeys[i]);
-    if (nthKey == kNotFound) {
-      return {};
-    }
-    positions.push_back(nthKey);
-  }
-  return positions;
-}
-
 PlanObjectSet availableColumns(PlanObjectCP object) {
   PlanObjectSet set;
   if (object->is(PlanType::kTableNode)) {
@@ -1042,7 +1026,9 @@ RelationOpPtr repartitionForWrite(const RelationOpPtr& plan, PlanState& state) {
 
   // Copartitioning is possible if PartitionTypes are compatible and the table
   // has no fewer partitions than the plan.
-  bool shuffle = !copartition || copartition != planPartitionType;
+  bool shuffle =
+      !queryCtx()->optimization()->options().enableBucketedExecution ||
+      !copartition || copartition != planPartitionType;
   if (!shuffle) {
     // Check that the partition keys of the plan are assigned pairwise to the
     // partition columns of the layout.

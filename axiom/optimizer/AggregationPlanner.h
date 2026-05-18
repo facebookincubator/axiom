@@ -33,13 +33,21 @@ std::pair<RelationOpPtr, PlanCost> maybeRepartition(
     const RelationOpPtr& plan,
     ExprVector desiredKeys);
 
+/// Returns the positions in 'keys' of expressions that match 'op's partition
+/// keys, in partition-key order. Returns an empty vector if any partition key
+/// is missing from 'keys'.
+std::vector<uint32_t> joinKeyPartition(
+    const RelationOpPtr& op,
+    const ExprVector& keys);
+
 /// Plans aggregation operators for a derived table.
 class AggregationPlanner {
  public:
   AggregationPlanner(
       bool isSingleWorker,
       bool isSingleDriver,
-      bool alwaysPlanPartialAggregation);
+      bool alwaysPlanPartialAggregation,
+      bool enableBucketedExecution);
 
   /// Plans the aggregation for a derived table in the main optimization path.
   /// Chooses between single-step and split (partial + final) plans based on
@@ -107,6 +115,7 @@ class AggregationPlanner {
   bool isSingleWorker_;
   bool isSingleDriver_;
   bool alwaysPlanPartialAggregation_;
+  bool enableBucketedExecution_;
 };
 
 } // namespace facebook::axiom::optimizer

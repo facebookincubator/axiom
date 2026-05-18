@@ -259,6 +259,28 @@ MarkDistinctResult addMarkDistinctNodes(
 
 } // namespace
 
+std::vector<uint32_t> joinKeyPartition(
+    const RelationOpPtr& op,
+    const ExprVector& keys) {
+  const auto& partitionKeys = op->distribution().partitionKeys();
+  std::vector<uint32_t> positions;
+  positions.reserve(partitionKeys.size());
+  for (const auto& partitionKey : partitionKeys) {
+    bool found = false;
+    for (uint32_t j = 0; j < keys.size(); ++j) {
+      if (keys[j]->sameOrEqual(*partitionKey)) {
+        positions.push_back(j);
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      return {};
+    }
+  }
+  return positions;
+}
+
 std::pair<RelationOpPtr, PlanCost> maybeRepartition(
     const RelationOpPtr& plan,
     ExprVector desiredKeys) {
@@ -508,10 +530,12 @@ AggregationPlanner::makeDistinctToMarkDistinctPlan(
 AggregationPlanner::AggregationPlanner(
     bool isSingleWorker,
     bool isSingleDriver,
-    bool alwaysPlanPartialAggregation)
+    bool alwaysPlanPartialAggregation,
+    bool enableBucketedExecution)
     : isSingleWorker_{isSingleWorker},
       isSingleDriver_{isSingleDriver},
-      alwaysPlanPartialAggregation_{alwaysPlanPartialAggregation} {}
+      alwaysPlanPartialAggregation_{alwaysPlanPartialAggregation},
+      enableBucketedExecution_{enableBucketedExecution} {}
 
 RelationOpPtr AggregationPlanner::planSingle(
     DerivedTableCP dt,
@@ -539,6 +563,12 @@ void AggregationPlanner::plan(
     PlanState& state) const {
   VELOX_CHECK_NOT_NULL(dt->aggregation);
   const auto* aggPlan = dt->aggregation;
+
+  const bool isBucketedAggregation = enableBucketedExecution_ &&
+      !alwaysPlanPartialAggregation_ && !isSingleWorker_ &&
+      !aggPlan->groupingKeys().empty() &&
+      plan->distribution().partitionType() != nullptr &&
+      !joinKeyPartition(plan, aggPlan->groupingKeys()).empty();
 
   PrecomputeProjection precompute(plan, dt, /*projectAllInputs=*/false);
   auto groupingKeys =
@@ -571,6 +601,20 @@ void AggregationPlanner::plan(
       std::any_of(aggregates.begin(), aggregates.end(), [](const auto& agg) {
         return !agg->orderKeys().empty();
       });
+
+  if (isBucketedAggregation && !hasDistinct && !hasOrderBy) {
+    auto* singleAgg = make<Aggregation>(
+        plan,
+        std::move(groupingKeys),
+        /*preGroupedKeys=*/ExprVector{},
+        std::move(aggregates),
+        velox::core::AggregationNode::Step::kSingle,
+        aggPlan->columns());
+    state.addCost(*singleAgg);
+    plan = singleAgg;
+    return;
+  }
+
   if (hasDistinct) {
     auto distinctArgs = getCommonDistinctArgs(aggregates);
     if (distinctArgs.has_value()) {
