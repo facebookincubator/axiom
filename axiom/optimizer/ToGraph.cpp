@@ -4560,13 +4560,15 @@ NormalizedJoin normalizeLogicalJoin(const lp::JoinNode& join) {
 } // namespace
 
 DerivedTableP ToGraph::makeQueryGraph(const lp::LogicalPlanNode& logicalPlan) {
-  std::tie(controlSubfields_, payloadSubfields_) =
-      SubfieldTracker([&](const auto& expr) {
-        return tryFoldConstant(expr);
-      }).markAll(logicalPlan);
+  auto result = SubfieldTracker([&](const auto& expr) {
+                  return tryFoldConstant(expr);
+                }).markAll(logicalPlan);
+  controlSubfields_ = std::move(result.controlSubfields);
+  payloadSubfields_ = std::move(result.payloadSubfields);
+  const auto& planRoot = *result.planRoot;
   currentDt_ = newDt();
-  makeQueryGraph(logicalPlan, kAllAllowedInDt, /*orderObservedAbove=*/true);
-  setDtUsedOutput(currentDt_, logicalPlan);
+  makeQueryGraph(planRoot, kAllAllowedInDt, /*orderObservedAbove=*/true);
+  setDtUsedOutput(currentDt_, planRoot);
 
   // TODO Try constant fold the dt.
 

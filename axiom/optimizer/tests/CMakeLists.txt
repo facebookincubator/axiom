@@ -103,6 +103,7 @@ add_executable(
   axiom_optimizer_tests
   AggregationTest.cpp
   DistinctAggregationTest.cpp
+  OutputNodeTest.cpp
   CardinalityEstimationTest.cpp
   CsvReadWriteTest.cpp
   DerivedTablePrinterTest.cpp

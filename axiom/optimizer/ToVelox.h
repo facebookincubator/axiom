@@ -34,6 +34,16 @@ using NodeHistoryMap = folly::F14FastMap<velox::core::PlanNodeId, std::string>;
 using NodePredictionMap =
     folly::F14FastMap<velox::core::PlanNodeId, NodePrediction>;
 
+/// Maps a source column name to its user-requested output name for the
+/// final projection in toVeloxPlan. Resolved eagerly because column
+/// pruning invalidates the original ordinals.
+struct OutputColumnNameMapping {
+  /// Column name in the plan below OutputNode.
+  std::string sourceName;
+  /// Output column name from OutputNode entry.
+  std::string outputName;
+};
+
 /// Plan and specification for recording execution history amd planning ttime
 /// predictions.
 struct PlanAndStats {
@@ -56,11 +66,12 @@ class ToVelox {
 
   /// Converts physical plan (a tree of RelationOp) to an executable
   /// multi-fragment Velox plan. If outputNames is non-empty, adds a
-  /// final projection to rename or reorder output columns.
+  /// final projection that selects the named source columns from the
+  /// optimized plan's outputType and renames them per outputName.
   PlanAndStats toVeloxPlan(
       RelationOpPtr plan,
       const MultiFragmentPlan::Options& options,
-      const std::vector<logical_plan::OutputNode::Entry>& outputNames = {});
+      const std::vector<OutputColumnNameMapping>& outputNames = {});
 
   /// Per-leaf-table data produced by filterUpdated().
   struct LeafTableData {
@@ -101,12 +112,12 @@ class ToVelox {
   }
 
  private:
-  // Adds a Velox ProjectNode that renames or reorders output columns per the
-  // given OutputNode entries. Returns the input unchanged if all names and
-  // positions already match.
+  // Adds a Velox ProjectNode that selects 'outputNames' from 'input' by
+  // source name and renames them per outputName. Returns 'input' unchanged
+  // when all names and positions already match.
   velox::core::PlanNodePtr addOutputRenames(
       velox::core::PlanNodePtr input,
-      const std::vector<logical_plan::OutputNode::Entry>& outputNames);
+      const std::vector<OutputColumnNameMapping>& outputNames);
 
   velox::core::FieldAccessTypedExprPtr toFieldRef(ExprCP expr);
 

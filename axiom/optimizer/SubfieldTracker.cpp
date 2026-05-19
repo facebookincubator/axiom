@@ -64,6 +64,14 @@ SubfieldTracker::SubfieldTracker(
   }
 }
 
+SubfieldTracker::MarkAllResult SubfieldTracker::markAll(
+    const lp::LogicalPlanNode& node) && {
+  markAllSubfields(node, {});
+  const auto* planRoot =
+      node.is(lp::NodeKind::kOutput) ? node.onlyInput().get() : &node;
+  return {std::move(controlSubfields_), std::move(payloadSubfields_), planRoot};
+}
+
 namespace {
 
 PathCP stepsToPath(std::span<const Step> steps) {
@@ -655,6 +663,26 @@ void SubfieldTracker::markControl(
 void SubfieldTracker::markAllSubfields(
     const lp::LogicalPlanNode& node,
     const MarkFieldsAccessedContext& context) {
+  // Mark only the source ordinals OutputNode exports on its input,
+  // enabling pruning of columns the OutputNode does not list.
+  if (node.is(lp::NodeKind::kOutput)) {
+    const auto& output = *node.as<lp::OutputNode>();
+    const auto& input = *output.onlyInput();
+    markControl(input, context);
+
+    LogicalContextSource source = {.planNode = &input};
+    std::vector<Step> steps;
+    for (const auto& entry : output.entries()) {
+      markFieldAccessed(
+          source, entry.index, steps, /*isControl=*/false, context);
+      VELOX_CHECK(
+          steps.empty(),
+          "OutputNode entry at ordinal {} must be a top-level column",
+          entry.index);
+    }
+    return;
+  }
+
   markControl(node, context);
 
   LogicalContextSource source = {.planNode = &node};

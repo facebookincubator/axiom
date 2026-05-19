@@ -123,7 +123,9 @@ class ToGraph {
       std::shared_ptr<QueryRuntimeStats> runtimeStats = nullptr);
 
   /// Converts 'logicalPlan' to a tree of DerivedTables. Returns the root
-  /// DerivedTable.
+  /// DerivedTable. Strips a root OutputNode after SubfieldTracker prunes
+  /// columns it does not export. Surviving columns keep their original
+  /// names; positions are not stable — downstream must look up by name.
   DerivedTableP makeQueryGraph(
       const logical_plan::LogicalPlanNode& logicalPlan);
 
@@ -607,6 +609,9 @@ class ToGraph {
   // aggregate cannot be split out and triggers a VELOX_NYI.
   ExprCP splitCorrelatedProjection(ExprCP expr, DerivedTableP dt);
 
+  // Populates 'dt' with one column per ordinal in usedChannels(node),
+  // named via node.outputType().nameOf(ordinal). Establishes the
+  // makeQueryGraph name-preservation contract; ordering is unspecified.
   void setDtUsedOutput(
       DerivedTableP dt,
       const logical_plan::LogicalPlanNode& node);

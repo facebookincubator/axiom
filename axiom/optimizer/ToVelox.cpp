@@ -245,47 +245,52 @@ void ToVelox::filterUpdated(BaseTableCP table) {
 
 velox::core::PlanNodePtr ToVelox::addOutputRenames(
     velox::core::PlanNodePtr input,
-    const std::vector<logical_plan::OutputNode::Entry>& outputNames) {
-  VELOX_CHECK_EQ(outputNames.size(), input->outputType()->size());
-
-  // If the input is a ProjectNode that only does renames/reorders (all
-  // expressions are FieldAccessTypedExpr on input columns), look through it
-  // to compose the renames and avoid stacking two rename-only projects.
+    const std::vector<OutputColumnNameMapping>& outputNames) {
+  // Look through an identity Project on top of input to avoid stacking
+  // two rename-only projects.
   auto* project = dynamic_cast<const velox::core::ProjectNode*>(input.get());
   const std::vector<velox::core::TypedExprPtr>* innerProjections = nullptr;
   if (isIdentityProject(input.get())) {
     innerProjections = &project->projections();
   }
 
-  // Resolve the effective source: the project's input if we can look
-  // through, otherwise the input itself.
-  auto source = innerProjections ? project->sources()[0] : std::move(input);
-  const auto& sourceType = source->outputType();
+  auto composeFrom = innerProjections ? project->sources()[0] : input;
+  const auto& lookupType = input->outputType();
+  const auto& composeType = composeFrom->outputType();
 
-  // Check if the composed result is a no-op: each output column maps to the
-  // same-named source column at the same index.
-  if (sourceType->size() == outputNames.size()) {
-    bool needRename = false;
+  // Check if the composed rename is a no-op: each output column resolves
+  // to the same-named source column at the same position in composeFrom.
+  if (composeType->size() == outputNames.size()) {
+    bool isNoOp = true;
     for (size_t i = 0; i < outputNames.size(); ++i) {
-      auto index = outputNames[i].index;
-      const auto& sourceName = [&]() -> const std::string& {
-        if (innerProjections) {
-          return static_cast<const velox::core::FieldAccessTypedExpr*>(
-                     (*innerProjections)[index].get())
-              ->name();
-        }
-        return sourceType->nameOf(index);
-      }();
-
-      if (outputNames[i].name != sourceName ||
-          sourceName != sourceType->nameOf(i)) {
-        needRename = true;
+      const auto lookupIndex =
+          lookupType->getChildIdxIfExists(outputNames[i].sourceName);
+      if (!lookupIndex.has_value()) {
+        isNoOp = false;
+        break;
+      }
+      // Resolve through the identity project to the source column in
+      // composeFrom.
+      std::string_view sourceName;
+      size_t sourceIndex;
+      if (innerProjections) {
+        const auto& name =
+            static_cast<const velox::core::FieldAccessTypedExpr*>(
+                (*innerProjections)[*lookupIndex].get())
+                ->name();
+        sourceName = name;
+        sourceIndex = composeType->getChildIdx(name);
+      } else {
+        sourceName = lookupType->nameOf(*lookupIndex);
+        sourceIndex = *lookupIndex;
+      }
+      if (outputNames[i].outputName != sourceName || sourceIndex != i) {
+        isNoOp = false;
         break;
       }
     }
-
-    if (!needRename) {
-      return source;
+    if (isNoOp) {
+      return composeFrom;
     }
   }
 
@@ -294,25 +299,33 @@ velox::core::PlanNodePtr ToVelox::addOutputRenames(
 
   std::vector<velox::core::TypedExprPtr> projections;
   projections.reserve(outputNames.size());
-  for (const auto& entry : outputNames) {
-    names.push_back(entry.name);
+
+  // Duplicate outputName values are permitted; OutputNode allows the same
+  // source column to appear under multiple output names.
+  for (const auto& column : outputNames) {
+    const auto lookupIndex = lookupType->getChildIdxIfExists(column.sourceName);
+    VELOX_CHECK(
+        lookupIndex.has_value(),
+        "OutputNode source column '{}' not found in optimized plan output [{}]. "
+        "This violates the makeQueryGraph name-preservation contract.",
+        column.sourceName,
+        lookupType->toString());
+    names.push_back(column.outputName);
     if (innerProjections) {
-      projections.push_back((*innerProjections)[entry.index]);
+      projections.push_back((*innerProjections)[*lookupIndex]);
     } else {
       projections.push_back(
           std::make_shared<velox::core::FieldAccessTypedExpr>(
-              sourceType->childAt(entry.index),
-              sourceType->nameOf(entry.index)));
+              composeType->childAt(*lookupIndex), column.sourceName));
     }
   }
 
   auto id = innerProjections ? project->id() : nextId();
-
   return std::make_shared<velox::core::ProjectNode>(
       std::move(id),
       std::move(names),
       std::move(projections),
-      std::move(source));
+      std::move(composeFrom));
 }
 
 namespace {
@@ -419,7 +432,7 @@ void decideFragmentType(
 PlanAndStats ToVelox::toVeloxPlan(
     RelationOpPtr plan,
     const MultiFragmentPlan::Options& options,
-    const std::vector<logical_plan::OutputNode::Entry>& outputNames) {
+    const std::vector<OutputColumnNameMapping>& outputNames) {
   options_ = options;
 
   prediction_.clear();
@@ -1530,9 +1543,9 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
           type, toTypedExprs(aggregate->args()), aggregate->name());
 
       aggregates.push_back({
-          .call = call,
-          .rawInputTypes = rawInputTypes,
-          .mask = mask,
+          .call = std::move(call),
+          .rawInputTypes = std::move(rawInputTypes),
+          .mask = std::move(mask),
           .sortingKeys = toFieldRefs(aggregate->orderKeys()),
           .sortingOrders = toSortOrders(aggregate->orderTypes()),
           .distinct = aggregate->isDistinct(),
@@ -1549,7 +1562,8 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
       }
       auto call = std::make_shared<velox::core::CallTypedExpr>(
           type, std::move(inputs), aggregate->name());
-      aggregates.push_back({.call = call, .rawInputTypes = rawInputTypes});
+      aggregates.push_back(
+          {.call = std::move(call), .rawInputTypes = std::move(rawInputTypes)});
     }
   }
 

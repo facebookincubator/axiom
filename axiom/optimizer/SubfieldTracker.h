@@ -73,13 +73,26 @@ class SubfieldTracker {
       std::function<logical_plan::ConstantExprPtr(const logical_plan::ExprPtr&)>
           tryFoldConstant);
 
+  /// Subfield results plus the effective plan root after stripping any
+  /// root OutputNode.
+  struct MarkAllResult {
+    /// Columns and subfields used as join keys, group-by keys, etc.
+    PlanSubfields controlSubfields;
+    /// Columns and subfields used as payload (projected, aggregated, etc.).
+    PlanSubfields payloadSubfields;
+    /// The effective plan root after stripping OutputNode. If the root is an
+    /// OutputNode, this points to its only input; otherwise it is the original
+    /// root. Callers should use this as the plan root for subsequent
+    /// processing.
+    const logical_plan::LogicalPlanNode* planRoot{nullptr};
+  };
+
   /// Goes over the local plan and collects all accessed columns and subfields.
   /// Reports 'control' and 'payload' columns and subfields separately.
-  std::pair<PlanSubfields, PlanSubfields> markAll(
-      const logical_plan::LogicalPlanNode& node) && {
-    markAllSubfields(node, {});
-    return {controlSubfields_, payloadSubfields_};
-  }
+  /// When the root is an OutputNode, only the source ordinals listed in its
+  /// entries are marked as payload-accessed on its input, enabling pruning
+  /// of columns the OutputNode does not export.
+  MarkAllResult markAll(const logical_plan::LogicalPlanNode& node) &&;
 
   /// If 'step' applied to result of the function of 'metadata'
   /// corresponds to an argument, returns the ordinal of the argument.

@@ -63,13 +63,19 @@ Optimization::Optimization(
       runtimeStats_{std::move(runtimeStats)} {
   queryCtx()->optimization() = this;
 
-  const auto* planRoot = logicalPlan_;
   if (logicalPlan_->is(logical_plan::NodeKind::kOutput)) {
-    outputNames_ = logicalPlan_->as<logical_plan::OutputNode>()->entries();
-    planRoot = logicalPlan_->onlyInput().get();
+    // Resolve entries to source names so addOutputRenames can look up by
+    // name; pruning may invalidate the original ordinals.
+    const auto& output = *logicalPlan_->as<logical_plan::OutputNode>();
+    const auto& inputType = *output.onlyInput()->outputType();
+    outputColumnMappings_.reserve(output.entries().size());
+    for (const auto& entry : output.entries()) {
+      outputColumnMappings_.push_back(
+          {inputType.nameOf(entry.index), entry.name});
+    }
   }
 
-  root_ = toGraph_.makeQueryGraph(*planRoot);
+  root_ = toGraph_.makeQueryGraph(*logicalPlan_);
   root_->initializePlans();
 }
 
