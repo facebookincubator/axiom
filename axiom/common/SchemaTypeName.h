@@ -51,6 +51,6 @@ struct fmt::formatter<facebook::axiom::SchemaTypeName>
     : fmt::formatter<std::string_view> {
   auto format(const facebook::axiom::SchemaTypeName& name, format_context& ctx)
       const {
-    return fmt::format_to(ctx.out(), R"d("{}"."{}")d", name.schema, name.type);
+    return fmt::format_to(ctx.out(), "{}.{}", name.schema, name.type);
   }
 };

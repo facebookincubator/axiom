@@ -303,9 +303,10 @@ TypePtr tryConnectorBasedTypeResolution(
 }
 
 // Attempts to resolve a qualified name (e.g., "catalog.schema.status.active")
-// as an enum literal. Returns nullopt if the type is not found. Throws
-// PrestoSqlError if the type is found but the value is not a valid enum member,
-// or if the resolved type is not an enum type.
+// as an enum literal. Returns nullopt if the catalog is not registered. Throws
+// PrestoSqlError if the catalog is registered but the type is not found, if the
+// value is not a valid enum member, or if the resolved type is not an enum
+// type.
 std::optional<lp::ExprApi> tryResolveEnumLiteral(
     const std::vector<std::string>& parts,
     folly::F14FastMap<std::string, TypePtr>& typeCache,
@@ -315,15 +316,19 @@ std::optional<lp::ExprApi> tryResolveEnumLiteral(
   }
 
   const auto& catalog = parts[0];
-  auto schema = parts[1];
-  auto typeName = folly::join('.', parts.begin() + 2, parts.end() - 1);
+  facebook::axiom::SchemaTypeName schemaTypeName{
+      parts[1], folly::join('.', parts.begin() + 2, parts.end() - 1)};
   const auto& valueName = parts.back();
 
-  auto type = findQualifiedType(
-      catalog,
-      facebook::axiom::SchemaTypeName{std::move(schema), std::move(typeName)},
-      typeCache);
+  auto type = findQualifiedType(catalog, schemaTypeName, typeCache);
   if (type == nullptr) {
+    if (facebook::axiom::connector::ConnectorMetadataRegistry::tryGet(
+            catalog) != nullptr) {
+      AXIOM_PRESTO_SEMANTIC_FAIL(
+          location,
+          fmt::format("{}.{}", catalog, schemaTypeName),
+          "Type not found");
+    }
     return std::nullopt;
   }
 

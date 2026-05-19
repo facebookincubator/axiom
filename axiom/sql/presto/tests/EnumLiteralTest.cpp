@@ -157,10 +157,20 @@ TEST_F(EnumLiteralTest, castToEnumType) {
 }
 
 TEST_F(EnumLiteralTest, unknownTypeAndCatalog) {
-  // Unknown type with known catalog falls through to column dereference.
-  VELOX_ASSERT_THROW(
+  // Unknown type with known catalog produces explicit error.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSelect("SELECT tc.myschema.NonExistent.VALUE FROM nation"),
-      "Cannot resolve column: tc");
+      "near 'tc.myschema.nonexistent': Type not found");
+
+  // Case-insensitive: token is lowercased.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSelect("SELECT tc.MYSCHEMA.NONEXISTENT.VALUE FROM nation"),
+      "near 'tc.myschema.nonexistent': Type not found");
+
+  // Multi-part type name with known catalog.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSelect("SELECT tc.myschema.foo.bar.VALUE FROM nation"),
+      "near 'tc.myschema.foo.bar': Type not found");
 
   // Unknown catalog falls through to column dereference.
   VELOX_ASSERT_THROW(
