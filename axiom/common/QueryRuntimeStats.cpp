@@ -117,4 +117,13 @@ folly::dynamic QueryRuntimeStats::toDynamic() const {
   return result;
 }
 
+ScopedCpuWallStatsTimer::~ScopedCpuWallStatsTimer() {
+  if (std::this_thread::get_id() == startThreadId_) {
+    auto cpuElapsed = velox::process::threadCpuNanos() - cpuStart_;
+    stats_.recordTiming(cpuMetricName_, std::chrono::nanoseconds(cpuElapsed));
+  }
+  auto wallElapsed = std::chrono::steady_clock::now() - wallStart_;
+  stats_.recordTiming(wallMetricName_, wallElapsed);
+}
+
 } // namespace facebook::axiom

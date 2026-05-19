@@ -15,10 +15,12 @@
  */
 
 #include "axiom/optimizer/Schema.h"
+
 #include "axiom/optimizer/Cost.h"
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/PlanUtils.h"
+#include "velox/common/process/ProcessBase.h"
 
 #include <numbers>
 
@@ -146,9 +148,14 @@ SchemaTableCP Schema::findTable(
 
   VELOX_CHECK_NOT_NULL(source_);
 
+  auto findCpuStart = velox::process::threadCpuNanos();
   auto findStart = std::chrono::steady_clock::now();
   auto connectorTable = source_->findTable(std::string(connectorId), tableName);
   if (runtimeStats_) {
+    runtimeStats_->recordTiming(
+        QueryRuntimeStats::kFindTableCpuNanos,
+        std::chrono::nanoseconds(
+            velox::process::threadCpuNanos() - findCpuStart));
     runtimeStats_->recordTiming(
         QueryRuntimeStats::kFindTableWallNanos,
         std::chrono::steady_clock::now() - findStart);

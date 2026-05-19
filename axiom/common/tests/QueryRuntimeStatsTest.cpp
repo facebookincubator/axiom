@@ -18,6 +18,7 @@
 
 #include <thread>
 
+#include <folly/BenchmarkUtil.h>
 #include <folly/json.h>
 #include <gtest/gtest.h>
 
@@ -127,6 +128,42 @@ TEST(QueryRuntimeStatsTest, concurrentRecording) {
   auto& metric = map.at(std::string(QueryRuntimeStats::kExecuteWallNanos));
   EXPECT_EQ(metric.sum, kThreads * kIterations);
   EXPECT_EQ(metric.count, kThreads * kIterations);
+}
+
+TEST(QueryRuntimeStatsTest, scopedCpuWallStatsTimer) {
+  QueryRuntimeStats stats;
+  {
+    ScopedCpuWallStatsTimer timer(
+        stats,
+        QueryRuntimeStats::kParseWallNanos,
+        QueryRuntimeStats::kParseCpuNanos);
+    int64_t sum = 0;
+    for (int64_t i = 0; i < 1'000'000; ++i) {
+      sum += i;
+    }
+    folly::doNotOptimizeAway(sum);
+  }
+  auto map = stats.toMap();
+  ASSERT_EQ(map.count(std::string(QueryRuntimeStats::kParseWallNanos)), 1);
+  ASSERT_EQ(map.count(std::string(QueryRuntimeStats::kParseCpuNanos)), 1);
+
+  auto wallNanos = map.at(std::string(QueryRuntimeStats::kParseWallNanos)).sum;
+  auto cpuNanos = map.at(std::string(QueryRuntimeStats::kParseCpuNanos)).sum;
+  EXPECT_GT(wallNanos, 0);
+  EXPECT_GT(cpuNanos, 0);
+  EXPECT_LE(cpuNanos, wallNanos);
+}
+
+TEST(QueryRuntimeStatsTest, cpuMetricNaming) {
+  QueryRuntimeStats stats;
+  stats.recordTiming(
+      QueryRuntimeStats::kFindTableCpuNanos, std::chrono::nanoseconds(5000));
+
+  auto dynamic = stats.toDynamic();
+  auto key = std::string(QueryRuntimeStats::kFindTableCpuNanos);
+  ASSERT_TRUE(dynamic.count(key));
+  EXPECT_EQ(dynamic[key]["unit"].asString(), "NANO");
+  EXPECT_EQ(dynamic[key]["sum"].asInt(), 5000);
 }
 
 } // namespace

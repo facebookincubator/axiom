@@ -163,11 +163,18 @@ void Optimization::estimateAllBaseTableSelectivity(DerivedTable& dt) {
   // query context executor if available, otherwise run inline.
   auto collectTask = folly::coro::collectAllRange(std::move(tasks));
   auto* executor = veloxQueryCtx_->executor();
+  auto estimateCpuStart = velox::process::threadCpuNanos();
+  auto estimateThreadId = std::this_thread::get_id();
   auto estimateStart = std::chrono::steady_clock::now();
   auto results = executor ? folly::coro::blockingWait(co_withExecutor(
                                 executor, std::move(collectTask)))
                           : folly::coro::blockingWait(std::move(collectTask));
   if (runtimeStats_) {
+    recordCpuIfSameThread(
+        *runtimeStats_,
+        QueryRuntimeStats::kEstimateStatsCpuNanos,
+        estimateCpuStart,
+        estimateThreadId);
     runtimeStats_->recordTiming(
         QueryRuntimeStats::kEstimateStatsWallNanos,
         std::chrono::steady_clock::now() - estimateStart);

@@ -76,9 +76,16 @@ ConnectorSplitSourceFactory::splitSourceForScan(
       connector::ConnectorMetadataRegistry::get(handle->connectorId());
   auto splitManager = metadata->splitManager();
 
+  auto listCpuStart = velox::process::threadCpuNanos();
+  auto listThreadId = std::this_thread::get_id();
   auto listStart = std::chrono::steady_clock::now();
   auto partitions = folly::coro::blockingWait(
       splitManager->co_listPartitions(session, handle));
+  recordCpuIfSameThread(
+      runtimeStats_,
+      QueryRuntimeStats::kListPartitionsCpuNanos,
+      listCpuStart,
+      listThreadId);
   runtimeStats_.recordTiming(
       QueryRuntimeStats::kListPartitionsWallNanos,
       std::chrono::steady_clock::now() - listStart);
@@ -126,6 +133,8 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
   try {
     VELOX_CHECK(!tasks.empty(), "tasks must not be empty");
 
+    auto getSplitsCpuStart = velox::process::threadCpuNanos();
+    auto getSplitsThreadId = std::this_thread::get_id();
     auto getSplitsStart = std::chrono::steady_clock::now();
     int64_t splitCount = 0;
     size_t taskIdx = 0;
@@ -144,6 +153,11 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
       task->noMoreSplits(scanId);
     }
 
+    recordCpuIfSameThread(
+        runtimeStats,
+        QueryRuntimeStats::kGetSplitsCpuNanos,
+        getSplitsCpuStart,
+        getSplitsThreadId);
     runtimeStats.recordTiming(
         QueryRuntimeStats::kGetSplitsWallNanos,
         std::chrono::steady_clock::now() - getSplitsStart);
