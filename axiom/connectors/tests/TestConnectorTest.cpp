@@ -156,8 +156,9 @@ CO_TEST_F(TestConnectorTest, splitManager) {
 
   auto partitions =
       co_await splitManager->co_listPartitions(nullptr, tableHandle);
+  QueryRuntimeStats noopStats;
   auto splitSource =
-      splitManager->getSplitSource(nullptr, tableHandle, partitions);
+      splitManager->getSplitSource(nullptr, tableHandle, partitions, noopStats);
   EXPECT_NE(splitSource, nullptr);
 
   std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;

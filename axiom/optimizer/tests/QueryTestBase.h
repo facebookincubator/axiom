@@ -269,6 +269,7 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
   // A QueryCtx created for each compiled query.
   std::shared_ptr<velox::core::QueryCtx> queryCtx_;
   std::unique_ptr<optimizer::VeloxHistory> history_;
+  QueryRuntimeStats runtimeStats_;
 
   inline static int32_t gQueryCounter{0};
   inline static std::unique_ptr<VeloxHistory> gSuiteHistory;

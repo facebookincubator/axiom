@@ -86,7 +86,8 @@ TpchSplitManager::co_listPartitions(
 std::shared_ptr<SplitSource> TpchSplitManager::getSplitSource(
     const connector::ConnectorSessionPtr& /*session*/,
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
-    const std::vector<PartitionHandlePtr>& /*partitions*/) {
+    const std::vector<PartitionHandlePtr>& /*partitions*/,
+    QueryRuntimeStats& /*runtimeStats*/) {
   auto* tpchTableHandle =
       dynamic_cast<const velox::connector::tpch::TpchTableHandle*>(
           tableHandle.get());

@@ -65,16 +65,15 @@ class SimpleSplitSourceFactory : public SplitSourceFactory {
 /// Generic SplitSourceFactory that delegates the work to ConnectorSplitManager.
 class ConnectorSplitSourceFactory : public SplitSourceFactory {
  public:
-  ConnectorSplitSourceFactory(
-      std::shared_ptr<QueryRuntimeStats> runtimeStats = nullptr)
-      : runtimeStats_(std::move(runtimeStats)) {}
+  explicit ConnectorSplitSourceFactory(QueryRuntimeStats& runtimeStats)
+      : runtimeStats_(runtimeStats) {}
 
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
       const connector::ConnectorSessionPtr& session,
       const velox::core::TableScanNode& scan) override;
 
  protected:
-  std::shared_ptr<QueryRuntimeStats> runtimeStats_;
+  QueryRuntimeStats& runtimeStats_;
 };
 
 /// Runner for in-process execution of a distributed plan.
@@ -91,11 +90,10 @@ class LocalRunner : public Runner,
       optimizer::MultiFragmentPlanPtr plan,
       optimizer::FinishWrite finishWrite,
       std::shared_ptr<velox::core::QueryCtx> queryCtx,
-      std::shared_ptr<SplitSourceFactory> splitSourceFactory =
-          std::make_shared<ConnectorSplitSourceFactory>(),
-      std::shared_ptr<velox::memory::MemoryPool> outputPool = nullptr,
-      std::string baseSpillDirectory = "",
-      std::shared_ptr<QueryRuntimeStats> runtimeStats = nullptr);
+      std::shared_ptr<SplitSourceFactory> splitSourceFactory,
+      std::shared_ptr<velox::memory::MemoryPool> outputPool,
+      std::string baseSpillDirectory,
+      QueryRuntimeStats& runtimeStats);
 
   ~LocalRunner() override;
 
@@ -186,7 +184,7 @@ class LocalRunner : public Runner,
   std::shared_ptr<SplitSourceFactory> splitSourceFactory_;
   // Base directory for task spill files. Empty disables spilling.
   std::string baseSpillDirectory_;
-  std::shared_ptr<QueryRuntimeStats> runtimeStats_;
+  QueryRuntimeStats& runtimeStats_;
   folly::coro::AsyncScope splitScope_{/*throwOnJoin=*/true};
   bool splitScopeJoined_{false};
 };

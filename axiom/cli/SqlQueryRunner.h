@@ -343,8 +343,7 @@ class SqlQueryRunner {
       facebook::axiom::optimizer::PlanAndStats& planAndStats,
       const std::shared_ptr<facebook::velox::core::QueryCtx>& queryCtx,
       const RunOptions& options,
-      std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats =
-          nullptr);
+      facebook::axiom::QueryRuntimeStats& runtimeStats);
 
   // Runs a parsed SQL statement, writing optimize/execute timing into 'timing'
   // and the serialized Velox plan into 'planString'.
@@ -405,6 +404,9 @@ class SqlQueryRunner {
   // Identity of the user running queries. Used as table owner in CREATE TABLE.
   std::string user_;
   std::atomic<int32_t> queryCounter_{0};
+
+  // Noop stats instance for code paths that don't track runtime metrics.
+  facebook::axiom::QueryRuntimeStats noopRuntimeStats_;
 };
 
 } // namespace axiom::sql

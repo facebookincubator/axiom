@@ -138,7 +138,13 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
     const auto queryId = plan->options().queryId;
 
     return std::make_shared<LocalRunner>(
-        std::move(plan), optimizer::FinishWrite{}, makeQueryCtx(queryId));
+        std::move(plan),
+        optimizer::FinishWrite{},
+        makeQueryCtx(queryId),
+        std::make_shared<ConnectorSplitSourceFactory>(runtimeStats_),
+        /*outputPool=*/nullptr,
+        /*baseSpillDirectory=*/"",
+        runtimeStats_);
   }
 
   // Fetches all remaining data from the runner.
@@ -155,6 +161,7 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
       std::make_shared<velox::core::PlanNodeIdGenerator>()};
 
   int32_t queryCounter_{0};
+  QueryRuntimeStats runtimeStats_;
 
   velox::RowTypePtr rowType_;
 };
@@ -270,9 +277,10 @@ TEST_F(LocalRunnerTest, spillDirectoryWiring) {
       std::move(join),
       optimizer::FinishWrite{},
       std::move(queryCtx),
-      std::make_shared<ConnectorSplitSourceFactory>(),
+      std::make_shared<ConnectorSplitSourceFactory>(runtimeStats_),
       /*outputPool=*/nullptr,
-      spillDir->getPath());
+      spillDir->getPath(),
+      runtimeStats_);
 
   auto results = readCursor(localRunner);
   EXPECT_EQ(1, results.size());

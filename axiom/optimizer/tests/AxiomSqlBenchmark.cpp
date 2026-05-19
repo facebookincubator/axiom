@@ -650,8 +650,10 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
         planAndStats.plan,
         std::move(planAndStats.finishWrite),
         queryCtx,
-        std::make_shared<runner::ConnectorSplitSourceFactory>(),
-        optimizerPool_);
+        std::make_shared<runner::ConnectorSplitSourceFactory>(runtimeStats_),
+        optimizerPool_,
+        /*baseSpillDirectory=*/"",
+        runtimeStats_);
   }
 
   /// Runs a query and returns the result as a single vector in *resultVector,
@@ -981,6 +983,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
   // Result from first run of flag value sweep.
   std::vector<RowVectorPtr> referenceResult_;
   std::set<std::string> modifiedFlags_;
+  axiom::QueryRuntimeStats runtimeStats_;
 };
 
 // Reads multi-line command from 'in' until encounters ';' followed by zero or

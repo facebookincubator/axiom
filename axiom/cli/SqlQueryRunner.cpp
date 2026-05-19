@@ -889,7 +889,7 @@ SqlQueryRunner::executeSelectOrInsert(
 
   auto queryCtx = newQuery(options);
   auto planAndStats = optimize(logicalPlan, queryCtx, options);
-  return makeLocalRunner(planAndStats, queryCtx, options);
+  return makeLocalRunner(planAndStats, queryCtx, options, noopRuntimeStats_);
 }
 
 namespace {
@@ -920,7 +920,8 @@ std::string SqlQueryRunner::runExplainAnalyze(
   auto planAndStats = optimize(
       logicalPlan, queryCtx, options, nullptr, nullptr, schemaResolver);
 
-  auto runner = makeLocalRunner(planAndStats, queryCtx, options);
+  auto runner =
+      makeLocalRunner(planAndStats, queryCtx, options, noopRuntimeStats_);
   SCOPE_EXIT {
     waitForCompletion(runner, options.timeoutMicros);
   };
@@ -1025,7 +1026,7 @@ std::shared_ptr<runner::LocalRunner> SqlQueryRunner::makeLocalRunner(
     optimizer::PlanAndStats& planAndStats,
     const std::shared_ptr<velox::core::QueryCtx>& queryCtx,
     const RunOptions& options,
-    std::shared_ptr<QueryRuntimeStats> runtimeStats) {
+    QueryRuntimeStats& runtimeStats) {
   return std::make_shared<runner::LocalRunner>(
       planAndStats.plan,
       std::move(planAndStats.finishWrite),
@@ -1115,7 +1116,11 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runLogicalPlan(
 
   planString = planAndStats.toString();
 
-  auto runner = makeLocalRunner(planAndStats, queryCtx, options, runtimeStats);
+  auto runner = makeLocalRunner(
+      planAndStats,
+      queryCtx,
+      options,
+      runtimeStats ? *runtimeStats : noopRuntimeStats_);
   SCOPE_EXIT {
     waitForCompletion(runner, options.timeoutMicros);
   };

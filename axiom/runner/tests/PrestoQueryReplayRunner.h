@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "velox/connectors/Connector.h"
 #include "velox/core/QueryCtx.h"
@@ -90,6 +91,7 @@ class PrestoQueryReplayRunner {
   const std::unordered_map<std::string, std::string> config_;
   const std::unordered_map<std::string, std::string> hiveConfig_;
   std::unique_ptr<folly::CPUThreadPoolExecutor> executor_;
+  QueryRuntimeStats runtimeStats_;
 };
 
 } // namespace facebook::axiom::runner

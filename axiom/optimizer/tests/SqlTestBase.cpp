@@ -144,12 +144,15 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunner(
   auto best = optimization.bestPlan();
   auto planAndStats = optimization.toVeloxPlan(best->op);
 
+  static QueryRuntimeStats noopStats;
   return std::make_shared<runner::LocalRunner>(
       planAndStats.plan,
       std::move(planAndStats.finishWrite),
       queryCtx,
-      std::make_shared<runner::ConnectorSplitSourceFactory>(),
-      optimizerPool);
+      std::make_shared<runner::ConnectorSplitSourceFactory>(noopStats),
+      optimizerPool,
+      /*baseSpillDirectory=*/"",
+      noopStats);
 }
 
 void SqlTestBase::runSetupStatement(

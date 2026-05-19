@@ -80,6 +80,7 @@ class LocalRunner : public Runner {
  private:
   std::shared_ptr<::facebook::velox::memory::MemoryPool> aggregatePool_;
   std::shared_ptr<::facebook::velox::memory::MemoryPool> leafPool_;
+  ::facebook::axiom::QueryRuntimeStats runtimeStats_;
 };
 
 std::vector<velox::RowVectorPtr> LocalRunner::execute(
@@ -94,10 +95,17 @@ std::vector<velox::RowVectorPtr> LocalRunner::execute(
       aggregatePool_);
 
   auto splitSourceFactory =
-      std::make_shared<facebook::axiom::runner::ConnectorSplitSourceFactory>();
+      std::make_shared<facebook::axiom::runner::ConnectorSplitSourceFactory>(
+          runtimeStats_);
 
   auto runner = std::make_shared<facebook::axiom::runner::LocalRunner>(
-      plan_, std::move(finishWrite_), queryCtx, splitSourceFactory, leafPool_);
+      plan_,
+      std::move(finishWrite_),
+      queryCtx,
+      splitSourceFactory,
+      leafPool_,
+      /*baseSpillDirectory=*/"",
+      runtimeStats_);
   try {
     while (auto rows = runner->next()) {
       results.push_back(rows);

@@ -319,7 +319,8 @@ FilteredTableStats estimateStatsFromPartitionStats(
 std::shared_ptr<SplitSource> LocalHiveSplitManager::getSplitSource(
     const ConnectorSessionPtr& /*session*/,
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
-    const std::vector<PartitionHandlePtr>& /*partitions*/) {
+    const std::vector<PartitionHandlePtr>& /*partitions*/,
+    QueryRuntimeStats& /*runtimeStats*/) {
   // Since there are only unpartitioned tables now, always makes a SplitSource
   // that goes over all the files in the handle's layout.
   auto metadata = ConnectorMetadataRegistry::get(tableHandle->connectorId());

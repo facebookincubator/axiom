@@ -144,8 +144,10 @@ TestResult QueryTestBase::runFragmentedPlan(
       planAndStats.plan,
       std::move(planAndStats.finishWrite),
       getQueryCtx(),
-      std::make_shared<runner::ConnectorSplitSourceFactory>(),
-      optimizerPool_);
+      std::make_shared<runner::ConnectorSplitSourceFactory>(runtimeStats_),
+      optimizerPool_,
+      /*baseSpillDirectory=*/"",
+      runtimeStats_);
 
   SCOPE_EXIT {
     waitForCompletion(runner);

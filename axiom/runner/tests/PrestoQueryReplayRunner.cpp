@@ -398,7 +398,10 @@ PrestoQueryReplayRunner::run(
       std::move(multiFragmentPlan),
       optimizer::FinishWrite{},
       makeQueryCtx(queryId, queryRootPool),
-      std::make_shared<runner::SimpleSplitSourceFactory>(nodeSplitMap));
+      std::make_shared<runner::SimpleSplitSourceFactory>(nodeSplitMap),
+      /*outputPool=*/nullptr,
+      /*baseSpillDirectory=*/"",
+      runtimeStats_);
 
   std::vector<velox::RowVectorPtr> result;
   try {

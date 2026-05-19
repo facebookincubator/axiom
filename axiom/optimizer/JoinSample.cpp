@@ -154,10 +154,15 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
   auto& optimization = queryCtx()->optimization();
   auto plan = optimization->toVelox().toVeloxPlan(
       filter, MultiFragmentPlan::Options::singleNode());
+  static QueryRuntimeStats noopStats;
   return std::make_shared<runner::LocalRunner>(
       std::move(plan.plan),
       std::move(plan.finishWrite),
-      sampleQueryCtx(*optimization->veloxQueryCtx()));
+      sampleQueryCtx(*optimization->veloxQueryCtx()),
+      std::make_shared<runner::ConnectorSplitSourceFactory>(noopStats),
+      /*outputPool=*/nullptr,
+      /*baseSpillDirectory=*/"",
+      noopStats);
 }
 
 // Maps hash value to number of times it appears in a table.
