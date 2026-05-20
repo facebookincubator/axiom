@@ -1095,7 +1095,13 @@ class RelationPlanner : public AstVisitor {
       return;
     }
 
-    builder_->offset(std::atol(offset->offset().c_str()));
+    // OFFSET 0 is a no-op. Skip creating a LimitNode.
+    auto numOffsetRows = std::atol(offset->offset().c_str());
+    if (numOffsetRows == 0) {
+      return;
+    }
+
+    builder_->offset(numOffsetRows);
   }
 
   void addLimit(const std::optional<std::string>& limit) {
