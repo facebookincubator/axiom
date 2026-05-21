@@ -1390,6 +1390,12 @@ TEST_F(PrestoParserTest, outputNames) {
   // Duplicate output column names are preserved as-is (not deduplicated to
   // x, x_0).
   test("SELECT a as x, b as x FROM (VALUES (1, 2)) AS t(a, b)", {"x", "x"});
+
+  // SELECT * over a subquery with duplicate output aliases preserves the
+  // duplicate aliases.
+  test(
+      "SELECT * FROM (SELECT a as x, b as x FROM (VALUES (1, 2)) AS t(a, b))",
+      {"x", "x"});
 }
 
 // Explicit SELECT aliases preserve the user's original case in the output
@@ -1496,6 +1502,19 @@ TEST_F(PrestoParserTest, outputNamesPreserveAliasCase) {
       outputNames(
           "SELECT * FROM ((SELECT 1 AS FooBar) UNION ALL (SELECT 2 AS Bar)) u"),
       testing::ElementsAre("FooBar"));
+}
+
+TEST_F(PrestoParserTest, renameToAliasMatchingInnerColumnName) {
+  // A SELECT-list rename must be honored even when the alias coincides
+  // with a column name appearing in an inner subquery.
+  EXPECT_THAT(
+      parseSelect(
+          "WITH src AS (SELECT 1 AS x_2024),"
+          "     renamed AS (SELECT x_2024 AS x FROM src) "
+          "SELECT x FROM renamed")
+          ->outputType()
+          ->names(),
+      testing::ElementsAre("x"));
 }
 
 TEST_F(PrestoParserTest, qualifiedStarInUnionAfterJoin) {

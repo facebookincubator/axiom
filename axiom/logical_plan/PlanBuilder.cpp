@@ -625,9 +625,18 @@ void PlanBuilder::resolveProjections(
       const auto& id = expr->as<InputReferenceExpr>()->name();
       if (seenColumnIds.emplace(id).second) {
         outputNames.push_back(id);
-        for (const auto& name : outputMapping_->reverseLookup(id)) {
-          nameTracker.add(name, outputNames.back());
+        if (alias.has_value()) {
+          // An explicit alias overrides any name the source exposed for
+          // this column.
+          nameTracker.add(alias.value(), outputNames.back());
+        } else {
+          for (const auto& name : outputMapping_->reverseLookup(id)) {
+            nameTracker.add(name, outputNames.back());
+          }
         }
+        // TODO: An explicit alias on an identity projection does not
+        // override the source's userName, so the pre-alias name may
+        // surface in the output schema.
         mappings.copyUserName(id, *outputMapping_);
       } else {
         outputNames.push_back(newName(id));
