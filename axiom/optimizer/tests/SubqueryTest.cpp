@@ -114,7 +114,7 @@ TEST_F(SubqueryTest, uncorrelatedScalar) {
                                .hiveScan("region", test::gt("r_name", "ASIA"))
                                .build(),
                            velox::core::JoinType::kAnti,
-                           /*nullAware=*/true)
+                           {.nullAware = true})
                        .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -462,7 +462,7 @@ TEST_F(SubqueryTest, uncorrelatedProject) {
                                .hiveScan("region", test::gt("r_name", "ASIA"))
                                .build(),
                            velox::core::JoinType::kLeftSemiProject,
-                           true)
+                           {.nullAware = true})
                        .project()
                        .build();
 
@@ -486,7 +486,7 @@ TEST_F(SubqueryTest, uncorrelatedProject) {
                                .hiveScan("region", test::gt("r_name", "ASIA"))
                                .build(),
                            velox::core::JoinType::kLeftSemiProject,
-                           true)
+                           {.nullAware = true})
                        .project()
                        .build();
 
@@ -575,7 +575,7 @@ TEST_F(SubqueryTest, correlatedIn) {
                        .hashJoin(
                            matchHiveScan("customer").build(),
                            core::JoinType::kRightSemiProject,
-                           /*nullAware=*/true)
+                           {.nullAware = true})
                        .filter()
                        .project()
                        .build();
@@ -608,7 +608,7 @@ TEST_F(SubqueryTest, correlatedIn) {
                         matchScan("t").build(), core::JoinType::kLeftSemiFilter)
                     .build(),
                 core::JoinType::kLeftSemiProject,
-                /*nullAware=*/true)
+                {.nullAware = true})
             .project()
             .build();
 
@@ -915,7 +915,7 @@ TEST_F(SubqueryTest, correlatedProject) {
             .hashJoin(
                 core::PlanMatcherBuilder().hiveScan("region", {}).build(),
                 velox::core::JoinType::kLeftSemiProject,
-                false)
+                {.nullAware = false})
             .project()
             .build();
 
@@ -938,7 +938,7 @@ TEST_F(SubqueryTest, correlatedProject) {
             .hashJoin(
                 core::PlanMatcherBuilder().hiveScan("region", {}).build(),
                 velox::core::JoinType::kLeftSemiProject,
-                true)
+                {.nullAware = true})
             .project()
             .build();
 
@@ -961,7 +961,7 @@ TEST_F(SubqueryTest, correlatedProject) {
             .hashJoin(
                 core::PlanMatcherBuilder().hiveScan("region", {}).build(),
                 velox::core::JoinType::kLeftSemiProject,
-                true)
+                {.nullAware = true})
             .project()
             .build();
 
@@ -1024,7 +1024,8 @@ TEST_F(SubqueryTest, correlatedNotExists) {
         matchHiveScan("nation")
             .hashJoin(
                 core::PlanMatcherBuilder().hiveScan("region", {}).build(),
-                velox::core::JoinType::kAnti)
+                velox::core::JoinType::kAnti,
+                {.nullAware = false})
             .build();
 
     SCOPED_TRACE(query);
@@ -1067,7 +1068,7 @@ TEST_F(SubqueryTest, correlatedNotExists) {
             .hashJoin(
                 core::PlanMatcherBuilder().hiveScan("region", {}).build(),
                 velox::core::JoinType::kLeftSemiProject,
-                false)
+                {.nullAware = false})
             .project()
             .build();
 
@@ -1655,7 +1656,7 @@ TEST_F(SubqueryTest, correlatedExistsThenUncorrelatedIn) {
                      .hashJoin(
                          matchHiveScan("region").build(),
                          velox::core::JoinType::kRightSemiProject,
-                         /*nullAware=*/true)
+                         {.nullAware = true})
                      .nestedLoopJoin(
                          matchHiveScan("nation").build(),
                          velox::core::JoinType::kLeftSemiProject)
@@ -1800,7 +1801,7 @@ TEST_F(SubqueryTest, innerJoinOnSubquery) {
             .hashJoin(
                 matchHiveScan("nation").build(),
                 velox::core::JoinType::kRightSemiProject,
-                /*nullAware=*/true)
+                {.nullAware = true})
             .filter()
             .hashJoin(
                 matchHiveScan("region").build(), velox::core::JoinType::kInner)
@@ -1841,7 +1842,8 @@ TEST_F(SubqueryTest, innerJoinOnSubquery) {
         matchHiveScan("supplier")
             .hashJoin(
                 matchHiveScan("nation").build(),
-                velox::core::JoinType::kRightSemiProject)
+                velox::core::JoinType::kRightSemiProject,
+                {.nullAware = false})
             .filter()
             .hashJoin(
                 matchHiveScan("region").build(), velox::core::JoinType::kInner)
@@ -1964,7 +1966,7 @@ TEST_F(SubqueryTest, leftJoinOnSubquery) {
                                .hashJoin(
                                    matchHiveScan("region").build(),
                                    core::JoinType::kRightSemiProject,
-                                   /*nullAware=*/true)
+                                   {.nullAware = true})
                                .filter()
                                .project()
                                .build(),
@@ -2029,7 +2031,8 @@ TEST_F(SubqueryTest, leftJoinOnSubquery) {
                            matchHiveScan("supplier")
                                .hashJoin(
                                    matchHiveScan("region").build(),
-                                   core::JoinType::kRightSemiProject)
+                                   core::JoinType::kRightSemiProject,
+                                   {.nullAware = false})
                                .filter()
                                .project()
                                .build(),
@@ -2184,7 +2187,7 @@ TEST_F(SubqueryTest, inSubqueryInsideAggregate) {
     return matchHiveScan("nation").hashJoin(
         matchHiveScan("region").build(),
         core::JoinType::kLeftSemiProject,
-        /*nullAware=*/true);
+        {.nullAware = true});
   };
 
   // IN <subquery> inside an aggregate expression.
@@ -2230,12 +2233,12 @@ TEST_F(SubqueryTest, nestedInSubqueries) {
                      .hashJoin(
                          matchHiveScan("region").build(),
                          velox::core::JoinType::kLeftSemiProject,
-                         /*nullAware=*/true)
+                         {.nullAware = true})
                      .project()
                      .hashJoin(
                          matchValues().project().build(),
                          velox::core::JoinType::kLeftSemiProject,
-                         /*nullAware=*/true)
+                         {.nullAware = true})
                      .project()
                      .build();
 
@@ -2304,10 +2307,13 @@ TEST_F(SubqueryTest, inSubqueryWithCorrelatedNotExists) {
                      .hashJoin(
                          matchScan("v").build(),
                          core::JoinType::kLeftSemiProject,
-                         /*nullAware=*/true)
+                         {.nullAware = true})
                      .project()
                      .hashJoin(matchScan("t").build(), core::JoinType::kInner)
-                     .hashJoin(matchScan("v").build(), core::JoinType::kAnti)
+                     .hashJoin(
+                         matchScan("v").build(),
+                         core::JoinType::kAnti,
+                         {.nullAware = false})
                      .build();
 
   auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
@@ -2340,7 +2346,7 @@ TEST_F(SubqueryTest, inReplicateNullsAndAny) {
                                .shuffle({"c"}, /*replicateNullsAndAny=*/true)
                                .build(),
                            velox::core::JoinType::kAnti,
-                           /*nullAware=*/true)
+                           {.nullAware = true})
                        .gather()
                        .build();
 
@@ -2362,7 +2368,7 @@ TEST_F(SubqueryTest, inReplicateNullsAndAny) {
                                .shuffle({"c"}, /*replicateNullsAndAny=*/true)
                                .build(),
                            velox::core::JoinType::kLeftSemiProject,
-                           /*nullAware=*/true)
+                           {.nullAware = true})
                        .project()
                        .gather()
                        .build();
@@ -2381,7 +2387,7 @@ TEST_F(SubqueryTest, inReplicateNullsAndAny) {
                        .hashJoin(
                            matchScan("u").shuffle({"c"}).build(),
                            velox::core::JoinType::kRightSemiProject,
-                           /*nullAware=*/true)
+                           {.nullAware = true})
                        .project()
                        .gather()
                        .build();

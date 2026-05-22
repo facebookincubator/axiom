@@ -295,37 +295,14 @@ class PlanMatcherBuilder {
       const std::shared_ptr<PlanMatcher>& rightMatcher);
 
   /// Matches a HashJoin node with the specified right side matcher, join type,
-  /// and nullAware flag.
+  /// and optional details. Supports symbol rewriting from child matchers.
   /// @param rightMatcher Matcher for the right (build) side of the join.
-  /// @param joinType Type of join (e.g., kInner, kLeft, kRight).
-  /// @param nullAware When true, the join semantic is IN / NOT IN. When false,
-  /// the join semantic is EXISTS / NOT EXISTS. Applies only to semi project
-  /// and anti joins.
-  PlanMatcherBuilder& hashJoin(
-      const std::shared_ptr<PlanMatcher>& rightMatcher,
-      JoinType joinType,
-      bool nullAware = false);
-
-  /// Matches a HashJoin node with the specified right side matcher, join type,
-  /// and details.
-  /// @param rightMatcher Matcher for the right side of the join.
   /// @param joinType Type of join.
   /// @param details Join details. See HashJoinDetails.
   PlanMatcherBuilder& hashJoin(
       const std::shared_ptr<PlanMatcher>& rightMatcher,
       JoinType joinType,
-      const HashJoinDetails& details);
-
-  /// Matches a HashJoin node with the specified right side matcher, join type,
-  /// and expected output column names. Column names are verified as a set —
-  /// order does not matter. Supports symbol rewriting from child matchers.
-  /// @param rightMatcher Matcher for the right (build) side of the join.
-  /// @param joinType Type of join (e.g., kInner, kLeft, kRight).
-  /// @param outputColumnNames Expected column names in the join output.
-  PlanMatcherBuilder& hashJoin(
-      const std::shared_ptr<PlanMatcher>& rightMatcher,
-      JoinType joinType,
-      const std::vector<std::string>& outputColumnNames);
+      const HashJoinDetails& details = {});
 
   /// Matches a NestedLoopJoin node with the specified right side matcher and
   /// join type.

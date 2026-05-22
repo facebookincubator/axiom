@@ -1378,7 +1378,9 @@ TEST_F(JoinTest, leftJoinNoEqualitiesMultipleTables) {
       matchScan("nation")
           .hashJoin(matchScan("region").build(), core::JoinType::kInner)
           .hashJoin(
-              matchScan("customer").build(), core::JoinType::kLeftSemiProject)
+              matchScan("customer").build(),
+              core::JoinType::kLeftSemiProject,
+              {.nullAware = false})
           .project()
           .nestedLoopJoin(matchScan("supplier").build(), core::JoinType::kLeft)
           .build();
