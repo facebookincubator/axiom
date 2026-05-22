@@ -279,6 +279,41 @@ execution.session_timezone*| UTC*|*| STRING*| * (glob)
 
 ```
 
+## Presto function-package session property: array_agg.ignore_nulls
+
+```scrut
+$ $CLI --query "SHOW SESSION LIKE '%presto%';
+> SELECT array_agg(x) AS a FROM unnest(array[1,2,null]) _(x);
+> SET SESSION presto.array_agg.ignore_nulls = 'false';
+> SHOW SESSION LIKE '%presto%';
+> SELECT array_agg(x) AS a FROM unnest(array[1,2,null]) _(x)" 2>/dev/null
+*-+-*-+-*-+-* (glob)
+Name*| Value*| Default*| Type*| Description (glob)
+*-+-*-+-*-+-* (glob)
+presto.array_agg.ignore_nulls*| true*| false*| BOOLEAN*| * (glob)
+(1 rows in 1 batches)
+
+------
+     a
+------
+[1, 2]
+(1 rows in 1 batches)
+
+Session 'presto.array_agg.ignore_nulls' set to 'false'
+*-+-*-+-*-+-* (glob)
+Name*| Value*| Default*| Type*| Description (glob)
+*-+-*-+-*-+-* (glob)
+presto.array_agg.ignore_nulls*| false*| false*| BOOLEAN*| * (glob)
+(1 rows in 1 batches)
+
+------------
+           a
+------------
+[1, 2, null]
+(1 rows in 1 batches)
+
+```
+
 ## Error message for non-existent table
 
 ```scrut

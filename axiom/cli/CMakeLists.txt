@@ -28,6 +28,7 @@ add_library(
 target_link_libraries(
   axiom_cli
   velox_connector_registry
+  velox_presto_query_config
   velox_query_config_provider
   axiom_runner_local_runner
   axiom_optimizer_multifragment_plan
