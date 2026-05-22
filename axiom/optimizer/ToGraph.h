@@ -597,7 +597,17 @@ class ToGraph {
   // 'applyContext_.lifted.projections' (via 'splitCorrelatedProjection' for the
   // mixed-reference variant), and 'dt' is not extended with the unsplit
   // form (which would violate DerivedTable::checkConsistency).
-  void addDtColumn(DerivedTableP dt, std::string_view name);
+  //
+  // When 'propagateAlias' is true and the expression is a Column from a
+  // different relation with a non-null alias, the new wrapper Column
+  // inherits that alias so its outputName() matches the source. Same-DT
+  // columns are not affected (their requested 'name' is preserved as the
+  // wrapper's alias). Pass false at the top-level DT to preserve the
+  // makeQueryGraph name-preservation contract.
+  void addDtColumn(
+      DerivedTableP dt,
+      std::string_view name,
+      bool propagateAlias = true);
 
   // Splits a subquery projection expression that references both 'dt's
   // own tables and tables from an enclosing scope. Local-only maximal
@@ -610,11 +620,12 @@ class ToGraph {
   ExprCP splitCorrelatedProjection(ExprCP expr, DerivedTableP dt);
 
   // Populates 'dt' with one column per ordinal in usedChannels(node),
-  // named via node.outputType().nameOf(ordinal). Establishes the
-  // makeQueryGraph name-preservation contract; ordering is unspecified.
+  // named via node.outputType().nameOf(ordinal); ordering is unspecified.
+  // See addDtColumn for 'propagateAlias'.
   void setDtUsedOutput(
       DerivedTableP dt,
-      const logical_plan::LogicalPlanNode& node);
+      const logical_plan::LogicalPlanNode& node,
+      bool propagateAlias = true);
 
   DerivedTableP newDt();
 

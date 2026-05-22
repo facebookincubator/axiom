@@ -1140,7 +1140,6 @@ TEST_F(UnnestTest, join) {
                        .values()
                        .project()
                        .unnest()
-                       .project()
                        .hashJoin(
                            core::PlanMatcherBuilder{}
                                .values()
@@ -1148,6 +1147,7 @@ TEST_F(UnnestTest, join) {
                                .unnest()
                                .project()
                                .build())
+                       .project()
                        .build();
     ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
     ASSERT_EQ(plan->outputType()->names(), expectedNames);

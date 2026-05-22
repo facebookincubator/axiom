@@ -518,8 +518,6 @@ TEST_F(JoinTest, crossThenLeft) {
   auto matcher =
       matchValues()
           .aggregation()
-          // TODO Remove redundant projection.
-          .project()
           .hashJoin(
               matchScan("u").nestedLoopJoin(matchScan("t").build()).build(),
               velox::core::JoinType::kRight)
@@ -586,13 +584,7 @@ TEST_F(JoinTest, filterPushdownThroughCrossJoinUnnest) {
         "SELECT * FROM (VALUES row(row(1, 2))) as t(x), UNNEST(array[1,2,3]) WHERE x.field0 > 0";
     SCOPED_TRACE(query);
 
-    auto matcher = matchValues()
-                       .filter()
-                       // TODO Combine 2 projects into one.
-                       .project()
-                       .project()
-                       .unnest()
-                       .build();
+    auto matcher = matchValues().filter().project().unnest().project().build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);

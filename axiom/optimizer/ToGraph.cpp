@@ -222,7 +222,10 @@ DerivedTableScopeUse classifyScope(ExprCP expr, DerivedTableP dt) {
 }
 } // namespace
 
-void ToGraph::addDtColumn(DerivedTableP dt, std::string_view name) {
+void ToGraph::addDtColumn(
+    DerivedTableP dt,
+    std::string_view name,
+    bool propagateAlias) {
   const auto* expr = translateColumn(name);
 
   const auto scope = classifyScope(expr, dt);
@@ -246,7 +249,13 @@ void ToGraph::addDtColumn(DerivedTableP dt, std::string_view name) {
     dtColumn = expr->as<Column>();
   } else {
     const auto* columnName = toName(name);
-    dtColumn = make<Column>(columnName, dt, expr->value(), columnName);
+    Name alias = columnName;
+    if (propagateAlias && expr->isColumn() &&
+        expr->as<Column>()->relation() != dt &&
+        expr->as<Column>()->alias() != nullptr) {
+      alias = expr->as<Column>()->alias();
+    }
+    dtColumn = make<Column>(columnName, dt, expr->value(), alias);
   }
 
   dt->exprs.push_back(expr);
@@ -520,10 +529,11 @@ lp::ValuesNodePtr tryFoldConstantDt(
 
 void ToGraph::setDtUsedOutput(
     DerivedTableP dt,
-    const lp::LogicalPlanNode& node) {
+    const lp::LogicalPlanNode& node,
+    bool propagateAlias) {
   const auto& type = *node.outputType();
   for (auto i : usedChannels(node)) {
-    addDtColumn(dt, type.nameOf(i));
+    addDtColumn(dt, type.nameOf(i), propagateAlias);
   }
   dt->outputColumns = dt->columns;
 }
@@ -4594,7 +4604,7 @@ DerivedTableP ToGraph::makeQueryGraph(const lp::LogicalPlanNode& logicalPlan) {
   const auto& planRoot = *result.planRoot;
   currentDt_ = newDt();
   makeQueryGraph(planRoot, kAllAllowedInDt, /*orderObservedAbove=*/true);
-  setDtUsedOutput(currentDt_, planRoot);
+  setDtUsedOutput(currentDt_, planRoot, /*propagateAlias=*/false);
 
   // TODO Try constant fold the dt.
 
