@@ -462,7 +462,6 @@ TEST_F(SetTest, exceptAll) {
   auto matchBuild = [](auto filters) {
     return core::PlanMatcherBuilder()
         .hiveScan("nation", std::move(filters))
-        .project()
         .build();
   };
 
@@ -501,7 +500,6 @@ TEST_F(SetTest, exceptAll) {
   auto matchPartitionedBuild = [](auto filters) {
     return core::PlanMatcherBuilder()
         .hiveScan("nation", std::move(filters))
-        .project()
         .shuffle()
         .build();
   };
@@ -541,7 +539,7 @@ TEST_F(SetTest, intersectAll) {
       kTestConnectorId);
 
   auto matchBuild = [](const std::string& table) {
-    return matchScan(table).project().build();
+    return matchScan(table).build();
   };
   {
     // Single-driver: counting left semi filter joins, no aggregation.
@@ -569,7 +567,7 @@ TEST_F(SetTest, intersectAll) {
   }
 
   auto matchPartitionedBuild = [](const std::string& table) {
-    return matchScan(table).project().shuffle().build();
+    return matchScan(table).shuffle().build();
   };
 
   {
