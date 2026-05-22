@@ -1316,25 +1316,36 @@ using WindowFunctionCP = const WindowFunction*;
 using WindowFunctionVector = QGVector<WindowFunctionCP>;
 
 /// Stores the GROUP BY keys, aggregate functions, and output columns for a
-/// DerivedTable. Output columns are 1:1 with grouping keys followed by
-/// aggregates: columns_[i] corresponds to groupingKeys_[i] for
-/// i < groupingKeys_.size(), and to aggregates_[i - groupingKeys_.size()]
-/// otherwise.
+/// DerivedTable. Output column layout: [groupingKeys, groupId (optional),
+/// aggregates]. columns_[i] corresponds to groupingKeys_[i] for
+/// i < groupingKeys_.size(). When groupId is present, columns_[numKeys] is
+/// the groupId column and aggregates start at numKeys + 1. Without groupId,
+/// aggregates start immediately after keys.
+/// Each grouping set is a list of indices into the grouping keys array.
+using GroupingSet = QGVector<int32_t>;
+using GroupingSets = QGVector<GroupingSet>;
+
 class AggregationPlan : public PlanObject {
  public:
+  /// @param groupingKeys GROUP BY columns referencing the enclosing
+  ///   DerivedTable's tableSet. When grouping sets are present, these are
+  ///   new columns with auto-generated names (no alias).
+  /// @param aggregates Aggregate functions (sum, count, etc.).
+  /// @param columns Output columns: groupingKeys[i] maps to columns[i],
+  ///   followed by groupId (if present), then aggregate result columns.
+  /// @param intermediateColumns Columns with intermediate accumulator types for
+  ///   partial aggregation. Same layout as columns.
+  /// @param groupingSets Grouping sets for ROLLUP/CUBE/GROUPING SETS. Each set
+  ///   is a list of indices into groupingKeys. Empty for regular GROUP BY.
+  /// @param groupId Output column for the grouping set ID. Null when
+  ///   grouping sets are not used.
   AggregationPlan(
       ExprVector groupingKeys,
       AggregateVector aggregates,
       ColumnVector columns,
-      ColumnVector intermediateColumns)
-      : PlanObject(PlanType::kAggregationNode),
-        groupingKeys_(std::move(groupingKeys)),
-        aggregates_(std::move(aggregates)),
-        columns_(std::move(columns)),
-        intermediateColumns_(std::move(intermediateColumns)) {
-    VELOX_CHECK_EQ(groupingKeys_.size() + aggregates_.size(), columns_.size());
-    VELOX_CHECK_EQ(columns_.size(), intermediateColumns_.size());
-  }
+      ColumnVector intermediateColumns,
+      GroupingSets groupingSets = {},
+      ColumnCP groupId = nullptr);
 
   /// GROUP BY columns. Each references a column from a table in the enclosing
   /// DerivedTable's tableSet or from the DerivedTable itself.
@@ -1348,9 +1359,7 @@ class AggregationPlan : public PlanObject {
     return aggregates_;
   }
 
-  /// Output columns produced by this aggregation. The first
-  /// groupingKeys_.size() entries correspond to grouping keys; the rest
-  /// correspond to aggregate results.
+  /// Output columns: [groupingKeys, groupId (if present), aggregates].
   const ColumnVector& columns() const {
     return columns_;
   }
@@ -1367,11 +1376,33 @@ class AggregationPlan : public PlanObject {
   /// reference 'dt'.
   void checkConsistency(const DerivedTable& dt) const;
 
+  /// Returns true if this aggregation uses grouping sets (ROLLUP/CUBE/GROUPING
+  /// SETS).
+  bool hasGroupingSets() const {
+    return !groupingSets_.empty();
+  }
+
+  /// Grouping sets for ROLLUP/CUBE/GROUPING SETS. Empty for regular GROUP BY.
+  const GroupingSets& groupingSets() const {
+    return groupingSets_;
+  }
+
+  /// Returns the column for the grouping set ID, or nullptr if no grouping
+  /// sets.
+  ColumnCP groupId() const {
+    return groupId_;
+  }
+
+  /// Returns indices of global (empty) grouping sets within groupingSets().
+  QGVector<int32_t> globalGroupingSets() const;
+
  private:
   const ExprVector groupingKeys_;
   const AggregateVector aggregates_;
   const ColumnVector columns_;
   const ColumnVector intermediateColumns_;
+  const GroupingSets groupingSets_;
+  const ColumnCP groupId_;
 };
 
 using AggregationPlanCP = const AggregationPlan*;

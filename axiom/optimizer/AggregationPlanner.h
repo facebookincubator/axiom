@@ -66,7 +66,9 @@ class AggregationPlanner {
       const ExprVector& groupingKeys,
       const AggregateVector& aggregates,
       const ColumnVector& intermediateColumns,
-      const ColumnVector& outputColumns) const;
+      const ColumnVector& outputColumns,
+      QGVector<int32_t> globalGroupingSets = {},
+      ColumnCP groupId = nullptr) const;
 
   // Creates a single-phase aggregation plan following repartitioning by
   // groupingKeys.
@@ -75,7 +77,9 @@ class AggregationPlanner {
       const ExprVector& groupingKeys,
       const AggregateVector& aggregates,
       const ColumnVector& intermediateColumns,
-      const ColumnVector& outputColumns) const;
+      const ColumnVector& outputColumns,
+      QGVector<int32_t> globalGroupingSets = {},
+      ColumnCP groupId = nullptr) const;
 
   // Chooses between split and single aggregation plans based on cost.
   std::pair<RelationOpPtr, PlanCost> makeSplitOrSingleAggregationPlan(
@@ -83,7 +87,9 @@ class AggregationPlanner {
       const ExprVector& groupingKeys,
       const AggregateVector& aggregates,
       const ColumnVector& intermediateColumns,
-      const ColumnVector& outputColumns) const;
+      const ColumnVector& outputColumns,
+      QGVector<int32_t> globalGroupingSets = {},
+      ColumnCP groupId = nullptr) const;
 
   // Transforms distinct aggregation into a two-level GROUP BY + non-distinct
   // aggregation plan.
@@ -102,6 +108,17 @@ class AggregationPlanner {
       const ExprVector& groupingKeys,
       const AggregateVector& aggregates,
       AggregationPlanCP aggPlan,
+      bool hasOrderBy) const;
+
+  // Handles aggregation with grouping sets (ROLLUP, CUBE, GROUPING SETS).
+  // Creates a GroupId node followed by cost-based split or single aggregation.
+  void addGroupingSetsAggregation(
+      AggregationPlanCP aggPlan,
+      RelationOpPtr& plan,
+      const ExprVector& groupingKeys,
+      const AggregateVector& aggregates,
+      PlanState& state,
+      bool useSingleStep,
       bool hasOrderBy) const;
 
   bool isSingleWorker_;

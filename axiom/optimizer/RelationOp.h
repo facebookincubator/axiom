@@ -126,6 +126,7 @@ enum class RelType {
   kRowNumber,
   kTopNRowNumber,
   kMarkDistinct,
+  kGroupId,
 };
 
 AXIOM_DECLARE_ENUM_NAME(RelType)
@@ -631,14 +632,19 @@ struct Aggregation : public RelationOp {
   ///   (columns[groupingKeys.size()..]).
   /// @param step Aggregation step (partial, final, single, intermediate).
   /// @param columns Output columns: groupingKeys followed by aggregate result
-  ///   columns. Must have size == groupingKeys.size() + aggregates.size().
+  ///   columns. Size includes groupId when present.
+  /// @param globalGroupingSets Indices of global (empty) grouping sets, if any.
+  /// @param groupId The group ID column from upstream GroupId, if any.
+  ///   When set, must appear in groupingKeys.
   Aggregation(
       RelationOpPtr input,
       ExprVector groupingKeys,
       ExprVector preGroupedKeys,
       AggregateVector aggregates,
       velox::core::AggregationNode::Step step,
-      ColumnVector columns);
+      ColumnVector columns,
+      QGVector<int32_t> globalGroupingSets = {},
+      ColumnCP groupId = nullptr);
 
   const ExprVector groupingKeys;
   const AggregateVector aggregates;
@@ -648,6 +654,17 @@ struct Aggregation : public RelationOp {
   /// that matches the input's clusterKeys. When non-empty, the aggregation
   /// can be executed in streaming manner without building a hash table.
   const ExprVector preGroupedKeys;
+
+  /// Indices of global grouping sets (empty sets) within the grouping sets
+  /// array. Non-empty only for aggregations over GROUPING SETS/ROLLUP/CUBE
+  /// that contain a global (no-key) set. Used to generate a default output row
+  /// for empty inputs.
+  const QGVector<int32_t> globalGroupingSets;
+
+  /// The group ID column from the upstream GroupId operator, if present.
+  /// Must appear in groupingKeys when set. Carries grouping set info to
+  /// ToVelox for Velox AggregationNode construction.
+  const ColumnCP groupId{nullptr};
 
   /// Returns true if the aggregation is pre-grouped (streaming).
   bool isPreGrouped() const {
@@ -956,4 +973,60 @@ struct MarkDistinct : public RelationOp {
 
 using MarkDistinctCP = const MarkDistinct*;
 
+/// Duplicates each input row once per grouping set. For each copy, grouping key
+/// columns not participating in that set are set to NULL, and a grouping set ID
+/// column is appended. Used to implement GROUPING SETS, ROLLUP, and CUBE.
+///
+/// Output columns: [groupingKeyColumns..., aggregation inputs..., groupId].
+struct GroupId : public RelationOp {
+  /// @param groupingKeys Original input key columns before replacement
+  ///   with auto-generated output columns. Used by ToVelox to produce correct
+  ///   input field references.
+  /// @param aggregationInputs Columns that are inputs to aggregate functions.
+  /// @param groupingSets List of grouping sets, each containing indices into
+  ///   groupingKeyColumns that are active for that set.
+  /// @param groupingKeyColumns Output columns for grouping keys with
+  ///   auto-generated names.
+  /// @param groupId The output column for the grouping set ID.
+  GroupId(
+      RelationOpPtr input,
+      ColumnVector groupingKeys,
+      ExprVector aggregationInputs,
+      GroupingSets groupingSets,
+      ColumnVector groupingKeyColumns,
+      ColumnCP groupId);
+
+  const ColumnVector& groupingKeys() const {
+    return groupingKeys_;
+  }
+
+  const ExprVector& aggregationInputs() const {
+    return aggregationInputs_;
+  }
+
+  const GroupingSets& groupingSets() const {
+    return groupingSets_;
+  }
+
+  const ColumnVector& groupingKeyColumns() const {
+    return groupingKeyColumns_;
+  }
+
+  ColumnCP groupId() const {
+    return groupId_;
+  }
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
+
+ private:
+  const ColumnVector groupingKeys_;
+  const ExprVector aggregationInputs_;
+  const GroupingSets groupingSets_;
+  const ColumnVector groupingKeyColumns_;
+  const ColumnCP groupId_;
+};
+
+using GroupIdCP = const GroupId*;
 } // namespace facebook::axiom::optimizer

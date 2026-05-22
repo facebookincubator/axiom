@@ -131,6 +131,29 @@ velox::ExceptionContext makeExceptionContext(ToGraphContext* ctx) {
   e.arg = ctx;
   return e;
 }
+
+// Remaps grouping set indices through keyIndexMap (which maps original key
+// positions to deduped positions) and deduplicates within each set.
+GroupingSets dedupAndRemapGroupingSets(
+    const std::vector<std::vector<int32_t>>& logicalGroupingSets,
+    const std::vector<int32_t>& keyIndexMap) {
+  GroupingSets result;
+  result.reserve(logicalGroupingSets.size());
+  for (const auto& set : logicalGroupingSets) {
+    GroupingSet remapped;
+    remapped.reserve(set.size());
+    folly::F14FastSet<int32_t> seen;
+    for (auto idx : set) {
+      auto mappedIdx = keyIndexMap[idx];
+      if (seen.insert(mappedIdx).second) {
+        remapped.push_back(mappedIdx);
+      }
+    }
+    result.emplace_back(std::move(remapped));
+  }
+  return result;
+}
+
 } // namespace
 
 size_t SubqueryExprHash::operator()(const lp::ExprPtr& expr) const {
@@ -1687,11 +1710,20 @@ struct AggregateDedupHasher {
 };
 } // namespace
 
+ColumnCP ToGraph::createGroupIdColumn(
+    Name name,
+    const velox::TypePtr& type,
+    size_t numGroupingSets) {
+  VELOX_CHECK_GT(numGroupingSets, 0);
+  Value value(toType(type), numGroupingSets);
+  value.nullable = false;
+  value.min = registerVariant(int64_t{0});
+  value.max = registerVariant(static_cast<int64_t>(numGroupingSets - 1));
+  return make<Column>(name, currentDt_, value, name);
+}
+
 AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
   const auto& input = *agg.onlyInput();
-
-  VELOX_USER_CHECK_EQ(
-      0, agg.groupingSets().size(), "Grouping sets are not supported yet");
 
   exprSources_.push_back(&input);
   SCOPE_EXIT {
@@ -1711,7 +1743,8 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     }
 
     for (auto channel : channels) {
-      if (channel < numGroupingKeys) {
+      if (channel < numGroupingKeys ||
+          channel >= numGroupingKeys + agg.aggregates().size()) {
         continue;
       }
 
@@ -1726,6 +1759,7 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     }
   }
 
+  const bool hasGroupingSets = !agg.groupingSets().empty();
   ColumnVector columns;
 
   ExprVector deduppedGroupingKeys;
@@ -1733,26 +1767,60 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
 
   auto newRenames = renames_;
 
-  folly::F14FastMap<ExprCP, ColumnCP> uniqueGroupingKeys;
+  // Maps each original grouping key index to its deduped index. Used to
+  // remap grouping set indices after key deduplication.
+  std::vector<int32_t> keyIndexMap(numGroupingKeys);
+  folly::F14FastMap<ExprCP, std::pair<ColumnCP, int32_t>> uniqueGroupingKeys;
   for (auto i = 0; i < numGroupingKeys; ++i) {
     auto name = toName(agg.outputType()->nameOf(i));
     auto* key = translateExpr(agg.groupingKeys()[i]);
 
     auto it = uniqueGroupingKeys.try_emplace(key).first;
-    if (it->second) {
-      newRenames[name] = it->second;
+    if (it->second.first) {
+      newRenames[name] = it->second.first;
+      keyIndexMap[i] = it->second.second;
     } else {
+      ColumnCP inputColumn;
       if (key->is(PlanType::kColumnExpr)) {
-        columns.push_back(key->as<Column>());
+        inputColumn = key->as<Column>();
       } else {
-        auto* column = make<Column>(name, currentDt_, key->value(), name);
-        columns.push_back(column);
+        inputColumn = make<Column>(name, currentDt_, key->value(), name);
       }
 
+      if (hasGroupingSets) {
+        // GroupId produces nullable output columns with auto-generated names.
+        // Replace the original key in renames so downstream references resolve
+        // to the GroupId output column instead of the original input column.
+        auto groupKeyName = newCName("gk");
+        auto* outputColumn = make<Column>(
+            groupKeyName, currentDt_, inputColumn->value(), groupKeyName);
+        columns.push_back(outputColumn);
+        newRenames[name] = outputColumn;
+      } else {
+        columns.push_back(inputColumn);
+        newRenames[name] = inputColumn;
+      }
+
+      const auto dedupedIdx = static_cast<int32_t>(deduppedGroupingKeys.size());
       deduppedGroupingKeys.emplace_back(key);
-      it->second = columns.back();
-      newRenames[name] = columns.back();
+      it->second = {columns.back(), dedupedIdx};
+      keyIndexMap[i] = dedupedIdx;
     }
+  }
+
+  ColumnCP groupId = nullptr;
+  GroupingSets queryGraphGroupingSets;
+  if (hasGroupingSets) {
+    const auto ordinal = agg.groupIdIndex().value();
+    groupId = createGroupIdColumn(
+        toName(agg.outputNames().at(ordinal)),
+        agg.outputType()->childAt(static_cast<uint32_t>(ordinal)),
+        agg.groupingSets().size());
+    newRenames[groupId->name()] = groupId;
+    columns.push_back(groupId);
+
+    queryGraphGroupingSets =
+        dedupAndRemapGroupingSets(agg.groupingSets(), keyIndexMap);
   }
 
   AggregateVector deduppedAggregates;
@@ -1772,7 +1840,8 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
   // The keys for intermediate are the same as for final.
   ColumnVector intermediateColumns = columns;
   for (auto channel : channels) {
-    if (channel < numGroupingKeys) {
+    if (channel < numGroupingKeys ||
+        channel >= numGroupingKeys + agg.aggregates().size()) {
       continue;
     }
 
@@ -1909,7 +1978,9 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       std::move(deduppedGroupingKeys),
       std::move(deduppedAggregates),
       std::move(columns),
-      std::move(intermediateColumns));
+      std::move(intermediateColumns),
+      std::move(queryGraphGroupingSets),
+      groupId);
 }
 
 void ToGraph::addOrderBy(const lp::SortNode& order) {

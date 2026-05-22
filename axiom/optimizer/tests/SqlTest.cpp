@@ -271,6 +271,7 @@ int main(int argc, char** argv) {
   registerQueryFile<"distinctAggregation">();
   registerQueryFile<"unionAll">();
   registerQueryFile<"unionAllFlatten">();
+  registerQueryFile<"groupingsets">();
 
   return RUN_ALL_TESTS();
 }
