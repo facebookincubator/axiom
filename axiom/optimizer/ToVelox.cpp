@@ -1575,6 +1575,13 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
 
   auto preGroupedKeys = toFieldRefs(op.preGroupedKeys);
 
+  std::vector<velox::vector_size_t> globalGroupingSets(
+      op.globalGroupingSets.begin(), op.globalGroupingSets.end());
+  std::optional<velox::core::FieldAccessTypedExprPtr> groupId;
+  if (op.groupId != nullptr) {
+    groupId = toFieldRef(op.groupId);
+  }
+
   return std::make_shared<velox::core::AggregationNode>(
       nextId(),
       op.step,
@@ -1582,6 +1589,8 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
       preGroupedKeys,
       aggregateNames,
       aggregates,
+      globalGroupingSets,
+      groupId,
       /*ignoreNullKeys=*/false,
       /*noGroupsSpanBatches=*/false,
       input);
@@ -2121,11 +2130,7 @@ velox::core::PlanNodePtr ToVelox::makeMarkDistinct(
     std::vector<ExecutableFragment>& stages) {
   auto input = makeFragment(op.input(), fragment, stages);
   if (options_.numDrivers > 1) {
-    // If the input is a repartition, always add a local partition after it. If
-    // the input is not a repartition, check if the input's distribution
-    // partition keys are a subset of MarkDistinct's keys. If so, rows with the
-    // same MarkDistinct keys are already co-located, so no need for an
-    // additional local partition.
+    // Add local partition unless keys are already co-located.
     bool needsLocalPartition = true;
     if (op.input()->relType() != RelType::kRepartition) {
       const auto& existingKeys = op.input()->distribution().partitionKeys();
@@ -2144,6 +2149,54 @@ velox::core::PlanNodePtr ToVelox::makeMarkDistinct(
       nextId(),
       op.marker()->outputName(),
       toFieldRefs(op.keys()),
+      std::move(input));
+
+  makePredictionAndHistory(node->id(), &op);
+  return node;
+}
+
+velox::core::PlanNodePtr ToVelox::makeGroupId(
+    const GroupId& op,
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
+  auto input = makeFragment(op.input(), fragment, stages);
+
+  std::vector<velox::core::GroupIdNode::GroupingKeyInfo> groupingKeyInfos;
+  groupingKeyInfos.reserve(op.groupingKeyColumns().size());
+  VELOX_CHECK_EQ(
+      op.groupingKeys().size(),
+      op.groupingKeyColumns().size(),
+      "groupingKeys size mismatch");
+  for (size_t i = 0; i < op.groupingKeyColumns().size(); ++i) {
+    auto outputName = op.groupingKeyColumns()[i]->outputName();
+    auto inputRef = toFieldRef(op.groupingKeys()[i]);
+    groupingKeyInfos.push_back({
+        .output = std::move(outputName),
+        .input = std::move(inputRef),
+    });
+  }
+
+  // Convert groupingSets from indices to output column names for Velox.
+  std::vector<std::vector<std::string>> groupingSets;
+  groupingSets.reserve(op.groupingSets().size());
+  for (const auto& set : op.groupingSets()) {
+    std::vector<std::string> names;
+    names.reserve(set.size());
+    for (auto keyIndex : set) {
+      VELOX_CHECK_LT(keyIndex, groupingKeyInfos.size());
+      names.emplace_back(groupingKeyInfos[keyIndex].output);
+    }
+    groupingSets.emplace_back(std::move(names));
+  }
+
+  auto aggregationInputs = toFieldRefs(op.aggregationInputs());
+
+  auto node = std::make_shared<velox::core::GroupIdNode>(
+      nextId(),
+      std::move(groupingSets),
+      std::move(groupingKeyInfos),
+      std::move(aggregationInputs),
+      op.groupId()->outputName(),
       std::move(input));
 
   makePredictionAndHistory(node->id(), &op);
@@ -2228,6 +2281,9 @@ velox::core::PlanNodePtr ToVelox::makeFragment(
       break;
     case RelType::kMarkDistinct:
       result = makeMarkDistinct(*op->as<MarkDistinct>(), fragment, stages);
+      break;
+    case RelType::kGroupId:
+      result = makeGroupId(*op->as<GroupId>(), fragment, stages);
       break;
     default:
       VELOX_FAIL(

@@ -553,6 +553,24 @@ class PlanMatcherBuilder {
       const std::vector<std::string>& distinctKeys,
       std::optional<std::string> markerAlias = std::nullopt);
 
+  /// Matches a GroupId node with the specified grouping sets, aggregation
+  /// inputs, and group ID column alias. Each grouping set is a list of output
+  /// column names for the active keys in that set.
+  /// @param groupingSets The expected grouping sets (each set is a list of
+  /// output column names).
+  /// @param aggregationInputs The expected aggregation input expressions.
+  /// @param groupIdAlias Alias for the group ID output column. The actual
+  ///   column name is captured as a symbol so downstream matchers can reference
+  ///   it by this alias.
+  /// @param keyAliases Maps input column names to test aliases for keys that
+  ///   also appear as aggregate inputs. Downstream matchers can use the alias
+  ///   to reference the auto-generated output key name.
+  PlanMatcherBuilder& groupId(
+      const std::vector<std::vector<std::string>>& groupingSets,
+      const std::vector<std::string>& aggregationInputs,
+      const std::string& groupIdAlias,
+      const std::vector<std::pair<std::string, std::string>>& keyAliases = {});
+
   /// Builds and returns the constructed PlanMatcher.
   /// @throws VeloxUserError if matcher is empty.
   std::shared_ptr<PlanMatcher> build() {

@@ -1161,11 +1161,16 @@ void DerivedTable::replaceJoinOutputs(
 
     if (newGroupingKeys != aggregation->groupingKeys() ||
         newAggregates != aggregation->aggregates()) {
+      // groupingSets: Indices into grouping keys, not column references —
+      // unaffected by input replacement.
+      // groupId: Output column, unaffected by input replacement.
       aggregation = make<AggregationPlan>(
           std::move(newGroupingKeys),
           std::move(newAggregates),
           aggregation->columns(),
-          aggregation->intermediateColumns());
+          aggregation->intermediateColumns(),
+          aggregation->groupingSets(),
+          aggregation->groupId());
     }
   }
 
@@ -2232,7 +2237,15 @@ void DerivedTable::distributeConjuncts() {
       // aggregation. Translate from names after agg to pre-agg
       // names. Pre/post agg names may differ for dts in set
       // operations. If already in pre-agg names, no-op.
-      if (having[i]->columns().isSubset(grouping)) {
+      //
+      // With GROUPING SETS, GroupId NULLs keys not in the active set,
+      // so HAVING filters on grouping keys must stay above aggregation
+      // to see the NULLed values.
+      // TODO: Push HAVING between GroupId and Aggregation instead of
+      // disabling pushdown entirely.
+      // https://github.com/facebookincubator/axiom/issues/1338
+      if (!aggregation->hasGroupingSets() &&
+          having[i]->columns().isSubset(grouping)) {
         conjuncts.push_back(
             DerivedTableFlattener::replaceInputs(
                 having[i],

@@ -57,6 +57,7 @@ const auto& relTypeNames() {
       {RelType::kRowNumber, "RowNumber"},
       {RelType::kTopNRowNumber, "TopNRowNumber"},
       {RelType::kMarkDistinct, "MarkDistinct"},
+      {RelType::kGroupId, "GroupId"},
   };
 
   return kNames;
@@ -1293,12 +1294,26 @@ Aggregation::Aggregation(
     ExprVector _preGroupedKeys,
     AggregateVector _aggregates,
     velox::core::AggregationNode::Step step,
-    ColumnVector columns)
+    ColumnVector columns,
+    QGVector<int32_t> _globalGroupingSets,
+    ColumnCP _groupId)
     : RelationOp{RelType::kAggregation, std::move(input), std::move(columns)},
       groupingKeys{std::move(_groupingKeys)},
       aggregates{std::move(_aggregates)},
       step{step},
-      preGroupedKeys{std::move(_preGroupedKeys)} {
+      preGroupedKeys{std::move(_preGroupedKeys)},
+      globalGroupingSets{std::move(_globalGroupingSets)},
+      groupId{_groupId} {
+  if (!globalGroupingSets.empty()) {
+    VELOX_CHECK_NOT_NULL(
+        groupId, "groupId must be set when globalGroupingSets is non-empty");
+  }
+  if (groupId != nullptr) {
+    VELOX_CHECK(
+        std::find(groupingKeys.begin(), groupingKeys.end(), groupId) !=
+            groupingKeys.end(),
+        "groupId must appear in groupingKeys");
+  }
 #ifndef NDEBUG
   VELOX_DCHECK_EQ(
       columns_.size(),
@@ -1703,7 +1718,7 @@ Limit::Limit(RelationOpPtr input, int64_t limit, int64_t offset)
       limit{limit},
       offset{offset} {
   cost_.inputCardinality = inputCardinality();
-  cost_.unitCost = 0.01;
+  cost_.unitCost = Costs::kMinimalUnitCost;
   const auto cardinality = static_cast<float>(limit);
   if (cost_.inputCardinality <= cardinality) {
     // Input cardinality does not exceed the limit. The limit is no-op.
@@ -1888,7 +1903,7 @@ TableWrite::TableWrite(
       inputColumns{std::move(inputColumns)},
       write{write} {
   cost_.inputCardinality = inputCardinality();
-  cost_.unitCost = 0.01;
+  cost_.unitCost = Costs::kMinimalUnitCost;
   VELOX_DCHECK_EQ(
       this->inputColumns.size(), this->write->table().type()->size());
 }
@@ -1959,7 +1974,7 @@ AssignUniqueId::AssignUniqueId(RelationOpPtr input, ColumnCP uniqueIdColumn)
       uniqueIdColumn_(uniqueIdColumn) {
   // Fanout is 1 (cardinality neutral).
   cost_.fanout = 1;
-  cost_.unitCost = 0.01; // Minimal cost for generating unique IDs.
+  cost_.unitCost = Costs::kMinimalUnitCost;
 
   // Copy all input constraints (AssignUniqueId projects all input columns).
   constraints_ = input_->constraints();
@@ -1988,7 +2003,8 @@ EnforceDistinct::EnforceDistinct(
       errorMessage_(errorMessage) {
   // Fanout is 1 (cardinality neutral).
   cost_.fanout = 1;
-  cost_.unitCost = 0.01; // Minimal cost for enforcing distinctness.
+  // TODO: Review cost for EnforceDistinct.
+  cost_.unitCost = 0.01;
 
   // EnforceDistinct projects all input columns.
   constraints_ = input_->constraints();
@@ -2248,4 +2264,84 @@ void MarkDistinct::accept(
   visitor.visit(*this, context);
 }
 
+namespace {
+
+// Builds the output columns for GroupId from grouping keys, aggregation
+// inputs, and the group ID column.
+ColumnVector makeGroupIdColumns(
+    const ColumnVector& groupingKeyColumns,
+    const ExprVector& aggregationInputs,
+    ColumnCP groupId) {
+  ColumnVector columns;
+  columns.reserve(groupingKeyColumns.size() + aggregationInputs.size() + 1);
+  for (auto* column : groupingKeyColumns) {
+    columns.push_back(column);
+  }
+  for (auto* expr : aggregationInputs) {
+    VELOX_CHECK(
+        expr->is(PlanType::kColumnExpr),
+        "GroupId aggregation input must be a Column");
+    columns.push_back(expr->as<Column>());
+  }
+  columns.push_back(groupId);
+  return columns;
+}
+
+} // namespace
+
+GroupId::GroupId(
+    RelationOpPtr input,
+    ColumnVector groupingKeys,
+    ExprVector aggregationInputs,
+    GroupingSets groupingSets,
+    ColumnVector groupingKeyColumns,
+    ColumnCP groupId)
+    : RelationOp(
+          RelType::kGroupId,
+          std::move(input),
+          makeGroupIdColumns(groupingKeyColumns, aggregationInputs, groupId)),
+      groupingKeys_(std::move(groupingKeys)),
+      aggregationInputs_(std::move(aggregationInputs)),
+      groupingSets_(std::move(groupingSets)),
+      groupingKeyColumns_(std::move(groupingKeyColumns)),
+      groupId_(groupId) {
+  VELOX_CHECK_GT(
+      groupingSets_.size(),
+      1,
+      "GroupId requires multiple grouping sets. "
+      "A single grouping set is a regular GROUP BY.");
+
+  // Each input row is duplicated once per set.
+  cost_.fanout = groupingSets_.size();
+  cost_.unitCost = Costs::kMinimalUnitCost * groupingSets_.size();
+
+  constraints_ = input_->constraints();
+
+  // Add constraints for the renamed output key columns. GroupId NULLs out
+  // keys for non-participating grouping sets, so they are always nullable.
+  const auto numSets = groupingSets_.size();
+  std::vector<size_t> setsPerKey(groupingKeyColumns_.size(), 0);
+  for (const auto& set : groupingSets_) {
+    for (auto idx : set) {
+      VELOX_CHECK_LT(idx, groupingKeyColumns_.size());
+      ++setsPerKey[idx];
+    }
+  }
+
+  for (size_t keyIdx = 0; keyIdx < groupingKeyColumns_.size(); ++keyIdx) {
+    auto value = groupingKeyColumns_[keyIdx]->value();
+    value.nullable = true;
+    value.nullFraction = static_cast<float>(numSets - setsPerKey[keyIdx]) /
+        static_cast<float>(numSets);
+    constraints_.emplace(groupingKeyColumns_[keyIdx]->id(), value);
+  }
+
+  constraints_.emplace(groupId_->id(), groupId_->value());
+}
+
+void GroupId::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
 } // namespace facebook::axiom::optimizer

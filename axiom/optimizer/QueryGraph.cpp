@@ -277,6 +277,45 @@ void checkTableReferences(
 }
 } // namespace
 
+AggregationPlan::AggregationPlan(
+    ExprVector groupingKeys,
+    AggregateVector aggregates,
+    ColumnVector columns,
+    ColumnVector intermediateColumns,
+    GroupingSets groupingSets,
+    ColumnCP groupId)
+    : PlanObject(PlanType::kAggregationNode),
+      groupingKeys_(std::move(groupingKeys)),
+      aggregates_(std::move(aggregates)),
+      columns_(std::move(columns)),
+      intermediateColumns_(std::move(intermediateColumns)),
+      groupingSets_(std::move(groupingSets)),
+      groupId_(groupId) {
+  const auto expectedSize =
+      groupingKeys_.size() + aggregates_.size() + (groupId_ != nullptr ? 1 : 0);
+  VELOX_CHECK_EQ(expectedSize, columns_.size());
+  VELOX_CHECK_EQ(columns_.size(), intermediateColumns_.size());
+
+  VELOX_CHECK_EQ(
+      groupingSets_.empty(),
+      groupId_ == nullptr,
+      "groupingSets and groupId must both be set or both be empty");
+
+  for (const auto& set : groupingSets_) {
+    folly::F14FastSet<int32_t> seen;
+    for (const auto idx : set) {
+      VELOX_CHECK_LT(
+          idx,
+          groupingKeys_.size(),
+          "Grouping set index out of bounds: index={}, numKeys={}",
+          idx,
+          groupingKeys_.size());
+      VELOX_CHECK(
+          seen.insert(idx).second, "Duplicate index in grouping set: {}", idx);
+    }
+  }
+}
+
 void AggregationPlan::checkConsistency(const DerivedTable& dt) const {
   checkTableReferences<ExprCP>(dt, groupingKeys_, "Grouping key");
   checkTableReferences<AggregateCP>(dt, aggregates_, "Aggregate");
@@ -457,6 +496,16 @@ JoinEdge* JoinEdge::reverse(JoinEdge& join) {
   reversed->setFanouts(join.rlFanout_, join.lrFanout_);
 
   return reversed;
+}
+
+QGVector<int32_t> AggregationPlan::globalGroupingSets() const {
+  QGVector<int32_t> result;
+  for (int32_t i = 0; i < groupingSets_.size(); ++i) {
+    if (groupingSets_[i].empty()) {
+      result.push_back(i);
+    }
+  }
+  return result;
 }
 
 std::pair<std::string, bool> JoinEdge::sampleKey() const {

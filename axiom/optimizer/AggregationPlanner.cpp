@@ -257,6 +257,61 @@ MarkDistinctResult addMarkDistinctNodes(
   return {plan, std::move(newAggregates), totalCost};
 }
 
+// Collects unique column references from aggregate functions (args, ORDER BY
+// keys, and filter conditions). Skips literals since they are constants that
+// don't need to flow through GroupId.
+ExprVector collectAggregationInputs(const AggregateVector& aggregates) {
+  PlanObjectSet seen;
+  ExprVector inputs;
+  auto maybeAdd = [&](ExprCP expr) {
+    if (expr->is(PlanType::kColumnExpr) && !seen.contains(expr)) {
+      seen.add(expr);
+      inputs.push_back(expr);
+    }
+  };
+  for (const auto* agg : aggregates) {
+    for (const auto* arg : agg->args()) {
+      maybeAdd(arg);
+    }
+    for (const auto* key : agg->orderKeys()) {
+      maybeAdd(key);
+    }
+    if (agg->condition()) {
+      maybeAdd(agg->condition());
+    }
+  }
+  return inputs;
+}
+
+// Constructs a GroupId node from the aggregation plan's grouping sets,
+// precomputed grouping keys, and aggregate inputs.
+GroupId* makeGroupIdNode(
+    RelationOpPtr& plan,
+    AggregationPlanCP aggPlan,
+    const ExprVector& groupingKeys,
+    const AggregateVector& aggregates) {
+  const auto numKeys = groupingKeys.size();
+  ColumnVector outputKeys;
+  outputKeys.reserve(numKeys);
+  for (size_t i = 0; i < numKeys; ++i) {
+    outputKeys.push_back(aggPlan->columns()[i]);
+  }
+
+  ColumnVector inputKeys;
+  inputKeys.reserve(numKeys);
+  for (const auto* key : groupingKeys) {
+    inputKeys.push_back(key->as<Column>());
+  }
+
+  return make<GroupId>(
+      plan,
+      std::move(inputKeys),
+      collectAggregationInputs(aggregates),
+      aggPlan->groupingSets(),
+      std::move(outputKeys),
+      aggPlan->groupId());
+}
+
 } // namespace
 
 std::pair<RelationOpPtr, PlanCost> maybeRepartition(
@@ -319,7 +374,9 @@ std::pair<RelationOpPtr, PlanCost> AggregationPlanner::makeSplitAggregationPlan(
     const ExprVector& groupingKeys,
     const AggregateVector& aggregates,
     const ColumnVector& intermediateColumns,
-    const ColumnVector& outputColumns) const {
+    const ColumnVector& outputColumns,
+    QGVector<int32_t> globalGroupingSets,
+    ColumnCP groupId) const {
   PlanCost splitAggCost;
 
   plan = make<Aggregation>(
@@ -346,7 +403,9 @@ std::pair<RelationOpPtr, PlanCost> AggregationPlanner::makeSplitAggregationPlan(
       /*preGroupedKeys*/ ExprVector{},
       aggregates,
       velox::core::AggregationNode::Step::kFinal,
-      outputColumns);
+      outputColumns,
+      std::move(globalGroupingSets),
+      groupId);
   splitAggCost.add(*splitAggPlan);
 
   return {splitAggPlan, splitAggCost};
@@ -358,7 +417,9 @@ AggregationPlanner::makeSingleAggregationPlan(
     const ExprVector& groupingKeys,
     const AggregateVector& aggregates,
     const ColumnVector& intermediateColumns,
-    const ColumnVector& outputColumns) const {
+    const ColumnVector& outputColumns,
+    QGVector<int32_t> globalGroupingSets,
+    ColumnCP groupId) const {
   PlanCost singleAggCost;
 
   ColumnVector partitionKeys(
@@ -374,7 +435,9 @@ AggregationPlanner::makeSingleAggregationPlan(
       /*preGroupedKeys*/ ExprVector{},
       aggregates,
       velox::core::AggregationNode::Step::kSingle,
-      outputColumns);
+      outputColumns,
+      std::move(globalGroupingSets),
+      groupId);
   singleAggCost.add(*singleAgg);
 
   return {singleAgg, singleAggCost};
@@ -386,21 +449,35 @@ AggregationPlanner::makeSplitOrSingleAggregationPlan(
     const ExprVector& groupingKeys,
     const AggregateVector& aggregates,
     const ColumnVector& intermediateColumns,
-    const ColumnVector& outputColumns) const {
-  const auto& [splitAggPlan, splitAggCost] = makeSplitAggregationPlan(
-      plan, groupingKeys, aggregates, intermediateColumns, outputColumns);
+    const ColumnVector& outputColumns,
+    QGVector<int32_t> globalGroupingSets,
+    ColumnCP groupId) const {
+  auto [splitAggPlan, splitAggCost] = makeSplitAggregationPlan(
+      plan,
+      groupingKeys,
+      aggregates,
+      intermediateColumns,
+      outputColumns,
+      globalGroupingSets,
+      groupId);
 
   if (groupingKeys.empty() || alwaysPlanPartialAggregation_) {
-    return {splitAggPlan, splitAggCost};
+    return {std::move(splitAggPlan), splitAggCost};
   }
 
-  const auto& [singleAgg, singleAggCost] = makeSingleAggregationPlan(
-      plan, groupingKeys, aggregates, intermediateColumns, outputColumns);
+  auto [singleAgg, singleAggCost] = makeSingleAggregationPlan(
+      plan,
+      groupingKeys,
+      aggregates,
+      intermediateColumns,
+      outputColumns,
+      std::move(globalGroupingSets),
+      groupId);
 
   if (singleAggCost.cost < splitAggCost.cost) {
-    return {singleAgg, singleAggCost};
+    return {std::move(singleAgg), singleAggCost};
   }
-  return {splitAggPlan, splitAggCost};
+  return {std::move(splitAggPlan), splitAggCost};
 }
 
 std::pair<RelationOpPtr, PlanCost>
@@ -433,31 +510,31 @@ AggregationPlanner::makeDistinctToGroupByPlan(
   }
 
   PlanCost totalCost;
-  const auto& [innerAgg, innerAggCost] = makeSplitOrSingleAggregationPlan(
+  auto [innerAgg, innerAggCost] = makeSplitOrSingleAggregationPlan(
       plan, innerKeys, AggregateVector{}, innerColumns, innerColumns);
   totalCost.add(innerAggCost);
-  plan = innerAgg;
+  plan = std::move(innerAgg);
 
   // Make non-distinct aggregation calls for the outer level.
   auto nonDistinctAggregates = dropDistinctFromAggregates(aggregates);
 
   if (hasOrderBy) {
-    const auto& [outerPlan, outerCost] = makeSingleAggregationPlan(
+    auto [outerPlan, outerCost] = makeSingleAggregationPlan(
         plan,
         groupingKeys,
         nonDistinctAggregates,
         aggPlan->intermediateColumns(),
         aggPlan->columns());
-    plan = outerPlan;
+    plan = std::move(outerPlan);
     totalCost.add(outerCost);
   } else {
-    const auto& [outerPlan, outerCost] = makeSplitOrSingleAggregationPlan(
+    auto [outerPlan, outerCost] = makeSplitOrSingleAggregationPlan(
         plan,
         groupingKeys,
         nonDistinctAggregates,
         aggPlan->intermediateColumns(),
         aggPlan->columns());
-    plan = outerPlan;
+    plan = std::move(outerPlan);
     totalCost.add(outerCost);
   }
 
@@ -533,6 +610,84 @@ RelationOpPtr AggregationPlanner::planSingle(
       aggPlan->columns());
 }
 
+void AggregationPlanner::addGroupingSetsAggregation(
+    AggregationPlanCP aggPlan,
+    RelationOpPtr& plan,
+    const ExprVector& groupingKeys,
+    const AggregateVector& aggregates,
+    PlanState& state,
+    bool useSingleStep,
+    bool hasOrderBy) const {
+  auto* groupIdNode = makeGroupIdNode(plan, aggPlan, groupingKeys, aggregates);
+  state.addCost(*groupIdNode);
+  plan = groupIdNode;
+
+  auto globalGroupingSets = aggPlan->globalGroupingSets();
+
+  // Only pass groupId to the Aggregation when there are global (empty)
+  // grouping sets. Velox uses this pair to produce default output rows for
+  // empty inputs; without global sets, the groupId column is just a regular
+  // grouping key.
+  ColumnCP aggGroupId =
+      globalGroupingSets.empty() ? nullptr : aggPlan->groupId();
+
+  const auto numKeys = groupingKeys.size();
+  ExprVector aggGroupingKeys;
+  aggGroupingKeys.reserve(numKeys + 1);
+  for (size_t i = 0; i < numKeys; ++i) {
+    aggGroupingKeys.push_back(groupIdNode->columns()[i]);
+  }
+  aggGroupingKeys.push_back(aggPlan->groupId());
+
+  // ORDER BY forces single-step aggregation (partial aggregation cannot
+  // preserve ORDER BY semantics), but global grouping sets require split
+  // (partial+final). With kSingle, addLocalPartition creates empty driver
+  // partitions that each emit a spurious default row for the global set.
+  VELOX_USER_CHECK(
+      !hasOrderBy || globalGroupingSets.empty(),
+      "ORDER BY in aggregate functions is not supported with global grouping sets (ROLLUP, CUBE, or GROUPING SETS containing ())");
+
+  if (useSingleStep || hasOrderBy) {
+    auto [agg, cost] = makeSingleAggregationPlan(
+        plan,
+        aggGroupingKeys,
+        aggregates,
+        aggPlan->intermediateColumns(),
+        aggPlan->columns(),
+        std::move(globalGroupingSets),
+        aggGroupId);
+    state.cost.add(cost);
+    plan = std::move(agg);
+    return;
+  }
+
+  // TODO: Remove forced split once Velox handles global grouping sets
+  // in kSingle without spurious default rows from empty partitions.
+  // https://github.com/facebookincubator/velox/issues/17312
+  if (alwaysPlanPartialAggregation_ || !globalGroupingSets.empty()) {
+    auto [agg, cost] = makeSplitAggregationPlan(
+        plan,
+        aggGroupingKeys,
+        aggregates,
+        aggPlan->intermediateColumns(),
+        aggPlan->columns(),
+        std::move(globalGroupingSets),
+        aggGroupId);
+    state.cost.add(cost);
+    plan = std::move(agg);
+    return;
+  }
+
+  auto [agg, cost] = makeSplitOrSingleAggregationPlan(
+      plan,
+      aggGroupingKeys,
+      aggregates,
+      aggPlan->intermediateColumns(),
+      aggPlan->columns());
+  state.cost.add(cost);
+  plan = std::move(agg);
+}
+
 void AggregationPlanner::plan(
     DerivedTableCP dt,
     RelationOpPtr& plan,
@@ -541,15 +696,51 @@ void AggregationPlanner::plan(
   const auto* aggPlan = dt->aggregation;
 
   PrecomputeProjection precompute(plan, dt, /*projectAllInputs=*/false);
-  auto groupingKeys =
-      precompute.toColumns(aggPlan->groupingKeys(), &aggPlan->columns());
+  // When grouping sets are present, don't pass aliases for grouping keys.
+  // This lets them pass through PrecomputeProjection without renaming, so
+  // aggregate args that reference the same column get their own pass-through
+  // entry.
+  auto groupingKeys = precompute.toColumns(
+      aggPlan->groupingKeys(),
+      aggPlan->hasGroupingSets() ? nullptr : &aggPlan->columns());
   auto aggregates = flattenAggregates(aggPlan->aggregates(), precompute);
 
   plan = std::move(precompute).maybeProject();
   state.place(aggPlan);
 
+  const bool useSingleStep = isSingleWorker_ && isSingleDriver_;
+
+  // ORDER BY aggregates force single-step because partial aggregation cannot
+  // preserve ORDER BY semantics.
+  const auto hasOrderBy =
+      std::any_of(aggregates.begin(), aggregates.end(), [](const auto& agg) {
+        return !agg->orderKeys().empty();
+      });
+
+  const auto hasDistinct =
+      std::any_of(aggregates.begin(), aggregates.end(), [](const auto& agg) {
+        return agg->isDistinct();
+      });
+
+  if (aggPlan->hasGroupingSets()) {
+    // TODO: Support DISTINCT aggregation with grouping sets. Requires
+    // integrating transformDistinctToGroupBy with GroupId.
+    VELOX_USER_CHECK(
+        !hasDistinct,
+        "DISTINCT aggregation with grouping sets is not supported yet");
+    addGroupingSetsAggregation(
+        aggPlan,
+        plan,
+        groupingKeys,
+        aggregates,
+        state,
+        useSingleStep,
+        hasOrderBy);
+    return;
+  }
+
   auto preGroupedKeys = computePreGroupedKeys(*plan, groupingKeys);
-  if ((isSingleWorker_ && isSingleDriver_) || !preGroupedKeys.empty()) {
+  if (useSingleStep || !preGroupedKeys.empty()) {
     auto* singleAgg = make<Aggregation>(
         plan,
         std::move(groupingKeys),
@@ -563,14 +754,6 @@ void AggregationPlanner::plan(
     return;
   }
 
-  const auto hasDistinct =
-      std::any_of(aggregates.begin(), aggregates.end(), [](const auto& agg) {
-        return agg->isDistinct();
-      });
-  const auto hasOrderBy =
-      std::any_of(aggregates.begin(), aggregates.end(), [](const auto& agg) {
-        return !agg->orderKeys().empty();
-      });
   if (hasDistinct) {
     auto distinctArgs = getCommonDistinctArgs(aggregates);
     if (distinctArgs.has_value()) {

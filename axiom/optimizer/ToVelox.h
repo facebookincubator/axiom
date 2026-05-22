@@ -114,7 +114,8 @@ class ToVelox {
  private:
   // Adds a Velox ProjectNode that selects 'outputNames' from 'input' by
   // source name and renames them per outputName. Returns 'input' unchanged
-  // when all names and positions already match.
+  // when all names and positions already match. input->outputType() may contain
+  // more columns than outputNames; extra columns are dropped by the projection.
   velox::core::PlanNodePtr addOutputRenames(
       velox::core::PlanNodePtr input,
       const std::vector<OutputColumnNameMapping>& outputNames);
@@ -295,6 +296,12 @@ class ToVelox {
   // Makes a Velox MarkDistinctNode for a RelationOp.
   velox::core::PlanNodePtr makeMarkDistinct(
       const MarkDistinct& op,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  // Converts a GroupId operator to a Velox GroupIdNode.
+  velox::core::PlanNodePtr makeGroupId(
+      const GroupId& op,
       ExecutableFragment& fragment,
       std::vector<ExecutableFragment>& stages);
 
