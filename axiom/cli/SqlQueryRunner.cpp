@@ -45,6 +45,8 @@
 #include "velox/core/QueryConfigProvider.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/expression/Expr.h"
+#include "velox/functions/prestosql/PrestoConfigProvider.h"
+#include "velox/functions/prestosql/PrestoQueryConfig.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
@@ -167,6 +169,10 @@ void SqlQueryRunner::initialize(
   configRegistry_->add(
       kExecutionPrefix,
       std::make_shared<facebook::velox::core::QueryConfigProvider>());
+  configRegistry_->add(
+      velox::functions::prestosql::PrestoQueryConfig::kPrefix,
+      std::make_shared<
+          facebook::velox::functions::prestosql::PrestoConfigProvider>());
 
   // Register config providers for connectors that support session properties.
   for (const auto& [connectorId, connector] :
@@ -188,8 +194,8 @@ void SqlQueryRunner::initialize(
       velox::core::QueryConfig::kAdjustTimestampToTimezone,
       "true");
   sessionConfig_->set(
-      kExecutionPrefix,
-      velox::core::QueryConfig::kPrestoArrayAggIgnoreNulls,
+      velox::functions::prestosql::PrestoQueryConfig::kPrefix,
+      velox::functions::prestosql::PrestoQueryConfig::kArrayAggIgnoreNulls,
       "true");
 }
 
@@ -761,10 +767,17 @@ std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
   const auto queryId =
       options.queryId.value_or(fmt::format("query_{}", ++queryCounter_));
 
-  // Build Velox QueryConfig from execution session properties.
+  // Build Velox QueryConfig from session properties.
   auto executionProps = sessionConfig_->effectiveValues(kExecutionPrefix);
   std::unordered_map<std::string, std::string> queryConfig(
       executionProps.begin(), executionProps.end());
+  // effectiveValues() strips the prefix; re-qualify (e.g. 'foo' ->
+  // 'presto.foo') so PrestoQueryConfig accessors find the value.
+  for (const auto& [name, value] : sessionConfig_->effectiveValues(
+           velox::functions::prestosql::PrestoQueryConfig::kPrefix)) {
+    queryConfig[velox::functions::prestosql::PrestoQueryConfig::qualify(name)] =
+        value;
+  }
   // Per-query value, not a session property.
   queryConfig[velox::core::QueryConfig::kSessionStartTime] = std::to_string(
       options.sessionStartTimeMs.value_or(velox::getCurrentTimeMs()));
