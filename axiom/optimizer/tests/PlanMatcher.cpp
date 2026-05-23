@@ -1898,29 +1898,11 @@ PlanMatcherBuilder& PlanMatcherBuilder::hashJoin(
 PlanMatcherBuilder& PlanMatcherBuilder::hashJoin(
     const std::shared_ptr<PlanMatcher>& rightMatcher,
     JoinType joinType,
-    bool nullAware) {
-  return hashJoin(
-      rightMatcher, joinType, HashJoinDetails{.nullAware = nullAware});
-}
-
-PlanMatcherBuilder& PlanMatcherBuilder::hashJoin(
-    const std::shared_ptr<PlanMatcher>& rightMatcher,
-    JoinType joinType,
     const HashJoinDetails& details) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<HashJoinMatcher>(
       matcher_, rightMatcher, joinType, details);
   return *this;
-}
-
-PlanMatcherBuilder& PlanMatcherBuilder::hashJoin(
-    const std::shared_ptr<PlanMatcher>& rightMatcher,
-    JoinType joinType,
-    const std::vector<std::string>& outputColumnNames) {
-  return hashJoin(
-      rightMatcher,
-      joinType,
-      HashJoinDetails{.outputColumnNames = outputColumnNames});
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::nestedLoopJoin(

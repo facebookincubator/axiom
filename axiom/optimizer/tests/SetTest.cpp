@@ -428,12 +428,14 @@ TEST_F(SetTest, except) {
                                // 1) % 3 = 1 to all branches of 'except'.
                                .hiveScan("nation", test::gte("n_nationkey", 17))
                                .build(),
-                           core::JoinType::kAnti)
+                           core::JoinType::kAnti,
+                           {.nullAware = false})
                        .hashJoin(
                            core::PlanMatcherBuilder()
                                .hiveScan("nation", test::lte("n_nationkey", 5))
                                .build(),
-                           core::JoinType::kAnti)
+                           core::JoinType::kAnti,
+                           {.nullAware = false})
                        .singleAggregation()
                        .project()
                        .build();
@@ -1028,7 +1030,10 @@ TEST_F(SetTest, exceptUnionAll) {
   // rename project to align column names through LocalPartition.
   auto matchExcept = [](const std::string& left, const std::string& right) {
     return matchScan(left)
-        .hashJoin(matchScan(right).build(), core::JoinType::kAnti)
+        .hashJoin(
+            matchScan(right).build(),
+            core::JoinType::kAnti,
+            {.nullAware = false})
         .singleAggregation()
         .project();
   };

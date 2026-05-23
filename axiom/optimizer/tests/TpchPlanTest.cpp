@@ -206,14 +206,16 @@ TEST_F(TpchPlanTest, q03) {
                   .hashJoin(
                       startMatcher("customer").build(),
                       core::JoinType::kInner,
-                      {"o_orderkey", "o_orderdate", "o_shippriority"})
+                      {.outputColumnNames =
+                           {{"o_orderkey", "o_orderdate", "o_shippriority"}}})
                   .build(),
               core::JoinType::kInner,
-              {"l_orderkey",
-               "l_extendedprice",
-               "l_discount",
-               "o_orderdate",
-               "o_shippriority"})
+              {.outputColumnNames =
+                   {{"l_orderkey",
+                     "l_extendedprice",
+                     "l_discount",
+                     "o_orderdate",
+                     "o_shippriority"}}})
           .project()
           .aggregation()
           .topN()
@@ -550,7 +552,7 @@ TEST_F(TpchPlanTest, q16) {
           .hashJoin(
               startMatcher("supplier").build(),
               core::JoinType::kAnti,
-              /*nullAware=*/true)
+              {.nullAware = true})
           .aggregation()
           .orderBy()
           .build();
@@ -752,7 +754,8 @@ TEST_F(TpchPlanTest, q22) {
                                  startMatcher("customer").aggregation().build())
                              .filter()
                              .build(),
-                         velox::core::JoinType::kRightSemiProject)
+                         velox::core::JoinType::kRightSemiProject,
+                         {.nullAware = false})
                      .filter()
                      .project()
                      .aggregation()
