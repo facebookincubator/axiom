@@ -21,6 +21,7 @@
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "velox/core/ITypedExpr.h"
+#include "velox/core/PlanNode.h"
 
 namespace facebook::axiom::connector {
 
@@ -91,7 +92,7 @@ class TestTable : public Table {
       const velox::RowTypePtr& schema,
       const velox::RowTypePtr& hiddenColumns,
       TestConnector* connector,
-      folly::F14FastMap<std::string, velox::Variant> options);
+      const folly::F14FastMap<std::string, velox::Variant>& options);
 
   const std::vector<const TableLayout*>& layouts() const override {
     return layouts_;
@@ -154,26 +155,24 @@ class TestTable : public Table {
   std::vector<ColumnTracker> columnTrackers_;
 };
 
-/// SplitSource generated via the TestSplitManager embedded in the
-/// TestConnector. Generates one TestConnectorSplit for each RowVector
-/// in the table's data_ vector.
+/// SplitSource for TestTable. Emits one TestConnectorSplit per index in
+/// 'dataIndices'.
 class TestSplitSource : public SplitSource {
  public:
-  TestSplitSource(const std::string& connectorId, size_t splitCount)
-      : connectorId_(connectorId), splitCount_(splitCount) {}
+  TestSplitSource(
+      const std::string& connectorId,
+      std::vector<size_t> dataIndices)
+      : connectorId_(connectorId), dataIndices_(std::move(dataIndices)) {}
 
   folly::coro::Task<SplitBatch> co_getSplits(uint32_t maxSplitCount) override;
 
  private:
   const std::string connectorId_;
-  const size_t splitCount_;
-  size_t nextIndex_{0};
+  const std::vector<size_t> dataIndices_;
+  size_t nextOffset_{0};
 };
 
-/// SplitManager embedded in the TestConnector. Returns one
-/// default-initialized PartitionHandle upon call to co_listPartitions.
-/// Generates a TestSplitSource that produces one TestConnectorSplit
-/// per RowVector in the table's data_ vector.
+/// Returns one PartitionHandle covering the whole table.
 class TestSplitManager : public ConnectorSplitManager {
  public:
   folly::coro::Task<std::vector<PartitionHandlePtr>> co_listPartitions(
@@ -184,6 +183,7 @@ class TestSplitManager : public ConnectorSplitManager {
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
       const std::vector<PartitionHandlePtr>& partitions,
+      const std::shared_ptr<PartitionType>& partitionType,
       QueryRuntimeStats& runtimeStats) override;
 };
 
@@ -436,9 +436,8 @@ class TestConnectorMetadata : public ConnectorMetadata {
     return splitManager_.get();
   }
 
-  /// Creates and returns a TestTable with the specified name and schema in the
-  /// in-memory map maintained in the connector metadata. Throws if the table
-  /// already exists.
+  /// Registers a TestTable in the connector metadata. Throws if the name is
+  /// already taken.
   std::shared_ptr<TestTable> addTable(
       SchemaTableName tableName,
       const velox::RowTypePtr& schema,
@@ -686,8 +685,7 @@ class TestConnector : public velox::connector::Connector {
       velox::connector::ConnectorQueryCtx* connectorQueryCtx,
       velox::connector::CommitStrategy commitStrategy) override;
 
-  /// Adds a TestTable with the specified name and schema. Throws if a table
-  /// with the same name already exists.
+  /// Registers a TestTable. Throws if the name is already taken.
   std::shared_ptr<TestTable> addTable(
       SchemaTableName tableName,
       const velox::RowTypePtr& schema,

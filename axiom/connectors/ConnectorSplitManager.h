@@ -17,14 +17,29 @@
 
 #include <folly/coro/Task.h>
 #include <velox/connectors/Connector.h>
+#include <optional>
 #include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/connectors/ConnectorSession.h"
 
 namespace facebook::axiom::connector {
 
+class PartitionType;
+
+/// Wraps a Velox ConnectorSplit with an optional group ID for bucketed
+/// execution routing. Splits with the same groupId are routed to the same
+/// task. When unset, the runtime is free to assign the split to any task.
+struct Split {
+  /// The underlying Velox connector split.
+  std::shared_ptr<velox::connector::ConnectorSplit> connectorSplit;
+
+  /// Group ID for bucketed routing; splits sharing a groupId are routed to
+  /// the same task. Absent means any task may handle this split.
+  std::optional<int32_t> groupId{std::nullopt};
+};
+
 /// A batch of splits returned by SplitSource::co_getSplits.
 struct SplitBatch {
-  std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
+  std::vector<Split> splits;
 
   /// True when there are no more splits to return.
   bool noMoreSplits{false};
@@ -90,17 +105,22 @@ class ConnectorSplitManager {
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle) = 0;
 
-  /// Returns a SplitSource that covers the contents of 'partitions'. The set of
-  /// partitions is exposed separately so that the caller may process the
-  /// partitions in a specific order or distribute them to specific nodes in a
-  /// cluster. Connector implementations may use 'runtimeStats' to record
-  /// split enumeration metrics (e.g., file listing, Metastore RPCs).
+  /// Returns a SplitSource that covers the contents of 'partitions'. The set
+  /// of partitions is exposed separately so that the caller may process them
+  /// in a specific order or distribute them to specific nodes in a cluster.
+  /// Connector implementations may use 'runtimeStats' to record split
+  /// enumeration metrics (e.g., file listing, Metastore RPCs).
+  ///
+  /// When 'partitionType' is non-null, the connector tags each emitted Split
+  /// with a groupId in [0, partitionType->numPartitions()). Pass 'nullptr'
+  /// for the non-bucketed case.
   // TODO: Instrument PrismSplitManager with runtimeStats for split enumeration
   // timing.
   virtual std::shared_ptr<SplitSource> getSplitSource(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
       const std::vector<PartitionHandlePtr>& partitions,
+      const std::shared_ptr<PartitionType>& partitionType,
       QueryRuntimeStats& runtimeStats) = 0;
 };
 

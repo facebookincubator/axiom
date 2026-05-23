@@ -17,6 +17,7 @@ add_library(axiom_test_connector TestConnector.cpp)
 target_link_libraries(
   axiom_test_connector
   axiom_connectors
+  axiom_hive_connector_metadata
   velox_common_base
   velox_memory
   velox_connector

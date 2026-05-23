@@ -87,6 +87,7 @@ std::shared_ptr<SplitSource> TpchSplitManager::getSplitSource(
     const connector::ConnectorSessionPtr& /*session*/,
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
     const std::vector<PartitionHandlePtr>& /*partitions*/,
+    const std::shared_ptr<PartitionType>& /*partitionType*/,
     QueryRuntimeStats& /*runtimeStats*/) {
   auto* tpchTableHandle =
       dynamic_cast<const velox::connector::tpch::TpchTableHandle*>(
@@ -115,8 +116,8 @@ folly::coro::Task<SplitBatch> TpchSplitSource::co_getSplits(
       std::min(nextSplitIdx_ + static_cast<int64_t>(maxSplitCount), numSplits_);
   for (auto i = nextSplitIdx_; i < end; ++i) {
     batch.splits.push_back(
-        std::make_shared<velox::connector::tpch::TpchConnectorSplit>(
-            connectorId_, numSplits_, i));
+        Split{std::make_shared<velox::connector::tpch::TpchConnectorSplit>(
+            connectorId_, numSplits_, i)});
   }
   nextSplitIdx_ = end;
   batch.noMoreSplits = (nextSplitIdx_ >= numSplits_);
