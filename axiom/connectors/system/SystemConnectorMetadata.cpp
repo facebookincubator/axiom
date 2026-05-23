@@ -128,7 +128,7 @@ folly::coro::Task<SplitBatch> SystemSplitSource::co_getSplits(
     uint32_t /*maxSplitCount*/) {
   SplitBatch batch;
   if (!done_) {
-    batch.splits.push_back(std::make_shared<SystemSplit>(connectorId_));
+    batch.splits.push_back(Split{std::make_shared<SystemSplit>(connectorId_)});
     done_ = true;
   }
   batch.noMoreSplits = true;
@@ -147,6 +147,7 @@ std::shared_ptr<SplitSource> SystemSplitManager::getSplitSource(
     const ConnectorSessionPtr& /*session*/,
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
     const std::vector<PartitionHandlePtr>& /*partitions*/,
+    const std::shared_ptr<PartitionType>& /*partitionType*/,
     QueryRuntimeStats& /*runtimeStats*/) {
   return std::make_shared<SystemSplitSource>(tableHandle->connectorId());
 }

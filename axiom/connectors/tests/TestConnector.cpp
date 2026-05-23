@@ -17,7 +17,9 @@
 #include "axiom/connectors/tests/TestConnector.h"
 
 #include <algorithm>
+#include <utility>
 
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/tpch/gen/TpchGen.h"
 #include "velox/vector/ComplexVector.h"
@@ -87,7 +89,7 @@ TestTable::TestTable(
     const velox::RowTypePtr& schema,
     const velox::RowTypePtr& hiddenColumns,
     TestConnector* connector,
-    folly::F14FastMap<std::string, velox::Variant> options)
+    const folly::F14FastMap<std::string, velox::Variant>& options)
     : Table(
           std::move(name),
           makeTestTableColumns(schema, hiddenColumns, options),
@@ -250,21 +252,37 @@ std::unique_ptr<ColumnStatistics> TestTable::ColumnTracker::toColumnStatistics(
 folly::coro::Task<SplitBatch> TestSplitSource::co_getSplits(
     uint32_t maxSplitCount) {
   SplitBatch batch;
-  auto end =
-      std::min(nextIndex_ + static_cast<size_t>(maxSplitCount), splitCount_);
-  for (auto i = nextIndex_; i < end; ++i) {
-    batch.splits.push_back(
-        std::make_shared<TestConnectorSplit>(connectorId_, i));
+  const auto end = std::min(
+      nextOffset_ + static_cast<size_t>(maxSplitCount), dataIndices_.size());
+  for (auto i = nextOffset_; i < end; ++i) {
+    auto split =
+        std::make_shared<TestConnectorSplit>(connectorId_, dataIndices_[i]);
+    batch.splits.push_back(Split{std::move(split)});
   }
-  nextIndex_ = end;
-  batch.noMoreSplits = (nextIndex_ >= splitCount_);
+  nextOffset_ = end;
+  batch.noMoreSplits = (nextOffset_ >= dataIndices_.size());
   co_return batch;
 }
+
+namespace {
+
+const TestTable& findTestTableForHandle(
+    const velox::connector::ConnectorTableHandlePtr& tableHandle) {
+  auto testHandle =
+      std::dynamic_pointer_cast<const TestTableHandle>(tableHandle);
+  VELOX_CHECK(testHandle, "Expected TestTableHandle");
+  auto table = ConnectorMetadataRegistry::get(testHandle->connectorId())
+                   ->findTable(testHandle->schemaTableName());
+  VELOX_CHECK(table, "Table does not exist: {}", testHandle->name());
+  return dynamic_cast<const TestTable&>(*table);
+}
+
+} // namespace
 
 folly::coro::Task<std::vector<PartitionHandlePtr>>
 TestSplitManager::co_listPartitions(
     const ConnectorSessionPtr& /*session*/,
-    const velox::connector::ConnectorTableHandlePtr&) {
+    const velox::connector::ConnectorTableHandlePtr& /*tableHandle*/) {
   co_return std::vector<PartitionHandlePtr>{
       std::make_shared<PartitionHandle>()};
 }
@@ -272,13 +290,19 @@ TestSplitManager::co_listPartitions(
 std::shared_ptr<SplitSource> TestSplitManager::getSplitSource(
     const ConnectorSessionPtr& /*session*/,
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
-    const std::vector<PartitionHandlePtr>&,
+    const std::vector<PartitionHandlePtr>& /*partitions*/,
+    const std::shared_ptr<PartitionType>& /*partitionType*/,
     QueryRuntimeStats& /*runtimeStats*/) {
-  auto maybeTableHandle =
-      std::dynamic_pointer_cast<const TestTableHandle>(tableHandle);
-  VELOX_CHECK(maybeTableHandle, "Expected TestTableHandle");
+  const auto& testTable = findTestTableForHandle(tableHandle);
+
+  const auto numEntries = testTable.data().size();
+  std::vector<size_t> dataIndices;
+  dataIndices.reserve(numEntries);
+  for (size_t i = 0; i < numEntries; ++i) {
+    dataIndices.push_back(i);
+  }
   return std::make_shared<TestSplitSource>(
-      tableHandle->connectorId(), maybeTableHandle->size());
+      tableHandle->connectorId(), std::move(dataIndices));
 }
 
 std::shared_ptr<Table> TestConnectorMetadata::findTableInternal(

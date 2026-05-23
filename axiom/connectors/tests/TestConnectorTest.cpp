@@ -157,15 +157,15 @@ CO_TEST_F(TestConnectorTest, splitManager) {
   auto partitions =
       co_await splitManager->co_listPartitions(nullptr, tableHandle);
   QueryRuntimeStats noopStats;
-  auto splitSource =
-      splitManager->getSplitSource(nullptr, tableHandle, partitions, noopStats);
+  auto splitSource = splitManager->getSplitSource(
+      nullptr, tableHandle, partitions, /*partitionType=*/nullptr, noopStats);
   EXPECT_NE(splitSource, nullptr);
 
   std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
   while (true) {
     auto batch = co_await splitSource->co_getSplits(/*maxSplitCount=*/1000);
     for (auto& split : batch.splits) {
-      splits.push_back(std::move(split));
+      splits.push_back(std::move(split.connectorSplit));
     }
     if (batch.noMoreSplits) {
       break;

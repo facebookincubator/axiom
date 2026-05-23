@@ -41,7 +41,8 @@ The Test connector is designed for three use cases:
 
 **Not supported:**
 - Filter pushdown.
-- Partitioning and bucketing.
+- Hive-style directory partitioning.
+- Sort-within-bucket.
 - Persistence. All data is lost when the process exits.
 
 ## Usage
