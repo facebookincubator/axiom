@@ -30,12 +30,14 @@ std::string NameMappings::QualifiedName::toString() const {
 void NameMappings::add(const QualifiedName& name, const std::string& id) {
   bool ok = mappings_.emplace(name, id).second;
   VELOX_CHECK(ok, "Duplicate name: {}", name.toString());
+  reverseIndex_[id].push_back(name);
 }
 
 void NameMappings::add(const std::string& name, const std::string& id) {
-  bool ok =
-      mappings_.emplace(QualifiedName{.alias = {}, .name = name}, id).second;
+  QualifiedName qualified{.alias = {}, .name = name};
+  bool ok = mappings_.emplace(qualified, id).second;
   VELOX_CHECK(ok, "Duplicate name: {}", name);
+  reverseIndex_[id].push_back(std::move(qualified));
 }
 
 void NameMappings::markHidden(const std::string& id) {
@@ -89,19 +91,16 @@ std::optional<std::string> NameMappings::lookup(
 
 std::vector<NameMappings::QualifiedName> NameMappings::reverseLookup(
     const std::string& id) const {
-  std::vector<QualifiedName> names;
-  for (const auto& [key, value] : mappings_) {
-    if (value == id) {
-      names.push_back(key);
-    }
+  auto it = reverseIndex_.find(id);
+  if (it == reverseIndex_.end()) {
+    return {};
   }
-
+  const auto& names = it->second;
   VELOX_CHECK_LE(names.size(), 2);
   if (names.size() == 2) {
     VELOX_CHECK_EQ(names[0].name, names[1].name);
     VELOX_CHECK_NE(names[0].alias.has_value(), names[1].alias.has_value());
   }
-
   return names;
 }
 
@@ -116,9 +115,17 @@ void NameMappings::setAlias(const std::string& alias) {
     }
   }
 
+  // Every surviving entry gets the new alias.
   for (auto& [name, id] : names) {
-    mappings_.emplace(
-        QualifiedName{.alias = alias, .name = std::move(name)}, std::move(id));
+    QualifiedName qualified{.alias = alias, .name = std::move(name)};
+    mappings_.emplace(std::move(qualified), std::move(id));
+  }
+
+  // Rebuild from mappings_ so both surviving unqualified entries and the
+  // newly-added qualified entries appear in reverseIndex_.
+  reverseIndex_.clear();
+  for (const auto& [name, id] : mappings_) {
+    reverseIndex_[id].push_back(name);
   }
 }
 
@@ -133,9 +140,18 @@ void NameMappings::merge(const NameMappings& other) {
   }
 
   for (const auto& [name, id] : other.mappings_) {
-    if (mappings_.contains(name)) {
+    if (auto existing = mappings_.find(name); existing != mappings_.end()) {
       VELOX_CHECK(!name.alias.has_value());
-      mappings_.erase(name);
+      const auto& existingId = existing->second;
+      if (auto entry = reverseIndex_.find(existingId);
+          entry != reverseIndex_.end()) {
+        auto& names = entry->second;
+        std::erase(names, name);
+        if (names.empty()) {
+          reverseIndex_.erase(entry);
+        }
+      }
+      mappings_.erase(existing);
     } else if (
         !name.alias.has_value() && leftQualifiedNames.contains(name.name)) {
       // Don't add an unqualified name from the right side if the left side
@@ -144,6 +160,7 @@ void NameMappings::merge(const NameMappings& other) {
       // removed by an earlier merge.
     } else {
       mappings_.emplace(name, id);
+      reverseIndex_[id].push_back(name);
     }
   }
 
