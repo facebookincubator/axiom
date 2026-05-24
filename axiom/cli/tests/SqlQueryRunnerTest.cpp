@@ -209,6 +209,32 @@ TEST_F(SqlQueryRunnerTest, parseMultipleWithInvalidStatement) {
       std::exception);
 }
 
+TEST_F(SqlQueryRunnerTest, explainPopulatesOptimizeTiming) {
+  auto runWithTiming = [&](std::string_view sql) {
+    QueryTiming timing;
+    SqlQueryRunner::RunOptions options{
+        .onComplete = [&](const QueryCompletionInfo& info) {
+          timing = info.timing;
+        }};
+    runner_->run(sql, options);
+    return timing;
+  };
+
+  // EXPLAIN (TYPE LOGICAL) does not populate optimize timing.
+  EXPECT_EQ(0, runWithTiming("EXPLAIN (TYPE LOGICAL) SELECT 1").optimize);
+
+  // All other EXPLAIN variants populate optimize timing.
+  EXPECT_GT(runWithTiming("EXPLAIN (TYPE GRAPH) SELECT 1").optimize, 0);
+  EXPECT_GT(runWithTiming("EXPLAIN (TYPE OPTIMIZED) SELECT 1").optimize, 0);
+  EXPECT_GT(runWithTiming("EXPLAIN SELECT 1").optimize, 0);
+  EXPECT_GT(runWithTiming("EXPLAIN (TYPE IO) SELECT 1").optimize, 0);
+
+  // EXPLAIN ANALYZE populates both optimize and execute timing.
+  auto analyzeTiming = runWithTiming("EXPLAIN ANALYZE SELECT 1");
+  EXPECT_GT(analyzeTiming.optimize, 0);
+  EXPECT_GT(analyzeTiming.execute, 0);
+}
+
 TEST_F(SqlQueryRunnerTest, explainCtas) {
   {
     auto result = run("EXPLAIN (TYPE LOGICAL) CREATE TABLE t AS SELECT 1 AS x");

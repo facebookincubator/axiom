@@ -298,12 +298,16 @@ class SqlQueryRunner {
       presto::ExplainStatement::Type type,
       presto::ExplainStatement::Format format,
       const RunOptions& options,
+      QueryTiming& timing,
+      std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats,
       std::shared_ptr<facebook::axiom::connector::SchemaResolver>
           schemaResolver = nullptr);
 
   std::string runExplainAnalyze(
       const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
       const RunOptions& options,
+      QueryTiming& timing,
+      std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats,
       std::shared_ptr<facebook::axiom::connector::SchemaResolver>
           schemaResolver = nullptr);
 

@@ -60,6 +60,44 @@ using connector::ConnectorMetadataRegistry;
 
 namespace {
 
+// Times a phase: writes wall-clock micros to 'wallMicros', and if
+// 'runtimeStats' is non-null, also records wall and CPU durations under the
+// given keys.
+class PhaseTimer {
+ public:
+  PhaseTimer(
+      uint64_t& wallMicros,
+      QueryRuntimeStats* runtimeStats,
+      std::string_view wallKey,
+      std::string_view cpuKey)
+      : runtimeStats_(runtimeStats),
+        wallKey_(wallKey),
+        cpuKey_(cpuKey),
+        wallMicros_(wallMicros),
+        cpuStartNanos_(velox::process::threadCpuNanos()),
+        timer_(std::in_place, &wallMicros) {}
+
+  ~PhaseTimer() {
+    // Destroy the wall timer first so wallMicros_ is finalized before we
+    // read it below.
+    timer_.reset();
+    if (runtimeStats_ != nullptr) {
+      const auto cpuNanos = velox::process::threadCpuNanos() - cpuStartNanos_;
+      runtimeStats_->recordTiming(
+          wallKey_, std::chrono::microseconds(wallMicros_));
+      runtimeStats_->recordTiming(cpuKey_, std::chrono::nanoseconds(cpuNanos));
+    }
+  }
+
+ private:
+  QueryRuntimeStats* const runtimeStats_;
+  const std::string_view wallKey_;
+  const std::string_view cpuKey_;
+  uint64_t& wallMicros_;
+  const uint64_t cpuStartNanos_;
+  std::optional<velox::MicrosecondTimer> timer_;
+};
+
 // Wraps a Velox connector's ConfigProvider pointer into an owned
 // ConfigProvider for use with ConfigRegistry. The underlying connector
 // must outlive this wrapper.
@@ -626,23 +664,33 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
       }
 
       std::string text;
-      optimize(
-          logicalPlan,
-          newQuery(options),
-          options,
-          [&](const auto& dt) {
-            text = optimizer::explainIo(&dt, outputTable);
-            return false; // Stop optimization.
-          },
-          nullptr,
-          schemaResolver,
-          /*explain=*/true);
+      auto queryCtx = newQuery(options);
+      {
+        PhaseTimer phaseTimer(
+            timing.optimize,
+            runtimeStats.get(),
+            QueryRuntimeStats::kOptimizeWallNanos,
+            QueryRuntimeStats::kOptimizeCpuNanos);
+        optimize(
+            logicalPlan,
+            queryCtx,
+            options,
+            [&](const auto& dt) {
+              text = optimizer::explainIo(&dt, outputTable);
+              return false; // Stop optimization.
+            },
+            nullptr,
+            schemaResolver,
+            /*explain=*/true,
+            runtimeStats);
+      }
       return {.message = std::move(text)};
     }
 
     if (explain->isAnalyze()) {
       return {
-          .message = runExplainAnalyze(logicalPlan, options, schemaResolver)};
+          .message = runExplainAnalyze(
+              logicalPlan, options, timing, runtimeStats, schemaResolver)};
     } else {
       return {
           .message = runExplain(
@@ -650,6 +698,8 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
               explain->type(),
               explain->format(),
               options,
+              timing,
+              runtimeStats,
               schemaResolver)};
     }
   }
@@ -814,6 +864,8 @@ std::string SqlQueryRunner::runExplain(
     presto::ExplainStatement::Type type,
     presto::ExplainStatement::Format format,
     const RunOptions& options,
+    QueryTiming& timing,
+    std::shared_ptr<QueryRuntimeStats> runtimeStats,
     std::shared_ptr<connector::SchemaResolver> schemaResolver) {
   const bool explain = schemaResolver != nullptr;
 
@@ -840,57 +892,86 @@ std::string SqlQueryRunner::runExplain(
 
     case presto::ExplainStatement::Type::kGraph: {
       std::string text;
-      optimize(
-          logicalPlan,
-          newQuery(options),
-          options,
-          [&](const auto& dt) {
-            if (format == presto::ExplainStatement::Format::kGraphviz) {
-              std::ostringstream out;
-              graphviz::DerivedTableDotPrinter::print(dt, out);
-              text = out.str();
-            } else {
-              text = optimizer::DerivedTablePrinter::toText(dt);
-            }
-            return false; // Stop optimization.
-          },
-          nullptr,
-          schemaResolver,
-          explain);
+      auto queryCtx = newQuery(options);
+      {
+        PhaseTimer phaseTimer(
+            timing.optimize,
+            runtimeStats.get(),
+            QueryRuntimeStats::kOptimizeWallNanos,
+            QueryRuntimeStats::kOptimizeCpuNanos);
+        optimize(
+            logicalPlan,
+            queryCtx,
+            options,
+            [&](const auto& dt) {
+              if (format == presto::ExplainStatement::Format::kGraphviz) {
+                std::ostringstream out;
+                graphviz::DerivedTableDotPrinter::print(dt, out);
+                text = out.str();
+              } else {
+                text = optimizer::DerivedTablePrinter::toText(dt);
+              }
+              return false; // Stop optimization.
+            },
+            nullptr,
+            schemaResolver,
+            explain,
+            runtimeStats);
+      }
       return text;
     }
 
     case presto::ExplainStatement::Type::kOptimized: {
       std::string text;
-      optimize(
-          logicalPlan,
-          newQuery(options),
-          options,
-          nullptr,
-          [&](const auto& plan) {
-            text = optimizer::RelationOpPrinter::toText(
-                plan,
-                {
-                    .includeCost = true,
-                    .includeConstraints = options.debugMode,
-                });
-            return false; // Stop optimization.
-          },
-          schemaResolver,
-          explain);
+      auto queryCtx = newQuery(options);
+      {
+        PhaseTimer phaseTimer(
+            timing.optimize,
+            runtimeStats.get(),
+            QueryRuntimeStats::kOptimizeWallNanos,
+            QueryRuntimeStats::kOptimizeCpuNanos);
+        optimize(
+            logicalPlan,
+            queryCtx,
+            options,
+            nullptr,
+            [&](const auto& plan) {
+              text = optimizer::RelationOpPrinter::toText(
+                  plan,
+                  {
+                      .includeCost = true,
+                      .includeConstraints = options.debugMode,
+                  });
+              return false; // Stop optimization.
+            },
+            schemaResolver,
+            explain,
+            runtimeStats);
+      }
       return text;
     }
 
-    case presto::ExplainStatement::Type::kExecutable:
-      return optimize(
-                 logicalPlan,
-                 newQuery(options),
-                 options,
-                 nullptr,
-                 nullptr,
-                 schemaResolver,
-                 explain)
-          .toString();
+    case presto::ExplainStatement::Type::kExecutable: {
+      optimizer::PlanAndStats planAndStats;
+      auto queryCtx = newQuery(options);
+      {
+        PhaseTimer phaseTimer(
+            timing.optimize,
+            runtimeStats.get(),
+            QueryRuntimeStats::kOptimizeWallNanos,
+            QueryRuntimeStats::kOptimizeCpuNanos);
+        planAndStats = optimize(
+            logicalPlan,
+            queryCtx,
+            options,
+            nullptr,
+            nullptr,
+            schemaResolver,
+            explain,
+            runtimeStats);
+      }
+      return planAndStats.toString();
+    }
 
     case presto::ExplainStatement::Type::kIo:
       // Handled in run() before calling runExplain().
@@ -942,18 +1023,45 @@ std::string printPlanWithStats(
 std::string SqlQueryRunner::runExplainAnalyze(
     const logical_plan::LogicalPlanNodePtr& logicalPlan,
     const RunOptions& options,
+    QueryTiming& timing,
+    std::shared_ptr<QueryRuntimeStats> runtimeStats,
     std::shared_ptr<connector::SchemaResolver> schemaResolver) {
   auto queryCtx = newQuery(options);
-  auto planAndStats = optimize(
-      logicalPlan, queryCtx, options, nullptr, nullptr, schemaResolver);
+  optimizer::PlanAndStats planAndStats;
+  {
+    PhaseTimer phaseTimer(
+        timing.optimize,
+        runtimeStats.get(),
+        QueryRuntimeStats::kOptimizeWallNanos,
+        QueryRuntimeStats::kOptimizeCpuNanos);
+    planAndStats = optimize(
+        logicalPlan,
+        queryCtx,
+        options,
+        nullptr,
+        nullptr,
+        schemaResolver,
+        /*explain=*/false,
+        runtimeStats);
+  }
 
-  auto runner =
-      makeLocalRunner(planAndStats, queryCtx, options, noopRuntimeStats_);
+  auto runner = makeLocalRunner(
+      planAndStats,
+      queryCtx,
+      options,
+      runtimeStats ? *runtimeStats : noopRuntimeStats_);
   SCOPE_EXIT {
     waitForCompletion(runner, options.timeoutMicros);
   };
 
-  auto results = fetchResults(*runner);
+  {
+    PhaseTimer phaseTimer(
+        timing.execute,
+        runtimeStats.get(),
+        QueryRuntimeStats::kExecuteWallNanos,
+        QueryRuntimeStats::kExecuteCpuNanos);
+    auto results = fetchResults(*runner);
+  }
 
   std::stringstream out;
   out << printPlanWithStats(
@@ -1141,10 +1249,12 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runLogicalPlan(
   SqlResult result;
 
   optimizer::PlanAndStats planAndStats;
-  uint64_t optimizeCpuNanos{0};
   {
-    auto cpuStart = velox::process::threadCpuNanos();
-    velox::MicrosecondTimer timer(&timing.optimize);
+    PhaseTimer phaseTimer(
+        timing.optimize,
+        runtimeStats.get(),
+        QueryRuntimeStats::kOptimizeWallNanos,
+        QueryRuntimeStats::kOptimizeCpuNanos);
     planAndStats = optimize(
         logicalPlan,
         queryCtx,
@@ -1154,15 +1264,6 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runLogicalPlan(
         std::move(schemaResolver),
         /*explain=*/false,
         runtimeStats);
-    optimizeCpuNanos = velox::process::threadCpuNanos() - cpuStart;
-  }
-  if (runtimeStats) {
-    runtimeStats->recordTiming(
-        QueryRuntimeStats::kOptimizeWallNanos,
-        std::chrono::microseconds(timing.optimize));
-    runtimeStats->recordTiming(
-        QueryRuntimeStats::kOptimizeCpuNanos,
-        std::chrono::nanoseconds(optimizeCpuNanos));
   }
 
   planString = planAndStats.toString();
@@ -1176,20 +1277,13 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runLogicalPlan(
     waitForCompletion(runner, options.timeoutMicros);
   };
 
-  uint64_t executeCpuNanos{0};
   {
-    auto cpuStart = velox::process::threadCpuNanos();
-    velox::MicrosecondTimer timer(&timing.execute);
-    result.results = fetchResults(*runner);
-    executeCpuNanos = velox::process::threadCpuNanos() - cpuStart;
-  }
-  if (runtimeStats) {
-    runtimeStats->recordTiming(
+    PhaseTimer phaseTimer(
+        timing.execute,
+        runtimeStats.get(),
         QueryRuntimeStats::kExecuteWallNanos,
-        std::chrono::microseconds(timing.execute));
-    runtimeStats->recordTiming(
-        QueryRuntimeStats::kExecuteCpuNanos,
-        std::chrono::nanoseconds(executeCpuNanos));
+        QueryRuntimeStats::kExecuteCpuNanos);
+    result.results = fetchResults(*runner);
   }
 
   return result;
