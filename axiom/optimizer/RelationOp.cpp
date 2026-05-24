@@ -217,6 +217,7 @@ Distribution TableScan::outputDistribution(
     orderTypes.resize(numPrefix);
     replace(orderKeys, schemaColumns, columns.data());
   }
+
   return Distribution(
       distribution.partitionType(),
       std::move(partitionKeys),

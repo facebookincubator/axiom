@@ -548,6 +548,28 @@ class PlanMatcherBuilder {
       const std::string& groupIdAlias,
       const std::vector<std::pair<std::string, std::string>>& keyAliases = {});
 
+  /// Asserts the current fragment has a non-empty groupedNodes map (bucketed
+  /// scheduling is active).
+  PlanMatcherBuilder& bucketed();
+
+  /// Asserts the current fragment has an empty groupedNodes map (no bucketed
+  /// scheduling).
+  PlanMatcherBuilder& notBucketed();
+
+  /// Asserts the current fragment has exactly 'count' entries in groupedNodes
+  /// with a non-null PartitionType (bucketed scans).
+  PlanMatcherBuilder& bucketedScans(int32_t count);
+
+  /// Asserts the current fragment has exactly 'count' entries in groupedNodes
+  /// with a null PartitionType (consumer-side hash exchanges).
+  PlanMatcherBuilder& hashExchanges(int32_t count);
+
+  /// Asserts the current fragment has fragment.width == 'width'.
+  PlanMatcherBuilder& fragmentWidth(int32_t width);
+
+  /// Asserts the current fragment has fragment.type == 'type'.
+  PlanMatcherBuilder& fragmentType(axiom::optimizer::FragmentType type);
+
   /// Builds and returns the constructed PlanMatcher.
   /// @throws VeloxUserError if matcher is empty.
   std::shared_ptr<PlanMatcher> build() {

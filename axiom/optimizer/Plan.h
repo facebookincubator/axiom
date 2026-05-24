@@ -168,18 +168,25 @@ struct NextJoin {
       RelationOpPtr plan,
       PlanCost cost,
       PlanObjectSet placed,
-      PlanObjectSet columns)
+      PlanObjectSet columns,
+      GroupedLeaves currentGroupedLeaves)
       : candidate{candidate},
         plan{std::move(plan)},
         cost{std::move(cost)},
         placed{std::move(placed)},
-        columns{std::move(columns)} {}
+        columns{std::move(columns)},
+        currentGroupedLeaves{std::move(currentGroupedLeaves)} {}
 
   const JoinCandidate* candidate;
   RelationOpPtr plan;
   PlanCost cost;
   PlanObjectSet placed;
   PlanObjectSet columns;
+
+  /// Frozen copy of PlanState::currentGroupedLeaves_ at the time addNextJoin
+  /// captured this candidate. Restored alongside placed/columns/cost when
+  /// tryNextJoins iterates candidates.
+  GroupedLeaves currentGroupedLeaves;
 
   /// If true, only 'other' should be tried. Use to compare equivalent joins
   /// with different join method or partitioning.
@@ -313,6 +320,16 @@ struct PlanState {
   /// mapping. Returns the original 'expr' if no mapping exists.
   ExprCP toColumn(ExprCP expr) const;
 
+  /// Read-only access to the current fragment's per-leaf PartitionType map.
+  const GroupedLeaves& currentGroupedLeaves() const {
+    return currentGroupedLeaves_;
+  }
+
+  /// Mutable access for in-place updates at scan / join / Repartition sites.
+  GroupedLeaves& mutableCurrentGroupedLeaves() {
+    return currentGroupedLeaves_;
+  }
+
  private:
   PlanObjectSet computeDownstreamColumns(bool includeFilters) const;
 
@@ -336,6 +353,11 @@ struct PlanState {
   /// A mapping of expressions to pre-computed columns. See
   /// PrecomputeProjection.
   folly::F14FastMap<ExprCP, ExprCP> exprToColumn_;
+
+  // Per-leaf PartitionType map for the fragment containing the current top
+  // operator. Updated as scans are placed (insert), as joins fold copartition
+  // (per-leaf coarsening), and as Repartitions are inserted (snapshot+reset).
+  GroupedLeaves currentGroupedLeaves_;
 };
 
 /// A scoped guard that restores fields of PlanState on destruction.
@@ -352,6 +374,7 @@ struct PlanStateSaver {
   PlanObjectSet columns;
   PlanCost cost;
   folly::F14FastMap<ExprCP, ExprCP> exprToColumn;
+  GroupedLeaves currentGroupedLeaves;
   size_t numDebugPlacedTables{0};
 
  private:

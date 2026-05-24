@@ -39,7 +39,14 @@ PlanState::PlanState(Optimization& optimization, DerivedTableCP dt, PlanP plan)
     : optimization(optimization),
       dt(dt),
       cost(plan->cost),
-      syntacticJoinOrder_{optimization.options().syntacticJoinOrder} {}
+      syntacticJoinOrder_{optimization.options().syntacticJoinOrder} {
+  if (auto it = optimization.planGroupedLeaves().find(plan);
+      it != optimization.planGroupedLeaves().end()) {
+    // Copy: planGroupedLeaves_[plan] is reused if 'plan' is selected as input
+    // to multiple parents; each consumer needs its own starting map.
+    currentGroupedLeaves_ = GroupedLeaves{it->second};
+  }
+}
 
 #ifndef NDEBUG
 // NOLINTBEGIN
@@ -73,6 +80,7 @@ void PlanState::save(PlanStateSaver& saver) const {
   saver.columns = columns_;
   saver.cost = cost;
   saver.exprToColumn = exprToColumn_;
+  saver.currentGroupedLeaves = currentGroupedLeaves_;
   saver.numDebugPlacedTables = debugPlacedTables.size();
 }
 
@@ -81,6 +89,7 @@ void PlanState::restore(PlanStateSaver& saver) {
   columns_ = std::move(saver.columns);
   cost = saver.cost;
   exprToColumn_ = std::move(saver.exprToColumn);
+  currentGroupedLeaves_ = std::move(saver.currentGroupedLeaves);
   debugPlacedTables.resize(saver.numDebugPlacedTables);
 }
 
@@ -89,6 +98,9 @@ void PlanState::restore(const NextJoin& nextJoin) {
   columns_ = nextJoin.columns;
   cost = nextJoin.cost;
   exprToColumn_.clear();
+  // Copy, not move: NextJoin may be revisited if multiple candidates remain
+  // in toTry and the outer scope iterates them.
+  currentGroupedLeaves_ = nextJoin.currentGroupedLeaves;
 }
 
 void PlanState::place(PlanObjectCP object) {
@@ -160,7 +172,13 @@ Plan::Plan(RelationOpPtr op, const PlanState& state)
       cost(state.cost),
       tables(state.placed()),
       columns(exprColumns(state.targetExprs)),
-      constraints(&this->op->constraints()) {}
+      constraints(&this->op->constraints()) {
+  // Park the per-leaf bucketed map on the Optimization side table keyed by
+  // this Plan's address. Plans are sometimes allocated via the arena
+  // (make<Plan>) where destructors don't run; storing the map externally
+  // avoids leaking the F14FastMap's heap storage.
+  state.optimization.planGroupedLeaves()[this] = state.currentGroupedLeaves();
+}
 
 bool Plan::isStateBetter(const PlanState& state, float margin) const {
   return cost.cost > state.cost.cost + margin;
@@ -203,7 +221,13 @@ void PlanState::addNextJoin(
     std::vector<NextJoin>& toTry) const {
   VELOX_DCHECK(exprToColumn_.empty());
   if (!isOverBest()) {
-    toTry.emplace_back(candidate, std::move(plan), cost, placed_, columns_);
+    toTry.emplace_back(
+        candidate,
+        std::move(plan),
+        cost,
+        placed_,
+        columns_,
+        currentGroupedLeaves_);
   } else {
     optimization.trace(OptimizerOptions::kExceededBest, dt->id(), cost, *plan);
   }
@@ -484,7 +508,7 @@ PlanP PlanSet::best(
 
     update(best, bestCost);
     if (checkDistribution &&
-        plan->op->distribution().isSamePartition(distribution.value())) {
+        plan->op->distribution().isCopartitionedWith(distribution.value())) {
       update(match, matchCost);
     }
   }

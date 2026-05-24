@@ -164,7 +164,12 @@ std::vector<velox::common::Subfield> columnSubfields(
   return subfields;
 }
 
-RelationOpPtr addGather(const RelationOpPtr& op) {
+// On return, *outGather is set to the inserted gather Repartition, or
+// nullptr if no gather was added.
+RelationOpPtr addGather(
+    const RelationOpPtr& op,
+    const Repartition** outGather) {
+  *outGather = nullptr;
   if (op->distribution().isGather()) {
     return op;
   }
@@ -172,11 +177,13 @@ RelationOpPtr addGather(const RelationOpPtr& op) {
     const auto& order = op->distribution();
     auto final = Distribution::gather(order.orderKeys(), order.orderTypes());
     auto* gather = make<Repartition>(op, final, op->columns());
+    *outGather = gather;
     auto* orderBy =
         make<OrderBy>(gather, order.orderKeys(), order.orderTypes());
     return orderBy;
   }
   auto* gather = make<Repartition>(op, Distribution::gather(), op->columns());
+  *outGather = gather;
   return gather;
 }
 
@@ -427,20 +434,111 @@ void decideFragmentType(
   }
 }
 
+// First non-null PartitionType's numPartitions in 'groupedLeaves', else
+// 'fallback'. All non-null entries are expected to share numPartitions()
+// (post-foldCopartition invariant) and a mismatch indicates a planning bug.
+int32_t groupedLeavesWidth(
+    const GroupedLeaves& groupedLeaves,
+    int32_t fallback) {
+  int32_t width = -1;
+  for (const auto& [_, pt] : groupedLeaves) {
+    if (pt == nullptr) {
+      continue;
+    }
+    if (width < 0) {
+      width = pt->numPartitions();
+    } else {
+      VELOX_CHECK_EQ(
+          pt->numPartitions(),
+          width,
+          "GroupedLeaves has non-null PartitionTypes with disagreeing numPartitions");
+    }
+  }
+  return width < 0 ? fallback : width;
+}
+
 } // namespace
+
+void ToVelox::applyGroupedLeaves(
+    ExecutableFragment& fragment,
+    const GroupedLeaves& groupedLeaves) {
+  // A fragment is bucketed iff at least one groupedLeaves entry has a non-null
+  // PartitionType. Non-bucketed fragments leave groupedNodes empty: a
+  // fragment that consumes only hash-partitioned exchanges (all-null entries)
+  // doesn't participate in groupId routing.
+  bool anyNonNull = false;
+  for (const auto& [_, pt] : groupedLeaves) {
+    if (pt != nullptr) {
+      anyNonNull = true;
+      break;
+    }
+  }
+  if (!anyNonNull) {
+    return;
+  }
+  for (const auto& [relOp, partitionType] : groupedLeaves) {
+    auto idIt = relationOpToNodeId_.find(relOp);
+    VELOX_CHECK(
+        idIt != relationOpToNodeId_.end(),
+        "GroupedLeaves references a RelationOp not yet emitted by ToVelox");
+    // ExecutableFragment::groupedNodes' contract is non-const PartitionType
+    // (axel/runtime side); groupedLeaves are const for optimizer-side
+    // immutability. Drop-const is safe — neither consumer mutates the type.
+    fragment.groupedNodes.emplace(
+        idIt->second,
+        std::const_pointer_cast<connector::PartitionType>(partitionType));
+  }
+  int32_t width = -1;
+  for (const auto& [_, pt] : fragment.groupedNodes) {
+    if (pt == nullptr) {
+      continue;
+    }
+    if (width < 0) {
+      width = pt->numPartitions();
+    } else {
+      VELOX_CHECK_EQ(
+          pt->numPartitions(),
+          width,
+          "fragment.groupedNodes has non-null PartitionTypes with disagreeing numPartitions");
+    }
+  }
+  if (width >= 0) {
+    fragment.type = FragmentType::kFixed;
+    fragment.width = width;
+  }
+}
 
 PlanAndStats ToVelox::toVeloxPlan(
     RelationOpPtr plan,
     const MultiFragmentPlan::Options& options,
-    const std::vector<OutputColumnNameMapping>& outputNames) {
+    const std::vector<OutputColumnNameMapping>& outputNames,
+    const GroupedLeavesBundle& groupedLeaves) {
   options_ = options;
 
   prediction_.clear();
   nodeHistory_.clear();
+  relationOpToNodeId_.clear();
+  currentConsumerGroupedLeaves_ = nullptr;
+  groupedLeaves_ = &groupedLeaves;
+  gatherRepartition_ = nullptr;
+  SCOPE_EXIT {
+    groupedLeaves_ = nullptr;
+    gatherRepartition_ = nullptr;
+  };
 
+  // If addGather inserts a final gather Repartition, remember it so
+  // makeRepartition's consumer logic can treat it as carrying the root
+  // fragment's GroupedLeaves (the gather was not present at planning time
+  // and so has no entry in groupedLeaves_->perRepartition).
   if (options_.numWorkers > 1 && !options_.remoteOutput) {
-    plan = addGather(plan);
+    plan = addGather(plan, &gatherRepartition_);
   }
+
+  // Top fragment's consumer GroupedLeaves. For non-gather single-task tests
+  // this is groupedLeaves_->root; for the gather case the gather's
+  // PartitionedOutputNode feeds a kSingle root, so the value is unused but
+  // harmless.
+  currentConsumerGroupedLeaves_ = &groupedLeaves_->root;
 
   // The final (root) fragment is not capped by a Repartition. With
   // remoteOutput, the root produces wire output; its type is whatever its
@@ -456,6 +554,17 @@ PlanAndStats ToVelox::toVeloxPlan(
 
   std::vector<ExecutableFragment> stages;
   top.fragment.planNode = makeFragment(plan, top, stages);
+
+  // For the root fragment when no addGather was inserted, apply the
+  // optimizer's root groupedLeaves directly to top.groupedNodes so the
+  // runtime/connector pair sees the root's bucketed-leaf routing.
+  // Skip when top.type is kSingle: a single-task root has no groupId
+  // routing (local consumer) and applyGroupedLeaves would otherwise
+  // overwrite the type with kFixed and trip checkLastFragment.
+  if (gatherRepartition_ == nullptr && top.type != FragmentType::kSingle) {
+    applyGroupedLeaves(top, groupedLeaves_->root);
+  }
+
   stages.push_back(std::move(top));
 
   auto& rootPlanNode = stages.back().fragment.planNode;
@@ -1009,6 +1118,8 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
       nextId(), node->outputType(), exchangeSerdeKind_, node);
   makePredictionAndHistory(source.fragment.planNode->id(), &op);
 
+  applyGroupedLeaves(source, groupedLeaves_->root);
+
   auto merge = std::make_shared<velox::core::MergeExchangeNode>(
       nextId(), node->outputType(), keys, sortOrder, exchangeSerdeKind_);
 
@@ -1037,6 +1148,8 @@ velox::core::PlanNodePtr ToVelox::makeOffset(
   source.fragment.planNode = velox::core::PartitionedOutputNode::single(
       nextId(), input->outputType(), exchangeSerdeKind_, input);
   makePredictionAndHistory(source.fragment.planNode->id(), &op);
+
+  applyGroupedLeaves(source, groupedLeaves_->root);
 
   auto exchange = std::make_shared<velox::core::ExchangeNode>(
       nextId(), input->outputType(), exchangeSerdeKind_);
@@ -1086,6 +1199,8 @@ velox::core::PlanNodePtr ToVelox::makeLimit(
   source.fragment.planNode = velox::core::PartitionedOutputNode::single(
       nextId(), node->outputType(), exchangeSerdeKind_, node);
   makePredictionAndHistory(source.fragment.planNode->id(), &op);
+
+  applyGroupedLeaves(source, groupedLeaves_->root);
 
   auto exchange = std::make_shared<velox::core::ExchangeNode>(
       nextId(), node->outputType(), exchangeSerdeKind_);
@@ -1305,8 +1420,8 @@ velox::core::TypedExprPtr toAndWithAliases(
 
 velox::core::PlanNodePtr ToVelox::makeScan(
     const TableScan& scan,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    ExecutableFragment& /*fragment*/,
+    std::vector<ExecutableFragment>& /*stages*/) {
   columnAlteredTypes_.clear();
 
   const bool isSubfieldPushdown = hasSubfieldPushdown(scan);
@@ -1354,9 +1469,12 @@ velox::core::PlanNodePtr ToVelox::makeScan(
         connectorSession, column->name(), std::move(subfields));
   }
 
+  auto scanId = nextId();
   velox::core::PlanNodePtr result =
       std::make_shared<velox::core::TableScanNode>(
-          nextId(), outputType, tableHandle, assignments);
+          scanId, outputType, tableHandle, assignments);
+
+  relationOpToNodeId_.insert_or_assign(&scan, scanId);
 
   if (filter != nullptr) {
     result =
@@ -1755,7 +1873,30 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
   // Repartition's distribution describes the wire output and is independent.
   auto source = newFragment();
   decideFragmentType(*repartition.input(), options_, source);
+
+  // Save the outer consumer's groupedLeaves (used to size our PartitionedOutput
+  // below) and set the inner recursion's consumer context to source's
+  // groupedLeaves. Restore after the recursion returns.
+  const GroupedLeaves* outerConsumerGroupedLeaves =
+      currentConsumerGroupedLeaves_;
+  static const GroupedLeaves kEmptyGroupedLeaves;
+  const GroupedLeaves* sourceGroupedLeaves = nullptr;
+  if (&repartition == gatherRepartition_) {
+    // Synthetic gather Repartition: not present in perRepartition
+    // because it was added after planning. Treat its source-side groupedLeaves
+    // as the root's.
+    sourceGroupedLeaves = &groupedLeaves_->root;
+  } else {
+    auto it = groupedLeaves_->perRepartition.find(&repartition);
+    if (it != groupedLeaves_->perRepartition.end()) {
+      sourceGroupedLeaves = &it->second;
+    }
+  }
+  currentConsumerGroupedLeaves_ = sourceGroupedLeaves != nullptr
+      ? sourceGroupedLeaves
+      : &kEmptyGroupedLeaves;
   auto sourcePlan = makeFragment(repartition.input(), source, stages);
+  currentConsumerGroupedLeaves_ = outerConsumerGroupedLeaves;
 
   // TODO Figure out a cleaner solution to setting 'columns' for TableWrite.
   auto outputType = repartition.columns().empty()
@@ -1780,20 +1921,26 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
         nextId(), outputType, exchangeSerdeKind_, sourcePlan);
   } else {
     VELOX_CHECK_NE(0, keys.size());
-    auto partitionFunctionFactory = createPartitionFunctionSpec(
-        sourcePlan->outputType(), keys, distribution);
-
-    source.fragment.planNode =
-        std::make_shared<velox::core::PartitionedOutputNode>(
-            nextId(),
-            velox::core::PartitionedOutputNode::Kind::kPartitioned,
-            keys,
-            options_.numWorkers,
-            repartition.isReplicateNullsAndAny(),
-            std::move(partitionFunctionFactory),
-            outputType,
-            exchangeSerdeKind_,
-            sourcePlan);
+    const auto numPartitions =
+        groupedLeavesWidth(*outerConsumerGroupedLeaves, options_.numWorkers);
+    if (numPartitions == 1) {
+      source.fragment.planNode = velox::core::PartitionedOutputNode::single(
+          nextId(), outputType, exchangeSerdeKind_, sourcePlan);
+    } else {
+      auto partitionFunctionFactory = createPartitionFunctionSpec(
+          sourcePlan->outputType(), keys, distribution);
+      source.fragment.planNode =
+          std::make_shared<velox::core::PartitionedOutputNode>(
+              nextId(),
+              velox::core::PartitionedOutputNode::Kind::kPartitioned,
+              keys,
+              numPartitions,
+              repartition.isReplicateNullsAndAny(),
+              std::move(partitionFunctionFactory),
+              outputType,
+              exchangeSerdeKind_,
+              sourcePlan);
+    }
   }
   makePredictionAndHistory(source.fragment.planNode->id(), &repartition);
 
@@ -1801,6 +1948,20 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
     exchange = std::make_shared<velox::core::ExchangeNode>(
         nextId(), outputType, exchangeSerdeKind_);
   }
+
+  // Map this Repartition to its consumer-side ExchangeNode id so any later
+  // groupedLeaves lookup that targets &repartition translates to exchange->id()
+  // for the consumer fragment's groupedNodes entry.
+  relationOpToNodeId_.insert_or_assign(&repartition, exchange->id());
+
+  // Apply the optimizer-side groupedLeaves for this Repartition's PRODUCER
+  // fragment. The map was committed in Optimization at every make<Repartition>
+  // and contains the per-leaf PartitionType map for the fragment ending in
+  // this Repartition.
+  if (sourceGroupedLeaves != nullptr) {
+    applyGroupedLeaves(source, *sourceGroupedLeaves);
+  }
+
   fragment.inputStages.emplace_back(exchange->id(), source.taskPrefix);
   stages.push_back(std::move(source));
   return exchange;
@@ -2015,6 +2176,9 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
     numDrivers = 1;
   }
 
+  VELOX_CHECK(
+      fragment.type != FragmentType::kFixed || fragment.width.has_value(),
+      "kFixed fragment must have width set");
   auto numTasks = fragment.width.value_or(
       fragment.type == FragmentType::kSource ? options_.numWorkers : 1);
 

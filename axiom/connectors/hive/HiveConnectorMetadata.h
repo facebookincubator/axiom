@@ -52,11 +52,8 @@ class HivePartitionType : public connector::PartitionType {
     VELOX_CHECK_GT(numPartitions_, 0);
   }
 
-  /// Types are compatible if numPartitions of one is an interger multiple of
-  /// the other. The partition to use for copartitioning is the one with the
-  /// fewer partitions. If numPartitions is the same, returns 'this'.
-  const PartitionType* FOLLY_NULLABLE
-  copartition(const PartitionType& any) const override;
+  std::shared_ptr<PartitionType> copartition(
+      const PartitionType& any) const override;
 
   /// Returns the largest divisor of numPartitions() that is <=
   /// maxPartitions.
@@ -135,8 +132,8 @@ class HiveTableLayout : public TableLayout {
     return numBuckets_;
   }
 
-  const PartitionType* partitionType() const override {
-    return partitionType_.has_value() ? &partitionType_.value() : nullptr;
+  std::shared_ptr<const PartitionType> partitionType() const override {
+    return partitionType_;
   }
 
   /// Returns SerDe parameters for this layout. Default implementation returns
@@ -167,7 +164,7 @@ class HiveTableLayout : public TableLayout {
   const velox::dwio::common::FileFormat fileFormat_;
   const std::vector<const Column*> hivePartitionColumns_;
   const std::optional<int32_t> numBuckets_;
-  const std::optional<HivePartitionType> partitionType_;
+  const std::shared_ptr<const HivePartitionType> partitionType_;
 };
 
 class HiveConnectorWriteHandle : public ConnectorWriteHandle {

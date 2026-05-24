@@ -57,6 +57,16 @@ struct PlanAndStats {
   std::string toString() const;
 };
 
+/// Per-fragment leaf-PartitionType maps produced by the optimizer and consumed
+/// by ToVelox to populate ExecutableFragment::groupedNodes.
+struct GroupedLeavesBundle {
+  /// One entry per Repartition (fragment boundary).
+  folly::F14FastMap<const Repartition*, GroupedLeaves> perRepartition;
+
+  /// For the root fragment, captured after planning completes.
+  GroupedLeaves root;
+};
+
 class ToVelox {
  public:
   ToVelox(
@@ -66,12 +76,13 @@ class ToVelox {
 
   /// Converts physical plan (a tree of RelationOp) to an executable
   /// multi-fragment Velox plan. If outputNames is non-empty, adds a
-  /// final projection that selects the named source columns from the
-  /// optimized plan's outputType and renames them per outputName.
+  /// final projection to rename or reorder output columns. Pass {} for
+  /// 'groupedLeaves' on plans that don't use bucketed execution.
   PlanAndStats toVeloxPlan(
       RelationOpPtr plan,
       const MultiFragmentPlan::Options& options,
-      const std::vector<OutputColumnNameMapping>& outputNames = {});
+      const std::vector<OutputColumnNameMapping>& outputNames,
+      const GroupedLeavesBundle& groupedLeaves);
 
   /// Per-leaf-table data produced by filterUpdated().
   struct LeafTableData {
@@ -394,6 +405,36 @@ class ToVelox {
   // when numWorkers > 1, consumed by toVeloxPlan to add a
   // TableWriteMerge(kFinal) after the gather exchange.
   std::optional<velox::core::ColumnStatsSpec> finalMergeSpec_;
+
+  // Translates 'groupedLeaves' (keyed by const RelationOp*) into entries in
+  // 'fragment.groupedNodes' (keyed by Velox PlanNodeId) using
+  // 'relationOpToNodeId_'. After translation, if any non-null PartitionType
+  // entry is present, sets fragment.type = kFixed and fragment.width =
+  // numPartitions().
+  void applyGroupedLeaves(
+      ExecutableFragment& fragment,
+      const GroupedLeaves& groupedLeaves);
+
+  // RelationOp identity → minted Velox PlanNodeId. Cleared at the top of
+  // toVeloxPlan.
+  folly::F14FastMap<const RelationOp*, velox::core::PlanNodeId>
+      relationOpToNodeId_;
+
+  // GroupedLeaves of the fragment consuming the Repartition currently being
+  // emitted; read to size that Repartition's PartitionedOutputNode.
+  // Saved/restored across nested makeRepartition calls.
+  const GroupedLeaves* currentConsumerGroupedLeaves_{nullptr};
+
+  // Per-call bundle of optimizer-produced grouped-leaf maps. Set at the top
+  // of toVeloxPlan from the explicit parameter; cleared on exit.
+  const GroupedLeavesBundle* groupedLeaves_{nullptr};
+
+  // The synthetic gather Repartition that addGather inserts at the top of
+  // the plan tree, when applicable. Set by toVeloxPlan. makeRepartition
+  // treats this as carrying the same GroupedLeaves as the root fragment;
+  // it is not present in groupedLeaves_->perRepartition because
+  // it was not in the plan at optimization time.
+  const Repartition* gatherRepartition_{nullptr};
 };
 
 } // namespace facebook::axiom::optimizer

@@ -28,10 +28,21 @@ struct PlanState;
 /// desiredKeys is empty. Adds a shuffle if existing partition keys are not a
 /// subset of desiredKeys. Does nothing if data is already gathered or
 /// partitioned correctly. Returns the possibly repartitioned plan and cost. If
-/// no shuffle is added, the returned cost is 0.
+/// no shuffle is added, the returned cost is 0. When a Repartition is added,
+/// snapshots 'state.currentGroupedLeaves_' onto
+/// Optimization::repartitionGroupedLeaves_ and resets the map per the new
+/// Repartition's distribution kind.
 std::pair<RelationOpPtr, PlanCost> maybeRepartition(
     const RelationOpPtr& plan,
-    ExprVector desiredKeys);
+    ExprVector desiredKeys,
+    PlanState& state);
+
+/// Returns the positions in 'keys' of expressions that match 'op's partition
+/// keys, in partition-key order. Returns an empty vector if any partition key
+/// is missing from 'keys'.
+std::vector<uint32_t> joinKeyPartition(
+    const RelationOpPtr& op,
+    const ExprVector& keys);
 
 /// Plans aggregation operators for a derived table.
 class AggregationPlanner {
@@ -57,7 +68,8 @@ class AggregationPlanner {
   // repartition is added, the returned cost is 0.
   std::pair<RelationOpPtr, PlanCost> repartitionForAgg(
       const RelationOpPtr& plan,
-      const ColumnVector& partitionKeys) const;
+      const ColumnVector& partitionKeys,
+      PlanState& state) const;
 
   // Creates a two-phase (partial + final) aggregation plan with repartitioning
   // by groupingKeys in between.
@@ -67,8 +79,9 @@ class AggregationPlanner {
       const AggregateVector& aggregates,
       const ColumnVector& intermediateColumns,
       const ColumnVector& outputColumns,
-      QGVector<int32_t> globalGroupingSets = {},
-      ColumnCP groupId = nullptr) const;
+      QGVector<int32_t> globalGroupingSets,
+      ColumnCP groupId,
+      PlanState& state) const;
 
   // Creates a single-phase aggregation plan following repartitioning by
   // groupingKeys.
@@ -78,8 +91,9 @@ class AggregationPlanner {
       const AggregateVector& aggregates,
       const ColumnVector& intermediateColumns,
       const ColumnVector& outputColumns,
-      QGVector<int32_t> globalGroupingSets = {},
-      ColumnCP groupId = nullptr) const;
+      QGVector<int32_t> globalGroupingSets,
+      ColumnCP groupId,
+      PlanState& state) const;
 
   // Chooses between split and single aggregation plans based on cost.
   std::pair<RelationOpPtr, PlanCost> makeSplitOrSingleAggregationPlan(
@@ -88,8 +102,9 @@ class AggregationPlanner {
       const AggregateVector& aggregates,
       const ColumnVector& intermediateColumns,
       const ColumnVector& outputColumns,
-      QGVector<int32_t> globalGroupingSets = {},
-      ColumnCP groupId = nullptr) const;
+      QGVector<int32_t> globalGroupingSets,
+      ColumnCP groupId,
+      PlanState& state) const;
 
   // Transforms distinct aggregation into a two-level GROUP BY + non-distinct
   // aggregation plan.
@@ -99,7 +114,8 @@ class AggregationPlanner {
       const ExprVector& distinctArgs,
       const AggregateVector& aggregates,
       AggregationPlanCP aggPlan,
-      bool hasOrderBy) const;
+      bool hasOrderBy,
+      PlanState& state) const;
 
   // Transforms distinct aggregations into a plan with MarkDistinct and
   // non-distinct masked aggregations.
@@ -108,7 +124,8 @@ class AggregationPlanner {
       const ExprVector& groupingKeys,
       const AggregateVector& aggregates,
       AggregationPlanCP aggPlan,
-      bool hasOrderBy) const;
+      bool hasOrderBy,
+      PlanState& state) const;
 
   // Handles aggregation with grouping sets (ROLLUP, CUBE, GROUPING SETS).
   // Creates a GroupId node followed by cost-based split or single aggregation.

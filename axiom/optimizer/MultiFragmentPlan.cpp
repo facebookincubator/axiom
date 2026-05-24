@@ -304,6 +304,7 @@ const auto& columnStatFieldNames() {
   };
   return kNames;
 }
+
 } // namespace
 
 AXIOM_DEFINE_ENUM_NAME(ColumnStatField, columnStatFieldNames);
@@ -380,18 +381,23 @@ velox::ContinueFuture FinishWrite::abort() && noexcept {
 }
 
 namespace {
-// Formats the header line for a fragment in toString/toSummaryString.
 std::string formatFragmentHeader(
     int32_t index,
     const ExecutableFragment& fragment) {
+  std::string bucketedSuffix;
+  if (!fragment.groupedNodes.empty()) {
+    bucketedSuffix =
+        fmt::format(" bucketed(leaves={})", fragment.groupedNodes.size());
+  }
   return fmt::format(
-      "Fragment {}: {} {}{}:",
+      "Fragment {}: {} {}{}{}:",
       index,
       fragment.taskPrefix,
       FragmentTypeName::toName(fragment.type),
       fragment.width.has_value()
           ? fmt::format(" numWorkers={}", fragment.width.value())
-          : "");
+          : "",
+      bucketedSuffix);
 }
 } // namespace
 
@@ -601,6 +607,48 @@ void checkProducerConsumerLinkage(
   }
 }
 
+void checkGroupedNodes(const ExecutableFragment& fragment) {
+  if (fragment.groupedNodes.empty()) {
+    return;
+  }
+
+  folly::F14FastSet<velox::core::PlanNodeId> leafIds;
+  std::vector<const velox::core::PlanNode*> stack;
+  stack.push_back(fragment.fragment.planNode.get());
+  while (!stack.empty()) {
+    const auto* node = stack.back();
+    stack.pop_back();
+    if (dynamic_cast<const velox::core::TableScanNode*>(node) != nullptr ||
+        dynamic_cast<const velox::core::ExchangeNode*>(node) != nullptr) {
+      leafIds.insert(node->id());
+    }
+    for (const auto& child : node->sources()) {
+      stack.push_back(child.get());
+    }
+  }
+
+  std::optional<int32_t> commonNumPartitions;
+  for (const auto& [planNodeId, partitionType] : fragment.groupedNodes) {
+    VELOX_CHECK(
+        leafIds.contains(planNodeId),
+        "groupedNodes references a PlanNodeId that is not a leaf TableScan or ExchangeNode in fragment '{}': {}",
+        fragment.taskPrefix,
+        planNodeId);
+    if (partitionType == nullptr) {
+      continue;
+    }
+    if (commonNumPartitions.has_value()) {
+      VELOX_CHECK_EQ(
+          commonNumPartitions.value(),
+          partitionType->numPartitions(),
+          "All non-null groupedNodes entries in a fragment must share numPartitions(): {}",
+          fragment.taskPrefix);
+    } else {
+      commonNumPartitions = partitionType->numPartitions();
+    }
+  }
+}
+
 // Checks that the last fragment has a type compatible with local result
 // consumption.
 void checkLastFragment(const ExecutableFragment& last, int32_t numWorkers) {
@@ -621,6 +669,10 @@ void MultiFragmentPlan::checkConsistency() const {
   checkFragmentTypes(fragments_, options_.numWorkers);
 
   checkProducerConsumerLinkage(fragments_);
+
+  for (const auto& fragment : fragments_) {
+    checkGroupedNodes(fragment);
+  }
 
   if (!options_.remoteOutput) {
     checkLastFragment(fragments_.back(), options_.numWorkers);

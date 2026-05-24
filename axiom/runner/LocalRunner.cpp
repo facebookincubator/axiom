@@ -59,7 +59,8 @@ class SimpleSplitSource : public connector::SplitSource {
 std::shared_ptr<connector::SplitSource>
 SimpleSplitSourceFactory::splitSourceForScan(
     const connector::ConnectorSessionPtr& /* session */,
-    const velox::core::TableScanNode& scan) {
+    const velox::core::TableScanNode& scan,
+    const std::shared_ptr<connector::PartitionType>& /*partitionType*/) {
   auto it = nodeSplitMap_.find(scan.id());
   if (it == nodeSplitMap_.end()) {
     VELOX_FAIL("Splits are not provided for scan {}", scan.id());
@@ -70,7 +71,8 @@ SimpleSplitSourceFactory::splitSourceForScan(
 std::shared_ptr<connector::SplitSource>
 ConnectorSplitSourceFactory::splitSourceForScan(
     const connector::ConnectorSessionPtr& session,
-    const velox::core::TableScanNode& scan) {
+    const velox::core::TableScanNode& scan,
+    const std::shared_ptr<connector::PartitionType>& partitionType) {
   const auto& handle = scan.tableHandle();
   auto metadata =
       connector::ConnectorMetadataRegistry::get(handle->connectorId());
@@ -93,7 +95,7 @@ ConnectorSplitSourceFactory::splitSourceForScan(
       QueryRuntimeStats::kListPartitionsCount, partitions.size());
 
   return splitManager->getSplitSource(
-      session, handle, partitions, /*partitionType=*/nullptr, runtimeStats_);
+      session, handle, partitions, partitionType, runtimeStats_);
 }
 
 namespace {
@@ -122,7 +124,6 @@ std::optional<velox::common::SpillDiskOptions> makeSpillDiskOptions(
   return options;
 }
 
-// Streams splits from the source and distributes them round-robin across tasks.
 folly::coro::Task<void> co_generateAndDistributeSplits(
     std::shared_ptr<connector::SplitSource> source,
     velox::core::PlanNodeId scanId,
@@ -141,9 +142,18 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
     for (;;) {
       auto batch = co_await source->co_getSplits(1);
       for (auto& split : batch.splits) {
-        tasks[taskIdx]->addSplit(
-            scanId, velox::exec::Split(std::move(split.connectorSplit)));
-        taskIdx = (taskIdx + 1) % tasks.size();
+        size_t targetTask;
+        if (split.groupId.has_value()) {
+          // The connector guarantees groupId is in [0, tasks.size()).
+          VELOX_CHECK_LT(static_cast<size_t>(*split.groupId), tasks.size());
+          targetTask = static_cast<size_t>(*split.groupId);
+        } else {
+          targetTask = taskIdx;
+          taskIdx = (taskIdx + 1) % tasks.size();
+        }
+        tasks.at(targetTask)
+            ->addSplit(
+                scanId, velox::exec::Split(std::move(split.connectorSplit)));
         ++splitCount;
       }
       if (batch.noMoreSplits) {
@@ -345,8 +355,9 @@ void LocalRunner::start() {
 
 std::shared_ptr<connector::SplitSource> LocalRunner::splitSourceForScan(
     const connector::ConnectorSessionPtr& session,
-    const velox::core::TableScanNode& scan) {
-  return splitSourceFactory_->splitSourceForScan(session, scan);
+    const velox::core::TableScanNode& scan,
+    const std::shared_ptr<connector::PartitionType>& partitionType) {
+  return splitSourceFactory_->splitSourceForScan(session, scan, partitionType);
 }
 
 void LocalRunner::abort() {
@@ -493,7 +504,6 @@ void LocalRunner::makeStages(
           makeSpillDiskOptions(baseSpillDirectory_, taskId),
           onError);
       stages_.back().push_back(task);
-
       task->start(plan_->options().numDrivers);
     }
   }
@@ -510,7 +520,13 @@ void LocalRunner::makeStages(
       gatherScans(fragment.fragment.planNode, scans);
 
       for (const auto& scan : scans) {
-        auto source = splitSourceForScan(/*session=*/nullptr, *scan);
+        std::shared_ptr<connector::PartitionType> partitionType;
+        if (auto it = fragment.groupedNodes.find(scan->id());
+            it != fragment.groupedNodes.end()) {
+          partitionType = it->second;
+        }
+        auto source =
+            splitSourceForScan(/*session=*/nullptr, *scan, partitionType);
         splitScope_.add(
             folly::coro::co_withExecutor(
                 params_.queryCtx->executor(),

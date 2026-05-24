@@ -39,6 +39,15 @@ The Test connector is designed for three use cases:
   explicitly without adding actual data, enabling optimizer testing with
   controlled cost estimates (see [Setting Statistics Without Data](#setting-statistics-without-data)).
 
+**Supported:**
+- Hash bucketing. Tables can be created bucketed via the C++ API
+  (`addTable(..., TestBucketSpec{...})`). Rows are routed to buckets via a
+  generic hash partition function on append, and splits are emitted per
+  bucket. When the split manager is asked for splits with a non-null
+  `PartitionType`, each emitted Split is tagged with a `groupId` derived
+  from its bucket, enabling end-to-end exercise of the bucketed-execution
+  scheduling contract.
+
 **Not supported:**
 - Filter pushdown.
 - Hive-style directory partitioning.
@@ -131,6 +140,26 @@ When all columns share the same type, use `ROW(names, type)` instead of
 `ROW(names, {type, type, ...})`.
 
 `setStats()` and `addData()` cannot be combined on the same table.
+
+### Bucketed Tables
+
+Pass a `TestBucketSpec` to `addTable` to mark a table as hash-bucketed. Rows
+appended via `addData` are routed to buckets via a generic hash partition
+function (the test connector defines its own `TestPartitionType` and does
+not depend on the Hive connector). The split manager emits one split per
+non-empty bucket. The optimizer treats the table as bucket-partitioned for
+planning purposes.
+
+```cpp
+auto table = connector->addTable(
+    "orders",
+    ROW({"customer_id", "amount"}, {BIGINT(), DOUBLE()}),
+    velox::ROW({}),                          // no hidden columns
+    TestBucketSpec{{"customer_id"}, 16});    // 16 buckets on customer_id
+```
+
+`TestBucketSpec::bucketColumns` lists the column names that compose the bucket
+key (must reference visible columns); `numBuckets` is the fixed bucket count.
 
 ### Hidden Columns
 

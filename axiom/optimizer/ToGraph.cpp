@@ -535,7 +535,7 @@ lp::ValuesNodePtr tryFoldConstantDt(
 
   auto& optimization = queryCtx()->optimization();
   auto veloxPlan = optimization->toVelox().toVeloxPlan(
-      plan, MultiFragmentPlan::Options::singleNode());
+      plan, MultiFragmentPlan::Options::singleNode(), {}, {});
   auto results = runConstantPlan(veloxPlan, pool);
   if (results.empty()) {
     VELOX_CHECK_EQ(1, veloxPlan.plan->fragments().size());
