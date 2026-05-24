@@ -33,16 +33,30 @@ class Console {
   /// Initializes the CLI with usage message and logging settings.
   void initialize();
 
-  /// Runs the CLI, either executing a single query if passed in
-  /// or entering interactive mode to read commands from stdin.
+  /// Runs the CLI. Executes `--query` if set, otherwise reads piped
+  /// stdin if non-interactive, otherwise enters the interactive REPL.
+  /// Honors `--repeat` for `--query` and piped-stdin paths.
+  ///
+  /// Throws VeloxUserError on invalid CLI flags. Query failures during
+  /// execution are caught internally and printed to stderr; they do
+  /// not throw.
   void run();
 
  private:
-  // Executes SQL, catching any exceptions.
-  void runNoThrow(std::string_view sql, bool isInteractive);
+  // Runs a single SQL statement and prints results/timing. Returns true on
+  // success, false if the query threw.
+  bool runOnce(std::string_view sql, bool printTiming);
+
+  // Splits 'sql' into individual statements and runs each one in sequence.
+  // Stops on the first failure.
+  void runMultiple(std::string_view sql, bool printTiming);
+
+  // Runs 'sql' (a single SQL statement) 'repeat' times back-to-back.
+  // Stops on the first failure.
+  void runRepeat(std::string_view sql, int repeat, bool printTiming);
 
   // Reads and executes commands from standard input in interactive mode.
-  void readCommands(const std::string& prompt, bool interactive);
+  void readCommands(const std::string& prompt, bool printTiming);
 
   SqlQueryRunner& runner_;
 };

@@ -18,10 +18,12 @@
 #include <folly/container/F14Map.h>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
+#include <iostream>
 #include <set>
 #include "axiom/cli/CatalogProperties.h"
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/Console.h"
+#include "velox/common/base/Exceptions.h"
 
 DEFINE_string(
     catalog,
@@ -116,7 +118,14 @@ int main(int argc, char** argv) {
 
   axiom::sql::Console console{runner};
   console.initialize();
-  console.run();
+  // Invalid CLI flags throw VeloxUserError; surface them as a clean
+  // 'Error: ...' line and a non-zero exit.
+  try {
+    console.run();
+  } catch (const facebook::velox::VeloxUserError& e) {
+    std::cerr << "Error: " << e.message() << std::endl;
+    return 1;
+  }
 
   return 0;
 }

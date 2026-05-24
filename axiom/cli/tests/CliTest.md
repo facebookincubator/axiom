@@ -321,6 +321,13 @@ $ $CLI --query "SELECT * FROM nonexistent_table" 2>&1 >/dev/null | grep 'Query f
 Query failed: * (glob)
 ```
 
+## Query failure does not change the CLI exit code
+
+```scrut
+$ $CLI --query "SELECT * FROM nonexistent_table" 2>/dev/null
+[0]
+```
+
 ## Cleanly log dictionary wrapped result vectors (window functions produce encoded vectors)
 
 ```scrut

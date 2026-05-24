@@ -172,7 +172,9 @@ runtime statistics.
 
 ## Timing Output
 
-In interactive mode, each statement prints timing after execution:
+In interactive mode, each statement prints timing after execution. In
+non-interactive mode (piped stdin or `--query`), pass `--print_timing`
+to enable the same output:
 
 ```
 Parsing: 10.58ms / 8.76ms user / 1.83ms system (100%)
@@ -187,6 +189,26 @@ Optimizing: 3.27ms | Executing: 5.27ms | Total: 19.26ms / 16.36ms user / 4.65ms 
 | Total | Wall-clock time for the entire query lifecycle. |
 
 Each field shows wall time, user CPU, system CPU, and CPU utilization %.
+
+### Repeating a query
+
+Pass `--repeat N` together with `--query` (or piped stdin) to run the
+input N times back-to-back. Useful for perf measurements, re-running
+flaky queries, or queries with non-deterministic results. The input
+must be a single statement; multi-statement input is rejected. Stops
+on the first error. Not supported in interactive mode.
+
+## Exit Status
+
+| Condition | Exit code |
+|-----------|-----------|
+| Invalid CLI flags (e.g. `--repeat 0`, `--repeat` in interactive mode) | 1 |
+| All statements completed | 0 |
+| One or more statements failed at parse / optimize / execute | 0 |
+
+Query failures print `Query failed: ...` to stderr but do not change
+the exit code. Wrap the CLI in shell tooling if you need to detect
+query failure (e.g. grep for `Query failed:` in stderr).
 
 ## Query History
 
