@@ -239,6 +239,14 @@ class PartitionType {
   virtual const PartitionType* FOLLY_NULLABLE
   copartition(const PartitionType& other) const = 0;
 
+  /// Returns a PartitionType compatible with this one but with at most
+  /// 'maxPartitions' partitions. The returned partitioning groups together
+  /// rows that this PartitionType would have placed in different partitions,
+  /// so the resulting partition assignment is a coarsening of this one. The
+  /// returned value is always a freshly allocated owned shared_ptr.
+  virtual std::shared_ptr<PartitionType> scaleDown(
+      int32_t maxPartitions) const = 0;
+
   /// Returns a factory that makes partition functions. The function takes a
   /// RowVector and calculates a partition number from the columns identified by
   /// 'channels'. If channels[i] == kConstantChannel then the corresponding
@@ -248,6 +256,9 @@ class PartitionType {
       const std::vector<velox::column_index_t>& channels,
       const std::vector<velox::VectorPtr>& constants,
       bool isLocal) const = 0;
+
+  /// Number of partitions.
+  virtual int32_t numPartitions() const = 0;
 
   virtual std::string toString() const = 0;
 

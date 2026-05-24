@@ -320,6 +320,7 @@ std::shared_ptr<SplitSource> LocalHiveSplitManager::getSplitSource(
     const ConnectorSessionPtr& /*session*/,
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
     const std::vector<PartitionHandlePtr>& /*partitions*/,
+    const std::shared_ptr<PartitionType>& partitionType,
     QueryRuntimeStats& /*runtimeStats*/) {
   // Since there are only unpartitioned tables now, always makes a SplitSource
   // that goes over all the files in the handle's layout.
@@ -344,7 +345,8 @@ std::shared_ptr<SplitSource> LocalHiveSplitManager::getSplitSource(
       std::move(selectedFiles),
       layout->fileFormat(),
       layout->connector()->connectorId(),
-      layout->serdeParameters());
+      layout->serdeParameters(),
+      partitionType);
 }
 
 namespace {
@@ -381,7 +383,14 @@ folly::coro::Task<SplitBatch> LocalHiveSplitSource::co_getSplits(
       if (!serdeParameters_.empty()) {
         builder.serdeParameters(serdeParameters_);
       }
-      batch.splits.push_back(builder.build());
+      std::optional<int32_t> groupId;
+      if (partitionType_ != nullptr) {
+        VELOX_CHECK(
+            info->bucketNumber.has_value(),
+            "Bucketed scan requires bucketNumber on every file");
+        groupId = info->bucketNumber.value() % partitionType_->numPartitions();
+      }
+      batch.splits.push_back(Split{builder.build(), groupId});
       ++splitWithinFile_;
     }
     if (splitWithinFile_ >= splitsPerFile) {

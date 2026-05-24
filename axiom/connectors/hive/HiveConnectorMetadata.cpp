@@ -52,6 +52,17 @@ HivePartitionType::copartition(const PartitionType& other) const {
   return nullptr;
 }
 
+std::shared_ptr<PartitionType> HivePartitionType::scaleDown(
+    int32_t maxPartitions) const {
+  VELOX_CHECK_GT(maxPartitions, 0);
+  int32_t numResultPartitions = std::min(numPartitions_, maxPartitions);
+  while (numResultPartitions > 1 && numPartitions_ % numResultPartitions != 0) {
+    --numResultPartitions;
+  }
+  return std::make_shared<HivePartitionType>(
+      numResultPartitions, partitionKeyTypes_);
+}
+
 velox::core::PartitionFunctionSpecPtr HivePartitionType::makeSpec(
     const std::vector<velox::column_index_t>& channels,
     const std::vector<velox::VectorPtr>& constants,

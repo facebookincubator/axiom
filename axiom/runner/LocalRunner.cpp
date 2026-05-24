@@ -43,7 +43,7 @@ class SimpleSplitSource : public connector::SplitSource {
     auto end = std::min(
         nextIndex_ + static_cast<size_t>(maxSplitCount), splits_.size());
     for (auto i = nextIndex_; i < end; ++i) {
-      batch.splits.push_back(std::move(splits_[i]));
+      batch.splits.push_back(connector::Split{std::move(splits_[i])});
     }
     nextIndex_ = end;
     batch.noMoreSplits = (nextIndex_ >= splits_.size());
@@ -93,7 +93,7 @@ ConnectorSplitSourceFactory::splitSourceForScan(
       QueryRuntimeStats::kListPartitionsCount, partitions.size());
 
   return splitManager->getSplitSource(
-      session, handle, partitions, runtimeStats_);
+      session, handle, partitions, /*partitionType=*/nullptr, runtimeStats_);
 }
 
 namespace {
@@ -141,7 +141,8 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
     for (;;) {
       auto batch = co_await source->co_getSplits(1);
       for (auto& split : batch.splits) {
-        tasks[taskIdx]->addSplit(scanId, velox::exec::Split(std::move(split)));
+        tasks[taskIdx]->addSplit(
+            scanId, velox::exec::Split(std::move(split.connectorSplit)));
         taskIdx = (taskIdx + 1) % tasks.size();
         ++splitCount;
       }

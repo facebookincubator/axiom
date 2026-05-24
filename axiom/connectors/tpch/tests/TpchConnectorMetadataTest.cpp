@@ -212,13 +212,17 @@ CO_TEST_F(TpchConnectorMetadataTest, splitGeneration) {
 
   QueryRuntimeStats noopStats;
   auto splitSource = splitManager->getSplitSource(
-      /*session=*/nullptr, tableHandle, partitions, noopStats);
+      /*session=*/nullptr,
+      tableHandle,
+      partitions,
+      /*partitionType=*/nullptr,
+      noopStats);
   CO_ASSERT_NE(splitSource, nullptr);
   std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
   while (true) {
     auto batch = co_await splitSource->co_getSplits(1000);
     for (auto& split : batch.splits) {
-      splits.push_back(std::move(split));
+      splits.push_back(std::move(split.connectorSplit));
     }
     if (batch.noMoreSplits) {
       break;

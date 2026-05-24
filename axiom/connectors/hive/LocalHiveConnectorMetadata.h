@@ -37,11 +37,13 @@ class LocalHiveSplitSource : public SplitSource {
       std::vector<const FileInfo*> files,
       velox::dwio::common::FileFormat format,
       const std::string& connectorId,
-      std::unordered_map<std::string, std::string> serdeParameters = {})
+      std::unordered_map<std::string, std::string> serdeParameters,
+      std::shared_ptr<PartitionType> partitionType)
       : format_(format),
         connectorId_(connectorId),
         files_(std::move(files)),
-        serdeParameters_(std::move(serdeParameters)) {}
+        serdeParameters_(std::move(serdeParameters)),
+        partitionType_(std::move(partitionType)) {}
 
   folly::coro::Task<SplitBatch> co_getSplits(uint32_t maxSplitCount) override;
 
@@ -53,6 +55,9 @@ class LocalHiveSplitSource : public SplitSource {
   const std::string connectorId_;
   std::vector<const FileInfo*> files_;
   const std::unordered_map<std::string, std::string> serdeParameters_;
+  // When non-null, used to assign a groupId to each split for bucketed
+  // execution.
+  const std::shared_ptr<PartitionType> partitionType_;
   size_t fileIdx_{0};
   int64_t splitWithinFile_{0};
 };
@@ -71,6 +76,7 @@ class LocalHiveSplitManager : public ConnectorSplitManager {
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
       const std::vector<PartitionHandlePtr>& partitions,
+      const std::shared_ptr<PartitionType>& partitionType,
       QueryRuntimeStats& runtimeStats) override;
 };
 

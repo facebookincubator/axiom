@@ -48,7 +48,9 @@ class HivePartitionType : public connector::PartitionType {
       int32_t numPartitions,
       std::vector<velox::TypePtr> partitionKeyTypes)
       : numPartitions_(numPartitions),
-        partitionKeyTypes_(std::move(partitionKeyTypes)) {}
+        partitionKeyTypes_(std::move(partitionKeyTypes)) {
+    VELOX_CHECK_GT(numPartitions_, 0);
+  }
 
   /// Types are compatible if numPartitions of one is an interger multiple of
   /// the other. The partition to use for copartitioning is the one with the
@@ -56,10 +58,19 @@ class HivePartitionType : public connector::PartitionType {
   const PartitionType* FOLLY_NULLABLE
   copartition(const PartitionType& any) const override;
 
+  /// Returns the largest divisor of numPartitions() that is <=
+  /// maxPartitions.
+  std::shared_ptr<PartitionType> scaleDown(
+      int32_t maxPartitions) const override;
+
   velox::core::PartitionFunctionSpecPtr makeSpec(
       const std::vector<velox::column_index_t>& channels,
       const std::vector<velox::VectorPtr>& constants,
       bool isLocal) const override;
+
+  int32_t numPartitions() const override {
+    return numPartitions_;
+  }
 
   std::string toString() const override;
 

@@ -332,15 +332,15 @@ TEST_F(SystemConnectorMetadataTest, splitSource) {
   EXPECT_EQ(partitions.size(), 1);
 
   QueryRuntimeStats noopStats;
-  auto splitSource =
-      splitManager->getSplitSource(session, tableHandle, partitions, noopStats);
+  auto splitSource = splitManager->getSplitSource(
+      session, tableHandle, partitions, /*partitionType=*/nullptr, noopStats);
   ASSERT_NE(splitSource, nullptr);
 
   std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
   while (true) {
     auto batch = folly::coro::blockingWait(splitSource->co_getSplits(1000));
     for (auto& split : batch.splits) {
-      splits.push_back(std::move(split));
+      splits.push_back(std::move(split.connectorSplit));
     }
     if (batch.noMoreSplits) {
       break;

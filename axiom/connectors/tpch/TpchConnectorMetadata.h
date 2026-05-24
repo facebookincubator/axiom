@@ -62,6 +62,7 @@ class TpchSplitManager : public ConnectorSplitManager {
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
       const std::vector<PartitionHandlePtr>& partitions,
+      const std::shared_ptr<PartitionType>& partitionType,
       QueryRuntimeStats& runtimeStats) override;
 };
 

@@ -698,22 +698,11 @@ for Hive, `bucketId % partitionType->numPartitions()`).
 | Latency | May wait for group completion | Incremental, tasks start immediately |
 | Memory per task | Per-group data | Total data / numTasks |
 
-The optimizer queries the connector to choose the mode:
-
-```cpp
-/// On ConnectorSplitManager. Returns true if the connector can
-/// efficiently enumerate complete groups via GroupedSplitSource.
-virtual bool supportsGroupedSplitSource() const { return false; }
-```
-
-When true, the optimizer sets `groupedExecution = true` on the
-fragment and the runtime uses `GroupedSplitSource` with per-group
-clearing. When false, the optimizer sets `groupedExecution = false`
-and the runtime uses regular `SplitSource` with `groupId` on each
-split — shuffle avoidance without per-group clearing. This applies
-to all cases — aggregations, window functions, and joins (both
-co-bucketed and mixed). A more structured connector capabilities
-system may replace this in the future.
+Shuffle avoidance uses the regular `SplitSource` with `groupId`
+on each split — no per-group clearing. A future grouped-execution
+path may introduce a `GroupedSplitSource` and a corresponding
+capability bit on `ConnectorSplitManager`; the API surface is not
+defined here.
 
 #### Examples
 
