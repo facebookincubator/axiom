@@ -109,6 +109,7 @@ class NameMappings {
 
   void reset() {
     mappings_.clear();
+    reverseIndex_.clear();
     userNames_.clear();
   }
 
@@ -120,6 +121,10 @@ class NameMappings {
   // Mapping from names to IDs. Unique names may appear twice: w/ and w/o an
   // alias.
   folly::F14FastMap<QualifiedName, std::string, QualifiedNameHasher> mappings_;
+
+  // Inverse of mappings_: each ID maps to the QualifiedName(s) that resolve
+  // to it (at most 2: with and without alias). Kept in sync with mappings_.
+  folly::F14FastMap<std::string, std::vector<QualifiedName>> reverseIndex_;
 
   // IDs of hidden columns.
   folly::F14FastSet<std::string> hiddenIds_;
