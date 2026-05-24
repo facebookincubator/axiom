@@ -20,6 +20,7 @@
 #include <unistd.h>
 #include <algorithm>
 #include <iostream>
+#include <iterator>
 #include <optional>
 #include <set>
 #include "axiom/cli/ResultPrinter.h"
@@ -58,6 +59,20 @@ DEFINE_string(
     "Path to a SQL file to execute on startup before entering interactive mode or running --query");
 
 DEFINE_bool(debug, false, "Enable debug mode");
+
+DEFINE_bool(
+    print_timing,
+    false,
+    "Print per-statement timing (parse / optimize / execute). Always on in "
+    "interactive mode.");
+
+DEFINE_int32(
+    repeat,
+    1,
+    "Run the --query input this many times back-to-back. Useful for perf "
+    "measurements, re-running flaky queries, or queries with "
+    "non-deterministic results. The input must be a single statement. "
+    "Does not apply to --init. Stops on the first error.");
 
 using namespace facebook::velox;
 
@@ -102,27 +117,107 @@ void Console::initialize() {
 }
 
 void Console::run() {
+  gflags::CommandLineFlagInfo repeatInfo;
+  gflags::GetCommandLineFlagInfo("repeat", &repeatInfo);
+
+  VELOX_USER_CHECK_GE(FLAGS_repeat, 1, "--repeat must be at least 1");
+
   if (!FLAGS_init.empty()) {
     std::string sql;
     auto success = folly::readFile(FLAGS_init.c_str(), sql);
     VELOX_USER_CHECK(success, "Cannot open init file: {}", FLAGS_init);
-    runNoThrow(sql, false);
+    runMultiple(sql, FLAGS_print_timing);
   }
 
+  const bool interactive = isatty(STDIN_FILENO);
+
+  // Pick the user-SQL source: --query first, then piped stdin.
+  std::string userSql;
   if (!FLAGS_query.empty()) {
-    runNoThrow(FLAGS_query, false);
-  } else {
-    const bool interactive = isatty(STDIN_FILENO);
-    if (interactive) {
-      std::cout << "Axiom SQL. Type statement and end with ;.\n"
-                   "Type .help for available commands."
-                << std::endl;
+    userSql = FLAGS_query;
+  } else if (!interactive) {
+    userSql.assign(std::istreambuf_iterator<char>(std::cin), {});
+  }
+
+  if (!userSql.empty()) {
+    if (repeatInfo.is_default) {
+      runMultiple(userSql, FLAGS_print_timing);
+    } else {
+      // Explicit --repeat: treat the input as a single statement.
+      runRepeat(userSql, FLAGS_repeat, FLAGS_print_timing);
     }
-    readCommands("SQL> ", interactive);
+    return;
+  }
+
+  // No user SQL: enter interactive REPL.
+  VELOX_USER_CHECK(
+      repeatInfo.is_default, "--repeat is not supported in interactive mode");
+  if (interactive) {
+    std::cout << "Axiom SQL. Type statement and end with ;.\n"
+                 "Type .help for available commands."
+              << std::endl;
+  }
+  readCommands("SQL> ", interactive || FLAGS_print_timing);
+}
+
+namespace {
+std::string formatTiming(
+    const QueryTiming& timing,
+    const cli::Timing& cpuTiming) {
+  return fmt::format(
+      "Parsing: {} | Optimizing: {} | Executing: {} | Total: {}",
+      facebook::velox::succinctMicros(timing.parse),
+      facebook::velox::succinctMicros(timing.optimize),
+      facebook::velox::succinctMicros(timing.execute),
+      cpuTiming.toString());
+}
+} // namespace
+
+bool Console::runOnce(std::string_view sql, bool printTiming) {
+  QueryCompletionInfo completionInfo;
+
+  SqlQueryRunner::RunOptions options{
+      .numWorkers = FLAGS_num_workers,
+      .numDrivers = FLAGS_num_drivers,
+      .splitTargetBytes = FLAGS_split_target_bytes,
+      .debugMode = FLAGS_debug,
+      .onComplete =
+          [&](const QueryCompletionInfo& info) { completionInfo = info; },
+  };
+
+  cli::Timing cpuTiming;
+  try {
+    auto result = cli::time<SqlQueryRunner::SqlResult>(
+        [&]() { return runner_.run(sql, options); }, cpuTiming);
+
+    if (result.message.has_value()) {
+      std::cout << result.message.value() << std::endl;
+    } else {
+      if (FLAGS_debug && !result.results.empty()) {
+        std::cout << result.results.front()->rowType()->toString() << std::endl;
+      }
+      cli::printResults(result.results, FLAGS_max_rows);
+    }
+
+    if (printTiming) {
+      std::cout << "Query ID: " << completionInfo.startInfo.queryId << " | "
+                << formatTiming(completionInfo.timing, cpuTiming) << std::endl;
+    }
+    return true;
+  } catch (const std::exception&) {
+    // run() threw after firing the completion callback, so telemetry was
+    // captured.
+    std::cerr << "Query failed: " << completionInfo.errorInfo->message
+              << std::endl;
+    if (printTiming) {
+      std::cerr << "Query ID: " << completionInfo.startInfo.queryId << " | "
+                << formatTiming(completionInfo.timing, cpuTiming) << std::endl;
+    }
+    return false;
   }
 }
 
-void Console::runNoThrow(std::string_view sql, bool isInteractive) {
+void Console::runMultiple(std::string_view sql, bool printTiming) {
   // Parse and execute statements one at a time so that DDL statements
   // (e.g. CREATE TABLE) take effect before subsequent statements (e.g.
   // INSERT) are parsed.
@@ -130,65 +225,21 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
     if (sqlText.empty()) {
       continue;
     }
-
-    // The completion callback captures telemetry for error reporting.
-    QueryCompletionInfo completionInfo;
-
-    SqlQueryRunner::RunOptions options{
-        .numWorkers = FLAGS_num_workers,
-        .numDrivers = FLAGS_num_drivers,
-        .splitTargetBytes = FLAGS_split_target_bytes,
-        .debugMode = FLAGS_debug,
-        .onComplete =
-            [&](const QueryCompletionInfo& info) { completionInfo = info; },
-    };
-
-    auto formatTiming = [](const QueryTiming& timing,
-                           const cli::Timing& cpuTiming) {
-      return fmt::format(
-          "Parsing: {} | Optimizing: {} | Executing: {} | Total: {}",
-          facebook::velox::succinctMicros(timing.parse),
-          facebook::velox::succinctMicros(timing.optimize),
-          facebook::velox::succinctMicros(timing.execute),
-          cpuTiming.toString());
-    };
-
-    cli::Timing cpuTiming;
-    try {
-      auto result = cli::time<SqlQueryRunner::SqlResult>(
-          [&]() { return runner_.run(sqlText, options); }, cpuTiming);
-
-      if (result.message.has_value()) {
-        std::cout << result.message.value() << std::endl;
-      } else {
-        if (FLAGS_debug && !result.results.empty()) {
-          std::cout << result.results.front()->rowType()->toString()
-                    << std::endl;
-        }
-        cli::printResults(result.results, FLAGS_max_rows);
-      }
-
-      if (isInteractive) {
-        std::cout << "Query ID: " << completionInfo.startInfo.queryId << " | "
-                  << formatTiming(completionInfo.timing, cpuTiming)
-                  << std::endl;
-      }
-    } catch (const std::exception&) {
-      // run() threw after firing the completion callback, so telemetry
-      // was captured.
-      std::cerr << "Query failed: " << completionInfo.errorInfo->message
-                << std::endl;
-      if (isInteractive) {
-        std::cerr << "Query ID: " << completionInfo.startInfo.queryId << " | "
-                  << formatTiming(completionInfo.timing, cpuTiming)
-                  << std::endl;
-      }
+    if (!runOnce(sqlText, printTiming)) {
       return;
     }
   }
 }
 
-void Console::readCommands(const std::string& prompt, bool interactive) {
+void Console::runRepeat(std::string_view sql, int repeat, bool printTiming) {
+  for (int i = 0; i < repeat; ++i) {
+    if (!runOnce(sql, printTiming)) {
+      return;
+    }
+  }
+}
+
+void Console::readCommands(const std::string& prompt, bool printTiming) {
   linenoiseSetMultiLine(1);
   linenoiseHistorySetMaxLen(1024);
 
@@ -204,7 +255,7 @@ void Console::readCommands(const std::string& prompt, bool interactive) {
     std::string command = cli::readCommand(prompt, atEnd);
     if (atEnd) {
       if (!command.empty()) {
-        runNoThrow(command, interactive);
+        runMultiple(command, printTiming);
       }
       break;
     }
@@ -254,7 +305,7 @@ void Console::readCommands(const std::string& prompt, bool interactive) {
         std::cerr << "Cannot open file: " << filePath << std::endl;
         continue;
       }
-      runNoThrow(sql, interactive);
+      runMultiple(sql, printTiming);
       continue;
     }
 
@@ -332,7 +383,7 @@ void Console::readCommands(const std::string& prompt, bool interactive) {
       continue;
     }
 
-    runNoThrow(command, interactive);
+    runMultiple(command, printTiming);
   }
 }
 } // namespace axiom::sql
