@@ -19,6 +19,7 @@
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "velox/connectors/ConnectorRegistry.h"
+#include "velox/exec/tests/utils/LocalExchangeSource.h"
 
 DECLARE_string(query);
 
@@ -32,6 +33,8 @@ class ConsoleTest : public ::testing::Test {
   static void SetUpTestCase() {
     facebook::velox::memory::MemoryManager::testingSetInstance(
         facebook::velox::memory::MemoryManager::Options{});
+    facebook::velox::exec::ExchangeSource::registerFactory(
+        facebook::velox::exec::test::createLocalExchangeSource);
   }
 
   void TearDown() override {
