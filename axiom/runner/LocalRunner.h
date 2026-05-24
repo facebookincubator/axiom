@@ -36,10 +36,12 @@ class SplitSourceFactory {
 
   /// Returns a splitSource for one TableScan across all Tasks of
   /// the fragment. The source will be invoked to produce splits for
-  /// each individual worker running the scan.
+  /// each individual worker running the scan. When 'partitionType' is
+  /// non-null, emitted Splits are tagged with a groupId.
   virtual std::shared_ptr<connector::SplitSource> splitSourceForScan(
       const connector::ConnectorSessionPtr& session,
-      const velox::core::TableScanNode& scan) = 0;
+      const velox::core::TableScanNode& scan,
+      const std::shared_ptr<connector::PartitionType>& partitionType) = 0;
 };
 
 class SimpleSplitSourceFactory : public SplitSourceFactory {
@@ -53,7 +55,8 @@ class SimpleSplitSourceFactory : public SplitSourceFactory {
 
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
       const connector::ConnectorSessionPtr& session,
-      const velox::core::TableScanNode& scan) override;
+      const velox::core::TableScanNode& scan,
+      const std::shared_ptr<connector::PartitionType>& partitionType) override;
 
  private:
   folly::F14FastMap<
@@ -70,7 +73,8 @@ class ConnectorSplitSourceFactory : public SplitSourceFactory {
 
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
       const connector::ConnectorSessionPtr& session,
-      const velox::core::TableScanNode& scan) override;
+      const velox::core::TableScanNode& scan,
+      const std::shared_ptr<connector::PartitionType>& partitionType) override;
 
  protected:
   QueryRuntimeStats& runtimeStats_;
@@ -165,7 +169,8 @@ class LocalRunner : public Runner,
 
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
       const connector::ConnectorSessionPtr& session,
-      const velox::core::TableScanNode& scan);
+      const velox::core::TableScanNode& scan,
+      const std::shared_ptr<connector::PartitionType>& partitionType);
 
   // Serializes 'cursor_' and 'error_'.
   mutable std::mutex mutex_;

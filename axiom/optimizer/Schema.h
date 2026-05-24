@@ -215,13 +215,18 @@ struct Distribution {
   }
 
   /// True if 'this' and 'other' have the same number/type of keys and same
-  /// distribution type. Data is copartitioned if both sides have a 1:1
-  /// equality on all partitioning key columns.
+  /// distribution type via strict pointer equality on PartitionType.
   bool isSamePartition(const Distribution& other) const;
 
-  /// Return if 'this' and 'other' have the same number/type of partitioning
-  /// keys and use same partitioning function.
+  /// True if 'this' has the same number/type of partitioning keys and uses
+  /// the same partitioning function (strict pointer equality on
+  /// PartitionType).
   bool isSamePartition(const DesiredDistribution& other) const;
+
+  /// Looser variant of isSamePartition: same partition keys and
+  /// PartitionTypes for which copartition() returns non-null. Returns false
+  /// when both sides have empty partitionKeys.
+  bool isCopartitionedWith(const DesiredDistribution& other) const;
 
   /// True if 'other' has the same ordering columns and order type.
   bool isSameOrder(const Distribution& other) const;
@@ -276,7 +281,10 @@ struct Distribution {
   Kind kind_{Kind::kUnspecified};
 
   // Connector-specific partition function. nullptr means standard Velox hash
-  // (when kind_ is kPartitioned) or no partitioning otherwise.
+  // (when kind_ is kPartitioned) or no partitioning otherwise. Lifetime is
+  // managed externally: layout-owned PartitionTypes live for the connector's
+  // lifetime; PartitionTypes derived during planning (scaleDown, copartition)
+  // are owned by Optimization::derivedPartitionTypes_.
   const connector::PartitionType* partitionType_{nullptr};
 
   // Partitioning columns. The values of these columns determine which

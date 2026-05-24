@@ -227,7 +227,7 @@ SchemaTableCP Schema::findTable(
     VELOX_CHECK_EQ(orderKeys.size(), orderTypes.size());
 
     Distribution distribution(
-        layout->partitionType(),
+        layout->partitionType().get(),
         std::move(partition),
         std::move(orderKeys),
         std::move(orderTypes));
@@ -345,6 +345,32 @@ bool Distribution::isSamePartition(const DesiredDistribution& other) const {
   }
 
   if (partitionKeys().size() != other.partitionKeys.size()) {
+    return false;
+  }
+
+  for (auto i = 0; i < partitionKeys().size(); ++i) {
+    if (!partitionKeys()[i]->sameOrEqual(*other.partitionKeys[i])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool Distribution::isCopartitionedWith(const DesiredDistribution& other) const {
+  auto* thisPartitionType = partitionType();
+  if (thisPartitionType != other.partitionType) {
+    if (thisPartitionType == nullptr || other.partitionType == nullptr ||
+        thisPartitionType->copartition(*other.partitionType) == nullptr) {
+      return false;
+    }
+  }
+
+  if (partitionKeys().size() != other.partitionKeys.size()) {
+    return false;
+  }
+
+  if (partitionKeys().empty()) {
     return false;
   }
 

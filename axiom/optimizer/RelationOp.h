@@ -440,6 +440,17 @@ class Repartition : public RelationOp {
 
 using RepartitionCP = const Repartition*;
 
+/// Per-leaf PartitionType map for a fragment in flight during planning.
+/// Keys are arena-allocated `const TableScan*` (bucketed scan leaf) or
+/// `const Repartition*` (consumer-side exchange entering this fragment).
+/// Values are non-null for bucketed leaves (the connector emits splits
+/// tagged with groupId and the runtime routes by that groupId) and null for
+/// hash-partitioned exchanges (the producer's hash function does the
+/// alignment, no per-row tagging needed).
+using GroupedLeaves = folly::F14FastMap<
+    const RelationOp*,
+    std::shared_ptr<const connector::PartitionType>>;
+
 /// Represents a usually multitable filter not associated with any non-inner
 /// join. Non-equality constraints over inner joins become Filters.
 class Filter : public RelationOp {

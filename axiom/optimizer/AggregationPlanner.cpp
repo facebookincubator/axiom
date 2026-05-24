@@ -207,7 +207,8 @@ MarkDistinctResult addMarkDistinctNodes(
     RelationOpPtr plan,
     const ExprVector& groupingKeys,
     const AggregateVector& aggregates,
-    bool isSingleWorker) {
+    bool isSingleWorker,
+    PlanState& state) {
   PlanCost totalCost;
   folly::F14FastMap<PlanObjectSet, ColumnCP> markers;
 
@@ -240,7 +241,7 @@ MarkDistinctResult addMarkDistinctNodes(
 
       if (!isSingleWorker) {
         auto [repartitioned, repartitionCost] =
-            maybeRepartition(plan, ExprVector(markDistinctKeys));
+            maybeRepartition(plan, ExprVector(markDistinctKeys), state);
         plan = repartitioned;
         totalCost.add(repartitionCost);
       }
@@ -314,9 +315,32 @@ GroupId* makeGroupIdNode(
 
 } // namespace
 
+std::vector<uint32_t> joinKeyPartition(
+    const RelationOpPtr& op,
+    const ExprVector& keys) {
+  const auto& partitionKeys = op->distribution().partitionKeys();
+  std::vector<uint32_t> positions;
+  positions.reserve(partitionKeys.size());
+  for (const auto& partitionKey : partitionKeys) {
+    bool found = false;
+    for (uint32_t j = 0; j < keys.size(); ++j) {
+      if (keys[j]->sameOrEqual(*partitionKey)) {
+        positions.push_back(j);
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      return {};
+    }
+  }
+  return positions;
+}
+
 std::pair<RelationOpPtr, PlanCost> maybeRepartition(
     const RelationOpPtr& plan,
-    ExprVector desiredKeys) {
+    ExprVector desiredKeys,
+    PlanState& state) {
   if (plan->distribution().isGather()) {
     return {plan, {}};
   }
@@ -326,6 +350,7 @@ std::pair<RelationOpPtr, PlanCost> maybeRepartition(
     auto* gather =
         make<Repartition>(plan, Distribution::gather(), plan->columns());
     cost.add(*gather);
+    commitGroupedLeavesForRepartition(state, gather);
     return {gather, cost};
   }
 
@@ -347,11 +372,12 @@ std::pair<RelationOpPtr, PlanCost> maybeRepartition(
   }
 
   if (shuffle) {
-    Distribution distribution{
-        plan->distribution().partitionType(), std::move(desiredKeys)};
+    Distribution distribution{/*partitionType=*/nullptr,
+                              std::move(desiredKeys)};
     auto* repartition =
         make<Repartition>(plan, std::move(distribution), plan->columns());
     cost.add(*repartition);
+    commitGroupedLeavesForRepartition(state, repartition);
     return {repartition, cost};
   }
 
@@ -360,13 +386,14 @@ std::pair<RelationOpPtr, PlanCost> maybeRepartition(
 
 std::pair<RelationOpPtr, PlanCost> AggregationPlanner::repartitionForAgg(
     const RelationOpPtr& plan,
-    const ColumnVector& partitionKeys) const {
+    const ColumnVector& partitionKeys,
+    PlanState& state) const {
   if (isSingleWorker_ || plan->distribution().isGather()) {
     return {plan, {}};
   }
 
   ExprVector keyExprs(partitionKeys.begin(), partitionKeys.end());
-  return maybeRepartition(plan, std::move(keyExprs));
+  return maybeRepartition(plan, std::move(keyExprs), state);
 }
 
 std::pair<RelationOpPtr, PlanCost> AggregationPlanner::makeSplitAggregationPlan(
@@ -376,7 +403,8 @@ std::pair<RelationOpPtr, PlanCost> AggregationPlanner::makeSplitAggregationPlan(
     const ColumnVector& intermediateColumns,
     const ColumnVector& outputColumns,
     QGVector<int32_t> globalGroupingSets,
-    ColumnCP groupId) const {
+    ColumnCP groupId,
+    PlanState& state) const {
   PlanCost splitAggCost;
 
   plan = make<Aggregation>(
@@ -393,7 +421,8 @@ std::pair<RelationOpPtr, PlanCost> AggregationPlanner::makeSplitAggregationPlan(
       intermediateColumns.begin() + groupingKeys.size());
 
   PlanCost repartitionCost;
-  std::tie(plan, repartitionCost) = repartitionForAgg(plan, partitionKeys);
+  std::tie(plan, repartitionCost) =
+      repartitionForAgg(plan, partitionKeys, state);
   splitAggCost.add(repartitionCost);
 
   ExprVector finalGroupingKeys(partitionKeys.begin(), partitionKeys.end());
@@ -419,14 +448,16 @@ AggregationPlanner::makeSingleAggregationPlan(
     const ColumnVector& intermediateColumns,
     const ColumnVector& outputColumns,
     QGVector<int32_t> globalGroupingSets,
-    ColumnCP groupId) const {
+    ColumnCP groupId,
+    PlanState& state) const {
   PlanCost singleAggCost;
 
   ColumnVector partitionKeys(
       intermediateColumns.begin(),
       intermediateColumns.begin() + groupingKeys.size());
   PlanCost repartitionCost;
-  std::tie(plan, repartitionCost) = repartitionForAgg(plan, partitionKeys);
+  std::tie(plan, repartitionCost) =
+      repartitionForAgg(plan, partitionKeys, state);
   singleAggCost.add(repartitionCost);
 
   auto* singleAgg = make<Aggregation>(
@@ -451,7 +482,14 @@ AggregationPlanner::makeSplitOrSingleAggregationPlan(
     const ColumnVector& intermediateColumns,
     const ColumnVector& outputColumns,
     QGVector<int32_t> globalGroupingSets,
-    ColumnCP groupId) const {
+    ColumnCP groupId,
+    PlanState& state) const {
+  // Both alternatives may insert Repartitions via maybeRepartition, which
+  // mutates state.currentGroupedLeaves_ via commitGroupedLeavesForRepartition.
+  // Snapshot+restore around each alternative so the second one starts from
+  // the same map the first did, and the chosen alternative's mutations are
+  // re-applied at the end.
+  auto savedMap = state.currentGroupedLeaves();
   auto [splitAggPlan, splitAggCost] = makeSplitAggregationPlan(
       plan,
       groupingKeys,
@@ -459,12 +497,16 @@ AggregationPlanner::makeSplitOrSingleAggregationPlan(
       intermediateColumns,
       outputColumns,
       globalGroupingSets,
-      groupId);
+      groupId,
+      state);
+  auto splitMap = std::move(state.mutableCurrentGroupedLeaves());
 
   if (groupingKeys.empty() || alwaysPlanPartialAggregation_) {
+    state.mutableCurrentGroupedLeaves() = std::move(splitMap);
     return {std::move(splitAggPlan), splitAggCost};
   }
 
+  state.mutableCurrentGroupedLeaves() = savedMap;
   auto [singleAgg, singleAggCost] = makeSingleAggregationPlan(
       plan,
       groupingKeys,
@@ -472,11 +514,13 @@ AggregationPlanner::makeSplitOrSingleAggregationPlan(
       intermediateColumns,
       outputColumns,
       std::move(globalGroupingSets),
-      groupId);
+      groupId,
+      state);
 
   if (singleAggCost.cost < splitAggCost.cost) {
     return {std::move(singleAgg), singleAggCost};
   }
+  state.mutableCurrentGroupedLeaves() = std::move(splitMap);
   return {std::move(splitAggPlan), splitAggCost};
 }
 
@@ -487,7 +531,8 @@ AggregationPlanner::makeDistinctToGroupByPlan(
     const ExprVector& distinctArgs,
     const AggregateVector& aggregates,
     AggregationPlanCP aggPlan,
-    bool hasOrderBy) const {
+    bool hasOrderBy,
+    PlanState& state) const {
   // Build inner GROUP BY keys: groupingKeys union distinctArgs. We put
   // groupingKeys at the beginning, followed by distinctArgs not appearing in
   // groupingKeys.
@@ -511,7 +556,14 @@ AggregationPlanner::makeDistinctToGroupByPlan(
 
   PlanCost totalCost;
   auto [innerAgg, innerAggCost] = makeSplitOrSingleAggregationPlan(
-      plan, innerKeys, AggregateVector{}, innerColumns, innerColumns);
+      plan,
+      innerKeys,
+      AggregateVector{},
+      innerColumns,
+      innerColumns,
+      {},
+      nullptr,
+      state);
   totalCost.add(innerAggCost);
   plan = std::move(innerAgg);
 
@@ -524,7 +576,10 @@ AggregationPlanner::makeDistinctToGroupByPlan(
         groupingKeys,
         nonDistinctAggregates,
         aggPlan->intermediateColumns(),
-        aggPlan->columns());
+        aggPlan->columns(),
+        {},
+        nullptr,
+        state);
     plan = std::move(outerPlan);
     totalCost.add(outerCost);
   } else {
@@ -533,7 +588,10 @@ AggregationPlanner::makeDistinctToGroupByPlan(
         groupingKeys,
         nonDistinctAggregates,
         aggPlan->intermediateColumns(),
-        aggPlan->columns());
+        aggPlan->columns(),
+        {},
+        nullptr,
+        state);
     plan = std::move(outerPlan);
     totalCost.add(outerCost);
   }
@@ -547,9 +605,10 @@ AggregationPlanner::makeDistinctToMarkDistinctPlan(
     const ExprVector& groupingKeys,
     const AggregateVector& aggregates,
     AggregationPlanCP aggPlan,
-    bool hasOrderBy) const {
-  auto [markedPlan, newAggregates, markCost] =
-      addMarkDistinctNodes(plan, groupingKeys, aggregates, isSingleWorker_);
+    bool hasOrderBy,
+    PlanState& state) const {
+  auto [markedPlan, newAggregates, markCost] = addMarkDistinctNodes(
+      plan, groupingKeys, aggregates, isSingleWorker_, state);
 
   PlanCost totalCost;
   totalCost.add(markCost);
@@ -567,7 +626,10 @@ AggregationPlanner::makeDistinctToMarkDistinctPlan(
         groupingKeys,
         newAggregates,
         aggPlan->intermediateColumns(),
-        aggPlan->columns());
+        aggPlan->columns(),
+        {},
+        nullptr,
+        state);
     totalCost.add(aggCost);
     return {aggregation, totalCost};
   }
@@ -577,7 +639,10 @@ AggregationPlanner::makeDistinctToMarkDistinctPlan(
       groupingKeys,
       newAggregates,
       aggPlan->intermediateColumns(),
-      aggPlan->columns());
+      aggPlan->columns(),
+      {},
+      nullptr,
+      state);
   totalCost.add(aggCost);
   return {aggregation, totalCost};
 }
@@ -655,7 +720,8 @@ void AggregationPlanner::addGroupingSetsAggregation(
         aggPlan->intermediateColumns(),
         aggPlan->columns(),
         std::move(globalGroupingSets),
-        aggGroupId);
+        aggGroupId,
+        state);
     state.cost.add(cost);
     plan = std::move(agg);
     return;
@@ -672,7 +738,8 @@ void AggregationPlanner::addGroupingSetsAggregation(
         aggPlan->intermediateColumns(),
         aggPlan->columns(),
         std::move(globalGroupingSets),
-        aggGroupId);
+        aggGroupId,
+        state);
     state.cost.add(cost);
     plan = std::move(agg);
     return;
@@ -683,7 +750,10 @@ void AggregationPlanner::addGroupingSetsAggregation(
       aggGroupingKeys,
       aggregates,
       aggPlan->intermediateColumns(),
-      aggPlan->columns());
+      aggPlan->columns(),
+      {},
+      nullptr,
+      state);
   state.cost.add(cost);
   plan = std::move(agg);
 }
@@ -694,6 +764,11 @@ void AggregationPlanner::plan(
     PlanState& state) const {
   VELOX_CHECK_NOT_NULL(dt->aggregation);
   const auto* aggPlan = dt->aggregation;
+
+  const bool isBucketedAggregation = !alwaysPlanPartialAggregation_ &&
+      !isSingleWorker_ && !aggPlan->groupingKeys().empty() &&
+      plan->distribution().partitionType() != nullptr &&
+      !joinKeyPartition(plan, aggPlan->groupingKeys()).empty();
 
   PrecomputeProjection precompute(plan, dt, /*projectAllInputs=*/false);
   // When grouping sets are present, don't pass aliases for grouping keys.
@@ -754,11 +829,30 @@ void AggregationPlanner::plan(
     return;
   }
 
+  if (isBucketedAggregation && !hasDistinct && !hasOrderBy) {
+    auto* singleAgg = make<Aggregation>(
+        plan,
+        std::move(groupingKeys),
+        /*preGroupedKeys=*/ExprVector{},
+        std::move(aggregates),
+        velox::core::AggregationNode::Step::kSingle,
+        aggPlan->columns());
+    state.addCost(*singleAgg);
+    plan = singleAgg;
+    return;
+  }
+
   if (hasDistinct) {
     auto distinctArgs = getCommonDistinctArgs(aggregates);
     if (distinctArgs.has_value()) {
       auto [result, cost] = makeDistinctToGroupByPlan(
-          plan, groupingKeys, *distinctArgs, aggregates, aggPlan, hasOrderBy);
+          plan,
+          groupingKeys,
+          *distinctArgs,
+          aggregates,
+          aggPlan,
+          hasOrderBy,
+          state);
       plan = std::move(result);
       state.cost.add(cost);
       return;
@@ -766,7 +860,7 @@ void AggregationPlanner::plan(
 
     if (canMakeMarkDistinctPlan(aggregates)) {
       auto [result, cost] = makeDistinctToMarkDistinctPlan(
-          plan, groupingKeys, aggregates, aggPlan, hasOrderBy);
+          plan, groupingKeys, aggregates, aggPlan, hasOrderBy, state);
       plan = std::move(result);
       state.cost.add(cost);
       return;
@@ -780,7 +874,10 @@ void AggregationPlanner::plan(
         groupingKeys,
         aggregates,
         aggPlan->intermediateColumns(),
-        aggPlan->columns());
+        aggPlan->columns(),
+        {},
+        nullptr,
+        state);
     plan = std::move(result);
     state.cost.add(cost);
     return;
@@ -794,7 +891,10 @@ void AggregationPlanner::plan(
         groupingKeys,
         aggregates,
         aggPlan->intermediateColumns(),
-        aggPlan->columns());
+        aggPlan->columns(),
+        {},
+        nullptr,
+        state);
     plan = singleAgg;
     state.cost.add(singleAggCost);
     return;
@@ -805,7 +905,10 @@ void AggregationPlanner::plan(
       groupingKeys,
       aggregates,
       aggPlan->intermediateColumns(),
-      aggPlan->columns());
+      aggPlan->columns(),
+      {},
+      nullptr,
+      state);
   plan = selectedPlan;
   state.cost.add(selectedCost);
 }

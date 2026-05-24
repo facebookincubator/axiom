@@ -16,10 +16,10 @@
 
 #include "axiom/connectors/hive/HiveConnectorMetadata.h"
 
-#include <folly/CppAttributes.h>
 #include <algorithm>
 #include <utility>
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/TableWriter.h"
@@ -27,27 +27,28 @@
 
 namespace facebook::axiom::connector::hive {
 
-const PartitionType* FOLLY_NULLABLE
-HivePartitionType::copartition(const PartitionType& other) const {
-  if (const auto* otherPartitionType = other.as<HivePartitionType>()) {
-    const auto& thisTypes = partitionKeyTypes_;
-    const auto& otherTypes = otherPartitionType->partitionKeyTypes_;
-
-    if (thisTypes.size() == otherTypes.size()) {
-      for (size_t i = 0; i < thisTypes.size(); ++i) {
-        if (!thisTypes[i]->equivalent(*otherTypes[i])) {
-          return nullptr;
-        }
-      }
-
-      if (otherPartitionType->numPartitions_ % numPartitions_ == 0) {
-        return this;
-      }
-
-      if (numPartitions_ % otherPartitionType->numPartitions_ == 0) {
-        return otherPartitionType;
-      }
+std::shared_ptr<PartitionType> HivePartitionType::copartition(
+    const PartitionType& other) const {
+  const auto* otherPartitionType = other.as<HivePartitionType>();
+  if (otherPartitionType == nullptr) {
+    return nullptr;
+  }
+  const auto& thisTypes = partitionKeyTypes_;
+  const auto& otherTypes = otherPartitionType->partitionKeyTypes_;
+  if (thisTypes.size() != otherTypes.size()) {
+    return nullptr;
+  }
+  for (size_t i = 0; i < thisTypes.size(); ++i) {
+    if (!thisTypes[i]->equivalent(*otherTypes[i])) {
+      return nullptr;
     }
+  }
+  const int32_t otherNumPartitions = otherPartitionType->numPartitions_;
+  if (otherNumPartitions % numPartitions_ == 0) {
+    return std::make_shared<HivePartitionType>(numPartitions_, thisTypes);
+  }
+  if (numPartitions_ % otherNumPartitions == 0) {
+    return std::make_shared<HivePartitionType>(otherNumPartitions, otherTypes);
   }
   return nullptr;
 }
@@ -171,10 +172,10 @@ HiveTableLayout::HiveTableLayout(
       numBuckets_(numPartitions),
       partitionType_{
           numPartitions.has_value()
-              ? std::make_optional<HivePartitionType>(
+              ? std::make_shared<const HivePartitionType>(
                     numPartitions.value(),
                     extractPartitionKeyTypes(partitionedByColumns))
-              : std::nullopt} {
+              : nullptr} {
   VELOX_CHECK_EQ(sortedByColumns.size(), sortOrder.size());
 }
 

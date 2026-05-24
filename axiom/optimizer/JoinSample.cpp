@@ -153,7 +153,7 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
 
   auto& optimization = queryCtx()->optimization();
   auto plan = optimization->toVelox().toVeloxPlan(
-      filter, MultiFragmentPlan::Options::singleNode());
+      filter, MultiFragmentPlan::Options::singleNode(), {}, {});
   static QueryRuntimeStats noopStats;
   return std::make_shared<runner::LocalRunner>(
       std::move(plan.plan),

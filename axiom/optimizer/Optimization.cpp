@@ -277,6 +277,175 @@ void Optimization::applyFilteredStats(
   }
 }
 
+namespace {
+// Coarsens 'groupedLeaves' to the runner's task budget by calling scaleDown on
+// each non-null entry. GroupedLeaves is immutable once taken; this is the only
+// point that locks the per-leaf entries to runner-task partition counts.
+void scaleDownGroupedLeaves(GroupedLeaves& groupedLeaves, int32_t numWorkers) {
+  for (auto& [_, partitionType] : groupedLeaves) {
+    if (partitionType != nullptr) {
+      partitionType = partitionType->scaleDown(numWorkers);
+    }
+  }
+}
+
+// Collects the per-fragment leaves of 'op': TableScans physically inside this
+// fragment plus Repartitions whose consumer-side Exchange lives here.
+// Bounded by Repartition descendants — those are separate fragments.
+void collectFragmentLeaves(
+    const RelationOp* op,
+    folly::F14FastSet<const RelationOp*>& leaves) {
+  if (op == nullptr) {
+    return;
+  }
+  if (op->is(RelType::kTableScan)) {
+    leaves.insert(op);
+    return;
+  }
+  if (op->is(RelType::kRepartition)) {
+    leaves.insert(op);
+    return;
+  }
+  if (op->is(RelType::kJoin)) {
+    const auto& join = *op->as<Join>();
+    collectFragmentLeaves(join.input().get(), leaves);
+    collectFragmentLeaves(join.right.get(), leaves);
+    return;
+  }
+  if (op->is(RelType::kUnionAll)) {
+    for (const auto& input : op->as<UnionAll>()->inputs) {
+      collectFragmentLeaves(input.get(), leaves);
+    }
+    return;
+  }
+  collectFragmentLeaves(op->input().get(), leaves);
+}
+
+// Drops entries from 'groupedLeaves' whose RelationOp* is not in 'leaves'.
+void filterGroupedLeavesToProducerLeaves(
+    GroupedLeaves& groupedLeaves,
+    const folly::F14FastSet<const RelationOp*>& leaves) {
+  for (auto it = groupedLeaves.begin(); it != groupedLeaves.end();) {
+    if (!leaves.contains(it->first)) {
+      it = groupedLeaves.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+} // namespace
+
+void commitGroupedLeavesForRepartition(
+    PlanState& state,
+    const Repartition* repartition) {
+  auto& groupedLeaves =
+      state.optimization.repartitionGroupedLeaves()[repartition];
+  // Overwrite atomically; an entry for 'repartition' may already exist if a
+  // memoized RelationOp was shared across planning candidates.
+  groupedLeaves =
+      std::exchange(state.mutableCurrentGroupedLeaves(), GroupedLeaves{});
+  // Drop entries injected from sibling fragments via mergeFragmentMaps or
+  // PlanStateSaver across planning branches.
+  folly::F14FastSet<const RelationOp*> producerLeaves;
+  collectFragmentLeaves(repartition->input().get(), producerLeaves);
+  filterGroupedLeavesToProducerLeaves(groupedLeaves, producerLeaves);
+  scaleDownGroupedLeaves(
+      groupedLeaves, state.optimization.runnerOptions().numWorkers);
+  const auto& dist = repartition->distribution();
+  if (dist.kind() == Distribution::Kind::kPartitioned &&
+      !dist.partitionKeys().empty()) {
+    state.mutableCurrentGroupedLeaves().emplace(repartition, nullptr);
+  }
+}
+
+namespace {
+// Calls scaleDown(numWorkers) on 'partitionType' and returns the resulting
+// type, pushed onto 'owned' for lifetime management. Passes null through
+// unchanged.
+const connector::PartitionType* FOLLY_NULLABLE scaleDownPartitionType(
+    const connector::PartitionType* partitionType,
+    int32_t numWorkers,
+    std::vector<std::shared_ptr<connector::PartitionType>>& owned) {
+  if (partitionType == nullptr) {
+    return nullptr;
+  }
+  auto scaled = partitionType->scaleDown(numWorkers);
+  const auto* raw = scaled.get();
+  owned.push_back(std::move(scaled));
+  return raw;
+}
+
+// Folds copartition() across all non-null PartitionType values in 'values'.
+// Returns nullptr if 'values' is empty or any pair is incompatible.
+std::shared_ptr<const connector::PartitionType> foldCopartition(
+    const std::vector<std::shared_ptr<const connector::PartitionType>>&
+        values) {
+  if (values.empty()) {
+    return nullptr;
+  }
+  std::shared_ptr<const connector::PartitionType> result = values.front();
+  for (size_t i = 1; result != nullptr && i < values.size(); ++i) {
+    result = result->copartition(*values[i]);
+  }
+  return result;
+}
+
+// Merges 'producer' into 'consumer' with per-leaf coarsening: if both maps
+// contain non-null PartitionTypes, fold copartition() across them to find a
+// common, then replace each non-null value with entry.copartition(*common).
+// Null entries pass through unchanged. Used at every join/union site that
+// combines two PlanStates' current fragment maps.
+void mergeFragmentMaps(GroupedLeaves& consumer, GroupedLeaves&& producer) {
+  std::vector<std::shared_ptr<const connector::PartitionType>> nonNullValues;
+  for (const auto& [_, partitionType] : consumer) {
+    if (partitionType != nullptr) {
+      nonNullValues.push_back(partitionType);
+    }
+  }
+  for (const auto& [_, partitionType] : producer) {
+    if (partitionType != nullptr) {
+      nonNullValues.push_back(partitionType);
+    }
+  }
+
+  if (nonNullValues.size() >= 2) {
+    std::sort(
+        nonNullValues.begin(),
+        nonNullValues.end(),
+        [](const auto& lhs, const auto& rhs) {
+          return lhs->numPartitions() < rhs->numPartitions();
+        });
+    auto result = foldCopartition(nonNullValues);
+    if (result != nullptr) {
+      for (auto& [_, partitionType] : consumer) {
+        if (partitionType != nullptr) {
+          partitionType = partitionType->copartition(*result);
+        }
+      }
+      for (auto& [_, partitionType] : producer) {
+        if (partitionType != nullptr) {
+          partitionType = partitionType->copartition(*result);
+        }
+      }
+    }
+  }
+
+  for (auto& [key, partitionType] : producer) {
+    consumer.emplace(key, std::move(partitionType));
+  }
+  producer.clear();
+}
+} // namespace
+
+PlanAndStats Optimization::toVeloxPlan(RelationOpPtr plan) {
+  return toVelox_.toVeloxPlan(
+      std::move(plan),
+      runnerOptions_,
+      outputColumnMappings_,
+      {repartitionGroupedLeaves_, rootGroupedLeaves_});
+}
+
 // static
 PlanAndStats Optimization::toVeloxPlan(
     const logical_plan::LogicalPlanNode& logicalPlan,
@@ -335,7 +504,18 @@ PlanP Optimization::bestPlan() {
 
   makeJoins(topState_);
 
-  return topState_.plans.best();
+  auto* winner = topState_.plans.best();
+  if (auto it = planGroupedLeaves_.find(winner);
+      it != planGroupedLeaves_.end()) {
+    // Move-out is safe: 'winner' is the single plan ToVelox will emit, no
+    // further consumer of planGroupedLeaves_[winner] exists past this point.
+    rootGroupedLeaves_ = std::move(it->second);
+    folly::F14FastSet<const RelationOp*> rootLeaves;
+    collectFragmentLeaves(winner->op.get(), rootLeaves);
+    filterGroupedLeavesToProducerLeaves(rootGroupedLeaves_, rootLeaves);
+    scaleDownGroupedLeaves(rootGroupedLeaves_, runnerOptions_.numWorkers);
+  }
+  return winner;
 }
 
 namespace {
@@ -887,24 +1067,8 @@ RelationOpPtr repartitionForIndex(
       Distribution{distribution.partitionType(), std::move(keyExprs)},
       plan->columns());
   state.addCost(*repartition);
+  commitGroupedLeavesForRepartition(state, repartition);
   return repartition;
-}
-
-// Returns the positions in 'keys' for the expressions that determine the
-// partition. empty if the partition is not decided by 'keys'
-std::vector<uint32_t> joinKeyPartition(
-    const RelationOpPtr& op,
-    const ExprVector& keys) {
-  const auto& partitionKeys = op->distribution().partitionKeys();
-  std::vector<uint32_t> positions;
-  for (unsigned i = 0; i < partitionKeys.size(); ++i) {
-    auto nthKey = position(keys, *partitionKeys[i]);
-    if (nthKey == kNotFound) {
-      return {};
-    }
-    positions.push_back(nthKey);
-  }
-  return positions;
 }
 
 PlanObjectSet availableColumns(PlanObjectCP object) {
@@ -963,6 +1127,7 @@ void alignJoinSides(
     auto* repartition = make<Repartition>(
         input, std::move(distribution), input->columns(), replicateNullsAndAny);
     state.addCost(*repartition);
+    commitGroupedLeavesForRepartition(state, repartition);
     input = repartition;
   }
 
@@ -978,10 +1143,15 @@ void alignJoinSides(
   }
 
   Distribution distribution{
-      input->distribution().partitionType(), std::move(distColumns)};
+      scaleDownPartitionType(
+          input->distribution().partitionType(),
+          state.optimization.runnerOptions().numWorkers,
+          state.optimization.derivedPartitionTypes()),
+      std::move(distColumns)};
   auto* repartition = make<Repartition>(
       otherInput, std::move(distribution), otherInput->columns());
   otherState.addCost(*repartition);
+  commitGroupedLeavesForRepartition(otherState, repartition);
   otherInput = repartition;
 }
 
@@ -1007,7 +1177,7 @@ const RelationOpPtr& maybeDropProject(const RelationOpPtr& plan) {
   return plan;
 }
 
-const connector::PartitionType* copartitionType(
+std::shared_ptr<connector::PartitionType> copartitionType(
     const connector::PartitionType* first,
     const connector::PartitionType* second) {
   if (first != nullptr && second != nullptr) {
@@ -1051,11 +1221,10 @@ RelationOpPtr repartitionForWrite(const RelationOpPtr& plan, PlanState& state) {
   const auto* planPartitionType = plan->distribution().partitionType();
 
   auto copartition =
-      copartitionType(planPartitionType, layout->partitionType());
+      copartitionType(planPartitionType, layout->partitionType().get());
 
-  // Copartitioning is possible if PartitionTypes are compatible and the table
-  // has no fewer partitions than the plan.
-  bool shuffle = !copartition || copartition != planPartitionType;
+  bool shuffle = !copartition || planPartitionType == nullptr ||
+      copartition->numPartitions() != planPartitionType->numPartitions();
   if (!shuffle) {
     // Check that the partition keys of the plan are assigned pairwise to the
     // partition columns of the layout.
@@ -1072,10 +1241,12 @@ RelationOpPtr repartitionForWrite(const RelationOpPtr& plan, PlanState& state) {
     }
   }
 
-  Distribution distribution(layout->partitionType(), std::move(keyValues));
+  Distribution distribution(
+      layout->partitionType().get(), std::move(keyValues));
   auto* repartition =
       make<Repartition>(plan, std::move(distribution), plan->columns());
   state.addCost(*repartition);
+  commitGroupedLeavesForRepartition(state, repartition);
   return repartition;
 }
 
@@ -1176,8 +1347,11 @@ void Optimization::addPostprocess(
     // EnforceSingleRow requires gather input. Single-worker plans
     // satisfy this by construction; no Repartition needed there.
     if (!isSingleWorker_ && !plan->distribution().isGather()) {
-      plan = make<Repartition>(plan, Distribution::gather(), plan->columns());
-      state.addCost(*plan);
+      auto* gather =
+          make<Repartition>(plan, Distribution::gather(), plan->columns());
+      state.addCost(*gather);
+      commitGroupedLeavesForRepartition(state, gather);
+      plan = gather;
     }
     auto enforceSingleRow = make<EnforceSingleRow>(plan);
     state.addCost(*enforceSingleRow);
@@ -1582,7 +1756,7 @@ bool Optimization::addWindow(
     if (!isSingleWorker_) {
       PlanCost repartitionCost;
       std::tie(plan, repartitionCost) =
-          maybeRepartition(plan, ExprVector(partitionKeys));
+          maybeRepartition(plan, ExprVector(partitionKeys), state);
       state.cost.add(repartitionCost);
     }
 
@@ -1726,6 +1900,10 @@ void Optimization::joinByIndex(
 
     state.placeColumns(c);
     state.addCost(*scan);
+    if (auto partitionType = info.index->layout->partitionType()) {
+      state.mutableCurrentGroupedLeaves().emplace(
+          scan, std::move(partitionType));
+    }
     state.addNextJoin(&candidate, scan, toTry);
   }
 }
@@ -2075,13 +2253,18 @@ void Optimization::joinByHash(
           }
         }
         Distribution distribution{
-            plan->distribution().partitionType(), copartition};
+            scaleDownPartitionType(
+                plan->distribution().partitionType(),
+                runnerOptions_.numWorkers,
+                derivedPartitionTypes_),
+            copartition};
         auto* repartition = make<Repartition>(
             buildInput,
             std::move(distribution),
             buildInput->columns(),
             replicateNullsAndAny);
         buildState.addCost(*repartition);
+        commitGroupedLeavesForRepartition(buildState, repartition);
         buildInput = repartition;
       }
     } else if (
@@ -2090,6 +2273,7 @@ void Optimization::joinByHash(
       auto* broadcast = make<Repartition>(
           buildInput, Distribution::broadcast(), buildInput->columns());
       buildState.addCost(*broadcast);
+      commitGroupedLeavesForRepartition(buildState, broadcast);
       buildInput = broadcast;
     } else {
       // The probe gets shuffled to align with build. If build is not
@@ -2169,6 +2353,9 @@ void Optimization::joinByHash(
 
   state.addCost(*join);
   state.cost.cost += buildState.cost.cost;
+  mergeFragmentMaps(
+      state.mutableCurrentGroupedLeaves(),
+      std::move(buildState.mutableCurrentGroupedLeaves()));
 
   if (enforceDistinctColumn != nullptr) {
     join = make<EnforceDistinct>(
@@ -2358,6 +2545,9 @@ void Optimization::joinByHashRight(
       candidate.fanout,
       projectionBuilder.inputColumns());
   state.addCost(*join);
+  mergeFragmentMaps(
+      state.mutableCurrentGroupedLeaves(),
+      std::move(probeState.mutableCurrentGroupedLeaves()));
 
   if (needsProjection) {
     join = projectionBuilder.build(join);
@@ -2417,12 +2607,17 @@ void Optimization::crossJoin(
   RelationOpPtr buildInput = buildPlan->op;
 
   if (!isSingleWorker_) {
-    buildInput = make<Repartition>(
+    auto* broadcast = make<Repartition>(
         buildInput, Distribution::broadcast(), buildInput->columns());
-    buildState.addCost(*buildInput);
+    buildState.addCost(*broadcast);
+    commitGroupedLeavesForRepartition(buildState, broadcast);
+    buildInput = broadcast;
   }
 
   state.cost.cost += buildState.cost.cost;
+  mergeFragmentMaps(
+      state.mutableCurrentGroupedLeaves(),
+      std::move(buildState.mutableCurrentGroupedLeaves()));
 
   if (candidate.join) {
     auto [build, probe] = candidate.joinSides();
@@ -2703,12 +2898,17 @@ RelationOpPtr Optimization::placeSingleRowDt(
   auto rightOp = rightPlan->op;
 
   if (!isSingleWorker_) {
-    rightOp = make<Repartition>(
+    auto* broadcast = make<Repartition>(
         rightOp, Distribution::broadcast(), rightOp->columns());
-    rightState.addCost(*rightOp);
+    rightState.addCost(*broadcast);
+    commitGroupedLeavesForRepartition(rightState, broadcast);
+    rightOp = broadcast;
   }
 
   state.cost.cost += rightState.cost.cost;
+  mergeFragmentMaps(
+      state.mutableCurrentGroupedLeaves(),
+      std::move(rightState.mutableCurrentGroupedLeaves()));
 
   auto resultColumns = plan->columns();
   resultColumns.insert(
@@ -2788,6 +2988,13 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
   bool ignore = false;
   auto plan = makePlan(*state.dt, key, std::nullopt, 1, ignore);
   state.cost = plan->cost;
+  // Inherit the DT's per-leaf bucketed map so subsequent operators planned
+  // atop this DT see its scans as fragment leaves.
+  auto it = planGroupedLeaves_.find(plan);
+  if (it != planGroupedLeaves_.end()) {
+    mergeFragmentMaps(
+        state.mutableCurrentGroupedLeaves(), GroupedLeaves{it->second});
+  }
 
   // Make plans based on the dt alone as first.
   makeJoins(plan->op, state);
@@ -2928,7 +3135,9 @@ ColumnVector indexColumns(
   return result;
 }
 
-// Adds the costs in the input states to the first state.
+// Adds the costs in the input states to the first state. Also merges the
+// per-leaf currentGroupedLeaves_ from each input state into the first so the
+// resulting Plan.map carries every UnionAll input's bucketed leaves.
 PlanP unionPlan(std::vector<PlanState>& states, const RelationOpPtr& result) {
   auto& firstState = states[0];
 
@@ -2937,6 +3146,10 @@ PlanP unionPlan(std::vector<PlanState>& states, const RelationOpPtr& result) {
 
     firstState.cost.cost += otherCost.cost;
     firstState.cost.cardinality += otherCost.cardinality;
+
+    mergeFragmentMaps(
+        firstState.mutableCurrentGroupedLeaves(),
+        std::move(states[i].mutableCurrentGroupedLeaves()));
   }
   return make<Plan>(result, states[0]);
 }
@@ -3021,6 +3234,10 @@ void Optimization::makeJoins(PlanState& state) {
 
         auto* scan = make<TableScan>(table, index, columns);
         state.addCost(*scan);
+        if (auto partitionType = index->layout->partitionType()) {
+          state.mutableCurrentGroupedLeaves().emplace(
+              scan, std::move(partitionType));
+        }
         makeJoins(scan, state);
       }
     } else if (from->is(PlanType::kValuesTableNode)) {
@@ -3251,15 +3468,19 @@ PlanP Optimization::makeUnionPlan(
   if (effectiveDistribution.has_value()) {
     // Some inputs need a shuffle to reach the parent's desired distribution;
     // wrap those.
+    const auto* unionPartType = scaleDownPartitionType(
+        effectiveDistribution->partitionType,
+        runnerOptions_.numWorkers,
+        derivedPartitionTypes_);
     for (auto i = 0; i < inputs.size(); ++i) {
       if (inputNeedsShuffle[i]) {
-        inputs[i] = make<Repartition>(
+        auto* repartition = make<Repartition>(
             inputs[i],
-            Distribution{
-                effectiveDistribution->partitionType,
-                effectiveDistribution->partitionKeys},
+            Distribution{unionPartType, effectiveDistribution->partitionKeys},
             inputs[i]->columns());
-        inputStates[i].addCost(*inputs[i]);
+        inputStates[i].addCost(*repartition);
+        commitGroupedLeavesForRepartition(inputStates[i], repartition);
+        inputs[i] = repartition;
       }
     }
   } else {
@@ -3308,7 +3529,11 @@ PlanP Optimization::makeUnionPlan(
         newInputs.emplace_back(wrapped);
       }
       inputs = std::move(newInputs);
-      inputStates[firstSingleIndex].addCost(*wrapped);
+      VELOX_CHECK(wrapEmitted);
+      VELOX_CHECK_LT(firstSingleIndex, inputStates.size());
+      inputStates.at(firstSingleIndex).addCost(*wrapped);
+      commitGroupedLeavesForRepartition(
+          inputStates.at(firstSingleIndex), wrapped);
     }
   }
 

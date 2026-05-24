@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <functional>
 #include "axiom/common/Enums.h"
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/common/SchemaTypeName.h"
@@ -50,6 +51,8 @@ using PartitionFunctionSpecPtr =
 /// the above connect to different metadata stores and provide different
 /// metadata, e.g. order, partitioning, bucketing etc.
 namespace facebook::axiom::connector {
+
+class TableLayout;
 
 /// Represents statistics of a column. The statistics may represent the column
 /// across the table or may be calculated over a sample of a layout of the
@@ -228,16 +231,13 @@ class PartitionType {
  public:
   virtual ~PartitionType() = default;
 
-  /// Returns 'this' or '&other' if the partitions are compatible. Partitions
-  /// are compatible if data in one partitioned dataset can only match data in
-  /// the same partition of another dataset if joined on equality of partition
-  /// keys. Compatibility is not strict equality in the case of e.g. Hive where
-  /// a dataset partitioned 8 ways is compatible with one partitioned 16 ways if
-  /// the function is the same. In such a case the partition to use is the 8 way
-  /// one. On the 16 side data from partitions 0 and 1 match 0 on the 8 side and
-  /// 2, 3 match 1 and so on.
-  virtual const PartitionType* FOLLY_NULLABLE
-  copartition(const PartitionType& other) const = 0;
+  /// Returns a PartitionType compatible with both 'this' and 'other', or
+  /// nullptr if they are not compatible. Compatibility is not strict equality:
+  /// for Hive, a table with 8 buckets is compatible with one bucketed 16 ways
+  /// (same hash function); the result has 8 partitions. The returned value
+  /// is always a freshly allocated owned shared_ptr.
+  virtual std::shared_ptr<PartitionType> copartition(
+      const PartitionType& other) const = 0;
 
   /// Returns a PartitionType compatible with this one but with at most
   /// 'maxPartitions' partitions. The returned partitioning groups together
@@ -435,10 +435,10 @@ class TableLayout {
     return partitionColumns_;
   }
 
-  /// Describes how the value in partitionColumns() determines a partition. The
-  /// returned value is owned by 'this'. nullptr if 'partitionColumns_' is
-  /// empty.
-  virtual const PartitionType* partitionType() const {
+  /// Describes how the value in partitionColumns() determines a partition.
+  /// The returned shared_ptr is owned by 'this'; callers may copy it to
+  /// extend lifetime as needed. nullptr if 'partitionColumns_' is empty.
+  virtual std::shared_ptr<const PartitionType> partitionType() const {
     VELOX_CHECK(partitionColumns_.empty());
     return nullptr;
   }

@@ -59,13 +59,8 @@ class Optimization {
   /// Returns the optimized RelationOp plan for 'plan' given at construction.
   PlanP bestPlan();
 
-  /// Returns a set of per-stage Velox PlanNode trees. If 'historyKeys' is
-  /// given, these can be used to record history data about the execution of
-  /// each relevant node for costing future queries.
-  PlanAndStats toVeloxPlan(RelationOpPtr plan) {
-    return toVelox_.toVeloxPlan(
-        std::move(plan), runnerOptions_, outputColumnMappings_);
-  }
+  /// Returns a set of per-stage Velox PlanNode trees.
+  PlanAndStats toVeloxPlan(RelationOpPtr plan);
 
   ToVelox& toVelox() {
     return toVelox_;
@@ -150,6 +145,11 @@ class Optimization {
     return runnerOptions_;
   }
 
+  std::vector<std::shared_ptr<connector::PartitionType>>&
+  derivedPartitionTypes() {
+    return derivedPartitionTypes_;
+  }
+
   History& history() const {
     return history_;
   }
@@ -177,6 +177,43 @@ class Optimization {
   /// Produces trace output if event matches 'traceFlags_'.
   void trace(uint32_t event, int32_t id, const PlanCost& cost, RelationOp& plan)
       const;
+
+  /// Per-Repartition map from leaf RelationOp to its scaled-down
+  /// PartitionType, captured at fragment commit. ToVelox reads it at
+  /// makeRepartition emission to populate the producer
+  /// ExecutableFragment::groupedNodes.
+  folly::F14FastMap<const Repartition*, GroupedLeaves>&
+  repartitionGroupedLeaves() {
+    return repartitionGroupedLeaves_;
+  }
+
+  const folly::F14FastMap<const Repartition*, GroupedLeaves>&
+  repartitionGroupedLeaves() const {
+    return repartitionGroupedLeaves_;
+  }
+
+  /// Final leaf -> PartitionType map for the root fragment, set by bestPlan()
+  /// and read by ToVelox when emitting the root fragment.
+  GroupedLeaves& rootGroupedLeaves() {
+    return rootGroupedLeaves_;
+  }
+
+  const GroupedLeaves& rootGroupedLeaves() const {
+    return rootGroupedLeaves_;
+  }
+
+  /// Side table of per-Plan bucketed leaf maps, captured at Plan construction.
+  /// Lives on Optimization (not on Plan itself) because some Plans are
+  /// arena-allocated via make<Plan>, where storing an F14FastMap directly on
+  /// Plan would leak its heap storage.
+  folly::F14FastMap<const Plan*, GroupedLeaves>& planGroupedLeaves() {
+    return planGroupedLeaves_;
+  }
+
+  const folly::F14FastMap<const Plan*, GroupedLeaves>& planGroupedLeaves()
+      const {
+    return planGroupedLeaves_;
+  }
 
  private:
   // Lists the possible joins based on 'state.placed' and adds each on top of
@@ -397,7 +434,43 @@ class Optimization {
   // (e.g., via existence pushdown).
   folly::F14FastSet<int32_t> estimatedBaseTables_;
 
+  // PartitionTypes derived during planning (scaleDown for Repartition
+  // distributions). Distribution::partitionType_ is a raw pointer because
+  // RelationOps are arena-allocated and dtors don't run there; this vector
+  // owns the heap-allocated derived types so the raw pointers stay valid
+  // for the lifetime of the planning session.
+  std::vector<std::shared_ptr<connector::PartitionType>> derivedPartitionTypes_;
+
+  // Per-Repartition map from leaf RelationOp to its scaled-down PartitionType,
+  // committed at every make<Repartition>. Consumed by ToVelox at Repartition
+  // emission to populate the producer ExecutableFragment::groupedNodes.
+  folly::F14FastMap<const Repartition*, GroupedLeaves>
+      repartitionGroupedLeaves_;
+
+  // Final leaf -> scaled-down PartitionType map for the root (topmost)
+  // fragment, captured by bestPlan() from the winning Plan's per-leaf map.
+  // Consumed by ToVelox at root emission.
+  GroupedLeaves rootGroupedLeaves_;
+
+  // Per-Plan map from leaf RelationOp to its scaled-down PartitionType,
+  // captured at Plan construction. See planGroupedLeaves() doc.
+  folly::F14FastMap<const Plan*, GroupedLeaves> planGroupedLeaves_;
+
   std::shared_ptr<QueryRuntimeStats> runtimeStats_;
 };
+
+/// Captures the producer-side fragment commit. Moves
+/// 'state.currentGroupedLeaves_' (the producer's per-leaf map of native
+/// PartitionTypes) onto 'state.optimization.repartitionGroupedLeaves_' keyed by
+/// the freshly-created 'repartition', applies scaleDown(numWorkers) to each
+/// non-null entry — that's the optimizer committing the fragment to a
+/// runner-task budget — then resets state's map per the Repartition's
+/// distribution kind: hash-partitioned consumer gets a single
+/// (repartition, nullptr) entry to propagate the exchange into the consumer
+/// fragment's groupedNodes; broadcast/gather/arbitrary leave the consumer
+/// empty. Call immediately after each make<Repartition>.
+void commitGroupedLeavesForRepartition(
+    PlanState& state,
+    const Repartition* repartition);
 
 } // namespace facebook::axiom::optimizer
