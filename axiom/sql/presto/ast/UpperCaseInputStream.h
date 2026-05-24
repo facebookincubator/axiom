@@ -22,25 +22,26 @@
 
 namespace axiom::sql::presto {
 /**
- * This class is a thin wrapper around ANTLRInputStream to allow streams to be
- * case-insensitive by always forcing the stream to be upper case. This is done
- * by wrapping the look-ahead and checking if the value returned != 0. For now,
- * we uppercase all; however, we may need to reconsider EOF or use sophisicated
- * unicode when supported.
+ * ANTLRInputStream wrapper that case-folds ASCII letters so the lexer
+ * matches keywords case-insensitively. Presto's keyword and unquoted-
+ * identifier grammar is ASCII-only; non-ASCII codepoints pass through
+ * unchanged.
  */
 class UpperCaseInputStream final : public antlr4::ANTLRInputStream {
  public:
   explicit UpperCaseInputStream(std::string_view input)
       : antlr4::ANTLRInputStream(input) {}
-  // Force the casing to be upper case
+
   size_t LA(ssize_t i) override {
     size_t c = antlr4::ANTLRInputStream::LA(i);
-    if (c == 0) {
-      return c;
+    if (c - 'a' < kNumAsciiLowerLetters) {
+      return c - ('a' - 'A');
     }
-
-    return toupper(c);
+    return c;
   }
+
+ private:
+  static constexpr size_t kNumAsciiLowerLetters = 'z' - 'a' + 1;
 };
 
 } // namespace axiom::sql::presto
