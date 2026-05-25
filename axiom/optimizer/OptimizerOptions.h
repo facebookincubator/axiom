@@ -66,13 +66,13 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
   /// Enable join order sampling during optimization. If this flag is set, joins
   /// are sampled to determine the optimal join order. If join sampling is
   /// disabled, the optimizer will fall back on cardinality estimation.
-  bool sampleJoins{true};
+  bool sampleJoins{false};
 
   /// Enable filter selectivity sampling during optimization. If this flag is
   /// set, filters will be evaluated against a sample of source data to
   /// determine the estimated cardinality of the scan. If filter sampling is
   /// disabled, a default selectivity will be used.
-  bool sampleFilters{true};
+  bool sampleFilters{false};
 
   /// Enable using connector-provided table statistics (co_estimateStats) for
   /// cardinality estimation. When disabled, the optimizer falls back to

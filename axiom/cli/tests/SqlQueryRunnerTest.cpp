@@ -1170,19 +1170,19 @@ TEST_F(SqlQueryRunnerTest, timingFieldsOnParseError) {
 
 TEST_F(SqlQueryRunnerTest, sessionProperties) {
   // Default value.
-  assertSessionProperty("optimizer.sample_joins", "true", "true");
+  assertSessionProperty("optimizer.sample_joins", "false", "false");
 
   // SET changes the value.
-  auto result = run("SET SESSION optimizer.sample_joins = false");
+  auto result = run("SET SESSION optimizer.sample_joins = true");
   ASSERT_TRUE(result.message.has_value());
-  EXPECT_EQ(*result.message, "Session 'optimizer.sample_joins' set to 'false'");
-  assertSessionProperty("optimizer.sample_joins", "false", "true");
+  EXPECT_EQ(*result.message, "Session 'optimizer.sample_joins' set to 'true'");
+  assertSessionProperty("optimizer.sample_joins", "true", "false");
 
   // RESET restores the default.
   result = run("RESET SESSION optimizer.sample_joins");
   ASSERT_TRUE(result.message.has_value());
   EXPECT_EQ(*result.message, "Session 'optimizer.sample_joins' reset");
-  assertSessionProperty("optimizer.sample_joins", "true", "true");
+  assertSessionProperty("optimizer.sample_joins", "false", "false");
 
   // Invalid value.
   VELOX_ASSERT_THROW(
