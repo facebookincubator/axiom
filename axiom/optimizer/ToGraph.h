@@ -605,16 +605,18 @@ class ToGraph {
   // mixed-reference variant), and 'dt' is not extended with the unsplit
   // form (which would violate DerivedTable::checkConsistency).
   //
-  // When 'propagateAlias' is true and the expression is a Column from a
+  // When 'claimedNames' is non-null and the expression is a Column from a
   // different relation with a non-null alias, the new wrapper Column
-  // inherits that alias so its outputName() matches the source. Same-DT
-  // columns are not affected (their requested 'name' is preserved as the
-  // wrapper's alias). Pass false at the top-level DT to preserve the
-  // makeQueryGraph name-preservation contract.
+  // inherits that alias so its outputName() matches the source - unless
+  // doing so would collide with an output name already claimed in this
+  // batch. The chosen alias is recorded in 'claimedNames'. Pass nullptr
+  // at the top-level DT to preserve the makeQueryGraph
+  // name-preservation contract. 'claimedNames' must initially contain
+  // every channel's requested name for the current setDtUsedOutput batch.
   void addDtColumn(
       DerivedTableP dt,
       std::string_view name,
-      bool propagateAlias = true);
+      folly::F14FastSet<std::string_view>* claimedNames);
 
   // Splits a subquery projection expression that references both 'dt's
   // own tables and tables from an enclosing scope. Local-only maximal
@@ -628,7 +630,10 @@ class ToGraph {
 
   // Populates 'dt' with one column per ordinal in usedChannels(node),
   // named via node.outputType().nameOf(ordinal); ordering is unspecified.
-  // See addDtColumn for 'propagateAlias'.
+  // When 'propagateAlias' is true, threads a 'claimedNames' set through
+  // 'addDtColumn' so wrapper Columns may inherit source aliases without
+  // colliding on output names. Pass false at the top-level DT to preserve
+  // the makeQueryGraph name-preservation contract.
   void setDtUsedOutput(
       DerivedTableP dt,
       const logical_plan::LogicalPlanNode& node,

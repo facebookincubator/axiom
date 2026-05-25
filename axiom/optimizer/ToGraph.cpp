@@ -243,12 +243,41 @@ DerivedTableScopeUse classifyScope(ExprCP expr, DerivedTableP dt) {
   });
   return result;
 }
+
+// Selects the alias for a new wrapper Column on 'dt' that exports 'expr'
+// under requested name 'columnName'. When 'claimedNames' is non-null,
+// inherits the source Column's alias if doing so won't collide with any
+// output name already claimed in the current batch; otherwise falls back
+// to 'columnName'. Records the chosen alias in 'claimedNames'.
+Name pickWrapperAlias(
+    ExprCP expr,
+    DerivedTableP dt,
+    Name columnName,
+    folly::F14FastSet<std::string_view>* claimedNames) {
+  if (claimedNames == nullptr || !expr->isColumn() ||
+      expr->as<Column>()->relation() == dt ||
+      expr->as<Column>()->alias() == nullptr) {
+    return columnName;
+  }
+
+  const Name candidate{expr->as<Column>()->alias()};
+  const std::string_view candidateView{candidate};
+  if (candidateView == std::string_view{columnName}) {
+    return candidate;
+  }
+  if (claimedNames->contains(candidateView)) {
+    return columnName;
+  }
+  claimedNames->insert(candidateView);
+  return candidate;
+}
+
 } // namespace
 
 void ToGraph::addDtColumn(
     DerivedTableP dt,
     std::string_view name,
-    bool propagateAlias) {
+    folly::F14FastSet<std::string_view>* claimedNames) {
   const auto* expr = translateColumn(name);
 
   const auto scope = classifyScope(expr, dt);
@@ -272,12 +301,7 @@ void ToGraph::addDtColumn(
     dtColumn = expr->as<Column>();
   } else {
     const auto* columnName = toName(name);
-    Name alias = columnName;
-    if (propagateAlias && expr->isColumn() &&
-        expr->as<Column>()->relation() != dt &&
-        expr->as<Column>()->alias() != nullptr) {
-      alias = expr->as<Column>()->alias();
-    }
+    const Name alias = pickWrapperAlias(expr, dt, columnName, claimedNames);
     dtColumn = make<Column>(columnName, dt, expr->value(), alias);
   }
 
@@ -555,8 +579,19 @@ void ToGraph::setDtUsedOutput(
     const lp::LogicalPlanNode& node,
     bool propagateAlias) {
   const auto& type = *node.outputType();
-  for (auto i : usedChannels(node)) {
-    addDtColumn(dt, type.nameOf(i), propagateAlias);
+  const auto channels = usedChannels(node);
+  // Tracks output names that are spoken for by some channel in this batch:
+  // initially every channel's requested name, then extended with each
+  // inherited alias as it is claimed.
+  folly::F14FastSet<std::string_view> claimedNames;
+  if (propagateAlias) {
+    claimedNames.reserve(channels.size());
+    for (auto i : channels) {
+      claimedNames.insert(type.nameOf(i));
+    }
+  }
+  for (auto i : channels) {
+    addDtColumn(dt, type.nameOf(i), propagateAlias ? &claimedNames : nullptr);
   }
   dt->outputColumns = dt->columns;
 }
