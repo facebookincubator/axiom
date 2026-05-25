@@ -1336,6 +1336,57 @@ TEST_F(PrestoParserTest, outputNamesPreserveAliasCase) {
       testing::ElementsAre("FooBar"));
 }
 
+// Output column names retain their user-written case when a JOIN is wrapped
+// in an AliasedRelation.
+TEST_F(PrestoParserTest, outputNamesPreserveAliasCaseAcrossJoin) {
+  auto outputNames = [&](const std::string& sql) {
+    SCOPED_TRACE(sql);
+    return parseSelect(sql)->outputType()->names();
+  };
+
+  // Explicit qualified column references.
+  EXPECT_THAT(
+      outputNames(
+          "SELECT a.X, a.Y FROM ((SELECT 1 AS X) CROSS JOIN (SELECT 2 AS Y)) a"),
+      testing::ElementsAre("X", "Y"));
+
+  // Bare star expansion.
+  EXPECT_THAT(
+      outputNames(
+          "SELECT * FROM ((SELECT 1 AS X) CROSS JOIN (SELECT 2 AS Y)) a"),
+      testing::ElementsAre("X", "Y"));
+
+  // Alias-qualified star expansion.
+  EXPECT_THAT(
+      outputNames(
+          "SELECT a.* FROM ((SELECT 1 AS X) CROSS JOIN (SELECT 2 AS Y)) a"),
+      testing::ElementsAre("X", "Y"));
+
+  // INNER JOIN ON.
+  EXPECT_THAT(
+      outputNames(
+          "SELECT * FROM ((SELECT 1 AS X) JOIN (SELECT 2 AS Y) ON true) a"),
+      testing::ElementsAre("X", "Y"));
+
+  // LEFT JOIN ON.
+  EXPECT_THAT(
+      outputNames(
+          "SELECT * FROM ((SELECT 1 AS X) LEFT JOIN (SELECT 2 AS Y) ON true) a"),
+      testing::ElementsAre("X", "Y"));
+
+  // JOIN USING - the USING column appears once in the output.
+  EXPECT_THAT(
+      outputNames(
+          "SELECT * FROM ((SELECT 1 AS X, 2 AS K) JOIN (SELECT 3 AS Y, 2 AS K) USING(K)) a"),
+      testing::ElementsAre("K", "X", "Y"));
+
+  // Nested JOIN inside the right leg.
+  EXPECT_THAT(
+      outputNames(
+          "SELECT * FROM ((SELECT 1 AS X) CROSS JOIN ((SELECT 2 AS Y) CROSS JOIN (SELECT 3 AS Z))) a"),
+      testing::ElementsAre("X", "Y", "Z"));
+}
+
 TEST_F(PrestoParserTest, renameToAliasMatchingInnerColumnName) {
   // A SELECT-list rename must be honored even when the alias coincides
   // with a column name appearing in an inner subquery.

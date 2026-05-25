@@ -599,6 +599,14 @@ class RelationPlanner : public AstVisitor {
     builder_ = newBuilder(leftScope);
     processFrom(join.right());
 
+    // 'lastNames' now holds only the right leg's names; its size no
+    // longer matches the JOIN's combined output. An enclosing accumulate
+    // would fail the size check. Clearing is safe: each leg's own
+    // accumulate stored its columns under '{nullopt, name}', and
+    // 'displayName()' falls back to that key for star-expansion through
+    // the wrap.
+    displayNames_.lastNames.clear();
+
     auto rightBuilder = builder_;
 
     if (const auto& criteria = join.criteria()) {
