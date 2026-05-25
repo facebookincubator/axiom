@@ -68,3 +68,32 @@ SELECT a, count(*) c FROM (
   UNION ALL
   (SELECT a FROM t ORDER BY a)
 ) GROUP BY a
+----
+-- Projecting the same source column twice (once aliased, once raw) inside
+-- a CTE must not produce duplicate output column names downstream.
+WITH
+  t1 AS (
+    SELECT b AS x, b, "row_number"() OVER () c
+    FROM (VALUES (100)) AS _(b)
+  ),
+  u AS (
+    SELECT y AS x, null b, null c
+    FROM (VALUES (100)) AS _(y)
+  )
+SELECT * FROM t1 WHERE c = 1
+UNION ALL
+SELECT * FROM u WHERE c = 1
+----
+-- Projecting the same source column twice where one alias equals the
+-- source column's own name (`b`) must not produce duplicate output
+-- column names downstream.
+WITH
+  v AS (
+    SELECT b AS bb, b, "row_number"() OVER (ORDER BY b) c FROM t
+  ),
+  u AS (
+    SELECT null bb, null b, null c
+  )
+SELECT * FROM v WHERE c = 1
+UNION ALL
+SELECT * FROM u
