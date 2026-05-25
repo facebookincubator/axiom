@@ -29,6 +29,7 @@ add_executable(
   PrestoParserTestBase.cpp
   ReferencedTablesTest.cpp
   SortParserTest.cpp
+  SplitStatementsTest.cpp
 )
 
 add_test(axiom_sql_presto_test axiom_sql_presto_test)

@@ -30,7 +30,7 @@ Drafts a commit message that follows the rules in `.claude/CLAUDE.md` (sections 
    - **What + why**: lead with user-visible behavior change. Include one concrete example query, error message, or before/after fact. A reader without internals knowledge should get the gist.
    - **Mechanism**: the core idea as ONE concept — a new field, a swapped algorithm, an added check, a rewrite step. Skip when the title + "what + why" already conveys it.
    - **Deferred**: name a deliberately-not-done case and how it surfaces (NYI message, follow-up issue). Skip if none.
-   - **Test plan**: high-level coverage. Name the test file(s) and what scenarios they cover. Don't write "tests pass" or "CI green" — CI reports that; restating it is noise. State what was *covered*, not that it succeeded. For pure refactors with no new tests, omit the Test Plan section entirely — "existing tests cover this" / "covered by CI" is implied by "pure refactor" and adds no information.
+   - **Test plan**: high-level coverage. Name the test file(s) and what scenarios they cover. If the test work covers more than one distinct category (e.g., extracting tests + adding new coverage + a bug-fix regression test), use bullets — one per category. Don't cram multiple categories into one comma-separated sentence. Don't write "tests pass" or "CI green" — CI reports that; restating it is noise. State what was *covered*, not that it succeeded. For pure refactors with no new tests, omit the Test Plan section entirely — "existing tests cover this" / "covered by CI" is implied by "pure refactor" and adds no information.
 
    **Prose clarity** — write so a tired reader gets each sentence on first read.
    - Prefer short sentences. If a sentence has two clauses joined by "so", "because", "but", "even though", "although", or a comma + participle, consider splitting it. Contrastive joiners ("but X", "even though Y") are especially risky when both halves introduce a fact the reader does not already have — pack two new facts into one sentence and the reader stalls. State each rule in its own sentence, then connect them.
@@ -63,6 +63,8 @@ Drafts a commit message that follows the rules in `.claude/CLAUDE.md` (sections 
      ```
 
      Short fragments (a single column name, a flag, a 2-3-word error name) stay inline.
+   - Any enumeration of 3+ items goes in a sub-bullet list, not in a sentence — even a short one. Examples: list of recognized constructs, list of new flags, list of test scenarios. Forcing the reader to parse a list while tracking the surrounding clause overloads them.
+   - For deletions and additions, lead with the active verb: "Removes the foo helper — no longer needed." not "The foo helper is no longer needed and is removed." Easier to skim and locate.
    - When in doubt, read the paragraph aloud. If you pause mid-sentence to decode it, split or simplify it.
 
 4. **Self-check before showing** — Walk every item; do not skip any.
@@ -78,6 +80,9 @@ Drafts a commit message that follows the rules in `.claude/CLAUDE.md` (sections 
    - [ ] Reads in ~30 seconds.
    - [ ] Length matches the change. Trivial changes are not padded to standard length; standard changes are not condensed to one line.
    - [ ] Prose clarity: no sentence longer than ~30 words; no stacked abstractions ("X advertising Y", "scope of Z"). Each sentence is parseable on first read.
+   - [ ] No comma-separated enumeration of 3+ items inside any sentence — lists go in sub-bullets.
+   - [ ] Sentences describing deletions or additions lead with the active verb ("Removes X", "Adds Y").
+   - [ ] Test Plan uses bullets if covering 2 or more distinct categories.
 
    If any item fails, fix the draft before showing.
 
@@ -95,6 +100,7 @@ These are the patterns drafts most often hit, and that this skill exists to prev
 - **Reasoning scaffolding** — "We considered X but chose Y because Z." Belongs in design docs or PR threads, not the commit log.
 - **Hard-wrapped paragraphs** — Hard line breaks at ~70/80 columns render as ragged short lines wherever the message is reflowed.
 - **Pass-counting test plans** — "All 47 tests pass." CI says that. State *what was covered*, not that it succeeded.
+- **Stale Test Plan after amend** — when amending a commit whose diff has grown or changed shape (new test file, new coverage, dropped scenarios), re-derive the Test Plan from the current diff. Text written for the first draft of the change rots: it references items that no longer exist or omits new categories. Re-read the diff before keeping the prior Test Plan as-is.
 
 ## When NOT to invoke
 

@@ -1452,107 +1452,75 @@ std::vector<SqlStatementPtr> PrestoParser::parseMultiple(
   return results;
 }
 
-// Returns the byte offset in 'utf8' that corresponds to the given UTF-32
-// codepoint index. ANTLR's getStartIndex/getStopIndex return codepoint
-// offsets, but std::string_view::substr operates on bytes, so they must be
-// converted before slicing.
-size_t codepointToByteOffset(std::string_view utf8, size_t codepointIndex) {
-  size_t byteOffset = 0;
-  size_t cp = 0;
-  while (cp < codepointIndex && byteOffset < utf8.size()) {
-    auto c = static_cast<unsigned char>(utf8[byteOffset]);
-    size_t step;
-    if (c < 0x80) {
-      step = 1;
-    } else if ((c & 0xe0) == 0xc0) {
-      step = 2;
-    } else if ((c & 0xf0) == 0xe0) {
-      step = 3;
-    } else if ((c & 0xf8) == 0xf0) {
-      step = 4;
-    } else {
-      VELOX_USER_FAIL(
-          "Invalid UTF-8 start byte at offset {}: {:#x}", byteOffset, c);
-    }
-    byteOffset += step;
-    ++cp;
-  }
-  return byteOffset;
-}
-
 std::vector<std::string_view> PrestoParser::splitStatements(
     std::string_view sql) {
   std::vector<std::string_view> statements;
 
-  // Use ANTLR lexer to tokenize and find statement boundaries
-  const std::string sqlStr(sql);
-  UpperCaseInputStream inputStream(sqlStr);
-  PrestoSqlLexer lexer(&inputStream);
-  antlr4::CommonTokenStream tokenStream(&lexer);
-  tokenStream.fill();
+  auto trim = [](std::string_view text) {
+    while (!text.empty() &&
+           std::isspace(static_cast<unsigned char>(text.front()))) {
+      text.remove_prefix(1);
+    }
+    while (!text.empty() &&
+           std::isspace(static_cast<unsigned char>(text.back()))) {
+      text.remove_suffix(1);
+    }
+    return text;
+  };
 
-  // Get all tokens (default channel only - excludes hidden tokens like
-  // whitespace/comments)
-  size_t numTokens = tokenStream.size();
-
-  size_t statementStart = 0;
-  for (size_t i = 0; i < numTokens; ++i) {
-    const auto* token = tokenStream.get(i);
-
-    if (token->getText() == ";") {
-      // Find the last token before the semicolon (on default channel)
-      if (i > statementStart) {
-        size_t startIndex = codepointToByteOffset(
-            sql, tokenStream.get(statementStart)->getStartIndex());
-        size_t endIndex = codepointToByteOffset(
-            sql, tokenStream.get(i - 1)->getStopIndex() + 1);
-
-        auto stmt = sql.substr(startIndex, endIndex - startIndex);
-
-        while (!stmt.empty() && std::isspace(stmt.front())) {
-          stmt.remove_prefix(1);
-        }
-        while (!stmt.empty() && std::isspace(stmt.back())) {
-          stmt.remove_suffix(1);
-        }
-
-        if (!stmt.empty()) {
-          statements.push_back(stmt);
-        }
+  auto emit = [&](size_t begin, size_t end) {
+    if (begin < end) {
+      auto statement = trim(sql.substr(begin, end - begin));
+      if (!statement.empty()) {
+        statements.push_back(statement);
       }
+    }
+  };
 
+  // UTF-8 continuation bytes are >= 0x80 and cannot collide with the
+  // ASCII delimiters tracked here.
+  size_t i{0};
+  size_t statementStart{0};
+  while (i < sql.size()) {
+    char byte = sql[i];
+    if (byte == '\'' || byte == '"' || byte == '`') {
+      // Quoted string or identifier (`'` string, `"` identifier, `` ` ``
+      // BACKQUOTED_IDENTIFIER). Doubled quote (e.g. '') is an escape.
+      const char quote{byte};
+      ++i;
+      while (i < sql.size()) {
+        if (sql[i] == quote) {
+          if (i + 1 < sql.size() && sql[i + 1] == quote) {
+            i += 2;
+            continue;
+          }
+          ++i;
+          break;
+        }
+        ++i;
+      }
+    } else if (byte == '-' && i + 1 < sql.size() && sql[i + 1] == '-') {
+      // Line comment until end of line.
+      i += 2;
+      while (i < sql.size() && sql[i] != '\n') {
+        ++i;
+      }
+    } else if (byte == '/' && i + 1 < sql.size() && sql[i + 1] == '*') {
+      // Block comment (non-nested, per ANSI SQL).
+      i += 2;
+      while (i + 1 < sql.size() && !(sql[i] == '*' && sql[i + 1] == '/')) {
+        ++i;
+      }
+      i = std::min(i + 2, sql.size());
+    } else if (byte == ';') {
+      emit(statementStart, i);
       statementStart = i + 1;
+      ++i;
+    } else {
+      ++i;
     }
   }
-
-  // Handle the last statement (if no trailing semicolon)
-  if (statementStart < numTokens) {
-    // Skip EOF token (last token in stream)
-    size_t lastTokenIdx = numTokens - 1;
-    if (lastTokenIdx > 0 && lastTokenIdx >= statementStart) {
-      --lastTokenIdx;
-    }
-
-    if (lastTokenIdx >= statementStart) {
-      size_t startIndex = codepointToByteOffset(
-          sql, tokenStream.get(statementStart)->getStartIndex());
-      size_t endIndex = codepointToByteOffset(
-          sql, tokenStream.get(lastTokenIdx)->getStopIndex() + 1);
-
-      auto stmt = sql.substr(startIndex, endIndex - startIndex);
-
-      while (!stmt.empty() && std::isspace(stmt.front())) {
-        stmt.remove_prefix(1);
-      }
-      while (!stmt.empty() && std::isspace(stmt.back())) {
-        stmt.remove_suffix(1);
-      }
-
-      if (!stmt.empty()) {
-        statements.push_back(stmt);
-      }
-    }
-  }
+  emit(statementStart, sql.size());
 
   return statements;
 }
