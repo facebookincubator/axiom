@@ -7,6 +7,14 @@ description: Draft a commit message for an Axiom commit. Use when the user asks 
 
 Drafts a commit message that follows the rules in `.claude/CLAUDE.md` (sections "Commit Messages" and "Body length and shape"). The rules there are authoritative — this skill is the workflow for applying them.
 
+## Guiding principle
+
+**Write to orient a reviewer, not to defend the change.** A commit message's job is to orient the reader to the change — not to enumerate every affected file, restate every claim at multiple abstraction levels, or hedge against "you didn't mention X". The diff and the version-control history are the system of record. The message picks the smallest set of facts the reader needs to navigate the diff, and stops.
+
+Apply the **would-I-say-this-aloud** test to every sentence: read it as if briefing a teammate verbally. Sentences that exist to prove a claim, recite enum values, attribute jargon to a subsystem, or acknowledge symbols by name die on first contact with speech. Sentences that orient — "this query failed", "Velox doesn't support it", "treat it as a regular function call" — survive. If a sentence wouldn't survive being spoken aloud, delete it.
+
+The per-pattern rules below all derive from this principle. If a draft passes the rules but still reads like a legal brief, trust the principle and trim further.
+
 ## Process
 
 1. **Read the rules** — Open `.claude/CLAUDE.md` and re-read the "Commit Messages" and "Body length and shape" sections. Do not draft from memory.
@@ -83,6 +91,7 @@ Drafts a commit message that follows the rules in `.claude/CLAUDE.md` (sections 
    - [ ] No comma-separated enumeration of 3+ items inside any sentence — lists go in sub-bullets.
    - [ ] Sentences describing deletions or additions lead with the active verb ("Removes X", "Adds Y").
    - [ ] Test Plan uses bullets if covering 2 or more distinct categories.
+   - [ ] Every sentence passes the would-I-say-this-aloud test. No defensive citations (file:line, enum value lists), no claims restated at a different abstraction level, no symbol-by-symbol cleanup recitations.
 
    If any item fails, fix the draft before showing.
 
@@ -92,6 +101,7 @@ Drafts a commit message that follows the rules in `.claude/CLAUDE.md` (sections 
 
 These are the patterns drafts most often hit, and that this skill exists to prevent:
 
+- **Defensive completionism** (the meta-pattern). Each clause exists to ward off "you didn't mention X" rather than to inform the reader: citing source file:line to back a claim ("`Subfield.h:28-33` enumerates only ..."), restating the same fact at two abstraction levels ("step has no Velox representation" + "Velox doesn't support pushdown"), enumerating removed symbols/files in a cleanup tail ("Removes the dead enum, its handlers in `A`/`B`/`C`, and the `X::registerY`/`y()` accessors"), or hedging title phrasings ("X without crash"). All five derive from writing for a future challenger instead of a present reader. Apply the would-I-say-this-aloud test; cut everything that wouldn't survive being spoken.
 - **Restating the diff as prose** — "Adds X. Modifies Y. Changes Z." That's what the diff shows. State the behavior change and the one concept behind it.
 - **Function-by-function walkthrough** — "In `foo()`, we now do A. In `bar()`, we adjust B." The reviewer reads the diff for that. Collapse into the single mechanism.
 - **Enumerating touched files, classes, or call sites** — "Adopt it in `Foo`, `Bar`, `Baz`, `Qux`, and `Quux`." or "Updated across N call sites." The diff is the source of truth for scope. Naming the touched symbols eats space without informing the reader. Exception: name a specific file only when its role in the change is not obvious from the title (e.g., the test file that needed expectation updates, or the one production file the rest of the diff supports).
