@@ -526,3 +526,12 @@ SELECT x FROM (SELECT x, sum(x) AS sx FROM s GROUP BY x) WHERE sx > 0
 ----
 -- IN with a constant left-hand side over a no-FROM subquery.
 SELECT 1 WHERE 1 IN (SELECT 1)
+----
+-- Scalar subquery in aggregate ORDER BY expression.
+SELECT array_agg(a ORDER BY a + (SELECT 1)) AS vals FROM t
+----
+-- Scalar subquery in aggregate ORDER BY with GROUP BY.
+SELECT a, array_agg(b ORDER BY b + (SELECT 0)) AS vals FROM t GROUP BY a
+----
+-- Non-order-sensitive aggregate with ORDER BY containing a subquery.
+SELECT sum(a ORDER BY a + (SELECT 1)) AS total FROM t
