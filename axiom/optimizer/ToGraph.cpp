@@ -3909,6 +3909,26 @@ void ToGraph::processInPredicates(
     const bool isCorrelated =
         !applyContext_.lifted.predicates.empty() || inRightHasOuter;
 
+    // Fold `<const> IN (SELECT <proj> WHERE <cond>)` over a no-FROM
+    // subquery into `<cond> AND <const> = <proj>`. A SEMI cannot
+    // represent this case: leftKey has no table to anchor its left side.
+    if (!isCorrelated && leftKey->allTables().empty() &&
+        subqueryDt->isProjectFilterOnly() && subqueryDt->exprs.size() == 1) {
+      ExprCP projection = subqueryDt->exprs.front();
+      ExprVector parts = std::move(subqueryDt->conjuncts);
+      parts.push_back(makeEquality(leftKey, projection));
+      ExprVector guards = std::move(applyContext_.lifted.outerGuards);
+      applyContext_.lifted.outerGuards.clear();
+      currentDt_->removeLastTable(subqueryDt);
+      ExprCP result =
+          wrapMarkInGuards(std::move(guards), makeAnd(std::move(parts)));
+      subqueries_.emplace(predicate, result);
+      if (!result->columns().empty()) {
+        chain.carryForwards.push_back(predicate);
+      }
+      continue;
+    }
+
     // Velox HashJoin cannot represent a multi-key null-aware join, so the
     // SEMI's left side must be a single table. If correlation reaches more
     // than one outer table (via leftKey, inRightKey, or correlation
@@ -4605,8 +4625,13 @@ void ToGraph::translateUnion(const lp::SetNode& set) {
     renames_ = renames;
     currentDt_ = newDt();
     auto savedLifted = applyContext_.saveAndClearLifted();
+    // Cached subquery columns are bound to the branch's DT; scope per
+    // branch so sibling branches re-translate against their own DT.
+    auto savedSubqueries = std::move(subqueries_);
+    subqueries_.clear();
     SCOPE_EXIT {
       applyContext_.lifted = std::move(savedLifted);
+      subqueries_ = std::move(savedSubqueries);
     };
     makeQueryGraph(input, kAllAllowedInDt, /*orderObservedAbove=*/false);
     if (!applyContext_.lifted.empty()) {

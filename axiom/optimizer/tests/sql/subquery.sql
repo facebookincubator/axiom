@@ -508,3 +508,21 @@ FROM (VALUES (1)) AS t(a)
 LEFT JOIN (VALUES (1, 'x')) AS u(k, b) ON t.a = u.k
 INNER JOIN (VALUES (1)) AS v(c)
   ON u.b IN (SELECT 'x' FROM (VALUES (1)) AS w(d) WHERE d = v.c)
+----
+-- Shared CTE with a nested-IN filter, referenced from both UNION legs,
+-- second leg wrapping it in GROUP BY.
+WITH s AS (
+    SELECT x FROM (VALUES (1)) t(x) WHERE x IN (SELECT 1 WHERE 1 IN (SELECT 1))
+)
+SELECT x FROM s
+UNION ALL
+SELECT x FROM (SELECT x, sum(x) AS sx FROM s GROUP BY x) WHERE sx > 0
+----
+-- Same shape with a single reference inside a GROUP BY.
+WITH s AS (
+    SELECT x FROM (VALUES (1)) t(x) WHERE x IN (SELECT 1 WHERE 1 IN (SELECT 1))
+)
+SELECT x FROM (SELECT x, sum(x) AS sx FROM s GROUP BY x) WHERE sx > 0
+----
+-- IN with a constant left-hand side over a no-FROM subquery.
+SELECT 1 WHERE 1 IN (SELECT 1)
