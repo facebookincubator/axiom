@@ -385,6 +385,14 @@ struct DerivedTable : public PlanObject {
   /// single row with no columns. Does not look at postprocessing.
   bool isSingleRowNoColumnsValues() const;
 
+  /// True when this DT consists of a projection over an optional WHERE,
+  /// with no FROM (the only source is the synthetic single-row no-cols
+  /// values), no aggregation, no window, no ORDER BY, and no LIMIT/OFFSET.
+  bool isProjectFilterOnly() const {
+    return isSingleRowNoColumnsValues() && !hasAggregation() && !hasWindow() &&
+        !hasOrderBy() && !hasLimit() && !hasOffset();
+  }
+
   /// Returns true if this DT has no postprocessing — no filter,
   /// aggregation, having, window, order by, limit, or offset. See
   /// 'Optimization::addPostprocess' for the corresponding planning step.
