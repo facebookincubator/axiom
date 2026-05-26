@@ -2538,7 +2538,14 @@ std::any AstBuilder::visitSearchedCase(
 std::any AstBuilder::visitGroupingOperation(
     PrestoSqlParser::GroupingOperationContext* ctx) {
   trace("visitGroupingOperation");
-  return visitChildren("visitGroupingOperation", ctx);
+  std::vector<std::shared_ptr<QualifiedName>> columns;
+  columns.reserve(ctx->qualifiedName().size());
+  for (auto* qualifiedNameCtx : ctx->qualifiedName()) {
+    columns.push_back(getQualifiedName(qualifiedNameCtx));
+  }
+  return std::static_pointer_cast<Expression>(
+      std::make_shared<GroupingOperation>(
+          getLocation(ctx), std::move(columns)));
 }
 
 std::any AstBuilder::visitBasicStringLiteral(
