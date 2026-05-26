@@ -1777,10 +1777,19 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
 
   const auto numGroupingKeys = agg.groupingKeys().size();
   const auto channels = usedChannels(agg);
+
+  // Looked up twice per aggregate: subquery processing and translation.
+  std::vector<velox::exec::AggregateFunctionMetadata> aggMetadata;
+  aggMetadata.reserve(agg.aggregates().size());
+  for (const auto& aggregate : agg.aggregates()) {
+    aggMetadata.push_back(
+        velox::exec::getAggregateFunctionMetadata(aggregate->name()));
+  }
+
   {
     bool mayFinalize = true;
-    // Single chain spans all grouping-key and aggregate-input/filter
-    // expressions so heavy-path correlated scalar subqueries across them
+    // Single chain spans all grouping-key, aggregate-input, filter, and
+    // ordering expressions so correlated scalar subqueries across them
     // share the wrap-and-export state.
     SubqueryChain chain;
     for (const auto& key : agg.groupingKeys()) {
@@ -1800,6 +1809,11 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       }
       if (aggregate->filter()) {
         processSubqueries(input, aggregate->filter(), mayFinalize, chain);
+      }
+      if (aggMetadata[channel - numGroupingKeys].orderSensitive) {
+        for (const auto& field : aggregate->ordering()) {
+          processSubqueries(input, field.expression, mayFinalize, chain);
+        }
       }
     }
   }
@@ -1907,8 +1921,7 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
 
     auto aggName = toName(aggregate->name());
 
-    const auto& metadata =
-        velox::exec::getAggregateFunctionMetadata(aggregate->name());
+    const auto& metadata = aggMetadata[channel - numGroupingKeys];
 
     if (metadata.ignoreDuplicates) {
       funcs = funcs | FunctionSet::kIgnoreDuplicatesAggregate;
