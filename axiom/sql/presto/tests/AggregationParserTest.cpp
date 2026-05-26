@@ -207,6 +207,21 @@ TEST_F(AggregationParserTest, groupingSets) {
           testing::ElementsAre(0, 1), testing::ElementsAre(0)));
 }
 
+TEST_F(AggregationParserTest, groupingFunction) {
+  // GROUPING(col) is rejected with a clear unsupported-expression error.
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
+      parseSql(
+          "SELECT GROUPING(n_regionkey), count(1) FROM nation "
+          "GROUP BY GROUPING SETS ((n_regionkey), ())"),
+      "Unsupported expression type: GroupingOperation");
+
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
+      parseSql(
+          "SELECT GROUPING(n_regionkey, n_name), count(1) FROM nation "
+          "GROUP BY GROUPING SETS ((n_regionkey, n_name), (n_regionkey), ())"),
+      "Unsupported expression type: GroupingOperation");
+}
+
 TEST_F(AggregationParserTest, rollup) {
   lp::AggregateNodePtr agg;
   auto matcher =
