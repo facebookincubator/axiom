@@ -29,7 +29,6 @@ const auto& stepKindNames() {
       {StepKind::kField, "FIELD"},
       {StepKind::kSubscript, "SUBSCRIPT"},
       {StepKind::kElementAt, "ELEMENT_AT"},
-      {StepKind::kCardinality, "CARDINALITY"},
   };
   return kNames;
 }
@@ -234,9 +233,6 @@ std::string Path::toString() const {
   std::stringstream out;
   for (auto& step : steps_) {
     switch (step.kind) {
-      case StepKind::kCardinality:
-        out << ".cardinality";
-        break;
       case StepKind::kField:
         if (step.field) {
           out << "." << step.field;
@@ -351,10 +347,6 @@ void QueryGraphContext::populateFunctionNames() {
 
   if (auto subscript = registry->subscript()) {
     functionNames_.subscript = this->toName(subscript.value());
-  }
-
-  if (auto cardinality = registry->cardinality()) {
-    functionNames_.cardinality = this->toName(cardinality.value());
   }
 
   if (auto arbitrary = registry->arbitrary()) {

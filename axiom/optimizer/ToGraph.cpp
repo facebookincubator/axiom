@@ -692,11 +692,6 @@ bool ToGraph::isSubfield(
       }
       return false;
     }
-    if (name == functionNames_.cardinality) {
-      step.kind = StepKind::kCardinality;
-      input = expr->inputAt(0);
-      return true;
-    }
   }
   return false;
 }
@@ -1024,13 +1019,6 @@ ExprCP ToGraph::makeGetter(const Step& step, ExprCP base) {
           baseFuncs());
     }
 
-    case StepKind::kCardinality: {
-      return make<Call>(
-          functionNames_.cardinality,
-          toConstantValue(velox::BIGINT()),
-          ExprVector{base},
-          baseFuncs());
-    }
     default:
       VELOX_NYI();
   }

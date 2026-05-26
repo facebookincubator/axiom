@@ -720,6 +720,32 @@ TEST_P(SubfieldTest, maps) {
   }
 }
 
+TEST_P(SubfieldTest, cardinality) {
+  createFeaturesTable();
+
+  // cardinality(m) requires the whole map.
+  {
+    auto logicalPlan = lp::PlanBuilder(makeContext())
+                           .tableScan("features")
+                           .project({"cardinality(float_features) as n"})
+                           .build();
+    auto plan = extractPlanNode(planVelox(logicalPlan));
+    verifyRequiredSubfields(plan, {{"float_features", {}}});
+  }
+
+  // cardinality(m) and m[k] on the same column: the whole map is required.
+  {
+    auto logicalPlan = lp::PlanBuilder(makeContext())
+                           .tableScan("features")
+                           .project(
+                               {"cardinality(float_features) as n",
+                                "float_features[10100::int] as v"})
+                           .build();
+    auto plan = extractPlanNode(planVelox(logicalPlan));
+    verifyRequiredSubfields(plan, {{"float_features", {}}});
+  }
+}
+
 TEST_P(SubfieldTest, parallelExpr) {
   FeatureOptions opts;
   const auto vectors = createFeaturesTable(opts);

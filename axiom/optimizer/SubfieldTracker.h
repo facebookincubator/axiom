@@ -166,7 +166,6 @@ class SubfieldTracker {
 
   Name elementAt_{nullptr};
   Name subscript_{nullptr};
-  Name cardinality_{nullptr};
 
   PlanSubfields controlSubfields_;
   PlanSubfields payloadSubfields_;

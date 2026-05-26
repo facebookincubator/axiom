@@ -128,18 +128,10 @@ TEST_F(QueryGraphContextTest, toType) {
   // Identical child types with different names get equal pointers.
   EXPECT_EQ(dedupRow1->childAt(0).get(), dedupDifferentNames->childAt(0).get());
 
-  auto* path = make<Path>()
-                   ->subscript("field")
-                   ->subscript(123)
-                   ->field("f1")
-                   ->cardinality();
+  auto* path = make<Path>()->subscript("field")->subscript(123)->field("f1");
   auto interned = queryCtx()->toPath(path);
   EXPECT_EQ(interned, path);
-  auto* path2 = make<Path>()
-                    ->subscript("field")
-                    ->subscript(123)
-                    ->field("f1")
-                    ->cardinality();
+  auto* path2 = make<Path>()->subscript("field")->subscript(123)->field("f1");
   auto interned2 = queryCtx()->toPath(path2);
   EXPECT_EQ(interned2, interned);
 }
@@ -202,9 +194,9 @@ TEST_F(QueryGraphContextTest, stepOrdering) {
   {
     Step a{.kind = StepKind::kField, .field = toName("a")};
     Step b{.kind = StepKind::kSubscript, .field = toName("b")};
-    Step c{.kind = StepKind::kCardinality};
+    Step c{.kind = StepKind::kElementAt, .field = toName("c")};
 
-    // kField < kSubscript < kElementAt < kCardinality (enum order).
+    // kField < kSubscript < kElementAt (enum order).
     // Verify ordering and asymmetry: if A < B then B > A.
     EXPECT_LT(a, b);
     EXPECT_GT(b, a);

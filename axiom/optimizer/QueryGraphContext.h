@@ -175,7 +175,6 @@ enum class StepKind : uint8_t {
   kField,
   kSubscript,
   kElementAt,
-  kCardinality,
 };
 
 AXIOM_DECLARE_ENUM_NAME(StepKind);
@@ -242,12 +241,6 @@ class Path {
   Path* subscript(int64_t id) {
     VELOX_CHECK(mutable_);
     steps_.push_back(Step{.kind = StepKind::kSubscript, .id = id});
-    return this;
-  }
-
-  Path* cardinality() {
-    VELOX_CHECK(mutable_);
-    steps_.push_back(Step{.kind = StepKind::kCardinality});
     return this;
   }
 
@@ -321,7 +314,6 @@ struct FunctionNames {
   Name negation{nullptr};
   Name elementAt{nullptr};
   Name subscript{nullptr};
-  Name cardinality{nullptr};
   Name lt{nullptr};
   Name lte{nullptr};
   Name gt{nullptr};

@@ -58,10 +58,6 @@ SubfieldTracker::SubfieldTracker(
   if (auto subscript = registry->subscript()) {
     subscript_ = toName(subscript.value());
   }
-
-  if (auto cardinality = registry->cardinality()) {
-    cardinality_ = toName(cardinality.value());
-  }
 }
 
 SubfieldTracker::MarkAllResult SubfieldTracker::markAll(
@@ -391,13 +387,6 @@ void SubfieldTracker::markSubfields(
 
   if (expr->isCall()) {
     auto name = toName(expr->as<lp::CallExpr>()->name());
-    if (name == cardinality_) {
-      steps.push_back({.kind = StepKind::kCardinality});
-      markSubfields(expr->inputAt(0), steps, isControl, context);
-      steps.pop_back();
-      return;
-    }
-
     if (name == subscript_ || name == elementAt_) {
       const auto stepKind =
           (name == elementAt_) ? StepKind::kElementAt : StepKind::kSubscript;

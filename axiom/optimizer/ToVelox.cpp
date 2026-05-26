@@ -153,8 +153,6 @@ std::vector<velox::common::Subfield> columnSubfields(
               std::make_unique<velox::common::Subfield::LongSubscript>(
                   step.id));
           break;
-        case StepKind::kCardinality:
-          VELOX_UNSUPPORTED();
       }
       first = false;
     }

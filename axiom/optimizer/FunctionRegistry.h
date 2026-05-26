@@ -257,10 +257,6 @@ class FunctionRegistry {
     return subscript_;
   }
 
-  const std::optional<std::string>& cardinality() const {
-    return cardinality_;
-  }
-
   const std::string& specialForm(logical_plan::SpecialForm specialForm) {
     auto it = specialForms_.find(specialForm);
     VELOX_USER_CHECK(it != specialForms_.end());
@@ -301,12 +297,6 @@ class FunctionRegistry {
   /// @return true if successfully registered, false if a different 'subfield'
   /// function is already registered.
   bool registerSubscript(std::string_view name);
-
-  /// Registers function 'name' that has semantics of Presto's 'cardinality',
-  /// i.e. returns the number of entries in an array or map.
-  /// @return true if successfully registered, false if a different
-  /// 'cardinality' function is already registered.
-  bool registerCardinality(std::string_view name);
 
   /// Registers function 'name' that has semantics of Presto's 'arbitrary'
   /// aggregate function, i.e. returns an arbitrary value from the group.
@@ -503,7 +493,6 @@ class FunctionRegistry {
   std::string negation_{"not"};
   std::optional<std::string> elementAt_;
   std::optional<std::string> subscript_;
-  std::optional<std::string> cardinality_;
   std::optional<std::string> lessThan_;
   std::optional<std::string> lessThanOrEqual_;
   std::optional<std::string> greaterThan_;
