@@ -90,6 +90,29 @@ struct QGAllocator {
 template <typename T>
 using QGVector = std::vector<T, QGAllocator<T>>;
 
+/// Aligns 'raw + 4' forward to 'alignment' bytes within
+/// [raw, raw + paddedSize), writes the resulting 4-byte offset from raw
+/// in the 4 bytes immediately before the aligned address, and returns
+/// the aligned address. 'paddedSize' must be at least
+/// 'bytes + alignment + 4'.
+inline void*
+alignWithDelta(char* raw, size_t bytes, size_t alignment, size_t paddedSize) {
+  void* aligned = raw + 4;
+  paddedSize -= 4;
+  aligned = std::align(alignment, bytes, aligned, paddedSize);
+  VELOX_DCHECK_NOT_NULL(aligned);
+  int32_t delta = static_cast<int32_t>(static_cast<char*>(aligned) - raw - 4);
+  *reinterpret_cast<int32_t*>(static_cast<char*>(aligned) - 4) = delta;
+  return aligned;
+}
+
+/// Returns the raw pointer that backs an aligned pointer produced by
+/// alignWithDelta().
+inline void* rawFromAligned(void* aligned) {
+  int32_t delta = *reinterpret_cast<int32_t*>(static_cast<char*>(aligned) - 4);
+  return static_cast<char*>(aligned) - 4 - delta;
+}
+
 /// An allocator backed by QueryGraphContext that guarantees a configurable
 /// alignment. The alignment must be a power of 2 and not be 0. This allocator
 /// can be used with folly F14 containers that require 16-byte alignment.
@@ -131,20 +154,6 @@ struct QGAlignedAllocator {
   static std::size_t calculatePaddedSize(std::size_t n) {
     return velox::checkedPlus<size_t>(
         Alignment + 4, velox::checkedMultiply(n, sizeof(T)));
-  }
-
-  static T*
-  alignPtr(char* ptr, std::size_t allocateCount, std::size_t& paddedSize) {
-    // Align 'ptr + 4'.
-    void* alignedPtr = ptr + 4;
-    paddedSize -= 4;
-    std::align(Alignment, allocateCount * sizeof(T), alignedPtr, paddedSize);
-
-    // Write alignment delta just before the aligned pointer.
-    int32_t delta = static_cast<char*>(alignedPtr) - ptr - 4;
-    *reinterpret_cast<int32_t*>(static_cast<char*>(alignedPtr) - 4) = delta;
-
-    return reinterpret_cast<T*>(alignedPtr);
   }
 };
 
@@ -339,6 +348,8 @@ struct FunctionNames {
 /// references this via a thread local through queryCtx().
 class QueryGraphContext {
  public:
+  static constexpr int32_t kArenaAlignment = 8;
+
   explicit QueryGraphContext(velox::HashStringAllocator& allocator);
 
   /// Returns a new unique id to use for 'object' and associates 'object' to
@@ -349,29 +360,37 @@ class QueryGraphContext {
     return static_cast<int32_t>(objects_.size() - 1);
   }
 
-  /// Allocates 'size' bytes from the arena of 'this'. The allocation lives
-  /// until free() is called on it or the arena is destroyed.
+  /// Allocates 'size' bytes from the arena of 'this', aligned to
+  /// kArenaAlignment. The allocation lives until free() is called on it or
+  /// the arena is destroyed.
   void* allocate(int32_t size) {
+    // See facebookincubator/axiom#1422: required for libc++ std::hash<T*>
+    // correctness under TBAA.
+    size_t paddedSize = static_cast<size_t>(size) + kArenaAlignment + 4;
+    char* ptr;
 #ifdef QG_TEST_USE_MALLOC
     // Benchmark-only. Dropping the arena will not free un-free'd allocs.
-    return ::malloc(size);
+    ptr = reinterpret_cast<char*>(::malloc(paddedSize));
 #elif defined(QG_CACHE_ARENA)
-    return cache_.allocate(size);
+    ptr = reinterpret_cast<char*>(
+        cache_.allocate(static_cast<int32_t>(paddedSize)));
 #else
-    return allocator_.allocate(size)->begin();
+    ptr = reinterpret_cast<char*>(allocator_.allocate(paddedSize)->begin());
 #endif
+    return alignWithDelta(ptr, size, kArenaAlignment, paddedSize);
   }
 
   /// Frees ptr, which must have been allocated with allocate() above. Calling
   /// this is not mandatory since objects from the arena get freed at latest
   /// when the arena is destroyed.
   void free(void* ptr) {
+    void* raw = rawFromAligned(ptr);
 #ifdef QG_TEST_USE_MALLOC
-    ::free(ptr);
+    ::free(raw);
 #elif defined(QG_CACHE_ARENA)
-    cache_.free(ptr);
+    cache_.free(raw);
 #else
-    allocator_.free(velox::HashStringAllocator::headerOf(ptr));
+    allocator_.free(velox::HashStringAllocator::headerOf(raw));
 #endif
   }
 
@@ -481,19 +500,22 @@ template <class T, uint8_t Alignment>
 T* QGAlignedAllocator<T, Alignment>::allocate(std::size_t n) {
   auto paddedSize = calculatePaddedSize(n);
   auto* ptr = reinterpret_cast<char*>(queryCtx()->allocate(paddedSize));
-  return alignPtr(ptr, n, paddedSize);
+  return reinterpret_cast<T*>(
+      alignWithDelta(ptr, n * sizeof(T), Alignment, paddedSize));
 }
 
 template <class T, uint8_t Alignment>
 void QGAlignedAllocator<T, Alignment>::deallocate(
     T* p,
     std::size_t /*n*/) noexcept {
-  auto delta = *reinterpret_cast<int32_t*>(reinterpret_cast<char*>(p) - 4);
-  queryCtx()->free(reinterpret_cast<char*>(p) - 4 - delta);
+  queryCtx()->free(rawFromAligned(p));
 }
 
 template <class T, class... Args>
 inline T* make(Args&&... args) {
+  static_assert(
+      alignof(T) <= QueryGraphContext::kArenaAlignment,
+      "Type alignment exceeds arena alignment.");
   return new (queryCtx()->allocate(sizeof(T))) T(std::forward<Args>(args)...);
 }
 

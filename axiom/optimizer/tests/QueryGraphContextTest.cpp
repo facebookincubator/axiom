@@ -51,6 +51,16 @@ class QueryGraphContextTest : public ::testing::Test {
   std::unique_ptr<QueryGraphContext> ctx_;
 };
 
+TEST_F(QueryGraphContextTest, allocateAlignment) {
+  for (int32_t size : {1, 3, 4, 7, 8, 9, 15, 16, 17, 31, 64, 4'097}) {
+    void* ptr = queryCtx()->allocate(size);
+    EXPECT_EQ(
+        reinterpret_cast<uintptr_t>(ptr) % QueryGraphContext::kArenaAlignment,
+        0u);
+    queryCtx()->free(ptr);
+  }
+}
+
 TEST_F(QueryGraphContextTest, f14Map) {
   QGF14FastMap<int32_t, double> map;
 
