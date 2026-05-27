@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+#include <chrono>
+#include <future>
+#include <thread>
+
 #include <folly/init/Init.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -289,6 +293,53 @@ TEST_F(SyntacticJoinOrderTest, outerJoins) {
       checkSame(logicalPlan, referenceResults);
     }
   }
+}
+
+// 12-way inner-join chain. Without the per-step restriction that keeps
+// the optimizer on the SQL-written order, the recursion enumerates
+// candidates and strategies at every level and the optimization does
+// not finish within the timeout.
+TEST_F(SyntacticJoinOrderTest, manyJoinsBoundedByOrder) {
+  constexpr int32_t kNumTables = 12;
+
+  for (int32_t i = 0; i < kNumTables; ++i) {
+    const auto key = fmt::format("k{}", i);
+    const auto rowType = ROW({key, fmt::format("v{}", i)}, BIGINT());
+    testConnector_->addTable(fmt::format("t{}", i), rowType)
+        ->setStats(1'000, {{key, {.numDistinct = 1'000}}});
+  }
+
+  lp::PlanBuilder::Context context(kTestConnectorId, "default");
+  lp::PlanBuilder builder(context);
+  builder.tableScan("t0");
+  for (int32_t i = 1; i < kNumTables; ++i) {
+    builder.join(
+        lp::PlanBuilder(context).tableScan(fmt::format("t{}", i)),
+        fmt::format("k0 = k{}", i),
+        lp::JoinType::kInner);
+  }
+  auto logicalPlan = builder.aggregate({}, {"count(1)"}).build();
+
+  optimizerOptions_.syntacticJoinOrder = true;
+  optimizerOptions_.sampleJoins = false;
+
+  std::packaged_task<void()> task([&]() {
+    auto plan = toSingleNodePlan(logicalPlan);
+    ASSERT_NE(plan, nullptr);
+  });
+  auto future = task.get_future();
+  std::thread worker(std::move(task));
+
+  constexpr std::chrono::seconds kTimeout{30};
+  const auto status = future.wait_for(kTimeout);
+  if (status != std::future_status::ready) {
+    worker.detach();
+    FAIL() << "Optimization timed out after " << kTimeout.count() << "s; "
+           << "syntactic_join_order failed to bound enumeration";
+    return;
+  }
+  worker.join();
+  future.get();
 }
 
 } // namespace

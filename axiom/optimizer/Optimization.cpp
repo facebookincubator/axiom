@@ -942,6 +942,32 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
         return left.fanout < right.fanout;
       });
 
+  // Keep only the candidate that matches the next unplaced table in
+  // dt->joinOrder.
+  if (options_.syntacticJoinOrder && candidates.size() > 1) {
+    auto nextIt = std::find_if(
+        state.dt->joinOrder.begin(),
+        state.dt->joinOrder.end(),
+        [&](int32_t id) { return !state.isPlaced(queryCtx()->objectAt(id)); });
+    VELOX_CHECK(
+        nextIt != state.dt->joinOrder.end(),
+        "syntactic_join_order: all tables already placed but candidates remain");
+    const int32_t nextId = *nextIt;
+    auto it = std::find_if(
+        candidates.begin(),
+        candidates.end(),
+        [&](const JoinCandidate& candidate) {
+          return candidate.tables[0]->id() == nextId;
+        });
+    VELOX_CHECK(
+        it != candidates.end(),
+        "syntactic_join_order: next-in-order table {} is not among current join candidates",
+        nextId);
+    JoinCandidate match = std::move(*it);
+    candidates.clear();
+    candidates.push_back(std::move(match));
+  }
+
   return candidates;
 }
 
