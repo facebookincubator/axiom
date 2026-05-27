@@ -545,6 +545,91 @@ TEST_F(CardinalityEstimationTest, joinWithFilterOutsideMinMax) {
   verify("SELECT a, b, x, y FROM t JOIN u ON a = x AND b = y WHERE a = 999");
 }
 
+// Verifies dedup in JoinEdge::guessFanout: fires for structurally-matching
+// filters on equivalence-class columns, not for filters that differ.
+TEST_F(CardinalityEstimationTest, joinWithDuplicateEquivalenceFilter) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(
+          1'000,
+          {
+              {"a", {.min = 1LL, .max = 100LL, .numDistinct = 100}},
+              {"b", {.numDistinct = 500}},
+          });
+
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(
+          1'000,
+          {
+              {"x", {.min = 1LL, .max = 100LL, .numDistinct = 100}},
+              {"y", {.numDistinct = 200}},
+          });
+
+  float baselineCardinality = 0;
+  verifyPlan(
+      "SELECT * FROM t, u WHERE t.a = u.x AND t.a = 5", [&](const Plan& plan) {
+        const auto& join = findOp<Join>(*plan.op, RelType::kJoin);
+        baselineCardinality = join.resultCardinality();
+        EXPECT_GT(baselineCardinality, 0);
+      });
+
+  verifyPlan(
+      "SELECT * FROM t, u WHERE t.a = u.x AND t.a = 5 AND u.x = 5",
+      [&](const Plan& plan) {
+        const auto& join = findOp<Join>(*plan.op, RelType::kJoin);
+        EXPECT_NEAR(
+            join.resultCardinality(),
+            baselineCardinality,
+            kCardinalityTolerance);
+      });
+
+  // Asymmetric column ranges so each side's selectivity contributes
+  // independently when the filters differ structurally.
+  testConnector_->addTable("w", ROW({"x", "y"}, BIGINT()))
+      ->setStats(
+          1'000,
+          {
+              {"x", {.min = 1LL, .max = 1'000LL, .numDistinct = 1'000}},
+              {"y", {.numDistinct = 200}},
+          });
+
+  float matchingFilterBaselineCardinality = 0;
+  verifyPlan(
+      "SELECT * FROM t, w WHERE t.a = w.x AND t.a > 5", [&](const Plan& plan) {
+        const auto& join = findOp<Join>(*plan.op, RelType::kJoin);
+        matchingFilterBaselineCardinality = join.resultCardinality();
+        EXPECT_GT(matchingFilterBaselineCardinality, 0);
+      });
+
+  verifyPlan(
+      "SELECT * FROM t, w WHERE t.a = w.x AND t.a > 5 AND w.x < 10",
+      [&](const Plan& plan) {
+        const auto& join = findOp<Join>(*plan.op, RelType::kJoin);
+        EXPECT_LT(
+            join.resultCardinality(), matchingFilterBaselineCardinality / 4);
+      });
+
+  testConnector_->addTable("v", ROW({"p", "q"}, BIGINT()))
+      ->setStats(
+          1'000,
+          {
+              {"p", {.numDistinct = 100}},
+              {"q", {.numDistinct = 100}},
+          });
+
+  float tvBaselineCardinality = 0;
+  verifyPlan("SELECT * FROM t, v WHERE t.a = v.p", [&](const Plan& plan) {
+    const auto& join = findOp<Join>(*plan.op, RelType::kJoin);
+    tvBaselineCardinality = join.resultCardinality();
+    EXPECT_GT(tvBaselineCardinality, 0);
+  });
+
+  verifyPlan(
+      "SELECT * FROM t, v WHERE t.a = v.p AND v.q = 7", [&](const Plan& plan) {
+        const auto& join = findOp<Join>(*plan.op, RelType::kJoin);
+        EXPECT_LT(join.resultCardinality(), tvBaselineCardinality);
+      });
+}
+
 // Verifies that inner join with a unique right side (DerivedTable with GROUP
 // BY) uses the right fanout to scale cardinality. The right side's fanout
 // reflects that not all left key values exist in the right side.
