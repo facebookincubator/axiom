@@ -1137,12 +1137,12 @@ TEST_F(JoinTest, impliedJoins) {
     auto query = "SELECT count(*) FROM t JOIN u ON t.a = u.x AND t.a = t.b";
     SCOPED_TRACE(query);
 
-    auto matcher =
-        matchScan("u")
-            .hashJoin(
-                matchScan("t").filter("a = b").build(), core::JoinType::kInner)
-            .aggregation()
-            .build();
+    auto matcher = matchScan("u")
+                       .hashJoin(
+                           matchScan("t").filter("a = b").project().build(),
+                           core::JoinType::kInner)
+                       .aggregation()
+                       .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -1219,10 +1219,10 @@ TEST_F(JoinTest, impliedFilters) {
     SCOPED_TRACE(query);
 
     auto matcher =
-        matchScan("u")
-            .filter("x = 5")
+        matchScan("t")
+            .filter("a = 5")
             .hashJoin(
-                matchScan("t").filter("a = 5").build(), core::JoinType::kInner)
+                matchScan("u").filter("x = 5").build(), core::JoinType::kInner)
             .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
@@ -1250,10 +1250,10 @@ TEST_F(JoinTest, impliedFilters) {
     auto query = "SELECT * FROM t, u WHERE t.a = u.x AND t.a IN (1, 2, 3)";
     SCOPED_TRACE(query);
 
-    auto matcher = matchScan("u")
-                       .filter("x IN (1, 2, 3)")
+    auto matcher = matchScan("t")
+                       .filter("a IN (1, 2, 3)")
                        .hashJoin(
-                           matchScan("t").filter("a IN (1, 2, 3)").build(),
+                           matchScan("u").filter("x IN (1, 2, 3)").build(),
                            core::JoinType::kInner)
                        .build();
 
@@ -1321,10 +1321,10 @@ TEST_F(JoinTest, impliedFilters) {
     SCOPED_TRACE(query);
 
     auto matcher =
-        matchScan("u")
-            .filter("x = 5")
+        matchScan("t")
+            .filter("a = 5")
             .hashJoin(
-                matchScan("t").filter("a = 5").build(), core::JoinType::kInner)
+                matchScan("u").filter("x = 5").build(), core::JoinType::kInner)
             .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
@@ -1340,12 +1340,12 @@ TEST_F(JoinTest, impliedFilters) {
     SCOPED_TRACE(query);
 
     auto matcher =
-        matchScan("u")
-            .filter("x = 5")
-            .hashJoin(
-                matchScan("t").filter("a = 5").build(), core::JoinType::kInner)
+        matchScan("t")
+            .filter("a = 5")
             .hashJoin(
                 matchScan("v").filter("k = 5").build(), core::JoinType::kInner)
+            .hashJoin(
+                matchScan("u").filter("x = 5").build(), core::JoinType::kInner)
             .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
@@ -1488,6 +1488,7 @@ TEST_F(JoinTest, duplicateJoinOutputColumns) {
 
     auto matcher = matchScan("u")
                        .filter("a = 1")
+                       .project()
                        .hashJoin(matchScan("t").build(), core::JoinType::kInner)
                        .distinct()
                        .project({"b as x", "b as y"})

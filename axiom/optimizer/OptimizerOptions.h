@@ -45,6 +45,8 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
       "enable_reducing_existences";
   static constexpr std::string_view kParallelProjectWidth =
       "parallel_project_width";
+  static constexpr std::string_view kGreedyJoinThreshold =
+      "greedy_join_threshold";
   static constexpr std::string_view kTraceFlags = "trace_flags";
 
   /// Parallelizes independent projections over this many threads. 1 means no
@@ -89,6 +91,15 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
   /// sequence specified in the query.
   /// TODO: Make this work for non-inner joins.
   bool syntacticJoinOrder{false};
+
+  /// When a DerivedTable's 'tables' count is at least this value, the
+  /// optimizer skips the branch-and-bound join enumeration and runs a
+  /// bottom-up greedy operator ordering (GOO) instead. Bounds planning time
+  /// for queries that would otherwise hit combinatorial join enumeration.
+  /// The GOO result is not guaranteed to be the cost-optimal plan but is
+  /// produced in O(numRelations^3) time. Set higher to widen the exact
+  /// search; set to 1 to force greedy on every join enumeration.
+  int32_t greedyJoinThreshold{12};
 
   /// Disable cost-based decision re: whether to split an aggregation into
   /// partial + final or not.

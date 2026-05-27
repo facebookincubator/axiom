@@ -89,16 +89,16 @@ TEST_F(ExistencePushdownTest, innerJoinGroupBy) {
   // Single-node plan.
   auto plan = toSingleNodePlan(logicalPlan);
 
-  auto matcher =
-      matchScan("u")
-          .hashJoin(
-              matchScan("t").filter("b < 100").build(),
-              core::JoinType::kLeftSemiFilter)
-          .singleAggregation({"x"}, {"count(*) as cnt"})
-          .hashJoin(
-              matchScan("t").filter("b < 100").build(), core::JoinType::kInner)
-          .project()
-          .build();
+  auto matcher = matchScan("u")
+                     .hashJoin(
+                         matchScan("t").filter("b < 100").project().build(),
+                         core::JoinType::kLeftSemiFilter)
+                     .singleAggregation({"x"}, {"count(*) as cnt"})
+                     .hashJoin(
+                         matchScan("t").filter("b < 100").project().build(),
+                         core::JoinType::kInner)
+                     .project()
+                     .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   // Distributed plan.
@@ -110,13 +110,13 @@ TEST_F(ExistencePushdownTest, innerJoinGroupBy) {
   auto distributedMatcher =
       matchScan("u")
           .hashJoin(
-              matchScan("t").filter("b < 100").broadcast().build(),
+              matchScan("t").filter("b < 100").project().broadcast().build(),
               core::JoinType::kLeftSemiFilter)
           .shuffle({"x"})
           .localPartition({"x"})
           .singleAggregation({"x"}, {"count(*) as cnt"})
           .hashJoin(
-              matchScan("t").filter("b < 100").shuffle({"a"}).build(),
+              matchScan("t").filter("b < 100").project().shuffle({"a"}).build(),
               core::JoinType::kInner)
           .project()
           .gather()
@@ -135,19 +135,20 @@ TEST_F(ExistencePushdownTest, semiJoin) {
   // Single-node plan.
   auto plan = toSingleNodePlan(logicalPlan);
 
-  auto matcher = matchScan("t")
-                     .filter("b < 100")
-                     .hashJoin(
-                         matchScan("u")
-                             .hashJoin(
-                                 matchScan("t").filter("b < 100").build(),
-                                 core::JoinType::kLeftSemiFilter)
-                             .singleAggregation({"x"}, {"count(*) as cnt"})
-                             .filter("cnt > 1")
-                             .project()
-                             .build(),
-                         core::JoinType::kLeftSemiFilter)
-                     .build();
+  auto matcher =
+      matchScan("t")
+          .filter("b < 100")
+          .hashJoin(
+              matchScan("u")
+                  .hashJoin(
+                      matchScan("t").filter("b < 100").project().build(),
+                      core::JoinType::kLeftSemiFilter)
+                  .singleAggregation({"x"}, {"count(*) as cnt"})
+                  .filter("cnt > 1")
+                  .project()
+                  .build(),
+              core::JoinType::kLeftSemiFilter)
+          .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   // Distributed plan.
@@ -165,7 +166,11 @@ TEST_F(ExistencePushdownTest, semiJoin) {
           .hashJoin(
               matchScan("u")
                   .hashJoin(
-                      matchScan("t").filter("b < 100").broadcast().build(),
+                      matchScan("t")
+                          .filter("b < 100")
+                          .project()
+                          .broadcast()
+                          .build(),
                       core::JoinType::kLeftSemiFilter)
                   .shuffle({"x"})
                   .localPartition({"x"})
@@ -193,17 +198,19 @@ TEST_F(ExistencePushdownTest, leftJoinDtIsOptional) {
   // Single-node plan.
   auto plan = toSingleNodePlan(logicalPlan);
 
-  auto matcher = matchScan("t")
-                     .filter("b < 100")
-                     .hashJoin(
-                         matchScan("u")
-                             .hashJoin(
-                                 matchScan("t").filter("b < 100").build(),
-                                 core::JoinType::kLeftSemiFilter)
-                             .singleAggregation({"x"}, {"count(*) as cnt"})
-                             .build(),
-                         core::JoinType::kLeft)
-                     .build();
+  auto matcher =
+      matchScan("t")
+          .filter("b < 100")
+          .project()
+          .hashJoin(
+              matchScan("u")
+                  .hashJoin(
+                      matchScan("t").filter("b < 100").project().build(),
+                      core::JoinType::kLeftSemiFilter)
+                  .singleAggregation({"x"}, {"count(*) as cnt"})
+                  .build(),
+              core::JoinType::kLeft)
+          .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   // Distributed plan.
@@ -212,13 +219,13 @@ TEST_F(ExistencePushdownTest, leftJoinDtIsOptional) {
   auto distributedMatcher =
       matchScan("u")
           .hashJoin(
-              matchScan("t").filter("b < 100").broadcast().build(),
+              matchScan("t").filter("b < 100").project().broadcast().build(),
               core::JoinType::kLeftSemiFilter)
           .shuffle({"x"})
           .localPartition({"x"})
           .singleAggregation({"x"}, {"count(*) as cnt"})
           .hashJoin(
-              matchScan("t").filter("b < 100").shuffle({"a"}).build(),
+              matchScan("t").filter("b < 100").project().shuffle({"a"}).build(),
               core::JoinType::kRight)
           .gather()
           .build();
@@ -369,7 +376,7 @@ TEST_F(ExistencePushdownTest, multipleTables) {
           .hashJoin(
               matchScan("u")
                   .hashJoin(
-                      matchScan("r").filter("b < 100").build(),
+                      matchScan("r").filter("b < 100").project().build(),
                       core::JoinType::kLeftSemiFilter)
                   .hashJoin(
                       matchScan("s").build(), core::JoinType::kLeftSemiFilter)
@@ -377,7 +384,8 @@ TEST_F(ExistencePushdownTest, multipleTables) {
                   .build(),
               core::JoinType::kInner)
           .hashJoin(
-              matchScan("r").filter("b < 100").build(), core::JoinType::kInner)
+              matchScan("r").filter("b < 100").project().build(),
+              core::JoinType::kInner)
           .project()
           .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
@@ -390,7 +398,11 @@ TEST_F(ExistencePushdownTest, multipleTables) {
           .hashJoin(
               matchScan("u")
                   .hashJoin(
-                      matchScan("r").filter("b < 100").broadcast().build(),
+                      matchScan("r")
+                          .filter("b < 100")
+                          .project()
+                          .broadcast()
+                          .build(),
                       core::JoinType::kLeftSemiFilter)
                   .hashJoin(
                       matchScan("s").broadcast().build(),
@@ -402,7 +414,7 @@ TEST_F(ExistencePushdownTest, multipleTables) {
                   .build(),
               core::JoinType::kInner)
           .hashJoin(
-              matchScan("r").filter("b < 100").broadcast().build(),
+              matchScan("r").filter("b < 100").project().broadcast().build(),
               core::JoinType::kInner)
           .project()
           .gather()
@@ -426,14 +438,14 @@ TEST_F(ExistencePushdownTest, partialPush) {
 
   // No existence pushdown: dt.cnt (an aggregate result, not a grouping key)
   // is used in the join with r, so the aggregation cannot be deferred.
-  auto matcher =
-      matchScan("u")
-          .singleAggregation({"x"}, {"count(*) as cnt"})
-          .hashJoin(
-              matchScan("t").filter("b < 100").build(), core::JoinType::kInner)
-          .hashJoin(matchScan("r").build(), core::JoinType::kInner)
-          .project()
-          .build();
+  auto matcher = matchScan("u")
+                     .singleAggregation({"x"}, {"count(*) as cnt"})
+                     .hashJoin(
+                         matchScan("t").filter("b < 100").project().build(),
+                         core::JoinType::kInner)
+                     .hashJoin(matchScan("r").build(), core::JoinType::kInner)
+                     .project()
+                     .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   // Distributed plan.
@@ -445,7 +457,7 @@ TEST_F(ExistencePushdownTest, partialPush) {
           .localPartition({"x"})
           .singleAggregation({"x"}, {"count(*) as cnt"})
           .hashJoin(
-              matchScan("t").filter("b < 100").shuffle({"a"}).build(),
+              matchScan("t").filter("b < 100").project().shuffle({"a"}).build(),
               core::JoinType::kInner)
           .hashJoin(matchScan("r").broadcast().build(), core::JoinType::kInner)
           .project()
@@ -467,17 +479,19 @@ TEST_F(ExistencePushdownTest, distinctSubquery) {
   // Single-node plan.
   auto plan = toSingleNodePlan(logicalPlan);
 
-  auto matcher = matchScan("t")
-                     .filter("b < 100")
-                     .hashJoin(
-                         matchScan("u")
-                             .hashJoin(
-                                 matchScan("t").filter("b < 100").build(),
-                                 core::JoinType::kLeftSemiFilter)
-                             .singleAggregation({"x"}, {})
-                             .build(),
-                         core::JoinType::kInner)
-                     .build();
+  auto matcher =
+      matchScan("t")
+          .filter("b < 100")
+          .project()
+          .hashJoin(
+              matchScan("u")
+                  .hashJoin(
+                      matchScan("t").filter("b < 100").project().build(),
+                      core::JoinType::kLeftSemiFilter)
+                  .singleAggregation({"x"}, {})
+                  .build(),
+              core::JoinType::kInner)
+          .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   // Distributed plan.
@@ -486,23 +500,27 @@ TEST_F(ExistencePushdownTest, distinctSubquery) {
   // semiJoin test.
   auto distributedPlan = planVelox(logicalPlan);
 
-  auto distributedMatcher =
-      matchScan("t")
-          .filter("b < 100")
-          .hashJoin(
-              matchScan("u")
-                  .hashJoin(
-                      matchScan("t").filter("b < 100").broadcast().build(),
-                      core::JoinType::kLeftSemiFilter)
-                  .partialAggregation({"x"}, {})
-                  .shuffle({"x"})
-                  .localPartition({"x"})
-                  .finalAggregation({"x"}, {})
-                  .broadcast()
-                  .build(),
-              core::JoinType::kInner)
-          .gather()
-          .build();
+  auto distributedMatcher = matchScan("t")
+                                .filter("b < 100")
+                                .project()
+                                .hashJoin(
+                                    matchScan("u")
+                                        .hashJoin(
+                                            matchScan("t")
+                                                .filter("b < 100")
+                                                .project()
+                                                .broadcast()
+                                                .build(),
+                                            core::JoinType::kLeftSemiFilter)
+                                        .partialAggregation({"x"}, {})
+                                        .shuffle({"x"})
+                                        .localPartition({"x"})
+                                        .finalAggregation({"x"}, {})
+                                        .broadcast()
+                                        .build(),
+                                    core::JoinType::kInner)
+                                .gather()
+                                .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
 }
 
@@ -519,16 +537,16 @@ TEST_F(ExistencePushdownTest, multiKeyJoin) {
   auto plan = toSingleNodePlan(logicalPlan);
 
   // Multi-key join existence is pushed down into plan.
-  auto matcher =
-      matchScan("u")
-          .hashJoin(
-              matchScan("t").filter("c < 100").build(),
-              core::JoinType::kLeftSemiFilter)
-          .singleAggregation({"x", "y"}, {"count(*) as cnt"})
-          .hashJoin(
-              matchScan("t").filter("c < 100").build(), core::JoinType::kInner)
-          .project()
-          .build();
+  auto matcher = matchScan("u")
+                     .hashJoin(
+                         matchScan("t").filter("c < 100").project().build(),
+                         core::JoinType::kLeftSemiFilter)
+                     .singleAggregation({"x", "y"}, {"count(*) as cnt"})
+                     .hashJoin(
+                         matchScan("t").filter("c < 100").project().build(),
+                         core::JoinType::kInner)
+                     .project()
+                     .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   // Distributed plan.
@@ -537,13 +555,17 @@ TEST_F(ExistencePushdownTest, multiKeyJoin) {
   auto distributedMatcher =
       matchScan("u")
           .hashJoin(
-              matchScan("t").filter("c < 100").broadcast().build(),
+              matchScan("t").filter("c < 100").project().broadcast().build(),
               core::JoinType::kLeftSemiFilter)
           .shuffle({"x", "y"})
           .localPartition({"x", "y"})
           .singleAggregation({"x", "y"}, {"count(*) as cnt"})
           .hashJoin(
-              matchScan("t").filter("c < 100").shuffle({"a", "b"}).build(),
+              matchScan("t")
+                  .filter("c < 100")
+                  .project()
+                  .shuffle({"a", "b"})
+                  .build(),
               core::JoinType::kInner)
           .project()
           .gather()
@@ -565,17 +587,17 @@ TEST_F(ExistencePushdownTest, joinWithFilter) {
   // Single-node plan.
   auto plan = toSingleNodePlan(logicalPlan);
 
-  auto matcher =
-      matchScan("u")
-          .hashJoin(
-              matchScan("t").filter("c < 100").build(),
-              core::JoinType::kLeftSemiFilter)
-          .singleAggregation({"x"}, {"count(*) as cnt"})
-          .hashJoin(
-              matchScan("t").filter("c < 100").build(), core::JoinType::kInner)
-          .filter("b < x")
-          .project()
-          .build();
+  auto matcher = matchScan("u")
+                     .hashJoin(
+                         matchScan("t").filter("c < 100").project().build(),
+                         core::JoinType::kLeftSemiFilter)
+                     .singleAggregation({"x"}, {"count(*) as cnt"})
+                     .hashJoin(
+                         matchScan("t").filter("c < 100").project().build(),
+                         core::JoinType::kInner)
+                     .filter("b < x")
+                     .project()
+                     .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   // Distributed plan.
@@ -584,10 +606,15 @@ TEST_F(ExistencePushdownTest, joinWithFilter) {
   auto distributedMatcher =
       matchScan("t")
           .filter("c < 100")
+          .project()
           .hashJoin(
               matchScan("u")
                   .hashJoin(
-                      matchScan("t").filter("c < 100").broadcast().build(),
+                      matchScan("t")
+                          .filter("c < 100")
+                          .project()
+                          .broadcast()
+                          .build(),
                       core::JoinType::kLeftSemiFilter)
                   .shuffle({"x"})
                   .localPartition({"x"})
@@ -651,17 +678,17 @@ TEST_F(ExistencePushdownTest, windowSubquery) {
   // Single-node plan.
   auto plan = toSingleNodePlan(logicalPlan);
 
-  auto matcher =
-      matchScan("u")
-          .hashJoin(
-              matchScan("t").filter("b < 100").build(),
-              core::JoinType::kLeftSemiFilter)
-          .window({"row_number() OVER (PARTITION BY x ORDER BY y)"})
-          .project()
-          .hashJoin(
-              matchScan("t").filter("b < 100").build(), core::JoinType::kInner)
-          .project()
-          .build();
+  auto matcher = matchScan("u")
+                     .hashJoin(
+                         matchScan("t").filter("b < 100").project().build(),
+                         core::JoinType::kLeftSemiFilter)
+                     .window({"row_number() OVER (PARTITION BY x ORDER BY y)"})
+                     .project()
+                     .hashJoin(
+                         matchScan("t").filter("b < 100").project().build(),
+                         core::JoinType::kInner)
+                     .project()
+                     .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   // Distributed plan.
@@ -670,14 +697,14 @@ TEST_F(ExistencePushdownTest, windowSubquery) {
   auto distributedMatcher =
       matchScan("u")
           .hashJoin(
-              matchScan("t").filter("b < 100").broadcast().build(),
+              matchScan("t").filter("b < 100").project().broadcast().build(),
               core::JoinType::kLeftSemiFilter)
           .shuffle({"x"})
           .localPartition({"x"})
           .window({"row_number() OVER (PARTITION BY x ORDER BY y)"})
           .project()
           .hashJoin(
-              matchScan("t").filter("b < 100").shuffle({"a"}).build(),
+              matchScan("t").filter("b < 100").project().shuffle({"a"}).build(),
               core::JoinType::kInner)
           .project()
           .gather()
@@ -700,6 +727,7 @@ TEST_F(ExistencePushdownTest, limitOnFirstDt) {
 
   auto matcher = matchScan("t")
                      .filter("b < 100")
+                     .project()
                      .hashJoin(
                          matchScan("u")
                              .singleAggregation({"x"}, {})
@@ -714,6 +742,7 @@ TEST_F(ExistencePushdownTest, limitOnFirstDt) {
 
   auto distributedMatcher = matchScan("t")
                                 .filter("b < 100")
+                                .project()
                                 .hashJoin(
                                     matchScan("u")
                                         .partialAggregation({"x"}, {})
@@ -744,18 +773,20 @@ TEST_F(ExistencePushdownTest, orderByOnFirstDt) {
   // Single-node plan.
   auto plan = toSingleNodePlan(logicalPlan);
 
-  auto matcher = matchScan("t")
-                     .filter("b < 100")
-                     .hashJoin(
-                         matchScan("u")
-                             .hashJoin(
-                                 matchScan("t").filter("b < 100").build(),
-                                 core::JoinType::kLeftSemiFilter)
-                             .singleAggregation({"x"}, {"count(*) as cnt"})
-                             .project()
-                             .build(),
-                         core::JoinType::kInner)
-                     .build();
+  auto matcher =
+      matchScan("t")
+          .filter("b < 100")
+          .project()
+          .hashJoin(
+              matchScan("u")
+                  .hashJoin(
+                      matchScan("t").filter("b < 100").project().build(),
+                      core::JoinType::kLeftSemiFilter)
+                  .singleAggregation({"x"}, {"count(*) as cnt"})
+                  .project()
+                  .build(),
+              core::JoinType::kInner)
+          .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   // Distributed plan.
@@ -764,10 +795,15 @@ TEST_F(ExistencePushdownTest, orderByOnFirstDt) {
   auto distributedMatcher =
       matchScan("t")
           .filter("b < 100")
+          .project()
           .hashJoin(
               matchScan("u")
                   .hashJoin(
-                      matchScan("t").filter("b < 100").broadcast().build(),
+                      matchScan("t")
+                          .filter("b < 100")
+                          .project()
+                          .broadcast()
+                          .build(),
                       core::JoinType::kLeftSemiFilter)
                   .shuffle({"x"})
                   .localPartition({"x"})
@@ -793,13 +829,13 @@ TEST_F(ExistencePushdownTest, aggregateKey) {
   auto plan = toSingleNodePlan(logicalPlan);
 
   // No pushdown: join is on aggregate result (cnt), not grouping key.
-  auto matcher =
-      matchScan("u")
-          .singleAggregation({"x"}, {"count(*) as cnt"})
-          .project()
-          .hashJoin(
-              matchScan("t").filter("b < 100").build(), core::JoinType::kInner)
-          .build();
+  auto matcher = matchScan("u")
+                     .singleAggregation({"x"}, {"count(*) as cnt"})
+                     .project()
+                     .hashJoin(
+                         matchScan("t").filter("b < 100").project().build(),
+                         core::JoinType::kInner)
+                     .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   // Distributed plan.
@@ -812,7 +848,7 @@ TEST_F(ExistencePushdownTest, aggregateKey) {
           .singleAggregation({"x"}, {"count(*) as cnt"})
           .project()
           .hashJoin(
-              matchScan("t").filter("b < 100").broadcast().build(),
+              matchScan("t").filter("b < 100").project().broadcast().build(),
               core::JoinType::kInner)
           .gather()
           .build();
@@ -892,6 +928,7 @@ TEST_F(ExistencePushdownTest, unnestGroupBy) {
 
   auto matcher = matchScan("r")
                      .filter("b < 100")
+                     .project()
                      .hashJoin(
                          matchScan("t")
                              .project()
@@ -909,6 +946,7 @@ TEST_F(ExistencePushdownTest, unnestGroupBy) {
   auto distributedMatcher =
       matchScan("r")
           .filter("b < 100")
+          .project()
           .hashJoin(
               matchScan("t")
                   .project()
@@ -967,14 +1005,14 @@ TEST_F(ExistencePushdownTest, windowNonPartitionKey) {
   auto plan = toSingleNodePlan(logicalPlan);
 
   // No pushdown: window has no PARTITION BY. Join stays above window.
-  auto matcher =
-      matchScan("u")
-          .window({"row_number() OVER (ORDER BY y)"})
-          .project()
-          .hashJoin(
-              matchScan("t").filter("b < 100").build(), core::JoinType::kInner)
-          .project()
-          .build();
+  auto matcher = matchScan("u")
+                     .window({"row_number() OVER (ORDER BY y)"})
+                     .project()
+                     .hashJoin(
+                         matchScan("t").filter("b < 100").project().build(),
+                         core::JoinType::kInner)
+                     .project()
+                     .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   // Distributed plan.
@@ -990,7 +1028,7 @@ TEST_F(ExistencePushdownTest, windowNonPartitionKey) {
           .window({"row_number() OVER (ORDER BY y)"})
           .project()
           .hashJoin(
-              matchScan("t").filter("b < 100").broadcast().build(),
+              matchScan("t").filter("b < 100").project().broadcast().build(),
               core::JoinType::kInner)
           .project()
           .build();

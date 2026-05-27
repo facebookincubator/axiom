@@ -89,3 +89,13 @@ SELECT * FROM (VALUES ROW(1), ROW(CAST(2 AS bigint))) AS t(x)
 -- duckdb: VALUES (MAP {1::bigint: 1.0}), (MAP {2::bigint: 2.0})
 SELECT * FROM (VALUES ROW(MAP(ARRAY[1], ARRAY[1.0])), ROW(MAP(ARRAY[CAST(2 AS bigint)], ARRAY[CAST(2.0 AS real)]))) AS t(x)
 ----
+-- Filter on a column not in the SELECT list.
+SELECT b FROM t WHERE a > 1
+----
+-- count 5
+SELECT b FROM t WHERE a > 1 LIMIT 5
+----
+-- ordered
+SELECT b FROM t WHERE a > 1 ORDER BY b
+----
+SELECT b, c FROM t WHERE a > 1

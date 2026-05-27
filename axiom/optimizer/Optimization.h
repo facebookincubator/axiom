@@ -226,6 +226,17 @@ class Optimization {
 
   void makeJoins(PlanState& state);
 
+  // Bounds planning time on derived tables whose 'tables' count meets
+  // OptimizerOptions::greedyJoinThreshold by running a greedy join-order
+  // search. Each viable starting table seeds one chain; the cheapest
+  // resulting plan is left in 'state.plans'. Within a chain, prefers
+  // candidates connected by an equality join edge over cross products.
+  void solveJoinOrderApproximately(PlanState& state);
+
+  // Descends one greedy chain from 'plan', registering its leaf as a
+  // complete plan in 'state.plans'.
+  void greedyJoinChainDescend(RelationOpPtr plan, PlanState& state);
+
   // Retrieves or makes a plan from 'key'. 'key' specifies a set of top level
   // joined tables or a hash join build side table or join.
   //
