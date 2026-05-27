@@ -3190,6 +3190,147 @@ std::vector<int32_t> sortByStartingScore(const PlanObjectVector& tables) {
 }
 } // namespace
 
+namespace {
+// True if 'candidate' joins on equi-keys (not a cross product).
+bool isRealEdgeCandidate(const NextJoin& candidate) {
+  return candidate.candidate->join != nullptr &&
+      candidate.candidate->join->numKeys() > 0;
+}
+} // namespace
+
+void Optimization::greedyJoinChainDescend(
+    RelationOpPtr plan,
+    PlanState& state) {
+  VELOX_CHECK_NOT_NULL(plan);
+
+  if (placeConjuncts(plan, state, false)) {
+    return;
+  }
+
+  auto candidates = nextJoins(state);
+  if (candidates.empty()) {
+    if (placeConjuncts(plan, state, true)) {
+      return;
+    }
+
+    const auto downstream = state.downstreamColumns();
+    std::vector<DerivedTableCP> singleRowDtsToPlace;
+    state.dt->singleRowDts.forEach<DerivedTable>([&](DerivedTableCP subquery) {
+      if (!state.isPlaced(subquery)) {
+        if (!downstream.containsAny(subquery->columns)) {
+          state.place(subquery);
+        } else {
+          singleRowDtsToPlace.push_back(subquery);
+        }
+      }
+    });
+
+    for (const auto* singleRowDt : singleRowDtsToPlace) {
+      plan = placeSingleRowDt(plan, singleRowDt, state);
+    }
+
+    addPostprocess(state.dt, plan, state);
+    state.plans.addPlan(plan, state);
+    return;
+  }
+
+  std::vector<NextJoin> nextJoins;
+  nextJoins.reserve(candidates.size());
+  for (auto& candidate : candidates) {
+    // Multi-table builds and existence imports retrigger expensive makePlan
+    // recursion that the cap is supposed to bound; skip them.
+    if (candidate.tables.size() != 1 || !candidate.existences.empty()) {
+      continue;
+    }
+    addJoin(candidate, plan, state, nextJoins);
+  }
+  if (nextJoins.empty()) {
+    return;
+  }
+
+  const NextJoin* chosen = nullptr;
+  bool foundRealEdge = false;
+  for (const auto& next : nextJoins) {
+    const bool real = isRealEdgeCandidate(next);
+    if (foundRealEdge && !real) {
+      continue;
+    }
+    if (real && !foundRealEdge) {
+      foundRealEdge = true;
+      chosen = &next;
+      continue;
+    }
+    if (chosen == nullptr || next.cost.cost < chosen->cost.cost) {
+      chosen = &next;
+    }
+  }
+  VELOX_CHECK_NOT_NULL(chosen);
+
+  state.restore(*chosen);
+  greedyJoinChainDescend(chosen->plan, state);
+}
+
+void Optimization::solveJoinOrderApproximately(PlanState& state) {
+  PlanObjectVector firstTables = state.dt->startTables.toObjects();
+#ifndef NDEBUG
+  for (auto* table : firstTables) {
+    state.debugSetFirstTable(table->id());
+  }
+#endif
+
+  const auto sortedIndices = sortByStartingScore(firstTables);
+
+  for (auto index : sortedIndices) {
+    auto* from = firstTables.at(index);
+    if (from->is(PlanType::kTableNode)) {
+      auto* table = from->as<BaseTable>();
+      const auto leafIndices = table->chooseLeafIndex();
+      const auto downstream = state.downstreamColumns();
+      for (auto leafIndex : leafIndices) {
+        auto columns = indexColumns(downstream, table, leafIndex);
+
+        PlanStateSaver save(state);
+        state.place(table);
+        state.placeColumns(columns);
+
+        auto* scan = make<TableScan>(table, leafIndex, columns);
+        state.addCost(*scan);
+        greedyJoinChainDescend(scan, state);
+      }
+    } else if (from->is(PlanType::kValuesTableNode)) {
+      const auto* valuesTable = from->as<ValuesTable>();
+      ColumnVector columns;
+      state.downstreamColumns().forEach<Column>([&](auto column) {
+        if (valuesTable == column->relation()) {
+          columns.push_back(column);
+        }
+      });
+
+      PlanStateSaver save(state);
+      state.place(valuesTable);
+      state.placeColumns(columns);
+      auto* scan = make<Values>(*valuesTable, std::move(columns));
+      state.addCost(*scan);
+      greedyJoinChainDescend(scan, state);
+    } else if (from->is(PlanType::kUnnestTableNode)) {
+      VELOX_FAIL("UnnestTable cannot be a starting table");
+    }
+  }
+
+  // If no greedy chain produced a plan (typically because every viable
+  // start was a DerivedTable, which greedy skips), fall back to the
+  // regular branch-and-bound entry for each DerivedTable start. Slower
+  // than greedy but guaranteed to leave at least one plan in 'state.plans'.
+  if (state.plans.plans.empty()) {
+    for (auto index : sortedIndices) {
+      auto* from = firstTables.at(index);
+      if (from->is(PlanType::kDerivedTableNode)) {
+        placeDerivedTable(from->as<const DerivedTable>(), state);
+      }
+    }
+  }
+}
+
 void Optimization::makeJoins(PlanState& state) {
   // Sanity check that there are no RIGHT joins.
   for (auto join : state.dt->joins) {
@@ -3197,6 +3338,13 @@ void Optimization::makeJoins(PlanState& state) {
       VELOX_CHECK(
           join->rightOptional(), "Unexpected RIGHT join: {}", join->toString());
     }
+  }
+
+  if (!options_.syntacticJoinOrder &&
+      static_cast<int32_t>(state.dt->tables.size()) >=
+          options_.greedyJoinThreshold) {
+    solveJoinOrderApproximately(state);
+    return;
   }
 
   PlanObjectVector firstTables;
