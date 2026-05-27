@@ -36,6 +36,7 @@ permissions:
   contents: read
 jobs:
   update-badge:
+    if: github.repository == 'facebookincubator/axiom'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
