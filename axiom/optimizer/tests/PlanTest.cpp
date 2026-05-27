@@ -153,6 +153,7 @@ TEST_F(PlanTest, rejectedFilters) {
     auto matcher = matchScan("t", ROW({"a", "b"}, {BIGINT(), DOUBLE()}))
                        .filter("b > 10.0")
                        .project()
+                       .project()
                        .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -233,7 +234,7 @@ TEST_F(PlanTest, specialFormConstantFold) {
     std::optional<std::string> expectedExpression;
   };
 
-  std::vector<TestCase> filterTestCases = {
+  std::vector<TestCase> constantFilterTestCases = {
       {"1 in (1, 2, 3)", std::nullopt},
       {"if(2 > 1, true, false)", std::nullopt},
       {"true or 2 < 1", std::nullopt},
@@ -251,11 +252,9 @@ TEST_F(PlanTest, specialFormConstantFold) {
       {"coalesce(cast(null as boolean), false)", "false"},
       {"case when 1 > 2 then true else false end", "false"},
       {"try_cast('a' as BIGINT) > 4", "null"},
-      {"if(a > b, 1 + 2, c) > b + 3", "if(a > b, 3, c) > b + 3"},
-      {"if(a > b, 1 + 2, 3 + 4) > b + 3", "if(a > b, 3, 7) > b + 3"},
   };
 
-  for (const auto& [expr, expected] : filterTestCases) {
+  for (const auto& [expr, expected] : constantFilterTestCases) {
     SCOPED_TRACE("Filter: " + expr);
     auto logicalPlan = lp::PlanBuilder(makeContext())
                            .tableScan("numbers")
@@ -269,6 +268,29 @@ TEST_F(PlanTest, specialFormConstantFold) {
     } else {
       matcher = matchScan("numbers").filter(expected.value()).project().build();
     }
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  std::vector<TestCase> columnFilterTestCases = {
+      {"if(a > b, 1 + 2, c) > b + 3", "if(a > b, 3, c) > b + 3"},
+      {"if(a > b, 1 + 2, 3 + 4) > b + 3", "if(a > b, 3, 7) > b + 3"},
+  };
+
+  for (const auto& [expr, expected] : columnFilterTestCases) {
+    SCOPED_TRACE("Filter: " + expr);
+    auto logicalPlan = lp::PlanBuilder(makeContext())
+                           .tableScan("numbers")
+                           .filter(expr)
+                           .map({"a + 2"})
+                           .build();
+
+    auto matcher = matchScan("numbers")
+                       .filter(expected.value())
+                       .project()
+                       .project()
+                       .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -384,8 +406,11 @@ TEST_F(PlanTest, inList) {
     auto logicalPlan =
         scan().filter("a in (1, 2, 3) and b > 1.2").map({"a + 2"}).build();
 
-    auto matcher =
-        scanMatcher().filter("a in (1, 2, 3) and b > 1.2").project().build();
+    auto matcher = scanMatcher()
+                       .filter("a in (1, 2, 3) and b > 1.2")
+                       .project()
+                       .project()
+                       .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);

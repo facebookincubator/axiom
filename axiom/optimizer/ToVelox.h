@@ -282,13 +282,10 @@ class ToVelox {
       ExecutableFragment& fragment,
       std::vector<ExecutableFragment>& stages);
 
-  // Adds a ProjectNode to trim extra columns from 'input' if it has more
-  // columns than 'inputOp' expects. This handles Velox operators that pass
-  // through all input columns (e.g., WindowNode) when the input has extra
-  // columns from rejected scan filters.
+  // Narrows 'input' to 'inputOp.columns()' when wider; no-op otherwise.
   velox::core::PlanNodePtr maybeTrimColumns(
       velox::core::PlanNodePtr input,
-      const RelationOpPtr& inputOp);
+      const RelationOp& inputOp);
 
   // Prepares the input for a partitioned operator (Window, RowNumber,
   // TopNRowNumber): trims extra columns and adds a local partition exchange

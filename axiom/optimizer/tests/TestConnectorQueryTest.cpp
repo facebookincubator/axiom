@@ -83,6 +83,59 @@ TEST_F(TestConnectorQueryTest, selectFiltered) {
   exec::test::assertEqualResults(results.results, {expected});
 }
 
+TEST_F(TestConnectorQueryTest, filterColumnNotInProjection) {
+  auto vector = makeRowVector(
+      {"a", "b", "c"},
+      {makeNullableFlatVector<int64_t>({1, 2, std::nullopt, 4, 5}),
+       makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+       makeFlatVector<int64_t>({100, 200, 300, 400, 500})});
+  testConnector_->addTable("t_subset", vector->rowType());
+  testConnector_->appendData("t_subset", vector);
+
+  {
+    SCOPED_TRACE("bare SELECT");
+    auto plan = parseSelect(
+        "SELECT b FROM t_subset WHERE a IS NOT NULL", kTestConnectorId);
+    auto expected = makeRowVector({makeFlatVector<int64_t>({10, 20, 40, 50})});
+    auto results = runVelox(plan, options_);
+    exec::test::assertEqualResults(results.results, {expected});
+  }
+
+  {
+    SCOPED_TRACE("with LIMIT");
+    auto plan = parseSelect(
+        "SELECT b FROM t_subset WHERE a IS NOT NULL LIMIT 3", kTestConnectorId);
+    auto results = runVelox(plan, options_);
+    int64_t totalRows = 0;
+    for (const auto& batch : results.results) {
+      totalRows += batch->size();
+    }
+    EXPECT_EQ(totalRows, 3);
+  }
+
+  {
+    SCOPED_TRACE("with ORDER BY");
+    auto plan = parseSelect(
+        "SELECT b FROM t_subset WHERE a IS NOT NULL ORDER BY b",
+        kTestConnectorId);
+    auto expected = makeRowVector({makeFlatVector<int64_t>({10, 20, 40, 50})});
+    auto results = runVelox(plan, options_);
+    exec::test::assertEqualResults(results.results, {expected});
+  }
+
+  {
+    SCOPED_TRACE("multi-column SELECT");
+    auto plan = parseSelect(
+        "SELECT b, c FROM t_subset WHERE a IS NOT NULL", kTestConnectorId);
+    auto expected = makeRowVector(
+        {"b", "c"},
+        {makeFlatVector<int64_t>({10, 20, 40, 50}),
+         makeFlatVector<int64_t>({100, 200, 400, 500})});
+    auto results = runVelox(plan, options_);
+    exec::test::assertEqualResults(results.results, {expected});
+  }
+}
+
 TEST_F(TestConnectorQueryTest, writeFiltered) {
   auto vector = makeRowVector(
       {"b", "c"},

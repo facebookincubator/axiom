@@ -1137,12 +1137,12 @@ TEST_F(JoinTest, impliedJoins) {
     auto query = "SELECT count(*) FROM t JOIN u ON t.a = u.x AND t.a = t.b";
     SCOPED_TRACE(query);
 
-    auto matcher =
-        matchScan("u")
-            .hashJoin(
-                matchScan("t").filter("a = b").build(), core::JoinType::kInner)
-            .aggregation()
-            .build();
+    auto matcher = matchScan("u")
+                       .hashJoin(
+                           matchScan("t").filter("a = b").project().build(),
+                           core::JoinType::kInner)
+                       .aggregation()
+                       .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -1488,6 +1488,7 @@ TEST_F(JoinTest, duplicateJoinOutputColumns) {
 
     auto matcher = matchScan("u")
                        .filter("a = 1")
+                       .project()
                        .hashJoin(matchScan("t").build(), core::JoinType::kInner)
                        .distinct()
                        .project({"b as x", "b as y"})

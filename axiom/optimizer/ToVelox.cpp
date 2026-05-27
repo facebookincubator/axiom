@@ -1485,6 +1485,10 @@ velox::core::PlanNodePtr ToVelox::makeScan(
 
   makePredictionAndHistory(result->id(), &scan);
 
+  if (!isSubfieldPushdown) {
+    result = maybeTrimColumns(std::move(result), scan);
+  }
+
   columnAlteredTypes_.clear();
   return result;
 }
@@ -1770,9 +1774,9 @@ velox::core::WindowNode::Function ToVelox::toVeloxWindowFunction(
 
 velox::core::PlanNodePtr ToVelox::maybeTrimColumns(
     velox::core::PlanNodePtr input,
-    const RelationOpPtr& inputOp) {
-  const auto& columns = inputOp->columns();
-  if (input->outputType()->size() <= columns.size()) {
+    const RelationOp& inputOp) {
+  const auto& columns = inputOp.columns();
+  if (columns.empty() || input->outputType()->size() <= columns.size()) {
     return input;
   }
 
@@ -1790,7 +1794,7 @@ velox::core::PlanNodePtr ToVelox::makeWindowInput(
     ExecutableFragment& fragment,
     std::vector<ExecutableFragment>& stages) {
   auto input =
-      maybeTrimColumns(makeFragment(op.input(), fragment, stages), op.input());
+      maybeTrimColumns(makeFragment(op.input(), fragment, stages), *op.input());
   if (options_.numDrivers > 1) {
     input = addLocalPartition(nextId(), input, toFieldRefs(partitionKeys));
   }
