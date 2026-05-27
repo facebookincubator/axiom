@@ -92,15 +92,16 @@ TEST_F(RemoteOutputTest, groupByAggregation) {
   auto logicalPlan =
       parseSelect("SELECT sum(b) FROM t GROUP BY a", kTestConnectorId);
 
-  // Multi-worker without remote output: shuffle by group-by key, then
-  // single aggregation. A gather stage collects results from multiple
-  // workers onto a single node.
+  // Multi-worker without remote output: partial + shuffle + final
+  // aggregation, with a gather stage collecting results from the workers
+  // onto a single node.
   auto plan = planVelox(
       logicalPlan, {.numWorkers = 2, .numDrivers = 2, .remoteOutput = false});
   auto matcher = matchScan("t")
+                     .partialAggregation({"a"}, {"sum(b)"})
                      .shuffle({"a"})
                      .localPartition({"a"})
-                     .singleAggregation({"a"}, {"sum(b)"})
+                     .finalAggregation()
                      .project()
                      .gather()
                      .build();

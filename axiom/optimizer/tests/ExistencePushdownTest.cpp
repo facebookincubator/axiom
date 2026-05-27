@@ -256,9 +256,10 @@ TEST_F(ExistencePushdownTest, otherIsDerivedTable) {
 
   auto distributedMatcher = matchScan("u")
                                 .filter("x < 10")
+                                .partialAggregation({"x"}, {"count(*) as cnt"})
                                 .shuffle({"x"})
                                 .localPartition({"x"})
-                                .singleAggregation({"x"}, {"count(*) as cnt"})
+                                .finalAggregation({"x"}, {"count(cnt) as cnt"})
                                 .hashJoin(
                                     matchScan("v")
                                         .filter("a < 10")
@@ -287,16 +288,14 @@ TEST_F(ExistencePushdownTest, chainJoin) {
   // Single-node plan.
   auto plan = toSingleNodePlan(logicalPlan);
 
+  // r + s wrapped into a chainDt, pushed as existence inside the aggregation.
   auto matcher =
       matchScan("u")
           .hashJoin(
               matchScan("r")
                   .filter("b < 100")
                   .hashJoin(
-                      matchScan("s")
-                          .aliases({"s_a"})
-                          .filter("s_a < 100")
-                          .build(),
+                      matchScan("s").filter("a_0 < 100").build(),
                       core::JoinType::kInner)
                   .project()
                   .build(),
@@ -305,7 +304,7 @@ TEST_F(ExistencePushdownTest, chainJoin) {
           .hashJoin(
               matchScan("r").filter("b < 100").build(), core::JoinType::kInner)
           .hashJoin(
-              matchScan("s").aliases({"s_a"}).filter("s_a < 100").build(),
+              matchScan("s").filter("a_0 < 100").build(),
               core::JoinType::kInner)
           .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
@@ -317,11 +316,7 @@ TEST_F(ExistencePushdownTest, chainJoin) {
       matchScan("r")
           .filter("b < 100")
           .hashJoin(
-              matchScan("s")
-                  .aliases({"s_a"})
-                  .filter("s_a < 100")
-                  .broadcast()
-                  .build(),
+              matchScan("s").filter("a_0 < 100").broadcast().build(),
               core::JoinType::kInner)
           .hashJoin(
               matchScan("u")
@@ -330,8 +325,7 @@ TEST_F(ExistencePushdownTest, chainJoin) {
                           .filter("b < 100")
                           .hashJoin(
                               matchScan("s")
-                                  .aliases({"s_a"})
-                                  .filter("s_a < 100")
+                                  .filter("a_0 < 100")
                                   .broadcast()
                                   .build(),
                               core::JoinType::kInner)
@@ -395,9 +389,10 @@ TEST_F(ExistencePushdownTest, multipleTables) {
                   .hashJoin(
                       matchScan("s").broadcast().build(),
                       core::JoinType::kLeftSemiFilter)
+                  .partialAggregation({"x", "y"}, {})
                   .shuffle({"x", "y"})
                   .localPartition({"x", "y"})
-                  .singleAggregation({"x", "y"}, {})
+                  .finalAggregation()
                   .broadcast()
                   .build(),
               core::JoinType::kInner)

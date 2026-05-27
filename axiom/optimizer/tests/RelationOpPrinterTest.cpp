@@ -346,15 +346,18 @@ TEST_F(RelationOpPrinterTest, markDistinct) {
           testing::HasSubstr("FILTER (WHERE __m0)"),
           testing::HasSubstr("FILTER (WHERE __m1)"),
           testing::StartsWith("    Repartition"),
-          testing::StartsWith("      MarkDistinct"),
-          testing::StartsWith("        Repartition"),
-          testing::StartsWith("          MarkDistinct"),
-          testing::StartsWith("            Repartition"),
-          testing::StartsWith("              TableScan"),
-          testing::StartsWith("                table: \"default\".\"t\""),
+          testing::StartsWith("      Aggregation"),
+          testing::HasSubstr("FILTER (WHERE __m0)"),
+          testing::HasSubstr("FILTER (WHERE __m1)"),
+          testing::StartsWith("        MarkDistinct"),
+          testing::StartsWith("          Repartition"),
+          testing::StartsWith("            MarkDistinct"),
+          testing::StartsWith("              Repartition"),
+          testing::StartsWith("                TableScan"),
+          testing::StartsWith("                  table: \"default\".\"t\""),
           testing::Eq("")));
 
-  EXPECT_EQ("agg(\"default\".\"t\")", toDistributedOneline(*logicalPlan));
+  EXPECT_EQ("agg(agg(\"default\".\"t\"))", toDistributedOneline(*logicalPlan));
 }
 
 TEST_F(RelationOpPrinterTest, cost) {

@@ -250,6 +250,40 @@ TEST_F(AggregationTest, orderBy) {
   AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
 }
 
+// Verifies that GROUP BY on a column with very few distinct values relative to
+// the available parallelism uses the partial + final shape rather than a
+// single-stage aggregation. With one driver per distinct grouping-key value,
+// single-stage aggregation on the post-shuffle data is bottlenecked by skew,
+// so the cost model must penalize it accordingly.
+TEST_F(AggregationTest, lowCardinalityGroupByPrefersPartialFinal) {
+  testConnector_->addTable("t", ROW({"k", "v"}, BIGINT()))
+      ->setStats(
+          1,
+          {
+              {"k", {.numDistinct = 1}},
+              {"v", {.numDistinct = 1}},
+          });
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .aggregate({"k"}, {"sum(v)"})
+                         .build();
+  auto plan = planVelox(logicalPlan);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .partialAggregation({"k"}, {"sum(v)"})
+                     .shuffle()
+                     .localPartition()
+                     .finalAggregation()
+                     .shuffle()
+                     .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+}
+
 // Verifies that repartitionForAgg correctly determines when shuffle is needed
 // based on the relationship between the current partition keys and the required
 // grouping keys.
@@ -278,16 +312,17 @@ TEST_F(AggregationTest, repartitionForAggPartitionSubset) {
                            .build();
     auto plan = planVelox(logicalPlan);
 
-    // There should be only ONE shuffle (for the first
-    // aggregation). The second aggregation should NOT require a shuffle
-    // because partitionKeys [a, b] ⊆ groupingKeys [a, b, d].
+    // The second aggregation should NOT need a remote shuffle because
+    // partitionKeys [a, b] ⊆ groupingKeys [a, b, d]; only a local
+    // repartition by [a, b, d] is needed to align the local hash table.
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
-                       .distributedSingleAggregation({"a", "b"}, {})
+                       .distributedAggregation({"a", "b"}, {})
                        .project()
-                       // No shuffle here - partitionKeys ⊆ groupingKeys
+                       // No remote shuffle here - partitionKeys ⊆ groupingKeys.
+                       .partialAggregation({"a", "b", "d"}, {})
                        .localPartition()
-                       .singleAggregation({"a", "b", "d"}, {})
+                       .finalAggregation()
                        .shuffle()
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
@@ -303,14 +338,13 @@ TEST_F(AggregationTest, repartitionForAggPartitionSubset) {
                            .build();
     auto plan = planVelox(logicalPlan);
 
-    // There should be TWO shuffles. The second aggregation
-    // MUST be after a shuffle because partitionKeys [a, b, c] ⊄ groupingKeys
-    // [a, b].
+    // The second aggregation MUST be after a remote shuffle because
+    // partitionKeys [a, b, c] ⊄ groupingKeys [a, b].
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
-                       .distributedSingleAggregation({"a", "b", "c"}, {})
+                       .distributedAggregation({"a", "b", "c"}, {})
                        .project()
-                       .distributedSingleAggregation({"a", "b"}, {})
+                       .distributedAggregation({"a", "b"}, {})
                        .shuffle()
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);

@@ -1416,6 +1416,30 @@ float sortCost(size_t numKeys, float cardinality) {
   }
   return Costs::kKeyCompareCost * numKeys * std::log2(cardinality);
 }
+
+// Returns true if 'input' is hash-partitioned and every partition key is
+// also a grouping key. In that case rows for each distinct grouping-key
+// value land on a single partition, so aggregation parallelism is bounded
+// by the number of distinct grouping-key values.
+bool isPartitionedByGroupingKeys(
+    const RelationOp& input,
+    const ExprVector& groupingKeys) {
+  const auto& partitionKeys = input.distribution().partitionKeys();
+  if (partitionKeys.empty()) {
+    return false;
+  }
+  return std::all_of(
+      partitionKeys.begin(),
+      partitionKeys.end(),
+      [&groupingKeys](const auto& partitionKey) {
+        return std::any_of(
+            groupingKeys.begin(),
+            groupingKeys.end(),
+            [&partitionKey](ExprCP groupKey) {
+              return groupKey->sameOrEqual(*partitionKey);
+            });
+      });
+}
 } // namespace
 
 void Aggregation::setCostWithGroups(float inputBeforePartial) {
@@ -1444,6 +1468,18 @@ void Aggregation::setCostWithGroups(float inputBeforePartial) {
     cost_.unitCost =
         aggregationCost(numKeys, aggregates.size(), rowBytes, numGroups) +
         localExchangeCost;
+
+    // Apply skew penalty: when numGroups < parallelism, only numGroups workers
+    // do meaningful work, so effective wall-time scales as parallelism /
+    // numGroups.
+    if (step == velox::core::AggregationNode::Step::kSingle) {
+      const auto parallelism =
+          runnerOptions.numWorkers * runnerOptions.numDrivers;
+      if (numGroups >= 1.0f && numGroups < parallelism &&
+          isPartitionedByGroupingKeys(*input_, groupingKeys)) {
+        cost_.unitCost *= static_cast<float>(parallelism) / numGroups;
+      }
+    }
 
     // numGroups can be > inputCardinality since this is calculated against
     // the input before partial and inputCardinality is scaled down by partial
