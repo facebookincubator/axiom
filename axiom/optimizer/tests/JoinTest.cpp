@@ -1724,6 +1724,135 @@ TEST_F(JoinTest, impliedSameTableEqualityPreservedSide) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+// A same-table column equality in WHERE implies an equality on the
+// null-extending side's join keys: t.a = t.b with ON t.a = u.x AND t.b = u.y
+// pushes u.x = u.y to u's scan.
+TEST_F(JoinTest, impliedSameTableEqualityFromPredicateTransitivity) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(1'000, {{"x", {.numDistinct = 10}}});
+
+  auto query =
+      "SELECT count(*) FROM t LEFT JOIN u ON t.a = u.x AND t.b = u.y "
+      "WHERE t.a = t.b";
+  SCOPED_TRACE(query);
+
+  auto matcher =
+      matchScan("t")
+          .filter("a = b")
+          .hashJoin(
+              matchScan("u").filter("x = y").build(), core::JoinType::kLeft)
+          .aggregation()
+          .build();
+
+  auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+// Self-equality `t.a = t.a` must not enter the equivalence class; u must
+// have no inferred filter. The literal predicate may still appear in the
+// plan on t.
+TEST_F(JoinTest, impliedSameTableEqualitySelfEqualityNotInferred) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(1'000, {{"x", {.numDistinct = 10}}});
+
+  auto query =
+      "SELECT count(*) FROM t LEFT JOIN u ON t.a = u.x AND t.b = u.y "
+      "WHERE t.a = t.a";
+  SCOPED_TRACE(query);
+
+  // The eq(a,a) predicate stays on t; u must have no inferred filter
+  // (no self-equality propagation into the equivalence class).
+  auto matcher =
+      matchScan("u")
+          .hashJoin(
+              matchScan("t").filter("a = a").build(), core::JoinType::kRight)
+          .aggregation()
+          .build();
+
+  auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+// Same-table eq under OR is NOT a strict constraint on every row, so it
+// must not enter the equivalence class. u.x = u.y must NOT be inferred.
+TEST_F(JoinTest, impliedSameTableEqualityUnderOrNotInferred) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(1'000, {{"x", {.numDistinct = 10}}});
+
+  auto query =
+      "SELECT count(*) FROM t LEFT JOIN u ON t.a = u.x AND t.b = u.y "
+      "WHERE t.a = t.b OR t.a > 100";
+  SCOPED_TRACE(query);
+
+  // The OR-disjunct conjunct doesn't constrain every row to t.a = t.b,
+  // so u.x = u.y must NOT be inferred. The disjunction stays as a Filter
+  // above t's scan.
+  auto matcher = matchScan("t")
+                     .filter("a = b OR a > 100")
+                     .hashJoin(matchScan("u").build(), core::JoinType::kLeft)
+                     .aggregation()
+                     .build();
+
+  auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+// Same-table eq negated by NOT: `NOT (t.a = t.b)` constrains rows to
+// t.a != t.b, the opposite of what would enter the equiv class.
+// u.x = u.y must NOT be inferred.
+TEST_F(JoinTest, impliedSameTableEqualityUnderNotNotInferred) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(1'000, {{"x", {.numDistinct = 10}}});
+
+  auto query =
+      "SELECT count(*) FROM t LEFT JOIN u ON t.a = u.x AND t.b = u.y "
+      "WHERE NOT (t.a = t.b)";
+  SCOPED_TRACE(query);
+
+  auto matcher = matchScan("t")
+                     .filter("not(eq(a, b))")
+                     .hashJoin(matchScan("u").build(), core::JoinType::kLeft)
+                     .aggregation()
+                     .build();
+
+  auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+// Same-table eq with a wrapper expression (cast) on one side is NOT a
+// direct column equality and must not enter the equivalence class.
+TEST_F(JoinTest, impliedSameTableEqualityWrapperExprNotInferred) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(1'000, {{"x", {.numDistinct = 10}}});
+
+  auto query =
+      "SELECT count(*) FROM t LEFT JOIN u ON t.a = u.x AND t.b = u.y "
+      "WHERE t.a + 1 = t.b";
+  SCOPED_TRACE(query);
+
+  // Wrapper expression (cast/arithmetic) on one side blocks equivalence-
+  // class entry; no inference fires.
+  auto matcher = matchScan("u")
+                     .hashJoin(
+                         matchScan("t").filter("b = a + 1").build(),
+                         core::JoinType::kRight)
+                     .aggregation()
+                     .build();
+
+  auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 // LEFT JOIN with no equalities when the DT has 3+ tables. The comma join
 // between nation and region is inlined into the same DT. The EXISTS semi-join
 // adds a 3rd table. The subsequent LEFT JOIN ON clause uses contains() which

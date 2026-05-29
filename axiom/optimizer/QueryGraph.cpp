@@ -47,6 +47,11 @@ const char* SpecialFormCallNames::kIn = "__in";
 const char* SpecialFormCallNames::kNullIf = "__nullif";
 
 void Column::equals(ColumnCP other) const {
+  if (this == other) {
+    // Self-merge is a no-op; without this, the first branch below would
+    // add the same column to the equivalence twice.
+    return;
+  }
   if (!equivalence_ && !other->equivalence_) {
     auto* equiv = make<Equivalence>();
     equiv->columns.push_back(this);

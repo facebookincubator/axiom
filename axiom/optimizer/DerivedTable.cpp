@@ -738,6 +738,12 @@ void collectImpliedPredicates(
     if (!targetTable) {
       continue;
     }
+    if (targetTable == source->singleTable()) {
+      // Skip same-table targets: propagating e.g. t.a > 0 to t.b via the
+      // equivalence class {t.a, t.b} would double-count selectivity in cost
+      // estimation since the original filter already constrains this table.
+      continue;
+    }
     auto it = mutableTables.find(targetTable);
     if (it == mutableTables.end()) {
       continue;
@@ -2176,6 +2182,27 @@ RankingPredicate analyzeRankingPredicate(
   return {RankingPredicate::Kind::kAbsorbAsLimit, *limit};
 }
 
+// Merges operands into the same equivalence class if 'conjunct' is a
+// column equality (col1 = col2) where both columns belong to 'table'.
+void mergeSameTableColumnEquivalence(ExprCP conjunct, PlanObjectCP table) {
+  if (!conjunct->is(PlanType::kCallExpr)) {
+    return;
+  }
+  auto* call = conjunct->as<Call>();
+  if (call->name() != queryCtx()->functionNames().equality) {
+    return;
+  }
+  auto* left = call->argAt(0);
+  auto* right = call->argAt(1);
+  if (!left->is(PlanType::kColumnExpr) || !right->is(PlanType::kColumnExpr)) {
+    return;
+  }
+  if (left->singleTable() != table || right->singleTable() != table) {
+    return;
+  }
+  left->as<Column>()->equals(right->as<Column>());
+}
+
 } // namespace
 
 bool DerivedTable::isPartitionKeyFilter(ExprCP imported) const {
@@ -2464,6 +2491,9 @@ void DerivedTable::distributeConjuncts() {
       if (!tryPushdownConjunct(conjunct, tables[0])) {
         continue;
       }
+
+      // ex: WHERE t.a = t.b.
+      mergeSameTableColumnEquivalence(conjunct, tables[0]);
 
       conjuncts.erase(conjuncts.begin() + i);
       --i;
