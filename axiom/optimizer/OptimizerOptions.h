@@ -18,6 +18,7 @@
 #include <folly/container/F14Map.h>
 #include <algorithm>
 #include <cstdint>
+#include <unordered_map>
 
 #include "axiom/common/SchemaTableName.h"
 #include "velox/common/config/ConfigProvider.h"
@@ -31,6 +32,7 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
   static constexpr uint32_t kSample = 4;
   static constexpr uint32_t kPreprocess = 8;
 
+  // Property name constants.
   static constexpr std::string_view kSampleJoins = "sample_joins";
   static constexpr std::string_view kSampleFilters = "sample_filters";
   static constexpr std::string_view kUseFilteredTableStats =
@@ -47,52 +49,66 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
       "parallel_project_width";
   static constexpr std::string_view kTraceFlags = "trace_flags";
 
+  // Default values — single source of truth for field initializers
+  // and properties().
+  static constexpr int32_t kParallelProjectWidthDefault = 1;
+  static constexpr bool kPushdownSubfieldsDefault = false;
+  static constexpr bool kAllMapsAsStructDefault = false;
+  static constexpr bool kSampleJoinsDefault = false;
+  static constexpr bool kSampleFiltersDefault = false;
+  static constexpr bool kUseFilteredTableStatsDefault = true;
+  static constexpr bool kEnableReducingExistencesDefault = true;
+  static constexpr uint32_t kTraceFlagsDefault = 0;
+  static constexpr bool kSyntacticJoinOrderDefault = false;
+  static constexpr bool kAlwaysPlanPartialAggregationDefault = false;
+
+  /// Constructs with code defaults only.
+  OptimizerOptions();
+
+  /// Constructs a config-file-aware provider. Config-file values override
+  /// code defaults in the output of `properties()`, enabling the three-layer
+  /// cascade: code default -> config file -> session override.
+  explicit OptimizerOptions(
+      std::unordered_map<std::string, std::string> configOverrides);
+
   /// Parallelizes independent projections over this many threads. 1 means no
   /// parallel projection.
-  int32_t parallelProjectWidth{1};
+  int32_t parallelProjectWidth{kParallelProjectWidthDefault};
 
   /// Produces skyline subfield sets of complex type columns as top level
   /// columns in table scan.
-  bool pushdownSubfields{false};
+  bool pushdownSubfields{kPushdownSubfieldsDefault};
 
   /// Makes all maps for which a known subset of keys is accessed to
   /// be projected out as structs.
-  bool allMapsAsStruct{false};
+  bool allMapsAsStruct{kAllMapsAsStructDefault};
 
   /// Map from table name to list of map columns to be read as structs unless
   /// the whole map is accessed as a map.
   folly::F14FastMap<std::string, std::vector<std::string>> mapAsStruct;
 
-  /// Enable join order sampling during optimization. If this flag is set, joins
-  /// are sampled to determine the optimal join order. If join sampling is
-  /// disabled, the optimizer will fall back on cardinality estimation.
-  bool sampleJoins{false};
+  /// Enable join order sampling during optimization.
+  bool sampleJoins{kSampleJoinsDefault};
 
-  /// Enable filter selectivity sampling during optimization. If this flag is
-  /// set, filters will be evaluated against a sample of source data to
-  /// determine the estimated cardinality of the scan. If filter sampling is
-  /// disabled, a default selectivity will be used.
-  bool sampleFilters{false};
+  /// Enable filter selectivity sampling during optimization.
+  bool sampleFilters{kSampleFiltersDefault};
 
-  /// Enable using connector-provided table statistics (co_estimateStats) for
-  /// cardinality estimation. When disabled, the optimizer falls back to
-  /// sampling or constraint-based estimation.
-  bool useFilteredTableStats{true};
+  /// Enable using connector-provided table statistics for cardinality
+  /// estimation.
+  bool useFilteredTableStats{kUseFilteredTableStatsDefault};
 
   /// Enable reducing semi joins.
-  bool enableReducingExistences{true};
+  bool enableReducingExistences{kEnableReducingExistencesDefault};
 
   /// Produce trace of plan candidates.
-  uint32_t traceFlags{0};
+  uint32_t traceFlags{kTraceFlagsDefault};
 
-  /// Disable cost-based join order selection. Perform the joins in the exact
-  /// sequence specified in the query.
-  /// TODO: Make this work for non-inner joins.
-  bool syntacticJoinOrder{false};
+  /// Disable cost-based join order selection.
+  bool syntacticJoinOrder{kSyntacticJoinOrderDefault};
 
   /// Disable cost-based decision re: whether to split an aggregation into
   /// partial + final or not.
-  bool alwaysPlanPartialAggregation{false};
+  bool alwaysPlanPartialAggregation{kAlwaysPlanPartialAggregationDefault};
 
   /// When true, connectors skip side effects in createTable() and
   /// beginWrite(). Used for EXPLAIN queries.
@@ -104,8 +120,11 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
   static OptimizerOptions from(
       const folly::F14FastMap<std::string, std::string>& properties);
 
-  // ConfigProvider implementation.
-  std::vector<velox::config::ConfigProperty> properties() const override;
+  /// Returns metadata for all optimizer session properties. Defaults
+  /// reflect config-file overrides when provided at construction.
+  std::vector<velox::config::ConfigProperty> properties() const override {
+    return properties_;
+  }
   std::string normalize(std::string_view name, std::string_view value)
       const override;
 
@@ -124,6 +143,9 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
     return std::find(it->second.begin(), it->second.end(), column) !=
         it->second.end();
   }
+
+ private:
+  std::vector<velox::config::ConfigProperty> properties_;
 };
 
 } // namespace facebook::axiom::optimizer
