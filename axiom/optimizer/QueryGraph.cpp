@@ -470,8 +470,11 @@ bool JoinEdge::isBroadcastableType() const {
 }
 
 void JoinEdge::addEquality(ExprCP left, ExprCP right, bool update) {
-  for (auto i = 0; i < leftKeys_.size(); ++i) {
-    if (leftKeys_[i] == left && rightKeys_[i] == right) {
+  // Drop equivalence-class-redundant keys; sound via attachPredicate's
+  // always-attaches invariant.
+  for (size_t i = 0; i < leftKeys_.size(); ++i) {
+    if (leftKeys_[i]->sameOrEqual(*left) &&
+        rightKeys_[i]->sameOrEqual(*right)) {
       return;
     }
   }
@@ -705,6 +708,13 @@ void BaseTable::addFilter(ExprCP expr) {
   if (columns.size() == 1) {
     columnFilters.push_back(expr);
   } else {
+    // Pointer equality suffices: equality calls are interned by ToGraph,
+    // so a duplicate insert resolves to the same Call*.
+    for (auto* existing : filter) {
+      if (existing == expr) {
+        return;
+      }
+    }
     filter.push_back(expr);
   }
 
