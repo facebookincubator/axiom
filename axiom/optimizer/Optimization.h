@@ -133,6 +133,20 @@ class Optimization {
     return toGraph_.isJoinEquality(expr, leftTable, rightTable, left, right);
   }
 
+  /// Interns a Call so equivalent calls share pointer identity.
+  ExprCP deduppedCall(
+      Name name,
+      const Value& value,
+      ExprVector args,
+      bool specialForm = false) {
+    return toGraph_.deduppedCall(name, value, std::move(args), specialForm);
+  }
+
+  /// Creates a deduped equality expression with correct boolean cardinality.
+  ExprCP makeEquality(ExprCP left, ExprCP right) {
+    return toGraph_.makeEquality(left, right);
+  }
+
   const SessionPtr& session() const {
     return session_;
   }
