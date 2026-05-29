@@ -23,7 +23,9 @@
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/utils/DfFunctions.h"
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::axiom::optimizer {
 namespace {
@@ -313,6 +315,35 @@ TEST_F(PlanTest, specialFormConstantFold) {
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
+}
+
+// Two AT TIME ZONE folds that share an instant but request different
+// timezones must produce distinct packed constants.
+TEST_F(PlanTest, atTimeZoneConstantFoldPreservesTzId) {
+  testConnector_->addTable("numbers", ROW({"a"}, BIGINT()));
+
+  constexpr int64_t kMillis = 1'778'148'000'000; // 2026-05-07 10:00:00 UTC.
+  const auto laId = tz::getTimeZoneID("America/Los_Angeles");
+  const auto nyId = tz::getTimeZoneID("America/New_York");
+  ASSERT_NE(laId, nyId);
+
+  const auto laPacked = std::to_string(pack(kMillis, laId));
+  const auto nyPacked = std::to_string(pack(kMillis, nyId));
+
+  auto logicalPlan =
+      lp::PlanBuilder(makeContext())
+          .tableScan("numbers")
+          .project(
+              {"at_timezone(cast('2026-05-07 10:00:00 UTC' as timestamp with time zone), 'America/Los_Angeles')",
+               "at_timezone(cast('2026-05-07 10:00:00 UTC' as timestamp with time zone), 'America/New_York')",
+               "a"})
+          .build();
+
+  auto matcher =
+      matchScan("numbers").project({laPacked, nyPacked, "a"}).build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+  AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
 // Verifies that func(..., null, ...) is folded to null for

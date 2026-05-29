@@ -16,6 +16,7 @@
 #pragma once
 
 #include "axiom/common/QueryRuntimeStats.h"
+#include "axiom/optimizer/ConstantCache.h"
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/PathSet.h"
@@ -51,26 +52,6 @@ struct ExprDedupHasher {
 
 using FunctionDedupMap =
     folly::F14FastMap<ExprDedupKey, ExprCP, ExprDedupHasher>;
-
-struct TypedVariant {
-  /// Canonical Type pointer returned by QueryGraphContext::toType.
-  const velox::Type* type;
-  std::shared_ptr<const velox::Variant> value;
-};
-
-struct TypedVariantHasher {
-  size_t operator()(const TypedVariant& value) const {
-    return velox::bits::hashMix(
-        std::hash<const velox::Type*>()(value.type), value.value->hash());
-  }
-};
-
-struct TypedVariantComparer {
-  bool operator()(const TypedVariant& left, const TypedVariant& right) const {
-    // Types have been deduped, hence, we compare pointers.
-    return left.type == right.type && *left.value == *right.value;
-  }
-};
 
 /// Represents a path over an Expr of complex type. Used as a key
 /// for a map from unique step to the dedupped Expr that is the getter.
@@ -977,9 +958,7 @@ class ToGraph {
       SubqueryExprEqual>
       subqueries_;
 
-  folly::
-      F14FastMap<TypedVariant, ExprCP, TypedVariantHasher, TypedVariantComparer>
-          constantDedup_;
+  ConstantCache constantCache_;
 
   // Dedup map from name + ExprVector to corresponding CallExpr.
   FunctionDedupMap functionDedup_;
