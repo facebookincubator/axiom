@@ -737,12 +737,12 @@ TEST_F(SetTest, nondeterministicFilterAboveUnion) {
 
     auto buildMatcher = [&] {
       return core::PlanMatcherBuilder()
-          .hiveScan("nation", {}, "cast(n_nationkey as double) > rand()")
+          .hiveScan("nation", {}, "rand() < cast(n_nationkey as double)")
           .project()
           .localPartition(
               core::PlanMatcherBuilder()
                   .hiveScan(
-                      "region", {}, "cast(r_regionkey as double) > rand()")
+                      "region", {}, "rand() < cast(r_regionkey as double)")
                   .project()
                   .build());
     };

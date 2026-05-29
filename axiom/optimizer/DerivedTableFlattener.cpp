@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "axiom/optimizer/DerivedTableFlattener.h"
+#include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/QueryGraph.h"
 
 namespace facebook::axiom::optimizer {
@@ -26,14 +27,6 @@ void unionChildFunctions(FunctionSet& functions, const ExprVector& children) {
       functions = functions | child->as<Call>()->functions();
     }
   }
-}
-
-// Returns the function flags for a scalar Call with new children.
-FunctionSet computeCallFunctions(CallCP call, const ExprVector& newChildren) {
-  FunctionSet functions = functionBits(
-      call->name(), SpecialFormCallNames::isSpecialForm(call->name()));
-  unionChildFunctions(functions, newChildren);
-  return functions;
 }
 
 // Returns the function flags for an Aggregate with new children.
@@ -111,12 +104,11 @@ ExprCP replaceInputs(ExprCP expr, const ExprMapping& mapping) {
       }
 
       const auto* call = expr->as<Call>();
-      auto functions = computeCallFunctions(call, newChildren);
-      return make<Call>(
+      return queryCtx()->optimization()->deduppedCall(
           call->name(),
           call->value(),
           std::move(newChildren),
-          std::move(functions));
+          /*specialForm=*/SpecialFormCallNames::isSpecialForm(call->name()));
     }
     case PlanType::kFieldExpr: {
       auto* field = expr->as<Field>();
