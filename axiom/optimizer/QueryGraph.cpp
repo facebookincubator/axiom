@@ -47,6 +47,11 @@ const char* SpecialFormCallNames::kIn = "__in";
 const char* SpecialFormCallNames::kNullIf = "__nullif";
 
 void Column::equals(ColumnCP other) const {
+  if (this == other) {
+    // Self-merge is a no-op; without this, the first branch below would
+    // add the same column to the equivalence twice.
+    return;
+  }
   if (!equivalence_ && !other->equivalence_) {
     auto* equiv = make<Equivalence>();
     equiv->columns.push_back(this);
@@ -62,6 +67,11 @@ void Column::equals(ColumnCP other) const {
   }
   if (!equivalence_) {
     other->equals(this);
+    return;
+  }
+  if (equivalence_ == other->equivalence_) {
+    // Union-find no-op: both columns are already in the same class.
+    // Continuing could produce no-op filters (a = a).
     return;
   }
   for (auto& column : other->equivalence_->columns) {
@@ -470,8 +480,11 @@ bool JoinEdge::isBroadcastableType() const {
 }
 
 void JoinEdge::addEquality(ExprCP left, ExprCP right, bool update) {
-  for (auto i = 0; i < leftKeys_.size(); ++i) {
-    if (leftKeys_[i] == left && rightKeys_[i] == right) {
+  // Drop equivalence-class-redundant keys; sound via attachPredicate's
+  // always-attaches invariant.
+  for (size_t i = 0; i < leftKeys_.size(); ++i) {
+    if (leftKeys_[i]->sameOrEqual(*left) &&
+        rightKeys_[i]->sameOrEqual(*right)) {
       return;
     }
   }
@@ -705,6 +718,13 @@ void BaseTable::addFilter(ExprCP expr) {
   if (columns.size() == 1) {
     columnFilters.push_back(expr);
   } else {
+    // Pointer equality suffices: equality calls are interned by ToGraph,
+    // so a duplicate insert resolves to the same Call*.
+    for (auto* existing : filter) {
+      if (existing == expr) {
+        return;
+      }
+    }
     filter.push_back(expr);
   }
 

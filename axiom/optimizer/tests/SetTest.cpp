@@ -357,25 +357,27 @@ TEST_F(SetTest, intersect) {
           "nation", std::move(filters), remainingFilter);
     };
 
-    // TODO Fix this plan to push down (n_regionkey + 1) % 3
-    // = 1 to all branches of 'intersect'.
-
+    // The deterministic remaining filter and the union of n_nationkey ranges
+    // are pushed into every INTERSECT branch. Each scan ends up with the
+    // tightest [lo, hi] across all intersect sides.
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = startMatcher(test::gte("n_nationkey", 13))
-                       .hashJoin(
-                           startMatcher(test::gte("n_nationkey", 12))
-                               .hashJoin(
-                                   startMatcher(
-                                       test::lte("n_nationkey", 20),
-                                       "(n_regionkey + 1) % 3 = 1")
-                                       .build(),
-                                   core::JoinType::kRightSemiFilter)
-                               .build(),
-                           core::JoinType::kRightSemiFilter)
-                       .singleAggregation()
-                       .project()
-                       .project()
-                       .build();
+    auto remainingFilter = std::string{"(n_regionkey + 1) % 3 = 1"};
+    auto matcher =
+        startMatcher(test::lte("n_nationkey", 20), remainingFilter)
+            .hashJoin(
+                startMatcher(
+                    test::between("n_nationkey", 12, 20), remainingFilter)
+                    .build(),
+                core::JoinType::kLeftSemiFilter)
+            .hashJoin(
+                startMatcher(
+                    test::between("n_nationkey", 13, 20), remainingFilter)
+                    .build(),
+                core::JoinType::kLeftSemiFilter)
+            .singleAggregation()
+            .project()
+            .project()
+            .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
   }

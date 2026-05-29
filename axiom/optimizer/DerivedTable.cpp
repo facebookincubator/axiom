@@ -738,6 +738,12 @@ void collectImpliedPredicates(
     if (!targetTable) {
       continue;
     }
+    if (targetTable == source->singleTable()) {
+      // Skip same-table targets: propagating e.g. t.a > 0 to t.b via the
+      // equivalence class {t.a, t.b} would double-count selectivity in cost
+      // estimation since the original filter already constrains this table.
+      continue;
+    }
     auto it = mutableTables.find(targetTable);
     if (it == mutableTables.end()) {
       continue;
@@ -749,7 +755,246 @@ void collectImpliedPredicates(
   }
 }
 
+// Synthesizes same-table equalities implied by every Equivalence class
+// reachable from columns of 'tables'. Walks each table's columns to find
+// distinct Equivalence pointers, groups each class's members by target
+// table, and emits n-1 anchored (target, equality) pairs for each
+// equivalence-class group of n >= 2 columns on the same target.
+void collectImpliedSameTableEqualities(
+    const QGVector<PlanObjectCP>& tables,
+    const folly::F14FastMap<PlanObjectCP, PlanObjectP>& mutableTables,
+    std::vector<std::pair<PlanObjectP, ExprCP>>& impliedPredicatesOut) {
+  auto* optimization = queryCtx()->optimization();
+  folly::F14FastSet<const Equivalence*> seenEquivalences;
+
+  auto processEquivalence = [&](const Equivalence* equivalence) {
+    if (!seenEquivalences.insert(equivalence).second) {
+      return;
+    }
+    // Equivalence::columns may contain duplicates when classes merge via
+    // multiple paths (see Column::equals). Dedup per target so we never
+    // synthesize a self-equality like t.a = t.a.
+    folly::F14FastMap<PlanObjectP, folly::F14FastSet<ColumnCP>> tableEquivs;
+    for (auto* column : equivalence->columns) {
+      auto* memberTable = column->singleTable();
+      if (!memberTable) {
+        continue;
+      }
+      auto it = mutableTables.find(memberTable);
+      if (it == mutableTables.end()) {
+        continue;
+      }
+      tableEquivs[it->second].insert(column);
+    }
+    for (auto& [target, columns] : tableEquivs) {
+      if (columns.size() < 2) {
+        continue;
+      }
+      // Sort by Column id so the anchor and member order are stable across
+      // runs.
+      std::vector<ColumnCP> orderedColumns(columns.begin(), columns.end());
+      std::ranges::sort(orderedColumns, [](ColumnCP lhs, ColumnCP rhs) {
+        return lhs->id() < rhs->id();
+      });
+      auto* anchorColumn = orderedColumns[0];
+      for (size_t k = 1; k < orderedColumns.size(); ++k) {
+        impliedPredicatesOut.emplace_back(
+            target,
+            optimization->makeEquality(anchorColumn, orderedColumns[k]));
+      }
+    }
+  };
+
+  for (auto* table : tables) {
+    const ColumnVector* columns = nullptr;
+    if (table->is(PlanType::kTableNode)) {
+      columns = &table->as<BaseTable>()->columns;
+    } else if (table->is(PlanType::kDerivedTableNode)) {
+      columns = &table->as<DerivedTable>()->columns;
+    } else {
+      continue;
+    }
+    for (auto* column : *columns) {
+      if (auto* equivalence = column->equivalence()) {
+        processEquivalence(equivalence);
+      }
+    }
+  }
+}
+
+// Propagates single-column filters from the preserved (left) side to the
+// null-extending (right) side of LEFT and non-null-aware SEMI joins.
+// Example: t LEFT JOIN u ON t.a = u.x with filter t.a = 5 → push u.x = 5.
+void collectPreservedSideImpliedPredicates(
+    const JoinEdgeVector& joins,
+    const folly::F14FastMap<PlanObjectCP, PlanObjectP>& mutableTables,
+    std::vector<std::pair<PlanObjectP, ExprCP>>& impliedPredicatesOut) {
+  for (auto& join : joins) {
+    // Null-aware SEMI is unsound: pre-filtering the right side can change a
+    // NULL outcome to FALSE under three-value logic.
+    const bool isLeftOuter = join->rightOptional() && !join->leftOptional();
+    const bool isNullRejectingSemi = join->isSemi() && !join->isNullAwareIn();
+    if (!isLeftOuter && !isNullRejectingSemi) {
+      continue;
+    }
+    for (size_t i = 0; i < join->numKeys(); ++i) {
+      auto* leftKey = join->leftKeys()[i];
+      auto* nullExtendingKey = join->rightKeys()[i];
+      if (!leftKey->isColumn() || !nullExtendingKey->isColumn()) {
+        continue;
+      }
+      auto* sourceTable = leftKey->singleTable();
+      if (!sourceTable) {
+        continue;
+      }
+      auto* targetTable = nullExtendingKey->singleTable();
+      if (!targetTable) {
+        continue;
+      }
+      auto it = mutableTables.find(targetTable);
+      if (it == mutableTables.end()) {
+        continue;
+      }
+      const auto* sourceColumn = leftKey->as<Column>();
+      auto addFilter = [&](ExprCP filter) {
+        impliedPredicatesOut.emplace_back(
+            it->second,
+            DerivedTableFlattener::replaceInputs(
+                filter,
+                ColumnVector{sourceColumn},
+                ExprVector{nullExtendingKey}));
+      };
+      if (sourceTable->is(PlanType::kTableNode)) {
+        for (auto* filter : sourceTable->as<BaseTable>()->columnFilters) {
+          if (filter->containsNonDeterministic()) {
+            continue;
+          }
+          if (filter->columns().size() != 1 ||
+              filter->columns().onlyObject<Column>() != sourceColumn) {
+            continue;
+          }
+          addFilter(filter);
+        }
+      } else if (sourceTable->is(PlanType::kDerivedTableNode)) {
+        sourceTable->as<DerivedTable>()->forEachExportableSingleColumnConjunct(
+            [&](ColumnCP outerColumn, ExprCP outerFilter) {
+              if (outerColumn != sourceColumn) {
+                return;
+              }
+              if (outerFilter->containsNonDeterministic()) {
+                return;
+              }
+              addFilter(outerFilter);
+            });
+      }
+    }
+  }
+}
+
+// Synthesizes same-table equalities on the null-extending side of LEFT and
+// non-null-aware SEMI joins from pairs of right keys paired with the same
+// left key.
+// Example: t LEFT JOIN u ON u.x = t.a AND u.y = t.a → emit u.x = u.y.
+// TODO: Generalize to arbitrary expressions (currently column-only).
+void collectImpliedOuterJoinSlotEqualities(
+    const JoinEdgeVector& joins,
+    const folly::F14FastMap<PlanObjectCP, PlanObjectP>& mutableTables,
+    std::vector<std::pair<PlanObjectP, ExprCP>>& impliedPredicatesOut) {
+  auto* optimization = queryCtx()->optimization();
+  for (const auto& join : joins) {
+    // Only LEFT and non-null-aware SEMI are sound here.
+    const bool isLeftOuter = join->rightOptional() && !join->leftOptional();
+    const bool isNullRejectingSemi = join->isSemi() && !join->isNullAwareIn();
+    if (!isLeftOuter && !isNullRejectingSemi) {
+      continue;
+    }
+    for (size_t i = 0; i < join->numKeys(); ++i) {
+      auto* leftColI = join->leftKeys()[i];
+      auto* rightColI = join->rightKeys()[i];
+      auto* table = rightColI->singleTable();
+      if (!table) {
+        continue;
+      }
+      // Non-deterministic keys can evaluate differently per row.
+      if (leftColI->containsNonDeterministic() ||
+          rightColI->containsNonDeterministic()) {
+        continue;
+      }
+      auto it = mutableTables.find(table);
+      if (it == mutableTables.end()) {
+        continue;
+      }
+      for (size_t j = i + 1; j < join->numKeys(); ++j) {
+        auto* leftColJ = join->leftKeys()[j];
+        auto* rightColJ = join->rightKeys()[j];
+        if (rightColJ == rightColI) {
+          continue;
+        }
+        if (rightColJ->singleTable() != table) {
+          continue;
+        }
+        if (leftColJ->containsNonDeterministic() ||
+            rightColJ->containsNonDeterministic()) {
+          continue;
+        }
+        if (!leftColI->sameOrEqual(*leftColJ)) {
+          continue;
+        }
+        impliedPredicatesOut.emplace_back(
+            it->second, optimization->makeEquality(rightColI, rightColJ));
+      }
+    }
+  }
+}
+
 } // namespace
+
+namespace {
+
+// Returns true if 'target' already has a predicate equivalent to 'expr'.
+bool targetAlreadyHas(PlanObjectCP target, ExprCP expr) {
+  if (target->is(PlanType::kTableNode)) {
+    const auto& existing = target->as<BaseTable>()->columnFilters;
+    return std::ranges::any_of(existing, [&](ExprCP candidate) {
+      return candidate->sameOrEqual(*expr);
+    });
+  }
+  if (target->is(PlanType::kDerivedTableNode)) {
+    const auto& existing = target->as<DerivedTable>()->conjuncts;
+    return std::ranges::any_of(existing, [&](ExprCP candidate) {
+      return candidate->sameOrEqual(*expr);
+    });
+  }
+  return false;
+}
+
+} // namespace
+
+void DerivedTable::attachPredicate(PlanObjectP target, ExprCP expr) {
+  if (targetAlreadyHas(target, expr)) {
+    return;
+  }
+  if (tryPushdownConjunct(expr, target)) {
+    return;
+  }
+  // Pushdown blocked (LIMIT/window DT, ValuesTable, UnnestTable). Land
+  // 'expr' on this DT's conjuncts so it's applied above 'target'.
+  if (std::ranges::any_of(conjuncts, [&](ExprCP candidate) {
+        return candidate->sameOrEqual(*expr);
+      })) {
+    return;
+  }
+  conjuncts.push_back(expr);
+}
+
+void DerivedTable::tryAttachToNullExtendingSide(
+    PlanObjectP target,
+    ExprCP expr) {
+  if (targetAlreadyHas(target, expr)) {
+    return;
+  }
+  tryPushdownConjunct(expr, target);
+}
 
 void DerivedTable::inferImpliedPredicates() {
   folly::F14FastMap<PlanObjectCP, PlanObjectP> mutableTables;
@@ -763,44 +1008,31 @@ void DerivedTable::inferImpliedPredicates() {
         collectImpliedPredicates(filter, mutableTables, implied);
       }
     } else if (table->is(PlanType::kDerivedTableNode)) {
-      auto* innerDt = table->as<DerivedTable>();
-      for (auto* filter : innerDt->conjuncts) {
-        if (filter->columns().size() != 1) {
-          continue;
-        }
-        auto* innerColumn = filter->columns().onlyObject<Column>();
-        for (size_t i = 0;
-             i < innerDt->columns.size() && i < innerDt->exprs.size();
-             ++i) {
-          if (innerDt->exprs[i] != innerColumn) {
-            continue;
-          }
-          auto* outerColumn = innerDt->columns[i];
-          auto outerFilter = DerivedTableFlattener::replaceInputs(
-              filter, ColumnVector{innerColumn}, ExprVector{outerColumn});
-          collectImpliedPredicates(outerFilter, mutableTables, implied);
-        }
-      }
+      table->as<DerivedTable>()->forEachExportableSingleColumnConjunct(
+          [&](ColumnCP /*outerColumn*/, ExprCP outerFilter) {
+            collectImpliedPredicates(outerFilter, mutableTables, implied);
+          });
     }
   }
 
+  collectImpliedSameTableEqualities(tables, mutableTables, implied);
+  // Land each implied predicate. attachPredicate guarantees enforcement
+  // somewhere (scan or this DT's conjuncts); JoinEdge::addEquality relies
+  // on that invariant when dropping equivalence-class-redundant keys.
   for (auto& [target, expr] : implied) {
-    if (target->is(PlanType::kTableNode)) {
-      const auto& existing = target->as<BaseTable>()->columnFilters;
-      if (std::ranges::any_of(existing, [&](ExprCP candidate) {
-            return candidate->sameOrEqual(*expr);
-          })) {
-        continue;
-      }
-    } else if (target->is(PlanType::kDerivedTableNode)) {
-      const auto& existing = target->as<DerivedTable>()->conjuncts;
-      if (std::ranges::any_of(existing, [&](ExprCP candidate) {
-            return candidate->sameOrEqual(*expr);
-          })) {
-        continue;
-      }
-    }
-    tryPushdownConjunct(expr, target);
+    attachPredicate(target, expr);
+  }
+
+  // Predicates targeting the null-extending side (outer-join slot equalities
+  // and preserved-side filter propagation) are only valid for matched rows.
+  // Use tryAttachToNullExtendingSide which drops silently if pushdown fails.
+  std::vector<std::pair<PlanObjectP, ExprCP>> nullExtendingImplied;
+  collectImpliedOuterJoinSlotEqualities(
+      joins, mutableTables, nullExtendingImplied);
+  collectPreservedSideImpliedPredicates(
+      joins, mutableTables, nullExtendingImplied);
+  for (auto& [target, expr] : nullExtendingImplied) {
+    tryAttachToNullExtendingSide(target, expr);
   }
 }
 
@@ -1331,6 +1563,25 @@ void DerivedTable::exportExprs(ExprVector& exprs) {
 
 ExprCP DerivedTable::importExpr(ExprCP expr) const {
   return DerivedTableFlattener::replaceInputs(expr, columns, exprs);
+}
+
+void DerivedTable::forEachExportableSingleColumnConjunct(
+    folly::FunctionRef<void(ColumnCP, ExprCP)> cb) const {
+  for (auto* filter : conjuncts) {
+    if (filter->columns().size() != 1) {
+      continue;
+    }
+    auto* innerColumn = filter->columns().onlyObject<Column>();
+    for (size_t i = 0; i < columns.size() && i < exprs.size(); ++i) {
+      if (exprs[i] != innerColumn) {
+        continue;
+      }
+      auto* outerColumn = columns[i];
+      auto* outerFilter = DerivedTableFlattener::replaceInputs(
+          filter, ColumnVector{innerColumn}, ExprVector{outerColumn});
+      cb(outerColumn, outerFilter);
+    }
+  }
 }
 
 void DerivedTable::removeTables(
@@ -2003,6 +2254,27 @@ RankingPredicate analyzeRankingPredicate(
   return {RankingPredicate::Kind::kAbsorbAsLimit, *limit};
 }
 
+// Merges operands into the same equivalence class if 'conjunct' is a
+// column equality (col1 = col2) where both columns belong to 'table'.
+void mergeSameTableColumnEquivalence(ExprCP conjunct, PlanObjectCP table) {
+  if (!conjunct->is(PlanType::kCallExpr)) {
+    return;
+  }
+  auto* call = conjunct->as<Call>();
+  if (call->name() != queryCtx()->functionNames().equality) {
+    return;
+  }
+  auto* left = call->argAt(0);
+  auto* right = call->argAt(1);
+  if (!left->is(PlanType::kColumnExpr) || !right->is(PlanType::kColumnExpr)) {
+    return;
+  }
+  if (left->singleTable() != table || right->singleTable() != table) {
+    return;
+  }
+  left->as<Column>()->equals(right->as<Column>());
+}
+
 } // namespace
 
 bool DerivedTable::isPartitionKeyFilter(ExprCP imported) const {
@@ -2291,6 +2563,9 @@ void DerivedTable::distributeConjuncts() {
       if (!tryPushdownConjunct(conjunct, tables[0])) {
         continue;
       }
+
+      // ex: WHERE t.a = t.b.
+      mergeSameTableColumnEquivalence(conjunct, tables[0]);
 
       conjuncts.erase(conjuncts.begin() + i);
       --i;

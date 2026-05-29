@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/Function.h>
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/MemoKey.h"
 #include "axiom/optimizer/PlanObject.h"
@@ -278,6 +279,13 @@ struct DerivedTable : public PlanObject {
   /// corresponding 'exprs'.
   ExprCP importExpr(ExprCP expr) const;
 
+  /// Invokes 'cb(outerColumn, translatedFilter)' for each single-column
+  /// conjunct in this DT whose underlying source column maps to one of
+  /// this DT's output 'columns'. 'translatedFilter' is the conjunct with
+  /// the inner source column substituted by the corresponding outer column.
+  void forEachExportableSingleColumnConjunct(
+      folly::FunctionRef<void(ColumnCP, ExprCP)> cb) const;
+
   /// Adds a filter conjunct to this DT. Handles LIMIT (returns false),
   /// aggregation (adds to 'having'), and set operations (adds to all children).
   /// Returns true if the conjunct was successfully added, false otherwise.
@@ -461,12 +469,28 @@ struct DerivedTable : public PlanObject {
   // Updates cardinality and column constraints from the plan.
   void updateConstraints(const RelationOp& plan);
 
-  // Synthesizes single-column predicates implied by inner-join
-  // column equivalences. For each single-column filter on a
-  // BaseTable or inner DerivedTable, clones it to other columns
-  // in the same equivalence class. Skips non-deterministic and
-  // multi-column filters; see implementation for rationale.
+  // Adds same-table equality filters that hold on a single table because of
+  // its column equivalences. Four paths:
+  //   1. Per-column propagation of single-column deterministic filters to
+  //      other members of the same equivalence class.
+  //   2. Same-table synthesis: for each equivalence class with 2+ members
+  //      on the same table (e.g. ON t.a = u.x AND t.b = u.x), emits
+  //      anchored equalities (t.a = t.b) on that table.
+  //   3. Outer-join slot synthesis: for LEFT and non-null-aware LEFT SEMI
+  //      joins, when two right-side join keys belong to the same null-
+  //      supplying table and pair with the same left key, emits their
+  //      equality on that table.
+  //   4. Left-join key propagation: for LEFT and non-null-aware LEFT SEMI
+  //      joins, clones single-column filters on the preserved side to the
+  //      null-supplying side via the equi-join key (t.a = 5 implies
+  //      u.x = 5 for ON t.a = u.x).
   void inferImpliedPredicates();
+
+  // Enforces 'expr' on 'target': existing scan filter, pushdown via
+  // tryPushdownConjunct, or fallback to this DT's conjuncts above the
+  // refusing target. The always-attaches invariant lets JoinEdge::addEquality
+  // drop equivalence-class-redundant join keys unconditionally.
+  void attachPredicate(PlanObjectP target, ExprCP expr);
 
   // Completes 'joins' with edges implied by column equivalences.
   void addImpliedJoins();
@@ -561,6 +585,10 @@ struct DerivedTable : public PlanObject {
   // @param table The target table (BaseTable, DerivedTable, etc.).
   // @return true if the conjunct was successfully pushed down, false otherwise.
   bool tryPushdownConjunct(ExprCP conjunct, PlanObjectP table);
+
+  // Pushes 'expr' to the null-extending side. Drops if target refuses —
+  // post-join fallback would filter NULL-padded unmatched rows incorrectly.
+  void tryAttachToNullExtendingSide(PlanObjectP target, ExprCP expr);
 
   // Returns true if 'imported' depends only on columns that are partition keys
   // of every window function in windowPlan.
