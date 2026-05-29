@@ -822,6 +822,75 @@ void collectImpliedSameTableEqualities(
   }
 }
 
+// Propagates single-column filters from the preserved (left) side to the
+// null-extending (right) side of LEFT and non-null-aware SEMI joins.
+// Example: t LEFT JOIN u ON t.a = u.x with filter t.a = 5 → push u.x = 5.
+void collectPreservedSideImpliedPredicates(
+    const JoinEdgeVector& joins,
+    const folly::F14FastMap<PlanObjectCP, PlanObjectP>& mutableTables,
+    std::vector<std::pair<PlanObjectP, ExprCP>>& impliedPredicatesOut) {
+  for (auto& join : joins) {
+    // Null-aware SEMI is unsound: pre-filtering the right side can change a
+    // NULL outcome to FALSE under three-value logic.
+    const bool isLeftOuter = join->rightOptional() && !join->leftOptional();
+    const bool isNullRejectingSemi = join->isSemi() && !join->isNullAwareIn();
+    if (!isLeftOuter && !isNullRejectingSemi) {
+      continue;
+    }
+    for (size_t i = 0; i < join->numKeys(); ++i) {
+      auto* leftKey = join->leftKeys()[i];
+      auto* nullExtendingKey = join->rightKeys()[i];
+      if (!leftKey->isColumn() || !nullExtendingKey->isColumn()) {
+        continue;
+      }
+      auto* sourceTable = leftKey->singleTable();
+      if (!sourceTable) {
+        continue;
+      }
+      auto* targetTable = nullExtendingKey->singleTable();
+      if (!targetTable) {
+        continue;
+      }
+      auto it = mutableTables.find(targetTable);
+      if (it == mutableTables.end()) {
+        continue;
+      }
+      const auto* sourceColumn = leftKey->as<Column>();
+      auto addFilter = [&](ExprCP filter) {
+        impliedPredicatesOut.emplace_back(
+            it->second,
+            DerivedTableFlattener::replaceInputs(
+                filter,
+                ColumnVector{sourceColumn},
+                ExprVector{nullExtendingKey}));
+      };
+      if (sourceTable->is(PlanType::kTableNode)) {
+        for (auto* filter : sourceTable->as<BaseTable>()->columnFilters) {
+          if (filter->containsNonDeterministic()) {
+            continue;
+          }
+          if (filter->columns().size() != 1 ||
+              filter->columns().onlyObject<Column>() != sourceColumn) {
+            continue;
+          }
+          addFilter(filter);
+        }
+      } else if (sourceTable->is(PlanType::kDerivedTableNode)) {
+        sourceTable->as<DerivedTable>()->forEachExportableSingleColumnConjunct(
+            [&](ColumnCP outerColumn, ExprCP outerFilter) {
+              if (outerColumn != sourceColumn) {
+                return;
+              }
+              if (outerFilter->containsNonDeterministic()) {
+                return;
+              }
+              addFilter(outerFilter);
+            });
+      }
+    }
+  }
+}
+
 // Synthesizes same-table equalities on the null-extending side of LEFT and
 // non-null-aware SEMI joins from pairs of right keys paired with the same
 // left key.
@@ -954,12 +1023,15 @@ void DerivedTable::inferImpliedPredicates() {
     attachPredicate(target, expr);
   }
 
-  // Outer-join slot equalities are only valid on matched rows; use
-  // tryAttachToNullExtendingSide which drops silently if pushdown fails.
-  std::vector<std::pair<PlanObjectP, ExprCP>> outerSlotEqualities;
+  // Predicates targeting the null-extending side (outer-join slot equalities
+  // and preserved-side filter propagation) are only valid for matched rows.
+  // Use tryAttachToNullExtendingSide which drops silently if pushdown fails.
+  std::vector<std::pair<PlanObjectP, ExprCP>> nullExtendingImplied;
   collectImpliedOuterJoinSlotEqualities(
-      joins, mutableTables, outerSlotEqualities);
-  for (auto& [target, expr] : outerSlotEqualities) {
+      joins, mutableTables, nullExtendingImplied);
+  collectPreservedSideImpliedPredicates(
+      joins, mutableTables, nullExtendingImplied);
+  for (auto& [target, expr] : nullExtendingImplied) {
     tryAttachToNullExtendingSide(target, expr);
   }
 }

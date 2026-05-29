@@ -69,6 +69,11 @@ void Column::equals(ColumnCP other) const {
     other->equals(this);
     return;
   }
+  if (equivalence_ == other->equivalence_) {
+    // Union-find no-op: both columns are already in the same class.
+    // Continuing could produce no-op filters (a = a).
+    return;
+  }
   for (auto& column : other->equivalence_->columns) {
     equivalence_->columns.push_back(column);
     column->equivalence_ = equivalence_;

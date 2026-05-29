@@ -898,7 +898,10 @@ TEST_F(JoinTest, fullThenFilter) {
     auto matcher = matchScan("t")
                        .filter("a > 0")
                        .hashJoin(
-                           matchScan("u").project({"x", "y + 1 as z"}).build(),
+                           matchScan("u")
+                               .filter("x > 0")
+                               .project({"x", "y + 1 as z"})
+                               .build(),
                            core::JoinType::kLeft)
                        .filter("coalesce(z, 1) > 0")
                        .project()
@@ -1422,6 +1425,114 @@ TEST_F(JoinTest, impliedFilters) {
   }
 }
 
+// Filter propagation through LEFT JOIN keys: a filter on the preserved (left)
+// side is cloned to the null-supplying (right) side for any matched row.
+TEST_F(JoinTest, impliedFiltersOuterJoin) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(1'000, {{"x", {.numDistinct = 100}}});
+
+  // Equality on the preserved side propagates to the null-supplying side.
+  // t.a = 5 reduces t to ~1 row; the optimizer makes t the probe side (kRight).
+  {
+    auto query = "SELECT * FROM t LEFT JOIN u ON t.a = u.x WHERE t.a = 5";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("u")
+            .filter("x = 5")
+            .hashJoin(
+                matchScan("t").filter("a = 5").build(), core::JoinType::kRight)
+            .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Range predicate propagates similarly.
+  {
+    auto query = "SELECT * FROM t LEFT JOIN u ON t.a = u.x WHERE t.a > 100";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("t")
+            .filter("a > 100")
+            .hashJoin(
+                matchScan("u").filter("x > 100").build(), core::JoinType::kLeft)
+            .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Non-deterministic predicates do not propagate.
+  {
+    auto query =
+        "SELECT * FROM t LEFT JOIN u ON t.a = u.x "
+        "WHERE t.a = cast(random() * 100 as bigint)";
+    SCOPED_TRACE(query);
+
+    // u must have no filter.
+    auto matcher = matchScan("t")
+                       .hashJoin(matchScan("u").build(), core::JoinType::kLeft)
+                       .filter("a = cast(random() * 100.0 as bigint)")
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+// LEFT SEMI (EXISTS) propagates filters from the outer side to the
+// subquery side via the equi-join key: a filter on the matching outer
+// column holds on every subquery row that participates in the result.
+TEST_F(JoinTest, impliedFiltersSemiJoin) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(1'000, {{"x", {.numDistinct = 100}}});
+
+  auto query =
+      "SELECT * FROM t WHERE t.a = 5 AND EXISTS ("
+      "  SELECT 1 FROM u WHERE u.x = t.a)";
+  SCOPED_TRACE(query);
+
+  // u.x = 5 is the propagated filter; t.a = 5 is the original.
+  auto matcher = matchScan("u")
+                     .filter("x = 5")
+                     .hashJoin(
+                         matchScan("t").filter("a = 5").build(),
+                         core::JoinType::kRightSemiFilter)
+                     .build();
+
+  auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+// Null-aware SEMI (`a IN (subquery)`) must NOT propagate: pre-filtering
+// the right side could change a NULL outcome to FALSE under 3VL.
+TEST_F(JoinTest, impliedFiltersNullAwareSemiNotPropagated) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(1'000, {{"x", {.numDistinct = 100}}});
+
+  auto query = "SELECT * FROM t WHERE t.a = 5 AND t.a IN (SELECT x FROM u)";
+  SCOPED_TRACE(query);
+
+  // u must NOT receive an x = 5 filter (null-aware SEMI is unsound for
+  // pre-filtering). u's scan should have no filters.
+  auto matcher = matchScan("u")
+                     .hashJoin(
+                         matchScan("t").filter("a = 5").build(),
+                         core::JoinType::kRightSemiFilter)
+                     .build();
+
+  auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 // Three or more columns from the same table in one equivalence class.
 TEST_F(JoinTest, impliedSameTableEquality) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()))
@@ -1679,6 +1790,62 @@ TEST_F(JoinTest, impliedSameTableEqualityFullOuterJoinSkipped) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+// RIGHT JOIN filter propagation reaches the LEFT branch via
+// ToGraph::normalizeLogicalJoin. `u RIGHT JOIN t WHERE t.a = 5` becomes
+// `t LEFT JOIN u WHERE t.a = 5`, so u still gets the propagated u.x = 5
+// filter.
+TEST_F(JoinTest, impliedFiltersRightJoinNormalized) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(1'000, {{"x", {.numDistinct = 100}}});
+
+  auto query = "SELECT * FROM u RIGHT JOIN t ON u.x = t.a WHERE t.a = 5";
+  SCOPED_TRACE(query);
+
+  auto matcher =
+      matchScan("u")
+          .filter("x = 5")
+          .hashJoin(
+              matchScan("t").filter("a = 5").build(), core::JoinType::kRight)
+          .project()
+          .build();
+
+  auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+// LEFT-join filter propagation works when the preserved side is a
+// DerivedTable: the inner conjunct `a = 5` on the subquery propagates
+// out via DerivedTable::forEachExportableSingleColumnConjunct to outer
+// column space (sub.a = 5), then onto u via the join key (u.x = 5).
+TEST_F(JoinTest, impliedFiltersDerivedTablePreservedSide) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(1'000, {{"x", {.numDistinct = 100}}});
+
+  auto query =
+      "SELECT * FROM (SELECT a, b FROM t WHERE a = 5) AS sub "
+      "LEFT JOIN u ON sub.a = u.x";
+  SCOPED_TRACE(query);
+
+  // sub is flattened; optimizer makes u the build side with x=5 (propagated
+  // from sub.a=5) and t the probe side with a=5 (the original inner conjunct).
+  auto matcher =
+      matchScan("u")
+          .filter("x = 5")
+          .hashJoin(
+              matchScan("t").filter("a = 5").build(), core::JoinType::kRight)
+          .build();
+
+  auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+// TODO: Add a FULL OUTER JOIN propagation-skip test when a query shape that
+// stays FULL OUTER through planning is available.
+
 // Same-table equalities must NOT be inferred for the null-supplying side
 // when the right-side keys are paired with *different* left-side keys. For
 // t LEFT JOIN u ON t.a = u.x AND t.b = u.y, u.x = u.y does not follow
@@ -1725,7 +1892,7 @@ TEST_F(JoinTest, impliedSameTableEqualityPreservedSide) {
 }
 
 // A same-table column equality in WHERE implies an equality on the
-// null-extending side's join keys: t.a = t.b with ON t.a = u.x AND t.b = u.y
+// null-supplying side's join keys: t.a = t.b with ON t.a = u.x AND t.b = u.y
 // pushes u.x = u.y to u's scan.
 TEST_F(JoinTest, impliedSameTableEqualityFromPredicateTransitivity) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
@@ -1750,26 +1917,27 @@ TEST_F(JoinTest, impliedSameTableEqualityFromPredicateTransitivity) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-// Self-equality `t.a = t.a` must not enter the equivalence class; u must
+// Self-equality `t.c = t.c` must not enter the equivalence class; u must
 // have no inferred filter. The literal predicate may still appear in the
-// plan on t.
+// plan on t. Uses a non-key column (t.c) so the test is isolated from
+// LEFT-JOIN filter-key propagation.
 TEST_F(JoinTest, impliedSameTableEqualitySelfEqualityNotInferred) {
-  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()))
       ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
       ->setStats(1'000, {{"x", {.numDistinct = 10}}});
 
   auto query =
       "SELECT count(*) FROM t LEFT JOIN u ON t.a = u.x AND t.b = u.y "
-      "WHERE t.a = t.a";
+      "WHERE t.c = t.c";
   SCOPED_TRACE(query);
 
-  // The eq(a,a) predicate stays on t; u must have no inferred filter
-  // (no self-equality propagation into the equivalence class).
+  // eq(c,c) stays on t; no propagation to u (c is not a join key) and no
+  // equivalence-class pollution (Column::equals self-merge is a no-op).
   auto matcher =
       matchScan("u")
           .hashJoin(
-              matchScan("t").filter("a = a").build(), core::JoinType::kRight)
+              matchScan("t").filter("c = c").build(), core::JoinType::kRight)
           .aggregation()
           .build();
 

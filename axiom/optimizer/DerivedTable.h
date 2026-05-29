@@ -470,7 +470,7 @@ struct DerivedTable : public PlanObject {
   void updateConstraints(const RelationOp& plan);
 
   // Adds same-table equality filters that hold on a single table because of
-  // its column equivalences. Three paths:
+  // its column equivalences. Four paths:
   //   1. Per-column propagation of single-column deterministic filters to
   //      other members of the same equivalence class.
   //   2. Same-table synthesis: for each equivalence class with 2+ members
@@ -480,6 +480,10 @@ struct DerivedTable : public PlanObject {
   //      joins, when two right-side join keys belong to the same null-
   //      supplying table and pair with the same left key, emits their
   //      equality on that table.
+  //   4. Left-join key propagation: for LEFT and non-null-aware LEFT SEMI
+  //      joins, clones single-column filters on the preserved side to the
+  //      null-supplying side via the equi-join key (t.a = 5 implies
+  //      u.x = 5 for ON t.a = u.x).
   void inferImpliedPredicates();
 
   // Enforces 'expr' on 'target': existing scan filter, pushdown via
