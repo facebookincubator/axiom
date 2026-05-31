@@ -535,3 +535,12 @@ SELECT a, array_agg(b ORDER BY b + (SELECT 0)) AS vals FROM t GROUP BY a
 ----
 -- Non-order-sensitive aggregate with ORDER BY containing a subquery.
 SELECT sum(a ORDER BY a + (SELECT 1)) AS total FROM t
+----
+-- Common scalar subquery in aggregation and non-aggregation.
+SELECT MAX((SELECT 1)), (SELECT 1)
+----
+-- Common scalar subquery in WHERE and SELECT, interleaved by a correlated IN subquery.
+SELECT t.a, (SELECT max(a) FROM u)
+FROM t
+WHERE t.b IN (SELECT a FROM v)
+  AND t.a < (SELECT max(a) FROM u)

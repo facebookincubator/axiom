@@ -2217,6 +2217,59 @@ TEST_F(SubqueryTest, inSubqueryInsideAggregate) {
   }
 }
 
+TEST_F(SubqueryTest, commonScalarSubquery) {
+  // MAX((SELECT 1)) and a bare (SELECT 1) in the same SELECT. Verifies
+  // each occurrence becomes its own subplan (no dedup across the
+  // aggregating wrap).
+  {
+    auto query = "SELECT MAX((SELECT 1)), (SELECT 1)";
+    SCOPED_TRACE(query);
+
+    auto plan = toSingleNodePlan(query);
+
+    auto aggregateBranch = matchValues()
+                               .project()
+                               .nestedLoopJoin(matchValues().build())
+                               .singleAggregation()
+                               .build();
+
+    auto matcher = matchValues()
+                       .project()
+                       .nestedLoopJoin(aggregateBranch)
+                       .project()
+                       .build();
+
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Shared (SELECT max(s_suppkey) FROM supplier) used in WHERE and
+  // SELECT alongside an IN subquery whose semi-join wraps the current
+  // DT. Verifies a single supplier scan reused by both the filter and
+  // the projection.
+  {
+    auto query =
+        "SELECT n.n_nationkey, (SELECT max(s_suppkey) FROM supplier) "
+        "FROM nation n "
+        "WHERE n.n_regionkey IN (SELECT r_regionkey FROM region) "
+        "  AND n.n_nationkey > (SELECT max(s_suppkey) FROM supplier)";
+    SCOPED_TRACE(query);
+
+    auto plan = toSingleNodePlan(query);
+    auto matcher = matchHiveScan("nation")
+                       .nestedLoopJoin(
+                           matchHiveScan("supplier")
+                               .singleAggregation({}, {"max(s_suppkey) as max"})
+                               .build())
+                       .filter("gt(n_nationkey, max)")
+                       .hashJoin(
+                           matchHiveScan("region").build(),
+                           core::JoinType::kLeftSemiFilter)
+                       .build();
+
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
 TEST_F(SubqueryTest, nestedInSubqueries) {
   // IN subquery on a column derived from another IN subquery. The inner IN
   // produces a mark column used to compute 'flag'. The outer IN uses 'flag'
