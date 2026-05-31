@@ -2468,6 +2468,27 @@ void pruneUnreachableRenames(
   }
 }
 
+// Repairs cached subquery results whose value lives inside 'dt' after
+// the wrap. Aggregating wraps drop the entry, non-aggregating wraps re-export
+// via exportExpr to keep dedup alive across the wrap.
+void repairCachedSubqueries(
+    folly::F14FastMap<lp::ExprPtr, ExprCP, SubqueryExprHash, SubqueryExprEqual>&
+        subqueries,
+    DerivedTableP dt) {
+  for (auto it = subqueries.begin(); it != subqueries.end();) {
+    if (it->second->hasAnyTableIn(dt->tableSet)) {
+      if (dt->hasAggregation()) {
+        it = subqueries.erase(it);
+      } else {
+        it->second = dt->exportExpr(it->second);
+        ++it;
+      }
+    } else {
+      ++it;
+    }
+  }
+}
+
 } // namespace
 
 void ToGraph::finalizeDt(
@@ -2488,6 +2509,7 @@ void ToGraph::finalizeDt(
   currentDt_->addTable(dt);
 
   pruneUnreachableRenames(renames_, dt);
+  repairCachedSubqueries(subqueries_, dt);
 }
 
 void ToGraph::finalizeDtPreservingCorrelations(
