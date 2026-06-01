@@ -16,6 +16,7 @@
 #include "axiom/optimizer/OptimizerOptions.h"
 
 #include <fmt/format.h>
+#include <glog/logging.h>
 
 #include "velox/common/base/Exceptions.h"
 
@@ -24,72 +25,102 @@ namespace facebook::axiom::optimizer {
 using velox::config::ConfigProperty;
 using velox::config::ConfigPropertyType;
 
-std::vector<ConfigProperty> OptimizerOptions::properties() const {
-  // Defaults come from field initializers on a default-constructed instance.
-  OptimizerOptions defaults;
-  return {
+namespace {
+
+std::vector<ConfigProperty> buildProperties(
+    const std::unordered_map<std::string, std::string>& configOverrides) {
+  std::vector<ConfigProperty> props = {
       {
-          std::string(kSampleJoins),
+          std::string(OptimizerOptions::kSampleJoins),
           ConfigPropertyType::kBoolean,
-          fmt::to_string(defaults.sampleJoins),
+          fmt::to_string(OptimizerOptions::kSampleJoinsDefault),
           "Sample joins to determine optimal join order.",
       },
       {
-          std::string(kSampleFilters),
+          std::string(OptimizerOptions::kSampleFilters),
           ConfigPropertyType::kBoolean,
-          fmt::to_string(defaults.sampleFilters),
+          fmt::to_string(OptimizerOptions::kSampleFiltersDefault),
           "Sample filters to estimate scan selectivity.",
       },
       {
-          std::string(kUseFilteredTableStats),
+          std::string(OptimizerOptions::kUseFilteredTableStats),
           ConfigPropertyType::kBoolean,
-          fmt::to_string(defaults.useFilteredTableStats),
+          fmt::to_string(OptimizerOptions::kUseFilteredTableStatsDefault),
           "Use connector-provided table statistics for cardinality estimation.",
       },
       {
-          std::string(kPushdownSubfields),
+          std::string(OptimizerOptions::kPushdownSubfields),
           ConfigPropertyType::kBoolean,
-          fmt::to_string(defaults.pushdownSubfields),
+          fmt::to_string(OptimizerOptions::kPushdownSubfieldsDefault),
           "Extract accessed subfields of complex columns in table scan.",
       },
       {
-          std::string(kAllMapsAsStruct),
+          std::string(OptimizerOptions::kAllMapsAsStruct),
           ConfigPropertyType::kBoolean,
-          fmt::to_string(defaults.allMapsAsStruct),
+          fmt::to_string(OptimizerOptions::kAllMapsAsStructDefault),
           "Project maps with known key subsets as structs.",
       },
       {
-          std::string(kSyntacticJoinOrder),
+          std::string(OptimizerOptions::kSyntacticJoinOrder),
           ConfigPropertyType::kBoolean,
-          fmt::to_string(defaults.syntacticJoinOrder),
+          fmt::to_string(OptimizerOptions::kSyntacticJoinOrderDefault),
           "Disable cost-based join ordering; use query order.",
       },
       {
-          std::string(kAlwaysPlanPartialAggregation),
+          std::string(OptimizerOptions::kAlwaysPlanPartialAggregation),
           ConfigPropertyType::kBoolean,
-          fmt::to_string(defaults.alwaysPlanPartialAggregation),
+          fmt::to_string(
+              OptimizerOptions::kAlwaysPlanPartialAggregationDefault),
           "Always split aggregation into partial + final.",
       },
       {
-          std::string(kEnableReducingExistences),
+          std::string(OptimizerOptions::kEnableReducingExistences),
           ConfigPropertyType::kBoolean,
-          fmt::to_string(defaults.enableReducingExistences),
+          fmt::to_string(OptimizerOptions::kEnableReducingExistencesDefault),
           "Enable reducing semi joins.",
       },
       {
-          std::string(kParallelProjectWidth),
+          std::string(OptimizerOptions::kParallelProjectWidth),
           ConfigPropertyType::kInteger,
-          std::to_string(defaults.parallelProjectWidth),
+          std::to_string(OptimizerOptions::kParallelProjectWidthDefault),
           "Number of threads for parallel projection. 1 disables.",
       },
       {
-          std::string(kTraceFlags),
+          std::string(OptimizerOptions::kTraceFlags),
           ConfigPropertyType::kInteger,
-          std::to_string(defaults.traceFlags),
+          std::to_string(OptimizerOptions::kTraceFlagsDefault),
           "Bit mask for optimizer trace output: 1=retained, 2=exceeded best, 4=sample, 8=preprocess.",
       },
   };
+
+  if (configOverrides.empty()) {
+    return props;
+  }
+
+  std::unordered_map<std::string, size_t> propIndex;
+  for (size_t i = 0; i < props.size(); ++i) {
+    propIndex[props[i].name] = i;
+  }
+  for (const auto& [key, value] : configOverrides) {
+    auto it = propIndex.find(key);
+    if (it != propIndex.end()) {
+      props[it->second].defaultValue = value;
+    } else {
+      LOG(WARNING) << "Unregistered session property in optimizer config: "
+                   << key;
+    }
+  }
+
+  return props;
 }
+
+} // namespace
+
+OptimizerOptions::OptimizerOptions() : properties_(buildProperties({})) {}
+
+OptimizerOptions::OptimizerOptions(
+    std::unordered_map<std::string, std::string> configOverrides)
+    : properties_(buildProperties(configOverrides)) {}
 
 std::string OptimizerOptions::normalize(
     std::string_view name,
@@ -104,7 +135,6 @@ std::string OptimizerOptions::normalize(
 
 OptimizerOptions OptimizerOptions::from(
     const folly::F14FastMap<std::string, std::string>& properties) {
-  // Sets 'field' from the property map if present, otherwise keeps default.
   auto setBool = [&](std::string_view key, bool& field) {
     auto it = properties.find(key);
     if (it != properties.end()) {
