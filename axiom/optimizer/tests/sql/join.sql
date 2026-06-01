@@ -81,3 +81,26 @@ FROM (VALUES ('d1'), ('d2')) a(ds)
 LEFT JOIN (VALUES ('d3')) b(ds) ON (a.ds = b.ds)
 LEFT JOIN (SELECT 'x' as ds WHERE false) c ON (a.ds = c.ds)
 GROUP BY 1
+----
+-- Same-table equality from equivalence class: a = b is inferred and pushed
+-- as a filter on the left side. Only rows where a = b survive, projecting
+-- (a, b): (1, 1), (3, 3), (5, 5).
+SELECT t.a, t.b
+FROM (VALUES (1, 1), (2, 20), (3, 3), (4, 40), (5, 5)) AS t(a, b)
+JOIN (SELECT DISTINCT a FROM (VALUES (1), (2), (3), (4), (5)) AS v(a)) AS u(a)
+  ON t.a = u.a AND t.b = u.a
+----
+-- LEFT JOIN slot synthesis: u.x = u.y inferred from u.x = t.a AND u.y = t.a.
+SELECT t.a, u.x
+FROM (VALUES (1), (2), (3)) AS t(a)
+LEFT JOIN (VALUES (1, 1), (3, 3), (4, 5)) AS u(x, y)
+  ON u.x = t.a AND u.y = t.a
+----
+-- SEMI join slot synthesis: u.x = u.y inferred, so only rows where x = y
+-- survive the semi-join filter. t.a = 2 has no matching u row (2, 3 fails).
+SELECT t.a
+FROM (VALUES (1), (2), (3)) AS t(a)
+WHERE EXISTS (
+  SELECT 1 FROM (VALUES (1, 1), (2, 3), (3, 3)) AS u(x, y)
+  WHERE u.x = t.a AND u.y = t.a
+)
