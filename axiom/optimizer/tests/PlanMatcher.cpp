@@ -1596,10 +1596,10 @@ class MarkDistinctMatcher : public PlanMatcherImpl<MarkDistinctNode> {
   MarkDistinctMatcher(
       const std::shared_ptr<PlanMatcher>& matcher,
       const std::vector<std::string>& distinctKeys,
-      std::optional<std::string> markerAlias)
+      const std::vector<std::string>& markerAliases)
       : PlanMatcherImpl<MarkDistinctNode>({matcher}),
         distinctKeys_{distinctKeys},
-        markerAlias_{std::move(markerAlias)} {
+        markerAliases_{markerAliases} {
     VELOX_CHECK(!distinctKeys_.empty());
   }
 
@@ -1620,16 +1620,22 @@ class MarkDistinctMatcher : public PlanMatcherImpl<MarkDistinctNode> {
     }
     AXIOM_TEST_RETURN_IF_FAILURE
 
+    const auto& markers = plan.markerNames();
+    EXPECT_EQ(markerAliases_.size(), markers.size())
+        << "Test expects " << markerAliases_.size() << " marker(s) but the "
+        << "MarkDistinct node produced " << markers.size();
+    AXIOM_TEST_RETURN_IF_FAILURE
+
     std::unordered_map<std::string, std::string> newSymbols = symbols;
-    if (markerAlias_.has_value()) {
-      newSymbols[*markerAlias_] = plan.markerName();
+    for (size_t i = 0; i < markerAliases_.size(); ++i) {
+      newSymbols[markerAliases_[i]] = markers[i];
     }
     return MatchResult::success(std::move(newSymbols));
   }
 
  private:
   const std::vector<std::string> distinctKeys_;
-  const std::optional<std::string> markerAlias_;
+  const std::vector<std::string> markerAliases_;
 };
 
 // Matches a GroupIdNode and verifies grouping sets, aggregation inputs, and
@@ -2216,8 +2222,8 @@ PlanMatcherBuilder& PlanMatcherBuilder::topNRowNumber(
 
 PlanMatcherBuilder& PlanMatcherBuilder::distributedMarkDistinct(
     const std::vector<std::string>& keys,
-    const std::string& markerAlias) {
-  return shuffle().localPartition(keys).markDistinct(keys, markerAlias);
+    const std::vector<std::string>& markerAliases) {
+  return shuffle().localPartition(keys).markDistinct(keys, markerAliases);
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::distributedAggregation(
@@ -2251,10 +2257,10 @@ PlanMatcherBuilder& PlanMatcherBuilder::markDistinct() {
 
 PlanMatcherBuilder& PlanMatcherBuilder::markDistinct(
     const std::vector<std::string>& distinctKeys,
-    std::optional<std::string> markerAlias) {
+    const std::vector<std::string>& markerAliases) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<MarkDistinctMatcher>(
-      matcher_, distinctKeys, std::move(markerAlias));
+      matcher_, distinctKeys, markerAliases);
   return *this;
 }
 

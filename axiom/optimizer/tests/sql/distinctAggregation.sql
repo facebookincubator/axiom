@@ -81,24 +81,35 @@ SELECT a, covar_pop(DISTINCT c, 1.0), covar_samp(DISTINCT c, 2.0) FROM t GROUP B
 -- DISTINCT: literal in args alongside different DISTINCT column sets.
 SELECT a, count(DISTINCT c), covar_pop(DISTINCT CAST(b AS DOUBLE), 1.0) FROM t GROUP BY a
 ----
--- DISTINCT with FILTER: grouped aggregation.
-SELECT a, count(DISTINCT b) FILTER (WHERE c > 0) FROM t GROUP BY a
+-- DISTINCT+FILTER: same key set, different filters.
+SELECT a, count(DISTINCT b) FILTER (WHERE c > 5), count(DISTINCT b) FILTER (WHERE c < 10) FROM t GROUP BY a
 ----
--- DISTINCT with FILTER: global aggregation.
+-- DISTINCT+FILTER: different distinct key sets, different filters.
+SELECT a, count(DISTINCT b) FILTER (WHERE c > 5), sum(DISTINCT c) FILTER (WHERE b > 50) FROM t GROUP BY a
+----
+-- DISTINCT+FILTER: global aggregation.
 SELECT count(DISTINCT b) FILTER (WHERE c > 0) FROM t
 ----
--- DISTINCT with FILTER: multiple DISTINCT aggregates with different filters.
-SELECT a, count(DISTINCT b) FILTER (WHERE c > 5.0), sum(DISTINCT c) FILTER (WHERE c > 10.0) FROM t GROUP BY a
+-- DISTINCT+FILTER: same args and same filter, different agg functions.
+SELECT a, count(DISTINCT b) FILTER (WHERE c > 5), sum(DISTINCT b) FILTER (WHERE c > 5) FROM t GROUP BY a
 ----
--- DISTINCT with FILTER: mix of DISTINCT-with-filter and non-DISTINCT.
-SELECT a, count(DISTINCT b) FILTER (WHERE c > 0), avg(c) FROM t GROUP BY a
+-- DISTINCT+FILTER: filtered and unfiltered on the same args.
+SELECT a, count(DISTINCT b), count(DISTINCT b) FILTER (WHERE c > 5) FROM t GROUP BY a
 ----
--- DISTINCT with FILTER and ORDER BY.
--- error: Aggregations over sorted unique values are not supported yet
+-- DISTINCT+FILTER+ORDER BY.
 SELECT a, array_agg(DISTINCT b ORDER BY b) FILTER (WHERE c > 0) FROM t GROUP BY a
+----
+-- DISTINCT+FILTER: non-distinct FILTER alongside distinct FILTER.
+SELECT a, sum(b) FILTER (WHERE c > 5), count(DISTINCT b) FILTER (WHERE c < 10) FROM t GROUP BY a
 ----
 -- DISTINCT with FILTER + DISTINCT without filter on different columns.
 SELECT a, count(DISTINCT b) FILTER (WHERE c > 0), sum(DISTINCT c) FROM t GROUP BY a
+----
+-- DISTINCT+FILTER: distinct args equal grouping keys.
+SELECT a, count(DISTINCT a) FILTER (WHERE c > 5) FROM t GROUP BY a
+----
+-- DISTINCT+FILTER: all-literal DISTINCT with FILTER alongside column-args DISTINCT.
+SELECT a, count(DISTINCT b), count(DISTINCT 1) FILTER (WHERE c > 5) FROM t GROUP BY a
 ----
 -- DISTINCT: combination of distinct on literal args and on grouping keys.
 SELECT a, count(DISTINCT 1), count(DISTINCT a), count(DISTINCT b) FROM t GROUP BY a

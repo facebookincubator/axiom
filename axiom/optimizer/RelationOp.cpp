@@ -2212,20 +2212,26 @@ void TopNRowNumber::accept(
 
 MarkDistinct::MarkDistinct(
     RelationOpPtr input,
-    ColumnCP marker,
-    ExprVector keys)
+    ColumnVector markers,
+    ExprVector keys,
+    ColumnVector masks)
     : RelationOp(
           RelType::kMarkDistinct,
           input,
           [&]() {
-            // Output columns = input columns + marker column.
             ColumnVector cols = input->columns();
-            cols.push_back(marker);
+            for (const auto* marker : markers) {
+              cols.push_back(marker);
+            }
             return cols;
           }()),
-      marker_(marker),
-      keys_(std::move(keys)) {
-  VELOX_CHECK_NOT_NULL(marker_);
+      markers_(std::move(markers)),
+      keys_(std::move(keys)),
+      masks_(std::move(masks)) {
+  VELOX_CHECK_EQ(
+      markers_.size(),
+      masks_.size() + 1,
+      "MarkDistinct must have one marker for the no-mask channel plus one per mask");
   VELOX_CHECK(!keys_.empty());
   auto* optimization = queryCtx()->optimization();
   const auto& runnerOptions = optimization->runnerOptions();
@@ -2238,7 +2244,9 @@ MarkDistinct::MarkDistinct(
       std::max<double>(1, maxGroups(keys_, input_->constraints()));
   const auto numGroups =
       expectedNumDistincts(cost_.inputCardinality, maxCardinality);
-  const auto rowBytes = byteSize(keys_) + Costs::kHashRowBytes;
+  const auto maskBitmapBytes = (masks_.size() + 7) / 8;
+  const auto rowBytes =
+      byteSize(keys_) + Costs::kHashRowBytes + maskBitmapBytes;
   cost_.totalBytes = numGroups * rowBytes;
 
   // Cost is similar to a hash aggregation for tracking distinct values. Each
@@ -2251,12 +2259,14 @@ MarkDistinct::MarkDistinct(
   }
   auto markDistinctCost = Costs::kHashColumnCost * keys_.size() +
       Costs::hashTableCost(numGroups) + Costs::kKeyCompareCost * keys_.size() +
-      Costs::hashRowCost(numGroups, rowBytes);
+      Costs::hashRowCost(numGroups, rowBytes) +
+      masks_.size() * Costs::kSimpleAggregateCost;
   cost_.unitCost = localExchangeCost + markDistinctCost;
 
-  // Set constraints_. Result cardinality is the same as input cardinality.
   constraints_ = input->constraints();
-  constraints_.emplace(marker->id(), marker_->value());
+  for (const auto* marker : markers_) {
+    constraints_.emplace(marker->id(), marker->value());
+  }
 }
 
 void MarkDistinct::accept(

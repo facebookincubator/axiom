@@ -496,10 +496,10 @@ class PlanMatcherBuilder {
       int32_t limit);
 
   /// Matches the distributed mark-distinct pattern:
-  /// shuffle → localPartition(keys) → markDistinct(keys, markerAlias).
+  /// shuffle → localPartition(keys) → markDistinct(keys, markerAliases).
   PlanMatcherBuilder& distributedMarkDistinct(
       const std::vector<std::string>& keys,
-      const std::string& markerAlias);
+      const std::vector<std::string>& markerAliases);
 
   /// Matches the distributed (split) aggregation pattern:
   /// partialAggregation(groupingKeys, aggregates) → shuffle →
@@ -520,15 +520,19 @@ class PlanMatcherBuilder {
   /// Matches any MarkDistinct node regardless of distinct keys.
   PlanMatcherBuilder& markDistinct();
 
-  /// Matches a MarkDistinct node with the specified distinct keys.
+  /// Matches a MarkDistinct node with the specified distinct keys and
+  /// registers symbol aliases for every marker column it produces. A
+  /// MarkDistinct node emits 1 + masks().size() marker columns: a no-mask
+  /// marker at index 0 and one per-mask marker at index i+1 for masks()[i].
   /// @param distinctKeys List of expected distinct keys. Supports symbol
-  /// rewriting from child matchers.
-  /// @param markerAlias If provided, registers a symbol mapping from this
-  /// alias to the marker column name, so downstream matchers can reference the
-  /// marker by alias.
+  ///   rewriting from child matchers.
+  /// @param markerAliases Aliases for every marker column, in position order.
+  ///   Must have exactly one entry per marker the node produces. Pass the
+  ///   no-argument `markDistinct()` overload to match without verifying
+  ///   marker count.
   PlanMatcherBuilder& markDistinct(
       const std::vector<std::string>& distinctKeys,
-      std::optional<std::string> markerAlias = std::nullopt);
+      const std::vector<std::string>& markerAliases);
 
   /// Matches a GroupId node with the specified grouping sets, aggregation
   /// inputs, and group ID column alias. Each grouping set is a list of output
