@@ -1204,8 +1204,10 @@ class Aggregate : public Call {
   /// Returns a copy with isDistinct set to false.
   const Aggregate* dropDistinct() const;
 
-  /// Returns a copy with isDistinct set to false and condition set to 'marker'.
-  const Aggregate* replaceDistinctWithMarker(ExprCP marker) const;
+  /// Returns a copy with isDistinct cleared and condition replaced by 'marker'.
+  /// Any prior FILTER condition is dropped because the marker already encodes
+  /// which rows pass the filter.
+  const Aggregate* replaceDistinctAndFilterByMarker(ExprCP marker) const;
 
   std::string toString() const override;
 

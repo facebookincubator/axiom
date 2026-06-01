@@ -186,9 +186,10 @@ const Aggregate* Aggregate::dropDistinct() const {
       orderTypes_);
 }
 
-const Aggregate* Aggregate::replaceDistinctWithMarker(ExprCP marker) const {
+const Aggregate* Aggregate::replaceDistinctAndFilterByMarker(
+    ExprCP marker) const {
   VELOX_CHECK(isDistinct_);
-  VELOX_CHECK_NULL(condition_);
+  VELOX_CHECK_NOT_NULL(marker);
   return make<Aggregate>(
       name(),
       value_,

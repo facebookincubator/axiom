@@ -186,14 +186,6 @@ AggregateVector dropDistinctFromAggregates(const AggregateVector& aggregates) {
   return result;
 }
 
-// Returns true if no distinct aggregate has a filter.
-bool canMakeMarkDistinctPlan(const AggregateVector& aggregates) {
-  return !std::any_of(
-      aggregates.begin(), aggregates.end(), [](const auto* agg) {
-        return agg->isDistinct() && agg->condition() != nullptr;
-      });
-}
-
 // Result of adding MarkDistinct nodes to a plan.
 struct MarkDistinctResult {
   RelationOpPtr plan;
@@ -201,8 +193,20 @@ struct MarkDistinctResult {
   PlanCost cost;
 };
 
+// Per-key-set group of distinct aggregates sharing the same MarkDistinct node.
+// markers[0] is the no-mask marker, markers[i+1] is the per-mask marker for
+// masks[i].
+struct MarkDistinctGroup {
+  ExprVector markDistinctKeys;
+  ColumnVector markers;
+  ColumnVector masks;
+  // Maps filter condition to its marker column. nullptr means unfiltered.
+  folly::F14FastMap<ExprCP, ColumnCP> filterToMarker;
+};
+
 // Adds MarkDistinct nodes for each unique set of distinct arguments and
-// rewrites distinct aggregates to masked non-distinct aggregates.
+// rewrites distinct aggregates to masked non-distinct aggregates. Handles
+// both filtered and unfiltered distinct aggregates via multi-mask MarkDistinct.
 MarkDistinctResult addMarkDistinctNodes(
     RelationOpPtr plan,
     const ExprVector& groupingKeys,
@@ -210,52 +214,94 @@ MarkDistinctResult addMarkDistinctNodes(
     bool isSingleWorker,
     PlanState& state) {
   PlanCost totalCost;
-  folly::F14FastMap<PlanObjectSet, ColumnCP> markers;
-
-  AggregateVector newAggregates;
-  newAggregates.reserve(aggregates.size());
   auto groupingKeySet = PlanObjectSet::fromObjects(groupingKeys);
+  size_t markerCounter = 0;
+
+  auto makeMarker = [&]() {
+    auto markerName = fmt::format("__m{}", markerCounter++);
+    return make<Column>(
+        toName(markerName),
+        /*relation=*/nullptr,
+        Value{toType(velox::BOOLEAN()), 2});
+  };
+
+  // Phase 1: Collect — group distinct aggregates by key set, allocate markers,
+  // and remember which marker each aggregate will reference in Phase 3.
+  folly::F14VectorMap<PlanObjectSet, MarkDistinctGroup> groups;
+  folly::F14FastMap<const Aggregate*, ColumnCP> aggregateToMarker;
   for (const auto* aggregate : aggregates) {
     if (!aggregate->isDistinct()) {
-      newAggregates.push_back(aggregate);
       continue;
     }
-
     auto markDistinctKeys = unionColumnArgs(groupingKeys, aggregate->args());
-    auto markDistinctKeySet = PlanObjectSet::fromObjects(markDistinctKeys);
-    if (markDistinctKeySet == groupingKeySet) {
-      // All distinct args are literals or already in grouping keys.
-      // MarkDistinct would be redundant since the aggregation's GROUP BY
-      // already partitions by these keys. Keep the aggregate unchanged with
-      // DISTINCT.
-      newAggregates.push_back(aggregate);
+    auto keySet = PlanObjectSet::fromObjects(markDistinctKeys);
+    if (keySet == groupingKeySet) {
       continue;
     }
-    auto [it, inserted] = markers.try_emplace(markDistinctKeySet, nullptr);
-    if (inserted) {
-      auto markerName = fmt::format("__m{}", markers.size() - 1);
-      it->second = make<Column>(
-          toName(markerName),
-          /*relation=*/nullptr,
-          Value{toType(velox::BOOLEAN()), 2});
-
-      if (!isSingleWorker) {
-        auto [repartitioned, repartitionCost] =
-            maybeRepartition(plan, ExprVector(markDistinctKeys), state);
-        plan = repartitioned;
-        totalCost.add(repartitionCost);
-      }
-
-      auto markDistinct =
-          make<MarkDistinct>(plan, it->second, std::move(markDistinctKeys));
-      totalCost.add(*markDistinct);
-      plan = markDistinct;
+    auto [groupIt, isNewGroup] = groups.try_emplace(std::move(keySet));
+    auto& group = groupIt->second;
+    if (isNewGroup) {
+      group.markDistinctKeys = std::move(markDistinctKeys);
+      // Reserve the no-mask marker name first so it has the smallest counter
+      // value in the group; per-mask markers follow as filters are seen.
+      auto* noMaskMarker = makeMarker();
+      group.markers.push_back(noMaskMarker);
+      group.filterToMarker[nullptr] = noMaskMarker;
     }
 
-    newAggregates.push_back(aggregate->replaceDistinctWithMarker(it->second));
+    auto* filter = aggregate->condition();
+    auto [markerIt, markerInserted] =
+        group.filterToMarker.try_emplace(filter, nullptr);
+    if (markerInserted) {
+      auto* marker = makeMarker();
+      markerIt->second = marker;
+      group.markers.push_back(marker);
+      // Filter conditions are projected to Column refs upstream; this cast
+      // cannot return null.
+      auto* maskColumn = filter->as<Column>();
+      VELOX_CHECK_NOT_NULL(
+          maskColumn,
+          "MarkDistinct mask must be a Column after flattenAggregates; got {}",
+          filter->toString());
+      group.masks.push_back(maskColumn);
+    }
+    aggregateToMarker[aggregate] = markerIt->second;
   }
 
-  return {plan, std::move(newAggregates), totalCost};
+  // Phase 2: Build a MarkDistinct per key set. F14VectorMap iterates in LIFO;
+  // use rbegin/rend for insertion order.
+  for (auto it = groups.rbegin(); it != groups.rend(); ++it) {
+    auto& group = it->second;
+
+    if (!isSingleWorker) {
+      auto [repartitioned, repartitionCost] =
+          maybeRepartition(plan, ExprVector(group.markDistinctKeys), state);
+      plan = repartitioned;
+      totalCost.add(repartitionCost);
+    }
+
+    plan = make<MarkDistinct>(
+        plan,
+        std::move(group.markers),
+        std::move(group.markDistinctKeys),
+        std::move(group.masks));
+    totalCost.add(*plan);
+  }
+
+  // Phase 3: Rewrite distinct aggregates via the Phase-1 lookup.
+  AggregateVector newAggregates;
+  newAggregates.reserve(aggregates.size());
+  for (const auto* aggregate : aggregates) {
+    auto it = aggregateToMarker.find(aggregate);
+    if (it == aggregateToMarker.end()) {
+      newAggregates.push_back(aggregate);
+      continue;
+    }
+    newAggregates.push_back(
+        aggregate->replaceDistinctAndFilterByMarker(it->second));
+  }
+
+  return {std::move(plan), std::move(newAggregates), totalCost};
 }
 
 // Collects unique column references from aggregate functions (args, ORDER BY
@@ -608,7 +654,7 @@ AggregationPlanner::makeDistinctToMarkDistinctPlan(
     bool hasOrderBy,
     PlanState& state) const {
   auto [markedPlan, newAggregates, markCost] = addMarkDistinctNodes(
-      plan, groupingKeys, aggregates, isSingleWorker_, state);
+      std::move(plan), groupingKeys, aggregates, isSingleWorker_, state);
 
   PlanCost totalCost;
   totalCost.add(markCost);
@@ -858,26 +904,8 @@ void AggregationPlanner::plan(
       return;
     }
 
-    if (canMakeMarkDistinctPlan(aggregates)) {
-      auto [result, cost] = makeDistinctToMarkDistinctPlan(
-          plan, groupingKeys, aggregates, aggPlan, hasOrderBy, state);
-      plan = std::move(result);
-      state.cost.add(cost);
-      return;
-    }
-
-    // When neither GroupBy nor MarkDistinct
-    // can apply (e.g. DISTINCT with FILTER), fall back to single-step distinct
-    // aggregation.
-    auto [result, cost] = makeSingleAggregationPlan(
-        plan,
-        groupingKeys,
-        aggregates,
-        aggPlan->intermediateColumns(),
-        aggPlan->columns(),
-        {},
-        nullptr,
-        state);
+    auto [result, cost] = makeDistinctToMarkDistinctPlan(
+        plan, groupingKeys, aggregates, aggPlan, hasOrderBy, state);
     plan = std::move(result);
     state.cost.add(cost);
     return;

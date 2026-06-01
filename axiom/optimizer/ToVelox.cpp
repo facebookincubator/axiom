@@ -2307,12 +2307,34 @@ velox::core::PlanNodePtr ToVelox::makeMarkDistinct(
     }
   }
 
+  std::vector<std::string> markerNames;
+  markerNames.reserve(op.markers().size());
+  for (const auto* marker : op.markers()) {
+    markerNames.push_back(marker->outputName());
+  }
+
+  if (op.masks().empty()) {
+    // Single-marker mode: one no-mask marker, no masks.
+    auto node = std::make_shared<velox::core::MarkDistinctNode>(
+        nextId(), markerNames[0], toFieldRefs(op.keys()), std::move(input));
+    makePredictionAndHistory(node->id(), &op);
+    return node;
+  }
+
+  std::vector<velox::core::FieldAccessTypedExprPtr> masks;
+  masks.reserve(op.masks().size());
+  for (const auto* mask : op.masks()) {
+    masks.push_back(
+        std::make_shared<velox::core::FieldAccessTypedExpr>(
+            velox::BOOLEAN(), mask->outputName()));
+  }
+
   auto node = std::make_shared<velox::core::MarkDistinctNode>(
       nextId(),
-      op.marker()->outputName(),
+      std::move(markerNames),
       toFieldRefs(op.keys()),
+      std::move(masks),
       std::move(input));
-
   makePredictionAndHistory(node->id(), &op);
   return node;
 }

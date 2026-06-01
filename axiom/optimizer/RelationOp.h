@@ -956,21 +956,33 @@ struct TopNRowNumber : public RelationOp {
 
 using TopNRowNumberCP = const TopNRowNumber*;
 
-/// Marks unique rows based on distinct keys. Produces a boolean marker column
-/// that is true for the first row seen for each unique combination of distinct
-/// keys.
+/// Marks unique rows based on distinct keys. Produces masks.size() + 1
+/// boolean marker columns:
+///
+/// markers[0]: no-mask marker — true for the first occurrence of each distinct
+/// key combination, regardless of any mask.
+///
+/// markers[i+1]: per-mask marker — true for the first occurrence of each
+/// distinct key combination where masks[i] is true.
+///
+/// When masks is empty, only the no-mask marker is produced.
 struct MarkDistinct : public RelationOp {
-  /// @param input The input relation.
-  /// @param marker The output boolean column that marks distinct rows.
-  /// @param keys The columns that define distinctness.
-  MarkDistinct(RelationOpPtr input, ColumnCP marker, ExprVector keys);
+  MarkDistinct(
+      RelationOpPtr input,
+      ColumnVector markers,
+      ExprVector keys,
+      ColumnVector masks);
 
-  ColumnCP marker() const {
-    return marker_;
+  const ColumnVector& markers() const {
+    return markers_;
   }
 
   const ExprVector& keys() const {
     return keys_;
+  }
+
+  const ColumnVector& masks() const {
+    return masks_;
   }
 
   void accept(
@@ -978,8 +990,9 @@ struct MarkDistinct : public RelationOp {
       RelationOpVisitorContext& context) const override;
 
  private:
-  ColumnCP const marker_;
+  const ColumnVector markers_;
   const ExprVector keys_;
+  const ColumnVector masks_;
 };
 
 using MarkDistinctCP = const MarkDistinct*;
