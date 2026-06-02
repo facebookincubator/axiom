@@ -39,6 +39,12 @@ std::string canonicalizeIdentifier(const Identifier& identifier);
 /// Parses a TypeSignature AST node into a Velox type.
 facebook::velox::TypePtr parseType(const TypeSignaturePtr& type);
 
+/// Options for context-specific validation during expression translation.
+struct ExprOptions {
+  /// When true, rejects GROUPING() calls with a semantic error.
+  bool rejectGroupingOps = false;
+};
+
 /// Translates Presto SQL AST expression nodes into logical plan ExprApi
 /// objects. Handles all expression types (literals, comparisons, arithmetic,
 /// function calls, casts, subqueries, etc.).
@@ -74,8 +80,8 @@ class ExpressionPlanner {
   /// functions). Required when the expression may contain aggregate function
   /// calls with ORDER BY clauses. Can be nullptr if aggregates with ORDER BY
   /// are not expected.
-  using SortingKeyResolver =
-      std::function<lp::ExprApi(const ExpressionPtr& expr)>;
+  using SortingKeyResolver = std::function<
+      lp::ExprApi(const ExpressionPtr& expr, ExprOptions options)>;
 
   /// Returns true if the table qualifier should be dropped from a column
   /// reference (e.g. t.col -> col).
@@ -115,7 +121,7 @@ class ExpressionPlanner {
   /// Translates an AST expression into an ExprApi. Aggregate options
   /// (DISTINCT, FILTER, ORDER BY) are embedded in the returned ExprApi via
   /// AggregateCallExpr. Window functions are embedded via WindowCallExpr.
-  lp::ExprApi toExpr(const ExpressionPtr& node);
+  lp::ExprApi toExpr(const ExpressionPtr& node, ExprOptions options = {});
 
   /// Sets alias-to-expression mappings for lateral column alias resolution.
   /// When set, Identifier nodes matching an alias key are resolved to the
@@ -147,14 +153,17 @@ class ExpressionPlanner {
       std::vector<const facebook::velox::core::IExpr*>& traversalOrder);
 
   // Converts a Window AST node into a WindowSpec.
-  lp::WindowSpec convertWindow(const std::shared_ptr<Window>& window);
+  lp::WindowSpec convertWindow(
+      const std::shared_ptr<Window>& window,
+      ExprOptions options);
 
   // Builds an AggregateCallExpr from a FunctionCall AST node that has
   // DISTINCT, FILTER, or ORDER BY.
   lp::ExprApi toAggregateCallExpr(
       const FunctionCall* call,
       const std::string& funcName,
-      const std::vector<lp::ExprApi>& args);
+      const std::vector<lp::ExprApi>& args,
+      ExprOptions options);
 
   // Resolves a type signature, trying built-in Velox types first, then
   // connector-based resolution for dotted names (e.g., "catalog.schema.Type").

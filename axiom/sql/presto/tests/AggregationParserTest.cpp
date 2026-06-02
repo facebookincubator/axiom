@@ -208,18 +208,18 @@ TEST_F(AggregationParserTest, groupingSets) {
 }
 
 TEST_F(AggregationParserTest, groupingFunction) {
-  // GROUPING(col) is rejected with a clear unsupported-expression error.
+  // GROUPING() is not yet implemented and is rejected with a clear error.
   AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       parseSql(
           "SELECT GROUPING(n_regionkey), count(1) FROM nation "
           "GROUP BY GROUPING SETS ((n_regionkey), ())"),
-      "Unsupported expression type: GroupingOperation");
+      "GROUPING() requires GROUP BY");
 
   AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       parseSql(
           "SELECT GROUPING(n_regionkey, n_name), count(1) FROM nation "
           "GROUP BY GROUPING SETS ((n_regionkey, n_name), (n_regionkey), ())"),
-      "Unsupported expression type: GroupingOperation");
+      "GROUPING() requires GROUP BY");
 }
 
 TEST_F(AggregationParserTest, rollup) {

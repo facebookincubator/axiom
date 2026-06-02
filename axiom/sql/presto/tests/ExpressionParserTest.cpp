@@ -16,6 +16,8 @@
 
 #include <fmt/format.h>
 #include <limits>
+#include "axiom/sql/presto/ExpressionPlanner.h"
+#include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/types/QDigestRegistration.h"
@@ -1062,6 +1064,25 @@ TEST_F(ExpressionParserTest, mixedCaseColumnName) {
       "SELECT orderingid FROM mixedCase", matchScan().project().output()));
   ASSERT_NO_THROW(testSelect(
       "SELECT ORDERINGID FROM mixedCase", matchScan().project().output()));
+}
+
+TEST_F(ExpressionParserTest, exprOptionsRejectGroupingOps) {
+  auto groupingNode = std::make_shared<GroupingOperation>(
+      NodeLocation{1, 0},
+      std::vector<std::shared_ptr<QualifiedName>>{
+          std::make_shared<QualifiedName>(
+              NodeLocation{1, 0}, std::vector<std::string>{"col"})});
+
+  ExpressionPlanner planner{nullptr, nullptr};
+
+  // Flag OFF — falls through to syntax error.
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
+      planner.toExpr(groupingNode, {}), "GROUPING() requires GROUP BY");
+
+  // Flag ON — semantic rejection.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      planner.toExpr(groupingNode, {.rejectGroupingOps = true}),
+      "not allowed in WHERE");
 }
 
 } // namespace
