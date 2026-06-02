@@ -90,6 +90,40 @@ for the complete guide. Key rules are summarized below.
 - Don't leave reasoning-scaffolding comments in committed code. Comments that capture the thought process — naming a sibling function, citing an example from a design discussion ("e.g. for COUNT-style aggregates"), framing the code defensively against an alternative path that was considered and rejected — are useful working notes while writing but rot quickly: they couple to other functions' internals and to ephemeral conversation context that a fresh reader doesn't share. Before committing, delete any comment that names another function and contrasts it ("X does Y; we do Z"), cites a specific operator/aggregate from discussion, describes a path you didn't take, or reads as a running narrative. Keep only comments that describe an invariant the code maintains or a non-obvious constraint a reader must know.
 - After trimming, re-read the function as a fresh reader and check the *other* failure mode: stripping every comment can leave branches whose intent is no longer visible. A silent `else` to a non-trivial `if/else-if` chain, a state mutation whose justification depends on a downstream call, a deliberate-looking "do nothing" — these usually need a one-line `// why` even after every scaffolding comment is gone. Brevity is not "zero comments"; it is "no comment that doesn't earn its line."
 
+#### Public class docs — readability
+
+The above rules are mechanical (form). Class-level documentation has an
+additional readability requirement, since header docs are read cold by
+people who don't know the surrounding design.
+
+**For non-trivial classes** — defined as ANY of:
+- Has multi-state behavior (an enum field, mode flag, or `kind` tag the implementation dispatches on)
+- Carries invariants beyond defaults (constructor assertions, ordering requirements, lifecycle rules)
+- Participates in a larger protocol or algorithm with other classes
+- Is a factory / builder / registry / context object callers compose
+
+— the class-level doc MUST include:
+- **(a)** ONE sentence stating what the class is (lead, not buried)
+- **(b)** ONE concrete usage example (typically a snippet showing construction + the most common operation, OR a sketch of how it slots into the larger algorithm)
+- **(c)** IF the class has invariants: a checklist at the end mirroring what the constructor asserts
+
+**For trivial classes** (pure data carriers with self-explanatory fields,
+single-method helpers whose method name conveys purpose, typedef-style
+aliases, simple enums): ONE sentence stating what it is. No example or
+invariants checklist required.
+
+**When in doubt:** would a reader who hasn't seen the rest of the file
+get stuck before reaching the second paragraph? If yes, the class is
+non-trivial.
+
+**Failure modes the mechanical rules don't catch** (apply
+would-I-say-this-aloud test to each):
+- Per-kind / per-mode behavior described as prose instead of a scannable list — readers can't compare cases at a glance.
+- Invariants buried in narrative ("if X is set then Y must also be set, except when Z, in which case W") — restate as a checklist.
+- Jargon used without definition ("dependent join", "universal", "DT-form") — define inline at first use or replace with plain terms.
+- Modeling-rationale fine-print (why the field is split into N components) added without a one-line summary of what the field IS — give the "what" before the "why."
+- Edit accretion: a doc that started small and grew through edits without restructuring. Periodically re-read public docs cold and refactor if they no longer read as one piece.
+
 ### Naming Conventions
 
 - **PascalCase** for types and file names.
@@ -228,7 +262,8 @@ class SortProjection {
 
 ### One-letter and abbreviated variable names
 
-Do not abbreviate. Use full, descriptive names. Loop indices (`i`, `j`) are
+Do not abbreviate. Use full, descriptive names. Loop indices (`i`, `j`) and
+standard iterator/comparison names (`it`, `lhs`, `rhs`) are
 acceptable. Everything else — function parameters, lambda parameters, local
 variables — must be descriptive.
 
