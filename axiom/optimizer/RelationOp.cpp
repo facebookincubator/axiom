@@ -442,7 +442,10 @@ double expectedNumDistincts(double numRows, double numDistinct) {
     return numDistinct;
   }
 
-  return numDistinct * (1.0 - std::exp(exponent));
+  // Use -expm1(x) instead of (1 - exp(x)) to avoid catastrophic cancellation
+  // when exponent ≈ 0. The naive form can land a few ULPs above
+  // min(numRows, numDistinct), breaking downstream invariants.
+  return numDistinct * -std::expm1(exponent);
 }
 
 // Static methods for populating join constraints.

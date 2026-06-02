@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <fmt/core.h>
 #include <gtest/gtest.h>
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
@@ -248,6 +249,61 @@ TEST_F(AggregationTest, orderBy) {
                 .shuffle()
                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+}
+
+// Verifies plan construction succeeds when partial-aggregation
+// `maxCardinality` greatly exceeds `inputBeforePartial`. Guards the
+// `expectedNumDistincts` invariant `result <= min(numRows, numDistinct)`.
+TEST_F(AggregationTest, fanoutPrecisionRegression) {
+  // Stats sized to push `maxCardinality` far above `inputBeforePartial`:
+  // the selective filter narrows `inputBeforePartial` to ~10 and scales each
+  // post-filter per-key NDV to ~10, so with 11 keys the saturating-product
+  // `maxGroups` reaches ~5e10.
+  constexpr int64_t kHugeStat = 100'000'000'000LL;
+  constexpr int kNumKeys = 11;
+
+  std::vector<std::string> keys;
+  keys.reserve(kNumKeys);
+  for (int i = 0; i < kNumKeys; ++i) {
+    keys.push_back(fmt::format("k{}", i));
+  }
+
+  std::unordered_map<std::string, connector::ColumnStatistics> colStats;
+  colStats[keys[0]] = {
+      .min = velox::Variant{int64_t{1}},
+      .max = velox::Variant{kHugeStat},
+      .numDistinct = kHugeStat};
+  for (int i = 1; i < kNumKeys; ++i) {
+    colStats[keys[i]] = {.numDistinct = kHugeStat};
+  }
+
+  testConnector_->addTable("t", ROW(folly::copy(keys), BIGINT()))
+      ->setStats(kHugeStat, colStats);
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .filter(fmt::format("{} > 99999999990", keys[0]))
+                         .aggregate(keys, {"count(1)"})
+                         .build();
+
+  OptimizerOptions options;
+  options.alwaysPlanPartialAggregation = true;
+  auto plan = planVelox(
+                  logicalPlan,
+                  MultiFragmentPlan::Options{.numWorkers = 4, .numDrivers = 4},
+                  options)
+                  .plan;
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .filter(fmt::format("{} > 99999999990", keys[0]))
+                     .partialAggregation(keys, {"count(1)"})
+                     .shuffle()
+                     .localPartition()
+                     .finalAggregation()
+                     .shuffle()
+                     .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(plan, matcher);
 }
 
 // Verifies that repartitionForAgg correctly determines when shuffle is needed
