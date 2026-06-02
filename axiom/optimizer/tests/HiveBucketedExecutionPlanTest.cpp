@@ -373,6 +373,71 @@ TEST_F(HiveBucketedExecutionTest, select) {
   }
 }
 
+TEST_F(HiveBucketedExecutionTest, widthClampsToNumWorkers) {
+  createBucketedTable(
+      "wc_customers",
+      "CREATE TABLE wc_customers "
+      "WITH (bucket_count = 8, bucketed_by = ARRAY['c_nationkey']) "
+      "AS SELECT * FROM customer");
+
+  {
+    auto logicalPlan = parseSelect(
+        "SELECT c_nationkey, count(*) FROM wc_customers "
+        "GROUP BY c_nationkey");
+    auto plan = planVelox(
+        logicalPlan, {.numWorkers = 5, .numDrivers = 4}, optimizerOptions_);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchHiveScan("wc_customers")
+            .localPartition({"c_nationkey"})
+            .singleAggregation({"c_nationkey"}, {"count(*)"})
+            .bucketed()
+            .fragmentWidth(5)
+            .gather()
+            .build());
+    assertBucketedExecution(logicalPlan);
+  }
+
+  createBucketedTable(
+      "wc_left",
+      "CREATE TABLE wc_left "
+      "WITH (bucket_count = 8, bucketed_by = ARRAY['c_nationkey']) "
+      "AS SELECT c_custkey, c_nationkey FROM customer");
+  tablesToDrop_.emplace_back("wc_unbucketed");
+  runCtas(
+      "CREATE TABLE wc_unbucketed AS "
+      "SELECT DISTINCT c_nationkey, "
+      "cast(c_nationkey as varchar) as label FROM customer");
+
+  {
+    auto logicalPlan = parseSelect(
+        "SELECT * FROM wc_left JOIN wc_unbucketed "
+        "ON wc_left.c_nationkey = wc_unbucketed.c_nationkey");
+    auto plan = planVelox(
+        logicalPlan, {.numWorkers = 5, .numDrivers = 4}, optimizerOptions_);
+    int32_t bucketedScans = 0;
+    int32_t hashExchanges = 0;
+    int32_t bucketedFragmentWidth = 0;
+    for (const auto& fragment : plan.plan->fragments()) {
+      if (!fragment.groupedNodes.empty()) {
+        ASSERT_TRUE(fragment.width.has_value());
+        bucketedFragmentWidth = *fragment.width;
+        for (const auto& [_, partitionType] : fragment.groupedNodes) {
+          if (partitionType == nullptr) {
+            ++hashExchanges;
+          } else {
+            ++bucketedScans;
+          }
+        }
+      }
+    }
+    EXPECT_EQ(bucketedScans, 1);
+    EXPECT_EQ(hashExchanges, 1);
+    EXPECT_EQ(bucketedFragmentWidth, 5);
+    assertBucketedExecution(logicalPlan);
+  }
+}
+
 TEST_F(HiveBucketedExecutionTest, unionall) {
   // Different bucket keys (same type) — must not co-fragment.
   createBucketedTable(

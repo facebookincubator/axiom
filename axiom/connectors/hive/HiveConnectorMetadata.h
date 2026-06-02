@@ -41,22 +41,35 @@ struct HivePartitionHandle : public PartitionHandle {
   const std::optional<int32_t> tableBucketNumber;
 };
 
-/// For Hive, 'partition' means 'bucket'.
+/// For Hive, 'partition' means 'bucket'. Carries the native bucket count
+/// and a (possibly smaller) partition count produced by scaleDown.
 class HivePartitionType : public connector::PartitionType {
  public:
+  /// Constructs an unscaled HivePartitionType. The partition count equals
+  /// 'numBuckets'.
   HivePartitionType(
-      int32_t numPartitions,
+      int32_t numBuckets,
       std::vector<velox::TypePtr> partitionKeyTypes)
-      : numPartitions_(numPartitions),
-        partitionKeyTypes_(std::move(partitionKeyTypes)) {
-    VELOX_CHECK_GT(numPartitions_, 0);
-  }
+      : HivePartitionType(
+            numBuckets,
+            numBuckets,
+            std::move(partitionKeyTypes)) {}
+
+  /// Constructs a scaled HivePartitionType where the partition count
+  /// ('numPartitions') is less than or equal to the table's native bucket
+  /// count ('numBuckets').
+  HivePartitionType(
+      int32_t numBuckets,
+      int32_t numPartitions,
+      std::vector<velox::TypePtr> partitionKeyTypes);
 
   std::shared_ptr<PartitionType> copartition(
       const PartitionType& any) const override;
 
-  /// Returns the largest divisor of numPartitions() that is <=
-  /// maxPartitions.
+  /// Returns a HivePartitionType whose partition count is
+  /// min(numBuckets, maxPartitions). The native bucket count is preserved;
+  /// the partition count drives fragment width, and makeSpec maps native
+  /// buckets onto partitions via modulo.
   std::shared_ptr<PartitionType> scaleDown(
       int32_t maxPartitions) const override;
 
@@ -69,9 +82,15 @@ class HivePartitionType : public connector::PartitionType {
     return numPartitions_;
   }
 
+  /// Native bucket count of the underlying Hive table layout.
+  int32_t numBuckets() const {
+    return numBuckets_;
+  }
+
   std::string toString() const override;
 
  private:
+  const int32_t numBuckets_;
   const int32_t numPartitions_;
   const std::vector<velox::TypePtr> partitionKeyTypes_;
 };
