@@ -42,12 +42,12 @@ TEST(HivePartitionTypeTest, scaleDownIdentityWhenWithinLimit) {
   EXPECT_EQ(scaled->numPartitions(), 8);
 }
 
-TEST(HivePartitionTypeTest, scaleDownPicksLargestDivisor) {
+TEST(HivePartitionTypeTest, scaleDownClampsToMax) {
   const auto partitionType = makePartitionType(256);
 
   auto scaled = partitionType.scaleDown(100);
   ASSERT_NE(scaled, nullptr);
-  EXPECT_EQ(scaled->numPartitions(), 64);
+  EXPECT_EQ(scaled->numPartitions(), 100);
 
   scaled = partitionType.scaleDown(64);
   ASSERT_NE(scaled, nullptr);
@@ -55,7 +55,7 @@ TEST(HivePartitionTypeTest, scaleDownPicksLargestDivisor) {
 
   scaled = partitionType.scaleDown(63);
   ASSERT_NE(scaled, nullptr);
-  EXPECT_EQ(scaled->numPartitions(), 32);
+  EXPECT_EQ(scaled->numPartitions(), 63);
 }
 
 TEST(HivePartitionTypeTest, scaleDownToOne) {
@@ -71,7 +71,7 @@ TEST(HivePartitionTypeTest, scaleDownPrimePartitionCount) {
 
   auto scaled = partitionType.scaleDown(6);
   ASSERT_NE(scaled, nullptr);
-  EXPECT_EQ(scaled->numPartitions(), 1);
+  EXPECT_EQ(scaled->numPartitions(), 6);
 
   scaled = partitionType.scaleDown(7);
   ASSERT_NE(scaled, nullptr);
@@ -89,7 +89,7 @@ TEST(HivePartitionTypeTest, scaleDownRejectsNonPositiveMax) {
   VELOX_ASSERT_THROW(partitionType.scaleDown(-1), "");
 }
 
-TEST(HivePartitionTypeTest, ctorRejectsNonPositiveNumPartitions) {
+TEST(HivePartitionTypeTest, ctorRejectsNonPositiveNumBuckets) {
   VELOX_ASSERT_THROW(HivePartitionType(0, std::vector<TypePtr>{BIGINT()}), "");
   VELOX_ASSERT_THROW(HivePartitionType(-1, std::vector<TypePtr>{BIGINT()}), "");
 }

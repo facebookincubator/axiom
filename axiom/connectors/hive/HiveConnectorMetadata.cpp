@@ -27,6 +27,18 @@
 
 namespace facebook::axiom::connector::hive {
 
+HivePartitionType::HivePartitionType(
+    int32_t numBuckets,
+    int32_t numPartitions,
+    std::vector<velox::TypePtr> partitionKeyTypes)
+    : numBuckets_(numBuckets),
+      numPartitions_(numPartitions),
+      partitionKeyTypes_(std::move(partitionKeyTypes)) {
+  VELOX_CHECK_GT(numBuckets_, 0);
+  VELOX_CHECK_GT(numPartitions_, 0);
+  VELOX_CHECK_LE(numPartitions_, numBuckets_);
+}
+
 std::shared_ptr<PartitionType> HivePartitionType::copartition(
     const PartitionType& other) const {
   const auto* otherPartitionType = other.as<HivePartitionType>();
@@ -43,12 +55,12 @@ std::shared_ptr<PartitionType> HivePartitionType::copartition(
       return nullptr;
     }
   }
-  const int32_t otherNumPartitions = otherPartitionType->numPartitions_;
-  if (otherNumPartitions % numPartitions_ == 0) {
-    return std::make_shared<HivePartitionType>(numPartitions_, thisTypes);
+  const int32_t otherNumBuckets = otherPartitionType->numBuckets_;
+  if (otherNumBuckets % numBuckets_ == 0) {
+    return std::make_shared<HivePartitionType>(numBuckets_, thisTypes);
   }
-  if (numPartitions_ % otherNumPartitions == 0) {
-    return std::make_shared<HivePartitionType>(otherNumPartitions, otherTypes);
+  if (numBuckets_ % otherNumBuckets == 0) {
+    return std::make_shared<HivePartitionType>(otherNumBuckets, otherTypes);
   }
   return nullptr;
 }
@@ -56,24 +68,31 @@ std::shared_ptr<PartitionType> HivePartitionType::copartition(
 std::shared_ptr<PartitionType> HivePartitionType::scaleDown(
     int32_t maxPartitions) const {
   VELOX_CHECK_GT(maxPartitions, 0);
-  int32_t numResultPartitions = std::min(numPartitions_, maxPartitions);
-  while (numResultPartitions > 1 && numPartitions_ % numResultPartitions != 0) {
-    --numResultPartitions;
-  }
   return std::make_shared<HivePartitionType>(
-      numResultPartitions, partitionKeyTypes_);
+      numBuckets_, std::min(numBuckets_, maxPartitions), partitionKeyTypes_);
 }
 
 velox::core::PartitionFunctionSpecPtr HivePartitionType::makeSpec(
     const std::vector<velox::column_index_t>& channels,
     const std::vector<velox::VectorPtr>& constants,
     bool /*isLocal*/) const {
+  std::vector<int> bucketToPartition;
+  if (numPartitions_ != numBuckets_) {
+    bucketToPartition.reserve(numBuckets_);
+    for (int32_t bucket = 0; bucket < numBuckets_; ++bucket) {
+      bucketToPartition.push_back(bucket % numPartitions_);
+    }
+  }
   return std::make_shared<velox::connector::hive::HivePartitionFunctionSpec>(
-      numPartitions_, channels, constants);
+      numBuckets_, std::move(bucketToPartition), channels, constants);
 }
 
 std::string HivePartitionType::toString() const {
-  return fmt::format("{} Hive buckets", numPartitions_);
+  if (numPartitions_ == numBuckets_) {
+    return fmt::format("{} Hive buckets", numBuckets_);
+  }
+  return fmt::format(
+      "{} Hive buckets -> {} partitions", numBuckets_, numPartitions_);
 }
 
 namespace {
