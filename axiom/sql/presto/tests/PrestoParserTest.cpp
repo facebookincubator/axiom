@@ -765,6 +765,18 @@ TEST_F(PrestoParserTest, exists) {
   }
 }
 
+// JOIN ON in a correlated subquery body resolves outer-scope columns
+// the same way WHERE does.
+TEST_F(PrestoParserTest, correlatedSubqueryWithOuterReferenceInJoinOn) {
+  auto matcher = matchScan("region").project().output();
+  testSelect(
+      "SELECT ("
+      " SELECT max(s.s_nationkey) "
+      " FROM supplier s LEFT JOIN nation n ON n.n_nationkey = r.r_regionkey"
+      ") FROM region r",
+      matcher);
+}
+
 TEST_F(PrestoParserTest, structDereferenceInCorrelatedSubquery) {
   connector_->addTable(
       "t",
