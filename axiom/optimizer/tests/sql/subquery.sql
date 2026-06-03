@@ -394,7 +394,7 @@ SELECT (SELECT count(*) + t.a FROM u WHERE u.a = t.a + 100) FROM t
 ----
 -- Outer-column reference in a non-INNER join's ON condition inside a
 -- correlated subquery.
--- error: Cannot resolve column in join input
+-- error: Cannot resolve column name: a
 SELECT (SELECT max(u.a) FROM u LEFT JOIN v ON v.a = t.a) FROM t
 ----
 -- Correlated subquery whose body is a UNION ALL of two branches that each

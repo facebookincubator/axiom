@@ -1176,17 +1176,29 @@ ExprPtr resolveJoinInputName(
     const std::optional<std::string>& alias,
     const std::string& name,
     const NameMappings& mapping,
-    const velox::RowTypePtr& inputRowType) {
+    const velox::RowTypePtr& inputRowType,
+    const PlanBuilder::Scope& outerScope) {
   if (alias.has_value()) {
     if (auto id = mapping.lookup(alias.value(), name)) {
       return makeInputRef(inputRowType->findChild(id.value()), id.value());
     }
 
+    // The ON condition may reference outer-scope columns when the JOIN
+    // sits inside a correlated subquery.
+    if (outerScope) {
+      return outerScope(alias, name);
+    }
     return nullptr;
   }
 
   if (auto id = mapping.lookup(name)) {
     return makeInputRef(inputRowType->findChild(id.value()), id.value());
+  }
+
+  if (outerScope) {
+    if (auto expr = outerScope(alias, name)) {
+      return expr;
+    }
   }
 
   VELOX_USER_FAIL(
@@ -1215,7 +1227,7 @@ PlanBuilder& PlanBuilder::join(
     expr = resolver_.resolveScalarTypes(
         condition->expr(), [&](const auto& alias, const auto& name) {
           return resolveJoinInputName(
-              alias, name, *outputMapping_, inputRowType);
+              alias, name, *outputMapping_, inputRowType, outerScope_);
         });
   }
 

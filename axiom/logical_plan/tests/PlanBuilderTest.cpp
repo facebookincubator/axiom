@@ -53,11 +53,11 @@ class PlanBuilderTest : public testing::Test {
 };
 
 TEST_F(PlanBuilderTest, anonymousOutputNames) {
-  auto builder = PlanBuilder()
-                     .values(
-                         ROW({"a"}, {BIGINT()}),
-                         std::vector<Variant>{Variant::row({123LL})})
-                     .project({"a + 1", "a + 2 as b"});
+  auto builder =
+      PlanBuilder()
+          .values(
+              ROW({"a"}, BIGINT()), std::vector<Variant>{Variant::row({123LL})})
+          .project({"a + 1", "a + 2 as b"});
 
   using Name = PlanBuilder::OutputColumnName;
 
