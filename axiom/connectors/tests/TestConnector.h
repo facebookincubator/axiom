@@ -154,10 +154,18 @@ class TestTableLayout : public TableLayout {
       velox::RowTypePtr dataColumns,
       std::optional<LookupKeys> lookupKeys) const override;
 
+  /// Returns the ConnectorSession seen by the most recent createTableHandle()
+  /// call, or nullptr if it has not been called.
+  const ConnectorSessionPtr& observedSession() const {
+    return observedSession_;
+  }
+
  private:
   std::vector<const Column*> discreteValueColumns_;
   std::vector<velox::Variant> discreteValues_;
   std::shared_ptr<const PartitionType> partitionType_;
+
+  mutable ConnectorSessionPtr observedSession_;
 };
 
 /// RowVectors are appended using the addData() interface and the vector

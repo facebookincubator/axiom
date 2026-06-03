@@ -168,7 +168,8 @@ class SystemConnectorMetadataTest : public ::testing::Test {
     auto table = metadata_->findTable(tableName);
     VELOX_CHECK_NOT_NULL(table);
 
-    auto session = std::make_shared<ConnectorSession>("test-query");
+    auto session = std::make_shared<ConnectorSession>(
+        "test-query", std::nullopt, ConnectorSession::ConnectorProperties{});
     velox::exec::SimpleExpressionEvaluator evaluator(
         queryCtx_.get(), pool_.get());
 
@@ -284,7 +285,8 @@ TEST_F(SystemConnectorMetadataTest, tableLayout) {
   EXPECT_EQ(layouts[0]->connectorId(), kSystemCatalog);
 
   // Verify column handle creation.
-  auto session = std::make_shared<ConnectorSession>("test-query");
+  auto session = std::make_shared<ConnectorSession>(
+      "test-query", std::nullopt, ConnectorSession::ConnectorProperties{});
   auto columnHandle = layouts[0]->createColumnHandle(session, "query_id");
   ASSERT_NE(columnHandle, nullptr);
   EXPECT_EQ(columnHandle->name(), "query_id");
@@ -297,7 +299,8 @@ TEST_F(SystemConnectorMetadataTest, tableHandle) {
   const auto& layouts = table->layouts();
   ASSERT_EQ(layouts.size(), 1);
 
-  auto session = std::make_shared<ConnectorSession>("test-query");
+  auto session = std::make_shared<ConnectorSession>(
+      "test-query", std::nullopt, ConnectorSession::ConnectorProperties{});
   auto columnHandle = layouts[0]->createColumnHandle(session, "query_id");
 
   velox::exec::SimpleExpressionEvaluator evaluator(
@@ -316,7 +319,8 @@ TEST_F(SystemConnectorMetadataTest, splitSource) {
   auto table = metadata_->findTable(kQueriesTable);
   ASSERT_NE(table, nullptr);
 
-  auto session = std::make_shared<ConnectorSession>("test-query");
+  auto session = std::make_shared<ConnectorSession>(
+      "test-query", std::nullopt, ConnectorSession::ConnectorProperties{});
 
   velox::exec::SimpleExpressionEvaluator evaluator(
       queryCtx_.get(), pool_.get());
@@ -481,7 +485,8 @@ TEST_F(SystemConnectorMetadataTest, sessionPropertiesSchema) {
 }
 
 TEST_F(SystemConnectorMetadataTest, schemas) {
-  auto session = std::make_shared<ConnectorSession>("test-query");
+  auto session = std::make_shared<ConnectorSession>(
+      "test-query", std::nullopt, ConnectorSession::ConnectorProperties{});
   EXPECT_THAT(
       metadata_->listSchemaNames(session),
       testing::UnorderedElementsAre(
@@ -492,7 +497,8 @@ TEST_F(SystemConnectorMetadataTest, schemas) {
 }
 
 TEST_F(SystemConnectorMetadataTest, listTableNames) {
-  auto session = std::make_shared<ConnectorSession>("test-query");
+  auto session = std::make_shared<ConnectorSession>(
+      "test-query", std::nullopt, ConnectorSession::ConnectorProperties{});
   EXPECT_THAT(
       metadata_->listTableNames(session, std::string(kRuntimeSchema)),
       testing::ElementsAre(kQueriesTable.table));

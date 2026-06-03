@@ -15,7 +15,14 @@
  */
 #pragma once
 
+#include <functional>
 #include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+
+#include <folly/container/F14Map.h>
 #include "axiom/connectors/ConnectorSession.h"
 
 namespace facebook::axiom {
@@ -23,26 +30,42 @@ namespace facebook::axiom {
 /// Read-only query-specific information.
 class Session final {
  public:
-  explicit Session(std::string queryId, std::string user = {})
-      : queryId_{std::move(queryId)}, user_{std::move(user)} {}
+  /// Session properties grouped by connector id; the inner map holds one
+  /// connector's properties keyed by name.
+  using ConnectorProperties = folly::F14FastMap<
+      std::string,
+      connector::ConnectorSession::ConnectorProperties,
+      folly::transparent<std::hash<std::string_view>>,
+      folly::transparent<std::equal_to<>>>;
+
+  Session(
+      std::string queryId,
+      std::optional<std::string> user,
+      ConnectorProperties connectorProperties)
+      : queryId_{std::move(queryId)},
+        user_{std::move(user)},
+        connectorProperties_{std::move(connectorProperties)} {}
 
   /// Returns the query identifier.
   const std::string& queryId() const {
     return queryId_;
   }
 
-  /// Returns the identity of the user who submitted the query.
-  const std::string& user() const {
+  /// Returns the user who submitted the query, or `std::nullopt` if
+  /// unavailable.
+  const std::optional<std::string>& user() const {
     return user_;
   }
 
-  /// Creates a connector-scoped session carrying the query ID and user.
+  /// Returns a connector-scoped session for `connectorId` carrying that
+  /// connector's properties, or an empty set if none.
   connector::ConnectorSessionPtr toConnectorSession(
       std::string_view connectorId) const;
 
  private:
   const std::string queryId_;
-  const std::string user_;
+  const std::optional<std::string> user_;
+  const ConnectorProperties connectorProperties_;
 };
 
 using SessionPtr = std::shared_ptr<Session>;

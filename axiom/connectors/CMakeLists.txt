@@ -12,7 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(axiom_connectors ConnectorMetadata.cpp ConnectorMetadataRegistry.cpp SchemaResolver.cpp)
+add_library(
+  axiom_connectors
+  ConnectorMetadata.cpp
+  ConnectorMetadataRegistry.cpp
+  ConnectorSession.cpp
+  SchemaResolver.cpp
+)
 
 target_link_libraries(
   axiom_connectors

@@ -324,7 +324,10 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
           optimizer::ConstantExprEvaluator::evaluateConstantExpr(*value);
     }
 
-    auto session = std::make_shared<connector::ConnectorSession>("test");
+    auto session = std::make_shared<connector::ConnectorSession>(
+        "test",
+        std::nullopt,
+        connector::ConnectorSession::ConnectorProperties{});
     auto table = metadata->createTable(
         session,
         statement.tableName(),
@@ -342,7 +345,10 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
 
     const auto& tableName = statement.tableName();
 
-    auto session = std::make_shared<connector::ConnectorSession>("test");
+    auto session = std::make_shared<connector::ConnectorSession>(
+        "test",
+        std::nullopt,
+        connector::ConnectorSession::ConnectorProperties{});
     const bool dropped = metadata->dropTable(
         session, tableName, statement.ifExists(), /*explain=*/false);
 
@@ -588,7 +594,8 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     exec::SimpleExpressionEvaluator evaluator(
         queryCtx.get(), optimizerPool_.get());
 
-    auto session = std::make_shared<Session>(queryCtx->queryId());
+    auto session = std::make_shared<Session>(
+        queryCtx->queryId(), std::nullopt, Session::ConnectorProperties{});
 
     optimizer::OptimizerOptions optimizerOptions;
     optimizerOptions.traceFlags = FLAGS_optimizer_trace;

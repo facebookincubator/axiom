@@ -80,7 +80,9 @@ facebook::axiom::connector::TablePtr createTable(
   auto tableSchema = velox::ROW(std::move(schemaNames), std::move(schemaTypes));
 
   auto session = std::make_shared<facebook::axiom::connector::ConnectorSession>(
-      "pyspark_session");
+      "pyspark_session",
+      std::nullopt,
+      facebook::axiom::connector::ConnectorSession::ConnectorProperties{});
   auto table = metadata->createTable(
       session,
       writeNode.tableName(),
@@ -129,8 +131,10 @@ facebook::axiom::optimizer::PlanAndStats optimize(
   auto queryCtx = velox::core::QueryCtx::create();
   velox::exec::SimpleExpressionEvaluator evaluator(queryCtx.get(), pool);
 
-  auto session =
-      std::make_shared<facebook::axiom::Session>(queryCtx->queryId());
+  auto session = std::make_shared<facebook::axiom::Session>(
+      queryCtx->queryId(),
+      std::nullopt,
+      facebook::axiom::Session::ConnectorProperties{});
 
   facebook::axiom::optimizer::Optimization opt(
       session,

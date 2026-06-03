@@ -161,7 +161,8 @@ void HiveQueriesTestBase::createEmptyTable(
     const folly::F14FastMap<std::string, velox::Variant>& options) {
   hiveMetadata().dropTableIfExists({kDefaultSchema, name});
 
-  auto session = std::make_shared<connector::ConnectorSession>("test");
+  auto session = std::make_shared<connector::ConnectorSession>(
+      "test", std::nullopt, connector::ConnectorSession::ConnectorProperties{});
   auto table = hiveMetadata().createTable(
       session,
       {kDefaultSchema, name},
@@ -195,7 +196,8 @@ void HiveQueriesTestBase::createTableFromFiles(
         << "File does not exist: " << filePath;
   }
 
-  auto session = std::make_shared<connector::ConnectorSession>("test");
+  auto session = std::make_shared<connector::ConnectorSession>(
+      "test", std::nullopt, connector::ConnectorSession::ConnectorProperties{});
   hiveMetadata().createTable(
       session,
       {kDefaultSchema, tableName},
@@ -231,7 +233,8 @@ void HiveQueriesTestBase::runCtas(const std::string& sql) {
     options[key] = ConstantExprEvaluator::evaluateConstantExpr(*value);
   }
 
-  auto session = std::make_shared<connector::ConnectorSession>("test");
+  auto session = std::make_shared<connector::ConnectorSession>(
+      "test", std::nullopt, connector::ConnectorSession::ConnectorProperties{});
   auto table = hiveMetadata().createTable(
       session,
       ctasStatement->tableName(),

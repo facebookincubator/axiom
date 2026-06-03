@@ -20,6 +20,7 @@
 #include <functional>
 #include "axiom/common/ConfigRegistry.h"
 #include "axiom/common/QueryRuntimeStats.h"
+#include "axiom/common/Session.h"
 #include "axiom/common/SessionConfig.h"
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/ToVelox.h"
@@ -292,6 +293,10 @@ class SqlQueryRunner {
 
   std::shared_ptr<facebook::velox::core::QueryCtx> newQuery(
       const RunOptions& options);
+
+  // Collects planning-time connector session properties from the SessionConfig.
+  facebook::axiom::Session::ConnectorProperties collectConnectorProperties()
+      const;
 
   std::string runExplain(
       const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,

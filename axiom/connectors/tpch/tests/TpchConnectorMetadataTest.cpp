@@ -158,7 +158,8 @@ TEST_F(TpchConnectorMetadataTest, createTableHandle) {
 }
 
 TEST_F(TpchConnectorMetadataTest, listTablesDefault) {
-  auto session = std::make_shared<ConnectorSession>("test");
+  auto session = std::make_shared<ConnectorSession>(
+      "test", std::nullopt, ConnectorSession::ConnectorProperties{});
   auto tables = metadata_->listTableNames(session, "tiny");
   EXPECT_THAT(
       tables,
@@ -174,7 +175,8 @@ TEST_F(TpchConnectorMetadataTest, listTablesDefault) {
 }
 
 TEST_F(TpchConnectorMetadataTest, listTablesWithSchema) {
-  auto session = std::make_shared<ConnectorSession>("test");
+  auto session = std::make_shared<ConnectorSession>(
+      "test", std::nullopt, ConnectorSession::ConnectorProperties{});
   auto tables = metadata_->listTableNames(session, "sf1");
   ASSERT_EQ(tables.size(), 8);
   for (const auto& table : tables) {
@@ -183,7 +185,8 @@ TEST_F(TpchConnectorMetadataTest, listTablesWithSchema) {
 }
 
 TEST_F(TpchConnectorMetadataTest, listTablesInvalidSchema) {
-  auto session = std::make_shared<ConnectorSession>("test");
+  auto session = std::make_shared<ConnectorSession>(
+      "test", std::nullopt, ConnectorSession::ConnectorProperties{});
   auto tables = metadata_->listTableNames(session, "invalid");
   EXPECT_THAT(tables, testing::IsEmpty());
 }

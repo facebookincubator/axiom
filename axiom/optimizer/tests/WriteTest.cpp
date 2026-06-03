@@ -73,7 +73,10 @@ class WriteTest : public test::HiveQueriesTestBase {
     auto& metadata = hiveMetadata();
     dropTableIfExists(name);
 
-    auto session = std::make_shared<connector::ConnectorSession>("test");
+    auto session = std::make_shared<connector::ConnectorSession>(
+        "test",
+        std::nullopt,
+        connector::ConnectorSession::ConnectorProperties{});
     auto table = metadata.createTable(
         session,
         {kDefaultSchema, name},
@@ -97,7 +100,10 @@ class WriteTest : public test::HiveQueriesTestBase {
       options[key] = ConstantExprEvaluator::evaluateConstantExpr(*value);
     }
 
-    auto session = std::make_shared<connector::ConnectorSession>("test");
+    auto session = std::make_shared<connector::ConnectorSession>(
+        "test",
+        std::nullopt,
+        connector::ConnectorSession::ConnectorProperties{});
     auto table = metadata.createTable(
         session,
         statement.tableName(),

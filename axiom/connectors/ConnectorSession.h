@@ -15,32 +15,54 @@
  */
 #pragma once
 
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
+
+#include <folly/container/F14Map.h>
 
 namespace facebook::axiom::connector {
 
 /// Read-only query-specific information passed to connectors.
 class ConnectorSession final {
  public:
-  explicit ConnectorSession(std::string queryId, std::string user = {})
-      : queryId_{std::move(queryId)}, user_{std::move(user)} {}
+  /// This connector's session properties keyed by name. Values are
+  /// connector-defined and not validated.
+  using ConnectorProperties = folly::F14FastMap<
+      std::string,
+      std::string,
+      folly::transparent<std::hash<std::string_view>>,
+      folly::transparent<std::equal_to<>>>;
+
+  ConnectorSession(
+      std::string queryId,
+      std::optional<std::string> user,
+      ConnectorProperties properties)
+      : queryId_{std::move(queryId)},
+        user_{std::move(user)},
+        properties_{std::move(properties)} {}
 
   /// Returns the query identifier.
   const std::string& queryId() const {
     return queryId_;
   }
 
-  /// Returns the identity of the user who submitted the query. Empty when
-  /// user context is unavailable.
-  const std::string& user() const {
+  /// Returns the user who submitted the query, or `std::nullopt` if
+  /// unavailable.
+  const std::optional<std::string>& user() const {
     return user_;
   }
 
+  /// Returns the value of property `name`, or `std::nullopt` if not set.
+  std::optional<std::string> property(std::string_view name) const;
+
  private:
   const std::string queryId_;
-  const std::string user_;
+  const std::optional<std::string> user_;
+  const ConnectorProperties properties_;
 };
 
 using ConnectorSessionPtr = std::shared_ptr<ConnectorSession>;

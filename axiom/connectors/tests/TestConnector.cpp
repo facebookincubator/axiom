@@ -660,13 +660,14 @@ velox::connector::ColumnHandlePtr TestTableLayout::createColumnHandle(
 }
 
 velox::connector::ConnectorTableHandlePtr TestTableLayout::createTableHandle(
-    const ConnectorSessionPtr& /*session*/,
+    const ConnectorSessionPtr& session,
     std::vector<velox::connector::ColumnHandlePtr> columnHandles,
     velox::core::ExpressionEvaluator& /* evaluator */,
     std::vector<velox::core::TypedExprPtr> filters,
     std::vector<velox::core::TypedExprPtr>& rejectedFilters,
     velox::RowTypePtr /* dataColumns */,
     std::optional<LookupKeys> /*lookupKeys*/) const {
+  observedSession_ = session;
   rejectedFilters = std::move(filters);
   return std::make_shared<TestTableHandle>(*this, std::move(columnHandles));
 }

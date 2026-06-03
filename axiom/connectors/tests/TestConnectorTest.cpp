@@ -16,6 +16,7 @@
 
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/common/SchemaTableName.h"
+#include "axiom/common/Session.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 
 #include <folly/coro/GtestHelpers.h>
@@ -131,6 +132,41 @@ TEST_F(TestConnectorTest, columnHandle) {
   EXPECT_NE(testColumnHandle, nullptr);
   EXPECT_EQ(testColumnHandle->name(), "a");
   EXPECT_EQ(testColumnHandle->type()->kind(), TypeKind::INTEGER);
+}
+
+// Verifies a connector-scoped session property set on the engine Session
+// reaches a planning-time metadata callback via toConnectorSession().
+TEST_F(TestConnectorTest, sessionProperty) {
+  auto schema = ROW({"a"}, {INTEGER()});
+  auto table = connector_->addTable("table", schema);
+  auto& layout = *table->layouts()[0];
+
+  ConnectorSession::ConnectorProperties properties{
+      {"collect_column_statistics", "false"}};
+  Session session(
+      "q",
+      /*user=*/std::nullopt,
+      {{connector_->connectorId(), std::move(properties)}});
+
+  auto evaluator =
+      std::make_unique<exec::SimpleExpressionEvaluator>(nullptr, nullptr);
+  std::vector<velox::connector::ColumnHandlePtr> columns;
+  columns.push_back(layout.createColumnHandle(/*session=*/nullptr, "a"));
+  std::vector<core::TypedExprPtr> empty;
+  layout.createTableHandle(
+      session.toConnectorSession(connector_->connectorId()),
+      std::move(columns),
+      *evaluator,
+      empty,
+      empty);
+
+  const auto* testLayout = dynamic_cast<const TestTableLayout*>(&layout);
+  ASSERT_NE(testLayout, nullptr);
+  ASSERT_NE(testLayout->observedSession(), nullptr);
+  EXPECT_EQ(
+      testLayout->observedSession()->property("collect_column_statistics"),
+      std::optional<std::string>{"false"});
+  EXPECT_EQ(testLayout->observedSession()->property("missing"), std::nullopt);
 }
 
 CO_TEST_F(TestConnectorTest, splitManager) {

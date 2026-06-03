@@ -2298,7 +2298,9 @@ SqlStatementPtr parseShowSchemas(
   auto metadata =
       facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId);
   auto session = std::make_shared<facebook::axiom::connector::ConnectorSession>(
-      "show-schemas");
+      "show-schemas",
+      std::nullopt,
+      facebook::axiom::connector::ConnectorSession::ConnectorProperties{});
   auto schemaNames = metadata->listSchemaNames(session);
   std::sort(schemaNames.begin(), schemaNames.end());
 
@@ -2348,7 +2350,9 @@ SqlStatementPtr parseShowTables(
   auto metadata =
       facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId);
   auto session = std::make_shared<facebook::axiom::connector::ConnectorSession>(
-      "show-tables");
+      "show-tables",
+      std::nullopt,
+      facebook::axiom::connector::ConnectorSession::ConnectorProperties{});
   VELOX_USER_CHECK(
       metadata->schemaExists(session, schema),
       "Schema does not exist: {}",

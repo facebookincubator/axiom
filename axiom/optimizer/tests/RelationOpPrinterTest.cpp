@@ -144,7 +144,8 @@ class RelationOpPrinterTest : public ::testing::Test {
 
     auto schemaResolver = std::make_shared<connector::SchemaResolver>();
 
-    auto session = std::make_shared<Session>(veloxQueryCtx->queryId());
+    auto session = std::make_shared<Session>(
+        veloxQueryCtx->queryId(), std::nullopt, Session::ConnectorProperties{});
 
     Optimization opt{
         session,

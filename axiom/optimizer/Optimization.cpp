@@ -466,7 +466,8 @@ PlanAndStats Optimization::toVeloxPlan(
 
   VeloxHistory history;
 
-  auto session = std::make_shared<Session>(veloxQueryCtx->queryId());
+  auto session = std::make_shared<Session>(
+      veloxQueryCtx->queryId(), std::nullopt, Session::ConnectorProperties{});
 
   Optimization opt{
       session,

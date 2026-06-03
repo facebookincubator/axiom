@@ -186,7 +186,8 @@ PlanCost QueryTestBase::optimizationCost(
   };
   exec::SimpleExpressionEvaluator evaluator(
       queryCtx.get(), optimizerPool_.get());
-  auto session = std::make_shared<Session>(queryCtx->queryId());
+  auto session = std::make_shared<Session>(
+      queryCtx->queryId(), std::nullopt, Session::ConnectorProperties{});
   connector::SchemaResolver schemaResolver;
   Optimization opt(
       session,
@@ -216,7 +217,8 @@ void QueryTestBase::verifyOptimization(
   exec::SimpleExpressionEvaluator evaluator(
       veloxQueryCtx.get(), optimizerPool_.get());
 
-  auto session = std::make_shared<Session>(veloxQueryCtx->queryId());
+  auto session = std::make_shared<Session>(
+      veloxQueryCtx->queryId(), std::nullopt, Session::ConnectorProperties{});
 
   connector::SchemaResolver schemaResolver;
   VeloxHistory history;
@@ -261,7 +263,8 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
   exec::SimpleExpressionEvaluator evaluator(
       queryCtx.get(), optimizerPool_.get());
 
-  auto session = std::make_shared<Session>(queryCtx->queryId());
+  auto session = std::make_shared<Session>(
+      queryCtx->queryId(), std::nullopt, Session::ConnectorProperties{});
 
   std::unique_ptr<std::ofstream> planPath;
   if (planFilePathPrefix.has_value()) {

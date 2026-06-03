@@ -14,19 +14,17 @@
  * limitations under the License.
  */
 
-#include "axiom/common/Session.h"
+#include "axiom/connectors/ConnectorSession.h"
 
-namespace facebook::axiom {
+namespace facebook::axiom::connector {
 
-connector::ConnectorSessionPtr Session::toConnectorSession(
-    std::string_view connectorId) const {
-  auto it = connectorProperties_.find(connectorId);
-  if (it == connectorProperties_.end()) {
-    return std::make_shared<connector::ConnectorSession>(
-        queryId_, user_, connector::ConnectorSession::ConnectorProperties{});
+std::optional<std::string> ConnectorSession::property(
+    std::string_view name) const {
+  auto found = properties_.find(name);
+  if (found == properties_.end()) {
+    return std::nullopt;
   }
-  return std::make_shared<connector::ConnectorSession>(
-      queryId_, user_, it->second);
+  return found->second;
 }
 
-} // namespace facebook::axiom
+} // namespace facebook::axiom::connector
