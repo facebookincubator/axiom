@@ -79,12 +79,9 @@ SELECT a FROM t GROUP BY GROUPING SETS ((a), (a, b)) HAVING b IS NOT NULL
 -- HAVING + ORDER BY with grouping sets.
 SELECT a AS foo FROM t GROUP BY GROUPING SETS ((a), (a, b)) HAVING b IS NOT NULL ORDER BY a DESC
 ----
--- TODO: Support DISTINCT aggregation with grouping sets.
--- error: DISTINCT aggregation with grouping sets
+-- error: DISTINCT aggregation with grouping sets is not supported yet
 SELECT b, count(DISTINCT a) AS c FROM t GROUP BY ROLLUP(b)
 ----
--- TODO: Support ORDER BY in aggregates with global grouping sets. kSingle
--- emits spurious default rows from empty driver partitions for the global set.
 -- error: ORDER BY in aggregate functions is not supported with global grouping sets
 SELECT a, array_agg(b ORDER BY b) FROM t GROUP BY ROLLUP(a)
 ----

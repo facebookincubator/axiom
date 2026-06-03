@@ -296,6 +296,18 @@ SELECT t.a IN (SELECT t2.a FROM t t2 WHERE t.b = t2.b) FROM t
 -- Correlated NOT IN subquery with reversed operand order in correlation.
 SELECT t.a NOT IN (SELECT t2.a FROM t t2 WHERE t.b = t2.b) FROM t
 ----
+-- NOT IN excludes rows where the left key is NULL.
+SELECT a FROM (VALUES (1), (CAST(NULL AS INTEGER)), (5)) AS l(a)
+WHERE a NOT IN (SELECT b FROM (VALUES (1), (3)) AS r(b))
+----
+-- Uncorrelated `WHERE NOT EXISTS` over an empty subquery returns every
+-- outer row.
+SELECT a FROM t WHERE NOT EXISTS (SELECT 1 FROM v WHERE false)
+----
+-- Uncorrelated `WHERE EXISTS` over a non-empty subquery returns every
+-- outer row.
+SELECT a FROM t WHERE EXISTS (SELECT 1 FROM v)
+----
 -- Uncorrelated scalar subquery whose source needs runtime single-row
 -- enforcement. Returns one row per outer row.
 SELECT (SELECT u.a FROM u WHERE u.a = 1) FROM t
@@ -359,8 +371,6 @@ SELECT (SELECT t.a WHERE t.a = 1) FROM t
 ----
 SELECT (SELECT t.b + 100 WHERE t.a > 1) FROM t
 ----
--- NYI: no-FROM subquery body with an aggregate whose body references an
--- outer column.
 -- error: Correlated aggregate in a no-FROM subquery body is not supported yet
 SELECT (SELECT max(t.a)) FROM t
 ----
@@ -382,13 +392,13 @@ SELECT (SELECT count(*) + t.a FROM u WHERE u.a = t.a) FROM t
 -- are 1..3, u.a values are 1..5, t.a + 100 is never in u).
 SELECT (SELECT count(*) + t.a FROM u WHERE u.a = t.a + 100) FROM t
 ----
--- NYI: outer-column reference in a non-inner join's ON condition inside
--- a correlated subquery.
+-- Outer-column reference in a non-INNER join's ON condition inside a
+-- correlated subquery.
 -- error: Cannot resolve column in join input
 SELECT (SELECT max(u.a) FROM u LEFT JOIN v ON v.a = t.a) FROM t
 ----
--- NYI: correlated subquery whose body is a UNION ALL of two branches
--- that each reference an outer column.
+-- Correlated subquery whose body is a UNION ALL of two branches that each
+-- reference an outer column.
 -- error: Correlated reference inside a UNION ALL branch is not supported yet
 SELECT (SELECT max(a) FROM (SELECT u.a FROM u WHERE u.a = t.a UNION ALL SELECT v.a FROM v WHERE v.a = t.a)) FROM t
 ----
@@ -396,9 +406,8 @@ SELECT (SELECT max(a) FROM (SELECT u.a FROM u WHERE u.a = t.a UNION ALL SELECT v
 -- comparison value combines an inner column with an outer column.
 SELECT t.a IN (SELECT u.a + t.b FROM u WHERE u.a > 0) FROM t
 ----
--- NYI: outer-column reference inside an aggregate body of an IN
--- subquery. The aggregate is in HAVING (not SELECT), so the SELECT
--- projection stays purely local and only the aggregate-body lift fires.
+-- Outer-column reference inside an aggregate body of an IN subquery
+-- (HAVING max(u.a + t.b) > 0).
 -- error: Outer-column reference in the aggregate body of an IN subquery is not supported yet
 SELECT t.a IN (SELECT u.a FROM u GROUP BY u.a HAVING max(u.a + t.b) > 0) FROM t
 ----
@@ -416,8 +425,8 @@ SELECT EXISTS (SELECT max(u.a + t.b) FROM u WHERE u.a = t.a) FROM t
 -- referencing outer.
 SELECT (SELECT min_by(u.a, t.b) FROM u WHERE u.a > 0) FROM t
 ----
--- NYI: aggregate whose args reference only outer columns.
--- error: aggregate whose arguments reference only outer columns is not supported yet
+-- Aggregate whose only argument references an outer column.
+-- error: Correlated subquery with an aggregate whose arguments reference only outer columns is not supported yet
 SELECT (SELECT count(t.a) FROM u WHERE u.a > 999) FROM t
 ----
 -- Multiple aggregates, each referencing an outer column.
@@ -535,3 +544,183 @@ SELECT a, array_agg(b ORDER BY b + (SELECT 0)) AS vals FROM t GROUP BY a
 ----
 -- Non-order-sensitive aggregate with ORDER BY containing a subquery.
 SELECT sum(a ORDER BY a + (SELECT 1)) AS total FROM t
+----
+-- Correlated scalar subquery whose body returns more than one row per
+-- outer row (multiple t.b for each t.a) must fail at runtime.
+-- error: Scalar sub-query has returned multiple rows
+SELECT (SELECT t2.b FROM t t2 WHERE t2.a = t.a) FROM t
+----
+-- Uncorrelated scalar subquery whose body returns more than one row
+-- must fail at runtime.
+-- error: Expected single row of input. Received 5 rows.
+SELECT (SELECT a FROM u) FROM t
+----
+-- Correlated EXISTS over a scalar-aggregate body. EXISTS is true iff
+-- the per-outer aggregate produces a row — for count(*) without
+-- HAVING, that's iff u has any matching row.
+SELECT t.a FROM t WHERE EXISTS (
+  SELECT count(*) FROM u WHERE u.a = t.a
+)
+----
+-- Correlated EXISTS over an aggregate body with HAVING. No `u.a` value
+-- has more than one row, so HAVING is never satisfied and the result
+-- is empty.
+-- count 0
+-- error: EXISTS over a global aggregate with HAVING or OFFSET is not supported yet
+SELECT t.a FROM t WHERE EXISTS (
+  SELECT count(*) FROM u WHERE u.a = t.a HAVING count(*) > 1
+)
+----
+-- Correlated EXISTS over an aggregate body with HAVING that is
+-- satisfied for outers whose key appears in u.
+-- error: EXISTS over a global aggregate with HAVING or OFFSET is not supported yet
+SELECT t.a FROM t WHERE EXISTS (
+  SELECT count(*) FROM u WHERE u.a = t.a HAVING count(*) >= 1
+)
+----
+-- Correlated IN over a grouping aggregate body where the IN right-
+-- hand side is one of the grouping keys.
+SELECT t.a FROM t WHERE t.a IN (
+  SELECT u.a FROM u WHERE u.a >= t.a GROUP BY u.a
+)
+----
+-- Correlated NOT EXISTS over an aggregate body with HAVING. Outers
+-- with no surviving group are kept.
+-- error: EXISTS over a global aggregate with HAVING or OFFSET is not supported yet
+SELECT t.a FROM t WHERE NOT EXISTS (
+  SELECT count(*) FROM u WHERE u.a = t.a HAVING count(*) > 5
+)
+----
+-- IN whose subquery body is a scalar aggregate, so the IN right-hand
+-- side column is the aggregate result itself (not a grouping key).
+-- error: IN over a correlated global aggregate is not supported yet
+SELECT t.a FROM t WHERE t.a IN (
+  SELECT max(u.a) FROM u WHERE u.a <= t.a
+)
+----
+-- Correlated scalar subquery whose body is a UNION ALL of two
+-- branches, each filtering by an outer column.
+-- error: Correlated reference inside a UNION ALL branch is not supported yet
+SELECT t.a, (
+  SELECT count(*) FROM (
+    SELECT u.a FROM u WHERE u.a > t.a
+    UNION ALL
+    SELECT v.a FROM v WHERE v.a > t.a
+  )
+) FROM t
+----
+-- Correlated scalar subquery whose body has a Limit between the
+-- Aggregate and the correlated Filter.
+SELECT t.a, (
+  SELECT max(x) FROM (
+    SELECT u.a AS x FROM u WHERE u.a > t.a LIMIT 10
+  )
+) FROM t
+----
+-- Uncorrelated scalar subquery inside the UNNEST array constructor.
+-- error: Unexpected expression: Subquery
+SELECT v.x
+FROM (VALUES (ARRAY[10, 20, 30])) s(arr)
+CROSS JOIN UNNEST(ARRAY[(SELECT max(a) FROM u), arr[1]]) AS v(x)
+----
+-- Correlated scalar subquery inside the UNNEST array constructor;
+-- correlates to the input row above the UNNEST. DuckDB rejects nested
+-- lateral joins, so the expected result is hardcoded.
+-- duckdb: VALUES (1, 1), (2, 2)
+-- error: Unexpected expression: Subquery
+SELECT s.k, v.x
+FROM (VALUES (1), (2)) s(k)
+CROSS JOIN UNNEST(ARRAY[(SELECT max(a) FROM u WHERE u.a = s.k)]) AS v(x)
+----
+-- Correlated scalar subquery with LIMIT 1 body. The no-match outer
+-- must survive with NULL.
+-- error: LIMIT in a correlated scalar subquery is not supported yet
+SELECT u.a, (SELECT t.b FROM t WHERE t.a = u.a + 1 LIMIT 1) FROM u
+----
+-- Correlated EXISTS with LIMIT 1 body.
+SELECT u.a FROM u WHERE EXISTS (SELECT 1 FROM t WHERE t.a > u.a LIMIT 1)
+----
+-- Correlated NOT EXISTS with LIMIT 1 body.
+SELECT u.a FROM u WHERE NOT EXISTS (SELECT 1 FROM t WHERE t.a > u.a LIMIT 1)
+----
+-- A correlated scalar whose body is a Join of two correlated
+-- single-row subqueries returns one row per outer.
+-- error: Nested correlation across subquery boundaries is not supported yet
+SELECT u.a,
+       (SELECT l.b + r.b
+        FROM (SELECT max(b) AS b FROM t WHERE t.a = u.a) l,
+             (SELECT max(b) AS b FROM t WHERE t.a = u.a + 1) r)
+FROM u
+----
+-- Correlated scalar whose body joins a correlated single-row subquery
+-- with an uncorrelated single-row subquery. Outers with no matching
+-- left row must surface a single NULL row, not |right| NULL-extended
+-- rows.
+-- error: Nested correlation across subquery boundaries is not supported yet
+SELECT u.a,
+       (SELECT l.b + r.b
+        FROM (SELECT max(b) AS b FROM t WHERE t.a = u.a + 10) l,
+             (SELECT max(b) AS b FROM t) r)
+FROM u
+----
+-- Correlated EXISTS over a Join with single-side correlation.
+-- error: Nested correlation across subquery boundaries is not supported yet
+SELECT u.a
+FROM u
+WHERE EXISTS (
+  SELECT 1
+  FROM (SELECT t.a FROM t WHERE t.a = u.a + 1) l,
+       (SELECT t.a FROM t) r)
+----
+-- Correlated IN whose body has a multi-conjunct Filter mixing a
+-- correlation predicate with an uncorrelated predicate. Both
+-- conjuncts must survive pull-through into the semi-join condition.
+SELECT u.a IN (SELECT t.a FROM t WHERE t.a = u.a AND t.b > 0) FROM u
+----
+-- Correlated EXISTS whose body has a multi-conjunct Filter mixing a
+-- correlation predicate with an uncorrelated predicate. Both
+-- conjuncts must survive pull-through into the semi-join condition.
+SELECT u.a FROM u
+WHERE EXISTS (SELECT 1 FROM t WHERE t.a = u.a AND t.b > 0)
+----
+-- Correlated scalar `count(*)` body with a HAVING predicate over the
+-- aggregate result.
+SELECT (SELECT count(*) FROM u WHERE u.a = t.a HAVING count(*) > 0) FROM t
+----
+-- Correlated IN whose right-hand side is the result of a scalar
+-- `count(*)` over a correlated body. For outers with no matching u
+-- rows, `count(*)` returns 0 — so `t.a IN (...)` matches when t.a = 0.
+-- error: IN over a correlated aggregation is not supported yet
+SELECT t.a IN (SELECT count(*) FROM u WHERE u.a = t.a) FROM t
+----
+-- Correlated IN whose right-hand side is the aggregate result of a
+-- grouping aggregate (not a grouping key).
+SELECT t.a IN (
+  SELECT count(*) FROM u WHERE u.a = t.a GROUP BY u.a
+) FROM t
+----
+-- Correlated grouped aggregate whose correlation predicate references
+-- an inner column outside the GROUP BY clause: t.b is consumed by the
+-- aggregate (grouped by t.a only) and cannot become a join key at the
+-- outer level.
+-- error: Correlation predicate references a column not in GROUP BY is not supported yet
+SELECT u.a IN (
+  SELECT count(*) FROM t WHERE t.b = u.a GROUP BY t.a
+) FROM u
+----
+-- Correlated IN whose body is a scalar aggregate with HAVING.
+-- error: IN over a correlated aggregation is not supported yet
+SELECT t.a IN (
+  SELECT count(*) FROM u WHERE u.a = t.a HAVING count(*) > 0
+) FROM t
+----
+-- Correlated NOT IN whose body is a scalar aggregate that can return
+-- NULL (max over empty body). NULL on the right-hand side propagates
+-- NULL through NOT IN per SQL three-valued logic.
+-- error: IN over a correlated global aggregate is not supported yet
+SELECT t.a NOT IN (SELECT max(u.a) FROM u WHERE u.a > t.a) FROM t
+----
+-- EXISTS over a correlated `count(*)` body where the WHERE
+-- eliminates every body row. Scalar aggregates always emit one
+-- row, so EXISTS sees it → TRUE for every outer.
+SELECT EXISTS (SELECT count(*) FROM u WHERE u.a = t.a + 100) FROM t

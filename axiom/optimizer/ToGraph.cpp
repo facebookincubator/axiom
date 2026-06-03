@@ -29,10 +29,7 @@
 #include "axiom/runner/LocalRunner.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
-#include "velox/expression/ConstantExpr.h"
-#include "velox/expression/Expr.h"
 #include "velox/expression/FunctionSignature.h"
-#include "velox/functions/FunctionRegistry.h"
 
 namespace lp = facebook::axiom::logical_plan;
 
@@ -88,6 +85,12 @@ Value toValue(const velox::TypePtr& type, float cardinality) {
 
 Value toConstantValue(const velox::TypePtr& type) {
   return toValue(type, 1);
+}
+
+// Canonical Literal for a BOOLEAN constant.
+Literal* makeBoolLiteral(bool value) {
+  return make<Literal>(
+      toConstantValue(velox::BOOLEAN()), registerVariant(value));
 }
 
 OrderType toOrderType(lp::SortOrder sort) {
@@ -2473,8 +2476,14 @@ void pruneUnreachableRenames(
 void ToGraph::finalizeDt(
     const lp::LogicalPlanNode& node,
     DerivedTableP outerDt) {
-  VELOX_CHECK_EQ(0, applyContext_.lifted.predicates.size());
-  VELOX_CHECK_EQ(0, applyContext_.lifted.projections.size());
+  VELOX_USER_CHECK_EQ(
+      0,
+      applyContext_.lifted.predicates.size(),
+      "Nested correlation across subquery boundaries is not supported yet");
+  VELOX_USER_CHECK_EQ(
+      0,
+      applyContext_.lifted.projections.size(),
+      "Nested correlation across subquery boundaries is not supported yet");
 
   if (!outerDt) {
     outerDt = newDt();
@@ -3165,13 +3174,10 @@ AggregationPlanCP ToGraph::processCorrelatedAggregation(
     return agg;
   }
 
-  // For EXISTS subqueries with DISTINCT (aggregation with no aggregate
-  // functions), the DISTINCT can be dropped since EXISTS only checks row
-  // existence. Skip adding grouping keys from correlation and just keep
-  // the correlation conjuncts for later processing.
+  // DISTINCT (aggregation with no aggregate functions) does not change
+  // the membership set seen by EXISTS or IN, so drop it and let the
+  // correlation conjuncts flow up.
   if (agg->aggregates().empty()) {
-    // This is a DISTINCT (aggregation with only grouping keys, no
-    // aggregates). For EXISTS, we can skip it entirely.
     return nullptr;
   }
 
@@ -3512,6 +3518,10 @@ ExprCP ToGraph::processCorrelatedScalarSubquery(
     DerivedTableP subqueryDt,
     SubqueryChain& chain,
     ApplyContext::Lifted* outerLifted) {
+  VELOX_USER_CHECK(
+      !subqueryDt->hasLimit(),
+      "LIMIT in a correlated scalar subquery is not supported yet");
+
   // Non-equi correlation conjuncts land in the decorrelating LEFT JOIN's
   // filter. A filter reference to a sibling of the join's left side is
   // unplaceable. Wrap when there is at least one non-equi conjunct AND the
@@ -3889,6 +3899,13 @@ void ToGraph::processInPredicates(
       VELOX_NYI(
           "Outer-column reference in the aggregate body of an IN subquery is not supported yet");
     }
+    // The correlation rewrite for a global aggregate promotes the
+    // correlation column to a grouping key, leaving the inner subquery
+    // with one extra output column the IN consumer cannot place. Catch
+    // it before it surfaces as an internal arity check.
+    VELOX_USER_CHECK(
+        subqueryDt->aggregation == nullptr || subqueryDt->columns.size() == 1,
+        "IN over a correlated aggregation is not supported yet");
 
     // Right side of the IN comparison. When the subquery's SELECT
     // references outer columns, the lifted residual replaces the
@@ -4019,6 +4036,14 @@ ExprCP ToGraph::processCorrelatedInPredicate(
     PlanObjectCP leftTable,
     ExprCP inRightKey,
     bool inRightHasOuter) {
+  VELOX_USER_CHECK(
+      !subqueryDt->hasLimit(),
+      "LIMIT in a correlated IN subquery is not supported yet");
+  VELOX_USER_CHECK(
+      subqueryDt->aggregation == nullptr ||
+          !subqueryDt->aggregation->groupingKeys().empty(),
+      "IN over a correlated global aggregate is not supported yet");
+
   // Correlated IN subquery: process correlation conditions and create
   // semi-join with the IN equality as the sole null-aware join key and
   // correlation equalities moved to the join filter. If 'inRightKey'
@@ -4081,6 +4106,7 @@ void ToGraph::processExistsSubqueries(
     maybeWrapForChainedSubquery(input, chain);
 
     auto savedLifted = applyContext_.saveAndClearLifted();
+    applyContext_.lifted.isExists = true;
     SCOPE_EXIT {
       applyContext_.lifted = std::move(savedLifted);
     };
@@ -4102,10 +4128,25 @@ void ToGraph::processExistsSubqueries(
     // A subquery that produces zero rows (e.g., LIMIT 0) makes EXISTS false.
     if (subqueryDt->isZeroRows()) {
       applyContext_.lifted.predicates.clear();
-      subqueries_.emplace(
-          existsExpr,
-          make<Literal>(
-              toConstantValue(velox::BOOLEAN()), registerVariant(false)));
+      subqueries_.emplace(existsExpr, makeBoolLiteral(false));
+      continue;
+    }
+
+    // LIMIT N >= 1 is redundant for EXISTS: `EXISTS (... LIMIT N OFFSET M)`
+    // matches `EXISTS (... OFFSET M)`.
+    if (subqueryDt->hasLimit() && subqueryDt->limit >= 1) {
+      subqueryDt->limit = -1;
+    }
+
+    // EXISTS over a single-row body is TRUE.
+    if (subqueryDt->isSingleRow()) {
+      applyContext_.lifted.predicates.clear();
+      ExprCP result =
+          wrapMarkInGuards(std::move(outerGuards), makeBoolLiteral(true));
+      subqueries_.emplace(existsExpr, result);
+      if (!result->columns().empty()) {
+        chain.carryForwards.push_back(existsExpr);
+      }
       continue;
     }
 
@@ -4128,13 +4169,9 @@ void ToGraph::processExistsSubqueries(
           allConjuncts.end(), outerGuards.begin(), outerGuards.end());
       applyContext_.lifted.predicates.clear();
 
-      ExprCP result;
-      if (allConjuncts.empty()) {
-        result = make<Literal>(
-            toConstantValue(velox::BOOLEAN()), registerVariant(true));
-      } else {
-        result = makeAnd(std::move(allConjuncts));
-      }
+      ExprCP result = allConjuncts.empty()
+          ? static_cast<ExprCP>(makeBoolLiteral(true))
+          : makeAnd(std::move(allConjuncts));
       subqueries_.emplace(existsExpr, result);
       if (!result->columns().empty()) {
         chain.carryForwards.push_back(existsExpr);
@@ -4197,6 +4234,11 @@ ExprCP ToGraph::processUncorrelatedExists(DerivedTableP subqueryDt) {
 }
 
 ExprCP ToGraph::processCorrelatedExists(DerivedTableP subqueryDt) {
+  VELOX_USER_CHECK(
+      subqueryDt->aggregation == nullptr ||
+          !subqueryDt->aggregation->groupingKeys().empty(),
+      "EXISTS over a global aggregate with HAVING or OFFSET is not supported yet");
+
   // Correlated EXISTS: create mark join.
   // Finalize the subqueryDt (add to currentDt_).
   currentDt_->addTable(subqueryDt);
@@ -4901,6 +4943,27 @@ void ToGraph::makeQueryGraph(
         // outer DT by processCorrelatedScalarSubquery.
         VELOX_CHECK_NULL(applyContext_.lifted.aggregation);
         applyContext_.lifted.aggregation = agg;
+      } else if (applyContext_.lifted.isExists && agg->groupingKeys().empty()) {
+        // Keep the aggregation untransformed so the EXISTS consumer can
+        // detect a single-row body.
+        currentDt_->aggregation = agg;
+      } else if (!agg->groupingKeys().empty() && !agg->aggregates().empty()) {
+        // Grouped aggregate with correlation. Inner-side columns
+        // referenced by a lifted predicate must be in `groupingKeys` so
+        // they survive to the outer as join keys.
+        PlanObjectSet groupingKeyColumns;
+        groupingKeyColumns.unionColumns(agg->groupingKeys());
+        for (ExprCP predicate : applyContext_.lifted.predicates) {
+          predicate->columns().forEach([&](PlanObjectCP column) {
+            if (isOutsideDt(column->as<Column>()->relation(), currentDt_)) {
+              return;
+            }
+            VELOX_USER_CHECK(
+                groupingKeyColumns.contains(column),
+                "Correlation predicate references a column not in GROUP BY is not supported yet");
+          });
+        }
+        currentDt_->aggregation = agg;
       } else if (
           auto* result = processCorrelatedAggregation(
               agg, applyContext_.lifted.predicates)) {

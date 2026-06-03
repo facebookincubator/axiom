@@ -218,6 +218,12 @@ class ToGraph {
     // one struct so a single value captures the full snapshot for
     // save/restore across nested 'translateSubquery' calls.
     struct Lifted {
+      // True while translating the body of an EXISTS subquery.
+      // Suppresses correlation rewrites that would lose the body's
+      // single-row property. Lives in 'Lifted' so 'saveAndClearLifted'
+      // resets it for any nested scalar/IN subquery whose body should
+      // not inherit EXISTS semantics.
+      bool isExists{false};
       // Filter conjuncts found in the subquery body that reference
       // outer-scope columns. Drained by the outer scope's
       // 'processCorrelatedScalarSubquery' (and friends) to become join
@@ -248,7 +254,9 @@ class ToGraph {
       // drain this field.
       ExprVector outerGuards;
 
-      // True if all accumulators are empty/null.
+      // True if all accumulators are empty/null. Does not consult
+      // 'isExists', which is a context-mode flag piggybacking on
+      // 'Lifted' for save/restore — not an accumulator.
       bool empty() const {
         return predicates.empty() && projections.empty() &&
             outerGuards.empty() && aggregation == nullptr;
