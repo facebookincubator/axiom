@@ -241,7 +241,8 @@ void HiveQueriesTestBase::runCtas(const std::string& sql) {
       /*explain=*/false);
   VELOX_CHECK_NOT_NULL(table);
 
-  connector::SchemaResolver schemaResolver;
+  connector::SchemaResolver schemaResolver{
+      connector::ConnectorMetadataRegistry::global()};
   schemaResolver.setTargetTable(
       ctasStatement->connectorId(), ctasStatement->tableName(), table);
 

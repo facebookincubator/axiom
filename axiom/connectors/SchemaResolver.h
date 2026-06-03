@@ -17,16 +17,21 @@
 #pragma once
 
 #include <string>
-#include <utility>
 
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 
 namespace facebook::axiom::connector {
 
 class SchemaResolver {
  public:
-  explicit SchemaResolver(std::string defaultSchema = "")
-      : defaultSchema_{std::move(defaultSchema)} {}
+  using Registry = ConnectorMetadataRegistry::Registry;
+
+  /// Constructs a SchemaResolver scoped to the given registry, with an
+  /// optional default schema.
+  explicit SchemaResolver(
+      const Registry& registry,
+      std::string defaultSchema = "");
 
   virtual ~SchemaResolver() = default;
 
@@ -46,6 +51,10 @@ class SchemaResolver {
       const SchemaTableName& tableName) const;
 
  private:
+  // Reference member: SchemaResolver is intentionally non-assignable and
+  // non-movable. The referenced Registry must outlive this resolver. Callers
+  // typically construct one resolver per query.
+  const Registry& registry_;
   const std::string defaultSchema_;
 
   std::string targetConnectorId_;

@@ -176,7 +176,8 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
       connector_ = registerTpchConnector();
     }
 
-    schema_ = std::make_shared<connector::SchemaResolver>();
+    schema_ = std::make_shared<connector::SchemaResolver>(
+        connector::ConnectorMetadataRegistry::global());
 
     prestoParser_ = std::make_unique<::axiom::sql::presto::PrestoParser>(
         connector_->connectorId(),
@@ -390,7 +391,8 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
         schema_ = originalSchemaResolver;
       };
 
-      schema_ = std::make_shared<connector::SchemaResolver>();
+      schema_ = std::make_shared<connector::SchemaResolver>(
+          connector::ConnectorMetadataRegistry::global());
       schema_->setTargetTable(ctas->connectorId(), ctas->tableName(), table);
 
       runSql(ctas->plan());

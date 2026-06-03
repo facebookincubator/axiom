@@ -16,9 +16,12 @@
 
 #include "axiom/connectors/SchemaResolver.h"
 
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
-
 namespace facebook::axiom::connector {
+
+SchemaResolver::SchemaResolver(
+    const Registry& registry,
+    std::string defaultSchema)
+    : registry_{registry}, defaultSchema_{std::move(defaultSchema)} {}
 
 void SchemaResolver::setTargetTable(
     const std::string& connectorId,
@@ -39,7 +42,9 @@ TablePtr SchemaResolver::findTable(
     return targetTable_;
   }
 
-  auto metadata = ConnectorMetadataRegistry::get(connectorId);
+  auto metadata = registry_.find(connectorId);
+  VELOX_CHECK_NOT_NULL(
+      metadata, "ConnectorMetadata not registered: {}", connectorId);
   return metadata->findTable(tableName);
 }
 

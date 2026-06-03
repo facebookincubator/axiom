@@ -90,7 +90,8 @@ class DerivedTablePrinterTest : public ::testing::Test {
 
     VeloxHistory history;
 
-    auto schemaResolver = std::make_shared<connector::SchemaResolver>();
+    auto schemaResolver = std::make_shared<connector::SchemaResolver>(
+        connector::ConnectorMetadataRegistry::global());
 
     auto session = std::make_shared<Session>(veloxQueryCtx->queryId());
 
