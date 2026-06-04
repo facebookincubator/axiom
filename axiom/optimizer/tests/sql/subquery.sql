@@ -371,7 +371,8 @@ SELECT (SELECT t.a WHERE t.a = 1) FROM t
 ----
 SELECT (SELECT t.b + 100 WHERE t.a > 1) FROM t
 ----
--- error: Correlated aggregate in a no-FROM subquery body is not supported yet
+-- Pure-outer aggregate: max(t.a) binds to the outer scope. Returns
+-- one row with max(t.a) over all t.
 SELECT (SELECT max(t.a)) FROM t
 ----
 -- No-FROM subquery body with a cardinality-neutral aggregate. count(*)
@@ -425,9 +426,37 @@ SELECT EXISTS (SELECT max(u.a + t.b) FROM u WHERE u.a = t.a) FROM t
 -- referencing outer.
 SELECT (SELECT min_by(u.a, t.b) FROM u WHERE u.a > 0) FROM t
 ----
--- Aggregate whose only argument references an outer column.
--- error: Correlated subquery with an aggregate whose arguments reference only outer columns is not supported yet
+-- The following pure-outer-aggregate queries use `-- duckdb:`
+-- overrides because DuckDB's subquery form does not implement the
+-- outer-scope lift consistently with its own explicit-aggregation
+-- form. See https://github.com/duckdb/duckdb/issues/23063.
+--
+-- Pure-outer aggregate with an empty body. count over zero rows = 0.
+-- duckdb: SELECT count(t.a) FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.a > 999)
 SELECT (SELECT count(t.a) FROM u WHERE u.a > 999) FROM t
+----
+-- Pure-outer aggregate with a correlated body filter. Every outer
+-- row qualifies, so max returns 3.
+-- duckdb: SELECT max(t.a) FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.a = t.a)
+SELECT (SELECT max(t.a) FROM u WHERE u.a = t.a) FROM t
+----
+-- Single-row outer: per-row evaluation gives the same answer.
+SELECT (SELECT count(t.a) FROM u WHERE u.a > 0) FROM (VALUES (1)) AS t(a)
+----
+-- Pure-outer aggregate inside a HAVING predicate.
+-- duckdb: SELECT count(*) FROM t HAVING EXISTS(SELECT 1) AND (SELECT max(a) FROM t) > 0
+SELECT count(*) FROM t HAVING (SELECT max(t.a)) > 0
+----
+-- Pure-outer aggregate wrapped in arithmetic.
+SELECT (SELECT max(t.a) + 1 FROM u WHERE u.a > 0) FROM t
+----
+-- Multiple pure-outer aggregates in one subquery expression, sharing
+-- the body's FROM/WHERE as the EXISTS gate.
+SELECT (SELECT max(t.a) - min(t.a) FROM u WHERE u.a > 0) FROM t
+----
+-- Pure-outer aggregate inside an ORDER BY key is not yet supported.
+-- error: Cannot replace inputs on AggregateCallExpr with filter
+SELECT t.a FROM t ORDER BY (SELECT max(t.a))
 ----
 -- Multiple aggregates, each referencing an outer column.
 SELECT (SELECT max(u.a + t.b) + min(u.a + t.c) FROM u WHERE u.a > 0) FROM t

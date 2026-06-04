@@ -18,6 +18,7 @@
 #include <gtest/gtest-spi.h>
 #include <gtest/gtest.h>
 #include "axiom/logical_plan/Expr.h"
+#include "axiom/logical_plan/LogicalPlanNode.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/type/Type.h"
@@ -63,6 +64,22 @@ velox::core::ExprPtr wildcard() {
       std::string{ExprMatcher::kWildcard},
       std::vector<velox::core::ExprPtr>{},
       std::nullopt);
+}
+
+velox::core::ExprPtr existsWildcard() {
+  return std::make_shared<velox::core::CallExpr>(
+      std::string{ExprMatcher::kExistsWildcard},
+      std::vector<velox::core::ExprPtr>{},
+      std::nullopt);
+}
+
+ExprPtr exists() {
+  auto subqueryPlan = std::make_shared<ValuesNode>(
+      "values_0",
+      ROW({"x"}, {BIGINT()}),
+      ValuesNode::Variants{Variant::row({42LL})});
+  auto subquery = std::make_shared<SubqueryExpr>(subqueryPlan);
+  return specialForm(BOOLEAN(), SpecialForm::kExists, {subquery});
 }
 
 class ExprMatcherTest : public testing::Test {
@@ -330,6 +347,24 @@ TEST_F(ExprMatcherTest, wildcardInSubtree) {
           "plus",
           std::vector<velox::core::ExprPtr>{parseExpr("a"), wildcard()},
           std::nullopt));
+}
+
+TEST_F(ExprMatcherTest, existsWildcardMatchesExists) {
+  ExprMatcher::match(exists(), existsWildcard());
+}
+
+TEST_F(ExprMatcherTest, existsWildcardRejectsNonExists) {
+  EXPECT_NONFATAL_FAILURE(
+      ExprMatcher::match(field(BOOLEAN(), "a"), existsWildcard()),
+      "Expected EXISTS (any_exists() wildcard)");
+
+  auto coalesce = specialForm(
+      BIGINT(),
+      SpecialForm::kCoalesce,
+      {field(BIGINT(), "a"), field(BIGINT(), "b")});
+  EXPECT_NONFATAL_FAILURE(
+      ExprMatcher::match(coalesce, existsWildcard()),
+      "Expected EXISTS special form, got COALESCE.");
 }
 
 } // namespace

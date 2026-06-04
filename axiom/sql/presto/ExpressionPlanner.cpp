@@ -26,6 +26,7 @@
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/ast/DefaultTraversalVisitor.h"
+#include "velox/exec/Aggregate.h"
 #include "velox/functions/prestosql/types/BigintEnumType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
@@ -37,6 +38,167 @@ namespace axiom::sql::presto {
 using namespace facebook::velox;
 
 namespace {
+
+// Returns the set of relation aliases directly visible in a simple
+// FROM clause (a single Table or AliasedRelation). Returns nullopt
+// for shapes we don't analyze (joins, etc.). A null `from` (no FROM
+// clause) returns an empty set.
+std::optional<folly::F14FastSet<std::string>> simpleFromAliases(
+    const RelationPtr& from) {
+  folly::F14FastSet<std::string> aliases;
+  if (from == nullptr) {
+    return aliases;
+  }
+  if (from->is(NodeType::kTable)) {
+    const auto& parts = from->as<Table>()->name()->parts();
+    aliases.insert(canonicalizeName(parts.back()));
+    return aliases;
+  }
+  if (from->is(NodeType::kAliasedRelation)) {
+    aliases.insert(
+        canonicalizeIdentifier(*from->as<AliasedRelation>()->alias()));
+    return aliases;
+  }
+  return std::nullopt;
+}
+
+// Walks an aggregate's argument expression to classify column refs as
+// inner-scope (qualifier matches `innerAliases`, or unqualified when
+// `innerAliases` is non-empty) vs outer-scope (qualifier doesn't
+// match, or unqualified when there is no FROM).
+class AggregateArgScopeClassifier : public DefaultTraversalVisitor {
+ public:
+  explicit AggregateArgScopeClassifier(
+      const folly::F14FastSet<std::string>& innerAliases)
+      : innerAliases_(innerAliases) {}
+
+  bool anyInner() const {
+    return anyInner_;
+  }
+  bool anyOuter() const {
+    return anyOuter_;
+  }
+
+ protected:
+  void visitIdentifier(Identifier* /*node*/) override {
+    if (innerAliases_.empty()) {
+      anyOuter_ = true;
+    } else {
+      anyInner_ = true;
+    }
+  }
+
+  void visitDereferenceExpression(DereferenceExpression* node) override {
+    if (node->base()->is(NodeType::kIdentifier)) {
+      const auto qualifier =
+          canonicalizeIdentifier(*node->base()->as<Identifier>());
+      if (innerAliases_.count(qualifier) > 0) {
+        anyInner_ = true;
+      } else {
+        anyOuter_ = true;
+      }
+      return;
+    }
+    DefaultTraversalVisitor::visitDereferenceExpression(node);
+  }
+
+  void visitSubqueryExpression(SubqueryExpression* /*node*/) override {}
+
+ private:
+  const folly::F14FastSet<std::string>& innerAliases_;
+  bool anyInner_{false};
+  bool anyOuter_{false};
+};
+
+// Walks an expression looking for an aggregate FunctionCall whose
+// args reference at least one outer column and no inner-scope column.
+class OuterScopeAggregateScanner : public DefaultTraversalVisitor {
+ public:
+  explicit OuterScopeAggregateScanner(
+      const folly::F14FastSet<std::string>& innerAliases)
+      : innerAliases_(innerAliases) {}
+
+  bool foundAny() const {
+    return foundAny_;
+  }
+
+ protected:
+  void visitFunctionCall(FunctionCall* node) override {
+    const auto name = canonicalizeName(node->name()->suffix());
+    if (exec::getAggregateFunctionEntry(name) != nullptr &&
+        node->window() == nullptr && !node->isDistinct() &&
+        node->filter() == nullptr && node->orderBy() == nullptr &&
+        !node->ignoreNulls() && !node->arguments().empty()) {
+      AggregateArgScopeClassifier classifier(innerAliases_);
+      for (const auto& arg : node->arguments()) {
+        arg->accept(&classifier);
+      }
+      if (classifier.anyOuter() && !classifier.anyInner()) {
+        foundAny_ = true;
+        return;
+      }
+    }
+    DefaultTraversalVisitor::visitFunctionCall(node);
+  }
+
+  void visitSubqueryExpression(SubqueryExpression* /*node*/) override {}
+
+ private:
+  const folly::F14FastSet<std::string>& innerAliases_;
+  bool foundAny_{false};
+};
+
+// Walks `expr`. Sets `anyMatch` if any column reference's name is in
+// `names`; sets `anyOther` if any column reference's name is not.
+void classifyColumnRefs(
+    const lp::ExprPtr& expr,
+    const folly::F14FastSet<std::string>& names,
+    bool& anyMatch,
+    bool& anyOther) {
+  if (expr->kind() == lp::ExprKind::kInputReference) {
+    if (names.count(expr->as<lp::InputReferenceExpr>()->name()) > 0) {
+      anyMatch = true;
+    } else {
+      anyOther = true;
+    }
+    return;
+  }
+  for (const auto& input : expr->inputs()) {
+    classifyColumnRefs(input, names, anyMatch, anyOther);
+  }
+}
+
+// True if `plan` (or any descendant) is an AggregateNode containing an
+// aggregate call whose arguments reference at least one outer column
+// and no inner-source column.
+bool hasOuterScopeAggregate(const lp::LogicalPlanNodePtr& plan) {
+  if (plan->kind() == lp::NodeKind::kAggregate) {
+    const auto* aggregateNode = plan->as<lp::AggregateNode>();
+    const auto& source = aggregateNode->inputs().front();
+    folly::F14FastSet<std::string> innerColumns(
+        source->outputType()->names().begin(),
+        source->outputType()->names().end());
+    for (const auto& aggregateCall : aggregateNode->aggregates()) {
+      bool anyInner = false;
+      bool anyOuter = false;
+      for (const auto& argExpr : aggregateCall->inputs()) {
+        classifyColumnRefs(argExpr, innerColumns, anyInner, anyOuter);
+        if (anyInner) {
+          break;
+        }
+      }
+      if (anyOuter && !anyInner) {
+        return true;
+      }
+    }
+  }
+  for (const auto& input : plan->inputs()) {
+    if (hasOuterScopeAggregate(input)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 int32_t parseInt(const TypeSignaturePtr& type) {
   AXIOM_PRESTO_SEMANTIC_CHECK(
@@ -443,6 +605,35 @@ TypePtr tryResolveBuiltinType(const TypeSignaturePtr& type) {
 }
 
 } // namespace
+
+bool isOuterScopeAggregateLiftCandidate(Query* query) {
+  if (query == nullptr || query->with() != nullptr ||
+      query->orderBy() != nullptr || query->offset() != nullptr ||
+      query->limit().has_value() || query->queryBody() == nullptr ||
+      !query->queryBody()->is(NodeType::kQuerySpecification)) {
+    return false;
+  }
+  const auto* spec = query->queryBody()->as<QuerySpecification>();
+  if (spec->groupBy() != nullptr || spec->having() != nullptr ||
+      spec->orderBy() != nullptr || spec->offset() != nullptr ||
+      spec->limit().has_value() || spec->select() == nullptr ||
+      spec->select()->isDistinct() ||
+      spec->select()->selectItems().size() != 1) {
+    return false;
+  }
+  const auto& item = spec->select()->selectItems().front();
+  if (!item->is(NodeType::kSingleColumn) ||
+      item->as<SingleColumn>()->expression() == nullptr) {
+    return false;
+  }
+  auto innerAliases = simpleFromAliases(spec->from());
+  if (!innerAliases.has_value()) {
+    return false;
+  }
+  OuterScopeAggregateScanner scanner(*innerAliases);
+  item->as<SingleColumn>()->expression()->accept(&scanner);
+  return scanner.foundAny();
+}
 
 void ExpressionPlanner::findWindowExprs(
     const core::ExprPtr& expr,
@@ -934,10 +1125,7 @@ lp::ExprApi ExpressionPlanner::toExpr(const ExpressionPtr& node) {
     case NodeType::kFunctionCall: {
       auto* call = node->as<FunctionCall>();
 
-      std::vector<lp::ExprApi> args;
-      for (const auto& arg : call->arguments()) {
-        args.push_back(toExpr(arg));
-      }
+      auto args = translateArgs(call->arguments());
 
       const auto& funcName = call->name()->suffix();
       const auto lowerFuncName = canonicalizeName(funcName);
@@ -1055,6 +1243,107 @@ core::WindowCallExpr::BoundType toWindowBoundType(FrameBound::Type type) {
   VELOX_UNREACHABLE();
 }
 
+// AST-shape matcher for a scalar subquery that may be a candidate
+// for the outer-scope aggregate lift. Match is necessary but not
+// sufficient — the caller must still verify at the LP level that each
+// aggregate's arguments reference only outer columns.
+struct LiftablePureOuterAggregate {
+  Query* query;
+  const QuerySpecification* spec;
+
+  // Accepts a body of the form
+  //   SELECT <expr> FROM <inner> [WHERE <pred>]
+  // with no other top-level clauses. <expr> may itself contain
+  // aggregate function calls; per-aggregate validity is verified at
+  // the LP level by the caller.
+  static std::optional<LiftablePureOuterAggregate> match(Query* query) {
+    if (!isOuterScopeAggregateLiftCandidate(query)) {
+      return std::nullopt;
+    }
+    return LiftablePureOuterAggregate{
+        query, query->queryBody()->as<QuerySpecification>()};
+  }
+
+  // Plans `SELECT 1 FROM <body.from> [WHERE body.where]` for use as
+  // the EXISTS gate's source. The planned body's pre-aggregate input
+  // can't be reused because in the no-FROM case it has zero output
+  // columns and `lp::Subquery` requires at least one.
+  //
+  //   Before: SELECT count(t.a) FROM u WHERE u.a > 999
+  //   After:  SELECT 1           FROM u WHERE u.a > 999
+  lp::LogicalPlanNodePtr planExistsBody(
+      const ExpressionPlanner::SubqueryPlanner& planner) const {
+    const auto& selectLocation = spec->select()->location();
+    auto liftedSelect = std::make_shared<Select>(
+        selectLocation,
+        /*distinct=*/false,
+        std::vector<SelectItemPtr>{std::make_shared<SingleColumn>(
+            selectLocation,
+            std::make_shared<LongLiteral>(selectLocation, 1),
+            /*alias=*/nullptr)});
+    auto liftedQuery = std::make_shared<Query>(
+        query->location(),
+        /*with=*/nullptr,
+        std::make_shared<QuerySpecification>(
+            spec->location(), liftedSelect, spec->from(), spec->where()));
+    return planner(liftedQuery.get()).plan;
+  }
+};
+
+std::vector<core::ExprPtr> toCoreExprs(const std::vector<lp::ExprApi>& args) {
+  std::vector<core::ExprPtr> result;
+  result.reserve(args.size());
+  for (const auto& arg : args) {
+    result.push_back(arg.expr());
+  }
+  return result;
+}
+
+// Replaces every aggregate-function `CallExpr` in `expr` with an
+// `AggregateCallExpr` that has `filter` injected. Returns nullptr if
+// the tree contains a pre-existing `AggregateCallExpr` or
+// `WindowCallExpr` whose options can't be composed with the injected
+// filter (DISTINCT, FILTER, ORDER BY, window). Caller must pass an
+// expression translated outside an aggregation context; aggregates
+// must appear as `CallExpr`, not as `AggregateCallExpr`.
+core::ExprPtr wrapAggregatesWithFilter(
+    const core::ExprPtr& expr,
+    const core::ExprPtr& filter) {
+  if (expr->is(core::IExpr::Kind::kAggregate) ||
+      expr->is(core::IExpr::Kind::kWindow)) {
+    return nullptr;
+  }
+  if (expr->is(core::IExpr::Kind::kCall)) {
+    const auto* call = expr->as<core::CallExpr>();
+    if (exec::getAggregateFunctionEntry(canonicalizeName(call->name())) !=
+        nullptr) {
+      return std::make_shared<core::AggregateCallExpr>(
+          call->name(),
+          call->inputs(),
+          /*distinct=*/false,
+          filter,
+          std::vector<core::SortKey>{});
+    }
+  }
+  std::vector<core::ExprPtr> newInputs;
+  newInputs.reserve(expr->inputs().size());
+  bool changed{false};
+  for (const auto& input : expr->inputs()) {
+    auto rewritten = wrapAggregatesWithFilter(input, filter);
+    if (rewritten == nullptr) {
+      return nullptr;
+    }
+    if (rewritten != input) {
+      changed = true;
+    }
+    newInputs.push_back(std::move(rewritten));
+  }
+  if (!changed) {
+    return expr;
+  }
+  return expr->replaceInputs(std::move(newInputs));
+}
+
 } // namespace
 
 lp::ExprApi ExpressionPlanner::planSubquery(
@@ -1079,14 +1368,36 @@ lp::ExprApi ExpressionPlanner::planSubquery(
     return it->second;
   }
   auto result = subqueryPlanner_(query->as<Query>());
+
   if (scalar) {
+    if (auto lifted = tryLiftPureOuterAggregate(query->as<Query>(), result)) {
+      return *lifted;
+    }
     AXIOM_PRESTO_SEMANTIC_CHECK_EQ(
         result.plan->outputType()->size(),
         1,
         query->location(),
         "",
         "Scalar subquery must return exactly one column");
+    AXIOM_PRESTO_SEMANTIC_CHECK(
+        !hasOuterScopeAggregate(result.plan),
+        query->location(),
+        "",
+        "Outer-scope aggregate could not be lifted. Lift supports a "
+        "subquery whose body is `SELECT <expr> FROM <inner> [WHERE "
+        "<pred>]` where every aggregate in <expr> takes only outer-"
+        "column arguments and binds to the immediate parent scope.");
+  } else {
+    // Outer-scope aggregate inside an EXISTS body silently flips
+    // EXISTS to true (the aggregation produces one row even over an
+    // empty body), so the parser must reject.
+    AXIOM_PRESTO_SEMANTIC_CHECK(
+        !hasOuterScopeAggregate(result.plan),
+        query->location(),
+        "",
+        "Outer-scope aggregate in an EXISTS body is not supported.");
   }
+
   auto expr = lp::Subquery(result.plan);
   // Correlated subqueries bake in physical column names from the outer
   // scope they were planned in; caching would let a second outer
@@ -1096,6 +1407,85 @@ lp::ExprApi ExpressionPlanner::planSubquery(
     subqueryCache_.emplace(query, expr);
   }
   return expr;
+}
+
+std::optional<lp::ExprApi> ExpressionPlanner::tryLiftPureOuterAggregate(
+    Query* query,
+    const SubqueryPlanResult& bodyResult) {
+  const auto shape = LiftablePureOuterAggregate::match(query);
+  if (!shape.has_value()) {
+    return std::nullopt;
+  }
+
+  // The body's planned plan must contain a top-level AggregateNode,
+  // either as the root (bare aggregate) or as the immediate input of a
+  // ProjectNode (aggregate wrapped in an expression).
+  const lp::AggregateNode* aggregateNode = nullptr;
+  if (bodyResult.plan->kind() == lp::NodeKind::kAggregate) {
+    aggregateNode = bodyResult.plan->as<lp::AggregateNode>();
+  } else if (
+      bodyResult.plan->kind() == lp::NodeKind::kProject &&
+      !bodyResult.plan->inputs().empty() &&
+      bodyResult.plan->inputs().front()->kind() == lp::NodeKind::kAggregate) {
+    aggregateNode = bodyResult.plan->inputs().front()->as<lp::AggregateNode>();
+  }
+  if (aggregateNode == nullptr || !aggregateNode->groupingKeys().empty()) {
+    return std::nullopt;
+  }
+
+  // Every aggregate in the body must be a plain aggregate (no
+  // DISTINCT/FILTER/ORDER BY) whose arguments reference at least one
+  // outer column and no inner-source column.
+  const auto& innerSource = aggregateNode->inputs().front();
+  folly::F14FastSet<std::string> innerColumns(
+      innerSource->outputType()->names().begin(),
+      innerSource->outputType()->names().end());
+  for (const auto& aggregateCall : aggregateNode->aggregates()) {
+    if (aggregateCall->isDistinct() || aggregateCall->filter() != nullptr ||
+        !aggregateCall->ordering().empty() || aggregateCall->inputs().empty()) {
+      return std::nullopt;
+    }
+    bool anyInner = false;
+    bool anyOuter = false;
+    for (const auto& argExpr : aggregateCall->inputs()) {
+      classifyColumnRefs(argExpr, innerColumns, anyInner, anyOuter);
+      if (anyInner) {
+        break;
+      }
+    }
+    if (anyInner || !anyOuter) {
+      return std::nullopt;
+    }
+  }
+
+  auto existsCheck =
+      lp::Exists(lp::Subquery(shape->planExistsBody(subqueryPlanner_)));
+
+  // Translate the body's SELECT expression in the outer scope and
+  // inject the EXISTS filter on every aggregate function call within
+  // it.
+  const auto& selectExpr = shape->spec->select()
+                               ->selectItems()
+                               .front()
+                               ->as<SingleColumn>()
+                               ->expression();
+  auto translated = toExpr(selectExpr);
+  auto wrapped =
+      wrapAggregatesWithFilter(translated.expr(), existsCheck.expr());
+  if (wrapped == nullptr) {
+    return std::nullopt;
+  }
+  return lp::ExprApi(wrapped);
+}
+
+std::vector<lp::ExprApi> ExpressionPlanner::translateArgs(
+    const std::vector<ExpressionPtr>& arguments) {
+  std::vector<lp::ExprApi> args;
+  args.reserve(arguments.size());
+  for (const auto& arg : arguments) {
+    args.push_back(toExpr(arg));
+  }
+  return args;
 }
 
 lp::ExprApi ExpressionPlanner::toAggregateCallExpr(
@@ -1120,16 +1510,10 @@ lp::ExprApi ExpressionPlanner::toAggregateCallExpr(
     }
   }
 
-  std::vector<core::ExprPtr> inputExprs;
-  inputExprs.reserve(args.size());
-  for (const auto& arg : args) {
-    inputExprs.push_back(arg.expr());
-  }
-
   return lp::ExprApi(
       std::make_shared<core::AggregateCallExpr>(
           funcName,
-          std::move(inputExprs),
+          toCoreExprs(args),
           call->isDistinct(),
           std::move(filterExpr),
           std::move(sortKeys)));

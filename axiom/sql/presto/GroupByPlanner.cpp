@@ -242,7 +242,13 @@ class ExprAnalyzer : public DefaultTraversalVisitor {
   }
 
   void visitSubqueryExpression(SubqueryExpression* node) override {
-    // Aggregate function calls within a subquery do not count.
+    // Outer-scope aggregates in scalar subqueries are lifted to this
+    // block; count them so the block becomes an aggregation.
+    const auto& query = node->query();
+    if (query != nullptr && query->is(NodeType::kQuery) &&
+        isOuterScopeAggregateLiftCandidate(query->as<Query>())) {
+      ++numAggregates_;
+    }
   }
 
  private:
@@ -397,26 +403,24 @@ bool GroupByPlanner::tryPlanGlobalAgg(
     }
   }
 
-  bool hasAggregate = false;
+  // Count visible aggregates, including outer-scope aggregates in
+  // lift-candidate scalar subqueries. `ExprAnalyzer` rejects nested
+  // aggregates as a side effect of the walk.
+  bool hasAggregate{false};
   for (const auto& item : selectItems) {
     VELOX_CHECK(item->is(NodeType::kSingleColumn));
-    auto* singleColumn = item->as<SingleColumn>();
-
     ExprAnalyzer exprAnalyzer;
-    singleColumn->expression()->accept(&exprAnalyzer);
-
+    item->as<SingleColumn>()->expression()->accept(&exprAnalyzer);
     if (exprAnalyzer.hasAggregate()) {
       hasAggregate = true;
-      break;
     }
   }
-
   if (!hasAggregate) {
     return false;
   }
 
-  // Resolve SELECT items into ExprApi.
   std::vector<lp::ExprApi> selectExprs;
+  selectExprs.reserve(selectItems.size());
   for (const auto& item : selectItems) {
     auto* singleColumn = item->as<SingleColumn>();
     auto expr = exprPlanner_.toExpr(singleColumn->expression());

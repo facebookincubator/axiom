@@ -460,6 +460,24 @@ within a `SELECT ... FROM nation` query:
 testNationExpr("n_regionkey + 1", "plus(n_regionkey, 1:INTEGER)");
 ```
 
+When asserting a parsed plan with `LogicalPlanMatcherBuilder` (e.g.
+`.aggregate({}, {"..."})`), the expected expression strings are parsed by
+DuckDB. Two wildcard call names are recognized to stand in for subtrees
+that don't need exact verification:
+
+- `any()` — matches any actual subtree.
+- `any_exists()` — matches any actual `EXISTS(subquery(...))` subtree.
+  Use this when the EXISTS body is a planned logical plan, which DuckDB
+  cannot re-parse from SQL.
+
+```cpp
+// Verify aggregate is lifted with the expected name and arg, ignoring
+// the EXISTS body's planned subquery.
+matchScan()
+    .aggregate({}, {"max(n_nationkey) FILTER (WHERE any_exists())"})
+    .output();
+```
+
 #### Running tests
 
 ```bash
