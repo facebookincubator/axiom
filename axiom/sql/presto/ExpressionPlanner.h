@@ -39,6 +39,14 @@ std::string canonicalizeIdentifier(const Identifier& identifier);
 /// Parses a TypeSignature AST node into a Velox type.
 facebook::velox::TypePtr parseType(const TypeSignaturePtr& type);
 
+/// Returns true if `query` is a scalar subquery whose aggregate(s)
+/// bind to an outer scope per SQL's innermost-binding rule, making
+/// the body a candidate for outer-scope-aggregate lift. AST-only and
+/// conservative — unqualified column refs in a body with a FROM
+/// clause are treated as inner-scope; complex FROM shapes (joins,
+/// subqueries) are rejected.
+bool isOuterScopeAggregateLiftCandidate(Query* query);
+
 /// Translates Presto SQL AST expression nodes into logical plan ExprApi
 /// objects. Handles all expression types (literals, comparisons, arithmetic,
 /// function calls, casts, subqueries, etc.).
@@ -149,6 +157,10 @@ class ExpressionPlanner {
   // Converts a Window AST node into a WindowSpec.
   lp::WindowSpec convertWindow(const std::shared_ptr<Window>& window);
 
+  // Translates each AST argument via `toExpr`.
+  std::vector<lp::ExprApi> translateArgs(
+      const std::vector<ExpressionPtr>& arguments);
+
   // Builds an AggregateCallExpr from a FunctionCall AST node that has
   // DISTINCT, FILTER, or ORDER BY.
   lp::ExprApi toAggregateCallExpr(
@@ -158,10 +170,32 @@ class ExpressionPlanner {
 
   // Plans `subquery` via `subqueryPlanner_` and wraps the resulting
   // plan as an `lp::Subquery` expression, caching by AST identity.
-  // When `scalar` is true, enforces the SQL rule that a subquery used
+  // When `scalar` is true, applies the outer-scope-aggregate lift
+  // (`tryLiftPureOuterAggregate`), rejects unhandled outer-scope-
+  // aggregate shapes, and enforces the SQL rule that a subquery used
   // as a scalar expression must return exactly one column. EXISTS
-  // (which only checks row presence) passes false.
+  // (which only checks row presence) passes false to skip those
+  // checks.
   lp::ExprApi planSubquery(const SubqueryExpression* subquery, bool scalar);
+
+  // SQL binds an aggregate to the innermost query block containing all
+  // its column references. A scalar subquery body whose aggregates all
+  // take outer-scope-only arguments is therefore an outer-scope
+  // aggregation. Detects that shape (AST shape + LP-level check that
+  // each aggregate's args reference no inner-source column) and
+  // rewrites the subquery so each aggregate becomes
+  //
+  //   agg(outer_args) FILTER (WHERE EXISTS(SELECT 1 FROM <body's FROM>
+  //                                        [WHERE <body's WHERE>]))
+  //
+  // with any surrounding expression (arithmetic, multiple aggregates
+  // in one SELECT item) preserved around the lifted aggregates.
+  // `bodyResult` must be the result of planning `query` via
+  // `subqueryPlanner_`. Returns std::nullopt when the shape doesn't
+  // match; the caller falls through to normal subquery planning.
+  std::optional<lp::ExprApi> tryLiftPureOuterAggregate(
+      Query* query,
+      const SubqueryPlanResult& bodyResult);
 
   // Resolves a type signature, trying built-in Velox types first, then
   // connector-based resolution for dotted names (e.g., "catalog.schema.Type").

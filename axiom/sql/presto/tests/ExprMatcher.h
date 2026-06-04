@@ -31,6 +31,11 @@ class ExprMatcher {
   /// with this name and zero inputs matches any actual subtree.
   static constexpr std::string_view kWildcard = "any";
 
+  /// Matches any actual EXISTS subtree. DuckDB->Velox expression
+  /// conversion does not support subqueries, so the EXISTS body
+  /// cannot be spelled in expected strings.
+  static constexpr std::string_view kExistsWildcard = "any_exists";
+
   /// Returns true if the trees match. On mismatch, sets gtest failures
   /// with SCOPED_TRACE context showing the path through the tree.
   static bool match(

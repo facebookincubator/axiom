@@ -44,6 +44,104 @@ TEST_F(AggregationParserTest, countStar) {
   }
 }
 
+TEST_F(AggregationParserTest, nestedAggregateRejected) {
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("SELECT sum(count(n_nationkey)) FROM nation"),
+      "Cannot nest aggregations inside aggregation: sum");
+}
+
+// A scalar subquery whose body aggregates over only outer columns is
+// lifted into the outer query.
+TEST_F(AggregationParserTest, pureOuterAggregateLift) {
+  // No-FROM body, fully unqualified outer reference.
+  testSelect(
+      "SELECT (SELECT max(n_nationkey)) FROM nation",
+      matchScan()
+          .aggregate({}, {"max(n_nationkey) FILTER (WHERE any_exists())"})
+          .output());
+
+  // Outer reference qualified with the outer alias, body has its own
+  // FROM with non-overlapping column names.
+  testSelect(
+      "SELECT (SELECT count(t.n_nationkey) "
+      "FROM (VALUES (1)) AS u(x) WHERE u.x > 0) "
+      "FROM nation t",
+      matchScan()
+          .aggregate({}, {"count(n_nationkey) FILTER (WHERE any_exists())"})
+          .output());
+
+  // Outer-scope aggregate inside arithmetic resolves to the outer
+  // scope.
+  testSelect(
+      "SELECT (SELECT max(t.n_nationkey) + 1 "
+      "FROM (VALUES (1)) AS u(x)) "
+      "FROM nation t",
+      matchScan()
+          .aggregate({}, {"max(n_nationkey) FILTER (WHERE any_exists())"})
+          .project()
+          .output());
+
+  // Multiple outer-scope aggregates in one subquery expression all
+  // resolve to the outer scope.
+  testSelect(
+      "SELECT (SELECT max(t.n_nationkey) - min(t.n_nationkey) "
+      "FROM (VALUES (1)) AS u(x)) "
+      "FROM nation t",
+      matchScan()
+          .aggregate(
+              {},
+              {"max(n_nationkey) FILTER (WHERE any_exists())",
+               "min(n_nationkey) FILTER (WHERE any_exists())"})
+          .project()
+          .output());
+
+  // Body WHERE composes with the lift: the EXISTS gate carries it.
+  testSelect(
+      "SELECT (SELECT max(t.n_nationkey) + 1 "
+      "FROM (VALUES (1)) AS u(x) WHERE u.x > 0) "
+      "FROM nation t",
+      matchScan()
+          .aggregate({}, {"max(n_nationkey) FILTER (WHERE any_exists())"})
+          .project()
+          .output());
+}
+
+// Aggregate references an inner-scope column, so lift does not fire
+// and the outer block stays a Project.
+TEST_F(AggregationParserTest, innerScopeAggregateNotLifted) {
+  // Qualified with the inner alias.
+  testSelect(
+      "SELECT (SELECT max(inner_n.n_nationkey) FROM nation inner_n) "
+      "FROM nation outer_n",
+      matchScan().project().output());
+
+  // Unqualified column present in both inner and outer FROM lists;
+  // innermost-wins binds to the inner scope.
+  testSelect(
+      "SELECT (SELECT count(n_nationkey) FROM nation WHERE n_nationkey > 0) "
+      "FROM nation",
+      matchScan().project().output());
+}
+
+// Outer-scope aggregate in shapes the lift does not handle is
+// rejected at the parser layer: mixing inner- and outer-scope
+// aggregates in one expression (ambiguous per spec), and two-level
+// outer-scope binding (aggregate would bind to a grandparent scope).
+TEST_F(AggregationParserTest, unsupportedOuterScopeAggregateRejected) {
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(
+          "SELECT (SELECT max(t.n_nationkey) + count(u.x) "
+          "FROM (VALUES (1)) AS u(x)) "
+          "FROM nation t"),
+      "Outer-scope aggregate could not be lifted.");
+
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(
+          "SELECT (SELECT (SELECT max(t.n_nationkey)) FROM region) "
+          "FROM nation t"),
+      "Outer-scope aggregate could not be lifted.");
+}
+
 TEST_F(AggregationParserTest, aggregateCoercions) {
   auto matcher = matchScan().aggregate().output();
 

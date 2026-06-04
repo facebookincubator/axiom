@@ -609,6 +609,16 @@ TEST_F(PrestoParserTest, scalarSubqueryMultipleColumnsRejected) {
       "Scalar subquery must return exactly one column");
 }
 
+// EXISTS over a body whose aggregate's args reference only outer
+// columns is rejected at parse time.
+TEST_F(PrestoParserTest, existsOuterScopeAggregateRejected) {
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(
+          "SELECT t.n_nationkey FROM nation t "
+          "WHERE EXISTS (SELECT max(t.n_nationkey) FROM (VALUES (1)) AS u(x) WHERE u.x > 999)"),
+      "Outer-scope aggregate in an EXISTS body is not supported.");
+}
+
 TEST_F(PrestoParserTest, joinOnSubquery) {
   auto matcher = matchScan()
                      .join(matchScan().build())
