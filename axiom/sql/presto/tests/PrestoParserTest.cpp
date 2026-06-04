@@ -595,6 +595,20 @@ TEST_F(PrestoParserTest, joinUsing) {
   }
 }
 
+// A scalar subquery (subquery used as an expression) must return
+// exactly one column.
+TEST_F(PrestoParserTest, scalarSubqueryMultipleColumnsRejected) {
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("SELECT (SELECT n_nationkey, n_name FROM nation) FROM nation"),
+      "Scalar subquery must return exactly one column");
+
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(
+          "SELECT (SELECT max(t.n_nationkey), min(t.n_nationkey) FROM (VALUES (1)) AS _(x)) "
+          "FROM nation t"),
+      "Scalar subquery must return exactly one column");
+}
+
 TEST_F(PrestoParserTest, joinOnSubquery) {
   auto matcher = matchScan()
                      .join(matchScan().build())

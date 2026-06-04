@@ -581,34 +581,7 @@ lp::ExprApi ExpressionPlanner::toExpr(const ExpressionPtr& node) {
     }
 
     case NodeType::kSubqueryExpression: {
-      auto* subquery = node->as<SubqueryExpression>();
-      auto query = subquery->query();
-
-      if (query->is(NodeType::kQuery)) {
-        VELOX_CHECK_NOT_NULL(
-            subqueryPlanner_, "Subquery expressions require a SubqueryPlanner");
-        // Look up first; if not cached, plan and insert. Do not hold an
-        // iterator across subqueryPlanner_ because it may recursively plan
-        // a subquery that mutates the cache and invalidates iterators.
-        if (auto it = subqueryCache_.find(query); it != subqueryCache_.end()) {
-          return it->second;
-        }
-        auto result = subqueryPlanner_(query->as<Query>());
-        auto expr = lp::Subquery(result.plan);
-        // Correlated subqueries bake in physical column names from the outer
-        // scope they were planned in; caching would let a second outer
-        // context reuse a plan whose references point at the first context's
-        // (now stale) names.
-        if (!result.touchedOuterScope) {
-          subqueryCache_.emplace(query, expr);
-        }
-        return expr;
-      }
-
-      AXIOM_PRESTO_SYNTAX_FAIL(
-          query->location(),
-          std::string(NodeTypeName::toName(query->type())),
-          "Subquery type is not supported yet");
+      return planSubquery(node->as<SubqueryExpression>(), /*scalar=*/true);
     }
 
     case NodeType::kComparisonExpression: {
@@ -710,7 +683,8 @@ lp::ExprApi ExpressionPlanner::toExpr(const ExpressionPtr& node) {
 
     case NodeType::kExistsPredicate: {
       auto* exists = node->as<ExistsPredicate>();
-      return lp::Exists(toExpr(exists->subquery()));
+      return lp::Exists(planSubquery(
+          exists->subquery()->as<SubqueryExpression>(), /*scalar=*/false));
     }
 
     case NodeType::kCast: {
@@ -1082,6 +1056,47 @@ core::WindowCallExpr::BoundType toWindowBoundType(FrameBound::Type type) {
 }
 
 } // namespace
+
+lp::ExprApi ExpressionPlanner::planSubquery(
+    const SubqueryExpression* subquery,
+    bool scalar) {
+  auto query = subquery->query();
+
+  if (!query->is(NodeType::kQuery)) {
+    AXIOM_PRESTO_SYNTAX_FAIL(
+        query->location(),
+        std::string(NodeTypeName::toName(query->type())),
+        "Subquery type is not supported yet");
+  }
+
+  VELOX_CHECK_NOT_NULL(
+      subqueryPlanner_, "Subquery expressions require a SubqueryPlanner");
+
+  // Look up first; if not cached, plan and insert. Do not hold an
+  // iterator across subqueryPlanner_ because it may recursively plan
+  // a subquery that mutates the cache and invalidates iterators.
+  if (auto it = subqueryCache_.find(query); it != subqueryCache_.end()) {
+    return it->second;
+  }
+  auto result = subqueryPlanner_(query->as<Query>());
+  if (scalar) {
+    AXIOM_PRESTO_SEMANTIC_CHECK_EQ(
+        result.plan->outputType()->size(),
+        1,
+        query->location(),
+        "",
+        "Scalar subquery must return exactly one column");
+  }
+  auto expr = lp::Subquery(result.plan);
+  // Correlated subqueries bake in physical column names from the outer
+  // scope they were planned in; caching would let a second outer
+  // context reuse a plan whose references point at the first context's
+  // (now stale) names.
+  if (!result.touchedOuterScope) {
+    subqueryCache_.emplace(query, expr);
+  }
+  return expr;
+}
 
 lp::ExprApi ExpressionPlanner::toAggregateCallExpr(
     const FunctionCall* call,
