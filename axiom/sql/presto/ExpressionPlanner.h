@@ -156,6 +156,13 @@ class ExpressionPlanner {
       const std::string& funcName,
       const std::vector<lp::ExprApi>& args);
 
+  // Plans `subquery` via `subqueryPlanner_` and wraps the resulting
+  // plan as an `lp::Subquery` expression, caching by AST identity.
+  // When `scalar` is true, enforces the SQL rule that a subquery used
+  // as a scalar expression must return exactly one column. EXISTS
+  // (which only checks row presence) passes false.
+  lp::ExprApi planSubquery(const SubqueryExpression* subquery, bool scalar);
+
   // Resolves a type signature, trying built-in Velox types first, then
   // connector-based resolution for dotted names (e.g., "catalog.schema.Type").
   facebook::velox::TypePtr resolveType(const TypeSignaturePtr& type);
