@@ -606,7 +606,8 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
       // EXPLAIN ANALYZE runs the query for real, so createTable must not
       // be in explain mode. Regular EXPLAIN must be side-effect-free.
       auto table = createTable(*ctas, /*explain=*/!explain->isAnalyze());
-      schemaResolver = std::make_shared<connector::SchemaResolver>();
+      schemaResolver = std::make_shared<connector::SchemaResolver>(
+          connector::ConnectorMetadataRegistry::global());
       schemaResolver->setTargetTable(
           ctas->connectorId(), ctas->tableName(), table);
     } else if (statement->isCreateTable()) {
@@ -721,7 +722,8 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
     const auto* ctas = sqlStatement.as<presto::CreateTableAsSelectStatement>();
     auto table = createTable(*ctas);
 
-    auto schema = std::make_shared<connector::SchemaResolver>();
+    auto schema = std::make_shared<connector::SchemaResolver>(
+        connector::ConnectorMetadataRegistry::global());
     schema->setTargetTable(ctas->connectorId(), ctas->tableName(), table);
 
     return runLogicalPlan(
@@ -1098,7 +1100,8 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
   auto session = std::make_shared<Session>(queryCtx->queryId());
   auto history = std::make_unique<optimizer::VeloxHistory>();
   if (schemaResolver == nullptr) {
-    schemaResolver = std::make_shared<connector::SchemaResolver>();
+    schemaResolver = std::make_shared<connector::SchemaResolver>(
+        connector::ConnectorMetadataRegistry::global());
   }
 
   auto optimizerProps = sessionConfig_->effectiveValues(kOptimizerPrefix);

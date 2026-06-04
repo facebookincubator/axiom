@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <iostream>
 #include <utility>
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/optimizer/AggregationPlanner.h"
 #include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/FunctionRegistry.h"
@@ -462,7 +463,8 @@ PlanAndStats Optimization::toVeloxPlan(
   auto veloxQueryCtx = velox::core::QueryCtx::create();
   velox::exec::SimpleExpressionEvaluator evaluator(veloxQueryCtx.get(), &pool);
 
-  auto schemaResolver = std::make_shared<connector::SchemaResolver>();
+  auto schemaResolver = std::make_shared<connector::SchemaResolver>(
+      connector::ConnectorMetadataRegistry::global());
 
   VeloxHistory history;
 

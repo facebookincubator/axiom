@@ -18,6 +18,7 @@
 
 #include <glog/logging.h>
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/Optimization.h"
@@ -108,7 +109,8 @@ facebook::axiom::optimizer::PlanAndStats optimize(
   // Fetch connector and set up schema resolver.
   auto connector = velox::connector::getConnector(connectorId);
   auto schemaResolver =
-      std::make_shared<facebook::axiom::connector::SchemaResolver>();
+      std::make_shared<facebook::axiom::connector::SchemaResolver>(
+          facebook::axiom::connector::ConnectorMetadataRegistry::global());
 
   // Check if this is a CREATE TABLE operation and set up schema resolver.
   if (auto* createTableNode = isCreateTableNode(logicalPlan)) {

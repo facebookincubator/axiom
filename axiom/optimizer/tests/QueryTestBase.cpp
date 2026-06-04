@@ -187,7 +187,8 @@ PlanCost QueryTestBase::optimizationCost(
   exec::SimpleExpressionEvaluator evaluator(
       queryCtx.get(), optimizerPool_.get());
   auto session = std::make_shared<Session>(queryCtx->queryId());
-  connector::SchemaResolver schemaResolver;
+  connector::SchemaResolver schemaResolver{
+      connector::ConnectorMetadataRegistry::global()};
   Optimization opt(
       session,
       *logicalPlan,
@@ -218,7 +219,8 @@ void QueryTestBase::verifyOptimization(
 
   auto session = std::make_shared<Session>(veloxQueryCtx->queryId());
 
-  connector::SchemaResolver schemaResolver;
+  connector::SchemaResolver schemaResolver{
+      connector::ConnectorMetadataRegistry::global()};
   VeloxHistory history;
 
   Optimization optimization(
@@ -239,7 +241,8 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
     const MultiFragmentPlan::Options& options,
     const std::optional<OptimizerOptions>& optimizerOptions,
     const std::optional<std::string>& planFilePathPrefix) {
-  connector::SchemaResolver schemaResolver;
+  connector::SchemaResolver schemaResolver{
+      connector::ConnectorMetadataRegistry::global()};
   return planVelox(
       plan, schemaResolver, options, optimizerOptions, planFilePathPrefix);
 }

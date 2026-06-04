@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/ConstantExprEvaluator.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
@@ -128,7 +130,8 @@ class WriteTest : public test::HiveQueriesTestBase {
 
     auto table = createTable(*ctasStatement);
 
-    connector::SchemaResolver schemaResolver;
+    connector::SchemaResolver schemaResolver{
+        connector::ConnectorMetadataRegistry::global()};
     schemaResolver.setTargetTable(
         ctasStatement->connectorId(), ctasStatement->tableName(), table);
 

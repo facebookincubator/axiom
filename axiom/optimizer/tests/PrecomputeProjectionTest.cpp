@@ -16,6 +16,7 @@
 
 #include "axiom/optimizer/PrecomputeProjection.h"
 #include <gtest/gtest.h>
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/VeloxHistory.h"
@@ -61,7 +62,8 @@ class PrecomputeProjectionTest : public ::testing::Test {
 
     VeloxHistory history;
 
-    auto schemaResolver = std::make_shared<connector::SchemaResolver>();
+    auto schemaResolver = std::make_shared<connector::SchemaResolver>(
+        connector::ConnectorMetadataRegistry::global());
 
     auto session = std::make_shared<Session>(veloxQueryCtx->queryId());
 

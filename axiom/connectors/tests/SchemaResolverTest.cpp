@@ -16,10 +16,10 @@
 
 #include <gtest/gtest.h>
 
-#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/tests/TestConnector.h"
+#include "velox/common/base/tests/GTestUtils.h"
 
 using namespace facebook::velox;
 
@@ -32,7 +32,8 @@ class SchemaResolverTest : public ::testing::Test {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     baseCatalog_ = generateCatalog("base", "baseschema");
     otherCatalog_ = generateCatalog("other", "otherschema");
-    resolver_ = std::make_shared<SchemaResolver>(baseCatalog_.schema);
+    resolver_ = std::make_shared<SchemaResolver>(
+        ConnectorMetadataRegistry::global(), baseCatalog_.schema);
   }
 
   void TearDown() override {
@@ -68,7 +69,7 @@ class SchemaResolverTest : public ::testing::Test {
   std::shared_ptr<SchemaResolver> resolver_;
 };
 
-TEST_F(SchemaResolverTest, bareTable) {
+TEST_F(SchemaResolverTest, findTable) {
   auto metadata = ConnectorMetadataRegistry::get("base");
   metadata->createTable(
       nullptr,
@@ -80,12 +81,9 @@ TEST_F(SchemaResolverTest, bareTable) {
 
   auto table = resolver_->findTable("base", {"baseschema", "table"});
   ASSERT_NE(table, nullptr);
-
-  table = resolver_->findTable("other", {"otherschema", "table"});
-  ASSERT_EQ(table, nullptr);
 }
 
-TEST_F(SchemaResolverTest, tablePlusSchema) {
+TEST_F(SchemaResolverTest, findTableInNonDefaultSchema) {
   auto metadata = ConnectorMetadataRegistry::get("base");
   metadata->createSchema(nullptr, "newschema", /*ifNotExists=*/false, {});
   metadata->createTable(
@@ -98,37 +96,17 @@ TEST_F(SchemaResolverTest, tablePlusSchema) {
 
   auto table = resolver_->findTable("base", {"newschema", "table"});
   ASSERT_NE(table, nullptr);
+}
 
-  table = resolver_->findTable("other", {"newschema", "table"});
+TEST_F(SchemaResolverTest, tableNotFound) {
+  // No table is created; lookup against an existing catalog/schema must return
+  // nullptr.
+  auto table = resolver_->findTable("base", {"baseschema", "missing_table"});
   ASSERT_EQ(table, nullptr);
 }
 
-TEST_F(SchemaResolverTest, tablePlusSchemaPlusCatalog) {
-  auto otherMetadata = ConnectorMetadataRegistry::get("other");
-  otherMetadata->createTable(
-      /*session=*/nullptr,
-      {"otherschema", "other_table"},
-      ROW({}),
-      {},
-      /*ifNotExists=*/false,
-      /*explain=*/false);
-  auto table = resolver_->findTable("other", {"otherschema", "other_table"});
-  ASSERT_NE(table, nullptr);
-
-  auto baseMetadata = ConnectorMetadataRegistry::get("base");
-  baseMetadata->createTable(
-      nullptr,
-      {"baseschema", "base_table"},
-      ROW({}),
-      {},
-      /*ifNotExists=*/false,
-      /*explain=*/false);
-  table = resolver_->findTable("base", {"baseschema", "base_table"});
-  ASSERT_NE(table, nullptr);
-}
-
-TEST_F(SchemaResolverTest, catalogMismatch) {
-  // Table exists in "other" catalog but not in "base".
+TEST_F(SchemaResolverTest, wrongCatalog) {
+  // Table exists in "other" catalog but lookup is routed through "base".
   auto metadata = ConnectorMetadataRegistry::get("other");
   metadata->createTable(
       /*session=*/nullptr,
@@ -139,6 +117,60 @@ TEST_F(SchemaResolverTest, catalogMismatch) {
       /*explain=*/false);
   auto table = resolver_->findTable("base", {"otherschema", "table"});
   ASSERT_EQ(table, nullptr);
+}
+
+TEST_F(SchemaResolverTest, unregisteredConnectorThrows) {
+  VELOX_ASSERT_THROW(
+      resolver_->findTable("nonexistent", {"baseschema", "table"}),
+      "ConnectorMetadata not registered: nonexistent");
+}
+
+TEST_F(SchemaResolverTest, scopedRegistryLookup) {
+  // Create a scoped registry that is a child of the global registry.
+  auto scopedRegistry =
+      ConnectorMetadataRegistry::create(&ConnectorMetadataRegistry::global());
+
+  // Register a new connector with a table in the scoped registry only.
+  auto scopedConnector = std::make_shared<connector::TestConnector>("scoped");
+  const auto& scopedMetadata = scopedConnector->metadata();
+  scopedMetadata->createSchema(
+      nullptr, "scopedschema", /*ifNotExists=*/false, {});
+  scopedMetadata->createTable(
+      nullptr,
+      {"scopedschema", "scoped_orders"},
+      ROW({}),
+      {},
+      /*ifNotExists=*/false,
+      /*explain=*/false);
+  scopedRegistry->insert("scoped", scopedMetadata);
+
+  auto resolver{SchemaResolver{*scopedRegistry, "scopedschema"}};
+  auto table = resolver.findTable("scoped", {"scopedschema", "scoped_orders"});
+  ASSERT_NE(table, nullptr);
+
+  // The scoped registration must not have leaked into the global registry.
+  ASSERT_EQ(ConnectorMetadataRegistry::tryGet("scoped"), nullptr);
+}
+
+TEST_F(SchemaResolverTest, scopedRegistryFallsBackToParent) {
+  // Create a scoped registry with no local entries that falls back to global.
+  auto scopedRegistry =
+      ConnectorMetadataRegistry::create(&ConnectorMetadataRegistry::global());
+
+  // Register a table in the globally-registered "base" catalog.
+  auto metadata = ConnectorMetadataRegistry::get("base");
+  metadata->createTable(
+      nullptr,
+      {"baseschema", "parent_table"},
+      ROW({}),
+      {},
+      /*ifNotExists=*/false,
+      /*explain=*/false);
+
+  // Resolver using scoped registry should still find the global table.
+  auto resolver{SchemaResolver{*scopedRegistry, "baseschema"}};
+  auto table = resolver.findTable("base", {"baseschema", "parent_table"});
+  ASSERT_NE(table, nullptr);
 }
 
 } // namespace
