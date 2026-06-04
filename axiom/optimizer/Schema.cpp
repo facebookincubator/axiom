@@ -384,7 +384,8 @@ bool Distribution::isCopartitionedWith(const DesiredDistribution& other) const {
 }
 
 bool Distribution::isSamePartition(const Distribution& other) const {
-  if (kind() != other.kind() || partitionType() != other.partitionType()) {
+  if (kind() != other.kind() || partitionType() != other.partitionType() ||
+      requiresCoordinator() != other.requiresCoordinator()) {
     return false;
   }
   if (isBroadcast() || isGather()) {
@@ -465,7 +466,8 @@ Distribution Distribution::rename(
       std::move(orderKeys),
       std::move(orderTypes),
       numKeysUnique_,
-      std::move(clusterKeys));
+      std::move(clusterKeys),
+      placement_);
 }
 
 namespace {
@@ -487,7 +489,7 @@ std::string Distribution::toString() const {
   }
 
   if (isGather()) {
-    return "gather";
+    return requiresCoordinator() ? "gather on coordinator" : "gather";
   }
 
   std::stringstream out;

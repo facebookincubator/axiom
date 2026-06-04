@@ -142,6 +142,15 @@ struct Distribution {
     kArbitrary,
   };
 
+  /// Scheduling location constraint for the tasks that process this
+  /// distribution.
+  enum class Placement {
+    /// No location constraint.
+    kAny,
+    /// Must run on the coordinator.
+    kCoordinator,
+  };
+
   AXIOM_DECLARE_EMBEDDED_ENUM_NAME(Kind);
 
   Distribution() = default;
@@ -153,8 +162,10 @@ struct Distribution {
       ExprVector orderKeys = {},
       OrderTypeVector orderTypes = {},
       int32_t numKeysUnique = 0,
-      ExprVector clusterKeys = {})
+      ExprVector clusterKeys = {},
+      Placement placement = Placement::kAny)
       : kind_{kind},
+        placement_{placement},
         partitionType_{partitionType},
         partitionKeys_{std::move(partitionKeys)},
         orderKeys_{std::move(orderKeys)},
@@ -165,6 +176,12 @@ struct Distribution {
     if (kind_ == Kind::kGather) {
       VELOX_CHECK_EQ(partitionKeys_.size(), 0);
     }
+    if (placement_ == Placement::kCoordinator) {
+      VELOX_CHECK_EQ(
+          kind_,
+          Kind::kGather,
+          "Coordinator placement requires gather distribution");
+    }
   }
 
   /// Convenience constructor for hash partitioning.
@@ -174,7 +191,8 @@ struct Distribution {
       ExprVector orderKeys = {},
       OrderTypeVector orderTypes = {},
       int32_t numKeysUnique = 0,
-      ExprVector clusterKeys = {})
+      ExprVector clusterKeys = {},
+      Placement placement = Placement::kAny)
       : Distribution{
             Kind::kPartitioned,
             partitionType,
@@ -182,7 +200,8 @@ struct Distribution {
             std::move(orderKeys),
             std::move(orderTypes),
             numKeysUnique,
-            std::move(clusterKeys)} {}
+            std::move(clusterKeys),
+            placement} {}
 
   /// Returns a Distribution for use in a broadcast shuffle.
   static Distribution broadcast() {
@@ -199,6 +218,20 @@ struct Distribution {
   /// LIMIT or ORDER BY in a subquery, global aggregation).
   static Distribution gather() {
     return {Kind::kGather, /*partitionType=*/nullptr, /*partitionKeys=*/{}};
+  }
+
+  /// Returns a distribution that gathers all rows to a coordinator task.
+  static Distribution gatherOnCoordinator() {
+    return {
+        Kind::kGather,
+        /*partitionType=*/nullptr,
+        /*partitionKeys=*/{},
+        /*orderKeys=*/{},
+        /*orderTypes=*/{},
+        /*numKeysUnique=*/0,
+        /*clusterKeys=*/{},
+        Placement::kCoordinator,
+    };
   }
 
   /// Returns a distribution for an ordered gather. Creates a merging exchange
@@ -247,6 +280,10 @@ struct Distribution {
     return kind_ == Kind::kArbitrary;
   }
 
+  bool requiresCoordinator() const {
+    return placement_ == Placement::kCoordinator;
+  }
+
   /// Connector-specific partitioning function, or nullptr if standard Velox
   /// hash partitioning (or no partitioning).
   const connector::PartitionType* partitionType() const {
@@ -279,6 +316,9 @@ struct Distribution {
 
  private:
   Kind kind_{Kind::kUnspecified};
+
+  // Location constraint for the tasks processing this distribution.
+  Placement placement_{Placement::kAny};
 
   // Connector-specific partition function. nullptr means standard Velox hash
   // (when kind_ is kPartitioned) or no partitioning otherwise. Lifetime is

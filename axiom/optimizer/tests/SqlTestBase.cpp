@@ -37,7 +37,7 @@ namespace facebook::axiom::optimizer::test {
 using namespace facebook::velox;
 
 namespace {
-constexpr uint64_t kMaxWaitMicros{50'000};
+constexpr uint64_t kMaxWaitMicros{30'000'000};
 } // namespace
 
 void SqlTestBase::SetUpTestCase() {
@@ -192,7 +192,9 @@ void SqlTestBase::runSetupStatement(
   auto runner = runnerFactory(plan);
   while (auto batch = runner->next()) {
   }
-  runner->waitForCompletion(kMaxWaitMicros);
+  VELOX_CHECK(
+      runner->waitForCompletion(kMaxWaitMicros),
+      "Timed out waiting for setup statement completion");
 }
 
 void SqlTestBase::runSetupStatement(const std::string& sql) {

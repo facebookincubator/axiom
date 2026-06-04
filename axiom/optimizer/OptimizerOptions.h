@@ -18,6 +18,7 @@
 #include <folly/container/F14Map.h>
 #include <algorithm>
 #include <cstdint>
+#include <string>
 #include <unordered_map>
 
 #include "axiom/common/SchemaTableName.h"
@@ -113,6 +114,10 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
   /// When true, connectors skip side effects in createTable() and
   /// beginWrite(). Used for EXPLAIN queries.
   bool explain{false};
+
+  /// Connector ID whose table scans must run on the coordinator. Empty means
+  /// no connector requires coordinator placement.
+  std::string systemConnectorId;
 
   /// Constructs options from session property name-value pairs.
   /// Keys are unqualified property names (e.g., "sample_joins").

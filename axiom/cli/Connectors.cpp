@@ -218,7 +218,8 @@ std::shared_ptr<velox::connector::Connector> Connectors::registerTestConnector(
   return connector;
 }
 
-void Connectors::registerSystemConnector(
+std::shared_ptr<velox::connector::Connector>
+Connectors::registerSystemConnector(
     const SessionConfig& sessionConfig,
     const std::string& connectorId) {
   sessionPropertiesProvider_ =
@@ -233,6 +234,7 @@ void Connectors::registerSystemConnector(
       connector->connectorId(),
       std::make_shared<connector::system::SystemConnectorMetadata>(
           connector.get()));
+  return connector;
 }
 
 } // namespace facebook::axiom

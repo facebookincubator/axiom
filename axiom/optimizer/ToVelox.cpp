@@ -15,6 +15,7 @@
  */
 #include "axiom/optimizer/ToVelox.h"
 #include <folly/container/F14Set.h>
+#include <algorithm>
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
@@ -335,8 +336,7 @@ velox::core::PlanNodePtr ToVelox::addOutputRenames(
 
 namespace {
 
-// Merges fragment-type contributions per the compatibility rules in
-// docs/UnionAllPlanning.md. nullopt means "no constraint".
+// Combines fragment types while preserving the more restrictive execution mode.
 std::optional<FragmentType> mergeFragmentTypes(
     std::optional<FragmentType> lhs,
     std::optional<FragmentType> rhs) {
@@ -353,21 +353,53 @@ std::optional<FragmentType> mergeFragmentTypes(
       (*lhs == FragmentType::kFixed && *rhs == FragmentType::kSource)) {
     return FragmentType::kFixed;
   }
+  if ((*lhs == FragmentType::kCoordinator && *rhs == FragmentType::kSingle) ||
+      (*lhs == FragmentType::kSingle && *rhs == FragmentType::kCoordinator)) {
+    return FragmentType::kCoordinator;
+  }
   VELOX_FAIL(
-      "Incompatible fragment-type contributions in same fragment: {} + {}",
-      *lhs,
-      *rhs);
+      "Incompatible fragment types in same fragment: {} + {}", *lhs, *rhs);
 }
 
-std::optional<FragmentType> fragmentTypeContribution(const RelationOp& op) {
-  // Repartition is a fragment boundary — its contribution is the
-  // consumer-side type derived from its distribution kind.
+// Maps a single-task distribution to the matching coordinator or worker
+// fragment.
+std::optional<FragmentType> singleTaskFragmentType(
+    const Distribution& distribution) {
+  if (!distribution.isGather()) {
+    return std::nullopt;
+  }
+  return distribution.requiresCoordinator() ? FragmentType::kCoordinator
+                                            : FragmentType::kSingle;
+}
+
+// Verifies that a gather distribution is inherited from the input fragment.
+void checkGatherDistributionComesFromInputs(
+    const RelationOp& op,
+    const RelationOpPtrVector& inputs,
+    bool requireAllInputs) {
+  const auto inputHasGatherDistribution = [](const auto& input) {
+    return input->distribution().isGather();
+  };
+  const auto gatherComesFromInputs = requireAllInputs
+      ? std::all_of(inputs.begin(), inputs.end(), inputHasGatherDistribution)
+      : std::any_of(inputs.begin(), inputs.end(), inputHasGatherDistribution);
+  VELOX_CHECK(
+      !op.distribution().isGather() || gatherComesFromInputs,
+      "Gather distribution must be inherited from input distributions; relType: {}, requireAllInputs: {}",
+      op.relTypeName(),
+      requireAllInputs);
+}
+
+// Derives the Velox fragment type needed for the optimizer relation.
+std::optional<FragmentType> deriveFragmentType(const RelationOp& op) {
+  // Repartition is a fragment boundary. Its contribution is the consumer-side
+  // fragment type implied by the exchange kind.
   if (op.relType() == RelType::kRepartition) {
     switch (op.distribution().kind()) {
       case Distribution::Kind::kPartitioned:
         return FragmentType::kFixed;
       case Distribution::Kind::kGather:
-        return FragmentType::kSingle;
+        return singleTaskFragmentType(op.distribution());
       case Distribution::Kind::kBroadcast:
       case Distribution::Kind::kArbitrary:
       case Distribution::Kind::kUnspecified:
@@ -375,42 +407,53 @@ std::optional<FragmentType> fragmentTypeContribution(const RelationOp& op) {
     }
   }
 
-  // For every other op, gather output means the op lives in a kSingle
-  // fragment: either the op itself emits gather (OrderBy, Limit) and
-  // synthesizes an implicit gather sub-fragment boundary, or it inherits
-  // gather from a single-partition input below.
-  if (op.distribution().isGather()) {
-    return FragmentType::kSingle;
-  }
-
   switch (op.relType()) {
     case RelType::kTableScan:
-      return FragmentType::kSource;
+      return op.distribution().requiresCoordinator()
+          ? FragmentType::kCoordinator
+          : FragmentType::kSource;
     case RelType::kValues:
       return FragmentType::kSingle;
     case RelType::kUnionAll: {
+      checkGatherDistributionComesFromInputs(
+          op, op.as<UnionAll>()->inputs, true);
       std::optional<FragmentType> result;
       for (const auto& input : op.as<UnionAll>()->inputs) {
-        result = mergeFragmentTypes(result, fragmentTypeContribution(*input));
+        result = mergeFragmentTypes(result, deriveFragmentType(*input));
       }
       return result;
     }
     case RelType::kJoin: {
       const auto& join = *op.as<Join>();
+      checkGatherDistributionComesFromInputs(
+          op, {join.input(), join.right}, false);
       return mergeFragmentTypes(
-          fragmentTypeContribution(*join.input()),
-          fragmentTypeContribution(*join.right));
+          deriveFragmentType(*join.input()), deriveFragmentType(*join.right));
     }
     case RelType::kRepartition:
       VELOX_UNREACHABLE();
-    default:
-      return op.input() ? fragmentTypeContribution(*op.input()) : std::nullopt;
+    default: {
+      const auto inputFragmentType =
+          op.input() ? deriveFragmentType(*op.input()) : std::nullopt;
+      const auto outputFragmentType = singleTaskFragmentType(op.distribution());
+      if (!outputFragmentType.has_value()) {
+        return inputFragmentType;
+      }
+      if (inputFragmentType == FragmentType::kCoordinator &&
+          outputFragmentType == FragmentType::kSingle) {
+        // Coordinator-bound input must stay coordinator-bound across gather
+        // operators; a worker-side single fragment would split the pipeline
+        // away from the connector that requires coordinator placement.
+        return FragmentType::kCoordinator;
+      }
+      return outputFragmentType;
+    }
   }
 }
 
 // Sets `fragment.type` (and `width` for kFixed) from the contents rooted at
 // `op`. The fragment type is derived by walking the RelationOp sub-tree down
-// to (but not including) any inner Repartition or leaf, merging contributions
+// to (but not including) any inner Repartition or leaf, merging derived types
 // per the compatibility rules in docs/UnionAllPlanning.md.
 //
 // For numWorkers == 1, all parallelism collapses to a single task; kSource,
@@ -426,7 +469,7 @@ void decideFragmentType(
     return;
   }
 
-  fragment.type = fragmentTypeContribution(op).value_or(FragmentType::kSource);
+  fragment.type = deriveFragmentType(op).value_or(FragmentType::kSource);
   if (fragment.type == FragmentType::kFixed) {
     fragment.width = options.numWorkers;
   }
@@ -544,10 +587,12 @@ PlanAndStats ToVelox::toVeloxPlan(
   // consumer. Decide before recursing so operators inside (e.g. makeWrite)
   // see the correct type.
   ExecutableFragment top = newFragment();
-  if (options.remoteOutput) {
-    decideFragmentType(*plan, options, top);
-  } else {
-    top.type = FragmentType::kSingle;
+  decideFragmentType(*plan, options, top);
+  if (!options.remoteOutput) {
+    if (top.type != FragmentType::kCoordinator) {
+      top.type = FragmentType::kSingle;
+      top.width.reset();
+    }
   }
 
   std::vector<ExecutableFragment> stages;
