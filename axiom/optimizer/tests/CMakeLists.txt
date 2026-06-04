@@ -36,12 +36,14 @@ add_library(axiom_optimizer_tests_query_test_base QueryTestBase.cpp)
 
 target_link_libraries(
   axiom_optimizer_tests_query_test_base
+  axiom_connectors
   axiom_optimizer
   axiom_sql_presto_parser
   axiom_test_connector
   velox_tpch_gen
   axiom_hive_connector_metadata
   axiom_runner_tests_utils
+  velox_connector_registry
   velox_exec_test_lib
   velox_dwio_parquet_reader
   velox_dwio_native_parquet_reader
@@ -103,6 +105,7 @@ add_executable(
   axiom_optimizer_tests
   AggregationTest.cpp
   DistinctAggregationTest.cpp
+  DistributionTest.cpp
   OutputNodeTest.cpp
   CardinalityEstimationTest.cpp
   CsvReadWriteTest.cpp
@@ -149,13 +152,16 @@ target_link_libraries(
   axiom_optimizer_tests
   axiom_optimizer_test_utils
   axiom_optimizer
+  axiom_optimizer_multifragment_plan
   axiom_logical_plan_builder
   axiom_optimizer_tests_hive_queries_test_base
   axiom_optimizer_tests_tpch_data_generator
   axiom_optimizer_tests_plan_matcher
   axiom_optimizer_tests_query_test_base
   axiom_runner_tests_utils
+  axiom_connectors
   axiom_test_connector
+  velox_connector_registry
   velox_dwio_text_reader_register
   velox_dwio_text_writer_register
   GTest::gmock
@@ -185,6 +191,7 @@ add_library(axiom_optimizer_tests_sql_test_base SqlTestBase.cpp)
 target_link_libraries(
   axiom_optimizer_tests_sql_test_base
   axiom_common
+  axiom_connectors
   axiom_optimizer
   axiom_runner_local_runner
   axiom_sql_presto_parser

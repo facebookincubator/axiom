@@ -2275,6 +2275,7 @@ void Optimization::joinByHash(
       if (needsShuffle) {
         if (copartition.empty()) {
           for (auto i : partKeys) {
+            VELOX_CHECK_LT(i, buildKeys.size());
             copartition.push_back(buildKeys[i]);
           }
         }
@@ -3490,6 +3491,9 @@ PlanP Optimization::makeUnionPlan(
       std::ranges::all_of(inputNeedsShuffle, std::identity{})) {
     effectiveDistribution.reset();
   }
+
+  VELOX_CHECK_EQ(inputStates.size(), inputs.size());
+  VELOX_CHECK_EQ(inputNeedsShuffle.size(), inputs.size());
 
   if (effectiveDistribution.has_value()) {
     // Some inputs need a shuffle to reach the parent's desired distribution;

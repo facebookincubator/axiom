@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <algorithm>
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/ConstantExprEvaluator.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
@@ -294,6 +295,15 @@ class WriteTest : public test::HiveQueriesTestBase {
     ASSERT_EQ(writtenRows, value.value<int64_t>());
   }
 
+  static size_t countFragments(
+      const MultiFragmentPlan& plan,
+      FragmentType type) {
+    return std::count_if(
+        plan.fragments().begin(),
+        plan.fragments().end(),
+        [type](const auto& fragment) { return fragment.type == type; });
+  }
+
   void checkTableData(
       const std::string& tableName,
       const RowVectorPtr& expectedData) {
@@ -470,6 +480,33 @@ TEST_F(WriteTest, insertSql) {
           makeNullableFlatVector<std::string>(
               {"foo", "bar", std::nullopt, std::nullopt, std::nullopt}),
       }));
+}
+
+TEST_F(WriteTest, insertFromCoordinatorScan) {
+  SCOPE_EXIT {
+    dropTableIfExists("test");
+  };
+
+  createTable("test", ROW({"a"}, {BIGINT()}), {});
+
+  auto options = optimizerOptions_;
+  options.systemConnectorId = exec::test::kHiveConnectorId;
+
+  auto plan = planVelox(
+      parseInsert(
+          "INSERT INTO test "
+          "SELECT n_nationkey FROM nation WHERE n_nationkey < 3"),
+      {
+          .numWorkers = 4,
+          .numDrivers = 4,
+      },
+      options);
+
+  EXPECT_EQ(countFragments(*plan.plan, FragmentType::kCoordinator), 1);
+  EXPECT_EQ(countFragments(*plan.plan, FragmentType::kSource), 0);
+
+  verifyPlanSerde(*plan.plan, pool());
+  checkWrittenRows(runFragmentedPlan(plan), 3);
 }
 
 TEST_F(WriteTest, ctasSql) {

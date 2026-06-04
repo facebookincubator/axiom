@@ -97,7 +97,7 @@ class Connectors {
 
   /// Registers the system connector for the runtime.queries and
   /// metadata.session_properties tables.
-  void registerSystemConnector(
+  std::shared_ptr<velox::connector::Connector> registerSystemConnector(
       const SessionConfig& sessionConfig,
       const std::string& connectorId = kSystemConnectorId);
 

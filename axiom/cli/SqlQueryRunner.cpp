@@ -1103,6 +1103,7 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
 
   auto optimizerProps = sessionConfig_->effectiveValues(kOptimizerPrefix);
   auto optimizerOptions = optimizer::OptimizerOptions::from(optimizerProps);
+  optimizerOptions.systemConnectorId = systemConnectorId_;
   optimizerOptions.explain = explain;
 
   uint64_t toGraphNanos{0};

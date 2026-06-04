@@ -14,8 +14,13 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
+#include <initializer_list>
+#include <vector>
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
+#include "velox/connectors/ConnectorRegistry.h"
 
 namespace facebook::axiom::optimizer {
 namespace {
@@ -39,8 +44,13 @@ using namespace velox;
 // a distinct column name to avoid internal disambiguation renames.
 class UnionAllTest : public test::QueryTestBase {
  protected:
+  static constexpr const char* kSystemConnectorIdForTest = "union_all_system";
+  static constexpr const char* kMetadataConnectorIdForTest =
+      "union_all_metadata";
+
   void SetUp() override {
     QueryTestBase::SetUp();
+    optimizerOptions_.systemConnectorId = kSystemConnectorIdForTest;
 
     // t and u have different column names ('a' and 'b') to avoid the
     // optimizer's internal column-disambiguation rename ('u.a' → 'a_0')
@@ -49,7 +59,69 @@ class UnionAllTest : public test::QueryTestBase {
         ->setStats(100'000, {{"a", {.numDistinct = 1'000}}});
     testConnector_->addTable("u", ROW("b", BIGINT()))
         ->setStats(10'000, {{"b", {.numDistinct = 1'000}}});
+
+    systemConnector_ =
+        std::make_shared<connector::TestConnector>(kSystemConnectorIdForTest);
+    velox::connector::ConnectorRegistry::global().insert(
+        systemConnector_->connectorId(), systemConnector_);
+    connector::ConnectorMetadataRegistry::global().insert(
+        systemConnector_->connectorId(), systemConnector_->metadata());
+    systemConnector_->addTable("s", ROW("c", BIGINT()))
+        ->setStats(1'000, {{"c", {.numDistinct = 100}}});
+
+    metadataConnector_ =
+        std::make_shared<connector::TestConnector>(kMetadataConnectorIdForTest);
+    velox::connector::ConnectorRegistry::global().insert(
+        metadataConnector_->connectorId(), metadataConnector_);
+    connector::ConnectorMetadataRegistry::global().insert(
+        metadataConnector_->connectorId(), metadataConnector_->metadata());
+    metadataConnector_->addTable("m", ROW("d", BIGINT()))
+        ->setStats(1'000, {{"d", {.numDistinct = 100}}});
   }
+
+  void TearDown() override {
+    if (metadataConnector_) {
+      connector::ConnectorMetadataRegistry::global().erase(
+          kMetadataConnectorIdForTest);
+      velox::connector::ConnectorRegistry::global().erase(
+          kMetadataConnectorIdForTest);
+      metadataConnector_.reset();
+    }
+    if (systemConnector_) {
+      connector::ConnectorMetadataRegistry::global().erase(
+          kSystemConnectorIdForTest);
+      velox::connector::ConnectorRegistry::global().erase(
+          kSystemConnectorIdForTest);
+      systemConnector_.reset();
+    }
+    QueryTestBase::TearDown();
+  }
+
+  static void expectFragmentTypes(
+      const MultiFragmentPlanPtr& plan,
+      std::initializer_list<FragmentType> expected) {
+    std::vector<FragmentType> actual;
+    actual.reserve(plan->fragments().size());
+    for (const auto& fragment : plan->fragments()) {
+      actual.push_back(fragment.type);
+    }
+    EXPECT_THAT(actual, testing::UnorderedElementsAreArray(expected));
+  }
+
+  static std::vector<const ExecutableFragment*> fragmentsOfType(
+      const MultiFragmentPlanPtr& plan,
+      FragmentType type) {
+    std::vector<const ExecutableFragment*> fragments;
+    for (const auto& fragment : plan->fragments()) {
+      if (fragment.type == type) {
+        fragments.push_back(&fragment);
+      }
+    }
+    return fragments;
+  }
+
+  std::shared_ptr<connector::TestConnector> systemConnector_;
+  std::shared_ptr<connector::TestConnector> metadataConnector_;
 };
 
 // Two scans (kSource + kSource) co-locate in one fragment with a
@@ -121,6 +193,208 @@ TEST_F(UnionAllTest, twoValues) {
         matchValues().localPartition(matchValues().project().build()).build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
+}
+
+TEST_F(UnionAllTest, systemScanUsesCoordinatorFragment) {
+  auto logicalPlan =
+      parseSelect("FROM union_all_system.default.s", kTestConnectorId);
+
+  auto plan = planVelox(
+      logicalPlan,
+      {
+          .numWorkers = 4,
+          .numDrivers = 4,
+      });
+
+  expectFragmentTypes(plan.plan, {FragmentType::kCoordinator});
+  const auto coordinatorFragments =
+      fragmentsOfType(plan.plan, FragmentType::kCoordinator);
+  ASSERT_EQ(coordinatorFragments.size(), 1);
+  EXPECT_FALSE(coordinatorFragments[0]->width.has_value());
+  EXPECT_TRUE(coordinatorFragments[0]->inputStages.empty());
+}
+
+TEST_F(UnionAllTest, systemConnectorIdIsConfigurable) {
+  auto logicalPlan =
+      parseSelect("FROM union_all_metadata.default.m", kTestConnectorId);
+
+  auto options = optimizerOptions_;
+  options.systemConnectorId = kMetadataConnectorIdForTest;
+
+  auto plan = planVelox(
+      logicalPlan,
+      {
+          .numWorkers = 4,
+          .numDrivers = 4,
+      },
+      options);
+
+  expectFragmentTypes(plan.plan, {FragmentType::kCoordinator});
+}
+
+TEST_F(UnionAllTest, systemCatalogIsNotHardcoded) {
+  auto logicalPlan =
+      parseSelect("FROM union_all_system.default.s", kTestConnectorId);
+
+  auto options = optimizerOptions_;
+  options.systemConnectorId.clear();
+
+  auto plan = planVelox(
+      logicalPlan,
+      {
+          .numWorkers = 4,
+          .numDrivers = 4,
+      },
+      options);
+
+  expectFragmentTypes(
+      plan.plan, {FragmentType::kSource, FragmentType::kSingle});
+}
+
+TEST_F(UnionAllTest, systemScanAndScan) {
+  auto logicalPlan = parseSelect(
+      "SELECT c AS a FROM union_all_system.default.s UNION ALL FROM t",
+      kTestConnectorId);
+
+  auto plan = planVelox(
+      logicalPlan,
+      {
+          .numWorkers = 4,
+          .numDrivers = 4,
+      });
+
+  expectFragmentTypes(
+      plan.plan,
+      {FragmentType::kCoordinator,
+       FragmentType::kSource,
+       FragmentType::kSingle});
+  const auto coordinatorFragments =
+      fragmentsOfType(plan.plan, FragmentType::kCoordinator);
+  const auto sourceFragments =
+      fragmentsOfType(plan.plan, FragmentType::kSource);
+  const auto singleFragments =
+      fragmentsOfType(plan.plan, FragmentType::kSingle);
+  ASSERT_EQ(coordinatorFragments.size(), 1);
+  ASSERT_EQ(sourceFragments.size(), 1);
+  ASSERT_EQ(singleFragments.size(), 1);
+  EXPECT_FALSE(coordinatorFragments[0]->width.has_value());
+  EXPECT_FALSE(sourceFragments[0]->width.has_value());
+  EXPECT_FALSE(singleFragments[0]->width.has_value());
+  EXPECT_TRUE(coordinatorFragments[0]->inputStages.empty());
+  EXPECT_EQ(sourceFragments[0]->inputStages.size(), 1);
+  EXPECT_EQ(singleFragments[0]->inputStages.size(), 1);
+}
+
+TEST_F(UnionAllTest, groupByOverSystemScanAndScan) {
+  auto logicalPlan = parseSelect(
+      "SELECT a, COUNT(*) FROM ("
+      "  SELECT c AS a FROM union_all_system.default.s UNION ALL FROM t"
+      ") GROUP BY a",
+      kTestConnectorId);
+
+  auto plan = planVelox(
+      logicalPlan,
+      {
+          .numWorkers = 4,
+          .numDrivers = 4,
+      });
+
+  expectFragmentTypes(
+      plan.plan,
+      {FragmentType::kCoordinator,
+       FragmentType::kSource,
+       FragmentType::kFixed,
+       FragmentType::kSingle});
+  const auto coordinatorFragments =
+      fragmentsOfType(plan.plan, FragmentType::kCoordinator);
+  const auto sourceFragments =
+      fragmentsOfType(plan.plan, FragmentType::kSource);
+  const auto fixedFragments = fragmentsOfType(plan.plan, FragmentType::kFixed);
+  const auto singleFragments =
+      fragmentsOfType(plan.plan, FragmentType::kSingle);
+  ASSERT_EQ(coordinatorFragments.size(), 1);
+  ASSERT_EQ(sourceFragments.size(), 1);
+  ASSERT_EQ(fixedFragments.size(), 1);
+  ASSERT_EQ(singleFragments.size(), 1);
+  EXPECT_FALSE(coordinatorFragments[0]->width.has_value());
+  EXPECT_FALSE(sourceFragments[0]->width.has_value());
+  ASSERT_TRUE(fixedFragments[0]->width.has_value());
+  EXPECT_EQ(fixedFragments[0]->width.value(), 4);
+  EXPECT_FALSE(singleFragments[0]->width.has_value());
+  EXPECT_TRUE(coordinatorFragments[0]->inputStages.empty());
+  EXPECT_EQ(sourceFragments[0]->inputStages.size(), 1);
+  EXPECT_EQ(fixedFragments[0]->inputStages.size(), 1);
+  EXPECT_EQ(singleFragments[0]->inputStages.size(), 1);
+}
+
+TEST_F(UnionAllTest, systemScanJoinWithScan) {
+  auto logicalPlan = parseSelect(
+      "SELECT a FROM t JOIN union_all_system.default.s ON a = c",
+      kTestConnectorId);
+
+  auto plan = planVelox(
+      logicalPlan,
+      {
+          .numWorkers = 4,
+          .numDrivers = 4,
+      });
+
+  expectFragmentTypes(
+      plan.plan,
+      {FragmentType::kCoordinator,
+       FragmentType::kSource,
+       FragmentType::kSingle});
+  const auto coordinatorFragments =
+      fragmentsOfType(plan.plan, FragmentType::kCoordinator);
+  const auto sourceFragments =
+      fragmentsOfType(plan.plan, FragmentType::kSource);
+  const auto singleFragments =
+      fragmentsOfType(plan.plan, FragmentType::kSingle);
+  ASSERT_EQ(coordinatorFragments.size(), 1);
+  ASSERT_EQ(sourceFragments.size(), 1);
+  ASSERT_EQ(singleFragments.size(), 1);
+  EXPECT_TRUE(coordinatorFragments[0]->inputStages.empty());
+  EXPECT_EQ(sourceFragments[0]->inputStages.size(), 1);
+  EXPECT_EQ(singleFragments[0]->inputStages.size(), 1);
+}
+
+TEST_F(UnionAllTest, systemScanProbeJoinWithScan) {
+  auto logicalPlan = parseSelect(
+      "SELECT a FROM union_all_system.default.s JOIN t ON c = a",
+      kTestConnectorId);
+
+  auto options = optimizerOptions_;
+  options.syntacticJoinOrder = true;
+
+  auto plan = planVelox(
+      logicalPlan,
+      {
+          .numWorkers = 4,
+          .numDrivers = 4,
+      },
+      options);
+
+  expectFragmentTypes(
+      plan.plan,
+      {FragmentType::kCoordinator,
+       FragmentType::kSource,
+       FragmentType::kFixed,
+       FragmentType::kSingle});
+  const auto coordinatorFragments =
+      fragmentsOfType(plan.plan, FragmentType::kCoordinator);
+  const auto sourceFragments =
+      fragmentsOfType(plan.plan, FragmentType::kSource);
+  const auto fixedFragments = fragmentsOfType(plan.plan, FragmentType::kFixed);
+  const auto singleFragments =
+      fragmentsOfType(plan.plan, FragmentType::kSingle);
+  ASSERT_EQ(coordinatorFragments.size(), 1);
+  ASSERT_EQ(sourceFragments.size(), 1);
+  ASSERT_EQ(fixedFragments.size(), 1);
+  ASSERT_EQ(singleFragments.size(), 1);
+  EXPECT_TRUE(coordinatorFragments[0]->inputStages.empty());
+  EXPECT_TRUE(sourceFragments[0]->inputStages.empty());
+  EXPECT_EQ(fixedFragments[0]->inputStages.size(), 2);
+  EXPECT_EQ(singleFragments[0]->inputStages.size(), 1);
 }
 
 // Scan + Values (kSource + kSingle) — Values wrapped in arbitrary, scan

@@ -97,6 +97,16 @@ void updateLeafCost(
   cost.unitCost += cost.fanout * rowCost;
 }
 
+Distribution writeOutputDistribution(const Distribution& inputDistribution) {
+  if (inputDistribution.requiresCoordinator()) {
+    return Distribution::gatherOnCoordinator();
+  }
+  if (inputDistribution.isGather()) {
+    return Distribution::gather();
+  }
+  return Distribution();
+}
+
 float orderPrefixDistance(
     const RelationOpPtr& input,
     ColumnGroupCP index,
@@ -111,6 +121,17 @@ float orderPrefixDistance(
     }
   }
   return selection;
+}
+
+bool isCoordinatorOnlyScan(BaseTableCP baseTable) {
+  auto* optimization = queryCtx()->optimization();
+  if (optimization == nullptr) {
+    return false;
+  }
+
+  const auto& systemConnectorId = optimization->options().systemConnectorId;
+  return !systemConnectorId.empty() &&
+      baseTable->schemaTable->connectorId() == systemConnectorId;
 }
 
 } // namespace
@@ -195,6 +216,10 @@ Distribution TableScan::outputDistribution(
     const BaseTable* baseTable,
     ColumnGroupCP index,
     const ColumnVector& columns) {
+  if (isCoordinatorOnlyScan(baseTable)) {
+    return Distribution::gatherOnCoordinator();
+  }
+
   auto schemaColumns = transform<ColumnVector>(
       columns, [](auto& column) { return column->schemaColumn(); });
 
@@ -1758,6 +1783,19 @@ namespace {
 Distribution commonInputDistribution(const RelationOpPtrVector& inputs) {
   VELOX_CHECK_GE(inputs.size(), 2, "UnionAll requires at least 2 inputs");
   const auto& first = inputs[0]->distribution();
+  const bool allGather =
+      std::all_of(inputs.begin(), inputs.end(), [](const auto& input) {
+        return input->distribution().isGather();
+      });
+  if (allGather) {
+    const bool anyCoordinator =
+        std::any_of(inputs.begin(), inputs.end(), [](const auto& input) {
+          return input->distribution().requiresCoordinator();
+        });
+    return anyCoordinator ? Distribution::gatherOnCoordinator()
+                          : Distribution::gather();
+  }
+
   for (size_t i = 1; i < inputs.size(); ++i) {
     if (!first.isSamePartition(inputs[i]->distribution())) {
       return Distribution{};
@@ -1898,12 +1936,11 @@ void UnionAll::accept(
   visitor.visit(*this, context);
 }
 
-// TODO Figure out a cleaner solution to setting 'distribution' and 'columns'.
 TableWrite::TableWrite(
     RelationOpPtr input,
     ExprVector inputColumns,
     const WritePlan* write)
-    : RelationOp{RelType::kTableWrite, input, input->distribution().isGather() ? Distribution::gather() : Distribution(), {}},
+    : RelationOp{RelType::kTableWrite, input, writeOutputDistribution(input->distribution()), {}},
       inputColumns{std::move(inputColumns)},
       write{write} {
   cost_.inputCardinality = inputCardinality();
@@ -1973,7 +2010,10 @@ AssignUniqueId::AssignUniqueId(RelationOpPtr input, ColumnCP uniqueIdColumn)
               input->distribution().orderKeys(),
               input->distribution().orderTypes(),
               input->distribution().numKeysUnique(),
-              ExprVector{uniqueIdColumn}),
+              ExprVector{uniqueIdColumn},
+              input->distribution().requiresCoordinator()
+                  ? Distribution::Placement::kCoordinator
+                  : Distribution::Placement::kAny),
           appendColumn(input->columns(), uniqueIdColumn)),
       uniqueIdColumn_(uniqueIdColumn) {
   // Fanout is 1 (cardinality neutral).

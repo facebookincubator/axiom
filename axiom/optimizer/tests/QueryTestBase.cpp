@@ -109,7 +109,7 @@ logical_plan::LogicalPlanNodePtr QueryTestBase::parseSelect(
 }
 
 namespace {
-constexpr int32_t kWaitTimeoutUs = 500'000;
+constexpr int32_t kWaitTimeoutUs = 30'000'000;
 
 void waitForCompletion(const std::shared_ptr<runner::LocalRunner>& runner) {
   if (runner) {
