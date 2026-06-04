@@ -16,10 +16,20 @@
 
 #include "axiom/common/TrackedExecutor.h"
 
+#include <folly/synchronization/SanitizeThread.h>
 #include "axiom/common/QueryRuntimeStats.h"
 #include "velox/common/time/CpuWallTimer.h"
 
 namespace facebook::axiom {
+
+TrackedExecutor::Metrics::Metrics() {
+  folly::annotate_benign_race_sized(
+      this,
+      sizeof(*this),
+      "axiom::TrackedExecutor::Metrics is deliberately not thread safe",
+      __FILE__,
+      __LINE__);
+}
 
 TrackedExecutor::Func TrackedExecutor::wrapFunc(Func func) {
   auto enqueueTime = std::chrono::steady_clock::now();
