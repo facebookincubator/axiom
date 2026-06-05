@@ -2353,6 +2353,10 @@ SqlStatementPtr parseShowTables(
       metadata->schemaExists(session, schema),
       "Schema does not exist: {}",
       schema);
+  VELOX_USER_CHECK(
+      metadata->listTableNamesSupported(),
+      "SHOW TABLES is not supported for catalog '{}'",
+      connectorId);
   auto tableNames = metadata->listTableNames(session, schema);
   std::sort(tableNames.begin(), tableNames.end());
 

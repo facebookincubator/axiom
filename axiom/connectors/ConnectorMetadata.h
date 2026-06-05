@@ -1008,9 +1008,13 @@ class ConnectorMetadata {
       const ConnectorSessionPtr& session,
       const std::string& schemaName) = 0;
 
-  /// Returns table names in the given schema. Connectors with unbounded
-  /// table sets (e.g., dynamic resolution) return empty. Results are not
-  /// guaranteed to be in any particular order.
+  /// Returns whether this connector supports listing table names.
+  virtual bool listTableNamesSupported() const {
+    return true;
+  }
+
+  /// Returns table names in the given schema. Results are not guaranteed to be
+  /// in any particular order.
   virtual std::vector<std::string> listTableNames(
       const ConnectorSessionPtr& session,
       const std::string& schemaName) = 0;
