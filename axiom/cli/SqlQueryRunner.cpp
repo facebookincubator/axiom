@@ -335,7 +335,7 @@ std::string SqlQueryRunner::dropTable(
 
   const auto& tableName = statement.tableName();
 
-  auto session = std::make_shared<connector::ConnectorSession>("test");
+  auto session = std::make_shared<connector::ConnectorSession>("test", user_);
   const bool dropped = metadata->dropTable(
       session,
       statement.tableName(),
@@ -354,7 +354,7 @@ std::string SqlQueryRunner::addColumn(
     bool explain) {
   auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
 
-  auto session = std::make_shared<connector::ConnectorSession>("test");
+  auto session = std::make_shared<connector::ConnectorSession>("test", user_);
   auto result = metadata->addColumn(
       session,
       statement.tableName(),
@@ -390,7 +390,7 @@ std::string SqlQueryRunner::createSchema(
         optimizer::ConstantExprEvaluator::evaluateConstantExpr(*value);
   }
 
-  auto session = std::make_shared<connector::ConnectorSession>("test");
+  auto session = std::make_shared<connector::ConnectorSession>("test", user_);
   metadata->createSchema(
       session, statement.schemaName(), statement.ifNotExists(), properties);
   return fmt::format("Created schema: {}", statement.schemaName());
@@ -399,7 +399,7 @@ std::string SqlQueryRunner::createSchema(
 std::string SqlQueryRunner::dropSchema(
     const presto::DropSchemaStatement& statement) {
   auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
-  auto session = std::make_shared<connector::ConnectorSession>("test");
+  auto session = std::make_shared<connector::ConnectorSession>("test", user_);
   metadata->dropSchema(session, statement.schemaName(), statement.ifExists());
   return fmt::format("Dropped schema: {}", statement.schemaName());
 }
@@ -1097,7 +1097,7 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
   velox::exec::SimpleExpressionEvaluator evaluator(
       queryCtx.get(), optimizerPool_.get());
 
-  auto session = std::make_shared<Session>(queryCtx->queryId());
+  auto session = std::make_shared<Session>(queryCtx->queryId(), user_);
   auto history = std::make_unique<optimizer::VeloxHistory>();
   if (schemaResolver == nullptr) {
     schemaResolver = std::make_shared<connector::SchemaResolver>(
