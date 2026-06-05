@@ -79,6 +79,42 @@ SELECT a FROM t GROUP BY GROUPING SETS ((a), (a, b)) HAVING b IS NOT NULL
 -- HAVING + ORDER BY with grouping sets.
 SELECT a AS foo FROM t GROUP BY GROUPING SETS ((a), (a, b)) HAVING b IS NOT NULL ORDER BY a DESC
 ----
+-- GROUPING() returns bitmask: 0 if column present, 1 if aggregated.
+SELECT a, GROUPING(a), sum(b) AS s FROM t GROUP BY ROLLUP(a)
+----
+-- GROUPING() with multiple columns.
+SELECT a, b, GROUPING(a, b), sum(b) AS s FROM t GROUP BY CUBE(a, b)
+----
+-- GROUPING() with single grouping set.
+SELECT a, GROUPING(a), count(*) AS c FROM t GROUP BY GROUPING SETS ((a))
+----
+-- GROUPING() with plain GROUP BY returns 0.
+SELECT a, GROUPING(a), count(*) AS c FROM t GROUP BY a
+----
+-- GROUPING() in HAVING.
+SELECT a, sum(b) AS s FROM t GROUP BY ROLLUP(a) HAVING GROUPING(a) = 0
+----
+-- GROUPING() in ORDER BY.
+-- ordered
+SELECT a, GROUPING(a) AS grp, sum(b) AS s FROM t GROUP BY ROLLUP(a) ORDER BY GROUPING(a), a
+----
+-- GROUPING() with reversed arg order.
+SELECT a, b, GROUPING(b, a), sum(b) AS s FROM t GROUP BY CUBE(a, b)
+----
+-- GROUPING() with empty grouping set.
+SELECT a, GROUPING(a), sum(b) AS s FROM t GROUP BY GROUPING SETS ((a), ())
+----
+-- GROUPING() with duplicate grouping sets.
+SELECT a, GROUPING(a), count(*) AS c FROM t GROUP BY GROUPING SETS ((a), (a), (a, b))
+----
+-- SELECT aliases are not visible in HAVING (standard SQL — HAVING runs before SELECT).
+-- error: HAVING clause cannot reference column
+SELECT a, GROUPING(a) AS grp, sum(b) AS s FROM t GROUP BY ROLLUP(a) HAVING grp = 0
+----
+-- GROUPING() with non-grouping column is rejected.
+-- error: Not a grouping column
+SELECT a, GROUPING(b), count(*) AS c FROM t GROUP BY ROLLUP(a)
+----
 -- error: DISTINCT aggregation with grouping sets is not supported yet
 SELECT b, count(DISTINCT a) AS c FROM t GROUP BY ROLLUP(b)
 ----
