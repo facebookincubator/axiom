@@ -47,6 +47,13 @@ facebook::velox::TypePtr parseType(const TypeSignaturePtr& type);
 /// subqueries) are rejected.
 bool isOuterScopeAggregateLiftCandidate(Query* query);
 
+/// Options for context-specific validation during expression translation.
+struct ExprOptions {
+  /// Whether GROUPING() expressions are allowed. Defaults to false so that
+  /// GROUPING() is rejected unless explicitly enabled by the GROUP BY path.
+  bool allowGrouping{false};
+};
+
 /// Translates Presto SQL AST expression nodes into logical plan ExprApi
 /// objects. Handles all expression types (literals, comparisons, arithmetic,
 /// function calls, casts, subqueries, etc.).
@@ -82,8 +89,8 @@ class ExpressionPlanner {
   /// functions). Required when the expression may contain aggregate function
   /// calls with ORDER BY clauses. Can be nullptr if aggregates with ORDER BY
   /// are not expected.
-  using SortingKeyResolver =
-      std::function<lp::ExprApi(const ExpressionPtr& expr)>;
+  using SortingKeyResolver = std::function<
+      lp::ExprApi(const ExpressionPtr& expr, ExprOptions options)>;
 
   /// Returns true if the table qualifier should be dropped from a column
   /// reference (e.g. t.col -> col).
@@ -123,7 +130,7 @@ class ExpressionPlanner {
   /// Translates an AST expression into an ExprApi. Aggregate options
   /// (DISTINCT, FILTER, ORDER BY) are embedded in the returned ExprApi via
   /// AggregateCallExpr. Window functions are embedded via WindowCallExpr.
-  lp::ExprApi toExpr(const ExpressionPtr& node);
+  lp::ExprApi toExpr(const ExpressionPtr& node, ExprOptions options = {});
 
   /// Sets alias-to-expression mappings for lateral column alias resolution.
   /// When set, Identifier nodes matching an alias key are resolved to the
@@ -155,18 +162,22 @@ class ExpressionPlanner {
       std::vector<const facebook::velox::core::IExpr*>& traversalOrder);
 
   // Converts a Window AST node into a WindowSpec.
-  lp::WindowSpec convertWindow(const std::shared_ptr<Window>& window);
+  lp::WindowSpec convertWindow(
+      const std::shared_ptr<Window>& window,
+      ExprOptions options);
 
   // Translates each AST argument via `toExpr`.
   std::vector<lp::ExprApi> translateArgs(
-      const std::vector<ExpressionPtr>& arguments);
+      const std::vector<ExpressionPtr>& arguments,
+      ExprOptions options = {});
 
   // Builds an AggregateCallExpr from a FunctionCall AST node that has
   // DISTINCT, FILTER, or ORDER BY.
   lp::ExprApi toAggregateCallExpr(
       const FunctionCall* call,
       const std::string& funcName,
-      const std::vector<lp::ExprApi>& args);
+      const std::vector<lp::ExprApi>& args,
+      ExprOptions options);
 
   // Plans `subquery` via `subqueryPlanner_` and wraps the resulting
   // plan as an `lp::Subquery` expression, caching by AST identity.

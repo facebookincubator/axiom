@@ -293,17 +293,17 @@ class RelationPlanner : public AstVisitor {
     return *builder_;
   }
 
-  lp::ExprApi toExpr(const ExpressionPtr& node) {
-    return exprPlanner_.toExpr(node);
+  lp::ExprApi toExpr(const ExpressionPtr& node, ExprOptions options = {}) {
+    return exprPlanner_.toExpr(node, options);
   }
 
  private:
-  void addFilter(const ExpressionPtr& filter) {
+  void addFilter(const ExpressionPtr& filter, ExprOptions options = {}) {
     if (filter == nullptr) {
       return;
     }
 
-    auto expr = toExpr(filter);
+    auto expr = toExpr(filter, options);
     auto expanded =
         ColumnsExpansion::expand(expr, *builder_, filter->location());
     if (expanded.empty()) {
@@ -765,7 +765,8 @@ class RelationPlanner : public AstVisitor {
   // for a single plain SELECT * (no EXCLUDE/REPLACE). Window functions are
   // embedded as WindowCallExpr in the IExpr tree.
   std::optional<std::vector<lp::ExprApi>> buildSelectProjections(
-      const std::vector<SelectItemPtr>& selectItems) {
+      const std::vector<SelectItemPtr>& selectItems,
+      ExprOptions options = {}) {
     // Previous SELECT's display names must not leak into this scope.
     displayNames_.lastNames.clear();
 
@@ -859,7 +860,7 @@ class RelationPlanner : public AstVisitor {
         VELOX_CHECK(item->is(NodeType::kSingleColumn));
         auto* singleColumn = item->as<SingleColumn>();
 
-        lp::ExprApi expr = toExpr(singleColumn->expression());
+        lp::ExprApi expr = toExpr(singleColumn->expression(), options);
 
         std::optional<std::string> alias;
         if (singleColumn->alias() != nullptr) {
@@ -932,8 +933,9 @@ class RelationPlanner : public AstVisitor {
   // SELECT * instead of returning nullopt). Does NOT extract nested windows —
   // the caller is responsible for that.
   std::vector<lp::ExprApi> expandSelectExprs(
-      const std::vector<SelectItemPtr>& selectItems) {
-    auto result = buildSelectProjections(selectItems);
+      const std::vector<SelectItemPtr>& selectItems,
+      ExprOptions options = {}) {
+    auto result = buildSelectProjections(selectItems, options);
     if (result.has_value()) {
       return result.value();
     }
@@ -1089,7 +1091,7 @@ class RelationPlanner : public AstVisitor {
         projectedExprs.size());
   }
 
-  lp::ExprApi toSortingKey(const ExpressionPtr& expr) {
+  lp::ExprApi toSortingKey(const ExpressionPtr& expr, ExprOptions options) {
     if (expr->is(NodeType::kLongLiteral)) {
       const auto n = expr->as<LongLiteral>()->value();
       AXIOM_PRESTO_SEMANTIC_CHECK_GE(
@@ -1109,7 +1111,7 @@ class RelationPlanner : public AstVisitor {
       return column.toCol();
     }
 
-    return toExpr(expr);
+    return toExpr(expr, options);
   }
 
   // Plans 'query' as a subquery in a fresh builder, reporting whether it
@@ -1150,7 +1152,7 @@ class RelationPlanner : public AstVisitor {
 
     const auto& sortItems = orderBy->sortItems();
     for (const auto& item : sortItems) {
-      auto expr = toSortingKey(item->sortKey());
+      auto expr = toSortingKey(item->sortKey(), {});
 
       // Expand COLUMNS() calls to multiple sort keys with the same
       // ordering direction.
@@ -1261,7 +1263,8 @@ class RelationPlanner : public AstVisitor {
     const bool distinct = node->select()->isDistinct();
 
     if (auto groupBy = node->groupBy()) {
-      auto selectExprs = expandSelectExprs(selectItems);
+      auto selectExprs =
+          expandSelectExprs(selectItems, {.allowGrouping = true});
 
       // When DISTINCT is also present, skip ORDER BY in the GROUP BY
       // planner so the Sort lands ABOVE the DISTINCT aggregate.
@@ -1390,7 +1393,9 @@ class RelationPlanner : public AstVisitor {
   std::shared_ptr<lp::PlanBuilder> builder_;
   ExpressionPlanner exprPlanner_{
       [this](Query* query) { return planSubquery(query); },
-      [this](const ExpressionPtr& expr) { return toSortingKey(expr); },
+      [this](const ExpressionPtr& expr, ExprOptions options) {
+        return toSortingKey(expr, options);
+      },
       [this](const std::string& qualifier, const std::string& name) {
         // Only canonicalize if the qualifier resolves as a table alias (not a
         // struct field dereference) and the unqualified name is unambiguous.

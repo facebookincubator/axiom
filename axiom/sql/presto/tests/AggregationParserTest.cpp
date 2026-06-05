@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <fmt/format.h>
+#include <fmt/ranges.h>
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
@@ -306,18 +308,167 @@ TEST_F(AggregationParserTest, groupingSets) {
 }
 
 TEST_F(AggregationParserTest, groupingFunction) {
-  // GROUPING(col) is rejected with a clear unsupported-expression error.
-  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
-      parseSql(
-          "SELECT GROUPING(n_regionkey), count(1) FROM nation "
-          "GROUP BY GROUPING SETS ((n_regionkey), ())"),
-      "Unsupported expression type: GroupingOperation");
+  auto grouping = [](std::initializer_list<int64_t> bitmasks) {
+    return fmt::format(
+        "element_at([{}], plus($grouping_set_id, 1))",
+        fmt::join(bitmasks, ","));
+  };
 
-  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
-      parseSql(
-          "SELECT GROUPING(n_regionkey, n_name), count(1) FROM nation "
-          "GROUP BY GROUPING SETS ((n_regionkey, n_name), (n_regionkey), ())"),
-      "Unsupported expression type: GroupingOperation");
+  // DuckDB can't parse "$grouping_set_id", so use callback-based project
+  // matching to compare expression toString() directly.
+  using MatcherBuilder =
+      facebook::axiom::logical_plan::test::LogicalPlanMatcherBuilder;
+  auto projectExprs =
+      [](std::vector<std::string> expected) -> MatcherBuilder::OnMatchCallback {
+    return
+        [expected = std::move(expected)](const lp::LogicalPlanNodePtr& node) {
+          auto& project = *node->as<lp::ProjectNode>();
+          ASSERT_EQ(expected.size(), project.expressions().size());
+          for (auto i = 0; i < expected.size(); ++i) {
+            EXPECT_EQ(expected[i], project.expressionAt(i)->toString())
+                << "at index " << i;
+          }
+        };
+  };
+
+  // GROUPING() with two grouping sets.
+  testSelect(
+      "SELECT GROUPING(n_regionkey), count(1) FROM nation "
+      "GROUP BY GROUPING SETS ((n_regionkey), ())",
+      matchScan()
+          .aggregate({"n_regionkey"}, {"count(1)"}, {{0}, {}})
+          .project(projectExprs({grouping({0, 1}), "count"}))
+          .output());
+
+  // GROUPING() with two columns, three grouping sets.
+  testSelect(
+      "SELECT GROUPING(n_regionkey, n_name), count(1) FROM nation "
+      "GROUP BY GROUPING SETS ((n_regionkey, n_name), (n_regionkey), ())",
+      matchScan()
+          .aggregate({"n_regionkey", "n_name"}, {"count(1)"}, {{0, 1}, {0}, {}})
+          .project(projectExprs({grouping({0, 1, 3}), "count"}))
+          .output());
+
+  // GROUPING() in SELECT with other columns (ROLLUP).
+  testSelect(
+      "SELECT n_regionkey, n_name, GROUPING(n_regionkey, n_name), count(1) "
+      "FROM nation GROUP BY ROLLUP(n_regionkey, n_name)",
+      matchScan()
+          .aggregate({"n_regionkey", "n_name"}, {"count(1)"}, {{0, 1}, {0}, {}})
+          .project(projectExprs(
+              {"n_regionkey", "n_name", grouping({0, 1, 3}), "count"}))
+          .output());
+
+  // Two separate GROUPING() calls (CUBE).
+  testSelect(
+      "SELECT n_regionkey, n_name, GROUPING(n_regionkey), GROUPING(n_name), "
+      "count(1) FROM nation GROUP BY CUBE(n_regionkey, n_name)",
+      matchScan()
+          .aggregate(
+              {"n_regionkey", "n_name"}, {"count(1)"}, {{0, 1}, {0}, {1}, {}})
+          .project(projectExprs(
+              {"n_regionkey",
+               "n_name",
+               grouping({0, 0, 1, 1}),
+               grouping({0, 1, 0, 1}),
+               "count"}))
+          .output());
+
+  // GROUPING() with plain GROUP BY resolves to constant 0 (single set).
+  testSelect(
+      "SELECT n_regionkey, GROUPING(n_regionkey), count(1) "
+      "FROM nation GROUP BY n_regionkey",
+      matchScan()
+          .aggregate({"n_regionkey"}, {"count(1)"})
+          .project(projectExprs({"n_regionkey", "0", "count"}))
+          .output());
+
+  VELOX_ASSERT_THROW(
+      parseSelect(
+          "SELECT n_regionkey, GROUPING(n_name), count(1) "
+          "FROM nation GROUP BY ROLLUP(n_regionkey)"),
+      "Not a grouping column: n_name");
+
+  // Duplicate columns are allowed.
+  testSelect(
+      "SELECT n_regionkey, GROUPING(n_regionkey, n_regionkey), count(1) "
+      "FROM nation GROUP BY ROLLUP(n_regionkey)",
+      matchScan()
+          .aggregate({"n_regionkey"}, {"count(1)"}, {{0}, {}})
+          .project(projectExprs({"n_regionkey", grouping({0, 3}), "count"}))
+          .output());
+
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSelect(
+          "SELECT n_regionkey, count(1) "
+          "FROM nation "
+          "WHERE GROUPING(n_regionkey) = 0 "
+          "GROUP BY ROLLUP(n_regionkey)"),
+      "not allowed in this context");
+
+  // Multiple GROUPING() calls in WHERE.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSelect(
+          "SELECT n_regionkey, n_name, count(1) "
+          "FROM nation "
+          "WHERE GROUPING(n_regionkey) = 0 OR GROUPING(n_name) = 1 "
+          "GROUP BY ROLLUP(n_regionkey, n_name)"),
+      "not allowed in this context");
+
+  // Zero-arg GROUPING().
+  VELOX_ASSERT_THROW(
+      parseSelect(
+          "SELECT n_regionkey, GROUPING(), count(1) "
+          "FROM nation GROUP BY ROLLUP(n_regionkey)"),
+      "GROUPING() requires at least one column argument");
+
+  // GROUPING() inside aggregate arguments is rejected.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSelect(
+          "SELECT sum(GROUPING(n_regionkey)) "
+          "FROM nation GROUP BY ROLLUP(n_regionkey)"),
+      "GROUPING() is not allowed in this context");
+
+  // Qualified column reference.
+  testSelect(
+      "SELECT GROUPING(nation.n_regionkey), count(1) FROM nation "
+      "GROUP BY GROUPING SETS ((n_regionkey), ())",
+      matchScan()
+          .aggregate({"n_regionkey"}, {"count(1)"}, {{0}, {}})
+          .project(projectExprs({grouping({0, 1}), "count"}))
+          .output());
+
+  // GROUPING() in FILTER clause of aggregate.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSelect(
+          "SELECT sum(n_regionkey) FILTER (WHERE GROUPING(n_regionkey) = 0), "
+          "count(1) FROM nation GROUP BY ROLLUP(n_regionkey)"),
+      "not allowed in this context");
+
+  // GROUPING() in ORDER BY of aggregate.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSelect(
+          "SELECT array_agg(n_name ORDER BY GROUPING(n_regionkey)), "
+          "count(1) FROM nation GROUP BY ROLLUP(n_regionkey)"),
+      "not allowed in this context");
+
+  // GROUPING() without GROUP BY.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSelect("SELECT GROUPING(n_regionkey) FROM nation"),
+      "not allowed in this context");
+
+  // GROUPING() in standalone ORDER BY without GROUP BY.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSelect(
+          "SELECT n_regionkey FROM nation ORDER BY GROUPING(n_regionkey)"),
+      "not allowed in this context");
+
+  // GROUPING() in JOIN ON.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSelect(
+          "SELECT n_regionkey FROM nation n1 "
+          "JOIN nation n2 ON GROUPING(n1.n_regionkey) = 0"),
+      "not allowed in this context");
 }
 
 TEST_F(AggregationParserTest, rollup) {

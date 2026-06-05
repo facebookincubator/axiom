@@ -319,6 +319,33 @@ std::vector<std::vector<lp::ExprApi>> crossProductGroupingSets(
   return combined;
 }
 
+constexpr std::string_view kGroupingSetIdColumn = "$grouping_set_id";
+
+const core::CallExpr* FOLLY_NULLABLE asGroupingCall(const core::ExprPtr& expr) {
+  if (expr->is(core::IExpr::Kind::kCall)) {
+    auto* call = expr->as<core::CallExpr>();
+    if (call->name() == GroupByPlanner::kGroupingFunctionName) {
+      return call;
+    }
+  }
+  return nullptr;
+}
+
+// Rejects GROUPING() inside aggregate function arguments.
+void rejectGroupingInAggregates(const core::ExprPtr& expr) {
+  if (asGroupingCall(expr)) {
+    throw PrestoSqlError(
+        "GROUPING() is not allowed in this context",
+        0,
+        0,
+        std::nullopt,
+        PrestoSqlErrorKind::kSemantic);
+  }
+  for (const auto& input : expr->inputs()) {
+    rejectGroupingInAggregates(input);
+  }
+}
+
 // Removes duplicate grouping sets from 'groupingSetsIndices'. Two sets are
 // duplicates if they contain the same key indices (order-insensitive).
 void deduplicateGroupingSets(
@@ -356,11 +383,30 @@ void GroupByPlanner::plan(
     deduplicateGroupingSets(groupingSetsIndices_);
   }
 
+  // Populate groupingColumnToIndex_ for GROUPING() resolution.
+  for (size_t i = 0; i < groupingKeys_.size(); ++i) {
+    if (const auto* fieldAccess =
+            core::FieldAccessExpr::tryAsRootColumn(groupingKeys_[i].expr())) {
+      groupingColumnToIndex_[fieldAccess->name()] = static_cast<int32_t>(i);
+    }
+  }
+
   // Walk SELECT, HAVING, and ORDER BY expressions to collect aggregate
   // function calls, then add the Aggregate plan node.
   // Populates: aggregates_, projections_, filter_,
   //   sortingKeyExprs_, outputNames_.
   collectAggregates(selectExprs, having, orderBy);
+
+  for (const auto& agg : aggregates_) {
+    rejectGroupingInAggregates(agg.expr());
+  }
+
+  resolveGroupingCalls(projections_);
+  if (filter_.has_value()) {
+    filter_ =
+        lp::ExprApi(rewriteGroupingMarker(filter_->expr()), filter_->alias());
+  }
+  resolveGroupingCalls(sortingKeyExprs_);
 
   addAggregate(groupingSetsIndices_.size() > 1);
 
@@ -540,7 +586,7 @@ void GroupByPlanner::collectAggregates(
   }
 
   if (having != nullptr) {
-    lp::ExprApi expr = exprPlanner_.toExpr(having);
+    lp::ExprApi expr = exprPlanner_.toExpr(having, {.allowGrouping = true});
     findAggregates(expr.expr(), aggregates_, aggregateSet);
     filter_ = expr;
   }
@@ -548,7 +594,7 @@ void GroupByPlanner::collectAggregates(
   if (orderBy != nullptr) {
     const auto& sortItems = orderBy->sortItems();
     for (const auto& item : sortItems) {
-      auto expr = exprPlanner_.toExpr(item->sortKey());
+      auto expr = exprPlanner_.toExpr(item->sortKey(), {.allowGrouping = true});
       findAggregates(expr.expr(), aggregates_, aggregateSet);
       sortingKeyExprs_.emplace_back(expr);
     }
@@ -601,7 +647,7 @@ void GroupByPlanner::addAggregate(bool useGroupingSets) {
         groupingKeys_,
         groupingSetsIndices_,
         aggregateExprs,
-        "$grouping_set_id");
+        std::string(kGroupingSetIdColumn));
   } else {
     builder_->aggregate(groupingKeys_, aggregateExprs);
   }
@@ -633,6 +679,13 @@ void GroupByPlanner::rewritePostAggregateExprs() {
     flatInputs_.emplace_back(lp::Col(outputNames_.at(index)));
     aggregateInputs.emplace(agg.expr(), flatInputs_.back().expr());
     ++index;
+  }
+
+  // GROUPING() resolution introduces Col(kGroupingSetIdColumn) references.
+  // Add an identity mapping so replaceInputs passes them through.
+  if (groupingSetsIndices_.size() > 1) {
+    auto groupingSetIdCol = lp::Col(std::string(kGroupingSetIdColumn)).expr();
+    keyInputs.emplace(groupingSetIdCol, groupingSetIdCol);
   }
 
   if (filter_.has_value()) {
@@ -808,6 +861,89 @@ std::vector<lp::ExprApi> GroupByPlanner::resolveWithCache(
     }
   }
   return result;
+}
+
+core::ExprPtr GroupByPlanner::rewriteGroupingMarker(const core::ExprPtr& expr) {
+  if (auto* call = asGroupingCall(expr)) {
+    std::vector<int32_t> columnIndices;
+    columnIndices.reserve(call->inputs().size());
+    for (const auto& input : call->inputs()) {
+      auto* field = core::FieldAccessExpr::tryAsRootColumn(input);
+      VELOX_USER_CHECK_NOT_NULL(
+          field, "GROUPING() arguments must be column references");
+      auto it = groupingColumnToIndex_.find(field->name());
+      VELOX_USER_CHECK(
+          it != groupingColumnToIndex_.end(),
+          "Not a grouping column: {}",
+          field->name());
+      columnIndices.push_back(it->second);
+    }
+
+    VELOX_USER_CHECK(
+        !columnIndices.empty(),
+        "GROUPING() requires at least one column argument");
+    // Bitmask is int64, so at most 63 columns (sign bit excluded).
+    VELOX_USER_CHECK_LE(
+        columnIndices.size(),
+        63,
+        "GROUPING() supports up to 63 column arguments");
+
+    if (groupingSetsIndices_.size() == 1) {
+      return lp::Lit(static_cast<int64_t>(0)).expr();
+    }
+
+    // MSB = leftmost arg. Bit is 0 when column is present in the
+    // active set, 1 when rolled up (absent).
+    folly::F14FastSet<int32_t> setIndices;
+    std::vector<Variant> bitmaskValues;
+    bitmaskValues.reserve(groupingSetsIndices_.size());
+    for (const auto& groupingSet : groupingSetsIndices_) {
+      int64_t bitmask =
+          static_cast<int64_t>((1ULL << columnIndices.size()) - 1);
+      setIndices.clear();
+      setIndices.insert(groupingSet.begin(), groupingSet.end());
+      for (size_t i = 0; i < columnIndices.size(); ++i) {
+        if (setIndices.contains(columnIndices[i])) {
+          bitmask &=
+              ~static_cast<int64_t>(1ULL << (columnIndices.size() - 1 - i));
+        }
+      }
+      bitmaskValues.emplace_back(bitmask);
+    }
+
+    // element_at is 1-indexed; $grouping_set_id is 0-based.
+    return lp::Call(
+               "element_at",
+               lp::Lit(Variant::array(std::move(bitmaskValues))),
+               lp::Call(
+                   "plus",
+                   lp::Col(std::string(kGroupingSetIdColumn)),
+                   lp::Lit(static_cast<int64_t>(1))))
+        .expr();
+  }
+
+  std::vector<core::ExprPtr> newInputs;
+  bool changed = false;
+  for (const auto& input : expr->inputs()) {
+    auto resolved = rewriteGroupingMarker(input);
+    if (resolved != input) {
+      changed = true;
+    }
+    newInputs.push_back(std::move(resolved));
+  }
+  if (changed) {
+    return expr->replaceInputs(std::move(newInputs));
+  }
+  return expr;
+}
+
+void GroupByPlanner::resolveGroupingCalls(std::vector<lp::ExprApi>& exprs) {
+  for (auto& expr : exprs) {
+    auto resolved = rewriteGroupingMarker(expr.expr());
+    if (resolved != expr.expr()) {
+      expr = lp::ExprApi(std::move(resolved), expr.alias());
+    }
+  }
 }
 
 } // namespace axiom::sql::presto

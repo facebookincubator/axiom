@@ -31,6 +31,10 @@ namespace lp = facebook::axiom::logical_plan;
 /// per-query to hold intermediate state during aggregation planning.
 class GroupByPlanner {
  public:
+  /// Marker function name emitted by ExpressionPlanner for GROUPING() AST
+  /// nodes.
+  static constexpr std::string_view kGroupingFunctionName = "grouping";
+
   GroupByPlanner(
       std::shared_ptr<lp::PlanBuilder>& builder,
       ExpressionPlanner& exprPlanner)
@@ -92,6 +96,15 @@ class GroupByPlanner {
       const std::vector<ExpressionPtr>& exprs,
       const std::vector<lp::ExprApi>& selectExprs);
 
+  // Replaces `grouping(...)` marker calls in 'exprs' with
+  // `element_at(array[bitmasks...], $grouping_set_id + 1)`.
+  void resolveGroupingCalls(std::vector<lp::ExprApi>& exprs);
+
+  // Replaces a single `grouping(...)` marker in 'expr' (recursively) with
+  // the bitmask lookup expression. Returns the original expr if unchanged.
+  facebook::velox::core::ExprPtr rewriteGroupingMarker(
+      const facebook::velox::core::ExprPtr& expr);
+
   // Injected dependencies.
   std::shared_ptr<lp::PlanBuilder>& builder_;
   ExpressionPlanner& exprPlanner_;
@@ -102,6 +115,9 @@ class GroupByPlanner {
   std::vector<std::vector<lp::ExprApi>> groupingSets_;
   std::vector<lp::ExprApi> groupingKeys_;
   std::vector<std::vector<int32_t>> groupingSetsIndices_;
+  // Maps grouping key column name → index in groupingKeys_ for GROUPING()
+  // resolution.
+  folly::F14FastMap<std::string, int32_t> groupingColumnToIndex_;
   std::vector<lp::ExprApi> projections_;
 
   // Deduplicated aggregate expressions. Aggregate options are embedded in
