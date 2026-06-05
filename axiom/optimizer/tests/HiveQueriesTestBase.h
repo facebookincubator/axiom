@@ -49,6 +49,11 @@ class HiveQueriesTestBase : public QueryTestBase {
   /// Unregisters Parquet reader and writer.
   static void TearDownTestCase();
 
+  static connector::ConnectorSessionPtr makeSession() {
+    return std::make_shared<connector::ConnectorSession>(
+        /*queryId=*/"test", /*user=*/"test");
+  }
+
   /// Returns a schema of a table.
   velox::RowTypePtr getSchema(std::string_view tableName);
 
