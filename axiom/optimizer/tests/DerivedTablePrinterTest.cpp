@@ -93,7 +93,7 @@ class DerivedTablePrinterTest : public ::testing::Test {
     auto schemaResolver = std::make_shared<connector::SchemaResolver>(
         connector::ConnectorMetadataRegistry::global());
 
-    auto session = std::make_shared<Session>(veloxQueryCtx->queryId());
+    auto session = std::make_shared<Session>(veloxQueryCtx->queryId(), "test");
 
     Optimization opt{
         session,

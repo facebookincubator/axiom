@@ -131,8 +131,8 @@ facebook::axiom::optimizer::PlanAndStats optimize(
   auto queryCtx = velox::core::QueryCtx::create();
   velox::exec::SimpleExpressionEvaluator evaluator(queryCtx.get(), pool);
 
-  auto session =
-      std::make_shared<facebook::axiom::Session>(queryCtx->queryId());
+  auto session = std::make_shared<facebook::axiom::Session>(
+      queryCtx->queryId(), /*user=*/"pyspark-optimizer");
 
   facebook::axiom::optimizer::Optimization opt(
       session,

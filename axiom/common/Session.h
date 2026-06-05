@@ -23,7 +23,7 @@ namespace facebook::axiom {
 /// Read-only query-specific information.
 class Session final {
  public:
-  explicit Session(std::string queryId, std::string user = {})
+  Session(std::string queryId, std::string user)
       : queryId_{std::move(queryId)}, user_{std::move(user)} {}
 
   /// Returns the query identifier.

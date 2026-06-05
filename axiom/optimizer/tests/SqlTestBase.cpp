@@ -122,7 +122,7 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunner(
   exec::SimpleExpressionEvaluator evaluator(
       queryCtx.get(), optimizerPool.get());
 
-  auto session = std::make_shared<Session>(queryId);
+  auto session = std::make_shared<Session>(queryId, "test");
   connector::SchemaResolver schemaResolver{
       connector::ConnectorMetadataRegistry::global()};
   VeloxHistory history;
