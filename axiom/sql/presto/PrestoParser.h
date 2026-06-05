@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/sql/presto/ParserOptions.h"
 #include "axiom/sql/presto/SqlStatement.h"
 
@@ -23,17 +24,22 @@ namespace axiom::sql::presto {
 /// SQL Parser compatible with PrestoSQL dialect.
 class PrestoParser {
  public:
+  using Registry =
+      facebook::axiom::connector::ConnectorMetadataRegistry::Registry;
+
   /// @param defaultConnectorId Connector ID to use for tables that do not
   /// specify catalog, i.e. SELECT * FROM schema.name.
   /// @param defaultSchema Default schema to use for tables that do not
   /// specify schema, i.e. SELECT * FROM name.
+  /// @param options Parser options controlling dialect extensions.
+  /// @param registry Scoped connector metadata registry for catalog lookups.
+  /// Defaults to the global registry.
   PrestoParser(
       const std::string& defaultConnectorId,
       const std::string& defaultSchema,
-      ParserOptions options = {})
-      : defaultConnectorId_{defaultConnectorId},
-        defaultSchema_{defaultSchema},
-        options_{options} {}
+      ParserOptions options = {},
+      const Registry& registry =
+          facebook::axiom::connector::ConnectorMetadataRegistry::global());
 
   SqlStatementPtr parse(std::string_view sql, bool enableTracing = false);
 
@@ -65,6 +71,12 @@ class PrestoParser {
   const std::string defaultConnectorId_;
   const std::string defaultSchema_;
   const ParserOptions options_;
+  // Per-query connector metadata registry override, or nullptr to use the
+  // global registry. The parser lazily wraps this in a core::QueryCtx inside
+  // doParse so the QueryCtx (and any memory pool it allocates) lives only as
+  // long as a single parse call. Caller must keep the referenced Registry
+  // alive for the lifetime of the parser.
+  const Registry* registry_;
 };
 
 } // namespace axiom::sql::presto

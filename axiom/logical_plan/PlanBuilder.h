@@ -114,6 +114,21 @@ class PlanBuilder {
  public:
   /// Shared state across PlanBuilder instances. Pass the same Context to
   /// multiple builders to keep plan-node IDs and column names globally unique.
+  ///
+  /// Example:
+  ///   PlanBuilder::Context ctx("my_connector", "my_schema");
+  ///   auto plan = PlanBuilder(ctx)
+  ///       .tableScan("orders")
+  ///       .filter("o_totalprice > 100")
+  ///       .build();
+  ///
+  /// To use a scoped connector registry (for test isolation), attach the
+  /// registry to a `QueryCtx` and pass it to the Context. The scoped registry
+  /// is looked up under `ConnectorMetadataRegistry::kRegistryKey`.
+  ///
+  /// Invariants:
+  /// - `planNodeIdGenerator` must not be null
+  /// - `nameAllocator` must not be null
   struct Context {
     /// Identifies the connector to use when tableScan omits the catalog prefix.
     std::optional<std::string> defaultConnectorId;
