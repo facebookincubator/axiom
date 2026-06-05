@@ -81,7 +81,11 @@ class TrackedExecutor final : public folly::Executor {
 
   struct Metrics {
     // Not thread safe. Prefer potential inaccuracy over synchronization
-    // overhead.
+    // overhead. Construction annotates the whole struct as benignly racy so
+    // ThreadSanitizer does not flag concurrent updates from the wrapped tasks
+    // or reads from reportTo().
+    Metrics();
+
     velox::RuntimeMetric waitTime_{velox::RuntimeCounter::Unit::kNanos};
     velox::RuntimeMetric executionWallTime_{
         velox::RuntimeCounter::Unit::kNanos};
