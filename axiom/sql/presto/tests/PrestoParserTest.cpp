@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+#include <folly/ScopeGuard.h>
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
@@ -1831,6 +1834,226 @@ TEST_F(PrestoParserTest, semanticErrorHasMessageTemplate) {
         << "Semantic errors must have a messageTemplate for Scuba grouping";
     EXPECT_EQ(std::string(e.messageTemplate()), "Table not found: {}");
   }
+}
+
+TEST_F(PrestoParserTest, scopedRegistrySelect) {
+  using facebook::axiom::connector::ConnectorMetadataRegistry;
+  using facebook::axiom::connector::TestConnectorMetadata;
+
+  // Create a child registry that falls back to the global registry.
+  auto scopedRegistry =
+      ConnectorMetadataRegistry::create(&ConnectorMetadataRegistry::global());
+
+  // Create a connector and metadata only in the scoped registry.
+  auto scopedConnector =
+      std::make_shared<facebook::axiom::connector::TestConnector>("scoped_cat");
+  auto scopedMetadata =
+      std::make_shared<TestConnectorMetadata>(scopedConnector.get());
+  scopedMetadata->addTable(
+      {"default", "scoped_table"},
+      ROW({"id", "name"}, {INTEGER(), VARCHAR()}),
+      ROW({}));
+  scopedRegistry->insert("scoped_cat", scopedMetadata, /*overwrite=*/true);
+
+  // Parse a SELECT against the scoped table using a parser with the scoped
+  // registry. This should succeed because the scoped registry contains
+  // "scoped_cat".
+  PrestoParser scopedParser(
+      "scoped_cat", "default", ParserOptions{}, *scopedRegistry);
+  auto statement = scopedParser.parse("SELECT * FROM scoped_table");
+  ASSERT_TRUE(statement->isSelect());
+}
+
+TEST_F(PrestoParserTest, scopedRegistryTableNotFoundInGlobal) {
+  using facebook::axiom::connector::ConnectorMetadataRegistry;
+  using facebook::axiom::connector::TestConnectorMetadata;
+
+  // Create a child registry and register a scoped-only connector and table.
+  auto scopedRegistry =
+      ConnectorMetadataRegistry::create(&ConnectorMetadataRegistry::global());
+
+  auto scopedConnector =
+      std::make_shared<facebook::axiom::connector::TestConnector>(
+          "scoped_cat2");
+  auto scopedMetadata =
+      std::make_shared<TestConnectorMetadata>(scopedConnector.get());
+  scopedMetadata->addTable(
+      {"default", "scoped_only"}, ROW({"x"}, {INTEGER()}), ROW({}));
+  scopedRegistry->insert("scoped_cat2", scopedMetadata, /*overwrite=*/true);
+
+  // A parser using the default global registry should not find the table
+  // because "scoped_cat2" only has the test metadata in the scoped registry,
+  // and the global metadata does not have "scoped_only".
+  ConnectorMetadataRegistry::global().insert(
+      scopedConnector->connectorId(), scopedConnector->metadata());
+  SCOPE_EXIT {
+    ConnectorMetadataRegistry::global().erase(scopedConnector->connectorId());
+  };
+  PrestoParser globalParser("scoped_cat2", "default");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      globalParser.parse("SELECT * FROM scoped_only"), "Table not found");
+}
+
+TEST_F(PrestoParserTest, scopedRegistryShowCatalogs) {
+  using facebook::axiom::connector::ConnectorMetadataRegistry;
+  using facebook::axiom::connector::TestConnectorMetadata;
+
+  // Create a child registry and register an extra catalog.
+  auto scopedRegistry =
+      ConnectorMetadataRegistry::create(&ConnectorMetadataRegistry::global());
+
+  auto extraConnector =
+      std::make_shared<facebook::axiom::connector::TestConnector>("extra_cat");
+  auto extraMetadata =
+      std::make_shared<TestConnectorMetadata>(extraConnector.get());
+  scopedRegistry->insert("extra_cat", extraMetadata, /*overwrite=*/true);
+
+  // SHOW CATALOGS through the scoped parser should include "extra_cat".
+  PrestoParser scopedParser(
+      kConnectorId, "default", ParserOptions{}, *scopedRegistry);
+  auto statement = scopedParser.parse("SHOW CATALOGS");
+  ASSERT_TRUE(statement->isSelect());
+
+  auto* selectStatement = statement->as<SelectStatement>();
+  auto plan = selectStatement->plan();
+
+  // Walk the plan tree to find the ValuesNode.
+  auto node = plan;
+  while (!node->inputs().empty()) {
+    node = node->inputAt(0);
+  }
+  ASSERT_TRUE(node->is(lp::NodeKind::kValues));
+  auto values = std::dynamic_pointer_cast<const lp::ValuesNode>(node);
+  ASSERT_NE(values, nullptr);
+
+  // Collect catalog names from the first column of each row.
+  const auto& variants = std::get<lp::ValuesNode::Variants>(values->data());
+  std::vector<std::string> catalogNames;
+  for (const auto& row : variants) {
+    ASSERT_EQ(row.kind(), TypeKind::ROW);
+    catalogNames.push_back(row.row()[0].value<std::string>());
+  }
+
+  EXPECT_THAT(catalogNames, testing::Contains("extra_cat"));
+  EXPECT_THAT(catalogNames, testing::Contains(kConnectorId));
+}
+
+// TODO: When a second test file needs SchemaOnlyTable SingleTableMetadata,
+// extract them to a shared test header (e.g.
+// axiom/connectors/tests/SchemaOnlyTable.h) instead of duplicating.
+//
+// Lightweight Table used in scoped-registry tests. Unlike TestTable, this does
+// not allocate a memory pool, avoiding global pool-name collisions when two
+// tables share the same name.
+class SchemaOnlyTable : public facebook::axiom::connector::Table {
+ public:
+  SchemaOnlyTable(
+      facebook::axiom::SchemaTableName name,
+      const facebook::velox::RowTypePtr& schema)
+      : Table(std::move(name), Table::makeColumns(schema)) {}
+
+  const std::vector<const facebook::axiom::connector::TableLayout*>& layouts()
+      const override {
+    static const std::vector<const facebook::axiom::connector::TableLayout*>
+        kEmpty;
+    return kEmpty;
+  }
+
+  uint64_t numRows() const override {
+    return 0;
+  }
+};
+
+// Minimal ConnectorMetadata backed by a single SchemaOnlyTable. Provides just
+// enough for PrestoParser metadata lookup paths.
+class SingleTableMetadata
+    : public facebook::axiom::connector::ConnectorMetadata {
+ public:
+  SingleTableMetadata(
+      facebook::axiom::SchemaTableName tableName,
+      facebook::velox::RowTypePtr schema)
+      : table_{std::make_shared<SchemaOnlyTable>(
+            std::move(tableName),
+            std::move(schema))} {}
+
+  facebook::axiom::connector::TablePtr findTable(
+      const facebook::axiom::SchemaTableName& tableName) override {
+    if (tableName == table_->name()) {
+      return table_;
+    }
+    return nullptr;
+  }
+
+  facebook::axiom::connector::ConnectorSplitManager* splitManager() override {
+    return nullptr;
+  }
+
+  std::vector<std::string> listSchemaNames(
+      const facebook::axiom::connector::ConnectorSessionPtr&) override {
+    return {table_->name().schema};
+  }
+
+  bool schemaExists(
+      const facebook::axiom::connector::ConnectorSessionPtr&,
+      const std::string& schemaName) override {
+    return schemaName == table_->name().schema;
+  }
+
+  std::vector<std::string> listTableNames(
+      const facebook::axiom::connector::ConnectorSessionPtr&,
+      const std::string& schemaName) override {
+    if (schemaName == table_->name().schema) {
+      return {table_->name().table};
+    }
+    return {};
+  }
+
+ private:
+  std::shared_ptr<SchemaOnlyTable> table_;
+};
+
+TEST_F(PrestoParserTest, scopedRegistryShadowsGlobalSchema) {
+  using facebook::axiom::connector::ConnectorMetadataRegistry;
+
+  auto catConnector =
+      std::make_shared<facebook::axiom::connector::TestConnector>("cat");
+  catConnector->addTable("t", ROW({"a"}, {INTEGER()}));
+  ConnectorMetadataRegistry::global().insert(
+      catConnector->connectorId(), catConnector->metadata());
+
+  SCOPE_EXIT {
+    ConnectorMetadataRegistry::global().erase("cat");
+  };
+
+  auto scopedRegistry =
+      ConnectorMetadataRegistry::create(&ConnectorMetadataRegistry::global());
+
+  // Use SingleTableMetadata to avoid the memory-pool name collision that would
+  // occur if two TestTables both named "t" existed.
+  auto scopedMetadata = std::make_shared<SingleTableMetadata>(
+      facebook::axiom::SchemaTableName{"default", "t"},
+      ROW({"a", "b"}, {INTEGER(), VARCHAR()}));
+  scopedRegistry->insert("cat", scopedMetadata, /*overwrite=*/true);
+
+  PrestoParser scopedParser("cat", "default", ParserOptions{}, *scopedRegistry);
+  auto scopedStatement = scopedParser.parse("SELECT * FROM cat.default.t");
+  ASSERT_TRUE(scopedStatement->isSelect());
+
+  auto* scopedSelect = scopedStatement->as<SelectStatement>();
+  auto scopedOutput = scopedSelect->plan()->outputType();
+
+  EXPECT_EQ(scopedOutput->size(), 2);
+  EXPECT_THAT(scopedOutput->names(), testing::ElementsAre("a", "b"));
+
+  PrestoParser globalParser("cat", "default");
+  auto globalStatement = globalParser.parse("SELECT * FROM cat.default.t");
+  ASSERT_TRUE(globalStatement->isSelect());
+
+  auto* globalSelect = globalStatement->as<SelectStatement>();
+  auto globalOutput = globalSelect->plan()->outputType();
+
+  EXPECT_EQ(globalOutput->size(), 1);
+  EXPECT_THAT(globalOutput->names(), testing::ElementsAre("a"));
 }
 
 } // namespace

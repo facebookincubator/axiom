@@ -16,9 +16,13 @@
 #include "axiom/logical_plan/PlanBuilder.h"
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/sql/presto/tests/LogicalPlanMatcher.h"
+#include "folly/ScopeGuard.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/QueryCtx.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
@@ -734,6 +738,94 @@ TEST_F(PlanBuilderTest, valuesTypeCoercionErrors) {
           {{"CAST(null AS boolean)"}, {"CAST(null AS bigint)"}},
           /*enableCoercions=*/false),
       "All values should have equivalent types: BIGINT vs. ROW<x:BOOLEAN>");
+}
+
+// Builds a QueryCtx with the given scoped connector metadata registry attached
+// under ConnectorMetadataRegistry::kRegistryKey.
+std::shared_ptr<core::QueryCtx> queryCtxWithRegistry(
+    std::shared_ptr<connector::ConnectorMetadataRegistry::Registry> registry) {
+  auto queryCtx = core::QueryCtx::create();
+  queryCtx->setRegistry(
+      connector::ConnectorMetadataRegistry::kRegistryKey, std::move(registry));
+  return queryCtx;
+}
+
+TEST_F(PlanBuilderTest, scopedRegistryTableScan) {
+  // Create an isolated scoped registry (no parent fallback).
+  auto registry =
+      connector::ConnectorMetadataRegistry::create(/*parent=*/nullptr);
+
+  auto testConnector =
+      std::make_shared<connector::TestConnector>("scoped_connector");
+  registry->insert(testConnector->connectorId(), testConnector->metadata());
+
+  testConnector->addTable(
+      "orders", ROW({"o_custkey", "o_totalprice"}, {BIGINT(), DOUBLE()}));
+
+  PlanBuilder::Context context{
+      std::string("scoped_connector"),
+      std::string(connector::TestConnector::kDefaultSchema),
+      queryCtxWithRegistry(registry)};
+
+  auto plan = PlanBuilder(context).tableScan("orders").build();
+  ASSERT_NE(plan, nullptr);
+  EXPECT_THAT(
+      plan->outputType()->names(),
+      testing::ElementsAre("o_custkey", "o_totalprice"));
+}
+
+TEST_F(PlanBuilderTest, scopedRegistryFrom) {
+  // Verify that from() propagates the scoped registry to subsequent table
+  // scans for the second and later tables.
+  auto registry =
+      connector::ConnectorMetadataRegistry::create(/*parent=*/nullptr);
+
+  auto testConnector =
+      std::make_shared<connector::TestConnector>("scoped_from");
+  registry->insert(testConnector->connectorId(), testConnector->metadata());
+
+  testConnector->addTable("t1", ROW({"a", "b"}, {BIGINT(), VARCHAR()}));
+  testConnector->addTable("t2", ROW({"c", "d"}, {INTEGER(), DOUBLE()}));
+
+  PlanBuilder::Context context{
+      std::string("scoped_from"),
+      std::string(connector::TestConnector::kDefaultSchema),
+      queryCtxWithRegistry(registry)};
+
+  // from() builds cross joins across t1 and t2. The second table scan
+  // must also use the scoped registry.
+  auto plan = PlanBuilder(context).from({"t1", "t2"}).build();
+  ASSERT_NE(plan, nullptr);
+  EXPECT_THAT(
+      plan->outputType()->names(), testing::ElementsAre("a", "b", "c", "d"));
+}
+
+TEST_F(PlanBuilderTest, scopedRegistryTableNotFound) {
+  // Register a table in the global registry only. A scoped registry without
+  // that table should fail to resolve it.
+  auto globalConnector =
+      std::make_shared<connector::TestConnector>("global_only");
+  connector::ConnectorMetadataRegistry::global().insert(
+      globalConnector->connectorId(), globalConnector->metadata());
+  SCOPE_EXIT {
+    connector::ConnectorMetadataRegistry::global().erase(
+        globalConnector->connectorId());
+  };
+  globalConnector->addTable("global_table", ROW({"x"}, {BIGINT()}));
+
+  // Create an isolated registry with no parent, so it cannot see the global.
+  auto registry =
+      connector::ConnectorMetadataRegistry::create(/*parent=*/nullptr);
+
+  PlanBuilder::Context context{
+      std::string("global_only"),
+      std::string(connector::TestConnector::kDefaultSchema),
+      queryCtxWithRegistry(registry)};
+
+  // The scoped registry does not contain "global_only", so lookup fails.
+  VELOX_ASSERT_THROW(
+      PlanBuilder(context).tableScan("global_table"),
+      "ConnectorMetadata not registered: global_only");
 }
 
 } // namespace
