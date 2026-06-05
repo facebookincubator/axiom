@@ -449,6 +449,7 @@ PlanAndStats Optimization::toVeloxPlan(RelationOpPtr plan) {
 
 // static
 PlanAndStats Optimization::toVeloxPlan(
+    SessionPtr session,
     const logical_plan::LogicalPlanNode& logicalPlan,
     velox::memory::MemoryPool& pool,
     OptimizerOptions options,
@@ -468,10 +469,8 @@ PlanAndStats Optimization::toVeloxPlan(
 
   VeloxHistory history;
 
-  auto session = std::make_shared<Session>(veloxQueryCtx->queryId());
-
   Optimization opt{
-      session,
+      std::move(session),
       logicalPlan,
       *schemaResolver,
       history,
