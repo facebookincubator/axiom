@@ -48,6 +48,7 @@ class Optimization {
 
   /// Simplified API for usage in testing and tooling.
   static PlanAndStats toVeloxPlan(
+      SessionPtr session,
       const logical_plan::LogicalPlanNode& logicalPlan,
       velox::memory::MemoryPool& pool,
       OptimizerOptions options = {},
