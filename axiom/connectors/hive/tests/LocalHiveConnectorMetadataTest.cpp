@@ -116,6 +116,11 @@ class LocalHiveConnectorMetadataTest
     compareTableLayout(*getLayout(expected), *getLayout(table));
   }
 
+  static ConnectorSessionPtr makeSession() {
+    return std::make_shared<ConnectorSession>(
+        /*queryId=*/"q-test", /*user=*/"u-test");
+  }
+
   /// Write the specified data to the table with a TableWrite operation. The
   /// 'kind' specifies the type of write, for which only kCreate (new table) and
   /// kInsert (existing table) writes are supported. 'format' specifies the
@@ -126,7 +131,7 @@ class LocalHiveConnectorMetadataTest
       WriteKind kind,
       dwio::common::FileFormat format) {
     std::string outputPath = metadata_->tablePath(table->name());
-    auto session = std::make_shared<ConnectorSession>("q-test");
+    auto session = makeSession();
     auto handle =
         metadata_->beginWrite(session, table, kind, /*explain=*/false);
 
@@ -317,7 +322,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createTable) {
       {HiveWriteOptions::kFileFormat, "parquet"},
       {HiveWriteOptions::kCompressionKind, "zstd"}};
 
-  auto session = std::make_shared<ConnectorSession>("q-test");
+  auto session = makeSession();
   auto table = metadata_->createTable(
       session,
       {kDefaultSchema, "test"},
@@ -406,7 +411,7 @@ TEST_F(LocalHiveConnectorMetadataTest, addColumn) {
       {HiveWriteOptions::kPartitionedBy, velox::Variant::array({"ds"})},
       {HiveWriteOptions::kFileFormat, "parquet"}};
 
-  auto session = std::make_shared<ConnectorSession>("q-test");
+  auto session = makeSession();
   auto table = metadata_->createTable(
       session,
       {kDefaultSchema, "add_col_test"},
@@ -524,7 +529,7 @@ TEST_F(LocalHiveConnectorMetadataTest, addColumnExplain) {
   folly::F14FastMap<std::string, velox::Variant> options = {
       {HiveWriteOptions::kFileFormat, "parquet"}};
 
-  auto session = std::make_shared<ConnectorSession>("q-test");
+  auto session = makeSession();
   metadata_->createTable(
       session,
       {kDefaultSchema, "explain_add_col_test"},
@@ -620,7 +625,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createEmptyTable) {
        {"ts", VARCHAR()},
        {"ds", VARCHAR()}});
 
-  auto session = std::make_shared<ConnectorSession>("q-test");
+  auto session = makeSession();
   auto table = metadata_->createTable(
       session,
       {kDefaultSchema, "test_empty"},
@@ -655,7 +660,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
   auto tableType =
       ROW({{"key1", BIGINT()}, {"key2", BIGINT()}, {"ds", VARCHAR()}});
 
-  auto session = std::make_shared<ConnectorSession>("q-test");
+  auto session = makeSession();
   auto staged = metadata_->createTable(
       session,
       {kDefaultSchema, "test_insert"},
@@ -704,7 +709,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
 TEST_F(LocalHiveConnectorMetadataTest, abortCreateWithRetry) {
   auto tableType =
       ROW({{"key1", BIGINT()}, {"key2", BIGINT()}, {"ds", VARCHAR()}});
-  auto session = std::make_shared<ConnectorSession>("q-test");
+  auto session = makeSession();
   std::string tablePath = metadata_->tablePath({kDefaultSchema, "test_abort"});
 
   auto table = metadata_->createTable(
@@ -748,7 +753,7 @@ TEST_F(LocalHiveConnectorMetadataTest, abortCreateWithRetry) {
 
 TEST_F(LocalHiveConnectorMetadataTest, createTableIfNotExists) {
   auto tableType = ROW({{"col1", BIGINT()}, {"col2", VARCHAR()}});
-  auto session = std::make_shared<ConnectorSession>("q-test");
+  auto session = makeSession();
 
   auto table = metadata_->createTable(
       session,
@@ -781,7 +786,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createTableIfNotExists) {
 
 TEST_F(LocalHiveConnectorMetadataTest, createTableIfNotExistsNewTable) {
   auto tableType = ROW({{"col1", BIGINT()}});
-  auto session = std::make_shared<ConnectorSession>("q-test");
+  auto session = makeSession();
 
   auto table = metadata_->createTable(
       session,
@@ -798,7 +803,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createTableIfNotExistsNewTable) {
 
 TEST_F(LocalHiveConnectorMetadataTest, createTableIfNotExistsExplain) {
   auto tableType = ROW({{"col1", BIGINT()}});
-  auto session = std::make_shared<ConnectorSession>("q-test");
+  auto session = makeSession();
 
   auto table = metadata_->createTable(
       session,
@@ -834,7 +839,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createTableIfNotExistsExplain) {
 
 TEST_F(LocalHiveConnectorMetadataTest, dropTableIfExists) {
   auto tableType = ROW({{"col1", BIGINT()}});
-  auto session = std::make_shared<ConnectorSession>("q-test");
+  auto session = makeSession();
 
   auto table = metadata_->createTable(
       session,
@@ -869,7 +874,7 @@ TEST_F(LocalHiveConnectorMetadataTest, dropTableIfExists) {
 
 TEST_F(LocalHiveConnectorMetadataTest, dropTableExplain) {
   auto tableType = ROW({{"col1", BIGINT()}});
-  auto session = std::make_shared<ConnectorSession>("q-test");
+  auto session = makeSession();
 
   auto table = metadata_->createTable(
       session,

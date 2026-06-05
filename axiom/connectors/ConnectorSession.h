@@ -24,7 +24,7 @@ namespace facebook::axiom::connector {
 /// Read-only query-specific information passed to connectors.
 class ConnectorSession final {
  public:
-  explicit ConnectorSession(std::string queryId, std::string user = {})
+  ConnectorSession(std::string queryId, std::string user)
       : queryId_{std::move(queryId)}, user_{std::move(user)} {}
 
   /// Returns the query identifier.
@@ -32,8 +32,7 @@ class ConnectorSession final {
     return queryId_;
   }
 
-  /// Returns the identity of the user who submitted the query. Empty when
-  /// user context is unavailable.
+  /// Returns the identity of the user who submitted the query.
   const std::string& user() const {
     return user_;
   }

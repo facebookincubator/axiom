@@ -81,7 +81,7 @@ facebook::axiom::connector::TablePtr createTable(
   auto tableSchema = velox::ROW(std::move(schemaNames), std::move(schemaTypes));
 
   auto session = std::make_shared<facebook::axiom::connector::ConnectorSession>(
-      "pyspark_session");
+      "pyspark_session", /*user=*/"pyspark-optimizer");
   auto table = metadata->createTable(
       session,
       writeNode.tableName(),
