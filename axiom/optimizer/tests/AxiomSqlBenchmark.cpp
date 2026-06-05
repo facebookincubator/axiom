@@ -592,7 +592,8 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     exec::SimpleExpressionEvaluator evaluator(
         queryCtx.get(), optimizerPool_.get());
 
-    auto session = std::make_shared<Session>(queryCtx->queryId());
+    auto session = std::make_shared<Session>(
+        queryCtx->queryId(), /*user=*/"axiom-sql-benchmark");
 
     optimizer::OptimizerOptions optimizerOptions;
     optimizerOptions.traceFlags = FLAGS_optimizer_trace;
