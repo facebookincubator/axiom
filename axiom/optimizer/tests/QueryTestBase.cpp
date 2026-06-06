@@ -140,7 +140,13 @@ TestResult QueryTestBase::runVelox(const core::PlanNodePtr& plan) {
 
 TestResult QueryTestBase::runFragmentedPlan(
     optimizer::PlanAndStats& planAndStats) {
+  auto runnerSession = std::make_shared<runner::RunnerSession>(
+      getQueryCtx()->queryId(),
+      "test",
+      connector::Properties{},
+      connector::ConnectorProperties{});
   auto runner = std::make_shared<runner::LocalRunner>(
+      std::move(runnerSession),
       planAndStats.plan,
       std::move(planAndStats.finishWrite),
       getQueryCtx(),

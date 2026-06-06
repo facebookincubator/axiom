@@ -145,8 +145,14 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunner(
   auto best = optimization.bestPlan();
   auto planAndStats = optimization.toVeloxPlan(best->op);
 
+  auto runnerSession = std::make_shared<runner::RunnerSession>(
+      session->queryId(),
+      session->user(),
+      connector::Properties{},
+      connector::ConnectorProperties{});
   static QueryRuntimeStats noopStats;
   return std::make_shared<runner::LocalRunner>(
+      std::move(runnerSession),
       planAndStats.plan,
       std::move(planAndStats.finishWrite),
       queryCtx,

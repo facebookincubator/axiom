@@ -248,22 +248,31 @@ class SqlQueryRunner {
   }
 
   facebook::axiom::connector::TablePtr createTable(
+      std::string_view queryId,
       const presto::CreateTableStatement& statement,
       bool explain = false);
 
   facebook::axiom::connector::TablePtr createTable(
+      std::string_view queryId,
       const presto::CreateTableAsSelectStatement& statement,
       bool explain = false);
 
-  std::string dropTable(const presto::DropTableStatement& statement);
+  std::string dropTable(
+      std::string_view queryId,
+      const presto::DropTableStatement& statement);
 
   std::string addColumn(
+      std::string_view queryId,
       const presto::AddColumnStatement& statement,
       bool explain = false);
 
-  std::string createSchema(const presto::CreateSchemaStatement& statement);
+  std::string createSchema(
+      std::string_view queryId,
+      const presto::CreateSchemaStatement& statement);
 
-  std::string dropSchema(const presto::DropSchemaStatement& statement);
+  std::string dropSchema(
+      std::string_view queryId,
+      const presto::DropSchemaStatement& statement);
 
   /// Returns the default connector ID set during initialization.
   const std::string& defaultConnectorId() const {
@@ -376,6 +385,13 @@ class SqlQueryRunner {
           schemaResolver = nullptr,
       std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats =
           nullptr);
+
+  // Builds a ConnectorSession for `connectorId` carrying the caller's
+  // queryId, the runner's user, and the connector's effective session
+  // properties from `sessionConfig_`.
+  facebook::axiom::connector::ConnectorSessionPtr makeConnectorSession(
+      std::string_view queryId,
+      std::string_view connectorId) const;
 
   // Wait maxWaitMicros microseconds for the LocalRunner to complete.  If
   // `maxWaitMicros <= 0` this will check if the LocalRunner is completed and
