@@ -155,7 +155,15 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
   auto plan = optimization->toVelox().toVeloxPlan(
       filter, MultiFragmentPlan::Options::singleNode(), {}, {});
   static QueryRuntimeStats noopStats;
+  // TODO: When Optimization holds a RunnerSession, use it here so that the
+  // sampling runner sees per-query SET SESSION properties.
+  auto sampleSession = std::make_shared<runner::RunnerSession>(
+      optimization->session()->queryId(),
+      optimization->session()->user(),
+      runner::Properties{},
+      connector::ConnectorProperties{});
   return std::make_shared<runner::LocalRunner>(
+      std::move(sampleSession),
       std::move(plan.plan),
       std::move(plan.finishWrite),
       sampleQueryCtx(*optimization->veloxQueryCtx()),

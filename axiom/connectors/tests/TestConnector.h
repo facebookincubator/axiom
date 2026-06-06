@@ -716,12 +716,21 @@ class TestConfigProvider : public velox::config::ConfigProvider {
   static constexpr const char* kCollectColumnStatistics =
       "collect_column_statistics";
 
+  /// When non-empty, TestSplitManager::co_listPartitions throws a user
+  /// error with this value as the message. Used by tests that need to
+  /// verify a session property reaches connector split-generation.
+  static constexpr const char* kListPartitionsError = "list_partitions_error";
+
   std::vector<velox::config::ConfigProperty> properties() const override {
     return {
         {kCollectColumnStatistics,
          velox::config::ConfigPropertyType::kBoolean,
          "true",
          "Collect per-column statistics when writing data to a table."},
+        {kListPartitionsError,
+         velox::config::ConfigPropertyType::kString,
+         "",
+         "Test-only: if non-empty, co_listPartitions throws this message."},
     };
   }
 

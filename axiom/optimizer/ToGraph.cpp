@@ -385,7 +385,16 @@ std::vector<velox::RowVectorPtr> runConstantPlan(
     PlanAndStats& veloxPlan,
     velox::memory::MemoryPool* pool) {
   QueryRuntimeStats noopStats;
+  // TODO: When Optimization holds a RunnerSession, use it here so that the
+  // constant-evaluation runner sees per-query SET SESSION properties.
+  const auto& parentSession = *queryCtx()->optimization()->session();
+  auto constantEvalSession = std::make_shared<runner::RunnerSession>(
+      parentSession.queryId(),
+      parentSession.user(),
+      runner::Properties{},
+      connector::ConnectorProperties{});
   auto runner = std::make_shared<runner::LocalRunner>(
+      std::move(constantEvalSession),
       veloxPlan.plan,
       std::move(veloxPlan.finishWrite),
       constantQueryCtx(*queryCtx()->optimization()->veloxQueryCtx()),

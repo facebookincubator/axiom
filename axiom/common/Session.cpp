@@ -20,6 +20,8 @@ namespace facebook::axiom {
 
 connector::ConnectorSessionPtr Session::toConnectorSession(
     std::string_view /* connectorId */) const {
-  return std::make_shared<connector::ConnectorSession>(queryId_, user_);
+  return std::make_shared<connector::ConnectorSession>(
+      queryId_, user_, connector::Properties{});
 }
+
 } // namespace facebook::axiom

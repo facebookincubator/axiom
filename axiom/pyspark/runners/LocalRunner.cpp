@@ -99,6 +99,11 @@ std::vector<velox::RowVectorPtr> LocalRunner::execute(
           runtimeStats_);
 
   auto runner = std::make_shared<facebook::axiom::runner::LocalRunner>(
+      std::make_shared<facebook::axiom::runner::RunnerSession>(
+          queryCtx->queryId(),
+          /*user=*/"pyspark-runner",
+          facebook::axiom::runner::Properties{},
+          facebook::axiom::connector::ConnectorProperties{}),
       plan_,
       std::move(finishWrite_),
       queryCtx,

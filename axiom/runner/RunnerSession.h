@@ -21,37 +21,29 @@
 #include <string_view>
 #include <utility>
 
-#include <folly/container/F14Map.h>
+#include "axiom/connectors/BaseSession.h"
 
-namespace facebook::axiom::connector {
+namespace facebook::axiom::runner {
 
-/// Property bag for a single component or connector.
+/// Runner-scoped property bag.
 using Properties = folly::F14FastMap<std::string, std::string>;
 
-class ConnectorSession;
-using ConnectorSessionPtr = std::shared_ptr<ConnectorSession>;
-
-/// Read-only query-specific information passed to connectors.
-class ConnectorSession final {
+/// Runner-scoped session view. Carries the shared identity (queryId, user,
+/// connector-session factory) plus the runner's own property slice.
+class RunnerSession final : public connector::BaseSession {
  public:
-  ConnectorSession(std::string queryId, std::string user, Properties properties)
-      : queryId_{std::move(queryId)},
-        user_{std::move(user)},
+  RunnerSession(
+      std::string queryId,
+      std::string user,
+      Properties properties,
+      connector::ConnectorProperties connectorProperties)
+      : BaseSession(
+            std::move(queryId),
+            std::move(user),
+            std::move(connectorProperties)),
         properties_{std::move(properties)} {}
 
-  /// Returns the query identifier.
-  const std::string& queryId() const {
-    return queryId_;
-  }
-
-  /// Returns the identity of the user who submitted the query.
-  const std::string& user() const {
-    return user_;
-  }
-
-  /// Returns the value of session property 'name' if set on this session,
-  /// or std::nullopt otherwise. The returned view is valid for the lifetime
-  /// of this ConnectorSession.
+  /// Returns the value of runner-scoped property 'name' if set.
   std::optional<std::string_view> property(std::string_view name) const {
     auto it = properties_.find(name);
     if (it == properties_.end()) {
@@ -61,9 +53,9 @@ class ConnectorSession final {
   }
 
  private:
-  const std::string queryId_;
-  const std::string user_;
   const Properties properties_;
 };
 
-} // namespace facebook::axiom::connector
+using RunnerSessionPtr = std::shared_ptr<RunnerSession>;
+
+} // namespace facebook::axiom::runner

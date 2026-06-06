@@ -284,6 +284,7 @@ void onComplete(
 } // namespace
 
 connector::TablePtr SqlQueryRunner::createTable(
+    std::string_view queryId,
     const presto::CreateTableStatement& statement,
     bool explain) {
   auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
@@ -294,9 +295,8 @@ connector::TablePtr SqlQueryRunner::createTable(
         optimizer::ConstantExprEvaluator::evaluateConstantExpr(*value);
   }
 
-  auto session = std::make_shared<connector::ConnectorSession>("test", user_);
   auto table = metadata->createTable(
-      session,
+      makeConnectorSession(queryId, statement.connectorId()),
       statement.tableName(),
       statement.tableSchema(),
       options,
@@ -307,6 +307,7 @@ connector::TablePtr SqlQueryRunner::createTable(
 }
 
 connector::TablePtr SqlQueryRunner::createTable(
+    std::string_view queryId,
     const presto::CreateTableAsSelectStatement& statement,
     bool explain) {
   auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
@@ -317,9 +318,8 @@ connector::TablePtr SqlQueryRunner::createTable(
         optimizer::ConstantExprEvaluator::evaluateConstantExpr(*value);
   }
 
-  auto session = std::make_shared<connector::ConnectorSession>("test", user_);
   auto table = metadata->createTable(
-      session,
+      makeConnectorSession(queryId, statement.connectorId()),
       statement.tableName(),
       statement.tableSchema(),
       options,
@@ -330,14 +330,14 @@ connector::TablePtr SqlQueryRunner::createTable(
 }
 
 std::string SqlQueryRunner::dropTable(
+    std::string_view queryId,
     const presto::DropTableStatement& statement) {
   auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
 
   const auto& tableName = statement.tableName();
 
-  auto session = std::make_shared<connector::ConnectorSession>("test", user_);
   const bool dropped = metadata->dropTable(
-      session,
+      makeConnectorSession(queryId, statement.connectorId()),
       statement.tableName(),
       statement.ifExists(),
       /*explain=*/false);
@@ -350,13 +350,13 @@ std::string SqlQueryRunner::dropTable(
 }
 
 std::string SqlQueryRunner::addColumn(
+    std::string_view queryId,
     const presto::AddColumnStatement& statement,
     bool explain) {
   auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
 
-  auto session = std::make_shared<connector::ConnectorSession>("test", user_);
   auto result = metadata->addColumn(
-      session,
+      makeConnectorSession(queryId, statement.connectorId()),
       statement.tableName(),
       statement.columnName(),
       statement.columnType(),
@@ -381,6 +381,7 @@ std::string SqlQueryRunner::addColumn(
 }
 
 std::string SqlQueryRunner::createSchema(
+    std::string_view queryId,
     const presto::CreateSchemaStatement& statement) {
   auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
 
@@ -390,17 +391,22 @@ std::string SqlQueryRunner::createSchema(
         optimizer::ConstantExprEvaluator::evaluateConstantExpr(*value);
   }
 
-  auto session = std::make_shared<connector::ConnectorSession>("test", user_);
   metadata->createSchema(
-      session, statement.schemaName(), statement.ifNotExists(), properties);
+      makeConnectorSession(queryId, statement.connectorId()),
+      statement.schemaName(),
+      statement.ifNotExists(),
+      properties);
   return fmt::format("Created schema: {}", statement.schemaName());
 }
 
 std::string SqlQueryRunner::dropSchema(
+    std::string_view queryId,
     const presto::DropSchemaStatement& statement) {
   auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
-  auto session = std::make_shared<connector::ConnectorSession>("test", user_);
-  metadata->dropSchema(session, statement.schemaName(), statement.ifExists());
+  metadata->dropSchema(
+      makeConnectorSession(queryId, statement.connectorId()),
+      statement.schemaName(),
+      statement.ifExists());
   return fmt::format("Dropped schema: {}", statement.schemaName());
 }
 
@@ -587,6 +593,7 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
     QueryTiming& timing,
     std::string& planString,
     std::shared_ptr<QueryRuntimeStats> runtimeStats) {
+  const std::string queryId = options.queryId.value_or(queryIdGenerator_());
   if (sqlStatement.isExplain()) {
     const auto* explain = sqlStatement.as<presto::ExplainStatement>();
 
@@ -605,14 +612,15 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
 
       // EXPLAIN ANALYZE runs the query for real, so createTable must not
       // be in explain mode. Regular EXPLAIN must be side-effect-free.
-      auto table = createTable(*ctas, /*explain=*/!explain->isAnalyze());
+      auto table =
+          createTable(queryId, *ctas, /*explain=*/!explain->isAnalyze());
       schemaResolver = std::make_shared<connector::SchemaResolver>(
           connector::ConnectorMetadataRegistry::global());
       schemaResolver->setTargetTable(
           ctas->connectorId(), ctas->tableName(), table);
     } else if (statement->isCreateTable()) {
       const auto* create = statement->as<presto::CreateTableStatement>();
-      createTable(*create, /*explain=*/true);
+      createTable(queryId, *create, /*explain=*/true);
       return {
           .message = fmt::format(
               "CREATE TABLE {}{}.{}",
@@ -637,7 +645,7 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
               drop->tableName())};
     } else if (statement->isAddColumn()) {
       const auto* add = statement->as<presto::AddColumnStatement>();
-      addColumn(*add, /*explain=*/true);
+      addColumn(queryId, *add, /*explain=*/true);
       return {
           .message = fmt::format(
               "ALTER TABLE {}{}.{} ADD COLUMN {}{} {}",
@@ -707,7 +715,7 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
 
   if (sqlStatement.isCreateTable()) {
     const auto* create = sqlStatement.as<presto::CreateTableStatement>();
-    auto table = createTable(*create);
+    auto table = createTable(queryId, *create);
     if (!table) {
       return {
           .message = fmt::format(
@@ -720,7 +728,7 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
 
   if (sqlStatement.isCreateTableAsSelect()) {
     const auto* ctas = sqlStatement.as<presto::CreateTableAsSelectStatement>();
-    auto table = createTable(*ctas);
+    auto table = createTable(queryId, *ctas);
 
     auto schema = std::make_shared<connector::SchemaResolver>(
         connector::ConnectorMetadataRegistry::global());
@@ -739,23 +747,23 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
   if (sqlStatement.isDropTable()) {
     const auto* drop = sqlStatement.as<presto::DropTableStatement>();
 
-    return {.message = dropTable(*drop)};
+    return {.message = dropTable(queryId, *drop)};
   }
 
   if (sqlStatement.isAddColumn()) {
     const auto* add = sqlStatement.as<presto::AddColumnStatement>();
 
-    return {.message = addColumn(*add)};
+    return {.message = addColumn(queryId, *add)};
   }
 
   if (sqlStatement.isCreateSchema()) {
     const auto* create = sqlStatement.as<presto::CreateSchemaStatement>();
-    return {.message = createSchema(*create)};
+    return {.message = createSchema(queryId, *create)};
   }
 
   if (sqlStatement.isDropSchema()) {
     const auto* drop = sqlStatement.as<presto::DropSchemaStatement>();
-    return {.message = dropSchema(*drop)};
+    return {.message = dropSchema(queryId, *drop)};
   }
 
   if (sqlStatement.isShowStatsForQuery()) {
@@ -1020,6 +1028,34 @@ std::string printPlanWithStats(
         }
       });
 }
+
+} // namespace
+
+connector::ConnectorSessionPtr SqlQueryRunner::makeConnectorSession(
+    std::string_view queryId,
+    std::string_view connectorId) const {
+  return std::make_shared<connector::ConnectorSession>(
+      std::string(queryId),
+      user_,
+      sessionConfig_->effectiveValues(connectorId));
+}
+
+namespace {
+
+// Returns per-connector property maps for connectors with at least one
+// effective value set.
+connector::ConnectorProperties collectConnectorProperties(
+    const SessionConfig& config) {
+  connector::ConnectorProperties result;
+  for (const auto& id :
+       connector::ConnectorMetadataRegistry::allMetadataIds()) {
+    connector::Properties properties = config.effectiveValues(id);
+    if (!properties.empty()) {
+      result.emplace(id, std::move(properties));
+    }
+  }
+  return result;
+}
 } // namespace
 
 std::string SqlQueryRunner::runExplainAnalyze(
@@ -1183,7 +1219,13 @@ std::shared_ptr<runner::LocalRunner> SqlQueryRunner::makeLocalRunner(
     const std::shared_ptr<velox::core::QueryCtx>& queryCtx,
     const RunOptions& options,
     QueryRuntimeStats& runtimeStats) {
+  auto runnerSession = std::make_shared<runner::RunnerSession>(
+      queryCtx->queryId(),
+      user_,
+      sessionConfig_->effectiveValues("runner"),
+      collectConnectorProperties(*sessionConfig_));
   return std::make_shared<runner::LocalRunner>(
+      std::move(runnerSession),
       planAndStats.plan,
       std::move(planAndStats.finishWrite),
       queryCtx,

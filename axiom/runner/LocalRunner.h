@@ -22,6 +22,7 @@
 #include "axiom/connectors/ConnectorSplitManager.h"
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/runner/Runner.h"
+#include "axiom/runner/RunnerSession.h"
 #include "velox/common/base/SpillConfig.h"
 #include "velox/connectors/Connector.h"
 #include "velox/exec/Cursor.h"
@@ -91,6 +92,7 @@ class LocalRunner : public Runner,
   /// spilling at the task level.
   /// @param runtimeStats Optional recorder for split enumeration metrics.
   LocalRunner(
+      RunnerSessionPtr session,
       optimizer::MultiFragmentPlanPtr plan,
       optimizer::FinishWrite finishWrite,
       std::shared_ptr<velox::core::QueryCtx> queryCtx,
@@ -175,6 +177,7 @@ class LocalRunner : public Runner,
   // Serializes 'cursor_' and 'error_'.
   mutable std::mutex mutex_;
 
+  const RunnerSessionPtr session_;
   const optimizer::MultiFragmentPlanPtr plan_;
   const std::vector<optimizer::ExecutableFragment> fragments_;
   optimizer::FinishWrite finishWrite_;
