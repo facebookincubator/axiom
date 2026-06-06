@@ -93,21 +93,28 @@ class DerivedTablePrinterTest : public ::testing::Test {
     auto schemaResolver = std::make_shared<connector::SchemaResolver>(
         connector::ConnectorMetadataRegistry::global());
 
-    auto session = std::make_shared<Session>(veloxQueryCtx->queryId(), "test");
+    OptimizerOptions options;
+    options.sampleJoins = false;
+    options.sampleFilters = false;
+    auto optimizerSession = std::make_shared<OptimizerSession>(
+        veloxQueryCtx->queryId(),
+        "test",
+        std::move(options),
+        connector::ConnectorProperties{});
+    auto runnerSession = std::make_shared<runner::RunnerSession>(
+        veloxQueryCtx->queryId(),
+        "test",
+        runner::Properties{},
+        connector::ConnectorProperties{});
 
     Optimization opt{
-        session,
+        optimizerSession,
+        runnerSession,
         plan,
         *schemaResolver,
         history,
         veloxQueryCtx,
         evaluator,
-        [] {
-          OptimizerOptions options;
-          options.sampleJoins = false;
-          options.sampleFilters = false;
-          return options;
-        }(),
         {.numWorkers = 1, .numDrivers = 1}};
 
     const auto dtString = DerivedTablePrinter::toText(*opt.rootDt());

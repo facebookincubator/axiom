@@ -133,17 +133,26 @@ facebook::axiom::optimizer::PlanAndStats optimize(
   auto queryCtx = velox::core::QueryCtx::create();
   velox::exec::SimpleExpressionEvaluator evaluator(queryCtx.get(), pool);
 
-  auto session = std::make_shared<facebook::axiom::Session>(
-      queryCtx->queryId(), /*user=*/"pyspark-optimizer");
+  auto optimizerSession =
+      std::make_shared<facebook::axiom::optimizer::OptimizerSession>(
+          queryCtx->queryId(),
+          /*user=*/"pyspark-optimizer",
+          std::move(optimizerOptions),
+          facebook::axiom::connector::ConnectorProperties{});
+  auto runnerSession = std::make_shared<facebook::axiom::runner::RunnerSession>(
+      queryCtx->queryId(),
+      /*user=*/"pyspark-optimizer",
+      facebook::axiom::runner::Properties{},
+      facebook::axiom::connector::ConnectorProperties{});
 
   facebook::axiom::optimizer::Optimization opt(
-      session,
+      std::move(optimizerSession),
+      std::move(runnerSession),
       *logicalPlan,
       *schemaResolver,
       *history,
       queryCtx,
       evaluator,
-      optimizerOptions,
       runnerOpts);
   auto best = opt.bestPlan();
   LOG(INFO) << "Axiom best plan:\n" << best->toString(false);

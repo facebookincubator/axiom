@@ -1133,29 +1133,39 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
   velox::exec::SimpleExpressionEvaluator evaluator(
       queryCtx.get(), optimizerPool_.get());
 
-  auto session = std::make_shared<Session>(queryCtx->queryId(), user_);
   auto history = std::make_unique<optimizer::VeloxHistory>();
   if (schemaResolver == nullptr) {
     schemaResolver = std::make_shared<connector::SchemaResolver>(
         connector::ConnectorMetadataRegistry::global());
   }
 
-  auto optimizerProps = sessionConfig_->effectiveValues(kOptimizerPrefix);
-  auto optimizerOptions = optimizer::OptimizerOptions::from(optimizerProps);
+  auto connectorProperties = collectConnectorProperties(*sessionConfig_);
+  auto optimizerOptions = optimizer::OptimizerOptions::from(
+      sessionConfig_->effectiveValues(kOptimizerPrefix));
   optimizerOptions.explain = explain;
+  auto optimizerSession = std::make_shared<optimizer::OptimizerSession>(
+      queryCtx->queryId(),
+      user_,
+      std::move(optimizerOptions),
+      connectorProperties);
+  auto runnerSession = std::make_shared<runner::RunnerSession>(
+      queryCtx->queryId(),
+      user_,
+      sessionConfig_->effectiveValues(kRunnerPrefix),
+      std::move(connectorProperties));
 
   uint64_t toGraphNanos{0};
   uint64_t toGraphCpuNanos{0};
   auto toGraphCpuStart = velox::process::threadCpuNanos();
   auto toGraphStart = std::chrono::steady_clock::now();
   optimizer::Optimization optimization(
-      session,
+      std::move(optimizerSession),
+      std::move(runnerSession),
       *logicalPlan,
       *schemaResolver,
       *history,
       queryCtx,
       evaluator,
-      optimizerOptions,
       opts,
       runtimeStats);
 
@@ -1222,7 +1232,7 @@ std::shared_ptr<runner::LocalRunner> SqlQueryRunner::makeLocalRunner(
   auto runnerSession = std::make_shared<runner::RunnerSession>(
       queryCtx->queryId(),
       user_,
-      sessionConfig_->effectiveValues("runner"),
+      sessionConfig_->effectiveValues(kRunnerPrefix),
       collectConnectorProperties(*sessionConfig_));
   return std::make_shared<runner::LocalRunner>(
       std::move(runnerSession),

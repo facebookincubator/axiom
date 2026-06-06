@@ -50,15 +50,15 @@ std::string PlanAndStats::toString() const {
 }
 
 ToVelox::ToVelox(
-    SessionPtr session,
-    const MultiFragmentPlan::Options& options,
-    const OptimizerOptions& optimizerOptions)
-    : session_{std::move(session)},
+    OptimizerSessionPtr optimizerSession,
+    const MultiFragmentPlan::Options& options)
+    : optimizerSession_{std::move(optimizerSession)},
       options_{options},
-      optimizerOptions_{optimizerOptions},
       isSingle_{options.numWorkers == 1},
       subscript_{FunctionRegistry::instance()->subscript()},
-      elementAt_{FunctionRegistry::instance()->elementAt()} {}
+      elementAt_{FunctionRegistry::instance()->elementAt()} {
+  VELOX_CHECK_NOT_NULL(optimizerSession_);
+}
 
 namespace {
 
@@ -220,7 +220,7 @@ void ToVelox::filterUpdated(BaseTableCP table) {
 
   auto connector = layout->connector();
   auto connectorSession =
-      session_->toConnectorSession(connector->connectorId());
+      optimizerSession_->toConnectorSession(connector->connectorId());
 
   std::vector<velox::connector::ColumnHandlePtr> columns;
   for (const auto* column : allColumns) {
@@ -1453,7 +1453,7 @@ velox::core::PlanNodePtr ToVelox::makeScan(
 
   auto* connector = scan.index->layout->connector();
   auto connectorSession =
-      session_->toConnectorSession(connector->connectorId());
+      optimizerSession_->toConnectorSession(connector->connectorId());
 
   velox::connector::ColumnHandleMap assignments;
   for (auto column : scanColumns) {
@@ -1506,7 +1506,7 @@ velox::core::PlanNodePtr ToVelox::makeProject(
     ExecutableFragment& fragment,
     std::vector<ExecutableFragment>& stages) {
   auto input = makeFragment(project.input(), fragment, stages);
-  if (optimizerOptions_.parallelProjectWidth > 1) {
+  if (optimizerSession_->options().parallelProjectWidth > 1) {
     auto result = maybeParallelProject(&project, input);
     if (result) {
       return result;
@@ -2158,12 +2158,12 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
 
   const auto& connectorId = layout->connector()->connectorId();
   auto metadata = connector::ConnectorMetadataRegistry::get(connectorId);
-  auto session = session_->toConnectorSession(connectorId);
+  auto session = optimizerSession_->toConnectorSession(connectorId);
   auto handle = metadata->beginWrite(
       session,
       table.shared_from_this(),
       write.kind(),
-      optimizerOptions_.explain);
+      optimizerSession_->options().explain);
 
   auto inputType = ROW(inputNames, inputTypes);
 

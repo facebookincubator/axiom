@@ -15,7 +15,6 @@
  */
 
 #include "axiom/optimizer/tests/SqlTestBase.h"
-#include "axiom/common/Session.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/FunctionRegistry.h"
@@ -122,7 +121,6 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunner(
   exec::SimpleExpressionEvaluator evaluator(
       queryCtx.get(), optimizerPool.get());
 
-  auto session = std::make_shared<Session>(queryId, "test");
   connector::SchemaResolver schemaResolver{
       connector::ConnectorMetadataRegistry::global()};
   VeloxHistory history;
@@ -132,24 +130,24 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunner(
   options.numDrivers = numDrivers;
   options.queryId = queryId;
 
+  auto optimizerSession = std::make_shared<OptimizerSession>(
+      queryId, "test", OptimizerOptions{}, connector::ConnectorProperties{});
+  auto runnerSession = std::make_shared<runner::RunnerSession>(
+      queryId, "test", runner::Properties{}, connector::ConnectorProperties{});
+
   Optimization optimization(
-      session,
+      optimizerSession,
+      runnerSession,
       *logicalPlan,
       schemaResolver,
       history,
       queryCtx,
       evaluator,
-      OptimizerOptions(),
       options);
 
   auto best = optimization.bestPlan();
   auto planAndStats = optimization.toVeloxPlan(best->op);
 
-  auto runnerSession = std::make_shared<runner::RunnerSession>(
-      session->queryId(),
-      session->user(),
-      connector::Properties{},
-      connector::ConnectorProperties{});
   static QueryRuntimeStats noopStats;
   return std::make_shared<runner::LocalRunner>(
       std::move(runnerSession),

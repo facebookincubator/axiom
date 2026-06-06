@@ -118,6 +118,18 @@ void waitForCompletion(const std::shared_ptr<runner::LocalRunner>& runner) {
         "Timed out waiting for query completion");
   }
 }
+
+OptimizerSessionPtr makeOptimizerSession(
+    const std::string& queryId,
+    OptimizerOptions options) {
+  return std::make_shared<OptimizerSession>(
+      queryId, "test", std::move(options), connector::ConnectorProperties{});
+}
+
+runner::RunnerSessionPtr makeRunnerSession(const std::string& queryId) {
+  return std::make_shared<runner::RunnerSession>(
+      queryId, "test", runner::Properties{}, connector::ConnectorProperties{});
+}
 } // namespace
 
 TestResult QueryTestBase::runVelox(const core::PlanNodePtr& plan) {
@@ -192,17 +204,17 @@ PlanCost QueryTestBase::optimizationCost(
   };
   exec::SimpleExpressionEvaluator evaluator(
       queryCtx.get(), optimizerPool_.get());
-  auto session = std::make_shared<Session>(queryCtx->queryId(), "test");
   connector::SchemaResolver schemaResolver{
       connector::ConnectorMetadataRegistry::global()};
   Optimization opt(
-      session,
+      makeOptimizerSession(
+          queryCtx->queryId(), optimizerOptions.value_or(optimizerOptions_)),
+      makeRunnerSession(queryCtx->queryId()),
       *logicalPlan,
       schemaResolver,
       *history_,
       queryCtx,
       evaluator,
-      optimizerOptions.value_or(optimizerOptions_),
       options);
   return opt.bestPlan()->cost;
 }
@@ -223,20 +235,20 @@ void QueryTestBase::verifyOptimization(
   exec::SimpleExpressionEvaluator evaluator(
       veloxQueryCtx.get(), optimizerPool_.get());
 
-  auto session = std::make_shared<Session>(veloxQueryCtx->queryId(), "test");
-
   connector::SchemaResolver schemaResolver{
       connector::ConnectorMetadataRegistry::global()};
   VeloxHistory history;
 
   Optimization optimization(
-      session,
+      makeOptimizerSession(
+          veloxQueryCtx->queryId(),
+          optimizerOptions.value_or(optimizerOptions_)),
+      makeRunnerSession(veloxQueryCtx->queryId()),
       logicalPlan,
       schemaResolver,
       history,
       veloxQueryCtx,
       evaluator,
-      optimizerOptions.value_or(optimizerOptions_),
       MultiFragmentPlan::Options{.numWorkers = 1, .numDrivers = 1});
 
   callback(optimization);
@@ -270,8 +282,6 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
   exec::SimpleExpressionEvaluator evaluator(
       queryCtx.get(), optimizerPool_.get());
 
-  auto session = std::make_shared<Session>(queryCtx->queryId(), "test");
-
   std::unique_ptr<std::ofstream> planPath;
   if (planFilePathPrefix.has_value()) {
     planPath = std::make_unique<std::ofstream>(
@@ -288,13 +298,14 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
   };
 
   optimizer::Optimization opt(
-      session,
+      makeOptimizerSession(
+          queryCtx->queryId(), optimizerOptions.value_or(optimizerOptions_)),
+      makeRunnerSession(queryCtx->queryId()),
       *plan,
       schemaResolver,
       *history_,
       queryCtx,
       evaluator,
-      optimizerOptions.value_or(optimizerOptions_),
       options);
   if (planPath != nullptr) {
     *planPath << "Query Graph:\n\n" << opt.rootDt()->toString() << "\n\n";
