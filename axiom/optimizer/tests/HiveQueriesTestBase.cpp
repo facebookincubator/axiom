@@ -61,7 +61,12 @@ void HiveQueriesTestBase::SetUp() {
 
   prestoParser_ = std::make_unique<::axiom::sql::presto::PrestoParser>(
       exec::test::kHiveConnectorId,
-      std::string(connector::hive::LocalHiveConnectorMetadata::kDefaultSchema));
+      std::string(connector::hive::LocalHiveConnectorMetadata::kDefaultSchema),
+      std::make_shared<::axiom::sql::presto::ParserSession>(
+          /*queryId=*/"test",
+          /*user=*/"test",
+          ::axiom::sql::presto::ParserOptions{},
+          connector::ConnectorProperties{}));
 }
 
 // static

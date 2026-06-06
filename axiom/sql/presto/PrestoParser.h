@@ -15,8 +15,9 @@
  */
 #pragma once
 
-#include "axiom/sql/presto/ParserOptions.h"
+#include "axiom/sql/presto/ParserSession.h"
 #include "axiom/sql/presto/SqlStatement.h"
+#include "velox/common/base/Exceptions.h"
 
 namespace axiom::sql::presto {
 
@@ -27,13 +28,17 @@ class PrestoParser {
   /// specify catalog, i.e. SELECT * FROM schema.name.
   /// @param defaultSchema Default schema to use for tables that do not
   /// specify schema, i.e. SELECT * FROM name.
+  /// @param session Parser-scoped session used to spawn ConnectorSessions
+  /// for parse-time metadata calls.
   PrestoParser(
       const std::string& defaultConnectorId,
       const std::string& defaultSchema,
-      ParserOptions options = {})
+      ParserSessionPtr session)
       : defaultConnectorId_{defaultConnectorId},
         defaultSchema_{defaultSchema},
-        options_{options} {}
+        session_{std::move(session)} {
+    VELOX_CHECK_NOT_NULL(session_);
+  }
 
   SqlStatementPtr parse(std::string_view sql, bool enableTracing = false);
 
@@ -64,7 +69,7 @@ class PrestoParser {
 
   const std::string defaultConnectorId_;
   const std::string defaultSchema_;
-  const ParserOptions options_;
+  const ParserSessionPtr session_;
 };
 
 } // namespace axiom::sql::presto

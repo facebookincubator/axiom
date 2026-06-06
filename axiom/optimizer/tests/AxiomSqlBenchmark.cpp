@@ -182,7 +182,12 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     prestoParser_ = std::make_unique<::axiom::sql::presto::PrestoParser>(
         connector_->connectorId(),
         std::string(
-            connector::hive::LocalHiveConnectorMetadata::kDefaultSchema));
+            connector::hive::LocalHiveConnectorMetadata::kDefaultSchema),
+        std::make_shared<::axiom::sql::presto::ParserSession>(
+            /*queryId=*/"axiom-sql-benchmark",
+            /*user=*/"axiom-sql-benchmark",
+            ::axiom::sql::presto::ParserOptions{},
+            connector::ConnectorProperties{}));
 
     history_ = std::make_unique<optimizer::VeloxHistory>();
 

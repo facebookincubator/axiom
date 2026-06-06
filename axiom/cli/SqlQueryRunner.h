@@ -121,6 +121,9 @@ class SqlQueryRunner {
   /// Prefix for runner session properties.
   static constexpr const char* kRunnerPrefix = "runner";
 
+  /// Prefix for parser session properties (e.g., "parser.friendly_sql").
+  static constexpr const char* kParserPrefix = "parser";
+
   /// Prefix for Velox execution session properties (e.g.,
   /// "execution.session_timezone").
   static constexpr const char* kExecutionPrefix = "execution";

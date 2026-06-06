@@ -205,6 +205,8 @@ void SqlQueryRunner::initialize(
       kOptimizerPrefix,
       std::make_shared<facebook::axiom::optimizer::OptimizerOptions>());
   configRegistry_->add(
+      kParserPrefix, std::make_shared<presto::ParserOptions>());
+  configRegistry_->add(
       kExecutionPrefix,
       std::make_shared<facebook::velox::core::QueryConfigProvider>());
   configRegistry_->add(
@@ -238,6 +240,22 @@ void SqlQueryRunner::initialize(
 }
 
 namespace {
+
+// Returns per-connector property maps for connectors with at least one
+// effective value set.
+connector::ConnectorProperties collectConnectorProperties(
+    const SessionConfig& config) {
+  connector::ConnectorProperties result;
+  for (const auto& id :
+       connector::ConnectorMetadataRegistry::allMetadataIds()) {
+    connector::Properties properties = config.effectiveValues(id);
+    if (!properties.empty()) {
+      result.emplace(id, std::move(properties));
+    }
+  }
+  return result;
+}
+
 std::vector<velox::RowVectorPtr> fetchResults(runner::LocalRunner& runner) {
   std::vector<velox::RowVectorPtr> results;
   while (auto rows = runner.next()) {
@@ -562,8 +580,14 @@ std::vector<presto::SqlStatementPtr> SqlQueryRunner::parseMultiple(
       options.defaultConnectorId.value_or(defaultConnectorId_);
   const auto& defaultSchema = options.defaultSchema.value_or(defaultSchema_);
 
-  auto prestoParser =
-      std::make_unique<presto::PrestoParser>(defaultConnectorId, defaultSchema);
+  auto parserSession = std::make_shared<presto::ParserSession>(
+      options.queryId.value_or(queryIdGenerator_()),
+      user_,
+      presto::ParserOptions::from(
+          sessionConfig_->effectiveValues(kParserPrefix)),
+      collectConnectorProperties(*sessionConfig_));
+  auto prestoParser = std::make_unique<presto::PrestoParser>(
+      defaultConnectorId, defaultSchema, std::move(parserSession));
   return prestoParser->parseMultiple(sql, /*enableTracing=*/options.debugMode);
 }
 
@@ -1039,24 +1063,6 @@ connector::ConnectorSessionPtr SqlQueryRunner::makeConnectorSession(
       user_,
       sessionConfig_->effectiveValues(connectorId));
 }
-
-namespace {
-
-// Returns per-connector property maps for connectors with at least one
-// effective value set.
-connector::ConnectorProperties collectConnectorProperties(
-    const SessionConfig& config) {
-  connector::ConnectorProperties result;
-  for (const auto& id :
-       connector::ConnectorMetadataRegistry::allMetadataIds()) {
-    connector::Properties properties = config.effectiveValues(id);
-    if (!properties.empty()) {
-      result.emplace(id, std::move(properties));
-    }
-  }
-  return result;
-}
-} // namespace
 
 std::string SqlQueryRunner::runExplainAnalyze(
     const logical_plan::LogicalPlanNodePtr& logicalPlan,

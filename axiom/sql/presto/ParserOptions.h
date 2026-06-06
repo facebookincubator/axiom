@@ -15,19 +15,58 @@
  */
 #pragma once
 
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
+
+#include <folly/container/F14Map.h>
+
+#include "velox/common/config/ConfigProvider.h"
+
 namespace axiom::sql::presto {
 
 /// Options controlling SQL parsing behavior.
-struct ParserOptions {
+struct ParserOptions : public facebook::velox::config::ConfigProvider {
+  static constexpr std::string_view kFriendlySql = "friendly_sql";
+  static constexpr std::string_view kParseDecimalLiteralAsDouble =
+      "parse_decimal_literal_as_double";
+
+  static constexpr bool kFriendlySqlDefault = true;
+  static constexpr bool kParseDecimalLiteralAsDoubleDefault = true;
+
+  ParserOptions();
+
+  /// Overrides code defaults with values from `configOverrides`.
+  explicit ParserOptions(
+      const std::unordered_map<std::string, std::string>& configOverrides);
+
   /// Enables Friendly SQL extensions inspired by DuckDB: named ROW
   /// constructors, trailing commas, FROM-first syntax, etc.
-  bool friendlySql{true};
+  bool friendlySql{kFriendlySqlDefault};
 
   /// When true, decimal literals (e.g., 1.5) are parsed as DOUBLE. When
   /// false, they are parsed as DECIMAL with precision and scale inferred
   /// from the literal. Matches Presto's decimal_literal_result_type session
   /// property.
-  bool parseDecimalLiteralAsDouble{true};
+  bool parseDecimalLiteralAsDouble{kParseDecimalLiteralAsDoubleDefault};
+
+  /// Constructs options from session property name-value pairs.
+  /// Keys are unqualified property names (e.g., "friendly_sql").
+  /// Missing keys use struct defaults.
+  static ParserOptions from(
+      const folly::F14FastMap<std::string, std::string>& properties);
+
+  std::vector<facebook::velox::config::ConfigProperty> properties()
+      const override {
+    return properties_;
+  }
+
+  std::string normalize(std::string_view name, std::string_view value)
+      const override;
+
+ private:
+  std::vector<facebook::velox::config::ConfigProperty> properties_;
 };
 
 } // namespace axiom::sql::presto
