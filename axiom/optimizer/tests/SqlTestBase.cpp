@@ -169,7 +169,13 @@ void SqlTestBase::runSetupStatement(
   duckDb.execute(sql);
 
   ::axiom::sql::presto::PrestoParser parser(
-      kTestConnectorId, std::string(connector::TestConnector::kDefaultSchema));
+      kTestConnectorId,
+      std::string(connector::TestConnector::kDefaultSchema),
+      std::make_shared<::axiom::sql::presto::ParserSession>(
+          /*queryId=*/"test",
+          /*user=*/"test",
+          ::axiom::sql::presto::ParserOptions{},
+          connector::ConnectorProperties{}));
   auto stmt = parser.parse(sql, /*enableTracing=*/true);
 
   if (stmt->isCreateTable()) {
@@ -214,7 +220,13 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeRunner(
     std::string_view sql) {
   // Parse SQL to logical plan.
   ::axiom::sql::presto::PrestoParser parser(
-      kTestConnectorId, std::string(connector::TestConnector::kDefaultSchema));
+      kTestConnectorId,
+      std::string(connector::TestConnector::kDefaultSchema),
+      std::make_shared<::axiom::sql::presto::ParserSession>(
+          /*queryId=*/"test",
+          /*user=*/"test",
+          ::axiom::sql::presto::ParserOptions{},
+          connector::ConnectorProperties{}));
   auto statement = parser.parse(sql, true);
 
   VELOX_CHECK(

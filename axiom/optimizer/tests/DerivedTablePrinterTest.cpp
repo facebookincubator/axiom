@@ -65,7 +65,14 @@ class DerivedTablePrinterTest : public ::testing::Test {
   }
 
   std::vector<std::string> toLines(const std::string& sql) {
-    ::axiom::sql::presto::PrestoParser parser{kTestConnectorId, kDefaultSchema};
+    ::axiom::sql::presto::PrestoParser parser{
+        kTestConnectorId,
+        kDefaultSchema,
+        std::make_shared<::axiom::sql::presto::ParserSession>(
+            /*queryId=*/"test",
+            /*user=*/"test",
+            ::axiom::sql::presto::ParserOptions{},
+            connector::ConnectorProperties{})};
     auto statement = parser.parse(sql);
     VELOX_CHECK(statement->isSelect());
 

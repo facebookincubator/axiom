@@ -2297,15 +2297,13 @@ SqlStatementPtr parseDropSchema(
 
 SqlStatementPtr parseShowSchemas(
     const ShowSchemas& showSchemas,
-    const std::string& defaultConnectorId) {
+    const std::string& defaultConnectorId,
+    const ParserSessionPtr& parserSession) {
   const auto connectorId = showSchemas.catalog().value_or(defaultConnectorId);
 
   auto metadata =
       facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId);
-  auto session = std::make_shared<facebook::axiom::connector::ConnectorSession>(
-      "show-schemas",
-      /*user=*/"presto-parser",
-      facebook::axiom::connector::Properties{});
+  auto session = parserSession->toConnectorSession(connectorId);
   auto schemaNames = metadata->listSchemaNames(session);
   std::sort(schemaNames.begin(), schemaNames.end());
 
@@ -2331,7 +2329,8 @@ SqlStatementPtr parseShowSchemas(
 SqlStatementPtr parseShowTables(
     const ShowTables& showTables,
     const std::string& defaultConnectorId,
-    const std::string& defaultSchema) {
+    const std::string& defaultSchema,
+    const ParserSessionPtr& parserSession) {
   static constexpr std::string_view kTableColumnName = "Table";
 
   std::string connectorId = defaultConnectorId;
@@ -2354,10 +2353,7 @@ SqlStatementPtr parseShowTables(
 
   auto metadata =
       facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId);
-  auto session = std::make_shared<facebook::axiom::connector::ConnectorSession>(
-      "show-tables",
-      /*user=*/"presto-parser",
-      facebook::axiom::connector::Properties{});
+  auto session = parserSession->toConnectorSession(connectorId);
   VELOX_USER_CHECK(
       metadata->schemaExists(session, schema),
       "Schema does not exist: {}",
@@ -2420,7 +2416,7 @@ SqlStatementPtr doPlan(
     const std::string& defaultSchema,
     const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
         std::string_view /*sql*/)>& parseSql,
-    bool friendlySql = true) {
+    const ParserSessionPtr& parserSession) {
   if (query->is(NodeType::kInsert)) {
     return parseInsert(
         *query->as<Insert>(), defaultConnectorId, defaultSchema, parseSql);
@@ -2458,12 +2454,16 @@ SqlStatementPtr doPlan(
   }
 
   if (query->is(NodeType::kShowSchemas)) {
-    return parseShowSchemas(*query->as<ShowSchemas>(), defaultConnectorId);
+    return parseShowSchemas(
+        *query->as<ShowSchemas>(), defaultConnectorId, parserSession);
   }
 
   if (query->is(NodeType::kShowTables)) {
     return parseShowTables(
-        *query->as<ShowTables>(), defaultConnectorId, defaultSchema);
+        *query->as<ShowTables>(),
+        defaultConnectorId,
+        defaultSchema,
+        parserSession);
   }
 
   if (query->is(NodeType::kShowCatalogs)) {
@@ -2503,7 +2503,10 @@ SqlStatementPtr doPlan(
 
   if (query->is(NodeType::kQuery)) {
     RelationPlanner planner(
-        defaultConnectorId, defaultSchema, parseSql, friendlySql);
+        defaultConnectorId,
+        defaultSchema,
+        parseSql,
+        parserSession->options().friendlySql);
     query->accept(&planner);
     return std::make_shared<SelectStatement>(
         planner.plan(),
@@ -2525,7 +2528,7 @@ SqlStatementPtr PrestoParser::doParse(
     ParserHelper helper(sql);
     auto* context = helper.parse();
 
-    AstBuilder astBuilder(options_, enableTracing);
+    AstBuilder astBuilder(session_->options(), enableTracing);
     auto query =
         std::any_cast<std::shared_ptr<Statement>>(astBuilder.visit(context));
 
@@ -2575,16 +2578,11 @@ SqlStatementPtr PrestoParser::doParse(
         defaultConnectorId_,
         defaultSchema_,
         parseSql,
-        options_.friendlySql);
+        session_);
     return parseExplain(*explain, sqlStatement);
   }
 
-  return doPlan(
-      query,
-      defaultConnectorId_,
-      defaultSchema_,
-      parseSql,
-      options_.friendlySql);
+  return doPlan(query, defaultConnectorId_, defaultSchema_, parseSql, session_);
 }
 
 } // namespace axiom::sql::presto

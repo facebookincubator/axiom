@@ -26,6 +26,7 @@ add_library(
   DisplayNames.cpp
   ExpressionPlanner.cpp
   GroupByPlanner.cpp
+  ParserOptions.cpp
   SortProjection.cpp
   PrestoParser.cpp
   ShowStatsBuilder.cpp
@@ -38,6 +39,7 @@ target_link_libraries(
   axiom_sql_presto_ast
   axiom_sql_presto_error
   velox_common_base
+  velox_common_config
   velox_presto_types
   antlr4_shared
   re2::re2

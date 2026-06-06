@@ -257,10 +257,10 @@ TEST_F(ExpressionParserTest, decimalLiteralAsDecimal) {
   VELOX_EXPECT_EQ_TYPES(expr->type(), DOUBLE());
 
   // With parseDecimalLiteralAsDouble=false, 1.5 is parsed as DECIMAL(2, 1).
+  ParserOptions options;
+  options.parseDecimalLiteralAsDouble = false;
   PrestoParser parser(
-      kConnectorId,
-      "default",
-      ParserOptions{.parseDecimalLiteralAsDouble = false});
+      kConnectorId, "default", makeParserSession(std::move(options)));
   expr = parser.parseExpression("1.5");
   VELOX_EXPECT_EQ_TYPES(expr->type(), DECIMAL(2, 1));
 

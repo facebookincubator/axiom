@@ -8,8 +8,9 @@ SQL dialect.
 
 Some extensions are gated behind the `friendlySql` flag in `ParserOptions`.
 These are inspired by [DuckDB's Friendly SQL](https://duckdb.org/docs/sql/dialect/friendly_sql)
-and are enabled by default. To disable them, construct `PrestoParser` with
-`ParserOptions{.friendlySql = false}`.
+and are enabled by default. To disable them, set `friendlySql = false` on
+the `ParserOptions` passed to `ParserSession`, or use
+`SET SESSION parser.friendly_sql = false` at the CLI.
 
 Friendly SQL features:
 

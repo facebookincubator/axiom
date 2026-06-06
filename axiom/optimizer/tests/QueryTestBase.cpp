@@ -100,7 +100,14 @@ logical_plan::LogicalPlanNodePtr QueryTestBase::parseSelect(
     std::string_view sql,
     const std::string& defaultConnectorId,
     const std::string& defaultSchema) {
-  ::axiom::sql::presto::PrestoParser parser(defaultConnectorId, defaultSchema);
+  ::axiom::sql::presto::PrestoParser parser(
+      defaultConnectorId,
+      defaultSchema,
+      std::make_shared<::axiom::sql::presto::ParserSession>(
+          /*queryId=*/"test",
+          /*user=*/"test",
+          ::axiom::sql::presto::ParserOptions{},
+          connector::ConnectorProperties{}));
 
   auto statement = parser.parse(sql);
 
