@@ -162,7 +162,9 @@ class SystemConnectorMetadataTest : public ::testing::Test {
 
   static ConnectorSessionPtr makeSession() {
     return std::make_shared<ConnectorSession>(
-        /*queryId=*/"test", /*user=*/"test");
+        /*queryId=*/"test",
+        /*user=*/"test",
+        Properties{});
   }
 
   // Creates a DataSource for the given schema/table through the connector,

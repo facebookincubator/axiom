@@ -429,8 +429,14 @@ const TestTable& findTestTableForHandle(
 
 folly::coro::Task<std::vector<PartitionHandlePtr>>
 TestSplitManager::co_listPartitions(
-    const ConnectorSessionPtr& /*session*/,
+    const ConnectorSessionPtr& session,
     const velox::connector::ConnectorTableHandlePtr& tableHandle) {
+  VELOX_CHECK_NOT_NULL(session);
+  if (auto error = session->property(TestConfigProvider::kListPartitionsError);
+      error.has_value() && !error->empty()) {
+    VELOX_USER_FAIL("{}", *error);
+  }
+
   const auto& testTable = findTestTableForHandle(tableHandle);
   if (!testTable.bucketSpec().has_value()) {
     co_return std::vector<PartitionHandlePtr>{

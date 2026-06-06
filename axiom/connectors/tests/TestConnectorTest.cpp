@@ -56,6 +56,11 @@ class TestConnectorTest : public ::testing::Test, public test::VectorTestBase {
     velox::connector::unregisterConnector(connector_->connectorId());
   }
 
+  static ConnectorSessionPtr makeSession() {
+    return std::make_shared<ConnectorSession>(
+        /*queryId=*/"test", /*user=*/"test", Properties{});
+  }
+
   std::shared_ptr<TestConnector> connector_;
   std::shared_ptr<ConnectorMetadata> metadata_;
 };
@@ -156,11 +161,12 @@ CO_TEST_F(TestConnectorTest, splitManager) {
   auto tableHandle = layout.createTableHandle(
       nullptr, std::move(columns), *evaluator, empty, empty);
 
+  auto session = makeSession();
   auto partitions =
-      co_await splitManager->co_listPartitions(nullptr, tableHandle);
+      co_await splitManager->co_listPartitions(session, tableHandle);
   QueryRuntimeStats noopStats;
   auto splitSource = splitManager->getSplitSource(
-      nullptr, tableHandle, partitions, /*partitionType=*/nullptr, noopStats);
+      session, tableHandle, partitions, /*partitionType=*/nullptr, noopStats);
   EXPECT_NE(splitSource, nullptr);
 
   std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
@@ -613,8 +619,9 @@ CO_TEST_F(TestConnectorTest, bucketedTable) {
 
   auto tableHandle = makeScanHandle(*table->layouts()[0], {"key"});
   auto* splitManager = metadata_->splitManager();
+  auto session = makeSession();
   auto partitions =
-      co_await splitManager->co_listPartitions(nullptr, tableHandle);
+      co_await splitManager->co_listPartitions(session, tableHandle);
   EXPECT_EQ(partitions.size(), kNumBuckets);
 
   // Pass a non-null partitionType with numPartitions < numBuckets so the
@@ -624,7 +631,7 @@ CO_TEST_F(TestConnectorTest, bucketedTable) {
       kNumGroups, std::vector<TypePtr>{BIGINT()}, schema);
   QueryRuntimeStats noopStats;
   auto source = splitManager->getSplitSource(
-      nullptr, tableHandle, partitions, partitionType, noopStats);
+      session, tableHandle, partitions, partitionType, noopStats);
   std::vector<int32_t> observedGroupIds;
   while (true) {
     auto batch = co_await source->co_getSplits(/*maxSplitCount=*/16);
@@ -675,7 +682,7 @@ CO_TEST_F(TestConnectorTest, bucketedTableNumBucketsExceedsNumRows) {
 
   auto tableHandle = makeScanHandle(*table->layouts()[0], {"key"});
   auto partitions = co_await metadata_->splitManager()->co_listPartitions(
-      nullptr, tableHandle);
+      makeSession(), tableHandle);
   EXPECT_EQ(partitions.size(), kNumBuckets);
 }
 

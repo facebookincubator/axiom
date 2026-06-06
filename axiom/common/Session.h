@@ -20,18 +20,17 @@
 
 namespace facebook::axiom {
 
-/// Read-only query-specific information.
+/// DEPRECATED: transitional shim. Use per-component sessions
+/// (`RunnerSession`, future `OptimizerSession` / `ParserSession`) instead.
 class Session final {
  public:
   Session(std::string queryId, std::string user)
       : queryId_{std::move(queryId)}, user_{std::move(user)} {}
 
-  /// Returns the query identifier.
   const std::string& queryId() const {
     return queryId_;
   }
 
-  /// Returns the identity of the user who submitted the query.
   const std::string& user() const {
     return user_;
   }

@@ -325,8 +325,8 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
           optimizer::ConstantExprEvaluator::evaluateConstantExpr(*value);
     }
 
-    auto session =
-        std::make_shared<connector::ConnectorSession>("test", "test");
+    auto session = std::make_shared<connector::ConnectorSession>(
+        "test", "test", connector::Properties{});
     auto table = metadata->createTable(
         session,
         statement.tableName(),
@@ -344,8 +344,8 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
 
     const auto& tableName = statement.tableName();
 
-    auto session =
-        std::make_shared<connector::ConnectorSession>("test", "test");
+    auto session = std::make_shared<connector::ConnectorSession>(
+        "test", "test", connector::Properties{});
     const bool dropped = metadata->dropTable(
         session, tableName, statement.ifExists(), /*explain=*/false);
 
@@ -651,7 +651,13 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
   std::shared_ptr<runner::LocalRunner> makeRunner(
       optimizer::PlanAndStats& planAndStats,
       const std::shared_ptr<core::QueryCtx>& queryCtx) {
+    auto runnerSession = std::make_shared<runner::RunnerSession>(
+        queryCtx->queryId(),
+        /*user=*/"axiom-sql-benchmark",
+        connector::Properties{},
+        connector::ConnectorProperties{});
     return std::make_shared<runner::LocalRunner>(
+        std::move(runnerSession),
         planAndStats.plan,
         std::move(planAndStats.finishWrite),
         queryCtx,

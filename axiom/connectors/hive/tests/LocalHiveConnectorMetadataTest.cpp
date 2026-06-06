@@ -118,7 +118,9 @@ class LocalHiveConnectorMetadataTest
 
   static ConnectorSessionPtr makeSession() {
     return std::make_shared<ConnectorSession>(
-        /*queryId=*/"q-test", /*user=*/"u-test");
+        /*queryId=*/"q-test",
+        /*user=*/"u-test",
+        Properties{});
   }
 
   /// Write the specified data to the table with a TableWrite operation. The

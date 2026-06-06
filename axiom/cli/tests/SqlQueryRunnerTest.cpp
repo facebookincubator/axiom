@@ -1324,6 +1324,19 @@ TEST_F(SqlQueryRunnerTest, connectorSessionPropertyEffect) {
   }
 }
 
+// Verifies that a SET SESSION connector property is visible to the
+// connector during execution-time split generation.
+TEST_F(SqlQueryRunnerTest, connectorProperties) {
+  run("CREATE TABLE t AS SELECT x FROM unnest(sequence(1, 3)) AS _(x)");
+  SCOPE_EXIT {
+    run("DROP TABLE IF EXISTS t");
+  };
+
+  run("SET SESSION test.list_partitions_error = 'boom from split-gen'");
+
+  VELOX_ASSERT_THROW(run("SELECT * FROM t"), "boom from split-gen");
+}
+
 TEST_F(SqlQueryRunnerTest, addColumn) {
   auto findTable = [&]() {
     auto metadata = facebook::axiom::connector::ConnectorMetadataRegistry::get(

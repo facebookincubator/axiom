@@ -51,7 +51,7 @@ class HiveQueriesTestBase : public QueryTestBase {
 
   static connector::ConnectorSessionPtr makeSession() {
     return std::make_shared<connector::ConnectorSession>(
-        /*queryId=*/"test", /*user=*/"test");
+        /*queryId=*/"test", /*user=*/"test", connector::Properties{});
   }
 
   /// Returns a schema of a table.

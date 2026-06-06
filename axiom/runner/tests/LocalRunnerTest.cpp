@@ -133,11 +133,20 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
     return fmt::format("q{}", queryCounter_++);
   }
 
+  static axiom::runner::RunnerSessionPtr makeRunnerSession(
+      std::string_view queryId) {
+    return std::make_shared<axiom::runner::RunnerSession>(
+        std::string(queryId),
+        "test",
+        axiom::runner::Properties{},
+        axiom::connector::ConnectorProperties{});
+  }
+
   std::shared_ptr<LocalRunner> makeRunner(
       optimizer::MultiFragmentPlanPtr plan) {
     const auto queryId = plan->options().queryId;
-
     return std::make_shared<LocalRunner>(
+        makeRunnerSession(queryId),
         std::move(plan),
         optimizer::FinishWrite{},
         makeQueryCtx(queryId),
@@ -274,6 +283,7 @@ TEST_F(LocalRunnerTest, spillDirectoryWiring) {
   auto queryCtx = makeQueryCtx(queryId);
 
   auto localRunner = std::make_shared<LocalRunner>(
+      makeRunnerSession(queryId),
       std::move(join),
       optimizer::FinishWrite{},
       std::move(queryCtx),

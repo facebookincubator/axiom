@@ -231,6 +231,7 @@ std::vector<optimizer::ExecutableFragment> topologicalSort(
 } // namespace
 
 LocalRunner::LocalRunner(
+    RunnerSessionPtr session,
     optimizer::MultiFragmentPlanPtr plan,
     optimizer::FinishWrite finishWrite,
     std::shared_ptr<velox::core::QueryCtx> queryCtx,
@@ -238,7 +239,8 @@ LocalRunner::LocalRunner(
     std::shared_ptr<velox::memory::MemoryPool> outputPool,
     std::string baseSpillDirectory,
     QueryRuntimeStats& runtimeStats)
-    : plan_{std::move(plan)},
+    : session_{std::move(session)},
+      plan_{std::move(plan)},
       fragments_{topologicalSort(plan_->fragments())},
       finishWrite_{std::move(finishWrite)},
       splitSourceFactory_{std::move(splitSourceFactory)},
@@ -250,6 +252,7 @@ LocalRunner::LocalRunner(
     params_.spillDirectory = baseSpillDirectory_;
   }
 
+  VELOX_CHECK_NOT_NULL(session_);
   VELOX_CHECK_NOT_NULL(splitSourceFactory_);
   VELOX_CHECK(!finishWrite_ || params_.outputPool != nullptr);
 }
@@ -525,8 +528,10 @@ void LocalRunner::makeStages(
             it != fragment.groupedNodes.end()) {
           partitionType = it->second;
         }
-        auto source =
-            splitSourceForScan(/*session=*/nullptr, *scan, partitionType);
+        auto source = splitSourceForScan(
+            session_->toConnectorSession(scan->tableHandle()->connectorId()),
+            *scan,
+            partitionType);
         splitScope_.add(
             folly::coro::co_withExecutor(
                 params_.queryCtx->executor(),
