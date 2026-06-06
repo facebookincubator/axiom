@@ -147,8 +147,8 @@ velox::core::PlanNodePtr ToVelox::makeParallelProject(
       indices, [&](auto l, auto r) { return costs[l] < costs[r]; });
 
   // Sorted lowest cost first. Make even size groups.
-  const float targetCost =
-      totalCost / static_cast<float>(optimizerOptions_.parallelProjectWidth);
+  const float targetCost = totalCost /
+      static_cast<float>(optimizerSession_->options().parallelProjectWidth);
 
   std::vector<std::vector<velox::core::TypedExprPtr>> groups;
   groups.emplace_back();

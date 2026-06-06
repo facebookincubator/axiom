@@ -592,20 +592,27 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     exec::SimpleExpressionEvaluator evaluator(
         queryCtx.get(), optimizerPool_.get());
 
-    auto session = std::make_shared<Session>(
-        queryCtx->queryId(), /*user=*/"axiom-sql-benchmark");
-
     optimizer::OptimizerOptions optimizerOptions;
     optimizerOptions.traceFlags = FLAGS_optimizer_trace;
+    auto optimizerSession = std::make_shared<optimizer::OptimizerSession>(
+        queryCtx->queryId(),
+        /*user=*/"axiom-sql-benchmark",
+        std::move(optimizerOptions),
+        connector::ConnectorProperties{});
+    auto runnerSession = std::make_shared<runner::RunnerSession>(
+        queryCtx->queryId(),
+        /*user=*/"axiom-sql-benchmark",
+        runner::Properties{},
+        connector::ConnectorProperties{});
 
     optimizer::Optimization optimization(
-        session,
+        std::move(optimizerSession),
+        std::move(runnerSession),
         *logicalPlan,
         *schema_,
         *history_,
         queryCtx,
         evaluator,
-        optimizerOptions,
         opts);
 
     if (checkDerivedTable && !checkDerivedTable(*optimization.rootDt())) {

@@ -37,17 +37,17 @@ namespace lp = facebook::axiom::logical_plan;
 namespace facebook::axiom::optimizer {
 
 Optimization::Optimization(
-    SessionPtr session,
+    OptimizerSessionPtr optimizerSession,
+    runner::RunnerSessionPtr runnerSession,
     const logical_plan::LogicalPlanNode& logicalPlan,
     const connector::SchemaResolver& schema,
     History& history,
     std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx,
     velox::core::ExpressionEvaluator& evaluator,
-    OptimizerOptions options,
     MultiFragmentPlan::Options runnerOptions,
     std::shared_ptr<QueryRuntimeStats> runtimeStats)
-    : session_{std::move(session)},
-      options_(std::move(options)),
+    : optimizerSession_{std::move(optimizerSession)},
+      runnerSession_{std::move(runnerSession)},
       runnerOptions_(std::move(runnerOptions)),
       isSingleWorker_(runnerOptions_.numWorkers == 1),
       isSingleDriver_(runnerOptions_.numDrivers == 1),
@@ -58,10 +58,11 @@ Optimization::Optimization(
       aggregationPlanner_{
           isSingleWorker_,
           isSingleDriver_,
-          options_.alwaysPlanPartialAggregation},
-      toGraph_{schema, evaluator, options_, runtimeStats},
-      toVelox_{session_, runnerOptions_, options_},
+          optimizerSession_->options().alwaysPlanPartialAggregation},
+      toGraph_{schema, evaluator, optimizerSession_->options(), runtimeStats},
+      toVelox_{optimizerSession_, runnerOptions_},
       runtimeStats_{std::move(runtimeStats)} {
+  VELOX_CHECK_NOT_NULL(runnerSession_);
   queryCtx()->optimization() = this;
 
   if (logicalPlan_->is(logical_plan::NodeKind::kOutput)) {
@@ -109,7 +110,7 @@ void collectBaseTables(DerivedTable* dt, std::vector<BaseTable*>& baseTables) {
 } // namespace
 
 void Optimization::estimateAllBaseTableSelectivity(DerivedTable& dt) {
-  if (!options_.useFilteredTableStats) {
+  if (!options().useFilteredTableStats) {
     return;
   }
 
@@ -152,8 +153,8 @@ void Optimization::estimateAllBaseTableSelectivity(DerivedTable& dt) {
     }
 
     auto* layout = baseTable->schemaTable->connectorTable->layouts()[0];
-    auto connectorSession =
-        session_->toConnectorSession(layout->connector()->connectorId());
+    auto connectorSession = optimizerSession_->toConnectorSession(
+        layout->connector()->connectorId());
     tableTasks.push_back({baseTable, tasks.size(), std::move(columnIndices)});
     tasks.push_back(layout->co_estimateStats(
         std::move(connectorSession),
@@ -449,10 +450,10 @@ PlanAndStats Optimization::toVeloxPlan(RelationOpPtr plan) {
 
 // static
 PlanAndStats Optimization::toVeloxPlan(
-    SessionPtr session,
+    OptimizerSessionPtr optimizerSession,
+    runner::RunnerSessionPtr runnerSession,
     const logical_plan::LogicalPlanNode& logicalPlan,
     velox::memory::MemoryPool& pool,
-    OptimizerOptions options,
     MultiFragmentPlan::Options runnerOptions) {
   auto allocator = std::make_unique<velox::HashStringAllocator>(&pool);
   auto context = std::make_unique<QueryGraphContext>(*allocator);
@@ -470,13 +471,13 @@ PlanAndStats Optimization::toVeloxPlan(
   VeloxHistory history;
 
   Optimization opt{
-      std::move(session),
+      std::move(optimizerSession),
+      std::move(runnerSession),
       logicalPlan,
       *schemaResolver,
       history,
       veloxQueryCtx,
       evaluator,
-      std::move(options),
       std::move(runnerOptions)};
 
   auto best = opt.bestPlan();
@@ -488,7 +489,7 @@ void Optimization::trace(
     int32_t id,
     const PlanCost& cost,
     RelationOp& plan) const {
-  if (event & options_.traceFlags) {
+  if (event & options().traceFlags) {
     std::cout << (event == OptimizerOptions::kRetained ? "Retained: "
                                                        : "Abandoned: ")
               << id << ": " << cost.toString() << ": " << " " << plan.toString()
@@ -927,7 +928,7 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
   // Take the first hand joined tables and bundle them with reducing joins that
   // can go on the build side.
 
-  if (!options_.syntacticJoinOrder && !candidates.empty()) {
+  if (!options().syntacticJoinOrder && !candidates.empty()) {
     std::vector<JoinCandidate> bushes;
     for (auto& candidate : candidates) {
       if (auto bush = reducingJoins(state, candidate)) {
@@ -945,7 +946,7 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
 
   // Keep only the candidate that matches the next unplaced table in
   // dt->joinOrder.
-  if (options_.syntacticJoinOrder && candidates.size() > 1) {
+  if (options().syntacticJoinOrder && candidates.size() > 1) {
     auto nextIt = std::find_if(
         state.dt->joinOrder.begin(),
         state.dt->joinOrder.end(),
@@ -2860,7 +2861,7 @@ void Optimization::addJoin(
 
   std::vector<NextJoin> toTry;
 
-  if (options_.syntacticJoinOrder &&
+  if (options().syntacticJoinOrder &&
       candidate.join->originalJoinType().has_value() &&
       candidate.join->originalJoinType().value() ==
           logical_plan::JoinType::kRight) {
@@ -2871,7 +2872,7 @@ void Optimization::addJoin(
     const auto sizeAfterIndex = toTry.size();
     joinByHash(plan, candidate, state, toTry);
 
-    if (!options_.syntacticJoinOrder && toTry.size() > sizeAfterIndex &&
+    if (!options().syntacticJoinOrder && toTry.size() > sizeAfterIndex &&
         candidate.join->isNonCommutative() &&
         candidate.join->hasRightHashVariant()) {
       // There is a hash based candidate with a non-commutative join. Try a
@@ -3228,7 +3229,7 @@ void Optimization::makeJoins(PlanState& state) {
 
   PlanObjectVector firstTables;
 
-  if (options_.syntacticJoinOrder) {
+  if (options().syntacticJoinOrder) {
     const auto firstTableId = state.dt->joinOrder[0];
     VELOX_CHECK(state.dt->startTables.BitSet::contains(firstTableId));
 

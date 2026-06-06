@@ -16,15 +16,15 @@
 #pragma once
 
 #include "axiom/common/QueryRuntimeStats.h"
-#include "axiom/common/Session.h"
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/optimizer/AggregationPlanner.h"
 #include "axiom/optimizer/Cost.h"
 #include "axiom/optimizer/MultiFragmentPlan.h"
-#include "axiom/optimizer/OptimizerOptions.h"
+#include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/ToGraph.h"
 #include "axiom/optimizer/ToVelox.h"
+#include "axiom/runner/RunnerSession.h"
 #include "velox/core/QueryCtx.h"
 
 namespace facebook::axiom::optimizer {
@@ -36,22 +36,22 @@ namespace facebook::axiom::optimizer {
 class Optimization {
  public:
   Optimization(
-      SessionPtr session,
+      OptimizerSessionPtr optimizerSession,
+      runner::RunnerSessionPtr runnerSession,
       const logical_plan::LogicalPlanNode& logicalPlan,
       const connector::SchemaResolver& schemaResolver,
       History& history,
       std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx,
       velox::core::ExpressionEvaluator& evaluator,
-      OptimizerOptions options = {},
       MultiFragmentPlan::Options runnerOptions = {},
       std::shared_ptr<QueryRuntimeStats> runtimeStats = nullptr);
 
   /// Simplified API for usage in testing and tooling.
   static PlanAndStats toVeloxPlan(
-      SessionPtr session,
+      OptimizerSessionPtr optimizerSession,
+      runner::RunnerSessionPtr runnerSession,
       const logical_plan::LogicalPlanNode& logicalPlan,
       velox::memory::MemoryPool& pool,
-      OptimizerOptions options = {},
       MultiFragmentPlan::Options runnerOptions = {});
 
   Optimization(const Optimization& other) = delete;
@@ -148,12 +148,16 @@ class Optimization {
     return toGraph_.makeEquality(left, right);
   }
 
-  const SessionPtr& session() const {
-    return session_;
+  const OptimizerSessionPtr& optimizerSession() const {
+    return optimizerSession_;
+  }
+
+  const runner::RunnerSessionPtr& runnerSession() const {
+    return runnerSession_;
   }
 
   const OptimizerOptions& options() const {
-    return options_;
+    return optimizerSession_->options();
   }
 
   const MultiFragmentPlan::Options& runnerOptions() const {
@@ -399,9 +403,9 @@ class Optimization {
       const std::optional<connector::FilteredTableStats>& stats,
       const std::vector<size_t>& columnIndices);
 
-  const SessionPtr session_;
+  const OptimizerSessionPtr optimizerSession_;
 
-  const OptimizerOptions options_;
+  const runner::RunnerSessionPtr runnerSession_;
 
   const MultiFragmentPlan::Options runnerOptions_;
 

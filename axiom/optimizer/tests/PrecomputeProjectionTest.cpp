@@ -65,16 +65,25 @@ class PrecomputeProjectionTest : public ::testing::Test {
     auto schemaResolver = std::make_shared<connector::SchemaResolver>(
         connector::ConnectorMetadataRegistry::global());
 
-    auto session = std::make_shared<Session>(veloxQueryCtx->queryId(), "test");
+    auto optimizerSession = std::make_shared<OptimizerSession>(
+        veloxQueryCtx->queryId(),
+        "test",
+        OptimizerOptions{},
+        connector::ConnectorProperties{});
+    auto runnerSession = std::make_shared<runner::RunnerSession>(
+        veloxQueryCtx->queryId(),
+        "test",
+        runner::Properties{},
+        connector::ConnectorProperties{});
 
     Optimization opt{
-        session,
+        optimizerSession,
+        runnerSession,
         *plan,
         *schemaResolver,
         history,
         veloxQueryCtx,
         evaluator,
-        {}, // optimizerOptions
         {.numWorkers = 1, .numDrivers = 1}};
 
     testRoutine(opt.rootDt());

@@ -118,6 +118,9 @@ class SqlQueryRunner {
   /// Prefix for optimizer session properties (e.g., "optimizer.sample_joins").
   static constexpr const char* kOptimizerPrefix = "optimizer";
 
+  /// Prefix for runner session properties.
+  static constexpr const char* kRunnerPrefix = "runner";
+
   /// Prefix for Velox execution session properties (e.g.,
   /// "execution.session_timezone").
   static constexpr const char* kExecutionPrefix = "execution";

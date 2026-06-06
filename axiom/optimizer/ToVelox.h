@@ -16,10 +16,9 @@
 
 #pragma once
 
-#include "axiom/common/Session.h"
 #include "axiom/optimizer/Cost.h"
 #include "axiom/optimizer/MultiFragmentPlan.h"
-#include "axiom/optimizer/OptimizerOptions.h"
+#include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/RelationOp.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -70,9 +69,8 @@ struct GroupedLeavesBundle {
 class ToVelox {
  public:
   ToVelox(
-      SessionPtr session,
-      const MultiFragmentPlan::Options& options,
-      const OptimizerOptions& optimizerOptions);
+      OptimizerSessionPtr optimizerSession,
+      const MultiFragmentPlan::Options& options);
 
   /// Converts physical plan (a tree of RelationOp) to an executable
   /// multi-fragment Velox plan. If outputNames is non-empty, adds a
@@ -152,7 +150,7 @@ class ToVelox {
   bool isMapAsStruct(
       const SchemaTableName& tableName,
       std::string_view column) {
-    return optimizerOptions_.isMapAsStruct(tableName, column);
+    return optimizerSession_->options().isMapAsStruct(tableName, column);
   }
 
   // Makes an output type for use in PlanNode et al. If 'columnType' is set,
@@ -357,11 +355,9 @@ class ToVelox {
   const std::string exchangeSerdeKind_{
       velox::serializer::presto::PrestoVectorSerde::name()};
 
-  const SessionPtr session_;
+  const OptimizerSessionPtr optimizerSession_;
 
   MultiFragmentPlan::Options options_;
-
-  const OptimizerOptions& optimizerOptions_;
 
   const bool isSingle_;
 
