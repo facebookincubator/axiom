@@ -22,30 +22,110 @@ namespace facebook::axiom {
 
 using velox::config::ConfigPropertyType;
 
+namespace {
+// Returns true if 'value' is a valid integer string (optional leading '-'
+// followed by one or more digits).
+bool isInteger(std::string_view value) {
+  auto start = !value.empty() && value[0] == '-' ? 1u : 0u;
+  return value.size() > start &&
+      std::all_of(value.begin() + start, value.end(), [](char c) {
+           return std::isdigit(c);
+         });
+}
+
+// Returns true if 'value' is a valid double string.
+bool isDouble(std::string_view value) {
+  if (value.empty()) {
+    return false;
+  }
+  auto str = std::string(value);
+  char* end = nullptr;
+  std::strtod(str.c_str(), &end);
+  return end != nullptr && *end == '\0';
+}
+
+// Validates and normalizes 'value' for 'type'. Lowercases booleans,
+// passes through integers, doubles, and strings. Throws on invalid values.
+std::string normalizeType(
+    std::string_view qualifiedName,
+    ConfigPropertyType type,
+    std::string_view value) {
+  switch (type) {
+    case ConfigPropertyType::kBoolean: {
+      auto lower = std::string(value);
+      std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+      VELOX_USER_CHECK(
+          lower == "true" || lower == "false",
+          "Expected boolean value for session property: {} = {}",
+          qualifiedName,
+          value);
+      return lower;
+    }
+    case ConfigPropertyType::kInteger:
+      VELOX_USER_CHECK(
+          isInteger(value),
+          "Expected integer value for session property: {} = {}",
+          qualifiedName,
+          value);
+      return std::string(value);
+    case ConfigPropertyType::kDouble:
+      VELOX_USER_CHECK(
+          isDouble(value),
+          "Expected double value for session property: {} = {}",
+          qualifiedName,
+          value);
+      return std::string(value);
+    case ConfigPropertyType::kString:
+      return std::string(value);
+  }
+  VELOX_UNREACHABLE();
+}
+
+struct NormalizedAndDefault {
+  std::string normalizedValue;
+  std::optional<std::string> defaultValue;
+
+  bool normalizedEqualsDefault() const {
+    return defaultValue.has_value() && normalizedValue == defaultValue.value();
+  }
+};
+
+// Resolves 'qualifiedName' and normalizes 'value'.
+// Throws if 'qualifiedName' is not found or 'value' is invalid.
+NormalizedAndDefault resolveAndNormalize(
+    const ConfigRegistry& registry,
+    std::string_view qualifiedName,
+    std::string_view value) {
+  auto resolved = registry.resolve(qualifiedName);
+  auto normalized = normalizeType(qualifiedName, resolved.property.type, value);
+  normalized = resolved.provider->normalize(resolved.property.name, normalized);
+  return {std::move(normalized), std::move(resolved.property.defaultValue)};
+}
+} // namespace
+
 SessionConfig::SessionConfig(std::shared_ptr<const ConfigRegistry> registry)
     : registry_(std::move(registry)) {}
 
 bool SessionConfig::set(
     std::string_view qualifiedName,
     std::string_view value) {
-  auto resolved = registry_->resolve(qualifiedName);
-  auto normalized = normalizeType(qualifiedName, resolved.property.type, value);
-  normalized = resolved.provider->normalize(resolved.property.name, normalized);
-
   auto key = std::string(qualifiedName);
+  auto normalizedAndDefault =
+      resolveAndNormalize(*registry_, qualifiedName, value);
 
   // If the normalized value equals the default, clear any override.
-  if (normalized == resolved.property.defaultValue) {
+  if (normalizedAndDefault.normalizedEqualsDefault()) {
     return overrides_.erase(key) > 0;
   }
 
   // Check if value is same as current override.
   auto it = overrides_.find(key);
-  if (it != overrides_.end() && it->second == normalized) {
+  if (it != overrides_.end() &&
+      it->second == normalizedAndDefault.normalizedValue) {
     return false;
   }
 
-  overrides_[std::move(key)] = std::move(normalized);
+  overrides_[std::move(key)] = std::move(normalizedAndDefault.normalizedValue);
   return true;
 }
 
@@ -60,6 +140,16 @@ bool SessionConfig::reset(std::string_view qualifiedName) {
   // Verify property exists.
   registry_->resolve(qualifiedName);
   return overrides_.erase(qualifiedName) > 0;
+}
+
+void SessionConfig::validate(
+    std::string_view qualifiedName,
+    std::string_view value) const {
+  resolveAndNormalize(*registry_, qualifiedName, value);
+}
+
+void SessionConfig::validate(std::string_view qualifiedName) const {
+  registry_->resolve(qualifiedName);
 }
 
 std::optional<std::string> SessionConfig::effectiveValue(
@@ -109,66 +199,6 @@ std::vector<SessionConfig::Entry> SessionConfig::all() const {
          it != overrides_.end()});
   }
   return result;
-}
-
-namespace {
-
-// Returns true if 'value' is a valid integer string (optional leading '-'
-// followed by one or more digits).
-bool isInteger(std::string_view value) {
-  auto start = !value.empty() && value[0] == '-' ? 1u : 0u;
-  return value.size() > start &&
-      std::all_of(value.begin() + start, value.end(), [](char c) {
-           return std::isdigit(c);
-         });
-}
-
-// Returns true if 'value' is a valid double string.
-bool isDouble(std::string_view value) {
-  if (value.empty()) {
-    return false;
-  }
-  auto str = std::string(value);
-  char* end = nullptr;
-  std::strtod(str.c_str(), &end);
-  return end != nullptr && *end == '\0';
-}
-
-} // namespace
-
-std::string SessionConfig::normalizeType(
-    std::string_view qualifiedName,
-    ConfigPropertyType type,
-    std::string_view value) {
-  switch (type) {
-    case ConfigPropertyType::kBoolean: {
-      auto lower = std::string(value);
-      std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-      VELOX_USER_CHECK(
-          lower == "true" || lower == "false",
-          "Expected boolean value for session property: {} = {}",
-          qualifiedName,
-          value);
-      return lower;
-    }
-    case ConfigPropertyType::kInteger:
-      VELOX_USER_CHECK(
-          isInteger(value),
-          "Expected integer value for session property: {} = {}",
-          qualifiedName,
-          value);
-      return std::string(value);
-    case ConfigPropertyType::kDouble:
-      VELOX_USER_CHECK(
-          isDouble(value),
-          "Expected double value for session property: {} = {}",
-          qualifiedName,
-          value);
-      return std::string(value);
-    case ConfigPropertyType::kString:
-      return std::string(value);
-  }
-  VELOX_UNREACHABLE();
 }
 
 } // namespace facebook::axiom
