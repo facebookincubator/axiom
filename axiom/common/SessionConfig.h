@@ -44,6 +44,15 @@ class SessionConfig {
   /// changed.
   bool reset(std::string_view qualifiedName);
 
+  /// Validates that 'qualifiedName' names a known property and that 'value' is
+  /// a valid value for it (type and domain validation). Throws on failure.
+  /// Does not modify the session.
+  void validate(std::string_view qualifiedName, std::string_view value) const;
+
+  /// Validates that 'qualifiedName' names a known property. Throws on failure.
+  /// Does not modify the session.
+  void validate(std::string_view qualifiedName) const;
+
   /// Returns effective value (override or default) for a single
   /// property. Returns nullopt if no default and not set.
   std::optional<std::string> effectiveValue(

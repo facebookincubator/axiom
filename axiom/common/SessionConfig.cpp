@@ -62,6 +62,18 @@ bool SessionConfig::reset(std::string_view qualifiedName) {
   return overrides_.erase(qualifiedName) > 0;
 }
 
+void SessionConfig::validate(
+    std::string_view qualifiedName,
+    std::string_view value) const {
+  auto resolved = registry_->resolve(qualifiedName);
+  auto normalized = normalizeType(qualifiedName, resolved.property.type, value);
+  resolved.provider->normalize(resolved.property.name, normalized);
+}
+
+void SessionConfig::validate(std::string_view qualifiedName) const {
+  registry_->resolve(qualifiedName);
+}
+
 std::optional<std::string> SessionConfig::effectiveValue(
     std::string_view qualifiedName) const {
   auto it = overrides_.find(qualifiedName);
