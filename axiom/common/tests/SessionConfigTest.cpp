@@ -161,6 +161,91 @@ TEST_F(SessionConfigTest, normalize) {
   EXPECT_EQ(config_->effectiveValue("test.label"), "hello");
 }
 
+TEST_F(SessionConfigTest, validateValueValid) {
+  // Valid values pass validation without throwing.
+  EXPECT_NO_THROW(config_->validate("test.flag_a", "false"));
+  EXPECT_NO_THROW(config_->validate("test.count", "42"));
+  EXPECT_NO_THROW(config_->validate("test.ratio", "1.5"));
+  EXPECT_NO_THROW(config_->validate("test.label", "anything"));
+
+  // validate() must not mutate the session: nothing is overridden and
+  // effective values stay at their defaults.
+  EXPECT_EQ(config_->effectiveValue("test.flag_a"), "true");
+  EXPECT_EQ(config_->effectiveValue("test.count"), "10");
+  EXPECT_FALSE(findEntry("flag_a").isOverridden);
+  EXPECT_FALSE(findEntry("count").isOverridden);
+}
+
+TEST_F(SessionConfigTest, validateValueTypeErrors) {
+  // Same type validation as set(), but without mutating state.
+  VELOX_ASSERT_THROW(
+      config_->validate("test.flag_a", "banana"), "Expected boolean value");
+  VELOX_ASSERT_THROW(
+      config_->validate("test.count", "abc"), "Expected integer value");
+  VELOX_ASSERT_THROW(
+      config_->validate("test.ratio", "xyz"), "Expected double value");
+
+  // A failed validation leaves the session unchanged.
+  EXPECT_FALSE(findEntry("flag_a").isOverridden);
+  EXPECT_FALSE(findEntry("count").isOverridden);
+  EXPECT_FALSE(findEntry("ratio").isOverridden);
+}
+
+TEST_F(SessionConfigTest, validateValueUnknownProperty) {
+  VELOX_ASSERT_THROW(
+      config_->validate("test.nonexistent", "1"), "Unknown session property");
+  VELOX_ASSERT_THROW(
+      config_->validate("unknown.flag", "true"),
+      "Unknown session property prefix");
+  VELOX_ASSERT_THROW(
+      config_->validate("noDotPrefix", "x"),
+      "Session property must be prefix-qualified");
+}
+
+TEST_F(SessionConfigTest, validateName) {
+  // Known properties validate without throwing and do not mutate state.
+  EXPECT_NO_THROW(config_->validate("test.flag_a"));
+  EXPECT_NO_THROW(config_->validate("test.label"));
+  EXPECT_FALSE(findEntry("flag_a").isOverridden);
+
+  // Unknown name/prefix/unqualified all throw, mirroring resolve().
+  VELOX_ASSERT_THROW(
+      config_->validate("test.nonexistent"), "Unknown session property");
+  VELOX_ASSERT_THROW(
+      config_->validate("unknown.flag"), "Unknown session property prefix");
+  VELOX_ASSERT_THROW(
+      config_->validate("noDotPrefix"),
+      "Session property must be prefix-qualified");
+}
+
+TEST_F(SessionConfigTest, validateUsesProviderNormalization) {
+  // Provider normalization runs during validation (label is lowercased
+  // internally) but the result is discarded — the session is not modified.
+  EXPECT_NO_THROW(config_->validate("test.label", "Hello"));
+  EXPECT_EQ(config_->effectiveValue("test.label"), std::nullopt);
+  EXPECT_FALSE(findEntry("label").isOverridden);
+}
+
+TEST_F(SessionConfigTest, validateDoesNotAffectSetAndReset) {
+  // Interleaving validate() with set()/reset() does not change their behavior.
+  config_->validate("test.count", "42");
+  EXPECT_EQ(config_->effectiveValue("test.count"), "10"); // still default
+
+  EXPECT_TRUE(config_->set("test.count", "42"));
+  EXPECT_EQ(config_->effectiveValue("test.count"), "42");
+
+  // Validation (valid or invalid) does not disturb an existing override.
+  config_->validate("test.count", "7");
+  VELOX_ASSERT_THROW(
+      config_->validate("test.count", "abc"), "Expected integer value");
+  EXPECT_EQ(config_->effectiveValue("test.count"), "42");
+  EXPECT_TRUE(findEntry("count").isOverridden);
+
+  EXPECT_TRUE(config_->reset("test.count"));
+  EXPECT_EQ(config_->effectiveValue("test.count"), "10");
+  EXPECT_FALSE(config_->reset("test.count"));
+}
+
 TEST_F(SessionConfigTest, duplicatePrefix) {
   auto registry = std::make_shared<ConfigRegistry>();
   registry->add("test", std::make_shared<TestConfigProvider>());
