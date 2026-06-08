@@ -21,11 +21,14 @@
 #include <folly/json.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <stdexcept>
 #include <thread>
 #include "axiom/cli/QueryIdGenerator.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
+#include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
@@ -990,6 +993,79 @@ TEST_F(SqlQueryRunnerTest, completionCallbackOnError) {
 
   EXPECT_TRUE(captured.errorInfo.has_value());
   EXPECT_FALSE(captured.errorInfo->message.empty());
+}
+
+// Captures the parameterized template, distinct from the substituted message,
+// so similar failures can be grouped.
+TEST_F(SqlQueryRunnerTest, completionCapturesFailureMessageTemplate) {
+  QueryCompletionInfo captured;
+
+  EXPECT_THROW(
+      runner_->run(
+          "SELECT * FROM nonexistent_table",
+          {.onComplete =
+               [&](const QueryCompletionInfo& info) { captured = info; }}),
+      std::exception);
+
+  ASSERT_TRUE(captured.errorInfo.has_value());
+  EXPECT_EQ(captured.errorInfo->messageTemplate, "Table not found: {}");
+  EXPECT_NE(captured.errorInfo->messageTemplate, captured.errorInfo->message);
+}
+
+TEST(MessageTemplateOfTest, veloxExceptionUsesTemplate) {
+  try {
+    VELOX_USER_FAIL("Not supported: {}", "rank");
+    FAIL() << "expected VeloxUserError";
+  } catch (const VeloxException& e) {
+    EXPECT_EQ(messageTemplateOf(e), "Not supported: {}");
+  }
+}
+
+// A messageless VELOX_CHECK has no template; synthesize a groupable key from
+// its failing expression (mirroring QueryError::create) instead of logging
+// nothing.
+TEST(MessageTemplateOfTest, messagelessVeloxCheckSynthesizesFromExpression) {
+  try {
+    VELOX_CHECK(false);
+    FAIL() << "expected VeloxRuntimeError";
+  } catch (const VeloxException& e) {
+    EXPECT_EQ(messageTemplateOf(e), "Check failed: false");
+  }
+}
+
+// A VELOX_FAIL literal has no template (VeloxException returns the message), so
+// it logs as-is, matching AxelQueryLogger. Pinned so a fix doesn't diverge.
+TEST(MessageTemplateOfTest, veloxFailLiteralReturnsMessageMatchingAxel) {
+  try {
+    VELOX_FAIL("disk full");
+    FAIL() << "expected VeloxRuntimeError";
+  } catch (const VeloxException& e) {
+    EXPECT_EQ(messageTemplateOf(e), "disk full");
+  }
+}
+
+TEST(MessageTemplateOfTest, prestoSqlErrorUsesTemplate) {
+  const presto::PrestoSqlError error(
+      "Table not found: 'orders'",
+      1,
+      0,
+      std::nullopt,
+      presto::PrestoSqlErrorKind::kSemantic,
+      "Table not found: {}");
+  EXPECT_EQ(messageTemplateOf(error), "Table not found: {}");
+}
+
+// A PrestoSqlError without a template returns empty -- a substituted message is
+// not a groupable template, so the caller omits the field.
+TEST(MessageTemplateOfTest, prestoSqlErrorWithoutTemplateReturnsEmpty) {
+  const presto::PrestoSqlError error("some parser error", 1, 0, std::nullopt);
+  EXPECT_TRUE(messageTemplateOf(error).empty());
+}
+
+// Any other exception has no template; returns empty so the field is omitted.
+TEST(MessageTemplateOfTest, plainExceptionReturnsEmpty) {
+  const std::runtime_error error("connection reset");
+  EXPECT_TRUE(messageTemplateOf(error).empty());
 }
 
 TEST_F(SqlQueryRunnerTest, multiStatementTimingPerStatement) {
