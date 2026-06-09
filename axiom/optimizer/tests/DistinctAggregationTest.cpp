@@ -1108,5 +1108,140 @@ TEST_F(
   }
 }
 
+TEST_F(DistinctAggregationTest, groupingSetsDistinctToGroupBy) {
+  testConnector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .rollup({"a"}, {"count(DISTINCT b) as cnt"}, "gid")
+                         .build();
+
+  // Distributed plan. ROLLUP(a) contains the global set (), so the outer
+  // aggregation is forced split (partial + final).
+  {
+    auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchScan("t")
+            .groupId({{"a"}, {}}, {"b"}, "gid")
+            .distributedAggregation({"a", "gid", "b"}, {})
+            .distributedAggregation({"a", "gid"}, {"count(b) as cnt"})
+            .project({"a", "cnt", "gid"})
+            .gather()
+            .build());
+  }
+
+  // Single-node plan: a single aggregation computes DISTINCT natively.
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(
+        plan,
+        matchScan("t")
+            .groupId({{"a"}, {}}, {"b"}, "gid")
+            .singleAggregation({"a", "gid"}, {"count(DISTINCT b) as cnt"})
+            .project({"a", "cnt", "gid"})
+            .build());
+  }
+}
+
+TEST_F(DistinctAggregationTest, groupingSetsDistinctToMarkDistinct) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  auto logicalPlan =
+      lp::PlanBuilder(makeContext())
+          .tableScan("t")
+          .rollup(
+              {"a"},
+              {"count(DISTINCT b) as a0", "sum(DISTINCT c) as a1"},
+              "gid")
+          .build();
+
+  // Distributed plan.
+  {
+    auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchScan("t")
+            .groupId({{"a"}, {}}, {"b", "c"}, "gid")
+            .distributedMarkDistinct({"a", "gid", "b"}, {"m0"})
+            .distributedMarkDistinct({"a", "gid", "c"}, {"m1"})
+            .distributedAggregation(
+                {"a", "gid"},
+                {"count(b) filter (where m0) as a0",
+                 "sum(c) filter (where m1) as a1"})
+            .project({"a", "a0", "a1", "gid"})
+            .gather()
+            .build());
+  }
+
+  // Single-node plan: one kSingle Aggregation computes the DISTINCT aggregates
+  // natively.
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(
+        plan,
+        matchScan("t")
+            .groupId({{"a"}, {}}, {"b", "c"}, "gid")
+            .singleAggregation(
+                {"a", "gid"},
+                {"count(DISTINCT b) as a0", "sum(DISTINCT c) as a1"})
+            .project({"a", "a0", "a1", "gid"})
+            .build());
+  }
+}
+
+// DISTINCT aggregate combined with ORDER BY and grouping sets without a global
+// set. ORDER BY forces the result-producing aggregation to single-step.
+TEST_F(DistinctAggregationTest, groupingSetsDistinctWithOrderBy) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  auto logicalPlan =
+      lp::PlanBuilder(makeContext())
+          .tableScan("t")
+          .aggregate(
+              {{"a"}, {"b"}}, {"array_agg(DISTINCT c ORDER BY c) as a0"}, "gid")
+          .build();
+
+  // Distributed plan.
+  {
+    auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchScan("t")
+            .groupId({{"a"}, {"b"}}, {"c"}, "gid")
+            .distributedAggregation({"a", "b", "gid", "c"}, {})
+            .shuffle()
+            .localPartition()
+            .singleAggregation(
+                {"a", "b", "gid"}, {"array_agg(c ORDER BY c) as a0"})
+            .project({"a", "b", "a0", "gid"})
+            .gather()
+            .build());
+  }
+
+  // Single-node plan: one kSingle Aggregation computes DISTINCT + ORDER BY
+  // natively.
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(
+        plan,
+        matchScan("t")
+            .groupId({{"a"}, {"b"}}, {"c"}, "gid")
+            .singleAggregation(
+                {"a", "b", "gid"}, {"array_agg(DISTINCT c ORDER BY c) as a0"})
+            .project({"a", "b", "a0", "gid"})
+            .build());
+  }
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

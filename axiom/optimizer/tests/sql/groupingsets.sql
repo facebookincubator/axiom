@@ -115,9 +115,6 @@ SELECT a, GROUPING(a) AS grp, sum(b) AS s FROM t GROUP BY ROLLUP(a) HAVING grp =
 -- error: Not a grouping column
 SELECT a, GROUPING(b), count(*) AS c FROM t GROUP BY ROLLUP(a)
 ----
--- error: DISTINCT aggregation with grouping sets is not supported yet
-SELECT b, count(DISTINCT a) AS c FROM t GROUP BY ROLLUP(b)
-----
 -- error: ORDER BY in aggregate functions is not supported with global grouping sets
 SELECT a, array_agg(b ORDER BY b) FROM t GROUP BY ROLLUP(a)
 ----

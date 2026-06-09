@@ -95,13 +95,33 @@ class AggregationPlanner {
       ColumnCP groupId,
       PlanState& state) const;
 
-  // Chooses between split and single aggregation plans based on cost.
+  // Builds the distributed aggregation, choosing split (partial + final) and
+  // single-step plans based on the shape of 'aggregates' and the cost.
+  //   1. If 'globalGroupingSets' is non-empty, generates split plan.
+  //   2. If any of 'aggregates' has ORDER BY or is DISTINCT, generates
+  //   single-step plan.
+  //   3. Otherwise compare split and single by cost.
+  // For non-grouping-sets aggregation, set 'globalGroupingSets' and 'groupId'
+  // to {} and nullptr.
   std::pair<RelationOpPtr, PlanCost> makeSplitOrSingleAggregationPlan(
       const RelationOpPtr& plan,
       const ExprVector& groupingKeys,
       const AggregateVector& aggregates,
       const ColumnVector& intermediateColumns,
       const ColumnVector& outputColumns,
+      QGVector<int32_t> globalGroupingSets,
+      ColumnCP groupId,
+      PlanState& state) const;
+
+  // Returns a plan for distinct aggregations with its cost. Distinct
+  // aggregations are handled through Distinct-to-GroupBy or
+  // Distinct-to-MarkDistinct transformations. For non-grouping-sets
+  // aggregation, set 'globalGroupingSets' and 'groupId' to {} and nullptr.
+  std::pair<RelationOpPtr, PlanCost> makeDistinctAggregation(
+      RelationOpPtr plan,
+      const ExprVector& groupingKeys,
+      const AggregateVector& aggregates,
+      AggregationPlanCP aggPlan,
       QGVector<int32_t> globalGroupingSets,
       ColumnCP groupId,
       PlanState& state) const;
@@ -114,7 +134,8 @@ class AggregationPlanner {
       const ExprVector& distinctArgs,
       const AggregateVector& aggregates,
       AggregationPlanCP aggPlan,
-      bool hasOrderBy,
+      QGVector<int32_t> globalGroupingSets,
+      ColumnCP groupId,
       PlanState& state) const;
 
   // Transforms distinct aggregations into a plan with MarkDistinct and
@@ -124,7 +145,8 @@ class AggregationPlanner {
       const ExprVector& groupingKeys,
       const AggregateVector& aggregates,
       AggregationPlanCP aggPlan,
-      bool hasOrderBy,
+      QGVector<int32_t> globalGroupingSets,
+      ColumnCP groupId,
       PlanState& state) const;
 
   // Handles aggregation with grouping sets (ROLLUP, CUBE, GROUPING SETS).
@@ -134,9 +156,7 @@ class AggregationPlanner {
       RelationOpPtr& plan,
       const ExprVector& groupingKeys,
       const AggregateVector& aggregates,
-      PlanState& state,
-      bool useSingleStep,
-      bool hasOrderBy) const;
+      PlanState& state) const;
 
   bool isSingleWorker_;
   bool isSingleDriver_;
