@@ -1274,6 +1274,46 @@ TEST_F(JoinTest, impliedJoins) {
   }
 }
 
+// Implied join edges from an equivalence class must not reference tables
+// outside a subset DT's tableSet.
+TEST_F(JoinTest, impliedJoinChain) {
+  testConnector_->addTable("t1", ROW({"id1", "data1"}, BIGINT()))
+      ->setStats(1'000'000, {{"id1", {.numDistinct = 1'000'000}}});
+  testConnector_->addTable("t2", ROW({"id2", "data2"}, BIGINT()))
+      ->setStats(100, {{"id2", {.numDistinct = 100}}});
+  testConnector_->addTable("t3", ROW({"id3", "data3"}, BIGINT()))
+      ->setStats(100, {{"id3", {.numDistinct = 100}}});
+  testConnector_->addTable("t4", ROW({"id4", "data4"}, BIGINT()))
+      ->setStats(100, {{"id4", {.numDistinct = 100}}});
+
+  auto ctx = makeContext();
+  auto logicalPlan = lp::PlanBuilder{ctx}
+                         .tableScan("t1")
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("t2"),
+                             "id1 = id2",
+                             lp::JoinType::kInner)
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("t3"),
+                             "id2 = id3",
+                             lp::JoinType::kInner)
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("t4"),
+                             "id3 = id4",
+                             lp::JoinType::kInner)
+                         .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto matcher = matchScan("t3")
+                     .hashJoin(matchScan("t1")
+                                   .hashJoin(matchScan("t2").build())
+                                   .hashJoin(matchScan("t4").build())
+                                   .build())
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 TEST_F(JoinTest, impliedFilters) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});

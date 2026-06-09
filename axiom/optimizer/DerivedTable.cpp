@@ -66,19 +66,31 @@ bool addEdge(EdgeSet& edges, PlanObjectCP left, PlanObjectCP right) {
 }
 
 void fillJoins(
-    PlanObjectCP column,
+    ColumnCP column,
     const Equivalence& equivalence,
     EdgeSet& edges,
     DerivedTableP dt) {
+  auto* columnTable = column->singleTable();
+  if (columnTable == nullptr) {
+    return;
+  }
   for (auto& other : equivalence.columns) {
+    auto* otherTable = other->singleTable();
+    if (otherTable == nullptr) {
+      continue;
+    }
     // A join equality requires columns from different tables. Two columns
     // in the same equivalence class can belong to the same table, e.g. after
     // UNNEST.
-    if (column->as<Expr>()->singleTable() == other->as<Expr>()->singleTable()) {
+    if (columnTable == otherTable) {
+      continue;
+    }
+    if (!dt->tableSet.contains(columnTable) &&
+        !dt->tableSet.contains(otherTable)) {
       continue;
     }
     if (addEdge(edges, column, other)) {
-      addJoinEquality(column->as<Column>(), other->as<Column>(), dt->joins);
+      addJoinEquality(column, other, dt->joins);
     }
   }
 }
@@ -619,9 +631,7 @@ void DerivedTable::finalizeJoinsAndMakePlans() {
 
   finalizeJoins();
 
-#ifndef NDEBUG
   checkConsistency();
-#endif
   auto plan = queryCtx()->optimization()->makeInitialPlan(*this);
   updateConstraints(*plan);
 }
@@ -692,9 +702,9 @@ void DerivedTable::addImpliedJoins() {
               fillJoins(left, *rightEq, edges, this);
             }
           } else if (leftEq) {
-            fillJoins(rightKey, *leftEq, edges, this);
+            fillJoins(rightKey->as<Column>(), *leftEq, edges, this);
           } else if (rightEq) {
-            fillJoins(leftKey, *rightEq, edges, this);
+            fillJoins(leftKey->as<Column>(), *rightEq, edges, this);
           }
         }
       }
