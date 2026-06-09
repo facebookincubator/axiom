@@ -53,6 +53,7 @@
 #include <sstream>
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/SqlQueryRunner.h"
+#include "axiom/cli/SystemUser.h"
 
 DEFINE_string(
     query,
@@ -179,7 +180,7 @@ int main(int argc, char** argv) {
       facebook::velox::memory::MemoryManager::Options{});
 
   facebook::axiom::Connectors connectors;
-  axiom::sql::SqlQueryRunner runner;
+  axiom::sql::SqlQueryRunner runner{axiom::sql::SystemUser::resolve()};
   runner.initialize([&]() {
     auto defaultConnector = connectors.registerTpchConnector();
     auto defaultSchema = "tiny";

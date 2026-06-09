@@ -45,7 +45,7 @@ class ConsoleTest : public ::testing::Test {
 
   std::unique_ptr<SqlQueryRunner> makeRunner(
       PermissionCheck permissionCheck = {}) {
-    auto runner = std::make_unique<SqlQueryRunner>();
+    auto runner = std::make_unique<SqlQueryRunner>("test_user");
 
     runner->initialize(
         [&]() {

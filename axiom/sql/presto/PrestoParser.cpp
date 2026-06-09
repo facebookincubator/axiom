@@ -243,6 +243,7 @@ core::ExprPtr replaceInputs(
 class RelationPlanner : public AstVisitor {
  public:
   RelationPlanner(
+      std::string user,
       const std::string& defaultConnectorId,
       const std::string& defaultSchema,
       const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
@@ -251,6 +252,7 @@ class RelationPlanner : public AstVisitor {
       : context_{makePrestoContext(defaultConnectorId, defaultSchema)},
         defaultSchema_{defaultSchema},
         parseSql_{parseSql},
+        user_{std::move(user)},
         builder_(newBuilder()),
         friendlySql_{friendlySql} {}
 
@@ -1390,8 +1392,10 @@ class RelationPlanner : public AstVisitor {
   const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
       std::string_view /*sql*/)>
       parseSql_;
+  const std::string user_;
   std::shared_ptr<lp::PlanBuilder> builder_;
   ExpressionPlanner exprPlanner_{
+      user_,
       [this](Query* query) { return planSubquery(query); },
       [this](const ExpressionPtr& expr, ExprOptions options) {
         return toSortingKey(expr, options);
@@ -1556,9 +1560,11 @@ lp::ExprPtr PrestoParser::parseExpression(
 }
 
 namespace {
-lp::ExprPtr parseSqlExpression(const ExpressionPtr& expr) {
-  ExpressionPlanner exprPlanner{/*subqueryPlanner=*/nullptr,
-                                /*sortingKeyResolver=*/nullptr};
+lp::ExprPtr parseSqlExpression(
+    const std::string& user,
+    const ExpressionPtr& expr) {
+  ExpressionPlanner exprPlanner{
+      user, /*subqueryPlanner=*/nullptr, /*sortingKeyResolver=*/nullptr};
 
   auto plan = lp::PlanBuilder()
                   .values(ROW({}), {Variant::row({})})
@@ -1981,6 +1987,7 @@ std::vector<lp::ExprApi> toColumnExprs(
 }
 
 SqlStatementPtr parseInsert(
+    const std::string& user,
     const Insert& insert,
     const std::string& defaultConnectorId,
     const std::string& defaultSchema,
@@ -2015,7 +2022,7 @@ SqlStatementPtr parseInsert(
     }
   }
 
-  RelationPlanner planner(defaultConnectorId, defaultSchema, parseSql);
+  RelationPlanner planner(user, defaultConnectorId, defaultSchema, parseSql);
   insert.query()->accept(&planner);
 
   auto inputColumns = planner.builder().findOrAssignOutputNames();
@@ -2039,11 +2046,12 @@ SqlStatementPtr parseInsert(
 }
 
 std::unordered_map<std::string, lp::ExprPtr> parseTableProperties(
+    const std::string& user,
     const std::vector<std::shared_ptr<Property>>& props) {
   std::unordered_map<std::string, lp::ExprPtr> properties;
   for (const auto& p : props) {
     const auto& name = p->name()->value();
-    auto expr = parseSqlExpression(p->value());
+    auto expr = parseSqlExpression(user, p->value());
     AXIOM_PRESTO_SEMANTIC_CHECK(
         expr->looksConstant(),
         p->location(),
@@ -2057,6 +2065,7 @@ std::unordered_map<std::string, lp::ExprPtr> parseTableProperties(
 }
 
 SqlStatementPtr parseCreateTableAsSelect(
+    const std::string& user,
     const CreateTableAsSelect& ctas,
     const std::string& defaultConnectorId,
     const std::string& defaultSchema,
@@ -2065,10 +2074,10 @@ SqlStatementPtr parseCreateTableAsSelect(
   auto [connectorId, connectorTable] =
       toConnectorTable(*ctas.name(), defaultConnectorId, defaultSchema);
 
-  RelationPlanner planner(defaultConnectorId, defaultSchema, parseSql);
+  RelationPlanner planner(user, defaultConnectorId, defaultSchema, parseSql);
   ctas.query()->accept(&planner);
 
-  auto properties = parseTableProperties(ctas.properties());
+  auto properties = parseTableProperties(user, ctas.properties());
 
   auto& planBuilder = planner.builder();
 
@@ -2131,13 +2140,14 @@ SqlStatementPtr parseCreateTableAsSelect(
 }
 
 SqlStatementPtr parseCreateTable(
+    const std::string& user,
     const CreateTable& createTable,
     const std::string& defaultConnectorId,
     const std::string& defaultSchema) {
   auto [connectorId, connectorTable] =
       toConnectorTable(*createTable.name(), defaultConnectorId, defaultSchema);
 
-  auto properties = parseTableProperties(createTable.properties());
+  auto properties = parseTableProperties(user, createTable.properties());
 
   std::vector<std::string> names;
   std::vector<TypePtr> types;
@@ -2245,6 +2255,7 @@ SqlStatementPtr parseAddColumn(
 }
 
 SqlStatementPtr parseCreateSchema(
+    const std::string& user,
     const CreateSchema& createSchema,
     const std::string& defaultConnectorId) {
   const auto& parts = createSchema.schemaName()->parts();
@@ -2260,7 +2271,7 @@ SqlStatementPtr parseCreateSchema(
   std::string connectorId = parts.size() == 2 ? parts[0] : defaultConnectorId;
   std::string schemaName = parts.size() == 2 ? parts[1] : parts[0];
 
-  auto properties = parseTableProperties(createSchema.properties());
+  auto properties = parseTableProperties(user, createSchema.properties());
 
   return std::make_shared<CreateSchemaStatement>(
       std::move(connectorId),
@@ -2417,13 +2428,20 @@ SqlStatementPtr doPlan(
     const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
         std::string_view /*sql*/)>& parseSql,
     const ParserSessionPtr& parserSession) {
+  const auto& user = parserSession->user();
+
   if (query->is(NodeType::kInsert)) {
     return parseInsert(
-        *query->as<Insert>(), defaultConnectorId, defaultSchema, parseSql);
+        user,
+        *query->as<Insert>(),
+        defaultConnectorId,
+        defaultSchema,
+        parseSql);
   }
 
   if (query->is(NodeType::kCreateTableAsSelect)) {
     return parseCreateTableAsSelect(
+        user,
         *query->as<CreateTableAsSelect>(),
         defaultConnectorId,
         defaultSchema,
@@ -2432,7 +2450,7 @@ SqlStatementPtr doPlan(
 
   if (query->is(NodeType::kCreateTable)) {
     return parseCreateTable(
-        *query->as<CreateTable>(), defaultConnectorId, defaultSchema);
+        user, *query->as<CreateTable>(), defaultConnectorId, defaultSchema);
   }
 
   if (query->is(NodeType::kDropTable)) {
@@ -2446,7 +2464,8 @@ SqlStatementPtr doPlan(
   }
 
   if (query->is(NodeType::kCreateSchema)) {
-    return parseCreateSchema(*query->as<CreateSchema>(), defaultConnectorId);
+    return parseCreateSchema(
+        user, *query->as<CreateSchema>(), defaultConnectorId);
   }
 
   if (query->is(NodeType::kDropSchema)) {
@@ -2487,7 +2506,7 @@ SqlStatementPtr doPlan(
 
   if (query->is(NodeType::kShowStatsForQuery)) {
     auto* showStats = query->as<ShowStatsForQuery>();
-    RelationPlanner planner(defaultConnectorId, defaultSchema, parseSql);
+    RelationPlanner planner(user, defaultConnectorId, defaultSchema, parseSql);
     showStats->query()->accept(&planner);
     auto innerStatement = std::make_shared<SelectStatement>(
         planner.plan(),
@@ -2503,6 +2522,7 @@ SqlStatementPtr doPlan(
 
   if (query->is(NodeType::kQuery)) {
     RelationPlanner planner(
+        user,
         defaultConnectorId,
         defaultSchema,
         parseSql,

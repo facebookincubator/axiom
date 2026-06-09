@@ -105,11 +105,13 @@ class ExpressionPlanner {
       std::function<bool(const std::string& first, const std::string& second)>;
 
   ExpressionPlanner(
+      std::string user,
       SubqueryPlanner subqueryPlanner,
       SortingKeyResolver sortingKeyResolver,
       ShouldDropQualifier shouldDropQualifier = nullptr,
       ColumnResolver columnResolver = nullptr)
-      : subqueryPlanner_(std::move(subqueryPlanner)),
+      : user_{std::move(user)},
+        subqueryPlanner_(std::move(subqueryPlanner)),
         sortingKeyResolver_(std::move(sortingKeyResolver)),
         shouldDropQualifier_(std::move(shouldDropQualifier)),
         columnResolver_(std::move(columnResolver)) {}
@@ -231,6 +233,10 @@ class ExpressionPlanner {
       return *lhs == *rhs;
     }
   };
+
+  // Session user used to constant-fold CURRENT_USER at planning time. Empty
+  // when no session context is available; CURRENT_USER translation then fails.
+  const std::string user_;
 
   SubqueryPlanner subqueryPlanner_;
   SortingKeyResolver sortingKeyResolver_;

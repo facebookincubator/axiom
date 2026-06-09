@@ -142,7 +142,20 @@ class SqlQueryRunner {
   /// "execution.session_timezone").
   static constexpr const char* kExecutionPrefix = "execution";
 
+  /// Constructs the runner with the given session user identity. The user
+  /// must be non-empty; it is exposed by the SQL `CURRENT_USER` function and
+  /// used as the default table owner in DDL.
+  explicit SqlQueryRunner(std::string user) : user_{std::move(user)} {
+    VELOX_USER_CHECK(!user_.empty(), "SqlQueryRunner user must be non-empty");
+  }
+
   virtual ~SqlQueryRunner() = default;
+
+  /// Identity of the user running queries. Used as the table owner in DDL and
+  /// for the SQL `CURRENT_USER` function.
+  const std::string& user() const {
+    return user_;
+  }
 
   /// Initializes the runner with connectors, an optional permission check, and
   /// a query ID generator (defaults to QueryIdGenerator if not provided).
@@ -304,12 +317,6 @@ class SqlQueryRunner {
     return defaultSchema_;
   }
 
-  /// Sets the user identity for DDL operations. Used as the default table
-  /// owner in CREATE TABLE when the WITH clause does not specify one.
-  void setUser(std::string user) {
-    user_ = std::move(user);
-  }
-
  private:
   // Checks permissions for the query via the configured PermissionCheck
   // callback. Returns a TokenProvider for authenticated file system access.
@@ -441,8 +448,7 @@ class SqlQueryRunner {
   std::shared_ptr<facebook::axiom::SessionConfig> sessionConfig_;
   std::string defaultConnectorId_;
   std::string defaultSchema_;
-  // Identity of the user running queries. Used as table owner in CREATE TABLE.
-  std::string user_;
+  const std::string user_;
   std::atomic<int32_t> queryCounter_{0};
 
   // Noop stats instance for code paths that don't track runtime metrics.
