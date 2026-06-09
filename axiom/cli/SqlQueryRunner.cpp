@@ -17,6 +17,7 @@
 #include "axiom/cli/SqlQueryRunner.h"
 #include <folly/system/HardwareConcurrency.h>
 #include <cmath>
+#include "velox/common/base/VeloxException.h"
 #include "velox/common/process/ProcessBase.h"
 
 #include "axiom/cli/QueryIdGenerator.h"
@@ -37,6 +38,7 @@
 #include "axiom/optimizer/RelationOpPrinter.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/sql/presto/PrestoParser.h"
+#include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/ShowStatsBuilder.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/time/Timer.h"
@@ -428,6 +430,24 @@ std::string SqlQueryRunner::dropSchema(
   return fmt::format("Dropped schema: {}", statement.schemaName());
 }
 
+std::string messageTemplateOf(const std::exception& e) {
+  if (const auto* veloxError = dynamic_cast<const velox::VeloxException*>(&e)) {
+    // An empty template means no explicit format string (e.g. messageless
+    // VELOX_CHECK); key it by the failing expression so these still group.
+    if (veloxError->messageTemplate().empty()) {
+      const auto& expression = veloxError->failingExpression();
+      return expression.empty() ? ""
+                                : fmt::format("Check failed: {}", expression);
+    }
+    return std::string(veloxError->messageTemplate());
+  }
+  if (const auto* prestoError =
+          dynamic_cast<const presto::PrestoSqlError*>(&e)) {
+    return std::string(prestoError->messageTemplate());
+  }
+  return "";
+}
+
 SqlQueryRunner::SqlResult SqlQueryRunner::run(
     std::string_view sql,
     const RunOptions& options) {
@@ -502,7 +522,8 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
     finalize();
     return result;
   } catch (const std::exception& e) {
-    completionInfo.errorInfo = ErrorInfo{e.what()};
+    completionInfo.errorInfo =
+        ErrorInfo{.message = e.what(), .messageTemplate = messageTemplateOf(e)};
     finalize();
     throw;
   }

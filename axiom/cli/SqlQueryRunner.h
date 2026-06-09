@@ -17,6 +17,7 @@
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <chrono>
+#include <exception>
 #include <functional>
 #include "axiom/common/ConfigRegistry.h"
 #include "axiom/common/QueryRuntimeStats.h"
@@ -66,7 +67,20 @@ struct QueryStartInfo {
 struct ErrorInfo {
   /// Human-readable error message from the caught exception.
   std::string message;
+
+  /// Template with placeholders (e.g. "Cannot resolve type {}") for grouping
+  /// similar failures.
+  std::string messageTemplate;
 };
+
+/// Returns a format template (placeholders, not substituted values) for
+/// grouping similar failures. A VeloxException with no explicit template
+/// synthesizes "Check failed: <expr>" from its failing expression (mirroring
+/// QueryError::create); a PrestoSqlError or other exception without a template
+/// yields empty, and the caller omits the field. Caveat: VELOX_FAIL with a
+/// literal message returns that message, because VeloxException cannot
+/// distinguish a literal from a format string; matches AxelQueryLogger.
+std::string messageTemplateOf(const std::exception& e);
 
 /// Per-phase wall-clock timing in microseconds, ordered by lifecycle stage.
 struct QueryTiming {
