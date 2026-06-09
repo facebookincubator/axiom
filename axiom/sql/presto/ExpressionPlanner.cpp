@@ -1239,6 +1239,15 @@ lp::ExprApi ExpressionPlanner::toExpr(
           std::string(GroupByPlanner::kGroupingFunctionName), columnArgs);
     }
 
+    case NodeType::kCurrentUser: {
+      AXIOM_PRESTO_SEMANTIC_CHECK(
+          !user_.empty(),
+          node->location(),
+          std::nullopt,
+          "CURRENT_USER is not available in this context (no session user set)");
+      return lp::Lit(user_);
+    }
+
     default:
       AXIOM_PRESTO_SYNTAX_FAIL(
           node->location(),

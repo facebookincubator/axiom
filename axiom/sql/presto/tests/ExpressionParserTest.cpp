@@ -542,6 +542,14 @@ TEST_F(ExpressionParserTest, specialDateTimeFunctions) {
       "Precision for date/time functions is not supported yet");
 }
 
+TEST_F(ExpressionParserTest, currentUser) {
+  auto expr = parseExpr("CURRENT_USER");
+  ASSERT_TRUE(expr->isConstant());
+  ASSERT_EQ(*expr->type(), *VARCHAR());
+  EXPECT_EQ(
+      expr->as<lp::ConstantExpr>()->value()->value<std::string>(), "test");
+}
+
 TEST_F(ExpressionParserTest, nullif) {
   auto verifyNullIf = [&](const std::string& sql,
                           const TypePtr& expectedType,

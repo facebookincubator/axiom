@@ -23,6 +23,7 @@
 #include "axiom/cli/CatalogProperties.h"
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/Console.h"
+#include "axiom/cli/SystemUser.h"
 #include "velox/common/base/Exceptions.h"
 
 DEFINE_string(
@@ -38,7 +39,7 @@ int main(int argc, char** argv) {
       facebook::velox::memory::MemoryManager::Options{});
 
   facebook::axiom::Connectors connectors;
-  axiom::sql::SqlQueryRunner runner;
+  axiom::sql::SqlQueryRunner runner{axiom::sql::SystemUser::resolve()};
   runner.initialize([&]() {
     VELOX_USER_CHECK(
         FLAGS_data_path.empty() || FLAGS_etc_dir.empty(),

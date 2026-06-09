@@ -65,7 +65,7 @@ class SqlQueryRunnerTest : public ::testing::Test, public test::VectorTestBase {
       const std::string& connectorId = "test",
       std::function<std::string()> queryIdGenerator = {},
       PermissionCheck permissionCheck = {}) {
-    auto runner = std::make_unique<SqlQueryRunner>();
+    auto runner = std::make_unique<SqlQueryRunner>("test_user");
 
     auto initConnectors = [&]() {
       testConnector_ =
@@ -152,6 +152,13 @@ TEST_F(SqlQueryRunnerTest, runSingleStatement) {
   test::assertEqualVectors(
       fetchSingleRow("SELECT 1"),
       makeRowVector({makeFlatVector<int32_t>({1})}));
+}
+
+TEST_F(SqlQueryRunnerTest, currentUser) {
+  // CURRENT_USER returns the user passed to the SqlQueryRunner constructor.
+  test::assertEqualVectors(
+      fetchSingleRow("SELECT CURRENT_USER"),
+      makeRowVector({makeFlatVector<std::string>({"test_user"})}));
 }
 
 TEST_F(SqlQueryRunnerTest, runRejectsMultipleStatements) {

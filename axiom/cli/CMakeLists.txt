@@ -19,6 +19,7 @@ add_library(
   Console.cpp
   QueryIdGenerator.cpp
   SqlQueryRunner.cpp
+  SystemUser.cpp
   ResultPrinter.cpp
   StdinReader.cpp
   Timing.cpp
