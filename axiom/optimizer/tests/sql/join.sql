@@ -139,3 +139,11 @@ JOIN t t17 ON t16.b = t17.b
 JOIN t t18 ON t17.b = t18.b
 JOIN t t19 ON t18.b = t19.b
 JOIN t t20 ON t19.b = t20.b
+----
+-- RIGHT JOIN whose inferred left keys span multiple tables (hyper-edge).
+-- error: Failed to place a table
+SELECT 1
+FROM t AS ref_4
+RIGHT JOIN (SELECT (SELECT c FROM t LIMIT 1) AS c0) AS subq_0
+  ON CAST(null AS double) > subq_0.c0
+WHERE ref_4.b = ref_4.b

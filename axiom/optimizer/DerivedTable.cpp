@@ -2538,6 +2538,12 @@ void DerivedTable::tryConvertOuterJoins(bool allowNondeterministic) {
         continue;
       }
 
+      // Hyper-edge outer joins (left keys span multiple tables) cannot be
+      // converted to inner joins.
+      if (join->leftTable() == nullptr) {
+        continue;
+      }
+
       auto rightJoinColumns = PlanObjectSet::fromObjects(join->rightColumns());
       auto leftJoinColumns = PlanObjectSet::fromObjects(join->leftColumns());
 

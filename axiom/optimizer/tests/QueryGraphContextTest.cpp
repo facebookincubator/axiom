@@ -18,6 +18,8 @@
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 #include <algorithm>
+#include "axiom/optimizer/QueryGraph.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/type/Type.h"
 
@@ -288,6 +290,14 @@ TEST_F(QueryGraphContextTest, pathOrdering) {
     EXPECT_FALSE(pathValues[i] < pathValues[i - 1])
         << "Sort result not ordered at index " << i;
   }
+}
+
+TEST_F(QueryGraphContextTest, joinEdgeMakeInnerRejectsNullTables) {
+  auto* table = make<BaseTable>();
+  VELOX_ASSERT_THROW(
+      JoinEdge::makeInner(nullptr, table), "Inner join requires a left table");
+  VELOX_ASSERT_THROW(
+      JoinEdge::makeInner(table, nullptr), "Inner join requires a right table");
 }
 
 } // namespace

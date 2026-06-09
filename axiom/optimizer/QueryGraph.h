@@ -612,6 +612,11 @@ class JoinEdge {
   }
 
   static JoinEdge* makeInner(PlanObjectCP leftTable, PlanObjectCP rightTable) {
+    VELOX_CHECK_NOT_NULL(
+        leftTable,
+        "Inner join requires a left table; hyper-edge joins (leftTable=nullptr) "
+        "cannot be converted to inner.");
+    VELOX_CHECK_NOT_NULL(rightTable, "Inner join requires a right table.");
     VELOX_CHECK(
         !leftTable->is(PlanType::kUnnestTableNode) &&
             !rightTable->is(PlanType::kUnnestTableNode),
