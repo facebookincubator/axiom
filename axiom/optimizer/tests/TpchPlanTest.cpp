@@ -16,6 +16,7 @@
 
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
+#include <limits>
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
@@ -51,6 +52,9 @@ class TpchPlanTest : public virtual test::HiveQueriesTestBase {
 
   void SetUp() override {
     HiveQueriesTestBase::SetUp();
+
+    // Pin TPC-H golden plans to exhaustive branch-and-bound.
+    optimizerOptions_.greedyJoinThreshold = std::numeric_limits<int32_t>::max();
 
     referenceBuilder_ =
         std::make_unique<exec::test::TpchQueryBuilder>(localFileFormat_);

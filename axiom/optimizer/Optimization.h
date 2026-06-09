@@ -245,6 +245,15 @@ class Optimization {
 
   void makeJoins(PlanState& state);
 
+  // Bounds planning time on large derived tables via greedy join-order
+  // search. Each (starting table, leaf index) pair seeds one chain; the
+  // cheapest resulting plan is left in 'state.plans'.
+  void solveJoinOrderApproximately(PlanState& state);
+
+  // Descends one greedy chain from 'plan', registering the result in
+  // 'state.plans'.
+  void greedyJoinChainDescend(RelationOpPtr plan, PlanState& state);
+
   // Retrieves or makes a plan from 'key'. 'key' specifies a set of top level
   // joined tables or a hash join build side table or join.
   //
@@ -310,6 +319,14 @@ class Optimization {
   // Places a derived table as first table in a plan. Imports possibly reducing
   // joins into the plan if can.
   void placeDerivedTable(DerivedTableCP from, PlanState& state);
+
+  // Places 'from' and plans its inner DT via memo. Returns the relational
+  // op for the caller to extend.
+  RelationOpPtr planDtAsLeaf(DerivedTableCP from, PlanState& state);
+
+  // Imports reducing joins from the surrounding scope into 'from' for a
+  // bushier shape and plans the result.
+  void importReducingJoinsAndPlan(DerivedTableCP from, PlanState& state);
 
   // Adds the items from 'dt.conjuncts' that are not placed in 'state'
   // and whose prerequisite columns are placed. If conjuncts can be

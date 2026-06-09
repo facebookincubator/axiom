@@ -104,3 +104,38 @@ WHERE EXISTS (
   SELECT 1 FROM (VALUES (1, 1), (2, 3), (3, 3)) AS u(x, y)
   WHERE u.x = t.a AND u.y = t.a
 )
+----
+-- 8-way self-join hitting the greedy join-enumeration cutoff.
+SELECT count(*)
+FROM t t1
+JOIN t t2 ON t1.b = t2.b
+JOIN t t3 ON t2.b = t3.b
+JOIN t t4 ON t3.b = t4.b
+JOIN t t5 ON t4.b = t5.b
+JOIN t t6 ON t5.b = t6.b
+JOIN t t7 ON t6.b = t7.b
+JOIN t t8 ON t7.b = t8.b
+----
+-- 20-way self-join. Stress-tests greedy at multiples of the default cutoff;
+-- result count is validated end-to-end against DuckDB.
+SELECT count(*)
+FROM t t1
+JOIN t t2 ON t1.b = t2.b
+JOIN t t3 ON t2.b = t3.b
+JOIN t t4 ON t3.b = t4.b
+JOIN t t5 ON t4.b = t5.b
+JOIN t t6 ON t5.b = t6.b
+JOIN t t7 ON t6.b = t7.b
+JOIN t t8 ON t7.b = t8.b
+JOIN t t9 ON t8.b = t9.b
+JOIN t t10 ON t9.b = t10.b
+JOIN t t11 ON t10.b = t11.b
+JOIN t t12 ON t11.b = t12.b
+JOIN t t13 ON t12.b = t13.b
+JOIN t t14 ON t13.b = t14.b
+JOIN t t15 ON t14.b = t15.b
+JOIN t t16 ON t15.b = t16.b
+JOIN t t17 ON t16.b = t17.b
+JOIN t t18 ON t17.b = t18.b
+JOIN t t19 ON t18.b = t19.b
+JOIN t t20 ON t19.b = t20.b

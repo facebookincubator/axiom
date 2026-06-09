@@ -398,7 +398,7 @@ std::shared_ptr<const connector::PartitionType> foldCopartition(
 // common, then replace each non-null value with entry.copartition(*common).
 // Null entries pass through unchanged. Used at every join/union site that
 // combines two PlanStates' current fragment maps.
-void mergeFragmentMaps(GroupedLeaves& consumer, GroupedLeaves&& producer) {
+void mergeFragmentMaps(GroupedLeaves& consumer, GroupedLeaves producer) {
   std::vector<std::shared_ptr<const connector::PartitionType>> nonNullValues;
   for (const auto& [_, partitionType] : consumer) {
     if (partitionType != nullptr) {
@@ -928,7 +928,8 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
   // Take the first hand joined tables and bundle them with reducing joins that
   // can go on the build side.
 
-  if (!options().syntacticJoinOrder && !candidates.empty()) {
+  if (!options().syntacticJoinOrder && !state.greedyJoinOrder() &&
+      !candidates.empty()) {
     std::vector<JoinCandidate> bushes;
     for (auto& candidate : candidates) {
       if (auto bush = reducingJoins(state, candidate)) {
@@ -3001,9 +3002,9 @@ RelationOpPtr Optimization::placeSingleRowDtsForJoinFilter(
   return plan;
 }
 
-void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
-  PlanStateSaver save(state);
-
+RelationOpPtr Optimization::planDtAsLeaf(
+    DerivedTableCP from,
+    PlanState& state) {
   state.place(from);
 
   auto dtColumns = PlanObjectSet::fromObjects(from->columns);
@@ -3013,20 +3014,35 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
   MemoKey key =
       MemoKey::create(from, std::move(dtColumns), PlanObjectSet::single(from));
 
-  bool ignore = false;
+  bool ignore{false};
   auto plan = makePlan(*state.dt, key, std::nullopt, 1, ignore);
   state.cost = plan->cost;
   // Inherit the DT's per-leaf bucketed map so subsequent operators planned
-  // atop this DT see its scans as fragment leaves.
+  // atop this DT see its scans as fragment leaves. Copy: 'plan' may be the
+  // input to multiple parents, so each consumer needs its own starting map.
   auto it = planGroupedLeaves_.find(plan);
   if (it != planGroupedLeaves_.end()) {
-    mergeFragmentMaps(
-        state.mutableCurrentGroupedLeaves(), GroupedLeaves{it->second});
+    // @lint-ignore CLANGTIDY PULSE_UNNECESSARY_COPY
+    GroupedLeaves leaves = it->second;
+    mergeFragmentMaps(state.mutableCurrentGroupedLeaves(), std::move(leaves));
   }
+  return plan->op;
+}
+
+void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
+  PlanStateSaver save(state);
+
+  auto planOp = planDtAsLeaf(from, state);
 
   // Make plans based on the dt alone as first.
-  makeJoins(plan->op, state);
+  makeJoins(std::move(planOp), state);
 
+  importReducingJoinsAndPlan(from, state);
+}
+
+void Optimization::importReducingJoinsAndPlan(
+    DerivedTableCP from,
+    PlanState& state) {
   // Look for reducing joins to import inside the DT. Bushy joins are
   // only allowed when the primary table is a base table — when it is a
   // subquery DT, bushy tables would be placed inside the MemoKey alongside
@@ -3052,14 +3068,15 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
       state.downstreamColumns(),
       std::move(reducingTables),
       std::move(result.existences));
-  plan = makePlan(
+  bool ignore{false};
+  auto reducingPlan = makePlan(
       *state.dt,
       reducingKey,
       /*distribution=*/std::nullopt,
       /*existsFanout=*/result.existenceReduction,
       /*needsShuffle=*/ignore);
-  state.cost = plan->cost;
-  makeJoins(plan->op, state);
+  state.cost = reducingPlan->cost;
+  makeJoins(reducingPlan->op, state);
 }
 
 bool Optimization::placeConjuncts(
@@ -3216,7 +3233,147 @@ std::vector<int32_t> sortByStartingScore(const PlanObjectVector& tables) {
 
   return indices;
 }
+
+// Returns true if 'candidate' joins on equi-keys (not a cross product).
+bool isRealEdgeCandidate(const NextJoin& candidate) {
+  return candidate.candidate->join != nullptr &&
+      candidate.candidate->join->numKeys() > 0;
+}
 } // namespace
+
+void Optimization::greedyJoinChainDescend(
+    RelationOpPtr plan,
+    PlanState& state) {
+  VELOX_CHECK_NOT_NULL(plan);
+
+  if (placeConjuncts(plan, state, false)) {
+    return;
+  }
+
+  auto candidates = nextJoins(state);
+  if (candidates.empty()) {
+    if (placeConjuncts(plan, state, true)) {
+      return;
+    }
+
+    const auto downstream = state.downstreamColumns();
+    std::vector<DerivedTableCP> singleRowDtsToPlace;
+    state.dt->singleRowDts.forEach<DerivedTable>([&](DerivedTableCP subquery) {
+      if (!state.isPlaced(subquery)) {
+        if (!downstream.containsAny(subquery->columns)) {
+          state.place(subquery);
+        } else {
+          singleRowDtsToPlace.push_back(subquery);
+        }
+      }
+    });
+
+    for (const auto* singleRowDt : singleRowDtsToPlace) {
+      plan = placeSingleRowDt(plan, singleRowDt, state);
+    }
+
+    addPostprocess(state.dt, plan, state);
+    state.plans.addPlan(plan, state);
+    return;
+  }
+
+  std::vector<NextJoin> extensions;
+  extensions.reserve(candidates.size());
+  for (auto& candidate : candidates) {
+    addJoin(candidate, plan, state, extensions);
+  }
+  if (extensions.empty()) {
+    return;
+  }
+
+  auto cheapestOf = [&](bool wantReal) -> const NextJoin* {
+    const NextJoin* best = nullptr;
+    for (const auto& next : extensions) {
+      if (isRealEdgeCandidate(next) != wantReal) {
+        continue;
+      }
+      if (best == nullptr || next.cost.cardinality < best->cost.cardinality ||
+          (next.cost.cardinality == best->cost.cardinality &&
+           next.cost.cost < best->cost.cost)) {
+        best = &next;
+      }
+    }
+    return best;
+  };
+  const NextJoin* chosen = cheapestOf(/*wantReal=*/true);
+  if (chosen == nullptr) {
+    chosen = cheapestOf(/*wantReal=*/false);
+  }
+  VELOX_CHECK_NOT_NULL(chosen);
+
+  state.restore(*chosen);
+  greedyJoinChainDescend(chosen->plan, state);
+}
+
+void Optimization::solveJoinOrderApproximately(PlanState& state) {
+  state.setGreedyJoinOrder(true);
+  SCOPE_EXIT {
+    state.setGreedyJoinOrder(false);
+  };
+
+  PlanObjectVector firstTables = state.dt->startTables.toObjects();
+
+  const auto sortedIndices = sortByStartingScore(firstTables);
+
+  for (auto index : sortedIndices) {
+    auto* from = firstTables.at(index);
+#ifndef NDEBUG
+    state.debugSetFirstTable(from->id());
+#endif
+    if (from->is(PlanType::kTableNode)) {
+      auto* table = from->as<BaseTable>();
+      const auto leafIndices = table->chooseLeafIndex();
+      const auto downstream = state.downstreamColumns();
+      for (auto leafIndex : leafIndices) {
+        auto columns = indexColumns(downstream, table, leafIndex);
+
+        PlanStateSaver save(state);
+        state.place(table);
+        state.placeColumns(columns);
+
+        auto* scan = make<TableScan>(table, leafIndex, columns);
+        state.addCost(*scan);
+        if (auto partitionType = leafIndex->layout->partitionType()) {
+          state.mutableCurrentGroupedLeaves().emplace(
+              scan, std::move(partitionType));
+        }
+        greedyJoinChainDescend(scan, state);
+      }
+    } else if (from->is(PlanType::kValuesTableNode)) {
+      const auto* valuesTable = from->as<ValuesTable>();
+      ColumnVector columns;
+      state.downstreamColumns().forEach<Column>([&](auto column) {
+        if (valuesTable == column->relation()) {
+          columns.push_back(column);
+        }
+      });
+
+      PlanStateSaver save(state);
+      state.place(valuesTable);
+      state.placeColumns(columns);
+      auto* scan = make<Values>(*valuesTable, std::move(columns));
+      state.addCost(*scan);
+      greedyJoinChainDescend(scan, state);
+    } else if (from->is(PlanType::kDerivedTableNode)) {
+      PlanStateSaver save(state);
+      auto* dt = from->as<const DerivedTable>();
+      auto planOp = planDtAsLeaf(dt, state);
+      greedyJoinChainDescend(std::move(planOp), state);
+      importReducingJoinsAndPlan(dt, state);
+    } else if (from->is(PlanType::kUnnestTableNode)) {
+      VELOX_FAIL("UnnestTable cannot be a starting table");
+    }
+  }
+
+  VELOX_CHECK(
+      !state.plans.plans.empty(),
+      "solveJoinOrderApproximately produced no plan");
+}
 
 void Optimization::makeJoins(PlanState& state) {
   // Sanity check that there are no RIGHT joins.
@@ -3225,6 +3382,13 @@ void Optimization::makeJoins(PlanState& state) {
       VELOX_CHECK(
           join->rightOptional(), "Unexpected RIGHT join: {}", join->toString());
     }
+  }
+
+  if (!options().syntacticJoinOrder &&
+      static_cast<int32_t>(state.dt->tables.size()) >=
+          options().greedyJoinThreshold) {
+    solveJoinOrderApproximately(state);
+    return;
   }
 
   PlanObjectVector firstTables;
@@ -3296,6 +3460,12 @@ void Optimization::makeJoins(PlanState& state) {
 
 void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
   VELOX_CHECK_NOT_NULL(plan);
+
+  if (state.greedyJoinOrder()) {
+    greedyJoinChainDescend(plan, state);
+    return;
+  }
+
   auto dt = state.dt;
 
   if (state.isOverBest()) {

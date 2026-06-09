@@ -330,6 +330,17 @@ struct PlanState {
     return currentGroupedLeaves_;
   }
 
+  /// True while greedy join enumeration is driving this PlanState. Routes
+  /// nested makePlan / placeConjuncts re-entries back into the greedy path
+  /// so the planning-time bound holds end-to-end.
+  bool greedyJoinOrder() const {
+    return greedyJoinOrder_;
+  }
+
+  void setGreedyJoinOrder(bool value) {
+    greedyJoinOrder_ = value;
+  }
+
  private:
   PlanObjectSet computeDownstreamColumns(bool includeFilters) const;
 
@@ -358,6 +369,10 @@ struct PlanState {
   // operator. Updated as scans are placed (insert), as joins fold copartition
   // (per-leaf coarsening), and as Repartitions are inserted (snapshot+reset).
   GroupedLeaves currentGroupedLeaves_;
+
+  // See greedyJoinOrder(). Set by solveJoinOrderApproximately for the
+  // duration of its SCOPE_EXIT-bounded run.
+  bool greedyJoinOrder_{false};
 };
 
 /// A scoped guard that restores fields of PlanState on destruction.
