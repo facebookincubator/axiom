@@ -481,7 +481,15 @@ std::optional<lp::ExprApi> tryResolveEnumLiteral(
   const auto& catalog = parts[0];
   facebook::axiom::SchemaTypeName schemaTypeName{
       parts[1], folly::join('.', parts.begin() + 2, parts.end() - 1)};
-  const auto& valueName = parts.back();
+  // Enum types store their keys uppercase (the canonical form), so uppercase
+  // the referenced key for a case-insensitive lookup. The type and namespace
+  // parts stay lowercased.
+  std::string valueName = parts.back();
+  std::transform(
+      valueName.begin(),
+      valueName.end(),
+      valueName.begin(),
+      [](unsigned char character) { return std::toupper(character); });
 
   auto type = findQualifiedType(catalog, schemaTypeName, typeCache);
   if (type == nullptr) {

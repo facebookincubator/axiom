@@ -69,13 +69,15 @@ class EnumLiteralTest : public PrestoParserTestBase {
 
     enumMetadata_ = std::make_shared<CountingTestConnectorMetadata>(nullptr);
 
+    // Enum keys are stored uppercase, the canonical form produced by the type
+    // parser and connectors.
     statusType_ = BIGINT_ENUM(LongEnumParameter(
         "tc.myschema.status",
-        {{"active", 0}, {"inactive", 1}, {"pending", 2}}));
+        {{"ACTIVE", 0}, {"INACTIVE", 1}, {"PENDING", 2}}));
     enumMetadata_->addType({"myschema", "status"}, statusType_);
 
     colorType_ = VARCHAR_ENUM(VarcharEnumParameter(
-        "tc.myschema.color", {{"red", "red_value"}, {"blue", "blue_value"}}));
+        "tc.myschema.color", {{"RED", "red_value"}, {"BLUE", "blue_value"}}));
     enumMetadata_->addType({"myschema", "color"}, colorType_);
 
     facebook::axiom::connector::ConnectorMetadataRegistry::global().insert(
@@ -292,7 +294,7 @@ TEST_F(EnumLiteralTest, typeofEnumLiteral) {
 
 TEST_F(EnumLiteralTest, multiPartTypeName) {
   auto multiPartType =
-      BIGINT_ENUM(LongEnumParameter("tc.b.foo.bar", {{"val", 42}}));
+      BIGINT_ENUM(LongEnumParameter("tc.b.foo.bar", {{"VAL", 42}}));
   enumMetadata_->addType({"b", "foo.bar"}, multiPartType);
 
   // CAST path.
