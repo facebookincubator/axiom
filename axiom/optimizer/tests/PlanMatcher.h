@@ -140,13 +140,12 @@ struct HashJoinDetails {
   /// When set, asserts plan.isNullAware() matches.
   std::optional<bool> nullAware;
 
-  /// When set, asserts left-side join keys (must have same size as
-  /// rightKeys when both are set).
-  std::optional<std::vector<std::string>> leftKeys;
-
-  /// When set, asserts right-side join keys (must have same size as
-  /// leftKeys when both are set).
-  std::optional<std::vector<std::string>> rightKeys;
+  /// When set, asserts the join's equi-keys. Each entry is a single
+  /// equality expression written as "<left> = <right>" (DuckDB SQL
+  /// syntax). The LHS of each `=` matches `plan.leftKeys()[i]`; the
+  /// RHS matches `plan.rightKeys()[i]`. Supports alias rewriting from
+  /// child matchers.
+  std::optional<std::vector<std::string>> keys;
 
   /// When set, asserts the join filter expression (e.g., "a = b AND c > 0").
   /// Empty string asserts no filter.

@@ -631,16 +631,14 @@ TEST_F(SubqueryTest, correlatedInWithCorrelationFilter) {
         "  WHERE u.y = t.b"
         ") FROM t";
 
-    auto matcher = matchScan("t")
-                       .hashJoin(
-                           matchScan("u").build(),
-                           core::JoinType::kLeftSemiProject,
-                           {.nullAware = true,
-                            .leftKeys = std::vector<std::string>{"a"},
-                            .rightKeys = std::vector<std::string>{"x"},
-                            .filter = "b = y"})
-                       .project()
-                       .build();
+    auto matcher =
+        matchScan("t")
+            .hashJoin(
+                matchScan("u").build(),
+                core::JoinType::kLeftSemiProject,
+                {.nullAware = true, .keys = {{"a = x"}}, .filter = "b = y"})
+            .project()
+            .build();
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
@@ -658,8 +656,7 @@ TEST_F(SubqueryTest, correlatedInWithCorrelationFilter) {
                            matchScan("u").build(),
                            core::JoinType::kLeftSemiProject,
                            {.nullAware = true,
-                            .leftKeys = std::vector<std::string>{"a"},
-                            .rightKeys = std::vector<std::string>{"x"},
+                            .keys = {{"a = x"}},
                             .filter = "b = y AND c = z"})
                        .project()
                        .build();
@@ -685,8 +682,7 @@ TEST_F(SubqueryTest, correlatedInWithMixedCorrelationFilter) {
                          matchScan("u").build(),
                          core::JoinType::kLeftSemiProject,
                          {.nullAware = true,
-                          .leftKeys = std::vector<std::string>{"a"},
-                          .rightKeys = std::vector<std::string>{"x"},
+                          .keys = {{"a = x"}},
                           .filter = "c > z AND b = y"})
                      .project()
                      .build();
@@ -709,10 +705,7 @@ TEST_F(SubqueryTest, correlatedInWithRedundantCorrelationFilter) {
                      .hashJoin(
                          matchScan("u").build(),
                          core::JoinType::kLeftSemiProject,
-                         {.nullAware = true,
-                          .leftKeys = std::vector<std::string>{"a"},
-                          .rightKeys = std::vector<std::string>{"x"},
-                          .filter = ""})
+                         {.nullAware = true, .keys = {{"a = x"}}, .filter = ""})
                      .project()
                      .build();
   auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
