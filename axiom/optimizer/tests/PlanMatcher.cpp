@@ -130,6 +130,33 @@ class PlanMatcherImpl : public PlanMatcher {
   const std::vector<std::shared_ptr<PlanMatcher>> sourceMatchers_;
 };
 
+// Parses `"a = b"` into a pair of column names `(a, b)`. Requires
+// both sides to be plain column references.
+std::pair<std::string, std::string> parseEqualityColumnPair(
+    const std::string& equality) {
+  const auto parsed = parse::DuckSqlExpressionsParser().parseExpr(equality);
+  const auto* call = dynamic_cast<const core::CallExpr*>(parsed.get());
+  VELOX_USER_CHECK_NOT_NULL(
+      call, "Expected equality expression of the form `a = b`: {}", equality);
+  VELOX_USER_CHECK_EQ(
+      call->name(),
+      "eq",
+      "Expected equality expression of the form `a = b`: {}",
+      equality);
+  VELOX_USER_CHECK_EQ(
+      call->inputs().size(),
+      2,
+      "Expected equality expression of the form `a = b`: {}",
+      equality);
+  const auto* lhs = core::FieldAccessExpr::tryAsRootColumn(call->inputs()[0]);
+  const auto* rhs = core::FieldAccessExpr::tryAsRootColumn(call->inputs()[1]);
+  VELOX_USER_CHECK_NOT_NULL(
+      lhs, "Left side must be a plain column reference: {}", equality);
+  VELOX_USER_CHECK_NOT_NULL(
+      rhs, "Right side must be a plain column reference: {}", equality);
+  return {lhs->name(), rhs->name()};
+}
+
 velox::core::ExprPtr rewriteInputNames(
     const velox::core::ExprPtr& expr,
     const std::unordered_map<std::string, std::string>& mapping) {
@@ -782,17 +809,9 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
       : PlanMatcherImpl<HashJoinNode>({left, right}),
         joinType_{joinType},
         nullAware_{details.nullAware},
-        leftKeys_{details.leftKeys},
-        rightKeys_{details.rightKeys},
+        keys_{details.keys},
         filter_{details.filter},
-        outputColumnNames_{details.outputColumnNames} {
-    if (leftKeys_.has_value() && rightKeys_.has_value()) {
-      VELOX_CHECK_EQ(
-          leftKeys_->size(),
-          rightKeys_->size(),
-          "leftKeys and rightKeys must have the same size");
-    }
-  }
+        outputColumnNames_{details.outputColumnNames} {}
 
   MatchResult matchDetails(
       const HashJoinNode& plan,
@@ -812,26 +831,18 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
 
     AXIOM_TEST_RETURN_IF_FAILURE
 
-    if (leftKeys_.has_value()) {
-      EXPECT_EQ(plan.leftKeys().size(), leftKeys_->size());
+    if (keys_.has_value()) {
+      EXPECT_EQ(plan.leftKeys().size(), keys_->size());
       AXIOM_TEST_RETURN_IF_FAILURE
 
-      for (auto i = 0; i < leftKeys_->size(); ++i) {
-        auto it = symbols.find((*leftKeys_)[i]);
-        auto expected = it != symbols.end() ? it->second : (*leftKeys_)[i];
-        EXPECT_EQ(plan.leftKeys()[i]->name(), expected);
-      }
-      AXIOM_TEST_RETURN_IF_FAILURE
-    }
-
-    if (rightKeys_.has_value()) {
-      EXPECT_EQ(plan.rightKeys().size(), rightKeys_->size());
-      AXIOM_TEST_RETURN_IF_FAILURE
-
-      for (auto i = 0; i < rightKeys_->size(); ++i) {
-        auto it = symbols.find((*rightKeys_)[i]);
-        auto expected = it != symbols.end() ? it->second : (*rightKeys_)[i];
-        EXPECT_EQ(plan.rightKeys()[i]->name(), expected);
+      auto resolve = [&](const std::string& name) {
+        auto it = symbols.find(name);
+        return it != symbols.end() ? it->second : name;
+      };
+      for (size_t i = 0; i < keys_->size(); ++i) {
+        const auto [lhs, rhs] = parseEqualityColumnPair((*keys_)[i]);
+        EXPECT_EQ(plan.leftKeys()[i]->name(), resolve(lhs));
+        EXPECT_EQ(plan.rightKeys()[i]->name(), resolve(rhs));
       }
       AXIOM_TEST_RETURN_IF_FAILURE
     }
@@ -885,8 +896,7 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
  private:
   const std::optional<JoinType> joinType_;
   const std::optional<bool> nullAware_;
-  const std::optional<std::vector<std::string>> leftKeys_;
-  const std::optional<std::vector<std::string>> rightKeys_;
+  const std::optional<std::vector<std::string>> keys_;
   const std::optional<std::string> filter_;
   const std::optional<std::vector<std::string>> outputColumnNames_;
 };
