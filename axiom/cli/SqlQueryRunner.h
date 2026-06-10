@@ -71,6 +71,14 @@ struct ErrorInfo {
   /// Template with placeholders (e.g. "Cannot resolve type {}") for grouping
   /// similar failures.
   std::string messageTemplate;
+
+  /// Raw Velox error code (e.g. "INVALID_ARGUMENT", "MEM_CAP_EXCEEDED") from
+  /// the caught VeloxException. Empty for non-Velox exceptions.
+  std::string errorCode;
+
+  /// Raw Velox error source (e.g. "USER", "RUNTIME", "SYSTEM", "EXTERNAL") from
+  /// the caught VeloxException. Empty for non-Velox exceptions.
+  std::string errorSource;
 };
 
 /// Returns a format template (placeholders, not substituted values) for

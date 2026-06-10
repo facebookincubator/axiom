@@ -521,7 +521,16 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
     completionInfo.numOutputRows = countRows(result.results);
     finalize();
     return result;
+  } catch (const velox::VeloxException& e) {
+    completionInfo.errorInfo = ErrorInfo{
+        .message = e.what(),
+        .messageTemplate = messageTemplateOf(e),
+        .errorCode = e.errorCode(),
+        .errorSource = e.errorSource()};
+    finalize();
+    throw;
   } catch (const std::exception& e) {
+    // Non-Velox exceptions carry no error code or source.
     completionInfo.errorInfo =
         ErrorInfo{.message = e.what(), .messageTemplate = messageTemplateOf(e)};
     finalize();
