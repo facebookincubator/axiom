@@ -877,7 +877,7 @@ folly::dynamic toSchemaJson(
 
   if (options.fileFormat.has_value()) {
     schema["fileFormat"] =
-        velox::dwio::common::toString(options.fileFormat.value());
+        velox::dwio::common::FileFormatName::toName(options.fileFormat.value());
   }
   // Save SerDe options
   if (options.serdeOptions.has_value()) {
@@ -939,7 +939,8 @@ std::shared_ptr<LocalTable> createLocalTable(
 
   if (createTableOptions.fileFormat.has_value()) {
     options[HiveWriteOptions::kFileFormat] = std::string(
-        velox::dwio::common::toString(createTableOptions.fileFormat.value()));
+        velox::dwio::common::FileFormatName::toName(
+            createTableOptions.fileFormat.value()));
   }
 
   if (createTableOptions.serdeOptions.has_value()) {

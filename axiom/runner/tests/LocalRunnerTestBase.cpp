@@ -76,7 +76,8 @@ void LocalRunnerTestBase::setupConnector() {
   configs[connector::hive::HiveMetadataConfig::kLocalDataPath] =
       tempDirectory_->getPath();
   configs[connector::hive::HiveMetadataConfig::kLocalFileFormat] =
-      velox::dwio::common::toString(velox::dwio::common::FileFormat::DWRF);
+      velox::dwio::common::FileFormatName::toName(
+          velox::dwio::common::FileFormat::DWRF);
   resetHiveConnector(
       std::make_shared<velox::config::ConfigBase>(std::move(configs)));
 

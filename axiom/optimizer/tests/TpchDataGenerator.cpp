@@ -35,7 +35,8 @@ void TpchDataGenerator::createTables(
   runner.initialize([&]() {
     connectors.registerTpchConnector();
     connectors.registerLocalHiveConnector(
-        std::string(path), std::string(velox::dwio::common::toString(format)));
+        std::string(path),
+        std::string(velox::dwio::common::FileFormatName::toName(format)));
     return std::make_pair(
         std::string(Connectors::kLocalHiveConnectorId), std::string("default"));
   });
@@ -54,7 +55,7 @@ void TpchDataGenerator::createTables(
     auto sql = fmt::format(
         "CREATE TABLE {} WITH (file_format = '{}') AS SELECT * FROM tpch.\"{}\".{}",
         tableName,
-        velox::dwio::common::toString(format),
+        velox::dwio::common::FileFormatName::toName(format),
         fmt::format("sf{}", scaleFactor),
         tableName);
 

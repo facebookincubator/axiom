@@ -240,7 +240,8 @@ void writeSchemaFile(
   folly::dynamic schema = folly::dynamic::object;
   schema["dataColumns"] = dataColumns;
   schema["partitionColumns"] = folly::dynamic::array();
-  schema["fileFormat"] = std::string(velox::dwio::common::toString(fileFormat));
+  schema["fileFormat"] =
+      std::string(velox::dwio::common::FileFormatName::toName(fileFormat));
 
   const auto file = schemaPath(tablePath);
   std::ofstream outputFile(file);
