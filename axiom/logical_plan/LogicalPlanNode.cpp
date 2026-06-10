@@ -36,6 +36,8 @@ const auto& nodeKindNames() {
       {NodeKind::kTableWrite, "TABLE_WRITE"},
       {NodeKind::kSample, "SAMPLE"},
       {NodeKind::kOutput, "OUTPUT"},
+      {NodeKind::kFixedPoint, "FIXED_POINT"},
+      {NodeKind::kRecursiveReference, "RECURSIVE_REFERENCE"},
   };
   return kNames;
 }
@@ -177,6 +179,8 @@ void LogicalPlanNode::registerSerDe() {
   registry.Register("TableWriteNode", TableWriteNode::create);
   registry.Register("SampleNode", SampleNode::create);
   registry.Register("OutputNode", OutputNode::create);
+  registry.Register("FixedPointNode", FixedPointNode::create);
+  registry.Register("RecursiveReferenceNode", RecursiveReferenceNode::create);
 }
 
 folly::dynamic ValuesNode::serialize() const {
@@ -1182,6 +1186,169 @@ LogicalPlanNodePtr OutputNode::create(
 
   return std::make_shared<OutputNode>(
       obj["id"].asString(), inputs[0], std::move(entries));
+}
+
+namespace {
+
+// Checks every RecursiveReferenceNode reachable from 'node': it must name
+// 'name' and carry 'stateSchema'. Sets *found if at least one matching
+// reference is seen. Does not descend into a nested FixedPointNode, whose
+// recursive references resolve against that inner loop.
+void checkRecursiveReferences(
+    const LogicalPlanNodePtr& node,
+    const std::string& name,
+    const velox::RowTypePtr& stateSchema,
+    bool* found) {
+  if (node == nullptr) {
+    return;
+  }
+  if (node->is(NodeKind::kRecursiveReference)) {
+    const auto* ref = node->as<RecursiveReferenceNode>();
+    VELOX_USER_CHECK_EQ(
+        ref->name(),
+        name,
+        "RecursiveReferenceNode names an unknown fixed-point state");
+    VELOX_USER_CHECK(
+        ref->outputType()->equivalent(*stateSchema),
+        "RecursiveReferenceNode schema does not match state '{}': {} vs. {}",
+        name,
+        ref->outputType()->toString(),
+        stateSchema->toString());
+    *found = true;
+    return;
+  }
+  if (node->is(NodeKind::kFixedPoint)) {
+    return;
+  }
+  for (const auto& input : node->inputs()) {
+    checkRecursiveReferences(input, name, stateSchema, found);
+  }
+}
+
+// Rejects any RecursiveReferenceNode reachable from 'node' that names
+// 'name'. Used on the anchor, which produces seed rows before any
+// iteration and so cannot reference its own enclosing FixedPointNode. Does
+// not descend into a nested FixedPointNode -- its refs resolve to that inner
+// loop's state.
+void rejectAnchorRecursiveReference(
+    const LogicalPlanNodePtr& node,
+    const std::string& name) {
+  if (node == nullptr) {
+    return;
+  }
+  if (node->is(NodeKind::kRecursiveReference)) {
+    const auto* ref = node->as<RecursiveReferenceNode>();
+    VELOX_USER_CHECK_NE(
+        ref->name(),
+        name,
+        "FixedPointNode anchor must not reference its own state");
+    return;
+  }
+  if (node->is(NodeKind::kFixedPoint)) {
+    return;
+  }
+  for (const auto& input : node->inputs()) {
+    rejectAnchorRecursiveReference(input, name);
+  }
+}
+} // namespace
+
+FixedPointNode::FixedPointNode(
+    std::string id,
+    std::string name,
+    LogicalPlanNodePtr anchor,
+    LogicalPlanNodePtr step)
+    : LogicalPlanNode{NodeKind::kFixedPoint, std::move(id), {anchor, step}, anchor->outputType()},
+      name_{std::move(name)} {
+  VELOX_USER_CHECK(!name_.empty(), "FixedPointNode name must be non-empty");
+  // Equivalence (types only), not strict name equality. Anchor and step
+  // schemas may carry different canonical column ids -- e.g. when the step's
+  // final projection allocates fresh names from the shared NameAllocator --
+  // so tightening this to name-equality would break valid recursive plans
+  // whose anchor and step differ only by id.
+  VELOX_USER_CHECK(
+      anchor->outputType()->equivalent(*step->outputType()),
+      "Anchor and step branches of FixedPointNode must have equivalent output schemas: {} vs. {}",
+      anchor->outputType()->toString(),
+      step->outputType()->toString());
+
+  rejectAnchorRecursiveReference(anchor, name_);
+  bool found = false;
+  checkRecursiveReferences(step, name_, anchor->outputType(), &found);
+  VELOX_USER_CHECK(
+      found,
+      "FixedPointNode step must contain at least one RecursiveReferenceNode named '{}'",
+      name_);
+}
+
+void FixedPointNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+bool FixedPointNode::equalTo(const LogicalPlanNode& other) const {
+  // LogicalPlanNode::operator== compares inputs() before delegating here, so
+  // equalTo only needs to compare the fixed-point metadata.
+  return name_ == other.as<FixedPointNode>()->name_;
+}
+
+folly::dynamic FixedPointNode::serialize() const {
+  auto obj = serializeBase("FixedPointNode");
+  obj["recursiveName"] = name_;
+  return obj;
+}
+
+// static
+LogicalPlanNodePtr FixedPointNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto inputs = deserializeNodeInputs(obj, context);
+  VELOX_USER_CHECK_EQ(
+      inputs.size(),
+      2,
+      "FixedPointNode requires exactly two inputs (anchor, step)");
+  return std::make_shared<FixedPointNode>(
+      obj["id"].asString(),
+      obj["recursiveName"].asString(),
+      std::move(inputs[0]),
+      std::move(inputs[1]));
+}
+
+RecursiveReferenceNode::RecursiveReferenceNode(
+    std::string id,
+    std::string name,
+    velox::RowTypePtr outputType)
+    : LogicalPlanNode{NodeKind::kRecursiveReference, std::move(id), {}, std::move(outputType)},
+      name_{std::move(name)} {
+  VELOX_USER_CHECK(
+      !name_.empty(), "RecursiveReferenceNode name must be non-empty");
+}
+
+void RecursiveReferenceNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+bool RecursiveReferenceNode::equalTo(const LogicalPlanNode& other) const {
+  return id() == other.id();
+}
+
+folly::dynamic RecursiveReferenceNode::serialize() const {
+  auto obj = serializeBase("RecursiveReferenceNode");
+  obj["recursiveName"] = name_;
+  return obj;
+}
+
+// static
+LogicalPlanNodePtr RecursiveReferenceNode::create(
+    const folly::dynamic& obj,
+    void* /*context*/) {
+  return std::make_shared<RecursiveReferenceNode>(
+      obj["id"].asString(),
+      obj["recursiveName"].asString(),
+      deserializeOutputType(obj));
 }
 
 } // namespace facebook::axiom::logical_plan

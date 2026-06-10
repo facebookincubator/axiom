@@ -251,6 +251,22 @@ class ToTextVisitor : public PlanNodeVisitor {
     appendInputs(node, myContext);
   }
 
+  void visit(const FixedPointNode& node, PlanNodeVisitorContext& context)
+      const override {
+    auto& myContext = static_cast<Context&>(context);
+    myContext.out << makeIndent(myContext.indent)
+                  << "- FixedPoint(name=" << node.name() << "):";
+    appendOutputType(node, myContext);
+    myContext.out << std::endl;
+    appendInputs(node, myContext);
+  }
+
+  void visit(
+      const RecursiveReferenceNode& node,
+      PlanNodeVisitorContext& context) const override {
+    appendNode("RecursiveReference", node, "name=" + node.name(), context);
+  }
+
  private:
   static std::string makeIndent(size_t size) {
     return std::string(size * 2, ' ');
@@ -436,6 +452,17 @@ class CollectExprStatsPlanNodeVisitor : public PlanNodeVisitor {
   void visit(const OutputNode& node, PlanNodeVisitorContext& context)
       const override {
     visitInputs(node, context);
+  }
+
+  void visit(const FixedPointNode& node, PlanNodeVisitorContext& context)
+      const override {
+    visitInputs(node, context);
+  }
+
+  void visit(
+      const RecursiveReferenceNode& /*node*/,
+      PlanNodeVisitorContext& /*context*/) const override {
+    // Leaf node — nothing to collect.
   }
 
  private:
@@ -763,6 +790,19 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
     auto& myContext = static_cast<Context&>(context);
     appendHeader(node, myContext);
     appendInputs(node, myContext);
+  }
+
+  void visit(const FixedPointNode& node, PlanNodeVisitorContext& context)
+      const override {
+    appendNode(node, context);
+  }
+
+  void visit(
+      const RecursiveReferenceNode& node,
+      PlanNodeVisitorContext& context) const override {
+    auto& myContext = static_cast<Context&>(context);
+    appendHeader(node, myContext);
+    // Leaf node — no inputs to recurse into.
   }
 
  private:

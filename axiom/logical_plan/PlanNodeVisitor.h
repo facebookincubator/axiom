@@ -16,6 +16,7 @@
 #pragma once
 
 #include "axiom/logical_plan/LogicalPlanNode.h"
+#include "velox/common/base/Exceptions.h"
 
 namespace facebook::axiom::logical_plan {
 
@@ -67,6 +68,18 @@ class PlanNodeVisitor {
 
   virtual void visit(const OutputNode& node, PlanNodeVisitorContext& context)
       const = 0;
+
+  virtual void visit(
+      const FixedPointNode& /*node*/,
+      PlanNodeVisitorContext& /*context*/) const {
+    VELOX_NYI("PlanNodeVisitor does not support FixedPointNode");
+  }
+
+  virtual void visit(
+      const RecursiveReferenceNode& /*node*/,
+      PlanNodeVisitorContext& /*context*/) const {
+    VELOX_NYI("PlanNodeVisitor does not support RecursiveReferenceNode");
+  }
 
  protected:
   void visitInputs(const LogicalPlanNode& node, PlanNodeVisitorContext& ctx)

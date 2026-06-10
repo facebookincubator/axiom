@@ -72,6 +72,8 @@ class LogicalPlanNodeSerdeTest : public testing::Test {
         ISerializable::deserialize<LogicalPlanNode>(serialized, context);
     ASSERT_NE(deserialized, nullptr);
     EXPECT_EQ(node->toString(), deserialized->toString());
+    // Sructural equality verifies the full round trip.
+    EXPECT_EQ(*node, *deserialized);
   }
 
   std::shared_ptr<memory::MemoryPool> pool_;
@@ -277,6 +279,26 @@ TEST_F(LogicalPlanNodeSerdeTest, tableWriteNode) {
                       {{"compression", "gzip"}})
                   .build();
   testRoundTrip(plan);
+}
+
+TEST_F(LogicalPlanNodeSerdeTest, fixedPointNode) {
+  auto step = PlanBuilder()
+                  .recursiveRef("t", ROW("n", BIGINT()))
+                  .project({"n + 1 as n"})
+                  .planNode();
+  auto plan =
+      PlanBuilder()
+          .values(ROW("n", BIGINT()), std::vector<Variant>{Variant::row({1LL})})
+          .fixedPoint("t", step)
+          .planNode();
+  testRoundTrip(plan);
+}
+
+TEST_F(LogicalPlanNodeSerdeTest, recursiveReferenceNode) {
+  auto ref = PlanBuilder()
+                 .recursiveRef("cte", ROW({"x", "y"}, {BIGINT(), VARCHAR()}))
+                 .planNode();
+  testRoundTrip(ref);
 }
 
 } // namespace

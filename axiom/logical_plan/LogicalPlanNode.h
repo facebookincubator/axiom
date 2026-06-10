@@ -38,6 +38,8 @@ enum class NodeKind {
   kTableWrite = 10,
   kSample = 11,
   kOutput = 12,
+  kFixedPoint = 13,
+  kRecursiveReference = 14,
 };
 
 AXIOM_DECLARE_ENUM_NAME(NodeKind)
@@ -122,7 +124,9 @@ class LogicalPlanNode : public velox::ISerializable {
   }
 
   /// Returns true if two plan nodes are structurally equal. Node IDs are
-  /// allowed to differ.
+  /// allowed to differ, except for RecursiveReferenceNode, which compares by
+  /// id: distinct references are never equal even when structurally identical
+  /// (see RecursiveReferenceNode::equalTo).
   bool operator==(const LogicalPlanNode& other) const;
 
   std::string toString() const;
@@ -964,6 +968,105 @@ class OutputNode : public LogicalPlanNode {
 };
 
 using OutputNodePtr = std::shared_ptr<const OutputNode>;
+
+/// Iterative fixed-point evaluation node. Models a linear recursive CTE: an
+/// 'anchor' subplan produces the initial rows; a 'step' subplan is re-run on
+/// each iteration to produce additional rows. Inside 'step', a
+/// RecursiveReferenceNode with matching 'name' stands for the rows produced
+/// by the previous iteration. The fixed point converges when 'step' returns
+/// no rows; the node emits the UNION ALL of the anchor's rows and every step
+/// iteration's rows.
+///
+/// For SQL the mapping is:
+///
+///   WITH RECURSIVE t(n) AS (
+///     SELECT 1                          -- anchor
+///     UNION ALL
+///     SELECT n + 1 FROM t WHERE n < 10  -- step; the reference to t is a
+///                                       --   RecursiveReferenceNode named "t"
+///   )
+///
+class FixedPointNode : public LogicalPlanNode {
+ public:
+  /// 'name' is the recursive relation's name and must be non-empty. The
+  /// step must contain at least one RecursiveReferenceNode with this name.
+  /// 'anchor' and 'step' must produce equivalent output schemas; that schema
+  /// is the node's output type.
+  FixedPointNode(
+      std::string id,
+      std::string name,
+      LogicalPlanNodePtr anchor,
+      LogicalPlanNodePtr step);
+
+  /// Initial (base-case) subplan.
+  const LogicalPlanNodePtr& anchor() const {
+    return inputs()[0];
+  }
+
+  /// Per-iteration subplan.
+  const LogicalPlanNodePtr& step() const {
+    return inputs()[1];
+  }
+
+  /// Name of the recursive relation. RecursiveReferenceNodes inside the step
+  /// match this name to refer to the previous iteration.
+  const std::string& name() const {
+    return name_;
+  }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
+  folly::dynamic serialize() const override;
+
+  static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  bool equalTo(const LogicalPlanNode& other) const override;
+
+  const std::string name_;
+};
+
+using FixedPointNodePtr = std::shared_ptr<const FixedPointNode>;
+
+/// Leaf placeholder inside the step branch of a FixedPointNode. Represents a
+/// back-reference to the previous iteration's output at execution time.
+/// Identity equality is by node id, not schema, so passes that fold
+/// equal-comparing nodes (memo lookups, plan-tree equality) cannot collapse
+/// two distinct self-references in a step body into one leaf (e.g.
+/// `SELECT * FROM r r1 JOIN r r2 ON ...`).
+class RecursiveReferenceNode : public LogicalPlanNode {
+ public:
+  /// @param id Unique plan node ID. Each self-reference in a step body must
+  ///     receive its own fresh id so distinct references compare as distinct.
+  /// @param name Name of the enclosing FixedPointNode whose previous
+  ///     iteration this reference reads. Must be non-empty.
+  /// @param outputType Schema of the recursive CTE (after alias application).
+  RecursiveReferenceNode(
+      std::string id,
+      std::string name,
+      velox::RowTypePtr outputType);
+
+  /// Name of the FixedPointNode whose previous iteration this reference reads.
+  const std::string& name() const {
+    return name_;
+  }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
+  folly::dynamic serialize() const override;
+
+  static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  // Two RecursiveReferenceNodes are equal only when they share the same id.
+  bool equalTo(const LogicalPlanNode& other) const override;
+
+  const std::string name_;
+};
+
+using RecursiveReferenceNodePtr = std::shared_ptr<const RecursiveReferenceNode>;
 
 } // namespace facebook::axiom::logical_plan
 

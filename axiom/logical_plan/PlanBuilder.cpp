@@ -2081,4 +2081,33 @@ LogicalPlanNodePtr PlanBuilder::build(
   return buildRenameProject();
 }
 
+PlanBuilder& PlanBuilder::fixedPoint(
+    const std::string& name,
+    const LogicalPlanNodePtr& step) {
+  VELOX_USER_CHECK_NOT_NULL(
+      node_, "Anchor plan must be set before calling fixedPoint");
+  VELOX_USER_CHECK_NOT_NULL(step);
+  node_ = std::make_shared<FixedPointNode>(nextId(), name, node_, step);
+  // FixedPointNode's constructor enforces that anchor and step output schemas
+  // are equivalent, so outputMapping_ (built from the anchor) stays valid.
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::recursiveRef(
+    const std::string& name,
+    const velox::RowTypePtr& outputType) {
+  VELOX_USER_CHECK_NULL(node_, "RecursiveRef must be a leaf node");
+  outputMapping_ = std::make_shared<NameMappings>();
+  const auto numColumns = outputType->size();
+  std::vector<std::string> outputNames;
+  outputNames.reserve(numColumns);
+  for (const auto& columnName : outputType->names()) {
+    outputNames.push_back(newName(columnName));
+    outputMapping_->add(columnName, outputNames.back());
+  }
+  node_ = std::make_shared<RecursiveReferenceNode>(
+      nextId(), name, ROW(std::move(outputNames), outputType->children()));
+  return *this;
+}
+
 } // namespace facebook::axiom::logical_plan
