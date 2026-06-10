@@ -59,11 +59,55 @@ jobs:
           CMAKE_POLICY_VERSION_MINIMUM: '3.5'
         run: |
           source velox/scripts/setup-macos.sh
+          # Match the SHARED build axiom configures with below. Without
+          # this, install_folly's conditional adds -DGFLAGS_SHARED=FALSE
+          # which statically embeds gflags into libfolly.a. Axiom then
+          # also links libgflags.dylib via libvelox.so, putting two
+          # copies of gflags in each test binary, which gflags detects
+          # at runtime: "ERROR: something wrong with flag 'flagfile'
+          # … linked both statically and dynamically".
+          export VELOX_BUILD_SHARED=ON
+          # Keep the NDEBUG state of every installed dep in lockstep
+          # with axiom's own build. cmake_install_dir doesn't pass
+          # CMAKE_BUILD_TYPE, so without this folly/fizz/wangle/etc.
+          # default to no-build-type (no -DNDEBUG, no -O). Axiom's
+          # release build defines NDEBUG → folly's F14 templates have
+          # different struct layouts between the prebuilt libfolly.dylib
+          # (no NDEBUG) and axiom's inline expansions (NDEBUG), which
+          # fires F14's chunk-tag audit at line 2380 of F14Table.h in
+          # rehashImpl. Debug builds match folly's default and pass;
+          # release builds need this. Modern cmake (>=3.22) reads the
+          # CMAKE_BUILD_TYPE env var when no -D override is passed.
+          if [ "$BUILD_TYPE" = "release" ]; then
+            export CMAKE_BUILD_TYPE=Release
+          else
+            export CMAKE_BUILD_TYPE=Debug
+          fi
           install_build_prerequisites
           install_velox_deps_from_brew
           install_gflags
           install_glog
           install_double_conversion
+          # FBThrift dep chain — required by velox/CMakeLists.txt's
+          # find_package(fizz | wangle | FBThrift CONFIG REQUIRED)
+          # block (introduced by velox#16019), hit whenever
+          # VELOX_ENABLE_PARQUET is on (always, for axiom). Each
+          # install builds against the previous, so order matters:
+          #   boost/fmt/ranges_v3 — folly's build deps
+          #   folly — fizz/wangle/mvfst/fbthrift's runtime dep
+          #   fizz/wangle/mvfst — fbthrift's runtime deps
+          # We do NOT call install_velox_deps wholesale: it pulls in
+          # install_arrow, which axiom doesn't install today (velox
+          # bundles arrow itself via VELOX_DEPENDENCY_SOURCE=AUTO)
+          # and arrow's macOS build has its own Boost::process issue.
+          install_ranges_v3
+          install_boost
+          install_fmt
+          install_folly
+          install_fizz
+          install_wangle
+          install_mvfst
+          install_fbthrift
 
           echo "NJOBS=$(sysctl -n hw.ncpu)" >> $GITHUB_ENV
           echo "$INSTALL_PREFIX/bin" >> $GITHUB_PATH
@@ -79,8 +123,26 @@ jobs:
       - name: Configure Build
         env:
           CMAKE_POLICY_VERSION_MINIMUM: '3.5'
-          fmt_SOURCE: BUNDLED
+          # Use the fmt we installed in setup (11.2.0) instead of having
+          # velox FetchContent fmt 9.0.0. With BUNDLED, the bundled fmt's
+          # add_library(fmt::fmt ALIAS …) collides with the fmt::fmt
+          # target that folly-config.cmake already pulls in when
+          # find_package(folly) loads our SYSTEM folly.
+          fmt_SOURCE: SYSTEM
         run: |
+          # CXX flags must match what velox's get_cxx_flags applied
+          # when building libfolly.dylib (which it always does on
+          # apple-m1+crc). Without these, axiom's release build
+          # inlines folly F14 templates with __ARM_FEATURE_CRC32
+          # undefined, taking the non-CRC hash path. libfolly's
+          # already-compiled code took the CRC path. The tag stored
+          # at insertion (CRC) and the tag recomputed at rehash
+          # (non-CRC, inlined into axiom) disagree, firing
+          # FOLLY_SAFE_CHECK at F14Table.h:2381 in rehashImpl.
+          # Debug doesn't inline so it goes through libfolly's
+          # CRC path consistently and passes; release inlines and
+          # mismatches.
+          EXTRA_CMAKE_CXX_FLAGS="-mcpu=apple-m1+crc"
           if [ "$BUILD_TYPE" = "release" ]; then
             ccache -sz -M 1Gi
           else
@@ -92,6 +154,7 @@ jobs:
           cmake \
               -B _build/$BUILD_TYPE \
               -GNinja \
+              -DCMAKE_CXX_FLAGS="$EXTRA_CMAKE_CXX_FLAGS" \
               -DCMAKE_PREFIX_PATH="$INSTALL_PREFIX;$(brew --prefix icu4c)" \
               -DVELOX_ENABLE_PARQUET=ON \
               -DVELOX_MONO_LIBRARY=ON \
