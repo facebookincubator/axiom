@@ -533,24 +533,6 @@ TEST_F(AggregationTest, groupingSetsOrderByWithGlobalSet) {
       "ORDER BY in aggregate functions is not supported with global grouping sets");
 }
 
-TEST_F(AggregationTest, groupingSetsDistinctAggregation) {
-  testConnector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
-  SCOPE_EXIT {
-    testConnector_->dropTableIfExists("t");
-  };
-
-  auto logicalPlan = lp::PlanBuilder(makeContext())
-                         .tableScan("t")
-                         .rollup({"a"}, {"count(DISTINCT b)"}, "gid")
-                         .build();
-
-  VELOX_ASSERT_THROW(
-      planVelox(
-          logicalPlan,
-          MultiFragmentPlan::Options{.numWorkers = 4, .numDrivers = 4}),
-      "DISTINCT aggregation with grouping sets is not supported yet");
-}
-
 // Literal-only aggregate args (count(1)) — aggregation inputs list passed to
 // GroupId should be empty since literals are not column references.
 TEST_F(AggregationTest, groupingSetsLiteralArgs) {

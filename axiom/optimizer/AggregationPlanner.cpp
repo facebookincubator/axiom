@@ -530,6 +530,36 @@ AggregationPlanner::makeSplitOrSingleAggregationPlan(
     QGVector<int32_t> globalGroupingSets,
     ColumnCP groupId,
     PlanState& state) const {
+  const bool requiresSingleStep =
+      std::any_of(aggregates.begin(), aggregates.end(), [](const auto* agg) {
+        return agg->isDistinct() || !agg->orderKeys().empty();
+      });
+
+  if (!globalGroupingSets.empty()) {
+    return makeSplitAggregationPlan(
+        plan,
+        groupingKeys,
+        aggregates,
+        intermediateColumns,
+        outputColumns,
+        std::move(globalGroupingSets),
+        groupId,
+        state);
+  }
+
+  if (requiresSingleStep) {
+    return makeSingleAggregationPlan(
+        plan,
+        groupingKeys,
+        aggregates,
+        intermediateColumns,
+        outputColumns,
+        /*globalGroupingSets=*/{},
+        groupId,
+        state);
+  }
+
+  // Otherwise pick the cheaper of split and single-step plans by cost.
   // Both alternatives may insert Repartitions via maybeRepartition, which
   // mutates state.currentGroupedLeaves_ via commitGroupedLeavesForRepartition.
   // Snapshot+restore around each alternative so the second one starts from
@@ -570,6 +600,44 @@ AggregationPlanner::makeSplitOrSingleAggregationPlan(
   return {std::move(splitAggPlan), splitAggCost};
 }
 
+std::pair<RelationOpPtr, PlanCost> AggregationPlanner::makeDistinctAggregation(
+    RelationOpPtr plan,
+    const ExprVector& groupingKeys,
+    const AggregateVector& aggregates,
+    AggregationPlanCP aggPlan,
+    QGVector<int32_t> globalGroupingSets,
+    ColumnCP groupId,
+    PlanState& state) const {
+  // When a groupId column is supplied, the caller must have already added it to
+  // groupingKeys.
+  VELOX_DCHECK(
+      groupId == nullptr ||
+          std::find(groupingKeys.begin(), groupingKeys.end(), groupId) !=
+              groupingKeys.end(),
+      "groupId must be one of the groupingKeys when present");
+
+  if (auto distinctArgs = getCommonDistinctArgs(aggregates)) {
+    return makeDistinctToGroupByPlan(
+        std::move(plan),
+        groupingKeys,
+        *distinctArgs,
+        aggregates,
+        aggPlan,
+        std::move(globalGroupingSets),
+        groupId,
+        state);
+  }
+
+  return makeDistinctToMarkDistinctPlan(
+      std::move(plan),
+      groupingKeys,
+      aggregates,
+      aggPlan,
+      std::move(globalGroupingSets),
+      groupId,
+      state);
+}
+
 std::pair<RelationOpPtr, PlanCost>
 AggregationPlanner::makeDistinctToGroupByPlan(
     RelationOpPtr plan,
@@ -577,7 +645,8 @@ AggregationPlanner::makeDistinctToGroupByPlan(
     const ExprVector& distinctArgs,
     const AggregateVector& aggregates,
     AggregationPlanCP aggPlan,
-    bool hasOrderBy,
+    QGVector<int32_t> globalGroupingSets,
+    ColumnCP groupId,
     PlanState& state) const {
   // Build inner GROUP BY keys: groupingKeys union distinctArgs. We put
   // groupingKeys at the beginning, followed by distinctArgs not appearing in
@@ -601,46 +670,36 @@ AggregationPlanner::makeDistinctToGroupByPlan(
   }
 
   PlanCost totalCost;
+  // Inner level deduplication only, so it does not apply grouping-set behavior;
+  // the groupId column (already in groupingKeys) acts as a plain grouping key.
   auto [innerAgg, innerAggCost] = makeSplitOrSingleAggregationPlan(
       plan,
       innerKeys,
       AggregateVector{},
       innerColumns,
       innerColumns,
-      {},
-      nullptr,
+      /*globalGroupingSets=*/{},
+      /*groupId=*/nullptr,
       state);
   totalCost.add(innerAggCost);
   plan = std::move(innerAgg);
 
-  // Make non-distinct aggregation calls for the outer level.
+  // Make non-distinct aggregation calls for the outer level. The outer
+  // aggregation is the result-producing node, so it carries grouping-set
+  // semantics.
   auto nonDistinctAggregates = dropDistinctFromAggregates(aggregates);
 
-  if (hasOrderBy) {
-    auto [outerPlan, outerCost] = makeSingleAggregationPlan(
-        plan,
-        groupingKeys,
-        nonDistinctAggregates,
-        aggPlan->intermediateColumns(),
-        aggPlan->columns(),
-        {},
-        nullptr,
-        state);
-    plan = std::move(outerPlan);
-    totalCost.add(outerCost);
-  } else {
-    auto [outerPlan, outerCost] = makeSplitOrSingleAggregationPlan(
-        plan,
-        groupingKeys,
-        nonDistinctAggregates,
-        aggPlan->intermediateColumns(),
-        aggPlan->columns(),
-        {},
-        nullptr,
-        state);
-    plan = std::move(outerPlan);
-    totalCost.add(outerCost);
-  }
+  auto [outerPlan, outerCost] = makeSplitOrSingleAggregationPlan(
+      plan,
+      groupingKeys,
+      nonDistinctAggregates,
+      aggPlan->intermediateColumns(),
+      aggPlan->columns(),
+      std::move(globalGroupingSets),
+      groupId,
+      state);
+  plan = std::move(outerPlan);
+  totalCost.add(outerCost);
 
   return {plan, totalCost};
 }
@@ -651,7 +710,8 @@ AggregationPlanner::makeDistinctToMarkDistinctPlan(
     const ExprVector& groupingKeys,
     const AggregateVector& aggregates,
     AggregationPlanCP aggPlan,
-    bool hasOrderBy,
+    QGVector<int32_t> globalGroupingSets,
+    ColumnCP groupId,
     PlanState& state) const {
   auto [markedPlan, newAggregates, markCost] = addMarkDistinctNodes(
       std::move(plan), groupingKeys, aggregates, isSingleWorker_, state);
@@ -659,38 +719,17 @@ AggregationPlanner::makeDistinctToMarkDistinctPlan(
   PlanCost totalCost;
   totalCost.add(markCost);
 
-  // Use single-step aggregation if any aggregate has ORDER BY or if any
-  // aggregate still has isDistinct. Partial aggregation does not support
-  // DISTINCT or ORDER BY.
-  const auto hasRemainingDistinct = std::any_of(
-      newAggregates.begin(), newAggregates.end(), [](const auto* agg) {
-        return agg->isDistinct();
-      });
-  if (hasOrderBy || hasRemainingDistinct) {
-    const auto& [aggregation, aggCost] = makeSingleAggregationPlan(
-        markedPlan,
-        groupingKeys,
-        newAggregates,
-        aggPlan->intermediateColumns(),
-        aggPlan->columns(),
-        {},
-        nullptr,
-        state);
-    totalCost.add(aggCost);
-    return {aggregation, totalCost};
-  }
-
-  const auto& [aggregation, aggCost] = makeSplitOrSingleAggregationPlan(
+  auto [aggregation, aggCost] = makeSplitOrSingleAggregationPlan(
       markedPlan,
       groupingKeys,
       newAggregates,
       aggPlan->intermediateColumns(),
       aggPlan->columns(),
-      {},
-      nullptr,
+      std::move(globalGroupingSets),
+      groupId,
       state);
   totalCost.add(aggCost);
-  return {aggregation, totalCost};
+  return {std::move(aggregation), totalCost};
 }
 
 AggregationPlanner::AggregationPlanner(
@@ -726,9 +765,12 @@ void AggregationPlanner::addGroupingSetsAggregation(
     RelationOpPtr& plan,
     const ExprVector& groupingKeys,
     const AggregateVector& aggregates,
-    PlanState& state,
-    bool useSingleStep,
-    bool hasOrderBy) const {
+    PlanState& state) const {
+  const auto hasOrderBy =
+      std::any_of(aggregates.begin(), aggregates.end(), [](const auto& agg) {
+        return !agg->orderKeys().empty();
+      });
+
   auto* groupIdNode = makeGroupIdNode(plan, aggPlan, groupingKeys, aggregates);
   state.addCost(*groupIdNode);
   plan = groupIdNode;
@@ -758,7 +800,7 @@ void AggregationPlanner::addGroupingSetsAggregation(
       !hasOrderBy || globalGroupingSets.empty(),
       "ORDER BY in aggregate functions is not supported with global grouping sets (ROLLUP, CUBE, or GROUPING SETS containing ())");
 
-  if (useSingleStep || hasOrderBy) {
+  if (isSingleWorker_ && isSingleDriver_) {
     auto [agg, cost] = makeSingleAggregationPlan(
         plan,
         aggGroupingKeys,
@@ -773,16 +815,16 @@ void AggregationPlanner::addGroupingSetsAggregation(
     return;
   }
 
-  // TODO: Remove forced split once Velox handles global grouping sets
-  // in kSingle without spurious default rows from empty partitions.
-  // https://github.com/facebookincubator/velox/issues/17312
-  if (alwaysPlanPartialAggregation_ || !globalGroupingSets.empty()) {
-    auto [agg, cost] = makeSplitAggregationPlan(
+  const auto hasDistinct =
+      std::any_of(aggregates.begin(), aggregates.end(), [](const auto* agg) {
+        return agg->isDistinct();
+      });
+  if (hasDistinct) {
+    auto [agg, cost] = makeDistinctAggregation(
         plan,
         aggGroupingKeys,
         aggregates,
-        aggPlan->intermediateColumns(),
-        aggPlan->columns(),
+        aggPlan,
         std::move(globalGroupingSets),
         aggGroupId,
         state);
@@ -797,8 +839,8 @@ void AggregationPlanner::addGroupingSetsAggregation(
       aggregates,
       aggPlan->intermediateColumns(),
       aggPlan->columns(),
-      {},
-      nullptr,
+      std::move(globalGroupingSets),
+      aggGroupId,
       state);
   state.cost.add(cost);
   plan = std::move(agg);
@@ -829,8 +871,6 @@ void AggregationPlanner::plan(
   plan = std::move(precompute).maybeProject();
   state.place(aggPlan);
 
-  const bool useSingleStep = isSingleWorker_ && isSingleDriver_;
-
   // ORDER BY aggregates force single-step because partial aggregation cannot
   // preserve ORDER BY semantics.
   const auto hasOrderBy =
@@ -844,24 +884,12 @@ void AggregationPlanner::plan(
       });
 
   if (aggPlan->hasGroupingSets()) {
-    // TODO: Support DISTINCT aggregation with grouping sets. Requires
-    // integrating transformDistinctToGroupBy with GroupId.
-    VELOX_USER_CHECK(
-        !hasDistinct,
-        "DISTINCT aggregation with grouping sets is not supported yet");
-    addGroupingSetsAggregation(
-        aggPlan,
-        plan,
-        groupingKeys,
-        aggregates,
-        state,
-        useSingleStep,
-        hasOrderBy);
+    addGroupingSetsAggregation(aggPlan, plan, groupingKeys, aggregates, state);
     return;
   }
 
   auto preGroupedKeys = computePreGroupedKeys(*plan, groupingKeys);
-  if (useSingleStep || !preGroupedKeys.empty()) {
+  if ((isSingleWorker_ && isSingleDriver_) || !preGroupedKeys.empty()) {
     auto* singleAgg = make<Aggregation>(
         plan,
         std::move(groupingKeys),
@@ -889,42 +917,16 @@ void AggregationPlanner::plan(
   }
 
   if (hasDistinct) {
-    auto distinctArgs = getCommonDistinctArgs(aggregates);
-    if (distinctArgs.has_value()) {
-      auto [result, cost] = makeDistinctToGroupByPlan(
-          plan,
-          groupingKeys,
-          *distinctArgs,
-          aggregates,
-          aggPlan,
-          hasOrderBy,
-          state);
-      plan = std::move(result);
-      state.cost.add(cost);
-      return;
-    }
-
-    auto [result, cost] = makeDistinctToMarkDistinctPlan(
-        plan, groupingKeys, aggregates, aggPlan, hasOrderBy, state);
-    plan = std::move(result);
-    state.cost.add(cost);
-    return;
-  }
-
-  // Check if any aggregate has ORDER BY keys. If so, we must use single-step
-  // aggregation because partial aggregation cannot preserve global ordering.
-  if (hasOrderBy) {
-    const auto& [singleAgg, singleAggCost] = makeSingleAggregationPlan(
+    auto [result, cost] = makeDistinctAggregation(
         plan,
         groupingKeys,
         aggregates,
-        aggPlan->intermediateColumns(),
-        aggPlan->columns(),
-        {},
-        nullptr,
+        aggPlan,
+        /*globalGroupingSets=*/{},
+        /*groupId=*/nullptr,
         state);
-    plan = singleAgg;
-    state.cost.add(singleAggCost);
+    plan = std::move(result);
+    state.cost.add(cost);
     return;
   }
 
@@ -934,8 +936,8 @@ void AggregationPlanner::plan(
       aggregates,
       aggPlan->intermediateColumns(),
       aggPlan->columns(),
-      {},
-      nullptr,
+      /*globalGroupingSets=*/{},
+      /*groupId=*/nullptr,
       state);
   plan = selectedPlan;
   state.cost.add(selectedCost);

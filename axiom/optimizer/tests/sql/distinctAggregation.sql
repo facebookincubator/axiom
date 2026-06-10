@@ -119,3 +119,15 @@ SELECT count(DISTINCT c), count(DISTINCT 1) FROM t
 ----
 -- DISTINCT: the first MarkDistinct key is a subset of the second, hence no shuffle between multiple MarkDistincts.
 SELECT a, count(DISTINCT b), covar_pop(DISTINCT b, c) FROM t GROUP BY a
+----
+-- DISTINCT: single argument set with ROLLUP.
+SELECT b, count(DISTINCT a) FROM t GROUP BY ROLLUP(b)
+----
+-- DISTINCT: multiple argument sets with ROLLUP.
+SELECT a, count(DISTINCT b), count(DISTINCT c) FROM t GROUP BY ROLLUP(a)
+----
+-- DISTINCT: GROUPING SETS without a global set.
+SELECT a, b, count(DISTINCT c) FROM t GROUP BY GROUPING SETS ((a), (b))
+----
+-- DISTINCT: ORDER BY with GROUPING SETS, without a global set.
+SELECT a, b, array_agg(DISTINCT c ORDER BY c) FROM t GROUP BY GROUPING SETS ((a), (b))
