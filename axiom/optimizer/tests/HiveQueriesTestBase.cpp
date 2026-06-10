@@ -89,7 +89,7 @@ void HiveQueriesTestBase::setupHiveConnector() {
   std::unordered_map<std::string, std::string> configs;
   configs[connector::hive::HiveMetadataConfig::kLocalDataPath] = localDataPath_;
   configs[connector::hive::HiveMetadataConfig::kLocalFileFormat] =
-      velox::dwio::common::toString(localFileFormat_);
+      velox::dwio::common::FileFormatName::toName(localFileFormat_);
   configs.insert(hiveConfig_.begin(), hiveConfig_.end());
 
   resetHiveConnector(
