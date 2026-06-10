@@ -750,6 +750,22 @@ class PlanBuilder {
     return node_;
   }
 
+  /// Wraps the current plan (treated as the anchor) and the provided step
+  /// plan in a FixedPointNode named `name`. The step must contain at least
+  /// one RecursiveReferenceNode named `name`, and anchor and step must
+  /// produce equivalent schemas.
+  PlanBuilder& fixedPoint(
+      const std::string& name,
+      const LogicalPlanNodePtr& step);
+
+  /// Creates a RecursiveReferenceNode leaf with the given output type,
+  /// referencing the enclosing FixedPointNode named `name`. Must be the
+  /// first call on a fresh builder. Each call produces a fresh node id so
+  /// multiple references within a step body compare as distinct.
+  PlanBuilder& recursiveRef(
+      const std::string& name,
+      const velox::RowTypePtr& outputType);
+
   /// Builds the plan using user-specified names for output columns.
   /// When allowAmbiguousOutputNames is true, creates an OutputNode at the root
   /// that supports duplicate and empty names. Otherwise, creates a ProjectNode
