@@ -3230,10 +3230,18 @@ void Optimization::makeJoins(PlanState& state) {
   PlanObjectVector firstTables;
 
   if (options().syntacticJoinOrder) {
-    const auto firstTableId = state.dt->joinOrder[0];
-    VELOX_CHECK(state.dt->startTables.BitSet::contains(firstTableId));
+    // Single-row derived tables keep their syntactic position but are not valid
+    // starting tables. They are appended after the driving table as cross
+    // products.
+    const auto firstStartTableIt =
+        std::ranges::find_if(state.dt->joinOrder, [&](int32_t tableId) {
+          return state.dt->startTables.BitSet::contains(tableId);
+        });
+    VELOX_CHECK(
+        firstStartTableIt != state.dt->joinOrder.end(),
+        "Syntactic join order has no start table");
 
-    firstTables.push_back(queryCtx()->objectAt(firstTableId));
+    firstTables.push_back(queryCtx()->objectAt(*firstStartTableIt));
   } else {
     firstTables = state.dt->startTables.toObjects();
 

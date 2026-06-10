@@ -295,6 +295,38 @@ TEST_F(SyntacticJoinOrderTest, outerJoins) {
   }
 }
 
+TEST_F(SyntacticJoinOrderTest, crossJoinStartsWithSingleRowSubqueries) {
+  optimizerOptions_.sampleJoins = false;
+
+  auto logicalPlan = parseSelect(
+      "WITH "
+      "t AS (SELECT count(*) AS c FROM orders), "
+      "u AS (SELECT count(*) AS c FROM lineitem), "
+      "v AS (SELECT o_orderstatus, count(*) AS s FROM orders GROUP BY o_orderstatus) "
+      "SELECT t.c, u.c, v.s FROM t, u, v");
+
+  optimizerOptions_.syntacticJoinOrder = false;
+  auto referenceResults = runVelox(logicalPlan).results;
+
+  optimizerOptions_.syntacticJoinOrder = true;
+  auto plan = toSingleNodePlan(logicalPlan);
+  auto matcher =
+      matchHiveScan("orders")
+          .aliases({"status"})
+          .singleAggregation({"status"}, {"count(*) as s"})
+          .project()
+          .nestedLoopJoin(matchHiveScan("orders")
+                              .singleAggregation({}, {"count(*) as c"})
+                              .build())
+          .nestedLoopJoin(matchHiveScan("lineitem")
+                              .singleAggregation({}, {"count(*) as c"})
+                              .build())
+          .project()
+          .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+  checkSame(logicalPlan, referenceResults);
+}
+
 // 12-way inner-join chain. Without the per-step restriction that keeps
 // the optimizer on the SQL-written order, the recursion enumerates
 // candidates and strategies at every level and the optimization does
