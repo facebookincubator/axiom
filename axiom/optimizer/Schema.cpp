@@ -339,22 +339,25 @@ ColumnCP IndexInfo::schemaColumn(ColumnCP keyValue) const {
   return nullptr;
 }
 
-bool Distribution::isSamePartition(const DesiredDistribution& other) const {
-  if (partitionType() != other.partitionType) {
+namespace {
+// Returns true if 'lhs' and 'rhs' have equal length and are pairwise
+// sameOrEqual.
+bool keysEquivalent(const ExprVector& lhs, const ExprVector& rhs) {
+  if (lhs.size() != rhs.size()) {
     return false;
   }
-
-  if (partitionKeys().size() != other.partitionKeys.size()) {
-    return false;
-  }
-
-  for (auto i = 0; i < partitionKeys().size(); ++i) {
-    if (!partitionKeys()[i]->sameOrEqual(*other.partitionKeys[i])) {
+  for (size_t i = 0; i < lhs.size(); ++i) {
+    if (!lhs[i]->sameOrEqual(*rhs[i])) {
       return false;
     }
   }
-
   return true;
+}
+} // namespace
+
+bool Distribution::isSamePartition(const DesiredDistribution& other) const {
+  return partitionType() == other.partitionType &&
+      keysEquivalent(partitionKeys(), other.partitionKeys);
 }
 
 bool Distribution::isCopartitionedWith(const DesiredDistribution& other) const {
@@ -366,21 +369,8 @@ bool Distribution::isCopartitionedWith(const DesiredDistribution& other) const {
     }
   }
 
-  if (partitionKeys().size() != other.partitionKeys.size()) {
-    return false;
-  }
-
-  if (partitionKeys().empty()) {
-    return false;
-  }
-
-  for (auto i = 0; i < partitionKeys().size(); ++i) {
-    if (!partitionKeys()[i]->sameOrEqual(*other.partitionKeys[i])) {
-      return false;
-    }
-  }
-
-  return true;
+  return !partitionKeys().empty() &&
+      keysEquivalent(partitionKeys(), other.partitionKeys);
 }
 
 bool Distribution::isSamePartition(const Distribution& other) const {
@@ -392,33 +382,14 @@ bool Distribution::isSamePartition(const Distribution& other) const {
     // Both are trivially co-partitioned with themselves.
     return true;
   }
-  if (partitionKeys().size() != other.partitionKeys().size()) {
-    return false;
-  }
-  if (partitionKeys().empty()) {
-    // If the partitioning columns are not in the columns or if there
-    // are no partitioning columns, there can be  no copartitioning.
-    return false;
-  }
-  for (auto i = 0; i < partitionKeys().size(); ++i) {
-    if (!partitionKeys()[i]->sameOrEqual(*other.partitionKeys()[i])) {
-      return false;
-    }
-  }
-  return true;
+  // No partition keys means there is nothing to co-partition on.
+  return !partitionKeys().empty() &&
+      keysEquivalent(partitionKeys(), other.partitionKeys());
 }
 
 bool Distribution::isSameOrder(const Distribution& other) const {
-  if (orderKeys().size() != other.orderKeys().size()) {
-    return false;
-  }
-  for (size_t i = 0; i < orderKeys().size(); ++i) {
-    if (!orderKeys()[i]->sameOrEqual(*other.orderKeys()[i]) ||
-        orderTypes()[i] != other.orderTypes()[i]) {
-      return false;
-    }
-  }
-  return true;
+  return keysEquivalent(orderKeys(), other.orderKeys()) &&
+      orderTypes() == other.orderTypes();
 }
 
 namespace {
