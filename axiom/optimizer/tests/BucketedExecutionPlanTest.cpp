@@ -598,6 +598,85 @@ TEST_F(BucketedExecutionTest, threeWayCoBucketed) {
   EXPECT_TRUE(found);
 }
 
+// A chain of inner joins on a shared bucket key fuses into one bucketed
+// fragment: all three scans local, no remote hash exchange.
+TEST_F(BucketedExecutionTest, innerJoinChainFuses) {
+  addBucketedTable("t", {"k"}, 16, ROW({"k"}, BIGINT()));
+  addBucketedTable("u", {"k"}, 16, ROW({"k"}, BIGINT()));
+  addBucketedTable("v", {"k"}, 16, ROW({"k"}, BIGINT()));
+
+  // Both syntactic and reordered join orderings fuse into one bucketed
+  // fragment.
+  const std::string sql =
+      "SELECT t.k FROM t, "
+      "(SELECT v.k FROM u, v WHERE u.k = v.k) sub "
+      "WHERE t.k = sub.k";
+
+  optimizerOptions_.syntacticJoinOrder = true;
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      planDistributed(parseSelect(sql, kTestConnectorId)).plan,
+      matchScan("t")
+          .hashJoin(
+              matchScan("u")
+                  .hashJoin(matchScan("v").build(), core::JoinType::kInner)
+                  .build(),
+              core::JoinType::kInner)
+          .bucketed()
+          .bucketedScans(3)
+          .fragmentWidth(4)
+          .gather()
+          .build());
+
+  optimizerOptions_.syntacticJoinOrder = false;
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      planDistributed(parseSelect(sql, kTestConnectorId)).plan,
+      matchScan("u")
+          .hashJoin(matchScan("v").build(), core::JoinType::kInner)
+          .hashJoin(matchScan("t").build(), core::JoinType::kInner)
+          .bucketed()
+          .bucketedScans(3)
+          .fragmentWidth(4)
+          .gather()
+          .build());
+}
+
+// Same shape with a LEFT join: no equivalence forms, so the chain stays split
+// with a remote hash exchange. Regression guard for if outer joins ever start
+// forming equivalences.
+TEST_F(BucketedExecutionTest, leftJoinChainDoesNotFuse) {
+  addBucketedTable("t", {"k"}, 16, ROW({"k"}, BIGINT()));
+  addBucketedTable("u", {"k"}, 16, ROW({"k"}, BIGINT()));
+  addBucketedTable("v", {"k"}, 16, ROW({"k"}, BIGINT()));
+
+  const std::string sql =
+      "SELECT t.k FROM t, "
+      "(SELECT v.k FROM u LEFT JOIN v ON u.k = v.k) sub "
+      "WHERE t.k = sub.k";
+
+  optimizerOptions_.syntacticJoinOrder = true;
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      planDistributed(parseSelect(sql, kTestConnectorId)).plan,
+      matchScan("t")
+          .hashJoin(
+              matchScan("u")
+                  .hashJoin(matchScan("v").build(), core::JoinType::kLeft)
+                  .shuffle()
+                  .build(),
+              core::JoinType::kInner)
+          .gather()
+          .build());
+
+  optimizerOptions_.syntacticJoinOrder = false;
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      planDistributed(parseSelect(sql, kTestConnectorId)).plan,
+      matchScan("u")
+          .hashJoin(matchScan("v").build(), core::JoinType::kLeft)
+          .shuffle()
+          .hashJoin(matchScan("t").build(), core::JoinType::kInner)
+          .gather()
+          .build());
+}
+
 TEST_F(BucketedExecutionTest, bucketedAggThenBucketedJoin) {
   addBucketedTable("ab_orders", {"customer_id"}, 16);
   addBucketedTable(

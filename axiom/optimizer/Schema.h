@@ -273,6 +273,14 @@ struct Distribution {
     return clusterKeys_;
   }
 
+  /// Re-expresses this distribution's keys over a projection's output. 'exprs'
+  /// and 'names' are parallel arrays: a key matching 'exprs[i]' (by
+  /// sameOrEqual, value-equivalence) is re-pointed to 'names[i]'. Per property:
+  ///   - partition keys survive all-or-nothing,
+  ///   - order keys survive as the leading prefix with a surviving equivalent,
+  ///   - cluster keys survive individually.
+  /// numKeysUnique carries through only if the whole unique order prefix
+  /// survives, else resets to 0.
   Distribution rename(const ExprVector& exprs, const ColumnVector& names) const;
 
   std::string toString() const;
