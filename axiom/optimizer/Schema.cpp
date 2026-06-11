@@ -421,42 +421,70 @@ bool Distribution::isSameOrder(const Distribution& other) const {
   return true;
 }
 
+namespace {
+
+// Returns the lowest index 'i' such that 'key' is sameOrEqual to 'exprs[i]', or
+// nullopt if none.
+std::optional<size_t> findEquivalentIndex(ExprCP key, const ExprVector& exprs) {
+  for (size_t i = 0; i < exprs.size(); ++i) {
+    if (key->sameOrEqual(*exprs[i])) {
+      return i;
+    }
+  }
+  return std::nullopt;
+}
+
+} // namespace
+
 Distribution Distribution::rename(
     const ExprVector& exprs,
     const ColumnVector& names) const {
-  // Broadcast and arbitrary describe the kind of exchange a Repartition emits
-  // and are not inherited by downstream operators (rename produces a
-  // Distribution for a non-Repartition consumer).
+  VELOX_DCHECK_EQ(exprs.size(), names.size());
+
+  // Broadcast and arbitrary are exchange kinds, not properties a downstream
+  // consumer inherits.
   if (isBroadcast() || isArbitrary()) {
     return Distribution{};
   }
 
-  // Partitioning survives projection if all partitioning columns are projected
-  // out.
-  ExprVector partitionKeys = partitionKeys_;
-  if (!replace(partitionKeys, exprs, names)) {
-    partitionKeys.clear();
+  // Each key is remapped onto any output column it is value-equal to, not only
+  // the identical column. This is safe because column equivalences come only
+  // from inner-join equalities (see Column::equals): an equi-equal column holds
+  // the same value on every row, so the distribution property is preserved.
+  ExprVector partitionKeys;
+  partitionKeys.reserve(partitionKeys_.size());
+  for (const auto& key : partitionKeys_) {
+    auto index = findEquivalentIndex(key, exprs);
+    if (!index.has_value()) {
+      partitionKeys.clear();
+      break;
+    }
+    partitionKeys.push_back(names[*index]);
   }
 
-  // Ordering survives if a prefix of the previous order continues to be
-  // projected out.
-  ExprVector orderKeys = orderKeys_;
-  OrderTypeVector orderTypes = orderTypes_;
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
+  for (size_t i = 0; i < orderKeys_.size(); ++i) {
+    auto index = findEquivalentIndex(orderKeys_[i], exprs);
+    if (!index.has_value()) {
+      break;
+    }
+    orderKeys.push_back(names[*index]);
+    orderTypes.push_back(orderTypes_[i]);
+  }
 
-  const auto newOrderSize = prefixSize(orderKeys_, exprs);
-  orderKeys.resize(newOrderSize);
-  orderTypes.resize(newOrderSize);
-  replace(orderKeys, exprs, names);
-  VELOX_DCHECK_EQ(orderKeys.size(), orderTypes.size());
-
-  // Clustering survives for any cluster keys that continue to be projected out.
   ExprVector clusterKeys;
+  clusterKeys.reserve(clusterKeys_.size());
   for (const auto& key : clusterKeys_) {
-    auto it = std::find(exprs.begin(), exprs.end(), key);
-    if (it != exprs.end()) {
-      clusterKeys.push_back(names[it - exprs.begin()]);
+    auto index = findEquivalentIndex(key, exprs);
+    if (index.has_value()) {
+      clusterKeys.push_back(names[*index]);
     }
   }
+
+  const auto numKeysUnique =
+      orderKeys.size() >= static_cast<size_t>(numKeysUnique_) ? numKeysUnique_
+                                                              : 0;
 
   return Distribution(
       kind_,
@@ -464,7 +492,7 @@ Distribution Distribution::rename(
       std::move(partitionKeys),
       std::move(orderKeys),
       std::move(orderTypes),
-      numKeysUnique_,
+      numKeysUnique,
       std::move(clusterKeys));
 }
 

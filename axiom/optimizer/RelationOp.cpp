@@ -195,36 +195,13 @@ Distribution TableScan::outputDistribution(
     const BaseTable* baseTable,
     ColumnGroupCP index,
     const ColumnVector& columns) {
-  auto schemaColumns = transform<ColumnVector>(
+  // Re-express the index's distribution over the scan's output columns. At scan
+  // time no equivalence classes exist, so rename matches schema columns to
+  // output columns by identity.
+  auto schemaColumns = transform<ExprVector>(
       columns, [](auto& column) { return column->schemaColumn(); });
 
-  const auto& distribution = index->distribution;
-
-  ExprVector partitionKeys;
-  ExprVector orderKeys;
-  OrderTypeVector orderTypes;
-  // if all partitioning columns are projected, the output is partitioned.
-  if (isSubset(distribution.partitionKeys(), schemaColumns)) {
-    partitionKeys = distribution.partitionKeys();
-    replace(partitionKeys, schemaColumns, columns.data());
-  }
-
-  auto numPrefix = prefixSize(distribution.orderKeys(), schemaColumns);
-  if (numPrefix > 0) {
-    orderKeys = distribution.orderKeys();
-    orderKeys.resize(numPrefix);
-    orderTypes = distribution.orderTypes();
-    orderTypes.resize(numPrefix);
-    replace(orderKeys, schemaColumns, columns.data());
-  }
-
-  return Distribution(
-      distribution.partitionType(),
-      std::move(partitionKeys),
-      std::move(orderKeys),
-      std::move(orderTypes),
-      distribution.numKeysUnique() <= numPrefix ? distribution.numKeysUnique()
-                                                : 0);
+  return index->distribution.rename(schemaColumns, columns);
 }
 
 std::string Cost::toString(bool /*detail*/, bool isUnit) const {

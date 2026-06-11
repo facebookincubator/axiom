@@ -23,44 +23,6 @@
 namespace facebook::axiom::optimizer {
 
 template <typename T, typename U>
-bool isSubset(const T& subset, const U& superset) {
-  for (auto item : subset) {
-    if (std::find(superset.begin(), superset.end(), item) == superset.end()) {
-      return false;
-    }
-  }
-  return true;
-}
-
-// Returns how many leading members of 'ordered' are covered by 'set'
-template <typename Ordered, typename Set>
-uint32_t prefixSize(Ordered ordered, Set set) {
-  for (auto i = 0; i < ordered.size(); ++i) {
-    if (std::find(set.begin(), set.end(), ordered[i]) == set.end()) {
-      return i;
-    }
-  }
-  return ordered.size();
-}
-
-// Replaces each element of 'set' that matches an element of 'originals' with
-// the corresponding element of 'replaceWith'. Returns true if all elements were
-// replaced.
-template <typename Set, typename Old, typename New>
-bool replace(Set& set, Old& originals, New replaceWith) {
-  bool allReplaced = true;
-  for (auto& element : set) {
-    auto it = std::find(originals.begin(), originals.end(), element);
-    if (it == originals.end()) {
-      allReplaced = false;
-      continue;
-    }
-    element = replaceWith[it - originals.begin()];
-  }
-  return allReplaced;
-}
-
-template <typename T, typename U>
 void appendToVector(T& destination, U& source) {
   for (auto i : source) {
     destination.push_back(i);
