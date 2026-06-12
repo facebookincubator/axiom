@@ -758,13 +758,13 @@ class PlanBuilder {
       const std::string& name,
       const LogicalPlanNodePtr& step);
 
-  /// Creates a RecursiveReferenceNode leaf with the given output type,
-  /// referencing the enclosing FixedPointNode named `name`. Must be the
-  /// first call on a fresh builder. Each call produces a fresh node id so
-  /// multiple references within a step body compare as distinct.
-  PlanBuilder& recursiveRef(
-      const std::string& name,
-      const velox::RowTypePtr& outputType);
+  /// Creates a RecursiveReferenceNode leaf referencing the enclosing
+  /// FixedPointNode named `name`. Schema and name resolution mirror
+  /// `anchor` -- step-body lookups like `r.x` resolve through a clone of
+  /// the anchor's NameMappings, with each column id reallocated so
+  /// multiple references within a step body compare as distinct. Must be
+  /// the first call on a fresh builder.
+  PlanBuilder& recursiveRef(const std::string& name, const PlanBuilder& anchor);
 
   /// Builds the plan using user-specified names for output columns.
   /// When allowAmbiguousOutputNames is true, creates an OutputNode at the root

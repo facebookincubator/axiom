@@ -369,12 +369,6 @@ TEST_F(PrestoParserTest, withReferencedMultipleTimes) {
       matcher);
 }
 
-TEST_F(PrestoParserTest, withRecursiveNotSupported) {
-  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
-      parseSql("WITH RECURSIVE t AS (SELECT 1 AS x) SELECT * FROM t"),
-      "WITH RECURSIVE is not supported");
-}
-
 TEST_F(PrestoParserTest, join) {
   {
     auto matcher = matchScan()

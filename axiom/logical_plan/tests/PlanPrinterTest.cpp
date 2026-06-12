@@ -1597,29 +1597,24 @@ TEST_F(PlanPrinterTest, fixedPointCounter) {
   auto rowType = ROW("n", BIGINT());
   PlanBuilder::Context context;
 
+  auto anchor = PlanBuilder(context).values(
+      rowType, std::vector<Variant>{Variant::row({1LL})});
+
   auto step = PlanBuilder(context)
-                  .recursiveRef("t", rowType)
+                  .recursiveRef("t", anchor)
                   .project({"n + 1 as n"})
                   .planNode();
 
-  auto plan = PlanBuilder(context)
-                  .values(rowType, std::vector<Variant>{Variant::row({1LL})})
-                  .fixedPoint("t", step)
-                  .build();
+  auto plan = anchor.fixedPoint("t", step).build();
 
-  // PlanBuilder uniques column names; build() adds a renaming Project on top
-  // to expose the user-facing 'n'. The interesting structure is the FixedPoint
-  // subtree.
   EXPECT_THAT(
       toLines(plan),
       testing::ElementsAre(
-          testing::StartsWith("- Project:"),
-          testing::HasSubstr("n := "),
-          testing::StartsWith("  - FixedPoint(name=t):"),
-          testing::StartsWith("    - Values:"),
-          testing::StartsWith("    - Project:"),
+          testing::StartsWith("- FixedPoint(name=t):"),
+          testing::StartsWith("  - Values:"),
+          testing::StartsWith("  - Project:"),
           testing::HasSubstr(":= plus("),
-          testing::StartsWith("      - RecursiveReference: name=t"),
+          testing::StartsWith("    - RecursiveReference: name=t"),
           testing::Eq("")));
 }
 
@@ -1634,33 +1629,31 @@ TEST_F(PlanPrinterTest, fixedPointSelfJoin) {
   auto rowType = ROW("n", BIGINT());
   PlanBuilder::Context context;
 
+  auto anchor = PlanBuilder(context).values(
+      rowType, std::vector<Variant>{Variant::row({1LL})});
+
   auto right = PlanBuilder(context, /*allowAmbiguousOutputNames=*/true)
-                   .recursiveRef("r", rowType)
+                   .recursiveRef("r", anchor)
                    .as("r2");
   auto step = PlanBuilder(context, /*allowAmbiguousOutputNames=*/true)
-                  .recursiveRef("r", rowType)
+                  .recursiveRef("r", anchor)
                   .as("r1")
                   .join(right, "r1.n = r2.n", JoinType::kInner)
                   .project({"r1.n as n"})
                   .planNode();
 
-  auto plan = PlanBuilder(context)
-                  .values(rowType, std::vector<Variant>{Variant::row({1LL})})
-                  .fixedPoint("r", step)
-                  .build();
+  auto plan = anchor.fixedPoint("r", step).build();
 
   EXPECT_THAT(
       toLines(plan),
       testing::ElementsAre(
-          testing::StartsWith("- Project:"),
-          testing::HasSubstr("n := "),
-          testing::StartsWith("  - FixedPoint(name=r):"),
-          testing::StartsWith("    - Values:"),
-          testing::StartsWith("    - Project:"),
+          testing::StartsWith("- FixedPoint(name=r):"),
+          testing::StartsWith("  - Values:"),
+          testing::StartsWith("  - Project:"),
           testing::HasSubstr(":= "),
-          testing::StartsWith("      - Join INNER:"),
-          testing::StartsWith("        - RecursiveReference: name=r"),
-          testing::StartsWith("        - RecursiveReference: name=r"),
+          testing::StartsWith("    - Join INNER:"),
+          testing::StartsWith("      - RecursiveReference: name=r"),
+          testing::StartsWith("      - RecursiveReference: name=r"),
           testing::Eq("")));
 }
 

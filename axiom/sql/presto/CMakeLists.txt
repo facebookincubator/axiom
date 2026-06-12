@@ -27,6 +27,7 @@ add_library(
   ExpressionPlanner.cpp
   GroupByPlanner.cpp
   ParserOptions.cpp
+  RecursiveCteValidator.cpp
   SortProjection.cpp
   PrestoParser.cpp
   ShowStatsBuilder.cpp

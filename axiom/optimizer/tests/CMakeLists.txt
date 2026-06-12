@@ -112,6 +112,7 @@ add_executable(
   ExistencePushdownTest.cpp
   FilterPushdownTest.cpp
   FiltersTest.cpp
+  FixedPointTest.cpp
   HiveAggregationQueriesTest.cpp
   HiveLimitQueriesTest.cpp
   HiveQueriesTest.cpp

@@ -2095,18 +2095,33 @@ PlanBuilder& PlanBuilder::fixedPoint(
 
 PlanBuilder& PlanBuilder::recursiveRef(
     const std::string& name,
-    const velox::RowTypePtr& outputType) {
+    const PlanBuilder& anchor) {
   VELOX_USER_CHECK_NULL(node_, "RecursiveRef must be a leaf node");
+  VELOX_USER_CHECK_NOT_NULL(
+      anchor.node_, "Anchor plan must be set before calling recursiveRef");
+  const auto& anchorType = anchor.node_->outputType();
+  const auto& anchorMapping = *anchor.outputMapping_;
+  // Rebuild the anchor's mappings under fresh ids so each recursive reference
+  // site has distinct column ids -- two refs joined side by side
+  // (e.g. `r r1 JOIN r r2`) must not collide on shared anchor ids.
   outputMapping_ = std::make_shared<NameMappings>();
-  const auto numColumns = outputType->size();
+  const auto numColumns = anchorType->size();
   std::vector<std::string> outputNames;
   outputNames.reserve(numColumns);
-  for (const auto& columnName : outputType->names()) {
-    outputNames.push_back(newName(columnName));
-    outputMapping_->add(columnName, outputNames.back());
+  for (size_t i = 0; i < numColumns; ++i) {
+    const auto& oldId = anchorType->nameOf(i);
+    auto newId = newName(oldId);
+    for (const auto& qualified : anchorMapping.reverseLookup(oldId)) {
+      outputMapping_->add(qualified, newId);
+    }
+    if (anchorMapping.isHidden(oldId)) {
+      outputMapping_->markHidden(newId);
+    }
+    outputMapping_->copyUserName(newId, anchorMapping);
+    outputNames.push_back(std::move(newId));
   }
   node_ = std::make_shared<RecursiveReferenceNode>(
-      nextId(), name, ROW(std::move(outputNames), outputType->children()));
+      nextId(), name, ROW(std::move(outputNames), anchorType->children()));
   return *this;
 }
 

@@ -30,6 +30,7 @@ add_executable(
   ReferencedTablesTest.cpp
   SortParserTest.cpp
   SplitStatementsTest.cpp
+  WithRecursiveTest.cpp
 )
 
 add_test(axiom_sql_presto_test axiom_sql_presto_test)
