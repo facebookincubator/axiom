@@ -405,7 +405,8 @@ folly::coro::Task<SplitBatch> TestSplitSource::co_getSplits(
       VELOX_CHECK_LT(i, dataBucketIds_.size());
       groupId = dataBucketIds_[i] % partitionType_->numPartitions();
     }
-    batch.splits.push_back(Split{std::move(split), groupId});
+    batch.splits.push_back(
+        Split{.connectorSplit = std::move(split), .groupId = groupId});
   }
   nextOffset_ = end;
   batch.noMoreSplits = (nextOffset_ >= dataIndices_.size());
