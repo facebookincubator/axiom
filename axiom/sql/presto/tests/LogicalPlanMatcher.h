@@ -189,6 +189,36 @@ class LogicalPlanMatcherBuilder {
       const std::shared_ptr<LogicalPlanMatcher>& rightMatcher,
       const std::vector<std::string>& outputAliases);
 
+  /// Matches a FixedPointNode. The prior chain matches the anchor; the
+  /// given matcher matches the step.
+  LogicalPlanMatcherBuilder& fixedPoint(
+      const std::shared_ptr<LogicalPlanMatcher>& stepMatcher,
+      OnMatchCallback onMatch = nullptr);
+
+  /// Matches a FixedPointNode and captures aliases for all output columns.
+  /// 'outputAliases' must have one entry per output column. Each alias is
+  /// mapped to the actual column name at that position, so subsequent
+  /// matchers can reference these aliases in expressions.
+  LogicalPlanMatcherBuilder& fixedPoint(
+      const std::shared_ptr<LogicalPlanMatcher>& stepMatcher,
+      const std::vector<std::string>& outputAliases);
+
+  /// Matches a RecursiveReferenceNode leaf; must be the first call in a
+  /// chain.
+  LogicalPlanMatcherBuilder& recursiveRef(OnMatchCallback onMatch = nullptr);
+
+  /// Matches a RecursiveReferenceNode leaf and verifies its referenced
+  /// FixedPointNode name.
+  LogicalPlanMatcherBuilder& recursiveRef(const std::string& name);
+
+  /// Matches a RecursiveReferenceNode leaf, verifies its referenced
+  /// FixedPointNode name, and captures aliases for all output columns
+  /// (see fixedPoint(stepMatcher, outputAliases) for the alias-capture
+  /// convention).
+  LogicalPlanMatcherBuilder& recursiveRef(
+      const std::string& name,
+      const std::vector<std::string>& outputAliases);
+
   /// Matches a SetNode with the specified operation and right-side matcher.
   LogicalPlanMatcherBuilder& setOperation(
       SetOperation op,

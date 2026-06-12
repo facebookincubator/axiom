@@ -282,22 +282,21 @@ TEST_F(LogicalPlanNodeSerdeTest, tableWriteNode) {
 }
 
 TEST_F(LogicalPlanNodeSerdeTest, fixedPointNode) {
+  auto anchor = PlanBuilder().values(
+      ROW("n", BIGINT()), std::vector<Variant>{Variant::row({1LL})});
   auto step = PlanBuilder()
-                  .recursiveRef("t", ROW("n", BIGINT()))
+                  .recursiveRef("t", anchor)
                   .project({"n + 1 as n"})
                   .planNode();
-  auto plan =
-      PlanBuilder()
-          .values(ROW("n", BIGINT()), std::vector<Variant>{Variant::row({1LL})})
-          .fixedPoint("t", step)
-          .planNode();
+  auto plan = anchor.fixedPoint("t", step).planNode();
   testRoundTrip(plan);
 }
 
 TEST_F(LogicalPlanNodeSerdeTest, recursiveReferenceNode) {
-  auto ref = PlanBuilder()
-                 .recursiveRef("cte", ROW({"x", "y"}, {BIGINT(), VARCHAR()}))
-                 .planNode();
+  auto anchor = PlanBuilder().values(
+      ROW({"x", "y"}, {BIGINT(), VARCHAR()}),
+      std::vector<Variant>{Variant::row({1LL, "a"})});
+  auto ref = PlanBuilder().recursiveRef("cte", anchor).planNode();
   testRoundTrip(ref);
 }
 

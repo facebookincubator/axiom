@@ -5070,6 +5070,11 @@ void ToGraph::makeQueryGraph(
       wrapInDt(*node.onlyInput(), /*orderObservedAbove=*/false);
       addWrite(*node.as<lp::TableWriteNode>());
     } break;
+    case lp::NodeKind::kFixedPoint:
+    case lp::NodeKind::kRecursiveReference:
+      VELOX_NYI(
+          "Fixed-point (recursive) plan execution is not yet implemented");
+      break;
     default:
       VELOX_NYI(
           "Unsupported PlanNode {}", lp::NodeKindName::toName(node.kind()));

@@ -29,6 +29,7 @@
 #include "axiom/sql/presto/ExpressionPlanner.h"
 #include "axiom/sql/presto/GroupByPlanner.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
+#include "axiom/sql/presto/RecursiveCteValidator.h"
 #include "axiom/sql/presto/ShowStatsBuilder.h"
 #include "axiom/sql/presto/SortProjection.h"
 #include "axiom/sql/presto/ast/AstBuilder.h"
@@ -396,6 +397,79 @@ class RelationPlanner : public AstVisitor {
     }
   }
 
+  void processQueryBody(const QueryBodyPtr& queryBody) {
+    if (queryBody->is(NodeType::kQuerySpecification)) {
+      visitQuerySpecification(
+          queryBody->as<QuerySpecification>(), /*orderBy=*/nullptr);
+    } else {
+      queryBody->accept(this);
+    }
+  }
+
+  // Saves displayNames_ accumulated/last names, clears lastNames, and
+  // restores both on scope exit. Used when translating subplans (anchor,
+  // step) that must not leak their column names into the enclosing scope.
+  auto scopedResetLastNames() {
+    auto guard = folly::makeGuard(
+        [this,
+         savedAccumulated = displayNames_.accumulatedNames,
+         savedLast = std::move(displayNames_.lastNames)]() mutable {
+          displayNames_.accumulatedNames = std::move(savedAccumulated);
+          displayNames_.lastNames = std::move(savedLast);
+        });
+    displayNames_.lastNames.clear();
+    return guard;
+  }
+
+  // Translates a recursive CTE into a fresh FixedPointNode subtree rooted
+  // in the caller's builder_. Anchor sees 'outerScope' (LATERAL resolves);
+  // step does not (correlated refs across the boundary fail). Each outer
+  // reference run this to produce new FixedPointNodes.
+  void translateRecursiveCteReference(
+      const WithQuery& withEntry,
+      const std::string& cteName) {
+    AXIOM_PRESTO_SYNTAX_CHECK(
+        recursiveCteAnchors_.empty(),
+        withEntry.location(),
+        cteName,
+        "WITH RECURSIVE does not support nested recursive CTEs");
+    auto unionExpr =
+        presto::RecursiveCteValidator::extractAndValidateRecursiveUnion(
+            withEntry, cteName);
+
+    // Translate the anchor on a fresh builder inheriting the outer scope
+    // (LATERAL refs resolve through it).
+    auto outerScope = builder_->scope();
+    builder_ = newBuilder(outerScope);
+    {
+      auto guard = scopedResetLastNames();
+      processQueryBody(unionExpr->left());
+    }
+    if (const auto& columnAliases = withEntry.columnNames()) {
+      displayNames_.captureLastNames(*columnAliases);
+      applyColumnAliases(*columnAliases, withEntry.location(), cteName);
+    }
+    auto anchorBuilder = builder_;
+
+    // Translate the step on a fresh builder with no outer scope; register
+    // the anchor so processTable() resolves self-references via
+    // recursiveRef using the anchor's name mappings.
+    builder_ = newBuilder();
+    recursiveCteAnchors_[cteName] = anchorBuilder.get();
+    SCOPE_EXIT {
+      recursiveCteAnchors_.erase(cteName);
+    };
+    {
+      auto guard = scopedResetLastNames();
+      processQueryBody(unionExpr->right());
+    }
+    auto stepNode = builder_->planNode();
+
+    // Restore builder_ to the anchor and emit the FixedPointNode.
+    builder_ = std::move(anchorBuilder);
+    builder_->fixedPoint(/*name=*/cteName, stepNode);
+  }
+
   void processFrom(const RelationPtr& relation) {
     if (relation == nullptr) {
       // SELECT 1; type of query.
@@ -427,69 +501,100 @@ class RelationPlanner : public AstVisitor {
   void processTable(const Table& table) {
     const auto tableName = canonicalizeName(table.name()->suffix());
 
-    auto withIt = withQueries_.find(table.name()->suffix());
-    if (withIt == withQueries_.end()) {
-      withIt = withQueries_.find(tableName);
+    // Resolution precedence:
+    //   1. In-flight recursive CTE step body -- a self-reference inside
+    //      the step body must emit a RecursiveReferenceNode rather than
+    //      re-entering the WithQuery lookup and re-translating the body.
+    //   2. CTE binding in withQueries_ (recursive or non-recursive). For
+    //      recursive entries, re-translates the body at this reference
+    //      site so each reference yields an independent FixedPointNode
+    //      subtree (execution does not support DAG plans).
+    //   3. Base table.
+    auto recursiveIt = recursiveCteAnchors_.find(tableName);
+    if (recursiveIt != recursiveCteAnchors_.end()) {
+      builder_ = newBuilder();
+      // The recursive-ref name must match the enclosing FixedPointNode's
+      // name so the optimizer wires this self-reference to that loop state.
+      builder_->recursiveRef(recursiveIt->first, *recursiveIt->second);
+      builder_->as(tableName);
+      displayNames_.accumulate(*builder_, tableName);
+      return;
     }
 
+    auto withIt = withQueries_.find(tableName);
     if (withIt != withQueries_.end()) {
       // Temporarily remove the CTE from the map while processing its body
       // to prevent infinite recursion when a CTE has the same name as a
       // base table it references (e.g. WITH t AS (SELECT * FROM t)).
-      // Non-recursive CTEs cannot reference themselves in Presto.
-      auto withEntry = std::move(withIt->second);
+      // Recursive CTEs are also pulled out so a sibling outer reference
+      // fired mid-translation cannot re-enter the same body.
+      auto entry = std::move(withIt->second);
       withQueries_.erase(withIt);
       SCOPE_EXIT {
-        withQueries_.insert_or_assign(tableName, std::move(withEntry));
+        withQueries_.insert_or_assign(tableName, std::move(entry));
       };
-      // TODO: Change WithQuery to store Query and not Statement.
-      processQuery(dynamic_cast<Query*>(withEntry->query().get()));
 
-      // Apply CTE column-alias list, e.g. 'WITH t(a, b) AS (...)' renames
-      // the underlying SELECT/VALUES output columns to a, b.
-      if (const auto& columnAliases = withEntry->columnNames()) {
-        displayNames_.captureLastNames(*columnAliases);
-        applyColumnAliases(*columnAliases, withEntry->location(), tableName);
-      }
-      displayNames_.accumulate(*builder_, tableName);
-    } else {
-      const auto [connectorId, connectorTable] = toConnectorTable(
-          *table.name(), context_.defaultConnectorId.value(), defaultSchema_);
-
-      auto metadata =
-          facebook::axiom::connector::ConnectorMetadataRegistry::get(
-              connectorId);
-
-      if (metadata->findTable(connectorTable) != nullptr) {
-        // Drop display names captured from a sibling FROM relation so
-        // this table's columns aren't tagged with them.
-        displayNames_.lastNames.clear();
-        inputTables_.insert(
-            facebook::axiom::CatalogSchemaTableName{
-                connectorId, connectorTable});
-        builder_->tableScan(
-            connectorId,
-            connectorTable.schema,
-            connectorTable.table,
-            /*includeHiddenColumns=*/true);
-      } else if (auto view = metadata->findView(connectorTable)) {
-        views_.emplace(
-            facebook::axiom::CatalogSchemaTableName{
-                connectorId, connectorTable},
-            view->text());
-
-        VELOX_CHECK_NOT_NULL(parseSql_);
-        auto query = parseSql_(view->text());
-        processQuery(dynamic_cast<Query*>(query.get()));
+      if (entry.isRecursive) {
+        translateRecursiveCteReference(*entry.withQuery, tableName);
       } else {
-        AXIOM_PRESTO_SEMANTIC_FAIL(
-            table.location(),
-            // Use suffix (unqualified name) as token — the user rarely writes
-            // the fully qualified form.
-            table.name()->suffix(),
-            "Table not found: {}",
-            table.name()->fullyQualifiedName());
+        // TODO: Change WithQuery to store Query and not Statement.
+        processQuery(dynamic_cast<Query*>(entry.withQuery->query().get()));
+
+        // Apply CTE column-alias list, e.g. 'WITH t(a, b) AS (...)' renames
+        // the underlying SELECT/VALUES output columns to a, b.
+        if (const auto& columnAliases = entry.withQuery->columnNames()) {
+          displayNames_.captureLastNames(*columnAliases);
+          applyColumnAliases(
+              *columnAliases, entry.withQuery->location(), tableName);
+        }
       }
+      finalizeCteReference(tableName);
+      return;
+    }
+
+    // Regular base-table reference.
+    const auto [connectorId, connectorTable] = toConnectorTable(
+        *table.name(), context_.defaultConnectorId.value(), defaultSchema_);
+
+    auto metadata =
+        facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId);
+
+    if (metadata->findTable(connectorTable) != nullptr) {
+      // Drop display names captured from a sibling FROM relation so
+      // this table's columns aren't tagged with them.
+      displayNames_.lastNames.clear();
+      inputTables_.insert(
+          facebook::axiom::CatalogSchemaTableName{connectorId, connectorTable});
+      builder_->tableScan(
+          connectorId,
+          connectorTable.schema,
+          connectorTable.table,
+          /*includeHiddenColumns=*/true);
+    } else if (auto view = metadata->findView(connectorTable)) {
+      views_.emplace(
+          facebook::axiom::CatalogSchemaTableName{connectorId, connectorTable},
+          view->text());
+
+      VELOX_CHECK_NOT_NULL(parseSql_);
+      auto query = parseSql_(view->text());
+      // A view body is an independent query and must not resolve table
+      // references against the caller's in-flight recursive step-body
+      // bindings. Save and restore here so any sibling FROM relations in
+      // this outer query still see the outer bindings.
+      auto savedRecursiveCteAnchors = std::move(recursiveCteAnchors_);
+      recursiveCteAnchors_.clear();
+      SCOPE_EXIT {
+        recursiveCteAnchors_ = std::move(savedRecursiveCteAnchors);
+      };
+      processQuery(dynamic_cast<Query*>(query.get()));
+    } else {
+      AXIOM_PRESTO_SEMANTIC_FAIL(
+          table.location(),
+          // Use suffix (unqualified name) as token — the user rarely writes
+          // the fully qualified form.
+          table.name()->suffix(),
+          "Table not found: {}",
+          table.name()->fullyQualifiedName());
     }
 
     builder_->findOrAssignOutputNames(/*includeHiddenColumns=*/false);
@@ -516,6 +621,15 @@ class RelationPlanner : public AstVisitor {
 
     auto percentage = toExpr(sampledRelation.samplePercentage());
     builder_->sample(percentage.expr(), sampleMethod);
+  }
+
+  // Records the relation's user-visible display names under 'tableName', fills
+  // in any missing output-column names, then installs 'tableName' as the
+  // alias so qualified references resolve. CTE-style branches only.
+  void finalizeCteReference(const std::string& tableName) {
+    displayNames_.accumulate(*builder_, tableName);
+    builder_->findOrAssignOutputNames(/*includeHiddenColumns=*/false);
+    builder_->as(tableName);
   }
 
   // Renames the current builder output columns to match a user-supplied
@@ -1202,9 +1316,11 @@ class RelationPlanner : public AstVisitor {
   void processQuery(Query* query) {
     auto savedWithQueries = withQueries_;
     auto savedAccumulatedNames = displayNames_.accumulatedNames;
+    auto savedRecursiveCteAnchors = recursiveCteAnchors_;
     SCOPE_EXIT {
       withQueries_ = std::move(savedWithQueries);
       displayNames_.accumulatedNames = std::move(savedAccumulatedNames);
+      recursiveCteAnchors_ = std::move(savedRecursiveCteAnchors);
     };
 
     // lastNames is scoped per query; reset so names from a sibling relation
@@ -1212,14 +1328,23 @@ class RelationPlanner : public AstVisitor {
     displayNames_.lastNames.clear();
 
     if (const auto& with = query->with()) {
-      AXIOM_PRESTO_SYNTAX_CHECK(
-          !with->isRecursive(),
-          with->location(),
-          "RECURSIVE",
-          "WITH RECURSIVE is not supported");
-      for (const auto& query : with->queries()) {
+      for (const auto& withQuery : with->queries()) {
+        const auto cteName = canonicalizeIdentifier(*withQuery->name());
+        // A CTE in a WITH RECURSIVE block is only recursive if its body
+        // actually references its own name. Otherwise it's a standard union.
+        bool selfReferential = false;
+        if (with->isRecursive()) {
+          auto* bodyQuery = dynamic_cast<Query*>(withQuery->query().get());
+          selfReferential = bodyQuery != nullptr &&
+              presto::RecursiveCteValidator::referencesCte(*bodyQuery, cteName);
+        }
         withQueries_.insert_or_assign(
-            canonicalizeIdentifier(*query->name()), query);
+            cteName, CteEntry{withQuery, selfReferential});
+        // A nested WITH binding shadows any enclosing recursive CTE of the
+        // same name; remove the in-flight step-body entry so processTable
+        // falls through to the new withQueries_ binding. processQuery's
+        // SCOPE_EXIT restores recursiveCteAnchors_ on exit.
+        recursiveCteAnchors_.erase(cteName);
       }
     }
 
@@ -1410,7 +1535,19 @@ class RelationPlanner : public AstVisitor {
         return builder_->hasColumn(first) ||
             builder_->hasQualifiedColumn(first, second);
       }};
-  std::unordered_map<std::string, std::shared_ptr<WithQuery>> withQueries_;
+  // A CTE binding tracked while translating its enclosing query.
+  // 'isRecursive' is true when the body self-references and therefore
+  // requires FixedPointNode translation at each reference site.
+  struct CteEntry {
+    std::shared_ptr<WithQuery> withQuery;
+    bool isRecursive{false};
+  };
+  std::unordered_map<std::string, CteEntry> withQueries_;
+  // Anchor PlanBuilder pointer for each recursive CTE currently being
+  // translated. processTable consumes this when emitting the matching
+  // RecursiveReferenceNode so step-body self-references inherit anchor
+  // name resolution.
+  folly::F14FastMap<std::string, const lp::PlanBuilder*> recursiveCteAnchors_;
   ViewMap views_;
   std::unordered_set<facebook::axiom::CatalogSchemaTableName> inputTables_;
   bool friendlySql_;

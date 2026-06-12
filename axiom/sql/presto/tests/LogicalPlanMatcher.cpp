@@ -706,6 +706,126 @@ LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::join(
   return *this;
 }
 
+namespace {
+// Matches a FixedPointNode and captures aliases for all output columns.
+class FixedPointAliasMatcher : public LogicalPlanMatcherImpl<FixedPointNode> {
+ public:
+  FixedPointAliasMatcher(
+      const std::vector<std::shared_ptr<LogicalPlanMatcher>>& inputMatchers,
+      std::vector<std::string> outputAliases)
+      : LogicalPlanMatcherImpl<FixedPointNode>(inputMatchers, nullptr),
+        outputAliases_{std::move(outputAliases)} {}
+
+ private:
+  MatchResult matchDetails(
+      const FixedPointNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    const auto& outputType = plan.outputType();
+    if (outputAliases_.size() != outputType->size()) {
+      ADD_FAILURE() << "Expected " << outputAliases_.size()
+                    << " FixedPointNode output columns, got "
+                    << outputType->size();
+      return MatchResult::failure();
+    }
+    auto newSymbols = symbols;
+    for (size_t i = 0; i < outputAliases_.size(); ++i) {
+      newSymbols[outputAliases_[i]] = outputType->nameOf(i);
+    }
+    return MatchResult::success(newSymbols);
+  }
+
+  const std::vector<std::string> outputAliases_;
+};
+
+// Matches a RecursiveReferenceNode leaf with an expected name and,
+// optionally, captures aliases for all output columns.
+class RecursiveReferenceMatcher
+    : public LogicalPlanMatcherImpl<RecursiveReferenceNode> {
+ public:
+  RecursiveReferenceMatcher(
+      std::string expectedName,
+      std::vector<std::string> outputAliases)
+      : LogicalPlanMatcherImpl<RecursiveReferenceNode>(nullptr),
+        expectedName_{std::move(expectedName)},
+        outputAliases_{std::move(outputAliases)} {}
+
+ private:
+  MatchResult matchDetails(
+      const RecursiveReferenceNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    if (expectedName_ != plan.name()) {
+      ADD_FAILURE() << "Expected RecursiveReferenceNode name '" << expectedName_
+                    << "', got '" << plan.name() << "'";
+      return MatchResult::failure();
+    }
+    if (outputAliases_.empty()) {
+      return MatchResult::success(symbols);
+    }
+    const auto& outputType = plan.outputType();
+    if (outputAliases_.size() != outputType->size()) {
+      ADD_FAILURE() << "Expected " << outputAliases_.size()
+                    << " RecursiveReferenceNode output columns, got "
+                    << outputType->size();
+      return MatchResult::failure();
+    }
+    auto newSymbols = symbols;
+    for (size_t i = 0; i < outputAliases_.size(); ++i) {
+      newSymbols[outputAliases_[i]] = outputType->nameOf(i);
+    }
+    return MatchResult::success(newSymbols);
+  }
+
+  const std::string expectedName_;
+  const std::vector<std::string> outputAliases_;
+};
+} // namespace
+
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::fixedPoint(
+    const std::shared_ptr<LogicalPlanMatcher>& stepMatcher,
+    OnMatchCallback onMatch) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<LogicalPlanMatcherImpl<FixedPointNode>>(
+      std::vector<std::shared_ptr<LogicalPlanMatcher>>{matcher_, stepMatcher},
+      std::move(onMatch));
+  return *this;
+}
+
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::fixedPoint(
+    const std::shared_ptr<LogicalPlanMatcher>& stepMatcher,
+    const std::vector<std::string>& outputAliases) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<FixedPointAliasMatcher>(
+      std::vector<std::shared_ptr<LogicalPlanMatcher>>{matcher_, stepMatcher},
+      outputAliases);
+  return *this;
+}
+
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::recursiveRef(
+    OnMatchCallback onMatch) {
+  VELOX_USER_CHECK_NULL(matcher_);
+  matcher_ = std::make_shared<LogicalPlanMatcherImpl<RecursiveReferenceNode>>(
+      std::move(onMatch));
+  return *this;
+}
+
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::recursiveRef(
+    const std::string& name) {
+  VELOX_USER_CHECK_NULL(matcher_);
+  matcher_ = std::make_shared<RecursiveReferenceMatcher>(
+      name, std::vector<std::string>{});
+  return *this;
+}
+
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::recursiveRef(
+    const std::string& name,
+    const std::vector<std::string>& outputAliases) {
+  VELOX_USER_CHECK_NULL(matcher_);
+  matcher_ = std::make_shared<RecursiveReferenceMatcher>(name, outputAliases);
+  return *this;
+}
+
 LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::setOperation(
     SetOperation op,
     const std::shared_ptr<LogicalPlanMatcher>& matcher,
