@@ -116,8 +116,10 @@ folly::coro::Task<SplitBatch> TpchSplitSource::co_getSplits(
       std::min(nextSplitIdx_ + static_cast<int64_t>(maxSplitCount), numSplits_);
   for (auto i = nextSplitIdx_; i < end; ++i) {
     batch.splits.push_back(
-        Split{std::make_shared<velox::connector::tpch::TpchConnectorSplit>(
-            connectorId_, numSplits_, i)});
+        Split{
+            .connectorSplit =
+                std::make_shared<velox::connector::tpch::TpchConnectorSplit>(
+                    connectorId_, numSplits_, i)});
   }
   nextSplitIdx_ = end;
   batch.noMoreSplits = (nextSplitIdx_ >= numSplits_);

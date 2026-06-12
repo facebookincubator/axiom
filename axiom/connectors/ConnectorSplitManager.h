@@ -25,9 +25,13 @@ namespace facebook::axiom::connector {
 
 class PartitionType;
 
-/// Wraps a Velox ConnectorSplit with an optional group ID for bucketed
-/// execution routing. Splits with the same groupId are routed to the same
-/// task. When unset, the runtime is free to assign the split to any task.
+/// Wraps a Velox ConnectorSplit with optional placement metadata. groupId is a
+/// hard within-query routing constraint for grouped execution: splits with the
+/// same groupId are routed to the same task. affinityId is a soft cross-query
+/// affinity hint: schedulers prefer to route splits with the same affinityId
+/// to the same task, but may choose another task for load balancing. When both
+/// are present, grouped-execution routing through groupId takes precedence
+/// over affinityId.
 struct Split {
   /// The underlying Velox connector split.
   std::shared_ptr<velox::connector::ConnectorSplit> connectorSplit;
@@ -35,6 +39,13 @@ struct Split {
   /// Group ID for bucketed routing; splits sharing a groupId are routed to
   /// the same task. Absent means any task may handle this split.
   std::optional<int32_t> groupId{std::nullopt};
+
+  /// Stable connector-generated affinity ID for split affinity. Connectors
+  /// that support split affinity must generate the same ID for repeated reads
+  /// of the same physical split input. Different physical splits may share an
+  /// affinityId; such collisions only cause them to share a preferred task. If
+  /// unset, no affinityId-based placement hint is available for this split.
+  std::optional<int64_t> affinityId{std::nullopt};
 };
 
 /// A batch of splits returned by SplitSource::co_getSplits.

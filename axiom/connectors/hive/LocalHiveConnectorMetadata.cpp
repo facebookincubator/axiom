@@ -390,7 +390,8 @@ folly::coro::Task<SplitBatch> LocalHiveSplitSource::co_getSplits(
             "Bucketed scan requires bucketNumber on every file");
         groupId = info->bucketNumber.value() % partitionType_->numPartitions();
       }
-      batch.splits.push_back(Split{builder.build(), groupId});
+      batch.splits.push_back(
+          Split{.connectorSplit = builder.build(), .groupId = groupId});
       ++splitWithinFile_;
     }
     if (splitWithinFile_ >= splitsPerFile) {

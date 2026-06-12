@@ -43,7 +43,8 @@ class SimpleSplitSource : public connector::SplitSource {
     auto end = std::min(
         nextIndex_ + static_cast<size_t>(maxSplitCount), splits_.size());
     for (auto i = nextIndex_; i < end; ++i) {
-      batch.splits.push_back(connector::Split{std::move(splits_[i])});
+      batch.splits.push_back(
+          connector::Split{.connectorSplit = std::move(splits_.at(i))});
     }
     nextIndex_ = end;
     batch.noMoreSplits = (nextIndex_ >= splits_.size());
