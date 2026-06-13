@@ -295,6 +295,9 @@ TEST_F(PlanTest, specialFormConstantFold) {
        "case when a > 0 then 10 else b + 1 end"},
       {"try(10 / 1)", "10"},
       {"try_cast(1 as BIGINT)", "1"},
+      // A same-type cast over a column is dropped, for CAST and TRY_CAST alike.
+      {"cast(a as bigint) + 1", "a + 1"},
+      {"try_cast(a as bigint) + 1", "a + 1"},
       {"coalesce(1 + 1, a)", "coalesce(2, a)"},
       {"coalesce(cast(null as bigint), 5 * 2)", "10"},
   };
