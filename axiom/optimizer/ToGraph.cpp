@@ -1354,8 +1354,10 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
     auto* exprType = toType(expr->type());
 
     // Drop redundant cast.
-    //    CAST(x as t) ==> x if typeof(x) == t.
-    if (specialForm && specialForm->form() == lp::SpecialForm::kCast) {
+    //    CAST(x as t) / TRY_CAST(x as t) ==> x if typeof(x) == t.
+    if (specialForm &&
+        (specialForm->form() == lp::SpecialForm::kCast ||
+         specialForm->form() == lp::SpecialForm::kTryCast)) {
       if (args[0]->value().type == exprType) {
         return args[0];
       }
