@@ -674,8 +674,27 @@ velox::connector::ConnectorTableHandlePtr TestTableLayout::createTableHandle(
     std::vector<velox::core::TypedExprPtr>& rejectedFilters,
     velox::RowTypePtr /* dataColumns */,
     std::optional<LookupKeys> /*lookupKeys*/) const {
+  auto* testConnector = dynamic_cast<TestConnector*>(connector());
+  VELOX_CHECK_NOT_NULL(testConnector);
+  if (const auto& inspector = testConnector->onCreateTableHandle()) {
+    inspector(filters);
+  }
   rejectedFilters = std::move(filters);
   return std::make_shared<TestTableHandle>(*this, std::move(columnHandles));
+}
+
+folly::coro::Task<std::optional<FilteredTableStats>>
+TestTableLayout::co_estimateStats(
+    ConnectorSessionPtr /*session*/,
+    velox::connector::ConnectorTableHandlePtr /*tableHandle*/,
+    std::vector<std::string> /*columns*/,
+    std::vector<velox::core::TypedExprPtr> filterConjuncts) const {
+  auto* testConnector = dynamic_cast<TestConnector*>(connector());
+  VELOX_CHECK_NOT_NULL(testConnector);
+  if (const auto& inspector = testConnector->onEstimateStats()) {
+    inspector(filterConjuncts);
+  }
+  co_return std::nullopt;
 }
 
 std::shared_ptr<TestTable> TestConnectorMetadata::addTable(

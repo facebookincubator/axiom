@@ -16,7 +16,6 @@
 
 #include <gtest/gtest.h>
 #include "axiom/connectors/tests/TestConnector.h"
-#include "velox/core/Expressions.h"
 #include "velox/type/Type.h"
 
 namespace facebook::axiom::connector {
@@ -63,11 +62,6 @@ class TestConnectorSerDeTest : public testing::Test {
       ASSERT_EQ(original->name(), cloned->name());
       ASSERT_EQ(*original->type(), *cloned->type());
     }
-    ASSERT_EQ(handle.filters().size(), clone->filters().size());
-    for (size_t i = 0; i < handle.filters().size(); ++i) {
-      ASSERT_EQ(
-          handle.filters()[i]->toString(), clone->filters()[i]->toString());
-    }
   }
 
   static void testSerde(const TestConnectorSplit& split) {
@@ -102,20 +96,6 @@ TEST_F(TestConnectorSerDeTest, tableHandle) {
   auto handle2 = TestTableHandle(
       connectorId, SchemaTableName{"schema2", "table2"}, 5, std::move(columns));
   testSerde(handle2);
-
-  // With filters.
-  auto filterExpr =
-      std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c1");
-  std::vector<velox::connector::ColumnHandlePtr> columns2 = {
-      std::make_shared<TestColumnHandle>("c1", BIGINT()),
-  };
-  auto handle3 = TestTableHandle(
-      connectorId,
-      SchemaTableName{"schema3", "table3"},
-      3,
-      std::move(columns2),
-      {filterExpr});
-  testSerde(handle3);
 
   // Empty schema and name.
   auto handle4 = TestTableHandle(connectorId, SchemaTableName{"", ""}, 0, {});

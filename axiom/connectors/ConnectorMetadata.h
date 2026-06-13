@@ -528,7 +528,8 @@ class TableLayout {
   /// @param filterConjuncts Filter conjuncts applied to the table. This may
   /// be a superset of filters encoded in the table handle. The connector
   /// should report indices of conjuncts it could not account for via
-  /// rejectedFilterIndices.
+  /// rejectedFilterIndices. The conjuncts are in the same canonical form as
+  /// the 'filters' argument of createTableHandle.
   ///
   /// The default implementation returns std::nullopt, meaning the connector
   /// does not support stats estimation. Connectors opt in by overriding.
@@ -571,6 +572,30 @@ class TableLayout {
   /// lookupKeys() in 'layout'. If 'dataColumns' is given, it must have all the
   /// existing columns and may additionally specify casting from maps to structs
   /// by giving a struct in the place of a map.
+  ///
+  /// The optimizer normalizes 'filters' into a canonical form a connector may
+  /// rely on:
+  /// - A top-level conjunction is flattened: 'filters' holds one entry per
+  ///   conjunct, with no nested AND.
+  /// - A comparison against a constant is written column-first, e.g.
+  ///   eq(column, constant). The column is always the first argument and the
+  ///   constant the second, for eq, lt, lte, gt and gte. A connector never
+  ///   sees the constant on the left (e.g. eq(constant, column)).
+  /// - An IN list over constants is a single in() over the column and the
+  ///   constant values, with duplicate values removed. The values may be
+  ///   encoded either as a constant array, in(column, ARRAY[...]), or as
+  ///   variadic arguments, in(column, v1, v2, ...). A connector should handle
+  ///   both forms.
+  ///
+  /// Predicates are NOT combined across conjuncts: 'filters' may contain
+  /// several predicates on the same column (e.g. a = 1 and a = 2), which the
+  /// connector must handle. The optimizer does not fold redundant or
+  /// contradictory same-column predicates.
+  ///
+  /// TODO: Unify the two IN encodings into the varargs form and remove the
+  /// ARRAY encoding.
+  /// TODO: Fold a single-element IN list to an equality, and simplify
+  /// redundant or contradictory same-column predicates, before pushdown.
   virtual velox::connector::ConnectorTableHandlePtr createTableHandle(
       const ConnectorSessionPtr& session,
       std::vector<velox::connector::ColumnHandlePtr> columnHandles,

@@ -18,6 +18,7 @@
 
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
+#include <functional>
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "velox/core/ITypedExpr.h"
@@ -153,6 +154,14 @@ class TestTableLayout : public TableLayout {
       std::vector<velox::core::TypedExprPtr>& rejectedFilters,
       velox::RowTypePtr dataColumns,
       std::optional<LookupKeys> lookupKeys) const override;
+
+  // Forwards the received conjuncts to the installed estimate-stats inspector,
+  // then returns std::nullopt (no stats), as the base does.
+  folly::coro::Task<std::optional<FilteredTableStats>> co_estimateStats(
+      ConnectorSessionPtr session,
+      velox::connector::ConnectorTableHandlePtr tableHandle,
+      std::vector<std::string> columns,
+      std::vector<velox::core::TypedExprPtr> filterConjuncts) const override;
 
  private:
   std::vector<const Column*> discreteValueColumns_;
@@ -376,25 +385,21 @@ class TestTableHandle : public velox::connector::ConnectorTableHandle {
       const std::string& connectorId,
       const SchemaTableName& name,
       int64_t size,
-      std::vector<velox::connector::ColumnHandlePtr> columnHandles,
-      std::vector<velox::core::TypedExprPtr> filters = {})
+      std::vector<velox::connector::ColumnHandlePtr> columnHandles)
       : ConnectorTableHandle(connectorId),
         name_(name),
         size_(size),
         columnHandles_(std::move(columnHandles)),
-        filters_(std::move(filters)),
         nameString_(name.toString()) {}
 
   TestTableHandle(
       const TableLayout& layout,
-      std::vector<velox::connector::ColumnHandlePtr> columnHandles,
-      std::vector<velox::core::TypedExprPtr> filters = {})
+      std::vector<velox::connector::ColumnHandlePtr> columnHandles)
       : TestTableHandle(
             layout.connector()->connectorId(),
             layout.table().name(),
             getTableSize(layout),
-            std::move(columnHandles),
-            std::move(filters)) {}
+            std::move(columnHandles)) {}
 
   static int64_t getTableSize(const TableLayout& layout) {
     auto& table = dynamic_cast<const TestTable&>(layout.table());
@@ -417,10 +422,6 @@ class TestTableHandle : public velox::connector::ConnectorTableHandle {
     return name();
   }
 
-  const std::vector<velox::core::TypedExprPtr>& filters() const {
-    return filters_;
-  }
-
   const std::vector<velox::connector::ColumnHandlePtr>& columnHandles() const {
     return columnHandles_;
   }
@@ -437,17 +438,12 @@ class TestTableHandle : public velox::connector::ConnectorTableHandle {
       columns.push_back(handle->serialize());
     }
     obj["columnHandles"] = std::move(columns);
-    folly::dynamic filterArray = folly::dynamic::array;
-    for (const auto& filter : filters_) {
-      filterArray.push_back(filter->serialize());
-    }
-    obj["filters"] = std::move(filterArray);
     return obj;
   }
 
   static velox::connector::ConnectorTableHandlePtr create(
       const folly::dynamic& obj,
-      void* context) {
+      void* /*context*/) {
     auto connectorId = obj["connectorId"].asString();
     auto schema = obj["schemaName"].asString();
     auto tableName = obj["tableName"].asString();
@@ -460,20 +456,11 @@ class TestTableHandle : public velox::connector::ConnectorTableHandle {
                 col));
       }
     }
-    std::vector<velox::core::TypedExprPtr> filters;
-    if (obj.count("filters")) {
-      for (const auto& f : obj["filters"]) {
-        filters.push_back(
-            velox::ISerializable::deserialize<velox::core::ITypedExpr>(
-                f, context));
-      }
-    }
     return std::make_shared<TestTableHandle>(
         connectorId,
         SchemaTableName(schema, tableName),
         size,
-        std::move(columnHandles),
-        std::move(filters));
+        std::move(columnHandles));
   }
 
   static void registerSerDe() {
@@ -486,7 +473,6 @@ class TestTableHandle : public velox::connector::ConnectorTableHandle {
   const SchemaTableName name_;
   const int64_t size_;
   const std::vector<velox::connector::ColumnHandlePtr> columnHandles_;
-  const std::vector<velox::core::TypedExprPtr> filters_;
   const std::string nameString_;
 };
 
@@ -871,6 +857,32 @@ class TestConnector : public velox::connector::Connector {
 
   void addTpchTables();
 
+  /// Callback receiving the filter expressions the optimizer pushes into a
+  /// scan. Installed by tests to inspect the exact form a connector is handed.
+  using FilterInspector =
+      std::function<void(const std::vector<velox::core::TypedExprPtr>&)>;
+
+  /// Installs a callback invoked with the 'filters' argument of every
+  /// TestTableLayout::createTableHandle call.
+  void setOnCreateTableHandle(FilterInspector inspector) {
+    onCreateTableHandle_ = std::move(inspector);
+  }
+
+  /// Installs a callback invoked with the 'filterConjuncts' argument of every
+  /// TestTableLayout::co_estimateStats call.
+  void setOnEstimateStats(FilterInspector inspector) {
+    onEstimateStats_ = std::move(inspector);
+  }
+
+  // Returns the installed inspector, or an empty std::function if none was set.
+  const FilterInspector& onCreateTableHandle() const {
+    return onCreateTableHandle_;
+  }
+
+  const FilterInspector& onEstimateStats() const {
+    return onEstimateStats_;
+  }
+
   /// Register a view with the given name, output schema, and SQL text.
   void createView(
       const SchemaTableName& viewName,
@@ -883,6 +895,8 @@ class TestConnector : public velox::connector::Connector {
  private:
   const std::shared_ptr<velox::memory::MemoryPool> rootPool_;
   const std::shared_ptr<TestConnectorMetadata> metadata_;
+  FilterInspector onCreateTableHandle_;
+  FilterInspector onEstimateStats_;
 };
 
 /// The ConnectorFactory for the TestConnector can be configured with
