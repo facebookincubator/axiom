@@ -176,6 +176,9 @@ would-I-say-this-aloud test to each):
 
 ## Commit Messages
 
+Draft commit messages with the `write-commit-message` skill
+(`.claude/skills/write-commit-message/`), which applies these rules.
+
 Use conventional commit prefixes with `[Project]` tags:
 
 ```
@@ -196,7 +199,7 @@ A reviewer should be able to read the message in ~30 seconds and walk away knowi
 1. **What changed and why** — one paragraph, with one example query or one before/after fact.
 2. **Mechanism** — one paragraph, the core idea (a new field, a rewrite step, a swapped algorithm). Not a function-by-function walkthrough; the diff is the source of truth.
 3. **Deferred / known limitations** — one short paragraph; name the case and how it surfaces (NYI message, commented-out test, follow-up task). Do not re-explain the design rationale for each deferral.
-4. **Test plan** — one paragraph. State the high-level coverage; the diff is the source of truth for the specific cases. Don't write "tests pass" — CI reports that. Only call out a buck command if it's a non-obvious target a reviewer should run locally.
+4. **Test plan** — the test strategy, and only when it is non-obvious (a manual repro, a CLI run, a fuzzer run). The tests are in the diff — don't list them. Otherwise omit the Test Plan. Don't write "tests pass" — CI reports that.
 
 Avoid the reasoning journey: which sibling function got reused, which alternative paths were considered, which Layer-1 fix enabled which Layer-2 fix. That belongs in the design doc or PR thread, not the commit message. If a section keeps growing past a paragraph, it's usually a hint that the change should be split.
 

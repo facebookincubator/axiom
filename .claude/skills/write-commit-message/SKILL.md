@@ -38,7 +38,7 @@ The per-pattern rules below all derive from this principle. If a draft passes th
    - **What + why**: lead with user-visible behavior change. Include one concrete example query, error message, or before/after fact. A reader without internals knowledge should get the gist.
    - **Mechanism**: the core idea as ONE concept — a new field, a swapped algorithm, an added check, a rewrite step. Skip when the title + "what + why" already conveys it.
    - **Deferred**: name a deliberately-not-done case and how it surfaces (NYI message, follow-up issue). Skip if none.
-   - **Test plan**: high-level coverage. Name the test file(s) and what scenarios they cover. If the test work covers more than one distinct category (e.g., extracting tests + adding new coverage + a bug-fix regression test), use bullets — one per category. Don't cram multiple categories into one comma-separated sentence. Don't write "tests pass" or "CI green" — CI reports that; restating it is noise. State what was *covered*, not that it succeeded. For pure refactors with no new tests, omit the Test Plan section entirely — "existing tests cover this" / "covered by CI" is implied by "pure refactor" and adds no information.
+   - **Test plan**: the only useful content is the test *strategy*, and only when it isn't obvious. Never list the tests or their scenarios — they are in the diff. Default to omitting the Test Plan entirely (unit tests added for the new behavior, or a pure refactor). State the strategy only when a reader couldn't guess it — a manual repro, a CLI run, a fuzzer run, end-to-end exercise; bullets if it spans more than one kind. No pass counts or "CI green" — CI reports that.
 
    **Prose clarity** — write so a tired reader gets each sentence on first read.
    - Prefer short sentences. If a sentence has two clauses joined by "so", "because", "but", "even though", "although", or a comma + participle, consider splitting it. Contrastive joiners ("but X", "even though Y") are especially risky when both halves introduce a fact the reader does not already have — pack two new facts into one sentence and the reader stalls. State each rule in its own sentence, then connect them.
@@ -90,7 +90,7 @@ The per-pattern rules below all derive from this principle. If a draft passes th
    - [ ] Prose clarity: no sentence longer than ~30 words; no stacked abstractions ("X advertising Y", "scope of Z"). Each sentence is parseable on first read.
    - [ ] No comma-separated enumeration of 3+ items inside any sentence — lists go in sub-bullets.
    - [ ] Sentences describing deletions or additions lead with the active verb ("Removes X", "Adds Y").
-   - [ ] Test Plan uses bullets if covering 2 or more distinct categories.
+   - [ ] Test Plan is a non-obvious test strategy, or omitted — never a list of the tests added.
    - [ ] Every sentence passes the would-I-say-this-aloud test. No defensive citations (file:line, enum value lists), no claims restated at a different abstraction level, no symbol-by-symbol cleanup recitations.
 
    If any item fails, fix the draft before showing.
@@ -109,7 +109,7 @@ These are the patterns drafts most often hit, and that this skill exists to prev
 - **Missing big picture** — Diving into internal symbols in paragraph 1. Lead with user-visible behavior; descend into mechanism in paragraph 2.
 - **Reasoning scaffolding** — "We considered X but chose Y because Z." Belongs in design docs or PR threads, not the commit log.
 - **Hard-wrapped paragraphs** — Hard line breaks at ~70/80 columns render as ragged short lines wherever the message is reflowed.
-- **Pass-counting test plans** — "All 47 tests pass." CI says that. State *what was covered*, not that it succeeded.
+- **Listing or pass-counting the tests** — the added cases are in the diff and "All 47 tests pass" is CI's job; both are noise. The Test Plan carries only a non-obvious test strategy (a repro, a CLI run), else omit it.
 - **Stale Test Plan after amend** — when amending a commit whose diff has grown or changed shape (new test file, new coverage, dropped scenarios), re-derive the Test Plan from the current diff. Text written for the first draft of the change rots: it references items that no longer exist or omits new categories. Re-read the diff before keeping the prior Test Plan as-is.
 
 ## When NOT to invoke
