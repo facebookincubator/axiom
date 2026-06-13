@@ -15,6 +15,8 @@
  */
 
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
+#include <gflags/gflags.h>
+#include <optional>
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/logical_plan/PlanBuilder.h"
@@ -24,7 +26,30 @@
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 
+DEFINE_string(
+    tpch_data_path,
+    "",
+    "If set, TPC-H tests reuse pre-generated sf0.1 Parquet data in this "
+    "directory (one subdirectory per table, with .stats files) and skip data "
+    "generation. If empty, falls back to the AXIOM_TPCH_DATA_PATH environment "
+    "variable (which survives `buck test`, where --flags do not); if that is "
+    "also empty, data is generated into a temporary directory on each run.");
+
 namespace facebook::axiom::optimizer::test {
+
+namespace {
+// Resolves the reuse directory from --tpch_data_path, else the
+// AXIOM_TPCH_DATA_PATH environment variable. std::nullopt means generate.
+std::optional<std::string> tpchDataPath() {
+  if (!FLAGS_tpch_data_path.empty()) {
+    return FLAGS_tpch_data_path;
+  }
+  if (const char* fromEnv = std::getenv("AXIOM_TPCH_DATA_PATH")) {
+    return std::string{fromEnv};
+  }
+  return std::nullopt;
+}
+} // namespace
 
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
@@ -36,9 +61,12 @@ const std::string kDefaultSchema{
 void HiveQueriesTestBase::SetUpTestCase() {
   test::QueryTestBase::SetUpTestCase();
 
-  gTempDirectory = common::testutil::TempDirectoryPath::create();
-
-  localDataPath_ = gTempDirectory->getPath();
+  if (const auto dataPath = tpchDataPath()) {
+    localDataPath_ = *dataPath;
+  } else {
+    gTempDirectory = common::testutil::TempDirectoryPath::create();
+    localDataPath_ = gTempDirectory->getPath();
+  }
   localFileFormat_ = velox::dwio::common::FileFormat::PARQUET;
 
   velox::parquet::registerParquetReaderFactory();
@@ -72,6 +100,11 @@ void HiveQueriesTestBase::SetUp() {
 // static
 void HiveQueriesTestBase::createTpchTables(
     const std::vector<velox::tpch::Table>& tables) {
+  if (tpchDataPath().has_value()) {
+    LOG(INFO) << "Reusing TPC-H data from " << localDataPath_
+              << "; skipping generation";
+    return;
+  }
   VELOX_CHECK(gTempDirectory != nullptr, "SetUpTestCase not called");
   TpchDataGenerator::createTables(
       tables, gTempDirectory->getPath(), /*scaleFactor=*/0.1, localFileFormat_);
