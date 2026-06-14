@@ -16,6 +16,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 
 namespace facebook::axiom::optimizer::test {
 
@@ -24,5 +25,9 @@ std::string readSqlFromFile(const std::string& filePath);
 
 /// Reads and returns the SQL for the given TPC-H query number.
 std::string readTpchSql(int32_t query);
+
+/// Reads and returns the SQL for a named TPC-H query or variant file, e.g.
+/// "q9_alt" reads "tpch/queries/q9_alt.sql".
+std::string readTpchSql(std::string_view name);
 
 } // namespace facebook::axiom::optimizer::test

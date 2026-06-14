@@ -85,6 +85,15 @@ class TpchPlanTest : public virtual test::HiveQueriesTestBase {
     return toSingleNodePlan(parseTpchSql(query));
   }
 
+  // Parses a named TPC-H query file (e.g. "q9_alt").
+  lp::LogicalPlanNodePtr parseTpchSql(const std::string& name) {
+    return parseSelect(test::readTpchSql(name));
+  }
+
+  velox::core::PlanNodePtr planTpch(const std::string& name) {
+    return toSingleNodePlan(parseTpchSql(name));
+  }
+
   std::unique_ptr<exec::test::TpchQueryBuilder> referenceBuilder_;
 };
 
@@ -136,11 +145,10 @@ TEST_F(TpchPlanTest, q01) {
 TEST_F(TpchPlanTest, q02) {
   checkTpchSql(2);
 
-  auto joinNationWithRegion = matchHiveScan("nation").hashJoin(
+  auto joinNationWithRegion = matchHiveScan("nation").hashJoinInner(
       core::PlanMatcherBuilder()
           .hiveScan("region", test::eq("r_name", "EUROPE"))
-          .build(),
-      core::JoinType::kInner);
+          .build());
 
   // The subquery (min cost per part) is very selective — it matches at most
   // one partsupp row per part. It is joined before supplier because its low
@@ -154,29 +162,20 @@ TEST_F(TpchPlanTest, q02) {
   //  (supplier INNER (nation INNER region)))
   auto matcher =
       matchHiveScan("partsupp")
-          .hashJoin(matchHiveScan("part").build(), core::JoinType::kInner)
-          .hashJoin(
+          .hashJoinInner(matchHiveScan("part").build())
+          .hashJoinInner(
               matchHiveScan("partsupp")
-                  .hashJoin(
-                      matchHiveScan("part").build(),
-                      core::JoinType::kLeftSemiFilter)
-                  .hashJoin(
+                  .hashJoinLeftSemiFilter(matchHiveScan("part").build())
+                  .hashJoinInner(
                       matchHiveScan("supplier")
-                          .hashJoin(
-                              joinNationWithRegion.build(),
-                              core::JoinType::kInner)
-                          .build(),
-                      core::JoinType::kInner)
+                          .hashJoinInner(joinNationWithRegion.build())
+                          .build())
                   .aggregation()
                   .project()
-                  .build(),
-              core::JoinType::kInner)
-          .hashJoin(
-              matchHiveScan("supplier")
-                  .hashJoin(
-                      joinNationWithRegion.build(), core::JoinType::kInner)
-                  .build(),
-              core::JoinType::kInner)
+                  .build())
+          .hashJoinInner(matchHiveScan("supplier")
+                             .hashJoinInner(joinNationWithRegion.build())
+                             .build())
           .topN()
           .project()
           .build();
@@ -195,21 +194,15 @@ TEST_F(TpchPlanTest, q03) {
   // probe on lineitem. There is anti-correlation between the date filters on
   // lineitem and orders but that does not affect the best plan choice.
 
-  auto startMatcher = [&](const std::string& tableName) {
-    return core::PlanMatcherBuilder().tableScan(tableName);
-  };
-
   auto matcher =
-      startMatcher("lineitem")
-          .hashJoin(
-              startMatcher("orders")
-                  .hashJoin(
-                      startMatcher("customer").build(),
-                      core::JoinType::kInner,
+      matchHiveScan("lineitem")
+          .hashJoinInner(
+              matchHiveScan("orders")
+                  .hashJoinInner(
+                      matchHiveScan("customer").build(),
                       {.outputColumnNames =
                            {{"o_orderkey", "o_orderdate", "o_shippriority"}}})
                   .build(),
-              core::JoinType::kInner,
               {.outputColumnNames =
                    {{"l_orderkey",
                      "l_extendedprice",
@@ -239,7 +232,7 @@ TEST_F(TpchPlanTest, q04) {
 
   auto matcher = core::PlanMatcherBuilder()
                      .hiveScan("lineitem", {}, "l_commitdate < l_receiptdate")
-                     .hashJoin(
+                     .hashJoinRightSemiFilter(
                          core::PlanMatcherBuilder()
                              .hiveScan(
                                  "orders",
@@ -247,8 +240,7 @@ TEST_F(TpchPlanTest, q04) {
                                      "o_orderdate",
                                      DATE()->toDays("1993-07-01"),
                                      DATE()->toDays("1993-09-30")))
-                             .build(),
-                         core::JoinType::kRightSemiFilter)
+                             .build())
                      .aggregation()
                      .orderBy()
                      .build();
@@ -273,36 +265,27 @@ TEST_F(TpchPlanTest, q05) {
   // The plan is otherwise good and the extra reduction on customer ends up not
   // being very important. This is a possible enhancement for completeness.
 
-  auto startMatcher = [&](const std::string& tableName) {
-    return core::PlanMatcherBuilder().tableScan(tableName);
-  };
-
   // agg((
   //   (lineitem INNER ((orders INNER customer) INNER (nation INNER region)))
   //   INNER
   //   (supplier LEFT SEMI (FILTER) (nation INNER region))
   // ))
 
-  auto joinNationWithRegion = startMatcher("nation").hashJoin(
+  auto joinNationWithRegion = matchHiveScan("nation").hashJoinInner(
       core::PlanMatcherBuilder()
           .hiveScan("region", test::eq("r_name", "ASIA"))
-          .build(),
-      core::JoinType::kInner);
+          .build());
 
   auto matcher =
-      startMatcher("lineitem")
-          .hashJoin(
-              startMatcher("orders")
-                  .hashJoin(
-                      startMatcher("customer").build(), core::JoinType::kInner)
-                  .hashJoin(
-                      joinNationWithRegion.build(), core::JoinType::kInner)
-                  .build())
-          .hashJoin(startMatcher("supplier")
-                        .hashJoin(
-                            joinNationWithRegion.project().build(),
-                            core::JoinType::kLeftSemiFilter)
-                        .build())
+      matchHiveScan("lineitem")
+          .hashJoinInner(matchHiveScan("orders")
+                             .hashJoinInner(matchHiveScan("customer").build())
+                             .hashJoinInner(joinNationWithRegion.build())
+                             .build())
+          .hashJoinInner(matchHiveScan("supplier")
+                             .hashJoinLeftSemiFilter(
+                                 joinNationWithRegion.project().build())
+                             .build())
           .project()
           .aggregation()
           .orderBy()
@@ -362,10 +345,56 @@ TEST_F(TpchPlanTest, q08) {
 TEST_F(TpchPlanTest, q09) {
   checkTpchSql(9);
 
-  // TODO Verify the plan.
+  // No plan-shape assertion: q9's `p_name like '%green%'` is not estimable from
+  // column stats, so the optimizer over-estimates it and orders the join
+  // suboptimally. q09Alt locks the optimal shape using an estimable filter of
+  // similar selectivity. See tpch/queries/statistics.md.
 
   ASSERT_NO_THROW(planTpch(9));
   ASSERT_NO_THROW(planVelox(parseTpchSql(9)));
+}
+
+TEST_F(TpchPlanTest, q09Alt) {
+  // q9 with `p_name like '%green%'` replaced by the estimable `p_size <= 3`
+  // (~6%, similar selectivity). With an accurate estimate the optimizer reduces
+  // lineitem by the selective `part` first — the optimal join order. See
+  // tpch/queries/statistics.md.
+  //
+  // TODO: Verify results (no TpchQueryBuilder reference exists for this
+  // variant; this asserts plan shape only).
+  auto plan = planTpch("q9_alt");
+
+  // Optimal part-first order:
+  //
+  // agg((
+  //   orders INNER (
+  //     ((partsupp INNER supplier)
+  //        INNER
+  //        ((lineitem INNER part) LEFT SEMI (FILTER) (supplier INNER nation)))
+  //     INNER nation)))
+  auto matcher =
+      matchHiveScan("orders")
+          .hashJoinInner(
+              matchHiveScan("partsupp")
+                  .hashJoinInner(matchHiveScan("supplier").build())
+                  .hashJoinInner(
+                      matchHiveScan("lineitem")
+                          .hashJoinInner(matchHiveScan("part").build())
+                          .hashJoinLeftSemiFilter(
+                              matchHiveScan("supplier")
+                                  .hashJoinInner(
+                                      matchHiveScan("nation").build())
+                                  .project()
+                                  .build())
+                          .build())
+                  .hashJoinInner(matchHiveScan("nation").build())
+                  .build())
+          .project()
+          .aggregation()
+          .orderBy()
+          .project()
+          .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
 TEST_F(TpchPlanTest, q10) {
@@ -386,35 +415,27 @@ TEST_F(TpchPlanTest, q11) {
   // something that Velox plans support at this time. Also, practical need for
   // this is not very high.
 
-  auto startMatcher = [&](const std::string& tableName) {
-    return core::PlanMatcherBuilder().tableScan(tableName);
-  };
-
   auto matcher =
-      startMatcher("partsupp")
-          .hashJoin(
-              startMatcher("supplier")
-                  .hashJoin(
+      matchHiveScan("partsupp")
+          .hashJoinInner(
+              matchHiveScan("supplier")
+                  .hashJoinInner(
                       core::PlanMatcherBuilder()
                           .hiveScan("nation", test::eq("n_name", "GERMANY"))
-                          .build(),
-                      core::JoinType::kInner)
-                  .build(),
-              core::JoinType::kInner)
+                          .build())
+                  .build())
           .project()
           .aggregation()
           .nestedLoopJoin(
-              startMatcher("partsupp")
-                  .hashJoin(
-                      startMatcher("supplier")
-                          .hashJoin(
+              matchHiveScan("partsupp")
+                  .hashJoinInner(
+                      matchHiveScan("supplier")
+                          .hashJoinInner(
                               core::PlanMatcherBuilder()
                                   .hiveScan(
                                       "nation", test::eq("n_name", "GERMANY"))
-                                  .build(),
-                              core::JoinType::kInner)
-                          .build(),
-                      core::JoinType::kInner)
+                                  .build())
+                          .build())
                   .project()
                   .aggregation()
                   .project()
@@ -448,16 +469,14 @@ TEST_F(TpchPlanTest, q12) {
           .build();
 
   auto matcher =
-      core::PlanMatcherBuilder()
-          .tableScan("orders")
-          .hashJoin(
+      matchHiveScan("orders")
+          .hashJoinInner(
               core::PlanMatcherBuilder()
                   .hiveScan(
                       "lineitem",
                       std::move(subfieldFilters),
                       "l_commitdate < l_receiptdate AND l_shipdate < l_commitdate")
-                  .build(),
-              core::JoinType::kInner)
+                  .build())
           .project()
           .aggregation()
           .orderBy()
@@ -476,18 +495,13 @@ TEST_F(TpchPlanTest, q13) {
   // correctly produce the right outer join, building on the left, i.e.
   // customer, as it is much smaller than orders.
 
-  auto startMatcher = [&](const std::string& tableName) {
-    return core::PlanMatcherBuilder().tableScan(tableName);
-  };
-
-  auto matcher =
-      startMatcher("orders")
-          .hashJoin(startMatcher("customer").build(), core::JoinType::kRight)
-          .aggregation()
-          .project()
-          .aggregation()
-          .orderBy()
-          .build();
+  auto matcher = matchHiveScan("orders")
+                     .hashJoinRight(matchHiveScan("customer").build())
+                     .aggregation()
+                     .project()
+                     .aggregation()
+                     .orderBy()
+                     .build();
 
   auto plan = planTpch(13);
   AXIOM_ASSERT_PLAN(plan, matcher);
@@ -501,9 +515,8 @@ TEST_F(TpchPlanTest, q14) {
   // The only noteworthy aspect is that we build on lineitem since its filters
   // (1 month out of 7 years) make it smaller than part.
 
-  auto matcher = core::PlanMatcherBuilder()
-                     .tableScan("part")
-                     .hashJoin(
+  auto matcher = matchHiveScan("part")
+                     .hashJoinInner(
                          core::PlanMatcherBuilder()
                              .hiveScan(
                                  "lineitem",
@@ -511,8 +524,7 @@ TEST_F(TpchPlanTest, q14) {
                                      "l_shipdate",
                                      DATE()->toDays("1995-09-01"),
                                      DATE()->toDays("1995-09-30")))
-                             .build(),
-                         core::JoinType::kInner)
+                             .build())
                      .project()
                      .aggregation()
                      .project()
@@ -542,17 +554,10 @@ TEST_F(TpchPlanTest, q16) {
   // The join is biggest table first, with part joined first because it is quite
   // selective, more so than the exists with supplier.
 
-  auto startMatcher = [&](const std::string& tableName) {
-    return core::PlanMatcherBuilder().tableScan(tableName);
-  };
-
   auto matcher =
-      startMatcher("partsupp")
-          .hashJoin(startMatcher("part").build(), core::JoinType::kInner)
-          .hashJoin(
-              startMatcher("supplier").build(),
-              core::JoinType::kAnti,
-              {.nullAware = true})
+      matchHiveScan("partsupp")
+          .hashJoinInner(matchHiveScan("part").build())
+          .hashJoinAnti(matchHiveScan("supplier").build(), {.nullAware = true})
           .aggregation()
           .orderBy()
           .build();
@@ -571,22 +576,15 @@ TEST_F(TpchPlanTest, q17) {
   // only lineitems with a very specific part will occur on the probe side, so
   // we copy the restriction inside the group by as a semijoin (exists).
 
-  auto startMatcher = [&](const std::string& tableName) {
-    return core::PlanMatcherBuilder().tableScan(tableName);
-  };
-
   auto matcher =
-      startMatcher("lineitem")
-          .hashJoin(startMatcher("part").build(), core::JoinType::kInner)
-          .hashJoin(
-              startMatcher("lineitem")
-                  .hashJoin(
-                      startMatcher("part").build(),
-                      core::JoinType::kLeftSemiFilter)
+      matchHiveScan("lineitem")
+          .hashJoinInner(matchHiveScan("part").build())
+          .hashJoinLeft(
+              matchHiveScan("lineitem")
+                  .hashJoinLeftSemiFilter(matchHiveScan("part").build())
                   .aggregation()
                   .project() // TODO Figure out if it can be removed.
-                  .build(),
-              core::JoinType::kLeft)
+                  .build())
           .filter()
           .aggregation()
           .project()
@@ -614,19 +612,14 @@ TEST_F(TpchPlanTest, q18) {
 
   auto matcher =
       matchHiveScan("lineitem")
-          .hashJoin(
-              matchHiveScan("lineitem")
-                  .aggregation()
-                  .filter()
-                  .project()
-                  .build(),
-              core::JoinType::kLeftSemiFilter)
-          .hashJoin(
-              matchHiveScan("orders")
-                  .hashJoin(
-                      matchHiveScan("customer").build(), core::JoinType::kInner)
-                  .build(),
-              core::JoinType::kInner)
+          .hashJoinLeftSemiFilter(matchHiveScan("lineitem")
+                                      .aggregation()
+                                      .filter()
+                                      .project()
+                                      .build())
+          .hashJoinInner(matchHiveScan("orders")
+                             .hashJoinInner(matchHiveScan("customer").build())
+                             .build())
           .aggregation()
           .topN()
           .build();
@@ -658,7 +651,7 @@ TEST_F(TpchPlanTest, q19) {
   auto matcher =
       core::PlanMatcherBuilder()
           .hiveScan("lineitem", std::move(lineitemFilters))
-          .hashJoin(
+          .hashJoinInner(
               core::PlanMatcherBuilder()
                   .hiveScan(
                       "part",
@@ -666,8 +659,7 @@ TEST_F(TpchPlanTest, q19) {
                       "\"or\"(\"and\"(p_size between 1 and 15, (p_brand = 'Brand#34' AND p_container in ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG'))), "
                       "   \"or\"(\"and\"(p_size between 1 and 5, (p_brand = 'Brand#12' AND p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG'))), "
                       "          \"and\"(p_size between 1 and 10, (p_brand = 'Brand#23' AND p_container in ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')))))")
-                  .build(),
-              core::JoinType::kInner)
+                  .build())
           .filter()
           .project()
           .aggregation()
@@ -694,30 +686,24 @@ TEST_F(TpchPlanTest, q20) {
       matchHiveScan("lineitem")
           .aggregation()
           .project()
-          .hashJoin(
+          .hashJoinRight(
               matchHiveScan("part")
-                  .hashJoin(
+                  .hashJoinRightSemiFilter(
                       matchHiveScan("partsupp")
-                          .hashJoin(
+                          .hashJoinLeftSemiFilter(
                               matchHiveScan("supplier")
-                                  .hashJoin(
-                                      matchHiveScan("nation").build(),
-                                      core::JoinType::kInner)
+                                  .hashJoinInner(
+                                      matchHiveScan("nation").build())
                                   .project()
-                                  .build(),
-                              core::JoinType::kLeftSemiFilter)
-                          .build(),
-                      core::JoinType::kRightSemiFilter)
-                  .build(),
-              core::JoinType::kRight)
+                                  .build())
+                          .build())
+                  .build())
           .filter()
           .project()
-          .hashJoin(
+          .hashJoinRightSemiFilter(
               matchHiveScan("supplier")
-                  .hashJoin(
-                      matchHiveScan("nation").build(), core::JoinType::kInner)
-                  .build(),
-              core::JoinType::kRightSemiFilter)
+                  .hashJoinInner(matchHiveScan("nation").build())
+                  .build())
           .orderBy()
           .build();
 
@@ -739,28 +725,24 @@ TEST_F(TpchPlanTest, q21) {
 TEST_F(TpchPlanTest, q22) {
   checkTpchSql(22);
 
-  auto startMatcher = [&](const std::string& tableName) {
-    return core::PlanMatcherBuilder().tableScan(tableName);
-  };
-
   // The query is straightforward, with the not exists resolved with a right
   // semijoin and the non-correlated subquery becoming a cross join to the one
   // row result set of the non-grouped aggregation.
 
-  auto matcher = startMatcher("orders")
-                     .hashJoin(
-                         startMatcher("customer")
-                             .nestedLoopJoin(
-                                 startMatcher("customer").aggregation().build())
-                             .filter()
-                             .build(),
-                         velox::core::JoinType::kRightSemiProject,
-                         {.nullAware = false})
-                     .filter()
-                     .project()
-                     .aggregation()
-                     .orderBy()
-                     .build();
+  auto matcher =
+      matchHiveScan("orders")
+          .hashJoinRightSemiProject(
+              matchHiveScan("customer")
+                  .nestedLoopJoin(
+                      matchHiveScan("customer").aggregation().build())
+                  .filter()
+                  .build(),
+              {.nullAware = false})
+          .filter()
+          .project()
+          .aggregation()
+          .orderBy()
+          .build();
 
   auto plan = planTpch(22);
   AXIOM_ASSERT_PLAN(plan, matcher);
