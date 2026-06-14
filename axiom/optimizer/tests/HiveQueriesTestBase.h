@@ -33,7 +33,9 @@ class HiveQueriesTestBase : public QueryTestBase {
   /// Creates a temporary data directory and sets 'localDataPath_' and
   /// 'localFileFormat_' (Parquet by default). Registers Parquet reader and
   /// writer. Subclasses should call this, then use createTpchTables() to
-  /// populate test tables.
+  /// populate test tables. If --tpch_data_path or the AXIOM_TPCH_DATA_PATH
+  /// environment variable is set, 'localDataPath_' points at that pre-generated
+  /// directory instead and no temporary directory is created.
   static void SetUpTestCase();
 
   /// Sets up the Hive connector with LocalHiveConnectorMetadata, and
@@ -41,6 +43,8 @@ class HiveQueriesTestBase : public QueryTestBase {
   void SetUp() override;
 
   /// Generates TPC-H data for the specified tables using 'localFileFormat_'.
+  /// Skipped (data is reused as-is) when a pre-generated data directory is
+  /// configured; see SetUpTestCase().
   static void createTpchTables(const std::vector<velox::tpch::Table>& tables);
 
   /// Unregisters Hive connector metadata.
