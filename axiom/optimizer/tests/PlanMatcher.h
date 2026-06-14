@@ -303,6 +303,61 @@ class PlanMatcherBuilder {
       JoinType joinType,
       const HashJoinDetails& details = {});
 
+  /// Typed shortcuts for `hashJoin` with a fixed `JoinType`.
+  PlanMatcherBuilder& hashJoinInner(
+      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      const HashJoinDetails& details = {}) {
+    return hashJoin(rightMatcher, JoinType::kInner, details);
+  }
+
+  PlanMatcherBuilder& hashJoinLeft(
+      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      const HashJoinDetails& details = {}) {
+    return hashJoin(rightMatcher, JoinType::kLeft, details);
+  }
+
+  PlanMatcherBuilder& hashJoinRight(
+      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      const HashJoinDetails& details = {}) {
+    return hashJoin(rightMatcher, JoinType::kRight, details);
+  }
+
+  PlanMatcherBuilder& hashJoinFull(
+      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      const HashJoinDetails& details = {}) {
+    return hashJoin(rightMatcher, JoinType::kFull, details);
+  }
+
+  PlanMatcherBuilder& hashJoinLeftSemiFilter(
+      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      const HashJoinDetails& details = {}) {
+    return hashJoin(rightMatcher, JoinType::kLeftSemiFilter, details);
+  }
+
+  PlanMatcherBuilder& hashJoinLeftSemiProject(
+      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      const HashJoinDetails& details = {}) {
+    return hashJoin(rightMatcher, JoinType::kLeftSemiProject, details);
+  }
+
+  PlanMatcherBuilder& hashJoinRightSemiFilter(
+      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      const HashJoinDetails& details = {}) {
+    return hashJoin(rightMatcher, JoinType::kRightSemiFilter, details);
+  }
+
+  PlanMatcherBuilder& hashJoinRightSemiProject(
+      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      const HashJoinDetails& details = {}) {
+    return hashJoin(rightMatcher, JoinType::kRightSemiProject, details);
+  }
+
+  PlanMatcherBuilder& hashJoinAnti(
+      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      const HashJoinDetails& details = {}) {
+    return hashJoin(rightMatcher, JoinType::kAnti, details);
+  }
+
   /// Matches a NestedLoopJoin node with the specified right side matcher and
   /// join type.
   /// @param rightMatcher Matcher for the right side of the join.

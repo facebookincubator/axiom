@@ -44,14 +44,24 @@ std::string readSqlFromFile(const std::string& filePath) {
   return sql;
 }
 
-std::string readTpchSql(int32_t query) {
-  auto sql = readSqlFromFile(fmt::format("tpch/queries/q{}.sql", query));
+namespace {
+std::string readAndTrim(const std::string& path) {
+  auto sql = readSqlFromFile(path);
 
   boost::trim_right(sql);
   if (!sql.empty() && sql.back() == ';') {
     sql.pop_back();
   }
   return sql;
+}
+} // namespace
+
+std::string readTpchSql(int32_t query) {
+  return readAndTrim(fmt::format("tpch/queries/q{}.sql", query));
+}
+
+std::string readTpchSql(std::string_view name) {
+  return readAndTrim(fmt::format("tpch/queries/{}.sql", name));
 }
 
 } // namespace facebook::axiom::optimizer::test
