@@ -12,29 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(axiom_connectors ConnectorMetadata.cpp ConnectorMetadataRegistry.cpp SchemaResolver.cpp)
+add_executable(axiom_file_connector_test FileConnectorTest.cpp)
+
+add_test(NAME axiom_file_connector_test COMMAND axiom_file_connector_test)
 
 target_link_libraries(
-  axiom_connectors
-  axiom_common
-  velox_common_base
-  velox_memory
-  velox_connector
-  velox_core
-  Folly::folly
+  axiom_file_connector_test
+  axiom_cli
+  velox_dwio_parquet_writer
+  velox_vector_test_lib
+  velox_exec_test_lib
+  GTest::gtest
+  GTest::gmock
 )
-
-add_subdirectory(file)
-add_subdirectory(system)
-
-if(VELOX_ENABLE_HIVE_CONNECTOR)
-  add_subdirectory(hive)
-endif()
-
-if(VELOX_ENABLE_TPCH_CONNECTOR)
-  add_subdirectory(tpch)
-endif()
-
-if(AXIOM_BUILD_TESTING)
-  add_subdirectory(tests)
-endif()

@@ -12,29 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(axiom_connectors ConnectorMetadata.cpp ConnectorMetadataRegistry.cpp SchemaResolver.cpp)
+add_library(axiom_file_handler_parquet ParquetFileHandler.cpp)
 
 target_link_libraries(
-  axiom_connectors
-  axiom_common
-  velox_common_base
-  velox_memory
-  velox_connector
-  velox_core
-  Folly::folly
+  axiom_file_handler_parquet
+  PUBLIC
+    axiom_file_connector_core
+    velox_connector
+    velox_dwio_parquet_reader
+    velox_dwio_common
+    velox_file
 )
-
-add_subdirectory(file)
-add_subdirectory(system)
-
-if(VELOX_ENABLE_HIVE_CONNECTOR)
-  add_subdirectory(hive)
-endif()
-
-if(VELOX_ENABLE_TPCH_CONNECTOR)
-  add_subdirectory(tpch)
-endif()
-
-if(AXIOM_BUILD_TESTING)
-  add_subdirectory(tests)
-endif()

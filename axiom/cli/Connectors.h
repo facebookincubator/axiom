@@ -101,6 +101,9 @@ class Connectors {
       const SessionConfig& sessionConfig,
       const std::string& connectorId = kSystemConnectorId);
 
+  /// Registers the file connector for querying raw files via SQL.
+  void registerFileConnector(const std::string& connectorId = "file");
+
  protected:
   /// Initialize file formats and ioExecutor. Must be called before
   /// registering any connectors.

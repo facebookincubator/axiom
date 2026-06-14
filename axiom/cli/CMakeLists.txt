@@ -37,6 +37,8 @@ target_link_libraries(
   axiom_graphviz_printers
   axiom_hive_connector_metadata
   axiom_tpch_connector_metadata
+  axiom_file_connector
+  axiom_file_handler_parquet
   axiom_system_connector
   axiom_test_connector
   axiom_sql_presto_parser

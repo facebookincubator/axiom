@@ -228,13 +228,17 @@ with Velox. These components are:
   - top-level “optimizer” directory
 - Query Runner capable of orchestrating multi-stage Velox execution.
   - top-level “runner” directory
-- Connector - an extention of Velox Connector APIs to provide functionality
+- Connector - an extension of Velox Connector APIs to provide functionality
   necessary for query parsing and planning.
   - top-level “connectors” directory
-  - [Hive](axiom/connectors/hive/README.md) — Local filesystem connector for Parquet, DWRF, and TEXT (including CSV) files.
-  - [TPC-H](axiom/connectors/tpch/README.md) — Read-only, in-memory TPC-H benchmark data.
-  - [System](axiom/connectors/system/README.md) — Read-only metadata tables for session properties and active queries.
-  - [Test](axiom/connectors/tests/README.md) — In-memory read-write connector for unit testing.
+
+  | Connector | Description |
+  |-----------|-------------|
+  | [Hive](axiom/connectors/hive/README.md) | Local filesystem connector for Parquet, DWRF, and TEXT (including CSV) files. |
+  | [TPC-H](axiom/connectors/tpch/README.md) | Read-only, in-memory TPC-H benchmark data. |
+  | [System](axiom/connectors/system/README.md) | Read-only metadata tables for session properties and active queries. |
+  | [Test](axiom/connectors/tests/README.md) | In-memory read-write connector for unit testing. |
+  | [File](axiom/connectors/file/README.md) | Read-only connector multi-utility for running sql on raw files |
 - [CLI](axiom/cli/README.md) - Interactive SQL command line for executing
   queries against in-memory TPC-H dataset and local Hive data.
   - top-level “cli” directory
@@ -317,7 +321,7 @@ Axiom integrates Velox as a Git submodule, referencing a specific commit of the
 Velox repository. The Velox badge at the top of this README shows the current
 commit and how far behind it is from Velox main.
 
-[See what changed since the current Velox commit.](https://github.com/facebookincubator/velox/compare/505a21e7c5f8970e219bdac44fad3c9cc2313010...main)
+[See what changed since the current Velox commit.](https://github.com/facebookincubator/velox/compare/457bb8ffd7674d4b2396fc8486451f1acc7ccd2b...main)
 <!-- pre-commit check-velox-readme validates the SHA above matches the submodule -->
 
 Advance Velox when your changes depend on code in Velox that
