@@ -857,6 +857,12 @@ class TestConnector : public velox::connector::Connector {
 
   void addTpchTables();
 
+  /// Registers the TPC-H tables with column statistics for the given scale
+  /// factor, without generating any data, so the optimizer can plan TPC-H
+  /// queries at any scale instantly. Row counts, distinct counts, and value
+  /// ranges all follow the TPC-H spec.
+  void addTpchTables(double scaleFactor);
+
   /// Callback receiving the filter expressions the optimizer pushes into a
   /// scan. Installed by tests to inspect the exact form a connector is handed.
   using FilterInspector =

@@ -337,7 +337,10 @@ class FilterMatcher : public PlanMatcherImpl<FilterNode> {
       ExprMatcher::match(plan.filter(), expected->dropAlias());
     }
 
-    AXIOM_TEST_RETURN
+    // A filter does not rename columns; pass the child's symbols through so
+    // downstream matchers can resolve aliases bound below the filter.
+    AXIOM_TEST_RETURN_IF_FAILURE
+    return MatchResult::success(symbols);
   }
 
  private:

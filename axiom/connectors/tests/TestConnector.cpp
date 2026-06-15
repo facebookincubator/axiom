@@ -1055,6 +1055,161 @@ void TestConnector::addTpchTables() {
   }
 }
 
+namespace {
+
+// TPC-H column statistics for 'table' at 'scaleFactor', following the TPC-H
+// spec. Dates and discrete domains are scale-invariant; key counts scale with
+// the row count, and foreign-key columns take the referenced table's key
+// range.
+std::unordered_map<std::string, connector::ColumnStatistics> tpchColumnStats(
+    velox::tpch::Table table,
+    double scaleFactor) {
+  using velox::tpch::getRowCount;
+  using velox::tpch::Table;
+
+  const int64_t supplierRows = getRowCount(Table::TBL_SUPPLIER, scaleFactor);
+  const int64_t partRows = getRowCount(Table::TBL_PART, scaleFactor);
+  const int64_t partsuppRows = getRowCount(Table::TBL_PARTSUPP, scaleFactor);
+  const int64_t customerRows = getRowCount(Table::TBL_CUSTOMER, scaleFactor);
+  const int64_t ordersRows = getRowCount(Table::TBL_ORDERS, scaleFactor);
+  const int64_t lineitemRows = getRowCount(Table::TBL_LINEITEM, scaleFactor);
+  const int64_t numRows = getRowCount(table, scaleFactor);
+
+  // The o_orderkey domain is sparse: keys span roughly four times the orders
+  // row count.
+  const int64_t orderKeyMax = 4 * ordersRows;
+
+  auto distinct = [&](int64_t count) {
+    connector::ColumnStatistics statistics;
+    statistics.nonNull = true;
+    statistics.numValues = numRows;
+    statistics.numDistinct = std::min<int64_t>(count, numRows);
+    return statistics;
+  };
+
+  auto ranged = [&](int64_t count, velox::Variant min, velox::Variant max) {
+    auto statistics = distinct(count);
+    statistics.min = std::move(min);
+    statistics.max = std::move(max);
+    return statistics;
+  };
+
+  auto asInt32 = [](int32_t value) { return velox::Variant(value); };
+  auto asInt64 = [](int64_t value) { return velox::Variant(value); };
+  auto asDouble = [](double value) { return velox::Variant(value); };
+  auto date = [](const char* text) {
+    return velox::Variant(velox::DATE()->toDays(text));
+  };
+
+  switch (table) {
+    case Table::TBL_REGION:
+      return {
+          {"r_regionkey", ranged(5, asInt64(0), asInt64(4))},
+          {"r_name", distinct(5)},
+          {"r_comment", distinct(5)}};
+    case Table::TBL_NATION:
+      return {
+          {"n_nationkey", ranged(25, asInt64(0), asInt64(24))},
+          {"n_name", distinct(25)},
+          {"n_regionkey", ranged(5, asInt64(0), asInt64(4))},
+          {"n_comment", distinct(25)}};
+    case Table::TBL_SUPPLIER:
+      return {
+          {"s_suppkey",
+           ranged(supplierRows, asInt64(1), asInt64(supplierRows))},
+          {"s_name", distinct(supplierRows)},
+          {"s_address", distinct(supplierRows)},
+          {"s_nationkey", ranged(25, asInt64(0), asInt64(24))},
+          {"s_phone", distinct(supplierRows)},
+          {"s_acctbal",
+           ranged(supplierRows, asDouble(-999.99), asDouble(9999.99))},
+          {"s_comment", distinct(supplierRows)}};
+    case Table::TBL_PART:
+      return {
+          {"p_partkey", ranged(partRows, asInt64(1), asInt64(partRows))},
+          {"p_name", distinct(partRows)},
+          {"p_mfgr", distinct(5)},
+          {"p_brand", distinct(25)},
+          {"p_type", distinct(150)},
+          {"p_size", ranged(50, asInt32(1), asInt32(50))},
+          {"p_container", distinct(40)},
+          {"p_retailprice",
+           ranged(partRows, asDouble(901.0), asDouble(2098.99))},
+          {"p_comment", distinct(partRows)}};
+    case Table::TBL_PARTSUPP:
+      return {
+          {"ps_partkey", ranged(partRows, asInt64(1), asInt64(partRows))},
+          {"ps_suppkey",
+           ranged(supplierRows, asInt64(1), asInt64(supplierRows))},
+          {"ps_availqty", ranged(9999, asInt32(1), asInt32(9999))},
+          {"ps_supplycost", ranged(100000, asDouble(1.0), asDouble(1000.0))},
+          {"ps_comment", distinct(partsuppRows)}};
+    case Table::TBL_CUSTOMER:
+      return {
+          {"c_custkey",
+           ranged(customerRows, asInt64(1), asInt64(customerRows))},
+          {"c_name", distinct(customerRows)},
+          {"c_address", distinct(customerRows)},
+          {"c_nationkey", ranged(25, asInt64(0), asInt64(24))},
+          {"c_phone", distinct(customerRows)},
+          {"c_acctbal",
+           ranged(customerRows, asDouble(-999.99), asDouble(9999.99))},
+          {"c_mktsegment", distinct(5)},
+          {"c_comment", distinct(customerRows)}};
+    case Table::TBL_ORDERS:
+      return {
+          {"o_orderkey", ranged(ordersRows, asInt64(1), asInt64(orderKeyMax))},
+          // Only about two thirds of customers place orders.
+          {"o_custkey",
+           ranged(2 * customerRows / 3, asInt64(1), asInt64(customerRows))},
+          {"o_orderstatus", distinct(3)},
+          {"o_totalprice",
+           ranged(ordersRows, asDouble(857.71), asDouble(600000.0))},
+          {"o_orderdate", ranged(2406, date("1992-01-01"), date("1998-08-02"))},
+          {"o_orderpriority", distinct(5)},
+          {"o_clerk", distinct(std::max<int64_t>(1, 1000 * scaleFactor))},
+          {"o_shippriority", distinct(1)},
+          {"o_comment", distinct(ordersRows)}};
+    case Table::TBL_LINEITEM:
+      return {
+          {"l_orderkey", ranged(ordersRows, asInt64(1), asInt64(orderKeyMax))},
+          {"l_partkey", ranged(partRows, asInt64(1), asInt64(partRows))},
+          {"l_suppkey",
+           ranged(supplierRows, asInt64(1), asInt64(supplierRows))},
+          {"l_linenumber", ranged(7, asInt32(1), asInt32(7))},
+          {"l_quantity", ranged(50, asDouble(1.0), asDouble(50.0))},
+          {"l_extendedprice",
+           ranged(lineitemRows, asDouble(901.0), asDouble(104949.5))},
+          {"l_discount", ranged(11, asDouble(0.0), asDouble(0.10))},
+          {"l_tax", ranged(9, asDouble(0.0), asDouble(0.08))},
+          {"l_returnflag", distinct(3)},
+          {"l_linestatus", distinct(2)},
+          {"l_shipdate", ranged(2526, date("1992-01-02"), date("1998-12-01"))},
+          {"l_commitdate",
+           ranged(2466, date("1992-01-31"), date("1998-10-31"))},
+          {"l_receiptdate",
+           ranged(2554, date("1992-01-03"), date("1998-12-31"))},
+          {"l_shipinstruct", distinct(4)},
+          {"l_shipmode", distinct(7)},
+          {"l_comment", distinct(lineitemRows)}};
+  }
+  VELOX_UNREACHABLE();
+}
+
+} // namespace
+
+void TestConnector::addTpchTables(double scaleFactor) {
+  VELOX_CHECK_GT(scaleFactor, 0, "TPC-H scale factor must be positive");
+  for (auto table : velox::tpch::tables) {
+    const auto name = std::string(velox::tpch::toTableName(table));
+    addTable(name, velox::tpch::getTableSchema(table));
+    setStats(
+        name,
+        velox::tpch::getRowCount(table, scaleFactor),
+        tpchColumnStats(table, scaleFactor));
+  }
+}
+
 void TestConnector::createView(
     const SchemaTableName& viewName,
     velox::RowTypePtr type,

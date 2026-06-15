@@ -81,7 +81,7 @@ target_link_libraries(
   Boost::headers
 )
 
-add_executable(axiom_optimizer_tpch_plan_test TpchPlanTest.cpp)
+add_executable(axiom_optimizer_tpch_plan_test TpchPlanTest.cpp TpchResultTest.cpp)
 
 add_test(
   NAME axiom_optimizer_tpch_plan_test
@@ -92,11 +92,13 @@ add_test(
 target_link_libraries(
   axiom_optimizer_tpch_plan_test
   velox_dwio_common_test_utils
+  velox_exec_test_lib
   axiom_optimizer_tests_tpch_data_generator
   axiom_optimizer_tests_tpch_queries
   axiom_optimizer_tests_query_test_base
   axiom_optimizer_tests_hive_queries_test_base
   axiom_runner_tests_utils
+  GTest::gtest
 )
 
 add_executable(

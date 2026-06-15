@@ -198,6 +198,18 @@ class PlanMatcherBuilder {
   /// Matches a Filter node with the specified predicate expression.
   /// Supports symbol rewriting from child matchers.
   /// @param predicate The expected filter predicate (DuckDB SQL syntax).
+  ///
+  /// The predicate is parsed and compared to the plan's filter expression by
+  /// structure, so it must match the optimizer's form, not just be logically
+  /// equivalent. Gotchas:
+  ///   - Conjunctions/disjunctions of three or more terms: the optimizer emits
+  ///     a flat n-ary call, but 'a and b and c' parses as nested binary
+  ///     'and(and(a, b), c)' and will not match. Use the function-call form
+  ///     '"and"(a, b, c)' for a flat call.
+  ///   - Numeric literal type: a literal is compared by both value and type
+  ///     kind. A bare integer such as '24' is INTEGER and will not match a
+  ///     constant the optimizer coerced to the column's type. Write '24.0' to
+  ///     compare against a DOUBLE column.
   PlanMatcherBuilder& filter(const std::string& predicate);
 
   /// Matches any Project node regardless of expressions.
@@ -501,6 +513,10 @@ class PlanMatcherBuilder {
   /// maps the alias to the i-th output column name. nullopt entries are
   /// skipped. Fails at match time if aliases.size() exceeds the matched
   /// node's output column count.
+  ///
+  /// Use lowercase aliases. Downstream expressions are parsed as DuckDB SQL,
+  /// which lowercases unquoted identifiers, so an alias like "myCol" registered
+  /// here would be looked up as "mycol".
   /// @param aliases The aliases to register, indexed by output column
   /// position. Use std::nullopt to skip a column.
   PlanMatcherBuilder& aliases(
