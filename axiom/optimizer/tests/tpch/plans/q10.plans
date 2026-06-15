@@ -1,3 +1,4 @@
+generated: 2026-06-14 18:29:33 (snapshot; regenerate with TpchPlanTest.makePlans)
 numWorkers: 1
 numDrivers: 1
 
@@ -5,46 +6,46 @@ Query Graph:
 
 dt1: 20.00 rows, c_custkey, c_name, revenue, c_acctbal, n_name, c_address, c_phone, c_comment
   output:
-    c_custkey := t2.c_custkey BIGINT (cardinality=13.22 min=1 max=15000)
-    c_name := t2.c_name VARCHAR (cardinality=13.14 min="Customer#000000001" max="Customer#000015000")
+    c_custkey := t2.c_custkey BIGINT (cardinality=20.00 min=1 max=150000)
+    c_name := t2.c_name VARCHAR (cardinality=20.00)
     revenue := dt1.revenue DOUBLE (cardinality=1.00)
-    c_acctbal := t2.c_acctbal DOUBLE (cardinality=13.14 min=-999.95 max=9999.72)
-    n_name := t5.n_name VARCHAR (cardinality=11.09 min="ALGERIA" max="VIETNAM")
-    c_address := t2.c_address VARCHAR (cardinality=13.14 min="  3SUEwTaEs35ZDr5dx6P2b" max="zzyQcZpC50YDkK26Pglp")
-    c_phone := t2.c_phone VARCHAR (cardinality=13.14 min="10-103-318-6809" max="34-999-121-7718")
-    c_comment := t2.c_comment VARCHAR (cardinality=13.14 min=" Tiresias among the boldly regular pinto beans wake pending" max="zzle. blithely regular instructions cajol")
+    c_acctbal := t2.c_acctbal DOUBLE (cardinality=20.00 min=-999.99 max=9999.99)
+    n_name := t5.n_name VARCHAR (cardinality=13.95)
+    c_address := t2.c_address VARCHAR (cardinality=20.00)
+    c_phone := t2.c_phone VARCHAR (cardinality=20.00)
+    c_comment := t2.c_comment VARCHAR (cardinality=20.00)
   tables: t2, t3, t4, t5
   joins:
-    t2 INNER t3 ON t2.c_custkey = t3.o_custkey [t2 → 0.04, t3 → 0.10]
-    t3 INNER t4 ON t3.o_orderkey = t4.l_orderkey [t3 → 1.34, t4 → 0.04]
-    t2 INNER t5 ON t2.c_nationkey = t5.n_nationkey [t2 → 1.00, t5 → 600.00]
-  syntactic join order: 11, 30, 52, 63
+    t2 INNER t3 ON t2.c_custkey = t3.o_custkey [t2 → 0.38, t3 → 1.00]
+    t3 INNER t4 ON t3.o_orderkey = t4.l_orderkey [t3 → 1.33, t4 → 0.04]
+    t2 INNER t5 ON t2.c_nationkey = t5.n_nationkey [t2 → 1.00, t5 → 6000.00]
+  syntactic join order: 9, 26, 46, 55
   aggregates: sum(multiply(t4.l_extendedprice, minus(1, t4.l_discount))) AS revenue
   grouping keys: t2.c_custkey, t2.c_name, t2.c_acctbal, t2.c_phone, t5.n_name, t2.c_address, t2.c_comment
   orderBy: dt1.revenue DESC NULLS LAST
   limit: 20
 
-t2: 15000.00 rows, c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_comment
+t2: 150000.00 rows, c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_comment
   table: "default"."customer"
-    c_custkey BIGINT (cardinality=14936.00 min=1 max=15000)
-    c_name VARCHAR (cardinality=14717.00 min="Customer#000000001" max="Customer#000015000")
-    c_address VARCHAR (cardinality=14939.00 min="  3SUEwTaEs35ZDr5dx6P2b" max="zzyQcZpC50YDkK26Pglp")
+    c_custkey BIGINT (cardinality=150000.00 min=1 max=150000)
+    c_name VARCHAR (cardinality=150000.00)
+    c_address VARCHAR (cardinality=150000.00)
     c_nationkey BIGINT (cardinality=25.00 min=0 max=24)
-    c_phone VARCHAR (cardinality=15553.00 min="10-103-318-6809" max="34-999-121-7718")
-    c_acctbal DOUBLE (cardinality=14867.00 min=-999.95 max=9999.72)
-    c_comment VARCHAR (cardinality=14577.00 min=" Tiresias among the boldly regular pinto beans wake pending" max="zzle. blithely regular instructions cajol")
+    c_phone VARCHAR (cardinality=150000.00)
+    c_acctbal DOUBLE (cardinality=150000.00 min=-999.99 max=9999.99)
+    c_comment VARCHAR (cardinality=150000.00)
 
-t3: 5735.66 rows, o_orderkey, o_custkey, o_orderdate
+t3: 57356.61 rows, o_orderkey, o_custkey, o_orderdate
   table: "default"."orders"
-    o_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
-    o_custkey BIGINT (cardinality=73171.00 min=1 max=149999)
-    o_orderdate DATE (cardinality=91.08 min=8674 max=8765)
+    o_orderkey BIGINT (cardinality=1500000.00 min=1 max=6000000)
+    o_custkey BIGINT (cardinality=100000.00 min=1 max=150000)
+    o_orderdate DATE (cardinality=92.00 min=8674 max=8765)
   single-column filters: gte(t3.o_orderdate, "1993-10-01") and lt(t3.o_orderdate, "1994-01-01")
 
-t4: 200190.67 rows, l_orderkey, l_extendedprice, l_discount, l_returnflag
+t4: 2000405.00 rows, l_orderkey, l_extendedprice, l_discount, l_returnflag
   table: "default"."lineitem"
-    l_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
-    l_extendedprice DOUBLE (cardinality=444713.00 min=901 max=104899.5)
+    l_orderkey BIGINT (cardinality=1500000.00 min=1 max=6000000)
+    l_extendedprice DOUBLE (cardinality=6001215.00 min=901 max=104949.5)
     l_discount DOUBLE (cardinality=11.00 min=0 max=0.1)
     l_returnflag VARCHAR (cardinality=1.00 min="R" max="R")
   single-column filters: eq(t4.l_returnflag, "R")
@@ -52,12 +53,12 @@ t4: 200190.67 rows, l_orderkey, l_extendedprice, l_discount, l_returnflag
 t5: 25.00 rows, n_nationkey, n_name
   table: "default"."nation"
     n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
-    n_name VARCHAR (cardinality=25.00 min="ALGERIA" max="VIETNAM")
+    n_name VARCHAR (cardinality=25.00)
 
 
 Optimized plan (oneline):
 
-agg(("default"."lineitem" INNER (("default"."customer" INNER "default"."orders") INNER "default"."nation")))
+agg((((customer INNER orders) INNER nation) INNER (lineitem LEFT SEMI (FILTER) ((customer INNER orders) INNER nation))))
 
 Optimized plan:
 
@@ -71,9 +72,9 @@ Project [20.00 rows] -> dt1.c_custkey, dt1.c_name, dt1.revenue, dt1.c_acctbal, d
     dt1.c_phone := t2.c_phone
     dt1.c_comment := t2.c_comment
   OrderBy [20.00 rows] -> t2.c_custkey, t2.c_name, t2.c_acctbal, t2.c_phone, t5.n_name, t2.c_address, t2.c_comment, dt1.revenue
-    Aggregation (t2.c_custkey, t2.c_name, t2.c_acctbal, t2.c_phone, t5.n_name, t2.c_address, t2.c_comment) [754.45 rows] -> t2.c_custkey, t2.c_name, t2.c_acctbal, t2.c_phone, t5.n_name, t2.c_address, t2.c_comment, dt1.revenue
-        dt1.revenue := sum(dt1.__p88)
-      Project [755.75 rows] -> t2.c_custkey, t2.c_name, t2.c_acctbal, t2.c_phone, t5.n_name, t2.c_address, t2.c_comment, dt1.__p88
+    Aggregation (t2.c_custkey, t2.c_name, t2.c_acctbal, t2.c_phone, t5.n_name, t2.c_address, t2.c_comment) [75715.84 rows] -> t2.c_custkey, t2.c_name, t2.c_acctbal, t2.c_phone, t5.n_name, t2.c_address, t2.c_comment, dt1.revenue
+        dt1.revenue := sum(dt1.__p80)
+      Project [76490.97 rows] -> t2.c_custkey, t2.c_name, t2.c_acctbal, t2.c_phone, t5.n_name, t2.c_address, t2.c_comment, dt1.__p80
           t2.c_custkey := t2.c_custkey
           t2.c_name := t2.c_name
           t2.c_acctbal := t2.c_acctbal
@@ -81,41 +82,106 @@ Project [20.00 rows] -> dt1.c_custkey, dt1.c_name, dt1.revenue, dt1.c_acctbal, d
           t5.n_name := t5.n_name
           t2.c_address := t2.c_address
           t2.c_comment := t2.c_comment
-          dt1.__p88 := multiply(t4.l_extendedprice, minus(1, t4.l_discount))
-        Join INNER Hash [755.75 rows] -> t2.c_custkey, t2.c_name, t2.c_address, t2.c_phone, t2.c_acctbal, t2.c_comment, t4.l_extendedprice, t4.l_discount, t5.n_name
-            t4.l_orderkey = t3.o_orderkey
-          TableScan [200190.67 rows] -> t4.l_orderkey, t4.l_extendedprice, t4.l_discount
-            table: "default"."lineitem"
-            single-column filters: eq(t4.l_returnflag, "R")
-          HashBuild [565.10 rows] -> t2.c_custkey, t2.c_name, t2.c_address, t2.c_phone, t2.c_acctbal, t2.c_comment, t3.o_orderkey, t5.n_name
-            Join INNER Hash [565.10 rows] -> t2.c_custkey, t2.c_name, t2.c_address, t2.c_phone, t2.c_acctbal, t2.c_comment, t3.o_orderkey, t5.n_name
-                t2.c_nationkey = t5.n_nationkey
-              Join INNER Hash [565.10 rows] -> t2.c_custkey, t2.c_name, t2.c_address, t2.c_nationkey, t2.c_phone, t2.c_acctbal, t2.c_comment, t3.o_orderkey
-                  t2.c_custkey = t3.o_custkey
-                TableScan [15000.00 rows] -> t2.c_custkey, t2.c_name, t2.c_address, t2.c_nationkey, t2.c_phone, t2.c_acctbal, t2.c_comment
-                  table: "default"."customer"
-                HashBuild [5735.66 rows] -> t3.o_orderkey, t3.o_custkey
-                  TableScan [5735.66 rows] -> t3.o_orderkey, t3.o_custkey
-                    table: "default"."orders"
-                    single-column filters: gte(t3.o_orderdate, "1993-10-01") and lt(t3.o_orderdate, "1994-01-01")
-              HashBuild [25.00 rows] -> t5.n_nationkey, t5.n_name
-                TableScan [25.00 rows] -> t5.n_nationkey, t5.n_name
-                  table: "default"."nation"
+          dt1.__p80 := multiply(t4.l_extendedprice, minus(1, t4.l_discount))
+        Join INNER Hash [76490.97 rows] -> t2.c_custkey, t2.c_name, t2.c_address, t2.c_phone, t2.c_acctbal, t2.c_comment, t4.l_extendedprice, t4.l_discount, t5.n_name
+            t3.o_orderkey = t4.l_orderkey
+          Join INNER Hash [57356.61 rows] -> t2.c_custkey, t2.c_name, t2.c_address, t2.c_phone, t2.c_acctbal, t2.c_comment, t3.o_orderkey, t5.n_name
+              t2.c_nationkey = t5.n_nationkey
+            Join INNER Hash [57356.61 rows] -> t2.c_custkey, t2.c_name, t2.c_address, t2.c_nationkey, t2.c_phone, t2.c_acctbal, t2.c_comment, t3.o_orderkey
+                t2.c_custkey = t3.o_custkey
+              TableScan [150000.00 rows] -> t2.c_custkey, t2.c_name, t2.c_address, t2.c_nationkey, t2.c_phone, t2.c_acctbal, t2.c_comment
+                table: "default"."customer"
+              HashBuild [57356.61 rows] -> t3.o_orderkey, t3.o_custkey
+                TableScan [57356.61 rows] -> t3.o_orderkey, t3.o_custkey
+                  table: "default"."orders"
+                  single-column filters: gte(t3.o_orderdate, "1993-10-01") and lt(t3.o_orderdate, "1994-01-01")
+            HashBuild [25.00 rows] -> t5.n_nationkey, t5.n_name
+              TableScan [25.00 rows] -> t5.n_nationkey, t5.n_name
+                table: "default"."nation"
+          HashBuild [76490.97 rows] -> t4.l_orderkey, t4.l_extendedprice, t4.l_discount
+            Join LEFT SEMI (FILTER) Hash [76490.97 rows] -> t4.l_orderkey, t4.l_extendedprice, t4.l_discount
+                t4.l_orderkey = edt13.edt13.t3.o_orderkey
+              TableScan [2000405.00 rows] -> t4.l_orderkey, t4.l_extendedprice, t4.l_discount
+                table: "default"."lineitem"
+                single-column filters: eq(t4.l_returnflag, "R")
+              HashBuild [57356.61 rows] -> edt13.edt13.t3.o_orderkey
+                Project [57356.61 rows] -> edt13.edt13.t3.o_orderkey
+                    edt13.edt13.t3.o_orderkey := t3.o_orderkey
+                  Join INNER Hash [57356.61 rows] -> t3.o_orderkey
+                      t2.c_nationkey = t5.n_nationkey
+                    Join INNER Hash [57356.61 rows] -> t2.c_nationkey, t3.o_orderkey
+                        t2.c_custkey = t3.o_custkey
+                      TableScan [150000.00 rows] -> t2.c_custkey, t2.c_nationkey
+                        table: "default"."customer"
+                      HashBuild [57356.61 rows] -> t3.o_orderkey, t3.o_custkey
+                        TableScan [57356.61 rows] -> t3.o_orderkey, t3.o_custkey
+                          table: "default"."orders"
+                          single-column filters: gte(t3.o_orderdate, "1993-10-01") and lt(t3.o_orderdate, "1994-01-01")
+                    HashBuild [25.00 rows] -> t5.n_nationkey
+                      TableScan [25.00 rows] -> t5.n_nationkey
+                        table: "default"."nation"
 
 
 Executable Velox plan:
 
 Fragment 0: fragment1 SINGLE:
--- Project[10][expressions: (c_custkey:BIGINT, "c_custkey"), (c_name:VARCHAR, "c_name"), (revenue:DOUBLE, "revenue"), (c_acctbal:DOUBLE, "c_acctbal"), (n_name:VARCHAR, "n_name"), (c_address:VARCHAR, "c_address"), (c_phone:VARCHAR, "c_phone"), (c_comment:VARCHAR, "c_comment")] -> c_custkey:BIGINT, c_name:VARCHAR, revenue:DOUBLE, c_acctbal:DOUBLE, n_name:VARCHAR, c_address:VARCHAR, c_phone:VARCHAR, c_comment:VARCHAR
-  -- TopN[9][20 revenue DESC NULLS LAST] -> c_custkey:BIGINT, c_name:VARCHAR, c_acctbal:DOUBLE, c_phone:VARCHAR, n_name:VARCHAR, c_address:VARCHAR, c_comment:VARCHAR, revenue:DOUBLE
-    -- Aggregation[8][SINGLE [c_custkey, c_name, c_acctbal, c_phone, n_name, c_address, c_comment] revenue := sum("dt1.__p88")] -> c_custkey:BIGINT, c_name:VARCHAR, c_acctbal:DOUBLE, c_phone:VARCHAR, n_name:VARCHAR, c_address:VARCHAR, c_comment:VARCHAR, revenue:DOUBLE
-      -- Project[7][expressions: (c_custkey:BIGINT, "c_custkey"), (c_name:VARCHAR, "c_name"), (c_acctbal:DOUBLE, "c_acctbal"), (c_phone:VARCHAR, "c_phone"), (n_name:VARCHAR, "n_name"), (c_address:VARCHAR, "c_address"), (c_comment:VARCHAR, "c_comment"), (dt1.__p88:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> c_custkey:BIGINT, c_name:VARCHAR, c_acctbal:DOUBLE, c_phone:VARCHAR, n_name:VARCHAR, c_address:VARCHAR, c_comment:VARCHAR, "dt1.__p88":DOUBLE
-        -- HashJoin[6][INNER l_orderkey=o_orderkey] -> c_custkey:BIGINT, c_name:VARCHAR, c_address:VARCHAR, c_phone:VARCHAR, c_acctbal:DOUBLE, c_comment:VARCHAR, l_extendedprice:DOUBLE, l_discount:DOUBLE, n_name:VARCHAR
-          -- TableScan[0][table: lineitem, range filters: [(l_returnflag, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_returnflag, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> l_orderkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
+-- Project[20][expressions: (c_custkey:BIGINT, "c_custkey"), (c_name:VARCHAR, "c_name"), (revenue:DOUBLE, "revenue"), (c_acctbal:DOUBLE, "c_acctbal"), (n_name:VARCHAR, "n_name"), (c_address:VARCHAR, "c_address"), (c_phone:VARCHAR, "c_phone"), (c_comment:VARCHAR, "c_comment")] -> c_custkey:BIGINT, c_name:VARCHAR, revenue:DOUBLE, c_acctbal:DOUBLE, n_name:VARCHAR, c_address:VARCHAR, c_phone:VARCHAR, c_comment:VARCHAR
+  -- TopN[19][20 revenue DESC NULLS LAST] -> c_custkey:BIGINT, c_name:VARCHAR, c_acctbal:DOUBLE, c_phone:VARCHAR, n_name:VARCHAR, c_address:VARCHAR, c_comment:VARCHAR, revenue:DOUBLE
+    -- Aggregation[18][SINGLE [c_custkey, c_name, c_acctbal, c_phone, n_name, c_address, c_comment] revenue := sum("dt1.__p80")] -> c_custkey:BIGINT, c_name:VARCHAR, c_acctbal:DOUBLE, c_phone:VARCHAR, n_name:VARCHAR, c_address:VARCHAR, c_comment:VARCHAR, revenue:DOUBLE
+      -- Project[17][expressions: (c_custkey:BIGINT, "c_custkey"), (c_name:VARCHAR, "c_name"), (c_acctbal:DOUBLE, "c_acctbal"), (c_phone:VARCHAR, "c_phone"), (n_name:VARCHAR, "n_name"), (c_address:VARCHAR, "c_address"), (c_comment:VARCHAR, "c_comment"), (dt1.__p80:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> c_custkey:BIGINT, c_name:VARCHAR, c_acctbal:DOUBLE, c_phone:VARCHAR, n_name:VARCHAR, c_address:VARCHAR, c_comment:VARCHAR, "dt1.__p80":DOUBLE
+        -- HashJoin[16][INNER o_orderkey=l_orderkey] -> c_custkey:BIGINT, c_name:VARCHAR, c_address:VARCHAR, c_phone:VARCHAR, c_acctbal:DOUBLE, c_comment:VARCHAR, l_extendedprice:DOUBLE, l_discount:DOUBLE, n_name:VARCHAR
           -- HashJoin[5][INNER c_nationkey=n_nationkey] -> c_custkey:BIGINT, c_name:VARCHAR, c_address:VARCHAR, c_phone:VARCHAR, c_acctbal:DOUBLE, c_comment:VARCHAR, o_orderkey:BIGINT, n_name:VARCHAR
             -- HashJoin[3][INNER c_custkey=o_custkey] -> c_custkey:BIGINT, c_name:VARCHAR, c_address:VARCHAR, c_nationkey:BIGINT, c_phone:VARCHAR, c_acctbal:DOUBLE, c_comment:VARCHAR, o_orderkey:BIGINT
-              -- TableScan[1][table: customer, data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>] -> c_custkey:BIGINT, c_name:VARCHAR, c_address:VARCHAR, c_nationkey:BIGINT, c_phone:VARCHAR, c_acctbal:DOUBLE, c_comment:VARCHAR
-              -- TableScan[2][table: orders, range filters: [(o_orderdate, BigintRange: [8674, 8765] no nulls)], data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: o_orderdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> o_orderkey:BIGINT, o_custkey:BIGINT
-            -- TableScan[4][table: nation, data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>] -> n_nationkey:BIGINT, n_name:VARCHAR
+              -- TableScan[0]["default"."customer"] -> c_custkey:BIGINT, c_name:VARCHAR, c_address:VARCHAR, c_nationkey:BIGINT, c_phone:VARCHAR, c_acctbal:DOUBLE, c_comment:VARCHAR
+              -- Filter[2][expression: and(gte("o_orderdate",1993-10-01),lt("o_orderdate",1994-01-01))] -> o_orderkey:BIGINT, o_custkey:BIGINT, o_orderdate:DATE
+                -- TableScan[1]["default"."orders"] -> o_orderkey:BIGINT, o_custkey:BIGINT, o_orderdate:DATE
+            -- TableScan[4]["default"."nation"] -> n_nationkey:BIGINT, n_name:VARCHAR
+          -- HashJoin[15][LEFT SEMI (FILTER) l_orderkey=edt13.edt13.t3.o_orderkey] -> l_orderkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
+            -- Filter[7][expression: eq("l_returnflag",R)] -> l_orderkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE, l_returnflag:VARCHAR
+              -- TableScan[6]["default"."lineitem"] -> l_orderkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE, l_returnflag:VARCHAR
+            -- Project[14][expressions: (edt13.edt13.t3.o_orderkey:BIGINT, "o_orderkey")] -> "edt13.edt13.t3.o_orderkey":BIGINT
+              -- HashJoin[13][INNER c_nationkey=n_nationkey] -> o_orderkey:BIGINT
+                -- HashJoin[11][INNER c_custkey=o_custkey] -> c_nationkey:BIGINT, o_orderkey:BIGINT
+                  -- TableScan[8]["default"."customer"] -> c_custkey:BIGINT, c_nationkey:BIGINT
+                  -- Filter[10][expression: and(gte("o_orderdate",1993-10-01),lt("o_orderdate",1994-01-01))] -> o_orderkey:BIGINT, o_custkey:BIGINT, o_orderdate:DATE
+                    -- TableScan[9]["default"."orders"] -> o_orderkey:BIGINT, o_custkey:BIGINT, o_orderdate:DATE
+                -- TableScan[12]["default"."nation"] -> n_nationkey:BIGINT
+
+EXPLAIN ANALYZE:
+
+Fragment 0: fragment1 SINGLE:
+-- Project[10][expressions: (c_custkey:BIGINT, "c_custkey"), (c_name:VARCHAR, "c_name"), (revenue:DOUBLE, "revenue"), (c_acctbal:DOUBLE, "c_acctbal"), (n_name:VARCHAR, "n_name"), (c_address:VARCHAR, "c_address"), (c_phone:VARCHAR, "c_phone"), (c_comment:VARCHAR, "c_comment")] -> c_custkey:BIGINT, c_name:VARCHAR, revenue:DOUBLE, c_acctbal:DOUBLE, n_name:VARCHAR, c_address:VARCHAR, c_phone:VARCHAR, c_comment:VARCHAR
+   Estimate: 20 rows, 0B peak memory
+   Output: 0 rows (0B, 1 batches), Cpu time: 13.61us, Wall time: 22.97us, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, CPU breakdown: B/I/O/F (13.61us/0ns/0ns/0ns)
+  -- TopN[9][20 revenue DESC NULLS LAST] -> c_custkey:BIGINT, c_name:VARCHAR, c_acctbal:DOUBLE, c_phone:VARCHAR, n_name:VARCHAR, c_address:VARCHAR, c_comment:VARCHAR, revenue:DOUBLE
+     Estimate: 20 rows, 0B peak memory
+     Output: 20 rows (242.03KB, 2 batches), Cpu time: 947.81us, Wall time: 1.32ms, Blocked wall time: 0ns, Peak memory: 371.25KB, Memory allocations: 30, Threads: 1, CPU breakdown: B/I/O/F (416.52us/498.92us/23.76us/8.60us)
+    -- Aggregation[8][SINGLE [c_custkey, c_name, c_acctbal, c_phone, n_name, c_address, c_comment] revenue := sum("dt1.__p88")] -> c_custkey:BIGINT, c_name:VARCHAR, c_acctbal:DOUBLE, c_phone:VARCHAR, n_name:VARCHAR, c_address:VARCHAR, c_comment:VARCHAR, revenue:DOUBLE
+       Estimate: 74199.7 rows, 0B peak memory
+       Output: 37967 rows (10.02MB, 8 batches), Cpu time: 56.12ms, Wall time: 58.41ms, Blocked wall time: 0ns, Peak memory: 13.59MB, Memory allocations: 260, Threads: 1, CPU breakdown: B/I/O/F (1.42ms/50.43ms/4.10ms/166.64us)
+      -- Project[7][expressions: (c_custkey:BIGINT, "c_custkey"), (c_name:VARCHAR, "c_name"), (c_acctbal:DOUBLE, "c_acctbal"), (c_phone:VARCHAR, "c_phone"), (n_name:VARCHAR, "n_name"), (c_address:VARCHAR, "c_address"), (c_comment:VARCHAR, "c_comment"), (dt1.__p88:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> c_custkey:BIGINT, c_name:VARCHAR, c_acctbal:DOUBLE, c_phone:VARCHAR, n_name:VARCHAR, c_address:VARCHAR, c_comment:VARCHAR, "dt1.__p88":DOUBLE
+         Estimate: 74943.9 rows, 0B peak memory
+         Output: 114705 rows (165.52MB, 1226 batches), Cpu time: 9.12ms, Wall time: 11.05ms, Blocked wall time: 0ns, Peak memory: 3.00KB, Memory allocations: 1226, Threads: 1, CPU breakdown: B/I/O/F (1.75ms/184.35us/7.03ms/163.36us)
+        -- HashJoin[6][INNER c_nationkey=n_nationkey] -> c_custkey:BIGINT, c_name:VARCHAR, c_address:VARCHAR, c_phone:VARCHAR, c_acctbal:DOUBLE, c_comment:VARCHAR, l_extendedprice:DOUBLE, l_discount:DOUBLE, n_name:VARCHAR
+           Estimate: 74943.9 rows, 0B peak memory
+           Output: 114705 rows (164.49MB, 1226 batches), Cpu time: 5.50ms, Wall time: 7.77ms, Blocked wall time: 1.67ms, Peak memory: 234.00KB, Memory allocations: 42, CPU breakdown: B/I/O/F (1.77ms/556.04us/2.95ms/231.38us)
+          -- HashJoin[4][INNER o_custkey=c_custkey] -> c_custkey:BIGINT, c_name:VARCHAR, c_address:VARCHAR, c_nationkey:BIGINT, c_phone:VARCHAR, c_acctbal:DOUBLE, c_comment:VARCHAR, l_extendedprice:DOUBLE, l_discount:DOUBLE
+             Estimate: 74943.9 rows, 0B peak memory
+             Output: 114705 rows (134.02MB, 1226 batches), Cpu time: 74.00ms, Wall time: 76.81ms, Blocked wall time: 94.28ms, Peak memory: 39.91MB, Memory allocations: 68, CPU breakdown: B/I/O/F (1.73ms/47.39ms/22.56ms/2.32ms)
+            -- HashJoin[2][INNER l_orderkey=o_orderkey] -> o_custkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
+               Estimate: 74145.5 rows, 0B peak memory
+               Output: 114705 rows (1.73MB, 1226 batches), Cpu time: 15.99ms, Wall time: 18.17ms, Blocked wall time: 0ns, Peak memory: 2.74MB, Memory allocations: 31, CPU breakdown: B/I/O/F (2.63ms/10.10ms/1.79ms/1.48ms)
+              -- TableScan[0][table: lineitem, range filters: [(l_returnflag, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_returnflag, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> l_orderkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
+                 Estimate: 2.0004e+06 rows, 0B peak memory
+                 Input: 114705 rows (58.31MB, 1226 batches), Raw Input: 6001215 rows (55.02MB), Output: 114705 rows (58.31MB, 1226 batches), Cpu time: 144.73ms, Wall time: 171.16ms, Blocked wall time: 0ns, Peak memory: 15.09MB, Memory allocations: 13394, Threads: 1, Splits: 2, DynamicFilter producer plan nodes: 2, CPU breakdown: B/I/O/F (401.09us/0ns/144.33ms/261ns)
+              -- TableScan[1][table: orders, range filters: [(o_orderdate, BigintRange: [8674, 8765] no nulls)], data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: o_orderdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> o_orderkey:BIGINT, o_custkey:BIGINT
+                 Estimate: 57356.6 rows, 0B peak memory
+                 Input: 57069 rows (1.08MB, 152 batches), Raw Input: 1500000 rows (8.86MB), Output: 57069 rows (1.08MB, 152 batches), Cpu time: 36.65ms, Wall time: 37.93ms, Blocked wall time: 0ns, Peak memory: 10.47MB, Memory allocations: 840, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (43.08us/0ns/36.61ms/301ns)
+            -- TableScan[3][table: customer, data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>] -> c_custkey:BIGINT, c_name:VARCHAR, c_address:VARCHAR, c_nationkey:BIGINT, c_phone:VARCHAR, c_acctbal:DOUBLE, c_comment:VARCHAR
+               Estimate: 150000 rows, 0B peak memory
+               Input: 150000 rows (36.52MB, 15 batches), Output: 150000 rows (36.52MB, 15 batches), Cpu time: 43.02ms, Wall time: 47.24ms, Blocked wall time: 0ns, Peak memory: 32.20MB, Memory allocations: 974, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (11.05us/0ns/43.01ms/300ns)
+          -- TableScan[5][table: nation, data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>] -> n_nationkey:BIGINT, n_name:VARCHAR
+             Estimate: 25 rows, 0B peak memory
+             Input: 25 rows (992B, 1 batches), Output: 25 rows (992B, 1 batches), Cpu time: 261.89us, Wall time: 1.71ms, Blocked wall time: 0ns, Peak memory: 4.06KB, Memory allocations: 15, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (1.43us/0ns/260.16us/300ns)
 
 ___END___

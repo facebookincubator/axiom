@@ -1,110 +1,111 @@
+generated: 2026-06-14 18:29:32 (snapshot; regenerate with TpchPlanTest.makePlans)
 numWorkers: 1
 numDrivers: 1
 
 Query Graph:
 
-dt1: 3.75 rows, supp_nation, cust_nation, l_year, revenue
+dt1: 3.84 rows, supp_nation, cust_nation, l_year, revenue
   output:
-    supp_nation := t6.n_name VARCHAR (cardinality=1.95 min="ALGERIA" max="VIETNAM")
-    cust_nation := t7.n_name VARCHAR (cardinality=1.96 min="ALGERIA" max="VIETNAM")
-    l_year := dt1.l_year BIGINT (cardinality=3.75)
+    supp_nation := t6.n_name VARCHAR (cardinality=1.96)
+    cust_nation := t7.n_name VARCHAR (cardinality=1.96)
+    l_year := dt1.l_year BIGINT (cardinality=3.84)
     revenue := dt1.revenue DOUBLE (cardinality=1.00)
   tables: t2, t3, t4, t5, t6, t7
   joins:
-    t2 INNER t3 ON t2.s_suppkey = t3.l_suppkey [t2 → 47.26, t3 → 0.10]
-    t3 INNER t4 ON t3.l_orderkey = t4.o_orderkey [t3 → 1.00, t4 → 3.21]
-    t4 INNER t5 ON t4.o_custkey = t5.c_custkey [t4 → 0.10, t5 → 0.99]
-    t2 INNER t6 ON t2.s_nationkey = t6.n_nationkey [t2 → 0.08, t6 → 40.00]
-    t5 INNER t7 ON t5.c_nationkey = t7.n_nationkey [t5 → 0.08, t7 → 600.00]
-  syntactic join order: 10, 31, 48, 61, 70, 73
+    t2 INNER t3 ON t2.s_suppkey = t3.l_suppkey [t2 → 480.10, t3 → 1.00]
+    t3 INNER t4 ON t3.l_orderkey = t4.o_orderkey [t3 → 1.00, t4 → 3.20]
+    t4 INNER t5 ON t4.o_custkey = t5.c_custkey [t4 → 1.00, t5 → 10.00]
+    t2 INNER t6 ON t2.s_nationkey = t6.n_nationkey [t2 → 0.08, t6 → 400.00]
+    t5 INNER t7 ON t5.c_nationkey = t7.n_nationkey [t5 → 0.08, t7 → 6000.00]
+  syntactic join order: 8, 27, 42, 53, 60, 63
   aggregates: sum(multiply(t3.l_extendedprice, minus(1, t3.l_discount))) AS revenue
   grouping keys: t6.n_name, t7.n_name, year(t3.l_shipdate)
   filter: __or(__and(eq(t6.n_name, "FRANCE"), eq(t7.n_name, "GERMANY")), __and(eq(t6.n_name, "GERMANY"), eq(t7.n_name, "FRANCE")))
   orderBy: t6.n_name ASC NULLS LAST, t7.n_name ASC NULLS LAST, dt1.l_year ASC NULLS LAST
 
-t2: 1000.00 rows, s_suppkey, s_nationkey
+t2: 10000.00 rows, s_suppkey, s_nationkey
   table: "default"."supplier"
-    s_suppkey BIGINT (cardinality=1008.00 min=1 max=1000)
+    s_suppkey BIGINT (cardinality=10000.00 min=1 max=10000)
     s_nationkey BIGINT (cardinality=25.00 min=0 max=24)
 
-t3: 480457.59 rows, l_orderkey, l_suppkey, l_extendedprice, l_discount, l_shipdate
+t3: 4800972.00 rows, l_orderkey, l_suppkey, l_extendedprice, l_discount, l_shipdate
   table: "default"."lineitem"
-    l_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
-    l_suppkey BIGINT (cardinality=10167.00 min=1 max=10000)
-    l_extendedprice DOUBLE (cardinality=444713.00 min=901 max=104899.5)
+    l_orderkey BIGINT (cardinality=1500000.00 min=1 max=6000000)
+    l_suppkey BIGINT (cardinality=10000.00 min=1 max=10000)
+    l_extendedprice DOUBLE (cardinality=6001215.00 min=901 max=104949.5)
     l_discount DOUBLE (cardinality=11.00 min=0 max=0.1)
-    l_shipdate DATE (cardinality=2498.00 min=8037 max=10561)
+    l_shipdate DATE (cardinality=2526.00 min=8036 max=10561)
   single-column filters: between(t3.l_shipdate, "1995-01-01", "1996-12-31")
 
-t4: 150000.00 rows, o_orderkey, o_custkey
+t4: 1500000.00 rows, o_orderkey, o_custkey
   table: "default"."orders"
-    o_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
-    o_custkey BIGINT (cardinality=73171.00 min=1 max=149999)
+    o_orderkey BIGINT (cardinality=1500000.00 min=1 max=6000000)
+    o_custkey BIGINT (cardinality=100000.00 min=1 max=150000)
 
-t5: 15000.00 rows, c_custkey, c_nationkey
+t5: 150000.00 rows, c_custkey, c_nationkey
   table: "default"."customer"
-    c_custkey BIGINT (cardinality=14936.00 min=1 max=15000)
+    c_custkey BIGINT (cardinality=150000.00 min=1 max=150000)
     c_nationkey BIGINT (cardinality=25.00 min=0 max=24)
 
 t6: 1.96 rows, n_nationkey, n_name
   table: "default"."nation"
     n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
-    n_name VARCHAR (cardinality=25.00 min="ALGERIA" max="VIETNAM")
+    n_name VARCHAR (cardinality=25.00)
   single-column filters: __or(eq(t6.n_name, "FRANCE"), eq(t6.n_name, "GERMANY"))
 
 t7: 1.96 rows, n_nationkey, n_name
   table: "default"."nation"
     n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
-    n_name VARCHAR (cardinality=25.00 min="ALGERIA" max="VIETNAM")
+    n_name VARCHAR (cardinality=25.00)
   single-column filters: __or(eq(t7.n_name, "GERMANY"), eq(t7.n_name, "FRANCE"))
 
 
 Optimized plan (oneline):
 
-agg((("default"."lineitem" INNER ("default"."supplier" INNER "default"."nation")) INNER ("default"."orders" INNER ("default"."customer" INNER "default"."nation"))))
+agg(((lineitem INNER (supplier INNER nation)) INNER (orders INNER (customer INNER nation))))
 
 Optimized plan:
 
-Project [8.75 rows] -> dt1.supp_nation, dt1.cust_nation, dt1.l_year, dt1.revenue
+Project [14.76 rows] -> dt1.supp_nation, dt1.cust_nation, dt1.l_year, dt1.revenue
     dt1.supp_nation := t6.n_name
     dt1.cust_nation := t7.n_name
     dt1.l_year := dt1.l_year
     dt1.revenue := dt1.revenue
-  OrderBy [8.75 rows] -> t6.n_name, t7.n_name, dt1.l_year, dt1.revenue
-    Aggregation (t6.n_name, t7.n_name, dt1.__p99) [8.75 rows] -> t6.n_name, t7.n_name, dt1.l_year, dt1.revenue
-        dt1.revenue := sum(dt1.__p105)
-      Project [13.03 rows] -> t6.n_name, t7.n_name, dt1.__p99, dt1.__p105
+  OrderBy [14.76 rows] -> t6.n_name, t7.n_name, dt1.l_year, dt1.revenue
+    Aggregation (t6.n_name, t7.n_name, dt1.__p89) [14.76 rows] -> t6.n_name, t7.n_name, dt1.l_year, dt1.revenue
+        dt1.revenue := sum(dt1.__p95)
+      Project [13363.54 rows] -> t6.n_name, t7.n_name, dt1.__p89, dt1.__p95
           t6.n_name := t6.n_name
           t7.n_name := t7.n_name
-          dt1.__p99 := year(t3.l_shipdate)
-          dt1.__p105 := multiply(t3.l_extendedprice, minus(1, t3.l_discount))
-        Filter [13.03 rows] -> t3.l_extendedprice, t3.l_discount, t3.l_shipdate, t6.n_name, t7.n_name
+          dt1.__p89 := year(t3.l_shipdate)
+          dt1.__p95 := multiply(t3.l_extendedprice, minus(1, t3.l_discount))
+        Filter [13363.54 rows] -> t3.l_extendedprice, t3.l_discount, t3.l_shipdate, t6.n_name, t7.n_name
             __or(__and(eq(t6.n_name, "FRANCE"), eq(t7.n_name, "GERMANY")), __and(eq(t6.n_name, "GERMANY"), eq(t7.n_name, "FRANCE")))
-          Join INNER Hash [28.68 rows] -> t3.l_extendedprice, t3.l_discount, t3.l_shipdate, t6.n_name, t7.n_name
+          Join INNER Hash [29509.46 rows] -> t3.l_extendedprice, t3.l_discount, t3.l_shipdate, t6.n_name, t7.n_name
               t3.l_orderkey = t4.o_orderkey
-            Join INNER Hash [3704.92 rows] -> t3.l_orderkey, t3.l_extendedprice, t3.l_discount, t3.l_shipdate, t6.n_name
+            Join INNER Hash [376396.22 rows] -> t3.l_orderkey, t3.l_extendedprice, t3.l_discount, t3.l_shipdate, t6.n_name
                 t3.l_suppkey = t2.s_suppkey
-              TableScan [480457.59 rows] -> t3.l_orderkey, t3.l_suppkey, t3.l_extendedprice, t3.l_discount, t3.l_shipdate
+              TableScan [4800972.00 rows] -> t3.l_orderkey, t3.l_suppkey, t3.l_extendedprice, t3.l_discount, t3.l_shipdate
                 table: "default"."lineitem"
                 single-column filters: between(t3.l_shipdate, "1995-01-01", "1996-12-31")
-              HashBuild [78.40 rows] -> t2.s_suppkey, t6.n_name
-                Join INNER Hash [78.40 rows] -> t2.s_suppkey, t6.n_name
+              HashBuild [784.00 rows] -> t2.s_suppkey, t6.n_name
+                Join INNER Hash [784.00 rows] -> t2.s_suppkey, t6.n_name
                     t2.s_nationkey = t6.n_nationkey
-                  TableScan [1000.00 rows] -> t2.s_suppkey, t2.s_nationkey
+                  TableScan [10000.00 rows] -> t2.s_suppkey, t2.s_nationkey
                     table: "default"."supplier"
                   HashBuild [1.96 rows] -> t6.n_nationkey, t6.n_name
                     TableScan [1.96 rows] -> t6.n_nationkey, t6.n_name
                       table: "default"."nation"
                       single-column filters: __or(eq(t6.n_name, "FRANCE"), eq(t6.n_name, "GERMANY"))
-            HashBuild [1161.04 rows] -> t4.o_orderkey, t7.n_name
-              Join INNER Hash [1161.04 rows] -> t4.o_orderkey, t7.n_name
+            HashBuild [117600.00 rows] -> t4.o_orderkey, t7.n_name
+              Join INNER Hash [117600.00 rows] -> t4.o_orderkey, t7.n_name
                   t4.o_custkey = t5.c_custkey
-                TableScan [150000.00 rows] -> t4.o_orderkey, t4.o_custkey
+                TableScan [1500000.00 rows] -> t4.o_orderkey, t4.o_custkey
                   table: "default"."orders"
-                HashBuild [1176.00 rows] -> t5.c_custkey, t7.n_name
-                  Join INNER Hash [1176.00 rows] -> t5.c_custkey, t7.n_name
+                HashBuild [11760.00 rows] -> t5.c_custkey, t7.n_name
+                  Join INNER Hash [11760.00 rows] -> t5.c_custkey, t7.n_name
                       t5.c_nationkey = t7.n_nationkey
-                    TableScan [15000.00 rows] -> t5.c_custkey, t5.c_nationkey
+                    TableScan [150000.00 rows] -> t5.c_custkey, t5.c_nationkey
                       table: "default"."customer"
                     HashBuild [1.96 rows] -> t7.n_nationkey, t7.n_name
                       TableScan [1.96 rows] -> t7.n_nationkey, t7.n_name
@@ -115,21 +116,76 @@ Project [8.75 rows] -> dt1.supp_nation, dt1.cust_nation, dt1.l_year, dt1.revenue
 Executable Velox plan:
 
 Fragment 0: fragment1 SINGLE:
+-- Project[18][expressions: (supp_nation:VARCHAR, "n_name"), (cust_nation:VARCHAR, "n_name_1"), (l_year:BIGINT, "l_year"), (revenue:DOUBLE, "revenue")] -> supp_nation:VARCHAR, cust_nation:VARCHAR, l_year:BIGINT, revenue:DOUBLE
+  -- OrderBy[17][n_name ASC NULLS LAST, n_name_1 ASC NULLS LAST, l_year ASC NULLS LAST] -> n_name:VARCHAR, n_name_1:VARCHAR, l_year:BIGINT, revenue:DOUBLE
+    -- Aggregation[16][SINGLE [n_name, n_name_1, l_year] revenue := sum("dt1.__p95")] -> n_name:VARCHAR, n_name_1:VARCHAR, l_year:BIGINT, revenue:DOUBLE
+      -- Project[15][expressions: (n_name:VARCHAR, "n_name"), (n_name_1:VARCHAR, "n_name_1"), (l_year:BIGINT, year("l_shipdate")), (dt1.__p95:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> n_name:VARCHAR, n_name_1:VARCHAR, l_year:BIGINT, "dt1.__p95":DOUBLE
+        -- Filter[0][expression: or(and(eq("n_name",FRANCE),eq("n_name_1",GERMANY)),and(eq("n_name",GERMANY),eq("n_name_1",FRANCE)))] -> l_extendedprice:DOUBLE, l_discount:DOUBLE, l_shipdate:DATE, n_name:VARCHAR, n_name_1:VARCHAR
+          -- HashJoin[14][INNER l_orderkey=o_orderkey] -> l_extendedprice:DOUBLE, l_discount:DOUBLE, l_shipdate:DATE, n_name:VARCHAR, n_name_1:VARCHAR
+            -- HashJoin[7][INNER l_suppkey=s_suppkey] -> l_orderkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE, l_shipdate:DATE, n_name:VARCHAR
+              -- Filter[2][expression: between("l_shipdate",1995-01-01,1996-12-31)] -> l_orderkey:BIGINT, l_suppkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE, l_shipdate:DATE
+                -- TableScan[1]["default"."lineitem"] -> l_orderkey:BIGINT, l_suppkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE, l_shipdate:DATE
+              -- HashJoin[6][INNER s_nationkey=n_nationkey] -> s_suppkey:BIGINT, n_name:VARCHAR
+                -- TableScan[3]["default"."supplier"] -> s_suppkey:BIGINT, s_nationkey:BIGINT
+                -- Filter[5][expression: or(eq("n_name",FRANCE),eq("n_name",GERMANY))] -> n_nationkey:BIGINT, n_name:VARCHAR
+                  -- TableScan[4]["default"."nation"] -> n_nationkey:BIGINT, n_name:VARCHAR
+            -- HashJoin[13][INNER o_custkey=c_custkey] -> o_orderkey:BIGINT, n_name_1:VARCHAR
+              -- TableScan[8]["default"."orders"] -> o_orderkey:BIGINT, o_custkey:BIGINT
+              -- HashJoin[12][INNER c_nationkey=n_nationkey_0] -> c_custkey:BIGINT, n_name_1:VARCHAR
+                -- TableScan[9]["default"."customer"] -> c_custkey:BIGINT, c_nationkey:BIGINT
+                -- Filter[11][expression: or(eq("n_name_1",GERMANY),eq("n_name_1",FRANCE))] -> n_nationkey_0:BIGINT, n_name_1:VARCHAR
+                  -- TableScan[10]["default"."nation"] -> n_nationkey_0:BIGINT, n_name_1:VARCHAR
+
+EXPLAIN ANALYZE:
+
+Fragment 0: fragment1 SINGLE:
 -- Project[15][expressions: (supp_nation:VARCHAR, "n_name"), (cust_nation:VARCHAR, "n_name_9"), (l_year:BIGINT, "l_year"), (revenue:DOUBLE, "revenue")] -> supp_nation:VARCHAR, cust_nation:VARCHAR, l_year:BIGINT, revenue:DOUBLE
+   Estimate: 14.7579 rows, 0B peak memory
+   Output: 4 rows (256B, 1 batches), Cpu time: 18.72us, Wall time: 30.72us, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, CPU breakdown: B/I/O/F (9.61us/321ns/5.78us/3.01us)
   -- OrderBy[14][n_name ASC NULLS LAST, n_name_9 ASC NULLS LAST, l_year ASC NULLS LAST] -> n_name:VARCHAR, n_name_9:VARCHAR, l_year:BIGINT, revenue:DOUBLE
+     Estimate: 14.7579 rows, 0B peak memory
+     Output: 4 rows (256B, 1 batches), Cpu time: 215.53us, Wall time: 374.52us, Blocked wall time: 0ns, Peak memory: 128.69KB, Memory allocations: 7, CPU breakdown: B/I/O/F (192.45us/11.19us/6.08us/5.81us)
     -- Aggregation[13][SINGLE [n_name, n_name_9, l_year] revenue := sum("dt1.__p105")] -> n_name:VARCHAR, n_name_9:VARCHAR, l_year:BIGINT, revenue:DOUBLE
+       Estimate: 14.7579 rows, 0B peak memory
+       Output: 4 rows (575.62KB, 1 batches), Cpu time: 3.11ms, Wall time: 4.25ms, Blocked wall time: 0ns, Peak memory: 644.75KB, Memory allocations: 11, CPU breakdown: B/I/O/F (712.01us/1.96ms/274.91us/164.89us)
       -- Project[12][expressions: (n_name:VARCHAR, "n_name"), (n_name_9:VARCHAR, "n_name_9"), (l_year:BIGINT, year("l_shipdate")), (dt1.__p105:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> n_name:VARCHAR, n_name_9:VARCHAR, l_year:BIGINT, "dt1.__p105":DOUBLE
+         Estimate: 12878.2 rows, 0B peak memory
+         Output: 5924 rows (428.32KB, 607 batches), Cpu time: 13.17ms, Wall time: 14.19ms, Blocked wall time: 0ns, Peak memory: 7.88KB, Memory allocations: 8019, CPU breakdown: B/I/O/F (853.17us/169.28us/11.98ms/166.81us)
         -- Filter[0][expression: or(and(eq("n_name",FRANCE),eq("n_name_9",GERMANY)),and(eq("n_name",GERMANY),eq("n_name_9",FRANCE)))] -> l_extendedprice:DOUBLE, l_discount:DOUBLE, l_shipdate:DATE, n_name:VARCHAR, n_name_9:VARCHAR
+           Estimate: 12878.2 rows, 0B peak memory
+           Output: 5924 rows (418.35KB, 607 batches), Cpu time: 0ns, Wall time: 0ns, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, CPU breakdown: B/I/O/F (0ns/0ns/0ns/0ns)
           -- HashJoin[11][INNER l_orderkey=o_orderkey] -> l_extendedprice:DOUBLE, l_discount:DOUBLE, l_shipdate:DATE, n_name:VARCHAR, n_name_9:VARCHAR
+             Estimate: 28437.7 rows, 0B peak memory
+             Output: 0 rows (0B, 610 batches), Cpu time: 20.92ms, Wall time: 22.31ms, Blocked wall time: 0ns, Peak memory: 8.30MB, Memory allocations: 18, CPU breakdown: B/I/O/F (1.12ms/14.31ms/86.81us/5.40ms)
             -- HashJoin[5][INNER l_suppkey=s_suppkey] -> l_orderkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE, l_shipdate:DATE, n_name:VARCHAR
+               Estimate: 370214 rows, 0B peak memory
+               Output: 145703 rows (5.16MB, 1228 batches), Cpu time: 6.47ms, Wall time: 8.53ms, Blocked wall time: 0ns, Peak memory: 254.12KB, Memory allocations: 1377, CPU breakdown: B/I/O/F (1.58ms/1.17ms/3.49ms/227.08us)
               -- TableScan[1][table: lineitem, range filters: [(l_shipdate, BigintRange: [9131, 9861] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_orderkey:BIGINT, l_suppkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE, l_shipdate:DATE
+                 Estimate: 4.80097e+06 rows, 0B peak memory
+                 Input: 145703 rows (64.07MB, 1228 batches), Raw Input: 6001215 rows (73.13MB), Output: 145703 rows (64.07MB, 1228 batches), Cpu time: 155.84ms, Wall time: 186.74ms, Blocked wall time: 0ns, Peak memory: 17.82MB, Memory allocations: 23320, Threads: 1, Splits: 2, DynamicFilter producer plan nodes: 5, CPU breakdown: B/I/O/F (396.02us/0ns/155.44ms/261ns)
               -- HashJoin[4][INNER s_nationkey=n_nationkey] -> s_suppkey:BIGINT, n_name:VARCHAR
+                 Estimate: 784 rows, 0B peak memory
+                 Output: 798 rows (15.91KB, 1 batches), Cpu time: 150.73us, Wall time: 435.72us, Blocked wall time: 1.78ms, Peak memory: 146.00KB, Memory allocations: 10, CPU breakdown: B/I/O/F (39.40us/27.58us/33.92us/49.82us)
                 -- TableScan[2][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey:BIGINT, s_nationkey:BIGINT
+                   Estimate: 10000 rows, 0B peak memory
+                   Input: 798 rows (103.81KB, 1 batches), Raw Input: 10000 rows (659.75KB), Output: 798 rows (103.81KB, 1 batches), Cpu time: 473.26us, Wall time: 1.74ms, Blocked wall time: 0ns, Peak memory: 640.00KB, Memory allocations: 20, Threads: 1, Splits: 1, DynamicFilter producer plan nodes: 4, CPU breakdown: B/I/O/F (1.73us/0ns/471.05us/481ns)
                 -- TableScan[3][table: nation, range filters: [(n_name, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: n_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> n_nationkey:BIGINT, n_name:VARCHAR
+                   Estimate: 1.96 rows, 0B peak memory
+                   Input: 2 rows (152B, 1 batches), Raw Input: 25 rows (3.20KB), Output: 2 rows (152B, 1 batches), Cpu time: 300.37us, Wall time: 1.44ms, Blocked wall time: 0ns, Peak memory: 4.38KB, Memory allocations: 18, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (2.30us/0ns/297.55us/521ns)
             -- HashJoin[10][INNER o_custkey=c_custkey] -> o_orderkey:BIGINT, n_name_9:VARCHAR
+               Estimate: 118866 rows, 0B peak memory
+               Output: 121324 rows (2.36MB, 152 batches), Cpu time: 6.54ms, Wall time: 7.34ms, Blocked wall time: 9.83ms, Peak memory: 3.47MB, Memory allocations: 14, CPU breakdown: B/I/O/F (457.31us/2.28ms/3.17ms/633.16us)
               -- TableScan[6][table: orders, data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>] -> o_orderkey:BIGINT, o_custkey:BIGINT
+                 Estimate: 1.5e+06 rows, 0B peak memory
+                 Input: 121324 rows (15.18MB, 152 batches), Raw Input: 1500000 rows (6.69MB), Output: 121324 rows (15.18MB, 152 batches), Cpu time: 42.22ms, Wall time: 43.21ms, Blocked wall time: 0ns, Peak memory: 8.00MB, Memory allocations: 663, Threads: 1, Splits: 1, DynamicFilter producer plan nodes: 10, CPU breakdown: B/I/O/F (87.75us/0ns/42.13ms/481ns)
               -- HashJoin[9][INNER c_nationkey=n_nationkey_8] -> c_custkey:BIGINT, n_name_9:VARCHAR
+                 Estimate: 11760 rows, 0B peak memory
+                 Output: 12008 rows (238.59KB, 15 batches), Cpu time: 384.70us, Wall time: 426.36us, Blocked wall time: 1.35ms, Peak memory: 146.00KB, Memory allocations: 10, CPU breakdown: B/I/O/F (47.83us/87.06us/189.90us/59.92us)
                 -- TableScan[7][table: customer, data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>] -> c_custkey:BIGINT, c_nationkey:BIGINT
+                   Estimate: 150000 rows, 0B peak memory
+                   Input: 12008 rows (1.52MB, 15 batches), Raw Input: 150000 rows (761.36KB), Output: 12008 rows (1.52MB, 15 batches), Cpu time: 5.27ms, Wall time: 5.99ms, Blocked wall time: 0ns, Peak memory: 4.34MB, Memory allocations: 79, Threads: 1, Splits: 1, DynamicFilter producer plan nodes: 9, CPU breakdown: B/I/O/F (5.67us/0ns/5.27ms/270ns)
                 -- TableScan[8][table: nation, range filters: [(n_name, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: n_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> n_nationkey_8:BIGINT, n_name_9:VARCHAR
+                   Estimate: 1.96 rows, 0B peak memory
+                   Input: 2 rows (152B, 1 batches), Raw Input: 25 rows (3.20KB), Output: 2 rows (152B, 1 batches), Cpu time: 328.53us, Wall time: 1.32ms, Blocked wall time: 0ns, Peak memory: 4.38KB, Memory allocations: 18, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (2.19us/0ns/325.79us/550ns)
 
 ___END___

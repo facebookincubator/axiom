@@ -1,77 +1,78 @@
+generated: 2026-06-14 18:29:33 (snapshot; regenerate with TpchPlanTest.makePlans)
 numWorkers: 1
 numDrivers: 1
 
 Query Graph:
 
-dt1: 1746.05 rows, p_brand, p_type, p_size, supplier_cnt
+dt1: 3790.69 rows, p_brand, p_type, p_size, supplier_cnt
   output:
-    p_brand := t3.p_brand VARCHAR (cardinality=25.00 min="Brand#11" max="Brand#55")
-    p_type := t3.p_type VARCHAR (cardinality=150.00 min="ECONOMY ANODIZED BRASS" max="STANDARD POLISHED TIN")
+    p_brand := t3.p_brand VARCHAR (cardinality=25.00)
+    p_type := t3.p_type VARCHAR (cardinality=150.00)
     p_size := t3.p_size INTEGER (cardinality=8.00 min=3 max=49)
     supplier_cnt := dt1.supplier_cnt BIGINT (cardinality=1.00)
   tables: t2, t3, dt4
   joins:
-    t2 SEMI dt4 ON t2.ps_suppkey = dt4.s_suppkey [t2 → 0.08, dt4 → 7.87]
+    t2 SEMI dt4 ON t2.ps_suppkey = dt4.s_suppkey [t2 → 0.80, dt4 → 80.00]
     t2 INNER t3 ON t2.ps_partkey = t3.p_partkey [t2 → 0.03, t3 → 4.00]
-  syntactic join order: 8, 22, 27
-  aggregates: count(t2.ps_suppkey) AS supplier_cnt
+  syntactic join order: 6, 18, 23
+  aggregates: count(DISTINCT t2.ps_suppkey) AS supplier_cnt
   grouping keys: t3.p_brand, t3.p_type, t3.p_size
   filter: not(dt1.__mark6)
   orderBy: dt1.supplier_cnt DESC NULLS LAST, t3.p_brand ASC NULLS LAST, t3.p_type ASC NULLS LAST, t3.p_size ASC NULLS LAST
 
-t2: 80000.00 rows, ps_partkey, ps_suppkey
+t2: 800000.00 rows, ps_partkey, ps_suppkey
   table: "default"."partsupp"
-    ps_partkey BIGINT (cardinality=19675.00 min=1 max=20000)
-    ps_suppkey BIGINT (cardinality=10167.00 min=1 max=10000)
+    ps_partkey BIGINT (cardinality=200000.00 min=1 max=200000)
+    ps_suppkey BIGINT (cardinality=10000.00 min=1 max=10000)
 
-t3: 512.00 rows, p_partkey, p_brand, p_type, p_size
+t3: 5120.00 rows, p_partkey, p_brand, p_type, p_size
   table: "default"."part"
-    p_partkey BIGINT (cardinality=19675.00 min=1 max=20000)
-    p_brand VARCHAR (cardinality=25.00 min="Brand#11" max="Brand#55")
-    p_type VARCHAR (cardinality=150.00 min="ECONOMY ANODIZED BRASS" max="STANDARD POLISHED TIN")
+    p_partkey BIGINT (cardinality=200000.00 min=1 max=200000)
+    p_brand VARCHAR (cardinality=25.00)
+    p_type VARCHAR (cardinality=150.00)
     p_size INTEGER (cardinality=8.00 min=3 max=49)
   single-column filters: neq(t3.p_brand, "Brand#45") and not(like(t3.p_type, "MEDIUM POLISHED%")) and __in(t3.p_size, 49, 14, 23, 45, 19, 3, 36, 9)
 
-dt4: 800.00 rows, s_suppkey
+dt4: 8000.00 rows, s_suppkey
   output:
-    s_suppkey := t5.s_suppkey BIGINT (cardinality=800.00 min=1 max=1000)
+    s_suppkey := t5.s_suppkey BIGINT (cardinality=8000.00 min=1 max=10000)
   tables: t5
 
-t5: 800.00 rows, s_suppkey, s_comment
+t5: 8000.00 rows, s_suppkey, s_comment
   table: "default"."supplier"
-    s_suppkey BIGINT (cardinality=1008.00 min=1 max=1000)
-    s_comment VARCHAR (cardinality=1000.00 min=" according to the bravely quick dolphins. deposit" max="ymptotes. blithely regular theodolites are slyly according to the ")
+    s_suppkey BIGINT (cardinality=10000.00 min=1 max=10000)
+    s_comment VARCHAR (cardinality=10000.00)
   single-column filters: like(t5.s_comment, "%Customer%Complaints%")
 
 
 Optimized plan (oneline):
 
-agg((("default"."partsupp" INNER "default"."part") ANTI "default"."supplier"))
+agg(((partsupp INNER part) ANTI supplier))
 
 Optimized plan:
 
-Project (redundant) [1746.05 rows] -> dt1.p_brand, dt1.p_type, dt1.p_size, dt1.supplier_cnt
+Project (redundant) [3790.69 rows] -> dt1.p_brand, dt1.p_type, dt1.p_size, dt1.supplier_cnt
     dt1.p_brand := t3.p_brand
     dt1.p_type := t3.p_type
     dt1.p_size := t3.p_size
     dt1.supplier_cnt := dt1.supplier_cnt
-  OrderBy [1746.05 rows] -> t3.p_brand, t3.p_type, t3.p_size, dt1.supplier_cnt
-    Aggregation (t3.p_brand, t3.p_type, t3.p_size) [1746.05 rows] -> t3.p_brand, t3.p_type, t3.p_size, dt1.supplier_cnt
-        dt1.supplier_cnt := count(t2.ps_suppkey)
-      Join ANTI Hash [1886.85 rows] -> t2.ps_suppkey, t3.p_brand, t3.p_type, t3.p_size
+  OrderBy [3790.69 rows] -> t3.p_brand, t3.p_type, t3.p_size, dt1.supplier_cnt
+    Aggregation (t3.p_brand, t3.p_type, t3.p_size) [3790.69 rows] -> t3.p_brand, t3.p_type, t3.p_size, dt1.supplier_cnt
+        dt1.supplier_cnt := count(DISTINCT t2.ps_suppkey)
+      Join ANTI Hash [4096.00 rows] -> t2.ps_suppkey, t3.p_brand, t3.p_type, t3.p_size
           t2.ps_suppkey = dt4.s_suppkey
-        Join INNER Hash [2048.00 rows] -> t2.ps_suppkey, t3.p_brand, t3.p_type, t3.p_size
+        Join INNER Hash [20480.00 rows] -> t2.ps_suppkey, t3.p_brand, t3.p_type, t3.p_size
             t2.ps_partkey = t3.p_partkey
-          TableScan [80000.00 rows] -> t2.ps_partkey, t2.ps_suppkey
+          TableScan [800000.00 rows] -> t2.ps_partkey, t2.ps_suppkey
             table: "default"."partsupp"
-          HashBuild [512.00 rows] -> t3.p_partkey, t3.p_brand, t3.p_type, t3.p_size
-            TableScan [512.00 rows] -> t3.p_partkey, t3.p_brand, t3.p_type, t3.p_size
+          HashBuild [5120.00 rows] -> t3.p_partkey, t3.p_brand, t3.p_type, t3.p_size
+            TableScan [5120.00 rows] -> t3.p_partkey, t3.p_brand, t3.p_type, t3.p_size
               table: "default"."part"
               single-column filters: neq(t3.p_brand, "Brand#45") and not(like(t3.p_type, "MEDIUM POLISHED%")) and __in(t3.p_size, 49, 14, 23, 45, 19, 3, 36, 9)
-        HashBuild [800.00 rows] -> dt4.s_suppkey
-          Project (redundant) [800.00 rows] -> dt4.s_suppkey
+        HashBuild [8000.00 rows] -> dt4.s_suppkey
+          Project (redundant) [8000.00 rows] -> dt4.s_suppkey
               dt4.s_suppkey := t5.s_suppkey
-            TableScan [800.00 rows] -> t5.s_suppkey
+            TableScan [8000.00 rows] -> t5.s_suppkey
               table: "default"."supplier"
               single-column filters: like(t5.s_comment, "%Customer%Complaints%")
 
@@ -79,12 +80,39 @@ Project (redundant) [1746.05 rows] -> dt1.p_brand, dt1.p_type, dt1.p_size, dt1.s
 Executable Velox plan:
 
 Fragment 0: fragment1 SINGLE:
+-- OrderBy[8][supplier_cnt DESC NULLS LAST, p_brand ASC NULLS LAST, p_type ASC NULLS LAST, p_size ASC NULLS LAST] -> p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, supplier_cnt:BIGINT
+  -- Aggregation[7][SINGLE [p_brand, p_type, p_size] supplier_cnt := count("ps_suppkey") distinct] -> p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, supplier_cnt:BIGINT
+    -- HashJoin[6][ANTI ps_suppkey=s_suppkey, null aware] -> ps_suppkey:BIGINT, p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER
+      -- HashJoin[3][INNER ps_partkey=p_partkey] -> ps_suppkey:BIGINT, p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER
+        -- TableScan[0]["default"."partsupp"] -> ps_partkey:BIGINT, ps_suppkey:BIGINT
+        -- Filter[2][expression: and(neq("p_brand",Brand#45),not(like("p_type",MEDIUM POLISHED%)),in("p_size",{49, 14, 23, 45, 19, ...3 more}))] -> p_partkey:BIGINT, p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER
+          -- TableScan[1]["default"."part"] -> p_partkey:BIGINT, p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER
+      -- Filter[5][expression: like("s_comment",%Customer%Complaints%)] -> s_suppkey:BIGINT, s_comment:VARCHAR
+        -- TableScan[4]["default"."supplier"] -> s_suppkey:BIGINT, s_comment:VARCHAR
+
+EXPLAIN ANALYZE:
+
+Fragment 0: fragment1 SINGLE:
 -- OrderBy[6][supplier_cnt DESC NULLS LAST, p_brand ASC NULLS LAST, p_type ASC NULLS LAST, p_size ASC NULLS LAST] -> p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, supplier_cnt:BIGINT
-  -- Aggregation[5][SINGLE [p_brand, p_type, p_size] supplier_cnt := count("ps_suppkey")] -> p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, supplier_cnt:BIGINT
+   Estimate: 4089.52 rows, 0B peak memory
+   Output: 18314 rows (1.45MB, 2 batches), Cpu time: 7.16ms, Wall time: 7.30ms, Blocked wall time: 0ns, Peak memory: 5.64MB, Memory allocations: 37, CPU breakdown: B/I/O/F (69.66us/1.57ms/689.53us/4.83ms)
+  -- Aggregation[5][SINGLE [p_brand, p_type, p_size] supplier_cnt := count("ps_suppkey") distinct] -> p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, supplier_cnt:BIGINT
+     Estimate: 4089.52 rows, 0B peak memory
+     Output: 18314 rows (1.45MB, 2 batches), Cpu time: 23.65ms, Wall time: 24.18ms, Blocked wall time: 0ns, Peak memory: 12.22MB, Memory allocations: 33, CPU breakdown: B/I/O/F (184.25us/18.80ms/4.62ms/44.72us)
     -- HashJoin[4][ANTI ps_suppkey=s_suppkey, null aware] -> ps_suppkey:BIGINT, p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER
+       Estimate: 4447.98 rows, 0B peak memory
+       Output: 118274 rows (16.98MB, 161 batches), Cpu time: 1.65ms, Wall time: 2.01ms, Blocked wall time: 4.91ms, Peak memory: 276.00KB, Memory allocations: 12, CPU breakdown: B/I/O/F (212.01us/849.20us/473.53us/119.25us)
       -- HashJoin[2][INNER ps_partkey=p_partkey] -> ps_suppkey:BIGINT, p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER
+         Estimate: 20868.8 rows, 0B peak memory
+         Output: 118324 rows (16.99MB, 161 batches), Cpu time: 10.84ms, Wall time: 11.11ms, Blocked wall time: 15.00ms, Peak memory: 6.20MB, Memory allocations: 22, CPU breakdown: B/I/O/F (320.21us/6.52ms/3.17ms/823.81us)
         -- TableScan[0][table: partsupp, data columns: ROW<ps_partkey:BIGINT,ps_suppkey:BIGINT,ps_availqty:INTEGER,ps_supplycost:DOUBLE,ps_comment:VARCHAR>] -> ps_partkey:BIGINT, ps_suppkey:BIGINT
+           Estimate: 800000 rows, 0B peak memory
+           Input: 118324 rows (8.49MB, 81 batches), Raw Input: 800000 rows (2.84MB), Output: 118324 rows (8.49MB, 81 batches), Cpu time: 13.26ms, Wall time: 13.71ms, Blocked wall time: 0ns, Peak memory: 8.09MB, Memory allocations: 354, Splits: 1, DynamicFilter producer plan nodes: 2, CPU breakdown: B/I/O/F (24.94us/0ns/13.24ms/251ns)
         -- TableScan[1][table: part, range filters: [(p_brand, Filter(MultiRange, deterministic, no nulls)), (p_size, Filter(BigintValuesUsingBitmask, deterministic, no nulls))], remaining filter: (not(like("p_type",MEDIUM POLISHED%))), data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_size, columnType: Regular, dataType: INTEGER, requiredSubfields: [ ]], HiveColumnHandle [name: p_type, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: p_brand, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> p_partkey:BIGINT, p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER
+           Estimate: 5120 rows, 0B peak memory
+           Input: 29581 rows (3.40MB, 20 batches), Raw Input: 200000 rows (5.66MB), Output: 29581 rows (3.40MB, 20 batches), Cpu time: 7.11ms, Wall time: 12.96ms, Blocked wall time: 0ns, Peak memory: 5.44MB, Memory allocations: 286, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (8.47us/0ns/7.10ms/300ns)
       -- TableScan[3][table: supplier, remaining filter: (like("s_comment",%Customer%Complaints%)), data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: s_comment, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> s_suppkey:BIGINT
+         Estimate: 8000 rows, 0B peak memory
+         Input: 4 rows (234.38KB, 1 batches), Raw Input: 10000 rows (841.97KB), Output: 4 rows (234.38KB, 1 batches), Cpu time: 2.66ms, Wall time: 4.81ms, Blocked wall time: 0ns, Peak memory: 2.66MB, Memory allocations: 26, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (1.40us/0ns/2.66ms/291ns)
 
 ___END___

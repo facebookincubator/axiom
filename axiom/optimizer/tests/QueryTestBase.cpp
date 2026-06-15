@@ -15,6 +15,9 @@
  */
 
 #include "axiom/optimizer/tests/QueryTestBase.h"
+
+#include <ctime>
+
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/Optimization.h"
@@ -276,6 +279,17 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
       plan, schemaResolver, options, optimizerOptions, planFilePathPrefix);
 }
 
+namespace {
+std::string formatCurrentTime() {
+  const std::time_t now = std::time(nullptr);
+  std::tm localNow{};
+  ::localtime_r(&now, &localNow);
+  char timestamp[64];
+  std::strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &localNow);
+  return timestamp;
+}
+} // namespace
+
 optimizer::PlanAndStats QueryTestBase::planVelox(
     const logical_plan::LogicalPlanNodePtr& plan,
     const connector::SchemaResolver& schemaResolver,
@@ -298,6 +312,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
     planPath = std::make_unique<std::ofstream>(
         fmt::format("{}.plans", planFilePathPrefix.value()));
 
+    *planPath << "generated: " << formatCurrentTime() << " (snapshot)\n";
     *planPath << "numWorkers: " << options.numWorkers << "\n";
     *planPath << "numDrivers: " << options.numDrivers << "\n\n";
   }

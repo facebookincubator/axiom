@@ -1,115 +1,156 @@
+generated: 2026-06-14 18:29:33 (snapshot; regenerate with TpchPlanTest.makePlans)
 numWorkers: 1
 numDrivers: 1
 
 Query Graph:
 
-dt1: 100.00 rows, c_name, c_custkey, o_orderkey, o_orderdate, o_totalprice, sum_24
+dt1: 100.00 rows, c_name, c_custkey, o_orderkey, o_orderdate, o_totalprice, sum_18
   output:
-    c_name := t2.c_name VARCHAR (cardinality=96.57 min="Customer#000000001" max="Customer#000015000")
-    c_custkey := t2.c_custkey BIGINT (cardinality=99.15 min=1 max=15000)
-    o_orderkey := t3.o_orderkey BIGINT (cardinality=99.15 min=1 max=600000)
-    o_orderdate := t3.o_orderdate DATE (cardinality=97.95 min=8035 max=10440)
-    o_totalprice := t3.o_totalprice DOUBLE (cardinality=99.15 min=917.35 max=496620.48)
-    sum_24 := dt1.sum_24 DOUBLE (cardinality=1.00)
+    c_name := t2.c_name VARCHAR (cardinality=99.97)
+    c_custkey := t2.c_custkey BIGINT (cardinality=99.95 min=1 max=150000)
+    o_orderkey := t3.o_orderkey BIGINT (cardinality=99.99 min=1 max=6000000)
+    o_orderdate := t3.o_orderdate DATE (cardinality=97.97 min=8035 max=10440)
+    o_totalprice := t3.o_totalprice DOUBLE (cardinality=99.99 min=857.71 max=600000)
+    sum_18 := dt1.sum_18 DOUBLE (cardinality=1.00)
   tables: t2, t3, t4, dt5
   joins:
-    t3 SEMI dt5 ON t3.o_orderkey = dt5.l_orderkey_23 [t3 → 0.10, dt5 → 10.00]
-    t2 INNER t3 ON t2.c_custkey = t3.o_custkey [t2 → 0.99, t3 → 0.10]
-    t3 INNER t4 ON t3.o_orderkey = t4.l_orderkey [t3 → 4.02, t4 → 1.00]
-    t4 SEMI dt5 ON t4.l_orderkey = dt5.l_orderkey_23 [t4 → 0.10, dt5 → 40.04]
-  syntactic join order: 11, 25, 48, 51
-  aggregates: sum(t4.l_quantity) AS sum_24
+    t3 SEMI dt5 ON t3.o_orderkey = dt5.l_orderkey_17 [t3 → 0.10, dt5 → 10.19]
+    t2 INNER t3 ON t2.c_custkey = t3.o_custkey [t2 → 10.00, t3 → 1.00]
+    t3 INNER t4 ON t3.o_orderkey = t4.l_orderkey [t3 → 4.00, t4 → 1.00]
+    t4 SEMI dt5 ON t4.l_orderkey = dt5.l_orderkey_17 [t4 → 0.10, dt5 → 40.75]
+  syntactic join order: 9, 21, 42, 45
+  aggregates: sum(t4.l_quantity) AS sum_18
   grouping keys: t2.c_name, t2.c_custkey, t3.o_orderkey, t3.o_orderdate, t3.o_totalprice
   filter: dt1.__mark7
   orderBy: t3.o_totalprice DESC NULLS LAST, t3.o_orderdate ASC NULLS LAST
   limit: 100
 
-t2: 15000.00 rows, c_custkey, c_name
+t2: 150000.00 rows, c_custkey, c_name
   table: "default"."customer"
-    c_custkey BIGINT (cardinality=14936.00 min=1 max=15000)
-    c_name VARCHAR (cardinality=14717.00 min="Customer#000000001" max="Customer#000015000")
+    c_custkey BIGINT (cardinality=150000.00 min=1 max=150000)
+    c_name VARCHAR (cardinality=150000.00)
 
-t3: 150000.00 rows, o_orderkey, o_custkey, o_totalprice, o_orderdate
+t3: 1500000.00 rows, o_orderkey, o_custkey, o_totalprice, o_orderdate
   table: "default"."orders"
-    o_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
-    o_custkey BIGINT (cardinality=73171.00 min=1 max=149999)
-    o_totalprice DOUBLE (cardinality=147438.00 min=917.35 max=496620.48)
-    o_orderdate DATE (cardinality=2382.00 min=8035 max=10440)
+    o_orderkey BIGINT (cardinality=1500000.00 min=1 max=6000000)
+    o_custkey BIGINT (cardinality=100000.00 min=1 max=150000)
+    o_totalprice DOUBLE (cardinality=1500000.00 min=857.71 max=600000)
+    o_orderdate DATE (cardinality=2406.00 min=8035 max=10440)
 
-t4: 600572.00 rows, l_orderkey, l_quantity
+t4: 6001215.00 rows, l_orderkey, l_quantity
   table: "default"."lineitem"
-    l_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
+    l_orderkey BIGINT (cardinality=1500000.00 min=1 max=6000000)
     l_quantity DOUBLE (cardinality=50.00 min=1 max=50)
 
-dt5: 15000.48 rows, l_orderkey_23
+dt5: 147254.88 rows, l_orderkey_17
   output:
-    l_orderkey_23 := t6.l_orderkey BIGINT (cardinality=14274.89 min=1 max=600000)
+    l_orderkey_17 := t6.l_orderkey BIGINT (cardinality=140131.55 min=1 max=6000000)
   tables: t6
   aggregates: sum(t6.l_quantity) AS sum
   grouping keys: t6.l_orderkey
   having: gt(dt5.sum, 300)
 
-t6: 600572.00 rows, l_orderkey, l_quantity
+t6: 6001215.00 rows, l_orderkey, l_quantity
   table: "default"."lineitem"
-    l_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
+    l_orderkey BIGINT (cardinality=1500000.00 min=1 max=6000000)
     l_quantity DOUBLE (cardinality=50.00 min=1 max=50)
 
 
 Optimized plan (oneline):
 
-agg((("default"."lineitem" LEFT SEMI (FILTER) agg("default"."lineitem")) INNER ("default"."orders" INNER "default"."customer")))
+agg((((lineitem LEFT SEMI (FILTER) agg(lineitem)) INNER orders) INNER customer))
 
 Optimized plan:
 
-Project (redundant) [100.00 rows] -> dt1.c_name, dt1.c_custkey, dt1.o_orderkey, dt1.o_orderdate, dt1.o_totalprice, dt1.sum_24
+Project (redundant) [100.00 rows] -> dt1.c_name, dt1.c_custkey, dt1.o_orderkey, dt1.o_orderdate, dt1.o_totalprice, dt1.sum_18
     dt1.c_name := t2.c_name
     dt1.c_custkey := t2.c_custkey
     dt1.o_orderkey := t3.o_orderkey
     dt1.o_orderdate := t3.o_orderdate
     dt1.o_totalprice := t3.o_totalprice
-    dt1.sum_24 := dt1.sum_24
-  OrderBy [100.00 rows] -> t2.c_name, t2.c_custkey, t3.o_orderkey, t3.o_orderdate, t3.o_totalprice, dt1.sum_24
-    Aggregation (t2.c_name, t2.c_custkey, t3.o_orderkey, t3.o_orderdate, t3.o_totalprice) [5812.23 rows] -> t2.c_name, t2.c_custkey, t3.o_orderkey, t3.o_orderdate, t3.o_totalprice, dt1.sum_24
-        dt1.sum_24 := sum(t4.l_quantity)
-      Join INNER Hash [5812.24 rows] -> t2.c_custkey, t2.c_name, t3.o_orderkey, t3.o_totalprice, t3.o_orderdate, t4.l_quantity
-          t4.l_orderkey = t3.o_orderkey
-        Join LEFT SEMI (FILTER) Hash [58871.10 rows] -> t4.l_orderkey, t4.l_quantity
-            t4.l_orderkey = dt5.l_orderkey_23
-          TableScan [600572.00 rows] -> t4.l_orderkey, t4.l_quantity
-            table: "default"."lineitem"
-          HashBuild [15000.48 rows] -> dt5.l_orderkey_23
-            Project [15000.48 rows] -> dt5.l_orderkey_23
-                dt5.l_orderkey_23 := t6.l_orderkey
-              Filter [15000.48 rows] -> t6.l_orderkey, dt5.sum
-                  gt(dt5.sum, 300)
-                Aggregation (t6.l_orderkey) [150004.80 rows] -> t6.l_orderkey, dt5.sum
-                    dt5.sum := sum(t6.l_quantity)
-                  TableScan [600572.00 rows] -> t6.l_orderkey, t6.l_quantity
-                    table: "default"."lineitem"
-        HashBuild [14809.23 rows] -> t2.c_custkey, t2.c_name, t3.o_orderkey, t3.o_totalprice, t3.o_orderdate
-          Join INNER Hash [14809.23 rows] -> t2.c_custkey, t2.c_name, t3.o_orderkey, t3.o_totalprice, t3.o_orderdate
-              t3.o_custkey = t2.c_custkey
-            TableScan [150000.00 rows] -> t3.o_orderkey, t3.o_custkey, t3.o_totalprice, t3.o_orderdate
+    dt1.sum_18 := dt1.sum_18
+  OrderBy [100.00 rows] -> t2.c_name, t2.c_custkey, t3.o_orderkey, t3.o_orderdate, t3.o_totalprice, dt1.sum_18
+    Aggregation (t2.c_name, t2.c_custkey, t3.o_orderkey, t3.o_orderdate, t3.o_totalprice) [589120.62 rows] -> t2.c_name, t2.c_custkey, t3.o_orderkey, t3.o_orderdate, t3.o_totalprice, dt1.sum_18
+        dt1.sum_18 := sum(t4.l_quantity)
+      Join INNER Hash [589138.75 rows] -> t2.c_custkey, t2.c_name, t3.o_orderkey, t3.o_totalprice, t3.o_orderdate, t4.l_quantity
+          t3.o_custkey = t2.c_custkey
+        Join INNER Hash [589138.75 rows] -> t3.o_orderkey, t3.o_custkey, t3.o_totalprice, t3.o_orderdate, t4.l_quantity
+            t4.l_orderkey = t3.o_orderkey
+          Join LEFT SEMI (FILTER) Hash [589138.75 rows] -> t4.l_orderkey, t4.l_quantity
+              t4.l_orderkey = dt5.l_orderkey_17
+            TableScan [6001215.00 rows] -> t4.l_orderkey, t4.l_quantity
+              table: "default"."lineitem"
+            HashBuild [147254.88 rows] -> dt5.l_orderkey_17
+              Project [147254.88 rows] -> dt5.l_orderkey_17
+                  dt5.l_orderkey_17 := t6.l_orderkey
+                Filter [147254.88 rows] -> t6.l_orderkey, dt5.sum
+                    gt(dt5.sum, 300)
+                  Aggregation (t6.l_orderkey) [1472548.75 rows] -> t6.l_orderkey, dt5.sum
+                      dt5.sum := sum(t6.l_quantity)
+                    TableScan [6001215.00 rows] -> t6.l_orderkey, t6.l_quantity
+                      table: "default"."lineitem"
+          HashBuild [1500000.00 rows] -> t3.o_orderkey, t3.o_custkey, t3.o_totalprice, t3.o_orderdate
+            TableScan [1500000.00 rows] -> t3.o_orderkey, t3.o_custkey, t3.o_totalprice, t3.o_orderdate
               table: "default"."orders"
-            HashBuild [15000.00 rows] -> t2.c_custkey, t2.c_name
-              TableScan [15000.00 rows] -> t2.c_custkey, t2.c_name
-                table: "default"."customer"
+        HashBuild [150000.00 rows] -> t2.c_custkey, t2.c_name
+          TableScan [150000.00 rows] -> t2.c_custkey, t2.c_name
+            table: "default"."customer"
 
 
 Executable Velox plan:
 
 Fragment 0: fragment1 SINGLE:
+-- TopN[11][100 o_totalprice DESC NULLS LAST, o_orderdate ASC NULLS LAST] -> c_name:VARCHAR, c_custkey:BIGINT, o_orderkey:BIGINT, o_orderdate:DATE, o_totalprice:DOUBLE, sum_18:DOUBLE
+  -- Aggregation[10][SINGLE [c_name, c_custkey, o_orderkey, o_orderdate, o_totalprice] sum_18 := sum("l_quantity")] -> c_name:VARCHAR, c_custkey:BIGINT, o_orderkey:BIGINT, o_orderdate:DATE, o_totalprice:DOUBLE, sum_18:DOUBLE
+    -- HashJoin[9][INNER o_custkey=c_custkey] -> c_custkey:BIGINT, c_name:VARCHAR, o_orderkey:BIGINT, o_totalprice:DOUBLE, o_orderdate:DATE, l_quantity:DOUBLE
+      -- HashJoin[7][INNER l_orderkey=o_orderkey] -> o_orderkey:BIGINT, o_custkey:BIGINT, o_totalprice:DOUBLE, o_orderdate:DATE, l_quantity:DOUBLE
+        -- HashJoin[5][LEFT SEMI (FILTER) l_orderkey=l_orderkey_0] -> l_orderkey:BIGINT, l_quantity:DOUBLE
+          -- TableScan[0]["default"."lineitem"] -> l_orderkey:BIGINT, l_quantity:DOUBLE
+          -- Project[4][expressions: (l_orderkey_0:BIGINT, "l_orderkey_0")] -> l_orderkey_0:BIGINT
+            -- Filter[1][expression: gt("sum",300)] -> l_orderkey_0:BIGINT, sum:DOUBLE
+              -- Aggregation[3][SINGLE [l_orderkey_0] sum := sum("l_quantity_4")] -> l_orderkey_0:BIGINT, sum:DOUBLE
+                -- TableScan[2]["default"."lineitem"] -> l_orderkey_0:BIGINT, l_quantity_4:DOUBLE
+        -- TableScan[6]["default"."orders"] -> o_orderkey:BIGINT, o_custkey:BIGINT, o_totalprice:DOUBLE, o_orderdate:DATE
+      -- TableScan[8]["default"."customer"] -> c_custkey:BIGINT, c_name:VARCHAR
+
+EXPLAIN ANALYZE:
+
+Fragment 0: fragment1 SINGLE:
 -- TopN[11][100 o_totalprice DESC NULLS LAST, o_orderdate ASC NULLS LAST] -> c_name:VARCHAR, c_custkey:BIGINT, o_orderkey:BIGINT, o_orderdate:DATE, o_totalprice:DOUBLE, sum_24:DOUBLE
+   Estimate: 100 rows, 0B peak memory
+   Output: 57 rows (51.72KB, 1 batches), Cpu time: 79.30us, Wall time: 108.72us, Blocked wall time: 0ns, Peak memory: 180.38KB, Memory allocations: 9, Threads: 1, CPU breakdown: B/I/O/F (31.57us/25.07us/10.60us/12.06us)
   -- Aggregation[10][SINGLE [c_name, c_custkey, o_orderkey, o_orderdate, o_totalprice] sum_24 := sum("l_quantity")] -> c_name:VARCHAR, c_custkey:BIGINT, o_orderkey:BIGINT, o_orderdate:DATE, o_totalprice:DOUBLE, sum_24:DOUBLE
-    -- HashJoin[9][INNER l_orderkey=o_orderkey] -> c_custkey:BIGINT, c_name:VARCHAR, o_orderkey:BIGINT, o_totalprice:DOUBLE, o_orderdate:DATE, l_quantity:DOUBLE
-      -- HashJoin[5][LEFT SEMI (FILTER) l_orderkey=l_orderkey_23] -> l_orderkey:BIGINT, l_quantity:DOUBLE
-        -- TableScan[0][table: lineitem, data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_orderkey:BIGINT, l_quantity:DOUBLE
-        -- Project[4][expressions: (l_orderkey_23:BIGINT, "l_orderkey_4")] -> l_orderkey_23:BIGINT
-          -- Filter[1][expression: gt("sum",300)] -> l_orderkey_4:BIGINT, sum:DOUBLE
-            -- Aggregation[3][SINGLE [l_orderkey_4] sum := sum("l_quantity_8")] -> l_orderkey_4:BIGINT, sum:DOUBLE
-              -- TableScan[2][table: lineitem, data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_orderkey_4:BIGINT, l_quantity_8:DOUBLE
-      -- HashJoin[8][INNER o_custkey=c_custkey] -> c_custkey:BIGINT, c_name:VARCHAR, o_orderkey:BIGINT, o_totalprice:DOUBLE, o_orderdate:DATE
+     Estimate: 575801 rows, 0B peak memory
+     Output: 57 rows (671.34KB, 1 batches), Cpu time: 661.56us, Wall time: 768.66us, Blocked wall time: 0ns, Peak memory: 816.62KB, Memory allocations: 15, Threads: 1, CPU breakdown: B/I/O/F (83.09us/478.77us/79.65us/20.05us)
+    -- HashJoin[9][INNER o_custkey=c_custkey] -> c_custkey:BIGINT, c_name:VARCHAR, o_orderkey:BIGINT, o_totalprice:DOUBLE, o_orderdate:DATE, l_quantity:DOUBLE
+       Estimate: 575818 rows, 0B peak memory
+       Output: 399 rows (2.61MB, 55 batches), Cpu time: 18.10ms, Wall time: 18.39ms, Blocked wall time: 28.38ms, Peak memory: 13.73MB, Memory allocations: 28, CPU breakdown: B/I/O/F (118.52us/16.15ms/276.34us/1.55ms)
+      -- HashJoin[7][INNER l_orderkey=o_orderkey] -> o_orderkey:BIGINT, o_custkey:BIGINT, o_totalprice:DOUBLE, o_orderdate:DATE, l_quantity:DOUBLE
+         Estimate: 569684 rows, 0B peak memory
+         Output: 399 rows (23.44KB, 55 batches), Cpu time: 198.25ms, Wall time: 200.21ms, Blocked wall time: 230.88ms, Peak memory: 98.29MB, Memory allocations: 26, CPU breakdown: B/I/O/F (207.28us/115.57ms/300.69us/82.18ms)
+        -- HashJoin[5][LEFT SEMI (FILTER) l_orderkey=l_orderkey_4] -> l_orderkey:BIGINT, l_quantity:DOUBLE
+           Estimate: 587705 rows, 0B peak memory
+           Output: 399 rows (5.15MB, 55 batches), Cpu time: 461.61us, Wall time: 681.52us, Blocked wall time: 242.78ms, Peak memory: 84.00KB, Memory allocations: 3, CPU breakdown: B/I/O/F (186.99us/99.16us/93.24us/82.21us)
+          -- TableScan[0][table: lineitem, data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_orderkey:BIGINT, l_quantity:DOUBLE
+             Estimate: 6.00122e+06 rows, 0B peak memory
+             Input: 399 rows (5.16MB, 55 batches), Raw Input: 6001215 rows (16.75MB), Output: 399 rows (5.16MB, 55 batches), Cpu time: 87.26ms, Wall time: 111.55ms, Blocked wall time: 0ns, Peak memory: 5.69MB, Memory allocations: 1061, Threads: 1, Splits: 2, DynamicFilter producer plan nodes: 5, CPU breakdown: B/I/O/F (20.86us/0ns/87.24ms/280ns)
+          -- Project[4][expressions: (l_orderkey_4:BIGINT, "l_orderkey_4")] -> l_orderkey_4:BIGINT
+             Estimate: 151544 rows, 0B peak memory
+             Output: 57 rows (519B, 51 batches), Cpu time: 7.86ms, Wall time: 8.45ms, Blocked wall time: 0ns, Peak memory: 51.00KB, Memory allocations: 152, Threads: 1, CPU breakdown: B/I/O/F (452.82us/47.85us/7.32ms/42.46us)
+            -- Filter[1][expression: gt("sum",300)] -> l_orderkey_4:BIGINT, sum:DOUBLE
+               Estimate: 151544 rows, 0B peak memory
+               Output: 57 rows (1.09KB, 51 batches), Cpu time: 0ns, Wall time: 0ns, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (0ns/0ns/0ns/0ns)
+              -- Aggregation[3][SINGLE [l_orderkey_4] sum := sum("l_quantity_8")] -> l_orderkey_4:BIGINT, sum:DOUBLE
+                 Estimate: 1.51544e+06 rows, 0B peak memory
+                 Output: 1500000 rows (28.10MB, 150 batches), Cpu time: 367.78ms, Wall time: 371.76ms, Blocked wall time: 0ns, Peak memory: 70.88MB, Memory allocations: 38, Threads: 1, CPU breakdown: B/I/O/F (967.60us/356.29ms/10.24ms/280.87us)
+                -- TableScan[2][table: lineitem, data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_orderkey_4:BIGINT, l_quantity_8:DOUBLE
+                   Estimate: 6.00122e+06 rows, 0B peak memory
+                   Input: 6001215 rows (56.20MB, 614 batches), Output: 6001215 rows (56.20MB, 614 batches), Cpu time: 93.18ms, Wall time: 120.70ms, Blocked wall time: 0ns, Peak memory: 5.39MB, Memory allocations: 2031, Threads: 1, Splits: 2, CPU breakdown: B/I/O/F (316.54us/0ns/92.86ms/280ns)
         -- TableScan[6][table: orders, data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>] -> o_orderkey:BIGINT, o_custkey:BIGINT, o_totalprice:DOUBLE, o_orderdate:DATE
-        -- TableScan[7][table: customer, data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>] -> c_custkey:BIGINT, c_name:VARCHAR
+           Estimate: 1.5e+06 rows, 0B peak memory
+           Input: 1500000 rows (49.08MB, 152 batches), Output: 1500000 rows (49.08MB, 152 batches), Cpu time: 57.53ms, Wall time: 59.71ms, Blocked wall time: 0ns, Peak memory: 17.13MB, Memory allocations: 1311, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (53.70us/0ns/57.47ms/310ns)
+      -- TableScan[8][table: customer, data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>] -> c_custkey:BIGINT, c_name:VARCHAR
+         Estimate: 150000 rows, 0B peak memory
+         Input: 150000 rows (7.39MB, 15 batches), Output: 150000 rows (7.39MB, 15 batches), Cpu time: 8.88ms, Wall time: 10.57ms, Blocked wall time: 0ns, Peak memory: 8.35MB, Memory allocations: 167, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (14.47us/0ns/8.87ms/310ns)
 
 ___END___

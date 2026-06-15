@@ -1,3 +1,4 @@
+generated: 2026-06-14 18:29:33 (snapshot; regenerate with TpchPlanTest.makePlans)
 numWorkers: 1
 numDrivers: 1
 
@@ -10,18 +11,18 @@ dt1: 1.00 rows, cntrycode, numcust, totacctbal
     totacctbal := dt1.totacctbal DOUBLE (cardinality=1.00)
   tables: t2, dt3, dt5
   joins:
-    t2 SEMI dt5 ON t2.c_custkey = dt5.o_custkey [t2 → 2.05, dt5 → 0.00]
-  syntactic join order: 11, 15, 36
+    t2 SEMI dt5 ON t2.c_custkey = dt5.o_custkey [t2 → 10.00, dt5 → 0.00]
+  syntactic join order: 9, 13, 34
   aggregates: count() AS numcust, sum(t2.c_acctbal) AS totacctbal
   grouping keys: substr(t2.c_phone, 1, 2)
   filter: gt(t2.c_acctbal, dt3.avg) and not(dt1.__mark7)
   orderBy: dt1.cntrycode ASC NULLS LAST
 
-t2: 6.75 rows, c_custkey, c_phone, c_acctbal
+t2: 7.00 rows, c_custkey, c_phone, c_acctbal
   table: "default"."customer"
-    c_custkey BIGINT (cardinality=14936.00 min=1 max=15000)
-    c_phone VARCHAR (cardinality=15553.00 min="10-103-318-6809" max="34-999-121-7718")
-    c_acctbal DOUBLE (cardinality=14867.00 min=-999.95 max=9999.72)
+    c_custkey BIGINT (cardinality=150000.00 min=1 max=150000)
+    c_phone VARCHAR (cardinality=150000.00)
+    c_acctbal DOUBLE (cardinality=150000.00 min=-999.99 max=9999.99)
   single-column filters: __in(substr(t2.c_phone, 1, 2), "13", "31", "23", "29", "30", "18", "17")
 
 dt3: 1.00 rows, avg
@@ -30,25 +31,25 @@ dt3: 1.00 rows, avg
   tables: t4
   aggregates: avg(t4.c_acctbal) AS avg
 
-t4: 6.14 rows, c_phone, c_acctbal
+t4: 6.36 rows, c_phone, c_acctbal
   table: "default"."customer"
-    c_phone VARCHAR (cardinality=15553.00 min="10-103-318-6809" max="34-999-121-7718")
-    c_acctbal DOUBLE (cardinality=13515.48 min=0 max=9999.72)
+    c_phone VARCHAR (cardinality=150000.00)
+    c_acctbal DOUBLE (cardinality=136363.75 min=0 max=9999.99)
   single-column filters: gt(t4.c_acctbal, 0) and __in(substr(t4.c_phone, 1, 2), "13", "31", "23", "29", "30", "18", "17")
 
-dt5: 150000.00 rows, o_custkey
+dt5: 1500000.00 rows, o_custkey
   output:
-    o_custkey := t6.o_custkey BIGINT (cardinality=73171.00 min=1 max=149999)
+    o_custkey := t6.o_custkey BIGINT (cardinality=100000.00 min=1 max=150000)
   tables: t6
 
-t6: 150000.00 rows, o_custkey
+t6: 1500000.00 rows, o_custkey
   table: "default"."orders"
-    o_custkey BIGINT (cardinality=73171.00 min=1 max=149999)
+    o_custkey BIGINT (cardinality=100000.00 min=1 max=150000)
 
 
 Optimized plan (oneline):
 
-agg(("default"."orders" RIGHT SEMI (PROJECT) ("default"."customer" INNER agg("default"."customer"))))
+agg((orders RIGHT SEMI (PROJECT) (customer INNER agg(customer))))
 
 Optimized plan:
 
@@ -57,32 +58,32 @@ Project (redundant) [1.00 rows] -> dt1.cntrycode, dt1.numcust, dt1.totacctbal
     dt1.numcust := dt1.numcust
     dt1.totacctbal := dt1.totacctbal
   OrderBy [1.00 rows] -> dt1.cntrycode, dt1.numcust, dt1.totacctbal
-    Aggregation (dt1.__p54) [1.00 rows] -> dt1.cntrycode, dt1.numcust, dt1.totacctbal
+    Aggregation (dt1.__p50) [1.00 rows] -> dt1.cntrycode, dt1.numcust, dt1.totacctbal
         dt1.numcust := count()
         dt1.totacctbal := sum(t2.c_acctbal)
-      Project [1.00 rows] -> dt1.__p54, t2.c_acctbal
-          dt1.__p54 := substr(t2.c_phone, 1, 2)
+      Project [1.00 rows] -> dt1.__p50, t2.c_acctbal
+          dt1.__p50 := substr(t2.c_phone, 1, 2)
           t2.c_acctbal := t2.c_acctbal
         Filter [1.00 rows] -> t2.c_phone, t2.c_acctbal, dt1.__mark7
             not(dt1.__mark7)
-          Join RIGHT SEMI (PROJECT) Hash [3.38 rows] -> t2.c_phone, t2.c_acctbal, dt1.__mark7
+          Join RIGHT SEMI (PROJECT) Hash [3.50 rows] -> t2.c_phone, t2.c_acctbal, dt1.__mark7
               dt5.o_custkey = t2.c_custkey
-            Project (redundant) [150000.00 rows] -> dt5.o_custkey
+            Project (redundant) [1500000.00 rows] -> dt5.o_custkey
                 dt5.o_custkey := t6.o_custkey
-              TableScan [150000.00 rows] -> t6.o_custkey
+              TableScan [1500000.00 rows] -> t6.o_custkey
                 table: "default"."orders"
-            HashBuild [3.38 rows] -> t2.c_custkey, t2.c_phone, t2.c_acctbal, dt3.avg
-              Filter [3.38 rows] -> t2.c_custkey, t2.c_phone, t2.c_acctbal, dt3.avg
+            HashBuild [3.50 rows] -> t2.c_custkey, t2.c_phone, t2.c_acctbal, dt3.avg
+              Filter [3.50 rows] -> t2.c_custkey, t2.c_phone, t2.c_acctbal, dt3.avg
                   gt(t2.c_acctbal, dt3.avg)
-                Join INNER Cross [6.75 rows] -> t2.c_custkey, t2.c_phone, t2.c_acctbal, dt3.avg
-                  TableScan [6.75 rows] -> t2.c_custkey, t2.c_phone, t2.c_acctbal
+                Join INNER Cross [7.00 rows] -> t2.c_custkey, t2.c_phone, t2.c_acctbal, dt3.avg
+                  TableScan [7.00 rows] -> t2.c_custkey, t2.c_phone, t2.c_acctbal
                     table: "default"."customer"
                     single-column filters: __in(substr(t2.c_phone, 1, 2), "13", "31", "23", "29", "30", "18", "17")
                   Project (redundant) [1.00 rows] -> dt3.avg
                       dt3.avg := dt3.avg
                     Aggregation [1.00 rows] -> dt3.avg
                         dt3.avg := avg(t4.c_acctbal)
-                      TableScan [6.14 rows] -> t4.c_acctbal
+                      TableScan [6.36 rows] -> t4.c_acctbal
                         table: "default"."customer"
                         single-column filters: gt(t4.c_acctbal, 0) and __in(substr(t4.c_phone, 1, 2), "13", "31", "23", "29", "30", "18", "17")
 
@@ -90,16 +91,55 @@ Project (redundant) [1.00 rows] -> dt1.cntrycode, dt1.numcust, dt1.totacctbal
 Executable Velox plan:
 
 Fragment 0: fragment1 SINGLE:
--- OrderBy[10][cntrycode ASC NULLS LAST] -> cntrycode:VARCHAR, numcust:BIGINT, totacctbal:DOUBLE
-  -- Aggregation[9][SINGLE [cntrycode] numcust := count(), totacctbal := sum("c_acctbal")] -> cntrycode:VARCHAR, numcust:BIGINT, totacctbal:DOUBLE
-    -- Project[8][expressions: (cntrycode:VARCHAR, substr("c_phone",1,2)), (c_acctbal:DOUBLE, "c_acctbal")] -> cntrycode:VARCHAR, c_acctbal:DOUBLE
+-- OrderBy[12][cntrycode ASC NULLS LAST] -> cntrycode:VARCHAR, numcust:BIGINT, totacctbal:DOUBLE
+  -- Aggregation[11][SINGLE [cntrycode] numcust := count(), totacctbal := sum("c_acctbal")] -> cntrycode:VARCHAR, numcust:BIGINT, totacctbal:DOUBLE
+    -- Project[10][expressions: (cntrycode:VARCHAR, substr("c_phone",1,2)), (c_acctbal:DOUBLE, "c_acctbal")] -> cntrycode:VARCHAR, c_acctbal:DOUBLE
       -- Filter[0][expression: not("dt1.__mark7")] -> c_phone:VARCHAR, c_acctbal:DOUBLE, "dt1.__mark7":BOOLEAN
-        -- HashJoin[7][RIGHT SEMI (PROJECT) o_custkey=c_custkey] -> c_phone:VARCHAR, c_acctbal:DOUBLE, "dt1.__mark7":BOOLEAN
-          -- TableScan[1][table: orders, data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>] -> o_custkey:BIGINT
+        -- HashJoin[9][RIGHT SEMI (PROJECT) o_custkey=c_custkey] -> c_phone:VARCHAR, c_acctbal:DOUBLE, "dt1.__mark7":BOOLEAN
+          -- TableScan[1]["default"."orders"] -> o_custkey:BIGINT
           -- Filter[2][expression: gt("c_acctbal","avg")] -> c_custkey:BIGINT, c_phone:VARCHAR, c_acctbal:DOUBLE, avg:DOUBLE
+            -- NestedLoopJoin[8][INNER] -> c_custkey:BIGINT, c_phone:VARCHAR, c_acctbal:DOUBLE, avg:DOUBLE
+              -- Filter[4][expression: in(substr("c_phone",1,2),{13, 31, 23, 29, 30, ...2 more})] -> c_custkey:BIGINT, c_phone:VARCHAR, c_acctbal:DOUBLE
+                -- TableScan[3]["default"."customer"] -> c_custkey:BIGINT, c_phone:VARCHAR, c_acctbal:DOUBLE
+              -- Aggregation[7][SINGLE avg := avg("c_acctbal_5")] -> avg:DOUBLE
+                -- Filter[6][expression: and(gt("c_acctbal_5",0),in(substr("c_phone_4",1,2),{13, 31, 23, 29, 30, ...2 more}))] -> c_acctbal_5:DOUBLE, c_phone_4:VARCHAR
+                  -- TableScan[5]["default"."customer"] -> c_acctbal_5:DOUBLE, c_phone_4:VARCHAR
+
+EXPLAIN ANALYZE:
+
+Fragment 0: fragment1 SINGLE:
+-- OrderBy[10][cntrycode ASC NULLS LAST] -> cntrycode:VARCHAR, numcust:BIGINT, totacctbal:DOUBLE
+   Estimate: 1 rows, 0B peak memory
+   Output: 7 rows (352B, 1 batches), Cpu time: 423.44us, Wall time: 796.25us, Blocked wall time: 0ns, Peak memory: 128.69KB, Memory allocations: 6, CPU breakdown: B/I/O/F (249.80us/9.08us/81.64us/82.91us)
+  -- Aggregation[9][SINGLE [cntrycode] numcust := count(), totacctbal := sum("c_acctbal")] -> cntrycode:VARCHAR, numcust:BIGINT, totacctbal:DOUBLE
+     Estimate: 1 rows, 0B peak memory
+     Output: 7 rows (383.72KB, 1 batches), Cpu time: 675.81us, Wall time: 1.10ms, Blocked wall time: 0ns, Peak memory: 498.00KB, Memory allocations: 9, CPU breakdown: B/I/O/F (262.91us/187.56us/141.80us/83.54us)
+    -- Project[8][expressions: (cntrycode:VARCHAR, substr("c_phone",1,2)), (c_acctbal:DOUBLE, "c_acctbal")] -> cntrycode:VARCHAR, c_acctbal:DOUBLE
+       Estimate: 1 rows, 0B peak memory
+       Output: 6384 rows (527.09KB, 19 batches), Cpu time: 857.51us, Wall time: 1.36ms, Blocked wall time: 0ns, Peak memory: 30.25KB, Memory allocations: 40, CPU breakdown: B/I/O/F (351.07us/9.62us/412.86us/83.96us)
+      -- Filter[0][expression: not("dt1.__mark7")] -> c_phone:VARCHAR, c_acctbal:DOUBLE, "dt1.__mark7":BOOLEAN
+         Estimate: 1 rows, 0B peak memory
+         Output: 6384 rows (535.46KB, 19 batches), Cpu time: 0ns, Wall time: 0ns, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, CPU breakdown: B/I/O/F (0ns/0ns/0ns/0ns)
+        -- HashJoin[7][RIGHT SEMI (PROJECT) o_custkey=c_custkey] -> c_phone:VARCHAR, c_acctbal:DOUBLE, "dt1.__mark7":BOOLEAN
+           Estimate: 3.43784 rows, 0B peak memory
+           Output: 0 rows (0B, 19 batches), Cpu time: 4.35ms, Wall time: 4.85ms, Blocked wall time: 0ns, Peak memory: 5.80MB, Memory allocations: 21, CPU breakdown: B/I/O/F (721.68us/3.05ms/11.31us/563.62us)
+          -- TableScan[1][table: orders, data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>] -> o_custkey:BIGINT
+             Estimate: 1.5e+06 rows, 0B peak memory
+             Input: 190069 rows (14.03MB, 304 batches), Raw Input: 1500000 rows (4.45MB), Output: 190069 rows (14.03MB, 304 batches), Cpu time: 17.69ms, Wall time: 19.16ms, Blocked wall time: 0ns, Peak memory: 4.99MB, Memory allocations: 658, Threads: 1, Splits: 1, DynamicFilter producer plan nodes: 7, CPU breakdown: B/I/O/F (302.56us/0ns/17.39ms/471ns)
+          -- Filter[2][expression: gt("c_acctbal","avg")] -> c_custkey:BIGINT, c_phone:VARCHAR, c_acctbal:DOUBLE, avg:DOUBLE
+             Estimate: 3.43784 rows, 0B peak memory
+             Output: 19000 rows (1.05MB, 15 batches), Cpu time: 1.10ms, Wall time: 1.19ms, Blocked wall time: 0ns, Peak memory: 13.00KB, Memory allocations: 17, Threads: 1, CPU breakdown: B/I/O/F (44.63us/15.95us/1.03ms/9.65us)
             -- NestedLoopJoin[6][INNER] -> c_custkey:BIGINT, c_phone:VARCHAR, c_acctbal:DOUBLE, avg:DOUBLE
+               Estimate: 6.87569 rows, 0B peak memory
+               Output: 42015 rows (2.32MB, 15 batches), Cpu time: 413.36us, Wall time: 825.62us, Blocked wall time: 19.99ms, Peak memory: 0B, Memory allocations: 0, CPU breakdown: B/I/O/F (62.14us/268.49us/47.85us/34.88us)
               -- TableScan[3][table: customer, remaining filter: (in(substr("c_phone",1,2),{13, 31, 23, 29, 30, ...2 more})), data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: c_phone, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> c_custkey:BIGINT, c_phone:VARCHAR, c_acctbal:DOUBLE
+                 Estimate: 6.87569 rows, 0B peak memory
+                 Input: 42015 rows (4.12MB, 15 batches), Raw Input: 150000 rows (2.83MB), Output: 42015 rows (4.12MB, 15 batches), Cpu time: 22.06ms, Wall time: 22.97ms, Blocked wall time: 0ns, Peak memory: 15.34MB, Memory allocations: 318, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (10.36us/0ns/22.05ms/480ns)
               -- Aggregation[5][SINGLE avg := avg("c_acctbal_5")] -> avg:DOUBLE
+                 Estimate: 1 rows, 0B peak memory
+                 Output: 1 rows (32B, 1 batches), Cpu time: 120.36us, Wall time: 167.64us, Blocked wall time: 0ns, Peak memory: 64.62KB, Memory allocations: 6, Threads: 1, CPU breakdown: B/I/O/F (25.17us/70.47us/15.17us/9.55us)
                 -- TableScan[4][table: customer, range filters: [(c_acctbal, DoubleRange: (0.000000, nan) no nulls)], remaining filter: (in(substr("c_phone",1,2),{13, 31, 23, 29, 30, ...2 more})), data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: c_phone, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: c_acctbal, columnType: Regular, dataType: DOUBLE, requiredSubfields: [ ]]]] -> c_acctbal_5:DOUBLE
+                   Estimate: 6.25063 rows, 0B peak memory
+                   Input: 38120 rows (402.30KB, 15 batches), Raw Input: 150000 rows (2.43MB), Output: 38120 rows (402.30KB, 15 batches), Cpu time: 19.06ms, Wall time: 20.18ms, Blocked wall time: 0ns, Peak memory: 11.93MB, Memory allocations: 167, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (9.59us/0ns/19.05ms/471ns)
 
 ___END___

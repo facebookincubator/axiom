@@ -429,7 +429,9 @@ class OnelineVisitor : public RelationOpVisitor {
     auto& myCtx = static_cast<Context&>(context);
 
     const auto& table = *op.as<TableScan>()->baseTable;
-    myCtx.out << table.schemaTable->name();
+    // Bare table name (no schema qualifier or quotes) keeps the one-line plan
+    // shape compact and readable.
+    myCtx.out << table.schemaTable->name().table;
   }
 
   void visit(const Repartition& op, RelationOpVisitorContext& context)

@@ -29,11 +29,9 @@ namespace lp = facebook::axiom::logical_plan;
 
 // Asserts the single-node plan shape of each TPC-H query. Statistics are
 // injected via `TestConnector::addTpchTables(scaleFactor)`, so no data is
-// generated and the optimizer plans at any scale instantly. Foreign keys are
-// consistent at every scale, so the plans reflect real TPC-H rather than the
-// data generator's behavior below scale factor 1. Result correctness is checked
-// separately in `TpchResultTest`. Filters become separate nodes here because
-// the test connector does not push them into the scan.
+// generated and the optimizer plans at any scale instantly. Result correctness
+// is checked separately in `TpchResultTest`. Filters become separate nodes here
+// because the test connector does not push them into the scan.
 class TpchPlanTest : public test::QueryTestBase {
  protected:
   static constexpr double kScaleFactor = 1.0;
@@ -79,6 +77,7 @@ TEST_F(TpchPlanTest, stats) {
 }
 
 TEST_F(TpchPlanTest, q01) {
+  // agg(lineitem)
   auto matcher = matchScan("lineitem")
                      .filter("l_shipdate < date '1998-09-03'")
                      .project()
@@ -89,6 +88,15 @@ TEST_F(TpchPlanTest, q01) {
 }
 
 TEST_F(TpchPlanTest, q02) {
+  // (
+  //   ((partsupp INNER part) INNER (supplier INNER (nation INNER region)))
+  //   INNER
+  //   agg((
+  //     (partsupp LEFT SEMI (FILTER) part)
+  //     INNER
+  //     (supplier INNER (nation INNER region))
+  //   ))
+  // )
   auto matcher =
       matchScan("partsupp")
           .hashJoinInner(matchScan("part")
@@ -131,6 +139,7 @@ TEST_F(TpchPlanTest, q02) {
 }
 
 TEST_F(TpchPlanTest, q03) {
+  // agg((lineitem INNER (orders INNER customer)))
   auto matcher =
       matchScan("lineitem")
           .filter("l_shipdate > date '1995-03-15'")
@@ -150,6 +159,7 @@ TEST_F(TpchPlanTest, q03) {
 }
 
 TEST_F(TpchPlanTest, q04) {
+  // agg((lineitem RIGHT SEMI (FILTER) orders))
   auto matcher =
       matchScan("lineitem")
           .filter("l_commitdate < l_receiptdate")
@@ -165,6 +175,11 @@ TEST_F(TpchPlanTest, q04) {
 }
 
 TEST_F(TpchPlanTest, q05) {
+  // agg((
+  //   (lineitem INNER (orders INNER (customer INNER (nation INNER region))))
+  //   INNER
+  //   (supplier LEFT SEMI (FILTER) (nation INNER region))
+  // ))
   auto matcher =
       matchScan("lineitem")
           .hashJoinInner(
@@ -199,6 +214,7 @@ TEST_F(TpchPlanTest, q05) {
 }
 
 TEST_F(TpchPlanTest, q06) {
+  // agg(lineitem)
   auto matcher =
       matchScan("lineitem")
           .filter(
@@ -211,11 +227,91 @@ TEST_F(TpchPlanTest, q06) {
 }
 
 TEST_F(TpchPlanTest, q07) {
-  ASSERT_NO_THROW(planTpch(7));
+  // agg((
+  //   (lineitem INNER (supplier INNER nation))
+  //   INNER
+  //   (orders INNER (customer INNER nation))
+  // ))
+  auto matcher =
+      matchScan("lineitem")
+          .filter("l_shipdate between date '1995-01-01' and date '1996-12-31'")
+          .hashJoinInner(
+              matchScan("supplier")
+                  .hashJoinInner(
+                      matchScan("nation")
+                          .aliases({std::nullopt, "supp_nation"})
+                          .filter(
+                              "supp_nation = 'FRANCE' or supp_nation = 'GERMANY'")
+                          .build())
+                  .build())
+          .hashJoinInner(
+              matchScan("orders")
+                  .hashJoinInner(
+                      matchScan("customer")
+                          .hashJoinInner(
+                              matchScan("nation")
+                                  .aliases({std::nullopt, "cust_nation"})
+                                  .filter(
+                                      "cust_nation = 'GERMANY' or cust_nation = 'FRANCE'")
+                                  .build())
+                          .build())
+                  .build())
+          .filter(
+              "(supp_nation = 'FRANCE' and cust_nation = 'GERMANY') or "
+              "(supp_nation = 'GERMANY' and cust_nation = 'FRANCE')")
+          .project()
+          .aggregation()
+          .orderBy()
+          .project()
+          .build();
+  AXIOM_ASSERT_PLAN(planTpch(7), matcher);
 }
 
 TEST_F(TpchPlanTest, q08) {
-  ASSERT_NO_THROW(planTpch(8));
+  // agg((
+  //   (
+  //     supplier
+  //     INNER
+  //     (
+  //       (lineitem INNER part)
+  //       INNER
+  //       (orders INNER (customer INNER (nation INNER region)))
+  //     )
+  //   )
+  //   INNER
+  //   nation
+  // ))
+  auto matcher =
+      matchScan("supplier")
+          .hashJoinInner(
+              matchScan("lineitem")
+                  .hashJoinInner(
+                      matchScan("part")
+                          .filter("p_type = 'ECONOMY ANODIZED STEEL'")
+                          .build())
+                  .hashJoinInner(
+                      matchScan("orders")
+                          .filter(
+                              "o_orderdate between date '1995-01-01' and date '1996-12-31'")
+                          .hashJoinInner(
+                              matchScan("customer")
+                                  .hashJoinInner(
+                                      matchScan("nation")
+                                          .hashJoinInner(
+                                              matchScan("region")
+                                                  .filter("r_name = 'AMERICA'")
+                                                  .build())
+                                          .build())
+                                  .build())
+                          .build())
+                  .build())
+          .hashJoinInner(matchScan("nation").build())
+          .project()
+          .aggregation()
+          .orderBy()
+          .project()
+          .build();
+  AXIOM_ASSERT_PLAN(planTpch(8), matcher);
 }
 
 // No plan-shape assertion: q9's `p_name like '%green%'` is not estimable from
@@ -230,6 +326,11 @@ TEST_F(TpchPlanTest, q09) {
 // (~6%, similar selectivity). With an accurate estimate the optimizer reduces
 // lineitem by the selective `part` first. See tpch/queries/statistics.md.
 TEST_F(TpchPlanTest, q09Alt) {
+  // agg((
+  //   ((orders INNER (lineitem INNER (partsupp INNER part))) INNER supplier)
+  //   INNER
+  //   nation
+  // ))
   auto matcher =
       matchScan("orders")
           .hashJoinInner(
@@ -250,11 +351,50 @@ TEST_F(TpchPlanTest, q09Alt) {
   AXIOM_ASSERT_PLAN(planTpch("q9_alt"), matcher);
 }
 
+// Reduces `lineitem` with a left-semi join against the order keys from
+// `customer ⋈ orders ⋈ nation`, then joins that subtree.
 TEST_F(TpchPlanTest, q10) {
-  ASSERT_NO_THROW(planTpch(10));
+  // agg((
+  //   ((customer INNER orders) INNER nation)
+  //   INNER
+  //   (lineitem LEFT SEMI (FILTER) ((customer INNER orders) INNER nation))
+  // ))
+  auto matcher =
+      matchScan("customer")
+          .hashJoinInner(
+              matchScan("orders")
+                  .filter(
+                      "o_orderdate >= date '1993-10-01' and o_orderdate < date '1994-01-01'")
+                  .build())
+          .hashJoinInner(matchScan("nation").build())
+          .hashJoinInner(
+              matchScan("lineitem")
+                  .filter("l_returnflag = 'R'")
+                  .hashJoinLeftSemiFilter(
+                      matchScan("customer")
+                          .hashJoinInner(
+                              matchScan("orders")
+                                  .filter(
+                                      "o_orderdate >= date '1993-10-01' and o_orderdate < date '1994-01-01'")
+                                  .build())
+                          .hashJoinInner(matchScan("nation").build())
+                          .project()
+                          .build())
+                  .build())
+          .project()
+          .aggregation()
+          .topN()
+          .project()
+          .build();
+  AXIOM_ASSERT_PLAN(planTpch(10), matcher);
 }
 
 TEST_F(TpchPlanTest, q11) {
+  // (
+  //   agg((partsupp INNER (supplier INNER nation)))
+  //   INNER
+  //   agg((partsupp INNER (supplier INNER nation)))
+  // )
   auto matcher =
       matchScan("partsupp")
           .hashJoinInner(
@@ -286,6 +426,7 @@ TEST_F(TpchPlanTest, q11) {
 }
 
 TEST_F(TpchPlanTest, q12) {
+  // agg((orders INNER lineitem))
   auto matcher =
       matchScan("orders")
           .hashJoinInner(
@@ -303,6 +444,7 @@ TEST_F(TpchPlanTest, q12) {
 }
 
 TEST_F(TpchPlanTest, q13) {
+  // agg(agg((orders RIGHT customer)))
   auto matcher = matchScan("orders")
                      .filter("o_comment not like '%special%requests%'")
                      .hashJoinRight(matchScan("customer").build())
@@ -315,6 +457,7 @@ TEST_F(TpchPlanTest, q13) {
 }
 
 TEST_F(TpchPlanTest, q14) {
+  // agg((part INNER lineitem))
   auto matcher =
       matchScan("part")
           .hashJoinInner(
@@ -329,11 +472,37 @@ TEST_F(TpchPlanTest, q14) {
   AXIOM_ASSERT_PLAN(planTpch(14), matcher);
 }
 
+// The `revenue` CTE is computed twice — once as the supplier join's build side
+// and once inside the `max` subquery — because Velox does not materialize or
+// reuse CTEs.
 TEST_F(TpchPlanTest, q15) {
-  ASSERT_NO_THROW(planTpch(15));
+  // ((supplier INNER agg(lineitem)) INNER agg(agg(lineitem)))
+  auto matchCte = [&]() {
+    return matchScan("lineitem")
+        .aliases({"suppkey", "extendedprice", "discount", "shipdate"})
+        .filter(
+            "shipdate >= date '1996-01-01' and shipdate < date '1996-04-01'")
+        .project(
+            {"suppkey as suppkey",
+             "extendedprice * (1.0 - discount) as volume"})
+        .singleAggregation({"suppkey"}, {"sum(volume) as total_revenue"});
+  };
+
+  auto matcher =
+      matchScan("supplier")
+          .hashJoinInner(matchCte().build())
+          .hashJoinInner(
+              matchCte()
+                  .project({"total_revenue as revenue"})
+                  .singleAggregation({}, {"max(revenue) as max_revenue"})
+                  .build())
+          .orderBy()
+          .build();
+  AXIOM_ASSERT_PLAN(planTpch(15), matcher);
 }
 
 TEST_F(TpchPlanTest, q16) {
+  // agg(((partsupp INNER part) ANTI supplier))
   auto matcher =
       matchScan("partsupp")
           .hashJoinInner(
@@ -354,6 +523,7 @@ TEST_F(TpchPlanTest, q16) {
 }
 
 TEST_F(TpchPlanTest, q17) {
+  // agg(((lineitem INNER part) LEFT agg((lineitem LEFT SEMI (FILTER) part))))
   auto matcher =
       matchScan("lineitem")
           .hashJoinInner(
@@ -379,6 +549,11 @@ TEST_F(TpchPlanTest, q17) {
 }
 
 TEST_F(TpchPlanTest, q18) {
+  // agg((
+  //   ((lineitem LEFT SEMI (FILTER) agg(lineitem)) INNER orders)
+  //   INNER
+  //   customer
+  // ))
   auto matcher = matchScan("lineitem")
                      .hashJoinLeftSemiFilter(matchScan("lineitem")
                                                  .aggregation()
@@ -394,6 +569,7 @@ TEST_F(TpchPlanTest, q18) {
 }
 
 TEST_F(TpchPlanTest, q19) {
+  // agg((lineitem INNER part))
   auto matcher =
       matchScan("lineitem")
           .filter(
@@ -419,6 +595,19 @@ TEST_F(TpchPlanTest, q19) {
 }
 
 TEST_F(TpchPlanTest, q20) {
+  // (
+  //   (
+  //     agg(lineitem)
+  //     RIGHT
+  //     (
+  //       part
+  //       RIGHT SEMI (FILTER)
+  //       (partsupp LEFT SEMI (FILTER) (supplier INNER nation))
+  //     )
+  //   )
+  //   RIGHT SEMI (FILTER)
+  //   (supplier INNER nation)
+  // )
   auto matcher =
       matchScan("lineitem")
           .filter(
@@ -453,10 +642,53 @@ TEST_F(TpchPlanTest, q20) {
 }
 
 TEST_F(TpchPlanTest, q21) {
-  ASSERT_NO_THROW(planTpch(21));
+  // agg((
+  //   lineitem
+  //   RIGHT SEMI (FILTER)
+  //   (
+  //     lineitem
+  //     RIGHT SEMI (PROJECT)
+  //     ((lineitem INNER (supplier INNER nation)) INNER orders)
+  //   )
+  // ))
+  auto matcher =
+      matchScan("lineitem")
+          .hashJoinRightSemiFilter(
+              matchScan("lineitem")
+                  .aliases(
+                      {std::nullopt, std::nullopt, "commitdate", "receiptdate"})
+                  .filter("commitdate < receiptdate")
+                  .hashJoinRightSemiProject(
+                      matchScan("lineitem")
+                          .aliases(
+                              {std::nullopt,
+                               std::nullopt,
+                               "commitdate",
+                               "receiptdate"})
+                          .filter("commitdate < receiptdate")
+                          .hashJoinInner(
+                              matchScan("supplier")
+                                  .hashJoinInner(
+                                      matchScan("nation")
+                                          .filter("n_name = 'SAUDI ARABIA'")
+                                          .build())
+                                  .build())
+                          .hashJoinInner(matchScan("orders")
+                                             .filter("o_orderstatus = 'F'")
+                                             .build())
+                          .build(),
+                      {.nullAware = false})
+                  .aliases({std::nullopt, std::nullopt, std::nullopt, "mark"})
+                  .filter("not(mark)")
+                  .build())
+          .singleAggregation({"s_name"}, {"count(*)"})
+          .topN()
+          .build();
+  AXIOM_ASSERT_PLAN(planTpch(21), matcher);
 }
 
 TEST_F(TpchPlanTest, q22) {
+  // agg((orders RIGHT SEMI (PROJECT) (customer INNER agg(customer))))
   auto matcher =
       matchScan("orders")
           .hashJoinRightSemiProject(
@@ -495,6 +727,11 @@ TEST_F(TpchPlanTest, DISABLED_makePlans) {
         /*optimizerOptions=*/std::nullopt,
         fmt::format("{}/q{}", path, query));
   }
+  planVelox(
+      parseSelect(test::readTpchSql("q9_alt"), kTestConnectorId),
+      options,
+      /*optimizerOptions=*/std::nullopt,
+      fmt::format("{}/q9_alt", path));
 }
 
 } // namespace

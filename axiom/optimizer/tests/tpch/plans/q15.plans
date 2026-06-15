@@ -1,3 +1,4 @@
+generated: 2026-06-14 18:29:33 (snapshot; regenerate with TpchPlanTest.makePlans)
 numWorkers: 1
 numDrivers: 1
 
@@ -5,66 +6,66 @@ Query Graph:
 
 dt1: 1.00 rows, s_suppkey, s_name, s_address, s_phone, total_revenue
   output:
-    s_suppkey := t2.s_suppkey BIGINT (cardinality=1.00 min=1 max=1000)
-    s_name := t2.s_name VARCHAR (cardinality=1.00 min="Supplier#000000001" max="Supplier#000001000")
-    s_address := t2.s_address VARCHAR (cardinality=1.00 min="  Bg4GNb1 64E,NhHOTBsSLegFZL2l" max="zuWWhrxl0hEvZ")
-    s_phone := t2.s_phone VARCHAR (cardinality=1.00 min="10-108-564-6160" max="34-998-900-4911")
+    s_suppkey := t2.s_suppkey BIGINT (cardinality=1.00 min=1 max=10000)
+    s_name := t2.s_name VARCHAR (cardinality=1.00)
+    s_address := t2.s_address VARCHAR (cardinality=1.00)
+    s_phone := t2.s_phone VARCHAR (cardinality=1.00)
     total_revenue := dt3.total_revenue DOUBLE (cardinality=1.00)
   tables: t2, dt3, dt7
   joins:
-    t2 INNER dt3 ON t2.s_suppkey = dt3.l_suppkey [t2 → 1.00, dt3 → 0.11]
-    dt3 INNER dt7 ON dt3.total_revenue = dt7.max [dt3 → 0.00, dt7 → 8957.56]
-  syntactic join order: 10, 15, 84
+    t2 INNER dt3 ON t2.s_suppkey = dt3.l_suppkey [t2 → 1.00, dt3 → 1.00]
+    dt3 INNER dt7 ON dt3.total_revenue = dt7.max [dt3 → 0.00, dt7 → 10000.00]
+  syntactic join order: 8, 13, 80
   orderBy: t2.s_suppkey ASC NULLS LAST
 
-t2: 1000.00 rows, s_suppkey, s_name, s_address, s_phone
+t2: 10000.00 rows, s_suppkey, s_name, s_address, s_phone
   table: "default"."supplier"
-    s_suppkey BIGINT (cardinality=1008.00 min=1 max=1000)
-    s_name VARCHAR (cardinality=1016.00 min="Supplier#000000001" max="Supplier#000001000")
-    s_address VARCHAR (cardinality=992.00 min="  Bg4GNb1 64E,NhHOTBsSLegFZL2l" max="zuWWhrxl0hEvZ")
-    s_phone VARCHAR (cardinality=1023.00 min="10-108-564-6160" max="34-998-900-4911")
+    s_suppkey BIGINT (cardinality=10000.00 min=1 max=10000)
+    s_name VARCHAR (cardinality=10000.00)
+    s_address VARCHAR (cardinality=10000.00)
+    s_phone VARCHAR (cardinality=10000.00)
 
-dt3: 8957.56 rows, l_suppkey, total_revenue
+dt3: 10000.00 rows, l_suppkey, total_revenue
   output:
-    l_suppkey := t4.l_suppkey BIGINT (cardinality=8957.56 min=1 max=10000)
+    l_suppkey := t4.l_suppkey BIGINT (cardinality=10000.00 min=1 max=10000)
     total_revenue := dt3.total_revenue DOUBLE (cardinality=1.00)
   tables: t4
   aggregates: sum(multiply(t4.l_extendedprice, minus(1, t4.l_discount))) AS total_revenue
   grouping keys: t4.l_suppkey
 
-t4: 21644.38 rows, l_suppkey, l_extendedprice, l_discount, l_shipdate
+t4: 216195.80 rows, l_suppkey, l_extendedprice, l_discount, l_shipdate
   table: "default"."lineitem"
-    l_suppkey BIGINT (cardinality=10167.00 min=1 max=10000)
-    l_extendedprice DOUBLE (cardinality=444713.00 min=901 max=104899.5)
+    l_suppkey BIGINT (cardinality=10000.00 min=1 max=10000)
+    l_extendedprice DOUBLE (cardinality=6001215.00 min=901 max=104949.5)
     l_discount DOUBLE (cardinality=11.00 min=0 max=0.1)
-    l_shipdate DATE (cardinality=90.03 min=9496 max=9586)
+    l_shipdate DATE (cardinality=91.00 min=9496 max=9586)
   single-column filters: gte(t4.l_shipdate, "1996-01-01") and lt(t4.l_shipdate, "1996-04-01")
 
 dt7: 1.00 rows, max
   output:
     max := dt7.max DOUBLE (cardinality=1.00)
   tables: dt5
-  aggregates: max(dt5.total_revenue_23) AS max
+  aggregates: max(dt5.total_revenue_19) AS max
 
-dt5: 8957.56 rows, total_revenue_23
+dt5: 10000.00 rows, total_revenue_19
   output:
-    total_revenue_23 := dt5.total_revenue_21 DOUBLE (cardinality=1.00)
+    total_revenue_19 := dt5.total_revenue_17 DOUBLE (cardinality=1.00)
   tables: t6
-  aggregates: sum(multiply(t6.l_extendedprice, minus(1, t6.l_discount))) AS total_revenue_21
+  aggregates: sum(multiply(t6.l_extendedprice, minus(1, t6.l_discount))) AS total_revenue_17
   grouping keys: t6.l_suppkey
 
-t6: 21644.38 rows, l_suppkey, l_extendedprice, l_discount, l_shipdate
+t6: 216195.80 rows, l_suppkey, l_extendedprice, l_discount, l_shipdate
   table: "default"."lineitem"
-    l_suppkey BIGINT (cardinality=10167.00 min=1 max=10000)
-    l_extendedprice DOUBLE (cardinality=444713.00 min=901 max=104899.5)
+    l_suppkey BIGINT (cardinality=10000.00 min=1 max=10000)
+    l_extendedprice DOUBLE (cardinality=6001215.00 min=901 max=104949.5)
     l_discount DOUBLE (cardinality=11.00 min=0 max=0.1)
-    l_shipdate DATE (cardinality=90.03 min=9496 max=9586)
+    l_shipdate DATE (cardinality=91.00 min=9496 max=9586)
   single-column filters: gte(t6.l_shipdate, "1996-01-01") and lt(t6.l_shipdate, "1996-04-01")
 
 
 Optimized plan (oneline):
 
-(("default"."supplier" INNER agg(("default"."lineitem" LEFT SEMI (FILTER) "default"."supplier"))) INNER agg(agg("default"."lineitem")))
+((supplier INNER agg(lineitem)) INNER agg(agg(lineitem)))
 
 Optimized plan:
 
@@ -77,40 +78,35 @@ Project (redundant) [1.00 rows] -> dt1.s_suppkey, dt1.s_name, dt1.s_address, dt1
   OrderBy [1.00 rows] -> t2.s_suppkey, t2.s_name, t2.s_address, t2.s_phone, dt3.total_revenue
     Join INNER Hash [1.00 rows] -> t2.s_suppkey, t2.s_name, t2.s_address, t2.s_phone, dt3.total_revenue
         dt3.total_revenue = dt7.max
-      Join INNER Hash [1000.00 rows] -> t2.s_suppkey, t2.s_name, t2.s_address, t2.s_phone, dt3.total_revenue
+      Join INNER Hash [10000.00 rows] -> t2.s_suppkey, t2.s_name, t2.s_address, t2.s_phone, dt3.total_revenue
           t2.s_suppkey = dt3.l_suppkey
-        TableScan [1000.00 rows] -> t2.s_suppkey, t2.s_name, t2.s_address, t2.s_phone
+        TableScan [10000.00 rows] -> t2.s_suppkey, t2.s_name, t2.s_address, t2.s_phone
           table: "default"."supplier"
-        HashBuild [886.16 rows] -> dt3.l_suppkey, dt3.total_revenue
-          Project (redundant) [886.16 rows] -> dt3.l_suppkey, dt3.total_revenue
+        HashBuild [10000.00 rows] -> dt3.l_suppkey, dt3.total_revenue
+          Project (redundant) [10000.00 rows] -> dt3.l_suppkey, dt3.total_revenue
               dt3.l_suppkey := t4.l_suppkey
               dt3.total_revenue := dt3.total_revenue
-            Aggregation (t4.l_suppkey) [886.16 rows] -> t4.l_suppkey, dt3.total_revenue
-                dt3.total_revenue := sum(dt3.__p56)
-              Project [2128.89 rows] -> t4.l_suppkey, dt3.__p56
+            Aggregation (t4.l_suppkey) [10000.00 rows] -> t4.l_suppkey, dt3.total_revenue
+                dt3.total_revenue := sum(dt3.__p52)
+              Project [216195.80 rows] -> t4.l_suppkey, dt3.__p52
                   t4.l_suppkey := t4.l_suppkey
-                  dt3.__p56 := multiply(t4.l_extendedprice, minus(1, t4.l_discount))
-                Join LEFT SEMI (FILTER) Hash [2128.89 rows] -> t4.l_suppkey, t4.l_extendedprice, t4.l_discount
-                    t4.l_suppkey = t2.s_suppkey
-                  TableScan [21644.38 rows] -> t4.l_suppkey, t4.l_extendedprice, t4.l_discount
-                    table: "default"."lineitem"
-                    single-column filters: gte(t4.l_shipdate, "1996-01-01") and lt(t4.l_shipdate, "1996-04-01")
-                  HashBuild [1000.00 rows] -> t2.s_suppkey
-                    TableScan [1000.00 rows] -> t2.s_suppkey
-                      table: "default"."supplier"
+                  dt3.__p52 := multiply(t4.l_extendedprice, minus(1, t4.l_discount))
+                TableScan [216195.80 rows] -> t4.l_suppkey, t4.l_extendedprice, t4.l_discount
+                  table: "default"."lineitem"
+                  single-column filters: gte(t4.l_shipdate, "1996-01-01") and lt(t4.l_shipdate, "1996-04-01")
       HashBuild [1.00 rows] -> dt7.max
         Project (redundant) [1.00 rows] -> dt7.max
             dt7.max := dt7.max
           Aggregation [1.00 rows] -> dt7.max
-              dt7.max := max(dt5.total_revenue_23)
-            Project [8957.56 rows] -> dt5.total_revenue_23
-                dt5.total_revenue_23 := dt5.total_revenue_21
-              Aggregation (t6.l_suppkey) [8957.56 rows] -> t6.l_suppkey, dt5.total_revenue_21
-                  dt5.total_revenue_21 := sum(dt5.__p79)
-                Project [21644.38 rows] -> t6.l_suppkey, dt5.__p79
+              dt7.max := max(dt5.total_revenue_19)
+            Project [10000.00 rows] -> dt5.total_revenue_19
+                dt5.total_revenue_19 := dt5.total_revenue_17
+              Aggregation (t6.l_suppkey) [10000.00 rows] -> t6.l_suppkey, dt5.total_revenue_17
+                  dt5.total_revenue_17 := sum(dt5.__p75)
+                Project [216195.80 rows] -> t6.l_suppkey, dt5.__p75
                     t6.l_suppkey := t6.l_suppkey
-                    dt5.__p79 := multiply(t6.l_extendedprice, minus(1, t6.l_discount))
-                  TableScan [21644.38 rows] -> t6.l_suppkey, t6.l_extendedprice, t6.l_discount
+                    dt5.__p75 := multiply(t6.l_extendedprice, minus(1, t6.l_discount))
+                  TableScan [216195.80 rows] -> t6.l_suppkey, t6.l_extendedprice, t6.l_discount
                     table: "default"."lineitem"
                     single-column filters: gte(t6.l_shipdate, "1996-01-01") and lt(t6.l_shipdate, "1996-04-01")
 
@@ -120,17 +116,57 @@ Executable Velox plan:
 Fragment 0: fragment1 SINGLE:
 -- OrderBy[13][s_suppkey ASC NULLS LAST] -> s_suppkey:BIGINT, s_name:VARCHAR, s_address:VARCHAR, s_phone:VARCHAR, total_revenue:DOUBLE
   -- HashJoin[12][INNER total_revenue=max] -> s_suppkey:BIGINT, s_name:VARCHAR, s_address:VARCHAR, s_phone:VARCHAR, total_revenue:DOUBLE
-    -- HashJoin[6][INNER s_suppkey=l_suppkey] -> s_suppkey:BIGINT, s_name:VARCHAR, s_address:VARCHAR, s_phone:VARCHAR, total_revenue:DOUBLE
+    -- HashJoin[5][INNER s_suppkey=l_suppkey] -> s_suppkey:BIGINT, s_name:VARCHAR, s_address:VARCHAR, s_phone:VARCHAR, total_revenue:DOUBLE
+      -- TableScan[0]["default"."supplier"] -> s_suppkey:BIGINT, s_name:VARCHAR, s_address:VARCHAR, s_phone:VARCHAR
+      -- Aggregation[4][SINGLE [l_suppkey] total_revenue := sum("dt3.__p52")] -> l_suppkey:BIGINT, total_revenue:DOUBLE
+        -- Project[3][expressions: (l_suppkey:BIGINT, "l_suppkey"), (dt3.__p52:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> l_suppkey:BIGINT, "dt3.__p52":DOUBLE
+          -- Filter[2][expression: and(gte("l_shipdate",1996-01-01),lt("l_shipdate",1996-04-01))] -> l_suppkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE, l_shipdate:DATE
+            -- TableScan[1]["default"."lineitem"] -> l_suppkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE, l_shipdate:DATE
+    -- Aggregation[11][SINGLE max := max("total_revenue_19")] -> max:DOUBLE
+      -- Project[10][expressions: (total_revenue_19:DOUBLE, "total_revenue_17")] -> total_revenue_19:DOUBLE
+        -- Aggregation[9][SINGLE [l_suppkey_2] total_revenue_17 := sum("dt5.__p75")] -> l_suppkey_2:BIGINT, total_revenue_17:DOUBLE
+          -- Project[8][expressions: (l_suppkey_2:BIGINT, "l_suppkey_2"), (dt5.__p75:DOUBLE, multiply("l_extendedprice_5",minus(1,"l_discount_6")))] -> l_suppkey_2:BIGINT, "dt5.__p75":DOUBLE
+            -- Filter[7][expression: and(gte("l_shipdate_10",1996-01-01),lt("l_shipdate_10",1996-04-01))] -> l_suppkey_2:BIGINT, l_extendedprice_5:DOUBLE, l_discount_6:DOUBLE, l_shipdate_10:DATE
+              -- TableScan[6]["default"."lineitem"] -> l_suppkey_2:BIGINT, l_extendedprice_5:DOUBLE, l_discount_6:DOUBLE, l_shipdate_10:DATE
+
+EXPLAIN ANALYZE:
+
+Fragment 0: fragment1 SINGLE:
+-- OrderBy[11][s_suppkey ASC NULLS LAST] -> s_suppkey:BIGINT, s_name:VARCHAR, s_address:VARCHAR, s_phone:VARCHAR, total_revenue:DOUBLE
+   Estimate: 1 rows, 0B peak memory
+   Output: 1 rows (143.88KB, 1 batches), Cpu time: 33.80us, Wall time: 44.41us, Blocked wall time: 0ns, Peak memory: 272.69KB, Memory allocations: 11, Threads: 1, CPU breakdown: B/I/O/F (9.03us/10.81us/9.85us/4.11us)
+  -- HashJoin[10][INNER total_revenue=max] -> s_suppkey:BIGINT, s_name:VARCHAR, s_address:VARCHAR, s_phone:VARCHAR, total_revenue:DOUBLE
+     Estimate: 1 rows, 0B peak memory
+     Output: 1 rows (162B, 1 batches), Cpu time: 322.35us, Wall time: 361.63us, Blocked wall time: 141.28ms, Peak memory: 154.62KB, Memory allocations: 13, CPU breakdown: B/I/O/F (32.19us/197.25us/26.92us/65.98us)
+    -- HashJoin[4][INNER s_suppkey=l_suppkey] -> s_suppkey:BIGINT, s_name:VARCHAR, s_address:VARCHAR, s_phone:VARCHAR, total_revenue:DOUBLE
+       Estimate: 10000 rows, 0B peak memory
+       Output: 10000 rows (1.58MB, 10 batches), Cpu time: 1.17ms, Wall time: 1.34ms, Blocked wall time: 0ns, Peak memory: 2.77MB, Memory allocations: 17, CPU breakdown: B/I/O/F (288.14us/636.27us/146.95us/95.20us)
       -- TableScan[0][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey:BIGINT, s_name:VARCHAR, s_address:VARCHAR, s_phone:VARCHAR
-      -- Aggregation[5][SINGLE [l_suppkey] total_revenue := sum("dt3.__p56")] -> l_suppkey:BIGINT, total_revenue:DOUBLE
-        -- Project[4][expressions: (l_suppkey:BIGINT, "l_suppkey"), (dt3.__p56:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> l_suppkey:BIGINT, "dt3.__p56":DOUBLE
-          -- HashJoin[3][LEFT SEMI (FILTER) l_suppkey=s_suppkey] -> l_suppkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
-            -- TableScan[1][table: lineitem, range filters: [(l_shipdate, BigintRange: [9496, 9586] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_suppkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
-            -- TableScan[2][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey:BIGINT
-    -- Aggregation[11][SINGLE max := max("total_revenue_23")] -> max:DOUBLE
-      -- Project[10][expressions: (total_revenue_23:DOUBLE, "total_revenue_21")] -> total_revenue_23:DOUBLE
-        -- Aggregation[9][SINGLE [l_suppkey_4] total_revenue_21 := sum("dt5.__p79")] -> l_suppkey_4:BIGINT, total_revenue_21:DOUBLE
-          -- Project[8][expressions: (l_suppkey_4:BIGINT, "l_suppkey_4"), (dt5.__p79:DOUBLE, multiply("l_extendedprice_7",minus(1,"l_discount_8")))] -> l_suppkey_4:BIGINT, "dt5.__p79":DOUBLE
-            -- TableScan[7][table: lineitem, range filters: [(l_shipdate, BigintRange: [9496, 9586] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_suppkey_4:BIGINT, l_extendedprice_7:DOUBLE, l_discount_8:DOUBLE
+         Estimate: 10000 rows, 0B peak memory
+         Input: 10000 rows (1.47MB, 1 batches), Output: 10000 rows (1.47MB, 1 batches), Cpu time: 1.46ms, Wall time: 3.08ms, Blocked wall time: 0ns, Peak memory: 3.74MB, Memory allocations: 36, Threads: 1, Splits: 1, DynamicFilter producer plan nodes: 4, CPU breakdown: B/I/O/F (1.13us/0ns/1.46ms/271ns)
+      -- Aggregation[3][SINGLE [l_suppkey] total_revenue := sum("dt3.__p56")] -> l_suppkey:BIGINT, total_revenue:DOUBLE
+         Estimate: 10167 rows, 0B peak memory
+         Output: 10000 rows (191.81KB, 1 batches), Cpu time: 5.30ms, Wall time: 6.31ms, Blocked wall time: 0ns, Peak memory: 616.00KB, Memory allocations: 12, Threads: 1, CPU breakdown: B/I/O/F (689.36us/4.13ms/296.29us/182.90us)
+        -- Project[2][expressions: (l_suppkey:BIGINT, "l_suppkey"), (dt3.__p56:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> l_suppkey:BIGINT, "dt3.__p56":DOUBLE
+           Estimate: 216196 rows, 0B peak memory
+           Output: 225954 rows (2.02MB, 614 batches), Cpu time: 3.79ms, Wall time: 4.71ms, Blocked wall time: 0ns, Peak memory: 6.00KB, Memory allocations: 614, Threads: 1, CPU breakdown: B/I/O/F (678.87us/180.38us/2.76ms/170.44us)
+          -- TableScan[1][table: lineitem, range filters: [(l_shipdate, BigintRange: [9496, 9586] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_suppkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
+             Estimate: 216196 rows, 0B peak memory
+             Input: 225954 rows (6.14MB, 614 batches), Raw Input: 6001215 rows (61.19MB), Output: 225954 rows (6.14MB, 614 batches), Cpu time: 92.46ms, Wall time: 115.93ms, Blocked wall time: 0ns, Peak memory: 13.71MB, Memory allocations: 4824, Threads: 1, Splits: 2, CPU breakdown: B/I/O/F (188.61us/0ns/92.27ms/270ns)
+    -- Aggregation[9][SINGLE max := max("total_revenue_23")] -> max:DOUBLE
+       Estimate: 1 rows, 0B peak memory
+       Output: 1 rows (32B, 1 batches), Cpu time: 45.72us, Wall time: 56.02us, Blocked wall time: 0ns, Peak memory: 64.50KB, Memory allocations: 5, Threads: 1, CPU breakdown: B/I/O/F (7.32us/27.36us/8.41us/2.62us)
+      -- Project[8][expressions: (total_revenue_23:DOUBLE, "total_revenue_21")] -> total_revenue_23:DOUBLE
+         Estimate: 10167 rows, 0B peak memory
+         Output: 10000 rows (95.91KB, 1 batches), Cpu time: 208.98us, Wall time: 401.18us, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (201.49us/501ns/4.67us/2.32us)
+        -- Aggregation[7][SINGLE [l_suppkey_4] total_revenue_21 := sum("dt5.__p79")] -> l_suppkey_4:BIGINT, total_revenue_21:DOUBLE
+           Estimate: 10167 rows, 0B peak memory
+           Output: 10000 rows (191.81KB, 1 batches), Cpu time: 6.09ms, Wall time: 7.13ms, Blocked wall time: 0ns, Peak memory: 616.00KB, Memory allocations: 12, Threads: 1, CPU breakdown: B/I/O/F (734.01us/4.84ms/327.42us/188.20us)
+          -- Project[6][expressions: (l_suppkey_4:BIGINT, "l_suppkey_4"), (dt5.__p79:DOUBLE, multiply("l_extendedprice_7",minus(1,"l_discount_8")))] -> l_suppkey_4:BIGINT, "dt5.__p79":DOUBLE
+             Estimate: 216196 rows, 0B peak memory
+             Output: 225954 rows (2.02MB, 614 batches), Cpu time: 4.19ms, Wall time: 5.16ms, Blocked wall time: 0ns, Peak memory: 6.00KB, Memory allocations: 614, Threads: 1, CPU breakdown: B/I/O/F (732.20us/202.06us/3.07ms/189.56us)
+            -- TableScan[5][table: lineitem, range filters: [(l_shipdate, BigintRange: [9496, 9586] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_suppkey_4:BIGINT, l_extendedprice_7:DOUBLE, l_discount_8:DOUBLE
+               Estimate: 216196 rows, 0B peak memory
+               Input: 225954 rows (6.14MB, 614 batches), Raw Input: 6001215 rows (61.19MB), Output: 225954 rows (6.14MB, 614 batches), Cpu time: 103.20ms, Wall time: 126.98ms, Blocked wall time: 0ns, Peak memory: 14.82MB, Memory allocations: 4824, Threads: 1, Splits: 2, CPU breakdown: B/I/O/F (192.23us/0ns/103.00ms/350ns)
 
 ___END___

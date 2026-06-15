@@ -1,3 +1,4 @@
+generated: 2026-06-14 18:29:31 (snapshot; regenerate with TpchPlanTest.makePlans)
 numWorkers: 1
 numDrivers: 1
 
@@ -5,46 +6,46 @@ Query Graph:
 
 dt1: 10.00 rows, l_orderkey, revenue, o_orderdate, o_shippriority
   output:
-    l_orderkey := t4.l_orderkey BIGINT (cardinality=9.99 min=1 max=600000)
+    l_orderkey := t4.l_orderkey BIGINT (cardinality=10.00 min=1 max=6000000)
     revenue := dt1.revenue DOUBLE (cardinality=1.00)
-    o_orderdate := t3.o_orderdate DATE (cardinality=9.91 min=8035 max=9203)
-    o_shippriority := t3.o_shippriority INTEGER (cardinality=1.00 min=0 max=0)
+    o_orderdate := t3.o_orderdate DATE (cardinality=9.96 min=8035 max=9203)
+    o_shippriority := t3.o_shippriority INTEGER (cardinality=1.00)
   tables: t2, t3, t4
   joins:
-    t2 INNER t3 ON t2.c_custkey = t3.o_custkey [t2 → 0.48, t3 → 0.02]
-    t3 INNER t4 ON t3.o_orderkey = t4.l_orderkey [t3 → 2.16, t4 → 0.49]
-  syntactic join order: 11, 25, 48
+    t2 INNER t3 ON t2.c_custkey = t3.o_custkey [t2 → 4.86, t3 → 0.20]
+    t3 INNER t4 ON t3.o_orderkey = t4.l_orderkey [t3 → 2.15, t4 → 0.49]
+  syntactic join order: 9, 21, 42
   aggregates: sum(multiply(t4.l_extendedprice, minus(1, t4.l_discount))) AS revenue
   grouping keys: t4.l_orderkey, t3.o_orderdate, t3.o_shippriority
   orderBy: dt1.revenue DESC NULLS LAST, t3.o_orderdate ASC NULLS LAST
   limit: 10
 
-t2: 3000.00 rows, c_custkey, c_mktsegment
+t2: 30000.00 rows, c_custkey, c_mktsegment
   table: "default"."customer"
-    c_custkey BIGINT (cardinality=14936.00 min=1 max=15000)
+    c_custkey BIGINT (cardinality=150000.00 min=1 max=150000)
     c_mktsegment VARCHAR (cardinality=1.00 min="BUILDING" max="BUILDING")
   single-column filters: eq(t2.c_mktsegment, "BUILDING")
 
-t3: 72880.30 rows, o_orderkey, o_custkey, o_orderdate, o_shippriority
+t3: 728803.00 rows, o_orderkey, o_custkey, o_orderdate, o_shippriority
   table: "default"."orders"
-    o_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
-    o_custkey BIGINT (cardinality=73171.00 min=1 max=149999)
-    o_orderdate DATE (cardinality=1157.34 min=8035 max=9203)
-    o_shippriority INTEGER (cardinality=1.00 min=0 max=0)
+    o_orderkey BIGINT (cardinality=1500000.00 min=1 max=6000000)
+    o_custkey BIGINT (cardinality=100000.00 min=1 max=150000)
+    o_orderdate DATE (cardinality=1169.00 min=8035 max=9203)
+    o_shippriority INTEGER (cardinality=1.00)
   single-column filters: lt(t3.o_orderdate, "1995-03-15")
 
-t4: 322762.88 rows, l_orderkey, l_extendedprice, l_discount, l_shipdate
+t4: 3223930.50 rows, l_orderkey, l_extendedprice, l_discount, l_shipdate
   table: "default"."lineitem"
-    l_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
-    l_extendedprice DOUBLE (cardinality=444713.00 min=901 max=104899.5)
+    l_orderkey BIGINT (cardinality=1500000.00 min=1 max=6000000)
+    l_extendedprice DOUBLE (cardinality=6001215.00 min=901 max=104949.5)
     l_discount DOUBLE (cardinality=11.00 min=0 max=0.1)
-    l_shipdate DATE (cardinality=1342.49 min=9205 max=10561)
+    l_shipdate DATE (cardinality=1357.00 min=9205 max=10561)
   single-column filters: gt(t4.l_shipdate, "1995-03-15")
 
 
 Optimized plan (oneline):
 
-agg(("default"."lineitem" INNER ("default"."orders" INNER "default"."customer")))
+agg((lineitem INNER (orders INNER customer)))
 
 Optimized plan:
 
@@ -54,41 +55,75 @@ Project [10.00 rows] -> dt1.l_orderkey, dt1.revenue, dt1.o_orderdate, dt1.o_ship
     dt1.o_orderdate := t3.o_orderdate
     dt1.o_shippriority := t3.o_shippriority
   OrderBy [10.00 rows] -> t4.l_orderkey, t3.o_orderdate, t3.o_shippriority, dt1.revenue
-    Aggregation (t4.l_orderkey, t3.o_orderdate, t3.o_shippriority) [3096.45 rows] -> t4.l_orderkey, t3.o_orderdate, t3.o_shippriority, dt1.revenue
-        dt1.revenue := sum(dt1.__p70)
-      Project [3096.52 rows] -> t4.l_orderkey, t3.o_orderdate, t3.o_shippriority, dt1.__p70
+    Aggregation (t4.l_orderkey, t3.o_orderdate, t3.o_shippriority) [313248.47 rows] -> t4.l_orderkey, t3.o_orderdate, t3.o_shippriority, dt1.revenue
+        dt1.revenue := sum(dt1.__p64)
+      Project [313281.38 rows] -> t4.l_orderkey, t3.o_orderdate, t3.o_shippriority, dt1.__p64
           t4.l_orderkey := t4.l_orderkey
           t3.o_orderdate := t3.o_orderdate
           t3.o_shippriority := t3.o_shippriority
-          dt1.__p70 := multiply(t4.l_extendedprice, minus(1, t4.l_discount))
-        Join INNER Hash [3096.52 rows] -> t3.o_orderdate, t3.o_shippriority, t4.l_orderkey, t4.l_extendedprice, t4.l_discount
+          dt1.__p64 := multiply(t4.l_extendedprice, minus(1, t4.l_discount))
+        Join INNER Hash [313281.38 rows] -> t3.o_orderdate, t3.o_shippriority, t4.l_orderkey, t4.l_extendedprice, t4.l_discount
             t4.l_orderkey = t3.o_orderkey
-          TableScan [322762.88 rows] -> t4.l_orderkey, t4.l_extendedprice, t4.l_discount
+          TableScan [3223930.50 rows] -> t4.l_orderkey, t4.l_extendedprice, t4.l_discount
             table: "default"."lineitem"
             single-column filters: gt(t4.l_shipdate, "1995-03-15")
-          HashBuild [1439.07 rows] -> t3.o_orderkey, t3.o_orderdate, t3.o_shippriority
-            Join INNER Hash [1439.07 rows] -> t3.o_orderkey, t3.o_orderdate, t3.o_shippriority
+          HashBuild [145760.61 rows] -> t3.o_orderkey, t3.o_orderdate, t3.o_shippriority
+            Join INNER Hash [145760.61 rows] -> t3.o_orderkey, t3.o_orderdate, t3.o_shippriority
                 t3.o_custkey = t2.c_custkey
-              TableScan [72880.30 rows] -> t3.o_orderkey, t3.o_custkey, t3.o_orderdate, t3.o_shippriority
+              TableScan [728803.00 rows] -> t3.o_orderkey, t3.o_custkey, t3.o_orderdate, t3.o_shippriority
                 table: "default"."orders"
                 single-column filters: lt(t3.o_orderdate, "1995-03-15")
-              HashBuild [3000.00 rows] -> t2.c_custkey
-                TableScan [3000.00 rows] -> t2.c_custkey
+              HashBuild [30000.00 rows] -> t2.c_custkey
+                TableScan [30000.00 rows] -> t2.c_custkey
                   table: "default"."customer"
                   single-column filters: eq(t2.c_mktsegment, "BUILDING")
 
 
 Executable Velox plan:
 
-Fragment 0: fragment5 SINGLE:
--- Project[20][expressions: (l_orderkey:BIGINT, "l_orderkey"), (revenue:DOUBLE, "revenue"), (o_orderdate:DATE, "o_orderdate"), (o_shippriority:INTEGER, "o_shippriority")] -> l_orderkey:BIGINT, revenue:DOUBLE, o_orderdate:DATE, o_shippriority:INTEGER
-  -- TopN[19][10 revenue DESC NULLS LAST, o_orderdate ASC NULLS LAST] -> l_orderkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER, revenue:DOUBLE
-    -- Aggregation[18][SINGLE [l_orderkey, o_orderdate, o_shippriority] revenue := sum("dt1.__p70")] -> l_orderkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER, revenue:DOUBLE
-      -- Project[17][expressions: (l_orderkey:BIGINT, "l_orderkey"), (o_orderdate:DATE, "o_orderdate"), (o_shippriority:INTEGER, "o_shippriority"), (dt1.__p70:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> l_orderkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER, "dt1.__p70":DOUBLE
-        -- HashJoin[16][INNER l_orderkey=o_orderkey] -> o_orderdate:DATE, o_shippriority:INTEGER, l_orderkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
-          -- TableScan[12][table: lineitem, range filters: [(l_shipdate, BigintRange: [9205, 9223372036854775807] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_orderkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
-          -- HashJoin[15][INNER o_custkey=c_custkey] -> o_orderkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER
-            -- TableScan[13][table: orders, range filters: [(o_orderdate, BigintRange: [-9223372036854775808, 9203] no nulls)], data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: o_orderdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> o_orderkey:BIGINT, o_custkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER
-            -- TableScan[14][table: customer, range filters: [(c_mktsegment, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: c_mktsegment, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> c_custkey:BIGINT
+Fragment 0: fragment1 SINGLE:
+-- Project[11][expressions: (l_orderkey:BIGINT, "l_orderkey"), (revenue:DOUBLE, "revenue"), (o_orderdate:DATE, "o_orderdate"), (o_shippriority:INTEGER, "o_shippriority")] -> l_orderkey:BIGINT, revenue:DOUBLE, o_orderdate:DATE, o_shippriority:INTEGER
+  -- TopN[10][10 revenue DESC NULLS LAST, o_orderdate ASC NULLS LAST] -> l_orderkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER, revenue:DOUBLE
+    -- Aggregation[9][SINGLE [l_orderkey, o_orderdate, o_shippriority] revenue := sum("dt1.__p64")] -> l_orderkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER, revenue:DOUBLE
+      -- Project[8][expressions: (l_orderkey:BIGINT, "l_orderkey"), (o_orderdate:DATE, "o_orderdate"), (o_shippriority:INTEGER, "o_shippriority"), (dt1.__p64:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> l_orderkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER, "dt1.__p64":DOUBLE
+        -- HashJoin[7][INNER l_orderkey=o_orderkey] -> o_orderdate:DATE, o_shippriority:INTEGER, l_orderkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
+          -- Filter[1][expression: gt("l_shipdate",1995-03-15)] -> l_orderkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE, l_shipdate:DATE
+            -- TableScan[0]["default"."lineitem"] -> l_orderkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE, l_shipdate:DATE
+          -- HashJoin[6][INNER o_custkey=c_custkey] -> o_orderkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER
+            -- Filter[3][expression: lt("o_orderdate",1995-03-15)] -> o_orderkey:BIGINT, o_custkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER
+              -- TableScan[2]["default"."orders"] -> o_orderkey:BIGINT, o_custkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER
+            -- Filter[5][expression: eq("c_mktsegment",BUILDING)] -> c_custkey:BIGINT, c_mktsegment:VARCHAR
+              -- TableScan[4]["default"."customer"] -> c_custkey:BIGINT, c_mktsegment:VARCHAR
+
+EXPLAIN ANALYZE:
+
+Fragment 0: fragment1 SINGLE:
+-- Project[8][expressions: (l_orderkey:BIGINT, "l_orderkey"), (revenue:DOUBLE, "revenue"), (o_orderdate:DATE, "o_orderdate"), (o_shippriority:INTEGER, "o_shippriority")] -> l_orderkey:BIGINT, revenue:DOUBLE, o_orderdate:DATE, o_shippriority:INTEGER
+   Estimate: 10 rows, 0B peak memory
+   Output: 10 rows (384B, 1 batches), Cpu time: 20.24us, Wall time: 31.65us, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (9.62us/771ns/6.85us/3.00us)
+  -- TopN[7][10 revenue DESC NULLS LAST, o_orderdate ASC NULLS LAST] -> l_orderkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER, revenue:DOUBLE
+     Estimate: 10 rows, 0B peak memory
+     Output: 10 rows (384B, 1 batches), Cpu time: 418.95us, Wall time: 602.77us, Blocked wall time: 0ns, Peak memory: 64.75KB, Memory allocations: 5, Threads: 1, CPU breakdown: B/I/O/F (235.40us/166.49us/11.70us/5.37us)
+    -- Aggregation[6][SINGLE [l_orderkey, o_orderdate, o_shippriority] revenue := sum("dt1.__p70")] -> l_orderkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER, revenue:DOUBLE
+       Estimate: 306914 rows, 0B peak memory
+       Output: 11620 rows (575.25KB, 2 batches), Cpu time: 65.41ms, Wall time: 67.74ms, Blocked wall time: 0ns, Peak memory: 13.69MB, Memory allocations: 50, Threads: 1, CPU breakdown: B/I/O/F (840.75us/63.71ms/670.35us/186.02us)
+      -- Project[5][expressions: (l_orderkey:BIGINT, "l_orderkey"), (o_orderdate:DATE, "o_orderdate"), (o_shippriority:INTEGER, "o_shippriority"), (dt1.__p70:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> l_orderkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER, "dt1.__p70":DOUBLE
+         Estimate: 306945 rows, 0B peak memory
+         Output: 30519 rows (1.02MB, 607 batches), Cpu time: 13.35ms, Wall time: 18.33ms, Blocked wall time: 0ns, Peak memory: 50.00KB, Memory allocations: 1821, Threads: 1, CPU breakdown: B/I/O/F (994.73us/217.61us/11.95ms/188.27us)
+        -- HashJoin[4][INNER l_orderkey=o_orderkey] -> o_orderdate:DATE, o_shippriority:INTEGER, l_orderkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
+           Estimate: 306945 rows, 0B peak memory
+           Output: 30519 rows (757.81KB, 607 batches), Cpu time: 87.99ms, Wall time: 105.56ms, Blocked wall time: 161.91ms, Peak memory: 8.50MB, Memory allocations: 22, CPU breakdown: B/I/O/F (1.10ms/71.06ms/6.22ms/9.61ms)
+          -- TableScan[0][table: lineitem, range filters: [(l_shipdate, BigintRange: [9205, 9223372036854775807] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_orderkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
+             Estimate: 3.22393e+06 rows, 0B peak memory
+             Input: 3241776 rows (95.31MB, 614 batches), Raw Input: 6001215 rows (62.74MB), Output: 3241776 rows (95.31MB, 614 batches), Cpu time: 166.70ms, Wall time: 252.81ms, Blocked wall time: 0ns, Peak memory: 16.71MB, Memory allocations: 9069, Threads: 1, Splits: 2, CPU breakdown: B/I/O/F (244.51us/0ns/166.46ms/270ns)
+          -- HashJoin[3][INNER o_custkey=c_custkey] -> o_orderkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER
+             Estimate: 147330 rows, 0B peak memory
+             Output: 147126 rows (7.01MB, 152 batches), Cpu time: 9.44ms, Wall time: 10.10ms, Blocked wall time: 13.63ms, Peak memory: 3.41MB, Memory allocations: 7, CPU breakdown: B/I/O/F (1.93ms/6.21ms/374.89us/923.97us)
+            -- TableScan[1][table: orders, range filters: [(o_orderdate, BigintRange: [-9223372036854775808, 9203] no nulls)], data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: o_orderdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> o_orderkey:BIGINT, o_custkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER
+               Estimate: 728803 rows, 0B peak memory
+               Input: 147126 rows (15.95MB, 152 batches), Raw Input: 1500000 rows (8.86MB), Output: 147126 rows (15.95MB, 152 batches), Cpu time: 74.74ms, Wall time: 94.37ms, Blocked wall time: 0ns, Peak memory: 10.17MB, Memory allocations: 1318, Threads: 1, Splits: 1, DynamicFilter producer plan nodes: 3, CPU breakdown: B/I/O/F (87.49us/0ns/74.65ms/350ns)
+            -- TableScan[2][table: customer, range filters: [(c_mktsegment, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: c_mktsegment, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> c_custkey:BIGINT
+               Estimate: 30000 rows, 0B peak memory
+               Input: 30142 rows (270.59KB, 15 batches), Raw Input: 150000 rows (718.71KB), Output: 30142 rows (270.59KB, 15 batches), Cpu time: 5.55ms, Wall time: 6.49ms, Blocked wall time: 0ns, Peak memory: 4.29MB, Memory allocations: 65, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (8.23us/0ns/5.54ms/350ns)
 
 ___END___

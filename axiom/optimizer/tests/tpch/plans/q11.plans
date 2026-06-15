@@ -1,38 +1,39 @@
+generated: 2026-06-14 18:29:33 (snapshot; regenerate with TpchPlanTest.makePlans)
 numWorkers: 1
 numDrivers: 1
 
 Query Graph:
 
-dt5: 99.24 rows, ps_partkey, value
+dt5: 9775.29 rows, ps_partkey, value
   output:
-    ps_partkey := dt1.ps_partkey BIGINT (cardinality=78.25 min=1 max=20000)
+    ps_partkey := dt1.ps_partkey BIGINT (cardinality=7692.70 min=1 max=200000)
     value := dt1.value DOUBLE (cardinality=1.00)
   tables: dt1, dt6
   filter: gt(dt1.value, dt6.expr)
   orderBy: dt1.value DESC NULLS LAST
 
-dt1: 198.48 rows, ps_partkey, value
+dt1: 19550.58 rows, ps_partkey, value
   output:
-    ps_partkey := t2.ps_partkey BIGINT (cardinality=198.48 min=1 max=20000)
+    ps_partkey := t2.ps_partkey BIGINT (cardinality=19550.58 min=1 max=200000)
     value := dt1.value DOUBLE (cardinality=1.00)
   tables: t2, t3, t4
   joins:
-    t2 INNER t3 ON t2.ps_suppkey = t3.s_suppkey [t2 → 0.10, t3 → 7.87]
-    t3 INNER t4 ON t3.s_nationkey = t4.n_nationkey [t3 → 0.04, t4 → 40.00]
-  syntactic join order: 8, 22, 31
+    t2 INNER t3 ON t2.ps_suppkey = t3.s_suppkey [t2 → 1.00, t3 → 80.00]
+    t3 INNER t4 ON t3.s_nationkey = t4.n_nationkey [t3 → 0.04, t4 → 400.00]
+  syntactic join order: 6, 18, 25
   aggregates: sum(multiply(t2.ps_supplycost, __cast(t2.ps_availqty as DOUBLE))) AS value
   grouping keys: t2.ps_partkey
 
-t2: 80000.00 rows, ps_partkey, ps_suppkey, ps_availqty, ps_supplycost
+t2: 800000.00 rows, ps_partkey, ps_suppkey, ps_availqty, ps_supplycost
   table: "default"."partsupp"
-    ps_partkey BIGINT (cardinality=19675.00 min=1 max=20000)
-    ps_suppkey BIGINT (cardinality=10167.00 min=1 max=10000)
-    ps_availqty INTEGER (cardinality=10121.00 min=1 max=9999)
-    ps_supplycost DOUBLE (cardinality=54016.00 min=1.01 max=999.99)
+    ps_partkey BIGINT (cardinality=200000.00 min=1 max=200000)
+    ps_suppkey BIGINT (cardinality=10000.00 min=1 max=10000)
+    ps_availqty INTEGER (cardinality=9999.00 min=1 max=9999)
+    ps_supplycost DOUBLE (cardinality=100000.00 min=1 max=1000)
 
-t3: 1000.00 rows, s_suppkey, s_nationkey
+t3: 10000.00 rows, s_suppkey, s_nationkey
   table: "default"."supplier"
-    s_suppkey BIGINT (cardinality=1008.00 min=1 max=1000)
+    s_suppkey BIGINT (cardinality=10000.00 min=1 max=10000)
     s_nationkey BIGINT (cardinality=25.00 min=0 max=24)
 
 t4: 1.00 rows, n_nationkey, n_name
@@ -46,20 +47,20 @@ dt6: 1.00 rows, expr
     expr := multiply(dt6.sum, 0.0001) DOUBLE (cardinality=1.00)
   tables: t7, t8, t9
   joins:
-    t7 INNER t8 ON t7.ps_suppkey = t8.s_suppkey [t7 → 0.10, t8 → 7.87]
-    t8 INNER t9 ON t8.s_nationkey = t9.n_nationkey [t8 → 0.04, t9 → 40.00]
-  syntactic join order: 47, 51, 54
+    t7 INNER t8 ON t7.ps_suppkey = t8.s_suppkey [t7 → 1.00, t8 → 80.00]
+    t8 INNER t9 ON t8.s_nationkey = t9.n_nationkey [t8 → 0.04, t9 → 400.00]
+  syntactic join order: 41, 45, 48
   aggregates: sum(multiply(t7.ps_supplycost, __cast(t7.ps_availqty as DOUBLE))) AS sum
 
-t7: 80000.00 rows, ps_suppkey, ps_availqty, ps_supplycost
+t7: 800000.00 rows, ps_suppkey, ps_availqty, ps_supplycost
   table: "default"."partsupp"
-    ps_suppkey BIGINT (cardinality=10167.00 min=1 max=10000)
-    ps_availqty INTEGER (cardinality=10121.00 min=1 max=9999)
-    ps_supplycost DOUBLE (cardinality=54016.00 min=1.01 max=999.99)
+    ps_suppkey BIGINT (cardinality=10000.00 min=1 max=10000)
+    ps_availqty INTEGER (cardinality=9999.00 min=1 max=9999)
+    ps_supplycost DOUBLE (cardinality=100000.00 min=1 max=1000)
 
-t8: 1000.00 rows, s_suppkey, s_nationkey
+t8: 10000.00 rows, s_suppkey, s_nationkey
   table: "default"."supplier"
-    s_suppkey BIGINT (cardinality=1008.00 min=1 max=1000)
+    s_suppkey BIGINT (cardinality=10000.00 min=1 max=10000)
     s_nationkey BIGINT (cardinality=25.00 min=0 max=24)
 
 t9: 1.00 rows, n_nationkey, n_name
@@ -71,33 +72,33 @@ t9: 1.00 rows, n_nationkey, n_name
 
 Optimized plan (oneline):
 
-(agg(("default"."partsupp" INNER ("default"."supplier" INNER "default"."nation"))) INNER agg(("default"."partsupp" INNER ("default"."supplier" INNER "default"."nation"))))
+(agg((partsupp INNER (supplier INNER nation))) INNER agg((partsupp INNER (supplier INNER nation))))
 
 Optimized plan:
 
-Project [99.24 rows] -> dt5.ps_partkey, dt5.value
+Project [9775.29 rows] -> dt5.ps_partkey, dt5.value
     dt5.ps_partkey := dt1.ps_partkey
     dt5.value := dt1.value
-  OrderBy [99.24 rows] -> dt1.ps_partkey, dt1.value, dt6.expr
-    Filter [99.24 rows] -> dt1.ps_partkey, dt1.value, dt6.expr
+  OrderBy [9775.29 rows] -> dt1.ps_partkey, dt1.value, dt6.expr
+    Filter [9775.29 rows] -> dt1.ps_partkey, dt1.value, dt6.expr
         gt(dt1.value, dt6.expr)
-      Join INNER Cross [198.48 rows] -> dt1.ps_partkey, dt1.value, dt6.expr
-        Project (redundant) [198.48 rows] -> dt1.ps_partkey, dt1.value
+      Join INNER Cross [19550.58 rows] -> dt1.ps_partkey, dt1.value, dt6.expr
+        Project (redundant) [19550.58 rows] -> dt1.ps_partkey, dt1.value
             dt1.ps_partkey := t2.ps_partkey
             dt1.value := dt1.value
-          Aggregation (t2.ps_partkey) [198.48 rows] -> t2.ps_partkey, dt1.value
-              dt1.value := sum(dt1.__p39)
-            Project [314.74 rows] -> t2.ps_partkey, dt1.__p39
+          Aggregation (t2.ps_partkey) [19550.58 rows] -> t2.ps_partkey, dt1.value
+              dt1.value := sum(dt1.__p33)
+            Project [32000.00 rows] -> t2.ps_partkey, dt1.__p33
                 t2.ps_partkey := t2.ps_partkey
-                dt1.__p39 := multiply(t2.ps_supplycost, __cast(t2.ps_availqty as DOUBLE))
-              Join INNER Hash [314.74 rows] -> t2.ps_partkey, t2.ps_availqty, t2.ps_supplycost
+                dt1.__p33 := multiply(t2.ps_supplycost, __cast(t2.ps_availqty as DOUBLE))
+              Join INNER Hash [32000.00 rows] -> t2.ps_partkey, t2.ps_availqty, t2.ps_supplycost
                   t2.ps_suppkey = t3.s_suppkey
-                TableScan [80000.00 rows] -> t2.ps_partkey, t2.ps_suppkey, t2.ps_availqty, t2.ps_supplycost
+                TableScan [800000.00 rows] -> t2.ps_partkey, t2.ps_suppkey, t2.ps_availqty, t2.ps_supplycost
                   table: "default"."partsupp"
-                HashBuild [40.00 rows] -> t3.s_suppkey
-                  Join INNER Hash [40.00 rows] -> t3.s_suppkey
+                HashBuild [400.00 rows] -> t3.s_suppkey
+                  Join INNER Hash [400.00 rows] -> t3.s_suppkey
                       t3.s_nationkey = t4.n_nationkey
-                    TableScan [1000.00 rows] -> t3.s_suppkey, t3.s_nationkey
+                    TableScan [10000.00 rows] -> t3.s_suppkey, t3.s_nationkey
                       table: "default"."supplier"
                     HashBuild [1.00 rows] -> t4.n_nationkey
                       TableScan [1.00 rows] -> t4.n_nationkey
@@ -106,17 +107,17 @@ Project [99.24 rows] -> dt5.ps_partkey, dt5.value
         Project [1.00 rows] -> dt6.expr
             dt6.expr := multiply(dt6.sum, 0.0001)
           Aggregation [1.00 rows] -> dt6.sum
-              dt6.sum := sum(dt6.__p61)
-            Project [314.74 rows] -> dt6.__p61
-                dt6.__p61 := multiply(t7.ps_supplycost, __cast(t7.ps_availqty as DOUBLE))
-              Join INNER Hash [314.74 rows] -> t7.ps_availqty, t7.ps_supplycost
+              dt6.sum := sum(dt6.__p55)
+            Project [32000.00 rows] -> dt6.__p55
+                dt6.__p55 := multiply(t7.ps_supplycost, __cast(t7.ps_availqty as DOUBLE))
+              Join INNER Hash [32000.00 rows] -> t7.ps_availqty, t7.ps_supplycost
                   t7.ps_suppkey = t8.s_suppkey
-                TableScan [80000.00 rows] -> t7.ps_suppkey, t7.ps_availqty, t7.ps_supplycost
+                TableScan [800000.00 rows] -> t7.ps_suppkey, t7.ps_availqty, t7.ps_supplycost
                   table: "default"."partsupp"
-                HashBuild [40.00 rows] -> t8.s_suppkey
-                  Join INNER Hash [40.00 rows] -> t8.s_suppkey
+                HashBuild [400.00 rows] -> t8.s_suppkey
+                  Join INNER Hash [400.00 rows] -> t8.s_suppkey
                       t8.s_nationkey = t9.n_nationkey
-                    TableScan [1000.00 rows] -> t8.s_suppkey, t8.s_nationkey
+                    TableScan [10000.00 rows] -> t8.s_suppkey, t8.s_nationkey
                       table: "default"."supplier"
                     HashBuild [1.00 rows] -> t9.n_nationkey
                       TableScan [1.00 rows] -> t9.n_nationkey
@@ -127,24 +128,87 @@ Project [99.24 rows] -> dt5.ps_partkey, dt5.value
 Executable Velox plan:
 
 Fragment 0: fragment1 SINGLE:
--- Project[18][expressions: (ps_partkey:BIGINT, "ps_partkey"), (value:DOUBLE, "value")] -> ps_partkey:BIGINT, value:DOUBLE
-  -- OrderBy[17][value DESC NULLS LAST] -> ps_partkey:BIGINT, value:DOUBLE, expr:DOUBLE
+-- Project[20][expressions: (ps_partkey:BIGINT, "ps_partkey"), (value:DOUBLE, "value")] -> ps_partkey:BIGINT, value:DOUBLE
+  -- OrderBy[19][value DESC NULLS LAST] -> ps_partkey:BIGINT, value:DOUBLE, expr:DOUBLE
     -- Filter[0][expression: gt("value","expr")] -> ps_partkey:BIGINT, value:DOUBLE, expr:DOUBLE
+      -- NestedLoopJoin[18][INNER] -> ps_partkey:BIGINT, value:DOUBLE, expr:DOUBLE
+        -- Aggregation[8][SINGLE [ps_partkey] value := sum("dt1.__p33")] -> ps_partkey:BIGINT, value:DOUBLE
+          -- Project[7][expressions: (ps_partkey:BIGINT, "ps_partkey"), (dt1.__p33:DOUBLE, multiply("ps_supplycost",cast("ps_availqty" as DOUBLE)))] -> ps_partkey:BIGINT, "dt1.__p33":DOUBLE
+            -- HashJoin[6][INNER ps_suppkey=s_suppkey] -> ps_partkey:BIGINT, ps_availqty:INTEGER, ps_supplycost:DOUBLE
+              -- TableScan[1]["default"."partsupp"] -> ps_partkey:BIGINT, ps_suppkey:BIGINT, ps_availqty:INTEGER, ps_supplycost:DOUBLE
+              -- HashJoin[5][INNER s_nationkey=n_nationkey] -> s_suppkey:BIGINT
+                -- TableScan[2]["default"."supplier"] -> s_suppkey:BIGINT, s_nationkey:BIGINT
+                -- Filter[4][expression: eq("n_name",GERMANY)] -> n_nationkey:BIGINT, n_name:VARCHAR
+                  -- TableScan[3]["default"."nation"] -> n_nationkey:BIGINT, n_name:VARCHAR
+        -- Project[17][expressions: (expr:DOUBLE, multiply("sum",0.0001))] -> expr:DOUBLE
+          -- Aggregation[16][SINGLE sum := sum("dt6.__p55")] -> sum:DOUBLE
+            -- Project[15][expressions: (dt6.__p55:DOUBLE, multiply("ps_supplycost_3",cast("ps_availqty_2" as DOUBLE)))] -> "dt6.__p55":DOUBLE
+              -- HashJoin[14][INNER ps_suppkey_1=s_suppkey_5] -> ps_availqty_2:INTEGER, ps_supplycost_3:DOUBLE
+                -- TableScan[9]["default"."partsupp"] -> ps_suppkey_1:BIGINT, ps_availqty_2:INTEGER, ps_supplycost_3:DOUBLE
+                -- HashJoin[13][INNER s_nationkey_8=n_nationkey_12] -> s_suppkey_5:BIGINT
+                  -- TableScan[10]["default"."supplier"] -> s_suppkey_5:BIGINT, s_nationkey_8:BIGINT
+                  -- Filter[12][expression: eq("n_name_13",GERMANY)] -> n_nationkey_12:BIGINT, n_name_13:VARCHAR
+                    -- TableScan[11]["default"."nation"] -> n_nationkey_12:BIGINT, n_name_13:VARCHAR
+
+EXPLAIN ANALYZE:
+
+Fragment 0: fragment1 SINGLE:
+-- Project[18][expressions: (ps_partkey:BIGINT, "ps_partkey"), (value:DOUBLE, "value")] -> ps_partkey:BIGINT, value:DOUBLE
+   Estimate: 9613.98 rows, 0B peak memory
+   Output: 1048 rows (23.81KB, 1 batches), Cpu time: 19.79us, Wall time: 33.91us, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, CPU breakdown: B/I/O/F (10.73us/420ns/5.44us/3.20us)
+  -- OrderBy[17][value DESC NULLS LAST] -> ps_partkey:BIGINT, value:DOUBLE, expr:DOUBLE
+     Estimate: 9613.98 rows, 0B peak memory
+     Output: 1048 rows (35.72KB, 1 batches), Cpu time: 204.27us, Wall time: 220.43us, Blocked wall time: 0ns, Peak memory: 188.19KB, Memory allocations: 11, CPU breakdown: B/I/O/F (12.15us/59.93us/13.18us/119.01us)
+    -- Filter[0][expression: gt("value","expr")] -> ps_partkey:BIGINT, value:DOUBLE, expr:DOUBLE
+       Estimate: 9613.98 rows, 0B peak memory
+       Output: 1048 rows (20.24KB, 3 batches), Cpu time: 219.85us, Wall time: 235.03us, Blocked wall time: 0ns, Peak memory: 51.00KB, Memory allocations: 5, CPU breakdown: B/I/O/F (9.78us/912ns/206.10us/3.06us)
       -- NestedLoopJoin[16][INNER] -> ps_partkey:BIGINT, value:DOUBLE, expr:DOUBLE
+         Estimate: 19228 rows, 0B peak memory
+         Output: 29818 rows (575.46KB, 3 batches), Cpu time: 107.17us, Wall time: 1.03ms, Blocked wall time: 17.14ms, Peak memory: 0B, Memory allocations: 0, CPU breakdown: B/I/O/F (57.36us/2.50us/19.11us/28.19us)
         -- Aggregation[7][SINGLE [ps_partkey] value := sum("dt1.__p39")] -> ps_partkey:BIGINT, value:DOUBLE
+           Estimate: 19228 rows, 0B peak memory
+           Output: 29818 rows (575.44KB, 3 batches), Cpu time: 5.86ms, Wall time: 6.01ms, Blocked wall time: 0ns, Peak memory: 6.06MB, Memory allocations: 24, CPU breakdown: B/I/O/F (91.55us/5.29ms/451.52us/23.40us)
           -- Project[6][expressions: (ps_partkey:BIGINT, "ps_partkey"), (dt1.__p39:DOUBLE, multiply("ps_supplycost",cast("ps_availqty" as DOUBLE)))] -> ps_partkey:BIGINT, "dt1.__p39":DOUBLE
+             Estimate: 31474.4 rows, 0B peak memory
+             Output: 31680 rows (312.10KB, 81 batches), Cpu time: 593.99us, Wall time: 759.26us, Blocked wall time: 0ns, Peak memory: 4.00KB, Memory allocations: 81, CPU breakdown: B/I/O/F (110.10us/22.24us/439.29us/22.35us)
             -- HashJoin[5][INNER ps_suppkey=s_suppkey] -> ps_partkey:BIGINT, ps_availqty:INTEGER, ps_supplycost:DOUBLE
+               Estimate: 31474.4 rows, 0B peak memory
+               Output: 31680 rows (0B, 81 batches), Cpu time: 371.89us, Wall time: 540.04us, Blocked wall time: 0ns, Peak memory: 160.00KB, Memory allocations: 3, CPU breakdown: B/I/O/F (117.63us/81.48us/97.70us/75.07us)
               -- TableScan[1][table: partsupp, data columns: ROW<ps_partkey:BIGINT,ps_suppkey:BIGINT,ps_availqty:INTEGER,ps_supplycost:DOUBLE,ps_comment:VARCHAR>] -> ps_partkey:BIGINT, ps_suppkey:BIGINT, ps_availqty:INTEGER, ps_supplycost:DOUBLE
+                 Estimate: 800000 rows, 0B peak memory
+                 Input: 31680 rows (8.24MB, 81 batches), Raw Input: 800000 rows (6.45MB), Output: 31680 rows (8.24MB, 81 batches), Cpu time: 16.25ms, Wall time: 17.18ms, Blocked wall time: 0ns, Peak memory: 14.80MB, Memory allocations: 703, Splits: 1, DynamicFilter producer plan nodes: 5, CPU breakdown: B/I/O/F (22.90us/0ns/16.23ms/261ns)
               -- HashJoin[4][INNER s_nationkey=n_nationkey] -> s_suppkey:BIGINT
+                 Estimate: 400 rows, 0B peak memory
+                 Output: 396 rows (0B, 1 batches), Cpu time: 121.67us, Wall time: 135.43us, Blocked wall time: 1.78ms, Peak memory: 84.00KB, Memory allocations: 3, CPU breakdown: B/I/O/F (27.95us/33.90us/8.34us/51.48us)
                 -- TableScan[2][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey:BIGINT, s_nationkey:BIGINT
+                   Estimate: 10000 rows, 0B peak memory
+                   Input: 396 rows (99.81KB, 1 batches), Raw Input: 10000 rows (659.75KB), Output: 396 rows (99.81KB, 1 batches), Cpu time: 618.11us, Wall time: 2.71ms, Blocked wall time: 0ns, Peak memory: 640.00KB, Memory allocations: 20, Threads: 1, Splits: 1, DynamicFilter producer plan nodes: 4, CPU breakdown: B/I/O/F (1.94us/0ns/615.70us/460ns)
                 -- TableScan[3][table: nation, range filters: [(n_name, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: n_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> n_nationkey:BIGINT
+                   Estimate: 1 rows, 0B peak memory
+                   Input: 1 rows (96B, 1 batches), Raw Input: 25 rows (3.20KB), Output: 1 rows (96B, 1 batches), Cpu time: 300.52us, Wall time: 1.72ms, Blocked wall time: 0ns, Peak memory: 4.38KB, Memory allocations: 17, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (1.33us/0ns/298.89us/300ns)
         -- Project[15][expressions: (expr:DOUBLE, multiply("sum",0.0001))] -> expr:DOUBLE
+           Estimate: 1 rows, 0B peak memory
+           Output: 1 rows (32B, 1 batches), Cpu time: 64.27us, Wall time: 116.26us, Blocked wall time: 0ns, Peak memory: 128B, Memory allocations: 1, Threads: 1, CPU breakdown: B/I/O/F (50.30us/721ns/9.68us/3.58us)
           -- Aggregation[14][SINGLE sum := sum("dt6.__p61")] -> sum:DOUBLE
+             Estimate: 1 rows, 0B peak memory
+             Output: 1 rows (32B, 1 batches), Cpu time: 460.68us, Wall time: 733.02us, Blocked wall time: 0ns, Peak memory: 64.50KB, Memory allocations: 5, Threads: 1, CPU breakdown: B/I/O/F (164.99us/198.16us/49.62us/47.90us)
             -- Project[13][expressions: (dt6.__p61:DOUBLE, multiply("ps_supplycost_7",cast("ps_availqty_6" as DOUBLE)))] -> "dt6.__p61":DOUBLE
+               Estimate: 31474.4 rows, 0B peak memory
+               Output: 31680 rows (312.10KB, 81 batches), Cpu time: 765.00us, Wall time: 1.02ms, Blocked wall time: 0ns, Peak memory: 4.00KB, Memory allocations: 81, Threads: 1, CPU breakdown: B/I/O/F (198.88us/39.69us/485.61us/40.81us)
               -- HashJoin[12][INNER ps_suppkey_5=s_suppkey_11] -> ps_availqty_6:INTEGER, ps_supplycost_7:DOUBLE
+                 Estimate: 31474.4 rows, 0B peak memory
+                 Output: 31680 rows (0B, 81 batches), Cpu time: 472.75us, Wall time: 774.26us, Blocked wall time: 4.72ms, Peak memory: 160.00KB, Memory allocations: 3, CPU breakdown: B/I/O/F (177.84us/71.69us/129.11us/94.11us)
                 -- TableScan[8][table: partsupp, data columns: ROW<ps_partkey:BIGINT,ps_suppkey:BIGINT,ps_availqty:INTEGER,ps_supplycost:DOUBLE,ps_comment:VARCHAR>] -> ps_suppkey_5:BIGINT, ps_availqty_6:INTEGER, ps_supplycost_7:DOUBLE
+                   Estimate: 800000 rows, 0B peak memory
+                   Input: 31680 rows (7.93MB, 81 batches), Raw Input: 800000 rows (5.22MB), Output: 31680 rows (7.93MB, 81 batches), Cpu time: 10.00ms, Wall time: 10.46ms, Blocked wall time: 0ns, Peak memory: 9.64MB, Memory allocations: 529, Threads: 1, Splits: 1, DynamicFilter producer plan nodes: 12, CPU breakdown: B/I/O/F (41.26us/0ns/9.96ms/481ns)
                 -- HashJoin[11][INNER s_nationkey_14=n_nationkey_20] -> s_suppkey_11:BIGINT
+                   Estimate: 400 rows, 0B peak memory
+                   Output: 396 rows (0B, 1 batches), Cpu time: 80.50us, Wall time: 89.13us, Blocked wall time: 2.40ms, Peak memory: 84.00KB, Memory allocations: 3, CPU breakdown: B/I/O/F (17.39us/13.92us/6.58us/42.61us)
                   -- TableScan[9][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey_11:BIGINT, s_nationkey_14:BIGINT
+                     Estimate: 10000 rows, 0B peak memory
+                     Input: 396 rows (99.81KB, 1 batches), Raw Input: 10000 rows (659.75KB), Output: 396 rows (99.81KB, 1 batches), Cpu time: 929.34us, Wall time: 2.24ms, Blocked wall time: 0ns, Peak memory: 640.00KB, Memory allocations: 20, Threads: 1, Splits: 1, DynamicFilter producer plan nodes: 11, CPU breakdown: B/I/O/F (1.01us/0ns/928.07us/260ns)
                   -- TableScan[10][table: nation, range filters: [(n_name, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: n_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> n_nationkey_20:BIGINT
+                     Estimate: 1 rows, 0B peak memory
+                     Input: 1 rows (96B, 1 batches), Raw Input: 25 rows (3.20KB), Output: 1 rows (96B, 1 batches), Cpu time: 294.19us, Wall time: 2.36ms, Blocked wall time: 0ns, Peak memory: 4.38KB, Memory allocations: 17, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (1.42us/0ns/292.47us/301ns)
 
 ___END___

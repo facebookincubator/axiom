@@ -1,3 +1,4 @@
+generated: 2026-06-14 18:29:30 (snapshot; regenerate with TpchPlanTest.makePlans)
 numWorkers: 1
 numDrivers: 1
 
@@ -5,8 +6,8 @@ Query Graph:
 
 dt1: 6.00 rows, l_returnflag, l_linestatus, sum_qty, sum_base_price, sum_disc_price, sum_charge, avg_qty, avg_price, avg_disc, count_order
   output:
-    l_returnflag := t2.l_returnflag VARCHAR (cardinality=3.00 min="A" max="R")
-    l_linestatus := t2.l_linestatus VARCHAR (cardinality=2.00 min="F" max="O")
+    l_returnflag := t2.l_returnflag VARCHAR (cardinality=3.00)
+    l_linestatus := t2.l_linestatus VARCHAR (cardinality=2.00)
     sum_qty := dt1.sum_qty DOUBLE (cardinality=1.00)
     sum_base_price := dt1.sum_base_price DOUBLE (cardinality=1.00)
     sum_disc_price := dt1.sum_disc_price DOUBLE (cardinality=1.00)
@@ -20,21 +21,21 @@ dt1: 6.00 rows, l_returnflag, l_linestatus, sum_qty, sum_base_price, sum_disc_pr
   grouping keys: t2.l_returnflag, t2.l_linestatus
   orderBy: t2.l_returnflag ASC NULLS LAST, t2.l_linestatus ASC NULLS LAST
 
-t2: 579165.44 rows, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate
+t2: 5787395.00 rows, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate
   table: "default"."lineitem"
     l_quantity DOUBLE (cardinality=50.00 min=1 max=50)
-    l_extendedprice DOUBLE (cardinality=444713.00 min=901 max=104899.5)
+    l_extendedprice DOUBLE (cardinality=6001215.00 min=901 max=104949.5)
     l_discount DOUBLE (cardinality=11.00 min=0 max=0.1)
     l_tax DOUBLE (cardinality=9.00 min=0 max=0.08)
-    l_returnflag VARCHAR (cardinality=3.00 min="A" max="R")
-    l_linestatus VARCHAR (cardinality=2.00 min="F" max="O")
-    l_shipdate DATE (cardinality=2408.96 min=8037 max=10471)
+    l_returnflag VARCHAR (cardinality=3.00)
+    l_linestatus VARCHAR (cardinality=2.00)
+    l_shipdate DATE (cardinality=2436.00 min=8036 max=10471)
   single-column filters: lt(t2.l_shipdate, "1998-09-03")
 
 
 Optimized plan (oneline):
 
-agg("default"."lineitem")
+agg(lineitem)
 
 Optimized plan:
 
@@ -53,21 +54,21 @@ Project (redundant) [6.00 rows] -> dt1.l_returnflag, dt1.l_linestatus, dt1.sum_q
     Aggregation (t2.l_returnflag, t2.l_linestatus) [6.00 rows] -> t2.l_returnflag, t2.l_linestatus, dt1.sum_qty, dt1.sum_base_price, dt1.sum_disc_price, dt1.sum_charge, dt1.avg_qty, dt1.avg_price, dt1.avg_disc, dt1.count_order
         dt1.sum_qty := sum(t2.l_quantity)
         dt1.sum_base_price := sum(t2.l_extendedprice)
-        dt1.sum_disc_price := sum(dt1.__p43)
-        dt1.sum_charge := sum(dt1.__p52)
+        dt1.sum_disc_price := sum(dt1.__p41)
+        dt1.sum_charge := sum(dt1.__p50)
         dt1.avg_qty := avg(t2.l_quantity)
         dt1.avg_price := avg(t2.l_extendedprice)
         dt1.avg_disc := avg(t2.l_discount)
         dt1.count_order := count()
-      Project [579165.44 rows] -> t2.l_returnflag, t2.l_linestatus, t2.l_quantity, t2.l_extendedprice, dt1.__p43, dt1.__p52, t2.l_discount
+      Project [5787395.00 rows] -> t2.l_returnflag, t2.l_linestatus, t2.l_quantity, t2.l_extendedprice, dt1.__p41, dt1.__p50, t2.l_discount
           t2.l_returnflag := t2.l_returnflag
           t2.l_linestatus := t2.l_linestatus
           t2.l_quantity := t2.l_quantity
           t2.l_extendedprice := t2.l_extendedprice
-          dt1.__p43 := multiply(t2.l_extendedprice, minus(1, t2.l_discount))
-          dt1.__p52 := multiply(multiply(t2.l_extendedprice, minus(1, t2.l_discount)), plus(t2.l_tax, 1))
+          dt1.__p41 := multiply(t2.l_extendedprice, minus(1, t2.l_discount))
+          dt1.__p50 := multiply(multiply(t2.l_extendedprice, minus(1, t2.l_discount)), plus(t2.l_tax, 1))
           t2.l_discount := t2.l_discount
-        TableScan [579165.44 rows] -> t2.l_quantity, t2.l_extendedprice, t2.l_discount, t2.l_tax, t2.l_returnflag, t2.l_linestatus
+        TableScan [5787395.00 rows] -> t2.l_quantity, t2.l_extendedprice, t2.l_discount, t2.l_tax, t2.l_returnflag, t2.l_linestatus
           table: "default"."lineitem"
           single-column filters: lt(t2.l_shipdate, "1998-09-03")
 
@@ -75,9 +76,26 @@ Project (redundant) [6.00 rows] -> dt1.l_returnflag, dt1.l_linestatus, dt1.sum_q
 Executable Velox plan:
 
 Fragment 0: fragment1 SINGLE:
+-- OrderBy[4][l_returnflag ASC NULLS LAST, l_linestatus ASC NULLS LAST] -> l_returnflag:VARCHAR, l_linestatus:VARCHAR, sum_qty:DOUBLE, sum_base_price:DOUBLE, sum_disc_price:DOUBLE, sum_charge:DOUBLE, avg_qty:DOUBLE, avg_price:DOUBLE, avg_disc:DOUBLE, count_order:BIGINT
+  -- Aggregation[3][SINGLE [l_returnflag, l_linestatus] sum_qty := sum("l_quantity"), sum_base_price := sum("l_extendedprice"), sum_disc_price := sum("dt1.__p41"), sum_charge := sum("dt1.__p50"), avg_qty := avg("l_quantity"), avg_price := avg("l_extendedprice"), avg_disc := avg("l_discount"), count_order := count()] -> l_returnflag:VARCHAR, l_linestatus:VARCHAR, sum_qty:DOUBLE, sum_base_price:DOUBLE, sum_disc_price:DOUBLE, sum_charge:DOUBLE, avg_qty:DOUBLE, avg_price:DOUBLE, avg_disc:DOUBLE, count_order:BIGINT
+    -- Project[2][expressions: (l_returnflag:VARCHAR, "l_returnflag"), (l_linestatus:VARCHAR, "l_linestatus"), (l_quantity:DOUBLE, "l_quantity"), (l_extendedprice:DOUBLE, "l_extendedprice"), (dt1.__p41:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount"))), (dt1.__p50:DOUBLE, multiply(multiply("l_extendedprice",minus(1,"l_discount")),plus("l_tax",1))), (l_discount:DOUBLE, "l_discount")] -> l_returnflag:VARCHAR, l_linestatus:VARCHAR, l_quantity:DOUBLE, l_extendedprice:DOUBLE, "dt1.__p41":DOUBLE, "dt1.__p50":DOUBLE, l_discount:DOUBLE
+      -- Filter[1][expression: lt("l_shipdate",1998-09-03)] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, l_tax:DOUBLE, l_returnflag:VARCHAR, l_linestatus:VARCHAR, l_shipdate:DATE
+        -- TableScan[0]["default"."lineitem"] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, l_tax:DOUBLE, l_returnflag:VARCHAR, l_linestatus:VARCHAR, l_shipdate:DATE
+
+EXPLAIN ANALYZE:
+
+Fragment 0: fragment1 SINGLE:
 -- OrderBy[3][l_returnflag ASC NULLS LAST, l_linestatus ASC NULLS LAST] -> l_returnflag:VARCHAR, l_linestatus:VARCHAR, sum_qty:DOUBLE, sum_base_price:DOUBLE, sum_disc_price:DOUBLE, sum_charge:DOUBLE, avg_qty:DOUBLE, avg_price:DOUBLE, avg_disc:DOUBLE, count_order:BIGINT
+   Estimate: 5.99999 rows, 0B peak memory
+   Output: 4 rows (448B, 2 batches), Cpu time: 518.25us, Wall time: 838.34us, Blocked wall time: 0ns, Peak memory: 129.44KB, Memory allocations: 26, Threads: 1, CPU breakdown: B/I/O/F (486.09us/13.29us/11.07us/7.81us)
   -- Aggregation[2][SINGLE [l_returnflag, l_linestatus] sum_qty := sum("l_quantity"), sum_base_price := sum("l_extendedprice"), sum_disc_price := sum("dt1.__p43"), sum_charge := sum("dt1.__p52"), avg_qty := avg("l_quantity"), avg_price := avg("l_extendedprice"), avg_disc := avg("l_discount"), count_order := count()] -> l_returnflag:VARCHAR, l_linestatus:VARCHAR, sum_qty:DOUBLE, sum_base_price:DOUBLE, sum_disc_price:DOUBLE, sum_charge:DOUBLE, avg_qty:DOUBLE, avg_price:DOUBLE, avg_disc:DOUBLE, count_order:BIGINT
+     Estimate: 5.99999 rows, 0B peak memory
+     Output: 4 rows (1.12MB, 2 batches), Cpu time: 138.10ms, Wall time: 140.43ms, Blocked wall time: 0ns, Peak memory: 1.51MB, Memory allocations: 32, Threads: 1, CPU breakdown: B/I/O/F (1.52ms/136.09ms/306.86us/182.76us)
     -- Project[1][expressions: (l_returnflag:VARCHAR, "l_returnflag"), (l_linestatus:VARCHAR, "l_linestatus"), (l_quantity:DOUBLE, "l_quantity"), (l_extendedprice:DOUBLE, "l_extendedprice"), (dt1.__p43:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount"))), (dt1.__p52:DOUBLE, multiply(multiply("l_extendedprice",minus(1,"l_discount")),plus("l_tax",1))), (l_discount:DOUBLE, "l_discount")] -> l_returnflag:VARCHAR, l_linestatus:VARCHAR, l_quantity:DOUBLE, l_extendedprice:DOUBLE, "dt1.__p43":DOUBLE, "dt1.__p52":DOUBLE, l_discount:DOUBLE
+       Estimate: 5.7874e+06 rows, 0B peak memory
+       Output: 5916591 rows (224.81MB, 1228 batches), Cpu time: 15.29ms, Wall time: 16.55ms, Blocked wall time: 0ns, Peak memory: 192.00KB, Memory allocations: 2456, Threads: 1, CPU breakdown: B/I/O/F (1.38ms/192.61us/13.55ms/169.24us)
       -- TableScan[0][table: lineitem, range filters: [(l_shipdate, BigintRange: [-9223372036854775808, 10471] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, l_tax:DOUBLE, l_returnflag:VARCHAR, l_linestatus:VARCHAR
+         Estimate: 5.7874e+06 rows, 0B peak memory
+         Input: 5916591 rows (646.12MB, 1228 batches), Raw Input: 6001215 rows (59.02MB), Output: 5916591 rows (646.12MB, 1228 batches), Cpu time: 139.97ms, Wall time: 146.38ms, Blocked wall time: 0ns, Peak memory: 14.82MB, Memory allocations: 17626, Threads: 1, Splits: 2, CPU breakdown: B/I/O/F (395.59us/0ns/139.58ms/261ns)
 
 ___END___
