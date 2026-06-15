@@ -19,6 +19,9 @@
 #include <folly/system/HardwareConcurrency.h>
 #include "axiom/common/SessionConfig.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/connectors/file/FileConnector.h"
+#include "axiom/connectors/file/core/FileConnectorMetadata.h"
+#include "axiom/connectors/file/parquet/ParquetFileHandler.h"
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/system/SystemConnector.h"
@@ -232,6 +235,18 @@ void Connectors::registerSystemConnector(
   connector::ConnectorMetadataRegistry::global().insert(
       connector->connectorId(),
       std::make_shared<connector::system::SystemConnectorMetadata>(
+          connector.get()));
+}
+
+void Connectors::registerFileConnector(const std::string& connectorId) {
+  connector::file::registerParquetHandler();
+
+  auto connector =
+      std::make_shared<connector::file::FileConnector>(connectorId);
+  registerConnector(connector);
+  connector::ConnectorMetadataRegistry::global().insert(
+      connector->connectorId(),
+      std::make_shared<connector::file::FileConnectorMetadata>(
           connector.get()));
 }
 
