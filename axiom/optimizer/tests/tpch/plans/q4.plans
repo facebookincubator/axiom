@@ -1,3 +1,4 @@
+generated: 2026-06-14 18:29:31 (snapshot; regenerate with TpchPlanTest.makePlans)
 numWorkers: 1
 numDrivers: 1
 
@@ -5,40 +6,40 @@ Query Graph:
 
 dt1: 5.00 rows, o_orderpriority, order_count
   output:
-    o_orderpriority := t2.o_orderpriority VARCHAR (cardinality=5.00 min="1-URGENT" max="5-LOW")
+    o_orderpriority := t2.o_orderpriority VARCHAR (cardinality=5.00)
     order_count := dt1.order_count BIGINT (cardinality=1.00)
   tables: t2, dt3
   joins:
-    t2 SEMI dt3 ON t2.o_orderkey = dt3.l_orderkey [t2 → 1.99, dt3 → 0.04]
-  syntactic join order: 12, 16
+    t2 SEMI dt3 ON t2.o_orderkey = dt3.l_orderkey [t2 → 2.03, dt3 → 0.04]
+  syntactic join order: 10, 14
   aggregates: count() AS order_count
   grouping keys: t2.o_orderpriority
   filter: dt1.__mark5
   orderBy: t2.o_orderpriority ASC NULLS LAST
 
-t2: 5735.66 rows, o_orderkey, o_orderdate, o_orderpriority
+t2: 57356.61 rows, o_orderkey, o_orderdate, o_orderpriority
   table: "default"."orders"
-    o_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
-    o_orderdate DATE (cardinality=91.08 min=8582 max=8673)
-    o_orderpriority VARCHAR (cardinality=5.00 min="1-URGENT" max="5-LOW")
+    o_orderkey BIGINT (cardinality=1500000.00 min=1 max=6000000)
+    o_orderdate DATE (cardinality=92.00 min=8582 max=8673)
+    o_orderpriority VARCHAR (cardinality=5.00)
   single-column filters: gte(t2.o_orderdate, "1993-07-01") and lt(t2.o_orderdate, "1993-10-01")
 
-dt3: 303820.16 rows, l_orderkey
+dt3: 3039378.00 rows, l_orderkey
   output:
-    l_orderkey := t4.l_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
+    l_orderkey := t4.l_orderkey BIGINT (cardinality=1500000.00 min=1 max=6000000)
   tables: t4
 
-t4: 303820.16 rows, l_orderkey, l_commitdate, l_receiptdate
+t4: 3039378.00 rows, l_orderkey, l_commitdate, l_receiptdate
   table: "default"."lineitem"
-    l_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
-    l_commitdate DATE (cardinality=2435.00 min=8065 max=10530)
-    l_receiptdate DATE (cardinality=2523.00 min=8038 max=10587)
+    l_orderkey BIGINT (cardinality=1500000.00 min=1 max=6000000)
+    l_commitdate DATE (cardinality=2466.00 min=8065 max=10530)
+    l_receiptdate DATE (cardinality=2554.00 min=8037 max=10591)
   multi-column filters: lt(t4.l_commitdate, t4.l_receiptdate)
 
 
 Optimized plan (oneline):
 
-agg(("default"."lineitem" RIGHT SEMI (FILTER) "default"."orders"))
+agg((lineitem RIGHT SEMI (FILTER) orders))
 
 Optimized plan:
 
@@ -48,15 +49,15 @@ Project (redundant) [5.00 rows] -> dt1.o_orderpriority, dt1.order_count
   OrderBy [5.00 rows] -> t2.o_orderpriority, dt1.order_count
     Aggregation (t2.o_orderpriority) [5.00 rows] -> t2.o_orderpriority, dt1.order_count
         dt1.order_count := count()
-      Join RIGHT SEMI (FILTER) Hash [5735.66 rows] -> t2.o_orderpriority
+      Join RIGHT SEMI (FILTER) Hash [57356.61 rows] -> t2.o_orderpriority
           dt3.l_orderkey = t2.o_orderkey
-        Project (redundant) [303820.16 rows] -> dt3.l_orderkey
+        Project (redundant) [3039378.00 rows] -> dt3.l_orderkey
             dt3.l_orderkey := t4.l_orderkey
-          TableScan [303820.16 rows] -> t4.l_orderkey
+          TableScan [3039378.00 rows] -> t4.l_orderkey
             table: "default"."lineitem"
             multi-column filters: lt(t4.l_commitdate, t4.l_receiptdate)
-        HashBuild [5735.66 rows] -> t2.o_orderkey, t2.o_orderpriority
-          TableScan [5735.66 rows] -> t2.o_orderkey, t2.o_orderpriority
+        HashBuild [57356.61 rows] -> t2.o_orderkey, t2.o_orderpriority
+          TableScan [57356.61 rows] -> t2.o_orderkey, t2.o_orderpriority
             table: "default"."orders"
             single-column filters: gte(t2.o_orderdate, "1993-07-01") and lt(t2.o_orderdate, "1993-10-01")
 
@@ -64,10 +65,31 @@ Project (redundant) [5.00 rows] -> dt1.o_orderpriority, dt1.order_count
 Executable Velox plan:
 
 Fragment 0: fragment1 SINGLE:
+-- OrderBy[6][o_orderpriority ASC NULLS LAST] -> o_orderpriority:VARCHAR, order_count:BIGINT
+  -- Aggregation[5][SINGLE [o_orderpriority] order_count := count()] -> o_orderpriority:VARCHAR, order_count:BIGINT
+    -- HashJoin[4][RIGHT SEMI (FILTER) l_orderkey=o_orderkey] -> o_orderpriority:VARCHAR
+      -- Filter[1][expression: lt("l_commitdate","l_receiptdate")] -> l_orderkey:BIGINT, l_commitdate:DATE, l_receiptdate:DATE
+        -- TableScan[0]["default"."lineitem"] -> l_orderkey:BIGINT, l_commitdate:DATE, l_receiptdate:DATE
+      -- Filter[3][expression: and(gte("o_orderdate",1993-07-01),lt("o_orderdate",1993-10-01))] -> o_orderkey:BIGINT, o_orderpriority:VARCHAR, o_orderdate:DATE
+        -- TableScan[2]["default"."orders"] -> o_orderkey:BIGINT, o_orderpriority:VARCHAR, o_orderdate:DATE
+
+EXPLAIN ANALYZE:
+
+Fragment 0: fragment1 SINGLE:
 -- OrderBy[4][o_orderpriority ASC NULLS LAST] -> o_orderpriority:VARCHAR, order_count:BIGINT
+   Estimate: 5 rows, 0B peak memory
+   Output: 5 rows (48.09KB, 2 batches), Cpu time: 67.06us, Wall time: 105.93us, Blocked wall time: 0ns, Peak memory: 176.44KB, Memory allocations: 12, Threads: 1, CPU breakdown: B/I/O/F (42.78us/8.90us/9.09us/6.29us)
   -- Aggregation[3][SINGLE [o_orderpriority] order_count := count()] -> o_orderpriority:VARCHAR, order_count:BIGINT
+     Estimate: 5 rows, 0B peak memory
+     Output: 5 rows (335.72KB, 2 batches), Cpu time: 2.17ms, Wall time: 2.61ms, Blocked wall time: 0ns, Peak memory: 508.00KB, Memory allocations: 20, Threads: 1, CPU breakdown: B/I/O/F (439.22us/1.49ms/225.05us/16.28us)
     -- HashJoin[2][RIGHT SEMI (FILTER) l_orderkey=o_orderkey] -> o_orderpriority:VARCHAR
+       Estimate: 57356.6 rows, 0B peak memory
+       Output: 52523 rows (3.65MB, 104 batches), Cpu time: 20.69ms, Wall time: 22.67ms, Blocked wall time: 40.09ms, Peak memory: 5.05MB, Memory allocations: 31, CPU breakdown: B/I/O/F (3.67ms/13.76ms/1.78ms/1.48ms)
       -- TableScan[0][table: lineitem, remaining filter: (lt("l_commitdate","l_receiptdate")), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_receiptdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_commitdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_orderkey:BIGINT
+         Estimate: 3.04057e+06 rows, 0B peak memory
+         Input: 144869 rows (35.44MB, 1226 batches), Raw Input: 6001215 rows (29.84MB), Output: 144869 rows (35.44MB, 1226 batches), Cpu time: 86.13ms, Wall time: 131.14ms, Blocked wall time: 0ns, Peak memory: 8.55MB, Memory allocations: 9328, Threads: 1, Splits: 2, DynamicFilter producer plan nodes: 2, CPU breakdown: B/I/O/F (347.03us/0ns/85.78ms/270ns)
       -- TableScan[1][table: orders, range filters: [(o_orderdate, BigintRange: [8582, 8673] no nulls)], data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: o_orderdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> o_orderkey:BIGINT, o_orderpriority:VARCHAR
+         Estimate: 57356.6 rows, 0B peak memory
+         Input: 57218 rows (2.63MB, 152 batches), Raw Input: 1500000 rows (5.14MB), Output: 57218 rows (2.63MB, 152 batches), Cpu time: 28.60ms, Wall time: 29.97ms, Blocked wall time: 0ns, Peak memory: 6.49MB, Memory allocations: 845, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (44.75us/0ns/28.55ms/310ns)
 
 ___END___

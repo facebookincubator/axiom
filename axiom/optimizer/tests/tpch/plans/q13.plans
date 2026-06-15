@@ -1,3 +1,4 @@
+generated: 2026-06-14 18:29:33 (snapshot; regenerate with TpchPlanTest.makePlans)
 numWorkers: 1
 numDrivers: 1
 
@@ -12,31 +13,31 @@ dt4: 1.00 rows, c_count, custdist
   grouping keys: dt1.c_count
   orderBy: dt4.custdist DESC NULLS LAST, dt1.c_count DESC NULLS LAST
 
-dt1: 9465.03 rows, c_count
+dt1: 129699.84 rows, c_count
   output:
     c_count := dt1.count BIGINT (cardinality=1.00)
   tables: t2, t3
   joins:
-    t2 LEFT t3 ON t2.c_custkey = t3.o_custkey [t2 → 0.20, t3 → 0.10]
-  syntactic join order: 11, 24
+    t2 LEFT t3 ON t2.c_custkey = t3.o_custkey [t2 → 2.00, t3 → 1.00]
+  syntactic join order: 9, 20
   aggregates: count(dt1.o_orderkey) AS count
   grouping keys: t2.c_custkey
 
-t2: 15000.00 rows, c_custkey
+t2: 150000.00 rows, c_custkey
   table: "default"."customer"
-    c_custkey BIGINT (cardinality=14936.00 min=1 max=15000)
+    c_custkey BIGINT (cardinality=150000.00 min=1 max=150000)
 
-t3: 30000.00 rows, o_orderkey, o_custkey, o_comment
+t3: 300000.00 rows, o_orderkey, o_custkey, o_comment
   table: "default"."orders"
-    o_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
-    o_custkey BIGINT (cardinality=73171.00 min=1 max=149999)
-    o_comment VARCHAR (cardinality=151541.00 min=" Tiresias about the blithely ironic a" max="zzle. slyly special platele")
+    o_orderkey BIGINT (cardinality=1500000.00 min=1 max=6000000)
+    o_custkey BIGINT (cardinality=100000.00 min=1 max=150000)
+    o_comment VARCHAR (cardinality=1500000.00)
   single-column filters: not(like(t3.o_comment, "%special%requests%"))
 
 
 Optimized plan (oneline):
 
-agg(agg(("default"."orders" RIGHT "default"."customer")))
+agg(agg((orders RIGHT customer)))
 
 Optimized plan:
 
@@ -46,32 +47,58 @@ Project (redundant) [1.00 rows] -> dt4.c_count, dt4.custdist
   OrderBy [1.00 rows] -> dt1.c_count, dt4.custdist
     Aggregation (dt1.c_count) [1.00 rows] -> dt1.c_count, dt4.custdist
         dt4.custdist := count()
-      Project [9465.03 rows] -> dt1.c_count
+      Project [129699.84 rows] -> dt1.c_count
           dt1.c_count := dt1.count
-        Aggregation (t2.c_custkey) [9465.03 rows] -> t2.c_custkey, dt1.count
+        Aggregation (t2.c_custkey) [129699.84 rows] -> t2.c_custkey, dt1.count
             dt1.count := count(dt1.o_orderkey)
-          Project (redundant) [15000.00 rows] -> t2.c_custkey, dt1.o_orderkey
+          Project (redundant) [300000.00 rows] -> t2.c_custkey, dt1.o_orderkey
               t2.c_custkey := t2.c_custkey
               dt1.o_orderkey := t3.o_orderkey
-            Join RIGHT Hash [15000.00 rows] -> t2.c_custkey, t3.o_orderkey
+            Join RIGHT Hash [300000.00 rows] -> t2.c_custkey, t3.o_orderkey
                 t3.o_custkey = t2.c_custkey
-              TableScan [30000.00 rows] -> t3.o_orderkey, t3.o_custkey
+              TableScan [300000.00 rows] -> t3.o_orderkey, t3.o_custkey
                 table: "default"."orders"
                 single-column filters: not(like(t3.o_comment, "%special%requests%"))
-              HashBuild [15000.00 rows] -> t2.c_custkey
-                TableScan [15000.00 rows] -> t2.c_custkey
+              HashBuild [150000.00 rows] -> t2.c_custkey
+                TableScan [150000.00 rows] -> t2.c_custkey
                   table: "default"."customer"
 
 
 Executable Velox plan:
 
 Fragment 0: fragment1 SINGLE:
+-- OrderBy[7][custdist DESC NULLS LAST, c_count DESC NULLS LAST] -> c_count:BIGINT, custdist:BIGINT
+  -- Aggregation[6][SINGLE [c_count] custdist := count()] -> c_count:BIGINT, custdist:BIGINT
+    -- Project[5][expressions: (c_count:BIGINT, "count")] -> c_count:BIGINT
+      -- Aggregation[4][SINGLE [c_custkey] count := count("o_orderkey")] -> c_custkey:BIGINT, count:BIGINT
+        -- HashJoin[3][RIGHT o_custkey=c_custkey] -> c_custkey:BIGINT, o_orderkey:BIGINT
+          -- Filter[1][expression: not(like("o_comment",%special%requests%))] -> o_orderkey:BIGINT, o_custkey:BIGINT, o_comment:VARCHAR
+            -- TableScan[0]["default"."orders"] -> o_orderkey:BIGINT, o_custkey:BIGINT, o_comment:VARCHAR
+          -- TableScan[2]["default"."customer"] -> c_custkey:BIGINT
+
+EXPLAIN ANALYZE:
+
+Fragment 0: fragment1 SINGLE:
 -- OrderBy[6][custdist DESC NULLS LAST, c_count DESC NULLS LAST] -> c_count:BIGINT, custdist:BIGINT
+   Estimate: 1 rows, 0B peak memory
+   Output: 42 rows (832B, 1 batches), Cpu time: 50.25us, Wall time: 64.69us, Blocked wall time: 0ns, Peak memory: 129.38KB, Memory allocations: 5, CPU breakdown: B/I/O/F (13.21us/11.17us/10.84us/15.04us)
   -- Aggregation[5][SINGLE [c_count] custdist := count()] -> c_count:BIGINT, custdist:BIGINT
+     Estimate: 1 rows, 0B peak memory
+     Output: 42 rows (191.81KB, 1 batches), Cpu time: 421.05us, Wall time: 454.94us, Blocked wall time: 0ns, Peak memory: 580.00KB, Memory allocations: 8, CPU breakdown: B/I/O/F (21.81us/357.71us/35.24us/6.29us)
     -- Project[4][expressions: (c_count:BIGINT, "count")] -> c_count:BIGINT
+       Estimate: 129169 rows, 0B peak memory
+       Output: 150000 rows (1.40MB, 15 batches), Cpu time: 515.13us, Wall time: 938.16us, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, CPU breakdown: B/I/O/F (482.53us/5.64us/20.85us/6.11us)
       -- Aggregation[3][SINGLE [c_custkey] count := count("o_orderkey")] -> c_custkey:BIGINT, count:BIGINT
+         Estimate: 129169 rows, 0B peak memory
+         Output: 150000 rows (2.81MB, 15 batches), Cpu time: 37.79ms, Wall time: 40.73ms, Blocked wall time: 0ns, Peak memory: 6.76MB, Memory allocations: 12, CPU breakdown: B/I/O/F (1.37ms/34.24ms/1.75ms/426.84us)
         -- HashJoin[2][RIGHT o_custkey=c_custkey] -> c_custkey:BIGINT, o_orderkey:BIGINT
+           Estimate: 303230 rows, 0B peak memory
+           Output: 1533923 rows (32.03MB, 1549 batches), Cpu time: 65.73ms, Wall time: 67.25ms, Blocked wall time: 16.49ms, Peak memory: 5.76MB, Memory allocations: 63, CPU breakdown: B/I/O/F (618.15us/30.45ms/33.15ms/1.51ms)
           -- TableScan[0][table: orders, remaining filter: (not(like("o_comment",%special%requests%))), data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: o_comment, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> o_orderkey:BIGINT, o_custkey:BIGINT
+             Estimate: 300000 rows, 0B peak memory
+             Input: 1483918 rows (28.35MB, 152 batches), Raw Input: 1500000 rows (27.54MB), Output: 1483918 rows (28.35MB, 152 batches), Cpu time: 236.52ms, Wall time: 240.71ms, Blocked wall time: 0ns, Peak memory: 19.60MB, Memory allocations: 4942, Splits: 1, CPU breakdown: B/I/O/F (63.12us/0ns/236.46ms/271ns)
           -- TableScan[1][table: customer, data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>] -> c_custkey:BIGINT
+             Estimate: 150000 rows, 0B peak memory
+             Input: 150000 rows (1.40MB, 15 batches), Output: 150000 rows (1.40MB, 15 batches), Cpu time: 3.67ms, Wall time: 4.88ms, Blocked wall time: 0ns, Peak memory: 4.04MB, Memory allocations: 39, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (6.75us/0ns/3.66ms/310ns)
 
 ___END___

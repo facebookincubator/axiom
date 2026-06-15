@@ -1,3 +1,4 @@
+generated: 2026-06-14 18:29:33 (snapshot; regenerate with TpchPlanTest.makePlans)
 numWorkers: 1
 numDrivers: 1
 
@@ -9,41 +10,41 @@ dt1: 1.00 rows, avg_yearly
   tables: t2, t3, dt4
   joins:
     t3 LEFT dt4 ON t3.p_partkey = dt4.__gk6 [t3 → 1.00, dt4 → 0.00]
-    t2 INNER t3 ON t2.l_partkey = t3.p_partkey [t2 → 0.00, t3 → 3.01]
-  syntactic join order: 19, 34, 38
+    t2 INNER t3 ON t2.l_partkey = t3.p_partkey [t2 → 0.00, t3 → 30.01]
+  syntactic join order: 17, 30, 34
   aggregates: sum(t2.l_extendedprice) AS sum
   filter: lt(t2.l_quantity, dt4.expr)
 
-t2: 600572.00 rows, l_partkey, l_quantity, l_extendedprice
+t2: 6001215.00 rows, l_partkey, l_quantity, l_extendedprice
   table: "default"."lineitem"
-    l_partkey BIGINT (cardinality=188473.00 min=1 max=200000)
+    l_partkey BIGINT (cardinality=200000.00 min=1 max=200000)
     l_quantity DOUBLE (cardinality=50.00 min=1 max=50)
-    l_extendedprice DOUBLE (cardinality=444713.00 min=901 max=104899.5)
+    l_extendedprice DOUBLE (cardinality=6001215.00 min=901 max=104949.5)
 
-t3: 20.00 rows, p_partkey, p_brand, p_container
+t3: 200.00 rows, p_partkey, p_brand, p_container
   table: "default"."part"
-    p_partkey BIGINT (cardinality=19675.00 min=1 max=20000)
+    p_partkey BIGINT (cardinality=200000.00 min=1 max=200000)
     p_brand VARCHAR (cardinality=1.00 min="Brand#23" max="Brand#23")
     p_container VARCHAR (cardinality=1.00 min="MED BOX" max="MED BOX")
   single-column filters: eq(t3.p_brand, "Brand#23") and eq(t3.p_container, "MED BOX")
 
-dt4: 180686.19 rows, __gk6, expr
+dt4: 200000.00 rows, __gk6, expr
   output:
-    __gk6 := t5.l_partkey BIGINT (cardinality=180686.19 min=1 max=200000)
+    __gk6 := t5.l_partkey BIGINT (cardinality=200000.00 min=1 max=200000)
     expr := multiply(dt4.avg, 0.2) DOUBLE (cardinality=1.00)
   tables: t5
   aggregates: avg(t5.l_quantity) AS avg
   grouping keys: t5.l_partkey
 
-t5: 600572.00 rows, l_partkey, l_quantity
+t5: 6001215.00 rows, l_partkey, l_quantity
   table: "default"."lineitem"
-    l_partkey BIGINT (cardinality=188473.00 min=1 max=200000)
+    l_partkey BIGINT (cardinality=200000.00 min=1 max=200000)
     l_quantity DOUBLE (cardinality=50.00 min=1 max=50)
 
 
 Optimized plan (oneline):
 
-agg((("default"."lineitem" INNER "default"."part") LEFT agg(("default"."lineitem" LEFT SEMI (FILTER) "default"."part"))))
+agg(((lineitem INNER part) LEFT agg((lineitem LEFT SEMI (FILTER) part))))
 
 Optimized plan:
 
@@ -51,30 +52,30 @@ Project [1.00 rows] -> dt1.avg_yearly
     dt1.avg_yearly := divide(dt1.sum, 7)
   Aggregation [1.00 rows] -> dt1.sum
       dt1.sum := sum(t2.l_extendedprice)
-    Filter [30.49 rows] -> t2.l_quantity, t2.l_extendedprice, dt4.expr
+    Filter [3000.61 rows] -> t2.l_quantity, t2.l_extendedprice, dt4.expr
         lt(t2.l_quantity, dt4.expr)
-      Join LEFT Hash [60.99 rows] -> t2.l_quantity, t2.l_extendedprice, dt4.expr
+      Join LEFT Hash [6001.22 rows] -> t2.l_quantity, t2.l_extendedprice, dt4.expr
           t3.p_partkey = dt4.__gk6
-        Join INNER Hash [60.99 rows] -> t2.l_quantity, t2.l_extendedprice, t3.p_partkey
+        Join INNER Hash [6001.22 rows] -> t2.l_quantity, t2.l_extendedprice, t3.p_partkey
             t2.l_partkey = t3.p_partkey
-          TableScan [600572.00 rows] -> t2.l_partkey, t2.l_quantity, t2.l_extendedprice
+          TableScan [6001215.00 rows] -> t2.l_partkey, t2.l_quantity, t2.l_extendedprice
             table: "default"."lineitem"
-          HashBuild [20.00 rows] -> t3.p_partkey
-            TableScan [20.00 rows] -> t3.p_partkey
+          HashBuild [200.00 rows] -> t3.p_partkey
+            TableScan [200.00 rows] -> t3.p_partkey
               table: "default"."part"
               single-column filters: eq(t3.p_brand, "Brand#23") and eq(t3.p_container, "MED BOX")
-        HashBuild [63.62 rows] -> dt4.__gk6, dt4.expr
-          Project [63.62 rows] -> dt4.__gk6, dt4.expr
+        HashBuild [5912.09 rows] -> dt4.__gk6, dt4.expr
+          Project [5912.09 rows] -> dt4.__gk6, dt4.expr
               dt4.__gk6 := t5.l_partkey
               dt4.expr := multiply(dt4.avg, 0.2)
-            Aggregation (t5.l_partkey) [63.62 rows] -> t5.l_partkey, dt4.avg
+            Aggregation (t5.l_partkey) [5912.09 rows] -> t5.l_partkey, dt4.avg
                 dt4.avg := avg(t5.l_quantity)
-              Join LEFT SEMI (FILTER) Hash [63.73 rows] -> t5.l_partkey, t5.l_quantity
+              Join LEFT SEMI (FILTER) Hash [6001.22 rows] -> t5.l_partkey, t5.l_quantity
                   t5.l_partkey = t3.p_partkey
-                TableScan [600572.00 rows] -> t5.l_partkey, t5.l_quantity
+                TableScan [6001215.00 rows] -> t5.l_partkey, t5.l_quantity
                   table: "default"."lineitem"
-                HashBuild [20.00 rows] -> t3.p_partkey
-                  TableScan [20.00 rows] -> t3.p_partkey
+                HashBuild [200.00 rows] -> t3.p_partkey
+                  TableScan [200.00 rows] -> t3.p_partkey
                     table: "default"."part"
                     single-column filters: eq(t3.p_brand, "Brand#23") and eq(t3.p_container, "MED BOX")
 
@@ -82,17 +83,59 @@ Project [1.00 rows] -> dt1.avg_yearly
 Executable Velox plan:
 
 Fragment 0: fragment1 SINGLE:
--- Project[11][expressions: (avg_yearly:DOUBLE, divide("sum",7))] -> avg_yearly:DOUBLE
-  -- Aggregation[10][SINGLE sum := sum("l_extendedprice")] -> sum:DOUBLE
+-- Project[13][expressions: (avg_yearly:DOUBLE, divide("sum",7))] -> avg_yearly:DOUBLE
+  -- Aggregation[12][SINGLE sum := sum("l_extendedprice")] -> sum:DOUBLE
     -- Filter[0][expression: lt("l_quantity","expr")] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, expr:DOUBLE
+      -- HashJoin[11][LEFT p_partkey=dt4.__gk6] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, expr:DOUBLE
+        -- HashJoin[4][INNER l_partkey=p_partkey] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, p_partkey:BIGINT
+          -- TableScan[1]["default"."lineitem"] -> l_partkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE
+          -- Filter[3][expression: and(eq("p_brand",Brand#23),eq("p_container",MED BOX))] -> p_partkey:BIGINT, p_brand:VARCHAR, p_container:VARCHAR
+            -- TableScan[2]["default"."part"] -> p_partkey:BIGINT, p_brand:VARCHAR, p_container:VARCHAR
+        -- Project[10][expressions: (dt4.__gk6:BIGINT, "l_partkey_1"), (expr:DOUBLE, multiply("avg",0.2))] -> "dt4.__gk6":BIGINT, expr:DOUBLE
+          -- Aggregation[9][SINGLE [l_partkey_1] avg := avg("l_quantity_4")] -> l_partkey_1:BIGINT, avg:DOUBLE
+            -- HashJoin[8][LEFT SEMI (FILTER) l_partkey_1=p_partkey] -> l_partkey_1:BIGINT, l_quantity_4:DOUBLE
+              -- TableScan[5]["default"."lineitem"] -> l_partkey_1:BIGINT, l_quantity_4:DOUBLE
+              -- Filter[7][expression: and(eq("p_brand",Brand#23),eq("p_container",MED BOX))] -> p_partkey:BIGINT, p_brand:VARCHAR, p_container:VARCHAR
+                -- TableScan[6]["default"."part"] -> p_partkey:BIGINT, p_brand:VARCHAR, p_container:VARCHAR
+
+EXPLAIN ANALYZE:
+
+Fragment 0: fragment1 SINGLE:
+-- Project[11][expressions: (avg_yearly:DOUBLE, divide("sum",7))] -> avg_yearly:DOUBLE
+   Estimate: 1 rows, 0B peak memory
+   Output: 1 rows (32B, 1 batches), Cpu time: 229.06us, Wall time: 428.19us, Blocked wall time: 0ns, Peak memory: 128B, Memory allocations: 1, Threads: 1, CPU breakdown: B/I/O/F (211.54us/501ns/12.67us/4.35us)
+  -- Aggregation[10][SINGLE sum := sum("l_extendedprice")] -> sum:DOUBLE
+     Estimate: 1 rows, 0B peak memory
+     Output: 1 rows (32B, 1 batches), Cpu time: 2.44ms, Wall time: 3.56ms, Blocked wall time: 0ns, Peak memory: 64.50KB, Memory allocations: 5, Threads: 1, CPU breakdown: B/I/O/F (885.44us/1.15ms/219.83us/186.59us)
+    -- Filter[0][expression: lt("l_quantity","expr")] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, expr:DOUBLE
+       Estimate: 3057.57 rows, 0B peak memory
+       Output: 587 rows (21.90KB, 371 batches), Cpu time: 4.95ms, Wall time: 7.03ms, Blocked wall time: 0ns, Peak memory: 448B, Memory allocations: 611, Threads: 1, CPU breakdown: B/I/O/F (1.43ms/317.97us/2.90ms/307.67us)
       -- HashJoin[9][LEFT p_partkey=dt4.__gk6] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, expr:DOUBLE
+         Estimate: 6115.14 rows, 0B peak memory
+         Output: 6088 rows (147.16KB, 609 batches), Cpu time: 4.54ms, Wall time: 7.18ms, Blocked wall time: 188.73ms, Peak memory: 1.60MB, Memory allocations: 14, CPU breakdown: B/I/O/F (1.57ms/658.72us/1.48ms/824.16us)
         -- HashJoin[3][INNER l_partkey=p_partkey] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, p_partkey:BIGINT
+           Estimate: 6115.14 rows, 0B peak memory
+           Output: 6088 rows (147.16KB, 609 batches), Cpu time: 4.47ms, Wall time: 6.87ms, Blocked wall time: 0ns, Peak memory: 1.60MB, Memory allocations: 14, CPU breakdown: B/I/O/F (1.26ms/805.66us/1.58ms/824.39us)
           -- TableScan[1][table: lineitem, data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_partkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE
+             Estimate: 6.00122e+06 rows, 0B peak memory
+             Input: 6088 rows (56.54MB, 609 batches), Raw Input: 6001215 rows (66.25MB), Output: 6088 rows (56.54MB, 609 batches), Cpu time: 204.20ms, Wall time: 233.89ms, Blocked wall time: 0ns, Peak memory: 16.18MB, Memory allocations: 5349, Threads: 1, Splits: 2, DynamicFilter producer plan nodes: 3, CPU breakdown: B/I/O/F (338.09us/0ns/203.86ms/471ns)
           -- TableScan[2][table: part, range filters: [(p_brand, Filter(BytesValues, deterministic, no nulls)), (p_container, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_container, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: p_brand, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> p_partkey:BIGINT
+             Estimate: 200 rows, 0B peak memory
+             Input: 204 rows (2.75KB, 20 batches), Raw Input: 200000 rows (5.48MB), Output: 204 rows (2.75KB, 20 batches), Cpu time: 5.25ms, Wall time: 11.14ms, Blocked wall time: 0ns, Peak memory: 4.77MB, Memory allocations: 113, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (12.87us/0ns/5.24ms/531ns)
         -- Project[8][expressions: (dt4.__gk6:BIGINT, "l_partkey_3"), (expr:DOUBLE, multiply("avg",0.2))] -> "dt4.__gk6":BIGINT, expr:DOUBLE
+           Estimate: 6020.88 rows, 0B peak memory
+           Output: 204 rows (97.81KB, 1 batches), Cpu time: 202.64us, Wall time: 360.70us, Blocked wall time: 0ns, Peak memory: 2.00KB, Memory allocations: 1, Threads: 1, CPU breakdown: B/I/O/F (178.84us/421ns/21.08us/2.30us)
           -- Aggregation[7][SINGLE [l_partkey_3] avg := avg("l_quantity_6")] -> l_partkey_3:BIGINT, avg:DOUBLE
+             Estimate: 6020.88 rows, 0B peak memory
+             Output: 204 rows (191.81KB, 1 batches), Cpu time: 3.05ms, Wall time: 3.95ms, Blocked wall time: 0ns, Peak memory: 2.18MB, Memory allocations: 9, Threads: 1, CPU breakdown: B/I/O/F (673.81us/1.87ms/339.63us/161.19us)
             -- HashJoin[6][LEFT SEMI (FILTER) l_partkey_3=p_partkey] -> l_partkey_3:BIGINT, l_quantity_6:DOUBLE
+               Estimate: 6115.14 rows, 0B peak memory
+               Output: 6088 rows (56.18MB, 609 batches), Cpu time: 2.40ms, Wall time: 3.64ms, Blocked wall time: 11.65ms, Peak memory: 1.58MB, Memory allocations: 3, CPU breakdown: B/I/O/F (721.52us/241.02us/561.70us/873.20us)
               -- TableScan[4][table: lineitem, data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_partkey_3:BIGINT, l_quantity_6:DOUBLE
+                 Estimate: 6.00122e+06 rows, 0B peak memory
+                 Input: 6088 rows (56.26MB, 609 batches), Raw Input: 6001215 rows (27.15MB), Output: 6088 rows (56.26MB, 609 batches), Cpu time: 141.64ms, Wall time: 168.18ms, Blocked wall time: 0ns, Peak memory: 8.15MB, Memory allocations: 2729, Threads: 1, Splits: 2, DynamicFilter producer plan nodes: 6, CPU breakdown: B/I/O/F (172.75us/0ns/141.47ms/260ns)
               -- TableScan[5][table: part, range filters: [(p_brand, Filter(BytesValues, deterministic, no nulls)), (p_container, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_container, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: p_brand, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> p_partkey:BIGINT
+                 Estimate: 200 rows, 0B peak memory
+                 Input: 204 rows (2.75KB, 20 batches), Raw Input: 200000 rows (5.48MB), Output: 204 rows (2.75KB, 20 batches), Cpu time: 5.10ms, Wall time: 10.96ms, Blocked wall time: 0ns, Peak memory: 4.77MB, Memory allocations: 113, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (6.67us/0ns/5.09ms/310ns)
 
 ___END___

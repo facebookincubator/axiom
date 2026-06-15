@@ -1,0 +1,180 @@
+generated: 2026-06-14 18:29:33 (snapshot; regenerate with TpchPlanTest.makePlans)
+numWorkers: 1
+numDrivers: 1
+
+Query Graph:
+
+dt1: 25.00 rows, nation, o_year, sum_profit
+  output:
+    nation := t7.n_name VARCHAR (cardinality=25.00)
+    o_year := dt1.o_year BIGINT (cardinality=25.00)
+    sum_profit := dt1.sum_profit DOUBLE (cardinality=1.00)
+  tables: t2, t3, t4, t5, t6, t7
+  joins:
+    t3 INNER t4 ON t3.s_suppkey = t4.l_suppkey [t3 → 600.12, t4 → 1.00]
+    t4 INNER t5 ON t4.l_suppkey = t5.ps_suppkey AND t4.l_partkey = t5.ps_partkey [t4 → 1.00, t5 → 1.00]
+    t2 INNER t4 ON t2.p_partkey = t4.l_partkey [t2 → 30.01, t4 → 0.06]
+    t4 INNER t6 ON t4.l_orderkey = t6.o_orderkey [t4 → 1.00, t6 → 4.00]
+    t3 INNER t7 ON t3.s_nationkey = t7.n_nationkey [t3 → 1.00, t7 → 400.00]
+    t3 INNER t5 ON t3.s_suppkey = t5.ps_suppkey [t3 → 80.00, t5 → 1.00]
+    t5 INNER t2 ON t5.ps_partkey = t2.p_partkey [t5 → 0.06, t2 → 4.00]
+  syntactic join order: 10, 20, 39, 51, 64, 71
+  aggregates: sum(minus(multiply(t4.l_extendedprice, minus(1, t4.l_discount)), multiply(t4.l_quantity, t5.ps_supplycost))) AS sum_profit
+  grouping keys: t7.n_name, year(t6.o_orderdate)
+  orderBy: t7.n_name ASC NULLS LAST, dt1.o_year DESC NULLS LAST
+
+t2: 12000.00 rows, p_partkey, p_size
+  table: "default"."part"
+    p_partkey BIGINT (cardinality=200000.00 min=1 max=200000)
+    p_size INTEGER (cardinality=3.00 min=1 max=3)
+  single-column filters: lte(t2.p_size, 3)
+
+t3: 10000.00 rows, s_suppkey, s_nationkey
+  table: "default"."supplier"
+    s_suppkey BIGINT (cardinality=10000.00 min=1 max=10000)
+    s_nationkey BIGINT (cardinality=25.00 min=0 max=24)
+
+t4: 6001215.00 rows, l_orderkey, l_partkey, l_suppkey, l_quantity, l_extendedprice, l_discount
+  table: "default"."lineitem"
+    l_orderkey BIGINT (cardinality=1500000.00 min=1 max=6000000)
+    l_partkey BIGINT (cardinality=200000.00 min=1 max=200000)
+    l_suppkey BIGINT (cardinality=10000.00 min=1 max=10000)
+    l_quantity DOUBLE (cardinality=50.00 min=1 max=50)
+    l_extendedprice DOUBLE (cardinality=6001215.00 min=901 max=104949.5)
+    l_discount DOUBLE (cardinality=11.00 min=0 max=0.1)
+
+t5: 800000.00 rows, ps_partkey, ps_suppkey, ps_supplycost
+  table: "default"."partsupp"
+    ps_partkey BIGINT (cardinality=200000.00 min=1 max=200000)
+    ps_suppkey BIGINT (cardinality=10000.00 min=1 max=10000)
+    ps_supplycost DOUBLE (cardinality=100000.00 min=1 max=1000)
+
+t6: 1500000.00 rows, o_orderkey, o_orderdate
+  table: "default"."orders"
+    o_orderkey BIGINT (cardinality=1500000.00 min=1 max=6000000)
+    o_orderdate DATE (cardinality=2406.00 min=8035 max=10440)
+
+t7: 25.00 rows, n_nationkey, n_name
+  table: "default"."nation"
+    n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
+    n_name VARCHAR (cardinality=25.00)
+
+
+Optimized plan (oneline):
+
+agg((((orders INNER (lineitem INNER (partsupp INNER part))) INNER supplier) INNER nation))
+
+Optimized plan:
+
+Project [625.00 rows] -> dt1.nation, dt1.o_year, dt1.sum_profit
+    dt1.nation := t7.n_name
+    dt1.o_year := dt1.o_year
+    dt1.sum_profit := dt1.sum_profit
+  OrderBy [625.00 rows] -> t7.n_name, dt1.o_year, dt1.sum_profit
+    Aggregation (t7.n_name, dt1.__p82) [625.00 rows] -> t7.n_name, dt1.o_year, dt1.sum_profit
+        dt1.sum_profit := sum(dt1.__p90)
+      Project [360072.91 rows] -> t7.n_name, dt1.__p82, dt1.__p90
+          t7.n_name := t7.n_name
+          dt1.__p82 := year(t6.o_orderdate)
+          dt1.__p90 := minus(multiply(t4.l_extendedprice, minus(1, t4.l_discount)), multiply(t4.l_quantity, t5.ps_supplycost))
+        Join INNER Hash [360072.91 rows] -> t4.l_quantity, t4.l_extendedprice, t4.l_discount, t5.ps_supplycost, t6.o_orderdate, t7.n_name
+            t3.s_nationkey = t7.n_nationkey
+          Join INNER Hash [360072.91 rows] -> t3.s_nationkey, t4.l_quantity, t4.l_extendedprice, t4.l_discount, t5.ps_supplycost, t6.o_orderdate
+              t4.l_suppkey = t3.s_suppkey
+            Join INNER Hash [360072.91 rows] -> t4.l_suppkey, t4.l_quantity, t4.l_extendedprice, t4.l_discount, t5.ps_suppkey, t5.ps_supplycost, t6.o_orderdate
+                t6.o_orderkey = t4.l_orderkey
+              TableScan [1500000.00 rows] -> t6.o_orderkey, t6.o_orderdate
+                table: "default"."orders"
+              HashBuild [360072.91 rows] -> t4.l_orderkey, t4.l_suppkey, t4.l_quantity, t4.l_extendedprice, t4.l_discount, t5.ps_suppkey, t5.ps_supplycost
+                Join INNER Hash [360072.91 rows] -> t4.l_orderkey, t4.l_suppkey, t4.l_quantity, t4.l_extendedprice, t4.l_discount, t5.ps_suppkey, t5.ps_supplycost
+                    t4.l_suppkey = t5.ps_suppkey
+                    t4.l_partkey = t5.ps_partkey
+                  TableScan [6001215.00 rows] -> t4.l_orderkey, t4.l_partkey, t4.l_suppkey, t4.l_quantity, t4.l_extendedprice, t4.l_discount
+                    table: "default"."lineitem"
+                  HashBuild [48000.00 rows] -> t5.ps_partkey, t5.ps_suppkey, t5.ps_supplycost
+                    Join INNER Hash [48000.00 rows] -> t5.ps_partkey, t5.ps_suppkey, t5.ps_supplycost
+                        t5.ps_partkey = t2.p_partkey
+                      TableScan [800000.00 rows] -> t5.ps_partkey, t5.ps_suppkey, t5.ps_supplycost
+                        table: "default"."partsupp"
+                      HashBuild [12000.00 rows] -> t2.p_partkey
+                        TableScan [12000.00 rows] -> t2.p_partkey
+                          table: "default"."part"
+                          single-column filters: lte(t2.p_size, 3)
+            HashBuild [10000.00 rows] -> t3.s_suppkey, t3.s_nationkey
+              TableScan [10000.00 rows] -> t3.s_suppkey, t3.s_nationkey
+                table: "default"."supplier"
+          HashBuild [25.00 rows] -> t7.n_nationkey, t7.n_name
+            TableScan [25.00 rows] -> t7.n_nationkey, t7.n_name
+              table: "default"."nation"
+
+
+Executable Velox plan:
+
+Fragment 0: fragment1 SINGLE:
+-- Project[15][expressions: (nation:VARCHAR, "n_name"), (o_year:BIGINT, "o_year"), (sum_profit:DOUBLE, "sum_profit")] -> nation:VARCHAR, o_year:BIGINT, sum_profit:DOUBLE
+  -- OrderBy[14][n_name ASC NULLS LAST, o_year DESC NULLS LAST] -> n_name:VARCHAR, o_year:BIGINT, sum_profit:DOUBLE
+    -- Aggregation[13][SINGLE [n_name, o_year] sum_profit := sum("dt1.__p90")] -> n_name:VARCHAR, o_year:BIGINT, sum_profit:DOUBLE
+      -- Project[12][expressions: (n_name:VARCHAR, "n_name"), (o_year:BIGINT, year("o_orderdate")), (dt1.__p90:DOUBLE, minus(multiply("l_extendedprice",minus(1,"l_discount")),multiply("l_quantity","ps_supplycost")))] -> n_name:VARCHAR, o_year:BIGINT, "dt1.__p90":DOUBLE
+        -- HashJoin[11][INNER s_nationkey=n_nationkey] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, ps_supplycost:DOUBLE, o_orderdate:DATE, n_name:VARCHAR
+          -- HashJoin[9][INNER l_suppkey=s_suppkey] -> s_nationkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, ps_supplycost:DOUBLE, o_orderdate:DATE
+            -- HashJoin[7][INNER o_orderkey=l_orderkey] -> l_suppkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, ps_suppkey:BIGINT, ps_supplycost:DOUBLE, o_orderdate:DATE
+              -- TableScan[0]["default"."orders"] -> o_orderkey:BIGINT, o_orderdate:DATE
+              -- HashJoin[6][INNER l_suppkey=ps_suppkey AND l_partkey=ps_partkey] -> l_orderkey:BIGINT, l_suppkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, ps_suppkey:BIGINT, ps_supplycost:DOUBLE
+                -- TableScan[1]["default"."lineitem"] -> l_orderkey:BIGINT, l_partkey:BIGINT, l_suppkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE
+                -- HashJoin[5][INNER ps_partkey=p_partkey] -> ps_partkey:BIGINT, ps_suppkey:BIGINT, ps_supplycost:DOUBLE
+                  -- TableScan[2]["default"."partsupp"] -> ps_partkey:BIGINT, ps_suppkey:BIGINT, ps_supplycost:DOUBLE
+                  -- Filter[4][expression: lte("p_size",3)] -> p_partkey:BIGINT, p_size:INTEGER
+                    -- TableScan[3]["default"."part"] -> p_partkey:BIGINT, p_size:INTEGER
+            -- TableScan[8]["default"."supplier"] -> s_suppkey:BIGINT, s_nationkey:BIGINT
+          -- TableScan[10]["default"."nation"] -> n_nationkey:BIGINT, n_name:VARCHAR
+
+EXPLAIN ANALYZE:
+
+Fragment 0: fragment1 SINGLE:
+-- Project[14][expressions: (nation:VARCHAR, "n_name"), (o_year:BIGINT, "o_year"), (sum_profit:DOUBLE, "sum_profit")] -> nation:VARCHAR, o_year:BIGINT, sum_profit:DOUBLE
+   Estimate: 625 rows, 0B peak memory
+   Output: 175 rows (53.62KB, 1 batches), Cpu time: 36.88us, Wall time: 65.49us, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, CPU breakdown: B/I/O/F (20.05us/631ns/9.81us/6.38us)
+  -- OrderBy[13][n_name ASC NULLS LAST, o_year DESC NULLS LAST] -> n_name:VARCHAR, o_year:BIGINT, sum_profit:DOUBLE
+     Estimate: 625 rows, 0B peak memory
+     Output: 175 rows (53.62KB, 1 batches), Cpu time: 337.89us, Wall time: 586.60us, Blocked wall time: 0ns, Peak memory: 183.38KB, Memory allocations: 9, CPU breakdown: B/I/O/F (261.55us/22.15us/12.15us/42.03us)
+    -- Aggregation[12][SINGLE [n_name, o_year] sum_profit := sum("dt1.__p102")] -> n_name:VARCHAR, o_year:BIGINT, sum_profit:DOUBLE
+       Estimate: 625 rows, 0B peak memory
+       Output: 175 rows (431.62KB, 1 batches), Cpu time: 15.65ms, Wall time: 17.30ms, Blocked wall time: 0ns, Peak memory: 608.00KB, Memory allocations: 11, CPU breakdown: B/I/O/F (922.00us/14.21ms/305.24us/220.32us)
+      -- Project[11][expressions: (n_name:VARCHAR, "n_name"), (o_year:BIGINT, year("o_orderdate")), (dt1.__p102:DOUBLE, minus(multiply("l_extendedprice",minus(1,"l_discount")),multiply("l_quantity","ps_supplycost")))] -> n_name:VARCHAR, o_year:BIGINT, "dt1.__p102":DOUBLE
+         Estimate: 344070 rows, 0B peak memory
+         Output: 365696 rows (40.03MB, 450 batches), Cpu time: 15.00ms, Wall time: 17.08ms, Blocked wall time: 0ns, Peak memory: 42.00KB, Memory allocations: 1051, CPU breakdown: B/I/O/F (1.12ms/233.40us/13.42ms/217.66us)
+        -- HashJoin[10][INNER s_nationkey=n_nationkey] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, ps_supplycost:DOUBLE, o_orderdate:DATE, n_name:VARCHAR
+           Estimate: 344070 rows, 0B peak memory
+           Output: 365696 rows (54.45MB, 450 batches), Cpu time: 6.85ms, Wall time: 8.91ms, Blocked wall time: 2.02ms, Peak memory: 284.00KB, Memory allocations: 16, CPU breakdown: B/I/O/F (1.13ms/880.49us/4.57ms/280.68us)
+          -- HashJoin[8][INNER l_suppkey=s_suppkey] -> s_nationkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, ps_supplycost:DOUBLE, o_orderdate:DATE
+             Estimate: 344070 rows, 0B peak memory
+             Output: 0 rows (0B, 450 batches), Cpu time: 2.05ms, Wall time: 2.99ms, Blocked wall time: 0ns, Peak memory: 2.46MB, Memory allocations: 18, CPU breakdown: B/I/O/F (962.22us/982.45us/1.23us/107.94us)
+            -- HashJoin[6][INNER o_orderkey=l_orderkey] -> l_suppkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, ps_suppkey:BIGINT, ps_supplycost:DOUBLE, o_orderdate:DATE
+               Estimate: 349816 rows, 0B peak memory
+               Output: 365696 rows (33.35MB, 900 batches), Cpu time: 125.90ms, Wall time: 128.49ms, Blocked wall time: 404.14ms, Peak memory: 30.80MB, Memory allocations: 933, CPU breakdown: B/I/O/F (1.51ms/88.43ms/16.73ms/19.23ms)
+              -- TableScan[0][table: orders, data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>] -> o_orderkey:BIGINT, o_orderdate:DATE
+                 Estimate: 1.5e+06 rows, 0B peak memory
+                 Input: 1500000 rows (22.09MB, 304 batches), Output: 1500000 rows (22.09MB, 304 batches), Cpu time: 27.32ms, Wall time: 28.85ms, Blocked wall time: 0ns, Peak memory: 6.15MB, Memory allocations: 3134, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (189.42us/0ns/27.13ms/480ns)
+              -- HashJoin[5][INNER l_suppkey=ps_suppkey AND l_partkey=ps_partkey] -> l_orderkey:BIGINT, l_suppkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, ps_suppkey:BIGINT, ps_supplycost:DOUBLE
+                 Estimate: 366908 rows, 0B peak memory
+                 Output: 365696 rows (10.55MB, 614 batches), Cpu time: 27.38ms, Wall time: 29.18ms, Blocked wall time: 41.10ms, Peak memory: 3.35MB, Memory allocations: 20, CPU breakdown: B/I/O/F (1.14ms/15.05ms/8.77ms/2.42ms)
+                -- TableScan[1][table: lineitem, data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_orderkey:BIGINT, l_partkey:BIGINT, l_suppkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE
+                   Estimate: 6.00122e+06 rows, 0B peak memory
+                   Input: 365696 rows (73.52MB, 614 batches), Raw Input: 6001215 rows (91.07MB), Output: 365696 rows (73.52MB, 614 batches), Cpu time: 242.42ms, Wall time: 265.12ms, Blocked wall time: 0ns, Peak memory: 21.86MB, Memory allocations: 8102, Threads: 1, Splits: 2, DynamicFilter producer plan nodes: 5, CPU breakdown: B/I/O/F (196.48us/0ns/242.22ms/261ns)
+                -- HashJoin[4][INNER ps_partkey=p_partkey] -> ps_partkey:BIGINT, ps_suppkey:BIGINT, ps_supplycost:DOUBLE
+                   Estimate: 48911.2 rows, 0B peak memory
+                   Output: 48812 rows (7.48MB, 81 batches), Cpu time: 2.06ms, Wall time: 2.40ms, Blocked wall time: 14.23ms, Peak memory: 3.79MB, Memory allocations: 7, CPU breakdown: B/I/O/F (333.32us/879.17us/137.62us/714.04us)
+                  -- TableScan[2][table: partsupp, data columns: ROW<ps_partkey:BIGINT,ps_suppkey:BIGINT,ps_availqty:INTEGER,ps_supplycost:DOUBLE,ps_comment:VARCHAR>] -> ps_partkey:BIGINT, ps_suppkey:BIGINT, ps_supplycost:DOUBLE
+                     Estimate: 800000 rows, 0B peak memory
+                     Input: 48812 rows (8.39MB, 81 batches), Raw Input: 800000 rows (5.07MB), Output: 48812 rows (8.39MB, 81 batches), Cpu time: 17.44ms, Wall time: 18.27ms, Blocked wall time: 0ns, Peak memory: 12.73MB, Memory allocations: 530, Threads: 1, Splits: 1, DynamicFilter producer plan nodes: 4, CPU breakdown: B/I/O/F (42.38us/0ns/17.40ms/481ns)
+                  -- TableScan[3][table: part, range filters: [(p_size, BigintRange: [-9223372036854775808, 3] no nulls)], data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_size, columnType: Regular, dataType: INTEGER, requiredSubfields: [ ]]]] -> p_partkey:BIGINT
+                     Estimate: 12000 rows, 0B peak memory
+                     Input: 12203 rows (118.12KB, 20 batches), Raw Input: 200000 rows (5.37MB), Output: 12203 rows (118.12KB, 20 batches), Cpu time: 4.81ms, Wall time: 12.67ms, Blocked wall time: 0ns, Peak memory: 4.76MB, Memory allocations: 79, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (6.89us/0ns/4.81ms/301ns)
+            -- TableScan[7][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey:BIGINT, s_nationkey:BIGINT
+               Estimate: 10000 rows, 0B peak memory
+               Input: 10000 rows (191.81KB, 1 batches), Output: 10000 rows (191.81KB, 1 batches), Cpu time: 655.39us, Wall time: 4.32ms, Blocked wall time: 0ns, Peak memory: 640.00KB, Memory allocations: 17, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (1.13us/0ns/653.95us/310ns)
+          -- TableScan[9][table: nation, data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>] -> n_nationkey:BIGINT, n_name:VARCHAR
+             Estimate: 25 rows, 0B peak memory
+             Input: 25 rows (992B, 1 batches), Output: 25 rows (992B, 1 batches), Cpu time: 328.44us, Wall time: 2.11ms, Blocked wall time: 0ns, Peak memory: 4.06KB, Memory allocations: 15, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (1.92us/0ns/326.01us/510ns)
+
+___END___

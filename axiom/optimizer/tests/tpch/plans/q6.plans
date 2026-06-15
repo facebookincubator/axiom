@@ -1,3 +1,4 @@
+generated: 2026-06-14 18:29:32 (snapshot; regenerate with TpchPlanTest.makePlans)
 numWorkers: 1
 numDrivers: 1
 
@@ -9,28 +10,28 @@ dt1: 1.00 rows, revenue
   tables: t2
   aggregates: sum(multiply(t2.l_extendedprice, t2.l_discount)) AS revenue
 
-t2: 32600.05 rows, l_quantity, l_extendedprice, l_discount, l_shipdate
+t2: 325627.06 rows, l_quantity, l_extendedprice, l_discount, l_shipdate
   table: "default"."lineitem"
     l_quantity DOUBLE (cardinality=23.47 min=1 max=24)
-    l_extendedprice DOUBLE (cardinality=444713.00 min=901 max=104899.5)
+    l_extendedprice DOUBLE (cardinality=6001215.00 min=901 max=104949.5)
     l_discount DOUBLE (cardinality=11.00 min=0 max=0.1)
-    l_shipdate DATE (cardinality=361.10 min=8766 max=9130)
+    l_shipdate DATE (cardinality=365.00 min=8766 max=9130)
   single-column filters: gte(t2.l_shipdate, "1994-01-01") and lt(t2.l_shipdate, "1995-01-01") and between(t2.l_discount, 0.049999999999999996, 0.07) and lt(t2.l_quantity, 24)
 
 
 Optimized plan (oneline):
 
-agg("default"."lineitem")
+agg(lineitem)
 
 Optimized plan:
 
 Project (redundant) [1.00 rows] -> dt1.revenue
     dt1.revenue := dt1.revenue
   Aggregation [1.00 rows] -> dt1.revenue
-      dt1.revenue := sum(dt1.__p57)
-    Project [32600.05 rows] -> dt1.__p57
-        dt1.__p57 := multiply(t2.l_extendedprice, t2.l_discount)
-      TableScan [32600.05 rows] -> t2.l_extendedprice, t2.l_discount
+      dt1.revenue := sum(dt1.__p55)
+    Project [325627.06 rows] -> dt1.__p55
+        dt1.__p55 := multiply(t2.l_extendedprice, t2.l_discount)
+      TableScan [325627.06 rows] -> t2.l_extendedprice, t2.l_discount
         table: "default"."lineitem"
         single-column filters: gte(t2.l_shipdate, "1994-01-01") and lt(t2.l_shipdate, "1995-01-01") and between(t2.l_discount, 0.049999999999999996, 0.07) and lt(t2.l_quantity, 24)
 
@@ -38,8 +39,22 @@ Project (redundant) [1.00 rows] -> dt1.revenue
 Executable Velox plan:
 
 Fragment 0: fragment1 SINGLE:
+-- Aggregation[3][SINGLE revenue := sum("dt1.__p55")] -> revenue:DOUBLE
+  -- Project[2][expressions: (dt1.__p55:DOUBLE, multiply("l_extendedprice","l_discount"))] -> "dt1.__p55":DOUBLE
+    -- Filter[1][expression: and(gte("l_shipdate",1994-01-01),lt("l_shipdate",1995-01-01),between("l_discount",0.049999999999999996,0.07),lt("l_quantity",24))] -> l_extendedprice:DOUBLE, l_discount:DOUBLE, l_quantity:DOUBLE, l_shipdate:DATE
+      -- TableScan[0]["default"."lineitem"] -> l_extendedprice:DOUBLE, l_discount:DOUBLE, l_quantity:DOUBLE, l_shipdate:DATE
+
+EXPLAIN ANALYZE:
+
+Fragment 0: fragment1 SINGLE:
 -- Aggregation[2][SINGLE revenue := sum("dt1.__p57")] -> revenue:DOUBLE
+   Estimate: 1 rows, 0B peak memory
+   Output: 1 rows (32B, 1 batches), Cpu time: 3.19ms, Wall time: 5.46ms, Blocked wall time: 0ns, Peak memory: 64.50KB, Memory allocations: 5, Threads: 1, CPU breakdown: B/I/O/F (1.40ms/1.08ms/374.25us/331.54us)
   -- Project[1][expressions: (dt1.__p57:DOUBLE, multiply("l_extendedprice","l_discount"))] -> "dt1.__p57":DOUBLE
+     Estimate: 325627 rows, 0B peak memory
+     Output: 114160 rows (1.03MB, 613 batches), Cpu time: 4.75ms, Wall time: 6.97ms, Blocked wall time: 0ns, Peak memory: 2.00KB, Memory allocations: 613, Threads: 1, CPU breakdown: B/I/O/F (1.35ms/360.36us/2.71ms/332.54us)
     -- TableScan[0][table: lineitem, range filters: [(l_discount, DoubleRange: [0.050000, 0.070000] no nulls), (l_quantity, DoubleRange: (-inf, 24.000000) no nulls), (l_shipdate, BigintRange: [8766, 9130] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_quantity, columnType: Regular, dataType: DOUBLE, requiredSubfields: [ ]], HiveColumnHandle [name: l_discount, columnType: Regular, dataType: DOUBLE, requiredSubfields: [ ]], HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_extendedprice:DOUBLE, l_discount:DOUBLE
+       Estimate: 325627 rows, 0B peak memory
+       Input: 114160 rows (31.04MB, 613 batches), Raw Input: 6001215 rows (55.11MB), Output: 114160 rows (31.04MB, 613 batches), Cpu time: 112.22ms, Wall time: 118.28ms, Blocked wall time: 0ns, Peak memory: 11.91MB, Memory allocations: 4211, Threads: 1, Splits: 2, CPU breakdown: B/I/O/F (355.30us/0ns/111.87ms/471ns)
 
 ___END___

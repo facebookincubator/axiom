@@ -1,3 +1,4 @@
+generated: 2026-06-14 18:29:33 (snapshot; regenerate with TpchPlanTest.makePlans)
 numWorkers: 1
 numDrivers: 1
 
@@ -8,51 +9,51 @@ dt1: 1.00 rows, revenue
     revenue := dt1.revenue DOUBLE (cardinality=1.00)
   tables: t2, t3
   joins:
-    t2 INNER t3 ON t2.l_partkey = t3.p_partkey [t2 → 0.00, t3 → 0.11]
-  syntactic join order: 19, 37
+    t2 INNER t3 ON t2.l_partkey = t3.p_partkey [t2 → 0.01, t3 → 1.06]
+  syntactic join order: 17, 33
   aggregates: sum(multiply(t2.l_extendedprice, minus(1, t2.l_discount))) AS revenue
   filter: __or(__and(between(t3.p_size, 1, 15), __and(lte(t2.l_quantity, 30), __and(gte(t2.l_quantity, 20), __and(eq(t3.p_brand, "Brand#34"), __in(t3.p_container, "LG CASE", "LG BOX", "LG PACK", "LG PKG"))))), __or(__and(between(t3.p_size, 1, 5), __and(lte(t2.l_quantity, 11), __and(gte(t2.l_quantity, 1), __and(eq(t3.p_brand, "Brand#12"), __in(t3.p_container, "SM CASE", "SM BOX", "SM PACK", "SM PKG"))))), __and(between(t3.p_size, 1, 10), __and(lte(t2.l_quantity, 20), __and(gte(t2.l_quantity, 10), __and(eq(t3.p_brand, "Brand#23"), __in(t3.p_container, "MED BAG", "MED BOX", "MED PKG", "MED PACK")))))))
 
-t2: 21268.69 rows, l_partkey, l_quantity, l_extendedprice, l_discount, l_shipinstruct, l_shipmode
+t2: 212527.38 rows, l_partkey, l_quantity, l_extendedprice, l_discount, l_shipinstruct, l_shipmode
   table: "default"."lineitem"
-    l_partkey BIGINT (cardinality=188473.00 min=1 max=200000)
+    l_partkey BIGINT (cardinality=200000.00 min=1 max=200000)
     l_quantity DOUBLE (cardinality=50.00 min=1 max=50)
-    l_extendedprice DOUBLE (cardinality=444713.00 min=901 max=104899.5)
+    l_extendedprice DOUBLE (cardinality=6001215.00 min=901 max=104949.5)
     l_discount DOUBLE (cardinality=11.00 min=0 max=0.1)
     l_shipinstruct VARCHAR (cardinality=1.00 min="DELIVER IN PERSON" max="DELIVER IN PERSON")
     l_shipmode VARCHAR (cardinality=2.00 min="AIR" max="AIR REG")
   single-column filters: __in(t2.l_shipmode, "AIR", "AIR REG") and eq(t2.l_shipinstruct, "DELIVER IN PERSON") and __or(__and(gte(t2.l_quantity, 20), lte(t2.l_quantity, 30)), __or(__and(gte(t2.l_quantity, 1), lte(t2.l_quantity, 11)), __and(gte(t2.l_quantity, 10), lte(t2.l_quantity, 20))))
 
-t3: 191.39 rows, p_partkey, p_brand, p_size, p_container
+t3: 1913.86 rows, p_partkey, p_brand, p_size, p_container
   table: "default"."part"
-    p_partkey BIGINT (cardinality=19675.00 min=1 max=20000)
-    p_brand VARCHAR (cardinality=25.00 min="Brand#11" max="Brand#55")
+    p_partkey BIGINT (cardinality=200000.00 min=1 max=200000)
+    p_brand VARCHAR (cardinality=25.00)
     p_size INTEGER (cardinality=50.00 min=1 max=50)
-    p_container VARCHAR (cardinality=40.00 min="JUMBO BAG" max="WRAP PKG")
+    p_container VARCHAR (cardinality=40.00)
   multi-column filters: __or(__and(between(t3.p_size, 1, 15), __and(eq(t3.p_brand, "Brand#34"), __in(t3.p_container, "LG CASE", "LG BOX", "LG PACK", "LG PKG"))), __or(__and(between(t3.p_size, 1, 5), __and(eq(t3.p_brand, "Brand#12"), __in(t3.p_container, "SM CASE", "SM BOX", "SM PACK", "SM PKG"))), __and(between(t3.p_size, 1, 10), __and(eq(t3.p_brand, "Brand#23"), __in(t3.p_container, "MED BAG", "MED BOX", "MED PKG", "MED PACK")))))
 
 
 Optimized plan (oneline):
 
-agg(("default"."lineitem" INNER "default"."part"))
+agg((lineitem INNER part))
 
 Optimized plan:
 
 Project (redundant) [1.00 rows] -> dt1.revenue
     dt1.revenue := dt1.revenue
   Aggregation [1.00 rows] -> dt1.revenue
-      dt1.revenue := sum(dt1.__p134)
-    Project [1.00 rows] -> dt1.__p134
-        dt1.__p134 := multiply(t2.l_extendedprice, minus(1, t2.l_discount))
-      Filter [1.00 rows] -> t2.l_quantity, t2.l_extendedprice, t2.l_discount, t3.p_brand, t3.p_size, t3.p_container
+      dt1.revenue := sum(dt1.__p130)
+    Project [5.74 rows] -> dt1.__p130
+        dt1.__p130 := multiply(t2.l_extendedprice, minus(1, t2.l_discount))
+      Filter [5.74 rows] -> t2.l_quantity, t2.l_extendedprice, t2.l_discount, t3.p_brand, t3.p_size, t3.p_container
           __or(__and(between(t3.p_size, 1, 15), __and(lte(t2.l_quantity, 30), __and(gte(t2.l_quantity, 20), __and(eq(t3.p_brand, "Brand#34"), __in(t3.p_container, "LG CASE", "LG BOX", "LG PACK", "LG PKG"))))), __or(__and(between(t3.p_size, 1, 5), __and(lte(t2.l_quantity, 11), __and(gte(t2.l_quantity, 1), __and(eq(t3.p_brand, "Brand#12"), __in(t3.p_container, "SM CASE", "SM BOX", "SM PACK", "SM PKG"))))), __and(between(t3.p_size, 1, 10), __and(lte(t2.l_quantity, 20), __and(gte(t2.l_quantity, 10), __and(eq(t3.p_brand, "Brand#23"), __in(t3.p_container, "MED BAG", "MED BOX", "MED PKG", "MED PACK")))))))
-        Join INNER Hash [20.67 rows] -> t2.l_quantity, t2.l_extendedprice, t2.l_discount, t3.p_brand, t3.p_size, t3.p_container
+        Join INNER Hash [2033.74 rows] -> t2.l_quantity, t2.l_extendedprice, t2.l_discount, t3.p_brand, t3.p_size, t3.p_container
             t2.l_partkey = t3.p_partkey
-          TableScan [21268.69 rows] -> t2.l_partkey, t2.l_quantity, t2.l_extendedprice, t2.l_discount
+          TableScan [212527.38 rows] -> t2.l_partkey, t2.l_quantity, t2.l_extendedprice, t2.l_discount
             table: "default"."lineitem"
             single-column filters: __in(t2.l_shipmode, "AIR", "AIR REG") and eq(t2.l_shipinstruct, "DELIVER IN PERSON") and __or(__and(gte(t2.l_quantity, 20), lte(t2.l_quantity, 30)), __or(__and(gte(t2.l_quantity, 1), lte(t2.l_quantity, 11)), __and(gte(t2.l_quantity, 10), lte(t2.l_quantity, 20))))
-          HashBuild [191.39 rows] -> t3.p_partkey, t3.p_brand, t3.p_size, t3.p_container
-            TableScan [191.39 rows] -> t3.p_partkey, t3.p_brand, t3.p_size, t3.p_container
+          HashBuild [1913.86 rows] -> t3.p_partkey, t3.p_brand, t3.p_size, t3.p_container
+            TableScan [1913.86 rows] -> t3.p_partkey, t3.p_brand, t3.p_size, t3.p_container
               table: "default"."part"
               multi-column filters: __or(__and(between(t3.p_size, 1, 15), __and(eq(t3.p_brand, "Brand#34"), __in(t3.p_container, "LG CASE", "LG BOX", "LG PACK", "LG PKG"))), __or(__and(between(t3.p_size, 1, 5), __and(eq(t3.p_brand, "Brand#12"), __in(t3.p_container, "SM CASE", "SM BOX", "SM PACK", "SM PKG"))), __and(between(t3.p_size, 1, 10), __and(eq(t3.p_brand, "Brand#23"), __in(t3.p_container, "MED BAG", "MED BOX", "MED PKG", "MED PACK")))))
 
@@ -60,11 +61,35 @@ Project (redundant) [1.00 rows] -> dt1.revenue
 Executable Velox plan:
 
 Fragment 0: fragment1 SINGLE:
--- Aggregation[5][SINGLE revenue := sum("dt1.__p134")] -> revenue:DOUBLE
-  -- Project[4][expressions: (dt1.__p134:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> "dt1.__p134":DOUBLE
+-- Aggregation[7][SINGLE revenue := sum("dt1.__p130")] -> revenue:DOUBLE
+  -- Project[6][expressions: (dt1.__p130:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> "dt1.__p130":DOUBLE
     -- Filter[0][expression: or(and(between("p_size",1,15),and(lte("l_quantity",30),and(gte("l_quantity",20),and(eq("p_brand",Brand#34),in("p_container",{LG CASE, LG BOX, LG PACK, LG PKG}))))),or(and(between("p_size",1,5),and(lte("l_quantity",11),and(gte("l_quantity",1),and(eq("p_brand",Brand#12),in("p_container",{SM CASE, SM BOX, SM PACK, SM PKG}))))),and(between("p_size",1,10),and(lte("l_quantity",20),and(gte("l_quantity",10),and(eq("p_brand",Brand#23),in("p_container",{MED BAG, MED BOX, MED PKG, MED PACK})))))))] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, p_brand:VARCHAR, p_size:INTEGER, p_container:VARCHAR
+      -- HashJoin[5][INNER l_partkey=p_partkey] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, p_brand:VARCHAR, p_size:INTEGER, p_container:VARCHAR
+        -- Filter[2][expression: and(in("l_shipmode",{AIR, AIR REG}),eq("l_shipinstruct",DELIVER IN PERSON),or(and(gte("l_quantity",20),lte("l_quantity",30)),or(and(gte("l_quantity",1),lte("l_quantity",11)),and(gte("l_quantity",10),lte("l_quantity",20)))))] -> l_partkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, l_shipinstruct:VARCHAR, l_shipmode:VARCHAR
+          -- TableScan[1]["default"."lineitem"] -> l_partkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, l_shipinstruct:VARCHAR, l_shipmode:VARCHAR
+        -- Filter[4][expression: or(and(between("p_size",1,15),and(eq("p_brand",Brand#34),in("p_container",{LG CASE, LG BOX, LG PACK, LG PKG}))),or(and(between("p_size",1,5),and(eq("p_brand",Brand#12),in("p_container",{SM CASE, SM BOX, SM PACK, SM PKG}))),and(between("p_size",1,10),and(eq("p_brand",Brand#23),in("p_container",{MED BAG, MED BOX, MED PKG, MED PACK})))))] -> p_partkey:BIGINT, p_brand:VARCHAR, p_size:INTEGER, p_container:VARCHAR
+          -- TableScan[3]["default"."part"] -> p_partkey:BIGINT, p_brand:VARCHAR, p_size:INTEGER, p_container:VARCHAR
+
+EXPLAIN ANALYZE:
+
+Fragment 0: fragment1 SINGLE:
+-- Aggregation[5][SINGLE revenue := sum("dt1.__p134")] -> revenue:DOUBLE
+   Estimate: 1 rows, 0B peak memory
+   Output: 1 rows (32B, 1 batches), Cpu time: 550.22us, Wall time: 900.04us, Blocked wall time: 0ns, Peak memory: 64.50KB, Memory allocations: 5, Threads: 1, CPU breakdown: B/I/O/F (255.32us/175.78us/71.34us/47.77us)
+  -- Project[4][expressions: (dt1.__p134:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> "dt1.__p134":DOUBLE
+     Estimate: 5.85003 rows, 0B peak memory
+     Output: 121 rows (2.96KB, 104 batches), Cpu time: 4.42ms, Wall time: 5.11ms, Blocked wall time: 0ns, Peak memory: 1.75KB, Memory allocations: 1187, Threads: 1, CPU breakdown: B/I/O/F (480.73us/107.29us/3.72ms/111.45us)
+    -- Filter[0][expression: or(and(between("p_size",1,15),and(lte("l_quantity",30),and(gte("l_quantity",20),and(eq("p_brand",Brand#34),in("p_container",{LG CASE, LG BOX, LG PACK, LG PKG}))))),or(and(between("p_size",1,5),and(lte("l_quantity",11),and(gte("l_quantity",1),and(eq("p_brand",Brand#12),in("p_container",{SM CASE, SM BOX, SM PACK, SM PKG}))))),and(between("p_size",1,10),and(lte("l_quantity",20),and(gte("l_quantity",10),and(eq("p_brand",Brand#23),in("p_container",{MED BAG, MED BOX, MED PKG, MED PACK})))))))] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, p_brand:VARCHAR, p_size:INTEGER, p_container:VARCHAR
+       Estimate: 5.85003 rows, 0B peak memory
+       Output: 121 rows (25.64KB, 104 batches), Cpu time: 0ns, Wall time: 0ns, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (0ns/0ns/0ns/0ns)
       -- HashJoin[3][INNER l_partkey=p_partkey] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, p_brand:VARCHAR, p_size:INTEGER, p_container:VARCHAR
+         Estimate: 2072.35 rows, 0B peak memory
+         Output: 323 rows (68.44KB, 246 batches), Cpu time: 2.80ms, Wall time: 3.67ms, Blocked wall time: 17.84ms, Peak memory: 1.62MB, Memory allocations: 16, CPU breakdown: B/I/O/F (563.62us/552.20us/1.04ms/641.81us)
         -- TableScan[1][table: lineitem, range filters: [(l_quantity, DoubleRange: [1.000000, 30.000000] no nulls), (l_shipinstruct, Filter(BytesValues, deterministic, no nulls)), (l_shipmode, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_quantity, columnType: Regular, dataType: DOUBLE, requiredSubfields: [ ]], HiveColumnHandle [name: l_shipinstruct, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: l_shipmode, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> l_partkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE
+           Estimate: 212527 rows, 0B peak memory
+           Input: 323 rows (23.04MB, 246 batches), Raw Input: 6001215 rows (72.35MB), Output: 323 rows (23.04MB, 246 batches), Cpu time: 196.39ms, Wall time: 226.99ms, Blocked wall time: 0ns, Peak memory: 20.00MB, Memory allocations: 4398, Threads: 1, Splits: 2, DynamicFilter producer plan nodes: 3, CPU breakdown: B/I/O/F (116.03us/0ns/196.27ms/491ns)
         -- TableScan[2][table: part, remaining filter: (or(and(between("p_size",1,15),and(eq("p_brand",Brand#34),in("p_container",{LG CASE, LG BOX, LG PACK, LG PKG}))),or(and(between("p_size",1,5),and(eq("p_brand",Brand#12),in("p_container",{SM CASE, SM BOX, SM PACK, SM PKG}))),and(between("p_size",1,10),and(eq("p_brand",Brand#23),in("p_container",{MED BAG, MED BOX, MED PKG, MED PACK})))))), data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_container, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: p_brand, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: p_size, columnType: Regular, dataType: INTEGER, requiredSubfields: [ ]]]] -> p_partkey:BIGINT, p_brand:VARCHAR, p_size:INTEGER, p_container:VARCHAR
+           Estimate: 1913.86 rows, 0B peak memory
+           Input: 485 rows (2.36MB, 20 batches), Raw Input: 200000 rows (5.62MB), Output: 485 rows (2.36MB, 20 batches), Cpu time: 11.37ms, Wall time: 17.34ms, Blocked wall time: 0ns, Peak memory: 5.75MB, Memory allocations: 599, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (6.91us/0ns/11.36ms/301ns)
 
 ___END___
