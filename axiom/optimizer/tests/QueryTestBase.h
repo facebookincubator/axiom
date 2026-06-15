@@ -95,6 +95,11 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
   /// Unregisters exchange sources.
   void TearDown() override;
 
+  /// Populates 'testConnector_' before each test. The default registers the
+  /// TPC-H tables without statistics. Override to register different tables or
+  /// to attach statistics (e.g. via addTpchTables(scaleFactor)).
+  virtual void configureTestConnector();
+
   logical_plan::LogicalPlanNodePtr parseSelect(
       std::string_view sql,
       const std::string& defaultConnectorId,

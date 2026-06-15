@@ -67,7 +67,7 @@ void QueryTestBase::SetUp() {
   velox::connector::registerConnector(testConnector_);
   connector::ConnectorMetadataRegistry::global().insert(
       kTestConnectorId, testConnector_->metadata());
-  testConnector_->addTpchTables();
+  configureTestConnector();
 
   optimizerPool_ = rootPool_->addLeafChild("optimizer");
 
@@ -79,6 +79,10 @@ void QueryTestBase::SetUp() {
 
   optimizerOptions_ = OptimizerOptions();
   optimizerOptions_.traceFlags = FLAGS_optimizer_trace;
+}
+
+void QueryTestBase::configureTestConnector() {
+  testConnector_->addTpchTables();
 }
 
 void QueryTestBase::TearDown() {
