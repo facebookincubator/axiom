@@ -190,3 +190,9 @@ SELECT * FROM (VALUES (1, null, 'b')) t(x, y, z)
 -- UNION DISTINCT with an outer filter that pushes into the legs and
 -- reduces the constant leg to zero rows; dedup still applies.
 SELECT k FROM (SELECT 1 AS k UNION SELECT a AS k FROM t) WHERE k > 1
+----
+-- UNION ALL where each leg filters on a column absent from the output: the
+-- filter-only column is pruned from every leg, including the first.
+SELECT a FROM t WHERE b > 50
+UNION ALL
+SELECT a FROM t WHERE b > 100

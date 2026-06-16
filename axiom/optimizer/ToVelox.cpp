@@ -1985,20 +1985,35 @@ velox::core::PlanNodePtr ToVelox::makeUnionAll(
   }
 
   // LocalPartitionNode requires all sources to have the same output type
-  // (including column names). Add a rename project to sources whose column
-  // names differ from the first source.
-  const auto& targetType = sources[0]->outputType();
-  for (auto i = 1; i < sources.size(); ++i) {
-    auto& source = sources[i];
+  // (names and types). Project each leg to the UnionAll's declared output
+  // columns: this renames a leg's columns to the output names and drops the
+  // trailing columns a leg's scan carries when a non-pushed filter widened it.
+  // The output columns are a leg's leading columns; filter-only columns are
+  // appended after them.
+  const auto targetType = makeOutputType(unionAll.columns());
+  for (auto& source : sources) {
     const auto& sourceType = source->outputType();
-    if (*targetType != *sourceType) {
-      VELOX_CHECK(targetType->equivalent(*sourceType));
-      source = std::make_shared<velox::core::ProjectNode>(
-          nextId(),
-          folly::copy(targetType->names()),
-          identityProjections(sourceType),
-          source);
+    if (*sourceType == *targetType) {
+      continue;
     }
+    VELOX_CHECK_GE(sourceType->size(), targetType->size());
+    std::vector<velox::core::TypedExprPtr> projections;
+    projections.reserve(targetType->size());
+    for (auto i = 0; i < targetType->size(); ++i) {
+      VELOX_CHECK(
+          sourceType->childAt(i)->equivalent(*targetType->childAt(i)),
+          "UNION ALL leg column type does not match output type: {} vs {}",
+          sourceType->childAt(i)->toString(),
+          targetType->childAt(i)->toString());
+      projections.push_back(
+          std::make_shared<velox::core::FieldAccessTypedExpr>(
+              sourceType->childAt(i), sourceType->nameOf(i)));
+    }
+    source = std::make_shared<velox::core::ProjectNode>(
+        nextId(),
+        folly::copy(targetType->names()),
+        std::move(projections),
+        source);
   }
 
   return std::make_shared<velox::core::LocalPartitionNode>(
