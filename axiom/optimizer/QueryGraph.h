@@ -17,6 +17,7 @@
 #pragma once
 
 #include "axiom/logical_plan/LogicalPlanNode.h"
+#include "axiom/optimizer/EstimateMath.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/PathSet.h"
 #include "axiom/optimizer/Schema.h"
@@ -480,7 +481,7 @@ struct Equivalence {
 struct JoinSide {
   PlanObjectCP table;
   const ExprVector& keys;
-  const float fanout;
+  const std::optional<float> fanout;
   const velox::core::JoinType joinType;
   ColumnCP markColumn;
   const bool isUnique;
@@ -734,11 +735,11 @@ class JoinEdge {
     return rightKeys_;
   }
 
-  float lrFanout() const {
+  std::optional<float> lrFanout() const {
     return lrFanout_;
   }
 
-  float rlFanout() const {
+  std::optional<float> rlFanout() const {
     return rlFanout_;
   }
 
@@ -883,13 +884,14 @@ class JoinEdge {
   /// Returns the table on the other side of 'table' and the number of rows in
   /// the returned table for one row in 'table'. Returns {nullptr, 0} if the
   /// 'other' side of the join has multiple tables.
-  std::pair<PlanObjectCP, float> otherTable(PlanObjectCP table) const {
+  std::pair<PlanObjectCP, std::optional<float>> otherTable(
+      PlanObjectCP table) const {
     VELOX_DCHECK_NOT_NULL(table);
     return leftTable_ == table
-        ? std::pair<PlanObjectCP, float>{rightTable_, lrFanout_}
+        ? std::pair<PlanObjectCP, std::optional<float>>{rightTable_, lrFanout_}
         : rightTable_ == table && leftTable_ != nullptr
-        ? std::pair<PlanObjectCP, float>{leftTable_, rlFanout_}
-        : std::pair<PlanObjectCP, float>{nullptr, 0};
+        ? std::pair<PlanObjectCP, std::optional<float>>{leftTable_, rlFanout_}
+        : std::pair<PlanObjectCP, std::optional<float>>{nullptr, 0};
   }
 
   PlanObjectCP otherSide(PlanObjectCP side) const {
@@ -908,7 +910,9 @@ class JoinEdge {
     return filter_;
   }
 
-  void setFanouts(float leftToRight, float rightToLeft) {
+  void setFanouts(
+      std::optional<float> leftToRight,
+      std::optional<float> rightToLeft) {
     fanoutsFixed_ = true;
     lrFanout_ = leftToRight;
     rlFanout_ = rightToLeft;
@@ -943,10 +947,10 @@ class JoinEdge {
   const ExprVector filter_;
 
   // Number of right side rows selected for one row on the left.
-  float lrFanout_{1};
+  std::optional<float> lrFanout_{1};
 
   // Number of left side rows selected for one row on the right.
-  float rlFanout_{1};
+  std::optional<float> rlFanout_{1};
 
   // True if 'lrFanout_' and 'rlFanout_' are set by setFanouts.
   bool fanoutsFixed_{false};
@@ -1019,8 +1023,9 @@ struct BaseTable : public PlanObject {
   ExprVector filter;
 
   /// Estimated number of rows after applying all filters involving this table
-  /// only. Initialized to schemaTable->cardinality (no filtering).
-  float filteredCardinality{0};
+  /// only. Initialized to schemaTable->cardinality (no filtering). nullopt if
+  /// the cardinality is unknown.
+  std::optional<float> filteredCardinality{0};
 
   SubfieldSet controlSubfields;
 
@@ -1508,8 +1513,8 @@ using WritePlanCP = const WritePlan*;
 /// UnnestTable, or DerivedTable.
 Name cname(PlanObjectCP relation);
 
-/// @return estimated number of rows in 'table'. 'table' must be a BaseTable,
-/// ValuesTable, UnnestTable, or DerivedTable.
-float tableCardinality(PlanObjectCP table);
+/// @return estimated number of rows in 'table', or nullopt if unknown. 'table'
+/// must be a BaseTable, ValuesTable, UnnestTable, or DerivedTable.
+std::optional<float> tableCardinality(PlanObjectCP table);
 
 } // namespace facebook::axiom::optimizer

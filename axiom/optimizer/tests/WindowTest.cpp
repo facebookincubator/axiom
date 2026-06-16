@@ -677,8 +677,8 @@ TEST_F(WindowTest, leftJoinWithWindowOrderingByRightSideColumn) {
       "LEFT JOIN u ON u.x = t.x "
       "WHERE t.x = u.x");
 
-  auto matcher = matchScan("u")
-                     .hashJoin(matchScan("t").build(), core::JoinType::kInner)
+  auto matcher = matchScan("t")
+                     .hashJoin(matchScan("u").build(), core::JoinType::kInner)
                      .window({"row_number() OVER (ORDER BY y)"})
                      .project()
                      .build();

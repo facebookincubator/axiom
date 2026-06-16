@@ -29,7 +29,7 @@
 namespace facebook::axiom::optimizer {
 
 void PlanCost::add(RelationOp& op) {
-  cost += op.cost().totalCost();
+  cost = optimizer::add(cost, op.cost().totalCost());
   cardinality = op.resultCardinality();
 }
 
@@ -85,7 +85,7 @@ std::string itemsToString(const T* items, size_t n) {
 // For non-leaf nodes, the fanout represents the change in cardinality (output
 // cardinality / input cardinality), and the unitCost is the per-row cost.
 void updateLeafCost(
-    float cardinality,
+    std::optional<float> cardinality,
     const ColumnVector& columns,
     Cost& cost) {
   cost.fanout = cardinality;
@@ -94,20 +94,21 @@ void updateLeafCost(
   const auto numColumns = static_cast<float>(columns.size());
   const auto rowCost = numColumns * Costs::kColumnRowCost +
       std::max<float>(0, size - 8 * numColumns) * Costs::kColumnByteCost;
-  cost.unitCost += cost.fanout * rowCost;
+  // An unknown cardinality makes the unit cost unknown.
+  cost.unitCost = mul(cost.fanout, rowCost);
 }
 
-float orderPrefixDistance(
+std::optional<float> orderPrefixDistance(
     const RelationOpPtr& input,
     ColumnGroupCP index,
     const ExprVector& keys) {
   const auto& orderKeys = index->distribution.orderKeys();
-  float selection = 1;
+  std::optional<float> selection = 1;
   for (int32_t i = 0; i < input->distribution().orderKeys().size() &&
        i < orderKeys.size() && i < keys.size();
        ++i) {
     if (input->distribution().orderKeys()[i]->sameOrEqual(*keys[i])) {
-      selection *= orderKeys[i]->value().cardinality;
+      selection = mul(selection, orderKeys[i]->value().cardinality);
     }
   }
   return selection;
@@ -135,7 +136,7 @@ TableScan::TableScan(
     Distribution distribution,
     BaseTableCP table,
     ColumnGroupCP index,
-    float fanout,
+    std::optional<float> fanout,
     ColumnVector columns,
     ExprVector lookupKeys,
     velox::core::JoinType joinType,
@@ -161,20 +162,25 @@ TableScan::TableScan(
   }
 
   if (!keys.empty()) {
-    float lookupRange(index->table->cardinality);
-    float orderSelectivity = orderPrefixDistance(input_, index, keys);
-    auto distance = lookupRange / std::max<float>(1, orderSelectivity);
-    float batchSize = std::min<float>(cost_.inputCardinality, 10000);
-    if (orderSelectivity == 1) {
-      // The data does not come in key order.
-      float batchCost = index->lookupCost(lookupRange) +
-          index->lookupCost(lookupRange / batchSize) *
-              std::max<float>(1, batchSize);
-      cost_.unitCost = batchCost / batchSize;
-    } else {
-      float batchCost = index->lookupCost(lookupRange) +
-          index->lookupCost(distance) * std::max<float>(1, batchSize);
-      cost_.unitCost = batchCost / batchSize;
+    const auto orderSelectivityOpt = orderPrefixDistance(input_, index, keys);
+    // The lookup unit cost is unknown if the input cardinality (batch size) or
+    // the order selectivity could not be estimated.
+    if (cost_.inputCardinality.has_value() && orderSelectivityOpt.has_value()) {
+      float lookupRange(index->table->cardinality);
+      float orderSelectivity = *orderSelectivityOpt;
+      auto distance = lookupRange / std::max<float>(1, orderSelectivity);
+      float batchSize = std::min<float>(*cost_.inputCardinality, 10000);
+      if (orderSelectivity == 1) {
+        // The data does not come in key order.
+        float batchCost = index->lookupCost(lookupRange) +
+            index->lookupCost(lookupRange / batchSize) *
+                std::max<float>(1, batchSize);
+        cost_.unitCost = batchCost / batchSize;
+      } else {
+        float batchCost = index->lookupCost(lookupRange) +
+            index->lookupCost(distance) * std::max<float>(1, batchSize);
+        cost_.unitCost = batchCost / batchSize;
+      }
     }
     return;
   }
@@ -182,11 +188,14 @@ TableScan::TableScan(
   const auto cardinality = baseTable->filteredCardinality;
   updateLeafCost(cardinality, columns_, cost_);
 
-  // Cap column cardinalities to the output row count.
-  const auto outputCardinality = resultCardinality();
-  for (auto& [id, constraint] : constraints_) {
-    constraint.cardinality =
-        std::min(constraint.cardinality, outputCardinality);
+  // Cap column cardinalities to the output row count. Skip when the output
+  // cardinality is unknown so a known NDV is not wiped out.
+  const std::optional<float> outputCardinality = resultCardinality();
+  if (outputCardinality.has_value()) {
+    for (auto& [id, constraint] : constraints_) {
+      constraint.cardinality =
+          minOf(constraint.cardinality, *outputCardinality);
+    }
   }
 }
 
@@ -204,30 +213,55 @@ Distribution TableScan::outputDistribution(
   return index->distribution.rename(schemaColumns, columns);
 }
 
+namespace {
+std::string formatNumber(std::optional<float> value) {
+  return value.has_value() ? succinctNumber(*value) : "?";
+}
+
+std::string formatBytes(std::optional<float> value) {
+  return value.has_value() ? velox::succinctBytes(static_cast<uint64_t>(*value))
+                           : "?";
+}
+} // namespace
+
 std::string Cost::toString(bool /*detail*/, bool isUnit) const {
   std::stringstream out;
-  float multiplier = isUnit ? 1 : inputCardinality;
-  out << succinctNumber(fanout * multiplier) << " rows "
-      << succinctNumber(unitCost * multiplier) << "CU";
+  const std::optional<float> multiplier =
+      isUnit ? std::optional<float>(1) : inputCardinality;
+  out << formatNumber(mul(fanout, multiplier)) << " rows "
+      << formatNumber(mul(unitCost, multiplier)) << "CU";
 
-  if (totalBytes > 0) {
-    out << " build= "
-        << velox::succinctBytes(static_cast<uint64_t>(totalBytes));
+  // Show byte volumes when unknown or known-positive; skip a known zero.
+  if (!totalBytes.has_value() || *totalBytes > 0) {
+    out << " build= " << formatBytes(totalBytes);
   }
-  if (transferBytes > 0) {
-    out << " network= "
-        << velox::succinctBytes(static_cast<uint64_t>(transferBytes));
+  if (!transferBytes.has_value() || *transferBytes > 0) {
+    out << " network= " << formatBytes(transferBytes);
   }
   return out.str();
+}
+
+std::string PlanCost::toString() const {
+  const auto format = [](std::optional<float> value) -> std::string {
+    return value.has_value()
+        ? fmt::format(std::locale("en_US.UTF-8"), "{:L}", *value)
+        : "?";
+  };
+  return fmt::format(
+      "cost: {}, cardinality: {}", format(cost), format(cardinality));
 }
 
 void RelationOp::checkInputCardinality() const {
   if (input_ != nullptr) {
     const auto inputCardinality = input_->resultCardinality();
-    VELOX_CHECK(std::isfinite(inputCardinality));
+    // Only validate when the cardinality is known; an unknown estimate
+    // legitimately propagates as nullopt.
+    if (inputCardinality.has_value()) {
+      VELOX_CHECK(std::isfinite(*inputCardinality));
 
-    // TODO Assert that inputCardinality > 0.
-    VELOX_CHECK_GE(inputCardinality, 0);
+      // TODO Assert that inputCardinality > 0.
+      VELOX_CHECK_GE(*inputCardinality, 0);
+    }
   }
 }
 
@@ -263,9 +297,9 @@ std::string RelationOp::toOneline() const {
 void RelationOp::printCost(bool detail, std::stringstream& out) const {
   auto ctx = queryCtx();
   if (ctx && ctx->contextPlan()) {
-    auto planCost = ctx->contextPlan()->cost.cost;
-    auto pct = 100 * cost_.totalCost() / planCost;
-    out << " " << std::fixed << std::setprecision(2) << pct << "% ";
+    const auto planCost = ctx->contextPlan()->cost.cost;
+    const auto pct = divide(mul(cost_.totalCost(), 100), planCost);
+    out << " " << formatNumber(pct) << "% ";
   }
   if (detail) {
     out << " " << cost_.toString(detail, false) << std::endl;
@@ -495,17 +529,23 @@ struct JoinConstraints {
     // any right row = max(0, 1 - ndv(right) / ndv(left)).
     //
     // For RIGHT JOIN: same logic with sides reversed.
-    float leftNullFraction = 0.0f;
-    float rightNullFraction = 0.0f;
+    // Null fraction is unknown when either side's NDV is unknown; otherwise it
+    // defaults to 0 and is refined from the NDV ratio below.
+    const bool cardinalitiesKnown =
+        leftValue.cardinality.has_value() && rightValue.cardinality.has_value();
+    std::optional<float> leftNullFraction =
+        cardinalitiesKnown ? std::optional<float>(0.0f) : std::nullopt;
+    std::optional<float> rightNullFraction =
+        cardinalitiesKnown ? std::optional<float>(0.0f) : std::nullopt;
 
-    if (leftOptional && rightValue.cardinality > 0) {
-      leftNullFraction =
-          std::max(0.0f, 1.0f - leftValue.cardinality / rightValue.cardinality);
+    if (leftOptional && cardinalitiesKnown && *rightValue.cardinality > 0) {
+      leftNullFraction = std::max(
+          0.0f, 1.0f - *leftValue.cardinality / *rightValue.cardinality);
     }
 
-    if (rightOptional && leftValue.cardinality > 0) {
-      rightNullFraction =
-          std::max(0.0f, 1.0f - rightValue.cardinality / leftValue.cardinality);
+    if (rightOptional && cardinalitiesKnown && *leftValue.cardinality > 0) {
+      rightNullFraction = std::max(
+          0.0f, 1.0f - *rightValue.cardinality / *leftValue.cardinality);
     }
 
     if (leftOptional) {
@@ -611,7 +651,7 @@ struct JoinConstraints {
   static void updatePayload(
       const ColumnVector& columns,
       const ExprVector& keys,
-      float nullFraction,
+      std::optional<float> nullFraction,
       ConstraintMap& constraints) {
     auto keyIds = PlanObjectSet::fromObjects(keys);
 
@@ -630,7 +670,7 @@ struct JoinConstraints {
   // Computes the null fraction for the optional side of an outer join.
   // Returns the fraction of rows on the non-optional side that don't
   // find a match, i.e. max(0, 1 - ndv(optional_key) / ndv(non_optional_key)).
-  static float computeNullFraction(
+  static std::optional<float> computeNullFraction(
       const ExprVector& optionalKeys,
       const ExprVector& nonOptionalKeys,
       const ConstraintMap& constraints) {
@@ -638,13 +678,19 @@ struct JoinConstraints {
     for (size_t i = 0; i < optionalKeys.size(); ++i) {
       const auto& optionalValue = value(constraints, optionalKeys[i]);
       const auto& nonOptionalValue = value(constraints, nonOptionalKeys[i]);
-      if (nonOptionalValue.cardinality > 0) {
+      // An unknown NDV on either side makes the null fraction unknown.
+      if (!optionalValue.cardinality.has_value() ||
+          !nonOptionalValue.cardinality.has_value()) {
+        return std::nullopt;
+      }
+      if (*nonOptionalValue.cardinality > 0) {
         nullFraction = std::max(
             nullFraction,
             std::max(
                 0.0f,
                 1.0f -
-                    optionalValue.cardinality / nonOptionalValue.cardinality));
+                    *optionalValue.cardinality /
+                        *nonOptionalValue.cardinality));
       }
     }
     return nullFraction;
@@ -655,8 +701,8 @@ struct JoinConstraints {
   // match. Computes trueFraction from raw fanout and filter selectivity.
   static void addMark(
       const ColumnVector& columns,
-      float fanout,
-      float filterSelectivity,
+      std::optional<float> fanout,
+      std::optional<float> filterSelectivity,
       ConstraintMap& constraints) {
     VELOX_DCHECK(!columns.empty(), "LeftSemiProject must have columns");
 
@@ -665,7 +711,9 @@ struct JoinConstraints {
         markColumn->value().type->isBoolean(), "Mark column must be boolean");
 
     Value markValue = markColumn->value();
-    markValue.trueFraction = std::min<float>(1, fanout) * filterSelectivity;
+    // An unknown fanout or filter selectivity makes the mark's true fraction
+    // unknown.
+    markValue.trueFraction = mul(minOf(fanout, 1.0f), filterSelectivity);
     markValue.nullable = false;
     markValue.nullFraction = 0;
 
@@ -679,9 +727,11 @@ struct JoinConstraints {
       const ColumnVector& columns,
       const ExprVector& keys,
       float selectivity,
-      float numRows,
+      std::optional<float> numRows,
       ConstraintMap& constraints) {
-    if (selectivity >= 1.0f) {
+    // Without a known input row count the scaled NDV cannot be estimated;
+    // leave payload cardinalities unchanged.
+    if (selectivity >= 1.0f || !numRows.has_value()) {
       return;
     }
     auto keyIds = PlanObjectSet::fromObjects(keys);
@@ -690,11 +740,11 @@ struct JoinConstraints {
         continue;
       }
       auto it = constraints.find(column->id());
-      if (it != constraints.end()) {
+      if (it != constraints.end() && it->second.cardinality.has_value()) {
         it->second.cardinality = std::max(
             1.0f,
             (float)expectedNumDistincts(
-                numRows * selectivity, it->second.cardinality));
+                *numRows * selectivity, *it->second.cardinality));
       }
     }
   }
@@ -720,15 +770,21 @@ struct JoinConstraints {
       auto it = constraints.find(leftKeys[i]->id());
       if (it != constraints.end()) {
         auto& value = it->second;
-        const float minNdv =
-            std::min(value.cardinality, rightKeys[i]->value().cardinality);
-        value.cardinality = std::max(1.0f, value.cardinality - minNdv);
+        const auto rightNdv = rightKeys[i]->value().cardinality;
+        // Refine NDV only when both the left and right key NDVs are known.
+        if (value.cardinality.has_value() && rightNdv.has_value()) {
+          const float minNdv = std::min(*value.cardinality, *rightNdv);
+          value.cardinality = std::max(1.0f, *value.cardinality - minNdv);
+        }
 
-        const float survivingFraction =
-            value.nullFraction + (1.0f - value.nullFraction) * antiSelectivity;
-        value.nullFraction = survivingFraction > 0
-            ? value.nullFraction / survivingFraction
-            : 0.0f;
+        // Refine the surviving null fraction only when it is known.
+        if (value.nullFraction.has_value()) {
+          const float survivingFraction = *value.nullFraction +
+              (1.0f - *value.nullFraction) * antiSelectivity;
+          value.nullFraction = survivingFraction > 0
+              ? *value.nullFraction / survivingFraction
+              : 0.0f;
+        }
       }
     }
   }
@@ -784,8 +840,8 @@ Join::Join(
     ExprVector lhsKeys,
     ExprVector rhsKeys,
     ExprVector filterExprs,
-    float fanout,
-    float rlFanout,
+    std::optional<float> fanout,
+    std::optional<float> rlFanout,
     ColumnVector columns)
     : RelationOp{RelType::kJoin, std::move(lhs), std::move(columns)},
       method{method},
@@ -805,12 +861,12 @@ Join::Join(
     VELOX_DCHECK(key->is(PlanType::kColumnExpr));
   }
 #endif
-  float filterSelectivity = computeFilterSelectivity();
+  std::optional<float> filterSelectivity = computeFilterSelectivity();
   initConstraints(fanout, rlFanout, filterSelectivity);
   initCost(fanout, rlFanout, filterSelectivity);
 }
 
-float Join::computeFilterSelectivity() const {
+std::optional<float> Join::computeFilterSelectivity() const {
   if (filter.empty()) {
     return 1.0f;
   }
@@ -818,13 +874,18 @@ float Join::computeFilterSelectivity() const {
   for (const auto& [columnId, constraint] : right->constraints()) {
     inputConstraints.emplace(columnId, constraint);
   }
-  return conjunctsSelectivity(inputConstraints, filter, false).trueFraction;
+  const auto selectivity =
+      conjunctsSelectivity(inputConstraints, filter, false);
+  if (!selectivity.has_value()) {
+    return std::nullopt;
+  }
+  return selectivity->trueFraction;
 }
 
 void Join::initConstraints(
-    float fanout,
-    float rlFanout,
-    float filterSelectivity) {
+    std::optional<float> fanout,
+    std::optional<float> rlFanout,
+    std::optional<float> filterSelectivity) {
   // Add constraints for output columns only.
   auto outputColumnIds = PlanObjectSet::fromObjects(columns_);
   for (const auto& [columnId, constraint] : input_->constraints()) {
@@ -840,16 +901,21 @@ void Join::initConstraints(
 
   if (joinType == velox::core::JoinType::kAnti ||
       joinType == velox::core::JoinType::kCountingAnti) {
-    const float antiSelectivity =
-        std::max(0.0f, 1.0f - fanout * filterSelectivity);
-    JoinConstraints::updateAntiKeys(
-        leftKeys, rightKeys, antiSelectivity, constraints_);
-    JoinConstraints::scalePayloadCardinality(
-        input_->columns(),
-        leftKeys,
-        antiSelectivity,
-        inputCardinality(),
-        constraints_);
+    // Without a known fanout or filter selectivity the anti-join selectivity is
+    // unknown, so key/payload NDV refinements are skipped and constraints flow
+    // through.
+    if (fanout.has_value() && filterSelectivity.has_value()) {
+      const float antiSelectivity =
+          std::max(0.0f, 1.0f - *fanout * *filterSelectivity);
+      JoinConstraints::updateAntiKeys(
+          leftKeys, rightKeys, antiSelectivity, constraints_);
+      JoinConstraints::scalePayloadCardinality(
+          input_->columns(),
+          leftKeys,
+          antiSelectivity,
+          inputCardinality(),
+          constraints_);
+    }
     return;
   }
 
@@ -865,13 +931,13 @@ void Join::initConstraints(
   // Update constraints for optional-side payload columns.
   // This uses the same ndv-based formula as updateKey().
   if (leftOptional) {
-    const float leftNullFraction =
+    const std::optional<float> leftNullFraction =
         JoinConstraints::computeNullFraction(leftKeys, rightKeys, constraints_);
     JoinConstraints::updatePayload(
         input_->columns(), leftKeys, leftNullFraction, constraints_);
   }
   if (rightOptional) {
-    const float rightNullFraction =
+    const std::optional<float> rightNullFraction =
         JoinConstraints::computeNullFraction(rightKeys, leftKeys, constraints_);
     JoinConstraints::updatePayload(
         right->columns(), rightKeys, rightNullFraction, constraints_);
@@ -879,10 +945,11 @@ void Join::initConstraints(
 
   // Scale non-key payload cardinalities when the join eliminates rows.
   // The preserved side of outer joins keeps all rows, so its NDV is unchanged.
+  // An unknown filter selectivity leaves payload NDVs unscaled.
   const bool scaleLeft = leftOptional || isInnerJoin(joinType) ||
       isLeftSemiFilterJoin(joinType) || isCountingLeftSemiFilterJoin(joinType);
-  if (scaleLeft) {
-    const float leftSelectivity = std::min(1.0f, fanout) * filterSelectivity;
+  if (scaleLeft && fanout.has_value() && filterSelectivity.has_value()) {
+    const float leftSelectivity = std::min(1.0f, *fanout) * *filterSelectivity;
     JoinConstraints::scalePayloadCardinality(
         input_->columns(),
         leftKeys,
@@ -893,8 +960,9 @@ void Join::initConstraints(
 
   const bool scaleRight =
       rightOptional || isInnerJoin(joinType) || isRightSemiFilterJoin(joinType);
-  if (scaleRight) {
-    const float rightSelectivity = std::min(1.0f, rlFanout) * filterSelectivity;
+  if (scaleRight && rlFanout.has_value() && filterSelectivity.has_value()) {
+    const float rightSelectivity =
+        std::min(1.0f, *rlFanout) * *filterSelectivity;
     JoinConstraints::scalePayloadCardinality(
         right->columns(),
         rightKeys,
@@ -904,34 +972,50 @@ void Join::initConstraints(
   }
 }
 
-void Join::initCost(float fanout, float rlFanout, float filterSelectivity) {
+void Join::initCost(
+    std::optional<float> fanout,
+    std::optional<float> rlFanout,
+    std::optional<float> filterSelectivity) {
   cost_.inputCardinality = inputCardinality();
-  const float rightToLeftRatio =
-      right->resultCardinality() / cost_.inputCardinality;
-  cost_.fanout = adjustFanoutForJoinType(
-      joinType,
-      fanout * filterSelectivity,
-      rlFanout * filterSelectivity,
-      rightToLeftRatio);
+  const auto buildSizeOpt = right->resultCardinality();
+  // The right-to-left ratio is unknown if either the build cardinality or the
+  // input (probe) cardinality is unknown.
+  const auto rightToLeftRatio = divide(buildSizeOpt, cost_.inputCardinality);
 
-  const float buildSize = right->resultCardinality();
+  // The output fanout is unknown if the raw fanouts, filter selectivity, or the
+  // right-to-left ratio is unknown.
+  const auto adjustedFanout = mul(fanout, filterSelectivity);
+  const auto adjustedRlFanout = mul(rlFanout, filterSelectivity);
+  if (adjustedFanout.has_value() && adjustedRlFanout.has_value() &&
+      rightToLeftRatio.has_value()) {
+    cost_.fanout = adjustFanoutForJoinType(
+        joinType, *adjustedFanout, *adjustedRlFanout, *rightToLeftRatio);
+  }
+
   const auto numKeys = leftKeys.size();
   const auto rowBytes = byteSize(right->columns());
-  const auto rowCost = Costs::hashRowCost(buildSize, rowBytes);
 
-  // For NLJ (kCross), there's no hash table to probe, so the
-  // hashTableCost term — which models per-left-row bucket lookup — must
-  // not be charged.
-  const float probeCost = method == JoinMethod::kCross
-      ? 0.0f
-      : Costs::hashTableCost(buildSize) +
-          // Multiply by min(fanout, 1) because most misses will not compare and
-          // if fanout > 1, there is still only one compare.
-          (Costs::kKeyCompareCost * numKeys *
-           std::min<float>(1, cost_.fanout)) +
-          numKeys * Costs::kHashColumnCost;
+  // The unit cost depends on the build cardinality and the output fanout; it is
+  // unknown if either is unknown.
+  if (buildSizeOpt.has_value() && cost_.fanout.has_value()) {
+    const float buildSize = *buildSizeOpt;
+    const float fanoutValue = *cost_.fanout;
+    const auto rowCost = Costs::hashRowCost(buildSize, rowBytes);
 
-  cost_.unitCost = probeCost + cost_.fanout * rowCost;
+    // For NLJ (kCross), there's no hash table to probe, so the
+    // hashTableCost term — which models per-left-row bucket lookup — must
+    // not be charged.
+    const float probeCost = method == JoinMethod::kCross
+        ? 0.0f
+        : Costs::hashTableCost(buildSize) +
+            // Multiply by min(fanout, 1) because most misses will not compare
+            // and if fanout > 1, there is still only one compare.
+            (Costs::kKeyCompareCost * numKeys *
+             std::min<float>(1, fanoutValue)) +
+            numKeys * Costs::kHashColumnCost;
+
+    cost_.unitCost = probeCost + fanoutValue * rowCost;
+  }
 }
 
 namespace {
@@ -984,8 +1068,8 @@ Join* Join::makeCrossJoin(
     velox::core::JoinType joinType,
     ExprVector filter,
     ColumnVector columns) {
-  float fanout = right->resultCardinality();
-  float rlFanout = input->resultCardinality();
+  std::optional<float> fanout = right->resultCardinality();
+  std::optional<float> rlFanout = input->resultCardinality();
   return make<Join>(
       JoinMethod::kCross,
       joinType,
@@ -1025,7 +1109,7 @@ Repartition::Repartition(
 
   cost_.unitCost = size;
   cost_.transferBytes =
-      cost_.inputCardinality * size * Costs::byteShuffleCost();
+      mul(cost_.inputCardinality, size * Costs::byteShuffleCost());
 
   // Repartition projects all input columns.
   constraints_ = input_->constraints();
@@ -1072,6 +1156,7 @@ Unnest::Unnest(
   // TODO Compute fanout from unnest expression array size statistics when
   // available.
   cost_.fanout = 10;
+  cost_.unitCost = 0;
 
   initConstraints();
 }
@@ -1099,7 +1184,8 @@ void Unnest::initConstraints() {
   // Add constraint for ordinality column if present.
   // Ordinality is non-null. Use fanout as an approximation for cardinality.
   if (ordinalityColumn) {
-    Value ordValue(ordinalityColumn->value().type, cost_.fanout);
+    // Unnest always sets a fanout.
+    Value ordValue(ordinalityColumn->value().type, cost_.fanout.value());
     ordValue.nullable = false;
     constraints_.emplace(ordinalityColumn->id(), ordValue);
   }
@@ -1158,14 +1244,19 @@ double sampledNdv(double ndv, double numRows, double fraction) {
 // distinct values seen.
 void scaleCardinalities(
     ConstraintMap& constraints,
-    float inputCardinality,
-    float fanout) {
-  if (fanout >= 1.0) {
+    std::optional<float> inputCardinality,
+    std::optional<float> fanout) {
+  // Without a known input cardinality and fanout the scaled NDV cannot be
+  // estimated; leave cardinalities unchanged.
+  if (!inputCardinality.has_value() || !fanout.has_value() || *fanout >= 1.0) {
     return;
   }
   for (auto& [columnId, constraint] : constraints) {
-    constraint.cardinality = std::max(
-        1.0, sampledNdv(constraint.cardinality, inputCardinality, fanout));
+    // Per-column NDV that is itself unknown stays unknown.
+    if (constraint.cardinality.has_value()) {
+      constraint.cardinality = std::max(
+          1.0, sampledNdv(*constraint.cardinality, *inputCardinality, *fanout));
+    }
   }
 }
 
@@ -1192,9 +1283,9 @@ PlanObjectCP largestTable(const PlanObjectSet& tables) {
   double maxCardinality = 0.0;
 
   tables.forEach([&](const auto& table) {
-    double cardinality = tableCardinality(table);
-    if (cardinality > maxCardinality) {
-      maxCardinality = cardinality;
+    const auto cardinality = tableCardinality(table);
+    if (cardinality.has_value() && *cardinality > maxCardinality) {
+      maxCardinality = *cardinality;
       largestTable = table;
     }
   });
@@ -1206,7 +1297,7 @@ PlanObjectCP largestTable(const PlanObjectSet& tables) {
 // using saturating product to avoid overflow. When multiple keys come from
 // the same table, cap the maximum cardinality estimate at table's
 // cardinality.
-double maxGroups(
+std::optional<double> maxGroups(
     const ExprVector& groupingKeys,
     const ConstraintMap& constraints) {
   if (groupingKeys.empty()) {
@@ -1236,7 +1327,12 @@ double maxGroups(
   double maxTableCardinality = 0.0;
 
   for (const auto& [table, keys] : tableToKeys) {
-    const double maxCardinality = tableCardinality(table);
+    const auto maxCardinalityOpt = tableCardinality(table);
+    // An unknown table cardinality makes the group-count estimate unknown.
+    if (!maxCardinalityOpt.has_value()) {
+      return std::nullopt;
+    }
+    const double maxCardinality = *maxCardinalityOpt;
 
     maxTableCardinality = std::max(maxTableCardinality, maxCardinality);
 
@@ -1244,14 +1340,21 @@ double maxGroups(
     if (keys.size() == 1) {
       // Single key per table: use min of key cardinality and table
       // cardinality.
-      groupCardinality = std::min<double>(
-          constraints.at(keys[0]->id()).cardinality, maxCardinality);
+      const auto keyNdv = constraints.at(keys[0]->id()).cardinality;
+      if (!keyNdv.has_value()) {
+        return std::nullopt;
+      }
+      groupCardinality = std::min<double>(*keyNdv, maxCardinality);
     } else {
       // Multiple keys: collect cardinalities and use saturatingProduct.
       std::vector<double> keyCardinalities;
       keyCardinalities.reserve(keys.size());
       for (auto key : keys) {
-        keyCardinalities.push_back(constraints.at(key->id()).cardinality);
+        const auto keyNdv = constraints.at(key->id()).cardinality;
+        if (!keyNdv.has_value()) {
+          return std::nullopt;
+        }
+        keyCardinalities.push_back(*keyNdv);
       }
       groupCardinality = saturatingProduct(maxCardinality, keyCardinalities);
     }
@@ -1313,14 +1416,17 @@ Aggregation::Aggregation(
   const auto numKeys = groupingKeys.size();
   if (numKeys > 0) {
     // Input cardinality before the partial aggregation.
-    float inputBeforePartial;
+    std::optional<float> inputBeforePartial;
     if (step == velox::core::AggregationNode::Step::kFinal &&
         input_->is(RelType::kRepartition) &&
         input_->input()->is(RelType::kAggregation)) {
       auto partial = input_->input().get();
 
-      VELOX_CHECK(!std::isnan(partial->cost().inputCardinality));
-      VELOX_CHECK(std::isfinite(partial->cost().inputCardinality));
+      const auto partialInputCardinality = partial->cost().inputCardinality;
+      if (partialInputCardinality.has_value()) {
+        VELOX_CHECK(!std::isnan(*partialInputCardinality));
+        VELOX_CHECK(std::isfinite(*partialInputCardinality));
+      }
 
       inputBeforePartial = partial->inputCardinality();
     } else {
@@ -1332,17 +1438,20 @@ Aggregation::Aggregation(
     // Global aggregation (no grouping keys).
     cost_.unitCost = aggregates.size() * Costs::kSimpleAggregateCost;
 
-    // Avoid division by zero.
-    cost_.fanout = 1.0f / cost_.inputCardinality;
+    // Avoid division by zero. Unknown input cardinality => unknown fanout.
+    cost_.fanout = divide(1.0f, cost_.inputCardinality);
   }
 
-  VELOX_CHECK_LE(cost_.fanout, 1.0f);
+  // cost_.fanout may be unknown; only check when it is known.
+  if (cost_.fanout.has_value()) {
+    VELOX_CHECK_LE(*cost_.fanout, 1.0f);
+  }
 
   initConstraints();
 }
 
 void Aggregation::initConstraints() {
-  float outputCardinality = resultCardinality();
+  const std::optional<float> outputCardinality = resultCardinality();
   const auto numKeys = groupingKeys.size();
 
   for (size_t i = 0; i < columns_.size(); ++i) {
@@ -1361,8 +1470,12 @@ void Aggregation::initConstraints() {
       }
     }();
 
-    constraint.cardinality =
-        std::min(constraint.cardinality, outputCardinality);
+    // Cap the column NDV at the group count. Skip when the output cardinality
+    // is unknown so a known NDV is not wiped out.
+    if (outputCardinality.has_value()) {
+      constraint.cardinality =
+          minOf(constraint.cardinality, *outputCardinality);
+    }
 
     constraints_.emplace(column->id(), constraint);
   }
@@ -1398,15 +1511,27 @@ float sortCost(size_t numKeys, float cardinality) {
 }
 } // namespace
 
-void Aggregation::setCostWithGroups(float inputBeforePartial) {
+void Aggregation::setCostWithGroups(
+    std::optional<float> inputBeforePartialOpt) {
   auto* optimization = queryCtx()->optimization();
   const auto& runnerOptions = optimization->runnerOptions();
 
-  const auto maxCardinality =
-      std::max<double>(1, maxGroups(groupingKeys, input_->constraints()));
+  const auto maxGroupsOpt = maxGroups(groupingKeys, input_->constraints());
+  // The grouping cost is unknown when the input row count or the maximum
+  // number of distinct groups could not be estimated. Leave cost_ fanout,
+  // unitCost, and totalBytes as nullopt so the unknown propagates.
+  if (!inputBeforePartialOpt.has_value() || !maxGroupsOpt.has_value()) {
+    return;
+  }
+  const float inputBeforePartial = *inputBeforePartialOpt;
 
-  const auto numGroups =
-      expectedNumDistincts(inputBeforePartial, maxCardinality);
+  const auto maxCardinality = std::max<double>(1, *maxGroupsOpt);
+
+  // The grouping key NDV already reflects upstream filtering, so the distinct
+  // group count is min(NDV, input rows). Re-applying the coupon-collector
+  // formula here would discount a second time and invent a reduction even for a
+  // unique key.
+  const auto numGroups = std::min<double>(maxCardinality, inputBeforePartial);
 
   const auto numKeys = groupingKeys.size();
   const auto rowBytes =
@@ -1427,9 +1552,11 @@ void Aggregation::setCostWithGroups(float inputBeforePartial) {
 
     // numGroups can be > inputCardinality since this is calculated against
     // the input before partial and inputCardinality is scaled down by partial
-    // reduction.
-    cost_.fanout =
-        std::min<double>(inputCardinality(), numGroups) / inputCardinality();
+    // reduction. Unknown input cardinality => unknown fanout.
+    const auto inputCard = inputCardinality();
+    if (inputCard.has_value() && *inputCard != 0) {
+      cost_.fanout = std::min<double>(*inputCard, numGroups) / *inputCard;
+    }
     cost_.totalBytes = numGroups * rowBytes;
     return;
   }
@@ -1524,13 +1651,16 @@ HashBuild::HashBuild(RelationOpPtr input, ExprVector keysVector, PlanP plan)
   const auto rowBytes = byteSize(columns());
   const auto numColumns = static_cast<float>(columns().size());
   // Per row cost calculates the column hashes twice, once to partition and a
-  // second time to insert.
-  cost_.unitCost = (numKeys * 2 * Costs::kHashColumnCost) +
-      Costs::hashBuildCost(cost_.inputCardinality, rowBytes) +
-      numKeys * Costs::kKeyCompareCost +
-      numColumns * Costs::kHashExtractColumnCost * 2;
+  // second time to insert. The hashBuildCost term depends on the input
+  // cardinality, so the unit cost is unknown when that is unknown.
+  if (cost_.inputCardinality.has_value()) {
+    cost_.unitCost = (numKeys * 2 * Costs::kHashColumnCost) +
+        Costs::hashBuildCost(*cost_.inputCardinality, rowBytes) +
+        numKeys * Costs::kKeyCompareCost +
+        numColumns * Costs::kHashExtractColumnCost * 2;
+  }
 
-  cost_.totalBytes = cost_.inputCardinality * rowBytes;
+  cost_.totalBytes = mul(cost_.inputCardinality, rowBytes);
 
   // HashBuild projects all input columns.
   constraints_ = input_->constraints();
@@ -1551,9 +1681,12 @@ Filter::Filter(RelationOpPtr input, ExprVector exprs)
   // Start with input constraints
   constraints_ = input_->constraints();
 
-  // Compute selectivity using filter analysis, updating constraints_
+  // Compute selectivity using filter analysis, updating constraints_. An
+  // unknown selectivity leaves the fanout unknown.
   auto selectivity = conjunctsSelectivity(constraints_, exprs_, true);
-  cost_.fanout = selectivity.trueFraction;
+  if (selectivity.has_value()) {
+    cost_.fanout = static_cast<float>(selectivity->trueFraction);
+  }
 
   // Scale NDV for all columns using the coupon collector formula.
   // conjunctsSelectivity narrows the value space for filtered columns;
@@ -1619,8 +1752,9 @@ Project::Project(
 
   cost_.inputCardinality = inputCardinality();
   cost_.fanout = 1;
-
-  // TODO Fill in cost_.unitCost and others.
+  // A projection (in particular a redundant rename) has no per-row cost.
+  // TODO: Model the per-expression evaluation cost.
+  cost_.unitCost = 0;
 }
 
 void Project::accept(
@@ -1667,18 +1801,23 @@ OrderBy::OrderBy(
     cost_.fanout = 1;
   } else {
     const auto cardinality = static_cast<float>(limit);
-    if (cost_.inputCardinality <= cardinality) {
-      // Input cardinality does not exceed the limit. The limit is no-op.
-      // Doesn't change cardinality.
-      cost_.fanout = 1;
-    } else {
-      // Input cardinality exceeds the limit. Calculate fanout to ensure that
-      // fanout * limit = input-cardinality.
-      cost_.fanout = cardinality / cost_.inputCardinality;
+    // An unknown input cardinality leaves the fanout unknown.
+    if (cost_.inputCardinality.has_value()) {
+      if (*cost_.inputCardinality <= cardinality) {
+        // Input cardinality does not exceed the limit. The limit is no-op.
+        // Doesn't change cardinality.
+        cost_.fanout = 1;
+      } else {
+        // Input cardinality exceeds the limit. Calculate fanout to ensure that
+        // fanout * limit = input-cardinality.
+        cost_.fanout = cardinality / *cost_.inputCardinality;
+      }
     }
   }
 
-  // TODO Fill in cost_.unitCost and others.
+  // Modeled with zero per-row cost.
+  // TODO: Model the sort cost.
+  cost_.unitCost = 0;
 
   // OrderBy projects all input columns. When there's a LIMIT, keeping N of M
   // rows is equivalent to sampling with fraction s = N/M. Use the coupon
@@ -1701,14 +1840,17 @@ Limit::Limit(RelationOpPtr input, int64_t limit, int64_t offset)
   cost_.inputCardinality = inputCardinality();
   cost_.unitCost = Costs::kMinimalUnitCost;
   const auto cardinality = static_cast<float>(limit);
-  if (cost_.inputCardinality <= cardinality) {
-    // Input cardinality does not exceed the limit. The limit is no-op.
-    // Doesn't change cardinality.
-    cost_.fanout = 1;
-  } else {
-    // Input cardinality exceeds the limit. Calculate fanout to ensure that
-    // fanout * limit = input-cardinality.
-    cost_.fanout = cardinality / cost_.inputCardinality;
+  // An unknown input cardinality leaves the fanout unknown.
+  if (cost_.inputCardinality.has_value()) {
+    if (*cost_.inputCardinality <= cardinality) {
+      // Input cardinality does not exceed the limit. The limit is no-op.
+      // Doesn't change cardinality.
+      cost_.fanout = 1;
+    } else {
+      // Input cardinality exceeds the limit. Calculate fanout to ensure that
+      // fanout * limit = input-cardinality.
+      cost_.fanout = cardinality / *cost_.inputCardinality;
+    }
   }
 
   // Limit projects all input columns. Keeping N of M rows is equivalent to
@@ -1758,11 +1900,14 @@ UnionAll::UnionAll(RelationOpPtrVector inputsVector)
       inputs{std::move(inputsVector)} {
   cost_.inputCardinality = 0;
   for (auto& input : inputs) {
-    cost_.inputCardinality +=
-        input->cost().inputCardinality * input->cost().fanout;
+    cost_.inputCardinality =
+        add(cost_.inputCardinality,
+            mul(input->cost().inputCardinality, input->cost().fanout));
   }
 
   cost_.fanout = 1;
+  // A union-all has no per-row cost.
+  cost_.unitCost = 0;
 
   initConstraints();
 }
@@ -1809,12 +1954,14 @@ void UnionAll::initConstraints() {
 
     // Get constraint from first input as starting point.
     Value combined = inputConstraint(0);
-    float totalRows = inputs[0]->resultCardinality();
-    float weightedNullFraction = combined.nullFraction * totalRows;
-    float weightedTrueFraction = combined.trueFraction != Value::kUnknown
-        ? combined.trueFraction * totalRows
-        : 0;
-    bool anyUnknownTrueFraction = combined.trueFraction == Value::kUnknown;
+    // Row counts and the weighted fraction accumulators are all unknown if any
+    // leg's cardinality or the corresponding fraction is unknown; the helpers
+    // propagate nullopt.
+    std::optional<float> totalRows = inputs[0]->resultCardinality();
+    std::optional<float> weightedNullFraction =
+        mul(combined.nullFraction, totalRows);
+    std::optional<float> weightedTrueFraction =
+        mul(combined.trueFraction, totalRows);
 
     // Derive min and max across all legs. All-NULL legs contribute no
     // bound. A leg with unknown bound wipes the combined bound — no later
@@ -1845,25 +1992,64 @@ void UnionAll::initConstraints() {
     // Combine remaining fields from inputs beyond the first.
     for (size_t j = 1; j < inputs.size(); ++j) {
       const Value& inputValue = inputConstraint(j);
-      float inputRows = inputs[j]->resultCardinality();
+      const std::optional<float> inputRows = inputs[j]->resultCardinality();
 
-      totalRows += inputRows;
-      // Sum cardinalities as upper bound for distinct count.
-      combined.cardinality += inputValue.cardinality;
-      weightedNullFraction += inputValue.nullFraction * inputRows;
-      if (inputValue.trueFraction == Value::kUnknown) {
-        anyUnknownTrueFraction = true;
-      } else {
-        weightedTrueFraction += inputValue.trueFraction * inputRows;
-      }
+      totalRows = add(totalRows, inputRows);
+      weightedNullFraction =
+          add(weightedNullFraction, mul(inputValue.nullFraction, inputRows));
+      weightedTrueFraction =
+          add(weightedTrueFraction, mul(inputValue.trueFraction, inputRows));
       combined.nullable = combined.nullable || inputValue.nullable;
     }
 
-    combined.nullFraction =
-        totalRows > 0 ? weightedNullFraction / totalRows : 0;
-    combined.trueFraction = anyUnknownTrueFraction
-        ? Value::kUnknown
-        : (totalRows > 0 ? weightedTrueFraction / totalRows : 0);
+    // Estimate the union NDV by inclusion-exclusion over the legs' ranges. Fold
+    // legs left to right; for each leg subtract the values expected to be
+    // shared with the running range, assuming uniform density within each range
+    // and independence across legs. This keeps the summed NDV for disjoint legs
+    // and discounts the overlap otherwise. A leg without an integer range
+    // contributes its full NDV (the disjoint assumption) and clears the running
+    // range so later legs cannot estimate overlap against it.
+    std::optional<float> unionNdv = inputConstraint(0).cardinality;
+    VariantCP runMin = inputConstraint(0).min;
+    VariantCP runMax = inputConstraint(0).max;
+    for (size_t j = 1; j < inputs.size() && unionNdv.has_value(); ++j) {
+      const Value& leg = inputConstraint(j);
+      if (!leg.cardinality.has_value()) {
+        unionNdv = std::nullopt;
+        break;
+      }
+      const auto runRange = rangeCardinality(combined.type, runMin, runMax);
+      const auto legRange = rangeCardinality(combined.type, leg.min, leg.max);
+      float shared = 0;
+      if (runRange.has_value() && legRange.has_value()) {
+        // All four bounds are set here (rangeCardinality returns a value only
+        // when both of its bounds are). Overlap = [max(mins), min(maxs)].
+        VariantCP overlapMin = *runMin < *leg.min ? leg.min : runMin;
+        VariantCP overlapMax = *leg.max < *runMax ? leg.max : runMax;
+        if (!(*overlapMax < *overlapMin)) {
+          if (const auto overlap =
+                  rangeCardinality(combined.type, overlapMin, overlapMax)) {
+            shared = *overlap * (*unionNdv / *runRange) *
+                (*leg.cardinality / *legRange);
+          }
+        }
+        runMin = *leg.min < *runMin ? leg.min : runMin;
+        runMax = *runMax < *leg.max ? leg.max : runMax;
+      } else {
+        // A leg without an integer range clears the running range so later legs
+        // fall back to the disjoint (summed) assumption.
+        runMin = nullptr;
+        runMax = nullptr;
+      }
+      unionNdv = std::max(
+          std::max(*unionNdv, *leg.cardinality),
+          *unionNdv + *leg.cardinality - shared);
+    }
+    combined.cardinality = unionNdv;
+    // Weighted averages are unknown if the accumulators or row count are
+    // unknown; divide also yields nullopt when totalRows is 0.
+    combined.nullFraction = divide(weightedNullFraction, totalRows);
+    combined.trueFraction = divide(weightedTrueFraction, totalRows);
 
     constraints_.emplace(outputColumn->id(), combined);
   }
@@ -1884,6 +2070,7 @@ TableWrite::TableWrite(
       inputColumns{std::move(inputColumns)},
       write{write} {
   cost_.inputCardinality = inputCardinality();
+  cost_.fanout = 1;
   cost_.unitCost = Costs::kMinimalUnitCost;
   VELOX_DCHECK_EQ(
       this->inputColumns.size(), this->write->table().type()->size());
@@ -1902,6 +2089,7 @@ EnforceSingleRow::EnforceSingleRow(RelationOpPtr input)
           input->distribution(),
           input->columns()) {
   // Cardinality neutral: passes through exactly 1 row or fails at runtime.
+  cost_.inputCardinality = inputCardinality();
   cost_.fanout = 1;
   cost_.unitCost = 0;
 
@@ -1921,11 +2109,12 @@ namespace {
 // cardinality set to min(limit, inputCardinality) and nullable set to false.
 Value rankingColumnValue(
     ColumnCP outputColumn,
-    float inputCardinality,
+    std::optional<float> inputCardinality,
     std::optional<int32_t> limit) {
   auto value = outputColumn->value();
+  // An unknown input cardinality leaves the ranking column's NDV unknown.
   value.cardinality = limit.has_value()
-      ? std::min(static_cast<float>(limit.value()), inputCardinality)
+      ? minOf(static_cast<float>(limit.value()), inputCardinality)
       : inputCardinality;
   value.nullable = false;
   value.nullFraction = 0;
@@ -1954,6 +2143,7 @@ AssignUniqueId::AssignUniqueId(RelationOpPtr input, ColumnCP uniqueIdColumn)
           appendColumn(input->columns(), uniqueIdColumn)),
       uniqueIdColumn_(uniqueIdColumn) {
   // Fanout is 1 (cardinality neutral).
+  cost_.inputCardinality = inputCardinality();
   cost_.fanout = 1;
   cost_.unitCost = Costs::kMinimalUnitCost;
 
@@ -1961,7 +2151,8 @@ AssignUniqueId::AssignUniqueId(RelationOpPtr input, ColumnCP uniqueIdColumn)
   constraints_ = input_->constraints();
 
   // Add constraint for the uniqueId column: one unique value per row,
-  // non-null.
+  // non-null. The NDV equals the row count, which is unknown if the result
+  // cardinality is unknown.
   Value uniqueIdValue(uniqueIdColumn_->value().type, resultCardinality());
   uniqueIdValue.nullable = false;
   constraints_.emplace(uniqueIdColumn_->id(), uniqueIdValue);
@@ -1983,6 +2174,7 @@ EnforceDistinct::EnforceDistinct(
       preGroupedKeys_(std::move(preGroupedKeys)),
       errorMessage_(errorMessage) {
   // Fanout is 1 (cardinality neutral).
+  cost_.inputCardinality = inputCardinality();
   cost_.fanout = 1;
   // TODO: Review cost for EnforceDistinct.
   cost_.unitCost = 0.01;
@@ -2018,9 +2210,15 @@ Window::Window(
   cost_.fanout = 1;
 
   const auto numKeys = partitionKeys.size() + orderKeys.size();
-  cost_.unitCost =
-      (inputsSorted ? 0 : sortCost(numKeys, cost_.inputCardinality)) +
+  const float windowFunctionCost =
       windowFunctions.size() * Costs::kSimpleAggregateCost;
+  if (inputsSorted) {
+    cost_.unitCost = windowFunctionCost;
+  } else if (cost_.inputCardinality.has_value()) {
+    // Sorting cost depends on the input cardinality; unknown when it is.
+    cost_.unitCost =
+        sortCost(numKeys, *cost_.inputCardinality) + windowFunctionCost;
+  }
 
   initConstraints();
 }
@@ -2078,9 +2276,12 @@ RowNumber::RowNumber(
       outputColumn{_outputColumn} {
   cost_.inputCardinality = inputCardinality();
   cost_.fanout = 1;
-  // No sorting, just hashing by partition keys.
-  cost_.unitCost = Costs::kHashColumnCost * partitionKeys.size() +
-      Costs::hashTableCost(cost_.inputCardinality);
+  // No sorting, just hashing by partition keys. The hashTableCost term depends
+  // on the input cardinality, so the unit cost is unknown when it is.
+  if (cost_.inputCardinality.has_value()) {
+    cost_.unitCost = Costs::kHashColumnCost * partitionKeys.size() +
+        Costs::hashTableCost(*cost_.inputCardinality);
+  }
 
   // Pass through all input constraints and add a new column for the row number.
   constraints_ = input_->constraints();
@@ -2142,9 +2343,13 @@ TopNRowNumber::TopNRowNumber(
   cost_.fanout = 1;
   // Hash by partition keys + partial sort by order keys with limit-based
   // pruning. Cheaper than a full Window sort because only top N rows are kept.
+  // The sort term depends on the input cardinality, so the unit cost is
+  // unknown when it is.
   const auto numKeys = partitionKeys.size() + orderKeys.size();
-  cost_.unitCost = Costs::kHashColumnCost * partitionKeys.size() +
-      sortCost(numKeys, cost_.inputCardinality);
+  if (cost_.inputCardinality.has_value()) {
+    cost_.unitCost = Costs::kHashColumnCost * partitionKeys.size() +
+        sortCost(numKeys, *cost_.inputCardinality);
+  }
 
   // Pass through all input constraints and add a new column for the ranking
   // result.
@@ -2220,28 +2425,35 @@ MarkDistinct::MarkDistinct(
   // MarkDistinct doesn't reduce rows.
   cost_.fanout = 1;
 
-  const auto maxCardinality =
-      std::max<double>(1, maxGroups(keys_, input_->constraints()));
-  const auto numGroups =
-      expectedNumDistincts(cost_.inputCardinality, maxCardinality);
+  const auto maxGroupsOpt = maxGroups(keys_, input_->constraints());
   const auto maskBitmapBytes = (masks_.size() + 7) / 8;
   const auto rowBytes =
       byteSize(keys_) + Costs::kHashRowBytes + maskBitmapBytes;
-  cost_.totalBytes = numGroups * rowBytes;
 
-  // Cost is similar to a hash aggregation for tracking distinct values. Each
-  // input row probes the hash table to check if its key combination has been
-  // seen, and inserts a new entry if not. Estimated localExchangeCost to be
-  // 1/3 of a remote shuffle, following the same cost modeling of Aggregation.
-  float localExchangeCost = 0;
-  if (runnerOptions.numDrivers > 1) {
-    localExchangeCost = shuffleCost(input_->columns()) / 3;
+  // The group count drives both the memory footprint and the unit cost; both
+  // are unknown when the input cardinality or the max group count is unknown.
+  if (cost_.inputCardinality.has_value() && maxGroupsOpt.has_value()) {
+    const auto maxCardinality = std::max<double>(1, *maxGroupsOpt);
+    // min(NDV, input rows); see the note in Aggregation::setCostWithGroups.
+    const auto numGroups =
+        std::min<double>(maxCardinality, *cost_.inputCardinality);
+    cost_.totalBytes = numGroups * rowBytes;
+
+    // Cost is similar to a hash aggregation for tracking distinct values. Each
+    // input row probes the hash table to check if its key combination has been
+    // seen, and inserts a new entry if not. Estimated localExchangeCost to be
+    // 1/3 of a remote shuffle, following the same cost modeling of Aggregation.
+    float localExchangeCost = 0;
+    if (runnerOptions.numDrivers > 1) {
+      localExchangeCost = shuffleCost(input_->columns()) / 3;
+    }
+    auto markDistinctCost = Costs::kHashColumnCost * keys_.size() +
+        Costs::hashTableCost(numGroups) +
+        Costs::kKeyCompareCost * keys_.size() +
+        Costs::hashRowCost(numGroups, rowBytes) +
+        masks_.size() * Costs::kSimpleAggregateCost;
+    cost_.unitCost = localExchangeCost + markDistinctCost;
   }
-  auto markDistinctCost = Costs::kHashColumnCost * keys_.size() +
-      Costs::hashTableCost(numGroups) + Costs::kKeyCompareCost * keys_.size() +
-      Costs::hashRowCost(numGroups, rowBytes) +
-      masks_.size() * Costs::kSimpleAggregateCost;
-  cost_.unitCost = localExchangeCost + markDistinctCost;
 
   constraints_ = input->constraints();
   for (const auto* marker : markers_) {
@@ -2303,6 +2515,7 @@ GroupId::GroupId(
       "A single grouping set is a regular GROUP BY.");
 
   // Each input row is duplicated once per set.
+  cost_.inputCardinality = inputCardinality();
   cost_.fanout = groupingSets_.size();
   cost_.unitCost = Costs::kMinimalUnitCost * groupingSets_.size();
 

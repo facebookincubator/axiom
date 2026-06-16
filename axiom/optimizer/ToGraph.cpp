@@ -79,7 +79,7 @@ SubqueryKey subqueryKeyOf(const lp::ExprPtr& expr) {
   return {};
 }
 
-Value toValue(const velox::TypePtr& type, float cardinality) {
+Value toValue(const velox::TypePtr& type, std::optional<float> cardinality) {
   return clampCardinality(Value{toType(type), cardinality});
 }
 
@@ -1270,10 +1270,12 @@ bool hasNullLiteral(const ExprVector& exprs) {
 // cardinality across its arguments, with a minimum of 1.
 // TODO: This underestimates for functions like row_number() that produce
 // unique values per row. Revisit when partition size estimates are available.
-float estimateCallCardinality(const ExprVector& args) {
-  float cardinality = 1;
+// Estimates a call's result NDV as the max of its argument NDVs. Returns
+// nullopt if any argument's NDV is unknown.
+std::optional<float> estimateCallCardinality(const ExprVector& args) {
+  std::optional<float> cardinality = 1;
   for (const auto& arg : args) {
-    cardinality = std::max(cardinality, arg->value().cardinality);
+    cardinality = maxOf(cardinality, arg->value().cardinality);
   }
   return cardinality;
 }
@@ -1550,13 +1552,13 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
 
   const auto& inputs = call->inputs();
   ExprVector args(inputs.size());
-  float cardinality = 1;
+  std::optional<float> cardinality = 1;
   FunctionSet funcs;
   for (auto i = 0; i < inputs.size(); ++i) {
     const auto& input = inputs[i];
     if (allUsed || usedArgs.contains(i)) {
       args[i] = translateExpr(input);
-      cardinality = std::max(cardinality, args[i]->value().cardinality);
+      cardinality = maxOf(cardinality, args[i]->value().cardinality);
       if (args[i]->is(PlanType::kCallExpr)) {
         funcs = funcs | args[i]->as<Call>()->functions();
       }
@@ -1640,7 +1642,7 @@ void ToGraph::addUnnest(const lp::UnnestNode& unnest) {
   PlanObjectCP leftTable = nullptr;
   ExprVector unnestExprs;
   unnestExprs.reserve(unnest.unnestExpressions().size());
-  float maxCardinality = 0;
+  std::optional<float> maxCardinality = 0;
   for (size_t i = 0; i < unnest.unnestExpressions().size(); ++i) {
     const auto* unnestExpr = translateExpr(unnest.unnestExpressions()[i]);
     unnestExprs.push_back(unnestExpr);
@@ -1649,7 +1651,7 @@ void ToGraph::addUnnest(const lp::UnnestNode& unnest) {
     } else if (leftTable && leftTable != unnestExpr->singleTable()) {
       leftTable = nullptr;
     }
-    maxCardinality = std::max(maxCardinality, unnestExpr->value().cardinality);
+    maxCardinality = maxOf(maxCardinality, unnestExpr->value().cardinality);
   }
 
   if (!leftTable) {
@@ -2608,7 +2610,7 @@ SubfieldProjections makeSubfieldColumns(
     BaseTable& baseTable,
     ColumnCP column,
     const PathSet& paths) {
-  const float cardinality = baseTable.filteredCardinality;
+  const std::optional<float> cardinality = baseTable.filteredCardinality;
 
   SubfieldProjections projections;
   paths.forEachPath([&](PathCP path) {

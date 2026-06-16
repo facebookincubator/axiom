@@ -208,10 +208,11 @@ float freqs(const KeyFreq& left, const KeyFreq& right) {
   return hits / static_cast<float>(left.size());
 }
 
-float keyCardinality(const ExprVector& keys) {
-  float cardinality = 1;
+// Product of the key NDVs. Returns nullopt if any key's NDV is unknown.
+std::optional<float> keyCardinality(const ExprVector& keys) {
+  std::optional<float> cardinality = 1;
   for (auto& key : keys) {
-    cardinality *= key->value().cardinality;
+    cardinality = mul(cardinality, key->value().cardinality);
   }
   return cardinality;
 }
@@ -233,7 +234,9 @@ std::pair<float, float> sampleJoin(
   int32_t fraction = kMaxCardinality;
   if (leftRows < kMaxCardinality && rightRows < kMaxCardinality) {
     // Sample all.
-  } else if (leftCard > kMaxCardinality && rightCard > kMaxCardinality) {
+  } else if (
+      leftCard.has_value() && rightCard.has_value() &&
+      *leftCard > kMaxCardinality && *rightCard > kMaxCardinality) {
     // Keys have many values, sample a fraction.
     const auto smaller = static_cast<float>(std::min(leftRows, rightRows));
     const float ratio = smaller / (float)kMaxCardinality;

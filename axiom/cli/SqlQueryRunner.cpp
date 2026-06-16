@@ -1380,6 +1380,26 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runLogicalPlan(
   return result;
 }
 
+namespace {
+// Converts an optional to a different scalar type, preserving nullopt.
+template <typename To, typename From>
+std::optional<To> castOpt(const std::optional<From>& value) {
+  if (value.has_value()) {
+    return static_cast<To>(*value);
+  }
+  return std::nullopt;
+}
+
+// Rounds an optional cardinality estimate to an integer count, preserving
+// nullopt for an unknown cardinality.
+std::optional<int64_t> roundCardinality(std::optional<float> cardinality) {
+  if (cardinality.has_value()) {
+    return std::llround(*cardinality);
+  }
+  return std::nullopt;
+}
+} // namespace
+
 std::vector<velox::RowVectorPtr> SqlQueryRunner::runShowStatsForQuery(
     const presto::SqlStatement& sqlStatement,
     const RunOptions& options) {
@@ -1397,7 +1417,7 @@ std::vector<velox::RowVectorPtr> SqlQueryRunner::runShowStatsForQuery(
       newQuery(options),
       options,
       [&](const optimizer::DerivedTable& rootDt) {
-        presto::ShowStatsBuilder builder(std::llround(rootDt.cardinality));
+        presto::ShowStatsBuilder builder(roundCardinality(rootDt.cardinality));
 
         for (const auto* column : rootDt.columns) {
           const auto& value = column->value();
@@ -1405,8 +1425,8 @@ std::vector<velox::RowVectorPtr> SqlQueryRunner::runShowStatsForQuery(
           builder.addColumn(
               column->outputName(),
               *value.type,
-              static_cast<double>(value.nullFraction),
-              static_cast<int64_t>(value.cardinality),
+              castOpt<double>(value.nullFraction),
+              roundCardinality(value.cardinality),
               /*avgLength=*/std::nullopt,
               value.min,
               value.max);

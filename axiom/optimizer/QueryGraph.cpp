@@ -85,7 +85,7 @@ Name cname(PlanObjectCP relation) {
   }
 }
 
-float tableCardinality(PlanObjectCP table) {
+std::optional<float> tableCardinality(PlanObjectCP table) {
   if (table->is(PlanType::kTableNode)) {
     return table->as<BaseTable>()->schemaTable->cardinality;
   }
@@ -743,34 +743,44 @@ PlanObjectSet JoinEdge::allTables() const {
 namespace {
 
 struct JoinFanout {
-  float fanout;
-  bool unique;
+  std::optional<float> fanout;
+  bool unique{false};
 };
 
 // Estimates the number of matching rows per equality lookup on 'keys' given
 // 'scanCardinality' total rows. For each key pair, divides by
 // max(ndv(thisKey), ndv(otherKey)) to account for values on the probe side
-// that have no match on the scan side.
-float estimateFanout(
-    float scanCardinality,
+// that have no match on the scan side. Returns nullopt (unknown) if the scan
+// cardinality or any join-key NDV is unknown.
+std::optional<float> estimateFanout(
+    std::optional<float> scanCardinality,
     const ExprVector& keys,
     const ExprVector& otherKeys) {
+  if (!scanCardinality.has_value()) {
+    return std::nullopt;
+  }
   if (keys.empty()) {
     return scanCardinality;
   }
 
   for (size_t i = 0; i < keys.size(); ++i) {
-    if (keys[i]->value().cardinality == 0 ||
-        otherKeys[i]->value().cardinality == 0) {
+    const auto thisNdv = keys[i]->value().cardinality;
+    const auto otherNdv = otherKeys[i]->value().cardinality;
+    // An unknown join-key NDV makes the fanout unknown.
+    if (!thisNdv.has_value() || !otherNdv.has_value()) {
+      return std::nullopt;
+    }
+    if (*thisNdv == 0 || *otherNdv == 0) {
       return 0;
     }
   }
 
-  auto fanout = scanCardinality /
-      std::max(keys[0]->value().cardinality, otherKeys[0]->value().cardinality);
+  auto fanout = *scanCardinality /
+      std::max(
+          *keys[0]->value().cardinality, *otherKeys[0]->value().cardinality);
   for (size_t i = 1; i < keys.size(); ++i) {
     auto distinctValues = std::max(
-        keys[i]->value().cardinality, otherKeys[i]->value().cardinality);
+        *keys[i]->value().cardinality, *otherKeys[i]->value().cardinality);
     if (distinctValues > fanout) {
       fanout = 1;
     } else {
@@ -833,15 +843,20 @@ JoinFanout joinFanout(
   };
 }
 
-float baseSelectivity(PlanObjectCP object) {
+std::optional<float> baseSelectivity(PlanObjectCP object) {
   if (object->is(PlanType::kTableNode)) {
     auto* baseTable = object->as<BaseTable>();
     const auto baseCardinality = baseTable->schemaTable->cardinality;
+    const auto filteredCardinality = baseTable->filteredCardinality;
+    // An unknown filtered cardinality makes the selectivity unknown.
+    if (!filteredCardinality.has_value()) {
+      return std::nullopt;
+    }
     // filteredCardinality can exceed baseCardinality when the connector
     // returns inconsistent statistics, e.g. Table::numRows() returns 0
     // while co_estimateStats returns the real partition row count.
-    if (baseCardinality > baseTable->filteredCardinality) {
-      return baseTable->filteredCardinality / baseCardinality;
+    if (baseCardinality > *filteredCardinality) {
+      return *filteredCardinality / baseCardinality;
     }
   }
   return 1;
@@ -874,23 +889,28 @@ void JoinEdge::guessFanout() {
   // match many lineitems (lrFanout = cardLineitem / cardOrders). When both
   // sides are unique (1:1 join), leftUnique takes precedence.
   if (leftUnique_) {
-    rlFanout_ = left.fanout * baseSelectivity(leftTable_);
-    lrFanout_ = tableCardinality(rightTable_) / tableCardinality(leftTable_) *
-        baseSelectivity(rightTable_);
+    rlFanout_ = mul(left.fanout, baseSelectivity(leftTable_));
+    lrFanout_ =
+        mul(divide(tableCardinality(rightTable_), tableCardinality(leftTable_)),
+            baseSelectivity(rightTable_));
   } else if (rightUnique_) {
-    lrFanout_ = right.fanout * baseSelectivity(rightTable_);
-    rlFanout_ = tableCardinality(leftTable_) / tableCardinality(rightTable_) *
-        baseSelectivity(leftTable_);
+    lrFanout_ = mul(right.fanout, baseSelectivity(rightTable_));
+    rlFanout_ =
+        mul(divide(tableCardinality(leftTable_), tableCardinality(rightTable_)),
+            baseSelectivity(leftTable_));
   } else {
     auto [sampledLeftFanout, sampledRightFanout] = options.sampleJoins
         ? opt->history().sampleJoin(this)
         : std::pair<float, float>(0, 0);
     if (sampledLeftFanout == 0 && sampledRightFanout == 0) {
-      lrFanout_ = right.fanout * baseSelectivity(rightTable_);
-      rlFanout_ = left.fanout * baseSelectivity(leftTable_);
+      lrFanout_ = mul(right.fanout, baseSelectivity(rightTable_));
+      rlFanout_ = mul(left.fanout, baseSelectivity(leftTable_));
     } else {
-      lrFanout_ = sampledRightFanout * baseSelectivity(rightTable_);
-      rlFanout_ = sampledLeftFanout * baseSelectivity(leftTable_);
+      lrFanout_ =
+          mul(std::optional<float>(sampledRightFanout),
+              baseSelectivity(rightTable_));
+      rlFanout_ = mul(
+          std::optional<float>(sampledLeftFanout), baseSelectivity(leftTable_));
     }
   }
 }

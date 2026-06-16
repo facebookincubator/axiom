@@ -593,7 +593,10 @@ AggregationPlanner::makeSplitOrSingleAggregationPlan(
       groupId,
       state);
 
-  if (singleAggCost.cost < splitAggCost.cost) {
+  // Decide by cost when both costs are known. When a cost is unknown (a missing
+  // statistic), lessThan is false, so we default to the split (partial+final)
+  // plan.
+  if (lessThan(singleAggCost.cost, splitAggCost.cost)) {
     return {std::move(singleAgg), singleAggCost};
   }
   state.mutableCurrentGroupedLeaves() = std::move(splitMap);

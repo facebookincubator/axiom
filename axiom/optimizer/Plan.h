@@ -105,7 +105,7 @@ struct PlanSet {
 /// Represents the next table/derived table to join. May consist of several
 /// tables for a bushy build side.
 struct JoinCandidate {
-  JoinCandidate(JoinEdgeP join, PlanObjectCP right, float fanout)
+  JoinCandidate(JoinEdgeP join, PlanObjectCP right, std::optional<float> fanout)
       : join(join), tables({right}), fanout(fanout) {}
 
   /// Returns two join sides. First is the side that contains 'tables' (build).
@@ -146,8 +146,9 @@ struct JoinCandidate {
 
   /// Number of right side hits for one row on the left. The join
   /// selectivity in 'tables' affects this but the selectivity in
-  /// 'existences' does not.
-  float fanout;
+  /// 'existences' does not. nullopt when a missing statistic makes the fanout
+  /// unknown; such a candidate yields an uncomputable join cost.
+  std::optional<float> fanout;
 
   /// Product of the selectivities from 'existences'. Used to set
   /// the fanout on the exists-DT join. 0.2 means existences
@@ -198,7 +199,12 @@ class Optimization;
 /// Tracks the set of tables / columns that have been placed or are still needed
 /// when constructing a partial plan.
 struct PlanState {
-  PlanState(Optimization& optimization, DerivedTableCP dt);
+  /// 'syntacticJoinOrder' enumerates this DT in the query's syntactic join
+  /// order.
+  PlanState(
+      Optimization& optimization,
+      DerivedTableCP dt,
+      bool syntacticJoinOrder);
 
   PlanState(Optimization& optimization, DerivedTableCP dt, PlanP plan);
 
@@ -257,11 +263,15 @@ struct PlanState {
   /// limited to a single conjunct. Returns that conjunct or nullptr.
   ExprCP isDownstreamFilterOnly(ColumnCP column) const;
 
-  /// If OptimizerOptions::syntacticJoinOrder is true, returns true if all
-  /// tables that must be placed before 'table' have been placed. If
-  /// OptimizerOptions::syntacticJoinOrder is false, returns true
-  /// unconditionally.
+  /// In syntactic-order enumeration (syntacticJoinOrder()), returns true only
+  /// if all tables that must be placed before 'table' have been placed.
+  /// Otherwise returns true unconditionally.
   bool mayConsiderNext(PlanObjectCP table) const;
+
+  /// Returns whether this DT is enumerated in the query's syntactic join order.
+  bool syntacticJoinOrder() const {
+    return syntacticJoinOrder_;
+  }
 
   /// Adds a placed join to the set of partial queries to be developed.
   /// No-op if cost exceeds best so far and cutoff is enabled.
@@ -279,7 +289,9 @@ struct PlanState {
   /// True if the costs accumulated so far are so high that this should not be
   /// explored further.
   bool isOverBest() const {
-    return hasCutoff_ && cost.cost > plans.bestCostWithShuffle;
+    // An unknown cost cannot exceed the cutoff, so it is never over best.
+    return hasCutoff_ && cost.cost.has_value() &&
+        cost.cost.value() > plans.bestCostWithShuffle;
   }
 
   void debugSetFirstTable(int32_t id);
@@ -338,6 +350,9 @@ struct PlanState {
   mutable folly::F14FastMap<PlanObjectSet, PlanObjectSet>
       downstreamColumnsCache_;
 
+  // Whether this DT is enumerated in the query's syntactic join order. Set at
+  // construction from OptimizerOptions::syntacticJoinOrder, or true for the
+  // bail-retry state of a DT whose CBO cost is uncomputable.
   const bool syntacticJoinOrder_;
 
   // True if we should backtrack when 'cost' exceeds the best cost with

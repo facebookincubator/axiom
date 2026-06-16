@@ -43,10 +43,10 @@ std::string formatValue(const Variant& value, const Type& type) {
 }
 } // namespace
 
-ShowStatsBuilder::ShowStatsBuilder(int64_t rowCount) {
+ShowStatsBuilder::ShowStatsBuilder(std::optional<int64_t> rowCount) {
   rows_.emplace_back(
       Variant::row({
-          Variant(rowCount),
+          toVariant(rowCount),
           kNullVarchar,
           kNullDouble,
           kNullBigint,

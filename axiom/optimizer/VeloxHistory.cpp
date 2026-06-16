@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/VeloxHistory.h"
+#include "axiom/optimizer/EstimateMath.h"
 #include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
@@ -110,7 +111,7 @@ void VeloxHistory::estimateLeafSelectivity(
     const velox::connector::ConnectorTableHandlePtr& tableHandle) {
   auto options = queryCtx()->optimization()->options();
 
-  float conjunctsSelectivityValue = 1.0f;
+  std::optional<float> conjunctsSelectivityValue = 1.0f;
 
   if (!table.columnFilters.empty() || !table.filter.empty()) {
     ExprVector allFilters;
@@ -124,8 +125,11 @@ void VeloxHistory::estimateLeafSelectivity(
 
     ConstraintMap constraints;
 
+    // An unknown selectivity leaves filteredCardinality unknown.
     auto selectivity = conjunctsSelectivity(constraints, allFilters, true);
-    conjunctsSelectivityValue = selectivity.trueFraction;
+    conjunctsSelectivityValue = selectivity.has_value()
+        ? std::optional<float>(selectivity->trueFraction)
+        : std::nullopt;
 
     setBaseTableValues(constraints, table);
   }
@@ -136,7 +140,7 @@ void VeloxHistory::estimateLeafSelectivity(
   if (!options.sampleFilters ||
       !runnerTable->layouts()[0]->supportsSampling()) {
     table.filteredCardinality =
-        table.schemaTable->cardinality * conjunctsSelectivityValue;
+        mul(table.schemaTable->cardinality, conjunctsSelectivityValue);
     return;
   }
 

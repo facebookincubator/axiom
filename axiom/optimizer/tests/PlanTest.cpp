@@ -969,9 +969,9 @@ TEST_F(PlanTest, zeroLimit) {
         "SELECT * FROM t, (SELECT * FROM u LIMIT 0) s WHERE a = x";
     SCOPED_TRACE(query);
     const auto matcher = core::PlanMatcherBuilder{}
-                             .values()
+                             .tableScan()
                              .hashJoin(
-                                 core::PlanMatcherBuilder{}.tableScan().build(),
+                                 core::PlanMatcherBuilder{}.values().build(),
                                  core::JoinType::kInner)
                              .build();
     AXIOM_ASSERT_PLAN(planSql(query), matcher);

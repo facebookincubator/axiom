@@ -87,7 +87,12 @@ float Value::byteSize() const {
 
 std::string Value::toString() const {
   std::stringstream out;
-  out << "<Value type=" << type->toString() << ", cardinality=" << cardinality;
+  out << "<Value type=" << type->toString() << ", cardinality=";
+  if (cardinality.has_value()) {
+    out << *cardinality;
+  } else {
+    out << "?";
+  }
 
   if (min != nullptr) {
     out << " min=" << *min;
@@ -97,12 +102,20 @@ std::string Value::toString() const {
     out << " max=" << *max;
   }
 
-  if (trueFraction != kUnknown) {
-    out << " trueFraction=" << trueFraction;
+  // Surface unknown as "?". Unlike nullFraction, a known 0 is not omitted: a
+  // trueFraction of 0 ("always false") is notable, whereas a nullFraction of 0
+  // ("no nulls") is the unremarkable default.
+  if (trueFraction.has_value()) {
+    out << " trueFraction=" << *trueFraction;
+  } else {
+    out << " trueFraction=?";
   }
 
-  if (nullFraction != 0) {
-    out << " nullFraction=" << nullFraction;
+  // Distinguish unknown null fraction ("?") from a known zero (omitted).
+  if (!nullFraction.has_value()) {
+    out << " nullFraction=?";
+  } else if (*nullFraction != 0) {
+    out << " nullFraction=" << *nullFraction;
   }
 
   out << ">";
@@ -170,25 +183,18 @@ SchemaTableCP Schema::findTable(
   auto& tableColumns = connectorTable->columnMap();
   schemaColumns.reserve(tableColumns.size());
   for (const auto& [columnName, tableColumn] : tableColumns) {
-    const auto cardinality = std::max<float>(
-        1,
-        tableColumn->approxNumDistinct(
-            static_cast<int64_t>(connectorTable->numRows())));
-
-    // Get min/max and null fraction from column statistics if available.
-    const velox::Variant* minPtr = nullptr;
-    const velox::Variant* maxPtr = nullptr;
-    float nullFraction = 0;
+    // Cardinality and null fraction are unknown when the connector has no
+    // corresponding statistic.
+    Value value(toType(tableColumn->type()));
     if (auto* stats = tableColumn->stats()) {
-      minPtr = registerOptionalVariant(stats->min);
-      maxPtr = registerOptionalVariant(stats->max);
-      nullFraction = stats->nullPct / 100.0f;
+      if (stats->numDistinct.has_value()) {
+        value.cardinality = std::max<float>(1, stats->numDistinct.value());
+      }
+      value.min = registerOptionalVariant(stats->min);
+      value.max = registerOptionalVariant(stats->max);
+      value.nullFraction = stats->nullPct / 100.0f;
     }
 
-    Value value(toType(tableColumn->type()), cardinality);
-    value.min = minPtr;
-    value.max = maxPtr;
-    value.nullFraction = nullFraction;
     auto* column =
         make<Column>(toName(columnName), nullptr, clampCardinality(value));
     schemaColumns[column->name()] = column;
@@ -305,8 +311,12 @@ IndexInfo SchemaTable::indexInfo(
 
     covered.add(part);
     if (i < numSorting) {
-      info.scanCardinality =
-          combine(info.scanCardinality, i, orderKey->value().cardinality);
+      // Refine the scan cardinality only when the order key's NDV is known;
+      // otherwise leave it unchanged.
+      const auto orderKeyNdv = orderKey->value().cardinality;
+      if (orderKeyNdv.has_value()) {
+        info.scanCardinality = combine(info.scanCardinality, i, *orderKeyNdv);
+      }
       info.lookupKeys.push_back(part);
     }
     if (i == numUnique - 1) {

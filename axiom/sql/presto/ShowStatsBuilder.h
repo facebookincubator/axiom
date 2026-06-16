@@ -41,8 +41,9 @@ namespace axiom::sql::presto {
 ///   high_value (VARCHAR) - maximum value formatted as string.
 class ShowStatsBuilder {
  public:
-  /// @param rowCount Total row count for the summary row.
-  explicit ShowStatsBuilder(int64_t rowCount);
+  /// @param rowCount Total row count for the summary row. nullopt when the row
+  /// count is unknown, producing a NULL row_count.
+  explicit ShowStatsBuilder(std::optional<int64_t> rowCount);
 
   /// Adds a per-column stats row. Min/max Variant values are formatted using
   /// the column type (raw string for VARCHAR, toJson for other types). Null

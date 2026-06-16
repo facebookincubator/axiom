@@ -73,9 +73,10 @@ TEST_F(JoinTest, pushdownFilterThroughJoin) {
   {
     SCOPED_TRACE("Right Join");
     auto logicalPlan = makePlan(lp::JoinType::kRight);
-    auto matcher = matchScan("u")
-                       .filter("u_data IS NULL")
-                       .hashJoin(matchScan("t").build(), core::JoinType::kLeft)
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u").filter("u_data IS NULL").build(),
+                           core::JoinType::kRight)
                        .filter("t_data IS NULL")
                        .project()
                        .build();
@@ -175,11 +176,13 @@ TEST_F(JoinTest, outerJoinWithInnerJoin) {
     auto plan = toSingleNodePlan(logicalPlan);
 
     auto matcher =
-        startMatcher("u")
-            .hashJoin(startMatcher("v").build(), core::JoinType::kInner)
+        startMatcher("t")
+            .filter("b > 50")
             .hashJoin(
-                startMatcher("t").filter("b > 50").build(),
-                core::JoinType::kRight)
+                startMatcher("u")
+                    .hashJoin(startMatcher("v").build(), core::JoinType::kInner)
+                    .build(),
+                core::JoinType::kLeft)
             .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -206,13 +209,17 @@ TEST_F(JoinTest, outerJoinWithInnerJoin) {
                            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher =
-        startMatcher("u")
-            .hashJoin(startMatcher("v").build())
-            .filter()
-            .hashJoin(startMatcher("t").filter().aggregation().build())
-            .project()
-            .build();
+    auto matcher = startMatcher("t")
+                       .filter()
+                       .aggregation()
+                       .hashJoin(
+                           startMatcher("u")
+                               .hashJoin(startMatcher("v").build())
+                               .filter()
+                               .build(),
+                           core::JoinType::kLeft)
+                       .project()
+                       .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
@@ -230,12 +237,9 @@ TEST_F(JoinTest, nestedOuterJoins) {
   auto plan = toSingleNodePlan(logicalPlan);
 
   auto matcher =
-      matchScan("region")
-          .hashJoin(
-              matchScan("nation")
-                  .hashJoin(matchScan("region").build(), core::JoinType::kFull)
-                  .build(),
-              core::JoinType::kLeft)
+      matchScan("nation")
+          .hashJoin(matchScan("region").build(), core::JoinType::kFull)
+          .hashJoin(matchScan("region").build(), core::JoinType::kRight)
           .aggregation()
           .project()
           .build();
@@ -251,14 +255,12 @@ TEST_F(JoinTest, joinWithComputedKeys) {
   {
     auto plan = toSingleNodePlan(logicalPlan);
 
-    auto matcher = matchScan("region")
-                       .hashJoin(
-                           matchScan("nation")
-                               .project({"coalesce(n_regionkey, 1)"})
-                               .build(),
-                           core::JoinType::kLeft)
-                       .aggregation()
-                       .build();
+    auto matcher =
+        matchScan("nation")
+            .project({"coalesce(n_regionkey, 1)"})
+            .hashJoin(matchScan("region").build(), core::JoinType::kRight)
+            .aggregation()
+            .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
@@ -516,11 +518,10 @@ TEST_F(JoinTest, crossThenLeft) {
   SCOPED_TRACE(query);
 
   auto matcher =
-      matchValues()
-          .aggregation()
+      matchScan("u")
+          .nestedLoopJoin(matchScan("t").build())
           .hashJoin(
-              matchScan("u").nestedLoopJoin(matchScan("t").build()).build(),
-              velox::core::JoinType::kRight)
+              matchValues().aggregation().build(), velox::core::JoinType::kLeft)
           .aggregation()
           .build();
 
@@ -726,9 +727,10 @@ TEST_F(JoinTest, leftThenFilter) {
         "WHERE z > 0";
     SCOPED_TRACE(query);
 
-    auto matcher = matchScan("u")
-                       .filter("y + 1 > 0")
-                       .hashJoin(matchScan("t").build(), core::JoinType::kInner)
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u").filter("y + 1 > 0").build(),
+                           core::JoinType::kInner)
                        .project()
                        .build();
 
@@ -743,9 +745,10 @@ TEST_F(JoinTest, leftThenFilter) {
         "WHERE z > 0";
     SCOPED_TRACE(query);
 
-    auto matcher = matchScan("u")
-                       .filter("y + 1 > 0")
-                       .hashJoin(matchScan("t").build(), core::JoinType::kInner)
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u").filter("y + 1 > 0").build(),
+                           core::JoinType::kInner)
                        .project()
                        .aggregation()
                        .build();
@@ -810,8 +813,8 @@ TEST_F(JoinTest, leftThenFilter) {
     SCOPED_TRACE(query);
 
     auto matcher =
-        matchScan("card_u")
-            .hashJoin(matchScan("card_t").build(), core::JoinType::kRight)
+        matchScan("card_t")
+            .hashJoin(matchScan("card_u").build(), core::JoinType::kLeft)
             .filter("cardinality(coalesce(y, b)) > 0")
             .build();
 
@@ -1105,9 +1108,12 @@ TEST_F(JoinTest, leftJoinOnClausePushdown) {
 
 TEST_F(JoinTest, impliedJoins) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
-      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
+      ->setStats(
+          10'000,
+          {{"a", {.numDistinct = 10'000}}, {"b", {.numDistinct = 10'000}}});
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
-      ->setStats(1'000, {{"x", {.numDistinct = 10}}});
+      ->setStats(
+          1'000, {{"x", {.numDistinct = 10}}, {"y", {.numDistinct = 1'000}}});
   testConnector_->addTable("v", ROW({"n", "m"}, BIGINT()))
       ->setStats(100, {{"n", {.numDistinct = 100}}});
 
@@ -1464,10 +1470,8 @@ TEST_F(JoinTest, impliedFilters) {
 
 // Three or more columns from the same table in one equivalence class.
 TEST_F(JoinTest, impliedSameTableEquality) {
-  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()))
-      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
-  testConnector_->addTable("u", ROW({"x"}, BIGINT()))
-      ->setStats(1'000, {{"x", {.numDistinct = 10}}});
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x"}, BIGINT()));
 
   // Three same-table columns produce a = b and a = c filters.
   {
@@ -1476,10 +1480,9 @@ TEST_F(JoinTest, impliedSameTableEquality) {
         "JOIN u ON t.a = u.x AND t.b = u.x AND t.c = u.x";
     SCOPED_TRACE(query);
 
-    auto matcher = matchScan("u")
-                       .hashJoin(
-                           matchScan("t").filter("a = b AND a = c").build(),
-                           core::JoinType::kInner)
+    auto matcher = matchScan("t")
+                       .filter("a = b AND a = c")
+                       .hashJoin(matchScan("u").build(), core::JoinType::kInner)
                        .aggregation()
                        .build();
 
@@ -1519,24 +1522,19 @@ TEST_F(JoinTest, impliedSameTableEqualityBothSides) {
 // With GROUP BY a, b, the synthesized a = b references only grouping keys
 // and is pushed below the aggregation onto t's scan.
 TEST_F(JoinTest, impliedSameTableEqualityBelowAggregation) {
-  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
-      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
-  testConnector_->addTable("u", ROW({"x"}, BIGINT()))
-      ->setStats(1'000, {{"x", {.numDistinct = 10}}});
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x"}, BIGINT()));
 
   auto query =
       "SELECT count(*) FROM (SELECT a, b FROM t GROUP BY a, b) AS gb "
       "JOIN u ON gb.a = u.x AND gb.b = u.x";
   SCOPED_TRACE(query);
 
-  auto matcher = matchScan("u")
-                     .hashJoin(
-                         matchScan("t")
-                             .filter("a = b")
-                             .singleAggregation({"a", "b"}, {})
-                             .project()
-                             .build(),
-                         core::JoinType::kInner)
+  auto matcher = matchScan("t")
+                     .filter("a = b")
+                     .singleAggregation({"a", "b"}, {})
+                     .project()
+                     .hashJoin(matchScan("u").build(), core::JoinType::kInner)
                      .aggregation()
                      .build();
 
@@ -1576,10 +1574,8 @@ TEST_F(JoinTest, impliedSameTableEqualityInHaving) {
 // With a LIMIT in the way, the synthesized equality lands as a Filter
 // above the Limit. The redundant join key is still dropped.
 TEST_F(JoinTest, impliedSameTableEqualityBlockedByLimit) {
-  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
-      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
-  testConnector_->addTable("u", ROW({"x"}, BIGINT()))
-      ->setStats(1'000, {{"x", {.numDistinct = 10}}});
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x"}, BIGINT()));
 
   auto query =
       "SELECT count(*) FROM (SELECT a, b FROM t LIMIT 100) AS lim "
@@ -1600,10 +1596,8 @@ TEST_F(JoinTest, impliedSameTableEqualityBlockedByLimit) {
 // Explicit WHERE and synthesized equality converge on the same LIMIT DT
 // target. The filter appears exactly once above the Limit.
 TEST_F(JoinTest, impliedSameTableEqualityBlockedByLimitDedup) {
-  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
-      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
-  testConnector_->addTable("u", ROW({"x"}, BIGINT()))
-      ->setStats(1'000, {{"x", {.numDistinct = 10}}});
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x"}, BIGINT()));
 
   auto query =
       "SELECT count(*) FROM (SELECT a, b FROM t LIMIT 100) AS lim "
@@ -1680,7 +1674,8 @@ TEST_F(JoinTest, impliedSameTableEqualityRightJoinNormalized) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
-      ->setStats(1'000, {{"x", {.numDistinct = 10}}});
+      ->setStats(
+          1'000, {{"x", {.numDistinct = 10}}, {"y", {.numDistinct = 1'000}}});
 
   auto query = "SELECT count(*) FROM u RIGHT JOIN t ON u.x = t.a AND u.y = t.a";
   SCOPED_TRACE(query);
@@ -1822,12 +1817,15 @@ TEST_F(JoinTest, leftToInnerWithAggregation) {
 
   auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
 
-  auto matcher = matchScan("u")
-                     .filter("x > 0")
-                     .project()
-                     .unnest()
-                     .project()
-                     .hashJoin(matchScan("t").build(), core::JoinType::kInner)
+  auto matcher = matchScan("t")
+                     .hashJoin(
+                         matchScan("u")
+                             .filter("x > 0")
+                             .project()
+                             .unnest()
+                             .project()
+                             .build(),
+                         core::JoinType::kInner)
                      .project({"cast(y as REAL) as c"})
                      .distinct()
                      .project()
@@ -1855,8 +1853,8 @@ TEST_F(JoinTest, duplicateJoinOutputColumns) {
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
 
-    auto matcher = matchScan("u")
-                       .hashJoin(matchScan("t").build(), core::JoinType::kRight)
+    auto matcher = matchScan("t")
+                       .hashJoin(matchScan("u").build(), core::JoinType::kLeft)
                        .project({"b as x", "b as y"})
                        .build();
 
@@ -1875,8 +1873,8 @@ TEST_F(JoinTest, duplicateJoinOutputColumns) {
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
 
-    auto matcher = matchScan("u")
-                       .hashJoin(matchScan("t").build(), core::JoinType::kRight)
+    auto matcher = matchScan("t")
+                       .hashJoin(matchScan("u").build(), core::JoinType::kLeft)
                        .distinct()
                        .project({"b as x", "b as y"})
                        .build();
@@ -1897,12 +1895,13 @@ TEST_F(JoinTest, duplicateJoinOutputColumns) {
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
 
-    auto matcher = matchScan("u")
-                       .filter("a = 1")
-                       .hashJoin(matchScan("t").build(), core::JoinType::kInner)
-                       .distinct()
-                       .project({"b as x", "b as y"})
-                       .build();
+    auto matcher =
+        matchScan("t")
+            .hashJoin(
+                matchScan("u").filter("a = 1").build(), core::JoinType::kInner)
+            .distinct()
+            .project({"b as x", "b as y"})
+            .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
   }

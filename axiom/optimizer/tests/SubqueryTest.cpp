@@ -591,9 +591,13 @@ TEST_F(SubqueryTest, correlatedIn) {
   // does not support null-aware right semi project join with extra filter.
   {
     // Make t small and u large so the optimizer prefers the right-hash variant.
-    testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))->setStats(100, {});
+    testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+        ->setStats(
+            100, {{"a", {.numDistinct = 100}}, {"b", {.numDistinct = 100}}});
     testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
-        ->setStats(10'000, {});
+        ->setStats(
+            10'000,
+            {{"x", {.numDistinct = 10'000}}, {"y", {.numDistinct = 10'000}}});
 
     auto query =
         "SELECT t.a IN ("
@@ -2296,13 +2300,16 @@ TEST_F(SubqueryTest, inSubqueryWithCorrelatedNotExists) {
   // The IN subquery becomes a LEFT SEMI PROJECT (mark) join with v, wrapped
   // in its own DT. The inner join combines u's projection with t. The NOT
   // EXISTS becomes an anti-join with v.
-  auto matcher = matchScan("u")
+  auto matcher = matchScan("t")
                      .hashJoin(
-                         matchScan("v").build(),
-                         core::JoinType::kLeftSemiProject,
-                         {.nullAware = true})
-                     .project()
-                     .hashJoin(matchScan("t").build(), core::JoinType::kInner)
+                         matchScan("u")
+                             .hashJoin(
+                                 matchScan("v").build(),
+                                 core::JoinType::kLeftSemiProject,
+                                 {.nullAware = true})
+                             .project()
+                             .build(),
+                         core::JoinType::kInner)
                      .hashJoin(
                          matchScan("v").build(),
                          core::JoinType::kAnti,
@@ -2323,9 +2330,15 @@ TEST_F(SubqueryTest, inReplicateNullsAndAny) {
   // Make both tables large enough to trigger hash partitioning instead of
   // broadcast.
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
-      ->setStats(10'000'000, {});
+      ->setStats(
+          10'000'000,
+          {{"a", {.numDistinct = 10'000'000}},
+           {"b", {.numDistinct = 10'000'000}}});
   testConnector_->addTable("u", ROW({"c", "d"}, BIGINT()))
-      ->setStats(1'000'000, {});
+      ->setStats(
+          1'000'000,
+          {{"c", {.numDistinct = 1'000'000}},
+           {"d", {.numDistinct = 1'000'000}}});
 
   // NOT IN: the build side (u) must use replicateNullsAndAny=true.
   {

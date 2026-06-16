@@ -146,7 +146,7 @@ void addImpliedSemiEdge(
 // Returns the post-filter cardinality for any table type. For BaseTable,
 // this is filteredCardinality (reduced by pushed-down WHERE/HAVING). For
 // DerivedTable, cardinality is already post-filter/post-join.
-float filteredTableCardinality(PlanObjectCP table) {
+std::optional<float> filteredTableCardinality(PlanObjectCP table) {
   if (table->is(PlanType::kTableNode)) {
     return table->as<BaseTable>()->filteredCardinality;
   }
@@ -164,16 +164,30 @@ float filteredTableCardinality(PlanObjectCP table) {
 // filtering. For a single key, returns min(NDV, filteredCardinality)
 // directly (no dampening needed). For multiple keys, uses the saturating
 // product formula (max * P / (max + P)) to dampen the independence
-// assumption for correlated keys. Consistent with maxGroups().
-float compositeNdv(PlanObjectCP table, const ExprVector& keys) {
-  double max = filteredTableCardinality(table);
-  if (keys.size() == 1) {
-    return static_cast<float>(
-        std::min(max, static_cast<double>(keys[0]->value().cardinality)));
+// assumption for correlated keys. Consistent with maxGroups(). Returns nullopt
+// if the table cardinality or any key NDV is unknown.
+std::optional<float> compositeNdv(PlanObjectCP table, const ExprVector& keys) {
+  const auto maxOpt = filteredTableCardinality(table);
+  if (!maxOpt.has_value()) {
+    return std::nullopt;
   }
+
+  const double max = *maxOpt;
+  if (keys.size() == 1) {
+    const auto keyNdv = keys[0]->value().cardinality;
+    if (!keyNdv.has_value()) {
+      return std::nullopt;
+    }
+    return static_cast<float>(std::min(max, static_cast<double>(*keyNdv)));
+  }
+
   double product = 1.0;
   for (const auto* key : keys) {
-    product *= key->value().cardinality;
+    const auto keyNdv = key->value().cardinality;
+    if (!keyNdv.has_value()) {
+      return std::nullopt;
+    }
+    product *= *keyNdv;
   }
   return static_cast<float>(max * product / (max + product));
 }
@@ -623,9 +637,10 @@ void DerivedTable::finalizeJoinsAndMakePlans() {
 
     // Set initial cardinality as the sum of unionInputs's cardinalities so that
     // makeInitialPlan can use it when estimating groups for makeDistinct.
+    // The sum is unknown if any child's cardinality is unknown.
     cardinality = 0;
     for (const auto* child : unionInputs) {
-      cardinality += child->cardinality;
+      cardinality = add(cardinality, child->cardinality);
     }
   }
 
@@ -1729,10 +1744,11 @@ void DerivedTable::pushExistencesIntoSubquery(const DerivedTable& subquery) {
 
   for (size_t i = previousNumJoins; i < newFirst->joins.size(); ++i) {
     auto* join = newFirst->joins[i];
-    auto pushedNdv = compositeNdv(join->rightTable(), join->rightKeys());
-    auto baseNdv =
-        std::max(1.0f, compositeNdv(join->leftTable(), join->leftKeys()));
-    auto selectivity = std::min(1.0f, pushedNdv / baseNdv);
+    const auto pushedNdv = compositeNdv(join->rightTable(), join->rightKeys());
+    const auto baseNdv =
+        maxOf(compositeNdv(join->leftTable(), join->leftKeys()), 1.0f);
+    // The existence-join selectivity is unknown if either NDV is unknown.
+    const auto selectivity = minOf(divide(pushedNdv, baseNdv), 1.0f);
     join->setFanouts(selectivity, 1);
   }
 

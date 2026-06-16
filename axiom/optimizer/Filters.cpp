@@ -16,6 +16,7 @@
 
 #include <algorithm>
 
+#include "axiom/optimizer/EstimateMath.h"
 #include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/QueryGraph.h"
@@ -85,12 +86,12 @@ struct RangeOverlap {
 
 // Forward declarations for internal functions.
 
-Selectivity rangeSelectivity(
+std::optional<Selectivity> rangeSelectivity(
     ConstraintMap& constraints,
     std::span<const ExprCP> exprs,
     bool updateConstraints);
 
-Selectivity cardinalityBasedSelectivity(
+std::optional<Selectivity> cardinalityBasedSelectivity(
     ExprCP left,
     ExprCP right,
     const Value& leftValue,
@@ -101,9 +102,10 @@ Selectivity cardinalityBasedSelectivity(
 
 } // namespace
 
-Selectivity combineConjuncts(std::span<const Selectivity> selectivities) {
+std::optional<Selectivity> combineConjuncts(
+    std::span<const std::optional<Selectivity>> selectivities) {
   if (selectivities.empty()) {
-    return {1.0, 0.0};
+    return Selectivity{1.0, 0.0};
   }
 
   // For AND: result is TRUE only if all are TRUE.
@@ -119,8 +121,13 @@ Selectivity combineConjuncts(std::span<const Selectivity> selectivities) {
   double trueOrNullProduct = 1.0;
 
   for (const auto& selectivity : selectivities) {
-    trueProduct *= selectivity.trueFraction;
-    trueOrNullProduct *= (selectivity.trueFraction + selectivity.nullFraction);
+    // An unknown conjunct makes the combined selectivity unknown.
+    if (!selectivity.has_value()) {
+      return std::nullopt;
+    }
+    trueProduct *= selectivity->trueFraction;
+    trueOrNullProduct *=
+        (selectivity->trueFraction + selectivity->nullFraction);
   }
 
   // Clamp to handle floating-point rounding.
@@ -130,9 +137,10 @@ Selectivity combineConjuncts(std::span<const Selectivity> selectivities) {
   return result;
 }
 
-Selectivity combineDisjuncts(std::span<const Selectivity> selectivities) {
+std::optional<Selectivity> combineDisjuncts(
+    std::span<const std::optional<Selectivity>> selectivities) {
   if (selectivities.empty()) {
-    return {0.0, 0.0};
+    return Selectivity{0.0, 0.0};
   }
 
   // For OR: result is TRUE if any is TRUE.
@@ -148,8 +156,13 @@ Selectivity combineDisjuncts(std::span<const Selectivity> selectivities) {
   double falseProduct = 1.0;
 
   for (const auto& selectivity : selectivities) {
-    notTrueProduct *= (1.0 - selectivity.trueFraction);
-    falseProduct *= (1.0 - selectivity.trueFraction - selectivity.nullFraction);
+    // An unknown disjunct makes the combined selectivity unknown.
+    if (!selectivity.has_value()) {
+      return std::nullopt;
+    }
+    notTrueProduct *= (1.0 - selectivity->trueFraction);
+    falseProduct *=
+        (1.0 - selectivity->trueFraction - selectivity->nullFraction);
   }
 
   double resultTrue = 1.0 - notTrueProduct;
@@ -200,11 +213,12 @@ Value exprConstraint(ExprCP expr, ConstraintMap& constraints, bool update) {
         "Predicate cannot contain an aggregate function call: {}",
         call->toString());
 
-    // No functionConstraint: get max cardinality from args.
-    float maxCardinality = 1.0f;
+    // No functionConstraint: get max cardinality from args. Unknown if any
+    // arg's cardinality is unknown.
+    std::optional<float> maxCardinality = 1.0f;
     for (auto* arg : call->args()) {
       Value argValue = exprConstraint(arg, constraints, update);
-      maxCardinality = std::max(maxCardinality, argValue.cardinality);
+      maxCardinality = maxOf(maxCardinality, argValue.cardinality);
     }
     result = expr->value();
     result.cardinality = maxCardinality;
@@ -222,17 +236,18 @@ Value clampCardinality(const Value& value) {
   Value result = value;
   auto typeKind = result.type->kind();
 
+  // Clamp only when the cardinality is known; unknown stays unknown.
   if (typeKind == velox::TypeKind::BOOLEAN) {
-    result.cardinality = std::min(result.cardinality, 2.0f);
+    result.cardinality = minOf(result.cardinality, 2.0f);
   } else if (typeKind == velox::TypeKind::TINYINT) {
-    result.cardinality = std::min(result.cardinality, 256.0f);
+    result.cardinality = minOf(result.cardinality, 256.0f);
   } else if (typeKind == velox::TypeKind::SMALLINT) {
-    result.cardinality = std::min(result.cardinality, 65536.0f);
+    result.cardinality = minOf(result.cardinality, 65536.0f);
   }
   return result;
 }
 
-Selectivity comparisonSelectivity(
+std::optional<Selectivity> comparisonSelectivity(
     ConstraintMap& constraints,
     ExprCP expr,
     bool updateConstraints) {
@@ -275,7 +290,7 @@ Selectivity comparisonSelectivity(
       constraints);
 }
 
-Selectivity conjunctsSelectivity(
+std::optional<Selectivity> conjunctsSelectivity(
     ConstraintMap& constraints,
     std::span<const ExprCP> conjuncts,
     bool updateConstraints) {
@@ -284,7 +299,7 @@ Selectivity conjunctsSelectivity(
     exprConstraint(conjunct, constraints, true);
   }
 
-  std::vector<Selectivity> selectivities;
+  std::vector<std::optional<Selectivity>> selectivities;
   selectivities.reserve(conjuncts.size());
 
   // Map from left-hand side expression to list of comparison expressions.
@@ -355,21 +370,26 @@ Selectivity literalSelectivity(ExprCP expr) {
   return {1.0, 0.0};
 }
 
-// Computes selectivity for column expressions.
-Selectivity columnSelectivity(ConstraintMap& constraints, ExprCP expr) {
+// Computes selectivity for column expressions. nullopt if a required column
+// stat is missing.
+std::optional<Selectivity> columnSelectivity(
+    ConstraintMap& constraints,
+    ExprCP expr) {
   const auto& exprValue = value(constraints, expr);
+  // nullFraction and trueFraction are secondary scaling stats; only a missing
+  // cardinality (NDV) makes a selectivity unknown.
+  const float nullFraction = exprValue.nullFraction.value_or(0);
   if (exprValue.type->isBoolean()) {
-    if (exprValue.trueFraction != Value::kUnknown) {
-      return {exprValue.trueFraction, exprValue.nullFraction};
-    }
-    return Selectivity::likelyTrue();
+    return {
+        {exprValue.trueFraction.value_or(Selectivity::kUnknown), nullFraction}};
   }
   // For non-boolean columns, selectivity is 1 - nullFraction.
-  return {1.0 - exprValue.nullFraction, exprValue.nullFraction};
+  return {{1.0 - nullFraction, nullFraction}};
 }
 
-// Computes selectivity for call expressions (function calls).
-Selectivity callSelectivity(
+// Computes selectivity for call expressions (function calls). nullopt if a
+// required input stat is missing; a heuristic value for unmodelable predicates.
+std::optional<Selectivity> callSelectivity(
     ConstraintMap& constraints,
     ExprCP expr,
     bool updateConstraints) {
@@ -381,7 +401,10 @@ Selectivity callSelectivity(
   if (funcName == fn.negation) {
     VELOX_CHECK_EQ(call->args().size(), 1, "NOT must have exactly 1 argument");
     auto innerSel = exprSelectivity(constraints, call->args()[0], false);
-    return {innerSel.falseFraction(), innerSel.nullFraction};
+    if (!innerSel.has_value()) {
+      return std::nullopt;
+    }
+    return Selectivity{innerSel->falseFraction(), innerSel->nullFraction};
   }
 
   // AND
@@ -392,7 +415,7 @@ Selectivity callSelectivity(
   // OR
   if (funcName == SpecialFormCallNames::kOr) {
     const auto& args = call->args();
-    std::vector<Selectivity> disjuncts;
+    std::vector<std::optional<Selectivity>> disjuncts;
     disjuncts.reserve(args.size());
     for (auto* arg : args) {
       disjuncts.push_back(exprSelectivity(constraints, arg, false));
@@ -405,7 +428,7 @@ Selectivity callSelectivity(
     VELOX_CHECK_EQ(
         call->args().size(), 1, "isnull must have exactly 1 argument");
     const auto& argValue = value(constraints, call->args()[0]);
-    return {argValue.nullFraction, 0.0};
+    return Selectivity{argValue.nullFraction.value_or(0), 0.0};
   }
 
   // IN operator.
@@ -426,11 +449,11 @@ Selectivity callSelectivity(
     return comparisonSelectivity(constraints, expr, updateConstraints);
   }
 
-  // Other function - default selectivity.
+  // Other (unmodelable) function - heuristic default, stats not the issue.
   return Selectivity::likelyTrue();
 }
 
-Selectivity exprSelectivity(
+std::optional<Selectivity> exprSelectivity(
     ConstraintMap& constraints,
     ExprCP expr,
     bool updateConstraints) {
@@ -560,6 +583,32 @@ bool isIntegerKind(velox::TypeKind kind) {
       return false;
   }
 }
+
+} // namespace
+
+std::optional<float>
+rangeCardinality(TypeCP type, VariantCP min, VariantCP max) {
+  const auto kind = type->kind();
+  if (!isIntegerKind(kind) || min == nullptr || max == nullptr) {
+    return std::nullopt;
+  }
+  switch (kind) {
+    case velox::TypeKind::TINYINT:
+      return rangeCardinality<velox::TypeKind::TINYINT>(min, max);
+    case velox::TypeKind::SMALLINT:
+      return rangeCardinality<velox::TypeKind::SMALLINT>(min, max);
+    case velox::TypeKind::INTEGER:
+      return rangeCardinality<velox::TypeKind::INTEGER>(min, max);
+    case velox::TypeKind::BIGINT:
+      return rangeCardinality<velox::TypeKind::BIGINT>(min, max);
+    case velox::TypeKind::HUGEINT:
+      return rangeCardinality<velox::TypeKind::HUGEINT>(min, max);
+    default:
+      return std::nullopt;
+  }
+}
+
+namespace {
 
 // Extracts the IN list from an IN call expression.
 // The IN list is constructed from all non-first arguments of the call.
@@ -744,7 +793,7 @@ float rangeSelectivityImpl<velox::TypeKind::VARCHAR>(
 
 // Computes selectivity for comparisons using only cardinality (no range info).
 // Used when min/max bounds are not available for one or both sides.
-Selectivity cardinalityBasedSelectivity(
+std::optional<Selectivity> cardinalityBasedSelectivity(
     ExprCP left,
     ExprCP right,
     const Value& leftValue,
@@ -752,14 +801,19 @@ Selectivity cardinalityBasedSelectivity(
     Name funcName,
     bool updateConstraints,
     ConstraintMap& constraints) {
-  double nullFraction =
-      combinedNullFraction(leftValue.nullFraction, rightValue.nullFraction);
+  double nullFraction = combinedNullFraction(
+      leftValue.nullFraction.value_or(0), rightValue.nullFraction.value_or(0));
 
   const auto& fn = queryCtx()->functionNames();
 
   if (funcName == fn.equality) {
-    double ac = std::max(1.0, static_cast<double>(leftValue.cardinality));
-    double bc = std::max(1.0, static_cast<double>(rightValue.cardinality));
+    // Equality selectivity is 1/NDV; a missing NDV makes it unknown.
+    if (!leftValue.cardinality.has_value() ||
+        !rightValue.cardinality.has_value()) {
+      return std::nullopt;
+    }
+    double ac = std::max(1.0, static_cast<double>(*leftValue.cardinality));
+    double bc = std::max(1.0, static_cast<double>(*rightValue.cardinality));
     double minCard = std::min(ac, bc);
     double probTrue = minCard / (ac * bc);
 
@@ -771,7 +825,7 @@ Selectivity cardinalityBasedSelectivity(
     }
 
     double trueFraction = probTrue * (1.0 - nullFraction);
-    return {trueFraction, nullFraction};
+    return Selectivity{trueFraction, nullFraction};
   }
 
   if (isComparisonOperator(funcName)) {
@@ -801,7 +855,7 @@ Selectivity cardinalityBasedSelectivity(
 // - P(either null) = na + nb - na×nb
 // - All comparison probabilities are scaled by (1 - P(either null))
 template <velox::TypeKind KIND>
-Selectivity comparisonSelectivityImpl(
+std::optional<Selectivity> comparisonSelectivityImpl(
     ExprCP left,
     ExprCP right,
     const Value& leftValue,
@@ -809,8 +863,13 @@ Selectivity comparisonSelectivityImpl(
     Name funcName,
     bool updateConstraints,
     ConstraintMap& constraints) {
-  double nullFraction =
-      combinedNullFraction(leftValue.nullFraction, rightValue.nullFraction);
+  // Range-overlap selectivity needs both NDVs; a missing one makes it unknown.
+  if (!leftValue.cardinality.has_value() ||
+      !rightValue.cardinality.has_value()) {
+    return std::nullopt;
+  }
+  double nullFraction = combinedNullFraction(
+      leftValue.nullFraction.value_or(0), rightValue.nullFraction.value_or(0));
 
   // Extract min/max as doubles for arithmetic (caller guarantees non-null).
   double al = leftValue.min->value<KIND>();
@@ -818,8 +877,8 @@ Selectivity comparisonSelectivityImpl(
   double bl = rightValue.min->value<KIND>();
   double bh = rightValue.max->value<KIND>();
 
-  double ac = std::max(1.0, static_cast<double>(leftValue.cardinality));
-  double bc = std::max(1.0, static_cast<double>(rightValue.cardinality));
+  double ac = std::max(1.0, static_cast<double>(*leftValue.cardinality));
+  double bc = std::max(1.0, static_cast<double>(*rightValue.cardinality));
 
   // Calculate ranges (avoiding zero).
   double rangeA = rangeSize(al, ah);
@@ -902,12 +961,12 @@ Selectivity comparisonSelectivityImpl(
   probTrue = std::clamp(probTrue, 0.0, 1.0);
   double trueFraction = probTrue * (1.0 - nullFraction);
 
-  return {trueFraction, nullFraction};
+  return Selectivity{trueFraction, nullFraction};
 }
 
 } // namespace
 
-Selectivity columnComparisonSelectivity(
+std::optional<Selectivity> columnComparisonSelectivity(
     ExprCP left,
     ExprCP right,
     const Value& leftValue,
@@ -987,7 +1046,7 @@ Selectivity columnComparisonSelectivity(
 // @param lower Lower bound of the range (nullptr means unbounded).
 // @param upper Upper bound of the range (nullptr means unbounded).
 // @return Selectivity with trueFraction and nullFraction.
-Selectivity rangeSelectivity(
+std::optional<Selectivity> rangeSelectivity(
     const ConstraintMap& constraints,
     ExprCP expr,
     VariantCP lower,
@@ -995,8 +1054,7 @@ Selectivity rangeSelectivity(
   const auto& exprValue = value(constraints, expr);
   const auto kind = exprValue.type->kind();
 
-  // Retrieve null fraction from the expression.
-  double nullFraction = exprValue.nullFraction;
+  double nullFraction = exprValue.nullFraction.value_or(0);
 
   // Types without meaningful range semantics.
   switch (kind) {
@@ -1026,7 +1084,7 @@ Selectivity rangeSelectivity(
   // Scale true fraction by (1 - nullFraction) since NULLs cannot match.
   double trueFraction = baseTrueFraction * (1.0 - nullFraction);
 
-  return {trueFraction, nullFraction};
+  return Selectivity{trueFraction, nullFraction};
 }
 
 // Creates a new constraint Value for an expression by tightening bounds and
@@ -1046,31 +1104,11 @@ Value makeConstraint(
   VariantCP minPtr = tightenLowerBound(oldValue.min, lower);
   VariantCP maxPtr = tightenUpperBound(oldValue.max, upper);
 
-  // cardinality is at least 1 distinct value. If the type is an integer type,
-  // then the cardinality is not more than 1 + (max - min).
+  // cardinality is at least 1 distinct value. An integer range caps it at
+  // 1 + (max - min).
   float finalCardinality = std::max(1.0f, cardinality);
-  auto kind = oldValue.type->kind();
-
-  // If the type is an integer type and both upper and lower are set (after
-  // defaulting), adjust cardinality based on range.
-  if (isIntegerKind(kind) && minPtr != nullptr && maxPtr != nullptr) {
-#define INTEGER_CASE(KIND)                                        \
-  case velox::TypeKind::KIND:                                     \
-    finalCardinality = std::min(                                  \
-        finalCardinality,                                         \
-        rangeCardinality<velox::TypeKind::KIND>(minPtr, maxPtr)); \
-    break
-
-    switch (kind) {
-      INTEGER_CASE(TINYINT);
-      INTEGER_CASE(SMALLINT);
-      INTEGER_CASE(INTEGER);
-      INTEGER_CASE(BIGINT);
-      INTEGER_CASE(HUGEINT);
-      default:
-        break;
-    }
-#undef INTEGER_CASE
+  if (const auto rangeCard = rangeCardinality(oldValue.type, minPtr, maxPtr)) {
+    finalCardinality = std::min(finalCardinality, *rangeCard);
   }
 
   Value result(oldValue.type, finalCardinality);
@@ -1178,7 +1216,7 @@ std::optional<Selectivity> processEqualityClause(
 
   if (!rangeConstraints.eqSelectivity.has_value()) {
     rangeConstraints.eqSelectivity =
-        exprValue.cardinality > 0 ? 1.0 / exprValue.cardinality : 1.0;
+        *exprValue.cardinality > 0 ? 1.0 / *exprValue.cardinality : 1.0;
     rangeConstraints.eqValue = &litValue;
   } else {
     if (rangeConstraints.eqValue != nullptr &&
@@ -1364,7 +1402,7 @@ bool hasContradiction(
 }
 
 // Computes selectivity for an equality constraint.
-Selectivity computeEqualitySelectivity(
+std::optional<Selectivity> computeEqualitySelectivity(
     ConstraintMap& constraints,
     ExprCP leftSide,
     const RangeConstraints& rangeConstraints,
@@ -1381,13 +1419,13 @@ Selectivity computeEqualitySelectivity(
             1.0f));
   }
   // Scale by (1 - nullFraction) since NULLs cannot match equality.
-  return {
+  return Selectivity{
       rangeConstraints.eqSelectivity.value() * (1.0 - nullFraction),
       nullFraction};
 }
 
 // Computes selectivity for an IN list constraint.
-Selectivity computeInListSelectivity(
+std::optional<Selectivity> computeInListSelectivity(
     ConstraintMap& constraints,
     ExprCP leftSide,
     const EffectiveBounds& bounds,
@@ -1398,7 +1436,7 @@ Selectivity computeInListSelectivity(
 
   double inListSize = static_cast<double>(array.size());
   double trueFraction =
-      std::clamp(inListSize / exprValue.cardinality, 0.0, 1.0) *
+      std::clamp(inListSize / *exprValue.cardinality, 0.0, 1.0) *
       (1.0 - nullFraction);
 
   if (updateConstraints) {
@@ -1408,11 +1446,11 @@ Selectivity computeInListSelectivity(
         makeConstraint(constraints, leftSide, minVal, maxVal, inListSize));
   }
 
-  return {trueFraction, nullFraction};
+  return Selectivity{trueFraction, nullFraction};
 }
 
 // Computes selectivity for range bounds (lower/upper).
-Selectivity computeBoundsSelectivity(
+std::optional<Selectivity> computeBoundsSelectivity(
     ConstraintMap& constraints,
     ExprCP leftSide,
     const RangeConstraints& rangeConstraints,
@@ -1420,15 +1458,18 @@ Selectivity computeBoundsSelectivity(
     const Value& exprValue,
     double nullFraction,
     bool updateConstraints) {
-  Selectivity selectivity = rangeSelectivity(
+  auto selectivity = rangeSelectivity(
       constraints, leftSide, rangeConstraints.lower, rangeConstraints.upper);
+  if (!selectivity.has_value()) {
+    return std::nullopt;
+  }
 
   // Use baseTrueFraction (before null scaling) for cardinality estimation.
   // Nulls reduce the fraction of rows passing the filter, but don't reduce
   // the number of distinct values in the matching range.
-  double baseTrueFraction = (exprValue.nullFraction < 1.0)
-      ? selectivity.trueFraction / (1.0 - exprValue.nullFraction)
-      : selectivity.trueFraction;
+  double baseTrueFraction = (nullFraction < 1.0)
+      ? selectivity->trueFraction / (1.0 - nullFraction)
+      : selectivity->trueFraction;
 
   if (updateConstraints) {
     constraints.insert_or_assign(
@@ -1438,7 +1479,7 @@ Selectivity computeBoundsSelectivity(
             leftSide,
             rangeConstraints.lower,
             rangeConstraints.upper,
-            exprValue.cardinality * baseTrueFraction));
+            *exprValue.cardinality * baseTrueFraction));
   }
 
   return selectivity;
@@ -1455,7 +1496,7 @@ Selectivity computeBoundsSelectivity(
 // @param updateConstraints If true, updates constraints with refined
 //        value ranges.
 // @return Selectivity with trueFraction and nullFraction.
-Selectivity rangeSelectivity(
+std::optional<Selectivity> rangeSelectivity(
     ConstraintMap& constraints,
     std::span<const ExprCP> exprs,
     bool updateConstraints) {
@@ -1469,9 +1510,12 @@ Selectivity rangeSelectivity(
       firstCall->args().size(), 1, "Call must have at least one argument");
   ExprCP leftSide = firstCall->args()[0];
 
-  // Retrieve null fraction and other statistics from the left-hand side.
+  // A missing NDV (used for equality bounds) makes the selectivity unknown.
   const auto& exprValue = value(constraints, leftSide);
-  double nullFraction = exprValue.nullFraction;
+  if (!exprValue.cardinality.has_value()) {
+    return std::nullopt;
+  }
+  double nullFraction = exprValue.nullFraction.value_or(0);
 
   RangeConstraints rangeConstraints;
   const auto& fn = queryCtx()->functionNames();

@@ -173,9 +173,9 @@ TEST_F(DerivedTablePrinterTest, basic) {
     EXPECT_THAT(
         lines,
         testing::ElementsAre(
-            testing::Eq("dt1: 1.00 rows, a, s"),
+            testing::Eq("dt1: ? rows, a, s"),
             testing::Eq("  output:"),
-            testing::Eq("    a := t2.a INTEGER (cardinality=1.00)"),
+            testing::Eq("    a := t2.a INTEGER (cardinality=?)"),
             testing::Eq("    s := dt1.s BIGINT (cardinality=1.00 min=101)"),
             testing::Eq("  tables: t2"),
             testing::Eq("  aggregates: sum(t2.b) AS s"),
@@ -185,8 +185,8 @@ TEST_F(DerivedTablePrinterTest, basic) {
             testing::Eq(""),
             testing::Eq("t2: 0.50 rows, a, b"),
             testing::Eq("  table: \"default\".\"t\""),
-            testing::Eq("    a INTEGER (cardinality=1.00)"),
-            testing::Eq("    b INTEGER (cardinality=1.00)"),
+            testing::Eq("    a INTEGER (cardinality=?)"),
+            testing::Eq("    b INTEGER (cardinality=?)"),
             testing::Eq("  multi-column filters: gt(t2.a, t2.b)"),
             testing::Eq("")));
   }
@@ -199,9 +199,9 @@ TEST_F(DerivedTablePrinterTest, basic) {
     EXPECT_THAT(
         lines,
         testing::ElementsAre(
-            testing::Eq("dt1: 1.00 rows, a, sum"),
+            testing::Eq("dt1: ? rows, a, sum"),
             testing::Eq("  output:"),
-            testing::Eq("    a := t2.a INTEGER (cardinality=1.00)"),
+            testing::Eq("    a := t2.a INTEGER (cardinality=?)"),
             testing::Eq("    sum := dt1.sum BIGINT (cardinality=1.00)"),
             testing::Eq("  tables: t2, t3"),
             testing::Eq("  joins:"),
@@ -212,13 +212,13 @@ TEST_F(DerivedTablePrinterTest, basic) {
             testing::Eq(""),
             testing::Eq("t2: 1.00 rows, a, b"),
             testing::Eq("  table: \"default\".\"t\""),
-            testing::Eq("    a INTEGER (cardinality=1.00)"),
-            testing::Eq("    b INTEGER (cardinality=1.00)"),
+            testing::Eq("    a INTEGER (cardinality=?)"),
+            testing::Eq("    b INTEGER (cardinality=?)"),
             testing::Eq(""),
             testing::Eq("t3: 1.00 rows, x, y"),
             testing::Eq("  table: \"default\".\"u\""),
-            testing::Eq("    x INTEGER (cardinality=1.00)"),
-            testing::Eq("    y INTEGER (cardinality=1.00)"),
+            testing::Eq("    x INTEGER (cardinality=?)"),
+            testing::Eq("    y INTEGER (cardinality=?)"),
             testing::Eq("")));
   }
 }
@@ -234,8 +234,8 @@ TEST_F(DerivedTablePrinterTest, union) {
         testing::ElementsAre(
             testing::Eq("dt1: 2.00 rows, a, b"),
             testing::Eq("  output:"),
-            testing::Eq("    a := dt2.a INTEGER (cardinality=2.00)"),
-            testing::Eq("    b := dt2.b INTEGER (cardinality=2.00)"),
+            testing::Eq("    a := dt2.a INTEGER (cardinality=?)"),
+            testing::Eq("    b := dt2.b INTEGER (cardinality=?)"),
             testing::Eq("  tables: dt2"),
             testing::Eq(""),
             testing::Eq("dt2: 2.00 rows, a, b"),
@@ -243,25 +243,25 @@ TEST_F(DerivedTablePrinterTest, union) {
             testing::Eq(""),
             testing::Eq("dt3: 1.00 rows, a, b"),
             testing::Eq("  output:"),
-            testing::Eq("    a := t4.a INTEGER (cardinality=2.00)"),
-            testing::Eq("    b := t4.b INTEGER (cardinality=2.00)"),
+            testing::Eq("    a := t4.a INTEGER (cardinality=?)"),
+            testing::Eq("    b := t4.b INTEGER (cardinality=?)"),
             testing::Eq("  tables: t4"),
             testing::Eq(""),
             testing::Eq("t4: 1.00 rows, a, b"),
             testing::Eq("  table: \"default\".\"t\""),
-            testing::Eq("    a INTEGER (cardinality=1.00)"),
-            testing::Eq("    b INTEGER (cardinality=1.00)"),
+            testing::Eq("    a INTEGER (cardinality=?)"),
+            testing::Eq("    b INTEGER (cardinality=?)"),
             testing::Eq(""),
             testing::Eq("dt5: 1.00 rows, a, b"),
             testing::Eq("  output:"),
-            testing::Eq("    a := t6.a INTEGER (cardinality=2.00)"),
-            testing::Eq("    b := t6.b INTEGER (cardinality=2.00)"),
+            testing::Eq("    a := t6.a INTEGER (cardinality=?)"),
+            testing::Eq("    b := t6.b INTEGER (cardinality=?)"),
             testing::Eq("  tables: t6"),
             testing::Eq(""),
             testing::Eq("t6: 1.00 rows, a, b"),
             testing::Eq("  table: \"default\".\"u\""),
-            testing::Eq("    a INTEGER (cardinality=1.00)"),
-            testing::Eq("    b INTEGER (cardinality=1.00)"),
+            testing::Eq("    a INTEGER (cardinality=?)"),
+            testing::Eq("    b INTEGER (cardinality=?)"),
             testing::Eq("")));
   }
 }
@@ -290,14 +290,14 @@ TEST_F(DerivedTablePrinterTest, write) {
           testing::Eq(""),
           testing::Eq("dt2: 1.00 rows, a, b"),
           testing::Eq("  output:"),
-          testing::Eq("    a := t3.a INTEGER (cardinality=1.00)"),
-          testing::Eq("    b := t3.b INTEGER (cardinality=1.00)"),
+          testing::Eq("    a := t3.a INTEGER (cardinality=?)"),
+          testing::Eq("    b := t3.b INTEGER (cardinality=?)"),
           testing::Eq("  tables: t3"),
           testing::Eq(""),
           testing::Eq("t3: 1.00 rows, a, b"),
           testing::Eq("  table: \"default\".\"c\""),
-          testing::Eq("    a INTEGER (cardinality=1.00)"),
-          testing::Eq("    b INTEGER (cardinality=1.00)"),
+          testing::Eq("    a INTEGER (cardinality=?)"),
+          testing::Eq("    b INTEGER (cardinality=?)"),
           testing::Eq("")));
 }
 

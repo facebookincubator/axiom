@@ -63,7 +63,7 @@ Selectivity columnComparisonSelectivity(
     const Value& rightValue,
     std::string_view funcName) {
   ConstraintMap unused;
-  return columnComparisonSelectivity(
+  auto selectivity = columnComparisonSelectivity(
       /*left=*/nullptr,
       /*right=*/nullptr,
       leftValue,
@@ -71,6 +71,8 @@ Selectivity columnComparisonSelectivity(
       toName(funcName),
       /*updateConstraints=*/false,
       unused);
+  VELOX_CHECK(selectivity.has_value());
+  return *selectivity;
 }
 
 class FiltersTest : public test::HiveQueriesTestBase {
@@ -166,13 +168,14 @@ class FiltersTest : public test::HiveQueriesTestBase {
 
       auto constraints = makeSchemaConstraints(allFilters);
       auto selectivity = conjunctsSelectivity(constraints, allFilters, true);
+      ASSERT_TRUE(selectivity.has_value());
 
       auto* call = allFilters[0]->as<Call>();
       auto columnId = call->args()[0]->id();
 
       auto it = constraints.find(columnId);
       ASSERT_NE(it, constraints.end());
-      verify(selectivity, it->second);
+      verify(*selectivity, it->second);
     });
   }
 
@@ -211,7 +214,7 @@ class FiltersTest : public test::HiveQueriesTestBase {
 
             if (testCase.expectedCardinality.has_value()) {
               EXPECT_NEAR(
-                  constraint.cardinality,
+                  constraint.cardinality.value(),
                   *testCase.expectedCardinality,
                   kTolerance);
             }
@@ -225,12 +228,12 @@ class FiltersTest : public test::HiveQueriesTestBase {
 // ============================================================
 
 TEST_F(FiltersTest, combineConjunctsBasic) {
-  std::vector<Selectivity> conjuncts = {
-      {0.8, 0.0}, // 80% true, 0% null, 20% false
-      {0.6, 0.0} // 60% true, 0% null, 40% false
+  std::vector<std::optional<Selectivity>> conjuncts = {
+      Selectivity{0.8, 0.0}, // 80% true, 0% null, 20% false
+      Selectivity{0.6, 0.0} // 60% true, 0% null, 40% false
   };
 
-  Selectivity result = combineConjuncts(conjuncts);
+  Selectivity result = combineConjuncts(conjuncts).value();
 
   // P(TRUE) = product of trueFractions.
   EXPECT_NEAR(result.trueFraction, 0.8 * 0.6, kTolerance);
@@ -239,12 +242,12 @@ TEST_F(FiltersTest, combineConjunctsBasic) {
 }
 
 TEST_F(FiltersTest, combineConjunctsWithNulls) {
-  std::vector<Selectivity> conjuncts = {
-      {0.5, 0.2}, // 50% true, 20% null, 30% false
-      {0.6, 0.1} // 60% true, 10% null, 30% false
+  std::vector<std::optional<Selectivity>> conjuncts = {
+      Selectivity{0.5, 0.2}, // 50% true, 20% null, 30% false
+      Selectivity{0.6, 0.1} // 60% true, 10% null, 30% false
   };
 
-  Selectivity result = combineConjuncts(conjuncts);
+  Selectivity result = combineConjuncts(conjuncts).value();
 
   // P(TRUE) = product of trueFractions.
   EXPECT_NEAR(result.trueFraction, 0.5 * 0.6, kTolerance);
@@ -254,13 +257,13 @@ TEST_F(FiltersTest, combineConjunctsWithNulls) {
 }
 
 TEST_F(FiltersTest, combineConjunctsMultiple) {
-  std::vector<Selectivity> conjuncts = {
-      {0.8, 0.1}, // 80% true, 10% null, 10% false
-      {0.7, 0.0}, // 70% true, 0% null, 30% false
-      {0.9, 0.05} // 90% true, 5% null, 5% false
+  std::vector<std::optional<Selectivity>> conjuncts = {
+      Selectivity{0.8, 0.1}, // 80% true, 10% null, 10% false
+      Selectivity{0.7, 0.0}, // 70% true, 0% null, 30% false
+      Selectivity{0.9, 0.05} // 90% true, 5% null, 5% false
   };
 
-  Selectivity result = combineConjuncts(conjuncts);
+  Selectivity result = combineConjuncts(conjuncts).value();
 
   EXPECT_NEAR(result.trueFraction, 0.8 * 0.7 * 0.9, kTolerance);
   EXPECT_NEAR(
@@ -270,31 +273,31 @@ TEST_F(FiltersTest, combineConjunctsMultiple) {
 }
 
 TEST_F(FiltersTest, combineConjunctsEmpty) {
-  std::vector<Selectivity> empty;
-  Selectivity result = combineConjuncts(empty);
+  std::vector<std::optional<Selectivity>> empty;
+  Selectivity result = combineConjuncts(empty).value();
   EXPECT_NEAR(result.trueFraction, 1.0, kTolerance);
   EXPECT_NEAR(result.nullFraction, 0.0, kTolerance);
 }
 
 TEST_F(FiltersTest, combineConjunctsAllNull) {
-  std::vector<Selectivity> conjuncts = {
-      {0.0, 1.0}, // 0% true, 100% null, 0% false
-      {0.0, 1.0} // 0% true, 100% null, 0% false
+  std::vector<std::optional<Selectivity>> conjuncts = {
+      Selectivity{0.0, 1.0}, // 0% true, 100% null, 0% false
+      Selectivity{0.0, 1.0} // 0% true, 100% null, 0% false
   };
 
-  Selectivity result = combineConjuncts(conjuncts);
+  Selectivity result = combineConjuncts(conjuncts).value();
 
   EXPECT_NEAR(result.trueFraction, 0.0, kTolerance);
   EXPECT_NEAR(result.nullFraction, 1.0, kTolerance);
 }
 
 TEST_F(FiltersTest, combineDisjunctsBasic) {
-  std::vector<Selectivity> disjuncts = {
-      {0.3, 0.0}, // 30% true, 0% null, 70% false
-      {0.4, 0.0} // 40% true, 0% null, 60% false
+  std::vector<std::optional<Selectivity>> disjuncts = {
+      Selectivity{0.3, 0.0}, // 30% true, 0% null, 70% false
+      Selectivity{0.4, 0.0} // 40% true, 0% null, 60% false
   };
 
-  Selectivity result = combineDisjuncts(disjuncts);
+  Selectivity result = combineDisjuncts(disjuncts).value();
 
   // P(TRUE) = 1 - product of (1 - trueFraction_i).
   EXPECT_NEAR(result.trueFraction, 1.0 - (1.0 - 0.3) * (1.0 - 0.4), kTolerance);
@@ -302,12 +305,12 @@ TEST_F(FiltersTest, combineDisjunctsBasic) {
 }
 
 TEST_F(FiltersTest, combineDisjunctsWithNulls) {
-  std::vector<Selectivity> disjuncts = {
-      {0.3, 0.2}, // 30% true, 20% null, 50% false
-      {0.4, 0.1} // 40% true, 10% null, 50% false
+  std::vector<std::optional<Selectivity>> disjuncts = {
+      Selectivity{0.3, 0.2}, // 30% true, 20% null, 50% false
+      Selectivity{0.4, 0.1} // 40% true, 10% null, 50% false
   };
 
-  Selectivity result = combineDisjuncts(disjuncts);
+  Selectivity result = combineDisjuncts(disjuncts).value();
 
   // P(TRUE) = 1 - product of (1 - trueFraction_i).
   EXPECT_NEAR(result.trueFraction, 1.0 - (1.0 - 0.3) * (1.0 - 0.4), kTolerance);
@@ -320,13 +323,13 @@ TEST_F(FiltersTest, combineDisjunctsWithNulls) {
 }
 
 TEST_F(FiltersTest, combineDisjunctsMultiple) {
-  std::vector<Selectivity> disjuncts = {
-      {0.2, 0.1}, // 20% true, 10% null, 70% false
-      {0.3, 0.0}, // 30% true, 0% null, 70% false
-      {0.1, 0.05} // 10% true, 5% null, 85% false
+  std::vector<std::optional<Selectivity>> disjuncts = {
+      Selectivity{0.2, 0.1}, // 20% true, 10% null, 70% false
+      Selectivity{0.3, 0.0}, // 30% true, 0% null, 70% false
+      Selectivity{0.1, 0.05} // 10% true, 5% null, 85% false
   };
 
-  Selectivity result = combineDisjuncts(disjuncts);
+  Selectivity result = combineDisjuncts(disjuncts).value();
 
   EXPECT_NEAR(
       result.trueFraction,
@@ -339,19 +342,19 @@ TEST_F(FiltersTest, combineDisjunctsMultiple) {
 }
 
 TEST_F(FiltersTest, combineDisjunctsEmpty) {
-  std::vector<Selectivity> empty;
-  Selectivity result = combineDisjuncts(empty);
+  std::vector<std::optional<Selectivity>> empty;
+  Selectivity result = combineDisjuncts(empty).value();
   EXPECT_NEAR(result.trueFraction, 0.0, kTolerance);
   EXPECT_NEAR(result.nullFraction, 0.0, kTolerance);
 }
 
 TEST_F(FiltersTest, combineDisjunctsAllNull) {
-  std::vector<Selectivity> disjuncts = {
-      {0.0, 1.0}, // 0% true, 100% null, 0% false
-      {0.0, 1.0} // 0% true, 100% null, 0% false
+  std::vector<std::optional<Selectivity>> disjuncts = {
+      Selectivity{0.0, 1.0}, // 0% true, 100% null, 0% false
+      Selectivity{0.0, 1.0} // 0% true, 100% null, 0% false
   };
 
-  Selectivity result = combineDisjuncts(disjuncts);
+  Selectivity result = combineDisjuncts(disjuncts).value();
 
   EXPECT_NEAR(result.trueFraction, 0.0, kTolerance);
   EXPECT_NEAR(result.nullFraction, 1.0, kTolerance);
@@ -569,8 +572,9 @@ TEST_F(FiltersTest, rangeCardinalityMaxMin) {
 
         auto constraints = makeSchemaConstraints(allFilters);
         auto selectivity = conjunctsSelectivity(constraints, allFilters, true);
+        ASSERT_TRUE(selectivity.has_value());
 
-        EXPECT_NEAR(selectivity.trueFraction, 0.5, 0.1);
+        EXPECT_NEAR(selectivity->trueFraction, 0.5, 0.1);
       },
       kTestConnectorId);
 }
@@ -673,7 +677,9 @@ TEST_F(FiltersTest, strictInequalityStringBounds) {
           EXPECT_EQ(constraint.max->value<std::string>(), testCase.expectedMax);
 
           EXPECT_NEAR(
-              constraint.cardinality, testCase.expectedCardinality, 1.0f);
+              constraint.cardinality.value(),
+              testCase.expectedCardinality,
+              1.0f);
         });
   }
 }
@@ -879,9 +885,10 @@ TEST_F(FiltersTest, equalityConstraintPropagation) {
 
         auto constraints = makeSchemaConstraints(allFilters);
         auto selectivity = exprSelectivity(constraints, allFilters[0], true);
+        ASSERT_TRUE(selectivity.has_value());
 
-        EXPECT_GE(selectivity.trueFraction, 0.0);
-        EXPECT_LE(selectivity.trueFraction, 1.0);
+        EXPECT_GE(selectivity->trueFraction, 0.0);
+        EXPECT_LE(selectivity->trueFraction, 1.0);
 
         // Both columns are constrained to the overlapping range [0, 4]
         // (n_regionkey's range).
@@ -910,14 +917,15 @@ TEST_F(FiltersTest, isNullSelectivity) {
 
         auto constraints = makeSchemaConstraints(allFilters);
         auto selectivity = conjunctsSelectivity(constraints, allFilters, true);
+        ASSERT_TRUE(selectivity.has_value());
 
         // ISNULL: trueFraction = argument's nullFraction (0 for non-nullable
         // columns, > 0 for nullable columns).
-        EXPECT_GE(selectivity.trueFraction, 0.0);
-        EXPECT_LE(selectivity.trueFraction, 1.0);
+        EXPECT_GE(selectivity->trueFraction, 0.0);
+        EXPECT_LE(selectivity->trueFraction, 1.0);
         // nullFraction of IS NULL is 0 (the result is always TRUE or FALSE,
         // never NULL).
-        EXPECT_NEAR(selectivity.nullFraction, 0.0, kTolerance);
+        EXPECT_NEAR(selectivity->nullFraction, 0.0, kTolerance);
       });
 }
 
@@ -1054,11 +1062,12 @@ TEST_F(FiltersTest, cardinalityBasedSelectivity) {
           auto constraints = makeSchemaConstraints(allFilters);
           auto selectivity =
               conjunctsSelectivity(constraints, allFilters, true);
+          ASSERT_TRUE(selectivity.has_value());
 
           EXPECT_NEAR(
-              selectivity.trueFraction, expectedSelectivity, kTolerance);
+              selectivity->trueFraction, expectedSelectivity, kTolerance);
           EXPECT_NEAR(
-              selectivity.nullFraction, expectedNullFraction, kTolerance);
+              selectivity->nullFraction, expectedNullFraction, kTolerance);
         },
         kTestConnectorId);
   };

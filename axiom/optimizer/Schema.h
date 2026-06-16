@@ -40,16 +40,20 @@ using TypeCP = const velox::Type*;
 //     TypeCP type;
 //     bool nullable{false};  // schema fact
 //     struct Estimates {
-//       float cardinality{1};
-//       float nullFraction{0};
-//       float trueFraction{kUnknown};
+//       std::optional<float> cardinality;
+//       std::optional<float> nullFraction;
+//       std::optional<float> trueFraction;
 //       VariantCP min{nullptr};
 //       VariantCP max{nullptr};
 //     } estimates;
 //   };
 struct Value {
-  Value(TypeCP type, float cardinality)
+  /// Constructs a Value with the given type and NDV (nullopt = unknown).
+  Value(TypeCP type, std::optional<float> cardinality)
       : type{type}, cardinality{cardinality} {}
+
+  /// Constructs a Value with unknown cardinality (no NDV statistic available).
+  explicit Value(TypeCP type) : type{type} {}
 
   /// Default copy constructor.
   Value(const Value&) = default;
@@ -75,19 +79,18 @@ struct Value {
   VariantCP max{nullptr};
 
   /// Count of distinct values. Is not exact and is used for estimating
-  /// cardinalities of group bys or joins.
-  float cardinality{1};
+  /// cardinalities of group bys or joins. nullopt means the NDV is unknown (no
+  /// statistic available); callers must not silently treat unknown as a value.
+  std::optional<float> cardinality;
 
-  /// Sentinel value for unknown trueFraction.
-  static constexpr float kUnknown = -1.0f;
+  /// Estimate of true fraction for booleans. 0 means always false. This is an
+  /// estimate and 1 or 0 do not allow pruning dependent code paths. nullopt
+  /// means the true fraction is unknown.
+  std::optional<float> trueFraction;
 
-  /// Estimate of true fraction for booleans. 0 means always
-  /// false. This is an estimate and 1 or 0 do not allow pruning
-  /// dependent code paths.
-  float trueFraction{kUnknown};
-
-  /// 0 means no nulls, 0.5 means half are null.
-  float nullFraction{0};
+  /// 0 means no nulls, 0.5 means half are null. nullopt means the null fraction
+  /// is unknown.
+  std::optional<float> nullFraction;
 
   /// True if nulls may occur. 'false' means that plans that allow no nulls may
   /// be generated.

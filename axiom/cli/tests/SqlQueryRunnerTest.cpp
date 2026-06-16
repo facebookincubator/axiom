@@ -692,14 +692,15 @@ TEST_F(SqlQueryRunnerTest, showStats) {
     test::assertEqualVectors(expected, result.results[0]);
 
     // SHOW STATS FOR (SELECT * FROM <table>): reports optimizer estimates. The
-    // optimizer always estimates NDV (defaults to numRows when unknown) and
-    // doesn't track avgLength.
+    // optimizer reports its NDV estimate, which is unknown for a column it
+    // cannot estimate (the array z), and doesn't track avgLength.
     expected = makeRowVector({
         expected->childAt(0), // row_count.
         expected->childAt(1), // column_name.
         expected->childAt(2), // nulls_fraction.
-        // distinct_values_count: 100 for z (optimizer defaults to numRows).
-        makeNullableFlatVector<int64_t>({std::nullopt, 100, 7, 100, 75}),
+        // distinct_values_count: NULL for z (array NDV is unknown).
+        makeNullableFlatVector<int64_t>(
+            {std::nullopt, 100, 7, std::nullopt, 75}),
         // avg_length: not tracked by the optimizer.
         makeNullConstant(TypeKind::BIGINT, 5),
         expected->childAt(5), // low_value.
@@ -731,8 +732,9 @@ TEST_F(SqlQueryRunnerTest, showStatsForQueryWithFilter) {
       makeNullableFlatVector<double>({std::nullopt, 0.0, 0.0, 0.0, 0.25}),
       // distinct_values_count: reduced for x and w; y stays at 7 because the
       // optimizer assumes column independence — the filter on x doesn't reduce
-      // y's domain (and 7 < 50 filtered rows, so NDV is not capped).
-      makeNullableFlatVector<int64_t>({std::nullopt, 50, 7, 50, 50}),
+      // y's domain (and 7 < 50 filtered rows, so NDV is not capped). NULL for z
+      // (array NDV is unknown).
+      makeNullableFlatVector<int64_t>({std::nullopt, 50, 7, std::nullopt, 50}),
       // avg_length: not tracked by the optimizer.
       makeNullConstant(TypeKind::BIGINT, 5),
       // low_value: x tightened to 51.

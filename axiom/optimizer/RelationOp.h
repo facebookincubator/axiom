@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "axiom/optimizer/EstimateMath.h"
 #include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/Schema.h"
@@ -29,28 +30,31 @@ class RelationOpVisitorContext;
 class RelationOpVisitor;
 class RelationOp;
 
-/// Represents the cost of a plan.
+/// Represents the cost of a plan. cost and cardinality are independent
+/// optionals: a missing statistic (e.g. an unknown NDV) can leave one unknown
+/// while the other is known. For example, a filter with an unknown selectivity
+/// has a known cost (it still scans every input row) but an unknown output
+/// cardinality. An unknown cardinality propagates to the parent's cost on the
+/// next operator.
 struct PlanCost {
-  /// Total cost of the plan.
-  float cost{0};
+  /// Total cost of the plan. nullopt if unknown.
+  std::optional<float> cost{0};
 
-  /// Number of output rows.
-  float cardinality{1};
+  /// Number of output rows. nullopt if unknown.
+  std::optional<float> cardinality{1};
 
   void add(RelationOp& op);
 
   void add(const PlanCost& other) {
-    cost += other.cost;
+    if (cost.has_value() && other.cost.has_value()) {
+      cost = *cost + *other.cost;
+    } else {
+      cost = std::nullopt;
+    }
     cardinality = other.cardinality;
   }
 
-  std::string toString() const {
-    return fmt::format(
-        std::locale("en_US.UTF-8"),
-        "cost: {:L}, cardinality: {:L}",
-        cost,
-        cardinality);
-  }
+  std::string toString() const;
 };
 
 /// Represents the cost of a RelationOp. A Cost has a per-row cost and fanout.
@@ -66,31 +70,42 @@ struct PlanCost {
 /// hits sparsely. An index lookup has no setup cost.
 struct Cost {
   /// Cardinality of the output of the left deep input tree. 1 for a leaf
-  /// scan.
-  float inputCardinality{1};
+  /// scan. nullopt if unknown (an input's cardinality could not be estimated).
+  /// No default: every operator sets it, so a missing value is genuinely
+  /// unknown rather than a silent sentinel.
+  std::optional<float> inputCardinality;
 
   /// Cost of processing one input tuple. Complete cost of the operation for a
-  /// leaf.
-  float unitCost{0};
+  /// leaf. nullopt if unknown (e.g. an index lookup whose unit cost depends on
+  /// an unknown cardinality).
+  std::optional<float> unitCost;
 
   /// 'fanout * inputCardinality' is the number of result rows. For a leaf scan,
-  /// this is the number of rows.
-  float fanout{1};
+  /// this is the number of rows. nullopt if unknown (selectivity could not be
+  /// estimated, e.g. a join key or filter column with unknown NDV). Independent
+  /// of inputCardinality: a join may have a known input but unknown fanout.
+  std::optional<float> fanout;
 
   /// Estimate of total data volume for a hash join build or group / order
   /// by / distinct / repartition. The memory footprint may not be this if the
-  /// operation is streaming or spills.
-  float totalBytes{0};
+  /// operation is streaming or spills. nullopt if unknown.
+  std::optional<float> totalBytes;
 
-  /// Shuffle data volume.
-  float transferBytes{0};
+  /// Shuffle data volume. nullopt if unknown.
+  std::optional<float> transferBytes;
 
-  float totalCost() const {
-    return unitCost * inputCardinality;
+  /// Total CPU cost of this operator. nullopt iff unitCost or inputCardinality
+  /// is unknown (does not depend on fanout). This is the quantity that decides
+  /// whether the cost is known for ranking: the plan's accumulated cost is
+  /// unknown iff some operator's totalCost is unknown (unknown fanout reaches
+  /// it via the parent's inputCardinality).
+  std::optional<float> totalCost() const {
+    return mul(unitCost, inputCardinality);
   }
 
-  float resultCardinality() const {
-    return fanout * inputCardinality;
+  /// Number of output rows. nullopt iff fanout or inputCardinality is unknown.
+  std::optional<float> resultCardinality() const {
+    return mul(fanout, inputCardinality);
   }
 
   /// If 'isUnit' shows the cost/cardinality for one row, else for
@@ -271,16 +286,20 @@ class RelationOp {
     return constraints_;
   }
 
-  /// Returns the number of output rows.
-  float resultCardinality() const {
-    return std::max<float>(1, cost_.resultCardinality());
+  /// Returns the number of output rows, or nullopt if unknown.
+  std::optional<float> resultCardinality() const {
+    const auto cardinality = cost_.resultCardinality();
+    if (!cardinality.has_value()) {
+      return std::nullopt;
+    }
+    return std::max<float>(1, *cardinality);
   }
 
   /// @return 1 for a leaf node, otherwise returns 'resultCardinality()' of the
-  /// input. Nodes with multiple inputs, e.g. Join, UnionAll, return the
-  /// 'resultCardinality()' of the left-most input, which is not the same as
-  /// 'input cardinality'.
-  float inputCardinality() const {
+  /// input, or nullopt if that is unknown. Nodes with multiple inputs, e.g.
+  /// Join, UnionAll, return the 'resultCardinality()' of the left-most input,
+  /// which is not the same as 'input cardinality'.
+  std::optional<float> inputCardinality() const {
     if (input() == nullptr) {
       return 1;
     }
@@ -360,7 +379,7 @@ struct TableScan : public RelationOp {
       Distribution distribution,
       BaseTableCP table,
       ColumnGroupCP index,
-      float fanout,
+      std::optional<float> fanout,
       ColumnVector columns,
       ExprVector lookupKeys,
       velox::core::JoinType joinType,
@@ -541,8 +560,8 @@ struct Join : public RelationOp {
       ExprVector lhsKeys,
       ExprVector rhsKeys,
       ExprVector filterExprs,
-      float fanout,
-      float rlFanout,
+      std::optional<float> fanout,
+      std::optional<float> rlFanout,
       ColumnVector columns);
 
   /// Convenience factory for cross joins (no equi-keys). Sets method to
@@ -571,15 +590,22 @@ struct Join : public RelationOp {
       RelationOpVisitorContext& context) const override;
 
  private:
-  // Computes filter selectivity from input constraints.
-  float computeFilterSelectivity() const;
+  // Computes filter selectivity from input constraints. nullopt if the
+  // selectivity of a non-empty filter could not be estimated.
+  std::optional<float> computeFilterSelectivity() const;
 
   // Initializes constraints_ for output columns.
-  void initConstraints(float fanout, float rlFanout, float filterSelectivity);
+  void initConstraints(
+      std::optional<float> fanout,
+      std::optional<float> rlFanout,
+      std::optional<float> filterSelectivity);
 
   // Initializes cost_ fields. Applies filter selectivity and join-type
   // adjustment to the raw fanout.
-  void initCost(float fanout, float rlFanout, float filterSelectivity);
+  void initCost(
+      std::optional<float> fanout,
+      std::optional<float> rlFanout,
+      std::optional<float> filterSelectivity);
 };
 
 using JoinCP = const Join*;
@@ -691,7 +717,7 @@ struct Aggregation : public RelationOp {
 
  private:
   void initConstraints();
-  void setCostWithGroups(float inputBeforePartial);
+  void setCostWithGroups(std::optional<float> inputBeforePartial);
 };
 
 /// Represents an order by. The order is given by the distribution.

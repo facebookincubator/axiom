@@ -245,6 +245,14 @@ class Optimization {
 
   void makeJoins(PlanState& state);
 
+  // Enumerates joins for 'state' via makeJoins() and, if the resulting best
+  // plan has an uncomputable cost (a missing statistic tainted the estimate),
+  // re-enumerates the DT in the query's syntactic join order. When the cost
+  // cannot be trusted, the order written in the query is preferred over a
+  // poisoned estimate. No-op second pass when the DT is already syntactic or a
+  // rankable plan exists.
+  void makeJoinsWithSyntacticFallback(PlanState& state);
+
   // Retrieves or makes a plan from 'key'. 'key' specifies a set of top level
   // joined tables or a hash join build side table or join.
   //
