@@ -319,6 +319,15 @@ TEST_F(AggregationTest, fanoutPrecisionRegression) {
 TEST_F(AggregationTest, repartitionForAggPartitionSubset) {
   auto schema = ROW({"a", "b", "c", "v"}, BIGINT());
   testConnector_->addTable("t", schema);
+  // Unique grouping keys (NDV == row count): grouping does not reduce rows, so
+  // partial pre-aggregation has no benefit and single-stage aggregation wins.
+  testConnector_->setStats(
+      "t",
+      1'000,
+      {{"a", {.numDistinct = 1'000}},
+       {"b", {.numDistinct = 1'000}},
+       {"c", {.numDistinct = 1'000}},
+       {"v", {.numDistinct = 1'000}}});
   SCOPE_EXIT {
     testConnector_->dropTableIfExists("t");
   };

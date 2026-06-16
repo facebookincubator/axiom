@@ -22,6 +22,17 @@ namespace facebook::axiom::optimizer {
 
 namespace {
 
+// Renders an optional estimate, printing "?" when the value is unknown.
+template <typename T>
+std::string formatOptional(const std::optional<T>& value) {
+  if (!value.has_value()) {
+    return "?";
+  }
+  std::stringstream out;
+  out << std::fixed << std::setprecision(2) << *value;
+  return out.str();
+}
+
 class ToTextVisitor : public RelationOpVisitor {
  public:
   struct Context : public RelationOpVisitorContext {
@@ -329,16 +340,14 @@ class ToTextVisitor : public RelationOpVisitor {
       context.out << " " << extra;
     }
 
-    context.out << " [" << std::fixed << std::setprecision(2)
-                << op.resultCardinality() << " rows] -> "
-                << columnsToString(op.columns()) << std::endl;
+    context.out << " [" << formatOptional(op.resultCardinality())
+                << " rows] -> " << columnsToString(op.columns()) << std::endl;
 
     if (context.options.includeCost) {
       context.out << toIndentation(context.indent + 1)
-                  << "Estimates: fanout = " << std::fixed
-                  << std::setprecision(2) << op.cost().fanout
-                  << ", cost = " << std::fixed << std::setprecision(2)
-                  << op.cost().totalCost() << std::endl;
+                  << "Estimates: fanout = " << formatOptional(op.cost().fanout)
+                  << ", cost = " << formatOptional(op.cost().totalCost())
+                  << std::endl;
     }
   }
 
@@ -352,17 +361,17 @@ class ToTextVisitor : public RelationOpVisitor {
 
     const auto& value = it->second;
     std::stringstream out;
-    out << " " << value.type->toString() << " (ndv=" << std::fixed
-        << std::setprecision(2) << value.cardinality;
+    out << " " << value.type->toString()
+        << " (ndv=" << formatOptional(value.cardinality);
     if (value.min != nullptr) {
       out << " min=" << *value.min;
     }
     if (value.max != nullptr) {
       out << " max=" << *value.max;
     }
-    if (value.nullFraction > 0) {
+    if (value.nullFraction.has_value() && *value.nullFraction > 0) {
       out << " nulls=" << std::fixed << std::setprecision(0)
-          << (value.nullFraction * 100) << "%";
+          << (*value.nullFraction * 100) << "%";
     }
     out << ")";
     return out.str();

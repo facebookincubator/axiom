@@ -864,6 +864,11 @@ TEST_P(SubfieldTest, subquery) {
                   })}),
       });
 
+  // This test verifies subfield pushdown, not join ordering. The decorrelated
+  // subquery join has two cost-equivalent commutations, so use syntactic join
+  // order to keep the plan shape stable across build environments.
+  optimizerOptions_.syntacticJoinOrder = true;
+
   {
     auto logicalPlan = parseSelect(
         "SELECT a.y FROM t_subquery WHERE a.x = (SELECT 1)", kHiveConnectorId);

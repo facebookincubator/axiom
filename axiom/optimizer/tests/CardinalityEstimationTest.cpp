@@ -147,16 +147,16 @@ TEST_F(CardinalityEstimationTest, values) {
         const auto& op = *plan.op;
 
         ASSERT_EQ(op.columns().size(), 2);
-        EXPECT_NEAR(op.resultCardinality(), 3, kCardinalityTolerance);
+        EXPECT_NEAR(op.resultCardinality().value(), 3, kCardinalityTolerance);
 
         auto a = findConstraint(op, 0);
         ASSERT_TRUE(a.has_value());
-        EXPECT_NEAR(a->cardinality, 3, kCardinalityTolerance);
+        EXPECT_NEAR(a->cardinality.value(), 3, kCardinalityTolerance);
         AXIOM_ASSERT_NORANGE(*a);
 
         auto b = findConstraint(op, 1);
         ASSERT_TRUE(b.has_value());
-        EXPECT_NEAR(b->cardinality, 3, kCardinalityTolerance);
+        EXPECT_NEAR(b->cardinality.value(), 3, kCardinalityTolerance);
         AXIOM_ASSERT_NORANGE(*b);
       });
 }
@@ -177,17 +177,17 @@ TEST_F(CardinalityEstimationTest, scan) {
     const auto& op = *plan.op;
 
     ASSERT_EQ(op.columns().size(), 2);
-    EXPECT_NEAR(op.resultCardinality(), 1'000, kCardinalityTolerance);
+    EXPECT_NEAR(op.resultCardinality().value(), 1'000, kCardinalityTolerance);
 
     auto a = findConstraint(op, 0);
     ASSERT_TRUE(a.has_value());
-    EXPECT_NEAR(a->cardinality, 100, kCardinalityTolerance);
-    EXPECT_NEAR(a->nullFraction, 0.5, kTolerance);
+    EXPECT_NEAR(a->cardinality.value(), 100, kCardinalityTolerance);
+    EXPECT_NEAR(a->nullFraction.value(), 0.5, kTolerance);
     AXIOM_ASSERT_RANGE(*a, 10, 100);
 
     auto b = findConstraint(op, 1);
     ASSERT_TRUE(b.has_value());
-    EXPECT_NEAR(b->cardinality, 500, kCardinalityTolerance);
+    EXPECT_NEAR(b->cardinality.value(), 500, kCardinalityTolerance);
     AXIOM_ASSERT_NORANGE(*b);
   });
 }
@@ -208,16 +208,16 @@ TEST_F(CardinalityEstimationTest, scanWithFilter) {
     ASSERT_EQ(op.columns().size(), 2);
 
     // a > 500 on [1, 1000] should give ~50% selectivity.
-    EXPECT_NEAR(op.resultCardinality(), 500, kCardinalityTolerance);
+    EXPECT_NEAR(op.resultCardinality().value(), 500, kCardinalityTolerance);
 
     auto a = findConstraint(op, 0);
     ASSERT_TRUE(a.has_value());
-    EXPECT_NEAR(a->cardinality, 500, kCardinalityTolerance);
+    EXPECT_NEAR(a->cardinality.value(), 500, kCardinalityTolerance);
     AXIOM_ASSERT_RANGE(*a, 501, 1'000);
 
     auto b = findConstraint(op, 1);
     ASSERT_TRUE(b.has_value());
-    EXPECT_NEAR(b->cardinality, 500, kCardinalityTolerance);
+    EXPECT_NEAR(b->cardinality.value(), 500, kCardinalityTolerance);
     AXIOM_ASSERT_NORANGE(*b);
   });
 }
@@ -237,11 +237,11 @@ TEST_F(CardinalityEstimationTest, aggregation) {
       "SELECT a, count(*), sum(b) FROM t GROUP BY a", [](const Plan& plan) {
         const auto& op = *plan.op;
         ASSERT_EQ(op.columns().size(), 3);
-        EXPECT_NEAR(op.resultCardinality(), 50, kCardinalityTolerance);
+        EXPECT_NEAR(op.resultCardinality().value(), 50, kCardinalityTolerance);
 
         auto a = findConstraint(op, 0);
         ASSERT_TRUE(a.has_value());
-        EXPECT_NEAR(a->cardinality, 50, kCardinalityTolerance);
+        EXPECT_NEAR(a->cardinality.value(), 50, kCardinalityTolerance);
         AXIOM_ASSERT_NORANGE(*a);
       });
 }
@@ -252,7 +252,7 @@ TEST_F(CardinalityEstimationTest, globalAggregation) {
 
   verifyPlan("SELECT count(*), sum(a) FROM t", [](const Plan& plan) {
     const auto& op = *plan.op;
-    EXPECT_NEAR(op.resultCardinality(), 1, kCardinalityTolerance);
+    EXPECT_NEAR(op.resultCardinality().value(), 1, kCardinalityTolerance);
   });
 }
 
@@ -273,12 +273,12 @@ TEST_F(CardinalityEstimationTest, globalAggregationOnSubquery) {
       "SELECT count(*) FROM (SELECT a, sum(b) FROM t GROUP BY a) sub",
       [](const Plan& plan) {
         const auto& op = *plan.op;
-        EXPECT_NEAR(op.resultCardinality(), 1, kCardinalityTolerance);
+        EXPECT_NEAR(op.resultCardinality().value(), 1, kCardinalityTolerance);
 
         ASSERT_EQ(op.columns().size(), 1);
         auto count = findConstraint(op, 0);
         ASSERT_TRUE(count.has_value());
-        EXPECT_NEAR(count->cardinality, 1, kCardinalityTolerance);
+        EXPECT_NEAR(count->cardinality.value(), 1, kCardinalityTolerance);
       });
 }
 
@@ -313,20 +313,21 @@ TEST_F(CardinalityEstimationTest, filterOverValues) {
 
         // Filter 'a > 1' uses default selectivity 0.10 (no min/max on VALUES).
         // 3 * 0.10 = 0.3, clamped to at least 1 row.
-        EXPECT_NEAR(filter.resultCardinality(), 1, kCardinalityTolerance);
+        EXPECT_NEAR(
+            filter.resultCardinality().value(), 1, kCardinalityTolerance);
         ASSERT_EQ(filter.columns().size(), 2);
 
         // Filtered column 'a': conjunctsSelectivity sets NDV. sampledNdv
         // preserves it since NDV=1 can't decrease further.
         auto a = findConstraint(filter, 0);
         ASSERT_TRUE(a.has_value());
-        EXPECT_NEAR(a->cardinality, 1, kCardinalityTolerance);
+        EXPECT_NEAR(a->cardinality.value(), 1, kCardinalityTolerance);
 
         // Non-filtered column 'b': sampledNdv(3, 3, 0.10) scales NDV from 3
         // to 1.
         auto b = findConstraint(filter, 1);
         ASSERT_TRUE(b.has_value());
-        EXPECT_NEAR(b->cardinality, 1, kCardinalityTolerance);
+        EXPECT_NEAR(b->cardinality.value(), 1, kCardinalityTolerance);
       });
 }
 
@@ -350,13 +351,14 @@ TEST_F(CardinalityEstimationTest, filterOverUnnest) {
 
         // Unnest produces 10,000 rows (1,000 * fanout 10). Filter 'e > 1'
         // uses default selectivity 0.10 → 1,000 output rows.
-        EXPECT_NEAR(filter.resultCardinality(), 1'000, kCardinalityTolerance);
+        EXPECT_NEAR(
+            filter.resultCardinality().value(), 1'000, kCardinalityTolerance);
 
         // Non-filtered replicate column 'b': NDV=800 from table scan.
         // sampledNdv(800, 10000, 0.10) ≈ 571.
         auto b = findConstraint(filter, 0);
         ASSERT_TRUE(b.has_value());
-        EXPECT_LT(b->cardinality, 800);
+        EXPECT_LT(b->cardinality.value(), 800);
       });
 }
 
@@ -390,7 +392,8 @@ TEST_F(CardinalityEstimationTest, filterOverJoin) {
         // Join on a=x: fanout = 10 / max(100, 10) = 0.1.
         // resultCardinality = 1'000 * 0.1 = 100.
         // Filter 'b > y': ~50% selectivity → ~50 rows.
-        EXPECT_NEAR(filter.resultCardinality(), 50, kCardinalityTolerance);
+        EXPECT_NEAR(
+            filter.resultCardinality().value(), 50, kCardinalityTolerance);
 
         // Column 'c' is not referenced in any filter or join key. After the
         // join, c NDV was scaled by sampledNdv to ~94. The Filter should
@@ -430,7 +433,7 @@ TEST_F(CardinalityEstimationTest, innerJoin) {
       EXPECT_EQ(join.joinType, velox::core::JoinType::kInner);
       ASSERT_EQ(join.columns().size(), 4);
       EXPECT_NEAR(
-          join.resultCardinality(),
+          join.resultCardinality().value(),
           expected.resultCardinality,
           kCardinalityTolerance);
 
@@ -438,27 +441,35 @@ TEST_F(CardinalityEstimationTest, innerJoin) {
       auto a = findConstraint(join, 0);
       ASSERT_TRUE(a.has_value());
       EXPECT_NEAR(
-          a->cardinality, expected.keyCardinality, kCardinalityTolerance);
+          a->cardinality.value(),
+          expected.keyCardinality,
+          kCardinalityTolerance);
       EXPECT_EQ(a->nullFraction, 0.0f);
       AXIOM_ASSERT_NORANGE(*a);
 
       auto b = findConstraint(join, 1);
       ASSERT_TRUE(b.has_value());
       EXPECT_NEAR(
-          b->cardinality, expected.payloadBCardinality, kCardinalityTolerance);
+          b->cardinality.value(),
+          expected.payloadBCardinality,
+          kCardinalityTolerance);
       AXIOM_ASSERT_NORANGE(*b);
 
       auto x = findConstraint(join, 2);
       ASSERT_TRUE(x.has_value());
       EXPECT_NEAR(
-          x->cardinality, expected.keyCardinality, kCardinalityTolerance);
+          x->cardinality.value(),
+          expected.keyCardinality,
+          kCardinalityTolerance);
       EXPECT_EQ(x->nullFraction, 0.0f);
       AXIOM_ASSERT_NORANGE(*x);
 
       auto y = findConstraint(join, 3);
       ASSERT_TRUE(y.has_value());
       EXPECT_NEAR(
-          y->cardinality, expected.payloadYCardinality, kCardinalityTolerance);
+          y->cardinality.value(),
+          expected.payloadYCardinality,
+          kCardinalityTolerance);
       AXIOM_ASSERT_NORANGE(*y);
     });
   };
@@ -526,7 +537,7 @@ TEST_F(CardinalityEstimationTest, joinWithFilterOutsideMinMax) {
     SCOPED_TRACE(sql);
     verifyPlan(sql, [](const Plan& plan) {
       const auto& join = findOp<Join>(*plan.op, RelType::kJoin);
-      EXPECT_NEAR(join.resultCardinality(), 1, kCardinalityTolerance);
+      EXPECT_NEAR(join.resultCardinality().value(), 1, kCardinalityTolerance);
     });
   };
 
@@ -578,7 +589,8 @@ TEST_F(CardinalityEstimationTest, innerJoinUniqueRight) {
         // lrFanout = right.fanout * baseSelectivity(rightTable)
         //          = 0.5 * 1 = 0.5.
         // resultCardinality = |t| * 0.5 = 500.
-        EXPECT_NEAR(join.resultCardinality(), 500, kCardinalityTolerance);
+        EXPECT_NEAR(
+            join.resultCardinality().value(), 500, kCardinalityTolerance);
       });
 }
 
@@ -657,24 +669,24 @@ TEST_F(CardinalityEstimationTest, leftJoin) {
 
     // fanout = |u| / max(ndv(t.a), ndv(u.x)) = 100 / max(100, 50) = 1.
     // resultCardinality = |t| * max(1, 1) = 1'000.
-    EXPECT_NEAR(join.resultCardinality(), 1'000, kCardinalityTolerance);
+    EXPECT_NEAR(join.resultCardinality().value(), 1'000, kCardinalityTolerance);
 
     // Left key/payload: not modified (left side is not optional).
     auto a = findConstraint(join, 0);
     ASSERT_TRUE(a.has_value());
-    EXPECT_NEAR(a->cardinality, 100, kCardinalityTolerance);
+    EXPECT_NEAR(a->cardinality.value(), 100, kCardinalityTolerance);
     EXPECT_EQ(a->nullFraction, 0.1f);
 
     auto b = findConstraint(join, 1);
     ASSERT_TRUE(b.has_value());
-    EXPECT_NEAR(b->cardinality, 500, kCardinalityTolerance);
+    EXPECT_NEAR(b->cardinality.value(), 500, kCardinalityTolerance);
     EXPECT_EQ(b->nullFraction, 0.0f);
 
     // Right key: cardinality adjusted by updateKey to min(ndv(t.a), ndv(u.x)).
     // nullFraction = 1 - ndv(u.x) / ndv(t.a) = 0.5.
     auto x = findConstraint(join, 2);
     ASSERT_TRUE(x.has_value());
-    EXPECT_NEAR(x->cardinality, 50, kCardinalityTolerance);
+    EXPECT_NEAR(x->cardinality.value(), 50, kCardinalityTolerance);
     EXPECT_EQ(x->nullFraction, 0.5f);
 
     // Right payload: only nullable and nullFraction set by updatePayload.
@@ -682,7 +694,7 @@ TEST_F(CardinalityEstimationTest, leftJoin) {
     // from scan.
     auto y = findConstraint(join, 3);
     ASSERT_TRUE(y.has_value());
-    EXPECT_NEAR(y->cardinality, 100, kCardinalityTolerance);
+    EXPECT_NEAR(y->cardinality.value(), 100, kCardinalityTolerance);
     EXPECT_TRUE(y->nullable);
     EXPECT_EQ(y->nullFraction, 0.5f);
   });
@@ -717,20 +729,21 @@ TEST_F(CardinalityEstimationTest, leftJoinWithFilter) {
         // coalesce() doesn't propagate min/max, so the optimizer uses the
         // default selectivity of 0.5 for column-vs-column comparisons.
         // resultCardinality = |t| * max(1, 5 * 0.5) = 1'000 * 2.5 = 2'500.
-        EXPECT_NEAR(join.resultCardinality(), 2'500, kCardinalityTolerance);
+        EXPECT_NEAR(
+            join.resultCardinality().value(), 2'500, kCardinalityTolerance);
 
         // Left join preserves all left-side rows.
         auto a = findConstraint(join, 0);
         ASSERT_TRUE(a.has_value());
         EXPECT_EQ(a->nullFraction, 0.0f);
-        EXPECT_NEAR(a->cardinality, 100, kCardinalityTolerance);
+        EXPECT_NEAR(a->cardinality.value(), 100, kCardinalityTolerance);
 
         // Right-side key column becomes nullable due to unmatched left rows.
         // nullFraction = 1 - ndv(u.x) / ndv(t.a) = 1 - 50 / 100 = 0.5.
         auto x = findConstraint(join, 2);
         ASSERT_TRUE(x.has_value());
-        EXPECT_NEAR(x->nullFraction, 0.5f, kTolerance);
-        EXPECT_NEAR(x->cardinality, 50, kCardinalityTolerance);
+        EXPECT_NEAR(x->nullFraction.value(), 0.5f, kTolerance);
+        EXPECT_NEAR(x->cardinality.value(), 50, kCardinalityTolerance);
       });
 }
 
@@ -764,7 +777,7 @@ TEST_F(CardinalityEstimationTest, rightJoin) {
     // adjustFanoutForJoinType(kRight) = max(1, rlFanout) * (|t| / |u|)
     //   = 10 * 0.1 = 1.
     // resultCardinality = |u| * 1 = 1'000.
-    EXPECT_NEAR(join.resultCardinality(), 1'000, kCardinalityTolerance);
+    EXPECT_NEAR(join.resultCardinality().value(), 1'000, kCardinalityTolerance);
 
     // The optimizer converts 't LEFT JOIN u' to 'u RIGHT JOIN t'
     // (build smaller t, probe larger u). In the RIGHT join:
@@ -774,19 +787,19 @@ TEST_F(CardinalityEstimationTest, rightJoin) {
     // Right key/payload: not modified (right side is not optional).
     auto a = findConstraint(join, 0);
     ASSERT_TRUE(a.has_value());
-    EXPECT_NEAR(a->cardinality, 100, kCardinalityTolerance);
+    EXPECT_NEAR(a->cardinality.value(), 100, kCardinalityTolerance);
     EXPECT_EQ(a->nullFraction, 0.1f);
 
     auto b = findConstraint(join, 1);
     ASSERT_TRUE(b.has_value());
-    EXPECT_NEAR(b->cardinality, 80, kCardinalityTolerance);
+    EXPECT_NEAR(b->cardinality.value(), 80, kCardinalityTolerance);
     EXPECT_EQ(b->nullFraction, 0.0f);
 
     // Left key (u.x): cardinality adjusted by updateKey.
     // nullFraction = max(0, 1 - ndv(u.x) / ndv(t.a)) = 1 - 50 / 100 = 0.5.
     auto x = findConstraint(join, 2);
     ASSERT_TRUE(x.has_value());
-    EXPECT_NEAR(x->cardinality, 50, kCardinalityTolerance);
+    EXPECT_NEAR(x->cardinality.value(), 50, kCardinalityTolerance);
     EXPECT_TRUE(x->nullable);
     EXPECT_EQ(x->nullFraction, 0.5f);
 
@@ -794,7 +807,7 @@ TEST_F(CardinalityEstimationTest, rightJoin) {
     // Cardinality preserved from scan.
     auto y = findConstraint(join, 3);
     ASSERT_TRUE(y.has_value());
-    EXPECT_NEAR(y->cardinality, 500, kCardinalityTolerance);
+    EXPECT_NEAR(y->cardinality.value(), 500, kCardinalityTolerance);
     EXPECT_TRUE(y->nullable);
     EXPECT_EQ(y->nullFraction, 0.5f);
   });
@@ -827,13 +840,14 @@ TEST_F(CardinalityEstimationTest, fullJoin) {
         // fanout = |u| / max(ndv(t.a), ndv(u.x)) = 1'000 / 100 = 10.
         // adjustFanoutForJoinType(kFull) = max(max(1, 10), 1.0) = 10.
         // resultCardinality = |t| * 10 = 10'000.
-        EXPECT_NEAR(join.resultCardinality(), 10'000, kCardinalityTolerance);
+        EXPECT_NEAR(
+            join.resultCardinality().value(), 10'000, kCardinalityTolerance);
 
         // Left key: leftOptional = true.
         // nullFraction = max(0, 1 - ndv(t.a) / ndv(u.x)) = 1 - 100/50 < 0 => 0.
         auto a = findConstraint(join, 0);
         ASSERT_TRUE(a.has_value());
-        EXPECT_NEAR(a->cardinality, 50, kCardinalityTolerance);
+        EXPECT_NEAR(a->cardinality.value(), 50, kCardinalityTolerance);
         EXPECT_TRUE(a->nullable);
         EXPECT_EQ(a->nullFraction, 0.0f);
 
@@ -841,7 +855,7 @@ TEST_F(CardinalityEstimationTest, fullJoin) {
         // Cardinality preserved from scan.
         auto b = findConstraint(join, 1);
         ASSERT_TRUE(b.has_value());
-        EXPECT_NEAR(b->cardinality, 500, kCardinalityTolerance);
+        EXPECT_NEAR(b->cardinality.value(), 500, kCardinalityTolerance);
         EXPECT_TRUE(b->nullable);
         EXPECT_EQ(b->nullFraction, 0.0f);
 
@@ -849,7 +863,7 @@ TEST_F(CardinalityEstimationTest, fullJoin) {
         // nullFraction = max(0, 1 - ndv(u.x) / ndv(t.a)) = 1 - 50/100 = 0.5.
         auto x = findConstraint(join, 2);
         ASSERT_TRUE(x.has_value());
-        EXPECT_NEAR(x->cardinality, 50, kCardinalityTolerance);
+        EXPECT_NEAR(x->cardinality.value(), 50, kCardinalityTolerance);
         EXPECT_TRUE(x->nullable);
         EXPECT_EQ(x->nullFraction, 0.5f);
 
@@ -859,7 +873,7 @@ TEST_F(CardinalityEstimationTest, fullJoin) {
         // preserved from scan.
         auto y = findConstraint(join, 3);
         ASSERT_TRUE(y.has_value());
-        EXPECT_NEAR(y->cardinality, 200, kCardinalityTolerance);
+        EXPECT_NEAR(y->cardinality.value(), 200, kCardinalityTolerance);
         EXPECT_TRUE(y->nullable);
         EXPECT_EQ(y->nullFraction, 0.0f);
       });
@@ -883,7 +897,8 @@ TEST_F(CardinalityEstimationTest, semiProjectMark) {
       EXPECT_EQ(join.joinType, velox::core::JoinType::kLeftSemiProject);
 
       // Semi project preserves all left-side rows.
-      EXPECT_NEAR(join.resultCardinality(), 1'000, kCardinalityTolerance);
+      EXPECT_NEAR(
+          join.resultCardinality().value(), 1'000, kCardinalityTolerance);
 
       // The last column of a kLeftSemiProject join is the mark column.
       auto markColumn = join.columns().back();
@@ -891,7 +906,7 @@ TEST_F(CardinalityEstimationTest, semiProjectMark) {
 
       auto mark = findConstraint(join, markColumn);
       ASSERT_TRUE(mark.has_value());
-      EXPECT_NEAR(mark->trueFraction, expectedTrueFraction, kTolerance);
+      EXPECT_NEAR(mark->trueFraction.value(), expectedTrueFraction, kTolerance);
       EXPECT_FALSE(mark->nullable);
       EXPECT_EQ(mark->nullFraction, 0);
     });
@@ -944,7 +959,7 @@ TEST_F(CardinalityEstimationTest, semiFilter) {
       ASSERT_EQ(join.columns().size(), 2);
 
       EXPECT_NEAR(
-          join.resultCardinality(),
+          join.resultCardinality().value(),
           expected.resultCardinality,
           kCardinalityTolerance);
 
@@ -953,7 +968,9 @@ TEST_F(CardinalityEstimationTest, semiFilter) {
       auto a = findConstraint(join, 0);
       ASSERT_TRUE(a.has_value());
       EXPECT_NEAR(
-          a->cardinality, expected.keyCardinality, kCardinalityTolerance);
+          a->cardinality.value(),
+          expected.keyCardinality,
+          kCardinalityTolerance);
       EXPECT_EQ(a->nullFraction, 0.0f);
       AXIOM_ASSERT_NORANGE(*a);
 
@@ -962,7 +979,9 @@ TEST_F(CardinalityEstimationTest, semiFilter) {
       auto b = findConstraint(join, 1);
       ASSERT_TRUE(b.has_value());
       EXPECT_NEAR(
-          b->cardinality, expected.payloadCardinality, kCardinalityTolerance);
+          b->cardinality.value(),
+          expected.payloadCardinality,
+          kCardinalityTolerance);
       EXPECT_EQ(b->nullFraction, 0.0f);
       AXIOM_ASSERT_NORANGE(*b);
     });
@@ -1028,7 +1047,7 @@ TEST_F(CardinalityEstimationTest, antiJoin) {
       ASSERT_EQ(join.columns().size(), 2);
 
       EXPECT_NEAR(
-          join.resultCardinality(),
+          join.resultCardinality().value(),
           expected.resultCardinality,
           kCardinalityTolerance);
 
@@ -1040,9 +1059,12 @@ TEST_F(CardinalityEstimationTest, antiJoin) {
       auto a = findConstraint(join, 0);
       ASSERT_TRUE(a.has_value());
       EXPECT_NEAR(
-          a->cardinality, expected.keyCardinality, kCardinalityTolerance);
+          a->cardinality.value(),
+          expected.keyCardinality,
+          kCardinalityTolerance);
       EXPECT_TRUE(a->nullable);
-      EXPECT_NEAR(a->nullFraction, expected.keyNullFraction, kTolerance);
+      EXPECT_NEAR(
+          a->nullFraction.value(), expected.keyNullFraction, kTolerance);
       AXIOM_ASSERT_NORANGE(*a);
 
       // Payload: cardinality scaled by antiSelectivity (fewer rows => fewer
@@ -1051,7 +1073,9 @@ TEST_F(CardinalityEstimationTest, antiJoin) {
       auto b = findConstraint(join, 1);
       ASSERT_TRUE(b.has_value());
       EXPECT_NEAR(
-          b->cardinality, expected.payloadCardinality, kCardinalityTolerance);
+          b->cardinality.value(),
+          expected.payloadCardinality,
+          kCardinalityTolerance);
       EXPECT_EQ(b->nullFraction, 0.0f);
       AXIOM_ASSERT_NORANGE(*b);
     });
@@ -1104,7 +1128,7 @@ TEST_F(CardinalityEstimationTest, countingSemiFilter) {
   verifyPlan(sql, [](const Plan& plan) {
     const auto& join = findOp<Join>(*plan.op, RelType::kJoin);
     EXPECT_EQ(join.joinType, velox::core::JoinType::kCountingLeftSemiFilter);
-    EXPECT_NEAR(join.resultCardinality(), 1'000, kCardinalityTolerance);
+    EXPECT_NEAR(join.resultCardinality().value(), 1'000, kCardinalityTolerance);
   });
 
   // fanout < 1: resultCardinality = 1'000 * 0.5 = 500.
@@ -1112,7 +1136,7 @@ TEST_F(CardinalityEstimationTest, countingSemiFilter) {
   verifyPlan(sql, [](const Plan& plan) {
     const auto& join = findOp<Join>(*plan.op, RelType::kJoin);
     EXPECT_EQ(join.joinType, velox::core::JoinType::kCountingLeftSemiFilter);
-    EXPECT_NEAR(join.resultCardinality(), 500, kCardinalityTolerance);
+    EXPECT_NEAR(join.resultCardinality().value(), 500, kCardinalityTolerance);
   });
 }
 
@@ -1131,7 +1155,7 @@ TEST_F(CardinalityEstimationTest, countingAnti) {
   verifyPlan(sql, [](const Plan& plan) {
     const auto& join = findOp<Join>(*plan.op, RelType::kJoin);
     EXPECT_EQ(join.joinType, velox::core::JoinType::kCountingAnti);
-    EXPECT_NEAR(join.resultCardinality(), 1, kCardinalityTolerance);
+    EXPECT_NEAR(join.resultCardinality().value(), 1, kCardinalityTolerance);
   });
 
   // fanout < 1: resultCardinality = 1'000 * 0.5 = 500.
@@ -1139,7 +1163,7 @@ TEST_F(CardinalityEstimationTest, countingAnti) {
   verifyPlan(sql, [](const Plan& plan) {
     const auto& join = findOp<Join>(*plan.op, RelType::kJoin);
     EXPECT_EQ(join.joinType, velox::core::JoinType::kCountingAnti);
-    EXPECT_NEAR(join.resultCardinality(), 500, kCardinalityTolerance);
+    EXPECT_NEAR(join.resultCardinality().value(), 500, kCardinalityTolerance);
   });
 }
 
@@ -1159,7 +1183,7 @@ TEST_F(CardinalityEstimationTest, multiKeyAggregation) {
         const auto& op = *plan.op;
         ASSERT_EQ(op.columns().size(), 3);
         // Grouping on (a, b): expected ~10 * 20 = 200 groups.
-        EXPECT_NEAR(op.resultCardinality(), 200, kCardinalityTolerance);
+        EXPECT_NEAR(op.resultCardinality().value(), 200, kCardinalityTolerance);
 
         auto a = findConstraint(op, 0);
         ASSERT_TRUE(a.has_value());
@@ -1195,11 +1219,12 @@ TEST_F(CardinalityEstimationTest, joinThenAggregate) {
         ASSERT_EQ(op.columns().size(), 2);
 
         // After join and group by c_custkey: expect ~1000 groups.
-        EXPECT_NEAR(op.resultCardinality(), 1'000, kCardinalityTolerance);
+        EXPECT_NEAR(
+            op.resultCardinality().value(), 1'000, kCardinalityTolerance);
 
         auto custkey = findConstraint(op, 0);
         ASSERT_TRUE(custkey.has_value());
-        EXPECT_NEAR(custkey->cardinality, 1'000, kCardinalityTolerance);
+        EXPECT_NEAR(custkey->cardinality.value(), 1'000, kCardinalityTolerance);
         AXIOM_ASSERT_NORANGE(*custkey);
       });
 }
@@ -1221,14 +1246,15 @@ TEST_F(CardinalityEstimationTest, unnest) {
         const auto& op = findOp(*plan.op, RelType::kUnnest);
 
         // Unnest uses a default fanout of 10.
-        EXPECT_NEAR(op.resultCardinality(), 10'000, kCardinalityTolerance);
+        EXPECT_NEAR(
+            op.resultCardinality().value(), 10'000, kCardinalityTolerance);
 
         ASSERT_EQ(op.columns().size(), 2);
 
         // Replicate column 'b' preserves input constraints.
         auto b = findConstraint(op, 0);
         ASSERT_TRUE(b.has_value());
-        EXPECT_NEAR(b->cardinality, 200, kCardinalityTolerance);
+        EXPECT_NEAR(b->cardinality.value(), 200, kCardinalityTolerance);
         AXIOM_ASSERT_RANGE(*b, 1, 500);
 
         // Unnested column 'e' has no detailed statistics.
@@ -1252,21 +1278,21 @@ TEST_F(CardinalityEstimationTest, limit) {
   verifyPlan("SELECT a, b FROM t LIMIT 50", [](const Plan& plan) {
     const auto& op = findOp(*plan.op, RelType::kLimit);
 
-    EXPECT_NEAR(op.resultCardinality(), 50, kCardinalityTolerance);
+    EXPECT_NEAR(op.resultCardinality().value(), 50, kCardinalityTolerance);
     ASSERT_EQ(op.columns().size(), 2);
 
     // sampledNdv(100, 1000, 50/1000) =
     //   100 * (1 - (1 - 1/100)^50) = 100 * 0.395 ≈ 39.5.
     auto a = findConstraint(op, 0);
     ASSERT_TRUE(a.has_value());
-    EXPECT_NEAR(a->cardinality, 39.5, kCardinalityTolerance);
+    EXPECT_NEAR(a->cardinality.value(), 39.5, kCardinalityTolerance);
     AXIOM_ASSERT_RANGE(*a, 1, 500);
 
     // sampledNdv(800, 1000, 50/1000) =
     //   800 * (1 - (1 - 1/800)^50) = 800 * 0.0607 ≈ 48.5.
     auto b = findConstraint(op, 1);
     ASSERT_TRUE(b.has_value());
-    EXPECT_NEAR(b->cardinality, 48.5, kCardinalityTolerance);
+    EXPECT_NEAR(b->cardinality.value(), 48.5, kCardinalityTolerance);
   });
 }
 
@@ -1279,7 +1305,7 @@ TEST_F(CardinalityEstimationTest, unionAll) {
               {"a",
                {.nullPct = 10, .min = 1LL, .max = 500LL, .numDistinct = 100}},
               {"b",
-               {.nullPct = 30, .min = 10LL, .max = 200LL, .numDistinct = 400}},
+               {.nullPct = 30, .min = 10LL, .max = 200LL, .numDistinct = 150}},
           });
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
       ->setStats(
@@ -1288,7 +1314,7 @@ TEST_F(CardinalityEstimationTest, unionAll) {
               {"x",
                {.nullPct = 20, .min = 200LL, .max = 800LL, .numDistinct = 200}},
               {"y",
-               {.nullPct = 50, .min = 100LL, .max = 300LL, .numDistinct = 600}},
+               {.nullPct = 50, .min = 100LL, .max = 300LL, .numDistinct = 180}},
           });
 
   verifyPlan(
@@ -1296,20 +1322,27 @@ TEST_F(CardinalityEstimationTest, unionAll) {
         const auto& op = *plan.op;
 
         ASSERT_EQ(op.columns().size(), 2);
-        EXPECT_NEAR(op.resultCardinality(), 3'000, kCardinalityTolerance);
+        EXPECT_NEAR(
+            op.resultCardinality().value(), 3'000, kCardinalityTolerance);
 
         auto a = findConstraint(op, 0);
         ASSERT_TRUE(a.has_value());
-        EXPECT_NEAR(a->cardinality, 300, kCardinalityTolerance);
+        // Inclusion-exclusion over the legs' ranges [1, 500] and [200, 800]:
+        // 100 + 200 minus the ~20 distinct values expected to be shared in the
+        // [200, 500] overlap.
+        EXPECT_NEAR(a->cardinality.value(), 280, kCardinalityTolerance);
         // (1000 * 0.1 + 2000 * 0.2) / 3000.
-        EXPECT_NEAR(a->nullFraction, 500.0 / 3000, kTolerance);
+        EXPECT_NEAR(a->nullFraction.value(), 500.0 / 3000, kTolerance);
         AXIOM_ASSERT_RANGE(*a, 1, 800);
 
         auto b = findConstraint(op, 1);
         ASSERT_TRUE(b.has_value());
-        EXPECT_NEAR(b->cardinality, 1'000, kCardinalityTolerance);
+        // Inclusion-exclusion over [10, 200] and [100, 300]: 150 + 180 minus
+        // the ~71 distinct values expected to be shared in the [100, 200]
+        // overlap.
+        EXPECT_NEAR(b->cardinality.value(), 259, kCardinalityTolerance);
         // (1000 * 0.3 + 2000 * 0.5) / 3000.
-        EXPECT_NEAR(b->nullFraction, 1300.0 / 3000, kTolerance);
+        EXPECT_NEAR(b->nullFraction.value(), 1300.0 / 3000, kTolerance);
         AXIOM_ASSERT_RANGE(*b, 10, 300);
       });
 }
@@ -1327,12 +1360,13 @@ TEST_F(CardinalityEstimationTest, unionAllWithNullLiteral) {
       "SELECT a FROM t UNION ALL SELECT NULL FROM t", [](const Plan& plan) {
         const auto& op = *plan.op;
         ASSERT_EQ(op.columns().size(), 1);
-        EXPECT_NEAR(op.resultCardinality(), 2'000, kCardinalityTolerance);
+        EXPECT_NEAR(
+            op.resultCardinality().value(), 2'000, kCardinalityTolerance);
 
         auto a = findConstraint(op, 0);
         ASSERT_TRUE(a.has_value());
         // (1000 * 0.1 + 1000 * 1.0) / 2000 = 0.55.
-        EXPECT_NEAR(a->nullFraction, 0.55, kTolerance);
+        EXPECT_NEAR(a->nullFraction.value(), 0.55, kTolerance);
         // Either leg can produce NULLs.
         EXPECT_TRUE(a->nullable);
         // NULL-literal leg contributes only NULLs and so does not affect
@@ -1358,17 +1392,18 @@ TEST_F(CardinalityEstimationTest, unionDistinct) {
   verifyPlan("SELECT a FROM t UNION SELECT a FROM u", [](const Plan& plan) {
     const auto& op = *plan.op;
     ASSERT_EQ(op.columns().size(), 1);
-    // UNION = UNION ALL + GROUP BY. UNION ALL produces 3'000 rows with
-    // ndv(t.a) + ndv(u.a) = 300 distinct values. GROUP BY reduces to ~300
+    // UNION = UNION ALL + GROUP BY. UNION ALL produces 3'000 rows; the distinct
+    // count is ndv(t.a) + ndv(u.a) minus the ~20 values shared in the [200,
+    // 500] range overlap (inclusion-exclusion) = ~280. GROUP BY reduces to ~280
     // rows.
-    EXPECT_NEAR(op.resultCardinality(), 300, kCardinalityTolerance);
+    EXPECT_NEAR(op.resultCardinality().value(), 280, kCardinalityTolerance);
 
     auto a = findConstraint(op, 0);
     ASSERT_TRUE(a.has_value());
-    // NDV stays at ndv(t.a) + ndv(u.a) = 300.
-    EXPECT_NEAR(a->cardinality, 300, kCardinalityTolerance);
+    // NDV is the inclusion-exclusion union of the two ranges = ~280.
+    EXPECT_NEAR(a->cardinality.value(), 280, kCardinalityTolerance);
     // Combined null fraction: (1'000 * 0.1 + 2'000 * 0.2) / 3'000 = 500/3'000.
-    EXPECT_NEAR(a->nullFraction, 500.0 / 3'000, kTolerance);
+    EXPECT_NEAR(a->nullFraction.value(), 500.0 / 3'000, kTolerance);
     EXPECT_TRUE(a->nullable);
     // Min/max should be the union of both ranges: [1, 800].
     AXIOM_ASSERT_RANGE(*a, 1, 800);
@@ -1389,19 +1424,19 @@ TEST_F(CardinalityEstimationTest, orderByWithLimit) {
   verifyPlan("SELECT a, b FROM t ORDER BY a LIMIT 50", [](const Plan& plan) {
     const auto& op = findOp(*plan.op, RelType::kOrderBy);
 
-    EXPECT_NEAR(op.resultCardinality(), 50, kCardinalityTolerance);
+    EXPECT_NEAR(op.resultCardinality().value(), 50, kCardinalityTolerance);
     ASSERT_EQ(op.columns().size(), 2);
 
     // sampledNdv(100, 1000, 50/1000) ≈ 39.5.
     auto a = findConstraint(op, 0);
     ASSERT_TRUE(a.has_value());
-    EXPECT_NEAR(a->cardinality, 39.5, kCardinalityTolerance);
+    EXPECT_NEAR(a->cardinality.value(), 39.5, kCardinalityTolerance);
     AXIOM_ASSERT_RANGE(*a, 1, 500);
 
     // sampledNdv(800, 1000, 50/1000) ≈ 48.5.
     auto b = findConstraint(op, 1);
     ASSERT_TRUE(b.has_value());
-    EXPECT_NEAR(b->cardinality, 48.5, kCardinalityTolerance);
+    EXPECT_NEAR(b->cardinality.value(), 48.5, kCardinalityTolerance);
   });
 }
 

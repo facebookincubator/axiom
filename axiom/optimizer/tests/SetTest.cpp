@@ -654,9 +654,12 @@ TEST_F(SetTest, joinWithUnionAll) {
   auto logicalPlan = parseSelect(sql, kTestConnectorId);
   auto plan = toSingleNodePlan(logicalPlan);
 
-  auto matcher = matchScan("u")
-                     .localPartition(matchScan("v").project().build())
-                     .hashJoin(matchScan("t").build(), core::JoinType::kInner)
+  auto matcher = matchScan("t")
+                     .hashJoin(
+                         matchScan("u")
+                             .localPartition(matchScan("v").project().build())
+                             .build(),
+                         core::JoinType::kInner)
                      .build();
 
   AXIOM_ASSERT_PLAN(plan, matcher);
@@ -773,7 +776,7 @@ TEST_F(SetTest, nondeterministicFilterAboveUnion) {
         matchHiveScan("nation")
             .project()
             .localPartition(matchHiveScan("region").project().build())
-            .distributedAggregation({"k"}, {})
+            .distributedSingleAggregation({"k"}, {})
             .filter("cast(k as double) > rand()")
             .gather()
             .build());

@@ -100,7 +100,7 @@ row counts and for diagnosing unexpected join orders or performance issues.
 | **Aggregation** | Reduces to group count | Keys clamped to group count; aggregates use own Value |
 | **Limit** | Reduces to `limit` rows | Cardinalities scaled by `sampledNdv(c, limit / \|input\|)` |
 | **OrderBy** | Neutral; reduces to `limit` with LIMIT | With LIMIT, cardinalities scaled by `sampledNdv` |
-| **UnionAll** | Sum of inputs | Cardinalities summed, null fractions averaged, ranges unioned |
+| **UnionAll** | Sum of inputs | NDVs combined by inclusion-exclusion over ranges, null fractions averaged, ranges unioned |
 | **Values** | Literal row count | From literal values |
 | **Unnest** | Expands by heuristic fanout of 10 | Pass-through |
 | **AssignUniqueId** | Neutral | Adds unique ID column (ndv = rowCount, no nulls) |
@@ -252,19 +252,22 @@ inputCardinality = Σ (input[i].inputCardinality × input[i].fanout)
 fanout = 1
 ```
 
-Constraints: cardinalities (NDVs) summed, null fractions weighted-averaged,
-ranges unioned across all inputs.
+Constraints: cardinalities (NDVs) combined by inclusion-exclusion over the
+legs' ranges, null fractions weighted-averaged, ranges unioned across all
+inputs.
 
-**Why sum NDVs?** For a column present in all inputs, the true output NDV is
-the size of the set union: `|S_1 ∪ S_2 ∪ ...| = Σ ndv_i − (overlap)`. This
-lies in the range `[max(ndv_i), Σ ndv_i]`. Summing assumes zero overlap, which
-follows from the optimizer's global independence assumption: model each input as
-drawing distinct values uniformly from a large domain D. The expected output NDV
-is `D × (1 − Π(1 − ndv_i / D))`, which simplifies to `Σ ndv_i` when
-D >> ndv_i. This is the same independence assumption used for filter
-selectivity, join key matching, and aggregation group counts. It is also exact
-for the common case where UnionAll combines data from disjoint sources (e.g.,
-different partitions or time ranges with non-overlapping keys).
+**Combining NDVs.** For a column present in all inputs, the true output NDV is
+the size of the set union: `|S_1 ∪ S_2 ∪ ...| = Σ ndv_i − (overlap)`, which lies
+in `[max(ndv_i), Σ ndv_i]`. The legs are folded left to right; folding a leg
+with NDV `m` and range `[ml, mh]` into a running set with NDV `n` and range
+`[nl, nh]` subtracts the values expected to be shared in the overlap region
+`[max(ml,nl), min(mh,nh)]`: `shared = overlapSize × (n / runRange) × (m /
+legRange)`, assuming values are uniformly distributed within each range and
+independent across legs (the same model used for `columnComparisonSelectivity`).
+Disjoint legs have no overlap, so their NDVs sum — exact for the common case of
+data from disjoint sources (different partitions or time ranges with
+non-overlapping keys). A leg without an integer range contributes its full NDV
+(the disjoint assumption) and clears the running range.
 
 ### Values
 

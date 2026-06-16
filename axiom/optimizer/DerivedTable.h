@@ -82,7 +82,8 @@ struct DerivedTable : public PlanObject {
   /// planning by initializePlans() or makeInitialPlan(). For non-union DTs,
   /// computed as resultCardinality() of the initial physical plan. For union
   /// DTs, computed as the sum of resultCardinality() across all children.
-  float cardinality{};
+  /// nullopt if the cardinality is unknown.
+  std::optional<float> cardinality{};
 
   /// Correlation name.
   Name cname{nullptr};

@@ -79,7 +79,7 @@ class FilteredTableStatsTest : public test::HiveQueriesTestBase {
 TEST_F(FilteredTableStatsTest, noFilter) {
   verifyPlan("SELECT n_nationkey, n_name FROM nation", [](const Plan& plan) {
     const auto& op = *plan.op;
-    EXPECT_NEAR(op.resultCardinality(), 25, kCardinalityTolerance);
+    EXPECT_NEAR(op.resultCardinality().value(), 25, kCardinalityTolerance);
   });
 }
 
@@ -92,7 +92,9 @@ TEST_F(FilteredTableStatsTest, dataFilter) {
         const auto& op = *plan.op;
         // n_nationkey in [0, 24]. n_nationkey > 10 should give ~14/24 of rows.
         EXPECT_NEAR(
-            op.resultCardinality(), 25.0 * 14 / 24, kCardinalityTolerance);
+            op.resultCardinality().value(),
+            25.0 * 14 / 24,
+            kCardinalityTolerance);
       });
 }
 
@@ -102,13 +104,13 @@ TEST_F(FilteredTableStatsTest, partitionFilter) {
   verifyPlan("SELECT a FROM t WHERE k = 0", [](const Plan& plan) {
     const auto& op = *plan.op;
     // Partition k=0 has 9 rows (nationkeys 0,3,6,9,12,15,18,21,24).
-    EXPECT_NEAR(op.resultCardinality(), 9, kCardinalityTolerance);
+    EXPECT_NEAR(op.resultCardinality().value(), 9, kCardinalityTolerance);
   });
 
   verifyPlan("SELECT a FROM t WHERE k IN (1, 2)", [](const Plan& plan) {
     const auto& op = *plan.op;
     // Partitions k=1 and k=2 have 8 rows each (16 total).
-    EXPECT_NEAR(op.resultCardinality(), 16, kCardinalityTolerance);
+    EXPECT_NEAR(op.resultCardinality().value(), 16, kCardinalityTolerance);
   });
 }
 
@@ -119,7 +121,8 @@ TEST_F(FilteredTableStatsTest, partitionAndDataFilter) {
     const auto& op = *plan.op;
     // Partition k=0 has 9 rows with a in [0, 24].
     // a > 10 gives selectivity of 14/24, so ~9 * 14/24 = 5.25 rows.
-    EXPECT_NEAR(op.resultCardinality(), 9.0 * 14 / 24, kCardinalityTolerance);
+    EXPECT_NEAR(
+        op.resultCardinality().value(), 9.0 * 14 / 24, kCardinalityTolerance);
   });
 }
 
@@ -140,7 +143,8 @@ TEST_F(FilteredTableStatsTest, joinKeyWithZeroDistinctValues) {
         // is 25 (left join preserves all left-side rows, no matches on NULLs),
         // but NDV is clamped from 0 to 1, producing fanout = 25 and
         // resultCardinality = 625.
-        EXPECT_NEAR(plan.op->resultCardinality(), 625, kCardinalityTolerance);
+        EXPECT_NEAR(
+            plan.op->resultCardinality().value(), 625, kCardinalityTolerance);
       });
 }
 

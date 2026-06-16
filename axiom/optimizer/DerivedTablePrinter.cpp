@@ -38,13 +38,16 @@ std::string columnNames(const ColumnVector& columns) {
   return out.str();
 }
 
-std::string formatCardinality(float cardinality) {
-  return fmt::format("{:.2f}", cardinality);
+std::string formatCardinality(std::optional<float> cardinality) {
+  if (!cardinality.has_value()) {
+    return "?";
+  }
+  return fmt::format("{:.2f}", *cardinality);
 }
 
 std::string headerLine(
     const std::string& name,
-    float cardinality,
+    std::optional<float> cardinality,
     const ColumnVector& columns) {
   return fmt::format(
       "{}: {} rows, {}\n",
@@ -63,11 +66,11 @@ std::string constraintString(const Value& value) {
   if (value.max != nullptr) {
     out << " max=" << *value.max;
   }
-  if (value.trueFraction != Value::kUnknown) {
-    out << " trueFraction=" << value.trueFraction;
+  if (value.trueFraction.has_value()) {
+    out << " trueFraction=" << *value.trueFraction;
   }
-  if (value.nullFraction != 0) {
-    out << " nullFraction=" << value.nullFraction;
+  if (value.nullFraction.has_value() && *value.nullFraction != 0) {
+    out << " nullFraction=" << *value.nullFraction;
   }
   out << ")";
   return out.str();

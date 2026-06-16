@@ -88,6 +88,12 @@ TEST_F(RemoteOutputTest, simpleAggregation) {
 
 TEST_F(RemoteOutputTest, groupByAggregation) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  // Unique group-by key (NDV == row count): grouping does not reduce rows, so
+  // partial pre-aggregation has no benefit and single-stage aggregation wins.
+  testConnector_->setStats(
+      "t",
+      1'000,
+      {{"a", {.numDistinct = 1'000}}, {"b", {.numDistinct = 1'000}}});
 
   auto logicalPlan =
       parseSelect("SELECT sum(b) FROM t GROUP BY a", kTestConnectorId);

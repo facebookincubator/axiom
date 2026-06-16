@@ -30,10 +30,13 @@ bool isSingleWorker() {
 
 } // namespace
 
-PlanState::PlanState(Optimization& optimization, DerivedTableCP dt)
+PlanState::PlanState(
+    Optimization& optimization,
+    DerivedTableCP dt,
+    bool syntacticJoinOrder)
     : optimization(optimization),
       dt(dt),
-      syntacticJoinOrder_{optimization.options().syntacticJoinOrder} {}
+      syntacticJoinOrder_{syntacticJoinOrder} {}
 
 PlanState::PlanState(Optimization& optimization, DerivedTableCP dt, PlanP plan)
     : optimization(optimization),
@@ -181,7 +184,9 @@ Plan::Plan(RelationOpPtr op, const PlanState& state)
 }
 
 bool Plan::isStateBetter(const PlanState& state, float margin) const {
-  return cost.cost > state.cost.cost + margin;
+  // Unknown costs are not comparable, so a plan with an unknown cost is never
+  // declared better.
+  return lessThan(add(state.cost.cost, margin), cost.cost);
 }
 
 std::string Plan::printCost() const {
@@ -424,7 +429,11 @@ std::string PlanState::printPlan(RelationOpPtr op, bool detail) const {
 
 PlanP PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
   int32_t replaceIndex = -1;
-  const float shuffle = shuffleCost(plan->columns()) * state.cost.cardinality;
+  // Shuffle margin for cost comparisons. 0 when the cardinality is unknown: the
+  // comparisons (isStateBetter) don't rank unknown costs anyway, so the margin
+  // is moot.
+  const float shuffle =
+      shuffleCost(plan->columns()) * state.cost.cardinality.value_or(0);
 
   if (!plans.empty()) {
     // Compare with existing. If there is one with same distribution and new is
@@ -474,8 +483,12 @@ PlanP PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
   auto newPlan = std::make_unique<Plan>(std::move(plan), state);
   auto* result = newPlan.get();
 
-  const auto newPlanCost = result->cost.cost + shuffle;
-  bestCostWithShuffle = std::min(bestCostWithShuffle, newPlanCost);
+  // bestCostWithShuffle tracks the cheapest known-cost plan; an unknown-cost
+  // plan does not participate.
+  if (result->cost.cost.has_value()) {
+    bestCostWithShuffle =
+        std::min(bestCostWithShuffle, *result->cost.cost + shuffle);
+  }
   if (replaceIndex >= 0) {
     plans[replaceIndex] = std::move(newPlan);
   } else {
@@ -497,7 +510,12 @@ PlanP PlanSet::best(
   const bool checkDistribution = !isSingleWorker() && distribution.has_value();
 
   for (const auto& plan : plans) {
-    const float cost = plan->cost.cost;
+    // Unknown-cost plans are not rankable by cost; skip them in cost-based
+    // selection (handled by the fallback below).
+    if (!plan->cost.cost.has_value()) {
+      continue;
+    }
+    const float cost = *plan->cost.cost;
 
     auto update = [&](PlanP& current, float& currentCost) {
       if (!current || cost < currentCost) {
@@ -513,7 +531,22 @@ PlanP PlanSet::best(
     }
   }
 
-  VELOX_DCHECK_NOT_NULL(best);
+  // All plans have unknown cost (CBO bailed to syntactic order, which ranks
+  // nothing). Cost-based selection is impossible, but distribution still
+  // matters: prefer a plan already copartitioned with the requested
+  // distribution; otherwise return one and flag that a shuffle is needed.
+  if (best == nullptr) {
+    if (checkDistribution) {
+      for (const auto& plan : plans) {
+        if (plan->op->distribution().isCopartitionedWith(
+                distribution.value())) {
+          return plan.get();
+        }
+      }
+      needsShuffle = true;
+    }
+    return plans.front().get();
+  }
 
   if (!checkDistribution || best == match) {
     return best;
@@ -521,7 +554,7 @@ PlanP PlanSet::best(
 
   if (match) {
     const float shuffle =
-        shuffleCost(best->op->columns()) * best->cost.cardinality;
+        shuffleCost(best->op->columns()) * best->cost.cardinality.value_or(0);
     if (matchCost <= bestCost + shuffle) {
       return match;
     }
@@ -593,12 +626,13 @@ void JoinCandidate::addEdge(
       }
       if (!newEdgeCounted) {
         newEdgeCounted = true;
-        auto preFanout = join->lrFanout();
+        const auto preFanout = join->lrFanout();
         auto [other, newFanout] = edge->otherTable(newPlacedSide.table);
         // We update the lr fanout. The rl fanout will not be used for an inner
-        // join, so we set this to 1.
+        // join, so we set this to 1. The combined fanout is unknown if either
+        // input fanout is unknown.
         join->setFanouts(
-            std::min(newFanout * preFanout, std::min(preFanout, newFanout)), 1);
+            minOf(mul(newFanout, preFanout), minOf(preFanout, newFanout)), 1);
         fanout = join->lrFanout();
       }
       join->addEquality(key, newTableSide.keys[i]);
@@ -627,7 +661,12 @@ bool JoinCandidate::isDominantEdge(PlanState& state, JoinEdgeP edge) {
 std::string JoinCandidate::toString() const {
   std::stringstream out;
   if (join != nullptr) {
-    out << join->toString() << " fanout " << fanout;
+    out << join->toString() << " fanout ";
+    if (fanout.has_value()) {
+      out << *fanout;
+    } else {
+      out << "?";
+    }
   } else {
     out << "x-join: " << tables[0]->toString();
   }
@@ -646,10 +685,14 @@ std::string JoinCandidate::toString() const {
 bool NextJoin::isWorse(const NextJoin& other) const {
   float shuffle = 0;
   if (!plan->distribution().isSamePartition(other.plan->distribution())) {
-    shuffle = other.cost.cardinality * shuffleCost(other.plan->columns());
+    // The shuffle margin only refines a comparison of known costs; an unknown
+    // cardinality contributes 0.
+    shuffle =
+        other.cost.cardinality.value_or(0) * shuffleCost(other.plan->columns());
   }
 
-  return cost.cost > other.cost.cost + shuffle;
+  // Unknown costs are incomparable, so neither variant is declared worse.
+  return lessThan(add(other.cost.cost, shuffle), cost.cost);
 }
 
 velox::core::JoinType reverseJoinType(velox::core::JoinType joinType) {

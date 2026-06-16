@@ -2391,7 +2391,11 @@ void ToVelox::makePredictionAndHistory(
     const velox::core::PlanNodeId& id,
     const RelationOp* op) {
   nodeHistory_[id] = op->historyKey();
-  prediction_[id] = NodePrediction{.cardinality = op->resultCardinality()};
+  // Only record a prediction when the cardinality is known; NodePrediction
+  // holds a concrete value.
+  if (const auto cardinality = op->resultCardinality()) {
+    prediction_[id] = NodePrediction{.cardinality = *cardinality};
+  }
 }
 
 velox::core::PlanNodePtr ToVelox::makeFragment(

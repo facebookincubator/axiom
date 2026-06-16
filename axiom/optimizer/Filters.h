@@ -126,6 +126,12 @@ Value exprConstraint(
 /// BOOLEAN: max 2, TINYINT: max 256, SMALLINT: max 65536.
 Value clampCardinality(const Value& value);
 
+/// Returns the maximum number of distinct values an integer column's [min, max]
+/// range can hold (1 + max - min), or nullopt when the type is not an integer
+/// or either bound is unknown.
+std::optional<float>
+rangeCardinality(TypeCP type, VariantCP min, VariantCP max);
+
 /// Computes selectivity for a conjunction of filter expressions.
 ///
 /// Derives constraints for all expressions in the conjuncts and their
@@ -147,7 +153,7 @@ Value clampCardinality(const Value& value);
 /// expression nodes visited by exprConstraint (columns, calls, fields), not
 /// just columns. Callers that iterate the map should match entries against
 /// known column IDs.
-Selectivity conjunctsSelectivity(
+std::optional<Selectivity> conjunctsSelectivity(
     ConstraintMap& constraints,
     std::span<const ExprCP> conjuncts,
     bool updateConstraints);
@@ -177,7 +183,7 @@ Selectivity conjunctsSelectivity(
 /// @param updateConstraints If true, updates constraints with refined
 ///        value ranges based on the expression semantics.
 /// @return Selectivity with trueFraction and nullFraction.
-Selectivity exprSelectivity(
+std::optional<Selectivity> exprSelectivity(
     ConstraintMap& constraints,
     ExprCP expr,
     bool updateConstraints);
@@ -199,7 +205,7 @@ Selectivity exprSelectivity(
 /// @param funcName Comparison operator: "eq", "lt", "lte", "gt", "gte".
 /// @param updateConstraints If true, adds refined constraints to the map.
 /// @param constraints Map to store constraints keyed by expression ID.
-Selectivity columnComparisonSelectivity(
+std::optional<Selectivity> columnComparisonSelectivity(
     ExprCP left,
     ExprCP right,
     const Value& leftValue,
@@ -214,8 +220,10 @@ Selectivity columnComparisonSelectivity(
 // Filters.cpp.
 // ---------------------------------------------------------------------------
 
-Selectivity combineConjuncts(std::span<const Selectivity> selectivities);
+std::optional<Selectivity> combineConjuncts(
+    std::span<const std::optional<Selectivity>> selectivities);
 
-Selectivity combineDisjuncts(std::span<const Selectivity> selectivities);
+std::optional<Selectivity> combineDisjuncts(
+    std::span<const std::optional<Selectivity>> selectivities);
 
 } // namespace facebook::axiom::optimizer

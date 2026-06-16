@@ -54,7 +54,10 @@ Optimization::Optimization(
       logicalPlan_(&logicalPlan),
       history_(history),
       veloxQueryCtx_(std::move(veloxQueryCtx)),
-      topState_{*this, nullptr},
+      topState_{
+          *this,
+          nullptr,
+          optimizerSession_->options().syntacticJoinOrder},
       aggregationPlanner_{
           isSingleWorker_,
           isSingleDriver_,
@@ -218,9 +221,11 @@ void Optimization::applyFilteredStats(
     for (size_t i = 0; i < stats->columnStats.size(); ++i) {
       const auto& columnStats = stats->columnStats[i];
       auto& existing = baseTable.columns[columnIndices[i]]->value();
-      Value value(
-          existing.type,
-          std::max<float>(1, columnStats.numDistinct.value_or(1)));
+      // The column cardinality is unknown when the connector reports no NDV.
+      Value value(existing.type);
+      if (columnStats.numDistinct.has_value()) {
+        value.cardinality = std::max<float>(1, columnStats.numDistinct.value());
+      }
       value.min = columnStats.min.has_value()
           ? registerVariant(columnStats.min.value())
           : nullptr;
@@ -260,7 +265,11 @@ void Optimization::applyFilteredStats(
   ConstraintMap constraints;
   auto selectivity = conjunctsSelectivity(constraints, rejectedFilters, true);
 
-  baseTable.filteredCardinality = stats->numRows * selectivity.trueFraction;
+  // Connector-boundary producer: keep emitting a concrete filtered
+  // cardinality. Fall back to the no-op selectivity (1.0) when unknown.
+  const double rejectedSelectivity =
+      selectivity.has_value() ? selectivity->trueFraction : 1.0;
+  baseTable.filteredCardinality = stats->numRows * rejectedSelectivity;
 
   // Update column values with refined constraints from rejected filters.
   for (const auto& [columnId, constrainedValue] : constraints) {
@@ -504,7 +513,7 @@ PlanP Optimization::bestPlan() {
   topState_.dt = root_;
   topState_.setTargetExprsForDt(targetColumns);
 
-  makeJoins(topState_);
+  makeJoinsWithSyntacticFallback(topState_);
 
   auto* winner = topState_.plans.best();
   if (auto it = planGroupedLeaves_.find(winner);
@@ -607,12 +616,13 @@ void reducingJoinsRecursive(
       continue;
     }
 
-    if (other.fanout > maxFanout) {
+    // An unknown fanout cannot participate in reducing-path analysis; skip.
+    if (!other.fanout.has_value() || *other.fanout > maxFanout) {
       continue;
     }
 
     visited.add(other.table);
-    auto fanout = fanoutFromRoot * other.fanout;
+    auto fanout = fanoutFromRoot * *other.fanout;
     auto nextMaxFanout = maxFanout;
     if (fanout < ReducingJoinsMagic::kReducingPathThreshold) {
       result.add(other.table);
@@ -821,7 +831,7 @@ std::optional<JoinCandidate> reducingJoins(
 
   auto fanout = candidate.fanout;
   if (!result.bushyTables.empty()) {
-    fanout *= result.bushyReduction;
+    fanout = mul(fanout, result.bushyReduction);
   }
 
   JoinCandidate reducing(candidate.join, startTable, fanout);
@@ -900,7 +910,8 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
   std::vector<JoinCandidate> candidates;
   candidates.reserve(state.dt->tables.size());
   forJoinedTables(
-      state, [&](JoinEdgeP join, PlanObjectCP joined, float fanout) {
+      state,
+      [&](JoinEdgeP join, PlanObjectCP joined, std::optional<float> fanout) {
         if (!state.isPlaced(joined) && state.dt->hasJoin(join) &&
             state.dt->hasTable(joined)) {
           candidates.emplace_back(join, joined, fanout);
@@ -914,7 +925,7 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
     // There are no join edges. There could still be cross joins.
     state.dt->startTables.forEach([&](PlanObjectCP object) {
       if (!state.isPlaced(object) && state.mayConsiderNext(object)) {
-        auto fanout = tableCardinality(object);
+        std::optional<float> fanout = tableCardinality(object);
         if (object->is(PlanType::kTableNode)) {
           fanout = object->as<BaseTable>()->filteredCardinality;
         }
@@ -928,7 +939,7 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
   // Take the first hand joined tables and bundle them with reducing joins that
   // can go on the build side.
 
-  if (!options().syntacticJoinOrder && !candidates.empty()) {
+  if (!state.syntacticJoinOrder() && !candidates.empty()) {
     std::vector<JoinCandidate> bushes;
     for (auto& candidate : candidates) {
       if (auto bush = reducingJoins(state, candidate)) {
@@ -941,12 +952,20 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
 
   std::ranges::sort(
       candidates, [](const JoinCandidate& left, const JoinCandidate& right) {
-        return left.fanout < right.fanout;
+        // Order by fanout; an unknown fanout sorts last so candidates with a
+        // computable cost are explored first.
+        if (!left.fanout.has_value()) {
+          return false;
+        }
+        if (!right.fanout.has_value()) {
+          return true;
+        }
+        return *left.fanout < *right.fanout;
       });
 
   // Keep only the candidate that matches the next unplaced table in
   // dt->joinOrder.
-  if (options().syntacticJoinOrder && candidates.size() > 1) {
+  if (state.syntacticJoinOrder() && candidates.size() > 1) {
     auto nextIt = std::find_if(
         state.dt->joinOrder.begin(),
         state.dt->joinOrder.end(),
@@ -1896,14 +1915,17 @@ void Optimization::joinByIndex(
       return;
     }
 
-    auto fanout = info.scanCardinality * rightTable->filteredCardinality /
-        rightTable->schemaTable->cardinality;
+    // Index lookup fanout is unknown when the right table's filtered
+    // cardinality is unknown.
+    std::optional<float> fanout = divide(
+        mul(info.scanCardinality, rightTable->filteredCardinality),
+        rightTable->schemaTable->cardinality);
     if (joinType == velox::core::JoinType::kLeft) {
-      fanout = std::max<float>(1, fanout);
+      fanout = maxOf(fanout, 1.0f);
     } else if (joinType == velox::core::JoinType::kLeftSemiProject) {
       fanout = 1;
     } else if (joinType == velox::core::JoinType::kLeftSemiFilter) {
-      fanout = std::min<float>(1, fanout);
+      fanout = minOf(fanout, 1.0f);
     }
 
     auto lookupKeys = left.keys;
@@ -2380,7 +2402,7 @@ void Optimization::joinByHash(
       projectionBuilder.inputColumns());
 
   state.addCost(*join);
-  state.cost.cost += buildState.cost.cost;
+  state.cost.cost = add(state.cost.cost, buildState.cost.cost);
   mergeFragmentMaps(
       state.mutableCurrentGroupedLeaves(),
       std::move(buildState.mutableCurrentGroupedLeaves()));
@@ -2538,7 +2560,7 @@ void Optimization::joinByHashRight(
 
   state.replaceColumns(projectionBuilder.outputColumns());
   state.cost = probeState.cost;
-  state.cost.cost += buildCost.cost;
+  state.cost.cost = add(state.cost.cost, buildCost.cost);
 
   if (!isSingleWorker_) {
     // The build gets shuffled to align with probe. If probe is not
@@ -2642,7 +2664,7 @@ void Optimization::crossJoin(
     buildInput = broadcast;
   }
 
-  state.cost.cost += buildState.cost.cost;
+  state.cost.cost = add(state.cost.cost, buildState.cost.cost);
   mergeFragmentMaps(
       state.mutableCurrentGroupedLeaves(),
       std::move(buildState.mutableCurrentGroupedLeaves()));
@@ -2861,7 +2883,7 @@ void Optimization::addJoin(
 
   std::vector<NextJoin> toTry;
 
-  if (options().syntacticJoinOrder &&
+  if (state.syntacticJoinOrder() &&
       candidate.join->originalJoinType().has_value() &&
       candidate.join->originalJoinType().value() ==
           logical_plan::JoinType::kRight) {
@@ -2872,7 +2894,7 @@ void Optimization::addJoin(
     const auto sizeAfterIndex = toTry.size();
     joinByHash(plan, candidate, state, toTry);
 
-    if (!options().syntacticJoinOrder && toTry.size() > sizeAfterIndex &&
+    if (!state.syntacticJoinOrder() && toTry.size() > sizeAfterIndex &&
         candidate.join->isNonCommutative() &&
         candidate.join->hasRightHashVariant()) {
       // There is a hash based candidate with a non-commutative join. Try a
@@ -2933,7 +2955,7 @@ RelationOpPtr Optimization::placeSingleRowDt(
     rightOp = broadcast;
   }
 
-  state.cost.cost += rightState.cost.cost;
+  state.cost.cost = add(state.cost.cost, rightState.cost.cost);
   mergeFragmentMaps(
       state.mutableCurrentGroupedLeaves(),
       std::move(rightState.mutableCurrentGroupedLeaves()));
@@ -3172,8 +3194,9 @@ PlanP unionPlan(std::vector<PlanState>& states, const RelationOpPtr& result) {
   for (auto i = 1; i < states.size(); ++i) {
     const auto& otherCost = states[i].cost;
 
-    firstState.cost.cost += otherCost.cost;
-    firstState.cost.cardinality += otherCost.cardinality;
+    firstState.cost.cost = add(firstState.cost.cost, otherCost.cost);
+    firstState.cost.cardinality =
+        add(firstState.cost.cardinality, otherCost.cardinality);
 
     mergeFragmentMaps(
         firstState.mutableCurrentGroupedLeaves(),
@@ -3182,10 +3205,9 @@ PlanP unionPlan(std::vector<PlanState>& states, const RelationOpPtr& result) {
   return make<Plan>(result, states[0]);
 }
 
-float startingScore(PlanObjectCP table) {
+std::optional<float> startingScore(PlanObjectCP table) {
   if (table->is(PlanType::kTableNode)) {
-    auto* baseTable = table->as<BaseTable>();
-    return baseTable->filteredCardinality;
+    return table->as<BaseTable>()->filteredCardinality;
   }
 
   if (table->is(PlanType::kValuesTableNode)) {
@@ -3202,7 +3224,7 @@ float startingScore(PlanObjectCP table) {
 }
 
 std::vector<int32_t> sortByStartingScore(const PlanObjectVector& tables) {
-  std::vector<float> scores;
+  std::vector<std::optional<float>> scores;
   scores.reserve(tables.size());
   for (auto table : tables) {
     scores.emplace_back(startingScore(table));
@@ -3211,7 +3233,14 @@ std::vector<int32_t> sortByStartingScore(const PlanObjectVector& tables) {
   std::vector<int32_t> indices(tables.size());
   std::iota(indices.begin(), indices.end(), 0);
   std::ranges::sort(indices, [&](int32_t left, int32_t right) {
-    return scores[left] > scores[right];
+    // Larger starting score first; an unknown score sorts last.
+    if (!scores[left].has_value()) {
+      return false;
+    }
+    if (!scores[right].has_value()) {
+      return true;
+    }
+    return *scores[left] > *scores[right];
   });
 
   return indices;
@@ -3229,7 +3258,7 @@ void Optimization::makeJoins(PlanState& state) {
 
   PlanObjectVector firstTables;
 
-  if (options().syntacticJoinOrder) {
+  if (state.syntacticJoinOrder()) {
     // Single-row derived tables keep their syntactic position but are not valid
     // starting tables. They are appended after the driving table as cross
     // products.
@@ -3302,9 +3331,32 @@ void Optimization::makeJoins(PlanState& state) {
   }
 }
 
+void Optimization::makeJoinsWithSyntacticFallback(PlanState& state) {
+  makeJoins(state);
+  if (state.syntacticJoinOrder()) {
+    return;
+  }
+
+  // Cost-based enumeration drops every partial plan whose cost is unknown, so
+  // an empty plan set means the DT has no costable plan. Re-enumerate it from a
+  // clean state forced to syntactic order.
+  if (state.plans.plans.empty()) {
+    PlanState syntacticState(*this, state.dt, /*syntacticJoinOrder=*/true);
+    syntacticState.targetExprs = state.targetExprs;
+    makeJoins(syntacticState);
+    state.plans = std::move(syntacticState.plans);
+  }
+}
+
 void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
   VELOX_CHECK_NOT_NULL(plan);
   auto dt = state.dt;
+
+  // An unknown-cost partial plan cannot be ranked, so cost-based enumeration
+  // drops it. Syntactic-order enumeration ranks nothing and keeps it.
+  if (!state.syntacticJoinOrder() && !state.cost.cost.has_value()) {
+    return;
+  }
 
   if (state.isOverBest()) {
     trace(OptimizerOptions::kExceededBest, dt->id(), state.cost, *plan);
@@ -3362,7 +3414,7 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
 
 RelationOpPtr Optimization::makeInitialPlan(const DerivedTable& dt) {
   const auto key = dt.memoKey();
-  PlanState state(*this, &dt);
+  PlanState state(*this, &dt, options().syntacticJoinOrder);
   RelationOpPtr result;
 
   if (dt.isUnion()) {
@@ -3384,7 +3436,7 @@ RelationOpPtr Optimization::makeInitialPlan(const DerivedTable& dt) {
   } else {
     // Non-union.
     state.targetExprs.unionObjects(dt.exprs);
-    makeJoins(state);
+    makeJoinsWithSyntacticFallback(state);
     result = state.plans.best()->op;
   }
 
@@ -3454,10 +3506,10 @@ PlanP Optimization::makeUnionPlan(
         // references columns pruned from the scan.
         pruneOutputColumns(tmpDt, inputKey.columns);
 
-        PlanState inner(*this, tmpDt);
+        PlanState inner(*this, tmpDt, options().syntacticJoinOrder);
         inner.setTargetExprsForDt(inputKey.columns);
 
-        makeJoins(inner);
+        makeJoinsWithSyntacticFallback(inner);
         memo_.insert(inputKey, std::move(inner.plans));
         plans = memo_.find(inputKey);
       }
@@ -3591,7 +3643,7 @@ PlanP Optimization::makeDtPlan(
     tmpDt->cname = newCName("tmp_dt");
     tmpDt->import(dt, key.tables, key.firstTable, key.existences, existsFanout);
 
-    PlanState inner(*this, tmpDt);
+    PlanState inner(*this, tmpDt, options().syntacticJoinOrder);
     if (key.firstTable->is(PlanType::kDerivedTableNode) &&
         !tmpDt->columns.empty()) {
       // tmpDt wraps a subquery DT and has output columns from flattening.
@@ -3603,7 +3655,7 @@ PlanP Optimization::makeDtPlan(
       inner.targetExprs = key.columns;
     }
 
-    makeJoins(inner);
+    makeJoinsWithSyntacticFallback(inner);
     memo_.insert(key, std::move(inner.plans));
     plans = memo_.find(key);
   }
