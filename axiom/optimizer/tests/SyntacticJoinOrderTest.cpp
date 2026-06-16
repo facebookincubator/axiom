@@ -42,7 +42,9 @@ class SyntacticJoinOrderTest : public test::HiveQueriesTestBase {
     createTpchTables(
         {velox::tpch::Table::TBL_CUSTOMER,
          velox::tpch::Table::TBL_LINEITEM,
-         velox::tpch::Table::TBL_ORDERS});
+         velox::tpch::Table::TBL_NATION,
+         velox::tpch::Table::TBL_ORDERS,
+         velox::tpch::Table::TBL_REGION});
   }
 };
 
@@ -320,6 +322,37 @@ TEST_F(SyntacticJoinOrderTest, crossJoinStartsWithSingleRowSubqueries) {
                               .build())
           .nestedLoopJoin(matchHiveScan("lineitem")
                               .singleAggregation({}, {"count(*) as c"})
+                              .build())
+          .project()
+          .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+  checkSame(logicalPlan, referenceResults);
+}
+
+// A single-row uncorrelated subquery that is not the first table in the
+// syntactic join order must not block the tables placed after it. Here the
+// max() subquery sits between the base table and a later correlated subquery.
+TEST_F(SyntacticJoinOrderTest, singleRowSubqueryInMiddleOfJoinOrder) {
+  optimizerOptions_.sampleJoins = false;
+
+  auto logicalPlan = parseSelect(
+      "SELECT "
+      "  (SELECT max(l_quantity) FROM lineitem) AS x, "
+      "  (SELECT count(*) FROM nation WHERE n_regionkey = r.r_regionkey) AS y "
+      "FROM region r");
+
+  optimizerOptions_.syntacticJoinOrder = false;
+  auto referenceResults = runVelox(logicalPlan).results;
+
+  optimizerOptions_.syntacticJoinOrder = true;
+  auto plan = toSingleNodePlan(logicalPlan);
+  auto matcher =
+      matchHiveScan("region")
+          .hashJoin(
+              matchHiveScan("nation").singleAggregation().project().build(),
+              core::JoinType::kLeft)
+          .nestedLoopJoin(matchHiveScan("lineitem")
+                              .singleAggregation({}, {"max(l_quantity)"})
                               .build())
           .project()
           .build();

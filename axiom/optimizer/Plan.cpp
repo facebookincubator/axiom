@@ -213,7 +213,14 @@ bool PlanState::mayConsiderNext(PlanObjectCP table) const {
 
   const auto end = it - dt->joinOrder.begin();
   for (auto i = 0; i < end; ++i) {
-    if (!placed_.BitSet::contains(dt->joinOrder[i])) {
+    const auto precedingId = dt->joinOrder[i];
+    // Single-row derived tables are placed after join enumeration, not as join
+    // candidates, so they never become placed during enumeration and must not
+    // gate the tables that follow them in the join order.
+    if (dt->singleRowDts.BitSet::contains(precedingId)) {
+      continue;
+    }
+    if (!placed_.BitSet::contains(precedingId)) {
       return false;
     }
   }

@@ -442,7 +442,7 @@ A DerivedTable groups together operations that can be planned as a single unit. 
 
 3. **Dependent subquery joins must be in separate DTs.** When a subquery references a column produced by a prior subquery join (e.g., a mark column from an IN semi-join), the prior join is wrapped in a nested DT. Independent subquery joins can coexist in the same DT.
 
-4. **Syntactic join order (optional).** When enabled, the right side of each join is wrapped in a nested DT to preserve the SQL-specified join order.
+4. **Syntactic join order (optional).** When enabled, the right side of each join is wrapped in a nested DT to preserve the SQL-specified join order. Single-row uncorrelated subqueries (e.g. `(SELECT max(x) FROM u)` in the SELECT list) are an exception: they are always placed after the other tables, regardless of where they appear in the query.
 
 > [!NOTE]
 > Some outer join reorderings are semantically valid. For example, `(a JOIN b) LEFT JOIN c ON f(a, c)` can be reordered to `(a LEFT JOIN c ON f(a, c)) JOIN b`. However, Axiom does not implement this optimization today.
