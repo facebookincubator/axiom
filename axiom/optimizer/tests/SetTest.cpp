@@ -17,11 +17,9 @@
 #include <fmt/format.h>
 
 #include "axiom/logical_plan/PlanBuilder.h"
-#include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::axiom::optimizer {
 namespace {
@@ -29,66 +27,53 @@ namespace {
 using namespace velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class SetTest : public test::HiveQueriesTestBase {
+// Verifies set-operation planning (UNION / INTERSECT / EXCEPT flattening,
+// semi/anti-join lowering, dedup aggregation, local partitioning). Tables are
+// registered in TestConnector with TPC-H statistics, so the optimizer plans
+// instantly with no data generation. The test connector does not push filters
+// into the scan, so filters appear as separate Filter nodes. Result correctness
+// is verified separately in tests/sql/set.sql against DuckDB.
+class SetTest : public test::QueryTestBase {
  protected:
-  static void SetUpTestCase() {
-    test::HiveQueriesTestBase::SetUpTestCase();
-    createTpchTables({
-        velox::tpch::Table::TBL_REGION,
-        velox::tpch::Table::TBL_NATION,
-        velox::tpch::Table::TBL_PART,
-        velox::tpch::Table::TBL_PARTSUPP,
-    });
+  static constexpr double kScaleFactor = 1.0;
+
+  void configureTestConnector() override {
+    testConnector_->addTpchTables(kScaleFactor);
+  }
+
+  lp::LogicalPlanNodePtr parseSelect(std::string_view sql) {
+    return test::QueryTestBase::parseSelect(sql, kTestConnectorId);
   }
 };
 
 TEST_F(SetTest, unionAll) {
-  auto nationType = getSchema("nation");
-
-  const std::vector<std::string>& names = nationType->names();
-
-  lp::PlanBuilder::Context ctx{exec::test::kHiveConnectorId, kDefaultSchema};
-  auto t1 = lp::PlanBuilder(ctx)
-                .tableScan("nation", names)
-                .filter("n_nationkey < 11");
-  auto t2 = lp::PlanBuilder(ctx)
-                .tableScan("nation", names)
-                .filter("n_nationkey > 13");
+  lp::PlanBuilder::Context ctx{kTestConnectorId, kDefaultSchema};
+  auto t1 = lp::PlanBuilder(ctx).tableScan("nation").filter("n_nationkey < 11");
+  auto t2 = lp::PlanBuilder(ctx).tableScan("nation").filter("n_nationkey > 13");
 
   auto logicalPlan = t1.unionAll(t2)
                          .project({"n_regionkey + 1 as rk"})
                          .filter("rk % 3 = 1")
                          .build();
 
-  {
-    auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder()
-                       .hiveScan(
-                           "nation",
-                           test::lte("n_nationkey", 10),
-                           "(n_regionkey + 1) % 3 = 1")
-                       .localPartition(
-                           core::PlanMatcherBuilder()
-                               .hiveScan(
-                                   "nation",
-                                   test::gte("n_nationkey", 14),
-                                   "(n_regionkey + 1) % 3 = 1")
-                               .project()
-                               .build())
-                       .project()
-                       .build();
+  auto plan = toSingleNodePlan(logicalPlan);
+  // The outer 'rk % 3 = 1' filter is pushed into both legs and combined with
+  // the leg's own predicate. Aliases bind stable names to each leg's scan
+  // output (the second leg's columns are disambiguated).
+  auto matchLeg = [](const std::string& filter) {
+    return matchScan("nation")
+        .aliases({"regionkey", "nationkey"})
+        .filter(filter)
+        .project();
+  };
+  auto matcher =
+      matchLeg("nationkey < 11 and (regionkey + 1) % 3 = 1")
+          .localPartition(
+              matchLeg("nationkey > 13 and (regionkey + 1) % 3 = 1").build())
+          .project()
+          .build();
 
-    AXIOM_ASSERT_PLAN(plan, matcher);
-  }
-
-  auto referencePlan = exec::test::PlanBuilder(pool_.get())
-                           .tableScan("nation", nationType)
-                           .filter("n_nationkey < 11 or n_nationkey > 13")
-                           .project({"n_regionkey + 1 as rk"})
-                           .filter("rk % 3 = 1")
-                           .planNode();
-
-  checkSame(logicalPlan, referencePlan);
+  AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
 TEST_F(SetTest, lambdaFilterPushdownThroughUnionAll) {
@@ -113,10 +98,7 @@ TEST_F(SetTest, lambdaFilterPushdownThroughUnionAll) {
 }
 
 TEST_F(SetTest, unionJoin) {
-  auto partType = ROW({"p_partkey", "p_retailprice"}, {BIGINT(), DOUBLE()});
-  auto partSuppType = ROW({"ps_partkey", "ps_availqty"}, {BIGINT(), INTEGER()});
-
-  lp::PlanBuilder::Context ctx(exec::test::kHiveConnectorId, kDefaultSchema);
+  lp::PlanBuilder::Context ctx(kTestConnectorId, kDefaultSchema);
   auto ps1 = lp::PlanBuilder(ctx)
                  .tableScan("partsupp", {"ps_partkey", "ps_availqty"})
                  .filter("ps_availqty < 1000::int")
@@ -150,60 +132,35 @@ TEST_F(SetTest, unionJoin) {
           .aggregate({}, {"sum(1)"})
           .build();
 
-  {
-    auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher =
-        core::PlanMatcherBuilder()
-            .hiveScan("partsupp", test::lte("ps_availqty", 999))
-            .localPartition({
-                core::PlanMatcherBuilder()
-                    .hiveScan("partsupp", test::gte("ps_availqty", 2001))
-                    .project()
-                    .build(),
-                core::PlanMatcherBuilder()
-                    .hiveScan(
-                        "partsupp", test::between("ps_availqty", 1200, 1400))
-                    .project()
-                    .build(),
-            })
-            .hashJoin(
-                core::PlanMatcherBuilder()
-                    .hiveScan("part", test::lt("p_retailprice", 1100.0))
-                    .localPartition(
-                        core::PlanMatcherBuilder()
-                            .hiveScan("part", test::gt("p_retailprice", 1200.0))
-                            .project()
-                            .build())
-                    .build(),
-                core::JoinType::kInner)
-            .singleAggregation({}, {"sum(1)"})
-            .build();
-
-    AXIOM_ASSERT_PLAN(plan, matcher);
-  }
-
-  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto referencePlan =
-      exec::test::PlanBuilder(idGenerator)
-          .tableScan("partsupp", partSuppType)
-          .filter(
-              "ps_availqty < 1000::int or ps_availqty > 2000::int "
-              "or ps_availqty between 1200::int and 1400::int")
+  auto plan = toSingleNodePlan(logicalPlan);
+  // Aliases bind a stable name to each leg's filter column (the non-first scans
+  // of a table are disambiguated, e.g. ps_availqty_1).
+  auto matchLeg = [](const std::string& table,
+                     const std::string& alias,
+                     const std::string& filter) {
+    return matchScan(table)
+        .aliases({std::nullopt, alias})
+        .filter(filter)
+        .project();
+  };
+  auto matcher =
+      matchLeg("partsupp", "availqty", "availqty < 1000")
+          .localPartition({
+              matchLeg("partsupp", "availqty", "availqty > 2000").build(),
+              matchLeg("partsupp", "availqty", "availqty between 1200 and 1400")
+                  .build(),
+          })
           .hashJoin(
-              {"ps_partkey"},
-              {"p_partkey"},
-              exec::test::PlanBuilder(idGenerator)
-                  .tableScan("part", partType)
-                  .filter("p_retailprice < 1100.0 or p_retailprice > 1200.0")
-                  .planNode(),
-              "",
-              {"p_partkey"})
-          .project({"p_partkey"})
-          .localPartition({})
+              matchLeg("part", "retailprice", "retailprice < 1100.0")
+                  .localPartition(
+                      matchLeg("part", "retailprice", "retailprice > 1200.0")
+                          .build())
+                  .build(),
+              core::JoinType::kInner)
           .singleAggregation({}, {"sum(1)"})
-          .planNode();
+          .build();
 
-  checkSame(logicalPlan, referencePlan);
+  AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
 // Checks
@@ -212,10 +169,6 @@ TEST_F(SetTest, unionJoin) {
 // - UNION of two UNION ALL (should be flatten)
 // - UNION of two UNION (should be flatten)
 TEST_F(SetTest, unionFlatten) {
-  auto nationType = getSchema("nation");
-
-  const std::vector<std::string>& names = nationType->names();
-
   for (auto [rootType, leftType, rightType] : {
            std::tuple{
                lp::SetOperation::kUnion,
@@ -239,16 +192,14 @@ TEST_F(SetTest, unionFlatten) {
            },
 
        }) {
-    lp::PlanBuilder::Context ctx{exec::test::kHiveConnectorId, kDefaultSchema};
+    lp::PlanBuilder::Context ctx{kTestConnectorId, kDefaultSchema};
     auto makeT1 = [&] {
-      return lp::PlanBuilder(ctx)
-          .tableScan("nation", names)
-          .filter("n_nationkey < 11");
+      return lp::PlanBuilder(ctx).tableScan("nation").filter(
+          "n_nationkey < 11");
     };
     auto makeT2 = [&] {
-      return lp::PlanBuilder(ctx)
-          .tableScan("nation", names)
-          .filter("n_nationkey > 13");
+      return lp::PlanBuilder(ctx).tableScan("nation").filter(
+          "n_nationkey > 13");
     };
 
     SCOPED_TRACE(
@@ -266,11 +217,15 @@ TEST_F(SetTest, unionFlatten) {
 
     auto plan = toSingleNodePlan(logicalPlan);
 
+    // Each leg now carries a separate Filter node above its TableScan. The
+    // first child of a LocalPartition has no rename Project; non-first children
+    // do.
     auto nonFirstChildMatcher =
-        core::PlanMatcherBuilder().tableScan().project().build();
+        core::PlanMatcherBuilder().tableScan().filter().project().build();
     if (rootType == lp::SetOperation::kUnion) {
       auto matcher = core::PlanMatcherBuilder()
                          .tableScan()
+                         .filter()
                          .localPartition({
                              nonFirstChildMatcher,
                              nonFirstChildMatcher,
@@ -285,6 +240,7 @@ TEST_F(SetTest, unionFlatten) {
         rightType == lp::SetOperation::kUnionAll) {
       auto matcher = core::PlanMatcherBuilder()
                          .tableScan()
+                         .filter()
                          .localPartition({
                              nonFirstChildMatcher,
                              nonFirstChildMatcher,
@@ -298,11 +254,13 @@ TEST_F(SetTest, unionFlatten) {
       // We cannot flatten UNION inside UNION ALL.
       auto matcher = core::PlanMatcherBuilder()
                          .tableScan()
+                         .filter()
                          .localPartition(nonFirstChildMatcher)
                          .aggregation()
                          .localPartition(
                              core::PlanMatcherBuilder()
                                  .tableScan()
+                                 .filter()
                                  .localPartition(nonFirstChildMatcher)
                                  .aggregation()
                                  .project()
@@ -311,35 +269,21 @@ TEST_F(SetTest, unionFlatten) {
 
       AXIOM_ASSERT_PLAN(plan, matcher);
     }
-
-    auto referencePlan = exec::test::PlanBuilder(pool_.get())
-                             .tableScan("nation", nationType)
-                             .filter("n_nationkey < 11 or n_nationkey > 13")
-                             .singleAggregation(names, {})
-                             .planNode();
-
-    // Skip distributed run. Problem with local exchange source with
-    // multiple inputs.
-    checkSame(logicalPlan, referencePlan, {.numWorkers = 1, .numDrivers = 4});
   }
 }
 
 TEST_F(SetTest, intersect) {
-  auto nationType = getSchema("nation");
-
-  const std::vector<std::string>& names = nationType->names();
-
-  lp::PlanBuilder::Context ctx{exec::test::kHiveConnectorId, kDefaultSchema};
+  lp::PlanBuilder::Context ctx{kTestConnectorId, kDefaultSchema};
   auto t1 = lp::PlanBuilder(ctx)
-                .tableScan("nation", names)
+                .tableScan("nation")
                 .filter("n_nationkey < 21")
                 .project({"n_nationkey", "n_regionkey"});
   auto t2 = lp::PlanBuilder(ctx)
-                .tableScan("nation", names)
+                .tableScan("nation")
                 .filter("n_nationkey > 11")
                 .project({"n_nationkey", "n_regionkey"});
   auto t3 = lp::PlanBuilder(ctx)
-                .tableScan("nation", names)
+                .tableScan("nation")
                 .filter("n_nationkey > 12")
                 .project({"n_nationkey", "n_regionkey"});
 
@@ -351,61 +295,49 @@ TEST_F(SetTest, intersect) {
           .build();
 
   {
-    auto startMatcher = [&](auto&& filters,
-                            const std::string& remainingFilter = "") {
-      return core::PlanMatcherBuilder().hiveScan(
-          "nation", std::move(filters), remainingFilter);
-    };
-
     // TODO Fix this plan to push down (n_regionkey + 1) % 3
     // = 1 to all branches of 'intersect'.
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = startMatcher(test::gte("n_nationkey", 13))
-                       .hashJoin(
-                           startMatcher(test::gte("n_nationkey", 12))
-                               .hashJoin(
-                                   startMatcher(
-                                       test::lte("n_nationkey", 20),
-                                       "(n_regionkey + 1) % 3 = 1")
-                                       .build(),
-                                   core::JoinType::kRightSemiFilter)
-                               .build(),
-                           core::JoinType::kRightSemiFilter)
-                       .singleAggregation()
-                       .project()
-                       .project()
-                       .build();
+    // Aliases bind stable names to each leg's scan output (the non-first scans
+    // of nation are disambiguated). The t1 leg also carries the combined
+    // (regionkey + 1) % 3 = 1 predicate pushed down from above the intersect.
+    auto matchLeg = [](const std::string& filter) {
+      return matchScan("nation")
+          .aliases({"nationkey", "regionkey"})
+          .filter(filter);
+    };
+    auto matcher =
+        matchLeg("nationkey > 12")
+            .hashJoin(
+                matchLeg("nationkey > 11")
+                    .hashJoin(
+                        matchLeg("nationkey < 21 and (regionkey + 1) % 3 = 1")
+                            .build(),
+                        core::JoinType::kRightSemiFilter)
+                    .build(),
+                core::JoinType::kRightSemiFilter)
+            .singleAggregation()
+            .project()
+            .project()
+            .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
-
-  auto referencePlan = exec::test::PlanBuilder(pool_.get())
-                           .tableScan("nation", nationType)
-                           .filter("n_nationkey > 12 and n_nationkey < 21")
-                           .project({"n_regionkey + 1 as rk"})
-                           .filter("rk % 3 = 1")
-                           .planNode();
-
-  checkSame(logicalPlan, referencePlan);
 }
 
 TEST_F(SetTest, except) {
-  auto nationType = getSchema("nation");
-
-  const std::vector<std::string>& names = nationType->names();
-
-  lp::PlanBuilder::Context ctx{exec::test::kHiveConnectorId, kDefaultSchema};
+  lp::PlanBuilder::Context ctx{kTestConnectorId, kDefaultSchema};
   auto t1 = lp::PlanBuilder(ctx)
-                .tableScan("nation", names)
+                .tableScan("nation")
                 .filter("n_nationkey < 21")
                 .project({"n_nationkey", "n_regionkey"});
   auto t2 = lp::PlanBuilder(ctx)
-                .tableScan("nation", names)
+                .tableScan("nation")
                 .filter("n_nationkey > 16")
                 .project({"n_nationkey", "n_regionkey"});
   auto t3 = lp::PlanBuilder(ctx)
-                .tableScan("nation", names)
+                .tableScan("nation")
                 .filter("n_nationkey <= 5")
                 .project({"n_nationkey", "n_regionkey"});
 
@@ -415,42 +347,31 @@ TEST_F(SetTest, except) {
                          .filter("rk % 3 = 1")
                          .build();
 
-  {
-    auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder()
-                       .hiveScan(
-                           "nation",
-                           test::lte("n_nationkey", 20),
-                           "(n_regionkey + 1) % 3 = 1")
-                       .hashJoin(
-                           core::PlanMatcherBuilder()
-                               // TODO Fix this plan to push down (n_regionkey +
-                               // 1) % 3 = 1 to all branches of 'except'.
-                               .hiveScan("nation", test::gte("n_nationkey", 17))
-                               .build(),
-                           core::JoinType::kAnti,
-                           {.nullAware = false})
-                       .hashJoin(
-                           core::PlanMatcherBuilder()
-                               .hiveScan("nation", test::lte("n_nationkey", 5))
-                               .build(),
-                           core::JoinType::kAnti,
-                           {.nullAware = false})
-                       .singleAggregation()
-                       .project()
-                       .build();
+  auto plan = toSingleNodePlan(logicalPlan);
+  // Aliases bind stable names to each leg's scan output (the non-first scans of
+  // nation are disambiguated). The t1 (probe) leg also carries the combined
+  // (regionkey + 1) % 3 = 1 predicate pushed down from above the except.
+  // TODO Fix this plan to push down (n_regionkey + 1) % 3 = 1 to all branches
+  // of 'except'.
+  auto matchLeg = [](const std::string& filter) {
+    return matchScan("nation")
+        .aliases({"nationkey", "regionkey"})
+        .filter(filter);
+  };
+  auto matcher = matchLeg("nationkey < 21 and (regionkey + 1) % 3 = 1")
+                     .hashJoin(
+                         matchLeg("nationkey > 16").build(),
+                         core::JoinType::kAnti,
+                         {.nullAware = false})
+                     .hashJoin(
+                         matchLeg("nationkey <= 5").build(),
+                         core::JoinType::kAnti,
+                         {.nullAware = false})
+                     .singleAggregation()
+                     .project()
+                     .build();
 
-    AXIOM_ASSERT_PLAN(plan, matcher);
-  }
-
-  auto referencePlan = exec::test::PlanBuilder(pool_.get())
-                           .tableScan("nation", nationType)
-                           .filter("n_nationkey > 5 and n_nationkey <= 16")
-                           .project({"n_nationkey", "n_regionkey + 1 as rk"})
-                           .filter("rk % 3 = 1")
-                           .planNode();
-
-  checkSame(logicalPlan, referencePlan);
+  AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
 TEST_F(SetTest, exceptAll) {
@@ -461,24 +382,26 @@ TEST_F(SetTest, exceptAll) {
       "EXCEPT ALL "
       "SELECT n_nationkey, n_regionkey FROM nation WHERE n_nationkey <= 5");
 
-  auto matchBuild = [](auto filters) {
-    return core::PlanMatcherBuilder()
-        .hiveScan("nation", std::move(filters))
+  // The build legs (non-first scans of nation) read disambiguated columns, so
+  // aliases bind stable names for the filter predicates.
+  auto matchBuild = [](const std::string& filter) {
+    return matchScan("nation")
+        .aliases({"nationkey", "regionkey"})
+        .filter(filter)
         .build();
   };
 
   {
     // Single-node, single-driver: counting anti joins, no aggregation.
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder()
-                       .hiveScan("nation", test::lte("n_nationkey", 20))
-                       .hashJoin(
-                           matchBuild(test::gte("n_nationkey", 17)),
-                           core::JoinType::kCountingAnti)
-                       .hashJoin(
-                           matchBuild(test::lte("n_nationkey", 5)),
-                           core::JoinType::kCountingAnti)
-                       .build();
+    auto matcher =
+        matchScan("nation")
+            .filter("n_nationkey < 21")
+            .hashJoin(
+                matchBuild("nationkey > 16"), core::JoinType::kCountingAnti)
+            .hashJoin(
+                matchBuild("nationkey <= 5"), core::JoinType::kCountingAnti)
+            .build();
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
@@ -486,22 +409,22 @@ TEST_F(SetTest, exceptAll) {
     // Multi-driver: local hash repartition on probe side. The second
     // counting join reuses the partition from the first (no extra repartition).
     auto plan = toSingleNodePlan(logicalPlan, /*numDrivers=*/4);
-    auto matcher = core::PlanMatcherBuilder()
-                       .hiveScan("nation", test::lte("n_nationkey", 20))
-                       .localPartition({"n_nationkey", "n_regionkey"})
-                       .hashJoin(
-                           matchBuild(test::gte("n_nationkey", 17)),
-                           core::JoinType::kCountingAnti)
-                       .hashJoin(
-                           matchBuild(test::lte("n_nationkey", 5)),
-                           core::JoinType::kCountingAnti)
-                       .build();
+    auto matcher =
+        matchScan("nation")
+            .filter("n_nationkey < 21")
+            .localPartition({"n_nationkey", "n_regionkey"})
+            .hashJoin(
+                matchBuild("nationkey > 16"), core::JoinType::kCountingAnti)
+            .hashJoin(
+                matchBuild("nationkey <= 5"), core::JoinType::kCountingAnti)
+            .build();
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
-  auto matchPartitionedBuild = [](auto filters) {
-    return core::PlanMatcherBuilder()
-        .hiveScan("nation", std::move(filters))
+  auto matchPartitionedBuild = [](const std::string& filter) {
+    return matchScan("nation")
+        .aliases({"nationkey", "regionkey"})
+        .filter(filter)
         .shuffle()
         .build();
   };
@@ -509,15 +432,15 @@ TEST_F(SetTest, exceptAll) {
   {
     // Distributed: all sides co-partitioned by join keys (no broadcast).
     auto distributedPlan = planVelox(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder()
-                       .hiveScan("nation", test::lte("n_nationkey", 20))
+    auto matcher = matchScan("nation")
+                       .filter("n_nationkey < 21")
                        .shuffle({"n_nationkey", "n_regionkey"})
                        .localPartition({"n_nationkey", "n_regionkey"})
                        .hashJoin(
-                           matchPartitionedBuild(test::gte("n_nationkey", 17)),
+                           matchPartitionedBuild("nationkey > 16"),
                            core::JoinType::kCountingAnti)
                        .hashJoin(
-                           matchPartitionedBuild(test::lte("n_nationkey", 5)),
+                           matchPartitionedBuild("nationkey <= 5"),
                            core::JoinType::kCountingAnti)
                        .gather()
                        .build();
@@ -537,8 +460,7 @@ TEST_F(SetTest, intersectAll) {
   auto logicalPlan = parseSelect(
       "SELECT a FROM t1 "
       "INTERSECT ALL SELECT a FROM t2 "
-      "INTERSECT ALL SELECT a FROM t3",
-      kTestConnectorId);
+      "INTERSECT ALL SELECT a FROM t3");
 
   auto matchBuild = [](const std::string& table) {
     return matchScan(table).build();
@@ -611,9 +533,8 @@ TEST_F(SetTest, intersectAllSideSwap) {
 
   // big INTERSECT ALL small: 'big' is probe, 'small' is build.
   {
-    auto logicalPlan = parseSelect(
-        "SELECT a FROM big INTERSECT ALL SELECT x FROM small",
-        kTestConnectorId);
+    auto logicalPlan =
+        parseSelect("SELECT a FROM big INTERSECT ALL SELECT x FROM small");
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), startMatcher().build());
 
     auto distributedPlan = planVelox(logicalPlan);
@@ -624,9 +545,8 @@ TEST_F(SetTest, intersectAllSideSwap) {
   // Reversed input: optimizer swaps sides — 'big' is still probe, 'small'
   // is still build. A rename project maps probe columns to output schema.
   {
-    auto logicalPlan = parseSelect(
-        "SELECT x FROM small INTERSECT ALL SELECT a FROM big",
-        kTestConnectorId);
+    auto logicalPlan =
+        parseSelect("SELECT x FROM small INTERSECT ALL SELECT a FROM big");
     AXIOM_ASSERT_PLAN(
         toSingleNodePlan(logicalPlan), startMatcher().project().build());
 
@@ -651,7 +571,7 @@ TEST_F(SetTest, joinWithUnionAll) {
       "JOIN (SELECT x FROM u UNION ALL SELECT x FROM v) w "
       "ON a = w.x";
 
-  auto logicalPlan = parseSelect(sql, kTestConnectorId);
+  auto logicalPlan = parseSelect(sql);
   auto plan = toSingleNodePlan(logicalPlan);
 
   auto matcher = matchScan("t")
@@ -731,23 +651,20 @@ TEST_F(SetTest, unionDistinctOverGatherInputs) {
 // (the pushdown path requires the conjunct to reference a single table).
 TEST_F(SetTest, nondeterministicFilterAboveUnion) {
   // UNION ALL: filter pushes into both scan legs (no dedup → safe). The
-  // pushed predicate becomes a TableScan column filter; an extra Filter
-  // node above the union no longer exists.
+  // pushed predicate becomes a Filter node above each scan leg.
   {
     auto logicalPlan = parseSelect(
         "SELECT k FROM (SELECT n_nationkey AS k FROM nation "
         "UNION ALL SELECT r_regionkey AS k FROM region) WHERE k > rand()");
 
     auto buildMatcher = [&] {
-      return core::PlanMatcherBuilder()
-          .hiveScan("nation", {}, "rand() < cast(n_nationkey as double)")
+      return matchScan("nation")
+          .filter("rand() < cast(n_nationkey as double)")
           .project()
-          .localPartition(
-              core::PlanMatcherBuilder()
-                  .hiveScan(
-                      "region", {}, "rand() < cast(r_regionkey as double)")
-                  .project()
-                  .build());
+          .localPartition(matchScan("region")
+                              .filter("rand() < cast(r_regionkey as double)")
+                              .project()
+                              .build());
     };
 
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), buildMatcher().build());
@@ -764,18 +681,18 @@ TEST_F(SetTest, nondeterministicFilterAboveUnion) {
 
     AXIOM_ASSERT_PLAN(
         toSingleNodePlan(logicalPlan),
-        matchHiveScan("nation")
+        matchScan("nation")
             .project()
-            .localPartition(matchHiveScan("region").project().build())
+            .localPartition(matchScan("region").project().build())
             .singleAggregation({"k"}, {})
             .filter("cast(k as double) > rand()")
             .build());
 
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         planVelox(logicalPlan).plan,
-        matchHiveScan("nation")
+        matchScan("nation")
             .project()
-            .localPartition(matchHiveScan("region").project().build())
+            .localPartition(matchScan("region").project().build())
             .distributedSingleAggregation({"k"}, {})
             .filter("cast(k as double) > rand()")
             .gather()
@@ -786,7 +703,7 @@ TEST_F(SetTest, nondeterministicFilterAboveUnion) {
 // Same as above but with a table column referenced twice (SELECT x as a, x as
 // b) instead of constant expressions.
 TEST_F(SetTest, filterOnDuplicateColumnInUnionAll) {
-  createEmptyTable("t", ROW("x", BIGINT()));
+  testConnector_->addTable("t", ROW("x", BIGINT()));
 
   auto sql =
       "SELECT b FROM ("
@@ -797,11 +714,11 @@ TEST_F(SetTest, filterOnDuplicateColumnInUnionAll) {
 
   auto logicalPlan = parseSelect(sql);
 
-  // Filter is pushed into the HiveScan as a subfield filter on x.
+  // Filter is pushed into the leg below the union as a Filter on x.
   // The Values child's constant filter (2 > 0) is folded and eliminated.
   {
-    auto matcher = core::PlanMatcherBuilder()
-                       .hiveScan("t", test::gt("x", int64_t{0}))
+    auto matcher = matchScan("t")
+                       .filter("x > 0")
                        .project()
                        .localPartition(matchValues().project().build())
                        .build();
@@ -811,8 +728,8 @@ TEST_F(SetTest, filterOnDuplicateColumnInUnionAll) {
   {
     // Values is isolated behind an arbitrary exchange.
     auto matcher =
-        core::PlanMatcherBuilder()
-            .hiveScan("t", test::gt("x", int64_t{0}))
+        matchScan("t")
+            .filter("x > 0")
             .project()
             .localPartition(matchValues().project().arbitrary().build())
             .gather()
@@ -825,7 +742,7 @@ TEST_F(SetTest, filterOnDuplicateColumnInUnionAll) {
 // (SELECT x + 1 as a, x + 1 as b). The expression deduplication produces a
 // single expression object shared by both columns.
 TEST_F(SetTest, filterOnDuplicateExpressionInUnionAll) {
-  createEmptyTable("t", ROW("x", BIGINT()));
+  testConnector_->addTable("t", ROW("x", BIGINT()));
 
   auto sql =
       "SELECT b FROM ("
@@ -836,30 +753,25 @@ TEST_F(SetTest, filterOnDuplicateExpressionInUnionAll) {
 
   auto logicalPlan = parseSelect(sql);
 
-  // Filter 'a > 0' becomes remaining filters 'x + 1 > 0' and 'x + 2 > 0'
-  // on the respective scan branches.
+  // Filter 'a > 0' becomes remaining filters 'x + 1 > 0' and 'x + 2 > 0' on the
+  // respective scan branches. The alias binds the (disambiguated on the second
+  // branch) scan column.
+  auto matchLeg = [](const std::string& filter) {
+    return matchScan("t").aliases({"x"}).filter(filter);
+  };
+
   {
-    auto matcher = core::PlanMatcherBuilder()
-                       .hiveScan("t", {}, "x + 1 > 0")
+    auto matcher = matchLeg("x + 1 > 0")
                        .project()
-                       .localPartition(
-                           core::PlanMatcherBuilder()
-                               .hiveScan("t", {}, "x + 2 > 0")
-                               .project()
-                               .build())
+                       .localPartition(matchLeg("x + 2 > 0").project().build())
                        .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
   }
 
   {
-    auto matcher = core::PlanMatcherBuilder()
-                       .hiveScan("t", {}, "x + 1 > 0")
+    auto matcher = matchLeg("x + 1 > 0")
                        .project()
-                       .localPartition(
-                           core::PlanMatcherBuilder()
-                               .hiveScan("t", {}, "x + 2 > 0")
-                               .project()
-                               .build())
+                       .localPartition(matchLeg("x + 2 > 0").project().build())
                        .gather()
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
@@ -869,7 +781,7 @@ TEST_F(SetTest, filterOnDuplicateExpressionInUnionAll) {
 // Verifies that filtering a UNION ALL on a column not included in the outer
 // SELECT works correctly when the filter is pushed into the scan.
 TEST_F(SetTest, filterColumnPruningInUnionAll) {
-  createEmptyTable("t", ROW({"x", "y"}, BIGINT()));
+  testConnector_->addTable("t", ROW({"x", "y"}, BIGINT()));
 
   auto sql =
       "SELECT y FROM ("
@@ -880,26 +792,21 @@ TEST_F(SetTest, filterColumnPruningInUnionAll) {
 
   auto logicalPlan = parseSelect(sql);
 
+  // 'x' is filtered but not in the output, so it is pruned from each leg. The
+  // alias binds the (disambiguated on the second leg) filter column.
+  auto matchLeg = [](const std::string& filter) {
+    return matchScan("t").aliases({std::nullopt, "x"}).filter(filter).project();
+  };
+
   {
-    auto matcher = core::PlanMatcherBuilder()
-                       .hiveScan("t", test::gt("x", int64_t{0}))
-                       .localPartition(
-                           core::PlanMatcherBuilder()
-                               .hiveScan("t", test::gt("x", int64_t{0}))
-                               .project()
-                               .build())
-                       .build();
+    auto matcher =
+        matchLeg("x > 0").localPartition(matchLeg("x > 0").build()).build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
   }
 
   {
-    auto matcher = core::PlanMatcherBuilder()
-                       .hiveScan("t", test::gt("x", int64_t{0}))
-                       .localPartition(
-                           core::PlanMatcherBuilder()
-                               .hiveScan("t", test::gt("x", int64_t{0}))
-                               .project()
-                               .build())
+    auto matcher = matchLeg("x > 0")
+                       .localPartition(matchLeg("x > 0").build())
                        .gather()
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
@@ -913,7 +820,7 @@ TEST_F(SetTest, filterColumnPruningInUnionAll) {
 // - Mix of true/false: false branch pruned, true branches survive without
 //   filters.
 TEST_F(SetTest, constantFalseFilterInUnionAll) {
-  createEmptyTable("t", ROW({"x", "y"}, BIGINT()));
+  testConnector_->addTable("t", ROW({"x", "y"}, BIGINT()));
 
   // One constant-false branch (0 > 0), one table scan branch survives.
   {
@@ -925,11 +832,9 @@ TEST_F(SetTest, constantFalseFilterInUnionAll) {
         ") WHERE x > 0");
 
     auto plan = toSingleNodePlan(logicalPlan);
-    AXIOM_ASSERT_PLAN(
-        plan,
-        core::PlanMatcherBuilder()
-            .hiveScan("t", test::gt("x", int64_t{0}))
-            .build());
+    // The surviving branch ends with a rename Project that prunes x and keeps
+    // y.
+    AXIOM_ASSERT_PLAN(plan, matchScan("t").filter("x > 0").project().build());
   }
 
   // All branches constant-false (0 > 0 and -1 > 0).
@@ -980,8 +885,7 @@ TEST_F(SetTest, filterOnUnionWithWindow) {
         "  (SELECT a, row_number() OVER (ORDER BY a) AS r FROM t)"
         "  UNION ALL"
         "  (SELECT x, y FROM u)"
-        ") WHERE r > 1",
-        kTestConnectorId);
+        ") WHERE r > 1");
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher =
@@ -1000,8 +904,7 @@ TEST_F(SetTest, filterOnUnionWithWindow) {
         "  (SELECT a, row_number() OVER (ORDER BY a) AS r FROM t)"
         "  UNION"
         "  (SELECT x, y FROM u)"
-        ") WHERE r > 1",
-        kTestConnectorId);
+        ") WHERE r > 1");
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher =
@@ -1046,7 +949,7 @@ TEST_F(SetTest, exceptUnionAll) {
                      .singleAggregation()
                      .build();
 
-  auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+  auto plan = toSingleNodePlan(parseSelect(query));
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
@@ -1062,7 +965,7 @@ TEST_F(SetTest, unionDistinctWithUnnestMultipleReferences) {
       ")"
       "SELECT (SELECT COUNT(*) FROM u), (SELECT COUNT(*) FROM u)";
 
-  auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+  auto plan = toSingleNodePlan(parseSelect(query));
 
   // The two SELECT items reference the same scalar subquery, which is
   // planned once and joined once; the outer Project emits the join's
@@ -1090,8 +993,7 @@ TEST_F(SetTest, unionAllWithDistinctAndCountStar) {
         "  SELECT DISTINCT a FROM t"
         "  UNION ALL"
         "  SELECT 1"
-        ")",
-        kTestConnectorId);
+        ")");
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(
         plan,
@@ -1111,8 +1013,7 @@ TEST_F(SetTest, unionAllWithDistinctAndCountStar) {
         "  SELECT 1"
         "  UNION ALL"
         "  SELECT 2"
-        ")",
-        kTestConnectorId);
+        ")");
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(
         plan,
@@ -1134,8 +1035,7 @@ TEST_F(SetTest, unionAllWithDistinctAndCountStar) {
         "    UNION ALL"
         "    SELECT 1"
         "  )"
-        ") WHERE cnt > 0",
-        kTestConnectorId);
+        ") WHERE cnt > 0");
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(
         plan,
