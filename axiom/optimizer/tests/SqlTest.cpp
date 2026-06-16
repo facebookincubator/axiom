@@ -75,7 +75,10 @@ struct FileName {
 template <FileName Name>
 class SqlTest : public SqlTestBase {
  public:
-  explicit SqlTest(QueryEntry entry) : entry_(std::move(entry)) {}
+  SqlTest(QueryEntry entry, bool syntacticJoinOrder)
+      : entry_(std::move(entry)) {
+    this->syntacticJoinOrder_ = syntacticJoinOrder;
+  }
 
   // Uses SetUpTestCase / TearDownTestCase rather than the modern
   // SetUpTestSuite / TearDownTestSuite synonyms because SqlTestBase already
@@ -231,19 +234,25 @@ void registerQueryFile() {
 
   auto suiteName = fmt::format("SqlTest_{}", baseName);
 
+  // Run every query both with cost-based join ordering (the default) and with
+  // syntactic join ordering, so the optimizer is exercised under both
+  // strategies and must produce the same correct results.
   for (const auto& entry : file.entries) {
-    auto testName = fmt::format("{}_l{}", baseName, entry.lineNumber);
-    auto capturedEntry = entry;
-    testing::RegisterTest(
-        suiteName.c_str(),
-        testName.c_str(),
-        /*type_param=*/nullptr,
-        /*value_param=*/nullptr,
-        path.c_str(),
-        entry.lineNumber,
-        [capturedEntry = std::move(capturedEntry)]() -> SqlTest<Name>* {
-          return new SqlTest<Name>(capturedEntry);
-        });
+    for (const bool syntacticJoinOrder : {false, true}) {
+      auto testName = syntacticJoinOrder
+          ? fmt::format("{}_l{}_syntactic", baseName, entry.lineNumber)
+          : fmt::format("{}_l{}", baseName, entry.lineNumber);
+      testing::RegisterTest(
+          suiteName.c_str(),
+          testName.c_str(),
+          /*type_param=*/nullptr,
+          /*value_param=*/nullptr,
+          path.c_str(),
+          entry.lineNumber,
+          [capturedEntry = entry, syntacticJoinOrder]() -> SqlTest<Name>* {
+            return new SqlTest<Name>(capturedEntry, syntacticJoinOrder);
+          });
+    }
   }
 }
 

@@ -107,7 +107,8 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
       const std::shared_ptr<velox::memory::MemoryPool>& rootPool,
       const std::shared_ptr<velox::memory::MemoryPool>& optimizerPool,
       int32_t numWorkers = 4,
-      int32_t numDrivers = 4);
+      int32_t numDrivers = 4,
+      bool syntacticJoinOrder = false);
 
   /// Runs SQL through Axiom and DuckDB, asserts unordered results match.
   /// @param sql SQL query to run through both engines.
@@ -137,6 +138,10 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
   // Execution parallelism settings.
   int32_t numWorkers_{4};
   int32_t numDrivers_{4};
+
+  // When true, queries are optimized with cost-based join ordering disabled,
+  // placing tables in the order they appear in the query.
+  bool syntacticJoinOrder_{false};
 
   // Override to false in subclasses that manage the TestConnector lifecycle
   // at suite scope (i.e., create and register the connector once per

@@ -100,7 +100,8 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunner(
     const std::shared_ptr<memory::MemoryPool>& rootPool,
     const std::shared_ptr<memory::MemoryPool>& optimizerPool,
     int32_t numWorkers,
-    int32_t numDrivers) {
+    int32_t numDrivers,
+    bool syntacticJoinOrder) {
   static std::atomic<int32_t> queryCounter{0};
   auto queryId = fmt::format("sql_test_{}", ++queryCounter);
   auto queryCtx = core::QueryCtx::create(
@@ -130,8 +131,10 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunner(
   options.numDrivers = numDrivers;
   options.queryId = queryId;
 
+  OptimizerOptions optimizerOptions;
+  optimizerOptions.syntacticJoinOrder = syntacticJoinOrder;
   auto optimizerSession = std::make_shared<OptimizerSession>(
-      queryId, "test", OptimizerOptions{}, connector::ConnectorProperties{});
+      queryId, "test", optimizerOptions, connector::ConnectorProperties{});
   auto runnerSession = std::make_shared<runner::RunnerSession>(
       queryId, "test", runner::Properties{}, connector::ConnectorProperties{});
 
@@ -245,7 +248,8 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeRunner(
       rootPool_,
       optimizerPool_,
       numWorkers_,
-      numDrivers_);
+      numDrivers_,
+      syntacticJoinOrder_);
 }
 
 std::vector<RowVectorPtr> SqlTestBase::runAndCollect(std::string_view sql) {
