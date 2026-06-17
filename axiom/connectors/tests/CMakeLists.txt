@@ -12,15 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(axiom_test_connector TestConnector.cpp)
+add_library(axiom_test_connector TestConnector.cpp TestTableJson.cpp)
 
 target_link_libraries(
   axiom_test_connector
   axiom_connectors
   axiom_hive_connector_metadata
   velox_common_base
+  velox_common_config
   velox_memory
   velox_connector
+  velox_presto_type_parser
+  re2::re2
 )
 
 add_executable(axiom_test_connector_test TestConnectorTest.cpp ConnectorMetadataRegistryTest.cpp)
@@ -35,6 +38,22 @@ target_link_libraries(
   velox_connector
   velox_exec
   velox_vector_test_lib
+  GTest::gtest
+  GTest::gtest_main
+)
+
+add_executable(axiom_test_table_json_test TestTableJsonTest.cpp)
+
+add_test(axiom_test_table_json_test axiom_test_table_json_test)
+
+target_link_libraries(
+  axiom_test_table_json_test
+  axiom_test_connector
+  velox_common_base
+  velox_common_config
+  velox_memory
+  velox_test_util
+  velox_type
   GTest::gtest
   GTest::gtest_main
 )

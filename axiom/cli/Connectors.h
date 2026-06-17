@@ -91,9 +91,13 @@ class Connectors {
       const folly::F14FastMap<std::string, std::string>& connectorConfig,
       const std::string& connectorId);
 
-  /// Registers an in-memory test connector under `connectorId`.
+  /// Registers an in-memory test connector under `connectorId`. The
+  /// `connectorConfig` is passed through to the connector verbatim; the test
+  /// connector interprets its own properties (e.g. `tables` naming JSON files
+  /// of table schemas and statistics to preload).
   std::shared_ptr<velox::connector::Connector> registerTestConnector(
-      const std::string& connectorId = kTestConnectorId);
+      const std::string& connectorId = kTestConnectorId,
+      const folly::F14FastMap<std::string, std::string>& connectorConfig = {});
 
   /// Registers the system connector for the runtime.queries and
   /// metadata.session_properties tables.
