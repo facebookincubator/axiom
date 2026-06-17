@@ -18,12 +18,14 @@
 #include <folly/container/F14Map.h>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
+#include <filesystem>
 #include <iostream>
 #include <set>
 #include "axiom/cli/CatalogProperties.h"
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/Console.h"
 #include "axiom/cli/SystemUser.h"
+#include "axiom/connectors/tests/TestTableJson.h"
 #include "velox/common/base/Exceptions.h"
 
 DEFINE_string(
@@ -85,6 +87,11 @@ int main(int argc, char** argv) {
 
     for (auto& catalogProperties :
          axiom::sql::loadCatalogProperties(FLAGS_etc_dir)) {
+      // Expose the catalog directory so connectors can resolve relative file
+      // paths in their properties (e.g. the test connector's `tables`).
+      catalogProperties.connectorConfig.insert_or_assign(
+          std::string(facebook::axiom::connector::TestTableJson::kConfigDir),
+          std::filesystem::absolute(FLAGS_etc_dir).string());
       registerConnector(
           std::move(catalogProperties.catalogName),
           catalogProperties.connectorName,

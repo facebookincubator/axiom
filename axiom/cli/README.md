@@ -105,6 +105,40 @@ $ ./axiom_sql --init start.sql
 SQL> select * from t;
 ```
 
+A test catalog can also preload tables with controlled statistics but no row
+data, for reproducing optimizer plans (e.g. a bad plan seen in production)
+without copying the data. Add a `tables` property naming JSON files of table
+schemas and statistics; relative paths and globs resolve against `--etc_dir`:
+
+```properties
+# etc/repro.properties
+connector.name=test
+tables=*.json
+```
+
+Each JSON file describes one table; a missing per-column statistic is left
+unset, so the optimizer applies its no-stat default just as in production:
+
+```json
+{
+  "name": "orders",
+  "numRows": 1500000,
+  "columns": [
+    {"name": "o_orderkey", "type": "BIGINT", "numDistinct": 1500000,
+     "min": 1, "max": 6000000},
+    {"name": "o_orderstatus", "type": "VARCHAR", "numDistinct": 3}
+  ]
+}
+```
+
+```bash
+$ ./axiom_sql --etc_dir etc/ --catalog repro \
+    --query "EXPLAIN (type optimized) SELECT * FROM orders WHERE o_orderkey < 1000"
+```
+
+The internal `fb_axiom/cli/dump_ms_stats.py` script generates these JSON
+files from a production Hive table and partition by reading the metastore.
+
 ## Catalog Configuration Files
 
 Configuration files (`.properties` files) define catalogs for use with `--etc_dir`.

@@ -20,6 +20,7 @@
 #include <utility>
 
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/connectors/tests/TestTableJson.h"
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/tpch/gen/TpchGen.h"
@@ -1246,7 +1247,11 @@ std::shared_ptr<velox::connector::Connector> TestConnectorFactory::newConnector(
     std::shared_ptr<const velox::config::ConfigBase> config,
     folly::Executor*,
     folly::Executor*) {
-  return std::make_shared<TestConnector>(id, std::move(config));
+  auto connector = std::make_shared<TestConnector>(id, config);
+  if (config != nullptr) {
+    TestTableJson::loadFromConfig(*connector, *config);
+  }
+  return connector;
 }
 
 void TestDataSink::appendData(velox::RowVectorPtr vector) {
