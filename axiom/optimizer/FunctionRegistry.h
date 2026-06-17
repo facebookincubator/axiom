@@ -122,6 +122,10 @@ struct LambdaInfo {
 
 class Call;
 
+/// Per-row cost of a function call that has no specific cost. Used both when a
+/// call has no metadata and when its metadata leaves the cost at the default.
+constexpr float kDefaultCallCost = 5;
+
 /// Describes functions accepting lambdas and functions with special treatment
 /// of subfields.
 struct FunctionMetadata {
@@ -174,13 +178,8 @@ struct FunctionMetadata {
   /// Bits of FunctionSet for the function.
   FunctionSet functionSet;
 
-  /// Static fixed cost for processing one row. use 'costFunc' for non-constant
-  /// cost.
-  float cost{1};
-
-  /// Function for evaluating the per-row cost when the cost depends on
-  /// arguments and their stats.
-  std::function<float(const Call*)> costFunc;
+  /// Static fixed cost for processing one row.
+  float cost{kDefaultCallCost};
 
   /// Translates a set of paths into path, expression pairs if the complex type
   /// returning function is decomposable into per-path subexpressions. Suppose

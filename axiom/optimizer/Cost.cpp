@@ -75,13 +75,7 @@ float selfCost(ExprCP expr) {
     }
     case PlanType::kCallExpr: {
       auto metadata = expr->as<Call>()->metadata();
-      if (metadata) {
-        if (metadata->costFunc) {
-          return metadata->costFunc(expr->as<Call>());
-        }
-        return metadata->cost;
-      }
-      return 5;
+      return metadata ? metadata->cost : kDefaultCallCost;
     }
     default:
       return 5;

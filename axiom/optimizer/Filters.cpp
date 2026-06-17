@@ -560,14 +560,13 @@ std::pair<VariantCP, VariantCP> findArrayMinMax(
 }
 
 // Computes the maximum cardinality for an integer range: 1 + (max - min).
-// Operands are cast to double to avoid signed integer overflow when the
-// range spans a large portion of the integer domain.
+// The 1.0 literal forces double arithmetic, avoiding signed integer overflow
+// when the range spans a large portion of the integer domain.
 template <velox::TypeKind KIND>
 float rangeCardinality(VariantCP minPtr, VariantCP maxPtr) {
   auto upperVal = maxPtr->value<KIND>();
   auto lowerVal = minPtr->value<KIND>();
-  return static_cast<float>(
-      1.0 + static_cast<double>(upperVal) - static_cast<double>(lowerVal));
+  return 1.0 + upperVal - lowerVal;
 }
 
 // Returns true if the given TypeKind represents an integer type
@@ -710,8 +709,7 @@ float computeRangeSelectivity(
     exprRange = 1.0;
   }
 
-  float selectivity = static_cast<float>(intersectionRange / exprRange);
-  return std::clamp(selectivity, 0.0f, 1.0f);
+  return std::clamp<float>(intersectionRange / exprRange, 0.0f, 1.0f);
 }
 
 template <velox::TypeKind KIND>
@@ -743,10 +741,10 @@ float rangeSelectivityImpl(
     }
 
     return computeRangeSelectivity(
-        static_cast<double>(exprMin),
-        static_cast<double>(exprMax),
-        static_cast<double>(effectiveLower),
-        static_cast<double>(effectiveUpper),
+        exprMin,
+        exprMax,
+        effectiveLower,
+        effectiveUpper,
         /*discrete=*/!std::is_floating_point_v<T>);
   }
 }
@@ -767,7 +765,7 @@ float rangeSelectivityImpl<velox::TypeKind::VARCHAR>(
     if (str.empty()) {
       return 0;
     }
-    return static_cast<int32_t>(static_cast<unsigned char>(str[0]));
+    return static_cast<unsigned char>(str[0]);
   };
 
   int32_t exprMin = getFirstCharValue(exprValue.min);
@@ -784,11 +782,7 @@ float rangeSelectivityImpl<velox::TypeKind::VARCHAR>(
   }
 
   return computeRangeSelectivity(
-      static_cast<double>(exprMin),
-      static_cast<double>(exprMax),
-      static_cast<double>(effectiveLower),
-      static_cast<double>(effectiveUpper),
-      /*discrete=*/true);
+      exprMin, exprMax, effectiveLower, effectiveUpper, /*discrete=*/true);
 }
 
 // Computes selectivity for comparisons using only cardinality (no range info).
@@ -812,8 +806,8 @@ std::optional<Selectivity> cardinalityBasedSelectivity(
         !rightValue.cardinality.has_value()) {
       return std::nullopt;
     }
-    double ac = std::max(1.0, static_cast<double>(*leftValue.cardinality));
-    double bc = std::max(1.0, static_cast<double>(*rightValue.cardinality));
+    double ac = std::max<double>(1.0, *leftValue.cardinality);
+    double bc = std::max<double>(1.0, *rightValue.cardinality);
     double minCard = std::min(ac, bc);
     double probTrue = minCard / (ac * bc);
 
@@ -877,8 +871,8 @@ std::optional<Selectivity> comparisonSelectivityImpl(
   double bl = rightValue.min->value<KIND>();
   double bh = rightValue.max->value<KIND>();
 
-  double ac = std::max(1.0, static_cast<double>(*leftValue.cardinality));
-  double bc = std::max(1.0, static_cast<double>(*rightValue.cardinality));
+  double ac = std::max<double>(1.0, *leftValue.cardinality);
+  double bc = std::max<double>(1.0, *rightValue.cardinality);
 
   // Calculate ranges (avoiding zero).
   double rangeA = rangeSize(al, ah);
@@ -1434,7 +1428,7 @@ std::optional<Selectivity> computeInListSelectivity(
     bool updateConstraints) {
   const auto& array = bounds.inList->array();
 
-  double inListSize = static_cast<double>(array.size());
+  double inListSize = array.size();
   double trueFraction =
       std::clamp(inListSize / *exprValue.cardinality, 0.0, 1.0) *
       (1.0 - nullFraction);
