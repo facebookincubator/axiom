@@ -2070,6 +2070,31 @@ JoinEdgeP toInnerJoin(JoinEdgeCP leftJoin) {
   return innerJoin;
 }
 
+// Replaces outer join 'dt.joins[joinIndex]' with its inner-join equivalent and
+// moves the join's filter into 'dt.conjuncts'. A normal join becomes a single
+// inner JoinEdge. A hyper-edge (leftTable() == nullptr, so its left side spans
+// multiple tables) cannot be a single inner edge, so each equi key is emitted
+// as a free equality conjunct and the edge is dropped; conjunct distribution
+// then rebuilds the inner edges.
+void convertOuterJoinToInner(
+    DerivedTable& dt,
+    JoinEdgeCP join,
+    size_t joinIndex) {
+  if (join->leftTable() != nullptr) {
+    dt.joins[joinIndex] = toInnerJoin(join);
+  } else {
+    auto* optimization = queryCtx()->optimization();
+    for (size_t i = 0; i < join->leftKeys().size(); ++i) {
+      dt.conjuncts.push_back(optimization->makeEquality(
+          join->leftKeys()[i], join->rightKeys()[i]));
+    }
+    dt.joins.erase(dt.joins.begin() + joinIndex);
+  }
+
+  dt.conjuncts.insert(
+      dt.conjuncts.end(), join->filter().begin(), join->filter().end());
+}
+
 // Converts a FULL join to a LEFT join, preserving the filter, join keys, and
 // right-side output columns/expressions.
 // Used when a filter on the left side columns eliminates rows where the left
@@ -2569,10 +2594,7 @@ void DerivedTable::tryConvertOuterJoins(bool allowNondeterministic) {
       // rejects NULLs on both sides, so convert directly to INNER join.
       if (referencesRight && referencesLeft && join->leftOptional() &&
           join->rightOptional()) {
-        joins[joinIndex] = toInnerJoin(join);
-
-        conjuncts.insert(
-            conjuncts.end(), join->filter().begin(), join->filter().end());
+        convertOuterJoinToInner(*this, join, joinIndex);
 
         replaceJoinOutputs(join->rightColumns(), join->rightExprs());
         replaceJoinOutputs(join->leftColumns(), join->leftExprs());
@@ -2581,10 +2603,7 @@ void DerivedTable::tryConvertOuterJoins(bool allowNondeterministic) {
 
       if (referencesRight) {
         if (!join->leftOptional()) {
-          joins[joinIndex] = toInnerJoin(join);
-
-          conjuncts.insert(
-              conjuncts.end(), join->filter().begin(), join->filter().end());
+          convertOuterJoinToInner(*this, join, joinIndex);
         } else {
           // Convert FULL join to (normalized) RIGHT join. The filter
           // references right-side columns and has default null behavior, so

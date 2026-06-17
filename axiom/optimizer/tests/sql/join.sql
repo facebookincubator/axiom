@@ -104,3 +104,22 @@ WHERE EXISTS (
   SELECT 1 FROM (VALUES (1, 1), (2, 3), (3, 3)) AS u(x, y)
   WHERE u.x = t.a AND u.y = t.a
 )
+----
+-- RIGHT JOIN with a non-equi ON against a FROM-less scalar subquery and a
+-- null-rejecting WHERE on the optional side. Returns the optional-side rows
+-- that pass the predicate.
+SELECT a.*
+FROM t AS a
+RIGHT JOIN (SELECT (SELECT c FROM t LIMIT 1) AS c0) AS u ON a.a < u.c0
+WHERE a.b = 10
+----
+-- RIGHT JOIN with equi-key ON conditions against two FROM-less scalar
+-- subqueries and a null-rejecting WHERE on the optional side. Returns the
+-- single optional-side row whose keys match.
+SELECT a.*
+FROM t AS a
+RIGHT JOIN (
+  SELECT (SELECT a FROM t ORDER BY a LIMIT 1) AS a0,
+         (SELECT b FROM t ORDER BY b LIMIT 1) AS b0
+) AS u ON a.a = u.a0 AND a.b = u.b0
+WHERE a.b = 10
