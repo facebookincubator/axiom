@@ -1334,10 +1334,10 @@ TEST_F(JoinTest, impliedFilters) {
     SCOPED_TRACE(query);
 
     auto matcher =
-        matchScan("u")
-            .filter("x = 5")
+        matchScan("t")
+            .filter("a = 5")
             .hashJoin(
-                matchScan("t").filter("a = 5").build(), core::JoinType::kInner)
+                matchScan("u").filter("x = 5").build(), core::JoinType::kInner)
             .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
@@ -1365,10 +1365,10 @@ TEST_F(JoinTest, impliedFilters) {
     auto query = "SELECT * FROM t, u WHERE t.a = u.x AND t.a IN (1, 2, 3)";
     SCOPED_TRACE(query);
 
-    auto matcher = matchScan("u")
-                       .filter("x IN (1, 2, 3)")
+    auto matcher = matchScan("t")
+                       .filter("a IN (1, 2, 3)")
                        .hashJoin(
-                           matchScan("t").filter("a IN (1, 2, 3)").build(),
+                           matchScan("u").filter("x IN (1, 2, 3)").build(),
                            core::JoinType::kInner)
                        .build();
 
@@ -1436,10 +1436,10 @@ TEST_F(JoinTest, impliedFilters) {
     SCOPED_TRACE(query);
 
     auto matcher =
-        matchScan("u")
-            .filter("x = 5")
+        matchScan("t")
+            .filter("a = 5")
             .hashJoin(
-                matchScan("t").filter("a = 5").build(), core::JoinType::kInner)
+                matchScan("u").filter("x = 5").build(), core::JoinType::kInner)
             .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
@@ -1455,12 +1455,12 @@ TEST_F(JoinTest, impliedFilters) {
     SCOPED_TRACE(query);
 
     auto matcher =
-        matchScan("u")
-            .filter("x = 5")
-            .hashJoin(
-                matchScan("t").filter("a = 5").build(), core::JoinType::kInner)
+        matchScan("t")
+            .filter("a = 5")
             .hashJoin(
                 matchScan("v").filter("k = 5").build(), core::JoinType::kInner)
+            .hashJoin(
+                matchScan("u").filter("x = 5").build(), core::JoinType::kInner)
             .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
