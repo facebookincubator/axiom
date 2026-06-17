@@ -37,6 +37,7 @@ change in cardinality.
 | Document | Description |
 |----------|-------------|
 | **CardinalityEstimation.md** (this doc) | Overview of cardinality and constraint estimation for all operators |
+| [CardinalityEstimationGaps.md](CardinalityEstimationGaps.md) | Known flaws in statistics estimation (fabricated expression/aggregate NDV, stats fixed on expressions, unknown-collapses-CBO) and the target direction, with Presto/DuckDB references |
 | [JoinEstimation.md](JoinEstimation.md) | Detailed join cardinality and constraint propagation for all join types, with worked examples |
 | [JoinEstimationQuickRef.md](JoinEstimationQuickRef.md) | Compact cheat-sheet of all join formulas and constraint tables |
 | [FilterSelectivity.md](FilterSelectivity.md) | How filter selectivity is estimated from expressions (comparisons, logical operators, IN, IS NULL) |
