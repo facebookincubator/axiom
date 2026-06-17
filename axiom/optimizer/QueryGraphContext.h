@@ -337,6 +337,12 @@ struct FunctionNames {
   Name rowNumber{nullptr};
   Name rank{nullptr};
   Name denseRank{nullptr};
+
+  /// True if 'name' is a ranking window function (row_number, rank,
+  /// dense_rank).
+  bool isRanking(Name name) const {
+    return name == rowNumber || name == rank || name == denseRank;
+  }
 };
 
 /// Context for making a query plan. Owns all memory associated to

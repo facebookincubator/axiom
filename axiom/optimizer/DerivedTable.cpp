@@ -2148,13 +2148,6 @@ JoinEdgeP toNormalizedRightJoin(JoinEdgeCP fullJoin) {
   return leftJoin;
 }
 
-// Returns true if 'name' is a ranking window function (row_number, rank,
-// dense_rank).
-bool isRankingFunction(Name name, const FunctionNames& names) {
-  return name == names.rowNumber || name == names.rank ||
-      name == names.denseRank;
-}
-
 // Result of analyzing a predicate against a ranking window function output.
 struct RankingPredicate {
   enum class Kind {
@@ -2191,7 +2184,7 @@ RankingPredicate analyzeRankingPredicate(
     return {};
   }
 
-  if (!isRankingFunction(windowFunction->name(), names)) {
+  if (!names.isRanking(windowFunction->name())) {
     return {};
   }
 
