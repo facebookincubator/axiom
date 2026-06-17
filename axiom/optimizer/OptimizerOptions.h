@@ -47,11 +47,14 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
       "enable_reducing_existences";
   static constexpr std::string_view kParallelProjectWidth =
       "parallel_project_width";
+  static constexpr std::string_view kGreedyJoinThreshold =
+      "greedy_join_threshold";
   static constexpr std::string_view kTraceFlags = "trace_flags";
 
   // Default values — single source of truth for field initializers
   // and properties().
   static constexpr int32_t kParallelProjectWidthDefault = 1;
+  static constexpr int32_t kGreedyJoinThresholdDefault = 5;
   static constexpr bool kPushdownSubfieldsDefault = false;
   static constexpr bool kAllMapsAsStructDefault = false;
   static constexpr bool kSampleJoinsDefault = false;
@@ -108,6 +111,10 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
   /// they are always placed after the other tables, regardless of where they
   /// appear in the query.
   bool syntacticJoinOrder{kSyntacticJoinOrderDefault};
+
+  /// Use a greedy join-order search instead of exhaustive enumeration when
+  /// a single query block contains at least this many joined tables.
+  int32_t greedyJoinThreshold{kGreedyJoinThresholdDefault};
 
   /// Disable cost-based decision re: whether to split an aggregation into
   /// partial + final or not.

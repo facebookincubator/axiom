@@ -15,6 +15,7 @@
  */
 
 #include <gtest/gtest.h>
+#include <limits>
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
@@ -35,6 +36,14 @@ namespace lp = facebook::axiom::logical_plan;
 class TpchPlanTest : public test::QueryTestBase {
  protected:
   static constexpr double kScaleFactor = 1.0;
+
+  void SetUp() override {
+    QueryTestBase::SetUp();
+    // Pin TPC-H golden plans to exhaustive branch-and-bound.
+    // TODO: Drop this override and have greedy match B&B at the default
+    // threshold for TPC-H queries with 5+ tables (Q2, Q5, Q7, Q8, Q9, Q21).
+    optimizerOptions_.greedyJoinThreshold = std::numeric_limits<int32_t>::max();
+  }
 
   void configureTestConnector() override {
     testConnector_->addTpchTables(kScaleFactor);

@@ -28,6 +28,13 @@ bool isSingleWorker() {
   return queryCtx()->optimization()->runnerOptions().numWorkers == 1;
 }
 
+bool computeGreedyJoinOrder(
+    const OptimizerOptions& options,
+    DerivedTableCP dt) {
+  return !options.syntacticJoinOrder &&
+      static_cast<int32_t>(dt->tables.size()) >= options.greedyJoinThreshold;
+}
+
 } // namespace
 
 PlanState::PlanState(
@@ -36,13 +43,15 @@ PlanState::PlanState(
     bool syntacticJoinOrder)
     : optimization(optimization),
       dt(dt),
-      syntacticJoinOrder_{syntacticJoinOrder} {}
+      syntacticJoinOrder_{syntacticJoinOrder},
+      greedyJoinOrder_{computeGreedyJoinOrder(optimization.options(), dt)} {}
 
 PlanState::PlanState(Optimization& optimization, DerivedTableCP dt, PlanP plan)
     : optimization(optimization),
       dt(dt),
       cost(plan->cost),
-      syntacticJoinOrder_{optimization.options().syntacticJoinOrder} {
+      syntacticJoinOrder_{optimization.options().syntacticJoinOrder},
+      greedyJoinOrder_{computeGreedyJoinOrder(optimization.options(), dt)} {
   if (auto it = optimization.planGroupedLeaves().find(plan);
       it != optimization.planGroupedLeaves().end()) {
     // Copy: planGroupedLeaves_[plan] is reused if 'plan' is selected as input
@@ -700,6 +709,10 @@ bool NextJoin::isWorse(const NextJoin& other) const {
 
   // Unknown costs are incomparable, so neither variant is declared worse.
   return lessThan(add(other.cost.cost, shuffle), cost.cost);
+}
+
+bool NextJoin::isEquiJoin() const {
+  return candidate->join != nullptr && candidate->join->numKeys() > 0;
 }
 
 velox::core::JoinType reverseJoinType(velox::core::JoinType joinType) {
