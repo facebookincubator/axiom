@@ -103,7 +103,10 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
   /// Produce trace of plan candidates.
   uint32_t traceFlags{kTraceFlagsDefault};
 
-  /// Disable cost-based join order selection.
+  /// Disable cost-based join order selection: place tables in the order they
+  /// appear in the query. Single-row uncorrelated subqueries are an exception:
+  /// they are always placed after the other tables, regardless of where they
+  /// appear in the query.
   bool syntacticJoinOrder{kSyntacticJoinOrderDefault};
 
   /// Disable cost-based decision re: whether to split an aggregation into
