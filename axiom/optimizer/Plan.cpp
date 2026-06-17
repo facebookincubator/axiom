@@ -183,7 +183,8 @@ Plan::Plan(RelationOpPtr op, const PlanState& state)
   state.optimization.planGroupedLeaves()[this] = state.currentGroupedLeaves();
 }
 
-bool Plan::isStateBetter(const PlanState& state, float margin) const {
+bool Plan::isStateBetter(const PlanState& state, std::optional<float> margin)
+    const {
   // Unknown costs are not comparable, so a plan with an unknown cost is never
   // declared better.
   return lessThan(add(state.cost.cost, margin), cost.cost);
@@ -436,11 +437,11 @@ std::string PlanState::printPlan(RelationOpPtr op, bool detail) const {
 
 PlanP PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
   int32_t replaceIndex = -1;
-  // Shuffle margin for cost comparisons. 0 when the cardinality is unknown: the
-  // comparisons (isStateBetter) don't rank unknown costs anyway, so the margin
-  // is moot.
-  const float shuffle =
-      shuffleCost(plan->columns()) * state.cost.cardinality.value_or(0);
+  // Shuffle margin for cost comparisons. Unknown when the cardinality is
+  // unknown, which makes the shuffle-adjusted comparisons unknown so they do
+  // not delete or reject a plan based on a shuffle priced at zero.
+  const std::optional<float> shuffle =
+      mul(state.cost.cardinality, shuffleCost(plan->columns()));
 
   if (!plans.empty()) {
     // Compare with existing. If there is one with same distribution and new is
@@ -479,8 +480,8 @@ PlanP PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
         continue;
       }
 
-      if (plan->distribution().orderKeys().empty() &&
-          !old->isStateBetter(state, -shuffle)) {
+      if (plan->distribution().orderKeys().empty() && shuffle.has_value() &&
+          !old->isStateBetter(state, -*shuffle)) {
         // New has no order and old would beat it even after adding shuffle.
         return nullptr;
       }
@@ -490,11 +491,11 @@ PlanP PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
   auto newPlan = std::make_unique<Plan>(std::move(plan), state);
   auto* result = newPlan.get();
 
-  // bestCostWithShuffle tracks the cheapest known-cost plan; an unknown-cost
-  // plan does not participate.
-  if (result->cost.cost.has_value()) {
+  // bestCostWithShuffle tracks the cheapest known-cost plan; a plan with an
+  // unknown cost or shuffle margin does not participate.
+  if (result->cost.cost.has_value() && shuffle.has_value()) {
     bestCostWithShuffle =
-        std::min(bestCostWithShuffle, *result->cost.cost + shuffle);
+        std::min(bestCostWithShuffle, *result->cost.cost + *shuffle);
   }
   if (replaceIndex >= 0) {
     plans[replaceIndex] = std::move(newPlan);
@@ -560,9 +561,11 @@ PlanP PlanSet::best(
   }
 
   if (match) {
-    const float shuffle =
-        shuffleCost(best->op->columns()) * best->cost.cardinality.value_or(0);
-    if (matchCost <= bestCost + shuffle) {
+    const std::optional<float> shuffle =
+        mul(best->cost.cardinality, shuffleCost(best->op->columns()));
+    // When the shuffle cost is unknown, prefer the copartitioned plan rather
+    // than reject it for a shuffle we cannot price.
+    if (!shuffle.has_value() || matchCost <= bestCost + *shuffle) {
       return match;
     }
   }
@@ -690,15 +693,15 @@ std::string JoinCandidate::toString() const {
 }
 
 bool NextJoin::isWorse(const NextJoin& other) const {
-  float shuffle = 0;
+  std::optional<float> shuffle = 0;
   if (!plan->distribution().isSamePartition(other.plan->distribution())) {
-    // The shuffle margin only refines a comparison of known costs; an unknown
-    // cardinality contributes 0.
-    shuffle =
-        other.cost.cardinality.value_or(0) * shuffleCost(other.plan->columns());
+    // An unknown cardinality makes the shuffle margin unknown, so the
+    // comparison below is unknown and neither variant is declared worse.
+    shuffle = mul(other.cost.cardinality, shuffleCost(other.plan->columns()));
   }
 
-  // Unknown costs are incomparable, so neither variant is declared worse.
+  // Unknown costs or an unknown shuffle margin are incomparable, so neither
+  // variant is declared worse.
   return lessThan(add(other.cost.cost, shuffle), cost.cost);
 }
 

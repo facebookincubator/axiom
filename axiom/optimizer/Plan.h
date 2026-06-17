@@ -38,9 +38,12 @@ using HashBuildVector = std::vector<HashBuildCP>;
 struct Plan {
   Plan(RelationOpPtr op, const PlanState& state);
 
-  /// True if 'state' has a lower cost than 'this'. If 'margin' is given,
-  /// then 'other' must win by margin.
-  bool isStateBetter(const PlanState& state, float margin = 0) const;
+  /// True if 'state' has a lower cost than 'this'. 'margin' is added to
+  /// 'state's cost before the comparison (e.g. a shuffle the alternative must
+  /// pay), so 'state' must win by 'margin'. An unknown 'margin' makes the
+  /// comparison unknown, so 'state' is not declared better.
+  bool isStateBetter(const PlanState& state, std::optional<float> margin = 0)
+      const;
 
   /// Root of the plan tree.
   const RelationOpPtr op;
