@@ -86,6 +86,14 @@ std::vector<ConfigProperty> buildProperties(
           "Number of threads for parallel projection. 1 disables.",
       },
       {
+          std::string(OptimizerOptions::kGreedyJoinThreshold),
+          ConfigPropertyType::kInteger,
+          std::to_string(OptimizerOptions::kGreedyJoinThresholdDefault),
+          "Use a greedy join-order search instead of exhaustive enumeration "
+          "when a single query block contains at least this many joined "
+          "tables. Greedy is approximate but bounded in planning time.",
+      },
+      {
           std::string(OptimizerOptions::kTraceFlags),
           ConfigPropertyType::kInteger,
           std::to_string(OptimizerOptions::kTraceFlagsDefault),
@@ -129,6 +137,10 @@ std::string OptimizerOptions::normalize(
     auto width = std::stoi(std::string(value));
     VELOX_USER_CHECK_GE(
         width, 1, "parallel_project_width must be >= 1: {}", value);
+  } else if (name == kGreedyJoinThreshold) {
+    auto threshold = std::stoi(std::string(value));
+    VELOX_USER_CHECK_GE(
+        threshold, 1, "greedy_join_threshold must be >= 1: {}", value);
   }
   return std::string(value);
 }
@@ -159,6 +171,7 @@ OptimizerOptions OptimizerOptions::from(
   setBool(kAlwaysPlanPartialAggregation, options.alwaysPlanPartialAggregation);
   setBool(kEnableReducingExistences, options.enableReducingExistences);
   setInt(kParallelProjectWidth, options.parallelProjectWidth);
+  setInt(kGreedyJoinThreshold, options.greedyJoinThreshold);
 
   auto setUint = [&](std::string_view key, uint32_t& field) {
     auto it = properties.find(key);
