@@ -197,7 +197,7 @@ std::shared_ptr<velox::connector::Connector> Connectors::registerConnector(
   }
 
   if (connectorName == "test") {
-    return registerTestConnector(connectorId);
+    return registerTestConnector(connectorId, connectorConfig);
   }
 
   VELOX_USER_FAIL(
@@ -207,9 +207,14 @@ std::shared_ptr<velox::connector::Connector> Connectors::registerConnector(
 }
 
 std::shared_ptr<velox::connector::Connector> Connectors::registerTestConnector(
-    const std::string& connectorId) {
+    const std::string& connectorId,
+    const folly::F14FastMap<std::string, std::string>& connectorConfig) {
+  auto config = std::make_shared<velox::config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{
+          connectorConfig.begin(), connectorConfig.end()});
+
   connector::TestConnectorFactory factory(connectorId.c_str());
-  auto connector = factory.newConnector(connectorId);
+  auto connector = factory.newConnector(connectorId, std::move(config));
   registerConnector(connector);
 
   auto* testConnector =
