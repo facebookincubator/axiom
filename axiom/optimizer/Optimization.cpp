@@ -54,10 +54,6 @@ Optimization::Optimization(
       logicalPlan_(&logicalPlan),
       history_(history),
       veloxQueryCtx_(std::move(veloxQueryCtx)),
-      topState_{
-          *this,
-          nullptr,
-          optimizerSession_->options().syntacticJoinOrder},
       aggregationPlanner_{
           isSingleWorker_,
           isSingleDriver_,
@@ -407,7 +403,7 @@ std::shared_ptr<const connector::PartitionType> foldCopartition(
 // common, then replace each non-null value with entry.copartition(*common).
 // Null entries pass through unchanged. Used at every join/union site that
 // combines two PlanStates' current fragment maps.
-void mergeFragmentMaps(GroupedLeaves& consumer, GroupedLeaves&& producer) {
+void mergeFragmentMaps(GroupedLeaves& consumer, GroupedLeaves producer) {
   std::vector<std::shared_ptr<const connector::PartitionType>> nonNullValues;
   for (const auto& [_, partitionType] : consumer) {
     if (partitionType != nullptr) {
@@ -510,12 +506,12 @@ PlanP Optimization::bestPlan() {
   PlanObjectSet targetColumns;
   targetColumns.unionObjects(root_->columns);
 
-  topState_.dt = root_;
-  topState_.setTargetExprsForDt(targetColumns);
+  topState_.emplace(*this, root_, options().syntacticJoinOrder);
+  topState_->setTargetExprsForDt(targetColumns);
 
-  makeJoinsWithSyntacticFallback(topState_);
+  makeJoinsWithSyntacticFallback(*topState_);
 
-  auto* winner = topState_.plans.best();
+  auto* winner = topState_->plans.best();
   if (auto it = planGroupedLeaves_.find(winner);
       it != planGroupedLeaves_.end()) {
     // Move-out is safe: 'winner' is the single plan ToVelox will emit, no
@@ -939,7 +935,8 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
   // Take the first hand joined tables and bundle them with reducing joins that
   // can go on the build side.
 
-  if (!state.syntacticJoinOrder() && !candidates.empty()) {
+  if (!state.syntacticJoinOrder() && !state.greedyJoinOrder() &&
+      !candidates.empty()) {
     std::vector<JoinCandidate> bushes;
     for (auto& candidate : candidates) {
       if (auto bush = reducingJoins(state, candidate)) {
@@ -3023,9 +3020,9 @@ RelationOpPtr Optimization::placeSingleRowDtsForJoinFilter(
   return plan;
 }
 
-void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
-  PlanStateSaver save(state);
-
+RelationOpPtr Optimization::planDtAsLeaf(
+    DerivedTableCP from,
+    PlanState& state) {
   state.place(from);
 
   auto dtColumns = PlanObjectSet::fromObjects(from->columns);
@@ -3035,20 +3032,34 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
   MemoKey key =
       MemoKey::create(from, std::move(dtColumns), PlanObjectSet::single(from));
 
-  bool ignore = false;
-  auto plan = makePlan(*state.dt, key, std::nullopt, 1, ignore);
+  auto plan = makePlan(*state.dt, key, std::nullopt, 1);
   state.cost = plan->cost;
   // Inherit the DT's per-leaf bucketed map so subsequent operators planned
-  // atop this DT see its scans as fragment leaves.
+  // atop this DT see its scans as fragment leaves. Copy: 'plan' may be the
+  // input to multiple parents, so each consumer needs its own starting map.
   auto it = planGroupedLeaves_.find(plan);
   if (it != planGroupedLeaves_.end()) {
-    mergeFragmentMaps(
-        state.mutableCurrentGroupedLeaves(), GroupedLeaves{it->second});
+    // @lint-ignore CLANGTIDY PULSE_UNNECESSARY_COPY
+    GroupedLeaves leaves = it->second;
+    mergeFragmentMaps(state.mutableCurrentGroupedLeaves(), std::move(leaves));
   }
+  return plan->op;
+}
+
+void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
+  PlanStateSaver save(state);
+
+  auto planOp = planDtAsLeaf(from, state);
 
   // Make plans based on the dt alone as first.
-  makeJoins(plan->op, state);
+  makeJoins(std::move(planOp), state);
 
+  importReducingJoinsAndPlan(from, state);
+}
+
+void Optimization::importReducingJoinsAndPlan(
+    DerivedTableCP from,
+    PlanState& state) {
   // Look for reducing joins to import inside the DT. Bushy joins are
   // only allowed when the primary table is a base table — when it is a
   // subquery DT, bushy tables would be placed inside the MemoKey alongside
@@ -3074,14 +3085,13 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
       state.downstreamColumns(),
       std::move(reducingTables),
       std::move(result.existences));
-  plan = makePlan(
+  auto reducingPlan = makePlan(
       *state.dt,
       reducingKey,
       /*distribution=*/std::nullopt,
-      /*existsFanout=*/result.existenceReduction,
-      /*needsShuffle=*/ignore);
-  state.cost = plan->cost;
-  makeJoins(plan->op, state);
+      /*existsFanout=*/result.existenceReduction);
+  state.cost = reducingPlan->cost;
+  makeJoins(reducingPlan->op, state);
 }
 
 bool Optimization::placeConjuncts(
@@ -3245,7 +3255,85 @@ std::vector<int32_t> sortByStartingScore(const PlanObjectVector& tables) {
 
   return indices;
 }
+
 } // namespace
+
+PlanP Optimization::finalizePlanWithSingleRowDts(
+    RelationOpPtr& plan,
+    PlanState& state) {
+  const auto downstream = state.downstreamColumns();
+  std::vector<DerivedTableCP> singleRowDtsToPlace;
+  state.dt->singleRowDts.forEach<DerivedTable>([&](DerivedTableCP subquery) {
+    if (!state.isPlaced(subquery)) {
+      if (!downstream.containsAny(subquery->columns)) {
+        state.place(subquery);
+      } else {
+        singleRowDtsToPlace.push_back(subquery);
+      }
+    }
+  });
+
+  for (const auto* singleRowDt : singleRowDtsToPlace) {
+    plan = placeSingleRowDt(plan, singleRowDt, state);
+  }
+
+  addPostprocess(state.dt, plan, state);
+  return state.plans.addPlan(plan, state);
+}
+
+void Optimization::greedyJoinChainDescend(
+    RelationOpPtr plan,
+    PlanState& state) {
+  VELOX_CHECK_NOT_NULL(plan);
+
+  // An unknown-cost partial plan cannot be ranked, so greedy cannot pick a
+  // meaningful chain. Bail so the syntactic fallback in
+  // makeJoinsWithSyntacticFallback re-enumerates this DT.
+  if (!state.cost.cost.has_value()) {
+    return;
+  }
+
+  if (placeConjuncts(plan, state, false)) {
+    return;
+  }
+
+  auto candidates = nextJoins(state);
+  if (candidates.empty()) {
+    if (placeConjuncts(plan, state, true)) {
+      return;
+    }
+    finalizePlanWithSingleRowDts(plan, state);
+    return;
+  }
+
+  std::vector<NextJoin> extensions;
+  extensions.reserve(candidates.size());
+  for (auto& candidate : candidates) {
+    addJoin(candidate, plan, state, extensions);
+  }
+  if (extensions.empty()) {
+    return;
+  }
+
+  auto cheaper = [](const NextJoin* best, const NextJoin& next) {
+    return best == nullptr || next.cost.cardinality < best->cost.cardinality ||
+        (next.cost.cardinality == best->cost.cardinality &&
+         next.cost.cost < best->cost.cost);
+  };
+  const NextJoin* bestEqui = nullptr;
+  const NextJoin* bestCross = nullptr;
+  for (const auto& next : extensions) {
+    const NextJoin*& best = next.isEquiJoin() ? bestEqui : bestCross;
+    if (cheaper(best, next)) {
+      best = &next;
+    }
+  }
+  const NextJoin* chosen = bestEqui != nullptr ? bestEqui : bestCross;
+  VELOX_CHECK_NOT_NULL(chosen);
+
+  state.restore(*chosen);
+  greedyJoinChainDescend(chosen->plan, state);
+}
 
 void Optimization::makeJoins(PlanState& state) {
   // Sanity check that there are no RIGHT joins.
@@ -3350,6 +3438,12 @@ void Optimization::makeJoinsWithSyntacticFallback(PlanState& state) {
 
 void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
   VELOX_CHECK_NOT_NULL(plan);
+
+  if (state.greedyJoinOrder() && !state.syntacticJoinOrder()) {
+    greedyJoinChainDescend(plan, state);
+    return;
+  }
+
   auto dt = state.dt;
 
   // An unknown-cost partial plan cannot be ranked, so cost-based enumeration
@@ -3374,27 +3468,7 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
       return;
     }
 
-    // Go over single-row DTs that haven't been placed yet. If unused, just mark
-    // as "placed". Otherwise, place these. Look for any unused single-row DTs.
-    // Mark them as "placed".
-    const auto downstream = state.downstreamColumns();
-    std::vector<DerivedTableCP> singleRowDtsToPlace;
-    state.dt->singleRowDts.forEach<DerivedTable>([&](DerivedTableCP subquery) {
-      if (!state.isPlaced(subquery)) {
-        if (!downstream.containsAny(subquery->columns)) {
-          state.place(subquery);
-        } else {
-          singleRowDtsToPlace.push_back(subquery);
-        }
-      }
-    });
-
-    for (const auto* singleRowDt : singleRowDtsToPlace) {
-      plan = placeSingleRowDt(plan, singleRowDt, state);
-    }
-
-    addPostprocess(dt, plan, state);
-    auto kept = state.plans.addPlan(plan, state);
+    auto kept = finalizePlanWithSingleRowDts(plan, state);
     trace(
         kept ? OptimizerOptions::kRetained : OptimizerOptions::kExceededBest,
         dt->id(),
@@ -3456,6 +3530,15 @@ PlanP Optimization::makePlan(
     return makeUnionPlan(key, distribution);
   }
   return makeDtPlan(dt, key, distribution, existsFanout, needsShuffle);
+}
+
+PlanP Optimization::makePlan(
+    const DerivedTable& dt,
+    const MemoKey& key,
+    const std::optional<DesiredDistribution>& distribution,
+    float existsFanout) {
+  bool needsShuffle = false;
+  return makePlan(dt, key, distribution, existsFanout, needsShuffle);
 }
 
 PlanP Optimization::makeUnionPlan(

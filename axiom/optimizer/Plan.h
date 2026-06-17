@@ -192,6 +192,10 @@ struct NextJoin {
   /// If true, only 'other' should be tried. Use to compare equivalent joins
   /// with different join method or partitioning.
   bool isWorse(const NextJoin& other) const;
+
+  /// Returns true if this candidate joins on equi-keys, i.e. is a genuine
+  /// equality join rather than a cross product.
+  bool isEquiJoin() const;
 };
 
 class Optimization;
@@ -342,6 +346,12 @@ struct PlanState {
     return currentGroupedLeaves_;
   }
 
+  /// True when this PlanState should plan with the greedy join-order
+  /// heuristic instead of branch-and-bound.
+  bool greedyJoinOrder() const {
+    return greedyJoinOrder_;
+  }
+
  private:
   PlanObjectSet computeDownstreamColumns(bool includeFilters) const;
 
@@ -373,6 +383,8 @@ struct PlanState {
   // operator. Updated as scans are placed (insert), as joins fold copartition
   // (per-leaf coarsening), and as Repartitions are inserted (snapshot+reset).
   GroupedLeaves currentGroupedLeaves_;
+
+  const bool greedyJoinOrder_;
 };
 
 /// A scoped guard that restores fields of PlanState on destruction.

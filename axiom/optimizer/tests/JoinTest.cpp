@@ -1907,5 +1907,179 @@ TEST_F(JoinTest, duplicateJoinOutputColumns) {
   }
 }
 
+TEST_F(JoinTest, greedyJoinOrder) {
+  testConnector_->addTable("t1", ROW({"id1", "data1"}, BIGINT()))
+      ->setStats(100, {{"id1", {.numDistinct = 100}}});
+  testConnector_->addTable("t2", ROW({"id2", "data2"}, BIGINT()))
+      ->setStats(200, {{"id2", {.numDistinct = 200}}});
+  testConnector_->addTable("t3", ROW({"id3", "data3"}, BIGINT()))
+      ->setStats(400, {{"id3", {.numDistinct = 400}}});
+  testConnector_->addTable("t4", ROW({"id4", "data4"}, BIGINT()))
+      ->setStats(800, {{"id4", {.numDistinct = 800}}});
+
+  auto ctx = makeContext();
+  auto logicalPlan = lp::PlanBuilder{ctx}
+                         .tableScan("t1")
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("t2"),
+                             "id1 = id2",
+                             lp::JoinType::kInner)
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("t3"),
+                             "id2 = id3",
+                             lp::JoinType::kInner)
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("t4"),
+                             "id3 = id4",
+                             lp::JoinType::kInner)
+                         .build();
+
+  {
+    SCOPED_TRACE("greedy fires (threshold=4)");
+    optimizerOptions_.greedyJoinThreshold = 4;
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher = matchScan("t4")
+                       .hashJoin(matchScan("t1").build())
+                       .hashJoin(matchScan("t2").build())
+                       .hashJoin(matchScan("t3").build())
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    SCOPED_TRACE("branch-and-bound (threshold=100)");
+    optimizerOptions_.greedyJoinThreshold = 100;
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher =
+        matchScan("t4")
+            .hashJoin(matchScan("t3")
+                          .hashJoin(matchScan("t2")
+                                        .hashJoin(matchScan("t1").build())
+                                        .build())
+                          .build())
+            .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+TEST_F(JoinTest, greedyDtStart) {
+  testConnector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}))
+      ->setStats(1000, {});
+  testConnector_->addTable("base1", ROW({"id1", "x1"}, {BIGINT(), BIGINT()}))
+      ->setStats(500, {});
+
+  auto ctx = makeContext();
+  auto logicalPlan = lp::PlanBuilder{ctx}
+                         .tableScan("t")
+                         .aggregate({"a"}, {"sum(b) as s"})
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("base1"),
+                             "a = id1",
+                             lp::JoinType::kLeft)
+                         .build();
+
+  optimizerOptions_.greedyJoinThreshold = 2;
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto matcher =
+      matchScan("t")
+          .singleAggregation({"a"}, {"sum(b) as s"})
+          .hashJoin(matchScan("base1").build(), core::JoinType::kLeft)
+          .project()
+          .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+TEST_F(JoinTest, greedySnowflakeLeftDeep) {
+  testConnector_->addTable("fact", ROW({"fact_a", "fact_b"}, BIGINT()))
+      ->setStats(
+          10'000'000,
+          {{"fact_a", {.numDistinct = 100}}, {"fact_b", {.numDistinct = 100}}});
+  testConnector_->addTable("dim_a", ROW({"da_key", "da_sub"}, BIGINT()))
+      ->setStats(
+          100,
+          {{"da_key", {.numDistinct = 100}}, {"da_sub", {.numDistinct = 100}}});
+  testConnector_->addTable("sub_a", ROW({"sa_key"}, BIGINT()))
+      ->setStats(10, {{"sa_key", {.numDistinct = 10}}});
+  testConnector_->addTable("dim_b", ROW({"db_key", "db_sub"}, BIGINT()))
+      ->setStats(
+          100,
+          {{"db_key", {.numDistinct = 100}}, {"db_sub", {.numDistinct = 100}}});
+  testConnector_->addTable("sub_b", ROW({"sb_key"}, BIGINT()))
+      ->setStats(10, {{"sb_key", {.numDistinct = 10}}});
+
+  auto ctx = makeContext();
+  auto logicalPlan = lp::PlanBuilder{ctx}
+                         .tableScan("fact")
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("dim_a"),
+                             "fact_a = da_key",
+                             lp::JoinType::kInner)
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("sub_a"),
+                             "da_sub = sa_key",
+                             lp::JoinType::kInner)
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("dim_b"),
+                             "fact_b = db_key",
+                             lp::JoinType::kInner)
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("sub_b"),
+                             "db_sub = sb_key",
+                             lp::JoinType::kInner)
+                         .build();
+
+  optimizerOptions_.greedyJoinThreshold = 5;
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto matcher = matchScan("fact")
+                     .hashJoin(matchScan("dim_a").build())
+                     .hashJoin(matchScan("sub_a").build())
+                     .hashJoin(matchScan("dim_b").build())
+                     .hashJoin(matchScan("sub_b").build())
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+TEST_F(JoinTest, greedyValuesStart) {
+  testConnector_->addTable("v_t1", ROW({"a", "b"}, BIGINT()))
+      ->setStats(1000, {{"a", {.numDistinct = 1000}}});
+  testConnector_->addTable("v_t2", ROW({"c", "d"}, BIGINT()))
+      ->setStats(2000, {{"c", {.numDistinct = 2000}}});
+  testConnector_->addTable("v_t3", ROW({"e", "f"}, BIGINT()))
+      ->setStats(4000, {{"e", {.numDistinct = 4000}}});
+
+  auto rowVector = makeRowVector({"v"}, {makeFlatVector<int64_t>({1, 2, 3})});
+
+  auto ctx = makeContext();
+  auto logicalPlan = lp::PlanBuilder{ctx}
+                         .values({rowVector})
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("v_t1"),
+                             "v = a",
+                             lp::JoinType::kInner)
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("v_t2"),
+                             "a = c",
+                             lp::JoinType::kInner)
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("v_t3"),
+                             "c = e",
+                             lp::JoinType::kInner)
+                         .build();
+
+  optimizerOptions_.greedyJoinThreshold = 2;
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto matcher = matchScan("v_t3")
+                     .hashJoin(core::PlanMatcherBuilder{}.values().build())
+                     .hashJoin(matchScan("v_t1").build())
+                     .hashJoin(matchScan("v_t2").build())
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

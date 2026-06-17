@@ -752,5 +752,52 @@ TEST_F(BucketedExecutionTest, broadcastJoinThenBucketedAgg) {
   EXPECT_TRUE(foundBucketedScan);
 }
 
+TEST_F(BucketedExecutionTest, greedyBucketed) {
+  addBucketedTable("g_orders", {"customer_id"}, 128);
+  addBucketedTable(
+      "g_customers", {"id"}, 128, ROW({"id", "name"}, {BIGINT(), VARCHAR()}));
+
+  optimizerOptions_.greedyJoinThreshold = 2;
+
+  auto plan = planDistributed(parseSelect(
+      "SELECT * FROM g_orders JOIN g_customers "
+      "ON g_orders.customer_id = g_customers.id",
+      kTestConnectorId));
+  expectBucketedFragmentWithWidth(*plan.plan, 4);
+}
+
+TEST_F(BucketedExecutionTest, greedyBucketedWithDimensions) {
+  constexpr int kNumDims = 20;
+
+  std::vector<std::string> factColumns{"customer_id"};
+  std::vector<TypePtr> factTypes{BIGINT()};
+  for (int i = 0; i < kNumDims; ++i) {
+    factColumns.push_back(fmt::format("dim_key_{}", i));
+    factTypes.push_back(BIGINT());
+  }
+  auto factSchema = ROW(std::move(factColumns), std::move(factTypes));
+
+  addBucketedTable("g_fact_a", {"customer_id"}, 128, factSchema);
+  addBucketedTable("g_fact_b", {"customer_id"}, 128, factSchema);
+
+  for (int i = 0; i < kNumDims; ++i) {
+    addUnbucketedTable(
+        fmt::format("g_dim_{}", i),
+        ROW({"d_id", "d_val"}, {BIGINT(), VARCHAR()}),
+        100);
+  }
+
+  std::string sql =
+      "SELECT g_fact_a.customer_id FROM g_fact_a JOIN g_fact_b "
+      "ON g_fact_a.customer_id = g_fact_b.customer_id";
+  for (int i = 0; i < kNumDims; ++i) {
+    sql += fmt::format(
+        " JOIN g_dim_{0} ON g_fact_a.dim_key_{0} = g_dim_{0}.d_id", i);
+  }
+
+  auto plan = planDistributed(parseSelect(sql, kTestConnectorId));
+  expectBucketedFragmentWithWidth(*plan.plan, 4);
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer
