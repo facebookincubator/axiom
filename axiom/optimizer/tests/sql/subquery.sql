@@ -753,3 +753,13 @@ SELECT t.a NOT IN (SELECT max(u.a) FROM u WHERE u.a > t.a) FROM t
 -- eliminates every body row. Scalar aggregates always emit one
 -- row, so EXISTS sees it → TRUE for every outer.
 SELECT EXISTS (SELECT count(*) FROM u WHERE u.a = t.a + 100) FROM t
+----
+-- Uncorrelated IN with a constant (table-less) left side over a real source.
+-- The optimizer wraps the constant in a one-row probe to anchor the IN
+-- semi-join.
+SELECT 1 IN (SELECT a FROM u)
+----
+-- A non-constant, table-less IN left side (random()) has no plan-time value to
+-- embed as a one-row probe, so planning fails with a clear error.
+-- error: Non-constant table-less left side of IN <subquery> is not supported yet
+SELECT random() IN (SELECT a FROM u)

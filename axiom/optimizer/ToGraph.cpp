@@ -2766,6 +2766,24 @@ ValuesTable* ToGraph::makeValuesTable(
   return valuesTable;
 }
 
+ValuesTable* ToGraph::makeValuesTable(const Literal* literal) {
+  const auto* columnName = newCName("c");
+  const auto veloxType = toTypePtr(literal->value().type);
+
+  std::vector<velox::Variant> rows;
+  rows.emplace_back(velox::Variant::row({literal->literal()}));
+  ValuesTable::Data data =
+      &registerVariant(velox::Variant::array(std::move(rows)))->array();
+
+  auto* valuesTable = make<ValuesTable>(
+      toType(velox::ROW({std::string{columnName}}, {veloxType})), data);
+  valuesTable->cname = newCName("vt");
+  auto* column =
+      make<Column>(columnName, valuesTable, toValue(veloxType, 1), columnName);
+  valuesTable->columns.push_back(column);
+  return valuesTable;
+}
+
 void ToGraph::addProjection(const lp::ProjectNode& project) {
   const auto& input = *project.onlyInput();
 
@@ -3898,8 +3916,13 @@ void ToGraph::processInPredicates(
     SCOPE_EXIT {
       applyContext_.lifted = std::move(savedLifted);
     };
+    // Translate the subquery without adding it to 'currentDt_' yet. The IN
+    // lowers to a semi-join whose build side is this subquery and whose probe
+    // is the left side; Deferring the add lets us register the left side first
+    // to keep the right order for syntactic-join-order mode.
     auto subqueryDt = translateSubquery(
-        *predicate->inputAt(1)->as<lp::SubqueryExpr>()->subquery());
+        *predicate->inputAt(1)->as<lp::SubqueryExpr>()->subquery(),
+        /*finalize=*/false);
     if (applyContext_.lifted.aggregation != nullptr) {
       VELOX_NYI(
           "Outer-column reference in the aggregate body of an IN subquery is not supported yet");
@@ -3932,25 +3955,40 @@ void ToGraph::processInPredicates(
     const bool isCorrelated =
         !applyContext_.lifted.predicates.empty() || inRightHasOuter;
 
-    // Fold `<const> IN (SELECT <proj> WHERE <cond>)` over a no-FROM
-    // subquery into `<cond> AND <const> = <proj>`. A SEMI cannot
-    // represent this case: leftKey has no table to anchor its left side.
-    if (!isCorrelated && leftKey->allTables().empty() &&
-        subqueryDt->isProjectFilterOnly() && subqueryDt->exprs.size() == 1) {
-      ExprCP projection = subqueryDt->exprs.front();
-      ExprVector parts = std::move(subqueryDt->conjuncts);
-      parts.push_back(makeEquality(leftKey, projection));
-      ExprVector guards = std::move(applyContext_.lifted.outerGuards);
-      applyContext_.lifted.outerGuards.clear();
-      currentDt_->removeLastTable(subqueryDt);
-      ExprCP result =
-          wrapMarkInGuards(std::move(guards), makeAnd(std::move(parts)));
-      subqueries_.emplace(predicate, result);
-      if (!result->columns().empty()) {
-        chain.carryForwards.push_back(predicate);
+    // A table-less left side (e.g. a constant) has no table to anchor the IN
+    // semi-join on. Two sub-cases:
+    if (!isCorrelated && leftKey->allTables().empty()) {
+      // No-FROM subquery: fold `<expr> IN (SELECT <proj> WHERE <cond>)` into
+      // `<cond> AND <expr> = <proj>`. No need to add subqueryDt.
+      if (subqueryDt->isProjectFilterOnly() && subqueryDt->exprs.size() == 1) {
+        ExprCP projection = subqueryDt->exprs.front();
+        ExprVector parts = std::move(subqueryDt->conjuncts);
+        parts.push_back(makeEquality(leftKey, projection));
+        ExprVector guards = std::move(applyContext_.lifted.outerGuards);
+        applyContext_.lifted.outerGuards.clear();
+        ExprCP result =
+            wrapMarkInGuards(std::move(guards), makeAnd(std::move(parts)));
+        subqueries_.emplace(predicate, result);
+        if (!result->columns().empty()) {
+          chain.carryForwards.push_back(predicate);
+        }
+        continue;
       }
-      continue;
+
+      // Subquery over a real source: build a one-row probe holding the constant
+      // and add it before the build side. Syntactic enumeration places a table
+      // only after all its join-order predecessors, so the probe must precede
+      // 'subqueryDt'.
+      VELOX_USER_CHECK(
+          leftKey->is(PlanType::kLiteralExpr),
+          "Non-constant table-less left side of IN <subquery> is not supported yet: {}",
+          leftKey->toString());
+      auto* probe = makeValuesTable(leftKey->as<Literal>());
+      currentDt_->addTable(probe);
+      leftKey = probe->columns.front();
     }
+
+    currentDt_->addTable(subqueryDt);
 
     // Velox HashJoin cannot represent a multi-key null-aware join, so the
     // SEMI's left side must be a single table. If correlation reaches more

@@ -573,6 +573,10 @@ class ToGraph {
       const logical_plan::LogicalPlanNode& node,
       ValuesTable::Data data);
 
+  // Builds a one-row, single-column ValuesTable holding 'literal'. The caller
+  // adds it to the enclosing DerivedTable and picks up its column.
+  ValuesTable* makeValuesTable(const Literal* literal);
+
   void makeEmptyValuesTable(const logical_plan::LogicalPlanNode& node);
 
   // Adds 'node' and descendants to query graph wrapped inside a
