@@ -33,6 +33,7 @@ add_library(
   ExplainIo.cpp
   Filters.cpp
   FunctionRegistry.cpp
+  JoinConstraints.cpp
   JoinSample.cpp
   MemoKey.cpp
   Model.cpp
