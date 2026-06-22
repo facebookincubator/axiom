@@ -180,10 +180,13 @@ class PlanMatcherBuilder {
   /// filters.
   /// @param remainingFilter Optional filter expression that couldn't be pushed
   /// down into the scan.
+  /// @param sampleRate When set, asserts the scan's sample rate equals
+  /// this value (Hive's `rand() < k` encoding).
   PlanMatcherBuilder& hiveScan(
       const std::string& tableName,
       common::SubfieldFilters subfieldFilters,
-      const std::string& remainingFilter = "");
+      const std::string& remainingFilter = "",
+      std::optional<double> sampleRate = std::nullopt);
 
   /// Matches any Values node regardless of type.
   PlanMatcherBuilder& values();
@@ -484,7 +487,10 @@ class PlanMatcherBuilder {
   PlanMatcherBuilder& orderBy();
 
   /// Matches an OrderBy node with the specified ordering.
-  /// @param ordering List of sort keys (e.g., {"a ASC", "b DESC"}).
+  /// @param ordering List of sort keys (e.g., {"a ASC", "b DESC"}). Parsed by
+  /// the DuckDB SQL parser: an omitted direction defaults to `ASC` and an
+  /// omitted null ordering to `NULLS LAST`. So "c" means "c ASC NULLS LAST" and
+  /// "c DESC" means "c DESC NULLS LAST".
   PlanMatcherBuilder& orderBy(const std::vector<std::string>& ordering);
 
   /// Matches any TableWrite node.

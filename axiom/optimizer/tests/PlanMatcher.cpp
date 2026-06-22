@@ -225,11 +225,13 @@ class HiveScanMatcher : public PlanMatcherImpl<TableScanNode> {
   HiveScanMatcher(
       const std::string& tableName,
       common::SubfieldFilters subfieldFilters,
-      const std::string& remainingFilter)
+      const std::string& remainingFilter,
+      std::optional<double> sampleRate)
       : PlanMatcherImpl<TableScanNode>(),
         tableName_{tableName},
         subfieldFilters_{std::move(subfieldFilters)},
-        remainingFilter_{remainingFilter} {}
+        remainingFilter_{remainingFilter},
+        sampleRate_{sampleRate} {}
 
   MatchResult matchDetails(
       const TableScanNode& plan,
@@ -278,6 +280,10 @@ class HiveScanMatcher : public PlanMatcherImpl<TableScanNode> {
       EXPECT_EQ(remainingFilter->toString(), expected->toString());
     }
 
+    // Hive's `sampleRate == 1.0` means no sampling — the default the
+    // matcher asserts when the caller didn't opt in.
+    EXPECT_EQ(hiveTableHandle->sampleRate(), sampleRate_.value_or(1.0));
+
     AXIOM_TEST_RETURN
   }
 
@@ -285,6 +291,7 @@ class HiveScanMatcher : public PlanMatcherImpl<TableScanNode> {
   const std::string tableName_;
   const common::SubfieldFilters subfieldFilters_;
   const std::string remainingFilter_;
+  const std::optional<double> sampleRate_;
 };
 
 class ValuesMatcher : public PlanMatcherImpl<ValuesNode> {
@@ -368,8 +375,11 @@ class ProjectMatcher : public PlanMatcherImpl<ProjectNode> {
     if (!expressions_.empty()) {
       EXPECT_EQ(plan.projections().size(), expressions_.size());
       AXIOM_TEST_RETURN_IF_FAILURE
+    }
 
-      for (auto i = 0; i < expressions_.size(); ++i) {
+    for (auto i = 0; i < plan.projections().size(); ++i) {
+      // Verify the expression (if one was given) and capture its alias.
+      if (!expressions_.empty()) {
         auto expected =
             parse::DuckSqlExpressionsParser().parseExpr(expressions_[i]);
         if (expected->alias()) {
@@ -383,18 +393,18 @@ class ProjectMatcher : public PlanMatcherImpl<ProjectNode> {
         ExprMatcher::match(plan.projections()[i], expected->dropAlias());
         AXIOM_TEST_RETURN_IF_FAILURE
       }
-    } else {
-      // No expressions to verify. Remap symbols through the project's
-      // column mapping. For identity projections (field access), update
-      // the symbol to use the project's output name. Symbols for computed
-      // projections are dropped.
-      for (const auto& [alias, childName] : symbols) {
-        for (auto i = 0; i < plan.projections().size(); ++i) {
-          if (auto* field = dynamic_cast<const FieldAccessTypedExpr*>(
-                  plan.projections()[i].get());
-              field && field->name() == childName) {
+
+      // For an identity projection (a top-level input-column field access,
+      // not a subfield dereference like `a.b`), propagate the child's alias
+      // for that column, now bound to the project's output name, so a
+      // passthrough of an aliased column stays referenceable in parent
+      // matchers. Computed projections drop the symbol.
+      if (auto* field =
+              plan.projections()[i]->asUnchecked<FieldAccessTypedExpr>();
+          field != nullptr && field->isInputColumn()) {
+        for (const auto& [alias, childName] : symbols) {
+          if (childName == field->name()) {
             newSymbols[alias] = plan.names()[i];
-            break;
           }
         }
       }
@@ -1787,10 +1797,11 @@ PlanMatcherBuilder& PlanMatcherBuilder::tableScan(
 PlanMatcherBuilder& PlanMatcherBuilder::hiveScan(
     const std::string& tableName,
     common::SubfieldFilters subfieldFilters,
-    const std::string& remainingFilter) {
+    const std::string& remainingFilter,
+    std::optional<double> sampleRate) {
   VELOX_USER_CHECK_NULL(matcher_);
   matcher_ = std::make_shared<HiveScanMatcher>(
-      tableName, std::move(subfieldFilters), remainingFilter);
+      tableName, std::move(subfieldFilters), remainingFilter, sampleRate);
   return *this;
 }
 
