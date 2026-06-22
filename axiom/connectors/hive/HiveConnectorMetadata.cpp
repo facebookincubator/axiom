@@ -80,7 +80,7 @@ velox::core::PartitionFunctionSpecPtr HivePartitionType::makeSpec(
   if (numPartitions_ != numBuckets_) {
     bucketToPartition.reserve(numBuckets_);
     for (int32_t bucket = 0; bucket < numBuckets_; ++bucket) {
-      bucketToPartition.push_back(bucket % numPartitions_);
+      bucketToPartition.push_back(mapBucketToPartition(bucket));
     }
   }
   return std::make_shared<velox::connector::hive::HivePartitionFunctionSpec>(

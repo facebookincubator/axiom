@@ -87,6 +87,11 @@ class HivePartitionType : public connector::PartitionType {
     return numBuckets_;
   }
 
+  /// Maps a native bucket index to a partition index.
+  int32_t mapBucketToPartition(int32_t bucket) const {
+    return (bucket % numBuckets_) % numPartitions_;
+  }
+
   std::string toString() const override;
 
  private:

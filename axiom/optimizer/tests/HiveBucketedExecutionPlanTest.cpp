@@ -438,6 +438,30 @@ TEST_F(HiveBucketedExecutionTest, widthClampsToNumWorkers) {
   }
 }
 
+TEST_F(HiveBucketedExecutionTest, copartitionedJoinIndivisibleWorkers) {
+  // numPartitions=3 divides neither 16 nor 8.
+  createBucketedTable(
+      "fan_big",
+      "CREATE TABLE fan_big "
+      "WITH (bucket_count = 16, bucketed_by = ARRAY['c_nationkey']) "
+      "AS SELECT c_custkey, c_nationkey FROM customer");
+  createBucketedTable(
+      "fan_small",
+      "CREATE TABLE fan_small "
+      "WITH (bucket_count = 8, bucketed_by = ARRAY['c_nationkey']) "
+      "AS SELECT DISTINCT c_nationkey, "
+      "cast(c_nationkey AS varchar) AS label FROM customer");
+
+  auto logicalPlan = parseSelect(
+      "SELECT * FROM fan_big JOIN fan_small "
+      "ON fan_big.c_nationkey = fan_small.c_nationkey");
+  auto referencePlan = planVelox(
+      logicalPlan, MultiFragmentPlan::Options::singleNode(), optimizerOptions_);
+  auto reference = runFragmentedPlan(referencePlan).results;
+  ASSERT_GT(reference.size(), 0);
+  checkSame(logicalPlan, reference, {.numWorkers = 3, .numDrivers = 4});
+}
+
 TEST_F(HiveBucketedExecutionTest, unionall) {
   // Different bucket keys (same type) — must not co-fragment.
   createBucketedTable(

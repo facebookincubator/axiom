@@ -388,7 +388,10 @@ folly::coro::Task<SplitBatch> LocalHiveSplitSource::co_getSplits(
         VELOX_CHECK(
             info->bucketNumber.has_value(),
             "Bucketed scan requires bucketNumber on every file");
-        groupId = info->bucketNumber.value() % partitionType_->numPartitions();
+        const auto* hivePartitionType = partitionType_->as<HivePartitionType>();
+        VELOX_CHECK_NOT_NULL(hivePartitionType, "Expected HivePartitionType");
+        groupId =
+            hivePartitionType->mapBucketToPartition(info->bucketNumber.value());
       }
       batch.splits.push_back(
           Split{.connectorSplit = builder.build(), .groupId = groupId});
