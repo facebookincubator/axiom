@@ -173,6 +173,26 @@ TEST_F(SubqueryTest, inListWithMixedSubqueries) {
   }
 }
 
+// IN with a constant (table-less) left side over a real source. With no table
+// to anchor the constant on, the optimizer materializes it as a one-row Values
+// relation and runs the IN as a null-aware semi-join against the source.
+TEST_F(SubqueryTest, uncorrelatedInConstantLeftSide) {
+  auto query = "SELECT 1 IN (SELECT r_regionkey FROM region)";
+  SCOPED_TRACE(query);
+
+  auto matcher =
+      matchHiveScan("region")
+          .hashJoin(
+              matchValues().nestedLoopJoin(matchValues().build()).build(),
+              velox::core::JoinType::kRightSemiProject,
+              {.nullAware = true})
+          .project()
+          .build();
+
+  auto plan = toSingleNodePlan(query);
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 TEST_F(SubqueryTest, foldable) {
   testConnector_->addTable("t", ROW({"a", "ds"}, {INTEGER(), VARCHAR()}));
   testConnector_->setDiscreteValues(
