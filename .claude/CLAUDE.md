@@ -168,7 +168,7 @@ would-I-say-this-aloud test to each):
 ### API Design
 
 - Keep the public API surface small.
-- Prefer free functions in `.cpp` (anonymous namespace) over private/static class methods.
+- Prefer free functions in `.cpp` (anonymous namespace) over private/static methods declared in the header. The goal is keeping the header small: fewer things in the header means the header changes less often, so fewer downstream translation units recompile. Private members of a file-local class defined entirely in the `.cpp` already satisfy this — the rule doesn't apply to them.
 - Define free functions close to where they are used, not grouped together at the top or bottom of the file.
 - Keep method implementations in `.cpp` except for trivial one-liners.
 - Avoid default arguments when all callers can pass values explicitly.
