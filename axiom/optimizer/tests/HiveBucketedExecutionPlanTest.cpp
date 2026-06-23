@@ -67,16 +67,32 @@ class HiveBucketedExecutionTest : public test::HiveQueriesTestBase {
     EXPECT_EQ(partitionType->numPartitions(), bucketCount);
   }
 
-  void assertBucketedExecution(const lp::LogicalPlanNodePtr& logicalPlan) {
-    // Single-node execution produces an unbucketed reference; compare
-    // against the multi-worker bucketed run.
-    auto referencePlan = planVelox(
+  // Creates an unbucketed table populated by 'selectSql'.
+  void createRegularTable(std::string_view name, std::string_view selectSql) {
+    tablesToDrop_.emplace_back(name);
+    runCtas(fmt::format("CREATE TABLE {} AS {}", name, selectSql));
+  }
+
+  // Plans 'logicalPlan' for distributed execution across 'numWorkers' workers.
+  // 'numWorkers' must exceed 1, else the plan is single-node and unbucketed.
+  PlanAndStats planDistributed(
+      const lp::LogicalPlanNodePtr& logicalPlan,
+      int32_t numWorkers = 4) {
+    VELOX_CHECK_GT(numWorkers, 1);
+    return planVelox(
         logicalPlan,
-        MultiFragmentPlan::Options::singleNode(),
+        {.numWorkers = numWorkers, .numDrivers = 4},
         optimizerOptions_);
-    auto reference = runFragmentedPlan(referencePlan).results;
-    ASSERT_GT(reference.size(), 0);
-    checkSame(logicalPlan, reference);
+  }
+
+  // Checks that the already-planned distributed 'plan' returns the same rows as
+  // a single-node (unbucketed) run of 'logicalPlan'. Single-node execution is
+  // the oracle; 'plan' is the bucketed run under test.
+  void assertSameAsSingleNode(
+      const lp::LogicalPlanNodePtr& logicalPlan,
+      PlanAndStats& plan) {
+    auto reference = checkSame(plan, toSingleNodePlan(logicalPlan));
+    ASSERT_GT(reference.results.size(), 0);
   }
 
   std::vector<std::string> tablesToDrop_;
@@ -84,392 +100,452 @@ class HiveBucketedExecutionTest : public test::HiveQueriesTestBase {
 
 TEST_F(HiveBucketedExecutionTest, join) {
   createBucketedTable(
-      "j_left",
-      16,
-      {"c_nationkey"},
-      "SELECT c_custkey, c_nationkey FROM customer");
+      "t", 16, {"c_nationkey"}, "SELECT c_custkey, c_nationkey FROM customer");
   createBucketedTable(
-      "j_right",
+      "u",
       16,
       {"c_nationkey"},
       "SELECT DISTINCT c_nationkey, cast(c_nationkey as varchar) as label FROM customer");
 
   {
-    auto logicalPlan = parseSelect(
-        "SELECT * FROM j_left JOIN j_right "
-        "ON j_left.c_nationkey = j_right.c_nationkey");
-    auto plan = planVelox(
-        logicalPlan, {.numWorkers = 4, .numDrivers = 4}, optimizerOptions_);
+    auto logicalPlan =
+        parseSelect("SELECT * FROM t, u WHERE t.c_nationkey = u.c_nationkey");
+    auto plan = planDistributed(logicalPlan);
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
-        matchHiveScan("j_left")
-            .hashJoin(matchHiveScan("j_right").build(), core::JoinType::kInner)
+        matchHiveScan("t")
+            .hashJoinInner(matchHiveScan("u").build())
             .bucketed()
             .fragmentWidth(4)
             .gather()
             .project()
             .build());
-    assertBucketedExecution(logicalPlan);
+    assertSameAsSingleNode(logicalPlan, plan);
   }
 
-  for (
-      std::string_view sql : {
-          "SELECT * FROM j_left RIGHT JOIN j_right ON j_left.c_nationkey = j_right.c_nationkey",
-          "SELECT * FROM j_left FULL OUTER JOIN j_right ON j_left.c_nationkey = j_right.c_nationkey",
-      }) {
-    SCOPED_TRACE(sql);
-    auto logicalPlan = parseSelect(sql);
-    auto plan = planVelox(
-        logicalPlan, {.numWorkers = 4, .numDrivers = 4}, optimizerOptions_);
-    bool foundBucketed = std::any_of(
-        plan.plan->fragments().begin(),
-        plan.plan->fragments().end(),
-        [](const auto& f) { return !f.groupedNodes.empty(); });
-    EXPECT_TRUE(foundBucketed);
-    assertBucketedExecution(logicalPlan);
-  }
-
-  // LEFT join: at least one fragment must be bucketed.
+  // RIGHT join: the build side is repartitioned into the bucketed fragment.
   {
     auto logicalPlan = parseSelect(
-        "SELECT * FROM j_left LEFT JOIN j_right "
-        "ON j_left.c_nationkey = j_right.c_nationkey");
-    auto plan = planVelox(
-        logicalPlan, {.numWorkers = 4, .numDrivers = 4}, optimizerOptions_);
-    bool foundBucketed = std::any_of(
-        plan.plan->fragments().begin(),
-        plan.plan->fragments().end(),
-        [](const auto& f) { return !f.groupedNodes.empty(); });
-    EXPECT_TRUE(foundBucketed);
-    assertBucketedExecution(logicalPlan);
+        "SELECT * FROM t RIGHT JOIN u ON t.c_nationkey = u.c_nationkey");
+    auto plan = planDistributed(logicalPlan);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchHiveScan("t")
+            .hashJoinRight(matchHiveScan("u")
+                               .aliases({"u_nationkey"})
+                               .shuffle({"u_nationkey"})
+                               .build())
+            .project()
+            .bucketed()
+            .fragmentWidth(4)
+            .gather()
+            .project()
+            .build());
+    assertSameAsSingleNode(logicalPlan, plan);
   }
 
-  tablesToDrop_.emplace_back("j_unbucketed");
-  runCtas(
-      "CREATE TABLE j_unbucketed AS "
-      "SELECT DISTINCT c_nationkey, "
-      "cast(c_nationkey as varchar) as label FROM customer");
-  auto logicalPlan = parseSelect(
-      "SELECT * FROM j_left JOIN j_unbucketed "
-      "ON j_left.c_nationkey = j_unbucketed.c_nationkey");
-  auto plan = planVelox(
-      logicalPlan, {.numWorkers = 4, .numDrivers = 4}, optimizerOptions_);
-  int32_t bucketedScans = 0;
-  int32_t hashExchanges = 0;
-  for (const auto& fragment : plan.plan->fragments()) {
-    for (const auto& [_, partitionType] : fragment.groupedNodes) {
-      if (partitionType == nullptr) {
-        ++hashExchanges;
-      } else {
-        ++bucketedScans;
-      }
-    }
+  // FULL join: both sides stay co-bucketed in one fragment.
+  {
+    auto logicalPlan = parseSelect(
+        "SELECT * FROM t FULL OUTER JOIN u ON t.c_nationkey = u.c_nationkey");
+    auto plan = planDistributed(logicalPlan);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchHiveScan("t")
+            .hashJoinFull(matchHiveScan("u").build())
+            .bucketed()
+            .fragmentWidth(4)
+            .gather()
+            .project()
+            .build());
+    assertSameAsSingleNode(logicalPlan, plan);
   }
-  EXPECT_EQ(bucketedScans, 1);
-  EXPECT_EQ(hashExchanges, 1);
-  assertBucketedExecution(logicalPlan);
+
+  // LEFT join: both sides stay co-bucketed in one fragment.
+  {
+    auto logicalPlan = parseSelect(
+        "SELECT * FROM t LEFT JOIN u ON t.c_nationkey = u.c_nationkey");
+    auto plan = planDistributed(logicalPlan);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchHiveScan("t")
+            .hashJoinLeft(matchHiveScan("u").build())
+            .bucketed()
+            .fragmentWidth(4)
+            .gather()
+            .project()
+            .build());
+    assertSameAsSingleNode(logicalPlan, plan);
+  }
+
+  // Unbucketed right side is repartitioned by bucket into the bucketed join.
+  createRegularTable(
+      "w",
+      "SELECT DISTINCT c_nationkey, cast(c_nationkey as varchar) as label FROM customer");
+  auto logicalPlan =
+      parseSelect("SELECT * FROM t, w WHERE t.c_nationkey = w.c_nationkey");
+  auto plan = planDistributed(logicalPlan);
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      plan.plan,
+      matchHiveScan("t")
+          .hashJoinInner(matchHiveScan("w")
+                             .aliases({"w_nationkey"})
+                             .shuffle({"w_nationkey"})
+                             .build())
+          .bucketed()
+          .fragmentWidth(4)
+          .gather()
+          .project()
+          .build());
+  assertSameAsSingleNode(logicalPlan, plan);
 }
 
 TEST_F(HiveBucketedExecutionTest, semijoin) {
   createBucketedTable(
-      "sj_left",
-      16,
-      {"c_nationkey"},
-      "SELECT c_custkey, c_nationkey FROM customer");
+      "t", 16, {"c_nationkey"}, "SELECT c_custkey, c_nationkey FROM customer");
   createBucketedTable(
-      "sj_right",
+      "u",
       16,
       {"c_nationkey"},
       "SELECT DISTINCT c_nationkey FROM customer WHERE c_nationkey < 5");
 
   {
     auto logicalPlan = parseSelect(
-        "SELECT c_custkey, c_nationkey FROM sj_left "
-        "WHERE c_nationkey IN (SELECT c_nationkey FROM sj_right)");
-    auto plan = planVelox(
-        logicalPlan, {.numWorkers = 4, .numDrivers = 4}, optimizerOptions_);
+        "SELECT c_custkey, c_nationkey FROM t "
+        "WHERE c_nationkey IN (SELECT c_nationkey FROM u)");
+    auto plan = planDistributed(logicalPlan);
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
-        matchHiveScan("sj_left")
-            .hashJoin(
-                matchHiveScan("sj_right").build(),
-                core::JoinType::kLeftSemiFilter)
+        matchHiveScan("t")
+            .hashJoinLeftSemiFilter(matchHiveScan("u").build())
             .bucketed()
             .fragmentWidth(4)
             .gather()
             .build());
-    assertBucketedExecution(logicalPlan);
+    assertSameAsSingleNode(logicalPlan, plan);
   }
 
+  // NOT IN lowers to a null-aware anti join, co-bucketed in one fragment.
   {
     auto logicalPlan = parseSelect(
-        "SELECT c_custkey, c_nationkey FROM sj_left "
-        "WHERE c_nationkey NOT IN (SELECT c_nationkey FROM sj_right)");
-    auto plan = planVelox(
-        logicalPlan, {.numWorkers = 4, .numDrivers = 4}, optimizerOptions_);
-    bool foundBucketed = std::any_of(
-        plan.plan->fragments().begin(),
-        plan.plan->fragments().end(),
-        [](const auto& f) { return !f.groupedNodes.empty(); });
-    EXPECT_TRUE(foundBucketed);
-    assertBucketedExecution(logicalPlan);
+        "SELECT c_custkey, c_nationkey FROM t "
+        "WHERE c_nationkey NOT IN (SELECT c_nationkey FROM u)");
+    auto plan = planDistributed(logicalPlan);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchHiveScan("t")
+            .hashJoinAnti(matchHiveScan("u").build())
+            .bucketed()
+            .fragmentWidth(4)
+            .gather()
+            .build());
+    assertSameAsSingleNode(logicalPlan, plan);
   }
 }
 
 TEST_F(HiveBucketedExecutionTest, aggregation) {
-  createBucketedTable(
-      "a_customers", 16, {"c_nationkey"}, "SELECT * FROM customer");
+  createBucketedTable("t", 16, {"c_nationkey"}, "SELECT * FROM customer");
 
   {
-    auto logicalPlan = parseSelect(
-        "SELECT c_nationkey, count(*) FROM a_customers GROUP BY c_nationkey");
-    auto plan = planVelox(
-        logicalPlan, {.numWorkers = 4, .numDrivers = 4}, optimizerOptions_);
+    auto logicalPlan =
+        parseSelect("SELECT c_nationkey, count(*) FROM t GROUP BY 1");
+    auto plan = planDistributed(logicalPlan);
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
-        matchHiveScan("a_customers")
+        matchHiveScan("t")
             .localPartition({"c_nationkey"})
             .singleAggregation({"c_nationkey"}, {"count(*)"})
             .bucketed()
             .fragmentWidth(4)
             .gather()
             .build());
-    assertBucketedExecution(logicalPlan);
+    assertSameAsSingleNode(logicalPlan, plan);
   }
 
-  for (std::string_view sql : {
-           "SELECT c_nationkey, c_mktsegment, count(*) FROM a_customers "
-           "GROUP BY c_nationkey, c_mktsegment",
-           "SELECT c_nationkey, count(*), min(c_acctbal), max(c_acctbal) "
-           "FROM a_customers GROUP BY c_nationkey",
-           "SELECT c_nationkey, count(DISTINCT c_mktsegment) FROM a_customers "
-           "GROUP BY c_nationkey",
-           "SELECT c_nationkey, count(*) AS cnt FROM a_customers "
-           "GROUP BY c_nationkey HAVING count(*) > 100",
-       }) {
-    SCOPED_TRACE(sql);
-    auto logicalPlan = parseSelect(sql);
-    auto plan = planVelox(
-        logicalPlan, {.numWorkers = 4, .numDrivers = 4}, optimizerOptions_);
-    bool foundBucketed = std::any_of(
-        plan.plan->fragments().begin(),
-        plan.plan->fragments().end(),
-        [](const auto& f) { return !f.groupedNodes.empty(); });
-    EXPECT_TRUE(foundBucketed);
-    assertBucketedExecution(logicalPlan);
-  }
-
-  // Non-bucket grouping key falls through to partial+final.
+  // Composite grouping key that is a superset of the single bucket key.
   {
     auto logicalPlan = parseSelect(
-        "SELECT c_mktsegment, count(*) FROM a_customers GROUP BY c_mktsegment");
-    auto plan = planVelox(
-        logicalPlan, {.numWorkers = 4, .numDrivers = 4}, optimizerOptions_);
-    bool foundBucketedProducer = false;
-    for (size_t i = 0; i < plan.plan->fragments().size(); ++i) {
-      if (!plan.plan->fragments()[i].groupedNodes.empty()) {
-        foundBucketedProducer = true;
-      } else if (i > 0) {
-        EXPECT_TRUE(plan.plan->fragments()[i].groupedNodes.empty());
-      }
-    }
-    EXPECT_TRUE(foundBucketedProducer);
-    assertBucketedExecution(logicalPlan);
-  }
-}
-
-TEST_F(HiveBucketedExecutionTest, select) {
-  createBucketedTable("s_one", 1, {"c_nationkey"}, "SELECT * FROM customer");
-  {
-    auto logicalPlan = parseSelect(
-        "SELECT c_nationkey, count(*) FROM s_one GROUP BY c_nationkey");
-    auto plan = planVelox(
-        logicalPlan, {.numWorkers = 4, .numDrivers = 4}, optimizerOptions_);
+        "SELECT c_nationkey, c_mktsegment, count(*) FROM t GROUP BY 1, 2");
+    auto plan = planDistributed(logicalPlan);
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
-        matchHiveScan("s_one")
-            .localPartition({"c_nationkey"})
-            .singleAggregation({"c_nationkey"}, {"count(*)"})
-            .bucketed()
-            .fragmentWidth(1)
-            .gather()
-            .build());
-    assertBucketedExecution(logicalPlan);
-  }
-
-  // gcd(16, 8) = 8.
-  createBucketedTable(
-      "s_match",
-      16,
-      {"c_nationkey"},
-      "SELECT c_custkey, c_nationkey FROM customer");
-  createBucketedTable(
-      "s_down",
-      8,
-      {"c_nationkey"},
-      "SELECT DISTINCT c_nationkey, cast(c_nationkey as varchar) as label FROM customer");
-  {
-    auto logicalPlan = parseSelect(
-        "SELECT * FROM s_match JOIN s_down "
-        "ON s_match.c_nationkey = s_down.c_nationkey");
-    auto plan = planVelox(
-        logicalPlan, {.numWorkers = 4, .numDrivers = 4}, optimizerOptions_);
-    bool foundScaledFragment = false;
-    for (const auto& fragment : plan.plan->fragments()) {
-      if (!fragment.groupedNodes.empty() && fragment.width.has_value() &&
-          *fragment.width == 4) {
-        foundScaledFragment = true;
-      }
-    }
-    EXPECT_TRUE(foundScaledFragment);
-    assertBucketedExecution(logicalPlan);
-  }
-
-  createBucketedTable(
-      "s_composite",
-      16,
-      {"c_nationkey", "c_mktsegment"},
-      "SELECT * FROM customer");
-  {
-    auto logicalPlan = parseSelect(
-        "SELECT c_nationkey, c_mktsegment, count(*) FROM s_composite "
-        "GROUP BY c_nationkey, c_mktsegment");
-    auto plan = planVelox(
-        logicalPlan, {.numWorkers = 4, .numDrivers = 4}, optimizerOptions_);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(
-        plan.plan,
-        matchHiveScan("s_composite")
+        matchHiveScan("t")
             .localPartition({"c_nationkey", "c_mktsegment"})
             .singleAggregation({"c_nationkey", "c_mktsegment"}, {"count(*)"})
             .bucketed()
             .fragmentWidth(4)
             .gather()
             .build());
-    assertBucketedExecution(logicalPlan);
+    assertSameAsSingleNode(logicalPlan, plan);
   }
 
-  // Strict subset of bucket keys.
+  // Multiple aggregates over the bucket key.
   {
     auto logicalPlan = parseSelect(
-        "SELECT c_nationkey, count(*) FROM s_composite "
+        "SELECT c_nationkey, count(*), min(c_acctbal), max(c_acctbal) FROM t GROUP BY 1");
+    auto plan = planDistributed(logicalPlan);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchHiveScan("t")
+            .localPartition({"c_nationkey"})
+            .singleAggregation(
+                {"c_nationkey"},
+                {"count(*)", "min(c_acctbal)", "max(c_acctbal)"})
+            .bucketed()
+            .fragmentWidth(4)
+            .gather()
+            .build());
+    assertSameAsSingleNode(logicalPlan, plan);
+  }
+
+  // DISTINCT aggregate lowers to stacked partial/final aggregations.
+  {
+    auto logicalPlan = parseSelect(
+        "SELECT c_nationkey, count(DISTINCT c_mktsegment) FROM t "
         "GROUP BY c_nationkey");
-    auto plan = planVelox(
-        logicalPlan, {.numWorkers = 4, .numDrivers = 4}, optimizerOptions_);
-    ASSERT_GT(plan.plan->fragments().size(), 1);
-    assertBucketedExecution(logicalPlan);
+    auto plan = planDistributed(logicalPlan);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchHiveScan("t")
+            .partialAggregation()
+            .localPartition({"c_nationkey", "c_mktsegment"})
+            .finalAggregation()
+            .partialAggregation()
+            .localPartition({"c_nationkey"})
+            .finalAggregation()
+            .bucketed()
+            .fragmentWidth(4)
+            .gather()
+            .build());
+    assertSameAsSingleNode(logicalPlan, plan);
+  }
+
+  // HAVING becomes a Filter above the aggregation.
+  {
+    auto logicalPlan = parseSelect(
+        "SELECT c_nationkey, count(*) AS cnt FROM t GROUP BY 1 HAVING count(*) > 100");
+    auto plan = planDistributed(logicalPlan);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchHiveScan("t")
+            .localPartition({"c_nationkey"})
+            .singleAggregation({"c_nationkey"}, {"count(*) as cnt"})
+            .filter("cnt > 100")
+            .bucketed()
+            .fragmentWidth(4)
+            .gather()
+            .build());
+    assertSameAsSingleNode(logicalPlan, plan);
+  }
+
+  // Non-bucket grouping key falls through to partial (bucketed) + final
+  // (repartitioned) aggregation across two fragments.
+  {
+    auto logicalPlan =
+        parseSelect("SELECT c_mktsegment, count(*) FROM t GROUP BY 1");
+    auto plan = planDistributed(logicalPlan);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchHiveScan("t")
+            .partialAggregation()
+            .bucketed()
+            .fragmentWidth(4)
+            .shuffle({"c_mktsegment"})
+            .localPartition({"c_mktsegment"})
+            .finalAggregation()
+            .gather()
+            .build());
+    assertSameAsSingleNode(logicalPlan, plan);
+  }
+}
+
+TEST_F(HiveBucketedExecutionTest, singleBucket) {
+  createBucketedTable("t", 1, {"c_nationkey"}, "SELECT * FROM customer");
+
+  auto logicalPlan =
+      parseSelect("SELECT c_nationkey, count(*) FROM t GROUP BY 1");
+  auto plan = planDistributed(logicalPlan);
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      plan.plan,
+      matchHiveScan("t")
+          .localPartition({"c_nationkey"})
+          .singleAggregation({"c_nationkey"}, {"count(*)"})
+          .bucketed()
+          .fragmentWidth(1)
+          .gather()
+          .build());
+  assertSameAsSingleNode(logicalPlan, plan);
+}
+
+TEST_F(HiveBucketedExecutionTest, joinDifferentBucketCounts) {
+  // 8 divides 16, so the 16-bucket and 8-bucket sides share a compatible
+  // bucketing and co-fragment without a shuffle.
+  createBucketedTable(
+      "t16",
+      16,
+      {"c_nationkey"},
+      "SELECT c_custkey, c_nationkey FROM customer");
+  createBucketedTable(
+      "t8",
+      8,
+      {"c_nationkey"},
+      "SELECT DISTINCT c_nationkey, cast(c_nationkey as varchar) as label FROM customer");
+
+  auto logicalPlan = parseSelect(
+      "SELECT * FROM t16, t8 WHERE t16.c_nationkey = t8.c_nationkey");
+  auto plan = planDistributed(logicalPlan);
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      plan.plan,
+      matchHiveScan("t16")
+          .hashJoinInner(matchHiveScan("t8").build())
+          .bucketed()
+          .fragmentWidth(4)
+          .gather()
+          .project()
+          .build());
+  assertSameAsSingleNode(logicalPlan, plan);
+}
+
+TEST_F(HiveBucketedExecutionTest, compositeBucketKeys) {
+  createBucketedTable(
+      "t", 16, {"c_nationkey", "c_mktsegment"}, "SELECT * FROM customer");
+
+  // Grouping by all bucket keys co-fragments.
+  {
+    auto logicalPlan = parseSelect(
+        "SELECT c_nationkey, c_mktsegment, count(*) FROM t GROUP BY 1, 2");
+    auto plan = planDistributed(logicalPlan);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchHiveScan("t")
+            .localPartition({"c_nationkey", "c_mktsegment"})
+            .singleAggregation({"c_nationkey", "c_mktsegment"}, {"count(*)"})
+            .bucketed()
+            .fragmentWidth(4)
+            .gather()
+            .build());
+    assertSameAsSingleNode(logicalPlan, plan);
+  }
+
+  // Grouping by a strict subset of the bucket keys needs a reshuffle: partial
+  // aggregation in the bucketed fragment, final aggregation after.
+  {
+    auto logicalPlan =
+        parseSelect("SELECT c_nationkey, count(*) FROM t GROUP BY 1");
+    auto plan = planDistributed(logicalPlan);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchHiveScan("t")
+            .partialAggregation()
+            .bucketed()
+            .fragmentWidth(4)
+            .shuffle({"c_nationkey"})
+            .localPartition({"c_nationkey"})
+            .finalAggregation()
+            .gather()
+            .build());
+    assertSameAsSingleNode(logicalPlan, plan);
   }
 }
 
 TEST_F(HiveBucketedExecutionTest, widthClampsToNumWorkers) {
+  // 8 buckets, 5 workers: fragment width clamps to 5.
   createBucketedTable(
-      "wc_customers", 8, {"c_nationkey"}, "SELECT * FROM customer");
+      "t", 8, {"c_nationkey"}, "SELECT c_custkey, c_nationkey FROM customer");
 
   {
-    auto logicalPlan = parseSelect(
-        "SELECT c_nationkey, count(*) FROM wc_customers "
-        "GROUP BY c_nationkey");
-    auto plan = planVelox(
-        logicalPlan, {.numWorkers = 5, .numDrivers = 4}, optimizerOptions_);
+    auto logicalPlan =
+        parseSelect("SELECT c_nationkey, count(*) FROM t GROUP BY 1");
+    auto plan = planDistributed(logicalPlan, 5);
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
-        matchHiveScan("wc_customers")
+        matchHiveScan("t")
             .localPartition({"c_nationkey"})
             .singleAggregation({"c_nationkey"}, {"count(*)"})
             .bucketed()
             .fragmentWidth(5)
             .gather()
             .build());
-    assertBucketedExecution(logicalPlan);
+    assertSameAsSingleNode(logicalPlan, plan);
   }
 
-  createBucketedTable(
-      "wc_left",
-      8,
-      {"c_nationkey"},
-      "SELECT c_custkey, c_nationkey FROM customer");
-  tablesToDrop_.emplace_back("wc_unbucketed");
-  runCtas(
-      "CREATE TABLE wc_unbucketed AS "
-      "SELECT DISTINCT c_nationkey, "
-      "cast(c_nationkey as varchar) as label FROM customer");
+  createRegularTable(
+      "u",
+      "SELECT DISTINCT c_nationkey, cast(c_nationkey as varchar) as label FROM customer");
 
   {
-    auto logicalPlan = parseSelect(
-        "SELECT * FROM wc_left JOIN wc_unbucketed "
-        "ON wc_left.c_nationkey = wc_unbucketed.c_nationkey");
-    auto plan = planVelox(
-        logicalPlan, {.numWorkers = 5, .numDrivers = 4}, optimizerOptions_);
-    int32_t bucketedScans = 0;
-    int32_t hashExchanges = 0;
-    int32_t bucketedFragmentWidth = 0;
-    for (const auto& fragment : plan.plan->fragments()) {
-      if (!fragment.groupedNodes.empty()) {
-        ASSERT_TRUE(fragment.width.has_value());
-        bucketedFragmentWidth = *fragment.width;
-        for (const auto& [_, partitionType] : fragment.groupedNodes) {
-          if (partitionType == nullptr) {
-            ++hashExchanges;
-          } else {
-            ++bucketedScans;
-          }
-        }
-      }
-    }
-    EXPECT_EQ(bucketedScans, 1);
-    EXPECT_EQ(hashExchanges, 1);
-    EXPECT_EQ(bucketedFragmentWidth, 5);
-    assertBucketedExecution(logicalPlan);
+    auto logicalPlan =
+        parseSelect("SELECT * FROM t, u WHERE t.c_nationkey = u.c_nationkey");
+    auto plan = planDistributed(logicalPlan, 5);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchHiveScan("t")
+            .hashJoinInner(matchHiveScan("u")
+                               .aliases({"u_nationkey"})
+                               .shuffle({"u_nationkey"})
+                               .build())
+            .bucketed()
+            .fragmentWidth(5)
+            .gather()
+            .project()
+            .build());
+    assertSameAsSingleNode(logicalPlan, plan);
   }
 }
 
 TEST_F(HiveBucketedExecutionTest, copartitionedJoinIndivisibleWorkers) {
-  // numPartitions=3 divides neither 16 nor 8.
+  // 3 workers divide neither bucket count (16, 8); the co-bucketed join must
+  // still return all matching rows.
   createBucketedTable(
-      "fan_big",
-      16,
-      {"c_nationkey"},
-      "SELECT c_custkey, c_nationkey FROM customer");
+      "t", 16, {"c_nationkey"}, "SELECT c_custkey, c_nationkey FROM customer");
   createBucketedTable(
-      "fan_small",
+      "u",
       8,
       {"c_nationkey"},
       "SELECT DISTINCT c_nationkey, cast(c_nationkey AS varchar) AS label FROM customer");
 
-  auto logicalPlan = parseSelect(
-      "SELECT * FROM fan_big JOIN fan_small "
-      "ON fan_big.c_nationkey = fan_small.c_nationkey");
-  auto referencePlan = planVelox(
-      logicalPlan, MultiFragmentPlan::Options::singleNode(), optimizerOptions_);
-  auto reference = runFragmentedPlan(referencePlan).results;
-  ASSERT_GT(reference.size(), 0);
-  checkSame(logicalPlan, reference, {.numWorkers = 3, .numDrivers = 4});
+  auto logicalPlan =
+      parseSelect("SELECT * FROM t, u WHERE t.c_nationkey = u.c_nationkey");
+  auto plan = planDistributed(logicalPlan, 3);
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      plan.plan,
+      matchHiveScan("t")
+          .hashJoinInner(matchHiveScan("u").build())
+          .bucketed()
+          .fragmentWidth(3)
+          .gather()
+          .project()
+          .build());
+  assertSameAsSingleNode(logicalPlan, plan);
 }
 
 TEST_F(HiveBucketedExecutionTest, unionall) {
-  // Different bucket keys (same type) — must not co-fragment.
+  // The two inputs bucket on different keys, so they cannot co-partition; the
+  // union reshuffles on the grouping key before aggregating.
   createBucketedTable(
-      "u_diff_a",
-      16,
-      {"c_nationkey"},
-      "SELECT c_nationkey, c_custkey FROM customer");
+      "t", 16, {"c_nationkey"}, "SELECT c_nationkey, c_custkey FROM customer");
   createBucketedTable(
-      "u_diff_b",
-      16,
-      {"c_custkey"},
-      "SELECT c_nationkey, c_custkey FROM customer");
+      "u", 16, {"c_custkey"}, "SELECT c_nationkey, c_custkey FROM customer");
 
-  {
-    auto logicalPlan = parseSelect(
-        "SELECT c_nationkey, count(*) FROM ("
-        "  SELECT c_nationkey FROM u_diff_a"
-        "  UNION ALL"
-        "  SELECT c_custkey AS c_nationkey FROM u_diff_b"
-        ") GROUP BY c_nationkey");
-    auto plan = planVelox(
-        logicalPlan, {.numWorkers = 4, .numDrivers = 4}, optimizerOptions_);
-    ASSERT_GT(plan.plan->fragments().size(), 1);
-    assertBucketedExecution(logicalPlan);
-  }
+  auto logicalPlan = parseSelect(
+      "SELECT c_nationkey, count(*) FROM ("
+      "  SELECT c_nationkey FROM t"
+      "  UNION ALL"
+      "  SELECT c_custkey AS c_nationkey FROM u"
+      ") GROUP BY 1");
+  auto plan = planDistributed(logicalPlan);
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      plan.plan,
+      matchHiveScan("t")
+          .localPartition(matchHiveScan("u").project().build())
+          .bucketed()
+          .fragmentWidth(4)
+          .shuffle({"c_nationkey"})
+          .localPartition({"c_nationkey"})
+          .singleAggregation({"c_nationkey"}, {"count(*)"})
+          .gather()
+          .build());
+  assertSameAsSingleNode(logicalPlan, plan);
 }
 
 } // namespace
