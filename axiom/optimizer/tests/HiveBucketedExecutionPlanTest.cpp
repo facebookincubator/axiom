@@ -14,10 +14,9 @@
  * limitations under the License.
  */
 
+#include <fmt/ranges.h>
 #include <gtest/gtest.h>
-#include <re2/re2.h>
 #include "axiom/connectors/hive/HiveConnectorMetadata.h"
-#include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 
 namespace facebook::axiom::optimizer {
@@ -33,10 +32,6 @@ class HiveBucketedExecutionTest : public test::HiveQueriesTestBase {
     createTpchTables({velox::tpch::Table::TBL_CUSTOMER});
   }
 
-  void SetUp() override {
-    HiveQueriesTestBase::SetUp();
-  }
-
   void TearDown() override {
     for (const auto& name : tablesToDrop_) {
       hiveMetadata().dropTableIfExists({kDefaultSchema, name});
@@ -45,14 +40,23 @@ class HiveBucketedExecutionTest : public test::HiveQueriesTestBase {
     HiveQueriesTestBase::TearDown();
   }
 
-  void createBucketedTable(const std::string& name, const std::string& sql) {
-    tablesToDrop_.push_back(name);
-    runCtas(sql);
-    verifyBucketed(name, parseBucketCount(sql));
-  }
+  // Creates a table bucketed on 'bucketedBy' into 'bucketCount' buckets,
+  // populated by 'selectSql', and verifies the metadata reports 'bucketCount'.
+  void createBucketedTable(
+      std::string_view name,
+      int32_t bucketCount,
+      const std::vector<std::string>& bucketedBy,
+      std::string_view selectSql) {
+    tablesToDrop_.emplace_back(name);
+    runCtas(
+        fmt::format(
+            "CREATE TABLE {} WITH (bucket_count = {}, bucketed_by = ARRAY['{}']) AS {}",
+            name,
+            bucketCount,
+            fmt::join(bucketedBy, "', '"),
+            selectSql));
 
-  void verifyBucketed(const std::string& name, int32_t expectedBuckets) {
-    auto table = hiveMetadata().findTable({kDefaultSchema, name});
+    auto table = hiveMetadata().findTable({kDefaultSchema, std::string{name}});
     ASSERT_NE(table, nullptr);
     ASSERT_FALSE(table->layouts().empty());
     const auto* layout =
@@ -60,14 +64,7 @@ class HiveBucketedExecutionTest : public test::HiveQueriesTestBase {
     ASSERT_NE(layout, nullptr);
     const auto partitionType = layout->partitionType();
     ASSERT_NE(partitionType, nullptr);
-    EXPECT_EQ(partitionType->numPartitions(), expectedBuckets);
-  }
-
-  static int32_t parseBucketCount(const std::string& sql) {
-    static const re2::RE2 kPattern(R"(bucket_count\s*=\s*(\d+))");
-    int32_t count;
-    VELOX_CHECK(re2::RE2::PartialMatch(sql, kPattern, &count));
-    return count;
+    EXPECT_EQ(partitionType->numPartitions(), bucketCount);
   }
 
   void assertBucketedExecution(const lp::LogicalPlanNodePtr& logicalPlan) {
@@ -88,15 +85,14 @@ class HiveBucketedExecutionTest : public test::HiveQueriesTestBase {
 TEST_F(HiveBucketedExecutionTest, join) {
   createBucketedTable(
       "j_left",
-      "CREATE TABLE j_left "
-      "WITH (bucket_count = 16, bucketed_by = ARRAY['c_nationkey']) "
-      "AS SELECT c_custkey, c_nationkey FROM customer");
+      16,
+      {"c_nationkey"},
+      "SELECT c_custkey, c_nationkey FROM customer");
   createBucketedTable(
       "j_right",
-      "CREATE TABLE j_right "
-      "WITH (bucket_count = 16, bucketed_by = ARRAY['c_nationkey']) "
-      "AS SELECT DISTINCT c_nationkey, "
-      "cast(c_nationkey as varchar) as label FROM customer");
+      16,
+      {"c_nationkey"},
+      "SELECT DISTINCT c_nationkey, cast(c_nationkey as varchar) as label FROM customer");
 
   {
     auto logicalPlan = parseSelect(
@@ -116,12 +112,11 @@ TEST_F(HiveBucketedExecutionTest, join) {
     assertBucketedExecution(logicalPlan);
   }
 
-  for (std::string_view sql : {
-           "SELECT * FROM j_left RIGHT JOIN j_right "
-           "ON j_left.c_nationkey = j_right.c_nationkey",
-           "SELECT * FROM j_left FULL OUTER JOIN j_right "
-           "ON j_left.c_nationkey = j_right.c_nationkey",
-       }) {
+  for (
+      std::string_view sql : {
+          "SELECT * FROM j_left RIGHT JOIN j_right ON j_left.c_nationkey = j_right.c_nationkey",
+          "SELECT * FROM j_left FULL OUTER JOIN j_right ON j_left.c_nationkey = j_right.c_nationkey",
+      }) {
     SCOPED_TRACE(sql);
     auto logicalPlan = parseSelect(sql);
     auto plan = planVelox(
@@ -178,14 +173,14 @@ TEST_F(HiveBucketedExecutionTest, join) {
 TEST_F(HiveBucketedExecutionTest, semijoin) {
   createBucketedTable(
       "sj_left",
-      "CREATE TABLE sj_left "
-      "WITH (bucket_count = 16, bucketed_by = ARRAY['c_nationkey']) "
-      "AS SELECT c_custkey, c_nationkey FROM customer");
+      16,
+      {"c_nationkey"},
+      "SELECT c_custkey, c_nationkey FROM customer");
   createBucketedTable(
       "sj_right",
-      "CREATE TABLE sj_right "
-      "WITH (bucket_count = 16, bucketed_by = ARRAY['c_nationkey']) "
-      "AS SELECT DISTINCT c_nationkey FROM customer WHERE c_nationkey < 5");
+      16,
+      {"c_nationkey"},
+      "SELECT DISTINCT c_nationkey FROM customer WHERE c_nationkey < 5");
 
   {
     auto logicalPlan = parseSelect(
@@ -223,10 +218,7 @@ TEST_F(HiveBucketedExecutionTest, semijoin) {
 
 TEST_F(HiveBucketedExecutionTest, aggregation) {
   createBucketedTable(
-      "a_customers",
-      "CREATE TABLE a_customers "
-      "WITH (bucket_count = 16, bucketed_by = ARRAY['c_nationkey']) "
-      "AS SELECT * FROM customer");
+      "a_customers", 16, {"c_nationkey"}, "SELECT * FROM customer");
 
   {
     auto logicalPlan = parseSelect(
@@ -287,11 +279,7 @@ TEST_F(HiveBucketedExecutionTest, aggregation) {
 }
 
 TEST_F(HiveBucketedExecutionTest, select) {
-  createBucketedTable(
-      "s_one",
-      "CREATE TABLE s_one "
-      "WITH (bucket_count = 1, bucketed_by = ARRAY['c_nationkey']) "
-      "AS SELECT * FROM customer");
+  createBucketedTable("s_one", 1, {"c_nationkey"}, "SELECT * FROM customer");
   {
     auto logicalPlan = parseSelect(
         "SELECT c_nationkey, count(*) FROM s_one GROUP BY c_nationkey");
@@ -312,15 +300,14 @@ TEST_F(HiveBucketedExecutionTest, select) {
   // gcd(16, 8) = 8.
   createBucketedTable(
       "s_match",
-      "CREATE TABLE s_match "
-      "WITH (bucket_count = 16, bucketed_by = ARRAY['c_nationkey']) "
-      "AS SELECT c_custkey, c_nationkey FROM customer");
+      16,
+      {"c_nationkey"},
+      "SELECT c_custkey, c_nationkey FROM customer");
   createBucketedTable(
       "s_down",
-      "CREATE TABLE s_down "
-      "WITH (bucket_count = 8, bucketed_by = ARRAY['c_nationkey']) "
-      "AS SELECT DISTINCT c_nationkey, "
-      "cast(c_nationkey as varchar) as label FROM customer");
+      8,
+      {"c_nationkey"},
+      "SELECT DISTINCT c_nationkey, cast(c_nationkey as varchar) as label FROM customer");
   {
     auto logicalPlan = parseSelect(
         "SELECT * FROM s_match JOIN s_down "
@@ -340,9 +327,9 @@ TEST_F(HiveBucketedExecutionTest, select) {
 
   createBucketedTable(
       "s_composite",
-      "CREATE TABLE s_composite "
-      "WITH (bucket_count = 16, bucketed_by = ARRAY['c_nationkey', 'c_mktsegment']) "
-      "AS SELECT * FROM customer");
+      16,
+      {"c_nationkey", "c_mktsegment"},
+      "SELECT * FROM customer");
   {
     auto logicalPlan = parseSelect(
         "SELECT c_nationkey, c_mktsegment, count(*) FROM s_composite "
@@ -375,10 +362,7 @@ TEST_F(HiveBucketedExecutionTest, select) {
 
 TEST_F(HiveBucketedExecutionTest, widthClampsToNumWorkers) {
   createBucketedTable(
-      "wc_customers",
-      "CREATE TABLE wc_customers "
-      "WITH (bucket_count = 8, bucketed_by = ARRAY['c_nationkey']) "
-      "AS SELECT * FROM customer");
+      "wc_customers", 8, {"c_nationkey"}, "SELECT * FROM customer");
 
   {
     auto logicalPlan = parseSelect(
@@ -400,9 +384,9 @@ TEST_F(HiveBucketedExecutionTest, widthClampsToNumWorkers) {
 
   createBucketedTable(
       "wc_left",
-      "CREATE TABLE wc_left "
-      "WITH (bucket_count = 8, bucketed_by = ARRAY['c_nationkey']) "
-      "AS SELECT c_custkey, c_nationkey FROM customer");
+      8,
+      {"c_nationkey"},
+      "SELECT c_custkey, c_nationkey FROM customer");
   tablesToDrop_.emplace_back("wc_unbucketed");
   runCtas(
       "CREATE TABLE wc_unbucketed AS "
@@ -442,15 +426,14 @@ TEST_F(HiveBucketedExecutionTest, copartitionedJoinIndivisibleWorkers) {
   // numPartitions=3 divides neither 16 nor 8.
   createBucketedTable(
       "fan_big",
-      "CREATE TABLE fan_big "
-      "WITH (bucket_count = 16, bucketed_by = ARRAY['c_nationkey']) "
-      "AS SELECT c_custkey, c_nationkey FROM customer");
+      16,
+      {"c_nationkey"},
+      "SELECT c_custkey, c_nationkey FROM customer");
   createBucketedTable(
       "fan_small",
-      "CREATE TABLE fan_small "
-      "WITH (bucket_count = 8, bucketed_by = ARRAY['c_nationkey']) "
-      "AS SELECT DISTINCT c_nationkey, "
-      "cast(c_nationkey AS varchar) AS label FROM customer");
+      8,
+      {"c_nationkey"},
+      "SELECT DISTINCT c_nationkey, cast(c_nationkey AS varchar) AS label FROM customer");
 
   auto logicalPlan = parseSelect(
       "SELECT * FROM fan_big JOIN fan_small "
@@ -466,14 +449,14 @@ TEST_F(HiveBucketedExecutionTest, unionall) {
   // Different bucket keys (same type) — must not co-fragment.
   createBucketedTable(
       "u_diff_a",
-      "CREATE TABLE u_diff_a "
-      "WITH (bucket_count = 16, bucketed_by = ARRAY['c_nationkey']) "
-      "AS SELECT c_nationkey, c_custkey FROM customer");
+      16,
+      {"c_nationkey"},
+      "SELECT c_nationkey, c_custkey FROM customer");
   createBucketedTable(
       "u_diff_b",
-      "CREATE TABLE u_diff_b "
-      "WITH (bucket_count = 16, bucketed_by = ARRAY['c_custkey']) "
-      "AS SELECT c_nationkey, c_custkey FROM customer");
+      16,
+      {"c_custkey"},
+      "SELECT c_nationkey, c_custkey FROM customer");
 
   {
     auto logicalPlan = parseSelect(
