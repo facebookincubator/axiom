@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/ScopeGuard.h>
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 
@@ -22,6 +23,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/dwio/parquet/writer/Writer.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -72,7 +74,7 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
     auto sink = dwio::common::FileSink::create(
         fmt::format("file:{}", path), {.pool = rootPool_.get()});
     auto writer = std::make_unique<parquet::Writer>(
-        std::move(sink), writerOptions, rootPool_, schema);
+        std::move(sink), writerOptions, schema);
     writer->write(rowVector);
     writer->close();
   }
@@ -164,6 +166,25 @@ TEST_F(FileConnectorTest, unsupportedMetadataTableFails) {
       runner_->run(
           fmt::format("SELECT * FROM {}", metadataTable("stripes")), {}),
       "Unsupported metadata table: stripes");
+}
+
+TEST_F(FileConnectorTest, separatorInFileName) {
+  // A '$' in the file name is part of the path, not a metadata-table suffix:
+  // the text after it contains a '.', so the name resolves to the data table.
+  auto path = tempFile_->getPath() + "foo$bar.parquet";
+  writeTestParquetFile(path);
+  SCOPE_EXIT {
+    std::remove(path.c_str());
+  };
+
+  exec::test::assertEqualResults(
+      {query(
+          fmt::format(
+              "SELECT * FROM file.\"parquet\".\"{}\" ORDER BY id", path))},
+      {makeRowVector(
+          {"id", "name"},
+          {makeFlatVector<int64_t>({1, 2, 3}),
+           makeFlatVector<StringView>({"alpha", "beta", "gamma"})})});
 }
 
 } // namespace

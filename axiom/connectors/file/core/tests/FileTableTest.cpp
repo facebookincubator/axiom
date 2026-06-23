@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+#include <string>
+#include <utility>
+#include <vector>
+
 #include <gtest/gtest.h>
 
 #include "axiom/connectors/file/FileConnector.h"
@@ -59,7 +63,7 @@ class FileTableTest : public ::testing::Test, public test::VectorTestBase {
     auto sink = dwio::common::FileSink::create(
         fmt::format("file:{}", parquetPath_), {.pool = rootPool_.get()});
     auto writer = std::make_unique<parquet::Writer>(
-        std::move(sink), writerOptions, rootPool_, schema);
+        std::move(sink), writerOptions, schema);
     writer->write(rowVector);
     writer->close();
   }
@@ -112,6 +116,42 @@ TEST_F(FileTableTest, metadataTableColumnMap) {
   EXPECT_TRUE(columns.contains("min"));
   EXPECT_TRUE(columns.contains("max"));
   EXPECT_TRUE(columns.contains("null_count"));
+}
+
+TEST_F(FileTableTest, parseName) {
+  struct TestCase {
+    std::string tableName;
+    std::string expectedPath;
+    std::string expectedSuffix;
+  };
+
+  const std::vector<TestCase> testCases = {
+      // A plain path resolves to the data table (empty suffix).
+      {"/data/file.parquet", "/data/file.parquet", ""},
+      // A recognized metadata suffix is split off.
+      {"/data/file.parquet$column_chunks",
+       "/data/file.parquet",
+       "column_chunks"},
+      // A '$' in a directory name stays part of the path.
+      {"/data/$backup/file.parquet", "/data/$backup/file.parquet", ""},
+      // A '$' in a file name with an extension stays part of the path.
+      {"/tmp/foo$bar.parquet", "/tmp/foo$bar.parquet", ""},
+      // Known limitation: a bare token after '$' is taken as a suffix even when
+      // the file has no extension, so the name splits instead of resolving to
+      // the data table.
+      {"/data/foo$bar", "/data/foo", "bar"},
+      // An unknown bare-token suffix is still split off so the handler can
+      // reject it with a clear "unsupported metadata table" error rather than a
+      // file-not-found error.
+      {"/data/file.parquet$stripes", "/data/file.parquet", "stripes"},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.tableName);
+    EXPECT_EQ(
+        FileTable::parseName(testCase.tableName),
+        std::make_pair(testCase.expectedPath, testCase.expectedSuffix));
+  }
 }
 
 } // namespace

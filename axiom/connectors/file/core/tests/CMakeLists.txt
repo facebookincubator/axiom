@@ -12,12 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(
-  axiom_file_connector_core_test
-  FileConnectorMetadataTest.cpp
-  FileHandlerTest.cpp
-  FileTableTest.cpp
-)
+add_executable(axiom_file_connector_core_test FileConnectorMetadataTest.cpp FileTableTest.cpp)
 
 add_test(axiom_file_connector_core_test axiom_file_connector_core_test)
 
