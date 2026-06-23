@@ -67,7 +67,7 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
          makeFlatVector<StringView>({"alpha", "beta", "gamma"})});
     auto schema = asRowType(rowVector->type());
 
-    parquet::WriterOptions writerOptions;
+    dwio::common::WriterOptions writerOptions;
     writerOptions.memoryPool = rootPool_.get();
     auto sink = dwio::common::FileSink::create(
         fmt::format("file:{}", path), {.pool = rootPool_.get()});

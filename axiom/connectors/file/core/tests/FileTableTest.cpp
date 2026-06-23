@@ -54,7 +54,7 @@ class FileTableTest : public ::testing::Test, public test::VectorTestBase {
     auto rowVector = makeRowVector({"id", "name"}, {ids, names});
     auto schema = asRowType(rowVector->type());
 
-    parquet::WriterOptions writerOptions;
+    dwio::common::WriterOptions writerOptions;
     writerOptions.memoryPool = rootPool_.get();
     auto sink = dwio::common::FileSink::create(
         fmt::format("file:{}", parquetPath_), {.pool = rootPool_.get()});
