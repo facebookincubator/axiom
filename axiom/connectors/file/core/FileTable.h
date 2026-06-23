@@ -17,6 +17,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "axiom/connectors/ConnectorMetadata.h"
@@ -152,14 +153,23 @@ class FileTable : public Table {
       std::string filePath,
       std::string suffix);
 
-  /// Splits a table name into a file path and a metadata suffix. A '$' is
-  /// treated as the suffix separator only when it is not at the start of the
-  /// name and the part after it contains no path separator, so a '$' inside a
-  /// directory name (e.g. "/data/$backup/file.parquet") stays part of the path
-  /// and yields an empty suffix. A plain path returns an empty suffix (data
-  /// table); "/path/file.parquet$column_chunks" returns suffix "column_chunks".
+  /// Splits "<path>$<suffix>" into {path, suffix}. Takes the part after the
+  /// last '$' as the suffix only when that '$' isn't the first character and
+  /// the part is a bare token (no '/' or '.'); otherwise the whole name is the
+  /// path with an empty suffix. Examples:
+  ///   "/data/f.parquet"               -> {"/data/f.parquet", ""}
+  ///   "/data/f.parquet$column_chunks" -> {"/data/f.parquet", "column_chunks"}
+  ///   "/data/$bak/f.parquet"          -> {"/data/$bak/f.parquet", ""}
+  ///   "/tmp/foo$bar.parquet"          -> {"/tmp/foo$bar.parquet", ""}
+  /// Known limitation: a '$' in an extensionless file name is read as a suffix
+  /// separator, so "/data/foo$bar" splits into {"/data/foo", "bar"}.
   static std::pair<std::string, std::string> parseName(
       const std::string& tableName);
+
+  /// Returns true if 'name' is a valid metadata-table name (non-empty and free
+  /// of '$', '.', and '/' - reserved by the "<file path>$<name>" addressing
+  /// scheme).
+  static bool isValidName(std::string_view name);
 
   const std::vector<const TableLayout*>& layouts() const override {
     return layouts_;

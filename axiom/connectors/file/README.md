@@ -78,7 +78,11 @@ A table name is a file path with an optional metadata-table suffix:
 `FileTable::parseName()` splits on the last `$`, but treats it as a suffix
 separator only when the text after it contains no path separator.
 
-A `$` inside a directory name (e.g. `/data/$data2/file.example`) is therefore part of the path, not a suffix, and resolves to the data table.
+A `$` inside a directory name (e.g. `/data/$data2/file.example`) or a file name
+(e.g. `/tmp/foo$bar.file`) is therefore part of the path, not a suffix, and resolves to
+the data table.
+
+Known limitation: a `$` in an extensionless file name (e.g. `/data/foo$bar`) is read as a suffix separator, so the name splits into path `/data/foo` and suffix `bar` instead of resolving to the data table.
 
 ## Adding a New File Handler
 

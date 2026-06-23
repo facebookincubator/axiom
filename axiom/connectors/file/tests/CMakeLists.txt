@@ -25,3 +25,16 @@ target_link_libraries(
   GTest::gtest
   GTest::gmock
 )
+
+add_executable(axiom_file_handler_test FileHandlerTest.cpp)
+
+add_test(NAME axiom_file_handler_test COMMAND axiom_file_handler_test)
+
+target_link_libraries(
+  axiom_file_handler_test
+  axiom_file_connector
+  axiom_file_handler_parquet
+  velox_type
+  GTest::gtest
+  GTest::gtest_main
+)

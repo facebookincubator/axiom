@@ -22,12 +22,16 @@ namespace facebook::axiom::connector::file {
 
 using namespace facebook::velox;
 
+bool FileTable::isValidName(std::string_view name) {
+  return !name.empty() && name.find_first_of("$./") == std::string_view::npos;
+}
+
 std::pair<std::string, std::string> FileTable::parseName(
     const std::string& tableName) {
   auto pos = tableName.rfind('$');
   if (pos != std::string::npos && pos > 0) {
     auto suffix = tableName.substr(pos + 1);
-    if (suffix.find('/') == std::string::npos) {
+    if (isValidName(suffix)) {
       return {tableName.substr(0, pos), std::move(suffix)};
     }
   }

@@ -18,6 +18,7 @@
 
 #include <map>
 
+#include "axiom/connectors/file/core/FileTable.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::axiom::connector::file {
@@ -63,6 +64,10 @@ void FileHandler::addMetadataTable(
     std::string suffix,
     velox::RowTypePtr schema,
     MetadataSourceFactory factory) {
+  VELOX_USER_CHECK(
+      FileTable::isValidName(suffix),
+      "Invalid metadata table name: {}",
+      suffix);
   metadataTables_.emplace(
       std::move(suffix), MetadataTable{std::move(schema), std::move(factory)});
 }
