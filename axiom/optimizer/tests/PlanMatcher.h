@@ -36,6 +36,9 @@ namespace facebook::velox::core {
 /// parsed as DuckDB SQL. Use DuckDB-compatible syntax for expressions.
 /// See https://duckdb.org/docs/stable/sql/functions/overview for reference.
 ///
+/// To match any subexpression, use the ExprMatcher wildcard written as
+/// `"any"()` — double-quoted, since DuckDB rejects the bare identifier `any`.
+///
 /// Symbol Rewriting:
 /// -----------------
 /// PlanMatcher supports symbol (alias) capture and rewriting to allow

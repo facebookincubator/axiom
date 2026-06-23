@@ -32,6 +32,11 @@ namespace {
     return false;                              \
   }
 
+bool isNullConstant(const TypedExprPtr& expr) {
+  return expr->isConstantKind() &&
+      expr->asUnchecked<ConstantTypedExpr>()->isNull();
+}
+
 bool isWildcard(const ExprPtr& expr) {
   if (!expr->is(IExpr::Kind::kCall)) {
     return false;
@@ -215,6 +220,16 @@ bool matchImpl(const TypedExprPtr& actual, const ExprPtr& expected) {
     const auto* expectedCall = expected->as<CallExpr>();
     EXPECT_EQ(call->name(), expectedCall->name());
     AXIOM_RETURN_FALSE_IF_FAILURE
+
+    // A 2-arg `if(cond, then)` is semantically `if(cond, then, null)`, so it
+    // matches a plan's 3-arg `if` with a typed-null else.
+    if (call->name() == "if" && call->inputs().size() == 3 &&
+        expectedCall->inputs().size() == 2 &&
+        isNullConstant(call->inputs()[2])) {
+      matchChildren(
+          {call->inputs()[0], call->inputs()[1]}, expectedCall->inputs());
+      return !::testing::Test::HasNonfatalFailure();
+    }
 
     matchChildren(call->inputs(), expectedCall->inputs());
     return !::testing::Test::HasNonfatalFailure();
