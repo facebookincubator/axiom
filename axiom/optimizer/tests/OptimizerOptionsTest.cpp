@@ -17,6 +17,7 @@
 
 #include <gtest/gtest.h>
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/tests/GTestUtils.h"
 
 namespace facebook::axiom::optimizer {
 
@@ -46,6 +47,7 @@ TEST(OptimizerOptionsTest, codeDefaults) {
   EXPECT_EQ(getDefault(props, OptimizerOptions::kTraceFlags), "0");
   EXPECT_EQ(
       getDefault(props, OptimizerOptions::kUseFilteredTableStats), "true");
+  EXPECT_EQ(getDefault(props, OptimizerOptions::kBroadcastSizeLimit), "100MB");
 }
 
 TEST(OptimizerOptionsTest, configOverrides) {
@@ -64,21 +66,36 @@ TEST(OptimizerOptionsTest, from) {
       {std::string(OptimizerOptions::kSampleJoins), "true"},
       {std::string(OptimizerOptions::kParallelProjectWidth), "8"},
       {std::string(OptimizerOptions::kTraceFlags), "5"},
+      {std::string(OptimizerOptions::kBroadcastSizeLimit), "5GB"},
   };
   auto options = OptimizerOptions::from(props);
 
   EXPECT_TRUE(options.sampleJoins);
   EXPECT_EQ(options.parallelProjectWidth, 8);
   EXPECT_EQ(options.traceFlags, 5);
+  EXPECT_EQ(options.broadcastSizeLimit, 5LL << 30);
   EXPECT_FALSE(options.syntacticJoinOrder);
   EXPECT_FALSE(options.sampleFilters);
 }
 
-TEST(OptimizerOptionsTest, normalizeRejectsInvalidWidth) {
+TEST(OptimizerOptionsTest, broadcastSizeLimitDefaultsAgree) {
+  // The string default and the byte default must denote the same size.
+  auto options = OptimizerOptions::from(
+      {{std::string(OptimizerOptions::kBroadcastSizeLimit),
+        std::string(OptimizerOptions::kBroadcastSizeLimitDefault)}});
+  EXPECT_EQ(
+      options.broadcastSizeLimit,
+      OptimizerOptions::kBroadcastSizeLimitDefaultBytes);
+}
+
+TEST(OptimizerOptionsTest, normalizeRejectsInvalidValues) {
   OptimizerOptions options;
-  EXPECT_THROW(
+  VELOX_ASSERT_THROW(
       options.normalize(OptimizerOptions::kParallelProjectWidth, "0"),
-      facebook::velox::VeloxUserError);
+      "parallel_project_width must be >= 1");
+  VELOX_ASSERT_THROW(
+      options.normalize(OptimizerOptions::kBroadcastSizeLimit, "100"),
+      "Invalid capacity string");
 }
 
 } // namespace facebook::axiom::optimizer

@@ -733,11 +733,21 @@ Repartition::Repartition(
   cost_.inputCardinality = inputCardinality();
   cost_.fanout = 1;
 
-  auto size = shuffleCost(columns_);
+  auto unitCost = shuffleCost(columns_);
+  auto rowBytes = byteSize(columns_);
 
-  cost_.unitCost = size;
-  cost_.transferBytes =
-      mul(cost_.inputCardinality, size * Costs::byteShuffleCost());
+  // A broadcast replicates the full input to every worker, so its shuffle CPU
+  // and transfer costs scale with the number of workers. 'this->' disambiguates
+  // the accessor from the constructor parameter 'distribution'.
+  if (this->distribution().isBroadcast()) {
+    const auto numWorkers =
+        queryCtx()->optimization()->runnerOptions().numWorkers;
+    unitCost *= numWorkers;
+    rowBytes *= numWorkers;
+  }
+
+  cost_.unitCost = unitCost;
+  cost_.transferBytes = mul(cost_.inputCardinality, rowBytes);
 
   // Repartition projects all input columns.
   constraints_ = input_->constraints();

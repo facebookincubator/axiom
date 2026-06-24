@@ -826,6 +826,10 @@ TEST_F(UnionAllTest, shuffledJoinBuildOverUnion) {
                        .hashJoin(matchScan("t").shuffle({"a"}).build())
                        .gather()
                        .build();
+    // Cap the broadcast size limit low so the union build stays hash
+    // partitioned (the scenario under test) rather than the small probe being
+    // broadcast.
+    optimizerOptions_.broadcastSizeLimit = 1024;
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }

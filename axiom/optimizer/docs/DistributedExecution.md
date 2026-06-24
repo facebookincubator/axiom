@@ -52,6 +52,13 @@ Exchanges are needed for:
    stays wherever it is (no shuffle), and each task gets a full copy of
    the build side.
 
+   > **Note.** The current optimizer chooses broadcast *structurally*, not by
+   > cost: a build is broadcast whenever it is eligible — its estimated size
+   > (rows × row width) is at most `broadcast_size_limit` (default 100MB) — and
+   > hash-partitioned otherwise. The broadcast cost (replication × number of
+   > workers) therefore feeds join-order ranking, not the broadcast-vs-partition
+   > choice itself. Making that choice cost-based is future work.
+
 4. **Combining independently computed inputs (UNION ALL)** — each UNION
    ALL input may involve its own joins, aggregations, or other operations
    that produce separate fragments. Exchanges connect these fragments to

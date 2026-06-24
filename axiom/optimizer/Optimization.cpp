@@ -1146,7 +1146,16 @@ PlanObjectSet availableColumns(BaseTableCP baseTable, ColumnGroupCP index) {
 }
 
 bool isBroadcastableSize(PlanP build) {
-  return build->cost.cardinality < 100'000;
+  const auto cardinality = build->cost.cardinality;
+  if (!cardinality.has_value()) {
+    // Unknown size: a broadcast copy might not fit in each worker's memory.
+    return false;
+  }
+  const auto rowBytes = byteSize(build->op->columns());
+  const int64_t limit =
+      queryCtx()->optimization()->options().broadcastSizeLimit;
+  return static_cast<double>(*cardinality) * rowBytes <=
+      static_cast<double>(limit);
 }
 
 // The 'other' side gets shuffled to align with 'input'. If 'input' is not

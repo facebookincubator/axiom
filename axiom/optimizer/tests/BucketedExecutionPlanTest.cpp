@@ -640,9 +640,9 @@ TEST_F(BucketedExecutionTest, innerJoinChainFuses) {
           .build());
 }
 
-// Same shape with a LEFT join: no equivalence forms, so the chain stays split
-// with a remote hash exchange. Regression guard for if outer joins ever start
-// forming equivalences.
+// Same shape with a LEFT join: the outer join forms no equivalence, so t cannot
+// bucket-align with the chain and joins across a remote exchange. Regression
+// guard for if outer joins ever start forming equivalences.
 TEST_F(BucketedExecutionTest, leftJoinChainDoesNotFuse) {
   addBucketedTable("t", {"k"}, 16, ROW({"k"}, BIGINT()));
   addBucketedTable("u", {"k"}, 16, ROW({"k"}, BIGINT()));
@@ -671,8 +671,7 @@ TEST_F(BucketedExecutionTest, leftJoinChainDoesNotFuse) {
       planDistributed(parseSelect(sql, kTestConnectorId)).plan,
       matchScan("u")
           .hashJoin(matchScan("v").build(), core::JoinType::kLeft)
-          .shuffle()
-          .hashJoin(matchScan("t").build(), core::JoinType::kInner)
+          .hashJoin(matchScan("t").broadcast().build(), core::JoinType::kInner)
           .gather()
           .build());
 }

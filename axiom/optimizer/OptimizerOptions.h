@@ -49,12 +49,18 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
       "parallel_project_width";
   static constexpr std::string_view kGreedyJoinThreshold =
       "greedy_join_threshold";
+  static constexpr std::string_view kBroadcastSizeLimit =
+      "broadcast_size_limit";
   static constexpr std::string_view kTraceFlags = "trace_flags";
 
   // Default values — single source of truth for field initializers
   // and properties().
   static constexpr int32_t kParallelProjectWidthDefault = 1;
   static constexpr int32_t kGreedyJoinThresholdDefault = 5;
+  // 100 MB. The string form is the user-facing default and accepts capacity
+  // units; the bytes form initializes the parsed field.
+  static constexpr std::string_view kBroadcastSizeLimitDefault = "100MB";
+  static constexpr int64_t kBroadcastSizeLimitDefaultBytes = 100LL << 20;
   static constexpr bool kPushdownSubfieldsDefault = false;
   static constexpr bool kAllMapsAsStructDefault = false;
   static constexpr bool kSampleJoinsDefault = false;
@@ -115,6 +121,12 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
   /// Use a greedy join-order search instead of exhaustive enumeration when
   /// a single query block contains at least this many joined tables.
   int32_t greedyJoinThreshold{kGreedyJoinThresholdDefault};
+
+  /// A build side is eligible for broadcast only if its estimated size (rows ×
+  /// row width) is at most this many bytes, so a broadcast copy fits in each
+  /// worker's memory. Configured as a capacity string ("100MB", "1GB"); "0B"
+  /// disables broadcast entirely.
+  int64_t broadcastSizeLimit{kBroadcastSizeLimitDefaultBytes};
 
   /// Disable cost-based decision re: whether to split an aggregation into
   /// partial + final or not.

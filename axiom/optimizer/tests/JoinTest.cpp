@@ -284,6 +284,55 @@ TEST_F(JoinTest, joinWithComputedKeys) {
   }
 }
 
+TEST_F(JoinTest, broadcastSizeLimitGatesBroadcast) {
+  testConnector_->addTable("probe", ROW({"p_key", "p_data"}, BIGINT()))
+      ->setStats(100'000, {{"p_key", {.numDistinct = 100'000}}});
+  testConnector_->addTable("build", ROW({"b_key", "b_data"}, BIGINT()))
+      ->setStats(1'000, {{"b_key", {.numDistinct = 1'000}}});
+
+  OptimizerOptions options;
+  options.syntacticJoinOrder = true;
+
+  auto ctx = makeContext();
+  auto logicalPlan = lp::PlanBuilder{ctx}
+                         .tableScan("probe")
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("build"),
+                             "p_key = b_key",
+                             lp::JoinType::kInner)
+                         .build();
+
+  // The 1000-row build (~16KB) is well under the default 100MB limit, so it is
+  // broadcast rather than hash-partitioned.
+  {
+    auto distributedPlan =
+        planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 1}, options);
+    auto matcher =
+        matchScan("probe")
+            .hashJoin(
+                matchScan("build").broadcast().build(), core::JoinType::kInner)
+            .gather()
+            .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
+  }
+
+  // Lowering the limit below the build size makes it ineligible for broadcast,
+  // so both sides are hash-partitioned on the join key.
+  {
+    options.broadcastSizeLimit = 1024;
+    auto distributedPlan =
+        planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 1}, options);
+    auto matcher = matchScan("probe")
+                       .shuffle({"p_key"})
+                       .hashJoin(
+                           matchScan("build").shuffle({"b_key"}).build(),
+                           core::JoinType::kInner)
+                       .gather()
+                       .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
+  }
+}
+
 TEST_F(JoinTest, crossJoin) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
