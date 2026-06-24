@@ -29,12 +29,27 @@
 #include "folly/coro/BlockingWait.h"
 #include "folly/coro/Collect.h"
 #include "folly/coro/Task.h"
+#include "folly/hash/Hash.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
 
 namespace lp = facebook::axiom::logical_plan;
 
 namespace facebook::axiom::optimizer {
+
+namespace {
+struct F14DiagSelfTest {
+  F14DiagSelfTest() {
+    const void* const kPtr =
+        reinterpret_cast<const void*>(0xCAFEBABE12345678ULL);
+    std::cerr << "F14DIAG SELFTEST file=Optimization.cpp"
+              << " ptr=" << kPtr << std::hex << " std_hash=0x"
+              << std::hash<const void*>{}(kPtr) << " folly_hash=0x"
+              << folly::hasher<const void*>{}(kPtr) << std::dec << std::endl;
+  }
+};
+[[maybe_unused]] static const F14DiagSelfTest kF14DiagSelfTest;
+} // namespace
 
 Optimization::Optimization(
     OptimizerSessionPtr optimizerSession,
@@ -364,6 +379,13 @@ void commitGroupedLeavesForRepartition(
       !dist.partitionKeys().empty()) {
     state.mutableCurrentGroupedLeaves().emplace(repartition, nullptr);
   }
+  std::cerr << "F14DIAG INSERT file=Optimization.cpp"
+            << " ptr=" << repartition << std::hex << " std_hash=0x"
+            << std::hash<const Repartition*>{}(repartition) << " folly_hash=0x"
+            << folly::hasher<const Repartition*>{}(repartition) << std::dec
+            << " map_size="
+            << state.optimization.repartitionGroupedLeaves().size()
+            << std::endl;
 }
 
 namespace {

@@ -15,6 +15,8 @@
  */
 #include "axiom/optimizer/ToVelox.h"
 #include <folly/container/F14Set.h>
+#include <folly/hash/Hash.h>
+#include <iostream>
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
@@ -31,6 +33,20 @@
 namespace lp = facebook::axiom::logical_plan;
 
 namespace facebook::axiom::optimizer {
+
+namespace {
+struct F14DiagSelfTest {
+  F14DiagSelfTest() {
+    const void* const kPtr =
+        reinterpret_cast<const void*>(0xCAFEBABE12345678ULL);
+    std::cerr << "F14DIAG SELFTEST file=ToVelox.cpp"
+              << " ptr=" << kPtr << std::hex << " std_hash=0x"
+              << std::hash<const void*>{}(kPtr) << " folly_hash=0x"
+              << folly::hasher<const void*>{}(kPtr) << std::dec << std::endl;
+  }
+};
+[[maybe_unused]] static const F14DiagSelfTest kF14DiagSelfTest;
+} // namespace
 
 std::string PlanAndStats::toString() const {
   return plan->toString(
@@ -1886,7 +1902,16 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
     sourceGroupedLeaves = &groupedLeaves_->root;
   } else {
     auto it = groupedLeaves_->perRepartition.find(&repartition);
-    if (it != groupedLeaves_->perRepartition.end()) {
+    const bool found = it != groupedLeaves_->perRepartition.end();
+    std::cerr << "F14DIAG FIND file=ToVelox.cpp"
+              << " ptr=" << &repartition << std::hex << " std_hash=0x"
+              << std::hash<const Repartition*>{}(&repartition)
+              << " folly_hash=0x"
+              << folly::hasher<const Repartition*>{}(&repartition) << std::dec
+              << " found=" << found
+              << " map_size=" << groupedLeaves_->perRepartition.size()
+              << std::endl;
+    if (found) {
       sourceGroupedLeaves = &it->second;
     }
   }

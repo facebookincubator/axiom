@@ -187,6 +187,55 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-macos-${{ matrix.build_type }}
 
+      - name: F14 Diagnostic - Symbol and Library Analysis
+        if: matrix.build_type == 'release'
+        run: |
+          BIN=_build/$BUILD_TYPE/axiom/optimizer/tests/axiom_optimizer_tests
+          if [ ! -x "$BIN" ]; then
+            echo "Test binary not found at $BIN — listing candidates:"
+            find _build/$BUILD_TYPE -name "axiom_optimizer_tests*" -type f | head -5
+            exit 0
+          fi
+
+          echo "=== otool -L (dynamic library deps for libc++/folly/velox) ==="
+          otool -L "$BIN" | grep -iE "libc\+\+|libfolly|libvelox|libsystem" || true
+
+          echo ""
+          echo "=== nm: __hash_memory symbol presence (T=defined U=undefined-from-dylib) ==="
+          nm "$BIN" | grep -i hash_memory || echo "no __hash_memory symbol (fully inlined per TU)"
+
+          echo ""
+          echo "=== nm: __murmur2_or_cityhash symbol presence ==="
+          nm "$BIN" | grep -i "murmur2_or_cityhash" || echo "no cityhash symbol (fully inlined per TU)"
+
+          echo ""
+          echo "=== nm: std::hash<...Repartition...> instantiations (demangled) ==="
+          nm "$BIN" | xcrun c++filt 2>/dev/null | grep -E "std::__1::hash.*Repartition|std::hash.*Repartition" | head -20 || echo "no std::hash<Repartition*> symbol (fully inlined)"
+
+          echo ""
+          echo "=== nm: F14DiagSelfTest constructor symbols (one per TU) ==="
+          nm "$BIN" | xcrun c++filt 2>/dev/null | grep -E "F14DiagSelfTest" | head -10 || true
+
+          echo ""
+          echo "=== otool -tV: disassembly of commitGroupedLeavesForRepartition (INSERT site, includes inlined std::hash) ==="
+          ADDR_INSERT=$(nm "$BIN" | grep "commitGroupedLeavesForRepartition" | awk '{print $1}' | head -1)
+          if [ -n "$ADDR_INSERT" ]; then
+            echo "symbol at address: 0x$ADDR_INSERT"
+            otool -tV "$BIN" 2>&1 | awk '/commitGroupedLeavesForRepartition.*:$/{p=1; n=0} p && /^[0-9a-fA-F_].*:$/ && !/commitGroupedLeavesForRepartition/{p=0} p && (++n <= 400)'
+          else
+            echo "commitGroupedLeavesForRepartition symbol not found (may be inlined into all callers)"
+          fi
+
+          echo ""
+          echo "=== otool -tV: disassembly of ToVelox::makeRepartition (FIND site, includes inlined std::hash) ==="
+          ADDR_FIND=$(nm "$BIN" | xcrun c++filt 2>/dev/null | grep -E "ToVelox::makeRepartition" | awk '{print $1}' | head -1)
+          if [ -n "$ADDR_FIND" ]; then
+            echo "symbol matched (demangled). Searching disassembly:"
+            otool -tV "$BIN" 2>&1 | awk '/ToVelox.*makeRepartition.*:$/{p=1; n=0} p && /^[0-9a-fA-F_].*:$/ && !/makeRepartition/{p=0} p && (++n <= 400)'
+          else
+            echo "ToVelox::makeRepartition symbol not found"
+          fi
+
       - name: Run Tests
         run: |
           ctest --test-dir _build/$BUILD_TYPE -j $NJOBS --output-on-failure --no-tests=error
