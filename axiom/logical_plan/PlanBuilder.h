@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/ExprResolver.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
@@ -129,8 +131,10 @@ class PlanBuilder {
     /// Context.
     std::shared_ptr<NameAllocator> nameAllocator;
 
-    /// Enables constant folding when set. Also provides a memory pool for
-    /// evaluating constant expressions.
+    /// Enables constant folding (including memory pool) when set.
+    /// Enables a per-query connector metadata registry override (looked up
+    /// under `ConnectorMetadataRegistry::kRegistryKey`); when unset, lookups
+    /// go directly against the global registry.
     std::shared_ptr<velox::core::QueryCtx> queryCtx;
 
     /// Rewrites function calls during expression resolution, e.g. maps
@@ -163,20 +167,21 @@ class PlanBuilder {
         std::shared_ptr<velox::parse::SqlExpressionsParser> sqlParser =
             std::make_shared<velox::parse::DuckSqlExpressionsParser>(
                 velox::parse::ParseOptions{.parseInListAsArray = false}),
-        const velox::TypeCoercer* coercer = nullptr)
-        : defaultConnectorId{defaultConnectorId},
-          defaultSchema{defaultSchema},
-          sqlParser{std::move(sqlParser)},
-          planNodeIdGenerator{
-              std::make_shared<velox::core::PlanNodeIdGenerator>()},
-          nameAllocator{std::make_shared<NameAllocator>()},
-          queryCtx{std::move(queryCtxPtr)},
-          hook{std::move(hook)},
-          pool{
-              queryCtx && queryCtx->pool()
-                  ? queryCtx->pool()->addLeafChild("literals")
-                  : nullptr},
-          coercer{coercer} {}
+        const velox::TypeCoercer* coercer = nullptr);
+
+    /// Resolves connector metadata for `connectorId`.
+    ///
+    /// If `queryCtx` is set and has a `ConnectorMetadataRegistry` registered
+    /// under `ConnectorMetadataRegistry::kRegistryKey`, the lookup is
+    /// dispatched to that scoped registry; whether it falls back to the global
+    /// registry depends on the scoped registry's parent chain. Otherwise (no
+    /// `queryCtx`, or no registry override under `kRegistryKey`), the lookup
+    /// goes directly against the global registry. This will not return a
+    /// nullptr: it will throw an exception instead.
+    ///
+    /// @throws VeloxUserException if the connector is not registered.
+    std::shared_ptr<connector::ConnectorMetadata> connectorMetadata(
+        const std::string& connectorId) const;
   };
 
   /// Resolves a column reference from an outer query scope. Used to support
@@ -209,12 +214,8 @@ class PlanBuilder {
       const Context& context,
       bool allowAmbiguousOutputNames = false,
       Scope outerScope = nullptr)
-      : defaultConnectorId_{context.defaultConnectorId},
-        defaultSchema_{context.defaultSchema},
-        planNodeIdGenerator_{context.planNodeIdGenerator},
-        nameAllocator_{context.nameAllocator},
+      : context_{context},
         outerScope_{std::move(outerScope)},
-        sqlParser_{context.sqlParser},
         allowAmbiguousOutputNames_{allowAmbiguousOutputNames},
         coercer_{context.coercer},
         identifierCanonicalizer_{context.identifierCanonicalizer},
@@ -224,8 +225,8 @@ class PlanBuilder {
             context.hook,
             context.pool,
             context.planNodeIdGenerator} {
-    VELOX_CHECK_NOT_NULL(planNodeIdGenerator_);
-    VELOX_CHECK_NOT_NULL(nameAllocator_);
+    VELOX_CHECK_NOT_NULL(context_.planNodeIdGenerator);
+    VELOX_CHECK_NOT_NULL(context_.nameAllocator);
   }
 
   /// Adds a leaf Values node producing literal rows. Must be the first node
@@ -608,11 +609,11 @@ class PlanBuilder {
       std::vector<std::string> columnNames,
       const std::initializer_list<std::string>& columnExprs,
       folly::F14FastMap<std::string, std::string> options = {}) {
-    VELOX_USER_CHECK(defaultConnectorId_.has_value());
-    VELOX_USER_CHECK(defaultSchema_.has_value());
+    VELOX_USER_CHECK(context_.defaultConnectorId.has_value());
+    VELOX_USER_CHECK(context_.defaultSchema.has_value());
     return tableWrite(
-        defaultConnectorId_.value(),
-        defaultSchema_.value(),
+        context_.defaultConnectorId.value(),
+        context_.defaultSchema.value(),
         std::move(tableName),
         kind,
         std::move(columnNames),
@@ -627,11 +628,11 @@ class PlanBuilder {
       std::vector<std::string> columnNames,
       const std::vector<std::string>& columnExprs,
       folly::F14FastMap<std::string, std::string> options = {}) {
-    VELOX_USER_CHECK(defaultConnectorId_.has_value());
-    VELOX_USER_CHECK(defaultSchema_.has_value());
+    VELOX_USER_CHECK(context_.defaultConnectorId.has_value());
+    VELOX_USER_CHECK(context_.defaultSchema.has_value());
     return tableWrite(
-        defaultConnectorId_.value(),
-        defaultSchema_.value(),
+        context_.defaultConnectorId.value(),
+        context_.defaultSchema.value(),
         std::move(tableName),
         kind,
         std::move(columnNames),
@@ -827,7 +828,7 @@ class PlanBuilder {
   void setOperationImpl(SetOperation op, std::vector<LogicalPlanNodePtr> nodes);
 
   std::string nextId() {
-    return planNodeIdGenerator_->next();
+    return context_.planNodeIdGenerator->next();
   }
 
   std::string newName(const std::string& hint);
@@ -861,25 +862,14 @@ class PlanBuilder {
       std::vector<AggregateExprPtr>& exprs,
       NameMappings& mappings);
 
-  // Connector ID used when table names omit the catalog prefix.
-  const std::optional<std::string> defaultConnectorId_;
-
-  // Schema used when table names omit the schema prefix.
-  const std::optional<std::string> defaultSchema_;
-
-  // Generates unique plan-node IDs (shared across builders via Context).
-  const std::shared_ptr<velox::core::PlanNodeIdGenerator> planNodeIdGenerator_;
-
-  // Allocates unique internal column names (shared across builders via
-  // Context).
-  const std::shared_ptr<NameAllocator> nameAllocator_;
+  // Shared state inherited from the constructor's Context. Sole source of
+  // truth for default connector/schema, ID/name generators, queryCtx, and the
+  // SQL expression parser.
+  const Context context_;
 
   // Resolves column references from the enclosing query for correlated
   // subqueries. Null for top-level queries.
   const Scope outerScope_;
-
-  // Parses SQL expression strings into Velox expression trees.
-  const std::shared_ptr<velox::parse::SqlExpressionsParser> sqlParser_;
 
   const bool allowAmbiguousOutputNames_;
 
