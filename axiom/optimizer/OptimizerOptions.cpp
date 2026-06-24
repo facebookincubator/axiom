@@ -19,6 +19,7 @@
 #include <glog/logging.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/config/Config.h"
 
 namespace facebook::axiom::optimizer {
 
@@ -94,6 +95,14 @@ std::vector<ConfigProperty> buildProperties(
           "tables. Greedy is approximate but bounded in planning time.",
       },
       {
+          std::string(OptimizerOptions::kBroadcastSizeLimit),
+          ConfigPropertyType::kString,
+          std::string(OptimizerOptions::kBroadcastSizeLimitDefault),
+          "Maximum estimated build size eligible for broadcast, as a capacity "
+          "string (e.g. \"100MB\", \"1GB\"). A broadcast copy must fit in each "
+          "worker's memory. \"0B\" disables broadcast.",
+      },
+      {
           std::string(OptimizerOptions::kTraceFlags),
           ConfigPropertyType::kInteger,
           std::to_string(OptimizerOptions::kTraceFlagsDefault),
@@ -141,6 +150,10 @@ std::string OptimizerOptions::normalize(
     auto threshold = std::stoi(std::string(value));
     VELOX_USER_CHECK_GE(
         threshold, 1, "greedy_join_threshold must be >= 1: {}", value);
+  } else if (name == kBroadcastSizeLimit) {
+    // Throws if 'value' is not a valid capacity string (e.g. "100MB").
+    velox::config::toCapacity(
+        std::string(value), velox::config::CapacityUnit::BYTE);
   }
   return std::string(value);
 }
@@ -161,6 +174,14 @@ OptimizerOptions OptimizerOptions::from(
     }
   };
 
+  auto setCapacity = [&](std::string_view key, int64_t& field) {
+    auto it = properties.find(key);
+    if (it != properties.end()) {
+      field = static_cast<int64_t>(velox::config::toCapacity(
+          it->second, velox::config::CapacityUnit::BYTE));
+    }
+  };
+
   OptimizerOptions options;
   setBool(kSampleJoins, options.sampleJoins);
   setBool(kSampleFilters, options.sampleFilters);
@@ -172,6 +193,7 @@ OptimizerOptions OptimizerOptions::from(
   setBool(kEnableReducingExistences, options.enableReducingExistences);
   setInt(kParallelProjectWidth, options.parallelProjectWidth);
   setInt(kGreedyJoinThreshold, options.greedyJoinThreshold);
+  setCapacity(kBroadcastSizeLimit, options.broadcastSizeLimit);
 
   auto setUint = [&](std::string_view key, uint32_t& field) {
     auto it = properties.find(key);

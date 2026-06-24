@@ -2347,8 +2347,11 @@ TEST_F(SubqueryTest, inSubqueryWithCorrelatedNotExists) {
 //   NOT IN: workers missing the NULL incorrectly return rows.
 //   IN: workers missing the NULL produce false instead of NULL for the mark.
 TEST_F(SubqueryTest, inReplicateNullsAndAny) {
-  // Make both tables large enough to trigger hash partitioning instead of
-  // broadcast.
+  // replicateNullsAndAny only appears on a hash-partitioned build. Cap the
+  // broadcast size limit low so the build is hash partitioned regardless of its
+  // size.
+  optimizerOptions_.broadcastSizeLimit = 1024;
+
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(
           10'000'000,

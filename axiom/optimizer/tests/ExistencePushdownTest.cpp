@@ -311,34 +311,31 @@ TEST_F(ExistencePushdownTest, chainJoin) {
   auto distributedPlan = planVelox(logicalPlan);
 
   auto distributedMatcher =
-      matchScan("r")
-          .filter("b < 100")
+      matchScan("u")
+          .hashJoin(
+              matchScan("r")
+                  .filter("b < 100")
+                  .hashJoin(
+                      matchScan("s")
+                          .aliases({"s_a"})
+                          .filter("s_a < 100")
+                          .broadcast()
+                          .build(),
+                      core::JoinType::kInner)
+                  .project()
+                  .broadcast()
+                  .build(),
+              core::JoinType::kLeftSemiFilter)
+          .shuffle({"x"})
+          .localPartition({"x"})
+          .singleAggregation({"x"}, {"count(*) as cnt"})
+          .hashJoin(
+              matchScan("r").filter("b < 100").shuffle({"a"}).build(),
+              core::JoinType::kInner)
           .hashJoin(
               matchScan("s")
                   .aliases({"s_a"})
                   .filter("s_a < 100")
-                  .broadcast()
-                  .build(),
-              core::JoinType::kInner)
-          .hashJoin(
-              matchScan("u")
-                  .hashJoin(
-                      matchScan("r")
-                          .filter("b < 100")
-                          .hashJoin(
-                              matchScan("s")
-                                  .aliases({"s_a"})
-                                  .filter("s_a < 100")
-                                  .broadcast()
-                                  .build(),
-                              core::JoinType::kInner)
-                          .project()
-                          .broadcast()
-                          .build(),
-                      core::JoinType::kLeftSemiFilter)
-                  .shuffle({"x"})
-                  .localPartition({"x"})
-                  .singleAggregation({"x"}, {"count(*) as cnt"})
                   .broadcast()
                   .build(),
               core::JoinType::kInner)
@@ -385,13 +382,19 @@ TEST_F(ExistencePushdownTest, multipleTables) {
   auto distributedMatcher =
       matchScan("s")
           .hashJoin(
-              matchScan("u")
+              matchScan("s")
+                  .shuffle({"a_0"})
                   .hashJoin(
-                      matchScan("r").filter("b < 100").broadcast().build(),
-                      core::JoinType::kLeftSemiFilter)
-                  .hashJoin(
-                      matchScan("s").broadcast().build(),
-                      core::JoinType::kLeftSemiFilter)
+                      matchScan("u")
+                          .hashJoin(
+                              matchScan("r")
+                                  .filter("b < 100")
+                                  .broadcast()
+                                  .build(),
+                              core::JoinType::kLeftSemiFilter)
+                          .shuffle({"y"})
+                          .build(),
+                      core::JoinType::kRightSemiFilter)
                   .shuffle({"x", "y"})
                   .localPartition({"x", "y"})
                   .singleAggregation({"x", "y"}, {})
