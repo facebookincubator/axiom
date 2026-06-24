@@ -198,6 +198,28 @@ $ $CLI --query "SELECT INTERVAL '1' DAY AS d, INTERVAL '13' MONTH AS m" 2>/dev/n
 1 00:00:00.000 | 1-1
 ```
 
+## AT TIME ZONE constant fold preserves the target timezone
+
+```scrut
+$ $CLI --query "SELECT TIMESTAMP '2026-05-07 10:00:00 UTC' AT TIME ZONE 'America/Los_Angeles' AS ts" 2>/dev/null
+-------------------------------------------
+                                         ts
+-------------------------------------------
+2026-05-07 03:00:00.000 America/Los_Angeles
+(1 rows in 1 batches)
+
+```
+
+```scrut
+$ $CLI --query "SELECT date_format(TIMESTAMP '2026-05-07 10:00:00 UTC' AT TIME ZONE 'America/Los_Angeles', '%H') AS la, date_format(TIMESTAMP '2026-05-07 10:00:00 UTC' AT TIME ZONE 'America/New_York', '%H') AS ny" 2>/dev/null
+---+---
+la | ny
+---+---
+03 | 06
+(1 rows in 1 batches)
+
+```
+
 ## IPADDRESS displays a formatted IP address
 
 ```scrut

@@ -1221,28 +1221,7 @@ bool ToGraph::isJoinEquality(
 }
 
 ExprCP ToGraph::makeConstant(const lp::ConstantExpr& constant) {
-  TypedVariant temp{toType(constant.type()), constant.value()};
-  auto it = constantDedup_.find(temp);
-  if (it != constantDedup_.end()) {
-    return it->second;
-  }
-
-  Value value(temp.type, 1);
-  if (temp.value->isNull()) {
-    value.nullFraction = 1.0;
-  } else {
-    value.nullFraction = 0.0;
-    value.nullable = false;
-    if (temp.type->isPrimitiveType()) {
-      value.min = temp.value.get();
-      value.max = temp.value.get();
-    }
-  }
-
-  auto* literal = make<Literal>(value, temp.value.get());
-
-  constantDedup_[std::move(temp)] = literal;
-  return literal;
+  return constantCache_.get(constant);
 }
 
 ExprCP ToGraph::makeNullConstant(const velox::TypePtr& type) {

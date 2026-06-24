@@ -24,6 +24,7 @@ add_library(
   axiom_optimizer
   AggregationPlanner.cpp
   BitSet.cpp
+  ConstantCache.cpp
   ConstantExprEvaluator.cpp
   Cost.cpp
   DerivedTable.cpp
