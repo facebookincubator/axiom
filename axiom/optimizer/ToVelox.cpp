@@ -2272,13 +2272,8 @@ velox::core::PlanNodePtr ToVelox::makeAssignUniqueId(
     std::vector<ExecutableFragment>& stages) {
   auto input = makeFragment(op.input(), fragment, stages);
 
-  // TODO Remove taskUniqueId from AssignUniqueIdNode:
-  // https://github.com/facebookincubator/velox/issues/16260
   auto node = std::make_shared<velox::core::AssignUniqueIdNode>(
-      nextId(),
-      op.uniqueIdColumn()->toString(),
-      /*taskUniqueId=*/0,
-      std::move(input));
+      nextId(), op.uniqueIdColumn()->toString(), std::move(input));
 
   makePredictionAndHistory(node->id(), &op);
   return node;

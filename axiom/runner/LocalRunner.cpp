@@ -497,9 +497,14 @@ void LocalRunner::makeStages(
           params_.queryCtx->queryId(),
           fragment.taskPrefix,
           i);
+      // Each task in the stage gets a distinct taskUniqueId so AssignUniqueId
+      // operators across tasks produce non-overlapping ids. Copy the shared
+      // fragment so the per-task value does not leak to sibling tasks.
+      auto taskFragment = fragment.fragment;
+      taskFragment.taskUniqueId = i;
       auto task = velox::exec::Task::create(
           taskId,
-          fragment.fragment,
+          std::move(taskFragment),
           i,
           params_.queryCtx,
           velox::exec::Task::ExecutionMode::kParallel,
