@@ -861,6 +861,67 @@ std::optional<float> baseSelectivity(PlanObjectCP object) {
   }
   return 1;
 }
+
+// Returns the single-column filter on 'table' that constrains 'key' (or any
+// column equivalent to 'key' that belongs to 'table'). Returns nullptr if no
+// such filter exists or 'key' is not a column expression.
+ExprCP FOLLY_NULLABLE findColumnFilterOnKey(BaseTableCP table, ExprCP key) {
+  if (!key->is(PlanType::kColumnExpr)) {
+    return nullptr;
+  }
+  const auto* keyColumn = key->as<Column>();
+  const auto* equivalence = keyColumn->equivalence();
+
+  for (auto* filter : table->columnFilters) {
+    const auto& filterColumns = filter->columns();
+    if (filterColumns.size() != 1) {
+      continue;
+    }
+    const auto* filterColumn = filterColumns.onlyObject<Column>();
+    if (filterColumn == keyColumn) {
+      return filter;
+    }
+    if (equivalence != nullptr) {
+      for (const auto* equivalentColumn : equivalence->columns) {
+        if (equivalentColumn == filterColumn) {
+          return filter;
+        }
+      }
+    }
+  }
+  return nullptr;
+}
+
+// Returns true when every (leftKeys[i], rightKeys[i]) pair has a single-column
+// filter on each side and the two filters are structurally equal under
+// `Expr::sameOrEqual` (which treats equivalence-class columns as equal at the
+// leaves). Returns false on the first pair without a duplicate.
+bool everyKeyPairHasDuplicateFilter(
+    PlanObjectCP leftObject,
+    PlanObjectCP rightObject,
+    const ExprVector& leftKeys,
+    const ExprVector& rightKeys) {
+  if (leftObject == nullptr || rightObject == nullptr ||
+      !leftObject->is(PlanType::kTableNode) ||
+      !rightObject->is(PlanType::kTableNode)) {
+    return false;
+  }
+  const auto* leftTable = leftObject->as<BaseTable>();
+  const auto* rightTable = rightObject->as<BaseTable>();
+  VELOX_CHECK_EQ(leftKeys.size(), rightKeys.size());
+  VELOX_DCHECK(!leftKeys.empty());
+  for (size_t i = 0; i < leftKeys.size(); ++i) {
+    const auto leftFilter = findColumnFilterOnKey(leftTable, leftKeys[i]);
+    const auto rightFilter = findColumnFilterOnKey(rightTable, rightKeys[i]);
+    if (leftFilter == nullptr || rightFilter == nullptr) {
+      return false;
+    }
+    if (!leftFilter->sameOrEqual(*rightFilter)) {
+      return false;
+    }
+  }
+  return true;
+}
 } // namespace
 
 void JoinEdge::guessFanout() {
@@ -882,6 +943,17 @@ void JoinEdge::guessFanout() {
   leftUnique_ = left.unique;
   rightUnique_ = right.unique;
 
+  const auto leftSelectivity = baseSelectivity(leftTable_);
+  const auto rightSelectivity = baseSelectivity(rightTable_);
+  const bool hasDuplicateEquivalenceFilter = everyKeyPairHasDuplicateFilter(
+      leftTable_, rightTable_, leftKeys_, rightKeys_);
+  const auto effectiveLeftSelectivity = hasDuplicateEquivalenceFilter
+      ? std::max(leftSelectivity, rightSelectivity)
+      : leftSelectivity;
+  const auto effectiveRightSelectivity = hasDuplicateEquivalenceFilter
+      ? effectiveLeftSelectivity
+      : rightSelectivity;
+
   // If one side has unique join keys, this is a primary key (PK) to foreign
   // key (FK) join. For example, joining orders (PK: orderkey) with lineitem
   // (FK: orderkey), if orders is the left table, then leftUnique_ is true: each
@@ -889,28 +961,27 @@ void JoinEdge::guessFanout() {
   // match many lineitems (lrFanout = cardLineitem / cardOrders). When both
   // sides are unique (1:1 join), leftUnique takes precedence.
   if (leftUnique_) {
-    rlFanout_ = mul(left.fanout, baseSelectivity(leftTable_));
+    rlFanout_ = mul(left.fanout, effectiveLeftSelectivity);
     lrFanout_ =
         mul(divide(tableCardinality(rightTable_), tableCardinality(leftTable_)),
-            baseSelectivity(rightTable_));
+            effectiveRightSelectivity);
   } else if (rightUnique_) {
-    lrFanout_ = mul(right.fanout, baseSelectivity(rightTable_));
+    lrFanout_ = mul(right.fanout, effectiveRightSelectivity);
     rlFanout_ =
         mul(divide(tableCardinality(leftTable_), tableCardinality(rightTable_)),
-            baseSelectivity(leftTable_));
+            effectiveLeftSelectivity);
   } else {
     auto [sampledLeftFanout, sampledRightFanout] = options.sampleJoins
         ? opt->history().sampleJoin(this)
         : std::pair<float, float>(0, 0);
     if (sampledLeftFanout == 0 && sampledRightFanout == 0) {
-      lrFanout_ = mul(right.fanout, baseSelectivity(rightTable_));
-      rlFanout_ = mul(left.fanout, baseSelectivity(leftTable_));
+      lrFanout_ = mul(right.fanout, effectiveRightSelectivity);
+      rlFanout_ = mul(left.fanout, effectiveLeftSelectivity);
     } else {
-      lrFanout_ =
-          mul(std::optional<float>(sampledRightFanout),
-              baseSelectivity(rightTable_));
+      lrFanout_ = mul(
+          std::optional<float>(sampledRightFanout), effectiveRightSelectivity);
       rlFanout_ = mul(
-          std::optional<float>(sampledLeftFanout), baseSelectivity(leftTable_));
+          std::optional<float>(sampledLeftFanout), effectiveLeftSelectivity);
     }
   }
 }
