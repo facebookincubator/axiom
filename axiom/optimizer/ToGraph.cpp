@@ -3204,7 +3204,9 @@ AggregationPlanCP ToGraph::processCorrelatedAggregation(
     return nullptr;
   }
 
-  VELOX_CHECK(agg->groupingKeys().empty());
+  VELOX_CHECK(
+      agg->groupingKeys().empty(),
+      "Correlated aggregation with grouping keys is not supported");
 
   // Check if all conjuncts are equalities. If any are non-equi, we'll
   // handle decorrelation at the outer level using AssignUniqueId.
