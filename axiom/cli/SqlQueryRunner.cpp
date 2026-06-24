@@ -37,6 +37,7 @@
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/RelationOpPrinter.h"
 #include "axiom/optimizer/VeloxHistory.h"
+#include "axiom/runner/RunnerException.h"
 #include "axiom/sql/presto/PrestoParser.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/ShowStatsBuilder.h"
@@ -258,11 +259,152 @@ connector::ConnectorProperties collectConnectorProperties(
   return result;
 }
 
-std::vector<velox::RowVectorPtr> fetchResults(runner::LocalRunner& runner) {
-  std::vector<velox::RowVectorPtr> results;
-  while (auto rows = runner.next()) {
-    results.push_back(rows);
+// Aborts 'runner' at most once across threads; later calls are no-ops. abort()
+// is best effort, so exceptions are swallowed.
+void abortRunnerOnce(runner::LocalRunner& runner, std::atomic<bool>& aborted) {
+  bool expected = false;
+  if (aborted.compare_exchange_strong(expected, true)) {
+    try {
+      runner.abort();
+    } catch (...) {
+    }
   }
+}
+
+// Starts a watchdog thread that aborts the runner once the timeout elapses,
+// even if the main thread is blocked in next(). Uses a condition variable with
+// a mutex-protected predicate to avoid the lost-wakeup race between the
+// predicate check and the wait, and an atomic flag to abort at most once across
+// threads.
+//
+// Usage:
+//   std::atomic<bool> aborted{false};
+//   {
+//     TimeoutWatchdog watchdog(runner, std::chrono::seconds(5), aborted);
+//     // ... drain runner.next() ...
+//   } // destructor cancels the thread and joins on scope exit.
+class TimeoutWatchdog {
+ public:
+  TimeoutWatchdog(
+      runner::LocalRunner& runner,
+      std::chrono::microseconds timeout,
+      std::atomic<bool>& abortedFlag)
+      : runner_{runner}, timeout_{timeout}, abortedFlag_{abortedFlag} {
+    thread_ = std::thread([this] { run(); });
+  }
+
+  ~TimeoutWatchdog() {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      cancelled_ = true;
+    }
+    cv_.notify_all();
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+  }
+
+  TimeoutWatchdog(const TimeoutWatchdog&) = delete;
+  TimeoutWatchdog& operator=(const TimeoutWatchdog&) = delete;
+
+ private:
+  void run() {
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      if (cv_.wait_for(lock, timeout_, [this] { return cancelled_; })) {
+        return;
+      }
+    }
+    // Abort outside the lock: abortedFlag_ already serializes the abort across
+    // threads, and holding mutex_ here would block the destructor that needs it
+    // to signal cancellation.
+    abortRunnerOnce(runner_, abortedFlag_);
+  }
+
+  // Runner to abort when the timeout elapses.
+  runner::LocalRunner& runner_;
+  // How long to wait before aborting.
+  std::chrono::microseconds timeout_;
+  // Shared with the main thread so abort happens at most once across both.
+  std::atomic<bool>& abortedFlag_;
+  // Guards cancelled_ and pairs with cv_.
+  std::mutex mutex_;
+  // Wakes the thread early when cancelled_ is set, avoiding a full-timeout
+  // wait.
+  std::condition_variable cv_;
+  // Set by the destructor to cancel the wait before the timeout fires.
+  bool cancelled_{false};
+  // The waiting thread; joined in the destructor.
+  std::thread thread_;
+};
+
+// Drains all result batches from 'runner'. When 'timeoutMicros' > 0, enforces
+// it as a wall-clock execution timeout: a watchdog aborts the runner once the
+// deadline passes, and the query fails with a kQueryTimedOut RunnerException
+// rather than returning partial results. A timeout of 0 waits indefinitely.
+std::vector<velox::RowVectorPtr> fetchResults(
+    runner::LocalRunner& runner,
+    int64_t timeoutMicros) {
+  std::vector<velox::RowVectorPtr> results;
+  const auto start = std::chrono::steady_clock::now();
+  const bool enforceTimeout = timeoutMicros > 0;
+  const auto timeout = std::chrono::microseconds(timeoutMicros);
+
+  std::atomic<bool> aborted{false};
+
+  auto throwTimeoutIfExceeded = [&](const std::exception* original = nullptr) {
+    if (!enforceTimeout) {
+      return;
+    }
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    // The watchdog aborts on its own deadline; treat an abort it triggered as a
+    // timeout even if this thread's clock reads just under the limit.
+    if (elapsed <= timeout && !aborted.load()) {
+      return;
+    }
+    abortRunnerOnce(runner, aborted);
+    auto elapsedMicros =
+        std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+    auto timeoutSeconds = timeoutMicros / 1'000'000.0;
+    if (original) {
+      AXIOM_QUERY_TIMEOUT(
+          "Query exceeded maximum time limit of {:.2f}s ({} microseconds elapsed, timeoutMicros={}); original error: {}",
+          timeoutSeconds,
+          elapsedMicros,
+          timeoutMicros,
+          original->what());
+    } else {
+      AXIOM_QUERY_TIMEOUT(
+          "Query exceeded maximum time limit of {:.2f}s ({} microseconds elapsed, timeoutMicros={})",
+          timeoutSeconds,
+          elapsedMicros,
+          timeoutMicros);
+    }
+  };
+
+  std::optional<TimeoutWatchdog> watchdog;
+  if (enforceTimeout) {
+    watchdog.emplace(runner, timeout, aborted);
+  }
+
+  while (true) {
+    velox::RowVectorPtr rows;
+    try {
+      rows = runner.next();
+    } catch (const std::exception& e) {
+      throwTimeoutIfExceeded(&e);
+      throw;
+    }
+    if (!rows) {
+      break;
+    }
+    results.push_back(rows);
+    throwTimeoutIfExceeded();
+  }
+  // next() can return null rather than throwing if the runner treats a
+  // watchdog abort() as graceful end-of-stream; check once more so an aborted
+  // query still fails instead of returning partial results.
+  throwTimeoutIfExceeded();
   return results;
 }
 
@@ -1134,7 +1276,7 @@ std::string SqlQueryRunner::runExplainAnalyze(
         runtimeStats.get(),
         QueryRuntimeStats::kExecuteWallNanos,
         QueryRuntimeStats::kExecuteCpuNanos);
-    auto results = fetchResults(*runner);
+    auto results = fetchResults(*runner, options.executionTimeoutMicros);
   }
 
   std::stringstream out;
@@ -1374,7 +1516,7 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runLogicalPlan(
         runtimeStats.get(),
         QueryRuntimeStats::kExecuteWallNanos,
         QueryRuntimeStats::kExecuteCpuNanos);
-    result.results = fetchResults(*runner);
+    result.results = fetchResults(*runner, options.executionTimeoutMicros);
   }
 
   return result;
