@@ -1654,7 +1654,7 @@ PlanBuilder& PlanBuilder::tableWrite(
       const auto& schemaType = schema->childAt(index.value());
 
       if (!schemaType->equivalent(*inputType)) {
-        if (coercer_ != nullptr && coercer_->coercible(inputType, schemaType)) {
+        if (coercer_ != nullptr && coercer_->coerce(inputType, schemaType)) {
           columnExpressions[i] =
               applyCoercion(columnExpressions[i], schemaType);
         } else {
@@ -1734,7 +1734,7 @@ PlanBuilder& PlanBuilder::sample(
 
   if (!expr->type()->isDouble()) {
     if (coercer_ != nullptr) {
-      if (coercer_->coercible(expr->type(), velox::DOUBLE())) {
+      if (coercer_->coerce(expr->type(), velox::DOUBLE())) {
         expr = applyCoercion(expr, velox::DOUBLE());
       } else {
         VELOX_USER_FAIL(
