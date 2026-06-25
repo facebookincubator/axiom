@@ -12,8 +12,8 @@ table-name parsing, split management, and column handles without any knowledge
 of how bytes on disk are structured. All format-specific logic is isolated
 behind the **`FileHandler`** interface: each handler teaches the connector how
 to read one file type — how to extract the schema, how to stream row data, and
-what synthetic metadata tables to expose. (see
-[Adding a New File Handler](#adding-a-new-file-handler)).
+what synthetic metadata tables to expose. See the `FileHandler` interface in
+`FileHandler.h` for how to add support for a new file format.
 
 ## Capabilities
 
@@ -75,37 +75,11 @@ A table name is a file path with an optional metadata-table suffix:
   **metadata table** (e.g. `$row_groups`, `$column_chunks`).
 - An unrecognized `$`-suffix produces an error from the handler.
 
-`FileTable::parseName()` splits on the last `$`, but treats it as a suffix
-separator only when the text after it contains no path separator.
-
 A `$` inside a directory name (e.g. `/data/$data2/file.example`) or a file name
-(e.g. `/tmp/foo$bar.file`) is therefore part of the path, not a suffix, and resolves to
+(e.g. `/tmp/foo$bar.file`) is part of the path, not a suffix, and resolves to
 the data table.
 
 Known limitation: a `$` in an extensionless file name (e.g. `/data/foo$bar`) is read as a suffix separator, so the name splits into path `/data/foo` and suffix `bar` instead of resolving to the data table.
-
-## Adding a New File Handler
-
-To add support for a new file format (e.g. ORC):
-
-1. Create a subdirectory `<name_file_type>/` with a header and implementation. Subclass
-   `FileHandler` and implement `resolve()` (read the file header and return the
-   schema) and `createDataSource()` (return a `DataSource` that streams row
-   data). Register metadata tables in the constructor via `addMetadataTable()`.
-
-2. Define data source classes in the handler's `.cpp` file. Use
-   `StreamingDataSource` as the base for row data and `MetadataDataSource` as
-   the base for metadata tables.
-
-3. Add an idempotent registration function (e.g. `registerFileTypeHandler()`) that
-   creates a static handler instance and calls
-   `registerHandler("filetype", handler)`.
-
-4. Create a separate CMake library target for the handler with its
-   format-specific dependencies.
-
-5. Write tests: add an end-to-end test in `tests/` that queries the format
-   through the runner, and unit tests in `core/tests/` if adding new core types.
 
 ---
 

@@ -33,12 +33,21 @@ using MetadataSourceFactory =
         const velox::connector::ColumnHandleMap& columnHandles,
         velox::memory::MemoryPool* pool)>;
 
-/// Abstracts format-specific file operations. Each file type provides
-/// a concrete implementation and registers itself under a schema name.
+/// Abstracts format-specific file operations. Each file type provides a
+/// concrete implementation and registers itself under a schema name, so the
+/// core connector parses table names, manages splits, and handles columns with
+/// no knowledge of the on-disk format.
 ///
-/// Subclasses implement resolve() and createDataSource() for
-/// format-specific logic, and register metadata tables with factory
-/// lambdas via addMetadataTable() in their constructor.
+/// To add a format:
+///   - Subclass `FileHandler`.
+///   - Implement `resolve()` to read the header and return the schema, and
+///     `createDataSource()` to stream row data (subclass
+///     `StreamingDataSource`).
+///   - Register any metadata tables via `addMetadataTable()` in the constructor
+///     (subclass `MetadataDataSource` for their sources).
+///   - Expose an idempotent `registerXxxHandler()` that registers the
+///     handler once via `registerHandler()`.
+/// See the Parquet handler for a worked example.
 class FileHandler {
  public:
   virtual ~FileHandler() = default;
