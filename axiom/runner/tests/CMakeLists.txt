@@ -76,3 +76,28 @@ target_link_libraries(
   velox_exec
   GTest::gtest
 )
+
+add_executable(axiom_runner_progress_test QueryProgressBuilderTest.cpp Main.cpp)
+
+add_test(axiom_runner_progress_test axiom_runner_progress_test)
+
+target_link_libraries(
+  axiom_runner_progress_test
+  axiom_runner_local_runner
+  axiom_optimizer_multifragment_plan
+  velox_exec
+  GTest::gtest
+)
+
+add_executable(axiom_runner_progress_reporter_test ProgressReporterTest.cpp Main.cpp)
+
+add_test(axiom_runner_progress_reporter_test axiom_runner_progress_reporter_test)
+
+target_link_libraries(
+  axiom_runner_progress_reporter_test
+  axiom_runner_tests_utils
+  axiom_runner_local_runner
+  velox_exec_test_lib
+  velox_exec
+  GTest::gtest
+)

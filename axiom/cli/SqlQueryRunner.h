@@ -16,15 +16,19 @@
 #pragma once
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/executors/FunctionScheduler.h>
 #include <chrono>
 #include <exception>
 #include <functional>
+#include <vector>
 #include "axiom/common/ConfigRegistry.h"
 #include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/common/SessionConfig.h"
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/ToVelox.h"
 #include "axiom/runner/LocalRunner.h"
+#include "axiom/runner/ProgressReporter.h"
+#include "axiom/runner/QueryProgress.h"
 #include "axiom/sql/presto/SqlStatement.h"
 #include "velox/common/file/TokenProvider.h"
 
@@ -153,7 +157,14 @@ class SqlQueryRunner {
   /// Constructs the runner with the given session user identity. The user
   /// must be non-empty; it is exposed by the SQL `CURRENT_USER` function and
   /// used as the default table owner in DDL.
-  explicit SqlQueryRunner(std::string user) : user_{std::move(user)} {
+  ///
+  /// `progressScheduler` (not owned, must outlive this runner) drives progress
+  /// polling for queries that set RunOptions::onProgress. If null, such a query
+  /// fails loudly rather than running without the progress it asked for.
+  explicit SqlQueryRunner(
+      std::string user,
+      folly::FunctionScheduler* progressScheduler = nullptr)
+      : user_{std::move(user)}, progressScheduler_{progressScheduler} {
     VELOX_USER_CHECK(!user_.empty(), "SqlQueryRunner user must be non-empty");
   }
 
@@ -205,6 +216,16 @@ class SqlQueryRunner {
     /// Called before parsing. Receives query metadata (query ID, SQL text,
     /// creation time, and session catalog/schema).
     QueryStartCallback onStart;
+
+    /// Called to report progress while the query runs; see
+    /// progressReportIntervalMs for cadence.
+    facebook::axiom::runner::QueryProgressCallback onProgress;
+
+    /// Approximate interval between progress reports, in milliseconds (plus a
+    /// best-effort final report at completion). Clamped up to
+    /// runner::ProgressReporter::kMinProgressReportIntervalMs.
+    int32_t progressReportIntervalMs{facebook::axiom::runner::ProgressReporter::
+                                         kDefaultProgressReportIntervalMs};
 
     /// Called after execution completes (success or failure). Carries
     /// telemetry only: timing, query ID, error info, row counts. Results
@@ -393,6 +414,16 @@ class SqlQueryRunner {
       const RunOptions& options,
       facebook::axiom::QueryRuntimeStats& runtimeStats);
 
+  // Returns a ProgressReporter polling `runner` (starting the shared scheduler
+  // first) when options.onProgress is set, otherwise nullptr. Held behind a
+  // unique_ptr because ProgressReporter is non-movable; keep it in scope for as
+  // long as progress should be reported.
+  std::unique_ptr<facebook::axiom::runner::ProgressReporter>
+  startProgressReporter(
+      facebook::axiom::runner::Runner& runner,
+      std::string_view queryId,
+      const RunOptions& options);
+
   // Runs a parsed SQL statement, writing optimize/execute timing into 'timing'
   // and the serialized Velox plan into 'planString'.
   SqlResult runUnchecked(
@@ -458,6 +489,10 @@ class SqlQueryRunner {
   std::string defaultSchema_;
   const std::string user_;
   std::atomic<int32_t> queryCounter_{0};
+
+  // Progress-polling scheduler (see constructor). Started idempotently before
+  // each progress-reporting query.
+  folly::FunctionScheduler* const progressScheduler_;
 
   // Noop stats instance for code paths that don't track runtime metrics.
   facebook::axiom::QueryRuntimeStats noopRuntimeStats_;

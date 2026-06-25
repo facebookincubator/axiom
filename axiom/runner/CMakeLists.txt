@@ -16,7 +16,14 @@ if(AXIOM_BUILD_TESTING)
   add_subdirectory(tests)
 endif()
 
-add_library(axiom_runner_local_runner LocalRunner.cpp Runner.cpp)
+add_library(
+  axiom_runner_local_runner
+  LocalRunner.cpp
+  ProgressReporter.cpp
+  QueryProgress.cpp
+  QueryProgressBuilder.cpp
+  Runner.cpp
+)
 
 target_link_libraries(
   axiom_runner_local_runner

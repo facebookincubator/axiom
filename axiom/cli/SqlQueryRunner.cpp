@@ -15,8 +15,14 @@
  */
 
 #include "axiom/cli/SqlQueryRunner.h"
+#include <folly/container/F14Map.h>
 #include <folly/system/HardwareConcurrency.h>
+#include <algorithm>
 #include <cmath>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <vector>
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/process/ProcessBase.h"
 
@@ -37,6 +43,7 @@
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/RelationOpPrinter.h"
 #include "axiom/optimizer/VeloxHistory.h"
+#include "axiom/runner/ProgressReporter.h"
 #include "axiom/sql/presto/PrestoParser.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/ShowStatsBuilder.h"
@@ -90,6 +97,11 @@ class PhaseTimer {
       runtimeStats_->recordTiming(cpuKey_, std::chrono::nanoseconds(cpuNanos));
     }
   }
+
+  PhaseTimer(const PhaseTimer&) = delete;
+  PhaseTimer& operator=(const PhaseTimer&) = delete;
+  PhaseTimer(PhaseTimer&&) = delete;
+  PhaseTimer& operator=(PhaseTimer&&) = delete;
 
  private:
   QueryRuntimeStats* const runtimeStats_;
@@ -1094,6 +1106,25 @@ connector::ConnectorSessionPtr SqlQueryRunner::makeConnectorSession(
       sessionConfig_->effectiveValues(connectorId));
 }
 
+std::unique_ptr<runner::ProgressReporter> SqlQueryRunner::startProgressReporter(
+    runner::Runner& runner,
+    std::string_view queryId,
+    const RunOptions& options) {
+  if (!options.onProgress) {
+    return nullptr;
+  }
+  VELOX_USER_CHECK_NOT_NULL(
+      progressScheduler_,
+      "onProgress requires a scheduler supplied to SqlQueryRunner");
+  progressScheduler_->start();
+  return std::make_unique<runner::ProgressReporter>(
+      runner,
+      *progressScheduler_,
+      std::string(queryId),
+      options.onProgress,
+      options.progressReportIntervalMs);
+}
+
 std::string SqlQueryRunner::runExplainAnalyze(
     const logical_plan::LogicalPlanNodePtr& logicalPlan,
     const RunOptions& options,
@@ -1134,6 +1165,8 @@ std::string SqlQueryRunner::runExplainAnalyze(
         runtimeStats.get(),
         QueryRuntimeStats::kExecuteWallNanos,
         QueryRuntimeStats::kExecuteCpuNanos);
+    auto progress =
+        startProgressReporter(*runner, queryCtx->queryId(), options);
     auto results = fetchResults(*runner);
   }
 
@@ -1374,6 +1407,8 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runLogicalPlan(
         runtimeStats.get(),
         QueryRuntimeStats::kExecuteWallNanos,
         QueryRuntimeStats::kExecuteCpuNanos);
+    auto progress =
+        startProgressReporter(*runner, queryCtx->queryId(), options);
     result.results = fetchResults(*runner);
   }
 

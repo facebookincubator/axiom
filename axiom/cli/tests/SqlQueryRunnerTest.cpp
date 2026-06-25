@@ -16,7 +16,7 @@
 
 #include "axiom/cli/SqlQueryRunner.h"
 #include <folly/dynamic.h>
-// NOLINTNEXTLINE(facebook-unused-include-check)
+#include <folly/executors/FunctionScheduler.h>
 #include <folly/init/Init.h>
 #include <folly/json.h>
 #include <gmock/gmock.h>
@@ -26,6 +26,7 @@
 #include "axiom/cli/QueryIdGenerator.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/runner/QueryProgress.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "velox/common/base/VeloxException.h"
@@ -38,6 +39,8 @@ using namespace facebook::velox;
 
 namespace axiom::sql {
 namespace {
+
+namespace runner = facebook::axiom::runner;
 
 class SqlQueryRunnerTest : public ::testing::Test, public test::VectorTestBase {
  protected:
@@ -65,7 +68,8 @@ class SqlQueryRunnerTest : public ::testing::Test, public test::VectorTestBase {
       const std::string& connectorId = "test",
       std::function<std::string()> queryIdGenerator = {},
       PermissionCheck permissionCheck = {}) {
-    auto runner = std::make_unique<SqlQueryRunner>("test_user");
+    auto runner =
+        std::make_unique<SqlQueryRunner>("test_user", &progressScheduler_);
 
     auto initConnectors = [&]() {
       testConnector_ =
@@ -141,6 +145,9 @@ class SqlQueryRunnerTest : public ::testing::Test, public test::VectorTestBase {
         expectedDefault);
   }
 
+  // Drives progress polling for runners built by makeRunner(); declared before
+  // runner_ so it outlives any reporter a query starts.
+  folly::FunctionScheduler progressScheduler_;
   std::unique_ptr<SqlQueryRunner> runner_;
   std::shared_ptr<facebook::axiom::connector::TestConnector> testConnector_;
 
@@ -949,6 +956,7 @@ TEST_F(SqlQueryRunnerTest, completionCallbackReceivesTiming) {
 TEST_F(SqlQueryRunnerTest, startCallbackFiredBeforeCompletion) {
   std::string startQueryId;
   std::string completionQueryId;
+  std::string progressQueryId;
 
   runner_->run(
       "SELECT 1",
@@ -957,6 +965,10 @@ TEST_F(SqlQueryRunnerTest, startCallbackFiredBeforeCompletion) {
              startQueryId = info.queryId;
              EXPECT_EQ(info.query, "SELECT 1");
            },
+       .onProgress =
+           [&](const runner::QueryProgress& info) {
+             progressQueryId = info.queryId;
+           },
        .onComplete =
            [&](const QueryCompletionInfo& info) {
              completionQueryId = info.startInfo.queryId;
@@ -964,6 +976,9 @@ TEST_F(SqlQueryRunnerTest, startCallbackFiredBeforeCompletion) {
 
   EXPECT_FALSE(startQueryId.empty());
   EXPECT_EQ(startQueryId, completionQueryId);
+  // run() forwards onProgress to the runner; the teardown report carries the
+  // id.
+  EXPECT_EQ(progressQueryId, startQueryId);
 }
 
 TEST_F(SqlQueryRunnerTest, callbacksReceiveQueryMetadata) {
