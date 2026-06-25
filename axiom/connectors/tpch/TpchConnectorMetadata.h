@@ -145,7 +145,7 @@ class TpchTable : public Table {
 
   void makeDefaultLayout(TpchConnectorMetadata& metadata);
 
-  uint64_t numRows() const override {
+  std::optional<uint64_t> numRows() const override {
     return numRows_;
   }
 

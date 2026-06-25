@@ -164,10 +164,11 @@ TableScan::TableScan(
 
   if (!keys.empty()) {
     const auto orderSelectivityOpt = orderPrefixDistance(input_, index, keys);
-    // The lookup unit cost is unknown if the input cardinality (batch size) or
-    // the order selectivity could not be estimated.
-    if (cost_.inputCardinality.has_value() && orderSelectivityOpt.has_value()) {
-      float lookupRange(index->table->cardinality);
+    // The lookup unit cost is unknown if the input cardinality (batch size),
+    // the order selectivity, or the table cardinality could not be estimated.
+    if (cost_.inputCardinality.has_value() && orderSelectivityOpt.has_value() &&
+        index->table->cardinality.has_value()) {
+      float lookupRange(*index->table->cardinality);
       float orderSelectivity = *orderSelectivityOpt;
       auto distance = lookupRange / std::max<float>(1, orderSelectivity);
       float batchSize = std::min<float>(*cost_.inputCardinality, 10000);

@@ -366,9 +366,10 @@ struct IndexInfo {
   /// is no key order in 'index'.
   bool unique{false};
 
-  /// The number of rows selected after index lookup based on 'lookupKeys'. For
-  /// empty 'lookupKeys', this is the cardinality of 'index'.
-  float scanCardinality;
+  /// The number of rows selected after index lookup based on 'lookupKeys'.
+  /// For empty 'lookupKeys', this is the cardinality of 'index'. `nullopt`
+  /// when the underlying table reports no row-count estimate.
+  std::optional<float> scanCardinality;
 
   /// The lookup columns that match 'index'. These match 1:1 the leading keys
   /// of 'index'. If 'index' has no ordering columns or if the lookup columns
@@ -389,9 +390,7 @@ struct IndexInfo {
 /// partitioned physical representations (ColumnGroups). Not all ColumnGroups
 /// (aka indices) need to contain all columns.
 struct SchemaTable {
-  explicit SchemaTable(const connector::Table& connectorTable)
-      : connectorTable{&connectorTable},
-        cardinality{std::max<float>(1, connectorTable.numRows())} {}
+  explicit SchemaTable(const connector::Table& connectorTable);
 
   ColumnGroupCP addIndex(
       const connector::TableLayout& layout,
@@ -420,7 +419,7 @@ struct SchemaTable {
   /// This is the source-dependent representation from which 'this' was created.
   const connector::Table* const connectorTable;
 
-  const float cardinality;
+  const std::optional<float> cardinality;
 
   /// Maps column name to schema column.
   NameMap<ColumnCP> columns;

@@ -175,8 +175,8 @@ class FileTable : public Table {
     return layouts_;
   }
 
-  uint64_t numRows() const override {
-    return 0;
+  std::optional<uint64_t> numRows() const override {
+    return std::nullopt;
   }
 
  private:

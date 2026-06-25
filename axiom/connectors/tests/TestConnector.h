@@ -188,7 +188,7 @@ class TestTable : public Table {
     return layouts_;
   }
 
-  uint64_t numRows() const override {
+  std::optional<uint64_t> numRows() const override {
     return data_.empty() ? numRows_ : dataRows_;
   }
 

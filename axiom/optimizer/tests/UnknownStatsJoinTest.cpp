@@ -106,6 +106,71 @@ TEST_F(UnknownStatsJoinTest, twoJoins) {
   AXIOM_ASSERT_PLAN(plan(query), matchPlan("u", "t"));
   AXIOM_ASSERT_PLAN(plan(altQuery), matchPlan("t", "u"));
 }
+// A base table with no statistics at all must fall back to syntactic join
+// order, not crash on the unknown cardinality.
+TEST_F(UnknownStatsJoinTest, joinWithUnknownTableCardinality) {
+  testConnector_->addTable("t", ROW({"a", "k"}, BIGINT()))
+      ->setStats(1'000'000, {{"k", {.numDistinct = 1'000'000}}});
+  testConnector_->addTable("u", ROW({"b", "k"}, BIGINT()));
+
+  auto matchJoin = [&](const std::string& probe, const std::string& build) {
+    return matchScan(probe)
+        .hashJoinInner(matchScan(build).build())
+        .aggregation()
+        .build();
+  };
+
+  const auto query = "SELECT count(*) FROM u JOIN t ON t.k = u.k";
+  const auto altQuery = "SELECT count(*) FROM t JOIN u ON t.k = u.k";
+
+  AXIOM_ASSERT_PLAN(plan(query), matchJoin("u", "t"));
+  AXIOM_ASSERT_PLAN(plan(altQuery), matchJoin("t", "u"));
+}
+
+// The join sampler must tolerate an unknown build-side cardinality.
+TEST_F(UnknownStatsJoinTest, sampledJoinWithUnknownCardinality) {
+  optimizerOptions_.sampleJoins = true;
+
+  testConnector_->addTable("t", ROW({"a", "k"}, BIGINT()))
+      ->setStats(1'000'000, {{"k", {.numDistinct = 1'000'000}}});
+  testConnector_->addTable("u", ROW({"b", "k"}, BIGINT()));
+
+  auto matchJoin = [&](const std::string& probe, const std::string& build) {
+    return matchScan(probe)
+        .hashJoinInner(matchScan(build).build())
+        .aggregation()
+        .build();
+  };
+
+  AXIOM_ASSERT_PLAN(
+      plan("SELECT count(*) FROM u JOIN t ON t.k = u.k"), matchJoin("u", "t"));
+}
+
+// Enabling sampleJoins must not change the chosen plan when a side has
+// unknown cardinality.
+TEST_F(UnknownStatsJoinTest, sampledJoinMatchesUnsampledOnUnknownCardinality) {
+  testConnector_->addTable("t", ROW({"a", "k"}, BIGINT()))
+      ->setStats(1'000'000, {{"k", {.numDistinct = 1'000'000}}});
+  testConnector_->addTable("u", ROW({"b", "k"}, BIGINT()));
+
+  auto matchJoin = [&](const std::string& probe, const std::string& build) {
+    return matchScan(probe)
+        .hashJoinInner(matchScan(build).build())
+        .aggregation()
+        .build();
+  };
+
+  const auto query = "SELECT count(*) FROM u JOIN t ON t.k = u.k";
+  const auto altQuery = "SELECT count(*) FROM t JOIN u ON t.k = u.k";
+
+  AXIOM_ASSERT_PLAN(plan(query), matchJoin("u", "t"));
+  AXIOM_ASSERT_PLAN(plan(altQuery), matchJoin("t", "u"));
+
+  optimizerOptions_.sampleJoins = true;
+
+  AXIOM_ASSERT_PLAN(plan(query), matchJoin("u", "t"));
+  AXIOM_ASSERT_PLAN(plan(altQuery), matchJoin("t", "u"));
+}
 
 } // namespace
 } // namespace facebook::axiom::optimizer

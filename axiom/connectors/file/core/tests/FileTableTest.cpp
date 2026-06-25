@@ -78,10 +78,10 @@ class FileTableTest : public ::testing::Test, public test::VectorTestBase {
   std::string parquetPath_;
 };
 
-TEST_F(FileTableTest, numRowsReturnsZero) {
+TEST_F(FileTableTest, numRowsReturnsNullopt) {
   FileConnectorMetadata metadata(connector_.get());
   auto table = metadata.findTable({"parquet", parquetPath_});
-  EXPECT_EQ(table->numRows(), 0);
+  EXPECT_EQ(table->numRows(), std::nullopt);
 }
 
 TEST_F(FileTableTest, hasOneLayout) {

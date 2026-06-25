@@ -223,8 +223,13 @@ std::pair<float, float> sampleJoin(
     const ExprVector& leftKeys,
     SchemaTableCP right,
     const ExprVector& rightKeys) {
+  // Skip sampling when row counts are unknown: the cost cannot be estimated
+  // and the sampler would otherwise scan a potentially unbounded input.
   const auto leftRows = left->cardinality;
   const auto rightRows = right->cardinality;
+  if (!leftRows.has_value() || !rightRows.has_value()) {
+    return std::make_pair(0, 0);
+  }
 
   const auto leftCard = keyCardinality(leftKeys);
   const auto rightCard = keyCardinality(rightKeys);
@@ -232,13 +237,13 @@ std::pair<float, float> sampleJoin(
   static const auto kMaxCardinality = 10'000;
 
   int32_t fraction = kMaxCardinality;
-  if (leftRows < kMaxCardinality && rightRows < kMaxCardinality) {
+  if (*leftRows < kMaxCardinality && *rightRows < kMaxCardinality) {
     // Sample all.
   } else if (
       leftCard.has_value() && rightCard.has_value() &&
       *leftCard > kMaxCardinality && *rightCard > kMaxCardinality) {
     // Keys have many values, sample a fraction.
-    const auto smaller = static_cast<float>(std::min(leftRows, rightRows));
+    const auto smaller = static_cast<float>(std::min(*leftRows, *rightRows));
     const float ratio = smaller / (float)kMaxCardinality;
     fraction =
         static_cast<int32_t>(std::max(2.F, (float)kMaxCardinality / ratio));

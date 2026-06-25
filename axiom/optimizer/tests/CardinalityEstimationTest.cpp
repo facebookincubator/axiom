@@ -192,6 +192,22 @@ TEST_F(CardinalityEstimationTest, scan) {
   });
 }
 
+TEST_F(CardinalityEstimationTest, scanWithUnknownCardinality) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+
+  verifyPlan("SELECT a, b FROM t WHERE a > 10", [](const Plan& plan) {
+    const auto& op = *plan.op;
+
+    ASSERT_EQ(op.columns().size(), 2);
+    EXPECT_FALSE(op.resultCardinality().has_value());
+
+    auto a = findConstraint(op, 0);
+    ASSERT_TRUE(a.has_value());
+    EXPECT_FALSE(a->cardinality.has_value());
+    AXIOM_ASSERT_NORANGE(*a);
+  });
+}
+
 // Verifies that a range filter tightens constraints: the filtered column
 // should have reduced cardinality.
 TEST_F(CardinalityEstimationTest, scanWithFilter) {
