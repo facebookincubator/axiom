@@ -87,7 +87,7 @@ class ProgressReporterTest : public test::LocalRunnerTestBase {
   static constexpr int32_t kRowsPerSplit = 100;
 
   void SetUp() override {
-    rowType_ = velox::ROW({"c0"}, {velox::BIGINT()});
+    rowType_ = velox::ROW("c0", velox::BIGINT());
     makeTables({test::TableSpec{
         .name = "t",
         .columns = rowType_,
@@ -150,7 +150,9 @@ TEST_F(ProgressReporterTest, reportsProgressPerSplit) {
       return !reports.empty() && reports.back().stats.completedSplits > prev;
     });
     EXPECT_TRUE(ok) << "no report past " << prev;
-    return reports.back();
+    // On timeout the predicate never held, so reports may be empty; return a
+    // default rather than dereferencing back() so a hang fails cleanly.
+    return reports.empty() ? QueryProgress{} : reports.back();
   };
 
   {
