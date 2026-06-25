@@ -331,13 +331,13 @@ ExprPtr tryResolveSpecialForm(
           continue;
         }
 
-        if (coercer->coercible(newType, type)) {
+        if (coercer->coerce(newType, type)) {
           resolvedInputs[i] =
               applyCoercion(resolvedInputs[i], type, planNodeIdGenerator);
           continue;
         }
 
-        if (coercer->coercible(type, newType)) {
+        if (coercer->coerce(type, newType)) {
           type = newType;
 
           for (auto j = 0; j < i; ++j) {
