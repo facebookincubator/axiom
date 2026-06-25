@@ -14,26 +14,24 @@
  * limitations under the License.
  */
 
-#include "axiom/runner/Runner.h"
+#include "axiom/runner/QueryProgress.h"
 
 #include <folly/container/F14Map.h>
 
 namespace facebook::axiom::runner {
-
 namespace {
-const auto& stateNames() {
-  static const folly::F14FastMap<Runner::State, std::string_view> kNames = {
-      {Runner::State::kInitialized, "initialized"},
-      {Runner::State::kRunning, "running"},
-      {Runner::State::kCancelled, "cancelled"},
-      {Runner::State::kError, "error"},
-      {Runner::State::kFinished, "finished"},
-  };
 
+const auto& executionStateNames() {
+  static const folly::F14FastMap<ExecutionState, std::string_view> kNames = {
+      {ExecutionState::kPlanned, "PLANNED"},
+      {ExecutionState::kRunning, "RUNNING"},
+      {ExecutionState::kFinished, "FINISHED"},
+  };
   return kNames;
 }
+
 } // namespace
 
-AXIOM_DEFINE_EMBEDDED_ENUM_NAME(Runner, State, stateNames);
+AXIOM_DEFINE_ENUM_NAME(ExecutionState, executionStateNames);
 
 } // namespace facebook::axiom::runner

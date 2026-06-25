@@ -117,7 +117,7 @@ class LocalRunner : public Runner,
   /// appears before B in the sequence. It's essentially a way to arrange tasks
   /// or items with dependencies so that all prerequisites are completed before
   /// the dependent tasks.
-  const std::vector<optimizer::ExecutableFragment>& fragments() const {
+  const std::vector<optimizer::ExecutableFragment>& fragments() const override {
     return fragments_;
   }
 
