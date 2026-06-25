@@ -542,7 +542,11 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
       dynamic_cast<const LocalHiveConnectorMetadata*>(metadataPtr.get())
           ->connectorQueryCtx();
 
-  const auto maxRowsToScan = table().numRows() * (pct / 100);
+  // Treat unknown row count as "no cap" (scan all selected files).
+  const auto numRows = table().numRows();
+  const std::optional<int64_t> maxRowsToScan = numRows.has_value()
+      ? std::optional<int64_t>{static_cast<int64_t>(*numRows * (pct / 100))}
+      : std::nullopt;
 
   // Filter files based on $path and $bucket filters from tableHandle.
   auto* hiveTableHandle =
@@ -577,7 +581,8 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
         StatisticsBuilder::updateBuilders(data, builders);
       }
 
-      if (scannedRows + dataSource->getCompletedRows() > maxRowsToScan) {
+      if (maxRowsToScan.has_value() &&
+          scannedRows + dataSource->getCompletedRows() > *maxRowsToScan) {
         scannedRows += dataSource->getCompletedRows();
         break;
       }

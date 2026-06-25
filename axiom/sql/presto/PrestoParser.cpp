@@ -1995,7 +1995,11 @@ SqlStatementPtr parseShowStats(
   const auto table = findTable(*showStats.table(), connectorId, connectorTable);
   const auto schema = table->type();
 
-  ShowStatsBuilder builder(static_cast<int64_t>(table->numRows()));
+  const auto tableNumRows = table->numRows();
+  ShowStatsBuilder builder(
+      tableNumRows.has_value()
+          ? std::optional<int64_t>{static_cast<int64_t>(*tableNumRows)}
+          : std::nullopt);
   for (auto i = 0; i < schema->size(); ++i) {
     const auto* column = table->columnMap().at(schema->nameOf(i));
     const auto* stats = column->stats();

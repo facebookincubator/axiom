@@ -853,10 +853,11 @@ std::optional<float> baseSelectivity(PlanObjectCP object) {
       return std::nullopt;
     }
     // filteredCardinality can exceed baseCardinality when the connector
-    // returns inconsistent statistics, e.g. Table::numRows() returns 0
-    // while co_estimateStats returns the real partition row count.
-    if (baseCardinality > *filteredCardinality) {
-      return *filteredCardinality / baseCardinality;
+    // returns inconsistent statistics, e.g. a known `Table::numRows()`
+    // disagreeing with the partition row count from `co_estimateStats`.
+    if (baseCardinality.has_value() &&
+        *baseCardinality > *filteredCardinality) {
+      return *filteredCardinality / *baseCardinality;
     }
   }
   return 1;

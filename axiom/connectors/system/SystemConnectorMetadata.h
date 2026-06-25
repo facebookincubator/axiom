@@ -84,8 +84,8 @@ class SystemTable : public Table {
     return layouts_;
   }
 
-  uint64_t numRows() const override {
-    return 0; // Dynamic, unknown.
+  std::optional<uint64_t> numRows() const override {
+    return std::nullopt;
   }
 
  private:

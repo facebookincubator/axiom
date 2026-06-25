@@ -148,7 +148,21 @@ const velox::Variant* registerOptionalVariant(
   }
   return registerVariant(opt.value());
 }
+// Clamps a known row count to >= 1 so cost math never divides by zero;
+// propagates `nullopt` unchanged.
+std::optional<float> connectorCardinality(
+    const connector::Table& connectorTable) {
+  const auto numRows = connectorTable.numRows();
+  if (!numRows.has_value()) {
+    return std::nullopt;
+  }
+  return std::max<float>(1, static_cast<float>(*numRows));
+}
 } // namespace
+
+SchemaTable::SchemaTable(const connector::Table& connectorTable)
+    : connectorTable{&connectorTable},
+      cardinality{connectorCardinality(connectorTable)} {}
 
 SchemaTableCP Schema::findTable(
     std::string_view connectorId,
@@ -278,14 +292,18 @@ bool SchemaTable::isUnique(CPSpan<Column> columns) const {
 
 namespace {
 
-float combine(float card, size_t ith, float otherCard) {
-  if (ith == 0) {
-    return card / otherCard;
+std::optional<float>
+combine(std::optional<float> card, size_t ith, float otherCard) {
+  if (!card.has_value()) {
+    return std::nullopt;
   }
-  if (otherCard > card) {
+  if (ith == 0) {
+    return *card / otherCard;
+  }
+  if (otherCard > *card) {
     return 1;
   }
-  return card / otherCard;
+  return *card / otherCard;
 }
 } // namespace
 

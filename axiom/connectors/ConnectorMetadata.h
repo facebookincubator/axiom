@@ -698,8 +698,10 @@ class Table : public std::enable_shared_from_this<Table> {
 
   virtual const std::vector<const TableLayout*>& layouts() const = 0;
 
-  /// Returns an estimate of the number of rows in 'this'.
-  virtual uint64_t numRows() const = 0;
+  /// Returns an estimate of the number of rows in 'this'. `std::nullopt`
+  /// means the connector has no estimate; downstream cost-based
+  /// decisions fall back to safe defaults rather than a fabricated value.
+  virtual std::optional<uint64_t> numRows() const = 0;
 
   /// Returns the table properties specified at creation time (e.g. format,
   /// partitioned_by, bucket_count). Connectors must store all properties

@@ -205,7 +205,7 @@ class LocalTable : public HiveTable {
       std::vector<std::unique_ptr<const FileInfo>> files,
       LocalHiveConnectorMetadata& metadata);
 
-  uint64_t numRows() const override {
+  std::optional<uint64_t> numRows() const override {
     return numRows_;
   }
 

@@ -148,7 +148,8 @@ void VeloxHistory::estimateLeafSelectivity(
 
   // Return cached sampled selectivity if available to avoid expensive I/O.
   if (auto cached = findSampledLeafSelectivity(string)) {
-    table.filteredCardinality = table.schemaTable->cardinality * cached.value();
+    table.filteredCardinality =
+        mul(table.schemaTable->cardinality, cached.value());
     return;
   }
 
@@ -171,7 +172,7 @@ void VeloxHistory::estimateLeafSelectivity(
     selectivity = std::max<float>(Selectivity::kLikelyTrue, sample.numMatched) /
         static_cast<float>(sample.numSampled);
   }
-  table.filteredCardinality = table.schemaTable->cardinality * selectivity;
+  table.filteredCardinality = mul(table.schemaTable->cardinality, selectivity);
   recordSampledLeafSelectivity(string, selectivity, false);
 
   bool trace = (options.traceFlags & OptimizerOptions::kSample) != 0;
