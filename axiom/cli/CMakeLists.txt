@@ -17,6 +17,7 @@ add_library(
   CatalogProperties.cpp
   Connectors.cpp
   Console.cpp
+  LiveProgressDisplay.cpp
   QueryIdGenerator.cpp
   SqlQueryRunner.cpp
   SystemUser.cpp
