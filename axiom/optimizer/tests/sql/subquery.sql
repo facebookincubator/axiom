@@ -26,6 +26,16 @@ SELECT COALESCE(t.a, (SELECT max(a) FROM u))
 FROM t
 GROUP BY COALESCE(t.a, (SELECT max(a) FROM u))
 ----
+-- a <> 0 is evaluable before the single-row subquery cross join, so it must
+-- install below it; otherwise the grouping key divides by the a = 0 row.
+-- count 1
+WITH
+t AS (SELECT * FROM (VALUES 0, 1) AS _(a)),
+u AS (SELECT * FROM (VALUES 10) AS _(b))
+SELECT (SELECT max(b) FROM u) / a AS pt
+FROM t WHERE a <> 0 GROUP BY 1
+HAVING (SELECT max(b) FROM u) / a > 1
+----
 -- Scalar subquery and EXISTS over the same inner subquery must produce
 -- distinct columns (a scalar value vs a boolean).
 SELECT (SELECT max(a) FROM u), EXISTS (SELECT max(a) FROM u) FROM t

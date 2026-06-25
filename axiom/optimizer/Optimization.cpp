@@ -3113,7 +3113,45 @@ bool Optimization::placeConjuncts(
   state.dt->singleRowDts.forEach<DerivedTable>(
       [&](auto dt) { columnsAndSingles.unionObjects(dt->columns); });
 
-  ExprVector filters;
+  // Phase 1: place every conjunct whose columns are already available as a
+  // single Filter, before phase 2 introduces any single-row subquery. This
+  // installs base-column conjuncts as low as possible, below the single-row
+  // subquery cross join.
+  //
+  // Placement is not a safety mechanism for throwing expressions: SQL does not
+  // order the operands of AND, so such a conjunct may throw regardless of where
+  // it lands. A query that embeds a throwing expression in a grouping key and
+  // filters it with a base-column conjunct succeeds only as a side effect of
+  // that conjunct landing below the cross join, not because placement makes it
+  // safe.
+  {
+    ExprVector filters;
+    for (auto& conjunct : state.dt->conjuncts) {
+      if (!allowNondeterministic && conjunct->containsNonDeterministic()) {
+        continue;
+      }
+      if (state.isPlaced(conjunct)) {
+        continue;
+      }
+      if (conjunct->columns().isSubset(state.columns())) {
+        state.placeColumn(conjunct);
+        filters.push_back(conjunct);
+      }
+    }
+
+    if (!filters.empty()) {
+      for (auto& filter : filters) {
+        state.place(filter);
+      }
+      auto* filter = make<Filter>(plan, std::move(filters));
+      state.addCost(*filter);
+      makeJoins(filter, state);
+      return true;
+    }
+  }
+
+  // Phase 2: place a conjunct that depends on placed tables and non-correlated
+  // single row subqueries.
   for (auto& conjunct : state.dt->conjuncts) {
     if (!allowNondeterministic && conjunct->containsNonDeterministic()) {
       continue;
@@ -3121,14 +3159,7 @@ bool Optimization::placeConjuncts(
     if (state.isPlaced(conjunct)) {
       continue;
     }
-    if (conjunct->columns().isSubset(state.columns())) {
-      state.placeColumn(conjunct);
-      filters.push_back(conjunct);
-      continue;
-    }
     if (conjunct->columns().isSubset(columnsAndSingles)) {
-      // The filter depends on placed tables and non-correlated single row
-      // subqueries.
       std::vector<DerivedTableCP> placeable;
       state.dt->singleRowDts.forEach<DerivedTable>([&](auto subquery) {
         // If the subquery provides columns for the filter, place it.
@@ -3154,16 +3185,6 @@ bool Optimization::placeConjuncts(
         return true;
       }
     }
-  }
-
-  if (!filters.empty()) {
-    for (auto& filter : filters) {
-      state.place(filter);
-    }
-    auto* filter = make<Filter>(plan, std::move(filters));
-    state.addCost(*filter);
-    makeJoins(filter, state);
-    return true;
   }
   return false;
 }
