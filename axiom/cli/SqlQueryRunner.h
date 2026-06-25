@@ -179,9 +179,14 @@ class SqlQueryRunner {
     int32_t numDrivers{4};
     uint64_t splitTargetBytes{16 << 20};
 
-    /// Microseconds to wait for query to complete. 0 means check for completion
-    /// then timeout immediately if not complete.
+    /// Microseconds to wait for query to complete during cleanup phase.
+    /// 0 means check for completion then timeout immediately if not complete.
     int32_t timeoutMicros{500'000};
+
+    /// Microseconds to enforce as query execution timeout. 0 means no timeout
+    /// (wait indefinitely). When set, SqlQueryRunner aborts the query if
+    /// execution exceeds this duration.
+    int64_t executionTimeoutMicros{0};
 
     std::optional<std::string> defaultConnectorId;
     std::optional<std::string> defaultSchema;
@@ -429,8 +434,7 @@ class SqlQueryRunner {
       std::string_view connectorId) const;
 
   // Wait maxWaitMicros microseconds for the LocalRunner to complete.  If
-  // `maxWaitMicros <= 0` this will check if the LocalRunner is completed and
-  // return immediately.
+  // `maxWaitMicros <= 0` this will return immediately without waiting.
   static void waitForCompletion(
       const std::shared_ptr<facebook::axiom::runner::LocalRunner>& runner,
       int32_t maxWaitMicros) {
