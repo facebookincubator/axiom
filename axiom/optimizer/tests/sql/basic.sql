@@ -53,6 +53,15 @@ SELECT a, b, sum(b) OVER (PARTITION BY a) AS total_b FROM t
 -- error: division by zero
 SELECT a / 0 FROM t
 ----
+-- No subquery: both conjuncts are evaluable at the same level, so 1/a is
+-- pushed onto t and divides by zero on a = 0. SQL does not order AND
+-- operands, so no placement avoids this.
+-- error: division by zero
+WITH
+t AS (SELECT * FROM (VALUES 0, 1) AS _(a)),
+u AS (SELECT * FROM (VALUES 1, 2) AS _(b))
+SELECT * FROM t, u WHERE a >= b AND 1/a > 7
+----
 -- UNION ALL.
 SELECT a FROM t UNION ALL SELECT b FROM t
 ----
