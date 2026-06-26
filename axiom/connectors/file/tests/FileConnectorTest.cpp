@@ -62,30 +62,79 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
     std::remove(parquetPath_.c_str());
   }
 
-  void writeTestParquetFile(const std::string& path) {
-    auto rowVector = makeRowVector(
-        {"id", "name"},
-        {makeFlatVector<int64_t>({1, 2, 3}),
-         makeFlatVector<StringView>({"alpha", "beta", "gamma"})});
-    auto schema = asRowType(rowVector->type());
-
+  // Writes 'data' to 'path' as a Parquet file. A positive 'rowsInRowGroup'
+  // caps each row group at that many rows; 0 leaves the whole file in one row
+  // group.
+  void writeParquetFile(
+      const std::string& path,
+      const RowVectorPtr& data,
+      int32_t rowsInRowGroup = 0) {
     dwio::common::WriterOptions writerOptions;
     writerOptions.memoryPool = rootPool_.get();
+    if (rowsInRowGroup > 0) {
+      writerOptions.flushPolicyFactory = [rowsInRowGroup] {
+        return std::make_unique<parquet::DefaultFlushPolicy>(
+            rowsInRowGroup, /*bytesInRowGroup=*/128 << 20);
+      };
+    }
     auto sink = dwio::common::FileSink::create(
         fmt::format("file:{}", path), {.pool = rootPool_.get()});
     auto writer = std::make_unique<parquet::Writer>(
-        std::move(sink), writerOptions, schema);
-    writer->write(rowVector);
+        std::move(sink), writerOptions, rootPool_, asRowType(data->type()));
+    writer->write(data);
     writer->close();
   }
 
-  // Runs a SELECT and returns its single result vector.
-  RowVectorPtr query(const std::string& sql) {
-    auto result = runner_->run(sql, {});
+  void writeTestParquetFile(const std::string& path) {
+    // Rows are unsorted on every column so ORDER BY changes the result;
+    // 'score' carries nulls so null_count statistics are non-zero; and a
+    // two-row row-group limit splits the five rows into three row groups
+    // (2, 2, 1).
+    writeParquetFile(
+        path,
+        makeRowVector(
+            {"id", "name", "score"},
+            {makeFlatVector<int64_t>({3, 1, 5, 2, 4}),
+             makeFlatVector<StringView>(
+                 {"gamma", "alpha", "epsilon", "beta", "delta"}),
+             makeNullableFlatVector<int64_t>(
+                 {std::nullopt, 100, std::nullopt, 200, 300})}),
+        /*rowsInRowGroup=*/2);
+  }
+
+  // Runs a SELECT and returns all of its result batches.
+  std::vector<RowVectorPtr> queryAll(
+      const std::string& sql,
+      const ::axiom::sql::SqlQueryRunner::RunOptions& options = {}) {
+    auto result = runner_->run(sql, options);
     VELOX_CHECK(
         !result.message.has_value(), "Query produced no result: {}", sql);
-    VELOX_CHECK_EQ(result.results.size(), 1);
-    return result.results[0];
+    return result.results;
+  }
+
+  // Runs a SELECT that is expected to return a single result vector.
+  RowVectorPtr query(const std::string& sql) {
+    auto results = queryAll(sql);
+    VELOX_CHECK_EQ(results.size(), 1);
+    return results[0];
+  }
+
+  // Concatenates result batches into a single vector so multi-batch results
+  // can be compared against the expected rows regardless of batch boundaries.
+  RowVectorPtr concatenate(const std::vector<RowVectorPtr>& batches) {
+    VELOX_CHECK(!batches.empty());
+    vector_size_t total = 0;
+    for (const auto& batch : batches) {
+      total += batch->size();
+    }
+    auto result =
+        BaseVector::create<RowVector>(batches[0]->type(), total, pool());
+    vector_size_t offset = 0;
+    for (const auto& batch : batches) {
+      result->copy(batch.get(), offset, 0, batch->size());
+      offset += batch->size();
+    }
+    return result;
   }
 
   // SQL reference for the data table.
@@ -105,60 +154,118 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
 };
 
 TEST_F(FileConnectorTest, fullScan) {
+  // ORDER BY id reorders the unsorted file rows into id order.
   test::assertEqualVectors(
       query(fmt::format("SELECT * FROM {} ORDER BY id", table())),
       makeRowVector(
-          {"id", "name"},
-          {makeFlatVector<int64_t>({1, 2, 3}),
-           makeFlatVector<StringView>({"alpha", "beta", "gamma"})}));
+          {"id", "name", "score"},
+          {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+           makeFlatVector<StringView>(
+               {"alpha", "beta", "gamma", "delta", "epsilon"}),
+           makeNullableFlatVector<int64_t>(
+               {100, 200, std::nullopt, 300, std::nullopt})}));
 }
 
 TEST_F(FileConnectorTest, projection) {
+  // ORDER BY name produces an order distinct from both file order and id order.
   test::assertEqualVectors(
       query(fmt::format("SELECT name FROM {} ORDER BY name", table())),
       makeRowVector(
-          {"name"}, {makeFlatVector<StringView>({"alpha", "beta", "gamma"})}));
+          {"name"},
+          {makeFlatVector<StringView>(
+              {"alpha", "beta", "delta", "epsilon", "gamma"})}));
+}
+
+TEST_F(FileConnectorTest, streamingMultipleBatches) {
+  // Cap the output batch at two rows so the five-row scan is delivered as
+  // several batches, exercising the connector's batch-by-batch streaming read.
+  runner_->sessionConfig().set("execution", "preferred_output_batch_rows", "2");
+  runner_->sessionConfig().set("execution", "max_output_batch_rows", "2");
+
+  // A single worker and driver keep the scan output as-is: no gather stage
+  // coalesces the per-batch output. No ORDER BY, so the scan batches flow
+  // straight to the result and rows stay in file order.
+  ::axiom::sql::SqlQueryRunner::RunOptions options;
+  options.numWorkers = 1;
+  options.numDrivers = 1;
+  auto results = queryAll(fmt::format("SELECT * FROM {}", table()), options);
+  EXPECT_GT(results.size(), 1);
+  test::assertEqualVectors(
+      concatenate(results),
+      makeRowVector(
+          {"id", "name", "score"},
+          {makeFlatVector<int64_t>({3, 1, 5, 2, 4}),
+           makeFlatVector<StringView>(
+               {"gamma", "alpha", "epsilon", "beta", "delta"}),
+           makeNullableFlatVector<int64_t>(
+               {std::nullopt, 100, std::nullopt, 200, 300})}));
 }
 
 TEST_F(FileConnectorTest, rowGroupsMetadata) {
-  // The test file is written as a single row group holding all three rows.
+  // The file holds three row groups (2, 2, 1 rows), so the row_groups table has
+  // one row per group with incrementing ids and per-group row counts.
   test::assertEqualVectors(
       query(
           fmt::format(
-              "SELECT row_group_id, num_rows FROM {}",
+              "SELECT row_group_id, num_rows FROM {} ORDER BY row_group_id",
               metadataTable("row_groups"))),
       makeRowVector(
           {"row_group_id", "num_rows"},
-          {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({3})}));
+          {makeFlatVector<int64_t>({0, 1, 2}),
+           makeFlatVector<int64_t>({2, 2, 1})}));
 }
 
 TEST_F(FileConnectorTest, columnChunksMetadata) {
-  // One row per column chunk: the two columns of the single row group.
+  // One row per column chunk: three columns in each of the three row groups.
+  // num_values tracks each group's row count (2, 2, 1).
   test::assertEqualVectors(
       query(
           fmt::format(
-              "SELECT column_id, name, num_values FROM {} ORDER BY column_id",
+              "SELECT row_group_id, column_id, name, num_values FROM {} "
+              "ORDER BY row_group_id, column_id",
               metadataTable("column_chunks"))),
       makeRowVector(
-          {"column_id", "name", "num_values"},
-          {makeFlatVector<int64_t>({0, 1}),
-           makeFlatVector<StringView>({"id", "name"}),
-           makeFlatVector<int64_t>({3, 3})}));
+          {"row_group_id", "column_id", "name", "num_values"},
+          {makeFlatVector<int64_t>({0, 0, 0, 1, 1, 1, 2, 2, 2}),
+           makeFlatVector<int64_t>({0, 1, 2, 0, 1, 2, 0, 1, 2}),
+           makeFlatVector<StringView>(
+               {"id",
+                "name",
+                "score",
+                "id",
+                "name",
+                "score",
+                "id",
+                "name",
+                "score"}),
+           makeFlatVector<int64_t>({2, 2, 2, 2, 2, 2, 1, 1, 1})}));
 }
 
 TEST_F(FileConnectorTest, columnChunksStatistics) {
-  // Column statistics come from the Parquet column-chunk metadata. The test
-  // data has no nulls, so null_count is zero for both columns.
+  // Per-row-group statistics from the Parquet column-chunk metadata. 'score'
+  // has one null in each of the first two row groups, so null_count is
+  // non-zero there.
   test::assertEqualVectors(
       query(
           fmt::format(
-              "SELECT min, max, null_count FROM {} ORDER BY column_id",
+              "SELECT min, max, null_count FROM {} "
+              "ORDER BY row_group_id, column_id",
               metadataTable("column_chunks"))),
       makeRowVector(
           {"min", "max", "null_count"},
-          {makeFlatVector<StringView>({"1", "alpha"}),
-           makeFlatVector<StringView>({"3", "gamma"}),
-           makeFlatVector<int64_t>({0, 0})}));
+          {makeFlatVector<StringView>(
+               {"1", "alpha", "100", "2", "beta", "200", "4", "delta", "300"}),
+           makeFlatVector<StringView>(
+               {"3",
+                "gamma",
+                "100",
+                "5",
+                "epsilon",
+                "200",
+                "4",
+                "delta",
+                "300"}),
+           makeFlatVector<int64_t>({0, 0, 1, 0, 0, 1, 0, 0, 0})}));
 }
 
 TEST_F(FileConnectorTest, unsupportedMetadataTableFails) {
@@ -182,9 +289,12 @@ TEST_F(FileConnectorTest, separatorInFileName) {
           fmt::format(
               "SELECT * FROM file.\"parquet\".\"{}\" ORDER BY id", path))},
       {makeRowVector(
-          {"id", "name"},
-          {makeFlatVector<int64_t>({1, 2, 3}),
-           makeFlatVector<StringView>({"alpha", "beta", "gamma"})})});
+          {"id", "name", "score"},
+          {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+           makeFlatVector<StringView>(
+               {"alpha", "beta", "gamma", "delta", "epsilon"}),
+           makeNullableFlatVector<int64_t>(
+               {100, 200, std::nullopt, 300, std::nullopt})})});
 }
 
 } // namespace
