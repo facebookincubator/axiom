@@ -2520,6 +2520,13 @@ void DerivedTable::distributeConjuncts() {
     }
 
     if (tables.size() == 2) {
+      if (tables[0] == this || tables[1] == this) {
+        // One side references this dt's own output (e.g. the nullable column
+        // of a contained outer join), so this cannot be a base-table join
+        // equality. Leave it in place to evaluate above the join.
+        continue;
+      }
+
       ExprCP left = nullptr;
       ExprCP right = nullptr;
       // expr depends on 2 tables. If it is left = right or right = left and
