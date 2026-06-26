@@ -1600,12 +1600,27 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
   return callExpr;
 }
 
+void ToGraph::rejectIfReusedNonDeterministic(std::string_view name, ExprCP expr)
+    const {
+  if (expr == nullptr || !expr->containsNonDeterministic()) {
+    return;
+  }
+  if (!nonDeterministicResolutions_.insert(NameExprKey{toName(name), expr})
+           .second) {
+    VELOX_USER_FAIL(
+        "Non-deterministic expression reused across multiple references is not "
+        "supported yet: {}",
+        name);
+  }
+}
+
 ExprCP ToGraph::translateColumn(std::string_view name) const {
   if (auto it = lambdaSignature_.find(name); it != lambdaSignature_.end()) {
     return it->second;
   }
 
   if (auto it = renames_.find(name); it != renames_.end()) {
+    rejectIfReusedNonDeterministic(name, it->second);
     return it->second;
   }
 

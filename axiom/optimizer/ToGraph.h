@@ -405,6 +405,14 @@ class ToGraph {
   // expression.
   ExprCP translateColumn(std::string_view name) const;
 
+  // Fails the query if 'name' resolves to a non-deterministic inline binding
+  // 'expr' that has already been resolved under the same binding. That is a
+  // single non-deterministic source inlined at more than one reference site,
+  // which would draw the value independently per reference instead of once.
+  // Keyed on (name, expr) so distinct textual draws (different expr) and
+  // rename chains (different name) are not flagged.
+  void rejectIfReusedNonDeterministic(std::string_view name, ExprCP expr) const;
+
   //  Applies translateExpr to a 'source'.
   ExprVector translateExprs(const std::vector<logical_plan::ExprPtr>& source);
 
@@ -956,6 +964,32 @@ class ToGraph {
   // Values may be null when a subfield path is not materialized (see
   // intersectWithSkyline in makeGettersOverSkyline).
   folly::F14FastMap<std::string, ExprCP> renames_;
+
+  // Identifies one resolution of a column name to a specific resolved Expr.
+  // Seeing the same (name, expr) twice means a single non-deterministic source
+  // is inlined at more than one reference site. The name is part of the key
+  // because a rename chain (SELECT y AS z FROM (SELECT x AS y FROM ...))
+  // resolves the same Expr pointer under a different name at each level — that
+  // is propagation, not reuse. Genuine reuse (SELECT u AS a, u AS b) resolves
+  // the same pointer under the same name twice.
+  struct NameExprKey {
+    Name name;
+    ExprCP expr;
+    bool operator==(const NameExprKey& other) const = default;
+  };
+
+  struct NameExprKeyHasher {
+    size_t operator()(const NameExprKey& key) const {
+      return velox::bits::hashMix(
+          folly::hasher<Name>()(key.name), folly::hasher<ExprCP>()(key.expr));
+    }
+  };
+
+  // The (name, binding) pairs resolved via 'renames_' to a non-deterministic
+  // inline binding. A repeat of the same pair means one non-deterministic
+  // source is inlined at multiple reference sites.
+  mutable folly::F14FastSet<NameExprKey, NameExprKeyHasher>
+      nonDeterministicResolutions_;
 
   // Symbols from the 'outer' query. Used when processing correlated subqueries.
   const folly::F14FastMap<std::string, ExprCP>* correlations_{nullptr};

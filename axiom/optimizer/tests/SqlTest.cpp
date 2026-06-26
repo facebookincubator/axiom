@@ -281,6 +281,7 @@ int main(int argc, char** argv) {
   registerQueryFile<"unionAll">();
   registerQueryFile<"unionAllFlatten">();
   registerQueryFile<"groupingsets">();
+  registerQueryFile<"nondeterministic">();
 
   return RUN_ALL_TESTS();
 }
