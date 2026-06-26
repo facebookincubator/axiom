@@ -280,7 +280,7 @@ class SubfieldTest : public HiveQueriesTestBase,
             .project({"r as r1"})
             .project({"r1 as r2"})
             .project(
-                {"make_named_row('f1b', r2.f1 + 1::REAL, 'f2b', r2.f2 + 2::REAL + cast(rand() as real)) as named"})
+                {"make_named_row('f1b', r2.f1 + 1::REAL, 'f2b', r2.f2 + 2::REAL) as named"})
             .project({"named as named1"})
             .project(
                 {"make_named_row('f1b', named1.f1b, 'f2b', named1.f2b + 3::REAL) as named3"})
