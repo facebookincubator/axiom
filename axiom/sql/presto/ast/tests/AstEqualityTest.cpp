@@ -1090,27 +1090,27 @@ TEST(AstEqualityTest, bindExpressionNotEqual) {
 }
 
 TEST(AstEqualityTest, groupingOperationEquals) {
-  auto name1 =
-      std::make_shared<QualifiedName>(loc(), std::vector<std::string>{"a"});
-  auto name2 =
-      std::make_shared<QualifiedName>(loc(), std::vector<std::string>{"a"});
   auto a = std::make_shared<GroupingOperation>(
-      loc(0, 0), std::vector<std::shared_ptr<QualifiedName>>{name1});
+      loc(0, 0),
+      std::vector<ExpressionPtr>{
+          std::make_shared<Identifier>(loc(), "a", false)});
   auto b = std::make_shared<GroupingOperation>(
-      loc(5, 5), std::vector<std::shared_ptr<QualifiedName>>{name2});
+      loc(5, 5),
+      std::vector<ExpressionPtr>{
+          std::make_shared<Identifier>(loc(), "a", false)});
   EXPECT_TRUE(*a == *b);
   EXPECT_EQ(a->hash(), b->hash());
 }
 
 TEST(AstEqualityTest, groupingOperationNotEqual) {
-  auto na =
-      std::make_shared<QualifiedName>(loc(), std::vector<std::string>{"a"});
-  auto nb =
-      std::make_shared<QualifiedName>(loc(), std::vector<std::string>{"b"});
   auto a = std::make_shared<GroupingOperation>(
-      loc(), std::vector<std::shared_ptr<QualifiedName>>{na});
+      loc(),
+      std::vector<ExpressionPtr>{
+          std::make_shared<Identifier>(loc(), "a", false)});
   auto b = std::make_shared<GroupingOperation>(
-      loc(), std::vector<std::shared_ptr<QualifiedName>>{nb});
+      loc(),
+      std::vector<ExpressionPtr>{
+          std::make_shared<Identifier>(loc(), "b", false)});
   EXPECT_FALSE(*a == *b);
 }
 

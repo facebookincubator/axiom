@@ -374,21 +374,14 @@ void GroupByPlanner::plan(
     const OrderByPtr& orderBy) && {
   // Expand ROLLUP, CUBE, GROUPING SETS into a list of grouping sets, then
   // extract deduplicated grouping keys and per-set index vectors.
-  // Populates: groupingSets_, groupingKeys_, groupingSetsIndices_.
+  // Populates: groupingSets_, groupingKeys_, groupingSetsIndices_,
+  //   groupingKeyToIndex_.
   groupingSets_ = expandGroupingSets(groupingElements, selectExprs);
   deduplicateGroupingKeys();
   // GROUP BY DISTINCT removes duplicate grouping sets after expansion
   // (order-insensitive comparison).
   if (distinct) {
     deduplicateGroupingSets(groupingSetsIndices_);
-  }
-
-  // Populate groupingColumnToIndex_ for GROUPING() resolution.
-  for (size_t i = 0; i < groupingKeys_.size(); ++i) {
-    if (const auto* fieldAccess =
-            core::FieldAccessExpr::tryAsRootColumn(groupingKeys_[i].expr())) {
-      groupingColumnToIndex_[fieldAccess->name()] = static_cast<int32_t>(i);
-    }
   }
 
   // Walk SELECT, HAVING, and ORDER BY expressions to collect aggregate
@@ -538,13 +531,12 @@ std::vector<std::vector<lp::ExprApi>> GroupByPlanner::expandGroupingSets(
 }
 
 void GroupByPlanner::deduplicateGroupingKeys() {
-  core::ExprMap<int32_t> exprToIndex;
   for (const auto& groupingSet : groupingSets_) {
     std::vector<int32_t> indices;
     indices.reserve(groupingSet.size());
     for (const auto& expr : groupingSet) {
       int32_t idx = static_cast<int32_t>(groupingKeys_.size());
-      auto [it, inserted] = exprToIndex.try_emplace(expr.expr(), idx);
+      auto [it, inserted] = groupingKeyToIndex_.try_emplace(expr.expr(), idx);
       if (inserted) {
         groupingKeys_.push_back(expr);
       }
@@ -868,12 +860,13 @@ core::ExprPtr GroupByPlanner::rewriteGroupingMarker(const core::ExprPtr& expr) {
     std::vector<int32_t> columnIndices;
     columnIndices.reserve(call->inputs().size());
     for (const auto& input : call->inputs()) {
-      auto* field = core::FieldAccessExpr::tryAsRootColumn(input);
-      VELOX_USER_CHECK_NOT_NULL(
-          field, "GROUPING() arguments must be column references");
-      auto it = groupingColumnToIndex_.find(field->name());
       VELOX_USER_CHECK(
-          it != groupingColumnToIndex_.end(),
+          input->is(core::IExpr::Kind::kFieldAccess),
+          "GROUPING() arguments must be column references");
+      const auto* field = input->as<core::FieldAccessExpr>();
+      auto it = groupingKeyToIndex_.find(input);
+      VELOX_USER_CHECK(
+          it != groupingKeyToIndex_.end(),
           "Not a grouping column: {}",
           field->name());
       columnIndices.push_back(it->second);

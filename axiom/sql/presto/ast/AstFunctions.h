@@ -829,11 +829,11 @@ class GroupingOperation : public Expression {
  public:
   explicit GroupingOperation(
       NodeLocation location,
-      const std::vector<std::shared_ptr<QualifiedName>>& groupingColumns)
+      const std::vector<ExpressionPtr>& groupingColumns)
       : Expression(NodeType::kGroupingOperation, location),
         groupingColumns_(groupingColumns) {}
 
-  const std::vector<std::shared_ptr<QualifiedName>>& groupingColumns() const {
+  const std::vector<ExpressionPtr>& groupingColumns() const {
     return groupingColumns_;
   }
   void accept(AstVisitor* visitor) override;
@@ -849,7 +849,7 @@ class GroupingOperation : public Expression {
   }
 
  private:
-  std::vector<std::shared_ptr<QualifiedName>> groupingColumns_;
+  std::vector<ExpressionPtr> groupingColumns_;
 };
 
 class TableVersionExpression : public Expression {

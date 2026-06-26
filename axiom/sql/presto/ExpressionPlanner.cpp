@@ -1241,7 +1241,7 @@ lp::ExprApi ExpressionPlanner::toExpr(
       std::vector<lp::ExprApi> columnArgs;
       columnArgs.reserve(groupingOp->groupingColumns().size());
       for (const auto& column : groupingOp->groupingColumns()) {
-        columnArgs.push_back(lp::Col(canonicalizeName(column->suffix())));
+        columnArgs.push_back(toExpr(column, options));
       }
       return lp::Call(
           std::string(GroupByPlanner::kGroupingFunctionName), columnArgs);

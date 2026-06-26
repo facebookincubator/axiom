@@ -115,9 +115,8 @@ class GroupByPlanner {
   std::vector<std::vector<lp::ExprApi>> groupingSets_;
   std::vector<lp::ExprApi> groupingKeys_;
   std::vector<std::vector<int32_t>> groupingSetsIndices_;
-  // Maps grouping key column name → index in groupingKeys_ for GROUPING()
-  // resolution.
-  folly::F14FastMap<std::string, int32_t> groupingColumnToIndex_;
+  // Maps each grouping-key expression to its index in groupingKeys_.
+  facebook::velox::core::ExprMap<int32_t> groupingKeyToIndex_;
   std::vector<lp::ExprApi> projections_;
 
   // Deduplicated aggregate expressions. Aggregate options are embedded in
