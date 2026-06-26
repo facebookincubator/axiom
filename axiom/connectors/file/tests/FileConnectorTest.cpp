@@ -102,6 +102,24 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
         /*rowsInRowGroup=*/2);
   }
 
+  // Writes a file with struct, array, and map columns so the row group holds
+  // more leaf column chunks than top-level fields, exercising every branch of
+  // the leaf-flattening that labels chunks by dotted path.
+  void writeNestedParquetFile(const std::string& path) {
+    auto address = makeRowVector(
+        {"city", "zip"},
+        {makeFlatVector<StringView>({"nyc", "sf"}),
+         makeFlatVector<int64_t>({10001, 94016})});
+    auto tags = makeArrayVector<int32_t>({{1, 2}, {3}});
+    auto lookup =
+        makeMapVector<StringView, int64_t>({{{"a", 10}}, {{"b", 20}}});
+    writeParquetFile(
+        path,
+        makeRowVector(
+            {"id", "address", "tags", "lookup"},
+            {makeFlatVector<int64_t>({1, 2}), address, tags, lookup}));
+  }
+
   // Runs a SELECT and returns all of its result batches.
   std::vector<RowVectorPtr> queryAll(
       const std::string& sql,
@@ -266,6 +284,48 @@ TEST_F(FileConnectorTest, columnChunksStatistics) {
                 "delta",
                 "300"}),
            makeFlatVector<int64_t>({0, 0, 1, 0, 0, 1, 0, 0, 0})}));
+}
+
+TEST_F(FileConnectorTest, columnChunksNestedSchema) {
+  // Struct, array, and map columns each flatten to one leaf column chunk per
+  // leaf field, labeled by its full dotted path so leaves under the same parent
+  // stay distinct.
+  auto nestedPath = tempFile_->getPath() + ".nested.parquet";
+  writeNestedParquetFile(nestedPath);
+
+  test::assertEqualVectors(
+      query(
+          fmt::format(
+              "SELECT column_id, name FROM file.\"parquet\".\"{}$column_chunks\" "
+              "ORDER BY column_id",
+              nestedPath)),
+      makeRowVector(
+          {"column_id", "name"},
+          {makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5}),
+           makeFlatVector<StringView>(
+               {"id",
+                "address.city",
+                "address.zip",
+                "tags.element",
+                "lookup.key",
+                "lookup.value"})}));
+
+  // The flattened leaf type is used to decode statistics, so a nested leaf
+  // reports typed min/max instead of falling back to none. address.zip holds
+  // {10001, 94016} with no nulls.
+  test::assertEqualVectors(
+      query(
+          fmt::format(
+              "SELECT min, max, null_count FROM "
+              "file.\"parquet\".\"{}$column_chunks\" WHERE name = 'address.zip'",
+              nestedPath)),
+      makeRowVector(
+          {"min", "max", "null_count"},
+          {makeFlatVector<StringView>({"10001"}),
+           makeFlatVector<StringView>({"94016"}),
+           makeFlatVector<int64_t>({0})}));
+
+  std::remove(nestedPath.c_str());
 }
 
 TEST_F(FileConnectorTest, unsupportedMetadataTableFails) {

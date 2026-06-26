@@ -238,6 +238,46 @@ ColumnChunkStats readColumnChunkStats(
   return stats;
 }
 
+// A flattened leaf column: its dotted path from the file root and its scalar
+// type. Column chunks are stored per leaf, so a row group has one chunk per
+// entry here, in this order.
+struct LeafColumn {
+  std::string path;
+  TypePtr type;
+};
+
+// Appends 'segment' to a dotted leaf path, omitting the separator at the root
+// so a top-level field stays unprefixed (no leading '.').
+std::string joinPath(const std::string& prefix, std::string_view segment) {
+  return prefix.empty() ? std::string(segment)
+                        : fmt::format("{}.{}", prefix, segment);
+}
+
+// Flattens 'type' into its leaf columns in document order, matching the order
+// of column chunks in a Parquet row group. Nested fields are named by their
+// dotted path: struct fields join with '.', list elements append ".element",
+// and map entries append ".key"/".value" (e.g. "address.city", "tags.element",
+// "lookup.key").
+void collectLeafColumns(
+    const std::string& prefix,
+    const TypePtr& type,
+    std::vector<LeafColumn>& leaves) {
+  if (type->kind() == TypeKind::ROW) {
+    const auto& rowType = type->asRow();
+    for (auto i = 0; i < rowType.size(); ++i) {
+      collectLeafColumns(
+          joinPath(prefix, rowType.nameOf(i)), rowType.childAt(i), leaves);
+    }
+  } else if (type->kind() == TypeKind::ARRAY) {
+    collectLeafColumns(joinPath(prefix, "element"), type->childAt(0), leaves);
+  } else if (type->kind() == TypeKind::MAP) {
+    collectLeafColumns(joinPath(prefix, "key"), type->childAt(0), leaves);
+    collectLeafColumns(joinPath(prefix, "value"), type->childAt(1), leaves);
+  } else {
+    leaves.push_back({prefix, type});
+  }
+}
+
 class ColumnChunksDataSource : public MetadataDataSource {
  public:
   ColumnChunksDataSource(
@@ -254,7 +294,9 @@ class ColumnChunksDataSource : public MetadataDataSource {
   RowVectorPtr build() override {
     auto reader = openFile(split_->filePath, pool_);
     auto fileMetadata = reader->fileMetaData();
-    const auto& schema = reader->rowType();
+
+    std::vector<LeafColumn> leaves;
+    collectLeafColumns("", reader->rowType(), leaves);
 
     vector_size_t totalRows = 0;
     for (int rg = 0; rg < fileMetadata.numRowGroups(); ++rg) {
@@ -289,15 +331,17 @@ class ColumnChunksDataSource : public MetadataDataSource {
       auto rowGroup = fileMetadata.rowGroup(rg);
       for (int col = 0; col < rowGroup.numColumns(); ++col) {
         auto chunk = rowGroup.columnChunk(col);
-        auto columnName = col < static_cast<int>(schema->size())
-            ? std::string(schema->nameOf(col))
-            : fmt::format("column_{}", col);
+        std::string columnName;
+        TypePtr columnType;
+        if (static_cast<size_t>(col) < leaves.size()) {
+          columnName = leaves.at(col).path;
+          columnType = leaves.at(col).type;
+        } else {
+          columnName = fmt::format("column_{}", col);
+        }
         auto compression = common::compressionKindToString(chunk.compression());
         auto encoding = encodingsToString(chunk.encodings());
 
-        auto columnType = col < static_cast<int>(schema->size())
-            ? schema->childAt(col)
-            : nullptr;
         auto stats =
             readColumnChunkStats(chunk, columnType, rowGroup.numRows());
 
