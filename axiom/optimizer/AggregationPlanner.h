@@ -83,8 +83,8 @@ class AggregationPlanner {
       ColumnCP groupId,
       PlanState& state) const;
 
-  // Creates a single-phase aggregation plan following repartitioning by
-  // groupingKeys.
+  // Creates a single-phase aggregation plan. Repartitions by groupingKeys,
+  // except for global grouping sets, which are gathered onto a single task.
   std::pair<RelationOpPtr, PlanCost> makeSingleAggregationPlan(
       RelationOpPtr plan,
       const ExprVector& groupingKeys,
@@ -95,12 +95,13 @@ class AggregationPlanner {
       ColumnCP groupId,
       PlanState& state) const;
 
-  // Builds the distributed aggregation, choosing split (partial + final) and
-  // single-step plans based on the shape of 'aggregates' and the cost.
-  //   1. If 'globalGroupingSets' is non-empty, generates split plan.
-  //   2. If any of 'aggregates' has ORDER BY or is DISTINCT, generates
+  // Builds the distributed aggregation, choosing between a split (partial +
+  // final) and a single-step plan based on the shape of 'aggregates' and the
+  // cost.
+  //   1. If any of 'aggregates' has ORDER BY or is DISTINCT, generates a
   //   single-step plan.
-  //   3. Otherwise compare split and single by cost.
+  //   2. Else if 'globalGroupingSets' is non-empty, generates a split plan.
+  //   3. Otherwise compares split and single by cost.
   // For non-grouping-sets aggregation, set 'globalGroupingSets' and 'groupId'
   // to {} and nullptr.
   std::pair<RelationOpPtr, PlanCost> makeSplitOrSingleAggregationPlan(
