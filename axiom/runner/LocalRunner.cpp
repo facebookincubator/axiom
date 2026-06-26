@@ -404,25 +404,49 @@ bool LocalRunner::waitForCompletion(int32_t maxWaitMicros) {
     splitScopeJoined_ = true;
   }
 
-  std::vector<velox::ContinueFuture> futures;
+  auto& executor = folly::QueuedImmediateExecutor::instance();
+
+  // Wait for every task to stop running, then snapshot final stats while the
+  // tasks are still alive. taskCompletionFuture (unlike taskDeletionFuture)
+  // does not require releasing the tasks, so stats remain readable here.
+  std::vector<velox::ContinueFuture> completionFutures;
   {
     std::lock_guard<std::mutex> l(mutex_);
+    for (auto& stage : stages_) {
+      for (auto& task : stage) {
+        completionFutures.push_back(task->taskCompletionFuture());
+      }
+    }
+  }
+  const bool completed = !folly::collectAll(std::move(completionFutures))
+                              .via(&executor)
+                              .within(std::chrono::microseconds(maxWaitMicros))
+                              .wait()
+                              .hasException();
+
+  // Tear down: capture final stats before the tasks go away, then drop the
+  // cursor and tasks and wait for their deletion so pools are released.
+  std::vector<velox::ContinueFuture> deletionFutures;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (completed && !finalStats_.has_value()) {
+      finalStats_ = aggregatedStats();
+    }
     cursor_.reset();
     for (auto& stage : stages_) {
       for (auto& task : stage) {
-        futures.push_back(task->taskDeletionFuture());
+        deletionFutures.push_back(task->taskDeletionFuture());
       }
       stage.clear();
     }
   }
+  const bool deleted = !folly::collectAll(std::move(deletionFutures))
+                            .via(&executor)
+                            .within(std::chrono::microseconds(maxWaitMicros))
+                            .wait()
+                            .hasException();
 
-  auto& executor = folly::QueuedImmediateExecutor::instance();
-  auto result = folly::collectAll(std::move(futures))
-                    .via(&executor)
-                    .within(std::chrono::microseconds(maxWaitMicros))
-                    .wait();
-
-  return !result.hasException();
+  return completed && deleted;
 }
 
 namespace {
@@ -578,8 +602,15 @@ void LocalRunner::makeStages(
 }
 
 std::vector<velox::exec::TaskStats> LocalRunner::stats() const {
-  std::vector<velox::exec::TaskStats> result;
   std::lock_guard<std::mutex> l(mutex_);
+  if (finalStats_.has_value()) {
+    return *finalStats_;
+  }
+  return aggregatedStats();
+}
+
+std::vector<velox::exec::TaskStats> LocalRunner::aggregatedStats() const {
+  std::vector<velox::exec::TaskStats> result;
   for (const auto& tasks : stages_) {
     VELOX_CHECK(!tasks.empty());
 

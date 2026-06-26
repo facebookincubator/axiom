@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include <folly/coro/AsyncScope.h>
 
 #include "axiom/common/QueryRuntimeStats.h"
@@ -123,7 +125,8 @@ class LocalRunner : public Runner,
 
   /// Returns aggregated runtime stats for each fragment in 'fragments()'.
   /// Corresponds 1:1 to 'fragments()'. For multi-task fragments, stats from all
-  /// tasks are aggregated together.
+  /// tasks are aggregated together. While running this is a live snapshot; once
+  /// waitForCompletion() has captured the final stats, it returns those.
   std::vector<velox::exec::TaskStats> stats() const override;
 
   /// Prints the distributed plan annotated with runtime stats. Similar to
@@ -144,9 +147,15 @@ class LocalRunner : public Runner,
   /// Best-effort attempt to cancel the execution.
   void abort() override;
 
-  /// Waits for `maxWaitMicros` microseconds for all tasks to complete.
+  /// Waits for all tasks to complete in two phases (stop running, then release
+  /// resources), each bounded by `maxWaitMicros` microseconds.
   /// If `maxWaitMicros <= 0` this will check if the tasks are completed and
   /// return false immediately if not.
+  /// Captures a final stats snapshot once every task has stopped running, so a
+  /// subsequent stats() returns final stats rather than the in-progress
+  /// snapshot. (Draining the output via next() does not by itself guarantee
+  /// final stats: under multi-threaded execution a producer driver, e.g. a
+  /// probe-side TableScan, may still be closing.)
   /// @pre state() != State::kInitialized
   /// @return true if all tasks completed within the timeout, false otherwise.
   bool waitForCompletion(int32_t maxWaitMicros) override;
@@ -174,6 +183,11 @@ class LocalRunner : public Runner,
       const velox::core::TableScanNode& scan,
       const std::shared_ptr<connector::PartitionType>& partitionType);
 
+  // Aggregates the live per-fragment task stats. This is the in-progress
+  // snapshot returned by stats() before the run completes. Caller must hold
+  // mutex_.
+  std::vector<velox::exec::TaskStats> aggregatedStats() const;
+
   // Serializes 'cursor_' and 'error_'.
   mutable std::mutex mutex_;
 
@@ -188,6 +202,10 @@ class LocalRunner : public Runner,
 
   std::unique_ptr<velox::exec::TaskCursor> cursor_;
   std::vector<std::vector<std::shared_ptr<velox::exec::Task>>> stages_;
+  // Final stats captured by waitForCompletion() once all tasks stopped running.
+  // Once set, stats() returns this instead of the live snapshot, which lets
+  // stats() report final stats after the tasks have been torn down.
+  std::optional<std::vector<velox::exec::TaskStats>> finalStats_;
   std::exception_ptr error_;
   std::shared_ptr<SplitSourceFactory> splitSourceFactory_;
   // Base directory for task spill files. Empty disables spilling.

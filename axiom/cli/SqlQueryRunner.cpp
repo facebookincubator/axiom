@@ -1170,6 +1170,10 @@ std::string SqlQueryRunner::runExplainAnalyze(
     auto results = fetchResults(*runner);
   }
 
+  // Drive the run to completion so operator stats are final before reading
+  // them: draining the output cursor does not guarantee every driver finished.
+  waitForCompletion(runner, options.timeoutMicros);
+
   std::stringstream out;
   out << printPlanWithStats(
       *runner, planAndStats.prediction, options.debugMode);
