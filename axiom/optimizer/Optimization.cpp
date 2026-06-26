@@ -20,6 +20,7 @@
 #include <utility>
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/optimizer/AggregationPlanner.h"
+#include "axiom/optimizer/ConnectorPushdownPass.h"
 #include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Plan.h"
@@ -35,6 +36,34 @@
 namespace lp = facebook::axiom::logical_plan;
 
 namespace facebook::axiom::optimizer {
+namespace {
+
+// Runs 'task' to completion, hopping to 'executor' first when one is
+// available so the caller doesn't block the producer thread. Used to
+// bridge async connector calls into the synchronous optimizer
+// interface.
+template <typename T>
+T blockingWaitOn(folly::Executor* executor, folly::coro::Task<T> task) {
+  if (executor != nullptr) {
+    return folly::coro::blockingWait(
+        co_withExecutor(executor, std::move(task)));
+  }
+  return folly::coro::blockingWait(std::move(task));
+}
+
+// Reshapes a flat list of pushdown roots into a node-keyed map so the
+// per-node lookup `ToGraph` runs during the walk is O(1).
+folly::F14FastMap<const lp::LogicalPlanNode*, connector::TablePtr>
+toPushdownMap(std::vector<connector::PushdownRoot> roots) {
+  folly::F14FastMap<const lp::LogicalPlanNode*, connector::TablePtr> map;
+  map.reserve(roots.size());
+  for (auto& root : roots) {
+    map.emplace(root.root, std::move(root.table));
+  }
+  return map;
+}
+
+} // namespace
 
 Optimization::Optimization(
     OptimizerSessionPtr optimizerSession,
@@ -51,7 +80,6 @@ Optimization::Optimization(
       runnerOptions_(std::move(runnerOptions)),
       isSingleWorker_(runnerOptions_.numWorkers == 1),
       isSingleDriver_(runnerOptions_.numDrivers == 1),
-      logicalPlan_(&logicalPlan),
       history_(history),
       veloxQueryCtx_(std::move(veloxQueryCtx)),
       aggregationPlanner_{
@@ -62,12 +90,13 @@ Optimization::Optimization(
       toVelox_{optimizerSession_, runnerOptions_},
       runtimeStats_{std::move(runtimeStats)} {
   VELOX_CHECK_NOT_NULL(runnerSession_);
+  VELOX_CHECK_NOT_NULL(veloxQueryCtx_);
   queryCtx()->optimization() = this;
 
-  if (logicalPlan_->is(logical_plan::NodeKind::kOutput)) {
+  if (logicalPlan.is(logical_plan::NodeKind::kOutput)) {
     // Resolve entries to source names so addOutputRenames can look up by
     // name; pruning may invalidate the original ordinals.
-    const auto& output = *logicalPlan_->as<logical_plan::OutputNode>();
+    const auto& output = *logicalPlan.as<logical_plan::OutputNode>();
     const auto& inputType = *output.onlyInput()->outputType();
     outputColumnMappings_.reserve(output.entries().size());
     for (const auto& entry : output.entries()) {
@@ -76,7 +105,9 @@ Optimization::Optimization(
     }
   }
 
-  root_ = toGraph_.makeQueryGraph(*logicalPlan_);
+  auto pushdownRoots = toPushdownMap(blockingWaitOn(
+      veloxQueryCtx_->executor(), collectConnectorPushdownRoots(logicalPlan)));
+  root_ = toGraph_.makeQueryGraph(logicalPlan, std::move(pushdownRoots));
   root_->initializePlans();
 }
 
@@ -138,6 +169,7 @@ void Optimization::estimateAllBaseTableSelectivity(DerivedTable& dt) {
       continue;
     }
     filterUpdated(baseTable);
+
     const auto* data = toVelox_.leafData(baseTable->id());
 
     // Collect top-level table column names referenced by the query. Subfield
@@ -168,14 +200,12 @@ void Optimization::estimateAllBaseTableSelectivity(DerivedTable& dt) {
 
   // Wait for all connector stats requests concurrently. Schedule on the
   // query context executor if available, otherwise run inline.
-  auto collectTask = folly::coro::collectAllRange(std::move(tasks));
-  auto* executor = veloxQueryCtx_->executor();
   auto estimateCpuStart = velox::process::threadCpuNanos();
   auto estimateThreadId = std::this_thread::get_id();
   auto estimateStart = std::chrono::steady_clock::now();
-  auto results = executor ? folly::coro::blockingWait(co_withExecutor(
-                                executor, std::move(collectTask)))
-                          : folly::coro::blockingWait(std::move(collectTask));
+  auto results = blockingWaitOn(
+      veloxQueryCtx_->executor(),
+      folly::coro::collectAllRange(std::move(tasks)));
   if (runtimeStats_) {
     recordCpuIfSameThread(
         *runtimeStats_,

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/CppAttributes.h>
 #include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/PlanObject.h"
@@ -447,11 +448,23 @@ class Schema {
   /// Returns the table with 'name' or nullptr if not found, using
   /// the connector specified by connectorId to perform table lookups.
   /// An error is thrown if no connector with the specified ID exists.
-  SchemaTableCP findTable(
+  SchemaTableCP FOLLY_NULLABLE findTable(
       std::string_view connectorId,
       const SchemaTableName& tableName) const;
 
+  /// Wraps 'connectorTable' as a `SchemaTable` and takes ownership.
+  /// Bypasses the schema resolver. Pulls per-column stats from
+  /// `connectorTable`'s metadata, and builds one ColumnGroup per
+  /// `connectorTable->layouts()` entry, honouring any partition / order
+  /// columns.
+  SchemaTableCP adoptConnectorTable(connector::TablePtr connectorTable) const;
+
  private:
+  // Builds a `SchemaTable` from `connectorTable` without taking
+  // ownership. Caller retains `connectorTable` for the lifetime of
+  // the returned `SchemaTable`.
+  SchemaTableCP buildSchemaTable(const connector::Table& connectorTable) const;
+
   struct Table {
     connector::TablePtr connectorTable;
     SchemaTableCP schemaTable{nullptr};
@@ -466,6 +479,10 @@ class Schema {
   const connector::SchemaResolver* source_;
   std::shared_ptr<QueryRuntimeStats> runtimeStats_;
   mutable ConnectorMap connectorTables_;
+  // Holds `connector::Table`s whose ownership is given directly to
+  // the Schema rather than resolved through the source. Keeps them
+  // alive for the `SchemaTable`s that hold raw pointers into them.
+  mutable std::vector<connector::TablePtr> adoptedConnectorTables_;
 };
 
 } // namespace facebook::axiom::optimizer

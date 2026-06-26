@@ -16,11 +16,13 @@
 
 #include "axiom/optimizer/Schema.h"
 
+#include <fmt/format.h>
 #include "axiom/optimizer/Cost.h"
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/PlanUtils.h"
 #include "velox/common/process/ProcessBase.h"
+#include "velox/connectors/ConnectorRegistry.h"
 
 #include <numbers>
 
@@ -164,41 +166,17 @@ SchemaTable::SchemaTable(const connector::Table& connectorTable)
     : connectorTable{&connectorTable},
       cardinality{connectorCardinality(connectorTable)} {}
 
-SchemaTableCP Schema::findTable(
-    std::string_view connectorId,
-    const SchemaTableName& tableName) const {
-  auto& tables = connectorTables_.try_emplace(connectorId).first->second;
-  auto& table = tables.try_emplace(tableName, Table{}).first->second;
-  if (table.schemaTable) {
-    return table.schemaTable;
-  }
-
-  VELOX_CHECK_NOT_NULL(source_);
-
-  auto findCpuStart = velox::process::threadCpuNanos();
-  auto findStart = std::chrono::steady_clock::now();
-  auto connectorTable = source_->findTable(std::string(connectorId), tableName);
-  if (runtimeStats_) {
-    runtimeStats_->recordTiming(
-        QueryRuntimeStats::kFindTableCpuNanos,
-        std::chrono::nanoseconds(
-            velox::process::threadCpuNanos() - findCpuStart));
-    runtimeStats_->recordTiming(
-        QueryRuntimeStats::kFindTableWallNanos,
-        std::chrono::steady_clock::now() - findStart);
-  }
-  if (!connectorTable) {
-    return nullptr;
-  }
-
-  auto* schemaTable = make<SchemaTable>(*connectorTable);
+SchemaTableCP Schema::buildSchemaTable(
+    const connector::Table& connectorTable) const {
+  auto* schemaTable = make<SchemaTable>(connectorTable);
   auto& schemaColumns = schemaTable->columns;
 
-  auto& tableColumns = connectorTable->columnMap();
+  const auto& tableColumns = connectorTable.columnMap();
   schemaColumns.reserve(tableColumns.size());
   for (const auto& [columnName, tableColumn] : tableColumns) {
-    // Cardinality and null fraction are unknown when the connector has no
-    // corresponding statistic.
+    // Cardinality and null fraction are unknown when the connector
+    // has no corresponding statistic; downstream cost-based decisions
+    // fall back to safe defaults.
     Value value(toType(tableColumn->type()));
     if (auto* stats = tableColumn->stats()) {
       if (stats->numDistinct.has_value()) {
@@ -226,7 +204,7 @@ SchemaTableCP Schema::findTable(
     }
   };
 
-  for (const auto* layout : connectorTable->layouts()) {
+  for (const auto* layout : connectorTable.layouts()) {
     VELOX_CHECK_NOT_NULL(layout);
     ExprVector partition;
     appendColumns(layout->partitionColumns(), partition);
@@ -256,6 +234,45 @@ SchemaTableCP Schema::findTable(
     appendColumns(layout->columns(), columns);
     schemaTable->addIndex(*layout, std::move(distribution), std::move(columns));
   }
+  return schemaTable;
+}
+
+SchemaTableCP Schema::adoptConnectorTable(
+    connector::TablePtr connectorTable) const {
+  VELOX_CHECK_NOT_NULL(connectorTable);
+  auto* schemaTable = buildSchemaTable(*connectorTable);
+  adoptedConnectorTables_.push_back(std::move(connectorTable));
+  return schemaTable;
+}
+
+SchemaTableCP FOLLY_NULLABLE Schema::findTable(
+    std::string_view connectorId,
+    const SchemaTableName& tableName) const {
+  auto& tables = connectorTables_.try_emplace(connectorId).first->second;
+  auto& table = tables.try_emplace(tableName, Table{}).first->second;
+  if (table.schemaTable) {
+    return table.schemaTable;
+  }
+
+  VELOX_CHECK_NOT_NULL(source_);
+
+  auto findCpuStart = velox::process::threadCpuNanos();
+  auto findStart = std::chrono::steady_clock::now();
+  auto connectorTable = source_->findTable(std::string(connectorId), tableName);
+  if (runtimeStats_) {
+    runtimeStats_->recordTiming(
+        QueryRuntimeStats::kFindTableCpuNanos,
+        std::chrono::nanoseconds(
+            velox::process::threadCpuNanos() - findCpuStart));
+    runtimeStats_->recordTiming(
+        QueryRuntimeStats::kFindTableWallNanos,
+        std::chrono::steady_clock::now() - findStart);
+  }
+  if (!connectorTable) {
+    return nullptr;
+  }
+
+  auto* schemaTable = buildSchemaTable(*connectorTable);
   table = {std::move(connectorTable), schemaTable};
   return schemaTable;
 }

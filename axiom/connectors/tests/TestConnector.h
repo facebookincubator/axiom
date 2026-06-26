@@ -519,6 +519,24 @@ class TestConnectorMetadata : public ConnectorMetadata {
       : connector_(connector),
         splitManager_(std::make_unique<TestSplitManager>()) {}
 
+  /// Signature of a matcher that, for a given plan subtree, returns
+  /// the pushdown roots this connector wants to absorb.
+  using PushdownMatcher = std::function<std::vector<PushdownRoot>(
+      const logical_plan::LogicalPlanNode&)>;
+
+  /// Installs 'matcher' as the connector's pushdown matcher. A non-null
+  /// matcher opts the connector into pushdown and is invoked from
+  /// `co_pushdownPlan`. Passing nullptr clears the matcher and opts
+  /// out of pushdown.
+  void setPushdownMatcher(PushdownMatcher matcher);
+
+  bool isPushdownSupported() const override {
+    return pushdownMatcher_ != nullptr;
+  }
+
+  folly::coro::Task<std::vector<PushdownRoot>> co_pushdownPlan(
+      const logical_plan::LogicalPlanNode& plan) const override;
+
   TablePtr findTable(const SchemaTableName& tableName) override;
 
   /// Non-interface method which supplies a non-const Table reference
@@ -638,6 +656,7 @@ class TestConnectorMetadata : public ConnectorMetadata {
   TestConnector* connector_;
   folly::F14FastMap<SchemaTableName, std::shared_ptr<TestTable>> tables_;
   std::unique_ptr<TestSplitManager> splitManager_;
+  PushdownMatcher pushdownMatcher_;
 
   struct ViewDefinition {
     velox::RowTypePtr type;

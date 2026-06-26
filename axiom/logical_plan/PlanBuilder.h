@@ -750,6 +750,27 @@ class PlanBuilder {
     return node_;
   }
 
+  /// Captures the current plan node into 'node' so a test can grab a
+  /// pointer to a specific node at the point it is built, instead of
+  /// reaching it later by walking inputs() by index. The captured
+  /// pointer remains valid as long as the resulting plan does.
+  ///
+  /// Example:
+  ///
+  ///   const lp::LogicalPlanNode* filter = nullptr;
+  ///   auto plan = PlanBuilder(ctx)
+  ///     .tableScan("orders")
+  ///     .filter("a > 0")
+  ///     .capturePlanNode(&filter)
+  ///     .aggregate({"a"}, {"sum(b)"})
+  ///     .build();
+  PlanBuilder& capturePlanNode(const LogicalPlanNode** node) {
+    VELOX_USER_CHECK_NOT_NULL(node);
+    VELOX_USER_CHECK_NOT_NULL(node_);
+    *node = node_.get();
+    return *this;
+  }
+
   /// Wraps the current plan (treated as the anchor) and the provided step
   /// plan in a FixedPointNode named `name`. The step must contain at least
   /// one RecursiveReferenceNode named `name`, and anchor and step must
