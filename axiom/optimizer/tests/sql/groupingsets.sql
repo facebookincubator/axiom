@@ -107,6 +107,9 @@ SELECT a, GROUPING(a), sum(b) AS s FROM t GROUP BY GROUPING SETS ((a), ())
 -- GROUPING() with duplicate grouping sets.
 SELECT a, GROUPING(a), count(*) AS c FROM t GROUP BY GROUPING SETS ((a), (a), (a, b))
 ----
+-- GROUPING() with a column duplicated across a self-join.
+SELECT GROUPING(t1.a, t2.a), count(*) AS c FROM t t1, t t2 WHERE t1.a = t2.a GROUP BY GROUPING SETS ((t1.a), (t2.a))
+----
 -- SELECT aliases are not visible in HAVING (standard SQL — HAVING runs before SELECT).
 -- error: HAVING clause cannot reference column
 SELECT a, GROUPING(a) AS grp, sum(b) AS s FROM t GROUP BY ROLLUP(a) HAVING grp = 0

@@ -398,6 +398,37 @@ TEST_F(AggregationParserTest, groupingFunction) {
           .project(projectExprs({"n_regionkey", grouping({0, 3}), "count"}))
           .output());
 
+  // Two columns with the same leaf name across a join stay distinct grouping
+  // keys, one per grouping set.
+  testSelect(
+      "SELECT GROUPING(t.n_regionkey, u.n_regionkey), count(1) "
+      "FROM nation t, nation u WHERE t.n_nationkey = u.n_nationkey "
+      "GROUP BY GROUPING SETS ((t.n_regionkey), (u.n_regionkey))",
+      matchScan("nation")
+          .join(matchScan("nation").build())
+          .filter()
+          .aggregate({"n_regionkey", "n_regionkey_2"}, {"count(1)"}, {{0}, {1}})
+          .project(projectExprs({grouping({1, 2}), "count"}))
+          .output());
+
+  // A qualified GROUPING() argument that is not a grouping key still fails.
+  VELOX_ASSERT_THROW(
+      parseSelect(
+          "SELECT GROUPING(t.n_name), count(1) "
+          "FROM nation t, nation u WHERE t.n_nationkey = u.n_nationkey "
+          "GROUP BY GROUPING SETS ((t.n_regionkey), (u.n_regionkey))"),
+      "Not a grouping column: n_name");
+
+  // A struct-field deep qualifier resolves as a GROUPING() argument.
+  connector_->addTable("s", ROW({"k", "x"}, {BIGINT(), ROW("y", BIGINT())}));
+  testSelect(
+      "SELECT GROUPING(s.x.y), count(1) FROM s "
+      "GROUP BY GROUPING SETS ((s.x.y), ())",
+      matchScan("s")
+          .aggregate({"DEREFERENCE(x, y)"}, {"count(1)"}, {{0}, {}})
+          .project(projectExprs({grouping({0, 1}), "count"}))
+          .output());
+
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSelect(
           "SELECT n_regionkey, count(1) "
