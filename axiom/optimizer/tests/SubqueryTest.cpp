@@ -2123,6 +2123,32 @@ TEST_F(SubqueryTest, nonEquiLeftJoinWithScalarSubquery) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+// LEFT JOIN with a post-join WHERE equality referencing both sides, where one
+// operand is not default-null propagating. The outer join must be preserved and
+// the equality kept as a post-join filter.
+TEST_F(SubqueryTest, leftJoinFilterWithNonDefaultNullEquality) {
+  auto query =
+      "SELECT a.x FROM (VALUES 1) a(x) "
+      "LEFT JOIN (VALUES 1) b(y) ON a.x = b.y "
+      "WHERE b.y = TRY(a.x)";
+  SCOPED_TRACE(query);
+
+  // The join keeps 'a.x = b.y' as its key while 'b.y = TRY(a.x)' stays a
+  // post-join filter.
+  auto matcher = matchValues()
+                     .aliases({"x"})
+                     .hashJoin(
+                         matchValues().aliases({"y"}).build(),
+                         core::JoinType::kLeft,
+                         {.keys = {{"x = y"}}})
+                     .filter("eq(y, try(x))")
+                     .project({"x"})
+                     .build();
+
+  auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 TEST_F(SubqueryTest, rightJoinOnSubquery) {
   // RIGHT JOIN is normalized to LEFT JOIN. Subqueries referencing the
   // null-supplying side (left in SQL, right after normalization) are supported.
