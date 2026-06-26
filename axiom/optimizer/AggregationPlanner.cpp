@@ -498,12 +498,21 @@ AggregationPlanner::makeSingleAggregationPlan(
     PlanState& state) const {
   PlanCost singleAggCost;
 
-  ColumnVector partitionKeys(
-      intermediateColumns.begin(),
-      intermediateColumns.begin() + groupingKeys.size());
   PlanCost repartitionCost;
-  std::tie(plan, repartitionCost) =
-      repartitionForAgg(plan, partitionKeys, state);
+  if (!globalGroupingSets.empty()) {
+    // Gather a global-grouping-set single-step aggregation to one task so its
+    // default row is emitted once. A single worker already runs on one task.
+    if (!isSingleWorker_) {
+      std::tie(plan, repartitionCost) =
+          maybeRepartition(plan, /*desiredKeys=*/{}, state);
+    }
+  } else {
+    ColumnVector partitionKeys(
+        intermediateColumns.begin(),
+        intermediateColumns.begin() + groupingKeys.size());
+    std::tie(plan, repartitionCost) =
+        repartitionForAgg(plan, partitionKeys, state);
+  }
   singleAggCost.add(repartitionCost);
 
   auto* singleAgg = make<Aggregation>(
@@ -535,8 +544,10 @@ AggregationPlanner::makeSplitOrSingleAggregationPlan(
         return agg->isDistinct() || !agg->orderKeys().empty();
       });
 
-  if (!globalGroupingSets.empty()) {
-    return makeSplitAggregationPlan(
+  // ORDER BY / DISTINCT aggregates cannot be split, so use single-step even
+  // with global grouping sets.
+  if (requiresSingleStep) {
+    return makeSingleAggregationPlan(
         plan,
         groupingKeys,
         aggregates,
@@ -547,14 +558,14 @@ AggregationPlanner::makeSplitOrSingleAggregationPlan(
         state);
   }
 
-  if (requiresSingleStep) {
-    return makeSingleAggregationPlan(
+  if (!globalGroupingSets.empty()) {
+    return makeSplitAggregationPlan(
         plan,
         groupingKeys,
         aggregates,
         intermediateColumns,
         outputColumns,
-        /*globalGroupingSets=*/{},
+        std::move(globalGroupingSets),
         groupId,
         state);
   }
@@ -769,11 +780,6 @@ void AggregationPlanner::addGroupingSetsAggregation(
     const ExprVector& groupingKeys,
     const AggregateVector& aggregates,
     PlanState& state) const {
-  const auto hasOrderBy =
-      std::any_of(aggregates.begin(), aggregates.end(), [](const auto& agg) {
-        return !agg->orderKeys().empty();
-      });
-
   auto* groupIdNode = makeGroupIdNode(plan, aggPlan, groupingKeys, aggregates);
   state.addCost(*groupIdNode);
   plan = groupIdNode;
@@ -794,14 +800,6 @@ void AggregationPlanner::addGroupingSetsAggregation(
     aggGroupingKeys.push_back(groupIdNode->columns()[i]);
   }
   aggGroupingKeys.push_back(aggPlan->groupId());
-
-  // ORDER BY forces single-step aggregation (partial aggregation cannot
-  // preserve ORDER BY semantics), but global grouping sets require split
-  // (partial+final). With kSingle, addLocalPartition creates empty driver
-  // partitions that each emit a spurious default row for the global set.
-  VELOX_USER_CHECK(
-      !hasOrderBy || globalGroupingSets.empty(),
-      "ORDER BY in aggregate functions is not supported with global grouping sets (ROLLUP, CUBE, or GROUPING SETS containing ())");
 
   if (isSingleWorker_ && isSingleDriver_) {
     auto [agg, cost] = makeSingleAggregationPlan(

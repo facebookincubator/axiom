@@ -19,7 +19,6 @@
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
-#include "velox/common/base/tests/GTestUtils.h"
 
 namespace facebook::axiom::optimizer {
 namespace {
@@ -520,26 +519,34 @@ TEST_F(AggregationTest, groupingSetsNoGlobalSet) {
   }
 }
 
-// ORDER BY in aggregates requires single-step aggregation (partial aggregation
-// cannot preserve ORDER BY semantics), but global grouping sets require
-// partial+final. With kSingle, empty driver partitions emit spurious default
-// rows for the global set.
+// Verifies a per-aggregate ORDER BY with a global grouping set plans
+// single-step.
 TEST_F(AggregationTest, groupingSetsOrderByWithGlobalSet) {
   testConnector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
   SCOPE_EXIT {
     testConnector_->dropTableIfExists("t");
   };
 
-  auto logicalPlan = lp::PlanBuilder(makeContext())
-                         .tableScan("t")
-                         .rollup({"a"}, {"array_agg(b ORDER BY b)"}, "gid")
-                         .build();
+  auto logicalPlan =
+      lp::PlanBuilder(makeContext())
+          .tableScan("t")
+          .rollup({"a"}, {"array_agg(b ORDER BY b) as arr"}, "gid")
+          .build();
 
-  VELOX_ASSERT_THROW(
-      planVelox(
-          logicalPlan,
-          MultiFragmentPlan::Options{.numWorkers = 4, .numDrivers = 4}),
-      "ORDER BY in aggregate functions is not supported with global grouping sets");
+  auto plan = planVelox(
+      logicalPlan,
+      MultiFragmentPlan::Options{.numWorkers = 4, .numDrivers = 4});
+
+  auto matcher =
+      core::PlanMatcherBuilder()
+          .tableScan()
+          .groupId({{"a"}, {}}, {"b"}, "gid")
+          .gather()
+          .localPartition()
+          .singleAggregation({"a", "gid"}, {"array_agg(b ORDER BY b) as arr"})
+          .project({"a", "arr", "gid"})
+          .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
 }
 
 // Literal-only aggregate args (count(1)) — aggregation inputs list passed to
