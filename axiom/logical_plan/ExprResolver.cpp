@@ -543,7 +543,10 @@ bool ExprResolver::resolveLambdaArguments(
 
   velox::exec::SignatureBinder binder(
       signature, argTypes, velox::TypeCoercer::defaults());
-  binder.tryBind();
+  // Bind with coercions so an UNKNOWN argument resolves the lambda's type
+  // variables.
+  std::vector<velox::Coercion> coercions;
+  binder.tryBindWithCoercions(coercions);
   for (auto i = 0; i < numArgs; ++i) {
     auto argSignature = signature.argumentTypes()[i];
     if (isLambdaArgument(argSignature)) {

@@ -54,6 +54,21 @@ class ExprTest : public testing::Test {
     EXPECT_EQ(resolved->looksConstant(), expected);
   }
 
+  ExprPtr resolveScalar(const std::string& sql) {
+    return resolveScalar(sql, schema_);
+  }
+
+  ExprPtr resolveScalar(const std::string& sql, const RowTypePtr& schema) {
+    return ExprResolver(nullptr, &velox::TypeCoercer::defaults())
+        .resolveScalarTypes(Sql(sql).expr(), inputResolver(schema));
+  }
+
+  AggregateExprPtr resolveAggregate(const std::string& sql) {
+    return ExprResolver(nullptr, &velox::TypeCoercer::defaults())
+        .resolveAggregateTypes(
+            Sql(sql).expr(), inputResolver(schema_), nullptr, {}, false);
+  }
+
   RowTypePtr schema_ =
       ROW({"a", "x", "y", "z"}, {BIGINT(), BIGINT(), BIGINT(), BIGINT()});
 };
@@ -168,6 +183,13 @@ TEST_F(ExprTest, aggregateWithLambda) {
   EXPECT_TRUE(reduceAgg->inputAt(3)->isLambda());
 }
 
+TEST_F(ExprTest, reduceAggOverNull) {
+  auto reduceAgg = resolveAggregate(
+      "reduce_agg(null, 0, (s, x) -> s + x, (s1, s2) -> s1 + s2)");
+
+  VELOX_EXPECT_EQ_TYPES(reduceAgg->type(), BIGINT());
+}
+
 TEST_F(ExprTest, aggregateWithLambdaEquality) {
   auto makeAggregate = [this](const ExprApi& expr) {
     return ExprResolver(nullptr, nullptr)
@@ -243,6 +265,53 @@ TEST_F(ExprTest, aggregateWithLambdaUnknownFunction) {
           Col("x"),
           Lambda({"s", "x"}, Call("plus", Col("s"), Col("x"))))),
       "Cannot resolve Aggregate with lambda arguments: nonexistent_agg");
+}
+
+TEST_F(ExprTest, transformOverNull) {
+  // transform's result element type comes from the lambda body.
+  VELOX_EXPECT_EQ_TYPES(
+      resolveScalar("transform(null, x -> x + 1)")->type(), ARRAY(BIGINT()));
+}
+
+TEST_F(ExprTest, filterOverNull) {
+  // filter returns the input array type, whose element stays unknown.
+  VELOX_EXPECT_EQ_TYPES(
+      resolveScalar("filter(null, x -> x > 0)")->type(), ARRAY(UNKNOWN()));
+}
+
+TEST_F(ExprTest, reduceOverNull) {
+  // reduce returns the accumulator type from the initial state.
+  VELOX_EXPECT_EQ_TYPES(
+      resolveScalar("reduce(null, 0, (s, e) -> s + e, s -> s)")->type(),
+      BIGINT());
+}
+
+TEST_F(ExprTest, scalarLambdaWithTypedInput) {
+  auto schema = ROW({"arr"}, {ARRAY(BIGINT())});
+
+  // A typed (non-UNKNOWN) input still resolves.
+  VELOX_EXPECT_EQ_TYPES(
+      resolveScalar("transform(arr, x -> x + 1)", schema)->type(),
+      ARRAY(BIGINT()));
+}
+
+TEST_F(ExprTest, scalarLambdaWithNonArrayInput) {
+  auto schema = ROW({"i"}, {BIGINT()});
+
+  // transform requires an array argument.
+  VELOX_ASSERT_THROW(
+      resolveScalar("transform(i, x -> x + 1)", schema), "Can't resolve");
+}
+
+TEST_F(ExprTest, nestedLambdaOverEmptyMap) {
+  // Empty map() has UNKNOWN key/value types.
+  VELOX_EXPECT_EQ_TYPES(
+      resolveScalar(
+          "reduce(ARRAY[MAP(ARRAY['a'], ARRAY[1])], map(), "
+          "(s, x) -> map_zip_with(s, x, (k, v1, v2) -> "
+          "COALESCE(v1, 0) + COALESCE(v2, 0)), s -> s)")
+          ->type(),
+      MAP(VARCHAR(), BIGINT()));
 }
 
 TEST_F(ExprTest, windowFrameValidation) {
