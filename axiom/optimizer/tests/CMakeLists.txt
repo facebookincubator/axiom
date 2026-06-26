@@ -120,6 +120,7 @@ add_executable(
   HiveQueriesTest.cpp
   JoinTest.cpp
   MultiFragmentPlanTest.cpp
+  NonDeterministicFlagTest.cpp
   TpchDataGenerator.cpp
   PrecomputeProjectionTest.cpp
   PlanTest.cpp
