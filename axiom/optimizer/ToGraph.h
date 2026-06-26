@@ -16,7 +16,6 @@
 #pragma once
 
 #include "axiom/common/QueryRuntimeStats.h"
-#include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/PathSet.h"
 #include "axiom/optimizer/QueryGraph.h"
@@ -126,8 +125,17 @@ class ToGraph {
   /// DerivedTable. Strips a root OutputNode after SubfieldTracker prunes
   /// columns it does not export. Surviving columns keep their original
   /// names; positions are not stable — downstream must look up by name.
+  ///
+  /// 'pushdownRoots' maps each plan node a connector has agreed to
+  /// execute natively to the virtual `connector::Table` the optimizer
+  /// should scan in place of it. The walk consumes entries as it
+  /// encounters them and `VELOX_CHECK`s the map is empty at the end,
+  /// so any unmatched root surfaces as a planner bug.
   DerivedTableP makeQueryGraph(
-      const logical_plan::LogicalPlanNode& logicalPlan);
+      const logical_plan::LogicalPlanNode& logicalPlan,
+      folly::F14FastMap<
+          const logical_plan::LogicalPlanNode*,
+          connector::TablePtr> pushdownRoots);
 
   Name newCName(std::string_view prefix) {
     return toName(fmt::format("{}{}", prefix, ++nameCounter_));
@@ -571,6 +579,13 @@ class ToGraph {
   ensureFunctionSubfields(const logical_plan::ExprPtr& expr);
 
   void makeBaseTable(const logical_plan::TableScanNode& tableScan);
+
+  // Materialises a `BaseTable` over 'connectorTable' as the planner's
+  // stand-in for 'root'. EXPERIMENTAL: subfield pushdown is not applied
+  // to absorbed subtrees — see the .cpp for details.
+  void makePushdownBaseTable(
+      const logical_plan::LogicalPlanNode& root,
+      connector::TablePtr connectorTable);
 
   void makeValuesTable(const logical_plan::ValuesNode& values);
 
@@ -1033,6 +1048,14 @@ class ToGraph {
   // Counter for generating unique correlation names for BaseTables and
   // DerivedTables.
   int32_t nameCounter_{0};
+
+  // Pending pushdown roots for the current walk: each entry maps a
+  // plan node a connector has agreed to execute natively to the
+  // virtual `connector::Table` the optimizer should scan in place of
+  // it. Entries are consumed as the walk encounters the node, and the
+  // map is `VELOX_CHECK`ed empty at the end of `makeQueryGraph`.
+  folly::F14FastMap<const logical_plan::LogicalPlanNode*, connector::TablePtr>
+      pendingPushdowns_;
 
   // Column and subfield access info for filters, joins, grouping and other
   // things affecting result row selection.

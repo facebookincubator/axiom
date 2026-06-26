@@ -507,6 +507,18 @@ TablePtr TestConnectorMetadata::findTable(const SchemaTableName& tableName) {
   return findTableInternal(tableName);
 }
 
+void TestConnectorMetadata::setPushdownMatcher(PushdownMatcher matcher) {
+  pushdownMatcher_ = std::move(matcher);
+}
+
+folly::coro::Task<std::vector<PushdownRoot>>
+TestConnectorMetadata::co_pushdownPlan(
+    const logical_plan::LogicalPlanNode& plan) const {
+  VELOX_CHECK_NOT_NULL(
+      pushdownMatcher_, "co_pushdownPlan called with no matcher installed");
+  co_return pushdownMatcher_(plan);
+}
+
 velox::TypePtr TestConnectorMetadata::findType(const SchemaTypeName& typeName) {
   auto it = types_.find(typeName);
   if (it != types_.end()) {

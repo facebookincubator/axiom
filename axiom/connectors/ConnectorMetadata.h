@@ -21,6 +21,7 @@
 #include "axiom/common/SchemaTypeName.h"
 #include "axiom/connectors/ConnectorSession.h"
 #include "axiom/connectors/ConnectorSplitManager.h"
+#include "axiom/logical_plan/LogicalPlanNode.h"
 #include "folly/CppAttributes.h"
 #include "folly/coro/Task.h"
 #include "velox/connectors/Connector.h"
@@ -698,9 +699,9 @@ class Table : public std::enable_shared_from_this<Table> {
 
   virtual const std::vector<const TableLayout*>& layouts() const = 0;
 
-  /// Returns an estimate of the number of rows in 'this'. `std::nullopt`
-  /// means the connector has no estimate; downstream cost-based
-  /// decisions fall back to safe defaults rather than a fabricated value.
+  /// Returns an estimate of the number of rows in 'this'. `nullopt`
+  /// if the connector has no estimate; downstream cost-based decisions
+  /// fall back to safe defaults rather than a fabricated value.
   virtual std::optional<uint64_t> numRows() const = 0;
 
   /// Returns the table properties specified at creation time (e.g. format,
@@ -821,6 +822,25 @@ class ConnectorWriteHandle {
 
 using ConnectorWriteHandlePtr = std::shared_ptr<ConnectorWriteHandle>;
 
+/// One disjoint root the connector has agreed to execute natively.
+/// The optimizer materialises a scan from `table` in place of
+/// evaluating `root`; the `LogicalPlan` itself is never rewritten.
+/// `table` carries the connector's handle, column statistics, and
+/// row-count estimate via the standard `connector::Table` channel.
+///
+/// EXPERIMENTAL. Negotiates over `LogicalPlan`, which is not normalized.
+/// Expected to migrate to the optimizer's v2 IR once it lands; struct and
+/// method shapes may change.
+struct PushdownRoot {
+  /// Non-owning pointer into the `LogicalPlan` being optimized.
+  /// Valid for the duration of optimization.
+  const logical_plan::LogicalPlanNode* root;
+
+  /// Virtual table representing the pushed-down subtree's output.
+  /// Owned by the optimizer for the duration of optimization.
+  TablePtr table;
+};
+
 class ConnectorMetadata {
  public:
   /// Return the metadata for a given connector ID. Throws if not registered.
@@ -882,6 +902,30 @@ class ConnectorMetadata {
   /// @return nullptr if the type is not found.
   virtual velox::TypePtr findType(const SchemaTypeName& /*typeName*/) {
     return nullptr;
+  }
+
+  /// EXPERIMENTAL. Opt-in gate for connector pushdown. Default false.
+  /// The pushdown pass skips connectors that return false without
+  /// calling `co_pushdownPlan`.
+  virtual bool isPushdownSupported() const {
+    return false;
+  }
+
+  /// EXPERIMENTAL. Returns the disjoint roots this connector will
+  /// execute natively. The optimizer calls this once per maximal
+  /// subtree whose `TableScanNode`s all belong to this connector;
+  /// returned roots must be within `plan`. Each root tells the
+  /// optimizer "scan `table` in place of evaluating `root`." Pushing
+  /// a bare `TableScanNode` will error.
+  ///
+  /// Default `VELOX_FAIL`s. Connectors opting in via
+  /// `isPushdownSupported()` must override this method.
+  ///
+  /// See `PushdownRoot` for the v2-IR migration note.
+  virtual folly::coro::Task<std::vector<PushdownRoot>> co_pushdownPlan(
+      const logical_plan::LogicalPlanNode& /*plan*/) const {
+    VELOX_FAIL(
+        "Connector opted into pushdown via isPushdownSupported() but did not override co_pushdownPlan()");
   }
 
   /// Returns a SplitManager for split enumeration for TableLayouts accessed

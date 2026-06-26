@@ -447,9 +447,6 @@ class Optimization {
 
   const bool isSingleDriver_;
 
-  // Top level plan to optimize.
-  const logical_plan::LogicalPlanNode* const logicalPlan_;
-
   // Resolved root OutputNode entries; empty when there is no OutputNode.
   std::vector<OutputColumnNameMapping> outputColumnMappings_;
 
