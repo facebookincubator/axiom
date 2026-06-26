@@ -123,7 +123,7 @@ compression codec, byte sizes, value count, and column-chunk statistics.
 |--------|------|-------------|
 | `row_group_id` | BIGINT | Zero-based row group index. |
 | `column_id` | BIGINT | Zero-based column index within the row group. |
-| `name` | VARCHAR | Column name from the file schema. |
+| `name` | VARCHAR | Leaf column name from the file schema. Nested fields use their dotted path: struct fields join with `.`, list elements append `.element`, and map entries append `.key`/`.value` (e.g. `address.city`, `tags.element`, `lookup.key`). |
 | `compression` | VARCHAR | Compression codec (e.g. `none`, `zstd`, `snappy`, `gzip`). |
 | `encodings` | VARCHAR | Comma-separated Parquet page encodings (e.g. `RLE,PLAIN`, `RLE_DICTIONARY`). |
 | `compressed_size` | BIGINT | Total compressed byte size of the column chunk. |
