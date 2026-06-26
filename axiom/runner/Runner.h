@@ -47,8 +47,9 @@ class Runner {
   virtual velox::RowVectorPtr next() = 0;
 
   /// Returns Task stats for each fragment of the plan. The stats correspond 1:1
-  /// to the stages in the MultiFragmentPlan. This may be called at any time
-  /// before waitForCompletion() or abort().
+  /// to the stages in the MultiFragmentPlan. May be called at any time: while
+  /// the query is running it returns an in-progress snapshot; once
+  /// waitForCompletion() has run it returns the final stats.
   virtual std::vector<velox::exec::TaskStats> stats() const = 0;
 
   /// Returns the executable fragments of the plan being run, ordered so that
