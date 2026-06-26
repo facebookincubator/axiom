@@ -215,7 +215,8 @@ class Field : public Expr {
       : Expr(PlanType::kFieldExpr, Value(type, 1)),
         field_(field),
         index_(0),
-        base_(base) {
+        base_(base),
+        functions_(base->functions()) {
     columns_ = base->columns();
     subexpressions_ = base->subexpressions();
   }
@@ -224,7 +225,8 @@ class Field : public Expr {
       : Expr(PlanType::kFieldExpr, Value(type, 1)),
         field_(nullptr),
         index_(index),
-        base_(base) {
+        base_(base),
+        functions_(base->functions()) {
     columns_ = base->columns();
     subexpressions_ = base->subexpressions();
   }
@@ -243,10 +245,19 @@ class Field : public Expr {
     return base_;
   }
 
+  bool containsFunction(uint64_t set) const override {
+    return functions_.contains(set);
+  }
+
+  const FunctionSet& functions() const override {
+    return functions_;
+  }
+
  private:
   Name field_;
   int32_t index_;
   ExprCP base_;
+  const FunctionSet functions_;
 };
 
 struct SubfieldSet {
@@ -437,7 +448,8 @@ class Lambda : public Expr {
   Lambda(ColumnVector args, const velox::Type* type, ExprCP body)
       : Expr(PlanType::kLambdaExpr, Value(type, 1)),
         args_(std::move(args)),
-        body_(body) {
+        body_(body),
+        functions_(body->functions()) {
     auto columns = body_->columns();
     for (auto arg : args_) {
       columns.erase(arg);
@@ -454,9 +466,18 @@ class Lambda : public Expr {
     return body_;
   }
 
+  bool containsFunction(uint64_t set) const override {
+    return functions_.contains(set);
+  }
+
+  const FunctionSet& functions() const override {
+    return functions_;
+  }
+
  private:
   ColumnVector args_;
   ExprCP body_;
+  const FunctionSet functions_;
 };
 
 /// Represens a set of transitively equal columns.
