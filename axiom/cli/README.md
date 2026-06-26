@@ -35,7 +35,8 @@ The examples below use `axiom_sql` for brevity. With Buck, replace
 | `--num_workers` | `4` | Number of in-process workers. |
 | `--num_drivers` | `4` | Number of drivers per worker (parallelism). |
 | `--max_rows` | `100` | Maximum number of printed result rows. |
-| `--debug` | `false` | Enable debug mode (logging to stderr). |
+| `--show_live_progress` | `false` | Draw the [live progress](#live-progress) grid for `--query` and piped-stdin runs (when stderr is a terminal). The interactive REPL always shows it; this only opts the non-interactive paths in. |
+| `--debug` | `false` | Enable debug mode (logging to stderr; adds per-split and CPU-time detail lines to the live progress display). |
 
 ## Connectors
 
@@ -231,6 +232,44 @@ input N times back-to-back. Useful for perf measurements, re-running
 flaky queries, or queries with non-deterministic results. The input
 must be a single statement; multi-statement input is rejected. Stops
 on the first error. Not supported in interactive mode.
+
+## Live Progress
+
+While a query runs, the CLI can draw a live, in-place status block on stderr — a
+summary line, a progress bar, and a per-stage grid — refreshed as the query
+advances and erased before results are printed, so redirected stdout stays clean.
+
+It is shown only when stderr is a terminal:
+
+- **Interactive REPL** — on by default.
+- **`--query` and piped stdin** — opt in with `--show_live_progress`.
+- **`--init` and `--repeat`** — never draw it.
+
+When stderr is redirected (scripted or captured runs), nothing is drawn. Pass
+`--debug` to add per-split and CPU-time detail lines.
+
+```
+$ ./axiom_sql --show_live_progress --schema sf10 --query "
+    SELECT n.n_name, sum(l.l_extendedprice * (1 - l.l_discount)) AS revenue
+    FROM customer c
+    JOIN orders o ON o.o_custkey = c.c_custkey
+    JOIN lineitem l ON l.l_orderkey = o.o_orderkey
+    JOIN nation n ON n.n_nationkey = c.c_nationkey
+    GROUP BY n.n_name ORDER BY revenue DESC"
+
+Query 20260622_184329_00000_b3udk, RUNNING, 32 splits
+0:17 [32.5M rows, 6.11GB] [1.91M rows/s, 368MB/s] [===============>>>>>>>>>>>>>>] 14/32
+
+     STAGES   ROWS  ROWS/s  BYTES  BYTES/s  QUEUED    RUN   DONE
+0.........R  13.5M    793K   206M    12.1M       0      4      4
+  1.......R  10.6M    624K  4.32G     260M       2      4      0
+  2.......F   4.5M       0  1.37G       0B       0      0      1
+```
+
+The per-stage grid lists one row per execution stage, indented by depth (the
+root stage that produces the final result first), with a single-letter state
+(`P`lanned, `R`unning, `F`inished) and per-stage row/byte counts, rates, and
+split tallies.
 
 ## Exit Status
 

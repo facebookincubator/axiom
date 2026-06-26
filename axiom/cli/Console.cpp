@@ -17,12 +17,14 @@
 #include "axiom/cli/Console.h"
 #include <fmt/core.h>
 #include <folly/FileUtil.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 #include <algorithm>
 #include <iostream>
 #include <iterator>
 #include <optional>
 #include <set>
+#include "axiom/cli/LiveProgressDisplay.h"
 #include "axiom/cli/ResultPrinter.h"
 #include "axiom/cli/StdinReader.h"
 #include "axiom/cli/Timing.h"
@@ -66,6 +68,13 @@ DEFINE_bool(
     "Print per-statement timing (parse / optimize / execute). Always on in "
     "interactive mode.");
 
+DEFINE_bool(
+    show_live_progress,
+    false,
+    "Draw the live progress grid for --query and piped-stdin runs (when stderr "
+    "is a terminal). The interactive REPL always shows it; this only opts the "
+    "non-interactive paths in.");
+
 DEFINE_int32(
     repeat,
     1,
@@ -77,6 +86,22 @@ DEFINE_int32(
 using namespace facebook::velox;
 
 namespace {
+// Terminal width assumed when the real width cannot be queried (output is not a
+// tty or the ioctl fails).
+constexpr int kDefaultTerminalWidth = 80;
+
+// Returns the terminal width for `fileDescriptor`, or kDefaultTerminalWidth if
+// it cannot be determined. Re-queried per progress frame so the grid tracks a
+// live terminal resize.
+int terminalWidth(int fileDescriptor) {
+  struct winsize windowSize{};
+  if (ioctl(fileDescriptor, TIOCGWINSZ, &windowSize) == 0 &&
+      windowSize.ws_col > 0) {
+    return windowSize.ws_col;
+  }
+  return kDefaultTerminalWidth;
+}
+
 // Extracts a file path argument from a dot-command string like ".run <file>".
 // Returns the trimmed path, or empty string if none.
 std::string parseDotCommandPath(const std::string& command, size_t prefixLen) {
@@ -126,10 +151,17 @@ void Console::run() {
     std::string sql;
     auto success = folly::readFile(FLAGS_init.c_str(), sql);
     VELOX_USER_CHECK(success, "Cannot open init file: {}", FLAGS_init);
-    runMultiple(sql, FLAGS_print_timing);
+    runMultiple(sql, FLAGS_print_timing, /*showProgress=*/false);
   }
 
   const bool interactive = isatty(STDIN_FILENO);
+
+  // The live progress grid renders on stderr and is erased before results
+  // print, so it needs stderr to be a terminal and the runner to report
+  // progress. The interactive REPL shows it by default; the non-interactive
+  // paths (--query, piped stdin) only opt in via --show_live_progress.
+  const bool terminalProgress =
+      isatty(STDERR_FILENO) != 0 && runner_.supportsProgress();
 
   // Pick the user-SQL source: --query first, then piped stdin.
   std::string userSql;
@@ -141,9 +173,14 @@ void Console::run() {
 
   if (!userSql.empty()) {
     if (repeatInfo.is_default) {
-      runMultiple(userSql, FLAGS_print_timing);
+      runMultiple(
+          userSql,
+          FLAGS_print_timing,
+          FLAGS_show_live_progress && terminalProgress);
     } else {
-      // Explicit --repeat: treat the input as a single statement.
+      // Explicit --repeat: treat the input as a single statement. Skip the
+      // progress grid so its periodic redraws do not perturb the timing this
+      // mode exists to measure.
       runRepeat(userSql, FLAGS_repeat, FLAGS_print_timing);
     }
     return;
@@ -157,7 +194,7 @@ void Console::run() {
                  "Type .help for available commands."
               << std::endl;
   }
-  readCommands("SQL> ", interactive || FLAGS_print_timing);
+  readCommands("SQL> ", interactive || FLAGS_print_timing, terminalProgress);
 }
 
 namespace {
@@ -173,7 +210,10 @@ std::string formatTiming(
 }
 } // namespace
 
-bool Console::runOnce(std::string_view sql, bool printTiming) {
+bool Console::runOnce(
+    std::string_view sql,
+    bool printTiming,
+    bool showProgress) {
   QueryCompletionInfo completionInfo;
 
   SqlQueryRunner::RunOptions options{
@@ -185,10 +225,28 @@ bool Console::runOnce(std::string_view sql, bool printTiming) {
           [&](const QueryCompletionInfo& info) { completionInfo = info; },
   };
 
+  // When enabled by the caller, draw a live status grid on stderr while the
+  // query runs.
+  std::optional<cli::LiveProgressDisplay> progress;
+  if (showProgress) {
+    progress.emplace(
+        std::cerr,
+        cli::LiveProgressDisplay::Options{
+            .showSplitAndCpuDetail = FLAGS_debug});
+    options.onProgress =
+        [&](const facebook::axiom::runner::QueryProgress& info) {
+          progress->update(info, terminalWidth(STDERR_FILENO));
+        };
+  }
+
   cli::Timing cpuTiming;
   try {
     auto result = cli::time<SqlQueryRunner::SqlResult>(
         [&]() { return runner_.run(sql, options); }, cpuTiming);
+
+    if (progress) {
+      progress->clear();
+    }
 
     if (result.message.has_value()) {
       std::cout << result.message.value() << std::endl;
@@ -205,6 +263,9 @@ bool Console::runOnce(std::string_view sql, bool printTiming) {
     }
     return true;
   } catch (const std::exception&) {
+    if (progress) {
+      progress->clear();
+    }
     // run() threw after firing the completion callback, so telemetry was
     // captured.
     std::cerr << "Query failed: " << completionInfo.errorInfo->message
@@ -217,7 +278,10 @@ bool Console::runOnce(std::string_view sql, bool printTiming) {
   }
 }
 
-void Console::runMultiple(std::string_view sql, bool printTiming) {
+void Console::runMultiple(
+    std::string_view sql,
+    bool printTiming,
+    bool showProgress) {
   // Parse and execute statements one at a time so that DDL statements
   // (e.g. CREATE TABLE) take effect before subsequent statements (e.g.
   // INSERT) are parsed.
@@ -225,7 +289,7 @@ void Console::runMultiple(std::string_view sql, bool printTiming) {
     if (sqlText.empty()) {
       continue;
     }
-    if (!runOnce(sqlText, printTiming)) {
+    if (!runOnce(sqlText, printTiming, showProgress)) {
       return;
     }
   }
@@ -233,13 +297,16 @@ void Console::runMultiple(std::string_view sql, bool printTiming) {
 
 void Console::runRepeat(std::string_view sql, int repeat, bool printTiming) {
   for (int i = 0; i < repeat; ++i) {
-    if (!runOnce(sql, printTiming)) {
+    if (!runOnce(sql, printTiming, /*showProgress=*/false)) {
       return;
     }
   }
 }
 
-void Console::readCommands(const std::string& prompt, bool printTiming) {
+void Console::readCommands(
+    const std::string& prompt,
+    bool printTiming,
+    bool showProgress) {
   linenoiseSetMultiLine(1);
   linenoiseHistorySetMaxLen(1024);
 
@@ -255,7 +322,7 @@ void Console::readCommands(const std::string& prompt, bool printTiming) {
     std::string command = cli::readCommand(prompt, atEnd);
     if (atEnd) {
       if (!command.empty()) {
-        runMultiple(command, printTiming);
+        runMultiple(command, printTiming, showProgress);
       }
       break;
     }
@@ -305,7 +372,7 @@ void Console::readCommands(const std::string& prompt, bool printTiming) {
         std::cerr << "Cannot open file: " << filePath << std::endl;
         continue;
       }
-      runMultiple(sql, printTiming);
+      runMultiple(sql, printTiming, showProgress);
       continue;
     }
 
@@ -383,7 +450,7 @@ void Console::readCommands(const std::string& prompt, bool printTiming) {
       continue;
     }
 
-    runMultiple(command, printTiming);
+    runMultiple(command, printTiming, showProgress);
   }
 }
 } // namespace axiom::sql

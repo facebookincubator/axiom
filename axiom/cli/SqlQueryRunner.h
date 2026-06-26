@@ -176,6 +176,13 @@ class SqlQueryRunner {
     return user_;
   }
 
+  /// Whether live progress reporting is available, i.e. a progress scheduler
+  /// was supplied at construction. A query that sets RunOptions::onProgress
+  /// requires this; callers gate progress display on it.
+  bool supportsProgress() const {
+    return progressScheduler_ != nullptr;
+  }
+
   /// Initializes the runner with connectors, an optional permission check, and
   /// a query ID generator (defaults to QueryIdGenerator if not provided).
   /// Call once before running queries.

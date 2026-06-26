@@ -16,6 +16,7 @@
 
 #include <fmt/ranges.h>
 #include <folly/container/F14Map.h>
+#include <folly/executors/FunctionScheduler.h>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <filesystem>
@@ -41,7 +42,10 @@ int main(int argc, char** argv) {
       facebook::velox::memory::MemoryManager::Options{});
 
   facebook::axiom::Connectors connectors;
-  axiom::sql::SqlQueryRunner runner{axiom::sql::SystemUser::resolve()};
+  // Progress-polling scheduler for the console's live progress bar.
+  folly::FunctionScheduler progressScheduler;
+  axiom::sql::SqlQueryRunner runner{
+      axiom::sql::SystemUser::resolve(), &progressScheduler};
   runner.initialize([&]() {
     VELOX_USER_CHECK(
         FLAGS_data_path.empty() || FLAGS_etc_dir.empty(),

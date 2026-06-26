@@ -24,8 +24,31 @@ DECLARE_bool(debug);
 
 namespace axiom::sql {
 
-/// SQL console that executes queries from command-line flags, files, or
-/// interactive stdin input.
+/// Executes SQL through a SqlQueryRunner, driven from command-line flags, an
+/// init/`.run` file, piped stdin, or an interactive REPL, and prints results
+/// and timing to stdout/stderr.
+///
+/// A live progress grid is drawn on stderr while a query runs when stderr is a
+/// terminal and `runner` was built with a progress scheduler
+/// (SqlQueryRunner::supportsProgress()). The interactive REPL shows it by
+/// default; the non-interactive paths (`--query`, piped stdin) opt in via
+/// `--show_live_progress`. It is erased before results print, so redirected
+/// stdout stays clean, and it is hidden when stderr is redirected (scripted or
+/// captured runs). `--init` and `--repeat` never draw it.
+///
+/// @code
+///   folly::FunctionScheduler scheduler;  // enables progress reporting
+///   SqlQueryRunner runner{user, &scheduler};
+///   Console console{runner};
+///   console.initialize();
+///   console.run();
+/// @endcode
+///
+/// Invariants:
+/// - `runner` must outlive the Console.
+/// - run() owns process-wide stdin/stdout/stderr while it executes; do not
+///   write to them concurrently.
+/// - Query failures are caught and printed; only invalid CLI flags throw.
 class Console {
  public:
   explicit Console(SqlQueryRunner& runner);
@@ -44,19 +67,22 @@ class Console {
 
  private:
   // Runs a single SQL statement and prints results/timing. Returns true on
-  // success, false if the query threw.
-  bool runOnce(std::string_view sql, bool printTiming);
+  // success, false if the query threw. Draws the live progress grid when
+  // 'showProgress' is set.
+  bool runOnce(std::string_view sql, bool printTiming, bool showProgress);
 
   // Splits 'sql' into individual statements and runs each one in sequence.
-  // Stops on the first failure.
-  void runMultiple(std::string_view sql, bool printTiming);
+  // Stops on the first failure. Passes 'showProgress' through to each.
+  void runMultiple(std::string_view sql, bool printTiming, bool showProgress);
 
   // Runs 'sql' (a single SQL statement) 'repeat' times back-to-back.
   // Stops on the first failure.
   void runRepeat(std::string_view sql, int repeat, bool printTiming);
 
   // Reads and executes commands from standard input in interactive mode.
-  void readCommands(const std::string& prompt, bool printTiming);
+  // Passes 'showProgress' through to the statements it runs.
+  void
+  readCommands(const std::string& prompt, bool printTiming, bool showProgress);
 
   SqlQueryRunner& runner_;
 };
