@@ -23,14 +23,14 @@
 namespace facebook::axiom::connector::file {
 
 folly::coro::Task<SplitBatch> FileSplitSource::co_getSplits(
-    uint32_t /*maxSplitCount*/) {
+    uint32_t maxSplitCount) {
   SplitBatch batch;
-  if (!done_) {
+  while (next_ < filePaths_.size() && batch.splits.size() < maxSplitCount) {
     batch.splits.emplace_back(
-        std::make_shared<FileSplit>(connectorId_, filePath_));
-    done_ = true;
+        std::make_shared<FileSplit>(connectorId_, filePaths_[next_]));
+    ++next_;
   }
-  batch.noMoreSplits = true;
+  batch.noMoreSplits = next_ == filePaths_.size();
   co_return batch;
 }
 
@@ -38,8 +38,15 @@ TablePtr FileConnectorMetadata::findTable(const SchemaTableName& tableName) {
   auto& fileHandler = handler(tableName.schema);
   auto [filePath, suffix] = FileTable::parseName(tableName.table);
 
-  auto schema = suffix.empty() ? fileHandler.resolve(filePath, pool_.get())
-                               : fileHandler.metadataSchema(suffix);
+  velox::RowTypePtr schema;
+  if (suffix.empty()) {
+    // A directory resolves to the files it contains; take the schema from the
+    // first file and assume the rest share it.
+    schema = fileHandler.resolve(
+        fileHandler.listFiles(filePath).front(), pool_.get());
+  } else {
+    schema = fileHandler.metadataSchema(suffix);
+  }
 
   return std::make_shared<FileTable>(
       tableName, schema, connector_, filePath, suffix);
@@ -73,8 +80,10 @@ FileConnectorMetadata::SplitManager::getSplitSource(
     QueryRuntimeStats& /*runtimeStats*/) {
   auto* fileHandle = dynamic_cast<const FileTableHandle*>(tableHandle.get());
   VELOX_CHECK_NOT_NULL(fileHandle, "Expected FileTableHandle");
+  auto& fileHandler = handler(fileHandle->schemaTableName().schema);
   return std::make_shared<FileSplitSource>(
-      tableHandle->connectorId(), fileHandle->filePath());
+      tableHandle->connectorId(),
+      fileHandler.listFiles(fileHandle->filePath()));
 }
 
 } // namespace facebook::axiom::connector::file
