@@ -16,10 +16,12 @@
 
 #include "axiom/connectors/file/FileHandler.h"
 
+#include <algorithm>
 #include <map>
 
 #include "axiom/connectors/file/core/FileTable.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/file/FileSystems.h"
 
 namespace facebook::axiom::connector::file {
 
@@ -78,6 +80,33 @@ const velox::RowTypePtr& FileHandler::metadataSchema(
   VELOX_USER_CHECK(
       it != metadataTables_.end(), "Unsupported metadata table: {}", suffix);
   return it->second.schema;
+}
+
+std::vector<std::string> FileHandler::listFiles(const std::string& path) const {
+  if (path.empty() || path.back() != '/') {
+    return {path};
+  }
+
+  auto fileSystem = velox::filesystems::getFileSystem(path, /*config=*/nullptr);
+  auto entries = fileSystem->list(path);
+  std::vector<std::string> files;
+  files.reserve(entries.size());
+  for (auto& entry : entries) {
+    // The schema already selects the file format, so extensions are not
+    // required.
+    const auto slash = entry.find_last_of('/');
+    const std::string_view baseName = std::string_view(entry).substr(
+        slash == std::string::npos ? 0 : slash + 1);
+    if (baseName.empty() || baseName.front() == '_' ||
+        baseName.front() == '.') {
+      continue;
+    }
+    files.push_back(std::move(entry));
+  }
+  std::sort(files.begin(), files.end());
+  VELOX_USER_CHECK(
+      !files.empty(), "No data files found in directory: {}", path);
+  return files;
 }
 
 std::unique_ptr<velox::connector::DataSource> FileHandler::create(

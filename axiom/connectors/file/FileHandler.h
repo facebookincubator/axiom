@@ -60,6 +60,13 @@ class FileHandler {
   /// Returns the fixed schema for a metadata table by $-suffix.
   const velox::RowTypePtr& metadataSchema(const std::string& suffix) const;
 
+  /// Lists the data files for 'path'. A path that does not end in '/' is a
+  /// single file and yields itself. A path ending in '/' is a directory; its
+  /// entries are returned sorted, so a directory of files can be queried as one
+  /// table. File extensions are not required (the schema already selects the
+  /// format).
+  std::vector<std::string> listFiles(const std::string& path) const;
+
   /// Creates a DataSource for reading from a file. Dispatches to
   /// createDataSource() for row data or the registered factory for
   /// metadata tables.

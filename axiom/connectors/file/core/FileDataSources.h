@@ -121,6 +121,14 @@ class MetadataDataSource : public FileDataSource {
     }
   }
 
+  void addSplit(
+      std::shared_ptr<velox::connector::ConnectorSplit> split) override {
+    FileDataSource::addSplit(std::move(split));
+    // Each split is a separate file whose metadata must be emitted, so the
+    // single-batch build() runs once per split.
+    needData_ = true;
+  }
+
   std::optional<velox::RowVectorPtr> next(
       uint64_t /*size*/,
       velox::ContinueFuture& /*future*/) override {

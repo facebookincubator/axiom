@@ -40,6 +40,7 @@ constexpr const char* kRowGroups = "row_groups";
 
 const RowTypePtr& rowGroupsSchema() {
   static auto kSchema = ROW({
+      {"file_path", VARCHAR()},
       {"row_group_id", BIGINT()},
       {"num_rows", BIGINT()},
       {"total_byte_size", BIGINT()},
@@ -50,6 +51,7 @@ const RowTypePtr& rowGroupsSchema() {
 
 const RowTypePtr& columnChunksSchema() {
   static auto kSchema = ROW({
+      {"file_path", VARCHAR()},
       {"row_group_id", BIGINT()},
       {"column_id", BIGINT()},
       {"name", VARCHAR()},
@@ -71,6 +73,20 @@ std::unique_ptr<parquet::ParquetReader> openFile(
   dwio::common::ReaderOptions readerOptions(pool);
   auto fileSystem = filesystems::getFileSystem(filePath, /*config=*/nullptr);
   auto readFile = fileSystem->openFileForRead(filePath);
+
+  // Parquet files begin with the 4-byte magic "PAR1"; validate it up
+  // front.
+  constexpr std::string_view kParquetMagic = "PAR1";
+  VELOX_USER_CHECK_GE(
+      readFile->size(),
+      kParquetMagic.size(),
+      "Not a Parquet file (too small): {}",
+      filePath);
+  VELOX_USER_CHECK(
+      readFile->pread(0, kParquetMagic.size()) == kParquetMagic,
+      "Not a Parquet file (missing PAR1 magic): {}",
+      filePath);
+
   auto input =
       std::make_unique<dwio::common::BufferedInput>(std::move(readFile), *pool);
   return std::make_unique<parquet::ParquetReader>(
@@ -92,6 +108,7 @@ class ParquetDataSource : public StreamingDataSource {
  protected:
   void onSplit(const std::string& filePath) override {
     reader_ = openFile(filePath, pool_);
+    validateFileSchema(filePath);
     dwio::common::RowReaderOptions rowReaderOptions;
     rowReaderOptions.select(
         std::make_shared<dwio::common::ColumnSelector>(
@@ -119,6 +136,30 @@ class ParquetDataSource : public StreamingDataSource {
   }
 
  private:
+  // A directory read takes the table schema from the first file and assumes the
+  // rest match. Verify each projected column exists in this file with the same
+  // type — the footer is already open, so this adds no I/O — and fail naming
+  // the offending file rather than misreading it.
+  void validateFileSchema(const std::string& filePath) {
+    const auto& fileType = reader_->rowType();
+    for (auto i = 0; i < outputType_->size(); ++i) {
+      const auto& name = outputType_->nameOf(i);
+      auto index = fileType->getChildIdxIfExists(name);
+      VELOX_USER_CHECK(
+          index.has_value(),
+          "Directory file is missing column '{}' from the table schema: {}",
+          name,
+          filePath);
+      VELOX_USER_CHECK(
+          fileType->childAt(*index)->equivalent(*outputType_->childAt(i)),
+          "Directory file column '{}' is {}, but the table schema expects {}: {}",
+          name,
+          fileType->childAt(*index)->toString(),
+          outputType_->childAt(i)->toString(),
+          filePath);
+    }
+  }
+
   std::vector<std::string> projectedColumns_;
   std::unique_ptr<parquet::ParquetReader> reader_;
   std::unique_ptr<dwio::common::RowReader> rowReader_;
@@ -140,6 +181,8 @@ class RowGroupsDataSource : public MetadataDataSource {
     auto fileMetadata = reader->fileMetaData();
     auto numRowGroups = static_cast<vector_size_t>(fileMetadata.numRowGroups());
 
+    auto filePaths = BaseVector::create<FlatVector<StringView>>(
+        VARCHAR(), numRowGroups, pool_);
     auto rowGroupIds =
         BaseVector::create<FlatVector<int64_t>>(BIGINT(), numRowGroups, pool_);
     auto numRows =
@@ -151,6 +194,7 @@ class RowGroupsDataSource : public MetadataDataSource {
 
     for (vector_size_t i = 0; i < numRowGroups; ++i) {
       auto rowGroup = fileMetadata.rowGroup(i);
+      filePaths->set(i, StringView(split_->filePath));
       rowGroupIds->set(i, static_cast<int64_t>(i));
       numRows->set(i, rowGroup.numRows());
       totalByteSize->set(i, rowGroup.totalByteSize());
@@ -163,7 +207,11 @@ class RowGroupsDataSource : public MetadataDataSource {
         nullptr,
         numRowGroups,
         std::vector<VectorPtr>{
-            rowGroupIds, numRows, totalByteSize, totalCompressedSize});
+            filePaths,
+            rowGroupIds,
+            numRows,
+            totalByteSize,
+            totalCompressedSize});
   }
 };
 
@@ -310,6 +358,8 @@ class ColumnChunksDataSource : public MetadataDataSource {
       totalRows += fileMetadata.rowGroup(rg).numColumns();
     }
 
+    auto filePaths =
+        BaseVector::create<FlatVector<StringView>>(VARCHAR(), totalRows, pool_);
     auto rowGroupIds =
         BaseVector::create<FlatVector<int64_t>>(BIGINT(), totalRows, pool_);
     auto columnIds =
@@ -352,6 +402,7 @@ class ColumnChunksDataSource : public MetadataDataSource {
 
         auto stats = readColumnChunkStats(chunk, leaf.type, rowGroup.numRows());
 
+        filePaths->set(row, StringView(split_->filePath));
         rowGroupIds->set(row, static_cast<int64_t>(rg));
         columnIds->set(row, static_cast<int64_t>(col));
         names->set(row, StringView(leaf.path));
@@ -373,6 +424,7 @@ class ColumnChunksDataSource : public MetadataDataSource {
         nullptr,
         row,
         std::vector<VectorPtr>{
+            filePaths,
             rowGroupIds,
             columnIds,
             names,
@@ -440,15 +492,7 @@ void registerParquetHandler() {
 velox::RowTypePtr ParquetFileHandler::resolve(
     const std::string& filePath,
     velox::memory::MemoryPool* pool) const {
-  velox::dwio::common::ReaderOptions readerOptions(pool);
-  auto fileSystem =
-      velox::filesystems::getFileSystem(filePath, /*config=*/nullptr);
-  auto readFile = fileSystem->openFileForRead(filePath);
-  auto input = std::make_unique<velox::dwio::common::BufferedInput>(
-      std::move(readFile), *pool);
-  auto reader = std::make_unique<velox::parquet::ParquetReader>(
-      std::move(input), readerOptions);
-  return reader->rowType();
+  return openFile(filePath, pool)->rowType();
 }
 
 std::unique_ptr<velox::connector::DataSource>
