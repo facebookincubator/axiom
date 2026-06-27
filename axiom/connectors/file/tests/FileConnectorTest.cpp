@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include <folly/ScopeGuard.h>
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 
@@ -22,9 +21,8 @@
 #include "axiom/cli/SqlQueryRunner.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/parquet/writer/Writer.h"
-#include "velox/exec/tests/utils/QueryAssertions.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::axiom::connector::file {
@@ -50,8 +48,8 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
       return std::make_pair(std::string(kConnectorId), std::string("parquet"));
     });
 
-    tempFile_ = exec::test::TempFilePath::create();
-    parquetPath_ = tempFile_->getPath() + ".parquet";
+    tempDir_ = velox::common::testutil::TempDirectoryPath::create();
+    parquetPath_ = fmt::format("{}/test.parquet", tempDir_->getPath());
     writeTestParquetFile(parquetPath_);
   }
 
@@ -59,14 +57,19 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
     runner_.reset();
     // Connectors' destructor unregisters the connector and its metadata.
     connectors_.reset();
-    std::remove(parquetPath_.c_str());
   }
 
   void writeTestParquetFile(const std::string& path) {
-    auto rowVector = makeRowVector(
-        {"id", "name"},
-        {makeFlatVector<int64_t>({1, 2, 3}),
-         makeFlatVector<StringView>({"alpha", "beta", "gamma"})});
+    writeParquet(
+        path,
+        makeRowVector(
+            {"id", "name"},
+            {makeFlatVector<int64_t>({1, 2, 3}),
+             makeFlatVector<StringView>({"alpha", "beta", "gamma"})}));
+  }
+
+  // Writes 'rowVector' to 'path' as a single-row-group Parquet file.
+  void writeParquet(const std::string& path, const RowVectorPtr& rowVector) {
     auto schema = asRowType(rowVector->type());
 
     dwio::common::WriterOptions writerOptions;
@@ -79,13 +82,30 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
     writer->close();
   }
 
+  // Runs 'sql' and returns its result batches, failing with the query's own
+  // error message if it reported one.
+  std::vector<RowVectorPtr> run(const std::string& sql) {
+    auto result = runner_->run(sql, {});
+    VELOX_CHECK(!result.message.has_value(), "{}", *result.message);
+    return std::move(result.results);
+  }
+
   // Runs a SELECT and returns its single result vector.
   RowVectorPtr query(const std::string& sql) {
-    auto result = runner_->run(sql, {});
-    VELOX_CHECK(
-        !result.message.has_value(), "Query produced no result: {}", sql);
-    VELOX_CHECK_EQ(result.results.size(), 1);
-    return result.results[0];
+    auto results = run(sql);
+    VELOX_CHECK_EQ(results.size(), 1);
+    return results[0];
+  }
+
+  // Total number of result rows across all batches, so an empty result (zero
+  // batches or a single empty batch) can be asserted without query()'s
+  // single-vector requirement.
+  int64_t countResultRows(const std::string& sql) {
+    int64_t total = 0;
+    for (const auto& batch : run(sql)) {
+      total += batch->size();
+    }
+    return total;
   }
 
   // SQL reference for the data table.
@@ -98,9 +118,43 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
     return fmt::format("file.\"parquet\".\"{}${}\"", parquetPath_, suffix);
   }
 
+  // Runs DESC on 'name' and returns its (column, type) result.
+  RowVectorPtr describeTable(const std::string& name) {
+    return query(fmt::format("DESC {}", name));
+  }
+
+  // Asserts DESC on 'name' reports 'schema' as (column, type) rows in schema
+  // order. Expected type strings are derived from 'schema' via
+  // Type::toString(), matching how DESC renders them.
+  void assertDescribeTable(const std::string& name, const RowTypePtr& schema) {
+    std::vector<std::string> types;
+    for (const auto& child : schema->children()) {
+      types.push_back(child->toString());
+    }
+    test::assertEqualVectors(
+        describeTable(name),
+        makeRowVector(
+            {"column", "type"},
+            {makeFlatVector(schema->names()), makeFlatVector(types)}));
+  }
+
+  // Asserts SHOW SCHEMAS via 'sql' returns exactly 'expectedSchema' in the
+  // single-column "Schema" result.
+  void assertShowSchemas(
+      const std::string& sql,
+      const std::string& expectedSchema) {
+    test::assertEqualVectors(
+        query(sql),
+        makeRowVector(
+            {"Schema"}, {makeFlatVector<std::string>({expectedSchema})}));
+  }
+
   std::unique_ptr<Connectors> connectors_;
   std::unique_ptr<::axiom::sql::SqlQueryRunner> runner_;
-  std::shared_ptr<exec::test::TempFilePath> tempFile_;
+  // Temp directory holding all Parquet files; its destructor removes the
+  // directory and everything written into it.
+  std::shared_ptr<velox::common::testutil::TempDirectoryPath> tempDir_;
+  // Path of the default test Parquet file inside tempDir_.
   std::string parquetPath_;
 };
 
@@ -161,6 +215,55 @@ TEST_F(FileConnectorTest, columnChunksStatistics) {
            makeFlatVector<int64_t>({0, 0})}));
 }
 
+TEST_F(FileConnectorTest, showSchemas) {
+  // SHOW SCHEMAS lists the registered file-format handlers; only the Parquet
+  // handler is registered. The assertion is exact, so no other schema may leak
+  // in.
+  assertShowSchemas("SHOW SCHEMAS FROM file", "parquet");
+
+  // Without an explicit FROM, SHOW SCHEMAS resolves against the session's
+  // default connector ('file').
+  assertShowSchemas("SHOW SCHEMAS", "parquet");
+
+  // A LIKE pattern that matches no handler yields zero rows.
+  EXPECT_EQ(countResultRows("SHOW SCHEMAS FROM file LIKE 'orc'"), 0);
+}
+
+TEST_F(FileConnectorTest, describe) {
+  // DESC resolves the file path through the handler and reports the file schema
+  // as (column, type) rows in file-schema order.
+  assertDescribeTable(table(), ROW({"id", "name"}, {BIGINT(), VARCHAR()}));
+
+  // DESC on a $-suffix metadata table reports that table's fixed metadata
+  // schema rather than the data file's schema.
+  assertDescribeTable(
+      metadataTable("row_groups"),
+      ROW({"row_group_id",
+           "num_rows",
+           "total_byte_size",
+           "total_compressed_size"},
+          {BIGINT(), BIGINT(), BIGINT(), BIGINT()}));
+}
+
+TEST_F(FileConnectorTest, describeErrors) {
+  // DESC on a schema with no registered handler fails.
+  VELOX_ASSERT_THROW(
+      runner_->run(fmt::format("DESC file.\"orc\".\"{}\"", parquetPath_), {}),
+      "Unsupported file format: orc");
+
+  // DESC on an unknown $-suffix metadata table fails during schema resolution.
+  VELOX_ASSERT_THROW(
+      runner_->run(fmt::format("DESC {}", metadataTable("stripes")), {}),
+      "Unsupported metadata table: stripes");
+
+  // DESC on a path with no underlying file fails when the handler reads the
+  // footer.
+  VELOX_ASSERT_THROW(
+      runner_->run(
+          "DESC file.\"parquet\".\"/tmp/axiom_no_such_file.parquet\"", {}),
+      "No such file or directory: /tmp/axiom_no_such_file.parquet");
+}
+
 TEST_F(FileConnectorTest, unsupportedMetadataTableFails) {
   VELOX_ASSERT_THROW(
       runner_->run(
@@ -171,20 +274,17 @@ TEST_F(FileConnectorTest, unsupportedMetadataTableFails) {
 TEST_F(FileConnectorTest, separatorInFileName) {
   // A '$' in the file name is part of the path, not a metadata-table suffix:
   // the text after it contains a '.', so the name resolves to the data table.
-  auto path = tempFile_->getPath() + "foo$bar.parquet";
+  auto path = fmt::format("{}/foo$bar.parquet", tempDir_->getPath());
   writeTestParquetFile(path);
-  SCOPE_EXIT {
-    std::remove(path.c_str());
-  };
 
-  exec::test::assertEqualResults(
-      {query(
+  test::assertEqualVectors(
+      query(
           fmt::format(
-              "SELECT * FROM file.\"parquet\".\"{}\" ORDER BY id", path))},
-      {makeRowVector(
+              "SELECT * FROM file.\"parquet\".\"{}\" ORDER BY id", path)),
+      makeRowVector(
           {"id", "name"},
           {makeFlatVector<int64_t>({1, 2, 3}),
-           makeFlatVector<StringView>({"alpha", "beta", "gamma"})})});
+           makeFlatVector<StringView>({"alpha", "beta", "gamma"})}));
 }
 
 } // namespace
