@@ -25,7 +25,10 @@
 
 namespace facebook::axiom::connector::file {
 
-/// Carries the file path for a single file read.
+/// Carries the file path for a single file read. For a directory query, the
+/// file path disambiguates file-local metadata (e.g. a Parquet row group index,
+/// which restarts at 0 in each file) so rows from different files can be told
+/// apart and joined safely.
 struct FileSplit : public velox::connector::ConnectorSplit {
   FileSplit(const std::string& connectorId, std::string filePath)
       : ConnectorSplit(connectorId), filePath(std::move(filePath)) {}

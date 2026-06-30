@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+#include <filesystem>
+#include <fstream>
+
 #include <folly/init/Init.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -25,6 +28,7 @@
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::axiom::connector::file {
@@ -116,6 +120,19 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
         makeRowVector(
             {"id", "address", "tags", "lookup"},
             {makeFlatVector<int64_t>({1, 2}), address, tags, lookup}));
+  }
+
+  // Writes a single-row-group file with an (id, name) schema. Used to populate
+  // a directory with several files sharing one schema.
+  void writeRows(
+      const std::string& path,
+      const std::vector<int64_t>& ids,
+      const std::vector<StringView>& names) {
+    writeParquetFile(
+        path,
+        makeRowVector(
+            {"id", "name"},
+            {makeFlatVector<int64_t>(ids), makeFlatVector<StringView>(names)}));
   }
 
   // Runs 'sql' and returns its result batches, failing with the query's own
@@ -345,11 +362,12 @@ TEST_F(FileConnectorTest, describe) {
   // schema rather than the data file's schema.
   assertDescribeTable(
       metadataTable("row_groups"),
-      ROW({"row_group_id",
+      ROW({"file_path",
+           "row_group_id",
            "num_rows",
            "total_byte_size",
            "total_compressed_size"},
-          {BIGINT(), BIGINT(), BIGINT(), BIGINT()}));
+          {VARCHAR(), BIGINT(), BIGINT(), BIGINT(), BIGINT()}));
 }
 
 TEST_F(FileConnectorTest, describeErrors) {
@@ -452,6 +470,191 @@ TEST_F(FileConnectorTest, columnChunksDeeplyNestedSchema) {
                 "events.list.element.count",
                 "by_region.key_value.key",
                 "by_region.key_value.value.total"})}));
+}
+
+TEST_F(FileConnectorTest, multipleFilesInDirectory) {
+  // A trailing-slash path is a directory; the connector reads every Parquet
+  // file it contains as one logical table.
+  auto dir = exec::test::TempDirectoryPath::create();
+  writeRows(
+      fmt::format("{}/a.parquet", dir->getPath()), {1, 3}, {"alpha", "gamma"});
+  writeRows(
+      fmt::format("{}/b.parquet", dir->getPath()), {2, 4}, {"beta", "delta"});
+
+  test::assertEqualVectors(
+      query(
+          fmt::format(
+              "SELECT * FROM file.\"parquet\".\"{}/\" ORDER BY id",
+              dir->getPath())),
+      makeRowVector(
+          {"id", "name"},
+          {makeFlatVector<int64_t>({1, 2, 3, 4}),
+           makeFlatVector<StringView>({"alpha", "beta", "gamma", "delta"})}));
+}
+
+TEST_F(FileConnectorTest, rowGroupsAcrossFilesInDirectory) {
+  // Metadata over a directory emits rows for every file. Each file's
+  // row_group_id restarts at 0 (both files here are a single row group), so
+  // file_path is what keeps rows from different files distinct.
+  auto dir = exec::test::TempDirectoryPath::create();
+  auto pathA = fmt::format("{}/a.parquet", dir->getPath());
+  auto pathB = fmt::format("{}/b.parquet", dir->getPath());
+  writeRows(pathA, {1, 2}, {"alpha", "beta"});
+  writeRows(pathB, {3, 4, 5}, {"c", "d", "e"});
+
+  test::assertEqualVectors(
+      query(
+          fmt::format(
+              "SELECT file_path, row_group_id, num_rows "
+              "FROM file.\"parquet\".\"{}/$row_groups\" ORDER BY file_path",
+              dir->getPath())),
+      makeRowVector(
+          {"file_path", "row_group_id", "num_rows"},
+          {makeFlatVector<std::string>({pathA, pathB}),
+           makeFlatVector<int64_t>({0, 0}),
+           makeFlatVector<int64_t>({2, 3})}));
+}
+
+TEST_F(FileConnectorTest, columnChunksAcrossFilesInDirectory) {
+  // column_chunks over a directory also restarts row_group_id at 0 per file.
+  // file_path keeps each file's chunks distinct, so keying on
+  // (file_path, row_group_id) does not mix metadata across files.
+  auto dir = exec::test::TempDirectoryPath::create();
+  auto pathA = fmt::format("{}/a.parquet", dir->getPath());
+  auto pathB = fmt::format("{}/b.parquet", dir->getPath());
+  writeRows(pathA, {1, 2}, {"alpha", "beta"});
+  writeRows(pathB, {3, 4}, {"c", "d"});
+
+  test::assertEqualVectors(
+      query(
+          fmt::format(
+              "SELECT file_path, row_group_id, column_id, name "
+              "FROM file.\"parquet\".\"{}/$column_chunks\" "
+              "ORDER BY file_path, column_id",
+              dir->getPath())),
+      makeRowVector(
+          {"file_path", "row_group_id", "column_id", "name"},
+          {makeFlatVector<std::string>({pathA, pathA, pathB, pathB}),
+           makeFlatVector<int64_t>({0, 0, 0, 0}),
+           makeFlatVector<int64_t>({0, 1, 0, 1}),
+           makeFlatVector<StringView>({"id", "name", "id", "name"})}));
+}
+
+TEST_F(FileConnectorTest, emptyDirectoryFails) {
+  // A directory with no data files has nothing to scan.
+  auto dir = exec::test::TempDirectoryPath::create();
+  VELOX_ASSERT_THROW(
+      runner_->run(
+          fmt::format("SELECT * FROM file.\"parquet\".\"{}/\"", dir->getPath()),
+          {}),
+      "No data files found in directory");
+}
+
+TEST_F(FileConnectorTest, directoryReadsExtensionlessFilesAndSkipsMarkers) {
+  // Data-lake directories often hold extensionless part files alongside writer
+  // marker files (e.g. _SUCCESS, .crc). The scan reads every file regardless of
+  // extension but skips names beginning with '_' or '.'.
+  auto dir = exec::test::TempDirectoryPath::create();
+  writeRows(
+      fmt::format("{}/part-00000", dir->getPath()), {1, 2}, {"alpha", "beta"});
+  writeRows(fmt::format("{}/part-00001", dir->getPath()), {3}, {"gamma"});
+
+  // Marker files with non-Parquet content: reading them as data would throw, so
+  // a passing test proves they are skipped.
+  for (const auto* marker : {"_SUCCESS", ".part-00000.crc"}) {
+    std::ofstream{fmt::format("{}/{}", dir->getPath(), marker)}
+        << "not parquet";
+  }
+
+  exec::test::assertEqualResults(
+      {makeRowVector(
+          {"id", "name"},
+          {makeFlatVector<int64_t>({1, 2, 3}),
+           makeFlatVector<std::string>({"alpha", "beta", "gamma"})})},
+      queryAll(
+          fmt::format(
+              "SELECT * FROM file.\"parquet\".\"{}/\"", dir->getPath())));
+}
+
+TEST_F(FileConnectorTest, directorySkipsNonDataEntries) {
+  // The '_'/'.' name rule does not cover a visible non-Parquet sidecar file or
+  // a nested partition directory. Both must be skipped via the PAR1 magic check
+  // — a non-Parquet file would otherwise fail the reader, and a subdirectory is
+  // not a file at all. The subdirectory holds its own Parquet file to confirm
+  // listing does not recurse into it.
+  auto dir = exec::test::TempDirectoryPath::create();
+  writeRows(
+      fmt::format("{}/a.parquet", dir->getPath()), {1, 2}, {"alpha", "beta"});
+
+  // Visible non-Parquet sidecar (no '_'/'.' prefix to hide it).
+  std::ofstream{fmt::format("{}/manifest.json", dir->getPath())}
+      << "{\"not\": \"parquet\"}";
+
+  // Nested directory with its own Parquet file; its rows must not appear.
+  const auto subDir = fmt::format("{}/nested", dir->getPath());
+  std::filesystem::create_directory(subDir);
+  writeRows(fmt::format("{}/b.parquet", subDir), {3}, {"gamma"});
+
+  exec::test::assertEqualResults(
+      {makeRowVector(
+          {"id", "name"},
+          {makeFlatVector<int64_t>({1, 2}),
+           makeFlatVector<std::string>({"alpha", "beta"})})},
+      queryAll(
+          fmt::format(
+              "SELECT * FROM file.\"parquet\".\"{}/\"", dir->getPath())));
+}
+
+TEST_F(FileConnectorTest, nonParquetFileFails) {
+  // Without extension filtering, a non-Parquet file reaches the reader. It must
+  // fail with a clear error naming the file rather than a cryptic reader error.
+  auto path = fmt::format("{}/data.bin", tempDir_->getPath());
+  std::ofstream{path} << "this is not a parquet file";
+  VELOX_ASSERT_THROW(
+      runner_->run(
+          fmt::format("SELECT * FROM file.\"parquet\".\"{}\"", path), {}),
+      "Not a Parquet file");
+}
+
+TEST_F(FileConnectorTest, mismatchedSchemaInDirectoryFails) {
+  // The table schema is taken from the first file (a.parquet). A later file
+  // whose column types differ must fail clearly, naming the column, rather than
+  // misreading it as the table's type.
+  auto dir = exec::test::TempDirectoryPath::create();
+  writeRows(fmt::format("{}/a.parquet", dir->getPath()), {1}, {"alpha"});
+  // b.parquet shares the column names but 'name' is BIGINT, not VARCHAR.
+  writeParquetFile(
+      fmt::format("{}/b.parquet", dir->getPath()),
+      makeRowVector(
+          {"id", "name"},
+          {makeFlatVector<int64_t>({2}), makeFlatVector<int64_t>({99})}));
+
+  VELOX_ASSERT_THROW(
+      runner_->run(
+          fmt::format(
+              "SELECT * FROM file.\"parquet\".\"{}/\" ORDER BY id",
+              dir->getPath()),
+          {}),
+      "the table schema expects");
+}
+
+TEST_F(FileConnectorTest, missingColumnInDirectoryFails) {
+  // A directory file missing a column from the table schema (taken from the
+  // first file) fails clearly rather than silently reading nulls.
+  auto dir = exec::test::TempDirectoryPath::create();
+  writeRows(fmt::format("{}/a.parquet", dir->getPath()), {1}, {"alpha"});
+  // b.parquet has only 'id' — it is missing 'name'.
+  writeParquetFile(
+      fmt::format("{}/b.parquet", dir->getPath()),
+      makeRowVector({"id"}, {makeFlatVector<int64_t>({2})}));
+
+  VELOX_ASSERT_THROW(
+      runner_->run(
+          fmt::format(
+              "SELECT * FROM file.\"parquet\".\"{}/\" ORDER BY id",
+              dir->getPath()),
+          {}),
+      "is missing column");
 }
 
 TEST_F(FileConnectorTest, unsupportedMetadataTableFails) {
