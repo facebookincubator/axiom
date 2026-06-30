@@ -1326,8 +1326,17 @@ class RelationPlanner : public AstVisitor {
     displayNames_.lastNames.clear();
 
     if (const auto& with = query->with()) {
+      // Names must be unique within a single WITH list. A nested WITH may
+      // still reuse an enclosing name -- that is shadowing, handled below.
+      std::unordered_set<std::string> namesInList;
       for (const auto& withQuery : with->queries()) {
         const auto cteName = canonicalizeIdentifier(*withQuery->name());
+        AXIOM_PRESTO_SEMANTIC_CHECK(
+            namesInList.insert(cteName).second,
+            withQuery->location(),
+            cteName,
+            "Duplicate WITH query name: {}",
+            cteName);
         // A CTE in a WITH RECURSIVE block is only recursive if its body
         // actually references its own name. Otherwise it's a standard union.
         bool selfReferential = false;
