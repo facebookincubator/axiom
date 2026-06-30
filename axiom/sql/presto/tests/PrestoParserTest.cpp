@@ -1057,13 +1057,22 @@ TEST_F(PrestoParserTest, showTables) {
       "Schema does not exist");
 }
 
-TEST_F(PrestoParserTest, describe) {
+TEST_F(PrestoParserTest, describeTable) {
   auto matcher = matchValues();
   testSelect("DESCRIBE nation", matcher);
 
   testSelect("DESC orders", matcher);
 
   testSelect("SHOW COLUMNS FROM lineitem", matcher);
+}
+
+TEST_F(PrestoParserTest, describeView) {
+  connector_->createView(
+      facebook::axiom::SchemaTableName{"default", "view"},
+      ROW({"a", "b"}, {INTEGER(), VARCHAR()}),
+      "SELECT 1 AS a, 'x' AS b");
+  testSelect("DESCRIBE view", matchValues());
+  testSelect("SHOW COLUMNS FROM view", matchValues());
 }
 
 TEST_F(PrestoParserTest, showFunctions) {
