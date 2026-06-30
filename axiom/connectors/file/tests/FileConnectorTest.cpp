@@ -100,6 +100,24 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
         /*rowsInRowGroup=*/2);
   }
 
+  // Writes a file with struct, array, and map columns so the row group holds
+  // more leaf column chunks than top-level fields, exercising every branch of
+  // the leaf-flattening that labels chunks by dotted path.
+  void writeNestedParquetFile(const std::string& path) {
+    auto address = makeRowVector(
+        {"city", "zip"},
+        {makeFlatVector<StringView>({"nyc", "sf"}),
+         makeFlatVector<int64_t>({10001, 94016})});
+    auto tags = makeArrayVector<int32_t>({{1, 2}, {3}});
+    auto lookup =
+        makeMapVector<StringView, int64_t>({{{"a", 10}}, {{"b", 20}}});
+    writeParquetFile(
+        path,
+        makeRowVector(
+            {"id", "address", "tags", "lookup"},
+            {makeFlatVector<int64_t>({1, 2}), address, tags, lookup}));
+  }
+
   // Runs 'sql' and returns its result batches, failing with the query's own
   // error message if it reported one.
   std::vector<RowVectorPtr> run(const std::string& sql) {
@@ -351,6 +369,89 @@ TEST_F(FileConnectorTest, describeErrors) {
       runner_->run(
           "DESC file.\"parquet\".\"/tmp/axiom_no_such_file.parquet\"", {}),
       "No such file or directory: /tmp/axiom_no_such_file.parquet");
+}
+
+TEST_F(FileConnectorTest, columnChunksNestedSchema) {
+  // Struct, array, and map columns each flatten to one leaf column chunk per
+  // leaf field, labeled by its physical path_in_schema. Arrays and maps carry
+  // the synthetic "list"/"key_value" group levels, so the chunk for 'tags' is
+  // "tags.list.element" rather than the logical "tags.element".
+  auto nestedPath = fmt::format("{}/nested.parquet", tempDir_->getPath());
+  writeNestedParquetFile(nestedPath);
+
+  test::assertEqualVectors(
+      query(
+          fmt::format(
+              "SELECT column_id, name FROM file.\"parquet\".\"{}$column_chunks\" "
+              "ORDER BY column_id",
+              nestedPath)),
+      makeRowVector(
+          {"column_id", "name"},
+          {makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5}),
+           makeFlatVector<StringView>(
+               {"id",
+                "address.city",
+                "address.zip",
+                "tags.list.element",
+                "lookup.key_value.key",
+                "lookup.key_value.value"})}));
+
+  // The flattened leaf type is used to decode statistics, so a nested leaf
+  // reports typed min/max instead of falling back to none. address.zip holds
+  // {10001, 94016} with no nulls.
+  test::assertEqualVectors(
+      query(
+          fmt::format(
+              "SELECT min, max, null_count FROM "
+              "file.\"parquet\".\"{}$column_chunks\" WHERE name = 'address.zip'",
+              nestedPath)),
+      makeRowVector(
+          {"min", "max", "null_count"},
+          {makeFlatVector<StringView>({"10001"}),
+           makeFlatVector<StringView>({"94016"}),
+           makeFlatVector<int64_t>({0})}));
+}
+
+TEST_F(FileConnectorTest, columnChunksDeeplyNestedSchema) {
+  // Leaves under an array-of-struct and a map-of-struct are labeled by their
+  // physical path_in_schema, recursing through the "list"/"key_value" group
+  // levels and the element/key/value segments into the struct field names.
+  auto path = fmt::format("{}/deep.parquet", tempDir_->getPath());
+
+  // events: ARRAY<ROW(kind VARCHAR, count BIGINT)>
+  auto eventRows = makeRowVector(
+      {"kind", "count"},
+      {makeFlatVector<StringView>({"click", "view"}),
+       makeFlatVector<int64_t>({1, 2})});
+  auto events = makeArrayVector({0, 1}, eventRows);
+
+  // by_region: MAP<VARCHAR, ROW(total BIGINT)>
+  auto regionValues =
+      makeRowVector({"total"}, {makeFlatVector<int64_t>({10, 20})});
+  auto byRegion = makeMapVector(
+      {0, 1}, makeFlatVector<StringView>({"us", "eu"}), regionValues);
+
+  writeParquetFile(
+      path,
+      makeRowVector(
+          {"id", "events", "by_region"},
+          {makeFlatVector<int64_t>({1, 2}), events, byRegion}));
+
+  test::assertEqualVectors(
+      query(
+          fmt::format(
+              "SELECT column_id, name FROM file.\"parquet\".\"{}$column_chunks\" "
+              "ORDER BY column_id",
+              path)),
+      makeRowVector(
+          {"column_id", "name"},
+          {makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
+           makeFlatVector<StringView>(
+               {"id",
+                "events.list.element.kind",
+                "events.list.element.count",
+                "by_region.key_value.key",
+                "by_region.key_value.value.total"})}));
 }
 
 TEST_F(FileConnectorTest, unsupportedMetadataTableFails) {
