@@ -1867,8 +1867,20 @@ SqlStatementPtr parseShowColumns(
   const auto [connectorId, connectorTable] =
       toConnectorTable(*showColumns.table(), defaultConnectorId, defaultSchema);
 
-  const auto schema =
-      findTable(*showColumns.table(), connectorId, connectorTable)->type();
+  const auto metadata =
+      facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId);
+  facebook::velox::RowTypePtr schema;
+  if (const auto table = metadata->findTable(connectorTable)) {
+    schema = table->type();
+  } else if (const auto view = metadata->findView(connectorTable)) {
+    schema = view->type();
+  } else {
+    AXIOM_PRESTO_SEMANTIC_FAIL(
+        showColumns.table()->location(),
+        showColumns.table()->suffix(),
+        "Table not found: {}",
+        showColumns.table()->fullyQualifiedName());
+  }
 
   std::vector<Variant> data;
   data.reserve(schema->size());
