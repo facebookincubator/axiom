@@ -522,16 +522,14 @@ class RelationPlanner : public AstVisitor {
     }
 
     auto withIt = withQueries_.find(tableName);
-    if (withIt != withQueries_.end()) {
-      // Temporarily remove the CTE from the map while processing its body
-      // to prevent infinite recursion when a CTE has the same name as a
-      // base table it references (e.g. WITH t AS (SELECT * FROM t)).
-      // Recursive CTEs are also pulled out so a sibling outer reference
-      // fired mid-translation cannot re-enter the same body.
-      auto entry = std::move(withIt->second);
-      withQueries_.erase(withIt);
+    if (withIt != withQueries_.end() && !withIt->second.empty()) {
+      // Pop the in-scope binding while translating its body so the CTE is not
+      // visible within itself; see withQueries_ for why the shadowed outer
+      // binding must stay resolvable here.
+      auto entry = std::move(withIt->second.back());
+      withIt->second.pop_back();
       SCOPE_EXIT {
-        withQueries_.insert_or_assign(tableName, std::move(entry));
+        withQueries_[tableName].push_back(std::move(entry));
       };
 
       if (entry.isRecursive) {
@@ -1328,8 +1326,17 @@ class RelationPlanner : public AstVisitor {
     displayNames_.lastNames.clear();
 
     if (const auto& with = query->with()) {
+      // Names must be unique within a single WITH list. A nested WITH may
+      // still reuse an enclosing name -- that is shadowing, handled below.
+      std::unordered_set<std::string> namesInList;
       for (const auto& withQuery : with->queries()) {
         const auto cteName = canonicalizeIdentifier(*withQuery->name());
+        AXIOM_PRESTO_SEMANTIC_CHECK(
+            namesInList.insert(cteName).second,
+            withQuery->location(),
+            cteName,
+            "Duplicate WITH query name: {}",
+            cteName);
         // A CTE in a WITH RECURSIVE block is only recursive if its body
         // actually references its own name. Otherwise it's a standard union.
         bool selfReferential = false;
@@ -1338,12 +1345,15 @@ class RelationPlanner : public AstVisitor {
           selfReferential = bodyQuery != nullptr &&
               presto::RecursiveCteValidator::referencesCte(*bodyQuery, cteName);
         }
-        withQueries_.insert_or_assign(
-            cteName, CteEntry{withQuery, selfReferential});
-        // A nested WITH binding shadows any enclosing recursive CTE of the
-        // same name; remove the in-flight step-body entry so processTable
-        // falls through to the new withQueries_ binding. processQuery's
-        // SCOPE_EXIT restores recursiveCteAnchors_ on exit.
+        // Push a new binding that shadows any enclosing-scope CTE of the same
+        // name; the enclosing binding stays underneath and becomes visible
+        // again inside this CTE's own body. processQuery's SCOPE_EXIT restores
+        // withQueries_ to its pre-WITH state on exit.
+        withQueries_[cteName].push_back(CteEntry{withQuery, selfReferential});
+        // A nested WITH binding also shadows any enclosing recursive CTE of
+        // the same name; remove the in-flight step-body anchor so processTable
+        // falls through to the new binding. processQuery's SCOPE_EXIT restores
+        // recursiveCteAnchors_ on exit.
         recursiveCteAnchors_.erase(cteName);
       }
     }
@@ -1542,7 +1552,13 @@ class RelationPlanner : public AstVisitor {
     std::shared_ptr<WithQuery> withQuery;
     bool isRecursive{false};
   };
-  std::unordered_map<std::string, CteEntry> withQueries_;
+  // Active CTE bindings keyed by name. Each name maps to a stack of bindings
+  // ordered outermost-first; back() is the binding currently in scope. A
+  // nested WITH that redefines a name pushes a new binding that shadows the
+  // enclosing one, which remains underneath. Stacking rather than overwriting
+  // is what lets a non-recursive CTE's own body -- which hides only its own
+  // binding -- resolve a same-name reference to the enclosing-scope CTE.
+  std::unordered_map<std::string, std::vector<CteEntry>> withQueries_;
   // Anchor PlanBuilder pointer for each recursive CTE currently being
   // translated. processTable consumes this when emitting the matching
   // RecursiveReferenceNode so step-body self-references inherit anchor

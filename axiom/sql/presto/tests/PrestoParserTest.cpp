@@ -315,6 +315,71 @@ TEST_F(PrestoParserTest, withShadowingCte) {
       matcher);
 }
 
+TEST_F(PrestoParserTest, withNestedSameNameResolvesToOuter) {
+  // A nested WITH redefines a CTE name from an enclosing scope, and the inner
+  // CTE's own body references that same name. A non-recursive CTE is not in
+  // scope within its own body, so the reference must resolve to the outer CTE.
+  auto matcher = matchValues().project().output({"x"});
+  testSelect(
+      "WITH t AS (SELECT 1 AS x) "
+      "SELECT * FROM (WITH t AS (SELECT * FROM t) SELECT * FROM t) sub",
+      matcher);
+}
+
+TEST_F(PrestoParserTest, withNestedSameNameMultiLevel) {
+  // Three levels of same-name shadowing. Each inner CTE body resolves its
+  // same-name reference to the next enclosing CTE, ultimately the outer
+  // VALUES.
+  auto matcher = matchValues().project().output({"x"});
+  testSelect(
+      "WITH t AS (SELECT 1 AS x) "
+      "SELECT * FROM (WITH t AS (SELECT * FROM t) "
+      "  SELECT * FROM (WITH t AS (SELECT * FROM t) SELECT * FROM t) s2) s1",
+      matcher);
+}
+
+TEST_F(PrestoParserTest, withSelfReferenceNoOuterStillErrors) {
+  // Genuine self-reference: a non-recursive CTE references its own name with
+  // no enclosing CTE and no base table of that name. Must still error rather
+  // than silently resolving.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(
+          "SELECT * FROM (WITH t AS (SELECT * FROM t) SELECT * FROM t) sub"),
+      "Table not found: t");
+}
+
+TEST_F(PrestoParserTest, withNestedSameNameColumnAliasesFollowBinding) {
+  // The inner CTE body references column 'a', which exists only on the outer
+  // CTE, so successful resolution proves the body bound to the outer CTE. The
+  // inner alias list (b) then renames it for the inner reference.
+  testSelect(
+      "WITH t(a) AS (SELECT 1) "
+      "SELECT * FROM (WITH t(b) AS (SELECT a FROM t) SELECT b FROM t) sub",
+      matchValues().project().project().project().project().project().output(
+          {"b"}));
+}
+
+TEST_F(PrestoParserTest, withNestedShadowsRecursiveCte) {
+  // A nested non-recursive CTE shadows an outer recursive CTE. The inner
+  // body's same-name reference resolves to the outer recursive CTE, expanding
+  // it into a FixedPointNode.
+  auto step = lp::test::LogicalPlanMatcherBuilder()
+                  .recursiveRef("r")
+                  .filter()
+                  .project()
+                  .build();
+  testSelect(
+      R"(
+        WITH RECURSIVE r(n) AS (
+          SELECT CAST(1 AS BIGINT)
+          UNION ALL
+          SELECT n + 1 FROM r WHERE n < 10
+        )
+        SELECT * FROM (WITH r AS (SELECT * FROM r) SELECT * FROM r) sub
+      )",
+      matchValues().project().project().fixedPoint(step, {"n"}).output());
+}
+
 TEST_F(PrestoParserTest, withNoLeaking) {
   // CTE defined inside a subquery is not visible outside.
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
@@ -354,6 +419,27 @@ TEST_F(PrestoParserTest, withColumnAliases) {
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("WITH t(a, b) AS (VALUES (1)) SELECT * FROM t"),
       "Column alias list size does not match the number of output columns");
+}
+
+TEST_F(PrestoParserTest, withDuplicateNamesRejected) {
+  // A name may appear at most once within a single WITH list.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(
+          "WITH a AS (SELECT 1 AS x), a AS (SELECT 2 AS y) SELECT * FROM a"),
+      "Duplicate WITH query name: a");
+
+  // Case-insensitive: 'A' and 'a' collide.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(
+          "WITH a AS (SELECT 1 AS x), A AS (SELECT 2 AS y) SELECT * FROM a"),
+      "Duplicate WITH query name: a");
+
+  // A nested WITH reusing an enclosing name is allowed (shadowing, not a
+  // duplicate within one list).
+  testSelect(
+      "WITH a AS (SELECT 1 AS x) "
+      "SELECT * FROM (WITH a AS (SELECT 2 AS y) SELECT * FROM a) sub",
+      matchValues().project().output({"y"}));
 }
 
 TEST_F(PrestoParserTest, withReferencedMultipleTimes) {
