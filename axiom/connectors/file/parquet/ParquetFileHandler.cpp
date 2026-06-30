@@ -16,6 +16,7 @@
 
 #include "axiom/connectors/file/parquet/ParquetFileHandler.h"
 
+#include <folly/String.h>
 #include <folly/synchronization/CallOnce.h>
 
 #include "axiom/connectors/file/core/FileDataSources.h"
@@ -238,6 +239,33 @@ ColumnChunkStats readColumnChunkStats(
   return stats;
 }
 
+// Flattens 'type' into its leaf types in document order, matching the order of
+// the per-leaf column chunks in a Parquet row group. Leaf names are not derived
+// here: they come from each chunk's physical path_in_schema metadata (see
+// ColumnChunksDataSource::build), which carries the synthetic repeated-group
+// levels ("list"/"key_value") that the logical row type omits. Only the leaf
+// types are collected, to decode each chunk's statistics.
+void collectLeafTypes(const TypePtr& type, std::vector<TypePtr>& leafTypes) {
+  switch (type->kind()) {
+    case TypeKind::ROW: {
+      const auto& rowType = type->asRow();
+      for (auto i = 0; i < rowType.size(); ++i) {
+        collectLeafTypes(rowType.childAt(i), leafTypes);
+      }
+      break;
+    }
+    case TypeKind::ARRAY:
+      collectLeafTypes(type->childAt(0), leafTypes);
+      break;
+    case TypeKind::MAP:
+      collectLeafTypes(type->childAt(0), leafTypes);
+      collectLeafTypes(type->childAt(1), leafTypes);
+      break;
+    default:
+      leafTypes.push_back(type);
+  }
+}
+
 class ColumnChunksDataSource : public MetadataDataSource {
  public:
   ColumnChunksDataSource(
@@ -254,7 +282,9 @@ class ColumnChunksDataSource : public MetadataDataSource {
   RowVectorPtr build() override {
     auto reader = openFile(split_->filePath, pool_);
     auto fileMetadata = reader->fileMetaData();
-    const auto& schema = reader->rowType();
+
+    std::vector<TypePtr> leafTypes;
+    collectLeafTypes(reader->rowType(), leafTypes);
 
     vector_size_t totalRows = 0;
     for (int rg = 0; rg < fileMetadata.numRowGroups(); ++rg) {
@@ -287,23 +317,28 @@ class ColumnChunksDataSource : public MetadataDataSource {
     vector_size_t row = 0;
     for (int rg = 0; rg < fileMetadata.numRowGroups(); ++rg) {
       auto rowGroup = fileMetadata.rowGroup(rg);
+      // Each column chunk is one schema leaf, so the chunk count must equal the
+      // flattened leaf count. A mismatch means the file's physical layout does
+      // not match its schema; reject it rather than mislabel the chunks.
+      VELOX_USER_CHECK_EQ(
+          rowGroup.numColumns(),
+          static_cast<int>(leafTypes.size()),
+          "Parquet row group column-chunk count does not match the file schema's leaf count: {}",
+          split_->filePath);
       for (int col = 0; col < rowGroup.numColumns(); ++col) {
         auto chunk = rowGroup.columnChunk(col);
-        auto columnName = col < static_cast<int>(schema->size())
-            ? std::string(schema->nameOf(col))
-            : fmt::format("column_{}", col);
+        const auto& leafType = leafTypes.at(col);
+        // Name the chunk by its physical path_in_schema, which includes the
+        // "list"/"key_value" group levels Parquet inserts for arrays and maps.
+        auto path = folly::join('.', chunk.pathInSchema());
         auto compression = common::compressionKindToString(chunk.compression());
         auto encoding = encodingsToString(chunk.encodings());
 
-        auto columnType = col < static_cast<int>(schema->size())
-            ? schema->childAt(col)
-            : nullptr;
-        auto stats =
-            readColumnChunkStats(chunk, columnType, rowGroup.numRows());
+        auto stats = readColumnChunkStats(chunk, leafType, rowGroup.numRows());
 
         rowGroupIds->set(row, static_cast<int64_t>(rg));
         columnIds->set(row, static_cast<int64_t>(col));
-        names->set(row, StringView(columnName));
+        names->set(row, StringView(path));
         compressions->set(row, StringView(compression));
         encodings->set(row, StringView(encoding));
         compressedSizes->set(row, chunk.totalCompressedSize());
