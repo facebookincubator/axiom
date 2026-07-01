@@ -131,3 +131,9 @@ SELECT a, b, count(DISTINCT c) FROM t GROUP BY GROUPING SETS ((a), (b))
 ----
 -- DISTINCT: ORDER BY with GROUPING SETS, without a global set.
 SELECT a, b, array_agg(DISTINCT c ORDER BY c) FROM t GROUP BY GROUPING SETS ((a), (b))
+----
+-- DISTINCT: ORDER BY with a global grouping set.
+SELECT a, array_agg(DISTINCT b ORDER BY b) FROM t GROUP BY ROLLUP(a)
+----
+-- DISTINCT: ORDER BY with a global grouping set over empty input.
+SELECT a, array_agg(DISTINCT b ORDER BY b) FROM t WHERE a > 1000 GROUP BY ROLLUP(a)
