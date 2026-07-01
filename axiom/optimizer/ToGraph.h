@@ -503,6 +503,14 @@ class ToGraph {
   // Example: u(a, u(b, c)) -> u(a, b, c)
   void translateUnion(const logical_plan::SetNode& set);
 
+  // Translates an LP `FixedPointNode` into a FixedPoint DerivedTable rooted
+  // at `currentDt_`. Nested FixedPoints are NYI.
+  void translateFixedPoint(const logical_plan::FixedPointNode& fixedPoint);
+
+  // Translates an LP `RecursiveReferenceNode` into a `WorkingTable` inside
+  // the enclosing FixedPoint's step. Fails if outside any FixedPoint.
+  void translateRecursiveRef(const logical_plan::RecursiveReferenceNode& ref);
+
   void addUnnest(const logical_plan::UnnestNode& unnest);
 
   // Creates a Column for the grouping set ID with the given name, type, and
@@ -964,6 +972,15 @@ class ToGraph {
 
   // Innermost DerivedTable when making a QueryGraph from PlanNode.
   DerivedTableP currentDt_{nullptr};
+
+  // Enclosing FixedPoint scope, set while translating its step. Pairs the
+  // FP's name with the anchor's columns. `std::optional` because nested
+  // FixedPoints are NYI; widen to a stack when nesting ships.
+  struct FixedPointScope {
+    Name name;
+    ColumnVector anchorColumns;
+  };
+  std::optional<FixedPointScope> fixedPointScope_;
 
   // Source LogicalPlanNode's for the node currently being processed. Used to
   // translate expressions that involve subfields. Contains just one node if

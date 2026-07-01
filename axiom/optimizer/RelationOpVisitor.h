@@ -93,6 +93,13 @@ class RelationOpVisitor {
 
   virtual void visit(const GroupId& op, RelationOpVisitorContext& context)
       const = 0;
+
+  virtual void visit(
+      const WorkingTableScan& op,
+      RelationOpVisitorContext& context) const = 0;
+
+  virtual void visit(const FixedPoint& op, RelationOpVisitorContext& context)
+      const = 0;
 };
 
 } // namespace facebook::axiom::optimizer

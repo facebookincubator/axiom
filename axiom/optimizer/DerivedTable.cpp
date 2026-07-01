@@ -266,6 +266,16 @@ void DerivedTable::checkConsistency() const {
     return;
   }
 
+  if (isFixedPoint()) {
+    VELOX_CHECK_NOT_NULL(
+        fixedPoint.anchor, "FixedPoint DT missing anchor: {}", cname);
+    VELOX_CHECK_NOT_NULL(
+        fixedPoint.step, "FixedPoint DT missing step: {}", cname);
+    fixedPoint.anchor->checkConsistency();
+    fixedPoint.step->checkConsistency();
+    return;
+  }
+
   // Verifies that all tables referenced by expressions in 'exprs' are in
   // tableSet or 'this'.
   auto checkTableReferences = [&](const ExprVector& expressions,
@@ -571,7 +581,14 @@ void DerivedTable::initializePlans() {
 void DerivedTable::distributeAllConjuncts() {
   distributeConjuncts();
 
-  if (!isUnion()) {
+  if (isUnion()) {
+    for (auto* child : unionInputs) {
+      child->distributeAllConjuncts();
+    }
+  } else if (isFixedPoint()) {
+    fixedPoint.anchor->distributeAllConjuncts();
+    fixedPoint.step->distributeAllConjuncts();
+  } else {
     for (auto* table : tables) {
       if (table->is(PlanType::kDerivedTableNode)) {
         const_cast<PlanObject*>(table)
@@ -579,28 +596,13 @@ void DerivedTable::distributeAllConjuncts() {
             ->distributeAllConjuncts();
       }
     }
-  } else {
-    for (auto* child : unionInputs) {
-      child->distributeAllConjuncts();
-    }
   }
 }
 
 void DerivedTable::finalizeJoinsAndMakePlans() {
-  if (!isUnion()) {
-    VELOX_CHECK(!tables.empty());
-    VELOX_CHECK(unionInputs.empty());
-
-    for (auto* table : tables) {
-      if (table->is(PlanType::kDerivedTableNode)) {
-        const_cast<PlanObject*>(table)
-            ->as<DerivedTable>()
-            ->finalizeJoinsAndMakePlans();
-      }
-    }
-  } else {
+  if (isUnion()) {
     VELOX_CHECK(tables.empty());
-    VELOX_CHECK(!unionInputs.empty());
+    VELOX_CHECK_GE(unionInputs.size(), 2);
 
     for (auto* child : unionInputs) {
       child->finalizeJoinsAndMakePlans();
@@ -612,6 +614,27 @@ void DerivedTable::finalizeJoinsAndMakePlans() {
     cardinality_ = 0;
     for (const auto* child : unionInputs) {
       cardinality_ = add(cardinality_, child->cardinality());
+    }
+  } else if (isFixedPoint()) {
+    VELOX_CHECK(tables.empty());
+    VELOX_CHECK(unionInputs.empty());
+
+    fixedPoint.anchor->finalizeJoinsAndMakePlans();
+    fixedPoint.step->finalizeJoinsAndMakePlans();
+
+    // See FixedPoint::FixedPoint for cost rationale.
+    cardinality_ =
+        add(fixedPoint.anchor->cardinality(), fixedPoint.step->cardinality());
+  } else {
+    VELOX_CHECK(!tables.empty());
+    VELOX_CHECK(unionInputs.empty());
+
+    for (auto* table : tables) {
+      if (table->is(PlanType::kDerivedTableNode)) {
+        const_cast<PlanObject*>(table)
+            ->as<DerivedTable>()
+            ->finalizeJoinsAndMakePlans();
+      }
     }
   }
 
@@ -1206,6 +1229,7 @@ void DerivedTable::import(
   VELOX_DCHECK(!superTables.empty());
   VELOX_DCHECK(superTables.contains(primaryTable));
   VELOX_DCHECK(!super.isUnion(), "Cannot import from a union DT");
+  VELOX_DCHECK(!super.isFixedPoint(), "Cannot import from a FixedPoint DT");
 
   copySubset(super, superTables);
 
@@ -2321,6 +2345,17 @@ bool DerivedTable::addFilter(ExprCP conjunct) {
     return false;
   }
 
+  // Pushing a filter into the FixedPoint's step changes what feeds back
+  // into the next iteration and can alter the fixpoint. Push a copy into
+  // the anchor as a pre-filter (always safe — the anchor runs once like any
+  // non-recursive base) but always keep the conjunct on the enclosing DT
+  // so the step's per-iteration output is filtered too.
+  // TODO: Push iteration-invariant predicates into the step as well.
+  if (isFixedPoint()) {
+    fixedPoint.anchor->addFilter(conjunct);
+    return false;
+  }
+
   if (isUnion()) {
     for (auto i = 0; i < unionInputs.size(); ++i) {
       if (!unionInputs[i]->addFilter(conjunct)) {
@@ -2614,6 +2649,12 @@ bool DerivedTable::tryPushdownConjunct(ExprCP conjunct, PlanObjectP table) {
       return false;
     }
     return true;
+  }
+
+  if (table->is(PlanType::kWorkingTableNode)) {
+    // No own filter accumulator. Conjunct stays on the enclosing DT and
+    // lowers as a Filter RelOp on top of WorkingTableScan.
+    return false;
   }
 
   VELOX_CHECK(table->is(PlanType::kTableNode));

@@ -266,6 +266,21 @@ TEST_F(DerivedTablePrinterTest, union) {
   }
 }
 
+TEST_F(DerivedTablePrinterTest, fixedPoint) {
+  auto context = makeContext();
+  auto anchor = lp::PlanBuilder(context).values(
+      ROW({"n"}, {BIGINT()}), std::vector<Variant>{Variant::row({int64_t{1}})});
+  auto step = lp::PlanBuilder(context)
+                  .recursiveRef("counter", anchor)
+                  .filter("n < 10")
+                  .project({"n + 1 as n"})
+                  .planNode();
+  auto plan = anchor.fixedPoint("counter", step).build();
+
+  auto lines = toLines(*plan);
+  EXPECT_THAT(lines, testing::Contains(testing::HasSubstr("FIXED POINT:")));
+}
+
 TEST_F(DerivedTablePrinterTest, write) {
   connector_->addTable("c", ROW({"a", "b"}, INTEGER()));
   connector_->addTable("z", ROW({"x", "y"}, INTEGER()));

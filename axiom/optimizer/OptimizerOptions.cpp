@@ -108,6 +108,12 @@ std::vector<ConfigProperty> buildProperties(
           std::to_string(OptimizerOptions::kTraceFlagsDefault),
           "Bit mask for optimizer trace output: 1=retained, 2=exceeded best, 4=sample, 8=preprocess.",
       },
+      {
+          std::string(OptimizerOptions::kFixedPointMaxIterations),
+          ConfigPropertyType::kInteger,
+          std::to_string(OptimizerOptions::kFixedPointMaxIterationsDefault),
+          "Safety bound on iterations for a recursive CTE FixedPoint. Must be >= 1.",
+      },
   };
 
   if (configOverrides.empty()) {
@@ -154,6 +160,10 @@ std::string OptimizerOptions::normalize(
     // Throws if 'value' is not a valid capacity string (e.g. "100MB").
     velox::config::toCapacity(
         std::string(value), velox::config::CapacityUnit::BYTE);
+  } else if (name == kFixedPointMaxIterations) {
+    auto iterations = std::stoi(std::string(value));
+    VELOX_USER_CHECK_GE(
+        iterations, 1, "fixed_point_max_iterations must be >= 1: {}", value);
   }
   return std::string(value);
 }
@@ -194,6 +204,7 @@ OptimizerOptions OptimizerOptions::from(
   setInt(kParallelProjectWidth, options.parallelProjectWidth);
   setInt(kGreedyJoinThreshold, options.greedyJoinThreshold);
   setCapacity(kBroadcastSizeLimit, options.broadcastSizeLimit);
+  setInt(kFixedPointMaxIterations, options.fixedPointMaxIterations);
 
   auto setUint = [&](std::string_view key, uint32_t& field) {
     auto it = properties.find(key);

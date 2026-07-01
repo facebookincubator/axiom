@@ -315,6 +315,25 @@ class ToTextVisitor : public RelationOpVisitor {
     printInput(*op.input(), myCtx);
   }
 
+  void visit(const WorkingTableScan& op, RelationOpVisitorContext& context)
+      const override {
+    auto& myCtx = static_cast<Context&>(context);
+    printHeader(op, myCtx, fmt::format("name={}", op.name));
+    printConstraints(op, myCtx);
+  }
+
+  void visit(const FixedPoint& op, RelationOpVisitorContext& context)
+      const override {
+    auto& myCtx = static_cast<Context&>(context);
+    printHeader(op, myCtx, fmt::format("name={}", op.name));
+    printConstraints(op, myCtx);
+    const auto indentation = toIndentation(myCtx.indent + 2);
+    myCtx.out << indentation << "anchor:" << std::endl;
+    printInput(*op.anchor, myCtx);
+    myCtx.out << indentation << "step:" << std::endl;
+    printInput(*op.step, myCtx);
+  }
+
  private:
   static std::string toIndentation(size_t indent) {
     return std::string(indent * 2, ' ');
@@ -553,6 +572,22 @@ class OnelineVisitor : public RelationOpVisitor {
     auto& myCtx = static_cast<Context&>(context);
     myCtx.out << "groupid(";
     op.input()->accept(*this, context);
+    myCtx.out << ")";
+  }
+
+  void visit(const WorkingTableScan& op, RelationOpVisitorContext& context)
+      const override {
+    auto& myCtx = static_cast<Context&>(context);
+    myCtx.out << "workingscan(" << op.name << ")";
+  }
+
+  void visit(const FixedPoint& op, RelationOpVisitorContext& context)
+      const override {
+    auto& myCtx = static_cast<Context&>(context);
+    myCtx.out << "fixedpoint(";
+    op.anchor->accept(*this, context);
+    myCtx.out << " => ";
+    op.step->accept(*this, context);
     myCtx.out << ")";
   }
 

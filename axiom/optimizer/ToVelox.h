@@ -242,6 +242,26 @@ class ToVelox {
       const Values& values,
       ExecutableFragment& fragment);
 
+  // Lowers a WorkingTableScan RelOp to a Velox StateSourceNode reading the
+  // enclosing FixedPoint's vector state entry in delta mode.
+  velox::core::PlanNodePtr makeWorkingTableScan(const WorkingTableScan& scan);
+
+  // Lowers a FixedPoint RelOp to a Velox FixedPointNode.
+  velox::core::PlanNodePtr makeFixedPoint(
+      const FixedPoint& fp,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  // Builds the convergence sub-plan for a FixedPoint's ConvergenceConfig:
+  //   StateSource(stateName, schema, delta=true)
+  //     -> AggregationNode(count() AS __converged_count)
+  //     -> ProjectNode("converged" = eq(__converged_count, 0))
+  // delta=true so the source sees only the rows the most recent iteration
+  // appended; an empty delta produces count=0 and marks convergence.
+  velox::core::PlanNodePtr makeEmptyDeltaConvergence(
+      const std::string& stateName,
+      const velox::RowTypePtr& schema);
+
   velox::core::PlanNodePtr makeWrite(
       const TableWrite& write,
       ExecutableFragment& fragment,

@@ -26,6 +26,7 @@
 #include "axiom/optimizer/tests/TestDataPath.h"
 #include "axiom/sql/presto/PrestoParser.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/exec/FixedPointOperators.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/expression/Expr.h"
@@ -48,6 +49,7 @@ namespace facebook::axiom::optimizer::test {
 void QueryTestBase::SetUpTestCase() {
   HiveConnectorTestBase::SetUpTestCase();
   velox::window::prestosql::registerAllWindowFunctions();
+  velox::exec::registerFixedPointOperators();
 
   executor_ = std::make_unique<folly::CPUThreadPoolExecutor>(4);
   optimizer::FunctionRegistry::registerPrestoFunctions();

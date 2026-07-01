@@ -59,6 +59,8 @@ const auto& relTypeNames() {
       {RelType::kTopNRowNumber, "TopNRowNumber"},
       {RelType::kMarkDistinct, "MarkDistinct"},
       {RelType::kGroupId, "GroupId"},
+      {RelType::kFixedPoint, "FixedPoint"},
+      {RelType::kWorkingTableScan, "WorkingTableScan"},
   };
 
   return kNames;
@@ -2174,6 +2176,80 @@ GroupId::GroupId(
 }
 
 void GroupId::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+WorkingTableScan::WorkingTableScan(
+    const WorkingTable& workingTable,
+    ColumnVector columns)
+    : RelationOp{
+          RelType::kWorkingTableScan,
+          /*input=*/nullptr,
+          Distribution::gather(),
+          std::move(columns)},
+      name{workingTable.name} {
+  cost_.inputCardinality = 1;
+  updateLeafCost(workingTable.cardinality(), columns_, cost_);
+  for (auto* column : columns_) {
+    constraints_.emplace(column->id(), column->value());
+  }
+}
+
+const QGString& WorkingTableScan::historyKey() const {
+  if (!key_.empty()) {
+    return key_;
+  }
+  key_ = sanitizeHistoryKey(fmt::format("workingscan({})", name));
+  return key_;
+}
+
+void WorkingTableScan::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+FixedPoint::FixedPoint(
+    Name name,
+    RelationOpPtr anchorOp,
+    RelationOpPtr stepOp)
+    : RelationOp{
+          RelType::kFixedPoint,
+          /*input=*/nullptr,
+          anchorOp->distribution(),
+          anchorOp->columns()},
+      name{name},
+      anchor{std::move(anchorOp)},
+      step{std::move(stepOp)} {
+  VELOX_CHECK_NOT_NULL(step);
+  // Single-pass cost over anchor + step. The per-iteration multiplier is
+  // intentionally not applied — convergence depth is workload-dependent and
+  // an arbitrary maxIterations overestimate would push the FP onto the build
+  // side of every enclosing join.
+  cost_.inputCardinality =
+      add(mul(anchor->cost().inputCardinality, anchor->cost().fanout),
+          mul(step->cost().inputCardinality, step->cost().fanout));
+  cost_.fanout = 1;
+  cost_.unitCost = 0;
+  constraints_ = anchor->constraints();
+}
+
+const QGString& FixedPoint::historyKey() const {
+  if (!key_.empty()) {
+    return key_;
+  }
+  key_ = sanitizeHistoryKey(
+      fmt::format(
+          "fixedpoint({},{},{})",
+          name,
+          anchor->historyKey(),
+          step->historyKey()));
+  return key_;
+}
+
+void FixedPoint::accept(
     const RelationOpVisitor& visitor,
     RelationOpVisitorContext& context) const {
   visitor.visit(*this, context);

@@ -258,6 +258,20 @@ void SubfieldTracker::markFieldAccessed(
 }
 
 void SubfieldTracker::markFieldAccessed(
+    const lp::FixedPointNode& fixedPoint,
+    int32_t ordinal,
+    std::vector<Step>& steps,
+    bool isControl,
+    const MarkFieldsAccessedContext& context) {
+  // Both legs contribute to every output column; mark the same ordinal on
+  // each input.
+  for (const auto& input : fixedPoint.inputs()) {
+    const auto ctx = fromNode(input).append(context);
+    markFieldAccessed(ctx.sources[0], ordinal, steps, isControl, ctx.toCtx());
+  }
+}
+
+void SubfieldTracker::markFieldAccessed(
     const LogicalContextSource& source,
     int32_t ordinal,
     std::vector<Step>& steps,
@@ -317,6 +331,12 @@ void SubfieldTracker::markFieldAccessed(
   if (kind == lp::NodeKind::kSet) {
     const auto* set = source.planNode->as<lp::SetNode>();
     markFieldAccessed(*set, ordinal, steps, isControl, context);
+    return;
+  }
+
+  if (kind == lp::NodeKind::kFixedPoint) {
+    const auto* fixedPoint = source.planNode->as<lp::FixedPointNode>();
+    markFieldAccessed(*fixedPoint, ordinal, steps, isControl, context);
     return;
   }
 
