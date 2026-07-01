@@ -726,6 +726,10 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
                 .core::CallExpr::toString());
         AXIOM_TEST_RETURN_IF_FAILURE
 
+        EXPECT_EQ(plan.aggregates()[i].distinct, aggregateExpr->isDistinct())
+            << "DISTINCT mismatch for aggregate " << i;
+        AXIOM_TEST_RETURN_IF_FAILURE
+
         auto expectedMask = aggregateExpr->filter();
         const auto& mask = plan.aggregates()[i].mask;
         EXPECT_EQ(mask != nullptr, expectedMask != nullptr);
