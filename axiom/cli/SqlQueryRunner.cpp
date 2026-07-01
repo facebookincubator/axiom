@@ -500,6 +500,7 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
       parseCpuNanos = velox::process::threadCpuNanos() - cpuStart;
     }
     completionInfo.startInfo.queryType = statement->kind();
+    completionInfo.referencedTables = statement->referencedTables();
     completionInfo.runtimeStats->recordTiming(
         QueryRuntimeStats::kParseWallNanos,
         std::chrono::microseconds(completionInfo.timing.parse));
