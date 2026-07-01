@@ -601,24 +601,51 @@ TEST_F(TpchPlanTest, q15) {
 }
 
 TEST_F(TpchPlanTest, q16) {
+  const auto partFilter =
+      "\"and\"(p_brand <> 'Brand#45', p_type not like 'MEDIUM POLISHED%', "
+      "         p_size in (49, 14, 23, 45, 19, 3, 36, 9))";
   // agg(((partsupp INNER part) ANTI supplier))
   auto matcher =
       matchScan("partsupp")
-          .hashJoinInner(
-              matchScan("part")
-                  .filter(
-                      "\"and\"(p_brand <> 'Brand#45', p_type not like 'MEDIUM POLISHED%', "
-                      "         p_size in (49, 14, 23, 45, 19, 3, 36, 9))")
-                  .build())
+          .hashJoinInner(matchScan("part").filter(partFilter).build())
           .hashJoinAnti(
               matchScan("supplier")
                   .filter("s_comment like '%Customer%Complaints%'")
                   .build(),
               {.nullAware = true})
-          .aggregation()
+          .singleAggregation(
+              {"p_brand", "p_type", "p_size"},
+              {"count(distinct ps_suppkey) as supplier_cnt"})
           .orderBy()
           .build();
   AXIOM_ASSERT_PLAN(planTpch(16), matcher);
+
+  // Distributed: part and supplier broadcast to the partsupp probe (INNER then
+  // null-aware ANTI); the distinct count becomes a dedup aggregation on the
+  // grouping keys plus ps_suppkey feeding a plain count on the grouping keys.
+  auto distributed = [&](bool isMultiThreaded) {
+    return matchScan("partsupp")
+        .multiThreaded(isMultiThreaded)
+        .hashJoinInner(matchScan("part").filter(partFilter).broadcast().build())
+        .hashJoinAnti(
+            matchScan("supplier")
+                .filter("s_comment like '%Customer%Complaints%'")
+                .broadcast()
+                .build(),
+            {.nullAware = true})
+        .distributedSingleAggregation(
+            {"p_brand", "p_type", "p_size", "ps_suppkey"}, {})
+        .distributedSingleAggregation(
+            {"p_brand", "p_type", "p_size"},
+            {"count(ps_suppkey) as supplier_cnt"})
+        .distributedOrderBy(
+            {"supplier_cnt DESC", "p_brand", "p_type", "p_size"})
+        .build();
+  };
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      planTpchMultiNode({.query = 16, .numDrivers = 1}), distributed(false));
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      planTpchMultiNode({.query = 16, .numDrivers = 4}), distributed(true));
 }
 
 TEST_F(TpchPlanTest, q17) {
