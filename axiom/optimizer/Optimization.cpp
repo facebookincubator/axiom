@@ -126,6 +126,9 @@ void collectBaseTables(DerivedTable* dt, std::vector<BaseTable*>& baseTables) {
     for (auto* child : dt->unionInputs) {
       collectBaseTables(child, baseTables);
     }
+  } else if (dt->isFixedPoint()) {
+    collectBaseTables(dt->fixedPoint.anchor, baseTables);
+    collectBaseTables(dt->fixedPoint.step, baseTables);
   } else {
     for (auto* table : dt->tables) {
       if (table->is(PlanType::kTableNode)) {
@@ -3430,6 +3433,14 @@ void Optimization::makeJoins(PlanState& state) {
       auto* scan = make<Values>(*valuesTable, std::move(columns));
       state.addCost(*scan);
       makeJoins(scan, state);
+    } else if (from->is(PlanType::kWorkingTableNode)) {
+      const auto* workingTable = from->as<WorkingTable>();
+      PlanStateSaver save{state};
+      state.place(workingTable);
+      state.placeColumns(workingTable->columns);
+      auto* scan = make<WorkingTableScan>(*workingTable, workingTable->columns);
+      state.addCost(*scan);
+      makeJoins(scan, state);
     } else if (from->is(PlanType::kUnnestTableNode)) {
       VELOX_FAIL("UnnestTable cannot be a starting table");
       // Because it's rigth side of directed inner (cross) join edge.
@@ -3513,7 +3524,20 @@ RelationOpPtr Optimization::makeInitialPlan(const DerivedTable& dt) {
   PlanState state(*this, &dt, options().syntacticJoinOrder);
   RelationOpPtr result;
 
-  if (dt.isUnion()) {
+  if (dt.isFixedPoint()) {
+    auto* anchorPlans = memo_.find(dt.fixedPoint.anchor->memoKey());
+    auto* stepPlans = memo_.find(dt.fixedPoint.step->memoKey());
+    VELOX_CHECK(
+        anchorPlans != nullptr && anchorPlans->best() != nullptr,
+        "FixedPoint anchor has no planned entry");
+    VELOX_CHECK(
+        stepPlans != nullptr && stepPlans->best() != nullptr,
+        "FixedPoint step has no planned entry");
+
+    result = make<FixedPoint>(
+        dt.fixedPoint.name, anchorPlans->best()->op, stepPlans->best()->op);
+    state.plans.addPlan(result, state);
+  } else if (dt.isUnion()) {
     // Union: assemble from already-planned children.
     RelationOpPtrVector childOps;
     for (auto* childDt : dt.unionInputs) {

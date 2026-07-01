@@ -142,6 +142,8 @@ enum class RelType {
   kTopNRowNumber,
   kMarkDistinct,
   kGroupId,
+  kFixedPoint,
+  kWorkingTableScan,
 };
 
 AXIOM_DECLARE_ENUM_NAME(RelType)
@@ -1074,4 +1076,48 @@ struct GroupId : public RelationOp {
 };
 
 using GroupIdCP = const GroupId*;
+
+/// Leaf RelOp that produces rows from the recursive working table of an
+/// enclosing FixedPoint. Appears in the step RelOp tree wherever the LP
+/// had a `lp::RecursiveReferenceNode`.
+struct WorkingTableScan : public RelationOp {
+  WorkingTableScan(const WorkingTable& workingTable, ColumnVector columns);
+
+  const QGString& historyKey() const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
+
+  /// Name of the enclosing FixedPoint (matches its `fixedPoint.name`).
+  const Name name;
+};
+
+using WorkingTableScanCP = const WorkingTableScan*;
+
+/// Iterates `step` over a working table seeded by `anchor` until convergence
+/// or a max-iteration bound is hit. The output schema matches
+/// `anchor->columns()`.
+struct FixedPoint : public RelationOp {
+  FixedPoint(Name name, RelationOpPtr anchor, RelationOpPtr step);
+
+  const QGString& historyKey() const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
+
+  /// Name of this FixedPoint (matches `lp::FixedPointNode::name()`).
+  const Name name;
+
+  /// Lowered anchor sub-plan.
+  const RelationOpPtr anchor;
+
+  /// Lowered step sub-plan. Reads the working table via a `WorkingTableScan`
+  /// leaf somewhere in its tree.
+  const RelationOpPtr step;
+};
+
+using FixedPointCP = const FixedPoint*;
+
 } // namespace facebook::axiom::optimizer

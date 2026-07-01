@@ -157,6 +157,21 @@ struct DerivedTable : public TableObject {
     return isUnion() && aggregation == nullptr;
   }
 
+  /// FixedPoint sub-DTs and name. When `anchor` is non-null, all three
+  /// fields are bound and `name` matches `lp::FixedPointNode::name()`.
+  struct FixedPointFields {
+    DerivedTable* anchor{nullptr};
+    DerivedTable* step{nullptr};
+    Name name{nullptr};
+  };
+  FixedPointFields fixedPoint;
+
+  /// True if this DT is a FixedPoint — the optimizer-side counterpart of
+  /// `logical_plan::FixedPointNode`.
+  bool isFixedPoint() const {
+    return fixedPoint.anchor != nullptr;
+  }
+
   /// Single-row DTs (see isSingleRow()) that have no join dependencies in
   /// this DT — not referenced by any join's keys, sides, or filter.
   /// These can be appended at the end of the plan via cross-join, or

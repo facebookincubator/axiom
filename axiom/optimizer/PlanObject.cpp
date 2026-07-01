@@ -31,6 +31,7 @@ const auto& planTypeNames() {
       {PlanType::kTableNode, "TableNode"},
       {PlanType::kValuesTableNode, "ValuesTableNode"},
       {PlanType::kUnnestTableNode, "UnnestTableNode"},
+      {PlanType::kWorkingTableNode, "WorkingTableNode"},
       {PlanType::kDerivedTableNode, "DerivedTableNode"},
       {PlanType::kAggregationNode, "AggregationNode"},
       {PlanType::kWindowPlanNode, "WindowPlanNode"},

@@ -1153,6 +1153,26 @@ struct UnnestTable : public TableObject {
 
 using UnnestTableCP = const UnnestTable*;
 
+/// Placeholder for a reference to the recursive working table of an enclosing
+/// FixedPoint DerivedTable, used inside the FixedPoint's step DT. Stands in
+/// for the LP's `RecursiveReferenceNode` so the step DT can name and consume
+/// the in-progress accumulator the way any other table is named in a `FROM`.
+struct WorkingTable : public TableObject {
+  WorkingTable(Name _name)
+      : TableObject{PlanType::kWorkingTableNode}, name{_name} {}
+
+  /// Name of the enclosing FixedPoint (matches its `fixedPoint.name`).
+  const Name name;
+
+  std::optional<float> cardinality() const override {
+    // Per-iteration frontier is small and workload-dependent. Returning 1
+    // steers the join enumerator to place the working table as the probe.
+    return 1;
+  }
+
+  std::string toString() const override;
+};
+
 using TypeVector = QGVector<const velox::Type*>;
 
 // Aggregate function. The aggregation and arguments are in the

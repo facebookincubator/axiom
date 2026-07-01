@@ -19,6 +19,7 @@
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/WriteStatsBuilder.h"
+#include "velox/core/FixedPointPlanNodes.h"
 #include "velox/core/PlanConsistencyChecker.h"
 #include "velox/core/PlanNode.h"
 #include "velox/core/TableWriteTraits.h"
@@ -2421,6 +2422,120 @@ void ToVelox::makePredictionAndHistory(
   }
 }
 
+namespace {
+
+// Builds a Velox ROW type from a RelOp's `columns()`.
+velox::RowTypePtr toRowType(const ColumnVector& columns) {
+  std::vector<std::string> names;
+  std::vector<velox::TypePtr> types;
+  names.reserve(columns.size());
+  types.reserve(columns.size());
+  for (const auto* column : columns) {
+    names.push_back(column->outputName());
+    types.push_back(toTypePtr(column->value().type));
+  }
+  return velox::ROW(std::move(names), std::move(types));
+}
+
+} // namespace
+
+velox::core::PlanNodePtr ToVelox::makeEmptyDeltaConvergence(
+    const std::string& stateName,
+    const velox::RowTypePtr& schema) {
+  static constexpr std::string_view kConvergedCountName = "__converged_count";
+  static constexpr std::string_view kConvergedColumnName = "converged";
+
+  auto source = std::make_shared<velox::core::StateSourceNode>(
+      nextId(), stateName, schema, /*delta=*/true);
+
+  const auto& functionNames = queryCtx()->functionNames();
+
+  auto countCall = std::make_shared<velox::core::CallTypedExpr>(
+      velox::BIGINT(),
+      std::vector<velox::core::TypedExprPtr>{},
+      std::string(functionNames.count));
+  velox::core::AggregationNode::Aggregate countAggregate{
+      .call = std::move(countCall),
+      .rawInputTypes = {},
+      .mask = nullptr,
+      .sortingKeys = {},
+      .sortingOrders = {},
+      .distinct = false,
+  };
+  auto aggregation = std::make_shared<velox::core::AggregationNode>(
+      nextId(),
+      velox::core::AggregationNode::Step::kSingle,
+      std::vector<velox::core::FieldAccessTypedExprPtr>{},
+      std::vector<velox::core::FieldAccessTypedExprPtr>{},
+      std::vector<std::string>{std::string(kConvergedCountName)},
+      std::vector<velox::core::AggregationNode::Aggregate>{
+          std::move(countAggregate)},
+      std::vector<velox::vector_size_t>{},
+      std::optional<velox::core::FieldAccessTypedExprPtr>{},
+      /*ignoreNullKeys=*/false,
+      /*noGroupsSpanBatches=*/false,
+      std::move(source));
+
+  auto countRef = std::make_shared<velox::core::FieldAccessTypedExpr>(
+      velox::BIGINT(), std::string(kConvergedCountName));
+  auto zeroConst = std::make_shared<velox::core::ConstantTypedExpr>(
+      velox::BIGINT(), velox::Variant(int64_t{0}));
+  auto eqExpr = std::make_shared<velox::core::CallTypedExpr>(
+      velox::BOOLEAN(),
+      std::vector<velox::core::TypedExprPtr>{
+          std::move(countRef), std::move(zeroConst)},
+      std::string(functionNames.equality));
+  return std::make_shared<velox::core::ProjectNode>(
+      nextId(),
+      std::vector<std::string>{std::string(kConvergedColumnName)},
+      std::vector<velox::core::TypedExprPtr>{std::move(eqExpr)},
+      std::move(aggregation));
+}
+
+velox::core::PlanNodePtr ToVelox::makeFixedPoint(
+    const FixedPoint& fp,
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
+  // Same fragment + stages so nested makeRepartition can push sub-fragments.
+  auto anchorPlan = makeFragment(fp.anchor, fragment, stages);
+  auto stepPlan = makeFragment(fp.step, fragment, stages);
+
+  // State entry schema = FP output schema = anchor schema.
+  auto schema = toRowType(fp.columns());
+
+  const std::string stateNameString{fp.name};
+
+  velox::core::ConvergenceConfig convergence;
+  convergence.plan = makeEmptyDeltaConvergence(stateNameString, schema);
+  convergence.maxIterations =
+      optimizerSession_->options().fixedPointMaxIterations;
+
+  std::vector<velox::core::StateDeclarationPtr> stateDeclarations;
+  stateDeclarations.push_back(
+      std::make_shared<velox::core::VectorStateDeclaration>(
+          stateNameString, schema, std::move(anchorPlan), /*append=*/true));
+  std::vector<velox::core::PlanNodePtr> plans;
+  plans.push_back(std::move(stepPlan));
+
+  auto node = std::make_shared<velox::core::FixedPointNode>(
+      nextId(),
+      std::move(stateDeclarations),
+      std::move(plans),
+      std::move(convergence),
+      stateNameString);
+  makePredictionAndHistory(node->id(), &fp);
+  return node;
+}
+
+velox::core::PlanNodePtr ToVelox::makeWorkingTableScan(
+    const WorkingTableScan& scan) {
+  auto schema = toRowType(scan.columns());
+  auto node = std::make_shared<velox::core::StateSourceNode>(
+      nextId(), std::string(scan.name), schema, /*delta=*/true);
+  makePredictionAndHistory(node->id(), &scan);
+  return node;
+}
+
 velox::core::PlanNodePtr ToVelox::makeFragment(
     const RelationOpPtr& op,
     ExecutableFragment& fragment,
@@ -2495,6 +2610,12 @@ velox::core::PlanNodePtr ToVelox::makeFragment(
       break;
     case RelType::kGroupId:
       result = makeGroupId(*op->as<GroupId>(), fragment, stages);
+      break;
+    case RelType::kFixedPoint:
+      result = makeFixedPoint(*op->as<FixedPoint>(), fragment, stages);
+      break;
+    case RelType::kWorkingTableScan:
+      result = makeWorkingTableScan(*op->as<WorkingTableScan>());
       break;
     default:
       VELOX_FAIL(

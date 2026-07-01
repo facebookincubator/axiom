@@ -507,5 +507,31 @@ TEST_F(RelationOpPrinterTest, groupId) {
   EXPECT_THAT(oneline, testing::HasSubstr("groupid("));
 }
 
+TEST_F(RelationOpPrinterTest, fixedPoint) {
+  lp::PlanBuilder::Context context;
+  auto anchor = lp::PlanBuilder(context).values(
+      ROW({"n"}, {BIGINT()}), std::vector<Variant>{Variant::row({int64_t{1}})});
+  auto step = lp::PlanBuilder(context)
+                  .recursiveRef("counter", anchor)
+                  .filter("n < 10")
+                  .project({"n + 1 as n"})
+                  .planNode();
+  auto plan = anchor.fixedPoint("counter", step).build();
+
+  auto lines = toLines(*plan);
+  EXPECT_THAT(
+      lines,
+      testing::AllOf(
+          testing::Contains(testing::HasSubstr("FixedPoint")),
+          testing::Contains(testing::HasSubstr("name=counter")),
+          testing::Contains(testing::HasSubstr("anchor:")),
+          testing::Contains(testing::HasSubstr("step:")),
+          testing::Contains(testing::HasSubstr("WorkingTableScan"))));
+
+  auto oneline = toOneline(*plan);
+  EXPECT_THAT(oneline, testing::HasSubstr("fixedpoint("));
+  EXPECT_THAT(oneline, testing::HasSubstr("workingscan(counter)"));
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer
