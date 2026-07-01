@@ -29,6 +29,9 @@ SELECT a, sum(b) AS s FROM t GROUP BY CUBE(a)
 -- Explicit GROUPING SETS.
 SELECT a, sum(b) AS s FROM t GROUP BY GROUPING SETS ((a), ())
 ----
+-- Global grouping set over empty input emits one default row.
+SELECT a, sum(b) AS s FROM t WHERE a > 1000 GROUP BY ROLLUP(a)
+----
 -- ROLLUP with multiple keys.
 SELECT a, b, count(*) AS s FROM t GROUP BY ROLLUP(a, b)
 ----
@@ -118,6 +121,9 @@ SELECT a, GROUPING(a) AS grp, sum(b) AS s FROM t GROUP BY ROLLUP(a) HAVING grp =
 -- error: Not a grouping column
 SELECT a, GROUPING(b), count(*) AS c FROM t GROUP BY ROLLUP(a)
 ----
--- error: ORDER BY in aggregate functions is not supported with global grouping sets
-SELECT a, array_agg(b ORDER BY b) FROM t GROUP BY ROLLUP(a)
+-- ORDER BY in an aggregate with a global grouping set.
+SELECT a, array_agg(b ORDER BY b) AS arr FROM t GROUP BY ROLLUP(a)
+----
+-- ORDER BY in an aggregate with a global grouping set over empty input.
+SELECT a, array_agg(b ORDER BY b) AS arr FROM t WHERE a > 1000 GROUP BY ROLLUP(a)
 ----
