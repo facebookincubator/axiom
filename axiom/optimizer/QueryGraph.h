@@ -1017,25 +1017,41 @@ class JoinEdge {
 using JoinEdgeP = JoinEdge*;
 using JoinEdgeVector = QGVector<JoinEdgeP>;
 
+/// Polymorphic base for the table-shaped query-graph nodes. Callers
+/// iterating over `DerivedTable::tables` reach for `columns`, `cardinality`,
+/// or `joinedBy` on the base instead of switching on `PlanType`:
+///
+///   table->as<TableObject>()->columns
+class TableObject : public PlanObject {
+ public:
+  explicit TableObject(PlanType kind) : PlanObject{kind} {}
+
+  /// Estimated number of rows in this table's output, or `nullopt` when
+  /// not yet known.
+  virtual std::optional<float> cardinality() const = 0;
+
+  /// Output columns of this table.
+  ColumnVector columns;
+
+  /// Joins where this table is an end point.
+  JoinEdgeVector joinedBy;
+
+  bool isTable() const final override {
+    return true;
+  }
+};
+
 /// Represents a reference to a table from a query. There is one of these
 /// for each occurrence of the schema table. A TableScan references one
 /// BaseTable but the same BaseTable can be referenced from many TableScans, for
 /// example if accessing different indices in a secondary to primary key lookup.
-struct BaseTable : public PlanObject {
-  BaseTable() : PlanObject(PlanType::kTableNode) {}
+struct BaseTable : public TableObject {
+  BaseTable() : TableObject{PlanType::kTableNode} {}
 
   /// Correlation name, distinguishes between uses of the same schema table.
   Name cname{nullptr};
 
   SchemaTableCP schemaTable{nullptr};
-
-  /// All columns referenced from 'schemaTable' under this correlation name.
-  /// Different indices may have to be combined in different TableScans to cover
-  /// 'columns'.
-  ColumnVector columns;
-
-  /// All joins where 'this' is an end point.
-  JoinEdgeVector joinedBy;
 
   /// Top level conjuncts on single columns and literals, column to the left.
   ExprVector columnFilters;
@@ -1052,11 +1068,9 @@ struct BaseTable : public PlanObject {
 
   SubfieldSet payloadSubfields;
 
-  bool isTable() const override {
-    return true;
+  std::optional<float> cardinality() const override {
+    return filteredCardinality;
   }
-
-  void addJoinedBy(JoinEdgeP join);
 
   /// Adds 'expr' to 'filters' or 'columnFilters'.
   void addFilter(ExprCP expr);
@@ -1076,13 +1090,13 @@ struct BaseTable : public PlanObject {
 
 using BaseTableCP = const BaseTable*;
 
-struct ValuesTable : public PlanObject {
+struct ValuesTable : public TableObject {
   using Variants = const std::vector<velox::Variant>*;
   using Vectors = const std::vector<velox::RowVectorPtr>*;
   using Data = std::variant<Variants, Vectors>;
 
   explicit ValuesTable(const velox::Type* _dataType, Data _data)
-      : PlanObject{PlanType::kValuesTableNode},
+      : TableObject{PlanType::kValuesTableNode},
         dataType{_dataType},
         data{std::move(_data)},
         cardinality_{cardinality(data)} {
@@ -1096,21 +1110,9 @@ struct ValuesTable : public PlanObject {
 
   const Data data;
 
-  /// All columns referenced from this 'ValuesNode'.
-  ColumnVector columns;
-
-  /// All joins where 'this' is an end point.
-  JoinEdgeVector joinedBy;
-
-  float cardinality() const {
+  std::optional<float> cardinality() const override {
     return cardinality_;
   }
-
-  bool isTable() const override {
-    return true;
-  }
-
-  void addJoinedBy(JoinEdgeP join);
 
   std::string toString() const override;
 
@@ -1132,35 +1134,24 @@ struct ValuesTable : public PlanObject {
   float cardinality_;
 };
 
-struct UnnestTable : public PlanObject {
-  explicit UnnestTable() : PlanObject{PlanType::kUnnestTableNode} {}
+struct UnnestTable : public TableObject {
+  explicit UnnestTable() : TableObject{PlanType::kUnnestTableNode} {}
 
   // Correlation name, distinguishes between uses of the same unnest node.
   Name cname{nullptr};
 
-  /// All unnested columns from corresponding unnest node.
-  /// All replicated columns is on other (left) side of the join edge.
-  ColumnVector columns;
-
-  // All joins where 'this' is an end point.
-  JoinEdgeVector joinedBy;
-
   // Ordinality column if ordinality clause is present.
   ColumnCP ordinalityColumn{nullptr};
 
-  float cardinality() const {
+  std::optional<float> cardinality() const override {
     // TODO Should be changed later to actual cardinality.
     return 1;
   }
 
-  bool isTable() const override {
-    return true;
-  }
-
-  void addJoinedBy(JoinEdgeP join);
-
   std::string toString() const override;
 };
+
+using UnnestTableCP = const UnnestTable*;
 
 using TypeVector = QGVector<const velox::Type*>;
 
@@ -1533,9 +1524,5 @@ using WritePlanCP = const WritePlan*;
 /// @return cname of 'relation'. 'relation' must be a BaseTable, ValuesTable,
 /// UnnestTable, or DerivedTable.
 Name cname(PlanObjectCP relation);
-
-/// @return estimated number of rows in 'table', or nullopt if unknown. 'table'
-/// must be a BaseTable, ValuesTable, UnnestTable, or DerivedTable.
-std::optional<float> tableCardinality(PlanObjectCP table);
 
 } // namespace facebook::axiom::optimizer

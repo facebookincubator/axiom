@@ -761,19 +761,13 @@ void Repartition::accept(
 }
 
 namespace {
-ColumnVector concatColumns(
-    const ExprVector& lhs,
-    const ColumnVector& rhs,
-    ColumnCP ordinalityColumn) {
+ColumnVector concatColumns(const ExprVector& lhs, const ColumnVector& rhs) {
   ColumnVector result;
-  result.reserve(lhs.size() + rhs.size() + (ordinalityColumn ? 1 : 0));
+  result.reserve(lhs.size() + rhs.size());
   for (const auto& expr : lhs) {
     result.push_back(expr->as<Column>());
   }
   result.insert(result.end(), rhs.begin(), rhs.end());
-  if (ordinalityColumn) {
-    result.push_back(ordinalityColumn);
-  }
   return result;
 }
 } // namespace
@@ -782,13 +776,11 @@ Unnest::Unnest(
     RelationOpPtr input,
     ExprVector replicateColumns,
     ExprVector unnestExprs,
-    ColumnVector unnestedColumns,
-    ColumnCP ordinalityColumn)
-    : RelationOp{RelType::kUnnest, std::move(input), concatColumns(replicateColumns, unnestedColumns, ordinalityColumn)},
+    UnnestTableCP unnestTable)
+    : RelationOp{RelType::kUnnest, std::move(input), concatColumns(replicateColumns, unnestTable->columns)},
       replicateColumns{std::move(replicateColumns)},
       unnestExprs{std::move(unnestExprs)},
-      unnestedColumns{std::move(unnestedColumns)},
-      ordinalityColumn{ordinalityColumn} {
+      unnestTable{unnestTable} {
   cost_.inputCardinality = inputCardinality();
 
   // Use a heuristic for average array/map size.
@@ -813,20 +805,19 @@ void Unnest::initConstraints() {
     }
   }
 
-  // Add constraints for unnested columns.
-  // These come from array/map elements - we don't have detailed info,
-  // so use default constraints from the column's value.
-  for (auto* column : unnestedColumns) {
-    constraints_.emplace(column->id(), column->value());
-  }
-
-  // Add constraint for ordinality column if present.
-  // Ordinality is non-null. Use fanout as an approximation for cardinality.
-  if (ordinalityColumn) {
-    // Unnest always sets a fanout.
-    Value ordValue(ordinalityColumn->value().type, cost_.fanout.value());
-    ordValue.nullable = false;
-    constraints_.emplace(ordinalityColumn->id(), ordValue);
+  // Add constraints for the unnest table's output columns. Unnested values
+  // come from array/map elements (no detailed stats — use the column's
+  // default), and the ordinality column is non-null with fanout as a
+  // cardinality approximation.
+  for (auto* column : unnestTable->columns) {
+    if (column == unnestTable->ordinalityColumn) {
+      // Unnest always sets a fanout.
+      Value ordValue(column->value().type, cost_.fanout.value());
+      ordValue.nullable = false;
+      constraints_.emplace(column->id(), ordValue);
+    } else {
+      constraints_.emplace(column->id(), column->value());
+    }
   }
 }
 
@@ -922,7 +913,7 @@ PlanObjectCP largestTable(const PlanObjectSet& tables) {
   double maxCardinality = 0.0;
 
   tables.forEach([&](const auto& table) {
-    const auto cardinality = tableCardinality(table);
+    const auto cardinality = table->template as<TableObject>()->cardinality();
     if (cardinality.has_value() && *cardinality > maxCardinality) {
       maxCardinality = *cardinality;
       largestTable = table;
@@ -966,7 +957,7 @@ std::optional<double> maxGroups(
   double maxTableCardinality = 0.0;
 
   for (const auto& [table, keys] : tableToKeys) {
-    const auto maxCardinalityOpt = tableCardinality(table);
+    const auto maxCardinalityOpt = table->as<TableObject>()->cardinality();
     // An unknown table cardinality makes the group-count estimate unknown.
     if (!maxCardinalityOpt.has_value()) {
       return std::nullopt;

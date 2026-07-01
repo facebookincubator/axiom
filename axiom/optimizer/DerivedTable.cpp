@@ -143,31 +143,14 @@ void addImpliedSemiEdge(
   }
 }
 
-// Returns the post-filter cardinality for any table type. For BaseTable,
-// this is filteredCardinality (reduced by pushed-down WHERE/HAVING). For
-// DerivedTable, cardinality is already post-filter/post-join.
-std::optional<float> filteredTableCardinality(PlanObjectCP table) {
-  if (table->is(PlanType::kTableNode)) {
-    return table->as<BaseTable>()->filteredCardinality;
-  }
-  if (table->is(PlanType::kValuesTableNode)) {
-    return table->as<ValuesTable>()->cardinality();
-  }
-  if (table->is(PlanType::kUnnestTableNode)) {
-    return table->as<UnnestTable>()->cardinality();
-  }
-  VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
-  return table->as<DerivedTable>()->cardinality;
-}
-
 // Estimates the number of distinct key combinations in 'table' after
-// filtering. For a single key, returns min(NDV, filteredCardinality)
-// directly (no dampening needed). For multiple keys, uses the saturating
-// product formula (max * P / (max + P)) to dampen the independence
-// assumption for correlated keys. Consistent with maxGroups(). Returns nullopt
-// if the table cardinality or any key NDV is unknown.
+// filtering. For a single key, returns min(NDV, cardinality) directly (no
+// dampening needed). For multiple keys, uses the saturating product formula
+// (max * P / (max + P)) to dampen the independence assumption for correlated
+// keys. Consistent with maxGroups(). Returns nullopt if the table cardinality
+// or any key NDV is unknown.
 std::optional<float> compositeNdv(PlanObjectCP table, const ExprVector& keys) {
-  const auto maxOpt = filteredTableCardinality(table);
+  const auto maxOpt = table->as<TableObject>()->cardinality();
   if (!maxOpt.has_value()) {
     return std::nullopt;
   }
@@ -495,19 +478,7 @@ void DerivedTable::checkConsistency() const {
 
   // Layer 1: Base table columns are available.
   for (auto* table : tables) {
-    if (table->is(PlanType::kDerivedTableNode)) {
-      availableColumns.unionObjects(table->as<DerivedTable>()->columns);
-    } else if (table->is(PlanType::kTableNode)) {
-      availableColumns.unionObjects(table->as<BaseTable>()->columns);
-    } else if (table->is(PlanType::kValuesTableNode)) {
-      availableColumns.unionObjects(table->as<ValuesTable>()->columns);
-    } else if (table->is(PlanType::kUnnestTableNode)) {
-      auto* unnest = table->as<UnnestTable>();
-      availableColumns.unionObjects(unnest->columns);
-      if (unnest->ordinalityColumn) {
-        availableColumns.add(unnest->ordinalityColumn);
-      }
-    }
+    availableColumns.unionObjects(table->as<TableObject>()->columns);
   }
 
   auto checkExprAvailable = [&](ExprCP expr, const char* layerName) {
@@ -638,9 +609,9 @@ void DerivedTable::finalizeJoinsAndMakePlans() {
     // Set initial cardinality as the sum of unionInputs's cardinalities so that
     // makeInitialPlan can use it when estimating groups for makeDistinct.
     // The sum is unknown if any child's cardinality is unknown.
-    cardinality = 0;
+    cardinality_ = 0;
     for (const auto* child : unionInputs) {
-      cardinality = add(cardinality, child->cardinality);
+      cardinality_ = add(cardinality_, child->cardinality());
     }
   }
 
@@ -652,7 +623,7 @@ void DerivedTable::finalizeJoinsAndMakePlans() {
 }
 
 void DerivedTable::updateConstraints(const RelationOp& plan) {
-  cardinality = plan.resultCardinality();
+  cardinality_ = plan.resultCardinality();
 
   if (plan.relType() == RelType::kTableWrite) {
     // TableWrite columns are the data columns being written, not the DT's
@@ -1107,16 +1078,8 @@ void DerivedTable::linkTablesToJoins() {
       }
     }
     tables.forEachMutable([&](PlanObjectP table) {
-      if (table->is(PlanType::kTableNode)) {
-        table->as<BaseTable>()->addJoinedBy(join);
-      } else if (table->is(PlanType::kValuesTableNode)) {
-        table->as<ValuesTable>()->addJoinedBy(join);
-      } else if (table->is(PlanType::kUnnestTableNode)) {
-        table->as<UnnestTable>()->addJoinedBy(join);
-      } else {
-        VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
-        table->as<DerivedTable>()->addJoinedBy(join);
-      }
+      VELOX_CHECK(table->isTable());
+      pushBackUnique(table->as<TableObject>()->joinedBy, join);
     });
   }
 }
@@ -2660,10 +2623,6 @@ bool DerivedTable::tryPushdownConjunct(ExprCP conjunct, PlanObjectP table) {
 
 std::string DerivedTable::toString() const {
   return DerivedTablePrinter::toText(*this);
-}
-
-void DerivedTable::addJoinedBy(JoinEdgeP join) {
-  pushBackUnique(joinedBy, join);
 }
 
 } // namespace facebook::axiom::optimizer

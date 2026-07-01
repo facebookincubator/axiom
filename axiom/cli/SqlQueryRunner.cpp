@@ -1456,7 +1456,8 @@ std::vector<velox::RowVectorPtr> SqlQueryRunner::runShowStatsForQuery(
       newQuery(options),
       options,
       [&](const optimizer::DerivedTable& rootDt) {
-        presto::ShowStatsBuilder builder(roundCardinality(rootDt.cardinality));
+        presto::ShowStatsBuilder builder(
+            roundCardinality(rootDt.cardinality()));
 
         for (const auto* column : rootDt.columns) {
           const auto& value = column->value();

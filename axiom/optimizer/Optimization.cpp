@@ -951,11 +951,8 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
     // There are no join edges. There could still be cross joins.
     state.dt->startTables.forEach([&](PlanObjectCP object) {
       if (!state.isPlaced(object) && state.mayConsiderNext(object)) {
-        std::optional<float> fanout = tableCardinality(object);
-        if (object->is(PlanType::kTableNode)) {
-          fanout = object->as<BaseTable>()->filteredCardinality;
-        }
-        candidates.emplace_back(nullptr, object, fanout);
+        candidates.emplace_back(
+            nullptr, object, object->as<TableObject>()->cardinality());
       }
     });
 
@@ -1147,17 +1144,8 @@ RelationOpPtr repartitionForIndex(
 
 PlanObjectSet availableColumns(PlanObjectCP object) {
   PlanObjectSet set;
-  if (object->is(PlanType::kTableNode)) {
-    set.unionObjects(object->as<BaseTable>()->columns);
-  } else if (object->is(PlanType::kValuesTableNode)) {
-    set.unionObjects(object->as<ValuesTable>()->columns);
-  } else if (object->is(PlanType::kUnnestTableNode)) {
-    set.unionObjects(object->as<UnnestTable>()->columns);
-  } else if (object->is(PlanType::kDerivedTableNode)) {
-    set.unionObjects(object->as<DerivedTable>()->columns);
-  } else {
-    VELOX_UNREACHABLE("Joinable must be a table or derived table");
-  }
+  VELOX_CHECK(object->isTable(), "Joinable must be a table or derived table");
+  set.unionObjects(object->as<TableObject>()->columns);
   return set;
 }
 
@@ -2872,11 +2860,10 @@ void Optimization::crossJoinUnnest(
           "Ordinality column must be present");
     }
 
-    // We don't use downstreamColumns() for unnestExprs/unnestedColumns.
+    // We don't use downstreamColumns() for unnestExprs.
     // Because 'unnest-column' should be unnested even when it isn't used.
     // Because it can change cardinality of the all output.
     const auto& unnestExprs = candidate.join->leftKeys();
-    const auto& unnestedColumns = unnestTable->columns;
 
     // Plan is updated here,
     // because we can have multiple unnest joins in single JoinCandidate.
@@ -2888,8 +2875,7 @@ void Optimization::crossJoinUnnest(
         std::move(plan),
         std::move(replicateColumns),
         std::move(unnestColumns),
-        unnestedColumns,
-        unnestTable->ordinalityColumn);
+        unnestTable);
 
     state.replaceColumns(PlanObjectSet::fromObjects(plan->columns()));
     state.addCost(*plan);
@@ -3255,18 +3241,15 @@ PlanP unionPlan(std::vector<PlanState>& states, const RelationOpPtr& result) {
 }
 
 std::optional<float> startingScore(PlanObjectCP table) {
-  if (table->is(PlanType::kTableNode)) {
-    return table->as<BaseTable>()->filteredCardinality;
-  }
-
-  if (table->is(PlanType::kValuesTableNode)) {
-    return table->as<ValuesTable>()->cardinality();
-  }
-
   if (table->is(PlanType::kUnnestTableNode)) {
     VELOX_FAIL("UnnestTable cannot be a starting table");
     // Because it's rigth side of directed inner (cross) join edge.
     // Directed edges are non-commutative, so right side cannot be starting.
+  }
+
+  if (table->is(PlanType::kTableNode) ||
+      table->is(PlanType::kValuesTableNode)) {
+    return table->as<TableObject>()->cardinality();
   }
 
   return 10;
