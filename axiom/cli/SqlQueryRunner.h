@@ -112,6 +112,9 @@ struct QueryCompletionInfo {
   /// Carries query ID, SQL text, and creation timestamp from the start event.
   QueryStartInfo startInfo;
 
+  /// Tables referenced by the parsed statement. Unset when parsing fails.
+  std::optional<presto::ReferencedTables> referencedTables;
+
   /// Contains error details when the query fails; std::nullopt on success.
   std::optional<ErrorInfo> errorInfo;
 
