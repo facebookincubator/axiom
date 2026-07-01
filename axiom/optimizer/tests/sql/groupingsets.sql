@@ -29,6 +29,9 @@ SELECT a, sum(b) AS s FROM t GROUP BY CUBE(a)
 -- Explicit GROUPING SETS.
 SELECT a, sum(b) AS s FROM t GROUP BY GROUPING SETS ((a), ())
 ----
+-- Global grouping set over empty input emits one default row.
+SELECT a, sum(b) AS s FROM t WHERE a > 1000 GROUP BY ROLLUP(a)
+----
 -- ROLLUP with multiple keys.
 SELECT a, b, count(*) AS s FROM t GROUP BY ROLLUP(a, b)
 ----

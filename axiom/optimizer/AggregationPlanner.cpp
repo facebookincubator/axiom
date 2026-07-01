@@ -453,13 +453,16 @@ std::pair<RelationOpPtr, PlanCost> AggregationPlanner::makeSplitAggregationPlan(
     PlanState& state) const {
   PlanCost splitAggCost;
 
+  // The raw-input partial step emits the empty-input default row.
   plan = make<Aggregation>(
       plan,
       groupingKeys,
       /*preGroupedKeys*/ ExprVector{},
       aggregates,
       velox::core::AggregationNode::Step::kPartial,
-      intermediateColumns);
+      intermediateColumns,
+      globalGroupingSets,
+      groupId);
   splitAggCost.add(*plan);
 
   ColumnVector partitionKeys(
@@ -498,12 +501,18 @@ AggregationPlanner::makeSingleAggregationPlan(
     PlanState& state) const {
   PlanCost singleAggCost;
 
-  ColumnVector partitionKeys(
-      intermediateColumns.begin(),
-      intermediateColumns.begin() + groupingKeys.size());
   PlanCost repartitionCost;
-  std::tie(plan, repartitionCost) =
-      repartitionForAgg(plan, partitionKeys, state);
+  if (!globalGroupingSets.empty()) {
+    // Gather to one task so the default row is emitted once, not per worker.
+    std::tie(plan, repartitionCost) =
+        repartitionForAgg(plan, /*partitionKeys=*/{}, state);
+  } else {
+    ColumnVector partitionKeys(
+        intermediateColumns.begin(),
+        intermediateColumns.begin() + groupingKeys.size());
+    std::tie(plan, repartitionCost) =
+        repartitionForAgg(plan, partitionKeys, state);
+  }
   singleAggCost.add(repartitionCost);
 
   auto* singleAgg = make<Aggregation>(
@@ -535,18 +544,8 @@ AggregationPlanner::makeSplitOrSingleAggregationPlan(
         return agg->isDistinct() || !agg->orderKeys().empty();
       });
 
-  if (!globalGroupingSets.empty()) {
-    return makeSplitAggregationPlan(
-        plan,
-        groupingKeys,
-        aggregates,
-        intermediateColumns,
-        outputColumns,
-        std::move(globalGroupingSets),
-        groupId,
-        state);
-  }
-
+  // ORDER BY / DISTINCT aggregates cannot be split, so use single-step even
+  // with global grouping sets.
   if (requiresSingleStep) {
     return makeSingleAggregationPlan(
         plan,
@@ -554,7 +553,7 @@ AggregationPlanner::makeSplitOrSingleAggregationPlan(
         aggregates,
         intermediateColumns,
         outputColumns,
-        /*globalGroupingSets=*/{},
+        std::move(globalGroupingSets),
         groupId,
         state);
   }
