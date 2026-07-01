@@ -1603,9 +1603,13 @@ velox::core::PlanNodePtr ToVelox::makeUnnest(
     std::vector<ExecutableFragment>& stages) {
   auto input = makeFragment(op.input(), fragment, stages);
 
+  const auto* ordinalityColumn = op.unnestTable->ordinalityColumn;
   std::vector<std::string> unnestNames;
-  unnestNames.reserve(op.unnestedColumns.size());
-  for (const auto* column : op.unnestedColumns) {
+  unnestNames.reserve(op.unnestTable->columns.size());
+  for (const auto* column : op.unnestTable->columns) {
+    if (column == ordinalityColumn) {
+      continue;
+    }
     unnestNames.emplace_back(column->outputName());
   }
 
@@ -1614,8 +1618,8 @@ velox::core::PlanNodePtr ToVelox::makeUnnest(
       toFieldRefs(op.replicateColumns),
       toFieldRefs(op.unnestExprs),
       std::move(unnestNames),
-      op.ordinalityColumn
-          ? std::optional<std::string>(op.ordinalityColumn->outputName())
+      ordinalityColumn
+          ? std::optional<std::string>(ordinalityColumn->outputName())
           : std::nullopt,
       std::nullopt,
       std::move(input));

@@ -1711,6 +1711,7 @@ void ToGraph::addUnnest(const lp::UnnestNode& unnest) {
           unnestTable,
           toValue(velox::BIGINT(), maxCardinality),
           columnName);
+      unnestTable->columns.push_back(column);
       renames_[columnName] = unnestTable->ordinalityColumn = column;
     }
   }

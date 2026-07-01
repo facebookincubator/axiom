@@ -19,6 +19,7 @@
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/MemoKey.h"
 #include "axiom/optimizer/PlanObject.h"
+#include "axiom/optimizer/QueryGraph.h"
 
 namespace facebook::axiom::optimizer {
 
@@ -70,27 +71,24 @@ using WindowPlanCP = const WindowPlan*;
 ///
 /// See docs/DerivedTableLayers.md for the layered column ownership model
 /// and dependency rules validated by checkConsistency.
-struct DerivedTable : public PlanObject {
-  DerivedTable() : PlanObject(PlanType::kDerivedTableNode) {}
+struct DerivedTable : public TableObject {
+  DerivedTable() : TableObject{PlanType::kDerivedTableNode} {}
 
   /// True if this DT is guaranteed to produce exactly one row: a global
   /// aggregation (no grouping keys) with no HAVING clause and a non-zero
   /// limit.
   bool isSingleRow() const;
 
-  /// Estimated number of rows produced by this DerivedTable. Set during
-  /// planning by initializePlans() or makeInitialPlan(). For non-union DTs,
-  /// computed as resultCardinality() of the initial physical plan. For union
-  /// DTs, computed as the sum of resultCardinality() across all children.
-  /// nullopt if the cardinality is unknown.
-  std::optional<float> cardinality{};
+  /// Estimated number of rows this DerivedTable produces. Set during planning
+  /// by `initializePlans()` / `makeInitialPlan()`: for non-union DTs the
+  /// `resultCardinality()` of the initial physical plan, for union DTs the sum
+  /// across children. `nullopt` until planning has run.
+  std::optional<float> cardinality() const override {
+    return cardinality_;
+  }
 
   /// Correlation name.
   Name cname{nullptr};
-
-  /// All columns defined by this DT, including intermediate columns needed for
-  /// HAVING, ORDER BY, etc.
-  ColumnVector columns;
 
   /// Exprs projected out. 1:1 to 'columns' or empty if 'this' is a UNION
   /// ALL (isUnion is true).
@@ -106,9 +104,6 @@ struct DerivedTable : public PlanObject {
   /// at runtime. Set for scalar subqueries that don't naturally guarantee
   /// single-row output (no global aggregation).
   bool enforceSingleRow{false};
-
-  /// References all joins where 'this' is an end point.
-  JoinEdgeVector joinedBy;
 
   /// All tables in FROM, either Table or DerivedTable. If Table, all
   /// filters resolvable with the table alone are in single column filters or
@@ -320,10 +315,6 @@ struct DerivedTable : public PlanObject {
   /// mark column.
   AggregateCP exportSingleAggregate(Name markName);
 
-  bool isTable() const override {
-    return true;
-  }
-
   void addTable(PlanObjectCP table) {
     tables.push_back(table);
     tableSet.add(table);
@@ -426,8 +417,6 @@ struct DerivedTable : public PlanObject {
   /// True if contains one derived table in 'tables' and adds no change to its
   /// result set.
   bool isWrapOnly() const;
-
-  void addJoinedBy(JoinEdgeP join);
 
   /// Asserts invariants about this DerivedTable.
   void checkConsistency() const;
@@ -590,6 +579,9 @@ struct DerivedTable : public PlanObject {
   // Returns true if 'imported' depends only on columns that are partition keys
   // of every window function in windowPlan.
   bool isPartitionKeyFilter(ExprCP imported) const;
+
+ protected:
+  std::optional<float> cardinality_{};
 };
 
 using DerivedTableP = DerivedTable*;

@@ -581,20 +581,8 @@ PlanP PlanSet::best(
 }
 
 const JoinEdgeVector& joinedBy(PlanObjectCP table) {
-  if (table->is(PlanType::kTableNode)) {
-    return table->as<BaseTable>()->joinedBy;
-  }
-
-  if (table->is(PlanType::kValuesTableNode)) {
-    return table->as<ValuesTable>()->joinedBy;
-  }
-
-  if (table->is(PlanType::kUnnestTableNode)) {
-    return table->as<UnnestTable>()->joinedBy;
-  }
-
-  VELOX_DCHECK(table->is(PlanType::kDerivedTableNode));
-  return table->as<DerivedTable>()->joinedBy;
+  VELOX_DCHECK(table->isTable());
+  return table->as<TableObject>()->joinedBy;
 }
 
 std::pair<JoinSide, JoinSide> JoinCandidate::joinSides() const {

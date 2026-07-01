@@ -172,7 +172,8 @@ void printValuesTable(const ValuesTable& table, std::ostream& out) {
 
   // Show cardinality.
   printHighlightedRow(
-      out, fmt::format("{} rows", static_cast<int>(table.cardinality())));
+      out,
+      fmt::format("{} rows", static_cast<int>(table.cardinality().value())));
 
   printTableEnd(out);
 }
@@ -181,6 +182,9 @@ void printUnnestTable(const UnnestTable& table, std::ostream& out) {
   printTableStart(out, &table, std::string(table.cname) + " (UNNEST)");
 
   for (auto* col : table.columns) {
+    if (col == table.ordinalityColumn) {
+      continue;
+    }
     printRow(out, escapeHtml(col->name()));
   }
 

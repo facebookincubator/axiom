@@ -186,7 +186,7 @@ std::string visitJoinEdge(const JoinEdge& edge) {
 
 std::string visitDerivedTable(const DerivedTable& dt) {
   std::stringstream out;
-  out << headerLine(dt.cname, dt.cardinality, dt.columns);
+  out << headerLine(dt.cname, dt.cardinality(), dt.columns);
 
   if (dt.isUnion()) {
     VELOX_CHECK_EQ(0, dt.exprs.size());

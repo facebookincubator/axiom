@@ -85,22 +85,6 @@ Name cname(PlanObjectCP relation) {
   }
 }
 
-std::optional<float> tableCardinality(PlanObjectCP table) {
-  if (table->is(PlanType::kTableNode)) {
-    return table->as<BaseTable>()->schemaTable->cardinality;
-  }
-  if (table->is(PlanType::kValuesTableNode)) {
-    return table->as<ValuesTable>()->cardinality();
-  }
-
-  if (table->is(PlanType::kUnnestTableNode)) {
-    return table->as<UnnestTable>()->cardinality();
-  }
-
-  VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
-  return table->as<DerivedTable>()->cardinality;
-}
-
 std::string Column::toString() const {
   const auto* opt = queryCtx()->optimization();
   if (!opt->cnamesInExpr() || relation_ == nullptr) {
@@ -369,10 +353,6 @@ std::optional<PathSet> SubfieldSet::findSubfields(int32_t id) const {
   return std::nullopt;
 }
 
-void BaseTable::addJoinedBy(JoinEdgeP join) {
-  pushBackUnique(joinedBy, join);
-}
-
 std::optional<int32_t> BaseTable::columnId(Name column) const {
   for (auto i = 0; i < columns.size(); ++i) {
     if (columns[i]->name() == column) {
@@ -402,18 +382,10 @@ std::string BaseTable::toString() const {
   return out.str();
 }
 
-void ValuesTable::addJoinedBy(JoinEdgeP join) {
-  pushBackUnique(joinedBy, join);
-}
-
 std::string ValuesTable::toString() const {
   std::stringstream out;
   out << "{" << PlanObject::toString() << cname << "}";
   return out.str();
-}
-
-void UnnestTable::addJoinedBy(JoinEdgeP join) {
-  pushBackUnique(joinedBy, join);
 }
 
 std::string UnnestTable::toString() const {
@@ -791,11 +763,10 @@ std::optional<float> estimateFanout(
 }
 
 // Estimates the number of matching rows per equality lookup on 'keys' for
-// 'table'. For BaseTable, uses column statistics via estimateFanout and checks
-// uniqueness via SchemaTable::isUnique(). For ValuesTable, UnnestTable, and
-// DerivedTable, estimates cardinality using column statistics. For
-// DerivedTable with an aggregation, sets unique = true when keys cover all
-// grouping keys.
+// 'table'. BaseTable uses column statistics via estimateFanout and checks
+// uniqueness via SchemaTable::isUnique(). DerivedTable uses its post-planning
+// cardinality and marks unique = true when 'keys' cover all grouping keys.
+// Values/Unnest use their cardinality with unique = false.
 JoinFanout joinFanout(
     PlanObjectCP table,
     const ExprVector& keys,
@@ -820,27 +791,19 @@ JoinFanout joinFanout(
     return {fanout, unique};
   }
 
-  if (table->is(PlanType::kValuesTableNode)) {
-    const auto cardinality = table->as<ValuesTable>()->cardinality();
+  if (table->is(PlanType::kDerivedTableNode)) {
+    const auto* dt = table->as<DerivedTable>();
     return {
-        .fanout = estimateFanout(cardinality, keys, otherKeys),
-        .unique = false};
+        .fanout = estimateFanout(dt->cardinality(), keys, otherKeys),
+        .unique = dt->aggregation &&
+            keys.size() >= dt->aggregation->groupingKeys().size(),
+    };
   }
 
-  if (table->is(PlanType::kUnnestTableNode)) {
-    const auto cardinality = table->as<UnnestTable>()->cardinality();
-    return {
-        .fanout = estimateFanout(cardinality, keys, otherKeys),
-        .unique = false};
-  }
-
-  VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
-  const auto* dt = table->as<DerivedTable>();
+  VELOX_CHECK(table->isTable());
+  const auto cardinality = table->as<TableObject>()->cardinality();
   return {
-      .fanout = estimateFanout(dt->cardinality, keys, otherKeys),
-      .unique = dt->aggregation &&
-          keys.size() >= dt->aggregation->groupingKeys().size(),
-  };
+      .fanout = estimateFanout(cardinality, keys, otherKeys), .unique = false};
 }
 
 std::optional<float> baseSelectivity(PlanObjectCP object) {
@@ -883,6 +846,17 @@ void JoinEdge::guessFanout() {
   leftUnique_ = left.unique;
   rightUnique_ = right.unique;
 
+  // PK-FK ratio uses raw (pre-filter) cardinality for BaseTable so that the
+  // filter is re-applied exactly once via `baseSelectivity`. For other table
+  // kinds, only post-filter cardinality exists and `baseSelectivity` returns
+  // 1, so the post-filter value is what feeds the ratio.
+  auto pkFkRatioCardinality = [](PlanObjectCP table) -> std::optional<float> {
+    if (table->is(PlanType::kTableNode)) {
+      return table->as<BaseTable>()->schemaTable->cardinality;
+    }
+    return table->as<TableObject>()->cardinality();
+  };
+
   // If one side has unique join keys, this is a primary key (PK) to foreign
   // key (FK) join. For example, joining orders (PK: orderkey) with lineitem
   // (FK: orderkey), if orders is the left table, then leftUnique_ is true: each
@@ -892,12 +866,16 @@ void JoinEdge::guessFanout() {
   if (leftUnique_) {
     rlFanout_ = mul(left.fanout, baseSelectivity(leftTable_));
     lrFanout_ =
-        mul(divide(tableCardinality(rightTable_), tableCardinality(leftTable_)),
+        mul(divide(
+                pkFkRatioCardinality(rightTable_),
+                pkFkRatioCardinality(leftTable_)),
             baseSelectivity(rightTable_));
   } else if (rightUnique_) {
     lrFanout_ = mul(right.fanout, baseSelectivity(rightTable_));
     rlFanout_ =
-        mul(divide(tableCardinality(leftTable_), tableCardinality(rightTable_)),
+        mul(divide(
+                pkFkRatioCardinality(leftTable_),
+                pkFkRatioCardinality(rightTable_)),
             baseSelectivity(leftTable_));
   } else {
     auto [sampledLeftFanout, sampledRightFanout] = options.sampleJoins
