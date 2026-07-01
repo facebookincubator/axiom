@@ -1101,16 +1101,25 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
   decideFragmentType(*op.input(), options_, source);
   auto input = makeFragment(op.input(), source, stages);
 
+  // At one driver the per-worker sort yields a single sorted run, so emit a
+  // final sort and skip the LocalMerge; the MergeExchange combines the
+  // per-worker runs.
+  const bool singleDriver = options_.numDrivers == 1;
+
   velox::core::PlanNodePtr node;
   if (op.limit <= 0) {
     node = std::make_shared<velox::core::OrderByNode>(
-        nextId(), keys, sortOrder, true, input);
+        nextId(), keys, sortOrder, /*isPartial=*/!singleDriver, input);
+  } else if (singleDriver) {
+    node = addFinalTopN(nextId(), keys, sortOrder, op.limit + op.offset, input);
   } else {
     node =
         addPartialTopN(nextId(), keys, sortOrder, op.limit + op.offset, input);
   }
 
-  node = addLocalMerge(nextId(), keys, sortOrder, node);
+  if (!singleDriver) {
+    node = addLocalMerge(nextId(), keys, sortOrder, node);
+  }
 
   source.fragment.planNode = velox::core::PartitionedOutputNode::single(
       nextId(), node->outputType(), exchangeSerdeKind_, node);

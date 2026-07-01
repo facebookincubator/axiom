@@ -218,12 +218,21 @@ bool matchImpl(const TypedExprPtr& actual, const ExprPtr& expected) {
     AXIOM_RETURN_FALSE_IF_FAILURE
 
     const auto* expectedCall = expected->as<CallExpr>();
-    EXPECT_EQ(call->name(), expectedCall->name());
-    AXIOM_RETURN_FALSE_IF_FAILURE
+
+    // `if` and `switch` lower to the same SwitchExpr, so accept either name for
+    // a conditional; arity is still enforced by child matching below.
+    const auto isConditional = [](std::string_view name) {
+      return name == "if" || name == "switch";
+    };
+
+    if (!(isConditional(call->name()) && isConditional(expectedCall->name()))) {
+      EXPECT_EQ(call->name(), expectedCall->name());
+      AXIOM_RETURN_FALSE_IF_FAILURE
+    }
 
     // A 2-arg `if(cond, then)` is semantically `if(cond, then, null)`, so it
-    // matches a plan's 3-arg `if` with a typed-null else.
-    if (call->name() == "if" && call->inputs().size() == 3 &&
+    // matches a plan's 3-arg conditional with a typed-null else.
+    if (isConditional(call->name()) && call->inputs().size() == 3 &&
         expectedCall->inputs().size() == 2 &&
         isNullConstant(call->inputs()[2])) {
       matchChildren(

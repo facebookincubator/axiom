@@ -61,6 +61,25 @@ class TpchPlanTest : public test::QueryTestBase {
     return toSingleNodePlan(
         parseSelect(test::readTpchSql(name), kTestConnectorId));
   }
+
+  // Options for a multi-node plan-shape check. numWorkers > 1 splits the plan
+  // into fragments; numDrivers > 1 adds intra-node local exchanges.
+  struct MultiNodeOptions {
+    int32_t query;
+    int32_t numWorkers{2};
+    int32_t numDrivers{1};
+  };
+
+  std::shared_ptr<const MultiFragmentPlan> planTpchMultiNode(
+      const MultiNodeOptions& options) {
+    return planVelox(
+               parseTpch(options.query),
+               {
+                   .numWorkers = options.numWorkers,
+                   .numDrivers = options.numDrivers,
+               })
+        .plan;
+  }
 };
 
 // Verifies that the injected statistics produce the expected base-table
@@ -87,13 +106,44 @@ TEST_F(TpchPlanTest, stats) {
 
 TEST_F(TpchPlanTest, q01) {
   // agg(lineitem)
+  const auto filter = "l_shipdate < date '1998-09-03'";
   auto matcher = matchScan("lineitem")
-                     .filter("l_shipdate < date '1998-09-03'")
+                     .filter(filter)
                      .project()
                      .aggregation()
                      .orderBy()
                      .build();
   AXIOM_ASSERT_PLAN(planTpch(1), matcher);
+
+  auto distributed = [&](bool isMultiThreaded) {
+    return matchScan("lineitem")
+        .multiThreaded(isMultiThreaded)
+        .filter(filter)
+        .project(
+            {"l_returnflag",
+             "l_linestatus",
+             "l_quantity",
+             "l_extendedprice",
+             "l_extendedprice * (1.0 - l_discount) as disc_price",
+             "l_extendedprice * (1.0 - l_discount) * (l_tax + 1.0) as charge",
+             "l_discount"})
+        .distributedAggregation(
+            {"l_returnflag", "l_linestatus"},
+            {"sum(l_quantity)",
+             "sum(l_extendedprice)",
+             "sum(disc_price)",
+             "sum(charge)",
+             "avg(l_quantity)",
+             "avg(l_extendedprice)",
+             "avg(l_discount)",
+             "count()"})
+        .distributedOrderBy({"l_returnflag", "l_linestatus"})
+        .build();
+  };
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      planTpchMultiNode({.query = 1, .numDrivers = 1}), distributed(false));
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      planTpchMultiNode({.query = 1, .numDrivers = 4}), distributed(true));
 }
 
 TEST_F(TpchPlanTest, q02) {
@@ -224,15 +274,25 @@ TEST_F(TpchPlanTest, q05) {
 
 TEST_F(TpchPlanTest, q06) {
   // agg(lineitem)
+  const auto filter =
+      "\"and\"(l_shipdate >= date '1994-01-01', l_shipdate < date '1995-01-01', "
+      "         l_discount between 0.05 and 0.07, l_quantity < 24.0)";
   auto matcher =
-      matchScan("lineitem")
-          .filter(
-              "\"and\"(l_shipdate >= date '1994-01-01', l_shipdate < date '1995-01-01', "
-              "         l_discount between 0.05 and 0.07, l_quantity < 24.0)")
-          .project()
-          .aggregation()
-          .build();
+      matchScan("lineitem").filter(filter).project().aggregation().build();
   AXIOM_ASSERT_PLAN(planTpch(6), matcher);
+
+  auto distributed = [&](bool isMultiThreaded) {
+    return matchScan("lineitem")
+        .multiThreaded(isMultiThreaded)
+        .filter(filter)
+        .project({"l_extendedprice * l_discount as revenue"})
+        .distributedAggregation({}, {"sum(revenue)"})
+        .build();
+  };
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      planTpchMultiNode({.query = 6, .numDrivers = 1}), distributed(false));
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      planTpchMultiNode({.query = 6, .numDrivers = 4}), distributed(true));
 }
 
 TEST_F(TpchPlanTest, q07) {
@@ -436,20 +496,36 @@ TEST_F(TpchPlanTest, q11) {
 
 TEST_F(TpchPlanTest, q12) {
   // agg((orders INNER lineitem))
+  const auto filter =
+      "\"and\"(l_shipmode in ('MAIL', 'SHIP'), l_receiptdate >= date '1994-01-01', "
+      "         l_receiptdate < date '1995-01-01', l_commitdate < l_receiptdate, "
+      "         l_shipdate < l_commitdate)";
   auto matcher =
       matchScan("orders")
-          .hashJoinInner(
-              matchScan("lineitem")
-                  .filter(
-                      "\"and\"(l_shipmode in ('MAIL', 'SHIP'), l_receiptdate >= date '1994-01-01', "
-                      "         l_receiptdate < date '1995-01-01', l_commitdate < l_receiptdate, "
-                      "         l_shipdate < l_commitdate)")
-                  .build())
+          .hashJoinInner(matchScan("lineitem").filter(filter).build())
           .project()
           .aggregation()
           .orderBy()
           .build();
   AXIOM_ASSERT_PLAN(planTpch(12), matcher);
+
+  auto distributed = [&](bool isMultiThreaded) {
+    return matchScan("orders")
+        .multiThreaded(isMultiThreaded)
+        .hashJoinInner(matchScan("lineitem").filter(filter).broadcast().build())
+        .project(
+            {"l_shipmode",
+             "if(o_orderpriority = '1-URGENT' or o_orderpriority = '2-HIGH', 1, 0) as high_line_count",
+             "if(o_orderpriority <> '1-URGENT' and o_orderpriority <> '2-HIGH', 1, 0) as low_line_count"})
+        .distributedAggregation(
+            {"l_shipmode"}, {"sum(high_line_count)", "sum(low_line_count)"})
+        .distributedOrderBy({"l_shipmode"})
+        .build();
+  };
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      planTpchMultiNode({.query = 12, .numDrivers = 1}), distributed(false));
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      planTpchMultiNode({.query = 12, .numDrivers = 4}), distributed(true));
 }
 
 TEST_F(TpchPlanTest, q13) {
@@ -467,18 +543,32 @@ TEST_F(TpchPlanTest, q13) {
 
 TEST_F(TpchPlanTest, q14) {
   // agg((part INNER lineitem))
+  const auto filter =
+      "l_shipdate >= date '1995-09-01' and l_shipdate < date '1995-10-01'";
   auto matcher =
       matchScan("part")
-          .hashJoinInner(
-              matchScan("lineitem")
-                  .filter(
-                      "l_shipdate >= date '1995-09-01' and l_shipdate < date '1995-10-01'")
-                  .build())
+          .hashJoinInner(matchScan("lineitem").filter(filter).build())
           .project()
           .aggregation()
           .project()
           .build();
   AXIOM_ASSERT_PLAN(planTpch(14), matcher);
+
+  auto distributed = [&](bool isMultiThreaded) {
+    return matchScan("part")
+        .multiThreaded(isMultiThreaded)
+        .hashJoinInner(matchScan("lineitem").filter(filter).broadcast().build())
+        .project(
+            {"if(p_type like 'PROMO%', l_extendedprice * (1.0 - l_discount), 0.0) as promo",
+             "l_extendedprice * (1.0 - l_discount) as disc_price"})
+        .distributedAggregation({}, {"sum(promo)", "sum(disc_price)"})
+        .project()
+        .build();
+  };
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      planTpchMultiNode({.query = 14, .numDrivers = 1}), distributed(false));
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      planTpchMultiNode({.query = 14, .numDrivers = 4}), distributed(true));
 }
 
 // The `revenue` CTE is computed twice — once as the supplier join's build side
