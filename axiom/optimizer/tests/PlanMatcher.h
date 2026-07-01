@@ -441,6 +441,12 @@ class PlanMatcherBuilder {
   /// Cannot be used with match(PlanNodePtr) - use match(MultiFragmentPlan).
   PlanMatcherBuilder& shuffleMerge();
 
+  /// Like `shuffleMerge()`, additionally verifying the MergeExchange's sort
+  /// ordering. Each entry is an ORDER BY expression with optional direction,
+  /// e.g. "c" or "c DESC NULLS FIRST". Supports symbol rewriting from the
+  /// producer matcher.
+  PlanMatcherBuilder& shuffleMerge(const std::vector<std::string>& ordering);
+
   /// Matches a broadcast shuffle boundary in a distributed plan.
   /// Verifies that PartitionedOutputNode::isBroadcast() is true.
   PlanMatcherBuilder& broadcast();
@@ -575,23 +581,43 @@ class PlanMatcherBuilder {
       int32_t limit);
 
   /// Matches the distributed mark-distinct pattern:
-  /// shuffle → localPartition(keys) → markDistinct(keys, markerAliases).
+  /// shuffle → localPartition(keys) → markDistinct(keys, markerAliases). The
+  /// localPartition is expected only in multiThreaded() mode.
   PlanMatcherBuilder& distributedMarkDistinct(
       const std::vector<std::string>& keys,
       const std::vector<std::string>& markerAliases);
 
+  /// Sets whether this matcher describes a multi-threaded (numDrivers > 1)
+  /// plan. When enabled (the default for a new builder), the distributed*
+  /// helpers (distributedAggregation, distributedSingleAggregation,
+  /// distributedOrderBy, distributedMarkDistinct) expect the additional
+  /// local-exchange nodes that intra-node parallelism inserts, e.g.
+  /// localPartition/localGather before a final aggregation and a partial sort +
+  /// LocalMerge before a merge boundary. Pass false for a single-driver plan.
+  PlanMatcherBuilder& multiThreaded(bool enabled);
+
   /// Matches the distributed (split) aggregation pattern:
   /// partialAggregation(groupingKeys, aggregates) → shuffle →
   /// localPartition(groupingKeys) → finalAggregation.
-  /// For empty groupingKeys, uses localGather instead of localPartition.
+  /// For empty groupingKeys, uses gather instead of shuffle. The local exchange
+  /// (localPartition / localGather) between the shuffle and the final
+  /// aggregation is expected only in multiThreaded() mode.
   PlanMatcherBuilder& distributedAggregation(
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates);
 
+  /// Matches the distributed sort feeding a MergeExchange: an OrderBy on
+  /// 'ordering' followed by the merge boundary (see shuffleMerge). In
+  /// multiThreaded() mode the OrderBy is partial and a LocalMerge precedes the
+  /// boundary; otherwise the OrderBy is final and there is no LocalMerge.
+  PlanMatcherBuilder& distributedOrderBy(
+      const std::vector<std::string>& ordering);
+
   /// Matches the distributed single-step aggregation pattern:
   /// shuffle → localPartition(groupingKeys) → singleAggregation(groupingKeys,
-  /// aggregates). For empty groupingKeys, uses localGather instead of
-  /// localPartition.
+  /// aggregates). For empty groupingKeys, uses gather instead of shuffle. The
+  /// local exchange (localPartition / localGather) between the shuffle and the
+  /// aggregation is expected only in multiThreaded() mode.
   PlanMatcherBuilder& distributedSingleAggregation(
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates);
@@ -662,6 +688,11 @@ class PlanMatcherBuilder {
 
  private:
   std::shared_ptr<PlanMatcher> matcher_;
+
+  // When true, distributed helpers expect the local exchanges that
+  // numDrivers > 1 inserts. Defaults to true to match the default multi-driver
+  // plan config; set via multiThreaded(false) for single-driver plans.
+  bool localExchanges_{true};
 };
 
 } // namespace facebook::velox::core

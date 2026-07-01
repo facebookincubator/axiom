@@ -586,14 +586,22 @@ class OrderByMatcher : public PlanMatcherImpl<OrderByNode> {
 
   OrderByMatcher(
       const std::shared_ptr<PlanMatcher>& matcher,
-      const std::vector<std::string>& ordering)
-      : PlanMatcherImpl<OrderByNode>({matcher}), ordering_{ordering} {}
+      const std::vector<std::string>& ordering,
+      std::optional<bool> partial = std::nullopt)
+      : PlanMatcherImpl<OrderByNode>({matcher}),
+        ordering_{ordering},
+        partial_{partial} {}
 
   MatchResult matchDetails(
       const OrderByNode& plan,
       const std::unordered_map<std::string, std::string>& symbols)
       const override {
     SCOPED_TRACE(plan.toString(true, false));
+
+    if (partial_.has_value()) {
+      EXPECT_EQ(plan.isPartial(), partial_.value());
+      AXIOM_TEST_RETURN_IF_FAILURE
+    }
 
     if (!ordering_.empty()) {
       EXPECT_EQ(plan.sortingOrders().size(), ordering_.size());
@@ -619,6 +627,7 @@ class OrderByMatcher : public PlanMatcherImpl<OrderByNode> {
 
  private:
   const std::vector<std::string> ordering_;
+  const std::optional<bool> partial_;
 };
 
 class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
@@ -973,7 +982,15 @@ class ShuffleBoundaryMatcher : public PlanMatcher {
       : producerMatcher_(std::move(producerMatcher)),
         type_(type),
         keys_(std::move(keys)),
-        replicateNullsAndAny_(replicateNullsAndAny) {}
+        replicateNullsAndAny_(replicateNullsAndAny) {
+    VELOX_CHECK(
+        keys_.empty() || type == ShuffleType::kPartitioned ||
+            type == ShuffleType::kOrdered,
+        "Shuffle keys apply only to partitioned and ordered shuffles");
+    VELOX_CHECK(
+        !replicateNullsAndAny_.has_value() || type == ShuffleType::kPartitioned,
+        "replicateNullsAndAny applies only to a partitioned shuffle");
+  }
 
   MatchResult match(
       const PlanNodePtr& plan,
@@ -988,7 +1005,11 @@ class ShuffleBoundaryMatcher : public PlanMatcher {
  private:
   const std::shared_ptr<PlanMatcher> producerMatcher_;
   const std::optional<ShuffleType> type_;
+  // Type-specific: partition keys for kPartitioned, ORDER BY expressions
+  // (key + optional ASC/DESC and NULLS FIRST/LAST) for kOrdered; empty for
+  // kGather / kBroadcast / kArbitrary (enforced by the constructor).
   const std::vector<std::string> keys_;
+  // Set only for kPartitioned (enforced by the constructor).
   const std::optional<bool> replicateNullsAndAny_;
 };
 
@@ -1010,9 +1031,119 @@ const axiom::optimizer::ExecutableFragment* findProducerFragment(
   return nullptr;
 }
 
-// Implementation of ShuffleBoundaryMatcher::match.
-// When context is set, verifies Exchange and matches producer.
-// Otherwise, throws an error.
+// Verifies the consumer node at a shuffle boundary: a MergeExchange for an
+// ordered shuffle, a plain Exchange otherwise.
+void verifyShuffleConsumer(
+    const PlanNodePtr& plan,
+    std::optional<ShuffleType> type) {
+  if (type == ShuffleType::kOrdered) {
+    EXPECT_TRUE(dynamic_cast<const MergeExchangeNode*>(plan.get()) != nullptr)
+        << "Expected MergeExchange at shuffle boundary, but got "
+        << plan->toString(false, false);
+  } else {
+    EXPECT_TRUE(dynamic_cast<const ExchangeNode*>(plan.get()) != nullptr)
+        << "Expected Exchange at shuffle boundary, but got "
+        << plan->toString(false, false);
+  }
+}
+
+// Verifies the producer PartitionedOutput's kind matches the shuffle type and
+// its replicate-nulls flag matches when specified.
+void verifyShuffleProducer(
+    const PartitionedOutputNode& producer,
+    std::optional<ShuffleType> type,
+    std::optional<bool> replicateNullsAndAny) {
+  if (type.has_value()) {
+    switch (type.value()) {
+      case ShuffleType::kBroadcast:
+        EXPECT_TRUE(producer.isBroadcast())
+            << "Expected broadcast PartitionedOutput";
+        break;
+      case ShuffleType::kGather:
+        EXPECT_EQ(producer.numPartitions(), 1)
+            << "Expected gather (single partition) PartitionedOutput, but got "
+            << producer.numPartitions() << " partitions";
+        break;
+      case ShuffleType::kPartitioned:
+        EXPECT_FALSE(producer.isBroadcast())
+            << "Expected partitioned PartitionedOutput, but got broadcast";
+        AXIOM_TEST_RETURN_IF_FAILURE_VOID
+        EXPECT_GT(producer.numPartitions(), 1)
+            << "Expected partitioned PartitionedOutput with multiple "
+               "partitions, but got "
+            << producer.numPartitions();
+        break;
+      case ShuffleType::kOrdered:
+        // Verified via the MergeExchange consumer.
+        break;
+      case ShuffleType::kArbitrary:
+        EXPECT_TRUE(producer.isArbitrary());
+        break;
+    }
+    AXIOM_TEST_RETURN_IF_FAILURE_VOID
+  }
+
+  if (replicateNullsAndAny.has_value()) {
+    EXPECT_EQ(producer.isReplicateNullsAndAny(), replicateNullsAndAny.value());
+  }
+}
+
+// Verifies the MergeExchange's sort keys and orders against the expected ORDER
+// BY expressions (key + optional ASC/DESC and NULLS FIRST/LAST).
+void verifyMergeOrdering(
+    const MergeExchangeNode& merge,
+    const std::vector<std::string>& ordering,
+    const std::unordered_map<std::string, std::string>& symbols) {
+  EXPECT_EQ(merge.sortingKeys().size(), ordering.size())
+      << "Sorting key count mismatch";
+  AXIOM_TEST_RETURN_IF_FAILURE_VOID
+
+  for (size_t i = 0; i < ordering.size(); ++i) {
+    auto expected =
+        parse::DuckSqlExpressionsParser().parseOrderByExpr(ordering[i]);
+    auto expectedExpr = expected.expr;
+    if (!symbols.empty()) {
+      expectedExpr = rewriteInputNames(expectedExpr, symbols);
+    }
+    EXPECT_EQ(merge.sortingKeys()[i]->toString(), expectedExpr->toString());
+    EXPECT_EQ(merge.sortingOrders()[i].isAscending(), expected.ascending);
+    EXPECT_EQ(merge.sortingOrders()[i].isNullsFirst(), expected.nullsFirst);
+    AXIOM_TEST_RETURN_IF_FAILURE_VOID
+  }
+}
+
+// Verifies the producer PartitionedOutput's partition keys against the expected
+// key names, applying symbol rewriting.
+void verifyPartitionKeys(
+    const PartitionedOutputNode& producer,
+    const std::vector<std::string>& keys,
+    const std::unordered_map<std::string, std::string>& symbols) {
+  const auto& actualKeys = producer.keys();
+  EXPECT_EQ(actualKeys.size(), keys.size())
+      << "Partition key count mismatch: expected " << keys.size() << ", got "
+      << actualKeys.size();
+  AXIOM_TEST_RETURN_IF_FAILURE_VOID
+
+  for (size_t i = 0; i < keys.size(); ++i) {
+    auto expectedKey = keys[i];
+    auto it = symbols.find(expectedKey);
+    if (it != symbols.end()) {
+      expectedKey = it->second;
+    }
+
+    auto fieldAccess =
+        std::dynamic_pointer_cast<const FieldAccessTypedExpr>(actualKeys[i]);
+    EXPECT_TRUE(fieldAccess != nullptr)
+        << "Partition key at index " << i << " is not a field access";
+    AXIOM_TEST_RETURN_IF_FAILURE_VOID
+
+    EXPECT_EQ(fieldAccess->name(), expectedKey)
+        << "Partition key mismatch at index " << i;
+  }
+}
+
+// When context is set, verifies the consumer/producer exchange nodes and
+// matches the producer fragment; otherwise fails.
 PlanMatcher::MatchResult ShuffleBoundaryMatcher::match(
     const PlanNodePtr& plan,
     const std::unordered_map<std::string, std::string>& symbols,
@@ -1022,27 +1153,15 @@ PlanMatcher::MatchResult ShuffleBoundaryMatcher::match(
       "Cannot match PlanMatcher with shuffle boundaries against a single "
       "PlanNodePtr. Use match(MultiFragmentPlan) for distributed plans.");
 
-  // Verify the plan is an Exchange or MergeExchange.
-  if (type_ == ShuffleType::kOrdered) {
-    EXPECT_TRUE(dynamic_cast<const MergeExchangeNode*>(plan.get()) != nullptr)
-        << "Expected MergeExchange at shuffle boundary, but got "
-        << plan->toString(false, false);
-  } else {
-    EXPECT_TRUE(dynamic_cast<const ExchangeNode*>(plan.get()) != nullptr)
-        << "Expected Exchange at shuffle boundary, but got "
-        << plan->toString(false, false);
-  }
+  verifyShuffleConsumer(plan, type_);
   AXIOM_TEST_RETURN_IF_FAILURE
 
-  // Find the producer fragment.
   const auto* producerFragment = findProducerFragment(plan->id(), *context);
   EXPECT_TRUE(producerFragment != nullptr)
       << "Could not find producer fragment for Exchange " << plan->id();
   AXIOM_TEST_RETURN_IF_FAILURE
 
-  // Match the producer fragment (expects PartitionedOutput at root).
   const auto& fragmentPlan = producerFragment->fragment.planNode;
-
   const auto* partitionedOutput =
       dynamic_cast<const PartitionedOutputNode*>(fragmentPlan.get());
   EXPECT_TRUE(partitionedOutput != nullptr)
@@ -1050,51 +1169,11 @@ PlanMatcher::MatchResult ShuffleBoundaryMatcher::match(
       << fragmentPlan->toString(false, false);
   AXIOM_TEST_RETURN_IF_FAILURE
 
-  // Verify shuffle type specific constraints if type is specified.
-  if (type_.has_value()) {
-    switch (type_.value()) {
-      case ShuffleType::kBroadcast:
-        EXPECT_TRUE(partitionedOutput->isBroadcast())
-            << "Expected broadcast PartitionedOutput, but got "
-            << fragmentPlan->toString(false, false);
-        AXIOM_TEST_RETURN_IF_FAILURE
-        break;
-      case ShuffleType::kGather:
-        EXPECT_EQ(partitionedOutput->numPartitions(), 1)
-            << "Expected gather (single partition) PartitionedOutput, but got "
-            << partitionedOutput->numPartitions() << " partitions";
-        AXIOM_TEST_RETURN_IF_FAILURE
-        break;
-      case ShuffleType::kPartitioned:
-        EXPECT_FALSE(partitionedOutput->isBroadcast())
-            << "Expected partitioned PartitionedOutput, but got broadcast";
-        AXIOM_TEST_RETURN_IF_FAILURE
-        EXPECT_GT(partitionedOutput->numPartitions(), 1)
-            << "Expected partitioned PartitionedOutput with multiple "
-               "partitions, but got "
-            << partitionedOutput->numPartitions();
-        AXIOM_TEST_RETURN_IF_FAILURE
-        break;
-      case ShuffleType::kOrdered:
-        // Already verified above with MergeExchange check.
-        break;
-      case ShuffleType::kArbitrary:
-        EXPECT_TRUE(partitionedOutput->isArbitrary());
-        AXIOM_TEST_RETURN_IF_FAILURE
-        break;
-    }
-  }
+  verifyShuffleProducer(*partitionedOutput, type_, replicateNullsAndAny_);
+  AXIOM_TEST_RETURN_IF_FAILURE
 
-  // Verify replicateNullsAndAny if specified.
-  if (replicateNullsAndAny_.has_value()) {
-    EXPECT_EQ(
-        partitionedOutput->isReplicateNullsAndAny(),
-        replicateNullsAndAny_.value());
-    AXIOM_TEST_RETURN_IF_FAILURE
-  }
-
-  // Match the producer first so its symbols are available for the partition
-  // key lookup below (keys reference producer-fragment column names).
+  // Match the producer first so its symbols are available for the key lookups
+  // below (keys reference producer-fragment column names).
   DistributedMatchContext producerContext{
       context->fragments, producerFragment, context->taskPrefixToFragmentIndex};
   auto producerResult = producerMatcher_->match(
@@ -1104,27 +1183,13 @@ PlanMatcher::MatchResult ShuffleBoundaryMatcher::match(
   }
 
   if (!keys_.empty()) {
-    const auto& actualKeys = partitionedOutput->keys();
-    EXPECT_EQ(actualKeys.size(), keys_.size())
-        << "Partition key count mismatch: expected " << keys_.size() << ", got "
-        << actualKeys.size();
-    AXIOM_TEST_RETURN_IF_FAILURE
-
-    for (size_t i = 0; i < keys_.size(); ++i) {
-      auto expectedKey = keys_[i];
-      auto it = producerResult.symbols.find(expectedKey);
-      if (it != producerResult.symbols.end()) {
-        expectedKey = it->second;
-      }
-
-      auto fieldAccess =
-          std::dynamic_pointer_cast<const FieldAccessTypedExpr>(actualKeys[i]);
-      EXPECT_TRUE(fieldAccess != nullptr)
-          << "Partition key at index " << i << " is not a field access";
-      AXIOM_TEST_RETURN_IF_FAILURE
-
-      EXPECT_EQ(fieldAccess->name(), expectedKey)
-          << "Partition key mismatch at index " << i;
+    if (type_ == ShuffleType::kOrdered) {
+      verifyMergeOrdering(
+          *static_cast<const MergeExchangeNode*>(plan.get()),
+          keys_,
+          producerResult.symbols);
+    } else {
+      verifyPartitionKeys(*partitionedOutput, keys_, producerResult.symbols);
     }
     AXIOM_TEST_RETURN_IF_FAILURE
   }
@@ -2057,6 +2122,14 @@ PlanMatcherBuilder& PlanMatcherBuilder::shuffleMerge() {
   return *this;
 }
 
+PlanMatcherBuilder& PlanMatcherBuilder::shuffleMerge(
+    const std::vector<std::string>& ordering) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<ShuffleBoundaryMatcher>(
+      matcher_, ShuffleType::kOrdered, ordering);
+  return *this;
+}
+
 PlanMatcherBuilder& PlanMatcherBuilder::broadcast() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<ShuffleBoundaryMatcher>(
@@ -2247,7 +2320,16 @@ PlanMatcherBuilder& PlanMatcherBuilder::topNRowNumber(
 PlanMatcherBuilder& PlanMatcherBuilder::distributedMarkDistinct(
     const std::vector<std::string>& keys,
     const std::vector<std::string>& markerAliases) {
-  return shuffle().localPartition(keys).markDistinct(keys, markerAliases);
+  shuffle();
+  if (localExchanges_) {
+    localPartition(keys);
+  }
+  return markDistinct(keys, markerAliases);
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::multiThreaded(bool enabled) {
+  localExchanges_ = enabled;
+  return *this;
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::distributedAggregation(
@@ -2255,20 +2337,43 @@ PlanMatcherBuilder& PlanMatcherBuilder::distributedAggregation(
     const std::vector<std::string>& aggregates) {
   partialAggregation(groupingKeys, aggregates);
   if (groupingKeys.empty()) {
-    gather().localGather();
+    gather();
+    if (localExchanges_) {
+      localGather();
+    }
   } else {
-    shuffle(groupingKeys).localPartition(groupingKeys);
+    shuffle(groupingKeys);
+    if (localExchanges_) {
+      localPartition(groupingKeys);
+    }
   }
   return finalAggregation();
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::distributedOrderBy(
+    const std::vector<std::string>& ordering) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<OrderByMatcher>(
+      matcher_, ordering, /*partial=*/localExchanges_);
+  if (localExchanges_) {
+    localMerge();
+  }
+  return shuffleMerge(ordering);
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::distributedSingleAggregation(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates) {
   if (groupingKeys.empty()) {
-    gather().localGather();
+    gather();
+    if (localExchanges_) {
+      localGather();
+    }
   } else {
-    shuffle(groupingKeys).localPartition(groupingKeys);
+    shuffle(groupingKeys);
+    if (localExchanges_) {
+      localPartition(groupingKeys);
+    }
   }
   return singleAggregation(groupingKeys, aggregates);
 }
