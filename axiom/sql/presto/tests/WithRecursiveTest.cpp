@@ -780,6 +780,34 @@ TEST_F(WithRecursiveTest, innerWithInsideStepShadows) {
       matchValues().project().project().fixedPoint(step).output());
 }
 
+// A nested non-recursive CTE shadows an outer recursive CTE and references that
+// name in its body. The reference resolves to the outer recursive CTE and
+// expands into a FixedPointNode. It reads column n, which only the outer CTE
+// provides, so the binding is observable.
+TEST_F(WithRecursiveTest, nestedShadowsRecursiveCte) {
+  auto step = lp::test::LogicalPlanMatcherBuilder()
+                  .recursiveRef("r")
+                  .filter()
+                  .project()
+                  .build();
+  testSelect(
+      R"(
+        WITH RECURSIVE r(n) AS (
+          SELECT CAST(1 AS BIGINT)
+          UNION ALL
+          SELECT n + 1 FROM r WHERE n < 10
+        )
+        SELECT * FROM (WITH r AS (SELECT n AS m FROM r) SELECT m FROM r) sub
+      )",
+      matchValues()
+          .project()
+          .project()
+          .fixedPoint(step, {"n"})
+          .project({"n"})
+          .project()
+          .output({"m"}));
+}
+
 // Constructs that ANSI forbids in the recursive term (DISTINCT, ORDER BY,
 // LIMIT) are allowed inside a FROM-clause subquery within the step, because
 // a subquery is a sealed scope.

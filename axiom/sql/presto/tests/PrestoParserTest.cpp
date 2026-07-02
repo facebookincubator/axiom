@@ -315,6 +315,52 @@ TEST_F(PrestoParserTest, withShadowingCte) {
       matcher);
 }
 
+TEST_F(PrestoParserTest, withNestedSameNameResolvesToOuter) {
+  // A non-recursive CTE is not in scope within its own body, so a nested
+  // same-name WITH resolves to the enclosing binding. The shadowing CTEs differ
+  // in arity and names, so a wrong binding fails to resolve: the inner body
+  // needs the outer t(a), the main query needs the inner t(b, c).
+  testSelect(
+      "WITH t(a) AS (SELECT 1) "
+      "SELECT * FROM ("
+      "  WITH t(b, c) AS (SELECT a, a + 1 FROM t) "
+      "  SELECT b + c AS r FROM t) sub",
+      matchValues()
+          .project()
+          .project()
+          .project({"a", "a + 1"})
+          .project()
+          .project({"b + c"})
+          .output({"r"}));
+
+  // Same rule across nesting levels: each inner body binds to the next
+  // enclosing CTE (inner reads mid's b, mid reads outer's a).
+  testSelect(
+      "WITH t(a) AS (SELECT 1) "
+      "SELECT * FROM ("
+      "  WITH t(b) AS (SELECT a FROM t) "
+      "  SELECT * FROM (WITH t(c) AS (SELECT b FROM t) "
+      "    SELECT c AS r FROM t) s2) s1",
+      matchValues()
+          .project()
+          .project()
+          .project({"a"})
+          .project()
+          .project({"b"})
+          .project()
+          .project()
+          .output({"r"}));
+}
+
+TEST_F(PrestoParserTest, withSelfReferenceFails) {
+  // No enclosing CTE and no base table of that name, so the self-reference
+  // resolves to nothing and must error.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(
+          "SELECT * FROM (WITH t AS (SELECT * FROM t) SELECT * FROM t) sub"),
+      "Table not found: t");
+}
+
 TEST_F(PrestoParserTest, withNoLeaking) {
   // CTE defined inside a subquery is not visible outside.
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
