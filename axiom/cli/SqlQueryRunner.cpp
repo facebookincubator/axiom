@@ -16,6 +16,7 @@
 
 #include "axiom/cli/SqlQueryRunner.h"
 #include <folly/container/F14Map.h>
+#include <folly/coro/BlockingWait.h>
 #include <folly/system/HardwareConcurrency.h>
 #include <algorithm>
 #include <cmath>
@@ -271,11 +272,7 @@ connector::ConnectorProperties collectConnectorProperties(
 }
 
 std::vector<velox::RowVectorPtr> fetchResults(runner::LocalRunner& runner) {
-  std::vector<velox::RowVectorPtr> results;
-  while (auto rows = runner.next()) {
-    results.push_back(rows);
-  }
-  return results;
+  return runner.drain();
 }
 
 int64_t countRows(const std::vector<velox::RowVectorPtr>& results) {

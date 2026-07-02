@@ -16,6 +16,7 @@
 
 #include "axiom/pyspark/runners/LocalRunner.h"
 
+#include <folly/coro/BlockingWait.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
@@ -112,9 +113,7 @@ std::vector<velox::RowVectorPtr> LocalRunner::execute(
       /*baseSpillDirectory=*/"",
       runtimeStats_);
   try {
-    while (auto rows = runner->next()) {
-      results.push_back(rows);
-    }
+    results = runner->drain();
   } catch (const std::exception& e) {
     LOG(WARNING) << "Query terminated with: " << e.what();
     waitForCompletion(runner);

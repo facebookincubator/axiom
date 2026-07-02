@@ -18,6 +18,7 @@
 
 #include <ctime>
 
+#include <folly/coro/BlockingWait.h>
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/Optimization.h"
@@ -188,7 +189,7 @@ TestResult QueryTestBase::runFragmentedPlan(
 
   TestResult result;
   result.runner = runner;
-  result.results = readCursor(result.runner);
+  result.results = result.runner->drain();
   result.stats = result.runner->stats();
   history_->recordVeloxExecution(planAndStats, result.stats);
 
@@ -451,16 +452,6 @@ std::shared_ptr<velox::core::QueryCtx> QueryTestBase::makeQueryCtx(
       /*pool=*/nullptr,
       /*spillExecutor=*/nullptr,
       queryId);
-}
-
-// static
-std::vector<velox::RowVectorPtr> QueryTestBase::readCursor(
-    const std::shared_ptr<runner::LocalRunner>& runner) {
-  std::vector<velox::RowVectorPtr> result;
-  while (auto rowVector = runner->next()) {
-    result.push_back(rowVector);
-  }
-  return result;
 }
 
 } // namespace facebook::axiom::optimizer::test

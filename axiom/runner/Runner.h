@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/coro/AsyncGenerator.h>
+
 #include "axiom/common/Enums.h"
 #include "velox/exec/TaskStats.h"
 
@@ -40,11 +42,26 @@ class Runner {
 
   virtual ~Runner() = default;
 
-  /// Returns the next batch of results. Returns nullptr when no more results.
-  /// Throws any execution time errors. The result is allocated in the pool of
-  /// QueryCtx given to the Runner implementation. The caller is responsible for
-  /// serializing calls from different threads.
-  virtual velox::RowVectorPtr next() = 0;
+  /// Returns a generator that yields successive result batches until the query
+  /// is done (the generator ends). Each batch is allocated in the pool of the
+  /// QueryCtx given to the Runner implementation; `co_await gen.next()`
+  /// rethrows any execution-time error.
+  ///
+  /// Honors cooperative cancellation: cancelling the awaiting scope (e.g. via
+  /// folly::coro::timeout, or an explicit abort()) interrupts in-flight work
+  /// through the underlying Task and surfaces the error from the await — this
+  /// is how a query deadline is enforced without a side thread. Awaiting the
+  /// read/produce-drain path never blocks the awaiting thread, so it is safe on
+  /// a Velox executor thread. Exception: on the write path the INSERT/CTAS
+  /// commit is a point of no return that runs to completion, and its error-path
+  /// cleanup waits for tasks to stop — both may block, so a write-plan
+  /// execute() should not be awaited on an executor thread.
+  ///
+  /// To stop before the generator is exhausted, call abort(); state() only
+  /// reaches a terminal value once the generator ends or abort() runs. Simply
+  /// dropping a partially-consumed generator leaves state() == kRunning until
+  /// waitForCompletion().
+  virtual folly::coro::AsyncGenerator<velox::RowVectorPtr> execute() = 0;
 
   /// Returns Task stats for each fragment of the plan. The stats correspond 1:1
   /// to the stages in the MultiFragmentPlan. May be called at any time: while
@@ -60,10 +77,18 @@ class Runner {
   /// Returns the state of execution.
   virtual State state() const = 0;
 
-  /// Cancels the possibly pending execution. Returns immediately, thus before
-  /// the execution is actually finished. Use waitForCompletion() to wait for
-  /// all execution resources to be freed. May be called from any thread without
-  /// serialization.
+  /// Cancels the possibly pending execution. Returns immediately, before
+  /// execution has actually stopped; use waitForCompletion() to wait for all
+  /// execution resources to be freed.
+  ///
+  /// May be called from any thread, at any point in the runner's lifetime,
+  /// without serialization, and is idempotent. It is a no-op once execution has
+  /// finished (state() == kFinished). Otherwise state() becomes kCancelled and
+  /// the in-flight or next execute() pull surfaces the cancellation error.
+  ///
+  /// Cancellation is cooperative: the produce/drain phase stops promptly at the
+  /// drivers' yield points. It does not interrupt an in-flight commit on the
+  /// write path, nor initial metastore partition-listing (not yet cancelable).
   virtual void abort() = 0;
 
   /// Waits up to 'maxWaitMicros' for all activity of the execution to cease.
@@ -71,6 +96,15 @@ class Runner {
   /// before teardown. Returns true if all activity ceased within the timeout,
   /// false otherwise.
   virtual bool waitForCompletion(int32_t maxWaitMicros) = 0;
+
+  /// Convenience helper that synchronously drains and returns all result
+  /// batches by blocking the calling thread on execute(). Every caller could
+  /// instead be a coroutine awaiting execute(); this exists only where that is
+  /// inconvenient — non-production and test code. Must NOT be called from a
+  /// Velox executor thread (blocking there starves the executor). Holds the
+  /// whole result set in memory: callers that consume batches incrementally
+  /// should stream execute() rather than use this.
+  std::vector<velox::RowVectorPtr> drain();
 };
 
 } // namespace facebook::axiom::runner

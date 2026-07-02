@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/coro/BlockingWait.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/init/Init.h>
 #include <folly/system/HardwareConcurrency.h>
@@ -292,9 +293,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
       getrusage(RUSAGE_SELF, &start);
       MicrosecondTimer timer(&micros);
 
-      while (auto rows = runner.next()) {
-        results.push_back(rows);
-      }
+      results = runner.drain();
 
       struct rusage final;
       getrusage(RUSAGE_SELF, &final);

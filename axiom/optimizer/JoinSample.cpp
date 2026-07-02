@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/coro/BlockingWait.h>
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/runner/LocalRunner.h"
@@ -175,9 +176,14 @@ std::unique_ptr<KeyFreq> runJoinSample(
   auto result = std::make_unique<folly::F14FastMap<uint32_t, uint32_t>>();
 
   int32_t rowCount = 0;
-  while (auto rows = runner.next()) {
-    rowCount += rows->size();
-    auto hashes = rows->childAt(0)->as<velox::SimpleVector<int64_t>>();
+  // Pull batches one at a time so sampling can stop early once it has enough
+  // rows. blockingWait runs on the optimizer planning thread, not a Velox
+  // executor thread.
+  auto generator = runner.execute();
+  while (auto rows = folly::coro::blockingWait(generator.next())) {
+    const velox::RowVectorPtr& batch = *rows;
+    rowCount += batch->size();
+    auto hashes = batch->childAt(0)->as<velox::SimpleVector<int64_t>>();
     for (auto i = 0; i < hashes->size(); ++i) {
       if (!hashes->isNullAt(i)) {
         ++(*result)[static_cast<uint32_t>(hashes->valueAt(i))];
