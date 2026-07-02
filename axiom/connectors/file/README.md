@@ -19,6 +19,7 @@ what synthetic metadata tables to expose. See the `FileHandler` interface in
 
 **Reads:**
 - Scan row data from a supported file via its absolute file path.
+- Scan a directory of files (trailing-slash path) as one logical table.
 - Auto-detect schema from the file header.
 - Column projection — only the requested columns are decoded.
 - Streaming reads — row data is returned one batch at a time, not buffered in
@@ -45,6 +46,24 @@ FROM file."parquet"."/data/file.parquet"
 WHERE name = 'alpha';
 ```
 
+### Reading a directory of files
+
+A path ending in `/` is treated as a directory. The connector reads every file
+in it as one logical table, taking the schema from the first file and assuming
+the rest share it. File extensions are not required — the schema already selects
+the format.
+
+```sql
+-- Read all Parquet files under a directory.
+SELECT * FROM file."parquet"."/data/parquet/";
+```
+
+Over a directory, metadata tables emit rows for every file. Per-file identifiers
+such as a Parquet `row_group_id` restart at 0 in each file, so the metadata
+tables carry a `file_path` column to disambiguate them.
+
+Key or join metadata rows on `(file_path, row_group_id)` — not `row_group_id` alone — or rows from different files will collide.
+
 ### Inspecting file metadata
 
 Append a `$`-suffix to the file path to query a synthetic metadata table. No
@@ -70,7 +89,7 @@ A table name is a file path with an optional metadata-table suffix:
 ```
 
 - A plain path (no `$` suffix) maps to the **data table** — row data from the
-  file.
+  file, or from every file in the directory when the path ends in `/`.
 - A path ending with a recognized `$`-suffix maps to the corresponding
   **metadata table** (e.g. `$row_groups`, `$column_chunks`).
 - An unrecognized `$`-suffix produces an error from the handler.
@@ -96,7 +115,8 @@ Lists one row per row group with size and row-count statistics.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `row_group_id` | BIGINT | Zero-based row group index within the file. |
+| `file_path` | VARCHAR | Absolute path of the file the row group belongs to. |
+| `row_group_id` | BIGINT | Row group index within its file. Restarts at 0 in each file, so over a directory it is unique only together with `file_path`. |
 | `num_rows` | BIGINT | Number of rows in the row group. |
 | `total_byte_size` | BIGINT | Total uncompressed byte size of all column data in the row group. |
 | `total_compressed_size` | BIGINT | Total compressed byte size of all column data in the row group. |
@@ -121,9 +141,10 @@ compression codec, byte sizes, value count, and column-chunk statistics.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `row_group_id` | BIGINT | Zero-based row group index. |
+| `file_path` | VARCHAR | Absolute path of the file the column chunk belongs to. |
+| `row_group_id` | BIGINT | Row group index within its file. Restarts at 0 in each file, so over a directory it is unique only together with `file_path`. |
 | `column_id` | BIGINT | Zero-based column index within the row group. |
-| `name` | VARCHAR | Column name from the file schema. |
+| `name` | VARCHAR | Column name from the file schema. Nested fields use their dotted path: struct fields join with `.`, list elements append `.element`, and map entries append `.key`/`.value` (e.g. `address.city`, `tags.element`, `lookup.key`). |
 | `compression` | VARCHAR | Compression codec (e.g. `none`, `zstd`, `snappy`, `gzip`). |
 | `encodings` | VARCHAR | Comma-separated Parquet page encodings (e.g. `RLE,PLAIN`, `RLE_DICTIONARY`). |
 | `compressed_size` | BIGINT | Total compressed byte size of the column chunk. |

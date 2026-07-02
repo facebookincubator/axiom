@@ -36,6 +36,12 @@ class ParquetFileHandler : public FileHandler {
       const velox::RowTypePtr& fullSchema,
       const velox::connector::ColumnHandleMap& columnHandles,
       velox::memory::MemoryPool* pool) const override;
+
+  // Treats only files beginning with the Parquet "PAR1" magic as data files, so
+  // directory listing skips subdirectories and non-Parquet sidecar files.
+  bool isDataFile(
+      velox::filesystems::FileSystem& fileSystem,
+      const std::string& filePath) const override;
 };
 
 /// Registers the Parquet handler under the "parquet" schema name.
