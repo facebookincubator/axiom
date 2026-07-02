@@ -15,6 +15,12 @@
  */
 
 #include "axiom/runner/LocalRunner.h"
+#include <folly/CancellationToken.h>
+#include <folly/coro/BlockingWait.h>
+#include <folly/coro/Task.h>
+#include <folly/coro/WithCancellation.h>
+#include <folly/synchronization/Baton.h>
+#include <thread>
 #include "axiom/runner/tests/DistributedPlanBuilder.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -97,7 +103,7 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
   }
 
   optimizer::MultiFragmentPlanPtr makeJoinPlan(
-      std::string project = "c0",
+      std::string_view project = "c0",
       bool broadcastBuild = false) {
     optimizer::MultiFragmentPlan::Options options = {
         .queryId = makeQueryId(), .numWorkers = 4, .numDrivers = 2};
@@ -106,7 +112,7 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
     test::DistributedPlanBuilder rootBuilder(
         options, idGenerator_, pool_.get());
     rootBuilder.tableScan("t", rowType_)
-        .project({project})
+        .project({std::string{project}})
         .shufflePartitioned({"c0"}, 3, false)
         .hashJoin(
             {"c0"},
@@ -156,16 +162,6 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
         runtimeStats_);
   }
 
-  // Fetches all remaining data from the runner.
-  static std::vector<velox::RowVectorPtr> readCursor(
-      const std::shared_ptr<LocalRunner>& runner) {
-    std::vector<velox::RowVectorPtr> result;
-    while (auto rowVector = runner->next()) {
-      result.push_back(rowVector);
-    }
-    return result;
-  }
-
   std::shared_ptr<velox::core::PlanNodeIdGenerator> idGenerator_{
       std::make_shared<velox::core::PlanNodeIdGenerator>()};
 
@@ -186,7 +182,7 @@ TEST_F(LocalRunnerTest, count) {
   auto join = makeJoinPlan();
   auto localRunner = makeRunner(join);
 
-  auto results = readCursor(localRunner);
+  auto results = localRunner->drain();
   auto stats = localRunner->stats();
   EXPECT_EQ(1, results.size());
   EXPECT_EQ(1, results[0]->size());
@@ -196,11 +192,137 @@ TEST_F(LocalRunnerTest, count) {
   ASSERT_TRUE(localRunner->waitForCompletion(kWaitTimeoutUs));
 }
 
+// execute() yields all result batches and reports kFinished on completion.
+TEST_F(LocalRunnerTest, execute) {
+  auto join = makeJoinPlan();
+  auto localRunner = makeRunner(join);
+
+  std::vector<velox::RowVectorPtr> results;
+  folly::coro::blockingWait([&]() -> folly::coro::Task<void> {
+    auto generator = localRunner->execute();
+    while (auto rows = co_await generator.next()) {
+      results.push_back(std::move(*rows));
+    }
+  }());
+
+  EXPECT_EQ(1, results.size());
+  EXPECT_EQ(kNumRows, extractSingleInt64(results));
+  results.clear();
+  EXPECT_EQ(Runner::State::kFinished, localRunner->state());
+  ASSERT_TRUE(localRunner->waitForCompletion(kWaitTimeoutUs));
+}
+
+// Cancelling the awaiting scope interrupts execute() and surfaces the error;
+// the runner still terminates cleanly. A pre-cancelled token makes the abort
+// deterministic.
+TEST_F(LocalRunnerTest, executeCancellation) {
+  auto scan = makeScanPlan(/*numWorkers=*/3);
+  auto localRunner = makeRunner(scan);
+
+  folly::CancellationSource source;
+  source.requestCancellation();
+
+  auto drainLoop = [&]() -> folly::coro::Task<void> {
+    auto generator = localRunner->execute();
+    while (co_await generator.next()) {
+    }
+  };
+  VELOX_ASSERT_THROW(
+      folly::coro::blockingWait(
+          folly::coro::co_withCancellation(source.getToken(), drainLoop())),
+      "cancel");
+
+  EXPECT_EQ(Runner::State::kCancelled, localRunner->state());
+  ASSERT_TRUE(localRunner->waitForCompletion(kWaitTimeoutUs));
+}
+
+// The cancellation callback may fire on a thread other than the one awaiting
+// execute(). Here a separate thread requests cancellation (which runs abort()
+// synchronously on that thread) while the drain is parked between batches; the
+// next pull must surface the cross-thread abort, and teardown stays clean.
+TEST_F(LocalRunnerTest, executeCancellationFromAnotherThread) {
+  auto scan = makeScanPlan(/*numWorkers=*/1);
+  auto localRunner = makeRunner(scan);
+
+  folly::CancellationSource source;
+  folly::Baton<> gotBatch;
+  folly::Baton<> cancelled;
+
+  std::thread canceller([&] {
+    gotBatch.wait();
+    // requestCancellation() invokes the registered callback (abort()) inline on
+    // this thread, so the abort genuinely races the awaiting thread.
+    source.requestCancellation();
+    cancelled.post();
+  });
+
+  auto drainLoop = [&]() -> folly::coro::Task<void> {
+    auto generator = localRunner->execute();
+    auto first = co_await generator.next();
+    EXPECT_TRUE(first.has_value());
+    gotBatch.post();
+    cancelled.wait();
+    while (co_await generator.next()) {
+    }
+  };
+  VELOX_ASSERT_THROW(
+      folly::coro::blockingWait(
+          folly::coro::co_withCancellation(source.getToken(), drainLoop())),
+      "cancel");
+  canceller.join();
+
+  EXPECT_EQ(Runner::State::kCancelled, localRunner->state());
+  ASSERT_TRUE(localRunner->waitForCompletion(kWaitTimeoutUs));
+}
+
+// abort() before the first execute() pull (i.e. before start()) surfaces a
+// clean cancellation rather than tripping start()'s state precondition.
+TEST_F(LocalRunnerTest, abortBeforeStart) {
+  auto scan = makeScanPlan(/*numWorkers=*/1);
+  auto localRunner = makeRunner(scan);
+
+  localRunner->abort();
+  EXPECT_EQ(Runner::State::kCancelled, localRunner->state());
+
+  VELOX_ASSERT_THROW(localRunner->drain(), "Query cancelled");
+  EXPECT_EQ(Runner::State::kCancelled, localRunner->state());
+  ASSERT_TRUE(localRunner->waitForCompletion(kWaitTimeoutUs));
+}
+
+// A second abort() is a harmless no-op; the first cancellation wins.
+TEST_F(LocalRunnerTest, abortIsIdempotent) {
+  auto scan = makeScanPlan(/*numWorkers=*/1);
+  auto localRunner = makeRunner(scan);
+
+  localRunner->abort();
+  localRunner->abort();
+  EXPECT_EQ(Runner::State::kCancelled, localRunner->state());
+
+  VELOX_ASSERT_THROW(localRunner->drain(), "Query cancelled");
+  ASSERT_TRUE(localRunner->waitForCompletion(kWaitTimeoutUs));
+}
+
+// abort() after a successful drain is a no-op: a late cancel (the callback
+// fires after execute() set kFinished, before it deregisters) must not clobber
+// the terminal kFinished state with kCancelled.
+TEST_F(LocalRunnerTest, abortAfterFinishIsNoop) {
+  auto scan = makeScanPlan(/*numWorkers=*/1);
+  auto localRunner = makeRunner(scan);
+
+  auto results = localRunner->drain();
+  EXPECT_EQ(Runner::State::kFinished, localRunner->state());
+  results.clear();
+
+  localRunner->abort();
+  EXPECT_EQ(Runner::State::kFinished, localRunner->state());
+  ASSERT_TRUE(localRunner->waitForCompletion(kWaitTimeoutUs));
+}
+
 TEST_F(LocalRunnerTest, error) {
   auto join = makeJoinPlan("if (c0 = 111, c0 / 0, c0 + 1) as c0");
   auto localRunner = makeRunner(join);
 
-  VELOX_ASSERT_THROW(readCursor(localRunner), "division by zero");
+  VELOX_ASSERT_THROW(localRunner->drain(), "division by zero");
   EXPECT_EQ(Runner::State::kError, localRunner->state());
   ASSERT_TRUE(localRunner->waitForCompletion(kWaitTimeoutUs));
 }
@@ -211,11 +333,10 @@ TEST_F(LocalRunnerTest, scan) {
     auto localRunner = makeRunner(scan);
 
     {
-      auto results = readCursor(localRunner);
-
       int32_t count = 0;
-      for (auto& rows : results) {
-        count += rows->size();
+      auto generator = localRunner->execute();
+      while (auto rows = folly::coro::blockingWait(generator.next())) {
+        count += (*rows)->size();
       }
       EXPECT_EQ(kNumRows, count);
     }
@@ -231,7 +352,7 @@ TEST_F(LocalRunnerTest, broadcast) {
   auto join = makeJoinPlan("c0", true);
   auto localRunner = makeRunner(join);
 
-  auto results = readCursor(localRunner);
+  auto results = localRunner->drain();
   auto stats = localRunner->stats();
   EXPECT_EQ(1, results.size());
   EXPECT_EQ(1, results[0]->size());
@@ -254,23 +375,20 @@ TEST_F(LocalRunnerTest, lastStageWithMultipleInputs) {
                    .tableScan("u", rowType_)
                    .project({"c0 as b0"})
                    .shuffleBroadcastResult();
-  rootBuilder.addNode([&](auto, auto) { return probe; })
+  rootBuilder.addNode([&](const auto&, auto) { return probe; })
       .hashJoin({"c0"}, {"b0"}, build, "", {"c0", "b0"});
 
   auto plan = rootBuilder.build();
 
   auto localRunner = makeRunner(plan);
-  auto results = readCursor(localRunner);
-  auto stats = localRunner->stats();
 
   size_t numRows = 0;
-  for (const auto& result : results) {
-    numRows += result->size();
+  auto generator = localRunner->execute();
+  while (auto rows = folly::coro::blockingWait(generator.next())) {
+    numRows += (*rows)->size();
   }
 
   EXPECT_EQ(kNumRows, numRows);
-
-  results.clear();
   EXPECT_EQ(Runner::State::kFinished, localRunner->state());
   ASSERT_TRUE(localRunner->waitForCompletion(kWaitTimeoutUs));
 }
@@ -292,7 +410,7 @@ TEST_F(LocalRunnerTest, spillDirectoryWiring) {
       spillDir->getPath(),
       runtimeStats_);
 
-  auto results = readCursor(localRunner);
+  auto results = localRunner->drain();
   EXPECT_EQ(1, results.size());
   EXPECT_EQ(kNumRows, extractSingleInt64(results));
   EXPECT_EQ(Runner::State::kFinished, localRunner->state());

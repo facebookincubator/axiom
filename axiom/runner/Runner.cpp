@@ -17,6 +17,8 @@
 #include "axiom/runner/Runner.h"
 
 #include <folly/container/F14Map.h>
+#include <folly/coro/BlockingWait.h>
+#include <folly/coro/Task.h>
 
 namespace facebook::axiom::runner {
 
@@ -35,5 +37,17 @@ const auto& stateNames() {
 } // namespace
 
 AXIOM_DEFINE_EMBEDDED_ENUM_NAME(Runner, State, stateNames);
+
+std::vector<velox::RowVectorPtr> Runner::drain() {
+  return folly::coro::blockingWait(
+      [this]() -> folly::coro::Task<std::vector<velox::RowVectorPtr>> {
+        std::vector<velox::RowVectorPtr> results;
+        auto generator = execute();
+        while (auto batch = co_await generator.next()) {
+          results.push_back(std::move(*batch));
+        }
+        co_return results;
+      }());
+}
 
 } // namespace facebook::axiom::runner

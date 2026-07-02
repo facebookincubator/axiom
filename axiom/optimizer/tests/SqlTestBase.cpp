@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/tests/SqlTestBase.h"
+#include <folly/coro/BlockingWait.h>
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/FunctionRegistry.h"
@@ -204,7 +205,8 @@ void SqlTestBase::runSetupStatement(
   }
 
   auto runner = runnerFactory(plan);
-  while (auto batch = runner->next()) {
+  auto generator = runner->execute();
+  while (folly::coro::blockingWait(generator.next())) {
   }
   runner->waitForCompletion(kMaxWaitMicros);
 }
@@ -255,10 +257,7 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeRunner(
 std::vector<RowVectorPtr> SqlTestBase::runAndCollect(std::string_view sql) {
   auto runner = makeRunner(sql);
 
-  std::vector<RowVectorPtr> results;
-  for (auto batch = runner->next(); batch != nullptr; batch = runner->next()) {
-    results.push_back(std::move(batch));
-  }
+  std::vector<RowVectorPtr> results = runner->drain();
 
   runner->waitForCompletion(kMaxWaitMicros);
 
@@ -338,8 +337,9 @@ uint64_t SqlTestBase::run(std::string_view sql) {
   };
 
   uint64_t numRows = 0;
-  for (auto batch = runner->next(); batch != nullptr; batch = runner->next()) {
-    numRows += batch->size();
+  auto generator = runner->execute();
+  while (auto rows = folly::coro::blockingWait(generator.next())) {
+    numRows += (*rows)->size();
   }
 
   return numRows;

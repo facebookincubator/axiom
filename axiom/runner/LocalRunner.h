@@ -108,8 +108,9 @@ class LocalRunner : public Runner,
   LocalRunner(LocalRunner&&) = delete;
   LocalRunner& operator=(LocalRunner&&) = delete;
 
-  /// First call starts execution.
-  velox::RowVectorPtr next() override;
+  /// Execution starts lazily on the first pull of the returned generator, not
+  /// when execute() is called.
+  folly::coro::AsyncGenerator<velox::RowVectorPtr> execute() override;
 
   /// Returns a list of fragments from the 'plan' specified in constructor
   /// sorted in topological order.
@@ -153,7 +154,7 @@ class LocalRunner : public Runner,
   /// return false immediately if not.
   /// Captures a final stats snapshot once every task has stopped running, so a
   /// subsequent stats() returns final stats rather than the in-progress
-  /// snapshot. (Draining the output via next() does not by itself guarantee
+  /// snapshot. (Draining the output via execute() does not by itself guarantee
   /// final stats: under multi-threaded execution a producer driver, e.g. a
   /// probe-side TableScan, may still be closing.)
   /// @pre state() != State::kInitialized
@@ -165,14 +166,21 @@ class LocalRunner : public Runner,
   }
 
  private:
-  // Reads all results and calls commit(...) on the results if successful.
-  // Catches exceptions, calls abort() and rethrows if there is an error.
-  // Returns the number of rows written.
-  [[nodiscard]] int64_t runWrite();
+  // Cancelable single-batch pull shared by execute() and co_runWrite(). Starts
+  // the task on first call. Returns nullptr at end of output. Does not mutate
+  // 'state_'. The caller (execute()/co_runWrite()) owns the cancellation
+  // callback for the whole drain.
+  folly::coro::Task<velox::RowVectorPtr> co_pull();
 
-  // Call runWrite() and returns a single-row vector
-  // with the number of rows written in 'rows' column.
-  [[nodiscard]] velox::RowVectorPtr nextWrite();
+  // Reads all results and calls commit(...) on them if successful. Catches
+  // exceptions, calls abort() and rethrows on error. Returns the number of rows
+  // written. Drives the cancelable pull, so it honors the awaiting scope's
+  // cancellation during the produce/drain phase (the commit itself is a
+  // point of no return and runs to completion).
+  [[nodiscard]] folly::coro::Task<int64_t> co_runWrite();
+
+  // Builds a single-row vector with 'rows' in a "rows" BIGINT column.
+  velox::RowVectorPtr makeWriteResult(int64_t rows);
 
   void start();
 
@@ -198,7 +206,7 @@ class LocalRunner : public Runner,
 
   velox::exec::CursorParameters params_;
 
-  velox::tsan_atomic<State> state_{State::kInitialized};
+  std::atomic<State> state_{State::kInitialized};
 
   std::unique_ptr<velox::exec::TaskCursor> cursor_;
   std::vector<std::vector<std::shared_ptr<velox::exec::Task>>> stages_;

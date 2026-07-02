@@ -15,6 +15,7 @@
  */
 
 #include "axiom/runner/tests/PrestoQueryReplayRunner.h"
+#include <folly/coro/BlockingWait.h>
 #include "axiom/runner/LocalRunner.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -32,12 +33,16 @@ std::vector<velox::RowVectorPtr> readCursor(
     std::shared_ptr<LocalRunner>& runner,
     velox::memory::MemoryPool* pool) {
   // We'll check the result after tasks are deleted, so copy the result
-  // vectors to 'pool' that has longer lifetime.
+  // vectors to 'pool' that has longer lifetime. Stream one batch at a time so
+  // peak memory holds a single source batch plus the copies, not the whole
+  // source result set as well.
   std::vector<velox::RowVectorPtr> result;
-  while (auto rows = runner->next()) {
+  auto generator = runner->execute();
+  while (auto rows = folly::coro::blockingWait(generator.next())) {
+    const velox::RowVectorPtr& batch = *rows;
     result.push_back(
         std::dynamic_pointer_cast<velox::RowVector>(
-            velox::BaseVector::copy(*rows, pool)));
+            velox::BaseVector::copy(*batch, pool)));
   }
   return result;
 }

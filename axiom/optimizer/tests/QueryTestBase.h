@@ -258,10 +258,6 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
   std::shared_ptr<velox::core::QueryCtx> makeQueryCtx(
       const std::string& queryId);
 
-  /// Fetches all remaining data from the runner.
-  static std::vector<velox::RowVectorPtr> readCursor(
-      const std::shared_ptr<runner::LocalRunner>& runner);
-
   inline static std::unordered_map<std::string, std::string> config_;
 
   OptimizerOptions optimizerOptions_;
