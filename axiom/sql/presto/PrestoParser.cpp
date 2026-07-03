@@ -25,6 +25,7 @@
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/sql/presto/ColumnsExpansion.h"
+#include "axiom/sql/presto/CteScope.h"
 #include "axiom/sql/presto/DisplayNames.h"
 #include "axiom/sql/presto/ExpressionPlanner.h"
 #include "axiom/sql/presto/GroupByPlanner.h"
@@ -429,7 +430,7 @@ class RelationPlanner : public AstVisitor {
       const WithQuery& withEntry,
       const std::string& cteName) {
     AXIOM_PRESTO_SYNTAX_CHECK(
-        recursiveCteAnchors_.empty(),
+        !ctes_.hasAnchors(),
         withEntry.location(),
         cteName,
         "WITH RECURSIVE does not support nested recursive CTEs");
@@ -455,10 +456,7 @@ class RelationPlanner : public AstVisitor {
     // the anchor so processTable() resolves self-references via
     // recursiveRef using the anchor's name mappings.
     builder_ = newBuilder();
-    recursiveCteAnchors_[cteName] = anchorBuilder.get();
-    SCOPE_EXIT {
-      recursiveCteAnchors_.erase(cteName);
-    };
+    auto anchorGuard = ctes_.pushAnchor(cteName, anchorBuilder.get());
     {
       auto guard = scopedResetLastNames();
       processQueryBody(unionExpr->right());
@@ -501,39 +499,21 @@ class RelationPlanner : public AstVisitor {
   void processTable(const Table& table) {
     const auto tableName = canonicalizeName(table.name()->suffix());
 
-    // Resolution precedence:
-    //   1. In-flight recursive CTE step body -- a self-reference inside
-    //      the step body must emit a RecursiveReferenceNode rather than
-    //      re-entering the WithQuery lookup and re-translating the body.
-    //   2. CTE binding in withQueries_ (recursive or non-recursive). For
-    //      recursive entries, re-translates the body at this reference
-    //      site so each reference yields an independent FixedPointNode
-    //      subtree (execution does not support DAG plans).
-    //   3. Base table.
-    auto recursiveIt = recursiveCteAnchors_.find(tableName);
-    if (recursiveIt != recursiveCteAnchors_.end()) {
+    // A recursive binding re-translates its body at each reference site so
+    // every reference yields an independent FixedPointNode subtree, since
+    // execution does not support DAG plans.
+    if (const auto* anchor = ctes_.anchorFor(tableName)) {
       builder_ = newBuilder();
       // The recursive-ref name must match the enclosing FixedPointNode's
       // name so the optimizer wires this self-reference to that loop state.
-      builder_->recursiveRef(recursiveIt->first, *recursiveIt->second);
+      builder_->recursiveRef(tableName, *anchor);
       builder_->as(tableName);
       displayNames_.accumulate(*builder_, tableName);
       return;
     }
 
-    auto withIt = withQueries_.find(tableName);
-    if (withIt != withQueries_.end()) {
-      // Temporarily remove the CTE from the map while processing its body
-      // to prevent infinite recursion when a CTE has the same name as a
-      // base table it references (e.g. WITH t AS (SELECT * FROM t)).
-      // Recursive CTEs are also pulled out so a sibling outer reference
-      // fired mid-translation cannot re-enter the same body.
-      auto entry = std::move(withIt->second);
-      withQueries_.erase(withIt);
-      SCOPE_EXIT {
-        withQueries_.insert_or_assign(tableName, std::move(entry));
-      };
-
+    if (auto hidden = ctes_.hide(tableName)) {
+      const auto& entry = hidden.entry();
       if (entry.isRecursive) {
         translateRecursiveCteReference(*entry.withQuery, tableName);
       } else {
@@ -577,15 +557,7 @@ class RelationPlanner : public AstVisitor {
 
       VELOX_CHECK_NOT_NULL(parseSql_);
       auto query = parseSql_(view->text());
-      // A view body is an independent query and must not resolve table
-      // references against the caller's in-flight recursive step-body
-      // bindings. Save and restore here so any sibling FROM relations in
-      // this outer query still see the outer bindings.
-      auto savedRecursiveCteAnchors = std::move(recursiveCteAnchors_);
-      recursiveCteAnchors_.clear();
-      SCOPE_EXIT {
-        recursiveCteAnchors_ = std::move(savedRecursiveCteAnchors);
-      };
+      auto suppressed = ctes_.suppressAnchors();
       processQuery(dynamic_cast<Query*>(query.get()));
     } else {
       AXIOM_PRESTO_SEMANTIC_FAIL(
@@ -1314,13 +1286,10 @@ class RelationPlanner : public AstVisitor {
   }
 
   void processQuery(Query* query) {
-    auto savedWithQueries = withQueries_;
+    auto scope = ctes_.enterScope();
     auto savedAccumulatedNames = displayNames_.accumulatedNames;
-    auto savedRecursiveCteAnchors = recursiveCteAnchors_;
     SCOPE_EXIT {
-      withQueries_ = std::move(savedWithQueries);
       displayNames_.accumulatedNames = std::move(savedAccumulatedNames);
-      recursiveCteAnchors_ = std::move(savedRecursiveCteAnchors);
     };
 
     // lastNames is scoped per query; reset so names from a sibling relation
@@ -1338,13 +1307,7 @@ class RelationPlanner : public AstVisitor {
           selfReferential = bodyQuery != nullptr &&
               presto::RecursiveCteValidator::referencesCte(*bodyQuery, cteName);
         }
-        withQueries_.insert_or_assign(
-            cteName, CteEntry{withQuery, selfReferential});
-        // A nested WITH binding shadows any enclosing recursive CTE of the
-        // same name; remove the in-flight step-body entry so processTable
-        // falls through to the new withQueries_ binding. processQuery's
-        // SCOPE_EXIT restores recursiveCteAnchors_ on exit.
-        recursiveCteAnchors_.erase(cteName);
+        ctes_.bind(cteName, CteScope::Entry{withQuery, selfReferential});
       }
     }
 
@@ -1535,19 +1498,7 @@ class RelationPlanner : public AstVisitor {
         return builder_->hasColumn(first) ||
             builder_->hasQualifiedColumn(first, second);
       }};
-  // A CTE binding tracked while translating its enclosing query.
-  // 'isRecursive' is true when the body self-references and therefore
-  // requires FixedPointNode translation at each reference site.
-  struct CteEntry {
-    std::shared_ptr<WithQuery> withQuery;
-    bool isRecursive{false};
-  };
-  std::unordered_map<std::string, CteEntry> withQueries_;
-  // Anchor PlanBuilder pointer for each recursive CTE currently being
-  // translated. processTable consumes this when emitting the matching
-  // RecursiveReferenceNode so step-body self-references inherit anchor
-  // name resolution.
-  folly::F14FastMap<std::string, const lp::PlanBuilder*> recursiveCteAnchors_;
+  CteScope ctes_;
   ViewMap views_;
   std::unordered_set<facebook::axiom::CatalogSchemaTableName> inputTables_;
   bool friendlySql_;

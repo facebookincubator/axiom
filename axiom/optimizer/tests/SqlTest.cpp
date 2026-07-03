@@ -268,6 +268,7 @@ int main(int argc, char** argv) {
   testing::AddGlobalTestEnvironment(new SqlTestEnvironment);
 
   registerQueryFile<"basic">();
+  registerQueryFile<"cte">();
   registerQueryFile<"join">();
   registerQueryFile<"subquery">();
   registerQueryFile<"window">();
