@@ -18,6 +18,7 @@
 
 #include <ctime>
 
+#include <folly/coro/BlockingWait.h>
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/Optimization.h"
@@ -123,16 +124,6 @@ logical_plan::LogicalPlanNodePtr QueryTestBase::parseSelect(
 }
 
 namespace {
-constexpr int32_t kWaitTimeoutUs = 500'000;
-
-void waitForCompletion(const std::shared_ptr<runner::LocalRunner>& runner) {
-  if (runner) {
-    VELOX_CHECK(
-        runner->waitForCompletion(kWaitTimeoutUs),
-        "Timed out waiting for query completion");
-  }
-}
-
 OptimizerSessionPtr makeOptimizerSession(
     const std::string& queryId,
     OptimizerOptions options) {
@@ -182,13 +173,14 @@ TestResult QueryTestBase::runFragmentedPlan(
       runtimeStats_);
 
   SCOPE_EXIT {
-    waitForCompletion(runner);
     queryCtx_.reset();
   };
 
   TestResult result;
-  result.runner = runner;
-  result.results = readCursor(result.runner);
+  result.runner = std::move(runner);
+  result.runner->drain([&](velox::RowVectorPtr batch) {
+    result.results.push_back(std::move(batch));
+  });
   result.stats = result.runner->stats();
   history_->recordVeloxExecution(planAndStats, result.stats);
 
@@ -451,16 +443,6 @@ std::shared_ptr<velox::core::QueryCtx> QueryTestBase::makeQueryCtx(
       /*pool=*/nullptr,
       /*spillExecutor=*/nullptr,
       queryId);
-}
-
-// static
-std::vector<velox::RowVectorPtr> QueryTestBase::readCursor(
-    const std::shared_ptr<runner::LocalRunner>& runner) {
-  std::vector<velox::RowVectorPtr> result;
-  while (auto rowVector = runner->next()) {
-    result.push_back(rowVector);
-  }
-  return result;
 }
 
 } // namespace facebook::axiom::optimizer::test

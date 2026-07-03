@@ -108,8 +108,16 @@ class LocalRunner : public Runner,
   LocalRunner(LocalRunner&&) = delete;
   LocalRunner& operator=(LocalRunner&&) = delete;
 
-  /// First call starts execution.
-  velox::RowVectorPtr next() override;
+  /// Execution starts lazily on the first pull of the returned generator, not
+  /// when execute() is called.
+  folly::coro::AsyncGenerator<velox::RowVectorPtr> execute() override;
+
+  /// Terminal wind-down: cancels any still-running work and reaps it (split
+  /// scope joined, tasks completed, final stats captured, pools released).
+  /// Awaited (never blocks the awaiting thread), so it is safe on a Velox
+  /// executor thread. Idempotent, and safe when execute() was never pulled
+  /// (state() == kInitialized): it just joins the empty split scope.
+  folly::coro::Task<void> co_close() override;
 
   /// Returns a list of fragments from the 'plan' specified in constructor
   /// sorted in topological order.
@@ -126,7 +134,7 @@ class LocalRunner : public Runner,
   /// Returns aggregated runtime stats for each fragment in 'fragments()'.
   /// Corresponds 1:1 to 'fragments()'. For multi-task fragments, stats from all
   /// tasks are aggregated together. While running this is a live snapshot; once
-  /// waitForCompletion() has captured the final stats, it returns those.
+  /// execution has been reaped and the final stats captured, it returns those.
   std::vector<velox::exec::TaskStats> stats() const override;
 
   /// Prints the distributed plan annotated with runtime stats. Similar to
@@ -144,35 +152,45 @@ class LocalRunner : public Runner,
           std::string_view indentation,
           std::ostream& out)>& addContext = nullptr) const;
 
-  /// Best-effort attempt to cancel the execution.
-  void abort() override;
-
-  /// Waits for all tasks to complete in two phases (stop running, then release
-  /// resources), each bounded by `maxWaitMicros` microseconds.
-  /// If `maxWaitMicros <= 0` this will check if the tasks are completed and
-  /// return false immediately if not.
-  /// Captures a final stats snapshot once every task has stopped running, so a
-  /// subsequent stats() returns final stats rather than the in-progress
-  /// snapshot. (Draining the output via next() does not by itself guarantee
-  /// final stats: under multi-threaded execution a producer driver, e.g. a
-  /// probe-side TableScan, may still be closing.)
-  /// @pre state() != State::kInitialized
-  /// @return true if all tasks completed within the timeout, false otherwise.
-  bool waitForCompletion(int32_t maxWaitMicros) override;
-
   State state() const override {
     return state_;
   }
 
  private:
-  // Reads all results and calls commit(...) on the results if successful.
-  // Catches exceptions, calls abort() and rethrows if there is an error.
-  // Returns the number of rows written.
-  [[nodiscard]] int64_t runWrite();
+  // Fixed timeout for co_reap()'s task waits (stop running, then release
+  // resources).
+  static constexpr int32_t kReapTimeoutMicros = 1'000'000;
 
-  // Call runWrite() and returns a single-row vector
-  // with the number of rows written in 'rows' column.
-  [[nodiscard]] velox::RowVectorPtr nextWrite();
+  // Best-effort attempt to cancel the execution. May be invoked from any
+  // thread (via the cancellation callback), without serialization, and is
+  // idempotent. A no-op once execution has finished (state() == kFinished).
+  // Otherwise state() becomes kCancelled and the in-flight or next pull
+  // surfaces the cancellation error.
+  void cancelTasks();
+
+  // Awaited reap shared by co_close() and the co_runWrite() error path. Joins
+  // the split scope, then waits for all tasks to complete in two phases (stop
+  // running, then release resources), each bounded by kReapTimeoutMicros.
+  // Captures a final stats snapshot once every task has stopped running, so a
+  // subsequent stats() returns final stats rather than the in-progress
+  // snapshot. Idempotent (re-entry is a no-op once the scope is joined and
+  // stages_ cleared) and safe when state() == kInitialized (execute() created
+  // but never pulled): in that case it just joins the empty split scope.
+  folly::coro::Task<void> co_reap();
+
+  // Cancelable single-batch pull; starts execution on the first call. Returns
+  // nullptr at end of output.
+  folly::coro::Task<velox::RowVectorPtr> co_pull();
+
+  // Reads all results and calls commit(...) on them if successful. Catches
+  // exceptions, reaps and rethrows on error. Returns the number of rows
+  // written. Drives the cancelable pull, so it honors the awaiting scope's
+  // cancellation during the produce/drain phase (the commit itself is a
+  // point of no return and runs to completion).
+  [[nodiscard]] folly::coro::Task<int64_t> co_runWrite();
+
+  // Builds a single-row vector with 'rows' in a "rows" BIGINT column.
+  velox::RowVectorPtr makeWriteResult(int64_t rows);
 
   void start();
 
@@ -188,7 +206,9 @@ class LocalRunner : public Runner,
   // mutex_.
   std::vector<velox::exec::TaskStats> aggregatedStats() const;
 
-  // Serializes 'cursor_' and 'error_'.
+  // Serializes 'cursor_', 'error_', and mutation of 'stages_' (which
+  // cancelTasks()/reap() read from a task thread while makeStages() is still
+  // building it).
   mutable std::mutex mutex_;
 
   const RunnerSessionPtr session_;
@@ -198,11 +218,11 @@ class LocalRunner : public Runner,
 
   velox::exec::CursorParameters params_;
 
-  velox::tsan_atomic<State> state_{State::kInitialized};
+  std::atomic<State> state_{State::kInitialized};
 
   std::unique_ptr<velox::exec::TaskCursor> cursor_;
   std::vector<std::vector<std::shared_ptr<velox::exec::Task>>> stages_;
-  // Final stats captured by waitForCompletion() once all tasks stopped running.
+  // Final stats captured by co_reap() once all tasks stopped running.
   // Once set, stats() returns this instead of the live snapshot, which lets
   // stats() report final stats after the tasks have been torn down.
   std::optional<std::vector<velox::exec::TaskStats>> finalStats_;
@@ -211,8 +231,14 @@ class LocalRunner : public Runner,
   // Base directory for task spill files. Empty disables spilling.
   std::string baseSpillDirectory_;
   QueryRuntimeStats& runtimeStats_;
-  folly::coro::AsyncScope splitScope_{/*throwOnJoin=*/true};
+  // Cancellable so teardown can stop split enumeration promptly rather than
+  // draining each source to noMoreSplits. co_reap() cancelAndJoinAsync()s it.
+  folly::coro::CancellableAsyncScope splitScope_{/*throwOnJoin=*/true};
   bool splitScopeJoined_{false};
+  // Set once co_close() has reaped. The destructor asserts this (or that
+  // execution never started) rather than reaping itself, so no drop blocks a
+  // thread. See co_close().
+  bool closed_{false};
 };
 
 } // namespace facebook::axiom::runner

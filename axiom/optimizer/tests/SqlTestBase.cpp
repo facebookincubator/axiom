@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/tests/SqlTestBase.h"
+#include <folly/coro/BlockingWait.h>
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/FunctionRegistry.h"
@@ -34,10 +35,6 @@
 namespace facebook::axiom::optimizer::test {
 
 using namespace facebook::velox;
-
-namespace {
-constexpr uint64_t kMaxWaitMicros{50'000};
-} // namespace
 
 void SqlTestBase::SetUpTestCase() {
   OperatorTestBase::SetUpTestCase();
@@ -204,9 +201,7 @@ void SqlTestBase::runSetupStatement(
   }
 
   auto runner = runnerFactory(plan);
-  while (auto batch = runner->next()) {
-  }
-  runner->waitForCompletion(kMaxWaitMicros);
+  runner->drain([](RowVectorPtr) {});
 }
 
 void SqlTestBase::runSetupStatement(const std::string& sql) {
@@ -256,11 +251,8 @@ std::vector<RowVectorPtr> SqlTestBase::runAndCollect(std::string_view sql) {
   auto runner = makeRunner(sql);
 
   std::vector<RowVectorPtr> results;
-  for (auto batch = runner->next(); batch != nullptr; batch = runner->next()) {
-    results.push_back(std::move(batch));
-  }
-
-  runner->waitForCompletion(kMaxWaitMicros);
+  runner->drain(
+      [&](RowVectorPtr batch) { results.push_back(std::move(batch)); });
 
   return results;
 }
@@ -333,15 +325,9 @@ void SqlTestBase::assertOrderedResults(
 
 uint64_t SqlTestBase::run(std::string_view sql) {
   auto runner = makeRunner(sql);
-  SCOPE_EXIT {
-    runner->waitForCompletion(kMaxWaitMicros);
-  };
 
   uint64_t numRows = 0;
-  for (auto batch = runner->next(); batch != nullptr; batch = runner->next()) {
-    numRows += batch->size();
-  }
-
+  runner->drain([&](RowVectorPtr batch) { numRows += batch->size(); });
   return numRows;
 }
 

@@ -16,6 +16,7 @@
 
 #include "axiom/cli/SqlQueryRunner.h"
 #include <folly/container/F14Map.h>
+#include <folly/coro/BlockingWait.h>
 #include <folly/system/HardwareConcurrency.h>
 #include <algorithm>
 #include <cmath>
@@ -268,14 +269,6 @@ connector::ConnectorProperties collectConnectorProperties(
     }
   }
   return result;
-}
-
-std::vector<velox::RowVectorPtr> fetchResults(runner::LocalRunner& runner) {
-  std::vector<velox::RowVectorPtr> results;
-  while (auto rows = runner.next()) {
-    results.push_back(rows);
-  }
-  return results;
 }
 
 int64_t countRows(const std::vector<velox::RowVectorPtr>& results) {
@@ -1156,9 +1149,6 @@ std::string SqlQueryRunner::runExplainAnalyze(
       queryCtx,
       options,
       runtimeStats ? *runtimeStats : noopRuntimeStats_);
-  SCOPE_EXIT {
-    waitForCompletion(runner, options.timeoutMicros);
-  };
 
   {
     PhaseTimer phaseTimer(
@@ -1168,12 +1158,10 @@ std::string SqlQueryRunner::runExplainAnalyze(
         QueryRuntimeStats::kExecuteCpuNanos);
     auto progress =
         startProgressReporter(*runner, queryCtx->queryId(), options);
-    auto results = fetchResults(*runner);
+    // Executed for its runtime stats (printed below); the result batches are
+    // not used, so discard them instead of accumulating the whole result set.
+    runner->drain([](velox::RowVectorPtr) {});
   }
-
-  // Drive the run to completion so operator stats are final before reading
-  // them: draining the output cursor does not guarantee every driver finished.
-  waitForCompletion(runner, options.timeoutMicros);
 
   std::stringstream out;
   out << printPlanWithStats(
@@ -1402,9 +1390,6 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runLogicalPlan(
       queryCtx,
       options,
       runtimeStats ? *runtimeStats : noopRuntimeStats_);
-  SCOPE_EXIT {
-    waitForCompletion(runner, options.timeoutMicros);
-  };
 
   {
     PhaseTimer phaseTimer(
@@ -1414,7 +1399,9 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runLogicalPlan(
         QueryRuntimeStats::kExecuteCpuNanos);
     auto progress =
         startProgressReporter(*runner, queryCtx->queryId(), options);
-    result.results = fetchResults(*runner);
+    runner->drain([&](velox::RowVectorPtr batch) {
+      result.results.push_back(std::move(batch));
+    });
   }
 
   return result;

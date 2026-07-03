@@ -16,6 +16,11 @@
 
 #pragma once
 
+#include <functional>
+
+#include <folly/coro/AsyncGenerator.h>
+#include <folly/coro/Task.h>
+
 #include "axiom/common/Enums.h"
 #include "velox/exec/TaskStats.h"
 
@@ -40,16 +45,45 @@ class Runner {
 
   virtual ~Runner() = default;
 
-  /// Returns the next batch of results. Returns nullptr when no more results.
-  /// Throws any execution time errors. The result is allocated in the pool of
-  /// QueryCtx given to the Runner implementation. The caller is responsible for
-  /// serializing calls from different threads.
-  virtual velox::RowVectorPtr next() = 0;
+  /// Returns a generator that yields successive result batches until the query
+  /// is done (the generator ends). `co_await gen.next()` rethrows any
+  /// execution-time error. Each batch is backed by a memory pool owned by the
+  /// runner and stays valid only until the runner is destroyed; a caller that
+  /// needs a batch to outlive the runner must copy it out (as optimizer
+  /// constant folding does).
+  ///
+  /// The caller must `co_await co_close()` exactly once when done with the
+  /// generator — whether it drained fully, stopped early, or was unwound by an
+  /// exception — before destroying the runner. To stop early, stop pulling and
+  /// then co_await co_close(); dropping the generator alone does NOT reap.
+  /// External or deadline cancellation still composes through the awaiting
+  /// scope's cancellation token (e.g. folly::coro::timeout or
+  /// co_withCancellation); there is no separate public cancel.
+  ///
+  /// Awaiting the read/produce-drain path never blocks the awaiting thread, so
+  /// it is safe on a Velox executor thread. Exception: on the write path the
+  /// INSERT/CTAS commit is a point of no return that runs to completion, and
+  /// its error-path cleanup waits for tasks to stop — both may block, so a
+  /// write-plan execute() should not be awaited on an executor thread.
+  virtual folly::coro::AsyncGenerator<velox::RowVectorPtr> execute() = 0;
+
+  /// Terminal, owner-scoped wind-down of one execute() run: stops anything
+  /// still running and reaps it (split generation joined, tasks completed,
+  /// final stats captured, pools released), and does not complete until that is
+  /// done. The owner co_awaits this exactly once before destroying the runner,
+  /// whether the generator drained fully or stopped early — the destructor
+  /// asserts it ran rather than doing blocking teardown itself. Because it is
+  /// awaited (not a blocking destructor), it is safe to co_await on a Velox
+  /// executor thread. Idempotent. This is not an external cancel that returns
+  /// before work stops; deadline/scope cancellation still composes through
+  /// execute()'s awaiting token, while co_close() is the owner's lifecycle
+  /// finish.
+  virtual folly::coro::Task<void> co_close() = 0;
 
   /// Returns Task stats for each fragment of the plan. The stats correspond 1:1
   /// to the stages in the MultiFragmentPlan. May be called at any time: while
-  /// the query is running it returns an in-progress snapshot; once
-  /// waitForCompletion() has run it returns the final stats.
+  /// the query is running it returns an in-progress snapshot; once execution
+  /// has been reaped it returns the final stats.
   virtual std::vector<velox::exec::TaskStats> stats() const = 0;
 
   /// Returns the executable fragments of the plan being run, ordered so that
@@ -60,17 +94,19 @@ class Runner {
   /// Returns the state of execution.
   virtual State state() const = 0;
 
-  /// Cancels the possibly pending execution. Returns immediately, thus before
-  /// the execution is actually finished. Use waitForCompletion() to wait for
-  /// all execution resources to be freed. May be called from any thread without
-  /// serialization.
-  virtual void abort() = 0;
-
-  /// Waits up to 'maxWaitMicros' for all activity of the execution to cease.
-  /// This is used in tests to ensure that all pools are empty and unreferenced
-  /// before teardown. Returns true if all activity ceased within the timeout,
-  /// false otherwise.
-  virtual bool waitForCompletion(int32_t maxWaitMicros) = 0;
+  /// Convenience that synchronously drives execute() to completion, invoking
+  /// 'onBatch' for each result batch, then co_closes the runner before
+  /// returning. For callers that are not themselves coroutines — synchronous
+  /// entry points such as the CLI, FFI boundaries, and tests. A coroutine
+  /// caller should await execute() (and co_close()) directly instead. Blocks
+  /// the calling thread, so it must NOT be called from a Velox executor thread
+  /// (blocking there starves the executor).
+  ///
+  /// When 'timeoutMicros' > 0, enforces a wall-clock deadline via cooperative
+  /// cancellation; on the deadline the drain fails with VELOX_USER_FAIL.
+  void drain(
+      const std::function<void(velox::RowVectorPtr)>& onBatch,
+      int64_t timeoutMicros = 0);
 };
 
 } // namespace facebook::axiom::runner

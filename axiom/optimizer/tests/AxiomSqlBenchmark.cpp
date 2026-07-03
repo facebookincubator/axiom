@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/coro/BlockingWait.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/init/Init.h>
 #include <folly/system/HardwareConcurrency.h>
@@ -292,9 +293,8 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
       getrusage(RUSAGE_SELF, &start);
       MicrosecondTimer timer(&micros);
 
-      while (auto rows = runner.next()) {
-        results.push_back(rows);
-      }
+      runner.drain(
+          [&](RowVectorPtr batch) { results.push_back(std::move(batch)); });
 
       struct rusage final;
       getrusage(RUSAGE_SELF, &final);
@@ -549,9 +549,6 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     auto planAndStats = optimize(statement.plan(), queryCtx);
 
     auto runner = makeRunner(planAndStats, queryCtx);
-    SCOPE_EXIT {
-      waitForCompletion(runner);
-    };
 
     RunStats unused;
     auto results = runInner(*runner, unused);
@@ -717,9 +714,6 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
 
     try {
       auto runner = makeRunner(planAndStats, queryCtx);
-      SCOPE_EXIT {
-        waitForCompletion(runner);
-      };
 
       RunStats runStats;
       auto results = runInner(*runner, runStats);
@@ -789,15 +783,6 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     } else {
       // Must clear before 'runner' goes out of scope.
       result.clear();
-    }
-  }
-
-  void waitForCompletion(const std::shared_ptr<runner::LocalRunner>& runner) {
-    if (runner) {
-      try {
-        runner->waitForCompletion(500000);
-      } catch (const std::exception&) {
-      }
     }
   }
 

@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <folly/ScopeGuard.h>
+#include <folly/coro/BlockingWait.h>
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/runner/LocalRunner.h"
@@ -175,21 +177,30 @@ std::unique_ptr<KeyFreq> runJoinSample(
   auto result = std::make_unique<folly::F14FastMap<uint32_t, uint32_t>>();
 
   int32_t rowCount = 0;
-  while (auto rows = runner.next()) {
-    rowCount += rows->size();
-    auto hashes = rows->childAt(0)->as<velox::SimpleVector<int64_t>>();
+  // Pull batches one at a time so sampling can stop early once it has enough
+  // rows. blockingWait runs on the optimizer planning thread, not a Velox
+  // executor thread.
+  auto generator = runner.execute();
+  // Early stop is "stop pulling, then co_close()". co_close() must run on every
+  // exit -- including when a pull throws -- so the runner is reaped before it
+  // is destroyed (its destructor asserts co_close() ran). co_close() does not
+  // throw, so this is safe during exception unwinding.
+  SCOPE_EXIT {
+    folly::coro::blockingWait(runner.co_close());
+  };
+  while (auto rows = folly::coro::blockingWait(generator.next())) {
+    const velox::RowVectorPtr& batch = *rows;
+    rowCount += batch->size();
+    auto hashes = batch->childAt(0)->as<velox::SimpleVector<int64_t>>();
     for (auto i = 0; i < hashes->size(); ++i) {
       if (!hashes->isNullAt(i)) {
         ++(*result)[static_cast<uint32_t>(hashes->valueAt(i))];
       }
     }
     if (maxRows && rowCount > maxRows) {
-      runner.abort();
       break;
     }
   }
-
-  runner.waitForCompletion(1'000'000);
   return result;
 }
 

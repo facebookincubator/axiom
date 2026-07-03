@@ -469,20 +469,6 @@ class SqlQueryRunner {
       std::string_view queryId,
       std::string_view connectorId) const;
 
-  // Wait maxWaitMicros microseconds for the LocalRunner to complete.  If
-  // `maxWaitMicros <= 0` this will check if the LocalRunner is completed and
-  // return immediately.
-  static void waitForCompletion(
-      const std::shared_ptr<facebook::axiom::runner::LocalRunner>& runner,
-      int32_t maxWaitMicros) {
-    if (runner) {
-      try {
-        runner->waitForCompletion(maxWaitMicros);
-      } catch (const std::exception&) {
-      }
-    }
-  }
-
   // Permission check callback invoked before query execution.
   PermissionCheck permissionCheck_;
 

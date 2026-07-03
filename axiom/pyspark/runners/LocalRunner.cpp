@@ -16,6 +16,7 @@
 
 #include "axiom/pyspark/runners/LocalRunner.h"
 
+#include <folly/coro/BlockingWait.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
@@ -33,17 +34,6 @@ using namespace ::facebook;
 
 namespace axiom::collagen::runner {
 namespace {
-
-void waitForCompletion(
-    const std::shared_ptr<facebook::axiom::runner::LocalRunner>& runner) {
-  if (runner) {
-    try {
-      runner->waitForCompletion(500000);
-    } catch (const std::exception& /*ignore*/) {
-      // Ignore exceptions during wait for completion
-    }
-  }
-}
 
 folly::CPUThreadPoolExecutor* getCPUExecutor() {
   static auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(
@@ -111,17 +101,8 @@ std::vector<velox::RowVectorPtr> LocalRunner::execute(
       leafPool_,
       /*baseSpillDirectory=*/"",
       runtimeStats_);
-  try {
-    while (auto rows = runner->next()) {
-      results.push_back(rows);
-    }
-  } catch (const std::exception& e) {
-    LOG(WARNING) << "Query terminated with: " << e.what();
-    waitForCompletion(runner);
-    throw;
-  }
-
-  waitForCompletion(runner);
+  runner->drain(
+      [&](velox::RowVectorPtr batch) { results.push_back(std::move(batch)); });
   return results;
 }
 

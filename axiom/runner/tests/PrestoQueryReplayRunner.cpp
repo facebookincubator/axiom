@@ -15,6 +15,7 @@
  */
 
 #include "axiom/runner/tests/PrestoQueryReplayRunner.h"
+#include <folly/coro/BlockingWait.h>
 #include "axiom/runner/LocalRunner.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -31,14 +32,16 @@ std::shared_ptr<velox::memory::MemoryPool> makeRootPool(
 std::vector<velox::RowVectorPtr> readCursor(
     std::shared_ptr<LocalRunner>& runner,
     velox::memory::MemoryPool* pool) {
-  // We'll check the result after tasks are deleted, so copy the result
-  // vectors to 'pool' that has longer lifetime.
+  // We'll check the result after tasks are deleted, so copy the result vectors
+  // to 'pool' that has longer lifetime. drain() delivers one batch at a time,
+  // so peak memory holds a single source batch plus the copies, not the whole
+  // source result set as well.
   std::vector<velox::RowVectorPtr> result;
-  while (auto rows = runner->next()) {
+  runner->drain([&](velox::RowVectorPtr batch) {
     result.push_back(
         std::dynamic_pointer_cast<velox::RowVector>(
-            velox::BaseVector::copy(*rows, pool)));
-  }
+            velox::BaseVector::copy(*batch, pool)));
+  });
   return result;
 }
 
@@ -411,7 +414,6 @@ PrestoQueryReplayRunner::run(
   std::vector<velox::RowVectorPtr> result;
   try {
     result = readCursor(localRunner, pool_);
-    localRunner->waitForCompletion(kWaitTimeoutUs);
   } catch (const std::exception& e) {
     LOG(ERROR) << "Failed to run query " << queryId << ": " << e.what();
     return std::make_pair(std::nullopt, Status::kError);

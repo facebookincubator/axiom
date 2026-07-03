@@ -17,6 +17,7 @@
 #include "axiom/runner/ProgressReporter.h"
 
 #include <folly/coro/Baton.h>
+#include <folly/coro/BlockingWait.h>
 #include <folly/executors/FunctionScheduler.h>
 #include <gtest/gtest.h>
 #include <condition_variable>
@@ -175,7 +176,7 @@ TEST_F(ProgressReporterTest, reportsProgressPerSplit) {
     int32_t completedSplits{0};
     int64_t outputRows{0};
     gate->post();
-    while (auto batch = runner->next()) {
+    runner->drain([&](velox::RowVectorPtr batch) {
       outputRows += batch->size();
       ++completedSplits;
       const auto report = waitForCompletedPast(completedSplits - 1);
@@ -185,7 +186,7 @@ TEST_F(ProgressReporterTest, reportsProgressPerSplit) {
       EXPECT_EQ(report.stats.totalSplits, completedSplits);
       EXPECT_EQ(report.stats.scanRows, completedSplits * kRowsPerSplit);
       gate->post();
-    }
+    });
     EXPECT_EQ(completedSplits, kNumSplits);
     EXPECT_EQ(outputRows, kNumSplits * kRowsPerSplit);
   } // ~reporter delivers the final report synchronously.
