@@ -15,6 +15,7 @@
  */
 
 #include <fmt/format.h>
+#include <folly/coro/BlockingWait.h>
 #include <velox/common/base/Exceptions.h>
 #include <iostream>
 #include <ranges>
@@ -397,13 +398,14 @@ std::vector<velox::RowVectorPtr> runConstantPlan(
       noopStats);
 
   std::vector<velox::RowVectorPtr> results;
-  while (auto rows = runner->next()) {
-    VELOX_CHECK_GT(rows->size(), 0);
+  runner->drain([&](velox::RowVectorPtr batch) {
+    VELOX_CHECK_GT(batch->size(), 0);
+    // Copy out of the runner's QueryCtx pool: that pool is released when the
+    // runner is closed (drain() reaps before returning).
     results.push_back(
         std::dynamic_pointer_cast<velox::RowVector>(
-            velox::BaseVector::copy(*rows, pool)));
-  }
-  runner->waitForCompletion(1'000'000);
+            velox::BaseVector::copy(*batch, pool)));
+  });
   return results;
 }
 

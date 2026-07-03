@@ -15,8 +15,11 @@
  */
 
 #include "axiom/runner/LocalRunner.h"
+#include <folly/CancellationToken.h>
+#include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/AsyncScope.h>
 #include <folly/coro/BlockingWait.h>
+#include <folly/coro/Coroutine.h>
 #include <folly/coro/Task.h>
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
@@ -132,6 +135,10 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
     std::function<void(std::exception_ptr)> onError,
     QueryRuntimeStats& runtimeStats) {
   std::exception_ptr ex;
+  // Injected by CancellableAsyncScope::add(); the runner's co_reap() requests
+  // cancellation on teardown so this loop stops enumerating instead of draining
+  // the source to noMoreSplits.
+  const auto cancelToken = co_await folly::coro::co_current_cancellation_token;
   try {
     VELOX_CHECK(!tasks.empty(), "tasks must not be empty");
 
@@ -141,6 +148,11 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
     int64_t splitCount = 0;
     size_t taskIdx = 0;
     for (;;) {
+      // Teardown requested: the tasks are being reaped, so remaining splits are
+      // unnecessary. Bounds the reap's split-scope join to one co_getSplits().
+      if (cancelToken.isCancellationRequested()) {
+        break;
+      }
       auto batch = co_await source->co_getSplits(1);
       for (auto& split : batch.splits) {
         size_t targetTask;
@@ -174,6 +186,9 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
         QueryRuntimeStats::kGetSplitsWallNanos,
         std::chrono::steady_clock::now() - getSplitsStart);
     runtimeStats.recordCount(QueryRuntimeStats::kGetSplitsCount, splitCount);
+  } catch (const folly::OperationCancelled&) {
+    // co_getSplits() observed the teardown cancellation mid-call. This is a
+    // clean stop, not a query error, so do not propagate it to onError().
   } catch (...) {
     ex = std::current_exception();
   }
@@ -249,6 +264,15 @@ LocalRunner::LocalRunner(
       runtimeStats_(runtimeStats) {
   params_.queryCtx = std::move(queryCtx);
   params_.outputPool = std::move(outputPool);
+  if (params_.outputPool == nullptr) {
+    // Own the cursor's output pool (held by params_ for the runner's lifetime)
+    // rather than letting the cursor create an internal one. Result batches are
+    // allocated here, and reap() releases the cursor while a caller may still
+    // hold batches; a runner-owned pool lets those batches outlive the cursor.
+    // It is freed when the runner is destroyed.
+    params_.outputPool =
+        params_.queryCtx->pool()->addLeafChild("localRunnerOutput");
+  }
   if (!baseSpillDirectory_.empty()) {
     params_.spillDirectory = baseSpillDirectory_;
   }
@@ -259,62 +283,137 @@ LocalRunner::LocalRunner(
 }
 
 LocalRunner::~LocalRunner() {
+  // A started runner must be wound down via co_await co_close() before being
+  // destroyed; the destructor asserts that rather than reaping here, so no drop
+  // ever runs blocking teardown on an executor thread. A never-started runner
+  // (execute() created but never pulled) needs no close.
+  VELOX_CHECK(
+      closed_ || state_ == State::kInitialized,
+      "co_close() must be awaited before destroying a started LocalRunner");
+  // CancellableAsyncScope requires cancelAndJoinAsync()/joinAsync() to complete
+  // before it is destroyed. co_close() already did so for a started runner; for
+  // a never-started one the scope is empty and this returns immediately.
   if (!splitScopeJoined_) {
-    folly::coro::blockingWait(splitScope_.joinAsync());
+    folly::coro::blockingWait(splitScope_.cancelAndJoinAsync());
   }
 }
 
-velox::RowVectorPtr LocalRunner::next() {
-  if (finishWrite_) {
-    return nextWrite();
-  }
-
+folly::coro::Task<velox::RowVectorPtr> LocalRunner::co_pull() {
   if (!cursor_) {
     start();
   }
 
-  if (!cursor_->moveNext()) {
-    state_ = State::kFinished;
-    return nullptr;
+  velox::ContinueFuture future = velox::ContinueFuture::makeEmpty();
+  if (cursor_->moveNext(&future)) {
+    co_return cursor_->current();
+  }
+  if (!future.valid()) {
+    // No future: producers are at end (or a drain boundary).
+    co_return nullptr;
   }
 
-  return cursor_->current();
+  // The cursor wakes the consumer only when a batch is queued or all producers
+  // are finished/drained, so a resolved wait-future implies the next dequeue
+  // yields data-or-terminal -- a single await is enough.
+  co_await std::move(future);
+  if (cursor_->moveNext(&future)) {
+    co_return cursor_->current();
+  }
+  VELOX_CHECK(
+      !future.valid(), "Cursor re-blocked after a resolved wait-future");
+  co_return nullptr;
 }
 
-int64_t LocalRunner::runWrite() {
+folly::coro::AsyncGenerator<velox::RowVectorPtr> LocalRunner::execute() {
+  // Cancelling the awaiting scope cancels the tasks; the next moveNext() then
+  // surfaces the task error. The callback may run on another thread, but
+  // cancelTasks() is safe from any thread. One registration covers the whole
+  // drain, including the write path below.
+  const auto token = co_await folly::coro::co_current_cancellation_token;
+  folly::CancellationCallback cancelCallback{token, [this] { cancelTasks(); }};
+
+  if (finishWrite_) {
+    co_yield makeWriteResult(co_await co_runWrite());
+    co_return;
+  }
+
+  while (auto rows = co_await co_pull()) {
+    co_yield std::move(rows);
+  }
+
+  // Reached end of output cleanly. Move kRunning -> kFinished under 'mutex_' so
+  // it serializes with cancelTasks()/onError: the transition cannot be
+  // interleaved with cancelTasks()'s read-guard-then-write and thus cannot
+  // clobber, or be clobbered by, a terminal state another thread set
+  // concurrently.
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (state_ == State::kRunning) {
+      state_ = State::kFinished;
+    }
+  }
+}
+
+folly::coro::Task<int64_t> LocalRunner::co_runWrite() {
   std::vector<velox::RowVectorPtr> result;
   auto finishWrite = std::move(finishWrite_);
-  auto state = State::kError;
-  SCOPE_EXIT {
-    state_ = state;
-  };
+  std::exception_ptr drainError;
   try {
-    start();
-    while (cursor_->moveNext()) {
-      result.push_back(cursor_->current());
+    while (auto rows = co_await co_pull()) {
+      result.push_back(std::move(rows));
     }
   } catch (const std::exception&) {
+    // Capture and handle after the handler: co_await is illegal inside a catch
+    // handler, and the reap below must be awaited.
+    drainError = std::current_exception();
+  }
+  if (drainError) {
+    // The drain failed: cancelTasks() (cancellation) or the task onError
+    // callback already recorded the terminal state. Release the write resources
+    // and rethrow the drain error without touching state_. Both cleanup steps
+    // are best-effort: log their own failures but never mask the drain error.
+    // co_reap() here matches what the owner's co_close() would run; co_close()
+    // is idempotent, so a later close is a no-op.
     try {
-      waitForCompletion(1'000'000);
+      co_await co_reap();
     } catch (const std::exception& e) {
       LOG(ERROR) << e.what()
                  << " while waiting for completion after error in write query";
-      throw;
     }
-    std::move(finishWrite).abort().get();
-    throw;
+    try {
+      std::move(finishWrite).abort().get();
+    } catch (const std::exception& e) {
+      LOG(ERROR) << e.what()
+                 << " while aborting write after error in write query";
+    }
+    std::rethrow_exception(drainError);
   }
 
-  auto rows = std::move(finishWrite).commit(result).get();
-  state = State::kFinished;
-  return rows;
+  int64_t rows{0};
+  try {
+    rows = std::move(finishWrite).commit(result).get();
+  } catch (const std::exception&) {
+    // The commit runs outside the drain, so no cancelTasks()/onError ran for
+    // it; record the failure explicitly (under 'mutex_' to serialize with
+    // cancelTasks()), setting error_ alongside state_ as the other error paths
+    // do so a caller inspecting error_ after a failed commit sees it.
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      state_ = State::kError;
+      error_ = std::current_exception();
+    }
+    throw;
+  }
+  // A successful commit is the point of no return: the write is durable, so
+  // mark finished (under 'mutex_') even if a late cancel raced in.
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_ = State::kFinished;
+  }
+  co_return rows;
 }
 
-velox::RowVectorPtr LocalRunner::nextWrite() {
-  VELOX_DCHECK(finishWrite_);
-
-  const int64_t rows = runWrite();
-
+velox::RowVectorPtr LocalRunner::makeWriteResult(int64_t rows) {
   auto child = velox::BaseVector::create<velox::FlatVector<int64_t>>(
       velox::BIGINT(), /*size=*/1, params_.outputPool.get());
   child->set(0, rows);
@@ -328,7 +427,16 @@ velox::RowVectorPtr LocalRunner::nextWrite() {
 }
 
 void LocalRunner::start() {
-  VELOX_CHECK_EQ(state_, State::kInitialized);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // A cancel (or error) that landed before start() leaves the runner terminal
+    // with no cursor; surface that error rather than starting and tripping the
+    // state precondition below.
+    if (error_) {
+      std::rethrow_exception(error_);
+    }
+    VELOX_CHECK_EQ(state_, State::kInitialized);
+  }
 
   params_.maxDrivers = plan_->options().numDrivers;
   params_.planNode = fragments_.back().fragment.planNode;
@@ -343,7 +451,7 @@ void LocalRunner::start() {
   makeStages(cursor->task());
 
   {
-    std::lock_guard<std::mutex> l(mutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!error_) {
       cursor_ = std::move(cursor);
       state_ = State::kRunning;
@@ -352,7 +460,7 @@ void LocalRunner::start() {
 
   if (!cursor_) {
     // The cursor was not set because previous fragments had an error.
-    abort();
+    cancelTasks();
     std::rethrow_exception(error_);
   }
 }
@@ -364,71 +472,96 @@ std::shared_ptr<connector::SplitSource> LocalRunner::splitSourceForScan(
   return splitSourceFactory_->splitSourceForScan(session, scan, partitionType);
 }
 
-void LocalRunner::abort() {
-  // If called without previous error, we set the error to be cancellation.
-  if (!error_) {
-    try {
-      state_ = State::kCancelled;
-      VELOX_FAIL("Query cancelled");
-    } catch (const std::exception&) {
-      error_ = std::current_exception();
-    }
-  }
-  VELOX_CHECK(state_ != State::kInitialized);
-
-  // Take a local copy of tasks under the mutex to prevent use-after-free if
-  // waitForCompletion() clears stages_ concurrently.
+void LocalRunner::cancelTasks() {
+  // cancelTasks() may be invoked from any thread via the cancellation callback,
+  // so serialize the error/state mutation under 'mutex_' against start() (which
+  // reads error_ under the same lock) and a second concurrent cancelTasks().
   std::vector<std::shared_ptr<velox::exec::Task>> tasks;
   {
-    std::lock_guard<std::mutex> l(mutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
+    // A completed query stays finished: the cancel callback can fire after
+    // execute() moved to kFinished but before it deregisters, and that late
+    // cancel must neither clobber kFinished nor re-error completed tasks.
+    if (state_ == State::kFinished) {
+      return;
+    }
+    // If called without a previous error, set the error to cancellation.
+    // onError records its own error before calling cancelTasks() to propagate
+    // it, so it must not be overwritten here.
+    if (!error_) {
+      try {
+        state_ = State::kCancelled;
+        VELOX_FAIL("Query cancelled");
+      } catch (const std::exception&) {
+        error_ = std::current_exception();
+      }
+    }
+    // Copy tasks under the lock to prevent use-after-free if reap() clears
+    // stages_ concurrently. Propagate to the cursor here too, under the lock
+    // that guards cursor_.
     for (auto& stage : stages_) {
       for (auto& task : stage) {
         tasks.push_back(task);
       }
     }
+    if (cursor_) {
+      cursor_->setError(error_);
+    }
   }
+  VELOX_CHECK(state_ != State::kInitialized);
 
   for (auto& task : tasks) {
     task->setError(error_);
   }
-  if (cursor_) {
-    cursor_->setError(error_);
-  }
 }
 
-bool LocalRunner::waitForCompletion(int32_t maxWaitMicros) {
-  VELOX_CHECK_NE(state_, State::kInitialized);
-
+folly::coro::Task<void> LocalRunner::co_reap() {
+  // Cancel and join the split scope first. This is the only teardown step
+  // needed when execute() was created but never pulled (state_ == kInitialized:
+  // no cursor, no tasks); the loops below are then no-ops. Idempotent via
+  // splitScopeJoined_. Awaited (not blockingWait), so it releases the thread
+  // while it waits instead of holding it -- this is what makes teardown safe on
+  // a Velox executor thread. cancelAndJoinAsync() requests cancellation on the
+  // split coroutines (which check the token each iteration) so the join is
+  // bounded to at most one in-flight co_getSplits() rather than draining each
+  // source to noMoreSplits.
   if (!splitScopeJoined_) {
-    folly::coro::blockingWait(splitScope_.joinAsync());
+    // Mark joined before awaiting: cancelAndJoinAsync() sets the scope's own
+    // joined_ once its barrier completes, even if it then rethrows a split
+    // error, so the destructor must not attempt a second join.
     splitScopeJoined_ = true;
+    co_await splitScope_.cancelAndJoinAsync();
   }
-
-  auto& executor = folly::QueuedImmediateExecutor::instance();
 
   // Wait for every task to stop running, then snapshot final stats while the
   // tasks are still alive. taskCompletionFuture (unlike taskDeletionFuture)
   // does not require releasing the tasks, so stats remain readable here.
   std::vector<velox::ContinueFuture> completionFutures;
   {
-    std::lock_guard<std::mutex> l(mutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
     for (auto& stage : stages_) {
       for (auto& task : stage) {
         completionFutures.push_back(task->taskCompletionFuture());
       }
     }
   }
-  const bool completed = !folly::collectAll(std::move(completionFutures))
-                              .via(&executor)
-                              .within(std::chrono::microseconds(maxWaitMicros))
-                              .wait()
-                              .hasException();
+  bool completed = true;
+  try {
+    co_await folly::collectAll(std::move(completionFutures))
+        .within(std::chrono::microseconds(kReapTimeoutMicros));
+  } catch (const folly::FutureTimeout&) {
+    completed = false;
+  }
 
   // Tear down: capture final stats before the tasks go away, then drop the
-  // cursor and tasks and wait for their deletion so pools are released.
+  // cursor and tasks and wait for their deletion so their pools are released.
+  // Resetting the cursor here (releasing its output queue) is safe because
+  // result batches are allocated in outputPool -- owned by the runner or the
+  // caller -- which outlives the cursor, so batches the caller still holds stay
+  // valid until the runner is destroyed.
   std::vector<velox::ContinueFuture> deletionFutures;
   {
-    std::lock_guard<std::mutex> l(mutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
     if (completed && !finalStats_.has_value()) {
       finalStats_ = aggregatedStats();
     }
@@ -440,13 +573,40 @@ bool LocalRunner::waitForCompletion(int32_t maxWaitMicros) {
       stage.clear();
     }
   }
-  const bool deleted = !folly::collectAll(std::move(deletionFutures))
-                            .via(&executor)
-                            .within(std::chrono::microseconds(maxWaitMicros))
-                            .wait()
-                            .hasException();
+  try {
+    co_await folly::collectAll(std::move(deletionFutures))
+        .within(std::chrono::microseconds(kReapTimeoutMicros));
+  } catch (const folly::FutureTimeout&) {
+    // Best effort: pools may linger briefly if a task never stops, but the reap
+    // does not hang unboundedly.
+  }
+}
 
-  return completed && deleted;
+folly::coro::Task<void> LocalRunner::co_close() {
+  // Idempotent: a second close, or one after the co_runWrite() error path
+  // already reaped, is a no-op.
+  if (closed_) {
+    co_return;
+  }
+  // Stop anything still running so the split coroutines and tasks wind down,
+  // then reap. A clean finish is already kFinished and a failure kError; only a
+  // still-running run needs cancelTasks(), which lands a benign kCancelled.
+  if (state_ == State::kRunning) {
+    cancelTasks();
+  }
+  // Teardown must not throw: callers blockingWait(co_close()) on exception
+  // paths (drain()'s error handling, ~AxiomReader, JoinSample's scope guard),
+  // where a throw would mask the query's real error or std::terminate in a
+  // destructor. The query error is already surfaced through the pull; a
+  // split-scope join or task-teardown error here is secondary, so log and
+  // swallow it. closed_ is set regardless so the destructor's assert passes and
+  // it does not re-join.
+  try {
+    co_await co_reap();
+  } catch (const std::exception& e) {
+    LOG(ERROR) << "Error during LocalRunner teardown: " << e.what();
+  }
+  closed_ = true;
 }
 
 namespace {
@@ -490,16 +650,19 @@ void LocalRunner::makeStages(
       return;
     }
     {
-      std::lock_guard<std::mutex> l(self->mutex_);
+      std::lock_guard<std::mutex> lock(self->mutex_);
       if (self->error_) {
         return;
       }
       self->state_ = State::kError;
       self->error_ = std::move(error);
     }
-    if (self->cursor_) {
-      self->abort();
-    }
+    // Call cancelTasks() unconditionally: reading cursor_ here would race
+    // start() assigning it (onError can fire from a stage task before start()
+    // finishes). cancelTasks() re-locks and no-ops on a null cursor_, still
+    // propagating the error to sibling tasks when the failure precedes cursor
+    // creation.
+    self->cancelTasks();
   };
 
   // Mapping from task prefix to the stage index and whether it is a broadcast.
@@ -507,9 +670,16 @@ void LocalRunner::makeStages(
   for (auto fragmentIndex = 0; fragmentIndex < fragments_.size() - 1;
        ++fragmentIndex) {
     const auto& fragment = fragments_[fragmentIndex];
-    stageMap[fragment.taskPrefix] = {
-        stages_.size(), needsOutputBufferUpdate(fragment.fragment)};
-    stages_.emplace_back();
+    {
+      // Serialize stages_ mutation with cancelTasks()/reap(), which read it
+      // under mutex_ and may run on a task thread (a task started below can
+      // fire onError before makeStages() finishes building the rest of
+      // stages_).
+      std::lock_guard<std::mutex> lock(mutex_);
+      stageMap[fragment.taskPrefix] = {
+          stages_.size(), needsOutputBufferUpdate(fragment.fragment)};
+      stages_.emplace_back();
+    }
 
     auto numTasks = fragment.width.value_or(
         fragment.type == optimizer::FragmentType::kSource
@@ -536,12 +706,18 @@ void LocalRunner::makeStages(
           /*memoryArbitrationPriority=*/0,
           makeSpillDiskOptions(baseSpillDirectory_, taskId),
           onError);
-      stages_.back().push_back(task);
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        stages_.back().push_back(task);
+      }
       task->start(plan_->options().numDrivers);
     }
   }
 
-  stages_.push_back({lastStageTask});
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    stages_.push_back({lastStageTask});
+  }
 
   try {
     for (auto fragmentIndex = 0; fragmentIndex < fragments_.size();
@@ -602,7 +778,7 @@ void LocalRunner::makeStages(
 }
 
 std::vector<velox::exec::TaskStats> LocalRunner::stats() const {
-  std::lock_guard<std::mutex> l(mutex_);
+  std::lock_guard<std::mutex> lock(mutex_);
   if (finalStats_.has_value()) {
     return *finalStats_;
   }

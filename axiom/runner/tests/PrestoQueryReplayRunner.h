@@ -25,7 +25,6 @@ namespace facebook::axiom::runner {
 
 inline constexpr int32_t kDefaultWidth = 2;
 inline constexpr int32_t kDefaultMaxDrivers = 4;
-inline constexpr int32_t kWaitTimeoutUs = 5'000'000;
 
 using TaskPrefixExtractor = std::string (*)(std::string_view);
 using ConnectorSplitPtr = std::shared_ptr<velox::connector::ConnectorSplit>;
