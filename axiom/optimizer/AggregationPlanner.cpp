@@ -768,11 +768,6 @@ void AggregationPlanner::addGroupingSetsAggregation(
     const ExprVector& groupingKeys,
     const AggregateVector& aggregates,
     PlanState& state) const {
-  const auto hasOrderBy =
-      std::any_of(aggregates.begin(), aggregates.end(), [](const auto& agg) {
-        return !agg->orderKeys().empty();
-      });
-
   auto* groupIdNode = makeGroupIdNode(plan, aggPlan, groupingKeys, aggregates);
   state.addCost(*groupIdNode);
   plan = groupIdNode;
@@ -793,14 +788,6 @@ void AggregationPlanner::addGroupingSetsAggregation(
     aggGroupingKeys.push_back(groupIdNode->columns()[i]);
   }
   aggGroupingKeys.push_back(aggPlan->groupId());
-
-  // ORDER BY forces single-step aggregation (partial aggregation cannot
-  // preserve ORDER BY semantics), but global grouping sets require split
-  // (partial+final). With kSingle, addLocalPartition creates empty driver
-  // partitions that each emit a spurious default row for the global set.
-  VELOX_USER_CHECK(
-      !hasOrderBy || globalGroupingSets.empty(),
-      "ORDER BY in aggregate functions is not supported with global grouping sets (ROLLUP, CUBE, or GROUPING SETS containing ())");
 
   if (isSingleWorker_ && isSingleDriver_) {
     auto [agg, cost] = makeSingleAggregationPlan(
