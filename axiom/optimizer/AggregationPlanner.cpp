@@ -905,7 +905,12 @@ void AggregationPlanner::plan(
     return;
   }
 
-  if (isBucketedAggregation && !hasDistinct && !hasOrderBy) {
+  // The input is already partitioned on a subset of the grouping keys, so no
+  // distributed shuffle is needed. With a single driver each partition is
+  // aggregated in one place, so a single-step aggregation is optimal. With
+  // multiple drivers a local exchange is still required, so fall through to the
+  // cost-based choice between split and single aggregation plans.
+  if (isBucketedAggregation && isSingleDriver_ && !hasDistinct && !hasOrderBy) {
     auto* singleAgg = make<Aggregation>(
         plan,
         std::move(groupingKeys),
