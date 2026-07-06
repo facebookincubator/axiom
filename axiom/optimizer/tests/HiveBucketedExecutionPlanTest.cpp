@@ -253,8 +253,9 @@ TEST_F(HiveBucketedExecutionTest, aggregation) {
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchHiveScan("t")
+            .partialAggregation({"c_nationkey"}, {"count(*) as cnt"})
             .localPartition({"c_nationkey"})
-            .singleAggregation({"c_nationkey"}, {"count(*)"})
+            .finalAggregation({"c_nationkey"}, {"count(cnt) as cnt"})
             .bucketed()
             .fragmentWidth(4)
             .gather()
@@ -270,8 +271,11 @@ TEST_F(HiveBucketedExecutionTest, aggregation) {
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchHiveScan("t")
+            .partialAggregation(
+                {"c_nationkey", "c_mktsegment"}, {"count(*) as cnt"})
             .localPartition({"c_nationkey", "c_mktsegment"})
-            .singleAggregation({"c_nationkey", "c_mktsegment"}, {"count(*)"})
+            .finalAggregation(
+                {"c_nationkey", "c_mktsegment"}, {"count(cnt) as cnt"})
             .bucketed()
             .fragmentWidth(4)
             .gather()
@@ -287,10 +291,15 @@ TEST_F(HiveBucketedExecutionTest, aggregation) {
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchHiveScan("t")
-            .localPartition({"c_nationkey"})
-            .singleAggregation(
+            .partialAggregation(
                 {"c_nationkey"},
-                {"count(*)", "min(c_acctbal)", "max(c_acctbal)"})
+                {"count(*) as cnt",
+                 "min(c_acctbal) as mn",
+                 "max(c_acctbal) as mx"})
+            .localPartition({"c_nationkey"})
+            .finalAggregation(
+                {"c_nationkey"},
+                {"count(cnt) as cnt", "min(mn) as mn", "max(mx) as mx"})
             .bucketed()
             .fragmentWidth(4)
             .gather()
@@ -328,8 +337,9 @@ TEST_F(HiveBucketedExecutionTest, aggregation) {
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchHiveScan("t")
+            .partialAggregation({"c_nationkey"}, {"count(*) as cnt"})
             .localPartition({"c_nationkey"})
-            .singleAggregation({"c_nationkey"}, {"count(*) as cnt"})
+            .finalAggregation({"c_nationkey"}, {"count(cnt) as cnt"})
             .filter("cnt > 100")
             .bucketed()
             .fragmentWidth(4)
@@ -368,8 +378,9 @@ TEST_F(HiveBucketedExecutionTest, singleBucket) {
   AXIOM_ASSERT_DISTRIBUTED_PLAN(
       plan.plan,
       matchHiveScan("t")
+          .partialAggregation({"c_nationkey"}, {"count(*) as cnt"})
           .localPartition({"c_nationkey"})
-          .singleAggregation({"c_nationkey"}, {"count(*)"})
+          .finalAggregation({"c_nationkey"}, {"count(cnt) as cnt"})
           .bucketed()
           .fragmentWidth(1)
           .gather()
@@ -418,8 +429,11 @@ TEST_F(HiveBucketedExecutionTest, compositeBucketKeys) {
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchHiveScan("t")
+            .partialAggregation(
+                {"c_nationkey", "c_mktsegment"}, {"count(*) as cnt"})
             .localPartition({"c_nationkey", "c_mktsegment"})
-            .singleAggregation({"c_nationkey", "c_mktsegment"}, {"count(*)"})
+            .finalAggregation(
+                {"c_nationkey", "c_mktsegment"}, {"count(cnt) as cnt"})
             .bucketed()
             .fragmentWidth(4)
             .gather()
@@ -460,8 +474,9 @@ TEST_F(HiveBucketedExecutionTest, widthClampsToNumWorkers) {
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchHiveScan("t")
+            .partialAggregation({"c_nationkey"}, {"count(*) as cnt"})
             .localPartition({"c_nationkey"})
-            .singleAggregation({"c_nationkey"}, {"count(*)"})
+            .finalAggregation({"c_nationkey"}, {"count(cnt) as cnt"})
             .bucketed()
             .fragmentWidth(5)
             .gather()

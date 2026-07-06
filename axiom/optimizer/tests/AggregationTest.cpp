@@ -382,6 +382,59 @@ TEST_F(AggregationTest, repartitionForAggPartitionSubset) {
   }
 }
 
+TEST_F(AggregationTest, bucketedAggregation) {
+  // Table 't' bucketed on 'k' with ~100 rows per (k, g) group, so grouping by
+  // [k, g] reduces cardinality ~100x.
+  testConnector_->addTable(
+      "t",
+      ROW({"k", "g", "v"}, {BIGINT(), BIGINT(), DOUBLE()}),
+      velox::ROW({}),
+      connector::TestBucketSpec{{"k"}, 128});
+  testConnector_->setStats(
+      "t",
+      1'000'000,
+      {{"k", {.numDistinct = 1'000}},
+       {"g", {.numDistinct = 10}},
+       {"v", {.numDistinct = 500'000}}});
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .aggregate({"k", "g"}, {"sum(v)"})
+                         .build();
+
+  {
+    SCOPED_TRACE("multiple drivers: partial reduces before the local exchange");
+    auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan()
+                       .partialAggregation({"k", "g"}, {"sum(v) as s"})
+                       .localPartition({"k", "g"})
+                       .finalAggregation({"k", "g"}, {"sum(s) as s"})
+                       .bucketed()
+                       .fragmentWidth(4)
+                       .gather()
+                       .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+  }
+
+  {
+    SCOPED_TRACE("single driver: no local exchange, single-step aggregation");
+    auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 1});
+    auto matcher = core::PlanMatcherBuilder()
+                       .multiThreaded(false)
+                       .tableScan()
+                       .singleAggregation({"k", "g"}, {"sum(v)"})
+                       .bucketed()
+                       .fragmentWidth(4)
+                       .gather()
+                       .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+  }
+}
+
 // TODO: Add tests for maybeProject() cost tracking once Project::unitCost is
 // implemented (currently 0, see the TODO in Project::Project). The
 // optimizationCost() helper is available for verifying cost differences between
