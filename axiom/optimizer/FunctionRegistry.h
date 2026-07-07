@@ -385,6 +385,18 @@ class FunctionRegistry {
     return isNull_;
   }
 
+  /// Registers function 'name' that has semantics of Presto's 'between', i.e.
+  /// returns true if the first argument is within the inclusive range bounded
+  /// by the second and third arguments.
+  /// @return true if successfully registered, false if a different
+  /// 'between' function is already registered.
+  bool registerBetween(std::string_view name);
+
+  /// Returns the name of the 'between' function.
+  const std::optional<std::string>& between() const {
+    return between_;
+  }
+
   /// Registers function 'name' that has semantics of 'row_number' window
   /// function, i.e. assigns sequential numbers to rows within a partition.
   /// @return true if successfully registered, false if a different
@@ -497,6 +509,7 @@ class FunctionRegistry {
   std::optional<std::string> greaterThan_;
   std::optional<std::string> greaterThanOrEqual_;
   std::optional<std::string> isNull_;
+  std::optional<std::string> between_;
 
   // Aggregate functions.
   std::optional<std::string> arbitrary_;

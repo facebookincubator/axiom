@@ -377,6 +377,10 @@ void QueryGraphContext::populateFunctionNames() {
     functionNames_.isNull = this->toName(isNull.value());
   }
 
+  if (auto between = registry->between()) {
+    functionNames_.between = this->toName(between.value());
+  }
+
   if (auto rowNumber = registry->rowNumber()) {
     functionNames_.rowNumber = this->toName(rowNumber.value());
   }
