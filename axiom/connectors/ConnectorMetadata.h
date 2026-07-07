@@ -53,6 +53,10 @@ using PartitionFunctionSpecPtr =
 /// metadata, e.g. order, partitioning, bucketing etc.
 namespace facebook::axiom::connector {
 
+namespace synthetic {
+class SyntheticRowProvider;
+}
+
 class TableLayout;
 
 /// Represents statistics of a column. The statistics may represent the column
@@ -892,6 +896,16 @@ class ConnectorMetadata {
   ///
   /// @return nullptr if view doesn't exist.
   virtual ViewPtr findView(const SchemaTableName& /*tableName*/) {
+    return nullptr;
+  }
+
+  /// Returns a row provider for the synthetic relation named 'name' (e.g. an
+  /// information_schema table or a <table>$partitions relation), or nullptr if
+  /// 'name' is not a synthetic relation this catalog serves. A catalog opts
+  /// into synthetic tables by overriding this and routing findTable() through
+  /// synthetic::findSyntheticTable(). The default serves none.
+  virtual std::shared_ptr<const synthetic::SyntheticRowProvider>
+  findSyntheticProvider(const SchemaTableName& /*name*/) {
     return nullptr;
   }
 
