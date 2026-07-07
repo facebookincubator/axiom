@@ -829,6 +829,25 @@ TEST_F(PrestoParserTest, exists) {
   }
 }
 
+// Only `= ANY`/`= SOME` and `<> ALL` are supported; other operator and
+// quantifier combinations are not supported yet.
+TEST_F(PrestoParserTest, quantifiedComparisonUnsupported) {
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(
+          "SELECT * FROM nation WHERE n_regionkey > ALL (SELECT r_regionkey FROM region)"),
+      "Quantified comparison is only supported for");
+
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(
+          "SELECT * FROM nation WHERE n_regionkey = ALL (SELECT r_regionkey FROM region)"),
+      "Quantified comparison is only supported for");
+
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(
+          "SELECT * FROM nation WHERE n_regionkey <> ANY (SELECT r_regionkey FROM region)"),
+      "Quantified comparison is only supported for");
+}
+
 // JOIN ON in a correlated subquery body resolves outer-scope columns
 // the same way WHERE does.
 TEST_F(PrestoParserTest, correlatedSubqueryWithOuterReferenceInJoinOn) {

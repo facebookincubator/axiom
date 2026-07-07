@@ -1837,6 +1837,20 @@ ComparisonExpression::Operator toComparisonOperator(size_t tokenType) {
   }
 }
 
+QuantifiedComparisonExpression::Quantifier toQuantifier(
+    PrestoSqlParser::ComparisonQuantifierContext* ctx) {
+  if (ctx->ALL() != nullptr) {
+    return QuantifiedComparisonExpression::Quantifier::kAll;
+  }
+  if (ctx->ANY() != nullptr) {
+    return QuantifiedComparisonExpression::Quantifier::kAny;
+  }
+  if (ctx->SOME() != nullptr) {
+    return QuantifiedComparisonExpression::Quantifier::kSome;
+  }
+  VELOX_UNREACHABLE();
+}
+
 } // anonymous namespace
 
 std::any AstBuilder::visitComparison(PrestoSqlParser::ComparisonContext* ctx) {
@@ -1857,7 +1871,21 @@ std::any AstBuilder::visitComparison(PrestoSqlParser::ComparisonContext* ctx) {
 std::any AstBuilder::visitQuantifiedComparison(
     PrestoSqlParser::QuantifiedComparisonContext* ctx) {
   trace("visitQuantifiedComparison");
-  return visitChildren("visitQuantifiedComparison", ctx);
+
+  auto value = visitExpression(ctx->value);
+
+  auto operatorToken = ctx->comparisonOperator()->children[0];
+  auto terminalNode = dynamic_cast<antlr4::tree::TerminalNode*>(operatorToken);
+  auto op = toComparisonOperator(terminalNode->getSymbol()->getType());
+
+  auto quantifier = toQuantifier(ctx->comparisonQuantifier());
+
+  auto subquery = std::make_shared<SubqueryExpression>(
+      getLocation(ctx), visitTyped<Statement>(ctx->query()));
+
+  return std::static_pointer_cast<Expression>(
+      std::make_shared<QuantifiedComparisonExpression>(
+          getLocation(ctx), op, quantifier, value, subquery));
 }
 
 namespace {
