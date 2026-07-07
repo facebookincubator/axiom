@@ -450,10 +450,12 @@ std::pair<RelationOpPtr, PlanCost> AggregationPlanner::makeSplitAggregationPlan(
     const ColumnVector& outputColumns,
     QGVector<int32_t> globalGroupingSets,
     ColumnCP groupId,
+    bool withIntermediate,
     PlanState& state) const {
   PlanCost splitAggCost;
 
-  // The raw-input partial step emits the empty-input default row.
+  // The raw-input partial step emits the empty-input default row for non-empty
+  // globalGroupingSets.
   plan = make<Aggregation>(
       plan,
       groupingKeys,
@@ -468,6 +470,21 @@ std::pair<RelationOpPtr, PlanCost> AggregationPlanner::makeSplitAggregationPlan(
   ColumnVector partitionKeys(
       intermediateColumns.begin(),
       intermediateColumns.begin() + groupingKeys.size());
+
+  if (withIntermediate) {
+    ExprVector intermediateGroupingKeys(
+        partitionKeys.begin(), partitionKeys.end());
+    plan = make<Aggregation>(
+        plan,
+        std::move(intermediateGroupingKeys),
+        /*preGroupedKeys*/ ExprVector{},
+        aggregates,
+        velox::core::AggregationNode::Step::kIntermediate,
+        intermediateColumns,
+        globalGroupingSets,
+        groupId);
+    splitAggCost.add(*plan);
+  }
 
   PlanCost repartitionCost;
   std::tie(plan, repartitionCost) =
@@ -558,13 +575,15 @@ AggregationPlanner::makeSplitOrSingleAggregationPlan(
         state);
   }
 
-  // Otherwise pick the cheaper of split and single-step plans by cost.
-  // Both alternatives may insert Repartitions via maybeRepartition, which
-  // mutates state.currentGroupedLeaves_ via commitGroupedLeavesForRepartition.
-  // Snapshot+restore around each alternative so the second one starts from
-  // the same map the first did, and the chosen alternative's mutations are
-  // re-applied at the end.
-  auto savedMap = state.currentGroupedLeaves();
+  // Otherwise pick the cheapest of the split, split-with-intermediate, and
+  // single-step plans by cost. Each alternative may insert Repartitions via
+  // maybeRepartition, which mutates state.currentGroupedLeaves_ via
+  // commitGroupedLeavesForRepartition. Snapshot+restore around each so they all
+  // start from the same map, and the chosen alternative's mutations are
+  // re-applied at the end. On a tie or unknown cost, the split (partial+final)
+  // plan wins by default.
+  const auto savedMap = state.currentGroupedLeaves();
+
   auto [splitAggPlan, splitAggCost] = makeSplitAggregationPlan(
       plan,
       groupingKeys,
@@ -573,33 +592,56 @@ AggregationPlanner::makeSplitOrSingleAggregationPlan(
       outputColumns,
       globalGroupingSets,
       groupId,
+      /*withIntermediate=*/false,
       state);
-  auto splitMap = std::move(state.mutableCurrentGroupedLeaves());
+  auto bestPlan = splitAggPlan;
+  auto bestCost = splitAggCost;
+  auto bestMap = std::move(state.mutableCurrentGroupedLeaves());
 
-  if (groupingKeys.empty() || alwaysPlanPartialAggregation_) {
-    state.mutableCurrentGroupedLeaves() = std::move(splitMap);
-    return {std::move(splitAggPlan), splitAggCost};
+  // A per-node intermediate aggregation only helps when there is a remote
+  // shuffle (numWorkers > 1) with multiple producers per node (numDrivers > 1)
+  // to pre-combine.
+  if (!isSingleWorker_ && !isSingleDriver_) {
+    state.mutableCurrentGroupedLeaves() = savedMap;
+    auto [intermediatePlan, intermediateCost] = makeSplitAggregationPlan(
+        plan,
+        groupingKeys,
+        aggregates,
+        intermediateColumns,
+        outputColumns,
+        globalGroupingSets,
+        groupId,
+        /*withIntermediate=*/true,
+        state);
+    if (lessThan(intermediateCost.cost, bestCost.cost)) {
+      bestPlan = intermediatePlan;
+      bestCost = intermediateCost;
+      bestMap = std::move(state.mutableCurrentGroupedLeaves());
+    }
   }
 
-  state.mutableCurrentGroupedLeaves() = savedMap;
-  auto [singleAgg, singleAggCost] = makeSingleAggregationPlan(
-      plan,
-      groupingKeys,
-      aggregates,
-      intermediateColumns,
-      outputColumns,
-      std::move(globalGroupingSets),
-      groupId,
-      state);
-
-  // Decide by cost when both costs are known. When a cost is unknown (a missing
-  // statistic), lessThan is false, so we default to the split (partial+final)
-  // plan.
-  if (lessThan(singleAggCost.cost, splitAggCost.cost)) {
-    return {std::move(singleAgg), singleAggCost};
+  // Global aggregation and forced-partial-aggregation never use single-step: a
+  // single-step global plan would gather raw rows to one task.
+  if (!groupingKeys.empty() && !alwaysPlanPartialAggregation_) {
+    state.mutableCurrentGroupedLeaves() = savedMap;
+    auto [singleAgg, singleAggCost] = makeSingleAggregationPlan(
+        plan,
+        groupingKeys,
+        aggregates,
+        intermediateColumns,
+        outputColumns,
+        globalGroupingSets,
+        groupId,
+        state);
+    if (lessThan(singleAggCost.cost, bestCost.cost)) {
+      bestPlan = singleAgg;
+      bestCost = singleAggCost;
+      bestMap = std::move(state.mutableCurrentGroupedLeaves());
+    }
   }
-  state.mutableCurrentGroupedLeaves() = std::move(splitMap);
-  return {std::move(splitAggPlan), splitAggCost};
+
+  state.mutableCurrentGroupedLeaves() = std::move(bestMap);
+  return {bestPlan, bestCost};
 }
 
 std::pair<RelationOpPtr, PlanCost> AggregationPlanner::makeDistinctAggregation(

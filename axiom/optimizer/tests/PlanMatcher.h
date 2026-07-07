@@ -294,6 +294,17 @@ class PlanMatcherBuilder {
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates);
 
+  /// Matches any intermediate Aggregation node.
+  PlanMatcherBuilder& intermediateAggregation();
+
+  /// Matches an intermediate Aggregation node with the specified grouping keys
+  /// and aggregate expressions.
+  /// @param groupingKeys Columns to group by.
+  /// @param aggregates Aggregate expressions.
+  PlanMatcherBuilder& intermediateAggregation(
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates);
+
   /// Matches any streaming Aggregation node (input is pre-grouped on all
   /// grouping keys).
   PlanMatcherBuilder& streamingAggregation();
@@ -602,9 +613,15 @@ class PlanMatcherBuilder {
   /// For empty groupingKeys, uses gather instead of shuffle. The local exchange
   /// (localPartition / localGather) between the shuffle and the final
   /// aggregation is expected only in multiThreaded() mode.
+  /// When 'withIntermediate' is set, a per-node intermediate step is expected
+  /// before the remote boundary: partialAggregation → localPartition →
+  /// intermediateAggregation → shuffle → ... This only occurs in
+  /// multiThreaded() mode, where numDrivers > 1 makes the intermediate step
+  /// cost-effective.
   PlanMatcherBuilder& distributedAggregation(
       const std::vector<std::string>& groupingKeys,
-      const std::vector<std::string>& aggregates);
+      const std::vector<std::string>& aggregates,
+      bool withIntermediate = false);
 
   /// Matches the distributed sort feeding a MergeExchange: an OrderBy on
   /// 'ordering' followed by the merge boundary (see shuffleMerge). In

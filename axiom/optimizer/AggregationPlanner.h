@@ -71,8 +71,9 @@ class AggregationPlanner {
       const ColumnVector& partitionKeys,
       PlanState& state) const;
 
-  // Creates a two-phase (partial + final) aggregation plan with repartitioning
-  // by groupingKeys in between.
+  // Creates a split (partial + final) aggregation plan with repartitioning by
+  // groupingKeys in between. When 'withIntermediate' is set, inserts a
+  // per-node intermediate step over the partial output before the repartition.
   std::pair<RelationOpPtr, PlanCost> makeSplitAggregationPlan(
       RelationOpPtr plan,
       const ExprVector& groupingKeys,
@@ -81,6 +82,7 @@ class AggregationPlanner {
       const ColumnVector& outputColumns,
       QGVector<int32_t> globalGroupingSets,
       ColumnCP groupId,
+      bool withIntermediate,
       PlanState& state) const;
 
   // Creates a single-phase aggregation plan. Repartitions by groupingKeys,

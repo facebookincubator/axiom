@@ -319,9 +319,8 @@ TEST_F(HiveBucketedExecutionTest, aggregation) {
             .partialAggregation()
             .localPartition({"c_nationkey", "c_mktsegment"})
             .finalAggregation()
-            .partialAggregation()
             .localPartition({"c_nationkey"})
-            .finalAggregation()
+            .singleAggregation()
             .bucketed()
             .fragmentWidth(4)
             .gather()
@@ -358,6 +357,8 @@ TEST_F(HiveBucketedExecutionTest, aggregation) {
         plan.plan,
         matchHiveScan("t")
             .partialAggregation()
+            .localPartition({"c_mktsegment"})
+            .intermediateAggregation()
             .bucketed()
             .fragmentWidth(4)
             .shuffle({"c_mktsegment"})
@@ -451,6 +452,8 @@ TEST_F(HiveBucketedExecutionTest, compositeBucketKeys) {
         plan.plan,
         matchHiveScan("t")
             .partialAggregation()
+            .localPartition({"c_nationkey"})
+            .intermediateAggregation()
             .bucketed()
             .fragmentWidth(4)
             .shuffle({"c_nationkey"})

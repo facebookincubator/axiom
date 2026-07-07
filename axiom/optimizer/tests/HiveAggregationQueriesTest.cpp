@@ -71,6 +71,8 @@ TEST_F(HiveAggregationQueriesTest, mask) {
             .project({"n_nationkey > 10 as mask", "n_nationkey", "n_regionkey"})
             .partialAggregation(
                 {}, {"sum(n_nationkey) FILTER (mask)", "avg(n_regionkey)"})
+            .localPartition()
+            .intermediateAggregation()
             .shuffle()
             .localPartition()
             .finalAggregation({}, {"sum(sum)", "avg(avg)"})
@@ -109,10 +111,7 @@ TEST_F(HiveAggregationQueriesTest, distinct) {
     auto distributedPlan = planVelox(logicalPlan);
     matcher = core::PlanMatcherBuilder()
                   .tableScan("nation")
-                  .partialAggregation({"n_regionkey"}, {})
-                  .shuffle()
-                  .localPartition()
-                  .finalAggregation({"n_regionkey"}, {})
+                  .distributedSingleAggregation({"n_regionkey"}, {})
                   .partialAggregation({}, {"count(n_regionkey)"})
                   .shuffle()
                   .localPartition()
@@ -280,6 +279,8 @@ TEST_F(HiveAggregationQueriesTest, ignoreDuplicates) {
                             "bool_or(m1)",
                             "bool_and(m1) FILTER (WHERE m3)",
                             "bool_or(m1) FILTER (WHERE m4)"})
+                       .localPartition()
+                       .intermediateAggregation()
                        .shuffle()
                        .localPartition()
                        .finalAggregation()
@@ -363,6 +364,8 @@ TEST_F(HiveAggregationQueriesTest, orderNonSensitive) {
                             "count(n_regionkey)",
                             "sum(n_nationkey) FILTER (WHERE m1)",
                             "count(n_regionkey) FILTER (WHERE m2)"})
+                       .localPartition()
+                       .intermediateAggregation()
                        .shuffle()
                        .localPartition()
                        .finalAggregation()
@@ -439,6 +442,8 @@ TEST_F(HiveAggregationQueriesTest, ignoreDuplicatesXOrderNonSensitive) {
                     "bool_or(m1)",
                     "bool_and(m1) FILTER (WHERE m2)",
                 })
+            .localPartition()
+            .intermediateAggregation()
             .shuffle()
             .localPartition()
             .finalAggregation()

@@ -36,6 +36,35 @@ void PlanCost::add(RelationOp& op) {
 
 namespace {
 
+// Rows an operator emits across all of its parallel producers, counting each
+// output row once per producer that emits it. This equals resultCardinality for
+// row-preserving operators, but a pre-shuffle aggregation emits more: it runs
+// independently in each of its 'partitionCount' producers, so every producer
+// re-derives the groups present in its ~1 / partitionCount share of the input.
+// The coupon-collector estimator (expectedNumDistincts) gives the distinct
+// groups a single producer emits over that share. The result is capped at the
+// rows entering the subtree because a producer never emits more rows than it
+// ingests; the cap also propagates the source-row bound down the
+// recursion. Returns nullopt if any input is unknown.
+std::optional<float> emittedRows(const RelationOp& op) {
+  if (!op.is(RelType::kAggregation) && !op.is(RelType::kRepartition)) {
+    return op.resultCardinality();
+  }
+  const auto inputEmitted = emittedRows(*op.input());
+  if (op.is(RelType::kRepartition)) {
+    return inputEmitted;
+  }
+  const auto groups = op.resultCardinality();
+  if (!groups.has_value() || !inputEmitted.has_value()) {
+    return std::nullopt;
+  }
+  const float partitionCount = op.cost().partitionCount;
+  return std::min<float>(
+      *inputEmitted,
+      partitionCount *
+          expectedNumDistincts(*inputEmitted / partitionCount, *groups));
+}
+
 const auto& relTypeNames() {
   static const folly::F14FastMap<RelType, std::string_view> kNames = {
       {RelType::kTableScan, "TableScan"},
@@ -731,7 +760,7 @@ Repartition::Repartition(
           std::move(distribution),
           std::move(columns)),
       replicateNullsAndAny_{replicateNullsAndAny} {
-  cost_.inputCardinality = inputCardinality();
+  cost_.inputCardinality = emittedRows(*input_);
   cost_.fanout = 1;
 
   auto unitCost = shuffleCost(columns_);
@@ -1041,7 +1070,18 @@ Aggregation::Aggregation(
   }
 #endif
 
-  cost_.inputCardinality = inputCardinality();
+  const auto& runnerOptions = queryCtx()->optimization()->runnerOptions();
+
+  // A pre-shuffle aggregation runs independently per producer, replicating each
+  // group by numWorkers * numDrivers producers after a partial, or by
+  // numWorkers after a per-node intermediate.
+  if (step == velox::core::AggregationNode::Step::kPartial) {
+    cost_.partitionCount = runnerOptions.numWorkers * runnerOptions.numDrivers;
+  } else if (step == velox::core::AggregationNode::Step::kIntermediate) {
+    cost_.partitionCount = runnerOptions.numWorkers;
+  }
+
+  cost_.inputCardinality = emittedRows(*input_);
 
   const auto numKeys = groupingKeys.size();
   if (numKeys > 0) {
@@ -1066,7 +1106,15 @@ Aggregation::Aggregation(
     setCostWithGroups(inputBeforePartial);
   } else {
     // Global aggregation (no grouping keys).
-    cost_.unitCost = aggregates.size() * Costs::kSimpleAggregateCost;
+    float localExchangeCost = 0;
+    if (step != velox::core::AggregationNode::Step::kPartial &&
+        runnerOptions.numDrivers > 1) {
+      // A non-partial step gathers its producers' rows locally first; model it
+      // as 1/3 of a remote shuffle, matching setCostWithGroups.
+      localExchangeCost = shuffleCost(input_->columns()) / 3;
+    }
+    cost_.unitCost =
+        aggregates.size() * Costs::kSimpleAggregateCost + localExchangeCost;
 
     // Avoid division by zero. Unknown input cardinality => unknown fanout.
     cost_.fanout = divide(1.0f, cost_.inputCardinality);
@@ -1180,10 +1228,10 @@ void Aggregation::setCostWithGroups(
         aggregationCost(numKeys, aggregates.size(), rowBytes, numGroups) +
         localExchangeCost;
 
-    // numGroups can be > inputCardinality since this is calculated against
-    // the input before partial and inputCardinality is scaled down by partial
-    // reduction. Unknown input cardinality => unknown fanout.
-    const auto inputCard = inputCardinality();
+    // inputCardinality includes any per-producer replication; fanout collapses
+    // it to numGroups so resultCardinality is numGroups, while the merge is
+    // costed over those replicated rows.
+    const auto inputCard = cost_.inputCardinality;
     if (inputCard.has_value() && *inputCard != 0) {
       cost_.fanout = std::min<double>(*inputCard, numGroups) / *inputCard;
     }
