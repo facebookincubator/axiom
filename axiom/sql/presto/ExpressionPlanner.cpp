@@ -889,6 +889,33 @@ lp::ExprApi ExpressionPlanner::toExpr(
           exists->subquery()->as<SubqueryExpression>(), /*scalar=*/false));
     }
 
+    case NodeType::kQuantifiedComparisonExpression: {
+      auto* quantified = node->as<QuantifiedComparisonExpression>();
+      using Quantifier = QuantifiedComparisonExpression::Quantifier;
+      const auto op = quantified->op();
+      const auto quantifier = quantified->quantifier();
+
+      const bool isEqualAny = op == ComparisonExpression::Operator::kEqual &&
+          (quantifier == Quantifier::kAny || quantifier == Quantifier::kSome);
+      const bool isNotEqualAll =
+          op == ComparisonExpression::Operator::kNotEqual &&
+          quantifier == Quantifier::kAll;
+      AXIOM_PRESTO_SEMANTIC_CHECK(
+          isEqualAny || isNotEqualAll,
+          quantified->location(),
+          std::nullopt,
+          "Quantified comparison is only supported for = ANY, = SOME, and <> ALL");
+
+      auto value = toExpr(quantified->value(), options);
+      auto subquery = toExpr(quantified->subquery(), options);
+
+      // = ANY/SOME is definitionally equivalent to IN; <> ALL to NOT IN.
+      if (isEqualAny) {
+        return lp::Call("in", value, subquery);
+      }
+      return lp::Call("not", lp::Call("in", value, subquery));
+    }
+
     case NodeType::kCast: {
       auto* cast = node->as<Cast>();
       const auto type = resolveType(cast->toType());

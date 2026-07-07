@@ -300,6 +300,26 @@ SELECT t.a NOT IN (SELECT t2.a FROM t t2 WHERE t.b = t2.b) FROM t
 SELECT a FROM (VALUES (1), (CAST(NULL AS INTEGER)), (5)) AS l(a)
 WHERE a NOT IN (SELECT b FROM (VALUES (1), (3)) AS r(b))
 ----
+-- `= ANY` is equivalent to IN.
+SELECT a FROM t WHERE a = ANY (SELECT a FROM v)
+----
+-- `<> ALL` is equivalent to NOT IN.
+SELECT a FROM t WHERE a <> ALL (SELECT a FROM v)
+----
+-- `= SOME` (synonym for `= ANY`) in the SELECT list returns a boolean.
+SELECT a = SOME (SELECT a FROM v) FROM t
+----
+-- `<> ALL` with a NULL left key follows NOT IN three-valued logic.
+SELECT a FROM (VALUES (1), (CAST(NULL AS INTEGER)), (5)) AS l(a) WHERE a <> ALL (SELECT a FROM v)
+----
+-- `<> ALL` with a NULL in the subquery yields NULL for every non-matching
+-- row, so no rows qualify.
+SELECT a FROM (VALUES (1), (2)) AS l(a) WHERE a <> ALL (SELECT b FROM (VALUES (2), (CAST(NULL AS INTEGER))) AS r(b))
+----
+-- `= ANY` with a NULL in the subquery matches only non-NULL elements; a
+-- non-match against NULL is unknown, not false.
+SELECT a FROM (VALUES (1), (2)) AS l(a) WHERE a = ANY (SELECT b FROM (VALUES (2), (CAST(NULL AS INTEGER))) AS r(b))
+----
 -- Uncorrelated `WHERE NOT EXISTS` over an empty subquery returns every
 -- outer row.
 SELECT a FROM t WHERE NOT EXISTS (SELECT 1 FROM v WHERE false)
