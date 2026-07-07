@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <folly/container/F14Set.h>
+
 #include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/PathSet.h"
@@ -24,52 +26,11 @@
 
 namespace facebook::axiom::optimizer {
 
-struct ExprDedupKey {
-  Name func;
-  std::span<const ExprCP> args;
-  // Canonical return type pointer. Distinguishes calls like CAST(x AS double)
-  // and CAST(x AS varchar) which share the same function name and arguments.
-  const velox::Type* type;
-
-  bool operator==(const ExprDedupKey& other) const {
-    return func == other.func && type == other.type &&
-        std::ranges::equal(args, other.args);
-  }
-};
-
-struct ExprDedupHasher {
-  size_t operator()(const ExprDedupKey& key) const {
-    size_t h = folly::hasher<Name>()(key.func);
-    for (auto& a : key.args) {
-      h = velox::bits::hashMix(h, folly::hasher<ExprCP>()(a));
-    }
-    h = velox::bits::hashMix(h, folly::hasher<const velox::Type*>()(key.type));
-    return h;
-  }
-};
-
-using FunctionDedupMap =
-    folly::F14FastMap<ExprDedupKey, ExprCP, ExprDedupHasher>;
-
-struct TypedVariant {
-  /// Canonical Type pointer returned by QueryGraphContext::toType.
-  const velox::Type* type;
-  std::shared_ptr<const velox::Variant> value;
-};
-
-struct TypedVariantHasher {
-  size_t operator()(const TypedVariant& value) const {
-    return velox::bits::hashMix(
-        std::hash<const velox::Type*>()(value.type), value.value->hash());
-  }
-};
-
-struct TypedVariantComparer {
-  bool operator()(const TypedVariant& left, const TypedVariant& right) const {
-    // Types have been deduped, hence, we compare pointers.
-    return left.type == right.type && *left.value == *right.value;
-  }
-};
+// Interns Calls by content (name, result type, args by pointer) via the
+// transparent `Call::KeyHash` / `Call::KeyEq`, so a lookup uses a non-owning
+// `Call::KeyView` with no per-lookup allocation.
+using FunctionDedupSet =
+    folly::F14FastSet<const Call*, Call::KeyHash, Call::KeyEq>;
 
 /// Represents a path over an Expr of complex type. Used as a key
 /// for a map from unique step to the dedupped Expr that is the getter.
@@ -1038,12 +999,11 @@ class ToGraph {
       SubqueryExprEqual>
       subqueries_;
 
-  folly::
-      F14FastMap<TypedVariant, ExprCP, TypedVariantHasher, TypedVariantComparer>
-          constantDedup_;
+  folly::F14FastSet<const Literal*, Literal::KeyHash, Literal::KeyEq>
+      constantDedup_;
 
   // Dedup map from name + ExprVector to corresponding CallExpr.
-  FunctionDedupMap functionDedup_;
+  FunctionDedupSet functionDedup_;
 
   // Counter for generating unique correlation names for BaseTables and
   // DerivedTables.

@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <span>
+
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/EstimateMath.h"
 #include "axiom/optimizer/FunctionRegistry.h"
@@ -112,6 +114,30 @@ class Literal : public Expr {
   std::string toString() const override {
     return literal_->toJson(*value().type);
   }
+
+  /// Non-owning identity view for interning a `Literal` by content: result type
+  /// (canonical pointer) and the Variant, compared by value.
+  struct KeyView {
+    const velox::Type* type;
+    const velox::Variant* value;
+  };
+
+  /// Transparent hasher for interning `Literal`s; `is_transparent` enables
+  /// heterogeneous lookup by `KeyView` with no per-lookup allocation.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const Literal* literal) const;
+    size_t operator()(const KeyView& key) const;
+  };
+
+  /// Transparent equality for interning `Literal`s; the Variant is compared by
+  /// value, so equal values dedup across distinct Variant objects.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const Literal* left, const Literal* right) const;
+    bool operator()(const KeyView& key, const Literal* literal) const;
+    bool operator()(const Literal* literal, const KeyView& key) const;
+  };
 
  private:
   const velox::Variant* const literal_;
@@ -333,6 +359,31 @@ class Call : public Expr {
   FunctionMetadataCP metadata() const {
     return metadata_;
   }
+
+  /// Non-owning identity view for interning a `Call` by content. Holds only
+  /// what defines identity: function name, result type (distinguishes CAST-like
+  /// forms that share name + args), and args by pointer.
+  struct KeyView {
+    Name name;
+    const velox::Type* type;
+    std::span<const ExprCP> args;
+  };
+
+  /// Transparent hasher for interning `Call`s. `is_transparent` enables
+  /// heterogeneous lookup by `KeyView`, so a cache hit needs no allocation.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const Call* call) const;
+    size_t operator()(const KeyView& key) const;
+  };
+
+  /// Transparent equality for interning `Call`s by content.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const Call* left, const Call* right) const;
+    bool operator()(const KeyView& key, const Call* call) const;
+    bool operator()(const Call* call, const KeyView& key) const;
+  };
 
  private:
   // Name of function.
@@ -1227,6 +1278,34 @@ class Aggregate : public Call {
   const Aggregate* replaceDistinctAndFilterByMarker(ExprCP marker) const;
 
   std::string toString() const override;
+
+  /// Non-owning identity view for interning an `Aggregate` by content. Result
+  /// type and `intermediateType` are determined by (name, args), so they are
+  /// excluded; args / orderKeys are compared by pointer.
+  struct KeyView {
+    Name name;
+    std::span<const ExprCP> args;
+    bool isDistinct;
+    ExprCP condition;
+    std::span<const ExprCP> orderKeys;
+    std::span<const OrderType> orderTypes;
+  };
+
+  /// Transparent hasher for interning `Aggregate`s; `is_transparent` enables
+  /// heterogeneous lookup by `KeyView` with no per-lookup allocation.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const Aggregate* aggregate) const;
+    size_t operator()(const KeyView& key) const;
+  };
+
+  /// Transparent equality for interning `Aggregate`s by content.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const Aggregate* left, const Aggregate* right) const;
+    bool operator()(const KeyView& key, const Aggregate* aggregate) const;
+    bool operator()(const Aggregate* aggregate, const KeyView& key) const;
+  };
 
  private:
   bool isDistinct_;

@@ -14,11 +14,15 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/QueryGraph.h"
+#include <ranges>
+
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/PlanUtils.h"
+#include "axiom/optimizer/QueryGraph.h"
+#include "folly/hash/Hash.h"
+#include "velox/common/base/BitUtil.h"
 #include "velox/expression/ScopedVarSetter.h"
 
 namespace lp = facebook::axiom::logical_plan;
@@ -124,6 +128,148 @@ std::string Call::toString() const {
   }
   out << ")";
   return out.str();
+}
+
+size_t Literal::KeyHash::operator()(const Literal* literal) const {
+  return velox::bits::hashMix(
+      folly::hasher<const velox::Type*>()(literal->value().type),
+      literal->literal().hash());
+}
+
+size_t Literal::KeyHash::operator()(const KeyView& key) const {
+  return velox::bits::hashMix(
+      folly::hasher<const velox::Type*>()(key.type), key.value->hash());
+}
+
+bool Literal::KeyEq::operator()(const Literal* left, const Literal* right)
+    const {
+  return left->value().type == right->value().type &&
+      left->literal() == right->literal();
+}
+
+bool Literal::KeyEq::operator()(const KeyView& key, const Literal* literal)
+    const {
+  return key.type == literal->value().type && *key.value == literal->literal();
+}
+
+bool Literal::KeyEq::operator()(const Literal* literal, const KeyView& key)
+    const {
+  return (*this)(key, literal);
+}
+
+namespace {
+// Hashes a Call's identity: name, result type, and args by pointer.
+template <typename Args>
+size_t hashCallIdentity(Name name, const velox::Type* type, const Args& args) {
+  size_t hash = folly::hasher<Name>()(name);
+  for (const auto* arg : args) {
+    hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(arg));
+  }
+  return velox::bits::hashMix(hash, folly::hasher<const velox::Type*>()(type));
+}
+} // namespace
+
+size_t Call::KeyHash::operator()(const Call* call) const {
+  return hashCallIdentity(call->name(), call->value().type, call->args());
+}
+
+size_t Call::KeyHash::operator()(const KeyView& key) const {
+  return hashCallIdentity(key.name, key.type, key.args);
+}
+
+bool Call::KeyEq::operator()(const Call* left, const Call* right) const {
+  return left->name() == right->name() &&
+      left->value().type == right->value().type &&
+      std::ranges::equal(left->args(), right->args());
+}
+
+bool Call::KeyEq::operator()(const KeyView& key, const Call* call) const {
+  return key.name == call->name() && key.type == call->value().type &&
+      std::ranges::equal(key.args, call->args());
+}
+
+bool Call::KeyEq::operator()(const Call* call, const KeyView& key) const {
+  return (*this)(key, call);
+}
+
+namespace {
+template <typename Args, typename OrderKeys, typename OrderTypes>
+size_t hashAggregateIdentity(
+    Name name,
+    bool isDistinct,
+    ExprCP condition,
+    const Args& args,
+    const OrderKeys& orderKeys,
+    const OrderTypes& orderTypes) {
+  size_t hash = folly::hasher<Name>()(name);
+  hash = velox::bits::hashMix(hash, folly::hasher<bool>()(isDistinct));
+  if (condition != nullptr) {
+    hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(condition));
+  }
+  for (const auto* arg : args) {
+    hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(arg));
+  }
+  for (const auto* key : orderKeys) {
+    hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(key));
+  }
+  for (auto order : orderTypes) {
+    hash = velox::bits::hashMix(hash, folly::hasher<OrderType>()(order));
+  }
+  return hash;
+}
+
+bool aggregateIdentityEq(
+    const Aggregate::KeyView& key,
+    const Aggregate* aggregate) {
+  return key.name == aggregate->name() &&
+      key.isDistinct == aggregate->isDistinct() &&
+      key.condition == aggregate->condition() &&
+      std::ranges::equal(key.args, aggregate->args()) &&
+      std::ranges::equal(key.orderKeys, aggregate->orderKeys()) &&
+      std::ranges::equal(key.orderTypes, aggregate->orderTypes());
+}
+} // namespace
+
+size_t Aggregate::KeyHash::operator()(const Aggregate* aggregate) const {
+  return hashAggregateIdentity(
+      aggregate->name(),
+      aggregate->isDistinct(),
+      aggregate->condition(),
+      aggregate->args(),
+      aggregate->orderKeys(),
+      aggregate->orderTypes());
+}
+
+size_t Aggregate::KeyHash::operator()(const KeyView& key) const {
+  return hashAggregateIdentity(
+      key.name,
+      key.isDistinct,
+      key.condition,
+      key.args,
+      key.orderKeys,
+      key.orderTypes);
+}
+
+bool Aggregate::KeyEq::operator()(const Aggregate* left, const Aggregate* right)
+    const {
+  return left->name() == right->name() &&
+      left->isDistinct() == right->isDistinct() &&
+      left->condition() == right->condition() &&
+      std::ranges::equal(left->args(), right->args()) &&
+      std::ranges::equal(left->orderKeys(), right->orderKeys()) &&
+      std::ranges::equal(left->orderTypes(), right->orderTypes());
+}
+
+bool Aggregate::KeyEq::operator()(
+    const KeyView& key,
+    const Aggregate* aggregate) const {
+  return aggregateIdentityEq(key, aggregate);
+}
+
+bool Aggregate::KeyEq::operator()(
+    const Aggregate* aggregate,
+    const KeyView& key) const {
+  return aggregateIdentityEq(key, aggregate);
 }
 
 std::string Aggregate::toString() const {

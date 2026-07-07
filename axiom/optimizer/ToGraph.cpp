@@ -1110,19 +1110,17 @@ ExprCP ToGraph::deduppedCall(
     ExprVector args,
     bool specialForm) {
   canonicalizeCall(name, args);
-  ExprDedupKey key = {name, args, value.type};
-
-  auto [it, emplaced] = functionDedup_.try_emplace(key);
-  if (it->second) {
-    return it->second;
+  Call::KeyView view{name, value.type, args};
+  if (auto it = functionDedup_.find(view); it != functionDedup_.end()) {
+    return *it;
   }
   FunctionSet flags = functionBits(name, specialForm);
   for (auto* arg : args) {
     flags = flags | arg->functions();
   }
   auto* call = make<Call>(name, value, std::move(args), flags);
-  if (emplaced && !call->containsNonDeterministic()) {
-    it->second = call;
+  if (!call->containsNonDeterministic()) {
+    functionDedup_.insert(call);
   }
   return call;
 }
@@ -1224,27 +1222,30 @@ bool ToGraph::isJoinEquality(
 }
 
 ExprCP ToGraph::makeConstant(const lp::ConstantExpr& constant) {
-  TypedVariant temp{toType(constant.type()), constant.value()};
-  auto it = constantDedup_.find(temp);
-  if (it != constantDedup_.end()) {
-    return it->second;
+  const auto* type = toType(constant.type());
+  Literal::KeyView view{type, constant.value().get()};
+  if (auto it = constantDedup_.find(view); it != constantDedup_.end()) {
+    return *it;
   }
 
-  Value value(temp.type, 1);
-  if (temp.value->isNull()) {
+  // Give the Variant a query-scoped owner (the caller's ConstantExpr may be
+  // temporary, e.g. the null constant built by makeNullConstant).
+  const auto* variant = registerVariant(*constant.value());
+
+  Value value(type, 1);
+  if (variant->isNull()) {
     value.nullFraction = 1.0;
   } else {
     value.nullFraction = 0.0;
     value.nullable = false;
-    if (temp.type->isPrimitiveType()) {
-      value.min = temp.value.get();
-      value.max = temp.value.get();
+    if (type->isPrimitiveType()) {
+      value.min = variant;
+      value.max = variant;
     }
   }
 
-  auto* literal = make<Literal>(value, temp.value.get());
-
-  constantDedup_[std::move(temp)] = literal;
+  auto* literal = make<Literal>(value, variant);
+  constantDedup_.insert(literal);
   return literal;
 }
 
@@ -1726,50 +1727,6 @@ void ToGraph::addUnnest(const lp::UnnestNode& unnest) {
   currentDt_->joins.push_back(edge);
 }
 
-namespace {
-struct AggregateDedupKey {
-  Name func;
-  bool isDistinct;
-  ExprCP condition;
-  std::span<const ExprCP> args;
-  std::span<const ExprCP> orderKeys;
-  std::span<const OrderType> orderTypes;
-
-  bool operator==(const AggregateDedupKey& other) const {
-    return func == other.func && isDistinct == other.isDistinct &&
-        condition == other.condition && std::ranges::equal(args, other.args) &&
-        std::ranges::equal(orderKeys, other.orderKeys) &&
-        std::ranges::equal(orderTypes, other.orderTypes);
-  }
-};
-
-struct AggregateDedupHasher {
-  size_t operator()(const AggregateDedupKey& key) const {
-    size_t hash = folly::hasher<Name>()(key.func);
-
-    hash = velox::bits::hashMix(hash, folly::hasher<bool>()(key.isDistinct));
-
-    if (key.condition != nullptr) {
-      hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(key.condition));
-    }
-
-    for (auto& a : key.args) {
-      hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(a));
-    }
-
-    for (auto& k : key.orderKeys) {
-      hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(k));
-    }
-
-    for (auto& t : key.orderTypes) {
-      hash = velox::bits::hashMix(hash, folly::hasher<OrderType>()(t));
-    }
-
-    return hash;
-  }
-};
-} // namespace
-
 ColumnCP ToGraph::createGroupIdColumn(
     Name name,
     const velox::TypePtr& type,
@@ -1898,7 +1855,11 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
   }
 
   AggregateVector deduppedAggregates;
-  folly::F14FastMap<AggregateDedupKey, ColumnCP, AggregateDedupHasher>
+  folly::F14FastMap<
+      const Aggregate*,
+      ColumnCP,
+      Aggregate::KeyHash,
+      Aggregate::KeyEq>
       uniqueAggregates;
 
   // Inside a subquery, allow aggregate arguments to resolve against
@@ -1966,11 +1927,9 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
 
     auto name = toName(agg.outputNames()[channel]);
 
-    AggregateDedupKey key{
-        aggName, isDistinct, condition, args, orderKeys, orderTypes};
-
-    auto it = uniqueAggregates.try_emplace(key).first;
-    if (it->second) {
+    Aggregate::KeyView view{
+        aggName, args, isDistinct, condition, orderKeys, orderTypes};
+    if (auto it = uniqueAggregates.find(view); it != uniqueAggregates.end()) {
       newRenames[name] = it->second;
     } else {
       auto accumulatorType = toType(
@@ -2003,7 +1962,7 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       intermediateColumns.push_back(intermediateColumn);
 
       deduppedAggregates.push_back(aggregateExpr);
-      it->second = column;
+      uniqueAggregates.emplace(aggregateExpr, column);
       newRenames[name] = column;
     }
   }
