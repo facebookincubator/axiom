@@ -78,6 +78,8 @@ Name cname(PlanObjectCP relation) {
       return relation->as<ValuesTable>()->cname;
     case PlanType::kUnnestTableNode:
       return relation->as<UnnestTable>()->cname;
+    case PlanType::kWorkingTableNode:
+      return relation->as<WorkingTable>()->name;
     case PlanType::kDerivedTableNode:
       return relation->as<DerivedTable>()->cname;
     default:
@@ -391,6 +393,12 @@ std::string ValuesTable::toString() const {
 std::string UnnestTable::toString() const {
   std::stringstream out;
   out << "{" << PlanObject::toString() << cname << "}";
+  return out.str();
+}
+
+std::string WorkingTable::toString() const {
+  std::stringstream out;
+  out << "{" << PlanObject::toString() << "fp:" << name << "}";
   return out.str();
 }
 

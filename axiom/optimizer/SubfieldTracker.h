@@ -141,6 +141,13 @@ class SubfieldTracker {
       const MarkFieldsAccessedContext& context);
 
   void markFieldAccessed(
+      const logical_plan::FixedPointNode& fixedPoint,
+      int32_t ordinal,
+      std::vector<Step>& steps,
+      bool isControl,
+      const MarkFieldsAccessedContext& context);
+
+  void markFieldAccessed(
       const LogicalContextSource& source,
       int32_t ordinal,
       std::vector<Step>& steps,

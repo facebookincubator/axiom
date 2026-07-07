@@ -137,6 +137,28 @@ class PlanMatcher {
   std::vector<std::optional<std::string>> aliases_;
 };
 
+/// Match details for a FixedPoint node. Mirrors the fields on
+/// `lp::FixedPointNode` (name, anchor, step); ignores Velox-side lowering
+/// artifacts (convergence config, state declarations). Each field is
+/// optional.
+struct FixedPointDetails {
+  /// When set, asserts `lp::FixedPointNode::name()`.
+  std::optional<std::string> name;
+
+  /// When set, runs against `lp::FixedPointNode::anchor()`.
+  std::shared_ptr<PlanMatcher> anchor;
+
+  /// When set, runs against `lp::FixedPointNode::step()`.
+  std::shared_ptr<PlanMatcher> step;
+};
+
+/// Match details for a WorkingTableScan. Lowers to `StateSourceNode`.
+struct WorkingTableScanDetails {
+  /// When set, asserts the working table's name -- same as the enclosing
+  /// `FixedPointDetails::name`.
+  std::optional<std::string> name;
+};
+
 /// Match details for a HashJoin node beyond join type. Each field is
 /// optional: leave as nullopt to skip the check, set a value to assert it.
 struct HashJoinDetails {
@@ -197,6 +219,18 @@ class PlanMatcherBuilder {
   /// Matches a Values node with the specified output type.
   /// @param outputType The expected output type of the Values node.
   PlanMatcherBuilder& values(const RowTypePtr& outputType);
+
+  /// Matches any WorkingTableScan.
+  PlanMatcherBuilder& workingTableScan();
+
+  /// Matches a WorkingTableScan with the specified details.
+  PlanMatcherBuilder& workingTableScan(const WorkingTableScanDetails& details);
+
+  /// Matches any FixedPoint.
+  PlanMatcherBuilder& fixedPoint();
+
+  /// Matches a FixedPoint with the specified details.
+  PlanMatcherBuilder& fixedPoint(const FixedPointDetails& details);
 
   /// Matches any Filter node regardless of predicate.
   PlanMatcherBuilder& filter();

@@ -4867,6 +4867,121 @@ void ToGraph::translateUnion(const lp::SetNode& set) {
   }
 }
 
+void ToGraph::translateFixedPoint(const lp::FixedPointNode& fixedPoint) {
+  VELOX_USER_CHECK(
+      !fixedPointScope_.has_value(),
+      "Nested FixedPoint translation is not yet implemented");
+  auto* fixedPointDt = currentDt_;
+
+  const auto* recursionName = toName(fixedPoint.name());
+  auto renames = std::move(renames_);
+
+  // Translates one leg (anchor or step) into a fresh sub-DT and returns it.
+  // Each leg has its own renames_, subquery cache, and lifted-correlation
+  // state so siblings don't bleed into each other.
+  auto translateLeg = [&](const lp::LogicalPlanNode& input) -> DerivedTable* {
+    renames_ = renames;
+    currentDt_ = newDt();
+    auto savedLifted = applyContext_.saveAndClearLifted();
+    auto savedSubqueries = std::move(subqueries_);
+    subqueries_.clear();
+    SCOPE_EXIT {
+      applyContext_.lifted = std::move(savedLifted);
+      subqueries_ = std::move(savedSubqueries);
+    };
+    makeQueryGraph(input, kAllAllowedInDt, /*orderObservedAbove=*/false);
+    if (!applyContext_.lifted.empty()) {
+      VELOX_NYI(
+          "Correlated reference inside a FixedPoint leg is not supported yet");
+    }
+    return std::exchange(currentDt_, fixedPointDt);
+  };
+
+  // Anchor first — it defines the output schema of the FixedPoint.
+  auto* anchorDt = translateLeg(*fixedPoint.anchor());
+
+  const auto& anchorType = fixedPoint.anchor()->outputType();
+  for (auto i : usedChannels(*fixedPoint.anchor())) {
+    const auto& name = anchorType->nameOf(i);
+    ExprCP inner = translateColumn(name);
+    anchorDt->exprs.push_back(inner);
+    const auto* columnName = toName(name);
+    auto* outer =
+        make<Column>(columnName, fixedPointDt, inner->value(), columnName);
+    fixedPointDt->columns.push_back(outer);
+    anchorDt->columns.push_back(outer);
+  }
+
+  // Bind the enclosing scope so RecursiveReferenceNodes inside the step
+  // resolve to a WorkingTable whose columns match the anchor.
+  fixedPointScope_.emplace(
+      FixedPointScope{
+          .name = recursionName, .anchorColumns = fixedPointDt->columns});
+  SCOPE_EXIT {
+    fixedPointScope_.reset();
+  };
+  auto* stepDt = translateLeg(*fixedPoint.step());
+
+  // Step exprs feed the same output columns as the anchor; SubfieldTracker
+  // marks both legs identically so usedChannels matches.
+  const auto& stepType = fixedPoint.step()->outputType();
+  for (auto i : usedChannels(*fixedPoint.step())) {
+    ExprCP inner = translateColumn(stepType->nameOf(i));
+    stepDt->exprs.push_back(inner);
+  }
+  stepDt->columns = fixedPointDt->columns;
+
+  fixedPointDt->outputColumns = fixedPointDt->columns;
+  anchorDt->outputColumns = fixedPointDt->columns;
+  stepDt->outputColumns = fixedPointDt->columns;
+  fixedPointDt->fixedPoint.name = recursionName;
+  fixedPointDt->fixedPoint.anchor = anchorDt;
+  fixedPointDt->fixedPoint.step = stepDt;
+
+  renames_ = std::move(renames);
+  for (const auto* column : fixedPointDt->columns) {
+    renames_[column->name()] = column;
+  }
+}
+
+void ToGraph::translateRecursiveRef(const lp::RecursiveReferenceNode& ref) {
+  const auto* recursionName = toName(ref.name());
+  VELOX_USER_CHECK(
+      fixedPointScope_.has_value(),
+      "RecursiveReferenceNode outside any enclosing FixedPoint: {}",
+      ref.name());
+  const auto& scope = *fixedPointScope_;
+  VELOX_USER_CHECK_EQ(
+      scope.name,
+      recursionName,
+      "RecursiveReferenceNode name does not match enclosing FixedPoint");
+
+  const auto& schema = ref.outputType();
+  VELOX_CHECK_EQ(
+      schema->size(),
+      scope.anchorColumns.size(),
+      "RecursiveReference schema size mismatches enclosing FixedPoint anchor");
+
+  // The LP's `recursiveRef` deliberately renames the anchor's columns
+  // (e.g. `n` -> `n_0`) so multiple self-references can carry distinct
+  // column ids. Keep the LP's renamed names as `renames_` keys (so the
+  // step's filter/project resolve as the LP intended), but name the
+  // WorkingTable's columns to match the anchor.
+  auto* workingTable = make<WorkingTable>(recursionName);
+  for (auto i = 0; i < schema->size(); ++i) {
+    const auto* anchorColumnName = scope.anchorColumns[i]->name();
+    auto* column = make<Column>(
+        anchorColumnName,
+        workingTable,
+        toConstantValue(schema->childAt(i)),
+        anchorColumnName);
+    workingTable->columns.push_back(column);
+    renames_[schema->nameOf(i)] = column;
+  }
+
+  currentDt_->addTable(workingTable);
+}
+
 namespace {
 
 // Normalized join with left/right sides and join type. RIGHT joins are
@@ -5208,11 +5323,15 @@ void ToGraph::makeQueryGraph(
       wrapInDt(*node.onlyInput(), /*orderObservedAbove=*/false);
       addWrite(*node.as<lp::TableWriteNode>());
     } break;
-    case lp::NodeKind::kFixedPoint:
-    case lp::NodeKind::kRecursiveReference:
-      VELOX_NYI(
-          "Fixed-point (recursive) plan execution is not yet implemented");
-      break;
+    case lp::NodeKind::kFixedPoint: {
+      auto* outerDt = std::exchange(currentDt_, newDt());
+      translateFixedPoint(*node.as<lp::FixedPointNode>());
+      outerDt->addTable(currentDt_);
+      currentDt_ = outerDt;
+    } break;
+    case lp::NodeKind::kRecursiveReference: {
+      translateRecursiveRef(*node.as<lp::RecursiveReferenceNode>());
+    } break;
     default:
       VELOX_NYI(
           "Unsupported PlanNode {}", lp::NodeKindName::toName(node.kind()));

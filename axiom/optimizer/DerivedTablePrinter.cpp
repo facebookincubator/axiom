@@ -84,6 +84,8 @@ std::string tableName(PlanObjectCP table) {
       return table->as<ValuesTable>()->cname;
     case PlanType::kUnnestTableNode:
       return table->as<UnnestTable>()->cname;
+    case PlanType::kWorkingTableNode:
+      return table->as<WorkingTable>()->name;
     case PlanType::kDerivedTableNode:
       return table->as<DerivedTable>()->cname;
     default:
@@ -124,6 +126,17 @@ std::string visitUnnestTable(const UnnestTable& unnest) {
   std::stringstream out;
   out << headerLine(unnest.cname, unnest.cardinality(), unnest.columns);
   for (const auto& column : unnest.columns) {
+    out << "  " << column->name() << " " << constraintString(column->value())
+        << std::endl;
+  }
+  return out.str();
+}
+
+std::string visitWorkingTable(const WorkingTable& workingTable) {
+  std::stringstream out;
+  out << headerLine(
+      workingTable.name, workingTable.cardinality(), workingTable.columns);
+  for (const auto& column : workingTable.columns) {
     out << "  " << column->name() << " " << constraintString(column->value())
         << std::endl;
   }
@@ -190,11 +203,11 @@ std::string visitDerivedTable(const DerivedTable& dt) {
 
   if (dt.isUnion()) {
     VELOX_CHECK_EQ(0, dt.exprs.size());
-  } else {
+  } else if (!dt.isFixedPoint()) {
     VELOX_CHECK_EQ(dt.columns.size(), dt.exprs.size());
   }
 
-  if (!dt.isUnion()) {
+  if (!dt.isUnion() && !dt.isFixedPoint()) {
     out << "  output:" << std::endl;
     for (auto i = 0; i < dt.columns.size(); ++i) {
       out << "    " << dt.columns.at(i)->name()
@@ -294,6 +307,9 @@ std::string visitDerivedTable(const DerivedTable& dt) {
       case PlanType::kUnnestTableNode:
         out << visitUnnestTable(*table->as<UnnestTable>());
         break;
+      case PlanType::kWorkingTableNode:
+        out << visitWorkingTable(*table->as<WorkingTable>());
+        break;
       case PlanType::kDerivedTableNode:
         out << visitDerivedTable(*table->as<DerivedTable>());
         break;
@@ -318,6 +334,13 @@ std::string visitDerivedTable(const DerivedTable& dt) {
       out << std::endl;
       out << visitDerivedTable(*child);
     }
+  } else if (dt.isFixedPoint()) {
+    out << "  FIXED POINT: " << dt.fixedPoint.anchor->cname << ", "
+        << dt.fixedPoint.step->cname << std::endl;
+    out << std::endl;
+    out << visitDerivedTable(*dt.fixedPoint.anchor);
+    out << std::endl;
+    out << visitDerivedTable(*dt.fixedPoint.step);
   }
 
   return out.str();

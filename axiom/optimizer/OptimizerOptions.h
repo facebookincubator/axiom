@@ -53,6 +53,9 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
       "broadcast_size_limit";
   static constexpr std::string_view kTraceFlags = "trace_flags";
 
+  static constexpr std::string_view kFixedPointMaxIterations =
+      "fixed_point_max_iterations";
+
   // Default values — single source of truth for field initializers
   // and properties().
   static constexpr int32_t kParallelProjectWidthDefault = 1;
@@ -70,6 +73,7 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
   static constexpr uint32_t kTraceFlagsDefault = 0;
   static constexpr bool kSyntacticJoinOrderDefault = false;
   static constexpr bool kAlwaysPlanPartialAggregationDefault = false;
+  static constexpr int32_t kFixedPointMaxIterationsDefault = 1'000;
 
   /// Constructs with code defaults only.
   OptimizerOptions();
@@ -135,6 +139,12 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
   /// When true, connectors skip side effects in createTable() and
   /// beginWrite(). Used for EXPLAIN queries.
   bool explain{false};
+
+  /// Maximum iterations before a FixedPoint loop errors out as a safety
+  /// bound. Must be >= 1. Matches Presto/Trino/MySQL WITH RECURSIVE
+  /// semantics: exceeding the cap raises rather than silently truncating.
+  /// Forwarded to `velox::core::ConvergenceConfig::maxIterations`.
+  int32_t fixedPointMaxIterations{kFixedPointMaxIterationsDefault};
 
   /// Constructs options from session property name-value pairs.
   /// Keys are unqualified property names (e.g., "sample_joins").
