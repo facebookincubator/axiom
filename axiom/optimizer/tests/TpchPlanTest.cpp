@@ -136,7 +136,8 @@ TEST_F(TpchPlanTest, q01) {
              "avg(l_quantity)",
              "avg(l_extendedprice)",
              "avg(l_discount)",
-             "count()"})
+             "count()"},
+            isMultiThreaded)
         .distributedOrderBy({"l_returnflag", "l_linestatus"})
         .build();
   };
@@ -286,7 +287,7 @@ TEST_F(TpchPlanTest, q06) {
         .multiThreaded(isMultiThreaded)
         .filter(filter)
         .project({"l_extendedprice * l_discount as revenue"})
-        .distributedAggregation({}, {"sum(revenue)"})
+        .distributedAggregation({}, {"sum(revenue)"}, isMultiThreaded)
         .build();
   };
   AXIOM_ASSERT_DISTRIBUTED_PLAN(
@@ -518,7 +519,9 @@ TEST_F(TpchPlanTest, q12) {
              "if(o_orderpriority = '1-URGENT' or o_orderpriority = '2-HIGH', 1, 0) as high_line_count",
              "if(o_orderpriority <> '1-URGENT' and o_orderpriority <> '2-HIGH', 1, 0) as low_line_count"})
         .distributedAggregation(
-            {"l_shipmode"}, {"sum(high_line_count)", "sum(low_line_count)"})
+            {"l_shipmode"},
+            {"sum(high_line_count)", "sum(low_line_count)"},
+            isMultiThreaded)
         .distributedOrderBy({"l_shipmode"})
         .build();
   };
@@ -561,7 +564,8 @@ TEST_F(TpchPlanTest, q14) {
         .project(
             {"if(p_type like 'PROMO%', l_extendedprice * (1.0 - l_discount), 0.0) as promo",
              "l_extendedprice * (1.0 - l_discount) as disc_price"})
-        .distributedAggregation({}, {"sum(promo)", "sum(disc_price)"})
+        .distributedAggregation(
+            {}, {"sum(promo)", "sum(disc_price)"}, isMultiThreaded)
         .project()
         .build();
   };

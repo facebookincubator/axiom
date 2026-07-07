@@ -198,9 +198,11 @@ TEST_F(AggregationTest, orderBy) {
     testConnector_->dropTableIfExists("t");
   };
 
-  // 10 rows with only 2 distinct group_key values (0 and 1). Adding data to the
-  // test table is necessary to trigger split aggregation steps by default.
-  constexpr int kNumRows = 10;
+  // Enough rows with only 2 distinct group_key values that partial
+  // aggregation reduces the row count, so the split (partial + final) plan
+  // beats single-step. Adding data to the test table is necessary to trigger
+  // split aggregation steps by default.
+  constexpr int kNumRows = 1000;
   auto rowVector = makeRowVector({
       makeFlatVector<int64_t>(kNumRows, [](auto row) { return row % 2; }),
       makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }),
@@ -232,7 +234,7 @@ TEST_F(AggregationTest, orderBy) {
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
   }
 
-  // Query without ORDER BY - should use partial + final aggregation.
+  // Query without ORDER BY - should use split aggregation.
   logicalPlan = lp::PlanBuilder(makeContext())
                     .tableScan("t")
                     .aggregate({"k"}, {"sum(v1)"})
@@ -242,6 +244,8 @@ TEST_F(AggregationTest, orderBy) {
   matcher = core::PlanMatcherBuilder()
                 .tableScan()
                 .partialAggregation({"k"}, {"sum(v1)"})
+                .localPartition()
+                .intermediateAggregation()
                 .shuffle()
                 .localPartition()
                 .finalAggregation()
@@ -303,6 +307,71 @@ TEST_F(AggregationTest, fanoutPrecisionRegression) {
                      .shuffle()
                      .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(plan, matcher);
+}
+
+// A distributed global aggregation prefers split plan with intermediate step,
+// so the final node receives one partial per worker instead of one per driver.
+TEST_F(AggregationTest, globalIntermediateAggregation) {
+  testConnector_->addTable("t", ROW({"v"}, {DOUBLE()}))
+      ->setStats(/*numRows=*/1'000'000, {});
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .aggregate({}, {"approx_percentile(v, 0.5)"})
+                         .build();
+
+  auto plan = planVelox(
+      logicalPlan,
+      MultiFragmentPlan::Options{.numWorkers = 4, .numDrivers = 4},
+      OptimizerOptions{});
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .partialAggregation({}, {"approx_percentile(v, 0.5)"})
+                     .localGather()
+                     .intermediateAggregation()
+                     .gather()
+                     .localGather()
+                     .finalAggregation()
+                     .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+}
+
+// A low-cardinality distributed grouped aggregation prefers a split plan with
+// intermediate step.
+TEST_F(AggregationTest, groupedIntermediateAggregation) {
+  std::unordered_map<std::string, connector::ColumnStatistics> colStats;
+  colStats["g"] = {.numDistinct = 8};
+  testConnector_->addTable("t", ROW({"g", "v"}, {BIGINT(), DOUBLE()}))
+      ->setStats(/*numRows=*/1'000'000, colStats);
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .aggregate({"g"}, {"approx_percentile(v, 0.5)"})
+                         .build();
+
+  auto plan = planVelox(
+      logicalPlan,
+      MultiFragmentPlan::Options{.numWorkers = 4, .numDrivers = 4},
+      OptimizerOptions{});
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .partialAggregation({"g"}, {"approx_percentile(v, 0.5)"})
+                     .localPartition({"g"})
+                     .intermediateAggregation()
+                     .shuffle({"g"})
+                     .localPartition({"g"})
+                     .finalAggregation()
+                     .shuffle()
+                     .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
 }
 
 // Verifies that repartitionForAgg correctly determines when shuffle is needed

@@ -1698,7 +1698,8 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
 
   if (op.preGroupedKeys.empty() && options_.numDrivers > 1 &&
       (op.step == velox::core::AggregationNode::Step::kFinal ||
-       op.step == velox::core::AggregationNode::Step::kSingle)) {
+       op.step == velox::core::AggregationNode::Step::kSingle ||
+       op.step == velox::core::AggregationNode::Step::kIntermediate)) {
     input = addLocalPartition(nextId(), input, keys);
   }
 

@@ -90,14 +90,16 @@ TEST_F(UnionAllTest, twoDistincts) {
   }
 
   {
-    auto matcher = matchScan("t")
-                       .distributedAggregation({"a"}, {})
-                       .localPartition(matchScan("u")
-                                           .distributedAggregation({"b"}, {})
-                                           .project()
-                                           .build())
-                       .gather()
-                       .build();
+    auto matcher =
+        matchScan("t")
+            .distributedAggregation({"a"}, {}, /*withIntermediate=*/true)
+            .localPartition(matchScan("u")
+                                .distributedAggregation(
+                                    {"b"}, {}, /*withIntermediate=*/true)
+                                .project()
+                                .build())
+            .gather()
+            .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
@@ -191,7 +193,7 @@ TEST_F(UnionAllTest, distinctAndValues) {
   {
     auto matcher =
         matchScan("t")
-            .distributedAggregation({"a"}, {})
+            .distributedAggregation({"a"}, {}, /*withIntermediate=*/true)
             .localPartition(matchValues().project().arbitrary().build())
             .gather()
             .build();
@@ -215,11 +217,12 @@ TEST_F(UnionAllTest, scanAndDistinct) {
   }
 
   {
-    auto matcher = matchScan("t")
-                       .distributedAggregation({"a"}, {})
-                       .localPartition(matchScan("u").project().build())
-                       .gather()
-                       .build();
+    auto matcher =
+        matchScan("t")
+            .distributedAggregation({"a"}, {}, /*withIntermediate=*/true)
+            .localPartition(matchScan("u").project().build())
+            .gather()
+            .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
@@ -248,7 +251,8 @@ TEST_F(UnionAllTest, scanAndDistinctAndValues) {
     auto matcher = matchScan("t")
                        .localPartition(
                            {matchScan("u")
-                                .distributedAggregation({"b"}, {})
+                                .distributedAggregation(
+                                    {"b"}, {}, /*withIntermediate=*/true)
                                 .project()
                                 .build(),
                             matchValues().project().arbitrary().build()})
@@ -284,7 +288,8 @@ TEST_F(UnionAllTest, groupByOverTwoScans) {
   {
     auto matcher = matchScan("t")
                        .localPartition(matchScan("u").project().build())
-                       .distributedAggregation({"a"}, {"count(*)"})
+                       .distributedAggregation(
+                           {"a"}, {"count(*)"}, /*withIntermediate=*/true)
                        .gather()
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
@@ -320,16 +325,18 @@ TEST_F(UnionAllTest, groupByOverTwoDistincts) {
   }
 
   {
-    auto matcher = matchScan("t")
-                       .distributedAggregation({"a"}, {})
-                       .localPartition(matchScan("u")
-                                           .distributedAggregation({"b"}, {})
-                                           .project()
-                                           .build())
-                       .localPartition({"a"})
-                       .singleAggregation({"a"}, {"count(*)"})
-                       .gather()
-                       .build();
+    auto matcher =
+        matchScan("t")
+            .distributedAggregation({"a"}, {}, /*withIntermediate=*/true)
+            .localPartition(matchScan("u")
+                                .distributedAggregation(
+                                    {"b"}, {}, /*withIntermediate=*/true)
+                                .project()
+                                .build())
+            .localPartition({"a"})
+            .singleAggregation({"a"}, {"count(*)"})
+            .gather()
+            .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
@@ -392,7 +399,8 @@ TEST_F(UnionAllTest, groupByOverScanAndValues) {
     auto matcher =
         matchScan("t")
             .localPartition(matchValues().project().arbitrary().build())
-            .distributedAggregation({"a"}, {"count(*)"})
+            .distributedAggregation(
+                {"a"}, {"count(*)"}, /*withIntermediate=*/true)
             .gather()
             .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
@@ -427,7 +435,7 @@ TEST_F(UnionAllTest, groupByOverDistinctAndValues) {
   {
     auto matcher =
         matchScan("t")
-            .distributedAggregation({"a"}, {})
+            .distributedAggregation({"a"}, {}, /*withIntermediate=*/true)
             .localPartition(matchValues().project().arbitrary().build())
             .distributedSingleAggregation({"a"}, {"count(*)"})
             .gather()
@@ -458,14 +466,17 @@ TEST_F(UnionAllTest, groupByOverScanAndDistinct) {
   }
 
   {
-    auto matcher = matchScan("t")
-                       .localPartition(matchScan("u")
-                                           .distributedAggregation({"b"}, {})
-                                           .project()
-                                           .build())
-                       .distributedAggregation({"a"}, {"count(*)"})
-                       .gather()
-                       .build();
+    auto matcher =
+        matchScan("t")
+            .localPartition(matchScan("u")
+                                .distributedAggregation(
+                                    {"b"}, {}, /*withIntermediate=*/true)
+                                .project()
+                                .build())
+            .distributedAggregation(
+                {"a"}, {"count(*)"}, /*withIntermediate=*/true)
+            .gather()
+            .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
@@ -497,11 +508,13 @@ TEST_F(UnionAllTest, groupByOverScanAndDistinctAndValues) {
     auto matcher = matchScan("t")
                        .localPartition(
                            {matchScan("u")
-                                .distributedAggregation({"b"}, {})
+                                .distributedAggregation(
+                                    {"b"}, {}, /*withIntermediate=*/true)
                                 .project()
                                 .build(),
                             matchValues().project().arbitrary().build()})
-                       .distributedAggregation({"a"}, {"count(*)"})
+                       .distributedAggregation(
+                           {"a"}, {"count(*)"}, /*withIntermediate=*/true)
                        .gather()
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
@@ -600,16 +613,18 @@ TEST_F(UnionAllTest, orderByOverTwoDistincts) {
   }
 
   {
-    auto matcher = matchScan("t")
-                       .distributedAggregation({"a"}, {})
-                       .localPartition(matchScan("u")
-                                           .distributedAggregation({"b"}, {})
-                                           .project()
-                                           .build())
-                       .orderBy({"a ASC NULLS LAST"})
-                       .localMerge()
-                       .shuffleMerge()
-                       .build();
+    auto matcher =
+        matchScan("t")
+            .distributedAggregation({"a"}, {}, /*withIntermediate=*/true)
+            .localPartition(matchScan("u")
+                                .distributedAggregation(
+                                    {"b"}, {}, /*withIntermediate=*/true)
+                                .project()
+                                .build())
+            .orderBy({"a ASC NULLS LAST"})
+            .localMerge()
+            .shuffleMerge()
+            .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
@@ -667,7 +682,7 @@ TEST_F(UnionAllTest, orderByOverDistinctAndValues) {
   {
     auto matcher =
         matchScan("t")
-            .distributedAggregation({"a"}, {})
+            .distributedAggregation({"a"}, {}, /*withIntermediate=*/true)
             .localPartition(matchValues().project().arbitrary().build())
             .orderBy({"a ASC NULLS LAST"})
             .localMerge()
@@ -695,15 +710,17 @@ TEST_F(UnionAllTest, orderByOverScanAndDistinct) {
   }
 
   {
-    auto matcher = matchScan("t")
-                       .localPartition(matchScan("u")
-                                           .distributedAggregation({"b"}, {})
-                                           .project()
-                                           .build())
-                       .orderBy({"a ASC NULLS LAST"})
-                       .localMerge()
-                       .shuffleMerge()
-                       .build();
+    auto matcher =
+        matchScan("t")
+            .localPartition(matchScan("u")
+                                .distributedAggregation(
+                                    {"b"}, {}, /*withIntermediate=*/true)
+                                .project()
+                                .build())
+            .orderBy({"a ASC NULLS LAST"})
+            .localMerge()
+            .shuffleMerge()
+            .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
@@ -738,7 +755,8 @@ TEST_F(UnionAllTest, orderByOverScanAndDistinctAndValues) {
     auto matcher = matchScan("t")
                        .localPartition(
                            {matchScan("u")
-                                .distributedAggregation({"b"}, {})
+                                .distributedAggregation(
+                                    {"b"}, {}, /*withIntermediate=*/true)
                                 .project()
                                 .build(),
                             matchValues().project().arbitrary().build()})
@@ -867,7 +885,8 @@ TEST_F(UnionAllTest, groupByOverUnionAllWithOrderedLegs) {
   {
     auto matcher = matchScan("t")
                        .localPartition(matchScan("u").project().build())
-                       .distributedAggregation({"a"}, {"count(*)"})
+                       .distributedAggregation(
+                           {"a"}, {"count(*)"}, /*withIntermediate=*/true)
                        .gather()
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);

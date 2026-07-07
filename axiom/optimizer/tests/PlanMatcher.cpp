@@ -2006,6 +2006,22 @@ PlanMatcherBuilder& PlanMatcherBuilder::finalAggregation(
   return *this;
 }
 
+PlanMatcherBuilder& PlanMatcherBuilder::intermediateAggregation() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<AggregationMatcher>(
+      matcher_, AggregationNode::Step::kIntermediate);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::intermediateAggregation(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<AggregationMatcher>(
+      matcher_, AggregationNode::Step::kIntermediate, groupingKeys, aggregates);
+  return *this;
+}
+
 PlanMatcherBuilder& PlanMatcherBuilder::streamingAggregation() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<AggregationMatcher>(
@@ -2338,14 +2354,23 @@ PlanMatcherBuilder& PlanMatcherBuilder::multiThreaded(bool enabled) {
 
 PlanMatcherBuilder& PlanMatcherBuilder::distributedAggregation(
     const std::vector<std::string>& groupingKeys,
-    const std::vector<std::string>& aggregates) {
+    const std::vector<std::string>& aggregates,
+    bool withIntermediate) {
   partialAggregation(groupingKeys, aggregates);
   if (groupingKeys.empty()) {
+    if (withIntermediate) {
+      localGather();
+      intermediateAggregation();
+    }
     gather();
     if (localExchanges_) {
       localGather();
     }
   } else {
+    if (withIntermediate) {
+      localPartition(groupingKeys);
+      intermediateAggregation();
+    }
     shuffle(groupingKeys);
     if (localExchanges_) {
       localPartition(groupingKeys);

@@ -69,10 +69,16 @@ struct PlanCost {
 /// and input cardinality. A lookup that hits densely is cheaper than one that
 /// hits sparsely. An index lookup has no setup cost.
 struct Cost {
-  /// Cardinality of the output of the left deep input tree. 1 for a leaf
-  /// scan. nullopt if unknown (an input's cardinality could not be estimated).
-  /// No default: every operator sets it, so a missing value is genuinely
-  /// unknown rather than a silent sentinel.
+  /// Cardinality of the output of the left deep input tree. This is physical
+  /// rows this operator processes, i.e., the rows it actually reads, counting
+  /// each row once per producer. For a row-preserving input this is the child's
+  /// resultCardinality; a pre-shuffle (partial or intermediate) aggregation,
+  /// however, emits each group once per producer, so a Repartition or the
+  /// downstream merge reads more, and inputCardinality then includes that
+  /// per-producer replication. 1 for a leaf scan. nullopt if unknown (an
+  /// input's cardinality could not be estimated). No default: every operator
+  /// sets it, so a missing value is genuinely unknown rather than a silent
+  /// sentinel.
   std::optional<float> inputCardinality;
 
   /// Cost of processing one input tuple. Complete cost of the operation for a
@@ -93,6 +99,12 @@ struct Cost {
 
   /// Shuffle data volume. nullopt if unknown.
   std::optional<float> transferBytes;
+
+  /// Number of independent producers that each hold a copy of every output row
+  /// (the replication factor). 1 for row-preserving operators; for a
+  /// pre-shuffle aggregation it is the fragment width: numWorkers *
+  /// numDrivers after a partial, or numWorkers after a per-node intermediate.
+  float partitionCount{1};
 
   /// Total CPU cost of this operator. nullopt iff unitCost or inputCardinality
   /// is unknown (does not depend on fanout). This is the quantity that decides
