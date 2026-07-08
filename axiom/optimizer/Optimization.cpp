@@ -122,8 +122,8 @@ void Optimization::estimateLeafSelectivity(BaseTable& baseTable) {
 
 namespace {
 void collectBaseTables(DerivedTable* dt, std::vector<BaseTable*>& baseTables) {
-  if (dt->isUnion()) {
-    for (auto* child : dt->unionInputs) {
+  if (auto* setDt = dt->asUnion()) {
+    for (auto* child : setDt->inputs) {
       collectBaseTables(child, baseTables);
     }
   } else {
@@ -3513,10 +3513,10 @@ RelationOpPtr Optimization::makeInitialPlan(const DerivedTable& dt) {
   PlanState state(*this, &dt, options().syntacticJoinOrder);
   RelationOpPtr result;
 
-  if (dt.isUnion()) {
+  if (auto* setDt = dt.asUnion()) {
     // Union: assemble from already-planned children.
     RelationOpPtrVector childOps;
-    for (auto* childDt : dt.unionInputs) {
+    for (auto* childDt : setDt->inputs) {
       auto* plans = memo_.find(childDt->memoKey());
       VELOX_CHECK(
           plans != nullptr, "Expecting to find a plan for union branch");
@@ -3548,7 +3548,7 @@ PlanP Optimization::makePlan(
     bool& needsShuffle) {
   needsShuffle = false;
   if (key.firstTable->is(PlanType::kDerivedTableNode) &&
-      key.firstTable->as<DerivedTable>()->isUnion()) {
+      key.firstTable->as<DerivedTable>()->asUnion() != nullptr) {
     return makeUnionPlan(key, distribution);
   }
   return makeDtPlan(dt, key, distribution, existsFanout, needsShuffle);
@@ -3566,7 +3566,7 @@ PlanP Optimization::makePlan(
 PlanP Optimization::makeUnionPlan(
     const MemoKey& key,
     const std::optional<DesiredDistribution>& distribution) {
-  const auto* setDt = key.firstTable->as<DerivedTable>();
+  const auto* setDt = key.firstTable->as<SetDt>();
 
   RelationOpPtrVector inputs;
   std::vector<PlanP> inputPlans;
@@ -3584,7 +3584,7 @@ PlanP Optimization::makeUnionPlan(
     childColumns.unionObjects(setDt->columns);
   }
 
-  for (auto* inputDt : setDt->unionInputs) {
+  for (auto* inputDt : setDt->inputs) {
     // Only include the child DT in the input tables. Extra tables from
     // the parent key (e.g., reducing bushy join tables) reference joins
     // against the UNION ALL DT which don't exist for individual children.
@@ -3593,7 +3593,7 @@ PlanP Optimization::makeUnionPlan(
 
     PlanP inputPlan;
     bool inputShuffle = false;
-    if (inputDt->isUnion()) {
+    if (inputDt->asUnion() != nullptr) {
       // Nested union (e.g., UNION ALL of UNION ALL).
       // TODO: Flatten nested unions in ToGraph.
       inputPlan = makeUnionPlan(inputKey, distribution);

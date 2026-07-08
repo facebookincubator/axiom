@@ -184,23 +184,42 @@ std::string visitJoinEdge(const JoinEdge& edge) {
   return out.str();
 }
 
+std::string visitDt(const DerivedTable& dt);
+
+std::string visitSetDt(const SetDt& setDt) {
+  std::stringstream out;
+  out << headerLine(setDt.cname, setDt.cardinality(), setDt.columns);
+
+  const auto& inputs = setDt.inputs;
+  out << "  " << (setDt.isUnionAll() ? "UNION ALL" : "UNION DISTINCT") << ": ";
+  int32_t i = 0;
+  for (const auto* child : inputs) {
+    if (i > 0) {
+      out << ", ";
+    }
+    i++;
+    out << child->cname;
+  }
+  out << std::endl;
+
+  for (const auto* child : inputs) {
+    out << std::endl;
+    out << visitDt(*child);
+  }
+  return out.str();
+}
+
 std::string visitDerivedTable(const DerivedTable& dt) {
   std::stringstream out;
   out << headerLine(dt.cname, dt.cardinality(), dt.columns);
 
-  if (dt.isUnion()) {
-    VELOX_CHECK_EQ(0, dt.exprs.size());
-  } else {
-    VELOX_CHECK_EQ(dt.columns.size(), dt.exprs.size());
-  }
+  VELOX_CHECK_EQ(dt.columns.size(), dt.exprs.size());
 
-  if (!dt.isUnion()) {
-    out << "  output:" << std::endl;
-    for (auto i = 0; i < dt.columns.size(); ++i) {
-      out << "    " << dt.columns.at(i)->name()
-          << " := " << dt.exprs.at(i)->toString() << " "
-          << constraintString(dt.columns.at(i)->value()) << std::endl;
-    }
+  out << "  output:" << std::endl;
+  for (auto i = 0; i < dt.columns.size(); ++i) {
+    out << "    " << dt.columns.at(i)->name()
+        << " := " << dt.exprs.at(i)->toString() << " "
+        << constraintString(dt.columns.at(i)->value()) << std::endl;
   }
 
   if (dt.enforceSingleRow) {
@@ -295,38 +314,27 @@ std::string visitDerivedTable(const DerivedTable& dt) {
         out << visitUnnestTable(*table->as<UnnestTable>());
         break;
       case PlanType::kDerivedTableNode:
-        out << visitDerivedTable(*table->as<DerivedTable>());
+        out << visitDt(*table->as<DerivedTable>());
         break;
       default:
         VELOX_FAIL();
     }
   }
 
-  if (dt.isUnion()) {
-    out << "  UNION ALL: ";
-    int32_t i = 0;
-    for (const auto* child : dt.unionInputs) {
-      if (i > 0) {
-        out << ", ";
-      }
-      i++;
-      out << child->cname;
-    }
-    out << std::endl;
-
-    for (const auto* child : dt.unionInputs) {
-      out << std::endl;
-      out << visitDerivedTable(*child);
-    }
-  }
-
   return out.str();
+}
+
+std::string visitDt(const DerivedTable& dt) {
+  if (const auto* setDt = dt.asUnion()) {
+    return visitSetDt(*setDt);
+  }
+  return visitDerivedTable(dt);
 }
 } // namespace
 
 // static
 std::string DerivedTablePrinter::toText(const DerivedTable& root) {
-  return visitDerivedTable(root);
+  return visitDt(root);
 }
 
 } // namespace facebook::axiom::optimizer
