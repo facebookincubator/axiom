@@ -22,13 +22,6 @@
 
 namespace facebook::axiom::optimizer {
 
-template <typename T, typename U>
-void appendToVector(T& destination, U& source) {
-  for (auto i : source) {
-    destination.push_back(i);
-  }
-}
-
 /// Prints a number with precision' digits followed by a scale letter (n, u, m,
 /// k, M, G T, P).
 std::string succinctNumber(double value, int32_t precision = 2);
@@ -50,18 +43,6 @@ Target transform(const V& set, Func func) {
     result.push_back(func(elt));
   }
   return result;
-}
-
-/// Adds 'element' to 'vector' if it is not in it. Return 'true' if element was
-/// appended, 'false' if it already existed.
-template <typename V, typename E>
-inline bool pushBackUnique(V& vector, E& element) {
-  if (std::find(vector.begin(), vector.end(), element) != vector.end()) {
-    return false;
-  }
-
-  vector.push_back(element);
-  return true;
 }
 
 /// Returns the integer value of 'variant'. The variant must be non-null and
