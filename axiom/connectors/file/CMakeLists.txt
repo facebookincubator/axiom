@@ -26,6 +26,7 @@ target_link_libraries(
     velox_connector
     velox_memory
     velox_common_base
+    velox_file
     Folly::folly
 )
 

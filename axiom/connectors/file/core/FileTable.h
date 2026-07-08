@@ -25,7 +25,10 @@
 
 namespace facebook::axiom::connector::file {
 
-/// Carries the file path for a single file read.
+/// Carries the file path for a single file read. For a directory query, the
+/// file path disambiguates file-local metadata (e.g. a Parquet row group index,
+/// which restarts at 0 in each file) so rows from different files can be told
+/// apart and joined safely.
 struct FileSplit : public velox::connector::ConnectorSplit {
   FileSplit(const std::string& connectorId, std::string filePath)
       : ConnectorSplit(connectorId), filePath(std::move(filePath)) {}
@@ -54,12 +57,14 @@ class FileTableHandle : public velox::connector::ConnectorTableHandle {
       const std::string& connectorId,
       SchemaTableName schemaTableName,
       std::string filePath,
+      std::vector<std::string> filePaths,
       std::string suffix,
       velox::RowTypePtr fullSchema,
       std::vector<velox::connector::ColumnHandlePtr> columnHandles)
       : ConnectorTableHandle(connectorId),
         schemaTableName_(std::move(schemaTableName)),
         filePath_(std::move(filePath)),
+        filePaths_(std::move(filePaths)),
         suffix_(std::move(suffix)),
         fullSchema_(std::move(fullSchema)),
         qualifiedName_(
@@ -85,6 +90,13 @@ class FileTableHandle : public velox::connector::ConnectorTableHandle {
     return filePath_;
   }
 
+  /// The data files backing this table: the single file, or every data file in
+  /// the directory, resolved once during planning and reused for split
+  /// generation so the directory is listed only once per query.
+  const std::vector<std::string>& filePaths() const {
+    return filePaths_;
+  }
+
   /// Metadata table suffix (e.g. "encodings"). Empty for data tables.
   const std::string& suffix() const {
     return suffix_;
@@ -102,6 +114,7 @@ class FileTableHandle : public velox::connector::ConnectorTableHandle {
  private:
   const SchemaTableName schemaTableName_;
   const std::string filePath_;
+  const std::vector<std::string> filePaths_;
   const std::string suffix_;
   const velox::RowTypePtr fullSchema_;
   const std::string qualifiedName_;
@@ -116,6 +129,7 @@ class FileTableLayout : public TableLayout {
       velox::connector::Connector* connector,
       std::vector<const Column*> columns,
       std::string filePath,
+      std::vector<std::string> filePaths,
       std::string suffix);
 
   bool supportsSampling() const override {
@@ -140,6 +154,7 @@ class FileTableLayout : public TableLayout {
 
  private:
   std::string filePath_;
+  std::vector<std::string> filePaths_;
   std::string suffix_;
 };
 
@@ -151,6 +166,7 @@ class FileTable : public Table {
       const velox::RowTypePtr& schema,
       velox::connector::Connector* connector,
       std::string filePath,
+      std::vector<std::string> filePaths,
       std::string suffix);
 
   /// Splits "<path>$<suffix>" into {path, suffix}. Takes the part after the

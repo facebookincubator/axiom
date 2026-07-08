@@ -22,18 +22,20 @@
 
 namespace facebook::axiom::connector::file {
 
-/// Emits exactly one FileSplit per file.
+/// Emits one FileSplit per file path, in order.
 class FileSplitSource : public SplitSource {
  public:
-  FileSplitSource(const std::string& connectorId, std::string filePath)
-      : connectorId_(connectorId), filePath_(std::move(filePath)) {}
+  FileSplitSource(
+      const std::string& connectorId,
+      std::vector<std::string> filePaths)
+      : connectorId_(connectorId), filePaths_(std::move(filePaths)) {}
 
   folly::coro::Task<SplitBatch> co_getSplits(uint32_t maxSplitCount) override;
 
  private:
   const std::string connectorId_;
-  const std::string filePath_;
-  bool done_{false};
+  const std::vector<std::string> filePaths_;
+  size_t next_{0};
 };
 
 /// Resolves file paths as table names.

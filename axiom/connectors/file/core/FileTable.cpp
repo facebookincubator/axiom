@@ -43,6 +43,7 @@ FileTableLayout::FileTableLayout(
     velox::connector::Connector* connector,
     std::vector<const Column*> columns,
     std::string filePath,
+    std::vector<std::string> filePaths,
     std::string suffix)
     : TableLayout(
           table->name().schema,
@@ -55,6 +56,7 @@ FileTableLayout::FileTableLayout(
           /*lookupKeys=*/{},
           /*supportsScan=*/true),
       filePath_(std::move(filePath)),
+      filePaths_(std::move(filePaths)),
       suffix_(std::move(suffix)) {}
 
 velox::connector::ColumnHandlePtr FileTableLayout::createColumnHandle(
@@ -81,6 +83,7 @@ velox::connector::ConnectorTableHandlePtr FileTableLayout::createTableHandle(
       connectorId(),
       table().name(),
       filePath_,
+      filePaths_,
       suffix_,
       table().type(),
       std::move(columnHandles));
@@ -91,10 +94,16 @@ FileTable::FileTable(
     const RowTypePtr& schema,
     velox::connector::Connector* connector,
     std::string filePath,
+    std::vector<std::string> filePaths,
     std::string suffix)
     : Table(tableName, makeColumns(schema)) {
   layout_ = std::make_unique<FileTableLayout>(
-      this, connector, allColumns(), std::move(filePath), std::move(suffix));
+      this,
+      connector,
+      allColumns(),
+      std::move(filePath),
+      std::move(filePaths),
+      std::move(suffix));
   layouts_.push_back(layout_.get());
 }
 

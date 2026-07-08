@@ -23,14 +23,14 @@
 namespace facebook::axiom::connector::file {
 
 folly::coro::Task<SplitBatch> FileSplitSource::co_getSplits(
-    uint32_t /*maxSplitCount*/) {
+    uint32_t maxSplitCount) {
   SplitBatch batch;
-  if (!done_) {
+  while (next_ < filePaths_.size() && batch.splits.size() < maxSplitCount) {
     batch.splits.emplace_back(
-        std::make_shared<FileSplit>(connectorId_, filePath_));
-    done_ = true;
+        std::make_shared<FileSplit>(connectorId_, filePaths_[next_]));
+    ++next_;
   }
-  batch.noMoreSplits = true;
+  batch.noMoreSplits = next_ == filePaths_.size();
   co_return batch;
 }
 
@@ -38,11 +38,37 @@ TablePtr FileConnectorMetadata::findTable(const SchemaTableName& tableName) {
   auto& fileHandler = handler(tableName.schema);
   auto [filePath, suffix] = FileTable::parseName(tableName.table);
 
-  auto schema = suffix.empty() ? fileHandler.resolve(filePath, pool_.get())
-                               : fileHandler.metadataSchema(suffix);
+  velox::RowTypePtr schema;
+  std::vector<std::string> filePaths;
+  if (suffix.empty()) {
+    // Data table: resolve the path to its data files once, here during
+    // planning, and thread the list through the table handle to split
+    // generation, so the directory is listed — and each entry's format probed —
+    // only once per query. A directory takes its schema from the first file;
+    // validate every other file against it here so a mismatched directory fails
+    // upfront rather than mid-read after emitting rows from earlier files.
+    filePaths = fileHandler.listFiles(filePath);
+    schema = fileHandler.resolve(filePaths.front(), pool_.get());
+    for (size_t i = 1; i < filePaths.size(); ++i) {
+      const auto fileType = fileHandler.resolve(filePaths[i], pool_.get());
+      VELOX_USER_CHECK(
+          *fileType == *schema,
+          "Directory file schema does not match the table schema {}, found {}: {}",
+          schema->toString(),
+          fileType->toString(),
+          filePaths[i]);
+    }
+  } else {
+    // Metadata table: validate the suffix BEFORE probing the path. Otherwise an
+    // unsupported suffix on a missing or empty directory fails while listing
+    // ("No data files found in directory: ...") instead of with the accurate
+    // "Unsupported metadata table: ...".
+    schema = fileHandler.metadataSchema(suffix);
+    filePaths = fileHandler.listFiles(filePath);
+  }
 
   return std::make_shared<FileTable>(
-      tableName, schema, connector_, filePath, suffix);
+      tableName, schema, connector_, filePath, std::move(filePaths), suffix);
 }
 
 std::vector<std::string> FileConnectorMetadata::listSchemaNames(
@@ -73,8 +99,10 @@ FileConnectorMetadata::SplitManager::getSplitSource(
     QueryRuntimeStats& /*runtimeStats*/) {
   auto* fileHandle = dynamic_cast<const FileTableHandle*>(tableHandle.get());
   VELOX_CHECK_NOT_NULL(fileHandle, "Expected FileTableHandle");
+  // The file list was resolved once during planning (see findTable); reuse it
+  // rather than listing the directory again here.
   return std::make_shared<FileSplitSource>(
-      tableHandle->connectorId(), fileHandle->filePath());
+      tableHandle->connectorId(), fileHandle->filePaths());
 }
 
 } // namespace facebook::axiom::connector::file
