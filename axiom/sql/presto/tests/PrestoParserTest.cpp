@@ -402,6 +402,27 @@ TEST_F(PrestoParserTest, withColumnAliases) {
       "Column alias list size does not match the number of output columns");
 }
 
+TEST_F(PrestoParserTest, withDuplicateNamesRejected) {
+  // A name may appear at most once within a single WITH list.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(
+          "WITH a AS (SELECT 1 AS x), a AS (SELECT 2 AS y) SELECT * FROM a"),
+      "WITH query name specified more than once: a");
+
+  // Case-insensitive: 'A' and 'a' collide.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(
+          "WITH a AS (SELECT 1 AS x), A AS (SELECT 2 AS y) SELECT * FROM a"),
+      "WITH query name specified more than once: a");
+
+  // A nested WITH reusing an enclosing name is allowed (shadowing, not a
+  // duplicate within one list).
+  testSelect(
+      "WITH a AS (SELECT 1 AS x) "
+      "SELECT * FROM (WITH a AS (SELECT 2 AS y) SELECT * FROM a) sub",
+      matchValues().project().output({"y"}));
+}
+
 TEST_F(PrestoParserTest, withReferencedMultipleTimes) {
   // Same CTE referenced twice in a JOIN.
   auto matcher = matchScan()
