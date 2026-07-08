@@ -152,6 +152,15 @@ bool FunctionRegistry::registerBetween(std::string_view name) {
   return true;
 }
 
+bool FunctionRegistry::registerLike(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (like_.has_value() && like_.value() != name) {
+    return false;
+  }
+  like_ = name;
+  return true;
+}
+
 bool FunctionRegistry::registerRowNumber(std::string_view name) {
   VELOX_USER_CHECK(!name.empty());
   if (rowNumber_.has_value() && rowNumber_.value() != name) {
@@ -388,6 +397,7 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
   registry->registerGreaterThanOrEqual(fullName("gte"));
   registry->registerIsNull(fullName("is_null"));
   registry->registerBetween(fullName("between"));
+  registry->registerLike(fullName("like"));
   registry->registerRowNumber(fullName("row_number"));
   registry->registerRank(fullName("rank"));
   registry->registerDenseRank(fullName("dense_rank"));

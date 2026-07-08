@@ -288,6 +288,53 @@ std::vector<Range> Domain::normalize(std::vector<Range> ranges) {
   return result;
 }
 
+namespace {
+
+// Returns the exclusive upper bound for all strings that start with 'prefix':
+// increments the last byte below 0xFF and drops the bytes after it. Returns
+// std::nullopt when every byte is 0xFF, in which case there is no finite upper
+// bound. Comparison is byte-wise, matching VARCHAR ordering.
+std::optional<std::string> prefixUpperBound(std::string_view prefix) {
+  std::string upper{prefix};
+  while (!upper.empty()) {
+    if (static_cast<unsigned char>(upper.back()) != 0xFF) {
+      ++upper.back();
+      return upper;
+    }
+    upper.pop_back();
+  }
+  return std::nullopt;
+}
+
+// Converts a LIKE pattern to a Domain. A pattern with a fixed literal prefix
+// before the first wildcard ('%' or '_') maps to the half-open range
+// [prefix, prefixUpperBound(prefix)); a wildcard-free pattern is exact
+// equality. Returns std::nullopt (broader is safe) when the pattern has no
+// leading literal, i.e. it starts with a wildcard.
+std::optional<Domain> likePatternToDomain(const velox::Variant& pattern) {
+  if (pattern.isNull() || pattern.kind() != velox::TypeKind::VARCHAR) {
+    return std::nullopt;
+  }
+  const auto& text = pattern.value<velox::TypeKind::VARCHAR>();
+  const auto wildcard = text.find_first_of("%_");
+  if (wildcard == std::string::npos) {
+    return Domain::singleValue(pattern);
+  }
+  if (wildcard == 0) {
+    return std::nullopt;
+  }
+  std::string prefix = text.substr(0, wildcard);
+  auto upper = prefixUpperBound(prefix);
+  Domain domain = Domain::greaterThanOrEqual(velox::Variant(std::move(prefix)));
+  if (upper) {
+    domain =
+        domain.intersect(Domain::lessThan(velox::Variant(std::move(*upper))));
+  }
+  return domain;
+}
+
+} // namespace
+
 std::optional<Domain> exprToDomain(ExprCP expr) {
   if (!expr->is(PlanType::kCallExpr)) {
     return std::nullopt;
@@ -351,6 +398,14 @@ std::optional<Domain> exprToDomain(ExprCP expr) {
     const auto& high = call->args()[2]->as<Literal>()->literal();
     return Domain::greaterThanOrEqual(low).intersect(
         Domain::lessThanOrEqual(high));
+  }
+
+  // LIKE(col, pattern) with a literal prefix maps to a prefix range. The 3-arg
+  // form with an ESCAPE character is not interpreted and falls through.
+  if (funcName == functionNames.like && call->args().size() == 2 &&
+      call->args()[0]->is(PlanType::kColumnExpr) &&
+      call->args()[1]->is(PlanType::kLiteralExpr)) {
+    return likePatternToDomain(call->args()[1]->as<Literal>()->literal());
   }
 
   // Comparison of a column with a literal: eq, lt, lte, gt, gte.

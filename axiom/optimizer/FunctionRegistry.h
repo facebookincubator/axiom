@@ -397,6 +397,17 @@ class FunctionRegistry {
     return between_;
   }
 
+  /// Registers function 'name' that has semantics of Presto's 'like', i.e.
+  /// matches its first argument against a SQL LIKE pattern.
+  /// @return true if successfully registered, false if a different
+  /// 'like' function is already registered.
+  bool registerLike(std::string_view name);
+
+  /// Returns the name of the 'like' function.
+  const std::optional<std::string>& like() const {
+    return like_;
+  }
+
   /// Registers function 'name' that has semantics of 'row_number' window
   /// function, i.e. assigns sequential numbers to rows within a partition.
   /// @return true if successfully registered, false if a different
@@ -510,6 +521,7 @@ class FunctionRegistry {
   std::optional<std::string> greaterThanOrEqual_;
   std::optional<std::string> isNull_;
   std::optional<std::string> between_;
+  std::optional<std::string> like_;
 
   // Aggregate functions.
   std::optional<std::string> arbitrary_;
