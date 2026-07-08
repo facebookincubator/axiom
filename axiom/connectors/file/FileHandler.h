@@ -24,6 +24,10 @@
 
 #include "velox/connectors/Connector.h"
 
+namespace facebook::velox::filesystems {
+class FileSystem;
+}
+
 namespace facebook::axiom::connector::file {
 
 /// Factory function that creates a metadata DataSource.
@@ -60,6 +64,14 @@ class FileHandler {
   /// Returns the fixed schema for a metadata table by $-suffix.
   const velox::RowTypePtr& metadataSchema(const std::string& suffix) const;
 
+  /// Lists the data files for 'path'. A path that does not end in '/' is a
+  /// single file and yields itself. A path ending in '/' is a directory; its
+  /// entries are returned sorted, so a directory of files can be queried as one
+  /// table. Entries whose base name begins with '.' or '_', nested
+  /// subdirectories, and entries rejected by isDataFile() are skipped, so a
+  /// directory may freely hold sidecar files and nested partitions.
+  std::vector<std::string> listFiles(const std::string& path) const;
+
   /// Creates a DataSource for reading from a file. Dispatches to
   /// createDataSource() for row data or the registered factory for
   /// metadata tables.
@@ -84,6 +96,14 @@ class FileHandler {
       const velox::RowTypePtr& fullSchema,
       const velox::connector::ColumnHandleMap& columnHandles,
       velox::memory::MemoryPool* pool) const = 0;
+
+  // Returns whether 'filePath' is a file of this handler's format, used by
+  // listFiles() to skip entries that are not data files. The base accepts every
+  // entry; formats override this to recognize their own files (e.g. Parquet by
+  // its "PAR1" magic).
+  virtual bool isDataFile(
+      velox::filesystems::FileSystem& fileSystem,
+      const std::string& filePath) const;
 
  private:
   struct MetadataTable {
