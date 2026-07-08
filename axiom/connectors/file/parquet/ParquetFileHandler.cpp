@@ -26,6 +26,7 @@
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/parquet/reader/Metadata.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
+#include "velox/type/Variant.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
 
@@ -52,9 +53,9 @@ const RowTypePtr& columnChunksSchema() {
   static auto kSchema = ROW({
       {"row_group_id", BIGINT()},
       {"column_id", BIGINT()},
-      {"name", VARCHAR()},
+      {"path", ARRAY(VARCHAR())},
       {"compression", VARCHAR()},
-      {"encodings", VARCHAR()},
+      {"encodings", ARRAY(VARCHAR())},
       {"compressed_size", BIGINT()},
       {"uncompressed_size", BIGINT()},
       {"num_values", BIGINT()},
@@ -167,24 +168,22 @@ class RowGroupsDataSource : public MetadataDataSource {
   }
 };
 
-// Joins a column chunk's page encodings into a comma-separated string of
-// Parquet encoding names (e.g. "RLE,PLAIN").
-std::string encodingsToString(
+// Maps a column chunk's page encodings to their Parquet encoding names (e.g.
+// "RLE", "PLAIN"), falling back to the numeric code for unknown encodings.
+std::vector<std::string> encodingNames(
     const std::vector<parquet::thrift::Encoding>& encodings) {
-  std::string result;
+  std::vector<std::string> names;
+  names.reserve(encodings.size());
   for (auto encoding : encodings) {
     std::string_view name;
-    if (!result.empty()) {
-      result += ',';
-    }
     if (apache::thrift::TEnumTraits<parquet::thrift::Encoding>::findName(
             encoding, &name)) {
-      result.append(name);
+      names.emplace_back(name);
     } else {
-      result += std::to_string(static_cast<int32_t>(encoding));
+      names.push_back(std::to_string(static_cast<int32_t>(encoding)));
     }
   }
-  return result;
+  return names;
 }
 
 // Column-chunk statistics formatted for display. Empty optionals mean the
@@ -238,6 +237,26 @@ ColumnChunkStats readColumnChunkStats(
   return stats;
 }
 
+// Flattens 'type' into its leaf types in schema document order, matching the
+// order of the per-leaf column chunks in a Parquet row group. A type with no
+// children is a leaf; every other type recurses over its children in order,
+// which for ROW, ARRAY and MAP is the same order Parquet lays out the leaf
+// column chunks (row fields, array element, then map key followed by value).
+// Leaf names are not derived here: they come from each chunk's physical
+// path_in_schema metadata (see ColumnChunksDataSource::build), which carries
+// the synthetic repeated-group levels ("list"/"key_value") that the logical row
+// type omits. Only the leaf types are collected, to decode each chunk's
+// statistics.
+void collectLeafTypes(const TypePtr& type, std::vector<TypePtr>& leafTypes) {
+  if (type->size() == 0) {
+    leafTypes.push_back(type);
+    return;
+  }
+  for (auto i = 0; i < type->size(); ++i) {
+    collectLeafTypes(type->childAt(i), leafTypes);
+  }
+}
+
 class ColumnChunksDataSource : public MetadataDataSource {
  public:
   ColumnChunksDataSource(
@@ -254,7 +273,9 @@ class ColumnChunksDataSource : public MetadataDataSource {
   RowVectorPtr build() override {
     auto reader = openFile(split_->filePath, pool_);
     auto fileMetadata = reader->fileMetaData();
-    const auto& schema = reader->rowType();
+
+    std::vector<TypePtr> leafTypes;
+    collectLeafTypes(reader->rowType(), leafTypes);
 
     vector_size_t totalRows = 0;
     for (int rg = 0; rg < fileMetadata.numRowGroups(); ++rg) {
@@ -265,11 +286,7 @@ class ColumnChunksDataSource : public MetadataDataSource {
         BaseVector::create<FlatVector<int64_t>>(BIGINT(), totalRows, pool_);
     auto columnIds =
         BaseVector::create<FlatVector<int64_t>>(BIGINT(), totalRows, pool_);
-    auto names =
-        BaseVector::create<FlatVector<StringView>>(VARCHAR(), totalRows, pool_);
     auto compressions =
-        BaseVector::create<FlatVector<StringView>>(VARCHAR(), totalRows, pool_);
-    auto encodings =
         BaseVector::create<FlatVector<StringView>>(VARCHAR(), totalRows, pool_);
     auto compressedSizes =
         BaseVector::create<FlatVector<int64_t>>(BIGINT(), totalRows, pool_);
@@ -284,28 +301,39 @@ class ColumnChunksDataSource : public MetadataDataSource {
     auto nullCounts =
         BaseVector::create<FlatVector<int64_t>>(BIGINT(), totalRows, pool_);
 
+    std::vector<std::vector<std::string>> paths;
+    paths.reserve(totalRows);
+    std::vector<std::vector<std::string>> encodings;
+    encodings.reserve(totalRows);
+
     vector_size_t row = 0;
     for (int rg = 0; rg < fileMetadata.numRowGroups(); ++rg) {
       auto rowGroup = fileMetadata.rowGroup(rg);
+      // Column chunks and 'leafTypes' are both in schema document order (a
+      // depth-first walk of the leaves), so column 'col' below and
+      // leafTypes[col] refer to the same schema leaf: the chunk supplies the
+      // path, the leaf type decodes the statistics. The two orders derive from
+      // the same schema, so the only way they can diverge is a leaf-count
+      // disagreement; reject that here rather than mislabel the chunks.
+      VELOX_USER_CHECK_EQ(
+          rowGroup.numColumns(),
+          static_cast<int>(leafTypes.size()),
+          "Parquet row group column-chunk count does not match the file schema's leaf count: {}",
+          split_->filePath);
       for (int col = 0; col < rowGroup.numColumns(); ++col) {
         auto chunk = rowGroup.columnChunk(col);
-        auto columnName = col < static_cast<int>(schema->size())
-            ? std::string(schema->nameOf(col))
-            : fmt::format("column_{}", col);
+        const auto& leafType = leafTypes.at(col);
         auto compression = common::compressionKindToString(chunk.compression());
-        auto encoding = encodingsToString(chunk.encodings());
 
-        auto columnType = col < static_cast<int>(schema->size())
-            ? schema->childAt(col)
-            : nullptr;
-        auto stats =
-            readColumnChunkStats(chunk, columnType, rowGroup.numRows());
+        auto stats = readColumnChunkStats(chunk, leafType, rowGroup.numRows());
 
         rowGroupIds->set(row, static_cast<int64_t>(rg));
         columnIds->set(row, static_cast<int64_t>(col));
-        names->set(row, StringView(columnName));
+        // Physical path_in_schema as ordered segments, including the
+        // "list"/"key_value" group levels Parquet inserts for arrays and maps.
+        paths.push_back(chunk.pathInSchema());
+        encodings.push_back(encodingNames(chunk.encodings()));
         compressions->set(row, StringView(compression));
-        encodings->set(row, StringView(encoding));
         compressedSizes->set(row, chunk.totalCompressedSize());
         uncompressedSizes->set(row, chunk.totalUncompressedSize());
         numValues->set(row, chunk.numValues());
@@ -324,9 +352,9 @@ class ColumnChunksDataSource : public MetadataDataSource {
         std::vector<VectorPtr>{
             rowGroupIds,
             columnIds,
-            names,
+            makeStringArray(paths),
             compressions,
-            encodings,
+            makeStringArray(encodings),
             compressedSizes,
             uncompressedSizes,
             numValues,
@@ -356,6 +384,23 @@ class ColumnChunksDataSource : public MetadataDataSource {
     } else {
       vector.setNull(row, true);
     }
+  }
+
+  // Builds an ARRAY<VARCHAR> vector with one array per row from the per-row
+  // string lists (used for both the path segments and the encoding names).
+  VectorPtr makeStringArray(
+      const std::vector<std::vector<std::string>>& rows) const {
+    std::vector<Variant> arrays;
+    arrays.reserve(rows.size());
+    for (const auto& row : rows) {
+      std::vector<Variant> elements;
+      elements.reserve(row.size());
+      for (const auto& value : row) {
+        elements.emplace_back(value);
+      }
+      arrays.push_back(Variant::array(std::move(elements)));
+    }
+    return BaseVector::createFromVariants(ARRAY(VARCHAR()), arrays, pool_);
   }
 };
 
