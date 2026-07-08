@@ -2297,22 +2297,15 @@ void ToGraph::translateJoin(
         continue;
       }
 
-      if (rightTable->is(PlanType::kDerivedTableNode)) {
-        auto* rightDt =
-            const_cast<DerivedTable*>(rightTable->as<DerivedTable>());
-        if (!rightDt->addFilter(conjunct)) {
-          ++it;
-          continue;
-        }
-      } else if (rightTable->is(PlanType::kTableNode)) {
-        const_cast<BaseTable*>(rightTable->as<BaseTable>())
-            ->addFilter(conjunct);
-      } else {
-        // TODO: Support ValuesTable and UnnestTable.
+      auto* resolved = currentDt_->tryPushdownConjunct(
+          conjunct, const_cast<PlanObject*>(rightTable));
+      if (resolved == nullptr) {
         ++it;
         continue;
       }
-
+      // Use the resolved target for the join edge and later iterations
+      // in case a nested SetDt collapse swapped it.
+      rightTable = resolved;
       it = conjuncts.erase(it);
     }
   }

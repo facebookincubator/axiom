@@ -97,11 +97,8 @@ struct DerivedTable : public TableObject {
     return cardinality_;
   }
 
-  /// Returns `this` as a `SetDt` if the DT is in Set shape (SetDt with
-  /// non-empty inputs — today, a UNION ALL with or without a dedup
-  /// aggregation), or nullptr otherwise. A SetDt whose inputs have been
-  /// cleared by `SetDt::addFilter` is in regular-DT shape and does not
-  /// qualify.
+  /// Returns `this` as a `SetDt` if the DT is a set operation (UNION
+  /// ALL with or without a dedup aggregation), or nullptr otherwise.
   virtual SetDt* asUnion() {
     return nullptr;
   }
@@ -263,10 +260,17 @@ struct DerivedTable : public TableObject {
   void forEachExportableSingleColumnConjunct(
       folly::FunctionRef<void(ColumnCP, ExprCP)> cb) const;
 
-  /// Adds a filter conjunct to this DT. Handles LIMIT (returns false),
-  /// aggregation (adds to 'having'), and set operations (adds to all children).
-  /// Returns true if the conjunct was successfully added, false otherwise.
-  virtual bool addFilter(ExprCP conjunct);
+  /// Adds a filter conjunct to this DT. Handles LIMIT, aggregation
+  /// (adds to HAVING), and set operations (adds to all children).
+  ///
+  /// Returns:
+  ///   - `nullptr`: refused (LIMIT, or window DT that could not fold).
+  ///   - `this`:    accepted; the caller's pointer is still valid. This
+  ///                DT may still have been rewritten in place (e.g.
+  ///                folded to zero rows via `makeEmpty`).
+  ///   - other:     accepted; caller MUST swap `this` for the returned
+  ///                pointer in its slot (SetDt collapse only).
+  virtual DerivedTable* addFilter(ExprCP conjunct);
 
   /// Returns a copy of 'expr', replacing references to this DT's 'exprs' with
   /// the corresponding 'columns'. If 'expr' references columns not present in
@@ -419,6 +423,22 @@ struct DerivedTable : public TableObject {
   /// memoization.
   void distributeConjuncts();
 
+  /// Builds a fresh DT holding an empty ValuesTable that matches
+  /// 'outputColumns'.
+  static DerivedTable* newEmpty(
+      Name cname,
+      std::optional<ColumnVector> outputColumns);
+
+  /// Attempts to push 'conjunct' down into 'table', which must be in
+  /// this DT's `tables`.
+  ///
+  /// Returns nullptr if 'table' refused the filter (ValuesTable,
+  /// UnnestTable, LIMIT / window DT). Otherwise returns the resolved
+  /// target: equal to 'table' when unchanged, or the swapped-in
+  /// replacement when a nested SetDt collapsed. Callers that hold an
+  /// alias to 'table' must re-read it from the return value.
+  PlanObjectP tryPushdownConjunct(ExprCP conjunct, PlanObjectP table);
+
  private:
   // Resets all mutable state to empty defaults.
   void clearState();
@@ -440,6 +460,13 @@ struct DerivedTable : public TableObject {
   // tryPushdownConjunct, or fallback to this DT's conjuncts above the
   // refusing target.
   void attachPredicate(PlanObjectP target, ExprCP expr);
+
+  // Replaces the entry equal to 'old' in 'tables' with 'replacement',
+  // updating 'tableSet' and 'joinOrder', and rewires any join in 'joins'
+  // that references 'old'. The caller must first rebind any columns of
+  // 'old' onto 'replacement' (e.g. via Column::rebindAll) so that join
+  // keys point at the new relation before the swap.
+  void replaceTable(PlanObjectCP old, PlanObjectCP replacement);
 
   // Completes 'joins' with edges implied by column equivalences.
   void addImpliedJoins();
@@ -512,19 +539,6 @@ struct DerivedTable : public TableObject {
   // translated to the underlying expressions.
   void replaceJoinOutputs(const ColumnVector& source, const ExprVector& target);
 
-  // Attempts to push down a filter conjunct into the specified table.
-  // For a DerivedTable, translates column names and adds the condition to
-  // conjuncts or having clause (if there's aggregation). For set operations,
-  // the filter is added to all children. For a BaseTable, adds the filter
-  // directly.
-  // Returns false without modifying anything for ValuesTable, UnnestTable,
-  // and DerivedTables with LIMIT (which block filter push-down).
-  //
-  // @param conjunct The filter expression to push down.
-  // @param table The target table (BaseTable, DerivedTable, etc.).
-  // @return true if the conjunct was successfully pushed down, false otherwise.
-  bool tryPushdownConjunct(ExprCP conjunct, PlanObjectP table);
-
   // Pushes 'expr' to the null-extending side. Drops if target refuses —
   // post-join fallback would filter NULL-padded unmatched rows incorrectly.
   void tryAttachToNullExtendingSide(PlanObjectP target, ExprCP expr);
@@ -533,16 +547,16 @@ struct DerivedTable : public TableObject {
   // of every window function in windowPlan.
   bool isPartitionKeyFilter(ExprCP imported) const;
 
- protected:
-  // Replaces this DT's contents with an empty ValuesTable producing zero rows.
-  // Preserves 'outputColumns' (external interface referenced by parent DTs).
-  void makeEmpty();
-
   // Replaces 'this' with the contents of 'dt', effectively removing one
   // level of DT nesting. Reconstructs columns that have relation_ == dt
   // (aggregation, window, outer join outputs) so they reference 'this'
   // instead, since 'dt' will no longer be in tableSet after flattening.
   void flattenDt(const DerivedTable* dt);
+
+ protected:
+  // Replaces this DT's contents with an empty ValuesTable producing
+  // zero rows, preserving 'outputColumns'.
+  void makeEmpty();
 
   // Updates cardinality and column constraints from the plan.
   void updateConstraints(const RelationOp& plan);
@@ -581,11 +595,11 @@ using DerivedTableCP = const DerivedTable*;
 ///                                     aggregation/window output columns)
 ///     outputColumns = setDt->columns
 ///
-/// TODO: `SetDt::addFilter` mutates `this` to regular shape when a
-/// UNION ALL collapses (via `makeEmpty` / `flattenDt`). Each override
-/// guards on `inputs.empty()` and delegates to the base; `asUnion()`
-/// similarly gates on `!inputs.empty()`. Cleaner fix (return a
-/// replacement, reparent columns) deferred.
+/// Invariant: a live `SetDt` in the DT tree always has
+/// `inputs.size() >= 2`. When a UNION ALL collapses to 0 or 1 legs
+/// during filter push-down, `addFilter` returns the replacement DT
+/// (the surviving leg or a fresh empty DT) with the SetDt's shared
+/// columns rebound; the caller swaps the SetDt for the replacement.
 class SetDt final : public DerivedTable {
  public:
   SetDt() : DerivedTable{PlanType::kDerivedTableNode} {}
@@ -598,19 +612,19 @@ class SetDt final : public DerivedTable {
   /// grouping on all output columns; `isUnionAll()` returns false in
   /// that case.
   bool isUnionAll() const {
-    return !inputs.empty() && aggregation == nullptr;
+    return aggregation == nullptr;
   }
 
   void checkConsistency() const override;
-  bool addFilter(ExprCP conjunct) override;
+  DerivedTable* addFilter(ExprCP conjunct) override;
   void distributeAllConjuncts() override;
   void finalizeJoinsAndMakePlans() override;
 
   SetDt* asUnion() override {
-    return inputs.empty() ? nullptr : this;
+    return this;
   }
   const SetDt* asUnion() const override {
-    return inputs.empty() ? nullptr : this;
+    return this;
   }
 };
 

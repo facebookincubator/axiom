@@ -50,6 +50,12 @@ const char* SpecialFormCallNames::kIn = "__in";
 // static
 const char* SpecialFormCallNames::kNullIf = "__nullif";
 
+void Column::rebindAll(const ColumnVector& columns, PlanObjectCP newRelation) {
+  for (auto* column : columns) {
+    const_cast<Column*>(column)->relation_ = newRelation;
+  }
+}
+
 void Column::equals(ColumnCP other) const {
   if (!equivalence_ && !other->equivalence_) {
     auto* equiv = make<Equivalence>();

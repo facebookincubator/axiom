@@ -2262,6 +2262,44 @@ void DerivedTable::clearState() {
   offset = 0;
 }
 
+DerivedTable* DerivedTable::newEmpty(
+    Name cname,
+    std::optional<ColumnVector> outputColumns) {
+  auto* dt = make<DerivedTable>();
+  dt->cname = cname;
+  dt->outputColumns = std::move(outputColumns);
+  dt->makeEmpty();
+  return dt;
+}
+
+void DerivedTable::replaceTable(PlanObjectCP old, PlanObjectCP replacement) {
+  auto it = std::find(tables.begin(), tables.end(), old);
+  VELOX_CHECK(
+      it != tables.end(),
+      "replaceTable target not in tables: {}, target {}",
+      cname,
+      old->toString());
+  *it = replacement;
+  tableSet.erase(old);
+  tableSet.add(replacement);
+  auto orderIt = std::ranges::find(joinOrder, old->id());
+  VELOX_CHECK(
+      orderIt != joinOrder.end(),
+      "replaceTable target not in joinOrder: {}, target {}",
+      cname,
+      old->toString());
+  *orderIt = replacement->id();
+
+  // Rewire incident join edges. Column keys are already rebound by the
+  // caller (SetDt::addFilter calls Column::rebindAll before returning the
+  // replacement), so we only need to swap the table pointers.
+  for (auto* join : joins) {
+    if (join->leftTable() == old || join->rightTable() == old) {
+      join->replaceTable(old, replacement);
+    }
+  }
+}
+
 void DerivedTable::makeEmpty() {
   auto* emptyData = &registerVariant(velox::Variant::array({}))->array();
 
@@ -2297,10 +2335,10 @@ void DerivedTable::makeEmpty() {
   addTable(valuesTable);
 }
 
-bool DerivedTable::addFilter(ExprCP conjunct) {
+DerivedTable* DerivedTable::addFilter(ExprCP conjunct) {
   // TODO: Support pushing conjuncts below LIMIT by wrapping in a DT.
   if (dtHasLimit(*this)) {
-    return false;
+    return nullptr;
   }
 
   auto imported = importExpr(conjunct);
@@ -2311,7 +2349,7 @@ bool DerivedTable::addFilter(ExprCP conjunct) {
     if (!isConstantTrue(folded)) {
       makeEmpty();
     }
-    return true;
+    return this;
   }
 
   if (windowPlan) {
@@ -2329,15 +2367,15 @@ bool DerivedTable::addFilter(ExprCP conjunct) {
         switch (result.kind) {
           case RankingPredicate::Kind::kAbsorbAsLimit:
             windowPlan = windowPlan->withRankingLimit(result.limit);
-            return true;
+            return this;
           case RankingPredicate::Kind::kTautological:
             // Predicate is true for every row; drop it.
-            return true;
+            return this;
           case RankingPredicate::Kind::kNotRanking:
             break;
         }
       }
-      return false;
+      return nullptr;
     }
   }
 
@@ -2346,7 +2384,7 @@ bool DerivedTable::addFilter(ExprCP conjunct) {
   } else {
     conjuncts.push_back(imported);
   }
-  return true;
+  return this;
 }
 
 void DerivedTable::distributeConjuncts() {
@@ -2438,7 +2476,6 @@ void DerivedTable::distributeConjuncts() {
       if (!tryPushdownConjunct(conjunct, tables[0])) {
         continue;
       }
-
       conjuncts.erase(conjuncts.begin() + i);
       --i;
       continue;
@@ -2557,30 +2594,40 @@ void DerivedTable::tryConvertOuterJoins(bool allowNondeterministic) {
   }
 }
 
-bool DerivedTable::tryPushdownConjunct(ExprCP conjunct, PlanObjectP table) {
+PlanObjectP DerivedTable::tryPushdownConjunct(
+    ExprCP conjunct,
+    PlanObjectP table) {
+  VELOX_DCHECK(
+      tableSet.contains(table),
+      "tryPushdownConjunct target not in tableSet: {}, target {}",
+      cname,
+      table->toString());
   if (table->is(PlanType::kValuesTableNode)) {
-    return false; // ValuesTable does not have filter push-down.
+    return nullptr; // ValuesTable does not have filter push-down.
   }
 
   if (table->is(PlanType::kUnnestTableNode)) {
-    return false; // UnnestTable does not have filter push-down.
+    return nullptr; // UnnestTable does not have filter push-down.
   }
 
   if (conjunct->containsFunction(FunctionSet::kWindow)) {
-    return false;
+    return nullptr;
   }
 
   if (table->is(PlanType::kDerivedTableNode)) {
-    auto innerDt = table->as<DerivedTable>();
-    if (!innerDt->addFilter(conjunct)) {
-      return false;
+    auto* pushed = table->as<DerivedTable>()->addFilter(conjunct);
+    if (pushed == nullptr) {
+      return nullptr;
     }
-    return true;
+    if (pushed != table) {
+      replaceTable(table, pushed);
+    }
+    return pushed;
   }
 
   VELOX_CHECK(table->is(PlanType::kTableNode));
   table->as<BaseTable>()->addFilter(conjunct);
-  return true;
+  return table;
 }
 
 std::string DerivedTable::toString() const {
@@ -2591,22 +2638,12 @@ std::string DerivedTable::toString() const {
 // SetDt
 // ---------------------------------------------------------------------------
 
-// Each override guards on `inputs.empty()` first — see the class doc
-// for why identity and shape can diverge.
 void SetDt::checkConsistency() const {
   VELOX_CHECK_NOT_NULL(cname);
-  if (inputs.empty()) {
-    DerivedTable::checkConsistency();
-    return;
-  }
   checkUnionShape(*this);
 }
 
 void SetDt::distributeAllConjuncts() {
-  if (inputs.empty()) {
-    DerivedTable::distributeAllConjuncts();
-    return;
-  }
   distributeConjuncts();
   for (auto* child : inputs) {
     child->distributeAllConjuncts();
@@ -2614,10 +2651,6 @@ void SetDt::distributeAllConjuncts() {
 }
 
 void SetDt::finalizeJoinsAndMakePlans() {
-  if (inputs.empty()) {
-    DerivedTable::finalizeJoinsAndMakePlans();
-    return;
-  }
   VELOX_CHECK(tables.empty());
 
   for (auto* child : inputs) {
@@ -2639,37 +2672,37 @@ void SetDt::finalizeJoinsAndMakePlans() {
   updateConstraints(*plan);
 }
 
-bool SetDt::addFilter(ExprCP conjunct) {
-  if (inputs.empty()) {
-    return DerivedTable::addFilter(conjunct);
-  }
+DerivedTable* SetDt::addFilter(ExprCP conjunct) {
   // TODO: Support pushing conjuncts below LIMIT by wrapping in a DT.
   if (dtHasLimit(*this)) {
-    return false;
+    return nullptr;
   }
 
-  for (size_t i{0}; i < inputs.size(); ++i) {
-    if (!inputs[i]->addFilter(conjunct)) {
-      // The child cannot accept the filter (e.g. it has a window or limit).
-      // Wrap the child in a new DT that holds the filter above it.
-      inputs[i] = wrapChildWithFilter(inputs[i], conjunct);
-    }
+  for (auto*& child : inputs) {
+    auto* pushed = child->addFilter(conjunct);
+    child = pushed != nullptr ? pushed : wrapChildWithFilter(child, conjunct);
   }
 
-  if (isUnionAll()) {
-    std::erase_if(
-        inputs, [](const auto* child) { return child->isZeroRows(); });
-
-    if (inputs.size() == 1) {
-      auto* only = inputs[0];
-      inputs.clear();
-      flattenDt(only);
-    } else if (inputs.empty()) {
-      makeEmpty();
-    }
+  if (!isUnionAll()) {
+    return this;
   }
 
-  return true;
+  std::erase_if(inputs, [](const auto* child) { return child->isZeroRows(); });
+  if (inputs.size() >= 2) {
+    return this;
+  }
+
+  if (inputs.size() == 1) {
+    // Single leg: the leg already has these shared columns; rebinding
+    // relation_ is enough to make the leg a valid stand-alone DT.
+    Column::rebindAll(columns, inputs[0]);
+    return inputs[0];
+  }
+
+  auto* freshDt = DerivedTable::newEmpty(
+      queryCtx()->optimization()->newCName("dt"), std::move(outputColumns));
+  Column::rebindAll(columns, freshDt);
+  return freshDt;
 }
 
 } // namespace facebook::axiom::optimizer
