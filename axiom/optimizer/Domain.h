@@ -168,6 +168,7 @@ using ExprCP = const Expr*;
 ///
 /// Recognized expressions:
 ///   - Comparisons with literals: eq, lt, lte, gt, gte(column, literal)
+///   - BETWEEN(column, literal, literal) — closed range [low, high]
 ///   - IN(column, literal, literal, ...)
 ///   - IS NULL(column)
 ///   - AND(expr, expr, ...) — intersects children

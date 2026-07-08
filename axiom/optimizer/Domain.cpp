@@ -342,6 +342,17 @@ std::optional<Domain> exprToDomain(ExprCP expr) {
     return Domain::in(std::move(values));
   }
 
+  // BETWEEN(col, low, high) maps to the closed range [low, high].
+  if (funcName == functionNames.between && call->args().size() == 3 &&
+      call->args()[0]->is(PlanType::kColumnExpr) &&
+      call->args()[1]->is(PlanType::kLiteralExpr) &&
+      call->args()[2]->is(PlanType::kLiteralExpr)) {
+    const auto& low = call->args()[1]->as<Literal>()->literal();
+    const auto& high = call->args()[2]->as<Literal>()->literal();
+    return Domain::greaterThanOrEqual(low).intersect(
+        Domain::lessThanOrEqual(high));
+  }
+
   // Comparison of a column with a literal: eq, lt, lte, gt, gte.
   if (call->args().size() == 2 && call->args()[0]->is(PlanType::kColumnExpr) &&
       call->args()[1]->is(PlanType::kLiteralExpr)) {

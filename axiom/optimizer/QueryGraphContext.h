@@ -328,6 +328,7 @@ struct FunctionNames {
   Name gt{nullptr};
   Name gte{nullptr};
   Name isNull{nullptr};
+  Name between{nullptr};
 
   /// Aggregate functions.
   Name arbitrary{nullptr};

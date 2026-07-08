@@ -428,8 +428,8 @@ TEST_F(SqlQueryRunnerTest, explainIo) {
 }
 
 TEST_F(SqlQueryRunnerTest, explainIoColumnConstraints) {
-  run("CREATE TABLE t (x BIGINT, ds VARCHAR, region VARCHAR) "
-      "WITH (explain_io = ARRAY['ds', 'region'])");
+  run("CREATE TABLE t (x BIGINT, n BIGINT, ds VARCHAR, region VARCHAR) "
+      "WITH (explain_io = ARRAY['n', 'ds', 'region'])");
   SCOPE_EXIT {
     run("DROP TABLE t");
   };
@@ -509,6 +509,28 @@ TEST_F(SqlQueryRunnerTest, explainIoColumnConstraints) {
             {"low": {"value": "2026-03-01", "bound": "EXACTLY"},
              "high": {"value": "2026-03-31", "bound": "EXACTLY"}}]})")));
 
+  // BETWEEN maps to a closed range, inclusive on both ends.
+  ASSERT_EQ(
+      getJson(
+          "EXPLAIN (TYPE IO) SELECT * FROM t "
+          "WHERE ds BETWEEN '2026-03-01' AND '2026-03-31'"),
+      makeTable(makeConstraint(
+          "ds",
+          "VARCHAR",
+          R"({"nullsAllowed": false, "ranges": [
+            {"low": {"value": "2026-03-01", "bound": "EXACTLY"},
+             "high": {"value": "2026-03-31", "bound": "EXACTLY"}}]})")));
+
+  // BETWEEN on an integer column produces the same closed range.
+  ASSERT_EQ(
+      getJson("EXPLAIN (TYPE IO) SELECT * FROM t WHERE n BETWEEN 1 AND 10"),
+      makeTable(makeConstraint(
+          "n",
+          "BIGINT",
+          R"({"nullsAllowed": false, "ranges": [
+            {"low": {"value": 1, "bound": "EXACTLY"},
+             "high": {"value": 10, "bound": "EXACTLY"}}]})")));
+
   auto noConstraints = normalizeJson(R"({
     "inputTableColumnInfos": [{
       "table": {
@@ -529,6 +551,21 @@ TEST_F(SqlQueryRunnerTest, explainIoColumnConstraints) {
   ASSERT_EQ(
       getJson("EXPLAIN (TYPE IO) SELECT * FROM t WHERE ds <> 'foo'"),
       noConstraints);
+
+  // NOT BETWEEN (parsed as not(between(...))) is unconvertible and drops the
+  // column, same as other negations.
+  ASSERT_EQ(
+      getJson(
+          "EXPLAIN (TYPE IO) SELECT * FROM t "
+          "WHERE ds NOT BETWEEN '2026-03-01' AND '2026-03-31'"),
+      noConstraints);
+
+  // BETWEEN with low > high is an empty range, so the whole table is excluded.
+  ASSERT_EQ(
+      getJson(
+          "EXPLAIN (TYPE IO) SELECT * FROM t "
+          "WHERE ds BETWEEN '2026-03-31' AND '2026-03-01'"),
+      normalizeJson(R"({"inputTableColumnInfos": []})"));
 
   // Mix of convertible and unconvertible filters: unconvertible conjunct is
   // skipped (broader is safe), convertible conjunct is shown.
