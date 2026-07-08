@@ -107,7 +107,7 @@ TEST_F(FileTableTest, metadataTableColumnMap) {
   const auto& columns = table->columnMap();
   EXPECT_TRUE(columns.contains("row_group_id"));
   EXPECT_TRUE(columns.contains("column_id"));
-  EXPECT_TRUE(columns.contains("name"));
+  EXPECT_TRUE(columns.contains("path"));
   EXPECT_TRUE(columns.contains("compression"));
   EXPECT_TRUE(columns.contains("encodings"));
   EXPECT_TRUE(columns.contains("compressed_size"));

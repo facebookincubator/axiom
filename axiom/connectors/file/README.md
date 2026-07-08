@@ -123,9 +123,9 @@ compression codec, byte sizes, value count, and column-chunk statistics.
 |--------|------|-------------|
 | `row_group_id` | BIGINT | Zero-based row group index. |
 | `column_id` | BIGINT | Zero-based column index within the row group. |
-| `name` | VARCHAR | Column name from the file schema. |
+| `path` | ARRAY<VARCHAR> | Leaf column-chunk physical `path_in_schema` as ordered segments (e.g. `['address', 'city']`, `['tags', 'list', 'element']`, `['lookup', 'key_value', 'key']`). See [Nested column paths](#nested-column-paths). |
 | `compression` | VARCHAR | Compression codec (e.g. `none`, `zstd`, `snappy`, `gzip`). |
-| `encodings` | VARCHAR | Comma-separated Parquet page encodings (e.g. `RLE,PLAIN`, `RLE_DICTIONARY`). |
+| `encodings` | ARRAY<VARCHAR> | Parquet page encodings as a list (e.g. `['RLE', 'PLAIN']`, `['RLE_DICTIONARY']`). |
 | `compressed_size` | BIGINT | Total compressed byte size of the column chunk. |
 | `uncompressed_size` | BIGINT | Total uncompressed byte size of the column chunk. |
 | `num_values` | BIGINT | Number of values (including nulls) in the column chunk. |
@@ -139,26 +139,42 @@ leave it unset.
 
 ```sql
 -- Inspect encodings and compression for every column chunk.
-SELECT row_group_id, name, encodings, compression
+SELECT row_group_id, path, encodings, compression
 FROM file."parquet"."/data/file.parquet$column_chunks";
 
 -- Find columns with high compression ratios.
-SELECT name, compression,
+SELECT path, compression,
        uncompressed_size / NULLIF(compressed_size, 0) AS ratio
 FROM file."parquet"."/data/file.parquet$column_chunks"
 WHERE compressed_size > 0
 ORDER BY ratio DESC;
 
 -- Inspect per-column value ranges.
-SELECT name, min, max, null_count
+SELECT path, min, max, null_count
 FROM file."parquet"."/data/file.parquet$column_chunks";
 ```
 
 Example output:
 
 ```
- row_group_id | column_id | name | compression | encodings          | compressed_size | uncompressed_size | num_values | min   | max  | null_count
---------------+-----------+------+-------------+--------------------+-----------------+-------------------+------------+-------+------+-----------
-            0 |         0 | id   | zstd        | RLE,PLAIN          |             187 |               305 |         25 | 1     | 25   |          0
-            0 |         1 | name | zstd        | RLE,RLE_DICTIONARY |             279 |               360 |         25 | alpha | zeta |          0
+ row_group_id | column_id | path     | compression | encodings             | compressed_size | uncompressed_size | num_values | min   | max  | null_count
+--------------+-----------+----------+-------------+-----------------------+-----------------+-------------------+------------+-------+------+-----------
+            0 |         0 | [id]     | zstd        | [RLE, PLAIN]          |             187 |               305 |         25 | 1     | 25   |          0
+            0 |         1 | [name]   | zstd        | [RLE, RLE_DICTIONARY] |             279 |               360 |         25 | alpha | zeta |          0
 ```
+
+##### Nested column paths
+
+Nested columns flatten to one row per leaf, identified by its physical
+`path_in_schema` as ordered segments (arrays add `list`/`element`, maps add
+`key_value`/`key`/`value`):
+
+```
+address ROW(city, zip)  → ['address', 'city'], ['address', 'zip']
+tags    ARRAY(INT)      → ['tags', 'list', 'element']
+lookup  MAP(STR, INT)   → ['lookup', 'key_value', 'key'], ['lookup', 'key_value', 'value']
+```
+
+Exposing the path as an array (rather than a dot-joined string) avoids ambiguity
+when a field name itself contains a `.`, and keeps the synthetic repeated-group
+levels (`list`, `key_value`) as distinct segments.
