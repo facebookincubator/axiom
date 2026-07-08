@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <algorithm>
+
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/DerivedTableFlattener.h"
 #include "axiom/optimizer/DerivedTablePrinter.h"
@@ -1048,6 +1050,17 @@ JoinEdgeP makeExists(PlanObjectCP table, const PlanObjectSet& tables) {
     }
   }
   VELOX_UNREACHABLE("No join to make an exists build side restriction");
+}
+
+// Adds 'element' to 'vector' if not already present. Returns true if it was
+// appended, false if it already existed.
+template <typename V, typename E>
+bool pushBackUnique(V& vector, E& element) {
+  if (std::find(vector.begin(), vector.end(), element) != vector.end()) {
+    return false;
+  }
+  vector.push_back(element);
+  return true;
 }
 
 } // namespace
