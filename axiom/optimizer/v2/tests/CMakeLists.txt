@@ -12,7 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(axiom_optimizer_v2_test JoinHypergraphTest.cpp RelationSetTest.cpp)
+add_executable(
+  axiom_optimizer_v2_test
+  AlgebraicPropertiesTest.cpp
+  JoinHypergraphTest.cpp
+  RelationSetTest.cpp
+)
 
 add_test(NAME axiom_optimizer_v2_test COMMAND axiom_optimizer_v2_test)
 
