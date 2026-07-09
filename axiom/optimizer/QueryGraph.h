@@ -169,6 +169,19 @@ class Column : public Expr {
   /// names pass an `alias` to the full constructor instead.
   static ColumnCP create(std::string_view prefix, const Value& value);
 
+  /// Creates a `Column` named by the logical-plan `symbol` it carries. The
+  /// internal `name` is uniquified for the optimizer's flat namespace, while
+  /// `outputName()` returns `symbol` (the alias), so the emitted plan uses the
+  /// logical-plan name. Use whenever a translated logical-plan node produces a
+  /// named column; synthetic columns use `create`.
+  static ColumnCP createForSymbol(Name symbol, const Value& value);
+
+  /// Synthesizes a `BOOLEAN` column with cardinality 2 (the two valid
+  /// boolean values). Convenience for the recurring pattern of
+  /// creating eligibility / marker columns in rewrites; equivalent to
+  /// `create(prefix, Value(toType(velox::BOOLEAN()), 2))`.
+  static ColumnCP createBoolean(std::string_view prefix);
+
   Name name() const {
     return name_;
   }

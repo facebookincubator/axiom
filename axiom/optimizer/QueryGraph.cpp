@@ -51,6 +51,23 @@ const char* SpecialFormCallNames::kIn = "__in";
 const char* SpecialFormCallNames::kNullIf = "__nullif";
 
 // static
+ColumnCP Column::createForSymbol(Name symbol, const Value& value) {
+  VELOX_DCHECK(
+      queryCtx()->isV2(),
+      "Column::createForSymbol synthesizes a relation-less column, a v2-only idiom");
+  return make<Column>(
+      queryCtx()->newName(symbol),
+      /*relation=*/nullptr,
+      value,
+      /*alias=*/symbol);
+}
+
+// static
+ColumnCP Column::createBoolean(std::string_view prefix) {
+  return create(prefix, Value(toType(velox::BOOLEAN()), /*cardinality=*/2));
+}
+
+// static
 ColumnCP Column::create(std::string_view prefix, const Value& value) {
   VELOX_DCHECK(
       queryCtx()->isV2(),
