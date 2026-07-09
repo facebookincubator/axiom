@@ -21,6 +21,7 @@ add_library(
   ExprFactory.cpp
   ExprSimplifier.cpp
   JoinCondition.cpp
+  LimitAndOrderPass.cpp
   Node.cpp
   NodePrinter.cpp
   PhysicalProperties.cpp
