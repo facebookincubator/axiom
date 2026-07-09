@@ -169,6 +169,7 @@ using ExprCP = const Expr*;
 /// Recognized expressions:
 ///   - Comparisons with literals: eq, lt, lte, gt, gte(column, literal)
 ///   - BETWEEN(column, literal, literal) — closed range [low, high]
+///   - LIKE(column, literal) — prefix range, or equality if wildcard-free
 ///   - IN(column, literal, literal, ...)
 ///   - IS NULL(column)
 ///   - AND(expr, expr, ...) — intersects children

@@ -381,6 +381,10 @@ void QueryGraphContext::populateFunctionNames() {
     functionNames_.between = this->toName(between.value());
   }
 
+  if (auto like = registry->like()) {
+    functionNames_.like = this->toName(like.value());
+  }
+
   if (auto rowNumber = registry->rowNumber()) {
     functionNames_.rowNumber = this->toName(rowNumber.value());
   }

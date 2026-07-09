@@ -531,6 +531,37 @@ TEST_F(SqlQueryRunnerTest, explainIoColumnConstraints) {
             {"low": {"value": 1, "bound": "EXACTLY"},
              "high": {"value": 10, "bound": "EXACTLY"}}]})")));
 
+  // LIKE with a literal prefix maps to a half-open range [prefix, prefix++),
+  // where the upper bound increments the last byte of the prefix.
+  ASSERT_EQ(
+      getJson("EXPLAIN (TYPE IO) SELECT * FROM t WHERE ds LIKE '2026-05%'"),
+      makeTable(makeConstraint(
+          "ds",
+          "VARCHAR",
+          R"({"nullsAllowed": false, "ranges": [
+            {"low": {"value": "2026-05", "bound": "EXACTLY"},
+             "high": {"value": "2026-06", "bound": "BELOW"}}]})")));
+
+  // The '_' single-character wildcard also terminates the prefix.
+  ASSERT_EQ(
+      getJson("EXPLAIN (TYPE IO) SELECT * FROM t WHERE ds LIKE '2026-05_'"),
+      makeTable(makeConstraint(
+          "ds",
+          "VARCHAR",
+          R"({"nullsAllowed": false, "ranges": [
+            {"low": {"value": "2026-05", "bound": "EXACTLY"},
+             "high": {"value": "2026-06", "bound": "BELOW"}}]})")));
+
+  // LIKE with no wildcards degenerates to equality.
+  ASSERT_EQ(
+      getJson("EXPLAIN (TYPE IO) SELECT * FROM t WHERE ds LIKE '2026-05-01'"),
+      makeTable(makeConstraint(
+          "ds",
+          "VARCHAR",
+          R"({"nullsAllowed": false, "ranges": [
+            {"low": {"value": "2026-05-01", "bound": "EXACTLY"},
+             "high": {"value": "2026-05-01", "bound": "EXACTLY"}}]})")));
+
   auto noConstraints = normalizeJson(R"({
     "inputTableColumnInfos": [{
       "table": {
@@ -566,6 +597,19 @@ TEST_F(SqlQueryRunnerTest, explainIoColumnConstraints) {
           "EXPLAIN (TYPE IO) SELECT * FROM t "
           "WHERE ds BETWEEN '2026-03-31' AND '2026-03-01'"),
       normalizeJson(R"({"inputTableColumnInfos": []})"));
+
+  // LIKE with a leading wildcard has no usable prefix, so it is dropped.
+  ASSERT_EQ(
+      getJson("EXPLAIN (TYPE IO) SELECT * FROM t WHERE ds LIKE '%05'"),
+      noConstraints);
+
+  // LIKE with an ESCAPE clause is not converted (escape semantics are not
+  // interpreted), so the column is dropped.
+  ASSERT_EQ(
+      getJson(
+          "EXPLAIN (TYPE IO) SELECT * FROM t "
+          "WHERE ds LIKE '2026-05%' ESCAPE '#'"),
+      noConstraints);
 
   // Mix of convertible and unconvertible filters: unconvertible conjunct is
   // skipped (broader is safe), convertible conjunct is shown.
