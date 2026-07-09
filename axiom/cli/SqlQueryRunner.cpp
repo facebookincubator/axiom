@@ -44,6 +44,7 @@
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/RelationOpPrinter.h"
 #include "axiom/optimizer/VeloxHistory.h"
+#include "axiom/optimizer/v2/Optimize.h"
 #include "axiom/runner/ProgressReporter.h"
 #include "axiom/sql/presto/PrestoParser.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
@@ -720,6 +721,8 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
     }
 
     if (explain->type() == presto::ExplainStatement::Type::kIo) {
+      VELOX_USER_CHECK(
+          !useOptimizerV2_, "EXPLAIN TYPE IO is not supported with --v2");
       std::optional<CatalogSchemaTableName> outputTable;
       if (statement->isCreateTableAsSelect()) {
         const auto* ctas =
@@ -961,6 +964,8 @@ std::string SqlQueryRunner::runExplain(
       return logical_plan::PlanPrinter::toText(*logicalPlan);
 
     case presto::ExplainStatement::Type::kGraph: {
+      VELOX_USER_CHECK(
+          !useOptimizerV2_, "EXPLAIN TYPE GRAPH is not supported with --v2");
       std::string text;
       auto queryCtx = newQuery(options);
       {
@@ -992,6 +997,9 @@ std::string SqlQueryRunner::runExplain(
     }
 
     case presto::ExplainStatement::Type::kOptimized: {
+      VELOX_USER_CHECK(
+          !useOptimizerV2_,
+          "EXPLAIN TYPE OPTIMIZED is not supported with --v2");
       std::string text;
       auto queryCtx = newQuery(options);
       {
@@ -1216,6 +1224,18 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
       sessionConfig_->effectiveValues(kRunnerPrefix),
       std::move(connectorProperties));
 
+  if (useOptimizerV2_) {
+    VELOX_USER_CHECK(
+        checkDerivedTable == nullptr && checkBestPlan == nullptr,
+        "DerivedTable / RelationOp inspection hooks are not supported by the v2 optimizer");
+    // The v2 optimizer runs as a single phase, so the per-phase timing
+    // breakdown keys (toGraph / bestPlan / toVelox) are not populated; only
+    // the overall `kOptimizeWallNanos` / `kOptimizeCpuNanos` are recorded,
+    // from the caller-side `PhaseTimer`.
+    return optimizer::v2::optimize(
+        *logicalPlan, *schemaResolver, *optimizerSession, evaluator, opts);
+  }
+
   uint64_t toGraphNanos{0};
   uint64_t toGraphCpuNanos{0};
   auto toGraphCpuStart = velox::process::threadCpuNanos();
@@ -1430,6 +1450,8 @@ std::optional<int64_t> roundCardinality(std::optional<float> cardinality) {
 std::vector<velox::RowVectorPtr> SqlQueryRunner::runShowStatsForQuery(
     const presto::SqlStatement& sqlStatement,
     const RunOptions& options) {
+  VELOX_USER_CHECK(
+      !useOptimizerV2_, "SHOW STATS FOR (<query>) is not supported with --v2");
   const auto* showStats = sqlStatement.as<presto::ShowStatsForQueryStatement>();
   const auto& innerStatement = showStats->statement();
   VELOX_CHECK(innerStatement->isSelect());
