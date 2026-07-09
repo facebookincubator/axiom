@@ -41,9 +41,14 @@ class NonDeterministicFlagTest : public test::QueryTestBase {
     bool result = true;
     auto plan = parseSelect(sql, kTestConnectorId);
     verifyOptimization(*plan, [&](Optimization& opt) {
-      const auto& dt = *opt.rootDt();
-      ASSERT_EQ(dt.exprs.size(), 1);
-      result = !dt.exprs[0]->containsNonDeterministic();
+      const auto* dt = opt.rootDt();
+      // A non-deterministic projection may be materialized into a child DT.
+      if (dt->exprs[0]->is(PlanType::kColumnExpr) && dt->tables.size() == 1 &&
+          dt->tables[0]->is(PlanType::kDerivedTableNode)) {
+        dt = dt->tables[0]->as<DerivedTable>();
+      }
+      ASSERT_EQ(dt->exprs.size(), 1);
+      result = !dt->exprs[0]->containsNonDeterministic();
     });
     return result;
   }
@@ -79,6 +84,20 @@ TEST_F(NonDeterministicFlagTest, lambda) {
 
   // Deterministic lambda body reports determinism.
   EXPECT_TRUE(isDeterministic("transform(array[a], e -> e + b)"));
+
+  // Accessing a subfield of the result routes through the subfield path. The
+  // lambda's rand() must still taint the call.
+  EXPECT_FALSE(isDeterministic(
+      "transform(array[a], e -> e + cast(rand() * 10 AS bigint))[1]"));
+
+  // A rand() in the INNER lambda of nested higher-order calls propagates out
+  // through both lambdas.
+  EXPECT_FALSE(isDeterministic(
+      "transform(array[a], x -> transform(array[x], y -> y + cast(rand() * 10 AS bigint)))"));
+
+  // Nested lambdas with a deterministic inner body report determinism.
+  EXPECT_TRUE(isDeterministic(
+      "transform(array[a], x -> transform(array[x], y -> y + b))"));
 }
 
 } // namespace

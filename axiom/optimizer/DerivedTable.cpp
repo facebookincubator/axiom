@@ -2608,6 +2608,145 @@ void DerivedTable::tryConvertOuterJoins(bool allowNondeterministic) {
   }
 }
 
+namespace {
+
+// Invokes 'callback' for each top-level scalar expression of 'dt' that may
+// reference a non-deterministic child output column.
+void forEachExprRoot(
+    const DerivedTable& dt,
+    folly::FunctionRef<void(ExprCP)> callback) {
+  // pushWouldSplitDraw only runs on DT with filters, while non-null write
+  // is a thin wrapper with no conjunct, so is not reachable here.
+  VELOX_CHECK_NULL(dt.write);
+  for (auto* expr : dt.exprs) {
+    callback(expr);
+  }
+  for (auto* conjunct : dt.conjuncts) {
+    callback(conjunct);
+  }
+  for (auto* key : dt.orderKeys) {
+    callback(key);
+  }
+  for (auto* expr : dt.having) {
+    callback(expr);
+  }
+  if (dt.aggregation != nullptr) {
+    for (auto* key : dt.aggregation->groupingKeys()) {
+      callback(key);
+    }
+    for (const auto* aggregate : dt.aggregation->aggregates()) {
+      for (auto* arg : aggregate->args()) {
+        callback(arg);
+      }
+      if (aggregate->condition() != nullptr) {
+        callback(aggregate->condition());
+      }
+      for (auto* key : aggregate->orderKeys()) {
+        callback(key);
+      }
+    }
+  }
+  if (dt.windowPlan != nullptr) {
+    for (const auto* function : dt.windowPlan->functions()) {
+      for (auto* arg : function->args()) {
+        callback(arg);
+      }
+      for (auto* key : function->partitionKeys()) {
+        callback(key);
+      }
+      for (auto* key : function->orderKeys()) {
+        callback(key);
+      }
+      if (function->frame().startValue != nullptr) {
+        callback(function->frame().startValue);
+      }
+      if (function->frame().endValue != nullptr) {
+        callback(function->frame().endValue);
+      }
+    }
+  }
+  for (const auto* join : dt.joins) {
+    for (auto* key : join->leftKeys()) {
+      callback(key);
+    }
+    for (auto* key : join->rightKeys()) {
+      callback(key);
+    }
+    for (auto* expr : join->filter()) {
+      callback(expr);
+    }
+  }
+}
+
+// Tracks how the single materialized column 'target' is consumed.
+struct MaterializedColumnUse {
+  ColumnCP target;
+  int32_t numReads{0};
+  bool underLambda{false};
+
+  bool splitsSingleDraw() const {
+    return numReads > 1 || underLambda;
+  }
+};
+
+void accumulateColumnUse(
+    ExprCP expr,
+    MaterializedColumnUse& use,
+    bool insideLambda) {
+  switch (expr->type()) {
+    case PlanType::kColumnExpr: {
+      const auto* column = expr->as<Column>();
+      // A subfield column (Column::topColumn) is still a single read of the
+      // whole materialized value, so it counts against 'target'.
+      if (column == use.target || column->topColumn() == use.target) {
+        ++use.numReads;
+        use.underLambda |= insideLambda;
+      }
+      return;
+    }
+    case PlanType::kLiteralExpr:
+      return;
+    case PlanType::kFieldExpr:
+      accumulateColumnUse(expr->as<Field>()->base(), use, insideLambda);
+      return;
+    case PlanType::kLambdaExpr:
+      accumulateColumnUse(
+          expr->as<Lambda>()->body(), use, /*insideLambda=*/true);
+      return;
+    default:
+      // Calls and special forms, including array/map subscripts (which are
+      // calls).
+      for (auto* child : expr->children()) {
+        accumulateColumnUse(child->as<Expr>(), use, insideLambda);
+      }
+      return;
+  }
+}
+
+// Returns true if pushing a filter that reads 'target' (a non-deterministic
+// child output column) into the child would split its single shared draw,
+// because 'dt' reads it more than once or reads it inside a lambda body.
+bool pushWouldSplitDraw(const DerivedTable& dt, ColumnCP target) {
+  MaterializedColumnUse use{.target = target};
+  forEachExprRoot(dt, [&](ExprCP root) {
+    accumulateColumnUse(root, use, /*insideLambda=*/false);
+  });
+  return use.splitsSingleDraw();
+}
+
+// Returns true if 'col' is an output column of 'dt' whose defining projection
+// expression is non-deterministic.
+bool isNonDeterministicOutputColumn(const DerivedTable& dt, PlanObjectCP col) {
+  for (size_t i = 0; i < dt.columns.size() && i < dt.exprs.size(); ++i) {
+    if (dt.columns[i] == col && dt.exprs[i]->containsNonDeterministic()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+} // namespace
+
 bool DerivedTable::tryPushdownConjunct(ExprCP conjunct, PlanObjectP table) {
   if (table->is(PlanType::kValuesTableNode)) {
     return false; // ValuesTable does not have filter push-down.
@@ -2622,7 +2761,20 @@ bool DerivedTable::tryPushdownConjunct(ExprCP conjunct, PlanObjectP table) {
   }
 
   if (table->is(PlanType::kDerivedTableNode)) {
-    auto innerDt = table->as<DerivedTable>();
+    auto* innerDt = table->as<DerivedTable>();
+    // Do not push a conjunct that reads a non-deterministic output column of
+    // the child when re-inlining it into the child would split the one shared
+    // draw. A single row-scope use is safe and still pushes toward the scan.
+    bool blocked = false;
+    conjunct->columns().forEach([&](PlanObjectCP col) {
+      if (isNonDeterministicOutputColumn(*innerDt, col) &&
+          pushWouldSplitDraw(*this, col->as<Column>())) {
+        blocked = true;
+      }
+    });
+    if (blocked) {
+      return false;
+    }
     if (!innerDt->addFilter(conjunct)) {
       return false;
     }

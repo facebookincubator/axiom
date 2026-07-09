@@ -1563,9 +1563,7 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
     if (allUsed || usedArgs.contains(i)) {
       args[i] = translateExpr(input);
       cardinality = maxOf(cardinality, args[i]->value().cardinality);
-      if (args[i]->is(PlanType::kCallExpr)) {
-        funcs = funcs | args[i]->as<Call>()->functions();
-      }
+      funcs = funcs | args[i]->functions();
     } else {
       // Make a null of the type for the unused arg to keep the tree valid.
       const auto& inputType = input->type();
@@ -1604,27 +1602,12 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
   return callExpr;
 }
 
-void ToGraph::rejectIfReusedNonDeterministic(std::string_view name, ExprCP expr)
-    const {
-  if (expr == nullptr || !expr->containsNonDeterministic()) {
-    return;
-  }
-  if (!nonDeterministicResolutions_.insert(NameExprKey{toName(name), expr})
-           .second) {
-    VELOX_USER_FAIL(
-        "Non-deterministic expression reused across multiple references is not "
-        "supported yet: {}",
-        name);
-  }
-}
-
 ExprCP ToGraph::translateColumn(std::string_view name) const {
   if (auto it = lambdaSignature_.find(name); it != lambdaSignature_.end()) {
     return it->second;
   }
 
   if (auto it = renames_.find(name); it != renames_.end()) {
-    rejectIfReusedNonDeterministic(name, it->second);
     return it->second;
   }
 
@@ -2300,6 +2283,22 @@ void ToGraph::translateJoin(
       if (rightTable->is(PlanType::kDerivedTableNode)) {
         auto* rightDt =
             const_cast<DerivedTable*>(rightTable->as<DerivedTable>());
+        // Do not push a conjunct that reads a non-deterministic output column
+        // of the right side. addFilter re-inlines via importExpr, so if
+        // importing makes the conjunct non-deterministic, pushing would draw
+        // the value a second time below the materialization. Leaving it here
+        // routes it to the JoinEdge filter, which pre-filters the right side
+        // against the materialized column (one draw) with the same LEFT-join
+        // semantics.
+        //
+        // Conservatively prevent any non-deterministic conjunct from pushing
+        // down because a reference count of non-deterministic columns is not
+        // knowable here: the enclosing projections and filters that may also
+        // read the column are attached only after the join is built.
+        if (rightDt->importExpr(conjunct)->containsNonDeterministic()) {
+          ++it;
+          continue;
+        }
         if (!rightDt->addFilter(conjunct)) {
           ++it;
           continue;
@@ -4635,6 +4634,12 @@ bool hasNondeterministic(const lp::ExprPtr& expr) {
       return true;
     }
   }
+  // A non-deterministic call inside a lambda body (e.g. the rand() in
+  // transform(arr, x -> x + rand())) is not reached via inputs(), so descend
+  // into the body explicitly.
+  if (expr->isLambda()) {
+    return hasNondeterministic(expr->as<lp::LambdaExpr>()->body());
+  }
   return std::ranges::any_of(expr->inputs(), hasNondeterministic);
 }
 
@@ -4943,6 +4948,31 @@ void ToGraph::makeProjectQueryGraph(
   if (excludeOuterJoins && !currentDt_->tables.empty() &&
       std::ranges::any_of(project.expressions(), optimizer::hasSubquery)) {
     wrapInDt(project, /*orderObservedAbove=*/false);
+    return;
+  }
+
+  // A non-deterministic projection must not be inlined into its consumers: a
+  // reused value would be re-drawn per reference, and under join fan-out it
+  // would evaluate at the wrong scope. Force a DT boundary (as for a
+  // non-deterministic filter) so the value is materialized once as the child's
+  // output column.
+  if (std::ranges::any_of(project.expressions(), hasNondeterministic)) {
+    auto* outerDt = std::exchange(currentDt_, newDt());
+    makeQueryGraph(
+        *project.onlyInput(),
+        kAllAllowedInDt,
+        hasWindow ? false : orderObservedAbove,
+        excludeOuterJoins);
+    // Mirror the non-deterministic-free path's window handling: a window must
+    // compute over the full (already limited) input, and a window that reads
+    // another window's output needs its own DT. Skipping this finalize would
+    // hoist a LIMIT above the window or merge dependent windows into one plan.
+    if (hasWindow &&
+        (currentDt_->hasLimit() || windowReferencesWindow(project))) {
+      finalizeDt(*project.onlyInput());
+    }
+    addProjection(project);
+    finalizeDt(project, outerDt);
     return;
   }
 
