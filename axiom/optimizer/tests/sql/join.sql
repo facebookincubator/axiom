@@ -158,3 +158,11 @@ JOIN t t17 ON t16.b = t17.b
 JOIN t t18 ON t17.b = t18.b
 JOIN t t19 ON t18.b = t19.b
 JOIN t t20 ON t19.b = t20.b
+----
+-- Greedy join enumeration (>= 5 tables) driven by a UNION ALL subquery.
+SELECT b.v, s.k
+FROM (SELECT k FROM (VALUES (1)) AS t (k) UNION ALL SELECT k FROM (VALUES (1)) AS t (k)) AS s
+JOIN (VALUES (1)) AS a (k) ON s.k = a.k
+JOIN (VALUES (1)) AS c (k) ON s.k = c.k
+JOIN (VALUES (1)) AS d (k) ON s.k = d.k
+JOIN (VALUES (1, 2)) AS b (k, v) ON s.k = b.k

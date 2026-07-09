@@ -3308,6 +3308,10 @@ void Optimization::greedyJoinChainDescend(
     PlanState& state) {
   VELOX_CHECK_NOT_NULL(plan);
 
+  // Greedy descends in place, so restore 'state' on return to keep the
+  // invariant that makeJoins leaves it unchanged for the caller.
+  PlanStateSaver save(state);
+
   // An unknown-cost partial plan cannot be ranked, so greedy cannot pick a
   // meaningful chain. Bail so the syntactic fallback in
   // makeJoinsWithSyntacticFallback re-enumerates this DT.
