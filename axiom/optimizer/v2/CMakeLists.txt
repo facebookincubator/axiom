@@ -14,7 +14,9 @@
 
 add_library(
   axiom_optimizer_v2
+  AggregateRecovery.cpp
   Builder.cpp
+  DecorrelatePass.cpp
   ExprEmitter.cpp
   ExprFactory.cpp
   ExprSimplifier.cpp
