@@ -24,6 +24,7 @@ add_library(
   Node.cpp
   NodePrinter.cpp
   PhysicalProperties.cpp
+  PushdownAndPrunePass.cpp
   TranslatePass.cpp
 )
 
