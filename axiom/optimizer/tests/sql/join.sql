@@ -166,3 +166,7 @@ JOIN (VALUES (1)) AS a (k) ON s.k = a.k
 JOIN (VALUES (1)) AS c (k) ON s.k = c.k
 JOIN (VALUES (1)) AS d (k) ON s.k = d.k
 JOIN (VALUES (1, 2)) AS b (k, v) ON s.k = b.k
+----
+-- Cross join where one relation has no equi-predicate and is connected
+-- only by an inequality: the theta predicate must still be applied.
+SELECT t1.a, t2.a FROM t t1, t t2, t t3 WHERE t1.a = t3.a AND t1.b < t2.b

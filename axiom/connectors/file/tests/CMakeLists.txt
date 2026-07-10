@@ -19,6 +19,7 @@ add_test(NAME axiom_file_connector_test COMMAND axiom_file_connector_test)
 target_link_libraries(
   axiom_file_connector_test
   axiom_cli
+  axiom_optimizer_v2
   velox_dwio_parquet_writer
   velox_vector_test_lib
   velox_exec_test_lib
