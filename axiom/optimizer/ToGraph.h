@@ -99,7 +99,7 @@ class ToGraph {
           connector::TablePtr> pushdownRoots);
 
   Name newCName(std::string_view prefix) {
-    return toName(fmt::format("{}{}", prefix, ++nameCounter_));
+    return queryCtx()->newName(prefix);
   }
 
   /// Creates a new column with a unique name using the given prefix.

@@ -41,6 +41,8 @@ enum class PlanType : uint32_t {
   kAggregationNode,
   kWindowPlanNode,
   kWriteNode,
+  // Node from the v2 tree IR. See axiom/optimizer/v2/Node.h.
+  kV2Node,
 };
 
 AXIOM_DECLARE_ENUM_NAME(PlanType);
@@ -172,6 +174,7 @@ class PlanObjectSet : public BitSet {
         velox::bits::isBitSet(bits_.data(), object->id());
   }
 
+  /// True if id of any object in 'objects' is in 'this'.
   template <typename V>
   bool containsAny(const V& objects) const {
     for (const auto& object : objects) {
@@ -180,6 +183,31 @@ class PlanObjectSet : public BitSet {
       }
     }
     return false;
+  }
+
+  /// True if id of every object in 'objects' is in 'this'.
+  template <typename V>
+  bool containsAll(const V& objects) const {
+    for (const auto& object : objects) {
+      if (!contains(object)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /// True if every column 'expr' depends on is in 'this' — i.e. 'expr' can be
+  /// evaluated from these columns.
+  bool containsColumns(ExprCP expr) const;
+
+  /// True if every expression in 'exprs' can be evaluated from these columns.
+  bool containsColumns(const ExprVector& exprs) const {
+    for (ExprCP expr : exprs) {
+      if (!containsColumns(expr)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /// Inserts id of 'object'.

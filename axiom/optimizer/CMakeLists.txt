@@ -67,3 +67,5 @@ target_link_libraries(
   axiom_runner_local_runner
   velox_connector
 )
+
+add_subdirectory(v2)

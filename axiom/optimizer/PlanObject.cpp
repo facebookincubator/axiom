@@ -34,6 +34,7 @@ const auto& planTypeNames() {
       {PlanType::kDerivedTableNode, "DerivedTableNode"},
       {PlanType::kAggregationNode, "AggregationNode"},
       {PlanType::kWindowPlanNode, "WindowPlanNode"},
+      {PlanType::kV2Node, "V2Node"},
   };
   return kNames;
 }
@@ -51,6 +52,10 @@ size_t PlanObject::hash() const {
 
 void PlanObjectSet::unionColumns(ExprCP expr) {
   unionSet(expr->columns());
+}
+
+bool PlanObjectSet::containsColumns(ExprCP expr) const {
+  return expr->columns().isSubset(*this);
 }
 
 void PlanObjectSet::unionColumns(const ExprVector& exprs) {

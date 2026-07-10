@@ -50,6 +50,14 @@ const char* SpecialFormCallNames::kIn = "__in";
 // static
 const char* SpecialFormCallNames::kNullIf = "__nullif";
 
+// static
+ColumnCP Column::create(std::string_view prefix, const Value& value) {
+  VELOX_DCHECK(
+      queryCtx()->isV2(),
+      "Column::create synthesizes a relation-less column, a v2-only idiom");
+  return make<Column>(queryCtx()->newName(prefix), /*relation=*/nullptr, value);
+}
+
 void Column::equals(ColumnCP other) const {
   if (!equivalence_ && !other->equivalence_) {
     auto* equiv = make<Equivalence>();
@@ -66,6 +74,10 @@ void Column::equals(ColumnCP other) const {
   }
   if (!equivalence_) {
     other->equals(this);
+    return;
+  }
+  // Already in one class: merging would iterate and grow the same vector.
+  if (equivalence_ == other->equivalence_) {
     return;
   }
   for (auto& column : other->equivalence_->columns) {
@@ -90,6 +102,10 @@ Name cname(PlanObjectCP relation) {
 }
 
 std::string Column::toString() const {
+  if (queryCtx()->isV2()) {
+    return name_;
+  }
+
   const auto* opt = queryCtx()->optimization();
   if (!opt->cnamesInExpr() || relation_ == nullptr) {
     return name_;
