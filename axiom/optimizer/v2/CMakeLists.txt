@@ -24,8 +24,10 @@ add_library(
   CostModel.cpp
   DecorrelatePass.cpp
   DPhyp.cpp
+  EmitPass.cpp
   EstimateLeafStatsPass.cpp
   EstimateProvider.cpp
+  ExpandAggregatePass.cpp
   ExprEmitter.cpp
   ExprFactory.cpp
   ExprSimplifier.cpp
@@ -38,9 +40,11 @@ add_library(
   MemoOp.cpp
   Node.cpp
   NodePrinter.cpp
+  Optimize.cpp
   PhysicalProperties.cpp
   PlanPhysicalPass.cpp
   PlanSet.cpp
+  PrecomputeProjectionsPass.cpp
   PushdownAndPrunePass.cpp
   ScanHandle.cpp
   TranslatePass.cpp
