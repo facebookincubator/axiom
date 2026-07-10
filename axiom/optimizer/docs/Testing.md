@@ -340,6 +340,8 @@ buck test fbcode//axiom/optimizer/tests:sql -- V2/
 buck test fbcode//axiom/optimizer/tests:sql -- basic
 ```
 
+Under CMake (OSS builds / CI), the SQL test is split into one ctest entry per query file per optimizer version, named `axiom_optimizer_sql_test_v{1,2}_<file>` (e.g. `axiom_optimizer_sql_test_v1_join`), so ctest runs the files in parallel. CMake globs `tests/sql/*.sql` and excludes setup fragments by the `*_setup.sql` naming convention — files ending in `_setup.sql` (e.g. `common_setup.sql`) are spliced into queries via `-- setup_file:` and are not query files, so they get no ctest entry. Every other `.sql` file must be registered with a `registerQueryFile` call in `SqlTest.cpp`.
+
 To add a new correctness test, append a query to the appropriate `.sql` file in `axiom/optimizer/tests/sql/`. No C++ changes needed. A few of the files:
 
 - `basic.sql` — scratch file for local development and quick experiments. Not a dumping ground for checked-in tests.
