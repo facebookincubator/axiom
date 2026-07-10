@@ -44,10 +44,16 @@ void verifyPlanSerde(
   }
 }
 
-class WriteTest : public test::HiveQueriesTestBase {
+class WriteTest : public test::HiveQueriesTestBase,
+                  public ::testing::WithParamInterface<bool> {
  protected:
   const std::string kDefaultSchema{
       connector::hive::LocalHiveConnectorMetadata::kDefaultSchema};
+
+  void SetUp() override {
+    test::HiveQueriesTestBase::SetUp();
+    useV2_ = GetParam();
+  }
 
   static void SetUpTestCase() {
     test::HiveQueriesTestBase::SetUpTestCase();
@@ -339,7 +345,7 @@ class WriteTest : public test::HiveQueriesTestBase {
   velox::Variant evaluateConstantExpr(const lp::Expr& expr);
 };
 
-TEST_F(WriteTest, basic) {
+TEST_P(WriteTest, basic) {
   SCOPE_EXIT {
     dropTableIfExists("test");
     dropTableIfExists("test2");
@@ -432,7 +438,7 @@ TEST_F(WriteTest, basic) {
   }
 }
 
-TEST_F(WriteTest, insertSql) {
+TEST_P(WriteTest, insertSql) {
   SCOPE_EXIT {
     dropTableIfExists("test");
   };
@@ -475,7 +481,7 @@ TEST_F(WriteTest, insertSql) {
       }));
 }
 
-TEST_F(WriteTest, ctasSql) {
+TEST_P(WriteTest, ctasSql) {
   {
     SCOPE_EXIT {
       dropTableIfExists("test");
@@ -529,7 +535,7 @@ TEST_F(WriteTest, ctasSql) {
 // Verifies that CTAS and INSERT on unpartitioned tables populate per-column
 // stats (count, min, max, numDistinct) and that INSERT merges with existing
 // stats.
-TEST_F(WriteTest, columnStatsUnpartitioned) {
+TEST_P(WriteTest, columnStatsUnpartitioned) {
   SCOPE_EXIT {
     dropTableIfExists("test");
   };
@@ -592,7 +598,7 @@ TEST_F(WriteTest, columnStatsUnpartitioned) {
 }
 
 // Verifies that all-null columns produce zero count and no min/max/ndv.
-TEST_F(WriteTest, columnStatsAllNulls) {
+TEST_P(WriteTest, columnStatsAllNulls) {
   SCOPE_EXIT {
     dropTableIfExists("test");
   };
@@ -623,7 +629,7 @@ TEST_F(WriteTest, columnStatsAllNulls) {
 
 // Verifies that CTAS on partitioned tables stores per-partition stats but
 // does not produce table-level stats.
-TEST_F(WriteTest, columnStatsPartitioned) {
+TEST_P(WriteTest, columnStatsPartitioned) {
   SCOPE_EXIT {
     dropTableIfExists("test");
   };
@@ -653,7 +659,7 @@ TEST_F(WriteTest, columnStatsPartitioned) {
   }
 }
 
-TEST_F(WriteTest, ctasPartitionedSql) {
+TEST_P(WriteTest, ctasPartitionedSql) {
   SCOPE_EXIT {
     dropTableIfExists("test");
   };
@@ -720,7 +726,7 @@ void verifyCollocatedWrite(const MultiFragmentPlan& plan) {
 // Verifies that CTAS with a Values input (single-fragment, single-threaded
 // pipeline) does not produce LocalGather + TableWriteMerge nodes even when
 // numWorkers > 1 and numDrivers > 1.
-TEST_F(WriteTest, ctasValuesNoMerge) {
+TEST_P(WriteTest, ctasValuesNoMerge) {
   SCOPE_EXIT {
     dropTableIfExists("test");
   };
@@ -737,7 +743,7 @@ TEST_F(WriteTest, ctasValuesNoMerge) {
       {.numWorkers = 4, .numDrivers = 4});
 }
 
-TEST_F(WriteTest, ctasBucketedSql) {
+TEST_P(WriteTest, ctasBucketedSql) {
   SCOPE_EXIT {
     for (const auto& name : {"test", "more", "same", "fewer"}) {
       dropTableIfExists(name);
@@ -780,7 +786,7 @@ TEST_F(WriteTest, ctasBucketedSql) {
   verifyPartitionedLayout(getLayout("fewer"), "key", 2);
 }
 
-TEST_F(WriteTest, ctasBucketedSingleNode) {
+TEST_P(WriteTest, ctasBucketedSingleNode) {
   SCOPE_EXIT {
     dropTableIfExists("test");
   };
@@ -808,7 +814,7 @@ TEST_F(WriteTest, ctasBucketedSingleNode) {
   verifyPartitionedLayout(getLayout("test"), "key", 128);
 }
 
-TEST_F(WriteTest, ctasBucketedSingleThreaded) {
+TEST_P(WriteTest, ctasBucketedSingleThreaded) {
   SCOPE_EXIT {
     dropTableIfExists("test");
   };
@@ -833,7 +839,7 @@ TEST_F(WriteTest, ctasBucketedSingleThreaded) {
   verifyPartitionedLayout(getLayout("test"), "key", 64);
 }
 
-TEST_F(WriteTest, ctasBucketedAndSorted) {
+TEST_P(WriteTest, ctasBucketedAndSorted) {
   SCOPE_EXIT {
     dropTableIfExists("test");
   };
@@ -846,6 +852,8 @@ TEST_F(WriteTest, ctasBucketedAndSorted) {
 
   verifyPartitionedLayout(getLayout("test"), "n_nationkey", 16, "n_name");
 }
+
+AXIOM_INSTANTIATE_V1_V2(WriteTest);
 
 } // namespace
 } // namespace facebook::axiom::optimizer
