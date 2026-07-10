@@ -206,17 +206,34 @@ target_link_libraries(
 
 add_executable(axiom_optimizer_sql_test SqlTest.cpp)
 
-add_test(
-  NAME axiom_optimizer_sql_test_v1
-  COMMAND axiom_optimizer_sql_test --gtest_filter=V1/*
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+# One ctest entry per (optimizer version, query .sql file) so ctest runs the
+# files in parallel. Each .sql file has its own heavy per-file SetUpTestCase
+# (DuckDB runner + reference tables), so per-file is the right granularity:
+# gtest_discover_tests or gtest sharding would re-run that setup per test/shard.
+# The registerQueryFile<> list in SqlTest.cpp's main() remains the source of
+# truth for which files are registered. Deleting a registered file makes
+# registration throw, but adding a .sql file without a registerQueryFile<> call
+# is NOT caught here: its ctest entry matches no tests and gtest still exits 0.
+# Keep main()'s list in sync when adding query files.
+file(
+  GLOB _sql_files
+  CONFIGURE_DEPENDS
+  RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/sql
+  ${CMAKE_CURRENT_SOURCE_DIR}/sql/*.sql
 )
-
-add_test(
-  NAME axiom_optimizer_sql_test_v2
-  COMMAND axiom_optimizer_sql_test --gtest_filter=V2/*
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-)
+# Setup fragments (e.g. common_setup.sql) are not query files.
+list(FILTER _sql_files EXCLUDE REGEX "_setup\\.sql$")
+foreach(_ver V1 V2)
+  string(TOLOWER ${_ver} _vlower)
+  foreach(_f ${_sql_files})
+    get_filename_component(_name ${_f} NAME_WE)
+    add_test(
+      NAME axiom_optimizer_sql_test_${_vlower}_${_name}
+      COMMAND axiom_optimizer_sql_test --gtest_filter=${_ver}/SqlTest_${_name}.*
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+  endforeach()
+endforeach()
 
 target_link_libraries(
   axiom_optimizer_sql_test
