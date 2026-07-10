@@ -17,8 +17,23 @@ add_executable(
   AlgebraicPropertiesTest.cpp
   JoinHypergraphTest.cpp
   RelationSetTest.cpp
+  TpchPlanTest.cpp
+  TpchResultTest.cpp
 )
 
-add_test(NAME axiom_optimizer_v2_test COMMAND axiom_optimizer_v2_test)
+add_test(
+  NAME axiom_optimizer_v2_test
+  COMMAND axiom_optimizer_v2_test
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/axiom/optimizer/tests
+)
 
-target_link_libraries(axiom_optimizer_v2_test axiom_optimizer_v2 GTest::gtest GTest::gtest_main)
+target_link_libraries(
+  axiom_optimizer_v2_test
+  axiom_optimizer_v2
+  axiom_optimizer_tests_query_test_base
+  axiom_optimizer_tests_hive_queries_test_base
+  axiom_optimizer_tests_plan_matcher
+  axiom_optimizer_tests_tpch_queries
+  velox_exec_test_lib
+  GTest::gtest
+)
