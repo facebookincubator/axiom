@@ -31,13 +31,10 @@ namespace {
 
 using namespace facebook::velox;
 
-// Process-wide setup/teardown for the SqlTest binary. SqlTest<Name>'s
-// per-suite SetUpTestCase shadows the inherited SqlTestBase::SetUpTestCase,
-// so the gtest-driven once-per-process initialization that a non-templated
-// SqlTestBase consumer would otherwise get is moved here. gtest's
-// Environment lifecycle fires once per RUN_ALL_TESTS invocation and only
-// when tests actually run, which makes it the right home for non-idempotent
-// global state (function registries, SharedArbitrator factory, etc.).
+// Runs process-global, non-idempotent initialization (function registries,
+// SharedArbitrator factory, etc.) exactly once per RUN_ALL_TESTS. The
+// per-suite SetUpTestCase below shadows SqlTestBase::SetUpTestCase, so this
+// global init cannot live there.
 class SqlTestEnvironment : public testing::Environment {
  public:
   void SetUp() override {
@@ -62,22 +59,23 @@ struct FileName {
   char value[N]{};
 };
 
-// Per-.sql-file gtest fixture, parameterized by the file's base name. Each
-// distinct base name instantiates a distinct fixture class, giving every
-// .sql file its own SetUpTestCase/TearDownTestCase scope and its own
-// suite-scoped state: a standalone MemoryManager (separate from the
-// per-test singleton that OperatorTestBase resets), a TestConnector,
-// reference tables installed once, and a DuckDbQueryRunner.
+// Per-.sql-file, per-optimizer gtest fixture. Each (file, optimizer) pair is a
+// distinct instantiation with its own SetUpTestCase/TearDownTestCase scope and
+// its own suite-scoped state: a standalone MemoryManager (separate from the
+// per-test singleton that OperatorTestBase resets), a TestConnector, reference
+// tables installed once, and a DuckDbQueryRunner. 'UseV2' selects the optimizer
+// the queries run through; results are compared against DuckDB either way.
 //
-// The standalone MemoryManager is the key that lets fixture state survive
-// the per-test resetMemory() call: pools created from it are not bound to
-// the singleton, so testingSetInstance does not invalidate them.
-template <FileName Name>
+// The standalone MemoryManager is the key that lets fixture state survive the
+// per-test resetMemory() call: pools created from it are not bound to the
+// singleton, so testingSetInstance does not invalidate them.
+template <FileName Name, bool UseV2>
 class SqlTest : public SqlTestBase {
  public:
   SqlTest(QueryEntry entry, bool syntacticJoinOrder)
       : entry_(std::move(entry)) {
     this->syntacticJoinOrder_ = syntacticJoinOrder;
+    this->useV2_ = UseV2;
   }
 
   // Uses SetUpTestCase / TearDownTestCase rather than the modern
@@ -111,12 +109,17 @@ class SqlTest : public SqlTestBase {
           *suiteConnector_,
           *suiteDuckDbRunner_,
           [](const logical_plan::LogicalPlanNodePtr& plan) {
-            return makeLocalRunner(
+            const auto buildRunner =
+                UseV2 ? makeLocalRunnerV2 : makeLocalRunner;
+            return buildRunner(
                 plan,
                 suiteExecutor_.get(),
                 /*asyncDataCache=*/nullptr,
                 suiteRootPool_,
-                suiteOptimizerPool_);
+                suiteOptimizerPool_,
+                /*numWorkers=*/4,
+                /*numDrivers=*/4,
+                /*syntacticJoinOrder=*/false);
           });
     }
   }
@@ -132,10 +135,7 @@ class SqlTest : public SqlTestBase {
     suiteManager_.reset();
   }
 
-  // Setup statements parsed once at registration time and consumed by
-  // SetUpTestCase. registerQueryFile() populates this when it parses the
-  // file to register individual tests. Public so the free-function
-  // registerQueryFile() can assign it.
+  // Setup statements consumed by SetUpTestCase, populated at registration time.
   static std::vector<std::string> setupStatements;
 
  protected:
@@ -149,8 +149,7 @@ class SqlTest : public SqlTestBase {
 
   void SetUp() override {
     SqlTestBase::SetUp();
-    // The base class skipped per-test connector creation because of the
-    // override above; point connector_ at the suite-scoped one.
+    // connector_ is suite-scoped, set once per suite rather than per test.
     connector_ = suiteConnector_;
   }
 
@@ -161,7 +160,13 @@ class SqlTest : public SqlTestBase {
   }
 
   void TestBody() override {
+    const std::string& expectedError =
+        UseV2 ? entry_.expectedErrorV2 : entry_.expectedErrorV1;
     try {
+      if (!expectedError.empty()) {
+        assertFailure(entry_.sql, expectedError);
+        return;
+      }
       switch (entry_.type) {
         case QueryEntry::Type::kResults:
           assertResults(entry_.sql, entry_.checkColumnNames, entry_.duckDbSql);
@@ -172,9 +177,6 @@ class SqlTest : public SqlTestBase {
           break;
         case QueryEntry::Type::kCount:
           assertResultCount(entry_.sql, entry_.expectedCount);
-          break;
-        case QueryEntry::Type::kError:
-          assertFailure(entry_.sql, entry_.expectedError);
           break;
       }
     } catch (const std::exception& e) {
@@ -193,31 +195,61 @@ class SqlTest : public SqlTestBase {
   QueryEntry entry_;
 };
 
-template <FileName Name>
-std::unique_ptr<memory::MemoryManager> SqlTest<Name>::suiteManager_;
+template <FileName Name, bool UseV2>
+std::unique_ptr<memory::MemoryManager> SqlTest<Name, UseV2>::suiteManager_;
 
-template <FileName Name>
-std::shared_ptr<folly::CPUThreadPoolExecutor> SqlTest<Name>::suiteExecutor_;
+template <FileName Name, bool UseV2>
+std::shared_ptr<folly::CPUThreadPoolExecutor>
+    SqlTest<Name, UseV2>::suiteExecutor_;
 
-template <FileName Name>
-std::shared_ptr<memory::MemoryPool> SqlTest<Name>::suiteRootPool_;
+template <FileName Name, bool UseV2>
+std::shared_ptr<memory::MemoryPool> SqlTest<Name, UseV2>::suiteRootPool_;
 
-template <FileName Name>
-std::shared_ptr<memory::MemoryPool> SqlTest<Name>::suiteOptimizerPool_;
+template <FileName Name, bool UseV2>
+std::shared_ptr<memory::MemoryPool> SqlTest<Name, UseV2>::suiteOptimizerPool_;
 
-template <FileName Name>
-std::shared_ptr<connector::TestConnector> SqlTest<Name>::suiteConnector_;
+template <FileName Name, bool UseV2>
+std::shared_ptr<connector::TestConnector> SqlTest<Name, UseV2>::suiteConnector_;
 
-template <FileName Name>
+template <FileName Name, bool UseV2>
 std::unique_ptr<exec::test::DuckDbQueryRunner>
-    SqlTest<Name>::suiteDuckDbRunner_;
+    SqlTest<Name, UseV2>::suiteDuckDbRunner_;
 
-template <FileName Name>
-std::vector<std::string> SqlTest<Name>::setupStatements;
+template <FileName Name, bool UseV2>
+std::vector<std::string> SqlTest<Name, UseV2>::setupStatements;
 
-// Registers all queries from a .sql file as individual gtest tests under a
-// per-file fixture class 'SqlTest<Name>'. Each test instance picks its
-// QueryEntry comes from the closure captured at RegisterTest time.
+// Registers every query in 'file' as an individual gtest test under the suite
+// 'V1/SqlTest_<name>' or 'V2/SqlTest_<name>' (per UseV2). Each query runs under
+// both cost-based (default) and syntactic join ordering.
+template <FileName Name, bool UseV2>
+void registerVariant(const SqlFile& file, const std::string& path) {
+  SqlTest<Name, UseV2>::setupStatements = file.setupStatements;
+
+  const auto suiteName =
+      fmt::format("{}/SqlTest_{}", UseV2 ? "V2" : "V1", Name.value);
+
+  for (const auto& entry : file.entries) {
+    for (const bool syntacticJoinOrder : {false, true}) {
+      auto testName = syntacticJoinOrder
+          ? fmt::format("l{}_syntactic", entry.lineNumber)
+          : fmt::format("l{}", entry.lineNumber);
+      testing::RegisterTest(
+          suiteName.c_str(),
+          testName.c_str(),
+          /*type_param=*/nullptr,
+          /*value_param=*/nullptr,
+          path.c_str(),
+          entry.lineNumber,
+          [capturedEntry = entry,
+           syntacticJoinOrder]() -> SqlTest<Name, UseV2>* {
+            return new SqlTest<Name, UseV2>(capturedEntry, syntacticJoinOrder);
+          });
+    }
+  }
+}
+
+// Parses a .sql file and registers its queries under both the v1 and v2
+// suites.
 template <FileName Name>
 void registerQueryFile() {
   const std::string baseName = Name.value;
@@ -229,31 +261,8 @@ void registerQueryFile() {
   auto baseDir = std::filesystem::path(path).parent_path().string();
   auto file = SqlFile::parse(content, baseDir);
 
-  // Stash the setup statements where SetUpTestCase can find them.
-  SqlTest<Name>::setupStatements = std::move(file.setupStatements);
-
-  auto suiteName = fmt::format("SqlTest_{}", baseName);
-
-  // Run every query both with cost-based join ordering (the default) and with
-  // syntactic join ordering, so the optimizer is exercised under both
-  // strategies and must produce the same correct results.
-  for (const auto& entry : file.entries) {
-    for (const bool syntacticJoinOrder : {false, true}) {
-      auto testName = syntacticJoinOrder
-          ? fmt::format("{}_l{}_syntactic", baseName, entry.lineNumber)
-          : fmt::format("{}_l{}", baseName, entry.lineNumber);
-      testing::RegisterTest(
-          suiteName.c_str(),
-          testName.c_str(),
-          /*type_param=*/nullptr,
-          /*value_param=*/nullptr,
-          path.c_str(),
-          entry.lineNumber,
-          [capturedEntry = entry, syntacticJoinOrder]() -> SqlTest<Name>* {
-            return new SqlTest<Name>(capturedEntry, syntacticJoinOrder);
-          });
-    }
-  }
+  registerVariant<Name, false>(file, path);
+  registerVariant<Name, true>(file, path);
 }
 
 } // namespace
@@ -267,22 +276,22 @@ int main(int argc, char** argv) {
 
   testing::AddGlobalTestEnvironment(new SqlTestEnvironment);
 
-  registerQueryFile<"basic">();
-  registerQueryFile<"cte">();
-  registerQueryFile<"join">();
-  registerQueryFile<"subquery">();
-  registerQueryFile<"window">();
-  registerQueryFile<"set">();
-  registerQueryFile<"limit">();
   registerQueryFile<"aggregation">();
-  registerQueryFile<"subfield">();
-  registerQueryFile<"nullif">();
+  registerQueryFile<"basic">();
   registerQueryFile<"coercion">();
+  registerQueryFile<"cte">();
   registerQueryFile<"distinctAggregation">();
+  registerQueryFile<"groupingsets">();
+  registerQueryFile<"join">();
+  registerQueryFile<"limit">();
+  registerQueryFile<"nondeterministic">();
+  registerQueryFile<"nullif">();
+  registerQueryFile<"set">();
+  registerQueryFile<"subfield">();
+  registerQueryFile<"subquery">();
   registerQueryFile<"unionAll">();
   registerQueryFile<"unionAllFlatten">();
-  registerQueryFile<"groupingsets">();
-  registerQueryFile<"nondeterministic">();
+  registerQueryFile<"window">();
 
   return RUN_ALL_TESTS();
 }

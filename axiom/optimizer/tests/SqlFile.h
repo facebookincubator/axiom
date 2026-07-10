@@ -29,7 +29,7 @@ namespace facebook::axiom::optimizer::test {
 /// Represents a single SQL query parsed from a test file, along with its
 /// assertion type and any annotation parameters.
 struct QueryEntry {
-  enum class Type { kResults, kOrdered, kCount, kError };
+  enum class Type { kResults, kOrdered, kCount };
 
   AXIOM_DECLARE_EMBEDDED_ENUM_NAME(Type)
 
@@ -37,9 +37,24 @@ struct QueryEntry {
   Type type{Type::kResults};
   std::optional<std::string> duckDbSql;
   uint64_t expectedCount{0};
+  /// Set by `-- error: msg`: both optimizers expect this error. Mutually
+  /// exclusive with `-- error_v1:`/`-- error_v2:`; also mirrored into
+  /// `expectedErrorV1` and `expectedErrorV2`.
   std::string expectedError;
+  /// Per-optimizer expected error, set by `-- error_v1:` / `-- error_v2:` (or
+  /// by `-- error:`). An empty field means that optimizer is expected to
+  /// succeed, and its results are compared against DuckDB.
+  std::string expectedErrorV1;
+  std::string expectedErrorV2;
   bool checkColumnNames{false};
   int32_t lineNumber{0};
+
+  /// True if the query expects an error in both optimizers, so no run produces
+  /// a result set. A query that fails in only one optimizer still yields
+  /// results in the other.
+  bool expectError() const {
+    return !expectedErrorV1.empty() && !expectedErrorV2.empty();
+  }
 };
 
 /// Represents the contents of a parsed .sql test file: setup statements
@@ -77,7 +92,10 @@ struct SqlFile {
   /// before each query may carry annotations:
   ///   -- ordered         -> assertOrderedResults
   ///   -- count N         -> assertResultCount(sql, N)
-  ///   -- error: message  -> assertFailure(sql, "message")
+  ///   -- error: message     -> both optimizers expect this error
+  ///   -- error_v1: message  -> v1 expects this error (v2 unaffected)
+  ///   -- error_v2: message  -> v2 expects this error (v1 unaffected)
+  /// `-- error:` cannot be combined with `-- error_v1:`/`-- error_v2:`.
   ///   -- duckdb: sql     -> use alternate SQL for DuckDB comparison
   ///   -- columns         -> verify column names match DuckDB
   ///   -- disabled        -> skip this query

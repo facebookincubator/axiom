@@ -97,3 +97,11 @@ WITH
 SELECT * FROM v WHERE c = 1
 UNION ALL
 SELECT * FROM u
+----
+-- A window function with a compound partition key (a + b), as a direct UNION
+-- ALL leg, projects the correct columns.
+SELECT * FROM (
+  SELECT a, b, "row_number"() OVER (PARTITION BY a + b) AS r FROM t
+)
+UNION ALL
+SELECT a, b, a AS r FROM t WHERE a = 999
