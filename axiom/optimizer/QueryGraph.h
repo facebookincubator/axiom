@@ -393,6 +393,21 @@ class Call : public Expr {
     bool operator()(const Call* call, const KeyView& key) const;
   };
 
+  /// Returns 'base' OR'd with the `FunctionSet` of each argument. Used
+  /// when constructing a new `Call` to propagate flags
+  /// (kNonDeterministic, kAggregate, kWindow, etc.) that downstream
+  /// passes consult via `Expr::containsFunction(...)`. Pair with
+  /// `functionBits(name, specialForm)` to seed `base` with the
+  /// function's own bits.
+  static FunctionSet unionArgFunctions(
+      FunctionSet base,
+      const ExprVector& arguments) {
+    for (const auto* argument : arguments) {
+      base = base | argument->functions();
+    }
+    return base;
+  }
+
  private:
   // Name of function.
   Name const name_;
