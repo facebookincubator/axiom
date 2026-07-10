@@ -1376,6 +1376,28 @@ struct Frame {
   ExprCP endValue;
 
   bool operator==(const Frame& other) const = default;
+
+  /// ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING — every
+  /// row sees the whole partition (e.g. a partition-wide aggregate).
+  static Frame wholePartition() {
+    return Frame{
+        logical_plan::WindowExpr::WindowType::kRows,
+        logical_plan::WindowExpr::BoundType::kUnboundedPreceding,
+        /*startValue=*/nullptr,
+        logical_plan::WindowExpr::BoundType::kUnboundedFollowing,
+        /*endValue=*/nullptr};
+  }
+
+  /// ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW — the default
+  /// running frame (e.g. for row_number).
+  static Frame toCurrentRow() {
+    return Frame{
+        logical_plan::WindowExpr::WindowType::kRows,
+        logical_plan::WindowExpr::BoundType::kUnboundedPreceding,
+        /*startValue=*/nullptr,
+        logical_plan::WindowExpr::BoundType::kCurrentRow,
+        /*endValue=*/nullptr};
+  }
 };
 
 /// Window function call. Stores partition keys, order keys, frame, and

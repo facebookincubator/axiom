@@ -83,6 +83,15 @@ bool FunctionRegistry::registerCount(std::string_view name) {
   return true;
 }
 
+bool FunctionRegistry::registerBoolOr(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (boolOr_.has_value() && boolOr_.value() != name) {
+    return false;
+  }
+  boolOr_ = name;
+  return true;
+}
+
 bool FunctionRegistry::registerStatsAggregates(StatsAggregates aggregates) {
   VELOX_USER_CHECK(!aggregates.min.empty());
   VELOX_USER_CHECK(!aggregates.max.empty());
@@ -391,6 +400,7 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
   registry->registerSubscript(fullName("subscript"));
   registry->registerArbitrary(fullName("arbitrary"));
   registry->registerCount(fullName("count"));
+  registry->registerBoolOr(fullName("bool_or"));
   registry->registerLessThan(fullName("lt"));
   registry->registerLessThanOrEqual(fullName("lte"));
   registry->registerGreaterThan(fullName("gt"));

@@ -319,6 +319,19 @@ class FunctionRegistry {
     return count_;
   }
 
+  /// Registers function 'name' that has semantics of Presto's 'bool_or'
+  /// aggregate function, i.e. returns true if any input is true, false
+  /// if all inputs are false, and NULL only if there are no rows or
+  /// all inputs are NULL.
+  /// @return true if successfully registered, false if a different
+  /// 'bool_or' function is already registered.
+  bool registerBoolOr(std::string_view name);
+
+  /// Returns the name of the 'bool_or' aggregate function.
+  const std::optional<std::string>& boolOr() const {
+    return boolOr_;
+  }
+
   /// Registers aggregate function names used for computing column statistics
   /// during table writes. 'count' is omitted since it has its own slot.
   /// @return true if successfully registered, false if stats aggregates are
@@ -526,6 +539,7 @@ class FunctionRegistry {
   // Aggregate functions.
   std::optional<std::string> arbitrary_;
   std::optional<std::string> count_;
+  std::optional<std::string> boolOr_;
   // Aggregate function names for computing column statistics during writes.
   std::optional<StatsAggregates> statsAggregates_;
 
