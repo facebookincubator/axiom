@@ -12,20 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+if(AXIOM_BUILD_TESTING)
+  add_subdirectory(tests)
+endif()
+
 add_library(
   axiom_optimizer_v2
   AggregateRecovery.cpp
   Builder.cpp
+  CostModel.cpp
   DecorrelatePass.cpp
+  EstimateLeafStatsPass.cpp
+  EstimateProvider.cpp
   ExprEmitter.cpp
   ExprFactory.cpp
   ExprSimplifier.cpp
   JoinCondition.cpp
+  JoinFanout.cpp
+  JoinHypergraph.cpp
   LimitAndOrderPass.cpp
+  MemoOp.cpp
   Node.cpp
   NodePrinter.cpp
   PhysicalProperties.cpp
   PushdownAndPrunePass.cpp
+  ScanHandle.cpp
   TranslatePass.cpp
 )
 

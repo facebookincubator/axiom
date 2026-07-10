@@ -45,6 +45,16 @@ inline std::optional<float> add(
   return std::nullopt;
 }
 
+/// Subtraction.
+inline std::optional<float> subtract(
+    std::optional<float> a,
+    std::optional<float> b) {
+  if (a.has_value() && b.has_value()) {
+    return *a - *b;
+  }
+  return std::nullopt;
+}
+
 /// Division. nullopt if either operand is unknown or the divisor is 0.
 inline std::optional<float> divide(
     std::optional<float> a,
