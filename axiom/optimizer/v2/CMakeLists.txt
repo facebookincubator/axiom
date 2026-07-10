@@ -18,9 +18,11 @@ add_library(
   ExprEmitter.cpp
   ExprFactory.cpp
   ExprSimplifier.cpp
+  JoinCondition.cpp
   Node.cpp
   NodePrinter.cpp
   PhysicalProperties.cpp
+  TranslatePass.cpp
 )
 
 target_link_libraries(
@@ -31,6 +33,7 @@ target_link_libraries(
   axiom_optimizer
   velox_common_base
   velox_core
+  velox_exec
   velox_expression
   velox_vector
 )
