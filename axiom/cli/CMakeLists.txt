@@ -35,6 +35,7 @@ target_link_libraries(
   axiom_runner_local_runner
   axiom_optimizer_multifragment_plan
   axiom_optimizer
+  axiom_optimizer_v2
   axiom_graphviz_printers
   axiom_hive_connector_metadata
   axiom_tpch_connector_metadata
