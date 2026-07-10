@@ -12,7 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(axiom_optimizer_v2 Builder.cpp Node.cpp NodePrinter.cpp PhysicalProperties.cpp)
+add_library(
+  axiom_optimizer_v2
+  Builder.cpp
+  ExprEmitter.cpp
+  ExprFactory.cpp
+  ExprSimplifier.cpp
+  Node.cpp
+  NodePrinter.cpp
+  PhysicalProperties.cpp
+)
 
 target_link_libraries(
   axiom_optimizer_v2
@@ -22,4 +31,6 @@ target_link_libraries(
   axiom_optimizer
   velox_common_base
   velox_core
+  velox_expression
+  velox_vector
 )
