@@ -192,6 +192,7 @@ target_link_libraries(
   axiom_optimizer_tests_sql_test_base
   axiom_common
   axiom_optimizer
+  axiom_optimizer_v2
   axiom_runner_local_runner
   axiom_sql_presto_parser
   axiom_test_connector
@@ -206,8 +207,14 @@ target_link_libraries(
 add_executable(axiom_optimizer_sql_test SqlTest.cpp)
 
 add_test(
-  NAME axiom_optimizer_sql_test
-  COMMAND axiom_optimizer_sql_test
+  NAME axiom_optimizer_sql_test_v1
+  COMMAND axiom_optimizer_sql_test --gtest_filter=V1/*
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_test(
+  NAME axiom_optimizer_sql_test_v2
+  COMMAND axiom_optimizer_sql_test --gtest_filter=V2/*
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 

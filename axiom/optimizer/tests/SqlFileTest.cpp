@@ -92,8 +92,46 @@ TEST_F(SqlFileTest, error) {
       "-- error: Column not found\n"
       "SELECT missing FROM t");
   ASSERT_THAT(entries, testing::SizeIs(1));
-  EXPECT_EQ(entries[0].type, QueryEntry::Type::kError);
   EXPECT_EQ(entries[0].expectedError, "Column not found");
+  // `-- error:` sets both per-optimizer fields.
+  EXPECT_EQ(entries[0].expectedErrorV1, "Column not found");
+  EXPECT_EQ(entries[0].expectedErrorV2, "Column not found");
+}
+
+TEST_F(SqlFileTest, errorPerSuite) {
+  auto entries = parseQueries(
+      "-- error_v1: v1 message\n"
+      "-- error_v2: v2 message\n"
+      "SELECT bad FROM t");
+  ASSERT_THAT(entries, testing::SizeIs(1));
+  EXPECT_EQ(entries[0].type, QueryEntry::Type::kResults);
+  EXPECT_EQ(entries[0].expectedError, "");
+  EXPECT_EQ(entries[0].expectedErrorV1, "v1 message");
+  EXPECT_EQ(entries[0].expectedErrorV2, "v2 message");
+}
+
+TEST_F(SqlFileTest, errorV1Only) {
+  auto entries = parseQueries(
+      "-- error_v1: v1 message\n"
+      "SELECT bad FROM t");
+  ASSERT_THAT(entries, testing::SizeIs(1));
+  EXPECT_EQ(entries[0].expectedErrorV1, "v1 message");
+  EXPECT_EQ(entries[0].expectedErrorV2, "");
+}
+
+TEST_F(SqlFileTest, errorAndPerSuiteAreExclusive) {
+  VELOX_ASSERT_THROW(
+      parseQueries(
+          "-- error: both\n"
+          "-- error_v1: v1 message\n"
+          "SELECT bad FROM t"),
+      "cannot be combined");
+  VELOX_ASSERT_THROW(
+      parseQueries(
+          "-- error_v2: v2 message\n"
+          "-- error: both\n"
+          "SELECT bad FROM t"),
+      "cannot be combined");
 }
 
 TEST_F(SqlFileTest, duckdb) {

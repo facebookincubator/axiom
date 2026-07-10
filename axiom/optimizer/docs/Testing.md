@@ -234,7 +234,7 @@ How to read:
 
 ### SqlTest: Verifying Correctness
 
-SqlTest runs SQL queries through the full Axiom pipeline (parse → optimize → execute) and compares results against DuckDB.
+SqlTest runs SQL queries through the full Axiom pipeline (parse → optimize → execute) and compares results against DuckDB. Each query runs under both the v1 and v2 optimizers, so one `.sql` file exercises both.
 
 Tests are written as plain `.sql` files. Queries are separated by `----`. Comment lines (`-- ...`) before the SQL can contain annotations that control how the query is verified. Unrecognized comments are ignored. Comments after the SQL starts are treated as part of the SQL body.
 
@@ -245,12 +245,16 @@ Tests are written as plain `.sql` files. Queries are separated by `----`. Commen
 | *(none)* | Default: run query in Axiom and DuckDB, compare results ignoring row order and output column names. |
 | `-- ordered` | Compare results preserving row order. Use for queries with ORDER BY. |
 | `-- count N` | Only check that the result has exactly N rows (no data comparison). Useful for verifying empty results (`-- count 0`) or queries with non-deterministic output (e.g., `random()`, `uuid()`, `LIMIT` without `ORDER BY`). |
-| `-- error: message` | Expect the query to fail with an error containing `message`. |
+| `-- error: message` | Expect the query to fail under both optimizers with an error containing `message`. Shorthand for `error_v1` + `error_v2`; cannot be combined with either. |
+| `-- error_v1: message` | Expect the query to fail under the v1 optimizer with an error containing `message`. v2 is verified normally unless it also carries `error_v2`. |
+| `-- error_v2: message` | Expect the query to fail under the v2 optimizer with an error containing `message`. v1 is verified normally unless it also carries `error_v1`. |
 | `-- duckdb: sql` | Use a different SQL for the DuckDB comparison (when Presto and DuckDB syntax differs). |
 | `-- columns` | Additionally verify that column names match between Axiom and DuckDB. |
 | `-- disabled` | Skip this query entirely. For use during local development only — do not commit disabled queries. |
 
 Annotations can be combined. For example, `-- ordered` and `-- columns` can be used together.
+
+Use `error_v1`/`error_v2` when the two optimizers legitimately diverge — typically a v1 limitation that v2 fixes (or vice versa). The optimizer without an error annotation runs and is verified normally, so the same query can assert a v1 error and check the v2 result.
 
 **Example:**
 
@@ -327,10 +331,13 @@ INSERT INTO u VALUES (1), (2), (3)
 SELECT * FROM t JOIN u ON t.a = u.a
 ```
 
-Each query in a `.sql` file becomes a separate gtest (e.g., `SqlTest.basic_l22` for the query at line 22 of `basic.sql`). Run them with:
+Each query becomes a separate gtest per optimizer, in the suites `V1/SqlTest_<file>` and `V2/SqlTest_<file>` (e.g., `V1/SqlTest_basic.l22` and `V2/SqlTest_basic.l22` for the query at line 22 of `basic.sql`); each also runs under cost-based and syntactic join ordering. Run them with:
 ```bash
 buck test fbcode//axiom/optimizer/tests:sql
-buck test fbcode//axiom/optimizer/tests:sql -- basic_l28
+# only the v2 optimizer:
+buck test fbcode//axiom/optimizer/tests:sql -- V2/
+# one file:
+buck test fbcode//axiom/optimizer/tests:sql -- basic
 ```
 
 To add a new correctness test, append a query to the appropriate `.sql` file in `axiom/optimizer/tests/sql/`. No C++ changes needed. A few of the files:

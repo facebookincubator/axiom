@@ -81,10 +81,7 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
   ///     RowVector (one TestConnector split) and runs the same statement
   ///     in DuckDB.
   /// Each INSERT to the same table produces a separate split, mirroring
-  /// the multi-RowVector createTable shape.
-  void runSetupStatement(const std::string& sql);
-
-  /// Static variant of runSetupStatement. The caller supplies the
+  /// the multi-RowVector createTable shape. The caller supplies the
   /// connector, the DuckDB runner, and a factory that builds a LocalRunner
   /// for an INSERT / CTAS plan. Suite-scoped fixtures use this in
   /// SetUpTestSuite to install reference tables once into a standalone
@@ -101,6 +98,18 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
   /// MemoryManager / executor / AsyncDataCache into a runnerFactory for
   /// runSetupStatement.
   static std::shared_ptr<runner::LocalRunner> makeLocalRunner(
+      const logical_plan::LogicalPlanNodePtr& logicalPlan,
+      folly::Executor* executor,
+      velox::cache::AsyncDataCache* asyncDataCache,
+      const std::shared_ptr<velox::memory::MemoryPool>& rootPool,
+      const std::shared_ptr<velox::memory::MemoryPool>& optimizerPool,
+      int32_t numWorkers = 4,
+      int32_t numDrivers = 4,
+      bool syntacticJoinOrder = false);
+
+  /// Like makeLocalRunner, but optimizes 'logicalPlan' through the v2
+  /// optimizer pipeline (axiom/optimizer/v2) instead of v1.
+  static std::shared_ptr<runner::LocalRunner> makeLocalRunnerV2(
       const logical_plan::LogicalPlanNodePtr& logicalPlan,
       folly::Executor* executor,
       velox::cache::AsyncDataCache* asyncDataCache,
@@ -143,6 +152,10 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
   // placing tables in the order they appear in the query.
   bool syntacticJoinOrder_{false};
 
+  // When true, makeRunner routes queries through the v2 optimizer
+  // (axiom/optimizer/v2) instead of v1.
+  bool useV2_{false};
+
   // Override to false in subclasses that manage the TestConnector lifecycle
   // at suite scope (i.e., create and register the connector once per
   // fixture class in SetUpTestSuite, not once per test in SetUp).
@@ -172,14 +185,17 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
   // returns a LocalRunner to iterate over.
   std::shared_ptr<runner::LocalRunner> makeRunner(std::string_view sql);
 
-  // Builds a LocalRunner directly from a logical plan. Used by
-  // runSetupStatement to execute INSERT / CREATE TABLE AS SELECT plans
-  // without re-parsing.
+  // Builds a LocalRunner that runs 'logicalPlan' end-to-end (optimize +
+  // execute), routing through the v2 optimizer when useV2_ is set and v1
+  // otherwise.
   std::shared_ptr<runner::LocalRunner> makeRunner(
       const logical_plan::LogicalPlanNodePtr& logicalPlan);
 
+  // Memory pool for optimizer allocations.
   std::shared_ptr<velox::memory::MemoryPool> optimizerPool_;
+  // Executor for query execution.
   std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
+
   QueryRuntimeStats runtimeStats_;
 };
 

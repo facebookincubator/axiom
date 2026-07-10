@@ -49,6 +49,8 @@ const char* SpecialFormCallNames::kSwitch = "__switch";
 const char* SpecialFormCallNames::kIn = "__in";
 // static
 const char* SpecialFormCallNames::kNullIf = "__nullif";
+// static
+const char* SpecialFormCallNames::kDereference = "__dereference";
 
 // static
 ColumnCP Column::createForSymbol(Name symbol, const Value& value) {

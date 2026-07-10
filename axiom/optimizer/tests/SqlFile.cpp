@@ -29,7 +29,6 @@ const auto& typeNames() {
       {QueryEntry::Type::kResults, "results"},
       {QueryEntry::Type::kOrdered, "ordered"},
       {QueryEntry::Type::kCount, "count"},
-      {QueryEntry::Type::kError, "error"},
   };
   return kNames;
 }
@@ -121,11 +120,15 @@ std::vector<QueryEntry> parseQueries(
     }
 
     if (!sqlLines.empty() && !disabled) {
+      // `-- columns` checks output column names, so it needs a result set from
+      // at least one optimizer: reject it only for a count query or one that
+      // fails in both v1 and v2.
       VELOX_CHECK(
           !current.checkColumnNames ||
-              (current.type == QueryEntry::Type::kResults ||
-               current.type == QueryEntry::Type::kOrdered),
-          "'-- columns' can only be used with 'results' or 'ordered' queries at line {}",
+              ((current.type == QueryEntry::Type::kResults ||
+                current.type == QueryEntry::Type::kOrdered) &&
+               !current.expectError()),
+          "'-- columns' can only be used with 'results' or 'ordered' queries that succeed in at least one optimizer at line {}",
           sqlStartLine);
 
       current.sql = std::move(sqlLines);
@@ -168,8 +171,33 @@ std::vector<QueryEntry> parseQueries(
         current.type = QueryEntry::Type::kCount;
         current.expectedCount = std::stoull(annotation.substr(6));
       } else if (annotation.substr(0, 7) == "error: ") {
-        current.type = QueryEntry::Type::kError;
+        VELOX_USER_CHECK(
+            current.expectedErrorV1.empty() && current.expectedErrorV2.empty(),
+            "-- error: cannot be combined with -- error_v1:/-- error_v2: (line {})",
+            lineNumber);
         current.expectedError = annotation.substr(7);
+        current.expectedErrorV1 = current.expectedError;
+        current.expectedErrorV2 = current.expectedError;
+      } else if (annotation.substr(0, 10) == "error_v1: ") {
+        VELOX_USER_CHECK(
+            current.expectedError.empty(),
+            "-- error_v1: cannot be combined with -- error: (line {})",
+            lineNumber);
+        VELOX_USER_CHECK(
+            current.expectedErrorV1.empty(),
+            "duplicate -- error_v1: (line {})",
+            lineNumber);
+        current.expectedErrorV1 = annotation.substr(10);
+      } else if (annotation.substr(0, 10) == "error_v2: ") {
+        VELOX_USER_CHECK(
+            current.expectedError.empty(),
+            "-- error_v2: cannot be combined with -- error: (line {})",
+            lineNumber);
+        VELOX_USER_CHECK(
+            current.expectedErrorV2.empty(),
+            "duplicate -- error_v2: (line {})",
+            lineNumber);
+        current.expectedErrorV2 = annotation.substr(10);
       } else if (annotation.substr(0, 8) == "duckdb: ") {
         current.duckDbSql = annotation.substr(8);
       } else if (annotation == "columns") {

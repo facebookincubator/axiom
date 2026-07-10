@@ -21,6 +21,7 @@
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/VeloxHistory.h"
+#include "axiom/optimizer/v2/Optimize.h"
 #include "axiom/runner/LocalRunner.h"
 #include "axiom/sql/presto/PrestoParser.h"
 #include "axiom/sql/presto/SqlStatement.h"
@@ -90,7 +91,13 @@ void SqlTestBase::createTable(
   duckDbRunner().createTable(name, data);
 }
 
-std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunner(
+namespace {
+// Shared setup for makeLocalRunner / makeLocalRunnerV2: builds the query and
+// optimizer contexts, sessions, and plan options, invokes 'plan' to optimize
+// through the chosen optimizer, and wraps the result in a LocalRunner. 'plan'
+// receives the prepared context and returns the executable plan.
+template <typename PlanFn>
+std::shared_ptr<runner::LocalRunner> makeLocalRunnerImpl(
     const logical_plan::LogicalPlanNodePtr& logicalPlan,
     folly::Executor* executor,
     cache::AsyncDataCache* asyncDataCache,
@@ -98,7 +105,8 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunner(
     const std::shared_ptr<memory::MemoryPool>& optimizerPool,
     int32_t numWorkers,
     int32_t numDrivers,
-    bool syntacticJoinOrder) {
+    bool syntacticJoinOrder,
+    PlanFn plan) {
   static std::atomic<int32_t> queryCounter{0};
   auto queryId = fmt::format("sql_test_{}", ++queryCounter);
   auto queryCtx = core::QueryCtx::create(
@@ -121,7 +129,6 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunner(
 
   connector::SchemaResolver schemaResolver{
       connector::ConnectorMetadataRegistry::global()};
-  VeloxHistory history;
 
   MultiFragmentPlan::Options options;
   options.numWorkers = numWorkers;
@@ -135,18 +142,14 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunner(
   auto runnerSession = std::make_shared<runner::RunnerSession>(
       queryId, "test", runner::Properties{}, connector::ConnectorProperties{});
 
-  Optimization optimization(
-      optimizerSession,
-      runnerSession,
+  auto planAndStats = plan(
       *logicalPlan,
       schemaResolver,
-      history,
-      queryCtx,
       evaluator,
-      options);
-
-  auto best = optimization.bestPlan();
-  auto planAndStats = optimization.toVeloxPlan(best->op);
+      options,
+      optimizerSession,
+      runnerSession,
+      queryCtx);
 
   static QueryRuntimeStats noopStats;
   return std::make_shared<runner::LocalRunner>(
@@ -158,6 +161,77 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunner(
       optimizerPool,
       /*baseSpillDirectory=*/"",
       noopStats);
+}
+} // namespace
+
+std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunner(
+    const logical_plan::LogicalPlanNodePtr& logicalPlan,
+    folly::Executor* executor,
+    cache::AsyncDataCache* asyncDataCache,
+    const std::shared_ptr<memory::MemoryPool>& rootPool,
+    const std::shared_ptr<memory::MemoryPool>& optimizerPool,
+    int32_t numWorkers,
+    int32_t numDrivers,
+    bool syntacticJoinOrder) {
+  return makeLocalRunnerImpl(
+      logicalPlan,
+      executor,
+      asyncDataCache,
+      rootPool,
+      optimizerPool,
+      numWorkers,
+      numDrivers,
+      syntacticJoinOrder,
+      [](const logical_plan::LogicalPlanNode& logicalPlan,
+         const connector::SchemaResolver& schemaResolver,
+         velox::core::ExpressionEvaluator& evaluator,
+         const MultiFragmentPlan::Options& options,
+         const std::shared_ptr<OptimizerSession>& optimizerSession,
+         const std::shared_ptr<runner::RunnerSession>& runnerSession,
+         const std::shared_ptr<core::QueryCtx>& queryCtx) {
+        VeloxHistory history;
+        Optimization optimization(
+            optimizerSession,
+            runnerSession,
+            logicalPlan,
+            schemaResolver,
+            history,
+            queryCtx,
+            evaluator,
+            options);
+        auto best = optimization.bestPlan();
+        return optimization.toVeloxPlan(best->op);
+      });
+}
+
+std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunnerV2(
+    const logical_plan::LogicalPlanNodePtr& logicalPlan,
+    folly::Executor* executor,
+    cache::AsyncDataCache* asyncDataCache,
+    const std::shared_ptr<memory::MemoryPool>& rootPool,
+    const std::shared_ptr<memory::MemoryPool>& optimizerPool,
+    int32_t numWorkers,
+    int32_t numDrivers,
+    bool syntacticJoinOrder) {
+  return makeLocalRunnerImpl(
+      logicalPlan,
+      executor,
+      asyncDataCache,
+      rootPool,
+      optimizerPool,
+      numWorkers,
+      numDrivers,
+      syntacticJoinOrder,
+      [](const logical_plan::LogicalPlanNode& logicalPlan,
+         const connector::SchemaResolver& schemaResolver,
+         velox::core::ExpressionEvaluator& evaluator,
+         const MultiFragmentPlan::Options& options,
+         const std::shared_ptr<OptimizerSession>& optimizerSession,
+         const std::shared_ptr<runner::RunnerSession>& /*runnerSession*/,
+         const std::shared_ptr<core::QueryCtx>& /*queryCtx*/) {
+        return v2::optimize(
+            logicalPlan, schemaResolver, *optimizerSession, evaluator, options);
+      });
 }
 
 void SqlTestBase::runSetupStatement(
@@ -176,7 +250,7 @@ void SqlTestBase::runSetupStatement(
           /*user=*/"test",
           ::axiom::sql::presto::ParserOptions{},
           connector::ConnectorProperties{}));
-  auto stmt = parser.parse(sql, /*enableTracing=*/true);
+  auto stmt = parser.parse(sql);
 
   if (stmt->isCreateTable()) {
     const auto& create =
@@ -204,16 +278,6 @@ void SqlTestBase::runSetupStatement(
   runner->drain([](RowVectorPtr) {});
 }
 
-void SqlTestBase::runSetupStatement(const std::string& sql) {
-  runSetupStatement(
-      sql,
-      *connector_,
-      duckDbRunner(),
-      [this](const logical_plan::LogicalPlanNodePtr& plan) {
-        return makeRunner(plan);
-      });
-}
-
 std::shared_ptr<runner::LocalRunner> SqlTestBase::makeRunner(
     std::string_view sql) {
   // Parse SQL to logical plan.
@@ -236,7 +300,8 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeRunner(
 
 std::shared_ptr<runner::LocalRunner> SqlTestBase::makeRunner(
     const logical_plan::LogicalPlanNodePtr& logicalPlan) {
-  return makeLocalRunner(
+  const auto buildRunner = useV2_ ? makeLocalRunnerV2 : makeLocalRunner;
+  return buildRunner(
       logicalPlan,
       executor_.get(),
       cache::AsyncDataCache::getInstance(),
