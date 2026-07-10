@@ -161,6 +161,14 @@ class Column : public Expr {
       ColumnCP topColumn = nullptr,
       PathCP path = nullptr);
 
+  /// Synthesizes a `Column`. The column's `name` is `prefix` with a
+  /// uniqueness suffix appended by `QueryGraphContext::newName`. The
+  /// resulting name appears in plan output (EXPLAIN, `NodePrinter`),
+  /// so pick a descriptive prefix (`"__rownum"`, `"mark"`, etc.).
+  /// `alias` is not set; sites that produce user-visible LP output
+  /// names pass an `alias` to the full constructor instead.
+  static ColumnCP create(std::string_view prefix, const Value& value);
+
   Name name() const {
     return name_;
   }
@@ -1338,6 +1346,8 @@ struct Frame {
   /// Offset expression for the end bound, or nullptr for UNBOUNDED or
   /// CURRENT ROW.
   ExprCP endValue;
+
+  bool operator==(const Frame& other) const = default;
 };
 
 /// Window function call. Stores partition keys, order keys, frame, and

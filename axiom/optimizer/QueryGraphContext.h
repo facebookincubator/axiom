@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <fmt/format.h>
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 #include "axiom/common/Enums.h"
@@ -459,6 +460,18 @@ class QueryGraphContext {
     return allVariants_.back().get();
   }
 
+  /// Returns a globally unique interned name `{prefix}{N}` within this query
+  /// context. Example: `newName("a_")` returns `"a_47"`.
+  Name newName(std::string_view prefix) {
+    return toName(fmt::format("{}{}", prefix, ++nameCounter_));
+  }
+
+  /// True when the v2 optimizer is driving this query. v2 runs without an
+  /// `Optimization` (a v1 construct), so a null `optimization()` marks v2.
+  bool isV2() const {
+    return optimization_ == nullptr;
+  }
+
  private:
   void populateFunctionNames();
 
@@ -488,6 +501,8 @@ class QueryGraphContext {
   FunctionNames functionNames_;
 
   std::vector<std::unique_ptr<velox::Variant>> allVariants_;
+
+  uint32_t nameCounter_{0};
 };
 
 /// Returns a mutable reference to the calling thread's QueryGraphContext.
@@ -555,5 +570,8 @@ using ExprVector = QGVector<ExprCP>;
 class Column;
 using ColumnCP = const Column*;
 using ColumnVector = QGVector<ColumnCP>;
+
+class Literal;
+using LiteralCP = const Literal*;
 
 } // namespace facebook::axiom::optimizer
