@@ -103,6 +103,14 @@ std::vector<ConfigProperty> buildProperties(
           "worker's memory. \"0B\" disables broadcast.",
       },
       {
+          std::string(OptimizerOptions::kDphypEnumerationBudget),
+          ConfigPropertyType::kInteger,
+          std::to_string(OptimizerOptions::kDphypEnumerationBudgetDefault),
+          "Max connected-subgraph/complement pairs the DPhyp join enumerator "
+          "evaluates before falling back to greedy ordering. Bounds planning "
+          "time on dense join graphs. 0 means unlimited.",
+      },
+      {
           std::string(OptimizerOptions::kTraceFlags),
           ConfigPropertyType::kInteger,
           std::to_string(OptimizerOptions::kTraceFlagsDefault),
@@ -194,6 +202,7 @@ OptimizerOptions OptimizerOptions::from(
   setInt(kParallelProjectWidth, options.parallelProjectWidth);
   setInt(kGreedyJoinThreshold, options.greedyJoinThreshold);
   setCapacity(kBroadcastSizeLimit, options.broadcastSizeLimit);
+  setInt(kDphypEnumerationBudget, options.dphypEnumerationBudget);
 
   auto setUint = [&](std::string_view key, uint32_t& field) {
     auto it = properties.find(key);

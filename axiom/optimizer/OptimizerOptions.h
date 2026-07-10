@@ -51,6 +51,8 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
       "greedy_join_threshold";
   static constexpr std::string_view kBroadcastSizeLimit =
       "broadcast_size_limit";
+  static constexpr std::string_view kDphypEnumerationBudget =
+      "dphyp_enumeration_budget";
   static constexpr std::string_view kTraceFlags = "trace_flags";
 
   // Default values — single source of truth for field initializers
@@ -61,6 +63,7 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
   // units; the bytes form initializes the parsed field.
   static constexpr std::string_view kBroadcastSizeLimitDefault = "100MB";
   static constexpr int64_t kBroadcastSizeLimitDefaultBytes = 100LL << 20;
+  static constexpr int32_t kDphypEnumerationBudgetDefault = 100'000;
   static constexpr bool kPushdownSubfieldsDefault = false;
   static constexpr bool kAllMapsAsStructDefault = false;
   static constexpr bool kSampleJoinsDefault = false;
@@ -127,6 +130,13 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
   /// worker's memory. Configured as a capacity string ("100MB", "1GB"); "0B"
   /// disables broadcast entirely.
   int64_t broadcastSizeLimit{kBroadcastSizeLimitDefaultBytes};
+
+  /// Maximum number of connected-subgraph/complement pairs the DPhyp join
+  /// enumerator evaluates before falling back to greedy (GOO) ordering. Bounds
+  /// worst-case planning time on dense join graphs (e.g. same-key N-way joins,
+  /// which equality-transitivity closure turns into cliques). 0 means
+  /// unlimited.
+  int32_t dphypEnumerationBudget{kDphypEnumerationBudgetDefault};
 
   /// Disable cost-based decision re: whether to split an aggregation into
   /// partial + final or not.

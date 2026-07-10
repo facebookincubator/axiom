@@ -19,22 +19,28 @@ endif()
 add_library(
   axiom_optimizer_v2
   AggregateRecovery.cpp
+  AlgebraicProperties.cpp
   Builder.cpp
   CostModel.cpp
   DecorrelatePass.cpp
+  DPhyp.cpp
   EstimateLeafStatsPass.cpp
   EstimateProvider.cpp
   ExprEmitter.cpp
   ExprFactory.cpp
   ExprSimplifier.cpp
+  HypergraphBuilder.cpp
   JoinCondition.cpp
   JoinFanout.cpp
   JoinHypergraph.cpp
+  JoinTreeEmitter.cpp
   LimitAndOrderPass.cpp
   MemoOp.cpp
   Node.cpp
   NodePrinter.cpp
   PhysicalProperties.cpp
+  PlanPhysicalPass.cpp
+  PlanSet.cpp
   PushdownAndPrunePass.cpp
   ScanHandle.cpp
   TranslatePass.cpp
