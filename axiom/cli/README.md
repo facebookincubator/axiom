@@ -34,6 +34,7 @@ The examples below use `axiom_sql` for brevity. With Buck, replace
 | `--split_target_bytes` | `16MB` | Hive specific: approximate bytes per split. |
 | `--num_workers` | `4` | Number of in-process workers. |
 | `--num_drivers` | `4` | Number of drivers per worker (parallelism). |
+| `--v2` | `false` | Route queries through the v2 optimizer. `EXPLAIN (type graph\|optimized\|io)` and `SHOW STATS FOR (<query>)` are not supported under v2 yet. |
 | `--max_rows` | `100` | Maximum number of printed result rows. |
 | `--show_live_progress` | `false` | Draw the [live progress](#live-progress) grid for `--query` and piped-stdin runs (when stderr is a terminal). The interactive REPL always shows it; this only opts the non-interactive paths in. |
 | `--debug` | `false` | Enable debug mode (logging to stderr; adds per-split and CPU-time detail lines to the live progress display). |
