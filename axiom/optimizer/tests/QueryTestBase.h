@@ -20,6 +20,7 @@
 #include <gflags/gflags.h>
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/RelationOp.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
@@ -262,6 +263,11 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
 
   OptimizerOptions optimizerOptions_;
 
+  // When true, `optimize()` routes through the v2 optimizer pipeline instead of
+  // v1. Lets one fixture run the same tests through either optimizer (e.g. set
+  // from a TEST_P parameter). Default false = v1.
+  bool useV2_{false};
+
   std::shared_ptr<connector::TestConnector> testConnector_;
 
  private:
@@ -356,3 +362,18 @@ inline auto in(
     ASSERT_TRUE((matcher)->match(*_axiom_plan_))     \
         << _axiom_plan_->toString(true);             \
   }
+
+// Instantiates a value-parameterized (`TEST_P`) suite for both optimizers,
+// producing `V1/<suite>.<case>/_` and `V2/<suite>.<case>/_`. The fixture must
+// derive from `WithParamInterface<bool>` and set `useV2_ = GetParam()` in
+// `SetUp`; `false` selects v1, `true` v2. The trailing `_` is gtest's mandatory
+// value-parameter segment.
+#define AXIOM_INSTANTIATE_V1_V2(test_suite)                       \
+  INSTANTIATE_TEST_SUITE_P(                                       \
+      V1, test_suite, ::testing::Values(false), [](const auto&) { \
+        return std::string("_");                                  \
+      });                                                         \
+  INSTANTIATE_TEST_SUITE_P(                                       \
+      V2, test_suite, ::testing::Values(true), [](const auto&) {  \
+        return std::string("_");                                  \
+      })

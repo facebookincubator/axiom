@@ -25,6 +25,7 @@
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/optimizer/tests/TestDataPath.h"
+#include "axiom/optimizer/v2/Optimize.h"
 #include "axiom/sql/presto/PrestoParser.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
@@ -315,28 +316,39 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
     }
   };
 
-  optimizer::Optimization opt(
-      makeOptimizerSession(
-          queryCtx->queryId(), optimizerOptions.value_or(optimizerOptions_)),
-      makeRunnerSession(queryCtx->queryId()),
-      *plan,
-      schemaResolver,
-      *history_,
-      queryCtx,
-      evaluator,
-      options);
-  if (planPath != nullptr) {
-    *planPath << "Query Graph:\n\n" << opt.rootDt()->toString() << "\n\n";
+  auto session = makeOptimizerSession(
+      queryCtx->queryId(), optimizerOptions.value_or(optimizerOptions_));
+
+  optimizer::PlanAndStats planAndStats;
+  if (useV2_) {
+    planAndStats =
+        v2::optimize(*plan, schemaResolver, *session, evaluator, options);
+  } else {
+    optimizer::Optimization opt(
+        session,
+        makeRunnerSession(queryCtx->queryId()),
+        *plan,
+        schemaResolver,
+        *history_,
+        queryCtx,
+        evaluator,
+        options);
+    // The query-graph and optimized-plan sections are v1-only; v2 exposes
+    // neither here.
+    if (planPath != nullptr) {
+      *planPath << "Query Graph:\n\n" << opt.rootDt()->toString() << "\n\n";
+    }
+
+    auto best = opt.bestPlan();
+    if (planPath != nullptr) {
+      *planPath << "Optimized plan (oneline):\n\n"
+                << best->op->toOneline() << "\n\n";
+      *planPath << "Optimized plan:\n\n" << best->op->toString() << "\n\n";
+    }
+
+    planAndStats = opt.toVeloxPlan(best->op);
   }
 
-  auto best = opt.bestPlan();
-  if (planPath != nullptr) {
-    *planPath << "Optimized plan (oneline):\n\n"
-              << best->op->toOneline() << "\n\n";
-    *planPath << "Optimized plan:\n\n" << best->op->toString() << "\n\n";
-  }
-
-  auto planAndStats = opt.toVeloxPlan(best->op);
   if (planPath != nullptr) {
     *planPath << "Executable Velox plan:\n\n" << planAndStats.plan->toString();
     *planPath << "___END___\n";

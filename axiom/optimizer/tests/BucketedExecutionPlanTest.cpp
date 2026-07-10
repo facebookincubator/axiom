@@ -26,8 +26,14 @@ namespace {
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class BucketedExecutionTest : public test::QueryTestBase {
+class BucketedExecutionTest : public test::QueryTestBase,
+                              public ::testing::WithParamInterface<bool> {
  protected:
+  void SetUp() override {
+    test::QueryTestBase::SetUp();
+    useV2_ = GetParam();
+  }
+
   lp::PlanBuilder::Context makeContext() const {
     return lp::PlanBuilder::Context{kTestConnectorId, kDefaultSchema};
   }
@@ -103,7 +109,7 @@ class BucketedExecutionTest : public test::QueryTestBase {
   }
 };
 
-TEST_F(BucketedExecutionTest, join) {
+TEST_P(BucketedExecutionTest, join) {
   addBucketedTable("j_orders", {"customer_id"}, 128);
   addBucketedTable(
       "j_customers", {"id"}, 128, ROW({"id", "name"}, {BIGINT(), VARCHAR()}));
@@ -156,7 +162,7 @@ TEST_F(BucketedExecutionTest, join) {
       /*expectedHashExchanges=*/1);
 }
 
-TEST_F(BucketedExecutionTest, semijoin) {
+TEST_P(BucketedExecutionTest, semijoin) {
   addBucketedTable("sj_orders", {"customer_id"}, 128);
   addBucketedTable(
       "sj_customers", {"id"}, 128, ROW({"id", "name"}, {BIGINT(), VARCHAR()}));
@@ -166,16 +172,26 @@ TEST_F(BucketedExecutionTest, semijoin) {
         "SELECT * FROM sj_orders WHERE customer_id IN "
         "(SELECT id FROM sj_customers)",
         kTestConnectorId));
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(
-        plan.plan,
-        matchScan("sj_orders")
-            .hashJoin(
-                matchScan("sj_customers").build(),
-                core::JoinType::kLeftSemiFilter)
-            .bucketed()
-            .fragmentWidth(4)
-            .gather()
-            .build());
+    // V2 lowers WHERE-`IN` to a null-aware kLeftSemiProject (not
+    // kLeftSemiFilter) and rejects bucketing for null-aware existence joins, so
+    // it shuffles both sides instead of keeping the probe bucketed (sound, but
+    // a missed co-location). The V2 check is gated off until WHERE-`IN` folds
+    // to a non-null-aware semi-filter.
+    // TODO: assert V2 co-location once WHERE-`IN` folds to a non-null-aware
+    // semi-filter (v2 lowers it to a null-aware kLeftSemiProject DPhyp won't
+    // co-bucket).
+    if (!useV2_) {
+      AXIOM_ASSERT_DISTRIBUTED_PLAN(
+          plan.plan,
+          matchScan("sj_orders")
+              .hashJoin(
+                  matchScan("sj_customers").build(),
+                  core::JoinType::kLeftSemiFilter)
+              .bucketed()
+              .fragmentWidth(4)
+              .gather()
+              .build());
+    }
   }
 
   {
@@ -183,21 +199,30 @@ TEST_F(BucketedExecutionTest, semijoin) {
         "SELECT * FROM sj_orders WHERE customer_id NOT IN "
         "(SELECT id FROM sj_customers)",
         kTestConnectorId));
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(
-        plan.plan,
-        matchScan("sj_orders")
-            .hashJoin(
-                matchScan("sj_customers").build(),
-                core::JoinType::kAnti,
-                {.nullAware = true})
-            .bucketed()
-            .fragmentWidth(4)
-            .gather()
-            .build());
+    // V2 rejects bucketing for the null-aware anti join (a bucketed existence
+    // side would confine a null key to one bucket) and shuffles both sides with
+    // null/any replication instead of co-bucketing. The V2 check is gated off;
+    // DPhyp skips co-bucketing for null-aware edges.
+    // TODO: assert V2 co-location once null-aware existence joins co-bucket
+    // with replication (DPhyp currently skips co-bucketing for null-aware
+    // edges).
+    if (!useV2_) {
+      AXIOM_ASSERT_DISTRIBUTED_PLAN(
+          plan.plan,
+          matchScan("sj_orders")
+              .hashJoin(
+                  matchScan("sj_customers").build(),
+                  core::JoinType::kAnti,
+                  {.nullAware = true})
+              .bucketed()
+              .fragmentWidth(4)
+              .gather()
+              .build());
+    }
   }
 }
 
-TEST_F(BucketedExecutionTest, aggregation) {
+TEST_P(BucketedExecutionTest, aggregation) {
   testConnector_->addTable(
       "a_orders",
       ROW({"customer_id", "order_date", "amount"},
@@ -290,7 +315,7 @@ TEST_F(BucketedExecutionTest, aggregation) {
   }
 }
 
-TEST_F(BucketedExecutionTest, select) {
+TEST_P(BucketedExecutionTest, select) {
   {
     addBucketedTable("s_one", {"customer_id"}, 1);
     auto plan = planDistributed(
@@ -378,7 +403,7 @@ TEST_F(BucketedExecutionTest, select) {
   }
 }
 
-TEST_F(BucketedExecutionTest, unionall) {
+TEST_P(BucketedExecutionTest, unionall) {
   // gcd(128, 4) = 4.
   addBucketedTable("u_a", {"customer_id"}, 128);
   addBucketedTable(
@@ -438,7 +463,7 @@ TEST_F(BucketedExecutionTest, unionall) {
   }
 }
 
-TEST_F(BucketedExecutionTest, alwaysPlanPartialAggregation) {
+TEST_P(BucketedExecutionTest, alwaysPlanPartialAggregation) {
   addBucketedTable("g_orders", {"customer_id"}, 128);
 
   auto plan = lp::PlanBuilder(makeContext())
@@ -460,7 +485,7 @@ TEST_F(BucketedExecutionTest, alwaysPlanPartialAggregation) {
           .build());
 }
 
-TEST_F(BucketedExecutionTest, mixedJoinOneBucketed) {
+TEST_P(BucketedExecutionTest, mixedJoinOneBucketed) {
   addBucketedTable("m_orders", {"customer_id"}, 8);
   addUnbucketedTable("m_extras");
 
@@ -488,7 +513,7 @@ TEST_F(BucketedExecutionTest, mixedJoinOneBucketed) {
   EXPECT_TRUE(foundMixed);
 }
 
-TEST_F(BucketedExecutionTest, mixedJoinTwoBucketedOneNot) {
+TEST_P(BucketedExecutionTest, mixedJoinTwoBucketedOneNot) {
   addBucketedTable("m2_orders", {"customer_id"}, 8);
   addBucketedTable(
       "m2_customers", {"id"}, 8, ROW({"id", "name"}, {BIGINT(), VARCHAR()}));
@@ -519,7 +544,7 @@ TEST_F(BucketedExecutionTest, mixedJoinTwoBucketedOneNot) {
   EXPECT_TRUE(foundMixed);
 }
 
-TEST_F(BucketedExecutionTest, mixedJoinOneBucketedTwoNot) {
+TEST_P(BucketedExecutionTest, mixedJoinOneBucketedTwoNot) {
   addBucketedTable("m3_orders", {"customer_id"}, 8);
   addUnbucketedTable("m3_extras1");
   addUnbucketedTable("m3_extras2");
@@ -549,7 +574,7 @@ TEST_F(BucketedExecutionTest, mixedJoinOneBucketedTwoNot) {
   EXPECT_TRUE(foundMixed);
 }
 
-TEST_F(BucketedExecutionTest, windowOnBucketKey) {
+TEST_P(BucketedExecutionTest, windowOnBucketKey) {
   addBucketedTable("w_orders", {"customer_id"}, 16);
   auto plan = planDistributed(parseSelect(
       "SELECT customer_id, amount, "
@@ -568,7 +593,7 @@ TEST_F(BucketedExecutionTest, windowOnBucketKey) {
   EXPECT_TRUE(foundBucketed);
 }
 
-TEST_F(BucketedExecutionTest, threeWayCoBucketed) {
+TEST_P(BucketedExecutionTest, threeWayCoBucketed) {
   addBucketedTable("tw_a", {"customer_id"}, 16);
   addBucketedTable("tw_b", {"customer_id"}, 8);
   addBucketedTable("tw_c", {"customer_id"}, 4);
@@ -600,7 +625,7 @@ TEST_F(BucketedExecutionTest, threeWayCoBucketed) {
 
 // A chain of inner joins on a shared bucket key fuses into one bucketed
 // fragment: all three scans local, no remote hash exchange.
-TEST_F(BucketedExecutionTest, innerJoinChainFuses) {
+TEST_P(BucketedExecutionTest, innerJoinChainFuses) {
   addBucketedTable("t", {"k"}, 16, ROW({"k"}, BIGINT()));
   addBucketedTable("u", {"k"}, 16, ROW({"k"}, BIGINT()));
   addBucketedTable("v", {"k"}, 16, ROW({"k"}, BIGINT()));
@@ -612,9 +637,12 @@ TEST_F(BucketedExecutionTest, innerJoinChainFuses) {
       "(SELECT v.k FROM u, v WHERE u.k = v.k) sub "
       "WHERE t.k = sub.k";
 
+  // In syntactic order both optimizers co-bucket all three scans into one
+  // fragment as t ⋈ (u ⋈ v).
   optimizerOptions_.syntacticJoinOrder = true;
+  auto syntacticPlan = planDistributed(parseSelect(sql, kTestConnectorId)).plan;
   AXIOM_ASSERT_DISTRIBUTED_PLAN(
-      planDistributed(parseSelect(sql, kTestConnectorId)).plan,
+      syntacticPlan,
       matchScan("t")
           .hashJoin(
               matchScan("u")
@@ -627,23 +655,42 @@ TEST_F(BucketedExecutionTest, innerJoinChainFuses) {
           .gather()
           .build());
 
+  // Under cost-based ordering each optimizer picks a different (equally valid)
+  // order — v1 u ⋈ v ⋈ t, v2 (t ⋈ u) ⋈ v — but both co-bucket all three into
+  // one fragment.
   optimizerOptions_.syntacticJoinOrder = false;
-  AXIOM_ASSERT_DISTRIBUTED_PLAN(
-      planDistributed(parseSelect(sql, kTestConnectorId)).plan,
-      matchScan("u")
-          .hashJoin(matchScan("v").build(), core::JoinType::kInner)
-          .hashJoin(matchScan("t").build(), core::JoinType::kInner)
-          .bucketed()
-          .bucketedScans(3)
-          .fragmentWidth(4)
-          .gather()
-          .build());
+  auto reorderedPlan = planDistributed(parseSelect(sql, kTestConnectorId)).plan;
+  if (!useV2_) {
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        reorderedPlan,
+        matchScan("u")
+            .hashJoin(matchScan("v").build(), core::JoinType::kInner)
+            .hashJoin(matchScan("t").build(), core::JoinType::kInner)
+            .bucketed()
+            .bucketedScans(3)
+            .fragmentWidth(4)
+            .gather()
+            .build());
+  } else {
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        reorderedPlan,
+        matchScan("t")
+            .hashJoin(matchScan("u").build(), core::JoinType::kInner)
+            .hashJoin(matchScan("v").build(), core::JoinType::kInner)
+            .bucketed()
+            .bucketedScans(3)
+            .fragmentWidth(4)
+            .gather()
+            .build());
+  }
 }
 
-// Same shape with a LEFT join: the outer join forms no equivalence, so t cannot
-// bucket-align with the chain and joins across a remote exchange. Regression
-// guard for if outer joins ever start forming equivalences.
-TEST_F(BucketedExecutionTest, leftJoinChainDoesNotFuse) {
+// Same shape with a LEFT join. In V1 the outer join forms no equivalence, so t
+// cannot bucket-align with the chain and joins across a remote exchange
+// (regression guard for if outer joins ever start forming equivalences). V2
+// demotes the LEFT to INNER and fuses, so v1 asserts the shuffled shape and v2
+// the co-location property.
+TEST_P(BucketedExecutionTest, leftJoinChainDoesNotFuse) {
   addBucketedTable("t", {"k"}, 16, ROW({"k"}, BIGINT()));
   addBucketedTable("u", {"k"}, 16, ROW({"k"}, BIGINT()));
   addBucketedTable("v", {"k"}, 16, ROW({"k"}, BIGINT()));
@@ -653,30 +700,68 @@ TEST_F(BucketedExecutionTest, leftJoinChainDoesNotFuse) {
       "(SELECT v.k FROM u LEFT JOIN v ON u.k = v.k) sub "
       "WHERE t.k = sub.k";
 
+  // V1 keeps the LEFT JOIN (its outer null-padding forms no equivalence), so t
+  // can't bucket-align and joins across a remote exchange. V2 demotes the LEFT
+  // to INNER (the outer t.k = v.k rejects null v.k) and co-buckets all three,
+  // in syntactic order t ⋈ (u ⋈ v).
   optimizerOptions_.syntacticJoinOrder = true;
-  AXIOM_ASSERT_DISTRIBUTED_PLAN(
-      planDistributed(parseSelect(sql, kTestConnectorId)).plan,
-      matchScan("t")
-          .hashJoin(
-              matchScan("u")
-                  .hashJoin(matchScan("v").build(), core::JoinType::kLeft)
-                  .shuffle()
-                  .build(),
-              core::JoinType::kInner)
-          .gather()
-          .build());
+  auto syntacticPlan = planDistributed(parseSelect(sql, kTestConnectorId)).plan;
+  if (!useV2_) {
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        syntacticPlan,
+        matchScan("t")
+            .hashJoin(
+                matchScan("u")
+                    .hashJoin(matchScan("v").build(), core::JoinType::kLeft)
+                    .shuffle()
+                    .build(),
+                core::JoinType::kInner)
+            .gather()
+            .build());
+  } else {
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        syntacticPlan,
+        matchScan("t")
+            .hashJoin(
+                matchScan("u")
+                    .hashJoin(matchScan("v").build(), core::JoinType::kInner)
+                    .build(),
+                core::JoinType::kInner)
+            .bucketed()
+            .bucketedScans(3)
+            .fragmentWidth(4)
+            .gather()
+            .build());
+  }
 
+  // Under cost-based ordering v1 still keeps the LEFT (broadcasting t); v2
+  // demotes and co-buckets all three as (t ⋈ u) ⋈ v.
   optimizerOptions_.syntacticJoinOrder = false;
-  AXIOM_ASSERT_DISTRIBUTED_PLAN(
-      planDistributed(parseSelect(sql, kTestConnectorId)).plan,
-      matchScan("u")
-          .hashJoin(matchScan("v").build(), core::JoinType::kLeft)
-          .hashJoin(matchScan("t").broadcast().build(), core::JoinType::kInner)
-          .gather()
-          .build());
+  auto reorderedPlan = planDistributed(parseSelect(sql, kTestConnectorId)).plan;
+  if (!useV2_) {
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        reorderedPlan,
+        matchScan("u")
+            .hashJoin(matchScan("v").build(), core::JoinType::kLeft)
+            .hashJoin(
+                matchScan("t").broadcast().build(), core::JoinType::kInner)
+            .gather()
+            .build());
+  } else {
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        reorderedPlan,
+        matchScan("t")
+            .hashJoin(matchScan("u").build(), core::JoinType::kInner)
+            .hashJoin(matchScan("v").build(), core::JoinType::kInner)
+            .bucketed()
+            .bucketedScans(3)
+            .fragmentWidth(4)
+            .gather()
+            .build());
+  }
 }
 
-TEST_F(BucketedExecutionTest, bucketedAggThenBucketedJoin) {
+TEST_P(BucketedExecutionTest, bucketedAggThenBucketedJoin) {
   addBucketedTable("ab_orders", {"customer_id"}, 16);
   addBucketedTable(
       "ab_customers", {"id"}, 16, ROW({"id", "name"}, {BIGINT(), VARCHAR()}));
@@ -706,7 +791,7 @@ TEST_F(BucketedExecutionTest, bucketedAggThenBucketedJoin) {
   EXPECT_TRUE(found);
 }
 
-TEST_F(BucketedExecutionTest, bucketedAggThenBroadcastJoin) {
+TEST_P(BucketedExecutionTest, bucketedAggThenBroadcastJoin) {
   addBucketedTable("bc_orders", {"customer_id"}, 16);
   addUnbucketedTable(
       "bc_dim",
@@ -729,7 +814,7 @@ TEST_F(BucketedExecutionTest, bucketedAggThenBroadcastJoin) {
   EXPECT_TRUE(foundBucketedScan);
 }
 
-TEST_F(BucketedExecutionTest, broadcastJoinThenBucketedAgg) {
+TEST_P(BucketedExecutionTest, broadcastJoinThenBucketedAgg) {
   addBucketedTable("bj_orders", {"customer_id"}, 16);
   addUnbucketedTable(
       "bj_dim",
@@ -751,7 +836,7 @@ TEST_F(BucketedExecutionTest, broadcastJoinThenBucketedAgg) {
   EXPECT_TRUE(foundBucketedScan);
 }
 
-TEST_F(BucketedExecutionTest, greedyBucketed) {
+TEST_P(BucketedExecutionTest, greedyBucketed) {
   addBucketedTable("g_orders", {"customer_id"}, 128);
   addBucketedTable(
       "g_customers", {"id"}, 128, ROW({"id", "name"}, {BIGINT(), VARCHAR()}));
@@ -765,7 +850,7 @@ TEST_F(BucketedExecutionTest, greedyBucketed) {
   expectBucketedFragmentWithWidth(*plan.plan, 4);
 }
 
-TEST_F(BucketedExecutionTest, greedyBucketedWithDimensions) {
+TEST_P(BucketedExecutionTest, greedyBucketedWithDimensions) {
   constexpr int kNumDims = 20;
 
   std::vector<std::string> factColumns{"customer_id"};
@@ -797,6 +882,8 @@ TEST_F(BucketedExecutionTest, greedyBucketedWithDimensions) {
   auto plan = planDistributed(parseSelect(sql, kTestConnectorId));
   expectBucketedFragmentWithWidth(*plan.plan, 4);
 }
+
+AXIOM_INSTANTIATE_V1_V2(BucketedExecutionTest);
 
 } // namespace
 } // namespace facebook::axiom::optimizer
