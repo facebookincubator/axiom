@@ -773,6 +773,27 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
     }
 
+    // A final aggregation reads the partial's intermediate accumulator as its
+    // first input (any trailing inputs are lambda arguments) and emits the
+    // result under a new name. Rebind the alias a lower matcher bound to the
+    // intermediate column to this stage's output column, so matchers above
+    // resolve the alias to the column this stage actually produces.
+    if (plan.step() == AggregationNode::Step::kFinal) {
+      for (auto i = 0; i < plan.aggregates().size(); ++i) {
+        const auto& aggregate = plan.aggregates()[i];
+        const auto* accumulator =
+            aggregate.call->inputs()[0]->asUnchecked<FieldAccessTypedExpr>();
+        VELOX_CHECK_NOT_NULL(
+            accumulator,
+            "A final aggregate's first input is the intermediate accumulator column");
+        for (auto& [alias, name] : newSymbols) {
+          if (name == accumulator->name()) {
+            name = plan.aggregateNames()[i];
+          }
+        }
+      }
+    }
+
     return MatchResult::success(std::move(newSymbols));
   }
 
@@ -1135,8 +1156,7 @@ void verifyPartitionKeys(
       expectedKey = it->second;
     }
 
-    auto fieldAccess =
-        std::dynamic_pointer_cast<const FieldAccessTypedExpr>(actualKeys[i]);
+    auto fieldAccess = actualKeys[i]->asUnchecked<FieldAccessTypedExpr>();
     EXPECT_TRUE(fieldAccess != nullptr)
         << "Partition key at index " << i << " is not a field access";
     AXIOM_TEST_RETURN_IF_FAILURE_VOID
