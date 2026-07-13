@@ -121,6 +121,19 @@ class PrestoSqlError : public std::exception {
   PrestoSqlErrorKind kind_;
 };
 
+/// Error source and Presto error code that a PrestoSqlError should surface
+/// with, so every conversion boundary classifies parser and analyzer failures
+/// identically.
+struct PrestoErrorClassification {
+  /// Velox error source; always the user source for parser/analyzer errors.
+  std::string_view errorSource;
+  /// Presto error code name, e.g. SYNTAX_ERROR.
+  std::string_view errorCode;
+};
+
+/// Returns the user-error classification for an error kind.
+PrestoErrorClassification classify(PrestoSqlErrorKind kind);
+
 /// Throws PrestoSqlError with kSyntax kind if `condition` is false.
 /// @param condition  Boolean expression to check.
 /// @param location   A raw NodeLocation whose `line` is 1-based (as stored

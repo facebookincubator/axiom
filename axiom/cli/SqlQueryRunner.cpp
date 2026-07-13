@@ -536,6 +536,15 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
         .errorSource = e.errorSource()};
     finalize();
     throw;
+  } catch (const presto::PrestoSqlError& e) {
+    const auto classification = presto::classify(e.kind());
+    completionInfo.errorInfo = ErrorInfo{
+        .message = e.what(),
+        .messageTemplate = messageTemplateOf(e),
+        .errorCode = std::string(classification.errorCode),
+        .errorSource = std::string(classification.errorSource)};
+    finalize();
+    throw;
   } catch (const std::exception& e) {
     // Non-Velox exceptions carry no error code or source.
     completionInfo.errorInfo =

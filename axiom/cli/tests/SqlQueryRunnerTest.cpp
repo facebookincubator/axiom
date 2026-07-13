@@ -1265,6 +1265,32 @@ TEST_F(SqlQueryRunnerTest, completionCallbackOnParseFailure) {
   EXPECT_EQ(captured.timing.execute, 0);
 }
 
+TEST_F(SqlQueryRunnerTest, classifiesSyntaxErrorAsUser) {
+  QueryCompletionInfo captured;
+  EXPECT_THROW(
+      runner_->run(
+          "SELECT * FROM",
+          {.onComplete =
+               [&](const QueryCompletionInfo& info) { captured = info; }}),
+      std::exception);
+  ASSERT_TRUE(captured.errorInfo.has_value());
+  EXPECT_EQ(captured.errorInfo->errorSource, error_source::kErrorSourceUser);
+  EXPECT_EQ(captured.errorInfo->errorCode, "SYNTAX_ERROR");
+}
+
+TEST_F(SqlQueryRunnerTest, classifiesSemanticErrorAsUser) {
+  QueryCompletionInfo captured;
+  EXPECT_THROW(
+      runner_->run(
+          "SELECT * FROM nonexistent_table",
+          {.onComplete =
+               [&](const QueryCompletionInfo& info) { captured = info; }}),
+      std::exception);
+  ASSERT_TRUE(captured.errorInfo.has_value());
+  EXPECT_EQ(captured.errorInfo->errorSource, error_source::kErrorSourceUser);
+  EXPECT_EQ(captured.errorInfo->errorCode, "GENERIC_USER_ERROR");
+}
+
 TEST_F(SqlQueryRunnerTest, completionCallbackOnPermissionCheckFailure) {
   QueryCompletionInfo captured;
 
