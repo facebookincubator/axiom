@@ -27,7 +27,6 @@
 #include "axiom/optimizer/v2/PushdownAndPrunePass.h"
 #include "axiom/optimizer/v2/ScanHandle.h"
 #include "axiom/optimizer/v2/TranslatePass.h"
-#include "velox/core/PlanConsistencyChecker.h"
 
 namespace facebook::axiom::optimizer::v2 {
 
@@ -75,10 +74,6 @@ PlanAndStats optimize(
       evaluator,
       scanHandles,
       options);
-
-  for (const auto& fragment : emitted.fragments) {
-    velox::core::PlanConsistencyChecker::check(fragment.fragment.planNode);
-  }
 
   PlanAndStats result;
   result.plan = std::make_shared<MultiFragmentPlan>(

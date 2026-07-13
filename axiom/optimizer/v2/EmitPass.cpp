@@ -17,6 +17,7 @@
 #include "axiom/optimizer/v2/EmitPass.h"
 
 #include <folly/ScopeGuard.h>
+#include <folly/container/F14Set.h>
 #include <limits>
 
 #include "axiom/connectors/ConnectorMetadata.h"
@@ -25,6 +26,7 @@
 #include "axiom/optimizer/WriteStatsBuilder.h"
 #include "axiom/optimizer/v2/ExprEmitter.h"
 #include "axiom/optimizer/v2/PhysicalProperties.h"
+#include "velox/core/PlanConsistencyChecker.h"
 #include "velox/core/TableWriteTraits.h"
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/expression/ExprConstants.h"
@@ -354,20 +356,57 @@ class Emitter {
       const velox::RowTypePtr& outputType,
       const velox::core::PlanNodePtr& sourcePlan);
 
+  // Builds a producer-side `PartitionedOutput` that gathers 'sourcePlan' to a
+  // single destination.
+  velox::core::PlanNodePtr makeSingleOutput(
+      const velox::RowTypePtr& outputType,
+      const velox::core::PlanNodePtr& sourcePlan) {
+    return velox::core::PartitionedOutputNode::single(
+        nextId(), outputType, exchangeSerdeKind_, sourcePlan);
+  }
+
   // Builds the consumer-side exchange node for 'partitioning' — a
   // `MergeExchange` for an order-preserving gather, else a plain `Exchange`.
   velox::core::PlanNodePtr makeExchangeConsumer(
       const Partitioning& partitioning,
       const velox::RowTypePtr& outputType);
 
-  // Emits 'node' as the root of child fragment 'fragment', isolating its
+  // Runs 'emitFn' with 'fragment' as the current fragment, isolating its
   // grouped leaves and finalizing them onto 'fragment', then restores the
-  // enclosing fragment and its leaves. Returns the emitted plan. For a child
-  // fragment whose grouped leaves must be finalized after further building (a
-  // table write), do the save/restore inline instead.
+  // enclosing fragment and its leaves. Returns the plan 'emitFn' produced. For
+  // a child fragment whose grouped leaves must be finalized after further
+  // building (a table write), do the save/restore inline instead.
+  template <typename EmitFn>
+  velox::core::PlanNodePtr emitInFragment(
+      ExecutableFragment& fragment,
+      EmitFn&& emitFn) {
+    ExecutableFragment* outer = currentFragment_;
+    auto outerGroupedLeaves = std::move(groupedLeaves_);
+    SCOPE_EXIT {
+      currentFragment_ = outer;
+      groupedLeaves_ = std::move(outerGroupedLeaves);
+    };
+    groupedLeaves_.clear();
+    currentFragment_ = &fragment;
+    velox::core::PlanNodePtr plan = std::forward<EmitFn>(emitFn)();
+    finalizeGroupedLeaves(fragment);
+    return plan;
+  }
+
+  // Emits 'node' as the root of child fragment 'fragment'.
   velox::core::PlanNodePtr emitChildFragment(
       NodeCP node,
       ExecutableFragment& fragment);
+
+  // Emits 'root' below a gather that collects the distributed output onto the
+  // single-task output fragment 'top'. The output-column layout applies above
+  // the gather when the output names repeat (a shuffle needs unique names),
+  // otherwise below it so the gather itself is the plan root.
+  void emitGatheredOutput(
+      NodeCP root,
+      const ColumnVector& outputColumns,
+      const std::vector<std::string>& outputNames,
+      ExecutableFragment& top);
 
   // A fresh producer/consumer fragment with a unique task prefix.
   ExecutableFragment newFragment() {
@@ -687,6 +726,18 @@ bool isIdentityLayout(
     }
   }
   return true;
+}
+
+// True when 'names' contains the same name more than once.
+bool hasDuplicateNames(const std::vector<std::string>& names) {
+  folly::F14FastSet<std::string_view> seen;
+  seen.reserve(names.size());
+  for (const auto& name : names) {
+    if (!seen.insert(name).second) {
+      return true;
+    }
+  }
+  return false;
 }
 
 } // namespace
@@ -1604,17 +1655,44 @@ void Emitter::finalizeGroupedLeaves(ExecutableFragment& fragment) {
 velox::core::PlanNodePtr Emitter::emitChildFragment(
     NodeCP node,
     ExecutableFragment& fragment) {
-  ExecutableFragment* outer = currentFragment_;
-  auto outerGroupedLeaves = std::move(groupedLeaves_);
-  SCOPE_EXIT {
-    currentFragment_ = outer;
-    groupedLeaves_ = std::move(outerGroupedLeaves);
-  };
-  groupedLeaves_.clear();
-  currentFragment_ = &fragment;
-  velox::core::PlanNodePtr plan = emit(node);
-  finalizeGroupedLeaves(fragment);
-  return plan;
+  return emitInFragment(fragment, [&] { return emit(node); });
+}
+
+void Emitter::emitGatheredOutput(
+    NodeCP root,
+    const ColumnVector& outputColumns,
+    const std::vector<std::string>& outputNames,
+    ExecutableFragment& top) {
+  const bool layoutAboveGather = hasDuplicateNames(outputNames);
+  const Project* rootProject =
+      root->is(NodeType::kProject) ? root->as<Project>() : nullptr;
+  NodeCP belowRoot =
+      layoutAboveGather && rootProject != nullptr ? rootProject->input() : root;
+
+  ExecutableFragment source = newFragment();
+  decideFragmentType(belowRoot, options_.numWorkers, source);
+  velox::core::PlanNodePtr sourcePlan = layoutAboveGather
+      ? emitChildFragment(belowRoot, source)
+      : emitInFragment(
+            source, [&] { return emitRoot(root, outputColumns, outputNames); });
+  currentFragment_ = &top;
+
+  source.fragment.planNode =
+      makeSingleOutput(sourcePlan->outputType(), sourcePlan);
+  auto gather = std::make_shared<velox::core::ExchangeNode>(
+      nextId(), sourcePlan->outputType(), exchangeSerdeKind_);
+  top.inputStages.emplace_back(gather->id(), source.taskPrefix);
+  stages_.push_back(std::move(source));
+
+  if (!layoutAboveGather) {
+    top.fragment.planNode = gather;
+  } else if (rootProject != nullptr) {
+    top.fragment.planNode =
+        emitRootProjectOver(gather, *rootProject, outputColumns, outputNames);
+  } else {
+    top.fragment.planNode =
+        wrapWithRenameProject(gather, outputColumns, outputNames);
+  }
 }
 
 velox::core::PlanNodePtr Emitter::makeExchangeProducer(
@@ -1630,8 +1708,7 @@ velox::core::PlanNodePtr Emitter::makeExchangeProducer(
           exchangeSerdeKind_,
           sourcePlan);
     case PartitionKind::kGather:
-      return velox::core::PartitionedOutputNode::single(
-          nextId(), outputType, exchangeSerdeKind_, sourcePlan);
+      return makeSingleOutput(outputType, sourcePlan);
     case PartitionKind::kArbitrary:
       return velox::core::PartitionedOutputNode::arbitrary(
           nextId(), outputType, exchangeSerdeKind_, sourcePlan);
@@ -1659,8 +1736,7 @@ velox::core::PlanNodePtr Emitter::makeExchangeProducer(
       if (numPartitions == 1) {
         // A connector partitioning that scales to one destination (e.g. a
         // single-bucket table) needs no partition function: gather to one task.
-        return velox::core::PartitionedOutputNode::single(
-            nextId(), outputType, exchangeSerdeKind_, sourcePlan);
+        return makeSingleOutput(outputType, sourcePlan);
       }
 
       std::vector<velox::core::TypedExprPtr> keys(fields.begin(), fields.end());
@@ -1863,8 +1939,8 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
 
   // Gather each worker's intermediate stats to the single root fragment.
   finalizeGroupedLeaves(writerFragment);
-  writerFragment.fragment.planNode = velox::core::PartitionedOutputNode::single(
-      nextId(), result->outputType(), exchangeSerdeKind_, result);
+  writerFragment.fragment.planNode =
+      makeSingleOutput(result->outputType(), result);
   currentFragment_ = rootFragment;
   groupedLeaves_ = std::move(rootGroupedLeaves);
   auto gather = std::make_shared<velox::core::ExchangeNode>(
@@ -1896,65 +1972,60 @@ std::vector<ExecutableFragment> Emitter::emitFragments(
   ExecutableFragment top = newFragment();
   top.type = FragmentType::kSingle;
 
-  // A table write is a root sink: emit it (and its gathered input) directly as
-  // the single root fragment. Its output is the write-stats row the runner
-  // interprets via FinishWrite, not a user column layout, so it takes no
-  // output-rename projection.
+  // The output fragment's root for the consistency check, whose output names
+  // (the query's) may repeat for user aliases and so are validated as the plan
+  // root. For remote output this is the input of the final PartitionedOutput;
+  // for the other cases it defaults to the output fragment root below.
+  velox::core::PlanNodePtr outputProjection;
+
   if (root->is(NodeType::kTableWrite)) {
+    // A table write is a root sink: emit it (and its gathered input) directly
+    // as the single root fragment. Its output is the write-stats row the runner
+    // interprets via FinishWrite, not a user column layout, so it takes no
+    // output-rename projection.
     currentFragment_ = &top;
     top.fragment.planNode = emit(root);
-    finalizeGroupedLeaves(top);
-    currentFragment_ = nullptr;
-    stages_.push_back(std::move(top));
-    return std::move(stages_);
-  }
-
-  // A root whose subtree already runs on one task (e.g. below a global ORDER BY
-  // or aggregate) needs no output gather and is emitted directly, like the
-  // single-node case. Only a multi-task root is gathered to a single task for
-  // the query output.
-  const Project* rootProject =
-      root->is(NodeType::kProject) ? root->as<Project>() : nullptr;
-  NodeCP sourceRoot = rootProject != nullptr ? rootProject->input() : root;
-  const bool gatherForOutput = options_.numWorkers > 1 &&
-      fragmentTypeContribution(sourceRoot) != FragmentType::kSingle;
-
-  if (gatherForOutput) {
-    // The distributed source gathers its output to the single-task root, which
-    // applies the output projection. Gathering below a root Project keeps the
-    // shuffle carrying only the projection's (distinct) input columns — a
-    // Project that renames or duplicates columns (e.g. `SELECT a, a`) does so
-    // at the single-task root, where the consistency checker also exempts the
-    // root projection from the unique-name rule.
-    ExecutableFragment source = newFragment();
-    decideFragmentType(sourceRoot, options_.numWorkers, source);
-    velox::core::PlanNodePtr sourcePlan = emitChildFragment(sourceRoot, source);
-    currentFragment_ = &top;
-
-    source.fragment.planNode = velox::core::PartitionedOutputNode::single(
-        nextId(), sourcePlan->outputType(), exchangeSerdeKind_, sourcePlan);
-    auto gather = std::make_shared<velox::core::ExchangeNode>(
-        nextId(), sourcePlan->outputType(), exchangeSerdeKind_);
-    top.inputStages.emplace_back(gather->id(), source.taskPrefix);
-    stages_.push_back(std::move(source));
-    // The gather already carries the query's output columns and names when the
-    // root layout is identity (`sourceRoot` is the root Project's input in the
-    // rootProject case), so no output-rename projection is needed.
-    if (isIdentityLayout(*sourceRoot, outputColumns, outputNames)) {
-      top.fragment.planNode = gather;
-    } else if (rootProject != nullptr) {
-      top.fragment.planNode =
-          emitRootProjectOver(gather, *rootProject, outputColumns, outputNames);
-    } else {
-      top.fragment.planNode =
-          wrapWithRenameProject(gather, outputColumns, outputNames);
-    }
   } else {
-    currentFragment_ = &top;
-    top.fragment.planNode = emitRoot(root, outputColumns, outputNames);
+    // A root whose subtree already runs on one task (e.g. below a global ORDER
+    // BY or aggregate) needs no output gather and is emitted directly, like the
+    // single-node case. Only a multi-task root is gathered to a single task for
+    // the query output.
+    const bool gatherForOutput = options_.numWorkers > 1 &&
+        fragmentTypeContribution(root) != FragmentType::kSingle;
+
+    if (options_.remoteOutput) {
+      // Results stay distributed: emit the root as a single fragment capped by
+      // a PartitionedOutput for remote consumption, with no gather consumer
+      // fragment. The fragment type follows the root's contents (kFixed for a
+      // multi-worker source, kSingle at numWorkers == 1).
+      currentFragment_ = &top;
+      decideFragmentType(root, options_.numWorkers, top);
+      outputProjection = emitRoot(root, outputColumns, outputNames);
+      top.fragment.planNode =
+          makeSingleOutput(outputProjection->outputType(), outputProjection);
+    } else if (gatherForOutput) {
+      emitGatheredOutput(root, outputColumns, outputNames, top);
+    } else {
+      currentFragment_ = &top;
+      top.fragment.planNode = emitRoot(root, outputColumns, outputNames);
+    }
   }
+
   finalizeGroupedLeaves(top);
   currentFragment_ = nullptr;
+
+  // Validate the producer fragments and the output fragment. The output
+  // fragment is validated at 'outputProjection' so its output names, which may
+  // repeat for user aliases, are allowed as the plan root.
+  if (outputProjection == nullptr) {
+    outputProjection = top.fragment.planNode;
+  }
+
+  for (const auto& fragment : stages_) {
+    velox::core::PlanConsistencyChecker::check(fragment.fragment.planNode);
+  }
+  velox::core::PlanConsistencyChecker::check(outputProjection);
+
   stages_.push_back(std::move(top));
   return std::move(stages_);
 }
