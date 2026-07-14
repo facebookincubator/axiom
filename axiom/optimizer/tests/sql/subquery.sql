@@ -337,6 +337,9 @@ SELECT a FROM t WHERE EXISTS (SELECT 1 FROM v)
 -- enforcement. Returns one row per outer row.
 SELECT (SELECT u.a FROM u WHERE u.a = 1) FROM t
 ----
+-- The same uncorrelated scalar subquery referenced twice in one expression.
+SELECT (SELECT max(u.a) FROM u) + (SELECT max(u.a) FROM u) AS s FROM t
+----
 -- Scalar subquery whose SELECT references an outer column. The subquery
 -- has no FROM clause: result is just the outer column.
 SELECT (SELECT a) FROM t

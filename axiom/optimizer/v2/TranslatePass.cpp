@@ -200,6 +200,16 @@ bool containsSubquery(const logical_plan::Expr& expr) {
   return false;
 }
 
+// True if 'column' is one of 'node's output columns (by identity).
+bool outputContains(NodeCP node, ColumnCP column) {
+  for (ColumnCP candidate : node->outputColumns()) {
+    if (candidate == column) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Walks 'expr' as a top-level AND chain and appends each non-AND leaf
 // to 'out'.
 void flattenAndConjuncts(
@@ -528,6 +538,15 @@ class Translator {
   ExprFactory exprFactory_;
   ExprSimplifier simplifier_;
   int32_t baseTableCounter_{0};
+
+  // Result column of each scalar subquery already lifted, keyed by its inner
+  // plan. Identical subqueries share one inner plan (hash-consed), so a
+  // repeated reference reuses the lifted column instead of lifting it again
+  // (which would place the same column on both sides of the lift's join). A
+  // cached column is only reused while it is still in the current lift
+  // target's output, so a reference in an unrelated scope re-lifts.
+  folly::F14FastMap<const lp::LogicalPlanNode*, ColumnCP>
+      scalarSubqueryColumns_;
 };
 
 Translated Translator::translateTableWrite(
@@ -1876,12 +1895,24 @@ ExprCP Translator::translateExpr(
       // (no Apply), correlated → kLeft Apply. Scalar shape is signaled
       // by a null `inLhs` (no IN equi to build).
       const auto& subquery = *expr.as<lp::SubqueryExpr>();
-      return liftSubquery(
+      const auto* innerPlan = subquery.subquery().get();
+      if (applyTarget != nullptr) {
+        auto it = scalarSubqueryColumns_.find(innerPlan);
+        if (it != scalarSubqueryColumns_.end() &&
+            outputContains(*applyTarget, it->second)) {
+          return it->second;
+        }
+      }
+      ColumnCP column = liftSubquery(
           subquery,
           velox::core::JoinType::kLeft,
           /*inLhs=*/nullptr,
           scope,
           applyTarget);
+      if (applyTarget != nullptr) {
+        scalarSubqueryColumns_[innerPlan] = column;
+      }
+      return column;
     }
     default:
       VELOX_NYI(
