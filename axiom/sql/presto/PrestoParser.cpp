@@ -1324,7 +1324,15 @@ class RelationPlanner : public AstVisitor {
       return;
     }
 
-    builder_->limit(parseInt64(limit));
+    const auto count = parseInt64(limit);
+
+    // A LIMIT of INT64_MAX is effectively no limit, and LimitNode reserves
+    // that value as the no-limit sentinel. Skip the node, like LIMIT ALL.
+    if (count == std::numeric_limits<int64_t>::max()) {
+      return;
+    }
+
+    builder_->limit(count);
   }
 
   void processQuery(Query* query) {
