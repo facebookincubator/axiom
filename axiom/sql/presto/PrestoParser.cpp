@@ -1383,6 +1383,27 @@ class RelationPlanner : public AstVisitor {
     node->query()->accept(this);
   }
 
+  // `TABLE t` as a query body is shorthand for `SELECT * FROM t`.
+  void visitTable(Table* node) override {
+    auto select = std::make_shared<Select>(
+        node->location(),
+        /*distinct=*/false,
+        std::vector<std::shared_ptr<SelectItem>>{std::make_shared<AllColumns>(
+            node->location(),
+            /*prefix=*/nullptr,
+            std::vector<std::shared_ptr<Identifier>>{},
+            std::vector<ReplaceItem>{})});
+    auto querySpec = std::make_shared<QuerySpecification>(
+        node->location(),
+        std::move(select),
+        std::make_shared<Table>(node->location(), node->name()),
+        /*where=*/nullptr,
+        /*groupBy=*/nullptr,
+        /*having=*/nullptr,
+        /*window=*/nullptr);
+    visitQuerySpecification(querySpec.get(), /*orderBy=*/nullptr);
+  }
+
   void visitQuerySpecification(QuerySpecification* node) override {
     visitQuerySpecification(node, /*orderBy=*/nullptr);
   }
