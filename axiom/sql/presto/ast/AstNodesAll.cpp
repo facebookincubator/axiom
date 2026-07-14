@@ -181,6 +181,7 @@ const auto& nodeTypeNames() {
       {NodeType::kShowCatalogs, "ShowCatalogs"},
       {NodeType::kShowFunctions, "ShowFunctions"},
       {NodeType::kShowCreate, "ShowCreate"},
+      {NodeType::kShowCreateView, "ShowCreateView"},
       {NodeType::kShowCreateFunction, "ShowCreateFunction"},
       {NodeType::kShowSession, "ShowSession"},
       {NodeType::kShowStats, "ShowStats"},
@@ -828,6 +829,10 @@ void ShowTables::accept(AstVisitor* visitor) {
 
 void ShowCreateTable::accept(AstVisitor* visitor) {
   visitor->visitShowCreateTable(this);
+}
+
+void ShowCreateView::accept(AstVisitor* visitor) {
+  visitor->visitShowCreateView(this);
 }
 
 void ShowColumns::accept(AstVisitor* visitor) {

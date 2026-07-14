@@ -2038,6 +2038,38 @@ SqlStatementPtr parseShowCreateTable(
       });
 }
 
+SqlStatementPtr parseShowCreateView(
+    const ShowCreateView& showCreateView,
+    const std::string& defaultConnectorId,
+    const std::string& defaultSchema) {
+  const auto [connectorId, schemaTableName] = toConnectorTable(
+      *showCreateView.name(), defaultConnectorId, defaultSchema);
+
+  const auto view =
+      facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId)
+          ->findView(schemaTableName);
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      view != nullptr,
+      showCreateView.name()->location(),
+      showCreateView.name()->suffix(),
+      "View not found: {}",
+      showCreateView.name()->fullyQualifiedName());
+
+  const auto ddl = fmt::format(
+      "CREATE VIEW {}.{} AS\n{}", connectorId, schemaTableName, view->text());
+
+  return std::make_shared<SelectStatement>(
+      lp::PlanBuilder()
+          .values(ROW({"Create View"}, VARCHAR()), {Variant::row({ddl})})
+          .build(),
+      ViewMap{},
+      ReferencedTables{
+          {facebook::axiom::CatalogSchemaTableName{
+              connectorId, schemaTableName}},
+          std::nullopt,
+      });
+}
+
 SqlStatementPtr parseShowStats(
     const ShowStats& showStats,
     const std::string& defaultConnectorId,
@@ -2686,6 +2718,11 @@ SqlStatementPtr doPlan(
   if (query->is(NodeType::kShowCreate)) {
     return parseShowCreateTable(
         *query->as<ShowCreateTable>(), defaultConnectorId, defaultSchema);
+  }
+
+  if (query->is(NodeType::kShowCreateView)) {
+    return parseShowCreateView(
+        *query->as<ShowCreateView>(), defaultConnectorId, defaultSchema);
   }
 
   if (query->is(NodeType::kShowColumns)) {

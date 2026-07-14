@@ -984,6 +984,23 @@ TEST_F(SqlQueryRunnerTest, showCreateTable) {
       run("SHOW CREATE TABLE no_such_table"), "Table not found");
 }
 
+TEST_F(SqlQueryRunnerTest, showCreateView) {
+  testConnector_->createView(
+      facebook::axiom::SchemaTableName{kDefaultSchema, "v1"},
+      ROW({"a", "b"}, {INTEGER(), VARCHAR()}),
+      "SELECT 1 AS a, 'x' AS b");
+
+  auto row = fetchSingleRow("SHOW CREATE VIEW v1");
+  auto ddl = row->childAt(0)->variantAt(0).value<std::string>();
+  EXPECT_EQ(
+      ddl,
+      "CREATE VIEW test.\"default\".\"v1\" AS\n"
+      "SELECT 1 AS a, 'x' AS b");
+
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      run("SHOW CREATE VIEW no_such_view"), "View not found");
+}
+
 TEST_F(SqlQueryRunnerTest, generateQueryIdDefault) {
   // Default generator produces non-empty, unique IDs via run().
   std::string queryId1;

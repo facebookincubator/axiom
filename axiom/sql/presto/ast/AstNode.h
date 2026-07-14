@@ -184,6 +184,7 @@ enum class NodeType {
   kShowCatalogs,
   kShowFunctions,
   kShowCreate,
+  kShowCreateView,
   kShowCreateFunction,
   kShowSession,
   kShowStats,
