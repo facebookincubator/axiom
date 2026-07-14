@@ -184,6 +184,15 @@ TEST_F(PrestoParserTest, qualifiedColumnAccess) {
   }
 }
 
+TEST_F(PrestoParserTest, tableShorthand) {
+  // `TABLE t` is shorthand for `SELECT * FROM t`.
+  auto matcher =
+      matchScan().output({"n_nationkey", "n_name", "n_regionkey", "n_comment"});
+  testSelect("TABLE nation", matcher);
+  testSelect("(TABLE nation)", matcher);
+  testSelect("SELECT * FROM (TABLE nation)", matcher);
+}
+
 TEST_F(PrestoParserTest, selectStar) {
   {
     auto matcher = matchScan().output(
