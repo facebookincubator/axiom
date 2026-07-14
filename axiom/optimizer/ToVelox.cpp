@@ -2167,9 +2167,11 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
     if (!partitionColumns.empty()) {
       std::vector<velox::column_index_t> channels;
       channels.reserve(partitionColumns.size());
-      for (auto i = 0; i < partitionColumns.size(); ++i) {
-        channels.push_back(
-            input->outputType()->getChildIdx(partitionColumns[i]->name()));
+      for (const auto* partitionColumn : partitionColumns) {
+        // 'partitionColumns' name the target schema. The write's input columns
+        // correspond to the schema positionally but may carry different names,
+        // so resolve the channel by schema position rather than by name.
+        channels.push_back(table.type()->getChildIdx(partitionColumn->name()));
       }
 
       auto spec = layout->partitionType()->makeSpec(

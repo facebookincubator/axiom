@@ -74,17 +74,33 @@ class WriteTest : public test::HiveQueriesTestBase,
     hiveMetadata().dropTableIfExists({kDefaultSchema, std::string(name)});
   }
 
-  void createTable(
+  // Evaluates CREATE TABLE 'WITH' properties into connector table options.
+  static folly::F14FastMap<std::string, velox::Variant> toOptions(
+      const std::unordered_map<
+          std::string,
+          facebook::axiom::logical_plan::ExprPtr>& properties) {
+    folly::F14FastMap<std::string, velox::Variant> options;
+    for (const auto& [key, value] : properties) {
+      options[key] = ConstantExprEvaluator::evaluateConstantExpr(*value);
+    }
+    return options;
+  }
+
+  // Creates and commits an empty table so it is findable by a later INSERT. Per
+  // the ConnectorMetadata contract a new table is not visible via findTable
+  // until finishWrite completes, so an empty create still commits.
+  connector::TablePtr createTable(
+      const std::string& schema,
       const std::string& name,
       const RowTypePtr& tableType,
       const folly::F14FastMap<std::string, velox::Variant>& options) {
     auto& metadata = hiveMetadata();
-    dropTableIfExists(name);
+    metadata.dropTableIfExists({schema, std::string(name)});
 
     auto session = makeSession();
     auto table = metadata.createTable(
         session,
-        {kDefaultSchema, name},
+        {schema, name},
         tableType,
         options,
         /*ifNotExists=*/false,
@@ -93,28 +109,49 @@ class WriteTest : public test::HiveQueriesTestBase,
     auto handle = metadata.beginWrite(
         session, table, connector::WriteKind::kCreate, /*explain=*/false);
     metadata.finishWrite(session, handle, {}, nullptr, {}).get();
+    return table;
   }
 
+  connector::TablePtr createTable(
+      const facebook::axiom::SchemaTableName& tableName,
+      const RowTypePtr& schema,
+      const std::unordered_map<
+          std::string,
+          facebook::axiom::logical_plan::ExprPtr>& properties) {
+    return createTable(
+        tableName.schema, tableName.table, schema, toOptions(properties));
+  }
+
+  connector::TablePtr createTable(
+      const std::string& name,
+      const RowTypePtr& tableType,
+      const folly::F14FastMap<std::string, velox::Variant>& options) {
+    return createTable(kDefaultSchema, name, tableType, options);
+  }
+
+  // Registers a CTAS target without committing; the CTAS write commits it. Per
+  // the ConnectorMetadata contract the table becomes findable only after that
+  // write's finishWrite, so pre-committing here would write a spurious empty
+  // stats file.
   connector::TablePtr createTable(
       const ::axiom::sql::presto::CreateTableAsSelectStatement& statement) {
     auto& metadata = hiveMetadata();
     metadata.dropTableIfExists(statement.tableName());
-
-    folly::F14FastMap<std::string, velox::Variant> options;
-    for (const auto& [key, value] : statement.properties()) {
-      options[key] = ConstantExprEvaluator::evaluateConstantExpr(*value);
-    }
-
-    auto session = makeSession();
     auto table = metadata.createTable(
-        session,
+        makeSession(),
         statement.tableName(),
         statement.tableSchema(),
-        options,
+        toOptions(statement.properties()),
         /*ifNotExists=*/false,
         /*explain=*/false);
     VELOX_CHECK_NOT_NULL(table);
     return table;
+  }
+
+  lp::LogicalPlanNodePtr parseInsert(std::string_view sql) {
+    auto statement = prestoParser().parse(sql);
+    VELOX_CHECK(statement->isInsert());
+    return statement->as<::axiom::sql::presto::InsertStatement>()->plan();
   }
 
   void runCtas(
@@ -154,6 +191,21 @@ class WriteTest : public test::HiveQueriesTestBase,
     auto result = runFragmentedPlan(plan);
 
     checkWrittenRows(result, writtenRows);
+  }
+
+  void runCreateTable(std::string_view sql) {
+    SCOPED_TRACE(sql);
+
+    auto statement = prestoParser().parse(sql);
+    VELOX_CHECK(statement->isCreateTable());
+
+    auto createTableStatement =
+        statement->as<::axiom::sql::presto::CreateTableStatement>();
+
+    createTable(
+        createTableStatement->tableName(),
+        createTableStatement->tableSchema(),
+        createTableStatement->properties());
   }
 
   const connector::hive::LocalHiveTableLayout& getLayout(
@@ -446,26 +498,19 @@ TEST_P(WriteTest, insertSql) {
   createTable(
       "test", ROW({"a", "b", "c"}, {INTEGER(), DOUBLE(), VARCHAR()}), {});
 
-  auto parseSql = [&](std::string_view sql) {
-    auto statement = prestoParser().parse(sql);
-    VELOX_CHECK(statement->isInsert());
-
-    return statement->as<::axiom::sql::presto::InsertStatement>()->plan();
-  };
-
   {
-    auto logicalPlan = parseSql("INSERT INTO test SELECT 1, 0.123, 'foo'");
+    auto logicalPlan = parseInsert("INSERT INTO test SELECT 1, 0.123, 'foo'");
     checkWrittenRows(runVelox(logicalPlan), 1);
   }
 
   {
     auto logicalPlan =
-        parseSql("INSERT INTO test(c, a, b) SELECT 'bar', 2, 1.23");
+        parseInsert("INSERT INTO test(c, a, b) SELECT 'bar', 2, 1.23");
     checkWrittenRows(runVelox(logicalPlan), 1);
   }
 
   {
-    auto logicalPlan = parseSql(
+    auto logicalPlan = parseInsert(
         "INSERT INTO test(a, b) "
         "SELECT x, x * 0.1 FROM unnest(array[3, 4, 5]) as t(x)");
     checkWrittenRows(runVelox(logicalPlan), 3);
@@ -479,6 +524,42 @@ TEST_P(WriteTest, insertSql) {
           makeNullableFlatVector<std::string>(
               {"foo", "bar", std::nullopt, std::nullopt, std::nullopt}),
       }));
+}
+
+// INSERT into a bucketed table where the column feeding the bucket column is
+// named differently from the target column.
+TEST_P(WriteTest, insertBucketedSql) {
+  SCOPE_EXIT {
+    dropTableIfExists("test");
+  };
+
+  runCreateTable(
+      "CREATE TABLE test(a integer, b double) "
+      "WITH (bucket_count = 8, bucketed_by = ARRAY['a'])");
+
+  {
+    auto logicalPlan = parseInsert(
+        "INSERT INTO test SELECT x, x * 0.1 FROM unnest(array[1, 2, 4]) AS t(x)");
+    checkWrittenRows(runVelox(logicalPlan), 3);
+    checkTableData(
+        "test",
+        makeRowVector({
+            makeFlatVector<int32_t>({1, 2, 4}),
+            makeFlatVector<double>({0.1, 0.2, 0.4}),
+        }));
+  }
+
+  {
+    auto logicalPlan = parseInsert(
+        "INSERT INTO test(b, a) SELECT x * 0.2, x * 2 FROM unnest(array[1, 2, 4]) AS t(x)");
+    checkWrittenRows(runVelox(logicalPlan), 3);
+    checkTableData(
+        "test",
+        makeRowVector({
+            makeFlatVector<int32_t>({1, 2, 4, 2, 4, 8}),
+            makeFlatVector<double>({0.1, 0.2, 0.4, 0.2, 0.4, 0.8}),
+        }));
+  }
 }
 
 TEST_P(WriteTest, ctasSql) {

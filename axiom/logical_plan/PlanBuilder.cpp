@@ -1646,7 +1646,7 @@ PlanBuilder& PlanBuilder::tableWrite(
       const auto index = schema->getChildIdxIfExists(name);
       VELOX_USER_CHECK(
           index.has_value(),
-          "Column not found: '{}' in table '{}'",
+          "Column not found: '{}' in table {}",
           name,
           schemaTableName.toString());
 
