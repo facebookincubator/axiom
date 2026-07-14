@@ -513,26 +513,25 @@ class RelationPlanner : public AstVisitor {
     }
   }
 
-  void processTable(const Table& table) {
-    const auto tableName = canonicalizeName(table.name()->suffix());
-
+  // Resolves 'name' as a CTE reference, returning true if handled.
+  bool tryProcessCteReference(const std::string& name) {
     // A recursive binding re-translates its body at each reference site so
     // every reference yields an independent FixedPointNode subtree, since
     // execution does not support DAG plans.
-    if (const auto* anchor = ctes_.anchorFor(tableName)) {
+    if (const auto* anchor = ctes_.anchorFor(name)) {
       builder_ = newBuilder();
       // The recursive-ref name must match the enclosing FixedPointNode's
       // name so the optimizer wires this self-reference to that loop state.
-      builder_->recursiveRef(tableName, *anchor);
-      builder_->as(tableName);
-      displayNames_.accumulate(*builder_, tableName);
-      return;
+      builder_->recursiveRef(name, *anchor);
+      builder_->as(name);
+      displayNames_.accumulate(*builder_, name);
+      return true;
     }
 
-    if (auto hidden = ctes_.hide(tableName)) {
+    if (auto hidden = ctes_.hide(name)) {
       const auto& entry = hidden.entry();
       if (entry.isRecursive) {
-        translateRecursiveCteReference(*entry.withQuery, tableName);
+        translateRecursiveCteReference(*entry.withQuery, name);
       } else {
         // TODO: Change WithQuery to store Query and not Statement.
         processQuery(dynamic_cast<Query*>(entry.withQuery->query().get()));
@@ -541,11 +540,24 @@ class RelationPlanner : public AstVisitor {
         // the underlying SELECT/VALUES output columns to a, b.
         if (const auto& columnAliases = entry.withQuery->columnNames()) {
           displayNames_.captureLastNames(*columnAliases);
-          applyColumnAliases(
-              *columnAliases, entry.withQuery->location(), tableName);
+          applyColumnAliases(*columnAliases, entry.withQuery->location(), name);
         }
       }
-      finalizeCteReference(tableName);
+      finalizeCteReference(name);
+      return true;
+    }
+
+    return false;
+  }
+
+  void processTable(const Table& table) {
+    const auto tableName = canonicalizeName(table.name()->suffix());
+
+    // Only an unqualified single-part name can name a CTE; a qualified
+    // catalog.schema.table reference is always a base table or view, even if
+    // its last component matches a CTE name.
+    if (table.name()->parts().size() == 1 &&
+        tryProcessCteReference(tableName)) {
       return;
     }
 
