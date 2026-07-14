@@ -697,6 +697,16 @@ LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::join(
   return *this;
 }
 
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::lateralJoin(
+    const std::shared_ptr<LogicalPlanMatcher>& rightMatcher,
+    OnMatchCallback onMatch) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<LogicalPlanMatcherImpl<LateralJoinNode>>(
+      std::vector<std::shared_ptr<LogicalPlanMatcher>>{matcher_, rightMatcher},
+      std::move(onMatch));
+  return *this;
+}
+
 LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::join(
     const std::shared_ptr<LogicalPlanMatcher>& rightMatcher,
     const std::vector<std::string>& outputAliases) {

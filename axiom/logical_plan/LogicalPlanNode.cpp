@@ -38,6 +38,7 @@ const auto& nodeKindNames() {
       {NodeKind::kOutput, "OUTPUT"},
       {NodeKind::kFixedPoint, "FIXED_POINT"},
       {NodeKind::kRecursiveReference, "RECURSIVE_REFERENCE"},
+      {NodeKind::kLateralJoin, "LATERAL_JOIN"},
   };
   return kNames;
 }
@@ -172,6 +173,7 @@ void LogicalPlanNode::registerSerDe() {
   registry.Register("ProjectNode", ProjectNode::create);
   registry.Register("AggregateNode", AggregateNode::create);
   registry.Register("JoinNode", JoinNode::create);
+  registry.Register("LateralJoinNode", LateralJoinNode::create);
   registry.Register("SortNode", SortNode::create);
   registry.Register("LimitNode", LimitNode::create);
   registry.Register("SetNode", SetNode::create);
@@ -857,6 +859,56 @@ void JoinNode::accept(
 
 bool JoinNode::equalTo(const LogicalPlanNode& other) const {
   const auto* rhs = other.as<JoinNode>();
+  return joinType_ == rhs->joinType_ &&
+      Expr::equalNullableExprs(condition_, rhs->condition_);
+}
+
+folly::dynamic LateralJoinNode::serialize() const {
+  auto obj = serializeBase("LateralJoinNode");
+  obj["joinType"] = JoinTypeName::toName(joinType_);
+  if (condition_) {
+    obj["condition"] = condition_->serialize();
+  }
+  return obj;
+}
+
+// static
+LogicalPlanNodePtr LateralJoinNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto inputs = deserializeNodeInputs(obj, context);
+  VELOX_CHECK_EQ(inputs.size(), 2);
+  ExprPtr condition = nullptr;
+  if (obj.count("condition")) {
+    condition = deserializeExpr(obj["condition"], context);
+  }
+  return std::make_shared<LateralJoinNode>(
+      obj["id"].asString(),
+      inputs[0],
+      inputs[1],
+      JoinTypeName::toJoinType(obj["joinType"].asString()),
+      std::move(condition));
+}
+
+// static
+velox::RowTypePtr LateralJoinNode::makeOutputType(
+    const LogicalPlanNodePtr& left,
+    const LogicalPlanNodePtr& right) {
+  auto type = left->outputType()->unionWith(right->outputType());
+
+  UniqueNameChecker::check(type->names());
+
+  return type;
+}
+
+void LateralJoinNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+bool LateralJoinNode::equalTo(const LogicalPlanNode& other) const {
+  const auto* rhs = other.as<LateralJoinNode>();
   return joinType_ == rhs->joinType_ &&
       Expr::equalNullableExprs(condition_, rhs->condition_);
 }

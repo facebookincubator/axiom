@@ -1562,30 +1562,42 @@ Apply::Apply(Key key)
   VELOX_CHECK_NOT_NULL(inputs_[0]);
   VELOX_CHECK_NOT_NULL(inputs_[1]);
 
-  // Allowed kinds at Apply: correlated scalar (kLeft) and EXISTS/IN
-  // (kLeftSemiProject). Uncorrelated scalars are lowered directly to
-  // cross-join + EnforceSingleRow at translate time — no Apply. kAnti
-  // / kLeftSemiFilter emerge from the post-decorrelate peephole, never
-  // at Apply.
+  // Allowed kinds at Apply: correlated scalar / LEFT lateral (kLeft),
+  // CROSS/INNER lateral (kInner), and EXISTS/IN (kLeftSemiProject).
+  // Uncorrelated scalars are lowered directly to cross-join +
+  // EnforceSingleRow at translate time — no Apply. kAnti / kLeftSemiFilter
+  // emerge from the post-decorrelate peephole, never at Apply.
   const bool isLeft = kind_ == velox::core::JoinType::kLeft;
+  const bool isInner = kind_ == velox::core::JoinType::kInner;
   VELOX_CHECK(
-      isLeft || kind_ == velox::core::JoinType::kLeftSemiProject,
-      "Apply.kind must be kLeft / kLeftSemiProject; got: {}",
+      isLeft || isInner || kind_ == velox::core::JoinType::kLeftSemiProject,
+      "Apply.kind must be kInner / kLeft / kLeftSemiProject; got: {}",
       kind_);
 
-  if (isLeft) {
-    VELOX_CHECK_NOT_NULL(
-        includeMarker_, "kLeft Apply requires an includeMarker");
-    VELOX_CHECK_EQ(
-        includeMarker_->value().type->kind(),
-        velox::TypeKind::BOOLEAN,
-        "Apply.includeMarker must be BOOLEAN");
+  if (isLeft || isInner) {
+    // Scalar / lateral: markColumn and the IN pair are semi/IN-only.
     VELOX_CHECK_NULL(
         markColumn_,
-        "markColumn is kLeftSemiProject-only; kLeft leaves it null");
+        "markColumn is kLeftSemiProject-only; kLeft/kInner leave it null");
     VELOX_CHECK_NULL(inLhs_, "inLhs is IN-only; non-semi Apply leaves it null");
     VELOX_CHECK_NULL(
         inBodyKey_, "inBodyKey is IN-only; non-semi Apply leaves it null");
+    if (isLeft) {
+      VELOX_CHECK_NOT_NULL(
+          includeMarker_, "kLeft Apply requires an includeMarker");
+      VELOX_CHECK_EQ(
+          includeMarker_->value().type->kind(),
+          velox::TypeKind::BOOLEAN,
+          "Apply.includeMarker must be BOOLEAN");
+    } else {
+      // kInner has no NULL-pad rows, so no includeMarker, and (as a
+      // table-valued lateral) no cardinality assertion.
+      VELOX_CHECK_NULL(
+          includeMarker_, "kInner Apply must not have an includeMarker");
+      VELOX_CHECK(
+          !enforceSingleRow_,
+          "kInner Apply must have enforceSingleRow == false");
+    }
   } else {
     VELOX_CHECK_NULL(
         includeMarker_, "includeMarker is kLeft-only; kSemi leaves it null");
@@ -1621,12 +1633,15 @@ Apply::Apply(Key key)
         outputColumns()[i] == inputCols[i],
         "Apply.outputColumns prefix must match input.outputColumns");
   }
-  if (isLeft) {
+  if (isLeft || isInner) {
+    // kLeft ends with the includeMarker slot; kInner has no marker.
+    const size_t markerSlots = isLeft ? 1 : 0;
     VELOX_CHECK_GE(
         outputColumns().size(),
-        inputCols.size() + 1,
-        "kLeft Apply.outputColumns shorter than input + includeMarker");
-    const size_t bodySlots = outputColumns().size() - inputCols.size() - 1;
+        inputCols.size() + markerSlots,
+        "kLeft/kInner Apply.outputColumns shorter than input (+ includeMarker)");
+    const size_t bodySlots =
+        outputColumns().size() - inputCols.size() - markerSlots;
     VELOX_CHECK_LE(
         bodySlots,
         inputs_[1]->outputColumns().size(),
@@ -1639,9 +1654,11 @@ Apply::Apply(Key key)
           "Apply.outputColumns body cols must be unique vs input and each other");
       seen.add(column);
     }
-    VELOX_CHECK(
-        outputColumns().back() == includeMarker_,
-        "Apply.outputColumns must end with includeMarker for kLeft");
+    if (isLeft) {
+      VELOX_CHECK(
+          outputColumns().back() == includeMarker_,
+          "Apply.outputColumns must end with includeMarker for kLeft");
+    }
   } else {
     VELOX_CHECK_EQ(
         outputColumns().size(),

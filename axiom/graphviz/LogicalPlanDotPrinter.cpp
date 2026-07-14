@@ -265,6 +265,37 @@ class DotPrinterVisitor : public PlanNodeVisitor {
     visitInputs(node, ctx);
   }
 
+  void visit(const LateralJoinNode& node, PlanNodeVisitorContext& ctx)
+      const override {
+    auto& context = static_cast<Context&>(ctx);
+    printNodeStart(
+        context.out,
+        node,
+        fmt::format("Lateral Join {}", JoinTypeName::toName(node.joinType())),
+        kPalette.header);
+
+    if (node.condition() != nullptr) {
+      printHighlightedRow(
+          context.out,
+          fmt::format(
+              "ON: {}",
+              escapeHtml(truncate(ExprPrinter::toText(*node.condition())))));
+    }
+
+    printNodeEnd(context.out);
+
+    // Collect and render subqueries from the condition.
+    if (node.condition() != nullptr) {
+      auto subqueries = collectSubqueries(*node.condition());
+      for (const auto* subquery : subqueries) {
+        renderSubqueryInCluster(context, node, *subquery->subquery());
+      }
+    }
+
+    printEdgeToInputs(context.out, node);
+    visitInputs(node, ctx);
+  }
+
   void visit(const SortNode& node, PlanNodeVisitorContext& ctx) const override {
     auto& context = static_cast<Context&>(ctx);
     printNodeStart(context.out, node, "Sort", kPalette.header);

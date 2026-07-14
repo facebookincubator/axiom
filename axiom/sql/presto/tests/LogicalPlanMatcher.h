@@ -189,6 +189,11 @@ class LogicalPlanMatcherBuilder {
       const std::shared_ptr<LogicalPlanMatcher>& rightMatcher,
       const std::vector<std::string>& outputAliases);
 
+  /// Matches a LateralJoinNode with the specified right-side matcher.
+  LogicalPlanMatcherBuilder& lateralJoin(
+      const std::shared_ptr<LogicalPlanMatcher>& rightMatcher,
+      OnMatchCallback onMatch = nullptr);
+
   /// Matches a FixedPointNode. The prior chain matches the anchor; the
   /// given matcher matches the step.
   LogicalPlanMatcherBuilder& fixedPoint(
