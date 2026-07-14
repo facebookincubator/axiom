@@ -16,6 +16,8 @@
 
 #include "axiom/sql/presto/PrestoSqlError.h"
 
+#include "velox/common/base/VeloxException.h"
+
 namespace axiom::sql::presto {
 
 namespace {
@@ -57,6 +59,17 @@ AXIOM_DEFINE_ENUM_NAME(PrestoSqlErrorKind, prestoSqlErrorKindNames);
         message);
   }
   return fmt::format("{} at {}:{}: {}", prefix, line, column, message);
+}
+
+PrestoErrorClassification classify(PrestoSqlErrorKind kind) {
+  const std::string_view user = facebook::velox::error_source::kErrorSourceUser;
+  switch (kind) {
+    case PrestoSqlErrorKind::kSyntax:
+      return {user, "SYNTAX_ERROR"};
+    case PrestoSqlErrorKind::kSemantic:
+      return {user, "GENERIC_USER_ERROR"};
+  }
+  VELOX_UNREACHABLE();
 }
 
 } // namespace axiom::sql::presto
