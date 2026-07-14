@@ -524,9 +524,8 @@ std::any AstBuilder::visitAliasedRelation(
 std::any AstBuilder::visitTableName(PrestoSqlParser::TableNameContext* ctx) {
   trace("visitTableName");
 
-  auto name = getQualifiedName(ctx->qualifiedName());
-  return std::static_pointer_cast<Relation>(
-      std::make_shared<Table>(getLocation(ctx), name));
+  return std::static_pointer_cast<Relation>(std::make_shared<Table>(
+      getLocation(ctx), getQualifiedName(ctx->qualifiedName())));
 }
 
 std::any AstBuilder::visitSelectAll(PrestoSqlParser::SelectAllContext* ctx) {
@@ -1527,7 +1526,11 @@ std::any AstBuilder::visitQueryPrimaryDefault(
 
 std::any AstBuilder::visitTable(PrestoSqlParser::TableContext* ctx) {
   trace("visitTable");
-  return visitChildren("visitTable", ctx);
+
+  // `TABLE t` yields a table reference used directly as a query body; Table
+  // is a QueryBody.
+  return std::static_pointer_cast<QueryBody>(std::make_shared<Table>(
+      getLocation(ctx), getQualifiedName(ctx->qualifiedName())));
 }
 
 std::any AstBuilder::visitInlineTable(
