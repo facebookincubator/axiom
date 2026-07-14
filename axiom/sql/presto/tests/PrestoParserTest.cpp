@@ -1655,9 +1655,11 @@ TEST_F(PrestoParserTest, limit) {
   }
 
   // LIMIT ALL means "no limit" — should not add a LimitNode.
+  // Similarly, LIMIT of INT64_MAX is effectively no limit.
   {
     auto matcher = matchScan().output(nationColumns);
     testSelect("SELECT * FROM nation LIMIT ALL", matcher);
+    testSelect("SELECT * FROM nation LIMIT 9223372036854775807", matcher);
   }
 
   {
