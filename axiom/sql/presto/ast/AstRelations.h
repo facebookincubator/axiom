@@ -583,10 +583,10 @@ class TableSubquery : public QueryBody {
 
 class Lateral : public Relation {
  public:
-  explicit Lateral(NodeLocation location, const RelationPtr& query)
+  explicit Lateral(NodeLocation location, const StatementPtr& query)
       : Relation(NodeType::kLateral, location), query_(query) {}
 
-  const RelationPtr& query() const {
+  const StatementPtr& query() const {
     return query_;
   }
   void accept(AstVisitor* visitor) override;
@@ -601,7 +601,7 @@ class Lateral : public Relation {
   }
 
  private:
-  RelationPtr query_;
+  StatementPtr query_;
 };
 
 class Unnest : public Relation {

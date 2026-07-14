@@ -904,3 +904,73 @@ SELECT t.a IN (
 -- error_v1: 0 vs. 1
 -- error_v2: Scalar sub-query has returned multiple rows
 SELECT (SELECT max(u.a) FROM u WHERE u.a > t.a GROUP BY u.a % 2) FROM t
+----
+-- LATERAL join tests.
+--
+-- CROSS JOIN LATERAL whose no-FROM body projects an outer column.
+-- error_v1: Unsupported PlanNode LATERAL_JOIN
+WITH t(x) AS (VALUES (1), (2), (3))
+SELECT t.x, g.y
+FROM t
+CROSS JOIN LATERAL (SELECT t.x + 1 AS y) g
+----
+-- CROSS JOIN LATERAL with a correlated WHERE; INNER drops outer rows whose
+-- body is empty.
+-- error_v1: Unsupported PlanNode LATERAL_JOIN
+WITH t(x) AS (VALUES (1), (2), (9)),
+     u(a) AS (VALUES (1), (2))
+SELECT t.x, g.m
+FROM t
+CROSS JOIN LATERAL (SELECT u.a AS m FROM u WHERE u.a = t.x) g
+----
+-- CROSS JOIN LATERAL whose body returns several rows per outer row.
+-- error_v1: Unsupported PlanNode LATERAL_JOIN
+WITH t(x) AS (VALUES (2), (4)),
+     u(a) AS (VALUES (1), (2), (3))
+SELECT t.x, g.m
+FROM t
+CROSS JOIN LATERAL (SELECT u.a AS m FROM u WHERE u.a < t.x) g
+----
+-- CROSS JOIN LATERAL whose body produces multiple columns: a body column and
+-- an expression combining the body with an outer column.
+-- error_v1: Unsupported PlanNode LATERAL_JOIN
+WITH t(x) AS (VALUES (2), (4)),
+     u(a) AS (VALUES (1), (2), (3))
+SELECT t.x, g.a, g.b
+FROM t
+CROSS JOIN LATERAL (SELECT u.a AS a, u.a + t.x AS b FROM u WHERE u.a < t.x) g
+----
+-- error_v1: Unsupported PlanNode LATERAL_JOIN
+-- error_v2: INNER LATERAL over an Aggregate body is not yet supported
+WITH t(x) AS (VALUES (1), (2)),
+     u(a) AS (VALUES (1), (2), (3))
+SELECT t.x, g.c
+FROM t
+CROSS JOIN LATERAL (SELECT count(*) AS c FROM u WHERE u.a = t.x) g
+----
+-- LEFT JOIN LATERAL: a matched outer fans out to several rows; an outer whose
+-- body rows are all rejected by the ON survives NULL-padded.
+-- error_v1: Unsupported PlanNode LATERAL_JOIN
+WITH t(x) AS (VALUES (1), (4)),
+     u(a) AS (VALUES (1), (2), (3), (4))
+SELECT t.x, g.m
+FROM t
+LEFT JOIN LATERAL (SELECT u.a AS m FROM u WHERE u.a <= t.x) g ON g.m < t.x
+----
+-- INNER JOIN LATERAL with an ON condition combining outer and lateral
+-- columns.
+-- error_v1: Unsupported PlanNode LATERAL_JOIN
+WITH t(x) AS (VALUES (1), (2), (3)),
+     u(a) AS (VALUES (1), (2), (3), (4))
+SELECT t.x, g.m
+FROM t
+INNER JOIN LATERAL (SELECT u.a AS m FROM u) g ON g.m = t.x + 1
+----
+-- A subquery inside a LATERAL ON condition is not supported.
+-- error_v1: Unsupported PlanNode LATERAL_JOIN
+-- error_v2: Subquery in a LATERAL join ON condition is not supported
+WITH t(x) AS (VALUES (1), (2)),
+     u(a) AS (VALUES (1), (2), (3))
+SELECT t.x, g.m
+FROM t
+INNER JOIN LATERAL (SELECT u.a AS m FROM u) g ON g.m IN (SELECT t.x)

@@ -1366,16 +1366,21 @@ TEST(AstEqualityTest, tableSubqueryNotEqual) {
   EXPECT_FALSE(*a == *b);
 }
 
+std::shared_ptr<Statement> makeLateralQuery(const std::string& table) {
+  return std::make_shared<Query>(
+      loc(), nullptr, makeQuerySpec(emptySelect(), makeTable(table)));
+}
+
 TEST(AstEqualityTest, lateralEquals) {
-  auto a = std::make_shared<Lateral>(loc(0, 0), makeTable("t"));
-  auto b = std::make_shared<Lateral>(loc(5, 5), makeTable("t"));
+  auto a = std::make_shared<Lateral>(loc(0, 0), makeLateralQuery("t"));
+  auto b = std::make_shared<Lateral>(loc(5, 5), makeLateralQuery("t"));
   EXPECT_TRUE(*a == *b);
   EXPECT_EQ(a->hash(), b->hash());
 }
 
 TEST(AstEqualityTest, lateralNotEqual) {
-  auto a = std::make_shared<Lateral>(loc(), makeTable("t1"));
-  auto b = std::make_shared<Lateral>(loc(), makeTable("t2"));
+  auto a = std::make_shared<Lateral>(loc(), makeLateralQuery("t1"));
+  auto b = std::make_shared<Lateral>(loc(), makeLateralQuery("t2"));
   EXPECT_FALSE(*a == *b);
 }
 

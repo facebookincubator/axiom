@@ -40,6 +40,7 @@ enum class NodeKind {
   kOutput = 12,
   kFixedPoint = 13,
   kRecursiveReference = 14,
+  kLateralJoin = 15,
 };
 
 AXIOM_DECLARE_ENUM_NAME(NodeKind)
@@ -527,6 +528,73 @@ class JoinNode : public LogicalPlanNode {
 };
 
 using JoinNodePtr = std::shared_ptr<const JoinNode>;
+
+/// A lateral (dependent) join: for each row of the left input, the right input
+/// is evaluated with that left row's columns in scope, and the results are
+/// joined. Unlike JoinNode, whose two inputs are independent, the RIGHT input
+/// of a lateral join may reference the left input's columns (the correlation);
+/// the left input may not reference the right. The output schema is all left
+/// columns followed by all right columns.
+///
+/// Only kInner and kLeft are allowed. kRight and kFull would require the right
+/// side to be evaluable independently of the left to preserve unmatched right
+/// rows, which contradicts the right side depending on the left.
+class LateralJoinNode : public LogicalPlanNode {
+ public:
+  /// @param condition Optional ON predicate, which may reference either side.
+  /// If nullptr, the output is the per-left-row cross product with the right.
+  LateralJoinNode(
+      std::string id,
+      const LogicalPlanNodePtr& left,
+      const LogicalPlanNodePtr& right,
+      JoinType joinType,
+      ExprPtr condition)
+      : LogicalPlanNode{NodeKind::kLateralJoin, std::move(id), {left, right}, makeOutputType(left, right)},
+        joinType_{joinType},
+        condition_{std::move(condition)} {
+    VELOX_USER_CHECK(
+        joinType_ == JoinType::kInner || joinType_ == JoinType::kLeft,
+        "LATERAL join supports only INNER and LEFT join types");
+    if (condition_ != nullptr) {
+      VELOX_USER_CHECK_EQ(condition_->typeKind(), velox::TypeKind::BOOLEAN);
+    }
+  }
+
+  const LogicalPlanNodePtr& left() const {
+    return inputAt(0);
+  }
+
+  const LogicalPlanNodePtr& right() const {
+    return inputAt(1);
+  }
+
+  JoinType joinType() const {
+    return joinType_;
+  }
+
+  const ExprPtr& condition() const {
+    return condition_;
+  }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
+  folly::dynamic serialize() const override;
+
+  static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  bool equalTo(const LogicalPlanNode& other) const override;
+
+  static velox::RowTypePtr makeOutputType(
+      const LogicalPlanNodePtr& left,
+      const LogicalPlanNodePtr& right);
+
+  const JoinType joinType_;
+  const ExprPtr condition_;
+};
+
+using LateralJoinNodePtr = std::shared_ptr<const LateralJoinNode>;
 
 /// Sort rows based on one or more sort fields. The output schema for this node
 /// matches the input. This node doesn't change the cardinality of the dataset.

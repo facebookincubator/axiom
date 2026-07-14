@@ -498,6 +498,21 @@ class PlanBuilder {
       const std::optional<ExprApi>& condition,
       JoinType joinType);
 
+  /// Lateral (dependent) join: the 'right' plan may reference the left's
+  /// columns. Build 'right' with this builder's scope as its outer scope (see
+  /// the 'outerScope' constructor argument). Only kInner and kLeft are allowed.
+  PlanBuilder& lateralJoin(
+      const PlanBuilder& right,
+      const std::string& condition,
+      JoinType joinType);
+
+  /// @overload Takes an optional ExprApi condition. Pass std::nullopt for
+  /// CROSS JOIN LATERAL.
+  PlanBuilder& lateralJoin(
+      const PlanBuilder& right,
+      const std::optional<ExprApi>& condition,
+      JoinType joinType);
+
   /// Joins using named columns (SQL JOIN USING semantics). Produces a single
   /// copy of each USING column in the output followed by non-USING columns from
   /// both sides in their original order. For FULL OUTER joins, USING columns
