@@ -175,7 +175,7 @@ class Decorrelator : public NodeRewriter<> {
         if (node->isLeftSemiProject()) {
           return projectPeelSemi(node, input, body, accumulatedFilter);
         }
-        return projectPeelLeft(node, input, body, accumulatedFilter);
+        return projectPeelNonSemi(node, input, body, accumulatedFilter);
       }
 
       if (body->is(NodeType::kAggregate)) {
@@ -202,19 +202,22 @@ class Decorrelator : public NodeRewriter<> {
   }
 
  private:
-  // Project peel (Rule A): Project lifts above Apply. Apply's body
-  // becomes Project's child; the lifted Project above the decorrelated
-  // inner Apply reproduces the original output schema using Project's
-  // original exprs (which may reference L cols, now visible above the
-  // inner Apply per the relaxed contract).
+  // Project peel (Rule A) for non-semi kinds (kLeft, kInner): Project
+  // lifts above Apply. Apply's body becomes Project's child; the lifted
+  // Project above the decorrelated inner Apply reproduces the original
+  // output schema using Project's original exprs (which may reference L
+  // cols, now visible above the inner Apply per the relaxed contract).
+  //
+  // kLeft carries pad rows and the includeMarker; kInner has neither.
   //
   // Recurses on the inner Apply so the driver continues peeling whatever
   // remains in body (more Filters / Projects below, or terminus).
-  NodeCP projectPeelLeft(
+  NodeCP projectPeelNonSemi(
       ApplyCP node,
       NodeCP input,
       NodeCP body,
       ExprVector accumulatedFilter) {
+    const bool hasMarker = node->isLeft();
     const Project* projectBody = body->as<Project>();
     NodeCP newBody = projectBody->input();
 
@@ -237,7 +240,9 @@ class Decorrelator : public NodeRewriter<> {
         input->outputColumns().size() + newBody->outputColumns().size() + 1);
     appendAll(innerOutputColumns, input->outputColumns());
     appendUnique(innerOutputColumns, newBody->outputColumns());
-    innerOutputColumns.push_back(node->includeMarker());
+    if (hasMarker) {
+      innerOutputColumns.push_back(node->includeMarker());
+    }
 
     // Recompute correlations for the inner body. Project peel may have
     // lifted outer-column refs out of body (into the lifted Project
@@ -262,21 +267,16 @@ class Decorrelator : public NodeRewriter<> {
     // Recurse: continue peeling whatever's in newBody, or hit terminus.
     NodeCP decorrelatedInner = rewrite(innerApply);
 
-    // Build lifted Project. Its exprs reproduce the original Apply's
-    // output schema:
-    //   input.cols → pass-through.
-    //   Project's original output cols → IF(_include, expr, NULL) so
-    //     non-default-null exprs evaluate to NULL on pad rows post-Join.
-    //     Skip cols that already appear in input — they collapse to the
-    //     same slot.
-    //   includeMarker → pass-through.
+    // Build lifted Project reproducing the original Apply output schema:
+    // input cols pass through; each Project output col is recomputed from its
+    // original expr (per-kind handling below); cols already present in input
+    // collapse to the same slot.
     ExprVector liftedExprs;
     liftedExprs.reserve(
         input->outputColumns().size() + projectBody->exprs().size() + 1);
     appendAll(liftedExprs, input->outputColumns());
     PlanObjectSet liftedSeen =
         PlanObjectSet::fromObjects(input->outputColumns());
-    ColumnCP includeMarker = node->includeMarker();
     const auto& projectOutputs = projectBody->outputColumns();
     for (size_t i = 0; i < projectBody->exprs().size(); ++i) {
       ColumnCP outputColumn = projectOutputs[i];
@@ -285,11 +285,19 @@ class Decorrelator : public NodeRewriter<> {
       }
       liftedSeen.add(outputColumn);
       ExprCP expr = projectBody->exprs()[i];
-      const Literal* nullLiteral = builder().makeNull(expr->value().type);
-      liftedExprs.push_back(
-          exprFactory_.makeIf(includeMarker, expr, nullLiteral));
+      if (hasMarker) {
+        // kLeft: NULL out non-default-null exprs on pad rows.
+        const Literal* nullLiteral = builder().makeNull(expr->value().type);
+        liftedExprs.push_back(
+            exprFactory_.makeIf(node->includeMarker(), expr, nullLiteral));
+      } else {
+        // kInner: no pad rows, expr passes through unchanged.
+        liftedExprs.push_back(expr);
+      }
     }
-    liftedExprs.push_back(includeMarker);
+    if (hasMarker) {
+      liftedExprs.push_back(node->includeMarker());
+    }
 
     return builder().make<Project>(Project::Key{
         decorrelatedInner,
@@ -379,6 +387,10 @@ class Decorrelator : public NodeRewriter<> {
       VELOX_NYI(
           "Decorrelate: kLeftSemiProject IN over Limit with count >= 1 "
           "not yet implemented (LIMIT must precede the IN equi check)");
+    }
+    if (node->isInner()) {
+      VELOX_NYI(
+          "Decorrelate: INNER LATERAL over a Limit body is not yet supported");
     }
     VELOX_USER_CHECK(
         node->isLeft(),
@@ -595,6 +607,11 @@ class Decorrelator : public NodeRewriter<> {
           joinBody,
           std::move(joinPredicate),
           std::move(accumulatedFilter));
+    }
+
+    if (node->isInner()) {
+      VELOX_NYI(
+          "Decorrelate: INNER LATERAL over a Join body is not yet supported");
     }
 
     VELOX_FAIL(
@@ -1022,6 +1039,11 @@ class Decorrelator : public NodeRewriter<> {
       NodeCP input,
       NodeCP body,
       ExprVector accumulatedFilter) {
+    if (node->isInner()) {
+      VELOX_NYI(
+          "Decorrelate: INNER LATERAL over an AssignUniqueId body is not "
+          "yet supported");
+    }
     AssignUniqueIdCP assignUniqueIdBody = body->as<AssignUniqueId>();
     NodeCP newBody = assignUniqueIdBody->input();
     ColumnCP idColumn = assignUniqueIdBody->idColumn();
@@ -1118,6 +1140,11 @@ class Decorrelator : public NodeRewriter<> {
 
     if (node->isLeftSemiProject()) {
       return aggregatePeelSemi(node, input, body, accumulatedFilter);
+    }
+    if (node->isInner()) {
+      VELOX_NYI(
+          "Decorrelate: INNER LATERAL over an Aggregate body is not yet "
+          "supported");
     }
     if (!node->isLeft()) {
       VELOX_NYI(
@@ -1660,6 +1687,8 @@ class Decorrelator : public NodeRewriter<> {
   // Builds the terminus shape from a fully-peeled Apply.
   NodeCP terminus(ApplyCP apply, NodeCP input, NodeCP body, ExprVector filter) {
     switch (apply->kind()) {
+      case velox::core::JoinType::kInner:
+        return terminusInner(apply, input, body, filter);
       case velox::core::JoinType::kLeft:
         return terminusLeft(apply, input, body, filter);
       case velox::core::JoinType::kLeftSemiProject:
@@ -1768,6 +1797,28 @@ class Decorrelator : public NodeRewriter<> {
     return builder().make<Project>(Project::Key{
         enforced,
         std::move(finalExprs),
+        apply->outputColumns(),
+    });
+  }
+
+  NodeCP
+  terminusInner(ApplyCP apply, NodeCP input, NodeCP body, ExprVector filter) {
+    // Plain INNER JOIN: no cardinality assertion, no include marker. Body and
+    // input columns are disjoint (correlation columns live on the Apply, not
+    // in body output), so the output is input ++ body with no collision.
+    JoinCondition::Split split = JoinCondition::splitEquiKeys(
+        filter,
+        PlanObjectSet::fromObjects(input->outputColumns()),
+        PlanObjectSet::fromObjects(body->outputColumns()));
+    return builder().make<Join>(Join::Key{
+        input,
+        body,
+        velox::core::JoinType::kInner,
+        std::move(split.leftKeys),
+        std::move(split.rightKeys),
+        std::move(split.residual),
+        /*nullAware=*/false,
+        /*nullAsValue=*/false,
         apply->outputColumns(),
     });
   }

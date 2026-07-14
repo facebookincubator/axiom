@@ -1369,13 +1369,18 @@ using TopNRowNumberCP = const TopNRowNumber*;
 ///
 /// Per-kind semantics:
 ///
-///   kLeft             Correlated scalar / lateral subquery. Left-outer-join
+///   kLeft             Correlated scalar / LEFT JOIN LATERAL. Left-outer-join
 ///                     semantics. Body may produce N rows per outer. Output:
 ///                     `input.outputColumns ++ unique(body.outputColumns)
 ///                     ++ [includeMarker]` — a body column already in input
 ///                     occupies a single output slot. (NULL-padded for
 ///                     outers with no match; `includeMarker` is `true`
 ///                     on real rows, NULL on pad rows.)
+///   kInner            CROSS / INNER JOIN LATERAL. Inner-join semantics: no
+///                     NULL-padded rows and hence no `includeMarker`; outers
+///                     with no matching body row are dropped. Body may produce
+///                     N rows per outer. Output:
+///                     `input.outputColumns ++ unique(body.outputColumns)`.
 ///   kLeftSemiProject  EXISTS / IN. Output:
 ///                     `input.outputColumns ++ markColumn` — a fresh BOOLEAN
 ///                     true iff any body row exists for the outer
@@ -1457,6 +1462,10 @@ class Apply : public Node {
 
   bool isLeft() const {
     return kind_ == velox::core::JoinType::kLeft;
+  }
+
+  bool isInner() const {
+    return kind_ == velox::core::JoinType::kInner;
   }
 
   bool isLeftSemiProject() const {

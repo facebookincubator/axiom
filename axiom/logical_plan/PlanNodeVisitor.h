@@ -47,6 +47,10 @@ class PlanNodeVisitor {
   virtual void visit(const JoinNode& node, PlanNodeVisitorContext& context)
       const = 0;
 
+  virtual void visit(
+      const LateralJoinNode& node,
+      PlanNodeVisitorContext& context) const = 0;
+
   virtual void visit(const SortNode& node, PlanNodeVisitorContext& context)
       const = 0;
 

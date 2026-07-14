@@ -398,6 +398,21 @@ class RelationPlanner : public AstVisitor {
     }
   }
 
+  static bool isLateral(const RelationPtr& relation) {
+    if (relation->is(NodeType::kAliasedRelation)) {
+      return relation->as<AliasedRelation>()->relation()->is(
+          NodeType::kLateral);
+    }
+    return relation->is(NodeType::kLateral);
+  }
+
+  // Plans a LATERAL relation's body, which may reference the enclosing join's
+  // left side through the builder's outer scope.
+  void processLateral(const Lateral& lateral) {
+    processQuery(lateral.query()->as<Query>());
+    displayNames_.accumulate(*builder_, /*relationAlias=*/std::nullopt);
+  }
+
   void processQueryBody(const QueryBodyPtr& queryBody) {
     if (queryBody->is(NodeType::kQuerySpecification)) {
       visitQuerySpecification(
@@ -486,6 +501,8 @@ class RelationPlanner : public AstVisitor {
         return processTableSubquery(*relation->as<TableSubquery>());
       case NodeType::kUnnest:
         return processUnnest(*relation->as<Unnest>());
+      case NodeType::kLateral:
+        return processLateral(*relation->as<Lateral>());
       case NodeType::kJoin:
         return processJoin(*relation->as<Join>());
       default:
@@ -681,6 +698,19 @@ class RelationPlanner : public AstVisitor {
       return;
     }
 
+    // A LATERAL right side may reference the left. The right is planned with
+    // the left's scope as its outer scope, so the correlation resolves; a
+    // LateralJoinNode records the dependency for the optimizer to decorrelate.
+    const bool lateral = isLateral(join.right());
+    const auto joinType = toJoinType(join.joinType());
+    if (lateral) {
+      AXIOM_PRESTO_SEMANTIC_CHECK(
+          joinType == lp::JoinType::kInner || joinType == lp::JoinType::kLeft,
+          join.location(),
+          "LATERAL",
+          "LATERAL is only supported with CROSS, INNER, or LEFT JOIN");
+    }
+
     auto leftBuilder = builder_;
     auto leftScope = leftBuilder->scope();
 
@@ -717,8 +747,17 @@ class RelationPlanner : public AstVisitor {
         condition = toExpr(criteria->as<JoinOn>()->expression());
 
         builder_ = leftBuilder;
-        builder_->join(*rightBuilder, condition, toJoinType(join.joinType()));
+        if (lateral) {
+          builder_->lateralJoin(*rightBuilder, condition, joinType);
+        } else {
+          builder_->join(*rightBuilder, condition, joinType);
+        }
       } else if (criteria->is(NodeType::kJoinUsing)) {
+        AXIOM_PRESTO_SEMANTIC_CHECK(
+            !lateral,
+            criteria->location(),
+            "LATERAL",
+            "LATERAL does not support USING");
         const auto* joinUsing = criteria->as<JoinUsing>();
         std::vector<std::string> columns;
         columns.reserve(joinUsing->columns().size());
@@ -727,8 +766,7 @@ class RelationPlanner : public AstVisitor {
         }
 
         builder_ = leftBuilder;
-        builder_->joinUsing(
-            *rightBuilder, columns, toJoinType(join.joinType()));
+        builder_->joinUsing(*rightBuilder, columns, joinType);
       } else {
         AXIOM_PRESTO_SYNTAX_FAIL(
             criteria->location(),
@@ -738,7 +776,11 @@ class RelationPlanner : public AstVisitor {
       }
     } else {
       builder_ = leftBuilder;
-      builder_->join(*rightBuilder, std::nullopt, toJoinType(join.joinType()));
+      if (lateral) {
+        builder_->lateralJoin(*rightBuilder, std::nullopt, joinType);
+      } else {
+        builder_->join(*rightBuilder, std::nullopt, joinType);
+      }
     }
   }
 

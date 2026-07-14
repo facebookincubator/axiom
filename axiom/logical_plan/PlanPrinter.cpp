@@ -137,6 +137,16 @@ class ToTextVisitor : public PlanNodeVisitor {
         context);
   }
 
+  void visit(const LateralJoinNode& node, PlanNodeVisitorContext& context)
+      const override {
+    appendNode(
+        fmt::format("LateralJoin {}", JoinTypeName::toName(node.joinType())),
+        node,
+        node.condition() != nullptr ? ExprPrinter::toText(*node.condition())
+                                    : "",
+        context);
+  }
+
   void visit(const SortNode& node, PlanNodeVisitorContext& context)
       const override {
     auto& myContext = static_cast<Context&>(context);
@@ -403,6 +413,15 @@ class CollectExprStatsPlanNodeVisitor : public PlanNodeVisitor {
   }
 
   void visit(const JoinNode& node, PlanNodeVisitorContext& context)
+      const override {
+    auto& stats = static_cast<Context&>(context).stats;
+    if (node.condition() != nullptr) {
+      collectExprStats(*node.condition(), stats);
+    }
+    visitInputs(node, context);
+  }
+
+  void visit(const LateralJoinNode& node, PlanNodeVisitorContext& context)
       const override {
     auto& stats = static_cast<Context&>(context).stats;
     if (node.condition() != nullptr) {
@@ -690,6 +709,29 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
   }
 
   void visit(const JoinNode& node, PlanNodeVisitorContext& context)
+      const override {
+    auto& myContext = static_cast<Context&>(context);
+    appendHeader(
+        fmt::format(
+            "{} {}",
+            NodeKindName::toName(node.kind()),
+            JoinTypeName::toName(node.joinType())),
+        node,
+        myContext);
+
+    if (!myContext.skeletonOnly) {
+      const auto indent = makeIndent(myContext.indent + 3);
+      if (node.condition() != nullptr) {
+        myContext.out << indent << "condition: ";
+        myContext.appendExpression(*node.condition());
+        myContext.out << std::endl;
+      }
+    }
+
+    appendInputs(node, myContext);
+  }
+
+  void visit(const LateralJoinNode& node, PlanNodeVisitorContext& context)
       const override {
     auto& myContext = static_cast<Context&>(context);
     appendHeader(

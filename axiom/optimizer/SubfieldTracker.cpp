@@ -584,6 +584,13 @@ void SubfieldTracker::markControl(
     const lp::LogicalPlanNode& node,
     const MarkFieldsAccessedContext& context) {
   const auto kind = node.kind();
+
+  // Reject before the recursion below descends into the correlated body,
+  // where the outer reference cannot resolve against the body's own scope.
+  if (kind == lp::NodeKind::kLateralJoin) {
+    VELOX_NYI("Unsupported PlanNode {}", lp::NodeKindName::toName(kind));
+  }
+
   if (kind == lp::NodeKind::kJoin) {
     const auto* join = node.as<lp::JoinNode>();
     if (const auto& condition = join->condition()) {

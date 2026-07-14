@@ -1237,6 +1237,44 @@ PlanBuilder& PlanBuilder::join(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::lateralJoin(
+    const PlanBuilder& right,
+    const std::string& condition,
+    JoinType joinType) {
+  std::optional<ExprApi> conditionExpr;
+  if (!condition.empty()) {
+    conditionExpr = sqlParser_->parseExpr(condition);
+  }
+
+  return lateralJoin(right, conditionExpr, joinType);
+}
+
+PlanBuilder& PlanBuilder::lateralJoin(
+    const PlanBuilder& right,
+    const std::optional<ExprApi>& condition,
+    JoinType joinType) {
+  VELOX_USER_CHECK_NOT_NULL(node_, "Lateral join node cannot be a leaf node");
+  VELOX_USER_CHECK_NOT_NULL(right.node_);
+
+  outputMapping_->merge(*right.outputMapping_);
+
+  auto inputRowType = node_->outputType()->unionWith(right.node_->outputType());
+
+  ExprPtr expr;
+  if (condition.has_value()) {
+    expr = resolver_.resolveScalarTypes(
+        condition->expr(), [&](const auto& alias, const auto& name) {
+          return resolveJoinInputName(
+              alias, name, *outputMapping_, inputRowType, outerScope_);
+        });
+  }
+
+  node_ = std::make_shared<LateralJoinNode>(
+      nextId(), std::move(node_), right.node_, joinType, std::move(expr));
+
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::joinUsing(
     const PlanBuilder& right,
     const std::vector<std::string>& columns,

@@ -405,6 +405,9 @@ class Translator {
       const LpNameSet& required);
   Translated translateSet(const lp::SetNode& set, const LpNameSet& required);
   Translated translateJoin(const lp::JoinNode& join, const LpNameSet& required);
+  Translated translateLateralJoin(
+      const lp::LateralJoinNode& join,
+      const LpNameSet& required);
   Translated translateTableWrite(
       const lp::TableWriteNode& tableWrite,
       const LpNameSet& required);
@@ -620,6 +623,8 @@ Translated Translator::translateNode(
       return translateSet(*node.as<lp::SetNode>(), required);
     case lp::NodeKind::kJoin:
       return translateJoin(*node.as<lp::JoinNode>(), required);
+    case lp::NodeKind::kLateralJoin:
+      return translateLateralJoin(*node.as<lp::LateralJoinNode>(), required);
     case lp::NodeKind::kTableWrite:
       return translateTableWrite(*node.as<lp::TableWriteNode>(), required);
     case lp::NodeKind::kOutput:
@@ -1786,6 +1791,67 @@ Translated Translator::translateJoin(
        /*nullAsValue=*/false,
        std::move(outputColumns)});
   return {joinNode, std::move(merged)};
+}
+
+Translated Translator::translateLateralJoin(
+    const lp::LateralJoinNode& join,
+    const LpNameSet& /*required*/) {
+  // Keep all columns of both sides: the body may correlate on any left
+  // column, and the Apply output is input.columns ++ body.columns. Unused
+  // columns are pruned in a later pass.
+  Translated left =
+      translateNode(*join.left(), allNames(*join.left()->outputType()));
+
+  // With the left scope pushed, the body's references to left columns are
+  // captured as the Apply's correlation.
+  subqueries_.push(left.scope);
+  Translated right =
+      translateNode(*join.right(), allNames(*join.right()->outputType()));
+  ColumnVector correlationColumns = subqueries_.pop();
+
+  // The ON condition may read either side.
+  Scope merged = left.scope;
+  for (auto& [name, column] : right.scope) {
+    merged[name] = column;
+  }
+
+  ExprVector filter;
+  if (join.condition() != nullptr) {
+    if (containsSubquery(*join.condition())) {
+      VELOX_NYI("Subquery in a LATERAL join ON condition is not supported");
+    }
+    ExprCP condition =
+        translateExpr(*join.condition(), merged, /*applyTarget=*/nullptr);
+    filter = ExprFactory::flattenAnd(condition);
+  }
+
+  // CROSS / INNER JOIN LATERAL -> kInner (outers with no body row are
+  // dropped, no pad rows). LEFT JOIN LATERAL -> kLeft (NULL-padded).
+  const velox::core::JoinType kind = join.joinType() == lp::JoinType::kLeft
+      ? velox::core::JoinType::kLeft
+      : velox::core::JoinType::kInner;
+
+  ColumnVector outputColumns = left.node->outputColumns();
+  appendUnique(outputColumns, right.node->outputColumns());
+  ColumnCP includeMarker = nullptr;
+  if (kind == velox::core::JoinType::kLeft) {
+    includeMarker = Column::createBoolean("_include");
+    outputColumns.push_back(includeMarker);
+  }
+
+  auto* apply = builder_.make<Apply>(
+      {left.node,
+       right.node,
+       std::move(correlationColumns),
+       kind,
+       std::move(filter),
+       /*enforceSingleRow=*/false,
+       /*markColumn=*/nullptr,
+       /*inLhs=*/nullptr,
+       /*inBodyKey=*/nullptr,
+       includeMarker,
+       std::move(outputColumns)});
+  return {apply, std::move(merged)};
 }
 
 ExprCP Translator::translateExpr(
