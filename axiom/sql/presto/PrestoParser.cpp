@@ -533,8 +533,7 @@ class RelationPlanner : public AstVisitor {
       if (entry.isRecursive) {
         translateRecursiveCteReference(*entry.withQuery, name);
       } else {
-        // TODO: Change WithQuery to store Query and not Statement.
-        processQuery(dynamic_cast<Query*>(entry.withQuery->query().get()));
+        processQuery(entry.withQuery->query().get());
 
         // Apply CTE column-alias list, e.g. 'WITH t(a, b) AS (...)' renames
         // the underlying SELECT/VALUES output columns to a, b.
@@ -1374,9 +1373,8 @@ class RelationPlanner : public AstVisitor {
         // actually references its own name. Otherwise it's a standard union.
         bool selfReferential = false;
         if (with->isRecursive()) {
-          auto* bodyQuery = dynamic_cast<Query*>(withQuery->query().get());
-          selfReferential = bodyQuery != nullptr &&
-              presto::RecursiveCteValidator::referencesCte(*bodyQuery, cteName);
+          selfReferential = presto::RecursiveCteValidator::referencesCte(
+              *withQuery->query(), cteName);
         }
         ctes_.bind(cteName, CteScope::Entry{withQuery, selfReferential});
       }

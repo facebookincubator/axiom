@@ -1651,7 +1651,7 @@ std::any AstBuilder::visitNamedQuery(PrestoSqlParser::NamedQueryContext* ctx) {
   return std::make_shared<WithQuery>(
       getLocation(ctx),
       visitIdentifier(ctx->name),
-      visitTyped<Statement>(ctx->query()),
+      std::dynamic_pointer_cast<Query>(visitTyped<Statement>(ctx->query())),
       columns);
 }
 
