@@ -97,6 +97,48 @@ TEST_F(PrestoParserTest, unnest) {
   }
 }
 
+TEST_F(PrestoParserTest, lateralJoin) {
+  // CROSS JOIN LATERAL over a body with no FROM (the body references the left
+  // side) builds a LateralJoinNode whose right side is the body.
+  testSelect(
+      "SELECT n_nationkey, d FROM nation "
+      "CROSS JOIN LATERAL (SELECT n_nationkey + 1 AS d) AS x",
+      matchScan("nation")
+          .lateralJoin(matchValues().project().build())
+          .project()
+          .output());
+
+  // A LATERAL body with a FROM clause is a multi-row correlated relation.
+  testSelect(
+      "SELECT nation.n_nationkey, n FROM nation "
+      "CROSS JOIN LATERAL ("
+      "  SELECT n2.n_name AS n FROM nation n2 "
+      "  WHERE n2.n_nationkey = nation.n_regionkey) AS x",
+      matchScan("nation")
+          .lateralJoin(matchScan("nation").filter().project().build())
+          .project()
+          .output());
+
+  // LEFT JOIN LATERAL with an ON condition.
+  testSelect(
+      "SELECT nation.n_nationkey, n FROM nation "
+      "LEFT JOIN LATERAL ("
+      "  SELECT n2.n_name AS n FROM nation n2 "
+      "  WHERE n2.n_nationkey = nation.n_regionkey) AS x ON true",
+      matchScan("nation")
+          .lateralJoin(matchScan("nation").filter().project().build())
+          .project()
+          .output());
+
+  // RIGHT and FULL JOIN LATERAL are rejected: the right side is not preserved,
+  // so it cannot depend on the left.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSelect(
+          "SELECT n_nationkey FROM nation "
+          "RIGHT JOIN LATERAL (SELECT n_nationkey AS d) AS x ON true"),
+      "LATERAL is only supported with CROSS, INNER, or LEFT JOIN");
+}
+
 TEST_F(PrestoParserTest, qualifiedColumnAccess) {
   {
     connector_->addTable("t", ROW({"x"}, {INTEGER()}));

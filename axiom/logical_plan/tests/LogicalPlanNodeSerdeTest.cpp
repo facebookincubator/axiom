@@ -209,6 +209,32 @@ TEST_F(LogicalPlanNodeSerdeTest, joinNodeCrossJoin) {
   testRoundTrip(plan);
 }
 
+TEST_F(LogicalPlanNodeSerdeTest, lateralJoinNode) {
+  auto right = PlanBuilder().values(
+      ROW({"b"}, {BIGINT()}), std::vector<Variant>{Variant::row({1LL})});
+
+  auto plan =
+      PlanBuilder()
+          .values(
+              ROW({"a"}, {BIGINT()}), std::vector<Variant>{Variant::row({1LL})})
+          .lateralJoin(right, "a = b", JoinType::kLeft)
+          .build();
+  testRoundTrip(plan);
+}
+
+TEST_F(LogicalPlanNodeSerdeTest, lateralJoinNodeCross) {
+  auto right = PlanBuilder().values(
+      ROW({"b"}, {BIGINT()}), std::vector<Variant>{Variant::row({1LL})});
+
+  auto plan =
+      PlanBuilder()
+          .values(
+              ROW({"a"}, {BIGINT()}), std::vector<Variant>{Variant::row({1LL})})
+          .lateralJoin(right, std::nullopt, JoinType::kInner)
+          .build();
+  testRoundTrip(plan);
+}
+
 TEST_F(LogicalPlanNodeSerdeTest, sortNode) {
   auto plan = PlanBuilder()
                   .values(

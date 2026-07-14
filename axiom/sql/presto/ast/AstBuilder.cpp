@@ -1770,7 +1770,8 @@ std::any AstBuilder::visitUnnest(PrestoSqlParser::UnnestContext* ctx) {
 
 std::any AstBuilder::visitLateral(PrestoSqlParser::LateralContext* ctx) {
   trace("visitLateral");
-  return visitChildren("visitLateral", ctx);
+  return std::static_pointer_cast<Relation>(std::make_shared<Lateral>(
+      getLocation(ctx), visitTyped<Statement>(ctx->query())));
 }
 
 std::any AstBuilder::visitParenthesizedRelation(

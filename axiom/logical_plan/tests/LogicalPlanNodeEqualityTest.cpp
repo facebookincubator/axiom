@@ -237,6 +237,56 @@ TEST_F(LogicalPlanNodeEqualityTest, joinNodeEquality) {
   EXPECT_EQ(*makeCrossJoin(), *makeCrossJoin());
 }
 
+TEST_F(LogicalPlanNodeEqualityTest, lateralJoinNodeEquality) {
+  std::vector<std::vector<std::string>> rows = {{"1", "10"}, {"2", "20"}};
+  std::vector<std::vector<std::string>> rightRows = {{"1", "2"}};
+
+  auto makeLateral = [&rows, &rightRows] {
+    return PlanBuilder()
+        .values({"x", "y"}, rows)
+        .lateralJoin(
+            PlanBuilder().values({"a", "b"}, rightRows),
+            "x = a",
+            JoinType::kInner)
+        .planNode();
+  };
+
+  EXPECT_EQ(*makeLateral(), *makeLateral());
+
+  // Different join type.
+  auto lateralLeft = PlanBuilder()
+                         .values({"x", "y"}, rows)
+                         .lateralJoin(
+                             PlanBuilder().values({"a", "b"}, rightRows),
+                             "x = a",
+                             JoinType::kLeft)
+                         .planNode();
+  EXPECT_NE(*makeLateral(), *lateralLeft);
+
+  // No condition (cross) vs with condition.
+  auto makeCross = [&rows, &rightRows] {
+    return PlanBuilder()
+        .values({"x", "y"}, rows)
+        .lateralJoin(
+            PlanBuilder().values({"a", "b"}, rightRows),
+            std::nullopt,
+            JoinType::kInner)
+        .planNode();
+  };
+  EXPECT_NE(*makeLateral(), *makeCross());
+  EXPECT_EQ(*makeCross(), *makeCross());
+
+  // A lateral join differs from a regular join of the same shape.
+  auto regularJoin = PlanBuilder()
+                         .values({"x", "y"}, rows)
+                         .join(
+                             PlanBuilder().values({"a", "b"}, rightRows),
+                             "x = a",
+                             JoinType::kInner)
+                         .planNode();
+  EXPECT_NE(*makeLateral(), *regularJoin);
+}
+
 TEST_F(LogicalPlanNodeEqualityTest, sortNodeEquality) {
   std::vector<std::vector<std::string>> rows = {{"1", "10"}, {"2", "20"}};
   auto makeNode = [&rows] {
