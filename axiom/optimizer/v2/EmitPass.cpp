@@ -1872,7 +1872,10 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
         /*scaleWriter=*/false,
         connectorPartitionSpec(
             *layout->partitionType(),
-            inputType,
+            // 'partitionColumns' name the target schema. 'input' corresponds to
+            // the schema positionally but may carry source names when the write
+            // reuses a source projection, so resolve channels via the schema.
+            table.type(),
             partitionColumns,
             /*isLocal=*/true),
         std::vector<velox::core::PlanNodePtr>{std::move(input)});

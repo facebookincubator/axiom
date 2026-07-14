@@ -54,6 +54,11 @@ TEST_F(DdlParserTest, insertIntoTable) {
   VELOX_ASSERT_THROW(
       parseSql("INSERT INTO nation SELECT 100, 'n-100', 2, 3"),
       "Wrong column type: INTEGER vs. VARCHAR, column 'n_comment' in table \"default\".\"nation\"");
+
+  // Non-existent target column.
+  VELOX_ASSERT_THROW(
+      parseSql("INSERT INTO nation(no_such_col) SELECT 1"),
+      "Column not found: 'no_such_col' in table \"default\".\"nation\"");
 }
 
 TEST_F(DdlParserTest, createTableAsSelect) {
