@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
+#include "velox/common/base/tests/GTestUtils.h"
 
 namespace facebook::axiom::optimizer {
 namespace {
@@ -25,15 +26,21 @@ namespace {
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class TableSampleTest : public test::QueryTestBase {
+class TableSampleTest : public test::QueryTestBase,
+                        public ::testing::WithParamInterface<bool> {
  protected:
+  void SetUp() override {
+    test::QueryTestBase::SetUp();
+    useV2_ = GetParam();
+  }
+
   lp::LogicalPlanNodePtr parseSampledScan(const std::string& sample) {
     return parseSelect(
         "SELECT * FROM t TABLESAMPLE " + sample, kTestConnectorId);
   }
 };
 
-TEST_F(TableSampleTest, bernoulli) {
+TEST_P(TableSampleTest, bernoulli) {
   testConnector_->addTable("t", ROW({"a", "b"}, INTEGER()));
 
   // BERNOULLI samples each row independently, lowered to filter(rand() < p).
@@ -52,7 +59,7 @@ TEST_F(TableSampleTest, bernoulli) {
       matchValues().build());
 }
 
-TEST_F(TableSampleTest, system) {
+TEST_P(TableSampleTest, system) {
   testConnector_->addTable("t", ROW({"a", "b"}, INTEGER()));
 
   // Returns the single fragment's plan node and its sampled-scan map.
@@ -86,9 +93,18 @@ TEST_F(TableSampleTest, system) {
     AXIOM_ASSERT_PLAN(plan, matchValues().build());
     EXPECT_TRUE(sampledScans.empty());
   }
+
+  // SYSTEM needs a single scan to sample; a non-scan source fails.
+  VELOX_ASSERT_THROW(
+      planVelox(
+          parseSelect(
+              "SELECT * FROM (VALUES (1)) AS v (x) TABLESAMPLE SYSTEM (50)",
+              kTestConnectorId),
+          {.numWorkers = 1, .numDrivers = 1}),
+      "TABLESAMPLE SYSTEM is only supported directly over a table");
 }
 
-TEST_F(TableSampleTest, explainShowsSampleRate) {
+TEST_P(TableSampleTest, explainShowsSampleRate) {
   testConnector_->addTable("t", ROW({"a", "b"}, INTEGER()));
 
   auto explain = [&](const std::string& sample) {
@@ -111,7 +127,7 @@ TEST_F(TableSampleTest, explainShowsSampleRate) {
       "   sample: 0.1%\n\n");
 }
 
-TEST_F(TableSampleTest, sampledCardinality) {
+TEST_P(TableSampleTest, sampledCardinality) {
   testConnector_->addTable("big", ROW({"bk", "bv"}, BIGINT()))
       ->setStats(100'000, {{"bk", {.numDistinct = 100'000}}});
   testConnector_->addTable("small", ROW({"sk", "sv"}, BIGINT()))
@@ -119,19 +135,24 @@ TEST_F(TableSampleTest, sampledCardinality) {
 
   auto planSingleNode = [&](const std::string& big) {
     return toSingleNodePlan(parseSelect(
-        "SELECT * FROM " + big + " JOIN small ON bk = sk", kTestConnectorId));
+        "SELECT bk, bv, sv FROM " + big + " JOIN small ON bk = sk",
+        kTestConnectorId));
+  };
+
+  auto matchJoin = [&](const std::string& probe, const std::string& build) {
+    return matchScan(probe).hashJoinInner(matchScan(build).build()).build();
   };
 
   // Unsampled, 'small' (1K rows) is the smaller side.
-  AXIOM_ASSERT_PLAN(
-      planSingleNode("big"),
-      matchScan("big").hashJoinInner(matchScan("small").build()).build());
+  AXIOM_ASSERT_PLAN(planSingleNode("big"), matchJoin("big", "small"));
 
   // Sampling 'big' to 0.5% (~500 rows) makes it the smaller side.
   AXIOM_ASSERT_PLAN(
       planSingleNode("big TABLESAMPLE SYSTEM (0.5)"),
-      matchScan("small").hashJoinInner(matchScan("big").build()).build());
+      matchJoin("small", "big"));
 }
+
+AXIOM_INSTANTIATE_V1_V2(TableSampleTest);
 
 } // namespace
 } // namespace facebook::axiom::optimizer

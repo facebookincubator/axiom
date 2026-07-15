@@ -100,6 +100,20 @@ void collectUsedNamesInPlan(
   }
 }
 
+// Returns the single Scan leaf reached through single-input nodes (Filter,
+// Project, ...), or nullptr if the subtree branches (join, set) or bottoms out
+// in a non-Scan leaf. SYSTEM sampling requires exactly one scan to sample.
+ScanCP soleScan(NodeCP node) {
+  const auto inputs = node->inputs();
+  if (inputs.empty()) {
+    return node->is(NodeType::kScan) ? node->as<Scan>() : nullptr;
+  }
+  if (inputs.size() != 1) {
+    return nullptr;
+  }
+  return soleScan(inputs[0]);
+}
+
 // Collects every `InputReferenceExpr::name` referenced anywhere in `expr`.
 // Used by translate functions to compute the required-set their input must
 // supply, given the expressions the node itself reads. `WindowExpr`,
@@ -404,6 +418,16 @@ class Translator {
       const lp::LimitNode& limit,
       const LpNameSet& required);
   Translated translateSort(const lp::SortNode& sort, const LpNameSet& required);
+  Translated translateSample(
+      const lp::SampleNode& sample,
+      const LpNameSet& required);
+
+  // Returns the constant sample percentage (in [0, 100]) of a SampleNode.
+  double extractSamplePercentage(const logical_plan::Expr& percentage);
+
+  // Returns a zero-row result with 'outputType''s schema.
+  Translated makeEmptyResult(const velox::RowType& outputType);
+
   Translated translateAggregate(
       const lp::AggregateNode& aggregate,
       const LpNameSet& required);
@@ -632,6 +656,8 @@ Translated Translator::translateNode(
       return translateLimit(*node.as<lp::LimitNode>(), required);
     case lp::NodeKind::kSort:
       return translateSort(*node.as<lp::SortNode>(), required);
+    case lp::NodeKind::kSample:
+      return translateSample(*node.as<lp::SampleNode>(), required);
     case lp::NodeKind::kAggregate:
       return translateAggregate(*node.as<lp::AggregateNode>(), required);
     case lp::NodeKind::kValues:
@@ -1118,12 +1144,7 @@ Translated Translator::translateLimit(
   if (limit.count() == 0) {
     // LIMIT 0 returns no rows. Skip translating the input entirely and
     // replace with an empty `Values` carrying the same schema.
-    Scope scope;
-    ColumnVector outputColumns =
-        makeOutputColumns(*limit.outputType(), /*cardinality=*/0, scope);
-    ValuesCP valuesNode =
-        builder_.make<Values>({nullptr, nullptr, std::move(outputColumns)});
-    return {valuesNode, std::move(scope)};
+    return makeEmptyResult(*limit.outputType());
   }
   // Limit is a pass-through with no expressions of its own.
   Translated input = translateNode(*limit.onlyInput(), required);
@@ -1157,6 +1178,72 @@ Translated Translator::translateSort(
   SortCP sortNode = builder_.make<Sort>(
       {currentInput, std::move(orderKeys), std::move(orderTypes)});
   return {sortNode, std::move(input.scope)};
+}
+
+double Translator::extractSamplePercentage(const lp::Expr& percentage) {
+  Scope emptyScope;
+  ExprCP folded =
+      simplifier_.simplify(translateExpr(percentage, emptyScope, nullptr));
+  VELOX_USER_CHECK(
+      folded->is(PlanType::kLiteralExpr),
+      "Sampling percentage must be constant: {}",
+      percentage.toString());
+  const velox::Variant& value = folded->as<Literal>()->literal();
+  VELOX_USER_CHECK(!value.isNull(), "Sampling percentage must not be null");
+  VELOX_USER_CHECK_EQ(
+      value.kind(),
+      velox::TypeKind::DOUBLE,
+      "Sampling percentage must be a double");
+  const double result = value.value<double>();
+  VELOX_USER_CHECK_GE(result, 0, "Sampling percentage must be >= 0");
+  VELOX_USER_CHECK_LE(result, 100, "Sampling percentage must be <= 100");
+  return result;
+}
+
+Translated Translator::makeEmptyResult(const velox::RowType& outputType) {
+  Scope scope;
+  ColumnVector outputColumns =
+      makeOutputColumns(outputType, /*cardinality=*/0, scope);
+  ValuesCP valuesNode =
+      builder_.make<Values>({nullptr, nullptr, std::move(outputColumns)});
+  return {valuesNode, std::move(scope)};
+}
+
+Translated Translator::translateSample(
+    const lp::SampleNode& sample,
+    const LpNameSet& required) {
+  const double percentage = extractSamplePercentage(*sample.percentage());
+
+  // Handle the endpoints here so the switch below only sees a percentage in
+  // the open interval (0, 100).
+  if (percentage == 100) {
+    return translateNode(*sample.onlyInput(), required);
+  }
+  if (percentage == 0) {
+    return makeEmptyResult(*sample.outputType());
+  }
+
+  Translated input = translateNode(*sample.onlyInput(), required);
+
+  switch (sample.sampleMethod()) {
+    case lp::SampleNode::SampleMethod::kSystem: {
+      // SYSTEM sampling drops whole splits, so it needs a single scan to
+      // sample.
+      ScanCP scan = soleScan(input.node);
+      VELOX_USER_CHECK_NOT_NULL(
+          scan, "TABLESAMPLE SYSTEM is only supported directly over a table");
+      const_cast<BaseTable*>(scan->baseTable())->sampledPercentage =
+          static_cast<float>(percentage);
+      return input;
+    }
+    case lp::SampleNode::SampleMethod::kBernoulli: {
+      ExprCP predicate = exprFactory_.makeSamplePredicate(percentage / 100.0);
+      NodeCP filtered =
+          builder_.make<Filter>({input.node, ExprVector{predicate}});
+      return {filtered, std::move(input.scope)};
+    }
+  }
+  VELOX_UNREACHABLE();
 }
 
 Translated Translator::translateAggregate(
