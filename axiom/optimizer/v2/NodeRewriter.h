@@ -26,9 +26,9 @@ namespace facebook::axiom::optimizer::v2 {
 struct NoContext {};
 
 /// Visitor base for tree-IR rewrite passes. Default implementations
-/// recursively rewrite children and rebuild a node only when a child
-/// changed (identity-equal pointer comparison). Subclasses override the
-/// per-kind hooks they transform.
+/// recursively rewrite children and rebuild the node via `Node::withInputs`
+/// only when at least one child changed (identity-equal pointer
+/// comparison). Subclasses override the per-kind hooks they transform.
 ///
 /// Stateless passes inherit `NodeRewriter<>`. State-bearing passes
 /// parameterize on a `TContext` that is threaded by reference through
@@ -101,273 +101,135 @@ class NodeRewriter {
   }
 
  protected:
-  virtual NodeCP rewriteScan(const Scan* node, TContext& /*context*/) {
-    return node;
+  // Recurses on every input, then rebuilds `node` via `Node::withInputs`
+  // iff at least one child changed. Preserves pointer identity along
+  // untouched paths and defers `NodeVector` allocation until the first
+  // changed child, so passthrough is alloc-free.
+  NodeCP rewriteChildren(NodeCP node, TContext& context) {
+    const auto inputs = node->inputs();
+    NodeVector newInputs;
+    for (size_t i = 0; i < inputs.size(); ++i) {
+      NodeCP child = inputs[i];
+      NodeCP rewritten = rewrite(child, context);
+      if (newInputs.empty() && rewritten == child) {
+        continue;
+      }
+      if (newInputs.empty()) {
+        newInputs.reserve(inputs.size());
+        for (size_t j = 0; j < i; ++j) {
+          newInputs.push_back(inputs[j]);
+        }
+      }
+      newInputs.push_back(rewritten);
+    }
+    if (newInputs.empty()) {
+      return node;
+    }
+    return node->withInputs(std::move(newInputs), builder_);
   }
 
-  virtual NodeCP rewriteValues(const Values* node, TContext& /*context*/) {
-    return node;
+  virtual NodeCP rewriteScan(const Scan* node, TContext& context) {
+    return rewriteChildren(node, context);
+  }
+
+  virtual NodeCP rewriteValues(const Values* node, TContext& context) {
+    return rewriteChildren(node, context);
   }
 
   virtual NodeCP rewriteFilter(const Filter* node, TContext& context) {
-    NodeCP newInput = rewrite(node->input(), context);
-    if (newInput == node->input()) {
-      return node;
-    }
-    return builder_.template make<Filter>({newInput, node->predicates()});
+    return rewriteChildren(node, context);
   }
 
   virtual NodeCP rewriteProject(const Project* node, TContext& context) {
-    NodeCP newInput = rewrite(node->input(), context);
-    if (newInput == node->input()) {
-      return node;
-    }
-    return builder_.template make<Project>(
-        {newInput, node->exprs(), node->outputColumns()});
+    return rewriteChildren(node, context);
   }
 
   virtual NodeCP rewriteLimit(const Limit* node, TContext& context) {
-    NodeCP newInput = rewrite(node->input(), context);
-    if (newInput == node->input()) {
-      return node;
-    }
-    return builder_.template make<Limit>(
-        {newInput, node->offset(), node->count()});
+    return rewriteChildren(node, context);
   }
 
   virtual NodeCP rewriteSort(const Sort* node, TContext& context) {
-    NodeCP newInput = rewrite(node->input(), context);
-    if (newInput == node->input()) {
-      return node;
-    }
-    return builder_.template make<Sort>(
-        {newInput, node->orderKeys(), node->orderTypes()});
+    return rewriteChildren(node, context);
   }
 
   virtual NodeCP rewriteTopN(const TopN* node, TContext& context) {
-    NodeCP newInput = rewrite(node->input(), context);
-    if (newInput == node->input()) {
-      return node;
-    }
-    return builder_.template make<TopN>(
-        {newInput,
-         node->orderKeys(),
-         node->orderTypes(),
-         node->offset(),
-         node->count()});
+    return rewriteChildren(node, context);
   }
 
   virtual NodeCP rewriteAggregate(const Aggregate* node, TContext& context) {
-    NodeCP newInput = rewrite(node->input(), context);
-    if (newInput == node->input()) {
-      return node;
-    }
-    return builder_.template make<Aggregate>(Aggregate::Key{
-        .input = newInput,
-        .groupingKeys = node->groupingKeys(),
-        .aggregates = node->aggregates(),
-        .outputColumns = node->outputColumns(),
-        .step = node->step(),
-        .groupId = node->groupId(),
-        .globalGroupingSets = node->globalGroupingSets()});
+    return rewriteChildren(node, context);
   }
 
   virtual NodeCP rewriteGroupId(const GroupId* node, TContext& context) {
-    NodeCP newInput = rewrite(node->input(), context);
-    if (newInput == node->input()) {
-      return node;
-    }
-    return builder_.template make<GroupId>(
-        {newInput,
-         node->groupingKeys(),
-         node->aggregationInputs(),
-         node->groupingSets(),
-         node->groupingKeyColumns(),
-         node->groupId(),
-         node->outputColumns()});
+    return rewriteChildren(node, context);
   }
 
   virtual NodeCP rewriteMarkDistinct(
       const MarkDistinct* node,
       TContext& context) {
-    NodeCP newInput = rewrite(node->input(), context);
-    if (newInput == node->input()) {
-      return node;
-    }
-    return builder_.template make<MarkDistinct>(
-        {newInput,
-         node->markers(),
-         node->distinctKeys(),
-         node->masks(),
-         node->outputColumns()});
+    return rewriteChildren(node, context);
   }
 
   virtual NodeCP rewriteUnnest(const Unnest* node, TContext& context) {
-    NodeCP newInput = rewrite(node->input(), context);
-    if (newInput == node->input()) {
-      return node;
-    }
-    return builder_.template make<Unnest>(
-        {newInput,
-         node->unnestExpressions(),
-         node->replicatedColumns(),
-         node->unnestColumns(),
-         node->ordinalityColumn(),
-         node->outputColumns()});
+    return rewriteChildren(node, context);
   }
 
   virtual NodeCP rewriteUnionAll(const UnionAll* node, TContext& context) {
-    NodeVector newInputs;
-    newInputs.reserve(node->inputs().size());
-    bool changed = false;
-    for (NodeCP input : node->inputs()) {
-      NodeCP newInput = rewrite(input, context);
-      changed |= (newInput != input);
-      newInputs.push_back(newInput);
-    }
-    if (!changed) {
-      return node;
-    }
-    // legColumns are by Column*: valid as long as leg rewrites preserve
-    // identity of every referenced column. Rewrites that drop or replace a
-    // referenced column must remap legColumns explicitly; the UnionAll ctor
-    // enforces this.
-    return builder_.template make<UnionAll>(
-        {std::move(newInputs), node->legColumns(), node->outputColumns()});
+    return rewriteChildren(node, context);
   }
 
   virtual NodeCP rewriteJoin(const Join* node, TContext& context) {
-    NodeCP newLeft = rewrite(node->left(), context);
-    NodeCP newRight = rewrite(node->right(), context);
-    if (newLeft == node->left() && newRight == node->right()) {
-      return node;
-    }
-    return builder_.template make<Join>(
-        {newLeft,
-         newRight,
-         node->joinType(),
-         node->leftKeys(),
-         node->rightKeys(),
-         node->filter(),
-         node->nullAware(),
-         node->nullAsValue(),
-         node->outputColumns()});
+    return rewriteChildren(node, context);
   }
 
   virtual NodeCP rewriteWindow(const Window* node, TContext& context) {
-    NodeCP newInput = rewrite(node->input(), context);
-    if (newInput == node->input()) {
-      return node;
-    }
-    return builder_.template make<Window>(
-        {newInput,
-         node->functions(),
-         node->partitionKeys(),
-         node->orderKeys(),
-         node->orderTypes(),
-         node->outputColumns()});
+    return rewriteChildren(node, context);
   }
 
   virtual NodeCP rewriteTopNRowNumber(
       const TopNRowNumber* node,
       TContext& context) {
-    NodeCP newInput = rewrite(node->input(), context);
-    if (newInput == node->input()) {
-      return node;
-    }
-    return builder_.template make<TopNRowNumber>(
-        {newInput,
-         node->rankFunction(),
-         node->partitionKeys(),
-         node->orderKeys(),
-         node->orderTypes(),
-         node->limit(),
-         node->rankColumn(),
-         node->outputColumns()});
+    return rewriteChildren(node, context);
   }
 
   virtual NodeCP rewriteApply(const Apply* node, TContext& context) {
-    NodeCP newInput = rewrite(node->input(), context);
-    NodeCP newBody = rewrite(node->body(), context);
-    if (newInput == node->input() && newBody == node->body()) {
-      return node;
-    }
-    return builder_.template make<Apply>(
-        {newInput,
-         newBody,
-         node->correlationColumns(),
-         node->kind(),
-         node->filter(),
-         node->enforceSingleRow(),
-         node->markColumn(),
-         node->inLhs(),
-         node->inBodyKey(),
-         node->includeMarker(),
-         node->outputColumns()});
+    return rewriteChildren(node, context);
   }
 
   virtual NodeCP rewriteEnforceSingleRow(
       const EnforceSingleRow* node,
       TContext& context) {
-    NodeCP newInput = rewrite(node->input(), context);
-    if (newInput == node->input()) {
-      return node;
-    }
-    return builder_.template make<EnforceSingleRow>({newInput});
+    return rewriteChildren(node, context);
   }
 
   virtual NodeCP rewriteAssignUniqueId(
       const AssignUniqueId* node,
       TContext& context) {
-    NodeCP newInput = rewrite(node->input(), context);
-    if (newInput == node->input()) {
-      return node;
-    }
-    return builder_.template make<AssignUniqueId>({newInput, node->idColumn()});
+    return rewriteChildren(node, context);
   }
 
   virtual NodeCP rewriteEnforceDistinct(
       const EnforceDistinct* node,
       TContext& context) {
-    NodeCP newInput = rewrite(node->input(), context);
-    if (newInput == node->input()) {
-      return node;
-    }
-    return builder_.template make<EnforceDistinct>(
-        {newInput, node->distinctKeys(), node->errorMessage()});
+    return rewriteChildren(node, context);
   }
 
   virtual NodeCP rewriteExchange(const Exchange* node, TContext& context) {
-    NodeCP newInput = rewrite(node->input(), context);
-    if (newInput == node->input()) {
-      return node;
-    }
-    return builder_.template make<Exchange>({newInput, node->partitioning()});
+    return rewriteChildren(node, context);
   }
 
   virtual NodeCP rewriteTableWrite(const TableWrite* node, TContext& context) {
-    NodeCP newInput = rewrite(node->input(), context);
-    if (newInput == node->input()) {
-      return node;
-    }
-    return builder_.template make<TableWrite>(
-        {newInput, node->table(), node->kind(), node->columnExprs()});
+    return rewriteChildren(node, context);
   }
 
   virtual NodeCP rewriteWorkingTable(
       const WorkingTable* node,
-      TContext& /*context*/) {
-    return node;
+      TContext& context) {
+    return rewriteChildren(node, context);
   }
 
   virtual NodeCP rewriteFixedPoint(const FixedPoint* node, TContext& context) {
-    NodeCP newAnchor = rewrite(node->anchor(), context);
-    NodeCP newStep = rewrite(node->step(), context);
-    if (newAnchor == node->anchor() && newStep == node->step()) {
-      return node;
-    }
-    return builder_.template make<FixedPoint>(
-        {newAnchor, newStep, node->name(), node->outputColumns()});
+    return rewriteChildren(node, context);
   }
 
   Builder& builder() {
