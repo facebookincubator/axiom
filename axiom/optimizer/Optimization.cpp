@@ -896,6 +896,16 @@ std::optional<JoinCandidate> reducingJoins(
   return reducing;
 }
 
+// Returns true if every table referenced by the join's left keys is placed.
+bool leftKeysPlaced(const PlanState& state, JoinEdgeP join) {
+  for (auto key : join->leftKeys()) {
+    if (!key->allTables().isSubset(state.placed())) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // Calls 'func' with join, joined table and fanout for the joinable tables.
 template <typename Func>
 void forJoinedTables(const PlanState& state, Func func) {
@@ -910,15 +920,7 @@ void forJoinedTables(const PlanState& state, Func func) {
         if (!visited.insert(join).second) {
           continue;
         }
-        bool usable = true;
-        for (auto key : join->leftKeys()) {
-          if (!key->allTables().isSubset(state.placed())) {
-            // All items that the left key depends on must be placed.
-            usable = false;
-            break;
-          }
-        }
-        if (usable &&
+        if (leftKeysPlaced(state, join) &&
             (state.mayConsiderNext(join->rightTable()) || join->markColumn() ||
              join->rowNumberColumn())) {
           func(join, join->rightTable(), join->lrFanout());
@@ -955,6 +957,28 @@ void addExtraEdges(PlanState& state, JoinCandidate& candidate) {
     }
   }
 }
+
+// Equi-join candidate connecting 'table' to an already-placed table via a plain
+// inner join, or nullopt if there is none.
+std::optional<JoinCandidate> equiJoinCandidate(
+    const PlanState& state,
+    PlanObjectCP table) {
+  for (auto* join : joinedBy(table)) {
+    if (join->numKeys() == 0 || !state.dt->hasJoin(join)) {
+      continue;
+    }
+    // A directed inner join (CROSS JOIN UNNEST) is not freely reorderable.
+    if (!join->isInner() || join->directed()) {
+      continue;
+    }
+    auto* other = join->otherSide(table);
+    if (other && state.isPlaced(other)) {
+      // 'other' is the placed side, so this is the fan-out into 'table'.
+      return JoinCandidate{join, table, join->otherTable(other).second};
+    }
+  }
+  return std::nullopt;
+}
 } // namespace
 
 std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
@@ -973,6 +997,22 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
       });
 
   if (candidates.empty()) {
+    // In the internal syntactic pass (only when the user did not pin the
+    // order), place the earliest table in join order that has an equi-join to a
+    // placed table, avoiding a cross join.
+    if (state.syntacticJoinOrder() && !options().syntacticJoinOrder) {
+      for (auto id : state.dt->joinOrder) {
+        auto* object = queryCtx()->objectAt(id);
+        if (state.isPlaced(object)) {
+          continue;
+        }
+        if (auto candidate = equiJoinCandidate(state, object)) {
+          addExtraEdges(state, *candidate);
+          return {std::move(*candidate)};
+        }
+      }
+    }
+
     // There are no join edges. There could still be cross joins.
     state.dt->startTables.forEach([&](PlanObjectCP object) {
       if (!state.isPlaced(object) && state.mayConsiderNext(object)) {
