@@ -2049,6 +2049,9 @@ NodeCP Unnest::withInputs(NodeVector newInputs, Builder& builder) const {
 
 NodeCP UnionAll::withInputs(NodeVector newInputs, Builder& builder) const {
   VELOX_CHECK_EQ(newInputs.size(), inputs_.size());
+  // `legColumns_` reference `Column*`s from the old inputs' output schemas.
+  // Callers replacing an input must preserve every referenced `Column`
+  // identity; the `UnionAll` ctor enforces this.
   return builder.make<UnionAll>(
       {std::move(newInputs), legColumns_, outputColumns()});
 }

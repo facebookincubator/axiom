@@ -17,6 +17,7 @@ add_executable(
   AlgebraicPropertiesTest.cpp
   JoinHypergraphTest.cpp
   NodePrinterTest.cpp
+  NodeRewriterTest.cpp
   RelationSetTest.cpp
   TpchPlanTest.cpp
   TpchResultTest.cpp
