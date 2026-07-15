@@ -125,8 +125,6 @@ class ConnectorSplitManager {
   /// When 'partitionType' is non-null, the connector tags each emitted Split
   /// with a groupId in [0, partitionType->numPartitions()). Pass 'nullptr'
   /// for the non-bucketed case.
-  // TODO: Instrument PrismSplitManager with runtimeStats for split enumeration
-  // timing.
   virtual std::shared_ptr<SplitSource> getSplitSource(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
