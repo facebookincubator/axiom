@@ -321,6 +321,19 @@ TEST_F(SqlQueryRunnerTest, explainCreateTable) {
   EXPECT_EQ(result.message, R"(CREATE TABLE IF NOT EXISTS test."default"."t")");
 }
 
+TEST_F(SqlQueryRunnerTest, createTableRunsWritePath) {
+  // Connectors that commit a new table in finishWrite (not createTable) rely on
+  // CREATE TABLE running the write path. Inject a finishWrite error to confirm
+  // it runs.
+  run("SET SESSION test.finish_write_error = 'boom from finishWrite'");
+
+  // EXPLAIN does not run the write path, so it does not hit the error.
+  run("EXPLAIN CREATE TABLE t(x int)");
+
+  // A real CREATE runs the write path, surfacing the commit error.
+  VELOX_ASSERT_THROW(run("CREATE TABLE t(x int)"), "boom from finishWrite");
+}
+
 TEST_F(SqlQueryRunnerTest, explainDropTable) {
   // Fails if the table doesn't exist.
   VELOX_ASSERT_THROW(run("EXPLAIN DROP TABLE t"), "Table does not exist");

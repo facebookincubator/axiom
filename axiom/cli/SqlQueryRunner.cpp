@@ -321,14 +321,46 @@ connector::TablePtr SqlQueryRunner::createTable(
         optimizer::ConstantExprEvaluator::evaluateConstantExpr(*value);
   }
 
+  auto session = makeConnectorSession(queryId, statement.connectorId());
   auto table = metadata->createTable(
-      makeConnectorSession(queryId, statement.connectorId()),
+      session,
       statement.tableName(),
       statement.tableSchema(),
       options,
       statement.ifNotExists(),
       explain);
   VELOX_CHECK(table != nullptr || statement.ifNotExists());
+
+  // Some connectors only stage the table in createTable and commit it in
+  // finishWrite. Run an empty create-write so the table is persisted.
+  if (table != nullptr && !explain) {
+    auto handle = metadata->beginWrite(
+        session, table, connector::WriteKind::kCreate, /*explain=*/false);
+    // TODO: Make the commit timeout configurable (e.g. via a DdlOptions).
+    constexpr std::chrono::seconds kCommitTimeout{60};
+    try {
+      // Await the write so the table is committed, and any failure surfaced,
+      // before returning. The row count is unused for an empty create-write.
+      metadata
+          ->finishWrite(
+              session,
+              handle,
+              /*writeResults=*/{},
+              /*groupingKeys=*/nullptr,
+              /*groupStats=*/{})
+          .get(kCommitTimeout);
+    } catch (...) {
+      // Best-effort abort so a failed commit does not leak connector-side
+      // state; await it so an async connector actually runs the abort. The
+      // original error still propagates.
+      try {
+        metadata->abortWrite(session, handle).get(kCommitTimeout);
+      } catch (...) {
+        // Ignore abort failures; the original error is the useful one.
+      }
+      throw;
+    }
+  }
   return table;
 }
 

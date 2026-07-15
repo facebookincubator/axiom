@@ -823,11 +823,17 @@ ConnectorWriteHandlePtr TestConnectorMetadata::beginWrite(
 }
 
 RowsFuture TestConnectorMetadata::finishWrite(
-    const ConnectorSessionPtr& /*session*/,
+    const ConnectorSessionPtr& session,
     const ConnectorWriteHandlePtr& /*handle*/,
     const std::vector<velox::RowVectorPtr>& writeResults,
     velox::RowVectorPtr /*groupingKeys*/,
     std::vector<std::vector<ColumnStatistics>> /*groupStats*/) {
+  VELOX_CHECK_NOT_NULL(session);
+  if (auto error = session->property(TestConfigProvider::kFinishWriteError);
+      error.has_value() && !error->empty()) {
+    VELOX_USER_FAIL("{}", *error);
+  }
+
   int64_t rows = 0;
   velox::DecodedVector decoded;
   for (const auto& result : writeResults) {
