@@ -4386,24 +4386,45 @@ void ToGraph::applySampling(
   VELOX_USER_CHECK_GE(percentage, 0, "Sampling percentage must be >= 0");
   VELOX_USER_CHECK_LE(percentage, 100, "Sampling percentage must be <= 100");
 
+  // Handle the endpoints here so the sample methods below only deal with a
+  // percentage in the open interval (0, 100).
   if (percentage == 100) {
     makeQueryGraph(*sample.onlyInput(), allowedInDt, orderObservedAbove);
     return;
   }
 
-  // TODO Optimize the case when percentage == 0.
-  // TODO Figure out how to avoid hard-coding "rand" and "lt".
+  if (percentage == 0) {
+    makeEmptyValuesTable(sample);
+    return;
+  }
 
   switch (sample.sampleMethod()) {
-    case lp::SampleNode::SampleMethod::kSystem:
-      VELOX_NYI("SYSTEM sampling is not supported yet");
+    case lp::SampleNode::SampleMethod::kSystem: {
+      // SYSTEM sampling drops whole splits, so it needs a single table scan.
+      // Reject anything else rather than falling back to per-row sampling,
+      // which is the cost SYSTEM exists to avoid.
+      const auto& input = *sample.onlyInput();
+      auto* outerDt = std::exchange(currentDt_, newDt());
+      makeQueryGraph(input, kAllAllowedInDt, orderObservedAbove);
+      VELOX_USER_CHECK(
+          currentDt_->tables.size() == 1 &&
+              currentDt_->tables[0]->is(PlanType::kTableNode),
+          "TABLESAMPLE SYSTEM is only supported directly over a table");
+      const_cast<BaseTable*>(currentDt_->tables[0]->as<BaseTable>())
+          ->sampledPercentage = static_cast<float>(percentage);
+      finalizeDt(sample, outerDt);
       break;
+    }
     case lp::SampleNode::SampleMethod::kBernoulli: {
       // Implement using filter(rand() < percentage / 100.0).
+      VELOX_USER_CHECK_NOT_NULL(
+          functionNames_.random,
+          "BERNOULLI sampling requires a registered 'rand' function");
       auto predicate = std::make_shared<lp::CallExpr>(
           velox::BOOLEAN(),
-          "lt",
-          std::make_shared<lp::CallExpr>(velox::DOUBLE(), "rand"),
+          functionNames_.lt,
+          std::make_shared<lp::CallExpr>(
+              velox::DOUBLE(), functionNames_.random),
           std::make_shared<lp::ConstantExpr>(
               velox::DOUBLE(),
               std::make_shared<velox::Variant>(percentage / 100.0)));

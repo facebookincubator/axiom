@@ -170,6 +170,15 @@ bool FunctionRegistry::registerLike(std::string_view name) {
   return true;
 }
 
+bool FunctionRegistry::registerRandom(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (random_.has_value() && random_.value() != name) {
+    return false;
+  }
+  random_ = name;
+  return true;
+}
+
 bool FunctionRegistry::registerRowNumber(std::string_view name) {
   VELOX_USER_CHECK(!name.empty());
   if (rowNumber_.has_value() && rowNumber_.value() != name) {
@@ -408,6 +417,7 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
   registry->registerIsNull(fullName("is_null"));
   registry->registerBetween(fullName("between"));
   registry->registerLike(fullName("like"));
+  registry->registerRandom(fullName("rand"));
   registry->registerRowNumber(fullName("row_number"));
   registry->registerRank(fullName("rank"));
   registry->registerDenseRank(fullName("dense_rank"));

@@ -108,6 +108,13 @@ class SqlQueryRunnerTest : public ::testing::Test, public test::VectorTestBase {
     return result.results[0];
   }
 
+  // Runs 'sql', which must return a single row and a single column, and returns
+  // that value.
+  template <typename T>
+  T fetchSingleValue(std::string_view sql) {
+    return fetchSingleRow(sql)->childAt(0)->variantAt(0).value<T>();
+  }
+
   void assertSchemas(const std::vector<std::string>& expected) {
     auto result = run("SHOW SCHEMAS");
     ASSERT_FALSE(result.message.has_value());
@@ -950,8 +957,7 @@ TEST_F(SqlQueryRunnerTest, showTables) {
 TEST_F(SqlQueryRunnerTest, showCreateTable) {
   {
     run("CREATE TABLE t1 (id INTEGER, name VARCHAR)");
-    auto row = fetchSingleRow("SHOW CREATE TABLE t1");
-    auto ddl = row->childAt(0)->variantAt(0).value<std::string>();
+    auto ddl = fetchSingleValue<std::string>("SHOW CREATE TABLE t1");
     EXPECT_EQ(
         ddl,
         "CREATE TABLE test.\"default\".\"t1\" (\n"
@@ -966,8 +972,7 @@ TEST_F(SqlQueryRunnerTest, showCreateTable) {
     // CREATE TABLE statement.
     run("CREATE TABLE t2 (a INTEGER, b VARCHAR) "
         "WITH (hidden = ARRAY['h1', 'h2'])");
-    auto row = fetchSingleRow("SHOW CREATE TABLE t2");
-    auto ddl = row->childAt(0)->variantAt(0).value<std::string>();
+    auto ddl = fetchSingleValue<std::string>("SHOW CREATE TABLE t2");
     EXPECT_EQ(
         ddl,
         "CREATE TABLE test.\"default\".\"t2\" (\n"
@@ -990,8 +995,7 @@ TEST_F(SqlQueryRunnerTest, showCreateView) {
       ROW({"a", "b"}, {INTEGER(), VARCHAR()}),
       "SELECT 1 AS a, 'x' AS b");
 
-  auto row = fetchSingleRow("SHOW CREATE VIEW v1");
-  auto ddl = row->childAt(0)->variantAt(0).value<std::string>();
+  auto ddl = fetchSingleValue<std::string>("SHOW CREATE VIEW v1");
   EXPECT_EQ(
       ddl,
       "CREATE VIEW test.\"default\".\"v1\" AS\n"
@@ -999,6 +1003,41 @@ TEST_F(SqlQueryRunnerTest, showCreateView) {
 
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       run("SHOW CREATE VIEW no_such_view"), "View not found");
+}
+
+TEST_F(SqlQueryRunnerTest, tableSampleSystem) {
+  // One split per appended row vector, so sampling drops whole splits.
+  testConnector_->addTable("sampled", ROW("x", INTEGER()));
+  auto vector = makeRowVector({makeFlatVector<int32_t>({1})});
+  constexpr int64_t kNumSplits = 1000;
+  for (int64_t i = 0; i < kNumSplits; ++i) {
+    testConnector_->appendData("sampled", vector);
+  }
+
+  auto sample = [&](double percentage) {
+    return fetchSingleValue<int64_t>(fmt::format(
+        "SELECT count(*) FROM sampled TABLESAMPLE SYSTEM ({})", percentage));
+  };
+
+  EXPECT_EQ(
+      fetchSingleValue<int64_t>("SELECT count(*) FROM sampled"), kNumSplits);
+
+  // 0% produces an empty result; 100% is a no-op passthrough.
+  EXPECT_EQ(sample(0), 0);
+  EXPECT_EQ(sample(100), kNumSplits);
+
+  // Intermediate rates keep some but not all splits. Counts are exact because
+  // the split coin flip is deterministically seeded.
+  EXPECT_EQ(sample(0.1), 2);
+  EXPECT_EQ(sample(1), 10);
+  EXPECT_EQ(sample(20), 176);
+  EXPECT_EQ(sample(50), 493);
+
+  // SYSTEM sampling has no single split source to sample over a join.
+  VELOX_ASSERT_THROW(
+      run("SELECT count(*) FROM (SELECT a.x FROM sampled a, sampled b) "
+          "TABLESAMPLE SYSTEM (50)"),
+      "TABLESAMPLE SYSTEM is only supported directly over a table");
 }
 
 TEST_F(SqlQueryRunnerTest, generateQueryIdDefault) {

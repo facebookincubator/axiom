@@ -220,6 +220,31 @@ void Optimization::estimateAllBaseTableSelectivity(DerivedTable& dt) {
   // Apply results.
   for (auto& [baseTable, taskIndex, columnIndices] : tableTasks) {
     applyFilteredStats(*baseTable, results[taskIndex], columnIndices);
+    applySampleRate(*baseTable);
+  }
+}
+
+void Optimization::applySampleRate(BaseTable& baseTable) {
+  if (!baseTable.sampledPercentage.has_value() ||
+      !baseTable.filteredCardinality.has_value()) {
+    return;
+  }
+
+  // TABLESAMPLE SYSTEM is an additional selectivity on the scan, applied on top
+  // of the filter selectivity. Scale the filtered cardinality, floored at 1 so
+  // downstream estimates never divide by zero.
+  const float sampledCardinality = std::max<float>(
+      1,
+      *baseTable.filteredCardinality * (*baseTable.sampledPercentage / 100.0f));
+  baseTable.filteredCardinality = sampledCardinality;
+
+  // A column cannot have more distinct values than the sampled row count.
+  for (auto* column : baseTable.columns) {
+    const auto& value = column->value();
+    if (value.cardinality.has_value() &&
+        *value.cardinality > sampledCardinality) {
+      const_cast<Value&>(value).cardinality = sampledCardinality;
+    }
   }
 }
 

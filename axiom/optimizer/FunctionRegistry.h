@@ -421,6 +421,18 @@ class FunctionRegistry {
     return like_;
   }
 
+  /// Registers function 'name' that has semantics of Presto's 'rand', i.e.
+  /// returns a pseudo-random double in [0, 1). Used to implement BERNOULLI
+  /// sampling as a filter.
+  /// @return true if successfully registered, false if a different 'random'
+  /// function is already registered.
+  bool registerRandom(std::string_view name);
+
+  /// Returns the name of the 'random' function.
+  const std::optional<std::string>& random() const {
+    return random_;
+  }
+
   /// Registers function 'name' that has semantics of 'row_number' window
   /// function, i.e. assigns sequential numbers to rows within a partition.
   /// @return true if successfully registered, false if a different
@@ -535,6 +547,7 @@ class FunctionRegistry {
   std::optional<std::string> isNull_;
   std::optional<std::string> between_;
   std::optional<std::string> like_;
+  std::optional<std::string> random_;
 
   // Aggregate functions.
   std::optional<std::string> arbitrary_;

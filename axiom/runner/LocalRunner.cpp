@@ -64,7 +64,11 @@ std::shared_ptr<connector::SplitSource>
 SimpleSplitSourceFactory::splitSourceForScan(
     const connector::ConnectorSessionPtr& /* session */,
     const velox::core::TableScanNode& scan,
-    const std::shared_ptr<connector::PartitionType>& /*partitionType*/) {
+    const std::shared_ptr<connector::PartitionType>& /*partitionType*/,
+    std::optional<double> samplePercentage) {
+  VELOX_USER_CHECK(
+      !samplePercentage.has_value(),
+      "SYSTEM sampling is not supported for pre-materialized splits");
   auto it = nodeSplitMap_.find(scan.id());
   if (it == nodeSplitMap_.end()) {
     VELOX_FAIL("Splits are not provided for scan {}", scan.id());
@@ -76,7 +80,8 @@ std::shared_ptr<connector::SplitSource>
 ConnectorSplitSourceFactory::splitSourceForScan(
     const connector::ConnectorSessionPtr& session,
     const velox::core::TableScanNode& scan,
-    const std::shared_ptr<connector::PartitionType>& partitionType) {
+    const std::shared_ptr<connector::PartitionType>& partitionType,
+    std::optional<double> samplePercentage) {
   const auto& handle = scan.tableHandle();
   auto metadata =
       connector::ConnectorMetadataRegistry::get(handle->connectorId());
@@ -99,7 +104,12 @@ ConnectorSplitSourceFactory::splitSourceForScan(
       QueryRuntimeStats::kListPartitionsCount, partitions.size());
 
   return splitManager->getSplitSource(
-      session, handle, partitions, partitionType, runtimeStats_);
+      session,
+      handle,
+      partitions,
+      partitionType,
+      samplePercentage,
+      runtimeStats_);
 }
 
 namespace {
@@ -468,8 +478,10 @@ void LocalRunner::start() {
 std::shared_ptr<connector::SplitSource> LocalRunner::splitSourceForScan(
     const connector::ConnectorSessionPtr& session,
     const velox::core::TableScanNode& scan,
-    const std::shared_ptr<connector::PartitionType>& partitionType) {
-  return splitSourceFactory_->splitSourceForScan(session, scan, partitionType);
+    const std::shared_ptr<connector::PartitionType>& partitionType,
+    std::optional<double> samplePercentage) {
+  return splitSourceFactory_->splitSourceForScan(
+      session, scan, partitionType, samplePercentage);
 }
 
 void LocalRunner::cancelTasks() {
@@ -734,10 +746,16 @@ void LocalRunner::makeStages(
             it != fragment.groupedNodes.end()) {
           partitionType = it->second;
         }
+        std::optional<double> samplePercentage;
+        if (auto it = fragment.sampledScans.find(scan->id());
+            it != fragment.sampledScans.end()) {
+          samplePercentage = it->second;
+        }
         auto source = splitSourceForScan(
             session_->toConnectorSession(scan->tableHandle()->connectorId()),
             *scan,
-            partitionType);
+            partitionType,
+            samplePercentage);
         splitScope_.add(
             folly::coro::co_withExecutor(
                 params_.queryCtx->executor(),

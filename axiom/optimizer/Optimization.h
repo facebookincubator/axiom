@@ -437,6 +437,11 @@ class Optimization {
       const std::optional<connector::FilteredTableStats>& stats,
       const std::vector<size_t>& columnIndices);
 
+  // Folds a TABLESAMPLE SYSTEM rate into 'baseTable' by scaling
+  // filteredCardinality and capping column NDVs at the sampled row count. No-op
+  // when the table is not sampled. Called after applyFilteredStats.
+  void applySampleRate(BaseTable& baseTable);
+
   const OptimizerSessionPtr optimizerSession_;
 
   const runner::RunnerSessionPtr runnerSession_;

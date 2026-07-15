@@ -300,6 +300,7 @@ class TestSplitManager : public ConnectorSplitManager {
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
       const std::vector<PartitionHandlePtr>& partitions,
       const std::shared_ptr<PartitionType>& partitionType,
+      std::optional<double> samplePercentage,
       QueryRuntimeStats& runtimeStats) override;
 };
 
@@ -726,6 +727,10 @@ class TestConfigProvider : public velox::config::ConfigProvider {
   /// verify a session property reaches connector split-generation.
   static constexpr const char* kListPartitionsError = "list_partitions_error";
 
+  /// Seed for the TABLESAMPLE SYSTEM split coin flip. Defaults to a fixed
+  /// value so sampled split sets are reproducible across test runs.
+  static constexpr const char* kSampleSeed = "sample_seed";
+
   std::vector<velox::config::ConfigProperty> properties() const override {
     return {
         {kCollectColumnStatistics,
@@ -736,6 +741,10 @@ class TestConfigProvider : public velox::config::ConfigProvider {
          velox::config::ConfigPropertyType::kString,
          "",
          "Test-only: if non-empty, co_listPartitions throws this message."},
+        {kSampleSeed,
+         velox::config::ConfigPropertyType::kString,
+         "42",
+         "Test-only: seed for TABLESAMPLE SYSTEM split sampling."},
     };
   }
 

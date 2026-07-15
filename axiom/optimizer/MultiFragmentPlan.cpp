@@ -437,6 +437,11 @@ std::string MultiFragmentPlan::toString(
                  if (addContext != nullptr) {
                    addContext(planNodeId, indentation, stream);
                  }
+                 if (auto sampled = fragment.sampledScans.find(planNodeId);
+                     sampled != fragment.sampledScans.end()) {
+                   stream << indentation << "sample: " << sampled->second << "%"
+                          << std::endl;
+                 }
                  auto it = planNodeToIndices.find(planNodeId);
                  if (it != planNodeToIndices.end()) {
                    if (it->second.size() == 1) {
