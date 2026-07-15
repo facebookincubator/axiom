@@ -41,6 +41,33 @@ void mergeConstraints(const ConstraintMap& from, ConstraintMap& into) {
   }
 }
 
+// Scales a scan's estimated row count and per-column NDVs by a TABLESAMPLE
+// SYSTEM rate, if one is set. Modeled as a scan-level selectivity, so it
+// applies whether the row count came from connector stats or the base-table
+// fallback.
+void applySampleRate(
+    const BaseTable& baseTable,
+    const Scan* scan,
+    Estimate& estimate) {
+  if (!baseTable.sampledPercentage.has_value() ||
+      !estimate.cardinality.has_value()) {
+    return;
+  }
+
+  const float fraction = *baseTable.sampledPercentage / 100.0f;
+  estimate.cardinality = std::max(1.0f, *estimate.cardinality * fraction);
+
+  // A column cannot have more distinct values than the sampled row count.
+  for (ColumnCP column : scan->outputColumns()) {
+    Value capped = value(estimate.constraints, column);
+    if (!capped.cardinality.has_value() ||
+        *capped.cardinality > *estimate.cardinality) {
+      capped.cardinality = *estimate.cardinality;
+      estimate.constraints.insert_or_assign(column->id(), capped);
+    }
+  }
+}
+
 } // namespace
 
 const Estimate& EstimateProvider::estimate(NodeCP node) {
@@ -89,6 +116,8 @@ Estimate EstimateProvider::compute(NodeCP node) {
         // No base-table statistics: cardinality is unknown.
         result.cardinality = std::nullopt;
       }
+
+      applySampleRate(*baseTable, scan, result);
       return result;
     }
 

@@ -411,7 +411,7 @@ class Emitter {
   // A fresh producer/consumer fragment with a unique task prefix.
   ExecutableFragment newFragment() {
     return ExecutableFragment{
-        .taskPrefix = fmt::format("fragment{}", fragmentCounter_++)};
+        .taskPrefix = fmt::format("fragment{}", ++fragmentCounter_)};
   }
 
   const OptimizerSession& session_;
@@ -610,6 +610,13 @@ velox::core::PlanNodePtr Emitter::emitScan(const Scan& scan) {
   // under grouped execution, tagging the fragment as bucketed.
   if (const auto* partitionType = tablePartitionType(scan)) {
     groupedLeaves_.push_back({scanNode->id(), partitionType});
+  }
+
+  // TABLESAMPLE SYSTEM: the split source emits each split with this
+  // probability. Recorded per scan so split generation can sample.
+  if (scan.baseTable()->sampledPercentage.has_value()) {
+    currentFragment_->sampledScans.emplace(
+        scanNode->id(), *scan.baseTable()->sampledPercentage);
   }
 
   velox::core::PlanNodePtr result = std::move(scanNode);

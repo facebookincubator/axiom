@@ -73,6 +73,11 @@ class ExprFactory {
   /// Builds `lhs <= rhs`.
   ExprCP makeLessThanOrEqual(ExprCP lhs, ExprCP rhs);
 
+  /// Builds the BERNOULLI sampling predicate `rand() < fraction`, where
+  /// 'fraction' is in [0, 1). The `rand()` call is non-deterministic, so it is
+  /// re-evaluated per row.
+  ExprCP makeSamplePredicate(double fraction);
+
   /// Builds `is_null(arg)`. Result is BOOLEAN and is never NULL —
   /// returns `true` when 'arg' is NULL and `false` otherwise.
   ExprCP makeIsNull(ExprCP arg);
