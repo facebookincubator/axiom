@@ -237,6 +237,13 @@ class ConstantExpr : public Expr {
         value_->inferType()->toString());
   }
 
+  /// Creates a constant from 'value', inferring its type.
+  static std::shared_ptr<const ConstantExpr> fromVariant(
+      const velox::Variant& value) {
+    return std::make_shared<ConstantExpr>(
+        value.inferType(), std::make_shared<const velox::Variant>(value));
+  }
+
   const std::shared_ptr<const velox::Variant>& value() const {
     return value_;
   }
