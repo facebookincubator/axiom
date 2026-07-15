@@ -47,6 +47,30 @@ TEST_F(NodeTransformTest, valuesLeafRejectsNonEmptyInputs) {
       "Leaf node cannot have inputs: Values");
 }
 
+TEST_F(NodeTransformTest, workingTableLeafRejectsNonEmptyInputs) {
+  optimizer::ColumnVector cols{makeColumn("n", velox::BIGINT())};
+  auto* wt = builder_->make<WorkingTable>({toName("counter"), cols});
+  EXPECT_EQ(wt->withInputs({}, *builder_), wt);
+  VELOX_ASSERT_THROW(wt->withInputs({wt}, *builder_), "WorkingTable is a leaf");
+}
+
+TEST_F(NodeTransformTest, withInputsRoundtripAndRebuildFixedPoint) {
+  optimizer::ColumnVector cols{makeColumn("n", velox::BIGINT())};
+  NodeCP anchor = builder_->makeEmptyValues(cols);
+  NodeCP step = builder_->make<WorkingTable>({toName("counter"), cols});
+  auto* fp =
+      builder_->make<FixedPoint>({anchor, step, toName("counter"), cols});
+
+  EXPECT_EQ(fp->withInputs({anchor, step}, *builder_), fp);
+
+  NodeCP stepB = builder_->make<WorkingTable>({toName("other"), cols});
+  NodeCP rebuilt = fp->withInputs({anchor, stepB}, *builder_);
+  EXPECT_NE(rebuilt, fp);
+  EXPECT_EQ(rebuilt->as<FixedPoint>()->anchor(), anchor);
+  EXPECT_EQ(rebuilt->as<FixedPoint>()->step(), stepB);
+  EXPECT_EQ(rebuilt->as<FixedPoint>()->name(), fp->name());
+}
+
 TEST_F(NodeTransformTest, withInputsRoundtripReturnsSamePointer) {
   NodeCP values = leaf("a");
   auto* filter = builder_->make<Filter>({values, ExprVector{truePredicate()}});

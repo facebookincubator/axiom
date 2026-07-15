@@ -49,6 +49,8 @@ const auto& nodeTypeNames() {
       {NodeType::kEnforceDistinct, "EnforceDistinct"},
       {NodeType::kExchange, "Exchange"},
       {NodeType::kTableWrite, "TableWrite"},
+      {NodeType::kFixedPoint, "FixedPoint"},
+      {NodeType::kWorkingTable, "WorkingTable"},
   };
   return kNames;
 }
@@ -2134,6 +2136,89 @@ NodeCP TableWrite::withInputs(NodeVector newInputs, Builder& builder) const {
   return builder.make<TableWrite>({newInputs[0], table_, kind_, columnExprs_});
 }
 
+WorkingTable::WorkingTable(Key key)
+    : Node(NodeType::kWorkingTable, ColumnVector{key.outputColumns}, {}),
+      name_(key.name) {
+  VELOX_CHECK_NOT_NULL(name_);
+}
+
+size_t WorkingTable::KeyHash::operator()(const WorkingTable* node) const {
+  return hashOf(node->name(), node->outputColumns());
+}
+
+size_t WorkingTable::KeyHash::operator()(const Key& key) const {
+  return hashOf(key.name, key.outputColumns);
+}
+
+bool WorkingTable::KeyEq::operator()(
+    const WorkingTable* left,
+    const WorkingTable* right) const {
+  return left->name() == right->name() &&
+      left->outputColumns() == right->outputColumns();
+}
+
+bool WorkingTable::KeyEq::operator()(const Key& key, const WorkingTable* node)
+    const {
+  return key.name == node->name() && key.outputColumns == node->outputColumns();
+}
+
+bool WorkingTable::KeyEq::operator()(const WorkingTable* node, const Key& key)
+    const {
+  return (*this)(key, node);
+}
+
+FixedPoint::FixedPoint(Key key)
+    : Node(NodeType::kFixedPoint, ColumnVector{key.outputColumns}, {}),
+      inputs_{key.anchor, key.step},
+      name_(key.name) {
+  VELOX_CHECK_NOT_NULL(inputs_[0]);
+  VELOX_CHECK_NOT_NULL(inputs_[1]);
+  VELOX_CHECK_NOT_NULL(name_);
+  VELOX_CHECK(
+      std::ranges::equal(outputColumns(), inputs_[0]->outputColumns()),
+      "FixedPoint output columns must match anchor by pointer identity");
+}
+
+size_t FixedPoint::KeyHash::operator()(const FixedPoint* node) const {
+  return hashOf(
+      node->anchor(), node->step(), node->name(), node->outputColumns());
+}
+
+size_t FixedPoint::KeyHash::operator()(const Key& key) const {
+  return hashOf(key.anchor, key.step, key.name, key.outputColumns);
+}
+
+bool FixedPoint::KeyEq::operator()(
+    const FixedPoint* left,
+    const FixedPoint* right) const {
+  return left->anchor() == right->anchor() && left->step() == right->step() &&
+      left->name() == right->name() &&
+      left->outputColumns() == right->outputColumns();
+}
+
+bool FixedPoint::KeyEq::operator()(const Key& key, const FixedPoint* node)
+    const {
+  return key.anchor == node->anchor() && key.step == node->step() &&
+      key.name == node->name() && key.outputColumns == node->outputColumns();
+}
+
+bool FixedPoint::KeyEq::operator()(const FixedPoint* node, const Key& key)
+    const {
+  return (*this)(key, node);
+}
+
+NodeCP WorkingTable::withInputs(NodeVector newInputs, Builder& /*builder*/)
+    const {
+  VELOX_CHECK(newInputs.empty(), "WorkingTable is a leaf");
+  return this;
+}
+
+NodeCP FixedPoint::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 2);
+  return builder.make<FixedPoint>(
+      {newInputs[0], newInputs[1], name_, outputColumns()});
+}
+
 #define V2_DEFINE_ACCEPT(NodeT)                                               \
   void NodeT::accept(const NodeVisitor& visitor, NodeVisitorContext& context) \
       const {                                                                 \
@@ -2161,6 +2246,8 @@ V2_DEFINE_ACCEPT(AssignUniqueId)
 V2_DEFINE_ACCEPT(EnforceDistinct)
 V2_DEFINE_ACCEPT(Exchange)
 V2_DEFINE_ACCEPT(TableWrite)
+V2_DEFINE_ACCEPT(WorkingTable)
+V2_DEFINE_ACCEPT(FixedPoint)
 
 #undef V2_DEFINE_ACCEPT
 
