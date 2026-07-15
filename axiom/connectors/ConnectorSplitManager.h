@@ -125,11 +125,18 @@ class ConnectorSplitManager {
   /// When 'partitionType' is non-null, the connector tags each emitted Split
   /// with a groupId in [0, partitionType->numPartitions()). Pass 'nullptr'
   /// for the non-bucketed case.
+  ///
+  /// When 'samplePercentage' is set (TABLESAMPLE SYSTEM), the source emits each
+  /// split with that probability, in the open interval (0, 100); the caller
+  /// handles the 0 and 100 endpoints. The sampling happens during split
+  /// enumeration so unselected splits are never produced. A connector that does
+  /// not support sampling must fail rather than ignore it.
   virtual std::shared_ptr<SplitSource> getSplitSource(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
       const std::vector<PartitionHandlePtr>& partitions,
       const std::shared_ptr<PartitionType>& partitionType,
+      std::optional<double> samplePercentage,
       QueryRuntimeStats& runtimeStats) = 0;
 };
 

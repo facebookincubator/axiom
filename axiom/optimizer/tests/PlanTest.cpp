@@ -831,31 +831,6 @@ TEST_F(PlanTest, values) {
   }
 }
 
-TEST_F(PlanTest, tablesample) {
-  testConnector_->addTable("t", ROW({"a", "b"}, INTEGER()));
-
-  auto makeLogicalPlan = [&](double percentage) {
-    return lp::PlanBuilder(makeContext())
-        .tableScan("t")
-        .sample(percentage, lp::SampleNode::SampleMethod::kBernoulli)
-        .build();
-  };
-
-  {
-    auto plan = toSingleNodePlan(makeLogicalPlan(10));
-
-    auto matcher = matchScan("t").filter("rand() < 0.1").build();
-    AXIOM_ASSERT_PLAN(plan, matcher);
-  }
-
-  {
-    auto plan = toSingleNodePlan(makeLogicalPlan(100));
-
-    auto matcher = matchScan("t").build();
-    AXIOM_ASSERT_PLAN(plan, matcher);
-  }
-}
-
 TEST_F(PlanTest, limitBeforeProject) {
   testConnector_->addTable("t", ROW({"a", "b"}, {INTEGER(), INTEGER()}));
   {

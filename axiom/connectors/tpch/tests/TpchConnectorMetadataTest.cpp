@@ -223,6 +223,7 @@ CO_TEST_F(TpchConnectorMetadataTest, splitGeneration) {
       tableHandle,
       partitions,
       /*partitionType=*/nullptr,
+      /*samplePercentage=*/std::nullopt,
       noopStats);
   CO_ASSERT_NE(splitSource, nullptr);
   std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;

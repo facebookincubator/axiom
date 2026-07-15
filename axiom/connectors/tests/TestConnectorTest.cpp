@@ -166,7 +166,12 @@ CO_TEST_F(TestConnectorTest, splitManager) {
       co_await splitManager->co_listPartitions(session, tableHandle);
   QueryRuntimeStats noopStats;
   auto splitSource = splitManager->getSplitSource(
-      session, tableHandle, partitions, /*partitionType=*/nullptr, noopStats);
+      session,
+      tableHandle,
+      partitions,
+      /*partitionType=*/nullptr,
+      /*samplePercentage=*/std::nullopt,
+      noopStats);
   EXPECT_NE(splitSource, nullptr);
 
   std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
@@ -631,7 +636,12 @@ CO_TEST_F(TestConnectorTest, bucketedTable) {
       kNumGroups, std::vector<TypePtr>{BIGINT()}, schema);
   QueryRuntimeStats noopStats;
   auto source = splitManager->getSplitSource(
-      session, tableHandle, partitions, partitionType, noopStats);
+      session,
+      tableHandle,
+      partitions,
+      partitionType,
+      /*samplePercentage=*/std::nullopt,
+      noopStats);
   std::vector<int32_t> observedGroupIds;
   while (true) {
     auto batch = co_await source->co_getSplits(/*maxSplitCount=*/16);

@@ -321,7 +321,11 @@ std::shared_ptr<SplitSource> LocalHiveSplitManager::getSplitSource(
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
     const std::vector<PartitionHandlePtr>& /*partitions*/,
     const std::shared_ptr<PartitionType>& partitionType,
+    std::optional<double> samplePercentage,
     QueryRuntimeStats& /*runtimeStats*/) {
+  VELOX_USER_CHECK(
+      !samplePercentage.has_value(),
+      "SYSTEM sampling is not supported by this connector");
   // Since there are only unpartitioned tables now, always makes a SplitSource
   // that goes over all the files in the handle's layout.
   auto metadata = ConnectorMetadataRegistry::get(tableHandle->connectorId());

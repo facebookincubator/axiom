@@ -96,7 +96,11 @@ FileConnectorMetadata::SplitManager::getSplitSource(
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
     const std::vector<PartitionHandlePtr>& /*partitions*/,
     const std::shared_ptr<PartitionType>& /*partitionType*/,
+    std::optional<double> samplePercentage,
     QueryRuntimeStats& /*runtimeStats*/) {
+  VELOX_USER_CHECK(
+      !samplePercentage.has_value(),
+      "SYSTEM sampling is not supported by this connector");
   auto* fileHandle = dynamic_cast<const FileTableHandle*>(tableHandle.get());
   VELOX_CHECK_NOT_NULL(fileHandle, "Expected FileTableHandle");
   // The file list was resolved once during planning (see findTable); reuse it
