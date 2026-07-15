@@ -915,6 +915,17 @@ core::ExprPtr GroupByPlanner::rewriteGroupingMarker(const core::ExprPtr& expr) {
         .expr();
   }
 
+  // A WindowCallExpr keeps its PARTITION BY and ORDER BY keys outside
+  // inputs(), so rewrite the whole window spec.
+  if (expr->is(core::IExpr::Kind::kWindow)) {
+    return rewriteWindowExpr(
+               lp::ExprApi(expr),
+               [this](const core::ExprPtr& input) {
+                 return rewriteGroupingMarker(input);
+               })
+        .expr();
+  }
+
   std::vector<core::ExprPtr> newInputs;
   bool changed = false;
   for (const auto& input : expr->inputs()) {

@@ -308,27 +308,11 @@ TEST_F(AggregationParserTest, groupingSets) {
 }
 
 TEST_F(AggregationParserTest, groupingFunction) {
+  // The grouping-set id column is named "$grouping_set_id"; double-quote it so
+  // DuckDB parses it as an identifier rather than a bind parameter.
   auto grouping = [](std::initializer_list<int64_t> bitmasks) {
     return fmt::format(
-        "element_at([{}], plus($grouping_set_id, 1))",
-        fmt::join(bitmasks, ","));
-  };
-
-  // DuckDB can't parse "$grouping_set_id", so use callback-based project
-  // matching to compare expression toString() directly.
-  using MatcherBuilder =
-      facebook::axiom::logical_plan::test::LogicalPlanMatcherBuilder;
-  auto projectExprs =
-      [](std::vector<std::string> expected) -> MatcherBuilder::OnMatchCallback {
-    return
-        [expected = std::move(expected)](const lp::LogicalPlanNodePtr& node) {
-          auto& project = *node->as<lp::ProjectNode>();
-          ASSERT_EQ(expected.size(), project.expressions().size());
-          for (auto i = 0; i < expected.size(); ++i) {
-            EXPECT_EQ(expected[i], project.expressionAt(i)->toString())
-                << "at index " << i;
-          }
-        };
+        "element_at([{}], \"$grouping_set_id\" + 1)", fmt::join(bitmasks, ","));
   };
 
   // GROUPING() with two grouping sets.
@@ -337,7 +321,28 @@ TEST_F(AggregationParserTest, groupingFunction) {
       "GROUP BY GROUPING SETS ((n_regionkey), ())",
       matchScan()
           .aggregate({"n_regionkey"}, {"count(1)"}, {{0}, {}})
-          .project(projectExprs({grouping({0, 1}), "count"}))
+          .project({grouping({0, 1}), "count"})
+          .output());
+
+  // GROUPING() inside a window PARTITION BY is rewritten like GROUPING() in
+  // the SELECT list.
+  testSelect(
+      "SELECT sum(sum(n_nationkey)) OVER (PARTITION BY GROUPING(n_regionkey)) "
+      "FROM nation GROUP BY GROUPING SETS ((n_regionkey), ())",
+      matchScan()
+          .aggregate({"n_regionkey"}, {"sum(n_nationkey)"}, {{0}, {}})
+          .project({fmt::format(
+              "sum(sum) OVER (PARTITION BY {})", grouping({0, 1}))})
+          .output());
+
+  // GROUPING() inside a window ORDER BY is rewritten as well.
+  testSelect(
+      "SELECT sum(sum(n_nationkey)) OVER (ORDER BY GROUPING(n_regionkey)) "
+      "FROM nation GROUP BY GROUPING SETS ((n_regionkey), ())",
+      matchScan()
+          .aggregate({"n_regionkey"}, {"sum(n_nationkey)"}, {{0}, {}})
+          .project(
+              {fmt::format("sum(sum) OVER (ORDER BY {})", grouping({0, 1}))})
           .output());
 
   // GROUPING() with two columns, three grouping sets.
@@ -346,7 +351,7 @@ TEST_F(AggregationParserTest, groupingFunction) {
       "GROUP BY GROUPING SETS ((n_regionkey, n_name), (n_regionkey), ())",
       matchScan()
           .aggregate({"n_regionkey", "n_name"}, {"count(1)"}, {{0, 1}, {0}, {}})
-          .project(projectExprs({grouping({0, 1, 3}), "count"}))
+          .project({grouping({0, 1, 3}), "count"})
           .output());
 
   // GROUPING() in SELECT with other columns (ROLLUP).
@@ -355,8 +360,7 @@ TEST_F(AggregationParserTest, groupingFunction) {
       "FROM nation GROUP BY ROLLUP(n_regionkey, n_name)",
       matchScan()
           .aggregate({"n_regionkey", "n_name"}, {"count(1)"}, {{0, 1}, {0}, {}})
-          .project(projectExprs(
-              {"n_regionkey", "n_name", grouping({0, 1, 3}), "count"}))
+          .project({"n_regionkey", "n_name", grouping({0, 1, 3}), "count"})
           .output());
 
   // Two separate GROUPING() calls (CUBE).
@@ -366,12 +370,12 @@ TEST_F(AggregationParserTest, groupingFunction) {
       matchScan()
           .aggregate(
               {"n_regionkey", "n_name"}, {"count(1)"}, {{0, 1}, {0}, {1}, {}})
-          .project(projectExprs(
+          .project(
               {"n_regionkey",
                "n_name",
                grouping({0, 0, 1, 1}),
                grouping({0, 1, 0, 1}),
-               "count"}))
+               "count"})
           .output());
 
   // GROUPING() with plain GROUP BY resolves to constant 0 (single set).
@@ -380,7 +384,7 @@ TEST_F(AggregationParserTest, groupingFunction) {
       "FROM nation GROUP BY n_regionkey",
       matchScan()
           .aggregate({"n_regionkey"}, {"count(1)"})
-          .project(projectExprs({"n_regionkey", "0", "count"}))
+          .project({"n_regionkey", "0", "count"})
           .output());
 
   VELOX_ASSERT_THROW(
@@ -395,7 +399,7 @@ TEST_F(AggregationParserTest, groupingFunction) {
       "FROM nation GROUP BY ROLLUP(n_regionkey)",
       matchScan()
           .aggregate({"n_regionkey"}, {"count(1)"}, {{0}, {}})
-          .project(projectExprs({"n_regionkey", grouping({0, 3}), "count"}))
+          .project({"n_regionkey", grouping({0, 3}), "count"})
           .output());
 
   // Two columns with the same leaf name across a join stay distinct grouping
@@ -408,7 +412,7 @@ TEST_F(AggregationParserTest, groupingFunction) {
           .join(matchScan("nation").build())
           .filter()
           .aggregate({"n_regionkey", "n_regionkey_2"}, {"count(1)"}, {{0}, {1}})
-          .project(projectExprs({grouping({1, 2}), "count"}))
+          .project({grouping({1, 2}), "count"})
           .output());
 
   // A qualified GROUPING() argument that is not a grouping key still fails.
@@ -426,7 +430,7 @@ TEST_F(AggregationParserTest, groupingFunction) {
       "GROUP BY GROUPING SETS ((s.x.y), ())",
       matchScan("s")
           .aggregate({"DEREFERENCE(x, y)"}, {"count(1)"}, {{0}, {}})
-          .project(projectExprs({grouping({0, 1}), "count"}))
+          .project({grouping({0, 1}), "count"})
           .output());
 
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
@@ -466,7 +470,7 @@ TEST_F(AggregationParserTest, groupingFunction) {
       "GROUP BY GROUPING SETS ((n_regionkey), ())",
       matchScan()
           .aggregate({"n_regionkey"}, {"count(1)"}, {{0}, {}})
-          .project(projectExprs({grouping({0, 1}), "count"}))
+          .project({grouping({0, 1}), "count"})
           .output());
 
   // GROUPING() in FILTER clause of aggregate.
@@ -960,11 +964,12 @@ TEST_F(AggregationParserTest, aggregateDeduplication) {
       "FROM nation GROUP BY n_name",
       matchScan()
           .aggregate(
-              {"n_name"}, {"sum(n_regionkey)", "sum(DISTINCT n_regionkey)"})
+              {"n_name"},
+              {"sum(n_regionkey) as s1", "sum(DISTINCT n_regionkey) as s2"})
           .project({
               "n_name",
-              "plus(sum, CAST(1 AS BIGINT))",
-              "multiply(sum_0, CAST(2 AS BIGINT))",
+              "s1 + 1::bigint",
+              "s2 * 2::bigint",
           })
           .output());
 
@@ -977,12 +982,14 @@ TEST_F(AggregationParserTest, aggregateDeduplication) {
       matchScan()
           .aggregate(
               {"n_name"},
-              {"sum(n_regionkey) FILTER (WHERE gt(n_nationkey, CAST(5 AS BIGINT)))",
-               "sum(n_regionkey) FILTER (WHERE lt(n_nationkey, CAST(10 AS BIGINT)))"})
+              {
+                  "sum(n_regionkey) FILTER (WHERE n_nationkey > 5::bigint) as s1",
+                  "sum(n_regionkey) FILTER (WHERE n_nationkey < 10::bigint) as s2",
+              })
           .project({
               "n_name",
-              "plus(sum, CAST(1 AS BIGINT))",
-              "multiply(sum_0, CAST(2 AS BIGINT))",
+              "s1 + 1::bigint",
+              "s2 * 2::bigint",
           })
           .output());
 
@@ -1010,11 +1017,11 @@ TEST_F(AggregationParserTest, aggregateDeduplication) {
       matchScan()
           .aggregate(
               {"n_name"},
-              {"sum(DISTINCT n_regionkey) FILTER (WHERE gt(n_nationkey, CAST(5 AS BIGINT)))"})
+              {"sum(DISTINCT n_regionkey) FILTER (WHERE n_nationkey > 5::bigint)"})
           .project({
               "n_name",
-              "plus(sum, CAST(1 AS BIGINT))",
-              "multiply(sum, CAST(2 AS BIGINT))",
+              "sum + 1::bigint",
+              "sum * 2::bigint",
           })
           .output());
 }
@@ -1111,9 +1118,7 @@ TEST_F(AggregationParserTest, groupByWithWindowFunction) {
       matchScan("t")
           .aggregate({"b"}, {"sum(a)"})
           .project({"b", "sum", "sum(sum) OVER ()"})
-          .project(
-              {"b",
-               "multiply(cast(sum as double), 1.0) / cast(expr as double)"})
+          .project({"b", "sum::double * 1.0 / expr::double"})
           .output());
 
   // Same as above but with PARTITION BY in the nested window function.
@@ -1122,9 +1127,7 @@ TEST_F(AggregationParserTest, groupByWithWindowFunction) {
       matchScan("t")
           .aggregate({"b"}, {"sum(a)"})
           .project({"b", "sum", "sum(sum) OVER (PARTITION BY b)"})
-          .project(
-              {"b",
-               "multiply(cast(sum as double), 1.0) / cast(expr as double)"})
+          .project({"b", "sum::double * 1.0 / expr::double"})
           .output());
 
   // Same as above but with qualified column references.
@@ -1133,9 +1136,7 @@ TEST_F(AggregationParserTest, groupByWithWindowFunction) {
       matchScan("t")
           .aggregate({"b"}, {"sum(a)"})
           .project({"b", "sum", "sum(sum) OVER ()"})
-          .project(
-              {"b",
-               "multiply(cast(sum as double), 1.0) / cast(expr as double)"})
+          .project({"b", "sum::double * 1.0 / expr::double"})
           .output());
 
   // Window function call with the same signature as a plain aggregate.
