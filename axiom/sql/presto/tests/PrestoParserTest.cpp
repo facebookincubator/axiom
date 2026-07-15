@@ -432,6 +432,22 @@ TEST_F(PrestoParserTest, withShadowingBaseTable) {
       matcher);
 }
 
+TEST_F(PrestoParserTest, qualifiedTableNotShadowedByCte) {
+  // A qualified table reference is a base table even when its last component
+  // matches a CTE name; the CTE must not shadow it. Covers both the
+  // catalog.schema.table and schema.table forms.
+  auto matcher = matchScan().project().output({"n_name"});
+  testSelect(
+      "WITH nation AS (SELECT 1 AS x) "
+      "SELECT n.n_name FROM test.default.nation n",
+      matcher);
+
+  testSelect(
+      "WITH nation AS (SELECT 1 AS x) "
+      "SELECT n.n_name FROM default.nation n",
+      matcher);
+}
+
 TEST_F(PrestoParserTest, withMultipleCtes) {
   // Later CTE references earlier CTE.
   testSelect(
