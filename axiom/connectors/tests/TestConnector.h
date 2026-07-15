@@ -727,6 +727,11 @@ class TestConfigProvider : public velox::config::ConfigProvider {
   /// verify a session property reaches connector split-generation.
   static constexpr const char* kListPartitionsError = "list_partitions_error";
 
+  /// When non-empty, TestConnectorMetadata::finishWrite throws a user error
+  /// with this value as the message. Used by tests that verify a write reaches
+  /// connector commit.
+  static constexpr const char* kFinishWriteError = "finish_write_error";
+
   /// Seed for the TABLESAMPLE SYSTEM split coin flip. Defaults to a fixed
   /// value so sampled split sets are reproducible across test runs.
   static constexpr const char* kSampleSeed = "sample_seed";
@@ -741,6 +746,10 @@ class TestConfigProvider : public velox::config::ConfigProvider {
          velox::config::ConfigPropertyType::kString,
          "",
          "Test-only: if non-empty, co_listPartitions throws this message."},
+        {kFinishWriteError,
+         velox::config::ConfigPropertyType::kString,
+         "",
+         "Test-only: if non-empty, finishWrite throws this message."},
         {kSampleSeed,
          velox::config::ConfigPropertyType::kString,
          "42",
