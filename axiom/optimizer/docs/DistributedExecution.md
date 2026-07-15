@@ -6,9 +6,8 @@ This document describes how Axiom's optimizer plans distributed execution: how p
 
 The optimizer's role is to decide where exchanges go, what partitioning each exchange uses, and how many tasks each fragment should run with. The runtime takes the resulting `MultiFragmentPlan` and: creates tasks, enumerates and distributes splits to them, and wires producer/consumer exchanges between them.
 
-**Implementation status.** Sections 1 and 2 describe the fragment and exchange model that is in place today, with two exceptions called out where they appear:
+**Implementation status.** Sections 1 and 2 describe the fragment and exchange model that is in place today, including `kCoordinator` fragments and SystemConnector isolation. Grouped execution is the one exception:
 
-- **`kCoordinator` fragments and SystemConnector isolation** are not yet implemented. Section 1 (UNION ALL with single-task inputs) and Section 2 (`FragmentType::kCoordinator`) describe the intended behavior.
 - **Grouped execution** (Section 3) — including the `PartitionType` API, `groupedNodes` / `groupedExecution` fields on `ExecutableFragment`, `GroupedSplitSource`, and split-level `groupId` tagging — is a design proposal, not yet implemented.
 
 ### 1. Fragment Structure and Scheduling Constraints

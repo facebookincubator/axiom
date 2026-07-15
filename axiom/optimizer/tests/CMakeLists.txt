@@ -104,6 +104,7 @@ target_link_libraries(
 add_executable(
   axiom_optimizer_tests
   AggregationTest.cpp
+  CoordinatorSchedulingTest.cpp
   DistinctAggregationTest.cpp
   OutputNodeTest.cpp
   CardinalityEstimationTest.cpp
@@ -162,7 +163,9 @@ target_link_libraries(
   axiom_optimizer_tests_plan_matcher
   axiom_optimizer_tests_query_test_base
   axiom_runner_tests_utils
+  axiom_connectors
   axiom_test_connector
+  velox_connector_registry
   velox_dwio_text_reader_register
   velox_dwio_text_writer_register
   GTest::gmock

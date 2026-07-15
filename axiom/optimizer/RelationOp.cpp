@@ -115,6 +115,17 @@ std::optional<float> orderPrefixDistance(
   return selection;
 }
 
+bool isCoordinatorOnlyScan(BaseTableCP baseTable) {
+  auto* optimization = queryCtx()->optimization();
+  if (optimization == nullptr) {
+    return false;
+  }
+
+  const auto& systemConnectorId = optimization->options().systemConnectorId;
+  return !systemConnectorId.empty() &&
+      baseTable->schemaTable->connectorId() == systemConnectorId;
+}
+
 } // namespace
 
 TableScan::TableScan(
@@ -206,6 +217,10 @@ Distribution TableScan::outputDistribution(
     const BaseTable* baseTable,
     ColumnGroupCP index,
     const ColumnVector& columns) {
+  if (isCoordinatorOnlyScan(baseTable)) {
+    return Distribution::gather();
+  }
+
   // Re-express the index's distribution over the scan's output columns. At scan
   // time no equivalence classes exist, so rename matches schema columns to
   // output columns by identity.

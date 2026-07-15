@@ -547,13 +547,8 @@ TEST_F(UnionAllTest, orderByOverTwoScans) {
   }
 }
 
-// ORDER BY over two single-task legs. The union is kSingle; per the design
-// the ORDER BY should run in the same kSingle fragment with no remote
-// exchange.
-//
-// TODO: The optimizer always emits a separate kSingle final fragment, even
-// when the union is already kSingle. The OrderBy is split into PARTIAL +
-// LocalMerge + MergeExchange + (no extra OrderBy) — one unnecessary gather.
+// ORDER BY over two single-task legs. The union is kSingle, so the ORDER BY
+// runs in the same kSingle fragment with no remote exchange.
 TEST_F(UnionAllTest, orderByOverTwoValues) {
   auto logicalPlan = parseSelect(
       "SELECT * FROM (VALUES 1 UNION ALL VALUES 2) ORDER BY 1",
@@ -572,7 +567,6 @@ TEST_F(UnionAllTest, orderByOverTwoValues) {
                        .localPartition(matchValues().project().build())
                        .orderBy({"c0 ASC NULLS LAST"})
                        .localMerge()
-                       .shuffleMerge()
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
