@@ -508,6 +508,25 @@ void WithQuery::accept(AstVisitor* visitor) {
   visitor->visitWithQuery(this);
 }
 
+size_t WithQuery::hash() const {
+  return folly::hash::hash_combine(
+      Node::deepHash(name_),
+      Node::deepHash(query_),
+      columnNames_.has_value() ? Node::deepHashAll(*columnNames_) : 0);
+}
+
+bool WithQuery::equals(const Node& other) const {
+  const auto& o = *other.as<WithQuery>();
+  if (!(Node::deepEqual(name_, o.name_) && Node::deepEqual(query_, o.query_))) {
+    return false;
+  }
+  if (columnNames_.has_value() != o.columnNames_.has_value()) {
+    return false;
+  }
+  return !columnNames_.has_value() ||
+      Node::deepEqualAll(*columnNames_, *o.columnNames_);
+}
+
 void OrderBy::accept(AstVisitor* visitor) {
   visitor->visitOrderBy(this);
 }

@@ -26,6 +26,7 @@ namespace axiom::sql::presto {
 
 // Forward declarations
 class OrderBy;
+class Query;
 
 // Support Classes
 
@@ -588,19 +589,21 @@ class WithQuery : public Node {
   WithQuery(
       NodeLocation location,
       const std::shared_ptr<Identifier>& name,
-      const StatementPtr& query,
+      const std::shared_ptr<Query>& query,
       std::optional<std::vector<std::shared_ptr<Identifier>>> columnNames =
           std::nullopt)
       : Node(NodeType::kWithQuery, location),
         name_(name),
         query_(query),
-        columnNames_(std::move(columnNames)) {}
+        columnNames_(std::move(columnNames)) {
+    VELOX_CHECK_NOT_NULL(query_);
+  }
 
   const std::shared_ptr<Identifier>& name() const {
     return name_;
   }
 
-  const StatementPtr& query() const {
+  const std::shared_ptr<Query>& query() const {
     return query_;
   }
 
@@ -611,30 +614,16 @@ class WithQuery : public Node {
 
   void accept(AstVisitor* visitor) override;
 
-  size_t hash() const override {
-    return folly::hash::hash_combine(
-        Node::deepHash(name_),
-        Node::deepHash(query_),
-        columnNames_.has_value() ? Node::deepHashAll(*columnNames_) : 0);
-  }
+  // Defined out-of-line because they hash/compare 'query_', which requires a
+  // complete Query type.
+  size_t hash() const override;
 
  protected:
-  bool equals(const Node& other) const override {
-    const auto& o = *other.as<WithQuery>();
-    if (!(Node::deepEqual(name_, o.name_) &&
-          Node::deepEqual(query_, o.query_))) {
-      return false;
-    }
-    if (columnNames_.has_value() != o.columnNames_.has_value()) {
-      return false;
-    }
-    return !columnNames_.has_value() ||
-        Node::deepEqualAll(*columnNames_, *o.columnNames_);
-  }
+  bool equals(const Node& other) const override;
 
  private:
   std::shared_ptr<Identifier> name_;
-  StatementPtr query_;
+  std::shared_ptr<Query> query_;
   std::optional<std::vector<std::shared_ptr<Identifier>>> columnNames_;
 };
 

@@ -222,12 +222,7 @@ bool RecursiveCteValidator::referencesCte(
 const Union* RecursiveCteValidator::extractAndValidateRecursiveUnion(
     const WithQuery& withEntry,
     const std::string& cteName) {
-  auto* bodyQuery = dynamic_cast<Query*>(withEntry.query().get());
-  AXIOM_PRESTO_SYNTAX_CHECK(
-      bodyQuery != nullptr,
-      withEntry.location(),
-      cteName,
-      "Recursive CTE body is not a query");
+  const auto* bodyQuery = withEntry.query().get();
   const auto& queryBody = bodyQuery->queryBody();
 
   // Reject set operations other than UNION ALL.
