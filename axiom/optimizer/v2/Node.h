@@ -53,6 +53,8 @@ enum class NodeType : uint8_t {
   kEnforceDistinct,
   kExchange,
   kTableWrite,
+  kFixedPoint,
+  kWorkingTable,
 };
 
 AXIOM_DECLARE_ENUM_NAME(NodeType);
@@ -1880,6 +1882,120 @@ class TableWrite : public Node {
 };
 
 using TableWriteCP = const TableWrite*;
+
+/// Leaf placeholder for the working table of an enclosing `FixedPoint`.
+/// `outputColumns` share `Column*` identity with the enclosing FP's
+/// `outputColumns`, so the step body binds through pointer identity.
+class WorkingTable : public Node {
+ public:
+  struct Key {
+    /// Name of the enclosing `FixedPoint` (matches its `name()`).
+    Name name;
+    /// Output schema — same `Column*`s as the enclosing `FixedPoint`.
+    ColumnVector outputColumns;
+  };
+
+  /// Transparent hasher for interning `WorkingTable`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const WorkingTable* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `WorkingTable`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const WorkingTable* left, const WorkingTable* right) const;
+    bool operator()(const Key& key, const WorkingTable* node) const;
+    bool operator()(const WorkingTable* node, const Key& key) const;
+  };
+
+  explicit WorkingTable(Key key);
+
+  Name name() const {
+    return name_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return {};
+  }
+
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const Name name_;
+};
+
+using WorkingTableCP = const WorkingTable*;
+
+/// Iterates `step` over a working table seeded by `anchor` until convergence
+/// or a max-iteration bound. `outputColumns` equal `anchor->outputColumns()`
+/// by pointer identity.
+///
+/// Invariants (enforced by the ctor):
+///   - `anchor`, `step`, and `name` are non-null.
+///   - `outputColumns` equal `anchor->outputColumns()` by pointer identity.
+class FixedPoint : public Node {
+ public:
+  struct Key {
+    /// Anchor sub-plan; runs once, seeds the working table.
+    NodeCP anchor;
+    /// Step sub-plan; iterates over the working table. By convention it
+    /// contains at least one `WorkingTable` leaf named `name`.
+    NodeCP step;
+    /// Name of this `FixedPoint` (matches `lp::FixedPointNode::name()`).
+    Name name;
+    /// Output schema — same `Column*`s as `anchor->outputColumns()`.
+    ColumnVector outputColumns;
+  };
+
+  /// Transparent hasher for interning `FixedPoint`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const FixedPoint* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `FixedPoint`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const FixedPoint* left, const FixedPoint* right) const;
+    bool operator()(const Key& key, const FixedPoint* node) const;
+    bool operator()(const FixedPoint* node, const Key& key) const;
+  };
+
+  explicit FixedPoint(Key key);
+
+  NodeCP anchor() const {
+    return inputs_[0];
+  }
+
+  NodeCP step() const {
+    return inputs_[1];
+  }
+
+  Name name() const {
+    return name_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return inputs_;
+  }
+
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const std::array<NodeCP, 2> inputs_;
+  const Name name_;
+};
+
+using FixedPointCP = const FixedPoint*;
 
 template <typename Substitute>
 NodeCP Node::rewrite(Builder& builder, Substitute fn) const {

@@ -202,6 +202,8 @@ void forEachExpressionInNode(NodeCP node, Visit&& visit) {
     case NodeType::kLimit:
     case NodeType::kEnforceSingleRow:
     case NodeType::kAssignUniqueId:
+    case NodeType::kFixedPoint:
+    case NodeType::kWorkingTable:
       // No expressions on these nodes.
       break;
   }

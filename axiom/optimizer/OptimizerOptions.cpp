@@ -111,6 +111,12 @@ std::vector<ConfigProperty> buildProperties(
           "time on dense join graphs. 0 means unlimited.",
       },
       {
+          std::string(OptimizerOptions::kFixedPointMaxIterations),
+          ConfigPropertyType::kInteger,
+          std::to_string(OptimizerOptions::kFixedPointMaxIterationsDefault),
+          "Safety bound on iterations for a recursive CTE FixedPoint. Must be >= 1.",
+      },
+      {
           std::string(OptimizerOptions::kTraceFlags),
           ConfigPropertyType::kInteger,
           std::to_string(OptimizerOptions::kTraceFlagsDefault),
@@ -162,6 +168,10 @@ std::string OptimizerOptions::normalize(
     // Throws if 'value' is not a valid capacity string (e.g. "100MB").
     velox::config::toCapacity(
         std::string(value), velox::config::CapacityUnit::BYTE);
+  } else if (name == kFixedPointMaxIterations) {
+    auto iterations = std::stoi(std::string(value));
+    VELOX_USER_CHECK_GE(
+        iterations, 1, "fixed_point_max_iterations must be >= 1: {}", value);
   }
   return std::string(value);
 }
@@ -203,6 +213,7 @@ OptimizerOptions OptimizerOptions::from(
   setInt(kGreedyJoinThreshold, options.greedyJoinThreshold);
   setCapacity(kBroadcastSizeLimit, options.broadcastSizeLimit);
   setInt(kDphypEnumerationBudget, options.dphypEnumerationBudget);
+  setInt(kFixedPointMaxIterations, options.fixedPointMaxIterations);
 
   auto setUint = [&](std::string_view key, uint32_t& field) {
     auto it = properties.find(key);

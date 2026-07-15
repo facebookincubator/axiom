@@ -137,6 +137,27 @@ class PlanMatcher {
   std::vector<std::optional<std::string>> aliases_;
 };
 
+/// Match details for a FixedPoint node.
+struct FixedPointDetails {
+  /// When set, asserts `FixedPointNode::outputStateEntry()` — the working
+  /// table's state entry name (mirrors `lp::FixedPointNode::name()`).
+  std::optional<std::string> name;
+
+  /// When set, matches the anchor's lowered initial plan — the plan on the
+  /// first vector state declaration.
+  std::shared_ptr<PlanMatcher> anchor;
+
+  /// When set, matches the step's lowered plan — the first entry in
+  /// `plans()`.
+  std::shared_ptr<PlanMatcher> step;
+};
+
+/// Match details for a WorkingTableScan. Lowers to `StateSourceNode`.
+struct WorkingTableScanDetails {
+  /// When set, asserts the working table's name.
+  std::optional<std::string> name;
+};
+
 /// Match details for a HashJoin node beyond join type. Each field is
 /// optional: leave as nullopt to skip the check, set a value to assert it.
 struct HashJoinDetails {
@@ -197,6 +218,20 @@ class PlanMatcherBuilder {
   /// Matches a Values node with the specified output type.
   /// @param outputType The expected output type of the Values node.
   PlanMatcherBuilder& values(const RowTypePtr& outputType);
+
+  /// Matches any WorkingTableScan node regardless of state name.
+  PlanMatcherBuilder& workingTableScan();
+
+  /// Matches a WorkingTableScan node with the specified details.
+  PlanMatcherBuilder& workingTableScan(const WorkingTableScanDetails& details);
+
+  /// Matches any FixedPoint node regardless of state declarations, plans, or
+  /// convergence config.
+  PlanMatcherBuilder& fixedPoint();
+
+  /// Matches a FixedPoint node with the specified details. See
+  /// FixedPointDetails for per-field semantics.
+  PlanMatcherBuilder& fixedPoint(const FixedPointDetails& details);
 
   /// Matches any Filter node regardless of predicate.
   PlanMatcherBuilder& filter();
