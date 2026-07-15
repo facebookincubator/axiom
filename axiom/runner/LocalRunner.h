@@ -40,11 +40,14 @@ class SplitSourceFactory {
   /// Returns a splitSource for one TableScan across all Tasks of
   /// the fragment. The source will be invoked to produce splits for
   /// each individual worker running the scan. When 'partitionType' is
-  /// non-null, emitted Splits are tagged with a groupId.
+  /// non-null, emitted Splits are tagged with a groupId. When
+  /// 'samplePercentage' is set (TABLESAMPLE SYSTEM), the source emits each
+  /// split with that probability.
   virtual std::shared_ptr<connector::SplitSource> splitSourceForScan(
       const connector::ConnectorSessionPtr& session,
       const velox::core::TableScanNode& scan,
-      const std::shared_ptr<connector::PartitionType>& partitionType) = 0;
+      const std::shared_ptr<connector::PartitionType>& partitionType,
+      std::optional<double> samplePercentage) = 0;
 };
 
 class SimpleSplitSourceFactory : public SplitSourceFactory {
@@ -59,7 +62,8 @@ class SimpleSplitSourceFactory : public SplitSourceFactory {
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
       const connector::ConnectorSessionPtr& session,
       const velox::core::TableScanNode& scan,
-      const std::shared_ptr<connector::PartitionType>& partitionType) override;
+      const std::shared_ptr<connector::PartitionType>& partitionType,
+      std::optional<double> samplePercentage) override;
 
  private:
   folly::F14FastMap<
@@ -77,7 +81,8 @@ class ConnectorSplitSourceFactory : public SplitSourceFactory {
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
       const connector::ConnectorSessionPtr& session,
       const velox::core::TableScanNode& scan,
-      const std::shared_ptr<connector::PartitionType>& partitionType) override;
+      const std::shared_ptr<connector::PartitionType>& partitionType,
+      std::optional<double> samplePercentage) override;
 
  protected:
   QueryRuntimeStats& runtimeStats_;
@@ -199,7 +204,8 @@ class LocalRunner : public Runner,
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
       const connector::ConnectorSessionPtr& session,
       const velox::core::TableScanNode& scan,
-      const std::shared_ptr<connector::PartitionType>& partitionType);
+      const std::shared_ptr<connector::PartitionType>& partitionType,
+      std::optional<double> samplePercentage);
 
   // Aggregates the live per-fragment task stats. This is the in-progress
   // snapshot returned by stats() before the run completes. Caller must hold

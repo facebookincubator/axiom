@@ -17,6 +17,7 @@
 #include "axiom/connectors/tests/TestConnector.h"
 
 #include <algorithm>
+#include <random>
 #include <utility>
 
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
@@ -454,11 +455,13 @@ TestSplitManager::co_listPartitions(
 }
 
 std::shared_ptr<SplitSource> TestSplitManager::getSplitSource(
-    const ConnectorSessionPtr& /*session*/,
+    const ConnectorSessionPtr& session,
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
     const std::vector<PartitionHandlePtr>& partitions,
     const std::shared_ptr<PartitionType>& partitionType,
+    std::optional<double> samplePercentage,
     QueryRuntimeStats& /*runtimeStats*/) {
+  VELOX_CHECK_NOT_NULL(session);
   const auto& testTable = findTestTableForHandle(tableHandle);
 
   std::vector<size_t> dataIndices;
@@ -487,6 +490,30 @@ std::shared_ptr<SplitSource> TestSplitManager::getSplitSource(
       dataIndices.push_back(i);
     }
   }
+
+  if (samplePercentage.has_value()) {
+    // Drop whole splits (one per data index) at enumeration time, so unselected
+    // splits are never produced.
+    const bool bucketed = !dataBucketIds.empty();
+
+    const auto seed = folly::to<uint32_t>(
+        session->property(TestConfigProvider::kSampleSeed).value());
+    std::mt19937 rng(seed);
+    std::bernoulli_distribution keep(*samplePercentage / 100.0);
+    std::vector<size_t> sampledIndices;
+    std::vector<int32_t> sampledBucketIds;
+    for (size_t i = 0; i < dataIndices.size(); ++i) {
+      if (keep(rng)) {
+        sampledIndices.push_back(dataIndices[i]);
+        if (bucketed) {
+          sampledBucketIds.push_back(dataBucketIds[i]);
+        }
+      }
+    }
+    dataIndices = std::move(sampledIndices);
+    dataBucketIds = std::move(sampledBucketIds);
+  }
+
   return std::make_shared<TestSplitSource>(
       tableHandle->connectorId(),
       std::move(dataIndices),

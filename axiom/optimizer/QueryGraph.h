@@ -1161,6 +1161,11 @@ struct BaseTable : public TableObject {
 
   SubfieldSet payloadSubfields;
 
+  /// TABLESAMPLE SYSTEM percentage in the open interval (0, 100). When set,
+  /// split generation for this scan emits each split with this probability.
+  /// nullopt = no sampling.
+  std::optional<float> sampledPercentage;
+
   std::optional<float> cardinality() const override {
     return filteredCardinality;
   }

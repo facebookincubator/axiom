@@ -1427,7 +1427,7 @@ velox::core::TypedExprPtr toAndWithAliases(
 
 velox::core::PlanNodePtr ToVelox::makeScan(
     const TableScan& scan,
-    ExecutableFragment& /*fragment*/,
+    ExecutableFragment& fragment,
     std::vector<ExecutableFragment>& /*stages*/) {
   columnAlteredTypes_.clear();
 
@@ -1482,6 +1482,10 @@ velox::core::PlanNodePtr ToVelox::makeScan(
           scanId, outputType, tableHandle, assignments);
 
   relationOpToNodeId_.insert_or_assign(&scan, scanId);
+
+  if (scan.baseTable->sampledPercentage.has_value()) {
+    fragment.sampledScans.emplace(scanId, *scan.baseTable->sampledPercentage);
+  }
 
   if (filter != nullptr) {
     result =

@@ -161,6 +161,11 @@ struct ExecutableFragment {
       velox::core::PlanNodeId,
       std::shared_ptr<connector::PartitionType>>
       groupedNodes;
+
+  /// Sample percentage per scan node for TABLESAMPLE SYSTEM. The split source
+  /// for the scan emits each split with this probability, in the open interval
+  /// (0, 100). Empty when no scan in this fragment is sampled.
+  folly::F14FastMap<velox::core::PlanNodeId, double> sampledScans;
 };
 
 /// Describes a distributed plan handed to a Runner for parallel/distributed

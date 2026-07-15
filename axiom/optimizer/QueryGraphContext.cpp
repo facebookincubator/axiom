@@ -385,6 +385,10 @@ void QueryGraphContext::populateFunctionNames() {
     functionNames_.like = this->toName(like.value());
   }
 
+  if (auto random = registry->random()) {
+    functionNames_.random = this->toName(random.value());
+  }
+
   if (auto rowNumber = registry->rowNumber()) {
     functionNames_.rowNumber = this->toName(rowNumber.value());
   }

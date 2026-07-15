@@ -340,7 +340,12 @@ TEST_F(SystemConnectorMetadataTest, splitSource) {
 
   QueryRuntimeStats noopStats;
   auto splitSource = splitManager->getSplitSource(
-      session, tableHandle, partitions, /*partitionType=*/nullptr, noopStats);
+      session,
+      tableHandle,
+      partitions,
+      /*partitionType=*/nullptr,
+      /*samplePercentage=*/std::nullopt,
+      noopStats);
   ASSERT_NE(splitSource, nullptr);
 
   std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;

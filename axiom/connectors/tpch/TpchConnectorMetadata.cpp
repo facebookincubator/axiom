@@ -88,7 +88,11 @@ std::shared_ptr<SplitSource> TpchSplitManager::getSplitSource(
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
     const std::vector<PartitionHandlePtr>& /*partitions*/,
     const std::shared_ptr<PartitionType>& /*partitionType*/,
+    std::optional<double> samplePercentage,
     QueryRuntimeStats& /*runtimeStats*/) {
+  VELOX_USER_CHECK(
+      !samplePercentage.has_value(),
+      "SYSTEM sampling is not supported by this connector");
   auto* tpchTableHandle =
       dynamic_cast<const velox::connector::tpch::TpchTableHandle*>(
           tableHandle.get());

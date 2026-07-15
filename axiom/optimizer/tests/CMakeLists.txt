@@ -133,6 +133,7 @@ add_executable(
   SubfieldTest.cpp
   SubqueryTest.cpp
   SyntacticJoinOrderTest.cpp
+  TableSampleTest.cpp
   FeatureGen.cpp
   Genies.cpp
   BucketedExecutionPlanTest.cpp
