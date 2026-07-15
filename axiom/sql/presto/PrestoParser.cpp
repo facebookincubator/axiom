@@ -2404,6 +2404,15 @@ SqlStatementPtr parseCreateTable(
           names.push_back(schema->nameOf(i));
           types.push_back(schema->childAt(i));
         }
+
+        // For INCLUDING PROPERTIES, copy the source table's properties;
+        // try_emplace keeps any already set by an explicit WITH clause.
+        if (likeClause->propertiesOption() ==
+            LikeClause::PropertiesOption::kIncluding) {
+          for (const auto& [key, value] : table->options()) {
+            properties.try_emplace(key, lp::ConstantExpr::fromVariant(value));
+          }
+        }
         break;
       }
       case NodeType::kConstraintSpecification: {

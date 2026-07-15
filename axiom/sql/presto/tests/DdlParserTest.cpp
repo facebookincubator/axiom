@@ -296,6 +296,47 @@ TEST_F(DdlParserTest, createTable) {
       "Duplicate property");
 }
 
+TEST_F(DdlParserTest, createTableLikeProperties) {
+  auto metadata =
+      facebook::axiom::connector::ConnectorMetadataRegistry::get(kConnectorId);
+
+  const auto rowType = ROW({"a", "b"}, INTEGER());
+
+  // Register a source table that carries a table property.
+  metadata->createTable(
+      /*session=*/nullptr,
+      facebook::axiom::SchemaTableName{"default", "src"},
+      rowType,
+      /*options=*/
+      {{std::string(
+            facebook::axiom::connector::TestConnectorMetadata::kExplainIo),
+        Variant::array(std::vector<Variant>{Variant("a")})}},
+      /*ifNotExists=*/false,
+      /*explain=*/false);
+
+  // LIKE ... INCLUDING PROPERTIES carries the source table's properties.
+  testCreateTable(
+      "CREATE TABLE copy (LIKE src INCLUDING PROPERTIES)",
+      "copy",
+      rowType,
+      /*properties=*/{{"explain_io", "[\"a\"]"}});
+
+  // An explicit WITH property overrides the inherited one.
+  testCreateTable(
+      "CREATE TABLE copy_override (LIKE src INCLUDING PROPERTIES) "
+      "WITH (explain_io = ARRAY['b'])",
+      "copy_override",
+      rowType,
+      /*properties=*/{{"explain_io", "array_constructor(b)"}});
+
+  // The default (no option) copies columns only, not properties.
+  testCreateTable("CREATE TABLE copy2 (LIKE src)", "copy2", rowType);
+
+  // EXCLUDING PROPERTIES behaves like the default: columns only.
+  testCreateTable(
+      "CREATE TABLE copy3 (LIKE src EXCLUDING PROPERTIES)", "copy3", rowType);
+}
+
 TEST_F(DdlParserTest, dropTable) {
   {
     auto statement = parseSql("DROP TABLE t");
