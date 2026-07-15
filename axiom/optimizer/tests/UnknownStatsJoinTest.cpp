@@ -30,6 +30,17 @@ class UnknownStatsJoinTest : public test::QueryTestBase {
   velox::core::PlanNodePtr plan(const std::string& sql) {
     return toSingleNodePlan(parseSelect(sql, kTestConnectorId));
   }
+
+  // 't' and 'u' join only through 'v', whose join-key NDV is absent, so the
+  // join cost is unknown.
+  void addSharedJoinTableSchema() {
+    testConnector_->addTable("t", ROW({"a", "k"}, BIGINT()))
+        ->setStats(1'000'000, {{"k", {.numDistinct = 1'000'000}}});
+    testConnector_->addTable("u", ROW({"b", "k"}, BIGINT()))
+        ->setStats(1'000, {{"k", {.numDistinct = 1'000}}});
+    testConnector_->addTable("v", ROW({"x", "y"}, BIGINT()))
+        ->setStats(100'000, {});
+  }
 };
 
 TEST_F(UnknownStatsJoinTest, singleJoin) {
@@ -125,6 +136,98 @@ TEST_F(UnknownStatsJoinTest, joinWithUnknownTableCardinality) {
 
   AXIOM_ASSERT_PLAN(plan(query), matchJoin("u", "t"));
   AXIOM_ASSERT_PLAN(plan(altQuery), matchJoin("t", "u"));
+}
+
+// Two large tables join only through 'v'; the fallback must hash-join through
+// it rather than cross-join the two.
+TEST_F(UnknownStatsJoinTest, sharedTableJoinAvoidsCrossJoin) {
+  addSharedJoinTableSchema();
+
+  const auto query =
+      "SELECT count(*) FROM t, u, v WHERE t.k = v.x AND u.k = v.y";
+
+  // Fallback on: hash-join 't' and 'u' through 'v'.
+  optimizerOptions_.syntacticJoinOrder = false;
+  AXIOM_ASSERT_PLAN(
+      plan(query),
+      matchScan("t")
+          .hashJoinInner(matchScan("v").build())
+          .hashJoinInner(matchScan("u").build())
+          .aggregation()
+          .build());
+
+  // Pinned order disables the fallback: the literal order cross-joins 't', 'u'.
+  optimizerOptions_.syntacticJoinOrder = true;
+  AXIOM_ASSERT_PLAN(
+      plan(query),
+      matchScan("t")
+          .nestedLoopJoin(matchScan("u").build())
+          .hashJoinInner(matchScan("v").build())
+          .aggregation()
+          .build());
+}
+
+// An expression equi-key ('t.k + 0') behaves the same under the flag toggle.
+TEST_F(UnknownStatsJoinTest, sharedTableJoinAvoidsCrossJoinExpressionKey) {
+  addSharedJoinTableSchema();
+
+  const auto query =
+      "SELECT count(*) FROM t, u, v WHERE t.k + 0 = v.x AND u.k = v.y";
+
+  // Fallback on: hash-join through 'v' on the projected key.
+  optimizerOptions_.syntacticJoinOrder = false;
+  AXIOM_ASSERT_PLAN(
+      plan(query),
+      matchScan("t")
+          .project()
+          .hashJoinInner(matchScan("v").build())
+          .hashJoinInner(matchScan("u").build())
+          .aggregation()
+          .build());
+
+  // Pinned order disables the fallback: the literal order cross-joins 't', 'u'.
+  optimizerOptions_.syntacticJoinOrder = true;
+  AXIOM_ASSERT_PLAN(
+      plan(query),
+      matchScan("t")
+          .nestedLoopJoin(matchScan("u").build())
+          .project()
+          .hashJoinInner(matchScan("v").build())
+          .aggregation()
+          .build());
+}
+
+// Guard: 'w' has no equi-join to any table, so it still cross-joins even while
+// 't' and 'u' hash-join through the shared table 'v'.
+TEST_F(UnknownStatsJoinTest, crossJoinWhenNoEquiPartner) {
+  addSharedJoinTableSchema();
+  testConnector_->addTable("w", ROW({"c", "k"}, BIGINT()));
+
+  const auto query =
+      "SELECT count(*) FROM t, u, v, w WHERE t.k = v.x AND u.k = v.y";
+
+  // Fallback on: 't'/'u' hash-join through 'v'; 'w' has no partner, so it
+  // crosses.
+  optimizerOptions_.syntacticJoinOrder = false;
+  AXIOM_ASSERT_PLAN(
+      plan(query),
+      matchScan("t")
+          .hashJoinInner(matchScan("v").build())
+          .hashJoinInner(matchScan("u").build())
+          .nestedLoopJoin(matchScan("w").build())
+          .aggregation()
+          .build());
+
+  // Pinned order: the literal order cross-joins the unkeyed tables.
+  optimizerOptions_.syntacticJoinOrder = true;
+  AXIOM_ASSERT_PLAN(
+      plan(query),
+      matchScan("t")
+          .nestedLoopJoin(matchScan("u").build())
+          .hashJoinInner(matchScan("v").build())
+          .nestedLoopJoin(matchScan("w").build())
+          .aggregation()
+          .build());
 }
 
 // The join sampler must tolerate an unknown build-side cardinality.
