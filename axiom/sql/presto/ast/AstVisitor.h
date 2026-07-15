@@ -595,6 +595,10 @@ class AstVisitor {
     defaultVisit(node);
   }
 
+  virtual void visitShowCreateView(ShowCreateView* node) {
+    defaultVisit(node);
+  }
+
   virtual void visitShowColumns(ShowColumns* node) {
     defaultVisit(node);
   }

@@ -960,6 +960,24 @@ class ShowCreateTable : public Statement {
   std::shared_ptr<QualifiedName> name_;
 };
 
+/// Represents SHOW CREATE VIEW <view>. Returns the CREATE VIEW DDL statement
+/// as a single-row, single-column result.
+class ShowCreateView : public Statement {
+ public:
+  ShowCreateView(NodeLocation location, std::shared_ptr<QualifiedName> name)
+      : Statement(NodeType::kShowCreateView, location),
+        name_(std::move(name)) {}
+
+  const std::shared_ptr<QualifiedName>& name() const {
+    return name_;
+  }
+
+  void accept(AstVisitor* visitor) override;
+
+ private:
+  std::shared_ptr<QualifiedName> name_;
+};
+
 class ShowColumns : public Statement {
  public:
   explicit ShowColumns(
