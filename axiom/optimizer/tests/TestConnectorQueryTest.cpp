@@ -27,8 +27,14 @@ namespace {
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class TestConnectorQueryTest : public QueryTestBase {
+class TestConnectorQueryTest : public QueryTestBase,
+                               public ::testing::WithParamInterface<bool> {
  protected:
+  void SetUp() override {
+    QueryTestBase::SetUp();
+    useV2_ = GetParam();
+  }
+
   MultiFragmentPlanPtr appendTableWrite(
       const MultiFragmentPlanPtr& plan,
       const RowTypePtr& schema,
@@ -67,23 +73,39 @@ class TestConnectorQueryTest : public QueryTestBase {
   const MultiFragmentPlan::Options options_{.numWorkers = 1, .numDrivers = 16};
 };
 
-TEST_F(TestConnectorQueryTest, selectFiltered) {
-  auto vector = makeRowVector({"a"}, {makeFlatVector<int64_t>({0, 1, 2})});
-  auto schema = vector->rowType();
+TEST_P(TestConnectorQueryTest, selectFiltered) {
+  auto data = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>({0, 1, 2}),
+          makeFlatVector<int64_t>({0, 10, 20}),
+      });
+  testConnector_->addTable("t", data->rowType())->addData(data);
 
-  testConnector_->addTable("t", schema);
-  testConnector_->appendData("t", vector);
-
-  lp::PlanBuilder::Context context(kTestConnectorId, kDefaultSchema);
-  auto logicalPlan =
-      lp::PlanBuilder(context).tableScan("t").filter("a > 0").build();
   auto expected = makeRowVector({makeFlatVector<int64_t>({1, 2})});
 
-  auto results = runVelox(logicalPlan, options_);
-  exec::test::assertEqualResults(results.results, {expected});
+  // Filter on a selected column.
+  lp::PlanBuilder::Context context(kTestConnectorId, kDefaultSchema);
+  {
+    auto logicalPlan =
+        lp::PlanBuilder(context).tableScan("t", {"a"}).filter("a > 0").build();
+    auto results = runVelox(logicalPlan, options_);
+    exec::test::assertEqualResults(results.results, {expected});
+  }
+
+  // Filter on a column that is not selected: it must not appear in the output.
+  {
+    auto logicalPlan = lp::PlanBuilder(context)
+                           .tableScan("t", {"a", "b"})
+                           .filter("b > 0")
+                           .project({"a"})
+                           .build();
+    auto results = runVelox(logicalPlan, options_);
+    exec::test::assertEqualResults(results.results, {expected});
+  }
 }
 
-TEST_F(TestConnectorQueryTest, writeFiltered) {
+TEST_P(TestConnectorQueryTest, writeFiltered) {
   auto vector = makeRowVector(
       {"b", "c"},
       {makeFlatVector<int64_t>({0, 1, 2}),
@@ -109,6 +131,8 @@ TEST_F(TestConnectorQueryTest, writeFiltered) {
   auto actual = table->data().front();
   velox::test::assertEqualVectors(actual, expected);
 }
+
+AXIOM_INSTANTIATE_V1_V2(TestConnectorQueryTest);
 
 } // namespace
 } // namespace facebook::axiom::optimizer::test

@@ -551,7 +551,15 @@ PlanAndStats ToVelox::toVeloxPlan(
   }
 
   std::vector<ExecutableFragment> stages;
-  top.fragment.planNode = makeFragment(plan, top, stages);
+  auto rootNode = makeFragment(plan, top, stages);
+
+  // The root fragment passes its input columns through unchanged, so trim it to
+  // the plan's output columns here. Writes are exempt: their root emits write
+  // statistics, not the plan's columns.
+  if (!finishWrite_) {
+    rootNode = maybeTrimColumns(std::move(rootNode), plan);
+  }
+  top.fragment.planNode = std::move(rootNode);
 
   // For the root fragment when no addGather was inserted, apply the
   // optimizer's root groupedLeaves directly to top.groupedNodes so the
@@ -1806,6 +1814,8 @@ velox::core::PlanNodePtr ToVelox::makeWindowInput(
     const ExprVector& partitionKeys,
     ExecutableFragment& fragment,
     std::vector<ExecutableFragment>& stages) {
+  // Trim any rejected-filter columns before the Window so they are not carried
+  // through its sort/partition.
   auto input =
       maybeTrimColumns(makeFragment(op.input(), fragment, stages), op.input());
   if (options_.numDrivers > 1) {

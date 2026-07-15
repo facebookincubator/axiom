@@ -754,7 +754,13 @@ velox::core::PlanNodePtr Emitter::emitRoot(
     const ColumnVector& outputColumns,
     const std::vector<std::string>& outputNames) {
   if (isIdentityLayout(*node, outputColumns, outputNames)) {
-    return emit(node);
+    auto result = emit(node);
+    // A scan with a rejected filter emits the filter's columns for the
+    // FilterNode; trim them so they do not leak into the query output.
+    if (result->outputType()->size() > outputColumns.size()) {
+      result = projectToColumns(outputColumns, std::move(result));
+    }
+    return result;
   }
   if (node->is(NodeType::kProject)) {
     return emitRootProject(*node->as<Project>(), outputColumns, outputNames);
