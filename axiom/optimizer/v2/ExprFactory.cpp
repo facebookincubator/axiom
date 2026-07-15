@@ -99,6 +99,30 @@ ExprCP ExprFactory::makeLessThanOrEqual(ExprCP lhs, ExprCP rhs) {
   return makeBooleanCall(name, {lhs, rhs}, /*specialForm=*/false);
 }
 
+ExprCP ExprFactory::makeSamplePredicate(double fraction) {
+  const Name randName = builder_.functionNames().random;
+  VELOX_USER_CHECK_NOT_NULL(
+      randName,
+      "BERNOULLI sampling requires a 'rand' function registered via "
+      "FunctionRegistry::registerRandom; the active dialect did not register "
+      "it");
+  const Name ltName = builder_.functionNames().lt;
+  VELOX_USER_CHECK_NOT_NULL(
+      ltName,
+      "BERNOULLI sampling requires lessThan registered via "
+      "FunctionRegistry::registerLessThan; the active dialect did not register "
+      "it");
+
+  ExprCP randCall = builder_.makeCall(
+      randName,
+      Value(toType(velox::DOUBLE())),
+      /*args=*/{},
+      functionBits(randName, /*specialForm=*/false));
+  ExprCP threshold =
+      builder_.makeLiteral(velox::Variant(fraction), toType(velox::DOUBLE()));
+  return makeBooleanCall(ltName, {randCall, threshold}, /*specialForm=*/false);
+}
+
 ExprCP ExprFactory::makeIsNull(ExprCP arg) {
   const Name name = builder_.functionNames().isNull;
   VELOX_USER_CHECK_NOT_NULL(
