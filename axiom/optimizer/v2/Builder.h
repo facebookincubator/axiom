@@ -88,7 +88,9 @@ class Builder {
       FunctionSet functions);
 
   /// Returns a canonical aggregate `Call`. Result type and 'intermediateType'
-  /// are determined by (name, args), so identity excludes them.
+  /// are determined by (name, args), so identity excludes them. 'specialKind'
+  /// and 'fallback' mark a metadata aggregate (see optimizer::Aggregate); they
+  /// are also excluded from identity (determined by 'name').
   const optimizer::Aggregate* makeAggregate(
       Name name,
       const Value& value,
@@ -98,7 +100,10 @@ class Builder {
       ExprCP condition,
       TypeCP intermediateType,
       ExprVector orderKeys,
-      OrderTypeVector orderTypes);
+      OrderTypeVector orderTypes,
+      std::optional<logical_plan::SpecialAggregateKind> specialKind =
+          std::nullopt,
+      const optimizer::Aggregate* fallback = nullptr);
 
   /// Canonical `Literal` for boolean constant 'value'.
   const Literal* makeBoolean(bool value) {

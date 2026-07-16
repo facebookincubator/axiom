@@ -384,6 +384,30 @@ struct FilteredTableStats {
   std::vector<int32_t> rejectedFilterIndices;
 };
 
+/// One group of a metadata-derived count produced by co_metadataCounts. One
+/// entry per distinct tuple of the grouping columns; a single entry with empty
+/// 'key' for a global (ungrouped) count. Counts may be estimates; see
+/// co_metadataCounts.
+struct MetadataCountGroup {
+  /// Grouping-column values for this group, in the order of the
+  /// 'groupingColumns' argument of co_metadataCounts. Empty for a global count.
+  std::vector<velox::Variant> key;
+
+  /// Number of rows in this group, derived from table metadata.
+  int64_t numRows{0};
+
+  /// Null count per requested column, 1:1 with the 'columns' argument of
+  /// co_metadataCounts and in the same order. Empty when no columns were
+  /// requested. Each entry must be in [0, numRows] -- even for an estimate, a
+  /// column cannot have fewer than zero or more nulls than there are rows.
+  std::vector<int64_t> numNulls;
+
+  /// Verifies the group's invariants: numRows is non-negative and every
+  /// numNulls entry is in [0, numRows]. The connector must guarantee this,
+  /// including after rescaling an estimate.
+  void checkConsistency() const;
+};
+
 /// Represents a physical manifestation of a table. There is at least
 /// one layout but for tables that have multiple sort orders, partitionings,
 /// indices, column groups, etc. there is a separate layout for each. The layout
@@ -537,6 +561,43 @@ class TableLayout {
   virtual folly::coro::Task<std::optional<FilteredTableStats>> co_estimateStats(
       ConnectorSessionPtr /*session*/,
       velox::connector::ConnectorTableHandlePtr /*tableHandle*/,
+      std::vector<std::string> /*columns*/,
+      std::vector<velox::core::TypedExprPtr> /*filterConjuncts*/) const {
+    co_return std::nullopt;
+  }
+
+  /// Returns per-group row counts, and per-column null counts, derived from
+  /// table metadata, computed WITHOUT reading data. Backs aggregates whose
+  /// result is a metadata-derived count rather than a live scan (see
+  /// SpecialAggregateKind).
+  ///
+  /// The connector is free to return an estimate rather than exact counts --
+  /// for example, derived from a sampled subset of partitions and rescaled --
+  /// so the caller must treat the result as approximate. Filter and grouping
+  /// accounting remain all-or-nothing: a connector that cannot resolve every
+  /// conjunct, or group by the requested columns, from metadata declines by
+  /// returning std::nullopt. There is no rejectedFilterIndices equivalent.
+  ///
+  /// @param session Connector session for the current query.
+  /// @param tableHandle Table handle for the table.
+  /// @param groupingColumns Names of columns to group the counts by, in
+  /// output-key order. Empty requests a single global count. The connector
+  /// returns std::nullopt if it cannot group by these columns from metadata
+  /// (e.g. a grouping column is not a partition column).
+  /// @param columns Names of columns for which per-group null counts are
+  /// requested. Empty when only a row count is needed.
+  /// @param filterConjuncts Filter conjuncts applied to the table, in the same
+  /// canonical form as the 'filters' argument of createTableHandle. The
+  /// connector must account for every conjunct or return std::nullopt.
+  ///
+  /// @return One MetadataCountGroup per group, or std::nullopt if the connector
+  /// cannot answer from metadata. The default implementation returns
+  /// std::nullopt.
+  virtual folly::coro::Task<std::optional<std::vector<MetadataCountGroup>>>
+  co_metadataCounts(
+      ConnectorSessionPtr /*session*/,
+      velox::connector::ConnectorTableHandlePtr /*tableHandle*/,
+      std::vector<std::string> /*groupingColumns*/,
       std::vector<std::string> /*columns*/,
       std::vector<velox::core::TypedExprPtr> /*filterConjuncts*/) const {
     co_return std::nullopt;

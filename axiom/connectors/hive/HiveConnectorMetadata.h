@@ -152,6 +152,12 @@ class HiveTableLayout : public TableLayout {
     return hivePartitionColumns_;
   }
 
+  /// Converts a Hive partition-key string to a Variant of 'type'. Fails for a
+  /// type that cannot appear as a partition key.
+  static velox::Variant partitionValueToVariant(
+      std::string_view value,
+      const velox::Type& type);
+
   std::optional<int32_t> numBuckets() const {
     return numBuckets_;
   }

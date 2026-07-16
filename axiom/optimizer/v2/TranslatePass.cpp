@@ -965,6 +965,39 @@ const optimizer::Aggregate* Translator::toAggregateCall(
   ExprVector arguments =
       translateAll(aggregateExpr.inputs(), scope, applyTarget);
 
+  if (aggregateExpr.isSpecialFormAgg()) {
+    const auto& special = *aggregateExpr.as<lp::SpecialFormAggExpr>();
+    // A metadata aggregate does not support these modifiers. ORDER BY is
+    // allowed but ignored (order-insensitive), so it is not checked.
+    VELOX_USER_CHECK(
+        !special.isDistinct(),
+        "Metadata aggregate does not support DISTINCT: {}",
+        aggregateExpr.name());
+    VELOX_USER_CHECK_NULL(
+        special.filter(),
+        "Metadata aggregate does not support FILTER: {}",
+        aggregateExpr.name());
+    // The kind name is not a registered Velox aggregate, so skip the registry
+    // lookup and carry the kind and translated fallback for the fold pass.
+    // Result and intermediate types are BIGINT.
+    const optimizer::Aggregate* fallback = special.fallback() != nullptr
+        ? toAggregateCall(*special.fallback(), scope, applyTarget)
+        : nullptr;
+    FunctionSet funcs = Call::unionArgFunctions(FunctionSet{}, arguments);
+    return builder_.makeAggregate(
+        toName(aggregateExpr.name()),
+        Value(toType(aggregateExpr.type())),
+        std::move(arguments),
+        funcs,
+        /*isDistinct=*/false,
+        /*condition=*/nullptr,
+        toType(velox::BIGINT()),
+        /*orderKeys=*/{},
+        /*orderTypes=*/{},
+        special.kind(),
+        fallback);
+  }
+
   std::vector<velox::TypePtr> argTypes;
   argTypes.reserve(aggregateExpr.inputs().size());
   for (const auto& input : aggregateExpr.inputs()) {

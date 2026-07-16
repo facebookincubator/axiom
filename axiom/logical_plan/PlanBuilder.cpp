@@ -20,6 +20,7 @@
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/logical_plan/NameMappings.h"
+#include "velox/expression/FunctionSignature.h"
 #include "velox/type/TypeCoercer.h"
 
 namespace facebook::axiom::logical_plan {
@@ -921,28 +922,19 @@ void PlanBuilder::resolveAggregates(
   for (size_t i = 0; i < aggregates.size(); ++i) {
     const auto& aggregate = aggregates[i];
 
-    velox::core::ExprPtr filter;
-    std::vector<SortKey> sortKeys;
-    bool distinct = false;
-
-    if (aggregate.expr()->is(velox::core::IExpr::Kind::kAggregate)) {
-      auto* agg = aggregate.expr()->as<velox::core::AggregateCallExpr>();
-      filter = agg->filter();
-      for (const auto& key : agg->orderBy()) {
-        sortKeys.emplace_back(ExprApi(key.expr), key.ascending, key.nullsFirst);
-      }
-      distinct = agg->isDistinct();
-    }
-
-    auto expr =
-        resolveAggregateTypes(aggregate.expr(), filter, sortKeys, distinct);
+    auto expr = resolveAggregateTypes(aggregate.expr());
 
     if (aggregate.name().has_value()) {
       const auto& alias = aggregate.name().value();
       outputNames.push_back(newName(alias));
       tracker.add(alias, outputNames.back());
     } else {
-      outputNames.push_back(newName(expr->name()));
+      // Derive the output name from the parse-time call name, canonicalized so
+      // it reflects the source function rather than any internal name the
+      // resolved expr may carry.
+      const auto* call = aggregate.expr()->as<velox::core::CallExpr>();
+      VELOX_CHECK_NOT_NULL(call, "Aggregate expression must be a call");
+      outputNames.push_back(newName(velox::exec::sanitizeName(call->name())));
     }
 
     exprs.emplace_back(std::move(expr));
@@ -1847,18 +1839,11 @@ ExprPtr PlanBuilder::resolveScalarTypes(
 }
 
 AggregateExprPtr PlanBuilder::resolveAggregateTypes(
-    const velox::core::ExprPtr& expr,
-    const velox::core::ExprPtr& filter,
-    const std::vector<SortKey>& ordering,
-    bool distinct) const {
+    const velox::core::ExprPtr& expr) const {
   return resolver_.resolveAggregateTypes(
-      expr,
-      [&](const auto& alias, const auto& name) {
+      expr, [&](const auto& alias, const auto& name) {
         return resolveInputName(alias, name);
-      },
-      filter,
-      ordering,
-      distinct);
+      });
 }
 
 WindowExprPtr PlanBuilder::resolveWindowTypes(

@@ -32,6 +32,7 @@ enum class ExprKind {
   kWindow = 5,
   kLambda = 6,
   kSubquery = 7,
+  kSpecialFormAgg = 8,
 };
 
 AXIOM_DECLARE_ENUM_NAME(ExprKind);
@@ -114,6 +115,10 @@ class Expr : public velox::ISerializable {
 
   bool isSubquery() const {
     return kind_ == ExprKind::kSubquery;
+  }
+
+  bool isSpecialFormAgg() const {
+    return kind_ == ExprKind::kSpecialFormAgg;
   }
 
   /// Returns true if the expression appears constant such that it can be
@@ -600,7 +605,49 @@ class AggregateExpr : public Expr {
       ExprPtr filter = nullptr,
       std::vector<SortingField> ordering = {},
       bool distinct = false)
-      : Expr{ExprKind::kAggregate, std::move(type), std::move(inputs)},
+      : AggregateExpr{
+            ExprKind::kAggregate,
+            std::move(type),
+            std::move(name),
+            std::move(inputs),
+            std::move(filter),
+            std::move(ordering),
+            distinct} {}
+
+  const std::string& name() const {
+    return name_;
+  }
+
+  const ExprPtr& filter() const {
+    return filter_;
+  }
+
+  const std::vector<SortingField>& ordering() const {
+    return ordering_;
+  }
+
+  bool isDistinct() const {
+    return distinct_;
+  }
+
+  void accept(const ExprVisitor& visitor, ExprVisitorContext& context)
+      const override;
+
+  folly::dynamic serialize() const override;
+
+  static ExprPtr create(const folly::dynamic& obj, void* context);
+
+ protected:
+  // Constructor for subclasses that use a distinct ExprKind.
+  AggregateExpr(
+      ExprKind kind,
+      velox::TypePtr type,
+      std::string name,
+      std::vector<ExprPtr> inputs,
+      ExprPtr filter = nullptr,
+      std::vector<SortingField> ordering = {},
+      bool distinct = false)
+      : Expr{kind, std::move(type), std::move(inputs)},
         name_{std::move(name)},
         filter_{std::move(filter)},
         ordering_{std::move(ordering)},
@@ -632,20 +679,73 @@ class AggregateExpr : public Expr {
     }
   }
 
-  const std::string& name() const {
-    return name_;
+  bool equalTo(const Expr& other) const override;
+
+ private:
+  void rejectLambdaCaptures() const;
+
+  const std::string name_;
+  const ExprPtr filter_;
+  const std::vector<SortingField> ordering_;
+  const bool distinct_;
+};
+
+using AggregateExprPtr = std::shared_ptr<const AggregateExpr>;
+
+/// A closed set of aggregates whose result is derivable from table metadata
+/// (row counts and per-column null counts) rather than from reading the data.
+/// The optimizer folds them from metadata when it is available and otherwise
+/// replaces them with an ordinary aggregate. The set is a closed, hard-written
+/// contract. See SpecialFormAggExpr.
+///
+/// These aggregates are order-insensitive, so ORDER BY is accepted and ignored
+/// (as for count). The FILTER and DISTINCT modifiers are not supported, and
+/// they cannot be used as window functions.
+enum class SpecialAggregateKind {
+  /// Number of rows in the group. Takes no inputs. Result type: BIGINT.
+  kMetadataRowCount = 0,
+
+  /// Number of null values of the input column in the group. Takes one input
+  /// of any type. Result type: BIGINT.
+  kMetadataNullCount = 1,
+
+  /// Number of non-null values of the input column in the group. Takes one
+  /// input of any type. Result type: BIGINT.
+  kMetadataNonNullCount = 2,
+};
+
+AXIOM_DECLARE_ENUM_NAME(SpecialAggregateKind)
+
+/// An AggregateExpr identified by a SpecialAggregateKind instead of a function
+/// name. Represents an aggregate whose result is derivable from table metadata
+/// rather than from reading the data (see SpecialAggregateKind). It never
+/// executes in Velox: the optimizer either folds it into constants from
+/// metadata or replaces it with 'fallback'.
+///
+/// Subclasses AggregateExpr so it fits anywhere an aggregate does
+/// (AggregateNode and expression resolution), but carries its own ExprKind
+/// (kSpecialFormAgg) and a SpecialAggregateKind. Its function name is the
+/// canonical name of the kind. The kind fully determines the return type
+/// (always BIGINT) and input arity, so no function registry lookup is involved.
+class SpecialFormAggExpr : public AggregateExpr {
+ public:
+  /// @param kind Which metadata aggregate this is.
+  /// @param inputs Arguments, validated per kind (0 inputs for
+  /// kMetadataRowCount, 1 for kMetadataNullCount / kMetadataNonNullCount).
+  /// @param fallback Optional ordinary aggregate to use when the aggregate
+  /// cannot be answered from metadata. If null, the aggregate is plannable only
+  /// where metadata can answer it.
+  SpecialFormAggExpr(
+      SpecialAggregateKind kind,
+      std::vector<ExprPtr> inputs,
+      AggregateExprPtr fallback = nullptr);
+
+  SpecialAggregateKind kind() const {
+    return kind_;
   }
 
-  const ExprPtr& filter() const {
-    return filter_;
-  }
-
-  const std::vector<SortingField>& ordering() const {
-    return ordering_;
-  }
-
-  bool isDistinct() const {
-    return distinct_;
+  const AggregateExprPtr& fallback() const {
+    return fallback_;
   }
 
   void accept(const ExprVisitor& visitor, ExprVisitorContext& context)
@@ -658,15 +758,11 @@ class AggregateExpr : public Expr {
  private:
   bool equalTo(const Expr& other) const override;
 
-  void rejectLambdaCaptures() const;
-
-  const std::string name_;
-  const ExprPtr filter_;
-  const std::vector<SortingField> ordering_;
-  const bool distinct_;
+  const SpecialAggregateKind kind_;
+  const AggregateExprPtr fallback_;
 };
 
-using AggregateExprPtr = std::shared_ptr<const AggregateExpr>;
+using SpecialFormAggExprPtr = std::shared_ptr<const SpecialFormAggExpr>;
 
 /// Represents a window function call. Can be used in ProjectNode.
 /// See https://prestodb.io/docs/current/functions/window.html for SQL-level

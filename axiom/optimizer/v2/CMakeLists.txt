@@ -31,6 +31,7 @@ add_library(
   ExprEmitter.cpp
   ExprFactory.cpp
   ExprSimplifier.cpp
+  FoldMetadataAggregatePass.cpp
   HypergraphBuilder.cpp
   JoinCondition.cpp
   JoinFanout.cpp

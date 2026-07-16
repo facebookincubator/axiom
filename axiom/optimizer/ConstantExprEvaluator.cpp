@@ -65,6 +65,12 @@ class ExprTranslator : public lp::ExprVisitor {
     VELOX_NYI();
   }
 
+  void visit(
+      const lp::SpecialFormAggExpr& expr,
+      lp::ExprVisitorContext& context) const {
+    VELOX_NYI();
+  }
+
   void visit(const lp::WindowExpr& expr, lp::ExprVisitorContext& context)
       const {
     VELOX_NYI();

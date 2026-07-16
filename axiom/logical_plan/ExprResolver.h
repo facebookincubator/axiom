@@ -84,6 +84,13 @@ class ExprResolver {
       const std::vector<SortKey>& ordering,
       bool distinct) const;
 
+  /// Resolves an aggregate call, extracting DISTINCT / FILTER / ORDER BY from
+  /// 'expr' itself (an AggregateCallExpr or SpecialFormAggCallExpr). Used for
+  /// nested aggregates such as a special aggregate's fallback.
+  AggregateExprPtr resolveAggregateTypes(
+      const velox::core::ExprPtr& expr,
+      const InputNameResolver& inputNameResolver) const;
+
   /// Resolves a window function call. Resolves argument types, partition keys,
   /// ordering, and frame bounds, then looks up the window function signature
   /// and produces a WindowExpr.
@@ -107,6 +114,20 @@ class ExprResolver {
     std::vector<ExprPtr> inputs;
     velox::TypePtr type;
   };
+
+  // Resolves a list of untyped scalar arguments to typed expressions.
+  std::vector<ExprPtr> resolveScalarInputs(
+      const std::vector<velox::core::ExprPtr>& inputs,
+      const InputNameResolver& inputNameResolver) const;
+
+  // Resolves a SpecialFormAggCallExpr into a SpecialFormAggExpr. These
+  // aggregates reject the DISTINCT and FILTER modifiers ('filter' / 'distinct'
+  // here) and ignore ORDER BY (order-insensitive).
+  AggregateExprPtr resolveSpecialFormAgg(
+      const velox::core::SpecialFormAggCallExpr& expr,
+      const InputNameResolver& inputNameResolver,
+      const velox::core::ExprPtr& filter,
+      bool distinct) const;
 
   // Resolves function call arguments (including lambdas) and determines the
   // return type using the provided resolve functions. Used by both

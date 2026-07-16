@@ -41,6 +41,10 @@ class ExprVisitor {
   virtual void visit(const AggregateExpr& expr, ExprVisitorContext& context)
       const = 0;
 
+  virtual void visit(
+      const SpecialFormAggExpr& expr,
+      ExprVisitorContext& context) const = 0;
+
   virtual void visit(const WindowExpr& expr, ExprVisitorContext& context)
       const = 0;
 

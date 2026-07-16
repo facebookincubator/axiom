@@ -488,6 +488,21 @@ bool matchImpl(const ExprPtr& actual, const velox::core::ExprPtr& expected) {
       return !::testing::Test::HasNonfatalFailure();
     }
 
+    case ExprKind::kSpecialFormAgg: {
+      const auto* expectedCall =
+          dynamic_cast<const velox::core::SpecialFormAggCallExpr*>(
+              expected.get());
+      EXPECT_NE(expectedCall, nullptr) << "Expected SpecialFormAggCallExpr.";
+      AXIOM_RETURN_FALSE_IF_FAILURE
+
+      const auto* aggregate = actual->as<SpecialFormAggExpr>();
+      EXPECT_EQ(aggregate->kind(), expectedCall->specialAggregateKind());
+      AXIOM_RETURN_FALSE_IF_FAILURE
+
+      matchChildren(aggregate->inputs(), expectedCall->inputs());
+      return !::testing::Test::HasNonfatalFailure();
+    }
+
     case ExprKind::kWindow: {
       EXPECT_TRUE(expected->is(velox::core::IExpr::Kind::kWindow))
           << "Expected WindowCallExpr.";

@@ -69,10 +69,14 @@ class Connectors {
   /// The connector is registered under `connectorId`, so queries can access
   /// local tables like "INSERT INTO ${connectorId}.write_table SELECT * FROM
   /// ${connectorId}.read_table".
+  /// 'rootPool' backs the connector's LocalHiveConnectorMetadata; defaults to a
+  /// root pool from the global MemoryManager. Tests with a standalone
+  /// MemoryManager pass one from it.
   std::shared_ptr<velox::connector::Connector> registerLocalHiveConnector(
       const std::string& dataPath,
       const std::string& dataFormat,
-      const std::string& connectorId = kLocalHiveConnectorId);
+      const std::string& connectorId = kLocalHiveConnectorId,
+      std::shared_ptr<velox::memory::MemoryPool> rootPool = nullptr);
 
   /// Registers a connector from configuration properties.
   ///

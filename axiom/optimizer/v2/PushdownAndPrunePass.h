@@ -52,6 +52,13 @@ namespace facebook::axiom::optimizer::v2 {
 ///    predicate.
 ///  - `Apply` must already be gone: decorrelate removes every `Apply` before
 ///    this pass, so encountering one is a logic error.
+///
+/// Post-condition: no `Filter` node sits directly above a `Scan`. Every
+/// conjunct that reaches a `Scan` is absorbed into `Scan.filters`; which of
+/// those the connector can actually evaluate is decided later (at Emit), and
+/// connector-rejected filters reappear as a `Filter` above the `TableScan` only
+/// in the final Velox plan. A rewrite running after this pass can therefore
+/// treat a `Scan` as carrying all of its predicates.
 class PushdownAndPrunePass {
  public:
   /// Returns `root` rewritten as described in the class doc. `evaluator` backs

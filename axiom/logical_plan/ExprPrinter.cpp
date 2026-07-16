@@ -90,6 +90,20 @@ class ToTextVisitor : public ExprVisitor {
     }
   }
 
+  void visit(const SpecialFormAggExpr& expr, ExprVisitorContext& context)
+      const override {
+    auto& out = toOut(context);
+
+    out << SpecialAggregateKindName::toName(expr.kind());
+    appendInputs(expr, out, context);
+
+    if (expr.fallback() != nullptr) {
+      out << " [fallback: ";
+      expr.fallback()->accept(*this, context);
+      out << "]";
+    }
+  }
+
   void visit(const WindowExpr& expr, ExprVisitorContext& context)
       const override {
     auto& out = toOut(context);

@@ -299,16 +299,19 @@ Test tables are declared at the top of the `.sql` file via setup directives. Sta
 
 | Directive | Behavior |
 |---|---|
+| `-- connector: <test\|hive>` | Selects the connector the file's setup DDL and queries run against. Defaults to `test`. |
 | `-- setup_file: relative.sql` | Splice in the contents of another `.sql` file as setup statements. Path is relative to the directory of the file containing the directive. |
 | `-- setup` … `-- end_setup` | Inline block of setup statements. |
 
 Both forms can appear any number of times, in any order, before the first query. Setup directives appearing after a query has started are rejected — install all tables first, then write queries.
 
+**Choosing a connector.** By default a file runs against the in-memory `TestConnector`. Add `-- connector: hive` to run against a LocalHive connector instead: setup DDL then executes as real `CREATE TABLE` / `INSERT` / `CTAS` writing DWRF files, partition metadata, and write-time stats to a temp directory — so features that read from partition metadata (e.g. the metadata-count fold) are actually exercised. Use `CREATE TABLE ... WITH (partitioned_by = ARRAY['k'])` for partitioned tables (partition columns come last in the schema).
+
 Setup statements run via Axiom's PrestoParser:
 
-- `CREATE TABLE name(col TYPE, ...)` registers an empty table.
-- `INSERT INTO name VALUES (...), ...`, `INSERT INTO name SELECT ...`, and `CREATE TABLE name AS SELECT ...` install rows. Each `INSERT` produces one TestConnector split — use multiple `INSERT`s when you want a multi-split table.
-- All statements are also mirrored into DuckDB so result comparison works against the same data. There is no `-- duckdb:` override for setup statements; setup SQL must be valid in both Presto and DuckDB. Stick to portable types (`BIGINT`, `DOUBLE`, `VARCHAR`, `BOOLEAN`, `DATE`, …) and literal `VALUES`.
+- `CREATE TABLE name(col TYPE, ...)` registers a table (with any table properties).
+- `INSERT INTO name VALUES (...), ...`, `INSERT INTO name SELECT ...`, and `CREATE TABLE name AS SELECT ...` install rows.
+- All statements are also mirrored into DuckDB so result comparison works against the same data — with Presto table properties (`WITH (...)`) stripped, since DuckDB doesn't understand them. There is no `-- duckdb:` override for setup statements; setup SQL must otherwise be valid in both Presto and DuckDB. Stick to portable types (`BIGINT`, `DOUBLE`, `VARCHAR`, `BOOLEAN`, `DATE`, …) and literal `VALUES`.
 
 Most files share the standard table `t` via the project-wide setup file:
 

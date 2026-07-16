@@ -527,6 +527,15 @@ class SummarizeExprVisitor : public ExprVisitor {
     visitInputs(expr, ctx);
   }
 
+  void visit(const SpecialFormAggExpr& expr, ExprVisitorContext& ctx)
+      const override {
+    auto& myCtx = static_cast<Context&>(ctx);
+    myCtx.expressionCounts()["aggregate"]++;
+    myCtx.functionCounts()[std::string(
+        SpecialAggregateKindName::toName(expr.kind()))]++;
+    visitInputs(expr, ctx);
+  }
+
   void visit(const WindowExpr& expr, ExprVisitorContext& ctx) const override {
     auto& myCtx = static_cast<Context&>(ctx);
     myCtx.expressionCounts()["window"]++;

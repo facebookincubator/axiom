@@ -55,6 +55,7 @@ target_link_libraries(
   axiom_optimizer_tests_plan_matcher
   velox_hive_connector
   velox_parse_parser
+  velox_exec_test_lib
   GTest::gmock
   glog::glog
   GTest::gtest
@@ -121,6 +122,7 @@ add_executable(
   HiveLimitQueriesTest.cpp
   HiveQueriesTest.cpp
   JoinTest.cpp
+  MetadataCountsTest.cpp
   MultiFragmentPlanTest.cpp
   NonDeterministicFlagTest.cpp
   TpchDataGenerator.cpp

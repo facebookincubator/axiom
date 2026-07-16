@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <functional>
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "velox/core/PlanNode.h"
 #include "velox/type/Filter.h"
@@ -131,10 +132,18 @@ class PlanMatcher {
     aliases_ = std::move(aliases);
   }
 
+  /// Registers a callback invoked with the matched node on a successful match.
+  void setOnMatch(std::function<void(const PlanNodePtr&)> onMatch) {
+    onMatch_ = std::move(onMatch);
+  }
+
  protected:
   // Aliases bound to the matched node's output columns by position.
   // Applied on successful match by PlanMatcherImpl::match().
   std::vector<std::optional<std::string>> aliases_;
+
+  // Invoked with the matched node on a successful match, if set.
+  std::function<void(const PlanNodePtr&)> onMatch_;
 };
 
 /// Match details for a HashJoin node beyond join type. Each field is
@@ -161,6 +170,9 @@ struct HashJoinDetails {
 
 class PlanMatcherBuilder {
  public:
+  /// Callback invoked with the matched node on a successful match.
+  using OnMatchCallback = std::function<void(const PlanNodePtr&)>;
+
   /// Matches any TableScan node regardless of table name or output type.
   PlanMatcherBuilder& tableScan();
 
@@ -191,12 +203,22 @@ class PlanMatcherBuilder {
       const std::string& remainingFilter = "",
       std::optional<double> sampleRate = std::nullopt);
 
-  /// Matches any Values node regardless of type.
-  PlanMatcherBuilder& values();
+  /// Matches any Values node regardless of type. 'onMatch', if set, is invoked
+  /// with the matched Values node.
+  PlanMatcherBuilder& values(OnMatchCallback onMatch = nullptr);
 
-  /// Matches a Values node with the specified output type.
+  /// Matches a Values node with the specified output type. Only the number of
+  /// columns and their types are asserted, not the column names. The names in
+  /// 'outputType' are registered as aliases (by position) so downstream
+  /// matchers can reference the columns by those names.
   /// @param outputType The expected output type of the Values node.
   PlanMatcherBuilder& values(const RowTypePtr& outputType);
+
+  /// Matches a Values node whose rows equal 'expected' (order-insensitive).
+  /// Only the number of columns and their types are asserted, not the column
+  /// names. The names in 'expected's row type are registered as aliases (by
+  /// position) so downstream matchers can reference the columns by those names.
+  PlanMatcherBuilder& values(const std::vector<RowVectorPtr>& expected);
 
   /// Matches any Filter node regardless of predicate.
   PlanMatcherBuilder& filter();

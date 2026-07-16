@@ -133,7 +133,7 @@ void HiveQueriesTestBase::setupHiveConnector() {
           .get());
 
   auto metadata = std::make_shared<connector::hive::LocalHiveConnectorMetadata>(
-      hiveConnector);
+      hiveConnector, velox::memory::memoryManager()->addRootPool());
   hiveMetadata_ = metadata.get();
 
   connector::ConnectorMetadataRegistry::global().insert(

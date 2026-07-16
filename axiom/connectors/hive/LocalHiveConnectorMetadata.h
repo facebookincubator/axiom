@@ -171,6 +171,19 @@ class LocalHiveTableLayout : public HiveTableLayout {
       std::vector<std::string> columns,
       std::vector<velox::core::TypedExprPtr> filterConjuncts) const override;
 
+  /// Returns exact per-group row counts and per-column null counts from
+  /// persisted partition stats, one group per distinct tuple of
+  /// 'groupingColumns' values. Declines (nullopt) if a grouping column is not a
+  /// partition column, if any conjunct is not partition-only, or if a grouping
+  /// column's value is not available in the partition metadata.
+  folly::coro::Task<std::optional<std::vector<MetadataCountGroup>>>
+  co_metadataCounts(
+      ConnectorSessionPtr session,
+      velox::connector::ConnectorTableHandlePtr tableHandle,
+      std::vector<std::string> groupingColumns,
+      std::vector<std::string> columns,
+      std::vector<velox::core::TypedExprPtr> filterConjuncts) const override;
+
  private:
   // Configuration for local Hive metadata.
   std::shared_ptr<HiveMetadataConfig> hiveMetadataConfig_;
@@ -232,8 +245,13 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
  public:
   static constexpr std::string_view kDefaultSchema = "default";
 
-  explicit LocalHiveConnectorMetadata(
-      velox::connector::hive::HiveConnector* hiveConnector);
+  /// 'rootPool' backs the metadata's schema-reader query context. Pass a root
+  /// pool from a MemoryManager whose lifetime covers this metadata; tests with
+  /// a standalone MemoryManager pass one from it so the pool is not orphaned
+  /// when the global manager is reset.
+  LocalHiveConnectorMetadata(
+      velox::connector::hive::HiveConnector* hiveConnector,
+      std::shared_ptr<velox::memory::MemoryPool> rootPool);
 
   TablePtr findTable(const SchemaTableName& tableName) override;
 
@@ -369,8 +387,7 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
 
   mutable std::mutex mutex_;
   mutable bool initialized_{false};
-  std::shared_ptr<velox::memory::MemoryPool> rootPool_{
-      velox::memory::memoryManager()->addRootPool()};
+  std::shared_ptr<velox::memory::MemoryPool> rootPool_;
   std::shared_ptr<velox::memory::MemoryPool> schemaPool_;
   std::shared_ptr<velox::core::QueryCtx> queryCtx_;
   std::shared_ptr<velox::connector::ConnectorQueryCtx> connectorQueryCtx_;

@@ -53,25 +53,12 @@ void SqlTestBase::SetUp() {
   velox::exec::ExchangeSource::registerFactory(
       velox::exec::test::createLocalExchangeSource);
 
-  if (createsConnectorPerTest()) {
-    connector_ = std::make_shared<connector::TestConnector>(kTestConnectorId);
-    velox::connector::ConnectorRegistry::global().insert(
-        kTestConnectorId, connector_);
-    connector::ConnectorMetadataRegistry::global().insert(
-        kTestConnectorId, connector_->metadata());
-  }
-
   optimizerPool_ = rootPool_->addLeafChild("optimizer");
   executor_ = std::make_shared<folly::CPUThreadPoolExecutor>(4);
 }
 
 void SqlTestBase::TearDown() {
   optimizerPool_.reset();
-  if (createsConnectorPerTest()) {
-    connector::ConnectorMetadataRegistry::global().erase(kTestConnectorId);
-    velox::connector::ConnectorRegistry::global().erase(kTestConnectorId);
-    connector_.reset();
-  }
   velox::exec::ExchangeSource::factories().clear();
   executor_.reset();
 
@@ -234,56 +221,12 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunnerV2(
       });
 }
 
-void SqlTestBase::runSetupStatement(
-    const std::string& sql,
-    connector::TestConnector& connector,
-    velox::exec::test::DuckDbQueryRunner& duckDb,
-    const std::function<std::shared_ptr<runner::LocalRunner>(
-        const logical_plan::LogicalPlanNodePtr&)>& runnerFactory) {
-  duckDb.execute(sql);
-
-  ::axiom::sql::presto::PrestoParser parser(
-      kTestConnectorId,
-      std::string(connector::TestConnector::kDefaultSchema),
-      std::make_shared<::axiom::sql::presto::ParserSession>(
-          /*queryId=*/"test",
-          /*user=*/"test",
-          ::axiom::sql::presto::ParserOptions{},
-          connector::ConnectorProperties{}));
-  auto stmt = parser.parse(sql);
-
-  if (stmt->isCreateTable()) {
-    const auto& create =
-        *stmt->as<::axiom::sql::presto::CreateTableStatement>();
-    connector.addTable(create.tableName().table, create.tableSchema());
-    return;
-  }
-
-  logical_plan::LogicalPlanNodePtr plan;
-  if (stmt->isInsert()) {
-    plan = stmt->as<::axiom::sql::presto::InsertStatement>()->plan();
-  } else if (stmt->isCreateTableAsSelect()) {
-    const auto& ctas =
-        *stmt->as<::axiom::sql::presto::CreateTableAsSelectStatement>();
-    connector.addTable(ctas.tableName().table, ctas.tableSchema());
-    plan = ctas.plan();
-  } else {
-    VELOX_USER_FAIL(
-        "Unsupported setup statement (only CREATE TABLE, INSERT INTO, "
-        "and CREATE TABLE AS SELECT are supported): {}",
-        sql);
-  }
-
-  auto runner = runnerFactory(plan);
-  runner->drain([](RowVectorPtr) {});
-}
-
 std::shared_ptr<runner::LocalRunner> SqlTestBase::makeRunner(
     std::string_view sql) {
   // Parse SQL to logical plan.
   ::axiom::sql::presto::PrestoParser parser(
-      kTestConnectorId,
-      std::string(connector::TestConnector::kDefaultSchema),
+      connectorId_,
+      defaultSchema_,
       std::make_shared<::axiom::sql::presto::ParserSession>(
           /*queryId=*/"test",
           /*user=*/"test",

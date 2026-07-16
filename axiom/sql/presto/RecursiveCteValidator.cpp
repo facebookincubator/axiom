@@ -18,6 +18,7 @@
 
 #include "axiom/sql/presto/ExpressionPlanner.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
+#include "axiom/sql/presto/SpecialAggregates.h"
 #include "axiom/sql/presto/ast/DefaultTraversalVisitor.h"
 #include "velox/exec/Aggregate.h"
 
@@ -85,13 +86,13 @@ class RecursiveTermValidator : public DefaultTraversalVisitor {
         node->location(),
         cteName_,
         "WITH RECURSIVE recursive term does not support DISTINCT");
-    AXIOM_PRESTO_SYNTAX_CHECK(
-        node->groupBy() == nullptr,
+    AXIOM_PRESTO_SYNTAX_CHECK_NULL(
+        node->groupBy(),
         node->location(),
         cteName_,
         "WITH RECURSIVE recursive term does not support GROUP BY");
-    AXIOM_PRESTO_SYNTAX_CHECK(
-        node->having() == nullptr,
+    AXIOM_PRESTO_SYNTAX_CHECK_NULL(
+        node->having(),
         node->location(),
         cteName_,
         "WITH RECURSIVE recursive term does not support HAVING");
@@ -102,13 +103,14 @@ class RecursiveTermValidator : public DefaultTraversalVisitor {
 
   void visitFunctionCall(FunctionCall* node) override {
     const auto& name = node->name()->suffix();
-    AXIOM_PRESTO_SYNTAX_CHECK(
-        node->window() == nullptr,
+    AXIOM_PRESTO_SYNTAX_CHECK_NULL(
+        node->window(),
         node->location(),
         cteName_,
         "WITH RECURSIVE recursive term does not support window functions");
     AXIOM_PRESTO_SYNTAX_CHECK(
-        facebook::velox::exec::getAggregateFunctionEntry(name) == nullptr,
+        facebook::velox::exec::getAggregateFunctionEntry(name) == nullptr &&
+            !specialAggregateKind(name).has_value(),
         node->location(),
         cteName_,
         "WITH RECURSIVE recursive term does not support aggregate functions");
@@ -184,8 +186,8 @@ class RecursiveTermValidator : public DefaultTraversalVisitor {
       const std::shared_ptr<OrderBy>& orderBy,
       const std::optional<std::string>& limit,
       const std::shared_ptr<Offset>& offset) {
-    AXIOM_PRESTO_SYNTAX_CHECK(
-        orderBy == nullptr,
+    AXIOM_PRESTO_SYNTAX_CHECK_NULL(
+        orderBy,
         location,
         cteName_,
         "WITH RECURSIVE does not support ORDER BY in the recursive CTE");
@@ -194,8 +196,8 @@ class RecursiveTermValidator : public DefaultTraversalVisitor {
         location,
         cteName_,
         "WITH RECURSIVE does not support LIMIT in the recursive CTE");
-    AXIOM_PRESTO_SYNTAX_CHECK(
-        offset == nullptr,
+    AXIOM_PRESTO_SYNTAX_CHECK_NULL(
+        offset,
         location,
         cteName_,
         "WITH RECURSIVE does not support OFFSET in the recursive CTE");
@@ -247,8 +249,8 @@ const Union* RecursiveCteValidator::extractAndValidateRecursiveUnion(
 
   // ORDER BY / LIMIT / OFFSET on the wrapping Query are meaningless in a
   // recursive CTE (executor decides per-iteration order; ANSI forbids).
-  AXIOM_PRESTO_SYNTAX_CHECK(
-      bodyQuery->orderBy() == nullptr,
+  AXIOM_PRESTO_SYNTAX_CHECK_NULL(
+      bodyQuery->orderBy(),
       bodyQuery->location(),
       cteName,
       "WITH RECURSIVE does not support ORDER BY in the recursive CTE");
@@ -257,8 +259,8 @@ const Union* RecursiveCteValidator::extractAndValidateRecursiveUnion(
       bodyQuery->location(),
       cteName,
       "WITH RECURSIVE does not support LIMIT in the recursive CTE");
-  AXIOM_PRESTO_SYNTAX_CHECK(
-      bodyQuery->offset() == nullptr,
+  AXIOM_PRESTO_SYNTAX_CHECK_NULL(
+      bodyQuery->offset(),
       bodyQuery->location(),
       cteName,
       "WITH RECURSIVE does not support OFFSET in the recursive CTE");

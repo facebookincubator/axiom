@@ -875,10 +875,7 @@ class PlanBuilder {
   ExprPtr resolveScalarTypes(const velox::core::ExprPtr& expr) const;
 
   AggregateExprPtr resolveAggregateTypes(
-      const velox::core::ExprPtr& expr,
-      const velox::core::ExprPtr& filter,
-      const std::vector<SortKey>& ordering,
-      bool distinct) const;
+      const velox::core::ExprPtr& expr) const;
 
   WindowExprPtr resolveWindowTypes(
       const velox::core::WindowCallExpr& windowCallExpr) const;

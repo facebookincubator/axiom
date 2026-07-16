@@ -35,6 +35,14 @@ const auto& writeKindNames() {
 
 AXIOM_DEFINE_ENUM_NAME(WriteKind, writeKindNames);
 
+void MetadataCountGroup::checkConsistency() const {
+  VELOX_CHECK_GE(numRows, 0, "Row count must be non-negative");
+  for (const auto nulls : numNulls) {
+    VELOX_CHECK_GE(nulls, 0, "Null count must be non-negative");
+    VELOX_CHECK_LE(nulls, numRows, "Null count must not exceed row count");
+  }
+}
+
 namespace {
 
 // @return RowType that represents a subset of 'columns' which are not hidden.

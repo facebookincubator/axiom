@@ -93,6 +93,94 @@ class SubqueryExpr : public core::IExpr {
   const axiom::logical_plan::LogicalPlanNodePtr subquery_;
 };
 
+/// Untyped carrier for a metadata-answerable aggregate. Subclasses
+/// AggregateCallExpr so it flows through aggregate detection and type
+/// resolution as an ordinary aggregate; ExprResolver recognizes it by type and
+/// produces an axiom::logical_plan::SpecialFormAggExpr. Carries the optional
+/// fallback aggregate (e.g. count(*)) the dialect supplies.
+class SpecialFormAggCallExpr : public AggregateCallExpr {
+ public:
+  /// 'name' is the dialect-supplied name for the aggregate; defaults to the
+  /// kind name when the caller has no better name.
+  SpecialFormAggCallExpr(
+      axiom::logical_plan::SpecialAggregateKind kind,
+      std::vector<ExprPtr> inputs,
+      ExprPtr fallback = nullptr,
+      std::optional<std::string> alias = std::nullopt,
+      std::optional<std::string> name = std::nullopt)
+      : AggregateCallExpr(
+            name.has_value()
+                ? std::move(*name)
+                : std::string(
+                      axiom::logical_plan::SpecialAggregateKindName::toName(
+                          kind)),
+            std::move(inputs),
+            /*distinct=*/false,
+            /*filter=*/nullptr,
+            /*orderBy=*/{},
+            std::move(alias)),
+        specialAggregateKind_{kind},
+        fallback_{std::move(fallback)} {}
+
+  axiom::logical_plan::SpecialAggregateKind specialAggregateKind() const {
+    return specialAggregateKind_;
+  }
+
+  const ExprPtr& fallback() const {
+    return fallback_;
+  }
+
+  ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const override {
+    return std::make_shared<SpecialFormAggCallExpr>(
+        specialAggregateKind_,
+        std::move(newInputs),
+        fallback_,
+        alias(),
+        name());
+  }
+
+  ExprPtr withAlias(const std::string& alias) const override {
+    return std::make_shared<SpecialFormAggCallExpr>(
+        specialAggregateKind_, inputs(), fallback_, alias, name());
+  }
+
+  ExprPtr dropAlias() const override {
+    return std::make_shared<SpecialFormAggCallExpr>(
+        specialAggregateKind_, inputs(), fallback_, std::nullopt, name());
+  }
+
+  bool operator==(const IExpr& other) const override {
+    const auto* casted = dynamic_cast<const SpecialFormAggCallExpr*>(&other);
+    if (casted == nullptr) {
+      return false;
+    }
+    if (specialAggregateKind_ != casted->specialAggregateKind_) {
+      return false;
+    }
+    if ((fallback_ == nullptr) != (casted->fallback_ == nullptr)) {
+      return false;
+    }
+    if (fallback_ != nullptr && !(*fallback_ == *casted->fallback_)) {
+      return false;
+    }
+    return compareAliasAndInputs(other);
+  }
+
+ protected:
+  size_t localHash() const override {
+    size_t hash =
+        std::hash<int8_t>{}(static_cast<int8_t>(specialAggregateKind_));
+    if (fallback_ != nullptr) {
+      hash = bits::hashMix(hash, fallback_->hash());
+    }
+    return hash;
+  }
+
+ private:
+  const axiom::logical_plan::SpecialAggregateKind specialAggregateKind_;
+  const ExprPtr fallback_;
+};
+
 } // namespace facebook::velox::core
 namespace facebook::axiom::logical_plan {
 namespace detail {
@@ -315,6 +403,18 @@ ExprApi Lambda(std::vector<std::string> names, const ExprApi& body);
 ExprApi Subquery(std::shared_ptr<const LogicalPlanNode> subquery);
 
 ExprApi Exists(const ExprApi& input);
+
+/// Builds a metadata row-count aggregate
+/// (SpecialAggregateKind::kMetadataRowCount). Takes no arguments.
+ExprApi MetadataRowCount();
+
+/// Builds a metadata null-count aggregate
+/// (SpecialAggregateKind::kMetadataNullCount) over 'input'.
+ExprApi MetadataNullCount(const ExprApi& input);
+
+/// Builds a metadata non-null-count aggregate
+/// (SpecialAggregateKind::kMetadataNonNullCount) over 'input'.
+ExprApi MetadataNonNullCount(const ExprApi& input);
 
 ExprApi Sql(const std::string& sql);
 
