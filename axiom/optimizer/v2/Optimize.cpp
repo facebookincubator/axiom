@@ -17,6 +17,7 @@
 #include "axiom/optimizer/v2/Optimize.h"
 
 #include "axiom/optimizer/v2/Builder.h"
+#include "axiom/optimizer/v2/ConnectorPushdownPass.h"
 #include "axiom/optimizer/v2/DecorrelatePass.h"
 #include "axiom/optimizer/v2/EmitPass.h"
 #include "axiom/optimizer/v2/EstimateLeafStatsPass.h"
@@ -27,6 +28,7 @@
 #include "axiom/optimizer/v2/PushdownAndPrunePass.h"
 #include "axiom/optimizer/v2/ScanHandle.h"
 #include "axiom/optimizer/v2/TranslatePass.h"
+#include "folly/coro/BlockingWait.h"
 
 namespace facebook::axiom::optimizer::v2 {
 
@@ -52,11 +54,18 @@ PlanAndStats optimize(
   NodeCP decorrelated = DecorrelatePass::run(translated.root, builder);
   NodeCP limited = LimitAndOrderPass::run(decorrelated, builder);
   NodeCP pushed = PushdownAndPrunePass::run(limited, builder, evaluator);
+  // No optimizer-time executor is available; drive the pass's `Task`
+  // synchronously here.
+  // TODO: Remove `blockingWait` once the optimizer has an executor to
+  // `co_withExecutor` this on.
+  NodeCP connectorPushed = folly::coro::blockingWait(
+      ConnectorPushdownPass::run(pushed, builder, schema));
   if (session.options().useFilteredTableStats) {
-    EstimateLeafStatsPass::run(pushed, session, evaluator, scanHandles);
+    EstimateLeafStatsPass::run(
+        connectorPushed, session, evaluator, scanHandles);
   }
   NodeCP physicalPlanned = PlanPhysicalPass::run(
-      pushed,
+      connectorPushed,
       builder,
       session.options(),
       options.numWorkers,

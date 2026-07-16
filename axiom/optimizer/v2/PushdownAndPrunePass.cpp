@@ -1318,6 +1318,47 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     return NodeRewriter::rewriteTableWrite(node, child);
   }
 
+  // FixedPoint: keep the pending predicate above the FP. Do not push into
+  // the anchor (unsound without iteration-invariance proof) or the step
+  // (would change what accumulates each iteration).
+  // TODO: Push iteration-invariant predicates into the anchor and step.
+  NodeCP rewriteFixedPoint(const FixedPoint* node, PushdownContext& context)
+      override {
+    // Filtering seed rows requires `p(step(x)) ⇒ p(x)`; without that,
+    // dropping a row that fails `p` silently drops descendants that
+    // satisfy `p`. E.g. `p = (n > 15)` with `step = n+1` drops seed row 1
+    // whose descendants 16..20 would have matched.
+    PushdownContext anchorContext;
+    anchorContext.required.unionObjects(node->outputColumns());
+    anchorContext.requiredAbove = anchorContext.required;
+    anchorContext.nonNullColumns = context.nonNullColumns;
+    NodeCP newAnchor = rewrite(node->anchor(), anchorContext);
+
+    // Step's Project mints fresh Columns via `createForSymbol` — for
+    // `SELECT n+1 AS n FROM t`, the output `n` is a different Column* from
+    // anchor's `n`. Key `required` on the step's own outputs so those
+    // fresh Columns survive.
+    // `nonNullColumns` is intentionally left empty: the step reads through
+    // a `WorkingTable` leaf that carries no outer null guarantees, and its
+    // Project mints fresh Columns for which nothing is known upfront.
+    PushdownContext stepContext;
+    stepContext.required.unionObjects(node->step()->outputColumns());
+    stepContext.requiredAbove = stepContext.required;
+    NodeCP newStep = rewrite(node->step(), stepContext);
+
+    NodeCP fp = node;
+    if (newAnchor != node->anchor() || newStep != node->step()) {
+      fp = builder().make<FixedPoint>(
+          {newAnchor, newStep, node->name(), node->outputColumns()});
+    }
+    return maybeWrapFilter(fp, std::move(context.pending));
+  }
+
+  NodeCP rewriteWorkingTable(const WorkingTable* node, PushdownContext& context)
+      override {
+    return maybeWrapFilter(node, std::move(context.pending));
+  }
+
  private:
   // Builds a child `PushdownContext` whose required column set is
   // `parent.required` plus the columns referenced by any conjunct in

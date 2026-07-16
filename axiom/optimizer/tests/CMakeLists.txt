@@ -107,8 +107,6 @@ add_executable(
   DistinctAggregationTest.cpp
   OutputNodeTest.cpp
   CardinalityEstimationTest.cpp
-  ConnectorSubtreePushdownTest.cpp
-  ConnectorPushdownPassTest.cpp
   CsvReadWriteTest.cpp
   DerivedTablePrinterTest.cpp
   DomainTest.cpp

@@ -20,7 +20,6 @@
 #include <utility>
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/optimizer/AggregationPlanner.h"
-#include "axiom/optimizer/ConnectorPushdownPass.h"
 #include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Plan.h"
@@ -49,18 +48,6 @@ T blockingWaitOn(folly::Executor* executor, folly::coro::Task<T> task) {
         co_withExecutor(executor, std::move(task)));
   }
   return folly::coro::blockingWait(std::move(task));
-}
-
-// Reshapes a flat list of pushdown roots into a node-keyed map so the
-// per-node lookup `ToGraph` runs during the walk is O(1).
-folly::F14FastMap<const lp::LogicalPlanNode*, connector::TablePtr>
-toPushdownMap(std::vector<connector::PushdownRoot> roots) {
-  folly::F14FastMap<const lp::LogicalPlanNode*, connector::TablePtr> map;
-  map.reserve(roots.size());
-  for (auto& root : roots) {
-    map.emplace(root.root, std::move(root.table));
-  }
-  return map;
 }
 
 } // namespace
@@ -105,9 +92,7 @@ Optimization::Optimization(
     }
   }
 
-  auto pushdownRoots = toPushdownMap(blockingWaitOn(
-      veloxQueryCtx_->executor(), collectConnectorPushdownRoots(logicalPlan)));
-  root_ = toGraph_.makeQueryGraph(logicalPlan, std::move(pushdownRoots));
+  root_ = toGraph_.makeQueryGraph(logicalPlan);
   root_->initializePlans();
 }
 

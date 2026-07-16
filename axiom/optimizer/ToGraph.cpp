@@ -2708,39 +2708,6 @@ void ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
   currentDt_->addTable(baseTable);
 }
 
-void ToGraph::makePushdownBaseTable(
-    const lp::LogicalPlanNode& root,
-    connector::TablePtr connectorTable) {
-  auto* schemaTable = schema_.adoptConnectorTable(std::move(connectorTable));
-  auto* baseTable =
-      initBaseTable(root, schemaTable, newCName("t"), planLeaves_);
-
-  // Subfield pushdown is not applied to absorbed subtrees: the synthetic
-  // SchemaTable wrapping the connector's pushdown table does not carry the
-  // subfield bookkeeping that `makeBaseTable` consults. Subfield-typed
-  // columns flow through as a whole. LP pushdown limitation.
-  const auto channels = usedChannels(root);
-  const auto& type = root.outputType();
-  for (auto i : channels) {
-    VELOX_DCHECK_LT(i, type->size());
-    const auto* outputName = toName(type->nameOf(i));
-    auto* schemaColumn = schemaTable->findColumn(outputName);
-    VELOX_CHECK_NOT_NULL(
-        schemaColumn,
-        "Pushdown root output column not found in synthetic SchemaTable: {}",
-        type->nameOf(i));
-    VELOX_CHECK(
-        type->childAt(i)->equivalent(*schemaColumn->value().type),
-        "Pushdown table column type mismatch for {}: plan {} vs table {}",
-        type->nameOf(i),
-        type->childAt(i)->toString(),
-        schemaColumn->value().type->toString());
-    addBaseTableColumn(baseTable, schemaColumn, outputName, renames_);
-  }
-
-  currentDt_->addTable(baseTable);
-}
-
 void ToGraph::makeValuesTable(const lp::ValuesNode& values) {
   ValuesTable::Data data;
 
@@ -4872,11 +4839,7 @@ NormalizedJoin normalizeLogicalJoin(const lp::JoinNode& join) {
 
 } // namespace
 
-DerivedTableP ToGraph::makeQueryGraph(
-    const lp::LogicalPlanNode& logicalPlan,
-    folly::F14FastMap<const lp::LogicalPlanNode*, connector::TablePtr>
-        pushdownRoots) {
-  pendingPushdowns_ = std::move(pushdownRoots);
+DerivedTableP ToGraph::makeQueryGraph(const lp::LogicalPlanNode& logicalPlan) {
   auto result = SubfieldTracker([&](const auto& expr) {
                   return tryFoldConstant(expr);
                 }).markAll(logicalPlan);
@@ -4889,10 +4852,6 @@ DerivedTableP ToGraph::makeQueryGraph(
 
   // TODO Try constant fold the dt.
 
-  VELOX_CHECK(
-      pendingPushdowns_.empty(),
-      "Connector pushdown roots did not match any plan node: {} unmatched",
-      pendingPushdowns_.size());
   return currentDt_;
 }
 
@@ -4998,15 +4957,6 @@ void ToGraph::makeQueryGraph(
     bool orderObservedAbove,
     bool excludeOuterJoins,
     bool excludeWindows) {
-  // Pushdown-root short-circuit. Runs before the allowedInDt /
-  // excludeOuterJoins guards so any node kind can be pushed down
-  // (including FixedPoint, NYI for the switch below).
-  if (auto it = pendingPushdowns_.find(&node); it != pendingPushdowns_.end()) {
-    makePushdownBaseTable(node, std::move(it->second));
-    pendingPushdowns_.erase(it);
-    return;
-  }
-
   if (!contains(allowedInDt, node.kind())) {
     wrapInDt(node, orderObservedAbove);
     return;
