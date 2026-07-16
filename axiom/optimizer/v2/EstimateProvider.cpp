@@ -260,6 +260,23 @@ Estimate EstimateProvider::compute(NodeCP node) {
       return result;
     }
 
+    case NodeType::kFixedPoint: {
+      // Convergence depth is workload-dependent; single-pass sum would
+      // understate it and skew join placement. Propagate unknown rather
+      // than fabricate a fallback.
+      Estimate result;
+      result.cardinality = std::nullopt;
+      return result;
+    }
+
+    case NodeType::kWorkingTable: {
+      // Per-iteration frontier size is workload-dependent. Propagate
+      // unknown rather than fabricate a fallback.
+      Estimate result;
+      result.cardinality = std::nullopt;
+      return result;
+    }
+
     // Cardinality-neutral operators: pass the input's estimate through.
     case NodeType::kProject:
     case NodeType::kSort:

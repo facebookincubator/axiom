@@ -18,6 +18,7 @@
 
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/optimizer/Schema.h"
+#include "axiom/optimizer/v2/Builder.h"
 #include "axiom/optimizer/v2/KeyHash.h"
 #include "axiom/optimizer/v2/NodePrinter.h"
 #include "axiom/optimizer/v2/NodeVisitor.h"
@@ -48,6 +49,8 @@ const auto& nodeTypeNames() {
       {NodeType::kEnforceDistinct, "EnforceDistinct"},
       {NodeType::kExchange, "Exchange"},
       {NodeType::kTableWrite, "TableWrite"},
+      {NodeType::kFixedPoint, "FixedPoint"},
+      {NodeType::kWorkingTable, "WorkingTable"},
   };
   return kNames;
 }
@@ -1967,6 +1970,258 @@ bool TableWrite::KeyEq::operator()(const TableWrite* node, const Key& key)
   return (*this)(key, node);
 }
 
+NodeCP Scan::withInputs(NodeVector newInputs, Builder& /*builder*/) const {
+  VELOX_CHECK(newInputs.empty(), "Leaf node cannot have inputs: Scan");
+  return this;
+}
+
+NodeCP Values::withInputs(NodeVector newInputs, Builder& /*builder*/) const {
+  VELOX_CHECK(newInputs.empty(), "Leaf node cannot have inputs: Values");
+  return this;
+}
+
+NodeCP Filter::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<Filter>({newInputs[0], predicates_});
+}
+
+NodeCP Project::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<Project>({newInputs[0], exprs_, outputColumns()});
+}
+
+NodeCP Limit::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<Limit>({newInputs[0], offset_, count_});
+}
+
+NodeCP Sort::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<Sort>({newInputs[0], orderKeys_, orderTypes_});
+}
+
+NodeCP TopN::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<TopN>(
+      {newInputs[0], orderKeys_, orderTypes_, offset_, count_});
+}
+
+NodeCP Aggregate::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<Aggregate>(Aggregate::Key{
+      .input = newInputs[0],
+      .groupingKeys = groupingKeys_,
+      .aggregates = aggregates_,
+      .outputColumns = outputColumns(),
+      .step = step_,
+      .groupId = groupId_,
+      .globalGroupingSets = globalGroupingSets_});
+}
+
+NodeCP GroupId::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<GroupId>(
+      {newInputs[0],
+       groupingKeys_,
+       aggregationInputs_,
+       groupingSets_,
+       groupingKeyColumns_,
+       groupId_,
+       outputColumns()});
+}
+
+NodeCP MarkDistinct::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<MarkDistinct>(
+      {newInputs[0], markers_, distinctKeys_, masks_, outputColumns()});
+}
+
+NodeCP Unnest::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<Unnest>(
+      {newInputs[0],
+       unnestExpressions_,
+       replicatedColumns_,
+       unnestColumns_,
+       ordinalityColumn_,
+       outputColumns()});
+}
+
+NodeCP UnionAll::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), inputs_.size());
+  // `legColumns_` reference `Column*`s from the old inputs' output schemas.
+  // Callers replacing an input must preserve every referenced `Column`
+  // identity; the `UnionAll` ctor enforces this.
+  return builder.make<UnionAll>(
+      {std::move(newInputs), legColumns_, outputColumns()});
+}
+
+NodeCP Join::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 2);
+  return builder.make<Join>(
+      {newInputs[0],
+       newInputs[1],
+       joinType_,
+       leftKeys_,
+       rightKeys_,
+       filter_,
+       nullAware_,
+       nullAsValue_,
+       outputColumns()});
+}
+
+NodeCP Window::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<Window>(
+      {newInputs[0],
+       functions_,
+       partitionKeys_,
+       orderKeys_,
+       orderTypes_,
+       outputColumns()});
+}
+
+NodeCP TopNRowNumber::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<TopNRowNumber>(
+      {newInputs[0],
+       rankFunction_,
+       partitionKeys_,
+       orderKeys_,
+       orderTypes_,
+       limit_,
+       rankColumn_,
+       outputColumns()});
+}
+
+NodeCP Apply::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 2);
+  return builder.make<Apply>(
+      {newInputs[0],
+       newInputs[1],
+       correlationColumns_,
+       kind_,
+       filter_,
+       enforceSingleRow_,
+       markColumn_,
+       inLhs_,
+       inBodyKey_,
+       includeMarker_,
+       outputColumns()});
+}
+
+NodeCP EnforceSingleRow::withInputs(NodeVector newInputs, Builder& builder)
+    const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<EnforceSingleRow>({newInputs[0]});
+}
+
+NodeCP AssignUniqueId::withInputs(NodeVector newInputs, Builder& builder)
+    const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<AssignUniqueId>({newInputs[0], idColumn_});
+}
+
+NodeCP EnforceDistinct::withInputs(NodeVector newInputs, Builder& builder)
+    const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<EnforceDistinct>(
+      {newInputs[0], distinctKeys_, errorMessage_});
+}
+
+NodeCP Exchange::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<Exchange>({newInputs[0], partitioning_});
+}
+
+NodeCP TableWrite::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<TableWrite>({newInputs[0], table_, kind_, columnExprs_});
+}
+
+WorkingTable::WorkingTable(Key key)
+    : Node(NodeType::kWorkingTable, ColumnVector{key.outputColumns}, {}),
+      name_(key.name) {
+  VELOX_CHECK_NOT_NULL(name_);
+}
+
+size_t WorkingTable::KeyHash::operator()(const WorkingTable* node) const {
+  return hashOf(node->name(), node->outputColumns());
+}
+
+size_t WorkingTable::KeyHash::operator()(const Key& key) const {
+  return hashOf(key.name, key.outputColumns);
+}
+
+bool WorkingTable::KeyEq::operator()(
+    const WorkingTable* left,
+    const WorkingTable* right) const {
+  return left->name() == right->name() &&
+      left->outputColumns() == right->outputColumns();
+}
+
+bool WorkingTable::KeyEq::operator()(const Key& key, const WorkingTable* node)
+    const {
+  return key.name == node->name() && key.outputColumns == node->outputColumns();
+}
+
+bool WorkingTable::KeyEq::operator()(const WorkingTable* node, const Key& key)
+    const {
+  return (*this)(key, node);
+}
+
+FixedPoint::FixedPoint(Key key)
+    : Node(NodeType::kFixedPoint, ColumnVector{key.outputColumns}, {}),
+      inputs_{key.anchor, key.step},
+      name_(key.name) {
+  VELOX_CHECK_NOT_NULL(inputs_[0]);
+  VELOX_CHECK_NOT_NULL(inputs_[1]);
+  VELOX_CHECK_NOT_NULL(name_);
+  VELOX_CHECK(
+      std::ranges::equal(outputColumns(), inputs_[0]->outputColumns()),
+      "FixedPoint output columns must match anchor by pointer identity");
+}
+
+size_t FixedPoint::KeyHash::operator()(const FixedPoint* node) const {
+  return hashOf(
+      node->anchor(), node->step(), node->name(), node->outputColumns());
+}
+
+size_t FixedPoint::KeyHash::operator()(const Key& key) const {
+  return hashOf(key.anchor, key.step, key.name, key.outputColumns);
+}
+
+bool FixedPoint::KeyEq::operator()(
+    const FixedPoint* left,
+    const FixedPoint* right) const {
+  return left->anchor() == right->anchor() && left->step() == right->step() &&
+      left->name() == right->name() &&
+      left->outputColumns() == right->outputColumns();
+}
+
+bool FixedPoint::KeyEq::operator()(const Key& key, const FixedPoint* node)
+    const {
+  return key.anchor == node->anchor() && key.step == node->step() &&
+      key.name == node->name() && key.outputColumns == node->outputColumns();
+}
+
+bool FixedPoint::KeyEq::operator()(const FixedPoint* node, const Key& key)
+    const {
+  return (*this)(key, node);
+}
+
+NodeCP WorkingTable::withInputs(NodeVector newInputs, Builder& /*builder*/)
+    const {
+  VELOX_CHECK(newInputs.empty(), "WorkingTable is a leaf");
+  return this;
+}
+
+NodeCP FixedPoint::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 2);
+  return builder.make<FixedPoint>(
+      {newInputs[0], newInputs[1], name_, outputColumns()});
+}
+
 #define V2_DEFINE_ACCEPT(NodeT)                                               \
   void NodeT::accept(const NodeVisitor& visitor, NodeVisitorContext& context) \
       const {                                                                 \
@@ -1994,6 +2249,8 @@ V2_DEFINE_ACCEPT(AssignUniqueId)
 V2_DEFINE_ACCEPT(EnforceDistinct)
 V2_DEFINE_ACCEPT(Exchange)
 V2_DEFINE_ACCEPT(TableWrite)
+V2_DEFINE_ACCEPT(WorkingTable)
+V2_DEFINE_ACCEPT(FixedPoint)
 
 #undef V2_DEFINE_ACCEPT
 
