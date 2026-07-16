@@ -15,8 +15,11 @@
  */
 
 #include "axiom/cli/SqlQueryRunner.h"
+#include <folly/CancellationToken.h>
 #include <folly/container/F14Map.h>
 #include <folly/coro/BlockingWait.h>
+#include <folly/coro/Coroutine.h>
+#include <folly/coro/Timeout.h>
 #include <folly/system/HardwareConcurrency.h>
 #include <algorithm>
 #include <cmath>
@@ -1209,7 +1212,7 @@ std::string SqlQueryRunner::runExplainAnalyze(
         startProgressReporter(*runner, queryCtx->queryId(), options);
     // Executed for its runtime stats (printed below); the result batches are
     // not used, so discard them instead of accumulating the whole result set.
-    runner->drain([](velox::RowVectorPtr) {});
+    runner->drain([](velox::RowVectorPtr) {}, options.timeoutMicros);
   }
 
   std::stringstream out;
@@ -1460,9 +1463,11 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runLogicalPlan(
         QueryRuntimeStats::kExecuteCpuNanos);
     auto progress =
         startProgressReporter(*runner, queryCtx->queryId(), options);
-    runner->drain([&](velox::RowVectorPtr batch) {
-      result.results.push_back(std::move(batch));
-    });
+    runner->drain(
+        [&](velox::RowVectorPtr batch) {
+          result.results.push_back(std::move(batch));
+        },
+        options.timeoutMicros);
   }
 
   return result;
