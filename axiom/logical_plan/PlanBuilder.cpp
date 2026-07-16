@@ -26,6 +26,36 @@ namespace facebook::axiom::logical_plan {
 
 using connector::ConnectorMetadataRegistry;
 
+PlanBuilder::Context::Context(
+    const std::optional<std::string>& defaultConnectorId,
+    const std::optional<std::string>& defaultSchema,
+    std::shared_ptr<velox::core::QueryCtx> queryCtxPtr,
+    ExprResolver::FunctionRewriteHook hook,
+    std::shared_ptr<velox::parse::SqlExpressionsParser> sqlParser,
+    const velox::TypeCoercer* coercer)
+    : defaultConnectorId{defaultConnectorId},
+      defaultSchema{defaultSchema},
+      sqlParser{std::move(sqlParser)},
+      planNodeIdGenerator{std::make_shared<velox::core::PlanNodeIdGenerator>()},
+      nameAllocator{std::make_shared<NameAllocator>()},
+      queryCtx{std::move(queryCtxPtr)},
+      hook{std::move(hook)},
+      pool{
+          queryCtx && queryCtx->pool()
+              ? queryCtx->pool()->addLeafChild("literals")
+              : nullptr},
+      coercer{coercer} {}
+
+std::shared_ptr<connector::ConnectorMetadata>
+PlanBuilder::Context::connectorMetadata(const std::string& connectorId) const {
+  auto metadata = queryCtx
+      ? ConnectorMetadataRegistry::tryGet(*queryCtx, connectorId)
+      : ConnectorMetadataRegistry::tryGet(connectorId);
+  VELOX_USER_CHECK_NOT_NULL(
+      metadata, "ConnectorMetadata not registered: {}", connectorId);
+  return metadata;
+}
+
 PlanBuilder& PlanBuilder::values(
     const velox::RowTypePtr& rowType,
     std::vector<velox::Variant> rows) {
@@ -210,11 +240,11 @@ PlanBuilder& PlanBuilder::values(
 PlanBuilder& PlanBuilder::tableScan(
     const std::string& tableName,
     bool includeHiddenColumns) {
-  VELOX_USER_CHECK(defaultConnectorId_.has_value());
-  VELOX_USER_CHECK(defaultSchema_.has_value());
+  VELOX_USER_CHECK(context_.defaultConnectorId.has_value());
+  VELOX_USER_CHECK(context_.defaultSchema.has_value());
   return tableScan(
-      defaultConnectorId_.value(),
-      defaultSchema_.value(),
+      context_.defaultConnectorId.value(),
+      context_.defaultSchema.value(),
       tableName,
       includeHiddenColumns);
 }
@@ -225,12 +255,8 @@ PlanBuilder& PlanBuilder::from(const std::vector<std::string>& tableNames) {
 
   tableScan(tableNames.front());
 
-  Context context{defaultConnectorId_, defaultSchema_};
-  context.planNodeIdGenerator = planNodeIdGenerator_;
-  context.nameAllocator = nameAllocator_;
-
   for (auto i = 1; i < tableNames.size(); ++i) {
-    crossJoin(PlanBuilder(context).tableScan(tableNames.at(i)));
+    crossJoin(PlanBuilder(context_).tableScan(tableNames.at(i)));
   }
 
   return *this;
@@ -244,7 +270,7 @@ PlanBuilder& PlanBuilder::tableScan(
   VELOX_USER_CHECK_NULL(node_, "Table scan node must be the leaf node");
 
   SchemaTableName schemaTableName{schemaName, tableName};
-  auto metadata = ConnectorMetadataRegistry::get(connectorId);
+  auto metadata = context_.connectorMetadata(connectorId);
   auto table = metadata->findTable(schemaTableName);
   VELOX_USER_CHECK_NOT_NULL(
       table, "Table not found: {}", schemaTableName.toString());
@@ -305,19 +331,22 @@ PlanBuilder& PlanBuilder::tableScan(
     const std::string& schemaName,
     const std::string& tableName,
     bool includeHiddenColumns) {
-  VELOX_USER_CHECK(defaultConnectorId_.has_value());
+  VELOX_USER_CHECK(context_.defaultConnectorId.has_value());
   return tableScan(
-      defaultConnectorId_.value(), schemaName, tableName, includeHiddenColumns);
+      context_.defaultConnectorId.value(),
+      schemaName,
+      tableName,
+      includeHiddenColumns);
 }
 
 PlanBuilder& PlanBuilder::tableScan(
     const std::string& tableName,
     const std::vector<std::string>& columnNames) {
-  VELOX_USER_CHECK(defaultConnectorId_.has_value());
-  VELOX_USER_CHECK(defaultSchema_.has_value());
+  VELOX_USER_CHECK(context_.defaultConnectorId.has_value());
+  VELOX_USER_CHECK(context_.defaultSchema.has_value());
   return tableScan(
-      defaultConnectorId_.value(),
-      defaultSchema_.value(),
+      context_.defaultConnectorId.value(),
+      context_.defaultSchema.value(),
       tableName,
       columnNames);
 }
@@ -326,9 +355,9 @@ PlanBuilder& PlanBuilder::tableScan(
     const std::string& schemaName,
     const std::string& tableName,
     const std::vector<std::string>& columnNames) {
-  VELOX_USER_CHECK(defaultConnectorId_.has_value());
+  VELOX_USER_CHECK(context_.defaultConnectorId.has_value());
   return tableScan(
-      defaultConnectorId_.value(), schemaName, tableName, columnNames);
+      context_.defaultConnectorId.value(), schemaName, tableName, columnNames);
 }
 
 PlanBuilder& PlanBuilder::tableScan(
@@ -339,7 +368,7 @@ PlanBuilder& PlanBuilder::tableScan(
   VELOX_USER_CHECK_NULL(node_, "Table scan node must be the leaf node");
 
   SchemaTableName schemaTableName{schemaName, tableName};
-  auto metadata = ConnectorMetadataRegistry::get(connectorId);
+  auto metadata = context_.connectorMetadata(connectorId);
   auto table = metadata->findTable(schemaTableName);
   VELOX_USER_CHECK_NOT_NULL(
       table, "Table not found: {}", schemaTableName.toString());
@@ -427,7 +456,7 @@ PlanBuilder& PlanBuilder::dropHiddenColumns() {
 PlanBuilder& PlanBuilder::filter(const std::string& predicate) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Filter node cannot be a leaf node");
 
-  auto untypedExpr = sqlParser_->parseExpr(predicate);
+  auto untypedExpr = context_.sqlParser->parseExpr(predicate);
   return filter(untypedExpr);
 }
 
@@ -443,7 +472,7 @@ std::vector<ExprApi> PlanBuilder::parse(const std::vector<std::string>& exprs) {
   std::vector<ExprApi> untypedExprs;
   untypedExprs.reserve(exprs.size());
   for (const auto& sql : exprs) {
-    untypedExprs.emplace_back(sqlParser_->parseScalarOrWindowExpr(sql));
+    untypedExprs.emplace_back(context_.sqlParser->parseScalarOrWindowExpr(sql));
   }
   return untypedExprs;
 }
@@ -744,7 +773,7 @@ PlanBuilder& PlanBuilder::aggregate(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates) {
   std::vector<ExprApi> parsedAggregates;
-  parseAggregates(*sqlParser_, aggregates, parsedAggregates);
+  parseAggregates(*context_.sqlParser, aggregates, parsedAggregates);
 
   return aggregate(parse(groupingKeys), parsedAggregates);
 }
@@ -827,7 +856,7 @@ PlanBuilder& PlanBuilder::aggregate(
   }
 
   std::vector<ExprApi> parsedAggregates;
-  parseAggregates(*sqlParser_, aggregates, parsedAggregates);
+  parseAggregates(*context_.sqlParser, aggregates, parsedAggregates);
 
   return aggregate(exprGroupingSets, parsedAggregates, groupingSetIndexName);
 }
@@ -838,7 +867,7 @@ PlanBuilder& PlanBuilder::aggregate(
     const std::vector<std::string>& aggregates,
     const std::string& groupingSetIndexName) {
   std::vector<ExprApi> parsedAggregates;
-  parseAggregates(*sqlParser_, aggregates, parsedAggregates);
+  parseAggregates(*context_.sqlParser, aggregates, parsedAggregates);
 
   return aggregate(
       parse(groupingKeys),
@@ -973,7 +1002,7 @@ PlanBuilder& PlanBuilder::rollup(
     const std::vector<std::string>& aggregates,
     const std::string& groupingSetIndexName) {
   std::vector<ExprApi> parsedAggregates;
-  parseAggregates(*sqlParser_, aggregates, parsedAggregates);
+  parseAggregates(*context_.sqlParser, aggregates, parsedAggregates);
 
   return rollup(parse(groupingKeys), parsedAggregates, groupingSetIndexName);
 }
@@ -1009,7 +1038,7 @@ PlanBuilder& PlanBuilder::cube(
     const std::vector<std::string>& aggregates,
     const std::string& groupingSetIndexName) {
   std::vector<ExprApi> parsedAggregates;
-  parseAggregates(*sqlParser_, aggregates, parsedAggregates);
+  parseAggregates(*context_.sqlParser, aggregates, parsedAggregates);
 
   return cube(parse(groupingKeys), parsedAggregates, groupingSetIndexName);
 }
@@ -1164,7 +1193,7 @@ PlanBuilder& PlanBuilder::join(
     JoinType joinType) {
   std::optional<ExprApi> conditionExpr;
   if (!condition.empty()) {
-    conditionExpr = sqlParser_->parseExpr(condition);
+    conditionExpr = context_.sqlParser->parseExpr(condition);
   }
 
   return join(right, conditionExpr, joinType);
@@ -1491,7 +1520,7 @@ PlanBuilder& PlanBuilder::setOperation(
     SetOperation op,
     const PlanBuilder& other) {
   // Do not use std::move(*this) — that invalidates resolver_ members
-  // (e.g. planNodeIdGenerator_ becomes null), causing crashes when the
+  // (e.g. context_.planNodeIdGenerator becomes null), causing crashes when the
   // builder is used for expression resolution after the set operation.
   VELOX_CHECK_NOT_NULL(node_);
   VELOX_CHECK_NOT_NULL(other.node_);
@@ -1601,7 +1630,7 @@ PlanBuilder& PlanBuilder::sort(const std::vector<std::string>& sortingKeys) {
   sortingFields.reserve(sortingKeys.size());
 
   for (const auto& key : sortingKeys) {
-    auto orderBy = sqlParser_->parseOrderByExpr(key);
+    auto orderBy = context_.sqlParser->parseOrderByExpr(key);
     auto expr = resolveScalarTypes(orderBy.expr);
 
     sortingFields.push_back(
@@ -1673,7 +1702,7 @@ PlanBuilder& PlanBuilder::tableWrite(
 
   if (kind == WriteKind::kInsert) {
     // Check input types.
-    auto metadata = ConnectorMetadataRegistry::get(connectorId);
+    auto metadata = context_.connectorMetadata(connectorId);
     auto table = metadata->findTable(schemaTableName);
     VELOX_USER_CHECK_NOT_NULL(
         table, "Table not found: {}", schemaTableName.toString());
@@ -1726,8 +1755,8 @@ PlanBuilder& PlanBuilder::tableWrite(
     std::vector<std::string> columnNames,
     folly::F14FastMap<std::string, std::string> options) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Table write node cannot be a leaf node");
-  VELOX_USER_CHECK(defaultConnectorId_.has_value());
-  VELOX_USER_CHECK(defaultSchema_.has_value());
+  VELOX_USER_CHECK(context_.defaultConnectorId.has_value());
+  VELOX_USER_CHECK(context_.defaultSchema.has_value());
 
   auto outputColumns = findOrAssignOutputNames();
   std::vector<ExprApi> columnExprs;
@@ -1737,8 +1766,8 @@ PlanBuilder& PlanBuilder::tableWrite(
   }
 
   return tableWrite(
-      defaultConnectorId_.value(),
-      defaultSchema_.value(),
+      context_.defaultConnectorId.value(),
+      context_.defaultSchema.value(),
       std::move(tableName),
       kind,
       std::move(columnNames),
@@ -1875,7 +1904,7 @@ PlanBuilder& PlanBuilder::as(const std::string& alias) {
 }
 
 std::string PlanBuilder::newName(const std::string& hint) {
-  return nameAllocator_->newName(hint);
+  return context_.nameAllocator->newName(hint);
 }
 
 size_t PlanBuilder::numOutput() const {
