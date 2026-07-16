@@ -168,6 +168,22 @@ TEST_F(SqlQueryRunnerTest, runSingleStatement) {
       makeRowVector({makeFlatVector<int32_t>({1})}));
 }
 
+TEST_F(SqlQueryRunnerTest, executionTimeout) {
+  // A multi-way cross product over the small nation table (25 rows) produces
+  // ~244M rows, far more than can complete within the 10ms deadline, so the
+  // execution timeout fires deterministically during execution and the query
+  // fails with a user error.
+  testConnector_->addTpchTables();
+  SqlQueryRunner::RunOptions options;
+  options.timeoutMicros = 10'000; // 10ms
+  VELOX_ASSERT_THROW(
+      runner_->run(
+          "SELECT count(*) FROM nation a, nation b, nation c, "
+          "nation d, nation e, nation f",
+          options),
+      "exceeded maximum time limit");
+}
+
 TEST_F(SqlQueryRunnerTest, currentUser) {
   // CURRENT_USER returns the user passed to the SqlQueryRunner constructor.
   test::assertEqualVectors(

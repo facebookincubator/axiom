@@ -207,9 +207,13 @@ class SqlQueryRunner {
     int32_t numDrivers{4};
     uint64_t splitTargetBytes{16 << 20};
 
-    /// Microseconds to wait for query to complete. 0 means check for completion
-    /// then timeout immediately if not complete.
-    int32_t timeoutMicros{500'000};
+    /// Cooperative execution deadline in microseconds; 0 means no limit. Bounds
+    /// the execution phase only -- not parsing, permission checks, or
+    /// optimization -- and is cooperative rather than a hard wall-clock cap: a
+    /// non-yielding operator can overrun it, and winding the cancelled query
+    /// down adds teardown latency. When exceeded, run() fails with a user
+    /// error.
+    int64_t timeoutMicros{0};
 
     std::optional<std::string> defaultConnectorId;
     std::optional<std::string> defaultSchema;
