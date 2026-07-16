@@ -240,6 +240,16 @@ bool matchImpl(const TypedExprPtr& actual, const ExprPtr& expected) {
       return !::testing::Test::HasNonfatalFailure();
     }
 
+    // A 2-arg `if(cond, then)` is semantically `if(cond, then, null)`, so it
+    // matches a plan's 3-arg `if` with a typed-null else.
+    if (call->name() == "if" && call->inputs().size() == 3 &&
+        expectedCall->inputs().size() == 2 &&
+        isNullConstant(call->inputs()[2])) {
+      matchChildren(
+          {call->inputs()[0], call->inputs()[1]}, expectedCall->inputs());
+      return !::testing::Test::HasNonfatalFailure();
+    }
+
     matchChildren(call->inputs(), expectedCall->inputs());
     return !::testing::Test::HasNonfatalFailure();
   }
