@@ -145,7 +145,8 @@ std::shared_ptr<velox::connector::Connector>
 Connectors::registerLocalHiveConnector(
     const std::string& dataPath,
     const std::string& dataFormat,
-    const std::string& connectorId) {
+    const std::string& connectorId,
+    std::shared_ptr<velox::memory::MemoryPool> rootPool) {
   std::unordered_map<std::string, std::string> connectorConfig = {
       {connector::hive::HiveMetadataConfig::kLocalDataPath, dataPath},
       {connector::hive::HiveMetadataConfig::kLocalFileFormat, dataFormat},
@@ -164,7 +165,9 @@ Connectors::registerLocalHiveConnector(
   connector::ConnectorMetadataRegistry::global().insert(
       connector->connectorId(),
       std::make_shared<connector::hive::LocalHiveConnectorMetadata>(
-          hiveConnector));
+          hiveConnector,
+          rootPool ? std::move(rootPool)
+                   : velox::memory::memoryManager()->addRootPool()));
 
   return connector;
 }

@@ -411,12 +411,16 @@ folly::coro::Task<SplitBatch> LocalHiveSplitSource::co_getSplits(
 }
 
 LocalHiveConnectorMetadata::LocalHiveConnectorMetadata(
-    velox::connector::hive::HiveConnector* hiveConnector)
+    velox::connector::hive::HiveConnector* hiveConnector,
+    std::shared_ptr<velox::memory::MemoryPool> rootPool)
     : HiveConnectorMetadata(hiveConnector),
+      rootPool_(std::move(rootPool)),
       splitManager_(this),
       hiveMetadataConfig_(
           std::make_shared<HiveMetadataConfig>(
-              hiveConnector->connectorConfig())) {}
+              hiveConnector->connectorConfig())) {
+  VELOX_CHECK_NOT_NULL(rootPool_, "LocalHiveConnectorMetadata requires a pool");
+}
 
 void LocalHiveConnectorMetadata::reinitialize() {
   std::lock_guard<std::mutex> l(mutex_);
@@ -614,6 +618,8 @@ LocalHiveTableLayout::co_estimateStats(
       ConnectorMetadataRegistry::get(connector()->connectorId());
   auto* localHiveMetadata =
       dynamic_cast<const LocalHiveConnectorMetadata*>(connectorMetadata.get());
+  VELOX_CHECK_NOT_NULL(
+      localHiveMetadata, "Expected LocalHiveConnectorMetadata for connector");
   auto& evaluator =
       *localHiveMetadata->connectorQueryCtx()->expressionEvaluator();
 
@@ -631,6 +637,139 @@ LocalHiveTableLayout::co_estimateStats(
       evaluator,
       partitionColumnsByName,
       requestedColumns);
+}
+
+folly::coro::Task<std::optional<std::vector<MetadataCountGroup>>>
+LocalHiveTableLayout::co_metadataCounts(
+    ConnectorSessionPtr /*session*/,
+    velox::connector::ConnectorTableHandlePtr /*tableHandle*/,
+    std::vector<std::string> groupingColumns,
+    std::vector<std::string> columns,
+    std::vector<velox::core::TypedExprPtr> filterConjuncts) const {
+  folly::F14FastMap<std::string, const Column*> partitionColumnsByName;
+  for (const auto* column : hivePartitionColumns()) {
+    partitionColumnsByName[column->name()] = column;
+  }
+
+  // Every grouping column must be a partition column.
+  std::vector<const Column*> groupingKeyColumns;
+  groupingKeyColumns.reserve(groupingColumns.size());
+  for (const auto& name : groupingColumns) {
+    auto it = partitionColumnsByName.find(name);
+    if (it == partitionColumnsByName.end()) {
+      co_return std::nullopt;
+    }
+    groupingKeyColumns.push_back(it->second);
+  }
+
+  auto connectorMetadata =
+      ConnectorMetadataRegistry::get(connector()->connectorId());
+  auto* localHiveMetadata =
+      dynamic_cast<const LocalHiveConnectorMetadata*>(connectorMetadata.get());
+  VELOX_CHECK_NOT_NULL(
+      localHiveMetadata, "Expected LocalHiveConnectorMetadata for connector");
+  auto& evaluator =
+      *localHiveMetadata->connectorQueryCtx()->expressionEvaluator();
+
+  // The counts are exact, so every conjunct must be resolvable from partition
+  // metadata; decline if any is not.
+  std::vector<MetadataFilter> metadataFilters;
+  std::vector<int32_t> rejectedFilterIndices;
+  classifyFilterConjuncts(
+      filterConjuncts,
+      evaluator,
+      partitionColumnsByName,
+      /*allowPathAndBucket=*/false,
+      metadataFilters,
+      rejectedFilterIndices);
+  if (!rejectedFilterIndices.empty()) {
+    co_return std::nullopt;
+  }
+
+  std::vector<const Column*> nullCountColumns;
+  nullCountColumns.reserve(columns.size());
+  for (const auto& name : columns) {
+    const auto* column = table().findColumn(name);
+    VELOX_CHECK_NOT_NULL(column, "Column not found: {}", name);
+    nullCountColumns.push_back(column);
+  }
+  // Index the requested columns by name once so each partition's stats can be
+  // accumulated in a single pass below.
+  folly::F14FastMap<std::string_view, size_t> nullCountColumnIndex;
+  nullCountColumnIndex.reserve(nullCountColumns.size());
+  for (size_t c = 0; c < nullCountColumns.size(); ++c) {
+    nullCountColumnIndex.emplace(nullCountColumns[c]->name(), c);
+  }
+
+  // One group per distinct grouping-key tuple, accumulating rows and per-column
+  // non-null counts across the matching partitions.
+  std::vector<MetadataCountGroup> groups;
+  std::vector<std::vector<int64_t>> nonNullCounts;
+  folly::F14FastMap<std::string, size_t> groupIndex;
+  for (const auto& partition : partitionStats_) {
+    bool matched = true;
+    for (const auto& metadataFilter : metadataFilters) {
+      auto it = partition.partitionKeys.find(metadataFilter.columnName);
+      if (it == partition.partitionKeys.end() ||
+          !testPartitionValue(
+              *metadataFilter.filter,
+              it->second,
+              *metadataFilter.column->type())) {
+        matched = false;
+        break;
+      }
+    }
+    if (!matched) {
+      continue;
+    }
+
+    // Group key: partition values joined with a NUL separator. Hive partition
+    // values are path components and cannot contain NUL, so the join is
+    // unambiguous.
+    std::string groupKey;
+    std::vector<velox::Variant> keyValues;
+    keyValues.reserve(groupingKeyColumns.size());
+    for (const auto* column : groupingKeyColumns) {
+      auto it = partition.partitionKeys.find(column->name());
+      if (it == partition.partitionKeys.end()) {
+        // The value is not available (e.g. a partition column beyond the first
+        // level, which is not parsed today).
+        co_return std::nullopt;
+      }
+      groupKey += it->second;
+      groupKey += '\0';
+      keyValues.push_back(
+          HiveTableLayout::partitionValueToVariant(
+              it->second, *column->type()));
+    }
+
+    auto [it, inserted] = groupIndex.try_emplace(groupKey, groups.size());
+    if (inserted) {
+      MetadataCountGroup group;
+      group.key = std::move(keyValues);
+      groups.push_back(std::move(group));
+      nonNullCounts.emplace_back(nullCountColumns.size(), 0);
+    }
+    const size_t index = it->second;
+    groups[index].numRows += partition.numRows;
+    for (const auto& stats : partition.columnStats) {
+      auto columnIt = nullCountColumnIndex.find(stats.name);
+      if (columnIt != nullCountColumnIndex.end()) {
+        nonNullCounts[index][columnIt->second] += stats.numValues;
+      }
+    }
+  }
+
+  // A column missing from a partition's stats contributes no non-nulls, i.e. it
+  // is all-null for that partition, so nulls = rows - non-nulls.
+  for (size_t index = 0; index < groups.size(); ++index) {
+    groups[index].numNulls.reserve(nullCountColumns.size());
+    for (int64_t nonNull : nonNullCounts[index]) {
+      groups[index].numNulls.push_back(groups[index].numRows - nonNull);
+    }
+  }
+
+  co_return groups;
 }
 
 LocalHiveTableLayout* LocalTable::makeDefaultLayout(

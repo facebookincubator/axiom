@@ -119,7 +119,9 @@ const optimizer::Aggregate* Builder::makeAggregate(
     ExprCP condition,
     TypeCP intermediateType,
     ExprVector orderKeys,
-    OrderTypeVector orderTypes) {
+    OrderTypeVector orderTypes,
+    std::optional<logical_plan::SpecialAggregateKind> specialKind,
+    const optimizer::Aggregate* fallback) {
   optimizer::Aggregate::KeyView view{
       name, args, isDistinct, condition, orderKeys, orderTypes};
   if (auto it = aggregateCalls_.find(view); it != aggregateCalls_.end()) {
@@ -134,7 +136,9 @@ const optimizer::Aggregate* Builder::makeAggregate(
       condition,
       intermediateType,
       std::move(orderKeys),
-      std::move(orderTypes));
+      std::move(orderTypes),
+      specialKind,
+      fallback);
   aggregateCalls_.insert(aggregate);
   return aggregate;
 }

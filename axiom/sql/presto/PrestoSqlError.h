@@ -172,6 +172,23 @@ PrestoErrorClassification classify(PrestoSqlErrorKind kind);
         fmt_str);                                                     \
   } while (0)
 
+/// Throws PrestoSqlError with kSyntax kind if `value` is not null.
+/// Same parameter contract as AXIOM_PRESTO_SYNTAX_CHECK.
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
+#define AXIOM_PRESTO_SYNTAX_CHECK_NULL(value, location, token, fmt_str, ...) \
+  do {                                                                       \
+    if (FOLLY_UNLIKELY((value) != nullptr)) {                                \
+      assert((location).line > 0 && "Location must have 1-based line");      \
+      throw ::axiom::sql::presto::PrestoSqlError(                            \
+          fmt::format(fmt_str, ##__VA_ARGS__),                               \
+          static_cast<size_t>((location).line - 1),                          \
+          static_cast<size_t>(std::max(0, (location).charPosition)),         \
+          (token),                                                           \
+          ::axiom::sql::presto::PrestoSqlErrorKind::kSyntax,                 \
+          fmt_str);                                                          \
+    }                                                                        \
+  } while (0)
+
 /// Throws PrestoSqlError with kSemantic kind if `condition` is false.
 /// Same parameter contract as AXIOM_PRESTO_SYNTAX_CHECK.
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
@@ -201,6 +218,23 @@ PrestoErrorClassification classify(PrestoSqlErrorKind kind);
         (token),                                                      \
         ::axiom::sql::presto::PrestoSqlErrorKind::kSemantic,          \
         fmt_str);                                                     \
+  } while (0)
+
+/// Throws PrestoSqlError with kSemantic kind if `value` is not null.
+/// Same parameter contract as AXIOM_PRESTO_SYNTAX_CHECK.
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
+#define AXIOM_PRESTO_SEMANTIC_CHECK_NULL(value, location, token, fmt_str, ...) \
+  do {                                                                         \
+    if (FOLLY_UNLIKELY((value) != nullptr)) {                                  \
+      assert((location).line > 0 && "Location must have 1-based line");        \
+      throw ::axiom::sql::presto::PrestoSqlError(                              \
+          fmt::format(fmt_str, ##__VA_ARGS__),                                 \
+          static_cast<size_t>((location).line - 1),                            \
+          static_cast<size_t>(std::max(0, (location).charPosition)),           \
+          (token),                                                             \
+          ::axiom::sql::presto::PrestoSqlErrorKind::kSemantic,                 \
+          fmt_str);                                                            \
+    }                                                                          \
   } while (0)
 
 /// Throws PrestoSqlError with kSemantic kind if val1 != val2.

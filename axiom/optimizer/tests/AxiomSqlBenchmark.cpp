@@ -278,7 +278,8 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
         kHiveConnectorId,
         std::make_shared<connector::hive::LocalHiveConnectorMetadata>(
             dynamic_cast<velox::connector::hive::HiveConnector*>(
-                connector.get())));
+                connector.get()),
+            velox::memory::memoryManager()->addRootPool()));
 
     return connector;
   }

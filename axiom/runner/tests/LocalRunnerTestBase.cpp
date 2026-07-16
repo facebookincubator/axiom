@@ -88,7 +88,8 @@ void LocalRunnerTestBase::setupConnector() {
       velox::exec::test::kHiveConnectorId,
       std::make_shared<connector::hive::LocalHiveConnectorMetadata>(
           dynamic_cast<velox::connector::hive::HiveConnector*>(
-              hiveConnector.get())));
+              hiveConnector.get()),
+          velox::memory::memoryManager()->addRootPool()));
 }
 
 void LocalRunnerTestBase::makeTables(const std::vector<TableSpec>& specs) {

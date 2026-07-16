@@ -26,6 +26,16 @@
 
 namespace facebook::axiom::optimizer::test {
 
+/// Selects the connector a .sql test file's setup DDL and queries run against.
+enum class TestConnectorKind {
+  /// In-memory TestConnector (default).
+  kTest,
+  /// LocalHive connector: setup DDL runs as real CREATE TABLE / INSERT / CTAS,
+  /// so on-disk data, partition metadata, and write-time stats are available
+  /// (e.g. for metadata-count folds).
+  kLocalHive,
+};
+
 /// Represents a single SQL query parsed from a test file, along with its
 /// assertion type and any annotation parameters.
 struct QueryEntry {
@@ -69,10 +79,16 @@ struct SqlFile {
   /// Query entries parsed from the body of the file.
   std::vector<QueryEntry> entries;
 
+  /// Connector the file's setup DDL and queries run against, from a top-of-file
+  /// '-- connector: <test|hive>' directive. Defaults to kTest.
+  TestConnectorKind connector{TestConnectorKind::kTest};
+
   /// Parses 'content' into setup statements and queries.
   ///
   /// Setup directives recognized at the top of 'content' (before the first
   /// query):
+  ///   -- connector: <test|hive>
+  ///       Selects the connector for the whole file. Defaults to 'test'.
   ///   -- setup_file: relative/path.sql
   ///       Splices in the contents of another .sql file, parsed as a
   ///       sequence of setup statements separated by '----'. Path is

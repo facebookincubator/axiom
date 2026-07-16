@@ -1267,7 +1267,10 @@ class Aggregate : public Call {
       ExprCP condition,
       const velox::Type* intermediateType,
       ExprVector orderKeys,
-      OrderTypeVector orderTypes)
+      OrderTypeVector orderTypes,
+      std::optional<logical_plan::SpecialAggregateKind> specialKind =
+          std::nullopt,
+      const Aggregate* fallback = nullptr)
       : Call(
             PlanType::kAggregateExpr,
             name,
@@ -1278,7 +1281,9 @@ class Aggregate : public Call {
         condition_(condition),
         intermediateType_(intermediateType),
         orderKeys_(std::move(orderKeys)),
-        orderTypes_(std::move(orderTypes)) {
+        orderTypes_(std::move(orderTypes)),
+        specialKind_(specialKind),
+        fallback_(fallback) {
     VELOX_CHECK_EQ(orderKeys_.size(), orderTypes_.size());
 
     for (auto& arg : this->args()) {
@@ -1314,6 +1319,21 @@ class Aggregate : public Call {
 
   const OrderTypeVector& orderTypes() const {
     return orderTypes_;
+  }
+
+  /// The metadata-aggregate kind if this is a special-form metadata aggregate,
+  /// or std::nullopt for an ordinary aggregate. A metadata aggregate is folded
+  /// into constants from table metadata or replaced by 'fallback' before
+  /// lowering; its 'name' is the canonical kind name and is never lowered to a
+  /// Velox aggregate.
+  const std::optional<logical_plan::SpecialAggregateKind>& specialKind() const {
+    return specialKind_;
+  }
+
+  /// For a metadata aggregate, the ordinary aggregate (e.g. count) to use when
+  /// no connector can answer it from metadata, or nullptr if none was supplied.
+  const Aggregate* fallback() const {
+    return fallback_;
   }
 
   /// Returns a copy with isDistinct set to false.
@@ -1361,6 +1381,8 @@ class Aggregate : public Call {
   TypeVector rawInputType_;
   ExprVector orderKeys_;
   OrderTypeVector orderTypes_;
+  const std::optional<logical_plan::SpecialAggregateKind> specialKind_;
+  const Aggregate* fallback_;
 };
 
 using AggregateCP = const Aggregate*;

@@ -76,6 +76,14 @@ class SubqueryCollector : public ExprVisitor {
     }
   }
 
+  void visit(const SpecialFormAggExpr& expr, ExprVisitorContext& ctx)
+      const override {
+    visitInputs(expr, ctx);
+    if (expr.fallback() != nullptr) {
+      expr.fallback()->accept(*this, ctx);
+    }
+  }
+
   void visit(const WindowExpr& expr, ExprVisitorContext& ctx) const override {
     visitInputs(expr, ctx);
   }

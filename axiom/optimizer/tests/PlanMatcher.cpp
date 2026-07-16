@@ -22,6 +22,7 @@
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/exec/HashPartitionFunction.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/parse/ExprRewriter.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
@@ -62,7 +63,7 @@ class PlanMatcherImpl : public PlanMatcher {
       const PlanNodePtr& plan,
       const std::unordered_map<std::string, std::string>& symbols,
       const DistributedMatchContext* context) const override {
-    const auto* specificNode = dynamic_cast<const T*>(plan.get());
+    const auto* specificNode = plan->as<T>();
     EXPECT_TRUE(specificNode != nullptr)
         << "Expected " << folly::demangle(typeid(T).name()) << ", but got "
         << plan->toString(false, false);
@@ -98,9 +99,19 @@ class PlanMatcherImpl : public PlanMatcher {
     }
 
     auto result = matchDetails(*specificNode, newSymbols);
-    if (!result.match || aliases_.empty()) {
+    if (!result.match) {
       return result;
     }
+
+    if (onMatch_) {
+      onMatch_(plan);
+      AXIOM_TEST_RETURN_IF_FAILURE
+    }
+
+    if (aliases_.empty()) {
+      return result;
+    }
+
     const auto& names = plan->outputType()->names();
     VELOX_USER_CHECK_LE(aliases_.size(), names.size());
     auto resultSymbols = result.symbols;
@@ -1062,11 +1073,11 @@ void verifyShuffleConsumer(
     const PlanNodePtr& plan,
     std::optional<ShuffleType> type) {
   if (type == ShuffleType::kOrdered) {
-    EXPECT_TRUE(dynamic_cast<const MergeExchangeNode*>(plan.get()) != nullptr)
+    EXPECT_TRUE(plan->is<MergeExchangeNode>())
         << "Expected MergeExchange at shuffle boundary, but got "
         << plan->toString(false, false);
   } else {
-    EXPECT_TRUE(dynamic_cast<const ExchangeNode*>(plan.get()) != nullptr)
+    EXPECT_TRUE(plan->is<ExchangeNode>())
         << "Expected Exchange at shuffle boundary, but got "
         << plan->toString(false, false);
   }
@@ -1186,8 +1197,7 @@ PlanMatcher::MatchResult ShuffleBoundaryMatcher::match(
   AXIOM_TEST_RETURN_IF_FAILURE
 
   const auto& fragmentPlan = producerFragment->fragment.planNode;
-  const auto* partitionedOutput =
-      dynamic_cast<const PartitionedOutputNode*>(fragmentPlan.get());
+  const auto* partitionedOutput = fragmentPlan->as<PartitionedOutputNode>();
   EXPECT_TRUE(partitionedOutput != nullptr)
       << "Expected PartitionedOutput at fragment root, but got "
       << fragmentPlan->toString(false, false);
@@ -1894,15 +1904,49 @@ PlanMatcherBuilder& PlanMatcherBuilder::hiveScan(
   return *this;
 }
 
-PlanMatcherBuilder& PlanMatcherBuilder::values() {
+PlanMatcherBuilder& PlanMatcherBuilder::values(OnMatchCallback onMatch) {
   VELOX_USER_CHECK_NULL(matcher_);
   matcher_ = std::make_shared<ValuesMatcher>();
+  if (onMatch) {
+    matcher_->setOnMatch(std::move(onMatch));
+  }
   return *this;
 }
+
+namespace {
+// Returns a row type's column names as aliases (by position) so downstream
+// matchers can reference the columns by name rather than the
+// optimizer-generated internal names.
+std::vector<std::optional<std::string>> toAliases(const RowTypePtr& rowType) {
+  std::vector<std::optional<std::string>> aliases;
+  aliases.reserve(rowType->size());
+  for (const auto& name : rowType->names()) {
+    aliases.emplace_back(name);
+  }
+  return aliases;
+}
+} // namespace
 
 PlanMatcherBuilder& PlanMatcherBuilder::values(const RowTypePtr& outputType) {
   VELOX_USER_CHECK_NULL(matcher_);
   matcher_ = std::make_shared<ValuesMatcher>(outputType);
+  matcher_->setAliases(toAliases(outputType));
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::values(
+    const std::vector<RowVectorPtr>& expected) {
+  VELOX_USER_CHECK_NULL(matcher_);
+  VELOX_USER_CHECK(
+      !expected.empty(), "values() expects at least one RowVector");
+  matcher_ = std::make_shared<ValuesMatcher>();
+
+  matcher_->setOnMatch([expected](const PlanNodePtr& node) {
+    velox::exec::test::assertEqualResults(
+        expected, node->as<ValuesNode>()->values());
+  });
+
+  matcher_->setAliases(toAliases(expected.front()->rowType()));
   return *this;
 }
 

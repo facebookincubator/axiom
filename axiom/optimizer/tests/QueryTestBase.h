@@ -255,6 +255,13 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
     return velox::core::PlanMatcherBuilder().values(outputType);
   }
 
+  /// Matches a Values node whose rows equal 'expected' (order-insensitive).
+  static velox::core::PlanMatcherBuilder matchValues(
+      const velox::RowVectorPtr& expected) {
+    return velox::core::PlanMatcherBuilder().values(
+        std::vector<velox::RowVectorPtr>{expected});
+  }
+
   /// Creates a QueryCtx with the specified query ID.
   std::shared_ptr<velox::core::QueryCtx> makeQueryCtx(
       const std::string& queryId);

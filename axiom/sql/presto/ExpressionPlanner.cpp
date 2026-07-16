@@ -26,6 +26,7 @@
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/sql/presto/GroupByPlanner.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
+#include "axiom/sql/presto/SpecialAggregates.h"
 #include "axiom/sql/presto/ast/DefaultTraversalVisitor.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/functions/prestosql/types/BigintEnumType.h"
@@ -39,6 +40,72 @@ namespace axiom::sql::presto {
 using namespace facebook::velox;
 
 namespace {
+
+// Translates a Presto call already recognized as the metadata aggregate 'kind'
+// into a SpecialFormAggCallExpr carrying its fallback. Enforces the modifier
+// semantics: window / DISTINCT / FILTER are rejected; ORDER BY is accepted and
+// ignored (these aggregates are order-insensitive).
+lp::ExprApi makeMetadataAggregate(
+    lp::SpecialAggregateKind kind,
+    const FunctionCall* call,
+    const std::vector<lp::ExprApi>& args,
+    const std::string& funcName) {
+  AXIOM_PRESTO_SEMANTIC_CHECK_NULL(
+      call->window(),
+      call->location(),
+      funcName,
+      "Metadata aggregate cannot be used as a window function: {}",
+      funcName);
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      !call->isDistinct(),
+      call->location(),
+      funcName,
+      "Metadata aggregate does not support DISTINCT: {}",
+      funcName);
+  AXIOM_PRESTO_SEMANTIC_CHECK_NULL(
+      call->filter(),
+      call->location(),
+      funcName,
+      "Metadata aggregate does not support FILTER: {}",
+      funcName);
+
+  const size_t numExpectedArgs =
+      kind == lp::SpecialAggregateKind::kMetadataRowCount ? 0 : 1;
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      args.size() == numExpectedArgs,
+      call->location(),
+      funcName,
+      "Metadata aggregate has wrong number of arguments: {} expects {}, got {}",
+      funcName,
+      numExpectedArgs,
+      args.size());
+
+  std::vector<core::ExprPtr> inputs;
+  inputs.reserve(args.size());
+  for (const auto& arg : args) {
+    inputs.push_back(arg.expr());
+  }
+
+  // Each kind supplies its fallback, used when the connector cannot answer the
+  // aggregate from metadata, expressed as count / count_if.
+  const auto make = [&](const lp::ExprApi& fallback) {
+    return lp::ExprApi{std::make_shared<core::SpecialFormAggCallExpr>(
+        kind,
+        std::move(inputs),
+        fallback.expr(),
+        /*alias=*/std::nullopt,
+        funcName)};
+  };
+
+  switch (kind) {
+    case lp::SpecialAggregateKind::kMetadataRowCount:
+      return make(lp::Call("count"));
+    case lp::SpecialAggregateKind::kMetadataNonNullCount:
+      return make(lp::Call("count", args));
+    case lp::SpecialAggregateKind::kMetadataNullCount:
+      return make(lp::Call("count_if", lp::Call("is_null", args)));
+  }
+}
 
 // Returns the set of relation aliases directly visible in a simple
 // FROM clause (a single Table or AliasedRelation). Returns nullopt
@@ -126,7 +193,8 @@ class OuterScopeAggregateScanner : public DefaultTraversalVisitor {
  protected:
   void visitFunctionCall(FunctionCall* node) override {
     const auto name = canonicalizeName(node->name()->suffix());
-    if (exec::getAggregateFunctionEntry(name) != nullptr &&
+    if ((exec::getAggregateFunctionEntry(name) != nullptr ||
+         specialAggregateKind(name).has_value()) &&
         node->window() == nullptr && !node->isDistinct() &&
         node->filter() == nullptr && node->orderBy() == nullptr &&
         !node->ignoreNulls() && !node->arguments().empty()) {
@@ -1150,6 +1218,10 @@ lp::ExprApi ExpressionPlanner::toExpr(
             "NULLIF requires exactly 2 arguments, got {}",
             args.size());
         return lp::Call("nullif", args[0], args[1]);
+      }
+
+      if (auto kind = specialAggregateKind(lowerFuncName)) {
+        return makeMetadataAggregate(*kind, call, args, lowerFuncName);
       }
 
       if (call->isDistinct() || call->filter() || call->orderBy()) {

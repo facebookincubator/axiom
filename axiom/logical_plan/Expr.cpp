@@ -35,6 +35,7 @@ const auto& exprKindNames() {
       {ExprKind::kWindow, "Window"},
       {ExprKind::kLambda, "Lambda"},
       {ExprKind::kSubquery, "Subquery"},
+      {ExprKind::kSpecialFormAgg, "SpecialFormAgg"},
   };
   return kNames;
 }
@@ -117,6 +118,12 @@ bool AggregateExpr::equalTo(const Expr& other) const {
   const auto* rhs = other.as<AggregateExpr>();
   return name_ == rhs->name_ && distinct_ == rhs->distinct_ &&
       equalNullableExprs(filter_, rhs->filter_) && ordering_ == rhs->ordering_;
+}
+
+bool SpecialFormAggExpr::equalTo(const Expr& other) const {
+  const auto* rhs = other.as<SpecialFormAggExpr>();
+  return AggregateExpr::equalTo(other) && kind_ == rhs->kind_ &&
+      equalNullableExprs(fallback_, rhs->fallback_);
 }
 
 bool WindowExpr::Frame::operator==(const Frame& other) const {
@@ -266,6 +273,7 @@ void Expr::registerSerDe() {
   registry.Register("CallExpr", CallExpr::create);
   registry.Register("SpecialFormExpr", SpecialFormExpr::create);
   registry.Register("AggregateExpr", AggregateExpr::create);
+  registry.Register("SpecialFormAggExpr", SpecialFormAggExpr::create);
   registry.Register("WindowExpr", WindowExpr::create);
   registry.Register("LambdaExpr", LambdaExpr::create);
   registry.Register("SubqueryExpr", SubqueryExpr::create);
@@ -394,6 +402,31 @@ ExprPtr AggregateExpr::create(const folly::dynamic& obj, void* context) {
       obj["distinct"].asBool());
 }
 
+folly::dynamic SpecialFormAggExpr::serialize() const {
+  auto obj = serializeBase("SpecialFormAggExpr");
+  obj["specialAggregateKind"] = SpecialAggregateKindName::toName(kind_);
+  if (fallback_) {
+    obj["fallback"] = fallback_->serialize();
+  }
+  return obj;
+}
+
+// static
+ExprPtr SpecialFormAggExpr::create(const folly::dynamic& obj, void* context) {
+  auto inputs = deserializeInputs(obj, context);
+  auto kind = SpecialAggregateKindName::toSpecialAggregateKind(
+      obj["specialAggregateKind"].asString());
+  AggregateExprPtr fallback = nullptr;
+  if (obj.count("fallback")) {
+    fallback = std::dynamic_pointer_cast<const AggregateExpr>(
+        velox::ISerializable::deserialize<Expr>(obj["fallback"], context));
+    VELOX_CHECK_NOT_NULL(
+        fallback, "SpecialFormAggExpr fallback must be an AggregateExpr");
+  }
+  return std::make_shared<SpecialFormAggExpr>(
+      kind, std::move(inputs), std::move(fallback));
+}
+
 folly::dynamic WindowExpr::Frame::serialize() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = WindowExpr::toName(type);
@@ -518,6 +551,12 @@ void AggregateExpr::accept(
   visitor.visit(*this, context);
 }
 
+void SpecialFormAggExpr::accept(
+    const ExprVisitor& visitor,
+    ExprVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 void WindowExpr::accept(const ExprVisitor& visitor, ExprVisitorContext& context)
     const {
   visitor.visit(*this, context);
@@ -581,6 +620,54 @@ const auto& specialFormNames() {
 } // namespace
 
 AXIOM_DEFINE_ENUM_NAME(SpecialForm, specialFormNames)
+
+namespace {
+const auto& specialAggregateKindNames() {
+  static const folly::F14FastMap<SpecialAggregateKind, std::string_view>
+      kNames = {
+          {SpecialAggregateKind::kMetadataRowCount, "METADATA_ROW_COUNT"},
+          {SpecialAggregateKind::kMetadataNullCount, "METADATA_NULL_COUNT"},
+          {SpecialAggregateKind::kMetadataNonNullCount,
+           "METADATA_NON_NULL_COUNT"},
+      };
+  return kNames;
+}
+} // namespace
+
+AXIOM_DEFINE_ENUM_NAME(SpecialAggregateKind, specialAggregateKindNames)
+
+SpecialFormAggExpr::SpecialFormAggExpr(
+    SpecialAggregateKind kind,
+    std::vector<ExprPtr> inputs,
+    AggregateExprPtr fallback)
+    : AggregateExpr{ExprKind::kSpecialFormAgg, velox::BIGINT(), std::string(SpecialAggregateKindName::toName(kind)), std::move(inputs)},
+      kind_{kind},
+      fallback_{std::move(fallback)} {
+  switch (kind_) {
+    case SpecialAggregateKind::kMetadataRowCount:
+      VELOX_USER_CHECK_EQ(
+          inputs_.size(),
+          0,
+          "Metadata aggregate takes no inputs: {}",
+          SpecialAggregateKindName::toName(kind_));
+      break;
+    case SpecialAggregateKind::kMetadataNullCount:
+    case SpecialAggregateKind::kMetadataNonNullCount:
+      VELOX_USER_CHECK_EQ(
+          inputs_.size(),
+          1,
+          "Metadata aggregate takes exactly one input: {}",
+          SpecialAggregateKindName::toName(kind_));
+      break;
+  }
+
+  if (fallback_ != nullptr) {
+    VELOX_USER_CHECK_EQ(
+        fallback_->typeKind(),
+        velox::TypeKind::BIGINT,
+        "Metadata aggregate fallback must return BIGINT");
+  }
+}
 
 namespace {
 void validateDereferenceInputs(

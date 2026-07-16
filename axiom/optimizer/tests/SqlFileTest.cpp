@@ -356,5 +356,48 @@ TEST_F(SqlFileTest, lineNumbersUnaffectedBySetup) {
   EXPECT_EQ(file.entries[1].lineNumber, 7);
 }
 
+TEST_F(SqlFileTest, connectorDefaultsToTest) {
+  EXPECT_EQ(SqlFile::parse("SELECT 1", "").connector, TestConnectorKind::kTest);
+}
+
+TEST_F(SqlFileTest, connectorDirective) {
+  {
+    auto file = SqlFile::parse(
+        "-- connector: hive\n"
+        "SELECT 1",
+        "");
+    EXPECT_EQ(file.connector, TestConnectorKind::kLocalHive);
+    ASSERT_EQ(file.entries.size(), 1);
+    EXPECT_EQ(file.entries[0].sql, "SELECT 1");
+    // The directive line is consumed, so query line numbers are unaffected.
+    EXPECT_EQ(file.entries[0].lineNumber, 2);
+  }
+  {
+    auto file = SqlFile::parse("-- connector: test\nSELECT 1", "");
+    EXPECT_EQ(file.connector, TestConnectorKind::kTest);
+  }
+}
+
+TEST_F(SqlFileTest, connectorDirectiveWithSetup) {
+  auto file = SqlFile::parse(
+      "-- connector: hive\n"
+      "-- setup\n"
+      "CREATE TABLE t(a BIGINT)\n"
+      "-- end_setup\n"
+      "SELECT a FROM t",
+      "");
+  EXPECT_EQ(file.connector, TestConnectorKind::kLocalHive);
+  ASSERT_EQ(file.setupStatements.size(), 1);
+  EXPECT_EQ(file.setupStatements[0], "CREATE TABLE t(a BIGINT)");
+  ASSERT_EQ(file.entries.size(), 1);
+  EXPECT_EQ(file.entries[0].sql, "SELECT a FROM t");
+}
+
+TEST_F(SqlFileTest, connectorUnknownRejected) {
+  VELOX_ASSERT_THROW(
+      SqlFile::parse("-- connector: postgres\nSELECT 1", ""),
+      "Unknown connector directive 'postgres'");
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer::test

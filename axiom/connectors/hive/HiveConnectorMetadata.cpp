@@ -16,6 +16,7 @@
 
 #include "axiom/connectors/hive/HiveConnectorMetadata.h"
 
+#include <folly/Conv.h>
 #include <algorithm>
 #include <utility>
 #include "velox/connectors/hive/HiveConnector.h"
@@ -196,6 +197,29 @@ HiveTableLayout::HiveTableLayout(
                     extractPartitionKeyTypes(partitionedByColumns))
               : nullptr} {
   VELOX_CHECK_EQ(sortedByColumns.size(), sortOrder.size());
+}
+
+// static
+velox::Variant HiveTableLayout::partitionValueToVariant(
+    std::string_view value,
+    const velox::Type& type) {
+  switch (type.kind()) {
+    case velox::TypeKind::BOOLEAN:
+      return velox::Variant(folly::to<bool>(value));
+    case velox::TypeKind::TINYINT:
+      return velox::Variant(folly::to<int8_t>(value));
+    case velox::TypeKind::SMALLINT:
+      return velox::Variant(folly::to<int16_t>(value));
+    case velox::TypeKind::INTEGER:
+      return velox::Variant(folly::to<int32_t>(value));
+    case velox::TypeKind::BIGINT:
+      return velox::Variant(folly::to<int64_t>(value));
+    case velox::TypeKind::VARCHAR:
+      return velox::Variant(std::string(value));
+    default:
+      VELOX_UNREACHABLE(
+          "Unsupported partition column type: {}", type.toString());
+  }
 }
 
 namespace {

@@ -19,6 +19,7 @@
 #include "axiom/sql/presto/ColumnsExpansion.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/SortProjection.h"
+#include "axiom/sql/presto/SpecialAggregates.h"
 #include "axiom/sql/presto/ast/DefaultTraversalVisitor.h"
 #include "folly/container/F14Set.h"
 #include "velox/common/base/BitUtil.h"
@@ -224,7 +225,9 @@ class ExprAnalyzer : public DefaultTraversalVisitor {
 
   void visitFunctionCall(FunctionCall* node) override {
     const auto& name = node->name()->suffix();
-    if (exec::getAggregateFunctionEntry(name) && node->window() == nullptr) {
+    if ((exec::getAggregateFunctionEntry(name) ||
+         specialAggregateKind(name).has_value()) &&
+        node->window() == nullptr) {
       AXIOM_PRESTO_SEMANTIC_CHECK(
           !aggregateName_.has_value(),
           node->location(),

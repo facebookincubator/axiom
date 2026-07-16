@@ -74,25 +74,6 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
       const std::string& name,
       const std::vector<velox::RowVectorPtr>& data);
 
-  /// Executes a single setup DDL statement against the Axiom TestConnector
-  /// and DuckDB. Supports:
-  ///   - CREATE TABLE name (col TYPE, ...) — registers an empty table.
-  ///   - INSERT INTO name VALUES (..., ...), (..., ...), ... — appends one
-  ///     RowVector (one TestConnector split) and runs the same statement
-  ///     in DuckDB.
-  /// Each INSERT to the same table produces a separate split, mirroring
-  /// the multi-RowVector createTable shape. The caller supplies the
-  /// connector, the DuckDB runner, and a factory that builds a LocalRunner
-  /// for an INSERT / CTAS plan. Suite-scoped fixtures use this in
-  /// SetUpTestSuite to install reference tables once into a standalone
-  /// connector backed by their own MemoryManager / executor / cache.
-  static void runSetupStatement(
-      const std::string& sql,
-      connector::TestConnector& connector,
-      velox::exec::test::DuckDbQueryRunner& duckDb,
-      const std::function<std::shared_ptr<runner::LocalRunner>(
-          const logical_plan::LogicalPlanNodePtr&)>& runnerFactory);
-
   /// Builds a LocalRunner for 'logicalPlan' using caller-supplied
   /// infrastructure. Suite-scoped fixtures use this to bind their static
   /// MemoryManager / executor / AsyncDataCache into a runnerFactory for
@@ -156,13 +137,6 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
   // (axiom/optimizer/v2) instead of v1.
   bool useV2_{false};
 
-  // Override to false in subclasses that manage the TestConnector lifecycle
-  // at suite scope (i.e., create and register the connector once per
-  // fixture class in SetUpTestSuite, not once per test in SetUp).
-  virtual bool createsConnectorPerTest() const {
-    return true;
-  }
-
   // Returns the DuckDbQueryRunner used for table installation and result
   // comparison. The default returns 'duckDbQueryRunner_' (per-test,
   // inherited from OperatorTestBase). Subclasses that want suite-scoped
@@ -172,6 +146,13 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
   }
 
   std::shared_ptr<connector::TestConnector> connector_;
+
+  // Connector id and default schema used to parse this fixture's queries.
+  // Defaults to the in-memory TestConnector; a Hive-backed fixture overrides
+  // them so queries resolve against the Hive catalog.
+  std::string connectorId_{kTestConnectorId};
+  std::string defaultSchema_{
+      std::string(connector::TestConnector::kDefaultSchema)};
 
  private:
   // Runs SQL through Axiom's full pipeline without storing results. Returns

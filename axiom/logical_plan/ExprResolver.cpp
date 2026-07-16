@@ -911,10 +911,7 @@ ExprResolver::ResolvedCall ExprResolver::resolveCallTypes(
   const auto numArgs = call->inputs().size();
   std::vector<ExprPtr> inputs;
   if (lambdaSignature == nullptr) {
-    inputs.reserve(numArgs);
-    for (const auto& input : call->inputs()) {
-      inputs.push_back(resolveScalarTypes(input, inputNameResolver));
-    }
+    inputs = resolveScalarInputs(call->inputs(), inputNameResolver);
   } else {
     // Resolve non-lambda arguments first, then infer lambda parameter types
     // from the function signature.
@@ -968,10 +965,65 @@ ExprResolver::ResolvedCall ExprResolver::resolveCallTypes(
 
 AggregateExprPtr ExprResolver::resolveAggregateTypes(
     const velox::core::ExprPtr& expr,
+    const InputNameResolver& inputNameResolver) const {
+  velox::core::ExprPtr filter;
+  std::vector<SortKey> ordering;
+  bool distinct = false;
+  if (const auto* agg = expr->as<velox::core::AggregateCallExpr>()) {
+    filter = agg->filter();
+    for (const auto& key : agg->orderBy()) {
+      ordering.emplace_back(ExprApi(key.expr), key.ascending, key.nullsFirst);
+    }
+    distinct = agg->isDistinct();
+  }
+  return resolveAggregateTypes(
+      expr, inputNameResolver, filter, ordering, distinct);
+}
+
+std::vector<ExprPtr> ExprResolver::resolveScalarInputs(
+    const std::vector<velox::core::ExprPtr>& inputs,
+    const InputNameResolver& inputNameResolver) const {
+  std::vector<ExprPtr> result;
+  result.reserve(inputs.size());
+  for (const auto& input : inputs) {
+    result.push_back(resolveScalarTypes(input, inputNameResolver));
+  }
+  return result;
+}
+
+AggregateExprPtr ExprResolver::resolveSpecialFormAgg(
+    const velox::core::SpecialFormAggCallExpr& expr,
+    const InputNameResolver& inputNameResolver,
+    const velox::core::ExprPtr& filter,
+    bool distinct) const {
+  VELOX_USER_CHECK(
+      !distinct,
+      "DISTINCT is not supported for metadata aggregate {}",
+      expr.name());
+  VELOX_USER_CHECK_NULL(
+      filter, "FILTER is not supported for metadata aggregate {}", expr.name());
+
+  auto inputs = resolveScalarInputs(expr.inputs(), inputNameResolver);
+
+  AggregateExprPtr fallback;
+  if (expr.fallback() != nullptr) {
+    fallback = resolveAggregateTypes(expr.fallback(), inputNameResolver);
+  }
+
+  return std::make_shared<SpecialFormAggExpr>(
+      expr.specialAggregateKind(), std::move(inputs), std::move(fallback));
+}
+
+AggregateExprPtr ExprResolver::resolveAggregateTypes(
+    const velox::core::ExprPtr& expr,
     const InputNameResolver& inputNameResolver,
     const velox::core::ExprPtr& filter,
     const std::vector<SortKey>& ordering,
     bool distinct) const {
+  if (const auto* special = expr->as<velox::core::SpecialFormAggCallExpr>()) {
+    return resolveSpecialFormAgg(*special, inputNameResolver, filter, distinct);
+  }
+
   auto resolved = resolveCallTypes(
       expr,
       inputNameResolver,

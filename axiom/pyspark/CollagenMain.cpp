@@ -183,7 +183,8 @@ void CollagenMain::registerLocalHiveConnector() {
       std::make_shared<
           facebook::axiom::connector::hive::LocalHiveConnectorMetadata>(
           dynamic_cast<facebook::velox::connector::hive::HiveConnector*>(
-              hiveConnector.get())));
+              hiveConnector.get()),
+          facebook::velox::memory::memoryManager()->addRootPool()));
 }
 
 void CollagenMain::registerConnector() {

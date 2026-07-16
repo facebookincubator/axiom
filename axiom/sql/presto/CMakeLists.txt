@@ -31,6 +31,7 @@ add_library(
   SortProjection.cpp
   PrestoParser.cpp
   ShowStatsBuilder.cpp
+  SpecialAggregates.cpp
   SqlStatement.cpp
 )
 

@@ -164,10 +164,9 @@ class Scan : public Node {
     /// NOT in this set; the connector-side read schema is computed as
     /// `outputColumns ∪ refs(filters)` when building the final Velox plan.
     ColumnVector outputColumns;
-    /// Predicates (joined with AND) offered to the connector during planning;
-    /// may be empty. The connector accepts those it can evaluate and rejects
-    /// the rest; rejected predicates are re-applied as a `Filter` node above
-    /// the `TableScan` when building the final Velox plan.
+    /// Filters on the scanned rows, as conjuncts joined with AND; may be empty.
+    /// At Emit the connector evaluates those it can; the rest are re-applied as
+    /// a `Filter` node above the `TableScan` in the final Velox plan.
     ExprVector filters;
   };
 

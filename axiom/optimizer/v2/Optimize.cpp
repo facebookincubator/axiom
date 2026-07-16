@@ -21,6 +21,7 @@
 #include "axiom/optimizer/v2/EmitPass.h"
 #include "axiom/optimizer/v2/EstimateLeafStatsPass.h"
 #include "axiom/optimizer/v2/ExpandAggregatePass.h"
+#include "axiom/optimizer/v2/FoldMetadataAggregatePass.h"
 #include "axiom/optimizer/v2/LimitAndOrderPass.h"
 #include "axiom/optimizer/v2/PlanPhysicalPass.h"
 #include "axiom/optimizer/v2/PrecomputeProjectionsPass.h"
@@ -52,11 +53,13 @@ PlanAndStats optimize(
   NodeCP decorrelated = DecorrelatePass::run(translated.root, builder);
   NodeCP limited = LimitAndOrderPass::run(decorrelated, builder);
   NodeCP pushed = PushdownAndPrunePass::run(limited, builder, evaluator);
+  NodeCP folded = FoldMetadataAggregatePass::run(
+      pushed, builder, session, evaluator, scanHandles);
   if (session.options().useFilteredTableStats) {
-    EstimateLeafStatsPass::run(pushed, session, evaluator, scanHandles);
+    EstimateLeafStatsPass::run(folded, session, evaluator, scanHandles);
   }
   NodeCP physicalPlanned = PlanPhysicalPass::run(
-      pushed,
+      folded,
       builder,
       session.options(),
       options.numWorkers,

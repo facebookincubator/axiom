@@ -259,6 +259,22 @@ SqlFile SqlFile::parse(std::string_view content, std::string_view baseDir) {
       continue;
     }
 
+    if (trimmed.starts_with("-- connector:")) {
+      auto name = std::string(ltrim(trimmed.substr(13)));
+      rtrim(name);
+      if (name == "test") {
+        result.connector = TestConnectorKind::kTest;
+      } else if (name == "hive") {
+        result.connector = TestConnectorKind::kLocalHive;
+      } else {
+        VELOX_USER_FAIL(
+            "Unknown connector directive '{}' (expected 'test' or 'hive')",
+            name);
+      }
+      bytesConsumed = lineEnd;
+      continue;
+    }
+
     if (trimmed.starts_with("-- setup_file:")) {
       auto refPath = std::string(ltrim(trimmed.substr(15)));
       VELOX_USER_CHECK(!refPath.empty(), "setup_file directive missing path");

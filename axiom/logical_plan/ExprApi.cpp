@@ -171,6 +171,24 @@ ExprApi Exists(const ExprApi& input) {
       "exists", std::vector<velox::core::ExprPtr>{input.expr()}, kNoAlias)};
 }
 
+ExprApi MetadataRowCount() {
+  return ExprApi{std::make_shared<velox::core::SpecialFormAggCallExpr>(
+      SpecialAggregateKind::kMetadataRowCount,
+      std::vector<velox::core::ExprPtr>{})};
+}
+
+ExprApi MetadataNullCount(const ExprApi& input) {
+  return ExprApi{std::make_shared<velox::core::SpecialFormAggCallExpr>(
+      SpecialAggregateKind::kMetadataNullCount,
+      std::vector<velox::core::ExprPtr>{input.expr()})};
+}
+
+ExprApi MetadataNonNullCount(const ExprApi& input) {
+  return ExprApi{std::make_shared<velox::core::SpecialFormAggCallExpr>(
+      SpecialAggregateKind::kMetadataNonNullCount,
+      std::vector<velox::core::ExprPtr>{input.expr()})};
+}
+
 ExprApi Sql(const std::string& sql) {
   return ExprApi{velox::parse::DuckSqlExpressionsParser().parseExpr(sql)};
 }
