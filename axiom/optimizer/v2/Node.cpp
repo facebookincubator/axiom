@@ -18,6 +18,7 @@
 
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/optimizer/Schema.h"
+#include "axiom/optimizer/v2/Builder.h"
 #include "axiom/optimizer/v2/KeyHash.h"
 #include "axiom/optimizer/v2/NodePrinter.h"
 #include "axiom/optimizer/v2/NodeVisitor.h"
@@ -1965,6 +1966,172 @@ bool TableWrite::KeyEq::operator()(const Key& key, const TableWrite* node)
 bool TableWrite::KeyEq::operator()(const TableWrite* node, const Key& key)
     const {
   return (*this)(key, node);
+}
+
+NodeCP Scan::withInputs(NodeVector newInputs, Builder& /*builder*/) const {
+  VELOX_CHECK(newInputs.empty(), "Leaf node cannot have inputs: Scan");
+  return this;
+}
+
+NodeCP Values::withInputs(NodeVector newInputs, Builder& /*builder*/) const {
+  VELOX_CHECK(newInputs.empty(), "Leaf node cannot have inputs: Values");
+  return this;
+}
+
+NodeCP Filter::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<Filter>({newInputs[0], predicates_});
+}
+
+NodeCP Project::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<Project>({newInputs[0], exprs_, outputColumns()});
+}
+
+NodeCP Limit::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<Limit>({newInputs[0], offset_, count_});
+}
+
+NodeCP Sort::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<Sort>({newInputs[0], orderKeys_, orderTypes_});
+}
+
+NodeCP TopN::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<TopN>(
+      {newInputs[0], orderKeys_, orderTypes_, offset_, count_});
+}
+
+NodeCP Aggregate::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<Aggregate>(Aggregate::Key{
+      .input = newInputs[0],
+      .groupingKeys = groupingKeys_,
+      .aggregates = aggregates_,
+      .outputColumns = outputColumns(),
+      .step = step_,
+      .groupId = groupId_,
+      .globalGroupingSets = globalGroupingSets_});
+}
+
+NodeCP GroupId::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<GroupId>(
+      {newInputs[0],
+       groupingKeys_,
+       aggregationInputs_,
+       groupingSets_,
+       groupingKeyColumns_,
+       groupId_,
+       outputColumns()});
+}
+
+NodeCP MarkDistinct::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<MarkDistinct>(
+      {newInputs[0], markers_, distinctKeys_, masks_, outputColumns()});
+}
+
+NodeCP Unnest::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<Unnest>(
+      {newInputs[0],
+       unnestExpressions_,
+       replicatedColumns_,
+       unnestColumns_,
+       ordinalityColumn_,
+       outputColumns()});
+}
+
+NodeCP UnionAll::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), inputs_.size());
+  return builder.make<UnionAll>(
+      {std::move(newInputs), legColumns_, outputColumns()});
+}
+
+NodeCP Join::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 2);
+  return builder.make<Join>(
+      {newInputs[0],
+       newInputs[1],
+       joinType_,
+       leftKeys_,
+       rightKeys_,
+       filter_,
+       nullAware_,
+       nullAsValue_,
+       outputColumns()});
+}
+
+NodeCP Window::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<Window>(
+      {newInputs[0],
+       functions_,
+       partitionKeys_,
+       orderKeys_,
+       orderTypes_,
+       outputColumns()});
+}
+
+NodeCP TopNRowNumber::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<TopNRowNumber>(
+      {newInputs[0],
+       rankFunction_,
+       partitionKeys_,
+       orderKeys_,
+       orderTypes_,
+       limit_,
+       rankColumn_,
+       outputColumns()});
+}
+
+NodeCP Apply::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 2);
+  return builder.make<Apply>(
+      {newInputs[0],
+       newInputs[1],
+       correlationColumns_,
+       kind_,
+       filter_,
+       enforceSingleRow_,
+       markColumn_,
+       inLhs_,
+       inBodyKey_,
+       includeMarker_,
+       outputColumns()});
+}
+
+NodeCP EnforceSingleRow::withInputs(NodeVector newInputs, Builder& builder)
+    const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<EnforceSingleRow>({newInputs[0]});
+}
+
+NodeCP AssignUniqueId::withInputs(NodeVector newInputs, Builder& builder)
+    const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<AssignUniqueId>({newInputs[0], idColumn_});
+}
+
+NodeCP EnforceDistinct::withInputs(NodeVector newInputs, Builder& builder)
+    const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<EnforceDistinct>(
+      {newInputs[0], distinctKeys_, errorMessage_});
+}
+
+NodeCP Exchange::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<Exchange>({newInputs[0], partitioning_});
+}
+
+NodeCP TableWrite::withInputs(NodeVector newInputs, Builder& builder) const {
+  VELOX_CHECK_EQ(newInputs.size(), 1);
+  return builder.make<TableWrite>({newInputs[0], table_, kind_, columnExprs_});
 }
 
 #define V2_DEFINE_ACCEPT(NodeT)                                               \
