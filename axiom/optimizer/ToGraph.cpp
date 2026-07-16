@@ -1073,6 +1073,11 @@ namespace {
 //
 //  #2. If none are literal, but the id on the left is higher.
 bool shouldInvert(ExprCP left, ExprCP right) {
+  // Only reorder operands of the same type.
+  if (left->value().type != right->value().type) {
+    return false;
+  }
+
   if (left->is(PlanType::kLiteralExpr) &&
       right->isNot(PlanType::kLiteralExpr)) {
     return true;

@@ -35,6 +35,10 @@ namespace {
 // right, or — when neither side is a literal — to put the lower-id
 // expression on the left.
 bool shouldInvert(ExprCP left, ExprCP right) {
+  // Only reorder operands of the same type.
+  if (left->value().type != right->value().type) {
+    return false;
+  }
   const bool leftIsLiteral = left->is(PlanType::kLiteralExpr);
   const bool rightIsLiteral = right->is(PlanType::kLiteralExpr);
   if (leftIsLiteral && !rightIsLiteral) {
