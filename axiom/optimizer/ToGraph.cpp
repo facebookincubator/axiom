@@ -2298,22 +2298,15 @@ void ToGraph::translateJoin(
         continue;
       }
 
-      if (rightTable->is(PlanType::kDerivedTableNode)) {
-        auto* rightDt =
-            const_cast<DerivedTable*>(rightTable->as<DerivedTable>());
-        if (!rightDt->addFilter(conjunct)) {
-          ++it;
-          continue;
-        }
-      } else if (rightTable->is(PlanType::kTableNode)) {
-        const_cast<BaseTable*>(rightTable->as<BaseTable>())
-            ->addFilter(conjunct);
-      } else {
-        // TODO: Support ValuesTable and UnnestTable.
+      auto* resolved = currentDt_->tryPushdownConjunct(
+          conjunct, const_cast<PlanObject*>(rightTable));
+      if (resolved == nullptr) {
         ++it;
         continue;
       }
-
+      // Use the resolved target for the join edge and later iterations
+      // in case a nested SetDt collapse swapped it.
+      rightTable = resolved;
       it = conjuncts.erase(it);
     }
   }
@@ -2407,6 +2400,12 @@ bool ToGraph::eliminateJoinOnConstantFalse(
 
 DerivedTableP ToGraph::newDt() {
   auto* dt = make<DerivedTable>();
+  dt->cname = newCName("dt");
+  return dt;
+}
+
+SetDt* ToGraph::newSetDt() {
+  auto* dt = make<SetDt>();
   dt->cname = newCName("dt");
   return dt;
 }
@@ -4744,7 +4743,7 @@ void translateSetOperationInput(
 } // namespace
 
 void ToGraph::translateUnion(const lp::SetNode& set) {
-  auto* setDt = currentDt_;
+  auto* setDt = currentDt_->as<SetDt>();
   const auto parentOperation = set.operation();
 
   auto shouldFlatten = [&](const lp::LogicalPlanNode& input) {
@@ -4815,13 +4814,13 @@ void ToGraph::translateUnion(const lp::SetNode& set) {
       newDt->columns = setDt->columns;
     }
 
-    setDt->unionInputs.push_back(newDt);
+    setDt->inputs.push_back(newDt);
   };
 
   translateSetOperationInput(set, shouldFlatten, translateUnionInput);
 
   setDt->outputColumns = setDt->columns;
-  for (auto* child : setDt->unionInputs) {
+  for (auto* child : setDt->inputs) {
     child->outputColumns = setDt->columns;
   }
 
@@ -5165,10 +5164,13 @@ void ToGraph::makeQueryGraph(
       }
     } break;
     case lp::NodeKind::kSet: {
-      auto* outerDt = std::exchange(currentDt_, newDt());
       const auto& set = *node.as<lp::SetNode>();
-      if (set.operation() == lp::SetOperation::kUnion ||
-          set.operation() == lp::SetOperation::kUnionAll) {
+      const bool isUnion = set.operation() == lp::SetOperation::kUnion ||
+          set.operation() == lp::SetOperation::kUnionAll;
+      DerivedTable* freshDt =
+          isUnion ? static_cast<DerivedTable*>(newSetDt()) : newDt();
+      auto* outerDt = std::exchange(currentDt_, freshDt);
+      if (isUnion) {
         translateUnion(set);
       } else {
         translateSetJoin(set);

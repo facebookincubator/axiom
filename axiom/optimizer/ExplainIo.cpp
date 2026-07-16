@@ -110,8 +110,10 @@ void collectBaseTables(
       collectBaseTables(table->as<DerivedTable>(), baseTables);
     }
   }
-  for (auto* child : dt->unionInputs) {
-    collectBaseTables(child, baseTables);
+  if (auto* setDt = dt->asUnion()) {
+    for (auto* child : setDt->inputs) {
+      collectBaseTables(child, baseTables);
+    }
   }
 }
 

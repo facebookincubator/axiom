@@ -1,11 +1,12 @@
 -- setup_file: common_setup.sql
 
--- Tests for UNION ALL single-child collapse (flattenDt).
+-- Tests for UNION ALL single-child collapse.
 -- Each test uses a CTE with a specific layer, wraps it in UNION ALL with a
 -- constant boolean column, and applies an outer WHERE that eliminates one leg.
--- Filter pushdown removes the constant-false leg, leaving a single child that
--- gets flattened into the parent. The tests verify that column reconstruction
--- during flattening preserves correctness.
+-- Filter pushdown drops the constant-false leg, and the surviving leg
+-- replaces the SetDt in the parent's slot with its shared columns rebound
+-- to the leg. The tests verify that the collapse preserves correctness for
+-- each DT layer.
 --
 -- See docs/DerivedTableLayers.md for the DT layer model.
 
@@ -159,7 +160,7 @@ SELECT x, cnt, rn FROM (
 ----
 -- Layer 6: Dependent window functions. rank() orders by rn, which is the
 -- output of row_number(). After window merging, both functions are in the
--- same WindowPlan and must be processed sequentially during flattening.
+-- same WindowPlan; the collapse must preserve it on the surviving leg.
 WITH t AS (
     SELECT x, rn, rank() OVER (ORDER BY rn) rnk
     FROM (

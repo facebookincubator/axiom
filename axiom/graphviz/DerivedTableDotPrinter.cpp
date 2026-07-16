@@ -195,68 +195,62 @@ void printUnnestTable(const UnnestTable& table, std::ostream& out) {
   printTableEnd(out);
 }
 
-// Prints table ID nodes and join edges inside a DerivedTable cluster.
-//
-// Table ID nodes are small shapes representing tables participating in joins:
-// - Circles for base tables
-// - Rounded squares for nested DerivedTables
-//
-// Layout:
-// - {rank=same; ...} forces all table ID nodes to be horizontally aligned
-// - Invisible edge from header to middle table ID node positions the nodes
-//   below the header
-//
-// Join edges connect table ID nodes with ordinal numbers matching the
-// JOINS list in the header.
-void printJoinEdges(const DerivedTable& dt, std::ostream& out) {
-  // Table ID nodes arranged horizontally.
-  out << "    {rank=same;";
-  for (auto* table : dt.tables) {
-    out << " dt" << dt.id() << "_" << cname(table) << ";";
+// Prints one table ID node inside a DerivedTable cluster: a small shape
+// representing a child table participating in joins or union legs.
+// - Circles for base tables.
+// - Rounded squares for nested DerivedTables (including union legs).
+void printTableIdNode(
+    const DerivedTable& parent,
+    PlanObjectCP table,
+    std::ostream& out) {
+  out << "    dt" << parent.id() << "_" << cname(table) << " [label=\""
+      << cname(table) << "\", ";
+  if (table->type() == PlanType::kDerivedTableNode) {
+    out << "shape=rect, style=\"filled,rounded\", width=0.4, height=0.4, ";
+  } else {
+    out << "shape=circle, width=0.4, fixedsize=true, style=filled, ";
   }
+  out << "fillcolor=\"" << kPalette.circles << "\", color=\"" << kPalette.text
+      << "\"];\n";
+}
 
-  for (auto* table : dt.unionInputs) {
-    out << " dt" << dt.id() << "_" << cname(table) << ";";
+// Prints an invisible edge from the cluster header to the middle table ID
+// node to keep the nodes positioned below the header.
+void printHeaderAnchor(
+    const DerivedTable& parent,
+    const PlanObjectVector& children,
+    std::ostream& out) {
+  if (children.empty()) {
+    return;
+  }
+  out << "    dt" << parent.id() << "_header -> dt" << parent.id() << "_"
+      << cname(children[children.size() / 2]) << " [style=invis];\n\n";
+}
+
+// Arranges 'children' as horizontally aligned table ID nodes inside the
+// 'parent' cluster.
+void printTableIdRow(
+    const DerivedTable& parent,
+    const PlanObjectVector& children,
+    std::ostream& out) {
+  out << "    {rank=same;";
+  for (auto* child : children) {
+    out << " dt" << parent.id() << "_" << cname(child) << ";";
   }
   out << "}\n\n";
 
-  // Table ID nodes.
-  for (auto* table : dt.tables) {
-    out << "    dt" << dt.id() << "_" << cname(table) << " [label=\""
-        << cname(table) << "\", ";
-    if (table->type() == PlanType::kDerivedTableNode) {
-      // Rounded square for derived tables.
-      out << "shape=rect, style=\"filled,rounded\", width=0.4, height=0.4, ";
-    } else {
-      // Circle for base tables.
-      out << "shape=circle, width=0.4, fixedsize=true, style=filled, ";
-    }
-    out << "fillcolor=\"" << kPalette.circles << "\", color=\"" << kPalette.text
-        << "\"];\n";
+  for (auto* child : children) {
+    printTableIdNode(parent, child, out);
   }
-
-  for (auto* table : dt.unionInputs) {
-    out << "    dt" << dt.id() << "_" << cname(table) << " [label=\""
-        << cname(table) << "\", ";
-    // Rounded square for derived tables.
-    out << "shape=rect, style=\"filled,rounded\", width=0.4, height=0.4, ";
-    out << "fillcolor=\"" << kPalette.circles << "\", color=\"" << kPalette.text
-        << "\"];\n";
-  }
-
   out << "\n";
+}
 
-  // Invisible edge from header to first table ID to maintain ordering.
-  if (!dt.tables.empty()) {
-    out << "    dt" << dt.id() << "_header -> dt" << dt.id() << "_"
-        << cname(dt.tables[dt.tables.size() / 2]) << " [style=invis];\n\n";
-  }
-
-  if (!dt.unionInputs.empty()) {
-    out << "    dt" << dt.id() << "_header -> dt" << dt.id() << "_"
-        << cname(dt.unionInputs[dt.unionInputs.size() / 2])
-        << " [style=invis];\n\n";
-  }
+// Prints table ID nodes and join edges inside a regular DerivedTable
+// cluster. Join edges connect table ID nodes with ordinal numbers matching
+// the JOINS list in the header.
+void printJoinEdges(const DerivedTable& dt, std::ostream& out) {
+  printTableIdRow(dt, dt.tables, out);
+  printHeaderAnchor(dt, dt.tables, out);
 
   int joinNum = 1;
   for (auto* join : dt.joins) {
@@ -279,9 +273,13 @@ void printJoinEdges(const DerivedTable& dt, std::ostream& out) {
   }
 }
 
-void printDerivedTableCluster(
+// Emits the shared header row + cluster preamble (subgraph, styling,
+// header cell). Returns after the "<B>..." title cell so the caller can
+// append set-specific text before closing the title.
+void printClusterHeaderStart(
     const DerivedTable& dt,
     bool isRoot,
+    size_t numChildren,
     std::ostream& out) {
   out << "  // DerivedTable cluster for " << dt.cname << "\n";
   out << "  subgraph cluster_" << dt.id() << " {\n";
@@ -291,45 +289,45 @@ void printDerivedTableCluster(
   out << "    bgcolor=white;\n";
   out << "    margin=8;\n\n";
 
-  // Use thicker border for root DerivedTable.
   if (isRoot) {
     out << "    penwidth=3;\n";
   }
 
-  // Calculate header width based on number of tables.
-  int headerWidth = std::max(300, static_cast<int>(dt.tables.size()) * 70);
+  int headerWidth = std::max(300, static_cast<int>(numChildren) * 70);
 
-  // Build HTML label for header node with output columns, GROUP BY, AGG, ORDER
-  // BY, and JOINS.
   out << "    dt" << dt.id() << "_header [shape=none, margin=0, label=<\n";
   out << "      <TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"0\" "
          "CELLPADDING=\"4\">\n";
   out << "        <TR><TD BGCOLOR=\"" << kPalette.header << "\" WIDTH=\""
       << headerWidth << "\"><B>" << escapeHtml(dt.cname);
-  if (dt.isUnion()) {
-    out << " UNION ALL";
-  }
+}
+
+// Closes the header cell and the outer HTML table opened by
+// printClusterHeaderStart.
+void printClusterHeaderEnd(std::ostream& out) {
+  out << "      </TABLE>\n";
+  out << "    >];\n\n";
+}
+
+void printDerivedTableCluster(
+    const DerivedTable& dt,
+    bool isRoot,
+    std::ostream& out) {
+  printClusterHeaderStart(dt, isRoot, dt.tables.size(), out);
   out << "</B></TD></TR>\n";
 
-  // Output columns.
-  if (dt.isUnion()) {
-    for (auto* col : dt.columns) {
+  // Output columns: "col := expr" when the expression differs from the
+  // column name.
+  for (size_t i = 0; i < dt.columns.size(); ++i) {
+    auto* col = dt.columns[i];
+    auto* expr = dt.exprs[i];
+    if (expr->toString() != col->name()) {
+      printRow(
+          out,
+          escapeHtml(col->name()) +
+              " := " + escapeHtml(truncate(expr->toString())));
+    } else {
       printRow(out, escapeHtml(col->name()));
-    }
-  } else {
-    for (size_t i = 0; i < dt.columns.size(); ++i) {
-      auto* col = dt.columns[i];
-      auto* expr = dt.exprs[i];
-      // Show "col := expr" if expression differs from just the column
-      // reference.
-      if (expr->toString() != col->name()) {
-        printRow(
-            out,
-            escapeHtml(col->name()) +
-                " := " + escapeHtml(truncate(expr->toString())));
-      } else {
-        printRow(out, escapeHtml(col->name()));
-      }
     }
   }
 
@@ -359,8 +357,8 @@ void printDerivedTableCluster(
     return result;
   });
 
-  // JOINS section header and numbered join conditions.
-  // Only show join type for non-INNER joins to save space.
+  // JOINS section header and numbered join conditions. Only show join type
+  // for non-INNER joins to save space.
   printSection(out, "JOIN", dt.joins, [](size_t i, auto* join) {
     auto type = joinTypeLabel(*join);
     auto condition = joinCondition(*join);
@@ -375,11 +373,34 @@ void printDerivedTableCluster(
     return escapeHtml(truncate(expr->toString()));
   });
 
-  out << "      </TABLE>\n";
-  out << "    >];\n\n";
+  printClusterHeaderEnd(out);
 
-  // Join edges with ordinal numbers.
   printJoinEdges(dt, out);
+
+  out << "  }\n\n";
+}
+
+// Prints a SetDt (UNION ALL / UNION DISTINCT) as a cluster. Each union leg
+// is represented by a table ID node; the leg's own DerivedTable cluster is
+// printed separately by the caller.
+void printSetDtCluster(
+    const SetDt& setDt,
+    const PlanObjectVector& legs,
+    bool isRoot,
+    std::ostream& out) {
+  printClusterHeaderStart(setDt, isRoot, legs.size(), out);
+  out << (setDt.isUnionAll() ? " UNION ALL" : " UNION DISTINCT")
+      << "</B></TD></TR>\n";
+
+  // Output columns (names only; per-leg exprs live on the leg DTs).
+  for (auto* col : setDt.columns) {
+    printRow(out, escapeHtml(col->name()));
+  }
+
+  printClusterHeaderEnd(out);
+
+  printTableIdRow(setDt, legs, out);
+  printHeaderAnchor(setDt, legs, out);
 
   out << "  }\n\n";
 }
@@ -459,25 +480,29 @@ void printDerivedTableWithChildren(
     const DerivedTable& dt,
     bool isRoot,
     std::ostream& out) {
-  // Print the DerivedTable as a cluster.
+  if (const auto* setDt = dt.asUnion()) {
+    PlanObjectVector legs;
+    legs.reserve(setDt->inputs.size());
+    for (auto* leg : setDt->inputs) {
+      legs.push_back(leg);
+    }
+
+    printSetDtCluster(*setDt, legs, isRoot, out);
+
+    for (auto* leg : legs) {
+      printAllTables(leg, out);
+    }
+    printTableLayout(dt.id(), legs, out);
+    return;
+  }
+
   printDerivedTableCluster(dt, isRoot, out);
 
-  // Print all tables (recursively handling nested DerivedTables).
   for (auto* table : dt.tables) {
     printAllTables(table, out);
   }
 
-  for (const auto* child : dt.unionInputs) {
-    printAllTables(child, out);
-  }
-
-  auto children = dt.tables;
-  for (const auto* child : dt.unionInputs) {
-    children.push_back(child);
-  }
-
-  // Print layout constraints for this DerivedTable's base tables.
-  printTableLayout(dt.id(), children, out);
+  printTableLayout(dt.id(), dt.tables, out);
 }
 
 void printAllTables(PlanObjectCP table, std::ostream& out) {

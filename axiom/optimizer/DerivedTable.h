@@ -48,9 +48,11 @@ using WritePlanCP = const WritePlan*;
 class WindowPlan;
 using WindowPlanCP = const WindowPlan*;
 
-/// Represents a derived table, i.e. a SELECT in a FROM clause. This is the
-/// basic unit of planning. Derived tables can be merged and split apart from
-/// other ones. Join types and orders are decided within each derived table. A
+class SetDt;
+
+/// Represents a derived table, i.e. a SELECT in a FROM clause. Derived tables
+/// are the basic unit of planning and can be merged and split apart from other
+/// ones. Join types and orders are decided within each derived table. A
 /// derived table is likewise a reorderable unit inside its parent derived
 /// table. Joins can move between derived tables within limits, considering the
 /// semantics of e.g. group by.
@@ -71,27 +73,44 @@ using WindowPlanCP = const WindowPlan*;
 ///
 /// See docs/DerivedTableLayers.md for the layered column ownership model
 /// and dependency rules validated by checkConsistency.
+///
+/// Direct-instantiated `DerivedTable` is a regular SELECT (tables, joins,
+/// conjuncts, exprs, postprocessing). `SetDt` (below) is the UNION ALL
+/// variant. `asUnion()` distinguishes them at runtime.
 struct DerivedTable : public TableObject {
   DerivedTable() : TableObject{PlanType::kDerivedTableNode} {}
 
+ protected:
+  // Ctor for subclasses sharing the DerivedTable PlanType.
+  explicit DerivedTable(PlanType kind) : TableObject{kind} {}
+
+ public:
   /// True if this DT is guaranteed to produce exactly one row: a global
   /// aggregation (no grouping keys) with no HAVING clause and a non-zero
   /// limit.
   bool isSingleRow() const;
 
-  /// Estimated number of rows this DerivedTable produces. Set during planning
-  /// by `initializePlans()` / `makeInitialPlan()`: for non-union DTs the
-  /// `resultCardinality()` of the initial physical plan, for union DTs the sum
-  /// across children. `nullopt` until planning has run.
+  /// Estimated number of rows this DerivedTable produces. Set during
+  /// planning by `initializePlans()` / `makeInitialPlan()`. `nullopt`
+  /// until planning has run.
   std::optional<float> cardinality() const override {
     return cardinality_;
+  }
+
+  /// Returns `this` as a `SetDt` if the DT is a set operation (UNION
+  /// ALL with or without a dedup aggregation), or nullptr otherwise.
+  virtual SetDt* asUnion() {
+    return nullptr;
+  }
+  virtual const SetDt* asUnion() const {
+    return nullptr;
   }
 
   /// Correlation name.
   Name cname{nullptr};
 
-  /// Exprs projected out. 1:1 to 'columns' or empty if 'this' is a UNION
-  /// ALL (isUnion is true).
+  /// Exprs projected out. 1:1 to 'columns' (or empty on `SetDt`, where
+  /// each leg carries its own exprs).
   ExprVector exprs;
 
   /// Ordered list of columns this DT produces as output. Subset of 'columns'.
@@ -115,47 +134,6 @@ struct DerivedTable : public TableObject {
   /// for a build side. In this case joins that refer to tables not in
   /// 'tableSet' are not considered.
   PlanObjectSet tableSet;
-
-  /// Per-leg DTs of a UNION ALL. Has at least 2 entries for a union DT and
-  /// is empty for a non-union DT. When non-empty, 'tables', 'joins', and
-  /// 'exprs' are empty; the per-leg DTs hold the per-leg expressions.
-  /// ToGraph translates INTERSECT and EXCEPT to joins, and lowers UNION
-  /// DISTINCT to UNION ALL + GROUP BY all columns (the dedup lives on this
-  /// DT's `aggregation`).
-  ///
-  /// A UNION ALL produces a single result set — each leg contributes rows
-  /// to the same output columns. The output schema is defined once on the
-  /// parent, and all legs feed into it. No leg "owns" the output columns;
-  /// the parent does. Each leg's 'exprs' describes how that leg populates
-  /// the shared output columns.
-  ///
-  /// Column structure:
-  ///
-  ///   setDt (parent):
-  ///     columns = [col_a, col_b, ...]  (relation_ == setDt)
-  ///     exprs = {}                     (empty — union DTs have no exprs)
-  ///     outputColumns = columns
-  ///
-  ///   leg DTs:
-  ///     columns contains setDt->columns (shared Column objects from parent,
-  ///             plus possibly the leg's own columns from makeQueryGraph)
-  ///     exprs = [expr_a, expr_b, ...]  (1:1 with columns, reference the
-  ///                                     leg's internal tables or its own
-  ///                                     aggregation/window output columns)
-  ///     outputColumns = setDt->columns
-  QGVector<DerivedTable*> unionInputs;
-
-  /// True if this DT is a UNION or UNION ALL.
-  bool isUnion() const {
-    return !unionInputs.empty();
-  }
-
-  /// True if this DT is a UNION ALL without a dedup aggregation. UNION
-  /// DISTINCT is lowered in ToGraph to UNION ALL + an aggregation grouping
-  /// on all output columns; isUnionAll() returns false in that case.
-  bool isUnionAll() const {
-    return isUnion() && aggregation == nullptr;
-  }
 
   /// Single-row DTs (see isSingleRow()) that have no join dependencies in
   /// this DT — not referenced by any join's keys, sides, or filter.
@@ -282,10 +260,17 @@ struct DerivedTable : public TableObject {
   void forEachExportableSingleColumnConjunct(
       folly::FunctionRef<void(ColumnCP, ExprCP)> cb) const;
 
-  /// Adds a filter conjunct to this DT. Handles LIMIT (returns false),
-  /// aggregation (adds to 'having'), and set operations (adds to all children).
-  /// Returns true if the conjunct was successfully added, false otherwise.
-  bool addFilter(ExprCP conjunct);
+  /// Adds a filter conjunct to this DT. Handles LIMIT, aggregation
+  /// (adds to HAVING), and set operations (adds to all children).
+  ///
+  /// Returns:
+  ///   - `nullptr`: refused (LIMIT, or window DT that could not fold).
+  ///   - `this`:    accepted; the caller's pointer is still valid. This
+  ///                DT may still have been rewritten in place (e.g.
+  ///                folded to zero rows via `makeEmpty`).
+  ///   - other:     accepted; caller MUST swap `this` for the returned
+  ///                pointer in its slot (SetDt collapse only).
+  virtual DerivedTable* addFilter(ExprCP conjunct);
 
   /// Returns a copy of 'expr', replacing references to this DT's 'exprs' with
   /// the corresponding 'columns'. If 'expr' references columns not present in
@@ -394,8 +379,7 @@ struct DerivedTable : public TableObject {
   }
 
   /// Returns true if this DT has no postprocessing — no filter,
-  /// aggregation, having, window, order by, limit, or offset. See
-  /// 'Optimization::addPostprocess' for the corresponding planning step.
+  /// aggregation, having, window, order by, limit, or offset.
   bool hasNoPostprocess() const;
 
   /// Returns true if this DT's postprocessing has no filter, HAVING,
@@ -419,7 +403,15 @@ struct DerivedTable : public TableObject {
   bool isWrapOnly() const;
 
   /// Asserts invariants about this DerivedTable.
-  void checkConsistency() const;
+  virtual void checkConsistency() const;
+
+  /// Recursively distributes conjuncts across the entire DT tree (top-down).
+  /// Called as Pass 1 of initializePlans().
+  virtual void distributeAllConjuncts();
+
+  /// Recursively finalizes joins and builds initial plans across the entire
+  /// DT tree (bottom-up). Called as Pass 3 of initializePlans().
+  virtual void finalizeJoinsAndMakePlans();
 
   /// Returns the memo key for this DT.
   MemoKey memoKey() const;
@@ -431,33 +423,25 @@ struct DerivedTable : public TableObject {
   /// memoization.
   void distributeConjuncts();
 
- private:
-  // Wraps a set operation child in a new DT that holds the given filter. Used
-  // when the child cannot accept the filter directly (e.g. due to a window
-  // function or limit). Creates intermediate columns so the wrapper can apply
-  // the filter above the child.
-  DerivedTable* wrapChildWithFilter(DerivedTable* child, ExprCP conjunct);
+  /// Builds a fresh DT holding an empty ValuesTable that matches
+  /// 'outputColumns'.
+  static DerivedTable* newEmpty(
+      Name cname,
+      std::optional<ColumnVector> outputColumns);
 
+  /// Attempts to push 'conjunct' down into 'table', which must be in
+  /// this DT's `tables`.
+  ///
+  /// Returns nullptr if 'table' refused the filter (ValuesTable,
+  /// UnnestTable, LIMIT / window DT). Otherwise returns the resolved
+  /// target: equal to 'table' when unchanged, or the swapped-in
+  /// replacement when a nested SetDt collapsed. Callers that hold an
+  /// alias to 'table' must re-read it from the return value.
+  PlanObjectP tryPushdownConjunct(ExprCP conjunct, PlanObjectP table);
+
+ private:
   // Resets all mutable state to empty defaults.
   void clearState();
-
-  // Replaces this DT's contents with an empty ValuesTable producing zero rows.
-  // Preserves 'outputColumns' (external interface referenced by parent DTs).
-  void makeEmpty();
-
-  // Recursively distributes conjuncts across the entire DT tree (top-down).
-  // Called as Pass 1 of initializePlans().
-  void distributeAllConjuncts();
-
-  // Recursively finalizes joins and builds initial plans across the entire DT
-  // tree (bottom-up). Called as Pass 3 of initializePlans().
-  void finalizeJoinsAndMakePlans();
-
-  // Asserts invariants specific to union / unionAll DerivedTables.
-  void checkUnionConsistency() const;
-
-  // Updates cardinality and column constraints from the plan.
-  void updateConstraints(const RelationOp& plan);
 
   // Adds same-table equality filters that hold on a single table because of
   // its column equivalences. Three paths:
@@ -474,9 +458,15 @@ struct DerivedTable : public TableObject {
 
   // Enforces 'expr' on 'target': existing scan filter, pushdown via
   // tryPushdownConjunct, or fallback to this DT's conjuncts above the
-  // refusing target. The always-attaches invariant lets JoinEdge::addEquality
-  // drop equivalence-class-redundant join keys unconditionally.
+  // refusing target.
   void attachPredicate(PlanObjectP target, ExprCP expr);
+
+  // Replaces the entry equal to 'old' in 'tables' with 'replacement',
+  // updating 'tableSet' and 'joinOrder', and rewires any join in 'joins'
+  // that references 'old'. The caller must first rebind any columns of
+  // 'old' onto 'replacement' (e.g. via Column::rebindAll) so that join
+  // keys point at the new relation before the swap.
+  void replaceTable(PlanObjectCP old, PlanObjectCP replacement);
 
   // Completes 'joins' with edges implied by column equivalences.
   void addImpliedJoins();
@@ -488,10 +478,6 @@ struct DerivedTable : public TableObject {
   // Fills in 'startTables_' to 'tables_' that are not to the right of
   // non-commutative joins.
   void setStartTables();
-
-  // Completes 'joins' with edges implied by column equivalences, links tables
-  // to their joins, estimates fanout for each join, and computes start tables.
-  void finalizeJoins();
 
   // Pushes the other tables in 'this' into 'subquery' as existence semijoins
   // below its aggregation boundary. A table can be pushed when the join key
@@ -531,12 +517,6 @@ struct DerivedTable : public TableObject {
       const PlanObjectSet& superTables,
       PlanObjectCP primaryTable);
 
-  // Replaces 'this' with the contents of 'dt', effectively removing one
-  // level of DT nesting. Reconstructs columns that have relation_ == dt
-  // (aggregation, window, outer join outputs) so they reference 'this'
-  // instead, since 'dt' will no longer be in tableSet after flattening.
-  void flattenDt(const DerivedTable* dt);
-
   // Attempts to convert outer joins to less restrictive join types based on
   // filter predicates. A filter that eliminates NULLs on the optional side of
   // an outer join allows the join to be converted:
@@ -559,19 +539,6 @@ struct DerivedTable : public TableObject {
   // translated to the underlying expressions.
   void replaceJoinOutputs(const ColumnVector& source, const ExprVector& target);
 
-  // Attempts to push down a filter conjunct into the specified table.
-  // For a DerivedTable, translates column names and adds the condition to
-  // conjuncts or having clause (if there's aggregation). For set operations,
-  // the filter is added to all children. For a BaseTable, adds the filter
-  // directly.
-  // Returns false without modifying anything for ValuesTable, UnnestTable,
-  // and DerivedTables with LIMIT (which block filter push-down).
-  //
-  // @param conjunct The filter expression to push down.
-  // @param table The target table (BaseTable, DerivedTable, etc.).
-  // @return true if the conjunct was successfully pushed down, false otherwise.
-  bool tryPushdownConjunct(ExprCP conjunct, PlanObjectP table);
-
   // Pushes 'expr' to the null-extending side. Drops if target refuses —
   // post-join fallback would filter NULL-padded unmatched rows incorrectly.
   void tryAttachToNullExtendingSide(PlanObjectP target, ExprCP expr);
@@ -580,11 +547,85 @@ struct DerivedTable : public TableObject {
   // of every window function in windowPlan.
   bool isPartitionKeyFilter(ExprCP imported) const;
 
+  // Replaces 'this' with the contents of 'dt', effectively removing one
+  // level of DT nesting. Reconstructs columns that have relation_ == dt
+  // (aggregation, window, outer join outputs) so they reference 'this'
+  // instead, since 'dt' will no longer be in tableSet after flattening.
+  void flattenDt(const DerivedTable* dt);
+
  protected:
+  // Replaces this DT's contents with an empty ValuesTable producing
+  // zero rows, preserving 'outputColumns'.
+  void makeEmpty();
+
+  // Updates cardinality and column constraints from the plan.
+  void updateConstraints(const RelationOp& plan);
+
+  // Completes 'joins' with edges implied by column equivalences, links tables
+  // to their joins, estimates fanout for each join, and computes start tables.
+  void finalizeJoins();
+
   std::optional<float> cardinality_{};
 };
 
 using DerivedTableP = DerivedTable*;
 using DerivedTableCP = const DerivedTable*;
+
+/// UNION ALL DT. UNION DISTINCT arrives here as UNION ALL plus a
+/// GROUP-BY-all-columns `aggregation` (base field).
+///
+/// A UNION ALL produces a single result set — each leg contributes rows
+/// to the same output columns. The output schema is defined once on the
+/// parent, and all legs feed into it. No leg "owns" the output columns;
+/// the parent does. Each leg's `exprs` describes how that leg populates
+/// the shared output columns.
+///
+/// Column structure:
+///
+///   setDt (parent):
+///     columns = [col_a, col_b, ...]  (relation_ == setDt)
+///     exprs = {}
+///     outputColumns = columns
+///
+///   leg DTs:
+///     columns contains setDt->columns (shared Column objects from parent,
+///             plus possibly the leg's own columns from makeQueryGraph)
+///     exprs = [expr_a, expr_b, ...]  (1:1 with columns, reference the
+///                                     leg's internal tables or its own
+///                                     aggregation/window output columns)
+///     outputColumns = setDt->columns
+///
+/// Invariant: a live `SetDt` in the DT tree always has
+/// `inputs.size() >= 2`. When a UNION ALL collapses to 0 or 1 legs
+/// during filter push-down, `addFilter` returns the replacement DT
+/// (the surviving leg or a fresh empty DT) with the SetDt's shared
+/// columns rebound; the caller swaps the SetDt for the replacement.
+class SetDt final : public DerivedTable {
+ public:
+  SetDt() : DerivedTable{PlanType::kDerivedTableNode} {}
+
+  /// Per-leg DTs.
+  QGVector<DerivedTable*> inputs;
+
+  /// True if this DT is a UNION ALL without a dedup aggregation. UNION
+  /// DISTINCT is lowered in ToGraph to UNION ALL + an aggregation
+  /// grouping on all output columns; `isUnionAll()` returns false in
+  /// that case.
+  bool isUnionAll() const {
+    return aggregation == nullptr;
+  }
+
+  void checkConsistency() const override;
+  DerivedTable* addFilter(ExprCP conjunct) override;
+  void distributeAllConjuncts() override;
+  void finalizeJoinsAndMakePlans() override;
+
+  SetDt* asUnion() override {
+    return this;
+  }
+  const SetDt* asUnion() const override {
+    return this;
+  }
+};
 
 } // namespace facebook::axiom::optimizer

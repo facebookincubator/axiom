@@ -49,8 +49,180 @@ class UnionAllTest : public test::QueryTestBase {
         ->setStats(100'000, {{"a", {.numDistinct = 1'000}}});
     testConnector_->addTable("u", ROW("b", BIGINT()))
         ->setStats(10'000, {{"b", {.numDistinct = 1'000}}});
+    testConnector_->addTable("w", ROW("c", BIGINT()))
+        ->setStats(1'000, {{"c", {.numDistinct = 1'000}}});
   }
 };
+
+// ---------------------------------------------------------------------------
+// Filter push-down collapse: a pushed predicate folds one or both legs
+// to constant-false, and the SetDt is replaced by its surviving leg or
+// an empty ValuesTable. No UnionAll node in the resulting plan.
+// ---------------------------------------------------------------------------
+
+// tag = 2 folds the t leg (tag=1) to false; only the u leg survives.
+TEST_F(UnionAllTest, filterCollapsesToSingleLeg) {
+  auto logicalPlan = parseSelect(
+      "SELECT * FROM ("
+      "  SELECT a AS x, 1 AS tag FROM t"
+      "  UNION ALL SELECT b AS x, 2 AS tag FROM u"
+      ") WHERE tag = 2",
+      kTestConnectorId);
+
+  {
+    auto matcher = matchScan("u").project().build();
+    AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
+  }
+
+  {
+    auto matcher = matchScan("u").project().gather().build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
+  }
+}
+
+// tag = 5 folds both legs to false; the SetDt collapses to an empty
+// ValuesTable.
+TEST_F(UnionAllTest, filterCollapsesToEmpty) {
+  auto logicalPlan = parseSelect(
+      "SELECT * FROM ("
+      "  SELECT a AS x, 1 AS tag FROM t"
+      "  UNION ALL SELECT b AS x, 2 AS tag FROM u"
+      ") WHERE tag = 5",
+      kTestConnectorId);
+
+  auto matcher = matchValues().project().build();
+  AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
+}
+
+// A single-table conjunct on a SetDt that participates in a join now
+// collapses the SetDt as normal: `replaceTable` rewires the incident
+// join edge from the SetDt to the surviving leg, and pushdown proceeds.
+// The final plan has no UnionAll — just the surviving leg joined
+// directly with w.
+TEST_F(UnionAllTest, filterCollapsesInsideInnerJoin) {
+  auto logicalPlan = parseSelect(
+      "SELECT * FROM ("
+      "  SELECT a AS x, 1 AS tag FROM t"
+      "  UNION ALL SELECT b AS x, 2 AS tag FROM u"
+      ") v JOIN w ON v.x = w.c WHERE v.tag = 2",
+      kTestConnectorId);
+
+  auto matcher =
+      matchScan("u").project().hashJoin(matchScan("w").build()).build();
+  AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
+}
+
+// Both legs fold to false; the SetDt is replaced by an empty
+// ValuesTable DT. The incident join edge is rewired to the empty DT.
+// The join is not further eliminated — that's a separate optimization
+// (INNER join with an empty side → empty overall).
+TEST_F(UnionAllTest, filterCollapsesInsideInnerJoinToEmpty) {
+  auto logicalPlan = parseSelect(
+      "SELECT * FROM ("
+      "  SELECT a AS x, 1 AS tag FROM t"
+      "  UNION ALL SELECT b AS x, 2 AS tag FROM u"
+      ") v JOIN w ON v.x = w.c WHERE v.tag = 5",
+      kTestConnectorId);
+
+  auto matcher =
+      matchScan("w").hashJoin(matchValues().project().build()).build();
+  AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
+}
+
+// LEFT OUTER JOIN with the SetDt on the null-extending (right) side.
+// `WHERE v.tag = 2` rejects NULL-extended rows so the optimizer rewrites
+// LEFT → INNER; then the SetDt collapse fires the same as the plain
+// INNER case, and the join edge is rewired to the surviving u leg.
+TEST_F(UnionAllTest, filterCollapsesInsideLeftJoin) {
+  auto logicalPlan = parseSelect(
+      "SELECT * FROM w LEFT JOIN ("
+      "  SELECT a AS x, 1 AS tag FROM t"
+      "  UNION ALL SELECT b AS x, 2 AS tag FROM u"
+      ") v ON v.x = w.c WHERE v.tag = 2",
+      kTestConnectorId);
+
+  auto matcher =
+      matchScan("u").project().hashJoin(matchScan("w").build()).build();
+  AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
+}
+
+// SetDt is joined with TWO other tables in the parent DT. When the
+// SetDt collapses, both incident join edges must be rewired to the
+// surviving u leg — any dangling edge would trip `replaceTable` or
+// downstream plan construction.
+TEST_F(UnionAllTest, filterCollapsesInsideMultiWayJoin) {
+  auto logicalPlan = parseSelect(
+      "SELECT * FROM ("
+      "  SELECT a AS x, 1 AS tag FROM t"
+      "  UNION ALL SELECT b AS x, 2 AS tag FROM u"
+      ") v JOIN w ON v.x = w.c JOIN t t2 ON v.x = t2.a "
+      "WHERE v.tag = 2",
+      kTestConnectorId);
+
+  // t and w co-locate first (planner picks the smallest available join),
+  // then the surviving u leg joins in. No UnionAll node anywhere.
+  auto matcher = matchScan("t")
+                     .hashJoin(matchScan("w").build())
+                     .hashJoin(matchScan("u").project().build())
+                     .project()
+                     .build();
+  AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
+}
+
+// SEMI join (via IN subquery). The SetDt is the left/probe side; after
+// collapse the semi-join is between the surviving u leg and w.
+TEST_F(UnionAllTest, filterCollapsesInsideSemiJoin) {
+  auto logicalPlan = parseSelect(
+      "SELECT * FROM ("
+      "  SELECT a AS x, 1 AS tag FROM t"
+      "  UNION ALL SELECT b AS x, 2 AS tag FROM u"
+      ") v WHERE v.tag = 2 AND v.x IN (SELECT c FROM w)",
+      kTestConnectorId);
+
+  auto matcher = matchScan("u")
+                     .project()
+                     .hashJoinLeftSemiFilter(matchScan("w").build())
+                     .build();
+  AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
+}
+
+// ANTI join (via NOT EXISTS). Same story — after collapse the anti-join
+// runs on the surviving u leg.
+TEST_F(UnionAllTest, filterCollapsesInsideAntiJoin) {
+  auto logicalPlan = parseSelect(
+      "SELECT * FROM ("
+      "  SELECT a AS x, 1 AS tag FROM t"
+      "  UNION ALL SELECT b AS x, 2 AS tag FROM u"
+      ") v WHERE v.tag = 2 AND NOT EXISTS "
+      "(SELECT 1 FROM w WHERE w.c = v.x)",
+      kTestConnectorId);
+
+  auto matcher = matchScan("u")
+                     .project()
+                     .hashJoin(matchScan("w").build(), core::JoinType::kAnti)
+                     .build();
+  AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
+}
+
+// FULL OUTER JOIN. `WHERE v.tag = 2` is null-rejecting on v, so the
+// optimizer rewrites FULL → LEFT (v preserved, w null-extending) first;
+// the SetDt collapse then fires on the LEFT join. The final plan has
+// no UnionAll.
+TEST_F(UnionAllTest, filterCollapsesInsideFullJoin) {
+  auto logicalPlan = parseSelect(
+      "SELECT * FROM ("
+      "  SELECT a AS x, 1 AS tag FROM t"
+      "  UNION ALL SELECT b AS x, 2 AS tag FROM u"
+      ") v FULL OUTER JOIN w ON v.x = w.c WHERE v.tag = 2",
+      kTestConnectorId);
+
+  auto matcher = matchScan("u")
+                     .project()
+                     .hashJoin(matchScan("w").build(), core::JoinType::kLeft)
+                     .build();
+  AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
+}
 
 // Two scans (kSource + kSource) co-locate in one fragment with a
 // LocalPartition. No remote exchanges.

@@ -637,6 +637,8 @@ class ToGraph {
 
   DerivedTableP newDt();
 
+  SetDt* newSetDt();
+
   // Removes duplicate ordering keys from the input vector of SortingField
   // objects, returning a pair of vectors containing the deduplicated keys and
   // their corresponding order types. It dedups by comparing the expressions of

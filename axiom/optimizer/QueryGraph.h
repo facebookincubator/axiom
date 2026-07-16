@@ -192,6 +192,9 @@ class Column : public Expr {
     return relation_;
   }
 
+  /// Sets `relation_` on every column in 'columns' to 'newRelation'.
+  static void rebindAll(const ColumnVector& columns, PlanObjectCP newRelation);
+
   Name alias() const {
     return alias_;
   }
@@ -1032,6 +1035,26 @@ class JoinEdge {
     rlFanout_ = rightToLeft;
   }
 
+  /// Rewires any of {leftTable_, rightTable_} that equal 'old' to point at
+  /// 'replacement'. Used when the containing DT replaces one of its tables
+  /// (e.g. a SetDt collapsing to its surviving leg). Callers must have
+  /// already rebound the affected columns' `relation_` to 'replacement' so
+  /// that the join keys remain consistent with the new table pointer.
+  /// Clears fanoutsFixed_ so guessFanout() re-estimates against the new
+  /// side.
+  void replaceTable(PlanObjectCP old, PlanObjectCP replacement) {
+    VELOX_CHECK(
+        leftTable_ == old || rightTable_ == old,
+        "JoinEdge::replaceTable: 'old' not incident on this edge");
+    if (leftTable_ == old) {
+      leftTable_ = replacement;
+    }
+    if (rightTable_ == old) {
+      rightTable_ = replacement;
+    }
+    fanoutsFixed_ = false;
+  }
+
   std::string toString() const;
 
   /// Fills in 'lrFanout' and 'rlFanout', 'leftUnique', 'rightUnique'.
@@ -1053,9 +1076,9 @@ class JoinEdge {
   // Leading right side join keys, compared equals 1:1 to 'leftKeys'.
   ExprVector rightKeys_;
 
-  PlanObjectCP const leftTable_;
+  PlanObjectCP leftTable_;
 
-  PlanObjectCP const rightTable_;
+  PlanObjectCP rightTable_;
 
   // Join condition for any non-equality conditions for non-inner joins.
   const ExprVector filter_;
