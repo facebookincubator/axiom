@@ -2411,6 +2411,12 @@ DerivedTableP ToGraph::newDt() {
   return dt;
 }
 
+SetDt* ToGraph::newSetDt() {
+  auto* dt = make<SetDt>();
+  dt->cname = newCName("dt");
+  return dt;
+}
+
 void ToGraph::wrapInDt(
     const lp::LogicalPlanNode& node,
     bool orderObservedAbove) {
@@ -4744,7 +4750,7 @@ void translateSetOperationInput(
 } // namespace
 
 void ToGraph::translateUnion(const lp::SetNode& set) {
-  auto* setDt = currentDt_;
+  auto* setDt = currentDt_->as<SetDt>();
   const auto parentOperation = set.operation();
 
   auto shouldFlatten = [&](const lp::LogicalPlanNode& input) {
@@ -4815,13 +4821,13 @@ void ToGraph::translateUnion(const lp::SetNode& set) {
       newDt->columns = setDt->columns;
     }
 
-    setDt->unionInputs.push_back(newDt);
+    setDt->inputs.push_back(newDt);
   };
 
   translateSetOperationInput(set, shouldFlatten, translateUnionInput);
 
   setDt->outputColumns = setDt->columns;
-  for (auto* child : setDt->unionInputs) {
+  for (auto* child : setDt->inputs) {
     child->outputColumns = setDt->columns;
   }
 
@@ -5165,10 +5171,13 @@ void ToGraph::makeQueryGraph(
       }
     } break;
     case lp::NodeKind::kSet: {
-      auto* outerDt = std::exchange(currentDt_, newDt());
       const auto& set = *node.as<lp::SetNode>();
-      if (set.operation() == lp::SetOperation::kUnion ||
-          set.operation() == lp::SetOperation::kUnionAll) {
+      const bool isUnion = set.operation() == lp::SetOperation::kUnion ||
+          set.operation() == lp::SetOperation::kUnionAll;
+      DerivedTable* freshDt =
+          isUnion ? static_cast<DerivedTable*>(newSetDt()) : newDt();
+      auto* outerDt = std::exchange(currentDt_, freshDt);
+      if (isUnion) {
         translateUnion(set);
       } else {
         translateSetJoin(set);
