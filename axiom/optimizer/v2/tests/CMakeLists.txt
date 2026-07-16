@@ -15,6 +15,7 @@
 add_executable(
   axiom_optimizer_v2_test
   AlgebraicPropertiesTest.cpp
+  ConnectorPushdownPassTest.cpp
   JoinHypergraphTest.cpp
   NodePrinterTest.cpp
   NodeRewriterTest.cpp

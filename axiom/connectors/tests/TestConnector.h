@@ -21,6 +21,7 @@
 #include <functional>
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorPushdown.h"
 #include "velox/core/ITypedExpr.h"
 #include "velox/core/PlanNode.h"
 
@@ -504,7 +505,8 @@ class TestInsertTableHandle
 /// returns a TestColumnHandle for the specified layout and column.
 /// createTableHandle returns a TestTableHandle for the specified
 /// layout. Filter pushdown is not supported.
-class TestConnectorMetadata : public ConnectorMetadata {
+class TestConnectorMetadata : public ConnectorMetadata,
+                              public ConnectorPushdown {
  public:
   static constexpr std::string_view kDefaultSchema = "default";
 
@@ -522,21 +524,20 @@ class TestConnectorMetadata : public ConnectorMetadata {
 
   /// Signature of a matcher that, for a given plan subtree, returns
   /// the pushdown roots this connector wants to absorb.
-  using PushdownMatcher = std::function<std::vector<PushdownRoot>(
-      const logical_plan::LogicalPlanNode&)>;
+  using PushdownMatcher =
+      std::function<std::vector<PushdownRoot>(const optimizer::v2::Node&)>;
 
-  /// Installs 'matcher' as the connector's pushdown matcher. A non-null
-  /// matcher opts the connector into pushdown and is invoked from
-  /// `co_pushdownPlan`. Passing nullptr clears the matcher and opts
-  /// out of pushdown.
+  /// Installs 'matcher' as the connector's pushdown matcher, invoked from
+  /// `co_pushdown`. Required before any query touches this connector under
+  /// the v2 optimizer's `ConnectorPushdownPass`: the pass invokes
+  /// `co_pushdown` on every offered subtree, and a missing matcher fails
+  /// hard rather than silently opting into pushdown as a no-op. Passing
+  /// nullptr clears the matcher (subsequent `co_pushdown` calls will
+  /// throw until a new matcher is installed).
   void setPushdownMatcher(PushdownMatcher matcher);
 
-  bool isPushdownSupported() const override {
-    return pushdownMatcher_ != nullptr;
-  }
-
-  folly::coro::Task<std::vector<PushdownRoot>> co_pushdownPlan(
-      const logical_plan::LogicalPlanNode& plan) const override;
+  folly::coro::Task<std::vector<PushdownRoot>> co_pushdown(
+      const optimizer::v2::Node& subtree) const override;
 
   TablePtr findTable(const SchemaTableName& tableName) override;
 

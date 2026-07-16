@@ -538,12 +538,13 @@ void TestConnectorMetadata::setPushdownMatcher(PushdownMatcher matcher) {
   pushdownMatcher_ = std::move(matcher);
 }
 
-folly::coro::Task<std::vector<PushdownRoot>>
-TestConnectorMetadata::co_pushdownPlan(
-    const logical_plan::LogicalPlanNode& plan) const {
+folly::coro::Task<std::vector<PushdownRoot>> TestConnectorMetadata::co_pushdown(
+    const optimizer::v2::Node& subtree) const {
   VELOX_CHECK_NOT_NULL(
-      pushdownMatcher_, "co_pushdownPlan called with no matcher installed");
-  co_return pushdownMatcher_(plan);
+      pushdownMatcher_,
+      "TestConnectorMetadata::co_pushdown invoked with no matcher installed; "
+      "call setPushdownMatcher() first");
+  co_return pushdownMatcher_(subtree);
 }
 
 velox::TypePtr TestConnectorMetadata::findType(const SchemaTypeName& typeName) {
