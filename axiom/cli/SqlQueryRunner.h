@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/CancellationToken.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/executors/FunctionScheduler.h>
 #include <chrono>
@@ -214,6 +215,22 @@ class SqlQueryRunner {
     /// down adds teardown latency. When exceeded, run() fails with a user
     /// error.
     int64_t timeoutMicros{0};
+
+    /// Cancels the running query from another thread. run() blocks the calling
+    /// thread, so a client cancels by holding the paired
+    /// folly::CancellationSource and calling requestCancellation() from a
+    /// different thread (the CLI from a SIGINT handler; other clients from
+    /// their own cancel entry point). Empty by default (no external
+    /// cancellation).
+    ///
+    /// Scope: this interrupts query execution (the drain of results), not
+    /// planning. A cancel requested during parse/optimize (or a plan-only
+    /// statement such as SHOW STATS) is not observed until execution begins, at
+    /// which point the query stops immediately; if the statement never
+    /// executes, the cancel has no effect. This matches the cooperative model
+    /// -- see also the not-yet-cancelable metastore partition listing in
+    /// start().
+    folly::CancellationToken cancellationToken;
 
     std::optional<std::string> defaultConnectorId;
     std::optional<std::string> defaultSchema;

@@ -15,15 +15,21 @@
  */
 
 #include "axiom/cli/Console.h"
+#include <fcntl.h>
 #include <fmt/core.h>
 #include <folly/FileUtil.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <csignal>
 #include <iostream>
 #include <iterator>
+#include <mutex>
 #include <optional>
 #include <set>
+#include <thread>
 #include "axiom/cli/LiveProgressDisplay.h"
 #include "axiom/cli/ResultPrinter.h"
 #include "axiom/cli/StdinReader.h"
@@ -126,9 +132,161 @@ std::optional<std::string> getHistoryFilePath() {
   }
   return std::string(home) + "/.axiom_cli.history";
 }
+
+// Write end of the SIGINT self-pipe, published for the async-signal handler.
+// -1 when no interrupt handler is installed. A signal handler cannot capture
+// state, so this must be a file-scope atomic (mutated as handlers install and
+// tear down).
+// NOLINTNEXTLINE(facebook-avoid-non-const-global-variables)
+std::atomic<int> gInterruptPipeWriteFd{-1};
+
+// SIGINT handler: async-signal-safe. Just nudges the self-pipe; the handler
+// thread does the (non-async-signal-safe) cancellation. A full pipe (EAGAIN) is
+// fine -- one pending byte is enough to wake the reader.
+void interruptSignalHandler(int /*sig*/) {
+  const int fd = gInterruptPipeWriteFd.load(std::memory_order_relaxed);
+  if (fd >= 0) {
+    // Save/restore errno: SIGINT may be delivered to any thread (including a
+    // Velox executor thread mid-syscall), and write() can clobber errno.
+    const int savedErrno = errno;
+    const char byte{1};
+    const ssize_t ignored = write(fd, &byte, 1);
+    (void)ignored;
+    errno = savedErrno;
+  }
+}
 } // namespace
 
 namespace axiom::sql {
+
+// Installs a SIGINT handler for the interactive REPL: while a query runs,
+// Ctrl+C cancels it (leaving the CLI alive) instead of terminating the process.
+//
+// A signal handler (not sigwait) is used so the process-wide disposition
+// applies to every thread -- SIGINT delivered to a Velox executor thread runs
+// the handler rather than the default terminate, so no thread needs SIGINT
+// blocked (which would be impossible for executor threads already spawned by
+// the runner). requestCancellation() is not async-signal-safe, so the handler
+// only nudges a self-pipe and this thread does the cancellation.
+//
+// At the prompt, linenoise runs the terminal in raw mode with ISIG cleared, so
+// Ctrl+C there is a byte (handled by StdinReader), not a signal -- so this
+// handler only ever fires while a query is executing.
+class QueryInterruptHandler {
+ public:
+  QueryInterruptHandler() {
+    // Only one handler may be live: the SIGINT handler reads a single
+    // file-scope pipe fd, so a second handler would redirect the first's
+    // wakeups.
+    VELOX_CHECK_EQ(
+        gInterruptPipeWriteFd.load(),
+        -1,
+        "A QueryInterruptHandler is already installed");
+    VELOX_CHECK_EQ(pipe(pipeFds_), 0, "Failed to create interrupt pipe");
+    // The destructor does not run on a partially constructed object, so undo
+    // the pipe (and any installed handler) if a later step throws.
+    bool sigactionInstalled{false};
+    SCOPE_FAIL {
+      if (sigactionInstalled) {
+        sigaction(SIGINT, &savedAction_, nullptr);
+      }
+      close(pipeFds_[0]);
+      close(pipeFds_[1]);
+    };
+    // Non-blocking write end so the signal handler never blocks. OR into the
+    // existing flags rather than overwriting them.
+    const int flags = fcntl(pipeFds_[1], F_GETFL, 0);
+    VELOX_CHECK_GE(flags, 0, "Failed to read interrupt pipe flags");
+    VELOX_CHECK_EQ(
+        fcntl(pipeFds_[1], F_SETFL, flags | O_NONBLOCK),
+        0,
+        "Failed to set interrupt pipe non-blocking");
+
+    struct sigaction action{};
+    action.sa_handler = interruptSignalHandler;
+    sigemptyset(&action.sa_mask);
+    // Restart syscalls interrupted on other threads (e.g. executor I/O) instead
+    // of failing them with EINTR.
+    action.sa_flags = SA_RESTART;
+    VELOX_CHECK_EQ(
+        sigaction(SIGINT, &action, &savedAction_),
+        0,
+        "Failed to install SIGINT handler");
+    sigactionInstalled = true;
+
+    // All fallible steps have succeeded. Start the drain thread, then publish
+    // the write fd (an atomic store; noexcept) so no failure path can leave the
+    // file-scope fd pointing at a closed pipe.
+    thread_ = std::thread([this] { drainPipe(); });
+    gInterruptPipeWriteFd.store(pipeFds_[1]);
+  }
+
+  ~QueryInterruptHandler() {
+    // Ignore SIGINT for the duration of teardown so no new handler runs while
+    // we clear the fd and close the pipe -- a late Ctrl+C is dropped rather
+    // than nudging a closing pipe or taking the default (terminate) action. (An
+    // already-executing handler on another thread is not stopped by this, but
+    // that window is vanishingly small: the handler only loads the fd and
+    // writes, and it re-checks the fd for -1 before writing.)
+    struct sigaction ignore{};
+    ignore.sa_handler = SIG_IGN;
+    sigemptyset(&ignore.sa_mask);
+    sigaction(SIGINT, &ignore, nullptr);
+
+    gInterruptPipeWriteFd.store(-1);
+    stop_.store(true);
+    // Close the write end so the drain thread's blocked read() returns EOF and
+    // its loop exits; join() below then cannot hang. A wakeup byte would be a
+    // fast path but could be silently dropped if the non-blocking pipe were
+    // ever full, so closing for EOF is the guarantee.
+    close(pipeFds_[1]);
+    thread_.join();
+    close(pipeFds_[0]);
+
+    // Restore the previous SIGINT disposition now that the pipe is gone.
+    sigaction(SIGINT, &savedAction_, nullptr);
+  }
+
+  QueryInterruptHandler(const QueryInterruptHandler&) = delete;
+  QueryInterruptHandler& operator=(const QueryInterruptHandler&) = delete;
+  QueryInterruptHandler(QueryInterruptHandler&&) = delete;
+  QueryInterruptHandler& operator=(QueryInterruptHandler&&) = delete;
+
+  // Registers the cancellation source tripped on the next SIGINT, or nullptr to
+  // unregister between queries. 'source' must outlive the registration.
+  void setSource(folly::CancellationSource* source) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    source_ = source;
+  }
+
+ private:
+  void drainPipe() {
+    char buffer[64];
+    for (;;) {
+      const ssize_t bytes = read(pipeFds_[0], buffer, sizeof(buffer));
+      if (bytes <= 0) {
+        if (bytes < 0 && errno == EINTR) {
+          continue;
+        }
+        break;
+      }
+      if (stop_.load()) {
+        break;
+      }
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (source_ != nullptr) {
+        source_->requestCancellation();
+      }
+    }
+  }
+
+  int pipeFds_[2]{-1, -1};
+  struct sigaction savedAction_{};
+  std::mutex mutex_;
+  folly::CancellationSource* source_{nullptr}; // guarded by mutex_
+  std::atomic<bool> stop_{false};
+  std::thread thread_;
+};
 
 Console::Console(SqlQueryRunner& runner) : runner_{runner} {}
 
@@ -146,6 +304,17 @@ void Console::run() {
   gflags::GetCommandLineFlagInfo("repeat", &repeatInfo);
 
   VELOX_USER_CHECK_GE(FLAGS_repeat, 1, "--repeat must be at least 1");
+
+  // Install SIGINT handling for the whole session so Ctrl+C during any query --
+  // the init script, --query, piped stdin, --repeat, or a REPL statement --
+  // cancels that query via its per-query source (see runOnce) instead of
+  // terminating the CLI. The token is plumbed through every run() path, so all
+  // of them honor it.
+  QueryInterruptHandler interrupt;
+  interrupt_ = &interrupt;
+  SCOPE_EXIT {
+    interrupt_ = nullptr;
+  };
 
   if (!FLAGS_init.empty()) {
     std::string sql;
@@ -225,6 +394,21 @@ bool Console::runOnce(
           [&](const QueryCompletionInfo& info) { completionInfo = info; },
   };
 
+  // In the interactive REPL, let Ctrl+C cancel this query: register a
+  // per-query cancellation source with the interrupt handler and pass its token
+  // to run(). run() blocks this thread, so the handler thread trips the source.
+  std::optional<folly::CancellationSource> cancelSource;
+  if (interrupt_ != nullptr) {
+    cancelSource.emplace();
+    options.cancellationToken = cancelSource->getToken();
+    interrupt_->setSource(&cancelSource.value());
+  }
+  SCOPE_EXIT {
+    if (interrupt_ != nullptr) {
+      interrupt_->setSource(nullptr);
+    }
+  };
+
   // When enabled by the caller, draw a live status grid on stderr while the
   // query runs.
   std::optional<cli::LiveProgressDisplay> progress;
@@ -266,10 +450,24 @@ bool Console::runOnce(
     if (progress) {
       progress->clear();
     }
-    // run() threw after firing the completion callback, so telemetry was
-    // captured.
-    std::cerr << "Query failed: " << completionInfo.errorInfo->message
-              << std::endl;
+    // Report a user cancellation (Ctrl+C) plainly rather than as a failure,
+    // keyed on the typed error code the runner tags an external cancel with --
+    // not on whether the source was tripped. A late Ctrl+C during a timeout, or
+    // one racing a genuine error, leaves the source tripped but surfaces the
+    // timeout/error code, not the cancellation code, so those are not
+    // misreported here.
+    if (completionInfo.errorInfo.has_value() &&
+        completionInfo.errorInfo->errorCode ==
+            facebook::axiom::runner::Runner::kQueryCancelledErrorCode) {
+      std::cerr << "Query cancelled." << std::endl;
+      return false;
+    }
+    // run() populates errorInfo before throwing, but guard the dereference in
+    // case an exception escaped before it was set.
+    const std::string_view message = completionInfo.errorInfo.has_value()
+        ? std::string_view{completionInfo.errorInfo->message}
+        : std::string_view{"unknown error"};
+    std::cerr << "Query failed: " << message << std::endl;
     if (printTiming) {
       std::cerr << "Query ID: " << completionInfo.startInfo.queryId << " | "
                 << formatTiming(completionInfo.timing, cpuTiming) << std::endl;
@@ -309,6 +507,9 @@ void Console::readCommands(
     bool showProgress) {
   linenoiseSetMultiLine(1);
   linenoiseHistorySetMaxLen(1024);
+
+  // SIGINT handling for the REPL is installed by run(), which sets interrupt_
+  // for the whole session; runOnce() registers each query's cancel source.
 
   auto historyFile = getHistoryFilePath();
   if (historyFile.has_value()) {

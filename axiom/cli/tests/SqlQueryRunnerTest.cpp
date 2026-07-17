@@ -15,6 +15,7 @@
  */
 
 #include "axiom/cli/SqlQueryRunner.h"
+#include <folly/CancellationToken.h>
 #include <folly/dynamic.h>
 #include <folly/executors/FunctionScheduler.h>
 #include <folly/init/Init.h>
@@ -184,7 +185,25 @@ TEST_F(SqlQueryRunnerTest, executionTimeout) {
           "SELECT max(a.s || b.s || c.s || d.s || e.s || f.s) "
           "FROM t a, t b, t c, t d, t e, t f",
           options),
-      "exceeded maximum time limit");
+      "exceeded the execution time limit");
+}
+
+TEST_F(SqlQueryRunnerTest, externalCancellation) {
+  // A pre-cancelled token makes the outcome deterministic: drain surfaces a
+  // cancellation tagged with a distinct error code, so clients (CLI, PVC2) can
+  // report a user cancel off a typed code rather than the message text.
+  testConnector_->addTpchTables();
+  SqlQueryRunner::RunOptions options;
+  folly::CancellationSource source;
+  source.requestCancellation();
+  options.cancellationToken = source.getToken();
+  try {
+    runner_->run("SELECT count(*) FROM nation", options);
+    FAIL() << "Expected a cancellation";
+  } catch (const facebook::velox::VeloxException& e) {
+    EXPECT_EQ(
+        std::string(e.errorCode()), runner::Runner::kQueryCancelledErrorCode);
+  }
 }
 
 TEST_F(SqlQueryRunnerTest, currentUser) {

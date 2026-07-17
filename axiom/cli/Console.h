@@ -24,6 +24,10 @@ DECLARE_bool(debug);
 
 namespace axiom::sql {
 
+// Cancels the in-flight query on SIGINT while keeping the CLI alive. Defined in
+// Console.cpp.
+class QueryInterruptHandler;
+
 /// Executes SQL through a SqlQueryRunner, driven from command-line flags, an
 /// init/`.run` file, piped stdin, or an interactive REPL, and prints results
 /// and timing to stdout/stderr.
@@ -85,6 +89,12 @@ class Console {
   readCommands(const std::string& prompt, bool printTiming, bool showProgress);
 
   SqlQueryRunner& runner_;
+
+  // Non-owning; set to the session's interrupt handler while run() is active
+  // (covering the init script, --query, piped stdin, --repeat, and the REPL),
+  // otherwise null. When set, runOnce() registers the running query's
+  // cancellation source with it so Ctrl+C cancels the query, not the CLI.
+  QueryInterruptHandler* interrupt_{nullptr};
 };
 
 } // namespace axiom::sql

@@ -1212,7 +1212,10 @@ std::string SqlQueryRunner::runExplainAnalyze(
         startProgressReporter(*runner, queryCtx->queryId(), options);
     // Executed for its runtime stats (printed below); the result batches are
     // not used, so discard them instead of accumulating the whole result set.
-    runner->drain([](velox::RowVectorPtr) {}, options.timeoutMicros);
+    runner->drain(
+        [](velox::RowVectorPtr) {},
+        options.timeoutMicros,
+        options.cancellationToken);
   }
 
   std::stringstream out;
@@ -1467,7 +1470,8 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runLogicalPlan(
         [&](velox::RowVectorPtr batch) {
           result.results.push_back(std::move(batch));
         },
-        options.timeoutMicros);
+        options.timeoutMicros,
+        options.cancellationToken);
   }
 
   return result;
