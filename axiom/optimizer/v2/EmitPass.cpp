@@ -36,6 +36,36 @@ namespace facebook::axiom::optimizer::v2 {
 
 namespace {
 
+// True when `channels` selects every data column in order (no pruning).
+bool isIdentityChannels(
+    const QGVector<velox::column_index_t>& channels,
+    size_t dataSize) {
+  if (channels.size() != dataSize) {
+    return false;
+  }
+  for (size_t i = 0; i < channels.size(); ++i) {
+    if (channels[i] != i) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Wraps the `channels` children of `full` in a new RowVector of `rowType`,
+// so pruned data columns are never propagated downstream.
+velox::RowVectorPtr selectChannels(
+    const velox::RowVectorPtr& full,
+    const velox::RowTypePtr& rowType,
+    const QGVector<velox::column_index_t>& channels) {
+  std::vector<velox::VectorPtr> children;
+  children.reserve(channels.size());
+  for (auto channel : channels) {
+    children.push_back(full->childAt(channel));
+  }
+  return std::make_shared<velox::RowVector>(
+      full->pool(), rowType, full->nulls(), full->size(), std::move(children));
+}
+
 velox::core::FieldAccessTypedExprPtr toFieldAccess(ColumnCP column) {
   return std::make_shared<velox::core::FieldAccessTypedExpr>(
       toTypePtr(column->value().type), column->outputName());
@@ -1315,21 +1345,39 @@ velox::core::PlanNodePtr Emitter::emitLimit(const Limit& limit) {
 
 velox::core::PlanNodePtr Emitter::emitValues(const Values& values) {
   auto* pool = evaluator_.pool();
+  const auto& channels = values.channels();
+  const auto rowType = makeRowType(values.outputColumns());
   std::vector<velox::RowVectorPtr> rowVectors;
 
   if (values.rows() != nullptr) {
-    const auto rowType = makeRowType(values.outputColumns());
+    const auto& fullRows = values.rows()->array();
+    // Keep only the selected fields of each row variant, so a pruned data
+    // column is never built.
+    std::vector<velox::Variant> prunedRows;
+    const std::vector<velox::Variant>* rows = &fullRows;
+    if (!fullRows.empty() &&
+        !isIdentityChannels(channels, fullRows.front().row().size())) {
+      prunedRows.reserve(fullRows.size());
+      for (const auto& row : fullRows) {
+        const auto& fields = row.row();
+        std::vector<velox::Variant> kept;
+        kept.reserve(channels.size());
+        for (auto channel : channels) {
+          kept.push_back(fields[channel]);
+        }
+        prunedRows.push_back(velox::Variant::row(std::move(kept)));
+      }
+      rows = &prunedRows;
+    }
     rowVectors.emplace_back(
         std::static_pointer_cast<velox::RowVector>(
-            velox::BaseVector::createFromVariants(
-                rowType, values.rows()->array(), pool)));
+            velox::BaseVector::createFromVariants(rowType, *rows, pool)));
     return std::make_shared<velox::core::ValuesNode>(
         nextId(), std::move(rowVectors));
   }
 
   const auto* source = values.source();
   if (source == nullptr) {
-    const auto rowType = makeRowType(values.outputColumns());
     rowVectors.emplace_back(
         velox::BaseVector::create<velox::RowVector>(rowType, /*size=*/0, pool));
     return std::make_shared<velox::core::ValuesNode>(
@@ -1337,17 +1385,25 @@ velox::core::PlanNodePtr Emitter::emitValues(const Values& values) {
   }
 
   const auto& sourceRowType = source->outputType();
+  const bool identity = isIdentityChannels(channels, sourceRowType->size());
   const auto& data = source->data();
   if (const auto* variants =
           std::get_if<logical_plan::ValuesNode::Variants>(&data)) {
+    auto full = std::static_pointer_cast<velox::RowVector>(
+        velox::BaseVector::createFromVariants(sourceRowType, *variants, pool));
     rowVectors.emplace_back(
-        std::static_pointer_cast<velox::RowVector>(
-            velox::BaseVector::createFromVariants(
-                sourceRowType, *variants, pool)));
+        identity ? full : selectChannels(full, rowType, channels));
   } else if (
       const auto* vectors =
           std::get_if<logical_plan::ValuesNode::Vectors>(&data)) {
-    rowVectors = *vectors;
+    if (identity) {
+      rowVectors = *vectors;
+    } else {
+      rowVectors.reserve(vectors->size());
+      for (const auto& vector : *vectors) {
+        rowVectors.push_back(selectChannels(vector, rowType, channels));
+      }
+    }
   } else {
     VELOX_NYI(
         "ValuesNode::Exprs emit not yet supported (needs constant folding from normalize)");

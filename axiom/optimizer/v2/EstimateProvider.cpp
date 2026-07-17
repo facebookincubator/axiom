@@ -17,6 +17,7 @@
 #include "axiom/optimizer/v2/EstimateProvider.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "axiom/optimizer/EstimateMath.h"
 #include "axiom/optimizer/QueryGraph.h"
@@ -76,6 +77,13 @@ const Estimate& EstimateProvider::estimate(NodeCP node) {
     return it->second;
   }
   Estimate result = compute(node);
+  // A node's cardinality estimate should never be non-finite; estimate
+  // arithmetic saturates (see EstimateMath.h). Surface a violation here instead
+  // of letting infinity skew downstream cost comparisons.
+  VELOX_DCHECK(
+      !result.cardinality.has_value() || std::isfinite(*result.cardinality),
+      "Cardinality estimate is not finite. Node: {}",
+      node->nodeType());
   return byNode_.emplace(node, std::move(result)).first->second;
 }
 

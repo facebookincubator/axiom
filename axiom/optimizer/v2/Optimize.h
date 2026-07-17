@@ -44,6 +44,12 @@ namespace facebook::axiom::optimizer::v2 {
 /// `options.numWorkers` / `options.numDrivers` (each >= 1) are the target task
 /// and per-task driver counts; at `numWorkers > 1` the plan is distributed
 /// across fragments with remote exchanges.
+///
+/// Output column names are guaranteed to match the query only when `plan` is
+/// rooted in an `OutputNode`, whose field names pin the result names. For a
+/// bare plan (no OutputNode) the optimizer may elide pure-rename projections
+/// and carry a column under a source or disambiguated name, so the result
+/// column names are unspecified — do not depend on them.
 PlanAndStats optimize(
     const logical_plan::LogicalPlanNode& plan,
     const connector::SchemaResolver& schemaResolver,

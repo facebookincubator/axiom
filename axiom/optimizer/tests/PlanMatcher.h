@@ -19,6 +19,7 @@
 #include <functional>
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "velox/core/PlanNode.h"
+#include "velox/parse/ExpressionsParser.h"
 #include "velox/type/Filter.h"
 
 namespace facebook::velox::core {
@@ -138,12 +139,25 @@ class PlanMatcher {
   }
 
  protected:
+  explicit PlanMatcher(parse::ParseOptions options = {})
+      : options_{std::move(options)} {}
+
+  /// Parses `expr` as a DuckDB SQL expression using this matcher's parse
+  /// options. Use instead of constructing a DuckSqlExpressionsParser directly
+  /// so the matcher's options (e.g. integer-literal kind) are honored.
+  ExprPtr parseExpr(const std::string& expr) const {
+    return parse::DuckSqlExpressionsParser(options_).parseExpr(expr);
+  }
+
   // Aliases bound to the matched node's output columns by position.
   // Applied on successful match by PlanMatcherImpl::match().
   std::vector<std::optional<std::string>> aliases_;
 
   // Invoked with the matched node on a successful match, if set.
   std::function<void(const PlanNodePtr&)> onMatch_;
+
+  // Parse options for SQL expressions this matcher parses.
+  const parse::ParseOptions options_;
 };
 
 /// Match details for a HashJoin node beyond join type. Each field is
@@ -223,6 +237,12 @@ class PlanMatcherBuilder {
   /// Matches any Filter node regardless of predicate.
   PlanMatcherBuilder& filter();
 
+  /// Adds a Filter matcher (see filter()) only when 'condition' is true;
+  /// otherwise a no-op.
+  PlanMatcherBuilder& filterIf(bool condition) {
+    return condition ? filter() : *this;
+  }
+
   /// Matches a Filter node with the specified predicate expression.
   /// Supports symbol rewriting from child matchers.
   /// @param predicate The expected filter predicate (DuckDB SQL syntax).
@@ -238,17 +258,49 @@ class PlanMatcherBuilder {
   ///     kind. A bare integer such as '24' is INTEGER and will not match a
   ///     constant the optimizer coerced to the column's type. Write '24.0' to
   ///     compare against a DOUBLE column.
-  PlanMatcherBuilder& filter(const std::string& predicate);
+  /// @param options Parse options for 'predicate'. Defaults parse integer
+  /// literals as BIGINT; pass '{.parseIntegerAsBigint = false}' when the plan
+  /// uses INTEGER literals.
+  PlanMatcherBuilder& filter(
+      const std::string& predicate,
+      const parse::ParseOptions& options = {});
+
+  PlanMatcherBuilder& filterIf(
+      bool condition,
+      const std::string& predicate,
+      const parse::ParseOptions& options = {}) {
+    return condition ? filter(predicate, options) : *this;
+  }
 
   /// Matches any Project node regardless of expressions.
   PlanMatcherBuilder& project();
+
+  /// Adds a Project matcher (see project()) only when 'condition' is true;
+  /// otherwise a no-op.
+  PlanMatcherBuilder& projectIf(bool condition) {
+    return condition ? project() : *this;
+  }
 
   /// Matches a Project node with the specified projection expressions.
   /// Expressions with aliases (e.g., "a + b as c") capture the alias for use
   /// in parent matchers via symbol rewriting.
   /// @param expressions The expected projection expressions (DuckDB SQL
   /// syntax).
-  PlanMatcherBuilder& project(const std::vector<std::string>& expressions);
+  /// @param options Parse options for 'expressions'. Defaults parse integer
+  /// literals as BIGINT; pass '{.parseIntegerAsBigint = false}' when the plan
+  /// uses INTEGER literals (e.g. Presto array constructors) and the expression
+  /// contains a complex constant where the scalar INTEGER/BIGINT tolerance does
+  /// not apply.
+  PlanMatcherBuilder& project(
+      const std::vector<std::string>& expressions,
+      const parse::ParseOptions& options = {});
+
+  PlanMatcherBuilder& projectIf(
+      bool condition,
+      const std::vector<std::string>& expressions,
+      const parse::ParseOptions& options = {}) {
+    return condition ? project(expressions, options) : *this;
+  }
 
   /// Matches any ParallelProject node regardless of expressions.
   PlanMatcherBuilder& parallelProject();

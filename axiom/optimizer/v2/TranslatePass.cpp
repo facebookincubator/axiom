@@ -384,7 +384,9 @@ class Translator {
       return {inner.node, std::move(outputColumns), std::move(outputNames)};
     }
     // Bare plan (no OutputNode): nothing has narrowed the required set, so
-    // request everything the root advertises.
+    // request everything the root advertises. Output names are best-effort here
+    // (the column's own name) and not guaranteed without an OutputNode to pin
+    // them -- see the optimize() contract in Optimize.h.
     Translated translated = translateNode(plan, allNames(*plan.outputType()));
     std::vector<std::string> outputNames;
     outputNames.reserve(translated.node->outputColumns().size());
@@ -1238,7 +1240,7 @@ Translated Translator::makeEmptyResult(const velox::RowType& outputType) {
   ColumnVector outputColumns =
       makeOutputColumns(outputType, /*cardinality=*/0, scope);
   ValuesCP valuesNode =
-      builder_.make<Values>({nullptr, nullptr, std::move(outputColumns)});
+      builder_.makeValues(nullptr, nullptr, std::move(outputColumns));
   return {valuesNode, std::move(scope)};
 }
 
@@ -1559,8 +1561,8 @@ Translated Translator::translateValues(
   }
 
   const lp::ValuesNode* passthrough = foldedRows == nullptr ? &values : nullptr;
-  ValuesCP valuesNode = builder_.make<Values>(
-      {passthrough, foldedRows, std::move(outputColumns)});
+  ValuesCP valuesNode =
+      builder_.makeValues(passthrough, foldedRows, std::move(outputColumns));
   return {valuesNode, std::move(scope)};
 }
 

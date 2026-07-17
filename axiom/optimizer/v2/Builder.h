@@ -18,6 +18,7 @@
 
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
+#include <numeric>
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/v2/Node.h"
@@ -115,12 +116,24 @@ class Builder {
     return makeLiteral(velox::Variant::null(type->kind()), type);
   }
 
+  /// `Values` that emits every column of its underlying data, i.e. with
+  /// identity channels (see `Values::Key`). Pruning is done only in
+  /// PushdownAndPrunePass, which builds the narrowed channels directly.
+  const Values* makeValues(
+      const logical_plan::ValuesNode* source,
+      const velox::Variant* rows,
+      ColumnVector outputColumns) {
+    QGVector<velox::column_index_t> channels(outputColumns.size());
+    std::iota(channels.begin(), channels.end(), 0);
+    return make<Values>(
+        {source, rows, std::move(outputColumns), std::move(channels)});
+  }
+
   /// `Values` node carrying zero rows with the given output schema.
   /// Used to replace subtrees a rewrite proved produce no rows.
   const Values* makeEmptyValues(ColumnVector outputColumns) {
-    return make<Values>({/*source=*/nullptr,
-                         /*rows=*/nullptr,
-                         std::move(outputColumns)});
+    return makeValues(
+        /*source=*/nullptr, /*rows=*/nullptr, std::move(outputColumns));
   }
 
   /// Interned `Name`s for well-known functions, snapshotted from the

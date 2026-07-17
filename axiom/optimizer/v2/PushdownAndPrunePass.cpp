@@ -578,6 +578,26 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     childContext.nonNullColumns = context.nonNullColumns;
     NodeCP newInput = rewrite(node->input(), childContext);
 
+    // Inline a child Project: a Project directly over another Project collapses
+    // into one by substituting this Project's expressions through the child's
+    // output->expression map. Skipped when the child has a non-deterministic
+    // expression, since a parent that references such an output more than once
+    // would evaluate it multiple times.
+    //
+    // TODO: still inline the deterministic outputs when only some are
+    // non-deterministic — isolate the non-deterministic ones in a separate
+    // Project below and fold the rest.
+    if (newInput->is(NodeType::kProject)) {
+      const auto* childProject = newInput->as<Project>();
+      if (childProject->isDeterministic()) {
+        survivingExprs = exprs_.substitute(
+            survivingExprs,
+            childProject->outputColumns(),
+            childProject->exprs());
+        newInput = childProject->input();
+      }
+    }
+
     // Drop the Project when its surviving outputs are a pure pass-through of
     // the (rewritten) input's output columns. Pushdown can make a Project
     // identity by pruning columns below it — e.g. a semi-project join fused
@@ -947,7 +967,29 @@ class Pushdown : public NodeRewriter<PushdownContext> {
   }
 
   NodeCP rewriteValues(const Values* node, PushdownContext& context) override {
-    return maybeWrapFilter(node, std::move(context.pending));
+    // Keep every column the output needs (`required`), not just those demanded
+    // strictly above (`requiredAbove`): a pending conjunct wrapped as a Filter
+    // over this Values reads the Values' output, so its columns must survive.
+    ColumnVector survivingOutputs;
+    QGVector<velox::column_index_t> survivingChannels;
+    const auto& outputColumns = node->outputColumns();
+    const auto& channels = node->channels();
+    for (size_t i = 0; i < outputColumns.size(); ++i) {
+      if (context.required.contains(outputColumns[i])) {
+        survivingOutputs.push_back(outputColumns[i]);
+        survivingChannels.push_back(channels[i]);
+      }
+    }
+
+    NodeCP result = node;
+    if (survivingOutputs.size() != outputColumns.size()) {
+      result = builder().make<Values>(
+          {node->source(),
+           node->rows(),
+           std::move(survivingOutputs),
+           std::move(survivingChannels)});
+    }
+    return maybeWrapFilter(result, std::move(context.pending));
   }
 
   // Internal nodes — recurse with empty pending via `blockAt`:
@@ -1048,18 +1090,39 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       outputOnlyColumns.add(node->ordinalityColumn());
     }
     auto [pushable, blocked] = partition(context.pending, outputOnlyColumns);
+
+    // Columns this Unnest must still produce: those the consumer requires plus
+    // the columns read by conjuncts that stay above.
+    PlanObjectSet outputsKept = context.required;
+    outputsKept.unionColumns(blocked);
+
+    // Drop the replicated (pass-through) columns and ordinality column the
+    // consumer no longer needs. These must leave the replicated/ordinality
+    // fields and the output set together: Unnest requires both to appear in
+    // outputColumns. Columns still read by pushed-down conjuncts remain
+    // required of the input via 'pushable'.
+    ColumnVector survivingReplicated;
+    survivingReplicated.reserve(node->replicatedColumns().size());
+    for (ColumnCP column : node->replicatedColumns()) {
+      if (outputsKept.contains(column)) {
+        survivingReplicated.push_back(column);
+      }
+    }
+    ColumnCP survivingOrdinality = node->ordinalityColumn() != nullptr &&
+            outputsKept.contains(node->ordinalityColumn())
+        ? node->ordinalityColumn()
+        : nullptr;
+
     PushdownContext childContext =
         makeChildContext(std::move(pushable), context);
     childContext.required.unionColumns(node->unnestExpressions());
-    childContext.required.unionObjects(node->replicatedColumns());
+    childContext.required.unionObjects(survivingReplicated);
     childContext.required.unionColumns(blocked);
     childContext.requiredAbove = childContext.required;
     NodeCP newInput = rewrite(node->input(), childContext);
 
     // Unnest accepts a subset of structured-field outputs as
     // `outputColumns`; drop entries the consumer doesn't need.
-    PlanObjectSet outputsKept = context.required;
-    outputsKept.unionColumns(blocked);
     ColumnVector survivingOutputs;
     survivingOutputs.reserve(node->outputColumns().size());
     for (ColumnCP column : node->outputColumns()) {
@@ -1068,17 +1131,15 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       }
     }
 
-    // TODO: Trim `replicatedColumns` against `outputsKept` to drop dead
-    // passthrough columns when the input carries more than the consumer needs.
     const bool unchanged = newInput == node->input() &&
         survivingOutputs.size() == node->outputColumns().size();
     NodeCP newNode = unchanged ? static_cast<NodeCP>(node)
                                : builder().make<Unnest>(
                                      {newInput,
                                       node->unnestExpressions(),
-                                      node->replicatedColumns(),
+                                      std::move(survivingReplicated),
                                       node->unnestColumns(),
-                                      node->ordinalityColumn(),
+                                      survivingOrdinality,
                                       std::move(survivingOutputs)});
     return maybeWrapFilter(newNode, std::move(blocked));
   }

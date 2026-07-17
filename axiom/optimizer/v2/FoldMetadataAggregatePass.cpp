@@ -188,10 +188,10 @@ class Folder : public NodeRewriter<NoContext> {
       rows.push_back(velox::Variant::row(std::move(row)));
     }
 
-    return builder().make<Values>(Values::Key{
-        .source = nullptr,
-        .rows = registerVariant(velox::Variant::array(std::move(rows))),
-        .outputColumns = node->outputColumns()});
+    return builder().makeValues(
+        /*source=*/nullptr,
+        registerVariant(velox::Variant::array(std::move(rows))),
+        node->outputColumns());
   }
 
   static int64_t count(
