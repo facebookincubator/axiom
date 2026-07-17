@@ -2215,7 +2215,9 @@ lp::ExprPtr ToGraph::processLeftJoinSubqueries(
       std::make_move_iterator(it), std::make_move_iterator(conjuncts.end()));
   conjuncts.erase(it, conjuncts.end());
 
-  VELOX_CHECK(!subqueryConjuncts.empty());
+  VELOX_CHECK(
+      !subqueryConjuncts.empty(),
+      "processLeftJoinSubqueries requires a condition with at least one subquery conjunct");
 
   auto* outerDt = std::exchange(currentDt_, newDt());
   makeQueryGraph(right, kAllAllowedInDt, /*orderObservedAbove=*/false);
@@ -2477,7 +2479,7 @@ void ToGraph::finalizeDt(
   if (!outerDt) {
     outerDt = newDt();
   }
-  VELOX_DCHECK_NOT_NULL(currentDt_);
+  VELOX_DCHECK_NOT_NULL(currentDt_, "finalizeDt has no current DT to finalize");
 
   DerivedTableP dt = currentDt_;
   setDtUsedOutput(dt, node);
@@ -2671,7 +2673,8 @@ void ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
   const auto& type = tableScan.outputType();
   const auto& names = tableScan.columnNames();
   for (auto i : channels) {
-    VELOX_DCHECK_LT(i, type->size());
+    VELOX_DCHECK_LT(
+        i, type->size(), "Used channel index out of range for output type");
 
     const auto& name = names[i];
     const auto* columnName = toName(name);
@@ -2727,7 +2730,8 @@ void ToGraph::makePushdownBaseTable(
   const auto channels = usedChannels(root);
   const auto& type = root.outputType();
   for (auto i : channels) {
-    VELOX_DCHECK_LT(i, type->size());
+    VELOX_DCHECK_LT(
+        i, type->size(), "Used channel index out of range for output type");
     const auto* outputName = toName(type->nameOf(i));
     auto* schemaColumn = schemaTable->findColumn(outputName);
     VELOX_CHECK_NOT_NULL(
@@ -2793,7 +2797,8 @@ ValuesTable* ToGraph::makeValuesTable(
   const auto& names = type->names();
   const auto cardinality = valuesTable->cardinality();
   for (auto i : usedChannels(node)) {
-    VELOX_DCHECK_LT(i, type->size());
+    VELOX_DCHECK_LT(
+        i, type->size(), "Used channel index out of range for output type");
 
     const auto& name = names[i];
     const auto* columnName = toName(name);
@@ -3042,7 +3047,9 @@ void ToGraph::appendOuterAggregationCarryForwards(
 
 DerivedTableP ToGraph::translateSubqueryBody(
     const logical_plan::LogicalPlanNode& node) {
-  VELOX_CHECK(applyContext_.lifted.empty());
+  VELOX_CHECK(
+      applyContext_.lifted.empty(),
+      "Lifted correlation state must be cleared before translating a subquery body");
 
   // 'outerDt' is the only ApplyContext field saved here; the lifted
   // accumulators are scoped at the call site via 'saveAndClearLifted'.
@@ -3153,7 +3160,10 @@ ToGraph::CorrelationKeys ToGraph::extractCorrelationKeys(
 
   for (const auto* conjunct : correlatedConjuncts) {
     const auto tables = conjunct->allTables().toObjects();
-    VELOX_CHECK_EQ(2, tables.size());
+    VELOX_CHECK_EQ(
+        2,
+        tables.size(),
+        "Correlated conjunct must reference exactly two tables (outer and subquery)");
 
     ExprCP left = nullptr;
     ExprCP right = nullptr;
@@ -3248,7 +3258,9 @@ AggregationPlanCP ToGraph::processCorrelatedAggregation(
     return nullptr;
   }
 
-  VELOX_CHECK(agg->groupingKeys().empty());
+  VELOX_CHECK(
+      agg->groupingKeys().empty(),
+      "Correlated aggregation to decorrelate must be global (no grouping keys)");
 
   // Check if all conjuncts are equalities. If any are non-equi, we'll
   // handle decorrelation at the outer level using AssignUniqueId.
@@ -3265,7 +3277,10 @@ AggregationPlanCP ToGraph::processCorrelatedAggregation(
   ExprVector leftKeys;
   for (const auto* conjunct : liftedPredicates) {
     const auto tables = conjunct->allTables().toObjects();
-    VELOX_CHECK_EQ(2, tables.size());
+    VELOX_CHECK_EQ(
+        2,
+        tables.size(),
+        "Correlated conjunct must reference exactly two tables (outer and subquery)");
 
     ExprCP left = nullptr;
     ExprCP right = nullptr;
@@ -3484,10 +3499,14 @@ DerivedTableP ToGraph::wrapAroundSubquery(DerivedTableP subqueryDt) {
 }
 
 ExprCP ToGraph::processUncorrelatedScalarSubquery(DerivedTableP subqueryDt) {
-  VELOX_CHECK_EQ(1, subqueryDt->columns.size());
+  VELOX_CHECK_EQ(
+      1, subqueryDt->columns.size(), "Scalar subquery must produce one column");
 
   if (auto valuesNode = tryFoldConstantDt(subqueryDt, evaluator_.pool())) {
-    VELOX_CHECK_EQ(1, valuesNode->outputType()->size());
+    VELOX_CHECK_EQ(
+        1,
+        valuesNode->outputType()->size(),
+        "Folded scalar subquery must produce one column");
     if (valuesNode->cardinality() == 1) {
       // Replace subquery with a constant value.
       const auto value =
@@ -3623,9 +3642,14 @@ ExprCP ToGraph::processCorrelatedScalarSubquery(
   // 'splitCorrelatedProjection' when the caller is the projection path.
   if (correlation.nonEquiConjuncts.empty() && hasAggregation) {
     VELOX_CHECK_EQ(
-        applyContext_.lifted.predicates.size() + 1, subqueryDt->columns.size());
+        applyContext_.lifted.predicates.size() + 1,
+        subqueryDt->columns.size(),
+        "Decorrelated aggregated subquery must expose one result column plus one per lifted correlation key");
   } else {
-    VELOX_CHECK_GE(subqueryDt->columns.size(), 1);
+    VELOX_CHECK_GE(
+        subqueryDt->columns.size(),
+        1,
+        "Subquery must produce at least one result column");
   }
 
   applyContext_.lifted.predicates.clear();
@@ -3737,7 +3761,9 @@ ExprCP ToGraph::processCorrelatedScalarSubquery(
 
   // The caller wraps currentDt_ before each subsequent heavy-path subquery,
   // so the aggregation slot must be fresh here.
-  VELOX_CHECK_NULL(currentDt_->aggregation);
+  VELOX_CHECK_NULL(
+      currentDt_->aggregation,
+      "Outer aggregation slot must be fresh before adding the correlated subquery's aggregation");
   currentDt_->aggregation = make<AggregationPlan>(
       ExprVector{chain.rowNumberColumn}, allAggregates, allColumns, allColumns);
 
@@ -3786,7 +3812,9 @@ ExprCP ToGraph::buildCorrelatedAggregation(
         }
       });
     }
-    VELOX_CHECK_NOT_NULL(leftTable);
+    VELOX_CHECK_NOT_NULL(
+        leftTable,
+        "Correlated aggregate must reference at least one outer table for AssignUniqueId");
   }
 
   // Rewrite each aggregate's args/orderKeys/condition so inner-column
@@ -3855,7 +3883,9 @@ ExprCP ToGraph::buildCorrelatedAggregation(
   appendOuterAggregationCarryForwards(
       input, chain, outerLifted, rewrittenAggregates, allColumns);
 
-  VELOX_CHECK_NULL(currentDt_->aggregation);
+  VELOX_CHECK_NULL(
+      currentDt_->aggregation,
+      "Outer aggregation slot must be fresh before adding the correlated subquery's aggregation");
   currentDt_->aggregation = make<AggregationPlan>(
       ExprVector{chain.rowNumberColumn},
       rewrittenAggregates,
@@ -3873,7 +3903,10 @@ ExprCP ToGraph::processProjectionCorrelatedScalarSubquery(
   // Scalar subqueries produce exactly one SELECT expression, so
   // 'addDtColumn' pushes at most one residual into 'liftedProjections'
   // for this scope.
-  VELOX_CHECK_EQ(1, applyContext_.lifted.projections.size());
+  VELOX_CHECK_EQ(
+      1,
+      applyContext_.lifted.projections.size(),
+      "Scalar subquery produces exactly one correlated projection");
   auto* column = applyContext_.lifted.projections.front();
   applyContext_.lifted.projections.clear();
 
@@ -3984,11 +4017,17 @@ void ToGraph::processInPredicates(
     // inner-DT column; otherwise the inner DT exposes a single column.
     ExprCP inRightKey;
     if (!applyContext_.lifted.projections.empty()) {
-      VELOX_CHECK_EQ(1, applyContext_.lifted.projections.size());
+      VELOX_CHECK_EQ(
+          1,
+          applyContext_.lifted.projections.size(),
+          "IN subquery's correlated right side must be a single projection");
       inRightKey = applyContext_.lifted.projections.front();
       applyContext_.lifted.projections.clear();
     } else {
-      VELOX_CHECK_EQ(1, subqueryDt->columns.size());
+      VELOX_CHECK_EQ(
+          1,
+          subqueryDt->columns.size(),
+          "IN subquery must expose a single column");
       inRightKey = subqueryDt->columns.front();
     }
 
@@ -4345,7 +4384,10 @@ ExprCP ToGraph::processCorrelatedExists(DerivedTableP subqueryDt) {
   auto decorrelated = extractDecorrelatedJoin(
       functionNames_, applyContext_.lifted.predicates, subqueryDt);
   if (decorrelated.leftKeys.empty()) {
-    VELOX_CHECK_EQ(decorrelated.leftTables.size(), 1);
+    VELOX_CHECK_EQ(
+        decorrelated.leftTables.size(),
+        1,
+        "Correlated subquery with only non-equi correlation must reference exactly one outer table");
   }
   applyContext_.lifted.predicates.clear();
 
