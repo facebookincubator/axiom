@@ -169,17 +169,20 @@ TEST_F(SqlQueryRunnerTest, runSingleStatement) {
 }
 
 TEST_F(SqlQueryRunnerTest, executionTimeout) {
-  // A multi-way cross product over the small nation table (25 rows) produces
-  // ~244M rows, far more than can complete within the 10ms deadline, so the
-  // execution timeout fires deterministically during execution and the query
-  // fails with a user error.
-  testConnector_->addTpchTables();
+  // A six-way cross join over 25 rows produces 25^6 = ~244M rows, far more than
+  // can be processed within the 10ms deadline, and the max of the concatenated
+  // values cannot be short-circuited. So the run is still executing when the
+  // deadline elapses and the query fails with a timeout user error.
+  testConnector_->addTable("t", ROW("s", VARCHAR()))
+      ->addData(makeRowVector({makeFlatVector<std::string>(
+          25, [](auto row) { return fmt::format("value_{:04d}", row); })}));
+
   SqlQueryRunner::RunOptions options;
   options.timeoutMicros = 10'000; // 10ms
   VELOX_ASSERT_THROW(
       runner_->run(
-          "SELECT count(*) FROM nation a, nation b, nation c, "
-          "nation d, nation e, nation f",
+          "SELECT max(a.s || b.s || c.s || d.s || e.s || f.s) "
+          "FROM t a, t b, t c, t d, t e, t f",
           options),
       "exceeded maximum time limit");
 }
