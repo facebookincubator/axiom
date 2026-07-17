@@ -29,6 +29,7 @@ const auto& typeNames() {
       {QueryEntry::Type::kResults, "results"},
       {QueryEntry::Type::kOrdered, "ordered"},
       {QueryEntry::Type::kCount, "count"},
+      {QueryEntry::Type::kContains, "contains"},
   };
   return kNames;
 }
@@ -165,6 +166,8 @@ std::vector<QueryEntry> parseQueries(
 
       if (annotation == "ordered") {
         current.type = QueryEntry::Type::kOrdered;
+      } else if (annotation == "contains") {
+        current.type = QueryEntry::Type::kContains;
       } else if (annotation == "disabled") {
         disabled = true;
       } else if (annotation.substr(0, 6) == "count ") {

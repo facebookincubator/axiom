@@ -348,6 +348,9 @@ class SqlTest : public SqlTestBase {
         case QueryEntry::Type::kCount:
           assertResultCount(entry_.sql, entry_.expectedCount);
           break;
+        case QueryEntry::Type::kContains:
+          assertContains(entry_.sql, entry_.duckDbSql);
+          break;
       }
     } catch (const std::exception& e) {
       FAIL() << "Unexpected exception: " << e.what();
