@@ -18,6 +18,7 @@
 
 #include <functional>
 
+#include <folly/CancellationToken.h>
 #include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/Task.h>
 
@@ -102,11 +103,36 @@ class Runner {
   /// the calling thread, so it must NOT be called from a Velox executor thread
   /// (blocking there starves the executor).
   ///
-  /// When 'timeoutMicros' > 0, enforces a wall-clock deadline via cooperative
-  /// cancellation; on the deadline the drain fails with VELOX_USER_FAIL.
+  /// When 'timeoutMicros' > 0, enforces a cooperative deadline over execution
+  /// only. It is not a hard wall-clock cap: it bounds the execute() phase, not
+  /// the parse/permission/optimize phases a caller runs before drain() nor a
+  /// write commit; a non-yielding operator can overrun it; and reaping the
+  /// cancelled run adds teardown latency. On the deadline the drain fails with
+  /// VELOX_USER_FAIL.
+  ///
+  /// 'cancelToken' lets any client cancel the running query from another thread
+  /// (the drain thread is blocked in blockingWait): the client holds the paired
+  /// folly::CancellationSource and calls requestCancellation(). Cancellation
+  /// composes with the deadline through execute()'s awaiting scope. A genuine
+  /// execution error always surfaces as itself: the deadline/cancel outcome is
+  /// reported only when the run wound down benignly (no execution error), so a
+  /// deadline or Ctrl+C racing a real error never masks it. In that benign case
+  /// a deadline throws the timeout VELOX_USER_FAIL, and an external cancel
+  /// throws a VeloxUserError carrying kQueryCancelledErrorCode so clients can
+  /// report a cancellation off a typed error code rather than message text. The
+  /// CLI trips it from a SIGINT handler; other clients (e.g. PVC2) trip it from
+  /// their own cancel entry point.
   void drain(
       const std::function<void(velox::RowVectorPtr)>& onBatch,
-      int64_t timeoutMicros = 0);
+      int64_t timeoutMicros = 0,
+      folly::CancellationToken cancelToken = {});
+
+  /// Velox error code on the VeloxUserError drain() throws when a query is
+  /// stopped by an external cancel (as opposed to the deadline or a genuine
+  /// execution error). Clients match ErrorInfo::errorCode on it to report a
+  /// cancellation distinctly, without depending on the message text.
+  static constexpr const char* kQueryCancelledErrorCode =
+      "AXIOM_QUERY_CANCELLED";
 };
 
 } // namespace facebook::axiom::runner

@@ -297,6 +297,67 @@ TEST_F(LocalRunnerTest, earlyStopClosesAndReaps) {
   EXPECT_EQ(Runner::State::kCancelled, localRunner->state());
 }
 
+// drain() honors an external cancellation token: any client (CLI SIGINT, PVC2,
+// etc.) cancels the running query by tripping the source it passed. A
+// pre-cancelled token makes this deterministic -- the drain surfaces the
+// cancellation (not the timeout VELOX_USER_FAIL) and the runner ends
+// kCancelled.
+TEST_F(LocalRunnerTest, drainExternalCancellation) {
+  auto scan = makeScanPlan(/*numWorkers=*/3);
+  auto localRunner = makeRunner(scan);
+
+  folly::CancellationSource source;
+  source.requestCancellation();
+
+  VELOX_ASSERT_THROW(
+      localRunner->drain(
+          [](velox::RowVectorPtr) {},
+          /*timeoutMicros=*/0,
+          source.getToken()),
+      "cancel");
+
+  EXPECT_EQ(Runner::State::kCancelled, localRunner->state());
+}
+
+// The real shape: cancel a query that is already producing, from another
+// thread. The onBatch callback (running on the drain thread) holds the drain
+// after the first batch until the main thread trips the source, so the cancel
+// lands mid-flight; the drain then surfaces the cancellation and the runner
+// ends kCancelled.
+TEST_F(LocalRunnerTest, drainCancelFromAnotherThread) {
+  auto scan = makeScanPlan(/*numWorkers=*/3);
+  auto localRunner = makeRunner(scan);
+
+  folly::CancellationSource source;
+  folly::Baton<> gotBatch;
+  folly::Baton<> cancelled;
+
+  std::exception_ptr error;
+  std::thread drainer([&] {
+    try {
+      localRunner->drain(
+          [&](velox::RowVectorPtr) {
+            gotBatch.post();
+            // Hold the drain on the first batch until the main thread has
+            // cancelled, so the next pull observes the cancellation.
+            cancelled.wait();
+          },
+          /*timeoutMicros=*/0,
+          source.getToken());
+    } catch (const std::exception&) {
+      error = std::current_exception();
+    }
+  });
+
+  gotBatch.wait();
+  source.requestCancellation();
+  cancelled.post();
+  drainer.join();
+
+  EXPECT_TRUE(error != nullptr);
+  EXPECT_EQ(Runner::State::kCancelled, localRunner->state());
+}
+
 TEST_F(LocalRunnerTest, error) {
   auto join = makeJoinPlan("if (c0 = 111, c0 / 0, c0 + 1) as c0");
   auto localRunner = makeRunner(join);
