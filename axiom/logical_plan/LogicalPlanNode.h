@@ -221,12 +221,21 @@ class TableScanNode : public LogicalPlanNode {
         connectorId_{std::move(connectorId)},
         tableName_{std::move(tableName)},
         columnNames_{std::move(columnNames)} {
-    VELOX_USER_CHECK_EQ(outputType_->size(), columnNames_.size());
+    VELOX_USER_CHECK_EQ(
+        outputType_->size(),
+        columnNames_.size(),
+        "TableScan output type and column names must have the same size");
 
     const auto numColumns = outputType_->size();
     for (size_t i = 0; i < numColumns; ++i) {
-      VELOX_USER_CHECK(!outputType_->nameOf(i).empty());
-      VELOX_USER_CHECK(!columnNames_[i].empty());
+      VELOX_USER_CHECK(
+          !outputType_->nameOf(i).empty(),
+          "TableScan output column name must not be empty: {}",
+          i);
+      VELOX_USER_CHECK(
+          !columnNames_[i].empty(),
+          "TableScan column name must not be empty: {}",
+          i);
     }
   }
 
@@ -267,8 +276,11 @@ class FilterNode : public LogicalPlanNode {
   FilterNode(std::string id, const LogicalPlanNodePtr& input, ExprPtr predicate)
       : LogicalPlanNode{NodeKind::kFilter, std::move(id), {input}, input->outputType()},
         predicate_{std::move(predicate)} {
-    VELOX_USER_CHECK_NOT_NULL(predicate_);
-    VELOX_USER_CHECK_EQ(predicate_->type()->kind(), velox::TypeKind::BOOLEAN);
+    VELOX_USER_CHECK_NOT_NULL(predicate_, "Filter predicate must not be null");
+    VELOX_USER_CHECK_EQ(
+        predicate_->type()->kind(),
+        velox::TypeKind::BOOLEAN,
+        "Filter predicate must be boolean");
   }
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)

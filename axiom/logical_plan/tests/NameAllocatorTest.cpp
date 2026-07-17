@@ -38,4 +38,12 @@ TEST(NameAllocatorTest, basic) {
   EXPECT_EQ(allocator.newName("x_"), "x__4");
 }
 
+TEST(NameAllocatorTest, allDigitsSuffixWithoutPrefix) {
+  NameAllocator allocator;
+  // A name that is entirely a numeric suffix has no prefix to keep, so it falls
+  // back to "expr" rather than reducing to an empty name.
+  EXPECT_EQ(allocator.newName("_5"), "expr");
+  EXPECT_EQ(allocator.newName("_5"), "expr_0");
+}
+
 } // namespace facebook::axiom::logical_plan

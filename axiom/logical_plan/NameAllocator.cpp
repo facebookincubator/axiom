@@ -28,13 +28,19 @@ bool isAllDigits(std::string_view str) {
 std::string NameAllocator::newName(std::string_view hint) {
   VELOX_CHECK(!hint.empty(), "Hint cannot be empty");
 
-  // Strip suffix past '_' if all digits.
+  // Strip a trailing '_<digits>' suffix so re-allocating a generated name like
+  // "foo_0" yields "foo_2" rather than "foo_0_0". A name that is entirely a
+  // numeric suffix (e.g. "_5") has no prefix to keep; fall back to "expr" so
+  // the allocated name is never empty.
   std::string_view prefix = hint;
 
   auto pos = prefix.rfind('_');
   if (pos != std::string::npos && pos + 1 < prefix.size() &&
       isAllDigits({prefix.data() + pos + 1, prefix.size() - pos - 1})) {
     prefix = prefix.substr(0, pos);
+  }
+  if (prefix.empty()) {
+    prefix = "expr";
   }
 
   std::string name{prefix};

@@ -340,6 +340,12 @@ TEST_F(PrestoParserTest, mixedCaseColumnNames) {
   testSelect("SELECT \"NATION\".n_name FROM nation", matcher);
 }
 
+TEST_F(PrestoParserTest, numericSuffixColumnAlias) {
+  // A column alias that is entirely an underscore-plus-digits suffix (e.g.
+  // "_5") is preserved in the output.
+  testSelect("SELECT 1 AS \"_5\"", matchValues().project().output({"_5"}));
+}
+
 TEST_F(PrestoParserTest, withBasic) {
   {
     auto matcher = matchValues().project().output({"x"});
