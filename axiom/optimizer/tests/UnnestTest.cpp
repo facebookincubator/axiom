@@ -24,10 +24,12 @@ namespace {
 using namespace velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class UnnestTest : public test::QueryTestBase {
+class UnnestTest : public test::QueryTestBase,
+                   public ::testing::WithParamInterface<bool> {
  protected:
   void SetUp() override {
     test::QueryTestBase::SetUp();
+    useV2_ = GetParam();
 
     rowVector_ = makeRowVector(
         {"x", "a_a_y", "a_a_z"},
@@ -80,7 +82,7 @@ class UnnestTest : public test::QueryTestBase {
 // - limit before and after unnest
 // - join before and after unnest
 
-TEST_F(UnnestTest, unnest) {
+TEST_P(UnnestTest, unnest) {
   {
     SCOPED_TRACE("unnest");
 
@@ -93,9 +95,8 @@ TEST_F(UnnestTest, unnest) {
                            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher =
-        core::PlanMatcherBuilder{}.values().project().unnest().build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    auto matcher = matchValues().project().unnest().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
 
     auto referencePlan =
         exec::test::PlanBuilder{}
@@ -128,14 +129,8 @@ TEST_F(UnnestTest, unnest) {
                            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder{}
-                       .values()
-                       .project()
-                       .unnest()
-                       .project()
-                       .unnest()
-                       .build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    auto matcher = matchValues().project().unnest().project().unnest().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
 
     auto referencePlan =
         exec::test::PlanBuilder{}
@@ -195,7 +190,7 @@ TEST_F(UnnestTest, unnest) {
             .unnest({"x"}, {"y", "z"})
             .project(expectedNames)
             .build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    AXIOM_ASSERT_PLAN(plan, matcher);
     ASSERT_EQ(plan->outputType()->names(), expectedNames);
   }
   {
@@ -210,9 +205,8 @@ TEST_F(UnnestTest, unnest) {
                            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher =
-        core::PlanMatcherBuilder{}.values().project().unnest().build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    auto matcher = matchValues().project().unnest().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
 
     auto referencePlan = exec::test::PlanBuilder{}
                              .values({rowVector_})
@@ -242,7 +236,7 @@ TEST_F(UnnestTest, unnest) {
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = matchValues().project().unnest().build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    AXIOM_ASSERT_PLAN(plan, matcher);
 
     checkSame(logicalPlan, referencePlan);
   }
@@ -273,13 +267,13 @@ TEST_F(UnnestTest, unnest) {
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = matchValues().project().unnest().project({"v", "e"}).build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    AXIOM_ASSERT_PLAN(plan, matcher);
 
     checkSame(logicalPlan, referencePlan);
   }
 }
 
-TEST_F(UnnestTest, project) {
+TEST_P(UnnestTest, project) {
   auto startLogicalPlan = [&]() {
     return lp::PlanBuilder{}.values({rowVector_});
   };
@@ -303,16 +297,17 @@ TEST_F(UnnestTest, project) {
                            })
                            .build();
 
+    auto plan = toSingleNodePlan(logicalPlan);
+
     // TODO We probably want pushdown projection closer to data source.
     // Because compared to other joins, unnest only increase work.
-    auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder{}
-                       .values()
-                       .project()
-                       .unnest()
-                       .project()
-                       .build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+
+    // v1's Unnest replicates the original input columns, not the unnested
+    // arrays, so a trailing Project re-derives the output arrays
+    // (array_distinct again). v2's Unnest replicates the unnested arrays, so it
+    // needs no trailing Project.
+    auto matcher = matchValues().project().unnest().projectIf(!useV2_).build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
 
     auto referencePlan =
         startReferencePlan()
@@ -340,13 +335,8 @@ TEST_F(UnnestTest, project) {
     // TODO We probably want pushdown projection closer to data source.
     // Because compared to other joins, unnest only increase work.
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder{}
-                       .values()
-                       .project()
-                       .unnest()
-                       .project()
-                       .build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    auto matcher = matchValues().project().unnest().project().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
 
     auto referencePlan = startReferencePlan()
                              .project({
@@ -372,13 +362,8 @@ TEST_F(UnnestTest, project) {
                            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder{}
-                       .values()
-                       .project()
-                       .unnest()
-                       .project()
-                       .build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    auto matcher = matchValues().project().unnest().project().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
 
     auto referencePlan =
         startReferencePlan()
@@ -395,7 +380,7 @@ TEST_F(UnnestTest, project) {
   }
 }
 
-TEST_F(UnnestTest, filter) {
+TEST_P(UnnestTest, filter) {
   auto startLogicalPlan = [&]() {
     return lp::PlanBuilder{}.values({rowVector_});
   };
@@ -417,14 +402,8 @@ TEST_F(UnnestTest, filter) {
                            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder{}
-                       .values()
-                       .filter()
-                       .project()
-                       .unnest()
-                       .project()
-                       .build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    auto matcher = matchValues().filter().project().unnest().project().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
 
     auto referencePlan = startReferencePlan()
                              .filter("x % 2 = 0")
@@ -452,14 +431,8 @@ TEST_F(UnnestTest, filter) {
                            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder{}
-                       .values()
-                       .filter()
-                       .project()
-                       .unnest()
-                       .project()
-                       .build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    auto matcher = matchValues().filter().project().unnest().project().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
 
     auto referencePlan = startReferencePlan()
                              .project({
@@ -491,8 +464,7 @@ TEST_F(UnnestTest, filter) {
                            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder{}
-                       .values()
+    auto matcher = matchValues()
                        .project()
                        .unnest()
                        .project()
@@ -500,7 +472,7 @@ TEST_F(UnnestTest, filter) {
                        .filter()
                        .project()
                        .build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    AXIOM_ASSERT_PLAN(plan, matcher);
 
     auto referencePlan = startReferencePlan()
                              .project({
@@ -538,8 +510,7 @@ TEST_F(UnnestTest, filter) {
                            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder{}
-                       .values()
+    auto matcher = matchValues()
                        .filter()
                        .project()
                        .unnest()
@@ -547,7 +518,7 @@ TEST_F(UnnestTest, filter) {
                        .unnest()
                        .project()
                        .build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    AXIOM_ASSERT_PLAN(plan, matcher);
 
     auto referencePlan = startReferencePlan()
                              .project({
@@ -585,8 +556,7 @@ TEST_F(UnnestTest, filter) {
                            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder{}
-                       .values()
+    auto matcher = matchValues()
                        .project()
                        .unnest()
                        .filter()
@@ -594,7 +564,7 @@ TEST_F(UnnestTest, filter) {
                        .unnest()
                        .project()
                        .build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    AXIOM_ASSERT_PLAN(plan, matcher);
 
     auto referencePlan = startReferencePlan()
                              .project({
@@ -617,7 +587,7 @@ TEST_F(UnnestTest, filter) {
   }
 }
 
-TEST_F(UnnestTest, groupBy) {
+TEST_P(UnnestTest, groupBy) {
   const auto names = rowVector_->rowType()->names();
 
   auto startLogicalPlan = [&]() {
@@ -641,13 +611,8 @@ TEST_F(UnnestTest, groupBy) {
                            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder{}
-                       .values()
-                       .singleAggregation()
-                       .project()
-                       .unnest()
-                       .build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    auto matcher = matchValues().singleAggregation().project().unnest().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
 
     auto referencePlan = startReferencePlan()
                              .singleAggregation(names, {})
@@ -673,13 +638,8 @@ TEST_F(UnnestTest, groupBy) {
                            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder{}
-                       .values()
-                       .project()
-                       .unnest()
-                       .singleAggregation()
-                       .build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    auto matcher = matchValues().project().unnest().singleAggregation().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
 
     auto referencePlan =
         startReferencePlan()
@@ -696,7 +656,7 @@ TEST_F(UnnestTest, groupBy) {
   }
 }
 
-TEST_F(UnnestTest, orderBy) {
+TEST_P(UnnestTest, orderBy) {
   const std::vector<std::string> names{"x", "a_a_y", "a_a_z"};
 
   auto startLogicalPlan = [&]() {
@@ -720,13 +680,8 @@ TEST_F(UnnestTest, orderBy) {
                            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder{}
-                       .values()
-                       .orderBy()
-                       .project()
-                       .unnest()
-                       .build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    auto matcher = matchValues().orderBy().project().unnest().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
 
     auto referencePlan = startReferencePlan()
                              .orderBy(names, {})
@@ -753,13 +708,8 @@ TEST_F(UnnestTest, orderBy) {
                            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder{}
-                       .values()
-                       .project()
-                       .unnest()
-                       .orderBy()
-                       .build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    auto matcher = matchValues().project().unnest().orderBy().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
 
     auto referencePlan = startReferencePlan()
                              .project({
@@ -788,13 +738,8 @@ TEST_F(UnnestTest, orderBy) {
     // TODO We probably want pushdown orderBy closer to data source.
     // Because compared to other joins, unnest only increase work.
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder{}
-                       .values()
-                       .project()
-                       .unnest()
-                       .orderBy()
-                       .build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    auto matcher = matchValues().project().unnest().orderBy().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
 
     auto referencePlan = startReferencePlan()
                              .project({
@@ -810,7 +755,7 @@ TEST_F(UnnestTest, orderBy) {
   }
 }
 
-TEST_F(UnnestTest, limit) {
+TEST_P(UnnestTest, limit) {
   auto startLogicalPlan = [&]() {
     return lp::PlanBuilder{}.values({rowVector_});
   };
@@ -832,9 +777,8 @@ TEST_F(UnnestTest, limit) {
                            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher =
-        core::PlanMatcherBuilder{}.values().limit().project().unnest().build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    auto matcher = matchValues().limit().project().unnest().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
 
     auto referencePlan = startReferencePlan()
                              .limit(1, 1, {})
@@ -861,9 +805,8 @@ TEST_F(UnnestTest, limit) {
                            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher =
-        core::PlanMatcherBuilder{}.values().project().unnest().limit().build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    auto matcher = matchValues().project().unnest().limit().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
 
     auto referencePlan = startReferencePlan()
                              .project({
@@ -879,9 +822,10 @@ TEST_F(UnnestTest, limit) {
   }
 }
 
-TEST_F(UnnestTest, join) {
+TEST_P(UnnestTest, join) {
   auto startLogicalPlan = [&](lp::PlanBuilder::Context& ctx) {
-    return lp::PlanBuilder{ctx}.values({rowVector_});
+    return lp::PlanBuilder{ctx, /*allowAmbiguousOutputNames=*/true}.values(
+        {rowVector_});
   };
 
   auto startReferencePlan = [&](auto& planNodeIdGenerator) {
@@ -914,16 +858,15 @@ TEST_F(UnnestTest, join) {
             .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder{}
-                       .values()
-                       .hashJoin(core::PlanMatcherBuilder{}.values().build())
+    auto matcher = matchValues()
+                       .hashJoin(matchValues().build())
                        .project()
                        .unnest()
                        .project()
                        .unnest()
                        .project()
                        .build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    AXIOM_ASSERT_PLAN(plan, matcher);
     ASSERT_EQ(plan->outputType()->names(), expectedNames);
 
     auto generator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -986,16 +929,15 @@ TEST_F(UnnestTest, join) {
             .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder{}
-                       .values()
-                       .hashJoin(core::PlanMatcherBuilder{}.values().build())
+    auto matcher = matchValues()
+                       .hashJoin(matchValues().build())
                        .project()
                        .unnest()
                        .project()
                        .unnest()
                        .project()
                        .build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    AXIOM_ASSERT_PLAN(plan, matcher);
     ASSERT_EQ(plan->outputType()->names(), expectedNames);
 
     auto generator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -1058,22 +1000,26 @@ TEST_F(UnnestTest, join) {
             .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher =
-        core::PlanMatcherBuilder{}
-            .values()
-            .project()
-            .unnest()
-            .project()
-            .hashJoin(
-                core::PlanMatcherBuilder{}
-                    .values()
-                    .project()
-                    .unnest()
-                    .project()
-                    .build())
-            .project() // TODO Fix the Optimizer to remove this project.
-            .build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    // The join key is independent of the unnested columns, so v2 joins before
+    // unnesting (fewer rows through the join) and unnests each side above the
+    // join; v1 keeps the query's unnest-then-join order.
+    auto matcher = useV2_
+        ? matchValues()
+              .hashJoin(matchValues().build())
+              .project()
+              .unnest()
+              .project()
+              .unnest()
+              .project()
+              .build()
+        : matchValues()
+              .project()
+              .unnest()
+              .project()
+              .hashJoin(matchValues().project().unnest().project().build())
+              .project() // TODO Fix the Optimizer to remove this project.
+              .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
     ASSERT_EQ(plan->outputType()->names(), expectedNames);
 
     auto generator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -1136,20 +1082,16 @@ TEST_F(UnnestTest, join) {
             .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder{}
-                       .values()
-                       .project()
-                       .unnest()
-                       .hashJoin(
-                           core::PlanMatcherBuilder{}
-                               .values()
-                               .project()
-                               .unnest()
-                               .project()
-                               .build())
-                       .project()
-                       .build();
-    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+    // v1 emits a trailing project on the build side of the join; v2 elides it.
+    auto matcher =
+        matchValues()
+            .project()
+            .unnest()
+            .hashJoin(
+                matchValues().project().unnest().projectIf(!useV2_).build())
+            .project()
+            .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
     ASSERT_EQ(plan->outputType()->names(), expectedNames);
 
     auto generator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -1188,7 +1130,8 @@ TEST_F(UnnestTest, join) {
   }
 }
 
-TEST_F(UnnestTest, ordinality) {
+TEST_P(UnnestTest, ordinality) {
+  const parse::ParseOptions options = {.parseIntegerAsBigint = false};
   {
     auto query =
         "SELECT a, b, c FROM unnest(array[1, 2, 3], array[4, 5]) WITH ORDINALITY AS t(a, b, c)";
@@ -1197,11 +1140,12 @@ TEST_F(UnnestTest, ordinality) {
     auto logicalPlan = parseSelect(query, kTestConnectorId);
 
     // Two arrays are unnested with ordinality column.
-    auto matcher = matchValues()
-                       .project({"array[1, 2, 3] as foo", "array[4, 5] as bar"})
-                       .unnest({}, {"foo", "bar"}, "ordinality")
-                       .project({"e", "e_0", "ordinality"})
-                       .build();
+    auto matcher =
+        matchValues()
+            .project({"array[1, 2, 3] as foo", "array[4, 5] as bar"}, options)
+            .unnest({}, {"foo", "bar"}, "ordinality")
+            .project({"e", "e_0", "ordinality"})
+            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -1214,11 +1158,12 @@ TEST_F(UnnestTest, ordinality) {
     auto logicalPlan = parseSelect(query, kTestConnectorId);
 
     // Ordinality column is pruned because it's not used.
-    auto matcher = matchValues()
-                       .project({"array[1, 2, 3] as foo", "array[4, 5] as bar"})
-                       .unnest({}, {"foo", "bar"}, std::nullopt)
-                       .project({"e", "e_0"})
-                       .build();
+    auto matcher =
+        matchValues()
+            .project({"array[1, 2, 3] as foo", "array[4, 5] as bar"}, options)
+            .unnest({}, {"foo", "bar"}, std::nullopt)
+            .project({"e", "e_0"})
+            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -1231,11 +1176,12 @@ TEST_F(UnnestTest, ordinality) {
     auto logicalPlan = parseSelect(query, kTestConnectorId);
 
     // Ordinality column is pruned because it's not used.
-    auto matcher = matchValues()
-                       .project({"array[1, 2, 3] as foo", "array[4, 5] as bar"})
-                       .unnest({}, {"foo", "bar"}, std::nullopt)
-                       .project({"1"})
-                       .build();
+    auto matcher =
+        matchValues()
+            .project({"array[1, 2, 3] as foo", "array[4, 5] as bar"}, options)
+            .unnest({}, {"foo", "bar"}, std::nullopt)
+            .project({"1"})
+            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -1243,7 +1189,7 @@ TEST_F(UnnestTest, ordinality) {
 }
 
 // Unnest with a WHERE filter referencing unnested columns.
-TEST_F(UnnestTest, unnestWithFilter) {
+TEST_P(UnnestTest, unnestWithFilter) {
   testConnector_->addTable(
       "t", ROW({"a", "b"}, {MAP(VARCHAR(), INTEGER()), VARCHAR()}));
 
@@ -1258,7 +1204,7 @@ TEST_F(UnnestTest, unnestWithFilter) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(UnnestTest, multipleTables) {
+TEST_P(UnnestTest, multipleTables) {
   testConnector_->addTable("t", ROW({"a"}, ARRAY(BIGINT())));
 
   auto query = "SELECT * FROM t, UNNEST(a, array[1, 2, 3]) AS u(x, y)";
@@ -1270,7 +1216,7 @@ TEST_F(UnnestTest, multipleTables) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(UnnestTest, unnestWithJoinAndFilter) {
+TEST_P(UnnestTest, unnestWithJoinAndFilter) {
   testConnector_->addTable("t", ROW("a", ARRAY(INTEGER())));
   testConnector_->addTable("u", ROW("x", INTEGER()));
 
@@ -1279,21 +1225,31 @@ TEST_F(UnnestTest, unnestWithJoinAndFilter) {
   auto logicalPlan = parseSelect(query, kTestConnectorId);
   auto plan = toSingleNodePlan(logicalPlan);
 
-  // The filter n = x must not be converted to a join key between
-  // UnnestTable and table u. It must remain as a post-unnest filter.
-  auto matcher = matchScan("u")
-                     .nestedLoopJoin(matchScan("t").build())
-                     .unnest()
-                     .filter("x = n")
-                     .project({"1"})
-                     .build();
-  AXIOM_ASSERT_PLAN(plan, matcher);
+  // The filter n = x must not be converted to a join key between the
+  // UnnestTable and table u; it must remain a post-unnest filter.
+
+  // v1 and v2 pick opposite operand orders for this empty-table (tied-cost)
+  // cross join.
+  auto matchJoin = [&](const std::pair<std::string, std::string>& sides) {
+    return matchScan(sides.first)
+        .nestedLoopJoin(matchScan(sides.second).build())
+        .unnest()
+        .filter("x = n")
+        .project({"1"})
+        .build();
+  };
+
+  if (useV2_) {
+    AXIOM_ASSERT_PLAN(plan, matchJoin({"t", "u"}));
+  } else {
+    AXIOM_ASSERT_PLAN(plan, matchJoin({"u", "t"}));
+  }
 }
 
 // A column added by a CROSS JOIN with a single-row aggregate subquery
 // must remain in scope when followed by an UNNEST and both the SELECT
 // list and a WHERE filter reference that column.
-TEST_F(UnnestTest, crossJoinSingleRowAggregateAndUnnest) {
+TEST_P(UnnestTest, crossJoinSingleRowAggregateAndUnnest) {
   testConnector_->addTable(
       "t", ROW({"a", "ids"}, {INTEGER(), ARRAY(INTEGER())}));
   testConnector_->addTable("u", ROW("x", INTEGER()));
@@ -1306,21 +1262,23 @@ TEST_F(UnnestTest, crossJoinSingleRowAggregateAndUnnest) {
 
   auto logicalPlan = parseSelect(query, kTestConnectorId);
   auto plan = toSingleNodePlan(logicalPlan);
-  auto matcher =
+
+  // v2 fuses the filter into the join; v1 keeps it separate.
+  AXIOM_ASSERT_PLAN(
+      plan,
       matchScan("t")
           .nestedLoopJoin(
               matchScan("u").singleAggregation({}, {"count(*) as c"}).build())
-          .filter("c > a::BIGINT")
+          .filterIf(!useV2_, "c > a::BIGINT")
           .unnest({"c"}, {"ids"})
           .project({"n", "c"})
-          .build();
-  AXIOM_ASSERT_PLAN(plan, matcher);
+          .build());
 }
 
 // A LEFT JOIN whose ON clause references a single-row subquery's column via
 // a non-equi predicate must place the subquery's cross-join on the
 // preserved side before the LEFT join.
-TEST_F(UnnestTest, leftJoinFilterOnSingleRowSubquery) {
+TEST_P(UnnestTest, leftJoinFilterOnSingleRowSubquery) {
   testConnector_->addTable("t", ROW({"a", "b"}, {INTEGER(), ARRAY(INTEGER())}));
   testConnector_->addTable("u", ROW("x", INTEGER()));
   testConnector_->addTable("v", ROW("x", INTEGER()));
@@ -1335,12 +1293,15 @@ TEST_F(UnnestTest, leftJoinFilterOnSingleRowSubquery) {
 
   auto logicalPlan = parseSelect(query, kTestConnectorId);
   auto plan = toSingleNodePlan(logicalPlan);
+  // v2 materializes y = x + count in a Project before the join; v1 inlines it
+  // into the join filter.
   auto matcher =
       matchScan("t")
           .unnest({"a"}, {"b"})
           .nestedLoopJoin(matchScan("u")
                               .singleAggregation({}, {"count(*) as count"})
                               .build())
+          .projectIf(useV2_, {"a", "cast(x as bigint) + count as y"})
           .hashJoin(matchScan("v").build(), core::JoinType::kLeft)
           .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
@@ -1349,7 +1310,7 @@ TEST_F(UnnestTest, leftJoinFilterOnSingleRowSubquery) {
 // Same shape as leftJoinFilterOnSingleRowSubquery but with a small preserved
 // (left) side and a large optional (right) side, so the cost-based hash-right
 // variant wins.
-TEST_F(UnnestTest, leftJoinFilterOnSingleRowSubquerySmallPreservedSide) {
+TEST_P(UnnestTest, leftJoinFilterOnSingleRowSubquerySmallPreservedSide) {
   testConnector_->addTable("t", ROW({"a", "b"}, {INTEGER(), ARRAY(INTEGER())}))
       ->setStats(1, {{"a", {.numDistinct = 1}}});
   testConnector_->addTable("u", ROW("x", INTEGER()))
@@ -1367,21 +1328,25 @@ TEST_F(UnnestTest, leftJoinFilterOnSingleRowSubquerySmallPreservedSide) {
 
   auto logicalPlan = parseSelect(query, kTestConnectorId);
   auto plan = toSingleNodePlan(logicalPlan);
-  auto matcher = matchScan("v")
-                     .hashJoin(
-                         matchScan("t")
-                             .unnest({"a"}, {"b"})
-                             .nestedLoopJoin(matchScan("u")
-                                                 .singleAggregation(
-                                                     {}, {"count(*) as count"})
-                                                 .build())
-                             .build(),
-                         core::JoinType::kRight)
-                     .build();
+  // v2 materializes y = x + count in a Project before the join; v1 inlines it
+  // into the join filter.
+  auto matcher =
+      matchScan("v")
+          .hashJoin(
+              matchScan("t")
+                  .unnest({"a"}, {"b"})
+                  .nestedLoopJoin(
+                      matchScan("u")
+                          .singleAggregation({}, {"count(*) as count"})
+                          .build())
+                  .projectIf(useV2_, {"a", "cast(x as bigint) + count as y"})
+                  .build(),
+              core::JoinType::kRight)
+          .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(UnnestTest, crossJoinUnnestOnWindowFunctionOutput) {
+TEST_P(UnnestTest, crossJoinUnnestOnWindowFunctionOutput) {
   testConnector_->addTable("t", ROW({"a"}, {INTEGER()}));
 
   auto query =
@@ -1401,6 +1366,22 @@ TEST_F(UnnestTest, crossJoinUnnestOnWindowFunctionOutput) {
                      .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
+
+// Many chained unnests multiply the cardinality estimate past the float range.
+// The optimizer must saturate the estimate to a finite value and still produce
+// a plan rather than failing on a non-finite cardinality.
+TEST_P(UnnestTest, manyUnnestsCardinalityOverflow) {
+  std::string sql = "SELECT 1 FROM (VALUES 1) AS t(x)";
+  for (int32_t i = 0; i < 100; ++i) {
+    sql += fmt::format(
+        " CROSS JOIN UNNEST(ARRAY[1, 2, 3, 4, 5]) AS u{}(v{})", i, i);
+  }
+
+  auto logicalPlan = parseSelect(sql, kTestConnectorId);
+  ASSERT_NO_THROW(toSingleNodePlan(logicalPlan));
+}
+
+AXIOM_INSTANTIATE_V1_V2(UnnestTest);
 
 } // namespace
 } // namespace facebook::axiom::optimizer

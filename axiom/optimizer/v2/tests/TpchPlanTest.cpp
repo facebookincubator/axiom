@@ -343,7 +343,6 @@ TEST_F(TpchPlanTest, q08) {
                   .build())
           .hashJoinInner(matchScan("nation").build())
           .project()
-          .project()
           .aggregation()
           .project()
           .orderBy()
@@ -688,7 +687,6 @@ TEST_F(TpchPlanTest, q17) {
                   .build())
           .filter()
           .project()
-          .project()
           .aggregation()
           .project()
           .build();
@@ -781,7 +779,6 @@ TEST_F(TpchPlanTest, q20) {
                              .build())
           // TODO Optimize if(true, sum * 0.5, null) to sum * 0.5.
           .filter("cast(ps_availqty as double) > if(true, sum * 0.5, null)")
-          .project()
           .project()
           .hashJoinRightSemiFilter(
               matchScan("supplier")

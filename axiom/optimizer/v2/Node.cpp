@@ -576,6 +576,15 @@ Project::Project(Key key)
   VELOX_CHECK_EQ(this->outputColumns().size(), exprs_.size());
 }
 
+bool Project::isDeterministic() const {
+  for (ExprCP expr : exprs_) {
+    if (expr->containsNonDeterministic()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 size_t Project::KeyHash::operator()(const Project* node) const {
   return hashOf(node->input(), node->outputColumns(), node->exprs());
 }
@@ -975,22 +984,25 @@ bool MarkDistinct::KeyEq::operator()(const MarkDistinct* node, const Key& key)
 Values::Values(Key key)
     : Node(NodeType::kValues, ColumnVector{key.outputColumns}, {}),
       source_(key.source),
-      rows_(key.rows) {
+      rows_(key.rows),
+      channels_(std::move(key.channels)) {
   VELOX_CHECK(
       source_ == nullptr || rows_ == nullptr,
       "Values cannot carry both a passthrough source and folded rows");
 
   const auto numColumns = this->outputColumns().size();
+  VELOX_CHECK_EQ(
+      channels_.size(),
+      numColumns,
+      "Values channels must have one entry per output column");
+
   if (source_ != nullptr) {
     const auto& rowType = source_->outputType();
-    VELOX_CHECK_EQ(
-        rowType->size(),
-        numColumns,
-        "Values source schema must match outputColumns count");
     for (size_t i = 0; i < numColumns; ++i) {
+      VELOX_CHECK_LT(channels_[i], rowType->size());
       VELOX_CHECK(
-          rowType->childAt(i)->equivalent(
-              *this->outputColumns()[i]->value().type),
+          rowType->childAt(channels_[i])
+              ->equivalent(*this->outputColumns()[i]->value().type),
           "Values source column {} type must match outputColumns",
           i);
     }
@@ -1004,30 +1016,32 @@ Values::Values(Key key)
           row.kind(),
           velox::TypeKind::ROW,
           "Values folded rows must be row variants");
-      VELOX_CHECK_EQ(
-          row.row().size(),
-          numColumns,
-          "Values folded row field count must match outputColumns");
+      for (auto channel : channels_) {
+        VELOX_CHECK_LT(channel, row.row().size());
+      }
     }
   }
 }
 
 size_t Values::KeyHash::operator()(const Values* node) const {
-  return hashOf(node->source(), node->rows(), node->outputColumns());
+  return hashOf(
+      node->source(), node->rows(), node->outputColumns(), node->channels());
 }
 
 size_t Values::KeyHash::operator()(const Key& key) const {
-  return hashOf(key.source, key.rows, key.outputColumns);
+  return hashOf(key.source, key.rows, key.outputColumns, key.channels);
 }
 
 bool Values::KeyEq::operator()(const Values* left, const Values* right) const {
   return left->source() == right->source() && left->rows() == right->rows() &&
-      left->outputColumns() == right->outputColumns();
+      left->outputColumns() == right->outputColumns() &&
+      left->channels() == right->channels();
 }
 
 bool Values::KeyEq::operator()(const Key& key, const Values* node) const {
   return key.source == node->source() && key.rows == node->rows() &&
-      key.outputColumns == node->outputColumns();
+      key.outputColumns == node->outputColumns() &&
+      key.channels == node->channels();
 }
 
 bool Values::KeyEq::operator()(const Values* node, const Key& key) const {

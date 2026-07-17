@@ -1280,6 +1280,20 @@ TEST_F(CardinalityEstimationTest, unnest) {
       });
 }
 
+// A cartesian product of large tables pushes the cardinality estimate past the
+// float range. The estimate must saturate to a finite value so the planner can
+// still produce a plan.
+TEST_F(CardinalityEstimationTest, cardinalityOverflowSaturates) {
+  testConnector_->addTable("t", ROW({"a"}, {BIGINT()}))
+      ->setStats(10'000'000'000'000'000'000ULL, {{"a", {.numDistinct = 100}}});
+
+  verifyPlan("SELECT 1 FROM t t1, t t2, t t3", [](const Plan& plan) {
+    const auto cardinality = plan.op->resultCardinality();
+    ASSERT_TRUE(cardinality.has_value());
+    EXPECT_TRUE(std::isfinite(*cardinality));
+  });
+}
+
 // Verifies that LIMIT reduces output cardinality and adjusts column
 // constraints accordingly.
 TEST_F(CardinalityEstimationTest, limit) {

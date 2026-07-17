@@ -19,6 +19,7 @@
 #include <folly/container/F14Map.h>
 #include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/v2/ExprFactory.h"
 #include "axiom/optimizer/v2/NodeRewriter.h"
 
 namespace facebook::axiom::optimizer::v2 {
@@ -134,6 +135,23 @@ ExprCP PrecomputeProjections::toColumn(
 NodeCP PrecomputeProjections::node() && {
   if (!needsProject_) {
     return input_;
+  }
+
+  // Fold into a child Project rather than stacking a second one: substitute
+  // this project's expressions through the child's output->expression map.
+  // Skipped when the child has a non-deterministic expression, since a fold
+  // could evaluate such an output more than once.
+  //
+  // TODO: still inline the deterministic outputs when only some are
+  // non-deterministic — isolate the non-deterministic ones in a separate
+  // Project below and fold the rest.
+  if (input_->is(NodeType::kProject)) {
+    const auto* childProject = input_->as<Project>();
+    if (childProject->isDeterministic()) {
+      outExprs_ = ExprFactory(builder_).substitute(
+          outExprs_, childProject->outputColumns(), childProject->exprs());
+      input_ = childProject->input();
+    }
   }
   return builder_.make<Project>(
       {input_, std::move(outExprs_), std::move(outColumns_)});
@@ -407,14 +425,15 @@ NodeCP Rewriter::rewriteUnnest(const Unnest* unnest, NoContext& context) {
   // solely to feed a lifted unnest expression.
   PrecomputeProjections precompute{
       newInput, builder(), /*projectAllInputs=*/false};
+  // Keep the replicated (passthrough) columns first, before the lifted unnest
+  // expressions, so the project preserves input column order.
+  for (ColumnCP column : unnest->replicatedColumns()) {
+    precompute.toColumn(column);
+  }
   ExprVector newUnnestExprs;
   newUnnestExprs.reserve(unnest->unnestExpressions().size());
   for (ExprCP expr : unnest->unnestExpressions()) {
     newUnnestExprs.push_back(precompute.toColumn(expr));
-  }
-  // Keep the replicated (passthrough) columns in the project's output.
-  for (ColumnCP column : unnest->replicatedColumns()) {
-    precompute.toColumn(column);
   }
   newInput = std::move(precompute).node();
   // Structured fields (replicatedColumns / unnestColumns / ordinalityColumn)

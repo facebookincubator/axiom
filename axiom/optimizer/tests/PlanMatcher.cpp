@@ -50,14 +50,18 @@ namespace {
 template <typename T = PlanNode>
 class PlanMatcherImpl : public PlanMatcher {
  public:
-  PlanMatcherImpl() = default;
-
-  explicit PlanMatcherImpl(const std::shared_ptr<PlanMatcher>& sourceMatcher)
-      : sourceMatchers_{{sourceMatcher}} {}
+  explicit PlanMatcherImpl(parse::ParseOptions options = {})
+      : PlanMatcher(std::move(options)) {}
 
   explicit PlanMatcherImpl(
-      const std::vector<std::shared_ptr<PlanMatcher>>& sourceMatchers)
-      : sourceMatchers_{sourceMatchers} {}
+      const std::shared_ptr<PlanMatcher>& sourceMatcher,
+      parse::ParseOptions options = {})
+      : PlanMatcher(std::move(options)), sourceMatchers_{{sourceMatcher}} {}
+
+  explicit PlanMatcherImpl(
+      const std::vector<std::shared_ptr<PlanMatcher>>& sourceMatchers,
+      parse::ParseOptions options = {})
+      : PlanMatcher(std::move(options)), sourceMatchers_{sourceMatchers} {}
 
   MatchResult match(
       const PlanNodePtr& plan,
@@ -286,8 +290,7 @@ class HiveScanMatcher : public PlanMatcherImpl<TableScanNode> {
           << "Expected no remaining filter, but got "
           << remainingFilter->toString();
     } else {
-      auto expected =
-          parse::DuckSqlExpressionsParser().parseExpr(remainingFilter_);
+      auto expected = parseExpr(remainingFilter_);
       EXPECT_EQ(remainingFilter->toString(), expected->toString());
     }
 
@@ -337,8 +340,10 @@ class FilterMatcher : public PlanMatcherImpl<FilterNode> {
 
   FilterMatcher(
       const std::shared_ptr<PlanMatcher>& matcher,
-      const std::string& predicate)
-      : PlanMatcherImpl<FilterNode>({matcher}), predicate_{predicate} {}
+      const std::string& predicate,
+      const parse::ParseOptions& options)
+      : PlanMatcherImpl<FilterNode>({matcher}, options),
+        predicate_{predicate} {}
 
   MatchResult matchDetails(
       const FilterNode& plan,
@@ -347,8 +352,7 @@ class FilterMatcher : public PlanMatcherImpl<FilterNode> {
     SCOPED_TRACE(plan.toString(true, false));
 
     if (predicate_.has_value()) {
-      auto expected =
-          parse::DuckSqlExpressionsParser().parseExpr(predicate_.value());
+      auto expected = parseExpr(predicate_.value());
       if (!symbols.empty()) {
         expected = rewriteInputNames(expected, symbols);
       }
@@ -372,8 +376,10 @@ class ProjectMatcher : public PlanMatcherImpl<ProjectNode> {
 
   ProjectMatcher(
       const std::shared_ptr<PlanMatcher>& matcher,
-      const std::vector<std::string>& expressions)
-      : PlanMatcherImpl<ProjectNode>({matcher}), expressions_{expressions} {}
+      const std::vector<std::string>& expressions,
+      const parse::ParseOptions& options)
+      : PlanMatcherImpl<ProjectNode>({matcher}, options),
+        expressions_{expressions} {}
 
   MatchResult matchDetails(
       const ProjectNode& plan,
@@ -391,8 +397,7 @@ class ProjectMatcher : public PlanMatcherImpl<ProjectNode> {
     for (auto i = 0; i < plan.projections().size(); ++i) {
       // Verify the expression (if one was given) and capture its alias.
       if (!expressions_.empty()) {
-        auto expected =
-            parse::DuckSqlExpressionsParser().parseExpr(expressions_[i]);
+        auto expected = parseExpr(expressions_[i]);
         if (expected->alias()) {
           newSymbols[expected->alias().value()] = plan.names()[i];
         }
@@ -450,8 +455,7 @@ class ParallelProjectMatcher : public PlanMatcherImpl<ParallelProjectNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < expressions_.size(); ++i) {
-        auto expected =
-            parse::DuckSqlExpressionsParser().parseExpr(expressions_[i]);
+        auto expected = parseExpr(expressions_[i]);
         ExprMatcher::match(plan.projections()[i], expected->dropAlias());
         AXIOM_TEST_RETURN_IF_FAILURE
       }
@@ -488,8 +492,7 @@ class UnnestMatcher : public PlanMatcherImpl<UnnestNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < replicateExprs_->size(); ++i) {
-        auto expected =
-            parse::DuckSqlExpressionsParser().parseExpr((*replicateExprs_)[i]);
+        auto expected = parseExpr((*replicateExprs_)[i]);
         if (!symbols.empty()) {
           expected = rewriteInputNames(expected, symbols);
         }
@@ -505,8 +508,7 @@ class UnnestMatcher : public PlanMatcherImpl<UnnestNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < unnestExprs_->size(); ++i) {
-        auto expected =
-            parse::DuckSqlExpressionsParser().parseExpr((*unnestExprs_)[i]);
+        auto expected = parseExpr((*unnestExprs_)[i]);
         if (!symbols.empty()) {
           expected = rewriteInputNames(expected, symbols);
         }
@@ -708,8 +710,7 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < groupingKeys_.size(); ++i) {
-        auto expected =
-            parse::DuckSqlExpressionsParser().parseExpr(groupingKeys_[i]);
+        auto expected = parseExpr(groupingKeys_[i]);
         if (!symbols.empty()) {
           expected = rewriteInputNames(expected, symbols);
         }
@@ -912,8 +913,7 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
         EXPECT_NE(plan.filter(), nullptr);
         AXIOM_TEST_RETURN_IF_FAILURE
 
-        auto expected =
-            parse::DuckSqlExpressionsParser().parseExpr(filter_.value());
+        auto expected = parseExpr(filter_.value());
         if (!symbols.empty()) {
           expected = rewriteInputNames(expected, symbols);
         }
@@ -1338,8 +1338,7 @@ class EnforceDistinctMatcher : public PlanMatcherImpl<EnforceDistinctNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < distinctKeys_.size(); ++i) {
-        auto expected =
-            parse::DuckSqlExpressionsParser().parseExpr(distinctKeys_[i]);
+        auto expected = parseExpr(distinctKeys_[i]);
         if (!symbols.empty()) {
           expected = rewriteInputNames(expected, symbols);
         }
@@ -1846,8 +1845,7 @@ class GroupIdMatcher : public PlanMatcherImpl<GroupIdNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < aggregationInputs_->size(); ++i) {
-        auto expected = parse::DuckSqlExpressionsParser().parseExpr(
-            (*aggregationInputs_)[i]);
+        auto expected = parseExpr((*aggregationInputs_)[i]);
         if (!symbols.empty()) {
           expected = rewriteInputNames(expected, symbols);
         }
@@ -1956,9 +1954,11 @@ PlanMatcherBuilder& PlanMatcherBuilder::filter() {
   return *this;
 }
 
-PlanMatcherBuilder& PlanMatcherBuilder::filter(const std::string& predicate) {
+PlanMatcherBuilder& PlanMatcherBuilder::filter(
+    const std::string& predicate,
+    const parse::ParseOptions& options) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
-  matcher_ = std::make_shared<FilterMatcher>(matcher_, predicate);
+  matcher_ = std::make_shared<FilterMatcher>(matcher_, predicate, options);
   return *this;
 }
 
@@ -1969,9 +1969,10 @@ PlanMatcherBuilder& PlanMatcherBuilder::project() {
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::project(
-    const std::vector<std::string>& expressions) {
+    const std::vector<std::string>& expressions,
+    const parse::ParseOptions& options) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
-  matcher_ = std::make_shared<ProjectMatcher>(matcher_, expressions);
+  matcher_ = std::make_shared<ProjectMatcher>(matcher_, expressions, options);
   return *this;
 }
 

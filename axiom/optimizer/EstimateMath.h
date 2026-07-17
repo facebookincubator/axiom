@@ -17,20 +17,40 @@
 #pragma once
 
 #include <algorithm>
+#include <limits>
 #include <optional>
 
 /// Arithmetic over optional statistical estimates (cardinality, fanout, ...).
 /// Unknown (nullopt) propagates: if any operand is unknown, the result is
 /// unknown. This keeps callers from silently treating a missing estimate as a
 /// concrete value. Use these instead of unwrapping at estimate-combining sites.
+///
+/// Results saturate to the finite float range: a chain of estimate operations
+/// (e.g. the cardinality of many cross joins) can exceed what a float holds,
+/// and a non-finite estimate breaks downstream consumers. Saturating keeps a
+/// pathological-but-valid query plannable instead of overflowing to infinity.
 namespace facebook::axiom::optimizer {
+
+/// Clamps a value that overflowed to +/- infinity back to the finite range.
+/// NaN is intentionally not handled: it cannot arise from the finite-operand
+/// arithmetic here, so a NaN estimate signals a bug upstream and must reach the
+/// downstream isfinite() check rather than being masked by a fabricated value.
+inline float saturate(float value) {
+  if (value > std::numeric_limits<float>::max()) {
+    return std::numeric_limits<float>::max();
+  }
+  if (value < std::numeric_limits<float>::lowest()) {
+    return std::numeric_limits<float>::lowest();
+  }
+  return value;
+}
 
 /// Multiplication.
 inline std::optional<float> mul(
     std::optional<float> a,
     std::optional<float> b) {
   if (a.has_value() && b.has_value()) {
-    return *a * *b;
+    return saturate(*a * *b);
   }
   return std::nullopt;
 }
@@ -40,7 +60,7 @@ inline std::optional<float> add(
     std::optional<float> a,
     std::optional<float> b) {
   if (a.has_value() && b.has_value()) {
-    return *a + *b;
+    return saturate(*a + *b);
   }
   return std::nullopt;
 }
@@ -50,7 +70,7 @@ inline std::optional<float> subtract(
     std::optional<float> a,
     std::optional<float> b) {
   if (a.has_value() && b.has_value()) {
-    return *a - *b;
+    return saturate(*a - *b);
   }
   return std::nullopt;
 }
@@ -60,7 +80,7 @@ inline std::optional<float> divide(
     std::optional<float> a,
     std::optional<float> b) {
   if (a.has_value() && b.has_value() && *b != 0) {
-    return *a / *b;
+    return saturate(*a / *b);
   }
   return std::nullopt;
 }

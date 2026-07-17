@@ -212,7 +212,9 @@ class LimitAndOrderRewriter : public NodeRewriter<LimitContext> {
   LIMIT_BARRIER(Filter, rewriteFilter, true)
   LIMIT_BARRIER(Aggregate, rewriteAggregate, false)
   LIMIT_BARRIER(GroupId, rewriteGroupId, false)
-  LIMIT_BARRIER(Unnest, rewriteUnnest, false)
+  // Unnest emits each input row's unnested rows in input order, so it passes
+  // its input's order through: a Sort below it stays observable.
+  LIMIT_BARRIER(Unnest, rewriteUnnest, true)
   LIMIT_BARRIER(Join, rewriteJoin, false)
   LIMIT_BARRIER(Window, rewriteWindow, false)
   LIMIT_BARRIER(Apply, rewriteApply, false)

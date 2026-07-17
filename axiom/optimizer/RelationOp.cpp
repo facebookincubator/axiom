@@ -259,7 +259,11 @@ void RelationOp::checkInputCardinality() const {
     // Only validate when the cardinality is known; an unknown estimate
     // legitimately propagates as nullopt.
     if (inputCardinality.has_value()) {
-      VELOX_CHECK(std::isfinite(*inputCardinality));
+      VELOX_CHECK(
+          std::isfinite(*inputCardinality),
+          "Input cardinality is not finite; estimate arithmetic should saturate "
+          "to a finite value. Operator: {}",
+          relTypeName());
 
       // TODO Assert that inputCardinality > 0.
       VELOX_CHECK_GE(*inputCardinality, 0);

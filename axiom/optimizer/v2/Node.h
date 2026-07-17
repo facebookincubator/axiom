@@ -308,6 +308,11 @@ class Project : public Node {
     return exprs_;
   }
 
+  /// True if no output expression contains a non-deterministic function, so an
+  /// output can be substituted (inlined) into a consumer without changing
+  /// semantics.
+  bool isDeterministic() const;
+
   std::span<const NodeCP> inputs() const override {
     return {&input_, 1};
   }
@@ -827,6 +832,13 @@ class Values : public Node {
     const velox::Variant* rows;
     /// Output schema (defines the columns in all cases).
     ColumnVector outputColumns;
+    /// For each output column, its index into the underlying data (`source`
+    /// schema / `rows` fields). Identity `0..n-1` when the Values emits every
+    /// data column; pushdown pruning removes entries, leaving holes so a
+    /// dropped data column is never materialized. Must have one entry per
+    /// output column — Builder::makeValues fills identity for the emit-all
+    /// case.
+    QGVector<velox::column_index_t> channels;
   };
 
   /// Transparent hasher for interning `Values`s by identity.
@@ -854,6 +866,11 @@ class Values : public Node {
     return rows_;
   }
 
+  /// For each output column, its index into the underlying data. See Key.
+  const QGVector<velox::column_index_t>& channels() const {
+    return channels_;
+  }
+
   std::span<const NodeCP> inputs() const override {
     return {};
   }
@@ -864,6 +881,7 @@ class Values : public Node {
  private:
   const logical_plan::ValuesNode* const source_;
   const velox::Variant* const rows_;
+  const QGVector<velox::column_index_t> channels_;
 };
 
 using ValuesCP = const Values*;
