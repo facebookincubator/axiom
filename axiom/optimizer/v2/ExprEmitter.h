@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/container/F14Map.h>
+
 #include "axiom/common/Enums.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "velox/core/Expressions.h"
@@ -64,6 +66,14 @@ class ExprEmitter {
       ColumnNaming naming = ColumnNaming::kOutputName);
 
  private:
+  // Memoizes each Expr's lowered form for the duration of one conversion, so a
+  // shared subexpression DAG lowers in linear rather than exponential time.
+  using ExprCache = folly::F14FastMap<ExprCP, velox::core::TypedExprPtr>;
+
+  // Lowers 'expr', reusing 'cache' for already-lowered subexpressions.
+  velox::core::TypedExprPtr
+  toTypedExpr(ExprCP expr, ColumnNaming naming, ExprCache& cache);
+
   // Lowers a `Call`. 'args' are the already-lowered arguments.
   velox::core::TypedExprPtr callToTypedExpr(
       const Call* call,

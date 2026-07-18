@@ -168,36 +168,62 @@ velox::core::TypedExprPtr ExprEmitter::callToTypedExpr(
 velox::core::TypedExprPtr ExprEmitter::toTypedExpr(
     ExprCP expr,
     ColumnNaming naming) {
+  ExprCache cache;
+  return toTypedExpr(expr, naming, cache);
+}
+
+velox::core::TypedExprPtr
+ExprEmitter::toTypedExpr(ExprCP expr, ColumnNaming naming, ExprCache& cache) {
+  // Exprs form a DAG: a shared subexpression is one interned node reached from
+  // many parents. Memoize per conversion so each node is lowered once; without
+  // this, a deeply shared expression lowers in exponential time. 'naming' is
+  // fixed for the whole conversion, so a plain Expr* key is sufficient.
+  if (auto it = cache.find(expr); it != cache.end()) {
+    return it->second;
+  }
+
+  velox::core::TypedExprPtr result;
   switch (expr->type()) {
     case PlanType::kColumnExpr:
-      return columnToTypedExpr(expr->as<Column>(), naming);
+      result = columnToTypedExpr(expr->as<Column>(), naming);
+      break;
     case PlanType::kLiteralExpr:
-      return literalToTypedExpr(expr->as<Literal>());
+      result = literalToTypedExpr(expr->as<Literal>());
+      break;
     case PlanType::kCallExpr: {
       const auto* call = expr->as<Call>();
       std::vector<velox::core::TypedExprPtr> args;
       args.reserve(call->args().size());
       for (ExprCP arg : call->args()) {
-        args.push_back(toTypedExpr(arg, naming));
+        args.push_back(toTypedExpr(arg, naming, cache));
       }
-      return callToTypedExpr(call, std::move(args));
+      result = callToTypedExpr(call, std::move(args));
+      break;
     }
     case PlanType::kLambdaExpr: {
       const auto* lambda = expr->as<Lambda>();
-      return lambdaToTypedExpr(lambda, toTypedExpr(lambda->body(), naming));
+      result =
+          lambdaToTypedExpr(lambda, toTypedExpr(lambda->body(), naming, cache));
+      break;
     }
     default:
       VELOX_NYI("Unsupported expression type: {}", expr->typeName());
   }
+
+  cache.emplace(expr, result);
+  return result;
 }
 
 std::vector<velox::core::TypedExprPtr> ExprEmitter::toTypedExprs(
     const ExprVector& exprs,
     ColumnNaming naming) {
+  // One cache across all expressions: they share 'naming' and often share
+  // subexpressions (e.g. a Project's output columns).
+  ExprCache cache;
   std::vector<velox::core::TypedExprPtr> result;
   result.reserve(exprs.size());
   for (ExprCP expr : exprs) {
-    result.push_back(toTypedExpr(expr, naming));
+    result.push_back(toTypedExpr(expr, naming, cache));
   }
   return result;
 }
