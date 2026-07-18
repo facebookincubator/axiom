@@ -2051,12 +2051,22 @@ std::vector<ExecutableFragment> Emitter::emitFragments(
   velox::core::PlanNodePtr outputProjection;
 
   if (root->is(NodeType::kTableWrite)) {
-    // A table write is a root sink: emit it (and its gathered input) directly
-    // as the single root fragment. Its output is the write-stats row the runner
+    // A table write is a root sink: emit it (and its gathered input) as the
+    // single root fragment. Its output is the write-stats row the runner
     // interprets via FinishWrite, not a user column layout, so it takes no
-    // output-rename projection.
+    // output-rename projection. Like the other roots, cap the output fragment
+    // with a single PartitionedOutput when results are consumed remotely, so
+    // the runner reads the stats rows from a PartitionedOutput as it does for
+    // every other fragment; otherwise emit the write directly.
     currentFragment_ = &top;
-    top.fragment.planNode = emit(root);
+    velox::core::PlanNodePtr writePlan = emit(root);
+    if (options_.remoteOutput) {
+      outputProjection = writePlan;
+      top.fragment.planNode =
+          makeSingleOutput(writePlan->outputType(), writePlan);
+    } else {
+      top.fragment.planNode = writePlan;
+    }
   } else {
     // A root whose subtree already runs on one task (e.g. below a global ORDER
     // BY or aggregate) needs no output gather and is emitted directly, like the

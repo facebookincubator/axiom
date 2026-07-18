@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
 
@@ -173,6 +174,44 @@ TEST_P(RemoteOutputTest, sameColumnTwice) {
         // like v2.
         builder.project().gather().project();
       }
+    }
+
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, builder.build());
+  }
+}
+
+TEST_P(RemoteOutputTest, tableWrite) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  testConnector_->addTable("w", ROW({"a", "b"}, BIGINT()));
+
+  auto logicalPlan =
+      lp::PlanBuilder(lp::PlanBuilder::Context(kTestConnectorId, "default"))
+          .tableScan("t")
+          .tableWrite("w", lp::WriteKind::kInsert, {"a", "b"})
+          .build();
+
+  for (bool remoteOutput : {false, true}) {
+    SCOPED_TRACE(remoteOutput ? "remoteOutput=true" : "remoteOutput=false");
+    auto plan = planVelox(
+        logicalPlan,
+        {.numWorkers = 2, .numDrivers = 2, .remoteOutput = remoteOutput});
+
+    auto builder = matchScan("t").tableWrite().localGather().tableWriteMerge();
+    // v2 always runs the final TableWriteMerge on a separate coordinator
+    // fragment fed by a shuffle. v1 does the same unless it collocates the
+    // whole write in a single fragment, which it does when remote output caps
+    // that fragment with a PartitionedOutput.
+    if (useV2_ || !remoteOutput) {
+      builder.shuffle();
+    }
+    builder.tableWriteMerge();
+
+    // With remote output the output fragment's root is capped by a single
+    // PartitionedOutputNode so the written-row count can be consumed remotely.
+    // Without this cap the streaming scheduler rejects the plan (the output
+    // fragment must be rooted at a PartitionedOutputNode).
+    if (remoteOutput) {
+      builder.partitionedOutputSingle();
     }
 
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, builder.build());
