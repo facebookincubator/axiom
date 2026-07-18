@@ -17,6 +17,7 @@
 
 #include <functional>
 #include "axiom/common/Enums.h"
+#include "axiom/common/SchemaFunctionName.h"
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/common/SchemaTypeName.h"
 #include "axiom/connectors/ConnectorSession.h"
@@ -902,6 +903,39 @@ struct PushdownRoot {
   TablePtr table;
 };
 
+/// One overload of a SQL-invoked function resolved from a connector, e.g. a
+/// portable UDF from an external function registry. The caller inlines the body
+/// at the call site (the connector does not parse it), so the function leaves
+/// no call node in the plan.
+struct SqlFunctionDefinition {
+  /// Declared result type. Carried rather than derived from 'body' because it
+  /// may be wider than the body's inferred type: the caller casts (widens) the
+  /// resolved body to it. The defining connector guarantees the body type is
+  /// coercible to this type.
+  velox::TypePtr returnType;
+
+  /// Formal argument names, positionally aligned with 'argumentTypes'. Bind
+  /// the call's arguments to matching references inside 'body'.
+  std::vector<std::string> argumentNames;
+
+  /// Formal argument types. Used to select among overloads.
+  std::vector<velox::TypePtr> argumentTypes;
+
+  /// SQL expression over 'argumentNames', in the dialect of the defining
+  /// connector. Each connector documents the single SQL dialect it supports;
+  /// callers parse 'body' according to that documentation.
+  std::string body;
+
+  /// Whether a null in any argument forces a null result without evaluating the
+  /// body (Velox's defaultNullBehavior; SQL's RETURNS NULL ON NULL INPUT).
+  /// Carried explicitly because it cannot be recovered from 'body': it is a
+  /// property of the definition that dictates how the body is embedded. When
+  /// true, the caller guards the inlined body to yield null on a null argument.
+  bool defaultNullBehavior{true};
+};
+
+using SqlFunctionDefinitionPtr = std::shared_ptr<const SqlFunctionDefinition>;
+
 class ConnectorMetadata {
  public:
   /// Return the metadata for a given connector ID. Throws if not registered.
@@ -963,6 +997,17 @@ class ConnectorMetadata {
   /// @return nullptr if the type is not found.
   virtual velox::TypePtr findType(const SchemaTypeName& /*typeName*/) {
     return nullptr;
+  }
+
+  /// Finds all overloads of a SQL-invoked function by schema-qualified name.
+  /// Connectors that serve externally-defined SQL functions (e.g. portable
+  /// UDFs from a function registry) override this. Callers select among the
+  /// returned overloads by argument type and inline the chosen body.
+  ///
+  /// @return empty if the function is not found.
+  virtual std::vector<SqlFunctionDefinitionPtr> findFunction(
+      const SchemaFunctionName& /*functionName*/) {
+    return {};
   }
 
   /// EXPERIMENTAL. Opt-in gate for connector pushdown. Default false.

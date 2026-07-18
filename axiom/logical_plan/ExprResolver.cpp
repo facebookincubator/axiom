@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 #include "axiom/logical_plan/ExprResolver.h"
+
+#include <folly/ScopeGuard.h>
+#include <folly/container/F14Map.h>
+
 #include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "velox/exec/Aggregate.h"
@@ -737,7 +741,139 @@ int32_t parseLegacyRowFieldOrdinal(
   return ordinal;
 }
 
+bool containsSubquery(const ExprPtr& expr) {
+  if (expr->isSubquery()) {
+    return true;
+  }
+  for (const auto& input : expr->inputs()) {
+    if (containsSubquery(input)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 } // namespace
+
+ExprPtr ExprResolver::resolveSqlFunction(
+    const std::string& name,
+    const std::vector<ExprPtr>& inputs) const {
+  if (sqlFunctionResolver_ == nullptr) {
+    return nullptr;
+  }
+
+  // Reject recursion before the potentially expensive resolver call: a name in
+  // 'inliningFunctions_' is a SQL function whose body is currently being
+  // resolved, so re-entry is a recursive reference.
+  VELOX_USER_CHECK(
+      !inliningFunctions_.contains(name),
+      "Recursive SQL function is not supported: {}",
+      name);
+
+  auto resolved = sqlFunctionResolver_(name, toTypes(inputs));
+  if (!resolved.has_value()) {
+    return nullptr;
+  }
+
+  // The resolver selects an overload matching the call's argument count, and
+  // returns names and types 1:1, so a mismatch is an internal contract
+  // violation, not a user error.
+  VELOX_CHECK_EQ(
+      resolved->argumentNames.size(),
+      inputs.size(),
+      "SQL function overload arity mismatch: {}",
+      name);
+  VELOX_CHECK_EQ(
+      resolved->argumentTypes.size(),
+      resolved->argumentNames.size(),
+      "SQL function has mismatched argument names and types: {}",
+      name);
+
+  inliningFunctions_.insert(name);
+  SCOPE_EXIT {
+    inliningFunctions_.erase(name);
+  };
+
+  // Bind each argument, casting it to its declared type so the body operates on
+  // the declared types (e.g. int -> bigint). The resolver already matched the
+  // call to the signature and verified coercibility, so this only applies the
+  // cast and cannot fail here.
+  std::vector<ExprPtr> args;
+  args.reserve(inputs.size());
+  folly::F14FastMap<std::string, ExprPtr> bindings;
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    auto arg = inputs[i]->type()->equivalent(*resolved->argumentTypes[i])
+        ? inputs[i]
+        : std::make_shared<SpecialFormExpr>(
+              resolved->argumentTypes[i], SpecialForm::kCast, inputs[i]);
+    VELOX_USER_CHECK(
+        bindings.emplace(resolved->argumentNames[i], arg).second,
+        "Duplicate argument name in SQL function: {}: {}",
+        resolved->argumentNames[i],
+        name);
+    args.push_back(arg);
+  }
+
+  // A body identifier must be one of the function's arguments; nested
+  // SQL-invoked functions in the body recurse through resolveScalarTypes.
+  folly::F14FastSet<std::string> usedArguments;
+  auto argumentResolver = [&](const std::optional<std::string>& alias,
+                              const std::string& fieldName) -> ExprPtr {
+    // An alias-qualified reference is struct field access on an argument (a
+    // function body has no table aliases); returning nullptr lets
+    // resolveScalarTypes dereference the argument instead.
+    if (alias.has_value()) {
+      return nullptr;
+    }
+    auto it = bindings.find(fieldName);
+    VELOX_USER_CHECK(
+        it != bindings.end(),
+        "Unknown identifier in SQL function body: {}: {}",
+        fieldName,
+        name);
+    usedArguments.insert(fieldName);
+    return it->second;
+  };
+
+  auto body = resolveScalarTypes(resolved->body, argumentResolver);
+
+  // A subquery in the body would carry argument references that bypass
+  // 'argumentResolver' -- they would be neither substituted nor counted below.
+  VELOX_USER_CHECK(
+      !containsSubquery(body),
+      "Subqueries in SQL function bodies are not supported: {}",
+      name);
+
+  // Every argument must appear in the body; otherwise inlining would drop the
+  // corresponding argument's evaluation.
+  VELOX_USER_CHECK_EQ(
+      usedArguments.size(),
+      bindings.size(),
+      "SQL function does not use all of its arguments: {}",
+      name);
+
+  // Cast the body to the declared return type. The connector should guarantee
+  // coercibility; verify it so an inconsistent definition fails cleanly here
+  // instead of emitting an invalid cast.
+  if (!body->type()->equivalent(*resolved->returnType)) {
+    VELOX_USER_CHECK(
+        coercer_->coerce(body->type(), resolved->returnType).has_value(),
+        "SQL function body is not coercible to its declared return type: {} to {}: {}",
+        body->type()->toString(),
+        resolved->returnType->toString(),
+        name);
+    body = std::make_shared<SpecialFormExpr>(
+        resolved->returnType, SpecialForm::kCast, body);
+  }
+
+  // TODO: Skip the wrapper when the resolved body already propagates nulls from
+  // every argument (needs null-propagation analysis over the resolved body).
+  if (resolved->nullWrapper) {
+    body = resolved->nullWrapper(body, args);
+  }
+
+  return body;
+}
 
 ExprPtr ExprResolver::resolveScalarTypes(
     const velox::core::ExprPtr& expr,
@@ -832,6 +968,10 @@ ExprPtr ExprResolver::resolveScalarTypes(
         return folded;
       }
       return specialForm;
+    }
+
+    if (auto inlined = resolveSqlFunction(name, inputs)) {
+      return inlined;
     }
 
     auto type = resolveScalarFunction(name, inputs, coercer_);

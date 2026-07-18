@@ -619,6 +619,15 @@ class TestConnectorMetadata : public ConnectorMetadata {
   /// with the same name is already registered.
   void addType(const SchemaTypeName& typeName, velox::TypePtr type);
 
+  std::vector<SqlFunctionDefinitionPtr> findFunction(
+      const SchemaFunctionName& functionName) override;
+
+  /// Registers a SQL-invoked function for findFunction() resolution. Throws if
+  /// a function with the same name is already registered.
+  void addFunction(
+      const SchemaFunctionName& functionName,
+      SqlFunctionDefinition definition);
+
   ViewPtr findView(const SchemaTableName& tableName) override;
 
   /// Register a view with the given name, output schema, and SQL text.
@@ -667,6 +676,7 @@ class TestConnectorMetadata : public ConnectorMetadata {
 
   folly::F14FastSet<std::string> schemas_{"default"};
   folly::F14FastMap<SchemaTypeName, velox::TypePtr> types_;
+  folly::F14FastMap<SchemaFunctionName, SqlFunctionDefinitionPtr> functions_;
 };
 
 /// At DataSource creation time, the data contained in the corresponding Table

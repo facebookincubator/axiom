@@ -561,6 +561,28 @@ void TestConnectorMetadata::addType(
   VELOX_CHECK(inserted, "Type already registered: {}", typeName);
 }
 
+std::vector<SqlFunctionDefinitionPtr> TestConnectorMetadata::findFunction(
+    const SchemaFunctionName& functionName) {
+  auto it = functions_.find(functionName);
+  if (it == functions_.end()) {
+    return {};
+  }
+  return {it->second};
+}
+
+void TestConnectorMetadata::addFunction(
+    const SchemaFunctionName& functionName,
+    SqlFunctionDefinition definition) {
+  VELOX_CHECK(
+      schemas_.contains(functionName.schema),
+      "Schema not found: {}",
+      functionName.schema);
+  auto [_, inserted] = functions_.emplace(
+      functionName,
+      std::make_shared<const SqlFunctionDefinition>(std::move(definition)));
+  VELOX_CHECK(inserted, "Function already registered: {}", functionName);
+}
+
 ViewPtr TestConnectorMetadata::findView(const SchemaTableName& tableName) {
   auto it = views_.find(tableName);
   if (it == views_.end()) {

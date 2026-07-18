@@ -21,6 +21,7 @@ add_library(
   CatalogSchemaTableName.cpp
   ConfigRegistry.cpp
   QueryRuntimeStats.cpp
+  SchemaFunctionName.cpp
   SchemaTableName.cpp
   SchemaTypeName.cpp
   SessionConfig.cpp

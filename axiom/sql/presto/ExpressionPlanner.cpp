@@ -1228,7 +1228,14 @@ lp::ExprApi ExpressionPlanner::toExpr(
         return toAggregateCallExpr(call, funcName, args, options);
       }
 
-      auto callExpr = lp::Call(funcName, args);
+      // A qualified (multi-part) name denotes a connector-defined SQL-invoked
+      // function. Encode it with a leading '.' so downstream resolution can
+      // distinguish it from a builtin; a plain builtin keeps its bare name.
+      auto callExpr = lp::Call(
+          call->name()->parts().size() > 1
+              ? "." + call->name()->fullyQualifiedName()
+              : funcName,
+          args);
 
       if (call->window() != nullptr) {
         auto windowSpec = convertWindow(call->window(), options);
