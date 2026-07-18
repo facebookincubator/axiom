@@ -17,3 +17,8 @@ SELECT CAST(c AS DECIMAL(4,1)) = CAST(b AS DOUBLE) FROM t
 SELECT CAST(c AS DECIMAL(4,1)) / CAST(b AS DOUBLE) FROM t
 ----
 SELECT SIN(CAST(c AS DECIMAL(4,1))) FROM t
+----
+-- duckdb: SELECT 2
+SELECT cardinality(
+    CAST(ARRAY[CAST('2803:6082:f836::/48' AS ipprefix), CAST('2803:6082:f837::/48' AS ipprefix)]
+            AS array(varchar)))
