@@ -132,6 +132,24 @@ TEST_P(TestConnectorQueryTest, writeFiltered) {
   velox::test::assertEqualVectors(actual, expected);
 }
 
+// A chain of CTEs that each square the previous column inlines into a single
+// expression whose shared subexpressions form a DAG with 2^depth-way sharing.
+// Converting that expression to a Velox plan must reuse each shared node's
+// result rather than re-expanding it per reference, which would be exponential.
+TEST_P(TestConnectorQueryTest, sharedSubexpressionConversion) {
+  testConnector_->addTable("t", ROW({"x"}, {BIGINT()}));
+
+  constexpr int kDepth = 28;
+  std::string sql = "WITH t0 AS (SELECT x FROM t)";
+  for (int i = 1; i <= kDepth; ++i) {
+    sql += fmt::format(", t{0} AS (SELECT x * x AS x FROM t{1})", i, i - 1);
+  }
+  sql += fmt::format(" SELECT x FROM t{}", kDepth);
+
+  auto logicalPlan = parseSelect(sql, kTestConnectorId);
+  ASSERT_NO_THROW(toSingleNodePlan(logicalPlan));
+}
+
 AXIOM_INSTANTIATE_V1_V2(TestConnectorQueryTest);
 
 } // namespace

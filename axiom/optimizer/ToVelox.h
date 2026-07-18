@@ -136,6 +136,17 @@ class ToVelox {
 
   std::vector<velox::core::TypedExprPtr> toTypedExprs(const ExprVector& exprs);
 
+  // Memoizes each Expr's lowered form for the duration of one conversion, so a
+  // shared subexpression DAG lowers in linear rather than exponential time.
+  using ExprCache = folly::F14FastMap<ExprCP, velox::core::TypedExprPtr>;
+
+  // Lowers 'expr', reusing 'cache' for already-lowered subexpressions.
+  velox::core::TypedExprPtr toTypedExpr(ExprCP expr, ExprCache& cache);
+
+  // Lowers 'expr' without consulting 'cache' (the caller memoizes the result);
+  // recurses into subexpressions through the caching toTypedExpr(expr, cache).
+  velox::core::TypedExprPtr toTypedExprUncached(ExprCP expr, ExprCache& cache);
+
   void setLeafData(
       int32_t id,
       std::vector<velox::core::TypedExprPtr> filterConjuncts,

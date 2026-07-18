@@ -826,25 +826,47 @@ velox::core::TypedExprPtr ToVelox::pathToGetter(
 
 std::vector<velox::core::TypedExprPtr> ToVelox::toTypedExprs(
     const ExprVector& exprs) {
+  // One cache across all expressions: they share conversion context and often
+  // share subexpressions (e.g. a Project's output columns).
+  ExprCache cache;
   std::vector<velox::core::TypedExprPtr> typedExprs;
   typedExprs.reserve(exprs.size());
   for (auto expr : exprs) {
-    typedExprs.emplace_back(toTypedExpr(expr));
+    typedExprs.emplace_back(toTypedExpr(expr, cache));
   }
   return typedExprs;
 }
 
 velox::core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
-  auto it = projectedExprs_.find(expr);
-  if (it != projectedExprs_.end()) {
-    return it->second;
-  }
+  ExprCache cache;
+  return toTypedExpr(expr, cache);
+}
 
+velox::core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr, ExprCache& cache) {
+  auto projected = projectedExprs_.find(expr);
+  if (projected != projectedExprs_.end()) {
+    return projected->second;
+  }
+  // Exprs form a DAG; memoize per conversion so a shared subexpression is
+  // lowered once. Without this a deeply shared expression lowers in exponential
+  // time. The conversion context (column naming, altered types, subfield
+  // getters) is fixed for one conversion, so an Expr* key is sufficient.
+  if (auto cached = cache.find(expr); cached != cache.end()) {
+    return cached->second;
+  }
+  auto result = toTypedExprUncached(expr, cache);
+  cache.emplace(expr, result);
+  return result;
+}
+
+velox::core::TypedExprPtr ToVelox::toTypedExprUncached(
+    ExprCP expr,
+    ExprCache& cache) {
   switch (expr->type()) {
     case PlanType::kColumnExpr: {
       auto column = expr->as<Column>();
       if (column->topColumn() && getterForPushdownSubfield_) {
-        auto field = toTypedExpr(column->topColumn());
+        auto field = toTypedExpr(column->topColumn(), cache);
         return pathToGetter(column->topColumn(), column->path(), field);
       }
       auto name = makeVeloxExprWithNoAlias_ ? std::string(column->name())
@@ -863,11 +885,11 @@ velox::core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
       auto call = expr->as<Call>();
 
       if (auto inList = tryCreateConstantInList(*call)) {
-        inputs.push_back(toTypedExpr(call->args()[0]));
+        inputs.push_back(toTypedExpr(call->args()[0], cache));
         inputs.push_back(std::move(inList));
       } else {
         for (auto arg : call->args()) {
-          inputs.push_back(toTypedExpr(arg));
+          inputs.push_back(toTypedExpr(arg, cache));
         }
       }
 
@@ -904,12 +926,12 @@ velox::core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
       if (field) {
         return std::make_shared<velox::core::FieldAccessTypedExpr>(
             toTypePtr(expr->value().type),
-            toTypedExpr(expr->as<Field>()->base()),
+            toTypedExpr(expr->as<Field>()->base(), cache),
             field);
       }
       return std::make_shared<velox::core::DereferenceTypedExpr>(
           toTypePtr(expr->value().type),
-          toTypedExpr(expr->as<Field>()->base()),
+          toTypedExpr(expr->as<Field>()->base(), cache),
           expr->as<Field>()->index());
     }
     case PlanType::kLiteralExpr: {
@@ -933,7 +955,8 @@ velox::core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
         types.push_back(toTypePtr(c->value().type));
       }
       return std::make_shared<velox::core::LambdaTypedExpr>(
-          ROW(std::move(names), std::move(types)), toTypedExpr(lambda->body()));
+          ROW(std::move(names), std::move(types)),
+          toTypedExpr(lambda->body(), cache));
     }
     default:
       VELOX_FAIL("Cannot translate {} to TypeExpr", expr->toString());
