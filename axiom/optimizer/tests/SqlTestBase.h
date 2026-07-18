@@ -116,6 +116,14 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
       bool checkColumnNames = false,
       std::optional<std::string> duckDbSql = std::nullopt);
 
+  /// Runs SQL through Axiom and asserts its result contains every row produced
+  /// by running 'duckDbSql' (or 'sql' if not set) through DuckDB, i.e. a
+  /// superset check. Useful for statements whose full output is environment
+  /// dependent (e.g. SHOW TABLES) where only some rows are known to be present.
+  void assertContains(
+      std::string_view sql,
+      std::optional<std::string> duckDbSql = std::nullopt);
+
   /// Runs SQL through Axiom, asserts the result has exactly 'expectedCount'
   /// rows.
   void assertResultCount(std::string_view sql, uint64_t expectedCount);

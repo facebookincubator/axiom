@@ -39,7 +39,7 @@ enum class TestConnectorKind {
 /// Represents a single SQL query parsed from a test file, along with its
 /// assertion type and any annotation parameters.
 struct QueryEntry {
-  enum class Type { kResults, kOrdered, kCount };
+  enum class Type { kResults, kOrdered, kCount, kContains };
 
   AXIOM_DECLARE_EMBEDDED_ENUM_NAME(Type)
 
@@ -108,6 +108,8 @@ struct SqlFile {
   /// before each query may carry annotations:
   ///   -- ordered         -> assertOrderedResults
   ///   -- count N         -> assertResultCount(sql, N)
+  ///   -- contains        -> assert the result contains every row produced by
+  ///                         the `-- duckdb:` reference (a superset check)
   ///   -- error: message     -> both optimizers expect this error
   ///   -- error_v1: message  -> v1 expects this error (v2 unaffected)
   ///   -- error_v2: message  -> v2 expects this error (v1 unaffected)

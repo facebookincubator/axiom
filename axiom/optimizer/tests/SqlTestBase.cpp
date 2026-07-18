@@ -331,6 +331,26 @@ void SqlTestBase::assertOrderedResults(
   }
 }
 
+void SqlTestBase::assertContains(
+    std::string_view sql,
+    std::optional<std::string> duckDbSql) {
+  SCOPED_TRACE(sql);
+
+  auto axiomResults = runAndCollect(sql);
+
+  VELOX_CHECK(!axiomResults.empty(), "Axiom returned no results for: {}", sql);
+
+  auto referenceSql = duckDbSql.value_or(std::string(sql));
+  auto resultType = axiomResults[0]->rowType();
+
+  const auto expected = duckDbRunner().execute(referenceSql, resultType);
+  const auto actual = velox::exec::test::materialize(axiomResults);
+  for (const auto& row : expected) {
+    EXPECT_GE(actual.count(row), expected.count(row))
+        << "Result is missing a row expected by the reference query";
+  }
+}
+
 uint64_t SqlTestBase::run(std::string_view sql) {
   auto runner = makeRunner(sql);
 
