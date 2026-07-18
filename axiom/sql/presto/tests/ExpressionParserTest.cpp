@@ -906,6 +906,34 @@ TEST_F(ExpressionParserTest, lateralColumnAliasErrors) {
       "Cannot resolve column: j");
 }
 
+TEST_F(ExpressionParserTest, lateralColumnAliasNotVisibleInSubquery) {
+  // A lateral column alias belongs to its own SELECT block, so it must not be
+  // visible inside a subquery. Here the outer alias `r_regionkey` collides with
+  // region.r_regionkey; the subquery's bare `r_regionkey` must bind to
+  // region.r_regionkey.
+  auto subqueryMatcher =
+      matchScan("region").aggregate({}, {"max(r_regionkey)"}).build();
+
+  testSelect(
+      "SELECT n_regionkey AS r_regionkey, "
+      "       (SELECT max(r_regionkey) FROM region) "
+      "FROM nation",
+      matchScan("nation")
+          .project([&](const lp::LogicalPlanNodePtr& node) {
+            auto& project = *node->as<lp::ProjectNode>();
+            ASSERT_EQ(2, project.expressions().size());
+
+            const auto& subqueryExpr = project.expressionAt(1);
+            ASSERT_EQ(lp::ExprKind::kSubquery, subqueryExpr->kind());
+
+            const auto& subquery =
+                subqueryExpr->as<lp::SubqueryExpr>()->subquery();
+            ASSERT_TRUE(subqueryMatcher->match(subquery))
+                << subquery->toString();
+          })
+          .output());
+}
+
 TEST_F(ExpressionParserTest, row) {
   testNationExpr(
       "row(n_regionkey, n_name)", "row_constructor(n_regionkey, n_name)");
