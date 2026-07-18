@@ -15,6 +15,10 @@
  */
 #pragma once
 
+#include <optional>
+
+#include <folly/container/F14Set.h>
+
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/logical_plan/ExprApi.h"
 #include "velox/core/ITypedExpr.h"
@@ -47,6 +51,52 @@ class ExprResolver {
   using FunctionRewriteHook = std::function<
       ExprPtr(const std::string& name, const std::vector<ExprPtr>& args)>;
 
+  /// Wraps a resolved SQL-function body so a null in any argument yields null
+  /// without evaluating the body. Receives the resolved body (already coerced
+  /// to the result type) and the coerced argument expressions; returns the
+  /// wrapped body. The frontend supplies it so the dialect-specific null test
+  /// (e.g. is_null) stays out of this layer.
+  using NullWrapper = std::function<
+      ExprPtr(const ExprPtr& body, const std::vector<ExprPtr>& args)>;
+
+  /// A SQL-invoked function selected for a call, resolved into the untyped body
+  /// to inline plus the metadata needed to embed it. Produced by the frontend
+  /// that owns a SQL parser for the defining connector's dialect; consumed by
+  /// resolveScalarTypes, which coerces and binds the call's arguments and
+  /// resolves the body.
+  struct ResolvedSqlFunction {
+    /// Formal argument names, positionally aligned with 'argumentTypes'.
+    std::vector<std::string> argumentNames;
+
+    /// Formal argument types. The call's arguments are coerced to these before
+    /// binding, so the body sees the declared types (e.g. int -> bigint).
+    std::vector<velox::TypePtr> argumentTypes;
+
+    /// Untyped scalar body expression over 'argumentNames', parsed from the
+    /// connector's SQL by the frontend. Must not contain subqueries.
+    velox::core::ExprPtr body;
+
+    /// Declared result type; the resolved body is implicitly coerced to it.
+    velox::TypePtr returnType;
+
+    /// Wraps the resolved body for RETURNS NULL ON NULL INPUT, or null when the
+    /// function is called on null input (no wrapping). Applied after argument
+    /// binding and return-type coercion.
+    NullWrapper nullWrapper;
+  };
+
+  /// Resolves a call to a SQL-invoked (inlined) function by name and argument
+  /// types, or returns nullopt if 'name' is not a SQL-invoked function.
+  /// Argument types select among overloads. If 'name' is a SQL-invoked function
+  /// but no overload accepts 'argTypes', the resolver fails with a user error
+  /// rather than returning nullopt (which would surface as a misleading
+  /// function-not-found error). Installed by the frontend, which resolves the
+  /// function against connectors and parses its body in the appropriate
+  /// dialect.
+  using SqlFunctionResolver = std::function<std::optional<ResolvedSqlFunction>(
+      const std::string& name,
+      const std::vector<velox::TypePtr>& argTypes)>;
+
   /// @param queryCtx Query context for constant folding.
   /// @param coercer Coercion rule set used for implicit type conversions,
   /// or nullptr to disable implicit coercions.
@@ -54,18 +104,23 @@ class ExprResolver {
   /// @param pool Memory pool for constant folding evaluation.
   /// @param planNodeIdGenerator Plan node ID generator for subquery
   /// expressions.
+  /// @param sqlFunctionResolver Optional resolver for SQL-invoked functions
+  /// inlined from connectors. Requires a non-null 'coercer', since inlining
+  /// coerces the arguments and body to their declared types.
   ExprResolver(
       std::shared_ptr<velox::core::QueryCtx> queryCtx,
       const velox::TypeCoercer* coercer,
       FunctionRewriteHook hook = nullptr,
       std::shared_ptr<velox::memory::MemoryPool> pool = nullptr,
       std::shared_ptr<velox::core::PlanNodeIdGenerator> planNodeIdGenerator =
-          nullptr)
+          nullptr,
+      SqlFunctionResolver sqlFunctionResolver = nullptr)
       : queryCtx_(std::move(queryCtx)),
         coercer_{coercer},
         hook_(std::move(hook)),
         pool_(std::move(pool)),
-        planNodeIdGenerator_{std::move(planNodeIdGenerator)} {}
+        planNodeIdGenerator_{std::move(planNodeIdGenerator)},
+        sqlFunctionResolver_{std::move(sqlFunctionResolver)} {}
 
   /// Resolves an untyped scalar expression into a typed expression. Handles
   /// column references, function calls, casts, literals, lambdas, and
@@ -148,6 +203,14 @@ class ExprResolver {
       const std::shared_ptr<const velox::core::CallExpr>& callExpr,
       const InputNameResolver& inputNameResolver) const;
 
+  // Resolves 'name'(inputs) as a SQL-invoked function inlined from a connector,
+  // or returns nullptr if 'name' is not such a function. Binds the argument
+  // names to 'inputs', resolves the body, and coerces it to the declared return
+  // type.
+  ExprPtr resolveSqlFunction(
+      const std::string& name,
+      const std::vector<ExprPtr>& inputs) const;
+
   // Resolves lambda arguments using already resolved non-lambda arguments.
   // Populates 'resolvedInputs' entries that correspond to lambda arguments.
   //
@@ -187,5 +250,14 @@ class ExprResolver {
   FunctionRewriteHook hook_;
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::shared_ptr<velox::core::PlanNodeIdGenerator> planNodeIdGenerator_;
+  SqlFunctionResolver sqlFunctionResolver_;
+
+  // Names of SQL-invoked functions currently being inlined on the active
+  // resolveScalarTypes recursion, used to reject recursive definitions. This
+  // guard only catches recursion routed back through this same ExprResolver: it
+  // relies on sqlFunctionResolver_ returning an unresolved body that this
+  // instance resolves (nested SQL functions must not be resolved by a different
+  // ExprResolver). Resolution through a single ExprResolver is single-threaded.
+  mutable folly::F14FastSet<std::string> inliningFunctions_;
 };
 } // namespace facebook::axiom::logical_plan

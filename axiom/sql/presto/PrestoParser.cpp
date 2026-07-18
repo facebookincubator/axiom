@@ -17,6 +17,7 @@
 #include "axiom/sql/presto/PrestoParser.h"
 #include <folly/ScopeGuard.h>
 #include <folly/container/F14Map.h>
+#include <folly/container/small_vector.h>
 #include <folly/hash/Hash.h>
 #include <cctype>
 #include <unordered_set>
@@ -242,6 +243,11 @@ core::ExprPtr replaceInputs(
   return changed ? expr->replaceInputs(std::move(newInputs)) : expr;
 }
 
+lp::ExprResolver::SqlFunctionResolver makeSqlFunctionResolver(
+    std::string user,
+    std::function<std::shared_ptr<Statement>(std::string_view)> parseSql,
+    const TypeCoercer* coercer);
+
 class RelationPlanner : public AstVisitor {
  public:
   RelationPlanner(
@@ -251,7 +257,11 @@ class RelationPlanner : public AstVisitor {
       const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
           std::string_view /*sql*/)>& parseSql,
       bool friendlySql = true)
-      : context_{makePrestoContext(defaultConnectorId, defaultSchema)},
+      : context_{makePrestoContext(
+            user,
+            defaultConnectorId,
+            defaultSchema,
+            parseSql)},
         defaultSchema_{defaultSchema},
         parseSql_{parseSql},
         user_{std::move(user)},
@@ -259,8 +269,11 @@ class RelationPlanner : public AstVisitor {
         friendlySql_{friendlySql} {}
 
   static lp::PlanBuilder::Context makePrestoContext(
+      const std::string& user,
       const std::string& defaultConnectorId,
-      const std::string& defaultSchema) {
+      const std::string& defaultSchema,
+      const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
+          std::string_view /*sql*/)>& parseSql) {
     lp::PlanBuilder::Context ctx{
         defaultConnectorId,
         defaultSchema,
@@ -269,6 +282,8 @@ class RelationPlanner : public AstVisitor {
         std::make_shared<lp::ThrowingSqlExpressionsParser>(),
         &::facebook::velox::functions::prestosql::typeCoercer()};
     ctx.identifierCanonicalizer = &canonicalizeName;
+    ctx.sqlFunctionResolver =
+        makeSqlFunctionResolver(user, parseSql, ctx.coercer);
     return ctx;
   }
 
@@ -1738,6 +1753,144 @@ lp::ExprPtr PrestoParser::parseExpression(
 }
 
 namespace {
+
+// Parses a scalar SQL-function body into an untyped expression (a
+// velox::core::IExpr, not yet type-resolved) via 'parseSql' to reach the AST
+// and ExpressionPlanner to translate it. Argument binding and type resolution
+// happen later, when the enclosing call is resolved.
+core::ExprPtr parseFunctionBody(
+    const std::string& user,
+    const std::function<std::shared_ptr<Statement>(std::string_view)>& parseSql,
+    const std::string& body) {
+  auto statement = parseSql(fmt::format("SELECT {}", body));
+  auto* query = statement->as<Query>();
+  VELOX_USER_CHECK_NOT_NULL(query, "SQL function body is not an expression");
+  auto* spec = query->queryBody()->as<QuerySpecification>();
+  VELOX_USER_CHECK_NOT_NULL(spec, "SQL function body is not an expression");
+  const auto& items = spec->select()->selectItems();
+  VELOX_USER_CHECK_EQ(
+      items.size(), 1, "SQL function body is not a single expression");
+  auto* column = items[0]->as<SingleColumn>();
+  VELOX_USER_CHECK_NOT_NULL(column, "SQL function body is not an expression");
+
+  ExpressionPlanner exprPlanner{
+      user, /*subqueryPlanner=*/nullptr, /*sortingKeyResolver=*/nullptr};
+  return exprPlanner.toExpr(column->expression()).expr();
+}
+
+// Wraps a resolved SQL-function body for RETURNS NULL ON NULL INPUT as
+// IF(is_null(arg0) OR ... OR is_null(argN), NULL, body). Returns 'body'
+// unchanged for a zero-argument function. Installed as ResolvedSqlFunction's
+// nullWrapper so the dialect-specific is_null stays in the frontend.
+lp::ExprPtr wrapWithNullGuard(
+    const lp::ExprPtr& body,
+    const std::vector<lp::ExprPtr>& args) {
+  if (args.empty()) {
+    return body;
+  }
+
+  std::vector<lp::ExprPtr> anyNull;
+  anyNull.reserve(args.size());
+  for (const auto& arg : args) {
+    anyNull.push_back(
+        std::make_shared<lp::CallExpr>(BOOLEAN(), "is_null", arg));
+  }
+
+  lp::ExprPtr condition = anyNull.size() == 1
+      ? std::move(anyNull.front())
+      : std::make_shared<lp::SpecialFormExpr>(
+            BOOLEAN(), lp::SpecialForm::kOr, std::move(anyNull));
+
+  auto nullLiteral = std::make_shared<lp::ConstantExpr>(
+      body->type(),
+      std::make_shared<Variant>(Variant::null(body->type()->kind())));
+
+  return std::make_shared<lp::SpecialFormExpr>(
+      body->type(),
+      lp::SpecialForm::kIf,
+      std::move(condition),
+      std::move(nullLiteral),
+      body);
+}
+
+// Builds the resolver that inlines connector-defined SQL-invoked functions.
+// Only names that the frontend marked with a leading '.' are treated as
+// qualified function references; everything else returns nullopt so builtin
+// resolution proceeds.
+lp::ExprResolver::SqlFunctionResolver makeSqlFunctionResolver(
+    std::string user,
+    std::function<std::shared_ptr<Statement>(std::string_view)> parseSql,
+    const TypeCoercer* coercer) {
+  VELOX_CHECK_NOT_NULL(
+      coercer, "A coercer is required to inline SQL functions");
+  return [user = std::move(user), parseSql = std::move(parseSql), coercer](
+             const std::string& name, const std::vector<TypePtr>& argTypes)
+             -> std::optional<lp::ExprResolver::ResolvedSqlFunction> {
+    VELOX_CHECK(!name.empty(), "Function call has an empty name");
+    if (name.front() != '.') {
+      return std::nullopt;
+    }
+
+    folly::small_vector<std::string, 3> parts;
+    folly::split('.', std::string_view{name}.substr(1), parts);
+    VELOX_USER_CHECK_EQ(
+        parts.size(),
+        3,
+        "Qualified function name must be catalog.schema.function: {}",
+        name.substr(1));
+
+    auto metadata =
+        facebook::axiom::connector::ConnectorMetadataRegistry::tryGet(parts[0]);
+    VELOX_USER_CHECK_NOT_NULL(metadata, "Catalog not found: {}", parts[0]);
+
+    auto overloads =
+        metadata->findFunction({/*schema=*/parts[1], /*function=*/parts[2]});
+    VELOX_USER_CHECK(
+        !overloads.empty(), "SQL function not found: {}", name.substr(1));
+
+    // Multiple signatures for one name are not supported yet.
+    VELOX_USER_CHECK_EQ(
+        overloads.size(),
+        1,
+        "Overloaded SQL functions are not supported: {}",
+        name.substr(1));
+    const auto& definition = *overloads.front();
+
+    // Match the call to the signature: argument count, then each argument type
+    // coercible to its declared type. The resolver owns this matching, so the
+    // expression resolver only applies the coercion later, never re-checks it.
+    VELOX_USER_CHECK_EQ(
+        argTypes.size(),
+        definition.argumentTypes.size(),
+        "SQL function called with wrong number of arguments: {}",
+        name.substr(1));
+    for (size_t i = 0; i < argTypes.size(); ++i) {
+      const auto& declaredType = definition.argumentTypes[i];
+      if (argTypes[i]->equivalent(*declaredType)) {
+        continue;
+      }
+
+      VELOX_USER_CHECK(
+          coercer->coerce(argTypes[i], declaredType).has_value(),
+          "Cannot coerce SQL function argument {} to its declared type: {} to {}: {}",
+          i,
+          argTypes[i]->toString(),
+          declaredType->toString(),
+          name.substr(1));
+    }
+
+    lp::ExprResolver::ResolvedSqlFunction resolved;
+    resolved.argumentNames = definition.argumentNames;
+    resolved.argumentTypes = definition.argumentTypes;
+    resolved.returnType = definition.returnType;
+    resolved.body = parseFunctionBody(user, parseSql, definition.body);
+    if (definition.defaultNullBehavior) {
+      resolved.nullWrapper = wrapWithNullGuard;
+    }
+    return resolved;
+  };
+}
+
 lp::ExprPtr parseSqlExpression(
     const std::string& user,
     const ExpressionPtr& expr) {

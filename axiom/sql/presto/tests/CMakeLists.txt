@@ -30,6 +30,7 @@ add_executable(
   ReferencedTablesTest.cpp
   SortParserTest.cpp
   SplitStatementsTest.cpp
+  SqlFunctionTest.cpp
   WithRecursiveTest.cpp
 )
 

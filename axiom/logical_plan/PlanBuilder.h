@@ -137,6 +137,10 @@ class PlanBuilder {
     /// SQL function names to Velox runtime functions.
     ExprResolver::FunctionRewriteHook hook;
 
+    /// Resolves SQL-invoked (inlined) functions from connectors during
+    /// expression resolution. Optional; SQL frontends install it.
+    ExprResolver::SqlFunctionResolver sqlFunctionResolver;
+
     /// Provides memory for allocating literal values during constant folding.
     /// Automatically derived from queryCtx.
     std::shared_ptr<velox::memory::MemoryPool> pool;
@@ -223,7 +227,8 @@ class PlanBuilder {
             context.coercer,
             context.hook,
             context.pool,
-            context.planNodeIdGenerator} {
+            context.planNodeIdGenerator,
+            context.sqlFunctionResolver} {
     VELOX_CHECK_NOT_NULL(planNodeIdGenerator_);
     VELOX_CHECK_NOT_NULL(nameAllocator_);
   }
