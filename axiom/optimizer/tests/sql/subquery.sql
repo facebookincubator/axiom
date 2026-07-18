@@ -30,6 +30,11 @@ GROUP BY COALESCE(t.a, (SELECT max(a) FROM u))
 -- distinct columns (a scalar value vs a boolean).
 SELECT (SELECT max(a) FROM u), EXISTS (SELECT max(a) FROM u) FROM t
 ----
+-- `k` inside the subquery binds to the subquery's own column, not to the
+-- same-named alias in the outer SELECT.
+SELECT a AS k, (SELECT max(k) FROM (VALUES (10), (20)) AS _(k))
+FROM (VALUES (1), (2)) AS _(a)
+----
 -- Case-insensitive CTE alias resolution.
 WITH a AS (SELECT * FROM (VALUES (1)) t(a)) SELECT A.a FROM A
 ----

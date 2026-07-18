@@ -1486,6 +1486,20 @@ lp::ExprApi ExpressionPlanner::planSubquery(
   if (auto it = subqueryCache_.find(query); it != subqueryCache_.end()) {
     return it->second;
   }
+
+  // Lateral column aliases belong to the enclosing SELECT block only. Clear
+  // them while the subquery is planned so a bare column reference inside the
+  // subquery resolves against the subquery's own FROM (and then the outer
+  // scope's columns for correlation), not an outer SELECT alias.
+  const auto* savedAliasExprs = aliasExprs_;
+  const auto* savedColumnNames = columnNames_;
+  aliasExprs_ = nullptr;
+  columnNames_ = nullptr;
+  SCOPE_EXIT {
+    aliasExprs_ = savedAliasExprs;
+    columnNames_ = savedColumnNames;
+  };
+
   auto result = subqueryPlanner_(query->as<Query>());
 
   if (scalar) {

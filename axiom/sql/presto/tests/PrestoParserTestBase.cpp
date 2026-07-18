@@ -17,7 +17,6 @@
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/logical_plan/ExprPrinter.h"
-#include "axiom/logical_plan/PlanPrinter.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -83,15 +82,13 @@ void PrestoParserTestBase::testExplain(
         explainStatement->statement()->as<SelectStatement>();
 
     auto logicalPlan = selectStatement->plan();
-    ASSERT_TRUE(matcher.build()->match(logicalPlan))
-        << lp::PlanPrinter::toText(*logicalPlan);
+    ASSERT_TRUE(matcher.build()->match(logicalPlan)) << logicalPlan->toString();
   } else if (explainStatement->statement()->isInsert()) {
     auto* insertStatement =
         explainStatement->statement()->as<InsertStatement>();
 
     auto logicalPlan = insertStatement->plan();
-    ASSERT_TRUE(matcher.build()->match(logicalPlan))
-        << lp::PlanPrinter::toText(*logicalPlan);
+    ASSERT_TRUE(matcher.build()->match(logicalPlan)) << logicalPlan->toString();
   } else {
     FAIL() << "Unexpected statement: "
            << explainStatement->statement()->kindName();
@@ -124,8 +121,7 @@ void PrestoParserTestBase::testSelect(
   auto* selectStatement = statement->as<SelectStatement>();
 
   auto logicalPlan = selectStatement->plan();
-  ASSERT_TRUE(matcher.build()->match(logicalPlan))
-      << lp::PlanPrinter::toText(*logicalPlan);
+  ASSERT_TRUE(matcher.build()->match(logicalPlan)) << logicalPlan->toString();
 
   ASSERT_EQ(views.size(), selectStatement->views().size());
 
@@ -148,8 +144,7 @@ void PrestoParserTestBase::testInsert(
   auto insertStatement = statement->as<InsertStatement>();
 
   auto logicalPlan = insertStatement->plan();
-  ASSERT_TRUE(matcher.build()->match(logicalPlan))
-      << lp::PlanPrinter::toText(*logicalPlan);
+  ASSERT_TRUE(matcher.build()->match(logicalPlan)) << logicalPlan->toString();
 }
 
 void PrestoParserTestBase::testCtas(
@@ -170,8 +165,7 @@ void PrestoParserTestBase::testCtas(
   ASSERT_TRUE(*ctasStatement->tableSchema() == *tableSchema);
 
   auto logicalPlan = ctasStatement->plan();
-  ASSERT_TRUE(matcher.build()->match(logicalPlan))
-      << lp::PlanPrinter::toText(*logicalPlan);
+  ASSERT_TRUE(matcher.build()->match(logicalPlan)) << logicalPlan->toString();
 
   const auto& actualProperties = ctasStatement->properties();
   ASSERT_EQ(properties.size(), actualProperties.size());
