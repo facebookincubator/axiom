@@ -31,6 +31,53 @@ namespace {
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 
+// Delegates split enumeration to an inner source and records a fixed metric
+// into the session's runtime stats sink at close, so a test can verify a
+// source's metrics reach the query-level stats via the session.
+class StatsRecordingSplitSource : public connector::SplitSource {
+ public:
+  static constexpr std::string_view kMetricName{"testSplitMetric"};
+  static constexpr int64_t kMetricValue{7};
+
+  StatsRecordingSplitSource(
+      std::shared_ptr<connector::SplitSource> inner,
+      std::shared_ptr<QueryRuntimeStats> runtimeStats)
+      : inner_(std::move(inner)), runtimeStats_(std::move(runtimeStats)) {}
+
+  folly::coro::Task<connector::SplitBatch> co_getSplits(
+      uint32_t maxSplitCount) override {
+    co_return co_await inner_->co_getSplits(maxSplitCount);
+  }
+
+ protected:
+  folly::coro::Task<void> co_closeImpl() noexcept override {
+    runtimeStats_->recordCount(kMetricName, kMetricValue);
+    co_await inner_->co_close();
+  }
+
+ private:
+  const std::shared_ptr<connector::SplitSource> inner_;
+  const std::shared_ptr<QueryRuntimeStats> runtimeStats_;
+};
+
+// Wraps every source produced by ConnectorSplitSourceFactory in a
+// StatsRecordingSplitSource that records into the session's stats sink.
+class StatsRecordingSplitSourceFactory : public ConnectorSplitSourceFactory {
+ public:
+  using ConnectorSplitSourceFactory::ConnectorSplitSourceFactory;
+
+  std::shared_ptr<connector::SplitSource> splitSourceForScan(
+      const connector::ConnectorSessionPtr& session,
+      const velox::core::TableScanNode& scan,
+      const std::shared_ptr<connector::PartitionType>& partitionType,
+      std::optional<double> samplePercentage) override {
+    return std::make_shared<StatsRecordingSplitSource>(
+        ConnectorSplitSourceFactory::splitSourceForScan(
+            session, scan, partitionType, samplePercentage),
+        session->runtimeStats());
+  }
+};
+
 class LocalRunnerTest : public test::LocalRunnerTestBase {
  public:
   static constexpr int32_t kNumFiles = 5;
@@ -140,12 +187,14 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
   }
 
   static axiom::runner::RunnerSessionPtr makeRunnerSession(
-      std::string_view queryId) {
+      std::string_view queryId,
+      std::shared_ptr<QueryRuntimeStats> runtimeStats = nullptr) {
     return std::make_shared<axiom::runner::RunnerSession>(
         std::string(queryId),
         "test",
         axiom::runner::Properties{},
-        axiom::connector::ConnectorProperties{});
+        axiom::connector::ConnectorProperties{},
+        std::move(runtimeStats));
   }
 
   std::shared_ptr<LocalRunner> makeRunner(
@@ -399,6 +448,38 @@ TEST_F(LocalRunnerTest, spillDirectoryWiring) {
   EXPECT_EQ(1, results.size());
   EXPECT_EQ(kNumRows, extractSingleInt64(results));
   EXPECT_EQ(Runner::State::kFinished, localRunner->state());
+}
+
+// A SplitSource records its enumeration metrics into the ConnectorSession's
+// stats sink, and they land in the query-level stats object the RunnerSession
+// carries.
+TEST_F(LocalRunnerTest, splitSourceRecordsIntoSessionStats) {
+  auto scan = makeScanPlan(/*numWorkers=*/1);
+  const auto queryId = scan->options().queryId;
+  auto stats = std::make_shared<QueryRuntimeStats>();
+
+  auto localRunner = std::make_shared<LocalRunner>(
+      makeRunnerSession(queryId, stats),
+      std::move(scan),
+      optimizer::FinishWrite{},
+      makeQueryCtx(queryId),
+      std::make_shared<StatsRecordingSplitSourceFactory>(*stats),
+      /*outputPool=*/nullptr,
+      /*baseSpillDirectory=*/"",
+      *stats);
+
+  int32_t count = 0;
+  auto generator = localRunner->execute();
+  while (auto rows = folly::coro::blockingWait(generator.next())) {
+    count += (*rows)->size();
+  }
+  folly::coro::blockingWait(localRunner->co_close());
+  EXPECT_EQ(kNumRows, count);
+
+  const auto map = stats->toMap();
+  auto it = map.find(std::string(StatsRecordingSplitSource::kMetricName));
+  ASSERT_NE(it, map.end());
+  EXPECT_EQ(StatsRecordingSplitSource::kMetricValue, it->second.sum);
 }
 
 } // namespace
