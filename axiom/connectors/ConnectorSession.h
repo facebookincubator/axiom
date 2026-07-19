@@ -23,6 +23,8 @@
 
 #include <folly/container/F14Map.h>
 
+#include "axiom/common/QueryRuntimeStats.h"
+
 namespace facebook::axiom::connector {
 
 /// Property bag for a single component or connector.
@@ -31,13 +33,22 @@ using Properties = folly::F14FastMap<std::string, std::string>;
 class ConnectorSession;
 using ConnectorSessionPtr = std::shared_ptr<ConnectorSession>;
 
-/// Read-only query-specific information passed to connectors.
+/// Query-specific context passed to connectors. The identity and config fields
+/// (queryId, user, properties) are read-only. 'runtimeStats' is a query-scoped
+/// sink components record split-enumeration and metadata metrics into; the
+/// handle is immutable but the pointee is mutable. It is null for sessions with
+/// no query-scoped sink.
 class ConnectorSession final {
  public:
-  ConnectorSession(std::string queryId, std::string user, Properties properties)
+  ConnectorSession(
+      std::string queryId,
+      std::string user,
+      Properties properties,
+      std::shared_ptr<QueryRuntimeStats> runtimeStats = nullptr)
       : queryId_{std::move(queryId)},
         user_{std::move(user)},
-        properties_{std::move(properties)} {}
+        properties_{std::move(properties)},
+        runtimeStats_{std::move(runtimeStats)} {}
 
   /// Returns the query identifier.
   const std::string& queryId() const {
@@ -60,10 +71,17 @@ class ConnectorSession final {
     return it->second;
   }
 
+  /// Returns the query-scoped runtime stats sink, or null when the session has
+  /// none. Components record metrics through the pointee.
+  const std::shared_ptr<QueryRuntimeStats>& runtimeStats() const {
+    return runtimeStats_;
+  }
+
  private:
   const std::string queryId_;
   const std::string user_;
   const Properties properties_;
+  const std::shared_ptr<QueryRuntimeStats> runtimeStats_;
 };
 
 } // namespace facebook::axiom::connector

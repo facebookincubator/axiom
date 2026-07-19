@@ -118,8 +118,7 @@ class SystemSplitManager : public ConnectorSplitManager {
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
       const std::vector<PartitionHandlePtr>& partitions,
       const std::shared_ptr<PartitionType>& partitionType,
-      std::optional<double> samplePercentage,
-      QueryRuntimeStats& runtimeStats) override;
+      std::optional<double> samplePercentage) override;
 };
 
 /// Axiom ConnectorMetadata for the system connector.
