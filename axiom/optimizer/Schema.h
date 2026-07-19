@@ -440,10 +440,11 @@ struct SchemaTable {
 class Schema {
  public:
   /// Constructs a Schema for producing executable plans, backed by 'source'.
+  /// Records findTable timings into 'runtimeStats'.
   explicit Schema(
       const connector::SchemaResolver& source,
-      std::shared_ptr<QueryRuntimeStats> runtimeStats = nullptr)
-      : source_{&source}, runtimeStats_{std::move(runtimeStats)} {}
+      QueryRuntimeStats& runtimeStats)
+      : source_{&source}, runtimeStats_{runtimeStats} {}
 
   /// Returns the table with 'name' or nullptr if not found, using
   /// the connector specified by connectorId to perform table lookups.
@@ -477,7 +478,8 @@ class Schema {
   using ConnectorMap = folly::F14FastMap<std::string_view, TableMap>;
 
   const connector::SchemaResolver* source_;
-  std::shared_ptr<QueryRuntimeStats> runtimeStats_;
+  // Accumulates findTable timings; the referent must outlive this Schema.
+  QueryRuntimeStats& runtimeStats_;
   mutable ConnectorMap connectorTables_;
   // Holds `connector::Table`s whose ownership is given directly to
   // the Schema rather than resolved through the source. Keeps them

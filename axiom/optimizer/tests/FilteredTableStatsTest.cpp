@@ -126,6 +126,36 @@ TEST_F(FilteredTableStatsTest, partitionAndDataFilter) {
   });
 }
 
+// The optimizer owns its runtime metrics: findTable (recorded while building
+// the query graph) and estimateStats (recorded while planning) are visible via
+// runtimeStats() after optimizing.
+TEST_F(FilteredTableStatsTest, optimizerOwnsRuntimeStats) {
+  auto logicalPlan = parseSelect(
+      "SELECT n_nationkey FROM nation WHERE n_nationkey > 10",
+      velox::exec::test::kHiveConnectorId);
+
+  verifyOptimization(
+      *logicalPlan,
+      [](Optimization& optimization) {
+        ASSERT_NE(optimization.bestPlan(), nullptr);
+        // estimateStats records CPU only on-thread, so assert the wall keys.
+        const auto stats = optimization.runtimeStats();
+        EXPECT_GT(
+            stats.at(std::string(QueryRuntimeStats::kFindTableWallNanos)).count,
+            0);
+        EXPECT_GT(
+            stats.at(std::string(QueryRuntimeStats::kEstimateStatsWallNanos))
+                .count,
+            0);
+      },
+      [] {
+        // sampleFilters=false so co_estimateStats runs and records the metric.
+        OptimizerOptions options;
+        options.sampleFilters = false;
+        return options;
+      }());
+}
+
 // Verifies that a join key column with all NULLs (numDistinct = 0 from
 // connector stats) does not produce non-finite cardinality via division by
 // zero in estimateFanout.
