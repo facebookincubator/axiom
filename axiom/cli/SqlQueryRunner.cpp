@@ -1294,8 +1294,7 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
       *history,
       queryCtx,
       evaluator,
-      opts,
-      runtimeStats);
+      opts);
 
   if (checkDerivedTable && !checkDerivedTable(*optimization.rootDt())) {
     return {};
@@ -1347,6 +1346,10 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
     runtimeStats->recordTiming(
         QueryRuntimeStats::kOptimizeToVeloxCpuNanos,
         std::chrono::nanoseconds(toVeloxCpuNanos));
+    // Fold in the metrics the optimizer recorded into its own stats.
+    for (const auto& [name, metric] : optimization.runtimeStats()) {
+      runtimeStats->merge(name, metric);
+    }
   }
 
   return result;
