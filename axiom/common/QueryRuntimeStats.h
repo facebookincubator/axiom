@@ -85,6 +85,12 @@ class QueryRuntimeStats {
       "axiom-estimateStatsWallNanos"};
   static constexpr std::string_view kEstimateStatsCpuNanos{
       "axiom-estimateStatsCpuNanos"};
+  static constexpr std::string_view kEstimateStatsPartitionsRequested{
+      "axiom-estimateStatsPartitionsRequested"};
+  static constexpr std::string_view kEstimateStatsPartitionsCached{
+      "axiom-estimateStatsPartitionsCached"};
+  static constexpr std::string_view kEstimateStatsGetPartitionsWallNanos{
+      "axiom-estimateStatsGetPartitionsWallNanos"};
 
   // Execution.
   static constexpr std::string_view kExecuteWallNanos{"axiom-executeWallNanos"};
