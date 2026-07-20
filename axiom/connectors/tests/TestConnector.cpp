@@ -583,6 +583,23 @@ void TestConnectorMetadata::addFunction(
   VELOX_CHECK(inserted, "Function already registered: {}", functionName);
 }
 
+ProcedurePtr TestConnectorMetadata::findProcedure(
+    const SchemaProcedureName& name) {
+  auto it = procedures_.find(name);
+  if (it == procedures_.end()) {
+    return nullptr;
+  }
+  return it->second;
+}
+
+void TestConnectorMetadata::addProcedure(
+    const SchemaProcedureName& name,
+    Procedure procedure) {
+  auto [_, inserted] = procedures_.emplace(
+      name, std::make_shared<const Procedure>(std::move(procedure)));
+  VELOX_CHECK(inserted, "Procedure already registered: {}", name);
+}
+
 ViewPtr TestConnectorMetadata::findView(const SchemaTableName& tableName) {
   auto it = views_.find(tableName);
   if (it == views_.end()) {

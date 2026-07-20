@@ -18,7 +18,14 @@
 
 #include "axiom/common/CatalogSchemaTableName.h"
 #include "axiom/common/Enums.h"
+#include "axiom/common/SchemaProcedureName.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
+#include "velox/type/Variant.h"
+
+namespace facebook::axiom::connector {
+struct Procedure;
+using ProcedurePtr = std::shared_ptr<const Procedure>;
+} // namespace facebook::axiom::connector
 
 namespace axiom::sql::presto {
 
@@ -41,6 +48,7 @@ enum class SqlStatementKind {
   kResetSession,
   kUse,
   kAddColumn,
+  kCall,
 };
 
 AXIOM_DECLARE_ENUM_NAME(SqlStatementKind);
@@ -127,6 +135,10 @@ class SqlStatement {
 
   bool isAddColumn() const {
     return kind_ == SqlStatementKind::kAddColumn;
+  }
+
+  bool isCall() const {
+    return kind_ == SqlStatementKind::kCall;
   }
 
   template <typename T>
@@ -419,6 +431,49 @@ class AddColumnStatement : public SqlStatement {
   const facebook::velox::TypePtr columnType_;
   const bool ifTableExists_;
   const bool ifNotExists_;
+};
+
+/// A stored-procedure invocation. Resolved at parse time: the procedure is
+/// looked up on its connector and the call's arguments are bound to its
+/// parameters (matched positionally or by name, coerced to the declared
+/// parameter types, defaults filled) in declared parameter order, as constant
+/// expressions. The runner folds them to values; the connector then executes
+/// the procedure directly. Produces no rows.
+class CallStatement : public SqlStatement {
+ public:
+  CallStatement(
+      std::string connectorId,
+      facebook::axiom::SchemaProcedureName procedureName,
+      facebook::axiom::connector::ProcedurePtr procedure,
+      std::vector<facebook::axiom::logical_plan::ExprPtr> arguments)
+      : SqlStatement(SqlStatementKind::kCall),
+        connectorId_{std::move(connectorId)},
+        procedureName_{std::move(procedureName)},
+        procedure_{std::move(procedure)},
+        arguments_{std::move(arguments)} {}
+
+  const std::string& connectorId() const {
+    return connectorId_;
+  }
+
+  const facebook::axiom::SchemaProcedureName& procedureName() const {
+    return procedureName_;
+  }
+
+  /// Bound arguments as constant expressions, in declared parameter order.
+  const std::vector<facebook::axiom::logical_plan::ExprPtr>& arguments() const {
+    return arguments_;
+  }
+
+  const facebook::axiom::connector::ProcedurePtr& procedure() const {
+    return procedure_;
+  }
+
+ private:
+  const std::string connectorId_;
+  const facebook::axiom::SchemaProcedureName procedureName_;
+  const facebook::axiom::connector::ProcedurePtr procedure_;
+  const std::vector<facebook::axiom::logical_plan::ExprPtr> arguments_;
 };
 
 class CreateSchemaStatement : public SqlStatement {
