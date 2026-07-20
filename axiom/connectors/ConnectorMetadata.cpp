@@ -43,6 +43,26 @@ void MetadataCountGroup::checkConsistency() const {
   }
 }
 
+void Procedure::checkConsistency() const {
+  folly::F14FastSet<std::string> names;
+  bool seenOptional = false;
+  for (const auto& parameter : parameters) {
+    VELOX_CHECK(!parameter.name.empty(), "Procedure parameter name is empty");
+    VELOX_CHECK(
+        names.insert(parameter.name).second,
+        "Duplicate procedure parameter name: {}",
+        parameter.name);
+    if (parameter.defaultValue.has_value()) {
+      seenOptional = true;
+    } else {
+      VELOX_CHECK(
+          !seenOptional,
+          "Required procedure parameter must not follow an optional one: {}",
+          parameter.name);
+    }
+  }
+}
+
 namespace {
 
 // @return RowType that represents a subset of 'columns' which are not hidden.

@@ -59,7 +59,7 @@ struct ExprOptions {
 /// function calls, casts, subqueries, etc.).
 ///
 /// Can be used standalone for translating simple expressions (e.g. in
-/// parseSqlExpression) by passing nullptr for both callbacks. When used
+/// resolveSqlExpression) by passing nullptr for both callbacks. When used
 /// within RelationPlanner to translate full queries, callbacks must be
 /// provided to handle subqueries and ordinal sort keys in aggregates.
 class ExpressionPlanner {

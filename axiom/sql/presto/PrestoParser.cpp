@@ -1891,7 +1891,7 @@ lp::ExprResolver::SqlFunctionResolver makeSqlFunctionResolver(
   };
 }
 
-lp::ExprPtr parseSqlExpression(
+lp::ExprPtr resolveSqlExpression(
     const std::string& user,
     const ExpressionPtr& expr) {
   ExpressionPlanner exprPlanner{
@@ -2430,7 +2430,7 @@ std::unordered_map<std::string, lp::ExprPtr> parseTableProperties(
   std::unordered_map<std::string, lp::ExprPtr> properties;
   for (const auto& p : props) {
     const auto& name = p->name()->value();
-    auto expr = parseSqlExpression(user, p->value());
+    auto expr = resolveSqlExpression(user, p->value());
     AXIOM_PRESTO_SEMANTIC_CHECK(
         expr->looksConstant(),
         p->location(),
@@ -2809,6 +2809,174 @@ SqlStatementPtr parseSetSession(const SetSession* setSession) {
       std::move(name), std::move(valueString));
 }
 
+// Resolves a procedure's qualified name into a connector id and
+// schema-qualified procedure name.
+std::pair<std::string, facebook::axiom::SchemaProcedureName>
+toConnectorProcedure(
+    const QualifiedName& name,
+    const std::string& defaultConnectorId,
+    const std::string& defaultSchema) {
+  const auto& parts = name.parts();
+  VELOX_CHECK(!parts.empty(), "Procedure name cannot be empty");
+
+  if (parts.size() == 1) {
+    // name
+    return {defaultConnectorId, {defaultSchema, parts[0]}};
+  }
+
+  if (parts.size() == 2) {
+    // schema.name
+    return {defaultConnectorId, {parts[0], parts[1]}};
+  }
+
+  // connector.schema.name
+  VELOX_CHECK_EQ(3, parts.size());
+  return {parts[0], {parts[1], parts[2]}};
+}
+
+// Resolves a single CALL argument to a constant expression coerced to the
+// procedure parameter's declared type. The value is folded later, by the
+// runner.
+lp::ExprPtr bindProcedureArgument(
+    const std::string& user,
+    const ExpressionPtr& valueExpr,
+    const TypePtr& declaredType,
+    const std::string& token) {
+  auto expr = resolveSqlExpression(user, valueExpr);
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      expr->looksConstant(),
+      valueExpr->location(),
+      token,
+      "Procedure argument must be a constant: {}",
+      expr->toString());
+
+  if (expr->type()->equivalent(*declaredType)) {
+    return expr;
+  }
+
+  const auto& coercer = facebook::velox::functions::prestosql::typeCoercer();
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      coercer.coerce(expr->type(), declaredType).has_value(),
+      valueExpr->location(),
+      token,
+      "Cannot coerce procedure argument from {} to {}",
+      expr->type()->toString(),
+      declaredType->toString());
+  return std::make_shared<lp::SpecialFormExpr>(
+      declaredType, lp::SpecialForm::kCast, expr);
+}
+
+SqlStatementPtr parseCall(
+    const std::string& user,
+    const Call& call,
+    const std::string& defaultConnectorId,
+    const std::string& defaultSchema) {
+  auto [connectorId, procedureName] =
+      toConnectorProcedure(*call.name(), defaultConnectorId, defaultSchema);
+
+  auto metadata = facebook::axiom::connector::ConnectorMetadataRegistry::tryGet(
+      connectorId);
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      metadata != nullptr,
+      call.location(),
+      connectorId,
+      "Catalog not found: {}",
+      connectorId);
+
+  auto procedure = metadata->findProcedure(procedureName);
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      procedure != nullptr,
+      call.location(),
+      procedureName.procedure,
+      "Procedure not found: {}",
+      procedureName.toString());
+  procedure->checkConsistency();
+
+  const auto& parameters = procedure->parameters;
+  const auto& args = call.arguments();
+
+  bool anyNamed = false;
+  bool anyPositional = false;
+  for (const auto& arg : args) {
+    (arg->name() != nullptr ? anyNamed : anyPositional) = true;
+  }
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      !(anyNamed && anyPositional),
+      call.location(),
+      procedureName.procedure,
+      "Named and positional procedure arguments cannot be mixed");
+
+  // Map each parameter position to the argument supplied for it, if any.
+  // Named arguments are matched to parameters case-insensitively, using the
+  // same identifier canonicalization as the rest of the parser.
+  std::vector<const CallArgument*> supplied(parameters.size(), nullptr);
+  if (anyNamed) {
+    std::unordered_map<std::string, size_t> nameToIndex;
+    for (size_t i = 0; i < parameters.size(); ++i) {
+      VELOX_CHECK(
+          nameToIndex.emplace(canonicalizeName(parameters[i].name), i).second,
+          "Duplicate parameter name in procedure {}: {}",
+          procedureName.toString(),
+          parameters[i].name);
+    }
+    for (const auto& arg : args) {
+      const auto& argName = arg->name()->value();
+      auto it = nameToIndex.find(canonicalizeName(argName));
+      AXIOM_PRESTO_SEMANTIC_CHECK(
+          it != nameToIndex.end(),
+          call.location(),
+          argName,
+          "Unknown argument name for procedure {}: {}",
+          procedureName.toString(),
+          argName);
+      AXIOM_PRESTO_SEMANTIC_CHECK(
+          supplied[it->second] == nullptr,
+          call.location(),
+          argName,
+          "Duplicate argument for procedure {}: {}",
+          procedureName.toString(),
+          argName);
+      supplied[it->second] = arg.get();
+    }
+  } else {
+    AXIOM_PRESTO_SEMANTIC_CHECK_LE(
+        args.size(),
+        parameters.size(),
+        call.location(),
+        procedureName.procedure,
+        "Too many arguments for procedure {}",
+        procedureName.toString());
+    for (size_t i = 0; i < args.size(); ++i) {
+      supplied[i] = args[i].get();
+    }
+  }
+
+  std::vector<lp::ExprPtr> arguments;
+  arguments.reserve(parameters.size());
+  for (size_t i = 0; i < parameters.size(); ++i) {
+    const auto& parameter = parameters[i];
+    if (supplied[i] != nullptr) {
+      arguments.push_back(bindProcedureArgument(
+          user, supplied[i]->value(), parameter.type, parameter.name));
+    } else {
+      AXIOM_PRESTO_SEMANTIC_CHECK(
+          parameter.defaultValue.has_value(),
+          call.location(),
+          parameter.name,
+          "Missing required procedure argument: {}",
+          parameter.name);
+      arguments.push_back(
+          lp::ConstantExpr::fromVariant(*parameter.defaultValue));
+    }
+  }
+
+  return std::make_shared<CallStatement>(
+      std::move(connectorId),
+      std::move(procedureName),
+      std::move(procedure),
+      std::move(arguments));
+}
+
 SqlStatementPtr doPlan(
     const std::shared_ptr<Statement>& query,
     const std::string& defaultConnectorId,
@@ -2858,6 +3026,11 @@ SqlStatementPtr doPlan(
 
   if (query->is(NodeType::kDropSchema)) {
     return parseDropSchema(*query->as<DropSchema>(), defaultConnectorId);
+  }
+
+  if (query->is(NodeType::kCall)) {
+    return parseCall(
+        user, *query->as<Call>(), defaultConnectorId, defaultSchema);
   }
 
   if (query->is(NodeType::kShowSchemas)) {

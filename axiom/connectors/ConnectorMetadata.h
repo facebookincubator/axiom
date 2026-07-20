@@ -18,6 +18,7 @@
 #include <functional>
 #include "axiom/common/Enums.h"
 #include "axiom/common/SchemaFunctionName.h"
+#include "axiom/common/SchemaProcedureName.h"
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/common/SchemaTypeName.h"
 #include "axiom/connectors/ConnectorSession.h"
@@ -936,6 +937,52 @@ struct SqlFunctionDefinition {
 
 using SqlFunctionDefinitionPtr = std::shared_ptr<const SqlFunctionDefinition>;
 
+/// One parameter of a stored procedure.
+struct ProcedureParameter {
+  /// Parameter name, used to match named arguments at the call site.
+  std::string name;
+
+  /// Declared parameter type; supplied arguments are coerced to it.
+  velox::TypePtr type;
+
+  /// Default value for an optional parameter, substituted when its argument is
+  /// omitted at the call site. Empty for a required parameter, which must be
+  /// supplied. A parameter is optional iff it has a default; optional
+  /// parameters must follow the required ones.
+  std::optional<velox::Variant> defaultValue;
+};
+
+/// A stored procedure a connector exposes: a named, side-effecting operation.
+/// Unlike a function, a procedure is not compiled into a plan and returns no
+/// rows: the engine binds the call's arguments to the parameters and invokes
+/// 'execute', which performs the connector-side side effect and either succeeds
+/// or throws.
+///
+/// A procedure name is not overloaded: a connector exposes at most one
+/// procedure per schema-qualified name. Parameter names must be unique and
+/// non-empty.
+struct Procedure {
+  /// Formal parameters, in declared (positional) order.
+  std::vector<ProcedureParameter> parameters;
+
+  /// Runs the procedure. 'arguments' are the actual values in declared
+  /// parameter order, coerced to the declared parameter types, with defaults
+  /// filled in for omitted optional parameters. Async so the implementation can
+  /// await connector I/O; the caller awaits (or blocks on) the returned task.
+  std::function<folly::coro::Task<void>(
+      const ConnectorSessionPtr& session,
+      const std::vector<velox::Variant>& arguments)>
+      execute;
+
+  /// Validates the parameter list: names are non-empty and unique, and optional
+  /// parameters (those with a default) follow all required ones. Names are
+  /// compared as-is; dialect-specific matching (e.g. case-insensitivity) is the
+  /// parser's concern. Throws on violation.
+  void checkConsistency() const;
+};
+
+using ProcedurePtr = std::shared_ptr<const Procedure>;
+
 class ConnectorMetadata {
  public:
   /// Return the metadata for a given connector ID. Throws if not registered.
@@ -1008,6 +1055,15 @@ class ConnectorMetadata {
   virtual std::vector<SqlFunctionDefinitionPtr> findFunction(
       const SchemaFunctionName& /*functionName*/) {
     return {};
+  }
+
+  /// Resolves the stored procedure named by 'name'. Connectors that expose
+  /// procedures override this. Procedure names are not overloaded, so at most
+  /// one procedure is returned.
+  ///
+  /// @return nullptr if the procedure is not found.
+  virtual ProcedurePtr findProcedure(const SchemaProcedureName& /*name*/) {
+    return nullptr;
   }
 
   /// EXPERIMENTAL. Opt-in gate for connector pushdown. Default false.

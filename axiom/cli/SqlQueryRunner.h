@@ -357,6 +357,10 @@ class SqlQueryRunner {
       std::string_view queryId,
       const presto::DropSchemaStatement& statement);
 
+  std::string call(
+      std::string_view queryId,
+      const presto::CallStatement& statement);
+
   /// Returns the default connector ID set during initialization.
   const std::string& defaultConnectorId() const {
     return defaultConnectorId_;

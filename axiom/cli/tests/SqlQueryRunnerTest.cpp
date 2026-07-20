@@ -15,6 +15,7 @@
  */
 
 #include "axiom/cli/SqlQueryRunner.h"
+#include <folly/coro/Task.h>
 #include <folly/dynamic.h>
 #include <folly/executors/FunctionScheduler.h>
 #include <folly/init/Init.h>
@@ -1732,6 +1733,63 @@ TEST_F(SqlQueryRunnerTest, explainAddColumn) {
       findTable()->type(), ROW({"x", "dup"}, {BIGINT(), VARCHAR()}));
 
   run("DROP TABLE t");
+}
+
+TEST_F(SqlQueryRunnerTest, call) {
+  // increment(name, step = 1) adds 'step' to the named counter, exercising the
+  // full CALL path: parse, bind, constant-fold arguments, and execute.
+  auto counters = std::make_shared<std::unordered_map<std::string, int64_t>>();
+  testConnector_->metadata()->addProcedure(
+      {kDefaultSchema, "increment"},
+      facebook::axiom::connector::Procedure{
+          .parameters =
+              {{"name", VARCHAR(), std::nullopt},
+               {"step", BIGINT(), Variant(static_cast<int64_t>(1))}},
+          .execute = [counters](
+                         const facebook::axiom::connector::ConnectorSessionPtr&,
+                         const std::vector<Variant>& arguments)
+              -> folly::coro::Task<void> {
+            (*counters)[arguments[0].value<std::string>()] +=
+                arguments[1].value<int64_t>();
+            co_return;
+          }});
+
+  // Omitted 'step' defaults to 1.
+  auto result = run("CALL increment('foo')");
+  EXPECT_EQ(result.message, "CALL");
+  EXPECT_EQ((*counters)["foo"], 1);
+
+  run("CALL increment('bar')");
+  EXPECT_EQ((*counters)["bar"], 1);
+
+  // Explicit 'step' is coerced to BIGINT and applied.
+  run("CALL increment('foo', 10)");
+  EXPECT_EQ((*counters)["foo"], 11);
+
+  run("CALL increment('foo', 1 + 2)");
+  EXPECT_EQ((*counters)["foo"], 14);
+
+  // A constant-expression argument that fails to fold surfaces the error.
+  VELOX_ASSERT_THROW(run("CALL increment('foo', 1 / 0)"), "division by zero");
+
+  {
+    // EXPLAIN describes the CALL without invoking it: the counter is unchanged.
+    auto explained = run("EXPLAIN CALL increment('foo', 100)");
+    EXPECT_EQ(
+        explained.message,
+        "CALL test.default.increment(foo, CAST(100 AS BIGINT))");
+    EXPECT_EQ((*counters)["foo"], 14);
+  }
+
+  {
+    auto explained = run("EXPLAIN CALL increment('foo')");
+    EXPECT_EQ(explained.message, "CALL test.default.increment(foo, 1)");
+    EXPECT_EQ((*counters)["foo"], 14);
+  }
+
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      run("EXPLAIN CALL increment('foo', 'bar')"),
+      "Cannot coerce procedure argument from VARCHAR to BIGINT");
 }
 
 } // namespace

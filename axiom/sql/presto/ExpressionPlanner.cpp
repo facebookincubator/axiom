@@ -802,7 +802,7 @@ lp::ExprApi ExpressionPlanner::toExpr(
       auto* dereference = node->as<DereferenceExpression>();
 
       // Try to resolve as an enum literal (e.g., catalog.schema.Type.VALUE).
-      // When columnResolver_ is nullptr (e.g., parseSqlExpression for CREATE
+      // When columnResolver_ is nullptr (e.g., resolveSqlExpression for CREATE
       // TABLE property values), there is no column scope to compete with — a
       // 4-part dotted name can only be an enum literal.
       std::vector<std::string> parts;

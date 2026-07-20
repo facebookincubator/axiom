@@ -22,6 +22,7 @@ add_library(
   ConfigRegistry.cpp
   QueryRuntimeStats.cpp
   SchemaFunctionName.cpp
+  SchemaProcedureName.cpp
   SchemaTableName.cpp
   SchemaTypeName.cpp
   SessionConfig.cpp

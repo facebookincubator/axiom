@@ -57,7 +57,27 @@ class ExprTranslator : public lp::ExprVisitor {
 
   void visit(const lp::SpecialFormExpr& expr, lp::ExprVisitorContext& context)
       const {
-    VELOX_NYI();
+    auto& myCtx = static_cast<ExprTranslatorContext&>(context);
+
+    std::vector<velox::core::TypedExprPtr> inputs;
+    inputs.reserve(expr.inputs().size());
+    for (const auto& input : expr.inputs()) {
+      input->accept(*this, context);
+      inputs.push_back(myCtx.veloxExpr);
+    }
+
+    switch (expr.form()) {
+      case lp::SpecialForm::kCast:
+        myCtx.veloxExpr = std::make_shared<velox::core::CastTypedExpr>(
+            expr.type(), inputs, /*isTryCast=*/false);
+        break;
+      case lp::SpecialForm::kTryCast:
+        myCtx.veloxExpr = std::make_shared<velox::core::CastTypedExpr>(
+            expr.type(), inputs, /*isTryCast=*/true);
+        break;
+      default:
+        VELOX_NYI();
+    }
   }
 
   void visit(const lp::AggregateExpr& expr, lp::ExprVisitorContext& context)

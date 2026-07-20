@@ -927,7 +927,11 @@ std::any AstBuilder::visitDropFunction(
 
 std::any AstBuilder::visitCall(PrestoSqlParser::CallContext* ctx) {
   trace("visitCall");
-  return visitChildren("visitCall", ctx);
+  auto arguments = visitTyped<CallArgument>(ctx->callArgument());
+  return std::static_pointer_cast<Statement>(std::make_shared<Call>(
+      getLocation(ctx),
+      getQualifiedName(ctx->qualifiedName()),
+      std::move(arguments)));
 }
 
 std::any AstBuilder::visitCreateRole(PrestoSqlParser::CreateRoleContext* ctx) {
@@ -2883,13 +2887,19 @@ std::any AstBuilder::visitSerializable(
 std::any AstBuilder::visitPositionalArgument(
     PrestoSqlParser::PositionalArgumentContext* ctx) {
   trace("visitPositionalArgument");
-  return visitChildren("visitPositionalArgument", ctx);
+  return std::make_shared<CallArgument>(
+      getLocation(ctx),
+      /*name=*/nullptr,
+      visitTyped<Expression>(ctx->expression()));
 }
 
 std::any AstBuilder::visitNamedArgument(
     PrestoSqlParser::NamedArgumentContext* ctx) {
   trace("visitNamedArgument");
-  return visitChildren("visitNamedArgument", ctx);
+  return std::make_shared<CallArgument>(
+      getLocation(ctx),
+      visitTyped<Identifier>(ctx->identifier()),
+      visitTyped<Expression>(ctx->expression()));
 }
 
 std::any AstBuilder::visitPrivilege(PrestoSqlParser::PrivilegeContext* ctx) {

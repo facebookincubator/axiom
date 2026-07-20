@@ -15,6 +15,7 @@
  */
 
 #include "axiom/cli/SqlQueryRunner.h"
+#include <fmt/ranges.h>
 #include <folly/CancellationToken.h>
 #include <folly/container/F14Map.h>
 #include <folly/coro/BlockingWait.h>
@@ -410,6 +411,22 @@ std::string SqlQueryRunner::dropTable(
   }
 }
 
+std::string SqlQueryRunner::call(
+    std::string_view queryId,
+    const presto::CallStatement& statement) {
+  // Fold each bound argument expression to a value.
+  std::vector<velox::Variant> arguments;
+  arguments.reserve(statement.arguments().size());
+  for (const auto& argument : statement.arguments()) {
+    arguments.push_back(
+        optimizer::ConstantExprEvaluator::evaluateConstantExpr(*argument));
+  }
+
+  folly::coro::blockingWait(statement.procedure()->execute(
+      makeConnectorSession(queryId, statement.connectorId()), arguments));
+  return "CALL";
+}
+
 std::string SqlQueryRunner::addColumn(
     std::string_view queryId,
     const presto::AddColumnStatement& statement,
@@ -760,6 +777,25 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
               add->ifNotExists() ? "IF NOT EXISTS " : "",
               add->columnName(),
               add->columnType()->toString())};
+    } else if (statement->isCall()) {
+      // EXPLAIN must be side-effect-free: echo the resolved call without
+      // invoking the procedure.
+      const auto* call = statement->as<presto::CallStatement>();
+
+      std::vector<std::string> arguments;
+      arguments.reserve(call->arguments().size());
+      for (const auto& argument : call->arguments()) {
+        // TODO: render arguments as Presto SQL (add Expr::toSql); toString()
+        // emits debug form (e.g. array_constructor(...)), not valid SQL.
+        arguments.push_back(argument->toString());
+      }
+
+      return {
+          .message = fmt::format(
+              "CALL {}.{}({})",
+              call->connectorId(),
+              call->procedureName(),
+              fmt::join(arguments, ", "))};
     } else {
       VELOX_NYI("Unsupported EXPLAIN query: {}", statement->kindName());
     }
@@ -871,6 +907,11 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
   if (sqlStatement.isDropSchema()) {
     const auto* drop = sqlStatement.as<presto::DropSchemaStatement>();
     return {.message = dropSchema(queryId, *drop)};
+  }
+
+  if (sqlStatement.isCall()) {
+    const auto* call = sqlStatement.as<presto::CallStatement>();
+    return {.message = this->call(queryId, *call)};
   }
 
   if (sqlStatement.isShowStatsForQuery()) {
