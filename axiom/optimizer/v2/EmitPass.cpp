@@ -392,7 +392,11 @@ class Emitter {
       const velox::RowTypePtr& outputType,
       const velox::core::PlanNodePtr& sourcePlan) {
     return velox::core::PartitionedOutputNode::single(
-        nextId(), outputType, exchangeSerdeKind_, sourcePlan);
+        nextId(),
+        outputType,
+        exchangeSerdeKind_,
+        std::string{velox::core::TransportKind::kInMemory},
+        sourcePlan);
   }
 
   // Builds the consumer-side exchange node for 'partitioning' — a
@@ -1775,12 +1779,17 @@ velox::core::PlanNodePtr Emitter::makeExchangeProducer(
           /*numPartitions=*/1,
           outputType,
           exchangeSerdeKind_,
+          std::string{velox::core::TransportKind::kInMemory},
           sourcePlan);
     case PartitionKind::kGather:
       return makeSingleOutput(outputType, sourcePlan);
     case PartitionKind::kArbitrary:
       return velox::core::PartitionedOutputNode::arbitrary(
-          nextId(), outputType, exchangeSerdeKind_, sourcePlan);
+          nextId(),
+          outputType,
+          exchangeSerdeKind_,
+          std::string{velox::core::TransportKind::kInMemory},
+          sourcePlan);
     case PartitionKind::kPartitioned: {
       auto fields =
           toFieldAccessList(partitioning.keys, "Exchange partition key");
@@ -1818,6 +1827,7 @@ velox::core::PlanNodePtr Emitter::makeExchangeProducer(
           std::move(spec),
           outputType,
           exchangeSerdeKind_,
+          std::string{velox::core::TransportKind::kInMemory},
           sourcePlan);
     }
     case PartitionKind::kUnspecified:

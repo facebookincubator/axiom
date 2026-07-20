@@ -600,7 +600,11 @@ PlanAndStats ToVelox::toVeloxPlan(
 
   if (options.remoteOutput) {
     rootPlanNode = velox::core::PartitionedOutputNode::single(
-        nextId(), rootPlanNode->outputType(), exchangeSerdeKind_, rootPlanNode);
+        nextId(),
+        rootPlanNode->outputType(),
+        exchangeSerdeKind_,
+        std::string{velox::core::TransportKind::kInMemory},
+        rootPlanNode);
   }
 
   auto finishWrite = std::move(finishWrite_);
@@ -1153,7 +1157,11 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
   }
 
   source.fragment.planNode = velox::core::PartitionedOutputNode::single(
-      nextId(), node->outputType(), exchangeSerdeKind_, node);
+      nextId(),
+      node->outputType(),
+      exchangeSerdeKind_,
+      std::string{velox::core::TransportKind::kInMemory},
+      node);
   makePredictionAndHistory(source.fragment.planNode->id(), &op);
 
   applyGroupedLeaves(source, groupedLeaves_->root);
@@ -1184,7 +1192,11 @@ velox::core::PlanNodePtr ToVelox::makeOffset(
   auto input = makeFragment(op.input(), source, stages);
 
   source.fragment.planNode = velox::core::PartitionedOutputNode::single(
-      nextId(), input->outputType(), exchangeSerdeKind_, input);
+      nextId(),
+      input->outputType(),
+      exchangeSerdeKind_,
+      std::string{velox::core::TransportKind::kInMemory},
+      input);
   makePredictionAndHistory(source.fragment.planNode->id(), &op);
 
   applyGroupedLeaves(source, groupedLeaves_->root);
@@ -1235,7 +1247,11 @@ velox::core::PlanNodePtr ToVelox::makeLimit(
   }
 
   source.fragment.planNode = velox::core::PartitionedOutputNode::single(
-      nextId(), node->outputType(), exchangeSerdeKind_, node);
+      nextId(),
+      node->outputType(),
+      exchangeSerdeKind_,
+      std::string{velox::core::TransportKind::kInMemory},
+      node);
   makePredictionAndHistory(source.fragment.planNode->id(), &op);
 
   applyGroupedLeaves(source, groupedLeaves_->root);
@@ -1958,22 +1974,39 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
   if (distribution.isArbitrary()) {
     VELOX_CHECK_EQ(0, keys.size());
     source.fragment.planNode = velox::core::PartitionedOutputNode::arbitrary(
-        nextId(), outputType, exchangeSerdeKind_, sourcePlan);
+        nextId(),
+        outputType,
+        exchangeSerdeKind_,
+        std::string{velox::core::TransportKind::kInMemory},
+        sourcePlan);
   } else if (distribution.isBroadcast()) {
     VELOX_CHECK_EQ(0, keys.size());
     source.fragment.planNode = velox::core::PartitionedOutputNode::broadcast(
-        nextId(), 1, outputType, exchangeSerdeKind_, sourcePlan);
+        nextId(),
+        1,
+        outputType,
+        exchangeSerdeKind_,
+        std::string{velox::core::TransportKind::kInMemory},
+        sourcePlan);
   } else if (distribution.isGather()) {
     VELOX_CHECK_EQ(0, keys.size());
     source.fragment.planNode = velox::core::PartitionedOutputNode::single(
-        nextId(), outputType, exchangeSerdeKind_, sourcePlan);
+        nextId(),
+        outputType,
+        exchangeSerdeKind_,
+        std::string{velox::core::TransportKind::kInMemory},
+        sourcePlan);
   } else {
     VELOX_CHECK_NE(0, keys.size());
     const auto numPartitions =
         groupedLeavesWidth(*outerConsumerGroupedLeaves, options_.numWorkers);
     if (numPartitions == 1) {
       source.fragment.planNode = velox::core::PartitionedOutputNode::single(
-          nextId(), outputType, exchangeSerdeKind_, sourcePlan);
+          nextId(),
+          outputType,
+          exchangeSerdeKind_,
+          std::string{velox::core::TransportKind::kInMemory},
+          sourcePlan);
     } else {
       auto partitionFunctionFactory = createPartitionFunctionSpec(
           sourcePlan->outputType(), keys, distribution);
@@ -1987,6 +2020,7 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
               std::move(partitionFunctionFactory),
               outputType,
               exchangeSerdeKind_,
+              std::string{velox::core::TransportKind::kInMemory},
               sourcePlan);
     }
   }
