@@ -1100,5 +1100,68 @@ TEST_F(ExpressionParserTest, mixedCaseColumnName) {
       "SELECT ORDERINGID FROM mixedCase", matchScan().project().output()));
 }
 
+TEST_F(ExpressionParserTest, expressionDepthCapBoundary) {
+  auto chain = [](int terms) {
+    std::string expr = "1";
+    for (int i = 0; i < terms; ++i) {
+      expr += " + 0";
+    }
+    return expr;
+  };
+  EXPECT_NE(nullptr, parseExpr(chain(255)));
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseExpr(chain(256)), "statement is too large");
+}
+
+// A chain past the expression-depth cap flattens to one n-ary call and plans;
+// unflattened it would recurse over the cap.
+TEST_F(ExpressionParserTest, deepOrChainFlattensToNaryCall) {
+  const uint32_t termCount = ParserOptions::kMaxExpressionDepthDefault + 1;
+  std::string sql = "1 = 0";
+  for (uint32_t i = 1; i < termCount; ++i) {
+    sql += " OR 1 = " + std::to_string(i);
+  }
+  auto expr = parseExpr(sql);
+  ASSERT_TRUE(expr->isSpecialForm());
+  auto* orExpr = expr->as<lp::SpecialFormExpr>();
+  EXPECT_EQ(lp::SpecialForm::kOr, orExpr->form());
+  EXPECT_EQ(termCount, orExpr->inputs().size());
+}
+
+// AND flattens like OR into one n-ary call.
+TEST_F(ExpressionParserTest, andChainFlattensToNaryCall) {
+  auto expr = parseExpr("1 = 0 AND 2 = 0 AND 3 = 0");
+  ASSERT_TRUE(expr->isSpecialForm());
+  auto* andExpr = expr->as<lp::SpecialFormExpr>();
+  EXPECT_EQ(lp::SpecialForm::kAnd, andExpr->form());
+  EXPECT_EQ(3, andExpr->inputs().size());
+}
+
+// Regression guard: a different operator on the chain's left child stops the
+// flatten, so the nested AND stays nested instead of merging into the OR.
+TEST_F(ExpressionParserTest, mixedOperatorsNotFlattenedTogether) {
+  auto expr = parseExpr("1 = 0 AND 2 = 0 OR 3 = 0");
+  ASSERT_TRUE(expr->isSpecialForm());
+  auto* orExpr = expr->as<lp::SpecialFormExpr>();
+  EXPECT_EQ(lp::SpecialForm::kOr, orExpr->form());
+  ASSERT_EQ(2, orExpr->inputs().size());
+  ASSERT_TRUE(orExpr->inputAt(0)->isSpecialForm());
+  EXPECT_EQ(
+      lp::SpecialForm::kAnd,
+      orExpr->inputAt(0)->as<lp::SpecialFormExpr>()->form());
+}
+
+// Flattening preserves the operands' original left-to-right order.
+TEST_F(ExpressionParserTest, flattenPreservesOperandOrder) {
+  auto expr = parseExpr("1 = 2 OR 3 = 4 OR 5 = 6");
+  ASSERT_TRUE(expr->isSpecialForm());
+  auto* orExpr = expr->as<lp::SpecialFormExpr>();
+  EXPECT_EQ(lp::SpecialForm::kOr, orExpr->form());
+  ASSERT_EQ(3, orExpr->inputs().size());
+  EXPECT_EQ("eq(1, 2)", orExpr->inputAt(0)->toString());
+  EXPECT_EQ("eq(3, 4)", orExpr->inputAt(1)->toString());
+  EXPECT_EQ("eq(5, 6)", orExpr->inputAt(2)->toString());
+}
+
 } // namespace
 } // namespace axiom::sql::presto::test

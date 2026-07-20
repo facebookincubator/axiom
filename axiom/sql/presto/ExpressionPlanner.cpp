@@ -782,6 +782,16 @@ TypePtr ExpressionPlanner::resolveType(const TypeSignaturePtr& type) {
 lp::ExprApi ExpressionPlanner::toExpr(
     const ExpressionPtr& node,
     ExprOptions options) {
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      exprDepth_ < maxExpressionDepth_,
+      node->location(),
+      /*token=*/std::nullopt,
+      "statement is too large");
+  ++exprDepth_;
+  SCOPE_EXIT {
+    --exprDepth_;
+  };
+
   switch (node->type()) {
     case NodeType::kIdentifier: {
       auto name = canonicalizeIdentifier(*node->as<Identifier>());
@@ -882,16 +892,32 @@ lp::ExprApi ExpressionPlanner::toExpr(
 
     case NodeType::kLogicalBinaryExpression: {
       auto* logical = node->as<LogicalBinaryExpression>();
-      auto left = toExpr(logical->left(), options);
-      auto right = toExpr(logical->right(), options);
+      const auto op = logical->op();
 
-      switch (logical->op()) {
-        case LogicalBinaryExpression::Operator::kAnd:
-          return left && right;
-
-        case LogicalBinaryExpression::Operator::kOr:
-          return left || right;
+      // Flatten a same-operator left-deep chain into one n-ary call. AND/OR
+      // parse left-associatively, so same-op chains nest on the left spine.
+      std::vector<const LogicalBinaryExpression*> chain{logical};
+      while (auto* leftBinary =
+                 chain.back()->left()->as<LogicalBinaryExpression>()) {
+        if (leftBinary->op() != op) {
+          break;
+        }
+        chain.push_back(leftBinary);
       }
+
+      std::vector<lp::ExprApi> operands;
+      operands.reserve(chain.size() + 1);
+      operands.push_back(toExpr(chain.back()->left(), options));
+      for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        operands.push_back(toExpr((*it)->right(), options));
+      }
+      switch (op) {
+        case LogicalBinaryExpression::Operator::kAnd:
+          return lp::Call("and", std::move(operands));
+        case LogicalBinaryExpression::Operator::kOr:
+          return lp::Call("or", std::move(operands));
+      }
+      VELOX_UNREACHABLE();
     }
 
     case NodeType::kArithmeticUnaryExpression: {

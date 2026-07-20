@@ -20,10 +20,9 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include <folly/container/F14Map.h>
-
 #include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/PlanBuilder.h"
+#include "axiom/sql/presto/ParserOptions.h"
 #include "axiom/sql/presto/ast/AstNodesAll.h"
 
 namespace axiom::sql::presto {
@@ -109,12 +108,14 @@ class ExpressionPlanner {
       SubqueryPlanner subqueryPlanner,
       SortingKeyResolver sortingKeyResolver,
       ShouldDropQualifier shouldDropQualifier = nullptr,
-      ColumnResolver columnResolver = nullptr)
+      ColumnResolver columnResolver = nullptr,
+      uint32_t maxExpressionDepth = ParserOptions::kMaxExpressionDepthDefault)
       : user_{std::move(user)},
         subqueryPlanner_(std::move(subqueryPlanner)),
         sortingKeyResolver_(std::move(sortingKeyResolver)),
         shouldDropQualifier_(std::move(shouldDropQualifier)),
-        columnResolver_(std::move(columnResolver)) {}
+        columnResolver_(std::move(columnResolver)),
+        maxExpressionDepth_{maxExpressionDepth} {}
 
   /// Finds WindowCallExpr nodes nested inside non-window expressions.
   /// Skips top-level window projections (where the ExprApi itself is a
@@ -132,6 +133,7 @@ class ExpressionPlanner {
   /// Translates an AST expression into an ExprApi. Aggregate options
   /// (DISTINCT, FILTER, ORDER BY) are embedded in the returned ExprApi via
   /// AggregateCallExpr. Window functions are embedded via WindowCallExpr.
+  /// Fails with "statement is too large" when the expression nests too deeply.
   lp::ExprApi toExpr(const ExpressionPtr& node, ExprOptions options = {});
 
   /// Sets alias-to-expression mappings for lateral column alias resolution.
@@ -243,6 +245,9 @@ class ExpressionPlanner {
   ShouldDropQualifier shouldDropQualifier_;
   ColumnResolver columnResolver_;
 
+  // Cap on toExpr recursion depth.
+  const uint32_t maxExpressionDepth_;
+
   // Per-query cache for user-defined type lookups. Entries with nullptr values
   // represent negatively cached (not-found) types.
   folly::F14FastMap<std::string, facebook::velox::TypePtr> typeCache_;
@@ -265,6 +270,9 @@ class ExpressionPlanner {
   // the qualifier of 'x.field' when 'x' names a lambda parameter rather than
   // an outer table alias.
   std::vector<std::string> lambdaParamScope_;
+
+  // Current toExpr recursion depth, bounded by maxExpressionDepth_.
+  uint32_t exprDepth_{0};
 };
 
 } // namespace axiom::sql::presto

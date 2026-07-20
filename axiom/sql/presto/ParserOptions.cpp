@@ -17,6 +17,7 @@
 #include "axiom/sql/presto/ParserOptions.h"
 
 #include <fmt/format.h>
+#include <folly/Conv.h>
 
 #include "velox/common/base/Exceptions.h"
 
@@ -43,6 +44,13 @@ std::vector<ConfigProperty> buildProperties(
           fmt::to_string(ParserOptions::kParseDecimalLiteralAsDoubleDefault),
           "Parse decimal literals (e.g. 1.5) as DOUBLE. When false, parse as "
           "DECIMAL with inferred precision and scale.",
+      },
+      {
+          std::string(ParserOptions::kMaxExpressionDepth),
+          ConfigPropertyType::kInteger,
+          fmt::to_string(ParserOptions::kMaxExpressionDepthDefault),
+          "Maximum expression nesting depth before parsing fails with "
+          "\"statement is too large\", to avoid a stack overflow.",
       },
   };
 
@@ -88,10 +96,17 @@ ParserOptions ParserOptions::from(
       field = it->second == "true";
     }
   };
+  auto setUint32 = [&](std::string_view key, uint32_t& field) {
+    auto it = properties.find(key);
+    if (it != properties.end()) {
+      field = folly::to<uint32_t>(it->second);
+    }
+  };
 
   ParserOptions options;
   setBool(kFriendlySql, options.friendlySql);
   setBool(kParseDecimalLiteralAsDouble, options.parseDecimalLiteralAsDouble);
+  setUint32(kMaxExpressionDepth, options.maxExpressionDepth);
   return options;
 }
 
