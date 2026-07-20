@@ -782,6 +782,16 @@ TypePtr ExpressionPlanner::resolveType(const TypeSignaturePtr& type) {
 lp::ExprApi ExpressionPlanner::toExpr(
     const ExpressionPtr& node,
     ExprOptions options) {
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      exprDepth_ < maxExpressionDepth_,
+      node->location(),
+      /*token=*/std::nullopt,
+      "statement is too large");
+  ++exprDepth_;
+  SCOPE_EXIT {
+    --exprDepth_;
+  };
+
   switch (node->type()) {
     case NodeType::kIdentifier: {
       auto name = canonicalizeIdentifier(*node->as<Identifier>());

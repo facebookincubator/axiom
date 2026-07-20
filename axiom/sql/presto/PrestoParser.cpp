@@ -30,6 +30,7 @@
 #include "axiom/sql/presto/DisplayNames.h"
 #include "axiom/sql/presto/ExpressionPlanner.h"
 #include "axiom/sql/presto/GroupByPlanner.h"
+#include "axiom/sql/presto/ParserOptions.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/RecursiveCteValidator.h"
 #include "axiom/sql/presto/ShowStatsBuilder.h"
@@ -256,7 +257,8 @@ class RelationPlanner : public AstVisitor {
       const std::string& defaultSchema,
       const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
           std::string_view /*sql*/)>& parseSql,
-      bool friendlySql = true)
+      bool friendlySql = true,
+      uint32_t maxExpressionDepth = ParserOptions::kMaxExpressionDepthDefault)
       : context_{makePrestoContext(
             user,
             defaultConnectorId,
@@ -266,6 +268,7 @@ class RelationPlanner : public AstVisitor {
         parseSql_{parseSql},
         user_{std::move(user)},
         builder_(newBuilder()),
+        maxExpressionDepth_{maxExpressionDepth},
         friendlySql_{friendlySql} {}
 
   static lp::PlanBuilder::Context makePrestoContext(
@@ -1587,6 +1590,7 @@ class RelationPlanner : public AstVisitor {
       parseSql_;
   const std::string user_;
   std::shared_ptr<lp::PlanBuilder> builder_;
+  uint32_t maxExpressionDepth_;
   ExpressionPlanner exprPlanner_{
       user_,
       [this](Query* query) { return planSubquery(query); },
@@ -1602,7 +1606,8 @@ class RelationPlanner : public AstVisitor {
       [this](const std::string& first, const std::string& second) {
         return builder_->hasColumn(first) ||
             builder_->hasQualifiedColumn(first, second);
-      }};
+      },
+      maxExpressionDepth_};
   CteScope ctes_;
   ViewMap views_;
   std::unordered_set<facebook::axiom::CatalogSchemaTableName> inputTables_;
@@ -3092,7 +3097,8 @@ SqlStatementPtr doPlan(
         defaultConnectorId,
         defaultSchema,
         parseSql,
-        parserSession->options().friendlySql);
+        parserSession->options().friendlySql,
+        parserSession->options().maxExpressionDepth);
     query->accept(&planner);
     return std::make_shared<SelectStatement>(
         planner.plan(),

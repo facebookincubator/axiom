@@ -1100,5 +1100,18 @@ TEST_F(ExpressionParserTest, mixedCaseColumnName) {
       "SELECT ORDERINGID FROM mixedCase", matchScan().project().output()));
 }
 
+TEST_F(ExpressionParserTest, expressionDepthCapBoundary) {
+  auto chain = [](int terms) {
+    std::string expr = "1";
+    for (int i = 0; i < terms; ++i) {
+      expr += " + 0";
+    }
+    return expr;
+  };
+  EXPECT_NE(nullptr, parseExpr(chain(255)));
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseExpr(chain(256)), "statement is too large");
+}
+
 } // namespace
 } // namespace axiom::sql::presto::test
