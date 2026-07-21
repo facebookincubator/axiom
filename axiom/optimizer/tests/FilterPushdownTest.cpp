@@ -254,5 +254,26 @@ TEST_F(FilterPushdownTest, multiTableOrFilter) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+// Two base-column predicates (a <> 0 and c = 5) are evaluated below the cross
+// join, on the Values(t) side.
+TEST_F(FilterPushdownTest, belowSingleRowSubqueryCrossJoin) {
+  auto plan = toSingleNodePlan(
+      "WITH t AS (SELECT * FROM (VALUES (0, 5), (1, 5), (2, 99)) AS _(a, c)), "
+      "     u AS (SELECT * FROM (VALUES (10)) AS _(b)) "
+      "SELECT (SELECT max(b) FROM u) / a AS pt "
+      "FROM t WHERE a <> 0 AND c = 5 GROUP BY 1 "
+      "HAVING (SELECT max(b) FROM u) / a > 1");
+
+  auto matcher = matchValues()
+                     .filter("neq(c0, 0) AND eq(c1, 5)")
+                     .nestedLoopJoin(matchValues().singleAggregation().build())
+                     .filter()
+                     .project()
+                     .singleAggregation()
+                     .build();
+
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

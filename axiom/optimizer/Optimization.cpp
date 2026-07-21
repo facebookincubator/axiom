@@ -3194,7 +3194,37 @@ bool Optimization::placeConjuncts(
   state.dt->singleRowDts.forEach<DerivedTable>(
       [&](auto dt) { columnsAndSingles.unionObjects(dt->columns); });
 
-  ExprVector filters;
+  // Phase 1: place all already-evaluable conjuncts (every column available)
+  // as a single Filter, before phase 2 places any subquery-dependent
+  // conjunct, so these filters land as low as possible in the plan.
+  {
+    ExprVector filters;
+    for (auto& conjunct : state.dt->conjuncts) {
+      if (!allowNondeterministic && conjunct->containsNonDeterministic()) {
+        continue;
+      }
+      if (state.isPlaced(conjunct)) {
+        continue;
+      }
+      if (conjunct->columns().isSubset(state.columns())) {
+        state.placeColumn(conjunct);
+        filters.push_back(conjunct);
+      }
+    }
+
+    if (!filters.empty()) {
+      for (auto& filter : filters) {
+        state.place(filter);
+      }
+      auto* filter = make<Filter>(plan, std::move(filters));
+      state.addCost(*filter);
+      makeJoins(filter, state);
+      return true;
+    }
+  }
+
+  // Phase 2: place a conjunct that depends on placed tables and non-correlated
+  // single row subqueries.
   for (auto& conjunct : state.dt->conjuncts) {
     if (!allowNondeterministic && conjunct->containsNonDeterministic()) {
       continue;
@@ -3202,14 +3232,7 @@ bool Optimization::placeConjuncts(
     if (state.isPlaced(conjunct)) {
       continue;
     }
-    if (conjunct->columns().isSubset(state.columns())) {
-      state.placeColumn(conjunct);
-      filters.push_back(conjunct);
-      continue;
-    }
     if (conjunct->columns().isSubset(columnsAndSingles)) {
-      // The filter depends on placed tables and non-correlated single row
-      // subqueries.
       std::vector<DerivedTableCP> placeable;
       state.dt->singleRowDts.forEach<DerivedTable>([&](auto subquery) {
         // If the subquery provides columns for the filter, place it.
@@ -3235,16 +3258,6 @@ bool Optimization::placeConjuncts(
         return true;
       }
     }
-  }
-
-  if (!filters.empty()) {
-    for (auto& filter : filters) {
-      state.place(filter);
-    }
-    auto* filter = make<Filter>(plan, std::move(filters));
-    state.addCost(*filter);
-    makeJoins(filter, state);
-    return true;
   }
   return false;
 }

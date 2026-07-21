@@ -476,6 +476,7 @@ int main(int argc, char** argv) {
   registerQueryFile<"cte">();
   registerQueryFile<"datetime">();
   registerQueryFile<"distinctAggregation">();
+  registerQueryFile<"filterPushdown">();
   registerQueryFile<"groupingsets">();
   registerQueryFile<"join">();
   registerQueryFile<"limit">();
