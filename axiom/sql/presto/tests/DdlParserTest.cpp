@@ -133,14 +133,20 @@ TEST_F(DdlParserTest, createTable) {
     ASSERT_TRUE(createTable->ifNotExists());
   }
 
-  // properties
-  testCreateTable(
-      "CREATE TABLE t (id INTEGER, ds VARCHAR) "
-      "WITH (partitioned_by = ARRAY['ds'], format = 'ORC')",
-      "t",
-      ROW({"id", "ds"}, {INTEGER(), VARCHAR()}),
-      /*properties=*/
-      {{"partitioned_by", "array_constructor(ds)"}, {"format", "ORC"}});
+  // Properties. Names are identifiers canonicalized to lowercase, so the same
+  // option keys reach the connector whether written lowercase or uppercase.
+  for (const auto* withClause : {
+           "WITH (partitioned_by = ARRAY['ds'], format = 'ORC')",
+           "WITH (PARTITIONED_BY = array['ds'], FORMAT = 'ORC')",
+           "with (partitioned_By = ARRAY['ds'], Format = 'ORC')",
+       }) {
+    testCreateTable(
+        std::string("CREATE TABLE t (id INTEGER, ds VARCHAR) ") + withClause,
+        "t",
+        ROW({"id", "ds"}, {INTEGER(), VARCHAR()}),
+        /*properties=*/
+        {{"partitioned_by", "array_constructor(ds)"}, {"format", "ORC"}});
+  }
 
   // a variety of different types
   testCreateTable(

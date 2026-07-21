@@ -2493,7 +2493,9 @@ std::unordered_map<std::string, lp::ExprPtr> parseTableProperties(
     const std::vector<std::shared_ptr<Property>>& props) {
   std::unordered_map<std::string, lp::ExprPtr> properties;
   for (const auto& p : props) {
-    const auto& name = p->name()->value();
+    // Property names are identifiers; canonicalize so connectors receive
+    // canonical option keys regardless of the case or quoting the user wrote.
+    const auto name = canonicalizeIdentifier(*p->name());
     auto expr = resolveSqlExpression(user, p->value());
     AXIOM_PRESTO_SEMANTIC_CHECK(
         expr->looksConstant(),
