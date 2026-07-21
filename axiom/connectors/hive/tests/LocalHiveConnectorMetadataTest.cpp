@@ -405,6 +405,40 @@ TEST_F(LocalHiveConnectorMetadataTest, createTable) {
       "test", data, {{"ds", partition}}, dwio::common::FileFormat::PARQUET);
 }
 
+TEST_F(LocalHiveConnectorMetadataTest, partitionValueIsUnescaped) {
+  // A partition value containing ':' is Hive-escaped to '%3A' in the directory
+  // name; the metadata layer must decode it back to the canonical value.
+  auto tableType = ROW({{"data", BIGINT()}, {"p", VARCHAR()}});
+  folly::F14FastMap<std::string, velox::Variant> options = {
+      {HiveWriteOptions::kPartitionedBy, velox::Variant::array({"p"})},
+      {HiveWriteOptions::kFileFormat, "parquet"},
+  };
+  auto session = makeSession();
+  auto table = metadata_->createTable(
+      session,
+      {kDefaultSchema, "escaped_partition"},
+      tableType,
+      options,
+      /*ifNotExists=*/false,
+      /*explain=*/false);
+
+  auto data = makeRowVector(
+      tableType->names(),
+      {
+          makeFlatVector<int64_t>({0, 1, 2, 3}),
+          makeConstant<std::string>("2020-01-01 12:34:56", 4),
+      });
+  writeToTable(
+      table, data, WriteKind::kCreate, dwio::common::FileFormat::PARQUET);
+
+  const auto* layout =
+      getLayout(metadata_->findTable({kDefaultSchema, "escaped_partition"}));
+  ASSERT_FALSE(layout->files().empty());
+  // The writer escapes ':' to '%3A' on disk, so decoding is actually exercised.
+  EXPECT_NE(layout->files()[0]->path.find("%3A"), std::string::npos);
+  EXPECT_EQ(layout->files()[0]->partitionKeys.at("p"), "2020-01-01 12:34:56");
+}
+
 TEST_F(LocalHiveConnectorMetadataTest, addColumn) {
   auto tableType =
       ROW({{"id", BIGINT()}, {"name", VARCHAR()}, {"ds", VARCHAR()}});

@@ -153,10 +153,13 @@ class HiveTableLayout : public TableLayout {
   }
 
   /// Converts a Hive partition-key string to a Variant of 'type'. Fails for a
-  /// type that cannot appear as a partition key.
+  /// type that cannot appear as a partition key. 'readTimestampAsLocalTime'
+  /// interprets a plain TIMESTAMP as local time and converts it to GMT; it is
+  /// ignored for TIMESTAMP_UTC, which is always UTC.
   static velox::Variant partitionValueToVariant(
       std::string_view value,
-      const velox::Type& type);
+      const velox::Type& type,
+      bool readTimestampAsLocalTime);
 
   std::optional<int32_t> numBuckets() const {
     return numBuckets_;

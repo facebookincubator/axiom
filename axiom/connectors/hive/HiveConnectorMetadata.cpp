@@ -25,6 +25,7 @@
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/expression/ExprConstants.h"
+#include "velox/type/TimestampConversion.h"
 
 namespace facebook::axiom::connector::hive {
 
@@ -202,7 +203,8 @@ HiveTableLayout::HiveTableLayout(
 // static
 velox::Variant HiveTableLayout::partitionValueToVariant(
     std::string_view value,
-    const velox::Type& type) {
+    const velox::Type& type,
+    bool readTimestampAsLocalTime) {
   switch (type.kind()) {
     case velox::TypeKind::BOOLEAN:
       return velox::Variant(folly::to<bool>(value));
@@ -216,6 +218,21 @@ velox::Variant HiveTableLayout::partitionValueToVariant(
       return velox::Variant(folly::to<int64_t>(value));
     case velox::TypeKind::VARCHAR:
       return velox::Variant(std::string(value));
+    case velox::TypeKind::TIMESTAMP: {
+      auto result = velox::util::fromTimestampString(
+          value.data(),
+          value.size(),
+          velox::util::TimestampParseMode::kPrestoCast);
+      VELOX_USER_CHECK(
+          !result.hasError(), "Invalid timestamp partition value: {}", value);
+      auto timestamp = result.value();
+      // Plain TIMESTAMP values are local time and are converted to GMT to match
+      // the reader; TIMESTAMP_UTC is already UTC and needs no conversion.
+      if (readTimestampAsLocalTime && type.equivalent(*velox::TIMESTAMP())) {
+        timestamp.toGMT(velox::Timestamp::defaultTimezone());
+      }
+      return velox::Variant::timestamp(timestamp);
+    }
     default:
       VELOX_UNREACHABLE(
           "Unsupported partition column type: {}", type.toString());
