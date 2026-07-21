@@ -29,11 +29,8 @@ class ShowStatsTest : public SqlQueryRunnerTestBase,
                       public ::testing::WithParamInterface<bool> {
  protected:
   void SetUp() override {
-    runner_ = makeRunner(
-        "test",
-        /*queryIdGenerator=*/{},
-        /*permissionCheck=*/{},
-        /*useOptimizerV2=*/GetParam());
+    useV2_ = GetParam();
+    SqlQueryRunnerTestBase::SetUp();
   }
 };
 
