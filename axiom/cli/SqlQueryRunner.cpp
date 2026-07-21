@@ -869,9 +869,14 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
         OptimizerContext optimizerContext(optimizerPool_.get());
         velox::exec::SimpleExpressionEvaluator evaluator(
             queryCtx.get(), optimizerPool_.get());
+        auto session = makeOptimizerSession(
+            queryCtx->queryId(),
+            collectConnectorProperties(*sessionConfig_),
+            /*explain=*/true);
         return {
-            .message = optimizer::v2::explainIo(
-                *logicalPlan, *resolver, evaluator, std::move(outputTable))};
+            .message = optimizer::v2::Optimizer(
+                           *logicalPlan, *resolver, *session, evaluator)
+                           .explainIo(std::move(outputTable))};
       } else {
         std::string text;
         optimize(
@@ -1314,6 +1319,21 @@ std::string SqlQueryRunner::runExplainAnalyze(
   return out.str();
 }
 
+std::shared_ptr<optimizer::OptimizerSession>
+SqlQueryRunner::makeOptimizerSession(
+    std::string_view queryId,
+    connector::ConnectorProperties connectorProperties,
+    bool explain) {
+  auto optimizerOptions = optimizer::OptimizerOptions::from(
+      sessionConfig_->effectiveValues(kOptimizerPrefix));
+  optimizerOptions.explain = explain;
+  return std::make_shared<optimizer::OptimizerSession>(
+      std::string(queryId),
+      user_,
+      std::move(optimizerOptions),
+      std::move(connectorProperties));
+}
+
 optimizer::PlanAndStats SqlQueryRunner::optimize(
     const logical_plan::LogicalPlanNodePtr& logicalPlan,
     const std::shared_ptr<velox::core::QueryCtx>& queryCtx,
@@ -1336,14 +1356,8 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
   schemaResolver = orDefaultSchemaResolver(std::move(schemaResolver));
 
   auto connectorProperties = collectConnectorProperties(*sessionConfig_);
-  auto optimizerOptions = optimizer::OptimizerOptions::from(
-      sessionConfig_->effectiveValues(kOptimizerPrefix));
-  optimizerOptions.explain = explain;
-  auto optimizerSession = std::make_shared<optimizer::OptimizerSession>(
-      queryCtx->queryId(),
-      user_,
-      std::move(optimizerOptions),
-      connectorProperties);
+  auto optimizerSession =
+      makeOptimizerSession(queryCtx->queryId(), connectorProperties, explain);
   auto runnerSession = std::make_shared<runner::RunnerSession>(
       queryCtx->queryId(),
       user_,
@@ -1358,8 +1372,9 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
     // breakdown keys (toGraph / bestPlan / toVelox) are not populated; only
     // the overall `kOptimizeWallNanos` / `kOptimizeCpuNanos` are recorded,
     // from the caller-side `PhaseTimer`.
-    return optimizer::v2::optimize(
-        *logicalPlan, *schemaResolver, *optimizerSession, evaluator, opts);
+    return optimizer::v2::Optimizer(
+               *logicalPlan, *schemaResolver, *optimizerSession, evaluator)
+        .optimize(opts);
   }
 
   uint64_t toGraphNanos{0};
@@ -1578,8 +1593,6 @@ std::optional<int64_t> roundCardinality(std::optional<float> cardinality) {
 std::vector<velox::RowVectorPtr> SqlQueryRunner::runShowStatsForQuery(
     const presto::SqlStatement& sqlStatement,
     const RunOptions& options) {
-  VELOX_USER_CHECK(
-      !useOptimizerV2_, "SHOW STATS FOR (<query>) is not supported with --v2");
   const auto* showStats = sqlStatement.as<presto::ShowStatsForQueryStatement>();
   const auto& innerStatement = showStats->statement();
   VELOX_CHECK(innerStatement->isSelect());
@@ -1589,30 +1602,59 @@ std::vector<velox::RowVectorPtr> SqlQueryRunner::runShowStatsForQuery(
 
   std::vector<velox::Variant> data;
 
-  optimize(
-      logicalPlan,
-      newQuery(options),
-      options,
-      [&](const optimizer::DerivedTable& rootDt) {
-        presto::ShowStatsBuilder builder(
-            roundCardinality(rootDt.cardinality()));
+  if (useOptimizerV2_) {
+    auto queryCtx = newQuery(options);
+    OptimizerContext optimizerContext(optimizerPool_.get());
+    velox::exec::SimpleExpressionEvaluator evaluator(
+        queryCtx.get(), optimizerPool_.get());
+    auto resolver = orDefaultSchemaResolver(nullptr);
+    auto session = makeOptimizerSession(
+        queryCtx->queryId(),
+        collectConnectorProperties(*sessionConfig_),
+        /*explain=*/false);
 
-        for (const auto* column : rootDt.columns) {
-          const auto& value = column->value();
+    const auto stats =
+        optimizer::v2::Optimizer(*logicalPlan, *resolver, *session, evaluator)
+            .estimateQueryStats();
 
-          builder.addColumn(
-              column->outputName(),
-              *value.type,
-              castOpt<double>(value.nullFraction),
-              roundCardinality(value.cardinality),
-              /*avgLength=*/std::nullopt,
-              value.min,
-              value.max);
-        }
+    presto::ShowStatsBuilder builder(roundCardinality(stats.cardinality));
+    for (const auto& column : stats.columns) {
+      builder.addColumn(
+          column.name,
+          *column.type,
+          castOpt<double>(column.nullFraction),
+          roundCardinality(column.distinctCount),
+          /*avgLength=*/std::nullopt,
+          column.min,
+          column.max);
+    }
+    data = builder.rows();
+  } else {
+    optimize(
+        logicalPlan,
+        newQuery(options),
+        options,
+        [&](const optimizer::DerivedTable& rootDt) {
+          presto::ShowStatsBuilder builder(
+              roundCardinality(rootDt.cardinality()));
 
-        data = builder.rows();
-        return false; // Stop optimization.
-      });
+          for (const auto* column : rootDt.columns) {
+            const auto& value = column->value();
+
+            builder.addColumn(
+                column->outputName(),
+                *value.type,
+                castOpt<double>(value.nullFraction),
+                roundCardinality(value.cardinality),
+                /*avgLength=*/std::nullopt,
+                value.min,
+                value.max);
+          }
+
+          data = builder.rows();
+          return false; // Stop optimization.
+        });
+  }
 
   auto result = std::dynamic_pointer_cast<velox::RowVector>(
       velox::BaseVector::createFromVariants(

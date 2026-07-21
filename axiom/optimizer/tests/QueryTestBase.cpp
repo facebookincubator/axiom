@@ -321,8 +321,8 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
 
   optimizer::PlanAndStats planAndStats;
   if (useV2_) {
-    planAndStats =
-        v2::optimize(*plan, schemaResolver, *session, evaluator, options);
+    planAndStats = v2::Optimizer(*plan, schemaResolver, *session, evaluator)
+                       .optimize(options);
   } else {
     optimizer::Optimization opt(
         session,

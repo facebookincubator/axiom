@@ -37,8 +37,8 @@ DEFINE_string(schema, "", "Default schema.");
 DEFINE_bool(
     v2,
     false,
-    "Use the v2 optimizer. EXPLAIN (type graph|optimized|io) and "
-    "SHOW STATS FOR (<query>) are not supported under v2 yet.");
+    "Use the v2 optimizer. EXPLAIN (type graph|optimized) is not supported "
+    "under v2 yet.");
 
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv, false);
