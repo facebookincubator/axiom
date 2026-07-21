@@ -17,18 +17,28 @@
 
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "axiom/common/CatalogSchemaTableName.h"
 #include "axiom/optimizer/DerivedTable.h"
 
 namespace facebook::axiom::optimizer {
 
-/// Generates EXPLAIN IO JSON from the query graph.
+/// Generates EXPLAIN IO JSON from a set of input tables and their scan filters.
 ///
-/// Walks the DerivedTable tree to find input tables. If 'outputTable' is
-/// provided (INSERT/CTAS), includes it in the JSON output. For each input
-/// table, extracts column constraints from columnFilters for columns marked
-/// with includeInExplainIo (e.g., partition columns).
+/// For each (BaseTable, filters) pair, extracts column constraints from
+/// 'filters' for columns marked with includeInExplainIo (e.g., partition
+/// columns), grouping and merging by connector table. If 'outputTable' is
+/// provided (INSERT/CTAS), includes it in the JSON output. This is the shared
+/// core used by both the v1 (DerivedTable) and v2 (Scan tree) optimizers.
+std::string explainIo(
+    const std::vector<std::pair<BaseTableCP, ExprVector>>& tableFilters,
+    std::optional<CatalogSchemaTableName> outputTable = std::nullopt);
+
+/// Generates EXPLAIN IO JSON from the v1 query graph by walking the
+/// DerivedTable tree to find input tables and reading each table's
+/// columnFilters.
 std::string explainIo(
     DerivedTableCP rootDt,
     std::optional<CatalogSchemaTableName> outputTable = std::nullopt);

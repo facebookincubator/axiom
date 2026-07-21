@@ -16,6 +16,10 @@
 
 #pragma once
 
+#include <optional>
+#include <string>
+
+#include "axiom/common/CatalogSchemaTableName.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/MultiFragmentPlan.h"
@@ -56,5 +60,16 @@ PlanAndStats optimize(
     const OptimizerSession& session,
     velox::core::ExpressionEvaluator& evaluator,
     const MultiFragmentPlan::Options& options);
+
+/// Produces the EXPLAIN (TYPE IO) JSON for 'plan'. Runs the pipeline only
+/// through PushdownAndPrunePass (predicate pushdown into scans) — join ordering
+/// and Emit are skipped — then extracts per-table column domains from the scan
+/// filters. 'outputTable' is included for INSERT/CTAS. Must be called with an
+/// active QueryGraphContext, as `optimize` requires.
+std::string explainIo(
+    const logical_plan::LogicalPlanNode& plan,
+    const connector::SchemaResolver& schemaResolver,
+    velox::core::ExpressionEvaluator& evaluator,
+    std::optional<CatalogSchemaTableName> outputTable = std::nullopt);
 
 } // namespace facebook::axiom::optimizer::v2
