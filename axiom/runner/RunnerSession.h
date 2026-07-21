@@ -36,11 +36,13 @@ class RunnerSession final : public connector::BaseSession {
       std::string queryId,
       std::string user,
       Properties properties,
-      connector::ConnectorProperties connectorProperties)
+      connector::ConnectorProperties connectorProperties,
+      std::shared_ptr<QueryRuntimeStats> runtimeStats = nullptr)
       : BaseSession(
             std::move(queryId),
             std::move(user),
-            std::move(connectorProperties)),
+            std::move(connectorProperties),
+            std::move(runtimeStats)),
         properties_{std::move(properties)} {}
 
   /// Returns the value of runner-scoped property 'name' if set.

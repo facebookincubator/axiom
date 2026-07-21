@@ -43,8 +43,7 @@ class Optimization {
       History& history,
       std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx,
       velox::core::ExpressionEvaluator& evaluator,
-      MultiFragmentPlan::Options runnerOptions = {},
-      std::shared_ptr<QueryRuntimeStats> runtimeStats = nullptr);
+      MultiFragmentPlan::Options runnerOptions = {});
 
   /// Simplified API for usage in testing and tooling.
   static PlanAndStats toVeloxPlan(
@@ -65,6 +64,12 @@ class Optimization {
 
   ToVelox& toVelox() {
     return toVelox_;
+  }
+
+  /// Returns runtime metrics accumulated by the optimizer during graph
+  /// construction and planning.
+  std::unordered_map<std::string, velox::RuntimeMetric> runtimeStats() const {
+    return runtimeStats_.toMap();
   }
 
   /// Translates from Expr to Velox.
@@ -480,6 +485,9 @@ class Optimization {
 
   AggregationPlanner aggregationPlanner_;
 
+  // Declared before toGraph_: toGraph_ binds a reference to it.
+  QueryRuntimeStats runtimeStats_;
+
   ToGraph toGraph_;
 
   ToVelox toVelox_;
@@ -510,8 +518,6 @@ class Optimization {
   // Per-Plan map from leaf RelationOp to its scaled-down PartitionType,
   // captured at Plan construction. See planGroupedLeaves() doc.
   folly::F14FastMap<const Plan*, GroupedLeaves> planGroupedLeaves_;
-
-  std::shared_ptr<QueryRuntimeStats> runtimeStats_;
 };
 
 /// Captures the producer-side fragment commit. Moves

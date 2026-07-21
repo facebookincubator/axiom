@@ -29,6 +29,7 @@
 namespace facebook::axiom::optimizer {
 
 namespace {
+
 const auto& distributionKindNames() {
   static const folly::F14FastMap<Distribution::Kind, std::string_view> kNames =
       {
@@ -259,15 +260,13 @@ SchemaTableCP FOLLY_NULLABLE Schema::findTable(
   auto findCpuStart = velox::process::threadCpuNanos();
   auto findStart = std::chrono::steady_clock::now();
   auto connectorTable = source_->findTable(std::string(connectorId), tableName);
-  if (runtimeStats_) {
-    runtimeStats_->recordTiming(
-        QueryRuntimeStats::kFindTableCpuNanos,
-        std::chrono::nanoseconds(
-            velox::process::threadCpuNanos() - findCpuStart));
-    runtimeStats_->recordTiming(
-        QueryRuntimeStats::kFindTableWallNanos,
-        std::chrono::steady_clock::now() - findStart);
-  }
+  runtimeStats_.recordTiming(
+      QueryRuntimeStats::kFindTableCpuNanos,
+      std::chrono::nanoseconds(
+          velox::process::threadCpuNanos() - findCpuStart));
+  runtimeStats_.recordTiming(
+      QueryRuntimeStats::kFindTableWallNanos,
+      std::chrono::steady_clock::now() - findStart);
   if (!connectorTable) {
     return nullptr;
   }

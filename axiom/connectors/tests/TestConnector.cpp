@@ -459,8 +459,7 @@ std::shared_ptr<SplitSource> TestSplitManager::getSplitSource(
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
     const std::vector<PartitionHandlePtr>& partitions,
     const std::shared_ptr<PartitionType>& partitionType,
-    std::optional<double> samplePercentage,
-    QueryRuntimeStats& /*runtimeStats*/) {
+    std::optional<double> samplePercentage) {
   VELOX_CHECK_NOT_NULL(session);
   const auto& testTable = findTestTableForHandle(tableHandle);
 

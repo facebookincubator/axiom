@@ -82,7 +82,9 @@ PlanAndStats optimize(
   // Schema is owned here so its `connector::TablePtr`s — and the
   // `TableLayout`s the IR's `BaseTable` nodes hold raw pointers to —
   // stay alive through translate, precompute, and emit.
-  Schema schema(schemaResolver);
+  // v2 does not surface optimizer metrics yet; Schema records into this sink.
+  QueryRuntimeStats runtimeStats;
+  Schema schema(schemaResolver, runtimeStats);
 
   // Connector table handles are built once here and reused at emit.
   ScanHandleCache scanHandles;

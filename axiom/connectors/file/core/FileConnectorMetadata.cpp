@@ -96,8 +96,7 @@ FileConnectorMetadata::SplitManager::getSplitSource(
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
     const std::vector<PartitionHandlePtr>& /*partitions*/,
     const std::shared_ptr<PartitionType>& /*partitionType*/,
-    std::optional<double> samplePercentage,
-    QueryRuntimeStats& /*runtimeStats*/) {
+    std::optional<double> samplePercentage) {
   VELOX_USER_CHECK(
       !samplePercentage.has_value(),
       "SYSTEM sampling is not supported by this connector");

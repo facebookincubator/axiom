@@ -203,6 +203,25 @@ TEST_F(SqlQueryRunnerTest, explainPopulatesOptimizeTiming) {
   EXPECT_GT(analyzeTiming.execute, 0);
 }
 
+TEST_F(SqlQueryRunnerTest, mergesOptimizerRuntimeStats) {
+  run("CREATE TABLE t(x int)");
+  QueryCompletionInfo captured;
+  runner_->run(
+      "SELECT x FROM t", {.onComplete = [&](const QueryCompletionInfo& info) {
+        captured = info;
+      }});
+
+  // Optimizer metrics reach the query-level stats via the merge in optimize().
+  ASSERT_NE(captured.runtimeStats, nullptr);
+  const auto stats = captured.runtimeStats->toMap();
+  EXPECT_GT(
+      stats
+          .at(std::string(
+              facebook::axiom::QueryRuntimeStats::kFindTableWallNanos))
+          .count,
+      0);
+}
+
 TEST_F(SqlQueryRunnerTest, explainCtas) {
   {
     auto result = run("EXPLAIN (TYPE LOGICAL) CREATE TABLE t AS SELECT 1 AS x");

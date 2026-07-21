@@ -104,12 +104,7 @@ ConnectorSplitSourceFactory::splitSourceForScan(
       QueryRuntimeStats::kListPartitionsCount, partitions.size());
 
   return splitManager->getSplitSource(
-      session,
-      handle,
-      partitions,
-      partitionType,
-      samplePercentage,
-      runtimeStats_);
+      session, handle, partitions, partitionType, samplePercentage);
 }
 
 namespace {
