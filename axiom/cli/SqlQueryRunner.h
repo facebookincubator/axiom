@@ -165,7 +165,7 @@ class SqlQueryRunner {
   /// polling for queries that set RunOptions::onProgress. If null, such a query
   /// fails loudly rather than running without the progress it asked for.
   /// @param useOptimizerV2 When true, all queries route through the v2
-  /// optimizer. EXPLAIN (type graph|optimized|io) and SHOW STATS FOR (<query>)
+  /// optimizer. EXPLAIN (type graph|optimized) and SHOW STATS FOR (<query>)
   /// fail with a user error under v2, because they inspect optimizer internals
   /// the v2 pipeline does not expose.
   explicit SqlQueryRunner(

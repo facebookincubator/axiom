@@ -169,6 +169,59 @@ std::string getLocalTimezone() {
   return "UTC";
 }
 
+// Owns the optimizer QueryGraphContext for its lifetime and installs it as the
+// thread-local queryCtx(), clearing it on destruction.
+class OptimizerContext {
+ public:
+  explicit OptimizerContext(velox::memory::MemoryPool* pool)
+      : allocator_(std::make_unique<velox::HashStringAllocator>(pool)),
+        context_(std::make_unique<optimizer::QueryGraphContext>(*allocator_)) {
+    optimizer::queryCtx() = context_.get();
+  }
+
+  ~OptimizerContext() {
+    optimizer::queryCtx() = nullptr;
+  }
+
+  OptimizerContext(const OptimizerContext&) = delete;
+  OptimizerContext& operator=(const OptimizerContext&) = delete;
+
+ private:
+  std::unique_ptr<velox::HashStringAllocator> allocator_;
+  std::unique_ptr<optimizer::QueryGraphContext> context_;
+};
+
+// Returns 'schemaResolver' if non-null, else a default resolver over the global
+// connector metadata registry.
+std::shared_ptr<connector::SchemaResolver> orDefaultSchemaResolver(
+    std::shared_ptr<connector::SchemaResolver> schemaResolver) {
+  if (schemaResolver != nullptr) {
+    return schemaResolver;
+  }
+  return std::make_shared<connector::SchemaResolver>(
+      connector::ConnectorMetadataRegistry::global());
+}
+
+// Returns the destination table for an EXPLAIN (TYPE IO) over an INSERT or
+// CTAS, or nullopt for a plain SELECT.
+std::optional<CatalogSchemaTableName> explainIoOutputTable(
+    const axiom::sql::presto::SqlStatement& statement,
+    const logical_plan::LogicalPlanNode& plan) {
+  if (statement.isCreateTableAsSelect()) {
+    const auto* ctas =
+        statement.as<axiom::sql::presto::CreateTableAsSelectStatement>();
+    return CatalogSchemaTableName{ctas->connectorId(), ctas->tableName()};
+  }
+
+  if (statement.isInsert()) {
+    const auto* writeNode = plan.as<logical_plan::TableWriteNode>();
+    return CatalogSchemaTableName{
+        writeNode->connectorId(), writeNode->tableName()};
+  }
+
+  return std::nullopt;
+}
+
 } // namespace
 
 namespace axiom::sql {
@@ -801,28 +854,26 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
     }
 
     if (explain->type() == presto::ExplainStatement::Type::kIo) {
-      VELOX_USER_CHECK(
-          !useOptimizerV2_, "EXPLAIN TYPE IO is not supported with --v2");
-      std::optional<CatalogSchemaTableName> outputTable;
-      if (statement->isCreateTableAsSelect()) {
-        const auto* ctas =
-            statement->as<presto::CreateTableAsSelectStatement>();
-        outputTable =
-            CatalogSchemaTableName{ctas->connectorId(), ctas->tableName()};
-      } else if (statement->isInsert()) {
-        const auto* writeNode = logicalPlan->as<logical_plan::TableWriteNode>();
-        outputTable = CatalogSchemaTableName{
-            writeNode->connectorId(), writeNode->tableName()};
-      }
+      std::optional<CatalogSchemaTableName> outputTable =
+          explainIoOutputTable(*statement, *logicalPlan);
 
-      std::string text;
       auto queryCtx = newQuery(options);
-      {
-        PhaseTimer phaseTimer(
-            timing.optimize,
-            runtimeStats.get(),
-            QueryRuntimeStats::kOptimizeWallNanos,
-            QueryRuntimeStats::kOptimizeCpuNanos);
+      PhaseTimer phaseTimer(
+          timing.optimize,
+          runtimeStats.get(),
+          QueryRuntimeStats::kOptimizeWallNanos,
+          QueryRuntimeStats::kOptimizeCpuNanos);
+
+      if (useOptimizerV2_) {
+        auto resolver = orDefaultSchemaResolver(schemaResolver);
+        OptimizerContext optimizerContext(optimizerPool_.get());
+        velox::exec::SimpleExpressionEvaluator evaluator(
+            queryCtx.get(), optimizerPool_.get());
+        return {
+            .message = optimizer::v2::explainIo(
+                *logicalPlan, *resolver, evaluator, std::move(outputTable))};
+      } else {
+        std::string text;
         optimize(
             logicalPlan,
             queryCtx,
@@ -835,8 +886,8 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
             schemaResolver,
             /*explain=*/true,
             runtimeStats);
+        return {.message = std::move(text)};
       }
-      return {.message = std::move(text)};
     }
 
     if (explain->isAnalyze()) {
@@ -1276,23 +1327,13 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
   optimizer::MultiFragmentPlan::Options opts;
   opts.numWorkers = options.numWorkers;
   opts.numDrivers = options.numDrivers;
-  auto allocator =
-      std::make_unique<velox::HashStringAllocator>(optimizerPool_.get());
-  auto context = std::make_unique<optimizer::QueryGraphContext>(*allocator);
-
-  optimizer::queryCtx() = context.get();
-  SCOPE_EXIT {
-    optimizer::queryCtx() = nullptr;
-  };
+  OptimizerContext optimizerContext(optimizerPool_.get());
 
   velox::exec::SimpleExpressionEvaluator evaluator(
       queryCtx.get(), optimizerPool_.get());
 
   auto history = std::make_unique<optimizer::VeloxHistory>();
-  if (schemaResolver == nullptr) {
-    schemaResolver = std::make_shared<connector::SchemaResolver>(
-        connector::ConnectorMetadataRegistry::global());
-  }
+  schemaResolver = orDefaultSchemaResolver(std::move(schemaResolver));
 
   auto connectorProperties = collectConnectorProperties(*sessionConfig_);
   auto optimizerOptions = optimizer::OptimizerOptions::from(

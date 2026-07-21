@@ -99,28 +99,15 @@ Domain columnDomain(ColumnCP column, const ExprVector& columnFilters) {
   return domain;
 }
 
-// Recursively collects all BaseTables from a DerivedTable tree.
-void collectBaseTables(
-    DerivedTableCP dt,
-    std::vector<BaseTableCP>& baseTables) {
-  for (auto* table : dt->tables) {
-    if (table->is(PlanType::kTableNode)) {
-      baseTables.push_back(table->as<BaseTable>());
-    } else if (table->is(PlanType::kDerivedTableNode)) {
-      collectBaseTables(table->as<DerivedTable>(), baseTables);
-    }
-  }
-  for (auto* child : dt->unionInputs) {
-    collectBaseTables(child, baseTables);
-  }
-}
-
 // Per-column domains for a single table. Maps connector column name to Domain.
 using ColumnDomainMap = folly::F14FastMap<std::string, Domain>;
 
-// Computes column domains for a single BaseTable. Returns nullopt if any
-// explain_io column has an empty domain (table should be excluded).
-std::optional<ColumnDomainMap> computeColumnDomains(BaseTableCP baseTable) {
+// Computes column domains for a single BaseTable from 'filters' (the scan's
+// conjuncts). Returns nullopt if any explain_io column has an empty domain
+// (table should be excluded).
+std::optional<ColumnDomainMap> computeColumnDomains(
+    BaseTableCP baseTable,
+    const ExprVector& filters) {
   const auto* connectorTable = baseTable->schemaTable->connectorTable;
   ColumnDomainMap domains;
 
@@ -149,7 +136,7 @@ std::optional<ColumnDomainMap> computeColumnDomains(BaseTableCP baseTable) {
         connectorColumn->name(),
         connectorColumn->type()->toString());
 
-    auto domain = columnDomain(column, baseTable->columnFilters);
+    auto domain = columnDomain(column, filters);
     if (domain.isNone()) {
       return std::nullopt;
     }
@@ -202,19 +189,16 @@ folly::dynamic columnDomainsToJson(
 } // namespace
 
 std::string explainIo(
-    DerivedTableCP rootDt,
+    const std::vector<std::pair<BaseTableCP, ExprVector>>& tableFilters,
     std::optional<CatalogSchemaTableName> outputTable) {
-  std::vector<BaseTableCP> baseTables;
-  collectBaseTables(rootDt, baseTables);
-
-  // Group BaseTables by connector table and merge column domains. Multiple
+  // Group input tables by connector table and merge column domains. Multiple
   // scans of the same table (e.g., UNION ALL branches) are combined by
   // uniting their per-column domains.
   folly::F14FastMap<const connector::Table*, ColumnDomainMap> mergedDomains;
   std::vector<const connector::Table*> tableOrder;
 
-  for (auto* baseTable : baseTables) {
-    auto domains = computeColumnDomains(baseTable);
+  for (const auto& [baseTable, filters] : tableFilters) {
+    auto domains = computeColumnDomains(baseTable, filters);
     if (!domains) {
       continue;
     }
@@ -273,6 +257,38 @@ std::string explainIo(
   opts.pretty_formatting = true;
   opts.sort_keys = false;
   return folly::json::serialize(root, opts);
+}
+
+namespace {
+// Recursively collects all BaseTables from a DerivedTable tree.
+void collectBaseTables(
+    DerivedTableCP dt,
+    std::vector<BaseTableCP>& baseTables) {
+  for (auto* table : dt->tables) {
+    if (table->is(PlanType::kTableNode)) {
+      baseTables.push_back(table->as<BaseTable>());
+    } else if (table->is(PlanType::kDerivedTableNode)) {
+      collectBaseTables(table->as<DerivedTable>(), baseTables);
+    }
+  }
+  for (auto* child : dt->unionInputs) {
+    collectBaseTables(child, baseTables);
+  }
+}
+} // namespace
+
+std::string explainIo(
+    DerivedTableCP rootDt,
+    std::optional<CatalogSchemaTableName> outputTable) {
+  std::vector<BaseTableCP> baseTables;
+  collectBaseTables(rootDt, baseTables);
+
+  std::vector<std::pair<BaseTableCP, ExprVector>> tableFilters;
+  tableFilters.reserve(baseTables.size());
+  for (auto* baseTable : baseTables) {
+    tableFilters.emplace_back(baseTable, baseTable->columnFilters);
+  }
+  return explainIo(tableFilters, std::move(outputTable));
 }
 
 } // namespace facebook::axiom::optimizer

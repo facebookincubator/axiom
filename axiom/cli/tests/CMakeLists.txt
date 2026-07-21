@@ -15,7 +15,9 @@
 add_executable(
   axiom_cli_test
   CatalogPropertiesTest.cpp
+  ExplainIoTest.cpp
   SqlQueryRunnerTest.cpp
+  SqlQueryRunnerTestBase.cpp
   StdinReaderTest.cpp
   ConsoleTest.cpp
   LiveProgressDisplayTest.cpp
