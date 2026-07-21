@@ -147,15 +147,17 @@ std::optional<ColumnDomainMap> computeColumnDomains(
   return domains;
 }
 
-// Merges column domains from two scans of the same table by uniting domains
-// for each column.
+// Merges another scan's column domains into 'target' by uniting the two scans'
+// domains per column. A column present in only one scan is unconstrained (all)
+// in the other, so its union is all and it is dropped rather than carried over.
 void mergeColumnDomains(ColumnDomainMap& target, const ColumnDomainMap& other) {
-  for (const auto& [columnName, domain] : other) {
-    auto it = target.find(columnName);
-    if (it == target.end()) {
-      target.emplace(columnName, domain);
+  for (auto it = target.begin(); it != target.end();) {
+    auto otherIt = other.find(it->first);
+    if (otherIt == other.end()) {
+      it = target.erase(it);
     } else {
-      it->second = it->second.unite(domain);
+      it->second = it->second.unite(otherIt->second);
+      ++it;
     }
   }
 }
