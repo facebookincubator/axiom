@@ -562,6 +562,42 @@ TEST_P(WriteTest, insertBucketedSql) {
   }
 }
 
+// A write over a coordinator-only scan keeps the write and scan in a single
+// coordinator fragment, with no parallel source fragment.
+TEST_P(WriteTest, insertFromCoordinatorScan) {
+  if (useV2_) {
+    GTEST_SKIP() << "Coordinator placement of system scans is v1-only.";
+  }
+  SCOPE_EXIT {
+    dropTableIfExists("test");
+  };
+
+  createTable("test", ROW({"a"}, {BIGINT()}), {});
+
+  auto options = optimizerOptions_;
+  options.systemConnectorId = exec::test::kHiveConnectorId;
+
+  auto plan = planVelox(
+      parseInsert(
+          "INSERT INTO test "
+          "SELECT n_nationkey FROM nation WHERE n_nationkey < 3"),
+      {
+          .numWorkers = 4,
+          .numDrivers = 4,
+      },
+      options);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .tableWrite()
+                     .localGather()
+                     .tableWriteMerge()
+                     .fragmentType(FragmentType::kCoordinator)
+                     .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+  verifyPlanSerde(*plan.plan, pool());
+}
+
 TEST_P(WriteTest, ctasSql) {
   {
     SCOPE_EXIT {

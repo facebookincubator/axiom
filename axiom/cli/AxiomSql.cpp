@@ -131,7 +131,9 @@ int main(int argc, char** argv) {
   });
 
   // Register after initialize() so sessionConfig() is available.
-  connectors.registerSystemConnector(runner.sessionConfig());
+  auto systemConnector =
+      connectors.registerSystemConnector(runner.sessionConfig());
+  runner.setSystemConnectorId(systemConnector->connectorId());
   connectors.registerFileConnector();
 
   axiom::sql::Console console{runner};

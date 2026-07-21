@@ -1338,6 +1338,7 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
   auto connectorProperties = collectConnectorProperties(*sessionConfig_);
   auto optimizerOptions = optimizer::OptimizerOptions::from(
       sessionConfig_->effectiveValues(kOptimizerPrefix));
+  optimizerOptions.systemConnectorId = systemConnectorId_;
   optimizerOptions.explain = explain;
   auto optimizerSession = std::make_shared<optimizer::OptimizerSession>(
       queryCtx->queryId(),

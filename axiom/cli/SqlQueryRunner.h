@@ -371,6 +371,11 @@ class SqlQueryRunner {
     return defaultSchema_;
   }
 
+  /// Sets the connector ID whose scans must run on the coordinator.
+  void setSystemConnectorId(std::string connectorId) {
+    systemConnectorId_ = std::move(connectorId);
+  }
+
  private:
   // Checks permissions for the query via the configured PermissionCheck
   // callback. Returns a TokenProvider for authenticated file system access.
@@ -498,6 +503,8 @@ class SqlQueryRunner {
   std::shared_ptr<facebook::axiom::SessionConfig> sessionConfig_;
   std::string defaultConnectorId_;
   std::string defaultSchema_;
+  // Connector whose table scans must run on the coordinator.
+  std::string systemConnectorId_;
   const std::string user_;
   std::atomic<int32_t> queryCounter_{0};
   const bool useOptimizerV2_{false};

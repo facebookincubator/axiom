@@ -408,6 +408,39 @@ std::optional<FragmentType> fragmentTypeContribution(const RelationOp& op) {
   }
 }
 
+// Returns true if a system-connector scan is reachable within the fragment
+// rooted at 'op', i.e. without crossing a Repartition boundary into a producer
+// fragment. The system connector's data exists only on the coordinator.
+bool containsSystemScan(
+    const RelationOp& op,
+    std::string_view systemConnectorId) {
+  if (systemConnectorId.empty() || op.relType() == RelType::kRepartition) {
+    return false;
+  }
+  if (op.relType() == RelType::kTableScan) {
+    return op.as<TableScan>()->baseTable->schemaTable->connectorId() ==
+        systemConnectorId;
+  }
+  // Multi-input operators must recurse into every input. A new multi-input
+  // RelType added here must be handled explicitly, or its right-hand inputs
+  // would be skipped and a system scan under them missed.
+  if (op.relType() == RelType::kUnionAll) {
+    for (const auto& input : op.as<UnionAll>()->inputs) {
+      if (containsSystemScan(*input, systemConnectorId)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  if (op.relType() == RelType::kJoin) {
+    const auto& join = *op.as<Join>();
+    return containsSystemScan(*join.input(), systemConnectorId) ||
+        containsSystemScan(*join.right, systemConnectorId);
+  }
+  return op.input() != nullptr &&
+      containsSystemScan(*op.input(), systemConnectorId);
+}
+
 // Sets `fragment.type` (and `width` for kFixed) from the contents rooted at
 // `op`. The fragment type is derived by walking the RelationOp sub-tree down
 // to (but not including) any inner Repartition or leaf, merging contributions
@@ -420,7 +453,10 @@ std::optional<FragmentType> fragmentTypeContribution(const RelationOp& op) {
 void decideFragmentType(
     const RelationOp& op,
     const MultiFragmentPlan::Options& options,
+    std::string_view systemConnectorId,
     ExecutableFragment& fragment) {
+  // Single-node mode: the one node is the coordinator, so kSingle is already
+  // coordinator-equivalent and the system-scan distinction does not apply.
   if (options.numWorkers == 1) {
     fragment.type = FragmentType::kSingle;
     return;
@@ -429,6 +465,16 @@ void decideFragmentType(
   fragment.type = fragmentTypeContribution(op).value_or(FragmentType::kSource);
   if (fragment.type == FragmentType::kFixed) {
     fragment.width = options.numWorkers;
+  }
+
+  // A system-connector scan exists only on the coordinator; its gather
+  // distribution already made this fragment single-task, so pin it there.
+  if (containsSystemScan(op, systemConnectorId)) {
+    VELOX_CHECK_EQ(
+        fragment.type,
+        FragmentType::kSingle,
+        "System scan must not share a fragment with a parallel source");
+    fragment.type = FragmentType::kCoordinator;
   }
 }
 
@@ -544,10 +590,13 @@ PlanAndStats ToVelox::toVeloxPlan(
   // consumer. Decide before recursing so operators inside (e.g. makeWrite)
   // see the correct type.
   ExecutableFragment top = newFragment();
-  if (options.remoteOutput) {
-    decideFragmentType(*plan, options, top);
-  } else {
-    top.type = FragmentType::kSingle;
+  decideFragmentType(
+      *plan, options, optimizerSession_->options().systemConnectorId, top);
+  if (!options.remoteOutput) {
+    if (top.type != FragmentType::kCoordinator) {
+      top.type = FragmentType::kSingle;
+      top.width.reset();
+    }
   }
 
   std::vector<ExecutableFragment> stages;
@@ -564,10 +613,10 @@ PlanAndStats ToVelox::toVeloxPlan(
   // For the root fragment when no addGather was inserted, apply the
   // optimizer's root groupedLeaves directly to top.groupedNodes so the
   // runtime/connector pair sees the root's bucketed-leaf routing.
-  // Skip when top.type is kSingle: a single-task root has no groupId
-  // routing (local consumer) and applyGroupedLeaves would otherwise
-  // overwrite the type with kFixed and trip checkLastFragment.
-  if (gatherRepartition_ == nullptr && top.type != FragmentType::kSingle) {
+  // Skip single-task roots: they have no groupId routing, and
+  // applyGroupedLeaves would otherwise overwrite the type with kFixed.
+  if (gatherRepartition_ == nullptr && top.type != FragmentType::kSingle &&
+      top.type != FragmentType::kCoordinator) {
     applyGroupedLeaves(top, groupedLeaves_->root);
   }
 
@@ -1091,7 +1140,9 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
   auto sortOrder = toSortOrders(op.distribution().orderTypes());
   auto keys = toFieldRefs(op.distribution().orderKeys());
 
-  if (isSingle_) {
+  // A gather input (e.g. a system scan or a global aggregation) is already
+  // single-task, so sort it inline rather than across a merge exchange.
+  if (isSingle_ || op.input()->distribution().isGather()) {
     auto input = makeFragment(op.input(), fragment, stages);
 
     if (options_.numDrivers == 1) {
@@ -1129,7 +1180,11 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
   }
 
   auto source = newFragment();
-  decideFragmentType(*op.input(), options_, source);
+  decideFragmentType(
+      *op.input(),
+      options_,
+      optimizerSession_->options().systemConnectorId,
+      source);
   auto input = makeFragment(op.input(), source, stages);
 
   // At one driver the per-worker sort yields a single sorted run, so emit a
@@ -1174,13 +1229,17 @@ velox::core::PlanNodePtr ToVelox::makeOffset(
     const Limit& op,
     ExecutableFragment& fragment,
     std::vector<ExecutableFragment>& stages) {
-  if (isSingle_) {
+  if (isSingle_ || op.input()->distribution().isGather()) {
     auto input = makeFragment(op.input(), fragment, stages);
     return addFinalLimit(nextId(), op.offset, op.limit, input);
   }
 
   auto source = newFragment();
-  decideFragmentType(*op.input(), options_, source);
+  decideFragmentType(
+      *op.input(),
+      options_,
+      optimizerSession_->options().systemConnectorId,
+      source);
   auto input = makeFragment(op.input(), source, stages);
 
   source.fragment.planNode = velox::core::PartitionedOutputNode::single(
@@ -1224,7 +1283,11 @@ velox::core::PlanNodePtr ToVelox::makeLimit(
   }
 
   auto source = newFragment();
-  decideFragmentType(*op.input(), options_, source);
+  decideFragmentType(
+      *op.input(),
+      options_,
+      optimizerSession_->options().systemConnectorId,
+      source);
   auto input = makeFragment(op.input(), source, stages);
 
   auto node = addPartialLimit(nextId(), 0, op.offset + op.limit, input);
@@ -1920,7 +1983,11 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
   // The producer fragment's type is determined by what's inside it. The
   // Repartition's distribution describes the wire output and is independent.
   auto source = newFragment();
-  decideFragmentType(*repartition.input(), options_, source);
+  decideFragmentType(
+      *repartition.input(),
+      options_,
+      optimizerSession_->options().systemConnectorId,
+      source);
 
   // Save the outer consumer's groupedLeaves (used to size our PartitionedOutput
   // below) and set the inner recursion's consumer context to source's
