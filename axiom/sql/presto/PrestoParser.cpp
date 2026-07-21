@@ -51,6 +51,7 @@ namespace {
 
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
+using facebook::axiom::connector::SqlFunctionDefinitionPtr;
 
 class ErrorListener : public antlr4::BaseErrorListener {
  public:
@@ -1818,6 +1819,88 @@ lp::ExprPtr wrapWithNullGuard(
       body);
 }
 
+// Formats a function call or signature as "name(type1, type2)".
+std::string toSignatureString(
+    const std::string& name,
+    const std::vector<TypePtr>& argTypes) {
+  std::ostringstream out;
+  out << name << "(";
+  for (size_t i = 0; i < argTypes.size(); ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << argTypes[i]->toString();
+  }
+  out << ")";
+  return out.str();
+}
+
+// Selects the overload of a SQL-invoked function whose declared argument types
+// best match 'argTypes'. Reuses the same per-argument coercion (TypeCoercer)
+// and lowest-cost ranking (Coercion::pickLowestCost) that resolve native
+// function overloads, so SQL functions resolve identically. The resolver owns
+// this matching; the expression resolver applies the coercion to
+// 'argumentTypes' later. Throws a user error - consistent with native function
+// resolution - when no overload's signature matches, including an ambiguous
+// match. 'name' is the qualified function name, used only for error messages.
+SqlFunctionDefinitionPtr resolveSqlFunctionOverload(
+    const std::string& name,
+    const std::vector<SqlFunctionDefinitionPtr>& overloads,
+    const std::vector<TypePtr>& argTypes,
+    const TypeCoercer& coercer) {
+  std::vector<std::pair<std::vector<Coercion>, SqlFunctionDefinitionPtr>>
+      candidates;
+  for (const auto& overload : overloads) {
+    if (overload->argumentTypes.size() != argTypes.size()) {
+      continue;
+    }
+    std::vector<Coercion> coercions(argTypes.size());
+    bool viable = true;
+    for (size_t i = 0; i < argTypes.size(); ++i) {
+      const auto& declaredType = overload->argumentTypes[i];
+      if (argTypes[i]->equivalent(*declaredType)) {
+        continue;
+      }
+      if (auto coercion = coercer.coerce(argTypes[i], declaredType)) {
+        coercions[i] = coercion.value();
+        continue;
+      }
+
+      viable = false;
+      break;
+    }
+
+    if (viable) {
+      candidates.emplace_back(std::move(coercions), overload);
+    }
+  }
+
+  const auto selected =
+      Coercion::pickLowestCost(candidates, argTypes, [&](size_t i) {
+        return Coercion::CandidateMetadata{
+            .returnType = candidates[i].second->returnType,
+            .nullOnNull = candidates[i].second->defaultNullBehavior};
+      });
+
+  if (!selected.has_value()) {
+    std::string supportedSignatures;
+    for (const auto& overload : overloads) {
+      if (!supportedSignatures.empty()) {
+        supportedSignatures += ", ";
+      }
+      supportedSignatures += toSignatureString(name, overload->argumentTypes) +
+          " -> " + overload->returnType->toString();
+    }
+
+    VELOX_USER_FAIL(
+        "SQL function signature is not supported: {}. Supported signatures: {}.",
+        toSignatureString(name, argTypes),
+        supportedSignatures);
+  }
+
+  return candidates[selected.value()].second;
+}
+
 // Builds the resolver that inlines connector-defined SQL-invoked functions.
 // Only names that the frontend marked with a leading '.' are treated as
 // qualified function references; everything else returns nullopt so builtin
@@ -1851,38 +1934,11 @@ lp::ExprResolver::SqlFunctionResolver makeSqlFunctionResolver(
     auto overloads =
         metadata->findFunction({/*schema=*/parts[1], /*function=*/parts[2]});
     VELOX_USER_CHECK(
-        !overloads.empty(), "SQL function not found: {}", name.substr(1));
+        !overloads.empty(), "SQL function doesn't exist: {}.", name.substr(1));
 
-    // Multiple signatures for one name are not supported yet.
-    VELOX_USER_CHECK_EQ(
-        overloads.size(),
-        1,
-        "Overloaded SQL functions are not supported: {}",
-        name.substr(1));
-    const auto& definition = *overloads.front();
-
-    // Match the call to the signature: argument count, then each argument type
-    // coercible to its declared type. The resolver owns this matching, so the
-    // expression resolver only applies the coercion later, never re-checks it.
-    VELOX_USER_CHECK_EQ(
-        argTypes.size(),
-        definition.argumentTypes.size(),
-        "SQL function called with wrong number of arguments: {}",
-        name.substr(1));
-    for (size_t i = 0; i < argTypes.size(); ++i) {
-      const auto& declaredType = definition.argumentTypes[i];
-      if (argTypes[i]->equivalent(*declaredType)) {
-        continue;
-      }
-
-      VELOX_USER_CHECK(
-          coercer->coerce(argTypes[i], declaredType).has_value(),
-          "Cannot coerce SQL function argument {} to its declared type: {} to {}: {}",
-          i,
-          argTypes[i]->toString(),
-          declaredType->toString(),
-          name.substr(1));
-    }
+    const auto definitionPtr = resolveSqlFunctionOverload(
+        name.substr(1), overloads, argTypes, *coercer);
+    const auto& definition = *definitionPtr;
 
     lp::ExprResolver::ResolvedSqlFunction resolved;
     resolved.argumentNames = definition.argumentNames;

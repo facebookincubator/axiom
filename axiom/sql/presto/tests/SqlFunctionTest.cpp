@@ -147,6 +147,73 @@ TEST_F(SqlFunctionTest, inlines) {
           .output());
 }
 
+// Overloads of one name are selected by argument count, then by type,
+// preferring an exact match over a coercible one - the same ranking used for
+// native functions.
+TEST_F(SqlFunctionTest, overloads) {
+  // pick(x) := x  and  pick(a, b) := a + b differ by argument count.
+  metadata_->addFunction(
+      {"default", "pick"},
+      {
+          .returnType = BIGINT(),
+          .argumentNames = {"x"},
+          .argumentTypes = {BIGINT()},
+          .body = "x",
+          .defaultNullBehavior = false,
+      });
+  metadata_->addFunction(
+      {"default", "pick"},
+      {
+          .returnType = BIGINT(),
+          .argumentNames = {"a", "b"},
+          .argumentTypes = {BIGINT(), BIGINT()},
+          .body = "a + b",
+          .defaultNullBehavior = false,
+      });
+
+  testSelect(
+      "SELECT tc.default.pick(n_nationkey) FROM nation",
+      matchScan("nation").project({"n_nationkey"}).output());
+  testSelect(
+      "SELECT tc.default.pick(n_nationkey, n_regionkey) FROM nation",
+      matchScan("nation").project({"n_nationkey + n_regionkey"}).output());
+
+  // widen(x BIGINT) and widen(x DOUBLE) have the same arity; the exact type
+  // match is preferred over coercing the argument.
+  metadata_->addFunction(
+      {"default", "widen"},
+      {
+          .returnType = BIGINT(),
+          .argumentNames = {"x"},
+          .argumentTypes = {BIGINT()},
+          .body = "x",
+          .defaultNullBehavior = false,
+      });
+  metadata_->addFunction(
+      {"default", "widen"},
+      {
+          .returnType = DOUBLE(),
+          .argumentNames = {"x"},
+          .argumentTypes = {DOUBLE()},
+          .body = "x",
+          .defaultNullBehavior = false,
+      });
+
+  // A BIGINT argument binds to the BIGINT overload with no coercion.
+  testSelect(
+      "SELECT tc.default.widen(n_nationkey) FROM nation",
+      matchScan("nation").project({"n_nationkey"}).output());
+  // A DOUBLE argument binds to the DOUBLE overload.
+  testSelect(
+      "SELECT tc.default.widen(cast(n_nationkey as double)) FROM nation",
+      matchScan("nation").project({"cast(n_nationkey as double)"}).output());
+
+  // No overload matches the argument types.
+  VELOX_ASSERT_THROW(
+      parseSelect("SELECT tc.default.widen(n_name) FROM nation"),
+      "SQL function signature is not supported");
+}
+
 // Each argument is cast to its declared type, and the body is cast to the
 // declared return type.
 TEST_F(SqlFunctionTest, coercion) {
@@ -251,18 +318,18 @@ TEST_F(SqlFunctionTest, resolutionErrors) {
   // No such function.
   VELOX_ASSERT_THROW(
       parseSelect("SELECT tc.default.missing(n_nationkey) FROM nation"),
-      "SQL function not found");
+      "SQL function doesn't exist");
 
-  // Wrong number of arguments.
+  // Wrong number of arguments: no overload matches.
   VELOX_ASSERT_THROW(
       parseSelect(
           "SELECT tc.default.identity(n_nationkey, n_regionkey) FROM nation"),
-      "SQL function called with wrong number of arguments");
+      "SQL function signature is not supported");
 
-  // Argument not coercible to the declared type.
+  // Argument not coercible to the declared type: no overload matches.
   VELOX_ASSERT_THROW(
       parseSelect("SELECT tc.default.identity(n_name) FROM nation"),
-      "Cannot coerce SQL function argument");
+      "SQL function signature is not supported");
 
   // Body does not use every argument.
   metadata_->addFunction(
