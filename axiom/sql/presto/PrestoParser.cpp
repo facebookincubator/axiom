@@ -1478,14 +1478,12 @@ class RelationPlanner : public AstVisitor {
       }
     } else {
       if (GroupByPlanner{builder_, exprPlanner_}.tryPlanGlobalAgg(
-              selectItems, node->having())) {
+              selectItems, node->having(), orderBy)) {
         // GroupByPlanner does not go through buildSelectProjections, so
-        // stage display names from the SELECT items directly.
+        // stage display names from the SELECT items directly. It also plans
+        // ORDER BY over the aggregates. DISTINCT is a no-op since a global
+        // aggregation without a GROUP BY produces one row.
         displayNames_.captureLastNames(selectItems);
-        // Nothing else to do. For aggregation, ORDER BY can only reference
-        // SELECT list (aggregates). DISTINCT will be a no-op since global
-        // aggregations without a group by are 1 row output.
-        addOrderBy(orderBy);
       } else if (distinct) {
         addDistinctAndOrderBy(selectItems, orderBy);
       } else {

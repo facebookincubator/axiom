@@ -438,7 +438,8 @@ void GroupByPlanner::plan(
 
 bool GroupByPlanner::tryPlanGlobalAgg(
     const std::vector<SelectItemPtr>& selectItems,
-    const ExpressionPtr& having) && {
+    const ExpressionPtr& having,
+    const OrderByPtr& orderBy) && {
   for (const auto& item : selectItems) {
     if (item->is(NodeType::kAllColumns) || item->is(NodeType::kSelectColumns)) {
       return false;
@@ -472,8 +473,7 @@ bool GroupByPlanner::tryPlanGlobalAgg(
     selectExprs.push_back(std::move(expr));
   }
 
-  std::move(*this).plan(
-      {}, /*distinct=*/false, selectExprs, having, /*orderBy=*/nullptr);
+  std::move(*this).plan({}, /*distinct=*/false, selectExprs, having, orderBy);
   return true;
 }
 
