@@ -21,6 +21,7 @@
 #include "axiom/optimizer/v2/DecorrelatePass.h"
 #include "axiom/optimizer/v2/EmitPass.h"
 #include "axiom/optimizer/v2/EstimateLeafStatsPass.h"
+#include "axiom/optimizer/v2/EstimateProvider.h"
 #include "axiom/optimizer/v2/ExpandAggregatePass.h"
 #include "axiom/optimizer/v2/FoldMetadataAggregatePass.h"
 #include "axiom/optimizer/v2/LimitAndOrderPass.h"
@@ -70,34 +71,29 @@ void collectScans(
 
 } // namespace
 
-PlanAndStats optimize(
-    const logical_plan::LogicalPlanNode& plan,
-    const connector::SchemaResolver& schemaResolver,
-    const OptimizerSession& session,
-    velox::core::ExpressionEvaluator& evaluator,
-    const MultiFragmentPlan::Options& options) {
+PlanAndStats Optimizer::optimize(const MultiFragmentPlan::Options& options) {
   VELOX_USER_CHECK_GE(options.numWorkers, 1, "numWorkers must be at least 1");
   VELOX_USER_CHECK_GE(options.numDrivers, 1, "numDrivers must be at least 1");
 
   // Schema is owned here so its `connector::TablePtr`s — and the
   // `TableLayout`s the IR's `BaseTable` nodes hold raw pointers to —
   // stay alive through translate, precompute, and emit.
-  Schema schema(schemaResolver);
+  Schema schema(schemaResolver_);
 
   // Connector table handles are built once here and reused at emit.
   ScanHandleCache scanHandles;
 
   Builder builder;
-  auto frontend = translateAndPushdown(plan, schema, evaluator, builder);
+  auto frontend = translateAndPushdown(plan_, schema, evaluator_, builder);
   NodeCP folded = FoldMetadataAggregatePass::run(
-      frontend.pushed, builder, session, evaluator, scanHandles);
-  if (session.options().useFilteredTableStats) {
-    EstimateLeafStatsPass::run(folded, session, evaluator, scanHandles);
+      frontend.pushed, builder, session_, evaluator_, scanHandles);
+  if (session_.options().useFilteredTableStats) {
+    EstimateLeafStatsPass::run(folded, session_, evaluator_, scanHandles);
   }
   NodeCP physicalPlanned = PlanPhysicalPass::run(
       folded,
       builder,
-      session.options(),
+      session_.options(),
       options.numWorkers,
       options.numDrivers);
   NodeCP precomputed = PrecomputeProjectionsPass::run(physicalPlanned, builder);
@@ -109,8 +105,8 @@ PlanAndStats optimize(
       root,
       frontend.translated.outputColumns,
       frontend.translated.outputNames,
-      session,
-      evaluator,
+      session_,
+      evaluator_,
       scanHandles,
       options);
 
@@ -121,23 +117,58 @@ PlanAndStats optimize(
   return result;
 }
 
-std::string explainIo(
-    const logical_plan::LogicalPlanNode& plan,
-    const connector::SchemaResolver& schemaResolver,
-    velox::core::ExpressionEvaluator& evaluator,
+std::string Optimizer::explainIo(
     std::optional<CatalogSchemaTableName> outputTable) {
   // Schema is owned here so its `connector::TablePtr`s — and the raw pointers
   // the IR's `BaseTable` nodes hold into them — stay alive for the duration.
-  Schema schema(schemaResolver);
+  Schema schema(schemaResolver_);
 
   // Run only the passes that push predicates into scans; join ordering and Emit
   // are not needed to report IO.
   Builder builder;
-  auto frontend = translateAndPushdown(plan, schema, evaluator, builder);
+  auto frontend = translateAndPushdown(plan_, schema, evaluator_, builder);
 
   std::vector<std::pair<BaseTableCP, ExprVector>> tableFilters;
   collectScans(frontend.pushed, tableFilters);
   return optimizer::explainIo(tableFilters, std::move(outputTable));
+}
+
+QueryStats Optimizer::estimateQueryStats() {
+  // Schema is owned here so its tables — and the raw pointers the IR's
+  // BaseTable nodes hold into them — stay alive while the estimate is read.
+  Schema schema(schemaResolver_);
+  ScanHandleCache scanHandles;
+  Builder builder;
+
+  auto frontend = translateAndPushdown(plan_, schema, evaluator_, builder);
+  if (session_.options().useFilteredTableStats) {
+    EstimateLeafStatsPass::run(
+        frontend.pushed, session_, evaluator_, scanHandles);
+  }
+
+  EstimateProvider estimateProvider;
+  const Estimate& estimate = estimateProvider.estimate(frontend.pushed);
+
+  const auto& columns = frontend.translated.outputColumns;
+  const auto& names = frontend.translated.outputNames;
+  VELOX_CHECK_EQ(columns.size(), names.size());
+
+  QueryStats result;
+  result.cardinality = estimate.cardinality;
+  result.columns.reserve(columns.size());
+  for (size_t i = 0; i < columns.size(); ++i) {
+    // `value` returns the estimator's post-filter refined constraint, falling
+    // back to the column's own Value for columns it did not refine.
+    const Value& columnValue = value(estimate.constraints, columns[i]);
+    result.columns.push_back(
+        {.name = names[i],
+         .type = columnValue.type,
+         .nullFraction = columnValue.nullFraction,
+         .distinctCount = columnValue.cardinality,
+         .min = columnValue.min,
+         .max = columnValue.max});
+  }
+  return result;
 }
 
 } // namespace facebook::axiom::optimizer::v2

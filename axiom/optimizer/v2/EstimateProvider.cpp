@@ -42,14 +42,10 @@ void mergeConstraints(const ConstraintMap& from, ConstraintMap& into) {
   }
 }
 
-// Scales a scan's estimated row count and per-column NDVs by a TABLESAMPLE
-// SYSTEM rate, if one is set. Modeled as a scan-level selectivity, so it
-// applies whether the row count came from connector stats or the base-table
-// fallback.
-void applySampleRate(
-    const BaseTable& baseTable,
-    const Scan* scan,
-    Estimate& estimate) {
+// Scales a scan's estimated row count by a TABLESAMPLE SYSTEM rate, if one is
+// set. Modeled as a scan-level selectivity, so it applies whether the row count
+// came from connector stats or the base-table fallback.
+void applySampleRate(const BaseTable& baseTable, Estimate& estimate) {
   if (!baseTable.sampledPercentage.has_value() ||
       !estimate.cardinality.has_value()) {
     return;
@@ -57,14 +53,24 @@ void applySampleRate(
 
   const float fraction = *baseTable.sampledPercentage / 100.0f;
   estimate.cardinality = std::max(1.0f, *estimate.cardinality * fraction);
+}
 
-  // A column cannot have more distinct values than the sampled row count.
-  for (ColumnCP column : scan->outputColumns()) {
-    Value capped = value(estimate.constraints, column);
-    if (!capped.cardinality.has_value() ||
-        *capped.cardinality > *estimate.cardinality) {
+// Enforces the invariant that a column's NDV cannot exceed the row count. Caps
+// each output column's known NDV at 'estimate.cardinality', materializing a
+// constraint for a column that would otherwise fall back to an uncapped
+// base-table NDV (e.g. a column a pushed-down filter did not refine). An
+// unknown NDV stays unknown; a no-op when the cardinality is unknown.
+void capNdvAtCardinality(const ColumnVector& columns, Estimate& estimate) {
+  if (!estimate.cardinality.has_value()) {
+    return;
+  }
+  for (ColumnCP column : columns) {
+    const Value& current = value(estimate.constraints, column);
+    if (current.cardinality.has_value() &&
+        *current.cardinality > *estimate.cardinality) {
+      Value capped = current;
       capped.cardinality = *estimate.cardinality;
-      estimate.constraints.insert_or_assign(column->id(), capped);
+      estimate.constraints.insert_or_assign(column->id(), std::move(capped));
     }
   }
 }
@@ -77,6 +83,8 @@ const Estimate& EstimateProvider::estimate(NodeCP node) {
     return it->second;
   }
   Estimate result = compute(node);
+  capNdvAtCardinality(node->outputColumns(), result);
+
   // A node's cardinality estimate should never be non-finite; estimate
   // arithmetic saturates (see EstimateMath.h). Surface a violation here instead
   // of letting infinity skew downstream cost comparisons.
@@ -125,7 +133,7 @@ Estimate EstimateProvider::compute(NodeCP node) {
         result.cardinality = std::nullopt;
       }
 
-      applySampleRate(*baseTable, scan, result);
+      applySampleRate(*baseTable, result);
       return result;
     }
 

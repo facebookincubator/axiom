@@ -25,6 +25,7 @@
 #include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/common/SessionConfig.h"
 #include "axiom/optimizer/DerivedTable.h"
+#include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/ToVelox.h"
 #include "axiom/runner/LocalRunner.h"
 #include "axiom/runner/ProgressReporter.h"
@@ -165,9 +166,9 @@ class SqlQueryRunner {
   /// polling for queries that set RunOptions::onProgress. If null, such a query
   /// fails loudly rather than running without the progress it asked for.
   /// @param useOptimizerV2 When true, all queries route through the v2
-  /// optimizer. EXPLAIN (type graph|optimized) and SHOW STATS FOR (<query>)
-  /// fail with a user error under v2, because they inspect optimizer internals
-  /// the v2 pipeline does not expose.
+  /// optimizer. EXPLAIN (type graph|optimized) fails with a user error under
+  /// v2, because it inspects optimizer internals the v2 pipeline does not
+  /// expose.
   explicit SqlQueryRunner(
       std::string user,
       folly::FunctionScheduler* progressScheduler = nullptr,
@@ -382,6 +383,14 @@ class SqlQueryRunner {
 
   std::shared_ptr<facebook::velox::core::QueryCtx> newQuery(
       const RunOptions& options);
+
+  // Builds an OptimizerSession from the current session config's optimizer
+  // properties, attaching 'connectorProperties' and the explain flag.
+  std::shared_ptr<facebook::axiom::optimizer::OptimizerSession>
+  makeOptimizerSession(
+      std::string_view queryId,
+      facebook::axiom::connector::ConnectorProperties connectorProperties,
+      bool explain);
 
   std::string runExplain(
       const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,

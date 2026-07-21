@@ -216,8 +216,9 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunnerV2(
          const std::shared_ptr<OptimizerSession>& optimizerSession,
          const std::shared_ptr<runner::RunnerSession>& /*runnerSession*/,
          const std::shared_ptr<core::QueryCtx>& /*queryCtx*/) {
-        return v2::optimize(
-            logicalPlan, schemaResolver, *optimizerSession, evaluator, options);
+        return v2::Optimizer(
+                   logicalPlan, schemaResolver, *optimizerSession, evaluator)
+            .optimize(options);
       });
 }
 

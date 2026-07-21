@@ -61,5 +61,6 @@ target_link_libraries(
   velox_core
   velox_exec
   velox_expression
+  velox_type
   velox_vector
 )
