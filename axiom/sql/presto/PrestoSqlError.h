@@ -258,6 +258,27 @@ PrestoErrorClassification classify(PrestoSqlErrorKind kind);
     }                                                                   \
   } while (0)
 
+/// Throws PrestoSqlError with kSemantic kind if val1 >= val2.
+/// Automatically appends ": {val1} vs {val2}" to the error message.
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
+#define AXIOM_PRESTO_SEMANTIC_CHECK_LT(                                 \
+    val1, val2, location, token, fmt_str, ...)                          \
+  do {                                                                  \
+    const auto _axiom_v1 = (val1);                                      \
+    const auto _axiom_v2 = (val2);                                      \
+    if (FOLLY_UNLIKELY(_axiom_v1 >= _axiom_v2)) {                       \
+      assert((location).line > 0 && "Location must have 1-based line"); \
+      throw ::axiom::sql::presto::PrestoSqlError(                       \
+          fmt::format(fmt_str, ##__VA_ARGS__) +                         \
+              fmt::format(": {} vs {}", _axiom_v1, _axiom_v2),          \
+          static_cast<size_t>((location).line - 1),                     \
+          static_cast<size_t>(std::max(0, (location).charPosition)),    \
+          (token),                                                      \
+          ::axiom::sql::presto::PrestoSqlErrorKind::kSemantic,          \
+          fmt_str);                                                     \
+    }                                                                   \
+  } while (0)
+
 /// Throws PrestoSqlError with kSemantic kind if val1 > val2.
 /// Automatically appends ": {val1} vs {val2}" to the error message.
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)

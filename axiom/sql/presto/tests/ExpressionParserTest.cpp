@@ -1100,5 +1100,20 @@ TEST_F(ExpressionParserTest, mixedCaseColumnName) {
       "SELECT ORDERINGID FROM mixedCase", matchScan().project().output()));
 }
 
+TEST_F(ExpressionParserTest, expressionDepthCapBoundary) {
+  auto chain = [](uint32_t terms) {
+    std::string expr = "1";
+    for (uint32_t i = 0; i < terms; ++i) {
+      expr += " + 0";
+    }
+    return expr;
+  };
+  EXPECT_NE(
+      nullptr, parseExpr(chain(ParserOptions::kMaxExpressionDepthDefault - 1)));
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseExpr(chain(ParserOptions::kMaxExpressionDepthDefault)),
+      "Expression exceeds maximum nesting depth");
+}
+
 } // namespace
 } // namespace axiom::sql::presto::test
