@@ -30,6 +30,7 @@
 #include "axiom/sql/presto/DisplayNames.h"
 #include "axiom/sql/presto/ExpressionPlanner.h"
 #include "axiom/sql/presto/GroupByPlanner.h"
+#include "axiom/sql/presto/ParserOptions.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/RecursiveCteValidator.h"
 #include "axiom/sql/presto/ShowStatsBuilder.h"
@@ -256,7 +257,7 @@ class RelationPlanner : public AstVisitor {
       const std::string& defaultSchema,
       const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
           std::string_view /*sql*/)>& parseSql,
-      bool friendlySql = true)
+      const ParserOptions& options = {})
       : context_{makePrestoContext(
             user,
             defaultConnectorId,
@@ -266,7 +267,7 @@ class RelationPlanner : public AstVisitor {
         parseSql_{parseSql},
         user_{std::move(user)},
         builder_(newBuilder()),
-        friendlySql_{friendlySql} {}
+        options_{options} {}
 
   static lp::PlanBuilder::Context makePrestoContext(
       const std::string& user,
@@ -944,7 +945,7 @@ class RelationPlanner : public AstVisitor {
     // compatibility (e.g., SELECT a AS b, b FROM t — second b is column b).
     std::unordered_map<std::string, core::ExprPtr> aliasExprs;
     std::unordered_set<std::string> columnNames;
-    if (friendlySql_) {
+    if (options_.friendlySql) {
       for (const auto& name : builder_->outputNames()) {
         if (name.has_value()) {
           columnNames.insert(name.value());
@@ -1030,7 +1031,7 @@ class RelationPlanner : public AstVisitor {
         } else {
           // Normal SingleColumn handling.
           if (alias.has_value()) {
-            if (friendlySql_) {
+            if (options_.friendlySql) {
               aliasExprs[*alias] = expr.expr();
             }
             expr = expr.as(*alias);
@@ -1587,12 +1588,14 @@ class RelationPlanner : public AstVisitor {
       parseSql_;
   const std::string user_;
   std::shared_ptr<lp::PlanBuilder> builder_;
+  ParserOptions options_;
   ExpressionPlanner exprPlanner_{
       user_,
       [this](Query* query) { return planSubquery(query); },
       [this](const ExpressionPtr& expr, ExprOptions options) {
         return toSortingKey(expr, options);
       },
+      options_,
       [this](const std::string& qualifier, const std::string& name) {
         // Only canonicalize if the qualifier resolves as a table alias (not a
         // struct field dereference) and the unqualified name is unambiguous.
@@ -1606,7 +1609,6 @@ class RelationPlanner : public AstVisitor {
   CteScope ctes_;
   ViewMap views_;
   std::unordered_set<facebook::axiom::CatalogSchemaTableName> inputTables_;
-  bool friendlySql_;
 
   DisplayNames displayNames_;
 };
@@ -1774,7 +1776,10 @@ core::ExprPtr parseFunctionBody(
   VELOX_USER_CHECK_NOT_NULL(column, "SQL function body is not an expression");
 
   ExpressionPlanner exprPlanner{
-      user, /*subqueryPlanner=*/nullptr, /*sortingKeyResolver=*/nullptr};
+      user,
+      /*subqueryPlanner=*/nullptr,
+      /*sortingKeyResolver=*/nullptr,
+      ParserOptions{}};
   return exprPlanner.toExpr(column->expression()).expr();
 }
 
@@ -1895,7 +1900,10 @@ lp::ExprPtr resolveSqlExpression(
     const std::string& user,
     const ExpressionPtr& expr) {
   ExpressionPlanner exprPlanner{
-      user, /*subqueryPlanner=*/nullptr, /*sortingKeyResolver=*/nullptr};
+      user,
+      /*subqueryPlanner=*/nullptr,
+      /*sortingKeyResolver=*/nullptr,
+      ParserOptions{}};
 
   auto plan = lp::PlanBuilder()
                   .values(ROW({}), {Variant::row({})})
@@ -3092,7 +3100,7 @@ SqlStatementPtr doPlan(
         defaultConnectorId,
         defaultSchema,
         parseSql,
-        parserSession->options().friendlySql);
+        parserSession->options());
     query->accept(&planner);
     return std::make_shared<SelectStatement>(
         planner.plan(),

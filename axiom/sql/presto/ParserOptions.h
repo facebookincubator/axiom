@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -31,9 +32,12 @@ struct ParserOptions : public facebook::velox::config::ConfigProvider {
   static constexpr std::string_view kFriendlySql = "friendly_sql";
   static constexpr std::string_view kParseDecimalLiteralAsDouble =
       "parse_decimal_literal_as_double";
+  static constexpr std::string_view kMaxExpressionDepth =
+      "max_expression_depth";
 
   static constexpr bool kFriendlySqlDefault = true;
   static constexpr bool kParseDecimalLiteralAsDoubleDefault = true;
+  static constexpr uint32_t kMaxExpressionDepthDefault = 256;
 
   ParserOptions();
 
@@ -50,6 +54,10 @@ struct ParserOptions : public facebook::velox::config::ConfigProvider {
   /// from the literal. Matches Presto's decimal_literal_result_type session
   /// property.
   bool parseDecimalLiteralAsDouble{kParseDecimalLiteralAsDoubleDefault};
+
+  /// Maximum expression nesting depth; deeper expressions are rejected to
+  /// avoid a stack overflow.
+  uint32_t maxExpressionDepth{kMaxExpressionDepthDefault};
 
   /// Constructs options from session property name-value pairs.
   /// Keys are unqualified property names (e.g., "friendly_sql").

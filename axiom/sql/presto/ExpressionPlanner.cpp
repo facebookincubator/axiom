@@ -782,6 +782,17 @@ TypePtr ExpressionPlanner::resolveType(const TypeSignaturePtr& type) {
 lp::ExprApi ExpressionPlanner::toExpr(
     const ExpressionPtr& node,
     ExprOptions options) {
+  AXIOM_PRESTO_SEMANTIC_CHECK_LT(
+      exprDepth_,
+      options_.maxExpressionDepth,
+      node->location(),
+      /*token=*/std::nullopt,
+      "Expression exceeds maximum nesting depth");
+  ++exprDepth_;
+  SCOPE_EXIT {
+    --exprDepth_;
+  };
+
   switch (node->type()) {
     case NodeType::kIdentifier: {
       auto name = canonicalizeIdentifier(*node->as<Identifier>());
