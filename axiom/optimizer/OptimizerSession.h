@@ -36,11 +36,13 @@ class OptimizerSession final : public connector::BaseSession {
       std::string queryId,
       std::string user,
       OptimizerOptions options,
-      connector::ConnectorProperties connectorProperties)
+      connector::ConnectorProperties connectorProperties,
+      std::shared_ptr<QueryRuntimeStats> runtimeStats = nullptr)
       : BaseSession(
             std::move(queryId),
             std::move(user),
-            std::move(connectorProperties)),
+            std::move(connectorProperties),
+            std::move(runtimeStats)),
         options_{std::move(options)} {}
 
   const OptimizerOptions& options() const {

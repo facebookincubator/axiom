@@ -1292,7 +1292,7 @@ std::string SqlQueryRunner::runExplainAnalyze(
       planAndStats,
       queryCtx,
       options,
-      runtimeStats ? *runtimeStats : noopRuntimeStats_);
+      runtimeStats ? runtimeStats : noopRuntimeStats_);
 
   {
     PhaseTimer phaseTimer(
@@ -1343,12 +1343,14 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
       queryCtx->queryId(),
       user_,
       std::move(optimizerOptions),
-      connectorProperties);
+      connectorProperties,
+      runtimeStats);
   auto runnerSession = std::make_shared<runner::RunnerSession>(
       queryCtx->queryId(),
       user_,
       sessionConfig_->effectiveValues(kRunnerPrefix),
-      std::move(connectorProperties));
+      std::move(connectorProperties),
+      runtimeStats);
 
   if (useOptimizerV2_) {
     VELOX_USER_CHECK(
@@ -1436,21 +1438,22 @@ std::shared_ptr<runner::LocalRunner> SqlQueryRunner::makeLocalRunner(
     optimizer::PlanAndStats& planAndStats,
     const std::shared_ptr<velox::core::QueryCtx>& queryCtx,
     const RunOptions& options,
-    QueryRuntimeStats& runtimeStats) {
+    const std::shared_ptr<QueryRuntimeStats>& runtimeStats) {
   auto runnerSession = std::make_shared<runner::RunnerSession>(
       queryCtx->queryId(),
       user_,
       sessionConfig_->effectiveValues(kRunnerPrefix),
-      collectConnectorProperties(*sessionConfig_));
+      collectConnectorProperties(*sessionConfig_),
+      runtimeStats);
   return std::make_shared<runner::LocalRunner>(
       std::move(runnerSession),
       planAndStats.plan,
       std::move(planAndStats.finishWrite),
       queryCtx,
-      std::make_shared<runner::ConnectorSplitSourceFactory>(runtimeStats),
+      std::make_shared<runner::ConnectorSplitSourceFactory>(*runtimeStats),
       executorPool_,
       /*baseSpillDirectory=*/"",
-      runtimeStats);
+      *runtimeStats);
 }
 
 SqlQueryRunner::SqlResult SqlQueryRunner::showSession(
@@ -1535,7 +1538,7 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runLogicalPlan(
       planAndStats,
       queryCtx,
       options,
-      runtimeStats ? *runtimeStats : noopRuntimeStats_);
+      runtimeStats ? runtimeStats : noopRuntimeStats_);
 
   {
     PhaseTimer phaseTimer(
