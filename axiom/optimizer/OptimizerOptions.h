@@ -53,6 +53,8 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
       "broadcast_size_limit";
   static constexpr std::string_view kDphypEnumerationBudget =
       "dphyp_enumeration_budget";
+  static constexpr std::string_view kFixedPointMaxIterations =
+      "fixed_point_max_iterations";
   static constexpr std::string_view kTraceFlags = "trace_flags";
 
   // Default values — single source of truth for field initializers
@@ -64,6 +66,7 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
   static constexpr std::string_view kBroadcastSizeLimitDefault = "100MB";
   static constexpr int64_t kBroadcastSizeLimitDefaultBytes = 100LL << 20;
   static constexpr int32_t kDphypEnumerationBudgetDefault = 100'000;
+  static constexpr int32_t kFixedPointMaxIterationsDefault = 1'000;
   static constexpr bool kPushdownSubfieldsDefault = false;
   static constexpr bool kAllMapsAsStructDefault = false;
   static constexpr bool kSampleJoinsDefault = false;
@@ -137,6 +140,12 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
   /// which equality-transitivity closure turns into cliques). 0 means
   /// unlimited.
   int32_t dphypEnumerationBudget{kDphypEnumerationBudgetDefault};
+
+  /// Maximum iterations before a FixedPoint loop errors out as a safety
+  /// bound. Must be >= 1. Matches Presto/Trino/MySQL WITH RECURSIVE
+  /// semantics: exceeding the cap raises rather than silently truncating.
+  /// Forwarded to `velox::core::ConvergenceConfig::maxIterations`.
+  int32_t fixedPointMaxIterations{kFixedPointMaxIterationsDefault};
 
   /// Disable cost-based decision re: whether to split an aggregation into
   /// partial + final or not.

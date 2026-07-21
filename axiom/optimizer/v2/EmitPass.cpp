@@ -26,6 +26,7 @@
 #include "axiom/optimizer/WriteStatsBuilder.h"
 #include "axiom/optimizer/v2/ExprEmitter.h"
 #include "axiom/optimizer/v2/PhysicalProperties.h"
+#include "velox/core/FixedPointPlanNodes.h"
 #include "velox/core/PlanConsistencyChecker.h"
 #include "velox/core/TableWriteTraits.h"
 #include "velox/exec/HashPartitionFunction.h"
@@ -209,6 +210,34 @@ bool isSingleThreadedPipeline(const velox::core::PlanNodePtr& node) {
   }
 }
 
+struct AggregationParams {
+  velox::core::AggregationNode::Step step;
+  std::vector<velox::core::FieldAccessTypedExprPtr> groupingKeys;
+  std::vector<velox::core::FieldAccessTypedExprPtr> preGroupedKeys;
+  std::vector<std::string> names;
+  std::vector<velox::core::AggregationNode::Aggregate> aggregates;
+  std::vector<velox::vector_size_t> globalGroupingSets;
+  std::optional<velox::core::FieldAccessTypedExprPtr> groupId;
+  velox::core::PlanNodePtr input;
+};
+
+// Extracts `globalGroupingSets` + `groupId` from an IR `Aggregate` for
+// `AggregationParams`. Synthesized aggregates that carry no IR node
+// (e.g., the empty-delta convergence sub-plan) leave those fields empty.
+std::pair<
+    std::vector<velox::vector_size_t>,
+    std::optional<velox::core::FieldAccessTypedExprPtr>>
+groupingSetInfo(const Aggregate& aggregate) {
+  std::vector<velox::vector_size_t> globalGroupingSets(
+      aggregate.globalGroupingSets().begin(),
+      aggregate.globalGroupingSets().end());
+  std::optional<velox::core::FieldAccessTypedExprPtr> groupId;
+  if (aggregate.groupId() != nullptr) {
+    groupId = toFieldAccess(aggregate.groupId());
+  }
+  return {std::move(globalGroupingSets), std::move(groupId)};
+}
+
 class Emitter {
  public:
   Emitter(
@@ -266,6 +295,10 @@ class Emitter {
         return emitTableWrite(*node->as<TableWrite>());
       case NodeType::kExchange:
         return emitExchange(*node->as<Exchange>());
+      case NodeType::kFixedPoint:
+        return emitFixedPoint(*node->as<FixedPoint>());
+      case NodeType::kWorkingTable:
+        return emitWorkingTable(*node->as<WorkingTable>());
     }
     VELOX_UNREACHABLE();
   }
@@ -331,16 +364,7 @@ class Emitter {
   velox::core::PlanNodePtr emitSingleAggregation(const Aggregate& aggregate);
   velox::core::PlanNodePtr emitPartialAggregation(const Aggregate& aggregate);
   velox::core::PlanNodePtr emitFinalAggregation(const Aggregate& aggregate);
-  // Builds an AggregationNode, carrying the grouping-set default-row info
-  // (`globalGroupingSets`/`groupId`) from `aggregate` when present.
-  velox::core::PlanNodePtr makeAggregationNode(
-      velox::core::AggregationNode::Step step,
-      const Aggregate& aggregate,
-      std::vector<velox::core::FieldAccessTypedExprPtr> groupingKeys,
-      std::vector<velox::core::FieldAccessTypedExprPtr> preGroupedKeys,
-      std::vector<std::string> names,
-      std::vector<velox::core::AggregationNode::Aggregate> aggregates,
-      velox::core::PlanNodePtr input);
+  velox::core::PlanNodePtr makeAggregationNode(AggregationParams params);
   velox::core::PlanNodePtr emitGroupId(const GroupId& groupId);
   velox::core::PlanNodePtr emitMarkDistinct(const MarkDistinct& markDistinct);
   velox::core::PlanNodePtr emitJoin(const Join& join);
@@ -377,6 +401,15 @@ class Emitter {
   // current fragment, wiring the `InputStage` between them.
   velox::core::PlanNodePtr emitExchange(const Exchange& exchange);
   velox::core::PlanNodePtr emitTableWrite(const TableWrite& tableWrite);
+  velox::core::PlanNodePtr emitFixedPoint(const FixedPoint& fixedPoint);
+  velox::core::PlanNodePtr emitWorkingTable(const WorkingTable& workingTable);
+
+  // Convergence sub-plan: StateSource(delta=true) -> count() ->
+  // ProjectNode("converged" = count == 0). An iteration that appends no
+  // rows produces an empty delta, count=0, and marks convergence.
+  velox::core::PlanNodePtr makeFixpointCheck(
+      const std::string& stateName,
+      const velox::RowTypePtr& schema);
 
   // Builds the producer-side `PartitionedOutput` capping 'sourcePlan' for
   // 'partitioning'. A connector-bucketed partitioning that scales to a single
@@ -961,32 +994,19 @@ velox::core::PlanNodePtr Emitter::emitAggregation(const Aggregate& aggregate) {
 }
 
 velox::core::PlanNodePtr Emitter::makeAggregationNode(
-    velox::core::AggregationNode::Step step,
-    const Aggregate& aggregate,
-    std::vector<velox::core::FieldAccessTypedExprPtr> groupingKeys,
-    std::vector<velox::core::FieldAccessTypedExprPtr> preGroupedKeys,
-    std::vector<std::string> names,
-    std::vector<velox::core::AggregationNode::Aggregate> aggregates,
-    velox::core::PlanNodePtr input) {
-  std::vector<velox::vector_size_t> globalGroupingSets(
-      aggregate.globalGroupingSets().begin(),
-      aggregate.globalGroupingSets().end());
-  std::optional<velox::core::FieldAccessTypedExprPtr> groupId;
-  if (aggregate.groupId() != nullptr) {
-    groupId = toFieldAccess(aggregate.groupId());
-  }
+    AggregationParams params) {
   return std::make_shared<velox::core::AggregationNode>(
       nextId(),
-      step,
-      std::move(groupingKeys),
-      std::move(preGroupedKeys),
-      std::move(names),
-      std::move(aggregates),
-      std::move(globalGroupingSets),
-      std::move(groupId),
+      params.step,
+      std::move(params.groupingKeys),
+      std::move(params.preGroupedKeys),
+      std::move(params.names),
+      std::move(params.aggregates),
+      std::move(params.globalGroupingSets),
+      std::move(params.groupId),
       /*ignoreNullKeys=*/false,
       /*noGroupsSpanBatches=*/false,
-      std::move(input));
+      std::move(params.input));
 }
 
 velox::core::PlanNodePtr Emitter::emitSingleAggregation(
@@ -1018,14 +1038,17 @@ velox::core::PlanNodePtr Emitter::emitSingleAggregation(
         *aggregateExpr, toTypePtr(aggregateExpr->value().type), exprEmitter_);
   });
 
-  return makeAggregationNode(
-      velox::core::AggregationNode::Step::kSingle,
-      aggregate,
-      std::move(groupingKeys),
-      std::move(preGroupedKeys),
-      std::move(names),
-      std::move(aggregates),
-      std::move(input));
+  auto [globalGroupingSets, groupId] = groupingSetInfo(aggregate);
+  return makeAggregationNode({
+      .step = velox::core::AggregationNode::Step::kSingle,
+      .groupingKeys = std::move(groupingKeys),
+      .preGroupedKeys = std::move(preGroupedKeys),
+      .names = std::move(names),
+      .aggregates = std::move(aggregates),
+      .globalGroupingSets = std::move(globalGroupingSets),
+      .groupId = std::move(groupId),
+      .input = std::move(input),
+  });
 }
 
 velox::core::PlanNodePtr Emitter::emitPartialAggregation(
@@ -1043,14 +1066,17 @@ velox::core::PlanNodePtr Emitter::emitPartialAggregation(
         exprEmitter_);
   });
 
-  return makeAggregationNode(
-      velox::core::AggregationNode::Step::kPartial,
-      aggregate,
-      std::move(groupingKeys),
-      /*preGroupedKeys=*/{},
-      std::move(names),
-      std::move(aggregates),
-      std::move(input));
+  auto [globalGroupingSets, groupId] = groupingSetInfo(aggregate);
+  return makeAggregationNode({
+      .step = velox::core::AggregationNode::Step::kPartial,
+      .groupingKeys = std::move(groupingKeys),
+      .preGroupedKeys = {},
+      .names = std::move(names),
+      .aggregates = std::move(aggregates),
+      .globalGroupingSets = std::move(globalGroupingSets),
+      .groupId = std::move(groupId),
+      .input = std::move(input),
+  });
 }
 
 velox::core::PlanNodePtr Emitter::emitFinalAggregation(
@@ -1079,14 +1105,17 @@ velox::core::PlanNodePtr Emitter::emitFinalAggregation(
         exprEmitter_);
   });
 
-  return makeAggregationNode(
-      velox::core::AggregationNode::Step::kFinal,
-      aggregate,
-      std::move(groupingKeys),
-      /*preGroupedKeys=*/{},
-      std::move(names),
-      std::move(aggregates),
-      std::move(input));
+  auto [globalGroupingSets, groupId] = groupingSetInfo(aggregate);
+  return makeAggregationNode({
+      .step = velox::core::AggregationNode::Step::kFinal,
+      .groupingKeys = std::move(groupingKeys),
+      .preGroupedKeys = {},
+      .names = std::move(names),
+      .aggregates = std::move(aggregates),
+      .globalGroupingSets = std::move(globalGroupingSets),
+      .groupId = std::move(groupId),
+      .input = std::move(input),
+  });
 }
 
 velox::core::PlanNodePtr Emitter::emitGroupId(const GroupId& groupId) {
@@ -1657,6 +1686,7 @@ std::optional<FragmentType> fragmentTypeContribution(NodeCP node) {
     case NodeType::kScan:
       return FragmentType::kSource;
     case NodeType::kValues:
+    case NodeType::kFixedPoint:
       return FragmentType::kSingle;
     default: {
       std::optional<FragmentType> result;
@@ -2035,6 +2065,91 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
       std::move(finalMergeOutputType),
       std::move(finalMergeSpec),
       std::move(gather));
+}
+
+velox::core::PlanNodePtr Emitter::makeFixpointCheck(
+    const std::string& stateName,
+    const velox::RowTypePtr& schema) {
+  static constexpr std::string_view kConvergedCountName = "__converged_count";
+  static constexpr std::string_view kConvergedColumnName = "converged";
+
+  const auto& functionNames = queryCtx()->functionNames();
+
+  auto source = std::make_shared<velox::core::StateSourceNode>(
+      nextId(), stateName, schema, /*delta=*/true);
+
+  auto countCall = std::make_shared<velox::core::CallTypedExpr>(
+      velox::BIGINT(),
+      std::vector<velox::core::TypedExprPtr>{},
+      std::string{functionNames.count});
+  velox::core::AggregationNode::Aggregate countAggregate{
+      .call = std::move(countCall),
+      .rawInputTypes = {},
+      .mask = nullptr,
+      .sortingKeys = {},
+      .sortingOrders = {},
+      .distinct = false,
+  };
+  std::vector<velox::core::AggregationNode::Aggregate> aggregates;
+  aggregates.push_back(std::move(countAggregate));
+  auto aggregation = makeAggregationNode({
+      .step = velox::core::AggregationNode::Step::kSingle,
+      .groupingKeys = {},
+      .preGroupedKeys = {},
+      .names = std::vector<std::string>{std::string{kConvergedCountName}},
+      .aggregates = std::move(aggregates),
+      .globalGroupingSets = {},
+      .groupId = std::nullopt,
+      .input = std::move(source),
+  });
+
+  auto countRef = std::make_shared<velox::core::FieldAccessTypedExpr>(
+      velox::BIGINT(), std::string{kConvergedCountName});
+  auto zeroConst = std::make_shared<velox::core::ConstantTypedExpr>(
+      velox::BIGINT(), velox::Variant(int64_t{0}));
+  auto eqExpr = std::make_shared<velox::core::CallTypedExpr>(
+      velox::BOOLEAN(),
+      std::vector<velox::core::TypedExprPtr>{
+          std::move(countRef), std::move(zeroConst)},
+      std::string{functionNames.equality});
+  return std::make_shared<velox::core::ProjectNode>(
+      nextId(),
+      std::vector<std::string>{std::string{kConvergedColumnName}},
+      std::vector<velox::core::TypedExprPtr>{std::move(eqExpr)},
+      std::move(aggregation));
+}
+
+velox::core::PlanNodePtr Emitter::emitFixedPoint(const FixedPoint& fixedPoint) {
+  auto anchorPlan = emit(fixedPoint.anchor());
+  auto stepPlan = emit(fixedPoint.step());
+
+  auto schema = makeRowType(fixedPoint.outputColumns());
+  const std::string stateName{fixedPoint.name()};
+
+  velox::core::ConvergenceConfig convergence;
+  convergence.plan = makeFixpointCheck(stateName, schema);
+  convergence.maxIterations = session_.options().fixedPointMaxIterations;
+
+  std::vector<velox::core::StateDeclarationPtr> stateDeclarations;
+  stateDeclarations.push_back(
+      std::make_shared<velox::core::VectorStateDeclaration>(
+          stateName, schema, std::move(anchorPlan), /*append=*/true));
+  std::vector<velox::core::PlanNodePtr> plans;
+  plans.push_back(std::move(stepPlan));
+
+  return std::make_shared<velox::core::FixedPointNode>(
+      nextId(),
+      std::move(stateDeclarations),
+      std::move(plans),
+      std::move(convergence),
+      stateName);
+}
+
+velox::core::PlanNodePtr Emitter::emitWorkingTable(
+    const WorkingTable& workingTable) {
+  auto schema = makeRowType(workingTable.outputColumns());
+  return std::make_shared<velox::core::StateSourceNode>(
+      nextId(), std::string{workingTable.name()}, schema, /*delta=*/true);
 }
 
 std::vector<ExecutableFragment> Emitter::emitFragments(

@@ -48,6 +48,8 @@ const auto& nodeTypeNames() {
       {NodeType::kEnforceDistinct, "EnforceDistinct"},
       {NodeType::kExchange, "Exchange"},
       {NodeType::kTableWrite, "TableWrite"},
+      {NodeType::kFixedPoint, "FixedPoint"},
+      {NodeType::kWorkingTable, "WorkingTable"},
   };
   return kNames;
 }
@@ -1981,6 +1983,95 @@ bool TableWrite::KeyEq::operator()(const TableWrite* node, const Key& key)
   return (*this)(key, node);
 }
 
+WorkingTable::WorkingTable(Key key)
+    : Node(NodeType::kWorkingTable, ColumnVector{key.outputColumns}, {}),
+      name_(key.name) {
+  VELOX_CHECK_NOT_NULL(name_);
+}
+
+size_t WorkingTable::KeyHash::operator()(const WorkingTable* node) const {
+  return hashOf(node->name(), node->outputColumns());
+}
+
+size_t WorkingTable::KeyHash::operator()(const Key& key) const {
+  return hashOf(key.name, key.outputColumns);
+}
+
+bool WorkingTable::KeyEq::operator()(
+    const WorkingTable* left,
+    const WorkingTable* right) const {
+  return left->name() == right->name() &&
+      left->outputColumns() == right->outputColumns();
+}
+
+bool WorkingTable::KeyEq::operator()(const Key& key, const WorkingTable* node)
+    const {
+  return key.name == node->name() && key.outputColumns == node->outputColumns();
+}
+
+bool WorkingTable::KeyEq::operator()(const WorkingTable* node, const Key& key)
+    const {
+  return (*this)(key, node);
+}
+
+FixedPoint::FixedPoint(Key key)
+    : Node(NodeType::kFixedPoint, ColumnVector{key.outputColumns}, {}),
+      inputs_{key.anchor, key.step},
+      name_(key.name) {
+  VELOX_CHECK_NOT_NULL(inputs_[0]);
+  VELOX_CHECK_NOT_NULL(inputs_[1]);
+  VELOX_CHECK_NOT_NULL(name_);
+  VELOX_CHECK(
+      std::ranges::equal(outputColumns(), inputs_[0]->outputColumns()),
+      "FixedPoint output columns must match anchor by pointer identity");
+
+  // Step must produce a schema compatible with the anchor at every
+  // iteration. Anchor Column*s are reused where possible, but the step's
+  // Project mints fresh Column*s so pointer identity is not required.
+  const auto& anchorCols = inputs_[0]->outputColumns();
+  const auto& stepCols = inputs_[1]->outputColumns();
+  VELOX_CHECK_EQ(
+      stepCols.size(),
+      anchorCols.size(),
+      "FixedPoint step must produce the same column count as anchor");
+  for (size_t i = 0; i < stepCols.size(); ++i) {
+    VELOX_CHECK(
+        stepCols[i]->value().type->equivalent(*anchorCols[i]->value().type),
+        "FixedPoint step output column {} type does not match anchor: step={}, anchor={}",
+        i,
+        stepCols[i]->value().type->toString(),
+        anchorCols[i]->value().type->toString());
+  }
+}
+
+size_t FixedPoint::KeyHash::operator()(const FixedPoint* node) const {
+  return hashOf(
+      node->anchor(), node->step(), node->name(), node->outputColumns());
+}
+
+size_t FixedPoint::KeyHash::operator()(const Key& key) const {
+  return hashOf(key.anchor, key.step, key.name, key.outputColumns);
+}
+
+bool FixedPoint::KeyEq::operator()(
+    const FixedPoint* left,
+    const FixedPoint* right) const {
+  return left->anchor() == right->anchor() && left->step() == right->step() &&
+      left->name() == right->name() &&
+      left->outputColumns() == right->outputColumns();
+}
+
+bool FixedPoint::KeyEq::operator()(const Key& key, const FixedPoint* node)
+    const {
+  return key.anchor == node->anchor() && key.step == node->step() &&
+      key.name == node->name() && key.outputColumns == node->outputColumns();
+}
+
+bool FixedPoint::KeyEq::operator()(const FixedPoint* node, const Key& key)
+    const {
+  return (*this)(key, node);
+}
+
 #define V2_DEFINE_ACCEPT(NodeT)                                               \
   void NodeT::accept(const NodeVisitor& visitor, NodeVisitorContext& context) \
       const {                                                                 \
@@ -2008,6 +2099,8 @@ V2_DEFINE_ACCEPT(AssignUniqueId)
 V2_DEFINE_ACCEPT(EnforceDistinct)
 V2_DEFINE_ACCEPT(Exchange)
 V2_DEFINE_ACCEPT(TableWrite)
+V2_DEFINE_ACCEPT(WorkingTable)
+V2_DEFINE_ACCEPT(FixedPoint)
 
 #undef V2_DEFINE_ACCEPT
 

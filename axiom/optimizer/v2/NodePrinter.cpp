@@ -339,6 +339,24 @@ class Printer : public NodeVisitor {
     visitInputs(node, ctx);
   }
 
+  void visit(const WorkingTable& node, NodeVisitorContext& context)
+      const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(ctx, node, fmt::format("[name={}]", node.name()));
+    visitInputs(node, ctx);
+  }
+
+  void visit(const FixedPoint& node, NodeVisitorContext& context)
+      const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(ctx, node, fmt::format("[name={}]", node.name()));
+    IndentGuard guard(ctx);
+    ctx.out << spaces(ctx.indent) << "anchor:\n";
+    node.anchor()->accept(*this, ctx);
+    ctx.out << spaces(ctx.indent) << "step:\n";
+    node.step()->accept(*this, ctx);
+  }
+
  private:
   void header(Context& ctx, const Node& node, std::string_view extra = {})
       const {
