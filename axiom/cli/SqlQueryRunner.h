@@ -437,7 +437,7 @@ class SqlQueryRunner {
       facebook::axiom::optimizer::PlanAndStats& planAndStats,
       const std::shared_ptr<facebook::velox::core::QueryCtx>& queryCtx,
       const RunOptions& options,
-      facebook::axiom::QueryRuntimeStats& runtimeStats);
+      const std::shared_ptr<facebook::axiom::QueryRuntimeStats>& runtimeStats);
 
   // Returns a ProgressReporter polling `runner` (starting the shared scheduler
   // first) when options.onProgress is set, otherwise nullptr. Held behind a
@@ -506,8 +506,9 @@ class SqlQueryRunner {
   // each progress-reporting query.
   folly::FunctionScheduler* const progressScheduler_;
 
-  // Noop stats instance for code paths that don't track runtime metrics.
-  facebook::axiom::QueryRuntimeStats noopRuntimeStats_;
+  // Noop stats sink for code paths that don't track runtime metrics.
+  const std::shared_ptr<facebook::axiom::QueryRuntimeStats> noopRuntimeStats_{
+      std::make_shared<facebook::axiom::QueryRuntimeStats>()};
 };
 
 } // namespace axiom::sql

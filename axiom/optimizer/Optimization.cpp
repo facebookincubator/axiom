@@ -73,8 +73,7 @@ Optimization::Optimization(
     History& history,
     std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx,
     velox::core::ExpressionEvaluator& evaluator,
-    MultiFragmentPlan::Options runnerOptions,
-    std::shared_ptr<QueryRuntimeStats> runtimeStats)
+    MultiFragmentPlan::Options runnerOptions)
     : optimizerSession_{std::move(optimizerSession)},
       runnerSession_{std::move(runnerSession)},
       runnerOptions_(std::move(runnerOptions)),
@@ -86,9 +85,8 @@ Optimization::Optimization(
           isSingleWorker_,
           isSingleDriver_,
           optimizerSession_->options().alwaysPlanPartialAggregation},
-      toGraph_{schema, evaluator, optimizerSession_->options(), runtimeStats},
-      toVelox_{optimizerSession_, runnerOptions_},
-      runtimeStats_{std::move(runtimeStats)} {
+      toGraph_{schema, evaluator, optimizerSession_->options(), runtimeStats_},
+      toVelox_{optimizerSession_, runnerOptions_} {
   VELOX_CHECK_NOT_NULL(runnerSession_);
   VELOX_CHECK_NOT_NULL(veloxQueryCtx_);
   queryCtx()->optimization() = this;
@@ -206,16 +204,14 @@ void Optimization::estimateAllBaseTableSelectivity(DerivedTable& dt) {
   auto results = blockingWaitOn(
       veloxQueryCtx_->executor(),
       folly::coro::collectAllRange(std::move(tasks)));
-  if (runtimeStats_) {
-    recordCpuIfSameThread(
-        *runtimeStats_,
-        QueryRuntimeStats::kEstimateStatsCpuNanos,
-        estimateCpuStart,
-        estimateThreadId);
-    runtimeStats_->recordTiming(
-        QueryRuntimeStats::kEstimateStatsWallNanos,
-        std::chrono::steady_clock::now() - estimateStart);
-  }
+  recordCpuIfSameThread(
+      runtimeStats_,
+      QueryRuntimeStats::kEstimateStatsCpuNanos,
+      estimateCpuStart,
+      estimateThreadId);
+  runtimeStats_.recordTiming(
+      QueryRuntimeStats::kEstimateStatsWallNanos,
+      std::chrono::steady_clock::now() - estimateStart);
 
   // Apply results.
   for (auto& [baseTable, taskIndex, columnIndices] : tableTasks) {

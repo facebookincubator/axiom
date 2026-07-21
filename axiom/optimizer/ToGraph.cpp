@@ -194,8 +194,8 @@ ToGraph::ToGraph(
     const connector::SchemaResolver& schema,
     velox::core::ExpressionEvaluator& evaluator,
     const OptimizerOptions& options,
-    std::shared_ptr<QueryRuntimeStats> runtimeStats)
-    : schema_{schema, std::move(runtimeStats)},
+    QueryRuntimeStats& runtimeStats)
+    : schema_{schema, runtimeStats},
       evaluator_{evaluator},
       options_{options},
       functionNames_{queryCtx()->functionNames()} {
