@@ -25,14 +25,13 @@
 #include <stdexcept>
 #include <thread>
 #include "axiom/cli/QueryIdGenerator.h"
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/cli/tests/SqlQueryRunnerTestBase.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/runner/QueryProgress.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -43,79 +42,9 @@ namespace {
 
 namespace runner = facebook::axiom::runner;
 
-class SqlQueryRunnerTest : public ::testing::Test, public test::VectorTestBase {
+class SqlQueryRunnerTest : public SqlQueryRunnerTestBase {
  protected:
-  static void SetUpTestCase() {
-    facebook::velox::memory::MemoryManager::testingSetInstance(
-        facebook::velox::memory::MemoryManager::Options{});
-  }
-
-  void SetUp() override {
-    runner_ = makeRunner();
-  }
-
-  void TearDown() override {
-    runner_.reset();
-    for (const auto& id : connectorIds_) {
-      facebook::axiom::connector::ConnectorMetadataRegistry::global().erase(id);
-      facebook::velox::connector::ConnectorRegistry::global().erase(id);
-    }
-  }
-
-  inline static const std::string kDefaultSchema{
-      facebook::axiom::connector::TestConnector::kDefaultSchema};
-
-  std::unique_ptr<SqlQueryRunner> makeRunner(
-      const std::string& connectorId = "test",
-      std::function<std::string()> queryIdGenerator = {},
-      PermissionCheck permissionCheck = {}) {
-    auto runner =
-        std::make_unique<SqlQueryRunner>("test_user", &progressScheduler_);
-
-    auto initConnectors = [&]() {
-      testConnector_ =
-          std::make_shared<facebook::axiom::connector::TestConnector>(
-              connectorId);
-      facebook::velox::connector::ConnectorRegistry::global().insert(
-          testConnector_->connectorId(), testConnector_);
-      facebook::axiom::connector::ConnectorMetadataRegistry::global().insert(
-          testConnector_->connectorId(), testConnector_->metadata());
-
-      connectorIds_.emplace_back(testConnector_->connectorId());
-
-      return std::make_pair(testConnector_->connectorId(), kDefaultSchema);
-    };
-
-    runner->initialize(
-        initConnectors,
-        std::move(permissionCheck),
-        std::move(queryIdGenerator));
-
-    return runner;
-  }
-
-  SqlQueryRunner::SqlResult run(std::string_view sql) {
-    return runner_->run(sql, {});
-  }
-
-  RowVectorPtr fetchSingleRow(
-      std::string_view sql,
-      const SqlQueryRunner::RunOptions& options = {}) {
-    auto result = runner_->run(sql, options);
-    VELOX_CHECK(
-        !result.message.has_value(), "Query failed: {}", *result.message);
-    VELOX_CHECK_EQ(1, result.results.size());
-    VELOX_CHECK_EQ(1, result.results[0]->size());
-    return result.results[0];
-  }
-
-  // Runs 'sql', which must return a single row and a single column, and returns
-  // that value.
-  template <typename T>
-  T fetchSingleValue(std::string_view sql) {
-    return fetchSingleRow(sql)->childAt(0)->variantAt(0).value<T>();
-  }
-
+  // Asserts SHOW SCHEMAS returns exactly 'expected', in order.
   void assertSchemas(const std::vector<std::string>& expected) {
     auto result = run("SHOW SCHEMAS");
     ASSERT_FALSE(result.message.has_value());
@@ -125,6 +54,8 @@ class SqlQueryRunnerTest : public ::testing::Test, public test::VectorTestBase {
         makeRowVector({"Schema"}, {makeFlatVector(expected)}));
   }
 
+  // Asserts 'query' (SHOW TABLES by default) returns exactly 'expected', in
+  // order.
   void assertTables(
       const std::vector<std::string>& expected,
       const std::string& query = "SHOW TABLES") {
@@ -136,6 +67,8 @@ class SqlQueryRunnerTest : public ::testing::Test, public test::VectorTestBase {
         makeRowVector({"Table"}, {makeFlatVector(expected)}));
   }
 
+  // Asserts SHOW SESSION LIKE 'name' reports the given current value and
+  // default.
   void assertSessionProperty(
       std::string_view name,
       std::string_view expectedValue,
@@ -152,15 +85,6 @@ class SqlQueryRunnerTest : public ::testing::Test, public test::VectorTestBase {
         row->childAt(2)->as<SimpleVector<StringView>>()->valueAt(0),
         expectedDefault);
   }
-
-  // Drives progress polling for runners built by makeRunner(); declared before
-  // runner_ so it outlives any reporter a query starts.
-  folly::FunctionScheduler progressScheduler_;
-  std::unique_ptr<SqlQueryRunner> runner_;
-  std::shared_ptr<facebook::axiom::connector::TestConnector> testConnector_;
-
- private:
-  std::vector<std::string> connectorIds_;
 };
 
 TEST_F(SqlQueryRunnerTest, runSingleStatement) {
@@ -369,417 +293,6 @@ TEST_F(SqlQueryRunnerTest, explainDropTable) {
 
   // EXPLAIN is side-effect-free.
   run("DROP TABLE t");
-}
-
-TEST_F(SqlQueryRunnerTest, explainIo) {
-  testConnector_->addTpchTables();
-
-  // Parses and re-serializes JSON with sorted keys for deterministic
-  // comparison.
-  auto normalizeJson = [](const std::string& jsonStr) {
-    folly::json::serialization_opts opts;
-    opts.pretty_formatting = true;
-    opts.sort_keys = true;
-    return folly::json::serialize(folly::parseJson(jsonStr), opts);
-  };
-
-  auto getJson = [&](const std::string& query) {
-    auto result = run(query);
-    VELOX_CHECK(result.message.has_value());
-    return normalizeJson(result.message.value());
-  };
-
-  // SELECT with no table scans.
-  ASSERT_EQ(
-      getJson("EXPLAIN (TYPE IO) SELECT 1"),
-      normalizeJson(R"({"inputTableColumnInfos": []})"));
-
-  // SELECT with table scan.
-  ASSERT_EQ(
-      getJson("EXPLAIN (TYPE IO) SELECT * FROM nation"), normalizeJson(R"({
-        "inputTableColumnInfos": [{
-          "table": {
-            "catalog": "test",
-            "schemaTable": {"schema": "default", "table": "nation"}
-          },
-          "columnConstraints": []
-        }]
-      })"));
-
-  // CTAS with output table.
-  ASSERT_EQ(
-      getJson("EXPLAIN (TYPE IO) CREATE TABLE t AS SELECT * FROM nation"),
-      normalizeJson(R"({
-        "inputTableColumnInfos": [{
-          "table": {
-            "catalog": "test",
-            "schemaTable": {"schema": "default", "table": "nation"}
-          },
-          "columnConstraints": []
-        }],
-        "outputTable": {
-          "catalog": "test",
-          "schemaTable": {"schema": "default", "table": "t"}
-        }
-      })"));
-
-  // INSERT with output table.
-  testConnector_->addTable("t", ROW({"key", "name"}, {BIGINT(), VARCHAR()}));
-  ASSERT_EQ(
-      getJson(
-          "EXPLAIN (TYPE IO) INSERT INTO t(key, name) "
-          "SELECT r_regionkey, r_name FROM region"),
-      normalizeJson(R"({
-        "inputTableColumnInfos": [{
-          "table": {
-            "catalog": "test",
-            "schemaTable": {"schema": "default", "table": "region"}
-          },
-          "columnConstraints": []
-        }],
-        "outputTable": {
-          "catalog": "test",
-          "schemaTable": {"schema": "default", "table": "t"}
-        }
-      })"));
-
-  // JOIN: multiple input tables sorted by name.
-  ASSERT_EQ(
-      getJson(
-          "EXPLAIN (TYPE IO) SELECT * FROM nation, region WHERE n_regionkey = r_regionkey"),
-      normalizeJson(R"({
-        "inputTableColumnInfos": [
-          {
-            "table": {
-              "catalog": "test",
-              "schemaTable": {"schema": "default", "table": "nation"}
-            },
-            "columnConstraints": []
-          },
-          {
-            "table": {
-              "catalog": "test",
-              "schemaTable": {"schema": "default", "table": "region"}
-            },
-            "columnConstraints": []
-          }
-        ]
-      })"));
-}
-
-TEST_F(SqlQueryRunnerTest, explainIoColumnConstraints) {
-  run("CREATE TABLE t (x BIGINT, n BIGINT, ds VARCHAR, region VARCHAR) "
-      "WITH (explain_io = ARRAY['n', 'ds', 'region'])");
-  SCOPE_EXIT {
-    run("DROP TABLE t");
-  };
-
-  auto normalizeJson = [](const std::string& jsonStr) {
-    folly::json::serialization_opts opts;
-    opts.pretty_formatting = true;
-    opts.sort_keys = true;
-    return folly::json::serialize(folly::parseJson(jsonStr), opts);
-  };
-
-  auto getJson = [&](const std::string& query) {
-    auto result = run(query);
-    VELOX_CHECK(result.message.has_value());
-    return normalizeJson(result.message.value());
-  };
-
-  auto makeConstraint = [&](const std::string& columnName,
-                            const std::string& typeSignature,
-                            const std::string& domainJson) {
-    return normalizeJson(
-        fmt::format(
-            R"({{"columnName": "{}", "typeSignature": "{}", "domain": {}}})",
-            columnName,
-            typeSignature,
-            domainJson));
-  };
-
-  auto makeTable = [&](const std::string& constraintsJson) {
-    return normalizeJson(
-        fmt::format(
-            R"({{
-          "inputTableColumnInfos": [{{
-            "table": {{
-              "catalog": "test",
-              "schemaTable": {{"schema": "default", "table": "t"}}
-            }},
-            "columnConstraints": [{}]
-          }}]
-        }})",
-            constraintsJson));
-  };
-
-  // Equality constraint.
-  ASSERT_EQ(
-      getJson("EXPLAIN (TYPE IO) SELECT * FROM t WHERE ds = '2026-03-17'"),
-      makeTable(makeConstraint(
-          "ds",
-          "VARCHAR",
-          R"({"nullsAllowed": false, "ranges": [
-            {"low": {"value": "2026-03-17", "bound": "EXACTLY"},
-             "high": {"value": "2026-03-17", "bound": "EXACTLY"}}]})")));
-
-  // IN constraint.
-  ASSERT_EQ(
-      getJson(
-          "EXPLAIN (TYPE IO) SELECT * FROM t "
-          "WHERE ds IN ('2026-03-17', '2026-03-18')"),
-      makeTable(makeConstraint(
-          "ds",
-          "VARCHAR",
-          R"({"nullsAllowed": false, "ranges": [
-            {"low": {"value": "2026-03-17", "bound": "EXACTLY"},
-             "high": {"value": "2026-03-17", "bound": "EXACTLY"}},
-            {"low": {"value": "2026-03-18", "bound": "EXACTLY"},
-             "high": {"value": "2026-03-18", "bound": "EXACTLY"}}]})")));
-
-  // Range constraint.
-  ASSERT_EQ(
-      getJson(
-          "EXPLAIN (TYPE IO) SELECT * FROM t "
-          "WHERE ds >= '2026-03-01' AND ds <= '2026-03-31'"),
-      makeTable(makeConstraint(
-          "ds",
-          "VARCHAR",
-          R"({"nullsAllowed": false, "ranges": [
-            {"low": {"value": "2026-03-01", "bound": "EXACTLY"},
-             "high": {"value": "2026-03-31", "bound": "EXACTLY"}}]})")));
-
-  // BETWEEN maps to a closed range, inclusive on both ends.
-  ASSERT_EQ(
-      getJson(
-          "EXPLAIN (TYPE IO) SELECT * FROM t "
-          "WHERE ds BETWEEN '2026-03-01' AND '2026-03-31'"),
-      makeTable(makeConstraint(
-          "ds",
-          "VARCHAR",
-          R"({"nullsAllowed": false, "ranges": [
-            {"low": {"value": "2026-03-01", "bound": "EXACTLY"},
-             "high": {"value": "2026-03-31", "bound": "EXACTLY"}}]})")));
-
-  // BETWEEN on an integer column produces the same closed range.
-  ASSERT_EQ(
-      getJson("EXPLAIN (TYPE IO) SELECT * FROM t WHERE n BETWEEN 1 AND 10"),
-      makeTable(makeConstraint(
-          "n",
-          "BIGINT",
-          R"({"nullsAllowed": false, "ranges": [
-            {"low": {"value": 1, "bound": "EXACTLY"},
-             "high": {"value": 10, "bound": "EXACTLY"}}]})")));
-
-  // LIKE with a literal prefix maps to a half-open range [prefix, prefix++),
-  // where the upper bound increments the last byte of the prefix.
-  ASSERT_EQ(
-      getJson("EXPLAIN (TYPE IO) SELECT * FROM t WHERE ds LIKE '2026-05%'"),
-      makeTable(makeConstraint(
-          "ds",
-          "VARCHAR",
-          R"({"nullsAllowed": false, "ranges": [
-            {"low": {"value": "2026-05", "bound": "EXACTLY"},
-             "high": {"value": "2026-06", "bound": "BELOW"}}]})")));
-
-  // The '_' single-character wildcard also terminates the prefix.
-  ASSERT_EQ(
-      getJson("EXPLAIN (TYPE IO) SELECT * FROM t WHERE ds LIKE '2026-05_'"),
-      makeTable(makeConstraint(
-          "ds",
-          "VARCHAR",
-          R"({"nullsAllowed": false, "ranges": [
-            {"low": {"value": "2026-05", "bound": "EXACTLY"},
-             "high": {"value": "2026-06", "bound": "BELOW"}}]})")));
-
-  // LIKE with no wildcards degenerates to equality.
-  ASSERT_EQ(
-      getJson("EXPLAIN (TYPE IO) SELECT * FROM t WHERE ds LIKE '2026-05-01'"),
-      makeTable(makeConstraint(
-          "ds",
-          "VARCHAR",
-          R"({"nullsAllowed": false, "ranges": [
-            {"low": {"value": "2026-05-01", "bound": "EXACTLY"},
-             "high": {"value": "2026-05-01", "bound": "EXACTLY"}}]})")));
-
-  auto noConstraints = normalizeJson(R"({
-    "inputTableColumnInfos": [{
-      "table": {
-        "catalog": "test",
-        "schemaTable": {"schema": "default", "table": "t"}
-      },
-      "columnConstraints": []
-    }]
-  })");
-
-  // No constraint on explain_io column (filter on non-explain_io column only).
-  ASSERT_EQ(
-      getJson("EXPLAIN (TYPE IO) SELECT * FROM t WHERE x = 1"), noConstraints);
-
-  // Unconvertible filter on explain_io column drops the column entirely.
-  // NOT is not supported, so ds <> 'foo' (which becomes NOT(eq(ds, 'foo')))
-  // causes the column to be dropped.
-  ASSERT_EQ(
-      getJson("EXPLAIN (TYPE IO) SELECT * FROM t WHERE ds <> 'foo'"),
-      noConstraints);
-
-  // NOT BETWEEN (parsed as not(between(...))) is unconvertible and drops the
-  // column, same as other negations.
-  ASSERT_EQ(
-      getJson(
-          "EXPLAIN (TYPE IO) SELECT * FROM t "
-          "WHERE ds NOT BETWEEN '2026-03-01' AND '2026-03-31'"),
-      noConstraints);
-
-  // BETWEEN with low > high is an empty range, so the whole table is excluded.
-  ASSERT_EQ(
-      getJson(
-          "EXPLAIN (TYPE IO) SELECT * FROM t "
-          "WHERE ds BETWEEN '2026-03-31' AND '2026-03-01'"),
-      normalizeJson(R"({"inputTableColumnInfos": []})"));
-
-  // LIKE with a leading wildcard has no usable prefix, so it is dropped.
-  ASSERT_EQ(
-      getJson("EXPLAIN (TYPE IO) SELECT * FROM t WHERE ds LIKE '%05'"),
-      noConstraints);
-
-  // LIKE with an ESCAPE clause is not converted (escape semantics are not
-  // interpreted), so the column is dropped.
-  ASSERT_EQ(
-      getJson(
-          "EXPLAIN (TYPE IO) SELECT * FROM t "
-          "WHERE ds LIKE '2026-05%' ESCAPE '#'"),
-      noConstraints);
-
-  // Mix of convertible and unconvertible filters: unconvertible conjunct is
-  // skipped (broader is safe), convertible conjunct is shown.
-  ASSERT_EQ(
-      getJson(
-          "EXPLAIN (TYPE IO) SELECT * FROM t "
-          "WHERE ds >= '2026-03-01' AND ds <> 'foo'"),
-      makeTable(makeConstraint(
-          "ds",
-          "VARCHAR",
-          R"({"nullsAllowed": false, "ranges": [
-            {"low": {"value": "2026-03-01", "bound": "EXACTLY"}}]})")));
-
-  // IS NULL OR equality: nullsAllowed is true.
-  ASSERT_EQ(
-      getJson(
-          "EXPLAIN (TYPE IO) SELECT * FROM t "
-          "WHERE ds IS NULL OR ds = '2026-03-17'"),
-      makeTable(makeConstraint(
-          "ds",
-          "VARCHAR",
-          R"({"nullsAllowed": true, "ranges": [
-            {"low": {"value": "2026-03-17", "bound": "EXACTLY"},
-             "high": {"value": "2026-03-17", "bound": "EXACTLY"}}]})")));
-
-  // OR with unconvertible disjunct: the entire OR expression cannot be
-  // converted (dropping a disjunct would narrow the result, which is unsafe).
-  // The unconvertible OR is skipped as a conjunct (broader is safe).
-  ASSERT_EQ(
-      getJson(
-          "EXPLAIN (TYPE IO) SELECT * FROM t "
-          "WHERE ds = '2026-03-17' OR length(ds) > 3"),
-      noConstraints);
-
-  // Constraints on both explain_io columns.
-  ASSERT_EQ(
-      getJson(
-          "EXPLAIN (TYPE IO) SELECT * FROM t "
-          "WHERE ds = '2026-03-17' AND region = 'us'"),
-      normalizeJson(R"({
-        "inputTableColumnInfos": [{
-          "table": {
-            "catalog": "test",
-            "schemaTable": {"schema": "default", "table": "t"}
-          },
-          "columnConstraints": [
-            {
-              "columnName": "ds",
-              "typeSignature": "VARCHAR",
-              "domain": {
-                "nullsAllowed": false,
-                "ranges": [{
-                  "low": {"value": "2026-03-17", "bound": "EXACTLY"},
-                  "high": {"value": "2026-03-17", "bound": "EXACTLY"}
-                }]
-              }
-            },
-            {
-              "columnName": "region",
-              "typeSignature": "VARCHAR",
-              "domain": {
-                "nullsAllowed": false,
-                "ranges": [{
-                  "low": {"value": "us", "bound": "EXACTLY"},
-                  "high": {"value": "us", "bound": "EXACTLY"}
-                }]
-              }
-            }
-          ]
-        }]
-      })"));
-
-  // Greater-than (exclusive low bound).
-  ASSERT_EQ(
-      getJson("EXPLAIN (TYPE IO) SELECT * FROM t WHERE ds > '2026-03-01'"),
-      makeTable(makeConstraint(
-          "ds",
-          "VARCHAR",
-          R"({"nullsAllowed": false, "ranges": [
-            {"low": {"value": "2026-03-01", "bound": "ABOVE"}}]})")));
-
-  // Subquery: constraints are extracted from the inner table scan.
-  ASSERT_EQ(
-      getJson(
-          "EXPLAIN (TYPE IO) "
-          "SELECT * FROM (SELECT * FROM t WHERE ds = '2026-03-17') sub"),
-      makeTable(makeConstraint(
-          "ds",
-          "VARCHAR",
-          R"({"nullsAllowed": false, "ranges": [
-            {"low": {"value": "2026-03-17", "bound": "EXACTLY"},
-             "high": {"value": "2026-03-17", "bound": "EXACTLY"}}]})")));
-
-  // UNION ALL: same table scanned twice, merged into one entry with
-  // united constraints.
-  ASSERT_EQ(
-      getJson(
-          "EXPLAIN (TYPE IO) "
-          "SELECT * FROM t WHERE ds = '2026-03-17' "
-          "UNION ALL "
-          "SELECT * FROM t WHERE ds = '2026-03-18'"),
-      makeTable(makeConstraint(
-          "ds",
-          "VARCHAR",
-          R"({"nullsAllowed": false, "ranges": [
-            {"low": {"value": "2026-03-17", "bound": "EXACTLY"},
-             "high": {"value": "2026-03-17", "bound": "EXACTLY"}},
-            {"low": {"value": "2026-03-18", "bound": "EXACTLY"},
-             "high": {"value": "2026-03-18", "bound": "EXACTLY"}}]})")));
-
-  // UNION (distinct): domains from both branches are united.
-  // (2026-03-17, +inf) ∪ (2026-03-18, +inf) = (2026-03-17, +inf).
-  ASSERT_EQ(
-      getJson(
-          "EXPLAIN (TYPE IO) "
-          "SELECT * FROM t WHERE ds > '2026-03-17' "
-          "UNION "
-          "SELECT * FROM t WHERE ds > '2026-03-18'"),
-      makeTable(makeConstraint(
-          "ds",
-          "VARCHAR",
-          R"({"nullsAllowed": false, "ranges": [
-            {"low": {"value": "2026-03-17", "bound": "ABOVE"}}]})")));
-
-  // ds <= x OR ds >= x covers all values — constraint is omitted.
-  ASSERT_EQ(
-      getJson(
-          "EXPLAIN (TYPE IO) SELECT * FROM t "
-          "WHERE ds <= '2026-03-17' OR ds >= '2026-03-17'"),
-      noConstraints);
 }
 
 TEST_F(SqlQueryRunnerTest, showStats) {
