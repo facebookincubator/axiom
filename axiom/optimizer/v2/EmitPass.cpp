@@ -1512,10 +1512,10 @@ velox::core::PlanNodePtr Emitter::emitUnnest(const Unnest& unnest) {
   std::vector<velox::core::FieldAccessTypedExprPtr> unnestVariables =
       toFieldAccessList(unnest.unnestExpressions(), "Unnest expression");
 
-  std::vector<std::string> unnestNames;
+  std::vector<std::optional<std::string>> unnestNames;
   for (const auto& perExpr : unnest.unnestColumns()) {
     for (ColumnCP column : perExpr) {
-      unnestNames.push_back(column->outputName());
+      unnestNames.emplace_back(column->outputName());
     }
   }
 
