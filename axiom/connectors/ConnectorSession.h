@@ -60,6 +60,11 @@ class ConnectorSession final {
     return it->second;
   }
 
+  /// Returns all session properties set for this connector.
+  const Properties& properties() const {
+    return properties_;
+  }
+
  private:
   const std::string queryId_;
   const std::string user_;

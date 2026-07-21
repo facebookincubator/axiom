@@ -15,6 +15,7 @@ add_executable(
   axiom_connectors_hive_test
   LocalHiveConnectorMetadataTest.cpp
   HiveMetadataConfigTest.cpp
+  PartitionValueToVariantTest.cpp
   StatisticsBuilderTest.cpp
 )
 

@@ -22,6 +22,7 @@
 #include <folly/json.h>
 
 #include "velox/common/base/Fs.h"
+#include "velox/dwio/catalog/fbhive/FileUtils.h"
 
 namespace facebook::axiom::connector::hive {
 
@@ -213,7 +214,9 @@ void FileInfo::listFiles(
       std::vector<std::string> parts;
       folly::split('=', dir, parts);
       if (parts.size() == 2) {
-        file->partitionKeys[parts.at(0)] = parts.at(1);
+        using velox::dwio::catalog::fbhive::FileUtils;
+        file->partitionKeys[FileUtils::unescapePathName(parts.at(0))] =
+            FileUtils::unescapePathName(parts.at(1));
       }
     }
     result.push_back(std::move(file));

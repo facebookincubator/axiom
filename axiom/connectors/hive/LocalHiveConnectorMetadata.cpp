@@ -27,9 +27,11 @@
 #include "axiom/optimizer/JsonUtil.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/connectors/Connector.h"
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/HivePartitionName.h"
+#include "velox/dwio/catalog/fbhive/FileUtils.h"
 #include "velox/expression/Expr.h"
 
 namespace facebook::axiom::connector::hive {
@@ -153,7 +155,8 @@ std::vector<const FileInfo*> filterFilesByTableHandle(
 bool testPartitionValue(
     const velox::common::Filter& filter,
     const std::optional<std::string>& value,
-    const velox::Type& type) {
+    const velox::Type& type,
+    bool readTimestampAsLocalTime) {
   if (!value.has_value()) {
     return filter.testNull();
   }
@@ -169,6 +172,14 @@ bool testPartitionValue(
     case velox::TypeKind::VARCHAR:
       return filter.testBytes(
           value.value().c_str(), static_cast<int32_t>(value.value().size()));
+    case velox::TypeKind::TIMESTAMP: {
+      // Filtering must apply the same local-time-to-GMT shift used when
+      // materializing timestamp partition values.
+      const auto partitionValue = HiveTableLayout::partitionValueToVariant(
+          value.value(), type, readTimestampAsLocalTime);
+      return filter.testTimestamp(
+          partitionValue.value<velox::TypeKind::TIMESTAMP>());
+    }
     default:
       VELOX_UNREACHABLE(
           "Unsupported partition column type: {}", type.toString());
@@ -244,7 +255,8 @@ FilteredTableStats estimateStatsFromPartitionStats(
     const std::vector<velox::core::TypedExprPtr>& filterConjuncts,
     velox::core::ExpressionEvaluator& evaluator,
     const folly::F14FastMap<std::string, const Column*>& partitionColumnsByName,
-    const std::vector<const Column*>& requestedColumns) {
+    const std::vector<const Column*>& requestedColumns,
+    bool readTimestampAsLocalTime) {
   std::vector<MetadataFilter> metadataFilters;
   std::vector<int32_t> rejectedFilterIndices;
   classifyFilterConjuncts(
@@ -269,7 +281,8 @@ FilteredTableStats estimateStatsFromPartitionStats(
       if (!testPartitionValue(
               *metadataFilter.filter,
               it->second,
-              *metadataFilter.column->type())) {
+              *metadataFilter.column->type(),
+              readTimestampAsLocalTime)) {
         matched = false;
         break;
       }
@@ -603,6 +616,16 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
   return std::pair(scannedRows, passingRows);
 }
 
+namespace {
+bool timestampPartitionsAsLocalTime(
+    const LocalHiveConnectorMetadata& metadata) {
+  return velox::connector::hive::HiveConfig(
+             metadata.hiveConnector()->connectorConfig())
+      .readTimestampPartitionValueAsLocalTime(
+          metadata.connectorQueryCtx()->sessionProperties());
+}
+} // namespace
+
 folly::coro::Task<std::optional<FilteredTableStats>>
 LocalHiveTableLayout::co_estimateStats(
     ConnectorSessionPtr /*session*/,
@@ -631,12 +654,16 @@ LocalHiveTableLayout::co_estimateStats(
     requestedColumns.push_back(column);
   }
 
+  const bool readTimestampAsLocalTime =
+      timestampPartitionsAsLocalTime(*localHiveMetadata);
+
   co_return estimateStatsFromPartitionStats(
       partitionStats_,
       filterConjuncts,
       evaluator,
       partitionColumnsByName,
-      requestedColumns);
+      requestedColumns,
+      readTimestampAsLocalTime);
 }
 
 folly::coro::Task<std::optional<std::vector<MetadataCountGroup>>>
@@ -670,6 +697,8 @@ LocalHiveTableLayout::co_metadataCounts(
       localHiveMetadata, "Expected LocalHiveConnectorMetadata for connector");
   auto& evaluator =
       *localHiveMetadata->connectorQueryCtx()->expressionEvaluator();
+  const bool readTimestampAsLocalTime =
+      timestampPartitionsAsLocalTime(*localHiveMetadata);
 
   // The counts are exact, so every conjunct must be resolvable from partition
   // metadata; decline if any is not.
@@ -714,7 +743,8 @@ LocalHiveTableLayout::co_metadataCounts(
           !testPartitionValue(
               *metadataFilter.filter,
               it->second,
-              *metadataFilter.column->type())) {
+              *metadataFilter.column->type(),
+              readTimestampAsLocalTime)) {
         matched = false;
         break;
       }
@@ -740,7 +770,7 @@ LocalHiveTableLayout::co_metadataCounts(
       groupKey += '\0';
       keyValues.push_back(
           HiveTableLayout::partitionValueToVariant(
-              it->second, *column->type()));
+              it->second, *column->type(), readTimestampAsLocalTime));
     }
 
     auto [it, inserted] = groupIndex.try_emplace(groupKey, groups.size());
@@ -1271,8 +1301,11 @@ void LocalHiveConnectorMetadata::loadTableWithWriteTimeStats(
       const auto dirName = entry.path().filename().string();
       auto equalsPos = dirName.find('=');
       if (equalsPos != std::string::npos) {
-        partitionEntry.partitionKeys[dirName.substr(0, equalsPos)] =
-            dirName.substr(equalsPos + 1);
+        // Directory names are Hive-escaped (e.g. ':' -> '%3A').
+        using velox::dwio::catalog::fbhive::FileUtils;
+        partitionEntry.partitionKeys[FileUtils::unescapePathName(
+            dirName.substr(0, equalsPos))] =
+            FileUtils::unescapePathName(dirName.substr(equalsPos + 1));
       }
       allPartitionStats.push_back(std::move(partitionEntry));
     }
