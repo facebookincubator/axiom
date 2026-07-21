@@ -622,8 +622,9 @@ class TestConnectorMetadata : public ConnectorMetadata {
   std::vector<SqlFunctionDefinitionPtr> findFunction(
       const SchemaFunctionName& functionName) override;
 
-  /// Registers a SQL-invoked function for findFunction() resolution. Throws if
-  /// a function with the same name is already registered.
+  /// Registers a SQL-invoked function overload for findFunction() resolution.
+  /// Multiple overloads may be registered under the same name; they are
+  /// returned together and selected by argument type.
   void addFunction(
       const SchemaFunctionName& functionName,
       SqlFunctionDefinition definition);
@@ -682,7 +683,8 @@ class TestConnectorMetadata : public ConnectorMetadata {
 
   folly::F14FastSet<std::string> schemas_{"default"};
   folly::F14FastMap<SchemaTypeName, velox::TypePtr> types_;
-  folly::F14FastMap<SchemaFunctionName, SqlFunctionDefinitionPtr> functions_;
+  folly::F14FastMap<SchemaFunctionName, std::vector<SqlFunctionDefinitionPtr>>
+      functions_;
   folly::F14FastMap<SchemaProcedureName, ProcedurePtr> procedures_;
 };
 

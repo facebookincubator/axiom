@@ -567,7 +567,7 @@ std::vector<SqlFunctionDefinitionPtr> TestConnectorMetadata::findFunction(
   if (it == functions_.end()) {
     return {};
   }
-  return {it->second};
+  return it->second;
 }
 
 void TestConnectorMetadata::addFunction(
@@ -577,10 +577,8 @@ void TestConnectorMetadata::addFunction(
       schemas_.contains(functionName.schema),
       "Schema not found: {}",
       functionName.schema);
-  auto [_, inserted] = functions_.emplace(
-      functionName,
+  functions_[functionName].push_back(
       std::make_shared<const SqlFunctionDefinition>(std::move(definition)));
-  VELOX_CHECK(inserted, "Function already registered: {}", functionName);
 }
 
 ProcedurePtr TestConnectorMetadata::findProcedure(
