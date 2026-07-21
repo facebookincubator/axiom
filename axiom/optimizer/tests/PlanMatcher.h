@@ -496,8 +496,21 @@ class PlanMatcherBuilder {
   /// Cannot be used with match(PlanNodePtr) - use match(MultiFragmentPlan).
   PlanMatcherBuilder& shuffle();
 
+  /// Marks a shuffle boundary (see shuffle()) only when 'condition' is true;
+  /// otherwise a no-op.
+  PlanMatcherBuilder& shuffleIf(bool condition) {
+    return condition ? shuffle() : *this;
+  }
+
   /// Matches a PartitionedOutput node with a single partition.
   PlanMatcherBuilder& partitionedOutputSingle();
+
+  /// Adds a single-partition PartitionedOutput matcher (see
+  /// partitionedOutputSingle()) only when 'condition' is true; otherwise a
+  /// no-op.
+  PlanMatcherBuilder& partitionedOutputSingleIf(bool condition) {
+    return condition ? partitionedOutputSingle() : *this;
+  }
 
   /// Marks a shuffle boundary with verification of partition keys.
   /// @param keys Expected partition key column names. Supports symbol rewriting
@@ -507,6 +520,15 @@ class PlanMatcherBuilder {
   PlanMatcherBuilder& shuffle(
       const std::vector<std::string>& keys,
       bool replicateNullsAndAny = false);
+
+  /// Marks a shuffle boundary with partition keys (see shuffle(keys,
+  /// replicateNullsAndAny)) only when 'condition' is true; otherwise a no-op.
+  PlanMatcherBuilder& shuffleIf(
+      bool condition,
+      const std::vector<std::string>& keys,
+      bool replicateNullsAndAny = false) {
+    return condition ? shuffle(keys, replicateNullsAndAny) : *this;
+  }
 
   /// Marks an ordered shuffle boundary (uses MergeExchange instead of
   /// Exchange). In a distributed plan:
