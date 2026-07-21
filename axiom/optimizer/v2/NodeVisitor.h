@@ -63,6 +63,10 @@ class NodeVisitor {
       const = 0;
   virtual void visit(const TableWrite& node, NodeVisitorContext& context)
       const = 0;
+  virtual void visit(const WorkingTable& node, NodeVisitorContext& context)
+      const = 0;
+  virtual void visit(const FixedPoint& node, NodeVisitorContext& context)
+      const = 0;
 
  protected:
   void visitInputs(const Node& node, NodeVisitorContext& context) const {

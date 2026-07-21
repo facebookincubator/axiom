@@ -20,6 +20,7 @@
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/optimizer/tests/ExprMatcher.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/core/FixedPointPlanNodes.h"
 #include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
@@ -331,6 +332,70 @@ class ValuesMatcher : public PlanMatcherImpl<ValuesNode> {
 
  private:
   const RowTypePtr outputType_;
+};
+
+class WorkingTableScanMatcher : public PlanMatcherImpl<StateSourceNode> {
+ public:
+  WorkingTableScanMatcher() = default;
+
+  explicit WorkingTableScanMatcher(WorkingTableScanDetails details)
+      : PlanMatcherImpl<StateSourceNode>{}, details_{std::move(details)} {}
+
+  MatchResult matchDetails(
+      const StateSourceNode& plan,
+      const std::unordered_map<std::string, std::string>& /*symbols*/)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+    if (details_.name.has_value()) {
+      EXPECT_EQ(plan.stateName(), *details_.name);
+    }
+    AXIOM_TEST_RETURN
+  }
+
+ private:
+  const WorkingTableScanDetails details_;
+};
+
+class FixedPointMatcher : public PlanMatcherImpl<FixedPointNode> {
+ public:
+  FixedPointMatcher() = default;
+
+  explicit FixedPointMatcher(FixedPointDetails details)
+      : PlanMatcherImpl<FixedPointNode>{}, details_{std::move(details)} {}
+
+  MatchResult matchDetails(
+      const FixedPointNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+    if (details_.name.has_value()) {
+      EXPECT_EQ(plan.outputStateEntry(), *details_.name);
+    }
+    if (details_.anchor != nullptr) {
+      EXPECT_FALSE(plan.stateDeclarations().empty());
+      AXIOM_TEST_RETURN_IF_FAILURE
+      auto result = details_.anchor->match(
+          plan.stateDeclarations()[0]->initialPlan(),
+          symbols,
+          /*context=*/nullptr);
+      if (!result.match) {
+        return MatchResult::failure();
+      }
+    }
+    if (details_.step != nullptr) {
+      EXPECT_EQ(plan.plans().size(), 1);
+      AXIOM_TEST_RETURN_IF_FAILURE
+      auto result =
+          details_.step->match(plan.plans()[0], symbols, /*context=*/nullptr);
+      if (!result.match) {
+        return MatchResult::failure();
+      }
+    }
+    AXIOM_TEST_RETURN
+  }
+
+ private:
+  const FixedPointDetails details_;
 };
 
 class FilterMatcher : public PlanMatcherImpl<FilterNode> {
@@ -1945,6 +2010,32 @@ PlanMatcherBuilder& PlanMatcherBuilder::values(
   });
 
   matcher_->setAliases(toAliases(expected.front()->rowType()));
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::workingTableScan() {
+  VELOX_USER_CHECK_NULL(matcher_);
+  matcher_ = std::make_shared<WorkingTableScanMatcher>();
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::workingTableScan(
+    const WorkingTableScanDetails& details) {
+  VELOX_USER_CHECK_NULL(matcher_);
+  matcher_ = std::make_shared<WorkingTableScanMatcher>(details);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::fixedPoint() {
+  VELOX_USER_CHECK_NULL(matcher_);
+  matcher_ = std::make_shared<FixedPointMatcher>();
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::fixedPoint(
+    const FixedPointDetails& details) {
+  VELOX_USER_CHECK_NULL(matcher_);
+  matcher_ = std::make_shared<FixedPointMatcher>(details);
   return *this;
 }
 

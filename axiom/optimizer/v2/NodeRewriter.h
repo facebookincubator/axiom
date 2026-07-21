@@ -84,6 +84,10 @@ class NodeRewriter {
         return rewriteExchange(node->as<Exchange>(), context);
       case NodeType::kTableWrite:
         return rewriteTableWrite(node->as<TableWrite>(), context);
+      case NodeType::kWorkingTable:
+        return rewriteWorkingTable(node->as<WorkingTable>(), context);
+      case NodeType::kFixedPoint:
+        return rewriteFixedPoint(node->as<FixedPoint>(), context);
     }
     VELOX_UNREACHABLE();
   }
@@ -348,6 +352,22 @@ class NodeRewriter {
     }
     return builder_.template make<TableWrite>(
         {newInput, node->table(), node->kind(), node->columnExprs()});
+  }
+
+  virtual NodeCP rewriteWorkingTable(
+      const WorkingTable* node,
+      TContext& /*context*/) {
+    return node;
+  }
+
+  virtual NodeCP rewriteFixedPoint(const FixedPoint* node, TContext& context) {
+    NodeCP newAnchor = rewrite(node->anchor(), context);
+    NodeCP newStep = rewrite(node->step(), context);
+    if (newAnchor == node->anchor() && newStep == node->step()) {
+      return node;
+    }
+    return builder_.template make<FixedPoint>(
+        {newAnchor, newStep, node->name(), node->outputColumns()});
   }
 
   Builder& builder() {

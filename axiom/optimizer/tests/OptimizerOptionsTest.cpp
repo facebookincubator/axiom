@@ -96,6 +96,9 @@ TEST(OptimizerOptionsTest, normalizeRejectsInvalidValues) {
   VELOX_ASSERT_THROW(
       options.normalize(OptimizerOptions::kBroadcastSizeLimit, "100"),
       "Invalid capacity string");
+  VELOX_ASSERT_THROW(
+      options.normalize(OptimizerOptions::kFixedPointMaxIterations, "0"),
+      "fixed_point_max_iterations must be >= 1");
 }
 
 } // namespace facebook::axiom::optimizer
