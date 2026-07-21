@@ -114,6 +114,7 @@ PlanAndStats Optimizer::optimize(const MultiFragmentPlan::Options& options) {
   result.plan = std::make_shared<MultiFragmentPlan>(
       std::move(emitted.fragments), options);
   result.finishWrite = std::move(emitted.finishWrite);
+  result.prediction = std::move(emitted.prediction);
   return result;
 }
 

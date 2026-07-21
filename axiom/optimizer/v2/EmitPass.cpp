@@ -24,6 +24,7 @@
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/Schema.h"
 #include "axiom/optimizer/WriteStatsBuilder.h"
+#include "axiom/optimizer/v2/EstimateProvider.h"
 #include "axiom/optimizer/v2/ExprEmitter.h"
 #include "axiom/optimizer/v2/PhysicalProperties.h"
 #include "velox/core/PlanConsistencyChecker.h"
@@ -223,6 +224,12 @@ class Emitter {
         options_{options} {}
 
   velox::core::PlanNodePtr emit(NodeCP node) {
+    auto plan = emitNode(node);
+    recordPrediction(node, plan);
+    return plan;
+  }
+
+  velox::core::PlanNodePtr emitNode(NodeCP node) {
     switch (node->nodeType()) {
       case NodeType::kScan:
         return emitScan(*node->as<Scan>());
@@ -272,6 +279,19 @@ class Emitter {
 
   std::string nextId() {
     return std::to_string(nextNodeId_++);
+  }
+
+  // Records the estimated cardinality of IR 'node' against the emitted Velox
+  // 'plan's top node id, for EXPLAIN. Skips unknown cardinalities.
+  void recordPrediction(NodeCP node, const velox::core::PlanNodePtr& plan) {
+    if (plan == nullptr) {
+      return;
+    }
+    const auto& estimate = estimateProvider_.estimate(node);
+    if (estimate.cardinality.has_value()) {
+      prediction_[plan->id()] =
+          NodePrediction{.cardinality = *estimate.cardinality};
+    }
   }
 
   // Local exchange inserted below a final/single aggregation at numDrivers > 1
@@ -485,6 +505,13 @@ class Emitter {
   // commit or abort the write. Empty (bool false) for read-only queries.
   FinishWrite finishWrite_;
 
+  // Estimates IR-node cardinality for EXPLAIN, memoized over the emit-time IR.
+  EstimateProvider estimateProvider_;
+
+  // Per-node estimated cardinality keyed by emitted PlanNodeId; moved out via
+  // takePrediction.
+  NodePredictionMap prediction_;
+
  public:
   // Lowers 'root' (plus the output rename to 'outputNames') into fragments,
   // returning them with the root fragment last.
@@ -497,6 +524,11 @@ class Emitter {
   // any, to the caller. Empty for read-only queries.
   FinishWrite takeFinishWrite() {
     return std::move(finishWrite_);
+  }
+
+  // Transfers the per-node cardinality predictions collected during emit.
+  NodePredictionMap takePrediction() {
+    return std::move(prediction_);
   }
 };
 
@@ -783,19 +815,27 @@ velox::core::PlanNodePtr Emitter::emitRoot(
     NodeCP node,
     const ColumnVector& outputColumns,
     const std::vector<std::string>& outputNames) {
+  // Emit via emitNode, not emit, so the root's estimate is recorded once below
+  // against the outermost node (the trim/rename projection when one wraps it),
+  // rather than also against the inner node emit() would key it to.
+  velox::core::PlanNodePtr result;
   if (isIdentityLayout(*node, outputColumns, outputNames)) {
-    auto result = emit(node);
+    result = emitNode(node);
     // A scan with a rejected filter emits the filter's columns for the
     // FilterNode; trim them so they do not leak into the query output.
     if (result->outputType()->size() > outputColumns.size()) {
       result = projectToColumns(outputColumns, std::move(result));
     }
-    return result;
+  } else if (node->is(NodeType::kProject)) {
+    result = emitRootProject(*node->as<Project>(), outputColumns, outputNames);
+  } else {
+    result = wrapWithRenameProject(emitNode(node), outputColumns, outputNames);
   }
-  if (node->is(NodeType::kProject)) {
-    return emitRootProject(*node->as<Project>(), outputColumns, outputNames);
-  }
-  return wrapWithRenameProject(emit(node), outputColumns, outputNames);
+
+  // A trim or rename projection is cardinality-neutral, so the root's estimate
+  // annotates whichever node ends up outermost, so EXPLAIN shows it on top.
+  recordPrediction(node, result);
+  return result;
 }
 
 namespace {
@@ -2125,7 +2165,10 @@ EmitPass::Result EmitPass::run(
   VELOX_CHECK_EQ(outputColumns.size(), outputNames.size());
   Emitter emitter(session, evaluator, scanHandles, options);
   auto fragments = emitter.emitFragments(root, outputColumns, outputNames);
-  return Result{std::move(fragments), emitter.takeFinishWrite()};
+  return Result{
+      std::move(fragments),
+      emitter.takeFinishWrite(),
+      emitter.takePrediction()};
 }
 
 } // namespace facebook::axiom::optimizer::v2
