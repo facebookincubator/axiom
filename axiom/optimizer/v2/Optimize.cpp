@@ -16,6 +16,7 @@
 
 #include "axiom/optimizer/v2/Optimize.h"
 
+#include "axiom/optimizer/ExplainIo.h"
 #include "axiom/optimizer/v2/Builder.h"
 #include "axiom/optimizer/v2/DecorrelatePass.h"
 #include "axiom/optimizer/v2/EmitPass.h"
@@ -30,6 +31,44 @@
 #include "axiom/optimizer/v2/TranslatePass.h"
 
 namespace facebook::axiom::optimizer::v2 {
+
+namespace {
+
+// Bundles the outputs of the front-end passes shared by full optimization and
+// EXPLAIN (TYPE IO).
+struct FrontendResult {
+  TranslatePass::Result translated;
+  NodeCP pushed;
+};
+
+// Runs the front-end passes shared by `optimize` and `explainIo`. 'schema' and
+// 'builder' must outlive the returned IR.
+FrontendResult translateAndPushdown(
+    const logical_plan::LogicalPlanNode& plan,
+    Schema& schema,
+    velox::core::ExpressionEvaluator& evaluator,
+    Builder& builder) {
+  auto translated = TranslatePass::run(plan, schema, evaluator, builder);
+  NodeCP decorrelated = DecorrelatePass::run(translated.root, builder);
+  NodeCP limited = LimitAndOrderPass::run(decorrelated, builder);
+  NodeCP pushed = PushdownAndPrunePass::run(limited, builder, evaluator);
+  return {std::move(translated), pushed};
+}
+
+// Collects each Scan's base table and its pushed-down filter conjuncts.
+void collectScans(
+    NodeCP node,
+    std::vector<std::pair<BaseTableCP, ExprVector>>& tableFilters) {
+  if (node->is(NodeType::kScan)) {
+    const auto* scan = node->as<Scan>();
+    tableFilters.emplace_back(scan->baseTable(), scan->filters());
+  }
+  for (auto* input : node->inputs()) {
+    collectScans(input, tableFilters);
+  }
+}
+
+} // namespace
 
 PlanAndStats optimize(
     const logical_plan::LogicalPlanNode& plan,
@@ -49,12 +88,9 @@ PlanAndStats optimize(
   ScanHandleCache scanHandles;
 
   Builder builder;
-  auto translated = TranslatePass::run(plan, schema, evaluator, builder);
-  NodeCP decorrelated = DecorrelatePass::run(translated.root, builder);
-  NodeCP limited = LimitAndOrderPass::run(decorrelated, builder);
-  NodeCP pushed = PushdownAndPrunePass::run(limited, builder, evaluator);
+  auto frontend = translateAndPushdown(plan, schema, evaluator, builder);
   NodeCP folded = FoldMetadataAggregatePass::run(
-      pushed, builder, session, evaluator, scanHandles);
+      frontend.pushed, builder, session, evaluator, scanHandles);
   if (session.options().useFilteredTableStats) {
     EstimateLeafStatsPass::run(folded, session, evaluator, scanHandles);
   }
@@ -71,8 +107,8 @@ PlanAndStats optimize(
 
   EmitPass::Result emitted = EmitPass::run(
       root,
-      translated.outputColumns,
-      translated.outputNames,
+      frontend.translated.outputColumns,
+      frontend.translated.outputNames,
       session,
       evaluator,
       scanHandles,
@@ -83,6 +119,25 @@ PlanAndStats optimize(
       std::move(emitted.fragments), options);
   result.finishWrite = std::move(emitted.finishWrite);
   return result;
+}
+
+std::string explainIo(
+    const logical_plan::LogicalPlanNode& plan,
+    const connector::SchemaResolver& schemaResolver,
+    velox::core::ExpressionEvaluator& evaluator,
+    std::optional<CatalogSchemaTableName> outputTable) {
+  // Schema is owned here so its `connector::TablePtr`s — and the raw pointers
+  // the IR's `BaseTable` nodes hold into them — stay alive for the duration.
+  Schema schema(schemaResolver);
+
+  // Run only the passes that push predicates into scans; join ordering and Emit
+  // are not needed to report IO.
+  Builder builder;
+  auto frontend = translateAndPushdown(plan, schema, evaluator, builder);
+
+  std::vector<std::pair<BaseTableCP, ExprVector>> tableFilters;
+  collectScans(frontend.pushed, tableFilters);
+  return optimizer::explainIo(tableFilters, std::move(outputTable));
 }
 
 } // namespace facebook::axiom::optimizer::v2
