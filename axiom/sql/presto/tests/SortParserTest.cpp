@@ -183,6 +183,24 @@ TEST_F(SortParserTest, nonSelectedColumn) {
       parseSql(baseSelect + " ORDER BY 5"), "is not in the select list");
 }
 
+TEST_F(SortParserTest, windowInOrderBy) {
+  connector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+
+  // A window nested in an ORDER BY expression that also appears in the SELECT
+  // list: the sort key matches the SELECT item and reuses its window rather
+  // than being re-added as an unresolvable nested-window projection. The window
+  // is projected once, then the SELECT list, then the sort.
+  testSelect(
+      "SELECT a, a / sum(a) OVER () AS s FROM t ORDER BY a / sum(a) OVER () DESC",
+      matchScan("t").project().project().sort().output({"a", "s"}));
+
+  // The window appears only in the ORDER BY expression: it is widened into the
+  // projection, sorted on, then trimmed back to the SELECT list.
+  testSelect(
+      "SELECT a FROM t ORDER BY a / sum(a) OVER () DESC",
+      matchScan("t").project().project().sort().project().output({"a"}));
+}
+
 TEST_F(SortParserTest, ambiguousAlias) {
   connector_->addTable("t", ROW({"a", "b", "c"}, INTEGER()));
 

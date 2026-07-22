@@ -1180,8 +1180,8 @@ class RelationPlanner : public AstVisitor {
       builder_->dropHiddenColumns();
       return;
     }
-    extractNestedWindows(projections.value());
     if (orderBy == nullptr) {
+      extractNestedWindows(projections.value());
       builder_->project(projections.value());
       return;
     }
@@ -1191,6 +1191,13 @@ class RelationPlanner : public AstVisitor {
 
     auto ordinals = SortProjection::widenProjections(
         expansion.sortKeyExprs, expansion.preResolved, projections.value());
+    // Extract nested windows after widening. An ORDER BY expression that
+    // repeats a SELECT window (e.g. `x / SUM(x) OVER()`) is matched to its
+    // SELECT item by raw expression during widening, collapsing to an ordinal;
+    // extracting earlier would rewrite the SELECT item but not the sort key, so
+    // the two would no longer match and the sort key would be re-added as an
+    // unresolvable nested-window projection.
+    extractNestedWindows(projections.value());
     builder_->project(projections.value());
     SortProjection::sortAndTrim(
         *builder_,
