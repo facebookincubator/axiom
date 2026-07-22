@@ -1709,7 +1709,10 @@ std::optional<FragmentType> fragmentTypeContribution(NodeCP node) {
 }
 
 // Sets 'fragment.type' (and 'width' for kFixed) from the contents at 'node'. At
-// numWorkers == 1 all parallelism collapses to one task.
+// numWorkers == 1 all parallelism collapses to one task. A fragment with no
+// split source (no scan; only exchanges and/or values below) is single-task
+// regardless of its output partitioning: kSource requires connector splits to
+// drive its task count, so the fallback is kSingle, not kSource.
 void decideFragmentType(
     NodeCP node,
     int32_t numWorkers,
@@ -1719,7 +1722,7 @@ void decideFragmentType(
     return;
   }
   fragment.type =
-      fragmentTypeContribution(node).value_or(FragmentType::kSource);
+      fragmentTypeContribution(node).value_or(FragmentType::kSingle);
   if (fragment.type == FragmentType::kFixed) {
     fragment.width = numWorkers;
   }
