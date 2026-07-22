@@ -1757,20 +1757,16 @@ Translated Translator::translateSet(
 
       // Set-op via Join: each leg's columns become join keys, so all of each
       // leg's outputType is consumed.
-      Translated current = {
-          translateNode(
-              *set.inputs().front(),
-              allNames(*set.inputs().front()->outputType()))
-              .node,
-          {}};
+      Translated first = translateNode(
+          *set.inputs().front(), allNames(*set.inputs().front()->outputType()));
+      NodeCP node = first.node;
       for (size_t i = 1; i < set.inputs().size(); ++i) {
-        Translated other = {
+        NodeCP other =
             translateNode(
                 *set.inputs()[i], allNames(*set.inputs()[i]->outputType()))
-                .node,
-            {}};
-        const auto& leftColumns = current.node->outputColumns();
-        const auto& rightColumns = other.node->outputColumns();
+                .node;
+        const auto& leftColumns = node->outputColumns();
+        const auto& rightColumns = other->outputColumns();
         VELOX_CHECK_EQ(leftColumns.size(), rightColumns.size());
         ExprVector leftKeys;
         ExprVector rightKeys;
@@ -1782,9 +1778,9 @@ Translated Translator::translateSet(
           rightKeys.push_back(rightColumns[columnIndex]);
         }
         ColumnVector outputColumns{leftColumns};
-        current.node = builder_.make<Join>(
-            {current.node,
-             other.node,
+        node = builder_.make<Join>(
+            {node,
+             other,
              joinType,
              std::move(leftKeys),
              std::move(rightKeys),
@@ -1794,21 +1790,31 @@ Translated Translator::translateSet(
              std::move(outputColumns)});
       }
 
-      // Output schema is the left side's columns flowing through the Join
-      // unchanged.
-      const ColumnVector& outputColumns = current.node->outputColumns();
+      // Output columns are the first leg's, flowing through the Join unchanged.
+      // Resolve each output position by name through the first leg's scope so
+      // positions the leg collapsed to one Column (see translateProject) map
+      // both symbols to that shared Column.
       Scope scope;
-      populateScope(*set.outputType(), outputColumns, scope);
+      const auto& firstType = *set.inputs().front()->outputType();
+      for (size_t j = 0; j < set.outputType()->size(); ++j) {
+        auto it = first.scope.find(firstType.nameOf(j));
+        VELOX_CHECK(
+            it != first.scope.end(),
+            "Set-op leg scope missing column: {}",
+            firstType.nameOf(j));
+        scope[set.outputType()->nameOf(j)] = it->second;
+      }
 
       if (isDistinct) {
+        const ColumnVector& outputColumns = node->outputColumns();
         AggregateCP aggNode = builder_.make<Aggregate>(
-            {current.node,
+            {node,
              ExprVector{outputColumns.begin(), outputColumns.end()},
              AggregateCallVector{},
              outputColumns});
         return {aggNode, std::move(scope)};
       }
-      return {current.node, std::move(scope)};
+      return {node, std::move(scope)};
     }
   }
   VELOX_UNREACHABLE();
