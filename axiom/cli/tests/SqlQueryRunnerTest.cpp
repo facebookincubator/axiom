@@ -177,94 +177,6 @@ TEST_F(SqlQueryRunnerTest, parseMultipleWithInvalidStatement) {
       std::exception);
 }
 
-TEST_F(SqlQueryRunnerTest, explainPopulatesOptimizeTiming) {
-  auto runWithTiming = [&](std::string_view sql) {
-    QueryTiming timing;
-    SqlQueryRunner::RunOptions options{
-        .onComplete = [&](const QueryCompletionInfo& info) {
-          timing = info.timing;
-        }};
-    runner_->run(sql, options);
-    return timing;
-  };
-
-  // EXPLAIN (TYPE LOGICAL) does not populate optimize timing.
-  EXPECT_EQ(0, runWithTiming("EXPLAIN (TYPE LOGICAL) SELECT 1").optimize);
-
-  // All other EXPLAIN variants populate optimize timing.
-  EXPECT_GT(runWithTiming("EXPLAIN (TYPE GRAPH) SELECT 1").optimize, 0);
-  EXPECT_GT(runWithTiming("EXPLAIN (TYPE OPTIMIZED) SELECT 1").optimize, 0);
-  EXPECT_GT(runWithTiming("EXPLAIN SELECT 1").optimize, 0);
-  EXPECT_GT(runWithTiming("EXPLAIN (TYPE IO) SELECT 1").optimize, 0);
-
-  // EXPLAIN ANALYZE populates both optimize and execute timing.
-  auto analyzeTiming = runWithTiming("EXPLAIN ANALYZE SELECT 1");
-  EXPECT_GT(analyzeTiming.optimize, 0);
-  EXPECT_GT(analyzeTiming.execute, 0);
-}
-
-TEST_F(SqlQueryRunnerTest, explainCtas) {
-  {
-    auto result = run("EXPLAIN (TYPE LOGICAL) CREATE TABLE t AS SELECT 1 AS x");
-    ASSERT_TRUE(result.message.has_value());
-    EXPECT_THAT(
-        result.message.value(),
-        ::testing::HasSubstr("- TableWrite CREATE: -> ROW<rows:BIGINT>"));
-  }
-
-  {
-    auto result =
-        run("EXPLAIN (TYPE OPTIMIZED) CREATE TABLE t AS SELECT 1 AS x");
-    ASSERT_TRUE(result.message.has_value());
-    EXPECT_THAT(
-        result.message.value(),
-        ::testing::HasSubstr("TableWrite [1.00 rows] ->"));
-  }
-
-  {
-    auto result = run("EXPLAIN CREATE TABLE t AS SELECT 1 AS x");
-    ASSERT_TRUE(result.message.has_value());
-    EXPECT_THAT(result.message.value(), ::testing::HasSubstr("-- TableWrite"));
-  }
-
-  // EXPLAIN is side-effect-free.
-  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
-      run("SELECT * FROM t"), "Table not found: t");
-
-  // EXPLAIN ANALYZE runs the query and creates the table.
-  {
-    auto result = run("EXPLAIN ANALYZE CREATE TABLE t AS SELECT 1 AS x");
-    ASSERT_TRUE(result.message.has_value());
-    EXPECT_THAT(result.message.value(), ::testing::HasSubstr("-- TableWrite"));
-  }
-
-  {
-    auto result = run("SELECT * FROM t");
-    ASSERT_FALSE(result.message.has_value());
-    ASSERT_EQ(1, result.results.size());
-    test::assertEqualVectors(
-        result.results[0], makeRowVector({makeFlatVector<int32_t>({1})}));
-  }
-}
-
-TEST_F(SqlQueryRunnerTest, explainCreateTable) {
-  auto result = run("EXPLAIN CREATE TABLE t(x int)");
-  EXPECT_EQ(result.message, R"(CREATE TABLE test."default"."t")");
-
-  // EXPLAIN is side-effect-free.
-  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
-      run("SELECT * FROM t"), "Table not found: t");
-
-  // Fails if the table already exists.
-  run("CREATE TABLE t(x int)");
-  VELOX_ASSERT_THROW(
-      run("EXPLAIN CREATE TABLE t(x int)"), "Table already exists");
-
-  // IF NOT EXISTS succeeds even if the table exists.
-  result = run("EXPLAIN CREATE TABLE IF NOT EXISTS t(x int)");
-  EXPECT_EQ(result.message, R"(CREATE TABLE IF NOT EXISTS test."default"."t")");
-}
-
 TEST_F(SqlQueryRunnerTest, createTableRunsWritePath) {
   // Connectors that commit a new table in finishWrite (not createTable) rely on
   // CREATE TABLE running the write path. Inject a finishWrite error to confirm
@@ -276,23 +188,6 @@ TEST_F(SqlQueryRunnerTest, createTableRunsWritePath) {
 
   // A real CREATE runs the write path, surfacing the commit error.
   VELOX_ASSERT_THROW(run("CREATE TABLE t(x int)"), "boom from finishWrite");
-}
-
-TEST_F(SqlQueryRunnerTest, explainDropTable) {
-  // Fails if the table doesn't exist.
-  VELOX_ASSERT_THROW(run("EXPLAIN DROP TABLE t"), "Table does not exist");
-
-  // IF EXISTS succeeds even if the table doesn't exist.
-  auto result = run("EXPLAIN DROP TABLE IF EXISTS t");
-  EXPECT_EQ(result.message, R"(DROP TABLE IF EXISTS test."default"."t")");
-
-  run("CREATE TABLE t(x int)");
-
-  result = run("EXPLAIN DROP TABLE t");
-  EXPECT_EQ(result.message, R"(DROP TABLE test."default"."t")");
-
-  // EXPLAIN is side-effect-free.
-  run("DROP TABLE t");
 }
 
 TEST_F(SqlQueryRunnerTest, createAndDropSchema) {
@@ -341,38 +236,6 @@ TEST_F(SqlQueryRunnerTest, currentTimestamp) {
   auto row = fetchSingleRow("SELECT current_timestamp", options);
   auto packed = row->childAt(0)->as<SimpleVector<int64_t>>()->valueAt(0);
   EXPECT_EQ(unpackMillisUtc(packed), options.sessionStartTimeMs);
-}
-
-TEST_F(SqlQueryRunnerTest, explainFormatGraphviz) {
-  for (const auto& type : {"LOGICAL", "GRAPH"}) {
-    SCOPED_TRACE(type);
-
-    // FORMAT GRAPHVIZ produces DOT output.
-    auto graphviz = run(
-        fmt::format("EXPLAIN (TYPE {}, FORMAT GRAPHVIZ) SELECT 1 AS x", type));
-    ASSERT_TRUE(graphviz.message.has_value());
-    EXPECT_THAT(graphviz.message.value(), ::testing::HasSubstr("digraph"));
-
-    // Without FORMAT, produces text (no "digraph").
-    auto text = run(fmt::format("EXPLAIN (TYPE {}) SELECT 1 AS x", type));
-    ASSERT_TRUE(text.message.has_value());
-    EXPECT_THAT(
-        text.message.value(), ::testing::Not(::testing::HasSubstr("digraph")));
-  }
-
-  // FORMAT GRAPHVIZ with unsupported TYPE fails.
-  VELOX_ASSERT_USER_THROW(
-      run("EXPLAIN (TYPE OPTIMIZED, FORMAT GRAPHVIZ) SELECT 1 AS x"),
-      "EXPLAIN FORMAT GRAPHVIZ is supported for TYPE LOGICAL and TYPE GRAPH only");
-
-  VELOX_ASSERT_USER_THROW(
-      run("EXPLAIN (FORMAT GRAPHVIZ) SELECT 1 AS x"),
-      "EXPLAIN FORMAT GRAPHVIZ is supported for TYPE LOGICAL and TYPE GRAPH only");
-
-  // FORMAT JSON is rejected.
-  VELOX_ASSERT_USER_THROW(
-      run("EXPLAIN (FORMAT JSON) SELECT 1 AS x"),
-      "Unsupported EXPLAIN format: JSON");
 }
 
 TEST_F(SqlQueryRunnerTest, showSchemasWithLike) {
@@ -1102,53 +965,6 @@ TEST_F(SqlQueryRunnerTest, addColumn) {
   VELOX_ASSERT_THROW(
       run("ALTER TABLE no_such_table ADD COLUMN y VARCHAR"),
       "Table does not exist");
-}
-
-TEST_F(SqlQueryRunnerTest, explainAddColumn) {
-  auto findTable = [&]() {
-    auto metadata = facebook::axiom::connector::ConnectorMetadataRegistry::get(
-        testConnector_->connectorId());
-    return metadata->findTable({"default", "t"});
-  };
-
-  run("CREATE TABLE t(x BIGINT)");
-
-  auto result = run("EXPLAIN ALTER TABLE t ADD COLUMN y VARCHAR");
-  EXPECT_EQ(
-      result.message.value(),
-      R"(ALTER TABLE test."default"."t" ADD COLUMN y VARCHAR)");
-
-  // EXPLAIN must not have side effects.
-  ASSERT_NE(nullptr, findTable());
-  VELOX_ASSERT_EQ_TYPES(findTable()->type(), ROW({"x"}, {BIGINT()}));
-
-  VELOX_ASSERT_THROW(
-      run("EXPLAIN ALTER TABLE no_such_table ADD COLUMN y VARCHAR"),
-      "Table does not exist");
-
-  result =
-      run("EXPLAIN ALTER TABLE IF EXISTS no_such_table ADD COLUMN y VARCHAR");
-  EXPECT_EQ(
-      result.message.value(),
-      R"(ALTER TABLE IF EXISTS test."default"."no_such_table" ADD COLUMN y VARCHAR)");
-
-  // EXPLAIN throws when column already exists and !ifNotExists.
-  run("ALTER TABLE t ADD COLUMN dup VARCHAR");
-  VELOX_ASSERT_THROW(
-      run("EXPLAIN ALTER TABLE t ADD COLUMN dup INTEGER"),
-      "Column already exists");
-
-  // EXPLAIN with IF NOT EXISTS on existing column is a no-op (no throw).
-  result = run("EXPLAIN ALTER TABLE t ADD COLUMN IF NOT EXISTS dup INTEGER");
-  EXPECT_EQ(
-      result.message.value(),
-      R"(ALTER TABLE test."default"."t" ADD COLUMN IF NOT EXISTS dup INTEGER)");
-
-  // EXPLAIN must not have mutated the column type.
-  VELOX_EXPECT_EQ_TYPES(
-      findTable()->type(), ROW({"x", "dup"}, {BIGINT(), VARCHAR()}));
-
-  run("DROP TABLE t");
 }
 
 TEST_F(SqlQueryRunnerTest, call) {

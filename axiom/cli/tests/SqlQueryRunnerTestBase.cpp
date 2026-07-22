@@ -45,10 +45,9 @@ void SqlQueryRunnerTestBase::TearDown() {
 std::unique_ptr<SqlQueryRunner> SqlQueryRunnerTestBase::makeRunner(
     const std::string& connectorId,
     std::function<std::string()> queryIdGenerator,
-    PermissionCheck permissionCheck,
-    bool useOptimizerV2) {
+    PermissionCheck permissionCheck) {
   auto runner = std::make_unique<SqlQueryRunner>(
-      "test_user", &progressScheduler_, useOptimizerV2);
+      "test_user", &progressScheduler_, useV2_);
 
   auto initConnectors = [&]() {
     testConnector_ =

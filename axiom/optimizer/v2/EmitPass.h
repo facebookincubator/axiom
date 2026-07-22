@@ -18,6 +18,7 @@
 
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/optimizer/OptimizerSession.h"
+#include "axiom/optimizer/ToVelox.h"
 #include "axiom/optimizer/v2/Node.h"
 #include "axiom/optimizer/v2/ScanHandle.h"
 #include "velox/core/Expressions.h"
@@ -34,6 +35,9 @@ class EmitPass {
     std::vector<ExecutableFragment> fragments;
     /// Set when the plan writes a table; empty otherwise.
     FinishWrite finishWrite;
+    /// Per-node estimated cardinality, keyed by emitted `PlanNodeId`, for
+    /// EXPLAIN. Empty when estimates are unavailable.
+    NodePredictionMap prediction;
   };
 
   /// Lowers the tree-IR rooted at 'root' into fragments, projecting to the

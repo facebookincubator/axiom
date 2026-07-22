@@ -38,7 +38,8 @@ class SqlQueryRunnerTestBase : public ::testing::Test,
   // Installs the process-wide Velox MemoryManager the runner allocates from.
   static void SetUpTestCase();
 
-  // Builds the default runner_ (optimizer v1). Override to select v2.
+  // Builds runner_ for the optimizer selected by useV2_ (default v1). A derived
+  // fixture selects v2 by setting useV2_ before calling this.
   void SetUp() override;
 
   // Destroys runner_ and unregisters every connector makeRunner() created.
@@ -46,12 +47,12 @@ class SqlQueryRunnerTestBase : public ::testing::Test,
 
   // Builds a SqlQueryRunner over a freshly created TestConnector registered
   // under 'connectorId', wired as the default connector/schema. The connector
-  // is unregistered in TearDown. 'useOptimizerV2' selects the optimizer.
+  // is unregistered in TearDown. Selects the optimizer per 'useV2_', which a
+  // parameterized fixture sets before calling.
   std::unique_ptr<SqlQueryRunner> makeRunner(
       const std::string& connectorId = "test",
       std::function<std::string()> queryIdGenerator = {},
-      PermissionCheck permissionCheck = {},
-      bool useOptimizerV2 = false);
+      PermissionCheck permissionCheck = {});
 
   // Runs 'sql' on runner_ with default options.
   SqlQueryRunner::SqlResult run(std::string_view sql);
@@ -76,6 +77,10 @@ class SqlQueryRunnerTestBase : public ::testing::Test,
   folly::FunctionScheduler progressScheduler_;
   std::unique_ptr<SqlQueryRunner> runner_;
   std::shared_ptr<facebook::axiom::connector::TestConnector> testConnector_;
+
+  // Selects the optimizer makeRunner() builds; a parameterized fixture sets
+  // this before calling makeRunner() and branches its expectations on v1 vs v2.
+  bool useV2_{false};
 
  private:
   std::vector<std::string> connectorIds_;
