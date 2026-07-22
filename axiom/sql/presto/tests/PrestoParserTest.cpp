@@ -900,6 +900,12 @@ TEST_F(PrestoParserTest, intersect) {
       matcherAll);
 }
 
+TEST_F(PrestoParserTest, unionAllUnresolvedColumn) {
+  VELOX_ASSERT_THROW(
+      parseSql("SELECT n_name FROM nation UNION ALL SELECT n_name FROM region"),
+      "Cannot resolve column");
+}
+
 TEST_F(PrestoParserTest, exists) {
   {
     auto matcher =

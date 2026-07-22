@@ -713,6 +713,13 @@ class PlanBuilder {
     };
   }
 
+  /// Returns the enclosing scope this builder resolves against for correlated
+  /// references, or nullptr if there is none. Unlike scope(), this does not
+  /// expose the builder's own output columns.
+  const Scope& outerScope() const {
+    return outerScope_;
+  }
+
   /// Returns true if the given unqualified name resolves to a column in this
   /// builder's output without chaining to outer scopes.
   bool hasColumn(const std::string& name) const;
