@@ -98,17 +98,6 @@ std::string toString(ArithmeticBinaryExpression::Operator op) {
   VELOX_FAIL("Unsupported arithmetic operator");
 }
 
-std::string toString(LogicalBinaryExpression::Operator op) {
-  switch (op) {
-    case LogicalBinaryExpression::Operator::kAnd:
-      return "and";
-    case LogicalBinaryExpression::Operator::kOr:
-      return "or";
-  }
-
-  VELOX_FAIL("Unsupported logical operator");
-}
-
 std::string toString(ComparisonExpression::Operator op) {
   switch (op) {
     case ComparisonExpression::Operator::kEqual:
@@ -160,16 +149,6 @@ void AstPrinter::visitArithmeticBinaryExpression(
   printHeader("Arithmetic", node, [&](std::ostream& out) {
     out << toString(node->op());
   });
-
-  indent_++;
-  printChild("Left", node->left());
-  printChild("Right", node->right());
-  indent_--;
-}
-
-void AstPrinter::visitLogicalBinaryExpression(LogicalBinaryExpression* node) {
-  printHeader(
-      "Logical", node, [&](std::ostream& out) { out << toString(node->op()); });
 
   indent_++;
   printChild("Left", node->left());

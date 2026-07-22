@@ -15,6 +15,7 @@
  */
 
 #include <fmt/format.h>
+#include <gmock/gmock.h>
 #include <limits>
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -1122,7 +1123,6 @@ TEST_F(ExpressionParserTest, nestingDepthCapped) {
         "Expression exceeds maximum nesting depth");
   };
   expectRejected("1", " + 0");
-  expectRejected("true", " AND true");
   expectRejected("'a'", " || 'a'");
   expectRejected("x", "[1]");
 
@@ -1130,6 +1130,83 @@ TEST_F(ExpressionParserTest, nestingDepthCapped) {
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(chain("SELECT 1", " UNION ALL SELECT 1", past)),
       "Expression exceeds maximum nesting depth");
+}
+
+// A same-operator OR chain longer than the depth cap flattens to one n-ary
+// call.
+TEST_F(ExpressionParserTest, deepOrChainFlattens) {
+  const uint32_t termCount = ParserOptions::kMaxExpressionDepthDefault + 1;
+  std::string sql = "1 = 0";
+  for (uint32_t i = 1; i < termCount; ++i) {
+    sql += " OR 1 = " + std::to_string(i);
+  }
+  auto expr = parseExpr(sql);
+  ASSERT_TRUE(expr->isSpecialForm());
+  auto* orExpr = expr->as<lp::SpecialFormExpr>();
+  EXPECT_EQ(lp::SpecialForm::kOr, orExpr->form());
+  EXPECT_EQ(termCount, orExpr->inputs().size());
+}
+
+// AND flattens the same way as OR.
+TEST_F(ExpressionParserTest, andChainFlattens) {
+  auto expr = parseExpr("1 = 0 AND 2 = 0 AND 3 = 0");
+  ASSERT_TRUE(expr->isSpecialForm());
+  auto* andExpr = expr->as<lp::SpecialFormExpr>();
+  EXPECT_EQ(lp::SpecialForm::kAnd, andExpr->form());
+  EXPECT_EQ(3, andExpr->inputs().size());
+}
+
+// A different operator on the left child stops the flatten, so a nested AND
+// remains nested inside the OR.
+TEST_F(ExpressionParserTest, mixedOperatorsNotFlattened) {
+  auto expr = parseExpr("1 = 0 AND 2 = 0 OR 3 = 0");
+  ASSERT_TRUE(expr->isSpecialForm());
+  auto* orExpr = expr->as<lp::SpecialFormExpr>();
+  EXPECT_EQ(lp::SpecialForm::kOr, orExpr->form());
+  ASSERT_EQ(2, orExpr->inputs().size());
+  ASSERT_TRUE(orExpr->inputAt(0)->isSpecialForm());
+  auto* andExpr = orExpr->inputAt(0)->as<lp::SpecialFormExpr>();
+  EXPECT_EQ(lp::SpecialForm::kAnd, andExpr->form());
+  EXPECT_EQ(2, andExpr->inputs().size());
+}
+
+// Flattening preserves the operands' left-to-right order.
+TEST_F(ExpressionParserTest, flattenPreservesOperandOrder) {
+  auto expr = parseExpr("1 = 2 OR 3 = 4 OR 5 = 6");
+  ASSERT_TRUE(expr->isSpecialForm());
+  std::vector<std::string> operands;
+  for (const auto& input : expr->as<lp::SpecialFormExpr>()->inputs()) {
+    operands.push_back(input->toString());
+  }
+  EXPECT_THAT(
+      operands, testing::ElementsAre("eq(1, 2)", "eq(3, 4)", "eq(5, 6)"));
+}
+
+// Only the left spine flattens, so an explicitly right-nested same-operator
+// chain keeps the parenthesized group nested.
+TEST_F(ExpressionParserTest, rightNestedChainNotFlattened) {
+  auto expr = parseExpr("1 = 0 OR (2 = 0 OR 3 = 0)");
+  ASSERT_TRUE(expr->isSpecialForm());
+  auto* orExpr = expr->as<lp::SpecialFormExpr>();
+  EXPECT_EQ(lp::SpecialForm::kOr, orExpr->form());
+  ASSERT_EQ(2, orExpr->inputs().size());
+  ASSERT_TRUE(orExpr->inputAt(1)->isSpecialForm());
+  auto* nested = orExpr->inputAt(1)->as<lp::SpecialFormExpr>();
+  EXPECT_EQ(lp::SpecialForm::kOr, nested->form());
+  EXPECT_EQ(2, nested->inputs().size());
+}
+
+// A flattened chain wider than max_expression_width is rejected.
+TEST_F(ExpressionParserTest, chainWiderThanCapRejected) {
+  ParserOptions options;
+  options.maxExpressionWidth = 3;
+  auto parser = PrestoParser(
+      kConnectorId, "default", makeParserSession(std::move(options)));
+
+  EXPECT_NE(nullptr, parser.parseExpression("1 = 0 OR 1 = 1 OR 1 = 2", true));
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parser.parseExpression("1 = 0 OR 1 = 1 OR 1 = 2 OR 1 = 3", true),
+      "Expression exceeds maximum width");
 }
 
 } // namespace

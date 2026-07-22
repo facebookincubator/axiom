@@ -640,53 +640,6 @@ class QuantifiedComparisonExpression : public Expression {
 };
 
 // Logical Expressions
-class LogicalBinaryExpression : public Expression {
- public:
-  enum class Operator { kAnd, kOr };
-
-  LogicalBinaryExpression(
-      NodeLocation location,
-      Operator op,
-      const ExpressionPtr& left,
-      const ExpressionPtr& right)
-      : Expression(NodeType::kLogicalBinaryExpression, location),
-        operator_(op),
-        left_(left),
-        right_(right) {}
-
-  Operator op() const {
-    return operator_;
-  }
-
-  const ExpressionPtr& left() const {
-    return left_;
-  }
-
-  const ExpressionPtr& right() const {
-    return right_;
-  }
-
-  void accept(AstVisitor* visitor) override;
-
-  size_t hash() const override {
-    return folly::hash::hash_combine(
-        std::hash<Operator>{}(operator_),
-        Node::deepHash(left_),
-        Node::deepHash(right_));
-  }
-
- protected:
-  bool equals(const Node& other) const override {
-    const auto& o = *other.as<LogicalBinaryExpression>();
-    return operator_ == o.operator_ && Node::deepEqual(left_, o.left_) &&
-        Node::deepEqual(right_, o.right_);
-  }
-
- private:
-  Operator operator_;
-  ExpressionPtr left_;
-  ExpressionPtr right_;
-};
 
 class NotExpression : public Expression {
  public:

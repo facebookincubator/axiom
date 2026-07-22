@@ -162,10 +162,6 @@ class AstVisitor {
   }
 
   // Logical Expressions
-  virtual void visitLogicalBinaryExpression(LogicalBinaryExpression* node) {
-    defaultVisit(node);
-  }
-
   virtual void visitNotExpression(NotExpression* node) {
     defaultVisit(node);
   }
