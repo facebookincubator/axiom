@@ -2838,7 +2838,19 @@ SqlStatementPtr parseShowTables(
       metadata->listTableNamesSupported(),
       "SHOW TABLES is not supported for catalog '{}'",
       connectorId);
-  auto tableNames = metadata->listTableNames(session, schema);
+  // Push a prefix from a LIKE pattern (e.g. 'foo%') into the listing when the
+  // connector supports it.
+  std::vector<std::string> tableNames;
+  std::string prefix;
+  if (showTables.likePattern().has_value() &&
+      metadata->listTableNamesPrefixSupported()) {
+    prefix = likePrefix(showTables.likePattern().value(), showTables.escape());
+  }
+  if (!prefix.empty()) {
+    tableNames = metadata->listTableNames(session, schema, prefix);
+  } else {
+    tableNames = metadata->listTableNames(session, schema);
+  }
   std::sort(tableNames.begin(), tableNames.end());
 
   std::vector<Variant> data;
@@ -3183,6 +3195,35 @@ SqlStatementPtr doPlan(
       "Unsupported statement type");
 }
 } // namespace
+
+std::string likePrefix(
+    std::string_view pattern,
+    const std::optional<std::string>& escape) {
+  if (escape.has_value()) {
+    VELOX_USER_CHECK_EQ(
+        escape->size(), 1, "Escape string must be a single character");
+  }
+  const bool hasEscape = escape.has_value();
+  const char escapeChar = hasEscape ? escape->front() : '\0';
+  std::string prefix;
+  for (size_t i = 0; i < pattern.size(); ++i) {
+    const char c = pattern[i];
+    if (hasEscape && c == escapeChar) {
+      // The next character is escaped to a literal; a trailing escape char is
+      // malformed, so stop and let the residual LIKE surface the error.
+      if (i + 1 >= pattern.size()) {
+        break;
+      }
+      prefix.push_back(pattern[++i]);
+      continue;
+    }
+    if (c == '%' || c == '_') {
+      break;
+    }
+    prefix.push_back(c);
+  }
+  return prefix;
+}
 
 SqlStatementPtr PrestoParser::doParse(
     std::string_view sql,

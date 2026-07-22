@@ -72,4 +72,12 @@ class PrestoParser {
   const ParserSessionPtr session_;
 };
 
+/// Returns the literal leading substring of a SQL LIKE 'pattern' up to the
+/// first unescaped '%' or '_' wildcard, honoring 'escape'. Returns "" when the
+/// pattern starts with a wildcard (e.g. '%foo'), i.e. has no usable prefix.
+/// @throws A user error if 'escape' is set but is not a single character.
+std::string likePrefix(
+    std::string_view pattern,
+    const std::optional<std::string>& escape);
+
 } // namespace axiom::sql::presto
