@@ -1100,18 +1100,35 @@ TEST_F(ExpressionParserTest, mixedCaseColumnName) {
       "SELECT ORDERINGID FROM mixedCase", matchScan().project().output()));
 }
 
-TEST_F(ExpressionParserTest, expressionDepthCapBoundary) {
-  auto chain = [](uint32_t terms) {
-    std::string expr = "1";
-    for (uint32_t i = 0; i < terms; ++i) {
-      expr += " + 0";
-    }
-    return expr;
+TEST_F(ExpressionParserTest, nestingDepthCapped) {
+  auto chain =
+      [](std::string_view head, std::string_view unit, uint32_t repetitions) {
+        std::string sql{head};
+        for (uint32_t i = 0; i < repetitions; ++i) {
+          sql += unit;
+        }
+        return sql;
+      };
+
+  // A shallow expression parses.
+  EXPECT_NE(nullptr, parseExpr(chain("1", " + 0", 8)));
+
+  // Nesting past the cap fails cleanly, regardless of construct kind.
+  const uint32_t past = ParserOptions::kMaxExpressionDepthDefault + 1;
+  auto expectRejected = [&](std::string_view head, std::string_view unit) {
+    SCOPED_TRACE(head);
+    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+        parseExpr(chain(head, unit, past)),
+        "Expression exceeds maximum nesting depth");
   };
-  EXPECT_NE(
-      nullptr, parseExpr(chain(ParserOptions::kMaxExpressionDepthDefault - 1)));
+  expectRejected("1", " + 0");
+  expectRejected("true", " AND true");
+  expectRejected("'a'", " || 'a'");
+  expectRejected("x", "[1]");
+
+  // UNION nests at the statement level, so it goes through parseSql.
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
-      parseExpr(chain(ParserOptions::kMaxExpressionDepthDefault)),
+      parseSql(chain("SELECT 1", " UNION ALL SELECT 1", past)),
       "Expression exceeds maximum nesting depth");
 }
 
