@@ -115,6 +115,20 @@ PlanAndStats Optimizer::optimize(const MultiFragmentPlan::Options& options) {
       std::move(emitted.fragments), options);
   result.finishWrite = std::move(emitted.finishWrite);
   result.prediction = std::move(emitted.prediction);
+
+  // The plan's output must have one column per logical-plan output column. A
+  // TableWrite root emits write-stats rows instead of the query columns, so it
+  // is exempt.
+  if (!plan_.is(logical_plan::NodeKind::kTableWrite)) {
+    const auto& veloxOutput =
+        result.plan->fragments().back().fragment.planNode->outputType();
+    VELOX_CHECK(
+        veloxOutput->equivalent(*plan_.outputType()),
+        "Plan output type does not match the logical plan output type: {} vs {}",
+        veloxOutput->toString(),
+        plan_.outputType()->toString());
+  }
+
   return result;
 }
 
