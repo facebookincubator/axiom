@@ -43,3 +43,6 @@ SELECT a, b FROM t ORDER BY b OFFSET 0 LIMIT 3
 ----
 -- count 0
 SELECT a, b FROM t OFFSET 0 LIMIT 0
+----
+-- count 13
+SELECT a, b FROM t OFFSET 2

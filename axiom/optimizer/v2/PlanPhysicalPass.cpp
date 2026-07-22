@@ -682,7 +682,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     }
 
     NodeCP partial = builder().make<Limit>(
-        {newInput, /*offset=*/0, node->offset() + node->count()});
+        {newInput, /*offset=*/0, node->offsetPlusCount()});
     return builder().make<Limit>(
         {gather(partial), node->offset(), node->count()});
   }

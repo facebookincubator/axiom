@@ -1091,40 +1091,33 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
   auto sortOrder = toSortOrders(op.distribution().orderTypes());
   auto keys = toFieldRefs(op.distribution().orderKeys());
 
+  // An unbounded sort (ORDER BY with no LIMIT) is a full sort; a trailing Limit
+  // applies any offset (its no-limit count keeps every remaining row). A
+  // bounded sort is a TopN over offset + count.
   if (isSingle_) {
     auto input = makeFragment(op.input(), fragment, stages);
 
     if (options_.numDrivers == 1) {
-      if (op.limit <= 0) {
-        return std::make_shared<velox::core::OrderByNode>(
-            nextId(), keys, sortOrder, false, input);
-      }
-
-      auto node =
-          addFinalTopN(nextId(), keys, sortOrder, op.limit + op.offset, input);
-
+      auto node = op.isNoLimit()
+          ? std::make_shared<velox::core::OrderByNode>(
+                nextId(), keys, sortOrder, false, input)
+          : addFinalTopN(
+                nextId(), keys, sortOrder, op.limit + op.offset, input);
       if (op.offset > 0) {
         return addFinalLimit(nextId(), op.offset, op.limit, node);
       }
-
       return node;
     }
 
-    velox::core::PlanNodePtr node;
-    if (op.limit <= 0) {
-      node = std::make_shared<velox::core::OrderByNode>(
-          nextId(), keys, sortOrder, true, input);
-    } else {
-      node = addPartialTopN(
-          nextId(), keys, sortOrder, op.limit + op.offset, input);
-    }
-
+    auto node = op.isNoLimit()
+        ? std::make_shared<velox::core::OrderByNode>(
+              nextId(), keys, sortOrder, true, input)
+        : addPartialTopN(
+              nextId(), keys, sortOrder, op.limit + op.offset, input);
     node = addLocalMerge(nextId(), keys, sortOrder, node);
-
-    if (op.limit > 0) {
+    if (!op.isNoLimit() || op.offset > 0) {
       return addFinalLimit(nextId(), op.offset, op.limit, node);
     }
-
     return node;
   }
 
@@ -1138,7 +1131,7 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
   const bool singleDriver = options_.numDrivers == 1;
 
   velox::core::PlanNodePtr node;
-  if (op.limit <= 0) {
+  if (op.isNoLimit()) {
     node = std::make_shared<velox::core::OrderByNode>(
         nextId(), keys, sortOrder, /*isPartial=*/!singleDriver, input);
   } else if (singleDriver) {
@@ -1164,7 +1157,7 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
   fragment.inputStages.emplace_back(merge->id(), source.taskPrefix);
   stages.push_back(std::move(source));
 
-  if (op.limit > 0) {
+  if (!op.isNoLimit() || op.offset > 0) {
     return addFinalLimit(nextId(), op.offset, op.limit, merge);
   }
   return merge;

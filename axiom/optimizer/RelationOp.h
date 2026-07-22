@@ -721,11 +721,19 @@ struct OrderBy : public RelationOp {
       RelationOpPtr input,
       ExprVector orderKeys,
       OrderTypeVector orderTypes,
-      int64_t limit = -1,
+      int64_t limit = std::numeric_limits<int64_t>::max(),
       int64_t offset = 0);
 
   const int64_t limit;
   const int64_t offset;
+
+  /// True when the sort keeps every row: 'limit' is the no-limit sentinel
+  /// INT64_MAX, or the effective bound 'limit + offset' saturates it. The '>='
+  /// (rather than '>') is required so the bare sentinel is recognized when
+  /// 'offset' is 0.
+  bool isNoLimit() const {
+    return limit >= std::numeric_limits<int64_t>::max() - offset;
+  }
 
   void accept(
       const RelationOpVisitor& visitor,
@@ -758,6 +766,9 @@ struct Limit : public RelationOp {
   const int64_t limit;
   const int64_t offset;
 
+  /// True when this Limit keeps every row: 'limit' is the no-limit sentinel
+  /// INT64_MAX, or the effective bound 'limit + offset' saturates it. See
+  /// OrderBy::isNoLimit for why the comparison is '>='.
   bool isNoLimit() const {
     static const auto kMax = std::numeric_limits<int64_t>::max();
     return limit >= (kMax - offset);
