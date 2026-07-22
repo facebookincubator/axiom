@@ -75,6 +75,28 @@ TEST_F(AggregationParserTest, aggregateInWindowFrameBound) {
       matchScan("nation").aggregate().project().output());
 }
 
+// On a scalar function, DISTINCT is ignored while FILTER and ORDER BY are
+// rejected, matching Presto.
+TEST_F(AggregationParserTest, modifiersOnScalarFunction) {
+  connector_->addTable("t", ROW({"a", "k"}, {ARRAY(BIGINT()), BIGINT()}));
+
+  // DISTINCT is ignored: flatten(DISTINCT array_agg(a)) is
+  // flatten(array_agg(a)).
+  testSelect(
+      "SELECT flatten(DISTINCT array_agg(a)) FROM t GROUP BY k",
+      matchScan("t").aggregate({"k"}, {"array_agg(a)"}).project().output());
+
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(
+          "SELECT flatten(array_agg(a)) FILTER (WHERE k > 0) FROM t GROUP BY k"),
+      "Filter is only valid for aggregation functions");
+
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(
+          "SELECT flatten(array_agg(a) ORDER BY max(k)) FROM t GROUP BY k"),
+      "ORDER BY is only valid for aggregation functions");
+}
+
 TEST_F(AggregationParserTest, nestedAggregateRejected) {
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT sum(count(n_nationkey)) FROM nation"),
