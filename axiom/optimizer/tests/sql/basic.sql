@@ -87,5 +87,16 @@ SELECT * FROM (VALUES ROW(1), ROW(CAST(2 AS bigint))) AS t(x)
 ----
 -- VALUES with complex types requiring mixed-direction coercion per child.
 -- duckdb: VALUES (MAP {1::bigint: 1.0}), (MAP {2::bigint: 2.0})
-SELECT * FROM (VALUES ROW(MAP(ARRAY[1], ARRAY[1.0])), ROW(MAP(ARRAY[CAST(2 AS bigint)], ARRAY[CAST(2.0 AS real)]))) AS t(x)
+SELECT * FROM (VALUES
+  ROW(MAP(ARRAY[1], ARRAY[1.0])),
+  ROW(MAP(ARRAY[CAST(2 AS bigint)], ARRAY[CAST(2.0 AS real)])),
+) AS t(x)
+----
+-- VALUES rows mixing a constant, a lambda call, and a non-deterministic
+-- expression, with the first column coerced across rows.
+-- duckdb: VALUES (1.0, 25::bigint, true), (2.5, 4::bigint, true)
+SELECT * FROM (VALUES
+  (1, element_at(transform(sequence(1, 5), x -> x * x), 5), random() BETWEEN 0 AND 1),
+  (2.5, element_at(transform(sequence(1, 3), x -> x + 1), 3), random() >= 0),
+)
 ----

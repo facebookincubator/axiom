@@ -18,6 +18,7 @@
 
 #include "axiom/optimizer/v2/Builder.h"
 #include "velox/core/ExpressionEvaluator.h"
+#include "velox/vector/ComplexVector.h"
 
 namespace facebook::axiom::optimizer::v2 {
 
@@ -38,6 +39,12 @@ class ExprSimplifier {
   /// Returns the simplified `expr`, or `expr` unchanged if no rule
   /// applies.
   ExprCP simplify(ExprCP expr);
+
+  /// Evaluates a column-free `expr` to a single value. Places no determinism
+  /// or constant-ness requirement on `expr`: for contexts like VALUES where an
+  /// expression is evaluated exactly once. `expr` must not reference any
+  /// columns.
+  velox::Variant evaluate(ExprCP expr);
 
   /// Splits a filter `predicate` into conjuncts (AND-flattened),
   /// simplifies each, and applies filter semantics: a literal `true`
@@ -61,6 +68,9 @@ class ExprSimplifier {
 
   Builder& builder_;
   velox::core::ExpressionEvaluator& evaluator_;
+
+  // Reusable single empty row, the input for evaluate().
+  velox::RowVectorPtr emptyInput_;
 };
 
 } // namespace facebook::axiom::optimizer::v2
