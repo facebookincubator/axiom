@@ -349,54 +349,58 @@ class Translator {
         simplifier_(builder, evaluator) {}
 
   TranslatePass::Result run(const lp::LogicalPlanNode& plan) {
+    // The query output is a list of (sourceName, outputName) pairs, one per
+    // output position. An OutputNode names them explicitly and may repeat a
+    // source column under several output names; a bare plan (no OutputNode)
+    // uses its own outputType field names for both. Each position resolves by
+    // name through the translated scope: identical output expressions collapse
+    // to one Column, so the scope -- not the node's column list -- carries
+    // every output position.
+    const lp::LogicalPlanNode* node;
+    std::vector<std::pair<std::string, std::string>> outputSpec;
     if (plan.is(lp::NodeKind::kOutput)) {
       const auto& output = *plan.as<lp::OutputNode>();
-      const auto& child = *output.onlyInput();
-      const auto& childOutputType = *child.outputType();
-      // Seed `required` with just the LP names the OutputNode references.
-      // Names not referenced flow as "unused" through the child translation
-      // and get pruned where producers honor the required-set.
-      LpNameSet required;
-      required.reserve(output.entries().size());
+      node = &*output.onlyInput();
+      const auto& childOutputType = *node->outputType();
+      outputSpec.reserve(output.entries().size());
       for (const auto& entry : output.entries()) {
         VELOX_CHECK_LT(entry.index, childOutputType.size());
-        required.insert(childOutputType.nameOf(entry.index));
+        outputSpec.emplace_back(
+            childOutputType.nameOf(entry.index), entry.name);
       }
-      Translated inner = translateNode(child, required);
-      ColumnVector outputColumns;
-      std::vector<std::string> outputNames;
-      outputColumns.reserve(output.entries().size());
-      outputNames.reserve(output.entries().size());
-      for (const auto& entry : output.entries()) {
-        // Resolve via LP-name → Column* scope rather than positionally:
-        // the IR's outputColumns may be narrower than the LP child's
-        // outputType after dup-collapse, and the LP contract is that
-        // same-name == same-thing in a node's outputType.
-        const auto& name = childOutputType.nameOf(entry.index);
-        auto it = inner.scope.find(name);
-        VELOX_CHECK(
-            it != inner.scope.end(),
-            "OutputNode entry name not found in inner scope: {}",
-            name);
-        outputColumns.push_back(it->second);
-        outputNames.push_back(entry.name);
+    } else {
+      node = &plan;
+      const auto& outputType = *plan.outputType();
+      outputSpec.reserve(outputType.size());
+      for (size_t i = 0; i < outputType.size(); ++i) {
+        outputSpec.emplace_back(outputType.nameOf(i), outputType.nameOf(i));
       }
-      return {inner.node, std::move(outputColumns), std::move(outputNames)};
     }
-    // Bare plan (no OutputNode): nothing has narrowed the required set, so
-    // request everything the root advertises. Output names are best-effort here
-    // (the column's own name) and not guaranteed without an OutputNode to pin
-    // them -- see the optimize() contract in Optimize.h.
-    Translated translated = translateNode(plan, allNames(*plan.outputType()));
+
+    // Request only the referenced source names; unreferenced names flow through
+    // as unused and get pruned where producers honor the required-set.
+    LpNameSet required;
+    required.reserve(outputSpec.size());
+    for (const auto& [sourceName, outputName] : outputSpec) {
+      required.insert(sourceName);
+    }
+
+    Translated translated = translateNode(*node, required);
+
+    ColumnVector outputColumns;
     std::vector<std::string> outputNames;
-    outputNames.reserve(translated.node->outputColumns().size());
-    for (ColumnCP column : translated.node->outputColumns()) {
-      outputNames.emplace_back(column->outputName());
+    outputColumns.reserve(outputSpec.size());
+    outputNames.reserve(outputSpec.size());
+    for (const auto& [sourceName, outputName] : outputSpec) {
+      auto it = translated.scope.find(sourceName);
+      VELOX_CHECK(
+          it != translated.scope.end(),
+          "Output name not found in scope: {}",
+          sourceName);
+      outputColumns.push_back(it->second);
+      outputNames.push_back(outputName);
     }
-    return {
-        translated.node,
-        ColumnVector{translated.node->outputColumns()},
-        std::move(outputNames)};
+    return {translated.node, std::move(outputColumns), std::move(outputNames)};
   }
 
  private:
