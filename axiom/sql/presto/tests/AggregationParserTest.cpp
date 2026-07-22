@@ -64,6 +64,17 @@ TEST_F(AggregationParserTest, countStar) {
   }
 }
 
+// A window whose ORDER BY key is an aggregate and whose frame is a RANGE
+// offset, over a GROUP BY.
+TEST_F(AggregationParserTest, aggregateInWindowFrameBound) {
+  testSelect(
+      "SELECT count(*) OVER ("
+      "         ORDER BY max(n_nationkey) "
+      "         RANGE BETWEEN 5 PRECEDING AND CURRENT ROW) "
+      "FROM nation GROUP BY n_regionkey",
+      matchScan("nation").aggregate().project().output());
+}
+
 TEST_F(AggregationParserTest, nestedAggregateRejected) {
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT sum(count(n_nationkey)) FROM nation"),
