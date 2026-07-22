@@ -424,6 +424,15 @@ class Translator {
       const lp::LimitNode& limit,
       const LpNameSet& required);
   Translated translateSort(const lp::SortNode& sort, const LpNameSet& required);
+
+  // Translates ordering keys, dropping any key that repeats an earlier one. A
+  // repeated key cannot refine the order its first occurrence imposes, and
+  // Velox rejects Sort/TopN nodes with duplicate keys.
+  std::pair<ExprVector, OrderTypeVector> dedupOrdering(
+      const std::vector<lp::SortingField>& ordering,
+      const Scope& scope,
+      NodeCP* applyTarget);
+
   Translated translateSample(
       const lp::SampleNode& sample,
       const LpNameSet& required);
@@ -1017,14 +1026,8 @@ const optimizer::Aggregate* Translator::toAggregateCall(
       ? translateExpr(*aggregateExpr.filter(), scope, applyTarget)
       : nullptr;
 
-  ExprVector orderKeys;
-  OrderTypeVector orderTypes;
-  orderKeys.reserve(aggregateExpr.ordering().size());
-  orderTypes.reserve(aggregateExpr.ordering().size());
-  for (const auto& field : aggregateExpr.ordering()) {
-    orderKeys.push_back(translateExpr(*field.expression, scope, applyTarget));
-    orderTypes.push_back(toOrderType(field.order));
-  }
+  auto [orderKeys, orderTypes] =
+      dedupOrdering(aggregateExpr.ordering(), scope, applyTarget);
   Value value(toType(aggregateExpr.type()));
 
   Name aggName = toName(aggregateExpr.name());
@@ -1192,6 +1195,26 @@ Translated Translator::translateLimit(
   return {limitNode, std::move(input.scope)};
 }
 
+std::pair<ExprVector, OrderTypeVector> Translator::dedupOrdering(
+    const std::vector<lp::SortingField>& ordering,
+    const Scope& scope,
+    NodeCP* applyTarget) {
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
+  orderKeys.reserve(ordering.size());
+  orderTypes.reserve(ordering.size());
+  folly::F14FastSet<ExprCP> seen;
+  for (const auto& field : ordering) {
+    ExprCP key = translateExpr(*field.expression, scope, applyTarget);
+    if (!seen.insert(key).second) {
+      continue;
+    }
+    orderKeys.push_back(key);
+    orderTypes.push_back(toOrderType(field.order));
+  }
+  return {std::move(orderKeys), std::move(orderTypes)};
+}
+
 Translated Translator::translateSort(
     const lp::SortNode& sort,
     const LpNameSet& required) {
@@ -1204,15 +1227,8 @@ Translated Translator::translateSort(
   Translated input = translateNode(*sort.onlyInput(), childRequired);
 
   NodeCP currentInput = input.node;
-  ExprVector orderKeys;
-  OrderTypeVector orderTypes;
-  orderKeys.reserve(sort.ordering().size());
-  orderTypes.reserve(sort.ordering().size());
-  for (const auto& field : sort.ordering()) {
-    orderKeys.push_back(
-        translateExpr(*field.expression, input.scope, &currentInput));
-    orderTypes.push_back(toOrderType(field.order));
-  }
+  auto [orderKeys, orderTypes] =
+      dedupOrdering(sort.ordering(), input.scope, &currentInput);
 
   SortCP sortNode = builder_.make<Sort>(
       {currentInput, std::move(orderKeys), std::move(orderTypes)});
