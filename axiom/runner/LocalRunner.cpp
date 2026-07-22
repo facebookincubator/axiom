@@ -314,18 +314,23 @@ folly::coro::Task<velox::RowVectorPtr> LocalRunner::co_pull() {
   }
 
   velox::ContinueFuture future = velox::ContinueFuture::makeEmpty();
-  if (cursor_->moveNext(&future)) {
-    co_return cursor_->current();
-  }
-  if (!future.valid()) {
-    // No future: producers are at end (or a drain boundary).
-    co_return nullptr;
-  }
+  // The parallel TaskQueue wakes the consumer only when a batch is queued or
+  // all producers are finished/drained, so a resolved wait-future implies the
+  // next dequeue yields data-or-terminal -- a single await is enough. The
+  // serial cursor (Task::next) can legitimately re-block on a later barrier, so
+  // it must re-await until it produces a batch or reaches the end.
+  do {
+    if (cursor_->moveNext(&future)) {
+      co_return cursor_->current();
+    }
+    if (!future.valid()) {
+      // No future: producers are at end (or a drain boundary).
+      co_return nullptr;
+    }
+    co_await std::move(future);
+    future = velox::ContinueFuture::makeEmpty();
+  } while (params_.serialExecution);
 
-  // The cursor wakes the consumer only when a batch is queued or all producers
-  // are finished/drained, so a resolved wait-future implies the next dequeue
-  // yields data-or-terminal -- a single await is enough.
-  co_await std::move(future);
   if (cursor_->moveNext(&future)) {
     co_return cursor_->current();
   }
@@ -557,12 +562,15 @@ folly::coro::Task<void> LocalRunner::co_reap() {
       }
     }
   }
-  bool completed = true;
   try {
     co_await folly::collectAll(std::move(completionFutures))
         .within(std::chrono::microseconds(kReapTimeoutMicros));
-  } catch (const folly::FutureTimeout&) {
-    completed = false;
+  } catch (const folly::FutureTimeout& e) {
+    // A task did not stop within the reap budget; the stats captured below are
+    // a best-effort in-progress snapshot rather than final. Surface it rather
+    // than degrading silently.
+    LOG(WARNING) << "LocalRunner reap timed out waiting for tasks to complete: "
+                 << e.what() << ". Captured stats are best-effort.";
   }
 
   // Tear down: capture final stats before the tasks go away, then drop the
@@ -574,7 +582,11 @@ folly::coro::Task<void> LocalRunner::co_reap() {
   std::vector<velox::ContinueFuture> deletionFutures;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (completed && !finalStats_.has_value()) {
+    // Snapshot stats before dropping the tasks, even if the completion wait
+    // timed out: the tasks are still alive here, so an in-progress snapshot is
+    // better than the empty set stats() would otherwise aggregate once stages_
+    // is cleared.
+    if (!finalStats_.has_value()) {
       finalStats_ = aggregatedStats();
     }
     cursor_.reset();
