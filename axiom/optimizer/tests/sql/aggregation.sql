@@ -30,6 +30,27 @@ SELECT a + b AS x, a + b AS y, count(a + b) AS z FROM t GROUP BY 1, 2
 -- Dedup: identical FILTER masks.
 SELECT sum(a) FILTER (WHERE b > 0), sum(a) FILTER (WHERE b < 0), sum(a) FILTER (WHERE b > 0) FROM t
 ----
+-- Constant-true FILTER masks nothing.
+SELECT sum(a) FILTER (WHERE true), count(a) FILTER (WHERE true) FROM t
+----
+-- FILTER with an expression that evaluates to true masks nothing.
+SELECT sum(a) FILTER (WHERE 1 = 1) FROM t
+----
+-- Constant-false FILTER: aggregate sees the empty set (count 0, sum null).
+SELECT count(a) FILTER (WHERE false), sum(a) FILTER (WHERE false) FROM t
+----
+-- FILTER with an expression that evaluates to false: empty-set aggregate.
+SELECT count(a) FILTER (WHERE 1 = 0), sum(a) FILTER (WHERE 1 = 0) FROM t
+----
+-- Constant-null FILTER behaves like false: empty-set aggregate.
+SELECT count(a) FILTER (WHERE cast(null AS boolean)) FROM t
+----
+-- Empty-set FILTER with GROUP BY: one row per group, count 0 each.
+SELECT b, count(a) FILTER (WHERE false) FROM t GROUP BY b
+----
+-- Mixed: an unmasked aggregate alongside an empty-set one.
+SELECT sum(a), count(a) FILTER (WHERE 1 = 0) FROM t
+----
 -- Dedup: column ORDER BY keys within aggregates.
 SELECT array_agg(a ORDER BY a, a), array_agg(b ORDER BY b, a, b, a) FROM t
 ----

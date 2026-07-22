@@ -446,6 +446,24 @@ class Translator {
   Translated translateAggregate(
       const lp::AggregateNode& aggregate,
       const LpNameSet& required);
+  // Lowers GROUPING SETS / ROLLUP / CUBE to a GroupId plus a plain aggregate
+  // keyed on an explicit group-id column. Returns the aggregation node.
+  NodeCP lowerGroupingSets(
+      const lp::AggregateNode& aggregate,
+      const ExprVector& groupingKeys,
+      AggregateCallVector aggregates,
+      const ColumnVector& outputColumns,
+      NodeCP currentInput,
+      Scope& newScope);
+  // The result of an aggregate over the empty set (constant false/null FILTER):
+  // the aggregate's empty-input value from the function registry.
+  ExprCP emptySetResult(const optimizer::Aggregate* call);
+  // Wraps 'node' in a Project appending 'columns' (each defined by the matching
+  // expr) to its outputs. Returns 'node' unchanged when 'columns' is empty.
+  NodeCP appendConstantColumns(
+      NodeCP node,
+      const ColumnVector& columns,
+      const ExprVector& exprs);
   Translated translateValues(
       const lp::ValuesNode& values,
       const LpNameSet& required);
@@ -1025,15 +1043,10 @@ const optimizer::Aggregate* Translator::toAggregateCall(
   ExprCP condition = aggregateExpr.filter() != nullptr
       ? translateExpr(*aggregateExpr.filter(), scope, applyTarget)
       : nullptr;
-  if (condition != nullptr && condition->is(PlanType::kLiteralExpr)) {
-    if (isConstantTrue(condition)) {
-      condition = nullptr;
-    } else {
-      // A false or null mask means empty-set aggregation, which is not yet
-      // supported.
-      VELOX_NYI(
-          "Aggregate FILTER that folds to constant false or null is not yet supported");
-    }
+  // Drop a constant-true FILTER (it masks nothing). A false or null mask stays
+  // as a literal condition, folded to the empty-set result during assembly.
+  if (condition != nullptr && isConstantTrue(condition)) {
+    condition = nullptr;
   }
 
   auto [orderKeys, orderTypes] =
@@ -1311,25 +1324,61 @@ Translated Translator::translateSample(
   VELOX_UNREACHABLE();
 }
 
+ExprCP Translator::emptySetResult(const optimizer::Aggregate* call) {
+  std::vector<const velox::Type*> argTypes;
+  argTypes.reserve(call->args().size());
+  for (ExprCP arg : call->args()) {
+    argTypes.push_back(arg->value().type);
+  }
+  velox::Variant emptyValue =
+      FunctionRegistry::instance()->aggregateResultForEmptyInput(
+          call->name(), argTypes);
+  return emptyValue.isNull()
+      ? static_cast<ExprCP>(builder_.makeNull(call->value().type))
+      : builder_.makeLiteral(std::move(emptyValue), call->value().type);
+}
+
+NodeCP Translator::appendConstantColumns(
+    NodeCP node,
+    const ColumnVector& columns,
+    const ExprVector& exprs) {
+  if (columns.empty()) {
+    return node;
+  }
+  ExprVector projectExprs;
+  ColumnVector projectColumns;
+  const auto& nodeOutputs = node->outputColumns();
+  projectExprs.reserve(nodeOutputs.size() + columns.size());
+  projectColumns.reserve(nodeOutputs.size() + columns.size());
+  for (ColumnCP column : nodeOutputs) {
+    projectExprs.push_back(column);
+    projectColumns.push_back(column);
+  }
+  appendAll(projectExprs, exprs);
+  appendAll(projectColumns, columns);
+  return builder_.make<Project>(
+      {node, std::move(projectExprs), std::move(projectColumns)});
+}
+
 Translated Translator::translateAggregate(
     const lp::AggregateNode& aggregate,
     const LpNameSet& required) {
   const auto& names = aggregate.outputNames();
   const auto& groupingKeyExpressions = aggregate.groupingKeys();
+  const auto numGroupingKeys = groupingKeyExpressions.size();
   const auto& groupingSets = aggregate.groupingSets();
   const auto& aggregateExpressions = aggregate.aggregates();
   const size_t groupIdSlots = groupingSets.empty() ? 0 : 1;
   VELOX_CHECK_EQ(
       names.size(),
-      groupingKeyExpressions.size() + aggregateExpressions.size() +
-          groupIdSlots);
+      numGroupingKeys + aggregateExpressions.size() + groupIdSlots);
 
   // Decide which aggregates to keep (output not in `required`). Grouping keys
   // and groupId always stay: dropping them would change group cardinality.
   std::vector<size_t> keptAggregateIndices;
   keptAggregateIndices.reserve(aggregateExpressions.size());
   for (size_t i = 0; i < aggregateExpressions.size(); ++i) {
-    if (required.contains(names[groupingKeyExpressions.size() + i])) {
+    if (required.contains(names[numGroupingKeys + i])) {
       keptAggregateIndices.push_back(i);
     }
   }
@@ -1344,22 +1393,21 @@ Translated Translator::translateAggregate(
   Translated input = translateNode(*aggregate.onlyInput(), childRequired);
 
   ExprVector groupingKeys;
-  groupingKeys.reserve(groupingKeyExpressions.size());
+  groupingKeys.reserve(numGroupingKeys);
   ColumnVector outputColumns;
   outputColumns.reserve(
-      groupingKeyExpressions.size() + keptAggregateIndices.size() +
-      groupIdSlots);
+      numGroupingKeys + keptAggregateIndices.size() + groupIdSlots);
   Scope newScope;
   // Grouping-sets case keeps positional alignment between groupingKeys and
   // the set indices; only the simple GROUP BY case can dedup safely here.
   const bool canDedupGroupingKeys = groupingSets.empty();
   folly::F14FastSet<ColumnCP> seenGroupingOutputs;
   if (canDedupGroupingKeys) {
-    seenGroupingOutputs.reserve(groupingKeyExpressions.size());
+    seenGroupingOutputs.reserve(numGroupingKeys);
   }
 
   NodeCP currentInput = input.node;
-  for (size_t i = 0; i < groupingKeyExpressions.size(); ++i) {
+  for (size_t i = 0; i < numGroupingKeys; ++i) {
     ExprCP keyExpr =
         translateExpr(*groupingKeyExpressions[i], input.scope, &currentInput);
     // Reuse the input column when the grouping key is a column reference:
@@ -1384,6 +1432,12 @@ Translated Translator::translateAggregate(
     outputColumns.push_back(column);
   }
 
+  // Aggregates whose FILTER folded to constant false/null see the empty set;
+  // their output is the aggregate's empty-input value, materialized by a
+  // Project above the aggregation.
+  ColumnVector foldedColumns;
+  ExprVector foldedExprs;
+
   AggregateCallVector aggregates;
   aggregates.reserve(keptAggregateIndices.size());
   folly::F14FastMap<const optimizer::Aggregate*, ColumnCP> aggregateToOutput;
@@ -1391,7 +1445,18 @@ Translated Translator::translateAggregate(
   for (size_t idx : keptAggregateIndices) {
     const auto* aggregateCall =
         toAggregateCall(*aggregateExpressions[idx], input.scope, &currentInput);
-    const auto& aggregateName = names[groupingKeyExpressions.size() + idx];
+    const auto& aggregateName = names[numGroupingKeys + idx];
+    // A remaining literal condition can only be false or null: fold to the
+    // empty-set result.
+    if (aggregateCall->condition() != nullptr &&
+        aggregateCall->condition()->is(PlanType::kLiteralExpr)) {
+      auto* column = Column::createForSymbol(
+          toName(aggregateName), aggregateCall->value());
+      foldedColumns.push_back(column);
+      foldedExprs.push_back(emptySetResult(aggregateCall));
+      newScope[aggregateName] = column;
+      continue;
+    }
     if (auto it = aggregateToOutput.find(aggregateCall);
         it != aggregateToOutput.end()) {
       newScope[aggregateName] = it->second;
@@ -1411,8 +1476,32 @@ Translated Translator::translateAggregate(
         .groupingKeys = std::move(groupingKeys),
         .aggregates = std::move(aggregates),
         .outputColumns = std::move(outputColumns)});
-    return {aggNode, std::move(newScope)};
+    return {
+        appendConstantColumns(aggNode, foldedColumns, foldedExprs),
+        std::move(newScope)};
   }
+
+  NodeCP aggNode = lowerGroupingSets(
+      aggregate,
+      groupingKeys,
+      std::move(aggregates),
+      outputColumns,
+      currentInput,
+      newScope);
+  return {
+      appendConstantColumns(aggNode, foldedColumns, foldedExprs),
+      std::move(newScope)};
+}
+
+NodeCP Translator::lowerGroupingSets(
+    const lp::AggregateNode& aggregate,
+    const ExprVector& groupingKeys,
+    AggregateCallVector aggregates,
+    const ColumnVector& outputColumns,
+    NodeCP currentInput,
+    Scope& newScope) {
+  const auto& names = aggregate.outputNames();
+  const auto& groupingSets = aggregate.groupingSets();
 
   // GROUPING SETS / ROLLUP / CUBE lower to GroupId + a plain aggregate keyed on
   // an explicit group-id column: a mechanical translation that lets physical
@@ -1541,7 +1630,7 @@ Translated Translator::translateAggregate(
       .step = AggregateStep::kSingle,
       .groupId = aggGroupId,
       .globalGroupingSets = std::move(globalGroupingSets)});
-  return {aggNode, std::move(newScope)};
+  return aggNode;
 }
 
 std::optional<std::vector<velox::Variant>> Translator::foldExprRowsToVariants(
