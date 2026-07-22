@@ -126,12 +126,13 @@ std::optional<ColumnDomainMap> computeColumnDomains(
     const auto typeKind = connectorColumn->type()->kind();
     VELOX_USER_CHECK(
         typeKind == velox::TypeKind::VARCHAR ||
+            typeKind == velox::TypeKind::BOOLEAN ||
             typeKind == velox::TypeKind::TINYINT ||
             typeKind == velox::TypeKind::SMALLINT ||
             typeKind == velox::TypeKind::INTEGER ||
             typeKind == velox::TypeKind::BIGINT,
         "Unsupported type for EXPLAIN IO column. "
-        "Only VARCHAR and integer types are supported: {}.{} {}",
+        "Only VARCHAR, BOOLEAN, and integer types are supported: {}.{} {}",
         baseTable->schemaTable->name(),
         connectorColumn->name(),
         connectorColumn->type()->toString());

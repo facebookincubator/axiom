@@ -143,8 +143,8 @@ TEST_P(ExplainIoTest, inputAndOutputTables) {
 }
 
 TEST_P(ExplainIoTest, columnConstraints) {
-  run("CREATE TABLE t (x BIGINT, n BIGINT, ds VARCHAR, region VARCHAR) "
-      "WITH (explain_io = ARRAY['n', 'ds', 'region'])");
+  run("CREATE TABLE t (x BIGINT, n BIGINT, b BOOLEAN, ds VARCHAR, region VARCHAR) "
+      "WITH (explain_io = ARRAY['n', 'b', 'ds', 'region'])");
   SCOPE_EXIT {
     run("DROP TABLE t");
   };
@@ -203,6 +203,64 @@ TEST_P(ExplainIoTest, columnConstraints) {
               {
                 "low": {"value": "2026-03-17", "bound": "EXACTLY"},
                 "high": {"value": "2026-03-17", "bound": "EXACTLY"}
+              }
+            ]
+          })")));
+
+  // Equality on a boolean explain_io column yields a single-value domain.
+  ASSERT_EQ(
+      getJson(
+          "EXPLAIN (TYPE IO) "
+          "SELECT * FROM t "
+          "   WHERE b = true"),
+      makeTable(makeConstraint(
+          "b",
+          "BOOLEAN",
+          R"({
+            "nullsAllowed": false,
+            "ranges": [
+              {
+                "low": {"value": true, "bound": "EXACTLY"},
+                "high": {"value": true, "bound": "EXACTLY"}
+              }
+            ]
+          })")));
+
+  // Equality against FALSE yields the false single-value domain (the value is
+  // carried literally, not treated as an absent bound).
+  ASSERT_EQ(
+      getJson(
+          "EXPLAIN (TYPE IO) "
+          "SELECT * FROM t "
+          "   WHERE b = false"),
+      makeTable(makeConstraint(
+          "b",
+          "BOOLEAN",
+          R"({
+            "nullsAllowed": false,
+            "ranges": [
+              {
+                "low": {"value": false, "bound": "EXACTLY"},
+                "high": {"value": false, "bound": "EXACTLY"}
+              }
+            ]
+          })")));
+
+  // IS NULL OR equality on a boolean column: nullsAllowed is true.
+  ASSERT_EQ(
+      getJson(
+          "EXPLAIN (TYPE IO) "
+          "SELECT * FROM t "
+          "   WHERE b IS NULL OR b = true"),
+      makeTable(makeConstraint(
+          "b",
+          "BOOLEAN",
+          R"({
+            "nullsAllowed": true,
+            "ranges": [
+              {
+                "low": {"value": true, "bound": "EXACTLY"},
+                "high": {"value": true, "bound": "EXACTLY"}
               }
             ]
           })")));
