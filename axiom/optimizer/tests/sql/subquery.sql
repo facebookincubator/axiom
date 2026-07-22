@@ -982,3 +982,25 @@ WITH t(x) AS (VALUES (1), (2)),
 SELECT t.x, g.m
 FROM t
 INNER JOIN LATERAL (SELECT u.a AS m FROM u) g ON g.m IN (SELECT t.x)
+----
+-- Uncorrelated scalar subquery in an outer join's ON condition.
+-- error_v1: Unsupported subqueries in the ON clause of a LEFT or RIGHT join
+-- duckdb: VALUES (1, 10), (2, null)
+SELECT l.a, r.a FROM (VALUES 1, 2) l(a)
+LEFT JOIN (VALUES 10, 20) r(a)
+  ON r.a = l.a + (SELECT max(x) FROM (VALUES 8, 9) s(x))
+----
+-- Scalar subquery in an outer join's ON condition correlated to the left input.
+-- error_v1: Failed to place a table
+-- duckdb: VALUES (1, 15), (2, 15)
+SELECT l.a, r.a FROM (VALUES 1, 2) l(a)
+LEFT JOIN (VALUES 10, 15, 20) r(a)
+  ON r.a = (SELECT max(x) FROM (VALUES 10, 15) s(x) WHERE x > l.a)
+----
+-- Scalar subquery in an outer join's ON condition correlated to the right input
+-- is unsupported.
+-- error_v1: Unsupported subqueries in the ON clause of a LEFT or RIGHT join
+-- error_v2: Correlated subquery referencing the right side of an outer join's ON clause is not supported
+SELECT l.a, r.a FROM (VALUES 1, 2) l(a)
+LEFT JOIN (VALUES 10, 15, 20) r(a)
+  ON l.a = (SELECT max(x) FROM (VALUES 10, 15) s(x) WHERE x > r.a)
