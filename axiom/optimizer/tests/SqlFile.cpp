@@ -222,7 +222,10 @@ std::vector<QueryEntry> parseQueries(
 
 } // namespace
 
-SqlFile SqlFile::parse(std::string_view content, std::string_view baseDir) {
+SqlFile SqlFile::parse(
+    std::string_view content,
+    std::string_view baseDir,
+    const Options& options) {
   SqlFile result;
 
   std::istringstream stream{std::string(content)};
@@ -231,6 +234,14 @@ SqlFile SqlFile::parse(std::string_view content, std::string_view baseDir) {
   bool inSetupBlock = false;
   std::string setupBlockBody;
   bool sawNonSetupLine = false;
+
+  // Precompute the "-- <name>:" prefix for each custom directive so the scan
+  // loop doesn't rebuild them per line.
+  std::vector<std::pair<std::string, std::string>> customPrefixes;
+  customPrefixes.reserve(options.customSetupDirectives.size());
+  for (const auto& name : options.customSetupDirectives) {
+    customPrefixes.emplace_back("-- " + name + ":", name);
+  }
 
   // Scan the top of the content for setup directives. Stop at the first
   // non-directive line outside a setup block.
@@ -291,6 +302,21 @@ SqlFile SqlFile::parse(std::string_view content, std::string_view baseDir) {
     if (trimmed == "-- setup") {
       inSetupBlock = true;
       bytesConsumed = lineEnd;
+      continue;
+    }
+
+    bool capturedCustom = false;
+    for (const auto& [prefix, name] : customPrefixes) {
+      if (trimmed.starts_with(prefix)) {
+        auto value = std::string(ltrim(trimmed.substr(prefix.size())));
+        rtrim(value);
+        result.directives[name] = std::move(value);
+        bytesConsumed = lineEnd;
+        capturedCustom = true;
+        break;
+      }
+    }
+    if (capturedCustom) {
       continue;
     }
 

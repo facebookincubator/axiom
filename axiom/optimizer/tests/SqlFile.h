@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -71,6 +72,15 @@ struct QueryEntry {
 /// to install reference tables, plus the query entries that test against
 /// them.
 struct SqlFile {
+  /// Parse-time options.
+  struct Options {
+    /// Names of file-level directives to capture. A top-of-file
+    /// `-- <name>: <value>` line whose name is listed here is stored in
+    /// `directives`; names not listed are treated as plain comments. Lets a
+    /// consumer define directives the shared parser need not know about.
+    std::vector<std::string> customSetupDirectives;
+  };
+
   /// DDL statements (CREATE TABLE / INSERT INTO …) collected from the
   /// file's setup directives in source order. Run before any query in the
   /// file executes.
@@ -78,6 +88,11 @@ struct SqlFile {
 
   /// Query entries parsed from the body of the file.
   std::vector<QueryEntry> entries;
+
+  /// Values of the custom directives requested via
+  /// Options::customSetupDirectives and present in the file, keyed by directive
+  /// name.
+  std::map<std::string, std::string> directives;
 
   /// Connector the file's setup DDL and queries run against, from a top-of-file
   /// '-- connector: <test|hive>' directive. Defaults to kTest.
@@ -122,7 +137,11 @@ struct SqlFile {
   /// @param baseDir Directory used to resolve setup_file paths. Pass an
   /// empty string when no setup_file directives are expected (e.g. unit
   /// tests of the parser).
-  static SqlFile parse(std::string_view content, std::string_view baseDir);
+  /// @param options Parse-time options; see Options.
+  static SqlFile parse(
+      std::string_view content,
+      std::string_view baseDir,
+      const Options& options = {});
 };
 
 } // namespace facebook::axiom::optimizer::test

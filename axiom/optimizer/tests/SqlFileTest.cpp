@@ -399,5 +399,53 @@ TEST_F(SqlFileTest, connectorUnknownRejected) {
       "Unknown connector directive 'postgres'");
 }
 
+TEST_F(SqlFileTest, customDirectiveCaptured) {
+  auto file = SqlFile::parse(
+      "-- tables: orders, nation\n"
+      "SELECT * FROM orders",
+      /*baseDir=*/"",
+      {.customSetupDirectives = {"tables"}});
+  EXPECT_EQ(file.directives.at("tables"), "orders, nation");
+  ASSERT_THAT(file.entries, testing::SizeIs(1));
+  EXPECT_EQ(file.entries[0].sql, "SELECT * FROM orders");
+  // Query line numbers are unaffected by the captured directive.
+  EXPECT_EQ(file.entries[0].lineNumber, 2);
+}
+
+TEST_F(SqlFileTest, customDirectiveNotListedStaysComment) {
+  // A '-- name: value' line whose name is not requested is an ordinary
+  // comment and is not captured.
+  auto file = SqlFile::parse(
+      "-- tables: orders\n"
+      "SELECT 1",
+      /*baseDir=*/"");
+  EXPECT_THAT(file.directives, testing::IsEmpty());
+  ASSERT_THAT(file.entries, testing::SizeIs(1));
+  EXPECT_EQ(file.entries[0].sql, "SELECT 1");
+}
+
+TEST_F(SqlFileTest, customDirectiveAbsent) {
+  auto file = SqlFile::parse(
+      "SELECT 1", /*baseDir=*/"", {.customSetupDirectives = {"tables"}});
+  EXPECT_THAT(file.directives, testing::IsEmpty());
+}
+
+TEST_F(SqlFileTest, customDirectiveWithSetupAndConnector) {
+  auto file = SqlFile::parse(
+      "-- connector: hive\n"
+      "-- tables: none\n"
+      "-- setup\n"
+      "CREATE TABLE t(a BIGINT)\n"
+      "-- end_setup\n"
+      "SELECT a FROM t",
+      /*baseDir=*/"",
+      {.customSetupDirectives = {"tables"}});
+  EXPECT_EQ(file.connector, TestConnectorKind::kLocalHive);
+  EXPECT_EQ(file.directives.at("tables"), "none");
+  ASSERT_THAT(file.setupStatements, testing::SizeIs(1));
+  ASSERT_THAT(file.entries, testing::SizeIs(1));
+  EXPECT_EQ(file.entries[0].sql, "SELECT a FROM t");
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer::test
