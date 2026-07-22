@@ -871,8 +871,18 @@ class PlanBuilder {
       const std::vector<velox::TypePtr>& commonTypes);
 
   // Shared implementation for both setOperation overloads. Applies type
-  // coercions if enabled and creates the SetNode.
-  void setOperationImpl(SetOperation op, std::vector<LogicalPlanNodePtr> nodes);
+  // coercions if enabled, creates the SetNode, and builds the output mapping
+  // from 'firstBranchMapping' (the left branch's, whose names the set operation
+  // adopts).
+  void setOperationImpl(
+      SetOperation op,
+      std::vector<LogicalPlanNodePtr> nodes,
+      const std::shared_ptr<NameMappings>& firstBranchMapping);
+
+  // Adds a cast projection to each set-operation branch whose column types
+  // differ from the common target type. A coerced column gets a fresh id so no
+  // id denotes two types.
+  void coerceSetInputs(std::vector<LogicalPlanNodePtr>& nodes);
 
   std::string nextId() {
     return planNodeIdGenerator_->next();
