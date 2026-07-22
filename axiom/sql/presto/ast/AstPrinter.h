@@ -91,8 +91,6 @@ class AstPrinter : public AstVisitor {
       QuantifiedComparisonExpression* node) override;
 
   // Logical Expressions
-  void visitLogicalBinaryExpression(LogicalBinaryExpression* node) override;
-
   void visitNotExpression(NotExpression* node) override;
 
   // Conditional Expressions

@@ -1822,16 +1822,36 @@ std::any AstBuilder::visitLogicalBinary(
     PrestoSqlParser::LogicalBinaryContext* ctx) {
   trace("visitLogicalBinary");
 
-  auto leftExpr = visitExpression(ctx->left);
-  auto rightExpr = visitExpression(ctx->right);
+  const bool isAnd = ctx->AND() != nullptr;
 
-  LogicalBinaryExpression::Operator op = ctx->AND() != nullptr
-      ? LogicalBinaryExpression::Operator::kAnd
-      : LogicalBinaryExpression::Operator::kOr;
+  // Flatten a same-operator chain into one n-ary `and`/`or` call. Walk the
+  // left spine iteratively so a wide chain stays at constant nesting depth.
+  std::vector<ExpressionPtr> operands;
+  auto* current = ctx;
+  while (true) {
+    operands.push_back(visitExpression(current->right));
+    auto* leftBinary =
+        dynamic_cast<PrestoSqlParser::LogicalBinaryContext*>(current->left);
+    if (leftBinary == nullptr || (leftBinary->AND() != nullptr) != isAnd) {
+      operands.push_back(visitExpression(current->left));
+      break;
+    }
+    current = leftBinary;
+  }
+  std::reverse(operands.begin(), operands.end());
 
-  return std::static_pointer_cast<Expression>(
-      std::make_shared<LogicalBinaryExpression>(
-          getLocation(ctx), op, leftExpr, rightExpr));
+  AXIOM_PRESTO_SEMANTIC_CHECK_LE(
+      operands.size(),
+      options_.maxExpressionWidth,
+      getLocation(ctx),
+      /*token=*/std::nullopt,
+      "Expression exceeds maximum width");
+
+  return std::static_pointer_cast<Expression>(std::make_shared<FunctionCall>(
+      getLocation(ctx),
+      std::make_shared<QualifiedName>(
+          getLocation(ctx), std::vector<std::string>{isAnd ? "and" : "or"}),
+      operands));
 }
 
 namespace {
