@@ -1381,7 +1381,9 @@ void PlanBuilder::addJoinUsingProjection(
   exprs.reserve(joinOutputType->size());
   auto newOutputMapping = std::make_shared<NameMappings>();
 
-  // Emit USING columns first (one copy each).
+  // Emit USING columns first (one copy each). A column cast to the common type
+  // produces a new value and gets a fresh id; a passthrough keeps its source
+  // id.
   for (size_t i = 0; i < usingColumns.size(); ++i) {
     const auto& column = usingColumns[i];
     auto leftColumnType = joinOutputType->findChild(column.leftId);
@@ -1399,16 +1401,16 @@ void PlanBuilder::addJoinUsingProjection(
               SpecialForm::kCoalesce,
               std::vector<ExprPtr>{leftRef, rightRef}));
       outputNames.push_back(newName(column.name));
-    } else if (joinType == JoinType::kRight) {
-      // Use the right side's column for RIGHT joins.
-      exprs.push_back(
-          makeCoercedRef(rightColumnType, column.rightId, commonTypes[i]));
-      outputNames.push_back(column.rightId);
     } else {
-      // Pass through the left side's column for INNER/LEFT joins.
-      exprs.push_back(
-          makeCoercedRef(leftColumnType, column.leftId, commonTypes[i]));
-      outputNames.push_back(column.leftId);
+      // INNER/LEFT use the left column; RIGHT uses the right column.
+      const auto& sourceId =
+          joinType == JoinType::kRight ? column.rightId : column.leftId;
+      const auto& sourceType =
+          joinType == JoinType::kRight ? rightColumnType : leftColumnType;
+      exprs.push_back(makeCoercedRef(sourceType, sourceId, commonTypes[i]));
+      const bool coerced =
+          commonTypes[i] != nullptr && !sourceType->equivalent(*commonTypes[i]);
+      outputNames.push_back(coerced ? newName(column.name) : sourceId);
     }
 
     newOutputMapping->add(column.name, outputNames.back());
@@ -1493,7 +1495,8 @@ PlanBuilder& PlanBuilder::setOperation(
   nodes.push_back(std::move(node_));
   nodes.push_back(other.node_);
 
-  setOperationImpl(op, std::move(nodes));
+  // *this is the left branch, so its mapping supplies the output names.
+  setOperationImpl(op, std::move(nodes), outputMapping_);
   return *this;
 }
 
@@ -1504,8 +1507,6 @@ PlanBuilder& PlanBuilder::setOperation(
   VELOX_USER_CHECK_GE(
       inputs.size(), 2, "Set operation requires at least 2 inputs");
 
-  outputMapping_ = inputs.front().outputMapping_;
-
   std::vector<LogicalPlanNodePtr> nodes;
   nodes.reserve(inputs.size());
   for (const auto& builder : inputs) {
@@ -1513,77 +1514,116 @@ PlanBuilder& PlanBuilder::setOperation(
     nodes.push_back(builder.node_);
   }
 
-  setOperationImpl(op, std::move(nodes));
+  setOperationImpl(op, std::move(nodes), inputs.front().outputMapping_);
   return *this;
+}
+
+namespace {
+
+// Maps the first branch's names to the set operation's actual output ids, which
+// may differ from 'firstBranchIds' where a column was coerced.
+std::shared_ptr<NameMappings> remapSetOutputMapping(
+    const std::vector<std::string>& firstBranchIds,
+    const std::vector<std::string>& outputIds,
+    const NameMappings& firstBranchMapping) {
+  auto mapping = std::make_shared<NameMappings>();
+  for (size_t i = 0; i < outputIds.size(); ++i) {
+    const auto& oldId = firstBranchIds[i];
+    const auto& newId = outputIds[i];
+    const std::vector<NameMappings::QualifiedName> names =
+        firstBranchMapping.reverseLookup(oldId);
+    for (const auto& name : names) {
+      mapping->add(name, newId);
+    }
+    if (const auto* userName = firstBranchMapping.userName(oldId)) {
+      mapping->addUserName(newId, *userName);
+    }
+    if (!names.empty() && firstBranchMapping.isHidden(oldId)) {
+      mapping->markHidden(newId);
+    }
+  }
+  return mapping;
+}
+
+} // namespace
+
+void PlanBuilder::coerceSetInputs(std::vector<LogicalPlanNodePtr>& nodes) {
+  // Find the common supertype for each column across all branches.
+  const auto& firstRowType = nodes[0]->outputType();
+  auto targetTypes = firstRowType->children();
+
+  for (size_t i = 1; i < nodes.size(); ++i) {
+    const auto& rowType = nodes[i]->outputType();
+
+    VELOX_USER_CHECK_EQ(
+        firstRowType->size(),
+        rowType->size(),
+        "Output schemas of all inputs to a Set operation must have same number of columns");
+
+    for (uint32_t j = 0; j < firstRowType->size(); ++j) {
+      const auto& currentType = targetTypes[j];
+      const auto& nextType = rowType->childAt(j);
+
+      if (currentType->equivalent(*nextType)) {
+        continue;
+      }
+
+      auto commonType = coercer_->leastCommonSuperType(currentType, nextType);
+      VELOX_USER_CHECK_NOT_NULL(
+          commonType,
+          "Output schemas of all inputs to a Set operation must match: {} vs. {} at {}.{}",
+          currentType->toSummaryString(),
+          nextType->toSummaryString(),
+          j,
+          firstRowType->nameOf(j));
+
+      targetTypes[j] = commonType;
+    }
+  }
+
+  for (auto& node : nodes) {
+    const auto& inputRowType = node->outputType();
+    auto outputNames = inputRowType->names();
+    std::vector<ExprPtr> exprs;
+    exprs.reserve(inputRowType->size());
+
+    bool needsCast = false;
+    for (uint32_t i = 0; i < inputRowType->size(); ++i) {
+      const auto& inputType = inputRowType->childAt(i);
+      const auto& targetType = targetTypes[i];
+      if (inputType->equivalent(*targetType)) {
+        exprs.push_back(makeInputRef(inputType, inputRowType->nameOf(i)));
+      } else {
+        needsCast = true;
+        exprs.push_back(
+            makeCoercedRef(inputType, inputRowType->nameOf(i), targetType));
+        outputNames[i] = newName(inputRowType->nameOf(i));
+      }
+    }
+
+    if (needsCast) {
+      node = std::make_shared<ProjectNode>(
+          nextId(), std::move(node), std::move(outputNames), std::move(exprs));
+    }
+  }
 }
 
 void PlanBuilder::setOperationImpl(
     SetOperation op,
-    std::vector<LogicalPlanNodePtr> nodes) {
+    std::vector<LogicalPlanNodePtr> nodes,
+    const std::shared_ptr<NameMappings>& firstBranchMapping) {
+  // The set operation's output ids are the first branch's; capture them before
+  // coercion may replace some.
+  const auto firstBranchIds = nodes[0]->outputType()->names();
+
   if (coercer_ != nullptr) {
-    // Apply type coercion: find common supertype for each column.
-    const auto firstRowType = nodes[0]->outputType();
-    auto targetTypes = firstRowType->children();
-
-    for (size_t i = 1; i < nodes.size(); ++i) {
-      const auto& rowType = nodes[i]->outputType();
-
-      VELOX_USER_CHECK_EQ(
-          firstRowType->size(),
-          rowType->size(),
-          "Output schemas of all inputs to a Set operation must have same number of columns");
-
-      for (uint32_t j = 0; j < firstRowType->size(); ++j) {
-        const auto& currentType = targetTypes[j];
-        const auto& nextType = rowType->childAt(j);
-
-        if (currentType->equivalent(*nextType)) {
-          continue;
-        }
-
-        auto commonType = coercer_->leastCommonSuperType(currentType, nextType);
-        VELOX_USER_CHECK_NOT_NULL(
-            commonType,
-            "Output schemas of all inputs to a Set operation must match: {} vs. {} at {}.{}",
-            currentType->toSummaryString(),
-            nextType->toSummaryString(),
-            j,
-            firstRowType->nameOf(j));
-
-        targetTypes[j] = commonType;
-      }
-    }
-
-    auto targetRowType =
-        velox::ROW(folly::copy(firstRowType->names()), std::move(targetTypes));
-
-    // Add cast projections where needed.
-    for (auto& node : nodes) {
-      const auto& inputRowType = node->outputType();
-      bool needsCast = false;
-      std::vector<ExprPtr> exprs;
-      exprs.reserve(inputRowType->size());
-
-      for (uint32_t i = 0; i < inputRowType->size(); ++i) {
-        const auto& inputType = inputRowType->childAt(i);
-        const auto& targetType = targetRowType->childAt(i);
-        if (!inputType->equivalent(*targetType)) {
-          needsCast = true;
-          exprs.push_back(
-              makeCoercedRef(inputType, inputRowType->nameOf(i), targetType));
-        } else {
-          exprs.push_back(makeInputRef(inputType, inputRowType->nameOf(i)));
-        }
-      }
-
-      if (needsCast) {
-        node = std::make_shared<ProjectNode>(
-            nextId(), std::move(node), inputRowType->names(), std::move(exprs));
-      }
-    }
+    coerceSetInputs(nodes);
   }
 
   node_ = std::make_shared<SetNode>(nextId(), std::move(nodes), op);
+
+  outputMapping_ = remapSetOutputMapping(
+      firstBranchIds, node_->outputType()->names(), *firstBranchMapping);
 }
 
 PlanBuilder& PlanBuilder::sort(const std::vector<std::string>& sortingKeys) {
