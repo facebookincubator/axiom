@@ -1235,8 +1235,24 @@ lp::ExprApi ExpressionPlanner::toExpr(
         return makeMetadataAggregate(*kind, call, args, lowerFuncName);
       }
 
+      // DISTINCT / FILTER / ORDER BY modifiers mark an aggregate call.
       if (call->isDistinct() || call->filter() || call->orderBy()) {
-        return toAggregateCallExpr(call, funcName, args, options);
+        if (exec::getAggregateFunctionEntry(lowerFuncName) != nullptr) {
+          return toAggregateCallExpr(call, funcName, args, options);
+        }
+        // On a scalar function Presto ignores DISTINCT but rejects FILTER and
+        // ORDER BY. Match that: DISTINCT falls through to the scalar path
+        // (dropped); FILTER and ORDER BY are errors.
+        AXIOM_PRESTO_SEMANTIC_CHECK_NULL(
+            call->filter(),
+            call->location(),
+            funcName,
+            "Filter is only valid for aggregation functions");
+        AXIOM_PRESTO_SEMANTIC_CHECK_NULL(
+            call->orderBy(),
+            call->location(),
+            funcName,
+            "ORDER BY is only valid for aggregation functions");
       }
 
       // A qualified (multi-part) name denotes a connector-defined SQL-invoked
