@@ -967,15 +967,18 @@ class Pushdown : public NodeRewriter<PushdownContext> {
   }
 
   NodeCP rewriteValues(const Values* node, PushdownContext& context) override {
-    // Keep every column the output needs (`required`), not just those demanded
-    // strictly above (`requiredAbove`): a pending conjunct wrapped as a Filter
-    // over this Values reads the Values' output, so its columns must survive.
+    // Keep every column the output needs (`required`) plus every column a
+    // pending conjunct reads: maybeWrapFilter re-materializes those conjuncts
+    // as a Filter over this Values, so their columns must survive.
+    PlanObjectSet keep = context.required;
+    keep.unionColumns(context.pending);
+
     ColumnVector survivingOutputs;
     QGVector<velox::column_index_t> survivingChannels;
     const auto& outputColumns = node->outputColumns();
     const auto& channels = node->channels();
     for (size_t i = 0; i < outputColumns.size(); ++i) {
-      if (context.required.contains(outputColumns[i])) {
+      if (keep.contains(outputColumns[i])) {
         survivingOutputs.push_back(outputColumns[i]);
         survivingChannels.push_back(channels[i]);
       }
