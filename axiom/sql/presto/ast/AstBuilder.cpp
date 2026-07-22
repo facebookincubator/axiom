@@ -296,6 +296,15 @@ std::any AstBuilder::visitSingleStatement(
   return visit(ctx->statement());
 }
 
+void AstBuilder::checkNestingDepth(antlr4::ParserRuleContext* ctx) const {
+  AXIOM_PRESTO_SEMANTIC_CHECK_LT(
+      tracingIndent_,
+      options_.maxExpressionDepth,
+      getLocation(ctx),
+      /*token=*/std::nullopt,
+      "Expression exceeds maximum nesting depth");
+}
+
 std::any AstBuilder::visitQuery(PrestoSqlParser::QueryContext* ctx) {
   trace("visitQuery");
 

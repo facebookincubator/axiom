@@ -653,6 +653,7 @@ class AstBuilder : public PrestoSqlVisitor {
       return nullptr;
     }
 
+    checkNestingDepth(ctx);
     ++tracingIndent_;
     SCOPE_EXIT {
       --tracingIndent_;
@@ -706,9 +707,12 @@ class AstBuilder : public PrestoSqlVisitor {
 
   void trace(std::string_view name) const;
 
+  // Throws when AST nesting exceeds options_.maxExpressionDepth.
+  void checkNestingDepth(antlr4::ParserRuleContext* ctx) const;
+
   const ParserOptions options_;
   const bool enableTracing_;
-  int tracingIndent_ = 0;
+  uint32_t tracingIndent_{0};
 };
 
 } // namespace axiom::sql::presto
