@@ -1025,6 +1025,16 @@ const optimizer::Aggregate* Translator::toAggregateCall(
   ExprCP condition = aggregateExpr.filter() != nullptr
       ? translateExpr(*aggregateExpr.filter(), scope, applyTarget)
       : nullptr;
+  if (condition != nullptr && condition->is(PlanType::kLiteralExpr)) {
+    if (isConstantTrue(condition)) {
+      condition = nullptr;
+    } else {
+      // A false or null mask means empty-set aggregation, which is not yet
+      // supported.
+      VELOX_NYI(
+          "Aggregate FILTER that folds to constant false or null is not yet supported");
+    }
+  }
 
   auto [orderKeys, orderTypes] =
       dedupOrdering(aggregateExpr.ordering(), scope, applyTarget);
