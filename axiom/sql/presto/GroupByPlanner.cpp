@@ -47,8 +47,8 @@ using AggregateExprMap = folly::
     F14FastMap<core::ExprPtr, core::ExprPtr, core::IExprHash, core::IExprEqual>;
 
 // Rewrites a window function expression: replaces column references in the
-// function arguments, PARTITION BY keys, and ORDER BY keys using the provided
-// rewrite function. Constructs a new WindowCallExpr directly.
+// function arguments, PARTITION BY keys, ORDER BY keys, and frame bounds using
+// the provided rewrite function. Constructs a new WindowCallExpr directly.
 lp::ExprApi rewriteWindowExpr(
     const lp::ExprApi& item,
     const std::function<core::ExprPtr(const core::ExprPtr&)>& rewriteIExpr) {
@@ -74,13 +74,26 @@ lp::ExprApi rewriteWindowExpr(
         {rewriteIExpr(key.expr), key.ascending, key.nullsFirst});
   }
 
+  // Rewrite frame bounds. A RANGE offset bound is rewritten to
+  // `<order_by> +/- <offset>`, so it can reference the same aggregate as the
+  // ORDER BY key and must be rewritten alongside it.
+  std::optional<core::WindowCallExpr::Frame> newFrame = window->frame();
+  if (newFrame.has_value()) {
+    if (newFrame->startValue) {
+      newFrame->startValue = rewriteIExpr(newFrame->startValue);
+    }
+    if (newFrame->endValue) {
+      newFrame->endValue = rewriteIExpr(newFrame->endValue);
+    }
+  }
+
   return lp::ExprApi(
       std::make_shared<core::WindowCallExpr>(
           window->name(),
           std::move(newInputs),
           std::move(newPartitionKeys),
           std::move(newOrderByKeys),
-          window->frame(),
+          std::move(newFrame),
           window->isIgnoreNulls()),
       item.name());
 }
@@ -183,8 +196,10 @@ void findAggregates(
       // TODO: Handle aggregates in subqueries.
       return;
     case core::IExpr::Kind::kWindow: {
-      // Recurse into function inputs, partition keys, and order by keys
-      // to find nested aggregates.
+      // Recurse into function inputs, partition keys, order by keys, and frame
+      // bounds to find nested aggregates. A RANGE offset frame bound is
+      // rewritten to `<order_by> +/- <offset>`, so it embeds the ORDER BY
+      // expression and can carry an aggregate.
       auto* window = expr->as<core::WindowCallExpr>();
       for (const auto& input : window->inputs()) {
         findAggregates(input, aggregates, aggregateSet);
@@ -194,6 +209,14 @@ void findAggregates(
       }
       for (const auto& key : window->orderByKeys()) {
         findAggregates(key.expr, aggregates, aggregateSet);
+      }
+      if (window->frame().has_value()) {
+        if (window->frame()->startValue) {
+          findAggregates(window->frame()->startValue, aggregates, aggregateSet);
+        }
+        if (window->frame()->endValue) {
+          findAggregates(window->frame()->endValue, aggregates, aggregateSet);
+        }
       }
       return;
     }

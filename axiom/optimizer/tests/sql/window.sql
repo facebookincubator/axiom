@@ -200,3 +200,10 @@ SELECT a, c FROM t ORDER BY c / sum(c) OVER () DESC
 -- SELECT DISTINCT with a nested window in ORDER BY that repeats a SELECT item.
 -- ordered
 SELECT DISTINCT c / sum(c) OVER () AS s FROM t ORDER BY c / sum(c) OVER ()
+----
+-- A window whose ORDER BY key is an aggregate and whose frame is a RANGE
+-- offset, over a GROUP BY.
+-- ordered
+SELECT count(*) OVER (ORDER BY max(d) RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW) AS c
+FROM (VALUES (DATE '2025-01-01', 1), (DATE '2025-01-02', 2), (DATE '2025-01-03', 3)) AS t(d, n)
+GROUP BY d
