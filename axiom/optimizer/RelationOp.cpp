@@ -1431,7 +1431,7 @@ OrderBy::OrderBy(
       limit{limit},
       offset{offset} {
   cost_.inputCardinality = inputCardinality();
-  if (limit == -1) {
+  if (isNoLimit()) {
     cost_.fanout = 1;
   } else {
     const auto cardinality = static_cast<float>(limit);

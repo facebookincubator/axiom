@@ -1369,7 +1369,7 @@ velox::core::PlanNodePtr Emitter::emitLimit(const Limit& limit) {
     input = std::make_shared<velox::core::LimitNode>(
         nextId(),
         /*offset=*/0,
-        limit.offset() + limit.count(),
+        limit.offsetPlusCount(),
         /*isPartial=*/true,
         std::move(input));
     input =

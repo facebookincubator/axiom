@@ -1959,7 +1959,7 @@ void Optimization::addOrderBy(
       std::move(precompute).maybeProject(),
       std::move(orderKeys),
       dt->orderTypes,
-      dt->limit,
+      dt->hasLimit() ? dt->limit : std::numeric_limits<int64_t>::max(),
       dt->offset);
   state.addCost(*orderBy);
   plan = orderBy;

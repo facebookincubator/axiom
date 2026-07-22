@@ -372,6 +372,13 @@ class Limit : public Node {
     return count_;
   }
 
+  /// Returns offset + count, saturated at INT64_MAX so a no-limit count
+  /// (INT64_MAX) does not overflow. The '>=' matches the no-limit boundary used
+  /// by RelationOp's isNoLimit.
+  int64_t offsetPlusCount() const {
+    return count_ >= INT64_MAX - offset_ ? INT64_MAX : offset_ + count_;
+  }
+
   std::span<const NodeCP> inputs() const override {
     return {&input_, 1};
   }

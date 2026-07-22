@@ -232,7 +232,7 @@ NullFraction and range are unchanged.
 OrderBy is cardinality-neutral unless it has a LIMIT clause:
 
 ```
-if limit == -1 (no limit):
+if isNoLimit() (no LIMIT clause):
     fanout = 1
 else if inputCardinality <= limit:
     fanout = 1  (limit is no-op)
