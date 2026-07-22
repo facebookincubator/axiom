@@ -16,6 +16,7 @@
 
 #include "axiom/runner/LocalRunner.h"
 #include <folly/CancellationToken.h>
+#include <folly/OperationCancelled.h>
 #include <folly/coro/BlockingWait.h>
 #include <folly/coro/Task.h>
 #include <folly/coro/WithCancellation.h>
@@ -148,10 +149,10 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
         axiom::connector::ConnectorProperties{});
   }
 
-  std::shared_ptr<LocalRunner> makeRunner(
-      optimizer::MultiFragmentPlanPtr plan) {
+  template <typename RunnerT = LocalRunner>
+  std::shared_ptr<RunnerT> makeRunner(optimizer::MultiFragmentPlanPtr plan) {
     const auto queryId = plan->options().queryId;
-    return std::make_shared<LocalRunner>(
+    return std::make_shared<RunnerT>(
         makeRunnerSession(queryId),
         std::move(plan),
         optimizer::FinishWrite{},
@@ -175,6 +176,18 @@ int64_t extractSingleInt64(const std::vector<velox::RowVectorPtr>& vectors) {
   return vectors.at(0)->childAt(0)->as<velox::FlatVector<int64_t>>()->valueAt(
       0);
 }
+
+// A LocalRunner whose co_close() throws after the real reap, to exercise
+// drain()'s policy that a reap failure must not mask the original stop reason.
+class ReapFailingLocalRunner : public LocalRunner {
+ public:
+  using LocalRunner::LocalRunner;
+
+  folly::coro::Task<void> co_close() override {
+    co_await LocalRunner::co_close();
+    VELOX_FAIL("injected reap failure");
+  }
+};
 
 TEST_F(LocalRunnerTest, count) {
   auto join = makeJoinPlan();
@@ -227,10 +240,13 @@ TEST_F(LocalRunnerTest, executeCancellation) {
     while (co_await generator.next()) {
     }
   };
-  VELOX_ASSERT_THROW(
+  // Cancellation surfaces as cooperative cancellation
+  // (folly::OperationCancelled), not a VeloxRuntimeError shaped like a genuine
+  // failure.
+  EXPECT_THROW(
       folly::coro::blockingWait(
           folly::coro::co_withCancellation(source.getToken(), drainLoop())),
-      "cancel");
+      folly::OperationCancelled);
   folly::coro::blockingWait(localRunner->co_close());
 
   EXPECT_EQ(Runner::State::kCancelled, localRunner->state());
@@ -267,10 +283,10 @@ TEST_F(LocalRunnerTest, executeCancellationFromAnotherThread) {
     while (co_await generator.next()) {
     }
   };
-  VELOX_ASSERT_THROW(
+  EXPECT_THROW(
       folly::coro::blockingWait(
           folly::coro::co_withCancellation(source.getToken(), drainLoop())),
-      "cancel");
+      folly::OperationCancelled);
   canceller.join();
   folly::coro::blockingWait(localRunner->co_close());
 
@@ -307,6 +323,31 @@ TEST_F(LocalRunnerTest, error) {
         results.push_back(std::move(batch));
       }),
       "division by zero");
+  EXPECT_EQ(Runner::State::kError, localRunner->state());
+}
+
+// drain(..., timeoutMicros) fails with a user error when execution overruns the
+// cooperative deadline.
+TEST_F(LocalRunnerTest, drainTimeout) {
+  auto join = makeJoinPlan();
+  auto localRunner = makeRunner(join);
+
+  // A 1us deadline is far shorter than the join over kNumRows can complete in,
+  // so the run is still executing when the deadline elapses.
+  VELOX_ASSERT_THROW(
+      localRunner->drain([](velox::RowVectorPtr) {}, /*timeoutMicros=*/1),
+      "exceeded maximum time limit");
+}
+
+// A reap (co_close) failure must not mask the original stop reason: the genuine
+// execution error surfaces from drain() while the secondary reap failure is
+// logged, not thrown.
+TEST_F(LocalRunnerTest, drainReapFailureDoesNotMaskError) {
+  auto join = makeJoinPlan("if (c0 = 111, c0 / 0, c0 + 1) as c0");
+  auto localRunner = makeRunner<ReapFailingLocalRunner>(join);
+
+  VELOX_ASSERT_THROW(
+      localRunner->drain([](velox::RowVectorPtr) {}), "division by zero");
   EXPECT_EQ(Runner::State::kError, localRunner->state());
 }
 

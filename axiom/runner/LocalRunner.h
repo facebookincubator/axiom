@@ -169,8 +169,8 @@ class LocalRunner : public Runner,
   // Best-effort attempt to cancel the execution. May be invoked from any
   // thread (via the cancellation callback), without serialization, and is
   // idempotent. A no-op once execution has finished (state() == kFinished).
-  // Otherwise state() becomes kCancelled and the in-flight or next pull
-  // surfaces the cancellation error.
+  // Otherwise state() becomes kCancelled (without fabricating an error_) and
+  // the in-flight or next pull surfaces cooperative cancellation.
   void cancelTasks();
 
   // Awaited reap shared by co_close() and the co_runWrite() error path. Joins

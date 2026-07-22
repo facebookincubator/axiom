@@ -16,6 +16,7 @@
 
 #include "axiom/runner/LocalRunner.h"
 #include <folly/CancellationToken.h>
+#include <folly/OperationCancelled.h>
 #include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/AsyncScope.h>
 #include <folly/coro/BlockingWait.h>
@@ -313,6 +314,22 @@ folly::coro::Task<velox::RowVectorPtr> LocalRunner::co_pull() {
     start();
   }
 
+  // start() can return without a cursor if the run was cancelled or errored
+  // before starting. There is no cursor to surface the reason, so do it here: a
+  // genuine error as itself, a pure cancel as cooperative cancellation. Once a
+  // cursor exists, moveNext() itself surfaces a cancelled task as
+  // folly::OperationCancelled (translated in TaskCursor) and a genuine error as
+  // itself.
+  if (!cursor_) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (error_) {
+        std::rethrow_exception(error_);
+      }
+    }
+    throw folly::OperationCancelled{};
+  }
+
   velox::ContinueFuture future = velox::ContinueFuture::makeEmpty();
   // The parallel TaskQueue wakes the consumer only when a batch is queued or
   // all producers are finished/drained, so a resolved wait-future implies the
@@ -444,11 +461,14 @@ velox::RowVectorPtr LocalRunner::makeWriteResult(int64_t rows) {
 void LocalRunner::start() {
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    // A cancel (or error) that landed before start() leaves the runner terminal
-    // with no cursor; surface that error rather than starting and tripping the
-    // state precondition below.
+    // A cancel or error that landed before start() leaves the runner terminal
+    // with no cursor. Surface a genuine error here; for a pure cancel, return
+    // without starting so the read path surfaces cooperative cancellation.
     if (error_) {
       std::rethrow_exception(error_);
+    }
+    if (state_ == State::kCancelled) {
+      return;
     }
     VELOX_CHECK_EQ(state_, State::kInitialized);
   }
@@ -467,16 +487,21 @@ void LocalRunner::start() {
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!error_) {
+    // Do not adopt the cursor if a cancel or error landed while starting; that
+    // would clobber the terminal state a concurrent cancelTasks()/onError set.
+    if (!error_ && state_ != State::kCancelled) {
       cursor_ = std::move(cursor);
       state_ = State::kRunning;
     }
   }
 
   if (!cursor_) {
-    // The cursor was not set because previous fragments had an error.
+    // A cancel or error landed while starting, so the cursor was not adopted.
+    // Cancel the just-built tasks; co_pull() then surfaces the cause under
+    // 'mutex_' (a genuine error as itself, a pure cancel as cooperative
+    // cancellation). Do not read error_ here: it is written by onError() under
+    // the lock from a stage-task thread, so an unlocked read would race.
     cancelTasks();
-    std::rethrow_exception(error_);
   }
 }
 
@@ -494,6 +519,7 @@ void LocalRunner::cancelTasks() {
   // so serialize the error/state mutation under 'mutex_' against start() (which
   // reads error_ under the same lock) and a second concurrent cancelTasks().
   std::vector<std::shared_ptr<velox::exec::Task>> tasks;
+  std::exception_ptr error;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     // A completed query stays finished: the cancel callback can fire after
@@ -502,33 +528,38 @@ void LocalRunner::cancelTasks() {
     if (state_ == State::kFinished) {
       return;
     }
-    // If called without a previous error, set the error to cancellation.
-    // onError records its own error before calling cancelTasks() to propagate
-    // it, so it must not be overwritten here.
+    // A pure cancel records kCancelled but does NOT fabricate an error_:
+    // error_ is reserved for genuine failures, so onError() (guarded by 'if
+    // (error_)') can still record a real error that co-occurs with a cancel,
+    // and the read path can tell cancellation apart from failure by type
+    // (co_pull() surfaces OperationCancelled when cancelled-without-error).
     if (!error_) {
-      try {
-        state_ = State::kCancelled;
-        VELOX_FAIL("Query cancelled");
-      } catch (const std::exception&) {
-        error_ = std::current_exception();
-      }
+      state_ = State::kCancelled;
     }
     // Copy tasks under the lock to prevent use-after-free if reap() clears
-    // stages_ concurrently. Propagate to the cursor here too, under the lock
-    // that guards cursor_.
+    // stages_ concurrently. Snapshot error_ (may be null) and propagate a
+    // genuine error to the cursor under the lock that guards cursor_.
     for (auto& stage : stages_) {
       for (auto& task : stage) {
         tasks.push_back(task);
       }
     }
-    if (cursor_) {
-      cursor_->setError(error_);
+    error = error_;
+    if (cursor_ && error) {
+      cursor_->setError(error);
     }
   }
   VELOX_CHECK(state_ != State::kInitialized);
 
   for (auto& task : tasks) {
-    task->setError(error_);
+    if (error) {
+      task->setError(error);
+    } else {
+      // Clean cancel: stop the task without a caller error. terminate() still
+      // marks it kCanceled with its own "Cancelled" exception, which the read
+      // path translates to OperationCancelled rather than surfacing verbatim.
+      (void)task->requestCancel();
+    }
   }
 }
 
