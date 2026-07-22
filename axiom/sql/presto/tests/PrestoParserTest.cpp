@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "axiom/sql/presto/PrestoParser.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
@@ -27,6 +28,32 @@ namespace lp = facebook::axiom::logical_plan;
 namespace {
 
 class PrestoParserTest : public PrestoParserTestBase {};
+
+TEST(LikePrefixTest, extractsLiteralPrefix) {
+  // Pure prefix: the literal run before the trailing '%'.
+  EXPECT_EQ(likePrefix("foo%", std::nullopt), "foo");
+  // No wildcard: the whole pattern is the literal prefix (exact match).
+  EXPECT_EQ(likePrefix("foo", std::nullopt), "foo");
+  // A '_' wildcard also ends the prefix.
+  EXPECT_EQ(likePrefix("fo_o%", std::nullopt), "fo");
+  // Leading wildcard -> no usable prefix (caller falls back to a full listing).
+  EXPECT_EQ(likePrefix("%foo", std::nullopt), "");
+  EXPECT_EQ(likePrefix("%foo%", std::nullopt), "");
+  EXPECT_EQ(likePrefix("_foo", std::nullopt), "");
+  EXPECT_EQ(likePrefix("", std::nullopt), "");
+  // Escaped wildcards are literal and stay in the prefix.
+  EXPECT_EQ(likePrefix("foo\\%bar%", std::string("\\")), "foo%bar");
+  EXPECT_EQ(likePrefix("\\%foo%", std::string("\\")), "%foo");
+}
+
+TEST(LikePrefixTest, rejectsNonSingleCharacterEscape) {
+  VELOX_ASSERT_THROW(
+      likePrefix("foo%", std::string("ab")),
+      "Escape string must be a single character");
+  VELOX_ASSERT_THROW(
+      likePrefix("foo%", std::string("")),
+      "Escape string must be a single character");
+}
 
 TEST_F(PrestoParserTest, unnest) {
   {
