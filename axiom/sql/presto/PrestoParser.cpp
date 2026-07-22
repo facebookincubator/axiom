@@ -1576,7 +1576,9 @@ class RelationPlanner : public AstVisitor {
     // SQL set-operation output names come from the left input.
     auto leftDisplayNames = std::move(displayNames_.lastNames);
 
-    builder_ = newBuilder(leftBuilder->scope());
+    // Set-operation branches are independent: the right branch resolves against
+    // the enclosing scope, not the left branch's output columns.
+    builder_ = newBuilder(leftBuilder->outerScope());
     right->accept(this);
     auto rightBuilder = builder_;
 
