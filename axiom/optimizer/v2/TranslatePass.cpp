@@ -1949,6 +1949,24 @@ velox::core::JoinType toVeloxJoinType(lp::JoinType type) {
   VELOX_UNREACHABLE();
 }
 
+// True if a subquery lifted onto the left input correlates to a column of
+// 'right'. Such a correlation can't be satisfied by an Apply on the left input.
+bool correlatesToRight(NodeCP lifted, NodeCP leftBeforeLift, NodeCP right) {
+  const PlanObjectSet rightColumns =
+      PlanObjectSet::fromObjects(right->outputColumns());
+  for (NodeCP node = lifted; node != leftBeforeLift; node = node->inputs()[0]) {
+    if (node->nodeType() != NodeType::kApply) {
+      continue;
+    }
+    for (ColumnCP column : node->as<Apply>()->correlationColumns()) {
+      if (rightColumns.contains(column)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 Translated Translator::translateJoin(
     const lp::JoinNode& join,
     const LpNameSet& required) {
@@ -2038,8 +2056,19 @@ Translated Translator::translateJoin(
 
   JoinCondition::Split split;
   if (join.condition() != nullptr) {
+    // Lift a subquery in the condition onto the left input; the condition then
+    // references the lifted result column.
+    NodeCP leftBeforeLift = left.node;
     ExprCP condition =
-        translateExpr(*join.condition(), merged, /*applyTarget=*/nullptr);
+        translateExpr(*join.condition(), merged, /*applyTarget=*/&left.node);
+    // A subquery correlated to the right input, lifted onto the left,
+    // references a column the left can't provide.
+    if (correlatesToRight(left.node, leftBeforeLift, right.node)) {
+      VELOX_NYI(
+          "Correlated subquery referencing the right side of an outer join's "
+          "ON clause is not supported");
+    }
+
     split = JoinCondition::splitEquiKeys(
         ExprFactory::flattenAnd(condition),
         PlanObjectSet::fromObjects(left.node->outputColumns()),
