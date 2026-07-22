@@ -187,3 +187,16 @@ FROM (
             / sum(b) OVER (PARTITION BY a)) AS pct
     FROM t
 )
+----
+-- ORDER BY a window nested in an expression that also appears in the SELECT
+-- list: the sort key matches the SELECT item and reuses its window.
+-- ordered
+SELECT a, c, c / sum(c) OVER () AS share FROM t ORDER BY c / sum(c) OVER () DESC
+----
+-- ORDER BY a window nested in an expression not present in the SELECT list.
+-- ordered
+SELECT a, c FROM t ORDER BY c / sum(c) OVER () DESC
+----
+-- SELECT DISTINCT with a nested window in ORDER BY that repeats a SELECT item.
+-- ordered
+SELECT DISTINCT c / sum(c) OVER () AS s FROM t ORDER BY c / sum(c) OVER ()
