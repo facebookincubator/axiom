@@ -81,3 +81,12 @@ SELECT DISTINCT a, COUNT(*) AS cnt FROM t GROUP BY a ORDER BY a
 -- Aggregate alias collides with a GROUP BY key name.
 -- duckdb: SELECT max(b) FROM t GROUP BY b
 SELECT MAX(b) AS b FROM t GROUP BY b
+----
+-- ORDER BY over a global aggregation: the sort key resolves to the aggregate
+-- output, whether written as the aggregate expression or the SELECT alias.
+SELECT count(*) AS c FROM t ORDER BY count(*) DESC
+----
+SELECT count(*) AS c FROM t ORDER BY c DESC
+----
+-- Global aggregation with HAVING and ORDER BY together.
+SELECT count(*) AS c FROM t HAVING count(*) > 1 ORDER BY count(*)

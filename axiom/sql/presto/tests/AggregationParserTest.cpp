@@ -44,6 +44,24 @@ TEST_F(AggregationParserTest, countStar) {
     auto matcher = matchScan().aggregate().filter().output();
     testSelect("SELECT count(*) FROM nation HAVING count(*) > 100", matcher);
   }
+
+  {
+    // ORDER BY over a global aggregation: the sort key resolves to the
+    // aggregate output, whether written as the aggregate expression, the
+    // SELECT alias, or an ordinal.
+    auto matcher = matchScan().aggregate().sort().output();
+    testSelect("SELECT count(*) FROM nation ORDER BY count(*) DESC", matcher);
+    testSelect("SELECT count(*) AS c FROM nation ORDER BY c DESC", matcher);
+    testSelect("SELECT count(*) FROM nation ORDER BY 1", matcher);
+  }
+
+  {
+    // HAVING and ORDER BY together over a global aggregation.
+    auto matcher = matchScan().aggregate().filter().sort().output();
+    testSelect(
+        "SELECT count(*) FROM nation HAVING count(*) > 100 ORDER BY count(*)",
+        matcher);
+  }
 }
 
 TEST_F(AggregationParserTest, nestedAggregateRejected) {
