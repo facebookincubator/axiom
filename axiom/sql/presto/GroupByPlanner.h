@@ -53,11 +53,13 @@ class GroupByPlanner {
       const OrderByPtr& orderBy) &&;
 
   /// Detects implicit global aggregation (e.g. SELECT count(*) FROM t)
-  /// and plans it. Returns true if aggregation was added. Accepts raw AST
-  /// select items and resolves them internally.
+  /// and plans it, including any ORDER BY over the aggregates. Returns true if
+  /// aggregation was added. Accepts raw AST select items and resolves them
+  /// internally.
   bool tryPlanGlobalAgg(
       const std::vector<SelectItemPtr>& selectItems,
-      const ExpressionPtr& having) &&;
+      const ExpressionPtr& having,
+      const OrderByPtr& orderBy) &&;
 
  private:
   std::vector<std::vector<lp::ExprApi>> expandGroupingSets(
