@@ -982,7 +982,10 @@ bool MarkDistinct::KeyEq::operator()(const MarkDistinct* node, const Key& key)
 }
 
 Values::Values(Key key)
-    : Node(NodeType::kValues, ColumnVector{key.outputColumns}, {}),
+    : Node(
+          NodeType::kValues,
+          ColumnVector{key.outputColumns},
+          {.globalPartition = Partitioning::globalGather()}),
       source_(key.source),
       rows_(key.rows),
       channels_(std::move(key.channels)) {
@@ -1184,13 +1187,29 @@ bool Unnest::KeyEq::operator()(const Unnest* node, const Key& key) const {
 
 namespace {
 
-// Output global partitioning of a union: bucketed on the union output columns
-// when every leg is connector-bucketed on leg columns that map (via legColumns)
-// to those same output columns, with copartitionable partitionings. The
-// representative type is the min-partition-count leg's — its count equals the
-// copartition's — reused as a query-lifetime pointer. Unspecified otherwise, so
-// the union then distributes its legs independently.
+// Output global partitioning of a union:
+//  - Gather, when every leg is already gathered (single-task): the union then
+//    runs as one task, so no isolating exchange is needed.
+//  - Otherwise bucketed on the union output columns, when every leg is
+//    connector-bucketed on leg columns that map (via legColumns) to those same
+//    output columns, with copartitionable partitionings. The representative
+//    type is the min-partition-count leg's — its count equals the copartition's
+//    — reused as a query-lifetime pointer.
+//  - Unspecified otherwise, so the union then distributes its legs
+//    independently.
 Partitioning unionGlobalPartition(const UnionAll::Key& key) {
+  bool allGathered = true;
+  for (const auto* input : key.inputs) {
+    if (!input->physicalProperties().globalPartition.is(
+            PartitionKind::kGather)) {
+      allGathered = false;
+      break;
+    }
+  }
+  if (allGathered) {
+    return Partitioning::globalGather();
+  }
+
   const connector::PartitionType* representative = nullptr;
   ExprVector outputKeys;
   for (size_t leg = 0; leg < key.inputs.size(); ++leg) {

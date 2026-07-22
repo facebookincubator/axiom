@@ -740,11 +740,16 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       // to the same output columns with copartitionable types, and then all
       // legs share one grouped fragment. Otherwise each leg distributes
       // independently (arbitrary / round-robin).
-      NodeCP coBucketed = builder().make<UnionAll>(
+      NodeCP coalesced = builder().make<UnionAll>(
           {newInputs, node->legColumns(), node->outputColumns()});
-      if (coBucketed->physicalProperties().globalPartition.is(
-              PartitionKind::kPartitioned)) {
-        return coBucketed;
+      const auto& partition = coalesced->physicalProperties().globalPartition;
+      // No isolating exchange is needed when the legs co-bucket into one
+      // grouped fragment, nor when every leg is single-task (gathered) — then
+      // the union itself runs as a single task. See DistributedExecution.md
+      // section 1.
+      if (partition.is(PartitionKind::kPartitioned) ||
+          partition.is(PartitionKind::kGather)) {
+        return coalesced;
       }
       for (NodeCP& newInput : newInputs) {
         newInput = arbitrary(newInput);
