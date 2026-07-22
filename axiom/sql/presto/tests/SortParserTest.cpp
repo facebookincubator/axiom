@@ -183,6 +183,35 @@ TEST_F(SortParserTest, nonSelectedColumn) {
       parseSql(baseSelect + " ORDER BY 5"), "is not in the select list");
 }
 
+TEST_F(SortParserTest, windowInOrderBy) {
+  connector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+
+  // A window nested in an ORDER BY expression that also appears in the SELECT
+  // list: the sort key matches the SELECT item and reuses its window rather
+  // than being re-added as an unresolvable nested-window projection. The window
+  // is projected once, then the SELECT list, then the sort.
+  testSelect(
+      "SELECT a, a / sum(a) OVER () AS s FROM t ORDER BY a / sum(a) OVER () DESC",
+      matchScan("t").project().project().sort().output({"a", "s"}));
+
+  // The window appears only in the ORDER BY expression: it is widened into the
+  // projection, sorted on, then trimmed back to the SELECT list.
+  testSelect(
+      "SELECT a FROM t ORDER BY a / sum(a) OVER () DESC",
+      matchScan("t").project().project().sort().project().output({"a"}));
+
+  // SELECT DISTINCT: a nested window in ORDER BY that repeats a SELECT item
+  // sorts on the distinct output.
+  testSelect(
+      "SELECT DISTINCT a / sum(a) OVER () AS s FROM t ORDER BY a / sum(a) OVER ()",
+      matchScan("t").project().project().aggregate().sort().output({"s"}));
+
+  // SELECT DISTINCT rejects an ORDER BY expression not in the SELECT list.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("SELECT DISTINCT a AS s FROM t ORDER BY sum(a) OVER ()"),
+      "For SELECT DISTINCT, ORDER BY expressions must be output expressions");
+}
+
 TEST_F(SortParserTest, ambiguousAlias) {
   connector_->addTable("t", ROW({"a", "b", "c"}, INTEGER()));
 
