@@ -1157,6 +1157,10 @@ struct BaseTable : public TableObject {
   /// the cardinality is unknown.
   std::optional<float> filteredCardinality{0};
 
+  /// True when connector metadata proves that this table scan returns no rows.
+  /// This is an exact semantic fact, not a cardinality estimate.
+  bool knownEmpty{false};
+
   SubfieldSet controlSubfields;
 
   SubfieldSet payloadSubfields;

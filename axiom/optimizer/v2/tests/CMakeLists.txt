@@ -15,6 +15,7 @@
 add_executable(
   axiom_optimizer_v2_test
   AlgebraicPropertiesTest.cpp
+  EmptyFoldTest.cpp
   JoinHypergraphTest.cpp
   RelationSetTest.cpp
   TpchPlanTest.cpp

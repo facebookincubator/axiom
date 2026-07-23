@@ -23,6 +23,7 @@
 #include "axiom/optimizer/v2/EstimateLeafStatsPass.h"
 #include "axiom/optimizer/v2/EstimateProvider.h"
 #include "axiom/optimizer/v2/ExpandAggregatePass.h"
+#include "axiom/optimizer/v2/FoldEmptyInputsPass.h"
 #include "axiom/optimizer/v2/FoldMetadataAggregatePass.h"
 #include "axiom/optimizer/v2/LimitAndOrderPass.h"
 #include "axiom/optimizer/v2/PlanPhysicalPass.h"
@@ -90,6 +91,7 @@ PlanAndStats Optimizer::optimize(const MultiFragmentPlan::Options& options) {
   if (session_.options().useFilteredTableStats) {
     EstimateLeafStatsPass::run(folded, session_, evaluator_, scanHandles);
   }
+  folded = FoldEmptyInputsPass::run(folded, builder);
   NodeCP physicalPlanned = PlanPhysicalPass::run(
       folded,
       builder,
@@ -156,13 +158,14 @@ QueryStats Optimizer::estimateQueryStats() {
   Builder builder;
 
   auto frontend = translateAndPushdown(plan_, schema, evaluator_, builder);
+  NodeCP folded = frontend.pushed;
   if (session_.options().useFilteredTableStats) {
-    EstimateLeafStatsPass::run(
-        frontend.pushed, session_, evaluator_, scanHandles);
+    EstimateLeafStatsPass::run(folded, session_, evaluator_, scanHandles);
   }
+  folded = FoldEmptyInputsPass::run(folded, builder);
 
   EstimateProvider estimateProvider;
-  const Estimate& estimate = estimateProvider.estimate(frontend.pushed);
+  const Estimate& estimate = estimateProvider.estimate(folded);
 
   const auto& columns = frontend.translated.outputColumns;
   const auto& names = frontend.translated.outputNames;

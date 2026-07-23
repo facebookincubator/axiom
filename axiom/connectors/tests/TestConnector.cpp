@@ -229,6 +229,14 @@ void TestTable::setStats(
   }
 }
 
+void TestTable::setKnownEmpty(bool knownEmpty) {
+  exportedLayout_->setKnownEmpty(knownEmpty);
+}
+
+void TestTable::setFilteredStats(FilteredTableStats filteredStats) {
+  exportedLayout_->setFilteredStats(std::move(filteredStats));
+}
+
 namespace {
 
 struct BucketedRows {
@@ -771,7 +779,10 @@ TestTableLayout::co_estimateStats(
   if (const auto& inspector = testConnector->onEstimateStats()) {
     inspector(filterConjuncts);
   }
-  co_return std::nullopt;
+  if (knownEmpty_) {
+    co_return FilteredTableStats{.guaranteedEmpty = true, .numRows = 0};
+  }
+  co_return filteredStats_;
 }
 
 std::shared_ptr<TestTable> TestConnectorMetadata::addTable(

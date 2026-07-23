@@ -311,7 +311,9 @@ FilteredTableStats estimateStatsFromPartitionStats(
   }
 
   return FilteredTableStats{
-      totalRows, std::move(columnStats), std::move(rejectedFilterIndices)};
+      .numRows = totalRows,
+      .columnStats = std::move(columnStats),
+      .rejectedFilterIndices = std::move(rejectedFilterIndices)};
 }
 
 } // namespace

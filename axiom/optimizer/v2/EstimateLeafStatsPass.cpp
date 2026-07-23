@@ -61,13 +61,13 @@ void applyColumnStats(
   const_cast<Value&>(existing) = value;
 }
 
-// Applies one base table's connector stats result. Sets filteredCardinality to
-// the connector's post-filter row count, scaled by the optimizer's own
-// selectivity for any filters the connector rejected. A nullopt result (the
-// connector does not support stats) leaves filteredCardinality at 0 so
-// downstream estimation falls back to constraint-based selectivity. Rejected
-// filters scale only the row count; per-column constraints are re-derived
-// downstream.
+// Applies one base table's connector stats result. Records exact empty facts
+// before applying row-count stats, then sets filteredCardinality to the
+// connector's post-filter row count, scaled by the optimizer's own selectivity
+// for any filters the connector rejected. A nullopt result (the connector does
+// not support stats) leaves filteredCardinality at 0 so downstream estimation
+// falls back to constraint-based selectivity. Rejected filters scale only the
+// row count; per-column constraints are re-derived downstream.
 void applyFilteredStats(
     const Scan& scan,
     const std::vector<ColumnCP>& statColumns,
@@ -77,6 +77,13 @@ void applyFilteredStats(
   }
 
   auto* baseTable = const_cast<BaseTable*>(scan.baseTable());
+  const bool guaranteedEmpty = stats->guaranteedEmpty;
+  if (guaranteedEmpty) {
+    VELOX_CHECK_EQ(stats->numRows, 0);
+    baseTable->knownEmpty = true;
+    baseTable->filteredCardinality = 0;
+    return;
+  }
 
   if (!stats->columnStats.empty()) {
     VELOX_CHECK_EQ(stats->columnStats.size(), statColumns.size());

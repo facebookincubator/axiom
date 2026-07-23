@@ -139,6 +139,16 @@ class TestTableLayout : public TableLayout {
   std::unique_ptr<DiscretePredicates> discretePredicates(
       const std::vector<const Column*>& columns) const override;
 
+  /// Makes co_estimateStats() report this layout as guaranteed empty.
+  void setKnownEmpty(bool knownEmpty) {
+    knownEmpty_ = knownEmpty;
+  }
+
+  /// Sets filtered scan stats returned by co_estimateStats().
+  void setFilteredStats(std::optional<FilteredTableStats> filteredStats) {
+    filteredStats_ = std::move(filteredStats);
+  }
+
   velox::connector::ColumnHandlePtr createColumnHandle(
       const ConnectorSessionPtr& session,
       const std::string& columnName,
@@ -155,8 +165,7 @@ class TestTableLayout : public TableLayout {
       velox::RowTypePtr dataColumns,
       std::optional<LookupKeys> lookupKeys) const override;
 
-  // Forwards the received conjuncts to the installed estimate-stats inspector,
-  // then returns std::nullopt (no stats), as the base does.
+  /// Returns configured filtered stats, or a guaranteed-empty result.
   folly::coro::Task<std::optional<FilteredTableStats>> co_estimateStats(
       ConnectorSessionPtr session,
       velox::connector::ConnectorTableHandlePtr tableHandle,
@@ -167,6 +176,8 @@ class TestTableLayout : public TableLayout {
   std::vector<const Column*> discreteValueColumns_;
   std::vector<velox::Variant> discreteValues_;
   std::shared_ptr<const PartitionType> partitionType_;
+  bool knownEmpty_{false};
+  std::optional<FilteredTableStats> filteredStats_;
 };
 
 /// RowVectors are appended using the addData() interface and the vector
@@ -225,6 +236,12 @@ class TestTable : public Table {
   void setStats(
       uint64_t numRows,
       const std::unordered_map<std::string, ColumnStatistics>& columnStats);
+
+  /// Makes co_estimateStats() report this table as guaranteed empty.
+  void setKnownEmpty(bool knownEmpty);
+
+  /// Sets filtered scan stats returned by this table's layout.
+  void setFilteredStats(FilteredTableStats filteredStats);
 
  private:
   // Per-column state for incremental stat computation during addData.
