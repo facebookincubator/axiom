@@ -16,12 +16,12 @@
 
 #include "axiom/runner/Runner.h"
 
-#include <folly/CancellationToken.h>
 #include <folly/container/F14Map.h>
 #include <folly/coro/BlockingWait.h>
+#include <folly/coro/Invoke.h>
 #include <folly/coro/Task.h>
 #include <folly/coro/Timeout.h>
-#include <folly/coro/WithCancellation.h>
+#include <glog/logging.h>
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::axiom::runner {
@@ -45,44 +45,55 @@ AXIOM_DEFINE_EMBEDDED_ENUM_NAME(Runner, State, stateNames);
 void Runner::drain(
     const std::function<void(velox::RowVectorPtr)>& onBatch,
     int64_t timeoutMicros) {
-  // Hold the generator as a local; drain() co_closes the runner below (on this
-  // calling, non-executor thread) so the run is always reaped before return.
-  auto generator = execute();
-  std::atomic<bool> timedOut{false};
-  auto loop = [&]() -> folly::coro::Task<void> {
-    const auto token = co_await folly::coro::co_current_cancellation_token;
-    folly::CancellationCallback onTimeout{token, [&] { timedOut.store(true); }};
-    while (auto batch = co_await generator.next()) {
-      onBatch(std::move(*batch));
-    }
-  };
-
-  std::exception_ptr error;
-  try {
-    if (timeoutMicros > 0) {
-      folly::coro::blockingWait(
-          folly::coro::timeout(
-              loop(), std::chrono::microseconds(timeoutMicros)));
-    } else {
-      folly::coro::blockingWait(loop());
-    }
-  } catch (const std::exception&) {
-    error = std::current_exception();
-  }
-
-  // Reap whether the drain succeeded, timed out, or failed, before surfacing
-  // any error. On a deadline this reaps the cancelled run; VELOX_USER_FAIL is
-  // thrown only after the reap completes.
-  folly::coro::blockingWait(co_close());
-
-  if (error) {
-    if (timedOut.load()) {
-      VELOX_USER_FAIL(
-          "Query exceeded maximum time limit of {:.2f}s",
-          timeoutMicros / 1'000'000.0);
-    }
-    std::rethrow_exception(error);
-  }
+  folly::coro::blockingWait(
+      folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        auto generator = execute();
+        auto loop = [&]() -> folly::coro::Task<void> {
+          while (auto batch = co_await generator.next()) {
+            onBatch(std::move(*batch));
+          }
+        };
+        // co_invoke the loop: folly::coro::timeout() takes the awaitable by
+        // value and does not immediately co_await it, so invoking the lambda
+        // bare would leave the returned Task holding a dangling reference.
+        std::exception_ptr error;
+        bool timedOut = false;
+        try {
+          if (timeoutMicros > 0) {
+            co_await folly::coro::timeout(
+                folly::coro::co_invoke(loop),
+                std::chrono::microseconds(timeoutMicros));
+          } else {
+            co_await folly::coro::co_invoke(loop);
+          }
+        } catch (const folly::FutureTimeout&) {
+          timedOut = true;
+        } catch (const std::exception&) {
+          error = std::current_exception();
+        }
+        // Reap regardless, before surfacing any error or the deadline failure.
+        // A reap failure must not mask the original stop reason: if the drain
+        // already failed or timed out, keep that and let the reap error be
+        // secondary.
+        try {
+          co_await co_close();
+        } catch (const std::exception& e) {
+          if (!timedOut && !error) {
+            throw;
+          }
+          LOG(WARNING) << "co_close() failed during reap, surfacing the "
+                          "original stop reason instead: "
+                       << e.what();
+        }
+        if (timedOut) {
+          VELOX_USER_FAIL(
+              "Query exceeded maximum time limit of {:.2f}s",
+              timeoutMicros / 1'000'000.0);
+        }
+        if (error) {
+          std::rethrow_exception(error);
+        }
+      }));
 }
 
 } // namespace facebook::axiom::runner

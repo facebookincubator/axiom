@@ -94,16 +94,18 @@ class Runner {
   /// Returns the state of execution.
   virtual State state() const = 0;
 
-  /// Convenience that synchronously drives execute() to completion, invoking
-  /// 'onBatch' for each result batch, then co_closes the runner before
-  /// returning. For callers that are not themselves coroutines — synchronous
-  /// entry points such as the CLI, FFI boundaries, and tests. A coroutine
-  /// caller should await execute() (and co_close()) directly instead. Blocks
-  /// the calling thread, so it must NOT be called from a Velox executor thread
-  /// (blocking there starves the executor).
+  /// Synchronous convenience that drives execute() to completion (or the
+  /// deadline), invokes 'onBatch' for each result batch, then reaps via
+  /// co_close() before returning. For non-coroutine callers that do not need
+  /// external cancellation — simple entry points, tests, benchmarks. Blocks the
+  /// calling thread, so it must NOT be called from a Velox executor thread.
   ///
-  /// When 'timeoutMicros' > 0, enforces a wall-clock deadline via cooperative
-  /// cancellation; on the deadline the drain fails with VELOX_USER_FAIL.
+  /// When 'timeoutMicros' > 0, enforces a cooperative deadline over execution
+  /// only (not the parse/permission/optimize phases nor a write commit; a
+  /// non-yielding operator can overrun it), failing with VELOX_USER_FAIL on the
+  /// deadline. A caller that needs external cancellation does not use drain():
+  /// it drives execute()/co_close() under its own co_withCancellation scope and
+  /// catches folly::OperationCancelled (see SqlQueryRunner::run).
   void drain(
       const std::function<void(velox::RowVectorPtr)>& onBatch,
       int64_t timeoutMicros = 0);
