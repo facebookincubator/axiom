@@ -73,6 +73,12 @@ struct TestResult {
     VELOX_CHECK_EQ(result->childrenSize(), 1);
     return result->childAt(0)->variantAt(0);
   }
+
+  /// Typed accessor for the single scalar result. Throws if it is null.
+  template <typename T>
+  T getOnlyResult() const {
+    return getOnlyResult().template value<T>();
+  }
 };
 
 class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
