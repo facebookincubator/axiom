@@ -78,8 +78,12 @@ class Optimizer {
   ///   - Decorrelate — rewrite correlated subqueries as joins;
   ///   - LimitAndOrder — fold limits into ordering operators;
   ///   - PushdownAndPrune — push predicates down, prune unused columns;
+  ///   - FoldMetadataAggregate — answer metadata-only aggregates from
+  ///   connector stats when available;
   ///   - EstimateLeafStats — populate base-table cardinalities from the
   ///   connector;
+  ///   - FoldEmptyInputs — propagate exact empty-input facts through logical
+  ///   operators;
   ///   - PlanPhysical — cost-based join order and distribution;
   ///   - PrecomputeProjections — lift compound expressions into `Project`s
   ///   where
@@ -108,10 +112,9 @@ class Optimizer {
   /// Estimates the result statistics of the plan (the estimate behind
   /// SHOW STATS FOR (<query>)). Runs the shared front end (translate +
   /// pushdown) and, when the `useFilteredTableStats` option is set,
-  /// EstimateLeafStatsPass, then reads the root estimate via EstimateProvider —
-  /// the v2 analogue of v1 reading the root DerivedTable after logical
-  /// optimization. The returned pointers are valid only for the enclosing
-  /// QueryGraphContext's lifetime.
+  /// EstimateLeafStatsPass, folds exact empty-input facts, then reads the root
+  /// estimate via EstimateProvider. The returned pointers are valid only for
+  /// the enclosing QueryGraphContext's lifetime.
   QueryStats estimateQueryStats();
 
  private:

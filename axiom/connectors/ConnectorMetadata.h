@@ -368,9 +368,13 @@ struct SampleResult {
   int64_t numMatched;
 };
 
-/// Result of estimating filtered table statistics from the connector.
+/// Result of estimated or proven facts about a filtered table scan.
 struct FilteredTableStats {
-  /// Estimated row count after applying filters.
+  /// True when the connector proves the scan returns no rows. This is an exact
+  /// guarantee, not an estimate. When true, numRows must be 0.
+  bool guaranteedEmpty{false};
+
+  /// Row count after applying filters. This may be an estimate.
   uint64_t numRows{0};
 
   /// Per-column statistics corresponding 1:1 to the 'columns' parameter of
@@ -540,10 +544,16 @@ class TableLayout {
     VELOX_UNSUPPORTED("Sampling is not supported for this layout");
   }
 
-  /// Returns estimated statistics for a table scan with the given filters.
-  /// Connectors that have access to partition-level metadata (e.g., Hive
-  /// Metastore) can resolve matching partitions and aggregate their stats
-  /// without reading data.
+  /// Returns estimated statistics, or exact emptiness, for a table scan with
+  /// the given filters. Connectors that have access to partition-level metadata
+  /// (e.g., Hive Metastore) can resolve matching partitions and aggregate their
+  /// stats without reading data.
+  ///
+  /// A nullopt result means the connector has no information. A present result
+  /// with guaranteedEmpty set to false is an estimate. A present result with
+  /// guaranteedEmpty set to true is an exact proof that the scan returns no
+  /// rows, and must have numRows set to 0. A numRows == 0 estimate is not
+  /// treated as proof unless guaranteedEmpty is true.
   ///
   /// @param session Connector session for the current query.
   /// @param tableHandle Table handle for the table.

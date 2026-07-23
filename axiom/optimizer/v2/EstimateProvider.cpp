@@ -101,6 +101,9 @@ Estimate EstimateProvider::compute(NodeCP node) {
       const auto* scan = node->as<Scan>();
       const auto* baseTable = scan->baseTable();
       Estimate result;
+      VELOX_CHECK(
+          !baseTable->knownEmpty,
+          "Known-empty scans should be folded to empty Values before estimation");
       // Narrow per-column constraints from the scan filters; join propagation
       // reads these regardless of the cardinality source. The filter
       // selectivity is unknown when `conjunctsSelectivity` cannot estimate it;
@@ -232,7 +235,8 @@ Estimate EstimateProvider::compute(NodeCP node) {
       for (NodeCP input : node->inputs()) {
         total = add(total, estimate(input).cardinality);
       }
-      result.cardinality = maxOf(1.0f, total);
+      bool isEmpty = (total.has_value() && *total == 0);
+      result.cardinality = isEmpty ? 0 : maxOf(1.0f, total);
       return result;
     }
 
@@ -240,7 +244,11 @@ Estimate EstimateProvider::compute(NodeCP node) {
       const auto* values = node->as<Values>();
       Estimate result;
       if (values->rows() != nullptr) {
-        result.cardinality = std::max<float>(1, values->rows()->array().size());
+        const auto numRows = static_cast<float>(values->rows()->array().size());
+        result.cardinality = numRows == 0 ? 0 : std::max(1.0f, numRows);
+      } else if (values->source() == nullptr) {
+        // No source and no folded rows is the schema-only empty Values shape.
+        result.cardinality = 0;
       } else {
         result.cardinality = kDefaultLeafCardinality;
       }
