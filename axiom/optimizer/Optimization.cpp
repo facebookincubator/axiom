@@ -3895,4 +3895,28 @@ ExprCP Optimization::tryFoldConstant(ExprCP expr) {
   }
 }
 
+velox::Variant Optimization::evaluate(ExprCP expr) {
+  if (expr->is(PlanType::kLiteralExpr)) {
+    return expr->as<Literal>()->literal();
+  }
+  VELOX_CHECK(
+      expr->columns().empty(),
+      "Expression to evaluate must not reference columns");
+  if (emptyInput_ == nullptr) {
+    emptyInput_ = std::make_shared<velox::RowVector>(
+        evaluator()->pool(),
+        velox::ROW({}),
+        /*nulls=*/nullptr,
+        /*length=*/1,
+        std::vector<velox::VectorPtr>{});
+  }
+
+  auto typedExpr = toTypedExpr(expr);
+  auto exprSet = evaluator()->compile(typedExpr);
+  velox::SelectivityVector rows(1);
+  velox::VectorPtr result;
+  evaluator()->evaluate(exprSet.get(), rows, *emptyInput_, result);
+  return result->variantAt(0);
+}
+
 } // namespace facebook::axiom::optimizer

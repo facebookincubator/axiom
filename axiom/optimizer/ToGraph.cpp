@@ -2767,13 +2767,8 @@ void ToGraph::makeValuesTable(const lp::ValuesNode& values) {
       std::vector<velox::Variant> rowVariants;
       rowVariants.reserve(row.size());
       for (const auto& expr : row) {
-        auto literal = translateExpr(expr);
-        VELOX_USER_CHECK(
-            literal->is(PlanType::kLiteralExpr),
-            "Expressions used in Values node must be constant-foldable: {}",
-            expr->toString());
-
-        rowVariants.emplace_back(literal->as<Literal>()->literal());
+        rowVariants.emplace_back(
+            queryCtx()->optimization()->evaluate(translateExpr(expr)));
       }
       variants.emplace_back(velox::Variant::row(std::move(rowVariants)));
     }

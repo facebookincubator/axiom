@@ -188,6 +188,11 @@ class Optimization {
   /// constant or evaluation fails.
   ExprCP tryFoldConstant(ExprCP expr);
 
+  /// Evaluates a column-free 'expr' to a single value. Places no determinism or
+  /// constant-ness requirement on 'expr': for contexts like VALUES where an
+  /// expression is evaluated exactly once.
+  velox::Variant evaluate(ExprCP expr);
+
   /// Returns a dedupped left deep reduction with 'func' for the
   /// elements in 'expr'. The elements are sorted on plan object
   /// id and then combined into a left deep reduction on 'func'.
@@ -483,6 +488,9 @@ class Optimization {
   ToGraph toGraph_;
 
   ToVelox toVelox_;
+
+  // Reusable single empty row, the input for evaluate().
+  velox::RowVectorPtr emptyInput_;
 
   // Tracks base table IDs that have already been estimated. Prevents
   // duplicate processing when the same BaseTable appears in multiple DTs

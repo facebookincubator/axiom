@@ -582,11 +582,11 @@ class Translator {
       const Scope& scope,
       NodeCP* applyTarget);
 
-  // Translates each expression in 'exprRows' and, if every one folds to a
-  // `Literal`, returns the row-wise `Variant`s. Returns nullopt if any
-  // entry doesn't fold. `VALUES` expressions cannot reference input
-  // columns, so translation runs against an empty scope.
-  std::optional<std::vector<velox::Variant>> foldExprRowsToVariants(
+  // Evaluates each expression in 'exprRows' to its value and returns the
+  // row-wise `Variant`s. `VALUES` expressions cannot reference input columns,
+  // so evaluation runs against an empty scope; each is evaluated exactly once,
+  // so non-deterministic expressions are allowed.
+  std::vector<velox::Variant> evaluateExprRowsToVariants(
       const lp::ValuesNode::Exprs& exprRows);
 
   SubqueryContext subqueries_;
@@ -1633,7 +1633,7 @@ NodeCP Translator::lowerGroupingSets(
   return aggNode;
 }
 
-std::optional<std::vector<velox::Variant>> Translator::foldExprRowsToVariants(
+std::vector<velox::Variant> Translator::evaluateExprRowsToVariants(
     const lp::ValuesNode::Exprs& exprRows) {
   Scope emptyScope;
   std::vector<velox::Variant> rows;
@@ -1642,14 +1642,8 @@ std::optional<std::vector<velox::Variant>> Translator::foldExprRowsToVariants(
     std::vector<velox::Variant> rowValues;
     rowValues.reserve(exprRow.size());
     for (const auto& expr : exprRow) {
-      // VALUES literal expressions have no relational input above; lift
-      // forbidden. Subqueries inside VALUES are NYI.
-      ExprCP translated =
-          translateExpr(*expr, emptyScope, /*applyTarget=*/nullptr);
-      if (!translated->is(PlanType::kLiteralExpr)) {
-        return std::nullopt;
-      }
-      rowValues.emplace_back(translated->as<Literal>()->literal());
+      rowValues.emplace_back(simplifier_.evaluate(
+          translateExpr(*expr, emptyScope, /*applyTarget=*/nullptr)));
     }
     rows.emplace_back(velox::Variant::row(std::move(rowValues)));
   }
@@ -1663,25 +1657,21 @@ Translated Translator::translateValues(
   ColumnVector outputColumns =
       makeOutputColumns(*values.outputType(), values.cardinality(), scope);
 
-  // Fold `Exprs` data to a single `Variant::array(rows)` at translate
-  // time. Constant-foldable rows arrive here as `Literal`s (Call /
-  // SpecialForm translation has already simplified). If any entry
-  // isn't a literal, fall back to passing the source through — emit
-  // will fail loudly on the unsupported shape.
-  const velox::Variant* foldedRows = nullptr;
+  // Evaluate `Exprs` data to a single `Variant::array(rows)` at translate time.
+  // Other data shapes (constant `Variants` / `Vectors`) pass the source
+  // through.
+  const velox::Variant* evaluatedRows = nullptr;
   if (const auto* exprRows =
           std::get_if<lp::ValuesNode::Exprs>(&values.data())) {
-    auto rows = foldExprRowsToVariants(*exprRows);
-    if (rows.has_value()) {
-      foldedRows = queryCtx()->registerVariant(
-          std::make_unique<velox::Variant>(
-              velox::Variant::array(std::move(*rows))));
-    }
+    evaluatedRows = queryCtx()->registerVariant(
+        std::make_unique<velox::Variant>(
+            velox::Variant::array(evaluateExprRowsToVariants(*exprRows))));
   }
 
-  const lp::ValuesNode* passthrough = foldedRows == nullptr ? &values : nullptr;
+  const lp::ValuesNode* passthrough =
+      evaluatedRows == nullptr ? &values : nullptr;
   ValuesCP valuesNode =
-      builder_.makeValues(passthrough, foldedRows, std::move(outputColumns));
+      builder_.makeValues(passthrough, evaluatedRows, std::move(outputColumns));
   return {valuesNode, std::move(scope)};
 }
 

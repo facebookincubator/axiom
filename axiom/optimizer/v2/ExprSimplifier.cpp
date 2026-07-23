@@ -21,6 +21,8 @@
 #include "axiom/optimizer/v2/ExprEmitter.h"
 #include "axiom/optimizer/v2/ExprFactory.h"
 #include "velox/expression/ConstantExpr.h"
+#include "velox/vector/ComplexVector.h"
+#include "velox/vector/SelectivityVector.h"
 
 namespace facebook::axiom::optimizer::v2 {
 
@@ -179,6 +181,32 @@ ExprCP ExprSimplifier::tryFoldConstant(ExprCP expr) {
     // error surfaces at execution.
     return expr;
   }
+}
+
+velox::Variant ExprSimplifier::evaluate(ExprCP expr) {
+  if (expr->is(PlanType::kLiteralExpr)) {
+    return expr->as<Literal>()->literal();
+  }
+
+  VELOX_CHECK(
+      expr->columns().empty(),
+      "Expression to evaluate must not reference columns");
+
+  if (emptyInput_ == nullptr) {
+    emptyInput_ = std::make_shared<velox::RowVector>(
+        evaluator_.pool(),
+        velox::ROW({}),
+        /*nulls=*/nullptr,
+        /*length=*/1,
+        std::vector<velox::VectorPtr>{});
+  }
+
+  auto typedExpr = ExprEmitter{evaluator_.pool()}.toTypedExpr(expr);
+  auto exprSet = evaluator_.compile(typedExpr);
+  velox::SelectivityVector rows(1);
+  velox::VectorPtr result;
+  evaluator_.evaluate(exprSet.get(), rows, *emptyInput_, result);
+  return result->variantAt(0);
 }
 
 } // namespace facebook::axiom::optimizer::v2
