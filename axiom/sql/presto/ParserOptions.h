@@ -34,10 +34,12 @@ struct ParserOptions : public facebook::velox::config::ConfigProvider {
       "parse_decimal_literal_as_double";
   static constexpr std::string_view kMaxExpressionDepth =
       "max_expression_depth";
+  static constexpr std::string_view kMaxSubqueryDepth = "max_subquery_depth";
 
   static constexpr bool kFriendlySqlDefault = true;
   static constexpr bool kParseDecimalLiteralAsDoubleDefault = true;
-  static constexpr uint32_t kMaxExpressionDepthDefault = 256;
+  static constexpr uint32_t kMaxExpressionDepthDefault = 512;
+  static constexpr uint32_t kMaxSubqueryDepthDefault = 1024;
 
   ParserOptions();
 
@@ -58,6 +60,10 @@ struct ParserOptions : public facebook::velox::config::ConfigProvider {
   /// Maximum expression nesting depth; deeper expressions are rejected to
   /// avoid a stack overflow.
   uint32_t maxExpressionDepth{kMaxExpressionDepthDefault};
+
+  /// Maximum subquery nesting depth; deeper nesting is rejected to avoid a
+  /// stack overflow.
+  uint32_t maxSubqueryDepth{kMaxSubqueryDepthDefault};
 
   /// Constructs options from session property name-value pairs.
   /// Keys are unqualified property names (e.g., "friendly_sql").
