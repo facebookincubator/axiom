@@ -1377,6 +1377,17 @@ class RelationPlanner : public AstVisitor {
   }
 
   void processQuery(Query* query) {
+    AXIOM_PRESTO_SEMANTIC_CHECK_LT(
+        subqueryDepth_,
+        options_.maxSubqueryDepth,
+        query->location(),
+        /*token=*/std::nullopt,
+        "Subquery exceeds maximum nesting depth");
+    ++subqueryDepth_;
+    SCOPE_EXIT {
+      --subqueryDepth_;
+    };
+
     auto scope = ctes_.enterScope();
     auto savedAccumulatedNames = displayNames_.accumulatedNames;
     SCOPE_EXIT {
@@ -1603,6 +1614,8 @@ class RelationPlanner : public AstVisitor {
   const std::string user_;
   std::shared_ptr<lp::PlanBuilder> builder_;
   ParserOptions options_;
+  // Current processQuery recursion depth.
+  uint32_t subqueryDepth_{0};
   ExpressionPlanner exprPlanner_{
       user_,
       [this](Query* query) { return planSubquery(query); },

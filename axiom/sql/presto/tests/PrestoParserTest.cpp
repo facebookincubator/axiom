@@ -360,6 +360,38 @@ TEST_F(PrestoParserTest, withBasic) {
   }
 }
 
+TEST_F(PrestoParserTest, subqueryDepthCapped) {
+  // Chained CTEs have a shallow AST but recurse once per level in planning.
+  static constexpr auto kChainedCtes =
+      "WITH a AS (SELECT 1 AS x), "
+      "b AS (SELECT 2 FROM a), "
+      "c AS (SELECT 3 FROM b) "
+      "SELECT 4 AS r FROM c";
+
+  // Under the default cap the whole chain plans.
+  testSelect(
+      kChainedCtes,
+      matchValues().project().project().project().project().output({"r"}));
+
+  // The same query is rejected once the cap drops below the chain length.
+  auto parseWithDepth = [&](std::string_view sql, uint32_t maxSubqueryDepth) {
+    ParserOptions options;
+    options.maxSubqueryDepth = maxSubqueryDepth;
+    PrestoParser parser(
+        kConnectorId, "default", makeParserSession(std::move(options)));
+    return parser.parse(sql, true);
+  };
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseWithDepth(kChainedCtes, 2),
+      "Subquery exceeds maximum nesting depth");
+
+  // The cap also covers nested derived tables, not just CTE chains.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseWithDepth(
+          "SELECT * FROM (SELECT * FROM (SELECT * FROM (SELECT 1 AS x)))", 2),
+      "Subquery exceeds maximum nesting depth");
+}
+
 TEST_F(PrestoParserTest, withShadowingCte) {
   // Inner CTE shadows outer CTE with the same name. The inner CTE uses a table
   // scan (producing a Scan node) while the outer uses VALUES. Without proper
