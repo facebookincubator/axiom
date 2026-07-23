@@ -110,6 +110,7 @@ velox::core::JoinType demoteOuterToInner(
     case velox::core::JoinType::kLeftSemiProject:
     case velox::core::JoinType::kRightSemiFilter:
     case velox::core::JoinType::kRightSemiProject:
+    case velox::core::JoinType::kRightAnti:
     case velox::core::JoinType::kAnti:
     case velox::core::JoinType::kCountingAnti:
       return joinType;
@@ -229,6 +230,7 @@ bool canPushLeft(velox::core::JoinType joinType, bool leftOnly) {
     case velox::core::JoinType::kFull:
     case velox::core::JoinType::kRightSemiFilter:
     case velox::core::JoinType::kRightSemiProject:
+    case velox::core::JoinType::kRightAnti:
       return false;
     case velox::core::JoinType::kNumJoinTypes:
       break;
@@ -377,6 +379,7 @@ bool canPushRight(velox::core::JoinType joinType, bool rightOnly) {
     case velox::core::JoinType::kRight:
     case velox::core::JoinType::kRightSemiFilter:
     case velox::core::JoinType::kRightSemiProject:
+    case velox::core::JoinType::kRightAnti:
       return true;
     case velox::core::JoinType::kLeft:
     case velox::core::JoinType::kFull:
@@ -430,9 +433,10 @@ FilterTarget joinFilterTarget(
     case velox::core::JoinType::kAnti:
     case velox::core::JoinType::kCountingAnti:
       return rightOnly ? FilterTarget::kRight : FilterTarget::kKeep;
-    // ...and the left side for right-semi.
+    // ...and the left side for right-semi and right-anti.
     case velox::core::JoinType::kRightSemiFilter:
     case velox::core::JoinType::kRightSemiProject:
+    case velox::core::JoinType::kRightAnti:
       return leftOnly ? FilterTarget::kLeft : FilterTarget::kKeep;
     case velox::core::JoinType::kNumJoinTypes:
       break;
