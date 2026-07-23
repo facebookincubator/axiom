@@ -153,6 +153,27 @@ HiveTable::HiveTable(
               partitionColumnNames),
           std::move(options)) {}
 
+std::vector<std::string> HiveTable::ioColumnPriority() const {
+  const auto* hiveLayout = dynamic_cast<const HiveTableLayout*>(layouts()[0]);
+  VELOX_CHECK_NOT_NULL(hiveLayout);
+
+  bool hasDs = false;
+  bool hasTs = false;
+  for (const auto* column : hiveLayout->hivePartitionColumns()) {
+    hasDs |= column->name() == "ds";
+    hasTs |= column->name() == "ts";
+  }
+
+  // ts (hourly) is finer-grained than ds (daily), so list it first.
+  if (hasTs && hasDs) {
+    return {"ts", "ds"};
+  }
+  if (hasDs) {
+    return {"ds"};
+  }
+  return {};
+}
+
 namespace {
 std::vector<velox::TypePtr> extractPartitionKeyTypes(
     const std::vector<const Column*>& partitionedByColumns) {

@@ -513,6 +513,135 @@ TEST_P(ExplainIoTest, columnConstraints) {
           "   WHERE ds = '2026-03-17' OR length(ds) > 3"),
       noConstraints);
 
+  // A disjunction constraining two columns in every branch collapses onto one
+  // of them (ds), unioning its per-branch values; region is not emitted and the
+  // footprint is not a ds x region product.
+  ASSERT_EQ(
+      getJson(
+          "EXPLAIN (TYPE IO) "
+          "SELECT * FROM t "
+          "   WHERE (ds = '2026-03-17' AND region = 'us') "
+          "      OR (ds = '2026-03-18' AND region = 'eu')"),
+      makeTable(makeConstraint(
+          "ds",
+          "VARCHAR",
+          R"({
+            "nullsAllowed": false,
+            "ranges": [
+              {
+                "low": {"value": "2026-03-17", "bound": "EXACTLY"},
+                "high": {"value": "2026-03-17", "bound": "EXACTLY"}
+              },
+              {
+                "low": {"value": "2026-03-18", "bound": "EXACTLY"},
+                "high": {"value": "2026-03-18", "bound": "EXACTLY"}
+              }
+            ]
+          })")));
+
+  // A branch that does not constrain ds makes ds ineligible; region is
+  // constrained in both branches, so the disjunction collapses onto region.
+  ASSERT_EQ(
+      getJson(
+          "EXPLAIN (TYPE IO) "
+          "SELECT * FROM t "
+          "   WHERE (ds = '2026-03-17' AND region = 'us') OR region = 'eu'"),
+      makeTable(makeConstraint(
+          "region",
+          "VARCHAR",
+          R"({
+            "nullsAllowed": false,
+            "ranges": [
+              {
+                "low": {"value": "eu", "bound": "EXACTLY"},
+                "high": {"value": "eu", "bound": "EXACTLY"}
+              },
+              {
+                "low": {"value": "us", "bound": "EXACTLY"},
+                "high": {"value": "us", "bound": "EXACTLY"}
+              }
+            ]
+          })")));
+
+  // A disjunction of ranges collapses to the union of the branches' ranges.
+  ASSERT_EQ(
+      getJson(
+          "EXPLAIN (TYPE IO) "
+          "SELECT * FROM t "
+          "   WHERE (ds >= '2026-03-01' AND region = 'x') "
+          "      OR (ds >= '2026-03-10' AND region = 'y')"),
+      makeTable(makeConstraint(
+          "ds",
+          "VARCHAR",
+          R"({
+            "nullsAllowed": false,
+            "ranges": [
+              {"low": {"value": "2026-03-01", "bound": "EXACTLY"}}
+            ]
+          })")));
+
+  // No column is constrained in every branch, so nothing collapses.
+  ASSERT_EQ(
+      getJson(
+          "EXPLAIN (TYPE IO) "
+          "SELECT * FROM t "
+          "   WHERE (ds = '2026-03-17' AND region = 'us') OR n = 1"),
+      noConstraints);
+
+  // Two independent cross-column disjunctions collapse onto two different
+  // columns: the first onto ds, the second onto n.
+  ASSERT_EQ(
+      getJson(
+          "EXPLAIN (TYPE IO) "
+          "SELECT * FROM t "
+          "   WHERE ((ds = '2026-03-17' AND region = 'us') "
+          "       OR (ds = '2026-03-18' AND region = 'eu')) "
+          "     AND ((n = 1 AND b = true) OR (n = 2 AND b = false))"),
+      normalizeJson(R"({
+        "inputTableColumnInfos": [{
+          "table": {
+            "catalog": "test",
+            "schemaTable": {"schema": "default", "table": "t"}
+          },
+          "columnConstraints": [
+            {
+              "columnName": "ds",
+              "typeSignature": "VARCHAR",
+              "domain": {
+                "nullsAllowed": false,
+                "ranges": [
+                  {
+                    "low": {"value": "2026-03-17", "bound": "EXACTLY"},
+                    "high": {"value": "2026-03-17", "bound": "EXACTLY"}
+                  },
+                  {
+                    "low": {"value": "2026-03-18", "bound": "EXACTLY"},
+                    "high": {"value": "2026-03-18", "bound": "EXACTLY"}
+                  }
+                ]
+              }
+            },
+            {
+              "columnName": "n",
+              "typeSignature": "BIGINT",
+              "domain": {
+                "nullsAllowed": false,
+                "ranges": [
+                  {
+                    "low": {"value": 1, "bound": "EXACTLY"},
+                    "high": {"value": 1, "bound": "EXACTLY"}
+                  },
+                  {
+                    "low": {"value": 2, "bound": "EXACTLY"},
+                    "high": {"value": 2, "bound": "EXACTLY"}
+                  }
+                ]
+              }
+            }
+          ]
+        }]
+      })"));
+
   // Constraints on both explain_io columns.
   ASSERT_EQ(
       getJson(
@@ -556,8 +685,7 @@ TEST_P(ExplainIoTest, columnConstraints) {
   ASSERT_EQ(
       getJson(
           "EXPLAIN (TYPE IO) "
-          "SELECT * FROM t "
-          "   WHERE ds > '2026-03-01'"),
+          "SELECT * FROM t WHERE ds > '2026-03-01'"),
       makeTable(makeConstraint(
           "ds",
           "VARCHAR",
