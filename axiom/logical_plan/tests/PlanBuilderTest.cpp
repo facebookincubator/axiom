@@ -305,6 +305,7 @@ TEST_F(PlanBuilderTest, setOperationTypeCoercion) {
         startMatcher()
             .project()
             .setOperation(SetOperation::kUnionAll, startMatcher().build())
+            .project()
             .build();
     ASSERT_TRUE(matcher->match(plan)) << plan->toString();
   }
@@ -393,7 +394,7 @@ TEST_F(PlanBuilderTest, joinUsingTypeCoercion) {
         ROW({"c0", "c1", "c1_1"}, {BIGINT(), VARCHAR(), VARCHAR()}));
 
     auto matcher =
-        startMatcher().join(startMatcher().build()).project().build();
+        startMatcher().join(startMatcher().build()).project().project().build();
     ASSERT_TRUE(matcher->match(plan)) << plan->toString();
   }
 
@@ -497,7 +498,7 @@ TEST_F(PlanBuilderTest, joinUsingTypeCoercion) {
             {BIGINT(), VARCHAR(), REAL(), DOUBLE()}));
 
     auto matcher =
-        startMatcher().join(startMatcher().build()).project().build();
+        startMatcher().join(startMatcher().build()).project().project().build();
     ASSERT_TRUE(matcher->match(plan)) << plan->toString();
   }
 }
