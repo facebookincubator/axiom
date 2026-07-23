@@ -209,6 +209,16 @@ TableLayout::findColumn(std::string_view name) const {
   return nullptr;
 }
 
+std::vector<std::string> Table::ioColumnPriority() const {
+  std::vector<std::string> priority;
+  for (const auto* column : allColumns()) {
+    if (column->includeInExplainIo()) {
+      priority.push_back(column->name());
+    }
+  }
+  return priority;
+}
+
 // static
 ConnectorMetadata* FOLLY_NULLABLE
 ConnectorMetadata::tryMetadata(std::string_view connectorId) {

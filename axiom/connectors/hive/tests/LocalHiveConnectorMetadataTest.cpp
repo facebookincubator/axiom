@@ -359,6 +359,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createTable) {
   EXPECT_EQ(expected->hivePartitionColumns().size(), 1);
   EXPECT_EQ(expected->hivePartitionColumns()[0], expected->columns()[3]);
   EXPECT_TRUE(expected->hivePartitionColumns()[0]->includeInExplainIo());
+  EXPECT_EQ(table->ioColumnPriority(), (std::vector<std::string>{"ds"}));
   // Non-partition columns should not be included in EXPLAIN IO.
   EXPECT_FALSE(expected->columns()[0]->includeInExplainIo());
   EXPECT_FALSE(expected->columns()[1]->includeInExplainIo());

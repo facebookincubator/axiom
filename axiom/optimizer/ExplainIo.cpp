@@ -83,8 +83,10 @@ Domain columnDomain(ColumnCP column, const ExprVector& columnFilters) {
       continue;
     }
 
-    // columnFilters are single-column predicates. Check if this filter
-    // references the target column.
+    // Only single-column predicates map to a per-column domain.
+    if (filterExpr->columns().size() != 1) {
+      continue;
+    }
     if (!filterExpr->columns().contains(column)) {
       continue;
     }
@@ -99,6 +101,124 @@ Domain columnDomain(ColumnCP column, const ExprVector& columnFilters) {
   return domain;
 }
 
+// The tightest Domain implied by 'expr' for 'column': OR unites branches, AND
+// intersects, an atom on 'column' converts via exprToDomain, anything else is
+// all(). Hence all() unless every disjunct constrains 'column'.
+Domain projectToColumn(ExprCP expr, ColumnCP column) {
+  if (expr->is(PlanType::kCallExpr)) {
+    const auto* call = expr->as<Call>();
+    if (call->name() == SpecialFormCallNames::kAnd) {
+      Domain domain = Domain::all();
+      for (auto* arg : call->args()) {
+        domain = domain.intersect(projectToColumn(arg, column));
+      }
+      return domain;
+    }
+    if (call->name() == SpecialFormCallNames::kOr) {
+      Domain domain = Domain::none();
+      for (auto* arg : call->args()) {
+        domain = domain.unite(projectToColumn(arg, column));
+      }
+      return domain;
+    }
+  }
+
+  const auto& columns = expr->columns();
+  if (columns.size() == 1 && columns.contains(column)) {
+    if (auto domain = exprToDomain(expr)) {
+      return *domain;
+    }
+  }
+  return Domain::all();
+}
+
+// An includeInExplainIo column paired with its connector metadata.
+struct IoColumn {
+  ColumnCP column{nullptr};
+  const connector::Column* connectorColumn{nullptr};
+};
+
+// The base table's includeInExplainIo columns, ordered with the
+// ioColumnPriority columns first (finest-grained first) and the rest in
+// declaration order.
+std::vector<IoColumn> ioColumnsOf(
+    BaseTableCP baseTable,
+    const connector::Table& connectorTable) {
+  std::vector<IoColumn> declared;
+  for (auto* column : baseTable->columns) {
+    const auto* schemaColumn = column->schemaColumn();
+    if (!schemaColumn) {
+      continue;
+    }
+    const auto* connectorColumn =
+        connectorTable.findColumn(schemaColumn->name());
+    VELOX_CHECK_NOT_NULL(connectorColumn);
+    if (connectorColumn->includeInExplainIo()) {
+      declared.push_back({column, connectorColumn});
+    }
+  }
+
+  const auto priority = connectorTable.ioColumnPriority();
+  std::vector<IoColumn> ordered;
+  ordered.reserve(declared.size());
+  for (const auto& name : priority) {
+    for (const auto& ioColumn : declared) {
+      if (ioColumn.connectorColumn->name() == name) {
+        ordered.push_back(ioColumn);
+        break;
+      }
+    }
+  }
+  for (const auto& ioColumn : declared) {
+    const auto& name = ioColumn.connectorColumn->name();
+    if (std::find(priority.begin(), priority.end(), name) == priority.end()) {
+      ordered.push_back(ioColumn);
+    }
+  }
+  return ordered;
+}
+
+// Chooses the IO column to collapse a single cross-column 'filter' onto: the
+// first (finest-grained) 'ioColumns' entry it constrains in every disjunct.
+// Returns that column and the projected domain, or nullopt.
+std::optional<std::pair<ColumnCP, Domain>> chooseColumnForFilter(
+    const std::vector<IoColumn>& ioColumns,
+    ExprCP filter) {
+  for (const auto& ioColumn : ioColumns) {
+    auto domain = projectToColumn(filter, ioColumn.column);
+    if (!domain.isAll()) {
+      return std::make_pair(ioColumn.column, std::move(domain));
+    }
+  }
+  return std::nullopt;
+}
+
+// Per-column domains implied by the multi-column filters. Each filter collapses
+// onto its own best column, so different filters may target different columns;
+// a column targeted by several filters intersects their domains.
+folly::F14FastMap<ColumnCP, Domain> collapseCrossColumnFilters(
+    const std::vector<IoColumn>& ioColumns,
+    const ExprVector& filters) {
+  folly::F14FastMap<ColumnCP, Domain> byColumn;
+  for (auto* filter : filters) {
+    if (filter->columns().size() <= 1) {
+      continue;
+    }
+    auto chosen = chooseColumnForFilter(ioColumns, filter);
+    if (!chosen) {
+      continue;
+    }
+
+    auto it = byColumn.find(chosen->first);
+    if (it == byColumn.end()) {
+      byColumn.emplace(chosen->first, std::move(chosen->second));
+    } else {
+      it->second = it->second.intersect(chosen->second);
+    }
+  }
+  return byColumn;
+}
+
 // Per-column domains for a single table. Maps connector column name to Domain.
 using ColumnDomainMap = folly::F14FastMap<std::string, Domain>;
 
@@ -109,21 +229,12 @@ std::optional<ColumnDomainMap> computeColumnDomains(
     BaseTableCP baseTable,
     const ExprVector& filters) {
   const auto* connectorTable = baseTable->schemaTable->connectorTable;
+  const auto ioColumns = ioColumnsOf(baseTable, *connectorTable);
+  const auto collapseByColumn = collapseCrossColumnFilters(ioColumns, filters);
+
   ColumnDomainMap domains;
-
-  for (auto* column : baseTable->columns) {
-    auto* schemaColumn = column->schemaColumn();
-    if (!schemaColumn) {
-      continue;
-    }
-
-    auto* connectorColumn = connectorTable->findColumn(schemaColumn->name());
-    VELOX_CHECK_NOT_NULL(connectorColumn);
-    if (!connectorColumn->includeInExplainIo()) {
-      continue;
-    }
-
-    const auto typeKind = connectorColumn->type()->kind();
+  for (const auto& ioColumn : ioColumns) {
+    const auto typeKind = ioColumn.connectorColumn->type()->kind();
     VELOX_USER_CHECK(
         typeKind == velox::TypeKind::VARCHAR ||
             typeKind == velox::TypeKind::BOOLEAN ||
@@ -134,15 +245,19 @@ std::optional<ColumnDomainMap> computeColumnDomains(
         "Unsupported type for EXPLAIN IO column. "
         "Only VARCHAR, BOOLEAN, and integer types are supported: {}.{} {}",
         baseTable->schemaTable->name(),
-        connectorColumn->name(),
-        connectorColumn->type()->toString());
+        ioColumn.connectorColumn->name(),
+        ioColumn.connectorColumn->type()->toString());
 
-    auto domain = columnDomain(column, filters);
+    auto domain = columnDomain(ioColumn.column, filters);
+    if (auto it = collapseByColumn.find(ioColumn.column);
+        it != collapseByColumn.end()) {
+      domain = domain.intersect(it->second);
+    }
     if (domain.isNone()) {
       return std::nullopt;
     }
 
-    domains.emplace(connectorColumn->name(), std::move(domain));
+    domains.emplace(ioColumn.connectorColumn->name(), std::move(domain));
   }
 
   return domains;
@@ -289,7 +404,13 @@ std::string explainIo(
   std::vector<std::pair<BaseTableCP, ExprVector>> tableFilters;
   tableFilters.reserve(baseTables.size());
   for (auto* baseTable : baseTables) {
-    tableFilters.emplace_back(baseTable, baseTable->columnFilters);
+    // baseTable->filter holds the multi-column residual conjuncts (cross-column
+    // disjunctions); combine them with the single-column columnFilters.
+    ExprVector filters = baseTable->columnFilters;
+    for (auto* conjunct : baseTable->filter) {
+      filters.push_back(conjunct);
+    }
+    tableFilters.emplace_back(baseTable, std::move(filters));
   }
   return explainIo(tableFilters, std::move(outputTable));
 }

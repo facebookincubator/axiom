@@ -113,6 +113,10 @@ class HiveTable : public Table {
       bool includeHiddenColumns,
       folly::F14FastMap<std::string, velox::Variant> options,
       std::vector<std::string> partitionColumnNames = {});
+
+  /// Recognizes the ds/ts partition convention and returns those columns
+  /// finest-grained first (ts before ds).
+  std::vector<std::string> ioColumnPriority() const override;
 };
 
 /// Describes a Hive table layout. Adds a file format and a list of

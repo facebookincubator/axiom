@@ -776,6 +776,13 @@ class Table : public std::enable_shared_from_this<Table> {
     return options_;
   }
 
+  /// Returns this table's `includeInExplainIo` columns ordered finest- to
+  /// coarsest-grained (e.g. an hourly ts before a daily ds). A best-effort
+  /// estimate, not a guarantee, so a wrong order costs tightness, never
+  /// correctness. Defaults to declaration order; connectors override to reflect
+  /// their column granularity.
+  virtual std::vector<std::string> ioColumnPriority() const;
+
   /// Returns column handles whose value uniquely identifies a row for creating
   /// an update or delete record. These may be for example some connector
   /// specific opaque row id or primary key columns.
