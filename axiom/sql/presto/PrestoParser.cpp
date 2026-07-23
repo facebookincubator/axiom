@@ -100,18 +100,53 @@ class ErrorListener : public antlr4::BaseErrorListener {
   std::string token_;
 };
 
+// Bounds grammar-rule nesting to prevent a parser-stack overflow.
+class DepthLimitListener : public antlr4::tree::ParseTreeListener {
+ public:
+  explicit DepthLimitListener(uint32_t maxDepth) : maxDepth_{maxDepth} {}
+
+  void enterEveryRule(antlr4::ParserRuleContext* ctx) override {
+    if (++depth_ > maxDepth_) {
+      auto* token = ctx->getStart();
+      AXIOM_PRESTO_SEMANTIC_FAIL(
+          NodeLocation(token->getLine(), token->getCharPositionInLine()),
+          /*token=*/std::nullopt,
+          "Expression exceeds maximum nesting depth");
+    }
+  }
+
+  void exitEveryRule(antlr4::ParserRuleContext* /*ctx*/) override {
+    if (depth_ > 0) {
+      --depth_;
+    }
+  }
+
+  void visitTerminal(antlr4::tree::TerminalNode* /*node*/) override {}
+  void visitErrorNode(antlr4::tree::ErrorNode* /*node*/) override {}
+
+  void reset() {
+    depth_ = 0;
+  }
+
+ private:
+  uint32_t maxDepth_;
+  uint32_t depth_{0};
+};
+
 class ParserHelper {
  public:
-  explicit ParserHelper(std::string_view sql)
+  explicit ParserHelper(std::string_view sql, uint32_t maxDepth)
       : inputStream_(std::make_unique<UpperCaseInputStream>(sql)),
         lexer_(std::make_unique<PrestoSqlLexer>(inputStream_.get())),
         tokenStream_(std::make_unique<antlr4::CommonTokenStream>(lexer_.get())),
-        parser_(std::make_unique<PrestoSqlParser>(tokenStream_.get())) {
+        parser_(std::make_unique<PrestoSqlParser>(tokenStream_.get())),
+        depthListener_(maxDepth) {
     lexer_->removeErrorListeners();
     lexer_->addErrorListener(&errorListener_);
 
     parser_->removeErrorListeners();
     parser_->addErrorListener(&errorListener_);
+    parser_->addParseListener(&depthListener_);
 
     // Use SLL prediction mode for faster parsing. SLL is much faster than LL
     // mode and works for most SQL queries. If SLL fails, we fall back to LL.
@@ -130,6 +165,9 @@ class ParserHelper {
       if (parser_->getNumberOfSyntaxErrors() == 0) {
         return ctx->statement();
       }
+    } catch (const PrestoSqlError&) {
+      // Don't re-parse in LL, it would re-hit this semantic error.
+      throw;
     } catch (const std::exception&) {
       // SLL mode failed, fall through to LL mode.
     }
@@ -141,6 +179,7 @@ class ParserHelper {
     // valid AST, or it fails and we capture fresh LL error info.
     parser_->reset();
     errorListener_.reset();
+    depthListener_.reset();
     parser_->getInterpreter<antlr4::atn::ParserATNSimulator>()
         ->setPredictionMode(antlr4::atn::PredictionMode::LL);
 
@@ -164,6 +203,7 @@ class ParserHelper {
   std::unique_ptr<antlr4::CommonTokenStream> tokenStream_;
   std::unique_ptr<PrestoSqlParser> parser_;
   ErrorListener errorListener_;
+  DepthLimitListener depthListener_;
 };
 
 std::pair<std::string, facebook::axiom::SchemaTableName> toConnectorTable(
@@ -3203,7 +3243,7 @@ SqlStatementPtr PrestoParser::doParse(
     std::string_view sql,
     bool enableTracing) {
   auto parseSql = [this, enableTracing](std::string_view sql) {
-    ParserHelper helper(sql);
+    ParserHelper helper(sql, session_->options().maxExpressionDepth);
     auto* context = helper.parse();
 
     AstBuilder astBuilder(session_->options(), enableTracing);

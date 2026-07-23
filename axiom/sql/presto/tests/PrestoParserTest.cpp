@@ -368,7 +368,6 @@ TEST_F(PrestoParserTest, subqueryDepthCapped) {
       "c AS (SELECT 3 FROM b) "
       "SELECT 4 AS r FROM c";
 
-  // Under the default cap the whole chain plans.
   testSelect(
       kChainedCtes,
       matchValues().project().project().project().project().output({"r"}));
@@ -390,6 +389,24 @@ TEST_F(PrestoParserTest, subqueryDepthCapped) {
       parseWithDepth(
           "SELECT * FROM (SELECT * FROM (SELECT * FROM (SELECT 1 AS x)))", 2),
       "Subquery exceeds maximum nesting depth");
+}
+
+TEST_F(PrestoParserTest, parseDepthCapped) {
+  // Deeply nested parentheses recurse the parser before any AST exists.
+  const std::string sql =
+      "SELECT " + std::string(50, '(') + "1" + std::string(50, ')') + " AS x";
+
+  testSelect(sql, matchValues().project().output({"x"}));
+
+  auto parseWithDepth = [&](uint32_t maxExpressionDepth) {
+    ParserOptions options;
+    options.maxExpressionDepth = maxExpressionDepth;
+    PrestoParser parser(
+        kConnectorId, "default", makeParserSession(std::move(options)));
+    return parser.parse(sql, true);
+  };
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseWithDepth(10), "Expression exceeds maximum nesting depth");
 }
 
 TEST_F(PrestoParserTest, withShadowingCte) {
