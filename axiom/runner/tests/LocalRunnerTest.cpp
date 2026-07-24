@@ -17,6 +17,8 @@
 #include "axiom/runner/LocalRunner.h"
 #include <folly/CancellationToken.h>
 #include <folly/OperationCancelled.h>
+#include <folly/coro/AsyncGenerator.h>
+#include <folly/coro/Baton.h>
 #include <folly/coro/BlockingWait.h>
 #include <folly/coro/Task.h>
 #include <folly/coro/WithCancellation.h>
@@ -189,6 +191,41 @@ class ReapFailingLocalRunner : public LocalRunner {
   }
 };
 
+// A Runner whose execute() yields no batches and blocks until the awaiting
+// scope is cancelled, so drain()'s deadline is the only thing that ends the
+// run. Exercises the timeout deterministically, without depending on how long a
+// real query happens to take.
+class BlockingRunner : public Runner {
+ public:
+  folly::coro::AsyncGenerator<velox::RowVectorPtr> execute() override {
+    const auto token = co_await folly::coro::co_current_cancellation_token;
+    folly::coro::Baton baton;
+    folly::CancellationCallback unblock{token, [&baton] { baton.post(); }};
+    co_await baton;
+    // Surface the deadline the way LocalRunner surfaces a cancel, so drain()'s
+    // folly::coro::timeout classifies it as a timeout.
+    throw folly::OperationCancelled{};
+  }
+
+  folly::coro::Task<void> co_close() override {
+    co_return;
+  }
+
+  // Only execute() and co_close() are exercised by drain(); the rest of the
+  // Runner interface is required but unused here.
+  std::vector<velox::exec::TaskStats> stats() const override {
+    VELOX_UNREACHABLE();
+  }
+
+  const std::vector<optimizer::ExecutableFragment>& fragments() const override {
+    VELOX_UNREACHABLE();
+  }
+
+  State state() const override {
+    VELOX_UNREACHABLE();
+  }
+};
+
 TEST_F(LocalRunnerTest, count) {
   auto join = makeJoinPlan();
   auto localRunner = makeRunner(join);
@@ -327,15 +364,13 @@ TEST_F(LocalRunnerTest, error) {
 }
 
 // drain(..., timeoutMicros) fails with a user error when execution overruns the
-// cooperative deadline.
+// cooperative deadline. BlockingRunner blocks until the deadline cancels it, so
+// the timeout is the sole exit and the test is deterministic regardless of
+// platform or query speed.
 TEST_F(LocalRunnerTest, drainTimeout) {
-  auto join = makeJoinPlan();
-  auto localRunner = makeRunner(join);
-
-  // A 1us deadline is far shorter than the join over kNumRows can complete in,
-  // so the run is still executing when the deadline elapses.
+  BlockingRunner runner;
   VELOX_ASSERT_THROW(
-      localRunner->drain([](velox::RowVectorPtr) {}, /*timeoutMicros=*/1),
+      runner.drain([](velox::RowVectorPtr) {}, /*timeoutMicros=*/1'000),
       "exceeded maximum time limit");
 }
 

@@ -96,14 +96,19 @@ TEST_F(SqlQueryRunnerTest, runSingleStatement) {
 TEST_F(SqlQueryRunnerTest, executionTimeout) {
   // A six-way cross join over 25 rows produces 25^6 = ~244M rows, far more than
   // can be processed within the 10ms deadline, and the max of the concatenated
-  // values cannot be short-circuited. So the run is still executing when the
-  // deadline elapses and the query fails with a timeout user error.
+  // values cannot be short-circuited, so the run is still executing when the
+  // deadline elapses and fails with a timeout user error. A single worker keeps
+  // the plan to one fragment with no exchange: cancelling a multi-stage query
+  // can leave a LocalExchangeSource pinning its memory pool until process exit
+  // (the arbitrator then aborts), and a single-fragment plan avoids that.
   testConnector_->addTable("t", ROW("s", VARCHAR()))
       ->addData(makeRowVector({makeFlatVector<std::string>(
           25, [](auto row) { return fmt::format("value_{:04d}", row); })}));
 
   SqlQueryRunner::RunOptions options;
   options.timeoutMicros = 10'000; // 10ms
+  options.numWorkers = 1;
+  options.numDrivers = 1;
   VELOX_ASSERT_THROW(
       runner_->run(
           "SELECT max(a.s || b.s || c.s || d.s || e.s || f.s) "
