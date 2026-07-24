@@ -15,15 +15,17 @@
  */
 
 #include "axiom/cli/SqlQueryRunner.h"
+#include <folly/CancellationToken.h>
+#include <folly/coro/BlockingWait.h>
 #include <folly/coro/Task.h>
+#include <folly/coro/WithCancellation.h>
 #include <folly/dynamic.h>
 #include <folly/executors/FunctionScheduler.h>
 #include <folly/init/Init.h>
-#include <folly/json.h>
+#include <folly/synchronization/Baton.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <stdexcept>
-#include <thread>
 #include "axiom/cli/QueryIdGenerator.h"
 #include "axiom/cli/tests/SqlQueryRunnerTestBase.h"
 #include "axiom/connectors/tests/TestConnector.h"
@@ -110,6 +112,38 @@ TEST_F(SqlQueryRunnerTest, executionTimeout) {
           "FROM t a, t b, t c, t d, t e, t f",
           options),
       "exceeded maximum time limit");
+}
+
+TEST_F(SqlQueryRunnerTest, externalCancellation) {
+  // A token cancelled before co_run() is observed as the query starts executing
+  // -- the runner trips its cancellation callback before producing any output
+  // -- so the outcome is deterministic regardless of the table contents.
+  // co_run() surfaces the cancellation as a dedicated QueryCancelledError so a
+  // client can report a user cancel plainly.
+  testConnector_->addTable("t", ROW("c", BIGINT()));
+  SqlQueryRunner::RunOptions options;
+  folly::CancellationSource source;
+  source.requestCancellation();
+
+  // onComplete still fires for a cancellation, marking it distinctly: cancelled
+  // is true and errorInfo is unset, so telemetry can tell it apart from a
+  // successful empty result (which would also carry no errorInfo).
+  std::optional<QueryCompletionInfo> completion;
+  options.onComplete = [&](const QueryCompletionInfo& info) {
+    completion = info;
+  };
+
+  // Cancellation is composed structurally onto the co_run() await.
+  EXPECT_THROW(
+      folly::coro::blockingWait(
+          folly::coro::co_withCancellation(
+              source.getToken(),
+              runner_->co_run("SELECT count(*) FROM t", options))),
+      QueryCancelledError);
+
+  ASSERT_TRUE(completion.has_value());
+  EXPECT_TRUE(completion->cancelled);
+  EXPECT_FALSE(completion->errorInfo.has_value());
 }
 
 TEST_F(SqlQueryRunnerTest, currentUser) {
@@ -564,8 +598,8 @@ TEST_F(SqlQueryRunnerTest, multiStatementTimingPerStatement) {
 TEST_F(SqlQueryRunnerTest, totalTimingIncludesAllPhases) {
   QueryCompletionInfo captured;
 
-  // Inject a permission check that sleeps 10ms to create a measurable gap
-  // between parse and execute timers.
+  // Inject a permission check that consumes ~10ms of wall time to create a
+  // measurable gap in the permission-check timer.
   auto runner = makeRunner(
       "test_timing",
       {},
@@ -575,8 +609,10 @@ TEST_F(SqlQueryRunnerTest, totalTimingIncludesAllPhases) {
           std::optional<std::string_view> /*schema*/,
           const auto& /*views*/,
           const auto& /*referencedTables*/) {
-        // NOLINTNEXTLINE(facebook-hte-BadCall-sleep_for)
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        // Block ~10ms without a fixed sleep: an unposted baton times out after
+        // the wall-clock interval, giving the timer a nonzero span to record.
+        folly::Baton<> gate;
+        gate.try_wait_for(std::chrono::milliseconds(10));
         return std::shared_ptr<facebook::velox::filesystems::TokenProvider>{};
       });
 
