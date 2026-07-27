@@ -628,15 +628,6 @@ class DefaultTraversalVisitor : public AstVisitor {
     }
   }
 
-  void visitLogicalBinaryExpression(LogicalBinaryExpression* node) override {
-    if (node->left()) {
-      node->left()->accept(this);
-    }
-    if (node->right()) {
-      node->right()->accept(this);
-    }
-  }
-
   void visitNotExpression(NotExpression* node) override {
     if (node->value()) {
       node->value()->accept(this);

@@ -69,7 +69,6 @@ const auto& nodeTypeNames() {
        "QuantifiedComparisonExpression"},
 
       // Logical Expressions
-      {NodeType::kLogicalBinaryExpression, "LogicalBinaryExpression"},
       {NodeType::kNotExpression, "NotExpression"},
 
       // Conditional Expressions
@@ -373,10 +372,6 @@ void QuantifiedComparisonExpression::accept(AstVisitor* visitor) {
 }
 
 // Logical Expression implementations
-void LogicalBinaryExpression::accept(AstVisitor* visitor) {
-  visitor->visitLogicalBinaryExpression(this);
-}
-
 void NotExpression::accept(AstVisitor* visitor) {
   visitor->visitNotExpression(this);
 }

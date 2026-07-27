@@ -72,7 +72,6 @@ enum class NodeType {
   kQuantifiedComparisonExpression,
 
   // Logical Expressions
-  kLogicalBinaryExpression,
   kNotExpression,
 
   // Conditional Expressions

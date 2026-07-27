@@ -16,6 +16,7 @@
 
 #include <fmt/format.h>
 #include <limits>
+#include "axiom/sql/presto/tests/ExprMatcher.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/types/QDigestRegistration.h"
@@ -23,22 +24,35 @@
 #include "velox/functions/prestosql/types/TDigestRegistration.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/parse/ExpressionsParser.h"
 
 namespace axiom::sql::presto::test {
 
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
+using facebook::axiom::logical_plan::test::ExprMatcher;
 
 namespace {
 
 class ExpressionParserTest : public PrestoParserTestBase {
  protected:
-  lp::ExprPtr parseExpr(std::string_view sql) {
-    return makeParser().parseExpression(sql, true);
+  lp::ExprPtr parseExpr(
+      std::string_view sql,
+      uint32_t maxExpressionWidth = ParserOptions::kMaxExpressionWidthDefault) {
+    ParserOptions options;
+    options.maxExpressionWidth = maxExpressionWidth;
+    return PrestoParser(
+               kConnectorId, "default", makeParserSession(std::move(options)))
+        .parseExpression(sql, true);
   }
 
   lp::ExprPtr parseStrictExpr(std::string_view sql) {
     return makeStrictParser().parseExpression(sql, true);
+  }
+
+  // Matches a parsed expression against a reference expression (DuckDB syntax).
+  bool match(const lp::ExprPtr& expr, const std::string& expected) {
+    return ExprMatcher::match(expr, duckParser_.parseExpr(expected));
   }
 
   // Parses 'SELECT <expr> FROM nation' and verifies the project expression
@@ -72,6 +86,8 @@ class ExpressionParserTest : public PrestoParserTestBase {
     ASSERT_FALSE(v->isNull());
     ASSERT_EQ(v->value<T>(), value);
   }
+
+  facebook::velox::parse::DuckSqlExpressionsParser duckParser_;
 };
 
 TEST_F(ExpressionParserTest, types) {
@@ -1122,7 +1138,6 @@ TEST_F(ExpressionParserTest, nestingDepthCapped) {
         "Expression exceeds maximum nesting depth");
   };
   expectRejected("1", " + 0");
-  expectRejected("true", " AND true");
   expectRejected("'a'", " || 'a'");
   expectRejected("x", "[1]");
 
@@ -1130,6 +1145,67 @@ TEST_F(ExpressionParserTest, nestingDepthCapped) {
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(chain("SELECT 1", " UNION ALL SELECT 1", past)),
       "Expression exceeds maximum nesting depth");
+}
+
+// A same-operator chain past the depth cap flattens into one n-ary call.
+TEST_F(ExpressionParserTest, deepChainFlattens) {
+  const uint32_t numTerms = ParserOptions::kMaxExpressionDepthDefault + 1;
+  auto test = [&](std::string_view op, lp::SpecialForm form) {
+    SCOPED_TRACE(op);
+    std::string sql = "1 = 0";
+    for (uint32_t i = 1; i < numTerms; ++i) {
+      sql += fmt::format(" {} 1 = {}", op, i);
+    }
+    auto expr = parseExpr(sql);
+    ASSERT_TRUE(expr->isSpecialForm());
+    auto* special = expr->as<lp::SpecialFormExpr>();
+    EXPECT_EQ(special->form(), form);
+    EXPECT_EQ(special->inputs().size(), numTerms);
+  };
+  test("OR", lp::SpecialForm::kOr);
+  test("AND", lp::SpecialForm::kAnd);
+}
+
+// Operands keep source order after flattening.
+TEST_F(ExpressionParserTest, flattenPreservesOperandOrder) {
+  ASSERT_TRUE(match(
+      parseExpr("1 = 2 OR 3 = 4 OR 5 = 6"), R"("or"(1 = 2, 3 = 4, 5 = 6))"));
+}
+
+// Operators of different kinds are not merged; the AND stays nested in the OR.
+TEST_F(ExpressionParserTest, mixedOperatorsNotFlattened) {
+  ASSERT_TRUE(match(
+      parseExpr("1 = 0 AND 2 = 0 OR 3 = 0"), "(1 = 0 AND 2 = 0) OR 3 = 0"));
+}
+
+// A parenthesized chain stays grouped; only a plain chain is flattened.
+TEST_F(ExpressionParserTest, parenthesizedChainNotFlattened) {
+  ASSERT_TRUE(match(
+      parseExpr("1 = 0 OR (2 = 0 OR 3 = 0)"),
+      R"("or"(1 = 0, "or"(2 = 0, 3 = 0)))"));
+}
+
+// A flattened chain wider than max_expression_width is rejected.
+TEST_F(ExpressionParserTest, chainWiderThanCapRejected) {
+  // A chain at exactly the cap is accepted and flattens to that many operands.
+  auto atCap = parseExpr("1 = 0 OR 1 = 1 OR 1 = 2", /*maxExpressionWidth=*/3);
+  ASSERT_TRUE(atCap->isSpecialForm());
+  auto* atCapOr = atCap->as<lp::SpecialFormExpr>();
+  EXPECT_EQ(atCapOr->form(), lp::SpecialForm::kOr);
+  EXPECT_EQ(atCapOr->inputs().size(), 3u);
+
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseExpr("1 = 0 OR 1 = 1 OR 1 = 2 OR 1 = 3", /*maxExpressionWidth=*/3),
+      "Expression exceeds maximum width");
+}
+
+// The width cap applies to each flattened node, not just the outermost.
+TEST_F(ExpressionParserTest, nestedChainWidthEnforcedPerNode) {
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseExpr(
+          "(1 = 0 AND 1 = 1 AND 1 = 2 AND 1 = 3) OR 1 = 4",
+          /*maxExpressionWidth=*/3),
+      "Expression exceeds maximum width");
 }
 
 } // namespace

@@ -150,6 +150,26 @@ TEST_P(TestConnectorQueryTest, sharedSubexpressionConversion) {
   ASSERT_NO_THROW(toSingleNodePlan(logicalPlan));
 }
 
+// A wide same-operator OR chain flattens into one n-ary call and executes;
+// without flattening the left-nested tree would exceed the nesting depth cap.
+TEST_P(TestConnectorQueryTest, wideOrChainExecutes) {
+  auto data = makeRowVector({"a"}, {makeFlatVector<int64_t>({-1, 0, 1, 2})});
+  testConnector_->addTable("t", data->rowType())->addData(data);
+
+  // Well past the 512 nesting depth cap (a pre-flatten tree would be rejected),
+  // kept small enough to plan and execute quickly.
+  constexpr uint32_t kWidth = 5'000;
+  std::string sql = "SELECT a FROM t WHERE a = 0";
+  for (uint32_t i = 1; i < kWidth; ++i) {
+    sql += fmt::format(" OR a = {}", i);
+  }
+
+  auto expected = makeRowVector({makeFlatVector<int64_t>({0, 1, 2})});
+  auto logicalPlan = parseSelect(sql, kTestConnectorId);
+  auto results = runVelox(logicalPlan, options_);
+  exec::test::assertEqualResults(results.results, {expected});
+}
+
 AXIOM_INSTANTIATE_V1_V2(TestConnectorQueryTest);
 
 } // namespace

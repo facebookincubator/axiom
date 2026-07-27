@@ -34,11 +34,14 @@ struct ParserOptions : public facebook::velox::config::ConfigProvider {
       "parse_decimal_literal_as_double";
   static constexpr std::string_view kMaxExpressionDepth =
       "max_expression_depth";
+  static constexpr std::string_view kMaxExpressionWidth =
+      "max_expression_width";
   static constexpr std::string_view kMaxSubqueryDepth = "max_subquery_depth";
 
   static constexpr bool kFriendlySqlDefault = true;
   static constexpr bool kParseDecimalLiteralAsDoubleDefault = true;
   static constexpr uint32_t kMaxExpressionDepthDefault = 512;
+  static constexpr uint32_t kMaxExpressionWidthDefault = 100'000;
   static constexpr uint32_t kMaxSubqueryDepthDefault = 1024;
 
   ParserOptions();
@@ -57,9 +60,22 @@ struct ParserOptions : public facebook::velox::config::ConfigProvider {
   /// property.
   bool parseDecimalLiteralAsDouble{kParseDecimalLiteralAsDoubleDefault};
 
-  /// Maximum expression nesting depth; deeper expressions are rejected to
-  /// avoid a stack overflow.
+  /// Maximum nesting depth of an expression tree; deeper expressions are
+  /// rejected to avoid a stack overflow. Depth is how deeply operators nest,
+  /// e.g. a - (b - (c - d)) is three deep. Distinct from maxExpressionWidth,
+  /// which instead bounds the operand count of a single flattened AND/OR node.
   uint32_t maxExpressionDepth{kMaxExpressionDepthDefault};
+
+  /// Maximum number of operands in a single flattened AND/OR chain; wider
+  /// chains are rejected. Width is how many operands one flattened node holds,
+  /// e.g. a OR b OR c OR d is one node of width four. Distinct from
+  /// maxExpressionDepth, which instead bounds how deeply operators nest.
+  ///
+  /// The default is large because flattening collapses a chain into a single
+  /// node whose operand count downstream passes process in linear time, and the
+  /// widest chains seen in production (autoanalyzer output) reach on the order
+  /// of 42K operands; 100'000 clears that with roughly 2x headroom.
+  uint32_t maxExpressionWidth{kMaxExpressionWidthDefault};
 
   /// Maximum subquery nesting depth; deeper nesting is rejected to avoid a
   /// stack overflow.

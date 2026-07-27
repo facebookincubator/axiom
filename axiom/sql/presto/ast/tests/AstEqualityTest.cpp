@@ -627,30 +627,6 @@ TEST(AstEqualityTest, quantifiedComparisonExpressionNotEqualQuantifier) {
   EXPECT_FALSE(*a == *b);
 }
 
-TEST(AstEqualityTest, logicalBinaryExpressionEquals) {
-  auto a = std::make_shared<LogicalBinaryExpression>(
-      loc(0, 0),
-      LogicalBinaryExpression::Operator::kAnd,
-      longLit(1),
-      longLit(2));
-  auto b = std::make_shared<LogicalBinaryExpression>(
-      loc(5, 5),
-      LogicalBinaryExpression::Operator::kAnd,
-      longLit(1),
-      longLit(2));
-  EXPECT_TRUE(*a == *b);
-  EXPECT_EQ(a->hash(), b->hash());
-}
-
-TEST(AstEqualityTest, logicalBinaryExpressionNotEqualOperator) {
-  // a AND b vs a OR b.
-  auto a = std::make_shared<LogicalBinaryExpression>(
-      loc(), LogicalBinaryExpression::Operator::kAnd, longLit(1), longLit(2));
-  auto b = std::make_shared<LogicalBinaryExpression>(
-      loc(), LogicalBinaryExpression::Operator::kOr, longLit(1), longLit(2));
-  EXPECT_FALSE(*a == *b);
-}
-
 TEST(AstEqualityTest, notExpressionEquals) {
   auto a = std::make_shared<NotExpression>(loc(0, 0), longLit(1));
   auto b = std::make_shared<NotExpression>(loc(5, 5), longLit(1));

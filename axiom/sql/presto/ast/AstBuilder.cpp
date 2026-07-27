@@ -1822,16 +1822,45 @@ std::any AstBuilder::visitLogicalBinary(
     PrestoSqlParser::LogicalBinaryContext* ctx) {
   trace("visitLogicalBinary");
 
-  auto leftExpr = visitExpression(ctx->left);
-  auto rightExpr = visitExpression(ctx->right);
+  const auto location = getLocation(ctx);
+  const bool isAnd = ctx->AND() != nullptr;
 
-  LogicalBinaryExpression::Operator op = ctx->AND() != nullptr
-      ? LogicalBinaryExpression::Operator::kAnd
-      : LogicalBinaryExpression::Operator::kOr;
+  // Flatten a same-operator chain into one n-ary call.
+  std::vector<ExpressionPtr> arguments;
 
-  return std::static_pointer_cast<Expression>(
-      std::make_shared<LogicalBinaryExpression>(
-          getLocation(ctx), op, leftExpr, rightExpr));
+  // Fail fast: reject an oversize chain without building every operand.
+  auto checkWidth = [&] {
+    AXIOM_PRESTO_SEMANTIC_CHECK_LE(
+        arguments.size(),
+        options_.maxExpressionWidth,
+        location,
+        /*token=*/std::nullopt,
+        "Expression exceeds maximum width");
+  };
+
+  auto* current = ctx;
+  while (true) {
+    arguments.push_back(visitExpression(current->right));
+    checkWidth();
+    auto* leftBinary =
+        dynamic_cast<PrestoSqlParser::LogicalBinaryContext*>(current->left);
+    const bool leftIsSameOp =
+        leftBinary != nullptr && (leftBinary->AND() != nullptr) == isAnd;
+    if (!leftIsSameOp) {
+      break;
+    }
+    current = leftBinary;
+  }
+  arguments.push_back(visitExpression(current->left));
+  checkWidth();
+  // Operands were collected right to left; restore their original order.
+  std::reverse(arguments.begin(), arguments.end());
+
+  return std::static_pointer_cast<Expression>(std::make_shared<FunctionCall>(
+      location,
+      std::make_shared<QualifiedName>(
+          location, std::vector<std::string>{isAnd ? "and" : "or"}),
+      arguments));
 }
 
 namespace {

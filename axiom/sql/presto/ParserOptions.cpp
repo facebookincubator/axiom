@@ -59,6 +59,13 @@ std::vector<ConfigProperty> buildProperties(
           "Maximum subquery nesting depth; deeper nesting is rejected to avoid "
           "a stack overflow.",
       },
+      {
+          std::string(ParserOptions::kMaxExpressionWidth),
+          ConfigPropertyType::kInteger,
+          fmt::to_string(ParserOptions::kMaxExpressionWidthDefault),
+          "Maximum number of operands in a single flattened AND/OR chain; "
+          "wider chains are rejected.",
+      },
   };
 
   if (configOverrides.empty()) {
@@ -115,6 +122,7 @@ ParserOptions ParserOptions::from(
   setBool(kParseDecimalLiteralAsDouble, options.parseDecimalLiteralAsDouble);
   setUint32(kMaxExpressionDepth, options.maxExpressionDepth);
   setUint32(kMaxSubqueryDepth, options.maxSubqueryDepth);
+  setUint32(kMaxExpressionWidth, options.maxExpressionWidth);
   return options;
 }
 

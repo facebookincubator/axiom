@@ -891,20 +891,6 @@ lp::ExprApi ExpressionPlanner::toExpr(
       return lp::Call("like", std::move(inputs));
     }
 
-    case NodeType::kLogicalBinaryExpression: {
-      auto* logical = node->as<LogicalBinaryExpression>();
-      auto left = toExpr(logical->left(), options);
-      auto right = toExpr(logical->right(), options);
-
-      switch (logical->op()) {
-        case LogicalBinaryExpression::Operator::kAnd:
-          return left && right;
-
-        case LogicalBinaryExpression::Operator::kOr:
-          return left || right;
-      }
-    }
-
     case NodeType::kArithmeticUnaryExpression: {
       auto* unary = node->as<ArithmeticUnaryExpression>();
       if (unary->sign() == ArithmeticUnaryExpression::Sign::kMinus) {
