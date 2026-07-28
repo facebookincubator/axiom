@@ -15,6 +15,9 @@
  */
 #pragma once
 
+#include <folly/CancellationToken.h>
+#include <folly/coro/AsyncGenerator.h>
+#include <folly/coro/Task.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/executors/FunctionScheduler.h>
 #include <chrono>
@@ -86,6 +89,17 @@ struct ErrorInfo {
   std::string errorSource;
 };
 
+/// Thrown by co_run() when a query is stopped by an external cancellation. A
+/// dedicated type lets a client report a cancellation distinctly (e.g. the CLI
+/// prints "Query cancelled.") by catching the type rather than matching on a
+/// message or error code.
+class QueryCancelledError : public std::exception {
+ public:
+  const char* what() const noexcept override {
+    return "Query was cancelled";
+  }
+};
+
 /// Returns a format template (placeholders, not substituted values) for
 /// grouping similar failures. A VeloxException with no explicit template
 /// synthesizes "Check failed: <expr>" from its failing expression (mirroring
@@ -118,6 +132,11 @@ struct QueryCompletionInfo {
 
   /// Contains error details when the query fails; std::nullopt on success.
   std::optional<ErrorInfo> errorInfo;
+
+  /// True when the query was stopped by an external cancellation. A cancelled
+  /// query is not an error, so it carries no errorInfo -- this flag lets a
+  /// telemetry consumer tell cancellation apart from a successful empty result.
+  bool cancelled{false};
 
   /// Serialized Velox execution plan.
   std::string planString;
@@ -255,19 +274,107 @@ class SqlQueryRunner {
     QueryCompletionCallback onComplete;
   };
 
+  /// One increment of a streamed query result, yielded by co_run(). Exactly one
+  /// field is set: `message` (yielded once) for statements that return a status
+  /// line (DDL/session/EXPLAIN); `batch` (yielded once per result batch) for a
+  /// row-producing statement (SELECT/INSERT/CTAS). Modeled like SqlResult so
+  /// the same explicit-move rule applies.
+  struct SqlResultChunk {
+    SqlResultChunk() = default;
+
+    explicit SqlResultChunk(std::optional<std::string> message)
+        : message{std::move(message)} {}
+
+    explicit SqlResultChunk(facebook::velox::RowVectorPtr batch)
+        : batch{std::move(batch)} {}
+
+    SqlResultChunk(const SqlResultChunk&) = default;
+    SqlResultChunk& operator=(const SqlResultChunk&) = default;
+
+    // Explicit move, mirroring SqlResult: GCC 12 elides the aggregate move
+    // across a co_yield, leaving the chunk referring to storage in the
+    // destroyed coroutine frame.
+    SqlResultChunk(SqlResultChunk&& other) noexcept
+        : message{std::move(other.message)}, batch{std::move(other.batch)} {}
+
+    SqlResultChunk& operator=(SqlResultChunk&& other) noexcept {
+      message = std::move(other.message);
+      batch = std::move(other.batch);
+      return *this;
+    }
+
+    ~SqlResultChunk() = default;
+
+    std::optional<std::string> message;
+    facebook::velox::RowVectorPtr batch;
+  };
+
   /// Results of running a query. SELECT queries return a vector of results.
   /// Other queries return a message. SELECT query that returns no rows returns
   /// std::nullopt message and empty vector of results.
   struct SqlResult {
+    SqlResult() = default;
+
+    explicit SqlResult(
+        std::optional<std::string> message,
+        std::vector<facebook::velox::RowVectorPtr> results = {})
+        : message{std::move(message)}, results{std::move(results)} {}
+
+    explicit SqlResult(std::vector<facebook::velox::RowVectorPtr> results)
+        : results{std::move(results)} {}
+
+    SqlResult(const SqlResult&) = default;
+    SqlResult& operator=(const SqlResult&) = default;
+
+    // GCC 12 may otherwise elide the aggregate move across a co_await, leaving
+    // the result referring to storage in the destroyed child coroutine frame.
+    SqlResult(SqlResult&& other) noexcept
+        : message{std::move(other.message)},
+          results{std::move(other.results)} {}
+
+    SqlResult& operator=(SqlResult&& other) noexcept {
+      message = std::move(other.message);
+      results = std::move(other.results);
+      return *this;
+    }
+
+    ~SqlResult() = default;
+
     std::optional<std::string> message;
     std::vector<facebook::velox::RowVectorPtr> results;
   };
 
   /// Runs a single SQL statement with full lifecycle: generates a query ID,
-  /// fires onStart, parses, checks permissions, executes, fires onComplete,
-  /// and returns the result. On failure, fires onComplete with error telemetry
-  /// then re-throws.
-  virtual SqlResult run(std::string_view sql, const RunOptions& options);
+  /// fires onStart, parses, checks permissions, executes, fires onComplete.
+  /// Yields the result incrementally as SqlResultChunks -- one message chunk
+  /// for a statement that returns a status line, one chunk per result batch for
+  /// a row-producing statement -- so a caller can consume rows as they arrive.
+  /// On failure, fires onComplete with error telemetry then re-throws from the
+  /// consumer's next().
+  ///
+  /// The canonical async entry point. A caller in a coroutine context loops
+  /// this (while (auto chunk = co_await gen.next())); run() is a synchronous
+  /// convenience that drains it into a SqlResult. To cancel, compose a token
+  /// onto the consumption with folly::coro::co_withCancellation; a cancelled
+  /// query surfaces a QueryCancelledError. Cancellation applies to query
+  /// execution (the result drain) and takes effect once execution begins.
+  ///
+  /// Cleanup contract (mirrors runner::Runner::execute()): the consumer must
+  /// drive this to a terminal state -- either drain it fully (pull until next()
+  /// returns empty) or, to stop early, cancel via the token and keep pulling
+  /// until the cancellation surfaces. Reaching a terminal state runs the
+  /// shielded runner reap (co_close()). Dropping the generator while it is
+  /// suspended does NOT reap and aborts -- exactly as dropping an execute()
+  /// generator does -- because LocalRunner asserts on destroy-before-close
+  /// rather than running blocking teardown on an executor thread.
+  virtual folly::coro::AsyncGenerator<SqlResultChunk> co_run(
+      std::string sql,
+      RunOptions options);
+
+  /// Synchronous convenience over co_run(), for tests and simple synchronous
+  /// entry points. Blocks the calling thread, so it must NOT be called from a
+  /// Velox executor thread or within a coroutine (co_await co_run() there).
+  SqlResult run(std::string_view sql, const RunOptions& options);
 
   /// Runs a single parsed SQL statement without lifecycle hooks (no permission
   /// check, no callbacks). Use run(string_view, RunOptions) for the full
@@ -358,7 +465,9 @@ class SqlQueryRunner {
       std::string_view queryId,
       const presto::DropSchemaStatement& statement);
 
-  std::string call(
+  /// Constant-folds the CALL statement's bound arguments and awaits the
+  /// procedure's execute(); returns "CALL".
+  folly::coro::Task<std::string> co_call(
       std::string_view queryId,
       const presto::CallStatement& statement);
 
@@ -402,7 +511,18 @@ class SqlQueryRunner {
       std::shared_ptr<facebook::axiom::connector::SchemaResolver>
           schemaResolver = nullptr);
 
-  std::string runExplainAnalyze(
+  // Optimizes 'logicalPlan' and renders EXPLAIN (TYPE IO) output. Synchronous
+  // (no execution), so it is kept out of the co_run() coroutine chain.
+  std::string runExplainIo(
+      const presto::SqlStatement& statement,
+      const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
+      const RunOptions& options,
+      QueryTiming& timing,
+      std::shared_ptr<facebook::axiom::connector::SchemaResolver>
+          schemaResolver,
+      std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats);
+
+  folly::coro::Task<std::string> co_runExplainAnalyze(
       const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
       const RunOptions& options,
       QueryTiming& timing,
@@ -460,7 +580,7 @@ class SqlQueryRunner {
 
   // Runs a parsed SQL statement, writing optimize/execute timing into 'timing'
   // and the serialized Velox plan into 'planString'.
-  SqlResult runUnchecked(
+  folly::coro::AsyncGenerator<SqlResultChunk> co_runUnchecked(
       const presto::SqlStatement& statement,
       const RunOptions& options,
       QueryTiming& timing,
@@ -468,15 +588,16 @@ class SqlQueryRunner {
       std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats =
           nullptr);
 
-  SqlResult showSession(
+  folly::coro::AsyncGenerator<facebook::velox::RowVectorPtr> co_showSession(
       const presto::ShowSessionStatement& statement,
       const RunOptions& options,
       QueryTiming& timing,
       std::string& planString);
 
-  // Optimizes and executes a logical plan. Writes timing and plan string
-  // directly into the passed-in references so values survive exceptions.
-  SqlResult runLogicalPlan(
+  // Optimizes and executes a logical plan, yielding each result batch as it is
+  // produced. Writes timing and plan string directly into the passed-in
+  // references so values survive exceptions.
+  folly::coro::AsyncGenerator<facebook::velox::RowVectorPtr> co_runLogicalPlan(
       const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
       const RunOptions& options,
       QueryTiming& timing,

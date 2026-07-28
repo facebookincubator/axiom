@@ -17,10 +17,15 @@
 #include "axiom/cli/SqlQueryRunner.h"
 #include <fmt/ranges.h>
 #include <folly/CancellationToken.h>
+#include <folly/OperationCancelled.h>
 #include <folly/container/F14Map.h>
+#include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/BlockingWait.h>
 #include <folly/coro/Coroutine.h>
+#include <folly/coro/Invoke.h>
+#include <folly/coro/Task.h>
 #include <folly/coro/Timeout.h>
+#include <folly/coro/WithCancellation.h>
 #include <folly/system/HardwareConcurrency.h>
 #include <algorithm>
 #include <cmath>
@@ -329,14 +334,6 @@ connector::ConnectorProperties collectConnectorProperties(
   return result;
 }
 
-int64_t countRows(const std::vector<velox::RowVectorPtr>& results) {
-  int64_t numRows{0};
-  for (const auto& rowVector : results) {
-    numRows += rowVector->size();
-  }
-  return numRows;
-}
-
 // Fires the start callback if set, swallowing exceptions.
 void onStart(
     const sql::SqlQueryRunner::RunOptions& options,
@@ -464,20 +461,26 @@ std::string SqlQueryRunner::dropTable(
   }
 }
 
-std::string SqlQueryRunner::call(
+folly::coro::Task<std::string> SqlQueryRunner::co_call(
     std::string_view queryId,
     const presto::CallStatement& statement) {
   // Fold each bound argument expression to a value.
-  std::vector<velox::Variant> arguments;
-  arguments.reserve(statement.arguments().size());
+  std::vector<velox::Variant> boundArguments;
+  boundArguments.reserve(statement.arguments().size());
   for (const auto& argument : statement.arguments()) {
-    arguments.push_back(
+    boundArguments.push_back(
         optimizer::ConstantExprEvaluator::evaluateConstantExpr(*argument));
   }
 
-  folly::coro::blockingWait(statement.procedure()->execute(
-      makeConnectorSession(queryId, statement.connectorId()), arguments));
-  return "CALL";
+  // Procedure implementations may retain references to their call arguments in
+  // a lazy coroutine, so procedure, session, and boundArguments must all
+  // outlive the awaited task; hold them in named locals rather than awaiting a
+  // temporary.
+  auto procedure = statement.procedure();
+  auto session = makeConnectorSession(queryId, statement.connectorId());
+  auto task = procedure->execute(session, boundArguments);
+  co_await std::move(task);
+  co_return "CALL";
 }
 
 std::string SqlQueryRunner::addColumn(
@@ -562,8 +565,26 @@ std::string messageTemplateOf(const std::exception& e) {
 SqlQueryRunner::SqlResult SqlQueryRunner::run(
     std::string_view sql,
     const RunOptions& options) {
-  auto runOptions = options;
-  runOptions.queryId = options.queryId.value_or(queryIdGenerator_());
+  return folly::coro::blockingWait(
+      folly::coro::co_invoke([&]() -> folly::coro::Task<SqlResult> {
+        SqlResult result;
+        auto generator = co_run(std::string(sql), options);
+        while (auto chunk = co_await generator.next()) {
+          if (chunk->message.has_value()) {
+            result.message = std::move(chunk->message);
+          }
+          if (chunk->batch != nullptr) {
+            result.results.push_back(std::move(chunk->batch));
+          }
+        }
+        co_return result;
+      }));
+}
+
+folly::coro::AsyncGenerator<SqlQueryRunner::SqlResultChunk>
+SqlQueryRunner::co_run(std::string sql, RunOptions options) {
+  auto runOptions = std::move(options);
+  runOptions.queryId = runOptions.queryId.value_or(queryIdGenerator_());
   const auto& catalog =
       runOptions.defaultConnectorId.value_or(defaultConnectorId_);
   const auto& schema = runOptions.defaultSchema.value_or(defaultSchema_);
@@ -589,6 +610,7 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
     onComplete(runOptions, completionInfo);
   };
 
+  int64_t numOutputRows{0};
   try {
     presto::SqlStatementPtr statement;
     uint64_t parseCpuNanos;
@@ -623,16 +645,29 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
         QueryRuntimeStats::kPermissionCheckWallNanos,
         std::chrono::microseconds(completionInfo.timing.checkPermission));
 
-    auto result = runUnchecked(
+    auto generator = co_runUnchecked(
         *statement,
         runOptions,
         completionInfo.timing,
         completionInfo.planString,
         completionInfo.runtimeStats);
+    while (auto chunk = co_await generator.next()) {
+      if (chunk->batch != nullptr) {
+        numOutputRows += chunk->batch->size();
+      }
+      co_yield std::move(*chunk);
+    }
 
-    completionInfo.numOutputRows = countRows(result.results);
+    completionInfo.numOutputRows = numOutputRows;
     finalize();
-    return result;
+  } catch (const folly::OperationCancelled&) {
+    // Cancellation from the awaiting scope's token (any async path -- the drain
+    // or a CALL procedure) is a benign stop: record no errorInfo, mark it
+    // cancelled so telemetry can tell it apart from an empty success, finalize,
+    // and surface the dedicated type so the caller reports it distinctly.
+    completionInfo.cancelled = true;
+    finalize();
+    throw QueryCancelledError{};
   } catch (const velox::VeloxException& e) {
     completionInfo.errorInfo = ErrorInfo{
         .message = e.what(),
@@ -759,10 +794,25 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
     const RunOptions& options) {
   QueryTiming timing;
   std::string planString;
-  return runUnchecked(sqlStatement, options, timing, planString);
+  return folly::coro::blockingWait(
+      folly::coro::co_invoke([&]() -> folly::coro::Task<SqlResult> {
+        SqlResult result;
+        auto generator =
+            co_runUnchecked(sqlStatement, options, timing, planString);
+        while (auto chunk = co_await generator.next()) {
+          if (chunk->message.has_value()) {
+            result.message = std::move(chunk->message);
+          }
+          if (chunk->batch != nullptr) {
+            result.results.push_back(std::move(chunk->batch));
+          }
+        }
+        co_return result;
+      }));
 }
 
-SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
+folly::coro::AsyncGenerator<SqlQueryRunner::SqlResultChunk>
+SqlQueryRunner::co_runUnchecked(
     const presto::SqlStatement& sqlStatement,
     const RunOptions& options,
     QueryTiming& timing,
@@ -796,12 +846,12 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
     } else if (statement->isCreateTable()) {
       const auto* create = statement->as<presto::CreateTableStatement>();
       createTable(queryId, *create, /*explain=*/true);
-      return {
-          .message = fmt::format(
-              "CREATE TABLE {}{}.{}",
-              create->ifNotExists() ? "IF NOT EXISTS " : "",
-              create->connectorId(),
-              create->tableName())};
+      co_yield SqlResultChunk{fmt::format(
+          "CREATE TABLE {}{}.{}",
+          create->ifNotExists() ? "IF NOT EXISTS " : "",
+          create->connectorId(),
+          create->tableName())};
+      co_return;
     } else if (statement->isDropTable()) {
       const auto* drop = statement->as<presto::DropTableStatement>();
       if (!drop->ifExists()) {
@@ -812,24 +862,24 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
             drop->connectorId(),
             drop->tableName());
       }
-      return {
-          .message = fmt::format(
-              "DROP TABLE {}{}.{}",
-              drop->ifExists() ? "IF EXISTS " : "",
-              drop->connectorId(),
-              drop->tableName())};
+      co_yield SqlResultChunk{fmt::format(
+          "DROP TABLE {}{}.{}",
+          drop->ifExists() ? "IF EXISTS " : "",
+          drop->connectorId(),
+          drop->tableName())};
+      co_return;
     } else if (statement->isAddColumn()) {
       const auto* add = statement->as<presto::AddColumnStatement>();
       addColumn(queryId, *add, /*explain=*/true);
-      return {
-          .message = fmt::format(
-              "ALTER TABLE {}{}.{} ADD COLUMN {}{} {}",
-              add->ifTableExists() ? "IF EXISTS " : "",
-              add->connectorId(),
-              add->tableName(),
-              add->ifNotExists() ? "IF NOT EXISTS " : "",
-              add->columnName(),
-              add->columnType()->toString())};
+      co_yield SqlResultChunk{fmt::format(
+          "ALTER TABLE {}{}.{} ADD COLUMN {}{} {}",
+          add->ifTableExists() ? "IF EXISTS " : "",
+          add->connectorId(),
+          add->tableName(),
+          add->ifNotExists() ? "IF NOT EXISTS " : "",
+          add->columnName(),
+          add->columnType()->toString())};
+      co_return;
     } else if (statement->isCall()) {
       // EXPLAIN must be side-effect-free: echo the resolved call without
       // invoking the procedure.
@@ -843,87 +893,56 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
         arguments.push_back(argument->toString());
       }
 
-      return {
-          .message = fmt::format(
-              "CALL {}.{}({})",
-              call->connectorId(),
-              call->procedureName(),
-              fmt::join(arguments, ", "))};
+      co_yield SqlResultChunk{fmt::format(
+          "CALL {}.{}({})",
+          call->connectorId(),
+          call->procedureName(),
+          fmt::join(arguments, ", "))};
+      co_return;
     } else {
       VELOX_NYI("Unsupported EXPLAIN query: {}", statement->kindName());
     }
 
     if (explain->type() == presto::ExplainStatement::Type::kIo) {
-      std::optional<CatalogSchemaTableName> outputTable =
-          explainIoOutputTable(*statement, *logicalPlan);
-
-      auto queryCtx = newQuery(options);
-      PhaseTimer phaseTimer(
-          timing.optimize,
-          runtimeStats.get(),
-          QueryRuntimeStats::kOptimizeWallNanos,
-          QueryRuntimeStats::kOptimizeCpuNanos);
-
-      if (useOptimizerV2_) {
-        auto resolver = orDefaultSchemaResolver(schemaResolver);
-        OptimizerContext optimizerContext(optimizerPool_.get());
-        velox::exec::SimpleExpressionEvaluator evaluator(
-            queryCtx.get(), optimizerPool_.get());
-        auto session = makeOptimizerSession(
-            queryCtx->queryId(),
-            collectConnectorProperties(*sessionConfig_),
-            /*explain=*/true);
-        return {
-            .message =
-                optimizer::v2::Optimizer(
-                    *logicalPlan, *resolver, *session, evaluator, queryCtx)
-                    .explainIo(std::move(outputTable))};
-      } else {
-        std::string text;
-        optimize(
-            logicalPlan,
-            queryCtx,
-            options,
-            [&](const auto& dt) {
-              text = optimizer::explainIo(&dt, outputTable);
-              return false; // Stop optimization.
-            },
-            nullptr,
-            schemaResolver,
-            /*explain=*/true,
-            runtimeStats);
-        return {.message = std::move(text)};
-      }
+      co_yield SqlResultChunk{runExplainIo(
+          *statement,
+          logicalPlan,
+          options,
+          timing,
+          schemaResolver,
+          runtimeStats)};
+      co_return;
     }
 
     if (explain->isAnalyze()) {
-      return {
-          .message = runExplainAnalyze(
-              logicalPlan, options, timing, runtimeStats, schemaResolver)};
-    } else {
-      return {
-          .message = runExplain(
-              logicalPlan,
-              explain->type(),
-              explain->format(),
-              options,
-              timing,
-              runtimeStats,
-              schemaResolver)};
+      co_yield SqlResultChunk{co_await co_runExplainAnalyze(
+          logicalPlan, options, timing, runtimeStats, schemaResolver)};
+      co_return;
     }
+    co_yield SqlResultChunk{runExplain(
+        logicalPlan,
+        explain->type(),
+        explain->format(),
+        options,
+        timing,
+        runtimeStats,
+        schemaResolver)};
+    co_return;
   }
 
   if (sqlStatement.isCreateTable()) {
     const auto* create = sqlStatement.as<presto::CreateTableStatement>();
     auto table = createTable(queryId, *create);
     if (!table) {
-      return {
-          .message = fmt::format(
-              "Table already exists: {}.{}",
-              create->connectorId(),
-              create->tableName())};
+      co_yield SqlResultChunk{fmt::format(
+          "Table already exists: {}.{}",
+          create->connectorId(),
+          create->tableName())};
+      co_return;
     }
-    return {.message = fmt::format("Created table: {}", create->tableName())};
+    co_yield SqlResultChunk{
+        fmt::format("Created table: {}", create->tableName())};
+    co_return;
   }
 
   if (sqlStatement.isCreateTableAsSelect()) {
@@ -934,69 +953,96 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
         connector::ConnectorMetadataRegistry::global());
     schema->setTargetTable(ctas->connectorId(), ctas->tableName(), table);
 
-    return runLogicalPlan(
-        ctas->plan(), options, timing, planString, schema, runtimeStats);
+    // Materialize the plan into a named local: co_runLogicalPlan takes it by
+    // const& and is a lazy generator, so a temporary would dangle by the time
+    // the first batch is pulled.
+    auto plan = ctas->plan();
+    auto generator = co_runLogicalPlan(
+        plan, options, timing, planString, schema, runtimeStats);
+    while (auto batch = co_await generator.next()) {
+      co_yield SqlResultChunk{std::move(*batch)};
+    }
+    co_return;
   }
 
   if (sqlStatement.isInsert()) {
     const auto* insert = sqlStatement.as<presto::InsertStatement>();
-    return runLogicalPlan(
-        insert->plan(), options, timing, planString, nullptr, runtimeStats);
+    auto plan = insert->plan();
+    auto generator = co_runLogicalPlan(
+        plan, options, timing, planString, nullptr, runtimeStats);
+    while (auto batch = co_await generator.next()) {
+      co_yield SqlResultChunk{std::move(*batch)};
+    }
+    co_return;
   }
 
   if (sqlStatement.isDropTable()) {
     const auto* drop = sqlStatement.as<presto::DropTableStatement>();
 
-    return {.message = dropTable(queryId, *drop)};
+    co_yield SqlResultChunk{dropTable(queryId, *drop)};
+    co_return;
   }
 
   if (sqlStatement.isAddColumn()) {
     const auto* add = sqlStatement.as<presto::AddColumnStatement>();
 
-    return {.message = addColumn(queryId, *add)};
+    co_yield SqlResultChunk{addColumn(queryId, *add)};
+    co_return;
   }
 
   if (sqlStatement.isCreateSchema()) {
     const auto* create = sqlStatement.as<presto::CreateSchemaStatement>();
-    return {.message = createSchema(queryId, *create)};
+    co_yield SqlResultChunk{createSchema(queryId, *create)};
+    co_return;
   }
 
   if (sqlStatement.isDropSchema()) {
     const auto* drop = sqlStatement.as<presto::DropSchemaStatement>();
-    return {.message = dropSchema(queryId, *drop)};
+    co_yield SqlResultChunk{dropSchema(queryId, *drop)};
+    co_return;
   }
 
   if (sqlStatement.isCall()) {
     const auto* call = sqlStatement.as<presto::CallStatement>();
-    return {.message = this->call(queryId, *call)};
+    co_yield SqlResultChunk{co_await co_call(queryId, *call)};
+    co_return;
   }
 
   if (sqlStatement.isShowStatsForQuery()) {
-    return {.results = runShowStatsForQuery(sqlStatement, options)};
+    auto results = runShowStatsForQuery(sqlStatement, options);
+    for (auto& batch : results) {
+      co_yield SqlResultChunk{std::move(batch)};
+    }
+    co_return;
   }
 
   if (sqlStatement.isShowSession()) {
-    return showSession(
+    auto generator = co_showSession(
         *sqlStatement.as<presto::ShowSessionStatement>(),
         options,
         timing,
         planString);
+    while (auto batch = co_await generator.next()) {
+      co_yield SqlResultChunk{std::move(*batch)};
+    }
+    co_return;
   }
 
   if (sqlStatement.isSetSession()) {
     const auto* setSession = sqlStatement.as<presto::SetSessionStatement>();
     const auto& name = setSession->name();
     sessionConfig_->set(name, setSession->value());
-    return {
-        .message =
-            fmt::format("Session '{}' set to '{}'", name, setSession->value())};
+    co_yield SqlResultChunk{
+        fmt::format("Session '{}' set to '{}'", name, setSession->value())};
+    co_return;
   }
 
   if (sqlStatement.isResetSession()) {
     const auto* resetSession = sqlStatement.as<presto::ResetSessionStatement>();
     const auto& name = resetSession->name();
     sessionConfig_->reset(name);
-    return {.message = fmt::format("Session '{}' reset", name)};
+    co_yield SqlResultChunk{fmt::format("Session '{}' reset", name)};
+    co_return;
   }
 
   if (sqlStatement.isUse()) {
@@ -1010,17 +1056,20 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
         connectorId);
     defaultConnectorId_ = connectorId;
     defaultSchema_ = use->schema();
-    return {
-        .message =
-            fmt::format("Using {}.{}", defaultConnectorId_, use->schema())};
+    co_yield SqlResultChunk{
+        fmt::format("Using {}.{}", defaultConnectorId_, use->schema())};
+    co_return;
   }
 
   VELOX_CHECK(sqlStatement.isSelect());
 
   const auto logicalPlan = sqlStatement.as<presto::SelectStatement>()->plan();
 
-  return runLogicalPlan(
+  auto generator = co_runLogicalPlan(
       logicalPlan, options, timing, planString, nullptr, runtimeStats);
+  while (auto batch = co_await generator.next()) {
+    co_yield SqlResultChunk{std::move(*batch)};
+  }
 }
 
 std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
@@ -1072,6 +1121,52 @@ std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
       /*spillExecutor=*/nullptr,
       queryId,
       options.tokenProvider);
+}
+
+std::string SqlQueryRunner::runExplainIo(
+    const presto::SqlStatement& statement,
+    const logical_plan::LogicalPlanNodePtr& logicalPlan,
+    const RunOptions& options,
+    QueryTiming& timing,
+    std::shared_ptr<connector::SchemaResolver> schemaResolver,
+    std::shared_ptr<QueryRuntimeStats> runtimeStats) {
+  std::optional<CatalogSchemaTableName> outputTable =
+      explainIoOutputTable(statement, *logicalPlan);
+
+  auto queryCtx = newQuery(options);
+  PhaseTimer phaseTimer(
+      timing.optimize,
+      runtimeStats.get(),
+      QueryRuntimeStats::kOptimizeWallNanos,
+      QueryRuntimeStats::kOptimizeCpuNanos);
+
+  if (useOptimizerV2_) {
+    auto resolver = orDefaultSchemaResolver(schemaResolver);
+    OptimizerContext optimizerContext(optimizerPool_.get());
+    velox::exec::SimpleExpressionEvaluator evaluator(
+        queryCtx.get(), optimizerPool_.get());
+    auto session = makeOptimizerSession(
+        queryCtx->queryId(),
+        collectConnectorProperties(*sessionConfig_),
+        /*explain=*/true);
+    optimizer::v2::Optimizer optimizer(
+        *logicalPlan, *resolver, *session, evaluator, queryCtx);
+    return optimizer.explainIo(std::move(outputTable));
+  }
+  std::string text;
+  optimize(
+      logicalPlan,
+      queryCtx,
+      options,
+      [&](const auto& dt) {
+        text = optimizer::explainIo(&dt, outputTable);
+        return false; // Stop optimization.
+      },
+      nullptr,
+      std::move(schemaResolver),
+      /*explain=*/true,
+      std::move(runtimeStats));
+  return text;
 }
 
 std::string SqlQueryRunner::runExplain(
@@ -1239,6 +1334,105 @@ std::string printPlanWithStats(
       });
 }
 
+// Drives the runner under the awaiting scope's cancellation and an optional
+// deadline, yielding each result batch as it is produced and reaping via
+// co_close() once the stream ends. The deadline (folly::FutureTimeout) becomes
+// a VELOX_USER_FAIL; an external cancel re-raises folly::OperationCancelled for
+// co_run() to normalize; a genuine execution error propagates as itself.
+// A consumer that stops early must cancel via the token; silently destroying
+// this generator mid-stream skips the shielded reap and leaks the Velox task.
+folly::coro::AsyncGenerator<velox::RowVectorPtr> co_drainQuery(
+    runner::Runner& runner,
+    int64_t timeoutMicros) {
+  std::exception_ptr error;
+  bool cancelled{false};
+  bool timedOut{false};
+  // generator is kept in this coroutine's frame so its AsyncGenerator producer
+  // (execute()) outlives the per-batch timeout and the shielded co_close()
+  // reap. External cancellation flows in ambiently through the awaiting scope's
+  // token.
+  auto generator = runner.execute();
+  // Absolute deadline for the whole drain: folly::coro::timeout can't wrap a
+  // loop that co_yields, so each next() is bounded by the time remaining, which
+  // still caps total execution time (matching the pre-streaming behavior).
+  std::optional<std::chrono::steady_clock::time_point> deadline;
+  if (timeoutMicros > 0) {
+    deadline = std::chrono::steady_clock::now() +
+        std::chrono::microseconds(timeoutMicros);
+  }
+  try {
+    while (true) {
+      if (deadline) {
+        // folly::coro::timeout -> folly::futures::sleep takes microseconds, so
+        // round the remaining time up to microseconds once and reuse it for the
+        // guard and the pull. ceil (not duration_cast) avoids truncating a
+        // positive sub-microsecond remainder to zero, which would time out
+        // early.
+        const auto remaining = std::chrono::ceil<std::chrono::microseconds>(
+            *deadline - std::chrono::steady_clock::now());
+        if (remaining.count() <= 0) {
+          timedOut = true;
+          break;
+        }
+        auto batch = co_await folly::coro::timeout(generator.next(), remaining);
+        if (!batch) {
+          break;
+        }
+        co_yield std::move(*batch);
+      } else {
+        auto batch = co_await generator.next();
+        if (!batch) {
+          break;
+        }
+        co_yield std::move(*batch);
+      }
+    }
+  } catch (const folly::FutureTimeout&) {
+    timedOut = true;
+  } catch (const folly::OperationCancelled&) {
+    cancelled = true;
+  } catch (...) {
+    // Any failure (std::exception or not) still hits the shielded reap below,
+    // so capture it and follow the error path.
+    error = std::current_exception();
+  }
+  // Reap regardless, shielded from the caller's cancellation so a
+  // cancelled scope still winds the run down. A reap failure must not
+  // mask the original stop reason: if the drain already timed out,
+  // cancelled, or failed, keep that and let the reap error be secondary.
+  try {
+    co_await folly::coro::co_withCancellation(
+        folly::CancellationToken{}, runner.co_close());
+  } catch (const std::exception& e) {
+    if (!timedOut && !cancelled && !error) {
+      throw;
+    }
+    LOG(WARNING) << "co_close() failed during reap, surfacing the "
+                    "original stop reason instead: "
+                 << e.what();
+  } catch (...) {
+    // A non-std exception must not mask the original stop reason either.
+    if (!timedOut && !cancelled && !error) {
+      throw;
+    }
+    LOG(WARNING) << "co_close() failed during reap with a non-standard "
+                    "exception, surfacing the original stop reason instead";
+  }
+  if (timedOut) {
+    VELOX_USER_FAIL(
+        "Query exceeded maximum time limit of {:.2f}s",
+        timeoutMicros / 1'000'000.0);
+  }
+  if (cancelled) {
+    // Re-raise after the shielded reap; co_run() normalizes it to the dedicated
+    // QueryCancelledError so every async path reports cancellation uniformly.
+    throw folly::OperationCancelled{};
+  }
+  if (error) {
+    std::rethrow_exception(error);
+  }
+}
+
 } // namespace
 
 connector::ConnectorSessionPtr SqlQueryRunner::makeConnectorSession(
@@ -1269,7 +1463,7 @@ std::unique_ptr<runner::ProgressReporter> SqlQueryRunner::startProgressReporter(
       options.progressReportIntervalMs);
 }
 
-std::string SqlQueryRunner::runExplainAnalyze(
+folly::coro::Task<std::string> SqlQueryRunner::co_runExplainAnalyze(
     const logical_plan::LogicalPlanNodePtr& logicalPlan,
     const RunOptions& options,
     QueryTiming& timing,
@@ -1309,15 +1503,17 @@ std::string SqlQueryRunner::runExplainAnalyze(
     auto progress =
         startProgressReporter(*runner, queryCtx->queryId(), options);
     // Executed for its runtime stats (printed below); the result batches are
-    // not used, so discard them instead of accumulating the whole result set.
-    runner->drain([](velox::RowVectorPtr) {}, options.timeoutMicros);
+    // not used, so drain and discard them.
+    auto generator = co_drainQuery(*runner, options.timeoutMicros);
+    while (co_await generator.next()) {
+    }
   }
 
   std::stringstream out;
   out << printPlanWithStats(
       *runner, planAndStats.prediction, options.debugMode);
 
-  return out.str();
+  co_return out.str();
 }
 
 std::shared_ptr<optimizer::OptimizerSession>
@@ -1473,7 +1669,7 @@ std::shared_ptr<runner::LocalRunner> SqlQueryRunner::makeLocalRunner(
       runtimeStats);
 }
 
-SqlQueryRunner::SqlResult SqlQueryRunner::showSession(
+folly::coro::AsyncGenerator<velox::RowVectorPtr> SqlQueryRunner::co_showSession(
     const presto::ShowSessionStatement& statement,
     const RunOptions& options,
     QueryTiming& timing,
@@ -1517,10 +1713,19 @@ SqlQueryRunner::SqlResult SqlQueryRunner::showSession(
             "like", lp::Col("Name"), lp::Lit(statement.likePattern().value())));
   }
 
-  return runLogicalPlan(builder.build(), options, timing, planString);
+  // Materialize the built plan into a local before the await: `build()` returns
+  // by value, and binding that temporary to co_runLogicalPlan's `const&`
+  // parameter would leave it dangling once GCC destroys co_await-operand
+  // temporaries at the suspension point.
+  auto plan = builder.build();
+  auto generator = co_runLogicalPlan(plan, options, timing, planString);
+  while (auto batch = co_await generator.next()) {
+    co_yield std::move(*batch);
+  }
 }
 
-SqlQueryRunner::SqlResult SqlQueryRunner::runLogicalPlan(
+folly::coro::AsyncGenerator<velox::RowVectorPtr>
+SqlQueryRunner::co_runLogicalPlan(
     const logical_plan::LogicalPlanNodePtr& logicalPlan,
     const RunOptions& options,
     QueryTiming& timing,
@@ -1528,8 +1733,6 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runLogicalPlan(
     std::shared_ptr<facebook::axiom::connector::SchemaResolver> schemaResolver,
     std::shared_ptr<QueryRuntimeStats> runtimeStats) {
   auto queryCtx = newQuery(options);
-
-  SqlResult result;
 
   optimizer::PlanAndStats planAndStats;
   {
@@ -1565,14 +1768,11 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runLogicalPlan(
         QueryRuntimeStats::kExecuteCpuNanos);
     auto progress =
         startProgressReporter(*runner, queryCtx->queryId(), options);
-    runner->drain(
-        [&](velox::RowVectorPtr batch) {
-          result.results.push_back(std::move(batch));
-        },
-        options.timeoutMicros);
+    auto generator = co_drainQuery(*runner, options.timeoutMicros);
+    while (auto batch = co_await generator.next()) {
+      co_yield std::move(*batch);
+    }
   }
-
-  return result;
 }
 
 namespace {

@@ -15,15 +15,17 @@
  */
 
 #include "axiom/cli/SqlQueryRunner.h"
+#include <folly/CancellationToken.h>
+#include <folly/coro/BlockingWait.h>
 #include <folly/coro/Task.h>
+#include <folly/coro/WithCancellation.h>
 #include <folly/dynamic.h>
 #include <folly/executors/FunctionScheduler.h>
 #include <folly/init/Init.h>
-#include <folly/json.h>
+#include <folly/synchronization/Baton.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <stdexcept>
-#include <thread>
 #include "axiom/cli/QueryIdGenerator.h"
 #include "axiom/cli/tests/SqlQueryRunnerTestBase.h"
 #include "axiom/connectors/tests/TestConnector.h"
@@ -115,6 +117,178 @@ TEST_F(SqlQueryRunnerTest, executionTimeout) {
           "FROM t a, t b, t c, t d, t e, t f",
           options),
       "exceeded maximum time limit");
+}
+
+TEST_F(SqlQueryRunnerTest, externalCancellation) {
+  // A token cancelled before co_run() is observed as the query starts executing
+  // -- the runner trips its cancellation callback before producing any output
+  // -- so the outcome is deterministic regardless of the table contents.
+  // co_run() surfaces the cancellation as a dedicated QueryCancelledError so a
+  // client can report a user cancel plainly.
+  testConnector_->addTable("t", ROW("c", BIGINT()));
+  SqlQueryRunner::RunOptions options;
+  folly::CancellationSource source;
+  source.requestCancellation();
+
+  // onComplete still fires for a cancellation, marking it distinctly: cancelled
+  // is true and errorInfo is unset, so telemetry can tell it apart from a
+  // successful empty result (which would also carry no errorInfo).
+  std::optional<QueryCompletionInfo> completion;
+  options.onComplete = [&](const QueryCompletionInfo& info) {
+    completion = info;
+  };
+
+  // Cancellation is composed structurally onto the co_run() consumption.
+  EXPECT_THROW(
+      folly::coro::blockingWait(
+          folly::coro::co_withCancellation(
+              source.getToken(),
+              folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+                auto generator =
+                    runner_->co_run("SELECT count(*) FROM t", options);
+                while (co_await generator.next()) {
+                }
+              }))),
+      QueryCancelledError);
+
+  ASSERT_TRUE(completion.has_value());
+  EXPECT_TRUE(completion->cancelled);
+  EXPECT_FALSE(completion->errorInfo.has_value());
+}
+
+TEST_F(SqlQueryRunnerTest, coRunYieldsChunks) {
+  // co_run() is a generator: a SELECT yields batch chunks (no message); a
+  // statement that returns a status line yields a single message chunk.
+  auto collect = [&](std::string_view sql) {
+    return folly::coro::blockingWait(
+        folly::coro::co_invoke(
+            [&]() -> folly::coro::Task<
+                      std::vector<SqlQueryRunner::SqlResultChunk>> {
+              std::vector<SqlQueryRunner::SqlResultChunk> chunks;
+              auto generator = runner_->co_run(std::string(sql), {});
+              while (auto chunk = co_await generator.next()) {
+                chunks.push_back(std::move(*chunk));
+              }
+              co_return chunks;
+            }));
+  };
+
+  auto selectChunks = collect("SELECT 1");
+  ASSERT_EQ(selectChunks.size(), 1);
+  EXPECT_FALSE(selectChunks[0].message.has_value());
+  ASSERT_NE(selectChunks[0].batch, nullptr);
+  test::assertEqualVectors(
+      selectChunks[0].batch, makeRowVector({makeFlatVector<int32_t>({1})}));
+
+  auto explainChunks = collect("EXPLAIN (TYPE LOGICAL) SELECT 1");
+  ASSERT_EQ(explainChunks.size(), 1);
+  EXPECT_TRUE(explainChunks[0].message.has_value());
+  EXPECT_EQ(explainChunks[0].batch, nullptr);
+}
+
+TEST_F(SqlQueryRunnerTest, coRunRowCountAcrossChunks) {
+  // A multi-row SELECT is delivered as one or more batch chunks; the row count
+  // summed across chunks and the reported numOutputRows both match the input.
+  constexpr int64_t kNumRows = 2500;
+  testConnector_->addTable("t", ROW("c", BIGINT()))
+      ->addData(makeRowVector({makeFlatVector<int64_t>(
+          kNumRows, [](auto row) { return static_cast<int64_t>(row); })}));
+
+  std::optional<QueryCompletionInfo> completion;
+  SqlQueryRunner::RunOptions options;
+  options.onComplete = [&](const QueryCompletionInfo& info) {
+    completion = info;
+  };
+
+  int64_t totalRows = 0;
+  folly::coro::blockingWait(
+      folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        auto generator = runner_->co_run("SELECT c FROM t", options);
+        while (auto chunk = co_await generator.next()) {
+          EXPECT_FALSE(chunk->message.has_value());
+          if (chunk->batch != nullptr) {
+            totalRows += chunk->batch->size();
+          }
+        }
+      }));
+
+  EXPECT_EQ(totalRows, kNumRows);
+  ASSERT_TRUE(completion.has_value());
+  EXPECT_EQ(completion->numOutputRows, kNumRows);
+  EXPECT_FALSE(completion->cancelled);
+  EXPECT_FALSE(completion->errorInfo.has_value());
+}
+
+TEST_F(SqlQueryRunnerTest, coRunCancelMidStream) {
+  // Cancelling after a batch, while the query is still producing rows, surfaces
+  // QueryCancelledError and still reaps (onComplete marks cancelled, no
+  // errorInfo). numWorkers=1 keeps it single-fragment so cancel does not leave
+  // a LocalExchangeSource pinned.
+  testConnector_->addTable("t", ROW("s", VARCHAR()))
+      ->addData(makeRowVector({makeFlatVector<std::string>(
+          25, [](auto row) { return fmt::format("value_{:04d}", row); })}));
+
+  std::optional<QueryCompletionInfo> completion;
+  SqlQueryRunner::RunOptions options;
+  options.numWorkers = 1;
+  options.numDrivers = 1;
+  options.onComplete = [&](const QueryCompletionInfo& info) {
+    completion = info;
+  };
+
+  folly::CancellationSource source;
+  EXPECT_THROW(
+      folly::coro::blockingWait(
+          folly::coro::co_withCancellation(
+              source.getToken(),
+              folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+                // A six-way cross join streams ~244M rows, so the query is
+                // still producing long after the first batch.
+                auto generator = runner_->co_run(
+                    "SELECT a.s FROM t a, t b, t c, t d, t e, t f", options);
+                bool cancelled = false;
+                while (auto chunk = co_await generator.next()) {
+                  if (!cancelled) {
+                    source.requestCancellation();
+                    cancelled = true;
+                  }
+                }
+              }))),
+      QueryCancelledError);
+
+  ASSERT_TRUE(completion.has_value());
+  EXPECT_TRUE(completion->cancelled);
+  EXPECT_FALSE(completion->errorInfo.has_value());
+}
+
+TEST_F(SqlQueryRunnerTest, coRunErrorSurfacesFromGenerator) {
+  // A runtime error during execution surfaces from the consumer's next() and
+  // still fires onComplete with errorInfo (not cancelled).
+  testConnector_->addTable("t", ROW("c", BIGINT()))
+      ->addData(makeRowVector({makeFlatVector<int64_t>(
+          2500, [](auto row) { return static_cast<int64_t>(row); })}));
+
+  std::optional<QueryCompletionInfo> completion;
+  SqlQueryRunner::RunOptions options;
+  options.onComplete = [&](const QueryCompletionInfo& info) {
+    completion = info;
+  };
+
+  // Divides by zero at c == 2000 (not constant-foldable), erroring during
+  // execution after earlier rows have streamed.
+  EXPECT_THROW(
+      folly::coro::blockingWait(
+          folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+            auto generator =
+                runner_->co_run("SELECT 1 / (c - 2000) FROM t", options);
+            while (co_await generator.next()) {
+            }
+          })),
+      VeloxException);
+
+  ASSERT_TRUE(completion.has_value());
+  EXPECT_FALSE(completion->cancelled);
+  EXPECT_TRUE(completion->errorInfo.has_value());
 }
 
 TEST_F(SqlQueryRunnerTest, currentUser) {
@@ -569,8 +743,8 @@ TEST_F(SqlQueryRunnerTest, multiStatementTimingPerStatement) {
 TEST_F(SqlQueryRunnerTest, totalTimingIncludesAllPhases) {
   QueryCompletionInfo captured;
 
-  // Inject a permission check that sleeps 10ms to create a measurable gap
-  // between parse and execute timers.
+  // Inject a permission check that consumes ~10ms of wall time to create a
+  // measurable gap in the permission-check timer.
   auto runner = makeRunner(
       "test_timing",
       {},
@@ -580,8 +754,10 @@ TEST_F(SqlQueryRunnerTest, totalTimingIncludesAllPhases) {
           std::optional<std::string_view> /*schema*/,
           const auto& /*views*/,
           const auto& /*referencedTables*/) {
-        // NOLINTNEXTLINE(facebook-hte-BadCall-sleep_for)
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        // Block ~10ms without a fixed sleep: an unposted baton times out after
+        // the wall-clock interval, giving the timer a nonzero span to record.
+        folly::Baton<> gate;
+        gate.try_wait_for(std::chrono::milliseconds(10));
         return std::shared_ptr<facebook::velox::filesystems::TokenProvider>{};
       });
 
