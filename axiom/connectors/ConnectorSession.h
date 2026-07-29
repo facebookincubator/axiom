@@ -38,8 +38,9 @@ using ConnectorSessionPtr = std::shared_ptr<ConnectorSession>;
 
 /// Query-specific context passed to connectors. The identity and config fields
 /// (queryId, user, connectorId, properties) are read-only. Split-enumeration
-/// metrics are recorded through the write-only sink returned by
-/// splitStatsSink(); the connector boundary never sees the whole collector.
+/// and metadata metrics are recorded through the write-only sinks returned by
+/// splitStatsSink() and metadataStatsSink(); the connector boundary never sees
+/// the whole collector.
 class ConnectorSession final {
  public:
   ConnectorSession(
@@ -83,6 +84,10 @@ class ConnectorSession final {
   /// Returns a sink for this connector's split-enumeration metrics. Always
   /// valid, even when the session carries no collector.
   RuntimeStatsSink splitStatsSink() const;
+
+  /// Returns a sink for this connector's metadata-access metrics. Always
+  /// valid, even when the session carries no collector.
+  RuntimeStatsSink metadataStatsSink() const;
 
  private:
   // Always returns a valid sink; uses a throwaway map when no collector.

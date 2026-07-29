@@ -24,6 +24,10 @@ RuntimeStatsSink ConnectorSession::splitStatsSink() const {
   return statsSink(connector::connectorSplits(connectorId_));
 }
 
+RuntimeStatsSink ConnectorSession::metadataStatsSink() const {
+  return statsSink(connector::connectorMetadata(connectorId_));
+}
+
 RuntimeStatsSink ConnectorSession::statsSink(std::string_view component) const {
   return QueryRuntimeStats::sinkOrThrowaway(runtimeStats_, component);
 }

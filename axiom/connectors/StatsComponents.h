@@ -28,4 +28,10 @@ inline std::string connectorSplits(std::string_view connectorId) {
   return std::string(connectorId) + "/splits";
 }
 
+/// Returns the QueryRuntimeStats component id for 'connectorId' metadata access
+/// (e.g. "hive/metadata").
+inline std::string connectorMetadata(std::string_view connectorId) {
+  return std::string(connectorId) + "/metadata";
+}
+
 } // namespace facebook::axiom::connector
