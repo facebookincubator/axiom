@@ -49,12 +49,15 @@
 #include "axiom/optimizer/DerivedTablePrinter.h"
 #include "axiom/optimizer/ExplainIo.h"
 #include "axiom/optimizer/Optimization.h"
+#include "axiom/optimizer/OptimizerMetrics.h"
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/RelationOpPrinter.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/optimizer/v2/Optimize.h"
 #include "axiom/runner/ProgressReporter.h"
+#include "axiom/runner/RunnerMetrics.h"
+#include "axiom/sql/presto/ParserMetrics.h"
 #include "axiom/sql/presto/PrestoParser.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/ShowStatsBuilder.h"
@@ -80,17 +83,16 @@ using connector::ConnectorMetadataRegistry;
 
 namespace {
 
-// Times a phase: writes wall-clock micros to 'wallMicros', and if
-// 'runtimeStats' is non-null, also records wall and CPU durations under the
-// given keys.
+// Times a phase: writes wall-clock micros to 'wallMicros' and records wall and
+// CPU durations into 'sink' under the given keys.
 class PhaseTimer {
  public:
   PhaseTimer(
       uint64_t& wallMicros,
-      QueryRuntimeStats* runtimeStats,
+      RuntimeStatsSink sink,
       std::string_view wallKey,
       std::string_view cpuKey)
-      : runtimeStats_(runtimeStats),
+      : sink_(std::move(sink)),
         wallKey_(wallKey),
         cpuKey_(cpuKey),
         wallMicros_(wallMicros),
@@ -101,12 +103,9 @@ class PhaseTimer {
     // Destroy the wall timer first so wallMicros_ is finalized before we
     // read it below.
     timer_.reset();
-    if (runtimeStats_ != nullptr) {
-      const auto cpuNanos = velox::process::threadCpuNanos() - cpuStartNanos_;
-      runtimeStats_->recordTiming(
-          wallKey_, std::chrono::microseconds(wallMicros_));
-      runtimeStats_->recordTiming(cpuKey_, std::chrono::nanoseconds(cpuNanos));
-    }
+    const auto cpuNanos = velox::process::threadCpuNanos() - cpuStartNanos_;
+    sink_.recordTiming(wallKey_, std::chrono::microseconds(wallMicros_));
+    sink_.recordTiming(cpuKey_, std::chrono::nanoseconds(cpuNanos));
   }
 
   PhaseTimer(const PhaseTimer&) = delete;
@@ -115,7 +114,7 @@ class PhaseTimer {
   PhaseTimer& operator=(PhaseTimer&&) = delete;
 
  private:
-  QueryRuntimeStats* const runtimeStats_;
+  RuntimeStatsSink sink_;
   const std::string_view wallKey_;
   const std::string_view cpuKey_;
   uint64_t& wallMicros_;
@@ -366,6 +365,7 @@ void onComplete(
 connector::TablePtr SqlQueryRunner::createTable(
     std::string_view queryId,
     const presto::CreateTableStatement& statement,
+    const std::shared_ptr<QueryRuntimeStats>& runtimeStats,
     bool explain) {
   auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
 
@@ -375,7 +375,8 @@ connector::TablePtr SqlQueryRunner::createTable(
         optimizer::ConstantExprEvaluator::evaluateConstantExpr(*value);
   }
 
-  auto session = makeConnectorSession(queryId, statement.connectorId());
+  auto session =
+      makeConnectorSession(queryId, statement.connectorId(), runtimeStats);
   auto table = metadata->createTable(
       session,
       statement.tableName(),
@@ -421,6 +422,7 @@ connector::TablePtr SqlQueryRunner::createTable(
 connector::TablePtr SqlQueryRunner::createTable(
     std::string_view queryId,
     const presto::CreateTableAsSelectStatement& statement,
+    const std::shared_ptr<QueryRuntimeStats>& runtimeStats,
     bool explain) {
   auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
 
@@ -431,7 +433,7 @@ connector::TablePtr SqlQueryRunner::createTable(
   }
 
   auto table = metadata->createTable(
-      makeConnectorSession(queryId, statement.connectorId()),
+      makeConnectorSession(queryId, statement.connectorId(), runtimeStats),
       statement.tableName(),
       statement.tableSchema(),
       options,
@@ -443,13 +445,14 @@ connector::TablePtr SqlQueryRunner::createTable(
 
 std::string SqlQueryRunner::dropTable(
     std::string_view queryId,
-    const presto::DropTableStatement& statement) {
+    const presto::DropTableStatement& statement,
+    const std::shared_ptr<QueryRuntimeStats>& runtimeStats) {
   auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
 
   const auto& tableName = statement.tableName();
 
   const bool dropped = metadata->dropTable(
-      makeConnectorSession(queryId, statement.connectorId()),
+      makeConnectorSession(queryId, statement.connectorId(), runtimeStats),
       statement.tableName(),
       statement.ifExists(),
       /*explain=*/false);
@@ -463,7 +466,8 @@ std::string SqlQueryRunner::dropTable(
 
 folly::coro::Task<std::string> SqlQueryRunner::co_call(
     std::string_view queryId,
-    const presto::CallStatement& statement) {
+    const presto::CallStatement& statement,
+    const std::shared_ptr<QueryRuntimeStats>& runtimeStats) {
   // Fold each bound argument expression to a value.
   std::vector<velox::Variant> boundArguments;
   boundArguments.reserve(statement.arguments().size());
@@ -477,7 +481,8 @@ folly::coro::Task<std::string> SqlQueryRunner::co_call(
   // outlive the awaited task; hold them in named locals rather than awaiting a
   // temporary.
   auto procedure = statement.procedure();
-  auto session = makeConnectorSession(queryId, statement.connectorId());
+  auto session =
+      makeConnectorSession(queryId, statement.connectorId(), runtimeStats);
   auto task = procedure->execute(session, boundArguments);
   co_await std::move(task);
   co_return "CALL";
@@ -486,11 +491,12 @@ folly::coro::Task<std::string> SqlQueryRunner::co_call(
 std::string SqlQueryRunner::addColumn(
     std::string_view queryId,
     const presto::AddColumnStatement& statement,
+    const std::shared_ptr<QueryRuntimeStats>& runtimeStats,
     bool explain) {
   auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
 
   auto result = metadata->addColumn(
-      makeConnectorSession(queryId, statement.connectorId()),
+      makeConnectorSession(queryId, statement.connectorId(), runtimeStats),
       statement.tableName(),
       statement.columnName(),
       statement.columnType(),
@@ -516,7 +522,8 @@ std::string SqlQueryRunner::addColumn(
 
 std::string SqlQueryRunner::createSchema(
     std::string_view queryId,
-    const presto::CreateSchemaStatement& statement) {
+    const presto::CreateSchemaStatement& statement,
+    const std::shared_ptr<QueryRuntimeStats>& runtimeStats) {
   auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
 
   folly::F14FastMap<std::string, velox::Variant> properties;
@@ -526,7 +533,7 @@ std::string SqlQueryRunner::createSchema(
   }
 
   metadata->createSchema(
-      makeConnectorSession(queryId, statement.connectorId()),
+      makeConnectorSession(queryId, statement.connectorId(), runtimeStats),
       statement.schemaName(),
       statement.ifNotExists(),
       properties);
@@ -535,10 +542,11 @@ std::string SqlQueryRunner::createSchema(
 
 std::string SqlQueryRunner::dropSchema(
     std::string_view queryId,
-    const presto::DropSchemaStatement& statement) {
+    const presto::DropSchemaStatement& statement,
+    const std::shared_ptr<QueryRuntimeStats>& runtimeStats) {
   auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
   metadata->dropSchema(
-      makeConnectorSession(queryId, statement.connectorId()),
+      makeConnectorSession(queryId, statement.connectorId(), runtimeStats),
       statement.schemaName(),
       statement.ifExists());
   return fmt::format("Dropped schema: {}", statement.schemaName());
@@ -617,18 +625,22 @@ SqlQueryRunner::co_run(std::string sql, RunOptions options) {
     {
       auto cpuStart = velox::process::threadCpuNanos();
       velox::MicrosecondTimer parseTimer(&completionInfo.timing.parse);
-      statement = parseSingle(sql, runOptions);
+      statement = parseSingle(sql, runOptions, completionInfo.runtimeStats);
       parseCpuNanos = velox::process::threadCpuNanos() - cpuStart;
     }
     completionInfo.startInfo.queryType = statement->kind();
     completionInfo.referencedTables = statement->referencedTables();
-    completionInfo.runtimeStats->recordTiming(
-        QueryRuntimeStats::kParseWallNanos,
+    auto parseSink = completionInfo.runtimeStats->sinkFor(
+        ::axiom::sql::presto::kStatsComponent);
+    parseSink.recordTiming(
+        ::axiom::sql::presto::kParseWallNanos,
         std::chrono::microseconds(completionInfo.timing.parse));
-    completionInfo.runtimeStats->recordTiming(
-        QueryRuntimeStats::kParseCpuNanos,
+    parseSink.recordTiming(
+        ::axiom::sql::presto::kParseCpuNanos,
         std::chrono::nanoseconds(parseCpuNanos));
 
+    auto runnerSink = completionInfo.runtimeStats->sinkFor(
+        facebook::axiom::runner::kStatsComponent);
     {
       auto permissionCpuStart = velox::process::threadCpuNanos();
       runOptions.tokenProvider = checkPermission(
@@ -636,13 +648,13 @@ SqlQueryRunner::co_run(std::string sql, RunOptions options) {
           completionInfo,
           statement->views(),
           statement->referencedTables());
-      completionInfo.runtimeStats->recordTiming(
-          QueryRuntimeStats::kPermissionCheckCpuNanos,
+      runnerSink.recordTiming(
+          facebook::axiom::runner::kPermissionCheckCpuNanos,
           std::chrono::nanoseconds(
               velox::process::threadCpuNanos() - permissionCpuStart));
     }
-    completionInfo.runtimeStats->recordTiming(
-        QueryRuntimeStats::kPermissionCheckWallNanos,
+    runnerSink.recordTiming(
+        facebook::axiom::runner::kPermissionCheckWallNanos,
         std::chrono::microseconds(completionInfo.timing.checkPermission));
 
     auto generator = co_runUnchecked(
@@ -699,12 +711,20 @@ std::string SqlQueryRunner::toQueryGraphDot(std::string_view sql) {
 
   std::string dotOutput;
   RunOptions options;
-  optimize(logicalPlan, newQuery(options), options, [&](const auto& dt) {
-    std::ostringstream out;
-    graphviz::DerivedTableDotPrinter::print(dt, out);
-    dotOutput = out.str();
-    return false; // Stop optimization.
-  });
+  optimize(
+      logicalPlan,
+      newQuery(options),
+      options,
+      [&](const auto& dt) {
+        std::ostringstream out;
+        graphviz::DerivedTableDotPrinter::print(dt, out);
+        dotOutput = out.str();
+        return false; // Stop optimization.
+      },
+      /*checkBestPlan=*/nullptr,
+      /*schemaResolver=*/nullptr,
+      /*explain=*/false,
+      std::make_shared<QueryRuntimeStats>());
   return dotOutput;
 }
 
@@ -726,7 +746,15 @@ std::string SqlQueryRunner::toMultiFragmentPlanDot(
   options.numWorkers = numWorkers;
   options.numDrivers = numDrivers;
   auto queryCtx = newQuery(options);
-  auto planAndStats = optimize(logicalPlan, queryCtx, options);
+  auto planAndStats = optimize(
+      logicalPlan,
+      queryCtx,
+      options,
+      /*checkDerivedTable=*/nullptr,
+      /*checkBestPlan=*/nullptr,
+      /*schemaResolver=*/nullptr,
+      /*explain=*/false,
+      std::make_shared<QueryRuntimeStats>());
   VELOX_CHECK_NOT_NULL(planAndStats.plan);
 
   std::ostringstream out;
@@ -738,7 +766,9 @@ std::string SqlQueryRunner::toMultiFragmentPlanDot(
 logical_plan::LogicalPlanNodePtr SqlQueryRunner::toLogicalPlan(
     std::string_view sql) {
   RunOptions options;
-  auto statements = parseMultiple(sql, options);
+  // Plan-printing tooling discards connector-metadata metrics.
+  auto statements =
+      parseMultiple(sql, options, std::make_shared<QueryRuntimeStats>());
   VELOX_CHECK_EQ(statements.size(), 1, "Expected a single SELECT statement.");
 
   auto statement = statements[0];
@@ -761,7 +791,8 @@ std::vector<std::string_view> SqlQueryRunner::splitStatements(
 
 std::vector<presto::SqlStatementPtr> SqlQueryRunner::parseMultiple(
     std::string_view sql,
-    const RunOptions& options) {
+    const RunOptions& options,
+    const std::shared_ptr<QueryRuntimeStats>& runtimeStats) {
   const std::string& defaultConnectorId =
       options.defaultConnectorId.value_or(defaultConnectorId_);
   const auto& defaultSchema = options.defaultSchema.value_or(defaultSchema_);
@@ -771,7 +802,8 @@ std::vector<presto::SqlStatementPtr> SqlQueryRunner::parseMultiple(
       user_,
       presto::ParserOptions::from(
           sessionConfig_->effectiveValues(kParserPrefix)),
-      collectConnectorProperties(*sessionConfig_));
+      collectConnectorProperties(*sessionConfig_),
+      runtimeStats);
   auto prestoParser = std::make_unique<presto::PrestoParser>(
       defaultConnectorId, defaultSchema, std::move(parserSession));
   return prestoParser->parseMultiple(sql, /*enableTracing=*/options.debugMode);
@@ -779,8 +811,10 @@ std::vector<presto::SqlStatementPtr> SqlQueryRunner::parseMultiple(
 
 presto::SqlStatementPtr SqlQueryRunner::parseSingle(
     std::string_view sql,
-    const RunOptions& options) {
-  std::vector<presto::SqlStatementPtr> statements = parseMultiple(sql, options);
+    const RunOptions& options,
+    const std::shared_ptr<QueryRuntimeStats>& runtimeStats) {
+  std::vector<presto::SqlStatementPtr> statements =
+      parseMultiple(sql, options, runtimeStats);
   VELOX_USER_CHECK_EQ(
       statements.size(),
       1,
@@ -794,11 +828,16 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
     const RunOptions& options) {
   QueryTiming timing;
   std::string planString;
+  // No completion info to carry the metrics; discard them into a throwaway.
   return folly::coro::blockingWait(
       folly::coro::co_invoke([&]() -> folly::coro::Task<SqlResult> {
         SqlResult result;
-        auto generator =
-            co_runUnchecked(sqlStatement, options, timing, planString);
+        auto generator = co_runUnchecked(
+            sqlStatement,
+            options,
+            timing,
+            planString,
+            std::make_shared<QueryRuntimeStats>());
         while (auto chunk = co_await generator.next()) {
           if (chunk->message.has_value()) {
             result.message = std::move(chunk->message);
@@ -818,6 +857,7 @@ SqlQueryRunner::co_runUnchecked(
     QueryTiming& timing,
     std::string& planString,
     std::shared_ptr<QueryRuntimeStats> runtimeStats) {
+  VELOX_CHECK_NOT_NULL(runtimeStats);
   const std::string queryId = options.queryId.value_or(queryIdGenerator_());
   if (sqlStatement.isExplain()) {
     const auto* explain = sqlStatement.as<presto::ExplainStatement>();
@@ -837,15 +877,15 @@ SqlQueryRunner::co_runUnchecked(
 
       // EXPLAIN ANALYZE runs the query for real, so createTable must not
       // be in explain mode. Regular EXPLAIN must be side-effect-free.
-      auto table =
-          createTable(queryId, *ctas, /*explain=*/!explain->isAnalyze());
+      auto table = createTable(
+          queryId, *ctas, runtimeStats, /*explain=*/!explain->isAnalyze());
       schemaResolver = std::make_shared<connector::SchemaResolver>(
           connector::ConnectorMetadataRegistry::global());
       schemaResolver->setTargetTable(
           ctas->connectorId(), ctas->tableName(), table);
     } else if (statement->isCreateTable()) {
       const auto* create = statement->as<presto::CreateTableStatement>();
-      createTable(queryId, *create, /*explain=*/true);
+      createTable(queryId, *create, runtimeStats, /*explain=*/true);
       co_yield SqlResultChunk{fmt::format(
           "CREATE TABLE {}{}.{}",
           create->ifNotExists() ? "IF NOT EXISTS " : "",
@@ -870,7 +910,7 @@ SqlQueryRunner::co_runUnchecked(
       co_return;
     } else if (statement->isAddColumn()) {
       const auto* add = statement->as<presto::AddColumnStatement>();
-      addColumn(queryId, *add, /*explain=*/true);
+      addColumn(queryId, *add, runtimeStats, /*explain=*/true);
       co_yield SqlResultChunk{fmt::format(
           "ALTER TABLE {}{}.{} ADD COLUMN {}{} {}",
           add->ifTableExists() ? "IF EXISTS " : "",
@@ -932,7 +972,7 @@ SqlQueryRunner::co_runUnchecked(
 
   if (sqlStatement.isCreateTable()) {
     const auto* create = sqlStatement.as<presto::CreateTableStatement>();
-    auto table = createTable(queryId, *create);
+    auto table = createTable(queryId, *create, runtimeStats);
     if (!table) {
       co_yield SqlResultChunk{fmt::format(
           "Table already exists: {}.{}",
@@ -947,7 +987,7 @@ SqlQueryRunner::co_runUnchecked(
 
   if (sqlStatement.isCreateTableAsSelect()) {
     const auto* ctas = sqlStatement.as<presto::CreateTableAsSelectStatement>();
-    auto table = createTable(queryId, *ctas);
+    auto table = createTable(queryId, *ctas, runtimeStats);
 
     auto schema = std::make_shared<connector::SchemaResolver>(
         connector::ConnectorMetadataRegistry::global());
@@ -979,32 +1019,32 @@ SqlQueryRunner::co_runUnchecked(
   if (sqlStatement.isDropTable()) {
     const auto* drop = sqlStatement.as<presto::DropTableStatement>();
 
-    co_yield SqlResultChunk{dropTable(queryId, *drop)};
+    co_yield SqlResultChunk{dropTable(queryId, *drop, runtimeStats)};
     co_return;
   }
 
   if (sqlStatement.isAddColumn()) {
     const auto* add = sqlStatement.as<presto::AddColumnStatement>();
 
-    co_yield SqlResultChunk{addColumn(queryId, *add)};
+    co_yield SqlResultChunk{addColumn(queryId, *add, runtimeStats)};
     co_return;
   }
 
   if (sqlStatement.isCreateSchema()) {
     const auto* create = sqlStatement.as<presto::CreateSchemaStatement>();
-    co_yield SqlResultChunk{createSchema(queryId, *create)};
+    co_yield SqlResultChunk{createSchema(queryId, *create, runtimeStats)};
     co_return;
   }
 
   if (sqlStatement.isDropSchema()) {
     const auto* drop = sqlStatement.as<presto::DropSchemaStatement>();
-    co_yield SqlResultChunk{dropSchema(queryId, *drop)};
+    co_yield SqlResultChunk{dropSchema(queryId, *drop, runtimeStats)};
     co_return;
   }
 
   if (sqlStatement.isCall()) {
     const auto* call = sqlStatement.as<presto::CallStatement>();
-    co_yield SqlResultChunk{co_await co_call(queryId, *call)};
+    co_yield SqlResultChunk{co_await co_call(queryId, *call, runtimeStats)};
     co_return;
   }
 
@@ -1136,9 +1176,9 @@ std::string SqlQueryRunner::runExplainIo(
   auto queryCtx = newQuery(options);
   PhaseTimer phaseTimer(
       timing.optimize,
-      runtimeStats.get(),
-      QueryRuntimeStats::kOptimizeWallNanos,
-      QueryRuntimeStats::kOptimizeCpuNanos);
+      runtimeStats->sinkFor(facebook::axiom::optimizer::kStatsComponent),
+      facebook::axiom::optimizer::kOptimizeWallNanos,
+      facebook::axiom::optimizer::kOptimizeCpuNanos);
 
   if (useOptimizerV2_) {
     auto resolver = orDefaultSchemaResolver(schemaResolver);
@@ -1148,7 +1188,8 @@ std::string SqlQueryRunner::runExplainIo(
     auto session = makeOptimizerSession(
         queryCtx->queryId(),
         collectConnectorProperties(*sessionConfig_),
-        /*explain=*/true);
+        /*explain=*/true,
+        runtimeStats);
     optimizer::v2::Optimizer optimizer(
         *logicalPlan, *resolver, *session, evaluator, queryCtx);
     return optimizer.explainIo(std::move(outputTable));
@@ -1208,9 +1249,9 @@ std::string SqlQueryRunner::runExplain(
       {
         PhaseTimer phaseTimer(
             timing.optimize,
-            runtimeStats.get(),
-            QueryRuntimeStats::kOptimizeWallNanos,
-            QueryRuntimeStats::kOptimizeCpuNanos);
+            runtimeStats->sinkFor(facebook::axiom::optimizer::kStatsComponent),
+            facebook::axiom::optimizer::kOptimizeWallNanos,
+            facebook::axiom::optimizer::kOptimizeCpuNanos);
         optimize(
             logicalPlan,
             queryCtx,
@@ -1242,9 +1283,9 @@ std::string SqlQueryRunner::runExplain(
       {
         PhaseTimer phaseTimer(
             timing.optimize,
-            runtimeStats.get(),
-            QueryRuntimeStats::kOptimizeWallNanos,
-            QueryRuntimeStats::kOptimizeCpuNanos);
+            runtimeStats->sinkFor(facebook::axiom::optimizer::kStatsComponent),
+            facebook::axiom::optimizer::kOptimizeWallNanos,
+            facebook::axiom::optimizer::kOptimizeCpuNanos);
         optimize(
             logicalPlan,
             queryCtx,
@@ -1272,9 +1313,9 @@ std::string SqlQueryRunner::runExplain(
       {
         PhaseTimer phaseTimer(
             timing.optimize,
-            runtimeStats.get(),
-            QueryRuntimeStats::kOptimizeWallNanos,
-            QueryRuntimeStats::kOptimizeCpuNanos);
+            runtimeStats->sinkFor(facebook::axiom::optimizer::kStatsComponent),
+            facebook::axiom::optimizer::kOptimizeWallNanos,
+            facebook::axiom::optimizer::kOptimizeCpuNanos);
         planAndStats = optimize(
             logicalPlan,
             queryCtx,
@@ -1311,8 +1352,17 @@ SqlQueryRunner::executeSelectOrInsert(
   }
 
   auto queryCtx = newQuery(options);
-  auto planAndStats = optimize(logicalPlan, queryCtx, options);
-  return makeLocalRunner(planAndStats, queryCtx, options, noopRuntimeStats_);
+  auto runtimeStats = std::make_shared<QueryRuntimeStats>();
+  auto planAndStats = optimize(
+      logicalPlan,
+      queryCtx,
+      options,
+      /*checkDerivedTable=*/nullptr,
+      /*checkBestPlan=*/nullptr,
+      /*schemaResolver=*/nullptr,
+      /*explain=*/false,
+      runtimeStats);
+  return makeLocalRunner(planAndStats, queryCtx, options, runtimeStats);
 }
 
 namespace {
@@ -1437,11 +1487,14 @@ folly::coro::AsyncGenerator<velox::RowVectorPtr> co_drainQuery(
 
 connector::ConnectorSessionPtr SqlQueryRunner::makeConnectorSession(
     std::string_view queryId,
-    std::string_view connectorId) const {
+    std::string_view connectorId,
+    const std::shared_ptr<QueryRuntimeStats>& runtimeStats) const {
   return std::make_shared<connector::ConnectorSession>(
       std::string(queryId),
       user_,
-      sessionConfig_->effectiveValues(connectorId));
+      std::string(connectorId),
+      sessionConfig_->effectiveValues(connectorId),
+      runtimeStats);
 }
 
 std::unique_ptr<runner::ProgressReporter> SqlQueryRunner::startProgressReporter(
@@ -1474,9 +1527,9 @@ folly::coro::Task<std::string> SqlQueryRunner::co_runExplainAnalyze(
   {
     PhaseTimer phaseTimer(
         timing.optimize,
-        runtimeStats.get(),
-        QueryRuntimeStats::kOptimizeWallNanos,
-        QueryRuntimeStats::kOptimizeCpuNanos);
+        runtimeStats->sinkFor(facebook::axiom::optimizer::kStatsComponent),
+        facebook::axiom::optimizer::kOptimizeWallNanos,
+        facebook::axiom::optimizer::kOptimizeCpuNanos);
     planAndStats = optimize(
         logicalPlan,
         queryCtx,
@@ -1488,18 +1541,14 @@ folly::coro::Task<std::string> SqlQueryRunner::co_runExplainAnalyze(
         runtimeStats);
   }
 
-  auto runner = makeLocalRunner(
-      planAndStats,
-      queryCtx,
-      options,
-      runtimeStats ? *runtimeStats : noopRuntimeStats_);
+  auto runner = makeLocalRunner(planAndStats, queryCtx, options, runtimeStats);
 
   {
     PhaseTimer phaseTimer(
         timing.execute,
-        runtimeStats.get(),
-        QueryRuntimeStats::kExecuteWallNanos,
-        QueryRuntimeStats::kExecuteCpuNanos);
+        runtimeStats->sinkFor(facebook::axiom::runner::kStatsComponent),
+        facebook::axiom::runner::kExecuteWallNanos,
+        facebook::axiom::runner::kExecuteCpuNanos);
     auto progress =
         startProgressReporter(*runner, queryCtx->queryId(), options);
     // Executed for its runtime stats (printed below); the result batches are
@@ -1520,7 +1569,8 @@ std::shared_ptr<optimizer::OptimizerSession>
 SqlQueryRunner::makeOptimizerSession(
     std::string_view queryId,
     connector::ConnectorProperties connectorProperties,
-    bool explain) {
+    bool explain,
+    const std::shared_ptr<QueryRuntimeStats>& runtimeStats) {
   auto optimizerOptions = optimizer::OptimizerOptions::from(
       sessionConfig_->effectiveValues(kOptimizerPrefix));
   optimizerOptions.explain = explain;
@@ -1528,7 +1578,8 @@ SqlQueryRunner::makeOptimizerSession(
       std::string(queryId),
       user_,
       std::move(optimizerOptions),
-      std::move(connectorProperties));
+      std::move(connectorProperties),
+      runtimeStats);
 }
 
 optimizer::PlanAndStats SqlQueryRunner::optimize(
@@ -1541,6 +1592,7 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
     std::shared_ptr<facebook::axiom::connector::SchemaResolver> schemaResolver,
     bool explain,
     std::shared_ptr<QueryRuntimeStats> runtimeStats) {
+  VELOX_CHECK_NOT_NULL(runtimeStats);
   optimizer::MultiFragmentPlan::Options opts;
   opts.numWorkers = options.numWorkers;
   opts.numDrivers = options.numDrivers;
@@ -1553,13 +1605,14 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
   schemaResolver = orDefaultSchemaResolver(std::move(schemaResolver));
 
   auto connectorProperties = collectConnectorProperties(*sessionConfig_);
-  auto optimizerSession =
-      makeOptimizerSession(queryCtx->queryId(), connectorProperties, explain);
+  auto optimizerSession = makeOptimizerSession(
+      queryCtx->queryId(), connectorProperties, explain, runtimeStats);
   auto runnerSession = std::make_shared<runner::RunnerSession>(
       queryCtx->queryId(),
       user_,
       sessionConfig_->effectiveValues(kRunnerPrefix),
-      std::move(connectorProperties));
+      std::move(connectorProperties),
+      runtimeStats);
 
   if (useOptimizerV2_) {
     VELOX_USER_CHECK(
@@ -1590,8 +1643,7 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
       *history,
       queryCtx,
       evaluator,
-      opts,
-      runtimeStats);
+      opts);
 
   if (checkDerivedTable && !checkDerivedTable(*optimization.rootDt())) {
     return {};
@@ -1624,26 +1676,26 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
     toVeloxCpuNanos = velox::process::threadCpuNanos() - cpuStart;
   }
 
-  if (runtimeStats) {
-    runtimeStats->recordTiming(
-        QueryRuntimeStats::kOptimizeToGraphWallNanos,
-        std::chrono::nanoseconds(toGraphNanos));
-    runtimeStats->recordTiming(
-        QueryRuntimeStats::kOptimizeToGraphCpuNanos,
-        std::chrono::nanoseconds(toGraphCpuNanos));
-    runtimeStats->recordTiming(
-        QueryRuntimeStats::kOptimizeBestPlanWallNanos,
-        std::chrono::nanoseconds(bestPlanNanos));
-    runtimeStats->recordTiming(
-        QueryRuntimeStats::kOptimizeBestPlanCpuNanos,
-        std::chrono::nanoseconds(bestPlanCpuNanos));
-    runtimeStats->recordTiming(
-        QueryRuntimeStats::kOptimizeToVeloxWallNanos,
-        std::chrono::nanoseconds(toVeloxNanos));
-    runtimeStats->recordTiming(
-        QueryRuntimeStats::kOptimizeToVeloxCpuNanos,
-        std::chrono::nanoseconds(toVeloxCpuNanos));
-  }
+  auto sink =
+      runtimeStats->sinkFor(facebook::axiom::optimizer::kStatsComponent);
+  sink.recordTiming(
+      facebook::axiom::optimizer::kOptimizeToGraphWallNanos,
+      std::chrono::nanoseconds(toGraphNanos));
+  sink.recordTiming(
+      facebook::axiom::optimizer::kOptimizeToGraphCpuNanos,
+      std::chrono::nanoseconds(toGraphCpuNanos));
+  sink.recordTiming(
+      facebook::axiom::optimizer::kOptimizeBestPlanWallNanos,
+      std::chrono::nanoseconds(bestPlanNanos));
+  sink.recordTiming(
+      facebook::axiom::optimizer::kOptimizeBestPlanCpuNanos,
+      std::chrono::nanoseconds(bestPlanCpuNanos));
+  sink.recordTiming(
+      facebook::axiom::optimizer::kOptimizeToVeloxWallNanos,
+      std::chrono::nanoseconds(toVeloxNanos));
+  sink.recordTiming(
+      facebook::axiom::optimizer::kOptimizeToVeloxCpuNanos,
+      std::chrono::nanoseconds(toVeloxCpuNanos));
 
   return result;
 }
@@ -1652,21 +1704,23 @@ std::shared_ptr<runner::LocalRunner> SqlQueryRunner::makeLocalRunner(
     optimizer::PlanAndStats& planAndStats,
     const std::shared_ptr<velox::core::QueryCtx>& queryCtx,
     const RunOptions& options,
-    QueryRuntimeStats& runtimeStats) {
+    const std::shared_ptr<QueryRuntimeStats>& runtimeStats) {
   auto runnerSession = std::make_shared<runner::RunnerSession>(
       queryCtx->queryId(),
       user_,
       sessionConfig_->effectiveValues(kRunnerPrefix),
-      collectConnectorProperties(*sessionConfig_));
+      collectConnectorProperties(*sessionConfig_),
+      runtimeStats);
   return std::make_shared<runner::LocalRunner>(
       std::move(runnerSession),
       planAndStats.plan,
       std::move(planAndStats.finishWrite),
       queryCtx,
-      std::make_shared<runner::ConnectorSplitSourceFactory>(runtimeStats),
+      std::make_shared<runner::ConnectorSplitSourceFactory>(
+          runtimeStats->sinkFor(facebook::axiom::runner::kStatsComponent)),
       executorPool_,
       /*baseSpillDirectory=*/"",
-      runtimeStats);
+      runtimeStats->sinkFor(facebook::axiom::runner::kStatsComponent));
 }
 
 folly::coro::AsyncGenerator<velox::RowVectorPtr> SqlQueryRunner::co_showSession(
@@ -1718,7 +1772,13 @@ folly::coro::AsyncGenerator<velox::RowVectorPtr> SqlQueryRunner::co_showSession(
   // parameter would leave it dangling once GCC destroys co_await-operand
   // temporaries at the suspension point.
   auto plan = builder.build();
-  auto generator = co_runLogicalPlan(plan, options, timing, planString);
+  auto generator = co_runLogicalPlan(
+      plan,
+      options,
+      timing,
+      planString,
+      /*schemaResolver=*/nullptr,
+      std::make_shared<QueryRuntimeStats>());
   while (auto batch = co_await generator.next()) {
     co_yield std::move(*batch);
   }
@@ -1732,15 +1792,16 @@ SqlQueryRunner::co_runLogicalPlan(
     std::string& planString,
     std::shared_ptr<facebook::axiom::connector::SchemaResolver> schemaResolver,
     std::shared_ptr<QueryRuntimeStats> runtimeStats) {
+  VELOX_CHECK_NOT_NULL(runtimeStats);
   auto queryCtx = newQuery(options);
 
   optimizer::PlanAndStats planAndStats;
   {
     PhaseTimer phaseTimer(
         timing.optimize,
-        runtimeStats.get(),
-        QueryRuntimeStats::kOptimizeWallNanos,
-        QueryRuntimeStats::kOptimizeCpuNanos);
+        runtimeStats->sinkFor(facebook::axiom::optimizer::kStatsComponent),
+        facebook::axiom::optimizer::kOptimizeWallNanos,
+        facebook::axiom::optimizer::kOptimizeCpuNanos);
     planAndStats = optimize(
         logicalPlan,
         queryCtx,
@@ -1754,18 +1815,14 @@ SqlQueryRunner::co_runLogicalPlan(
 
   planString = planAndStats.toString();
 
-  auto runner = makeLocalRunner(
-      planAndStats,
-      queryCtx,
-      options,
-      runtimeStats ? *runtimeStats : noopRuntimeStats_);
+  auto runner = makeLocalRunner(planAndStats, queryCtx, options, runtimeStats);
 
   {
     PhaseTimer phaseTimer(
         timing.execute,
-        runtimeStats.get(),
-        QueryRuntimeStats::kExecuteWallNanos,
-        QueryRuntimeStats::kExecuteCpuNanos);
+        runtimeStats->sinkFor(facebook::axiom::runner::kStatsComponent),
+        facebook::axiom::runner::kExecuteWallNanos,
+        facebook::axiom::runner::kExecuteCpuNanos);
     auto progress =
         startProgressReporter(*runner, queryCtx->queryId(), options);
     auto generator = co_drainQuery(*runner, options.timeoutMicros);
@@ -1816,7 +1873,8 @@ std::vector<velox::RowVectorPtr> SqlQueryRunner::runShowStatsForQuery(
     auto session = makeOptimizerSession(
         queryCtx->queryId(),
         collectConnectorProperties(*sessionConfig_),
-        /*explain=*/false);
+        /*explain=*/false,
+        std::make_shared<QueryRuntimeStats>());
 
     const auto stats =
         optimizer::v2::Optimizer(
@@ -1859,7 +1917,11 @@ std::vector<velox::RowVectorPtr> SqlQueryRunner::runShowStatsForQuery(
 
           data = builder.rows();
           return false; // Stop optimization.
-        });
+        },
+        /*checkBestPlan=*/nullptr,
+        /*schemaResolver=*/nullptr,
+        /*explain=*/false,
+        std::make_shared<QueryRuntimeStats>());
   }
 
   auto result = std::dynamic_pointer_cast<velox::RowVector>(

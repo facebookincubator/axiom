@@ -24,6 +24,7 @@
 #include <folly/coro/WithCancellation.h>
 #include <folly/synchronization/Baton.h>
 #include <thread>
+#include "axiom/runner/RunnerMetrics.h"
 #include "axiom/runner/tests/DistributedPlanBuilder.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -33,6 +34,53 @@ namespace {
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+
+// Delegates split enumeration to an inner source and records a fixed metric
+// into the session's runtime stats sink at close, so a test can verify a
+// source's metrics reach the query-level stats via the session.
+class StatsRecordingSplitSource : public connector::SplitSource {
+ public:
+  static constexpr std::string_view kMetricName{"testSplitMetric"};
+  static constexpr int64_t kMetricValue{7};
+
+  StatsRecordingSplitSource(
+      std::shared_ptr<connector::SplitSource> inner,
+      RuntimeStatsSink statsSink)
+      : inner_(std::move(inner)), statsSink_(std::move(statsSink)) {}
+
+  folly::coro::Task<connector::SplitBatch> co_getSplits(
+      uint32_t maxSplitCount) override {
+    co_return co_await inner_->co_getSplits(maxSplitCount);
+  }
+
+ protected:
+  folly::coro::Task<void> co_closeImpl() noexcept override {
+    statsSink_.recordCount(kMetricName, kMetricValue);
+    co_await inner_->co_close();
+  }
+
+ private:
+  const std::shared_ptr<connector::SplitSource> inner_;
+  const RuntimeStatsSink statsSink_;
+};
+
+// Wraps every source produced by ConnectorSplitSourceFactory in a
+// StatsRecordingSplitSource that records into the session's stats sink.
+class StatsRecordingSplitSourceFactory : public ConnectorSplitSourceFactory {
+ public:
+  using ConnectorSplitSourceFactory::ConnectorSplitSourceFactory;
+
+  std::shared_ptr<connector::SplitSource> splitSourceForScan(
+      const connector::ConnectorSessionPtr& session,
+      const velox::core::TableScanNode& scan,
+      const std::shared_ptr<connector::PartitionType>& partitionType,
+      std::optional<double> samplePercentage) override {
+    return std::make_shared<StatsRecordingSplitSource>(
+        ConnectorSplitSourceFactory::splitSourceForScan(
+            session, scan, partitionType, samplePercentage),
+        session->splitStatsSink());
+  }
+};
 
 class LocalRunnerTest : public test::LocalRunnerTestBase {
  public:
@@ -143,12 +191,14 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
   }
 
   static axiom::runner::RunnerSessionPtr makeRunnerSession(
-      std::string_view queryId) {
+      std::string_view queryId,
+      std::shared_ptr<QueryRuntimeStats> runtimeStats = nullptr) {
     return std::make_shared<axiom::runner::RunnerSession>(
         std::string(queryId),
         "test",
         axiom::runner::Properties{},
-        axiom::connector::ConnectorProperties{});
+        axiom::connector::ConnectorProperties{},
+        std::move(runtimeStats));
   }
 
   template <typename RunnerT = LocalRunner>
@@ -159,10 +209,11 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
         std::move(plan),
         optimizer::FinishWrite{},
         makeQueryCtx(queryId),
-        std::make_shared<ConnectorSplitSourceFactory>(runtimeStats_),
+        std::make_shared<ConnectorSplitSourceFactory>(
+            runtimeStats_.sinkFor(kStatsComponent)),
         /*outputPool=*/nullptr,
         /*baseSpillDirectory=*/"",
-        runtimeStats_);
+        runtimeStats_.sinkFor(kStatsComponent));
   }
 
   std::shared_ptr<velox::core::PlanNodeIdGenerator> idGenerator_{
@@ -464,10 +515,11 @@ TEST_F(LocalRunnerTest, spillDirectoryWiring) {
       std::move(join),
       optimizer::FinishWrite{},
       std::move(queryCtx),
-      std::make_shared<ConnectorSplitSourceFactory>(runtimeStats_),
+      std::make_shared<ConnectorSplitSourceFactory>(
+          runtimeStats_.sinkFor(kStatsComponent)),
       /*outputPool=*/nullptr,
       spillDir->getPath(),
-      runtimeStats_);
+      runtimeStats_.sinkFor(kStatsComponent));
 
   std::vector<velox::RowVectorPtr> results;
   localRunner->drain(
@@ -475,6 +527,77 @@ TEST_F(LocalRunnerTest, spillDirectoryWiring) {
   EXPECT_EQ(1, results.size());
   EXPECT_EQ(kNumRows, extractSingleInt64(results));
   EXPECT_EQ(Runner::State::kFinished, localRunner->state());
+}
+
+// A SplitSource records its enumeration metrics into the ConnectorSession's
+// stats sink, and they land in the query-level stats object the RunnerSession
+// carries.
+TEST_F(LocalRunnerTest, splitSourceRecordsIntoSessionStats) {
+  auto scan = makeScanPlan(/*numWorkers=*/1);
+  const auto queryId = scan->options().queryId;
+  auto stats = std::make_shared<QueryRuntimeStats>();
+
+  auto localRunner = std::make_shared<LocalRunner>(
+      makeRunnerSession(queryId, stats),
+      std::move(scan),
+      optimizer::FinishWrite{},
+      makeQueryCtx(queryId),
+      std::make_shared<StatsRecordingSplitSourceFactory>(
+          stats->sinkFor(kStatsComponent)),
+      /*outputPool=*/nullptr,
+      /*baseSpillDirectory=*/"",
+      stats->sinkFor(kStatsComponent));
+
+  int32_t count = 0;
+  auto generator = localRunner->execute();
+  while (auto rows = folly::coro::blockingWait(generator.next())) {
+    count += (*rows)->size();
+  }
+  folly::coro::blockingWait(localRunner->co_close());
+  EXPECT_EQ(kNumRows, count);
+
+  const auto map = stats->totalsByName();
+  auto it = map.find(std::string(StatsRecordingSplitSource::kMetricName));
+  ASSERT_NE(it, map.end());
+  EXPECT_EQ(StatsRecordingSplitSource::kMetricValue, it->second.sum);
+}
+
+// Split metrics route to the sample collector, not the outer query's.
+TEST_F(LocalRunnerTest, isolatedSessionKeepsSplitStatsOutOfOuterCollector) {
+  auto scan = makeScanPlan(/*numWorkers=*/1);
+  const auto queryId = scan->options().queryId;
+  auto outerStats = std::make_shared<QueryRuntimeStats>();
+  auto sampleStats = std::make_shared<QueryRuntimeStats>();
+
+  auto sampleSession =
+      makeRunnerSession(queryId, outerStats)->withIsolatedStats(sampleStats);
+  EXPECT_EQ(queryId, sampleSession->queryId());
+  EXPECT_EQ("test", sampleSession->user());
+  auto localRunner = std::make_shared<LocalRunner>(
+      sampleSession,
+      std::move(scan),
+      optimizer::FinishWrite{},
+      makeQueryCtx(queryId),
+      std::make_shared<StatsRecordingSplitSourceFactory>(
+          RuntimeStatsSink::throwaway()),
+      /*outputPool=*/nullptr,
+      /*baseSpillDirectory=*/"",
+      RuntimeStatsSink::throwaway());
+
+  int32_t count = 0;
+  auto generator = localRunner->execute();
+  while (auto rows = folly::coro::blockingWait(generator.next())) {
+    count += (*rows)->size();
+  }
+  folly::coro::blockingWait(localRunner->co_close());
+  EXPECT_EQ(kNumRows, count);
+
+  const std::string metric(StatsRecordingSplitSource::kMetricName);
+  EXPECT_FALSE(outerStats->totalsByName().contains(metric))
+      << "split metric leaked into the outer query stats";
+  EXPECT_EQ(
+      StatsRecordingSplitSource::kMetricValue,
+      sampleStats->totalsByName().at(metric).sum);
 }
 
 } // namespace

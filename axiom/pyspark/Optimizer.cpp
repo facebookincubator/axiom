@@ -17,6 +17,7 @@
 #include "axiom/pyspark/Optimizer.h"
 
 #include <glog/logging.h>
+#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
@@ -83,7 +84,9 @@ facebook::axiom::connector::TablePtr createTable(
   auto session = std::make_shared<facebook::axiom::connector::ConnectorSession>(
       "pyspark_session",
       /*user=*/"pyspark-optimizer",
-      facebook::axiom::connector::Properties{});
+      connectorId,
+      facebook::axiom::connector::Properties{},
+      std::make_shared<facebook::axiom::QueryRuntimeStats>());
   auto table = metadata->createTable(
       session,
       writeNode.tableName(),
@@ -138,12 +141,14 @@ facebook::axiom::optimizer::PlanAndStats optimize(
           queryCtx->queryId(),
           /*user=*/"pyspark-optimizer",
           std::move(optimizerOptions),
-          facebook::axiom::connector::ConnectorProperties{});
+          facebook::axiom::connector::ConnectorProperties{},
+          std::make_shared<facebook::axiom::QueryRuntimeStats>());
   auto runnerSession = std::make_shared<facebook::axiom::runner::RunnerSession>(
       queryCtx->queryId(),
       /*user=*/"pyspark-optimizer",
       facebook::axiom::runner::Properties{},
-      facebook::axiom::connector::ConnectorProperties{});
+      facebook::axiom::connector::ConnectorProperties{},
+      std::make_shared<facebook::axiom::QueryRuntimeStats>());
 
   facebook::axiom::optimizer::Optimization opt(
       std::move(optimizerSession),

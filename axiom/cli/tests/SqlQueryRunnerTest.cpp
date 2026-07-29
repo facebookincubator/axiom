@@ -30,6 +30,7 @@
 #include "axiom/cli/tests/SqlQueryRunnerTestBase.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/runner/QueryProgress.h"
+#include "axiom/runner/RunnerMetrics.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "velox/common/base/VeloxException.h"
@@ -304,7 +305,9 @@ TEST_F(SqlQueryRunnerTest, runRejectsMultipleStatements) {
 
 TEST_F(SqlQueryRunnerTest, parseAndRunMixedStatementTypes) {
   auto statements = runner_->parseMultiple(
-      "SELECT 42; EXPLAIN (TYPE LOGICAL) SELECT 1; select 7", {});
+      "SELECT 42; EXPLAIN (TYPE LOGICAL) SELECT 1; select 7",
+      {},
+      std::make_shared<facebook::axiom::QueryRuntimeStats>());
   ASSERT_EQ(3, statements.size());
 
   auto selectResult = runner_->runUnchecked(*statements[0], {});
@@ -352,7 +355,10 @@ TEST_F(SqlQueryRunnerTest, invalidStatementThrows) {
 
 TEST_F(SqlQueryRunnerTest, parseMultipleWithInvalidStatement) {
   EXPECT_THROW(
-      runner_->parseMultiple("SELECT 1; INVALID; SELECT 2", {}),
+      runner_->parseMultiple(
+          "SELECT 1; INVALID; SELECT 2",
+          {},
+          std::make_shared<facebook::axiom::QueryRuntimeStats>()),
       std::exception);
 }
 
@@ -1091,6 +1097,30 @@ TEST_F(SqlQueryRunnerTest, connectorProperties) {
   run("SET SESSION test.list_partitions_error = 'boom from split-gen'");
 
   VELOX_ASSERT_THROW(run("SELECT * FROM t"), "boom from split-gen");
+}
+
+// Split-enumeration metrics recorded by the runner during execution land in the
+// query's QueryRuntimeStats, summed into per-query totals by totalsByName().
+TEST_F(SqlQueryRunnerTest, splitEnumerationMetricsInRuntimeStats) {
+  // One split per appended vector.
+  testConnector_->addTable("t", ROW("x", INTEGER()));
+  auto vector = makeRowVector({makeFlatVector<int32_t>({1})});
+  constexpr int64_t kNumSplits = 3;
+  for (int64_t i = 0; i < kNumSplits; ++i) {
+    testConnector_->appendData("t", vector);
+  }
+
+  std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats;
+  runner_->run(
+      "SELECT * FROM t", {.onComplete = [&](const QueryCompletionInfo& info) {
+        runtimeStats = info.runtimeStats;
+      }});
+
+  ASSERT_NE(runtimeStats, nullptr);
+  const auto metrics = runtimeStats->totalsByName();
+  auto it = metrics.find(std::string(facebook::axiom::runner::kGetSplitsCount));
+  ASSERT_NE(it, metrics.end());
+  EXPECT_EQ(it->second.sum, kNumSplits);
 }
 
 TEST_F(SqlQueryRunnerTest, addColumn) {

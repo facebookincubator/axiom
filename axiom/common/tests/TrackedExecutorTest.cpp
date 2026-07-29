@@ -20,6 +20,7 @@
 #include <folly/executors/SerialExecutor.h>
 #include <gtest/gtest.h>
 #include "axiom/common/QueryRuntimeStats.h"
+#include "axiom/runner/RunnerMetrics.h"
 
 namespace facebook::axiom {
 
@@ -40,9 +41,9 @@ TEST_F(TrackedExecutorTest, tracksExecutionMetrics) {
   done.wait();
 
   QueryRuntimeStats stats;
-  tracked.reportTo(stats, "test");
+  tracked.reportTo(stats.sinkFor(runner::kStatsComponent), "test");
 
-  auto map = stats.toMap();
+  auto map = stats.totalsByName();
   ASSERT_EQ(map.size(), 3);
 
   auto waitKey = fmt::format("test-{}", TrackedExecutor::kExecutorWaitNanos);
@@ -77,9 +78,9 @@ TEST_F(TrackedExecutorTest, tracksMultipleCallbacks) {
   done.wait();
 
   QueryRuntimeStats stats;
-  tracked.reportTo(stats, "multi");
+  tracked.reportTo(stats.sinkFor(runner::kStatsComponent), "multi");
 
-  auto map = stats.toMap();
+  auto map = stats.totalsByName();
   auto wallKey =
       fmt::format("multi-{}", TrackedExecutor::kExecutorExecutionWallNanos);
   ASSERT_EQ(map.count(wallKey), 1);
@@ -93,9 +94,9 @@ TEST_F(TrackedExecutorTest, reportToWithNoCallbacks) {
   TrackedExecutor tracked(std::move(serialExecutor));
 
   QueryRuntimeStats stats;
-  tracked.reportTo(stats, "empty");
+  tracked.reportTo(stats.sinkFor(runner::kStatsComponent), "empty");
 
-  auto map = stats.toMap();
+  auto map = stats.totalsByName();
   for (const auto& [name, metric] : map) {
     EXPECT_EQ(metric.count, 0);
   }

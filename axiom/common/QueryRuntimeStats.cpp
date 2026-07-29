@@ -16,6 +16,8 @@
 
 #include "axiom/common/QueryRuntimeStats.h"
 
+#include "velox/common/base/Exceptions.h"
+
 namespace facebook::axiom {
 
 namespace {
@@ -35,14 +37,20 @@ std::string_view unitToString(velox::RuntimeCounter::Unit unit) {
     case velox::RuntimeCounter::Unit::kNone:
       return "NONE";
   }
-  return "NONE";
+  VELOX_UNREACHABLE();
 }
 } // namespace
 
 void mergeRuntimeMetric(
-    folly::ConcurrentHashMap<std::string, velox::RuntimeMetric>& map,
+    RuntimeMetricMap& map,
     const std::string& name,
     const velox::RuntimeMetric& metric) {
+  // Metric names must not contain '/'; toMap() uses '/' to separate the
+  // component id from the name.
+  VELOX_CHECK(
+      name.find('/') == std::string::npos,
+      "Runtime metric name must not contain '/': {}",
+      name);
   auto [it, inserted] = map.try_emplace(name, metric);
   if (inserted) {
     return;
@@ -70,41 +78,59 @@ void mergeRuntimeMetric(
   }
 }
 
-void QueryRuntimeStats::recordTiming(
+void RuntimeStatsSink::recordTiming(
     std::string_view name,
-    std::chrono::nanoseconds duration) {
+    std::chrono::nanoseconds duration) const {
   mergeRuntimeMetric(
-      metrics_,
+      *metrics_,
       std::string(name),
       velox::RuntimeMetric(
           duration.count(), velox::RuntimeCounter::Unit::kNanos));
 }
 
-void QueryRuntimeStats::recordCount(std::string_view name, int64_t value) {
+void RuntimeStatsSink::recordCount(std::string_view name, int64_t value) const {
   mergeRuntimeMetric(
-      metrics_,
+      *metrics_,
       std::string(name),
       velox::RuntimeMetric(value, velox::RuntimeCounter::Unit::kNone));
 }
 
-void QueryRuntimeStats::merge(
+void RuntimeStatsSink::merge(
     std::string_view name,
-    const velox::RuntimeMetric& metric) {
-  mergeRuntimeMetric(metrics_, std::string(name), metric);
+    const velox::RuntimeMetric& metric) const {
+  mergeRuntimeMetric(*metrics_, std::string(name), metric);
+}
+
+RuntimeStatsSink RuntimeStatsSink::throwaway() {
+  return RuntimeStatsSink(std::make_shared<RuntimeMetricMap>());
+}
+
+RuntimeStatsSink QueryRuntimeStats::sinkOrThrowaway(
+    const std::shared_ptr<QueryRuntimeStats>& stats,
+    std::string_view component) {
+  return stats ? stats->sinkFor(component) : RuntimeStatsSink::throwaway();
+}
+
+RuntimeStatsSink QueryRuntimeStats::sinkFor(std::string_view component) {
+  auto [it, inserted] = components_.try_emplace(
+      std::string(component), std::make_shared<RuntimeMetricMap>());
+  return RuntimeStatsSink(it->second);
 }
 
 std::unordered_map<std::string, velox::RuntimeMetric> QueryRuntimeStats::toMap()
     const {
   std::unordered_map<std::string, velox::RuntimeMetric> result;
-  for (const auto& [name, metric] : metrics_) {
-    result.emplace(name, metric);
+  for (const auto& [component, metrics] : components_) {
+    for (const auto& [name, metric] : *metrics) {
+      result.emplace(component + "/" + name, metric);
+    }
   }
   return result;
 }
 
 folly::dynamic QueryRuntimeStats::toDynamic() const {
   folly::dynamic result = folly::dynamic::object();
-  for (const auto& [name, metric] : metrics_) {
+  for (const auto& [name, metric] : totalsByName()) {
     folly::dynamic entry = folly::dynamic::object();
     entry["name"] = name;
     entry["sum"] = metric.sum;
@@ -117,13 +143,27 @@ folly::dynamic QueryRuntimeStats::toDynamic() const {
   return result;
 }
 
+std::unordered_map<std::string, velox::RuntimeMetric>
+QueryRuntimeStats::totalsByName() const {
+  std::unordered_map<std::string, velox::RuntimeMetric> result;
+  for (const auto& [component, metrics] : components_) {
+    for (const auto& [name, metric] : *metrics) {
+      auto [it, inserted] = result.emplace(name, metric);
+      if (!inserted) {
+        it->second.merge(metric);
+      }
+    }
+  }
+  return result;
+}
+
 ScopedCpuWallStatsTimer::~ScopedCpuWallStatsTimer() {
   if (std::this_thread::get_id() == startThreadId_) {
     auto cpuElapsed = velox::process::threadCpuNanos() - cpuStart_;
-    stats_.recordTiming(cpuMetricName_, std::chrono::nanoseconds(cpuElapsed));
+    sink_.recordTiming(cpuMetricName_, std::chrono::nanoseconds(cpuElapsed));
   }
   auto wallElapsed = std::chrono::steady_clock::now() - wallStart_;
-  stats_.recordTiming(wallMetricName_, wallElapsed);
+  sink_.recordTiming(wallMetricName_, wallElapsed);
 }
 
 } // namespace facebook::axiom

@@ -125,9 +125,17 @@ std::shared_ptr<runner::LocalRunner> makeLocalRunnerImpl(
   OptimizerOptions optimizerOptions;
   optimizerOptions.syntacticJoinOrder = syntacticJoinOrder;
   auto optimizerSession = std::make_shared<OptimizerSession>(
-      queryId, "test", optimizerOptions, connector::ConnectorProperties{});
+      queryId,
+      "test",
+      optimizerOptions,
+      connector::ConnectorProperties{},
+      std::make_shared<QueryRuntimeStats>());
   auto runnerSession = std::make_shared<runner::RunnerSession>(
-      queryId, "test", runner::Properties{}, connector::ConnectorProperties{});
+      queryId,
+      "test",
+      runner::Properties{},
+      connector::ConnectorProperties{},
+      std::make_shared<QueryRuntimeStats>());
 
   auto planAndStats = plan(
       *logicalPlan,
@@ -138,7 +146,7 @@ std::shared_ptr<runner::LocalRunner> makeLocalRunnerImpl(
       runnerSession,
       queryCtx);
 
-  static QueryRuntimeStats noopStats;
+  static RuntimeStatsSink noopStats = RuntimeStatsSink::throwaway();
   return std::make_shared<runner::LocalRunner>(
       std::move(runnerSession),
       planAndStats.plan,
@@ -236,7 +244,8 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeRunner(
           /*queryId=*/"test",
           /*user=*/"test",
           ::axiom::sql::presto::ParserOptions{},
-          connector::ConnectorProperties{}));
+          connector::ConnectorProperties{},
+          std::make_shared<QueryRuntimeStats>()));
   auto statement = parser.parse(sql, true);
 
   VELOX_CHECK(
