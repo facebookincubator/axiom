@@ -74,6 +74,11 @@ class BaseSession {
         runtimeStats_);
   }
 
+ protected:
+  const ConnectorProperties& connectorProperties() const {
+    return connectorProperties_;
+  }
+
  private:
   Properties propertiesForConnector(std::string_view connectorId) const {
     auto it = connectorProperties_.find(connectorId);
