@@ -54,6 +54,18 @@ class RunnerSession final : public connector::BaseSession {
     return it->second;
   }
 
+  /// Returns a copy of this session whose sinks record into 'runtimeStats',
+  /// reusing all other identity and configuration.
+  std::shared_ptr<RunnerSession> withIsolatedStats(
+      std::shared_ptr<QueryRuntimeStats> runtimeStats) const {
+    return std::make_shared<RunnerSession>(
+        queryId(),
+        user(),
+        properties_,
+        connectorProperties(),
+        std::move(runtimeStats));
+  }
+
  private:
   const Properties properties_;
 };

@@ -562,5 +562,43 @@ TEST_F(LocalRunnerTest, splitSourceRecordsIntoSessionStats) {
   EXPECT_EQ(StatsRecordingSplitSource::kMetricValue, it->second.sum);
 }
 
+// Split metrics route to the sample collector, not the outer query's.
+TEST_F(LocalRunnerTest, isolatedSessionKeepsSplitStatsOutOfOuterCollector) {
+  auto scan = makeScanPlan(/*numWorkers=*/1);
+  const auto queryId = scan->options().queryId;
+  auto outerStats = std::make_shared<QueryRuntimeStats>();
+  auto sampleStats = std::make_shared<QueryRuntimeStats>();
+
+  auto sampleSession =
+      makeRunnerSession(queryId, outerStats)->withIsolatedStats(sampleStats);
+  EXPECT_EQ(queryId, sampleSession->queryId());
+  EXPECT_EQ("test", sampleSession->user());
+  auto localRunner = std::make_shared<LocalRunner>(
+      sampleSession,
+      std::move(scan),
+      optimizer::FinishWrite{},
+      makeQueryCtx(queryId),
+      std::make_shared<StatsRecordingSplitSourceFactory>(
+          RuntimeStatsSink::throwaway()),
+      /*outputPool=*/nullptr,
+      /*baseSpillDirectory=*/"",
+      RuntimeStatsSink::throwaway());
+
+  int32_t count = 0;
+  auto generator = localRunner->execute();
+  while (auto rows = folly::coro::blockingWait(generator.next())) {
+    count += (*rows)->size();
+  }
+  folly::coro::blockingWait(localRunner->co_close());
+  EXPECT_EQ(kNumRows, count);
+
+  const std::string metric(StatsRecordingSplitSource::kMetricName);
+  EXPECT_FALSE(outerStats->totalsByName().contains(metric))
+      << "split metric leaked into the outer query stats";
+  EXPECT_EQ(
+      StatsRecordingSplitSource::kMetricValue,
+      sampleStats->totalsByName().at(metric).sum);
+}
+
 } // namespace
 } // namespace facebook::axiom::runner
