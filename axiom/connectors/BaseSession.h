@@ -28,8 +28,9 @@ namespace facebook::axiom::connector {
 /// Map of connector id to that connector's property bag.
 using ConnectorProperties = folly::F14FastMap<std::string, Properties>;
 
-/// Base class for component sessions. Holds queryId, user, and the
-/// per-connector property map; spawns ConnectorSessions on demand.
+/// Base class for component sessions. Holds queryId, user, the per-connector
+/// property map, and an optional query-scoped runtime stats sink; spawns
+/// ConnectorSessions on demand.
 ///
 /// Example:
 ///   class OptimizerSession : public BaseSession { ... };
@@ -39,10 +40,12 @@ class BaseSession {
   BaseSession(
       std::string queryId,
       std::string user,
-      ConnectorProperties connectorProperties)
+      ConnectorProperties connectorProperties,
+      std::shared_ptr<QueryRuntimeStats> runtimeStats)
       : queryId_{std::move(queryId)},
         user_{std::move(user)},
-        connectorProperties_{std::move(connectorProperties)} {}
+        connectorProperties_{std::move(connectorProperties)},
+        runtimeStats_{std::move(runtimeStats)} {}
 
   virtual ~BaseSession() = default;
 
@@ -54,12 +57,26 @@ class BaseSession {
     return user_;
   }
 
-  /// Spawns a ConnectorSession for 'connectorId' carrying queryId, user,
-  /// and that connector's property slice (empty when no properties were set
-  /// for it).
+  /// Returns a sink for 'component' for first-party recorders (parser,
+  /// optimizer, runner). Always valid, even when the session carries no
+  /// collector.
+  RuntimeStatsSink statsSink(std::string_view component) const;
+
+  /// Spawns a ConnectorSession for 'connectorId' carrying queryId, user, the
+  /// connector id, that connector's property slice (empty when no properties
+  /// were set for it), and this session's runtime stats collector.
   ConnectorSessionPtr toConnectorSession(std::string_view connectorId) const {
     return std::make_shared<ConnectorSession>(
-        queryId_, user_, propertiesForConnector(connectorId));
+        queryId_,
+        user_,
+        std::string(connectorId),
+        propertiesForConnector(connectorId),
+        runtimeStats_);
+  }
+
+ protected:
+  const ConnectorProperties& connectorProperties() const {
+    return connectorProperties_;
   }
 
  private:
@@ -74,6 +91,7 @@ class BaseSession {
   const std::string queryId_;
   const std::string user_;
   const ConnectorProperties connectorProperties_;
+  const std::shared_ptr<QueryRuntimeStats> runtimeStats_;
 };
 
 } // namespace facebook::axiom::connector

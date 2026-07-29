@@ -16,9 +16,11 @@
 
 #include <folly/ScopeGuard.h>
 #include <folly/coro/BlockingWait.h>
+#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/runner/LocalRunner.h"
+#include "axiom/runner/RunnerMetrics.h"
 #include "velox/common/base/AsyncSource.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
@@ -156,16 +158,19 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
   auto& optimization = queryCtx()->optimization();
   auto plan = optimization->toVelox().toVeloxPlan(
       filter, MultiFragmentPlan::Options::singleNode(), {}, {});
-  static QueryRuntimeStats noopStats;
+
+  // Isolate sampling metrics from the outer query's collector.
+  auto sampleStats = std::make_shared<QueryRuntimeStats>();
+  auto sampleSink = sampleStats->sinkFor(runner::kStatsComponent);
   return std::make_shared<runner::LocalRunner>(
-      optimization->runnerSession(),
+      optimization->runnerSession()->withIsolatedStats(std::move(sampleStats)),
       std::move(plan.plan),
       std::move(plan.finishWrite),
       sampleQueryCtx(*optimization->veloxQueryCtx()),
-      std::make_shared<runner::ConnectorSplitSourceFactory>(noopStats),
+      std::make_shared<runner::ConnectorSplitSourceFactory>(sampleSink),
       /*outputPool=*/nullptr,
       /*baseSpillDirectory=*/"",
-      noopStats);
+      sampleSink);
 }
 
 // Maps hash value to number of times it appears in a table.

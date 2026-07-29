@@ -21,9 +21,11 @@
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
+#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/pyspark/Exception.h"
 #include "axiom/pyspark/runners/Runner.h"
 #include "axiom/runner/LocalRunner.h"
+#include "axiom/runner/RunnerMetrics.h"
 #include "velox/core/QueryCtx.h"
 
 DEFINE_int32(num_workers, 4, "Number of in-process workers");
@@ -86,21 +88,22 @@ std::vector<velox::RowVectorPtr> LocalRunner::execute(
 
   auto splitSourceFactory =
       std::make_shared<facebook::axiom::runner::ConnectorSplitSourceFactory>(
-          runtimeStats_);
+          runtimeStats_.sinkFor(facebook::axiom::runner::kStatsComponent));
 
   auto runner = std::make_shared<facebook::axiom::runner::LocalRunner>(
       std::make_shared<facebook::axiom::runner::RunnerSession>(
           queryCtx->queryId(),
           /*user=*/"pyspark-runner",
           facebook::axiom::runner::Properties{},
-          facebook::axiom::connector::ConnectorProperties{}),
+          facebook::axiom::connector::ConnectorProperties{},
+          std::make_shared<facebook::axiom::QueryRuntimeStats>()),
       plan_,
       std::move(finishWrite_),
       queryCtx,
       splitSourceFactory,
       leafPool_,
       /*baseSpillDirectory=*/"",
-      runtimeStats_);
+      runtimeStats_.sinkFor(facebook::axiom::runner::kStatsComponent));
   runner->drain(
       [&](velox::RowVectorPtr batch) { results.push_back(std::move(batch)); });
   return results;

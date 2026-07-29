@@ -49,15 +49,14 @@ TrackedExecutor::Func TrackedExecutor::wrapFunc(Func func) {
   };
 }
 
-void TrackedExecutor::reportTo(
-    QueryRuntimeStats& stats,
-    std::string_view prefix) const {
-  stats.merge(
+void TrackedExecutor::reportTo(RuntimeStatsSink sink, std::string_view prefix)
+    const {
+  sink.merge(
       fmt::format("{}-{}", prefix, kExecutorWaitNanos), metrics_->waitTime_);
-  stats.merge(
+  sink.merge(
       fmt::format("{}-{}", prefix, kExecutorExecutionWallNanos),
       metrics_->executionWallTime_);
-  stats.merge(
+  sink.merge(
       fmt::format("{}-{}", prefix, kExecutorExecutionCpuNanos),
       metrics_->executionCpuTime_);
 }

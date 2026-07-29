@@ -20,6 +20,7 @@
 #include "axiom/optimizer/Cost.h"
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/Filters.h"
+#include "axiom/optimizer/OptimizerMetrics.h"
 #include "axiom/optimizer/PlanUtils.h"
 #include "velox/common/process/ProcessBase.h"
 #include "velox/connectors/ConnectorRegistry.h"
@@ -259,15 +260,12 @@ SchemaTableCP FOLLY_NULLABLE Schema::findTable(
   auto findCpuStart = velox::process::threadCpuNanos();
   auto findStart = std::chrono::steady_clock::now();
   auto connectorTable = source_->findTable(std::string(connectorId), tableName);
-  if (runtimeStats_) {
-    runtimeStats_->recordTiming(
-        QueryRuntimeStats::kFindTableCpuNanos,
-        std::chrono::nanoseconds(
-            velox::process::threadCpuNanos() - findCpuStart));
-    runtimeStats_->recordTiming(
-        QueryRuntimeStats::kFindTableWallNanos,
-        std::chrono::steady_clock::now() - findStart);
-  }
+  statsSink_.recordTiming(
+      kFindTableCpuNanos,
+      std::chrono::nanoseconds(
+          velox::process::threadCpuNanos() - findCpuStart));
+  statsSink_.recordTiming(
+      kFindTableWallNanos, std::chrono::steady_clock::now() - findStart);
   if (!connectorTable) {
     return nullptr;
   }

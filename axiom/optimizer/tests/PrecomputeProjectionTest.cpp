@@ -16,6 +16,7 @@
 
 #include "axiom/optimizer/PrecomputeProjection.h"
 #include <gtest/gtest.h>
+#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/Optimization.h"
@@ -69,12 +70,14 @@ class PrecomputeProjectionTest : public ::testing::Test {
         veloxQueryCtx->queryId(),
         "test",
         OptimizerOptions{},
-        connector::ConnectorProperties{});
+        connector::ConnectorProperties{},
+        std::make_shared<QueryRuntimeStats>());
     auto runnerSession = std::make_shared<runner::RunnerSession>(
         veloxQueryCtx->queryId(),
         "test",
         runner::Properties{},
-        connector::ConnectorProperties{});
+        connector::ConnectorProperties{},
+        std::make_shared<QueryRuntimeStats>());
 
     Optimization opt{
         optimizerSession,

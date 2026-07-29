@@ -36,11 +36,13 @@ class RunnerSession final : public connector::BaseSession {
       std::string queryId,
       std::string user,
       Properties properties,
-      connector::ConnectorProperties connectorProperties)
+      connector::ConnectorProperties connectorProperties,
+      std::shared_ptr<QueryRuntimeStats> runtimeStats)
       : BaseSession(
             std::move(queryId),
             std::move(user),
-            std::move(connectorProperties)),
+            std::move(connectorProperties),
+            std::move(runtimeStats)),
         properties_{std::move(properties)} {}
 
   /// Returns the value of runner-scoped property 'name' if set.
@@ -50,6 +52,18 @@ class RunnerSession final : public connector::BaseSession {
       return std::nullopt;
     }
     return it->second;
+  }
+
+  /// Returns a copy of this session whose sinks record into 'runtimeStats',
+  /// reusing all other identity and configuration.
+  std::shared_ptr<RunnerSession> withIsolatedStats(
+      std::shared_ptr<QueryRuntimeStats> runtimeStats) const {
+    return std::make_shared<RunnerSession>(
+        queryId(),
+        user(),
+        properties_,
+        connectorProperties(),
+        std::move(runtimeStats));
   }
 
  private:

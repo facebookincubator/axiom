@@ -19,6 +19,7 @@
 #include <ctime>
 
 #include <folly/coro/BlockingWait.h>
+#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/Optimization.h"
@@ -26,6 +27,7 @@
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/optimizer/tests/TestDataPath.h"
 #include "axiom/optimizer/v2/Optimize.h"
+#include "axiom/runner/RunnerMetrics.h"
 #include "axiom/sql/presto/PrestoParser.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
@@ -116,7 +118,8 @@ logical_plan::LogicalPlanNodePtr QueryTestBase::parseSelect(
           /*queryId=*/"test",
           /*user=*/"test",
           ::axiom::sql::presto::ParserOptions{},
-          connector::ConnectorProperties{}));
+          connector::ConnectorProperties{},
+          std::make_shared<QueryRuntimeStats>()));
 
   auto statement = parser.parse(sql);
 
@@ -130,12 +133,20 @@ OptimizerSessionPtr makeOptimizerSession(
     OptimizerOptions options,
     connector::ConnectorProperties connectorProperties) {
   return std::make_shared<OptimizerSession>(
-      queryId, "test", std::move(options), std::move(connectorProperties));
+      queryId,
+      "test",
+      std::move(options),
+      std::move(connectorProperties),
+      std::make_shared<QueryRuntimeStats>());
 }
 
 runner::RunnerSessionPtr makeRunnerSession(const std::string& queryId) {
   return std::make_shared<runner::RunnerSession>(
-      queryId, "test", runner::Properties{}, connector::ConnectorProperties{});
+      queryId,
+      "test",
+      runner::Properties{},
+      connector::ConnectorProperties{},
+      std::make_shared<QueryRuntimeStats>());
 }
 } // namespace
 
@@ -163,16 +174,18 @@ TestResult QueryTestBase::runFragmentedPlan(
       getQueryCtx()->queryId(),
       "test",
       connector::Properties{},
-      connector::ConnectorProperties{});
+      connector::ConnectorProperties{},
+      std::make_shared<QueryRuntimeStats>());
   auto runner = std::make_shared<runner::LocalRunner>(
       std::move(runnerSession),
       planAndStats.plan,
       std::move(planAndStats.finishWrite),
       getQueryCtx(),
-      std::make_shared<runner::ConnectorSplitSourceFactory>(runtimeStats_),
+      std::make_shared<runner::ConnectorSplitSourceFactory>(
+          runtimeStats_.sinkFor(runner::kStatsComponent)),
       optimizerPool_,
       /*baseSpillDirectory=*/"",
-      runtimeStats_);
+      runtimeStats_.sinkFor(runner::kStatsComponent));
 
   SCOPE_EXIT {
     queryCtx_.reset();

@@ -23,6 +23,11 @@
 
 #include <folly/container/F14Map.h>
 
+namespace facebook::axiom {
+class QueryRuntimeStats;
+class RuntimeStatsSink;
+} // namespace facebook::axiom
+
 namespace facebook::axiom::connector {
 
 /// Property bag for a single component or connector.
@@ -31,13 +36,24 @@ using Properties = folly::F14FastMap<std::string, std::string>;
 class ConnectorSession;
 using ConnectorSessionPtr = std::shared_ptr<ConnectorSession>;
 
-/// Read-only query-specific information passed to connectors.
+/// Query-specific context passed to connectors. The identity and config fields
+/// (queryId, user, connectorId, properties) are read-only. Split-enumeration
+/// and metadata metrics are recorded through the write-only sinks returned by
+/// splitStatsSink() and metadataStatsSink(); the connector boundary never sees
+/// the whole collector.
 class ConnectorSession final {
  public:
-  ConnectorSession(std::string queryId, std::string user, Properties properties)
+  ConnectorSession(
+      std::string queryId,
+      std::string user,
+      std::string connectorId,
+      Properties properties,
+      std::shared_ptr<QueryRuntimeStats> runtimeStats)
       : queryId_{std::move(queryId)},
         user_{std::move(user)},
-        properties_{std::move(properties)} {}
+        connectorId_{std::move(connectorId)},
+        properties_{std::move(properties)},
+        runtimeStats_{std::move(runtimeStats)} {}
 
   /// Returns the query identifier.
   const std::string& queryId() const {
@@ -47,6 +63,11 @@ class ConnectorSession final {
   /// Returns the identity of the user who submitted the query.
   const std::string& user() const {
     return user_;
+  }
+
+  /// Returns the id of the connector this session is scoped to.
+  const std::string& connectorId() const {
+    return connectorId_;
   }
 
   /// Returns the value of session property 'name' if set on this session,
@@ -60,10 +81,23 @@ class ConnectorSession final {
     return it->second;
   }
 
+  /// Returns a sink for this connector's split-enumeration metrics. Always
+  /// valid, even when the session carries no collector.
+  RuntimeStatsSink splitStatsSink() const;
+
+  /// Returns a sink for this connector's metadata-access metrics. Always
+  /// valid, even when the session carries no collector.
+  RuntimeStatsSink metadataStatsSink() const;
+
  private:
+  // Always returns a valid sink; uses a throwaway map when no collector.
+  RuntimeStatsSink statsSink(std::string_view component) const;
+
   const std::string queryId_;
   const std::string user_;
+  const std::string connectorId_;
   const Properties properties_;
+  const std::shared_ptr<QueryRuntimeStats> runtimeStats_;
 };
 
 } // namespace facebook::axiom::connector
