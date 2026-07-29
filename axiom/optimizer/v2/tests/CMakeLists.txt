@@ -16,7 +16,8 @@ add_executable(
   axiom_optimizer_v2_test
   AlgebraicPropertiesTest.cpp
   JoinHypergraphTest.cpp
-  RelationSetTest.cpp
+  NodeRewriterTest.cpp
+  NodeTransformTest.cpp
   TpchPlanTest.cpp
   TpchResultTest.cpp
 )
@@ -36,4 +37,5 @@ target_link_libraries(
   axiom_optimizer_tests_tpch_queries
   velox_exec_test_lib
   GTest::gtest
+  GTest::gmock
 )
