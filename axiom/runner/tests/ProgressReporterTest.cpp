@@ -24,8 +24,10 @@
 #include <mutex>
 #include <vector>
 
+#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/connectors/ConnectorSplitManager.h"
 #include "axiom/runner/LocalRunner.h"
+#include "axiom/runner/RunnerMetrics.h"
 #include "axiom/runner/tests/DistributedPlanBuilder.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
 
@@ -65,9 +67,9 @@ class GatedSplitSource : public connector::SplitSource {
 class GatedSplitSourceFactory : public SplitSourceFactory {
  public:
   GatedSplitSourceFactory(
-      QueryRuntimeStats& runtimeStats,
+      RuntimeStatsSink statsSink,
       std::shared_ptr<folly::coro::Baton> gate)
-      : inner_{runtimeStats}, gate_{std::move(gate)} {}
+      : inner_{std::move(statsSink)}, gate_{std::move(gate)} {}
 
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
       const connector::ConnectorSessionPtr& session,
@@ -114,7 +116,8 @@ class ProgressReporterTest : public test::LocalRunnerTestBase {
         std::string(queryId),
         "test",
         Properties{},
-        connector::ConnectorProperties{});
+        connector::ConnectorProperties{},
+        std::make_shared<QueryRuntimeStats>());
   }
 
   velox::RowTypePtr rowType_;
@@ -136,10 +139,11 @@ TEST_F(ProgressReporterTest, reportsProgressPerSplit) {
       std::move(plan),
       optimizer::FinishWrite{},
       makeQueryCtx(queryId),
-      std::make_shared<GatedSplitSourceFactory>(runtimeStats_, gate),
+      std::make_shared<GatedSplitSourceFactory>(
+          runtimeStats_.sinkFor(kStatsComponent), gate),
       /*outputPool=*/nullptr,
       /*baseSpillDirectory=*/"",
-      runtimeStats_);
+      runtimeStats_.sinkFor(kStatsComponent));
 
   std::mutex mutex;
   std::condition_variable cv;

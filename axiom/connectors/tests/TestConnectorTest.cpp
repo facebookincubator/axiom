@@ -15,6 +15,7 @@
  */
 
 #include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 
@@ -58,7 +59,11 @@ class TestConnectorTest : public ::testing::Test, public test::VectorTestBase {
 
   static ConnectorSessionPtr makeSession() {
     return std::make_shared<ConnectorSession>(
-        /*queryId=*/"test", /*user=*/"test", Properties{});
+        /*queryId=*/"test",
+        /*user=*/"test",
+        /*connectorId=*/"test",
+        Properties{},
+        std::make_shared<QueryRuntimeStats>());
   }
 
   std::shared_ptr<TestConnector> connector_;
@@ -165,14 +170,12 @@ CO_TEST_F(TestConnectorTest, splitManager) {
   auto session = makeSession();
   auto partitions =
       co_await splitManager->co_listPartitions(session, tableHandle);
-  QueryRuntimeStats noopStats;
   auto splitSource = splitManager->getSplitSource(
       session,
       tableHandle,
       partitions,
       /*partitionType=*/nullptr,
-      /*samplePercentage=*/std::nullopt,
-      noopStats);
+      /*samplePercentage=*/std::nullopt);
   EXPECT_NE(splitSource, nullptr);
 
   std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
@@ -637,14 +640,12 @@ CO_TEST_F(TestConnectorTest, bucketedTable) {
   constexpr int32_t kNumGroups = 2;
   auto partitionType = std::make_shared<TestPartitionType>(
       kNumGroups, std::vector<TypePtr>{BIGINT()}, schema);
-  QueryRuntimeStats noopStats;
   auto source = splitManager->getSplitSource(
       session,
       tableHandle,
       partitions,
       partitionType,
-      /*samplePercentage=*/std::nullopt,
-      noopStats);
+      /*samplePercentage=*/std::nullopt);
   std::vector<int32_t> observedGroupIds;
   while (true) {
     auto batch = co_await source->co_getSplits(/*maxSplitCount=*/16);
@@ -736,6 +737,31 @@ TEST_F(TestConnectorTest, bucketedTableMultiColumnKeys) {
         table->data()[i]->childAt(0)->as<SimpleVector<int64_t>>()->valueAt(0);
     EXPECT_EQ(expected[firstKey], table->dataBucketIds()[i]);
   }
+}
+
+// Guards the deliberate contract that a session without a collector hands out a
+// valid split sink whose recordings are silently discarded.
+TEST_F(TestConnectorTest, sessionlessSplitSinkDiscardsMetrics) {
+  ConnectorSession sessionless(
+      /*queryId=*/"test",
+      /*user=*/"test",
+      /*connectorId=*/"test",
+      Properties{},
+      /*runtimeStats=*/nullptr);
+  sessionless.splitStatsSink().recordCount("axiom-getSplitsCount", 1);
+
+  auto stats = std::make_shared<QueryRuntimeStats>();
+  ConnectorSession tracked(
+      /*queryId=*/"test",
+      /*user=*/"test",
+      /*connectorId=*/"test",
+      Properties{},
+      stats);
+  tracked.splitStatsSink().recordCount("axiom-getSplitsCount", 1);
+
+  const auto map = stats->totalsByName();
+  ASSERT_EQ(map.count("axiom-getSplitsCount"), 1);
+  EXPECT_EQ(map.at("axiom-getSplitsCount").sum, 1);
 }
 
 } // namespace

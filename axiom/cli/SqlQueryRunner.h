@@ -398,17 +398,24 @@ class SqlQueryRunner {
 
   /// Parses SQL text containing one or more semicolon-separated statements.
   /// @param sql SQL text to parse.
+  /// @param runtimeStats Collector the parser session records
+  /// connector-metadata
+  ///   metrics into. Pass the query's stats to attribute them; tooling that
+  ///   discards metrics passes a throwaway QueryRuntimeStats.
   /// @return Vector of parsed statements.
   std::vector<presto::SqlStatementPtr> parseMultiple(
       std::string_view sql,
-      const RunOptions& options);
+      const RunOptions& options,
+      const std::shared_ptr<facebook::axiom::QueryRuntimeStats>& runtimeStats);
 
   /// Parses SQL text containing one statement.
+  /// @param runtimeStats See parseMultiple().
   /// @return Parsed statement.
   /// @throw VeloxUserError if the SQL text contains multiple statements.
   presto::SqlStatementPtr parseSingle(
       std::string_view sql,
-      const RunOptions& options);
+      const RunOptions& options,
+      const std::shared_ptr<facebook::axiom::QueryRuntimeStats>& runtimeStats);
 
   /// Generates DOT representation of the query graph for a single SELECT
   /// statement. The output can be rendered using Graphviz:
@@ -441,35 +448,42 @@ class SqlQueryRunner {
   facebook::axiom::connector::TablePtr createTable(
       std::string_view queryId,
       const presto::CreateTableStatement& statement,
+      const std::shared_ptr<facebook::axiom::QueryRuntimeStats>& runtimeStats,
       bool explain = false);
 
   facebook::axiom::connector::TablePtr createTable(
       std::string_view queryId,
       const presto::CreateTableAsSelectStatement& statement,
+      const std::shared_ptr<facebook::axiom::QueryRuntimeStats>& runtimeStats,
       bool explain = false);
 
   std::string dropTable(
       std::string_view queryId,
-      const presto::DropTableStatement& statement);
+      const presto::DropTableStatement& statement,
+      const std::shared_ptr<facebook::axiom::QueryRuntimeStats>& runtimeStats);
 
   std::string addColumn(
       std::string_view queryId,
       const presto::AddColumnStatement& statement,
+      const std::shared_ptr<facebook::axiom::QueryRuntimeStats>& runtimeStats,
       bool explain = false);
 
   std::string createSchema(
       std::string_view queryId,
-      const presto::CreateSchemaStatement& statement);
+      const presto::CreateSchemaStatement& statement,
+      const std::shared_ptr<facebook::axiom::QueryRuntimeStats>& runtimeStats);
 
   std::string dropSchema(
       std::string_view queryId,
-      const presto::DropSchemaStatement& statement);
+      const presto::DropSchemaStatement& statement,
+      const std::shared_ptr<facebook::axiom::QueryRuntimeStats>& runtimeStats);
 
   /// Constant-folds the CALL statement's bound arguments and awaits the
   /// procedure's execute(); returns "CALL".
   folly::coro::Task<std::string> co_call(
       std::string_view queryId,
-      const presto::CallStatement& statement);
+      const presto::CallStatement& statement,
+      const std::shared_ptr<facebook::axiom::QueryRuntimeStats>& runtimeStats);
 
   /// Returns the default connector ID set during initialization.
   const std::string& defaultConnectorId() const {
@@ -494,12 +508,14 @@ class SqlQueryRunner {
       const RunOptions& options);
 
   // Builds an OptimizerSession from the current session config's optimizer
-  // properties, attaching 'connectorProperties' and the explain flag.
+  // properties, attaching 'connectorProperties', the explain flag, and
+  // 'runtimeStats' for the session to record metrics through.
   std::shared_ptr<facebook::axiom::optimizer::OptimizerSession>
   makeOptimizerSession(
       std::string_view queryId,
       facebook::axiom::connector::ConnectorProperties connectorProperties,
-      bool explain);
+      bool explain,
+      const std::shared_ptr<facebook::axiom::QueryRuntimeStats>& runtimeStats);
 
   std::string runExplain(
       const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
@@ -552,21 +568,19 @@ class SqlQueryRunner {
       const std::shared_ptr<facebook::velox::core::QueryCtx>& queryCtx,
       const RunOptions& options,
       const std::function<bool(
-          const facebook::axiom::optimizer::DerivedTable&)>& checkDerivedTable =
-          nullptr,
+          const facebook::axiom::optimizer::DerivedTable&)>& checkDerivedTable,
       const std::function<bool(const facebook::axiom::optimizer::RelationOp&)>&
-          checkBestPlan = nullptr,
+          checkBestPlan,
       std::shared_ptr<facebook::axiom::connector::SchemaResolver>
-          schemaResolver = nullptr,
-      bool explain = false,
-      std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats =
-          nullptr);
+          schemaResolver,
+      bool explain,
+      std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats);
 
   std::shared_ptr<facebook::axiom::runner::LocalRunner> makeLocalRunner(
       facebook::axiom::optimizer::PlanAndStats& planAndStats,
       const std::shared_ptr<facebook::velox::core::QueryCtx>& queryCtx,
       const RunOptions& options,
-      facebook::axiom::QueryRuntimeStats& runtimeStats);
+      const std::shared_ptr<facebook::axiom::QueryRuntimeStats>& runtimeStats);
 
   // Returns a ProgressReporter polling `runner` (starting the shared scheduler
   // first) when options.onProgress is set, otherwise nullptr. Held behind a
@@ -579,14 +593,14 @@ class SqlQueryRunner {
       const RunOptions& options);
 
   // Runs a parsed SQL statement, writing optimize/execute timing into 'timing'
-  // and the serialized Velox plan into 'planString'.
+  // and the serialized Velox plan into 'planString'. 'runtimeStats' collects
+  // the query's metrics; pass a throwaway to discard them.
   folly::coro::AsyncGenerator<SqlResultChunk> co_runUnchecked(
       const presto::SqlStatement& statement,
       const RunOptions& options,
       QueryTiming& timing,
       std::string& planString,
-      std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats =
-          nullptr);
+      std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats);
 
   folly::coro::AsyncGenerator<facebook::velox::RowVectorPtr> co_showSession(
       const presto::ShowSessionStatement& statement,
@@ -603,16 +617,18 @@ class SqlQueryRunner {
       QueryTiming& timing,
       std::string& planString,
       std::shared_ptr<facebook::axiom::connector::SchemaResolver>
-          schemaResolver = nullptr,
-      std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats =
-          nullptr);
+          schemaResolver,
+      std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats);
 
   // Builds a ConnectorSession for `connectorId` carrying the caller's
-  // queryId, the runner's user, and the connector's effective session
-  // properties from `sessionConfig_`.
+  // queryId, the runner's user, the connector's effective session properties
+  // from `sessionConfig_`, and `runtimeStats` so connector-metadata metrics
+  // land in the query's stats.
   facebook::axiom::connector::ConnectorSessionPtr makeConnectorSession(
       std::string_view queryId,
-      std::string_view connectorId) const;
+      std::string_view connectorId,
+      const std::shared_ptr<facebook::axiom::QueryRuntimeStats>& runtimeStats)
+      const;
 
   // Permission check callback invoked before query execution.
   PermissionCheck permissionCheck_;
@@ -635,9 +651,6 @@ class SqlQueryRunner {
   // Progress-polling scheduler (see constructor). Started idempotently before
   // each progress-reporting query.
   folly::FunctionScheduler* const progressScheduler_;
-
-  // Noop stats instance for code paths that don't track runtime metrics.
-  facebook::axiom::QueryRuntimeStats noopRuntimeStats_;
 };
 
 } // namespace axiom::sql

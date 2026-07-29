@@ -32,11 +32,13 @@ class ParserSession final : public facebook::axiom::connector::BaseSession {
       std::string queryId,
       std::string user,
       ParserOptions options,
-      facebook::axiom::connector::ConnectorProperties connectorProperties)
+      facebook::axiom::connector::ConnectorProperties connectorProperties,
+      std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats)
       : BaseSession(
             std::move(queryId),
             std::move(user),
-            std::move(connectorProperties)),
+            std::move(connectorProperties),
+            std::move(runtimeStats)),
         options_{std::move(options)} {}
 
   const ParserOptions& options() const {

@@ -75,8 +75,8 @@ class SimpleSplitSourceFactory : public SplitSourceFactory {
 /// Generic SplitSourceFactory that delegates the work to ConnectorSplitManager.
 class ConnectorSplitSourceFactory : public SplitSourceFactory {
  public:
-  explicit ConnectorSplitSourceFactory(QueryRuntimeStats& runtimeStats)
-      : runtimeStats_(runtimeStats) {}
+  explicit ConnectorSplitSourceFactory(RuntimeStatsSink statsSink)
+      : statsSink_(std::move(statsSink)) {}
 
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
       const connector::ConnectorSessionPtr& session,
@@ -85,7 +85,7 @@ class ConnectorSplitSourceFactory : public SplitSourceFactory {
       std::optional<double> samplePercentage) override;
 
  protected:
-  QueryRuntimeStats& runtimeStats_;
+  RuntimeStatsSink statsSink_;
 };
 
 /// Runner for in-process execution of a distributed plan.
@@ -97,7 +97,8 @@ class LocalRunner : public Runner,
   /// @param baseSpillDirectory Base directory for spill files. If non-empty,
   /// each task gets a unique subdirectory under this path. Empty disables
   /// spilling at the task level.
-  /// @param runtimeStats Optional recorder for split enumeration metrics.
+  /// @param statsSink Sink for split enumeration metrics; pass
+  /// RuntimeStatsSink::throwaway() when the query has no collector.
   LocalRunner(
       RunnerSessionPtr session,
       optimizer::MultiFragmentPlanPtr plan,
@@ -106,7 +107,7 @@ class LocalRunner : public Runner,
       std::shared_ptr<SplitSourceFactory> splitSourceFactory,
       std::shared_ptr<velox::memory::MemoryPool> outputPool,
       std::string baseSpillDirectory,
-      QueryRuntimeStats& runtimeStats);
+      RuntimeStatsSink statsSink);
 
   ~LocalRunner() override;
 
@@ -236,7 +237,7 @@ class LocalRunner : public Runner,
   std::shared_ptr<SplitSourceFactory> splitSourceFactory_;
   // Base directory for task spill files. Empty disables spilling.
   std::string baseSpillDirectory_;
-  QueryRuntimeStats& runtimeStats_;
+  RuntimeStatsSink statsSink_;
   // Cancellable so teardown can stop split enumeration promptly rather than
   // draining each source to noMoreSplits. co_reap() cancelAndJoinAsync()s it.
   folly::coro::CancellableAsyncScope splitScope_{/*throwOnJoin=*/true};

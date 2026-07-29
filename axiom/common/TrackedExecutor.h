@@ -22,7 +22,7 @@
 #include "velox/common/base/RuntimeMetrics.h"
 
 namespace facebook::axiom {
-class QueryRuntimeStats;
+class RuntimeStatsSink;
 } // namespace facebook::axiom
 
 namespace facebook::axiom {
@@ -62,9 +62,9 @@ class TrackedExecutor final : public folly::Executor {
     return executor_->getNumPriorities();
   }
 
-  /// Reports accumulated metrics to the given stats, prefixing each metric
-  /// name with 'prefix'.
-  void reportTo(QueryRuntimeStats& stats, std::string_view prefix) const;
+  /// Reports accumulated metrics to 'sink', prefixing each metric name with
+  /// 'prefix'.
+  void reportTo(RuntimeStatsSink sink, std::string_view prefix) const;
 
  protected:
   bool keepAliveAcquire() noexcept override {
