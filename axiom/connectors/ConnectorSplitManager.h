@@ -18,7 +18,6 @@
 #include <folly/coro/Task.h>
 #include <velox/connectors/Connector.h>
 #include <optional>
-#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/connectors/ConnectorSession.h"
 
 namespace facebook::axiom::connector {
@@ -119,8 +118,6 @@ class ConnectorSplitManager {
   /// Returns a SplitSource that covers the contents of 'partitions'. The set
   /// of partitions is exposed separately so that the caller may process them
   /// in a specific order or distribute them to specific nodes in a cluster.
-  /// Connector implementations may use 'runtimeStats' to record split
-  /// enumeration metrics (e.g., file listing, Metastore RPCs).
   ///
   /// When 'partitionType' is non-null, the connector tags each emitted Split
   /// with a groupId in [0, partitionType->numPartitions()). Pass 'nullptr'
@@ -136,8 +133,7 @@ class ConnectorSplitManager {
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
       const std::vector<PartitionHandlePtr>& partitions,
       const std::shared_ptr<PartitionType>& partitionType,
-      std::optional<double> samplePercentage,
-      QueryRuntimeStats& runtimeStats) = 0;
+      std::optional<double> samplePercentage) = 0;
 };
 
 } // namespace facebook::axiom::connector

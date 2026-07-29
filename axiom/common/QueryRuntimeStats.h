@@ -16,177 +16,62 @@
 
 #pragma once
 
-#include <chrono>
+#include <memory>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <unordered_map>
 
-#include <folly/concurrency/ConcurrentHashMap.h>
 #include <folly/dynamic.h>
 
-#include "velox/common/base/RuntimeMetrics.h"
-#include "velox/common/process/ProcessBase.h"
+#include "axiom/common/RuntimeStatsSink.h"
 
 namespace facebook::axiom {
 
-/// Accumulates runtime metrics from Axiom's query pipeline (parser, optimizer,
-/// split manager, runner). Each metric is a velox::RuntimeMetric with
-/// sum/count/min/max. Thread-safe — multiple pipeline stages may record
-/// concurrently.
+/// Per-query collector of runtime metrics from Axiom's pipeline (parser,
+/// optimizer, split manager, connectors, runner). Metrics are grouped by
+/// component: identically-named metrics from different components stay
+/// distinct, while metrics within a component aggregate. Components record
+/// through an isolated RuntimeStatsSink and never touch the collector or one
+/// another. Thread-safe: many components and threads may record concurrently.
+///
+/// Example:
+///   QueryRuntimeStats stats;
+///   auto sink = stats.sinkFor(optimizer::kStatsComponent);
+///   sink.recordCount("axiom-candidatesPruned", 3);
+///   auto snapshot = stats.toMap();
 class QueryRuntimeStats {
  public:
-  // Parser.
-  static constexpr std::string_view kParseWallNanos{"axiom-parseWallNanos"};
-  static constexpr std::string_view kParseCpuNanos{"axiom-parseCpuNanos"};
+  /// Returns 'stats' sink for 'component', or a sink over a throwaway map when
+  /// 'stats' is null.
+  static RuntimeStatsSink sinkOrThrowaway(
+      const std::shared_ptr<QueryRuntimeStats>& stats,
+      std::string_view component);
 
-  // Optimizer.
-  static constexpr std::string_view kOptimizeWallNanos{
-      "axiom-optimizeWallNanos"};
-  static constexpr std::string_view kOptimizeCpuNanos{"axiom-optimizeCpuNanos"};
-  static constexpr std::string_view kOptimizeToGraphWallNanos{
-      "axiom-optimizeToGraphWallNanos"};
-  static constexpr std::string_view kOptimizeToGraphCpuNanos{
-      "axiom-optimizeToGraphCpuNanos"};
-  static constexpr std::string_view kOptimizeBestPlanWallNanos{
-      "axiom-optimizeBestPlanWallNanos"};
-  static constexpr std::string_view kOptimizeBestPlanCpuNanos{
-      "axiom-optimizeBestPlanCpuNanos"};
-  static constexpr std::string_view kOptimizeToVeloxWallNanos{
-      "axiom-optimizeToVeloxWallNanos"};
-  static constexpr std::string_view kOptimizeToVeloxCpuNanos{
-      "axiom-optimizeToVeloxCpuNanos"};
+  /// Returns a write-only sink for 'component', creating its view on first use.
+  RuntimeStatsSink sinkFor(std::string_view component);
 
-  // Split manager.
-  static constexpr std::string_view kListPartitionsWallNanos{
-      "axiom-listPartitionsWallNanos"};
-  static constexpr std::string_view kListPartitionsCpuNanos{
-      "axiom-listPartitionsCpuNanos"};
-  static constexpr std::string_view kListPartitionsCount{
-      "axiom-listPartitionsCount"};
-  static constexpr std::string_view kGetSplitsWallNanos{
-      "axiom-getSplitsWallNanos"};
-  static constexpr std::string_view kGetSplitsCpuNanos{
-      "axiom-getSplitsCpuNanos"};
-  static constexpr std::string_view kGetSplitsCount{"axiom-getSplitsCount"};
-
-  // Permission check.
-  static constexpr std::string_view kPermissionCheckWallNanos{
-      "axiom-permissionCheckWallNanos"};
-  static constexpr std::string_view kPermissionCheckCpuNanos{
-      "axiom-permissionCheckCpuNanos"};
-
-  // Connector.
-  static constexpr std::string_view kFindTableWallNanos{
-      "axiom-findTableWallNanos"};
-  static constexpr std::string_view kFindTableCpuNanos{
-      "axiom-findTableCpuNanos"};
-  static constexpr std::string_view kEstimateStatsWallNanos{
-      "axiom-estimateStatsWallNanos"};
-  static constexpr std::string_view kEstimateStatsCpuNanos{
-      "axiom-estimateStatsCpuNanos"};
-
-  // Execution.
-  static constexpr std::string_view kExecuteWallNanos{"axiom-executeWallNanos"};
-  static constexpr std::string_view kExecuteCpuNanos{"axiom-executeCpuNanos"};
-
-  /// Records a wall-clock duration under the given metric name.
-  void recordTiming(std::string_view name, std::chrono::nanoseconds duration);
-
-  /// Records a count (e.g., number of partitions or splits).
-  void recordCount(std::string_view name, int64_t value);
-
-  /// Merges a pre-aggregated metric into this recorder.
-  void merge(std::string_view name, const velox::RuntimeMetric& metric);
-
-  /// Returns a snapshot of all recorded metrics.
+  /// Returns a snapshot of all metrics across components. Each key is the
+  /// metric name qualified by its component id ("<component>/<name>"), so a
+  /// name emitted by more than one component stays a distinct entry. Safe to
+  /// call during execution; reflects everything recorded so far.
   std::unordered_map<std::string, velox::RuntimeMetric> toMap() const;
 
-  /// Serializes all metrics to folly::dynamic for Scribe logging. Format:
-  /// {"metricName": {"sum": N, "count": N, "min": N, "max": N, "unit": "..."}}
+  /// Serializes the per-query totals to folly::dynamic for logging, keyed by
+  /// the bare metric name. Format:
+  /// {"name": {"sum": N, "count": N, "min": N, "max": N, "unit": "..."}}
   folly::dynamic toDynamic() const;
 
- private:
-  folly::ConcurrentHashMap<std::string, velox::RuntimeMetric> metrics_;
-};
-
-/// RAII timer that records a wall-clock duration into QueryRuntimeStats on
-/// destruction. Guarantees the metric is recorded even if the timed scope
-/// exits via exception.
-class ScopedRuntimeStatsTimer {
- public:
-  ScopedRuntimeStatsTimer(QueryRuntimeStats& stats, std::string_view metricName)
-      : stats_(stats),
-        metricName_(metricName),
-        start_(std::chrono::steady_clock::now()) {}
-
-  ~ScopedRuntimeStatsTimer() {
-    stats_.recordTiming(metricName_, std::chrono::steady_clock::now() - start_);
-  }
-
-  ScopedRuntimeStatsTimer(const ScopedRuntimeStatsTimer&) = delete;
-  ScopedRuntimeStatsTimer& operator=(const ScopedRuntimeStatsTimer&) = delete;
+  /// Returns each metric summed across all components, keyed by the bare metric
+  /// name (unlike toMap(), which keys per component). Components emitting the
+  /// same name must use the same unit; a mismatch fails at report time via a
+  /// VELOX_CHECK in RuntimeMetric::merge.
+  std::unordered_map<std::string, velox::RuntimeMetric> totalsByName() const;
 
  private:
-  QueryRuntimeStats& stats_;
-  std::string_view metricName_;
-  std::chrono::steady_clock::time_point start_;
+  // Component id -> that component's metric map. shared_ptr so a
+  // RuntimeStatsSink co-owns its map independently of the collector's lifetime.
+  folly::ConcurrentHashMap<std::string, std::shared_ptr<RuntimeMetricMap>>
+      components_;
 };
-
-/// RAII timer that records both wall-clock and thread CPU durations into
-/// QueryRuntimeStats on destruction. CPU time is only recorded if the
-/// destructor runs on the same thread as the constructor — coroutine
-/// suspension may resume on a different thread, making per-thread CPU
-/// measurement invalid. Wall time is always recorded.
-class ScopedCpuWallStatsTimer {
- public:
-  ScopedCpuWallStatsTimer(
-      QueryRuntimeStats& stats,
-      std::string_view wallMetricName,
-      std::string_view cpuMetricName)
-      : stats_(stats),
-        wallMetricName_(wallMetricName),
-        cpuMetricName_(cpuMetricName),
-        wallStart_(std::chrono::steady_clock::now()),
-        cpuStart_(velox::process::threadCpuNanos()),
-        startThreadId_(std::this_thread::get_id()) {}
-
-  ~ScopedCpuWallStatsTimer();
-
-  ScopedCpuWallStatsTimer(const ScopedCpuWallStatsTimer&) = delete;
-  ScopedCpuWallStatsTimer& operator=(const ScopedCpuWallStatsTimer&) = delete;
-  ScopedCpuWallStatsTimer(ScopedCpuWallStatsTimer&&) = delete;
-  ScopedCpuWallStatsTimer& operator=(ScopedCpuWallStatsTimer&&) = delete;
-
- private:
-  QueryRuntimeStats& stats_;
-  std::string_view wallMetricName_;
-  std::string_view cpuMetricName_;
-  std::chrono::steady_clock::time_point wallStart_;
-  uint64_t cpuStart_;
-  std::thread::id startThreadId_;
-};
-
-/// Records thread CPU time elapsed since 'cpuStart' if still on the same
-/// thread ('startThreadId'). Skips recording when the thread switched (e.g.
-/// after co_await) to avoid invalid per-thread CPU measurements.
-inline void recordCpuIfSameThread(
-    QueryRuntimeStats& stats,
-    std::string_view metricName,
-    uint64_t cpuStart,
-    std::thread::id startThreadId) {
-  if (std::this_thread::get_id() == startThreadId) {
-    stats.recordTiming(
-        metricName,
-        std::chrono::nanoseconds(velox::process::threadCpuNanos() - cpuStart));
-  }
-}
-
-/// Merges 'metric' into 'map' under 'name' using CAS-based optimistic locking.
-/// Shared by QueryRuntimeStats and SchedulerStatsRecorder.
-void mergeRuntimeMetric(
-    folly::ConcurrentHashMap<std::string, velox::RuntimeMetric>& map,
-    const std::string& name,
-    const velox::RuntimeMetric& metric);
 
 } // namespace facebook::axiom

@@ -15,6 +15,7 @@
  */
 
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
+#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -120,7 +121,9 @@ class LocalHiveConnectorMetadataTest
     return std::make_shared<ConnectorSession>(
         /*queryId=*/"q-test",
         /*user=*/"u-test",
-        Properties{});
+        /*connectorId=*/std::string(velox::exec::test::kHiveConnectorId),
+        Properties{},
+        std::make_shared<QueryRuntimeStats>());
   }
 
   /// Write the specified data to the table with a TableWrite operation. The

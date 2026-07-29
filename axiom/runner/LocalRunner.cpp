@@ -24,6 +24,7 @@
 #include <folly/coro/Task.h>
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/runner/RunnerMetrics.h"
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/time/Timer.h"
@@ -33,8 +34,8 @@
 namespace facebook::axiom::runner {
 namespace {
 
-/// Testing proxy for a split source managed by a system with full metadata
-/// access.
+// Testing proxy for a split source managed by a system with full metadata
+// access.
 class SimpleSplitSource : public connector::SplitSource {
  public:
   explicit SimpleSplitSource(
@@ -94,23 +95,13 @@ ConnectorSplitSourceFactory::splitSourceForScan(
   auto partitions = folly::coro::blockingWait(
       splitManager->co_listPartitions(session, handle));
   recordCpuIfSameThread(
-      runtimeStats_,
-      QueryRuntimeStats::kListPartitionsCpuNanos,
-      listCpuStart,
-      listThreadId);
-  runtimeStats_.recordTiming(
-      QueryRuntimeStats::kListPartitionsWallNanos,
-      std::chrono::steady_clock::now() - listStart);
-  runtimeStats_.recordCount(
-      QueryRuntimeStats::kListPartitionsCount, partitions.size());
+      statsSink_, kListPartitionsCpuNanos, listCpuStart, listThreadId);
+  statsSink_.recordTiming(
+      kListPartitionsWallNanos, std::chrono::steady_clock::now() - listStart);
+  statsSink_.recordCount(kListPartitionsCount, partitions.size());
 
   return splitManager->getSplitSource(
-      session,
-      handle,
-      partitions,
-      partitionType,
-      samplePercentage,
-      runtimeStats_);
+      session, handle, partitions, partitionType, samplePercentage);
 }
 
 namespace {
@@ -144,7 +135,7 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
     velox::core::PlanNodeId scanId,
     std::vector<std::shared_ptr<velox::exec::Task>> tasks,
     std::function<void(std::exception_ptr)> onError,
-    QueryRuntimeStats& runtimeStats) {
+    RuntimeStatsSink statsSink) {
   std::exception_ptr ex;
   // Injected by CancellableAsyncScope::add(); the runner's co_reap() requests
   // cancellation on teardown so this loop stops enumerating instead of draining
@@ -189,14 +180,10 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
     }
 
     recordCpuIfSameThread(
-        runtimeStats,
-        QueryRuntimeStats::kGetSplitsCpuNanos,
-        getSplitsCpuStart,
-        getSplitsThreadId);
-    runtimeStats.recordTiming(
-        QueryRuntimeStats::kGetSplitsWallNanos,
-        std::chrono::steady_clock::now() - getSplitsStart);
-    runtimeStats.recordCount(QueryRuntimeStats::kGetSplitsCount, splitCount);
+        statsSink, kGetSplitsCpuNanos, getSplitsCpuStart, getSplitsThreadId);
+    statsSink.recordTiming(
+        kGetSplitsWallNanos, std::chrono::steady_clock::now() - getSplitsStart);
+    statsSink.recordCount(kGetSplitsCount, splitCount);
   } catch (const folly::OperationCancelled&) {
     // co_getSplits() observed the teardown cancellation mid-call. This is a
     // clean stop, not a query error, so do not propagate it to onError().
@@ -265,14 +252,14 @@ LocalRunner::LocalRunner(
     std::shared_ptr<SplitSourceFactory> splitSourceFactory,
     std::shared_ptr<velox::memory::MemoryPool> outputPool,
     std::string baseSpillDirectory,
-    QueryRuntimeStats& runtimeStats)
+    RuntimeStatsSink statsSink)
     : session_{std::move(session)},
       plan_{std::move(plan)},
       fragments_{topologicalSort(plan_->fragments())},
       finishWrite_{std::move(finishWrite)},
       splitSourceFactory_{std::move(splitSourceFactory)},
       baseSpillDirectory_{std::move(baseSpillDirectory)},
-      runtimeStats_(runtimeStats) {
+      statsSink_(std::move(statsSink)) {
   params_.queryCtx = std::move(queryCtx);
   params_.outputPool = std::move(outputPool);
   if (params_.outputPool == nullptr) {
@@ -803,7 +790,7 @@ void LocalRunner::makeStages(
             folly::coro::co_withExecutor(
                 params_.queryCtx->executor(),
                 co_generateAndDistributeSplits(
-                    source, scan->id(), stage, onError, runtimeStats_)));
+                    source, scan->id(), stage, onError, statsSink_)));
       }
 
       for (const auto& input : fragment.inputStages) {

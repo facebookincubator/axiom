@@ -19,6 +19,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/system/SystemConnector.h"
@@ -165,7 +166,9 @@ class SystemConnectorMetadataTest : public ::testing::Test {
     return std::make_shared<ConnectorSession>(
         /*queryId=*/"test",
         /*user=*/"test",
-        Properties{});
+        /*connectorId=*/std::string(kSystemCatalog),
+        Properties{},
+        std::make_shared<QueryRuntimeStats>());
   }
 
   // Creates a DataSource for the given schema/table through the connector,
@@ -343,14 +346,12 @@ TEST_F(SystemConnectorMetadataTest, splitSource) {
       splitManager->co_listPartitions(session, tableHandle));
   EXPECT_EQ(partitions.size(), 1);
 
-  QueryRuntimeStats noopStats;
   auto splitSource = splitManager->getSplitSource(
       session,
       tableHandle,
       partitions,
       /*partitionType=*/nullptr,
-      /*samplePercentage=*/std::nullopt,
-      noopStats);
+      /*samplePercentage=*/std::nullopt);
   ASSERT_NE(splitSource, nullptr);
 
   std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;

@@ -442,8 +442,8 @@ class Schema {
   /// Constructs a Schema for producing executable plans, backed by 'source'.
   explicit Schema(
       const connector::SchemaResolver& source,
-      std::shared_ptr<QueryRuntimeStats> runtimeStats = nullptr)
-      : source_{&source}, runtimeStats_{std::move(runtimeStats)} {}
+      RuntimeStatsSink statsSink = RuntimeStatsSink::throwaway())
+      : source_{&source}, statsSink_{std::move(statsSink)} {}
 
   /// Returns the table with 'name' or nullptr if not found, using
   /// the connector specified by connectorId to perform table lookups.
@@ -477,7 +477,7 @@ class Schema {
   using ConnectorMap = folly::F14FastMap<std::string_view, TableMap>;
 
   const connector::SchemaResolver* source_;
-  std::shared_ptr<QueryRuntimeStats> runtimeStats_;
+  RuntimeStatsSink statsSink_;
   mutable ConnectorMap connectorTables_;
   // Holds `connector::Table`s whose ownership is given directly to
   // the Schema rather than resolved through the source. Keeps them

@@ -17,6 +17,7 @@
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include <gflags/gflags.h>
 #include <optional>
+#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/logical_plan/PlanBuilder.h"
@@ -94,7 +95,8 @@ void HiveQueriesTestBase::SetUp() {
           /*queryId=*/"test",
           /*user=*/"test",
           ::axiom::sql::presto::ParserOptions{},
-          connector::ConnectorProperties{}));
+          connector::ConnectorProperties{},
+          std::make_shared<QueryRuntimeStats>()));
 }
 
 // static
