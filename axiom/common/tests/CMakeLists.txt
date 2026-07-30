@@ -18,6 +18,7 @@ add_executable(
   QueryRuntimeStatsTest.cpp
   SchemaTableNameTest.cpp
   SessionConfigTest.cpp
+  TrackedExecutorTest.cpp
 )
 
 add_test(axiom_common_tests axiom_common_tests)
