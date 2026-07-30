@@ -12,13 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Fine-grained target so consumers that only need query-id generation (e.g.
+# axel) can link it without pulling in the interactive CLI and its graphviz
+# dependency.
+add_library(axiom_query_id_generator QueryIdGenerator.cpp)
+
+target_link_libraries(axiom_query_id_generator fmt::fmt)
+
 add_library(
   axiom_cli
   CatalogProperties.cpp
   Connectors.cpp
   Console.cpp
   LiveProgressDisplay.cpp
-  QueryIdGenerator.cpp
   SqlQueryRunner.cpp
   SystemUser.cpp
   ResultPrinter.cpp
@@ -29,6 +35,7 @@ add_library(
 
 target_link_libraries(
   axiom_cli
+  axiom_query_id_generator
   velox_connector_registry
   velox_presto_query_config
   velox_query_config_provider
