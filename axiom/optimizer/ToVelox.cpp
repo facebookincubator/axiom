@@ -539,6 +539,7 @@ PlanAndStats ToVelox::toVeloxPlan(
 
   prediction_.clear();
   nodeHistory_.clear();
+  estimatedScanBytes_.reset();
   relationOpToNodeId_.clear();
   currentConsumerGroupedLeaves_ = nullptr;
   groupedLeaves_ = &groupedLeaves;
@@ -638,7 +639,8 @@ PlanAndStats ToVelox::toVeloxPlan(
       std::move(multiFragmentPlan),
       std::move(nodeHistory_),
       std::move(prediction_),
-      std::move(finishWrite)};
+      std::move(finishWrite),
+      estimatedScanBytes_};
 }
 
 velox::RowTypePtr ToVelox::makeOutputType(const ColumnVector& columns) const {
@@ -1545,6 +1547,11 @@ velox::core::PlanNodePtr ToVelox::makeScan(
   }
 
   makePredictionAndHistory(result->id(), &scan);
+
+  if (scan.baseTable->filteredDataSize.has_value()) {
+    estimatedScanBytes_ =
+        estimatedScanBytes_.value_or(0) + *scan.baseTable->filteredDataSize;
+  }
 
   columnAlteredTypes_.clear();
   return result;

@@ -522,6 +522,11 @@ class Emitter {
   // takePrediction.
   NodePredictionMap prediction_;
 
+  // Accumulated on-disk bytes read across the plan's table scans that reported
+  // a data-size estimate; moved out via takeEstimatedScanBytes. nullopt until
+  // the first scan contributes.
+  std::optional<int64_t> estimatedScanBytes_;
+
  public:
   // Lowers 'root' (plus the output rename to 'outputNames') into fragments,
   // returning them with the root fragment last.
@@ -539,6 +544,11 @@ class Emitter {
   // Transfers the per-node cardinality predictions collected during emit.
   NodePredictionMap takePrediction() {
     return std::move(prediction_);
+  }
+
+  // Transfers the summed on-disk scan-bytes estimate collected during emit.
+  std::optional<int64_t> takeEstimatedScanBytes() {
+    return std::move(estimatedScanBytes_);
   }
 };
 
@@ -658,6 +668,14 @@ velox::core::PlanNodePtr Emitter::emitScan(const Scan& scan) {
       velox::ROW(std::move(scanOutputNames), std::move(scanOutputTypes)),
       tableHandle,
       std::move(assignments));
+
+  // Sum the per-scan on-disk estimate into the plan-level total. Only scans
+  // that reported a size contribute, so the total is a lower bound when some
+  // scans lack an estimate.
+  if (scan.baseTable()->filteredDataSize.has_value()) {
+    estimatedScanBytes_ =
+        estimatedScanBytes_.value_or(0) + *scan.baseTable()->filteredDataSize;
+  }
 
   // A scan of a bucketed table is a grouped leaf: it runs per bucket-group
   // under grouped execution, tagging the fragment as bucketed. The layout's
@@ -2173,7 +2191,8 @@ EmitPass::Result EmitPass::run(
   return Result{
       std::move(fragments),
       emitter.takeFinishWrite(),
-      emitter.takePrediction()};
+      emitter.takePrediction(),
+      emitter.takeEstimatedScanBytes()};
 }
 
 } // namespace facebook::axiom::optimizer::v2

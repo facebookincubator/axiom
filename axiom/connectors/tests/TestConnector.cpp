@@ -991,6 +991,15 @@ void TestConnectorMetadata::setStats(
   it->second->setStats(numRows, columnStats);
 }
 
+void TestConnectorMetadata::setDataSize(
+    const SchemaTableName& tableName,
+    uint64_t dataSize) {
+  auto it = tables_.find(tableName);
+  VELOX_CHECK(
+      it != tables_.end(), "Table doesn't exist: {}", tableName.toString());
+  it->second->setDataSize(dataSize);
+}
+
 TestDataSource::TestDataSource(
     const velox::RowTypePtr& outputType,
     const velox::connector::ColumnHandleMap& handles,
@@ -1314,6 +1323,12 @@ void TestConnector::setStats(
     uint64_t numRows,
     const std::unordered_map<std::string, ColumnStatistics>& columnStats) {
   metadata_->setStats(tableName, numRows, columnStats);
+}
+
+void TestConnector::setDataSize(
+    const SchemaTableName& tableName,
+    uint64_t dataSize) {
+  metadata_->setDataSize(tableName, dataSize);
 }
 
 std::shared_ptr<velox::connector::Connector> TestConnectorFactory::newConnector(

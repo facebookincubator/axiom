@@ -38,6 +38,9 @@ class EmitPass {
     /// Per-node estimated cardinality, keyed by emitted `PlanNodeId`, for
     /// EXPLAIN. Empty when estimates are unavailable.
     NodePredictionMap prediction;
+    /// Summed on-disk bytes read across the plan's table scans that reported a
+    /// data-size estimate; nullopt when no scan reported one.
+    std::optional<int64_t> estimatedScanBytes;
   };
 
   /// Lowers the tree-IR rooted at 'root' into fragments, projecting to the

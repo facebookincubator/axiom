@@ -2546,6 +2546,7 @@ BaseTable* initBaseTable(
   baseTable->cname = cname;
   baseTable->schemaTable = schemaTable;
   baseTable->filteredCardinality = schemaTable->cardinality;
+  baseTable->filteredDataSize = schemaTable->dataSize;
   planLeaves[&planNode] = baseTable;
   return baseTable;
 }
