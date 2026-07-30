@@ -17,6 +17,9 @@
 #pragma once
 
 #include <folly/CppAttributes.h>
+#include <cstdint>
+#include <limits>
+#include <optional>
 #include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/PlanObject.h"
@@ -34,6 +37,18 @@ using NameMap = QGF14FastMap<Name, T>;
 
 using VariantCP = const velox::Variant*;
 using TypeCP = const velox::Type*;
+
+/// Converts a connector byte count to the optimizer's signed representation,
+/// returning nullopt when absent or too large to represent as int64_t (e.g. a
+/// UINT64_MAX "unknown" sentinel), so a corrupt size never becomes a negative
+/// estimate downstream.
+inline std::optional<int64_t> toSignedByteCount(std::optional<uint64_t> bytes) {
+  if (!bytes.has_value() ||
+      *bytes > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+    return std::nullopt;
+  }
+  return static_cast<int64_t>(*bytes);
+}
 
 /// Represents constraints on a column value or intermediate result.
 // TODO: Refactor to separate schema facts from statistical estimates:
@@ -421,6 +436,12 @@ struct SchemaTable {
   const connector::Table* const connectorTable;
 
   const std::optional<float> cardinality;
+
+  /// Estimated on-disk (compressed) size in bytes of the whole table, or
+  /// nullopt when the connector reports none. Partitioned connectors report
+  /// nullopt here; the pruned per-query estimate flows through
+  /// BaseTable::filteredDataSize.
+  const std::optional<int64_t> dataSize;
 
   /// Maps column name to schema column.
   NameMap<ColumnCP> columns;

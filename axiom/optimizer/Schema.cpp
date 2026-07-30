@@ -160,11 +160,20 @@ std::optional<float> connectorCardinality(
   }
   return std::max<float>(1, static_cast<float>(*numRows));
 }
+
+// Propagates the connector's on-disk data-size estimate, or `nullopt` when the
+// connector reports none. Kept as an integer byte count: unlike cardinality it
+// is never scaled by selectivity, so float would only lose precision.
+std::optional<int64_t> connectorDataSize(
+    const connector::Table& connectorTable) {
+  return toSignedByteCount(connectorTable.dataSize());
+}
 } // namespace
 
 SchemaTable::SchemaTable(const connector::Table& connectorTable)
     : connectorTable{&connectorTable},
-      cardinality{connectorCardinality(connectorTable)} {}
+      cardinality{connectorCardinality(connectorTable)},
+      dataSize{connectorDataSize(connectorTable)} {}
 
 SchemaTableCP Schema::buildSchemaTable(
     const connector::Table& connectorTable) const {
