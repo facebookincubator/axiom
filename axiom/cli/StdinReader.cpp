@@ -17,6 +17,7 @@
 #include "axiom/cli/StdinReader.h"
 #include <fmt/format.h>
 #include <algorithm>
+#include <cerrno>
 #include <sstream>
 #include "axiom/cli/linenoise/linenoise.h"
 #include "folly/ScopeGuard.h"
@@ -80,11 +81,25 @@ std::string readCommand(const std::string& prompt, bool& atEnd) {
   bool stripLeadingSpaces = true;
   bool inBlockComment = false;
 
-  while (char* rawLine = linenoise(prompt.c_str())) {
-    SCOPE_EXIT {
-      if (rawLine != nullptr) {
-        free(rawLine);
+  for (;;) {
+    errno = 0;
+    char* rawLine = linenoise(prompt.c_str());
+    if (rawLine == nullptr) {
+      // linenoise runs the terminal in raw mode with ISIG cleared, so Ctrl+C is
+      // not a signal here -- it returns nullptr with errno == EAGAIN (Ctrl+D
+      // and EOF set ENOENT). Map Ctrl+C to "discard the partial command and
+      // re-prompt" (like readline/psql); Ctrl+D and EOF end input.
+      if (errno == EAGAIN) {
+        command.str("");
+        command.clear();
+        stripLeadingSpaces = true;
+        inBlockComment = false;
+        continue;
       }
+      break;
+    }
+    SCOPE_EXIT {
+      free(rawLine);
     };
 
     std::string line(rawLine);

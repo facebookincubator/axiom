@@ -24,6 +24,8 @@ DECLARE_bool(debug);
 
 namespace axiom::sql {
 
+class QueryInterruptHandler;
+
 /// Executes SQL through a SqlQueryRunner, driven from command-line flags, an
 /// init/`.run` file, piped stdin, or an interactive REPL, and prints results
 /// and timing to stdout/stderr.
@@ -85,6 +87,11 @@ class Console {
   readCommands(const std::string& prompt, bool printTiming, bool showProgress);
 
   SqlQueryRunner& runner_;
+
+  // Non-owning; points to the session's interrupt handler while run() is
+  // active, else null. runOnce() arms it around each query so Ctrl+C cancels
+  // the query, not the CLI.
+  QueryInterruptHandler* interrupt_{nullptr};
 };
 
 } // namespace axiom::sql

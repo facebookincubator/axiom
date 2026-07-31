@@ -272,6 +272,12 @@ class SqlQueryRunner {
     /// telemetry only: timing, query ID, error info, row counts. Results
     /// are returned from run(), not passed through callbacks.
     QueryCompletionCallback onComplete;
+
+    /// Cancels the query's execution when tripped. run() composes it onto the
+    /// result drain; a cancelled query throws QueryCancelledError. Defaults to
+    /// a never-cancelled token. (For the co_run() generator, compose the token
+    /// with folly::coro::co_withCancellation instead.)
+    folly::CancellationToken cancellationToken;
   };
 
   /// One increment of a streamed query result, yielded by co_run(). Exactly one

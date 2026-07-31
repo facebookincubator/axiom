@@ -565,20 +565,24 @@ std::string messageTemplateOf(const std::exception& e) {
 SqlQueryRunner::SqlResult SqlQueryRunner::run(
     std::string_view sql,
     const RunOptions& options) {
+  // Compose the caller's cancellation token onto the drain so tripping it stops
+  // the query (surfacing QueryCancelledError). A default token never cancels.
   return folly::coro::blockingWait(
-      folly::coro::co_invoke([&]() -> folly::coro::Task<SqlResult> {
-        SqlResult result;
-        auto generator = co_run(std::string(sql), options);
-        while (auto chunk = co_await generator.next()) {
-          if (chunk->message.has_value()) {
-            result.message = std::move(chunk->message);
-          }
-          if (chunk->batch != nullptr) {
-            result.results.push_back(std::move(chunk->batch));
-          }
-        }
-        co_return result;
-      }));
+      folly::coro::co_withCancellation(
+          options.cancellationToken,
+          folly::coro::co_invoke([&]() -> folly::coro::Task<SqlResult> {
+            SqlResult result;
+            auto generator = co_run(std::string(sql), options);
+            while (auto chunk = co_await generator.next()) {
+              if (chunk->message.has_value()) {
+                result.message = std::move(chunk->message);
+              }
+              if (chunk->batch != nullptr) {
+                result.results.push_back(std::move(chunk->batch));
+              }
+            }
+            co_return result;
+          })));
 }
 
 folly::coro::AsyncGenerator<SqlQueryRunner::SqlResultChunk>

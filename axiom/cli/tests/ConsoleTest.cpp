@@ -15,10 +15,20 @@
  */
 
 #include "axiom/cli/Console.h"
+#include <folly/CancellationToken.h>
+#include <folly/ScopeGuard.h>
+#include <folly/coro/AsyncGenerator.h>
+#include <folly/coro/CurrentExecutor.h>
+#include <folly/synchronization/Baton.h>
 #include <gtest/gtest.h>
+#include <signal.h>
+#include <atomic>
+#include <chrono>
+#include <thread>
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "velox/connectors/ConnectorRegistry.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 DECLARE_string(query);
 
@@ -27,7 +37,53 @@ using namespace facebook::velox;
 namespace axiom::sql {
 namespace {
 
-class ConsoleTest : public ::testing::Test {
+// A SqlQueryRunner whose co_run() blocks until cancellation, then reports it
+// exactly as the real co_run() does. Lets the Console cancellation path be
+// tested deterministically: the test waits for co_run() to be entered (the
+// query's source is armed by runOnce beforehand), delivers one SIGINT, and the
+// fake observes the resulting cancellation -- no query executes and no
+// signal-retry loop is needed.
+class FakeCancelRunner : public SqlQueryRunner {
+ public:
+  using SqlQueryRunner::SqlQueryRunner;
+
+  // Posted once co_run() has been entered and the cancellation source is armed.
+  folly::Baton<>& entered() {
+    return entered_;
+  }
+
+  // Whether the RunOptions handed to co_run() carried a live token, i.e.
+  // Console set RunOptions::cancellationToken and run() forwarded it down.
+  bool sawCancellableToken() const {
+    return sawCancellableToken_.load();
+  }
+
+  folly::coro::AsyncGenerator<SqlResultChunk> co_run(
+      std::string /*sql*/,
+      RunOptions options) override {
+    sawCancellableToken_.store(options.cancellationToken.canBeCancelled());
+    entered_.post();
+    // Observe cancellation the way the real co_run() does: ambiently, through
+    // the token run() composes onto the drain from options.cancellationToken.
+    // Reacting to options.cancellationToken directly would still pass if run()
+    // stopped composing the token, so read the ambient one it actually
+    // installs.
+    const auto token = co_await folly::coro::co_current_cancellation_token;
+    folly::Baton<> cancelled;
+    folly::CancellationCallback callback(token, [&] { cancelled.post(); });
+    // Bounded so a cancellation regression fails the test instead of hanging.
+    if (!cancelled.try_wait_for(std::chrono::seconds(30))) {
+      co_return;
+    }
+    throw QueryCancelledError{};
+  }
+
+ private:
+  folly::Baton<> entered_;
+  std::atomic<bool> sawCancellableToken_{false};
+};
+
+class ConsoleTest : public ::testing::Test, public test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
     facebook::velox::memory::MemoryManager::testingSetInstance(
@@ -43,9 +99,9 @@ class ConsoleTest : public ::testing::Test {
     }
   }
 
-  std::unique_ptr<SqlQueryRunner> makeRunner(
-      PermissionCheck permissionCheck = {}) {
-    auto runner = std::make_unique<SqlQueryRunner>("test_user");
+  template <typename RunnerT = SqlQueryRunner>
+  std::unique_ptr<RunnerT> makeRunner(PermissionCheck permissionCheck = {}) {
+    auto runner = std::make_unique<RunnerT>("test_user");
 
     runner->initialize(
         [&]() {
@@ -101,6 +157,57 @@ TEST_F(ConsoleTest, permissionCheckCalledBeforeExecution) {
   ASSERT_TRUE(called);
   EXPECT_EQ(capturedSql, "SELECT 1");
   EXPECT_FALSE(capturedCatalog.empty());
+}
+
+// SIGINT during a running query cancels that query and leaves the CLI alive:
+// run() installs the interrupt handler for the session, runOnce registers the
+// query's cancellation source, and Console reports the cancellation rather than
+// terminating. FakeCancelRunner holds run() open until the source is tripped,
+// so the signal is delivered at a deterministic point (no retry loop).
+TEST_F(ConsoleTest, sigintCancelsRunningQuery) {
+  auto runner = makeRunner<FakeCancelRunner>();
+  ASSERT_TRUE(runner);
+
+  Console console{*runner};
+  console.initialize();
+  FLAGS_query = "SELECT 1";
+
+  // Ignore SIGINT outside run()'s handler window (before it installs, after it
+  // restores) so a signal landing there is harmless rather than terminating the
+  // test process.
+  struct sigaction ignore{};
+  ignore.sa_handler = SIG_IGN;
+  sigemptyset(&ignore.sa_mask);
+  ASSERT_EQ(sigaction(SIGINT, &ignore, nullptr), 0);
+
+  testing::internal::CaptureStderr();
+  std::thread queryThread([&] { console.run(); });
+  // Join on any early exit (e.g. an ASSERT failure below) so the thread is
+  // never destroyed while joinable -- that would std::terminate the test
+  // process.
+  SCOPE_EXIT {
+    if (queryThread.joinable()) {
+      queryThread.join();
+    }
+  };
+
+  // Wait until run() is executing with the query's cancellation source armed,
+  // then deliver exactly one SIGINT. The handler trips the armed source and the
+  // fake runner observes the cancellation, so run() returns on its own.
+  ASSERT_TRUE(runner->entered().try_wait_for(std::chrono::seconds(30)));
+  raise(SIGINT);
+  queryThread.join();
+
+  // run() carried Console's per-query token through RunOptions into co_run.
+  EXPECT_TRUE(runner->sawCancellableToken());
+
+  const std::string captured = testing::internal::GetCapturedStderr();
+  EXPECT_NE(captured.find("Query cancelled."), std::string::npos);
+
+  struct sigaction dfl{};
+  dfl.sa_handler = SIG_DFL;
+  sigemptyset(&dfl.sa_mask);
+  sigaction(SIGINT, &dfl, nullptr);
 }
 
 } // namespace

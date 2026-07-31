@@ -272,6 +272,27 @@ root stage that produces the final result first), with a single-letter state
 (`P`lanned, `R`unning, `F`inished) and per-stage row/byte counts, rates, and
 split tallies.
 
+## Cancelling Queries
+
+Press **Ctrl+C** while a query is running to cancel it. The query stops and the
+CLI prints to stderr:
+
+```
+Query cancelled.
+```
+
+Cancellation works on every execution path — `--init`, `--query`, piped stdin,
+`--repeat`, and the interactive REPL. In the REPL the prompt returns and the
+session stays alive; on the non-interactive paths the cancelled statement ends
+the run, so any remaining statements or `--repeat` iterations are skipped.
+
+At the prompt, with no query running:
+
+| Key | Behavior |
+|-----|----------|
+| **Ctrl+C** | Discard the partially typed command — including a half-entered multi-line statement — and redraw a fresh prompt. Does not exit. |
+| **Ctrl+D** | End input and exit the CLI (like `.exit`). |
+
 ## Exit Status
 
 | Condition | Exit code |

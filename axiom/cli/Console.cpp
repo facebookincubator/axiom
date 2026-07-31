@@ -16,6 +16,7 @@
 
 #include "axiom/cli/Console.h"
 #include <fmt/core.h>
+#include <folly/CancellationToken.h>
 #include <folly/FileUtil.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -25,6 +26,7 @@
 #include <optional>
 #include <set>
 #include "axiom/cli/LiveProgressDisplay.h"
+#include "axiom/cli/QueryInterruptHandler.h"
 #include "axiom/cli/ResultPrinter.h"
 #include "axiom/cli/StdinReader.h"
 #include "axiom/cli/Timing.h"
@@ -147,6 +149,14 @@ void Console::run() {
 
   VELOX_USER_CHECK_GE(FLAGS_repeat, 1, "--repeat must be at least 1");
 
+  // Install session-wide so Ctrl+C cancels the running query instead of the
+  // CLI; see QueryInterruptHandler.
+  QueryInterruptHandler interrupt;
+  interrupt_ = &interrupt;
+  SCOPE_EXIT {
+    interrupt_ = nullptr;
+  };
+
   if (!FLAGS_init.empty()) {
     std::string sql;
     auto success = folly::readFile(FLAGS_init.c_str(), sql);
@@ -225,6 +235,17 @@ bool Console::runOnce(
           [&](const QueryCompletionInfo& info) { completionInfo = info; },
   };
 
+  // Arm cancellation so Ctrl+C cancels the running query; run() honors the
+  // token.
+  if (interrupt_ != nullptr) {
+    options.cancellationToken = interrupt_->arm();
+  }
+  SCOPE_EXIT {
+    if (interrupt_ != nullptr) {
+      interrupt_->disarm();
+    }
+  };
+
   // When enabled by the caller, draw a live status grid on stderr while the
   // query runs.
   std::optional<cli::LiveProgressDisplay> progress;
@@ -262,12 +283,19 @@ bool Console::runOnce(
                 << formatTiming(completionInfo.timing, cpuTiming) << std::endl;
     }
     return true;
+  } catch (const QueryCancelledError&) {
+    // A user cancellation (Ctrl+C) is reported plainly.
+    if (progress) {
+      progress->clear();
+    }
+    std::cerr << "Query cancelled." << std::endl;
+    return false;
   } catch (const std::exception&) {
     if (progress) {
       progress->clear();
     }
-    // run() threw after firing the completion callback, so telemetry was
-    // captured.
+    // run() sets errorInfo before throwing (see SqlQueryRunner), so the deref
+    // is safe; a violation should surface here, not be masked.
     std::cerr << "Query failed: " << completionInfo.errorInfo->message
               << std::endl;
     if (printTiming) {

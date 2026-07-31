@@ -156,6 +156,30 @@ TEST_F(SqlQueryRunnerTest, externalCancellation) {
   EXPECT_FALSE(completion->errorInfo.has_value());
 }
 
+TEST_F(SqlQueryRunnerTest, runHonorsCancellationToken) {
+  // run() composes RunOptions::cancellationToken onto its co_run() drain: a
+  // token tripped before the call surfaces as QueryCancelledError. This is the
+  // synchronous cancellation path -- run(), not the co_run() generator.
+  testConnector_->addTable("t", ROW("c", BIGINT()));
+
+  folly::CancellationSource source;
+  source.requestCancellation();
+
+  std::optional<QueryCompletionInfo> completion;
+  SqlQueryRunner::RunOptions options;
+  options.cancellationToken = source.getToken();
+  options.onComplete = [&](const QueryCompletionInfo& info) {
+    completion = info;
+  };
+
+  EXPECT_THROW(
+      runner_->run("SELECT count(*) FROM t", options), QueryCancelledError);
+
+  ASSERT_TRUE(completion.has_value());
+  EXPECT_TRUE(completion->cancelled);
+  EXPECT_FALSE(completion->errorInfo.has_value());
+}
+
 TEST_F(SqlQueryRunnerTest, coRunYieldsChunks) {
   // co_run() is a generator: a SELECT yields batch chunks (no message); a
   // statement that returns a status line yields a single message chunk.
