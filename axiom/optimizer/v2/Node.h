@@ -57,6 +57,7 @@ enum class NodeType : uint8_t {
 
 AXIOM_DECLARE_ENUM_NAME(NodeType);
 
+class Builder;
 class Node;
 class NodeVisitor;
 class NodeVisitorContext;
@@ -127,6 +128,22 @@ class Node : public PlanObject {
   /// lifetime.
   virtual std::span<const NodeCP> inputs() const = 0;
 
+  /// Returns a canonical node of this kind with `newInputs` replacing the
+  /// current inputs and every other field preserved. Constructed through
+  /// `builder` so the result participates in hash-consing.
+  ///
+  /// Each `newInputs[i]` must have the same set of output columns as
+  /// `inputs()[i]` — the same `Column` pointers, since predicates, keys, and
+  /// `UnionAll::legColumns` bind to them by identity. A rewrite that changes an
+  /// input's output columns must rebuild the parent explicitly.
+  ///
+  /// For example, empty-scan pruning replaces a provably empty subtree with
+  /// `builder.makeEmptyValues(node->outputColumns())`, then uses `withInputs`
+  /// to rebuild ancestors that cannot themselves collapse over the empty
+  /// child. A global `Aggregate` must instead be rebuilt explicitly because it
+  /// still emits a row for an empty input.
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const;
+
   /// Double-dispatch hook for `NodeVisitor`.
   virtual void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const = 0;
@@ -134,6 +151,8 @@ class Node : public PlanObject {
   std::string toString() const override;
 
  protected:
+  virtual NodeCP withInputsImpl(NodeVector newInputs, Builder& builder) const;
+
   Node(
       NodeType nodeType,
       ColumnVector outputColumns,
@@ -256,6 +275,7 @@ class Filter : public Node {
       const override;
 
  private:
+  NodeCP withInputsImpl(NodeVector newInputs, Builder& builder) const override;
   const NodeCP input_;
   const ExprVector predicates_;
 };
@@ -321,6 +341,7 @@ class Project : public Node {
       const override;
 
  private:
+  NodeCP withInputsImpl(NodeVector newInputs, Builder& builder) const override;
   const NodeCP input_;
   const ExprVector exprs_;
 };
@@ -387,6 +408,7 @@ class Limit : public Node {
       const override;
 
  private:
+  NodeCP withInputsImpl(NodeVector newInputs, Builder& builder) const override;
   const NodeCP input_;
   const int64_t offset_;
   const int64_t count_;
@@ -445,6 +467,7 @@ class Sort : public Node {
       const override;
 
  private:
+  NodeCP withInputsImpl(NodeVector newInputs, Builder& builder) const override;
   const NodeCP input_;
   const ExprVector orderKeys_;
   const OrderTypeVector orderTypes_;
@@ -517,6 +540,7 @@ class TopN : public Node {
       const override;
 
  private:
+  NodeCP withInputsImpl(NodeVector newInputs, Builder& builder) const override;
   const NodeCP input_;
   const ExprVector orderKeys_;
   const OrderTypeVector orderTypes_;
@@ -633,6 +657,7 @@ class Aggregate : public Node {
       const override;
 
  private:
+  NodeCP withInputsImpl(NodeVector newInputs, Builder& builder) const override;
   const NodeCP input_;
   const ExprVector groupingKeys_;
   const AggregateCallVector aggregates_;
@@ -726,6 +751,7 @@ class GroupId : public Node {
       const override;
 
  private:
+  NodeCP withInputsImpl(NodeVector newInputs, Builder& builder) const override;
   const NodeCP input_;
   const ExprVector groupingKeys_;
   const ExprVector aggregationInputs_;
@@ -811,6 +837,7 @@ class MarkDistinct : public Node {
       const override;
 
  private:
+  NodeCP withInputsImpl(NodeVector newInputs, Builder& builder) const override;
   const NodeCP input_;
   const ColumnVector markers_;
   const ExprVector distinctKeys_;
@@ -970,6 +997,7 @@ class Unnest : public Node {
       const override;
 
  private:
+  NodeCP withInputsImpl(NodeVector newInputs, Builder& builder) const override;
   const NodeCP input_;
   const ExprVector unnestExpressions_;
   const ColumnVector replicatedColumns_;
@@ -1038,6 +1066,7 @@ class UnionAll : public Node {
       const override;
 
  private:
+  NodeCP withInputsImpl(NodeVector newInputs, Builder& builder) const override;
   const NodeVector inputs_;
   const QGVector<ColumnVector> legColumns_;
 };
@@ -1171,6 +1200,7 @@ class Join : public Node {
       const override;
 
  private:
+  NodeCP withInputsImpl(NodeVector newInputs, Builder& builder) const override;
   const std::array<NodeCP, 2> inputs_;
   const velox::core::JoinType joinType_;
   const ExprVector leftKeys_;
@@ -1266,6 +1296,7 @@ class Window : public Node {
       const override;
 
  private:
+  NodeCP withInputsImpl(NodeVector newInputs, Builder& builder) const override;
   const NodeCP input_;
   const WindowFunctions functions_;
   const ExprVector partitionKeys_;
@@ -1358,6 +1389,7 @@ class TopNRowNumber : public Node {
       const override;
 
  private:
+  NodeCP withInputsImpl(NodeVector newInputs, Builder& builder) const override;
   const NodeCP input_;
   const RankFunction rankFunction_;
   const ExprVector partitionKeys_;
@@ -1532,6 +1564,7 @@ class Apply : public Node {
       const override;
 
  private:
+  NodeCP withInputsImpl(NodeVector newInputs, Builder& builder) const override;
   const std::array<NodeCP, 2> inputs_;
   const ColumnVector correlationColumns_;
   const velox::core::JoinType kind_;
@@ -1587,6 +1620,7 @@ class EnforceSingleRow : public Node {
       const override;
 
  private:
+  NodeCP withInputsImpl(NodeVector newInputs, Builder& builder) const override;
   const NodeCP input_;
 };
 
@@ -1637,6 +1671,7 @@ class AssignUniqueId : public Node {
       const override;
 
  private:
+  NodeCP withInputsImpl(NodeVector newInputs, Builder& builder) const override;
   const NodeCP input_;
   const ColumnCP idColumn_;
 };
@@ -1698,6 +1733,7 @@ class EnforceDistinct : public Node {
       const override;
 
  private:
+  NodeCP withInputsImpl(NodeVector newInputs, Builder& builder) const override;
   const NodeCP input_;
   const ExprVector distinctKeys_;
   const Name errorMessage_;
@@ -1755,6 +1791,7 @@ class Exchange : public Node {
       const override;
 
  private:
+  NodeCP withInputsImpl(NodeVector newInputs, Builder& builder) const override;
   const NodeCP input_;
   const Partitioning partitioning_;
 };
@@ -1820,6 +1857,7 @@ class TableWrite : public Node {
       const override;
 
  private:
+  NodeCP withInputsImpl(NodeVector newInputs, Builder& builder) const override;
   const NodeCP input_;
   const connector::Table* const table_;
   const connector::WriteKind kind_;

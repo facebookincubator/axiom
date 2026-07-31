@@ -18,6 +18,7 @@
 
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/optimizer/Schema.h"
+#include "axiom/optimizer/v2/Builder.h"
 #include "axiom/optimizer/v2/KeyHash.h"
 #include "axiom/optimizer/v2/NodePrinter.h"
 #include "axiom/optimizer/v2/NodeVisitor.h"
@@ -2010,6 +2011,220 @@ bool TableWrite::KeyEq::operator()(const Key& key, const TableWrite* node)
 bool TableWrite::KeyEq::operator()(const TableWrite* node, const Key& key)
     const {
   return (*this)(key, node);
+}
+
+NodeCP Node::withInputs(NodeVector newInputs, Builder& builder) const {
+  const auto currentInputs = inputs();
+  VELOX_CHECK_EQ(
+      newInputs.size(),
+      currentInputs.size(),
+      "Replacement input count must match existing input count: {}",
+      nodeTypeName());
+  for (size_t i = 0; i < currentInputs.size(); ++i) {
+    VELOX_CHECK(
+        PlanObjectSet::fromObjects(newInputs.at(i)->outputColumns()) ==
+            PlanObjectSet::fromObjects(currentInputs[i]->outputColumns()),
+        "Replacement input must have the same output columns at index {}: {}",
+        i,
+        nodeTypeName());
+  }
+  return withInputsImpl(std::move(newInputs), builder);
+}
+
+NodeCP Node::withInputsImpl(NodeVector /*newInputs*/, Builder& /*builder*/)
+    const {
+  return this;
+}
+
+NodeCP Filter::withInputsImpl(NodeVector newInputs, Builder& builder) const {
+  return builder.make<Filter>(Filter::Key{
+      .input = newInputs.at(0),
+      .predicates = predicates_,
+  });
+}
+
+NodeCP Project::withInputsImpl(NodeVector newInputs, Builder& builder) const {
+  return builder.make<Project>(Project::Key{
+      .input = newInputs.at(0),
+      .exprs = exprs_,
+      .outputColumns = outputColumns(),
+  });
+}
+
+NodeCP Limit::withInputsImpl(NodeVector newInputs, Builder& builder) const {
+  return builder.make<Limit>(Limit::Key{
+      .input = newInputs.at(0),
+      .offset = offset_,
+      .count = count_,
+  });
+}
+
+NodeCP Sort::withInputsImpl(NodeVector newInputs, Builder& builder) const {
+  return builder.make<Sort>(Sort::Key{
+      .input = newInputs.at(0),
+      .orderKeys = orderKeys_,
+      .orderTypes = orderTypes_,
+  });
+}
+
+NodeCP TopN::withInputsImpl(NodeVector newInputs, Builder& builder) const {
+  return builder.make<TopN>(TopN::Key{
+      .input = newInputs.at(0),
+      .orderKeys = orderKeys_,
+      .orderTypes = orderTypes_,
+      .offset = offset_,
+      .count = count_,
+  });
+}
+
+NodeCP Aggregate::withInputsImpl(NodeVector newInputs, Builder& builder) const {
+  return builder.make<Aggregate>(Aggregate::Key{
+      .input = newInputs.at(0),
+      .groupingKeys = groupingKeys_,
+      .aggregates = aggregates_,
+      .outputColumns = outputColumns(),
+      .step = step_,
+      .groupId = groupId_,
+      .globalGroupingSets = globalGroupingSets_,
+  });
+}
+
+NodeCP GroupId::withInputsImpl(NodeVector newInputs, Builder& builder) const {
+  return builder.make<GroupId>(GroupId::Key{
+      .input = newInputs.at(0),
+      .groupingKeys = groupingKeys_,
+      .aggregationInputs = aggregationInputs_,
+      .groupingSets = groupingSets_,
+      .groupingKeyColumns = groupingKeyColumns_,
+      .groupId = groupId_,
+      .outputColumns = outputColumns(),
+  });
+}
+
+NodeCP MarkDistinct::withInputsImpl(NodeVector newInputs, Builder& builder)
+    const {
+  return builder.make<MarkDistinct>(MarkDistinct::Key{
+      .input = newInputs.at(0),
+      .markers = markers_,
+      .distinctKeys = distinctKeys_,
+      .masks = masks_,
+      .outputColumns = outputColumns(),
+  });
+}
+
+NodeCP Unnest::withInputsImpl(NodeVector newInputs, Builder& builder) const {
+  return builder.make<Unnest>(Unnest::Key{
+      .input = newInputs.at(0),
+      .unnestExpressions = unnestExpressions_,
+      .replicatedColumns = replicatedColumns_,
+      .unnestColumns = unnestColumns_,
+      .ordinalityColumn = ordinalityColumn_,
+      .outputColumns = outputColumns(),
+  });
+}
+
+NodeCP UnionAll::withInputsImpl(NodeVector newInputs, Builder& builder) const {
+  return builder.make<UnionAll>(UnionAll::Key{
+      .inputs = std::move(newInputs),
+      .legColumns = legColumns_,
+      .outputColumns = outputColumns(),
+  });
+}
+
+NodeCP Join::withInputsImpl(NodeVector newInputs, Builder& builder) const {
+  return builder.make<Join>(Join::Key{
+      .left = newInputs.at(0),
+      .right = newInputs.at(1),
+      .joinType = joinType_,
+      .leftKeys = leftKeys_,
+      .rightKeys = rightKeys_,
+      .filter = filter_,
+      .nullAware = nullAware_,
+      .nullAsValue = nullAsValue_,
+      .outputColumns = outputColumns(),
+  });
+}
+
+NodeCP Window::withInputsImpl(NodeVector newInputs, Builder& builder) const {
+  return builder.make<Window>(Window::Key{
+      .input = newInputs.at(0),
+      .functions = functions_,
+      .partitionKeys = partitionKeys_,
+      .orderKeys = orderKeys_,
+      .orderTypes = orderTypes_,
+      .outputColumns = outputColumns(),
+  });
+}
+
+NodeCP TopNRowNumber::withInputsImpl(NodeVector newInputs, Builder& builder)
+    const {
+  return builder.make<TopNRowNumber>(TopNRowNumber::Key{
+      .input = newInputs.at(0),
+      .rankFunction = rankFunction_,
+      .partitionKeys = partitionKeys_,
+      .orderKeys = orderKeys_,
+      .orderTypes = orderTypes_,
+      .limit = limit_,
+      .rankColumn = rankColumn_,
+      .outputColumns = outputColumns(),
+  });
+}
+
+NodeCP Apply::withInputsImpl(NodeVector newInputs, Builder& builder) const {
+  return builder.make<Apply>(Apply::Key{
+      .input = newInputs.at(0),
+      .body = newInputs.at(1),
+      .correlationColumns = correlationColumns_,
+      .kind = kind_,
+      .filter = filter_,
+      .enforceSingleRow = enforceSingleRow_,
+      .markColumn = markColumn_,
+      .inLhs = inLhs_,
+      .inBodyKey = inBodyKey_,
+      .includeMarker = includeMarker_,
+      .outputColumns = outputColumns(),
+  });
+}
+
+NodeCP EnforceSingleRow::withInputsImpl(NodeVector newInputs, Builder& builder)
+    const {
+  return builder.make<EnforceSingleRow>(EnforceSingleRow::Key{
+      .input = newInputs.at(0),
+  });
+}
+
+NodeCP AssignUniqueId::withInputsImpl(NodeVector newInputs, Builder& builder)
+    const {
+  return builder.make<AssignUniqueId>(AssignUniqueId::Key{
+      .input = newInputs.at(0),
+      .idColumn = idColumn_,
+  });
+}
+
+NodeCP EnforceDistinct::withInputsImpl(NodeVector newInputs, Builder& builder)
+    const {
+  return builder.make<EnforceDistinct>(EnforceDistinct::Key{
+      .input = newInputs.at(0),
+      .distinctKeys = distinctKeys_,
+      .errorMessage = errorMessage_,
+  });
+}
+
+NodeCP Exchange::withInputsImpl(NodeVector newInputs, Builder& builder) const {
+  return builder.make<Exchange>(Exchange::Key{
+      .input = newInputs.at(0),
+      .partitioning = partitioning_,
+  });
+}
+
+NodeCP TableWrite::withInputsImpl(NodeVector newInputs, Builder& builder)
+    const {
+  return builder.make<TableWrite>(TableWrite::Key{
+      .input = newInputs.at(0),
+      .table = table_,
+      .kind = kind_,
+      .columnExprs = columnExprs_,
+  });
 }
 
 #define V2_DEFINE_ACCEPT(NodeT)                                               \
