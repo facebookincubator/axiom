@@ -116,24 +116,24 @@ class Builder {
     return makeLiteral(velox::Variant::null(type->kind()), type);
   }
 
-  /// `Values` that emits every column of its underlying data, i.e. with
-  /// identity channels (see `Values::Key`). Pruning is done only in
-  /// PushdownAndPrunePass, which builds the narrowed channels directly.
+  /// `Values` node carrying zero rows with the given output schema.
+  /// Used to replace subtrees a rewrite proved produce no rows.
+  const Values* makeEmptyValues(ColumnVector outputColumns) {
+    auto channels = identityChannels(outputColumns.size());
+    return make<Values>({/*source=*/nullptr,
+                         /*rows=*/nullptr,
+                         std::move(outputColumns),
+                         std::move(channels)});
+  }
+
+  /// `Values` node carrying arena-folded 'rows' with the given output schema.
   const Values* makeValues(
       const logical_plan::ValuesNode* source,
       const velox::Variant* rows,
       ColumnVector outputColumns) {
-    QGVector<velox::column_index_t> channels(outputColumns.size());
-    std::iota(channels.begin(), channels.end(), 0);
+    auto channels = identityChannels(outputColumns.size());
     return make<Values>(
         {source, rows, std::move(outputColumns), std::move(channels)});
-  }
-
-  /// `Values` node carrying zero rows with the given output schema.
-  /// Used to replace subtrees a rewrite proved produce no rows.
-  const Values* makeEmptyValues(ColumnVector outputColumns) {
-    return makeValues(
-        /*source=*/nullptr, /*rows=*/nullptr, std::move(outputColumns));
   }
 
   /// Interned `Name`s for well-known functions, snapshotted from the
@@ -145,6 +145,14 @@ class Builder {
   }
 
  private:
+  // Builds identity channels `0..numColumns-1` for a `Values::Key` whose output
+  // emits every underlying data column in order.
+  static QGVector<velox::column_index_t> identityChannels(size_t numColumns) {
+    QGVector<velox::column_index_t> channels(numColumns);
+    std::iota(channels.begin(), channels.end(), 0);
+    return channels;
+  }
+
   // For a binary `Call` whose 'name' is in `reversibleFunctions_`,
   // swaps 'args' (and renames to the reverse) when `args[0]` should
   // come second per the canonical order: literal-on-right, lower-id
