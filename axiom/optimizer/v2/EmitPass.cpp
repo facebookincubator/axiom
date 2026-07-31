@@ -220,6 +220,32 @@ bool isSingleThreadedPipeline(const velox::core::PlanNodePtr& node) {
   }
 }
 
+struct AggregationParams {
+  velox::core::AggregationNode::Step step;
+  std::vector<velox::core::FieldAccessTypedExprPtr> groupingKeys;
+  std::vector<velox::core::FieldAccessTypedExprPtr> preGroupedKeys;
+  std::vector<std::string> names;
+  std::vector<velox::core::AggregationNode::Aggregate> aggregates;
+  std::vector<velox::vector_size_t> globalGroupingSets;
+  std::optional<velox::core::FieldAccessTypedExprPtr> groupId;
+  velox::core::PlanNodePtr input;
+};
+
+// Returns the grouping-set fields represented by the aggregate.
+std::pair<
+    std::vector<velox::vector_size_t>,
+    std::optional<velox::core::FieldAccessTypedExprPtr>>
+groupingSetInfo(const Aggregate& aggregate) {
+  std::vector<velox::vector_size_t> globalGroupingSets(
+      aggregate.globalGroupingSets().begin(),
+      aggregate.globalGroupingSets().end());
+  std::optional<velox::core::FieldAccessTypedExprPtr> groupId;
+  if (aggregate.groupId() != nullptr) {
+    groupId = toFieldAccess(aggregate.groupId());
+  }
+  return {std::move(globalGroupingSets), std::move(groupId)};
+}
+
 class Emitter {
  public:
   Emitter(
@@ -361,16 +387,7 @@ class Emitter {
   velox::core::PlanNodePtr emitSingleAggregation(const Aggregate& aggregate);
   velox::core::PlanNodePtr emitPartialAggregation(const Aggregate& aggregate);
   velox::core::PlanNodePtr emitFinalAggregation(const Aggregate& aggregate);
-  // Builds an AggregationNode, carrying the grouping-set default-row info
-  // (`globalGroupingSets`/`groupId`) from `aggregate` when present.
-  velox::core::PlanNodePtr makeAggregationNode(
-      velox::core::AggregationNode::Step step,
-      const Aggregate& aggregate,
-      std::vector<velox::core::FieldAccessTypedExprPtr> groupingKeys,
-      std::vector<velox::core::FieldAccessTypedExprPtr> preGroupedKeys,
-      std::vector<std::string> names,
-      std::vector<velox::core::AggregationNode::Aggregate> aggregates,
-      velox::core::PlanNodePtr input);
+  velox::core::PlanNodePtr makeAggregationNode(AggregationParams params);
   velox::core::PlanNodePtr emitGroupId(const GroupId& groupId);
   velox::core::PlanNodePtr emitMarkDistinct(const MarkDistinct& markDistinct);
   velox::core::PlanNodePtr emitJoin(const Join& join);
@@ -991,32 +1008,19 @@ velox::core::PlanNodePtr Emitter::emitAggregation(const Aggregate& aggregate) {
 }
 
 velox::core::PlanNodePtr Emitter::makeAggregationNode(
-    velox::core::AggregationNode::Step step,
-    const Aggregate& aggregate,
-    std::vector<velox::core::FieldAccessTypedExprPtr> groupingKeys,
-    std::vector<velox::core::FieldAccessTypedExprPtr> preGroupedKeys,
-    std::vector<std::string> names,
-    std::vector<velox::core::AggregationNode::Aggregate> aggregates,
-    velox::core::PlanNodePtr input) {
-  std::vector<velox::vector_size_t> globalGroupingSets(
-      aggregate.globalGroupingSets().begin(),
-      aggregate.globalGroupingSets().end());
-  std::optional<velox::core::FieldAccessTypedExprPtr> groupId;
-  if (aggregate.groupId() != nullptr) {
-    groupId = toFieldAccess(aggregate.groupId());
-  }
+    AggregationParams params) {
   return std::make_shared<velox::core::AggregationNode>(
       nextId(),
-      step,
-      std::move(groupingKeys),
-      std::move(preGroupedKeys),
-      std::move(names),
-      std::move(aggregates),
-      std::move(globalGroupingSets),
-      std::move(groupId),
+      params.step,
+      std::move(params.groupingKeys),
+      std::move(params.preGroupedKeys),
+      std::move(params.names),
+      std::move(params.aggregates),
+      std::move(params.globalGroupingSets),
+      std::move(params.groupId),
       /*ignoreNullKeys=*/false,
       /*noGroupsSpanBatches=*/false,
-      std::move(input));
+      std::move(params.input));
 }
 
 velox::core::PlanNodePtr Emitter::emitSingleAggregation(
@@ -1048,14 +1052,17 @@ velox::core::PlanNodePtr Emitter::emitSingleAggregation(
         *aggregateExpr, toTypePtr(aggregateExpr->value().type), exprEmitter_);
   });
 
-  return makeAggregationNode(
-      velox::core::AggregationNode::Step::kSingle,
-      aggregate,
-      std::move(groupingKeys),
-      std::move(preGroupedKeys),
-      std::move(names),
-      std::move(aggregates),
-      std::move(input));
+  auto [globalGroupingSets, groupId] = groupingSetInfo(aggregate);
+  return makeAggregationNode({
+      .step = velox::core::AggregationNode::Step::kSingle,
+      .groupingKeys = std::move(groupingKeys),
+      .preGroupedKeys = std::move(preGroupedKeys),
+      .names = std::move(names),
+      .aggregates = std::move(aggregates),
+      .globalGroupingSets = std::move(globalGroupingSets),
+      .groupId = std::move(groupId),
+      .input = std::move(input),
+  });
 }
 
 velox::core::PlanNodePtr Emitter::emitPartialAggregation(
@@ -1073,14 +1080,17 @@ velox::core::PlanNodePtr Emitter::emitPartialAggregation(
         exprEmitter_);
   });
 
-  return makeAggregationNode(
-      velox::core::AggregationNode::Step::kPartial,
-      aggregate,
-      std::move(groupingKeys),
-      /*preGroupedKeys=*/{},
-      std::move(names),
-      std::move(aggregates),
-      std::move(input));
+  auto [globalGroupingSets, groupId] = groupingSetInfo(aggregate);
+  return makeAggregationNode({
+      .step = velox::core::AggregationNode::Step::kPartial,
+      .groupingKeys = std::move(groupingKeys),
+      .preGroupedKeys = {},
+      .names = std::move(names),
+      .aggregates = std::move(aggregates),
+      .globalGroupingSets = std::move(globalGroupingSets),
+      .groupId = std::move(groupId),
+      .input = std::move(input),
+  });
 }
 
 velox::core::PlanNodePtr Emitter::emitFinalAggregation(
@@ -1109,14 +1119,17 @@ velox::core::PlanNodePtr Emitter::emitFinalAggregation(
         exprEmitter_);
   });
 
-  return makeAggregationNode(
-      velox::core::AggregationNode::Step::kFinal,
-      aggregate,
-      std::move(groupingKeys),
-      /*preGroupedKeys=*/{},
-      std::move(names),
-      std::move(aggregates),
-      std::move(input));
+  auto [globalGroupingSets, groupId] = groupingSetInfo(aggregate);
+  return makeAggregationNode({
+      .step = velox::core::AggregationNode::Step::kFinal,
+      .groupingKeys = std::move(groupingKeys),
+      .preGroupedKeys = {},
+      .names = std::move(names),
+      .aggregates = std::move(aggregates),
+      .globalGroupingSets = std::move(globalGroupingSets),
+      .groupId = std::move(groupId),
+      .input = std::move(input),
+  });
 }
 
 velox::core::PlanNodePtr Emitter::emitGroupId(const GroupId& groupId) {
