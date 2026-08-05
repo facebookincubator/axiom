@@ -297,10 +297,13 @@ class Optimization {
   // Plans a set operation (UNION ALL, UNION). Plans each child independently
   // using importUnionChild, combines them with UnionAll, and optionally adds
   // a distinct aggregation for UNION. Individual child shuffles are handled
-  // internally.
+  // internally. Sets 'needsShuffle' when the result does not come out
+  // copartitioned with 'distribution', meaning the caller must shuffle above
+  // the union to get what it asked for.
   PlanP makeUnionPlan(
       const MemoKey& key,
-      const std::optional<DesiredDistribution>& distribution);
+      const std::optional<DesiredDistribution>& distribution,
+      bool& needsShuffle);
 
   PlanP makeDtPlan(
       const DerivedTable& dt,
