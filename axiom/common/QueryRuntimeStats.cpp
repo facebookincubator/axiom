@@ -93,6 +93,18 @@ void QueryRuntimeStats::merge(
   mergeRuntimeMetric(metrics_, std::string(name), metric);
 }
 
+void QueryRuntimeStats::setRuntimeStat(
+    std::string_view name,
+    const velox::RuntimeMetric& metric) {
+  metrics_.insert_or_assign(std::string(name), metric);
+}
+
+void QueryRuntimeStats::addRuntimeStat(
+    std::string_view name,
+    const velox::RuntimeCounter& counter) {
+  merge(name, velox::RuntimeMetric(counter.value, counter.unit));
+}
+
 std::unordered_map<std::string, velox::RuntimeMetric> QueryRuntimeStats::toMap()
     const {
   std::unordered_map<std::string, velox::RuntimeMetric> result;

@@ -72,6 +72,47 @@ TEST(QueryRuntimeStatsTest, merge) {
   EXPECT_EQ(metric.max, 500);
 }
 
+TEST(QueryRuntimeStatsTest, setRuntimeStat) {
+  QueryRuntimeStats stats;
+  velox::BaseRuntimeStatWriter& writer = stats;
+
+  velox::RuntimeMetric first(100, velox::RuntimeCounter::Unit::kNanos);
+  writer.setRuntimeStat(QueryRuntimeStats::kOptimizeWallNanos, first);
+
+  velox::RuntimeMetric second(500, velox::RuntimeCounter::Unit::kNanos);
+  second.addValue(300);
+  writer.setRuntimeStat(QueryRuntimeStats::kOptimizeWallNanos, second);
+
+  // The second value replaces the first rather than accumulating.
+  auto map = stats.toMap();
+  auto& metric = map.at(std::string(QueryRuntimeStats::kOptimizeWallNanos));
+  EXPECT_EQ(metric.sum, 800);
+  EXPECT_EQ(metric.count, 2);
+  EXPECT_EQ(metric.min, 300);
+  EXPECT_EQ(metric.max, 500);
+  EXPECT_EQ(metric.unit, velox::RuntimeCounter::Unit::kNanos);
+}
+
+TEST(QueryRuntimeStatsTest, addRuntimeStat) {
+  QueryRuntimeStats stats;
+  velox::BaseRuntimeStatWriter& writer = stats;
+
+  writer.addRuntimeStat(
+      QueryRuntimeStats::kGetSplitsCount,
+      velox::RuntimeCounter(7, velox::RuntimeCounter::Unit::kNone));
+  writer.addRuntimeStat(
+      QueryRuntimeStats::kGetSplitsCount,
+      velox::RuntimeCounter(3, velox::RuntimeCounter::Unit::kNone));
+
+  auto map = stats.toMap();
+  auto& metric = map.at(std::string(QueryRuntimeStats::kGetSplitsCount));
+  EXPECT_EQ(metric.sum, 10);
+  EXPECT_EQ(metric.count, 2);
+  EXPECT_EQ(metric.min, 3);
+  EXPECT_EQ(metric.max, 7);
+  EXPECT_EQ(metric.unit, velox::RuntimeCounter::Unit::kNone);
+}
+
 TEST(QueryRuntimeStatsTest, toDynamic) {
   QueryRuntimeStats stats;
   stats.recordTiming(

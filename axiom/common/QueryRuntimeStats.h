@@ -33,8 +33,9 @@ namespace facebook::axiom {
 /// Accumulates runtime metrics from Axiom's query pipeline (parser, optimizer,
 /// split manager, runner). Each metric is a velox::RuntimeMetric with
 /// sum/count/min/max. Thread-safe — multiple pipeline stages may record
-/// concurrently.
-class QueryRuntimeStats {
+/// concurrently. Implements velox::BaseRuntimeStatWriter so instrumented Velox
+/// components (e.g. velox::TrackedExecutor) can report directly into it.
+class QueryRuntimeStats : public velox::BaseRuntimeStatWriter {
  public:
   // Parser.
   static constexpr std::string_view kParseWallNanos{"axiom-parseWallNanos"};
@@ -98,6 +99,15 @@ class QueryRuntimeStats {
 
   /// Merges a pre-aggregated metric into this recorder.
   void merge(std::string_view name, const velox::RuntimeMetric& metric);
+
+  /// Sets 'metric' under 'name', replacing any existing value.
+  void setRuntimeStat(std::string_view name, const velox::RuntimeMetric& metric)
+      override;
+
+  /// Adds 'counter' as one sample under 'name', accumulating across calls.
+  void addRuntimeStat(
+      std::string_view name,
+      const velox::RuntimeCounter& counter) override;
 
   /// Returns a snapshot of all recorded metrics.
   std::unordered_map<std::string, velox::RuntimeMetric> toMap() const;
