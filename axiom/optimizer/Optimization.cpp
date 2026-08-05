@@ -3611,7 +3611,7 @@ PlanP Optimization::makePlan(
   needsShuffle = false;
   if (key.firstTable->is(PlanType::kDerivedTableNode) &&
       key.firstTable->as<DerivedTable>()->isUnion()) {
-    return makeUnionPlan(key, distribution);
+    return makeUnionPlan(key, distribution, needsShuffle);
   }
   return makeDtPlan(dt, key, distribution, existsFanout, needsShuffle);
 }
@@ -3627,7 +3627,9 @@ PlanP Optimization::makePlan(
 
 PlanP Optimization::makeUnionPlan(
     const MemoKey& key,
-    const std::optional<DesiredDistribution>& distribution) {
+    const std::optional<DesiredDistribution>& distribution,
+    bool& needsShuffle) {
+  needsShuffle = false;
   const auto* setDt = key.firstTable->as<DerivedTable>();
 
   RelationOpPtrVector inputs;
@@ -3658,7 +3660,7 @@ PlanP Optimization::makeUnionPlan(
     if (inputDt->isUnion()) {
       // Nested union (e.g., UNION ALL of UNION ALL).
       // TODO: Flatten nested unions in ToGraph.
-      inputPlan = makeUnionPlan(inputKey, distribution);
+      inputPlan = makeUnionPlan(inputKey, distribution, inputShuffle);
     } else {
       PlanSet* plans = memo_.find(inputKey);
       if (plans == nullptr) {
@@ -3693,7 +3695,17 @@ PlanP Optimization::makeUnionPlan(
     if (setDt->aggregation) {
       addAggregation(setDt, result, inputStates[0]);
     }
-    return unionPlan(inputStates, result);
+    auto plan = unionPlan(inputStates, result);
+    // Tell the caller whether the union came out copartitioned with what it
+    // asked for. It does not when the request was dropped below, and it can
+    // also miss when the legs that needed no shuffle were merely
+    // copartitioned rather than identically partitioned, leaving the union
+    // with no common distribution. Either way the caller owns the shuffle;
+    // without this a hash join would build on an unpartitioned input and
+    // silently drop rows.
+    needsShuffle = !isSingleWorker_ && distribution.has_value() &&
+        !plan->op->distribution().isCopartitionedWith(*distribution);
+    return plan;
   };
 
   if (isSingleWorker_) {
@@ -3706,14 +3718,9 @@ PlanP Optimization::makeUnionPlan(
   // naturally-matching inputs unnecessarily); UNION ALL can shuffle only
   // the inputs that need it. So if at least one input already produces the
   // desired distribution natively, honor the request and shuffle only the
-  // inputs that don't. Otherwise drop the request — the parent's blanket
-  // shuffle is no worse than per-input shuffles in that case.
-  //
-  // Wrinkle: this assumes the parent commits to the desired distribution it
-  // requested. A parent that later switches strategy (e.g., a hash join that
-  // requests hash(K) for the build, then chooses to broadcast it instead)
-  // leaves the per-input shuffles in place even though they're now wasted.
-  // Such mis-specification is the parent's bug to fix, not UNION ALL's.
+  // inputs that don't. Otherwise drop the request and leave the blanket
+  // shuffle to the parent, which finishUnionPlan asks for by reporting
+  // needsShuffle.
   std::optional<DesiredDistribution> effectiveDistribution = distribution;
   if (effectiveDistribution.has_value() &&
       std::ranges::all_of(inputNeedsShuffle, std::identity{})) {
