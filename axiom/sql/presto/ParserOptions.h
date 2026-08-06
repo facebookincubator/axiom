@@ -40,7 +40,7 @@ struct ParserOptions : public facebook::velox::config::ConfigProvider {
 
   static constexpr bool kFriendlySqlDefault = true;
   static constexpr bool kParseDecimalLiteralAsDoubleDefault = true;
-  static constexpr uint32_t kMaxExpressionDepthDefault = 512;
+  static constexpr uint32_t kMaxExpressionDepthDefault = 1024;
   static constexpr uint32_t kMaxExpressionWidthDefault = 100'000;
   static constexpr uint32_t kMaxSubqueryDepthDefault = 1024;
 
@@ -60,10 +60,10 @@ struct ParserOptions : public facebook::velox::config::ConfigProvider {
   /// property.
   bool parseDecimalLiteralAsDouble{kParseDecimalLiteralAsDoubleDefault};
 
-  /// Maximum nesting depth of an expression tree; deeper expressions are
-  /// rejected to avoid a stack overflow. Depth is how deeply operators nest,
-  /// e.g. a - (b - (c - d)) is three deep. Distinct from maxExpressionWidth,
-  /// which instead bounds the operand count of a single flattened AND/OR node.
+  /// Maximum expression nesting depth; deeper expressions are rejected to avoid
+  /// a stack overflow. Counted in grammar rules while parsing and in recursion
+  /// depth after, so one level of parentheses costs several. Distinct from
+  /// maxExpressionWidth, which bounds the operand count of one flattened node.
   uint32_t maxExpressionDepth{kMaxExpressionDepthDefault};
 
   /// Maximum number of operands in a single flattened AND/OR chain; wider
