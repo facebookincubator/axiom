@@ -131,7 +131,6 @@ class SubfieldTest : public HiveQueriesTestBase,
         break;
       default:
         FAIL();
-        break;
     }
     optimizerOptions_.traceFlags = FLAGS_optimizer_trace;
   }
