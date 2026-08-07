@@ -80,9 +80,8 @@ using connector::ConnectorMetadataRegistry;
 
 namespace {
 
-// Times a phase: writes wall-clock micros to 'wallMicros', and if
-// 'runtimeStats' is non-null, also records wall and CPU durations under the
-// given keys.
+// Times a synchronous phase and records its wall and calling-thread CPU
+// durations.
 class PhaseTimer {
  public:
   PhaseTimer(
@@ -102,10 +101,10 @@ class PhaseTimer {
     // read it below.
     timer_.reset();
     if (runtimeStats_ != nullptr) {
-      const auto cpuNanos = velox::process::threadCpuNanos() - cpuStartNanos_;
       runtimeStats_->recordTiming(
           wallKey_, std::chrono::microseconds(wallMicros_));
-      runtimeStats_->recordTiming(cpuKey_, std::chrono::nanoseconds(cpuNanos));
+      const auto cpuNs = velox::process::threadCpuNanos() - cpuStartNanos_;
+      runtimeStats_->recordTiming(cpuKey_, std::chrono::nanoseconds(cpuNs));
     }
   }
 
@@ -1338,6 +1337,23 @@ std::string printPlanWithStats(
       });
 }
 
+// Sums finalized Velox driver CPU time across all runner tasks.
+int64_t executionCpuNanos(const runner::Runner& runner) {
+  int64_t cpuNs{0};
+  for (const auto& taskStats : runner.stats()) {
+    for (const auto& pipelineStats : taskStats.pipelineStats) {
+      for (const auto& operatorStats : pipelineStats.operatorStats) {
+        const auto it = operatorStats.runtimeStats.find(
+            velox::exec::OperatorStats::kDriverCpuTime);
+        if (it != operatorStats.runtimeStats.end()) {
+          cpuNs += it->second.sum;
+        }
+      }
+    }
+  }
+  return cpuNs;
+}
+
 // Drives the runner under the awaiting scope's cancellation and an optional
 // deadline, yielding each result batch as it is produced and reaping via
 // co_close() once the stream ends. The deadline (folly::FutureTimeout) becomes
@@ -1345,82 +1361,101 @@ std::string printPlanWithStats(
 // co_run() to normalize; a genuine execution error propagates as itself.
 // A consumer that stops early must cancel via the token; silently destroying
 // this generator mid-stream skips the shielded reap and leaks the Velox task.
+// Finalized wall and Velox task CPU timings are recorded after the reap.
 folly::coro::AsyncGenerator<velox::RowVectorPtr> co_drainQuery(
     runner::Runner& runner,
-    int64_t timeoutMicros) {
+    int64_t timeoutMicros,
+    uint64_t& wallMicros,
+    QueryRuntimeStats* runtimeStats) {
   std::exception_ptr error;
   bool cancelled{false};
   bool timedOut{false};
-  // generator is kept in this coroutine's frame so its AsyncGenerator producer
-  // (execute()) outlives the per-batch timeout and the shielded co_close()
-  // reap. External cancellation flows in ambiently through the awaiting scope's
-  // token.
-  auto generator = runner.execute();
-  // Absolute deadline for the whole drain: folly::coro::timeout can't wrap a
-  // loop that co_yields, so each next() is bounded by the time remaining, which
-  // still caps total execution time (matching the pre-streaming behavior).
-  std::optional<std::chrono::steady_clock::time_point> deadline;
-  if (timeoutMicros > 0) {
-    deadline = std::chrono::steady_clock::now() +
-        std::chrono::microseconds(timeoutMicros);
-  }
-  try {
-    while (true) {
-      if (deadline) {
-        // folly::coro::timeout -> folly::futures::sleep takes microseconds, so
-        // round the remaining time up to microseconds once and reuse it for the
-        // guard and the pull. ceil (not duration_cast) avoids truncating a
-        // positive sub-microsecond remainder to zero, which would time out
-        // early.
-        const auto remaining = std::chrono::ceil<std::chrono::microseconds>(
-            *deadline - std::chrono::steady_clock::now());
-        if (remaining.count() <= 0) {
-          timedOut = true;
-          break;
+  {
+    velox::MicrosecondTimer wallTimer(&wallMicros);
+    // Keeps the generator in this coroutine's frame so its AsyncGenerator
+    // producer (execute()) outlives the per-batch timeout and the shielded
+    // co_close() reap. External cancellation flows in ambiently through the
+    // awaiting scope's token.
+    auto generator = runner.execute();
+    // Absolute deadline for the whole drain: folly::coro::timeout can't wrap a
+    // loop that co_yields, so each next() is bounded by the time remaining,
+    // which still caps total execution time (matching the pre-streaming
+    // behavior).
+    std::optional<std::chrono::steady_clock::time_point> deadline;
+    if (timeoutMicros > 0) {
+      deadline = std::chrono::steady_clock::now() +
+          std::chrono::microseconds(timeoutMicros);
+    }
+    try {
+      while (true) {
+        if (deadline) {
+          // folly::coro::timeout -> folly::futures::sleep takes microseconds,
+          // so round the remaining time up to microseconds once and reuse it
+          // for the guard and the pull. ceil (not duration_cast) avoids
+          // truncating a positive sub-microsecond remainder to zero, which
+          // would time out early.
+          const auto remaining = std::chrono::ceil<std::chrono::microseconds>(
+              *deadline - std::chrono::steady_clock::now());
+          if (remaining.count() <= 0) {
+            timedOut = true;
+            break;
+          }
+          auto batch =
+              co_await folly::coro::timeout(generator.next(), remaining);
+          if (!batch) {
+            break;
+          }
+          co_yield std::move(*batch);
+        } else {
+          auto batch = co_await generator.next();
+          if (!batch) {
+            break;
+          }
+          co_yield std::move(*batch);
         }
-        auto batch = co_await folly::coro::timeout(generator.next(), remaining);
-        if (!batch) {
-          break;
-        }
-        co_yield std::move(*batch);
+      }
+    } catch (const folly::FutureTimeout&) {
+      timedOut = true;
+    } catch (const folly::OperationCancelled&) {
+      cancelled = true;
+    } catch (...) {
+      // Any failure (std::exception or not) still hits the shielded reap below,
+      // so capture it and follow the error path.
+      error = std::current_exception();
+    }
+    // Reap regardless, shielded from the caller's cancellation so a
+    // cancelled scope still winds the run down. A reap failure must not
+    // mask the original stop reason: if the drain already timed out,
+    // cancelled, or failed, keep that and let the reap error be secondary.
+    try {
+      co_await folly::coro::co_withCancellation(
+          folly::CancellationToken{}, runner.co_close());
+    } catch (const std::exception& e) {
+      if (!timedOut && !cancelled && !error) {
+        error = std::current_exception();
       } else {
-        auto batch = co_await generator.next();
-        if (!batch) {
-          break;
-        }
-        co_yield std::move(*batch);
+        LOG(WARNING) << "co_close() failed during reap, surfacing the "
+                        "original stop reason instead: "
+                     << e.what();
+      }
+    } catch (...) {
+      // A non-std exception must not mask the original stop reason either.
+      if (!timedOut && !cancelled && !error) {
+        error = std::current_exception();
+      } else {
+        LOG(WARNING) << "co_close() failed during reap with a non-standard "
+                        "exception, surfacing the original stop reason instead";
       }
     }
-  } catch (const folly::FutureTimeout&) {
-    timedOut = true;
-  } catch (const folly::OperationCancelled&) {
-    cancelled = true;
-  } catch (...) {
-    // Any failure (std::exception or not) still hits the shielded reap below,
-    // so capture it and follow the error path.
-    error = std::current_exception();
   }
-  // Reap regardless, shielded from the caller's cancellation so a
-  // cancelled scope still winds the run down. A reap failure must not
-  // mask the original stop reason: if the drain already timed out,
-  // cancelled, or failed, keep that and let the reap error be secondary.
-  try {
-    co_await folly::coro::co_withCancellation(
-        folly::CancellationToken{}, runner.co_close());
-  } catch (const std::exception& e) {
-    if (!timedOut && !cancelled && !error) {
-      throw;
-    }
-    LOG(WARNING) << "co_close() failed during reap, surfacing the "
-                    "original stop reason instead: "
-                 << e.what();
-  } catch (...) {
-    // A non-std exception must not mask the original stop reason either.
-    if (!timedOut && !cancelled && !error) {
-      throw;
-    }
-    LOG(WARNING) << "co_close() failed during reap with a non-standard "
-                    "exception, surfacing the original stop reason instead";
+
+  if (runtimeStats != nullptr) {
+    runtimeStats->recordTiming(
+        QueryRuntimeStats::kExecuteWallNanos,
+        std::chrono::microseconds(wallMicros));
+    runtimeStats->recordTiming(
+        QueryRuntimeStats::kExecuteCpuNanos,
+        std::chrono::nanoseconds(executionCpuNanos(runner)));
   }
   if (timedOut) {
     VELOX_USER_FAIL(
@@ -1499,16 +1534,12 @@ folly::coro::Task<std::string> SqlQueryRunner::co_runExplainAnalyze(
       runtimeStats ? *runtimeStats : noopRuntimeStats_);
 
   {
-    PhaseTimer phaseTimer(
-        timing.execute,
-        runtimeStats.get(),
-        QueryRuntimeStats::kExecuteWallNanos,
-        QueryRuntimeStats::kExecuteCpuNanos);
     auto progress =
         startProgressReporter(*runner, queryCtx->queryId(), options);
     // Executed for its runtime stats (printed below); the result batches are
     // not used, so drain and discard them.
-    auto generator = co_drainQuery(*runner, options.timeoutMicros);
+    auto generator = co_drainQuery(
+        *runner, options.timeoutMicros, timing.execute, runtimeStats.get());
     while (co_await generator.next()) {
     }
   }
@@ -1765,14 +1796,10 @@ SqlQueryRunner::co_runLogicalPlan(
       runtimeStats ? *runtimeStats : noopRuntimeStats_);
 
   {
-    PhaseTimer phaseTimer(
-        timing.execute,
-        runtimeStats.get(),
-        QueryRuntimeStats::kExecuteWallNanos,
-        QueryRuntimeStats::kExecuteCpuNanos);
     auto progress =
         startProgressReporter(*runner, queryCtx->queryId(), options);
-    auto generator = co_drainQuery(*runner, options.timeoutMicros);
+    auto generator = co_drainQuery(
+        *runner, options.timeoutMicros, timing.execute, runtimeStats.get());
     while (auto batch = co_await generator.next()) {
       co_yield std::move(*batch);
     }

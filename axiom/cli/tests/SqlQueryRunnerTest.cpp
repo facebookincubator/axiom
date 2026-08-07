@@ -605,6 +605,40 @@ TEST_F(SqlQueryRunnerTest, completionCallbackReceivesTiming) {
           captured.timing.execute);
 }
 
+TEST_F(SqlQueryRunnerTest, executionCpuTimingUsesVeloxTaskStats) {
+  constexpr int64_t kNumRows = 100'000;
+  testConnector_->addTable("t", ROW("c", BIGINT()))
+      ->addData(makeRowVector({makeFlatVector<int64_t>(
+          kNumRows, [](auto row) { return static_cast<int64_t>(row); })}));
+
+  std::optional<runner::QueryProgress> finalProgress;
+  QueryCompletionInfo completion;
+  SqlQueryRunner::RunOptions options;
+  options.numWorkers = 1;
+  options.numDrivers = 1;
+  options.onProgress = [&](const runner::QueryProgress& progress) {
+    if (progress.stats.state == runner::ExecutionState::kFinished) {
+      finalProgress = progress;
+    }
+  };
+  options.onComplete = [&](const QueryCompletionInfo& info) {
+    completion = info;
+  };
+
+  runner_->run("SELECT sum(c) FROM t", options);
+
+  ASSERT_TRUE(finalProgress.has_value());
+  ASSERT_NE(completion.runtimeStats, nullptr);
+  const auto runtimeStats = completion.runtimeStats->toMap();
+  const auto executeCpuMetric = runtimeStats.find(
+      std::string(facebook::axiom::QueryRuntimeStats::kExecuteCpuNanos));
+  ASSERT_NE(executeCpuMetric, runtimeStats.end());
+
+  const auto progressCpuNanos = finalProgress->stats.cpuTimeMicros * 1'000;
+  EXPECT_GT(progressCpuNanos, 0);
+  EXPECT_GE(executeCpuMetric->second.sum, progressCpuNanos);
+}
+
 TEST_F(SqlQueryRunnerTest, startCallbackFiredBeforeCompletion) {
   std::string startQueryId;
   std::string completionQueryId;
