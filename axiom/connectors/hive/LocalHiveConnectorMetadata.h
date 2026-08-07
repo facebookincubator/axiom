@@ -125,8 +125,8 @@ class LocalHiveTableLayout : public HiveTableLayout {
             sortOrder,
             std::move(lookupKeys),
             std::move(hivePartitionColumns),
-            fileFormat),
-        hiveMetadataConfig_(std::move(hiveMetadataConfig)),
+            fileFormat,
+            std::move(hiveMetadataConfig)),
         serdeParameters_(std::move(serdeParameters)) {}
 
   bool supportsSampling() const override {
@@ -195,8 +195,6 @@ class LocalHiveTableLayout : public HiveTableLayout {
       velox::connector::ConnectorTableHandlePtr tableHandle) const override;
 
  private:
-  // Configuration for local Hive metadata.
-  std::shared_ptr<HiveMetadataConfig> hiveMetadataConfig_;
   std::vector<std::unique_ptr<const FileInfo>> files_;
   std::vector<std::unique_ptr<const FileInfo>> ownedFiles_;
   // Per-partition (or per-table for unpartitioned) write-time stats loaded

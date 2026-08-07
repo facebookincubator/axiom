@@ -16,7 +16,10 @@
 
 #pragma once
 
+#include <memory>
 #include <string>
+
+#include "axiom/connectors/ConnectorSession.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::config {
@@ -45,6 +48,11 @@ class HiveMetadataConfig {
   std::string localDataPath() const;
 
   std::string localFileFormat() const;
+
+  /// Applies the session override when present, otherwise the connector
+  /// setting.
+  bool readTimestampPartitionValueAsLocalTime(
+      const ConnectorSessionPtr& session) const;
 
   /// HiveMetadataConfig may be initialized from a base config which also
   /// contains execution config defined in velox/connectors/hive/HiveConfig.h,

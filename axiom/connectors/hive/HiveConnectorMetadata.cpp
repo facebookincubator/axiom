@@ -16,10 +16,8 @@
 
 #include "axiom/connectors/hive/HiveConnectorMetadata.h"
 
-#include <folly/Conv.h>
 #include <algorithm>
 #include <utility>
-#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
@@ -197,7 +195,8 @@ HiveTableLayout::HiveTableLayout(
     const std::vector<SortOrder>& sortOrder,
     std::vector<const Column*> lookupKeys,
     std::vector<const Column*> hivePartitionedByColumns,
-    velox::dwio::common::FileFormat fileFormat)
+    velox::dwio::common::FileFormat fileFormat,
+    std::shared_ptr<const HiveMetadataConfig> hiveMetadataConfig)
     : TableLayout(
           label,
           table,
@@ -209,6 +208,7 @@ HiveTableLayout::HiveTableLayout(
           std::move(lookupKeys),
           /*supportsScan=*/true),
       fileFormat_(fileFormat),
+      hiveMetadataConfig_(std::move(hiveMetadataConfig)),
       hivePartitionColumns_(std::move(hivePartitionedByColumns)),
       numBuckets_(numPartitions),
       partitionType_{
@@ -218,29 +218,70 @@ HiveTableLayout::HiveTableLayout(
                     extractPartitionKeyTypes(partitionedByColumns))
               : nullptr} {
   VELOX_CHECK_EQ(sortedByColumns.size(), sortOrder.size());
+  VELOX_CHECK_NOT_NULL(hiveMetadataConfig_);
 }
 
-// static
-velox::Variant HiveTableLayout::partitionValueToVariant(
+HivePartitionValueConverter::HivePartitionValueConverter(
+    TimestampMode timestampMode)
+    : timestampMode_(timestampMode) {}
+
+velox::Variant HivePartitionValueConverter::toVariant(
     std::string_view value,
-    const velox::Type& type) {
-  switch (type.kind()) {
-    case velox::TypeKind::BOOLEAN:
-      return velox::Variant(folly::to<bool>(value));
-    case velox::TypeKind::TINYINT:
-      return velox::Variant(folly::to<int8_t>(value));
-    case velox::TypeKind::SMALLINT:
-      return velox::Variant(folly::to<int16_t>(value));
-    case velox::TypeKind::INTEGER:
-      return velox::Variant(folly::to<int32_t>(value));
-    case velox::TypeKind::BIGINT:
-      return velox::Variant(folly::to<int64_t>(value));
-    case velox::TypeKind::VARCHAR:
-      return velox::Variant(std::string(value));
-    default:
-      VELOX_UNREACHABLE(
-          "Unsupported partition column type: {}", type.toString());
+    const velox::Type& type) const {
+  return velox::connector::hive::partitionValueFromString(
+      value,
+      type,
+      timestampMode_,
+      velox::connector::hive::DateMode::kDateString);
+}
+
+bool HivePartitionValueConverter::matchesFilter(
+    std::string_view value,
+    const velox::Type& type,
+    const velox::common::Filter& filter) const {
+  return velox::connector::hive::partitionValueMatchesFilter(
+      value,
+      type,
+      timestampMode_,
+      velox::connector::hive::DateMode::kDateString,
+      filter);
+}
+
+std::optional<std::string>
+HivePartitionValueConverter::timestampToPartitionValue(
+    velox::Timestamp value,
+    const velox::Type& type) const {
+  VELOX_CHECK_EQ(type.kind(), velox::TypeKind::TIMESTAMP);
+  if (type.equivalent(*velox::TIMESTAMP()) &&
+      timestampMode_ == TimestampMode::kLocalTime) {
+    if (value == velox::Timestamp::min() || value == velox::Timestamp::max()) {
+      return std::nullopt;
+    }
+    const auto original = value;
+    value.toTimezone(velox::Timestamp::defaultTimezone());
+    auto roundTrip = value;
+    roundTrip.toGMT(velox::Timestamp::defaultTimezone());
+    if (roundTrip != original) {
+      return std::nullopt;
+    }
   }
+  static const velox::TimestampToStringOptions kOptions{
+      .precision = velox::TimestampPrecision::kNanoseconds,
+      .skipTrailingZeros = true,
+      .zeroPaddingYear = true,
+      .dateTimeSeparator = ' ',
+  };
+  return value.toString(kOptions);
+}
+
+HivePartitionValueConverter HiveTableLayout::partitionValueConverter(
+    const ConnectorSessionPtr& session) const {
+  const bool readTimestampAsLocalTime =
+      hiveMetadataConfig_->readTimestampPartitionValueAsLocalTime(session);
+  return HivePartitionValueConverter(
+      readTimestampAsLocalTime
+          ? HivePartitionValueConverter::TimestampMode::kLocalTime
+          : HivePartitionValueConverter::TimestampMode::kUtc);
 }
 
 namespace {
