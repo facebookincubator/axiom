@@ -17,9 +17,11 @@
 #pragma once
 
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "folly/CppAttributes.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/hive/HivePartitionValue.h"
 #include "velox/dwio/common/Options.h"
 
 namespace facebook::axiom::connector::hive {
@@ -119,6 +121,41 @@ class HiveTable : public Table {
   std::vector<std::string> ioColumnPriority() const override;
 };
 
+/// Converts Hive partition values using one timestamp interpretation.
+///
+/// HivePartitionValueConverter converter(
+///     HivePartitionValueConverter::TimestampMode::kLocalTime);
+/// auto value = converter.toVariant(
+///     "2020-01-01 12:34:56", *velox::TIMESTAMP());
+class HivePartitionValueConverter {
+ public:
+  using TimestampMode = velox::connector::hive::TimestampMode;
+
+  /// Uses 'timestampMode' for plain TIMESTAMP values.
+  explicit HivePartitionValueConverter(TimestampMode timestampMode);
+
+  /// Converts a non-null partition string to a typed value.
+  velox::Variant toVariant(std::string_view value, const velox::Type& type)
+      const;
+
+  /// Tests 'filter' against the converted value of a non-null partition
+  /// string.
+  bool matchesFilter(
+      std::string_view value,
+      const velox::Type& type,
+      const velox::common::Filter& filter) const;
+
+  /// Formats a timestamp for Hive filtering, or returns nullopt when a
+  /// local-time value cannot be serialized safely.
+  std::optional<std::string> timestampToPartitionValue(
+      velox::Timestamp value,
+      const velox::Type& type) const;
+
+ private:
+  // Controls whether plain TIMESTAMP values use local or UTC semantics.
+  const TimestampMode timestampMode_;
+};
+
 /// Describes a Hive table layout. Adds a file format and a list of
 /// Hive partitioning columns and an optional bucket count to the base
 /// TableLayout. The partitioning in TableLayout referes to bucketing.
@@ -146,7 +183,8 @@ class HiveTableLayout : public TableLayout {
       const std::vector<SortOrder>& sortOrder,
       std::vector<const Column*> lookupKeys,
       std::vector<const Column*> hivePartitionedByColumns,
-      velox::dwio::common::FileFormat fileFormat);
+      velox::dwio::common::FileFormat fileFormat,
+      std::shared_ptr<const HiveMetadataConfig> hiveMetadataConfig);
 
   velox::dwio::common::FileFormat fileFormat() const {
     return fileFormat_;
@@ -156,11 +194,9 @@ class HiveTableLayout : public TableLayout {
     return hivePartitionColumns_;
   }
 
-  /// Converts a Hive partition-key string to a Variant of 'type'. Fails for a
-  /// type that cannot appear as a partition key.
-  static velox::Variant partitionValueToVariant(
-      std::string_view value,
-      const velox::Type& type);
+  /// Creates a converter using the session-over-connector timestamp setting.
+  HivePartitionValueConverter partitionValueConverter(
+      const ConnectorSessionPtr& session) const;
 
   std::optional<int32_t> numBuckets() const {
     return numBuckets_;
@@ -208,6 +244,7 @@ class HiveTableLayout : public TableLayout {
       FilteredTableStats& stats) const;
 
   const velox::dwio::common::FileFormat fileFormat_;
+  const std::shared_ptr<const HiveMetadataConfig> hiveMetadataConfig_;
   const std::vector<const Column*> hivePartitionColumns_;
   const std::optional<int32_t> numBuckets_;
   const std::shared_ptr<const HivePartitionType> partitionType_;

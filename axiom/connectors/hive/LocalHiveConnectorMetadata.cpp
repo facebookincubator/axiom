@@ -30,6 +30,7 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/HivePartitionName.h"
+#include "velox/dwio/catalog/fbhive/FileUtils.h"
 #include "velox/expression/Expr.h"
 
 namespace facebook::axiom::connector::hive {
@@ -147,34 +148,6 @@ std::vector<const FileInfo*> filterFilesByTableHandle(
   return selectedFiles;
 }
 
-// Tests a partition key value against a filter. 'value' is the string from the
-// directory name (e.g. "2" from "k=2"). 'type' determines how to convert the
-// string before testing.
-bool testPartitionValue(
-    const velox::common::Filter& filter,
-    const std::optional<std::string>& value,
-    const velox::Type& type) {
-  if (!value.has_value()) {
-    return filter.testNull();
-  }
-
-  switch (type.kind()) {
-    case velox::TypeKind::BOOLEAN:
-      return filter.testBool(folly::to<bool>(value.value()));
-    case velox::TypeKind::TINYINT:
-    case velox::TypeKind::SMALLINT:
-    case velox::TypeKind::INTEGER:
-    case velox::TypeKind::BIGINT:
-      return filter.testInt64(folly::to<int64_t>(value.value()));
-    case velox::TypeKind::VARCHAR:
-      return filter.testBytes(
-          value.value().c_str(), static_cast<int32_t>(value.value().size()));
-    default:
-      VELOX_UNREACHABLE(
-          "Unsupported partition column type: {}", type.toString());
-  }
-}
-
 // A single-column filter over a partition key, read from the table handle.
 struct PartitionFilter {
   std::string columnName;
@@ -182,33 +155,55 @@ struct PartitionFilter {
   const Column* column;
 };
 
+enum class MissingPartitionKeyPolicy {
+  kDoesNotMatch,
+  kFail,
+};
+
+// Tests all partition filters. A missing key either rejects the partition or
+// fails according to 'missingKeyPolicy'.
+bool partitionMatchesFilters(
+    const PartitionStats& partition,
+    const std::vector<PartitionFilter>& partitionFilters,
+    const HivePartitionValueConverter& converter,
+    MissingPartitionKeyPolicy missingKeyPolicy) {
+  for (const auto& partitionFilter : partitionFilters) {
+    VELOX_CHECK_NOT_NULL(partitionFilter.filter);
+    VELOX_CHECK_NOT_NULL(partitionFilter.column);
+    const auto it = partition.partitionKeys.find(partitionFilter.columnName);
+    if (it == partition.partitionKeys.end()) {
+      VELOX_CHECK(
+          missingKeyPolicy != MissingPartitionKeyPolicy::kFail,
+          "Partition is missing a value for partition column '{}'",
+          partitionFilter.columnName);
+      return false;
+    }
+    if (!converter.matchesFilter(
+            it->second,
+            *partitionFilter.column->type(),
+            *partitionFilter.filter)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // Estimates table stats from persisted partition-level stats. Matches
 // partitions against the partition-key filters, merges matching partitions'
 // column stats, and returns them aligned 1:1 with 'requestedColumns'.
 FilteredTableStats estimateStatsFromPartitionStats(
     const std::vector<PartitionStats>& partitionStats,
     const std::vector<PartitionFilter>& partitionFilters,
-    const std::vector<const Column*>& requestedColumns) {
+    const std::vector<const Column*>& requestedColumns,
+    const HivePartitionValueConverter& converter) {
   uint64_t totalRows{0};
   std::vector<ColumnStatistics> mergedColumnStats;
   for (const auto& partition : partitionStats) {
-    bool matched = true;
-    for (const auto& partitionFilter : partitionFilters) {
-      VELOX_CHECK_NOT_NULL(partitionFilter.column);
-      auto it = partition.partitionKeys.find(partitionFilter.columnName);
-      if (it == partition.partitionKeys.end()) {
-        matched = false;
-        break;
-      }
-      if (!testPartitionValue(
-              *partitionFilter.filter,
-              it->second,
-              *partitionFilter.column->type())) {
-        matched = false;
-        break;
-      }
-    }
-    if (!matched) {
+    if (!partitionMatchesFilters(
+            partition,
+            partitionFilters,
+            converter,
+            MissingPartitionKeyPolicy::kDoesNotMatch)) {
       continue;
     }
 
@@ -559,7 +554,7 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
 
 folly::coro::Task<std::optional<FilteredTableStats>>
 LocalHiveTableLayout::co_estimateStats(
-    ConnectorSessionPtr /*session*/,
+    ConnectorSessionPtr session,
     velox::connector::ConnectorTableHandlePtr tableHandle,
     std::vector<std::string> columns,
     const FilterSelectivityEstimator& estimator) const {
@@ -581,6 +576,8 @@ LocalHiveTableLayout::co_estimateStats(
     requestedColumns.push_back(column);
   }
 
+  const auto converter = partitionValueConverter(session);
+
   // Partition-key subfield filters drive the base estimate from partition
   // metadata; the remaining accepted filters are folded in by the shared
   // HiveTableLayout helper below.
@@ -594,14 +591,14 @@ LocalHiveTableLayout::co_estimateStats(
   }
 
   auto stats = estimateStatsFromPartitionStats(
-      partitionStats_, partitionFilters, requestedColumns);
+      partitionStats_, partitionFilters, requestedColumns, converter);
   foldNonPartitionFilterStats(*hiveHandle, estimator, stats);
   co_return stats;
 }
 
 folly::coro::Task<std::optional<std::vector<MetadataCountGroup>>>
 LocalHiveTableLayout::co_metadataCounts(
-    ConnectorSessionPtr /*session*/,
+    ConnectorSessionPtr session,
     velox::connector::ConnectorTableHandlePtr tableHandle,
     std::vector<std::string> groupingColumns,
     std::vector<std::string> columns) const {
@@ -625,6 +622,8 @@ LocalHiveTableLayout::co_metadataCounts(
     }
     groupingKeyColumns.push_back(it->second);
   }
+
+  const auto converter = partitionValueConverter(session);
 
   // The counts are exact, so every filter pushed into the handle must be
   // resolvable from partition metadata; decline otherwise. A remaining filter,
@@ -664,19 +663,11 @@ LocalHiveTableLayout::co_metadataCounts(
   std::vector<std::vector<int64_t>> nonNullCounts;
   folly::F14FastMap<std::string, size_t> groupIndex;
   for (const auto& partition : partitionStats_) {
-    bool matched = true;
-    for (const auto& partitionFilter : partitionFilters) {
-      auto it = partition.partitionKeys.find(partitionFilter.columnName);
-      if (it == partition.partitionKeys.end() ||
-          !testPartitionValue(
-              *partitionFilter.filter,
-              it->second,
-              *partitionFilter.column->type())) {
-        matched = false;
-        break;
-      }
-    }
-    if (!matched) {
+    if (!partitionMatchesFilters(
+            partition,
+            partitionFilters,
+            converter,
+            MissingPartitionKeyPolicy::kDoesNotMatch)) {
       continue;
     }
 
@@ -695,9 +686,7 @@ LocalHiveTableLayout::co_metadataCounts(
       }
       groupKey += it->second;
       groupKey += '\0';
-      keyValues.push_back(
-          HiveTableLayout::partitionValueToVariant(
-              it->second, *column->type()));
+      keyValues.push_back(converter.toVariant(it->second, *column->type()));
     }
 
     auto [it, inserted] = groupIndex.try_emplace(groupKey, groups.size());
@@ -742,6 +731,8 @@ std::unique_ptr<DiscretePredicates> LocalHiveTableLayout::discretePredicates(
     return nullptr;
   }
 
+  const auto converter = partitionValueConverter(session);
+
   std::optional<int64_t> maxPartitions;
   if (session != nullptr) {
     if (auto value = session->property(
@@ -761,30 +752,25 @@ std::unique_ptr<DiscretePredicates> LocalHiveTableLayout::discretePredicates(
     partitionColumnsByName.emplace(column->name(), column);
   }
 
+  std::vector<PartitionFilter> partitionFilters;
+  partitionFilters.reserve(subfieldFilters.size());
+  for (const auto& [subfield, filter] : subfieldFilters) {
+    const auto columnIt = partitionColumnsByName.find(subfield.baseName());
+    VELOX_CHECK(
+        columnIt != partitionColumnsByName.end(),
+        "discretePredicates got a filter on non-partition column '{}'",
+        subfield.baseName());
+    partitionFilters.push_back(
+        {subfield.baseName(), filter.get(), columnIt->second});
+  }
+
   std::vector<velox::Variant> rows;
   for (const auto& partition : partitionStats_) {
-    bool matched{true};
-    for (const auto& [subfield, filter] : subfieldFilters) {
-      auto columnIt = partitionColumnsByName.find(subfield.baseName());
-      // The listing enumerates only partition columns, so every pushed filter
-      // must be on one (guaranteed by the caller's discrete-column
-      // precondition).
-      VELOX_CHECK(
-          columnIt != partitionColumnsByName.end(),
-          "discretePredicates got a filter on non-partition column '{}'",
-          subfield.baseName());
-      auto valueIt = partition.partitionKeys.find(subfield.baseName());
-      VELOX_CHECK(
-          valueIt != partition.partitionKeys.end(),
-          "Partition is missing a value for partition column '{}'",
-          subfield.baseName());
-      if (!testPartitionValue(
-              *filter, valueIt->second, *columnIt->second->type())) {
-        matched = false;
-        break;
-      }
-    }
-    if (!matched) {
+    if (!partitionMatchesFilters(
+            partition,
+            partitionFilters,
+            converter,
+            MissingPartitionKeyPolicy::kFail)) {
       continue;
     }
 
@@ -796,9 +782,7 @@ std::unique_ptr<DiscretePredicates> LocalHiveTableLayout::discretePredicates(
           valueIt != partition.partitionKeys.end(),
           "Partition is missing a value for partition column '{}'",
           column->name());
-      values.push_back(
-          HiveTableLayout::partitionValueToVariant(
-              valueIt->second, *column->type()));
+      values.push_back(converter.toVariant(valueIt->second, *column->type()));
     }
     rows.push_back(velox::Variant::row(std::move(values)));
 
@@ -1274,7 +1258,8 @@ std::string parsePartitionValue(
       "Expected a '{}=<value>' partition directory, found: {}",
       expectedColumn,
       dirName);
-  return dirName.substr(prefix.size());
+  return velox::dwio::catalog::fbhive::FileUtils::unescapePathName(
+      dirName.substr(prefix.size()));
 }
 
 // Descends the partition directory tree one level per declared partition

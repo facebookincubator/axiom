@@ -18,9 +18,11 @@
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/type/TimestampConversion.h"
 
 #include <folly/init/Init.h>
 #include <filesystem>
@@ -116,11 +118,15 @@ class LocalHiveConnectorMetadataTest
     compareTableLayout(*getLayout(expected), *getLayout(table));
   }
 
-  static ConnectorSessionPtr makeSession() {
+  static ConnectorSessionPtr makeSession(Properties properties) {
     return std::make_shared<ConnectorSession>(
         /*queryId=*/"q-test",
         /*user=*/"u-test",
-        Properties{});
+        std::move(properties));
+  }
+
+  static ConnectorSessionPtr makeSession() {
+    return makeSession(Properties{});
   }
 
   /// Write the specified data to the table with a TableWrite operation. The
@@ -404,6 +410,146 @@ TEST_F(LocalHiveConnectorMetadataTest, createTable) {
   compareTableLayout(table, metadata_->findTable({kDefaultSchema, "test"}));
   compareTableData(
       "test", data, {{"ds", partition}}, dwio::common::FileFormat::PARQUET);
+}
+
+TEST_F(LocalHiveConnectorMetadataTest, partitionValueIsUnescaped) {
+  auto tableType = ROW({{"data", BIGINT()}, {"p", VARCHAR()}});
+  folly::F14FastMap<std::string, velox::Variant> options = {
+      {HiveWriteOptions::kPartitionedBy, velox::Variant::array({"p"})},
+      {HiveWriteOptions::kFileFormat, "parquet"},
+  };
+  auto session = makeSession();
+  auto table = metadata_->createTable(
+      session,
+      {kDefaultSchema, "escaped_partition"},
+      tableType,
+      options,
+      /*ifNotExists=*/false,
+      /*explain=*/false);
+
+  auto data = makeRowVector(
+      tableType->names(),
+      {
+          makeFlatVector<int64_t>({0, 1, 2, 3}),
+          makeConstant<std::string>("2020-01-01 12:34:56", 4),
+      });
+  writeToTable(
+      table, data, WriteKind::kCreate, dwio::common::FileFormat::PARQUET);
+
+  const auto* layout =
+      getLayout(metadata_->findTable({kDefaultSchema, "escaped_partition"}));
+  ASSERT_FALSE(layout->files().empty());
+  EXPECT_NE(layout->files()[0]->path.find("%3A"), std::string::npos);
+  EXPECT_EQ(layout->files()[0]->partitionKeys.at("p"), "2020-01-01 12:34:56");
+}
+
+TEST_F(
+    LocalHiveConnectorMetadataTest,
+    timestampPartitionFilterUsesSessionSetting) {
+  auto tableType = ROW({{"data", BIGINT()}, {"p", TIMESTAMP()}});
+  folly::F14FastMap<std::string, velox::Variant> options = {
+      {HiveWriteOptions::kPartitionedBy, velox::Variant::array({"p"})},
+      {HiveWriteOptions::kFileFormat, "parquet"},
+  };
+  auto table = metadata_->createTable(
+      makeSession(),
+      {kDefaultSchema, "timestamp_partition"},
+      tableType,
+      options,
+      /*ifNotExists=*/false,
+      /*explain=*/false);
+
+  auto unshifted =
+      velox::util::fromTimestampString(
+          "2020-01-01 12:34:56", velox::util::TimestampParseMode::kPrestoCast)
+          .value();
+  auto shifted = unshifted;
+  shifted.toGMT(velox::Timestamp::defaultTimezone());
+  auto* layoutPtr = const_cast<LocalHiveTableLayout*>(getLayout(table));
+  VELOX_CHECK_NOT_NULL(layoutPtr);
+  auto& layout = *layoutPtr;
+  layout.setPartitionStats({PartitionStats{
+      .partitionKeys = {{"p", "2020-01-01 12:34:56"}},
+      .numRows = 4,
+  }});
+  const auto* partitionColumn = layout.table().findColumn("p");
+  ASSERT_NE(partitionColumn, nullptr);
+
+  auto verify = [&](bool readAsLocalTime, const velox::Timestamp& expected) {
+    velox::common::SubfieldFilters filters;
+    filters.emplace(
+        velox::common::Subfield("p"),
+        std::make_unique<velox::common::TimestampRange>(
+            expected, expected, /*nullAllowed=*/false));
+    auto tableHandle =
+        std::make_shared<velox::connector::hive::HiveTableHandle>(
+            layout.connectorId(),
+            "timestamp_partition",
+            std::move(filters),
+            /*remainingFilter=*/nullptr,
+            /*dataColumns=*/nullptr);
+    auto session = makeSession(
+        {{velox::connector::hive::HiveConfig::
+              kReadTimestampPartitionValueAsLocalTimeSession,
+          readAsLocalTime ? "true" : "false"}});
+    auto predicates = layout.discretePredicates(
+        session, {partitionColumn}, std::move(tableHandle));
+    auto* predicateSource = predicates.get();
+    VELOX_CHECK_NOT_NULL(predicateSource);
+    auto rows = predicateSource->next();
+    ASSERT_EQ(rows.size(), 1);
+    ASSERT_EQ(rows.front().row().size(), 1);
+    EXPECT_EQ(
+        rows.front().row().front().value<velox::TypeKind::TIMESTAMP>(),
+        expected);
+  };
+
+  verify(/*readAsLocalTime=*/true, shifted);
+  verify(/*readAsLocalTime=*/false, unshifted);
+}
+
+TEST_F(LocalHiveConnectorMetadataTest, datePartitionFilter) {
+  auto tableType = ROW({{"data", BIGINT()}, {"p", DATE()}});
+  folly::F14FastMap<std::string, velox::Variant> options = {
+      {HiveWriteOptions::kPartitionedBy, velox::Variant::array({"p"})},
+      {HiveWriteOptions::kFileFormat, "parquet"},
+  };
+  auto table = metadata_->createTable(
+      makeSession(),
+      {kDefaultSchema, "date_partition"},
+      tableType,
+      options,
+      /*ifNotExists=*/false,
+      /*explain=*/false);
+
+  auto* layout = const_cast<LocalHiveTableLayout*>(getLayout(table));
+  VELOX_CHECK_NOT_NULL(layout);
+  layout->setPartitionStats(
+      {{.partitionKeys = {{"p", "2020-01-02"}}, .numRows = 1},
+       {.partitionKeys = {{"p", "2020-01-03"}}, .numRows = 1}});
+  const auto* partitionColumn = layout->table().findColumn("p");
+  ASSERT_NE(partitionColumn, nullptr);
+  const auto expected = DATE()->toDays("2020-01-02");
+
+  velox::common::SubfieldFilters filters;
+  filters.emplace(
+      velox::common::Subfield("p"),
+      std::make_unique<velox::common::BigintRange>(
+          expected, expected, /*nullAllowed=*/false));
+  auto tableHandle = std::make_shared<velox::connector::hive::HiveTableHandle>(
+      layout->connectorId(),
+      "date_partition",
+      std::move(filters),
+      /*remainingFilter=*/nullptr,
+      /*dataColumns=*/nullptr);
+  auto predicates = layout->discretePredicates(
+      makeSession(), {partitionColumn}, std::move(tableHandle));
+  auto* predicateSource = predicates.get();
+  VELOX_CHECK_NOT_NULL(predicateSource);
+  const auto rows = predicateSource->next();
+  ASSERT_EQ(rows.size(), 1);
+  EXPECT_EQ(
+      rows.front().row().front().value<velox::TypeKind::INTEGER>(), expected);
 }
 
 TEST_F(LocalHiveConnectorMetadataTest, addColumn) {
