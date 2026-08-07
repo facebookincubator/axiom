@@ -241,6 +241,13 @@ class ExprAnalyzer : public DefaultTraversalVisitor {
     return numAggregates_ > 0;
   }
 
+  // Returns true if 'expression' contains an aggregate call.
+  static bool containsAggregate(const ExpressionPtr& expression) {
+    ExprAnalyzer analyzer;
+    expression->accept(&analyzer);
+    return analyzer.hasAggregate();
+  }
+
  protected:
   void visitExistsPredicate(ExistsPredicate* node) override {
     // Aggregate function calls within a subquery do not count.
@@ -469,18 +476,27 @@ bool GroupByPlanner::tryPlanGlobalAgg(
     }
   }
 
-  // Count visible aggregates, including outer-scope aggregates in
-  // lift-candidate scalar subqueries. `ExprAnalyzer` rejects nested
-  // aggregates as a side effect of the walk.
+  // Count visible aggregates in SELECT, HAVING and ORDER BY, including
+  // outer-scope aggregates in lift-candidate scalar subqueries.
+  // `ExprAnalyzer` rejects nested aggregates as a side effect of the walk.
   bool hasAggregate{false};
+
   for (const auto& item : selectItems) {
     VELOX_CHECK(item->is(NodeType::kSingleColumn));
-    ExprAnalyzer exprAnalyzer;
-    item->as<SingleColumn>()->expression()->accept(&exprAnalyzer);
-    if (exprAnalyzer.hasAggregate()) {
-      hasAggregate = true;
+    hasAggregate |=
+        ExprAnalyzer::containsAggregate(item->as<SingleColumn>()->expression());
+  }
+
+  if (having != nullptr) {
+    hasAggregate |= ExprAnalyzer::containsAggregate(having);
+  }
+
+  if (orderBy != nullptr) {
+    for (const auto& sortItem : orderBy->sortItems()) {
+      hasAggregate |= ExprAnalyzer::containsAggregate(sortItem->sortKey());
     }
   }
+
   if (!hasAggregate) {
     return false;
   }

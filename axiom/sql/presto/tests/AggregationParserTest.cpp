@@ -947,6 +947,62 @@ TEST_F(AggregationParserTest, having) {
       "HAVING clause cannot reference column: n_nationkey");
 }
 
+// An aggregate in HAVING forms a global aggregation on its own.
+TEST_F(AggregationParserTest, havingWithoutGroupBy) {
+  testSelect(
+      "SELECT 1 FROM nation HAVING sum(n_regionkey) > 100",
+      matchScan()
+          .aggregate({}, {"sum(n_regionkey)"})
+          .filter("sum > 100::bigint")
+          .project({"1"})
+          .output());
+
+  // The aggregate carries a FILTER clause.
+  testSelect(
+      "SELECT 1 FROM nation HAVING count(*) FILTER (WHERE n_regionkey = 1) > 0",
+      matchScan()
+          .aggregate({}, {"count() FILTER (WHERE n_regionkey = 1::bigint)"})
+          .filter("count > 0::bigint")
+          .project({"1"})
+          .output());
+
+  // HAVING makes the query an aggregation, so a bare column is not selectable.
+  VELOX_ASSERT_THROW(
+      parseSql("SELECT n_name FROM nation HAVING sum(n_regionkey) > 10"),
+      "Cannot resolve column: n_name");
+}
+
+// HAVING with no aggregate anywhere filters rows like WHERE.
+TEST_F(AggregationParserTest, havingWithoutGroupByOrAggregate) {
+  testSelect(
+      "SELECT n_name FROM nation HAVING n_regionkey > 2",
+      matchScan()
+          .filter("n_regionkey > 2::bigint")
+          .project({"n_name"})
+          .output());
+
+  // The predicate applies before DISTINCT.
+  testSelect(
+      "SELECT DISTINCT n_name FROM nation HAVING n_regionkey > 2",
+      matchScan()
+          .filter("n_regionkey > 2::bigint")
+          .project({"n_name"})
+          .distinct()
+          .output());
+}
+
+// An aggregate in ORDER BY forms a global aggregation on its own.
+TEST_F(AggregationParserTest, orderByAggregateWithoutGroupBy) {
+  testSelect(
+      "SELECT 1 AS x FROM nation ORDER BY sum(n_regionkey)",
+      matchScan()
+          .aggregate({}, {"sum(n_regionkey)"})
+          .project({"1", "sum"})
+          .sort({"sum"})
+          .project({"x"})
+          .output());
+}
+
 TEST_F(AggregationParserTest, scalarOverAgg) {
   auto matcher = matchScan().aggregate().project().output();
 

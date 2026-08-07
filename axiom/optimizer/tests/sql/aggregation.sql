@@ -111,3 +111,13 @@ SELECT count(*) AS c FROM t ORDER BY c DESC
 ----
 -- Global aggregation with HAVING and ORDER BY together.
 SELECT count(*) AS c FROM t HAVING count(*) > 1 ORDER BY count(*)
+----
+-- An aggregate in HAVING forms a global aggregation on its own.
+SELECT 1 AS x FROM t HAVING sum(a) > 10
+----
+-- An aggregate in ORDER BY forms a global aggregation on its own.
+SELECT 1 AS x FROM t ORDER BY sum(a)
+----
+-- HAVING with no aggregate filters rows like WHERE; DuckDB rejects it.
+-- duckdb: SELECT a FROM t WHERE b > 140
+SELECT a FROM t HAVING b > 140

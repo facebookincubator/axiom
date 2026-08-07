@@ -1548,12 +1548,17 @@ class RelationPlanner : public AstVisitor {
         // ORDER BY over the aggregates. DISTINCT is a no-op since a global
         // aggregation without a GROUP BY produces one row.
         displayNames_.captureLastNames(selectItems);
-      } else if (distinct) {
-        addDistinctAndOrderBy(selectItems, orderBy);
       } else {
-        // Widen the projection to include any ORDER BY columns not in the
-        // SELECT list, sort, then project again using only the SELECT list.
-        addProjectAndOrderBy(selectItems, orderBy);
+        // Without an aggregation, HAVING filters rows like WHERE.
+        addFilter(node->having());
+
+        if (distinct) {
+          addDistinctAndOrderBy(selectItems, orderBy);
+        } else {
+          // Widen the projection to include any ORDER BY columns not in the
+          // SELECT list, sort, then project again using only the SELECT list.
+          addProjectAndOrderBy(selectItems, orderBy);
+        }
       }
     }
   }

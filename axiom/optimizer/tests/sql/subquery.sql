@@ -496,8 +496,9 @@ SELECT (SELECT max(t.a) + 1 FROM u WHERE u.a > 0) FROM t
 -- the body's FROM/WHERE as the EXISTS gate.
 SELECT (SELECT max(t.a) - min(t.a) FROM u WHERE u.a > 0) FROM t
 ----
--- Pure-outer aggregate inside an ORDER BY key is not yet supported.
--- error: Cannot replace inputs on AggregateCallExpr with filter
+-- Pure-outer aggregate inside an ORDER BY key is not yet supported. The
+-- aggregate makes the block a global aggregation, leaving 't.a' non-grouped.
+-- error: Cannot resolve column: a
 SELECT t.a FROM t ORDER BY (SELECT max(t.a))
 ----
 -- Multiple aggregates, each referencing an outer column.
