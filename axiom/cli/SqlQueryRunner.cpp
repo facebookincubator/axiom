@@ -561,6 +561,76 @@ std::string messageTemplateOf(const std::exception& e) {
   return "";
 }
 
+namespace {
+
+// Finalizes query telemetry for successful, cancelled, and failed executions.
+class QueryFinalizer {
+ public:
+  QueryFinalizer(
+      const SqlQueryRunner::RunOptions& options,
+      QueryCompletionInfo& completionInfo)
+      : options_{options}, completionInfo_{completionInfo} {}
+
+  // Records the output row count and completes a successful query.
+  void succeed(int64_t numOutputRows) {
+    completionInfo_.numOutputRows = numOutputRows;
+    finalize();
+  }
+
+  // Marks the query as cancelled and completes its telemetry.
+  void cancel() {
+    completionInfo_.cancelled = true;
+    finalize();
+  }
+
+  // Records a Velox failure and completes the query telemetry.
+  void fail(const velox::VeloxException& error) {
+    completionInfo_.errorInfo = ErrorInfo{
+        .message = error.what(),
+        .messageTemplate = messageTemplateOf(error),
+        .errorCode = error.errorCode(),
+        .errorSource = error.errorSource()};
+    finalize();
+  }
+
+  // Records a Presto SQL failure and completes the query telemetry.
+  void fail(const presto::PrestoSqlError& error) {
+    const auto classification = presto::classify(error.kind());
+    completionInfo_.errorInfo = ErrorInfo{
+        .message = error.what(),
+        .messageTemplate = messageTemplateOf(error),
+        .errorCode = std::string(classification.errorCode),
+        .errorSource = std::string(classification.errorSource)};
+    finalize();
+  }
+
+  // Records a failure without a structured error code or source.
+  void fail(const std::exception& error) {
+    completionInfo_.errorInfo = ErrorInfo{
+        .message = error.what(), .messageTemplate = messageTemplateOf(error)};
+    finalize();
+  }
+
+ private:
+  // Captures end-to-end timing and fires the completion callback.
+  void finalize() {
+    completionInfo_.endTime = std::chrono::system_clock::now();
+    completionInfo_.timing.total =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            completionInfo_.endTime - completionInfo_.startInfo.createTime)
+            .count();
+    onComplete(options_, completionInfo_);
+  }
+
+  // Non-owning run options held by the enclosing query coroutine.
+  const SqlQueryRunner::RunOptions& options_;
+
+  // Non-owning completion record held by the enclosing query coroutine.
+  QueryCompletionInfo& completionInfo_;
+};
+
+} // namespace
+
 SqlQueryRunner::SqlResult SqlQueryRunner::run(
     std::string_view sql,
     const RunOptions& options) {
@@ -603,15 +673,7 @@ SqlQueryRunner::co_run(std::string sql, RunOptions options) {
   completionInfo.runtimeStats = std::make_shared<QueryRuntimeStats>();
 
   onStart(runOptions, completionInfo);
-
-  auto finalize = [&]() {
-    completionInfo.endTime = std::chrono::system_clock::now();
-    completionInfo.timing.total =
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            completionInfo.endTime - completionInfo.startInfo.createTime)
-            .count();
-    onComplete(runOptions, completionInfo);
-  };
+  QueryFinalizer finalizer{runOptions, completionInfo};
 
   int64_t numOutputRows{0};
   try {
@@ -661,38 +723,22 @@ SqlQueryRunner::co_run(std::string sql, RunOptions options) {
       co_yield std::move(*chunk);
     }
 
-    completionInfo.numOutputRows = numOutputRows;
-    finalize();
+    finalizer.succeed(numOutputRows);
   } catch (const folly::OperationCancelled&) {
     // Cancellation from the awaiting scope's token (any async path -- the drain
     // or a CALL procedure) is a benign stop: record no errorInfo, mark it
     // cancelled so telemetry can tell it apart from an empty success, finalize,
     // and surface the dedicated type so the caller reports it distinctly.
-    completionInfo.cancelled = true;
-    finalize();
+    finalizer.cancel();
     throw QueryCancelledError{};
   } catch (const velox::VeloxException& e) {
-    completionInfo.errorInfo = ErrorInfo{
-        .message = e.what(),
-        .messageTemplate = messageTemplateOf(e),
-        .errorCode = e.errorCode(),
-        .errorSource = e.errorSource()};
-    finalize();
+    finalizer.fail(e);
     throw;
   } catch (const presto::PrestoSqlError& e) {
-    const auto classification = presto::classify(e.kind());
-    completionInfo.errorInfo = ErrorInfo{
-        .message = e.what(),
-        .messageTemplate = messageTemplateOf(e),
-        .errorCode = std::string(classification.errorCode),
-        .errorSource = std::string(classification.errorSource)};
-    finalize();
+    finalizer.fail(e);
     throw;
   } catch (const std::exception& e) {
-    // Non-Velox exceptions carry no error code or source.
-    completionInfo.errorInfo =
-        ErrorInfo{.message = e.what(), .messageTemplate = messageTemplateOf(e)};
-    finalize();
+    finalizer.fail(e);
     throw;
   }
 }
@@ -815,210 +861,200 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
 }
 
 folly::coro::AsyncGenerator<SqlQueryRunner::SqlResultChunk>
-SqlQueryRunner::co_runUnchecked(
+SqlQueryRunner::co_runExplainStatement(
+    const presto::ExplainStatement& explain,
+    std::string_view queryId,
+    const RunOptions& options,
+    QueryTiming& timing,
+    std::shared_ptr<QueryRuntimeStats> runtimeStats) {
+  const auto& statement = explain.statement();
+
+  logical_plan::LogicalPlanNodePtr logicalPlan;
+  std::shared_ptr<connector::SchemaResolver> schemaResolver;
+
+  if (statement->isSelect()) {
+    logicalPlan = statement->as<presto::SelectStatement>()->plan();
+  } else if (statement->isInsert()) {
+    logicalPlan = statement->as<presto::InsertStatement>()->plan();
+  } else if (statement->isCreateTableAsSelect()) {
+    const auto* ctas = statement->as<presto::CreateTableAsSelectStatement>();
+    logicalPlan = ctas->plan();
+
+    // EXPLAIN ANALYZE runs the query for real, so createTable must not
+    // be in explain mode. Regular EXPLAIN must be side-effect-free.
+    auto table = createTable(queryId, *ctas, /*explain=*/!explain.isAnalyze());
+    schemaResolver = std::make_shared<connector::SchemaResolver>(
+        connector::ConnectorMetadataRegistry::global());
+    schemaResolver->setTargetTable(
+        ctas->connectorId(), ctas->tableName(), table);
+  } else if (statement->isCreateTable()) {
+    const auto* create = statement->as<presto::CreateTableStatement>();
+    createTable(queryId, *create, /*explain=*/true);
+    co_yield SqlResultChunk{fmt::format(
+        "CREATE TABLE {}{}.{}",
+        create->ifNotExists() ? "IF NOT EXISTS " : "",
+        create->connectorId(),
+        create->tableName())};
+    co_return;
+  } else if (statement->isDropTable()) {
+    const auto* drop = statement->as<presto::DropTableStatement>();
+    if (!drop->ifExists()) {
+      auto metadata = ConnectorMetadataRegistry::get(drop->connectorId());
+      VELOX_USER_CHECK(
+          metadata->findTable(drop->tableName()),
+          "Table does not exist: {}.{}",
+          drop->connectorId(),
+          drop->tableName());
+    }
+    co_yield SqlResultChunk{fmt::format(
+        "DROP TABLE {}{}.{}",
+        drop->ifExists() ? "IF EXISTS " : "",
+        drop->connectorId(),
+        drop->tableName())};
+    co_return;
+  } else if (statement->isAddColumn()) {
+    const auto* add = statement->as<presto::AddColumnStatement>();
+    addColumn(queryId, *add, /*explain=*/true);
+    co_yield SqlResultChunk{fmt::format(
+        "ALTER TABLE {}{}.{} ADD COLUMN {}{} {}",
+        add->ifTableExists() ? "IF EXISTS " : "",
+        add->connectorId(),
+        add->tableName(),
+        add->ifNotExists() ? "IF NOT EXISTS " : "",
+        add->columnName(),
+        add->columnType()->toString())};
+    co_return;
+  } else if (statement->isCall()) {
+    // EXPLAIN must be side-effect-free: echo the resolved call without
+    // invoking the procedure.
+    const auto* call = statement->as<presto::CallStatement>();
+
+    std::vector<std::string> arguments;
+    arguments.reserve(call->arguments().size());
+    for (const auto& argument : call->arguments()) {
+      // TODO: render arguments as Presto SQL (add Expr::toSql); toString()
+      // emits debug form (e.g. array_constructor(...)), not valid SQL.
+      arguments.push_back(argument->toString());
+    }
+
+    co_yield SqlResultChunk{fmt::format(
+        "CALL {}.{}({})",
+        call->connectorId(),
+        call->procedureName(),
+        fmt::join(arguments, ", "))};
+    co_return;
+  } else {
+    VELOX_NYI("Unsupported EXPLAIN query: {}", statement->kindName());
+  }
+
+  if (explain.type() == presto::ExplainStatement::Type::kIo) {
+    co_yield SqlResultChunk{runExplainIo(
+        *statement,
+        logicalPlan,
+        options,
+        timing,
+        schemaResolver,
+        runtimeStats)};
+    co_return;
+  }
+
+  if (explain.isAnalyze()) {
+    co_yield SqlResultChunk{co_await co_runExplainAnalyze(
+        logicalPlan, options, timing, runtimeStats, schemaResolver)};
+    co_return;
+  }
+  co_yield SqlResultChunk{runExplain(
+      logicalPlan,
+      explain.type(),
+      explain.format(),
+      options,
+      timing,
+      runtimeStats,
+      schemaResolver)};
+}
+
+folly::coro::AsyncGenerator<SqlQueryRunner::SqlResultChunk>
+SqlQueryRunner::co_runPlanStatement(
     const presto::SqlStatement& sqlStatement,
+    std::string_view queryId,
     const RunOptions& options,
     QueryTiming& timing,
     std::string& planString,
     std::shared_ptr<QueryRuntimeStats> runtimeStats) {
-  const std::string queryId = options.queryId.value_or(queryIdGenerator_());
-  if (sqlStatement.isExplain()) {
-    const auto* explain = sqlStatement.as<presto::ExplainStatement>();
-
-    const auto& statement = explain->statement();
-
-    logical_plan::LogicalPlanNodePtr logicalPlan;
-    std::shared_ptr<connector::SchemaResolver> schemaResolver;
-
-    if (statement->isSelect()) {
-      logicalPlan = statement->as<presto::SelectStatement>()->plan();
-    } else if (statement->isInsert()) {
-      logicalPlan = statement->as<presto::InsertStatement>()->plan();
-    } else if (statement->isCreateTableAsSelect()) {
-      const auto* ctas = statement->as<presto::CreateTableAsSelectStatement>();
-      logicalPlan = ctas->plan();
-
-      // EXPLAIN ANALYZE runs the query for real, so createTable must not
-      // be in explain mode. Regular EXPLAIN must be side-effect-free.
-      auto table =
-          createTable(queryId, *ctas, /*explain=*/!explain->isAnalyze());
-      schemaResolver = std::make_shared<connector::SchemaResolver>(
-          connector::ConnectorMetadataRegistry::global());
-      schemaResolver->setTargetTable(
-          ctas->connectorId(), ctas->tableName(), table);
-    } else if (statement->isCreateTable()) {
-      const auto* create = statement->as<presto::CreateTableStatement>();
-      createTable(queryId, *create, /*explain=*/true);
-      co_yield SqlResultChunk{fmt::format(
-          "CREATE TABLE {}{}.{}",
-          create->ifNotExists() ? "IF NOT EXISTS " : "",
-          create->connectorId(),
-          create->tableName())};
-      co_return;
-    } else if (statement->isDropTable()) {
-      const auto* drop = statement->as<presto::DropTableStatement>();
-      if (!drop->ifExists()) {
-        auto metadata = ConnectorMetadataRegistry::get(drop->connectorId());
-        VELOX_USER_CHECK(
-            metadata->findTable(drop->tableName()),
-            "Table does not exist: {}.{}",
-            drop->connectorId(),
-            drop->tableName());
-      }
-      co_yield SqlResultChunk{fmt::format(
-          "DROP TABLE {}{}.{}",
-          drop->ifExists() ? "IF EXISTS " : "",
-          drop->connectorId(),
-          drop->tableName())};
-      co_return;
-    } else if (statement->isAddColumn()) {
-      const auto* add = statement->as<presto::AddColumnStatement>();
-      addColumn(queryId, *add, /*explain=*/true);
-      co_yield SqlResultChunk{fmt::format(
-          "ALTER TABLE {}{}.{} ADD COLUMN {}{} {}",
-          add->ifTableExists() ? "IF EXISTS " : "",
-          add->connectorId(),
-          add->tableName(),
-          add->ifNotExists() ? "IF NOT EXISTS " : "",
-          add->columnName(),
-          add->columnType()->toString())};
-      co_return;
-    } else if (statement->isCall()) {
-      // EXPLAIN must be side-effect-free: echo the resolved call without
-      // invoking the procedure.
-      const auto* call = statement->as<presto::CallStatement>();
-
-      std::vector<std::string> arguments;
-      arguments.reserve(call->arguments().size());
-      for (const auto& argument : call->arguments()) {
-        // TODO: render arguments as Presto SQL (add Expr::toSql); toString()
-        // emits debug form (e.g. array_constructor(...)), not valid SQL.
-        arguments.push_back(argument->toString());
-      }
-
-      co_yield SqlResultChunk{fmt::format(
-          "CALL {}.{}({})",
-          call->connectorId(),
-          call->procedureName(),
-          fmt::join(arguments, ", "))};
-      co_return;
-    } else {
-      VELOX_NYI("Unsupported EXPLAIN query: {}", statement->kindName());
-    }
-
-    if (explain->type() == presto::ExplainStatement::Type::kIo) {
-      co_yield SqlResultChunk{runExplainIo(
-          *statement,
-          logicalPlan,
-          options,
-          timing,
-          schemaResolver,
-          runtimeStats)};
-      co_return;
-    }
-
-    if (explain->isAnalyze()) {
-      co_yield SqlResultChunk{co_await co_runExplainAnalyze(
-          logicalPlan, options, timing, runtimeStats, schemaResolver)};
-      co_return;
-    }
-    co_yield SqlResultChunk{runExplain(
-        logicalPlan,
-        explain->type(),
-        explain->format(),
-        options,
-        timing,
-        runtimeStats,
-        schemaResolver)};
-    co_return;
-  }
-
-  if (sqlStatement.isCreateTable()) {
-    const auto* create = sqlStatement.as<presto::CreateTableStatement>();
-    auto table = createTable(queryId, *create);
-    if (!table) {
-      co_yield SqlResultChunk{fmt::format(
-          "Table already exists: {}.{}",
-          create->connectorId(),
-          create->tableName())};
-      co_return;
-    }
-    co_yield SqlResultChunk{
-        fmt::format("Created table: {}", create->tableName())};
-    co_return;
-  }
+  // Keep the plan in this coroutine frame because co_runLogicalPlan takes it
+  // by const reference and pulls batches lazily.
+  logical_plan::LogicalPlanNodePtr logicalPlan;
+  std::shared_ptr<connector::SchemaResolver> schemaResolver;
 
   if (sqlStatement.isCreateTableAsSelect()) {
     const auto* ctas = sqlStatement.as<presto::CreateTableAsSelectStatement>();
     auto table = createTable(queryId, *ctas);
 
-    auto schema = std::make_shared<connector::SchemaResolver>(
+    schemaResolver = std::make_shared<connector::SchemaResolver>(
         connector::ConnectorMetadataRegistry::global());
-    schema->setTargetTable(ctas->connectorId(), ctas->tableName(), table);
-
-    // Materialize the plan into a named local: co_runLogicalPlan takes it by
-    // const& and is a lazy generator, so a temporary would dangle by the time
-    // the first batch is pulled.
-    auto plan = ctas->plan();
-    auto generator = co_runLogicalPlan(
-        plan, options, timing, planString, schema, runtimeStats);
-    while (auto batch = co_await generator.next()) {
-      co_yield SqlResultChunk{std::move(*batch)};
-    }
-    co_return;
+    schemaResolver->setTargetTable(
+        ctas->connectorId(), ctas->tableName(), table);
+    logicalPlan = ctas->plan();
+  } else if (sqlStatement.isInsert()) {
+    logicalPlan = sqlStatement.as<presto::InsertStatement>()->plan();
+  } else if (sqlStatement.isSelect()) {
+    logicalPlan = sqlStatement.as<presto::SelectStatement>()->plan();
+  } else {
+    VELOX_UNREACHABLE("Unexpected plan statement: {}", sqlStatement.kindName());
   }
 
-  if (sqlStatement.isInsert()) {
-    const auto* insert = sqlStatement.as<presto::InsertStatement>();
-    auto plan = insert->plan();
-    auto generator = co_runLogicalPlan(
-        plan, options, timing, planString, nullptr, runtimeStats);
-    while (auto batch = co_await generator.next()) {
-      co_yield SqlResultChunk{std::move(*batch)};
+  auto generator = co_runLogicalPlan(
+      logicalPlan, options, timing, planString, schemaResolver, runtimeStats);
+  while (auto batch = co_await generator.next()) {
+    co_yield SqlResultChunk{std::move(*batch)};
+  }
+}
+
+std::string SqlQueryRunner::runDataDefinitionStatement(
+    const presto::SqlStatement& sqlStatement,
+    std::string_view queryId) {
+  if (sqlStatement.isCreateTable()) {
+    const auto* create = sqlStatement.as<presto::CreateTableStatement>();
+    auto table = createTable(queryId, *create);
+    if (!table) {
+      return fmt::format(
+          "Table already exists: {}.{}",
+          create->connectorId(),
+          create->tableName());
     }
-    co_return;
+    return fmt::format("Created table: {}", create->tableName());
   }
 
   if (sqlStatement.isDropTable()) {
     const auto* drop = sqlStatement.as<presto::DropTableStatement>();
-
-    co_yield SqlResultChunk{dropTable(queryId, *drop)};
-    co_return;
+    return dropTable(queryId, *drop);
   }
 
   if (sqlStatement.isAddColumn()) {
     const auto* add = sqlStatement.as<presto::AddColumnStatement>();
-
-    co_yield SqlResultChunk{addColumn(queryId, *add)};
-    co_return;
+    return addColumn(queryId, *add);
   }
 
   if (sqlStatement.isCreateSchema()) {
     const auto* create = sqlStatement.as<presto::CreateSchemaStatement>();
-    co_yield SqlResultChunk{createSchema(queryId, *create)};
-    co_return;
+    return createSchema(queryId, *create);
   }
 
   if (sqlStatement.isDropSchema()) {
     const auto* drop = sqlStatement.as<presto::DropSchemaStatement>();
-    co_yield SqlResultChunk{dropSchema(queryId, *drop)};
-    co_return;
+    return dropSchema(queryId, *drop);
   }
 
-  if (sqlStatement.isCall()) {
-    const auto* call = sqlStatement.as<presto::CallStatement>();
-    co_yield SqlResultChunk{co_await co_call(queryId, *call)};
-    co_return;
-  }
+  VELOX_UNREACHABLE(
+      "Unexpected data definition statement: {}", sqlStatement.kindName());
+}
 
-  if (sqlStatement.isShowStatsForQuery()) {
-    auto results = runShowStatsForQuery(sqlStatement, options);
-    for (auto& batch : results) {
-      co_yield SqlResultChunk{std::move(batch)};
-    }
-    co_return;
-  }
-
+folly::coro::AsyncGenerator<SqlQueryRunner::SqlResultChunk>
+SqlQueryRunner::co_runSessionStatement(
+    const presto::SqlStatement& sqlStatement,
+    const RunOptions& options,
+    QueryTiming& timing,
+    std::string& planString) {
   if (sqlStatement.isShowSession()) {
     auto generator = co_showSession(
         *sqlStatement.as<presto::ShowSessionStatement>(),
@@ -1064,14 +1100,77 @@ SqlQueryRunner::co_runUnchecked(
     co_return;
   }
 
+  VELOX_UNREACHABLE(
+      "Unexpected session statement: {}", sqlStatement.kindName());
+}
+
+folly::coro::AsyncGenerator<SqlQueryRunner::SqlResultChunk>
+SqlQueryRunner::co_runUnchecked(
+    const presto::SqlStatement& sqlStatement,
+    const RunOptions& options,
+    QueryTiming& timing,
+    std::string& planString,
+    std::shared_ptr<QueryRuntimeStats> runtimeStats) {
+  const std::string queryId = options.queryId.value_or(queryIdGenerator_());
+
+  if (sqlStatement.isExplain()) {
+    auto generator = co_runExplainStatement(
+        *sqlStatement.as<presto::ExplainStatement>(),
+        queryId,
+        options,
+        timing,
+        runtimeStats);
+    while (auto chunk = co_await generator.next()) {
+      co_yield std::move(*chunk);
+    }
+    co_return;
+  }
+
+  if (sqlStatement.isCreateTableAsSelect() || sqlStatement.isInsert()) {
+    auto generator = co_runPlanStatement(
+        sqlStatement, queryId, options, timing, planString, runtimeStats);
+    while (auto chunk = co_await generator.next()) {
+      co_yield std::move(*chunk);
+    }
+    co_return;
+  }
+
+  if (sqlStatement.isCreateTable() || sqlStatement.isDropTable() ||
+      sqlStatement.isAddColumn() || sqlStatement.isCreateSchema() ||
+      sqlStatement.isDropSchema()) {
+    co_yield SqlResultChunk{runDataDefinitionStatement(sqlStatement, queryId)};
+    co_return;
+  }
+
+  if (sqlStatement.isCall()) {
+    const auto* call = sqlStatement.as<presto::CallStatement>();
+    co_yield SqlResultChunk{co_await co_call(queryId, *call)};
+    co_return;
+  }
+
+  if (sqlStatement.isShowStatsForQuery()) {
+    auto results = runShowStatsForQuery(sqlStatement, options);
+    for (auto& batch : results) {
+      co_yield SqlResultChunk{std::move(batch)};
+    }
+    co_return;
+  }
+
+  if (sqlStatement.isShowSession() || sqlStatement.isSetSession() ||
+      sqlStatement.isResetSession() || sqlStatement.isUse()) {
+    auto generator =
+        co_runSessionStatement(sqlStatement, options, timing, planString);
+    while (auto chunk = co_await generator.next()) {
+      co_yield std::move(*chunk);
+    }
+    co_return;
+  }
+
   VELOX_CHECK(sqlStatement.isSelect());
-
-  const auto logicalPlan = sqlStatement.as<presto::SelectStatement>()->plan();
-
-  auto generator = co_runLogicalPlan(
-      logicalPlan, options, timing, planString, nullptr, runtimeStats);
-  while (auto batch = co_await generator.next()) {
-    co_yield SqlResultChunk{std::move(*batch)};
+  auto generator = co_runPlanStatement(
+      sqlStatement, queryId, options, timing, planString, runtimeStats);
+  while (auto chunk = co_await generator.next()) {
+    co_yield std::move(*chunk);
   }
 }
 

@@ -594,6 +594,35 @@ class SqlQueryRunner {
       std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats =
           nullptr);
 
+  // Runs an EXPLAIN statement, including IO and ANALYZE variants.
+  folly::coro::AsyncGenerator<SqlResultChunk> co_runExplainStatement(
+      const presto::ExplainStatement& explain,
+      std::string_view queryId,
+      const RunOptions& options,
+      QueryTiming& timing,
+      std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats);
+
+  // Executes a CTAS, INSERT, or SELECT statement and yields its result batches.
+  folly::coro::AsyncGenerator<SqlResultChunk> co_runPlanStatement(
+      const presto::SqlStatement& statement,
+      std::string_view queryId,
+      const RunOptions& options,
+      QueryTiming& timing,
+      std::string& planString,
+      std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats);
+
+  // Executes a CREATE, DROP, or ALTER statement and returns its status message.
+  std::string runDataDefinitionStatement(
+      const presto::SqlStatement& statement,
+      std::string_view queryId);
+
+  // Runs a SHOW, SET, RESET, or USE session statement.
+  folly::coro::AsyncGenerator<SqlResultChunk> co_runSessionStatement(
+      const presto::SqlStatement& statement,
+      const RunOptions& options,
+      QueryTiming& timing,
+      std::string& planString);
+
   folly::coro::AsyncGenerator<facebook::velox::RowVectorPtr> co_showSession(
       const presto::ShowSessionStatement& statement,
       const RunOptions& options,
