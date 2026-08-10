@@ -1129,6 +1129,13 @@ TEST_F(ExpressionParserTest, nestingDepthCapped) {
   // A shallow expression parses.
   EXPECT_NE(nullptr, parseExpr(chain("1", " + 0", 8)));
 
+  // Parentheses cost several grammar rules per term.
+  std::string parens = "0 = 0";
+  for (uint32_t i = 1; i < 150; ++i) {
+    parens = fmt::format("{} = 0 OR ({})", i, parens);
+  }
+  EXPECT_NE(nullptr, parseExpr(parens));
+
   // Nesting past the cap fails cleanly, regardless of construct kind.
   const uint32_t past = ParserOptions::kMaxExpressionDepthDefault + 1;
   auto expectRejected = [&](std::string_view head, std::string_view unit) {

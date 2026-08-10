@@ -40,7 +40,7 @@ struct ParserOptions : public facebook::velox::config::ConfigProvider {
 
   static constexpr bool kFriendlySqlDefault = true;
   static constexpr bool kParseDecimalLiteralAsDoubleDefault = true;
-  static constexpr uint32_t kMaxExpressionDepthDefault = 512;
+  static constexpr uint32_t kMaxExpressionDepthDefault = 1024;
   static constexpr uint32_t kMaxExpressionWidthDefault = 100'000;
   static constexpr uint32_t kMaxSubqueryDepthDefault = 1024;
 
