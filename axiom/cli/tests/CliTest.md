@@ -274,8 +274,9 @@ Session 'execution.session_timezone' set to 'UTC'
 Name*| Value*| Default*| Type*| Description (glob)
 *-+-*-+-*-+-* (glob)
 execution.adjust_timestamp_to_session_timezone*| true*| false*| BOOLEAN*| * (glob)
+execution.legacy_timestamp_with_timezone*| true*| true*| BOOLEAN*| * (glob)
 execution.session_timezone*| UTC*|*| STRING*| * (glob)
-(2 rows in 1 batches)
+(3 rows in 1 batches)
 
 ```
 
