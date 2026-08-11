@@ -16,6 +16,7 @@
 #pragma once
 
 #include <folly/coro/Task.h>
+#include <glog/logging.h>
 #include <velox/connectors/Connector.h>
 #include <optional>
 #include "axiom/common/QueryRuntimeStats.h"
@@ -69,8 +70,8 @@ class SplitSource {
   SplitSource& operator=(SplitSource&&) = delete;
 
   virtual ~SplitSource() {
-    VELOX_CHECK(
-        closed_, "co_close() must be called before destroying SplitSource");
+    // A destructor is implicitly noexcept, so this must not throw.
+    LOG_IF(ERROR, !closed_) << "SplitSource destroyed without co_close()";
   }
 
   /// Returns up to 'maxSplitCount' splits, or fewer if the source is
