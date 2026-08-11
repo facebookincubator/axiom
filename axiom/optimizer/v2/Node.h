@@ -57,6 +57,7 @@ enum class NodeType : uint8_t {
 
 AXIOM_DECLARE_ENUM_NAME(NodeType);
 
+class Builder;
 class Node;
 class NodeVisitor;
 class NodeVisitorContext;
@@ -126,6 +127,24 @@ class Node : public PlanObject {
   /// node-owned storage; callers must not retain it past the node's
   /// lifetime.
   virtual std::span<const NodeCP> inputs() const = 0;
+
+  /// Returns a canonical node of this kind with `newInputs` replacing the
+  /// current inputs and every other field (output columns, keys, expressions,
+  /// etc.) preserved. Constructed through `builder` so the result participates
+  /// in hash-consing. `newInputs.size()` must equal `inputs().size()`, so a
+  /// leaf must be called with an empty vector and returns `this`.
+  ///
+  /// Preserved fields may reference `Column*` identities from the old inputs
+  /// (predicates, keys, `UnionAll::legColumns`, etc.). The caller is
+  /// responsible for ensuring each `newInputs[i]` still exposes every such
+  /// `Column`; ctors detect a mismatch on a best-effort basis only. Rewrites
+  /// that change output-column identity must rebuild the parent explicitly
+  /// rather than going through `withInputs`.
+  ///
+  /// Example:
+  ///
+  ///     NodeCP rebuilt = node->withInputs({newChild}, builder);
+  virtual NodeCP withInputs(NodeVector newInputs, Builder& builder) const = 0;
 
   /// Double-dispatch hook for `NodeVisitor`.
   virtual void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
@@ -199,6 +218,8 @@ class Scan : public Node {
     return {};
   }
 
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
+
   void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const override;
 
@@ -251,6 +272,8 @@ class Filter : public Node {
   std::span<const NodeCP> inputs() const override {
     return {&input_, 1};
   }
+
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
 
   void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const override;
@@ -316,6 +339,8 @@ class Project : public Node {
   std::span<const NodeCP> inputs() const override {
     return {&input_, 1};
   }
+
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
 
   void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const override;
@@ -383,6 +408,8 @@ class Limit : public Node {
     return {&input_, 1};
   }
 
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
+
   void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const override;
 
@@ -440,6 +467,8 @@ class Sort : public Node {
   std::span<const NodeCP> inputs() const override {
     return {&input_, 1};
   }
+
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
 
   void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const override;
@@ -512,6 +541,8 @@ class TopN : public Node {
   std::span<const NodeCP> inputs() const override {
     return {&input_, 1};
   }
+
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
 
   void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const override;
@@ -629,6 +660,8 @@ class Aggregate : public Node {
     return {&input_, 1};
   }
 
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
+
   void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const override;
 
@@ -722,6 +755,8 @@ class GroupId : public Node {
     return {&input_, 1};
   }
 
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
+
   void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const override;
 
@@ -807,6 +842,8 @@ class MarkDistinct : public Node {
     return {&input_, 1};
   }
 
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
+
   void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const override;
 
@@ -881,6 +918,8 @@ class Values : public Node {
   std::span<const NodeCP> inputs() const override {
     return {};
   }
+
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
 
   void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const override;
@@ -966,6 +1005,8 @@ class Unnest : public Node {
     return {&input_, 1};
   }
 
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
+
   void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const override;
 
@@ -1033,6 +1074,8 @@ class UnionAll : public Node {
   const QGVector<ColumnVector>& legColumns() const {
     return legColumns_;
   }
+
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
 
   void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const override;
@@ -1167,6 +1210,8 @@ class Join : public Node {
     return inputs_;
   }
 
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
+
   void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const override;
 
@@ -1262,6 +1307,8 @@ class Window : public Node {
     return {&input_, 1};
   }
 
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
+
   void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const override;
 
@@ -1353,6 +1400,8 @@ class TopNRowNumber : public Node {
   std::span<const NodeCP> inputs() const override {
     return {&input_, 1};
   }
+
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
 
   void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const override;
@@ -1528,6 +1577,8 @@ class Apply : public Node {
     return inputs_;
   }
 
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
+
   void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const override;
 
@@ -1583,6 +1634,8 @@ class EnforceSingleRow : public Node {
     return {&input_, 1};
   }
 
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
+
   void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const override;
 
@@ -1632,6 +1685,8 @@ class AssignUniqueId : public Node {
   std::span<const NodeCP> inputs() const override {
     return {&input_, 1};
   }
+
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
 
   void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const override;
@@ -1694,6 +1749,8 @@ class EnforceDistinct : public Node {
     return {&input_, 1};
   }
 
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
+
   void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const override;
 
@@ -1750,6 +1807,8 @@ class Exchange : public Node {
   std::span<const NodeCP> inputs() const override {
     return {&input_, 1};
   }
+
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
 
   void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const override;
@@ -1815,6 +1874,8 @@ class TableWrite : public Node {
   std::span<const NodeCP> inputs() const override {
     return {&input_, 1};
   }
+
+  NodeCP withInputs(NodeVector newInputs, Builder& builder) const override;
 
   void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const override;
