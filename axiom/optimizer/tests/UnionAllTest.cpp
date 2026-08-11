@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
+
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
 
@@ -901,6 +903,131 @@ TEST_P(UnionAllTest, shuffledJoinBuildOverUnion) {
     optimizerOptions_.broadcastSizeLimit = 1024;
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
+}
+
+// UNION ALL as build of a hash join whose probe is already partitioned on
+// the join key by a preceding join. The probe's partitioning makes the join
+// request hash(c) for the build; no union leg produces that natively, so a
+// single hash shuffle must sit above the union. Without it the build stays
+// round-robin against a hash-partitioned probe and the join silently drops
+// rows.
+TEST_P(UnionAllTest, shuffledUnionAsBuildOfCopartitionedJoin) {
+  testConnector_->addTable("v", ROW("c", BIGINT()))
+      ->setStats(1'000, {{"c", {.numDistinct = 1'000}}});
+  testConnector_->addTable("w", ROW("d", BIGINT()))
+      ->setStats(1'000, {{"d", {.numDistinct = 1'000}}});
+
+  auto logicalPlan = parseSelect(
+      "SELECT t.a FROM t JOIN u ON t.a = u.b "
+      "JOIN (FROM v UNION ALL FROM w) s ON u.b = s.c",
+      kTestConnectorId);
+
+  {
+    // Cap the broadcast size limit low so the union build is hash
+    // partitioned rather than replicated, and pin the join order so the
+    // union stays the build of the second join, whose probe the first join
+    // already partitioned on the shared key.
+    optimizerOptions_.broadcastSizeLimit = 1024;
+    optimizerOptions_.syntacticJoinOrder = true;
+
+    auto unionLegs =
+        matchScan("v").localPartition(matchScan("w").project().build());
+    auto firstJoin =
+        matchScan("t")
+            .shuffle({"a"}, FragmentType::kSource)
+            .hashJoin(
+                matchScan("u").shuffle({"b"}, FragmentType::kSource).build());
+
+    // v2 re-shuffles the first join's output onto the second join's key;
+    // v1 keeps it, since it is already partitioned on that key.
+    auto matcher = useV2_ ? std::move(firstJoin)
+                                .shuffle({"b"}, FragmentType::kFixed)
+                                .hashJoin(
+                                    std::move(unionLegs)
+                                        .shuffle({"c"}, FragmentType::kSource)
+                                        .build())
+                                .gather(FragmentType::kFixed)
+                                .build()
+                          : std::move(firstJoin)
+                                .hashJoin(
+                                    std::move(unionLegs)
+                                        .shuffle({"c"}, FragmentType::kSource)
+                                        .build())
+                                .gather(FragmentType::kFixed)
+                                .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
+  }
+}
+
+// Same shape as shuffledUnionAsBuildOfCopartitionedJoin, run over real rows
+// at every parallelism combination. Verifies the outcome the plan shape
+// exists to protect: a build that is not partitioned on the join key while
+// the probe is loses rows silently rather than failing, so checking the plan
+// alone would not catch a regression here.
+TEST_P(UnionAllTest, unionAsJoinBuildReturnsAllRows) {
+  auto keys = [&](velox::vector_size_t begin, velox::vector_size_t end) {
+    return makeRowVector({makeFlatVector<int64_t>(
+        end - begin, [&](auto i) { return static_cast<int64_t>(begin + i); })});
+  };
+
+  // These tables carry data rather than stats; the two cannot be combined on
+  // the same test table.
+  testConnector_->addTable("p", ROW("pk", BIGINT()));
+  testConnector_->addTable("q", ROW("qk", BIGINT()));
+  testConnector_->addTable("r1", ROW("rk", BIGINT()));
+  testConnector_->addTable("r2", ROW("sk", BIGINT()));
+  SCOPE_EXIT {
+    for (const auto& name : {"p", "q", "r1", "r2"}) {
+      testConnector_->dropTableIfExists(name);
+    }
+  };
+  testConnector_->appendData("p", keys(0, 40));
+  testConnector_->appendData("q", keys(0, 40));
+  testConnector_->appendData("r1", keys(0, 20));
+  testConnector_->appendData("r2", keys(20, 40));
+
+  auto logicalPlan = parseSelect(
+      "SELECT p.pk FROM p JOIN q ON p.pk = q.qk "
+      "JOIN (FROM r1 UNION ALL FROM r2) s ON q.qk = s.rk",
+      kTestConnectorId);
+
+  // Rule out broadcast so the union build must be hash partitioned, and pin
+  // the join order so the union stays the build of the second join.
+  optimizerOptions_.broadcastSizeLimit = 1;
+  optimizerOptions_.syntacticJoinOrder = true;
+
+  // The union legs cover 0..39 exactly once, so every p row joins once.
+  auto reference = toSingleNodePlan(logicalPlan);
+  ASSERT_EQ(runVelox(reference).countRows(), 40);
+
+  checkSame(logicalPlan, reference, {.numWorkers = 4, .numDrivers = 4});
+}
+
+// Nested UNION ALL as the build of the same copartitioned join. The inner
+// union reports whether it reached the requested distribution, so the outer
+// union sees an input that still needs a shuffle instead of assuming the
+// nested plan already matched.
+TEST_P(UnionAllTest, shuffledNestedUnionAsBuildOfCopartitionedJoin) {
+  for (const auto& [name, column] :
+       std::vector<std::pair<std::string, std::string>>{
+           {"v", "c"}, {"w", "d"}, {"x", "e"}}) {
+    testConnector_->addTable(name, ROW(column, BIGINT()))
+        ->setStats(1'000, {{column, {.numDistinct = 1'000}}});
+  }
+
+  auto logicalPlan = parseSelect(
+      "SELECT t.a FROM t JOIN u ON t.a = u.b "
+      "JOIN (FROM v UNION ALL FROM w UNION ALL FROM x) s ON u.b = s.c",
+      kTestConnectorId);
+
+  optimizerOptions_.broadcastSizeLimit = 1024;
+  optimizerOptions_.syntacticJoinOrder = true;
+
+  // Whatever nesting the legs end up in, the union must not reach the join
+  // as a round-robin local partition.
+  auto plan = planVelox(logicalPlan).plan;
+  EXPECT_THAT(plan->toString(), testing::HasSubstr("HASH(c)"))
+      << plan->toString();
 }
 
 // ---------------------------------------------------------------------------
