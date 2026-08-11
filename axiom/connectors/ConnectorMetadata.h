@@ -1358,6 +1358,32 @@ class ConnectorMetadata {
       const ConnectorSessionPtr& session,
       const std::string& schemaName) = 0;
 
+  /// Returns whether this connector pushes a table-name prefix into its listing
+  /// (serving listTableNames(session, schema, prefix) without a full
+  /// enumeration).
+  virtual bool listTableNamesPrefixSupported() const {
+    return false;
+  }
+
+  /// Returns table names in the given schema, pruned to those starting with
+  /// 'prefix' by pushing the prefix to the source. The result is best-effort
+  /// and may be a superset of the exact-prefix matches (e.g. when the source
+  /// interprets glob metacharacters in 'prefix'), so callers must still apply
+  /// the exact predicate. Only valid when listTableNamesPrefixSupported() is
+  /// true; connectors that opt in must override this.
+  ///
+  /// Overloads the two-argument listTableNames(); a subclass that overrides
+  /// only one overload hides the other, so a subclass overriding just the
+  /// two-argument form must add `using ConnectorMetadata::listTableNames;` to
+  /// keep this one visible.
+  virtual std::vector<std::string> listTableNames(
+      const ConnectorSessionPtr& /*session*/,
+      const std::string& /*schemaName*/,
+      std::string_view /*prefix*/) {
+    VELOX_UNSUPPORTED(
+        "listTableNames with prefix requires listTableNamesPrefixSupported()");
+  }
+
   /// Creates a schema with the given name and properties. If 'ifNotExists' is
   /// true, succeeds silently when the schema already exists. Otherwise, raises
   /// a user error if the schema already exists.
