@@ -23,12 +23,14 @@ namespace {
 
 using namespace velox;
 
-class CsvReadWriteTest : public test::HiveQueriesTestBase {
+class CsvReadWriteTest : public test::HiveQueriesTestBase,
+                         public ::testing::WithParamInterface<bool> {
  protected:
   const std::string kDefaultSchema{
       connector::hive::LocalHiveConnectorMetadata::kDefaultSchema};
 
   void SetUp() override {
+    useV2_ = GetParam();
     HiveQueriesTestBase::SetUp();
     velox::text::registerTextReaderFactory();
     velox::text::registerTextWriterFactory();
@@ -55,7 +57,7 @@ class CsvReadWriteTest : public test::HiveQueriesTestBase {
 };
 
 // Create a TEXT table via SQL and verify SHOW CREATE TABLE output.
-TEST_F(CsvReadWriteTest, createTextTable) {
+TEST_P(CsvReadWriteTest, createTextTable) {
   SCOPE_EXIT {
     dropTableIfExists("text_test");
   };
@@ -79,7 +81,7 @@ TEST_F(CsvReadWriteTest, createTextTable) {
 
 // Create a CSV table (TEXT with comma delimiter) via SQL and verify
 // SHOW CREATE TABLE output includes field.delim and serialization.null.format.
-TEST_F(CsvReadWriteTest, createCsvTable) {
+TEST_P(CsvReadWriteTest, createCsvTable) {
   SCOPE_EXIT {
     dropTableIfExists("csv_test");
   };
@@ -103,7 +105,7 @@ TEST_F(CsvReadWriteTest, createCsvTable) {
       ")");
 }
 
-TEST_F(CsvReadWriteTest, validateSchemaFileProperties) {
+TEST_P(CsvReadWriteTest, validateSchemaFileProperties) {
   SCOPE_EXIT {
     dropTableIfExists("custom_delimiter_test");
   };
@@ -146,7 +148,7 @@ TEST_F(CsvReadWriteTest, validateSchemaFileProperties) {
 }
 
 // Test reading CSV with custom delimiter and representative data types.
-TEST_F(CsvReadWriteTest, readCustomDelimiterWithVariousTypes) {
+TEST_P(CsvReadWriteTest, readCustomDelimiterWithVariousTypes) {
   SCOPE_EXIT {
     dropTableIfExists("custom_delimiter_test");
   };
@@ -184,7 +186,7 @@ TEST_F(CsvReadWriteTest, readCustomDelimiterWithVariousTypes) {
 }
 
 // Test writing CSV using INSERT statement with various data types.
-TEST_F(CsvReadWriteTest, writeWithInsertStatement) {
+TEST_P(CsvReadWriteTest, writeWithInsertStatement) {
   SCOPE_EXIT {
     dropTableIfExists("csv_write_test");
   };
@@ -227,6 +229,8 @@ TEST_F(CsvReadWriteTest, writeWithInsertStatement) {
 
   checkTableData("csv_write_test", {expectedData});
 }
+
+AXIOM_INSTANTIATE_V1_V2(CsvReadWriteTest);
 
 } // namespace
 } // namespace facebook::axiom::optimizer

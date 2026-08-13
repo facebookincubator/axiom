@@ -25,8 +25,14 @@ namespace {
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class OutputNodeTest : public test::QueryTestBase {
+class OutputNodeTest : public test::QueryTestBase,
+                       public ::testing::WithParamInterface<bool> {
  protected:
+  void SetUp() override {
+    useV2_ = GetParam();
+    QueryTestBase::SetUp();
+  }
+
   lp::PlanBuilder::Context makeContext() const {
     return lp::PlanBuilder::Context{kTestConnectorId, kDefaultSchema};
   }
@@ -34,7 +40,7 @@ class OutputNodeTest : public test::QueryTestBase {
 
 // Verifies the optimizer honors OutputNode entry shapes documented in
 // OutputNode::Entry — drop, reorder, duplicate, identity.
-TEST_F(OutputNodeTest, entries) {
+TEST_P(OutputNodeTest, entries) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
 
   auto makePlan = [&](const std::vector<lp::OutputNode::Entry>& entries)
@@ -81,6 +87,8 @@ TEST_F(OutputNodeTest, entries) {
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 }
+
+AXIOM_INSTANTIATE_V1_V2(OutputNodeTest);
 
 } // namespace
 } // namespace facebook::axiom::optimizer

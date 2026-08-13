@@ -27,11 +27,13 @@ namespace {
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class TpchConnectorQueryTest : public QueryTestBase {
+class TpchConnectorQueryTest : public QueryTestBase,
+                               public ::testing::WithParamInterface<bool> {
  protected:
   static constexpr auto kTpchConnectorId = "tpch";
 
   void SetUp() override {
+    useV2_ = GetParam();
     QueryTestBase::SetUp();
     connectors_ = std::make_unique<Connectors>();
     connectors_->registerTpchConnector(kTpchConnectorId);
@@ -66,7 +68,7 @@ class TpchConnectorQueryTest : public QueryTestBase {
   }
 };
 
-TEST_F(TpchConnectorQueryTest, lambda) {
+TEST_P(TpchConnectorQueryTest, lambda) {
   auto query =
       "SELECT n_regionkey, transform(array_agg(n_nationkey), x -> x * 2) FROM nation "
       "WHERE all_match(sequence(1, n_nationkey), x -> x < 3) "
@@ -79,7 +81,7 @@ TEST_F(TpchConnectorQueryTest, lambda) {
   checkSame(parseSql(query), {expected});
 }
 
-TEST_F(TpchConnectorQueryTest, scaleFactors) {
+TEST_P(TpchConnectorQueryTest, scaleFactors) {
   ASSERT_EQ(15'000, runCountStar("orders"));
   ASSERT_EQ(15'000, runCountStar("tiny.orders"));
   ASSERT_EQ(15'000, runCountStar("tpch.tiny.orders"));
@@ -87,6 +89,8 @@ TEST_F(TpchConnectorQueryTest, scaleFactors) {
   ASSERT_EQ(1'500'000, runCountStar("sf1.orders"));
   ASSERT_EQ(1'500'000, runCountStar("tpch.sf1.orders"));
 }
+
+AXIOM_INSTANTIATE_V1_V2(TpchConnectorQueryTest);
 
 } // namespace
 } // namespace facebook::axiom::optimizer::test
