@@ -57,9 +57,10 @@ class DPhyp {
       int64_t broadcastSizeLimit);
 
   /// Runs the enumeration and returns the root `MemoOp` for the full
-  /// relation set, or nullptr when no costable plan exists (some relation
-  /// or edge had unknown cost). A nullptr return tells the caller to fall
-  /// back to the query's syntactic join order.
+  /// relation set, or nullptr when no costable plan exists or budget fallback
+  /// makes an irrevocable greedy merge that leaves no valid next partition. A
+  /// nullptr return tells the caller to fall back to the query's syntactic join
+  /// order.
   MemoOpCP enumerate();
 
   /// Runs enumeration once and returns the optimal plan for each
@@ -67,8 +68,9 @@ class DPhyp {
   /// relation set and together they must cover all relations. Use when
   /// the hypergraph is disconnected (genuine cross products); the caller
   /// combines the per-component plans with cross joins. Returns an empty
-  /// vector when any component has no costable plan (some relation or edge
-  /// had unknown cost), telling the caller to fall back to syntactic order.
+  /// vector when any component has no costable plan or greedy cannot assemble
+  /// one after budget fallback, telling the caller to fall back to syntactic
+  /// order.
   std::vector<MemoOpCP> enumerate(const std::vector<RelationSet>& components);
 
  private:
