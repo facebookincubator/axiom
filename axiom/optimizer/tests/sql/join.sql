@@ -202,3 +202,51 @@ FROM (((VALUES (1, 10, 100, 101), (2, 20, 200, 202))
 JOIN (
   VALUES (1, 10), (1, 999), (2, 20), (2, 999), (3, 30)
 ) AS x(j, k) ON t.a = x.j AND t.b = x.k
+----
+-- Three-way join with two parallel t-u-v equality chains.
+SELECT t.c + u.z AS result, v.m
+FROM (
+  VALUES (1, 10, 100), (2, 20, 200)
+) AS t(a, b, c)
+JOIN (
+  VALUES
+    (1, 10, 1),
+    (2, 20, 2),
+    (1, 11, 101),
+    (1, 12, 102),
+    (1, 13, 103),
+    (2, 21, 201),
+    (2, 22, 202),
+    (2, 23, 203)
+) AS u(x, y, z) ON t.a = u.x AND t.b = u.y
+JOIN (
+  VALUES
+    (1, 10, 1000),
+    (1, 99, 1001),
+    (2, 20, 2000),
+    (2, 99, 2001)
+) AS v(k, l, m) ON u.x = v.k AND u.y = v.l
+----
+-- Three-way join with a t-u-v equality chain and a direct t-v equality.
+SELECT t.c + u.z AS result, v.m
+FROM (
+  VALUES (1, 10, 100), (2, 20, 200)
+) AS t(a, b, c)
+JOIN (
+  VALUES
+    (1, 1),
+    (2, 2),
+    (1, 101),
+    (1, 102),
+    (1, 103),
+    (2, 201),
+    (2, 202),
+    (2, 203)
+) AS u(x, z) ON t.a = u.x
+JOIN (
+  VALUES
+    (1, 10, 1000),
+    (9, 10, 1001),
+    (2, 20, 2000),
+    (9, 20, 2001)
+) AS v(k, l, m) ON u.x = v.k AND t.b = v.l

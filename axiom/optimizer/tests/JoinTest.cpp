@@ -249,6 +249,96 @@ TEST_F(JoinV2Test, inferredJoinKeyDoesNotDropAdditionalJoinKey) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+// A derived join must preserve every equality class for its relation pair,
+// including classes not covered by a written edge on that pair.
+TEST_F(JoinV2Test, derivedCompositeEdgePreservesAllEqualities) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()))
+      ->setStats(
+          100,
+          {
+              {"a", {.numDistinct = 100}},
+              {"b", {.numDistinct = 100}},
+          });
+  testConnector_->addTable("u", ROW({"x", "y", "z"}, BIGINT()))
+      ->setStats(
+          1'000'000,
+          {
+              {"x", {.numDistinct = 1'000'000}},
+              {"y", {.numDistinct = 1'000'000}},
+          });
+  testConnector_->addTable("v", ROW({"k", "l", "m"}, BIGINT()))
+      ->setStats(
+          10,
+          {
+              {"k", {.numDistinct = 10}},
+              {"l", {.numDistinct = 10}},
+          });
+
+  const auto makeCompositeJoinMatcher =
+      [](std::vector<std::string> lowerJoinKeys,
+         std::vector<std::string> upperJoinKeys) {
+        const auto lowerJoin = matchScan("t")
+                                   .hashJoinInner(
+                                       matchScan("v").build(),
+                                       {
+                                           .keys = std::move(lowerJoinKeys),
+                                           .filter = "",
+                                       })
+                                   .build();
+        return matchScan("u")
+            .hashJoinInner(
+                lowerJoin,
+                {
+                    .keys = std::move(upperJoinKeys),
+                    .filter = "",
+                })
+            .project({"c + z as result", "m"})
+            .build();
+      };
+
+  {
+    SCOPED_TRACE("both equality classes missing");
+    const auto query =
+        "SELECT t.c + u.z AS result, v.m "
+        "FROM t "
+        "JOIN u ON t.a = u.x AND t.b = u.y "
+        "JOIN v ON u.x = v.k AND u.y = v.l";
+    const auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    const auto matcher =
+        makeCompositeJoinMatcher({"a = k", "b = l"}, {"x = a", "y = b"});
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    SCOPED_TRACE("partially overlapping equality classes");
+    const auto query =
+        "SELECT t.c + u.z AS result, v.m "
+        "FROM t "
+        "JOIN u ON t.a = u.x "
+        "JOIN v ON u.x = v.k AND t.b = v.l";
+    const auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    const auto lowerJoin =
+        matchScan("t")
+            .hashJoinInner(
+                matchScan("v").build(),
+                {
+                    .keys = std::vector<std::string>{"b = l", "a = k"},
+                    .filter = "",
+                })
+            .build();
+    const auto matcher = matchScan("u")
+                             .hashJoinInner(
+                                 lowerJoin,
+                                 {
+                                     .keys = std::vector<std::string>{"x = a"},
+                                     .filter = "",
+                                 })
+                             .project({"c + z as result", "m"})
+                             .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
 // A join on the second Unnest output must wait until both Unnests and the base
 // input have been assembled.
 TEST_F(JoinV2Test, joinOnNestedUnnestOutputWaitsForInputChain) {
