@@ -31,6 +31,14 @@ class JoinTest : public test::QueryTestBase {
   }
 };
 
+class JoinV2Test : public JoinTest {
+ protected:
+  void SetUp() override {
+    JoinTest::SetUp();
+    useV2_ = true;
+  }
+};
+
 TEST_F(JoinTest, pushdownFilterThroughJoin) {
   testConnector_->addTable("t", ROW({"t_id", "t_data"}, BIGINT()));
   testConnector_->addTable("u", ROW({"u_id", "u_data"}, BIGINT()));
@@ -116,6 +124,128 @@ TEST_F(JoinTest, hyperEdge) {
                      .hashJoin(matchScan("v").build(), core::JoinType::kLeft)
                      .build();
   auto plan = toSingleNodePlan(logicalPlan);
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+// A key spanning two relations on one side can only be applied where both are
+// already joined, so `v` must come after `t` and `u` even though joining the
+// two smaller tables first looks cheaper.
+TEST_F(JoinV2Test, joinKeyWithMultiRelationOperandIsNotDropped) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(
+          1'000'000,
+          {
+              {"a", {.numDistinct = 1'000'000}},
+              {"b", {.numDistinct = 1'000'000}},
+          });
+  testConnector_->addTable("u", ROW({"x", "y", "z"}, BIGINT()))
+      ->setStats(
+          100,
+          {
+              {"x", {.numDistinct = 100}},
+              {"y", {.numDistinct = 100}},
+              {"z", {.numDistinct = 100}},
+          });
+  testConnector_->addTable("v", ROW({"k", "l", "m"}, BIGINT()))
+      ->setStats(
+          10,
+          {
+              {"k", {.numDistinct = 10}},
+              {"l", {.numDistinct = 10}},
+          });
+
+  const auto query =
+      "SELECT m "
+      "FROM t "
+      "JOIN u ON t.a = u.x "
+      "JOIN v ON u.z = v.k AND t.b + u.y = v.l";
+  SCOPED_TRACE(query);
+  const auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+
+  const auto matcher =
+      matchScan("t")
+          .hashJoinInner(
+              matchScan("u").build(),
+              {
+                  .keys = std::vector<std::string>{"a = x"},
+                  .filter = "",
+              })
+          .project({"z", "b + y as key"})
+          .hashJoinInner(
+              matchScan("v").build(),
+              {
+                  .keys = std::vector<std::string>{"z = k", "key = l"},
+                  .filter = "",
+              })
+          .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+// The t.a-u.e and t.a-x.j equalities imply a u.e-x.j edge that can attach x
+// before the explicit t-x edge is eligible. It must not strand the additional
+// t.b-x.k key, which is not implied by the inferred edge.
+TEST_F(JoinV2Test, inferredJoinKeyDoesNotDropAdditionalJoinKey) {
+  testConnector_->addTable("t", ROW({"a", "b", "c", "d"}, BIGINT()))
+      ->setStats(
+          100,
+          {
+              {"a", {.numDistinct = 100}},
+              {"b", {.numDistinct = 100}},
+              {"c", {.numDistinct = 100}},
+          });
+  testConnector_->addTable("u", ROW({"e", "f", "g"}, BIGINT()))
+      ->setStats(
+          100,
+          {
+              {"e", {.numDistinct = 100}},
+              {"f", {.numDistinct = 100}},
+              {"g", {.numDistinct = 100}},
+          });
+  testConnector_->addTable("v", ROW({"h"}, BIGINT()))
+      ->setStats(1'000'000, {{"h", {.numDistinct = 1}}});
+  testConnector_->addTable("w", ROW({"i"}, BIGINT()))
+      ->setStats(1, {{"i", {.numDistinct = 1}}});
+  testConnector_->addTable("x", ROW({"j", "k"}, BIGINT()))
+      ->setStats(
+          100, {{"j", {.numDistinct = 100}}, {"k", {.numDistinct = 100}}});
+
+  const auto query =
+      "SELECT d "
+      "FROM ((t JOIN u ON t.a = u.e AND t.b > u.f "
+      "JOIN v ON u.g = v.h) "
+      "LEFT JOIN w ON t.c = w.i) "
+      "JOIN x ON t.a = x.j AND t.b = x.k";
+  SCOPED_TRACE(query);
+  const auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+
+  const auto matcher =
+      matchScan("v")
+          .hashJoinInner(
+              matchScan("t")
+                  .hashJoinInner(
+                      matchScan("u").build(),
+                      {
+                          .keys = std::vector<std::string>{"a = e"},
+                          .filter = "b > f",
+                      })
+                  .hashJoinLeft(
+                      matchScan("w").build(),
+                      {
+                          .keys = std::vector<std::string>{"c = i"},
+                          .filter = "",
+                      })
+                  .build(),
+              {
+                  .keys = std::vector<std::string>{"h = g"},
+                  .filter = "",
+              })
+          .hashJoinInner(
+              matchScan("x").build(),
+              {
+                  .keys = std::vector<std::string>{"a = j", "b = k"},
+                  .filter = "",
+              })
+          .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
