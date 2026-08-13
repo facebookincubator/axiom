@@ -17,25 +17,20 @@
 #pragma once
 
 #include <chrono>
-#include <string>
 #include <string_view>
 #include <thread>
-#include <unordered_map>
 
-#include <folly/concurrency/ConcurrentHashMap.h>
 #include <folly/dynamic.h>
 
-#include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/process/ProcessBase.h"
 
 namespace facebook::axiom {
 
-/// Accumulates runtime metrics from Axiom's query pipeline (parser, optimizer,
-/// split manager, runner). Each metric is a velox::RuntimeMetric with
-/// sum/count/min/max. Thread-safe — multiple pipeline stages may record
-/// concurrently. Implements velox::BaseRuntimeStatWriter so instrumented Velox
-/// components (e.g. velox::TrackedExecutor) can report directly into it.
-class QueryRuntimeStats : public velox::BaseRuntimeStatWriter {
+/// Names the runtime metrics Axiom's query pipeline records and serializes them
+/// for logging; the accumulate-by-name store is the base's. Thread-safe, so
+/// pipeline stages may record concurrently.
+class QueryRuntimeStats : public velox::ConcurrentRuntimeStatWriter {
  public:
   // Parser.
   static constexpr std::string_view kParseWallNanos{"axiom-parseWallNanos"};
@@ -91,33 +86,9 @@ class QueryRuntimeStats : public velox::BaseRuntimeStatWriter {
   static constexpr std::string_view kExecuteWallNanos{"axiom-executeWallNanos"};
   static constexpr std::string_view kExecuteCpuNanos{"axiom-executeCpuNanos"};
 
-  /// Records a wall-clock duration under the given metric name.
-  void recordTiming(std::string_view name, std::chrono::nanoseconds duration);
-
-  /// Records a count (e.g., number of partitions or splits).
-  void recordCount(std::string_view name, int64_t value);
-
-  /// Merges a pre-aggregated metric into this recorder.
-  void merge(std::string_view name, const velox::RuntimeMetric& metric);
-
-  /// Sets 'metric' under 'name', replacing any existing value.
-  void setRuntimeStat(std::string_view name, const velox::RuntimeMetric& metric)
-      override;
-
-  /// Adds 'counter' as one sample under 'name', accumulating across calls.
-  void addRuntimeStat(
-      std::string_view name,
-      const velox::RuntimeCounter& counter) override;
-
-  /// Returns a snapshot of all recorded metrics.
-  std::unordered_map<std::string, velox::RuntimeMetric> toMap() const;
-
   /// Serializes all metrics to folly::dynamic for Scribe logging. Format:
   /// {"metricName": {"sum": N, "count": N, "min": N, "max": N, "unit": "..."}}
   folly::dynamic toDynamic() const;
-
- private:
-  folly::ConcurrentHashMap<std::string, velox::RuntimeMetric> metrics_;
 };
 
 /// RAII timer that records a wall-clock duration into QueryRuntimeStats on
@@ -131,7 +102,7 @@ class ScopedRuntimeStatsTimer {
         start_(std::chrono::steady_clock::now()) {}
 
   ~ScopedRuntimeStatsTimer() {
-    stats_.recordTiming(metricName_, std::chrono::steady_clock::now() - start_);
+    stats_.addTiming(metricName_, std::chrono::steady_clock::now() - start_);
   }
 
   ScopedRuntimeStatsTimer(const ScopedRuntimeStatsTimer&) = delete;
@@ -186,17 +157,10 @@ inline void recordCpuIfSameThread(
     uint64_t cpuStart,
     std::thread::id startThreadId) {
   if (std::this_thread::get_id() == startThreadId) {
-    stats.recordTiming(
+    stats.addTiming(
         metricName,
         std::chrono::nanoseconds(velox::process::threadCpuNanos() - cpuStart));
   }
 }
-
-/// Merges 'metric' into 'map' under 'name' using CAS-based optimistic locking.
-/// Shared by QueryRuntimeStats and SchedulerStatsRecorder.
-void mergeRuntimeMetric(
-    folly::ConcurrentHashMap<std::string, velox::RuntimeMetric>& map,
-    const std::string& name,
-    const velox::RuntimeMetric& metric);
 
 } // namespace facebook::axiom

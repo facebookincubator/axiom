@@ -218,7 +218,7 @@ void Optimization::estimateAllBaseTableSelectivity(DerivedTable& dt) {
         QueryRuntimeStats::kEstimateStatsCpuNanos,
         estimateCpuStart,
         estimateThreadId);
-    runtimeStats_->recordTiming(
+    runtimeStats_->addTiming(
         QueryRuntimeStats::kEstimateStatsWallNanos,
         std::chrono::steady_clock::now() - estimateStart);
   }

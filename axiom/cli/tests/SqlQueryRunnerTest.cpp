@@ -629,10 +629,10 @@ TEST_F(SqlQueryRunnerTest, executionCpuTimingUsesVeloxTaskStats) {
 
   ASSERT_TRUE(finalProgress.has_value());
   ASSERT_NE(completion.runtimeStats, nullptr);
-  const auto runtimeStats = completion.runtimeStats->toMap();
-  const auto executeCpuMetric = runtimeStats.find(
+  const auto metrics = completion.runtimeStats->runtimeStats();
+  const auto executeCpuMetric = metrics.find(
       std::string(facebook::axiom::QueryRuntimeStats::kExecuteCpuNanos));
-  ASSERT_NE(executeCpuMetric, runtimeStats.end());
+  ASSERT_NE(executeCpuMetric, metrics.end());
 
   const auto progressCpuNanos = finalProgress->stats.cpuTimeMicros * 1'000;
   EXPECT_GT(progressCpuNanos, 0);

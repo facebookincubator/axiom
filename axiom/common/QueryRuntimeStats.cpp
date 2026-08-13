@@ -19,13 +19,6 @@
 namespace facebook::axiom {
 
 namespace {
-bool runtimeMetricEquals(
-    const velox::RuntimeMetric& lhs,
-    const velox::RuntimeMetric& rhs) {
-  return lhs.sum == rhs.sum && lhs.count == rhs.count && lhs.min == rhs.min &&
-      lhs.max == rhs.max && lhs.unit == rhs.unit;
-}
-
 std::string_view unitToString(velox::RuntimeCounter::Unit unit) {
   switch (unit) {
     case velox::RuntimeCounter::Unit::kNanos:
@@ -39,84 +32,9 @@ std::string_view unitToString(velox::RuntimeCounter::Unit unit) {
 }
 } // namespace
 
-void mergeRuntimeMetric(
-    folly::ConcurrentHashMap<std::string, velox::RuntimeMetric>& map,
-    const std::string& name,
-    const velox::RuntimeMetric& metric) {
-  auto [it, inserted] = map.try_emplace(name, metric);
-  if (inserted) {
-    return;
-  }
-  while (true) {
-    auto current = it->second;
-    auto updated = current;
-    updated.merge(metric);
-    auto result = map.assign_if(
-        name,
-        std::move(updated),
-        [&current](const velox::RuntimeMetric& existing) {
-          return runtimeMetricEquals(existing, current);
-        });
-    if (result.has_value()) {
-      return;
-    }
-    it = map.find(name);
-    if (it == map.cend()) {
-      std::tie(it, inserted) = map.try_emplace(name, metric);
-      if (inserted) {
-        return;
-      }
-    }
-  }
-}
-
-void QueryRuntimeStats::recordTiming(
-    std::string_view name,
-    std::chrono::nanoseconds duration) {
-  mergeRuntimeMetric(
-      metrics_,
-      std::string(name),
-      velox::RuntimeMetric(
-          duration.count(), velox::RuntimeCounter::Unit::kNanos));
-}
-
-void QueryRuntimeStats::recordCount(std::string_view name, int64_t value) {
-  mergeRuntimeMetric(
-      metrics_,
-      std::string(name),
-      velox::RuntimeMetric(value, velox::RuntimeCounter::Unit::kNone));
-}
-
-void QueryRuntimeStats::merge(
-    std::string_view name,
-    const velox::RuntimeMetric& metric) {
-  mergeRuntimeMetric(metrics_, std::string(name), metric);
-}
-
-void QueryRuntimeStats::setRuntimeStat(
-    std::string_view name,
-    const velox::RuntimeMetric& metric) {
-  metrics_.insert_or_assign(std::string(name), metric);
-}
-
-void QueryRuntimeStats::addRuntimeStat(
-    std::string_view name,
-    const velox::RuntimeCounter& counter) {
-  merge(name, velox::RuntimeMetric(counter.value, counter.unit));
-}
-
-std::unordered_map<std::string, velox::RuntimeMetric> QueryRuntimeStats::toMap()
-    const {
-  std::unordered_map<std::string, velox::RuntimeMetric> result;
-  for (const auto& [name, metric] : metrics_) {
-    result.emplace(name, metric);
-  }
-  return result;
-}
-
 folly::dynamic QueryRuntimeStats::toDynamic() const {
   folly::dynamic result = folly::dynamic::object();
-  for (const auto& [name, metric] : metrics_) {
+  for (const auto& [name, metric] : runtimeStats()) {
     folly::dynamic entry = folly::dynamic::object();
     entry["name"] = name;
     entry["sum"] = metric.sum;
@@ -132,10 +50,10 @@ folly::dynamic QueryRuntimeStats::toDynamic() const {
 ScopedCpuWallStatsTimer::~ScopedCpuWallStatsTimer() {
   if (std::this_thread::get_id() == startThreadId_) {
     auto cpuElapsed = velox::process::threadCpuNanos() - cpuStart_;
-    stats_.recordTiming(cpuMetricName_, std::chrono::nanoseconds(cpuElapsed));
+    stats_.addTiming(cpuMetricName_, std::chrono::nanoseconds(cpuElapsed));
   }
   auto wallElapsed = std::chrono::steady_clock::now() - wallStart_;
-  stats_.recordTiming(wallMetricName_, wallElapsed);
+  stats_.addTiming(wallMetricName_, wallElapsed);
 }
 
 } // namespace facebook::axiom

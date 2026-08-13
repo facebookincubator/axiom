@@ -101,10 +101,10 @@ class PhaseTimer {
     // read it below.
     timer_.reset();
     if (runtimeStats_ != nullptr) {
-      runtimeStats_->recordTiming(
+      runtimeStats_->addTiming(
           wallKey_, std::chrono::microseconds(wallMicros_));
       const auto cpuNs = velox::process::threadCpuNanos() - cpuStartNanos_;
-      runtimeStats_->recordTiming(cpuKey_, std::chrono::nanoseconds(cpuNs));
+      runtimeStats_->addTiming(cpuKey_, std::chrono::nanoseconds(cpuNs));
     }
   }
 
@@ -691,10 +691,10 @@ SqlQueryRunner::co_run(std::string sql, RunOptions options) {
     }
     completionInfo.startInfo.queryType = statement->kind();
     completionInfo.referencedTables = statement->referencedTables();
-    completionInfo.runtimeStats->recordTiming(
+    completionInfo.runtimeStats->addTiming(
         QueryRuntimeStats::kParseWallNanos,
         std::chrono::microseconds(completionInfo.timing.parse));
-    completionInfo.runtimeStats->recordTiming(
+    completionInfo.runtimeStats->addTiming(
         QueryRuntimeStats::kParseCpuNanos,
         std::chrono::nanoseconds(parseCpuNanos));
 
@@ -705,12 +705,12 @@ SqlQueryRunner::co_run(std::string sql, RunOptions options) {
           completionInfo,
           statement->views(),
           statement->referencedTables());
-      completionInfo.runtimeStats->recordTiming(
+      completionInfo.runtimeStats->addTiming(
           QueryRuntimeStats::kPermissionCheckCpuNanos,
           std::chrono::nanoseconds(
               velox::process::threadCpuNanos() - permissionCpuStart));
     }
-    completionInfo.runtimeStats->recordTiming(
+    completionInfo.runtimeStats->addTiming(
         QueryRuntimeStats::kPermissionCheckWallNanos,
         std::chrono::microseconds(completionInfo.timing.checkPermission));
 
@@ -1558,10 +1558,10 @@ folly::coro::AsyncGenerator<velox::RowVectorPtr> co_drainQuery(
   }
 
   if (runtimeStats != nullptr) {
-    runtimeStats->recordTiming(
+    runtimeStats->addTiming(
         QueryRuntimeStats::kExecuteWallNanos,
         std::chrono::microseconds(wallMicros));
-    runtimeStats->recordTiming(
+    runtimeStats->addTiming(
         QueryRuntimeStats::kExecuteCpuNanos,
         std::chrono::nanoseconds(executionCpuNanos(runner)));
   }
@@ -1768,22 +1768,22 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
   }
 
   if (runtimeStats) {
-    runtimeStats->recordTiming(
+    runtimeStats->addTiming(
         QueryRuntimeStats::kOptimizeToGraphWallNanos,
         std::chrono::nanoseconds(toGraphNanos));
-    runtimeStats->recordTiming(
+    runtimeStats->addTiming(
         QueryRuntimeStats::kOptimizeToGraphCpuNanos,
         std::chrono::nanoseconds(toGraphCpuNanos));
-    runtimeStats->recordTiming(
+    runtimeStats->addTiming(
         QueryRuntimeStats::kOptimizeBestPlanWallNanos,
         std::chrono::nanoseconds(bestPlanNanos));
-    runtimeStats->recordTiming(
+    runtimeStats->addTiming(
         QueryRuntimeStats::kOptimizeBestPlanCpuNanos,
         std::chrono::nanoseconds(bestPlanCpuNanos));
-    runtimeStats->recordTiming(
+    runtimeStats->addTiming(
         QueryRuntimeStats::kOptimizeToVeloxWallNanos,
         std::chrono::nanoseconds(toVeloxNanos));
-    runtimeStats->recordTiming(
+    runtimeStats->addTiming(
         QueryRuntimeStats::kOptimizeToVeloxCpuNanos,
         std::chrono::nanoseconds(toVeloxCpuNanos));
   }

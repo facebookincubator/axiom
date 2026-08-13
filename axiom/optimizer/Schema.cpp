@@ -274,11 +274,11 @@ SchemaTableCP FOLLY_NULLABLE Schema::findTable(
   auto findStart = std::chrono::steady_clock::now();
   auto connectorTable = source_->findTable(std::string(connectorId), tableName);
   if (runtimeStats_) {
-    runtimeStats_->recordTiming(
+    runtimeStats_->addTiming(
         QueryRuntimeStats::kFindTableCpuNanos,
         std::chrono::nanoseconds(
             velox::process::threadCpuNanos() - findCpuStart));
-    runtimeStats_->recordTiming(
+    runtimeStats_->addTiming(
         QueryRuntimeStats::kFindTableWallNanos,
         std::chrono::steady_clock::now() - findStart);
   }

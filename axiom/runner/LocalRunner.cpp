@@ -98,10 +98,10 @@ ConnectorSplitSourceFactory::splitSourceForScan(
       QueryRuntimeStats::kListPartitionsCpuNanos,
       listCpuStart,
       listThreadId);
-  runtimeStats_.recordTiming(
+  runtimeStats_.addTiming(
       QueryRuntimeStats::kListPartitionsWallNanos,
       std::chrono::steady_clock::now() - listStart);
-  runtimeStats_.recordCount(
+  runtimeStats_.addCount(
       QueryRuntimeStats::kListPartitionsCount, partitions.size());
 
   return splitManager->getSplitSource(
@@ -203,10 +203,10 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
         QueryRuntimeStats::kGetSplitsCpuNanos,
         getSplitsCpuStart,
         getSplitsThreadId);
-    runtimeStats.recordTiming(
+    runtimeStats.addTiming(
         QueryRuntimeStats::kGetSplitsWallNanos,
         std::chrono::steady_clock::now() - getSplitsStart);
-    runtimeStats.recordCount(QueryRuntimeStats::kGetSplitsCount, splitCount);
+    runtimeStats.addCount(QueryRuntimeStats::kGetSplitsCount, splitCount);
   } catch (const folly::OperationCancelled&) {
     // co_getSplits() observed the teardown cancellation mid-call. This is a
     // clean stop, not a query error, so do not propagate it to onError().
