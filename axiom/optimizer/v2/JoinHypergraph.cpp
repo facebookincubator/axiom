@@ -247,4 +247,32 @@ void JoinHypergraph::addEdge(JoinEdge edge, RelationSet tes) {
   invalidateCoverCaches();
 }
 
+void JoinHypergraph::expandTesForUnnestDependencies() {
+  std::vector<RelationSet> unnestInputs(relations_.size());
+  bool hasUnnest = false;
+  // Extract each direct dependency U -> inputs(U).
+  for (const JoinEdge& edge : edges_) {
+    if (edge.isUnnest()) {
+      hasUnnest = true;
+      unnestInputs[edge.right().min()].unionSet(edge.left());
+    }
+  }
+  if (!hasUnnest) {
+    return;
+  }
+
+  // Apply the direct dependencies until each TES is stable. A newly added
+  // nested Unnest relation exposes its own inputs on the next iteration.
+  for (RelationSet& tes : tes_) {
+    RelationSet previous;
+    do {
+      previous = tes;
+      RelationSet added;
+      tes.forEach([&](int32_t id) { added.unionSet(unnestInputs[id]); });
+      tes.unionSet(added);
+    } while (tes != previous);
+  }
+  invalidateCoverCaches();
+}
+
 } // namespace facebook::axiom::optimizer::v2

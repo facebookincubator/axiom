@@ -51,16 +51,19 @@ struct FilterConjunct {
 /// must already be in the joined set before the edge can fire.
 ///
 /// Typical use: call `addRelation` once for each base input, then
-/// `addEdge` once for each predicate, then pass the result to
-/// DPhyp for plan enumeration. Edges and their TES are stored in
-/// parallel: `tes()[i]` is the TES of `edges()[i]`.
+/// `addEdge` once for each predicate, expand TES for Unnest input
+/// dependencies, then pass the result to DPhyp for plan enumeration.
+/// Edges and their TES are stored in parallel: `tes()[i]` is the TES
+/// of `edges()[i]`.
 ///
-/// Invariants (maintained across construction):
+/// Invariants:
 ///   - `relations()[i].id() == i`.
 ///   - Every relation id referenced by an edge is in
 ///     `[0, relations().size())`.
 ///   - `tes()[i]` is a superset of
 ///     `edges()[i].left() ∪ edges()[i].right()`.
+///   - After `expandTesForUnnestDependencies`, each edge TES includes the
+///     transitive input relations of every Unnest relation it contains.
 class JoinHypergraph {
  public:
   /// Constructs a Relation with the next assigned id and adds it
@@ -87,6 +90,13 @@ class JoinHypergraph {
   /// `edge.left() ∪ edge.right()`, and every relation referenced
   /// by `edge` or `tes` must already be in `relations()`.
   void addEdge(JoinEdge edge, RelationSet tes);
+
+  /// Replaces every stored TES with its least fixed-point closure over
+  /// directed Unnest dependencies. If a TES contains the right-side Unnest
+  /// relation of an Unnest edge, the edge's left-side input relations are
+  /// added; this repeats until no TES changes. Call after all edges have been
+  /// added.
+  void expandTesForUnnestDependencies();
 
   /// Appends a filter conjunct. `conjunct.relations` must be
   /// a subset of the relations already in `relations()`.
