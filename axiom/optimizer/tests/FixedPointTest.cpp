@@ -24,10 +24,17 @@ using namespace facebook::velox;
 namespace facebook::axiom::optimizer {
 namespace {
 
-class FixedPointTest : public test::QueryTestBase {};
+class FixedPointTest : public test::QueryTestBase,
+                       public ::testing::WithParamInterface<bool> {
+ protected:
+  void SetUp() override {
+    useV2_ = GetParam();
+    test::QueryTestBase::SetUp();
+  }
+};
 
 // Attempting to execute a recursive plan must fail with a clear NYI error.
-TEST_F(FixedPointTest, withRecursiveThrowsNyi) {
+TEST_P(FixedPointTest, withRecursiveThrowsNyi) {
   auto rowType = ROW("n", BIGINT());
   logical_plan::PlanBuilder::Context context;
 
@@ -45,6 +52,8 @@ TEST_F(FixedPointTest, withRecursiveThrowsNyi) {
       toSingleNodePlan(plan),
       "Fixed-point (recursive) plan execution is not yet implemented");
 }
+
+AXIOM_INSTANTIATE_V1_V2(FixedPointTest);
 
 } // namespace
 } // namespace facebook::axiom::optimizer

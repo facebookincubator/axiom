@@ -733,6 +733,10 @@ Translated Translator::translateNode(
       return translateTableWrite(*node.as<lp::TableWriteNode>(), required);
     case lp::NodeKind::kOutput:
       VELOX_UNREACHABLE();
+    case lp::NodeKind::kFixedPoint:
+    case lp::NodeKind::kRecursiveReference:
+      VELOX_NYI(
+          "Fixed-point (recursive) plan execution is not yet implemented");
     default:
       VELOX_NYI(
           "Unsupported logical plan node kind: {}",
