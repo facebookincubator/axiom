@@ -100,7 +100,7 @@ TEST_F(ConnectorSubtreePushdownTest, absorbsProbeSideOfJoin) {
       });
 
   auto plan = toSingleNodePlan(logicalPlan);
-  auto buildMatcher = matchScan("u").build();
+  auto buildMatcher = matchScan("u");
   auto matcher = matchScan("v").hashJoin(buildMatcher).build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 }

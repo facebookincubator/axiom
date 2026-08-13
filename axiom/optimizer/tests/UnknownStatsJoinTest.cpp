@@ -51,7 +51,7 @@ TEST_F(UnknownStatsJoinTest, singleJoin) {
 
   auto matchJoin = [&](const std::string& probe, const std::string& build) {
     return matchScan(probe)
-        .hashJoinInner(matchScan(build).build())
+        .hashJoinInner(matchScan(build))
         .aggregation()
         .build();
   };
@@ -92,9 +92,9 @@ TEST_F(UnknownStatsJoinTest, twoJoins) {
   auto matchPlan = [&](const std::string& innerProbe,
                        const std::string& innerBuild) {
     return matchScan(innerProbe)
-        .hashJoinInner(matchScan(innerBuild).build())
+        .hashJoinInner(matchScan(innerBuild))
         .filter()
-        .hashJoinInner(matchScan("v").build())
+        .hashJoinInner(matchScan("v"))
         .aggregation()
         .build();
   };
@@ -126,7 +126,7 @@ TEST_F(UnknownStatsJoinTest, joinWithUnknownTableCardinality) {
 
   auto matchJoin = [&](const std::string& probe, const std::string& build) {
     return matchScan(probe)
-        .hashJoinInner(matchScan(build).build())
+        .hashJoinInner(matchScan(build))
         .aggregation()
         .build();
   };
@@ -151,8 +151,8 @@ TEST_F(UnknownStatsJoinTest, sharedTableJoinAvoidsCrossJoin) {
   AXIOM_ASSERT_PLAN(
       plan(query),
       matchScan("t")
-          .hashJoinInner(matchScan("v").build())
-          .hashJoinInner(matchScan("u").build())
+          .hashJoinInner(matchScan("v"))
+          .hashJoinInner(matchScan("u"))
           .aggregation()
           .build());
 
@@ -161,8 +161,8 @@ TEST_F(UnknownStatsJoinTest, sharedTableJoinAvoidsCrossJoin) {
   AXIOM_ASSERT_PLAN(
       plan(query),
       matchScan("t")
-          .nestedLoopJoin(matchScan("u").build())
-          .hashJoinInner(matchScan("v").build())
+          .nestedLoopJoin(matchScan("u"))
+          .hashJoinInner(matchScan("v"))
           .aggregation()
           .build());
 }
@@ -180,8 +180,8 @@ TEST_F(UnknownStatsJoinTest, sharedTableJoinAvoidsCrossJoinExpressionKey) {
       plan(query),
       matchScan("t")
           .project()
-          .hashJoinInner(matchScan("v").build())
-          .hashJoinInner(matchScan("u").build())
+          .hashJoinInner(matchScan("v"))
+          .hashJoinInner(matchScan("u"))
           .aggregation()
           .build());
 
@@ -190,9 +190,9 @@ TEST_F(UnknownStatsJoinTest, sharedTableJoinAvoidsCrossJoinExpressionKey) {
   AXIOM_ASSERT_PLAN(
       plan(query),
       matchScan("t")
-          .nestedLoopJoin(matchScan("u").build())
+          .nestedLoopJoin(matchScan("u"))
           .project()
-          .hashJoinInner(matchScan("v").build())
+          .hashJoinInner(matchScan("v"))
           .aggregation()
           .build());
 }
@@ -212,9 +212,9 @@ TEST_F(UnknownStatsJoinTest, crossJoinWhenNoEquiPartner) {
   AXIOM_ASSERT_PLAN(
       plan(query),
       matchScan("t")
-          .hashJoinInner(matchScan("v").build())
-          .hashJoinInner(matchScan("u").build())
-          .nestedLoopJoin(matchScan("w").build())
+          .hashJoinInner(matchScan("v"))
+          .hashJoinInner(matchScan("u"))
+          .nestedLoopJoin(matchScan("w"))
           .aggregation()
           .build());
 
@@ -223,9 +223,9 @@ TEST_F(UnknownStatsJoinTest, crossJoinWhenNoEquiPartner) {
   AXIOM_ASSERT_PLAN(
       plan(query),
       matchScan("t")
-          .nestedLoopJoin(matchScan("u").build())
-          .hashJoinInner(matchScan("v").build())
-          .nestedLoopJoin(matchScan("w").build())
+          .nestedLoopJoin(matchScan("u"))
+          .hashJoinInner(matchScan("v"))
+          .nestedLoopJoin(matchScan("w"))
           .aggregation()
           .build());
 }
@@ -240,7 +240,7 @@ TEST_F(UnknownStatsJoinTest, sampledJoinWithUnknownCardinality) {
 
   auto matchJoin = [&](const std::string& probe, const std::string& build) {
     return matchScan(probe)
-        .hashJoinInner(matchScan(build).build())
+        .hashJoinInner(matchScan(build))
         .aggregation()
         .build();
   };
@@ -258,7 +258,7 @@ TEST_F(UnknownStatsJoinTest, sampledJoinMatchesUnsampledOnUnknownCardinality) {
 
   auto matchJoin = [&](const std::string& probe, const std::string& build) {
     return matchScan(probe)
-        .hashJoinInner(matchScan(build).build())
+        .hashJoinInner(matchScan(build))
         .aggregation()
         .build();
   };

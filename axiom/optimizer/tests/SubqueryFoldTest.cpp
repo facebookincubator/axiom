@@ -146,8 +146,7 @@ TEST_P(SubqueryFoldTest, foldable) {
                        .hashJoinInner(matchScan("t")
                                           .aliases({"ds", "a"})
                                           .filter("a > 5")
-                                          .aggregation()
-                                          .build())
+                                          .aggregation())
                        .projectIf(useV2_)
                        .build();
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -201,9 +200,8 @@ TEST_P(SubqueryFoldTest, foldableHivePartitions) {
         "SELECT x FROM pt WHERE ds = (SELECT max(ds) FROM pt WHERE x > 0)");
     auto matcher =
         matchHiveScan("pt")
-            .hashJoinInner(matchHiveScan("pt", test::gt("x", int64_t{0}))
-                               .aggregation()
-                               .build())
+            .hashJoinInner(
+                matchHiveScan("pt", test::gt("x", int64_t{0})).aggregation())
             .build();
     AXIOM_ASSERT_PLAN(plan, matcher);
   }

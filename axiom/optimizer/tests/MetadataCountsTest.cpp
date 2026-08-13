@@ -177,8 +177,7 @@ TEST_F(MetadataCountsTest, unionAll) {
               matchHiveScan("t")
                   .aliases({"a"})
                   .singleAggregation({}, {"sum(a)"})
-                  .project()
-                  .build(),
+                  .project(),
           })
           .build());
 }

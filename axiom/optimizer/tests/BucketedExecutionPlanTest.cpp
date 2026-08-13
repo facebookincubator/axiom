@@ -185,8 +185,7 @@ TEST_P(BucketedExecutionTest, semijoin) {
           plan.plan,
           matchScan("sj_orders")
               .hashJoin(
-                  matchScan("sj_customers").build(),
-                  core::JoinType::kLeftSemiFilter)
+                  matchScan("sj_customers"), core::JoinType::kLeftSemiFilter)
               .bucketed()
               .fragmentWidth(4)
               .gather()
@@ -211,7 +210,7 @@ TEST_P(BucketedExecutionTest, semijoin) {
           plan.plan,
           matchScan("sj_orders")
               .hashJoin(
-                  matchScan("sj_customers").build(),
+                  matchScan("sj_customers"),
                   core::JoinType::kAnti,
                   {.nullAware = true})
               .bucketed()
@@ -645,9 +644,7 @@ TEST_P(BucketedExecutionTest, innerJoinChainFuses) {
       syntacticPlan,
       matchScan("t")
           .hashJoin(
-              matchScan("u")
-                  .hashJoin(matchScan("v").build(), core::JoinType::kInner)
-                  .build(),
+              matchScan("u").hashJoin(matchScan("v"), core::JoinType::kInner),
               core::JoinType::kInner)
           .bucketed()
           .bucketedScans(3)
@@ -664,8 +661,8 @@ TEST_P(BucketedExecutionTest, innerJoinChainFuses) {
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         reorderedPlan,
         matchScan("u")
-            .hashJoin(matchScan("v").build(), core::JoinType::kInner)
-            .hashJoin(matchScan("t").build(), core::JoinType::kInner)
+            .hashJoin(matchScan("v"), core::JoinType::kInner)
+            .hashJoin(matchScan("t"), core::JoinType::kInner)
             .bucketed()
             .bucketedScans(3)
             .fragmentWidth(4)
@@ -675,8 +672,8 @@ TEST_P(BucketedExecutionTest, innerJoinChainFuses) {
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         reorderedPlan,
         matchScan("t")
-            .hashJoin(matchScan("u").build(), core::JoinType::kInner)
-            .hashJoin(matchScan("v").build(), core::JoinType::kInner)
+            .hashJoin(matchScan("u"), core::JoinType::kInner)
+            .hashJoin(matchScan("v"), core::JoinType::kInner)
             .bucketed()
             .bucketedScans(3)
             .fragmentWidth(4)
@@ -712,9 +709,8 @@ TEST_P(BucketedExecutionTest, leftJoinChainDoesNotFuse) {
         matchScan("t")
             .hashJoin(
                 matchScan("u")
-                    .hashJoin(matchScan("v").build(), core::JoinType::kLeft)
-                    .shuffle()
-                    .build(),
+                    .hashJoin(matchScan("v"), core::JoinType::kLeft)
+                    .shuffle(),
                 core::JoinType::kInner)
             .gather()
             .build());
@@ -723,9 +719,7 @@ TEST_P(BucketedExecutionTest, leftJoinChainDoesNotFuse) {
         syntacticPlan,
         matchScan("t")
             .hashJoin(
-                matchScan("u")
-                    .hashJoin(matchScan("v").build(), core::JoinType::kInner)
-                    .build(),
+                matchScan("u").hashJoin(matchScan("v"), core::JoinType::kInner),
                 core::JoinType::kInner)
             .bucketed()
             .bucketedScans(3)
@@ -742,17 +736,16 @@ TEST_P(BucketedExecutionTest, leftJoinChainDoesNotFuse) {
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         reorderedPlan,
         matchScan("u")
-            .hashJoin(matchScan("v").build(), core::JoinType::kLeft)
-            .hashJoin(
-                matchScan("t").broadcast().build(), core::JoinType::kInner)
+            .hashJoin(matchScan("v"), core::JoinType::kLeft)
+            .hashJoin(matchScan("t").broadcast(), core::JoinType::kInner)
             .gather()
             .build());
   } else {
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         reorderedPlan,
         matchScan("t")
-            .hashJoin(matchScan("u").build(), core::JoinType::kInner)
-            .hashJoin(matchScan("v").build(), core::JoinType::kInner)
+            .hashJoin(matchScan("u"), core::JoinType::kInner)
+            .hashJoin(matchScan("v"), core::JoinType::kInner)
             .bucketed()
             .bucketedScans(3)
             .fragmentWidth(4)

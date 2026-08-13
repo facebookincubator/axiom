@@ -554,7 +554,7 @@ TEST_P(UnnestTest, join) {
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = matchValues()
-                       .hashJoin(matchValues().build())
+                       .hashJoin(matchValues())
                        .project()
                        .unnest()
                        .project()
@@ -591,7 +591,7 @@ TEST_P(UnnestTest, join) {
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = matchValues()
-                       .hashJoin(matchValues().build())
+                       .hashJoin(matchValues())
                        .project()
                        .unnest()
                        .project()
@@ -632,7 +632,7 @@ TEST_P(UnnestTest, join) {
     // join; v1 keeps the query's unnest-then-join order.
     auto matcher = useV2_
         ? matchValues()
-              .hashJoin(matchValues().build())
+              .hashJoin(matchValues())
               .project()
               .unnest()
               .project()
@@ -643,7 +643,7 @@ TEST_P(UnnestTest, join) {
               .project()
               .unnest()
               .project()
-              .hashJoin(matchValues().project().unnest().project().build())
+              .hashJoin(matchValues().project().unnest().project())
               .project() // TODO Fix the Optimizer to remove this project.
               .build();
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -680,8 +680,7 @@ TEST_P(UnnestTest, join) {
         matchValues()
             .project()
             .unnest()
-            .hashJoin(
-                matchValues().project().unnest().projectIf(!useV2_).build())
+            .hashJoin(matchValues().project().unnest().projectIf(!useV2_))
             .project()
             .build();
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -791,7 +790,7 @@ TEST_P(UnnestTest, unnestWithJoinAndFilter) {
   // cross join.
   auto matchJoin = [&](const std::pair<std::string, std::string>& sides) {
     return matchScan(sides.first)
-        .nestedLoopJoin(matchScan(sides.second).build())
+        .nestedLoopJoin(matchScan(sides.second))
         .unnest()
         .filter("x = n")
         .project({"1"})
@@ -829,7 +828,7 @@ TEST_P(UnnestTest, crossJoinSingleRowAggregateAndUnnest) {
       matchScan("t")
           .projectIf(useV2_, {"a", "ids", "a::BIGINT"})
           .nestedLoopJoin(
-              matchScan("u").singleAggregation({}, {"count(*) as c"}).build())
+              matchScan("u").singleAggregation({}, {"count(*) as c"}))
           .filterIf(!useV2_, "c > a::BIGINT")
           .unnest({"c"}, {"ids"})
           .project({"n", "c"})
@@ -856,15 +855,13 @@ TEST_P(UnnestTest, leftJoinFilterOnSingleRowSubquery) {
   auto plan = toSingleNodePlan(logicalPlan);
   // v2 materializes y = x + count in a Project before the join; v1 inlines it
   // into the join filter.
-  auto matcher =
-      matchScan("t")
-          .unnest({"a"}, {"b"})
-          .nestedLoopJoin(matchScan("u")
-                              .singleAggregation({}, {"count(*) as count"})
-                              .build())
-          .projectIf(useV2_, {"a", "cast(x as bigint) + count as y"})
-          .hashJoin(matchScan("v").build(), core::JoinType::kLeft)
-          .build();
+  auto matcher = matchScan("t")
+                     .unnest({"a"}, {"b"})
+                     .nestedLoopJoin(matchScan("u").singleAggregation(
+                         {}, {"count(*) as count"}))
+                     .projectIf(useV2_, {"a", "cast(x as bigint) + count as y"})
+                     .hashJoin(matchScan("v"), core::JoinType::kLeft)
+                     .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
@@ -896,12 +893,9 @@ TEST_P(UnnestTest, leftJoinFilterOnSingleRowSubquerySmallPreservedSide) {
           .hashJoin(
               matchScan("t")
                   .unnest({"a"}, {"b"})
-                  .nestedLoopJoin(
-                      matchScan("u")
-                          .singleAggregation({}, {"count(*) as count"})
-                          .build())
-                  .projectIf(useV2_, {"a", "cast(x as bigint) + count as y"})
-                  .build(),
+                  .nestedLoopJoin(matchScan("u").singleAggregation(
+                      {}, {"count(*) as count"}))
+                  .projectIf(useV2_, {"a", "cast(x as bigint) + count as y"}),
               core::JoinType::kRight)
           .build();
   AXIOM_ASSERT_PLAN(plan, matcher);

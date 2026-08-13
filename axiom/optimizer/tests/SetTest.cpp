@@ -65,12 +65,11 @@ TEST_F(SetTest, unionAll) {
         .filter(filter)
         .project();
   };
-  auto matcher =
-      matchLeg("nationkey < 11 and (regionkey + 1) % 3 = 1")
-          .localPartition(
-              matchLeg("nationkey > 13 and (regionkey + 1) % 3 = 1").build())
-          .project()
-          .build();
+  auto matcher = matchLeg("nationkey < 11 and (regionkey + 1) % 3 = 1")
+                     .localPartition(
+                         matchLeg("nationkey > 13 and (regionkey + 1) % 3 = 1"))
+                     .project()
+                     .build();
 
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
@@ -90,7 +89,7 @@ TEST_F(SetTest, lambdaFilterPushdownThroughUnionAll) {
 
   auto matcher = matchScan("t")
                      .filter()
-                     .localPartition(matchScan("u").filter().project().build())
+                     .localPartition(matchScan("u").filter().project())
                      .build();
 
   AXIOM_ASSERT_PLAN(plan, matcher);
@@ -145,16 +144,14 @@ TEST_F(SetTest, unionJoin) {
   auto matcher =
       matchLeg("partsupp", "availqty", "availqty < 1000")
           .localPartition({
-              matchLeg("partsupp", "availqty", "availqty > 2000").build(),
-              matchLeg("partsupp", "availqty", "availqty between 1200 and 1400")
-                  .build(),
+              matchLeg("partsupp", "availqty", "availqty > 2000"),
+              matchLeg(
+                  "partsupp", "availqty", "availqty between 1200 and 1400"),
           })
           .hashJoin(
               matchLeg("part", "retailprice", "retailprice < 1100.0")
                   .localPartition(
-                      matchLeg("part", "retailprice", "retailprice > 1200.0")
-                          .build())
-                  .build(),
+                      matchLeg("part", "retailprice", "retailprice > 1200.0")),
               core::JoinType::kInner)
           .singleAggregation({}, {"sum(1)"})
           .build();
@@ -220,7 +217,7 @@ TEST_F(SetTest, unionFlatten) {
     // first child of a LocalPartition has no rename Project; non-first children
     // do.
     auto nonFirstChildMatcher =
-        core::PlanMatcherBuilder().tableScan().filter().project().build();
+        core::PlanMatcherBuilder().tableScan().filter().project();
     if (rootType == lp::SetOperation::kUnion) {
       auto matcher = core::PlanMatcherBuilder()
                          .tableScan()
@@ -262,8 +259,7 @@ TEST_F(SetTest, unionFlatten) {
                                  .filter()
                                  .localPartition(nonFirstChildMatcher)
                                  .aggregation()
-                                 .project()
-                                 .build())
+                                 .project())
                          .build();
 
       AXIOM_ASSERT_PLAN(plan, matcher);
@@ -311,10 +307,8 @@ TEST_F(SetTest, intersect) {
             .hashJoin(
                 matchLeg("nationkey > 11")
                     .hashJoin(
-                        matchLeg("nationkey < 21 and (regionkey + 1) % 3 = 1")
-                            .build(),
-                        core::JoinType::kRightSemiFilter)
-                    .build(),
+                        matchLeg("nationkey < 21 and (regionkey + 1) % 3 = 1"),
+                        core::JoinType::kRightSemiFilter),
                 core::JoinType::kRightSemiFilter)
             .singleAggregation()
             .project()
@@ -359,11 +353,11 @@ TEST_F(SetTest, except) {
   };
   auto matcher = matchLeg("nationkey < 21 and (regionkey + 1) % 3 = 1")
                      .hashJoin(
-                         matchLeg("nationkey > 16").build(),
+                         matchLeg("nationkey > 16"),
                          core::JoinType::kAnti,
                          {.nullAware = false})
                      .hashJoin(
-                         matchLeg("nationkey <= 5").build(),
+                         matchLeg("nationkey <= 5"),
                          core::JoinType::kAnti,
                          {.nullAware = false})
                      .singleAggregation()
@@ -386,8 +380,7 @@ TEST_F(SetTest, exceptAll) {
   auto matchBuild = [](const std::string& filter) {
     return matchScan("nation")
         .aliases({"nationkey", "regionkey"})
-        .filter(filter)
-        .build();
+        .filter(filter);
   };
 
   {
@@ -424,8 +417,7 @@ TEST_F(SetTest, exceptAll) {
     return matchScan("nation")
         .aliases({"nationkey", "regionkey"})
         .filter(filter)
-        .shuffle()
-        .build();
+        .shuffle();
   };
 
   {
@@ -461,9 +453,7 @@ TEST_F(SetTest, intersectAll) {
       "INTERSECT ALL SELECT a FROM t2 "
       "INTERSECT ALL SELECT a FROM t3");
 
-  auto matchBuild = [](const std::string& table) {
-    return matchScan(table).build();
-  };
+  auto matchBuild = [](const std::string& table) { return matchScan(table); };
   {
     // Single-driver: counting left semi filter joins, no aggregation.
     auto plan = toSingleNodePlan(logicalPlan);
@@ -490,7 +480,7 @@ TEST_F(SetTest, intersectAll) {
   }
 
   auto matchPartitionedBuild = [](const std::string& table) {
-    return matchScan(table).shuffle().build();
+    return matchScan(table).shuffle();
   };
 
   {
@@ -521,13 +511,12 @@ TEST_F(SetTest, intersectAllSideSwap) {
 
   auto startMatcher = [&]() {
     return matchScan("big").hashJoin(
-        matchScan("small").build(), core::JoinType::kCountingLeftSemiFilter);
+        matchScan("small"), core::JoinType::kCountingLeftSemiFilter);
   };
 
   auto startDistributedMatcher = [&]() {
     return matchScan("big").shuffle({"a"}).localPartition({"a"}).hashJoin(
-        matchScan("small").shuffle().build(),
-        core::JoinType::kCountingLeftSemiFilter);
+        matchScan("small").shuffle(), core::JoinType::kCountingLeftSemiFilter);
   };
 
   // big INTERSECT ALL small: 'big' is probe, 'small' is build.
@@ -573,13 +562,12 @@ TEST_F(SetTest, joinWithUnionAll) {
   auto logicalPlan = parseSelect(sql);
   auto plan = toSingleNodePlan(logicalPlan);
 
-  auto matcher = matchScan("t")
-                     .hashJoin(
-                         matchScan("u")
-                             .localPartition(matchScan("v").project().build())
-                             .build(),
-                         core::JoinType::kInner)
-                     .build();
+  auto matcher =
+      matchScan("t")
+          .hashJoin(
+              matchScan("u").localPartition(matchScan("v").project()),
+              core::JoinType::kInner)
+          .build();
 
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
@@ -598,8 +586,7 @@ TEST_F(SetTest, filterOnDuplicateConstantInUnionAll) {
 
   // Constant filters ('x' <> '' and 'y' <> '') are folded and eliminated.
   auto buildMatcher = [&] {
-    return matchValues().project().localPartition(
-        matchValues().project().build());
+    return matchValues().project().localPartition(matchValues().project());
   };
 
   auto plan = toSingleNodePlan(logicalPlan);
@@ -621,7 +608,7 @@ TEST_F(SetTest, unionDistinctOverGatherInputs) {
       toSingleNodePlan(logicalPlan),
       matchValues()
           .project()
-          .localPartition(matchValues().project().build())
+          .localPartition(matchValues().project())
           .singleAggregation({"k"}, {})
           .build());
 
@@ -634,7 +621,7 @@ TEST_F(SetTest, unionDistinctOverGatherInputs) {
       planVelox(logicalPlan).plan,
       matchValues()
           .project()
-          .localPartition(matchValues().project().build())
+          .localPartition(matchValues().project())
           .localPartition({"k"})
           .singleAggregation({"k"}, {})
           .build());
@@ -662,8 +649,7 @@ TEST_F(SetTest, nondeterministicFilterAboveUnion) {
           .project()
           .localPartition(matchScan("region")
                               .filter("rand() < cast(r_regionkey as double)")
-                              .project()
-                              .build());
+                              .project());
     };
 
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), buildMatcher().build());
@@ -682,7 +668,7 @@ TEST_F(SetTest, nondeterministicFilterAboveUnion) {
         toSingleNodePlan(logicalPlan),
         matchScan("nation")
             .project()
-            .localPartition(matchScan("region").project().build())
+            .localPartition(matchScan("region").project())
             .singleAggregation({"k"}, {})
             .filter("cast(k as double) > rand()")
             .build());
@@ -691,7 +677,7 @@ TEST_F(SetTest, nondeterministicFilterAboveUnion) {
         planVelox(logicalPlan).plan,
         matchScan("nation")
             .project()
-            .localPartition(matchScan("region").project().build())
+            .localPartition(matchScan("region").project())
             .distributedSingleAggregation({"k"}, {})
             .filter("cast(k as double) > rand()")
             .gather()
@@ -719,20 +705,19 @@ TEST_F(SetTest, filterOnDuplicateColumnInUnionAll) {
     auto matcher = matchScan("t")
                        .filter("x > 0")
                        .project()
-                       .localPartition(matchValues().project().build())
+                       .localPartition(matchValues().project())
                        .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
   }
 
   {
     // Values is isolated behind an arbitrary exchange.
-    auto matcher =
-        matchScan("t")
-            .filter("x > 0")
-            .project()
-            .localPartition(matchValues().project().arbitrary().build())
-            .gather()
-            .build();
+    auto matcher = matchScan("t")
+                       .filter("x > 0")
+                       .project()
+                       .localPartition(matchValues().project().arbitrary())
+                       .gather()
+                       .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
@@ -762,7 +747,7 @@ TEST_F(SetTest, filterOnDuplicateExpressionInUnionAll) {
   {
     auto matcher = matchLeg("x + 1 > 0")
                        .project()
-                       .localPartition(matchLeg("x + 2 > 0").project().build())
+                       .localPartition(matchLeg("x + 2 > 0").project())
                        .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
   }
@@ -770,7 +755,7 @@ TEST_F(SetTest, filterOnDuplicateExpressionInUnionAll) {
   {
     auto matcher = matchLeg("x + 1 > 0")
                        .project()
-                       .localPartition(matchLeg("x + 2 > 0").project().build())
+                       .localPartition(matchLeg("x + 2 > 0").project())
                        .gather()
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
@@ -798,16 +783,13 @@ TEST_F(SetTest, filterColumnPruningInUnionAll) {
   };
 
   {
-    auto matcher =
-        matchLeg("x > 0").localPartition(matchLeg("x > 0").build()).build();
+    auto matcher = matchLeg("x > 0").localPartition(matchLeg("x > 0")).build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
   }
 
   {
-    auto matcher = matchLeg("x > 0")
-                       .localPartition(matchLeg("x > 0").build())
-                       .gather()
-                       .build();
+    auto matcher =
+        matchLeg("x > 0").localPartition(matchLeg("x > 0")).gather().build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
@@ -866,7 +848,7 @@ TEST_F(SetTest, constantFalseFilterInUnionAll) {
         plan,
         matchValues()
             .project()
-            .localPartition(matchValues().project().build())
+            .localPartition(matchValues().project())
             .build());
   }
 }
@@ -887,12 +869,11 @@ TEST_F(SetTest, filterOnUnionWithWindow) {
         ") WHERE r > 1");
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher =
-        matchScan("t")
-            .window({"row_number() OVER (ORDER BY a) AS r"})
-            .filter("r > 1")
-            .localPartition(matchScan("u").filter("y > 1").project().build())
-            .build();
+    auto matcher = matchScan("t")
+                       .window({"row_number() OVER (ORDER BY a) AS r"})
+                       .filter("r > 1")
+                       .localPartition(matchScan("u").filter("y > 1").project())
+                       .build();
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
@@ -906,13 +887,12 @@ TEST_F(SetTest, filterOnUnionWithWindow) {
         ") WHERE r > 1");
 
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher =
-        matchScan("t")
-            .window({"row_number() OVER (ORDER BY a) AS r"})
-            .filter("r > 1")
-            .localPartition(matchScan("u").filter("y > 1").project().build())
-            .distinct()
-            .build();
+    auto matcher = matchScan("t")
+                       .window({"row_number() OVER (ORDER BY a) AS r"})
+                       .filter("r > 1")
+                       .localPartition(matchScan("u").filter("y > 1").project())
+                       .distinct()
+                       .build();
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 }
@@ -935,16 +915,13 @@ TEST_F(SetTest, exceptUnionAll) {
   // rename project to align column names through LocalPartition.
   auto matchExcept = [](const std::string& left, const std::string& right) {
     return matchScan(left)
-        .hashJoin(
-            matchScan(right).build(),
-            core::JoinType::kAnti,
-            {.nullAware = false})
+        .hashJoin(matchScan(right), core::JoinType::kAnti, {.nullAware = false})
         .singleAggregation()
         .project();
   };
 
   auto matcher = matchExcept("t", "u")
-                     .localPartition(matchExcept("u", "t").build())
+                     .localPartition(matchExcept("u", "t"))
                      .singleAggregation()
                      .build();
 
@@ -974,10 +951,9 @@ TEST_F(SetTest, unionDistinctWithUnnestMultipleReferences) {
           .nestedLoopJoin(matchScan("t")
                               .unnest()
                               .project()
-                              .localPartition(matchScan("t").project().build())
+                              .localPartition(matchScan("t").project())
                               .distinct()
-                              .singleAggregation({}, {"count(*) as cnt"})
-                              .build())
+                              .singleAggregation({}, {"count(*) as cnt"}))
           .project({"cnt", "cnt"})
           .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
@@ -999,7 +975,7 @@ TEST_F(SetTest, unionAllWithDistinctAndCountStar) {
         matchScan("t")
             .singleAggregation({"a"}, {})
             .project({})
-            .localPartition(core::PlanMatcherBuilder().values(ROW({})).build())
+            .localPartition(core::PlanMatcherBuilder().values(ROW({})))
             .singleAggregation({}, {"count(*) as c"})
             .build());
   }
@@ -1020,8 +996,8 @@ TEST_F(SetTest, unionAllWithDistinctAndCountStar) {
             .singleAggregation({"a"}, {})
             .project({})
             .localPartition(
-                {core::PlanMatcherBuilder().values(ROW({})).build(),
-                 core::PlanMatcherBuilder().values(ROW({})).build()})
+                {core::PlanMatcherBuilder().values(ROW({})),
+                 core::PlanMatcherBuilder().values(ROW({}))})
             .singleAggregation({}, {"count(*) as c"})
             .build());
   }
@@ -1041,7 +1017,7 @@ TEST_F(SetTest, unionAllWithDistinctAndCountStar) {
         matchScan("t")
             .singleAggregation({"a"}, {})
             .project({})
-            .localPartition(core::PlanMatcherBuilder().values(ROW({})).build())
+            .localPartition(core::PlanMatcherBuilder().values(ROW({})))
             .singleAggregation({}, {"count(*) as cnt"})
             .filter("cnt > 0")
             .build());
@@ -1062,9 +1038,8 @@ TEST_F(SetTest, rowSubfieldAccessInUnionAll) {
         plan,
         matchValues(ROW({}))
             .project({"row_constructor(1, null)"})
-            .localPartition(matchValues(ROW({}))
-                                .project({"row_constructor(3, null)"})
-                                .build())
+            .localPartition(
+                matchValues(ROW({})).project({"row_constructor(3, null)"}))
             .project({"x.a"})
             .build());
   }
@@ -1083,10 +1058,8 @@ TEST_F(SetTest, rowSubfieldAccessInUnionAll) {
         matchValues(ROW({}))
             .filter()
             .project({"row_constructor(1, null)"})
-            .localPartition(matchValues(ROW({}))
-                                .filter()
-                                .project({"row_constructor(3, null)"})
-                                .build())
+            .localPartition(matchValues(ROW({})).filter().project(
+                {"row_constructor(3, null)"}))
             .project({"x[1]"})
             .build());
   }
@@ -1108,11 +1081,10 @@ TEST_F(SetTest, rowSubfieldAccessInUnionAll) {
         plan,
         matchValues(ROW({}))
             .project({"row_constructor(1, null)"})
-            .localPartition(matchValues(ROW({}))
-                                .project({"row_constructor(3, null)"})
-                                .build())
+            .localPartition(
+                matchValues(ROW({})).project({"row_constructor(3, null)"}))
             .project({"x[1]"})
-            .localPartition(matchValues(ROW({})).project({"5 as y"}).build())
+            .localPartition(matchValues(ROW({})).project({"5 as y"}))
             .build());
   }
 }

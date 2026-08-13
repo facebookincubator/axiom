@@ -300,8 +300,7 @@ class SubfieldTest : public HiveQueriesTestBase,
                 core::PlanMatcherBuilder()
                     .hiveScan(
                         "features", {}, "float_features[10010] + 1 < 10000")
-                    .project()
-                    .build())
+                    .project())
             .project()
             .build();
 
@@ -877,7 +876,7 @@ TEST_P(SubfieldTest, subquery) {
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan("t_subquery")
                        .project()
-                       .hashJoin(matchValues().project().build())
+                       .hashJoin(matchValues().project())
                        .project()
                        .build();
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -894,7 +893,7 @@ TEST_P(SubfieldTest, subquery) {
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
                        .project()
-                       .hashJoin(matchValues().aggregation().project().build())
+                       .hashJoin(matchValues().aggregation().project())
                        .filter()
                        .project()
                        .build();

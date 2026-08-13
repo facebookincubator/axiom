@@ -130,8 +130,7 @@ TEST_F(FilterPushdownTest, throughJoin) {
 
     auto matcher =
         startMatcher("nation")
-            .hashJoin(
-                startMatcher("region").build(), velox::core::JoinType::kInner)
+            .hashJoin(startMatcher("region"), velox::core::JoinType::kInner)
             .filter()
             .aggregation()
             .build();
@@ -155,8 +154,7 @@ TEST_F(FilterPushdownTest, throughJoin) {
     auto matcher =
         core::PlanMatcherBuilder()
             .hiveScan("nation", test::lt("n_nationkey", (int64_t)10))
-            .hashJoin(
-                startMatcher("region").build(), velox::core::JoinType::kInner)
+            .hashJoin(startMatcher("region"), velox::core::JoinType::kInner)
             .aggregation()
             .build();
 
@@ -174,15 +172,13 @@ TEST_F(FilterPushdownTest, throughJoin) {
 
     auto plan = toSingleNodePlan(logicalPlan);
 
-    auto matcher =
-        startMatcher("nation")
-            .hashJoin(
-                core::PlanMatcherBuilder()
-                    .hiveScan("region", test::lt("r_regionkey", (int64_t)10))
-                    .build(),
-                velox::core::JoinType::kInner)
-            .aggregation()
-            .build();
+    auto matcher = startMatcher("nation")
+                       .hashJoin(
+                           core::PlanMatcherBuilder().hiveScan(
+                               "region", test::lt("r_regionkey", (int64_t)10)),
+                           velox::core::JoinType::kInner)
+                       .aggregation()
+                       .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
@@ -199,16 +195,14 @@ TEST_F(FilterPushdownTest, throughJoin) {
 
     auto plan = toSingleNodePlan(logicalPlan);
 
-    auto matcher =
-        core::PlanMatcherBuilder()
-            .hiveScan("nation", test::eq("n_regionkey", (int64_t)1))
-            .hashJoin(
-                core::PlanMatcherBuilder()
-                    .hiveScan("region", test::eq("r_regionkey", (int64_t)1))
-                    .build(),
-                velox::core::JoinType::kInner)
-            .aggregation()
-            .build();
+    auto matcher = core::PlanMatcherBuilder()
+                       .hiveScan("nation", test::eq("n_regionkey", (int64_t)1))
+                       .hashJoin(
+                           core::PlanMatcherBuilder().hiveScan(
+                               "region", test::eq("r_regionkey", (int64_t)1)),
+                           velox::core::JoinType::kInner)
+                       .aggregation()
+                       .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
@@ -263,9 +257,8 @@ TEST_F(FilterPushdownTest, multiTableOrFilter) {
       core::PlanMatcherBuilder()
           .hiveScan("nation", test::in("n_name", {"FRANCE", "JAPAN"}))
           .hashJoin(
-              core::PlanMatcherBuilder()
-                  .hiveScan("region", test::in("r_name", {"ASIA", "EUROPE"}))
-                  .build(),
+              core::PlanMatcherBuilder().hiveScan(
+                  "region", test::in("r_name", {"ASIA", "EUROPE"})),
               velox::core::JoinType::kInner)
           .filter(
               "(n_name = 'FRANCE' AND r_name = 'EUROPE') OR "
@@ -287,7 +280,7 @@ TEST_F(FilterPushdownTest, belowSingleRowSubqueryCrossJoin) {
 
   auto matcher = matchValues()
                      .filter("neq(c0, 0) AND eq(c1, 5)")
-                     .nestedLoopJoin(matchValues().singleAggregation().build())
+                     .nestedLoopJoin(matchValues().singleAggregation())
                      .filter()
                      .project()
                      .singleAggregation()

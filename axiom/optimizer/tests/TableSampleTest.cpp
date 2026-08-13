@@ -140,7 +140,7 @@ TEST_P(TableSampleTest, sampledCardinality) {
   };
 
   auto matchJoin = [&](const std::string& probe, const std::string& build) {
-    return matchScan(probe).hashJoinInner(matchScan(build).build()).build();
+    return matchScan(probe).hashJoinInner(matchScan(build)).build();
   };
 
   // Unsampled, 'small' (1K rows) is the smaller side.

@@ -62,9 +62,7 @@ TEST_F(SyntacticJoinOrderTest, innerJoins) {
   // Optimized join order: lineitem x (orders x customer).
   auto optimizedMatcher =
       matchHiveScan("lineitem")
-          .hashJoin(matchHiveScan("orders")
-                        .hashJoin(matchHiveScan("customer").build())
-                        .build())
+          .hashJoin(matchHiveScan("orders").hashJoin(matchHiveScan("customer")))
           .aggregation()
           .build();
 
@@ -140,8 +138,8 @@ TEST_F(SyntacticJoinOrderTest, innerJoins) {
         auto plan = toSingleNodePlan(logicalPlan);
 
         auto matcher = matchHiveScan(order[0])
-                           .hashJoin(matchHiveScan(order[1]).build())
-                           .hashJoin(matchHiveScan(order[2]).build())
+                           .hashJoin(matchHiveScan(order[1]))
+                           .hashJoin(matchHiveScan(order[2]))
                            .aggregation()
                            .build();
         AXIOM_ASSERT_PLAN(plan, matcher);
@@ -197,13 +195,11 @@ TEST_F(SyntacticJoinOrderTest, innerJoins) {
         optimizerOptions_.syntacticJoinOrder = true;
         auto plan = toSingleNodePlan(logicalPlan);
 
-        auto matcher =
-            matchHiveScan(order[0])
-                .hashJoin(matchHiveScan(order[1])
-                              .hashJoin(matchHiveScan(order[2]).build())
-                              .build())
-                .aggregation()
-                .build();
+        auto matcher = matchHiveScan(order[0])
+                           .hashJoin(matchHiveScan(order[1]).hashJoin(
+                               matchHiveScan(order[2])))
+                           .aggregation()
+                           .build();
         AXIOM_ASSERT_PLAN(plan, matcher);
 
         checkSame(logicalPlan, referenceResults);
@@ -218,7 +214,7 @@ TEST_F(SyntacticJoinOrderTest, outerJoins) {
   // Optimized join order: lineitem x orders.
   auto optimizedMatcher =
       matchHiveScan("lineitem")
-          .hashJoin(matchHiveScan("orders").build(), core::JoinType::kLeft)
+          .hashJoin(matchHiveScan("orders"), core::JoinType::kLeft)
           .aggregation()
           .build();
 
@@ -286,8 +282,7 @@ TEST_F(SyntacticJoinOrderTest, outerJoins) {
 
       auto matcher =
           matchHiveScan("orders")
-              .hashJoin(
-                  matchHiveScan("lineitem").build(), core::JoinType::kRight)
+              .hashJoin(matchHiveScan("lineitem"), core::JoinType::kRight)
               .aggregation()
               .build();
       AXIOM_ASSERT_PLAN(plan, matcher);
@@ -317,12 +312,10 @@ TEST_F(SyntacticJoinOrderTest, crossJoinStartsWithSingleRowSubqueries) {
           .aliases({"status"})
           .singleAggregation({"status"}, {"count(*) as s"})
           .project()
-          .nestedLoopJoin(matchHiveScan("orders")
-                              .singleAggregation({}, {"count(*) as c"})
-                              .build())
+          .nestedLoopJoin(
+              matchHiveScan("orders").singleAggregation({}, {"count(*) as c"}))
           .nestedLoopJoin(matchHiveScan("lineitem")
-                              .singleAggregation({}, {"count(*) as c"})
-                              .build())
+                              .singleAggregation({}, {"count(*) as c"}))
           .project()
           .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
@@ -349,11 +342,10 @@ TEST_F(SyntacticJoinOrderTest, singleRowSubqueryInMiddleOfJoinOrder) {
   auto matcher =
       matchHiveScan("region")
           .hashJoin(
-              matchHiveScan("nation").singleAggregation().project().build(),
+              matchHiveScan("nation").singleAggregation().project(),
               core::JoinType::kLeft)
           .nestedLoopJoin(matchHiveScan("lineitem")
-                              .singleAggregation({}, {"max(l_quantity)"})
-                              .build())
+                              .singleAggregation({}, {"max(l_quantity)"}))
           .project()
           .build();
   AXIOM_ASSERT_PLAN(plan, matcher);

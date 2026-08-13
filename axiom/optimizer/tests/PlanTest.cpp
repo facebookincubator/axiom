@@ -392,8 +392,7 @@ TEST_F(PlanTest, multipleConnectors) {
           .build();
   auto plan = toSingleNodePlan(logicalPlan);
 
-  auto matcher =
-      matchScan("table1").hashJoin(matchScan("table2").build()).build();
+  auto matcher = matchScan("table1").hashJoin(matchScan("table2")).build();
 
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
@@ -412,15 +411,12 @@ TEST_F(PlanTest, filterToJoinEdge) {
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("nation")
-                       .project()
-                       .hashJoin(
-                           core::PlanMatcherBuilder()
-                               .tableScan("region")
-                               .project()
-                               .build())
-                       .build();
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            .project()
+            .hashJoin(core::PlanMatcherBuilder().tableScan("region").project())
+            .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
@@ -463,8 +459,7 @@ TEST_F(PlanTest, filterToJoinEdge) {
                            core::PlanMatcherBuilder()
                                .tableScan("region")
                                .filter("rand() < 3.0")
-                               .project()
-                               .build())
+                               .project())
                        .filter("rand() < 4.0")
                        .project()
                        .build();
@@ -533,14 +528,12 @@ TEST_F(PlanTest, filterBreakup) {
         core::PlanMatcherBuilder()
             .hiveScan("lineitem", std::move(lineitemFilters))
             .hashJoin(
-                core::PlanMatcherBuilder()
-                    .hiveScan(
-                        "part",
-                        {},
-                        "\"or\"(\"and\"(p_size between 1 and 15, (p_brand = 'Brand#34' AND p_container LIKE 'LG%')), "
-                        "   \"or\"(\"and\"(p_size between 1 and 5, (p_brand = 'Brand#12' AND p_container LIKE 'SM%')), "
-                        "          \"and\"(p_size between 1 and 10, (p_brand = 'Brand#23' AND p_container LIKE 'MED%'))))")
-                    .build())
+                core::PlanMatcherBuilder().hiveScan(
+                    "part",
+                    {},
+                    "\"or\"(\"and\"(p_size between 1 and 15, (p_brand = 'Brand#34' AND p_container LIKE 'LG%')), "
+                    "   \"or\"(\"and\"(p_size between 1 and 5, (p_brand = 'Brand#12' AND p_container LIKE 'SM%')), "
+                    "          \"and\"(p_size between 1 and 10, (p_brand = 'Brand#23' AND p_container LIKE 'MED%'))))"))
             .filter()
             .project()
             .singleAggregation()

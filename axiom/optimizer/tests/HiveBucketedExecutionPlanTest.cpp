@@ -120,7 +120,7 @@ TEST_P(HiveBucketedExecutionTest, join) {
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchHiveScan("t")
-            .hashJoinInner(matchHiveScan("u").build())
+            .hashJoinInner(matchHiveScan("u"))
             .bucketed()
             .fragmentWidth(4)
             .gather()
@@ -142,8 +142,7 @@ TEST_P(HiveBucketedExecutionTest, join) {
           matchHiveScan("t")
               .hashJoinRight(matchHiveScan("u")
                                  .aliases({"u_nationkey"})
-                                 .shuffle({"u_nationkey"})
-                                 .build())
+                                 .shuffle({"u_nationkey"}))
               .project()
               .bucketed()
               .fragmentWidth(4)
@@ -162,7 +161,7 @@ TEST_P(HiveBucketedExecutionTest, join) {
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchHiveScan("t")
-            .hashJoinFull(matchHiveScan("u").build())
+            .hashJoinFull(matchHiveScan("u"))
             .bucketed()
             .fragmentWidth(4)
             .gather()
@@ -179,7 +178,7 @@ TEST_P(HiveBucketedExecutionTest, join) {
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchHiveScan("t")
-            .hashJoinLeft(matchHiveScan("u").build())
+            .hashJoinLeft(matchHiveScan("u"))
             .bucketed()
             .fragmentWidth(4)
             .gather()
@@ -200,8 +199,7 @@ TEST_P(HiveBucketedExecutionTest, join) {
       matchHiveScan("t")
           .hashJoinInner(matchHiveScan("w")
                              .aliases({"w_nationkey"})
-                             .shuffle({"w_nationkey"})
-                             .build())
+                             .shuffle({"w_nationkey"}))
           .bucketed()
           .fragmentWidth(4)
           .gather()
@@ -231,7 +229,7 @@ TEST_P(HiveBucketedExecutionTest, semijoin) {
       AXIOM_ASSERT_DISTRIBUTED_PLAN(
           plan.plan,
           matchHiveScan("t")
-              .hashJoinLeftSemiFilter(matchHiveScan("u").build())
+              .hashJoinLeftSemiFilter(matchHiveScan("u"))
               .bucketed()
               .fragmentWidth(4)
               .gather()
@@ -252,7 +250,7 @@ TEST_P(HiveBucketedExecutionTest, semijoin) {
       AXIOM_ASSERT_DISTRIBUTED_PLAN(
           plan.plan,
           matchHiveScan("t")
-              .hashJoinAnti(matchHiveScan("u").build())
+              .hashJoinAnti(matchHiveScan("u"))
               .bucketed()
               .fragmentWidth(4)
               .gather()
@@ -432,7 +430,7 @@ TEST_P(HiveBucketedExecutionTest, joinDifferentBucketCounts) {
   AXIOM_ASSERT_DISTRIBUTED_PLAN(
       plan.plan,
       matchHiveScan("t16")
-          .hashJoinInner(matchHiveScan("t8").build())
+          .hashJoinInner(matchHiveScan("t8"))
           .bucketed()
           .fragmentWidth(4)
           .gather()
@@ -521,8 +519,7 @@ TEST_P(HiveBucketedExecutionTest, widthClampsToNumWorkers) {
         matchHiveScan("t")
             .hashJoinInner(matchHiveScan("u")
                                .aliases({"u_nationkey"})
-                               .shuffle({"u_nationkey"})
-                               .build())
+                               .shuffle({"u_nationkey"}))
             .bucketed()
             .fragmentWidth(5)
             .gather()
@@ -549,7 +546,7 @@ TEST_P(HiveBucketedExecutionTest, copartitionedJoinIndivisibleWorkers) {
   AXIOM_ASSERT_DISTRIBUTED_PLAN(
       plan.plan,
       matchHiveScan("t")
-          .hashJoinInner(matchHiveScan("u").build())
+          .hashJoinInner(matchHiveScan("u"))
           .bucketed()
           .fragmentWidth(3)
           .gather()
@@ -581,7 +578,7 @@ TEST_P(HiveBucketedExecutionTest, unionall) {
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchHiveScan("t")
-            .localPartition(matchHiveScan("u").project().build())
+            .localPartition(matchHiveScan("u").project())
             .bucketed()
             .fragmentWidth(4)
             .shuffle({"c_nationkey"})

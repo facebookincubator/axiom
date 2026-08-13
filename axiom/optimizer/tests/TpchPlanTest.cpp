@@ -158,39 +158,24 @@ TEST_F(TpchPlanTest, q02) {
   // )
   auto matcher =
       matchScan("partsupp")
-          .hashJoinInner(matchScan("part")
-                             .filter("p_size = 15 and p_type like '%BRASS'")
-                             .build())
+          .hashJoinInner(
+              matchScan("part").filter("p_size = 15 and p_type like '%BRASS'"))
           .hashJoinInner(
               matchScan("supplier")
-                  .hashJoinInner(
-                      matchScan("nation")
-                          .hashJoinInner(matchScan("region")
-                                             .filter("r_name = 'EUROPE'")
-                                             .build())
-                          .build())
-                  .build())
+                  .hashJoinInner(matchScan("nation").hashJoinInner(
+                      matchScan("region").filter("r_name = 'EUROPE'"))))
           .hashJoinInner(
               matchScan("partsupp")
-                  .hashJoinLeftSemiFilter(
-                      matchScan("part")
-                          .filter("p_size = 15 and p_type like '%BRASS'")
-                          .build())
+                  .hashJoinLeftSemiFilter(matchScan("part").filter(
+                      "p_size = 15 and p_type like '%BRASS'"))
                   .hashJoinInner(
                       matchScan("supplier")
-                          .hashJoinInner(
-                              matchScan("nation")
-                                  .hashJoinInner(
-                                      matchScan("region")
-                                          .aliases(
-                                              {std::nullopt, "region_name"})
-                                          .filter("region_name = 'EUROPE'")
-                                          .build())
-                                  .build())
-                          .build())
+                          .hashJoinInner(matchScan("nation").hashJoinInner(
+                              matchScan("region")
+                                  .aliases({std::nullopt, "region_name"})
+                                  .filter("region_name = 'EUROPE'"))))
                   .aggregation()
-                  .project()
-                  .build())
+                  .project())
           .topN()
           .project()
           .build();
@@ -206,9 +191,7 @@ TEST_F(TpchPlanTest, q03) {
               matchScan("orders")
                   .filter("o_orderdate < date '1995-03-15'")
                   .hashJoinInner(matchScan("customer")
-                                     .filter("c_mktsegment = 'BUILDING'")
-                                     .build())
-                  .build())
+                                     .filter("c_mktsegment = 'BUILDING'")))
           .project()
           .aggregation()
           .topN()
@@ -222,11 +205,8 @@ TEST_F(TpchPlanTest, q04) {
   auto matcher =
       matchScan("lineitem")
           .filter("l_commitdate < l_receiptdate")
-          .hashJoinRightSemiFilter(
-              matchScan("orders")
-                  .filter(
-                      "o_orderdate >= date '1993-07-01' and o_orderdate < date '1993-10-01'")
-                  .build())
+          .hashJoinRightSemiFilter(matchScan("orders").filter(
+              "o_orderdate >= date '1993-07-01' and o_orderdate < date '1993-10-01'"))
           .aggregation()
           .orderBy()
           .build();
@@ -247,24 +227,14 @@ TEST_F(TpchPlanTest, q05) {
                       "o_orderdate >= date '1994-01-01' and o_orderdate < date '1995-01-01'")
                   .hashJoinInner(
                       matchScan("customer")
-                          .hashJoinInner(
-                              matchScan("nation")
-                                  .hashJoinInner(matchScan("region")
-                                                     .filter("r_name = 'ASIA'")
-                                                     .build())
-                                  .build())
-                          .build())
-                  .build())
-          .hashJoinInner(
-              matchScan("supplier")
-                  .hashJoinLeftSemiFilter(
-                      matchScan("nation")
-                          .hashJoinInner(matchScan("region")
-                                             .filter("r_name = 'ASIA'")
-                                             .build())
-                          .project()
-                          .build())
-                  .build())
+                          .hashJoinInner(matchScan("nation").hashJoinInner(
+                              matchScan("region").filter("r_name = 'ASIA'")))))
+          .hashJoinInner(matchScan("supplier")
+                             .hashJoinLeftSemiFilter(
+                                 matchScan("nation")
+                                     .hashJoinInner(matchScan("region").filter(
+                                         "r_name = 'ASIA'"))
+                                     .project()))
           .project()
           .aggregation()
           .orderBy()
@@ -310,21 +280,14 @@ TEST_F(TpchPlanTest, q07) {
                       matchScan("nation")
                           .aliases({std::nullopt, "supp_nation"})
                           .filter(
-                              "supp_nation = 'FRANCE' or supp_nation = 'GERMANY'")
-                          .build())
-                  .build())
-          .hashJoinInner(
-              matchScan("orders")
+                              "supp_nation = 'FRANCE' or supp_nation = 'GERMANY'")))
+          .hashJoinInner(matchScan("orders").hashJoinInner(
+              matchScan("customer")
                   .hashJoinInner(
-                      matchScan("customer")
-                          .hashJoinInner(
-                              matchScan("nation")
-                                  .aliases({std::nullopt, "cust_nation"})
-                                  .filter(
-                                      "cust_nation = 'GERMANY' or cust_nation = 'FRANCE'")
-                                  .build())
-                          .build())
-                  .build())
+                      matchScan("nation")
+                          .aliases({std::nullopt, "cust_nation"})
+                          .filter(
+                              "cust_nation = 'GERMANY' or cust_nation = 'FRANCE'"))))
           .filter(
               "(supp_nation = 'FRANCE' and cust_nation = 'GERMANY') or "
               "(supp_nation = 'GERMANY' and cust_nation = 'FRANCE')")
@@ -354,10 +317,8 @@ TEST_F(TpchPlanTest, q08) {
       matchScan("supplier")
           .hashJoinInner(
               matchScan("lineitem")
-                  .hashJoinInner(
-                      matchScan("part")
-                          .filter("p_type = 'ECONOMY ANODIZED STEEL'")
-                          .build())
+                  .hashJoinInner(matchScan("part").filter(
+                      "p_type = 'ECONOMY ANODIZED STEEL'"))
                   .hashJoinInner(
                       matchScan("orders")
                           .filter(
@@ -365,16 +326,10 @@ TEST_F(TpchPlanTest, q08) {
                           .hashJoinInner(
                               matchScan("customer")
                                   .hashJoinInner(
-                                      matchScan("nation")
-                                          .hashJoinInner(
-                                              matchScan("region")
-                                                  .filter("r_name = 'AMERICA'")
-                                                  .build())
-                                          .build())
-                                  .build())
-                          .build())
-                  .build())
-          .hashJoinInner(matchScan("nation").build())
+                                      matchScan("nation").hashJoinInner(
+                                          matchScan("region").filter(
+                                              "r_name = 'AMERICA'"))))))
+          .hashJoinInner(matchScan("nation"))
           .project()
           .aggregation()
           .orderBy()
@@ -404,14 +359,11 @@ TEST_F(TpchPlanTest, q09Alt) {
       matchScan("orders")
           .hashJoinInner(
               matchScan("lineitem")
-                  .hashJoinInner(
-                      matchScan("partsupp")
-                          .hashJoinInner(
-                              matchScan("part").filter("p_size <= 3").build())
-                          .build())
-                  .build())
-          .hashJoinInner(matchScan("supplier").build())
-          .hashJoinInner(matchScan("nation").build())
+                  .hashJoinInner(matchScan("partsupp")
+                                     .hashJoinInner(matchScan("part").filter(
+                                         "p_size <= 3"))))
+          .hashJoinInner(matchScan("supplier"))
+          .hashJoinInner(matchScan("nation"))
           .project()
           .aggregation()
           .orderBy()
@@ -430,26 +382,18 @@ TEST_F(TpchPlanTest, q10) {
   // ))
   auto matcher =
       matchScan("customer")
-          .hashJoinInner(
-              matchScan("orders")
-                  .filter(
-                      "o_orderdate >= date '1993-10-01' and o_orderdate < date '1994-01-01'")
-                  .build())
-          .hashJoinInner(matchScan("nation").build())
+          .hashJoinInner(matchScan("orders").filter(
+              "o_orderdate >= date '1993-10-01' and o_orderdate < date '1994-01-01'"))
+          .hashJoinInner(matchScan("nation"))
           .hashJoinInner(
               matchScan("lineitem")
                   .filter("l_returnflag = 'R'")
                   .hashJoinLeftSemiFilter(
                       matchScan("customer")
-                          .hashJoinInner(
-                              matchScan("orders")
-                                  .filter(
-                                      "o_orderdate >= date '1993-10-01' and o_orderdate < date '1994-01-01'")
-                                  .build())
-                          .hashJoinInner(matchScan("nation").build())
-                          .project()
-                          .build())
-                  .build())
+                          .hashJoinInner(matchScan("orders").filter(
+                              "o_orderdate >= date '1993-10-01' and o_orderdate < date '1994-01-01'"))
+                          .hashJoinInner(matchScan("nation"))
+                          .project()))
           .project()
           .aggregation()
           .topN()
@@ -466,11 +410,9 @@ TEST_F(TpchPlanTest, q11) {
   // )
   auto matcher =
       matchScan("partsupp")
-          .hashJoinInner(
-              matchScan("supplier")
-                  .hashJoinInner(
-                      matchScan("nation").filter("n_name = 'GERMANY'").build())
-                  .build())
+          .hashJoinInner(matchScan("supplier")
+                             .hashJoinInner(matchScan("nation").filter(
+                                 "n_name = 'GERMANY'")))
           .project()
           .aggregation()
           .nestedLoopJoin(
@@ -480,13 +422,10 @@ TEST_F(TpchPlanTest, q11) {
                           .hashJoinInner(
                               matchScan("nation")
                                   .aliases({std::nullopt, "nation_name"})
-                                  .filter("nation_name = 'GERMANY'")
-                                  .build())
-                          .build())
+                                  .filter("nation_name = 'GERMANY'")))
                   .project()
                   .aggregation()
-                  .project()
-                  .build())
+                  .project())
           .filter("value > expr")
           .orderBy()
           .project()
@@ -500,19 +439,18 @@ TEST_F(TpchPlanTest, q12) {
       "\"and\"(l_shipmode in ('MAIL', 'SHIP'), l_receiptdate >= date '1994-01-01', "
       "         l_receiptdate < date '1995-01-01', l_commitdate < l_receiptdate, "
       "         l_shipdate < l_commitdate)";
-  auto matcher =
-      matchScan("orders")
-          .hashJoinInner(matchScan("lineitem").filter(filter).build())
-          .project()
-          .aggregation()
-          .orderBy()
-          .build();
+  auto matcher = matchScan("orders")
+                     .hashJoinInner(matchScan("lineitem").filter(filter))
+                     .project()
+                     .aggregation()
+                     .orderBy()
+                     .build();
   AXIOM_ASSERT_PLAN(planTpch(12), matcher);
 
   auto distributed = [&](bool isMultiThreaded) {
     return matchScan("orders")
         .multiThreaded(isMultiThreaded)
-        .hashJoinInner(matchScan("lineitem").filter(filter).broadcast().build())
+        .hashJoinInner(matchScan("lineitem").filter(filter).broadcast())
         .project(
             {"l_shipmode",
              "if(o_orderpriority = '1-URGENT' or o_orderpriority = '2-HIGH', 1, 0) as high_line_count",
@@ -532,7 +470,7 @@ TEST_F(TpchPlanTest, q13) {
   // agg(agg((orders RIGHT customer)))
   auto matcher = matchScan("orders")
                      .filter("o_comment not like '%special%requests%'")
-                     .hashJoinRight(matchScan("customer").build())
+                     .hashJoinRight(matchScan("customer"))
                      .aggregation()
                      .project()
                      .aggregation()
@@ -545,19 +483,18 @@ TEST_F(TpchPlanTest, q14) {
   // agg((part INNER lineitem))
   const auto filter =
       "l_shipdate >= date '1995-09-01' and l_shipdate < date '1995-10-01'";
-  auto matcher =
-      matchScan("part")
-          .hashJoinInner(matchScan("lineitem").filter(filter).build())
-          .project()
-          .aggregation()
-          .project()
-          .build();
+  auto matcher = matchScan("part")
+                     .hashJoinInner(matchScan("lineitem").filter(filter))
+                     .project()
+                     .aggregation()
+                     .project()
+                     .build();
   AXIOM_ASSERT_PLAN(planTpch(14), matcher);
 
   auto distributed = [&](bool isMultiThreaded) {
     return matchScan("part")
         .multiThreaded(isMultiThreaded)
-        .hashJoinInner(matchScan("lineitem").filter(filter).broadcast().build())
+        .hashJoinInner(matchScan("lineitem").filter(filter).broadcast())
         .project(
             {"if(p_type like 'PROMO%', l_extendedprice * (1.0 - l_discount), 0.0) as promo",
              "l_extendedprice * (1.0 - l_discount) as disc_price"})
@@ -589,12 +526,11 @@ TEST_F(TpchPlanTest, q15) {
 
   auto matcher =
       matchScan("supplier")
-          .hashJoinInner(matchCte().build())
+          .hashJoinInner(matchCte())
           .hashJoinInner(
               matchCte()
                   .project({"total_revenue as revenue"})
-                  .singleAggregation({}, {"max(revenue) as max_revenue"})
-                  .build())
+                  .singleAggregation({}, {"max(revenue) as max_revenue"}))
           .orderBy()
           .build();
   AXIOM_ASSERT_PLAN(planTpch(15), matcher);
@@ -605,19 +541,17 @@ TEST_F(TpchPlanTest, q16) {
       "\"and\"(p_brand <> 'Brand#45', p_type not like 'MEDIUM POLISHED%', "
       "         p_size in (49, 14, 23, 45, 19, 3, 36, 9))";
   // agg(((partsupp INNER part) ANTI supplier))
-  auto matcher =
-      matchScan("partsupp")
-          .hashJoinInner(matchScan("part").filter(partFilter).build())
-          .hashJoinAnti(
-              matchScan("supplier")
-                  .filter("s_comment like '%Customer%Complaints%'")
-                  .build(),
-              {.nullAware = true})
-          .singleAggregation(
-              {"p_brand", "p_type", "p_size"},
-              {"count(distinct ps_suppkey) as supplier_cnt"})
-          .orderBy()
-          .build();
+  auto matcher = matchScan("partsupp")
+                     .hashJoinInner(matchScan("part").filter(partFilter))
+                     .hashJoinAnti(
+                         matchScan("supplier")
+                             .filter("s_comment like '%Customer%Complaints%'"),
+                         {.nullAware = true})
+                     .singleAggregation(
+                         {"p_brand", "p_type", "p_size"},
+                         {"count(distinct ps_suppkey) as supplier_cnt"})
+                     .orderBy()
+                     .build();
   AXIOM_ASSERT_PLAN(planTpch(16), matcher);
 
   // Distributed: part and supplier broadcast to the partsupp probe (INNER then
@@ -626,12 +560,11 @@ TEST_F(TpchPlanTest, q16) {
   auto distributed = [&](bool isMultiThreaded) {
     return matchScan("partsupp")
         .multiThreaded(isMultiThreaded)
-        .hashJoinInner(matchScan("part").filter(partFilter).broadcast().build())
+        .hashJoinInner(matchScan("part").filter(partFilter).broadcast())
         .hashJoinAnti(
             matchScan("supplier")
                 .filter("s_comment like '%Customer%Complaints%'")
-                .broadcast()
-                .build(),
+                .broadcast(),
             {.nullAware = true})
         .distributedSingleAggregation(
             {"p_brand", "p_type", "p_size", "ps_suppkey"}, {})
@@ -652,21 +585,15 @@ TEST_F(TpchPlanTest, q17) {
   // agg(((lineitem INNER part) LEFT agg((lineitem LEFT SEMI (FILTER) part))))
   auto matcher =
       matchScan("lineitem")
-          .hashJoinInner(
-              matchScan("part")
-                  .filter("p_brand = 'Brand#23' and p_container = 'MED BOX'")
-                  .build())
+          .hashJoinInner(matchScan("part").filter(
+              "p_brand = 'Brand#23' and p_container = 'MED BOX'"))
           .hashJoinLeft(
               matchScan("lineitem")
-                  .hashJoinLeftSemiFilter(
-                      matchScan("part")
-                          .filter(
-                              "p_brand = 'Brand#23' and p_container = 'MED BOX'")
-                          .build())
+                  .hashJoinLeftSemiFilter(matchScan("part").filter(
+                      "p_brand = 'Brand#23' and p_container = 'MED BOX'"))
                   .aggregation()
                   .project()
-                  .aliases({std::nullopt, "quantity_limit"})
-                  .build())
+                  .aliases({std::nullopt, "quantity_limit"}))
           .filter("l_quantity < quantity_limit")
           .aggregation()
           .project()
@@ -684,10 +611,9 @@ TEST_F(TpchPlanTest, q18) {
                      .hashJoinLeftSemiFilter(matchScan("lineitem")
                                                  .aggregation()
                                                  .filter("\"sum\" > 300.0")
-                                                 .project()
-                                                 .build())
-                     .hashJoinInner(matchScan("orders").build())
-                     .hashJoinInner(matchScan("customer").build())
+                                                 .project())
+                     .hashJoinInner(matchScan("orders"))
+                     .hashJoinInner(matchScan("customer"))
                      .aggregation()
                      .topN()
                      .build();
@@ -703,13 +629,10 @@ TEST_F(TpchPlanTest, q19) {
               "       \"or\"(\"and\"(l_quantity >= 20.0, l_quantity <= 30.0), "
               "             \"or\"(\"and\"(l_quantity >= 1.0, l_quantity <= 11.0), "
               "                   \"and\"(l_quantity >= 10.0, l_quantity <= 20.0))))")
-          .hashJoinInner(
-              matchScan("part")
-                  .filter(
-                      "\"or\"(\"and\"(p_size between 1 and 15, \"and\"(p_brand = 'Brand#34', p_container in ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG'))), "
-                      "      \"or\"(\"and\"(p_size between 1 and 5, \"and\"(p_brand = 'Brand#12', p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG'))), "
-                      "            \"and\"(p_size between 1 and 10, \"and\"(p_brand = 'Brand#23', p_container in ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')))))")
-                  .build())
+          .hashJoinInner(matchScan("part").filter(
+              "\"or\"(\"and\"(p_size between 1 and 15, \"and\"(p_brand = 'Brand#34', p_container in ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG'))), "
+              "      \"or\"(\"and\"(p_size between 1 and 5, \"and\"(p_brand = 'Brand#12', p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG'))), "
+              "            \"and\"(p_size between 1 and 10, \"and\"(p_brand = 'Brand#23', p_container in ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')))))"))
           .filter(
               "\"or\"(\"and\"(p_size between 1 and 15, \"and\"(l_quantity <= 30.0, \"and\"(l_quantity >= 20.0, \"and\"(p_brand = 'Brand#34', p_container in ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG'))))), "
               "      \"or\"(\"and\"(p_size between 1 and 5, \"and\"(l_quantity <= 11.0, \"and\"(l_quantity >= 1.0, \"and\"(p_brand = 'Brand#12', p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG'))))), "
@@ -747,21 +670,15 @@ TEST_F(TpchPlanTest, q20) {
                       matchScan("partsupp")
                           .hashJoinLeftSemiFilter(
                               matchScan("supplier")
-                                  .hashJoinInner(
-                                      matchScan("nation")
-                                          .filter("n_name = 'CANADA'")
-                                          .build())
-                                  .project()
-                                  .build())
-                          .build())
-                  .build())
+                                  .hashJoinInner(matchScan("nation").filter(
+                                      "n_name = 'CANADA'"))
+                                  .project())))
           .filter("expr < cast(ps_availqty as double)")
           .project()
           .hashJoinRightSemiFilter(
               matchScan("supplier")
                   .hashJoinInner(
-                      matchScan("nation").filter("n_name = 'CANADA'").build())
-                  .build())
+                      matchScan("nation").filter("n_name = 'CANADA'")))
           .orderBy()
           .build();
   AXIOM_ASSERT_PLAN(planTpch(20), matcher);
@@ -794,19 +711,13 @@ TEST_F(TpchPlanTest, q21) {
                           .filter("commitdate < receiptdate")
                           .hashJoinInner(
                               matchScan("supplier")
-                                  .hashJoinInner(
-                                      matchScan("nation")
-                                          .filter("n_name = 'SAUDI ARABIA'")
-                                          .build())
-                                  .build())
-                          .hashJoinInner(matchScan("orders")
-                                             .filter("o_orderstatus = 'F'")
-                                             .build())
-                          .build(),
+                                  .hashJoinInner(matchScan("nation").filter(
+                                      "n_name = 'SAUDI ARABIA'")))
+                          .hashJoinInner(matchScan("orders").filter(
+                              "o_orderstatus = 'F'")),
                       {.nullAware = false})
                   .aliases({std::nullopt, std::nullopt, std::nullopt, "mark"})
-                  .filter("not(mark)")
-                  .build())
+                  .filter("not(mark)"))
           .singleAggregation({"s_name"}, {"count(*)"})
           .topN()
           .build();
@@ -827,10 +738,8 @@ TEST_F(TpchPlanTest, q22) {
                           .filter(
                               "acctbal > 0.0 and substr(phone, 1, 2) in ('13', '31', '23', '29', '30', '18', '17')")
                           .singleAggregation(
-                              {}, {"avg(acctbal) as avg_acctbal"})
-                          .build())
-                  .filter("c_acctbal > avg_acctbal")
-                  .build(),
+                              {}, {"avg(acctbal) as avg_acctbal"}))
+                  .filter("c_acctbal > avg_acctbal"),
               {.nullAware = false})
           .aliases({std::nullopt, std::nullopt, "exists_mark"})
           .filter("not(exists_mark)")

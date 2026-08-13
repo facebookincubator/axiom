@@ -58,13 +58,13 @@ TEST_P(UnionAllTest, twoScans) {
 
   {
     auto matcher =
-        matchScan("t").localPartition(matchScan("u").project().build()).build();
+        matchScan("t").localPartition(matchScan("u").project()).build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
   }
 
   {
     auto matcher = matchScan("t")
-                       .localPartition(matchScan("u").project().build())
+                       .localPartition(matchScan("u").project())
                        .gather(FragmentType::kSource)
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
@@ -83,20 +83,19 @@ TEST_P(UnionAllTest, twoDistincts) {
         matchScan("t")
             .singleAggregation({"a"}, {})
             .localPartition(
-                matchScan("u").singleAggregation({"b"}, {}).project().build())
+                matchScan("u").singleAggregation({"b"}, {}).project())
             .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
   }
 
   {
-    auto matcher = matchScan("t")
-                       .distributedAggregation({"a"}, {})
-                       .localPartition(matchScan("u")
-                                           .distributedAggregation({"b"}, {})
-                                           .project()
-                                           .build())
-                       .gather(FragmentType::kFixed)
-                       .build();
+    auto matcher =
+        matchScan("t")
+            .distributedAggregation({"a"}, {})
+            .localPartition(
+                matchScan("u").distributedAggregation({"b"}, {}).project())
+            .gather(FragmentType::kFixed)
+            .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
@@ -109,7 +108,7 @@ TEST_P(UnionAllTest, twoValues) {
 
   {
     auto matcher =
-        matchValues().localPartition(matchValues().project().build()).build();
+        matchValues().localPartition(matchValues().project()).build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
   }
 
@@ -117,7 +116,7 @@ TEST_P(UnionAllTest, twoValues) {
     // All-gather UnionAll output stays gather; no extra gather Repartition
     // needed.
     auto matcher = matchValues()
-                       .localPartition(matchValues().project().build())
+                       .localPartition(matchValues().project())
                        .output(FragmentType::kSingle)
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
@@ -131,7 +130,7 @@ TEST_P(UnionAllTest, scanAndValues) {
 
   {
     auto matcher =
-        matchScan("t").localPartition(matchValues().project().build()).build();
+        matchScan("t").localPartition(matchValues().project()).build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
   }
 
@@ -144,8 +143,7 @@ TEST_P(UnionAllTest, scanAndValues) {
                            matchValues()
                                .project()
                                .arbitrary(FragmentType::kSingle)
-                               .projectIf(useV2_)
-                               .build())
+                               .projectIf(useV2_))
                        .gather(FragmentType::kSource)
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
@@ -160,11 +158,10 @@ TEST_P(UnionAllTest, scanAndTwoValues) {
       "FROM t UNION ALL VALUES 1 UNION ALL VALUES 2", kTestConnectorId);
 
   {
-    auto matcher = matchScan("t")
-                       .localPartition(
-                           {matchValues().project().build(),
-                            matchValues().project().build()})
-                       .build();
+    auto matcher =
+        matchScan("t")
+            .localPartition({matchValues().project(), matchValues().project()})
+            .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
   }
 
@@ -173,9 +170,8 @@ TEST_P(UnionAllTest, scanAndTwoValues) {
                        .localPartition(
                            matchValues()
                                .project()
-                               .localPartition(matchValues().project().build())
-                               .arbitrary(FragmentType::kSingle)
-                               .build())
+                               .localPartition(matchValues().project())
+                               .arbitrary(FragmentType::kSingle))
                        .gather(FragmentType::kSource)
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
@@ -191,7 +187,7 @@ TEST_P(UnionAllTest, distinctAndValues) {
   {
     auto matcher = matchScan("t")
                        .singleAggregation({"a"}, {})
-                       .localPartition(matchValues().project().build())
+                       .localPartition(matchValues().project())
                        .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
   }
@@ -203,8 +199,7 @@ TEST_P(UnionAllTest, distinctAndValues) {
                            matchValues()
                                .project()
                                .arbitrary(FragmentType::kSingle)
-                               .projectIf(useV2_)
-                               .build())
+                               .projectIf(useV2_))
                        .gather(FragmentType::kFixed)
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
@@ -221,7 +216,7 @@ TEST_P(UnionAllTest, scanAndDistinct) {
   {
     auto matcher = matchScan("t")
                        .singleAggregation({"a"}, {})
-                       .localPartition(matchScan("u").project().build())
+                       .localPartition(matchScan("u").project())
                        .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
   }
@@ -229,7 +224,7 @@ TEST_P(UnionAllTest, scanAndDistinct) {
   {
     auto matcher = matchScan("t")
                        .distributedAggregation({"a"}, {})
-                       .localPartition(matchScan("u").project().build())
+                       .localPartition(matchScan("u").project())
                        .gather(FragmentType::kFixed)
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
@@ -250,26 +245,23 @@ TEST_P(UnionAllTest, scanAndDistinctAndValues) {
     auto matcher =
         matchScan("t")
             .localPartition(
-                {matchScan("u").singleAggregation({"b"}, {}).project().build(),
-                 matchValues().project().build()})
+                {matchScan("u").singleAggregation({"b"}, {}).project(),
+                 matchValues().project()})
             .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
   }
 
   {
-    auto matcher = matchScan("t")
-                       .localPartition(
-                           {matchScan("u")
-                                .distributedAggregation({"b"}, {})
-                                .project()
-                                .build(),
-                            matchValues()
-                                .project()
-                                .arbitrary(FragmentType::kSingle)
-                                .projectIf(useV2_)
-                                .build()})
-                       .gather(FragmentType::kFixed)
-                       .build();
+    auto matcher =
+        matchScan("t")
+            .localPartition(
+                {matchScan("u").distributedAggregation({"b"}, {}).project(),
+                 matchValues()
+                     .project()
+                     .arbitrary(FragmentType::kSingle)
+                     .projectIf(useV2_)})
+            .gather(FragmentType::kFixed)
+            .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
@@ -291,7 +283,7 @@ TEST_P(UnionAllTest, groupByOverTwoScans) {
 
   {
     auto matcher = matchScan("t")
-                       .localPartition(matchScan("u").project().build())
+                       .localPartition(matchScan("u").project())
                        .singleAggregation({"a"}, {"count(*)"})
                        .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
@@ -299,7 +291,7 @@ TEST_P(UnionAllTest, groupByOverTwoScans) {
 
   {
     auto matcher = matchScan("t")
-                       .localPartition(matchScan("u").project().build())
+                       .localPartition(matchScan("u").project())
                        .distributedAggregation({"a"}, {"count(*)"})
                        .gather(FragmentType::kFixed)
                        .build();
@@ -329,7 +321,7 @@ TEST_P(UnionAllTest, groupByOverTwoDistincts) {
         matchScan("t")
             .singleAggregation({"a"}, {})
             .localPartition(
-                matchScan("u").singleAggregation({"b"}, {}).project().build())
+                matchScan("u").singleAggregation({"b"}, {}).project())
             .singleAggregation({"a"}, {"count(*)"})
             .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
@@ -342,7 +334,7 @@ TEST_P(UnionAllTest, groupByOverTwoDistincts) {
     // aggregation after the hash.
     auto builder =
         matchScan("t").distributedAggregation({"a"}, {}).localPartition(
-            matchScan("u").distributedAggregation({"b"}, {}).project().build());
+            matchScan("u").distributedAggregation({"b"}, {}).project());
     if (useV2_) {
       builder.partialAggregation({"a"}, {"count(*)"})
           .localPartition({"a"})
@@ -368,7 +360,7 @@ TEST_P(UnionAllTest, groupByOverTwoValues) {
 
   {
     auto matcher = matchValues()
-                       .localPartition(matchValues().project().build())
+                       .localPartition(matchValues().project())
                        .singleAggregation({"c0"}, {"count(*)"})
                        .project()
                        .build();
@@ -380,8 +372,7 @@ TEST_P(UnionAllTest, groupByOverTwoValues) {
     // in that fragment with no remote shuffle. v2 does a local two-stage
     // aggregation (partial → local HASH → final) to pre-aggregate before the
     // intra-fragment exchange; v1 does a single aggregation after the hash.
-    auto builder =
-        matchValues().localPartition(matchValues().project().build());
+    auto builder = matchValues().localPartition(matchValues().project());
     if (useV2_) {
       builder.partialAggregation({"c0"}, {"count(*)"})
           .localPartition({"c0"})
@@ -406,7 +397,7 @@ TEST_P(UnionAllTest, groupByOverScanAndValues) {
 
   {
     auto matcher = matchScan("t")
-                       .localPartition(matchValues().project().build())
+                       .localPartition(matchValues().project())
                        .singleAggregation({"a"}, {"count(*)"})
                        .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
@@ -418,8 +409,7 @@ TEST_P(UnionAllTest, groupByOverScanAndValues) {
                            matchValues()
                                .project()
                                .arbitrary(FragmentType::kSingle)
-                               .projectIf(useV2_)
-                               .build())
+                               .projectIf(useV2_))
                        .distributedAggregation({"a"}, {"count(*)"})
                        .gather(FragmentType::kFixed)
                        .build();
@@ -446,7 +436,7 @@ TEST_P(UnionAllTest, groupByOverDistinctAndValues) {
   {
     auto matcher = matchScan("t")
                        .singleAggregation({"a"}, {})
-                       .localPartition(matchValues().project().build())
+                       .localPartition(matchValues().project())
                        .singleAggregation({"a"}, {"count(*)"})
                        .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
@@ -462,8 +452,7 @@ TEST_P(UnionAllTest, groupByOverDistinctAndValues) {
             matchValues()
                 .project()
                 .arbitrary(FragmentType::kSingle)
-                .projectIf(useV2_)
-                .build());
+                .projectIf(useV2_));
     if (useV2_) {
       builder.distributedAggregation({"a"}, {"count(*)"});
     } else {
@@ -489,21 +478,20 @@ TEST_P(UnionAllTest, groupByOverScanAndDistinct) {
     auto matcher =
         matchScan("t")
             .localPartition(
-                matchScan("u").singleAggregation({"b"}, {}).project().build())
+                matchScan("u").singleAggregation({"b"}, {}).project())
             .singleAggregation({"a"}, {"count(*)"})
             .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
   }
 
   {
-    auto matcher = matchScan("t")
-                       .localPartition(matchScan("u")
-                                           .distributedAggregation({"b"}, {})
-                                           .project()
-                                           .build())
-                       .distributedAggregation({"a"}, {"count(*)"})
-                       .gather(FragmentType::kFixed)
-                       .build();
+    auto matcher =
+        matchScan("t")
+            .localPartition(
+                matchScan("u").distributedAggregation({"b"}, {}).project())
+            .distributedAggregation({"a"}, {"count(*)"})
+            .gather(FragmentType::kFixed)
+            .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
@@ -524,28 +512,25 @@ TEST_P(UnionAllTest, groupByOverScanAndDistinctAndValues) {
     auto matcher =
         matchScan("t")
             .localPartition(
-                {matchScan("u").singleAggregation({"b"}, {}).project().build(),
-                 matchValues().project().build()})
+                {matchScan("u").singleAggregation({"b"}, {}).project(),
+                 matchValues().project()})
             .singleAggregation({"a"}, {"count(*)"})
             .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
   }
 
   {
-    auto matcher = matchScan("t")
-                       .localPartition(
-                           {matchScan("u")
-                                .distributedAggregation({"b"}, {})
-                                .project()
-                                .build(),
-                            matchValues()
-                                .project()
-                                .arbitrary(FragmentType::kSingle)
-                                .projectIf(useV2_)
-                                .build()})
-                       .distributedAggregation({"a"}, {"count(*)"})
-                       .gather(FragmentType::kFixed)
-                       .build();
+    auto matcher =
+        matchScan("t")
+            .localPartition(
+                {matchScan("u").distributedAggregation({"b"}, {}).project(),
+                 matchValues()
+                     .project()
+                     .arbitrary(FragmentType::kSingle)
+                     .projectIf(useV2_)})
+            .distributedAggregation({"a"}, {"count(*)"})
+            .gather(FragmentType::kFixed)
+            .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
@@ -572,7 +557,7 @@ TEST_P(UnionAllTest, orderByOverTwoScans) {
 
   {
     auto matcher = matchScan("t")
-                       .localPartition(matchScan("u").project().build())
+                       .localPartition(matchScan("u").project())
                        .orderBy({"a ASC NULLS LAST"})
                        .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
@@ -580,7 +565,7 @@ TEST_P(UnionAllTest, orderByOverTwoScans) {
 
   {
     auto matcher = matchScan("t")
-                       .localPartition(matchScan("u").project().build())
+                       .localPartition(matchScan("u").project())
                        .orderBy({"a ASC NULLS LAST"})
                        .localMerge()
                        .shuffleMerge(FragmentType::kSource)
@@ -600,7 +585,7 @@ TEST_P(UnionAllTest, orderByOverTwoValues) {
 
   {
     auto matcher = matchValues()
-                       .localPartition(matchValues().project().build())
+                       .localPartition(matchValues().project())
                        .orderBy({"c0 ASC NULLS LAST"})
                        .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
@@ -609,7 +594,7 @@ TEST_P(UnionAllTest, orderByOverTwoValues) {
   {
     // The union is kSingle, so the sort runs in that fragment: no gather.
     auto matcher = matchValues()
-                       .localPartition(matchValues().project().build())
+                       .localPartition(matchValues().project())
                        .orderBy({"c0 ASC NULLS LAST"})
                        .localMerge()
                        .output(FragmentType::kSingle)
@@ -633,23 +618,22 @@ TEST_P(UnionAllTest, orderByOverTwoDistincts) {
         matchScan("t")
             .singleAggregation({"a"}, {})
             .localPartition(
-                matchScan("u").singleAggregation({"b"}, {}).project().build())
+                matchScan("u").singleAggregation({"b"}, {}).project())
             .orderBy({"a ASC NULLS LAST"})
             .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
   }
 
   {
-    auto matcher = matchScan("t")
-                       .distributedAggregation({"a"}, {})
-                       .localPartition(matchScan("u")
-                                           .distributedAggregation({"b"}, {})
-                                           .project()
-                                           .build())
-                       .orderBy({"a ASC NULLS LAST"})
-                       .localMerge()
-                       .shuffleMerge(FragmentType::kFixed)
-                       .build();
+    auto matcher =
+        matchScan("t")
+            .distributedAggregation({"a"}, {})
+            .localPartition(
+                matchScan("u").distributedAggregation({"b"}, {}).project())
+            .orderBy({"a ASC NULLS LAST"})
+            .localMerge()
+            .shuffleMerge(FragmentType::kFixed)
+            .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
@@ -669,7 +653,7 @@ TEST_P(UnionAllTest, orderByOverScanAndValues) {
 
   {
     auto matcher = matchScan("t")
-                       .localPartition(matchValues().project().build())
+                       .localPartition(matchValues().project())
                        .orderBy({"a ASC NULLS LAST"})
                        .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
@@ -681,8 +665,7 @@ TEST_P(UnionAllTest, orderByOverScanAndValues) {
                            matchValues()
                                .project()
                                .arbitrary(FragmentType::kSingle)
-                               .projectIf(useV2_)
-                               .build())
+                               .projectIf(useV2_))
                        .orderBy({"a ASC NULLS LAST"})
                        .localMerge()
                        .shuffleMerge(FragmentType::kSource)
@@ -702,7 +685,7 @@ TEST_P(UnionAllTest, orderByOverDistinctAndValues) {
   {
     auto matcher = matchScan("t")
                        .singleAggregation({"a"}, {})
-                       .localPartition(matchValues().project().build())
+                       .localPartition(matchValues().project())
                        .orderBy({"a ASC NULLS LAST"})
                        .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
@@ -715,8 +698,7 @@ TEST_P(UnionAllTest, orderByOverDistinctAndValues) {
                            matchValues()
                                .project()
                                .arbitrary(FragmentType::kSingle)
-                               .projectIf(useV2_)
-                               .build())
+                               .projectIf(useV2_))
                        .orderBy({"a ASC NULLS LAST"})
                        .localMerge()
                        .shuffleMerge(FragmentType::kFixed)
@@ -736,22 +718,21 @@ TEST_P(UnionAllTest, orderByOverScanAndDistinct) {
     auto matcher =
         matchScan("t")
             .localPartition(
-                matchScan("u").singleAggregation({"b"}, {}).project().build())
+                matchScan("u").singleAggregation({"b"}, {}).project())
             .orderBy({"a ASC NULLS LAST"})
             .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
   }
 
   {
-    auto matcher = matchScan("t")
-                       .localPartition(matchScan("u")
-                                           .distributedAggregation({"b"}, {})
-                                           .project()
-                                           .build())
-                       .orderBy({"a ASC NULLS LAST"})
-                       .localMerge()
-                       .shuffleMerge(FragmentType::kFixed)
-                       .build();
+    auto matcher =
+        matchScan("t")
+            .localPartition(
+                matchScan("u").distributedAggregation({"b"}, {}).project())
+            .orderBy({"a ASC NULLS LAST"})
+            .localMerge()
+            .shuffleMerge(FragmentType::kFixed)
+            .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
@@ -775,29 +756,26 @@ TEST_P(UnionAllTest, orderByOverScanAndDistinctAndValues) {
     auto matcher =
         matchScan("t")
             .localPartition(
-                {matchScan("u").singleAggregation({"b"}, {}).project().build(),
-                 matchValues().project().build()})
+                {matchScan("u").singleAggregation({"b"}, {}).project(),
+                 matchValues().project()})
             .orderBy({"a ASC NULLS LAST"})
             .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
   }
 
   {
-    auto matcher = matchScan("t")
-                       .localPartition(
-                           {matchScan("u")
-                                .distributedAggregation({"b"}, {})
-                                .project()
-                                .build(),
-                            matchValues()
-                                .project()
-                                .arbitrary(FragmentType::kSingle)
-                                .projectIf(useV2_)
-                                .build()})
-                       .orderBy({"a ASC NULLS LAST"})
-                       .localMerge()
-                       .shuffleMerge(FragmentType::kFixed)
-                       .build();
+    auto matcher =
+        matchScan("t")
+            .localPartition(
+                {matchScan("u").distributedAggregation({"b"}, {}).project(),
+                 matchValues()
+                     .project()
+                     .arbitrary(FragmentType::kSingle)
+                     .projectIf(useV2_)})
+            .orderBy({"a ASC NULLS LAST"})
+            .localMerge()
+            .shuffleMerge(FragmentType::kFixed)
+            .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
@@ -830,25 +808,21 @@ TEST_P(UnionAllTest, broadcastJoinBuildOverUnion) {
     // v2 merges the equi-join keys (a = c) into one equivalence column, so the
     // join outputs only `a` and a project reconstructs `c` (= a) for the
     // output; v1 keeps both keys in the join output.
-    auto matcher =
-        matchScan("t")
-            .hashJoin(matchScan("v")
-                          .localPartition(
-                              matchScan("u").filter("b < 0").project().build())
-                          .build())
-            .projectIf(useV2_)
-            .build();
+    auto matcher = matchScan("t")
+                       .hashJoin(matchScan("v").localPartition(
+                           matchScan("u").filter("b < 0").project()))
+                       .projectIf(useV2_)
+                       .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
   }
 
   {
     auto matcher =
         matchScan("t")
-            .hashJoin(matchScan("v")
-                          .localPartition(
-                              matchScan("u").filter("b < 0").project().build())
-                          .broadcast(FragmentType::kSource)
-                          .build())
+            .hashJoin(
+                matchScan("v")
+                    .localPartition(matchScan("u").filter("b < 0").project())
+                    .broadcast(FragmentType::kSource))
             .projectIf(useV2_)
             .gather(FragmentType::kSource)
             .build();
@@ -870,8 +844,8 @@ TEST_P(UnionAllTest, shuffledJoinBuildOverUnion) {
 
   {
     auto matcher = matchScan("v")
-                       .localPartition(matchScan("u").project().build())
-                       .hashJoin(matchScan("t").build())
+                       .localPartition(matchScan("u").project())
+                       .hashJoin(matchScan("t"))
                        .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
   }
@@ -879,10 +853,9 @@ TEST_P(UnionAllTest, shuffledJoinBuildOverUnion) {
   {
     auto matcher =
         matchScan("v")
-            .localPartition(matchScan("u").project().build())
+            .localPartition(matchScan("u").project())
             .shuffle({"c"}, FragmentType::kSource)
-            .hashJoin(
-                matchScan("t").shuffle({"a"}, FragmentType::kSource).build())
+            .hashJoin(matchScan("t").shuffle({"a"}, FragmentType::kSource))
             .gather(FragmentType::kFixed)
             .build();
     // Cap the broadcast size limit low so the union build stays hash
@@ -917,7 +890,7 @@ TEST_P(UnionAllTest, groupByOverUnionAllWithOrderedLegs) {
 
   {
     auto matcher = matchScan("t")
-                       .localPartition(matchScan("u").project().build())
+                       .localPartition(matchScan("u").project())
                        .singleAggregation({"a"}, {"count(*)"})
                        .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
@@ -925,7 +898,7 @@ TEST_P(UnionAllTest, groupByOverUnionAllWithOrderedLegs) {
 
   {
     auto matcher = matchScan("t")
-                       .localPartition(matchScan("u").project().build())
+                       .localPartition(matchScan("u").project())
                        .distributedAggregation({"a"}, {"count(*)"})
                        .gather(FragmentType::kFixed)
                        .build();

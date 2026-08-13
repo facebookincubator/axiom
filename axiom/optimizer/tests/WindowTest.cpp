@@ -351,11 +351,11 @@ TEST_F(WindowTest, underJoin) {
       ") dt ON nation.n_regionkey = dt.n_regionkey");
 
   // The window must be inside a nested DT (below the join), not above it.
-  auto matcher = matchScan("nation")
-                     .hashJoin(
-                         matchScan("nation").window().project().build(),
-                         core::JoinType::kInner)
-                     .build();
+  auto matcher =
+      matchScan("nation")
+          .hashJoin(
+              matchScan("nation").window().project(), core::JoinType::kInner)
+          .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
@@ -677,7 +677,7 @@ TEST_F(WindowTest, leftJoinWithWindowOrderingByRightSideColumn) {
       "WHERE t.x = u.x");
 
   auto matcher = matchScan("t")
-                     .hashJoin(matchScan("u").build(), core::JoinType::kInner)
+                     .hashJoin(matchScan("u"), core::JoinType::kInner)
                      .window({"row_number() OVER (ORDER BY y)"})
                      .project()
                      .build();

@@ -2112,29 +2112,29 @@ PlanMatcherBuilder& PlanMatcherBuilder::streamingAggregation(
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::hashJoin(
-    const std::shared_ptr<PlanMatcher>& rightMatcher) {
+    PlanMatcherBuilder rightMatcher) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
-  matcher_ = std::make_shared<HashJoinMatcher>(matcher_, rightMatcher);
+  matcher_ = std::make_shared<HashJoinMatcher>(matcher_, rightMatcher.build());
   return *this;
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::hashJoin(
-    const std::shared_ptr<PlanMatcher>& rightMatcher,
+    PlanMatcherBuilder rightMatcher,
     JoinType joinType,
     const HashJoinDetails& details) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<HashJoinMatcher>(
-      matcher_, rightMatcher, joinType, details);
+      matcher_, rightMatcher.build(), joinType, details);
   return *this;
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::nestedLoopJoin(
-    const std::shared_ptr<PlanMatcher>& rightMatcher,
+    PlanMatcherBuilder rightMatcher,
     JoinType joinType,
     std::optional<std::string> joinCondition) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<NestedLoopJoinMatcher>(
-      matcher_, rightMatcher, joinType, std::move(joinCondition));
+      matcher_, rightMatcher.build(), joinType, std::move(joinCondition));
   return *this;
 }
 
@@ -2160,12 +2160,14 @@ PlanMatcherBuilder& PlanMatcherBuilder::localPartition(
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::localPartition(
-    std::initializer_list<std::shared_ptr<PlanMatcher>> matcher) {
+    std::initializer_list<PlanMatcherBuilder> sources) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
-  std::vector<std::shared_ptr<PlanMatcher>> matchers{matcher_};
-  matchers.insert(matchers.end(), matcher);
+  std::vector<std::shared_ptr<PlanMatcher>> sourceMatchers{matcher_};
+  for (const auto& source : sources) {
+    sourceMatchers.push_back(source.build());
+  }
   matcher_ = std::make_shared<PlanMatcherImpl<LocalPartitionNode>>(
-      std::move(matchers));
+      std::move(sourceMatchers));
   return *this;
 }
 

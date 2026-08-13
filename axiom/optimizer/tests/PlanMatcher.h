@@ -382,8 +382,7 @@ class PlanMatcherBuilder {
 
   /// Matches a HashJoin node with the specified right side matcher.
   /// @param rightMatcher Matcher for the right (build) side of the join.
-  PlanMatcherBuilder& hashJoin(
-      const std::shared_ptr<PlanMatcher>& rightMatcher);
+  PlanMatcherBuilder& hashJoin(PlanMatcherBuilder rightMatcher);
 
   /// Matches a HashJoin node with the specified right side matcher, join type,
   /// and optional details. Supports symbol rewriting from child matchers.
@@ -391,63 +390,67 @@ class PlanMatcherBuilder {
   /// @param joinType Type of join.
   /// @param details Join details. See HashJoinDetails.
   PlanMatcherBuilder& hashJoin(
-      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      PlanMatcherBuilder rightMatcher,
       JoinType joinType,
       const HashJoinDetails& details = {});
 
   /// Typed shortcuts for `hashJoin` with a fixed `JoinType`.
   PlanMatcherBuilder& hashJoinInner(
-      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      PlanMatcherBuilder rightMatcher,
       const HashJoinDetails& details = {}) {
-    return hashJoin(rightMatcher, JoinType::kInner, details);
+    return hashJoin(std::move(rightMatcher), JoinType::kInner, details);
   }
 
   PlanMatcherBuilder& hashJoinLeft(
-      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      PlanMatcherBuilder rightMatcher,
       const HashJoinDetails& details = {}) {
-    return hashJoin(rightMatcher, JoinType::kLeft, details);
+    return hashJoin(std::move(rightMatcher), JoinType::kLeft, details);
   }
 
   PlanMatcherBuilder& hashJoinRight(
-      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      PlanMatcherBuilder rightMatcher,
       const HashJoinDetails& details = {}) {
-    return hashJoin(rightMatcher, JoinType::kRight, details);
+    return hashJoin(std::move(rightMatcher), JoinType::kRight, details);
   }
 
   PlanMatcherBuilder& hashJoinFull(
-      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      PlanMatcherBuilder rightMatcher,
       const HashJoinDetails& details = {}) {
-    return hashJoin(rightMatcher, JoinType::kFull, details);
+    return hashJoin(std::move(rightMatcher), JoinType::kFull, details);
   }
 
   PlanMatcherBuilder& hashJoinLeftSemiFilter(
-      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      PlanMatcherBuilder rightMatcher,
       const HashJoinDetails& details = {}) {
-    return hashJoin(rightMatcher, JoinType::kLeftSemiFilter, details);
+    return hashJoin(
+        std::move(rightMatcher), JoinType::kLeftSemiFilter, details);
   }
 
   PlanMatcherBuilder& hashJoinLeftSemiProject(
-      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      PlanMatcherBuilder rightMatcher,
       const HashJoinDetails& details = {}) {
-    return hashJoin(rightMatcher, JoinType::kLeftSemiProject, details);
+    return hashJoin(
+        std::move(rightMatcher), JoinType::kLeftSemiProject, details);
   }
 
   PlanMatcherBuilder& hashJoinRightSemiFilter(
-      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      PlanMatcherBuilder rightMatcher,
       const HashJoinDetails& details = {}) {
-    return hashJoin(rightMatcher, JoinType::kRightSemiFilter, details);
+    return hashJoin(
+        std::move(rightMatcher), JoinType::kRightSemiFilter, details);
   }
 
   PlanMatcherBuilder& hashJoinRightSemiProject(
-      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      PlanMatcherBuilder rightMatcher,
       const HashJoinDetails& details = {}) {
-    return hashJoin(rightMatcher, JoinType::kRightSemiProject, details);
+    return hashJoin(
+        std::move(rightMatcher), JoinType::kRightSemiProject, details);
   }
 
   PlanMatcherBuilder& hashJoinAnti(
-      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      PlanMatcherBuilder rightMatcher,
       const HashJoinDetails& details = {}) {
-    return hashJoin(rightMatcher, JoinType::kAnti, details);
+    return hashJoin(std::move(rightMatcher), JoinType::kAnti, details);
   }
 
   /// Matches a NestedLoopJoin node with the specified right side matcher and
@@ -457,7 +460,7 @@ class PlanMatcherBuilder {
   /// @param joinCondition When set, asserts the join condition (e.g., "a > b").
   /// Empty string asserts no join condition, i.e. a plain cross join.
   PlanMatcherBuilder& nestedLoopJoin(
-      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      PlanMatcherBuilder rightMatcher,
       JoinType joinType = JoinType::kInner,
       std::optional<std::string> joinCondition = std::nullopt);
 
@@ -470,15 +473,14 @@ class PlanMatcherBuilder {
       const std::vector<std::string>& partitionKeys);
 
   /// Matches a LocalPartition node with the specified source matchers.
-  /// @param matcher Matchers for the partition sources.
+  /// @param sources Matchers for the partition sources.
   PlanMatcherBuilder& localPartition(
-      std::initializer_list<std::shared_ptr<PlanMatcher>> matcher);
+      std::initializer_list<PlanMatcherBuilder> sources);
 
   /// Matches a LocalPartition node with a single source matcher.
   /// @param matcher Matcher for the partition source.
-  PlanMatcherBuilder& localPartition(
-      const std::shared_ptr<PlanMatcher>& matcher) {
-    return localPartition({matcher});
+  PlanMatcherBuilder& localPartition(PlanMatcherBuilder matcher) {
+    return localPartition({std::move(matcher)});
   }
 
   /// Matches a LocalPartition node with gather type (N-to-1, empty partition
@@ -811,7 +813,7 @@ class PlanMatcherBuilder {
 
   /// Builds and returns the constructed PlanMatcher.
   /// @throws VeloxUserError if matcher is empty.
-  std::shared_ptr<PlanMatcher> build() {
+  std::shared_ptr<PlanMatcher> build() const {
     VELOX_USER_CHECK_NOT_NULL(matcher_, "Cannot build an empty PlanMatcher.");
     return matcher_;
   }
