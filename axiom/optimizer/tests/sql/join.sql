@@ -177,3 +177,28 @@ SELECT t1.a, t2.a FROM t t1, t t2, t t3 WHERE t1.a = t3.a AND t1.b < t2.b
 -- even though no pair containing it satisfies t1.b < t2.b.
 -- error_v2: division by zero
 SELECT t1.a, t2.a FROM t t1, t t2 WHERE t1.b < t2.b AND 1000 / (150 - t1.b) > t2.a
+----
+-- A join-key operand that references two relations must remain applicable
+-- when the third relation joins.
+SELECT m
+FROM (VALUES (1, 10), (2, 20)) AS t(a, b)
+JOIN (VALUES (1, 1, 100), (2, 2, 200)) AS u(x, y, z) ON t.a = u.x
+JOIN (
+  VALUES (100, 11, 1001), (100, 99, 1002),
+         (200, 22, 2001), (200, 99, 2002)
+) AS v(k, l, m) ON u.z = v.k AND t.b + u.y = v.l
+----
+-- An inferred u-x equality must not strand the additional t.b = x.k key from
+-- the explicit t-x edge.
+SELECT d
+FROM (((VALUES (1, 10, 100, 101), (2, 20, 200, 202))
+         AS t(a, b, c, d)
+       JOIN (VALUES (1, 5, 10), (2, 10, 20)) AS u(e, f, g)
+         ON t.a = u.e AND t.b > u.f
+       JOIN (
+         VALUES (10), (20)
+       ) AS v(h) ON u.g = v.h)
+      LEFT JOIN (VALUES (100), (300)) AS w(i) ON t.c = w.i)
+JOIN (
+  VALUES (1, 10), (1, 999), (2, 20), (2, 999), (3, 30)
+) AS x(j, k) ON t.a = x.j AND t.b = x.k

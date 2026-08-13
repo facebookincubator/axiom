@@ -214,9 +214,10 @@ class Enumerator {
   // classic GOO heuristic of keeping intermediate results small; the
   // build/probe orientation within a chosen pair is still cost-optimal
   // (cardinality is orientation-invariant). Returns the component's root plan,
-  // or nullptr if a relation's cardinality is unknown. Reuses any matching
-  // subplans already in the memo (all memoized subplans are valid), so a
-  // partially-filled memo from an overflowed `solveComponent` is fine.
+  // or nullptr if a join cannot be costed or an earlier irrevocable merge
+  // leaves no partition that can apply every newly internal edge. Reuses any
+  // matching subplans already in the memo (all memoized subplans are valid),
+  // so a partially-filled memo from an overflowed `solveComponent` is fine.
   MemoOpCP greedy(RelationSet component) {
     budget_.disable();
     initLeaves(component);
@@ -247,10 +248,11 @@ class Enumerator {
           combined.unionSet(fragments[j]);
           emitCsgCmp(fragments[i], fragments[j]);
           const auto it = memo_.find(combined);
-          // emitCsgCmp records a pair only when an edge connects it and the
-          // join is costable — considerCandidate drops uncostable plans — so a
-          // missing entry means no edge or an unknown-NDV join key, and a
-          // present entry always has a known cardinality.
+          // emitCsgCmp records a pair only when an edge connects it, every edge
+          // made internal by the merge can be applied, and the join is
+          // costable. A missing entry can therefore mean no edge, a partition
+          // that would strand an edge, or an unknown-NDV join key. A present
+          // entry always has a known cardinality.
           if (it == memo_.end()) {
             continue;
           }
@@ -264,13 +266,12 @@ class Enumerator {
         }
       }
       if (!bestCardinality.has_value()) {
-        // No remaining fragment pair can be costed into a single join. In a
-        // connected component connectivity is never the blocker — contracting
-        // merged fragments keeps the graph connected, so an edge-joined pair
-        // always exists — so every such pair must have unknown cardinality (a
-        // join key without NDV). Genuine cross products are split into separate
-        // components upstream, not handled here. Caller falls back to syntactic
-        // order.
+        // No remaining fragment pair can be emitted. Connectivity guarantees
+        // that some pair is edge-connected, but an earlier irrevocable merge
+        // may have made another edge impossible to apply at that partition;
+        // otherwise required statistics are missing. Genuine cross products
+        // are split into separate components upstream. Caller falls back to
+        // syntactic order.
         return nullptr;
       }
       fragments[bestLeft] = bestCombined;
@@ -338,22 +339,30 @@ class Enumerator {
     RelationSet combined{subgraph};
     combined.unionSet(complement);
 
-    // Collect every edge crossing this partition (TES-covered). Standard
-    // DPhyp applies all predicates connecting the two subgraphs at the join;
-    // with a cyclic join graph more than one edge can cross.
+    // Every edge that becomes internal to `combined` must be applied at this
+    // join. Edges already internal to a child were applied below; edges not yet
+    // contained in `combined` remain available above.
     folly::small_vector<std::pair<size_t, bool>, 4> crossing;
     for (size_t edgeIndex{0}; edgeIndex < graph_.edges().size(); ++edgeIndex) {
       const auto& edge = graph_.edges()[edgeIndex];
+      RelationSet endpoints{edge.left()};
+      endpoints.unionSet(edge.right());
+      if (endpoints.isSubset(subgraph) || endpoints.isSubset(complement)) {
+        continue;
+      }
+      if (!endpoints.isSubset(combined)) {
+        continue;
+      }
+
       const bool forward =
           edge.left().isSubset(subgraph) && edge.right().isSubset(complement);
       const bool reverse =
           edge.left().isSubset(complement) && edge.right().isSubset(subgraph);
-      if (!forward && !reverse) {
-        continue;
-      }
-      // Skip edges whose TES is not yet covered.
-      if (!graph_.tes()[edgeIndex].isSubset(combined)) {
-        continue;
+      if ((!forward && !reverse) ||
+          !graph_.tes()[edgeIndex].isSubset(combined)) {
+        // The memo key contains only the cover, not pending predicates. Once
+        // this edge's endpoints become internal, no later join can apply it.
+        return;
       }
       crossing.push_back({edgeIndex, forward});
     }
@@ -993,7 +1002,8 @@ std::vector<MemoOpCP> DPhyp::enumerate(
       root = it == memo_.end() ? nullptr : it->second.cheapest();
     }
     if (root == nullptr) {
-      // A component has no costable plan: some relation or edge lacked stats.
+      // Greedy could not assemble a plan because some join lacked stats or an
+      // earlier merge left no partition that could apply every internal edge.
       // Signal whole-cluster fall back to syntactic order by returning empty.
       return {};
     }
