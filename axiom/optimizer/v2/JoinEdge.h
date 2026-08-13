@@ -113,6 +113,10 @@ class JoinEdge {
         unnestExprs_{std::move(unnestExprs)} {
     VELOX_CHECK(!left_.empty());
     VELOX_CHECK(!right_.empty());
+    VELOX_CHECK_EQ(
+        right_.size(),
+        1,
+        "Cross-join-unnest edge right side must contain exactly one relation");
     VELOX_CHECK(!left_.hasIntersection(right_));
     VELOX_CHECK(
         !unnestExprs_.empty(),

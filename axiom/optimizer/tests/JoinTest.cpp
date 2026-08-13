@@ -249,6 +249,81 @@ TEST_F(JoinV2Test, inferredJoinKeyDoesNotDropAdditionalJoinKey) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+// A join on the second Unnest output must wait until both Unnests and the base
+// input have been assembled.
+TEST_F(JoinV2Test, joinOnNestedUnnestOutputWaitsForInputChain) {
+  testConnector_->addTable("t", ROW({"a"}, ARRAY(ARRAY(BIGINT()))))
+      ->setStats(100, {{"a", {.numDistinct = 100}}});
+  // Make u much larger than v so the optimizer prefers the derived c = y join
+  // over the explicit c = x join; the TES must still keep the full Unnest
+  // input chain below that join.
+  testConnector_->addTable("u", ROW({"x"}, BIGINT()))
+      ->setStats(1'000'000, {{"x", {.numDistinct = 1}}});
+  testConnector_->addTable("v", ROW({"y", "z"}, BIGINT()))
+      ->setStats(10, {{"y", {.numDistinct = 10}}});
+
+  const auto query =
+      "SELECT v.z "
+      "FROM t "
+      "CROSS JOIN UNNEST(t.a) AS n(b) "
+      "CROSS JOIN UNNEST(n.b) AS m(c) "
+      "JOIN u ON m.c = u.x "
+      "JOIN v ON u.x = v.y";
+  SCOPED_TRACE(query);
+  const auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+
+  const auto unnestsAndSmall =
+      matchScan("t")
+          .unnest()
+          .unnest()
+          .hashJoinInner(
+              matchScan("v").build(),
+              {
+                  .keys = std::vector<std::string>{"c = y"},
+                  .filter = "",
+              })
+          .build();
+  const auto matcher = matchScan("u")
+                           .hashJoinInner(
+                               unnestsAndSmall,
+                               {
+                                   .keys = std::vector<std::string>{"x = c"},
+                                   .filter = "",
+                               })
+                           .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+// An outer join on an Unnest output must wait until the Unnest input relation
+// has been assembled.
+TEST_F(JoinV2Test, outerJoinOnUnnestOutputWaitsForInput) {
+  // Make u smaller than t so consuming the Unnest output with u would be the
+  // preferred first join if the TES did not require the Unnest input.
+  testConnector_->addTable("t", ROW({"a"}, ARRAY(BIGINT())))
+      ->setStats(100, {{"a", {.numDistinct = 100}}});
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(10, {{"x", {.numDistinct = 10}}});
+
+  const auto query =
+      "SELECT u.y "
+      "FROM t "
+      "CROSS JOIN UNNEST(t.a) AS n(b) "
+      "LEFT JOIN u ON n.b = u.x";
+  SCOPED_TRACE(query);
+  const auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+
+  const auto matcher = matchScan("t")
+                           .unnest()
+                           .hashJoinLeft(
+                               matchScan("u").build(),
+                               {
+                                   .keys = std::vector<std::string>{"b = x"},
+                                   .filter = "",
+                               })
+                           .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 TEST_F(JoinTest, joinWithFilterOverLimit) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y", "z"}, BIGINT()));

@@ -352,10 +352,9 @@ JoinHypergraph HypergraphBuilder::build(
     }
   }
 
-  // Admit Unnest relations and extend the column-resolution map so the
-  // Unnest's produced columns resolve to the Unnest's relation id.
-  // Innermost first, so a dependent Unnest sees the Unnest feeding its
-  // input already registered.
+  // Admit all Unnest relations and extend the column-resolution map so each
+  // Unnest's produced columns resolve to its relation id before input
+  // relations are resolved below.
   folly::F14FastMap<UnnestCP, int8_t> unnestIds;
   for (UnnestCP unnest : cluster.unnests) {
     PlanObjectSet producedColumns;
@@ -383,10 +382,8 @@ JoinHypergraph HypergraphBuilder::build(
     }
   }
 
-  // Build the directed cross-join-unnest edge for each Unnest, and record
-  // its input relations (the relation ids its input subtree contributes,
-  // resolved via the now-complete columnToLeaf) for the outer-join barrier
-  // applied in the cluster-join loop.
+  // Build each directed cross-join-unnest edge and record its input relations
+  // for the outer-join barrier applied in the cluster-join loop.
   folly::F14FastMap<int8_t, RelationSet> unnestInputRelations;
   for (UnnestCP unnest : cluster.unnests) {
     const int8_t id = unnestIds.at(unnest);
@@ -401,7 +398,6 @@ JoinHypergraph HypergraphBuilder::build(
         !inputRelations.empty(),
         "Unnest input subtree must contribute at least one cluster relation");
     unnestInputRelations.emplace(id, inputRelations);
-
     RelationSet tes{inputRelations};
     tes.add(id);
     graph.addEdge(
@@ -462,16 +458,6 @@ JoinHypergraph HypergraphBuilder::build(
             /*leftSide=*/false,
             leafIds,
             joinLeaves));
-
-        // Consumer edges that reference an Unnest produced column must
-        // wait until the Unnest's input relations are in cover, so the
-        // cross-join-unnest fires before any consumer joins Unnest with
-        // its other side.
-        for (const auto& [unnestId, inputRelations] : unnestInputRelations) {
-          if (ses.contains(unnestId)) {
-            tes.unionSet(inputRelations);
-          }
-        }
 
         graph.addEdge(
             JoinEdge{
@@ -587,6 +573,7 @@ JoinHypergraph HypergraphBuilder::build(
   }
 
   addTransitiveInnerEdges(graph, cluster, columnToLeaf);
+  graph.expandTesForUnnestDependencies();
 
   return graph;
 }
