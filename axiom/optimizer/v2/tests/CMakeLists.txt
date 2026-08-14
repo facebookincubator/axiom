@@ -18,7 +18,6 @@ add_executable(
   JoinHypergraphTest.cpp
   RelationSetTest.cpp
   TpchPlanTest.cpp
-  TpchResultTest.cpp
 )
 
 add_test(

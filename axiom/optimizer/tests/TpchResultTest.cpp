@@ -25,12 +25,13 @@ namespace {
 
 using namespace facebook::velox;
 
-// Runs each TPC-H query end-to-end on generated data and checks the results
-// against a reference plan from `TpchQueryBuilder`. Plan shape is asserted
-// separately in `TpchPlanTest`, which uses injected statistics and needs no
-// data. CI generates scale factor 0.1; other scales can be supplied via
-// `--tpch_data_path` (see `HiveQueriesTestBase`).
-class TpchResultTest : public test::HiveQueriesTestBase {
+// Runs each TPC-H query end-to-end on generated data under both optimizers and
+// checks the results against a reference plan from `TpchQueryBuilder`. Plan
+// shape is asserted separately in `TpchPlanTest`, which uses injected
+// statistics and needs no data. CI generates scale factor 0.1; other scales can
+// be supplied via `--tpch_data_path` (see `HiveQueriesTestBase`).
+class TpchResultTest : public test::HiveQueriesTestBase,
+                       public ::testing::WithParamInterface<bool> {
  protected:
   static void SetUpTestCase() {
     test::HiveQueriesTestBase::SetUpTestCase();
@@ -38,114 +39,130 @@ class TpchResultTest : public test::HiveQueriesTestBase {
   }
 
   void SetUp() override {
+    useV2_ = GetParam();
     HiveQueriesTestBase::SetUp();
     referenceBuilder_ =
         std::make_unique<exec::test::TpchQueryBuilder>(localFileFormat_);
     referenceBuilder_->initialize(localDataPath_);
   }
 
+  // Maximum parallelism for result checks. checkSame runs every setting up to
+  // this, so each query is verified single-node and multi-node, single- and
+  // multi-driver ({1,1}, {1,4}, {2,1}, {2,4}) — exercising the local exchanges
+  // that numDrivers > 1 inserts.
+  static inline const MultiFragmentPlan::Options kMaxParallelism{
+      .numWorkers = 2,
+      .numDrivers = 4,
+  };
+
   void checkTpchQuery(int32_t query) {
-    checkResults(
-        test::readTpchSql(query), referenceBuilder_->getQueryPlan(query).plan);
+    checkSame(
+        parseSelect(test::readTpchSql(query)),
+        referenceBuilder_->getQueryPlan(query).plan,
+        kMaxParallelism);
   }
 
   std::unique_ptr<exec::test::TpchQueryBuilder> referenceBuilder_;
 };
 
-TEST_F(TpchResultTest, q01) {
+TEST_P(TpchResultTest, q01) {
   checkTpchQuery(1);
 }
 
-TEST_F(TpchResultTest, q02) {
+TEST_P(TpchResultTest, q02) {
   checkTpchQuery(2);
 }
 
-TEST_F(TpchResultTest, q03) {
+TEST_P(TpchResultTest, q03) {
   checkTpchQuery(3);
 }
 
-TEST_F(TpchResultTest, q04) {
+TEST_P(TpchResultTest, q04) {
   checkTpchQuery(4);
 }
 
-TEST_F(TpchResultTest, q05) {
+TEST_P(TpchResultTest, q05) {
   checkTpchQuery(5);
 }
 
-TEST_F(TpchResultTest, q06) {
+TEST_P(TpchResultTest, q06) {
   checkTpchQuery(6);
 }
 
-TEST_F(TpchResultTest, q07) {
+TEST_P(TpchResultTest, q07) {
   checkTpchQuery(7);
 }
 
-TEST_F(TpchResultTest, q08) {
+TEST_P(TpchResultTest, q08) {
   checkTpchQuery(8);
 }
 
-TEST_F(TpchResultTest, q09) {
+TEST_P(TpchResultTest, q09) {
   checkTpchQuery(9);
 }
 
 // q9 with `p_name like '%green%'` replaced by the estimable `p_size <= 3`. The
 // reference comes from `getAltPlan(9)`.
-TEST_F(TpchResultTest, q09Alt) {
-  checkResults(
-      test::readTpchSql("q9_alt"), referenceBuilder_->getAltPlan(9).plan);
+TEST_P(TpchResultTest, q09Alt) {
+  checkSame(
+      parseSelect(test::readTpchSql("q9_alt")),
+      referenceBuilder_->getAltPlan(9).plan,
+      kMaxParallelism);
 }
 
-TEST_F(TpchResultTest, q10) {
+TEST_P(TpchResultTest, q10) {
   checkTpchQuery(10);
 }
 
-TEST_F(TpchResultTest, q11) {
+TEST_P(TpchResultTest, q11) {
   checkTpchQuery(11);
 }
 
-TEST_F(TpchResultTest, q12) {
+TEST_P(TpchResultTest, q12) {
   checkTpchQuery(12);
 }
 
-TEST_F(TpchResultTest, q13) {
+TEST_P(TpchResultTest, q13) {
   checkTpchQuery(13);
 }
 
-TEST_F(TpchResultTest, q14) {
+TEST_P(TpchResultTest, q14) {
   checkTpchQuery(14);
 }
 
-TEST_F(TpchResultTest, q15) {
+TEST_P(TpchResultTest, q15) {
   checkTpchQuery(15);
 }
 
-TEST_F(TpchResultTest, q16) {
+TEST_P(TpchResultTest, q16) {
   checkTpchQuery(16);
 }
 
-TEST_F(TpchResultTest, q17) {
+TEST_P(TpchResultTest, q17) {
   checkTpchQuery(17);
 }
 
-TEST_F(TpchResultTest, q18) {
+TEST_P(TpchResultTest, q18) {
   checkTpchQuery(18);
 }
 
-TEST_F(TpchResultTest, q19) {
+TEST_P(TpchResultTest, q19) {
   checkTpchQuery(19);
 }
 
-TEST_F(TpchResultTest, q20) {
+TEST_P(TpchResultTest, q20) {
   checkTpchQuery(20);
 }
 
-TEST_F(TpchResultTest, q21) {
+TEST_P(TpchResultTest, q21) {
   checkTpchQuery(21);
 }
 
-TEST_F(TpchResultTest, q22) {
+TEST_P(TpchResultTest, q22) {
   checkTpchQuery(22);
 }
+
+AXIOM_INSTANTIATE_V1_V2(TpchResultTest);
 
 } // namespace
 } // namespace facebook::axiom::optimizer
