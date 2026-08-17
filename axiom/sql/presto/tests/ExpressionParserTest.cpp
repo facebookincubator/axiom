@@ -1327,11 +1327,51 @@ TEST_F(ExpressionParserTest, mixedOperatorsNotFlattened) {
       parseExpr("1 = 0 AND 2 = 0 OR 3 = 0"), "(1 = 0 AND 2 = 0) OR 3 = 0"));
 }
 
-// A parenthesized chain stays grouped; only a plain chain is flattened.
-TEST_F(ExpressionParserTest, parenthesizedChainNotFlattened) {
+// Parentheses only group, so a same-operator chain flattens through them.
+TEST_F(ExpressionParserTest, parenthesizedChainFlattens) {
   ASSERT_TRUE(match(
-      parseExpr("1 = 0 OR (2 = 0 OR 3 = 0)"),
-      R"("or"(1 = 0, "or"(2 = 0, 3 = 0)))"));
+      parseExpr("1 = 0 OR (2 = 0 OR 3 = 0)"), R"("or"(1 = 0, 2 = 0, 3 = 0))"));
+  ASSERT_TRUE(match(
+      parseExpr("(1 = 0 OR 2 = 0) OR 3 = 0"), R"("or"(1 = 0, 2 = 0, 3 = 0))"));
+  ASSERT_TRUE(match(
+      parseExpr("(1 = 0 AND 2 = 0) AND 3 = 0"),
+      R"("and"(1 = 0, 2 = 0, 3 = 0))"));
+  // An unbalanced shape: operands still come out in source order.
+  ASSERT_TRUE(match(
+      parseExpr("1 = 0 OR ((2 = 0 OR 3 = 0) OR 4 = 0)"),
+      R"("or"(1 = 0, 2 = 0, 3 = 0, 4 = 0))"));
+}
+
+// Two paren levels, so a single unwrap would leave the chain nested.
+TEST_F(ExpressionParserTest, repeatedParenthesesFlatten) {
+  ASSERT_TRUE(match(
+      parseExpr("1 = 0 OR ((2 = 0 OR 3 = 0))"),
+      R"("or"(1 = 0, 2 = 0, 3 = 0))"));
+}
+
+// A parenthesized chain of the other operator keeps its own node.
+TEST_F(ExpressionParserTest, parenthesizedMixedOperatorsNotFlattened) {
+  ASSERT_TRUE(match(
+      parseExpr("1 = 0 OR (2 = 0 AND 3 = 0)"),
+      R"("or"(1 = 0, "and"(2 = 0, 3 = 0)))"));
+  // Dropping these parentheses would change the result, since AND binds first.
+  ASSERT_TRUE(match(
+      parseExpr("1 = 0 AND (2 = 0 OR 3 = 0)"),
+      R"("and"(1 = 0, "or"(2 = 0, 3 = 0)))"));
+  // Each group flattens on its own; the differing parent keeps them apart.
+  ASSERT_TRUE(match(
+      parseExpr("(1 = 0 OR 2 = 0) AND (3 = 0 OR 4 = 0)"),
+      R"("and"("or"(1 = 0, 2 = 0), "or"(3 = 0, 4 = 0)))"));
+}
+
+// An operator applied to a parenthesized chain keeps it a separate operand.
+TEST_F(ExpressionParserTest, operatorOnChainBlocksFlattening) {
+  ASSERT_TRUE(match(
+      parseExpr("1 = 0 OR ((2 = 0 OR 3 = 0) IS NULL)"),
+      R"("or"(1 = 0, is_null("or"(2 = 0, 3 = 0))))"));
+  ASSERT_TRUE(match(
+      parseExpr("1 = 0 OR (NOT (2 = 0 OR 3 = 0))"),
+      R"("or"(1 = 0, not("or"(2 = 0, 3 = 0))))"));
 }
 
 // A flattened chain wider than max_expression_width is rejected.
@@ -1354,6 +1394,20 @@ TEST_F(ExpressionParserTest, nestedChainWidthEnforcedPerNode) {
       parseExpr(
           "(1 = 0 AND 1 = 1 AND 1 = 2 AND 1 = 3) OR 1 = 4",
           /*maxExpressionWidth=*/3),
+      "Expression exceeds maximum width");
+}
+
+// Same-operator groups merge into one node, so they share a width budget.
+TEST_F(ExpressionParserTest, widthSharedAcrossParenthesizedGroups) {
+  // Groups summing to exactly the cap are accepted.
+  ASSERT_TRUE(match(
+      parseExpr(
+          "(1 = 0 OR 1 = 1) OR (1 = 2 OR 1 = 3)", /*maxExpressionWidth=*/4),
+      R"("or"(1 = 0, 1 = 1, 1 = 2, 1 = 3))"));
+
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseExpr(
+          "(1 = 0 OR 1 = 1) OR (1 = 2 OR 1 = 3)", /*maxExpressionWidth=*/3),
       "Expression exceeds maximum width");
 }
 
