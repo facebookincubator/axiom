@@ -17,9 +17,11 @@
 #pragma once
 
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "folly/CppAttributes.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/hive/PartitionValue.h"
 #include "velox/dwio/common/Options.h"
 
 namespace facebook::axiom::connector::hive {
@@ -119,6 +121,34 @@ class HiveTable : public Table {
   std::vector<std::string> ioColumnPriority() const override;
 };
 
+/// Converts Hive partition values using one timestamp interpretation.
+///
+/// HivePartitionValueConverter converter(
+///     HivePartitionValueConverter::TimestampMode::kLocalTime);
+/// auto value = converter.toVariant(
+///     "2020-01-01 12:34:56", *velox::TIMESTAMP());
+class HivePartitionValueConverter {
+ public:
+  using TimestampMode = velox::connector::hive::PartitionValue::TimestampMode;
+
+  /// Uses 'timestampMode' for plain TIMESTAMP values.
+  explicit HivePartitionValueConverter(TimestampMode timestampMode);
+
+  /// Converts a non-null partition string to a typed value.
+  velox::Variant toVariant(std::string_view value, const velox::Type& type)
+      const;
+
+  /// Converts a typed value to the partition string the Metastore stores.
+  /// Returns nullopt when no unambiguous string exists, as for a local-time
+  /// TIMESTAMP inside a DST fold.
+  std::optional<std::string> toPartitionString(
+      const velox::Variant& value,
+      const velox::Type& type) const;
+
+ private:
+  const TimestampMode timestampMode_;
+};
+
 /// Describes a Hive table layout. Adds a file format and a list of
 /// Hive partitioning columns and an optional bucket count to the base
 /// TableLayout. The partitioning in TableLayout referes to bucketing.
@@ -146,7 +176,8 @@ class HiveTableLayout : public TableLayout {
       const std::vector<SortOrder>& sortOrder,
       std::vector<const Column*> lookupKeys,
       std::vector<const Column*> hivePartitionedByColumns,
-      velox::dwio::common::FileFormat fileFormat);
+      velox::dwio::common::FileFormat fileFormat,
+      std::shared_ptr<const HiveMetadataConfig> hiveMetadataConfig);
 
   velox::dwio::common::FileFormat fileFormat() const {
     return fileFormat_;
@@ -156,11 +187,9 @@ class HiveTableLayout : public TableLayout {
     return hivePartitionColumns_;
   }
 
-  /// Converts a Hive partition-key string to a Variant of 'type'. Fails for a
-  /// type that cannot appear as a partition key.
-  static velox::Variant partitionValueToVariant(
-      std::string_view value,
-      const velox::Type& type);
+  /// Creates a converter using the session-over-connector timestamp setting.
+  HivePartitionValueConverter partitionValueConverter(
+      const ConnectorSessionPtr& session) const;
 
   std::optional<int32_t> numBuckets() const {
     return numBuckets_;
@@ -208,6 +237,7 @@ class HiveTableLayout : public TableLayout {
       FilteredTableStats& stats) const;
 
   const velox::dwio::common::FileFormat fileFormat_;
+  const std::shared_ptr<const HiveMetadataConfig> hiveMetadataConfig_;
   const std::vector<const Column*> hivePartitionColumns_;
   const std::optional<int32_t> numBuckets_;
   const std::shared_ptr<const HivePartitionType> partitionType_;
@@ -295,8 +325,15 @@ class HiveWriteOptions {
 /// materialized here.
 class HiveDeleteWriteHandle : public ConnectorWriteHandle {
  public:
-  HiveDeleteWriteHandle(TablePtr table, velox::common::SubfieldFilters filters)
-      : table_{std::move(table)}, filters_{std::move(filters)} {}
+  /// 'converter' is resolved from the session that issued the DELETE, so the
+  /// partitions removed at commit are the ones the query selected.
+  HiveDeleteWriteHandle(
+      TablePtr table,
+      velox::common::SubfieldFilters filters,
+      HivePartitionValueConverter converter)
+      : table_{std::move(table)},
+        filters_{std::move(filters)},
+        converter_{std::move(converter)} {}
 
   const TablePtr& table() const {
     return table_;
@@ -306,11 +343,16 @@ class HiveDeleteWriteHandle : public ConnectorWriteHandle {
     return filters_;
   }
 
+  const HivePartitionValueConverter& partitionValueConverter() const {
+    return converter_;
+  }
+
   std::string toString() const override;
 
  private:
   const TablePtr table_;
   const velox::common::SubfieldFilters filters_;
+  const HivePartitionValueConverter converter_;
 };
 
 class HiveConnectorMetadata : public ConnectorMetadata {
@@ -337,6 +379,7 @@ class HiveConnectorMetadata : public ConnectorMetadata {
   // on partition columns. A connector overrides this to carry its own
   // description of the delete.
   virtual ConnectorWriteHandlePtr makeDeleteWriteHandle(
+      const ConnectorSessionPtr& session,
       const TablePtr& table,
       velox::common::SubfieldFilters filters) const;
 

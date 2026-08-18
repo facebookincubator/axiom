@@ -17,16 +17,24 @@
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "gtest/gtest.h"
 #include "velox/common/config/Config.h"
+#include "velox/connectors/hive/HiveConfig.h"
 
 namespace facebook::axiom::connector::hive {
 namespace {
 
+ConnectorSessionPtr makeSession(Properties properties) {
+  return std::make_shared<ConnectorSession>(
+      "query", "user", std::move(properties));
+}
+
 TEST(HiveMetadataConfigTest, defaultConfig) {
   HiveMetadataConfig config(
       std::make_shared<velox::config::ConfigBase>(
-          std::unordered_map<std::string, std::string>()));
+          std::unordered_map<std::string, std::string>()),
+      "hive");
   ASSERT_EQ(config.localDataPath(), "");
   ASSERT_EQ(config.localFileFormat(), "");
+  EXPECT_TRUE(config.readTimestampPartitionValueAsLocalTime(nullptr));
 }
 
 TEST(HiveMetadataConfigTest, overrideConfig) {
@@ -34,9 +42,30 @@ TEST(HiveMetadataConfigTest, overrideConfig) {
       {HiveMetadataConfig::kLocalDataPath, "/path/to/data"},
       {HiveMetadataConfig::kLocalFileFormat, "parquet"}};
   HiveMetadataConfig config(
-      std::make_shared<velox::config::ConfigBase>(std::move(properties)));
+      std::make_shared<velox::config::ConfigBase>(std::move(properties)),
+      "hive");
   ASSERT_EQ(config.localDataPath(), "/path/to/data");
   ASSERT_EQ(config.localFileFormat(), "parquet");
+}
+
+TEST(HiveMetadataConfigTest, timestampPartitionSetting) {
+  HiveMetadataConfig config(
+      std::make_shared<velox::config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{
+              {velox::connector::hive::FileConfig::
+                   kReadTimestampPartitionValueAsLocalTime,
+               "false"}}),
+      "hive");
+  EXPECT_FALSE(config.readTimestampPartitionValueAsLocalTime(makeSession({})));
+  EXPECT_TRUE(config.readTimestampPartitionValueAsLocalTime(makeSession(
+      {{velox::connector::hive::FileConfig::
+            kReadTimestampPartitionValueAsLocalTimeSession,
+        "true"}})));
+  EXPECT_TRUE(config.readTimestampPartitionValueAsLocalTime(makeSession(
+      {{std::string("hive.") +
+            velox::connector::hive::FileConfig::
+                kReadTimestampPartitionValueAsLocalTimeSession,
+        "true"}})));
 }
 
 } // namespace

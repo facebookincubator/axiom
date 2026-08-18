@@ -17,10 +17,8 @@
 #include "axiom/connectors/hive/HiveConnectorMetadata.h"
 
 #include <fmt/ranges.h>
-#include <folly/Conv.h>
 #include <algorithm>
 #include <utility>
-#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
@@ -198,7 +196,8 @@ HiveTableLayout::HiveTableLayout(
     const std::vector<SortOrder>& sortOrder,
     std::vector<const Column*> lookupKeys,
     std::vector<const Column*> hivePartitionedByColumns,
-    velox::dwio::common::FileFormat fileFormat)
+    velox::dwio::common::FileFormat fileFormat,
+    std::shared_ptr<const HiveMetadataConfig> hiveMetadataConfig)
     : TableLayout(
           label,
           table,
@@ -210,6 +209,7 @@ HiveTableLayout::HiveTableLayout(
           std::move(lookupKeys),
           /*supportsScan=*/true),
       fileFormat_(fileFormat),
+      hiveMetadataConfig_(std::move(hiveMetadataConfig)),
       hivePartitionColumns_(std::move(hivePartitionedByColumns)),
       numBuckets_(numPartitions),
       partitionType_{
@@ -219,29 +219,64 @@ HiveTableLayout::HiveTableLayout(
                     extractPartitionKeyTypes(partitionedByColumns))
               : nullptr} {
   VELOX_CHECK_EQ(sortedByColumns.size(), sortOrder.size());
+  VELOX_CHECK_NOT_NULL(hiveMetadataConfig_);
 }
 
-// static
-velox::Variant HiveTableLayout::partitionValueToVariant(
+HivePartitionValueConverter::HivePartitionValueConverter(
+    TimestampMode timestampMode)
+    : timestampMode_(timestampMode) {}
+
+velox::Variant HivePartitionValueConverter::toVariant(
     std::string_view value,
-    const velox::Type& type) {
-  switch (type.kind()) {
-    case velox::TypeKind::BOOLEAN:
-      return velox::Variant(folly::to<bool>(value));
-    case velox::TypeKind::TINYINT:
-      return velox::Variant(folly::to<int8_t>(value));
-    case velox::TypeKind::SMALLINT:
-      return velox::Variant(folly::to<int16_t>(value));
-    case velox::TypeKind::INTEGER:
-      return velox::Variant(folly::to<int32_t>(value));
-    case velox::TypeKind::BIGINT:
-      return velox::Variant(folly::to<int64_t>(value));
-    case velox::TypeKind::VARCHAR:
-      return velox::Variant(std::string(value));
-    default:
-      VELOX_UNREACHABLE(
-          "Unsupported partition column type: {}", type.toString());
+    const velox::Type& type) const {
+  return velox::connector::hive::PartitionValue::fromString(
+      value,
+      type,
+      timestampMode_,
+      velox::connector::hive::PartitionValue::DateMode::kIsoString);
+}
+
+std::optional<std::string> HivePartitionValueConverter::toPartitionString(
+    const velox::Variant& value,
+    const velox::Type& type) const {
+  if (value.isNull()) {
+    return std::nullopt;
   }
+
+  if (type.kind() == velox::TypeKind::TIMESTAMP &&
+      type.equivalent(*velox::TIMESTAMP()) &&
+      timestampMode_ == TimestampMode::kLocalTime) {
+    auto timestamp = value.value<velox::TypeKind::TIMESTAMP>();
+    // Shifting either extreme overflows, so neither has a local-time name.
+    if (timestamp == velox::Timestamp::min() ||
+        timestamp == velox::Timestamp::max()) {
+      return std::nullopt;
+    }
+    // A DST fold maps two instants to one local time, so the round trip does
+    // not return the original.
+    const auto original = timestamp;
+    timestamp.toTimezone(velox::Timestamp::defaultTimezone());
+    timestamp.toGMT(velox::Timestamp::defaultTimezone());
+    if (timestamp != original) {
+      return std::nullopt;
+    }
+  }
+
+  return velox::connector::hive::PartitionValue::toString(
+      value,
+      type,
+      timestampMode_,
+      velox::connector::hive::PartitionValue::DateMode::kIsoString);
+}
+
+HivePartitionValueConverter HiveTableLayout::partitionValueConverter(
+    const ConnectorSessionPtr& session) const {
+  const bool readTimestampAsLocalTime =
+      hiveMetadataConfig_->readTimestampPartitionValueAsLocalTime(session);
+  return HivePartitionValueConverter(
+      readTimestampAsLocalTime
+          ? HivePartitionValueConverter::TimestampMode::kLocalTime
+          : HivePartitionValueConverter::TimestampMode::kUtc);
 }
 
 namespace {
@@ -462,9 +497,14 @@ velox::common::SubfieldFilters deleteFilters(
 } // namespace
 
 ConnectorWriteHandlePtr HiveConnectorMetadata::makeDeleteWriteHandle(
+    const ConnectorSessionPtr& session,
     const TablePtr& table,
     velox::common::SubfieldFilters filters) const {
-  return std::make_shared<HiveDeleteWriteHandle>(table, std::move(filters));
+  const auto* hiveLayout =
+      dynamic_cast<const HiveTableLayout*>(table->layouts()[0]);
+  VELOX_CHECK_NOT_NULL(hiveLayout);
+  return std::make_shared<HiveDeleteWriteHandle>(
+      table, std::move(filters), hiveLayout->partitionValueConverter(session));
 }
 
 ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
@@ -484,7 +524,8 @@ ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
   VELOX_CHECK_NOT_NULL(hiveLayout);
 
   if (kind == WriteKind::kDelete) {
-    return makeDeleteWriteHandle(table, deleteFilters(*hiveLayout, scanHandle));
+    return makeDeleteWriteHandle(
+        session, table, deleteFilters(*hiveLayout, scanHandle));
   }
   auto storageFormat = hiveLayout->fileFormat();
 

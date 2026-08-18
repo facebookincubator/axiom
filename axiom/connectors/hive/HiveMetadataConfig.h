@@ -16,7 +16,10 @@
 
 #pragma once
 
+#include <memory>
 #include <string>
+
+#include "axiom/connectors/ConnectorSession.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::config {
@@ -46,14 +49,27 @@ class HiveMetadataConfig {
 
   std::string localFileFormat() const;
 
+  /// Applies the session override when present, otherwise the connector
+  /// setting.
+  bool readTimestampPartitionValueAsLocalTime(
+      const ConnectorSessionPtr& session) const;
+
+  /// Applies the same precedence to a caller-supplied property map, for
+  /// callers holding session properties rather than a session.
+  bool readTimestampPartitionValueAsLocalTime(
+      const velox::config::ConfigBase* sessionProperties) const;
+
   /// HiveMetadataConfig may be initialized from a base config which also
   /// contains execution config defined in velox/connectors/hive/HiveConfig.h,
   /// so some additional properties may be present which are not defined here.
-  explicit HiveMetadataConfig(
-      std::shared_ptr<const velox::config::ConfigBase> config)
-      : config_{std::move(config)} {
+  /// 'connectorId' is the catalog name a session may prefix a property with.
+  HiveMetadataConfig(
+      std::shared_ptr<const velox::config::ConfigBase> config,
+      std::string connectorId)
+      : config_{std::move(config)}, connectorId_{std::move(connectorId)} {
     VELOX_CHECK_NOT_NULL(
         config_, "Config is null for HiveMetadataConfig initialization");
+    VELOX_CHECK(!connectorId_.empty(), "HiveMetadataConfig needs a connector");
   }
 
  protected:
@@ -63,6 +79,7 @@ class HiveMetadataConfig {
 
  private:
   std::shared_ptr<const velox::config::ConfigBase> config_;
+  const std::string connectorId_;
 };
 
 } // namespace facebook::axiom::connector::hive
