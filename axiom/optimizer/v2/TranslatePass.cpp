@@ -750,6 +750,7 @@ Translated Translator::translateScan(
   auto* baseTable = make<BaseTable>();
   baseTable->cname = toName(fmt::format("t{}", baseTableCounter_++));
   baseTable->schemaTable = schemaTable;
+  baseTable->filteredDataSize = schemaTable->dataSize;
   // filteredCardinality stays 0 until estimateLeafStats populates it from
   // connector stats; cardinality estimation falls back to constraint-based
   // selectivity while it is unset.

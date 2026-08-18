@@ -27,6 +27,7 @@
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/PrecomputeProjection.h"
+#include "axiom/optimizer/Schema.h"
 #include "axiom/optimizer/StatsFilterSelectivityEstimator.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "folly/coro/BlockingWait.h"
@@ -283,12 +284,21 @@ void Optimization::applyFilteredStats(
     }
   }
 
+  // Bytes read from storage are fixed by partition pruning, already reflected
+  // in stats->dataSize, so they are not scaled by row-level filter selectivity.
+  // Only refine when the connector estimated a size; otherwise keep the
+  // whole-table seed from schemaTable->dataSize.
+  if (auto dataSize = toSignedByteCount(stats->dataSize)) {
+    baseTable.filteredDataSize = dataSize;
+  }
+
   // The connector accounted for the filters it accepted into the handle in
   // numRows. Post-apply selectivity for the filters createTableHandle rejected
   // (kept as ExprCP), which the optimizer owns.
   const auto& rejectedFilters =
       toVelox_.leafData(baseTable.id())->rejectedExprs;
   if (rejectedFilters.empty()) {
+    // Connector estimated all filters.
     baseTable.filteredCardinality = stats->numRows;
     return;
   }

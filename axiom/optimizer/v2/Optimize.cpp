@@ -110,6 +110,7 @@ PlanAndStats Optimizer::optimize(const MultiFragmentPlan::Options& options) {
       std::move(emitted.fragments), options);
   result.finishWrite = std::move(emitted.finishWrite);
   result.prediction = std::move(emitted.prediction);
+  result.estimatedScanBytes = emitted.estimatedScanBytes;
 
   // The plan's output must have one column per logical-plan output column. A
   // TableWrite root emits write-stats rows instead of the query columns, so it

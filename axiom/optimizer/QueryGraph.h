@@ -1157,6 +1157,12 @@ struct BaseTable : public TableObject {
   /// the cardinality is unknown.
   std::optional<float> filteredCardinality{0};
 
+  /// Estimated on-disk (compressed) bytes read from storage for this scan after
+  /// partition pruning. Initialized to schemaTable->dataSize. Not scaled by
+  /// row-level filter selectivity: a scan reads the matching partitions' bytes
+  /// before rows are filtered. nullopt when no data-size estimate is available.
+  std::optional<int64_t> filteredDataSize;
+
   SubfieldSet controlSubfields;
 
   SubfieldSet payloadSubfields;
