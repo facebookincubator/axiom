@@ -146,13 +146,20 @@ class LocalHiveConnectorMetadataTest
         velox::exec::test::kHiveConnectorId, handle->veloxHandle());
     auto plan = builder.startTableWriter()
                     .outputDirectoryPath(outputPath)
-                    .outputType(table->type())
+                    .targetColumns(table->type())
                     .insertHandle(insertHandle)
                     .fileFormat(format)
                     .endTableWriter()
                     .planNode();
     auto result = exec::test::AssertQueryBuilder(plan).copyResults(pool());
-    metadata_->finishWrite(session, handle, {result}, nullptr, {}).get();
+    metadata_
+        ->finishWrite(
+            session,
+            handle,
+            std::vector<velox::RowVectorPtr>{result},
+            nullptr,
+            {})
+        .get();
   }
 
   /// Read the specified files from the table. All the files must belong to
