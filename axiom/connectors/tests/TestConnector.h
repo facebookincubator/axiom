@@ -186,6 +186,10 @@ class TestTable : public Table {
     return data_.empty() ? numRows_ : dataRows_;
   }
 
+  std::optional<uint64_t> dataSize() const override {
+    return dataSize_;
+  }
+
   const std::vector<velox::RowVectorPtr>& data() const {
     return data_;
   }
@@ -220,6 +224,12 @@ class TestTable : public Table {
       uint64_t numRows,
       const std::unordered_map<std::string, ColumnStatistics>& columnStats);
 
+  /// Sets the on-disk data size reported by dataSize(), for exercising
+  /// data-size-based optimizer estimates.
+  void setDataSize(uint64_t dataSize) {
+    dataSize_ = dataSize;
+  }
+
  private:
   // Per-column state for incremental stat computation during addData.
   struct ColumnTracker {
@@ -247,6 +257,7 @@ class TestTable : public Table {
   std::vector<int32_t> dataBucketIds_;
   uint64_t numRows_{0};
   uint64_t dataRows_{0};
+  std::optional<uint64_t> dataSize_;
   std::vector<ColumnTracker> columnTrackers_;
 
   std::optional<TestBucketSpec> bucketSpec_;
@@ -565,6 +576,9 @@ class TestConnectorMetadata : public ConnectorMetadata {
       const SchemaTableName& tableName,
       uint64_t numRows,
       const std::unordered_map<std::string, ColumnStatistics>& columnStats);
+
+  /// See TestTable::setDataSize.
+  void setDataSize(const SchemaTableName& tableName, uint64_t dataSize);
 
   TablePtr createTable(
       const ConnectorSessionPtr& session,
@@ -895,6 +909,14 @@ class TestConnector : public velox::connector::Connector {
       uint64_t numRows,
       const std::unordered_map<std::string, ColumnStatistics>& columnStats) {
     setStats({std::string(kDefaultSchema), tableName}, numRows, columnStats);
+  }
+
+  /// Sets the on-disk data size for the table with the specified name.
+  void setDataSize(const SchemaTableName& tableName, uint64_t dataSize);
+
+  /// Convenience overload that uses kDefaultSchema as the schema.
+  void setDataSize(const std::string& tableName, uint64_t dataSize) {
+    setDataSize({std::string(kDefaultSchema), tableName}, dataSize);
   }
 
   bool dropTableIfExists(const SchemaTableName& name);

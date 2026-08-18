@@ -51,6 +51,11 @@ struct PlanAndStats {
   NodePredictionMap prediction;
   FinishWrite finishWrite;
 
+  /// Sum of the on-disk (compressed) bytes read from storage over the table
+  /// scans that reported a data-size estimate. A lower bound when some scans
+  /// lack an estimate; nullopt only when no scan reported one.
+  std::optional<int64_t> estimatedScanBytes;
+
   /// Returns a string representation of the plan annotated with estimates from
   /// 'prediction'.
   std::string toString() const;
@@ -380,6 +385,10 @@ class ToVelox {
 
   // Predicted cardinality and memory for nodes to record in history.
   NodePredictionMap prediction_;
+
+  // Accumulated on-disk bytes read across the plan's table scans that reported
+  // a data-size estimate. nullopt until the first scan contributes.
+  std::optional<int64_t> estimatedScanBytes_;
 
   // On when producing a remaining filter for table scan, where columns must
   // correspond 1:1 to the schema.

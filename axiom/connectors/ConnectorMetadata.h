@@ -437,6 +437,13 @@ struct FilteredTableStats {
   /// co_estimateStats. Either empty (no column stats available) or has the
   /// same size as 'columns', in the same order.
   std::vector<ColumnStatistics> columnStats;
+
+  /// Estimated on-disk (compressed) size in bytes of the data read after
+  /// partition pruning, i.e. the bytes read from storage. `nullopt` if the
+  /// connector has no estimate. This is a leaf-level quantity taken from
+  /// collected table statistics, independent of downstream cardinality
+  /// estimation.
+  std::optional<uint64_t> dataSize;
 };
 
 /// Folds, into 'stats', the selectivity and refined column statistics of
@@ -867,6 +874,15 @@ class Table : public std::enable_shared_from_this<Table> {
   /// if the connector has no estimate; downstream cost-based decisions
   /// fall back to safe defaults rather than a fabricated value.
   virtual std::optional<uint64_t> numRows() const = 0;
+
+  /// Returns an estimate of the on-disk (compressed) size in bytes of 'this',
+  /// i.e. the bytes read from storage for a full scan. `nullopt` if the
+  /// connector has no estimate. Partitioned connectors may return `nullopt`
+  /// here and instead provide a partition-pruned per-query estimate via
+  /// TableLayout::co_estimateStats.
+  virtual std::optional<uint64_t> dataSize() const {
+    return std::nullopt;
+  }
 
   /// Returns the table properties specified at creation time (e.g. format,
   /// partitioned_by, bucket_count). Connectors must store all properties

@@ -238,6 +238,100 @@ TEST_F(CardinalityEstimationTest, scanWithFilter) {
   });
 }
 
+// Verifies estimatedScanBytes plumbing through both optimizers (v1 and v2).
+class EstimatedScanBytesTest : public test::QueryTestBase,
+                               public ::testing::WithParamInterface<bool> {
+ protected:
+  void SetUp() override {
+    test::QueryTestBase::SetUp();
+    useV2_ = GetParam();
+  }
+
+  // Optimizes 'sql' through the full ToVelox pipeline and returns the
+  // plan-level stats, which carry estimatedScanBytes.
+  optimizer::PlanAndStats planStatsFor(const std::string& sql) {
+    auto logicalPlan = parseSelect(sql, kTestConnectorId);
+    OptimizerOptions options;
+    options.sampleJoins = false;
+    options.sampleFilters = false;
+    return planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4}, options);
+  }
+};
+
+// Verifies that PlanAndStats.estimatedScanBytes carries the connector's
+// on-disk data size for a single table scan.
+TEST_P(EstimatedScanBytesTest, singleScan) {
+  auto table = testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  table->setStats(1'000, {{"a", {.numDistinct = 100}}});
+  table->setDataSize(4'096);
+
+  auto stats = planStatsFor("SELECT a FROM t");
+  ASSERT_TRUE(stats.estimatedScanBytes.has_value());
+  EXPECT_EQ(*stats.estimatedScanBytes, 4'096);
+}
+
+// Verifies that a scan whose connector reports no data size leaves
+// estimatedScanBytes unset rather than reporting a zero-byte scan.
+TEST_P(EstimatedScanBytesTest, unsetWithoutDataSize) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(1'000, {{"a", {.numDistinct = 100}}});
+
+  auto stats = planStatsFor("SELECT a FROM t");
+  EXPECT_FALSE(stats.estimatedScanBytes.has_value());
+}
+
+// Verifies that two scans each contribute their data size and the plan-level
+// estimate sums them.
+TEST_P(EstimatedScanBytesTest, sumsAcrossScans) {
+  auto t = testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  t->setStats(1'000, {{"a", {.numDistinct = 100}}});
+  t->setDataSize(4'096);
+
+  auto u = testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
+  u->setStats(1'000, {{"x", {.numDistinct = 100}}});
+  u->setDataSize(1'024);
+
+  auto stats = planStatsFor("SELECT a, y FROM t JOIN u ON a = x");
+  ASSERT_TRUE(stats.estimatedScanBytes.has_value());
+  EXPECT_EQ(*stats.estimatedScanBytes, 4'096 + 1'024);
+}
+
+// Verifies that when only some scans report a size, the estimate is the sum
+// over the scans that did (a lower bound) and is not wiped out by the scan
+// that reported none.
+TEST_P(EstimatedScanBytesTest, lowerBoundOnPartialCoverage) {
+  auto t = testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  t->setStats(1'000, {{"a", {.numDistinct = 100}}});
+  t->setDataSize(4'096);
+
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(1'000, {{"x", {.numDistinct = 100}}});
+
+  auto stats = planStatsFor("SELECT a, y FROM t JOIN u ON a = x");
+  ASSERT_TRUE(stats.estimatedScanBytes.has_value());
+  EXPECT_EQ(*stats.estimatedScanBytes, 4'096);
+}
+
+// Verifies that a total exceeding int64_t saturates at the maximum instead of
+// wrapping to a negative estimate.
+TEST_P(EstimatedScanBytesTest, sumSaturatesAtMax) {
+  constexpr int64_t kMaxBytes = std::numeric_limits<int64_t>::max();
+
+  auto t = testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  t->setStats(1'000, {{"a", {.numDistinct = 100}}});
+  t->setDataSize(kMaxBytes);
+
+  auto u = testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
+  u->setStats(1'000, {{"x", {.numDistinct = 100}}});
+  u->setDataSize(kMaxBytes);
+
+  auto stats = planStatsFor("SELECT a, y FROM t JOIN u ON a = x");
+  ASSERT_TRUE(stats.estimatedScanBytes.has_value());
+  EXPECT_EQ(*stats.estimatedScanBytes, kMaxBytes);
+}
+
+AXIOM_INSTANTIATE_V1_V2(EstimatedScanBytesTest);
+
 // Verifies cardinality estimation for aggregation: output cardinality
 // should be capped at the number of distinct values of the grouping key.
 TEST_F(CardinalityEstimationTest, aggregation) {
