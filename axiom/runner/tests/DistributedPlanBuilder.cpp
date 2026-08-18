@@ -15,6 +15,7 @@
  */
 
 #include "axiom/runner/tests/DistributedPlanBuilder.h"
+#include "velox/serializers/PrestoSerializer.h"
 
 namespace facebook::axiom::runner::test {
 
@@ -98,9 +99,7 @@ void DistributedPlanBuilder::addExchange(
     const velox::RowTypePtr& producerType,
     const std::string& producerPrefix,
     optimizer::ExecutableFragment& fragment) {
-  exchange(
-      producerType,
-      velox::VectorSerde::kindName(velox::VectorSerde::Kind::kPresto));
+  exchange(producerType, velox::serializer::presto::PrestoVectorSerde::name());
   auto* exchange = as<velox::core::ExchangeNode>(planNode_);
 
   fragment.inputStages.push_back(
