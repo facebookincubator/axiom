@@ -640,6 +640,57 @@ TEST_F(ExpressionParserTest, jsonLiteral) {
       R"({"a": 1})");
 }
 
+TEST_F(ExpressionParserTest, normalize) {
+  // The 1-arg normalize() defaults the form to NFC in Velox.
+  {
+    SCOPED_TRACE("normalize('abc')");
+    auto expr = parseExpr("normalize('abc')");
+    ASSERT_TRUE(expr->isCall());
+    auto* call = expr->as<lp::CallExpr>();
+    EXPECT_EQ(call->name(), "normalize");
+    ASSERT_EQ(call->inputs().size(), 1);
+    ASSERT_TRUE(call->inputAt(0)->isConstant());
+    EXPECT_EQ(
+        call->inputAt(0)
+            ->as<lp::ConstantExpr>()
+            ->value()
+            ->value<TypeKind::VARCHAR>(),
+        "abc");
+  }
+
+  auto checkForm = [&](const std::string& sql,
+                       const std::string& expectedForm) {
+    SCOPED_TRACE(sql);
+    auto expr = parseExpr(sql);
+    ASSERT_TRUE(expr->isCall());
+    auto* call = expr->as<lp::CallExpr>();
+    EXPECT_EQ(call->name(), "normalize");
+    ASSERT_EQ(call->inputs().size(), 2);
+    ASSERT_TRUE(call->inputAt(0)->isConstant());
+    EXPECT_EQ(
+        call->inputAt(0)
+            ->as<lp::ConstantExpr>()
+            ->value()
+            ->value<TypeKind::VARCHAR>(),
+        "abc");
+    ASSERT_TRUE(call->inputAt(1)->isConstant());
+    EXPECT_EQ(
+        call->inputAt(1)
+            ->as<lp::ConstantExpr>()
+            ->value()
+            ->value<TypeKind::VARCHAR>(),
+        expectedForm);
+  };
+
+  checkForm("normalize('abc', NFC)", "NFC");
+  checkForm("normalize('abc', NFD)", "NFD");
+  checkForm("normalize('abc', NFKC)", "NFKC");
+  checkForm("normalize('abc', NFKD)", "NFKD");
+
+  // The form is passed through as written, not upper-cased.
+  checkForm("normalize('abc', nfc)", "nfc");
+}
+
 TEST_F(ExpressionParserTest, atTimeZone) {
   // AT TIME ZONE translates to at_timezone().
   EXPECT_EQ(

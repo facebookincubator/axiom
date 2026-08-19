@@ -2328,7 +2328,23 @@ std::any AstBuilder::visitParameter(PrestoSqlParser::ParameterContext* ctx) {
 
 std::any AstBuilder::visitNormalize(PrestoSqlParser::NormalizeContext* ctx) {
   trace("visitNormalize");
-  return visitChildren("visitNormalize", ctx);
+
+  // NORMALIZE(value) lowers to normalize(value) and NORMALIZE(value, form) to
+  // normalize(value, form). The single-argument normalize() defaults the form
+  // to NFC in Velox, so no default is supplied here.
+  std::vector<ExpressionPtr> arguments{
+      visitTyped<Expression>(ctx->valueExpression())};
+  if (ctx->normalForm() != nullptr) {
+    arguments.push_back(
+        std::make_shared<StringLiteral>(
+            getLocation(ctx), ctx->normalForm()->getText()));
+  }
+
+  return std::static_pointer_cast<Expression>(std::make_shared<FunctionCall>(
+      getLocation(ctx),
+      std::make_shared<QualifiedName>(
+          getLocation(ctx), std::vector<std::string>{"normalize"}),
+      arguments));
 }
 
 std::any AstBuilder::visitIntervalLiteral(
