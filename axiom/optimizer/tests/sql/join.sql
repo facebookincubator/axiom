@@ -130,6 +130,32 @@ RIGHT JOIN (
 ) AS u ON a.a = u.a0 AND a.b = u.b0
 WHERE a.b = 10
 ----
+-- FULL JOIN with a null-rejecting conjunct on the right input demotes to RIGHT,
+-- so the right input keeps its unmatched rows.
+SELECT a, b, x, y
+FROM (VALUES (1, 10), (2, 20)) t(a, b)
+FULL JOIN (VALUES (1, 1), (3, 3)) u(x, y) ON a = x
+WHERE y > 0
+----
+-- FULL JOIN with a null-rejecting conjunct on the left input demotes to LEFT,
+-- so the left input keeps its unmatched rows.
+SELECT a, b, x, y
+FROM (VALUES (1, 10), (2, 20)) t(a, b)
+FULL JOIN (VALUES (1, 1), (3, 3)) u(x, y) ON a = x
+WHERE a > 0
+----
+-- FULL JOIN with null-rejecting conjuncts on both inputs demotes to INNER.
+SELECT a, b, x, y
+FROM (VALUES (1, 10), (2, 20)) t(a, b)
+FULL JOIN (VALUES (1, 1), (3, 3)) u(x, y) ON a = x
+WHERE a > 0 AND y > 0
+----
+-- FULL JOIN whose only conjunct does not reject nulls stays FULL.
+SELECT a, b, x, y
+FROM (VALUES (1, 10), (2, 20)) t(a, b)
+FULL JOIN (VALUES (1, 1), (3, 3)) u(x, y) ON a = x
+WHERE coalesce(y, 1) > 0
+----
 -- 8-way self-join hitting the greedy join-enumeration cutoff.
 SELECT count(*)
 FROM t t1

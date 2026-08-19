@@ -97,16 +97,20 @@ velox::core::JoinType demoteOuterToInner(
     case velox::core::JoinType::kRight:
       return anyRejects(leftColumns) ? velox::core::JoinType::kInner : joinType;
     case velox::core::JoinType::kFull: {
+      // A predicate that rejects nulls on one input eliminates the rows in
+      // which that input is null-padded, i.e. the other input's unmatched
+      // rows. So only the referenced input stays row-preserving: left ->
+      // LEFT, right -> RIGHT, both -> INNER.
       const bool rejectsLeft = anyRejects(leftColumns);
       const bool rejectsRight = anyRejects(rightColumns);
       if (rejectsLeft && rejectsRight) {
         return velox::core::JoinType::kInner;
       }
       if (rejectsLeft) {
-        return velox::core::JoinType::kRight;
+        return velox::core::JoinType::kLeft;
       }
       if (rejectsRight) {
-        return velox::core::JoinType::kLeft;
+        return velox::core::JoinType::kRight;
       }
       return joinType;
     }
