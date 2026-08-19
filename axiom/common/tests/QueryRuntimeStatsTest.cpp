@@ -18,6 +18,7 @@
 
 #include <folly/BenchmarkUtil.h>
 #include <folly/dynamic.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 namespace facebook::axiom {
@@ -91,6 +92,25 @@ TEST(QueryRuntimeStatsTest, cpuMetricNaming) {
   ASSERT_TRUE(dynamic.count(key));
   EXPECT_EQ(dynamic[key]["unit"].asString(), "NANO");
   EXPECT_EQ(dynamic[key]["sum"].asInt(), 5000);
+}
+
+// Both writer entry points compose the prefix.
+TEST(QueryRuntimeStatsTest, prefixesEveryStatName) {
+  QueryRuntimeStats stats;
+  PrefixedRuntimeStatWriter writer{stats, "myOp"};
+
+  writer.addTiming("wallNanos", std::chrono::nanoseconds(1000));
+  writer.setRuntimeStat(
+      "waitNanos",
+      velox::RuntimeMetric(2000, velox::RuntimeCounter::Unit::kNanos));
+
+  auto map = stats.runtimeStats();
+  ASSERT_THAT(
+      map,
+      testing::UnorderedElementsAre(
+          testing::Key("myOp-wallNanos"), testing::Key("myOp-waitNanos")));
+  EXPECT_EQ(map.at("myOp-wallNanos").sum, 1000);
+  EXPECT_EQ(map.at("myOp-waitNanos").sum, 2000);
 }
 
 } // namespace

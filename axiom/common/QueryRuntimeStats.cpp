@@ -16,6 +16,8 @@
 
 #include "axiom/common/QueryRuntimeStats.h"
 
+#include <fmt/format.h>
+
 namespace facebook::axiom {
 
 namespace {
@@ -54,6 +56,22 @@ ScopedCpuWallStatsTimer::~ScopedCpuWallStatsTimer() {
   }
   auto wallElapsed = std::chrono::steady_clock::now() - wallStart_;
   stats_.addTiming(wallMetricName_, wallElapsed);
+}
+
+void PrefixedRuntimeStatWriter::addRuntimeStat(
+    std::string_view name,
+    const velox::RuntimeCounter& value) {
+  writer_.addRuntimeStat(prefixed(name), value);
+}
+
+void PrefixedRuntimeStatWriter::setRuntimeStat(
+    std::string_view name,
+    const velox::RuntimeMetric& metric) {
+  writer_.setRuntimeStat(prefixed(name), metric);
+}
+
+std::string PrefixedRuntimeStatWriter::prefixed(std::string_view name) const {
+  return fmt::format("{}-{}", prefix_, name);
 }
 
 } // namespace facebook::axiom

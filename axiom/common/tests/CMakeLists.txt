@@ -22,4 +22,4 @@ add_executable(
 
 add_test(axiom_common_tests axiom_common_tests)
 
-target_link_libraries(axiom_common_tests axiom_common GTest::gtest GTest::gtest_main)
+target_link_libraries(axiom_common_tests axiom_common GTest::gmock GTest::gtest GTest::gtest_main)

@@ -17,6 +17,7 @@
 #pragma once
 
 #include <chrono>
+#include <string>
 #include <string_view>
 #include <thread>
 
@@ -89,6 +90,28 @@ class QueryRuntimeStats : public velox::ConcurrentRuntimeStatWriter {
   /// Serializes all metrics to folly::dynamic for Scribe logging. Format:
   /// {"metricName": {"sum": N, "count": N, "min": N, "max": N, "unit": "..."}}
   folly::dynamic toDynamic() const;
+};
+
+/// Forwards every stat to 'writer' under "<prefix>-<name>", so several
+/// components recording into one store keep their samples apart.
+class PrefixedRuntimeStatWriter : public velox::BaseRuntimeStatWriter {
+ public:
+  PrefixedRuntimeStatWriter(
+      velox::BaseRuntimeStatWriter& writer,
+      std::string_view prefix)
+      : writer_{writer}, prefix_{prefix} {}
+
+  void addRuntimeStat(std::string_view name, const velox::RuntimeCounter& value)
+      override;
+
+  void setRuntimeStat(std::string_view name, const velox::RuntimeMetric& metric)
+      override;
+
+ private:
+  std::string prefixed(std::string_view name) const;
+
+  velox::BaseRuntimeStatWriter& writer_;
+  const std::string prefix_;
 };
 
 /// RAII timer that records a wall-clock duration into QueryRuntimeStats on

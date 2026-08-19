@@ -28,4 +28,4 @@ add_library(
   SessionConfig.cpp
 )
 
-target_link_libraries(axiom_common velox_common_base velox_config_property Folly::folly)
+target_link_libraries(axiom_common velox_common_base velox_config_property Folly::folly fmt::fmt)
