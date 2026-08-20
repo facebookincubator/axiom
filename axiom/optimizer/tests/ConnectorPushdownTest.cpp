@@ -33,9 +33,11 @@ namespace lp = facebook::axiom::logical_plan;
 // a connector's createTableHandle for pushdown. This shape is the contract
 // documented on ConnectorMetadata::createTableHandle; connector authors rely on
 // it.
-class ConnectorPushdownTest : public QueryTestBase {
+class ConnectorPushdownTest : public QueryTestBase,
+                              public ::testing::WithParamInterface<bool> {
  protected:
   void SetUp() override {
+    useV2_ = GetParam();
     QueryTestBase::SetUp();
     testConnector_->addTable(
         "t",
@@ -85,7 +87,7 @@ class ConnectorPushdownTest : public QueryTestBase {
 
 // Equality is canonicalized with the column as the first argument, regardless
 // of how the predicate was written.
-TEST_F(ConnectorPushdownTest, equality) {
+TEST_P(ConnectorPushdownTest, equality) {
   expectPushed("a = 5", {"a = 5"});
   expectPushed("5 = a", {"a = 5"});
   expectPushed("s = 'x'", {"s = 'x'"});
@@ -93,7 +95,7 @@ TEST_F(ConnectorPushdownTest, equality) {
 
 // Reversible comparisons also put the column first, flipping the operator when
 // the constant was written on the left.
-TEST_F(ConnectorPushdownTest, comparison) {
+TEST_P(ConnectorPushdownTest, comparison) {
   expectPushed("a < 10", {"a < 10"});
   expectPushed("10 > a", {"a < 10"});
   expectPushed("a > 5", {"a > 5"});
@@ -104,27 +106,29 @@ TEST_F(ConnectorPushdownTest, comparison) {
   expectPushed("5 <= a", {"a >= 5"});
 }
 
-// An all-literal IN list is pushed as a deduplicated IN. v1 emits the constant
-// array form (the contract also permits varargs); a single-element list stays
-// an IN, not folded to an equality.
-TEST_F(ConnectorPushdownTest, inList) {
+// An all-literal IN list is pushed as a deduplicated IN; the multi-value form
+// may be a constant array (as v1 emits) or varargs. A list that dedups to a
+// single value folds to an equality.
+TEST_P(ConnectorPushdownTest, inList) {
   expectPushed("a in (1, 2, 3)", {"a in (1, 2, 3)"});
-  expectPushed("a in (5, 5)", {"a in (5)"});
+  expectPushed("a in (5, 5)", {"a = 5"});
 }
 
 // Predicates are not combined across conjuncts: a connector may receive several
 // predicates on the same column and must handle them.
-TEST_F(ConnectorPushdownTest, duplicateColumnPredicates) {
+TEST_P(ConnectorPushdownTest, duplicateColumnPredicates) {
   expectPushed("a = 1 and a = 2", {"a = 1", "a = 2"});
 }
 
 // A top-level conjunction is flattened: each leaf predicate is a separate
 // conjunct, even when nested.
-TEST_F(ConnectorPushdownTest, nestedAndFlattened) {
+TEST_P(ConnectorPushdownTest, nestedAndFlattened) {
   expectPushed(
       "a = 1 and (b = 2 and (c = 3 and s = 'x'))",
       {"a = 1", "b = 2", "c = 3", "s = 'x'"});
 }
+
+AXIOM_INSTANTIATE_V1_V2(ConnectorPushdownTest);
 
 } // namespace
 } // namespace facebook::axiom::optimizer::test
