@@ -24,14 +24,20 @@ namespace {
 using namespace velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class JoinTest : public test::QueryTestBase {
+class JoinTest : public test::QueryTestBase,
+                 public ::testing::WithParamInterface<bool> {
  protected:
   lp::PlanBuilder::Context makeContext() const {
     return lp::PlanBuilder::Context{kTestConnectorId, kDefaultSchema};
   }
+
+  void SetUp() override {
+    test::QueryTestBase::SetUp();
+    useV2_ = GetParam();
+  }
 };
 
-TEST_F(JoinTest, pushdownFilterThroughJoin) {
+TEST_P(JoinTest, pushdownFilterThroughJoin) {
   testConnector_->addTable("t", ROW({"t_id", "t_data"}, BIGINT()));
   testConnector_->addTable("u", ROW({"u_id", "u_data"}, BIGINT()));
 
@@ -73,12 +79,13 @@ TEST_F(JoinTest, pushdownFilterThroughJoin) {
   {
     SCOPED_TRACE("Right Join");
     auto logicalPlan = makePlan(lp::JoinType::kRight);
+    // V2 is better: it eliminates an identity Project above the join.
     auto matcher =
         matchScan("t")
             .hashJoin(
                 matchScan("u").filter("u_data IS NULL"), core::JoinType::kRight)
             .filter("t_data IS NULL")
-            .project()
+            .projectIf(!useV2_, {"t_id", "t_data", "u_id", "u_data"})
             .build();
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -87,16 +94,19 @@ TEST_F(JoinTest, pushdownFilterThroughJoin) {
   {
     SCOPED_TRACE("Full Join");
     auto logicalPlan = makePlan(lp::JoinType::kFull);
+    // Conjunct order doesn't affect predicate semantics.
     auto matcher = matchScan("t")
                        .hashJoin(matchScan("u"), core::JoinType::kFull)
-                       .filter("t_data IS NULL AND u_data IS NULL")
+                       .filter(
+                           useV2_ ? "u_data IS NULL AND t_data IS NULL"
+                                  : "t_data IS NULL AND u_data IS NULL")
                        .build();
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 }
 
-TEST_F(JoinTest, hyperEdge) {
+TEST_P(JoinTest, hyperEdge) {
   testConnector_->addTable("t", ROW({"t_id", "t_key", "t_data"}, BIGINT()));
   testConnector_->addTable("u", ROW({"u_id", "u_key", "u_data"}, BIGINT()));
   testConnector_->addTable("v", ROW({"v_key", "v_data"}, BIGINT()));
@@ -119,7 +129,7 @@ TEST_F(JoinTest, hyperEdge) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(JoinTest, joinWithFilterOverLimit) {
+TEST_P(JoinTest, joinWithFilterOverLimit) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y", "z"}, BIGINT()));
 
@@ -148,7 +158,7 @@ TEST_F(JoinTest, joinWithFilterOverLimit) {
   }
 }
 
-TEST_F(JoinTest, joinWithTopNOnBothSides) {
+TEST_P(JoinTest, joinWithTopNOnBothSides) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
 
@@ -172,7 +182,7 @@ TEST_F(JoinTest, joinWithTopNOnBothSides) {
   AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
 }
 
-TEST_F(JoinTest, outerJoinWithInnerJoin) {
+TEST_P(JoinTest, outerJoinWithInnerJoin) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
   testConnector_->addTable("v", ROW({"vx", "vy", "vz"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y", "z"}, BIGINT()));
@@ -231,21 +241,26 @@ TEST_F(JoinTest, outerJoinWithInnerJoin) {
                            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
+    // V2 is better: it pushes the filter below join and eliminates an identity
+    // Project above the outer join.
     auto matcher =
         startMatcher("t")
             .filter()
             .aggregation()
             .hashJoin(
-                startMatcher("u").hashJoin(startMatcher("v")).filter(),
+                startMatcher("u")
+                    .hashJoin(startMatcher("v").filterIf(useV2_))
+                    .filterIf(!useV2_),
                 core::JoinType::kLeft)
-            .project()
+            .projectIf(
+                !useV2_, {"a", "b", "sum", "x", "y", "z", "vx", "vy", "vz"})
             .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 }
 
-TEST_F(JoinTest, nestedOuterJoins) {
+TEST_P(JoinTest, nestedOuterJoins) {
   auto sql =
       "SELECT r2.r_name "
       "FROM nation n "
@@ -266,7 +281,7 @@ TEST_F(JoinTest, nestedOuterJoins) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(JoinTest, joinWithComputedKeys) {
+TEST_P(JoinTest, joinWithComputedKeys) {
   auto sql =
       "SELECT count(1) FROM nation n RIGHT JOIN region ON coalesce(n_regionkey, 1) = r_regionkey";
 
@@ -288,28 +303,34 @@ TEST_F(JoinTest, joinWithComputedKeys) {
 
     auto rightSideMatcher = matchScan("region").shuffle();
 
-    auto matcher = matchScan("nation")
-                       .project({"coalesce(n_regionkey, 1)"})
-                       .shuffle()
-                       .hashJoin(rightSideMatcher, core::JoinType::kRight)
-                       .partialAggregation()
-                       .shuffle()
-                       .localPartition()
-                       .finalAggregation()
-                       .build();
+    // V2 is worse: it carries the unused `n_regionkey` through the shuffle.
+    // TODO: Eliminate the unused `n_regionkey` field from the V2 plan.
+    auto matcher =
+        matchScan("nation")
+            .projectIf(useV2_, {"n_regionkey", "coalesce(n_regionkey, 1)"})
+            .projectIf(!useV2_, {"coalesce(n_regionkey, 1)"})
+            .shuffle()
+            .hashJoin(rightSideMatcher, core::JoinType::kRight)
+            .partialAggregation()
+            .shuffle()
+            .localPartition()
+            .finalAggregation()
+            .build();
 
     AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
   }
 }
 
-TEST_F(JoinTest, broadcastSizeLimitGatesBroadcast) {
+TEST_P(JoinTest, broadcastSizeLimitGatesBroadcast) {
   testConnector_->addTable("probe", ROW({"p_key", "p_data"}, BIGINT()))
       ->setStats(100'000, {{"p_key", {.numDistinct = 100'000}}});
   testConnector_->addTable("build", ROW({"b_key", "b_data"}, BIGINT()))
       ->setStats(1'000, {{"b_key", {.numDistinct = 1'000}}});
 
   OptimizerOptions options;
-  options.syntacticJoinOrder = true;
+  // V2 must use cost-based planning because its syntactic-order path
+  // always do repartitioned join.
+  options.syntacticJoinOrder = !useV2_;
 
   auto ctx = makeContext();
   auto logicalPlan = lp::PlanBuilder{ctx}
@@ -325,9 +346,13 @@ TEST_F(JoinTest, broadcastSizeLimitGatesBroadcast) {
   {
     auto distributedPlan =
         planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 1}, options);
+    // V2 is worse: it adds a Project to reconstruct both equivalent join-key
+    // names and emits `b_key` twice under different names.
+    // TODO: Eliminate the V2 output-key reconstruction Project.
     auto matcher =
         matchScan("probe")
             .hashJoin(matchScan("build").broadcast(), core::JoinType::kInner)
+            .projectIf(useV2_, {"b_key as p_key", "p_data", "b_key", "b_data"})
             .gather()
             .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
@@ -339,18 +364,21 @@ TEST_F(JoinTest, broadcastSizeLimitGatesBroadcast) {
     options.broadcastSizeLimit = 1024;
     auto distributedPlan =
         planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 1}, options);
+    // V2 is worse: it adds a Project to reconstruct both equivalent join-key
+    // names after the partitioned join.
     auto matcher =
         matchScan("probe")
             .shuffle({"p_key"})
             .hashJoin(
                 matchScan("build").shuffle({"b_key"}), core::JoinType::kInner)
+            .projectIf(useV2_, {"b_key as p_key", "p_data", "b_key", "b_data"})
             .gather()
             .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
   }
 }
 
-TEST_F(JoinTest, crossJoin) {
+TEST_P(JoinTest, crossJoin) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
   testConnector_->addTable("v", ROW({"n", "m"}, BIGINT()));
@@ -376,8 +404,14 @@ TEST_F(JoinTest, crossJoin) {
     auto logicalPlan =
         lp::PlanBuilder{ctx}.from({"t", "u"}).filter("a > x").build();
 
+    // V2 is better: it evaluates the predicate as the join filter and avoids a
+    // separate Filter node.
     auto matcher =
-        matchScan("t").nestedLoopJoin(matchScan("u")).filter("a > x").build();
+        matchScan("t")
+            .nestedLoopJoin(
+                matchScan("u"), core::JoinType::kInner, useV2_ ? "a > x" : "")
+            .filterIf(!useV2_, "a > x")
+            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -416,21 +450,6 @@ TEST_F(JoinTest, crossJoin) {
     ASSERT_NO_THROW(planVelox(logicalPlan));
   }
 
-  // Cross join with a single-row subquery whose output is not used. The
-  // subquery is ignored.
-  {
-    auto ctx = makeContext();
-    auto logicalPlan = parseSelect(
-        "SELECT a FROM t, (SELECT count(*) FROM u)", kTestConnectorId);
-
-    auto matcher = matchScan("t").build();
-
-    auto plan = toSingleNodePlan(logicalPlan);
-    AXIOM_ASSERT_PLAN(plan, matcher);
-
-    ASSERT_NO_THROW(planVelox(logicalPlan));
-  }
-
   {
     auto ctx = makeContext();
     auto logicalPlan = parseSelect(
@@ -462,7 +481,27 @@ TEST_F(JoinTest, crossJoin) {
   }
 }
 
-TEST_F(JoinTest, leftCrossJoin) {
+// TODO: Run with V2 after it eliminates unused, provably single-row aggregate
+// cross joins.
+TEST_P(JoinTest, unusedSingleRowAggregateCrossJoin) {
+  if (useV2_) {
+    GTEST_SKIP() << "Not supported by the V2 optimizer";
+  }
+
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
+
+  auto logicalPlan = parseSelect(
+      "SELECT a FROM t, (SELECT count(*) FROM u)", kTestConnectorId);
+  auto matcher = matchScan("t").build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  ASSERT_NO_THROW(planVelox(logicalPlan));
+}
+
+TEST_P(JoinTest, leftCrossJoin) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
 
@@ -525,19 +564,22 @@ TEST_F(JoinTest, leftCrossJoin) {
 
     auto logicalPlan = parseSelect(query, kTestConnectorId);
 
-    auto matcher =
-        matchScan("t")
-            .nestedLoopJoin(
-                matchScan("u").project({"x", "y + 1"}), core::JoinType::kLeft)
-            .project()
-            .build();
+    // V2 is better: it preserves the requested output directly and eliminates
+    // an identity Project above the join.
+    auto matcher = matchScan("t")
+                       .nestedLoopJoin(
+                           matchScan("u").project({"x", "y + 1 as z"}),
+                           core::JoinType::kLeft,
+                           "coalesce(a, x) > 0")
+                       .projectIf(!useV2_, {"a", "b", "x", "z"})
+                       .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 }
 
-TEST_F(JoinTest, rightJoin) {
+TEST_P(JoinTest, rightJoin) {
   // Make t small and u large so optimizer swaps sides and uses right hash join.
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(
@@ -554,10 +596,11 @@ TEST_F(JoinTest, rightJoin) {
 
     auto logicalPlan = parseSelect(query, kTestConnectorId);
 
+    // V2 is better: it eliminates an identity Project above the right join.
     auto matcher = matchScan("u")
-                       .project({"x", "y + 1"})
+                       .project({"x", "y + 1 as z"})
                        .hashJoin(matchScan("t"), core::JoinType::kRight)
-                       .project()
+                       .projectIf(!useV2_, {"a", "b", "x", "z"})
                        .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
@@ -565,7 +608,7 @@ TEST_F(JoinTest, rightJoin) {
   }
 }
 
-TEST_F(JoinTest, crossThenLeft) {
+TEST_P(JoinTest, crossThenLeft) {
   testConnector_->addTable("t", ROW({"t0", "t1"}, INTEGER()));
   testConnector_->addTable("u", ROW({"u0", "u1"}, BIGINT()));
 
@@ -575,18 +618,25 @@ TEST_F(JoinTest, crossThenLeft) {
       "SELECT count(1) FROM (SELECT * FROM t, u) LEFT JOIN v ON t0 = v0 AND u0 = v1";
   SCOPED_TRACE(query);
 
-  auto matcher =
-      matchScan("u")
-          .nestedLoopJoin(matchScan("t"))
-          .hashJoin(matchValues().aggregation(), velox::core::JoinType::kLeft)
-          .aggregation()
-          .build();
+  // V2 uses syntactic join order for the keyless join, while V1 uses
+  // cost-based planning.
+  auto matcher = useV2_
+      ? matchScan("t")
+            .nestedLoopJoin(matchScan("u"))
+            .hashJoin(matchValues().aggregation(), velox::core::JoinType::kLeft)
+            .aggregation()
+            .build()
+      : matchScan("u")
+            .nestedLoopJoin(matchScan("t"))
+            .hashJoin(matchValues().aggregation(), velox::core::JoinType::kLeft)
+            .aggregation()
+            .build();
 
   auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(JoinTest, joinWithComputedAndProjectedKeys) {
+TEST_P(JoinTest, joinWithComputedAndProjectedKeys) {
   testConnector_->addTable("t", ROW({"t0", "t1"}, BIGINT()));
   testConnector_->addTable("u", ROW({"u0", "u1"}, BIGINT()));
 
@@ -595,24 +645,27 @@ TEST_F(JoinTest, joinWithComputedAndProjectedKeys) {
       "SELECT * FROM u LEFT JOIN v ON u0 = v0";
   SCOPED_TRACE(query);
 
-  auto matcher = matchScan("u")
-                     .hashJoin(matchScan("t").project({"coalesce(t0, 0)"}))
-                     .project()
-                     .build();
+  // V2 is better: it eliminates an identity Project above the join.
+  auto matcher =
+      matchScan("u")
+          .hashJoin(matchScan("t").project({"coalesce(t0, 0) as v0"}))
+          .projectIf(!useV2_, {"u0", "u1", "v0"})
+          .build();
 
   auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(JoinTest, crossThanOrderBy) {
+TEST_P(JoinTest, crossThanOrderBy) {
   auto query = "SELECT length(n_name) FROM nation, region ORDER BY 1";
   SCOPED_TRACE(query);
 
+  // V2 is better: it eliminates an identity Project above OrderBy.
   auto matcher = matchScan("nation")
                      .nestedLoopJoin(matchScan("region"))
                      .project({"length(n_name) as l"})
                      .orderBy({"l"})
-                     .project()
+                     .projectIf(!useV2_, {"l"})
                      .build();
 
   auto logicalPlan = parseSelect(query, kTestConnectorId);
@@ -622,7 +675,7 @@ TEST_F(JoinTest, crossThanOrderBy) {
   ASSERT_NO_THROW(planVelox(logicalPlan));
 }
 
-TEST_F(JoinTest, filterPushdownThroughCrossJoinUnnest) {
+TEST_P(JoinTest, filterPushdownThroughCrossJoinUnnest) {
   {
     testConnector_->addTable(
         "t", ROW({"t0", "t1"}, {ROW({"a", "b"}, BIGINT()), ARRAY(BIGINT())}));
@@ -648,7 +701,7 @@ TEST_F(JoinTest, filterPushdownThroughCrossJoinUnnest) {
   }
 }
 
-TEST_F(JoinTest, joinOnClause) {
+TEST_P(JoinTest, joinOnClause) {
   testConnector_->addTable("t", ROW({"t0"}, ROW({"a", "b"}, BIGINT())));
   testConnector_->addTable("u", ROW({"u0"}, ROW({"a", "b"}, BIGINT())));
 
@@ -667,10 +720,11 @@ TEST_F(JoinTest, joinOnClause) {
     auto query = "SELECT * FROM (SELECT t0, 1 FROM t) JOIN u ON t0.a = u0.a";
     SCOPED_TRACE(query);
 
+    // V2 is better: it eliminates an identity Project above the join.
     auto matcher = matchScan("t")
                        .project()
                        .hashJoin(matchScan("u").project())
-                       .project()
+                       .projectIf(!useV2_, {"t0", "1", "u0"})
                        .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
@@ -678,7 +732,13 @@ TEST_F(JoinTest, joinOnClause) {
   }
 }
 
-TEST_F(JoinTest, leftJoinOverValues) {
+// TODO: Run with V2 after it keeps both Values inputs co-located for a local
+// join.
+TEST_P(JoinTest, leftJoinOverValues) {
+  if (useV2_) {
+    GTEST_SKIP() << "Not supported by the V2 optimizer";
+  }
+
   auto query =
       "SELECT * FROM (VALUES 1, 2, 3, 4) as t(x) LEFT JOIN (VALUES 1, 2) as u(y) ON x = y";
   SCOPED_TRACE(query);
@@ -703,7 +763,7 @@ TEST_F(JoinTest, leftJoinOverValues) {
   }
 }
 
-TEST_F(JoinTest, leftThenFilter) {
+TEST_P(JoinTest, leftThenFilter) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
   testConnector_->addTable("v", ROW({"p", "q"}, BIGINT()));
@@ -716,13 +776,14 @@ TEST_F(JoinTest, leftThenFilter) {
         "WHERE coalesce(z, 1) > 0";
     SCOPED_TRACE(query);
 
-    auto matcher =
-        matchScan("t")
-            .hashJoin(
-                matchScan("u").project({"x", "y + 1"}), core::JoinType::kLeft)
-            .filter()
-            .project()
-            .build();
+    // V2 is better: it eliminates an identity Project.
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u").project({"x", "y + 1 as z"}),
+                           core::JoinType::kLeft)
+                       .filter()
+                       .projectIf(!useV2_, {"a", "b", "c", "x", "z"})
+                       .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -735,12 +796,16 @@ TEST_F(JoinTest, leftThenFilter) {
         "WHERE z > 0";
     SCOPED_TRACE(query);
 
-    auto matcher =
-        matchScan("t")
-            .hashJoin(
-                matchScan("u").filter("y + 1 > 0"), core::JoinType::kInner)
-            .project()
-            .build();
+    // V2 is better: it materializes `z` before join fanout so that it
+    // eliminates the output-reconstruction Project after the join.
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u")
+                               .filter("y + 1 > 0")
+                               .projectIf(useV2_, {"x", "y + 1 as z"}),
+                           core::JoinType::kInner)
+                       .projectIf(!useV2_, {"a", "b", "c", "x", "y + 1 as z"})
+                       .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -753,13 +818,16 @@ TEST_F(JoinTest, leftThenFilter) {
         "WHERE coalesce(z, 1) > 0 AND z > 0";
     SCOPED_TRACE(query);
 
-    auto matcher =
-        matchScan("t")
-            .hashJoin(
-                matchScan("u").filter("coalesce(y + 1, 1) > 0 AND y + 1 > 0"),
-                core::JoinType::kInner)
-            .project()
-            .build();
+    // V2 is better: it materializes `z` before join fanout so that it
+    // eliminates the output-reconstruction Project after the join.
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u")
+                               .filter("coalesce(y + 1, 1) > 0 AND y + 1 > 0")
+                               .projectIf(useV2_, {"x", "y + 1 as z"}),
+                           core::JoinType::kInner)
+                       .projectIf(!useV2_, {"a", "b", "c", "x", "y + 1 as z"})
+                       .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -780,12 +848,16 @@ TEST_F(JoinTest, leftThenFilter) {
         "WHERE z > 0";
     SCOPED_TRACE(query);
 
-    auto matcher =
-        matchScan("t")
-            .hashJoin(
-                matchScan("u").filter("y + 1 > 0"), core::JoinType::kInner)
-            .project()
-            .build();
+    // V2 is better: it materializes `z` once and reuses the alias instead of
+    // expanding `y + 1` again after the join.
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u")
+                               .filter("y + 1 > 0")
+                               .projectIf(useV2_, {"x", "y + 1 as z"}),
+                           core::JoinType::kInner)
+                       .project({useV2_ ? "z * 2" : "(y + 1) * 2"})
+                       .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -798,13 +870,17 @@ TEST_F(JoinTest, leftThenFilter) {
         "WHERE z > 0";
     SCOPED_TRACE(query);
 
-    auto matcher =
-        matchScan("t")
-            .hashJoin(
-                matchScan("u").filter("y + 1 > 0"), core::JoinType::kInner)
-            .project()
-            .aggregation()
-            .build();
+    // V2 is better: it materializes `z` before join fanout so that it
+    // eliminates the output-reconstruction Project after the join.
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u")
+                               .filter("y + 1 > 0")
+                               .projectIf(useV2_, {"x", "y + 1 as z"}),
+                           core::JoinType::kInner)
+                       .projectIf(!useV2_, {"y + 1 as z"})
+                       .aggregation()
+                       .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -818,14 +894,18 @@ TEST_F(JoinTest, leftThenFilter) {
         "ORDER BY z DESC";
     SCOPED_TRACE(query);
 
-    auto matcher =
-        matchScan("t")
-            .hashJoin(
-                matchScan("u").filter("y + 1 > 0"), core::JoinType::kInner)
-            .project()
-            .orderBy()
-            .project()
-            .build();
+    // V2 is better: it materializes `z` before join fanout so that it
+    // eliminates the output-reconstruction Project after the join.
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u")
+                               .filter("y + 1 > 0")
+                               .projectIf(useV2_, {"x", "y + 1 as z"}),
+                           core::JoinType::kInner)
+                       .projectIf(!useV2_, {"y + 1 as z", "a", "b", "c", "x"})
+                       .orderBy()
+                       .projectIf(!useV2_, {"a", "b", "c", "x", "z"})
+                       .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -841,10 +921,19 @@ TEST_F(JoinTest, leftThenFilter) {
         "WHERE a > y";
     SCOPED_TRACE(query);
 
-    auto matcher = matchScan("t")
-                       .hashJoin(matchScan("u"), core::JoinType::kInner)
-                       .filter("a > y")
-                       .build();
+    // V2 is better: it derives the single-input `x > y` filter and evaluates
+    // `a > y` in the join instead of in a separate post-join Filter.
+    auto matcher = useV2_
+        ? matchScan("t")
+              .hashJoin(
+                  matchScan("u").filter("x > y"),
+                  core::JoinType::kInner,
+                  {.filter = "a > y"})
+              .build()
+        : matchScan("t")
+              .hashJoin(matchScan("u"), core::JoinType::kInner)
+              .filter("a > y")
+              .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -900,7 +989,7 @@ TEST_F(JoinTest, leftThenFilter) {
   }
 }
 
-TEST_F(JoinTest, fullThenFilter) {
+TEST_P(JoinTest, fullThenFilter) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
 
@@ -912,12 +1001,13 @@ TEST_F(JoinTest, fullThenFilter) {
         "WHERE coalesce(z, 1) > 0 AND is_null(a)";
     SCOPED_TRACE(query);
 
+    // V2 is better: it eliminates an identity Project.
     auto matcher = matchScan("t")
                        .hashJoin(
                            matchScan("u").project({"x", "y + 1 as z"}),
                            core::JoinType::kFull)
                        .filter("coalesce(z, 1) > 0 AND is_null(a)")
-                       .project()
+                       .projectIf(!useV2_)
                        .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
@@ -932,13 +1022,17 @@ TEST_F(JoinTest, fullThenFilter) {
         "WHERE z > 0 AND is_null(a)";
     SCOPED_TRACE(query);
 
-    auto matcher =
-        matchScan("t")
-            .hashJoin(
-                matchScan("u").filter("y + 1 > 0"), core::JoinType::kRight)
-            .filter("is_null(a)")
-            .project()
-            .build();
+    // V2 is better: it materializes `z` before the join and eliminates the
+    // output-reconstruction Project after the join.
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u")
+                               .filter("y + 1 > 0")
+                               .projectIf(useV2_, {"x", "y + 1 as z"}),
+                           core::JoinType::kRight)
+                       .filter("is_null(a)")
+                       .projectIf(!useV2_)
+                       .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -950,13 +1044,14 @@ TEST_F(JoinTest, fullThenFilter) {
         "WHERE coalesce(z, 1) > 0 AND a > 0";
     SCOPED_TRACE(query);
 
+    // V2 is better: it eliminates an identity Project above the filter.
     auto matcher = matchScan("t")
                        .filter("a > 0")
                        .hashJoin(
                            matchScan("u").project({"x", "y + 1 as z"}),
                            core::JoinType::kLeft)
                        .filter("coalesce(z, 1) > 0")
-                       .project()
+                       .projectIf(!useV2_)
                        .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
@@ -971,12 +1066,17 @@ TEST_F(JoinTest, fullThenFilter) {
         "WHERE z > 0 AND a > 0";
     SCOPED_TRACE(query);
 
+    // V2 is better: it derives `x > 0` on u, materializes `z` before the join,
+    // and eliminates the output-reconstruction Project after the join.
     auto matcher =
         matchScan("t")
             .filter("a > 0")
             .hashJoin(
-                matchScan("u").filter("y + 1 > 0"), core::JoinType::kInner)
-            .project()
+                matchScan("u")
+                    .filter(useV2_ ? "y + 1 > 0 AND x > 0" : "y + 1 > 0")
+                    .projectIf(useV2_, {"x", "y + 1 as z"}),
+                core::JoinType::kInner)
+            .projectIf(!useV2_)
             .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
@@ -992,10 +1092,19 @@ TEST_F(JoinTest, fullThenFilter) {
         "WHERE a > y";
     SCOPED_TRACE(query);
 
-    auto matcher = matchScan("t")
-                       .hashJoin(matchScan("u"), core::JoinType::kInner)
-                       .filter("a > y")
-                       .build();
+    // V2 is better: it derives the single-input `x > y` filter and evaluates
+    // `a > y` in the join instead of in a separate post-join Filter.
+    auto matcher = useV2_
+        ? matchScan("t")
+              .hashJoin(
+                  matchScan("u").filter("x > y"),
+                  core::JoinType::kInner,
+                  {.filter = "a > y"})
+              .build()
+        : matchScan("t")
+              .hashJoin(matchScan("u"), core::JoinType::kInner)
+              .filter("a > y")
+              .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -1004,7 +1113,7 @@ TEST_F(JoinTest, fullThenFilter) {
 
 // Verifies that ON clause conjuncts referencing only the right (null-supplying)
 // side of a LEFT JOIN are pushed down as filters on the right input.
-TEST_F(JoinTest, leftJoinOnClausePushdown) {
+TEST_P(JoinTest, leftJoinOnClausePushdown) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
 
@@ -1054,13 +1163,17 @@ TEST_F(JoinTest, leftJoinOnClausePushdown) {
         "ON a = x AND z > 0";
     SCOPED_TRACE(query);
 
-    auto matcher =
-        matchScan("t")
-            .hashJoin(
-                matchScan("u").filter("y + 1 > 0").project({"x", "y + 1"}),
-                core::JoinType::kLeft)
-            .project()
-            .build();
+    // V2 is better: it materializes `z` before join fanout so that it
+    // eliminates the output-reconstruction Project after the join.
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u")
+                               .filter("y + 1 > 0")
+                               .projectIf(useV2_, {"x", "y + 1 as z"})
+                               .projectIf(!useV2_, {"x", "y + 1"}),
+                           core::JoinType::kLeft)
+                       .projectIf(!useV2_)
+                       .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -1103,22 +1216,36 @@ TEST_F(JoinTest, leftJoinOnClausePushdown) {
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
-  // Right-side-only ON conjunct NOT pushed below LIMIT. It stays in the join
-  // condition.
-  // TODO: Support pushing conjuncts below LIMIT by wrapping in a DT.
+  // Right-side-only ON conjunct is not pushed through LIMIT. V2 pushes it
+  // below the join but keeps it above LIMIT.
+  // TODO: Support pushing conjuncts below LIMIT.
   {
     auto query =
         "SELECT * FROM t LEFT JOIN (SELECT x, y FROM u LIMIT 10) "
         " ON a = x AND y > 0";
     SCOPED_TRACE(query);
 
+    // V2 is better: it moves the right-only predicate below the join while
+    // keeping it above Limit, which preserves the query semantics.
     auto matcher = matchScan("t")
-                       .hashJoin(matchScan("u").limit(), core::JoinType::kLeft)
+                       .hashJoin(
+                           matchScan("u").limit().filterIf(useV2_, "y > 0"),
+                           core::JoinType::kLeft)
                        .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
+}
+
+// TODO: Run with V2 after it supports constant-false outer-join elimination.
+TEST_P(JoinTest, constantFalseOuterJoinElimination) {
+  if (useV2_) {
+    GTEST_SKIP() << "Not supported by the V2 optimizer";
+  }
+
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
 
   // Constant false ON conjunct (1 > 2) means no right rows can ever match.
   // The join is eliminated entirely; left rows survive with NULL right columns.
@@ -1149,7 +1276,7 @@ TEST_F(JoinTest, leftJoinOnClausePushdown) {
   }
 }
 
-TEST_F(JoinTest, impliedJoins) {
+TEST_P(JoinTest, impliedJoins) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(
           10'000,
@@ -1160,8 +1287,6 @@ TEST_F(JoinTest, impliedJoins) {
   testConnector_->addTable("v", ROW({"n", "m"}, BIGINT()))
       ->setStats(100, {{"n", {.numDistinct = 100}}});
 
-  // Transitive:
-
   // Transitive: t.a = u.x AND u.x = v.n implies t.a = v.n. With v being the
   // smallest table, the optimizer should join t with v first using the
   // implied join key.
@@ -1169,11 +1294,21 @@ TEST_F(JoinTest, impliedJoins) {
     auto query = "SELECT count(*) FROM t, u, v WHERE t.a = u.x AND u.x = v.n";
     SCOPED_TRACE(query);
 
-    auto matcher = matchScan("t")
-                       .hashJoin(matchScan("v"), core::JoinType::kInner)
-                       .hashJoin(matchScan("u"), core::JoinType::kInner)
-                       .aggregation()
-                       .build();
+    // V2 is better: both plans join t with v first, but V2 places the smaller
+    // t-v result on the build side of the root join.
+    auto matcher = useV2_
+        ? matchScan("u")
+              .hashJoin(
+                  matchScan("t").hashJoin(
+                      matchScan("v"), core::JoinType::kInner),
+                  core::JoinType::kInner)
+              .aggregation()
+              .build()
+        : matchScan("t")
+              .hashJoin(matchScan("v"), core::JoinType::kInner)
+              .hashJoin(matchScan("u"), core::JoinType::kInner)
+              .aggregation()
+              .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -1187,41 +1322,13 @@ TEST_F(JoinTest, impliedJoins) {
     auto query = "SELECT count(*) FROM t JOIN u ON t.a = u.x AND t.a = t.b";
     SCOPED_TRACE(query);
 
+    // V2 is better: it drops `b` after evaluating the filter, narrowing the
+    // join input to the key column `a`.
     auto matcher =
         matchScan("u")
-            .hashJoin(matchScan("t").filter("a = b"), core::JoinType::kInner)
-            .aggregation()
-            .build();
-
-    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_PLAN(plan, matcher);
-  }
-
-  // Same-table equality dedup: ON t.a = u.x AND t.b = u.x merges {t.a, t.b,
-  // u.x}, so an explicit WHERE t.a = t.b becomes the same interned Call as
-  // the inferred one and is added only once.
-  {
-    auto query =
-        "SELECT count(*) FROM t JOIN u ON t.a = u.x AND t.b = u.x WHERE t.a = t.b";
-    SCOPED_TRACE(query);
-
-    auto matcher =
-        matchScan("u")
-            .hashJoin(matchScan("t").filter("a = b"), core::JoinType::kInner)
-            .aggregation()
-            .build();
-
-    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_PLAN(plan, matcher);
-  }
-
-  {
-    auto query = "SELECT count(*) FROM t JOIN u ON t.a = u.x AND t.b = u.x";
-    SCOPED_TRACE(query);
-
-    auto matcher =
-        matchScan("u")
-            .hashJoin(matchScan("t").filter("a = b"), core::JoinType::kInner)
+            .hashJoin(
+                matchScan("t").filter("a = b").projectIf(useV2_, {"a"}),
+                core::JoinType::kInner)
             .aggregation()
             .build();
 
@@ -1258,7 +1365,88 @@ TEST_F(JoinTest, impliedJoins) {
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
-  // Three tables with same-table filter on t.
+  // Inner join is on t.b = u.y (not equivalent to u.x). No implied edge is
+  // added for the semi-join key u.x.
+  {
+    auto query =
+        "SELECT * FROM t, u "
+        "WHERE t.b = u.y AND u.x IN (SELECT n FROM v)";
+    SCOPED_TRACE(query);
+
+    // V2 is better in applying the semi-join before the inner join, but worse
+    // in adding an output-key reconstruction Project.
+    // TODO: Eliminate the V2 output-key reconstruction Project.
+    auto matcher = useV2_
+        ? matchScan("t")
+              .hashJoin(
+                  matchScan("u").hashJoin(
+                      matchScan("v"), core::JoinType::kLeftSemiFilter),
+                  core::JoinType::kInner)
+              .project()
+              .build()
+        : matchScan("t")
+              .hashJoin(matchScan("u"), core::JoinType::kInner)
+              .hashJoin(matchScan("v"), core::JoinType::kLeftSemiFilter)
+              .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+// TODO: Run with V2 after it adds implied same-input filters and handles
+// many-to-one join keys without duplicate substitutions.
+TEST_P(JoinTest, impliedSameInputJoinFilters) {
+  if (useV2_) {
+    GTEST_SKIP() << "Not supported by the V2 optimizer";
+  }
+
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(
+          10'000,
+          {{"a", {.numDistinct = 10'000}}, {"b", {.numDistinct = 10'000}}});
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(
+          1'000, {{"x", {.numDistinct = 10}}, {"y", {.numDistinct = 1'000}}});
+  testConnector_->addTable("v", ROW({"n", "m"}, BIGINT()))
+      ->setStats(100, {{"n", {.numDistinct = 100}}});
+
+  // Same-table equality dedup: ON t.a = u.x AND t.b = u.x merges {t.a, t.b,
+  // u.x}, so an explicit WHERE t.a = t.b becomes the same interned Call as
+  // the inferred one and is added only once.
+  // V2 fails planning this query with "Duplicate substitution source: x".
+  {
+    auto query =
+        "SELECT count(*) FROM t JOIN u ON t.a = u.x AND t.b = u.x WHERE t.a = t.b";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("u")
+            .hashJoin(matchScan("t").filter("a = b"), core::JoinType::kInner)
+            .aggregation()
+            .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // V2 keeps both join keys and does not infer the same-input `a = b` filter.
+  {
+    auto query = "SELECT count(*) FROM t JOIN u ON t.a = u.x AND t.b = u.x";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("u")
+            .hashJoin(matchScan("t").filter("a = b"), core::JoinType::kInner)
+            .aggregation()
+            .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Three tables with same-table filter on t. V2 does not infer `a = b` on t
+  // before planning the joins.
   {
     auto query =
         "SELECT count(*) FROM t "
@@ -1278,49 +1466,46 @@ TEST_F(JoinTest, impliedJoins) {
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
+}
+
+// TODO: Run with V2 after it propagates semi-joins across equivalent join
+// keys.
+TEST_P(JoinTest, impliedSemiJoinPropagation) {
+  if (useV2_) {
+    GTEST_SKIP() << "Not supported by the V2 optimizer";
+  }
+
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(
+          10'000,
+          {{"a", {.numDistinct = 10'000}}, {"b", {.numDistinct = 10'000}}});
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(
+          1'000, {{"x", {.numDistinct = 10}}, {"y", {.numDistinct = 1'000}}});
+  testConnector_->addTable("v", ROW({"n", "m"}, BIGINT()))
+      ->setStats(100, {{"n", {.numDistinct = 100}}});
 
   // t.a = u.x creates equivalence class {t.a, u.x}. The IN subquery
   // produces a semi-join on u.x → v.n. The implied edge t.a → v.n has
   // fanout 100/10000 = 0.01, so the semi-join is placed before the inner
   // join with u.
-  {
-    auto query =
-        "SELECT * FROM t, u "
-        "WHERE t.a = u.x AND u.x IN (SELECT n FROM v)";
-    SCOPED_TRACE(query);
+  auto query =
+      "SELECT * FROM t, u "
+      "WHERE t.a = u.x AND u.x IN (SELECT n FROM v)";
+  SCOPED_TRACE(query);
 
-    auto matcher =
-        matchScan("t")
-            .hashJoin(matchScan("v"), core::JoinType::kLeftSemiFilter)
-            .hashJoin(matchScan("u"), core::JoinType::kInner)
-            .build();
+  auto matcher = matchScan("t")
+                     .hashJoin(matchScan("v"), core::JoinType::kLeftSemiFilter)
+                     .hashJoin(matchScan("u"), core::JoinType::kInner)
+                     .build();
 
-    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_PLAN(plan, matcher);
-  }
-
-  // Inner join is on t.b = u.y (not equivalent to u.x). No implied edge,
-  // so the semi-join stays on u and is placed after the inner join.
-  {
-    auto query =
-        "SELECT * FROM t, u "
-        "WHERE t.b = u.y AND u.x IN (SELECT n FROM v)";
-    SCOPED_TRACE(query);
-
-    auto matcher =
-        matchScan("t")
-            .hashJoin(matchScan("u"), core::JoinType::kInner)
-            .hashJoin(matchScan("v"), core::JoinType::kLeftSemiFilter)
-            .build();
-
-    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_PLAN(plan, matcher);
-  }
+  auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+  AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
 // Implied join edges from an equivalence class must not reference tables
 // outside a subset DT's tableSet.
-TEST_F(JoinTest, impliedJoinChain) {
+TEST_P(JoinTest, impliedJoinChain) {
   testConnector_->addTable("t1", ROW({"id1", "data1"}, BIGINT()))
       ->setStats(1'000'000, {{"id1", {.numDistinct = 1'000'000}}});
   testConnector_->addTable("t2", ROW({"id2", "data2"}, BIGINT()))
@@ -1349,15 +1534,30 @@ TEST_F(JoinTest, impliedJoinChain) {
 
   auto plan = toSingleNodePlan(logicalPlan);
 
-  auto matcher = matchScan("t3")
-                     .hashJoin(matchScan("t1")
-                                   .hashJoin(matchScan("t2"))
-                                   .hashJoin(matchScan("t4")))
-                     .build();
+  // V2 is better in keeping the small dimensions as successive build inputs,
+  // but worse in adding an output-key reconstruction Project.
+  // TODO: Eliminate the V2 output-key reconstruction Project.
+  auto matcher = useV2_ ? matchScan("t1")
+                              .hashJoin(matchScan("t2"))
+                              .hashJoin(matchScan("t3"))
+                              .hashJoin(matchScan("t4"))
+                              .project()
+                              .build()
+                        : matchScan("t3")
+                              .hashJoin(matchScan("t1")
+                                            .hashJoin(matchScan("t2"))
+                                            .hashJoin(matchScan("t4")))
+                              .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(JoinTest, impliedFilters) {
+// TODO: Run with V2 after transitive inference handles pending equalities
+// before they become join keys.
+TEST_P(JoinTest, impliedFilters) {
+  if (useV2_) {
+    GTEST_SKIP() << "Not supported by the V2 optimizer";
+  }
+
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
@@ -1446,40 +1646,6 @@ TEST_F(JoinTest, impliedFilters) {
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
-  // Non-deterministic predicates do not propagate.
-  {
-    auto query =
-        "SELECT * FROM t, u "
-        "WHERE t.a = u.x AND t.a = cast(random() * 100 as bigint)";
-    SCOPED_TRACE(query);
-
-    auto matcher = matchScan("t")
-                       .hashJoin(matchScan("u"), core::JoinType::kInner)
-                       .filter("a = cast(random() * 100.0 as bigint)")
-                       .build();
-
-    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_PLAN(plan, matcher);
-  }
-
-  // Predicates already present on a sibling column should not be re-pushed.
-  // Both t.a = 5 and u.x = 5 exist before inference; inference sees that
-  // u.x = 5 is already on u (sameOrEqual finds it) and skips the redundant
-  // push, and likewise for the reverse direction.
-  {
-    auto query = "SELECT * FROM t, u WHERE t.a = u.x AND t.a = 5 AND u.x = 5";
-    SCOPED_TRACE(query);
-
-    auto matcher =
-        matchScan("u")
-            .filter("x = 5")
-            .hashJoin(matchScan("t").filter("a = 5"), core::JoinType::kInner)
-            .build();
-
-    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_PLAN(plan, matcher);
-  }
-
   // Three-table chain: t.a = u.x AND u.x = v.k puts t.a, u.x, v.k in one
   // equivalence class. A filter on t.a propagates to both u.x and v.k.
   {
@@ -1500,8 +1666,70 @@ TEST_F(JoinTest, impliedFilters) {
   }
 }
 
+// TODO: Run with V2 after it keeps non-deterministic predicates above joins.
+// Pushing `random()` below a join that can duplicate rows changes how often it
+// is evaluated and can change query results.
+TEST_P(JoinTest, impliedFilterNonPropagation) {
+  if (useV2_) {
+    GTEST_SKIP()
+        << "V2 incorrectly pushes non-deterministic predicates below joins";
+  }
+
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(1'000, {{"x", {.numDistinct = 100}}});
+
+  // Non-deterministic predicates do not propagate.
+  auto query =
+      "SELECT * FROM t, u "
+      "WHERE t.a = u.x AND t.a = cast(random() * 100 as bigint)";
+  SCOPED_TRACE(query);
+
+  auto matcher = matchScan("t")
+                     .hashJoin(matchScan("u"), core::JoinType::kInner)
+                     .filter("a = cast(random() * 100.0 as bigint)")
+                     .build();
+
+  auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+TEST_P(JoinTest, impliedFilterDedup) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(1'000, {{"x", {.numDistinct = 100}}});
+
+  // Predicates already present on both sides should not be duplicated by
+  // inference.
+  {
+    auto query = "SELECT * FROM t, u WHERE t.a = u.x AND t.a = 5 AND u.x = 5";
+    SCOPED_TRACE(query);
+
+    // V2 is worse: it adds a Project to reconstruct both equivalent join-key
+    // names in the output.
+    // TODO: Eliminate the V2 output-key reconstruction Project.
+    auto matcher =
+        matchScan("u")
+            .filter("x = 5")
+            .hashJoin(matchScan("t").filter("a = 5"), core::JoinType::kInner)
+            .projectIf(useV2_)
+            .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
 // Three or more columns from the same table in one equivalence class.
-TEST_F(JoinTest, impliedSameTableEquality) {
+// TODO: Run with V2 after it applies implied same-input filters inferred from
+// join conditions.
+TEST_P(JoinTest, impliedSameTableEquality) {
+  if (useV2_) {
+    GTEST_SKIP() << "Not supported by the V2 optimizer";
+  }
+
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x"}, BIGINT()));
 
@@ -1524,7 +1752,13 @@ TEST_F(JoinTest, impliedSameTableEquality) {
 }
 
 // Equivalence class with same-table columns on both sides of the join.
-TEST_F(JoinTest, impliedSameTableEqualityBothSides) {
+// TODO: Run with V2 after it applies implied same-input filters to both join
+// inputs.
+TEST_P(JoinTest, impliedSameTableEqualityBothSides) {
+  if (useV2_) {
+    GTEST_SKIP() << "Not supported by the V2 optimizer";
+  }
+
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
@@ -1552,7 +1786,13 @@ TEST_F(JoinTest, impliedSameTableEqualityBothSides) {
 
 // With GROUP BY a, b, the synthesized a = b references only grouping keys
 // and is pushed below the aggregation onto t's scan.
-TEST_F(JoinTest, impliedSameTableEqualityBelowAggregation) {
+// TODO: Run with V2 after it applies the implied same-input filter below the
+// aggregation.
+TEST_P(JoinTest, impliedSameTableEqualityBelowAggregation) {
+  if (useV2_) {
+    GTEST_SKIP() << "Not supported by the V2 optimizer";
+  }
+
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x"}, BIGINT()));
 
@@ -1576,7 +1816,13 @@ TEST_F(JoinTest, impliedSameTableEqualityBelowAggregation) {
 // Synthesis into HAVING: when an equivalence class member is an aggregate
 // output, the implied equality can't push below the aggregation and stays
 // as a post-aggregation Filter (HAVING).
-TEST_F(JoinTest, impliedSameTableEqualityInHaving) {
+// TODO: Run with V2 after it applies the implied same-input filter above the
+// aggregation.
+TEST_P(JoinTest, impliedSameTableEqualityInHaving) {
+  if (useV2_) {
+    GTEST_SKIP() << "Not supported by the V2 optimizer";
+  }
+
   testConnector_->addTable("t", ROW({"k"}, BIGINT()))
       ->setStats(10'000, {{"k", {.numDistinct = 10'000}}});
   testConnector_->addTable("u", ROW({"x"}, BIGINT()))
@@ -1603,7 +1849,13 @@ TEST_F(JoinTest, impliedSameTableEqualityInHaving) {
 
 // With a LIMIT in the way, the synthesized equality lands as a Filter
 // above the Limit. The redundant join key is still dropped.
-TEST_F(JoinTest, impliedSameTableEqualityBlockedByLimit) {
+// TODO: Run with V2 after it applies the implied same-input filter above the
+// limit.
+TEST_P(JoinTest, impliedSameTableEqualityBlockedByLimit) {
+  if (useV2_) {
+    GTEST_SKIP() << "Not supported by the V2 optimizer";
+  }
+
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x"}, BIGINT()));
 
@@ -1625,7 +1877,13 @@ TEST_F(JoinTest, impliedSameTableEqualityBlockedByLimit) {
 
 // Explicit WHERE and synthesized equality converge on the same LIMIT DT
 // target. The filter appears exactly once above the Limit.
-TEST_F(JoinTest, impliedSameTableEqualityBlockedByLimitDedup) {
+// TODO: Run with V2 after legal many-to-one join keys no longer fail with
+// duplicate substitution sources.
+TEST_P(JoinTest, impliedSameTableEqualityBlockedByLimitDedup) {
+  if (useV2_) {
+    GTEST_SKIP() << "Not supported by the V2 optimizer";
+  }
+
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x"}, BIGINT()));
 
@@ -1651,7 +1909,13 @@ TEST_F(JoinTest, impliedSameTableEqualityBlockedByLimitDedup) {
 // columns with the same left-side column. For t LEFT JOIN u ON u.x = t.a
 // AND u.y = t.a, any u row in the output must satisfy both conditions, so
 // u.x = u.y holds.
-TEST_F(JoinTest, impliedSameTableEqualityOuterJoin) {
+// TODO: Run with V2 after it applies the implied same-input filter to the
+// null-supplying join input.
+TEST_P(JoinTest, impliedSameTableEqualityOuterJoin) {
+  if (useV2_) {
+    GTEST_SKIP() << "Not supported by the V2 optimizer";
+  }
+
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
@@ -1675,7 +1939,13 @@ TEST_F(JoinTest, impliedSameTableEqualityOuterJoin) {
 // SEMI join (EXISTS) gets slot-pattern same-table eq synthesis on its
 // subquery side: surviving left rows require a matching right row, so the
 // same-table eq on the right side is sound.
-TEST_F(JoinTest, impliedSameTableEqualitySemiJoin) {
+// TODO: Run with V2 after it applies the implied same-input filter to the
+// existence input.
+TEST_P(JoinTest, impliedSameTableEqualitySemiJoin) {
+  if (useV2_) {
+    GTEST_SKIP() << "Not supported by the V2 optimizer";
+  }
+
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
@@ -1699,7 +1969,13 @@ TEST_F(JoinTest, impliedSameTableEqualitySemiJoin) {
 
 // RIGHT JOIN is normalized to LEFT JOIN; same-table synthesis fires on
 // the (now-right) u side, producing u.x = u.y.
-TEST_F(JoinTest, impliedSameTableEqualityRightJoinNormalized) {
+// TODO: Run with V2 after it applies the implied same-input filter following
+// right-to-left join normalization.
+TEST_P(JoinTest, impliedSameTableEqualityRightJoinNormalized) {
+  if (useV2_) {
+    GTEST_SKIP() << "Not supported by the V2 optimizer";
+  }
+
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
@@ -1722,7 +1998,7 @@ TEST_F(JoinTest, impliedSameTableEqualityRightJoinNormalized) {
 // FULL OUTER slot synthesis is unsound on either side (unmatched rows on
 // both sides survive with NULLs; a filter would drop them). u must NOT
 // get u.x = u.y.
-TEST_F(JoinTest, impliedSameTableEqualityFullOuterJoinSkipped) {
+TEST_P(JoinTest, impliedSameTableEqualityFullOuterJoinSkipped) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
@@ -1746,7 +2022,7 @@ TEST_F(JoinTest, impliedSameTableEqualityFullOuterJoinSkipped) {
 // when the right-side keys are paired with *different* left-side keys. For
 // t LEFT JOIN u ON t.a = u.x AND t.b = u.y, u.x = u.y does not follow
 // because t.a and t.b can differ.
-TEST_F(JoinTest, impliedSameTableEqualityMismatchedLeftKeys) {
+TEST_P(JoinTest, impliedSameTableEqualityMismatchedLeftKeys) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
@@ -1768,7 +2044,7 @@ TEST_F(JoinTest, impliedSameTableEqualityMismatchedLeftKeys) {
 // Same-table equalities must NOT be pushed to the preserved (left) side of a
 // left join. t rows can appear in the output without matching any u row, so
 // t.a = t.b cannot be inferred from ON t.a = u.x AND t.b = u.x.
-TEST_F(JoinTest, impliedSameTableEqualityPreservedSide) {
+TEST_P(JoinTest, impliedSameTableEqualityPreservedSide) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
   testConnector_->addTable("u", ROW({"x"}, BIGINT()))
@@ -1791,7 +2067,7 @@ TEST_F(JoinTest, impliedSameTableEqualityPreservedSide) {
 // between nation and region is inlined into the same DT. The EXISTS semi-join
 // adds a 3rd table. The subsequent LEFT JOIN ON clause uses contains() which
 // has no equalities, so leftTables must be inferred from the DT.
-TEST_F(JoinTest, leftJoinNoEqualitiesMultipleTables) {
+TEST_P(JoinTest, leftJoinNoEqualitiesMultipleTables) {
   auto query =
       "WITH base AS ("
       "   SELECT n_nationkey, n_name "
@@ -1808,16 +2084,22 @@ TEST_F(JoinTest, leftJoinNoEqualitiesMultipleTables) {
       "SELECT * FROM with_exists LEFT JOIN supplier ON s_nationkey > n_nationkey";
   SCOPED_TRACE(query);
 
-  auto matcher =
-      matchScan("nation")
-          .hashJoin(matchScan("region"), core::JoinType::kInner)
-          .hashJoin(
-              matchScan("customer"),
-              core::JoinType::kLeftSemiProject,
-              {.nullAware = false})
-          .project()
-          .nestedLoopJoin(matchScan("supplier"), core::JoinType::kLeft)
-          .build();
+  // V2 is worse: it applies the Project after the join, where it could process
+  // more rows than a Project on the input for joins with fanout.
+  // TODO: Push the V2 Project below the final left join.
+  auto matcher = matchScan("nation")
+                     .hashJoin(matchScan("region"), core::JoinType::kInner)
+                     .hashJoin(
+                         matchScan("customer"),
+                         core::JoinType::kLeftSemiProject,
+                         {.nullAware = false})
+                     .projectIf(!useV2_)
+                     .nestedLoopJoin(
+                         matchScan("supplier"),
+                         core::JoinType::kLeft,
+                         "n_nationkey < s_nationkey")
+                     .projectIf(useV2_)
+                     .build();
 
   auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
   AXIOM_ASSERT_PLAN(plan, matcher);
@@ -1825,7 +2107,7 @@ TEST_F(JoinTest, leftJoinNoEqualitiesMultipleTables) {
 
 // LEFT-to-INNER JOIN conversion with aggregation. replaceJoinOutputs must not
 // replace post-aggregation references (exprs) with pre-aggregation expressions.
-TEST_F(JoinTest, leftToInnerWithAggregation) {
+TEST_P(JoinTest, leftToInnerWithAggregation) {
   testConnector_->addTable("t", ROW("a", INTEGER()));
   testConnector_->addTable("u", ROW({"x", "y"}, {INTEGER(), DOUBLE()}));
 
@@ -1845,22 +2127,29 @@ TEST_F(JoinTest, leftToInnerWithAggregation) {
 
   auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
 
-  auto matcher =
-      matchScan("t")
-          .hashJoin(
-              matchScan("u").filter("x > 0").project().unnest().project(),
-              core::JoinType::kInner)
-          .project({"cast(y as REAL) as c"})
-          .distinct()
-          .project()
-          .build();
+  // V2 is better: it derives `a > 0` on t, materializes the cast once before
+  // DISTINCT, and eliminates the V1 output-reconstruction Projects.
+  auto matcher = matchScan("t")
+                     .filterIf(useV2_, "a > 0")
+                     .hashJoin(
+                         matchScan("u")
+                             .filter("x > 0")
+                             .project()
+                             .unnest()
+                             .projectIf(useV2_, {"x", "cast(y as REAL) as c"})
+                             .projectIf(!useV2_, {"x", "y"}),
+                         core::JoinType::kInner)
+                     .projectIf(!useV2_, {"cast(y as REAL) as c"})
+                     .distinct()
+                     .projectIf(!useV2_)
+                     .build();
 
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
 // Two aliases of the same source column (b AS x, b AS y) from a LEFT JOIN.
 // addJoinColumns must deduplicate and produce only one join output column.
-TEST_F(JoinTest, duplicateJoinOutputColumns) {
+TEST_P(JoinTest, duplicateJoinOutputColumns) {
   testConnector_->addTable("t", ROW("k", INTEGER()));
   testConnector_->addTable("u", ROW({"k", "a", "b"}, INTEGER()));
 
@@ -1919,18 +2208,29 @@ TEST_F(JoinTest, duplicateJoinOutputColumns) {
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
 
-    auto matcher =
-        matchScan("t")
-            .hashJoin(matchScan("u").filter("a = 1"), core::JoinType::kInner)
-            .distinct()
-            .project({"b as x", "b as y"})
-            .build();
+    // V2 is better: it drops the filter-only `a` column before the join.
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           useV2_ ? matchScan("u")
+                                        .aliases({"k", "b", "a"})
+                                        .filter("a = 1")
+                                        .project({"k", "b"})
+                                  : matchScan("u").filter("a = 1"),
+                           core::JoinType::kInner)
+                       .distinct()
+                       .project({"b as x", "b as y"})
+                       .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 }
 
-TEST_F(JoinTest, greedyJoinOrder) {
+// Not applicable to V2 because it tests the V1-only greedyJoinThreshold.
+TEST_P(JoinTest, greedyJoinOrder) {
+  if (useV2_) {
+    GTEST_SKIP() << "Only supported by the V1 optimizer";
+  }
+
   testConnector_->addTable("t1", ROW({"id1", "data1"}, BIGINT()))
       ->setStats(100, {{"id1", {.numDistinct = 100}}});
   testConnector_->addTable("t2", ROW({"id2", "data2"}, BIGINT()))
@@ -1983,7 +2283,13 @@ TEST_F(JoinTest, greedyJoinOrder) {
   }
 }
 
-TEST_F(JoinTest, greedyDtStart) {
+// Not applicable to V2 because two relations cannot exercise the DPhyp
+// fallback join-order choice.
+TEST_P(JoinTest, greedyDtStart) {
+  if (useV2_) {
+    GTEST_SKIP() << "Only supported by the V1 optimizer";
+  }
+
   testConnector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}))
       ->setStats(1000, {});
   testConnector_->addTable("base1", ROW({"id1", "x1"}, {BIGINT(), BIGINT()}))
@@ -2010,7 +2316,13 @@ TEST_F(JoinTest, greedyDtStart) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(JoinTest, greedySnowflakeLeftDeep) {
+// Not applicable to V2 because its left-deep join-order requirement is
+// V1-specific.
+TEST_P(JoinTest, greedySnowflakeLeftDeep) {
+  if (useV2_) {
+    GTEST_SKIP() << "Only supported by the V1 optimizer";
+  }
+
   testConnector_->addTable("fact", ROW({"fact_a", "fact_b"}, BIGINT()))
       ->setStats(
           10'000'000,
@@ -2061,7 +2373,13 @@ TEST_F(JoinTest, greedySnowflakeLeftDeep) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(JoinTest, greedyValuesStart) {
+// Not applicable to V2 because Values does not exercise a distinct fallback
+// path beyond the DPhyp budget coverage.
+TEST_P(JoinTest, greedyValuesStart) {
+  if (useV2_) {
+    GTEST_SKIP() << "Only supported by the V1 optimizer";
+  }
+
   testConnector_->addTable("v_t1", ROW({"a", "b"}, BIGINT()))
       ->setStats(1000, {{"a", {.numDistinct = 1000}}});
   testConnector_->addTable("v_t2", ROW({"c", "d"}, BIGINT()))
@@ -2098,6 +2416,112 @@ TEST_F(JoinTest, greedyValuesStart) {
                      .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
+
+TEST_P(JoinTest, dphypBudgetFallsBackToGreedy) {
+  if (!useV2_) {
+    GTEST_SKIP() << "Only supported by the V2 optimizer";
+  }
+
+  testConnector_->addTable("t1", ROW({"id1", "data1"}, BIGINT()))
+      ->setStats(100, {{"id1", {.numDistinct = 100}}});
+  testConnector_->addTable("t2", ROW({"id2", "data2"}, BIGINT()))
+      ->setStats(200, {{"id2", {.numDistinct = 200}}});
+  testConnector_->addTable("t3", ROW({"id3", "data3"}, BIGINT()))
+      ->setStats(400, {{"id3", {.numDistinct = 400}}});
+
+  auto ctx = makeContext();
+  auto logicalPlan = lp::PlanBuilder{ctx}
+                         .tableScan("t1")
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("t2"),
+                             "id1 = id2",
+                             lp::JoinType::kInner)
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("t3"),
+                             "id2 = id3",
+                             lp::JoinType::kInner)
+                         .build();
+
+  {
+    SCOPED_TRACE("Greedy Operator Ordering fallback");
+    optimizerOptions_.dphypEnumerationBudget = 1;
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher = matchScan("t3")
+                       .hashJoin(matchScan("t2").hashJoin(matchScan("t1")))
+                       .project()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    SCOPED_TRACE("exhaustive DPhyp");
+    optimizerOptions_.dphypEnumerationBudget = 0;
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher = matchScan("t2")
+                       .hashJoin(matchScan("t3").hashJoin(matchScan("t1")))
+                       .project()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+TEST_P(JoinTest, dphypGreedySnowflake) {
+  if (!useV2_) {
+    GTEST_SKIP() << "Only supported by the V2 optimizer";
+  }
+
+  testConnector_->addTable("fact", ROW({"fact_a", "fact_b"}, BIGINT()))
+      ->setStats(
+          10'000'000,
+          {{"fact_a", {.numDistinct = 100}}, {"fact_b", {.numDistinct = 100}}});
+  testConnector_->addTable("dim_a", ROW({"da_key", "da_sub"}, BIGINT()))
+      ->setStats(
+          100,
+          {{"da_key", {.numDistinct = 100}}, {"da_sub", {.numDistinct = 100}}});
+  testConnector_->addTable("sub_a", ROW({"sa_key"}, BIGINT()))
+      ->setStats(10, {{"sa_key", {.numDistinct = 10}}});
+  testConnector_->addTable("dim_b", ROW({"db_key", "db_sub"}, BIGINT()))
+      ->setStats(
+          100,
+          {{"db_key", {.numDistinct = 100}}, {"db_sub", {.numDistinct = 100}}});
+  testConnector_->addTable("sub_b", ROW({"sb_key"}, BIGINT()))
+      ->setStats(10, {{"sb_key", {.numDistinct = 10}}});
+
+  auto ctx = makeContext();
+  auto logicalPlan = lp::PlanBuilder{ctx}
+                         .tableScan("fact")
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("dim_a"),
+                             "fact_a = da_key",
+                             lp::JoinType::kInner)
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("sub_a"),
+                             "da_sub = sa_key",
+                             lp::JoinType::kInner)
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("dim_b"),
+                             "fact_b = db_key",
+                             lp::JoinType::kInner)
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("sub_b"),
+                             "db_sub = sb_key",
+                             lp::JoinType::kInner)
+                         .build();
+
+  optimizerOptions_.dphypEnumerationBudget = 1;
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto matcher = matchScan("fact")
+                     .hashJoin(matchScan("dim_a").hashJoin(matchScan("sub_a")))
+                     .hashJoin(matchScan("dim_b").hashJoin(matchScan("sub_b")))
+                     .project()
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+AXIOM_INSTANTIATE_V1_V2(JoinTest);
 
 } // namespace
 } // namespace facebook::axiom::optimizer
