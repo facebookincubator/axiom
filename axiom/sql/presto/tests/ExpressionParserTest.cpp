@@ -642,53 +642,20 @@ TEST_F(ExpressionParserTest, jsonLiteral) {
 
 TEST_F(ExpressionParserTest, normalize) {
   // The 1-arg normalize() defaults the form to NFC in Velox.
-  {
-    SCOPED_TRACE("normalize('abc')");
-    auto expr = parseExpr("normalize('abc')");
-    ASSERT_TRUE(expr->isCall());
-    auto* call = expr->as<lp::CallExpr>();
-    EXPECT_EQ(call->name(), "normalize");
-    ASSERT_EQ(call->inputs().size(), 1);
-    ASSERT_TRUE(call->inputAt(0)->isConstant());
-    EXPECT_EQ(
-        call->inputAt(0)
-            ->as<lp::ConstantExpr>()
-            ->value()
-            ->value<TypeKind::VARCHAR>(),
-        "abc");
-  }
+  ASSERT_TRUE(match(parseExpr("normalize('abc')"), "normalize('abc')"));
 
-  auto checkForm = [&](const std::string& sql,
-                       const std::string& expectedForm) {
-    SCOPED_TRACE(sql);
-    auto expr = parseExpr(sql);
-    ASSERT_TRUE(expr->isCall());
-    auto* call = expr->as<lp::CallExpr>();
-    EXPECT_EQ(call->name(), "normalize");
-    ASSERT_EQ(call->inputs().size(), 2);
-    ASSERT_TRUE(call->inputAt(0)->isConstant());
-    EXPECT_EQ(
-        call->inputAt(0)
-            ->as<lp::ConstantExpr>()
-            ->value()
-            ->value<TypeKind::VARCHAR>(),
-        "abc");
-    ASSERT_TRUE(call->inputAt(1)->isConstant());
-    EXPECT_EQ(
-        call->inputAt(1)
-            ->as<lp::ConstantExpr>()
-            ->value()
-            ->value<TypeKind::VARCHAR>(),
-        expectedForm);
-  };
-
-  checkForm("normalize('abc', NFC)", "NFC");
-  checkForm("normalize('abc', NFD)", "NFD");
-  checkForm("normalize('abc', NFKC)", "NFKC");
-  checkForm("normalize('abc', NFKD)", "NFKD");
+  ASSERT_TRUE(
+      match(parseExpr("normalize('abc', NFC)"), "normalize('abc', 'NFC')"));
+  ASSERT_TRUE(
+      match(parseExpr("normalize('abc', NFD)"), "normalize('abc', 'NFD')"));
+  ASSERT_TRUE(
+      match(parseExpr("normalize('abc', NFKC)"), "normalize('abc', 'NFKC')"));
+  ASSERT_TRUE(
+      match(parseExpr("normalize('abc', NFKD)"), "normalize('abc', 'NFKD')"));
 
   // The form is passed through as written, not upper-cased.
-  checkForm("normalize('abc', nfc)", "nfc");
+  ASSERT_TRUE(
+      match(parseExpr("normalize('abc', nfc)"), "normalize('abc', 'nfc')"));
 }
 
 TEST_F(ExpressionParserTest, atTimeZone) {
