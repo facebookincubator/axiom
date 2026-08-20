@@ -402,14 +402,15 @@ PrestoQueryReplayRunner::run(
           queryId,
           /*user=*/"presto-replay",
           runner::Properties{},
-          connector::ConnectorProperties{}),
+          connector::ConnectorProperties{},
+          facebook::axiom::connector::noopStatWriter(),
+          facebook::axiom::connector::noopConnectorWriterProvider()),
       std::move(multiFragmentPlan),
       optimizer::FinishWrite{},
       makeQueryCtx(queryId, queryRootPool),
       std::make_shared<runner::SimpleSplitSourceFactory>(nodeSplitMap),
       /*outputPool=*/nullptr,
-      /*baseSpillDirectory=*/"",
-      runtimeStats_);
+      /*baseSpillDirectory=*/"");
 
   std::vector<velox::RowVectorPtr> result;
   try {

@@ -123,11 +123,16 @@ void runSetupStatement(
           /*queryId=*/"test",
           /*user=*/"test",
           ::axiom::sql::presto::ParserOptions{},
-          connector::ConnectorProperties{}));
+          connector::ConnectorProperties{},
+          facebook::axiom::connector::noopStatWriter(),
+          facebook::axiom::connector::noopConnectorWriterProvider()));
   auto stmt = parser.parse(sql);
 
   auto session = std::make_shared<connector::ConnectorSession>(
-      /*queryId=*/"test", /*user=*/"test", connector::Properties{});
+      /*queryId=*/"test",
+      /*user=*/"test",
+      connector::Properties{},
+      facebook::axiom::connector::noopStatWriter());
 
   auto evalOptions = [](const auto& properties) {
     folly::F14FastMap<std::string, velox::Variant> options;

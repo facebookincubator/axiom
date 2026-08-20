@@ -127,12 +127,14 @@ class PrestoParserTestBase : public testing::Test {
         .values();
   }
 
-  static ParserSessionPtr makeParserSession(ParserOptions options = {}) {
+  ParserSessionPtr makeParserSession(ParserOptions options = {}) {
     return std::make_shared<ParserSession>(
         /*queryId=*/"test",
         /*user=*/"test",
         std::move(options),
-        facebook::axiom::connector::ConnectorProperties{});
+        facebook::axiom::connector::ConnectorProperties{},
+        facebook::axiom::connector::noopStatWriter(),
+        facebook::axiom::connector::noopConnectorWriterProvider());
   }
 
   /// Creates a PrestoParser configured with the test connector.

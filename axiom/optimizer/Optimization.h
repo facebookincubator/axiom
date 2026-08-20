@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/optimizer/AggregationPlanner.h"
 #include "axiom/optimizer/Cost.h"
@@ -43,8 +42,7 @@ class Optimization {
       History& history,
       std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx,
       velox::core::ExpressionEvaluator& evaluator,
-      MultiFragmentPlan::Options runnerOptions = {},
-      std::shared_ptr<QueryRuntimeStats> runtimeStats = nullptr);
+      MultiFragmentPlan::Options runnerOptions);
 
   /// Simplified API for usage in testing and tooling.
   static PlanAndStats toVeloxPlan(
@@ -518,8 +516,6 @@ class Optimization {
   // Per-Plan map from leaf RelationOp to its scaled-down PartitionType,
   // captured at Plan construction. See planGroupedLeaves() doc.
   folly::F14FastMap<const Plan*, GroupedLeaves> planGroupedLeaves_;
-
-  std::shared_ptr<QueryRuntimeStats> runtimeStats_;
 };
 
 /// Captures the producer-side fragment commit. Moves

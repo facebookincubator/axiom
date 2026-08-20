@@ -19,6 +19,12 @@ add_library(axiom_query_id_generator QueryIdGenerator.cpp)
 
 target_link_libraries(axiom_query_id_generator fmt::fmt)
 
+# Fine-grained for the same reason: axel and the CLI both aggregate a query's
+# metrics, and neither should pull in the interactive CLI to do it.
+add_library(axiom_query_runtime_stats common/QueryRuntimeStats.cpp)
+
+target_link_libraries(axiom_query_runtime_stats velox_common_base Folly::folly fmt::fmt)
+
 add_library(
   axiom_cli
   CatalogProperties.cpp
@@ -83,5 +89,7 @@ target_link_libraries(
 add_executable(axiom_hive_import ImportHiveData.cpp)
 
 target_link_libraries(axiom_hive_import axiom_cli)
+
+add_subdirectory(common/tests)
 
 add_subdirectory(tests)

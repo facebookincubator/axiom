@@ -69,12 +69,16 @@ class PrecomputeProjectionTest : public ::testing::Test {
         veloxQueryCtx->queryId(),
         "test",
         OptimizerOptions{},
-        connector::ConnectorProperties{});
+        connector::ConnectorProperties{},
+        facebook::axiom::connector::noopStatWriter(),
+        facebook::axiom::connector::noopConnectorWriterProvider());
     auto runnerSession = std::make_shared<runner::RunnerSession>(
         veloxQueryCtx->queryId(),
         "test",
         runner::Properties{},
-        connector::ConnectorProperties{});
+        connector::ConnectorProperties{},
+        facebook::axiom::connector::noopStatWriter(),
+        facebook::axiom::connector::noopConnectorWriterProvider());
 
     Optimization opt{
         optimizerSession,
@@ -88,7 +92,6 @@ class PrecomputeProjectionTest : public ::testing::Test {
 
     testRoutine(opt.rootDt());
   }
-
   std::shared_ptr<velox::memory::MemoryPool> rootPool_;
   std::shared_ptr<velox::memory::MemoryPool> optimizerPool_;
 };

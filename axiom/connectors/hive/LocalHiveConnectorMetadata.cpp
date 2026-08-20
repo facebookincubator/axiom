@@ -290,8 +290,7 @@ std::shared_ptr<SplitSource> LocalHiveSplitManager::getSplitSource(
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
     const std::vector<PartitionHandlePtr>& /*partitions*/,
     const std::shared_ptr<PartitionType>& partitionType,
-    std::optional<double> samplePercentage,
-    QueryRuntimeStats& /*runtimeStats*/) {
+    std::optional<double> samplePercentage) {
   VELOX_USER_CHECK(
       !samplePercentage.has_value(),
       "SYSTEM sampling is not supported by this connector");
@@ -574,7 +573,7 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
 
 folly::coro::Task<std::optional<FilteredTableStats>>
 LocalHiveTableLayout::co_estimateStats(
-    ConnectorSessionPtr /*session*/,
+    ConnectorSessionPtr session,
     velox::connector::ConnectorTableHandlePtr tableHandle,
     std::vector<std::string> columns,
     const FilterSelectivityEstimator& estimator) const {

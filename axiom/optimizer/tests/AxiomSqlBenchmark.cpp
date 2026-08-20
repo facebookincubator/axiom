@@ -188,7 +188,9 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
             /*queryId=*/"axiom-sql-benchmark",
             /*user=*/"axiom-sql-benchmark",
             ::axiom::sql::presto::ParserOptions{},
-            connector::ConnectorProperties{}));
+            connector::ConnectorProperties{},
+            facebook::axiom::connector::noopStatWriter(),
+            facebook::axiom::connector::noopConnectorWriterProvider()));
 
     history_ = std::make_unique<optimizer::VeloxHistory>();
 
@@ -332,7 +334,10 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     }
 
     auto session = std::make_shared<connector::ConnectorSession>(
-        "test", "test", connector::Properties{});
+        "test",
+        "test",
+        connector::Properties{},
+        facebook::axiom::connector::noopStatWriter());
     auto table = metadata->createTable(
         session,
         statement.tableName(),
@@ -351,7 +356,10 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     const auto& tableName = statement.tableName();
 
     auto session = std::make_shared<connector::ConnectorSession>(
-        "test", "test", connector::Properties{});
+        "test",
+        "test",
+        connector::Properties{},
+        facebook::axiom::connector::noopStatWriter());
     const bool dropped = metadata->dropTable(
         session, tableName, statement.ifExists(), /*explain=*/false);
 
@@ -601,12 +609,16 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
         queryCtx->queryId(),
         /*user=*/"axiom-sql-benchmark",
         std::move(optimizerOptions),
-        connector::ConnectorProperties{});
+        connector::ConnectorProperties{},
+        facebook::axiom::connector::noopStatWriter(),
+        facebook::axiom::connector::noopConnectorWriterProvider());
     auto runnerSession = std::make_shared<runner::RunnerSession>(
         queryCtx->queryId(),
         /*user=*/"axiom-sql-benchmark",
         runner::Properties{},
-        connector::ConnectorProperties{});
+        connector::ConnectorProperties{},
+        facebook::axiom::connector::noopStatWriter(),
+        facebook::axiom::connector::noopConnectorWriterProvider());
 
     optimizer::Optimization optimization(
         std::move(optimizerSession),
@@ -664,16 +676,17 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
         queryCtx->queryId(),
         /*user=*/"axiom-sql-benchmark",
         connector::Properties{},
-        connector::ConnectorProperties{});
+        connector::ConnectorProperties{},
+        facebook::axiom::connector::noopStatWriter(),
+        facebook::axiom::connector::noopConnectorWriterProvider());
     return std::make_shared<runner::LocalRunner>(
         std::move(runnerSession),
         planAndStats.plan,
         std::move(planAndStats.finishWrite),
         queryCtx,
-        std::make_shared<runner::ConnectorSplitSourceFactory>(runtimeStats_),
+        std::make_shared<runner::ConnectorSplitSourceFactory>(),
         optimizerPool_,
-        /*baseSpillDirectory=*/"",
-        runtimeStats_);
+        /*baseSpillDirectory=*/"");
   }
 
   /// Runs a query and returns the result as a single vector in *resultVector,
@@ -991,7 +1004,6 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
   // Result from first run of flag value sweep.
   std::vector<RowVectorPtr> referenceResult_;
   std::set<std::string> modifiedFlags_;
-  axiom::QueryRuntimeStats runtimeStats_;
 };
 
 // Reads multi-line command from 'in' until encounters ';' followed by zero or
