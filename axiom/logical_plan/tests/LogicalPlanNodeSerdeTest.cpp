@@ -23,6 +23,7 @@
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "velox/common/serialization/Serializable.h"
+#include "velox/core/PlanNode.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/type/Type.h"
@@ -41,6 +42,13 @@ class LogicalPlanNodeSerdeTest : public testing::Test {
     Type::registerSerDe();
     Expr::registerSerDe();
     LogicalPlanNode::registerSerDe();
+    // Registered alongside the logical plan serde on purpose. Both populate
+    // the same global deserialization registry, and physical node names such
+    // as ValuesNode, FilterNode and ProjectNode would collide with the logical
+    // ones were the latter not prefixed with "Logical". Registering both here
+    // means every round trip in this file also proves the two coexist.
+    core::PlanNode::registerSerDe();
+    core::ITypedExpr::registerSerDe();
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
   }
@@ -324,6 +332,43 @@ TEST_F(LogicalPlanNodeSerdeTest, recursiveReferenceNode) {
       std::vector<Variant>{Variant::row({1LL, "a"})});
   auto ref = PlanBuilder().recursiveRef("cte", anchor).planNode();
   testRoundTrip(ref);
+}
+
+// The logical and physical plan serializers share one global registry. This
+// checks the physical direction: a velox::core plan still round-trips with the
+// logical serde registered. The logical direction is covered by every other
+// test here, since SetUpTestSuite registers both.
+TEST_F(LogicalPlanNodeSerdeTest, coexistsWithPhysicalPlanSerde) {
+  auto rowType = ROW({"a", "b"}, {BIGINT(), VARCHAR()});
+  auto vector =
+      std::dynamic_pointer_cast<RowVector>(BaseVector::createFromVariants(
+          rowType,
+          std::vector<Variant>{Variant::row({1LL, "x"})},
+          pool_.get()));
+  // ValuesNode is one of the names the two registries would otherwise fight
+  // over.
+  core::PlanNodePtr physicalPlan = std::make_shared<core::ValuesNode>(
+      "0", std::vector<RowVectorPtr>{vector});
+
+  auto deserialized = ISerializable::deserialize<core::PlanNode>(
+      physicalPlan->serialize(), pool_.get());
+
+  ASSERT_NE(deserialized, nullptr);
+  EXPECT_NE(
+      std::dynamic_pointer_cast<const core::ValuesNode>(deserialized), nullptr);
+  EXPECT_EQ(
+      physicalPlan->toString(true, true), deserialized->toString(true, true));
+
+  // And a logical plan still resolves to a logical node rather than the
+  // physical one of the same shape.
+  auto logicalPlan =
+      PlanBuilder()
+          .values(rowType, std::vector<Variant>{Variant::row({1LL, "x"})})
+          .build();
+  auto logicalCopy = ISerializable::deserialize<LogicalPlanNode>(
+      logicalPlan->serialize(), pool_.get());
+  ASSERT_NE(logicalCopy, nullptr);
+  EXPECT_EQ(*logicalPlan, *logicalCopy);
 }
 
 } // namespace

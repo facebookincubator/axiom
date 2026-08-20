@@ -166,27 +166,34 @@ folly::dynamic LogicalPlanNode::serializeBase(std::string_view name) const {
 
 // static
 void LogicalPlanNode::registerSerDe() {
+  // Keys are prefixed with "Logical" because this registry is shared with
+  // velox::core::PlanNode, whose physical nodes claim TableScanNode,
+  // FilterNode, ProjectNode, LimitNode, TableWriteNode and UnnestNode. Without
+  // the prefix whichever registered last would win, leaving a process able to
+  // deserialize logical plans or physical ones but never both. The prefix must
+  // stay in step with the names serializeBase() writes.
   auto& registry = velox::DeserializationWithContextRegistryForSharedPtr();
-  registry.Register("ValuesNode", ValuesNode::create);
-  registry.Register("TableScanNode", TableScanNode::create);
-  registry.Register("FilterNode", FilterNode::create);
-  registry.Register("ProjectNode", ProjectNode::create);
-  registry.Register("AggregateNode", AggregateNode::create);
-  registry.Register("JoinNode", JoinNode::create);
-  registry.Register("LateralJoinNode", LateralJoinNode::create);
-  registry.Register("SortNode", SortNode::create);
-  registry.Register("LimitNode", LimitNode::create);
-  registry.Register("SetNode", SetNode::create);
-  registry.Register("UnnestNode", UnnestNode::create);
-  registry.Register("TableWriteNode", TableWriteNode::create);
-  registry.Register("SampleNode", SampleNode::create);
-  registry.Register("OutputNode", OutputNode::create);
-  registry.Register("FixedPointNode", FixedPointNode::create);
-  registry.Register("RecursiveReferenceNode", RecursiveReferenceNode::create);
+  registry.Register("LogicalValuesNode", ValuesNode::create);
+  registry.Register("LogicalTableScanNode", TableScanNode::create);
+  registry.Register("LogicalFilterNode", FilterNode::create);
+  registry.Register("LogicalProjectNode", ProjectNode::create);
+  registry.Register("LogicalAggregateNode", AggregateNode::create);
+  registry.Register("LogicalJoinNode", JoinNode::create);
+  registry.Register("LogicalLateralJoinNode", LateralJoinNode::create);
+  registry.Register("LogicalSortNode", SortNode::create);
+  registry.Register("LogicalLimitNode", LimitNode::create);
+  registry.Register("LogicalSetNode", SetNode::create);
+  registry.Register("LogicalUnnestNode", UnnestNode::create);
+  registry.Register("LogicalTableWriteNode", TableWriteNode::create);
+  registry.Register("LogicalSampleNode", SampleNode::create);
+  registry.Register("LogicalOutputNode", OutputNode::create);
+  registry.Register("LogicalFixedPointNode", FixedPointNode::create);
+  registry.Register(
+      "LogicalRecursiveReferenceNode", RecursiveReferenceNode::create);
 }
 
 folly::dynamic ValuesNode::serialize() const {
-  auto obj = serializeBase("ValuesNode");
+  auto obj = serializeBase("LogicalValuesNode");
   obj["cardinality"] = cardinality_;
 
   // Serialize the data variant
@@ -271,7 +278,7 @@ LogicalPlanNodePtr ValuesNode::create(
 }
 
 folly::dynamic TableScanNode::serialize() const {
-  auto obj = serializeBase("TableScanNode");
+  auto obj = serializeBase("LogicalTableScanNode");
   obj["connectorId"] = connectorId_;
   obj["tableName"] = tableName_.table;
   obj["schema"] = tableName_.schema;
@@ -295,7 +302,7 @@ LogicalPlanNodePtr TableScanNode::create(
 }
 
 folly::dynamic FilterNode::serialize() const {
-  auto obj = serializeBase("FilterNode");
+  auto obj = serializeBase("LogicalFilterNode");
   obj["predicate"] = predicate_->serialize();
   return obj;
 }
@@ -313,7 +320,7 @@ LogicalPlanNodePtr FilterNode::create(
 }
 
 folly::dynamic ProjectNode::serialize() const {
-  auto obj = serializeBase("ProjectNode");
+  auto obj = serializeBase("LogicalProjectNode");
   obj["names"] =
       serializeVector(names_, [](const std::string& s) { return s; });
   obj["expressions"] = serializeVector(
@@ -335,7 +342,7 @@ LogicalPlanNodePtr ProjectNode::create(
 }
 
 folly::dynamic AggregateNode::serialize() const {
-  auto obj = serializeBase("AggregateNode");
+  auto obj = serializeBase("LogicalAggregateNode");
   obj["groupingKeys"] = serializeVector(
       groupingKeys_, [](const ExprPtr& e) { return e->serialize(); });
   obj["groupingSets"] =
@@ -393,7 +400,7 @@ LogicalPlanNodePtr AggregateNode::create(
 }
 
 folly::dynamic JoinNode::serialize() const {
-  auto obj = serializeBase("JoinNode");
+  auto obj = serializeBase("LogicalJoinNode");
   obj["joinType"] = JoinTypeName::toName(joinType_);
   if (condition_) {
     obj["condition"] = condition_->serialize();
@@ -418,7 +425,7 @@ LogicalPlanNodePtr JoinNode::create(const folly::dynamic& obj, void* context) {
 }
 
 folly::dynamic SortNode::serialize() const {
-  auto obj = serializeBase("SortNode");
+  auto obj = serializeBase("LogicalSortNode");
   obj["ordering"] = serializeVector(
       ordering_, [](const SortingField& f) { return f.serialize(); });
   return obj;
@@ -439,7 +446,7 @@ LogicalPlanNodePtr SortNode::create(const folly::dynamic& obj, void* context) {
 }
 
 folly::dynamic LimitNode::serialize() const {
-  auto obj = serializeBase("LimitNode");
+  auto obj = serializeBase("LogicalLimitNode");
   obj["offset"] = offset_;
   obj["count"] = count_;
   return obj;
@@ -457,7 +464,7 @@ LogicalPlanNodePtr LimitNode::create(const folly::dynamic& obj, void* context) {
 }
 
 folly::dynamic SetNode::serialize() const {
-  auto obj = serializeBase("SetNode");
+  auto obj = serializeBase("LogicalSetNode");
   obj["operation"] = SetOperationName::toName(operation_);
   return obj;
 }
@@ -472,7 +479,7 @@ LogicalPlanNodePtr SetNode::create(const folly::dynamic& obj, void* context) {
 }
 
 folly::dynamic UnnestNode::serialize() const {
-  auto obj = serializeBase("UnnestNode");
+  auto obj = serializeBase("LogicalUnnestNode");
   obj["unnestExpressions"] = serializeVector(
       unnestExpressions_, [](const ExprPtr& e) { return e->serialize(); });
   obj["unnestedNames"] = serializeVector(
@@ -523,7 +530,7 @@ LogicalPlanNodePtr UnnestNode::create(
 }
 
 folly::dynamic TableWriteNode::serialize() const {
-  auto obj = serializeBase("TableWriteNode");
+  auto obj = serializeBase("LogicalTableWriteNode");
   obj["connectorId"] = connectorId_;
   obj["tableName"] = tableName_.table;
   obj["schema"] = tableName_.schema;
@@ -571,7 +578,7 @@ LogicalPlanNodePtr TableWriteNode::create(
 }
 
 folly::dynamic SampleNode::serialize() const {
-  auto obj = serializeBase("SampleNode");
+  auto obj = serializeBase("LogicalSampleNode");
   obj["percentage"] = percentage_->serialize();
   obj["sampleMethod"] = SampleNode::toName(sampleMethod_);
   return obj;
@@ -864,7 +871,7 @@ bool JoinNode::equalTo(const LogicalPlanNode& other) const {
 }
 
 folly::dynamic LateralJoinNode::serialize() const {
-  auto obj = serializeBase("LateralJoinNode");
+  auto obj = serializeBase("LogicalLateralJoinNode");
   obj["joinType"] = JoinTypeName::toName(joinType_);
   if (condition_) {
     obj["condition"] = condition_->serialize();
@@ -1213,7 +1220,7 @@ bool OutputNode::equalTo(const LogicalPlanNode& other) const {
 }
 
 folly::dynamic OutputNode::serialize() const {
-  auto obj = serializeBase("OutputNode");
+  auto obj = serializeBase("LogicalOutputNode");
   obj["entries"] = serializeVector(entries_, [](const Entry& entry) {
     folly::dynamic obj = folly::dynamic::object;
     obj["index"] = entry.index;
@@ -1349,7 +1356,7 @@ bool FixedPointNode::equalTo(const LogicalPlanNode& other) const {
 }
 
 folly::dynamic FixedPointNode::serialize() const {
-  auto obj = serializeBase("FixedPointNode");
+  auto obj = serializeBase("LogicalFixedPointNode");
   obj["recursiveName"] = name_;
   return obj;
 }
@@ -1391,7 +1398,7 @@ bool RecursiveReferenceNode::equalTo(const LogicalPlanNode& other) const {
 }
 
 folly::dynamic RecursiveReferenceNode::serialize() const {
-  auto obj = serializeBase("RecursiveReferenceNode");
+  auto obj = serializeBase("LogicalRecursiveReferenceNode");
   obj["recursiveName"] = name_;
   return obj;
 }
