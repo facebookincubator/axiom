@@ -357,10 +357,9 @@ JoinHypergraph HypergraphBuilder::build(
     }
   }
 
-  // Admit Unnest relations and extend the column-resolution map so the
-  // Unnest's produced columns resolve to the Unnest's relation id.
-  // Innermost first, so a dependent Unnest sees the Unnest feeding its
-  // input already registered.
+  // Admit Unnest relations in post-order so input Unnests receive lower ids
+  // than the Unnests that depend on them. Extend the column-resolution map so
+  // each Unnest's produced columns resolve to its relation id.
   folly::F14FastMap<UnnestCP, int8_t> unnestIds;
   for (UnnestCP unnest : cluster.unnests) {
     PlanObjectSet producedColumns;

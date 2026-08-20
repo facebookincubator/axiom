@@ -32,10 +32,11 @@ namespace facebook::axiom::optimizer::v2 {
 ///
 /// `unnests` records Unnest IR nodes the cluster collection
 /// descended through. Each becomes its own relation in the
-/// hypergraph, connected to the leaves contributed by its input
-/// subtree via an unnest edge. Order is descent order (innermost
-/// first) so dependent chains (`UNNEST(u1.x) u2`) have `u1`'s
-/// cardinality computed before `u2`'s.
+/// hypergraph, connected to the relations contributed by its input
+/// subtree via an unnest edge. Order is post order, i.e., an input Unnest
+/// appears before any Unnest that consumes its output, so input relations
+/// receive lower ids than the dependent Unnest, as required by DPhyp
+/// enumeration.
 struct JoinCluster {
   JoinCP root;
   std::vector<NodeCP> leaves;

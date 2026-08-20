@@ -104,3 +104,10 @@ WHERE EXISTS (
   SELECT 1
   FROM (VALUES (ARRAY[8, 5])) AS m(data) CROSS JOIN UNNEST(data) AS t(e)
   WHERE e > a.x)
+----
+-- Returns the innermost element that matches the joined value 1.
+SELECT c
+FROM arrays AS t
+CROSS JOIN UNNEST(t.nested) AS n(b)
+CROSS JOIN UNNEST(n.b) AS m(c)
+JOIN (VALUES (1)) AS u(x) ON c = u.x
