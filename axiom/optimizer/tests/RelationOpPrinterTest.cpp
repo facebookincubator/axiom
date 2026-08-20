@@ -123,7 +123,9 @@ class RelationOpPrinterTest : public ::testing::Test {
             /*queryId=*/"test",
             /*user=*/"test",
             ::axiom::sql::presto::ParserOptions{},
-            connector::ConnectorProperties{})};
+            connector::ConnectorProperties{},
+            facebook::axiom::connector::noopStatWriter(),
+            facebook::axiom::connector::noopConnectorWriterProvider())};
     auto statement = parser.parse(sql);
     VELOX_CHECK(statement->isSelect());
 
@@ -159,12 +161,16 @@ class RelationOpPrinterTest : public ::testing::Test {
         veloxQueryCtx->queryId(),
         "test",
         std::move(options),
-        connector::ConnectorProperties{});
+        connector::ConnectorProperties{},
+        facebook::axiom::connector::noopStatWriter(),
+        facebook::axiom::connector::noopConnectorWriterProvider());
     auto runnerSession = std::make_shared<runner::RunnerSession>(
         veloxQueryCtx->queryId(),
         "test",
         runner::Properties{},
-        connector::ConnectorProperties{});
+        connector::ConnectorProperties{},
+        facebook::axiom::connector::noopStatWriter(),
+        facebook::axiom::connector::noopConnectorWriterProvider());
 
     Optimization opt{
         optimizerSession,
@@ -183,7 +189,6 @@ class RelationOpPrinterTest : public ::testing::Test {
   lp::PlanBuilder::Context makeContext() const {
     return lp::PlanBuilder::Context{kTestConnectorId, kDefaultSchema};
   }
-
   std::shared_ptr<velox::memory::MemoryPool> rootPool_;
   std::shared_ptr<velox::memory::MemoryPool> optimizerPool_;
   std::shared_ptr<connector::TestConnector> connector_;

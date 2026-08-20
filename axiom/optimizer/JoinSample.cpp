@@ -156,16 +156,26 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
   auto& optimization = queryCtx()->optimization();
   auto plan = optimization->toVelox().toVeloxPlan(
       filter, MultiFragmentPlan::Options::singleNode(), {}, {});
-  static QueryRuntimeStats noopStats;
+
+  // Shares the query's identity and connector properties, but discards what
+  // it records: sampling is the optimizer's probe, not the query's work.
+  const auto& querySession = optimization->runnerSession();
+  auto sampleSession = std::make_shared<runner::RunnerSession>(
+      querySession->queryId(),
+      querySession->user(),
+      querySession->properties(),
+      querySession->connectorProperties(),
+      connector::noopStatWriter(),
+      connector::noopConnectorWriterProvider());
+
   return std::make_shared<runner::LocalRunner>(
-      optimization->runnerSession(),
+      std::move(sampleSession),
       std::move(plan.plan),
       std::move(plan.finishWrite),
       sampleQueryCtx(*optimization->veloxQueryCtx()),
-      std::make_shared<runner::ConnectorSplitSourceFactory>(noopStats),
+      std::make_shared<runner::ConnectorSplitSourceFactory>(),
       /*outputPool=*/nullptr,
-      /*baseSpillDirectory=*/"",
-      noopStats);
+      /*baseSpillDirectory=*/"");
 }
 
 // Maps hash value to number of times it appears in a table.
