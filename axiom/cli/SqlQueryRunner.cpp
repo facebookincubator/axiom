@@ -593,7 +593,9 @@ class QueryFinalizer {
         .message = error.what(),
         .messageTemplate = messageTemplateOf(error),
         .errorCode = error.errorCode(),
-        .errorSource = error.errorSource()};
+        .errorSource = error.errorSource(),
+        .file = error.file() != nullptr ? error.file() : "",
+        .line = error.line()};
     finalize();
   }
 
