@@ -24,6 +24,7 @@ add_executable(
   ExprApiTest.cpp
   PlanBuilderTest.cpp
   PlanPrinterTest.cpp
+  ReferencedTableCollectorTest.cpp
 )
 
 add_test(axiom_logical_plan_tests axiom_logical_plan_tests)

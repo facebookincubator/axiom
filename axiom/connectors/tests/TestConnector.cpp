@@ -157,7 +157,8 @@ TestTable::TestTable(
       connector_(connector),
       collectStatistics_(extractCollectStatistics(options)),
       bucketSpec_(std::move(bucketSpec)) {
-  const auto& label = this->name().table;
+  VELOX_CHECK_NOT_NULL(connector);
+  const auto& tableName = this->name().table;
   if (bucketSpec_.has_value()) {
     std::vector<const Column*> partitionColumns;
     std::vector<velox::TypePtr> partitionKeyTypes;
@@ -178,7 +179,7 @@ TestTable::TestTable(
             ->create(bucketSpec_->numBuckets, /*localExchange=*/false);
 
     exportedLayout_ = std::make_unique<TestTableLayout>(
-        label,
+        tableName,
         this,
         connector_,
         allColumns(),
@@ -186,13 +187,17 @@ TestTable::TestTable(
         std::move(partitionType));
   } else {
     exportedLayout_ = std::make_unique<TestTableLayout>(
-        label, this, connector_, allColumns());
+        tableName, this, connector_, allColumns());
   }
   layouts_.push_back(exportedLayout_.get());
   // Use the connector's parent pool if one was supplied (suite-scoped
   // fixtures with a standalone MemoryManager); otherwise fall back to the
   // global singleton.
   auto* tableRootPool = connector->tableRootPool();
+  // Pool names must be unique within the parent, and the same table name may
+  // occur in more than one schema or connector.
+  const auto label = fmt::format(
+      "{}.{}.{}", connector->connectorId(), this->name().schema, tableName);
   pool_ = tableRootPool != nullptr
       ? tableRootPool->addLeafChild(label + "_table")
       : velox::memory::memoryManager()->addLeafPool(label + "_table");

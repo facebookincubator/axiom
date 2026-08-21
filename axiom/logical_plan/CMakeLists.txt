@@ -19,6 +19,7 @@ add_library(
   ExprResolver.cpp
   LogicalPlanNode.cpp
   PlanPrinter.cpp
+  ReferencedTableCollector.cpp
   ExprApi.cpp
 )
 

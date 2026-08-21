@@ -2066,7 +2066,7 @@ SqlQueryRunner::checkPermission(
     const RunOptions& options,
     QueryCompletionInfo& completionInfo,
     const presto::ViewMap& views,
-    const presto::ReferencedTables& referencedTables) {
+    const logical_plan::ReferencedTables& referencedTables) {
   if (permissionCheck_) {
     velox::MicrosecondTimer timer(&completionInfo.timing.checkPermission);
     return permissionCheck_(

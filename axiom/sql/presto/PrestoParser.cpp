@@ -2402,7 +2402,7 @@ SqlStatementPtr parseShowCatalogs(
   }
 
   return std::make_shared<SelectStatement>(
-      builder.build(), ViewMap{}, ReferencedTables{});
+      builder.build(), ViewMap{}, lp::ReferencedTables{});
 }
 
 SqlStatementPtr parseShowColumns(
@@ -2440,7 +2440,7 @@ SqlStatementPtr parseShowColumns(
           .values(ROW({"column", "type"}, VARCHAR()), data)
           .build(),
       ViewMap{},
-      ReferencedTables{
+      lp::ReferencedTables{
           {facebook::axiom::CatalogSchemaTableName{
               connectorId, connectorTable}},
           std::nullopt,
@@ -2535,7 +2535,7 @@ SqlStatementPtr parseShowCreateTable(
           .values(ROW({"Create Table"}, VARCHAR()), {Variant::row({ddl.str()})})
           .build(),
       ViewMap{},
-      ReferencedTables{
+      lp::ReferencedTables{
           {facebook::axiom::CatalogSchemaTableName{
               connectorId, schemaTableName}},
           std::nullopt,
@@ -2567,7 +2567,7 @@ SqlStatementPtr parseShowCreateView(
           .values(ROW({"Create View"}, VARCHAR()), {Variant::row({ddl})})
           .build(),
       ViewMap{},
-      ReferencedTables{
+      lp::ReferencedTables{
           {facebook::axiom::CatalogSchemaTableName{
               connectorId, schemaTableName}},
           std::nullopt,
@@ -2629,7 +2629,7 @@ SqlStatementPtr parseShowStats(
           .values(ShowStatsBuilder::outputType(), builder.rows())
           .build(),
       ViewMap{},
-      ReferencedTables{
+      lp::ReferencedTables{
           {facebook::axiom::CatalogSchemaTableName{
               connectorId, connectorTable}},
           std::nullopt,
@@ -2703,7 +2703,7 @@ SqlStatementPtr parseShowFunctions(
   }
 
   return std::make_shared<SelectStatement>(
-      builder.build(), ViewMap{}, ReferencedTables{});
+      builder.build(), ViewMap{}, lp::ReferencedTables{});
 };
 
 std::vector<lp::ExprApi> toColumnExprs(
@@ -2769,7 +2769,7 @@ SqlStatementPtr parseInsert(
   return std::make_shared<InsertStatement>(
       planner.plan(),
       planner.views(),
-      ReferencedTables{
+      lp::ReferencedTables{
           planner.inputTables(),
           facebook::axiom::CatalogSchemaTableName{connectorId, connectorTable},
       });
@@ -2795,7 +2795,7 @@ SqlStatementPtr parseDelete(
   return std::make_shared<DeleteStatement>(
       planner.plan(),
       planner.views(),
-      ReferencedTables{
+      lp::ReferencedTables{
           planner.inputTables(),
           facebook::axiom::CatalogSchemaTableName{connectorId, connectorTable},
       });
@@ -3101,7 +3101,7 @@ SqlStatementPtr parseShowSchemas(
   }
 
   return std::make_shared<SelectStatement>(
-      builder.build(), ViewMap{}, ReferencedTables{});
+      builder.build(), ViewMap{}, lp::ReferencedTables{});
 }
 
 SqlStatementPtr parseShowTables(
@@ -3171,7 +3171,7 @@ SqlStatementPtr parseShowTables(
   }
 
   return std::make_shared<SelectStatement>(
-      builder.build(), ViewMap{}, ReferencedTables{});
+      builder.build(), ViewMap{}, lp::ReferencedTables{});
 }
 
 // Extracts the literal value from a SET SESSION statement.
@@ -3520,7 +3520,7 @@ SqlStatementPtr doPlan(
     auto innerStatement = std::make_shared<SelectStatement>(
         planner.plan(),
         planner.views(),
-        ReferencedTables{planner.inputTables(), std::nullopt});
+        lp::ReferencedTables{planner.inputTables(), std::nullopt});
     return std::make_shared<ShowStatsForQueryStatement>(
         std::move(innerStatement));
   }
@@ -3540,7 +3540,7 @@ SqlStatementPtr doPlan(
     return std::make_shared<SelectStatement>(
         planner.plan(),
         planner.views(),
-        ReferencedTables{planner.inputTables(), std::nullopt});
+        lp::ReferencedTables{planner.inputTables(), std::nullopt});
   }
 
   AXIOM_PRESTO_SYNTAX_FAIL(

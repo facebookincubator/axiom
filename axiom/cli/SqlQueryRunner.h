@@ -47,7 +47,8 @@ using PermissionCheck =
         std::string_view catalog,
         std::optional<std::string_view> schema,
         const presto::ViewMap& views,
-        const presto::ReferencedTables& referencedTables)>;
+        const facebook::axiom::logical_plan::ReferencedTables&
+            referencedTables)>;
 
 /// Holds query metadata captured at query start time.
 struct QueryStartInfo {
@@ -128,7 +129,8 @@ struct QueryCompletionInfo {
   QueryStartInfo startInfo;
 
   /// Tables referenced by the parsed statement. Unset when parsing fails.
-  std::optional<presto::ReferencedTables> referencedTables;
+  std::optional<facebook::axiom::logical_plan::ReferencedTables>
+      referencedTables;
 
   /// Contains error details when the query fails; std::nullopt on success.
   std::optional<ErrorInfo> errorInfo;
@@ -494,7 +496,7 @@ class SqlQueryRunner {
       const RunOptions& options,
       QueryCompletionInfo& completionInfo,
       const presto::ViewMap& views,
-      const presto::ReferencedTables& referencedTables);
+      const facebook::axiom::logical_plan::ReferencedTables& referencedTables);
 
   std::shared_ptr<facebook::velox::core::QueryCtx> newQuery(
       const RunOptions& options);

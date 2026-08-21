@@ -125,7 +125,7 @@ CreateTableStatement::CreateTableStatement(
     : SqlStatement(
           SqlStatementKind::kCreateTable,
           /*views=*/{},
-          ReferencedTables{
+          lp::ReferencedTables{
               /*inputTables=*/{},
               facebook::axiom::CatalogSchemaTableName{connectorId, tableName}}),
       connectorId_{std::move(connectorId)},
@@ -165,7 +165,7 @@ CreateTableAsSelectStatement::CreateTableAsSelectStatement(
     : SqlStatement(
           SqlStatementKind::kCreateTableAsSelect,
           std::move(views),
-          ReferencedTables{
+          lp::ReferencedTables{
               std::move(inputTables),
               facebook::axiom::CatalogSchemaTableName{connectorId, tableName}}),
       connectorId_{std::move(connectorId)},
