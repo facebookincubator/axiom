@@ -210,10 +210,13 @@ the full Iceberg specification in the abstract. As of the referenced Apache
 Iceberg implementation status page, C++ supports REST catalog table operations
 and namespace operations for table spec v1/v2, but does not list v3 table read
 operations, and lists REST catalog View Spec V1 operations as unsupported for
-C++. The same status page lists several Iceberg types as unsupported by C++:
+C++. It lists C++ data-type support as well, including unsupported status for
 `timestamp_ns`, `timestamptz_ns`, `unknown`, `uuid`, `variant`, `geometry`, and
 `geography`. It also lists C++ support for Parquet data files and Avro
 metadata-related files, while Puffin data-file-format support is not listed.
+These public Iceberg status signals are the external compatibility baseline; the
+Axiom connector still applies its own end-to-end type-mapping gate through Axiom
+and Velox.
 
 Axiom support requires a complete metadata-planning-to-execution path. Iceberg v3
 adds new types, default values, multi-argument transforms, row lineage, binary
@@ -558,8 +561,10 @@ Iceberg schema evolution depends on ID-based resolution, not name-based
 resolution.
 
 The connector should not equate "iceberg-cpp has a type class" with "Axiom can
-query that type." Some iceberg-cpp headers may model types that Phase 1 cannot
-convert or execute safely. The Phase 1 unsupported type list includes:
+query that type." Phase 1 type support is gated by Axiom's logical type model,
+Velox's execution types, file-reader semantics, and the connector's ability to
+preserve the intended Iceberg semantics through schema conversion and scan
+execution. The Phase 1 unsupported type list includes:
 
 * `time`
 * `uuid`
@@ -567,6 +572,8 @@ convert or execute safely. The Phase 1 unsupported type list includes:
 * v3-only `timestamp_ns` and `timestamptz_ns`
 * v3-only `variant`
 * v3-only `geometry` and `geography`
+
+The v3-only labels follow the Iceberg metadata minimum-format-version rules.
 
 Any unsupported type should fail with an actionable message naming the table,
 field, and Iceberg type. Phase 1 can fail at table loading for simplicity. A
