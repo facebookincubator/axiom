@@ -111,4 +111,26 @@ TEST(OptimizerOptionsTest, normalizeRejectsInvalidValues) {
       "small_query_num_workers must be >= 1");
 }
 
+TEST(OptimizerOptionsTest, recursionLimit) {
+  OptimizerOptions options;
+  EXPECT_EQ(options.normalize(OptimizerOptions::kRecursionLimit, "17"), "17");
+  EXPECT_EQ(
+      OptimizerOptions::from(
+          {{std::string(OptimizerOptions::kRecursionLimit), "17"}})
+          .recursionLimit,
+      17);
+  VELOX_ASSERT_THROW(
+      options.normalize(OptimizerOptions::kRecursionLimit, "invalid"),
+      "recursion_limit must be a valid 32-bit integer");
+  VELOX_ASSERT_THROW(
+      options.normalize(OptimizerOptions::kRecursionLimit, "2147483648"),
+      "recursion_limit must be a valid 32-bit integer");
+  VELOX_ASSERT_THROW(
+      options.normalize(OptimizerOptions::kRecursionLimit, "0"),
+      "recursion_limit must be >= 1");
+  VELOX_ASSERT_THROW(
+      options.normalize(OptimizerOptions::kRecursionLimit, "-1"),
+      "recursion_limit must be >= 1");
+}
+
 } // namespace facebook::axiom::optimizer
