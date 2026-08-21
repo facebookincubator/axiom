@@ -24,11 +24,11 @@ with delete files where the iceberg-cpp planning path and Velox Iceberg reader
 cover the same table feature. Format-version 3 and Iceberg views are outside the
 Phase 1 read surface. Axiom should advertise an Iceberg capability only when it
 can load the metadata, plan the scan, translate the planned tasks into Velox
-split metadata, and execute the split representation. Since v3 adds row lineage,
-deletion vectors, default values, multi-argument transforms, and new types beyond
-that end-to-end surface, Phase 1 rejects v3 tables during table loading. It
-should defer table creation, writes, row-level mutations, metadata maintenance
-actions, and Iceberg-specific SQL syntax to later phases.
+split metadata, and execute the split representation. The main v3 read-path gaps
+for this connector are deletion-vector attachment and new type mapping, so Phase
+1 rejects v3 tables during table loading. It should defer table creation, writes,
+row-level mutations, metadata maintenance actions, and Iceberg-specific SQL
+syntax to later phases.
 
 ## Background
 
@@ -41,8 +41,8 @@ Velox.
 Iceberg needs a different metadata source. Unlike the local Hive connector,
 Iceberg tables should not be discovered by reading directories or local schema
 files. Table schemas, partition specs, snapshots, manifest lists, data files,
-delete files, sequence numbers, and future v3 row-lineage metadata come from the
-Iceberg catalog and table metadata. Axiom should use a library that already
+delete files, sequence numbers, and table-format metadata come from the Iceberg
+catalog and table metadata. Axiom should use a library that already
 understands these Iceberg contracts instead of reimplementing the REST catalog
 protocol, metadata JSON parsing, manifest planning, and delete-file applicability
 rules. This mirrors how the Trino and Presto Iceberg connectors delegate all
@@ -219,9 +219,8 @@ Axiom connector still applies its own end-to-end type-mapping gate through Axiom
 and Velox.
 
 Axiom support requires a complete metadata-planning-to-execution path. Iceberg v3
-adds new types, default values, multi-argument transforms, row lineage, binary
-deletion vectors, and table encryption keys. Phase 1 therefore uses this
-compatibility baseline:
+adds new types and deletion vectors that change the read surface of this
+connector. Phase 1 therefore uses this compatibility baseline:
 
 * Supported table format versions: v1 and v2.
 * Unsupported table format versions: v3 and later.
@@ -231,6 +230,9 @@ compatibility baseline:
   requires iceberg-cpp to expose the applicable Puffin entries and blob metadata,
   the Axiom split converter to populate Velox's deletion-vector representation,
   and Velox to execute that representation.
+* V3 row lineage is not exposed as a Phase 1 metadata-column surface. If lineage
+  columns are added later, the connector must pass the required split metadata to
+  Velox; it is not a reason by itself to broaden the Phase 1 read scope.
 * Unsupported partition transforms in v1/v2 metadata can be ignored for pruning
   when the table remains otherwise readable, but they cannot contribute to
   partition enforcement.
@@ -716,6 +718,11 @@ entry stored in Puffin format. Velox uses a separate deletion-vector split
 representation because the reader needs Puffin blob metadata (`contentOffset`,
 `contentLength`, and `referencedDataFile`). Phase 1 must reject Puffin
 position-delete entries during split conversion.
+
+In v3, new position deletes are written as deletion vectors rather than Parquet
+position-delete files. Upgraded v2 tables may still carry existing position
+delete files until those deletes are merged into DVs. This keeps Phase 1 support
+for v2 position delete files separate from any claim of v3 delete support.
 
 Iceberg permits Parquet, ORC, and Avro data files. Phase 1 supports the formats
 the Velox Iceberg reader can open (Parquet and ORC/DWRF), and should fail with a
