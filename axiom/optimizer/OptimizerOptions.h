@@ -57,6 +57,7 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
       "small_query_max_scan_rows";
   static constexpr std::string_view kSmallQueryNumWorkers =
       "small_query_num_workers";
+  static constexpr std::string_view kRecursionLimit = "recursion_limit";
   static constexpr std::string_view kTraceFlags = "trace_flags";
 
   // Default values — single source of truth for field initializers
@@ -70,6 +71,7 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
   static constexpr std::string_view kBroadcastSizeLimitDefault = "100MB";
   static constexpr int64_t kBroadcastSizeLimitDefaultBytes = 100LL << 20;
   static constexpr int32_t kDphypEnumerationBudgetDefault = 100'000;
+  static constexpr int32_t kRecursionLimitDefault = 1'000;
   static constexpr bool kPushdownSubfieldsDefault = false;
   static constexpr bool kAllMapsAsStructDefault = false;
   static constexpr bool kSampleJoinsDefault = false;
@@ -153,6 +155,12 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
   /// which equality-transitivity closure turns into cliques). 0 means
   /// unlimited.
   int32_t dphypEnumerationBudget{kDphypEnumerationBudgetDefault};
+
+  /// Bounds a recursion that has no bound of its own, such as a SQL recursive
+  /// CTE. The query fails if the recursion has not converged within this many
+  /// iterations. Shapes that carry their own bound set it per node instead.
+  /// Must be at least 1.
+  int32_t recursionLimit{kRecursionLimitDefault};
 
   /// Disable cost-based decision re: whether to split an aggregation into
   /// partial + final or not.

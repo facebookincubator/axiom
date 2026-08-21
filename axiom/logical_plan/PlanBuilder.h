@@ -820,19 +820,17 @@ class PlanBuilder {
   }
 
   /// Wraps the current plan (treated as the anchor) and the provided step
-  /// plan in a FixedPointNode named `name`. The step must contain at least
-  /// one RecursiveReferenceNode named `name`, and anchor and step must
-  /// produce equivalent schemas.
+  /// plan in a FixedPointNode named `name`. The step must contain at least one
+  /// RecursiveReferenceNode named `name`, and anchor and step must produce
+  /// equivalent schemas.
   PlanBuilder& fixedPoint(
       const std::string& name,
       const LogicalPlanNodePtr& step);
 
   /// Creates a RecursiveReferenceNode leaf referencing the enclosing
-  /// FixedPointNode named `name`. Schema and name resolution mirror
-  /// `anchor` -- step-body lookups like `r.x` resolve through a clone of
-  /// the anchor's NameMappings, with each column id reallocated so
-  /// multiple references within a step body compare as distinct. Must be
-  /// the first call on a fresh builder.
+  /// FixedPointNode named `name`. Schema and name resolution mirror `anchor`,
+  /// with each column id reallocated so multiple references within a step body
+  /// compare as distinct. Must be the first call on a fresh builder.
   PlanBuilder& recursiveRef(const std::string& name, const PlanBuilder& anchor);
 
   /// Builds the plan using user-specified names for output columns.

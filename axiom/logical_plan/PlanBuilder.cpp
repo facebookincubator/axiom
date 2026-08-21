@@ -2231,8 +2231,6 @@ PlanBuilder& PlanBuilder::fixedPoint(
       node_, "Anchor plan must be set before calling fixedPoint");
   VELOX_USER_CHECK_NOT_NULL(step);
   node_ = std::make_shared<FixedPointNode>(nextId(), name, node_, step);
-  // FixedPointNode's constructor enforces that anchor and step output schemas
-  // are equivalent, so outputMapping_ (built from the anchor) stays valid.
   return *this;
 }
 
@@ -2244,9 +2242,9 @@ PlanBuilder& PlanBuilder::recursiveRef(
       anchor.node_, "Anchor plan must be set before calling recursiveRef");
   const auto& anchorType = anchor.node_->outputType();
   const auto& anchorMapping = *anchor.outputMapping_;
-  // Rebuild the anchor's mappings under fresh ids so each recursive reference
-  // site has distinct column ids -- two refs joined side by side
-  // (e.g. `r r1 JOIN r r2`) must not collide on shared anchor ids.
+  // Rebuilds the anchor's mappings under fresh ids so each recursive reference
+  // site has distinct column ids. Two references joined side by side must not
+  // collide on shared anchor ids.
   outputMapping_ = std::make_shared<NameMappings>();
   const auto numColumns = anchorType->size();
   std::vector<std::string> outputNames;

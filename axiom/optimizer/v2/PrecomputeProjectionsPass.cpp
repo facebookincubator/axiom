@@ -348,6 +348,8 @@ class Rewriter : public NodeRewriter<> {
   NodeCP rewriteUnnest(const Unnest* unnest, NoContext& context) override;
   NodeCP rewriteJoin(const Join* join, NoContext& context) override;
   NodeCP rewriteUnionAll(const UnionAll* unionAll, NoContext& context) override;
+  NodeCP rewriteFixedPoint(const FixedPoint* fixedPoint, NoContext& context)
+      override;
   NodeCP rewriteApply(const Apply* /*apply*/, NoContext& /*context*/) override {
     VELOX_UNREACHABLE(
         "Apply must be removed by decorrelate before PrecomputeProjections");
@@ -684,6 +686,40 @@ NodeCP Rewriter::rewriteUnnest(const Unnest* unnest, NoContext& context) {
        unnest->unnestColumns(),
        unnest->ordinalityColumn(),
        unnest->outputColumns()});
+}
+
+NodeCP Rewriter::rewriteFixedPoint(
+    const FixedPoint* fixedPoint,
+    NoContext& context) {
+  auto restoreSchema = [&](NodeCP branch, const ColumnVector& columns) {
+    if (branch->outputColumns() == columns) {
+      return branch;
+    }
+    return makeProject(
+        branch, ExprVector{columns.begin(), columns.end()}, columns, builder());
+  };
+
+  NodeCP anchor = restoreSchema(
+      rewrite(fixedPoint->anchor(), context), fixedPoint->outputColumns());
+  NodeCP step = restoreSchema(
+      rewrite(fixedPoint->step(), context),
+      fixedPoint->step()->outputColumns());
+  NodeCP convergence = restoreSchema(
+      rewrite(fixedPoint->convergence(), context),
+      fixedPoint->convergence()->outputColumns());
+  if (anchor == fixedPoint->anchor() && step == fixedPoint->step() &&
+      convergence == fixedPoint->convergence()) {
+    return fixedPoint;
+  }
+  return builder().make<FixedPoint>(FixedPoint::Key{
+      .anchor = anchor,
+      .step = step,
+      .convergence = convergence,
+      .name = fixedPoint->name(),
+      .outputColumns = fixedPoint->outputColumns(),
+      .maxIterations = fixedPoint->maxIterations(),
+      .recursiveNumDrivers = fixedPoint->recursiveNumDrivers(),
+  });
 }
 
 NodeCP Rewriter::rewriteUnionAll(const UnionAll* unionAll, NoContext& context) {

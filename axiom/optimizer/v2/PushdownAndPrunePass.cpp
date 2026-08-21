@@ -1758,6 +1758,59 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     return NodeRewriter::rewriteTableWrite(node, child);
   }
 
+  // Pending predicates must remain above the fixed point because pushing them
+  // into either branch can change the rows accumulated across iterations.
+  // TODO: Push iteration-invariant predicates into the anchor and step.
+  NodeCP rewriteFixedPoint(const FixedPoint* node, PushdownContext& context)
+      override {
+    // Filtering seed rows is sound only when `p(step(x))` implies `p(x)`;
+    // otherwise, a rejected seed can still produce matching descendants.
+    PushdownContext anchorContext;
+    anchorContext.required.unionObjects(node->outputColumns());
+    anchorContext.requiredAbove = anchorContext.required;
+    NodeCP newAnchor = rewrite(node->anchor(), anchorContext);
+    VELOX_CHECK(
+        std::ranges::equal(newAnchor->outputColumns(), node->outputColumns()),
+        "FixedPoint anchor output columns must retain pointer identity after pushdown");
+
+    // Required columns use step output identities because they may differ from
+    // anchor output identities. The working table carries no outer null
+    // guarantees, so `nonNullColumns` remains empty.
+    PushdownContext stepContext;
+    stepContext.required.unionObjects(node->step()->outputColumns());
+    stepContext.requiredAbove = stepContext.required;
+    NodeCP newStep = rewrite(node->step(), stepContext);
+
+    // Convergence is an independent Boolean subplan. Seed only its root output;
+    // each operator adds its expression dependencies while WorkingTable keeps
+    // the complete recursive-state schema.
+    PushdownContext convergenceContext;
+    convergenceContext.required.unionObjects(
+        node->convergence()->outputColumns());
+    convergenceContext.requiredAbove = convergenceContext.required;
+    NodeCP newConvergence = rewrite(node->convergence(), convergenceContext);
+
+    NodeCP fixedPoint = node;
+    if (newAnchor != node->anchor() || newStep != node->step() ||
+        newConvergence != node->convergence()) {
+      fixedPoint = builder().make<FixedPoint>(FixedPoint::Key{
+          .anchor = newAnchor,
+          .step = newStep,
+          .convergence = newConvergence,
+          .name = node->name(),
+          .outputColumns = node->outputColumns(),
+          .maxIterations = node->maxIterations(),
+          .recursiveNumDrivers = node->recursiveNumDrivers(),
+      });
+    }
+    return maybeWrapFilter(fixedPoint, std::move(context.pending));
+  }
+
+  NodeCP rewriteWorkingTable(const WorkingTable* node, PushdownContext& context)
+      override {
+    return maybeWrapFilter(node, std::move(context.pending));
+  }
+
  private:
   // Builds a child `PushdownContext` whose required column set is
   // `parent.required` plus the columns referenced by any conjunct in
