@@ -20,16 +20,15 @@ Velox Iceberg connector.
 Phase 1 focuses on reads of Iceberg format-version 1 and 2 tables. It should
 support `SHOW` operations, table resolution, column projection, filter-aware
 split planning where practical, and execution of scans over Iceberg data files
-with delete files where the underlying iceberg-cpp planning path and Velox
-Iceberg reader support them. Format-version 3 is deliberately out of scope for
-Phase 1. The Iceberg v3 spec adds row lineage, deletion vectors, default values,
-multi-argument transforms, and new types; the C++ implementation status and the
-Axiom/Velox adapter are not yet sufficient to advertise that surface as a
-supported read path. Phase 1 should therefore reject v3 tables with a clear
-message and revisit v3 only after the required iceberg-cpp and Velox support is
-available. It should defer table creation, writes, row-level mutations, metadata
-maintenance actions, and Iceberg-specific SQL syntax to later phases.
-Iceberg views are not part of the Phase 1 read surface.
+with delete files where the iceberg-cpp planning path and Velox Iceberg reader
+cover the same table feature. Format-version 3 and Iceberg views are outside the
+Phase 1 read surface. Axiom should advertise an Iceberg capability only when it
+can load the metadata, plan the scan, translate the planned tasks into Velox
+split metadata, and execute the split representation. Since v3 adds row lineage,
+deletion vectors, default values, multi-argument transforms, and new types beyond
+that end-to-end surface, Phase 1 rejects v3 tables during table loading. It
+should defer table creation, writes, row-level mutations, metadata maintenance
+actions, and Iceberg-specific SQL syntax to later phases.
 
 ## Background
 
@@ -93,8 +92,9 @@ the execution side:
 * `HiveIcebergSplit` carries the base data file plus associated delete files.
 * `IcebergColumnHandle` carries Iceberg field IDs and schema-evolution
   metadata.
-* `IcebergSplitReader` handles positional deletes, equality deletes, deletion
-  vectors, metadata columns, and field-ID based reads.
+* `IcebergSplitReader` handles positional deletes, equality deletes, metadata
+  columns, and field-ID based reads. It also has a distinct deletion-vector split
+  representation for a later v3/Puffin planning phase.
 
 The proposed Axiom connector should sit between these two libraries: use
 iceberg-cpp to own Iceberg catalog/table/scan semantics, and use Velox Iceberg
@@ -215,20 +215,20 @@ C++. The same status page lists several Iceberg types as unsupported by C++:
 `geography`. It also lists C++ support for Parquet data files and Avro
 metadata-related files, while Puffin data-file-format support is not listed.
 
-The Iceberg specification adds v3 capabilities that are broader than the Phase 1
-read adapter: v3 adds new types, default values, multi-argument transforms, row
-lineage, binary deletion vectors, and table encryption keys. The connector should
-therefore make this compatibility decision explicit:
+Axiom support requires a complete metadata-planning-to-execution path. Iceberg v3
+adds new types, default values, multi-argument transforms, row lineage, binary
+deletion vectors, and table encryption keys. Phase 1 therefore uses this
+compatibility baseline:
 
-* Supported table format versions in Phase 1: v1 and v2.
-* Unsupported table format versions in Phase 1: v3 and later.
-* Unsupported catalog objects in Phase 1: Iceberg views.
-* A v3 table should fail at table load, before split planning, with a message
-  naming the table and unsupported format version.
-* Deletion vector reads remain a future item because they are tied to v3
-  metadata, Puffin blobs, and Velox execution support.
-* Unknown partition transforms should not be used as a reason to claim v3
-  support. For v1/v2 metadata, unsupported transforms can be ignored for pruning
+* Supported table format versions: v1 and v2.
+* Unsupported table format versions: v3 and later.
+* Unsupported catalog objects: Iceberg views.
+* Unsupported v3 delete encoding: deletion vectors. Iceberg represents a
+  deletion vector as a Puffin-formatted position-delete entry. Supporting it
+  requires iceberg-cpp to expose the applicable Puffin entries and blob metadata,
+  the Axiom split converter to populate Velox's deletion-vector representation,
+  and Velox to execute that representation.
+* Unsupported partition transforms in v1/v2 metadata can be ignored for pruning
   when the table remains otherwise readable, but they cannot contribute to
   partition enforcement.
 
@@ -687,11 +687,13 @@ The conversion from `FileScanTask` to `HiveIcebergSplit` must include:
 * The info columns Velox surfaces as metadata columns, such as `$path`, carried
   in the split's `infoColumns` map.
 * Data-file sequence number.
-* Applicable positional delete files, each with its own sequence number.
+* Applicable non-Puffin positional delete files, each with its own sequence
+  number.
 * Applicable equality delete files, each with its equality field IDs and
   sequence number.
-* In a later v3 phase, applicable deletion vector files, including content
-  offset, content length, and referenced data file when present.
+* In a later v3 phase, deletion-vector metadata from Puffin-formatted
+  position-delete entries, including content offset, content length, and
+  referenced data file when present.
 
 Per-delete sequence numbers are not optional bookkeeping: Velox decides whether a
 delete file applies to a data file by comparing the delete's sequence number
@@ -699,6 +701,14 @@ against the data file's, with different rules for equality deletes
 (`delete > data`) than for positional deletes (`delete >= data`). v3 deletion
 vectors use the same applicability rule as positional deletes once that path is
 supported. Dropping sequence numbers yields silently incorrect results.
+
+The split converter classifies delete files by both manifest content and file
+format. Iceberg manifest content distinguishes data files, positional deletes,
+and equality deletes. A deletion vector is represented as a positional-delete
+entry stored in Puffin format. Velox uses a separate deletion-vector split
+representation because the reader needs Puffin blob metadata (`contentOffset`,
+`contentLength`, and `referencedDataFile`). Phase 1 must reject Puffin
+position-delete entries during split conversion.
 
 Iceberg permits Parquet, ORC, and Avro data files. Phase 1 supports the formats
 the Velox Iceberg reader can open (Parquet and ORC/DWRF), and should fail with a
@@ -853,8 +863,8 @@ logical system:
 
 * iceberg-cpp reads table metadata, manifest lists, and manifest files during
   table loading and scan planning.
-* Velox reads data files, delete files, and deletion-vector side files during
-  scan execution.
+* Velox reads data files, delete files, and, in a later v3 phase,
+  deletion-vector side files during scan execution.
 
 The Axiom connector must therefore own the mapping from catalog properties to
 both iceberg-cpp `FileIO` configuration and Velox filesystem configuration. It
@@ -988,7 +998,8 @@ The connector should fail fast with user-facing errors for:
 * Namespace or table not found.
 * Unsupported Iceberg type.
 * Unsupported file format.
-* Unsupported delete file content.
+* Puffin-formatted position-delete entries before deletion-vector support is
+  enabled.
 * Unsupported multi-level namespace mapping.
 * Attempted Iceberg view resolution or view catalog operation.
 * Attempted writes or DDL before write support is enabled.
@@ -1132,6 +1143,7 @@ Unit tests:
   Velox-enforced, rejected.
 * Projection and nested dereference field-ID preservation.
 * `FileScanTask` to `HiveIcebergSplit` conversion.
+* Defensive rejection of Puffin position-delete entries in split conversion.
 * FileIO and Velox filesystem configuration validation.
 * Statistics cache keying.
 * Stats and splits for one query resolve to the same pinned snapshot.
@@ -1154,7 +1166,8 @@ Integration tests:
   where the underlying Velox reader supports the scenario.
 * Query tables with positional deletes.
 * Query tables with equality deletes.
-* Verify v3 fixture metadata is rejected until Phase 1 explicitly supports v3.
+* Verify format-version 3 fixture metadata is rejected during table loading.
+* Verify Puffin position-delete metadata is rejected during split conversion.
 * Verify Iceberg views fail with actionable unsupported-feature messages.
 * Verify unsupported Iceberg features fail with actionable messages.
 
