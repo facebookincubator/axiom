@@ -459,13 +459,17 @@ table handle construction path with the following planning state:
   snapshot.
 * Projected top-level columns and projected nested field IDs.
 * Iceberg expressions accepted for manifest and file pruning.
-* Velox subfield filters accepted for execution-time pruning.
-* Rejected filter conjuncts that Axiom must keep above the scan.
-* Filters that are safe for statistics but not safe to remove from the query.
+* Velox subfield filters and remaining filter that the reader evaluates for
+  row-level enforcement.
+* Filters usable for statistics or pruning but not safe to treat as enforced.
 * Table properties and storage properties needed by split planning and Velox
   filesystem access.
 
-There is deliberately no limit here. Axiom has no connector limit hook, so a
+Rejected conjuncts are not part of this state. `createTableHandle` returns them to
+the optimizer as `rejectedFilterIndices`, and the engine applies those filters
+above the scan; the handle holds only what the connector accepted.
+
+There is deliberately no limit here either. Axiom has no connector limit hook, so a
 `LIMIT` never reaches the table handle; see Limit, Ordering, and Partitioning.
 
 #### Predicate classification
@@ -508,16 +512,19 @@ predicate on a bucketed, truncated, or time-partitioned column is also many-to-o
 For example, a table partitioned by `bucket(16, id)` places each row in one of
 sixteen buckets by hashing its `id`. A query for `id = 42` lets Iceberg hash 42
 once, see that it lands in bucket 5, and skip every file in the other fifteen
-buckets. Bucket 5 still holds every other `id` that hashes to 5, so the connector
-has to keep running `id = 42` on the rows it reads. Filters like these can prune,
-but they stay in the query above the scan.
+buckets. Bucket 5 still holds every other `id` that hashes to 5, so bucket pruning
+cannot prove those files match `id = 42`. Such a predicate therefore cannot be
+treated as Iceberg-enforced. It is still evaluated the usual way: by Velox as a
+subfield filter here, since Iceberg keeps the source `id` column in the data files,
+or above the scan only when Velox cannot represent it. The transform buys file
+pruning, not enforcement.
 
 The connector should sort each conjunct into one of four buckets:
 
 | Bucket | Meaning | Where it is used |
 | --- | --- | --- |
 | Iceberg-pruning | Predicate can be converted to an Iceberg expression for manifest or file-stat pruning, but may still have residual row-level semantics. | Used for `TableScan.filter`; does not by itself allow removal from `rejectedFilterIndices`. |
-| Metadata-enforced | Predicate is guaranteed by snapshot, identity partition, metadata-column, or another table-metadata property. | May be removed from `rejectedFilterIndices`. |
+| Metadata-enforced | Predicate is guaranteed by an identity partition, a metadata column, or another table-metadata property. | May be removed from `rejectedFilterIndices`. |
 | Velox-enforced | Predicate can be represented as Velox subfield filters or remaining filters in the Velox table handle. | May be removed from `rejectedFilterIndices` if Velox guarantees evaluation. |
 | Rejected | Predicate cannot be guaranteed by Iceberg or Velox. | Must be returned through `rejectedFilterIndices`. |
 
