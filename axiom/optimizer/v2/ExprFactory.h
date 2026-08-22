@@ -57,7 +57,8 @@ class ExprFactory {
   static ExprVector flattenOr(ExprCP expr);
   static void flattenOr(ExprCP expr, ExprVector& disjuncts);
 
-  /// Builds `lhs AND rhs`.
+  /// Builds `lhs AND rhs`, or returns `lhs` when the two sides are the
+  /// same deterministic expression.
   ExprCP makeAnd(ExprCP lhs, ExprCP rhs);
 
   /// Builds `lhs OR rhs`.

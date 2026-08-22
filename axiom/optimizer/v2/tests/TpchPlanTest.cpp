@@ -665,12 +665,12 @@ TEST_F(TpchPlanTest, q17) {
           .hashJoinInner(
               matchScan("lineitem")
                   .aggregation()
-                  .hashJoinRight(
+                  .hashJoinInner(
                       matchScan("part")
                           .filter(
                               "p_brand = 'Brand#23' and p_container = 'MED BOX'")
-                          .project({"p_partkey"})))
-          .filter()
+                          .project({"p_partkey"})),
+              {.filter = "l_quantity < avg * 0.2"})
           .project()
           .aggregation()
           .project()
@@ -758,8 +758,7 @@ TEST_F(TpchPlanTest, q20) {
                                      .filter("like(p_name, 'forest%')")
                                      .project({"p_partkey"}))
                              .filter("mark1"))
-          // TODO Optimize if(true, sum * 0.5, null) to sum * 0.5.
-          .filter("cast(ps_availqty as double) > if(true, sum * 0.5, null)")
+          .filter("cast(ps_availqty as double) > sum * 0.5")
           .project()
           .hashJoinRightSemiFilter(
               matchScan("supplier")

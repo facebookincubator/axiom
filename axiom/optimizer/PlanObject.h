@@ -221,6 +221,14 @@ class PlanObjectSet : public BitSet {
     BitSet::erase(object->id());
   }
 
+  /// Erases ids of all objects in 'objects'.
+  template <typename V>
+  void eraseAll(const V& objects) {
+    for (const auto& object : objects) {
+      erase(object);
+    }
+  }
+
   /// Adds ids of all columns 'expr' depends on.
   void unionColumns(ExprCP expr);
   void unionColumns(const ExprVector& exprs);

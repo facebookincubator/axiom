@@ -131,6 +131,16 @@ ExprCP substituteOrNull(
                          : exprFactory.substitute(expr, sources, targets);
 }
 
+// True if `expr` evaluates to NULL on a pad row of a kLeft Apply,
+// where every column of `bodyColumns` is NULL. A default-null
+// function returns NULL for a NULL argument, so an expression built
+// only from those and reading at least one body column is NULL there
+// already and needs no includeMarker guard.
+bool isNullOnPadRows(ExprCP expr, const PlanObjectSet& bodyColumns) {
+  return expr->columns().hasIntersection(bodyColumns) &&
+      !expr->containsFunction(FunctionSet::kNonDefaultNullBehavior);
+}
+
 // Decorrelate pass implementation. The per-Apply loop:
 // recompute `correlationColumns` from body; if empty, hit terminus;
 // otherwise dispatch a peel rule by body's outermost operator and
@@ -271,6 +281,12 @@ class Decorrelator : public NodeRewriter<> {
     // input cols pass through; each Project output col is recomputed from its
     // original expr (per-kind handling below); cols already present in input
     // collapse to the same slot.
+    // Only columns the body produces are NULL on a pad row. A body
+    // output that is an outer column keeps its value there.
+    PlanObjectSet bodyColumns =
+        PlanObjectSet::fromObjects(newBody->outputColumns());
+    bodyColumns.eraseAll(input->outputColumns());
+
     ExprVector liftedExprs;
     liftedExprs.reserve(
         input->outputColumns().size() + projectBody->exprs().size() + 1);
@@ -285,13 +301,12 @@ class Decorrelator : public NodeRewriter<> {
       }
       liftedSeen.add(outputColumn);
       ExprCP expr = projectBody->exprs()[i];
-      if (hasMarker) {
-        // kLeft: NULL out non-default-null exprs on pad rows.
+      if (hasMarker && !isNullOnPadRows(expr, bodyColumns)) {
+        // kLeft: NULL out exprs a pad row would otherwise give a value.
         const Literal* nullLiteral = builder().makeNull(expr->value().type);
         liftedExprs.push_back(
             exprFactory_.makeIf(node->includeMarker(), expr, nullLiteral));
       } else {
-        // kInner: no pad rows, expr passes through unchanged.
         liftedExprs.push_back(expr);
       }
     }

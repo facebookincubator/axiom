@@ -32,9 +32,15 @@ namespace lp = facebook::axiom::logical_plan;
 // instantly with no data generation. The test connector does not push filters
 // into the scan, so filters appear as separate Filter nodes. Result correctness
 // is verified separately in tests/sql/set.sql against DuckDB.
-class SetTest : public test::QueryTestBase {
+class SetTest : public test::QueryTestBase,
+                public ::testing::WithParamInterface<bool> {
  protected:
   static constexpr double kScaleFactor = 1.0;
+
+  void SetUp() override {
+    useV2_ = GetParam();
+    test::QueryTestBase::SetUp();
+  }
 
   void configureTestConnector() override {
     testConnector_->addTpchTables(kScaleFactor);
@@ -45,7 +51,7 @@ class SetTest : public test::QueryTestBase {
   }
 };
 
-TEST_F(SetTest, unionAll) {
+TEST_P(SetTest, unionAll) {
   lp::PlanBuilder::Context ctx{kTestConnectorId, kDefaultSchema};
   auto t1 = lp::PlanBuilder(ctx).tableScan("nation").filter("n_nationkey < 11");
   auto t2 = lp::PlanBuilder(ctx).tableScan("nation").filter("n_nationkey > 13");
@@ -74,7 +80,7 @@ TEST_F(SetTest, unionAll) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(SetTest, lambdaFilterPushdownThroughUnionAll) {
+TEST_P(SetTest, lambdaFilterPushdownThroughUnionAll) {
   testConnector_->addTable("t", ROW({"a", "b"}, ARRAY(BIGINT())));
   testConnector_->addTable("u", ROW({"a", "b"}, ARRAY(BIGINT())));
 
@@ -95,7 +101,7 @@ TEST_F(SetTest, lambdaFilterPushdownThroughUnionAll) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(SetTest, unionJoin) {
+TEST_P(SetTest, unionJoin) {
   lp::PlanBuilder::Context ctx(kTestConnectorId, kDefaultSchema);
   auto ps1 = lp::PlanBuilder(ctx)
                  .tableScan("partsupp", {"ps_partkey", "ps_availqty"})
@@ -164,7 +170,7 @@ TEST_F(SetTest, unionJoin) {
 // - UNION ALL of two UNION (shouldn't be flatten)
 // - UNION of two UNION ALL (should be flatten)
 // - UNION of two UNION (should be flatten)
-TEST_F(SetTest, unionFlatten) {
+TEST_P(SetTest, unionFlatten) {
   for (auto [rootType, leftType, rightType] : {
            std::tuple{
                lp::SetOperation::kUnion,
@@ -230,7 +236,7 @@ TEST_F(SetTest, unionFlatten) {
                          .aggregation()
                          .build();
 
-      AXIOM_ASSERT_PLAN(plan, matcher);
+      AXIOM_ASSERT_PLAN_V1(plan, matcher);
     } else if (
         leftType == lp::SetOperation::kUnionAll &&
         rightType == lp::SetOperation::kUnionAll) {
@@ -267,7 +273,7 @@ TEST_F(SetTest, unionFlatten) {
   }
 }
 
-TEST_F(SetTest, intersect) {
+TEST_P(SetTest, intersect) {
   lp::PlanBuilder::Context ctx{kTestConnectorId, kDefaultSchema};
   auto t1 = lp::PlanBuilder(ctx)
                 .tableScan("nation")
@@ -315,11 +321,11 @@ TEST_F(SetTest, intersect) {
             .project()
             .build();
 
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 }
 
-TEST_F(SetTest, except) {
+TEST_P(SetTest, except) {
   lp::PlanBuilder::Context ctx{kTestConnectorId, kDefaultSchema};
   auto t1 = lp::PlanBuilder(ctx)
                 .tableScan("nation")
@@ -364,10 +370,10 @@ TEST_F(SetTest, except) {
                      .project()
                      .build();
 
-  AXIOM_ASSERT_PLAN(plan, matcher);
+  AXIOM_ASSERT_PLAN_V1(plan, matcher);
 }
 
-TEST_F(SetTest, exceptAll) {
+TEST_P(SetTest, exceptAll) {
   auto logicalPlan = parseSelect(
       "SELECT n_nationkey, n_regionkey FROM nation WHERE n_nationkey < 21 "
       "EXCEPT ALL "
@@ -410,7 +416,7 @@ TEST_F(SetTest, exceptAll) {
             .hashJoin(
                 matchBuild("nationkey <= 5"), core::JoinType::kCountingAnti)
             .build();
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 
   auto matchPartitionedBuild = [](const std::string& filter) {
@@ -435,11 +441,11 @@ TEST_F(SetTest, exceptAll) {
                            core::JoinType::kCountingAnti)
                        .gather()
                        .build();
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(distributedPlan.plan, matcher);
   }
 }
 
-TEST_F(SetTest, intersectAll) {
+TEST_P(SetTest, intersectAll) {
   // t1 is much larger than t2 and t3, so the optimizer keeps t1 on probe.
   testConnector_->addTable("t1", ROW({"a"}, BIGINT()))
       ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
@@ -476,7 +482,7 @@ TEST_F(SetTest, intersectAll) {
             .hashJoin(matchBuild("t2"), core::JoinType::kCountingLeftSemiFilter)
             .hashJoin(matchBuild("t3"), core::JoinType::kCountingLeftSemiFilter)
             .build();
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 
   auto matchPartitionedBuild = [](const std::string& table) {
@@ -497,13 +503,13 @@ TEST_F(SetTest, intersectAll) {
                            core::JoinType::kCountingLeftSemiFilter)
                        .gather()
                        .build();
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(distributedPlan.plan, matcher);
   }
 }
 
 // Verifies the optimizer places the smaller table on build for INTERSECT ALL
 // regardless of input order (INTERSECT ALL is symmetric).
-TEST_F(SetTest, intersectAllSideSwap) {
+TEST_P(SetTest, intersectAllSideSwap) {
   testConnector_->addTable("big", ROW({"a"}, BIGINT()))
       ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
   testConnector_->addTable("small", ROW({"x"}, BIGINT()))
@@ -523,10 +529,10 @@ TEST_F(SetTest, intersectAllSideSwap) {
   {
     auto logicalPlan =
         parseSelect("SELECT a FROM big INTERSECT ALL SELECT x FROM small");
-    AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), startMatcher().build());
+    AXIOM_ASSERT_PLAN_V1(toSingleNodePlan(logicalPlan), startMatcher().build());
 
     auto distributedPlan = planVelox(logicalPlan);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
         distributedPlan.plan, startDistributedMatcher().gather().build());
   }
 
@@ -535,13 +541,13 @@ TEST_F(SetTest, intersectAllSideSwap) {
   {
     auto logicalPlan =
         parseSelect("SELECT x FROM small INTERSECT ALL SELECT a FROM big");
-    AXIOM_ASSERT_PLAN(
+    AXIOM_ASSERT_PLAN_V1(
         toSingleNodePlan(logicalPlan), startMatcher().project().build());
 
     // Output rename project: join outputs 'a' (probe) but query expects
     // 'x' (the original left side column name).
     auto distributedPlan = planVelox(logicalPlan);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
         distributedPlan.plan,
         startDistributedMatcher().project().gather().build());
   }
@@ -549,7 +555,7 @@ TEST_F(SetTest, intersectAllSideSwap) {
 
 // Verifies that joining with a UNION ALL subquery does not crash with an
 // assertion failure in importJoinsIntoFirstDt.
-TEST_F(SetTest, joinWithUnionAll) {
+TEST_P(SetTest, joinWithUnionAll) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
   testConnector_->addTable("v", ROW({"x", "y"}, BIGINT()));
@@ -574,7 +580,7 @@ TEST_F(SetTest, joinWithUnionAll) {
 
 // Verifies that filtering a UNION ALL works when two columns in a child branch
 // map to the same expression object (e.g., SELECT 'x' as a, 'x' as b).
-TEST_F(SetTest, filterOnDuplicateConstantInUnionAll) {
+TEST_P(SetTest, filterOnDuplicateConstantInUnionAll) {
   auto sql =
       "SELECT b FROM ("
       "  SELECT 'x' as a, 'x' as b"
@@ -601,7 +607,7 @@ TEST_F(SetTest, filterOnDuplicateConstantInUnionAll) {
 // UNION DISTINCT over all-gather inputs (e.g., constant Values) plans as a
 // single fragment with no remote shuffles. The dedup runs locally because
 // all data is already on a single task.
-TEST_F(SetTest, unionDistinctOverGatherInputs) {
+TEST_P(SetTest, unionDistinctOverGatherInputs) {
   auto logicalPlan = parseSelect("SELECT 1 AS k UNION SELECT 2");
 
   AXIOM_ASSERT_PLAN(
@@ -617,7 +623,7 @@ TEST_F(SetTest, unionDistinctOverGatherInputs) {
   // makeAggregation adds it for multi-driver hash co-location even though
   // the round-robin just spread the data. Folding the two would let
   // makeAggregation skip this step.
-  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
       planVelox(logicalPlan).plan,
       matchValues()
           .project()
@@ -635,7 +641,7 @@ TEST_F(SetTest, unionDistinctOverGatherInputs) {
 // The filter references a column (`k > rand()` rather than
 // `rand() < 0.5`) so that distributeConjuncts considers it for pushdown
 // (the pushdown path requires the conjunct to reference a single table).
-TEST_F(SetTest, nondeterministicFilterAboveUnion) {
+TEST_P(SetTest, nondeterministicFilterAboveUnion) {
   // UNION ALL: filter pushes into both scan legs (no dedup → safe). The
   // pushed predicate becomes a Filter node above each scan leg.
   {
@@ -652,8 +658,8 @@ TEST_F(SetTest, nondeterministicFilterAboveUnion) {
                               .project());
     };
 
-    AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), buildMatcher().build());
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+    AXIOM_ASSERT_PLAN_V1(toSingleNodePlan(logicalPlan), buildMatcher().build());
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
         planVelox(logicalPlan).plan, buildMatcher().gather().build());
   }
 
@@ -664,7 +670,7 @@ TEST_F(SetTest, nondeterministicFilterAboveUnion) {
         "SELECT k FROM (SELECT n_nationkey AS k FROM nation "
         "UNION SELECT r_regionkey AS k FROM region) WHERE k > rand()");
 
-    AXIOM_ASSERT_PLAN(
+    AXIOM_ASSERT_PLAN_V1(
         toSingleNodePlan(logicalPlan),
         matchScan("nation")
             .project()
@@ -673,7 +679,7 @@ TEST_F(SetTest, nondeterministicFilterAboveUnion) {
             .filter("cast(k as double) > rand()")
             .build());
 
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
         planVelox(logicalPlan).plan,
         matchScan("nation")
             .project()
@@ -687,7 +693,7 @@ TEST_F(SetTest, nondeterministicFilterAboveUnion) {
 
 // Same as above but with a table column referenced twice (SELECT x as a, x as
 // b) instead of constant expressions.
-TEST_F(SetTest, filterOnDuplicateColumnInUnionAll) {
+TEST_P(SetTest, filterOnDuplicateColumnInUnionAll) {
   testConnector_->addTable("t", ROW("x", BIGINT()));
 
   auto sql =
@@ -718,14 +724,14 @@ TEST_F(SetTest, filterOnDuplicateColumnInUnionAll) {
                        .localPartition(matchValues().project().arbitrary())
                        .gather()
                        .build();
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(planVelox(logicalPlan).plan, matcher);
   }
 }
 
 // Same as above but with a non-trivial expression referenced twice
 // (SELECT x + 1 as a, x + 1 as b). The expression deduplication produces a
 // single expression object shared by both columns.
-TEST_F(SetTest, filterOnDuplicateExpressionInUnionAll) {
+TEST_P(SetTest, filterOnDuplicateExpressionInUnionAll) {
   testConnector_->addTable("t", ROW("x", BIGINT()));
 
   auto sql =
@@ -764,7 +770,7 @@ TEST_F(SetTest, filterOnDuplicateExpressionInUnionAll) {
 
 // Verifies that filtering a UNION ALL on a column not included in the outer
 // SELECT works correctly when the filter is pushed into the scan.
-TEST_F(SetTest, filterColumnPruningInUnionAll) {
+TEST_P(SetTest, filterColumnPruningInUnionAll) {
   testConnector_->addTable("t", ROW({"x", "y"}, BIGINT()));
 
   auto sql =
@@ -784,13 +790,13 @@ TEST_F(SetTest, filterColumnPruningInUnionAll) {
 
   {
     auto matcher = matchLeg("x > 0").localPartition(matchLeg("x > 0")).build();
-    AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
+    AXIOM_ASSERT_PLAN_V1(toSingleNodePlan(logicalPlan), matcher);
   }
 
   {
     auto matcher =
         matchLeg("x > 0").localPartition(matchLeg("x > 0")).gather().build();
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(planVelox(logicalPlan).plan, matcher);
   }
 }
 
@@ -800,7 +806,7 @@ TEST_F(SetTest, filterColumnPruningInUnionAll) {
 // - All branches false: entire UNION ALL becomes empty ValuesTable.
 // - Mix of true/false: false branch pruned, true branches survive without
 //   filters.
-TEST_F(SetTest, constantFalseFilterInUnionAll) {
+TEST_P(SetTest, constantFalseFilterInUnionAll) {
   testConnector_->addTable("t", ROW({"x", "y"}, BIGINT()));
 
   // One constant-false branch (0 > 0), one table scan branch survives.
@@ -815,7 +821,8 @@ TEST_F(SetTest, constantFalseFilterInUnionAll) {
     auto plan = toSingleNodePlan(logicalPlan);
     // The surviving branch ends with a rename Project that prunes x and keeps
     // y.
-    AXIOM_ASSERT_PLAN(plan, matchScan("t").filter("x > 0").project().build());
+    AXIOM_ASSERT_PLAN_V1(
+        plan, matchScan("t").filter("x > 0").project().build());
   }
 
   // All branches constant-false (0 > 0 and -1 > 0).
@@ -828,7 +835,7 @@ TEST_F(SetTest, constantFalseFilterInUnionAll) {
         ") WHERE a > 0");
 
     auto plan = toSingleNodePlan(logicalPlan);
-    AXIOM_ASSERT_PLAN(plan, matchValues().project().build());
+    AXIOM_ASSERT_PLAN_V1(plan, matchValues().project().build());
   }
 
   // Mix: branch 1 (5 > 0) true, branch 2 (0 > 0) false, branch 3 (3 > 0)
@@ -844,7 +851,7 @@ TEST_F(SetTest, constantFalseFilterInUnionAll) {
         ") WHERE a > 0");
 
     auto plan = toSingleNodePlan(logicalPlan);
-    AXIOM_ASSERT_PLAN(
+    AXIOM_ASSERT_PLAN_V1(
         plan,
         matchValues()
             .project()
@@ -855,7 +862,7 @@ TEST_F(SetTest, constantFalseFilterInUnionAll) {
 
 // Verifies that a filter is pushed down below UNION / UNION ALL when one branch
 // has a window function.
-TEST_F(SetTest, filterOnUnionWithWindow) {
+TEST_P(SetTest, filterOnUnionWithWindow) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
 
@@ -899,7 +906,7 @@ TEST_F(SetTest, filterOnUnionWithWindow) {
 
 // UNION ALL of two EXCEPT branches produces mismatched column names when
 // the same table appears in multiple EXCEPT operands.
-TEST_F(SetTest, exceptUnionAll) {
+TEST_P(SetTest, exceptUnionAll) {
   testConnector_->addTable("t", ROW("a", BIGINT()));
   testConnector_->addTable("u", ROW("x", BIGINT()));
 
@@ -929,7 +936,7 @@ TEST_F(SetTest, exceptUnionAll) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(SetTest, unionDistinctWithUnnestMultipleReferences) {
+TEST_P(SetTest, unionDistinctWithUnnestMultipleReferences) {
   testConnector_->addTable("t", ROW({"a", "b"}, {BIGINT(), ARRAY(BIGINT())}));
 
   auto query =
@@ -959,7 +966,7 @@ TEST_F(SetTest, unionDistinctWithUnnestMultipleReferences) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(SetTest, unionAllWithDistinctAndCountStar) {
+TEST_P(SetTest, unionAllWithDistinctAndCountStar) {
   testConnector_->addTable("t", ROW("a", BIGINT()));
 
   {
@@ -1024,7 +1031,7 @@ TEST_F(SetTest, unionAllWithDistinctAndCountStar) {
   }
 }
 
-TEST_F(SetTest, rowSubfieldAccessInUnionAll) {
+TEST_P(SetTest, rowSubfieldAccessInUnionAll) {
   {
     auto logicalPlan = parseSelect(
         "SELECT x.a FROM ("
@@ -1034,7 +1041,7 @@ TEST_F(SetTest, rowSubfieldAccessInUnionAll) {
         ")");
     auto plan = toSingleNodePlan(logicalPlan);
 
-    AXIOM_ASSERT_PLAN(
+    AXIOM_ASSERT_PLAN_V1(
         plan,
         matchValues(ROW({}))
             .project({"row_constructor(1, null)"})
@@ -1053,7 +1060,7 @@ TEST_F(SetTest, rowSubfieldAccessInUnionAll) {
         ") WHERE x[1] > 0");
     auto plan = toSingleNodePlan(logicalPlan);
 
-    AXIOM_ASSERT_PLAN(
+    AXIOM_ASSERT_PLAN_V1(
         plan,
         matchValues(ROW({}))
             .filter()
@@ -1077,7 +1084,7 @@ TEST_F(SetTest, rowSubfieldAccessInUnionAll) {
         ")");
     auto plan = toSingleNodePlan(logicalPlan);
 
-    AXIOM_ASSERT_PLAN(
+    AXIOM_ASSERT_PLAN_V1(
         plan,
         matchValues(ROW({}))
             .project({"row_constructor(1, null)"})
@@ -1088,6 +1095,8 @@ TEST_F(SetTest, rowSubfieldAccessInUnionAll) {
             .build());
   }
 }
+
+AXIOM_INSTANTIATE_V1_V2(SetTest);
 
 } // namespace
 } // namespace facebook::axiom::optimizer

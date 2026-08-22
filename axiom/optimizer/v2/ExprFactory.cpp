@@ -29,6 +29,9 @@ ExprCP ExprFactory::makeBooleanCall(
 }
 
 ExprCP ExprFactory::makeAnd(ExprCP lhs, ExprCP rhs) {
+  if (lhs == rhs && !lhs->containsNonDeterministic()) {
+    return lhs;
+  }
   return makeBooleanCall(
       SpecialFormCallNames::kAnd, {lhs, rhs}, /*specialForm=*/true);
 }

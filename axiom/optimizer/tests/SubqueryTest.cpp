@@ -716,7 +716,7 @@ TEST_P(SubqueryTest, correlatedScalar) {
             .hashJoin(
                 matchHiveScan("nation")
                     .singleAggregation({"n_regionkey"}, {"min(n_nationkey)"})
-                    .project(),
+                    .projectIf(!useV2_),
                 velox::core::JoinType::kLeft)
             .filter("r_regionkey = min")
             .project()
@@ -740,7 +740,7 @@ TEST_P(SubqueryTest, correlatedScalar) {
                        .hashJoin(
                            matchHiveScan("nation")
                                .singleAggregation({"n_regionkey"}, {"count(*)"})
-                               .project(),
+                               .projectIf(!useV2_),
                            velox::core::JoinType::kLeft)
                        .filter("r_regionkey = coalesce(count, 0)")
                        .project()
@@ -761,7 +761,7 @@ TEST_P(SubqueryTest, correlatedScalar) {
                            matchHiveScan("nation")
                                .singleAggregation(
                                    {"n_regionkey"}, {"approx_distinct(n_name)"})
-                               .project(),
+                               .projectIf(!useV2_),
                            velox::core::JoinType::kLeft)
                        .filter("r_regionkey = coalesce(approx_distinct, 0)")
                        .project()
@@ -775,7 +775,7 @@ TEST_P(SubqueryTest, correlatedScalar) {
 
 TEST_P(SubqueryTest, correlatedProject) {
   auto matchAggNation = [&]() {
-    return matchHiveScan("nation").singleAggregation().project();
+    return matchHiveScan("nation").singleAggregation().projectIf(!useV2_);
   };
 
   // Correlated scalar subquery in projection with COUNT aggregation.
@@ -1028,7 +1028,7 @@ TEST_P(SubqueryTest, unnest) {
     auto matcher = matchScan("t").unnest().hashJoin(matchScan("u")).build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+    AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
   {
@@ -1039,7 +1039,7 @@ TEST_P(SubqueryTest, unnest) {
     auto matcher = matchScan("t").unnest().hashJoin(matchScan("u")).build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+    AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
   {
@@ -1047,15 +1047,15 @@ TEST_P(SubqueryTest, unnest) {
         "select (SELECT sum(y) FROM u WHERE x = n) from t, unnest(a) as v(n)";
 
     auto logicalPlan = parseSelect(query, kTestConnectorId);
-    auto matcher =
-        matchScan("t")
-            .unnest()
-            .hashJoin(
-                matchScan("u").aggregation().project(), core::JoinType::kLeft)
-            .build();
+    auto matcher = matchScan("t")
+                       .unnest()
+                       .hashJoin(
+                           matchScan("u").aggregation().projectIf(!useV2_),
+                           core::JoinType::kLeft)
+                       .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+    AXIOM_ASSERT_PLAN(plan, matcher);
   }
 }
 
@@ -1150,16 +1150,17 @@ TEST_P(SubqueryTest, correlatedGroupingKey) {
       "FROM region GROUP BY 1, 2";
   SCOPED_TRACE(query);
 
-  auto matcher = matchHiveScan("region")
-                     .hashJoin(
-                         matchHiveScan("nation").aggregation().project(),
-                         core::JoinType::kLeft)
-                     .project()
-                     .aggregation()
-                     .build();
+  auto matcher =
+      matchHiveScan("region")
+          .hashJoin(
+              matchHiveScan("nation").aggregation().projectIf(!useV2_),
+              core::JoinType::kLeft)
+          .project()
+          .aggregation()
+          .build();
 
   auto plan = toSingleNodePlan(query);
-  AXIOM_ASSERT_PLAN_V1(plan, matcher);
+  AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
 TEST_P(SubqueryTest, nonEquiCorrelatedScalar) {
@@ -1769,7 +1770,7 @@ TEST_P(SubqueryTest, innerJoinOnSubquery) {
             .hashJoin(
                 matchHiveScan("supplier")
                     .singleAggregation({"s_nationkey"}, {"count(*) as cnt"})
-                    .project(),
+                    .projectIf(!useV2_),
                 velox::core::JoinType::kLeft)
             .filter("n_nationkey > coalesce(cnt, 0)")
             .hashJoin(matchHiveScan("region"), velox::core::JoinType::kInner)
@@ -1951,7 +1952,7 @@ TEST_P(SubqueryTest, leftJoinOnSubquery) {
                                 matchHiveScan("region"),
                                 core::JoinType::kLeftSemiFilter)
                             .singleAggregation({"s_nationkey"}, {"count(*)"})
-                            .project(),
+                            .projectIf(!useV2_),
                         core::JoinType::kLeft)
                     .filter()
                     .project(),

@@ -84,6 +84,10 @@ SELECT
    FROM (SELECT 5 AS a, 10 AS x) u)
 FROM (SELECT 20 AS x, 30 AS y) v
 ----
+-- A correlated scalar subquery projecting a constant reads NULL, not the
+-- constant, for an outer row the subquery has no row for.
+SELECT a, (SELECT 1 FROM v WHERE v.a = t.a) AS one FROM t
+----
 -- Multiple correlated scalar count(*) subqueries with non-equi predicates
 -- in the same SELECT list, each correlating on a different outer column.
 SELECT
