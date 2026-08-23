@@ -17,6 +17,7 @@
 #pragma once
 
 #include <array>
+#include <optional>
 #include <span>
 
 #include "axiom/logical_plan/LogicalPlanNode.h"
@@ -56,6 +57,8 @@ enum class NodeType : uint8_t {
   kEnforceDistinct,
   kExchange,
   kTableWrite,
+  kFixedPoint,
+  kWorkingTable,
 };
 
 AXIOM_DECLARE_ENUM_NAME(NodeType);
@@ -66,8 +69,18 @@ class NodeVisitorContext;
 using NodeCP = const Node*;
 using NodeVector = QGVector<NodeCP>;
 
-/// Base class for tree-IR operator nodes. Immutable. All members are const
-/// and initialized via the constructor. Abstract — instantiate via a subclass.
+/// The recursive states a subtree reads, as carried by
+/// `Node::requiredStates()`: state name to the columns the reads present. Names
+/// are interned, so hashing the pointer is equivalent to hashing the text. In a
+/// valid plan this holds at most one entry; a branch that accumulates more is
+/// rejected by the enclosing `FixedPoint`.
+using RequiredStates = QGF14FastMap<Name, ColumnVector>;
+
+/// Base class for tree-IR operator nodes. Immutable: every member describing
+/// the node is const and initialized via the constructor. The one exception is
+/// `requiredStates()`, a pure function of those members that `Builder::make`
+/// fills in once construction is complete.
+/// Abstract — instantiate via a subclass.
 ///
 /// Cross-node references — predicates, join/grouping/sort keys, expression
 /// operands, per-leg layouts — bind by pointer identity, and keys may be
@@ -141,6 +154,23 @@ class Node : public PlanObject {
   virtual void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
       const = 0;
 
+  /// Recursive states this subtree needs an enclosing `FixedPoint` to provide,
+  /// each mapped to the columns its reads present. Empty for a self-contained
+  /// subtree, so for every node outside a recursive query. Lets a `FixedPoint`
+  /// check both that a branch reads its state and that the read agrees with the
+  /// state schema, with one lookup rather than a subtree search. Primed by
+  /// `Builder::make`, which is the only way to construct a node.
+  const RequiredStates& requiredStates() const {
+    return *requiredStates_;
+  }
+
+  /// Computes and caches `requiredStates()`. Called by `Builder::make` once the
+  /// node is fully constructed, so the set allocates in the same
+  /// `QueryGraphContext` as the rest of the node.
+  void primeRequiredStates() const {
+    requiredStates_ = deriveRequiredStates();
+  }
+
   std::string toString() const override;
 
  protected:
@@ -156,10 +186,20 @@ class Node : public PlanObject {
         PlanObjectSet::fromObjects(outputColumns_));
   }
 
+  // Unions the inputs' entries, rejecting two reads of one state that disagree
+  // on columns. `WorkingTable` requires the state it reads and `FixedPoint`
+  // satisfies the one it binds.
+  virtual RequiredStates deriveRequiredStates() const;
+
  private:
   const NodeType nodeType_;
   const ColumnVector outputColumns_;
   const PhysicalProperties physicalProperties_;
+  // Set by `primeRequiredStates()`. Mutable because that runs after
+  // construction, from `Builder::make` on an already-const node; safe under the
+  // single-threaded planning assumption (see `QueryGraphContext`). A pure
+  // function of the node's structure, so interning cannot make it stale.
+  mutable std::optional<RequiredStates> requiredStates_;
 };
 
 /// Reads rows from a connector-backed table (`BaseTable`).
@@ -1958,6 +1998,193 @@ class TableWrite : public Node {
 
 using TableWriteCP = const TableWrite*;
 
+/// Selects which rows a `WorkingTable` reads from recursive state.
+enum class WorkingTableReadMode : uint8_t {
+  /// Rows produced by the immediately preceding anchor or step evaluation.
+  kLatestDelta,
+  /// All rows accumulated since the anchor initialized the state.
+  kAccumulated,
+};
+
+AXIOM_DECLARE_ENUM_NAME(WorkingTableReadMode);
+
+/// Reads recursive state inside a `FixedPoint` branch.
+///
+/// A latest-delta read returns the rows produced by the immediately preceding
+/// anchor or step evaluation, not every row accumulated so far. An accumulated
+/// read returns the full recursive result produced through that iteration.
+/// `name` identifies which enclosing fixed-point state to read.
+///
+/// Requires:
+/// - `name` is non-null and identifies the enclosing fixed-point state.
+/// - `outputColumns` share pointer identity with the fixed-point output.
+class WorkingTable : public Node {
+ public:
+  struct Key {
+    /// Identifies the enclosing fixed-point state.
+    Name name;
+    /// Shares `Column*` identity with the enclosing `FixedPoint` output.
+    ColumnVector outputColumns;
+    /// Selects the latest iteration's rows or all accumulated rows.
+    WorkingTableReadMode readMode;
+  };
+
+  /// Transparent hasher for interning `WorkingTable`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const WorkingTable* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `WorkingTable`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const WorkingTable* left, const WorkingTable* right) const;
+    bool operator()(const Key& key, const WorkingTable* node) const;
+    bool operator()(const WorkingTable* node, const Key& key) const;
+  };
+
+  explicit WorkingTable(const Key& key);
+
+  Name name() const {
+    return name_;
+  }
+
+  WorkingTableReadMode readMode() const {
+    return readMode_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return {};
+  }
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ protected:
+  RequiredStates deriveRequiredStates() const override;
+
+ private:
+  const Name name_;
+  const WorkingTableReadMode readMode_;
+};
+
+using WorkingTableCP = const WorkingTable*;
+
+/// Represents a loop whose `anchor` seeds recursive state and whose `step`
+/// produces one new delta per iteration. For append-only state, the loop is:
+///
+///   delta = anchor(); result = delta;
+///   for (iteration = 0; iteration < maxIterations; ++iteration) {
+///     delta = step(delta);
+///     result += delta;
+///     if (convergence(delta)) break;
+///   }
+///
+/// For example:
+///
+///   WITH RECURSIVE counter(n) AS (
+///     VALUES 1
+///     UNION ALL
+///     SELECT n + 1 FROM counter WHERE n < 10)
+///
+/// translates to `VALUES 1` as the anchor, `n + 1 WHERE n < 10` over a
+/// latest-delta `WorkingTable[counter]` as the step, and `count(*) = 0` over
+/// another latest-delta read as convergence. The fixed point outputs all rows
+/// accumulated from the anchor and successive step deltas.
+///
+/// Requires:
+/// - `anchor`, `step`, `convergence`, and `name` are non-null.
+/// - `outputColumns` equal `anchor->outputColumns()` by pointer identity.
+/// - `step` output is type-compatible with `anchor` output.
+/// - `anchor->requiredStates()` is empty: the anchor reads no recursive state.
+/// - `step` and `convergence` each require exactly `name`, with columns
+///   pointer-identical to `outputColumns`.
+/// - `convergence` produces exactly one BOOLEAN column.
+/// - `maxIterations` is at least one.
+/// - `recursiveNumDrivers`, when set by physical planning, is one.
+class FixedPoint : public Node {
+ public:
+  struct Key {
+    /// Runs once to seed the working table.
+    NodeCP anchor;
+    /// Runs iteratively over the working table.
+    NodeCP step;
+    /// Produces a single Boolean indicating whether iteration should stop.
+    NodeCP convergence;
+    /// Identifies the recursive state represented by this fixed point.
+    Name name;
+    /// Shares `Column*` identity with the anchor output.
+    ColumnVector outputColumns;
+    /// Maximum number of recursive iterations.
+    int32_t maxIterations;
+    /// Driver width chosen by physical planning for step and convergence.
+    /// Unset in logical IR; currently only one is valid, and emission requires
+    /// the physically planned value.
+    std::optional<int32_t> recursiveNumDrivers;
+  };
+
+  /// Transparent hasher for interning `FixedPoint`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const FixedPoint* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `FixedPoint`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const FixedPoint* left, const FixedPoint* right) const;
+    bool operator()(const Key& key, const FixedPoint* node) const;
+    bool operator()(const FixedPoint* node, const Key& key) const;
+  };
+
+  explicit FixedPoint(const Key& key);
+
+  NodeCP anchor() const {
+    return inputs_[0];
+  }
+
+  NodeCP step() const {
+    return inputs_[1];
+  }
+
+  NodeCP convergence() const {
+    return inputs_[2];
+  }
+
+  Name name() const {
+    return name_;
+  }
+
+  int32_t maxIterations() const {
+    return maxIterations_;
+  }
+
+  std::optional<int32_t> recursiveNumDrivers() const {
+    return recursiveNumDrivers_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return inputs_;
+  }
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ protected:
+  RequiredStates deriveRequiredStates() const override;
+
+ private:
+  const std::array<NodeCP, 3> inputs_;
+  const Name name_;
+  const int32_t maxIterations_;
+  const std::optional<int32_t> recursiveNumDrivers_;
+};
+
+using FixedPointCP = const FixedPoint*;
+
 } // namespace facebook::axiom::optimizer::v2
 
 AXIOM_ENUM_FORMATTER(facebook::axiom::optimizer::v2::NodeType);
+AXIOM_ENUM_FORMATTER(facebook::axiom::optimizer::v2::WorkingTableReadMode);

@@ -16,6 +16,7 @@
 #include "axiom/optimizer/OptimizerOptions.h"
 
 #include <fmt/format.h>
+#include <folly/Conv.h>
 #include <glog/logging.h>
 
 #include "velox/common/base/Exceptions.h"
@@ -27,6 +28,18 @@ using velox::config::ConfigProperty;
 using velox::config::ConfigPropertyType;
 
 namespace {
+
+int32_t parseRecursionLimit(std::string_view value) {
+  int32_t iterations;
+  try {
+    iterations = folly::to<int32_t>(value);
+  } catch (const folly::ConversionError&) {
+    VELOX_USER_FAIL(
+        "recursion_limit must be a valid 32-bit integer: {}", value);
+  }
+  VELOX_USER_CHECK_GE(iterations, 1, "recursion_limit must be >= 1: {}", value);
+  return iterations;
+}
 
 std::vector<ConfigProperty> buildProperties(
     const std::unordered_map<std::string, std::string>& configOverrides) {
@@ -126,6 +139,12 @@ std::vector<ConfigProperty> buildProperties(
           "time on dense join graphs. 0 means unlimited.",
       },
       {
+          std::string(OptimizerOptions::kRecursionLimit),
+          ConfigPropertyType::kInteger,
+          std::to_string(OptimizerOptions::kRecursionLimitDefault),
+          "Maximum iterations for a recursion that has no bound of its own. Must be >= 1.",
+      },
+      {
           std::string(OptimizerOptions::kTraceFlags),
           ConfigPropertyType::kInteger,
           std::to_string(OptimizerOptions::kTraceFlagsDefault),
@@ -185,6 +204,8 @@ std::string OptimizerOptions::normalize(
     // Throws if 'value' is not a valid capacity string (e.g. "100MB").
     velox::config::toCapacity(
         std::string(value), velox::config::CapacityUnit::BYTE);
+  } else if (name == kRecursionLimit) {
+    parseRecursionLimit(value);
   }
   return std::string(value);
 }
@@ -235,6 +256,9 @@ OptimizerOptions OptimizerOptions::from(
   setInt(kGreedyJoinThreshold, options.greedyJoinThreshold);
   setCapacity(kBroadcastSizeLimit, options.broadcastSizeLimit);
   setInt(kDphypEnumerationBudget, options.dphypEnumerationBudget);
+  if (auto it = properties.find(kRecursionLimit); it != properties.end()) {
+    options.recursionLimit = parseRecursionLimit(it->second);
+  }
 
   auto setUint = [&](std::string_view key, uint32_t& field) {
     auto it = properties.find(key);

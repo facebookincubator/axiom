@@ -1323,11 +1323,6 @@ FixedPointNode::FixedPointNode(
     : LogicalPlanNode{NodeKind::kFixedPoint, std::move(id), {anchor, step}, anchor->outputType()},
       name_{std::move(name)} {
   VELOX_USER_CHECK(!name_.empty(), "FixedPointNode name must be non-empty");
-  // Equivalence (types only), not strict name equality. Anchor and step
-  // schemas may carry different canonical column ids -- e.g. when the step's
-  // final projection allocates fresh names from the shared NameAllocator --
-  // so tightening this to name-equality would break valid recursive plans
-  // whose anchor and step differ only by id.
   VELOX_USER_CHECK(
       anchor->outputType()->equivalent(*step->outputType()),
       "Anchor and step branches of FixedPointNode must have equivalent output schemas: {} vs. {}",
@@ -1335,7 +1330,7 @@ FixedPointNode::FixedPointNode(
       step->outputType()->toString());
 
   rejectAnchorRecursiveReference(anchor, name_);
-  bool found = false;
+  bool found{false};
   checkRecursiveReferences(step, name_, anchor->outputType(), &found);
   VELOX_USER_CHECK(
       found,

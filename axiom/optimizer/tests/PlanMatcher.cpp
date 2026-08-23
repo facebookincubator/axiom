@@ -20,6 +20,7 @@
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/optimizer/tests/ExprMatcher.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/core/FixedPointPlanNodes.h"
 #include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
@@ -314,6 +315,139 @@ class ValuesMatcher : public PlanMatcherImpl<ValuesNode> {
 
  private:
   const RowTypePtr outputType_;
+};
+
+class StateSourceMatcher : public PlanMatcherImpl<StateSourceNode> {
+ public:
+  StateSourceMatcher(std::string stateName, bool delta)
+      : PlanMatcherImpl<StateSourceNode>{},
+        stateName_{std::move(stateName)},
+        delta_{delta} {}
+
+  MatchResult matchDetails(
+      const StateSourceNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+    EXPECT_EQ(plan.stateName(), stateName_);
+    EXPECT_EQ(plan.delta(), delta_);
+    AXIOM_TEST_RETURN_IF_FAILURE
+    return MatchResult::success(symbols);
+  }
+
+ private:
+  const std::string stateName_;
+  const bool delta_;
+};
+
+class FixedPointMatcher : public PlanMatcherImpl<FixedPointNode> {
+ public:
+  FixedPointMatcher() = default;
+
+  explicit FixedPointMatcher(FixedPointMatch match)
+      : PlanMatcherImpl<FixedPointNode>{}, match_{std::move(match)} {}
+
+  MatchResult matchDetails(
+      const FixedPointNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+    if (!match_.has_value()) {
+      return MatchResult::success(symbols);
+    }
+
+    EXPECT_EQ(plan.outputStateEntry(), match_->outputStateEntry());
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    const auto& states = match_->states();
+    if (!states.empty()) {
+      EXPECT_EQ(plan.stateDeclarations().size(), states.size());
+      AXIOM_TEST_RETURN_IF_FAILURE
+    }
+    for (const auto& state : states) {
+      if (!matchState(plan, state, symbols)) {
+        return MatchResult::failure();
+      }
+    }
+
+    const auto& plans = match_->plans();
+    if (!plans.empty()) {
+      EXPECT_EQ(plan.plans().size(), plans.size());
+      AXIOM_TEST_RETURN_IF_FAILURE
+      for (size_t i = 0; i < plans.size(); ++i) {
+        if (!plans[i]
+                 ->match(plan.plans()[i], symbols, /*context=*/nullptr)
+                 .match) {
+          return MatchResult::failure();
+        }
+      }
+    }
+
+    if (const auto& convergence = match_->convergencePlan()) {
+      EXPECT_NE(plan.convergenceConfig().plan, nullptr);
+      AXIOM_TEST_RETURN_IF_FAILURE
+      if (!convergence
+               ->match(
+                   plan.convergenceConfig().plan, symbols, /*context=*/nullptr)
+               .match) {
+        return MatchResult::failure();
+      }
+    }
+
+    if (match_->maxIterations().has_value()) {
+      EXPECT_EQ(plan.maxIterations(), *match_->maxIterations());
+    }
+    if (match_->errorWhenMaxIterationReached().has_value()) {
+      EXPECT_EQ(
+          plan.convergenceConfig().errorWhenMaxIterationReached,
+          *match_->errorWhenMaxIterationReached());
+    }
+    AXIOM_TEST_RETURN
+  }
+
+ private:
+  bool matchState(
+      const FixedPointNode& plan,
+      const FixedPointMatch::State& expected,
+      const std::unordered_map<std::string, std::string>& symbols) const {
+    const StateDeclaration* declaration = nullptr;
+    for (const auto& candidate : plan.stateDeclarations()) {
+      if (candidate->name() == expected.name) {
+        declaration = candidate.get();
+        break;
+      }
+    }
+    EXPECT_NE(declaration, nullptr)
+        << "No state declaration named " << expected.name;
+    if (declaration == nullptr) {
+      return false;
+    }
+
+    const auto* vector =
+        dynamic_cast<const VectorStateDeclaration*>(declaration);
+    EXPECT_NE(vector, nullptr) << expected.name << " is not a vector state";
+    if (vector == nullptr) {
+      return false;
+    }
+    EXPECT_EQ(vector->append(), expected.append);
+    if (::testing::Test::HasFailure()) {
+      return false;
+    }
+
+    if (expected.initialPlan != nullptr) {
+      EXPECT_NE(declaration->initialPlan(), nullptr)
+          << expected.name << " has no initial plan";
+      if (declaration->initialPlan() == nullptr) {
+        return false;
+      }
+      return expected.initialPlan
+          ->match(declaration->initialPlan(), symbols, /*context=*/nullptr)
+          .match;
+    }
+    return true;
+  }
+
+  const std::optional<FixedPointMatch> match_;
 };
 
 class FilterMatcher : public PlanMatcherImpl<FilterNode> {
@@ -1966,6 +2100,67 @@ PlanMatcherBuilder& PlanMatcherBuilder::values(
   return *this;
 }
 
+PlanMatcherBuilder& PlanMatcherBuilder::stateSource(
+    const std::string& stateName,
+    bool delta) {
+  VELOX_USER_CHECK_NULL(matcher_);
+  matcher_ = std::make_shared<StateSourceMatcher>(stateName, delta);
+  return *this;
+}
+
+FixedPointMatch& FixedPointMatch::outputState(
+    bool append,
+    PlanMatcherBuilder initialPlan) {
+  states_.push_back(
+      {.name = outputStateEntry_,
+       .append = append,
+       .initialPlan = initialPlan.build()});
+  return *this;
+}
+
+FixedPointMatch& FixedPointMatch::plan(PlanMatcherBuilder body) {
+  plans_.push_back(body.build());
+  return *this;
+}
+
+namespace {
+// The plan a stop-when-empty loop uses today: count the rows the last
+// iteration wrote and compare to zero. 'stateColumns', when set, pins the
+// columns the delta read presents.
+PlanMatcherBuilder emptyDeltaConvergence(
+    const std::string& stateName,
+    const std::optional<std::vector<std::optional<std::string>>>&
+        stateColumns) {
+  PlanMatcherBuilder builder;
+  builder.stateSource(stateName, /*delta=*/true);
+  if (stateColumns.has_value()) {
+    builder.aliases(*stateColumns);
+  }
+  return builder.singleAggregation({}, {"count(*) as convergence_count"})
+      .project({"convergence_count = 0"});
+}
+} // namespace
+
+FixedPointMatch& FixedPointMatch::convergeOnEmpty(Convergence assertions) {
+  convergence_ =
+      emptyDeltaConvergence(outputStateEntry_, assertions.stateColumns).build();
+  errorWhenMaxIterationReached_ = true;
+  maxIterations_ = assertions.maxIterations;
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::fixedPoint() {
+  VELOX_USER_CHECK_NULL(matcher_);
+  matcher_ = std::make_shared<FixedPointMatcher>();
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::fixedPoint(FixedPointMatch match) {
+  VELOX_USER_CHECK_NULL(matcher_);
+  matcher_ = std::make_shared<FixedPointMatcher>(std::move(match));
+  return *this;
+}
+
 PlanMatcherBuilder& PlanMatcherBuilder::filter() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<FilterMatcher>(matcher_);
@@ -2461,6 +2656,18 @@ PlanMatcherBuilder& PlanMatcherBuilder::distributedMarkDistinct(
 PlanMatcherBuilder& PlanMatcherBuilder::multiThreaded(bool enabled) {
   localExchanges_ = enabled;
   return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::localAggregation(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates) {
+  partialAggregation(groupingKeys, aggregates);
+  if (groupingKeys.empty()) {
+    localGather();
+  } else {
+    localPartition(groupingKeys);
+  }
+  return finalAggregation();
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::distributedAggregation(

@@ -28,6 +28,7 @@
 #include "axiom/optimizer/v2/EstimateProvider.h"
 #include "axiom/optimizer/v2/ExprEmitter.h"
 #include "axiom/optimizer/v2/PhysicalProperties.h"
+#include "velox/core/FixedPointPlanNodes.h"
 #include "velox/core/PlanConsistencyChecker.h"
 #include "velox/core/TableWriteTraits.h"
 #include "velox/exec/HashPartitionFunction.h"
@@ -284,6 +285,10 @@ class Emitter {
         return emitTableWrite(*node->as<TableWrite>());
       case NodeType::kExchange:
         return emitExchange(*node->as<Exchange>());
+      case NodeType::kFixedPoint:
+        return emitFixedPoint(*node->as<FixedPoint>());
+      case NodeType::kWorkingTable:
+        return emitWorkingTable(*node->as<WorkingTable>());
     }
     VELOX_UNREACHABLE();
   }
@@ -417,6 +422,8 @@ class Emitter {
   // current fragment, wiring the `InputStage` between them.
   velox::core::PlanNodePtr emitExchange(const Exchange& exchange);
   velox::core::PlanNodePtr emitTableWrite(const TableWrite& tableWrite);
+  velox::core::PlanNodePtr emitFixedPoint(const FixedPoint& fixedPoint);
+  velox::core::PlanNodePtr emitWorkingTable(const WorkingTable& workingTable);
 
   // Returns the handle of the scan whose rows 'tableWrite' deletes. Fails if
   // that scan's handle does not describe exactly the rows to remove.
@@ -492,7 +499,9 @@ class Emitter {
   const OptimizerSession& session_;
   velox::core::ExpressionEvaluator& evaluator_;
   ExprEmitter exprEmitter_;
-  const MultiFragmentPlan::Options& options_;
+  // A copy, not a reference: emitting a fixed point lowers `numDrivers` for the
+  // recursive subtree and restores it afterwards.
+  MultiFragmentPlan::Options options_;
   int32_t nextNodeId_{0};
 
   // The exchange serialization format for remote
@@ -1660,6 +1669,7 @@ std::optional<FragmentType> fragmentTypeContribution(NodeCP node) {
           ? FragmentType::kCoordinator
           : FragmentType::kSource;
     case NodeType::kValues:
+    case NodeType::kFixedPoint:
       return FragmentType::kSingle;
     default: {
       std::optional<FragmentType> result;
@@ -2017,13 +2027,13 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
   // A single-fragment write over a single-threaded pipeline (e.g. a Values
   // source) has one writer producing all rows, so the per-driver stats need no
   // merge. Reporting one driver keeps the plan a bare TableWrite.
-  const int32_t numDrivers =
+  const int32_t writerNumDrivers =
       !distributed && isSingleThreadedPipeline(input) ? 1 : options_.numDrivers;
   WriteStatsBuilder statsBuilder(
       table,
       inputType,
       *handle,
-      numDrivers,
+      writerNumDrivers,
       distributed ? options_.numWorkers : 1);
   std::optional<velox::core::ColumnStatsSpec> writeStatsSpec;
   if (statsBuilder.hasStats()) {
@@ -2101,6 +2111,78 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
       std::move(finalMergeSpec),
       std::move(gather));
 }
+
+velox::core::PlanNodePtr Emitter::emitFixedPoint(const FixedPoint& fixedPoint) {
+  if (options_.numWorkers > 1) {
+    VELOX_NYI("Distributed FixedPoint execution is not yet implemented");
+  }
+
+  auto anchorPlan = emit(fixedPoint.anchor());
+
+  VELOX_CHECK_EQ(
+      fixedPoint.recursiveNumDrivers().value_or(0),
+      1,
+      "FixedPoint must be physically planned for one recursive driver before emission");
+  const int32_t previousNumDrivers =
+      std::exchange(options_.numDrivers, *fixedPoint.recursiveNumDrivers());
+  SCOPE_EXIT {
+    options_.numDrivers = previousNumDrivers;
+  };
+  auto stepPlan = emit(fixedPoint.step());
+
+  auto schema = makeRowType(fixedPoint.outputColumns());
+  const std::string stateName{fixedPoint.name()};
+
+  auto convergence = velox::core::ConvergenceConfig::converging(
+      emit(fixedPoint.convergence()), fixedPoint.maxIterations());
+
+  std::vector<velox::core::StateDeclarationPtr> stateDeclarations;
+  stateDeclarations.push_back(
+      std::make_shared<velox::core::VectorStateDeclaration>(
+          stateName, schema, std::move(anchorPlan), /*append=*/true));
+  std::vector<velox::core::PlanNodePtr> plans;
+  plans.push_back(std::move(stepPlan));
+
+  return std::make_shared<velox::core::FixedPointNode>(
+      nextId(),
+      std::move(stateDeclarations),
+      std::move(plans),
+      std::move(convergence),
+      stateName);
+}
+
+velox::core::PlanNodePtr Emitter::emitWorkingTable(
+    const WorkingTable& workingTable) {
+  auto schema = makeRowType(workingTable.outputColumns());
+  const bool delta =
+      workingTable.readMode() == WorkingTableReadMode::kLatestDelta;
+  return std::make_shared<velox::core::StateSourceNode>(
+      nextId(), std::string{workingTable.name()}, schema, delta);
+}
+
+namespace {
+
+// Rejects fragments that would require one task to orchestrate multiple
+// independent fixed points. Fixed points isolated in separate fragments remain
+// valid.
+void validateFixedPointLeaves(const ExecutableFragment& fragment) {
+  const auto& root = fragment.fragment.planNode;
+  int32_t numFixedPoints{0};
+  for (const auto& leafId : root->leafPlanNodeIds()) {
+    const auto* leaf = velox::core::PlanNode::findNodeById(root.get(), leafId);
+    VELOX_CHECK_NOT_NULL(leaf);
+    if (dynamic_cast<const velox::core::FixedPointNode*>(leaf) != nullptr) {
+      ++numFixedPoints;
+    }
+  }
+  if (numFixedPoints > 1) {
+    VELOX_NYI(
+        "Multiple FixedPoint nodes in one execution fragment are not yet supported: {}",
+        numFixedPoints);
+  }
+}
+
+} // namespace
 
 std::vector<ExecutableFragment> Emitter::emitFragments(
     NodeCP root,
@@ -2184,8 +2266,10 @@ std::vector<ExecutableFragment> Emitter::emitFragments(
   }
 
   for (const auto& fragment : stages_) {
+    validateFixedPointLeaves(fragment);
     velox::core::PlanConsistencyChecker::check(fragment.fragment.planNode);
   }
+  validateFixedPointLeaves(top);
   velox::core::PlanConsistencyChecker::check(outputProjection);
 
   stages_.push_back(std::move(top));

@@ -182,6 +182,92 @@ struct HashJoinDetails {
   std::optional<std::vector<std::string>> outputColumnNames;
 };
 
+class PlanMatcherBuilder;
+
+/// Describes the parts of a FixedPointNode to assert, for
+/// `PlanMatcherBuilder::fixedPoint`. A part that is not named is not checked,
+/// but naming the output state or any body plan also asserts how many the node
+/// has, so a test notices one that appears later.
+///
+///   PlanMatcherBuilder().fixedPoint(
+///       FixedPointMatch("counter")
+///           .outputState(/*append=*/true, matchValues())
+///           .plan(PlanMatcherBuilder()
+///                     .stateSource("counter", /*delta=*/true)
+///                     .aliases({"n"})
+///                     .filter("n < 10")
+///                     .project({"n + 1"}))
+///           .convergeOnEmpty({.maxIterations = 1000}));
+class FixedPointMatch {
+ public:
+  /// One expected VectorStateDeclaration.
+  struct State {
+    std::string name;
+    bool append{false};
+    std::shared_ptr<PlanMatcher> initialPlan;
+  };
+
+  /// 'outputStateEntry' is the state entry the fixed point emits.
+  explicit FixedPointMatch(std::string outputStateEntry)
+      : outputStateEntry_{std::move(outputStateEntry)} {}
+
+  /// Matches the VectorStateDeclaration the fixed point outputs — the entry
+  /// named at construction — with the given append mode, and its initial plan.
+  FixedPointMatch& outputState(bool append, PlanMatcherBuilder initialPlan);
+
+  /// Matches the next per-iteration plan — for a recursive CTE, the step — in
+  /// call order.
+  FixedPointMatch& plan(PlanMatcherBuilder body);
+
+  /// Assertions the convergence plan can carry beyond its shape. Each is
+  /// checked only when set.
+  struct Convergence {
+    /// The fixed point's iteration bound.
+    std::optional<int32_t> maxIterations;
+
+    /// The state columns the convergence plan reads, in order. A `nullopt`
+    /// element leaves that position unchecked. Set this where a rewrite above
+    /// the fixed point must not narrow the recursive state.
+    std::optional<std::vector<std::optional<std::string>>> stateColumns;
+  };
+
+  /// Asserts the loop stops once an iteration produces no rows, and that
+  /// reaching the iteration bound before converging fails the query.
+  FixedPointMatch& convergeOnEmpty(Convergence assertions = {});
+
+  const std::string& outputStateEntry() const {
+    return outputStateEntry_;
+  }
+
+  const std::vector<State>& states() const {
+    return states_;
+  }
+
+  const std::vector<std::shared_ptr<PlanMatcher>>& plans() const {
+    return plans_;
+  }
+
+  const std::shared_ptr<PlanMatcher>& convergencePlan() const {
+    return convergence_;
+  }
+
+  const std::optional<int32_t>& maxIterations() const {
+    return maxIterations_;
+  }
+
+  const std::optional<bool>& errorWhenMaxIterationReached() const {
+    return errorWhenMaxIterationReached_;
+  }
+
+ private:
+  std::string outputStateEntry_;
+  std::vector<State> states_;
+  std::vector<std::shared_ptr<PlanMatcher>> plans_;
+  std::shared_ptr<PlanMatcher> convergence_;
+  std::optional<int32_t> maxIterations_;
+  std::optional<bool> errorWhenMaxIterationReached_;
+};
+
 class PlanMatcherBuilder {
  public:
   /// Callback invoked with the matched node on a successful match.
@@ -233,6 +319,17 @@ class PlanMatcherBuilder {
   /// names. The names in 'expected's row type are registered as aliases (by
   /// position) so downstream matchers can reference the columns by those names.
   PlanMatcherBuilder& values(const std::vector<RowVectorPtr>& expected);
+
+  /// Matches a StateSourceNode reading fixed-point state 'stateName'. 'delta'
+  /// selects which read: true is the rows the previous iteration produced,
+  /// false the entry's full accumulation.
+  PlanMatcherBuilder& stateSource(const std::string& stateName, bool delta);
+
+  /// Matches any FixedPointNode.
+  PlanMatcherBuilder& fixedPoint();
+
+  /// Matches the FixedPointNode described by 'match'.
+  PlanMatcherBuilder& fixedPoint(FixedPointMatch match);
 
   /// Matches any Filter node regardless of predicate.
   PlanMatcherBuilder& filter();
@@ -747,6 +844,15 @@ class PlanMatcherBuilder {
   /// localPartition/localGather before a final aggregation and a partial sort +
   /// LocalMerge before a merge boundary. Pass false for a single-driver plan.
   PlanMatcherBuilder& multiThreaded(bool enabled);
+
+  /// Matches the single-node split aggregation pattern:
+  /// partialAggregation(groupingKeys, aggregates) →
+  /// localPartition(groupingKeys) → finalAggregation, with localGather in place
+  /// of localPartition when there are no grouping keys. This is the shape
+  /// intra-node parallelism produces when the input is already on one node.
+  PlanMatcherBuilder& localAggregation(
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates);
 
   /// Matches the distributed (split) aggregation pattern:
   /// partialAggregation(groupingKeys, aggregates) → shuffle →

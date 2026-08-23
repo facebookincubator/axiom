@@ -295,6 +295,34 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   }
 
  protected:
+  NodeCP rewriteFixedPoint(const FixedPoint* node, NoContext& context)
+      override {
+    NodeCP anchor = rewrite(node->anchor(), context);
+
+    static constexpr int32_t kRecursiveNumDrivers = 1;
+    PhysicalPlanRewriter singleThreaded{
+        builder(),
+        options_,
+        /*numWorkers=*/1,
+        /*numDrivers=*/kRecursiveNumDrivers};
+    NodeCP step = singleThreaded.rewrite(node->step());
+    NodeCP convergence = singleThreaded.rewrite(node->convergence());
+    if (anchor == node->anchor() && step == node->step() &&
+        convergence == node->convergence() &&
+        node->recursiveNumDrivers() == kRecursiveNumDrivers) {
+      return node;
+    }
+    return builder().make<FixedPoint>(FixedPoint::Key{
+        .anchor = anchor,
+        .step = step,
+        .convergence = convergence,
+        .name = node->name(),
+        .outputColumns = node->outputColumns(),
+        .maxIterations = node->maxIterations(),
+        .recursiveNumDrivers = kRecursiveNumDrivers,
+    });
+  }
+
   // Rebuilds a join that DPhyp does not plan (non-clusterable cross / theta /
   // decorrelated-subquery joins, and the syntactic-order / uncostable
   // fallbacks) with its children rewritten, giving it a valid distributed input

@@ -245,6 +245,8 @@ class LimitAndOrderRewriter : public NodeRewriter<LimitContext> {
   LIMIT_BARRIER(EnforceDistinct, rewriteEnforceDistinct, false)
   LIMIT_BARRIER(TopNRowNumber, rewriteTopNRowNumber, false)
   LIMIT_BARRIER(Exchange, rewriteExchange, false)
+  LIMIT_BARRIER(WorkingTable, rewriteWorkingTable, true)
+  LIMIT_BARRIER(FixedPoint, rewriteFixedPoint, false)
 
 #undef LIMIT_BARRIER
 

@@ -49,15 +49,41 @@ const auto& nodeTypeNames() {
       {NodeType::kEnforceDistinct, "EnforceDistinct"},
       {NodeType::kExchange, "Exchange"},
       {NodeType::kTableWrite, "TableWrite"},
+      {NodeType::kFixedPoint, "FixedPoint"},
+      {NodeType::kWorkingTable, "WorkingTable"},
   };
+  return kNames;
+}
+
+const auto& workingTableReadModeNames() {
+  static const folly::F14FastMap<WorkingTableReadMode, std::string_view>
+      kNames = {
+          {WorkingTableReadMode::kLatestDelta, "latestDelta"},
+          {WorkingTableReadMode::kAccumulated, "accumulated"},
+      };
   return kNames;
 }
 } // namespace
 
 AXIOM_DEFINE_ENUM_NAME(NodeType, nodeTypeNames);
+AXIOM_DEFINE_ENUM_NAME(WorkingTableReadMode, workingTableReadModeNames);
 
 std::string Node::toString() const {
   return NodePrinter::toText(this);
+}
+
+RequiredStates Node::deriveRequiredStates() const {
+  RequiredStates states;
+  for (NodeCP input : inputs()) {
+    for (const auto& [name, columns] : input->requiredStates()) {
+      auto [it, inserted] = states.emplace(name, columns);
+      VELOX_CHECK(
+          inserted || it->second == columns,
+          "WorkingTable reads of state {} disagree on columns",
+          name);
+    }
+  }
+  return states;
 }
 
 namespace {
@@ -2187,6 +2213,180 @@ bool TableWrite::KeyEq::operator()(const TableWrite* node, const Key& key)
   return (*this)(key, node);
 }
 
+WorkingTable::WorkingTable(const Key& key)
+    : Node(NodeType::kWorkingTable, ColumnVector{key.outputColumns}, {}),
+      name_(key.name),
+      readMode_(key.readMode) {
+  VELOX_CHECK_NOT_NULL(name_);
+}
+
+RequiredStates WorkingTable::deriveRequiredStates() const {
+  return {{name_, outputColumns()}};
+}
+
+size_t WorkingTable::KeyHash::operator()(const WorkingTable* node) const {
+  return hashOf(node->name(), node->outputColumns(), node->readMode());
+}
+
+size_t WorkingTable::KeyHash::operator()(const Key& key) const {
+  return hashOf(key.name, key.outputColumns, key.readMode);
+}
+
+bool WorkingTable::KeyEq::operator()(
+    const WorkingTable* left,
+    const WorkingTable* right) const {
+  return left->name() == right->name() &&
+      left->outputColumns() == right->outputColumns() &&
+      left->readMode() == right->readMode();
+}
+
+bool WorkingTable::KeyEq::operator()(const Key& key, const WorkingTable* node)
+    const {
+  return key.name == node->name() &&
+      key.outputColumns == node->outputColumns() &&
+      key.readMode == node->readMode();
+}
+
+bool WorkingTable::KeyEq::operator()(const WorkingTable* node, const Key& key)
+    const {
+  return (*this)(key, node);
+}
+
+namespace {
+
+// The branch reads the fixed point's state, presents the columns the fixed
+// point outputs, and reads no other state.
+void checkBranchReadsState(
+    NodeCP branch,
+    Name name,
+    const ColumnVector& stateColumns,
+    std::string_view branchName) {
+  const auto& states = branch->requiredStates();
+  auto it = states.find(name);
+  VELOX_CHECK(
+      it != states.end(),
+      "FixedPoint {} must read its working table",
+      branchName);
+  VELOX_CHECK(
+      it->second == stateColumns,
+      "FixedPoint {} WorkingTable columns must match the fixed-point output by pointer identity",
+      branchName);
+  VELOX_CHECK_EQ(
+      states.size(),
+      1,
+      "FixedPoint {} must read only the state this fixed point binds, but reads {} states",
+      branchName,
+      states.size());
+}
+
+} // namespace
+
+FixedPoint::FixedPoint(const Key& key)
+    : Node(NodeType::kFixedPoint, ColumnVector{key.outputColumns}, {}),
+      inputs_{key.anchor, key.step, key.convergence},
+      name_(key.name),
+      maxIterations_(key.maxIterations),
+      recursiveNumDrivers_(key.recursiveNumDrivers) {
+  VELOX_CHECK_NOT_NULL(inputs_[0]);
+  VELOX_CHECK_NOT_NULL(inputs_[1]);
+  VELOX_CHECK_NOT_NULL(inputs_[2]);
+  VELOX_CHECK_NOT_NULL(name_);
+  VELOX_CHECK_GE(
+      maxIterations_, 1, "FixedPoint maxIterations must be at least one");
+  VELOX_CHECK(
+      !recursiveNumDrivers_.has_value() || *recursiveNumDrivers_ == 1,
+      "FixedPoint recursiveNumDrivers must be one when set");
+  VELOX_CHECK(
+      std::ranges::equal(outputColumns(), inputs_[0]->outputColumns()),
+      "FixedPoint output columns must match anchor by pointer identity");
+
+  const auto& anchorCols = inputs_[0]->outputColumns();
+  const auto& stepCols = inputs_[1]->outputColumns();
+  VELOX_CHECK_EQ(
+      stepCols.size(),
+      anchorCols.size(),
+      "FixedPoint step must produce the same column count as anchor");
+  for (size_t i = 0; i < stepCols.size(); ++i) {
+    VELOX_CHECK(
+        stepCols[i]->value().type->equivalent(*anchorCols[i]->value().type),
+        "FixedPoint step output column {} type does not match anchor: step={}, anchor={}",
+        i,
+        stepCols[i]->value().type->toString(),
+        anchorCols[i]->value().type->toString());
+  }
+
+  const auto& convergenceCols = inputs_[2]->outputColumns();
+  VELOX_CHECK_EQ(
+      convergenceCols.size(),
+      1,
+      "FixedPoint convergence must produce exactly one column");
+  VELOX_CHECK_EQ(
+      convergenceCols[0]->value().type->kind(),
+      velox::TypeKind::BOOLEAN,
+      "FixedPoint convergence output must be BOOLEAN");
+
+  VELOX_CHECK(
+      inputs_[0]->requiredStates().empty(),
+      "FixedPoint anchor must not read its working table");
+  checkBranchReadsState(inputs_[1], name_, outputColumns(), "step");
+  checkBranchReadsState(inputs_[2], name_, outputColumns(), "convergence");
+}
+
+RequiredStates FixedPoint::deriveRequiredStates() const {
+  RequiredStates states = Node::deriveRequiredStates();
+  states.erase(name_);
+  return states;
+}
+
+size_t FixedPoint::KeyHash::operator()(const FixedPoint* node) const {
+  return hashOf(
+      node->anchor(),
+      node->step(),
+      node->convergence(),
+      node->name(),
+      node->outputColumns(),
+      node->maxIterations(),
+      node->recursiveNumDrivers().has_value(),
+      node->recursiveNumDrivers().value_or(0));
+}
+
+size_t FixedPoint::KeyHash::operator()(const Key& key) const {
+  return hashOf(
+      key.anchor,
+      key.step,
+      key.convergence,
+      key.name,
+      key.outputColumns,
+      key.maxIterations,
+      key.recursiveNumDrivers.has_value(),
+      key.recursiveNumDrivers.value_or(0));
+}
+
+bool FixedPoint::KeyEq::operator()(
+    const FixedPoint* left,
+    const FixedPoint* right) const {
+  return left->anchor() == right->anchor() && left->step() == right->step() &&
+      left->convergence() == right->convergence() &&
+      left->name() == right->name() &&
+      left->outputColumns() == right->outputColumns() &&
+      left->maxIterations() == right->maxIterations() &&
+      left->recursiveNumDrivers() == right->recursiveNumDrivers();
+}
+
+bool FixedPoint::KeyEq::operator()(const Key& key, const FixedPoint* node)
+    const {
+  return key.anchor == node->anchor() && key.step == node->step() &&
+      key.convergence == node->convergence() && key.name == node->name() &&
+      key.outputColumns == node->outputColumns() &&
+      key.maxIterations == node->maxIterations() &&
+      key.recursiveNumDrivers == node->recursiveNumDrivers();
+}
+
+bool FixedPoint::KeyEq::operator()(const FixedPoint* node, const Key& key)
+    const {
+  return (*this)(key, node);
+}
+
 #define V2_DEFINE_ACCEPT(NodeT)                                               \
   void NodeT::accept(const NodeVisitor& visitor, NodeVisitorContext& context) \
       const {                                                                 \
@@ -2215,6 +2415,8 @@ V2_DEFINE_ACCEPT(AssignUniqueId)
 V2_DEFINE_ACCEPT(EnforceDistinct)
 V2_DEFINE_ACCEPT(Exchange)
 V2_DEFINE_ACCEPT(TableWrite)
+V2_DEFINE_ACCEPT(WorkingTable)
+V2_DEFINE_ACCEPT(FixedPoint)
 
 #undef V2_DEFINE_ACCEPT
 

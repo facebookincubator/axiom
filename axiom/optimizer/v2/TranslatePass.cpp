@@ -16,6 +16,9 @@
 
 #include "axiom/optimizer/v2/TranslatePass.h"
 
+#include <utility>
+
+#include <folly/ScopeGuard.h>
 #include <folly/container/F14Map.h>
 #include "axiom/optimizer/ConstantFold.h"
 #include "axiom/optimizer/EstimateMath.h"
@@ -505,6 +508,17 @@ class Translator {
   Translated translateTableWrite(
       const lp::TableWriteNode& tableWrite,
       const LpNameSet& required);
+  Translated translateFixedPoint(
+      const lp::FixedPointNode& fixedPoint,
+      const LpNameSet& required);
+  // Reads the enclosing fixed point's state. Takes the columns from
+  // `activeFixedPoint_` rather than from the caller, so every read of one state
+  // presents the same `Column*`s by construction.
+  NodeCP makeWorkingTable();
+  NodeCP makeEmptyDeltaConvergence();
+  Translated translateRecursiveRef(
+      const lp::RecursiveReferenceNode& ref,
+      const LpNameSet& required);
   NodeCP maybeWrapInWindow(
       NodeCP input,
       const Scope& inputScope,
@@ -643,6 +657,13 @@ class Translator {
   // target's output, so a reference in an unrelated scope re-lifts; a folded
   // constant (Literal) is always in scope and always reused.
   folly::F14FastMap<const lp::LogicalPlanNode*, ExprCP> scalarSubqueryColumns_;
+
+  struct ActiveFixedPoint {
+    Name stateName;
+    ColumnVector stateColumns;
+    int32_t numReferences{0};
+  };
+  std::optional<ActiveFixedPoint> activeFixedPoint_;
 };
 
 Translated Translator::translateTableWrite(
@@ -717,6 +738,158 @@ Translated Translator::translateTableWrite(
   return {writeNode, std::move(scope)};
 }
 
+NodeCP Translator::makeWorkingTable() {
+  VELOX_CHECK(
+      activeFixedPoint_.has_value(),
+      "WorkingTable requires an enclosing FixedPoint");
+  const auto& enclosing = *activeFixedPoint_;
+  return builder_.make<WorkingTable>(WorkingTable::Key{
+      .name = enclosing.stateName,
+      .outputColumns = enclosing.stateColumns,
+      .readMode = WorkingTableReadMode::kLatestDelta,
+  });
+}
+
+NodeCP Translator::makeEmptyDeltaConvergence() {
+  NodeCP workingTable = makeWorkingTable();
+  const auto* count = builder_.makeAggregate(
+      builder_.functionNames().count,
+      Value(toType(velox::BIGINT())),
+      {},
+      FunctionSet{},
+      /*isDistinct=*/false,
+      /*condition=*/nullptr,
+      toType(velox::BIGINT()),
+      {},
+      {});
+  ColumnCP countColumn =
+      Column::create("__converged_count", Value(toType(velox::BIGINT())));
+  NodeCP aggregation = builder_.make<Aggregate>(Aggregate::Key{
+      .input = workingTable,
+      .groupingKeys = {},
+      .aggregates = {count},
+      .outputColumns = {countColumn},
+      .step = AggregateStep::kSingle,
+  });
+  ExprCP zero =
+      builder_.makeLiteral(velox::Variant(int64_t{0}), toType(velox::BIGINT()));
+  ExprCP convergedExpr = exprFactory_.makeEq(countColumn, zero);
+  ColumnCP convergedColumn =
+      Column::create("converged", Value(toType(velox::BOOLEAN())));
+  return builder_.make<Project>(Project::Key{
+      .input = aggregation,
+      .exprs = {convergedExpr},
+      .outputColumns = {convergedColumn},
+  });
+}
+
+Translated Translator::translateFixedPoint(
+    const lp::FixedPointNode& fixedPoint,
+    const LpNameSet& /*required*/) {
+  VELOX_USER_CHECK(
+      !activeFixedPoint_.has_value(),
+      "Nested FixedPoint translation is not yet implemented");
+
+  // Every recursive state read shares the anchor's Column* identities. Pruning
+  // must therefore choose one ordered subset and rewrite the fixed-point
+  // output, anchor, step, convergence, and every WorkingTable consistently.
+  // TODO: Implement this coordinated FixedPoint state-schema pruning.
+  const auto& anchorType = fixedPoint.anchor()->outputType();
+  Translated anchor =
+      translateNode(*fixedPoint.anchor(), allNames(*anchorType));
+
+  ColumnVector anchorColumns;
+  Scope anchorScope;
+  anchorColumns.reserve(anchorType->size());
+  for (size_t i = 0; i < anchorType->size(); ++i) {
+    const auto& name = anchorType->nameOf(static_cast<uint32_t>(i));
+    auto it = anchor.scope.find(name);
+    VELOX_CHECK(
+        it != anchor.scope.end(),
+        "FixedPoint anchor scope missing column: {}",
+        name);
+    ColumnCP column = it->second;
+    anchorColumns.push_back(column);
+    anchorScope[name] = column;
+  }
+
+  const auto* recursionName = toName(fixedPoint.name());
+  auto previousFixedPoint = std::exchange(
+      activeFixedPoint_,
+      ActiveFixedPoint{
+          .stateName = recursionName,
+          .stateColumns = anchorColumns,
+      });
+  SCOPE_EXIT {
+    activeFixedPoint_ = std::move(previousFixedPoint);
+  };
+
+  // Recursive-reference field names may differ from anchor field names.
+  Translated step = translateNode(
+      *fixedPoint.step(), allNames(*fixedPoint.step()->outputType()));
+  // Each recursive reference currently maps back to the same anchor Column*s.
+  // Two references would therefore collapse into one relation identity instead
+  // of representing independently aliased inputs to a self-join.
+  VELOX_USER_CHECK_EQ(
+      activeFixedPoint_->numReferences,
+      1,
+      "Optimizer v2 supports exactly one RecursiveReferenceNode per FixedPoint step: found {}",
+      activeFixedPoint_->numReferences);
+
+  NodeCP convergence = makeEmptyDeltaConvergence();
+
+  return {
+      builder_.make<FixedPoint>(FixedPoint::Key{
+          .anchor = anchor.node,
+          .step = step.node,
+          .convergence = convergence,
+          .name = recursionName,
+          .outputColumns = std::move(anchorColumns),
+          .maxIterations = session_.options().recursionLimit,
+          .recursiveNumDrivers = std::nullopt,
+      }),
+      std::move(anchorScope)};
+}
+
+Translated Translator::translateRecursiveRef(
+    const lp::RecursiveReferenceNode& ref,
+    const LpNameSet& /*required*/) {
+  const auto* recursionName = toName(ref.name());
+  VELOX_USER_CHECK(
+      activeFixedPoint_.has_value(),
+      "RecursiveReferenceNode outside any enclosing FixedPoint: {}",
+      ref.name());
+  auto& enclosing = *activeFixedPoint_;
+  VELOX_USER_CHECK_EQ(
+      enclosing.stateName,
+      recursionName,
+      "RecursiveReferenceNode name does not match enclosing FixedPoint");
+  ++enclosing.numReferences;
+
+  const auto& schema = ref.outputType();
+  VELOX_CHECK_EQ(
+      schema->size(),
+      enclosing.stateColumns.size(),
+      "RecursiveReference schema size mismatches enclosing FixedPoint anchor");
+
+  // Scope names come from the reference schema, while the working table's
+  // columns come from the enclosing state.
+  Scope newScope;
+  for (size_t i = 0; i < schema->size(); ++i) {
+    ColumnCP column = enclosing.stateColumns[i];
+    const auto& refType = schema->childAt(static_cast<uint32_t>(i));
+    VELOX_USER_CHECK(
+        refType->equivalent(*column->value().type),
+        "RecursiveReference column {} type does not match enclosing FixedPoint anchor: ref={}, anchor={}",
+        i,
+        refType->toString(),
+        column->value().type->toString());
+    newScope[schema->nameOf(static_cast<uint32_t>(i))] = column;
+  }
+
+  return {makeWorkingTable(), std::move(newScope)};
+}
+
 Translated Translator::translateNode(
     const lp::LogicalPlanNode& node,
     const LpNameSet& required) {
@@ -749,6 +922,11 @@ Translated Translator::translateNode(
       return translateTableWrite(*node.as<lp::TableWriteNode>(), required);
     case lp::NodeKind::kOutput:
       VELOX_UNREACHABLE();
+    case lp::NodeKind::kFixedPoint:
+      return translateFixedPoint(*node.as<lp::FixedPointNode>(), required);
+    case lp::NodeKind::kRecursiveReference:
+      return translateRecursiveRef(
+          *node.as<lp::RecursiveReferenceNode>(), required);
     default:
       VELOX_NYI(
           "Unsupported logical plan node kind: {}",

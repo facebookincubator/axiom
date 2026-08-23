@@ -1069,10 +1069,11 @@ using OutputNodePtr = std::shared_ptr<const OutputNode>;
 ///
 class FixedPointNode : public LogicalPlanNode {
  public:
-  /// 'name' is the recursive relation's name and must be non-empty. The
-  /// step must contain at least one RecursiveReferenceNode with this name.
-  /// 'anchor' and 'step' must produce equivalent output schemas; that schema
-  /// is the node's output type.
+  /// Requires:
+  /// - `name` is non-empty.
+  /// - `anchor` does not reference its enclosing fixed-point state.
+  /// - `step` contains at least one RecursiveReferenceNode named `name`.
+  /// - `anchor` and `step` produce equivalent output schemas.
   FixedPointNode(
       std::string id,
       std::string name,

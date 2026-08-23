@@ -73,6 +73,9 @@ class Builder {
       addEquivalences(key);
     }
     const T* node = optimizer::make<T>(std::move(key));
+    // After construction, so `inputs()` is available and the set allocates in
+    // this node's `QueryGraphContext`.
+    node->primeRequiredStates();
     dedup.insert(node);
     return node;
   }
@@ -244,6 +247,10 @@ class Builder {
       return exchanges_;
     } else if constexpr (std::is_same_v<T, TableWrite>) {
       return tableWrites_;
+    } else if constexpr (std::is_same_v<T, WorkingTable>) {
+      return workingTables_;
+    } else if constexpr (std::is_same_v<T, FixedPoint>) {
+      return fixedPoints_;
     } else {
       static_assert(sizeof(T) == 0, "No dedup map for this node type");
     }
@@ -284,6 +291,8 @@ class Builder {
   DedupSet<EnforceDistinct> enforceDistincts_;
   DedupSet<Exchange> exchanges_;
   DedupSet<TableWrite> tableWrites_;
+  DedupSet<WorkingTable> workingTables_;
+  DedupSet<FixedPoint> fixedPoints_;
 
   // Expr leaves, interned via `makeLiteral` / `makeCall` / `makeAggregate`.
   DedupSet<Literal> literals_;
