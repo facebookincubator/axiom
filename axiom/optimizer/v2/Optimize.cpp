@@ -19,6 +19,7 @@
 #include "axiom/optimizer/ConstantFold.h"
 #include "axiom/optimizer/ExplainIo.h"
 #include "axiom/optimizer/v2/Builder.h"
+#include "axiom/optimizer/v2/ConnectorPushdownPass.h"
 #include "axiom/optimizer/v2/DecorrelatePass.h"
 #include "axiom/optimizer/v2/EmitPass.h"
 #include "axiom/optimizer/v2/EstimateLeafStatsPass.h"
@@ -154,18 +155,20 @@ PlanAndStats Optimizer::optimize(const MultiFragmentPlan::Options& options) {
       PushdownAndPrunePass::ConnectorPushdown::kOffer);
   NodeCP folded =
       FoldMetadataAggregatePass::run(frontend.pushed, builder, session_);
+  NodeCP connectorPushed = ConnectorPushdownPass::run(
+      folded, builder, schema, schemaResolver_, session_, evaluator_);
   if (session_.options().useFilteredTableStats) {
-    EstimateLeafStatsPass::run(folded, session_);
+    EstimateLeafStatsPass::run(connectorPushed, session_);
   }
 
   // Decide the width before physical planning, which reads numWorkers to shape
   // exchanges and to cost broadcasts.
   MultiFragmentPlan::Options planOptions = options;
   planOptions.numWorkers =
-      chooseNumWorkers(folded, session_.options(), options.numWorkers);
+      chooseNumWorkers(connectorPushed, session_.options(), options.numWorkers);
 
   EmitPass::Result emitted = physicalPlanAndEmit(
-      folded,
+      connectorPushed,
       frontend.translated.outputColumns,
       frontend.translated.outputNames,
       builder,

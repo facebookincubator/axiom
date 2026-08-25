@@ -23,7 +23,6 @@
 #include "axiom/common/SchemaTypeName.h"
 #include "axiom/connectors/ConnectorSession.h"
 #include "axiom/connectors/ConnectorSplitManager.h"
-#include "axiom/logical_plan/LogicalPlanNode.h"
 #include "folly/CppAttributes.h"
 #include "folly/coro/Task.h"
 #include "velox/connectors/Connector.h"
@@ -46,6 +45,10 @@ using PartitionFunctionSpecPtr =
 namespace facebook::velox::common {
 class Filter;
 } // namespace facebook::velox::common
+
+namespace facebook::axiom::optimizer::v2 {
+class Node;
+} // namespace facebook::axiom::optimizer::v2
 
 /// Base classes for schema elements used in execution. A ConnectorMetadata
 /// provides access to table information. A Table has a TableLayout for each of
@@ -1041,22 +1044,16 @@ class ConnectorWriteHandle {
 
 using ConnectorWriteHandlePtr = std::shared_ptr<ConnectorWriteHandle>;
 
-/// One disjoint root the connector has agreed to execute natively.
-/// The optimizer materialises a scan from `table` in place of
-/// evaluating `root`; the `LogicalPlan` itself is never rewritten.
-/// `table` carries the connector's handle, column statistics, and
-/// row-count estimate via the standard `connector::Table` channel.
-///
-/// EXPERIMENTAL. Negotiates over `LogicalPlan`, which is not normalized.
-/// Expected to migrate to the optimizer's v2 IR once it lands; struct and
-/// method shapes may change.
+/// Replaces one optimizer subtree with a scan of a connector-owned virtual
+/// table. The table's visible columns must correspond positionally 1:1 with
+/// `root` outputs and have equivalent types. Column names are ignored, and all
+/// table layouts must use the connector that accepted the root. The first
+/// layout must support scans and contain every visible column.
 struct PushdownRoot {
-  /// Non-owning pointer into the `LogicalPlan` being optimized.
-  /// Valid for the duration of optimization.
-  const logical_plan::LogicalPlanNode* root;
+  /// Points into the offered subtree and must not be retained after the call.
+  const optimizer::v2::Node* root{nullptr};
 
-  /// Virtual table representing the pushed-down subtree's output.
-  /// Owned by the optimizer for the duration of optimization.
+  /// Represents the pushed-down subtree through standard connector metadata.
   TablePtr table;
 };
 
@@ -1222,28 +1219,17 @@ class ConnectorMetadata {
     return nullptr;
   }
 
-  /// EXPERIMENTAL. Opt-in gate for connector pushdown. Default false.
-  /// The pushdown pass skips connectors that return false without
-  /// calling `co_pushdownPlan`.
-  virtual bool isPushdownSupported() const {
-    return false;
-  }
-
-  /// EXPERIMENTAL. Returns the disjoint roots this connector will
-  /// execute natively. The optimizer calls this once per maximal
-  /// subtree whose `TableScanNode`s all belong to this connector;
-  /// returned roots must be within `plan`. Each root tells the
-  /// optimizer "scan `table` in place of evaluating `root`." Pushing
-  /// a bare `TableScanNode` will error.
-  ///
-  /// Default `VELOX_FAIL`s. Connectors opting in via
-  /// `isPushdownSupported()` must override this method.
-  ///
-  /// See `PushdownRoot` for the v2-IR migration note.
-  virtual folly::coro::Task<std::vector<PushdownRoot>> co_pushdownPlan(
-      const logical_plan::LogicalPlanNode& /*plan*/) const {
-    VELOX_FAIL(
-        "Connector opted into pushdown via isPushdownSupported() but did not override co_pushdownPlan()");
+  /// Returns distinct, non-nested roots within `offeredSubtree`
+  /// that this connector will execute. The offered subtree is maximal, all of
+  /// its scans use this connector, and calls may run concurrently. Roots cannot
+  /// be scans or writes, and must not depend on unbound recursive state.
+  /// Neither offered nor returned node pointers may be retained. `session`
+  /// carries query identity and connector properties. Returns empty to decline
+  /// pushdown.
+  virtual folly::coro::Task<std::vector<PushdownRoot>> co_pushdown(
+      ConnectorSessionPtr /*session*/,
+      const optimizer::v2::Node& /*offeredSubtree*/) const {
+    co_return {};
   }
 
   /// Returns a SplitManager for split enumeration for TableLayouts accessed
