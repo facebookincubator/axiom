@@ -305,19 +305,17 @@ TEST_P(JoinTest, joinWithComputedKeys) {
 
     // V2 is worse: it carries the unused `n_regionkey` through the shuffle.
     // TODO: Eliminate the unused `n_regionkey` field from the V2 plan.
-    auto matcher =
-        matchScan("nation")
-            .projectIf(useV2_, {"n_regionkey", "coalesce(n_regionkey, 1)"})
-            .projectIf(!useV2_, {"coalesce(n_regionkey, 1)"})
-            .shuffle()
-            .hashJoin(rightSideMatcher, core::JoinType::kRight)
-            .partialAggregation()
-            .shuffle()
-            .localPartition()
-            .finalAggregation()
-            .build();
+    auto matcher = matchScan("nation")
+                       .project({"coalesce(n_regionkey, 1)"})
+                       .shuffle()
+                       .hashJoin(rightSideMatcher, core::JoinType::kRight)
+                       .partialAggregation()
+                       .shuffle()
+                       .localPartition()
+                       .finalAggregation()
+                       .build();
 
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(distributedPlan.plan, matcher);
   }
 }
 
@@ -352,10 +350,9 @@ TEST_P(JoinTest, broadcastSizeLimitGatesBroadcast) {
     auto matcher =
         matchScan("probe")
             .hashJoin(matchScan("build").broadcast(), core::JoinType::kInner)
-            .projectIf(useV2_, {"b_key as p_key", "p_data", "b_key", "b_data"})
             .gather()
             .build();
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(distributedPlan.plan, matcher);
   }
 
   // Lowering the limit below the build size makes it ineligible for broadcast,
@@ -371,10 +368,9 @@ TEST_P(JoinTest, broadcastSizeLimitGatesBroadcast) {
             .shuffle({"p_key"})
             .hashJoin(
                 matchScan("build").shuffle({"b_key"}), core::JoinType::kInner)
-            .projectIf(useV2_, {"b_key as p_key", "p_data", "b_key", "b_data"})
             .gather()
             .build();
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(distributedPlan.plan, matcher);
   }
 }
 
@@ -481,13 +477,9 @@ TEST_P(JoinTest, crossJoin) {
   }
 }
 
-// TODO: Run with V2 after it eliminates unused, provably single-row aggregate
-// cross joins.
+// TODO: Assert the V2 plan after it eliminates unused, provably single-row
+// aggregate cross joins.
 TEST_P(JoinTest, unusedSingleRowAggregateCrossJoin) {
-  if (useV2_) {
-    GTEST_SKIP() << "Not supported by the V2 optimizer";
-  }
-
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
 
@@ -496,7 +488,7 @@ TEST_P(JoinTest, unusedSingleRowAggregateCrossJoin) {
   auto matcher = matchScan("t").build();
 
   auto plan = toSingleNodePlan(logicalPlan);
-  AXIOM_ASSERT_PLAN(plan, matcher);
+  AXIOM_ASSERT_PLAN_V1(plan, matcher);
 
   ASSERT_NO_THROW(planVelox(logicalPlan));
 }
@@ -732,13 +724,9 @@ TEST_P(JoinTest, joinOnClause) {
   }
 }
 
-// TODO: Run with V2 after it keeps both Values inputs co-located for a local
-// join.
+// TODO: Assert the V2 plan after it keeps both Values inputs co-located for a
+// local join.
 TEST_P(JoinTest, leftJoinOverValues) {
-  if (useV2_) {
-    GTEST_SKIP() << "Not supported by the V2 optimizer";
-  }
-
   auto query =
       "SELECT * FROM (VALUES 1, 2, 3, 4) as t(x) LEFT JOIN (VALUES 1, 2) as u(y) ON x = y";
   SCOPED_TRACE(query);
@@ -752,14 +740,12 @@ TEST_P(JoinTest, leftJoinOverValues) {
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 
   {
-    auto distributedPlan = planVelox(logicalPlan).plan;
-    EXPECT_EQ(1, distributedPlan->fragments().size());
-    auto plan = distributedPlan->fragments().at(0).fragment.planNode;
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    auto distributedPlan = planVelox(logicalPlan);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(distributedPlan.plan, matcher);
   }
 }
 
@@ -1238,12 +1224,9 @@ TEST_P(JoinTest, leftJoinOnClausePushdown) {
   }
 }
 
-// TODO: Run with V2 after it supports constant-false outer-join elimination.
+// TODO: Assert the V2 plan after it supports constant-false outer-join
+// elimination.
 TEST_P(JoinTest, constantFalseOuterJoinElimination) {
-  if (useV2_) {
-    GTEST_SKIP() << "Not supported by the V2 optimizer";
-  }
-
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
 
@@ -1258,7 +1241,7 @@ TEST_P(JoinTest, constantFalseOuterJoinElimination) {
         matchScan("t").project({"a", "b", "c", "null", "null"}).build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 
   // Constant false ON conjunct (1 > 2) means no left rows can ever match.
@@ -1272,7 +1255,7 @@ TEST_P(JoinTest, constantFalseOuterJoinElimination) {
         matchScan("u").project({"null", "null", "null", "x", "y"}).build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 }
 
@@ -1468,13 +1451,9 @@ TEST_P(JoinTest, impliedSameInputJoinFilters) {
   }
 }
 
-// TODO: Run with V2 after it propagates semi-joins across equivalent join
-// keys.
+// TODO: Assert the V2 plan after it propagates semi-joins across equivalent
+// join keys.
 TEST_P(JoinTest, impliedSemiJoinPropagation) {
-  if (useV2_) {
-    GTEST_SKIP() << "Not supported by the V2 optimizer";
-  }
-
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(
           10'000,
@@ -1500,7 +1479,7 @@ TEST_P(JoinTest, impliedSemiJoinPropagation) {
                      .build();
 
   auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-  AXIOM_ASSERT_PLAN(plan, matcher);
+  AXIOM_ASSERT_PLAN_V1(plan, matcher);
 }
 
 // Implied join edges from an equivalence class must not reference tables
@@ -1551,13 +1530,9 @@ TEST_P(JoinTest, impliedJoinChain) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-// TODO: Run with V2 after transitive inference handles pending equalities
-// before they become join keys.
+// TODO: Assert the V2 plans after transitive inference handles pending
+// equalities before they become join keys.
 TEST_P(JoinTest, impliedFilters) {
-  if (useV2_) {
-    GTEST_SKIP() << "Not supported by the V2 optimizer";
-  }
-
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
@@ -1577,7 +1552,7 @@ TEST_P(JoinTest, impliedFilters) {
             .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 
   // Range propagates similarly.
@@ -1592,7 +1567,7 @@ TEST_P(JoinTest, impliedFilters) {
             .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 
   // IN propagates across the equivalence.
@@ -1608,7 +1583,7 @@ TEST_P(JoinTest, impliedFilters) {
             .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 
   // IS NULL propagates across the equivalence. Sound under inner-join
@@ -1627,7 +1602,7 @@ TEST_P(JoinTest, impliedFilters) {
             .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 
   // IS NOT NULL likewise propagates.
@@ -1643,7 +1618,7 @@ TEST_P(JoinTest, impliedFilters) {
             .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 
   // Three-table chain: t.a = u.x AND u.x = v.k puts t.a, u.x, v.k in one
@@ -1662,19 +1637,15 @@ TEST_P(JoinTest, impliedFilters) {
             .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 }
 
-// TODO: Run with V2 after it keeps non-deterministic predicates above joins.
+// TODO: Assert the V2 plan after it keeps non-deterministic predicates above
+// joins.
 // Pushing `random()` below a join that can duplicate rows changes how often it
 // is evaluated and can change query results.
 TEST_P(JoinTest, impliedFilterNonPropagation) {
-  if (useV2_) {
-    GTEST_SKIP()
-        << "V2 incorrectly pushes non-deterministic predicates below joins";
-  }
-
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
@@ -1692,7 +1663,7 @@ TEST_P(JoinTest, impliedFilterNonPropagation) {
                      .build();
 
   auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-  AXIOM_ASSERT_PLAN(plan, matcher);
+  AXIOM_ASSERT_PLAN_V1(plan, matcher);
 }
 
 TEST_P(JoinTest, impliedFilterDedup) {
@@ -1714,22 +1685,17 @@ TEST_P(JoinTest, impliedFilterDedup) {
         matchScan("u")
             .filter("x = 5")
             .hashJoin(matchScan("t").filter("a = 5"), core::JoinType::kInner)
-            .projectIf(useV2_)
             .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 }
 
 // Three or more columns from the same table in one equivalence class.
-// TODO: Run with V2 after it applies implied same-input filters inferred from
-// join conditions.
+// TODO: Assert the V2 plan after it applies implied same-input filters inferred
+// from join conditions.
 TEST_P(JoinTest, impliedSameTableEquality) {
-  if (useV2_) {
-    GTEST_SKIP() << "Not supported by the V2 optimizer";
-  }
-
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x"}, BIGINT()));
 
@@ -1747,18 +1713,14 @@ TEST_P(JoinTest, impliedSameTableEquality) {
                        .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 }
 
 // Equivalence class with same-table columns on both sides of the join.
-// TODO: Run with V2 after it applies implied same-input filters to both join
-// inputs.
+// TODO: Assert the V2 plan after it applies implied same-input filters to both
+// join inputs.
 TEST_P(JoinTest, impliedSameTableEqualityBothSides) {
-  if (useV2_) {
-    GTEST_SKIP() << "Not supported by the V2 optimizer";
-  }
-
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
@@ -1780,19 +1742,15 @@ TEST_P(JoinTest, impliedSameTableEqualityBothSides) {
             .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 }
 
 // With GROUP BY a, b, the synthesized a = b references only grouping keys
 // and is pushed below the aggregation onto t's scan.
-// TODO: Run with V2 after it applies the implied same-input filter below the
-// aggregation.
+// TODO: Assert the V2 plan after it applies the implied same-input filter below
+// the aggregation.
 TEST_P(JoinTest, impliedSameTableEqualityBelowAggregation) {
-  if (useV2_) {
-    GTEST_SKIP() << "Not supported by the V2 optimizer";
-  }
-
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x"}, BIGINT()));
 
@@ -1810,19 +1768,15 @@ TEST_P(JoinTest, impliedSameTableEqualityBelowAggregation) {
                      .build();
 
   auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-  AXIOM_ASSERT_PLAN(plan, matcher);
+  AXIOM_ASSERT_PLAN_V1(plan, matcher);
 }
 
 // Synthesis into HAVING: when an equivalence class member is an aggregate
 // output, the implied equality can't push below the aggregation and stays
 // as a post-aggregation Filter (HAVING).
-// TODO: Run with V2 after it applies the implied same-input filter above the
-// aggregation.
+// TODO: Assert the V2 plan after it applies the implied same-input filter above
+// the aggregation.
 TEST_P(JoinTest, impliedSameTableEqualityInHaving) {
-  if (useV2_) {
-    GTEST_SKIP() << "Not supported by the V2 optimizer";
-  }
-
   testConnector_->addTable("t", ROW({"k"}, BIGINT()))
       ->setStats(10'000, {{"k", {.numDistinct = 10'000}}});
   testConnector_->addTable("u", ROW({"x"}, BIGINT()))
@@ -1844,18 +1798,14 @@ TEST_P(JoinTest, impliedSameTableEqualityInHaving) {
                      .build();
 
   auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-  AXIOM_ASSERT_PLAN(plan, matcher);
+  AXIOM_ASSERT_PLAN_V1(plan, matcher);
 }
 
 // With a LIMIT in the way, the synthesized equality lands as a Filter
 // above the Limit. The redundant join key is still dropped.
-// TODO: Run with V2 after it applies the implied same-input filter above the
-// limit.
+// TODO: Assert the V2 plan after it applies the implied same-input filter above
+// the limit.
 TEST_P(JoinTest, impliedSameTableEqualityBlockedByLimit) {
-  if (useV2_) {
-    GTEST_SKIP() << "Not supported by the V2 optimizer";
-  }
-
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x"}, BIGINT()));
 
@@ -1872,7 +1822,7 @@ TEST_P(JoinTest, impliedSameTableEqualityBlockedByLimit) {
                      .build();
 
   auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-  AXIOM_ASSERT_PLAN(plan, matcher);
+  AXIOM_ASSERT_PLAN_V1(plan, matcher);
 }
 
 // Explicit WHERE and synthesized equality converge on the same LIMIT DT
@@ -1909,13 +1859,9 @@ TEST_P(JoinTest, impliedSameTableEqualityBlockedByLimitDedup) {
 // columns with the same left-side column. For t LEFT JOIN u ON u.x = t.a
 // AND u.y = t.a, any u row in the output must satisfy both conditions, so
 // u.x = u.y holds.
-// TODO: Run with V2 after it applies the implied same-input filter to the
-// null-supplying join input.
+// TODO: Assert the V2 plan after it applies the implied same-input filter to
+// the null-supplying join input.
 TEST_P(JoinTest, impliedSameTableEqualityOuterJoin) {
-  if (useV2_) {
-    GTEST_SKIP() << "Not supported by the V2 optimizer";
-  }
-
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
@@ -1933,19 +1879,15 @@ TEST_P(JoinTest, impliedSameTableEqualityOuterJoin) {
           .build();
 
   auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-  AXIOM_ASSERT_PLAN(plan, matcher);
+  AXIOM_ASSERT_PLAN_V1(plan, matcher);
 }
 
 // SEMI join (EXISTS) gets slot-pattern same-table eq synthesis on its
 // subquery side: surviving left rows require a matching right row, so the
 // same-table eq on the right side is sound.
-// TODO: Run with V2 after it applies the implied same-input filter to the
-// existence input.
+// TODO: Assert the V2 plan after it applies the implied same-input filter to
+// the existence input.
 TEST_P(JoinTest, impliedSameTableEqualitySemiJoin) {
-  if (useV2_) {
-    GTEST_SKIP() << "Not supported by the V2 optimizer";
-  }
-
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
@@ -1964,18 +1906,14 @@ TEST_P(JoinTest, impliedSameTableEqualitySemiJoin) {
           .build();
 
   auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-  AXIOM_ASSERT_PLAN(plan, matcher);
+  AXIOM_ASSERT_PLAN_V1(plan, matcher);
 }
 
 // RIGHT JOIN is normalized to LEFT JOIN; same-table synthesis fires on
 // the (now-right) u side, producing u.x = u.y.
-// TODO: Run with V2 after it applies the implied same-input filter following
-// right-to-left join normalization.
+// TODO: Assert the V2 plan after it applies the implied same-input filter
+// following right-to-left join normalization.
 TEST_P(JoinTest, impliedSameTableEqualityRightJoinNormalized) {
-  if (useV2_) {
-    GTEST_SKIP() << "Not supported by the V2 optimizer";
-  }
-
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
@@ -1992,7 +1930,7 @@ TEST_P(JoinTest, impliedSameTableEqualityRightJoinNormalized) {
           .build();
 
   auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-  AXIOM_ASSERT_PLAN(plan, matcher);
+  AXIOM_ASSERT_PLAN_V1(plan, matcher);
 }
 
 // FULL OUTER slot synthesis is unsound on either side (unmatched rows on
@@ -2093,16 +2031,15 @@ TEST_P(JoinTest, leftJoinNoEqualitiesMultipleTables) {
                          matchScan("customer"),
                          core::JoinType::kLeftSemiProject,
                          {.nullAware = false})
-                     .projectIf(!useV2_)
+                     .project()
                      .nestedLoopJoin(
                          matchScan("supplier"),
                          core::JoinType::kLeft,
                          "n_nationkey < s_nationkey")
-                     .projectIf(useV2_)
                      .build();
 
   auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-  AXIOM_ASSERT_PLAN(plan, matcher);
+  AXIOM_ASSERT_PLAN_V1(plan, matcher);
 }
 
 // LEFT-to-INNER JOIN conversion with aggregation. replaceJoinOutputs must not
