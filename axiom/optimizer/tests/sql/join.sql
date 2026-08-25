@@ -242,6 +242,31 @@ SELECT t1.a, t2.a FROM t t1, t t2, t t3 WHERE t1.a = t3.a AND t1.b < t2.b
 -- error_v2: division by zero
 SELECT t1.a, t2.a FROM t t1, t t2 WHERE t1.b < t2.b AND 1000 / (150 - t1.b) > t2.a
 ----
+-- Two parallel equality chains connect t through u to v.
+SELECT v.m
+FROM (
+  VALUES (1, 10)
+) AS t(a, b)
+JOIN (
+  VALUES (1, 10), (1, 11)
+) AS u(x, y) ON t.a = u.x AND t.b = u.y
+JOIN (
+  VALUES (1, 10, 1000), (1, 11, 1001)
+) AS v(k, l, m) ON u.x = v.k AND u.y = v.l
+----
+-- An equality chain connects t through u to v alongside a direct t-v
+-- equality.
+SELECT v.m
+FROM (
+  VALUES (1, 10)
+) AS t(a, b)
+JOIN (
+  VALUES (1), (9)
+) AS u(x) ON t.a = u.x
+JOIN (
+  VALUES (1, 10, 1000), (9, 10, 1001)
+) AS v(k, l, m) ON u.x = v.k AND t.b = v.l
+----
 -- JOIN of two ORDER BY ... LIMIT subqueries.
 SELECT l.a, l.b, r.b
 FROM (SELECT * FROM t ORDER BY b LIMIT 5) l JOIN (SELECT * FROM t ORDER BY b DESC LIMIT 5) r ON l.a = r.a

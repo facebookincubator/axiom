@@ -17,7 +17,6 @@
 #include "axiom/optimizer/v2/HypergraphBuilder.h"
 
 #include <map>
-#include <set>
 
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
@@ -250,94 +249,118 @@ std::pair<int8_t, int8_t> orderedPair(int8_t a, int8_t b) {
 // path. Only inner equalities participate; an outer join's null-padding breaks
 // the transitivity, and those keys are skipped.
 //
-// The equality classes are recorded on the shared `Column::equivalence`, so the
-// cost model can later read them back (via `Column::equivalence`) to count a
-// transitive equality's selectivity once across same-class edges at a join.
+// One representative equality per class and relation pair completes the
+// relation-level closure. Written predicates remain on their original edges.
 void addTransitiveInnerEdges(
     JoinHypergraph& graph,
-    const JoinCluster& cluster,
     const folly::F14FastMap<ColumnCP, int8_t>& columnToLeaf) {
-  std::vector<ColumnCP> equatedColumns;
-  folly::F14FastSet<ColumnCP> seenColumns;
-  for (JoinCP join : cluster.joins) {
-    if (!join->isInner()) {
-      continue;
-    }
-    for (size_t i = 0; i < join->leftKeys().size(); ++i) {
-      ExprCP leftKey = join->leftKeys()[i];
-      ExprCP rightKey = join->rightKeys()[i];
-      if (leftKey->isColumn() && rightKey->isColumn()) {
-        const auto left = leftKey->as<Column>();
-        const auto right = rightKey->as<Column>();
-        if (seenColumns.insert(left).second) {
-          equatedColumns.push_back(left);
-        }
-        if (seenColumns.insert(right).second) {
-          equatedColumns.push_back(right);
-        }
-      }
-    }
-  }
-
-  // Relation pairs already joined by a single-relation inner equi-edge; a
-  // derived edge for such a pair would duplicate the equality and double-count
-  // its selectivity, so it is skipped.
-  std::set<std::pair<int8_t, int8_t>> connected;
-  for (const auto& edge : graph.edges()) {
-    if (edge.joinType() == velox::core::JoinType::kInner &&
-        edge.left().size() == 1 && edge.right().size() == 1) {
-      connected.insert(orderedPair(
-          static_cast<int8_t>(edge.left().min()),
-          static_cast<int8_t>(edge.right().min())));
-    }
-  }
-
-  // Group the equality classes, keeping one representative column per relation.
-  // `classOrder` records first-seen order (from the deterministic
-  // `equatedColumns`) so edges are added in a stable order: `classReps` is
-  // hashed on a pointer, whose iteration order is non-deterministic, and the
-  // edge-addition order fixes edge indices, which feed DPhyp's candidate
-  // tiebreak.
+  using RelationPair = std::pair<int8_t, int8_t>;
+  folly::F14FastMap<EquivalenceP, folly::F14FastSet<RelationPair>>
+      coveredRelationPairs;
+  // Keep one representative per relation and preserve first-seen class order.
+  // Derived edge indices participate in DPhyp's candidate tiebreak, so they
+  // must not depend on pointer-keyed hash iteration.
   folly::F14FastMap<EquivalenceP, std::map<int8_t, ColumnCP>> classReps;
   std::vector<EquivalenceP> classOrder;
-  for (ColumnCP column : equatedColumns) {
-    const auto leafIt = columnToLeaf.find(column);
-    if (leafIt != columnToLeaf.end()) {
-      auto [it, inserted] = classReps.try_emplace(column->equivalence());
-      if (inserted) {
-        classOrder.push_back(column->equivalence());
+
+  // Record written coverage per equality class. An edge for another class on
+  // the same relation pair does not cover this class.
+  for (const auto& edge : graph.edges()) {
+    if (edge.joinType() != velox::core::JoinType::kInner) {
+      continue;
+    }
+    for (size_t keyIndex = 0; keyIndex < edge.leftKeys().size(); ++keyIndex) {
+      const ExprCP leftKey = edge.leftKeys()[keyIndex];
+      const ExprCP rightKey = edge.rightKeys()[keyIndex];
+      if (leftKey == nullptr || rightKey == nullptr || !leftKey->isColumn() ||
+          !rightKey->isColumn()) {
+        continue;
       }
-      it->second.emplace(leafIt->second, column);
+
+      const ColumnCP leftColumn = leftKey->as<Column>();
+      const ColumnCP rightColumn = rightKey->as<Column>();
+      const EquivalenceP equivalence = leftColumn->equivalence();
+      VELOX_CHECK_NOT_NULL(
+          equivalence,
+          "Inner equi-join column has no equivalence class: {}",
+          leftColumn->toString());
+      VELOX_CHECK(
+          rightColumn->equivalence() == equivalence,
+          "Inner equi-join columns have different equivalence classes: {}, {}",
+          leftColumn->toString(),
+          rightColumn->toString());
+
+      const auto leftRelation = columnToLeaf.find(leftColumn);
+      const auto rightRelation = columnToLeaf.find(rightColumn);
+      if (leftRelation == columnToLeaf.end() ||
+          rightRelation == columnToLeaf.end()) {
+        continue;
+      }
+      VELOX_DCHECK_NE(leftRelation->second, rightRelation->second);
+
+      auto [classIt, inserted] = classReps.try_emplace(equivalence);
+      if (inserted) {
+        classOrder.push_back(equivalence);
+      }
+      classIt->second.try_emplace(leftRelation->second, leftColumn);
+      classIt->second.try_emplace(rightRelation->second, rightColumn);
+      coveredRelationPairs[equivalence].insert(
+          orderedPair(leftRelation->second, rightRelation->second));
     }
   }
 
-  // Connect every relation pair within each class that is not already joined.
-  for (EquivalenceP root : classOrder) {
-    const std::map<int8_t, ColumnCP>& repByRelation = classReps.at(root);
-    for (auto a = repByRelation.begin(); a != repByRelation.end(); ++a) {
-      for (auto b = std::next(a); b != repByRelation.end(); ++b) {
-        if (!connected.insert(orderedPair(a->first, b->first)).second) {
+  struct DerivedEdgeSpec {
+    int8_t leftRelation;
+    int8_t rightRelation;
+    ExprVector leftKeys;
+    ExprVector rightKeys;
+  };
+  std::vector<DerivedEdgeSpec> derivedEdges;
+  folly::F14FastMap<RelationPair, size_t> derivedEdgeByRelations;
+
+  for (EquivalenceP equivalence : classOrder) {
+    const auto& reps = classReps.at(equivalence);
+    const auto& coveredPairs = coveredRelationPairs.at(equivalence);
+    for (auto left = reps.begin(); left != reps.end(); ++left) {
+      auto right = left;
+      for (++right; right != reps.end(); ++right) {
+        const RelationPair relationPair =
+            orderedPair(left->first, right->first);
+        if (coveredPairs.contains(relationPair)) {
           continue;
         }
-        const RelationSet leftSet = RelationSet::singleton(a->first);
-        const RelationSet rightSet = RelationSet::singleton(b->first);
-        const ExprVector leftKeys{a->second};
-        const ExprVector rightKeys{b->second};
-        RelationSet tes{leftSet};
-        tes.unionSet(rightSet);
-        graph.addEdge(
-            JoinEdge{
-                leftSet,
-                rightSet,
-                leftKeys,
-                rightKeys,
-                ExprVector{},
-                velox::core::JoinType::kInner,
-                /*nullAware=*/false,
-                /*nullAsValue=*/false},
-            tes);
+        auto [it, inserted] = derivedEdgeByRelations.try_emplace(
+            relationPair, derivedEdges.size());
+        if (inserted) {
+          derivedEdges.push_back(
+              DerivedEdgeSpec{
+                  .leftRelation = relationPair.first,
+                  .rightRelation = relationPair.second,
+              });
+        }
+        DerivedEdgeSpec& derivedEdge = derivedEdges.at(it->second);
+        derivedEdge.leftKeys.push_back(left->second);
+        derivedEdge.rightKeys.push_back(right->second);
       }
     }
+  }
+
+  for (DerivedEdgeSpec& derivedEdge : derivedEdges) {
+    const RelationSet left = RelationSet::singleton(derivedEdge.leftRelation);
+    const RelationSet right = RelationSet::singleton(derivedEdge.rightRelation);
+    RelationSet tes{left};
+    tes.unionSet(right);
+    graph.addEdge(
+        JoinEdge{
+            left,
+            right,
+            std::move(derivedEdge.leftKeys),
+            std::move(derivedEdge.rightKeys),
+            ExprVector{},
+            velox::core::JoinType::kInner,
+            /*nullAware=*/false,
+            /*nullAsValue=*/false},
+        tes);
   }
 }
 
@@ -602,7 +625,7 @@ JoinHypergraph HypergraphBuilder::build(
     }
   }
 
-  addTransitiveInnerEdges(graph, cluster, columnToLeaf);
+  addTransitiveInnerEdges(graph, columnToLeaf);
 
   return graph;
 }

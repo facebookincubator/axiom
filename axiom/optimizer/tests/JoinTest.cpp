@@ -37,6 +37,132 @@ class JoinTest : public test::QueryTestBase,
   }
 };
 
+// A derived join must preserve every equality class for its relation pair,
+// including classes not covered by a written edge on that pair.
+TEST_P(JoinTest, derivedCompositeEdgePreservesAllEqualities) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(
+          100,
+          {
+              {"a", {.numDistinct = 100}},
+              {"b", {.numDistinct = 100}},
+          });
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(
+          1'000'000,
+          {
+              {"x", {.numDistinct = 1'000'000}},
+              {"y", {.numDistinct = 1'000'000}},
+          });
+  testConnector_->addTable("v", ROW({"k", "l", "m"}, BIGINT()))
+      ->setStats(
+          10,
+          {
+              {"k", {.numDistinct = 10}},
+              {"l", {.numDistinct = 10}},
+          });
+
+  // V2 is better: it joins the two small tables using all applicable equality
+  // keys, then uses that result as the build side when joining the million-row
+  // u. V1 carries u through both joins.
+  {
+    SCOPED_TRACE("all reordered join keys are inferred");
+    const auto query =
+        "SELECT v.m "
+        "FROM t "
+        "JOIN u ON t.a = u.x AND t.b = u.y "
+        "JOIN v ON u.x = v.k AND u.y = v.l";
+    const auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    const auto matcher = useV2_
+        ? matchScan("u")
+              .hashJoinInner(
+                  matchScan("t").hashJoinInner(
+                      matchScan("v"), {.keys = {{"a = k", "b = l"}}}),
+                  {.keys = {{"x = a", "y = b"}}})
+              .build()
+        : matchScan("u")
+              .hashJoinInner(matchScan("t"), {.keys = {{"x = a", "y = b"}}})
+              .hashJoinInner(matchScan("v"), {.keys = {{"a = k", "b = l"}}})
+              .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+
+    optimizerOptions_.broadcastSizeLimit = 1;
+    const auto distributedPlan =
+        planVelox(parseSelect(query, kTestConnectorId));
+    const auto distributedMatcher = useV2_
+        ? matchScan("u")
+              .shuffle({"x", "y"})
+              .hashJoinInner(
+                  matchScan("t")
+                      .shuffle({"a", "b"})
+                      .hashJoinInner(
+                          matchScan("v").shuffle({"k", "l"}),
+                          {.keys = {{"a = k", "b = l"}}}),
+                  {.keys = {{"x = a", "y = b"}}})
+              .gather()
+              .build()
+        : matchScan("u")
+              .shuffle({"x", "y"})
+              .hashJoinInner(
+                  matchScan("t").shuffle({"a", "b"}),
+                  {.keys = {{"x = a", "y = b"}}})
+              .hashJoinInner(
+                  matchScan("v").shuffle({"k", "l"}),
+                  {.keys = {{"a = k", "b = l"}}})
+              .gather()
+              .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
+  }
+
+  {
+    SCOPED_TRACE("partially overlapping equality classes");
+    const auto query =
+        "SELECT v.m "
+        "FROM t "
+        "JOIN u ON t.a = u.x "
+        "JOIN v ON u.x = v.k AND t.b = v.l";
+    const auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    const auto matcher = useV2_
+        ? matchScan("u")
+              .hashJoinInner(
+                  matchScan("t").hashJoinInner(
+                      matchScan("v"), {.keys = {{"b = l", "a = k"}}}),
+                  {.keys = {{"x = a"}}})
+              .build()
+        : matchScan("u")
+              .hashJoinInner(matchScan("v"), {.keys = {{"x = k"}}})
+              .hashJoinInner(matchScan("t"), {.keys = {{"x = a", "l = b"}}})
+              .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+
+    optimizerOptions_.broadcastSizeLimit = 1;
+    const auto distributedPlan =
+        planVelox(parseSelect(query, kTestConnectorId));
+    const auto distributedMatcher = useV2_
+        ? matchScan("u")
+              .shuffle({"x"})
+              .hashJoinInner(
+                  matchScan("t")
+                      .shuffle({"b", "a"})
+                      .hashJoinInner(
+                          matchScan("v").shuffle({"l", "k"}),
+                          {.keys = {{"b = l", "a = k"}}})
+                      .shuffle({"a"}),
+                  {.keys = {{"x = a"}}})
+              .gather()
+              .build()
+        : matchScan("u")
+              .shuffle({"x"})
+              .hashJoinInner(
+                  matchScan("v").shuffle({"k"}), {.keys = {{"x = k"}}})
+              .hashJoinInner(
+                  matchScan("t").shuffle({"a"}), {.keys = {{"x = a", "l = b"}}})
+              .gather()
+              .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
+  }
+}
+
 TEST_P(JoinTest, pushdownFilterThroughJoin) {
   testConnector_->addTable("t", ROW({"t_id", "t_data"}, BIGINT()));
   testConnector_->addTable("u", ROW({"u_id", "u_data"}, BIGINT()));
