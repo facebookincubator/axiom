@@ -88,6 +88,13 @@ struct ErrorInfo {
   /// Raw Velox error source (e.g. "USER", "RUNTIME", "SYSTEM", "EXTERNAL") from
   /// the caught VeloxException. Empty for non-Velox exceptions.
   std::string errorSource;
+
+  /// Source file the failure was raised from. Empty for exceptions that carry
+  /// no throw site, such as PrestoSqlError.
+  std::string file;
+
+  /// Line within `file`. Meaningful only when `file` is set.
+  size_t line{0};
 };
 
 /// Thrown by co_run() when a query is stopped by an external cancellation. A

@@ -722,6 +722,42 @@ TEST_F(SqlQueryRunnerTest, completionCapturesFailureMessageTemplate) {
   EXPECT_NE(captured.errorInfo->messageTemplate, captured.errorInfo->message);
 }
 
+// Captures the throw site of a Velox failure so telemetry can point at the
+// code that raised it.
+TEST_F(SqlQueryRunnerTest, completionCapturesFailureSourceLocation) {
+  QueryCompletionInfo captured;
+
+  EXPECT_THROW(
+      runner_->run(
+          "SELECT 1 / 0",
+          {.onComplete =
+               [&](const QueryCompletionInfo& info) { captured = info; }}),
+      std::exception);
+
+  ASSERT_TRUE(captured.errorInfo.has_value());
+  // The path itself is build-specific, so assert only that a location is
+  // captured.
+  EXPECT_FALSE(captured.errorInfo->file.empty());
+  EXPECT_GT(captured.errorInfo->line, 0);
+}
+
+// A PrestoSqlError carries no throw site, so the location stays unset rather
+// than reporting a misleading zero line against an empty file.
+TEST_F(SqlQueryRunnerTest, completionHasNoSourceLocationForSqlError) {
+  QueryCompletionInfo captured;
+
+  EXPECT_THROW(
+      runner_->run(
+          "SELECT * FROM nonexistent_table",
+          {.onComplete =
+               [&](const QueryCompletionInfo& info) { captured = info; }}),
+      std::exception);
+
+  ASSERT_TRUE(captured.errorInfo.has_value());
+  EXPECT_TRUE(captured.errorInfo->file.empty());
+  EXPECT_EQ(captured.errorInfo->line, 0);
+}
+
 TEST(MessageTemplateOfTest, veloxExceptionUsesTemplate) {
   try {
     VELOX_USER_FAIL("Not supported: {}", "rank");
