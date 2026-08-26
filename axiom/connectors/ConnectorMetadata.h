@@ -776,10 +776,11 @@ class TableLayout {
   ///   constant the second, for eq, lt, lte, gt and gte. A connector never
   ///   sees the constant on the left (e.g. eq(constant, column)).
   /// - An IN list over constants is a single in() over the column and the
-  ///   constant values, with duplicate values removed. The values may be
-  ///   encoded either as a constant array, in(column, ARRAY[...]), or as
-  ///   variadic arguments, in(column, v1, v2, ...). A connector should handle
-  ///   both forms.
+  ///   constant values, with duplicate values removed. A list that reduces to a
+  ///   single value is folded to an equality, eq(column, value). The remaining
+  ///   multi-value form may be encoded either as a constant array,
+  ///   in(column, ARRAY[...]), or as variadic arguments, in(column, v1, v2,
+  ///   ...). A connector should handle both forms.
   ///
   /// Predicates are NOT combined across conjuncts: 'filters' may contain
   /// several predicates on the same column (e.g. a = 1 and a = 2), which the
@@ -788,8 +789,8 @@ class TableLayout {
   ///
   /// TODO: Unify the two IN encodings into the varargs form and remove the
   /// ARRAY encoding.
-  /// TODO: Fold a single-element IN list to an equality, and simplify
-  /// redundant or contradictory same-column predicates, before pushdown.
+  /// TODO: Simplify redundant or contradictory same-column predicates before
+  /// pushdown.
   virtual velox::connector::ConnectorTableHandlePtr createTableHandle(
       const ConnectorSessionPtr& session,
       std::vector<velox::connector::ColumnHandlePtr> columnHandles,

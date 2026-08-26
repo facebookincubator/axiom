@@ -690,16 +690,17 @@ velox::core::TypedExprPtr ToVelox::toAnd(const ExprVector& exprs) {
 namespace {
 
 template <typename T>
-velox::core::TypedExprPtr makeKey(const velox::TypePtr& type, T v) {
+velox::core::TypedExprPtr makeConstant(const velox::TypePtr& type, T v) {
   return std::make_shared<velox::core::ConstantTypedExpr>(
-      type, velox::Variant(v));
+      type, velox::Variant(std::move(v)));
 }
 
-// Returns a constant array expression for the IN list if the call is an IN
-// expression with all-literal elements. Returns nullptr otherwise.
-velox::core::TypedExprPtr tryCreateConstantInList(const Call& call) {
+// Returns the deduplicated literal values of an IN list, or std::nullopt if
+// 'call' is not an IN over all-literal elements.
+std::optional<std::vector<velox::Variant>> tryConstantInValues(
+    const Call& call) {
   if (call.name() != SpecialFormCallNames::kIn) {
-    return nullptr;
+    return std::nullopt;
   }
 
   VELOX_USER_CHECK_GE(call.args().size(), 2);
@@ -708,13 +709,13 @@ velox::core::TypedExprPtr tryCreateConstantInList(const Call& call) {
   if (!std::all_of(args.begin() + 1, args.end(), [](const auto& arg) {
         return arg->is(PlanType::kLiteralExpr);
       })) {
-    return nullptr;
+    return std::nullopt;
   }
 
   auto elementType = toTypePtr(args[0]->value().type);
 
-  std::vector<velox::Variant> arrayElements;
-  arrayElements.reserve(args.size() - 1);
+  std::vector<velox::Variant> values;
+  values.reserve(args.size() - 1);
   folly::F14FastSet<velox::Variant, velox::Variant::Hasher> seen;
   seen.reserve(args.size() - 1);
   for (size_t i = 1; i < args.size(); ++i) {
@@ -726,14 +727,10 @@ velox::core::TypedExprPtr tryCreateConstantInList(const Call& call) {
         arg->value().type->toString());
     auto& literal = arg->as<Literal>()->literal();
     if (seen.insert(literal).second) {
-      arrayElements.push_back(literal);
+      values.push_back(literal);
     }
   }
-  auto arrayVector = variantToVector(
-      ARRAY(elementType),
-      velox::Variant::array(arrayElements),
-      queryCtx()->optimization()->evaluator()->pool());
-  return std::make_shared<velox::core::ConstantTypedExpr>(arrayVector);
+  return values;
 }
 
 velox::core::TypedExprPtr stepToMapSubscript(
@@ -744,19 +741,19 @@ velox::core::TypedExprPtr stepToMapSubscript(
   velox::core::TypedExprPtr key;
   switch (type->as<velox::TypeKind::MAP>().childAt(0)->kind()) {
     case velox::TypeKind::VARCHAR:
-      key = makeKey(velox::VARCHAR(), step.field);
+      key = makeConstant(velox::VARCHAR(), step.field);
       break;
     case velox::TypeKind::BIGINT:
-      key = makeKey(velox::BIGINT(), step.id);
+      key = makeConstant(velox::BIGINT(), step.id);
       break;
     case velox::TypeKind::INTEGER:
-      key = makeKey(velox::INTEGER(), static_cast<int32_t>(step.id));
+      key = makeConstant(velox::INTEGER(), static_cast<int32_t>(step.id));
       break;
     case velox::TypeKind::SMALLINT:
-      key = makeKey(velox::SMALLINT(), static_cast<int16_t>(step.id));
+      key = makeConstant(velox::SMALLINT(), static_cast<int16_t>(step.id));
       break;
     case velox::TypeKind::TINYINT:
-      key = makeKey(velox::TINYINT(), static_cast<int8_t>(step.id));
+      key = makeConstant(velox::TINYINT(), static_cast<int8_t>(step.id));
       break;
     default:
       VELOX_FAIL("Unsupported key type");
@@ -804,7 +801,7 @@ velox::core::TypedExprPtr stepToGetter(
           type->childAt(0),
           funcName,
           arg,
-          makeKey(velox::INTEGER(), static_cast<int32_t>(step.id)));
+          makeConstant(velox::INTEGER(), static_cast<int32_t>(step.id)));
     }
 
     default:
@@ -911,9 +908,35 @@ velox::core::TypedExprPtr ToVelox::toTypedExprUncached(
       std::vector<velox::core::TypedExprPtr> inputs;
       auto call = expr->as<Call>();
 
-      if (auto inList = tryCreateConstantInList(*call)) {
-        inputs.push_back(toTypedExpr(call->args()[0], cache));
-        inputs.push_back(std::move(inList));
+      std::optional<std::vector<velox::Variant>> values;
+      if (call->name() == SpecialFormCallNames::kIn) {
+        values = tryConstantInValues(*call);
+      }
+      if (values) {
+        auto elementType = toTypePtr(call->args()[0]->value().type);
+        auto column = toTypedExpr(call->args()[0], cache);
+
+        // A list that reduces to a single value folds to an equality, matching
+        // the v2 optimizer.
+        if (values->size() == 1) {
+          const auto& value = values->front();
+          return std::make_shared<velox::core::CallTypedExpr>(
+              velox::BOOLEAN(),
+              std::string{queryCtx()->functionNames().equality},
+              std::move(column),
+              makeConstant(elementType, value));
+        }
+
+        // Multiple deduplicated values lower to in(column, ARRAY[...]); the
+        // special-form handling below names the call.
+        inputs.push_back(std::move(column));
+        inputs.push_back(
+            std::make_shared<velox::core::ConstantTypedExpr>(
+                velox::BaseVector::createConstant(
+                    ARRAY(elementType),
+                    velox::Variant::array(*values),
+                    1,
+                    queryCtx()->optimization()->evaluator()->pool())));
       } else {
         for (auto arg : call->args()) {
           inputs.push_back(toTypedExpr(arg, cache));
