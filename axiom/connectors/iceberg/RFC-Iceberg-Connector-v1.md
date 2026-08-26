@@ -432,9 +432,18 @@ metadata, both identity columns and the bucket, truncate, and temporal
 (year/month/day/hour) transforms, is retained so iceberg-cpp can use it for
 manifest and file pruning during scan planning. Identity partition columns can
 additionally be surfaced through `discretePredicates`, letting the optimizer
-enumerate partition values for metadata counts. Grouped and co-located execution
-over Iceberg partitioning is a later concern, covered under Limit, Ordering, and
-Partitioning.
+enumerate partition values for metadata counts. The layout does not advertise
+Iceberg partitioning as physical placement in v1.
+
+A later bucket-aware execution milestone can expose exactly one eligible,
+top-level `bucket(N, source_column)` transform through `partitionColumns` and an
+`IcebergBucketPartitionType`. It remains separate from the complete Iceberg
+partition tuple: bucket, truncate, temporal, and identity transforms continue to
+serve pruning even when they do not participate in placement. The first version
+of that optimization deliberately excludes multiple bucket transforms, nested
+transform expressions, choosing among alternative layouts per query, and
+partition-spec evolution. The detailed rationale and execution model appear in
+Split Planning.
 
 ### Optimizer Contract and Table Handles
 
@@ -634,11 +643,13 @@ it yet:
   performs. The two phases should share one manifest pass and group its results,
   not scan the manifests twice.
 * A spec mixes transforms, so the tuple is heterogeneous: an identity value beside
-  a bucket ordinal beside a year ordinal. Grouped execution that co-locates the
-  other join input needs a composite `IcebergPartitionType` whose partition
-  function applies the matching transform per field, reusing Velox's existing
-  Iceberg partition transforms (`iceberg_bucket`, truncate, temporal) rather than
-  Hive's hash.
+  a bucket ordinal beside a year ordinal. A general grouped-execution design that
+  co-locates on the whole tuple needs a composite `IcebergPartitionType` whose
+  partition function applies the matching transform per field, reusing Velox's
+  existing Iceberg partition transforms (`iceberg_bucket`, truncate, temporal)
+  rather than Hive's hash. The first bucket-aware milestone intentionally avoids
+  that larger design by selecting one bucket transform as the distribution key
+  and retaining every other transform solely for pruning.
 * Partition specs evolve, so files can carry tuples under different specs. Those
   are not directly comparable, so grouped execution must group by spec or restrict
   to a compatible subset. This hazard has no Hive equivalent.
@@ -657,7 +668,10 @@ execution, which are not Phase 1 goals. Because the stub does no manifest work,
 `PlanFiles` runs once inside `getSplitSource` and nothing is cached between the two
 phases. The manifest planning worth caching is the connector-internal result
 shared across statistics, metadata counts, and split generation, covered under
-Statistics and Metadata Counts.
+Statistics and Metadata Counts. This does not block later bucket-aware execution:
+the split source can derive a group from each `FileScanTask`'s partition tuple as
+it converts planned files to splits, without first materializing one Axiom
+`PartitionHandle` per Iceberg tuple.
 
 `IcebergSplitManager::getSplitSource` should:
 
@@ -673,6 +687,62 @@ Statistics and Metadata Counts.
 3. Call `Build()` and `PlanFiles()`.
 4. Convert each `iceberg::FileScanTask` to one Velox `HiveIcebergSplit`.
 5. Return batches of Axiom `Split` objects from `IcebergSplitSource`.
+
+#### Bucket-aware execution
+
+Bucket-aware execution is a follow-on optimization, not a prerequisite for
+correct Iceberg scan planning. It uses the same Axiom mechanism as the current
+Hive bucketed path: the optimizer propagates a `PartitionType` into a fixed-width
+fragment, and the connector assigns each split a `groupId` so the local runner
+routes it to the corresponding task. This avoids an exchange when both sides of a
+join share a compatible distribution; it does not require
+`co_listPartitions` to enumerate every Iceberg partition tuple.
+
+The initial scope is intentionally narrow. A layout is eligible only when:
+
+* The resolved table has one supported partition spec. A table with
+  partition-spec evolution falls back to ordinary, ungrouped execution.
+* That spec has exactly one top-level `bucket(N, source_column)` transform. Other
+  transforms may coexist in the spec, but do not contribute to the distribution
+  key.
+* The source type is supported by Velox's Iceberg Murmur3 bucket implementation,
+  and Axiom retains `source_column` in the scan output wherever it asks the
+  optimizer to use the layout's partitioning.
+
+`IcebergBucketPartitionType` must be Iceberg-specific; it must not reuse Hive's
+bucket hash. The layout exposes `source_column` as its partition column, while the
+type records the Iceberg bucket count and source-key semantics. Its
+`makeSpec()` creates an Iceberg partition function backed by Velox's existing
+Iceberg Murmur3 helper. For a row value `x`, it first computes
+`bucket = (Murmur3_32(x) & INT_MAX) % N`, then maps that bucket to the `P` Axiom
+tasks with `group = bucket % P`, where `P <= N`. In particular, after the
+optimizer scales a layout down, the implementation must not recompute
+`Murmur3_32(x) % P`: reducing the already-computed Iceberg bucket is what keeps
+the grouping compatible with the original table layout. The null convention must
+match the Velox Iceberg bucket function and be covered by tests.
+
+The type's `copartition` relation should allow compatible Iceberg bucket keys when
+one bucket count divides the other, mirroring the Hive bucket-count compatibility
+rule without inheriting Hive hashing. It should reject different source-key
+semantics, incompatible transforms, or bucket counts that cannot be aligned.
+This lets the optimizer use the same partition-function specification to align an
+unbucketed join input when necessary, while preserving a no-exchange path for two
+compatible Iceberg inputs.
+
+During split conversion, `IcebergSplitSource` reads the bucket ordinal from the
+`FileScanTask` partition tuple, validates that it is in `[0, N)`, and assigns
+`groupId = bucket % P`. The ordinal is scheduling metadata, not a Hive table
+bucket number, so the connector does not overload `HiveIcebergSplit`'s Hive
+bucket field. Invalid or missing bucket metadata for an otherwise eligible scan
+is a planning error rather than a reason to silently route a file to an arbitrary
+task.
+
+This design is deliberately limited to Axiom's present grouped-leaf routing: it
+assigns files to fixed tasks and can avoid cross-task exchanges, but it does not
+enable Velox `PlanFragment` grouped execution or its per-group operator-state
+cleanup. Multiple candidate bucket layouts, composite transformed keys, and
+partition-spec evolution require planner support beyond the current single-layout
+selection model and remain future work.
 
 Split planning should be lazy and batched. Large Iceberg tables can have many
 manifest files and scan tasks, so `IcebergSplitSource` should avoid eagerly
@@ -866,9 +936,11 @@ Partitioning. The layout's partition properties (`partitionColumns`,
 `partitionType`, `discretePredicates`) stay minimal in v1, because Iceberg's real
 partition pruning happens inside `PlanFiles`, not through Axiom partition handles.
 Identity partition columns can feed `discretePredicates` when their values can be
-enumerated without excessive planning, and grouped or bucket-aligned execution is
-deferred until an `IcebergPartitionType` exists. The partition mapping and that
-deferral are covered in Split Planning, under the `co_listPartitions` discussion.
+enumerated without excessive planning. Bucket-aware execution is deferred to the
+later, conservative `IcebergBucketPartitionType` described in Split Planning. It
+derives group IDs from `PlanFiles` tasks rather than making partition-handle
+enumeration a prerequisite, and remains separate from generic whole-tuple
+partitioning.
 
 ### FileIO and Storage Credentials
 
@@ -1184,6 +1256,26 @@ Integration tests:
 * Verify Puffin position-delete metadata is rejected during split conversion.
 * Verify Iceberg views fail with actionable unsupported-feature messages.
 * Verify unsupported Iceberg features fail with actionable messages.
+
+### Bucket-aware Execution Follow-up Tests
+
+The bucket-aware milestone should add focused coverage before it is enabled:
+
+* Verify `IcebergBucketPartitionType` matches Velox's Iceberg bucket function for
+  each supported source type, including null values.
+* Verify bucket-to-task mapping for `N -> P` reductions, including non-divisor
+  task counts, and confirm that it maps the original bucket rather than hashing
+  directly to `P`.
+* Verify compatible bucket counts (for example, 8 and 16) co-partition, while
+  incompatible transforms, key semantics, and bucket counts do not.
+* Verify `FileScanTask` conversion assigns the expected Axiom `groupId` for a
+  bucketed table whose spec also includes a temporal or identity transform.
+* Verify plans for compatible Iceberg-to-Iceberg joins avoid an exchange, and
+  joins with an unbucketed input use the matching Iceberg partition function for
+  the aligned side.
+* Verify `LocalRunner` routes each Iceberg group ID to the fixed task index.
+* Verify a scan spanning partition-spec evolution falls back to ungrouped
+  execution.
 
 Regression tests:
 
