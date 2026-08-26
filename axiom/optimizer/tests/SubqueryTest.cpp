@@ -557,7 +557,7 @@ TEST_P(SubqueryTest, correlatedIn) {
 
     SCOPED_TRACE(query);
     auto plan = toSingleNodePlan(query);
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+    AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
   // Find customers with no orders.
@@ -581,7 +581,7 @@ TEST_P(SubqueryTest, correlatedIn) {
 
     SCOPED_TRACE(query);
     auto plan = toSingleNodePlan(query);
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+    AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
   // Correlated IN subquery with non-equality filter in the SELECT list produces
@@ -851,7 +851,7 @@ TEST_P(SubqueryTest, correlatedProject) {
 
     SCOPED_TRACE(query);
     auto plan = toSingleNodePlan(query);
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+    AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
   // Correlated scalar subquery in projection with SUM aggregation.
@@ -868,7 +868,7 @@ TEST_P(SubqueryTest, correlatedProject) {
 
     SCOPED_TRACE(query);
     auto plan = toSingleNodePlan(query);
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+    AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
   // Multiple scalar subqueries in projection.
@@ -911,7 +911,7 @@ TEST_P(SubqueryTest, correlatedProject) {
 
     SCOPED_TRACE(query);
     auto plan = toSingleNodePlan(query);
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+    AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
   // Correlated IN <subquery> in projection.
@@ -933,7 +933,7 @@ TEST_P(SubqueryTest, correlatedProject) {
 
     SCOPED_TRACE(query);
     auto plan = toSingleNodePlan(query);
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+    AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
   // Correlated NOT IN <subquery> in projection.
@@ -955,7 +955,7 @@ TEST_P(SubqueryTest, correlatedProject) {
 
     SCOPED_TRACE(query);
     auto plan = toSingleNodePlan(query);
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+    AXIOM_ASSERT_PLAN(plan, matcher);
   }
 }
 
@@ -1123,31 +1123,34 @@ TEST_P(SubqueryTest, enforceSingleRow) {
   auto logicalPlan = parseSelect(query);
 
   {
-    auto matcher =
-        matchHiveScan("region")
-            .nestedLoopJoin(matchHiveScan("nation").enforceSingleRow())
-            .filter()
-            .project()
-            .build();
+    auto matcher = matchHiveScan("region")
+                       .nestedLoopJoin(
+                           matchHiveScan("nation").enforceSingleRow(),
+                           core::JoinType::kInner,
+                           "gt(r_regionkey, n_regionkey)")
+                       .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
 
     VELOX_ASSERT_THROW(runVelox(plan), "Expected single row of input.");
   }
 
   {
-    auto matcher =
-        matchHiveScan("region")
-            .nestedLoopJoin(
-                matchHiveScan("nation").gather().enforceSingleRow().broadcast())
-            .filter()
-            .project()
-            .gather()
-            .build();
+    auto matcher = matchHiveScan("region")
+                       .nestedLoopJoin(
+                           matchHiveScan("nation")
+                               .gather()
+                               .localPartition()
+                               .enforceSingleRow()
+                               .broadcast(),
+                           core::JoinType::kInner,
+                           "gt(r_regionkey, n_regionkey)")
+                       .gather()
+                       .build();
 
     auto distributedPlan = planVelox(logicalPlan);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(distributedPlan.plan, matcher);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(distributedPlan.plan, matcher);
   }
 }
 
@@ -1158,14 +1161,14 @@ TEST_P(SubqueryTest, enforceSingleRowInProjection) {
   auto logicalPlan = parseSelect(query);
 
   {
-    auto matcher = core::PlanMatcherBuilder()
-                       .hiveScan("region", test::eq("r_name", "AFRICA"))
-                       .enforceSingleRow()
-                       .nestedLoopJoin(matchHiveScan("nation"))
+    auto matcher = matchHiveScan("nation")
+                       .nestedLoopJoin(
+                           matchHiveScan("region", test::eq("r_name", "AFRICA"))
+                               .enforceSingleRow())
                        .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
   }
 
   {
@@ -1173,17 +1176,18 @@ TEST_P(SubqueryTest, enforceSingleRowInProjection) {
     // broadcast-then-EnforceSingleRow shape would collapse the gather
     // + broadcast pair into a single broadcast with EnforceSingleRow
     // running on each consumer.
-    auto matcher =
-        core::PlanMatcherBuilder()
-            .hiveScan("region", test::eq("r_name", "AFRICA"))
-            .gather()
-            .enforceSingleRow()
-            .nestedLoopJoin(
-                core::PlanMatcherBuilder().tableScan("nation").broadcast())
-            .build();
+    auto matcher = matchHiveScan("nation")
+                       .nestedLoopJoin(
+                           matchHiveScan("region", test::eq("r_name", "AFRICA"))
+                               .gather()
+                               .localPartition()
+                               .enforceSingleRow()
+                               .broadcast())
+                       .gather()
+                       .build();
 
     auto distributedPlan = planVelox(logicalPlan);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(distributedPlan.plan, matcher);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(distributedPlan.plan, matcher);
   }
 }
 
@@ -1657,7 +1661,7 @@ TEST_P(SubqueryTest, correlatedScalarWithoutAggregation) {
                        .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+    AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
   {
@@ -1672,7 +1676,7 @@ TEST_P(SubqueryTest, correlatedScalarWithoutAggregation) {
                        .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+    AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
   // Non-equi correlation: d < b.
@@ -1880,7 +1884,7 @@ TEST_P(SubqueryTest, leftJoinOnSubquery) {
                            core::JoinType::kLeft)
                        .build();
 
-    AXIOM_ASSERT_PLAN_V1(toSingleNodePlan(query), matcher);
+    AXIOM_ASSERT_PLAN(toSingleNodePlan(query), matcher);
   }
 
   // Uncorrelated scalar subquery in LEFT JOIN ON clause.
@@ -1926,7 +1930,7 @@ TEST_P(SubqueryTest, leftJoinOnSubquery) {
                            core::JoinType::kLeft)
                        .build();
 
-    AXIOM_ASSERT_PLAN_V1(toSingleNodePlan(query), matcher);
+    AXIOM_ASSERT_PLAN(toSingleNodePlan(query), matcher);
   }
 
   // All conjuncts contain subqueries (no non-subquery condition remains).
@@ -1945,7 +1949,7 @@ TEST_P(SubqueryTest, leftJoinOnSubquery) {
                            core::JoinType::kLeft)
                        .build();
 
-    AXIOM_ASSERT_PLAN_V1(toSingleNodePlan(query), matcher);
+    AXIOM_ASSERT_PLAN(toSingleNodePlan(query), matcher);
   }
 
   // Correlated EXISTS referencing the right (null-supplying) side.
@@ -1964,7 +1968,7 @@ TEST_P(SubqueryTest, leftJoinOnSubquery) {
                            core::JoinType::kLeft)
                        .build();
 
-    AXIOM_ASSERT_PLAN_V1(toSingleNodePlan(query), matcher);
+    AXIOM_ASSERT_PLAN(toSingleNodePlan(query), matcher);
   }
 
   // Correlated NOT EXISTS referencing the right (null-supplying) side.
@@ -1986,7 +1990,7 @@ TEST_P(SubqueryTest, leftJoinOnSubquery) {
                            core::JoinType::kLeft)
                        .build();
 
-    AXIOM_ASSERT_PLAN_V1(toSingleNodePlan(query), matcher);
+    AXIOM_ASSERT_PLAN(toSingleNodePlan(query), matcher);
   }
 
   // Correlated scalar subquery referencing the right (null-supplying) side.
