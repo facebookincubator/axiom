@@ -31,7 +31,8 @@ namespace {
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class PlanTest : public test::HiveQueriesTestBase {
+class PlanTest : public test::HiveQueriesTestBase,
+                 public ::testing::WithParamInterface<bool> {
  protected:
   static void SetUpTestCase() {
     test::HiveQueriesTestBase::SetUpTestCase();
@@ -41,6 +42,11 @@ class PlanTest : public test::HiveQueriesTestBase {
          velox::tpch::Table::TBL_LINEITEM,
          velox::tpch::Table::TBL_PART});
     test::registerDfFunctions();
+  }
+
+  void SetUp() override {
+    useV2_ = GetParam();
+    test::HiveQueriesTestBase::SetUp();
   }
 
   lp::PlanBuilder::Context makeContext() const {
@@ -54,7 +60,7 @@ class PlanTest : public test::HiveQueriesTestBase {
   }
 };
 
-TEST_F(PlanTest, dedupEmptyArrays) {
+TEST_P(PlanTest, dedupEmptyArrays) {
   auto logicalPlan =
       lp::PlanBuilder()
           .values(ROW({}), {variant::row({})})
@@ -80,7 +86,7 @@ TEST_F(PlanTest, dedupEmptyArrays) {
 
 // Verify that optimizer can handle connectors that do not support filter
 // pushdown.
-TEST_F(PlanTest, rejectedFilters) {
+TEST_P(PlanTest, rejectedFilters) {
   const auto mapType = MAP(BIGINT(), DOUBLE());
   testConnector_->addTable(
       "t", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), mapType}));
@@ -141,7 +147,7 @@ TEST_F(PlanTest, rejectedFilters) {
                        .project() // project c.x + 1, c.y + 2, c.z + 3
                        .build();
 
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 
   // SELECT 1 FROM t WHERE c.x > 10.
@@ -162,7 +168,7 @@ TEST_F(PlanTest, rejectedFilters) {
                        .project({"1"})
                        .build();
 
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 
   // SELECT c.y + 1 FROM t WHERE c.x > 10.
@@ -184,11 +190,11 @@ TEST_F(PlanTest, rejectedFilters) {
                        .project() // project c.y + 1
                        .build();
 
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 }
 
-TEST_F(PlanTest, specialFormConstantFold) {
+TEST_P(PlanTest, specialFormConstantFold) {
   testConnector_->addTable("numbers", ROW({"a", "b", "c"}, BIGINT()));
 
   struct TestCase {
@@ -234,7 +240,7 @@ TEST_F(PlanTest, specialFormConstantFold) {
     }
 
     auto plan = toSingleNodePlan(logicalPlan);
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 
   std::vector<TestCase> projectTestCases = {
@@ -284,7 +290,7 @@ TEST_F(PlanTest, specialFormConstantFold) {
 // Verifies that func(..., null, ...) is folded to null for
 // default-null-behavior functions and is not folded for
 // non-default-null-behavior functions.
-TEST_F(PlanTest, nullPropagation) {
+TEST_P(PlanTest, nullPropagation) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
 
   struct TestCase {
@@ -314,11 +320,11 @@ TEST_F(PlanTest, nullPropagation) {
     auto matcher = matchScan("t").project({expected, "a", "b"}).build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 }
 
-TEST_F(PlanTest, inList) {
+TEST_P(PlanTest, inList) {
   testConnector_->addTable(
       "numbers", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
 
@@ -344,7 +350,7 @@ TEST_F(PlanTest, inList) {
     auto matcher = scanMatcher().filter("false").project().build();
 
     auto plan = toSingleNodePlan(logicalPlan);
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
   {
     auto logicalPlan =
@@ -367,7 +373,7 @@ TEST_F(PlanTest, inList) {
   }
 }
 
-TEST_F(PlanTest, multipleConnectors) {
+TEST_P(PlanTest, multipleConnectors) {
   auto extraConnector = std::make_shared<connector::TestConnector>("extra");
   velox::connector::registerConnector(extraConnector);
   connector::ConnectorMetadataRegistry::global().insert(
@@ -397,7 +403,7 @@ TEST_F(PlanTest, multipleConnectors) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(PlanTest, filterToJoinEdge) {
+TEST_P(PlanTest, filterToJoinEdge) {
   auto nationType = ROW({"n_regionkey"}, BIGINT());
   auto regionType = ROW({"r_regionkey"}, BIGINT());
 
@@ -458,13 +464,13 @@ TEST_F(PlanTest, filterToJoinEdge) {
             .project()
             .build();
 
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 
   checkSame(logicalPlan, referencePlan);
 }
 
-TEST_F(PlanTest, filterBreakup) {
+TEST_P(PlanTest, filterBreakup) {
   const char* filterText =
       "        (\n"
       "                l_partkey = p_partkey\n"
@@ -531,7 +537,7 @@ TEST_F(PlanTest, filterBreakup) {
             .singleAggregation()
             .build();
 
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 
   auto referenceBuilder =
@@ -543,7 +549,7 @@ TEST_F(PlanTest, filterBreakup) {
   checkSame(logicalPlan, referencePlan);
 }
 
-TEST_F(PlanTest, values) {
+TEST_P(PlanTest, values) {
   auto nationType =
       ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
           {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
@@ -779,7 +785,7 @@ TEST_F(PlanTest, values) {
   }
 }
 
-TEST_F(PlanTest, parallelCse) {
+TEST_P(PlanTest, parallelCse) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, INTEGER()));
 
   {
@@ -801,7 +807,7 @@ TEST_F(PlanTest, parallelCse) {
                        .project()
                        .build();
 
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 
   {
@@ -823,11 +829,11 @@ TEST_F(PlanTest, parallelCse) {
                        .project()
                        .build();
 
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 }
 
-TEST_F(PlanTest, lastProjection) {
+TEST_P(PlanTest, lastProjection) {
   testConnector_->addTable(
       "numbers", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
 
@@ -848,7 +854,7 @@ TEST_F(PlanTest, lastProjection) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(PlanTest, orderByDuplicateKeys) {
+TEST_P(PlanTest, orderByDuplicateKeys) {
   testConnector_->addTable("t", ROW({"a"}, {BIGINT()}));
 
   auto logicalPlan = lp::PlanBuilder(makeContext())
@@ -867,7 +873,7 @@ TEST_F(PlanTest, orderByDuplicateKeys) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(PlanTest, lambdaArgs) {
+TEST_P(PlanTest, lambdaArgs) {
   testConnector_->addTable(
       "t", ROW({"a", "b"}, {ARRAY(ARRAY(REAL())), BIGINT()}));
 
@@ -886,7 +892,7 @@ TEST_F(PlanTest, lambdaArgs) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(PlanTest, outputNames) {
+TEST_P(PlanTest, outputNames) {
   testConnector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
 
   auto test = [&](std::string_view sql,
@@ -906,6 +912,8 @@ TEST_F(PlanTest, outputNames) {
   // Empty output names.
   test(R"(SELECT a AS "", b FROM t)", {"", "b"});
 }
+
+AXIOM_INSTANTIATE_V1_V2(PlanTest);
 
 } // namespace
 } // namespace facebook::axiom::optimizer

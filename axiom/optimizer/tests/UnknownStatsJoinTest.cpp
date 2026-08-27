@@ -25,8 +25,14 @@ using namespace velox;
 // When a join-key NDV is missing the join cost is unknown, so the optimizer
 // falls back to the query's syntactic join order instead of a cost-based one.
 // 't' is large and 'u' is small; 'k' is the join key.
-class UnknownStatsJoinTest : public test::QueryTestBase {
+class UnknownStatsJoinTest : public test::QueryTestBase,
+                             public ::testing::WithParamInterface<bool> {
  protected:
+  void SetUp() override {
+    useV2_ = GetParam();
+    test::QueryTestBase::SetUp();
+  }
+
   velox::core::PlanNodePtr plan(const std::string& sql) {
     return toSingleNodePlan(parseSelect(sql, kTestConnectorId));
   }
@@ -43,7 +49,7 @@ class UnknownStatsJoinTest : public test::QueryTestBase {
   }
 };
 
-TEST_F(UnknownStatsJoinTest, singleJoin) {
+TEST_P(UnknownStatsJoinTest, singleJoin) {
   testConnector_->addTable("t", ROW({"a", "k"}, BIGINT()))
       ->setStats(1'000'000, {{"k", {.numDistinct = 1'000'000}}});
   testConnector_->addTable("u", ROW({"b", "k"}, BIGINT()))
@@ -76,7 +82,7 @@ TEST_F(UnknownStatsJoinTest, singleJoin) {
 // cost-based ordering of an independent join elsewhere in the query. A
 // non-deterministic filter between (u JOIN t) and the join with 'v' keeps the
 // two joins in separate derived tables.
-TEST_F(UnknownStatsJoinTest, twoJoins) {
+TEST_P(UnknownStatsJoinTest, twoJoins) {
   const auto query =
       "SELECT count(*) "
       "FROM (SELECT u.k AS k FROM u JOIN t ON u.k = t.k WHERE rand() < 0.1) AS s "
@@ -93,7 +99,7 @@ TEST_F(UnknownStatsJoinTest, twoJoins) {
                        const std::string& innerBuild) {
     return matchScan(innerProbe)
         .hashJoinInner(matchScan(innerBuild))
-        .filter()
+        .filterIf(!useV2_)
         .hashJoinInner(matchScan("v"))
         .aggregation()
         .build();
@@ -119,7 +125,7 @@ TEST_F(UnknownStatsJoinTest, twoJoins) {
 }
 // A base table with no statistics at all must fall back to syntactic join
 // order, not crash on the unknown cardinality.
-TEST_F(UnknownStatsJoinTest, joinWithUnknownTableCardinality) {
+TEST_P(UnknownStatsJoinTest, joinWithUnknownTableCardinality) {
   testConnector_->addTable("t", ROW({"a", "k"}, BIGINT()))
       ->setStats(1'000'000, {{"k", {.numDistinct = 1'000'000}}});
   testConnector_->addTable("u", ROW({"b", "k"}, BIGINT()));
@@ -140,7 +146,7 @@ TEST_F(UnknownStatsJoinTest, joinWithUnknownTableCardinality) {
 
 // Two large tables join only through 'v'; the fallback must hash-join through
 // it rather than cross-join the two.
-TEST_F(UnknownStatsJoinTest, sharedTableJoinAvoidsCrossJoin) {
+TEST_P(UnknownStatsJoinTest, sharedTableJoinAvoidsCrossJoin) {
   addSharedJoinTableSchema();
 
   const auto query =
@@ -148,7 +154,7 @@ TEST_F(UnknownStatsJoinTest, sharedTableJoinAvoidsCrossJoin) {
 
   // Fallback on: hash-join 't' and 'u' through 'v'.
   optimizerOptions_.syntacticJoinOrder = false;
-  AXIOM_ASSERT_PLAN(
+  AXIOM_ASSERT_PLAN_V1(
       plan(query),
       matchScan("t")
           .hashJoinInner(matchScan("v"))
@@ -168,7 +174,7 @@ TEST_F(UnknownStatsJoinTest, sharedTableJoinAvoidsCrossJoin) {
 }
 
 // An expression equi-key ('t.k + 0') behaves the same under the flag toggle.
-TEST_F(UnknownStatsJoinTest, sharedTableJoinAvoidsCrossJoinExpressionKey) {
+TEST_P(UnknownStatsJoinTest, sharedTableJoinAvoidsCrossJoinExpressionKey) {
   addSharedJoinTableSchema();
 
   const auto query =
@@ -176,7 +182,7 @@ TEST_F(UnknownStatsJoinTest, sharedTableJoinAvoidsCrossJoinExpressionKey) {
 
   // Fallback on: hash-join through 'v' on the projected key.
   optimizerOptions_.syntacticJoinOrder = false;
-  AXIOM_ASSERT_PLAN(
+  AXIOM_ASSERT_PLAN_V1(
       plan(query),
       matchScan("t")
           .project()
@@ -199,7 +205,7 @@ TEST_F(UnknownStatsJoinTest, sharedTableJoinAvoidsCrossJoinExpressionKey) {
 
 // Guard: 'w' has no equi-join to any table, so it still cross-joins even while
 // 't' and 'u' hash-join through the shared table 'v'.
-TEST_F(UnknownStatsJoinTest, crossJoinWhenNoEquiPartner) {
+TEST_P(UnknownStatsJoinTest, crossJoinWhenNoEquiPartner) {
   addSharedJoinTableSchema();
   testConnector_->addTable("w", ROW({"c", "k"}, BIGINT()));
 
@@ -209,7 +215,7 @@ TEST_F(UnknownStatsJoinTest, crossJoinWhenNoEquiPartner) {
   // Fallback on: 't'/'u' hash-join through 'v'; 'w' has no partner, so it
   // crosses.
   optimizerOptions_.syntacticJoinOrder = false;
-  AXIOM_ASSERT_PLAN(
+  AXIOM_ASSERT_PLAN_V1(
       plan(query),
       matchScan("t")
           .hashJoinInner(matchScan("v"))
@@ -231,7 +237,7 @@ TEST_F(UnknownStatsJoinTest, crossJoinWhenNoEquiPartner) {
 }
 
 // The join sampler must tolerate an unknown build-side cardinality.
-TEST_F(UnknownStatsJoinTest, sampledJoinWithUnknownCardinality) {
+TEST_P(UnknownStatsJoinTest, sampledJoinWithUnknownCardinality) {
   optimizerOptions_.sampleJoins = true;
 
   testConnector_->addTable("t", ROW({"a", "k"}, BIGINT()))
@@ -251,7 +257,7 @@ TEST_F(UnknownStatsJoinTest, sampledJoinWithUnknownCardinality) {
 
 // Enabling sampleJoins must not change the chosen plan when a side has
 // unknown cardinality.
-TEST_F(UnknownStatsJoinTest, sampledJoinMatchesUnsampledOnUnknownCardinality) {
+TEST_P(UnknownStatsJoinTest, sampledJoinMatchesUnsampledOnUnknownCardinality) {
   testConnector_->addTable("t", ROW({"a", "k"}, BIGINT()))
       ->setStats(1'000'000, {{"k", {.numDistinct = 1'000'000}}});
   testConnector_->addTable("u", ROW({"b", "k"}, BIGINT()));
@@ -274,6 +280,8 @@ TEST_F(UnknownStatsJoinTest, sampledJoinMatchesUnsampledOnUnknownCardinality) {
   AXIOM_ASSERT_PLAN(plan(query), matchJoin("u", "t"));
   AXIOM_ASSERT_PLAN(plan(altQuery), matchJoin("t", "u"));
 }
+
+AXIOM_INSTANTIATE_V1_V2(UnknownStatsJoinTest);
 
 } // namespace
 } // namespace facebook::axiom::optimizer
