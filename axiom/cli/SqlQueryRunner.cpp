@@ -230,6 +230,35 @@ std::optional<CatalogSchemaTableName> explainIoOutputTable(
 
 namespace axiom::sql {
 
+SqlQueryRunner::SqlResultChunk::SqlResultChunk(std::string message)
+    : message{std::move(message)} {}
+
+SqlQueryRunner::SqlResultChunk::SqlResultChunk(velox::RowVectorPtr batch)
+    : batch{std::move(batch)} {
+  VELOX_CHECK_NOT_NULL(this->batch);
+  batchType = this->batch->rowType();
+}
+
+SqlQueryRunner::SqlResultChunk::SqlResultChunk(velox::RowTypePtr batchType)
+    : batchType{std::move(batchType)} {
+  VELOX_CHECK_NOT_NULL(this->batchType);
+}
+
+SqlQueryRunner::SqlResult::SqlResult(std::string message)
+    : message{std::move(message)} {}
+
+SqlQueryRunner::SqlResult::SqlResult(std::vector<velox::RowVectorPtr> results)
+    : results{std::move(results)} {
+  VELOX_CHECK_GT(this->results.size(), 0);
+  VELOX_CHECK_NOT_NULL(this->results.front());
+  resultType = this->results.front()->rowType();
+}
+
+SqlQueryRunner::SqlResult::SqlResult(velox::RowTypePtr resultType)
+    : resultType{std::move(resultType)} {
+  VELOX_CHECK_NOT_NULL(this->resultType);
+}
+
 void SqlQueryRunner::initialize(
     const std::function<std::pair<std::string, std::string>()>&
         initializeConnectors,
@@ -683,6 +712,31 @@ logical_plan::LogicalPlanNodePtr showSessionPlan(
   return builder.build();
 }
 
+folly::coro::Task<SqlQueryRunner::SqlResult> materializeResult(
+    folly::coro::AsyncGenerator<SqlQueryRunner::SqlResultChunk> generator) {
+  std::optional<std::string> message;
+  std::vector<velox::RowVectorPtr> results;
+  velox::RowTypePtr emptyResultType;
+
+  while (auto chunk = co_await generator.next()) {
+    if (chunk->message.has_value()) {
+      message = std::move(*chunk->message);
+    } else if (chunk->batch != nullptr) {
+      results.push_back(std::move(chunk->batch));
+    } else {
+      emptyResultType = std::move(chunk->batchType);
+    }
+  }
+
+  if (message.has_value()) {
+    co_return SqlQueryRunner::SqlResult{std::move(*message)};
+  }
+  if (!results.empty()) {
+    co_return SqlQueryRunner::SqlResult{std::move(results)};
+  }
+  co_return SqlQueryRunner::SqlResult{std::move(emptyResultType)};
+}
+
 } // namespace
 
 SqlQueryRunner::SqlResult SqlQueryRunner::run(
@@ -694,17 +748,8 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
       folly::coro::co_withCancellation(
           options.cancellationToken,
           folly::coro::co_invoke([&]() -> folly::coro::Task<SqlResult> {
-            SqlResult result;
-            auto generator = co_run(std::string(sql), options);
-            while (auto chunk = co_await generator.next()) {
-              if (chunk->message.has_value()) {
-                result.message = std::move(chunk->message);
-              }
-              if (chunk->batch != nullptr) {
-                result.results.push_back(std::move(chunk->batch));
-              }
-            }
-            co_return result;
+            co_return co_await materializeResult(
+                co_run(std::string(sql), options));
           })));
 }
 
@@ -899,18 +944,8 @@ SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
   std::string planString;
   return folly::coro::blockingWait(
       folly::coro::co_invoke([&]() -> folly::coro::Task<SqlResult> {
-        SqlResult result;
-        auto generator =
-            co_runUnchecked(sqlStatement, options, timing, planString);
-        while (auto chunk = co_await generator.next()) {
-          if (chunk->message.has_value()) {
-            result.message = std::move(chunk->message);
-          }
-          if (chunk->batch != nullptr) {
-            result.results.push_back(std::move(chunk->batch));
-          }
-        }
-        co_return result;
+        co_return co_await materializeResult(
+            co_runUnchecked(sqlStatement, options, timing, planString));
       }));
 }
 
@@ -1086,6 +1121,7 @@ SqlQueryRunner::co_runPlanStatement(
   // by const reference and pulls batches lazily.
   logical_plan::LogicalPlanNodePtr logicalPlan;
   std::shared_ptr<connector::SchemaResolver> schemaResolver;
+  velox::RowTypePtr emptyResultType;
 
   if (sqlStatement.isCreateTableAsSelect()) {
     const auto* ctas = sqlStatement.as<presto::CreateTableAsSelectStatement>();
@@ -1102,14 +1138,20 @@ SqlQueryRunner::co_runPlanStatement(
     logicalPlan = sqlStatement.as<presto::DeleteStatement>()->plan();
   } else if (sqlStatement.isSelect()) {
     logicalPlan = sqlStatement.as<presto::SelectStatement>()->plan();
+    emptyResultType = logicalPlan->outputType();
   } else {
     VELOX_UNREACHABLE("Unexpected plan statement: {}", sqlStatement.kindName());
   }
 
   auto generator = co_runLogicalPlan(
       logicalPlan, options, timing, planString, schemaResolver, runtimeStats);
+  bool yieldedBatch{false};
   while (auto batch = co_await generator.next()) {
+    yieldedBatch = true;
     co_yield SqlResultChunk{std::move(*batch)};
+  }
+  if (!yieldedBatch && emptyResultType != nullptr) {
+    co_yield SqlResultChunk{std::move(emptyResultType)};
   }
 }
 
@@ -1164,8 +1206,8 @@ SqlQueryRunner::co_runSessionStatement(
         options,
         timing,
         planString);
-    while (auto batch = co_await generator.next()) {
-      co_yield SqlResultChunk{std::move(*batch)};
+    while (auto chunk = co_await generator.next()) {
+      co_yield std::move(*chunk);
     }
     co_return;
   }
@@ -1908,7 +1950,8 @@ std::shared_ptr<runner::LocalRunner> SqlQueryRunner::makeLocalRunner(
       runtimeStats);
 }
 
-folly::coro::AsyncGenerator<velox::RowVectorPtr> SqlQueryRunner::co_showSession(
+folly::coro::AsyncGenerator<SqlQueryRunner::SqlResultChunk>
+SqlQueryRunner::co_showSession(
     const presto::ShowSessionStatement& statement,
     const RunOptions& options,
     QueryTiming& timing,
@@ -1917,9 +1960,15 @@ folly::coro::AsyncGenerator<velox::RowVectorPtr> SqlQueryRunner::co_showSession(
   // takes it by const reference, and a temporary would dangle once GCC
   // destroys co_await-operand temporaries at the suspension point.
   auto plan = showSessionPlan(*sessionConfig_, defaultConnectorId_, statement);
+  auto resultType = plan->outputType();
   auto generator = co_runLogicalPlan(plan, options, timing, planString);
+  bool yieldedBatch{false};
   while (auto batch = co_await generator.next()) {
-    co_yield std::move(*batch);
+    yieldedBatch = true;
+    co_yield SqlResultChunk{std::move(*batch)};
+  }
+  if (!yieldedBatch) {
+    co_yield SqlResultChunk{std::move(resultType)};
   }
 }
 

@@ -46,6 +46,24 @@ namespace runner = facebook::axiom::runner;
 
 class SqlQueryRunnerTest : public SqlQueryRunnerTestBase {
  protected:
+  // Collects the complete stream for assertions across chunk shapes.
+  std::vector<SqlQueryRunner::SqlResultChunk> collectChunks(
+      std::string_view sql,
+      SqlQueryRunner::RunOptions options) {
+    return folly::coro::blockingWait(
+        folly::coro::co_invoke(
+            [&]() -> folly::coro::Task<
+                      std::vector<SqlQueryRunner::SqlResultChunk>> {
+              std::vector<SqlQueryRunner::SqlResultChunk> chunks;
+              auto generator =
+                  runner_->co_run(std::string(sql), std::move(options));
+              while (auto chunk = co_await generator.next()) {
+                chunks.push_back(std::move(*chunk));
+              }
+              co_return chunks;
+            }));
+  }
+
   // Asserts SHOW SCHEMAS returns exactly 'expected', in order.
   void assertSchemas(const std::vector<std::string>& expected) {
     auto result = run("SHOW SCHEMAS");
@@ -90,9 +108,25 @@ class SqlQueryRunnerTest : public SqlQueryRunnerTestBase {
 };
 
 TEST_F(SqlQueryRunnerTest, runSingleStatement) {
-  test::assertEqualVectors(
-      fetchSingleRow("SELECT 1"),
-      makeRowVector({makeFlatVector<int32_t>({1})}));
+  {
+    const auto result = run("SELECT 1");
+
+    EXPECT_FALSE(result.message.has_value());
+    ASSERT_EQ(result.results.size(), 1);
+    const auto& batch = result.results.front();
+    ASSERT_NE(batch, nullptr);
+    VELOX_EXPECT_EQ_TYPES(result.resultType, batch->rowType());
+    test::assertEqualVectors(
+        batch, makeRowVector({makeFlatVector<int32_t>({1})}));
+  }
+
+  {
+    const auto result = run("SELECT CAST(1 AS BIGINT) AS value WHERE false");
+
+    EXPECT_FALSE(result.message.has_value());
+    EXPECT_TRUE(result.results.empty());
+    VELOX_EXPECT_EQ_TYPES(result.resultType, ROW("value", BIGINT()));
+  }
 }
 
 TEST_F(SqlQueryRunnerTest, executionTimeout) {
@@ -181,33 +215,37 @@ TEST_F(SqlQueryRunnerTest, runHonorsCancellationToken) {
 }
 
 TEST_F(SqlQueryRunnerTest, coRunYieldsChunks) {
-  // co_run() is a generator: a SELECT yields batch chunks (no message); a
-  // statement that returns a status line yields a single message chunk.
-  auto collect = [&](std::string_view sql) {
-    return folly::coro::blockingWait(
-        folly::coro::co_invoke(
-            [&]() -> folly::coro::Task<
-                      std::vector<SqlQueryRunner::SqlResultChunk>> {
-              std::vector<SqlQueryRunner::SqlResultChunk> chunks;
-              auto generator = runner_->co_run(std::string(sql), {});
-              while (auto chunk = co_await generator.next()) {
-                chunks.push_back(std::move(*chunk));
-              }
-              co_return chunks;
-            }));
-  };
+  // co_run() distinguishes batch results, empty SELECT metadata, and status
+  // messages through separate chunk shapes.
+  {
+    const auto chunks = collectChunks("SELECT 1", {});
+    ASSERT_EQ(chunks.size(), 1);
+    const auto& chunk = chunks[0];
+    EXPECT_FALSE(chunk.message.has_value());
+    ASSERT_NE(chunk.batch, nullptr);
+    VELOX_EXPECT_EQ_TYPES(chunk.batchType, chunk.batch->rowType());
+    test::assertEqualVectors(
+        chunk.batch, makeRowVector({makeFlatVector<int32_t>({1})}));
+  }
 
-  auto selectChunks = collect("SELECT 1");
-  ASSERT_EQ(selectChunks.size(), 1);
-  EXPECT_FALSE(selectChunks[0].message.has_value());
-  ASSERT_NE(selectChunks[0].batch, nullptr);
-  test::assertEqualVectors(
-      selectChunks[0].batch, makeRowVector({makeFlatVector<int32_t>({1})}));
+  {
+    const auto chunks =
+        collectChunks("SELECT CAST(1 AS BIGINT) AS value WHERE false", {});
+    ASSERT_EQ(chunks.size(), 1);
+    const auto& chunk = chunks[0];
+    EXPECT_FALSE(chunk.message.has_value());
+    EXPECT_EQ(chunk.batch, nullptr);
+    VELOX_EXPECT_EQ_TYPES(chunk.batchType, ROW("value", BIGINT()));
+  }
 
-  auto explainChunks = collect("EXPLAIN (TYPE LOGICAL) SELECT 1");
-  ASSERT_EQ(explainChunks.size(), 1);
-  EXPECT_TRUE(explainChunks[0].message.has_value());
-  EXPECT_EQ(explainChunks[0].batch, nullptr);
+  {
+    const auto chunks = collectChunks("EXPLAIN (TYPE LOGICAL) SELECT 1", {});
+    ASSERT_EQ(chunks.size(), 1);
+    const auto& chunk = chunks[0];
+    EXPECT_EQ(chunk.batchType, nullptr);
+    EXPECT_TRUE(chunk.message.has_value());
+    EXPECT_EQ(chunk.batch, nullptr);
+  }
 }
 
 TEST_F(SqlQueryRunnerTest, coRunRowCountAcrossChunks) {
@@ -225,16 +263,14 @@ TEST_F(SqlQueryRunnerTest, coRunRowCountAcrossChunks) {
   };
 
   int64_t totalRows = 0;
-  folly::coro::blockingWait(
-      folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
-        auto generator = runner_->co_run("SELECT c FROM t", options);
-        while (auto chunk = co_await generator.next()) {
-          EXPECT_FALSE(chunk->message.has_value());
-          if (chunk->batch != nullptr) {
-            totalRows += chunk->batch->size();
-          }
-        }
-      }));
+  const auto chunks = collectChunks("SELECT c FROM t", options);
+  for (const auto& chunk : chunks) {
+    EXPECT_FALSE(chunk.message.has_value());
+    if (chunk.batch != nullptr) {
+      VELOX_EXPECT_EQ_TYPES(chunk.batchType, chunk.batch->rowType());
+      totalRows += chunk.batch->size();
+    }
+  }
 
   EXPECT_EQ(totalRows, kNumRows);
   ASSERT_TRUE(completion.has_value());
@@ -328,19 +364,30 @@ TEST_F(SqlQueryRunnerTest, runRejectsMultipleStatements) {
 
 TEST_F(SqlQueryRunnerTest, parseAndRunMixedStatementTypes) {
   auto statements = runner_->parseMultiple(
-      "SELECT 42; EXPLAIN (TYPE LOGICAL) SELECT 1; select 7", {});
-  ASSERT_EQ(3, statements.size());
+      "SELECT 42; SELECT CAST(1 AS BIGINT) AS value WHERE false; "
+      "EXPLAIN (TYPE LOGICAL) SELECT 1; select 7",
+      {});
+  ASSERT_EQ(4, statements.size());
 
   auto selectResult = runner_->runUnchecked(*statements[0], {});
   ASSERT_FALSE(selectResult.message.has_value());
+  ASSERT_EQ(selectResult.results.size(), 1);
+  const auto& selectBatch = selectResult.results.front();
+  ASSERT_NE(selectBatch, nullptr);
+  VELOX_EXPECT_EQ_TYPES(selectResult.resultType, selectBatch->rowType());
   test::assertEqualVectors(
-      selectResult.results[0], makeRowVector({makeFlatVector<int32_t>({42})}));
+      selectBatch, makeRowVector({makeFlatVector<int32_t>({42})}));
 
-  auto explainResult = runner_->runUnchecked(*statements[1], {});
+  auto emptyResult = runner_->runUnchecked(*statements[1], {});
+  ASSERT_FALSE(emptyResult.message.has_value());
+  EXPECT_TRUE(emptyResult.results.empty());
+  VELOX_EXPECT_EQ_TYPES(emptyResult.resultType, ROW("value", BIGINT()));
+
+  auto explainResult = runner_->runUnchecked(*statements[2], {});
   ASSERT_TRUE(explainResult.message.has_value());
   ASSERT_FALSE(explainResult.message.value().empty());
 
-  auto lastResult = runner_->runUnchecked(*statements[2], {});
+  auto lastResult = runner_->runUnchecked(*statements[3], {});
   ASSERT_FALSE(lastResult.message.has_value());
   test::assertEqualVectors(
       lastResult.results[0], makeRowVector({makeFlatVector<int32_t>({7})}));
@@ -1077,6 +1124,15 @@ TEST_F(SqlQueryRunnerTest, showSession) {
     auto names = fetchNames("SHOW SESSION LIKE 'test%'");
     EXPECT_THAT(names, ::testing::Each(::testing::StartsWith("test.")));
     EXPECT_THAT(names, ::testing::Contains("test.collect_column_statistics"));
+  }
+
+  {
+    const auto result = run("SHOW SESSION LIKE 'no_such_property%'");
+    EXPECT_FALSE(result.message.has_value());
+    EXPECT_TRUE(result.results.empty());
+    VELOX_EXPECT_EQ_TYPES(
+        result.resultType,
+        ROW({"Name", "Value", "Default", "Type", "Description"}, VARCHAR()));
   }
 }
 

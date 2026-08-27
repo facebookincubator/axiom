@@ -289,19 +289,24 @@ class SqlQueryRunner {
     folly::CancellationToken cancellationToken;
   };
 
-  /// One increment of a streamed query result, yielded by co_run(). Exactly one
-  /// field is set: `message` (yielded once) for statements that return a status
-  /// line (DDL/session/EXPLAIN); `batch` (yielded once per result batch) for a
-  /// row-producing statement (SELECT/INSERT/CTAS). Modeled like SqlResult so
-  /// the same explicit-move rule applies.
+  /// Represents one increment of a streamed query result from co_run().
+  /// Runner-produced chunks have one of these shapes:
+  /// - `message` only for statements that return a status line.
+  /// - `batch` and `batchType` when a result batch is produced.
+  /// - `batchType` only when a row-producing statement produces no batches.
+  ///
+  /// Modeled like SqlResult so the same explicit-move rule applies.
   struct SqlResultChunk {
-    SqlResultChunk() = default;
+    /// Creates a message-bearing chunk.
+    explicit SqlResultChunk(std::string message);
 
-    explicit SqlResultChunk(std::optional<std::string> message)
-        : message{std::move(message)} {}
+    /// Creates a batch-bearing chunk from a non-null batch and records its
+    /// type.
+    explicit SqlResultChunk(facebook::velox::RowVectorPtr batch);
 
-    explicit SqlResultChunk(facebook::velox::RowVectorPtr batch)
-        : batch{std::move(batch)} {}
+    /// Creates the metadata-only chunk for an empty result from a non-null
+    /// type.
+    explicit SqlResultChunk(facebook::velox::RowTypePtr batchType);
 
     SqlResultChunk(const SqlResultChunk&) = default;
     SqlResultChunk& operator=(const SqlResultChunk&) = default;
@@ -310,11 +315,14 @@ class SqlQueryRunner {
     // across a co_yield, leaving the chunk referring to storage in the
     // destroyed coroutine frame.
     SqlResultChunk(SqlResultChunk&& other) noexcept
-        : message{std::move(other.message)}, batch{std::move(other.batch)} {}
+        : message{std::move(other.message)},
+          batch{std::move(other.batch)},
+          batchType{std::move(other.batchType)} {}
 
     SqlResultChunk& operator=(SqlResultChunk&& other) noexcept {
       message = std::move(other.message);
       batch = std::move(other.batch);
+      batchType = std::move(other.batchType);
       return *this;
     }
 
@@ -322,21 +330,27 @@ class SqlQueryRunner {
 
     std::optional<std::string> message;
     facebook::velox::RowVectorPtr batch;
+
+    /// Carries the type of `batch`. For an empty row-producing result, the
+    /// first and only chunk carries the result type with a null `batch`.
+    facebook::velox::RowTypePtr batchType;
   };
 
-  /// Results of running a query. SELECT queries return a vector of results.
-  /// Other queries return a message. SELECT query that returns no rows returns
-  /// std::nullopt message and empty vector of results.
+  /// Represents a materialized query result from run() or runUnchecked().
+  /// Runner-produced values have one of these shapes:
+  /// - `message` only for statements that return a status line.
+  /// - `results` and `resultType` when one or more batches are produced.
+  /// - `resultType` only when a row-producing statement produces no batches.
   struct SqlResult {
-    SqlResult() = default;
+    /// Creates a message-bearing result.
+    explicit SqlResult(std::string message);
 
-    explicit SqlResult(
-        std::optional<std::string> message,
-        std::vector<facebook::velox::RowVectorPtr> results = {})
-        : message{std::move(message)}, results{std::move(results)} {}
+    /// Creates a result from a non-empty batch vector and derives `resultType`
+    /// from its non-null first batch.
+    explicit SqlResult(std::vector<facebook::velox::RowVectorPtr> results);
 
-    explicit SqlResult(std::vector<facebook::velox::RowVectorPtr> results)
-        : results{std::move(results)} {}
+    /// Creates a metadata-only empty result from a non-null type.
+    explicit SqlResult(facebook::velox::RowTypePtr resultType);
 
     SqlResult(const SqlResult&) = default;
     SqlResult& operator=(const SqlResult&) = default;
@@ -345,11 +359,13 @@ class SqlQueryRunner {
     // the result referring to storage in the destroyed child coroutine frame.
     SqlResult(SqlResult&& other) noexcept
         : message{std::move(other.message)},
-          results{std::move(other.results)} {}
+          results{std::move(other.results)},
+          resultType{std::move(other.resultType)} {}
 
     SqlResult& operator=(SqlResult&& other) noexcept {
       message = std::move(other.message);
       results = std::move(other.results);
+      resultType = std::move(other.resultType);
       return *this;
     }
 
@@ -357,13 +373,19 @@ class SqlQueryRunner {
 
     std::optional<std::string> message;
     std::vector<facebook::velox::RowVectorPtr> results;
+
+    /// Carries the type of `results`, including when a row-producing statement
+    /// produces no result batches.
+    facebook::velox::RowTypePtr resultType;
   };
 
   /// Runs a single SQL statement with full lifecycle: generates a query ID,
   /// fires onStart, parses, checks permissions, executes, fires onComplete.
   /// Yields the result incrementally as SqlResultChunks -- one message chunk
   /// for a statement that returns a status line, one chunk per result batch for
-  /// a row-producing statement -- so a caller can consume rows as they arrive.
+  /// a row-producing statement, or one metadata-only chunk when such a
+  /// statement produces no batches -- so a caller can consume rows as they
+  /// arrive.
   /// On failure, fires onComplete with error telemetry then re-throws from the
   /// consumer's next().
   ///
@@ -632,7 +654,9 @@ class SqlQueryRunner {
       QueryTiming& timing,
       std::string& planString);
 
-  folly::coro::AsyncGenerator<facebook::velox::RowVectorPtr> co_showSession(
+  // Executes SHOW SESSION and yields batches or a type-only chunk when no
+  // session properties match.
+  folly::coro::AsyncGenerator<SqlResultChunk> co_showSession(
       const presto::ShowSessionStatement& statement,
       const RunOptions& options,
       QueryTiming& timing,
