@@ -1355,6 +1355,65 @@ TEST_F(SqlQueryRunnerTest, call) {
       "Cannot coerce procedure argument from VARCHAR to BIGINT");
 }
 
+TEST_F(SqlQueryRunnerTest, logicalPlanCheck) {
+  using facebook::axiom::logical_plan::LogicalPlanNode;
+  using facebook::axiom::logical_plan::NodeKind;
+
+  // Rejects a plan that still names TIMESTAMP WITH TIME ZONE, which the
+  // optimizer folds away, or that writes a table.
+  int32_t numChecks{0};
+  runner_ = makeRunner(
+      "plan_check",
+      /*queryIdGenerator=*/{},
+      /*permissionCheck=*/{},
+      [&](const LogicalPlanNode& plan) {
+        ++numChecks;
+        if (plan.toString().find("TIMESTAMP WITH TIME ZONE") !=
+                std::string::npos ||
+            plan.is(NodeKind::kTableWrite)) {
+          VELOX_USER_FAIL("blocked by test check");
+        }
+      });
+
+  for (const auto* sql : {"SELECT 1", "EXPLAIN ANALYZE SELECT 1"}) {
+    SCOPED_TRACE(sql);
+    numChecks = 0;
+    run(sql);
+    EXPECT_EQ(numChecks, 1);
+  }
+
+  // The cast reaches the check, so the rejection makes it back to the caller.
+  // The optimized plan carries only the folded literal.
+  numChecks = 0;
+  VELOX_ASSERT_THROW(
+      run("SELECT to_unixtime(TIMESTAMP '2026-07-28 18:30:00 Asia/Bangkok')"),
+      "blocked by test check");
+  EXPECT_EQ(numChecks, 1);
+
+  // A rejected CTAS leaves no target table, on the plain path and on the
+  // EXPLAIN ANALYZE one, which creates the table for real. SHOW TABLES carries
+  // neither trigger, so it answers on its own merits.
+  for (const auto* sql :
+       {"CREATE TABLE t AS SELECT 1 AS x",
+        "EXPLAIN ANALYZE CREATE TABLE t AS SELECT 1 AS x"}) {
+    SCOPED_TRACE(sql);
+    VELOX_ASSERT_THROW(run(sql), "blocked by test check");
+    // SHOW TABLES yields no batches at all when the schema is empty.
+    EXPECT_THAT(run("SHOW TABLES").results, testing::IsEmpty());
+  }
+
+  numChecks = 0;
+  for (const auto* sql :
+       {"EXPLAIN SELECT 1",
+        "EXPLAIN (TYPE IO) SELECT 1",
+        "EXPLAIN CREATE TABLE t3 AS SELECT 1 AS x",
+        "SHOW SESSION"}) {
+    SCOPED_TRACE(sql);
+    run(sql);
+    EXPECT_EQ(numChecks, 0);
+  }
+}
+
 } // namespace
 } // namespace axiom::sql
 

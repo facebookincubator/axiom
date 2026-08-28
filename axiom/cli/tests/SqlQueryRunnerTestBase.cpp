@@ -45,7 +45,8 @@ void SqlQueryRunnerTestBase::TearDown() {
 std::unique_ptr<SqlQueryRunner> SqlQueryRunnerTestBase::makeRunner(
     const std::string& connectorId,
     std::function<std::string()> queryIdGenerator,
-    PermissionCheck permissionCheck) {
+    PermissionCheck permissionCheck,
+    LogicalPlanCheck logicalPlanCheck) {
   return makeRunner(
       [&]() {
         testConnector_ =
@@ -61,18 +62,23 @@ std::unique_ptr<SqlQueryRunner> SqlQueryRunnerTestBase::makeRunner(
         return std::make_pair(testConnector_->connectorId(), kDefaultSchema);
       },
       std::move(queryIdGenerator),
-      std::move(permissionCheck));
+      std::move(permissionCheck),
+      std::move(logicalPlanCheck));
 }
 
 std::unique_ptr<SqlQueryRunner> SqlQueryRunnerTestBase::makeRunner(
     const std::function<std::pair<std::string, std::string>()>& initConnectors,
     std::function<std::string()> queryIdGenerator,
-    PermissionCheck permissionCheck) {
+    PermissionCheck permissionCheck,
+    LogicalPlanCheck logicalPlanCheck) {
   auto runner = std::make_unique<SqlQueryRunner>(
       "test_user", &progressScheduler_, useV2_);
 
   runner->initialize(
-      initConnectors, std::move(permissionCheck), std::move(queryIdGenerator));
+      initConnectors,
+      std::move(permissionCheck),
+      std::move(logicalPlanCheck),
+      std::move(queryIdGenerator));
 
   return runner;
 }

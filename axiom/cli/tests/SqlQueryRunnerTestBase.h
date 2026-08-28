@@ -55,7 +55,8 @@ class SqlQueryRunnerTestBase : public ::testing::Test,
   std::unique_ptr<SqlQueryRunner> makeRunner(
       const std::string& connectorId = "test",
       std::function<std::string()> queryIdGenerator = {},
-      PermissionCheck permissionCheck = {});
+      PermissionCheck permissionCheck = {},
+      LogicalPlanCheck logicalPlanCheck = {});
 
   // Builds a SqlQueryRunner over the connectors 'initConnectors' registers; it
   // returns the connector id and schema to use by default. The caller
@@ -64,7 +65,8 @@ class SqlQueryRunnerTestBase : public ::testing::Test,
       const std::function<std::pair<std::string, std::string>()>&
           initConnectors,
       std::function<std::string()> queryIdGenerator = {},
-      PermissionCheck permissionCheck = {});
+      PermissionCheck permissionCheck = {},
+      LogicalPlanCheck logicalPlanCheck = {});
 
   // Runs 'sql' on runner_ with default options.
   SqlQueryRunner::SqlResult run(std::string_view sql);

@@ -50,6 +50,21 @@ using PermissionCheck =
         const facebook::axiom::logical_plan::ReferencedTables&
             referencedTables)>;
 
+/// Validates a logical plan before optimization and throws to reject a query
+/// the deployment cannot execute. Runs before the optimizer, so it observes
+/// expressions the optimizer would later constant-fold away.
+///
+/// Offered every statement that executes a plan the user wrote: SELECT,
+/// INSERT, DELETE, CREATE TABLE AS SELECT, and EXPLAIN ANALYZE. Not offered
+/// EXPLAIN in any other form, which does not execute and stays usable for
+/// diagnosing a rejected query, nor SHOW SESSION, whose plan the runner builds
+/// from the session config rather than parsing it from the statement.
+///
+/// An empty value disables checking. A single instance serves every query and
+/// is called from planner threads, so implementations must be thread-safe.
+using LogicalPlanCheck =
+    std::function<void(const facebook::axiom::logical_plan::LogicalPlanNode&)>;
+
 /// Holds query metadata captured at query start time.
 struct QueryStartInfo {
   /// Unique identifier for this query execution.
@@ -222,13 +237,15 @@ class SqlQueryRunner {
     return progressScheduler_ != nullptr;
   }
 
-  /// Initializes the runner with connectors, an optional permission check, and
-  /// a query ID generator (defaults to QueryIdGenerator if not provided).
-  /// Call once before running queries.
+  /// Initializes the runner with connectors, an optional permission check, an
+  /// optional logical plan check that rejects plans the deployment cannot
+  /// execute, and a query ID generator (defaults to QueryIdGenerator if not
+  /// provided). Call once before running queries.
   void initialize(
       const std::function<std::pair<std::string, std::string>()>&
           initializeConnectors,
       PermissionCheck permissionCheck = {},
+      LogicalPlanCheck logicalPlanCheck = {},
       std::function<std::string()> queryIdGenerator = {});
 
   struct RunOptions {
@@ -414,8 +431,9 @@ class SqlQueryRunner {
   SqlResult run(std::string_view sql, const RunOptions& options);
 
   /// Runs a single parsed SQL statement without lifecycle hooks (no permission
-  /// check, no callbacks). Use run(string_view, RunOptions) for the full
-  /// lifecycle.
+  /// check, no callbacks). The logical plan check still applies: it is a
+  /// correctness gate rather than a lifecycle hook, so no entry point skips
+  /// it. Use run(string_view, RunOptions) for the full lifecycle.
   SqlResult runUnchecked(
       const presto::SqlStatement& statement,
       const RunOptions& options);
@@ -526,6 +544,21 @@ class SqlQueryRunner {
       QueryCompletionInfo& completionInfo,
       const presto::ViewMap& views,
       const facebook::axiom::logical_plan::ReferencedTables& referencedTables);
+
+  // Invokes the configured LogicalPlanCheck, which see for the statements
+  // that reach it. Called before CTAS creates its target table, so a rejected
+  // query leaves nothing behind. No-op when no check is installed.
+  void checkLogicalPlan(
+      const facebook::axiom::logical_plan::LogicalPlanNode& logicalPlan) const;
+
+  // Creates the CTAS target table and returns a SchemaResolver pointed at it.
+  // 'explain' makes the creation a dry run, for the EXPLAIN forms that do not
+  // run the query. Callers that execute must call checkLogicalPlan() first: a
+  // rejected CTAS must not leave an empty table behind.
+  std::shared_ptr<facebook::axiom::connector::SchemaResolver> createTargetTable(
+      std::string_view queryId,
+      const presto::CreateTableAsSelectStatement& ctas,
+      bool explain);
 
   std::shared_ptr<facebook::velox::core::QueryCtx> newQuery(
       const RunOptions& options);
@@ -684,6 +717,9 @@ class SqlQueryRunner {
 
   // Permission check callback invoked before query execution.
   PermissionCheck permissionCheck_;
+
+  // Logical plan check invoked before execution. Empty installs no check.
+  LogicalPlanCheck logicalPlanCheck_;
 
   // Generates unique query IDs.
   std::function<std::string()> queryIdGenerator_;

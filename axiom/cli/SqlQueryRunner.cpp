@@ -263,6 +263,7 @@ void SqlQueryRunner::initialize(
     const std::function<std::pair<std::string, std::string>()>&
         initializeConnectors,
     PermissionCheck permissionCheck,
+    LogicalPlanCheck logicalPlanCheck,
     std::function<std::string()> queryIdGenerator) {
   static folly::once_flag kInitialized;
 
@@ -296,6 +297,7 @@ void SqlQueryRunner::initialize(
   defaultSchema_ = std::move(defaultSchema);
 
   permissionCheck_ = std::move(permissionCheck);
+  logicalPlanCheck_ = std::move(logicalPlanCheck);
 
   if (queryIdGenerator) {
     queryIdGenerator_ = std::move(queryIdGenerator);
@@ -973,6 +975,7 @@ SqlQueryRunner::co_runExplainStatement(
 
   logical_plan::LogicalPlanNodePtr logicalPlan;
   std::shared_ptr<connector::SchemaResolver> schemaResolver;
+  const presto::CreateTableAsSelectStatement* ctas{nullptr};
 
   if (statement->isSelect()) {
     logicalPlan = statement->as<presto::SelectStatement>()->plan();
@@ -981,16 +984,8 @@ SqlQueryRunner::co_runExplainStatement(
   } else if (statement->isDelete()) {
     logicalPlan = statement->as<presto::DeleteStatement>()->plan();
   } else if (statement->isCreateTableAsSelect()) {
-    const auto* ctas = statement->as<presto::CreateTableAsSelectStatement>();
+    ctas = statement->as<presto::CreateTableAsSelectStatement>();
     logicalPlan = ctas->plan();
-
-    // EXPLAIN ANALYZE runs the query for real, so createTable must not
-    // be in explain mode. Regular EXPLAIN must be side-effect-free.
-    auto table = createTable(queryId, *ctas, /*explain=*/!explain.isAnalyze());
-    schemaResolver = std::make_shared<connector::SchemaResolver>(
-        connector::ConnectorMetadataRegistry::global());
-    schemaResolver->setTargetTable(
-        ctas->connectorId(), ctas->tableName(), table);
   } else if (statement->isCreateTable()) {
     const auto* create = statement->as<presto::CreateTableStatement>();
     createTable(queryId, *create, /*explain=*/true);
@@ -1083,6 +1078,18 @@ SqlQueryRunner::co_runExplainStatement(
     VELOX_NYI("Unsupported EXPLAIN query: {}", statement->kindName());
   }
 
+  // EXPLAIN ANALYZE is the only EXPLAIN that runs the query. The others are
+  // side-effect-free: they skip the check so they stay usable for diagnosing a
+  // rejected query, and create the target table in explain mode.
+  if (explain.isAnalyze()) {
+    checkLogicalPlan(*logicalPlan);
+  }
+
+  if (ctas != nullptr) {
+    schemaResolver =
+        createTargetTable(queryId, *ctas, /*explain=*/!explain.isAnalyze());
+  }
+
   if (explain.type() == presto::ExplainStatement::Type::kIo) {
     co_yield SqlResultChunk{runExplainIo(
         *statement,
@@ -1122,15 +1129,10 @@ SqlQueryRunner::co_runPlanStatement(
   logical_plan::LogicalPlanNodePtr logicalPlan;
   std::shared_ptr<connector::SchemaResolver> schemaResolver;
   velox::RowTypePtr emptyResultType;
+  const presto::CreateTableAsSelectStatement* ctas{nullptr};
 
   if (sqlStatement.isCreateTableAsSelect()) {
-    const auto* ctas = sqlStatement.as<presto::CreateTableAsSelectStatement>();
-    auto table = createTable(queryId, *ctas);
-
-    schemaResolver = std::make_shared<connector::SchemaResolver>(
-        connector::ConnectorMetadataRegistry::global());
-    schemaResolver->setTargetTable(
-        ctas->connectorId(), ctas->tableName(), table);
+    ctas = sqlStatement.as<presto::CreateTableAsSelectStatement>();
     logicalPlan = ctas->plan();
   } else if (sqlStatement.isInsert()) {
     logicalPlan = sqlStatement.as<presto::InsertStatement>()->plan();
@@ -1141,6 +1143,14 @@ SqlQueryRunner::co_runPlanStatement(
     emptyResultType = logicalPlan->outputType();
   } else {
     VELOX_UNREACHABLE("Unexpected plan statement: {}", sqlStatement.kindName());
+  }
+
+  // Runs before the CTAS below creates its target table, so a rejected CTAS
+  // leaves nothing behind.
+  checkLogicalPlan(*logicalPlan);
+
+  if (ctas != nullptr) {
+    schemaResolver = createTargetTable(queryId, *ctas, /*explain=*/false);
   }
 
   auto generator = co_runLogicalPlan(
@@ -1560,6 +1570,8 @@ SqlQueryRunner::executeSelectOrInsert(
         statement.kindName());
   }
 
+  checkLogicalPlan(*logicalPlan);
+
   auto queryCtx = newQuery(options);
   auto planAndStats = optimize(logicalPlan, queryCtx, options);
   return makeLocalRunner(planAndStats, queryCtx, options, noopRuntimeStats_);
@@ -1812,6 +1824,24 @@ SqlQueryRunner::makeOptimizerSession(
       std::move(connectorProperties));
 }
 
+void SqlQueryRunner::checkLogicalPlan(
+    const logical_plan::LogicalPlanNode& logicalPlan) const {
+  if (logicalPlanCheck_) {
+    logicalPlanCheck_(logicalPlan);
+  }
+}
+
+std::shared_ptr<connector::SchemaResolver> SqlQueryRunner::createTargetTable(
+    std::string_view queryId,
+    const presto::CreateTableAsSelectStatement& ctas,
+    bool explain) {
+  auto table = createTable(queryId, ctas, explain);
+  auto schemaResolver = std::make_shared<connector::SchemaResolver>(
+      connector::ConnectorMetadataRegistry::global());
+  schemaResolver->setTargetTable(ctas.connectorId(), ctas.tableName(), table);
+  return schemaResolver;
+}
+
 optimizer::PlanAndStats SqlQueryRunner::optimize(
     const logical_plan::LogicalPlanNodePtr& logicalPlan,
     const std::shared_ptr<velox::core::QueryCtx>& queryCtx,
@@ -1961,6 +1991,9 @@ SqlQueryRunner::co_showSession(
   // destroys co_await-operand temporaries at the suspension point.
   auto plan = showSessionPlan(*sessionConfig_, defaultConnectorId_, statement);
   auto resultType = plan->outputType();
+  // Not checked: this plan is built from the session config rather than parsed
+  // from the statement, so a blocklist match would name a feature the user did
+  // not write and cannot rephrase.
   auto generator = co_runLogicalPlan(plan, options, timing, planString);
   bool yieldedBatch{false};
   while (auto batch = co_await generator.next()) {
