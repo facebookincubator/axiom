@@ -145,17 +145,17 @@ folly::F14FastSet<const Join*> markProducersReadInCluster(
 }
 
 // True if some relation appears in an edge's TES but in no edge's left/right
-// endpoints. Such a relation is connected only by correlation (e.g. an outer
-// table referenced inside a decorrelated subquery), so DPhyp — which grows
-// subgraphs along edge endpoints — cannot assemble it. Dissolving a cross
-// join that strands such a relation produces an unplannable graph.
+// key endpoints. Such a relation is connected only by correlation (e.g. an
+// outer table referenced inside a decorrelated subquery), so DPhyp cannot grow
+// a subgraph to include it. Dissolving a cross join that strands such a
+// relation produces an unplannable graph.
 bool hasEndpointStrandedRelation(const JoinHypergraph& graph) {
   RelationSet endpoints;
   RelationSet tesUnion;
-  for (size_t i = 0; i < graph.edges().size(); ++i) {
-    endpoints.unionSet(graph.edges()[i].left());
-    endpoints.unionSet(graph.edges()[i].right());
-    tesUnion.unionSet(graph.tes()[i]);
+  for (const auto& edge : graph.edges()) {
+    endpoints.unionSet(edge.leftEndpoints());
+    endpoints.unionSet(edge.rightEndpoints());
+    tesUnion.unionSet(edge.totalEligibility());
   }
   tesUnion.except(endpoints);
   return !tesUnion.empty();
@@ -436,10 +436,10 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     JoinHypergraph graph = buildGraph();
 
     // Dissolving a cross join can strand a correlation-only relation (in an
-    // edge's TES but no edge's endpoints), which DPhyp cannot assemble. Redo
-    // without dissolving so that relation stays bundled with its cross-join
-    // partner. Clusters that benefit from dissolution have no stranded
-    // relation and keep the dissolved form.
+    // edge's TES but no edge's key endpoints), which DPhyp cannot assemble.
+    // Redo without dissolving so that relation stays bundled with its
+    // cross-join partner. Clusters that benefit from dissolution have no
+    // stranded relation and keep the dissolved form.
     if (hasEndpointStrandedRelation(graph)) {
       cluster = JoinCluster{};
       cluster.root = node;
@@ -463,7 +463,8 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       }
       return id;
     };
-    for (const RelationSet& tes : graph.tes()) {
+    for (const auto& edge : graph.edges()) {
+      const RelationSet tes = edge.totalEligibility();
       int32_t representative = -1;
       tes.forEach([&](int32_t id) {
         if (representative < 0) {
@@ -495,8 +496,8 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         options_.broadcastSizeLimit};
     if (components.size() == 1) {
       MemoOpCP root = dphyp.enumerate();
-      // No costable plan (a relation or join key lacked stats): keep the
-      // cluster in query order.
+      // Enumeration found no valid costable plan; keep the cluster in query
+      // order.
       if (root == nullptr) {
         return rewriteUnclusteredJoin(node, context);
       }

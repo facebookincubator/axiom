@@ -1051,6 +1051,36 @@ TEST_P(UnnestTest, inSubqueryOverUnnest) {
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributed.plan, matcher);
 }
 
+// Chained Unnests on the null-padded side are completed before the outer join.
+TEST_P(UnnestTest, nestedUnnestOnOuterJoinSide) {
+  const auto query =
+      "SELECT l.a, y "
+      "FROM (VALUES (1), (2)) AS l(a) "
+      "LEFT JOIN ("
+      "  (VALUES (1, ARRAY[ARRAY[10]])) AS r(b, xs) "
+      "  CROSS JOIN UNNEST(xs) AS u(ys) "
+      "  CROSS JOIN UNNEST(ys) AS v(y)"
+      ") ON l.a = r.b";
+  SCOPED_TRACE(query);
+
+  const auto logicalPlan = parseSelect(query, kTestConnectorId);
+  const auto matcher =
+      matchValues()
+          .aliases({"b", "xs"})
+          .unnest({"b"}, {"xs"})
+          .aliases({"b", "ys"})
+          .unnest({"b"}, {"ys"})
+          .aliases({"b", "y"})
+          .hashJoinRight(matchValues().aliases({"a"}), {.keys = {{"b = a"}}})
+          .project({"a", "y"})
+          .build();
+
+  AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
+
+  auto distributed = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributed.plan, matcher);
+}
+
 // An expansion goes above a join that does not read what it produces, so the
 // join runs on the rows before they multiply.
 TEST_P(UnnestTest, unnestPlacedAboveJoin) {

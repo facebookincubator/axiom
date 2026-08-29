@@ -49,7 +49,7 @@ void appendNarrowed(
 // `graph.coverOutputColumns(cover)`, which collapses each within-cover
 // equi-group to one representative — exactly the set the cost model charges
 // for, so the executed plan matches its estimated width. The one exception is
-// an outer join carrying extra edges, which keeps both columns of each so the
+// a join carrying residual edges, which keeps both columns of each so the
 // filter above it can read them. Left-then-right order is preserved. A column
 // produced by no relation in `cover` (e.g. a semijoin mark synthesized below,
 // or a key a shuffle materialized) is outside the demand universe and is always
@@ -210,20 +210,18 @@ NodeCP restoreTargets(
       {node, std::move(exprs), ColumnVector{targets}});
 }
 
-// The equalities of `extraEdges` — the inner edges that crossed the same
-// partition as an Unnest or an outer join, which cannot take them as keys.
-// Equality is symmetric, so the edges' orientation does not matter here. Inner
-// edges carry no filter (`JoinEdge` enforces that), so the keys are the whole
-// predicate.
-ExprVector extraEdgeEqualities(
-    const std::vector<size_t>& extraEdges,
+// The equalities of residual inner edges. Equality is symmetric, so the edges'
+// orientation does not matter here. Inner edges carry no filter (`JoinEdge`
+// enforces that), so the keys are the whole predicate.
+ExprVector residualEdgeEqualities(
+    const std::vector<size_t>& residualEdges,
     const ExprFactory::ExprSubstitution& substitution,
     EmitState& state) {
   ExprVector predicates;
-  for (size_t extraIndex : extraEdges) {
-    const auto& extra = state.graph.edges()[extraIndex];
-    const auto& leftKeys = extra.leftKeys();
-    const auto& rightKeys = extra.rightKeys();
+  for (size_t index : residualEdges) {
+    const auto& edge = state.graph.edges()[index];
+    const auto& leftKeys = edge.leftKeys();
+    const auto& rightKeys = edge.rightKeys();
     VELOX_CHECK_EQ(leftKeys.size(), rightKeys.size());
     for (size_t i = 0; i < leftKeys.size(); ++i) {
       predicates.push_back(state.exprs.makeEq(leftKeys[i], rightKeys[i]));
@@ -265,7 +263,7 @@ NodeCP emitLeaf(const LeafOp* leaf, EmitState& state) {
 // original Unnest IR node stored on the Unnest relation.
 Emitted buildUnnest(const UnnestOp* unnest, Emitted input, EmitState& state) {
   const auto& edge = state.graph.edges()[unnest->edgeIndex];
-  const int8_t unnestRelId = edge.right().min();
+  const int8_t unnestRelId = edge.rightEndpoints().min();
   const auto* origUnnest =
       state.graph.relation(unnestRelId).node()->as<Unnest>();
 
@@ -285,7 +283,8 @@ Emitted buildUnnest(const UnnestOp* unnest, Emitted input, EmitState& state) {
       substitution,
       state);
   appendAll(
-      predicates, extraEdgeEqualities(unnest->extraEdges, substitution, state));
+      predicates,
+      residualEdgeEqualities(unnest->residualEdges, substitution, state));
 
   // The expansion replicates the columns a consumer above the cover demands,
   // plus those the predicates above read: the Filter sits on this node's
@@ -439,32 +438,32 @@ Emitted buildJoin(
     outputColumns = std::move(*narrowed);
   }
 
-  // If DPhyp chose the swapped orientation, edge.left() covers
+  // If DPhyp chose the swapped orientation, the left eligibility side covers
   // join->right; swap keys.
   ExprVector leftKeys{edge.leftKeys()};
   ExprVector rightKeys{edge.rightKeys()};
-  if (edge.left().isSubset(join->right->cover())) {
+  if (edge.leftEligibility().isSubset(join->right->cover())) {
     std::swap(leftKeys, rightKeys);
   }
 
   // Additional inner edges this join applies (a cyclic join graph can have
   // several edges crossing one partition), each orientation-corrected
-  // independently. Under an inner join they conjoin into its keys. Under an
-  // outer join they cannot: a condition null-pads the rows it rejects, while
-  // these must drop them, so they filter the join's output instead — which is
-  // what applying the inner join above the outer one means. Inner edges carry
-  // no filter (their non-equi conjuncts live in the hypergraph's filter pool).
-  if (isInner) {
-    for (size_t extraIndex : join->extraEdges) {
-      const auto& extra = state.graph.edges()[extraIndex];
-      ExprVector extraLeftKeys{extra.leftKeys()};
-      ExprVector extraRightKeys{extra.rightKeys()};
-      if (extra.left().isSubset(join->right->cover())) {
-        std::swap(extraLeftKeys, extraRightKeys);
-      }
-      appendAll(leftKeys, extraLeftKeys);
-      appendAll(rightKeys, extraRightKeys);
+  // independently. `extraEdges` are guaranteed to split across the two
+  // children, so they conjoin into the join keys. Residual edges are kept
+  // separately.
+  VELOX_DCHECK(isInner || join->extraEdges.empty());
+  for (size_t extraIndex : join->extraEdges) {
+    const auto& extra = state.graph.edges()[extraIndex];
+    const bool forward =
+        extra.leftEligibility().isSubset(join->left->cover()) &&
+        extra.rightEligibility().isSubset(join->right->cover());
+    ExprVector extraLeftKeys{extra.leftKeys()};
+    ExprVector extraRightKeys{extra.rightKeys()};
+    if (!forward) {
+      std::swap(extraLeftKeys, extraRightKeys);
     }
+    appendAll(leftKeys, extraLeftKeys);
+    appendAll(rightKeys, extraRightKeys);
   }
 
   ExprVector filter;
@@ -480,14 +479,13 @@ Emitted buildJoin(
   leftKeys = rewrite(leftKeys, substitution, state);
   rightKeys = rewrite(rightKeys, substitution, state);
   filter = rewrite(filter, substitution, state);
-  // A non-inner join applies its own condition — the edge's filter, above —
-  // and everything else this cover makes ready goes above it: the extra edges'
-  // equalities, and the pool conjuncts no child could apply. Neither can join
-  // the condition, which would null-pad the rows they reject instead of
-  // dropping them.
-  ExprVector aboveJoin;
+  // A non-inner join applies its edge filter as the join condition. Conjuncts
+  // newly eligible at this cover and residual edge equalities run above the
+  // join; putting them in a non-inner condition would null-pad rejected rows
+  // instead of dropping them.
+  ExprVector aboveJoin =
+      residualEdgeEqualities(join->residualEdges, substitution, state);
   if (!isInner) {
-    aboveJoin = extraEdgeEqualities(join->extraEdges, substitution, state);
     appendAll(
         aboveJoin,
         rewrite(
@@ -496,7 +494,7 @@ Emitted buildJoin(
             state));
   }
 
-  // The cover collapses the equated columns of an extra edge to one
+  // The cover collapses the equated columns of a residual edge to one
   // representative, so the narrowed output carries only that one. The filter
   // reads both, and both are emitted by the children — the collapse spans the
   // two child covers, so neither child applied it — so keep them here.

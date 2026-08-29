@@ -18,6 +18,15 @@ SELECT x, v FROM arrays
 CROSS JOIN UNNEST(nested) AS _(y)
 CROSS JOIN UNNEST(y) AS __(v)
 ----
+-- Chained Unnests on an optional side preserve unmatched outer rows.
+SELECT l.a, y
+FROM (VALUES (1), (2)) AS l(a)
+LEFT JOIN (
+  (VALUES (1, ARRAY[ARRAY[10]])) AS r(b, xs)
+  CROSS JOIN UNNEST(xs) AS u(ys)
+  CROSS JOIN UNNEST(ys) AS v(y)
+) ON l.a = r.b
+----
 -- Two arrays unnested together are zipped, and the shorter one is padded with
 -- nulls. DuckDB unnests each list independently, so state the rows directly.
 -- duckdb: VALUES (7, 10, 1), (7, 20, 2), (7, 30, NULL), (8, 30, 5), (8, 10, NULL), (9, 40, 6), (9, NULL, 7), (9, NULL, 8)

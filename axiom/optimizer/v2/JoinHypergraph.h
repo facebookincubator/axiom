@@ -47,20 +47,17 @@ struct FilterConjunct {
 /// The hypergraph DPhyp enumerates over: a set of relations
 /// (atomic join inputs) connected by hyperedges (predicates).
 ///
-/// Each edge carries a Total Eligibility Set (TES) — the relations that
-/// must already be in the joined set before the edge can fire.
+/// Each edge's eligibility sides form its Total Eligibility Set (TES) — the
+/// relations that must already be in the joined set before the edge can fire.
 ///
 /// Typical use: call `addRelation` once for each base input, then
-/// `addEdge` once for each predicate, then pass the result to
-/// DPhyp for plan enumeration. Edges and their TES are stored in
-/// parallel: `tes()[i]` is the TES of `edges()[i]`.
+/// `addEdge` once for each predicate, then pass the result to DPhyp for plan
+/// enumeration.
 ///
 /// Invariants (maintained across construction):
 ///   - `relations()[i].id() == i`.
 ///   - Every relation id referenced by an edge is in
 ///     `[0, relations().size())`.
-///   - `tes()[i]` is a superset of
-///     `edges()[i].left() ∪ edges()[i].right()`.
 class JoinHypergraph {
  public:
   /// Constructs a Relation with the next assigned id and adds it
@@ -87,10 +84,9 @@ class JoinHypergraph {
     return expandedRelationIds_;
   }
 
-  /// Appends an edge with its TES. `tes` must be a superset of
-  /// `edge.left() ∪ edge.right()`, and every relation referenced
-  /// by `edge` or `tes` must already be in `relations()`.
-  void addEdge(JoinEdge edge, RelationSet tes);
+  /// Appends an edge whose endpoints and eligibility sides must reference only
+  /// relations already in `relations()`. Throws if this invariant is violated.
+  void addEdge(JoinEdge edge);
 
   /// Appends a filter conjunct. `conjunct.relations` must be
   /// a subset of the relations already in `relations()`.
@@ -153,14 +149,8 @@ class JoinHypergraph {
     return edges_;
   }
 
-  /// Per-edge Total Eligibility Sets, aligned with `edges()`:
-  /// `tes()[i]` is the TES of `edges()[i]`.
-  const std::vector<RelationSet>& tes() const {
-    return tes_;
-  }
-
   /// Returns the set of relations reachable from `seed` by repeatedly
-  /// following edges whose endpoints are entirely within `bound`.
+  /// following edges whose eligibility sides are entirely within `bound`.
   RelationSet connectedComponent(RelationSet seed, RelationSet bound) const;
 
   /// Checks that all relations are connected to each other via
@@ -176,8 +166,6 @@ class JoinHypergraph {
   // Indexed by relation id.
   std::vector<Relation> relations_;
   std::vector<JoinEdge> edges_;
-  // Parallel to `edges_`: `tes_[i]` is the TES of `edges_[i]`.
-  std::vector<RelationSet> tes_;
   std::vector<FilterConjunct> filterConjuncts_;
   // Bitset of every relation id currently in the hypergraph.
   RelationSet relationIds_;

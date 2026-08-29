@@ -103,9 +103,10 @@ class LeafOp : public MemoOp {
   }
 };
 
-/// Join entry: combines two child subplans via the predicate at
-/// `graph.edges()[edgeIndex]`. `joinType` records the join
-/// semantic chosen.
+/// Combines two child subplans via the predicate at
+/// `graph.edges()[edgeIndex]`. Extra edges contribute
+/// hash keys, while residual edges become a Filter above the join.
+/// `joinType` records the chosen physical orientation.
 class JoinOp : public MemoOp {
  public:
   MemoOpCP const left;
@@ -127,6 +128,11 @@ class JoinOp : public MemoOp {
   /// single-edge join; every entry is a `kInner` equi-edge.
   const std::vector<size_t> extraEdges;
 
+  /// Inner equi-join edges evaluated as a Filter above this join rather than as
+  /// hash keys. They either do not split across the children, or accompany a
+  /// non-inner primary edge. They are never used for repartitioning.
+  const std::vector<size_t> residualEdges;
+
   JoinOp(
       Cost cost,
       MemoOpCP leftChild,
@@ -135,6 +141,7 @@ class JoinOp : public MemoOp {
       velox::core::JoinType type,
       bool reversedAnti = false,
       std::vector<size_t> extraEdges = {},
+      std::vector<size_t> residualEdges = {},
       Partitioning outputPartitioning = {});
 
   RelationSet cover() const override {
@@ -146,27 +153,26 @@ class JoinOp : public MemoOp {
 };
 
 /// Unnest entry: expands `input` by the Unnest relation at
-/// `graph.edges()[edgeIndex].right()`, adding that relation to the cover. Unary
-/// because an Unnest has no plan of its own — it produces rows only for the
-/// input it expands — so a relation set containing the Unnest relation is
-/// reachable only through this op, applied once the input relations are
-/// covered. Which input it is applied to is the placement DPhyp costs.
+/// `graph.edges()[edgeIndex].rightEndpoints()`, adding that relation to the
+/// cover. Unary because an Unnest has no plan of its own — it produces rows
+/// only for the input it expands — so a relation set containing the Unnest
+/// relation is reachable only through this op, applied once the input relations
+/// are covered. Which input it is applied to is the placement DPhyp costs.
 class UnnestOp : public MemoOp {
  public:
   MemoOpCP const input;
   const size_t edgeIndex;
 
-  /// Inner equi-join edges that also cross the partition this Unnest was
-  /// applied at, and are applied as a filter above it. See
-  /// `JoinOp::extraEdges`.
-  const std::vector<size_t> extraEdges;
+  /// Inner equi-join edges that become eligible when this Unnest is applied
+  /// and are evaluated as a Filter above it.
+  const std::vector<size_t> residualEdges;
 
   UnnestOp(
       Cost cost,
       MemoOpCP inputChild,
       size_t edge,
       RelationSet unnestRelation,
-      std::vector<size_t> extraEdges);
+      std::vector<size_t> residualEdges);
 
   RelationSet cover() const override {
     return cover_;
