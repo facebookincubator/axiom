@@ -217,6 +217,34 @@ ExprVector unionColumnArgs(const ExprVector& keys, const ExprVector& args) {
   return merged;
 }
 
+// Returns the shared set of non-literal DISTINCT arguments when every call is
+// unfiltered DISTINCT over that same set, or nullopt otherwise. ORDER BY does
+// not affect eligibility because the outer Aggregate preserves each call's
+// original ordering.
+std::optional<ExprVector> commonDistinctArgs(const Aggregate& aggregate) {
+  if (aggregate.aggregates().empty()) {
+    return std::nullopt;
+  }
+
+  std::optional<PlanObjectSet> commonArgSet;
+  ExprVector commonArgs;
+  for (const auto* call : aggregate.aggregates()) {
+    if (!call->isDistinct() || call->condition() != nullptr) {
+      return std::nullopt;
+    }
+
+    ExprVector args = unionColumnArgs({}, call->args());
+    PlanObjectSet argSet = PlanObjectSet::fromObjects(args);
+    if (!commonArgSet.has_value()) {
+      commonArgs = std::move(args);
+      commonArgSet = std::move(argSet);
+    } else if (argSet != *commonArgSet) {
+      return std::nullopt;
+    }
+  }
+  return commonArgs;
+}
+
 // Describes one MarkDistinct node independently of its physical input.
 struct MarkDistinctSpec {
   ExprVector keys;
@@ -897,7 +925,66 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       return planAggregateStages(prepared, prepared->input());
     }
 
+    if (auto commonArgs = commonDistinctArgs(*prepared)) {
+      if (commonArgs->empty() && prepared->groupingKeys().empty()) {
+        // A keyless inner Aggregate would create a row on empty input and
+        // change the result Aggregate's empty-input semantics.
+        return planAggregateStages(prepared, prepared->input());
+      }
+      return planDistinctToGroupBy(prepared, *commonArgs);
+    }
     return planDistinctToMarkDistinct(prepared);
+  }
+
+  // Plans common-signature DISTINCT calls as an inner deduplication Aggregate
+  // followed by the non-DISTINCT result Aggregate.
+  NodeCP planDistinctToGroupBy(
+      const Aggregate* aggregate,
+      const ExprVector& commonArgs) {
+    ExprVector innerKeys =
+        unionColumnArgs(aggregate->groupingKeys(), commonArgs);
+    ColumnVector innerColumns;
+    innerColumns.reserve(innerKeys.size());
+    for (ExprCP key : innerKeys) {
+      ColumnCP column = key->as<Column>();
+      VELOX_CHECK_NOT_NULL(
+          column,
+          "DISTINCT-to-GroupBy key must be a Column reference; got: {}",
+          key->toString());
+      innerColumns.push_back(column);
+    }
+
+    AggregateCP inner = builder().make<Aggregate>(Aggregate::Key{
+        .input = aggregate->input(),
+        .groupingKeys = std::move(innerKeys),
+        .aggregates = {},
+        .outputColumns = std::move(innerColumns),
+        .step = AggregateStep::kSingle,
+        .groupId = nullptr,
+        .globalGroupingSets = {}});
+    NodeCP physicalInner = planAggregateStages(inner, inner->input());
+
+    ExprVector outerKeys;
+    outerKeys.reserve(aggregate->groupingKeys().size());
+    for (size_t i = 0; i < aggregate->groupingKeys().size(); ++i) {
+      outerKeys.push_back(physicalInner->outputColumns()[i]);
+    }
+
+    AggregateCallVector outerCalls;
+    outerCalls.reserve(aggregate->aggregates().size());
+    for (const auto* call : aggregate->aggregates()) {
+      outerCalls.push_back(call->dropDistinct());
+    }
+
+    AggregateCP outer = builder().make<Aggregate>(Aggregate::Key{
+        .input = physicalInner,
+        .groupingKeys = std::move(outerKeys),
+        .aggregates = std::move(outerCalls),
+        .outputColumns = aggregate->outputColumns(),
+        .step = aggregate->step(),
+        .groupId = aggregate->groupId(),
+        .globalGroupingSets = aggregate->globalGroupingSets()});
+    return planAggregateStages(outer, physicalInner);
   }
 
   // Plans the MarkDistinct groups and the rewritten result Aggregate without
