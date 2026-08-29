@@ -27,7 +27,6 @@ add_library(
   EmitPass.cpp
   EstimateLeafStatsPass.cpp
   EstimateProvider.cpp
-  ExpandAggregatePass.cpp
   ExprEmitter.cpp
   ExprFactory.cpp
   ExprSimplifier.cpp

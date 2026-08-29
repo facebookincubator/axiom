@@ -338,6 +338,9 @@ class Rewriter : public NodeRewriter<> {
  protected:
   NodeCP rewriteAggregate(const Aggregate* aggregate, NoContext& context)
       override;
+  NodeCP rewriteMarkDistinct(
+      const MarkDistinct* markDistinct,
+      NoContext& context) override;
   NodeCP rewriteWindow(const Window* window, NoContext& context) override;
   NodeCP rewriteRowNumber(const RowNumber* rowNumber, NoContext& context)
       override;
@@ -361,6 +364,35 @@ NodeCP Rewriter::rewriteAggregate(
     NoContext& context) {
   return PrecomputeProjectionsPass::prepareAggregateInputs(
       aggregate, rewrite(aggregate->input(), context), builder());
+}
+
+NodeCP Rewriter::rewriteMarkDistinct(
+    const MarkDistinct* markDistinct,
+    NoContext& context) {
+  NodeCP rewrittenInput = rewrite(markDistinct->input(), context);
+  const PlanObjectSet rewrittenInputColumns =
+      PlanObjectSet::fromObjects(rewrittenInput->outputColumns());
+  PrecomputeProjections precompute{
+      rewrittenInput, builder(), /*projectAllInputs=*/true};
+
+  ExprVector distinctKeys;
+  distinctKeys.reserve(markDistinct->distinctKeys().size());
+  for (ExprCP key : markDistinct->distinctKeys()) {
+    distinctKeys.push_back(precompute.toColumn(key));
+  }
+
+  NodeCP finalInput = std::move(precompute).node();
+  const PlanObjectSet finalInputColumns =
+      PlanObjectSet::fromObjects(finalInput->outputColumns());
+  return builder().make<MarkDistinct>(MarkDistinct::Key{
+      .input = finalInput,
+      .markers = markDistinct->markers(),
+      .distinctKeys = std::move(distinctKeys),
+      .masks = markDistinct->masks(),
+      .outputColumns = replacePrefix(
+          markDistinct->outputColumns(),
+          markDistinct->input()->outputColumns().size(),
+          finalInput->outputColumns())});
 }
 
 NodeCP Rewriter::rewriteWindow(const Window* window, NoContext& context) {

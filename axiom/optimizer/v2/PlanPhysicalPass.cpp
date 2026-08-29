@@ -32,6 +32,7 @@
 #include "axiom/optimizer/v2/JoinCluster.h"
 #include "axiom/optimizer/v2/JoinTreeEmitter.h"
 #include "axiom/optimizer/v2/NodeRewriter.h"
+#include "axiom/optimizer/v2/PrecomputeProjectionsPass.h"
 
 namespace facebook::axiom::optimizer::v2 {
 
@@ -186,6 +187,123 @@ bool satisfies(
       return partitioning.isBucketedOn(keys);
   }
   VELOX_UNREACHABLE();
+}
+
+// Returns true when any result call requires DISTINCT semantics.
+bool hasDistinct(const Aggregate& aggregate) {
+  return std::ranges::any_of(aggregate.aggregates(), [](const auto* call) {
+    return call->isDistinct();
+  });
+}
+
+// Appends each non-literal argument Column not already present in `keys`.
+ExprVector unionColumnArgs(const ExprVector& keys, const ExprVector& args) {
+  ExprVector merged = keys;
+  PlanObjectSet seen = PlanObjectSet::fromObjects(keys);
+  for (ExprCP arg : args) {
+    if (arg->is(PlanType::kLiteralExpr)) {
+      continue;
+    }
+    VELOX_CHECK(
+        arg->is(PlanType::kColumnExpr),
+        "Expected column or literal aggregate arg: {}",
+        arg->toString());
+    if (seen.contains(arg)) {
+      continue;
+    }
+    seen.add(arg);
+    merged.push_back(arg);
+  }
+  return merged;
+}
+
+// Describes one MarkDistinct node independently of its physical input.
+struct MarkDistinctSpec {
+  ExprVector keys;
+  ColumnVector markers;
+  ColumnVector masks;
+};
+
+// Carries the marker groups and rewritten calls for one result Aggregate.
+struct MarkDistinctLowering {
+  std::vector<MarkDistinctSpec> groups;
+  AggregateCallVector rewrittenCalls;
+};
+
+// Accumulates marker sharing while DISTINCT calls are analyzed.
+struct MarkDistinctGroupState {
+  ExprVector keys;
+  ColumnVector markers;
+  ColumnVector masks;
+  folly::F14FastMap<ExprCP, ColumnCP> filterToMarker;
+};
+
+// Groups DISTINCT calls by marker keys and rewrites them to consume markers.
+MarkDistinctLowering analyzeMarkDistinct(const Aggregate& aggregate) {
+  const PlanObjectSet groupingKeySet =
+      PlanObjectSet::fromObjects(aggregate.groupingKeys());
+  folly::F14VectorMap<PlanObjectSet, MarkDistinctGroupState> groups;
+  folly::F14FastMap<const optimizer::Aggregate*, ColumnCP> aggregateToMarker;
+
+  for (const auto* call : aggregate.aggregates()) {
+    if (!call->isDistinct()) {
+      continue;
+    }
+
+    ExprVector keys = unionColumnArgs(aggregate.groupingKeys(), call->args());
+    const PlanObjectSet keySet = PlanObjectSet::fromObjects(keys);
+    if (keySet == groupingKeySet) {
+      continue;
+    }
+
+    auto [groupIt, isNewGroup] = groups.try_emplace(keySet);
+    auto& group = groupIt->second;
+    if (isNewGroup) {
+      group.keys = std::move(keys);
+      group.markers.push_back(Column::createBoolean("__mark"));
+      group.filterToMarker[nullptr] = group.markers.back();
+    }
+
+    ExprCP filter = call->condition();
+    auto [filterIt, isNewFilter] =
+        group.filterToMarker.try_emplace(filter, nullptr);
+    if (isNewFilter) {
+      group.markers.push_back(Column::createBoolean("__mark"));
+      filterIt->second = group.markers.back();
+
+      ColumnCP maskColumn = filter->as<Column>();
+      VELOX_CHECK_NOT_NULL(
+          maskColumn,
+          "MarkDistinct mask must be a Column reference; got: {}",
+          filter->toString());
+      group.masks.push_back(maskColumn);
+    }
+    aggregateToMarker[call] = filterIt->second;
+  }
+
+  MarkDistinctLowering lowering;
+  lowering.groups.reserve(groups.size());
+  // F14VectorMap iterates in LIFO order. Reverse it so the first encountered
+  // key set is planned closest to the original input.
+  for (auto it = groups.rbegin(); it != groups.rend(); ++it) {
+    auto& group = it->second;
+    lowering.groups.push_back(
+        MarkDistinctSpec{
+            .keys = std::move(group.keys),
+            .markers = std::move(group.markers),
+            .masks = std::move(group.masks)});
+  }
+
+  lowering.rewrittenCalls.reserve(aggregate.aggregates().size());
+  for (const auto* call : aggregate.aggregates()) {
+    if (auto it = aggregateToMarker.find(call); it != aggregateToMarker.end()) {
+      lowering.rewrittenCalls.push_back(
+          call->replaceDistinctAndFilterByMarker(it->second));
+    } else {
+      lowering.rewrittenCalls.push_back(call);
+    }
+  }
+  return lowering;
 }
 
 // True when regrouping the scans under 'node' can make it bucketed. Mirrors
@@ -765,7 +883,62 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   }
 
   NodeCP rewriteAggregate(const Aggregate* node, NoContext& context) override {
-    return planAggregateStages(node, rewrite(node->input(), context));
+    NodeCP input = rewrite(node->input(), context);
+    if (!hasDistinct(*node) || (numWorkers_ == 1 && numDrivers_ == 1)) {
+      return planAggregateStages(node, input);
+    }
+
+    AggregateCP prepared = PrecomputeProjectionsPass::prepareAggregateInputs(
+        node, input, builder());
+    if (!computePreGroupedKeys(
+             prepared->input()->physicalProperties().local,
+             prepared->groupingKeys())
+             .empty()) {
+      return planAggregateStages(prepared, prepared->input());
+    }
+
+    return planDistinctToMarkDistinct(prepared);
+  }
+
+  // Plans the MarkDistinct groups and the rewritten result Aggregate without
+  // recursively rewriting any generated node.
+  NodeCP planDistinctToMarkDistinct(const Aggregate* aggregate) {
+    MarkDistinctLowering lowering = analyzeMarkDistinct(*aggregate);
+    // No marker group is needed when every DISTINCT call's non-literal
+    // arguments are already grouping keys, including literal-only DISTINCT.
+    if (lowering.groups.empty()) {
+      return planAggregateStages(aggregate, aggregate->input());
+    }
+
+    NodeCP input = aggregate->input();
+    for (const auto& group : lowering.groups) {
+      input = planMarkDistinct(input, group);
+    }
+
+    AggregateCP outer = builder().make<Aggregate>(Aggregate::Key{
+        .input = input,
+        .groupingKeys = aggregate->groupingKeys(),
+        .aggregates = std::move(lowering.rewrittenCalls),
+        .outputColumns = aggregate->outputColumns(),
+        .step = aggregate->step(),
+        .groupId = aggregate->groupId(),
+        .globalGroupingSets = aggregate->globalGroupingSets()});
+    return planAggregateStages(outer, input);
+  }
+
+  // Co-locates a marker group's input across workers and constructs the
+  // corresponding MarkDistinct node.
+  NodeCP planMarkDistinct(NodeCP input, const MarkDistinctSpec& spec) {
+    auto [coLocated, keys] = ensureCoLocated(input, spec.keys);
+    ColumnVector outputColumns{coLocated->outputColumns()};
+    outputColumns.insert(
+        outputColumns.end(), spec.markers.begin(), spec.markers.end());
+    return builder().make<MarkDistinct>(MarkDistinct::Key{
+        .input = coLocated,
+        .markers = spec.markers,
+        .distinctKeys = std::move(keys),
+        .masks = spec.masks,
+        .outputColumns = std::move(outputColumns)});
   }
 
   // Selects single-stage or partial/final execution for an Aggregate whose
