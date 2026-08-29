@@ -32,10 +32,16 @@ namespace {
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class SyntacticJoinOrderTest : public test::HiveQueriesTestBase {
+class SyntacticJoinOrderTest : public test::HiveQueriesTestBase,
+                               public ::testing::WithParamInterface<bool> {
  protected:
   static const inline std::string kDefaultSchema{
       connector::hive::LocalHiveConnectorMetadata::kDefaultSchema};
+
+  void SetUp() override {
+    useV2_ = GetParam();
+    test::HiveQueriesTestBase::SetUp();
+  }
 
   static void SetUpTestCase() {
     test::HiveQueriesTestBase::SetUpTestCase();
@@ -48,7 +54,7 @@ class SyntacticJoinOrderTest : public test::HiveQueriesTestBase {
   }
 };
 
-TEST_F(SyntacticJoinOrderTest, innerJoins) {
+TEST_P(SyntacticJoinOrderTest, innerJoins) {
   lp::PlanBuilder::Context context(
       exec::test::kHiveConnectorId, kDefaultSchema);
 
@@ -208,7 +214,7 @@ TEST_F(SyntacticJoinOrderTest, innerJoins) {
   }
 }
 
-TEST_F(SyntacticJoinOrderTest, outerJoins) {
+TEST_P(SyntacticJoinOrderTest, outerJoins) {
   optimizerOptions_.sampleJoins = false;
 
   // Optimized join order: lineitem x orders.
@@ -292,7 +298,7 @@ TEST_F(SyntacticJoinOrderTest, outerJoins) {
   }
 }
 
-TEST_F(SyntacticJoinOrderTest, crossJoinStartsWithSingleRowSubqueries) {
+TEST_P(SyntacticJoinOrderTest, crossJoinStartsWithSingleRowSubqueries) {
   optimizerOptions_.sampleJoins = false;
 
   auto logicalPlan = parseSelect(
@@ -318,14 +324,17 @@ TEST_F(SyntacticJoinOrderTest, crossJoinStartsWithSingleRowSubqueries) {
                               .singleAggregation({}, {"count(*) as c"}))
           .project()
           .build();
-  AXIOM_ASSERT_PLAN(plan, matcher);
+  // v2 does not implement the single-row uncorrelated subquery exception
+  // documented on OptimizerOptions::syntacticJoinOrder: it leads with t and u
+  // instead of placing them after v.
+  AXIOM_ASSERT_PLAN_V1(plan, matcher);
   checkSame(logicalPlan, referenceResults);
 }
 
 // A single-row uncorrelated subquery that is not the first table in the
 // syntactic join order must not block the tables placed after it. Here the
 // max() subquery sits between the base table and a later correlated subquery.
-TEST_F(SyntacticJoinOrderTest, singleRowSubqueryInMiddleOfJoinOrder) {
+TEST_P(SyntacticJoinOrderTest, singleRowSubqueryInMiddleOfJoinOrder) {
   optimizerOptions_.sampleJoins = false;
 
   auto logicalPlan = parseSelect(
@@ -348,7 +357,9 @@ TEST_F(SyntacticJoinOrderTest, singleRowSubqueryInMiddleOfJoinOrder) {
                               .singleAggregation({}, {"max(l_quantity)"}))
           .project()
           .build();
-  AXIOM_ASSERT_PLAN(plan, matcher);
+  // Same gap: v2 leaves the max() subquery where it was written instead of
+  // placing it after the other tables.
+  AXIOM_ASSERT_PLAN_V1(plan, matcher);
   checkSame(logicalPlan, referenceResults);
 }
 
@@ -356,7 +367,7 @@ TEST_F(SyntacticJoinOrderTest, singleRowSubqueryInMiddleOfJoinOrder) {
 // the optimizer on the SQL-written order, the recursion enumerates
 // candidates and strategies at every level and the optimization does
 // not finish within the timeout.
-TEST_F(SyntacticJoinOrderTest, manyJoinsBoundedByOrder) {
+TEST_P(SyntacticJoinOrderTest, manyJoinsBoundedByOrder) {
   constexpr int32_t kNumTables = 12;
 
   for (int32_t i = 0; i < kNumTables; ++i) {
@@ -398,6 +409,8 @@ TEST_F(SyntacticJoinOrderTest, manyJoinsBoundedByOrder) {
   worker.join();
   future.get();
 }
+
+AXIOM_INSTANTIATE_V1_V2(SyntacticJoinOrderTest);
 
 } // namespace
 } // namespace facebook::axiom::optimizer
