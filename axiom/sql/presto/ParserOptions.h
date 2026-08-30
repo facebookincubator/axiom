@@ -72,8 +72,10 @@ struct ParserOptions : public facebook::velox::config::ConfigProvider {
 
   /// Maximum number of operands in a single flattened AND/OR chain; wider
   /// chains are rejected. Width is how many operands one flattened node holds,
-  /// e.g. a OR b OR c OR d is one node of width four. Distinct from
-  /// maxExpressionDepth, which instead bounds how deeply operators nest.
+  /// e.g. a OR b OR c OR d is one node of width four. Parentheses do not start
+  /// a new node, so (a OR b) OR (c OR d) is also one node of width four.
+  /// Distinct from maxExpressionDepth, which instead bounds how deeply
+  /// operators nest.
   ///
   /// The default is large because flattening collapses a chain into a single
   /// node whose operand count downstream passes process in linear time, and the
