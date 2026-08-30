@@ -42,10 +42,15 @@ TablePtr SchemaResolver::findTable(
     return targetTable_;
   }
 
-  auto metadata = registry_.find(connectorId);
+  return findMetadata(connectorId)->findTable(tableName);
+}
+
+std::shared_ptr<ConnectorMetadata> SchemaResolver::findMetadata(
+    std::string_view connectorId) const {
+  auto metadata = registry_.find(std::string{connectorId});
   VELOX_CHECK_NOT_NULL(
       metadata, "ConnectorMetadata not registered: {}", connectorId);
-  return metadata->findTable(tableName);
+  return metadata;
 }
 
 } // namespace facebook::axiom::connector
