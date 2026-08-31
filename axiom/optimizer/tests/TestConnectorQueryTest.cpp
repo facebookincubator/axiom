@@ -47,7 +47,8 @@ class TestConnectorQueryTest : public QueryTestBase,
     auto handle = std::make_shared<core::InsertTableHandle>(
         kTestConnectorId,
         std::make_shared<connector::TestInsertTableHandle>(SchemaTableName{
-            std::string(connector::TestConnector::kDefaultSchema), tableName}));
+            std::string(connector::TestConnector::kDefaultSchema), tableName}),
+        /*notNullColumns=*/folly::F14FastSet<std::string>{});
     auto write = std::make_shared<core::TableWriteNode>(
         "writenodeid",
         source->outputType(),

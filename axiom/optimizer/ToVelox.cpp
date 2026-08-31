@@ -2319,7 +2319,9 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
   VELOX_CHECK(!finishWrite_, "Only single TableWrite per query supported");
   auto insertTableHandle =
       std::make_shared<const velox::core::InsertTableHandle>(
-          connectorId, handle->veloxHandle());
+          connectorId,
+          handle->veloxHandle(),
+          /*notNullColumns=*/folly::F14FastSet<std::string>{});
   finishWrite_ = {
       metadata,
       connectorId,

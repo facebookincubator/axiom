@@ -142,12 +142,10 @@ class LocalHiveConnectorMetadataTest
         /*explain=*/false);
 
     auto builder = exec::test::PlanBuilder().values({values});
-    auto insertHandle = std::make_shared<core::InsertTableHandle>(
-        velox::exec::test::kHiveConnectorId, handle->veloxHandle());
     auto plan = builder.startTableWriter()
                     .outputDirectoryPath(outputPath)
                     .targetColumns(table->type())
-                    .insertHandle(insertHandle)
+                    .insertHandle(handle->veloxHandle())
                     .fileFormat(format)
                     .endTableWriter()
                     .planNode();
