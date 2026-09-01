@@ -325,6 +325,104 @@ const auto& fragmentTypeNames() {
 
 AXIOM_DEFINE_ENUM_NAME(FragmentType, fragmentTypeNames);
 
+namespace {
+
+// Returns true if the subtree rooted at 'node' contains a leaf whose id is in
+// 'groupedLeafIds' (a bucketed-scan leaf that runs grouped).
+bool subtreeHasGroupedLeaf(
+    const velox::core::PlanNode& node,
+    const folly::F14FastSet<velox::core::PlanNodeId>& groupedLeafIds) {
+  if (groupedLeafIds.contains(node.id())) {
+    return true;
+  }
+  for (const auto& source : node.sources()) {
+    if (subtreeHasGroupedLeaf(*source, groupedLeafIds)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Returns true for joins that preserve rows or existence results from the
+// right input.
+bool preservesRightSide(velox::core::JoinType joinType) {
+  return velox::core::isRightJoin(joinType) ||
+      velox::core::isFullJoin(joinType) ||
+      velox::core::isRightSemiFilterJoin(joinType) ||
+      velox::core::isRightSemiProjectJoin(joinType);
+}
+
+// Returns true if 'node' or a descendant is a right-side join whose two inputs
+// disagree on grouped-ness (one reaches a grouped leaf, the other does not) —
+// the mixed shape Velox rejects under grouped execution.
+bool hasUnsupportedMixedGroupedJoin(
+    const velox::core::PlanNode& node,
+    const folly::F14FastSet<velox::core::PlanNodeId>& groupedLeafIds) {
+  if (const auto* join =
+          dynamic_cast<const velox::core::AbstractJoinNode*>(&node)) {
+    if (join->sources().size() == 2 && preservesRightSide(join->joinType()) &&
+        subtreeHasGroupedLeaf(*join->sources()[0], groupedLeafIds) !=
+            subtreeHasGroupedLeaf(*join->sources()[1], groupedLeafIds)) {
+      return true;
+    }
+  }
+  for (const auto& source : node.sources()) {
+    if (hasUnsupportedMixedGroupedJoin(*source, groupedLeafIds)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// A grouped fragment is unrunnable if it contains a mixed grouped right-side
+// join. 'groupedNodes' with a non-null PartitionType are the grouped leaves.
+bool fragmentHasUnsupportedMixedGroupedJoin(
+    const ExecutableFragment& fragment) {
+  if (fragment.fragment.planNode == nullptr) {
+    return false;
+  }
+  folly::F14FastSet<velox::core::PlanNodeId> groupedLeafIds;
+  for (const auto& [nodeId, partitionType] : fragment.groupedNodes) {
+    if (partitionType != nullptr) {
+      groupedLeafIds.insert(nodeId);
+    }
+  }
+  if (groupedLeafIds.empty()) {
+    return false;
+  }
+  return hasUnsupportedMixedGroupedJoin(
+      *fragment.fragment.planNode, groupedLeafIds);
+}
+
+// Reverts fragments whose grouped execution Velox cannot run to
+// bucketed-but-ungrouped (keeps type/width/groupedNodes for split routing).
+std::vector<ExecutableFragment> disableUnsupportedGroupedExecution(
+    std::vector<ExecutableFragment> fragments) {
+  for (auto& fragment : fragments) {
+    if (fragment.fragment.executionStrategy !=
+            velox::core::ExecutionStrategy::kGrouped ||
+        !fragmentHasUnsupportedMixedGroupedJoin(fragment)) {
+      continue;
+    }
+    fragment.fragment.executionStrategy =
+        velox::core::ExecutionStrategy::kUngrouped;
+    fragment.fragment.numSplitGroups = 0;
+    fragment.fragment.groupedExecutionLeafNodeIds.clear();
+    fragment.numConcurrentSplitGroups.reset();
+  }
+  return fragments;
+}
+
+} // namespace
+
+MultiFragmentPlan::MultiFragmentPlan(
+    std::vector<ExecutableFragment> fragments,
+    Options options,
+    ScanPartitionSelectionMap scanPartitionSelections)
+    : fragments_{disableUnsupportedGroupedExecution(std::move(fragments))},
+      options_{std::move(options)},
+      scanPartitionSelections_{std::move(scanPartitionSelections)} {}
+
 FinishWrite::FinishWrite(
     std::shared_ptr<connector::ConnectorMetadata> metadata,
     std::string connectorId,

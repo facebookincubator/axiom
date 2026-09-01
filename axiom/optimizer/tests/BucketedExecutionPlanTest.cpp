@@ -111,6 +111,32 @@ class BucketedExecutionTest : public test::QueryTestBase,
     EXPECT_TRUE(found) << "Expected at least one bucketed fragment";
   }
 
+  static bool containsJoinType(
+      const velox::core::PlanNode& node,
+      velox::core::JoinType joinType) {
+    if (const auto* join =
+            dynamic_cast<const velox::core::AbstractJoinNode*>(&node);
+        join != nullptr && join->joinType() == joinType) {
+      return true;
+    }
+    return std::any_of(
+        node.sources().begin(), node.sources().end(), [&](const auto& source) {
+          return containsJoinType(*source, joinType);
+        });
+  }
+
+  static bool planContainsJoinType(
+      const MultiFragmentPlan& plan,
+      velox::core::JoinType joinType) {
+    return std::any_of(
+        plan.fragments().begin(),
+        plan.fragments().end(),
+        [&](const auto& fragment) {
+          return fragment.fragment.planNode != nullptr &&
+              containsJoinType(*fragment.fragment.planNode, joinType);
+        });
+  }
+
   // Asserts the bucketed fragment's Velox grouped-execution metadata.
   static void expectGroupedExecution(
       const MultiFragmentPlan& plan,
@@ -515,6 +541,110 @@ TEST_P(BucketedExecutionTest, groupedMixedJoinRunsEndToEnd) {
   }
   EXPECT_GT(groupedSplitGroups, 0)
       << "grouped mixed join must complete at least one split group";
+}
+
+TEST_P(
+    BucketedExecutionTest,
+    groupedUnsupportedRightSideJoinFallbackRunsEndToEnd) {
+  if (!useV2_) {
+    GTEST_SKIP() << "Grouped execution requires scan certification in v2";
+  }
+
+  // These joins preserve unmatched or existence rows from their right side.
+  // Velox cannot run them when only one input is grouped, so the fragment must
+  // keep fixed bucket routing while running ungrouped.
+  testConnector_->addTable(
+      "fj_orders",
+      ROW({"customer_id", "amount"}, {BIGINT(), DOUBLE()}),
+      velox::ROW({}),
+      connector::TestBucketSpec{{"customer_id"}, 8});
+  testConnector_->appendData(
+      "fj_orders",
+      makeRowVector(
+          {"customer_id", "amount"},
+          {makeFlatVector<int64_t>(
+               200, [](auto row) { return static_cast<int64_t>(row % 40); }),
+           makeFlatVector<double>(
+               200, [](auto row) { return static_cast<double>(row); })}));
+
+  testConnector_->addTable(
+      "fj_dim", ROW({"customer_id", "label"}, {BIGINT(), BIGINT()}));
+  testConnector_->appendData(
+      "fj_dim",
+      makeRowVector(
+          {"customer_id", "label"},
+          {makeFlatVector<int64_t>(
+               60, [](auto row) { return static_cast<int64_t>(row); }),
+           makeFlatVector<int64_t>(
+               60, [](auto row) { return static_cast<int64_t>(row * 7); })}));
+
+  const std::vector<std::string> queries{
+      "SELECT o.customer_id, o.amount, d.label "
+      "FROM fj_orders o RIGHT JOIN fj_dim d "
+      "ON o.customer_id = d.customer_id",
+      "SELECT o.customer_id, o.amount, d.label "
+      "FROM fj_orders o FULL OUTER JOIN fj_dim d "
+      "ON o.customer_id = d.customer_id",
+      "SELECT d.customer_id FROM fj_dim d WHERE d.customer_id IN ("
+      "SELECT o.customer_id FROM fj_orders o "
+      "WHERE o.customer_id = d.customer_id)",
+      "SELECT d.customer_id FROM fj_dim d WHERE d.customer_id NOT IN ("
+      "SELECT o.customer_id FROM fj_orders o "
+      "WHERE o.customer_id = d.customer_id)",
+  };
+  for (const auto& query : queries) {
+    SCOPED_TRACE(query);
+    const auto logicalPlan = parseSelect(query, kTestConnectorId);
+    auto grouped = runVelox(
+        logicalPlan,
+        {.numWorkers = 2, .numDrivers = 2, .groupedExecution = true});
+    auto ungrouped = runVelox(
+        logicalPlan,
+        {.numWorkers = 2, .numDrivers = 2, .groupedExecution = false});
+    velox::exec::test::assertEqualResults(grouped.results, ungrouped.results);
+  }
+}
+
+TEST_P(BucketedExecutionTest, groupedUnsupportedRightSideJoinFallbackPlans) {
+  if (!useV2_) {
+    GTEST_SKIP() << "Grouped execution requires scan certification in v2";
+  }
+
+  addBucketedTable(
+      "mf_orders",
+      {"customer_id"},
+      128,
+      ROW({"customer_id", "amount"}, {BIGINT(), DOUBLE()}),
+      1'000'000);
+  addUnbucketedTable(
+      "mf_dim", ROW({"customer_id", "label"}, {BIGINT(), BIGINT()}), 100);
+
+  const std::vector<std::pair<std::string, core::JoinType>> cases{
+      {"SELECT * FROM mf_orders o RIGHT JOIN mf_dim d "
+       "ON o.customer_id = d.customer_id",
+       core::JoinType::kRight},
+      {"SELECT * FROM mf_orders o FULL OUTER JOIN mf_dim d "
+       "ON o.customer_id = d.customer_id",
+       core::JoinType::kFull},
+      {"SELECT d.customer_id FROM mf_dim d WHERE d.customer_id IN ("
+       "SELECT o.customer_id FROM mf_orders o "
+       "WHERE o.customer_id = d.customer_id)",
+       core::JoinType::kRightSemiFilter},
+      {"SELECT d.customer_id FROM mf_dim d WHERE d.customer_id NOT IN ("
+       "SELECT o.customer_id FROM mf_orders o "
+       "WHERE o.customer_id = d.customer_id)",
+       core::JoinType::kRightSemiProject},
+  };
+  for (const auto& [query, joinType] : cases) {
+    SCOPED_TRACE(query);
+    auto plan = planVelox(
+        parseSelect(query, kTestConnectorId),
+        {.numWorkers = 4, .numDrivers = 4, .groupedExecution = true},
+        optimizerOptions_);
+    EXPECT_TRUE(planContainsJoinType(*plan.plan, joinType));
+    expectBucketedFragmentWithWidth(*plan.plan, 4);
+    expectGroupedExecution(*plan.plan, /*grouped=*/false);
+  }
 }
 
 TEST_P(BucketedExecutionTest, semijoin) {

@@ -245,13 +245,11 @@ class MultiFragmentPlan {
     }
   };
 
+  // Reverts grouped fragments Velox cannot run to bucketed-but-ungrouped.
   MultiFragmentPlan(
       std::vector<ExecutableFragment> fragments,
       Options options,
-      ScanPartitionSelectionMap scanPartitionSelections = {})
-      : fragments_{std::move(fragments)},
-        options_{std::move(options)},
-        scanPartitionSelections_{std::move(scanPartitionSelections)} {}
+      ScanPartitionSelectionMap scanPartitionSelections = {});
 
   const std::vector<ExecutableFragment>& fragments() const {
     return fragments_;
