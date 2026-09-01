@@ -181,6 +181,10 @@ struct ExecutableFragment {
   /// std::nullopt when the fragment has no grouped scans.
   std::optional<int32_t> numSplitGroups;
 
+  /// Maximum number of split groups a task processes concurrently under grouped
+  /// execution. std::nullopt when the fragment has no grouped scans.
+  std::optional<int32_t> numConcurrentSplitGroups;
+
   /// Sample percentage per scan node for TABLESAMPLE SYSTEM. The split source
   /// for the scan emits each split with this probability, in the open interval
   /// (0, 100). Empty when no scan in this fragment is sampled.
