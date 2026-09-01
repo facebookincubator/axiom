@@ -24,6 +24,16 @@ namespace facebook::axiom::optimizer::v2 {
 /// Moves expressions a consumer references into a `Project` over its input.
 class PrecomputeProjectionsPass {
  public:
+  /// Lifts grouping expressions, aggregate arguments, filters, and ordering
+  /// keys of 'aggregate' into a Project where required. Aggregate arguments
+  /// comes from 'rewrittenInput' provided by caller in replacement for
+  /// `aggregate->input()`. Returns a new equivalent Aggregate node with lifted
+  /// fields.
+  static AggregateCP prepareAggregateInputs(
+      const Aggregate* aggregate,
+      NodeCP rewrittenInput,
+      Builder& builder);
+
   /// Returns the tree rooted at 'node' rewritten so the expressions listed
   /// below are computed by a `Project` inserted between the consumer and its
   /// input, with the consumer rebuilt to reference the projected column.

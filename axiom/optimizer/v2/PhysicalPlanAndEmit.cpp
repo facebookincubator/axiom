@@ -16,7 +16,6 @@
 
 #include "axiom/optimizer/v2/PhysicalPlanAndEmit.h"
 
-#include "axiom/optimizer/v2/ExpandAggregatePass.h"
 #include "axiom/optimizer/v2/PlanPhysicalPass.h"
 #include "axiom/optimizer/v2/PrecomputeProjectionsPass.h"
 
@@ -33,11 +32,8 @@ EmitPass::Result physicalPlanAndEmit(
   NodeCP physicalPlanned = PlanPhysicalPass::run(
       root, builder, session.options(), options.numWorkers, options.numDrivers);
   NodeCP precomputed = PrecomputeProjectionsPass::run(physicalPlanned, builder);
-  // Distinct aggregates lower to MarkDistinct here, after physical planning
-  // (grouping sets were already lowered to GroupId in translate).
-  NodeCP expanded = ExpandAggregatePass::run(precomputed, builder);
   return EmitPass::run(
-      expanded, outputColumns, outputNames, session, evaluator, options);
+      precomputed, outputColumns, outputNames, session, evaluator, options);
 }
 
 } // namespace facebook::axiom::optimizer::v2

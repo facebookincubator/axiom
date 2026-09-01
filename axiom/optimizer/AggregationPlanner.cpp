@@ -619,6 +619,19 @@ std::pair<RelationOpPtr, PlanCost> AggregationPlanner::makeDistinctAggregation(
       "groupId must be one of the groupingKeys when present");
 
   if (auto distinctArgs = getCommonDistinctArgs(aggregates)) {
+    if (distinctArgs->empty() && groupingKeys.empty()) {
+      // A keyless inner aggregation would create a row on empty input and
+      // change the result aggregation's empty-input semantics.
+      return makeSingleAggregationPlan(
+          std::move(plan),
+          groupingKeys,
+          aggregates,
+          aggPlan->intermediateColumns(),
+          aggPlan->columns(),
+          std::move(globalGroupingSets),
+          groupId,
+          state);
+    }
     return makeDistinctToGroupByPlan(
         std::move(plan),
         groupingKeys,
