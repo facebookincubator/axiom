@@ -16,9 +16,11 @@
 
 #include "axiom/optimizer/v2/ScanHandle.h"
 
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/Schema.h"
 #include "axiom/optimizer/v2/ExprEmitter.h"
+#include "folly/coro/BlockingWait.h"
 
 namespace facebook::axiom::optimizer::v2 {
 
@@ -91,6 +93,19 @@ ScanHandle ScanHandle::build(
           std::move(typedFilters),
           rejectedFilterIndices);
 
+  connector::PartitionSelectionPtr partitionSelection;
+  // Some connectors provide table layouts without a registered
+  // ConnectorMetadata. Registered connectors resolve the exact selection
+  // through their split manager.
+  if (auto metadata =
+          connector::ConnectorMetadataRegistry::tryGet(layout->connectorId())) {
+    if (auto* splitManager = metadata->splitManager()) {
+      partitionSelection = std::make_shared<connector::PartitionSelection>(
+          folly::coro::blockingWait(splitManager->co_selectPartitions(
+              connectorSession, tableHandle, layout->partitionType())));
+    }
+  }
+
   // Each rejected index selects a conjunct the caller must apply above the
   // scan; the rest are the connector's responsibility, inside 'tableHandle'.
   for (int32_t index : rejectedFilterIndices) {
@@ -115,6 +130,7 @@ ScanHandle ScanHandle::build(
 
   return ScanHandle{
       .tableHandle = std::move(tableHandle),
+      .partitionSelection = std::move(partitionSelection),
       .columnHandles = std::move(columnHandles),
   };
 }

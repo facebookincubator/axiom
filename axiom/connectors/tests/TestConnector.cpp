@@ -448,6 +448,23 @@ const TestTable& findTestTableForHandle(
 
 } // namespace
 
+folly::coro::Task<PartitionSelection> TestSplitManager::co_selectPartitions(
+    const ConnectorSessionPtr& session,
+    const velox::connector::ConnectorTableHandlePtr& tableHandle,
+    std::shared_ptr<const PartitionType> declaredStoragePartitionType) {
+  const auto& table = findTestTableForHandle(tableHandle);
+  VELOX_CHECK(
+      !table.layouts().empty(), "Test table must have at least one layout");
+  const auto* layout = table.layouts().front()->as<TestTableLayout>();
+  VELOX_CHECK_NOT_NULL(layout);
+  auto partitions = co_await co_listPartitions(session, tableHandle);
+  co_return PartitionSelection{
+      .partitions = std::move(partitions),
+      .storagePartitionType = layout->partitionsConsistent()
+          ? std::move(declaredStoragePartitionType)
+          : nullptr};
+}
+
 folly::coro::Task<std::vector<PartitionHandlePtr>>
 TestSplitManager::co_listPartitions(
     const ConnectorSessionPtr& session,
@@ -1009,6 +1026,15 @@ void TestConnectorMetadata::setStats(
   it->second->setStats(numRows, columnStats);
 }
 
+void TestConnectorMetadata::setPartitionsConsistent(
+    const SchemaTableName& tableName,
+    bool consistent) {
+  auto it = tables_.find(tableName);
+  VELOX_CHECK(
+      it != tables_.end(), "Table doesn't exist: {}", tableName.toString());
+  it->second->mutableLayout()->setPartitionsConsistent(consistent);
+}
+
 TestDataSource::TestDataSource(
     const velox::RowTypePtr& outputType,
     const velox::connector::ColumnHandleMap& handles,
@@ -1332,6 +1358,12 @@ void TestConnector::setStats(
     uint64_t numRows,
     const std::unordered_map<std::string, ColumnStatistics>& columnStats) {
   metadata_->setStats(tableName, numRows, columnStats);
+}
+
+void TestConnector::setPartitionsConsistent(
+    const SchemaTableName& tableName,
+    bool consistent) {
+  metadata_->setPartitionsConsistent(tableName, consistent);
 }
 
 std::shared_ptr<velox::connector::Connector> TestConnectorFactory::newConnector(

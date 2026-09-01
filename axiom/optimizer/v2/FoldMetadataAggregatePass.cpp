@@ -136,6 +136,7 @@ class Folder : public NodeRewriter<NoContext> {
     auto result = folly::coro::blockingWait(layout->co_metadataCounts(
         std::move(connectorSession),
         handle.tableHandle,
+        handle.partitionSelection,
         std::move(groupingColumns),
         std::move(nullCountColumns)));
     if (!result.has_value()) {

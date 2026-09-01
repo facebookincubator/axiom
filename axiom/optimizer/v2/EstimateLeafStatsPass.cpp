@@ -126,6 +126,7 @@ void EstimateLeafStatsPass::run(NodeCP root, const OptimizerSession& session) {
     requests.push_back(layout->co_estimateStats(
         std::move(connectorSession),
         handle->tableHandle,
+        handle->partitionSelection,
         std::move(columnNames),
         estimator));
   }

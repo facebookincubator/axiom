@@ -18,6 +18,7 @@
 #include <folly/coro/Task.h>
 #include <velox/connectors/Connector.h>
 #include <optional>
+#include <utility>
 #include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/connectors/ConnectorSession.h"
 
@@ -106,9 +107,32 @@ class PartitionHandle {
 
 using PartitionHandlePtr = std::shared_ptr<const PartitionHandle>;
 
+/// The exact partitions selected for one scan and the storage partitioning the
+/// connector guarantees across those partitions. A null storagePartitionType
+/// means the scan must be planned as unbucketed.
+struct PartitionSelection {
+  std::vector<PartitionHandlePtr> partitions;
+  std::shared_ptr<const PartitionType> storagePartitionType;
+};
+
+using PartitionSelectionPtr = std::shared_ptr<const PartitionSelection>;
+
 class ConnectorSplitManager {
  public:
   virtual ~ConnectorSplitManager() = default;
+
+  /// Selects the partitions read by 'tableHandle' and validates the declared
+  /// storage partitioning for exactly that set. The default preserves the
+  /// connector's declared partitioning.
+  virtual folly::coro::Task<PartitionSelection> co_selectPartitions(
+      const ConnectorSessionPtr& session,
+      const velox::connector::ConnectorTableHandlePtr& tableHandle,
+      std::shared_ptr<const PartitionType> declaredStoragePartitionType) {
+    auto partitions = co_await co_listPartitions(session, tableHandle);
+    co_return PartitionSelection{
+        .partitions = std::move(partitions),
+        .storagePartitionType = std::move(declaredStoragePartitionType)};
+  }
 
   /// Returns a list of all partitions that match the filters in
   /// 'tableHandle'. A non-partitioned table returns one partition.

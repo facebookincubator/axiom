@@ -16,6 +16,8 @@
 
 #include "axiom/optimizer/v2/Node.h"
 
+#include "axiom/optimizer/v2/ScanHandle.h"
+
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/optimizer/Schema.h"
 #include "axiom/optimizer/v2/KeyHash.h"
@@ -611,8 +613,14 @@ size_t Scan::KeyHash::operator()(const Scan* node) const {
 
 Partitioning Scan::storageBucketing() const {
   const connector::TableLayout* layout = baseTable_->layout();
-  return bucketPartition(
-      layout, outputColumns(), layout->partitionType().get());
+  // A missing selection means this connector did not opt into per-scan
+  // certification, so preserve its declared layout. A present selection with a
+  // null storagePartitionType is an explicit unbucketed result.
+  const auto* storagePartitionType =
+      scanHandle_ != nullptr && scanHandle_->partitionSelection != nullptr
+      ? scanHandle_->partitionSelection->storagePartitionType.get()
+      : layout->partitionType().get();
+  return bucketPartition(layout, outputColumns(), storagePartitionType);
 }
 
 size_t Scan::KeyHash::operator()(const Key& key) const {

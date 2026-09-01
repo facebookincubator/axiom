@@ -1217,6 +1217,48 @@ TEST_P(BucketedExecutionTest, bucketColumnRenamedByProjection) {
   }
 }
 
+TEST_P(BucketedExecutionTest, partitionSelectionControlsStorageBucketing) {
+  if (!useV2_) {
+    GTEST_SKIP();
+  }
+
+  addBucketedTable("selected_orders", {"customer_id"}, 16);
+  testConnector_->setPartitionsConsistent("selected_orders", false);
+
+  auto plan = planDistributed(parseSelect(
+      "SELECT customer_id, count(*) FROM selected_orders "
+      "GROUP BY customer_id",
+      kTestConnectorId));
+
+  ASSERT_EQ(plan.plan->scanPartitionSelections().size(), 1);
+  const auto& selection = plan.plan->scanPartitionSelections().begin()->second;
+  ASSERT_NE(selection, nullptr);
+  EXPECT_EQ(selection->partitions.size(), 16);
+  EXPECT_EQ(selection->storagePartitionType, nullptr);
+  for (const auto& fragment : plan.plan->fragments()) {
+    EXPECT_TRUE(fragment.groupedNodes.empty());
+  }
+}
+
+TEST_P(BucketedExecutionTest, partitionSelectionReachesPlanOutput) {
+  if (!useV2_) {
+    GTEST_SKIP();
+  }
+
+  addBucketedTable("selected_bucketed_orders", {"customer_id"}, 16);
+  auto plan = planDistributed(parseSelect(
+      "SELECT customer_id, count(*) FROM selected_bucketed_orders "
+      "GROUP BY customer_id",
+      kTestConnectorId));
+
+  ASSERT_EQ(plan.plan->scanPartitionSelections().size(), 1);
+  const auto& selection = plan.plan->scanPartitionSelections().begin()->second;
+  ASSERT_NE(selection, nullptr);
+  EXPECT_EQ(selection->partitions.size(), 16);
+  EXPECT_NE(selection->storagePartitionType, nullptr);
+  expectBucketedFragmentWithWidth(*plan.plan, 4);
+}
+
 AXIOM_INSTANTIATE_V1_V2(BucketedExecutionTest);
 
 } // namespace

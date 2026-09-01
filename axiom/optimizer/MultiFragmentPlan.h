@@ -19,6 +19,7 @@
 #include <folly/container/F14Map.h>
 #include "axiom/common/Enums.h"
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorSplitManager.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/SimpleVector.h"
@@ -75,6 +76,10 @@ struct InputStage {
   /// Task prefix of producer stage.
   std::string producerTaskPrefix;
 };
+
+/// Selected partitions keyed by the emitted TableScanNode ID.
+using ScanPartitionSelectionMap = folly::
+    F14FastMap<velox::core::PlanNodeId, connector::PartitionSelectionPtr>;
 
 /// Callbacks to finalize writing to a connector after the query completes.
 /// On success, the runner calls 'commit'. On failure, 'abort'. Only one of the
@@ -222,8 +227,13 @@ class MultiFragmentPlan {
     }
   };
 
-  MultiFragmentPlan(std::vector<ExecutableFragment> fragments, Options options)
-      : fragments_{std::move(fragments)}, options_{std::move(options)} {}
+  MultiFragmentPlan(
+      std::vector<ExecutableFragment> fragments,
+      Options options,
+      ScanPartitionSelectionMap scanPartitionSelections = {})
+      : fragments_{std::move(fragments)},
+        options_{std::move(options)},
+        scanPartitionSelections_{std::move(scanPartitionSelections)} {}
 
   const std::vector<ExecutableFragment>& fragments() const {
     return fragments_;
@@ -231,6 +241,10 @@ class MultiFragmentPlan {
 
   const Options& options() const {
     return options_;
+  }
+
+  const ScanPartitionSelectionMap& scanPartitionSelections() const {
+    return scanPartitionSelections_;
   }
 
   /// @param detailed If true, includes details of each plan node. Otherwise,
@@ -259,6 +273,7 @@ class MultiFragmentPlan {
  private:
   const std::vector<ExecutableFragment> fragments_;
   const Options options_;
+  const ScanPartitionSelectionMap scanPartitionSelections_;
 };
 
 using MultiFragmentPlanPtr = std::shared_ptr<const MultiFragmentPlan>;
