@@ -872,55 +872,6 @@ velox::core::AggregationNode::Aggregate toVeloxFinalAggregate(
   return out;
 }
 
-// Subset of `groupingKeys` that `local` guarantees are pre-grouped (equal-key
-// rows contiguous), so an aggregation over them can stream rather than build a
-// full hash table. The larger of: the leading `Sorted` run that are grouping
-// keys, and a `Grouped(S)` whose columns are all grouping keys (the whole `S`,
-// since rows are contiguous on the set jointly, not on a bare subset). Empty
-// when nothing is pre-grouped.
-ExprVector computePreGroupedKeys(
-    const LocalPropertyVector& local,
-    const ExprVector& groupingKeys) {
-  if (groupingKeys.empty()) {
-    return {};
-  }
-
-  const auto isGroupingKey = [&](ColumnCP column) {
-    for (ExprCP key : groupingKeys) {
-      if (column->sameOrEqual(*key)) {
-        return true;
-      }
-    }
-    return false;
-  };
-
-  ExprVector best;
-  for (const LocalProperty& property : local) {
-    ExprVector candidate;
-    if (property.kind == LocalPropertyKind::kSorted) {
-      // Sorted on c1..cn implies grouped on any leading prefix; take the
-      // leading run of sort keys that are grouping keys.
-      for (ColumnCP column : property.columns) {
-        if (!isGroupingKey(column)) {
-          break;
-        }
-        candidate.push_back(column);
-      }
-    } else if (std::ranges::all_of(property.columns, isGroupingKey)) {
-      // Grouped on the whole set jointly; usable only if every member is a
-      // grouping key.
-      for (ColumnCP column : property.columns) {
-        candidate.push_back(column);
-      }
-    }
-    if (candidate.size() > best.size()) {
-      best = std::move(candidate);
-    }
-  }
-
-  return best;
-}
-
 // Builds the (output name, Velox Aggregate) lists for an AggregationNode. The
 // per-step call construction differs (single/partial output the result vs the
 // intermediate type; final reads its input accumulator column), so the caller
