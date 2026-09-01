@@ -330,6 +330,32 @@ TEST_P(BucketedExecutionTest, groupedExecutionRunsEndToEnd) {
   }
 }
 
+TEST_P(BucketedExecutionTest, groupedExecutionClosesEmptyTasks) {
+  if (!useV2_) {
+    GTEST_SKIP() << "Grouped execution requires scan certification in v2";
+  }
+  const auto schema = ROW("customer_id", BIGINT());
+  testConnector_->addTable(
+      "ge_sparse",
+      schema,
+      velox::ROW({}),
+      connector::TestBucketSpec{{"customer_id"}, 8});
+  testConnector_->appendData(
+      "ge_sparse", makeRowVector({makeFlatVector<int64_t>({0, 1})}));
+
+  const auto logicalPlan = parseSelect(
+      "SELECT customer_id, count(*) FROM ge_sparse GROUP BY customer_id",
+      kTestConnectorId);
+  auto grouped = runVelox(
+      logicalPlan,
+      {.numWorkers = 2, .numDrivers = 2, .groupedExecution = true});
+  auto ungrouped = runVelox(
+      logicalPlan,
+      {.numWorkers = 2, .numDrivers = 2, .groupedExecution = false});
+
+  velox::exec::test::assertEqualResults(grouped.results, ungrouped.results);
+}
+
 TEST_P(BucketedExecutionTest, groupedJoinRunsEndToEnd) {
   if (!useV2_) {
     GTEST_SKIP() << "Grouped execution requires scan certification in v2";

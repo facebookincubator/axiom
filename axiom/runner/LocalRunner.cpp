@@ -933,15 +933,52 @@ std::vector<velox::exec::TaskStats> LocalRunner::aggregatedStats() const {
   for (const auto& tasks : stages_) {
     VELOX_CHECK(!tasks.empty());
 
-    auto stats = tasks[0]->taskStats();
-    for (auto i = 1; i < tasks.size(); ++i) {
+    const auto hasOperatorStats = [](const velox::exec::TaskStats& stats) {
+      return std::any_of(
+          stats.pipelineStats.begin(),
+          stats.pipelineStats.end(),
+          [](const auto& pipeline) { return !pipeline.operatorStats.empty(); });
+    };
+    size_t baseTaskIndex{0};
+    while (baseTaskIndex < tasks.size() &&
+           !hasOperatorStats(tasks[baseTaskIndex]->taskStats())) {
+      ++baseTaskIndex;
+    }
+    if (baseTaskIndex == tasks.size()) {
+      baseTaskIndex = 0;
+    }
+
+    auto stats = tasks[baseTaskIndex]->taskStats();
+    for (size_t i = 0; i < tasks.size(); ++i) {
+      if (i == baseTaskIndex) {
+        continue;
+      }
       const auto moreStats = tasks[i]->taskStats();
-      for (auto pipeline = 0; pipeline < stats.pipelineStats.size();
+      stats.completedSplitGroups.insert(
+          moreStats.completedSplitGroups.begin(),
+          moreStats.completedSplitGroups.end());
+      if (moreStats.pipelineStats.empty()) {
+        continue;
+      }
+      VELOX_CHECK_EQ(
+          stats.pipelineStats.size(), moreStats.pipelineStats.size());
+      for (size_t pipeline = 0; pipeline < stats.pipelineStats.size();
            ++pipeline) {
         auto& pipelineStats = stats.pipelineStats[pipeline];
-        for (auto op = 0; op < pipelineStats.operatorStats.size(); ++op) {
+        const auto& morePipelineStats = moreStats.pipelineStats[pipeline];
+        if (morePipelineStats.operatorStats.empty()) {
+          continue;
+        }
+        if (pipelineStats.operatorStats.empty()) {
+          pipelineStats = morePipelineStats;
+          continue;
+        }
+        VELOX_CHECK_EQ(
+            pipelineStats.operatorStats.size(),
+            morePipelineStats.operatorStats.size());
+        for (size_t op = 0; op < pipelineStats.operatorStats.size(); ++op) {
           pipelineStats.operatorStats[op].add(
-              moreStats.pipelineStats[pipeline].operatorStats[op]);
+              morePipelineStats.operatorStats[op]);
         }
       }
     }
