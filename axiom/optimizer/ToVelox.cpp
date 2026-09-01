@@ -514,12 +514,14 @@ void ToVelox::applyGroupedLeaves(
         std::const_pointer_cast<connector::PartitionType>(partitionType));
   }
   int32_t width = -1;
+  int32_t numGroups = -1;
   for (const auto& [_, pt] : fragment.groupedNodes) {
     if (pt == nullptr) {
       continue;
     }
     if (width < 0) {
       width = pt->numPartitions();
+      numGroups = pt->numGroups();
     } else {
       VELOX_CHECK_EQ(
           pt->numPartitions(),
@@ -530,6 +532,7 @@ void ToVelox::applyGroupedLeaves(
   if (width >= 0) {
     fragment.type = FragmentType::kFixed;
     fragment.width = width;
+    fragment.numSplitGroups = numGroups;
   }
 }
 

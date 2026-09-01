@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/container/F14Set.h>
 #include <folly/coro/Task.h>
 #include <velox/connectors/Connector.h>
 #include <optional>
@@ -26,20 +27,24 @@ namespace facebook::axiom::connector {
 
 class PartitionType;
 
-/// Wraps a Velox ConnectorSplit with optional placement metadata. groupId is a
-/// hard within-query routing constraint for grouped execution: splits with the
-/// same groupId are routed to the same task. affinityId is a soft cross-query
+/// Wraps a Velox ConnectorSplit with optional placement metadata. For grouped
+/// execution, groupId identifies the split's bucket (split group) and
+/// partitionId the task it must run on; the connector derives partitionId from
+/// groupId via the partitioning function. affinityId is a soft cross-query
 /// affinity hint: schedulers prefer to route splits with the same affinityId
-/// to the same task, but may choose another task for load balancing. When both
-/// are present, grouped-execution routing through groupId takes precedence
-/// over affinityId.
+/// to the same task, but may choose another task for load balancing.
 struct Split {
   /// The underlying Velox connector split.
   std::shared_ptr<velox::connector::ConnectorSplit> connectorSplit;
 
-  /// Group ID for bucketed routing; splits sharing a groupId are routed to
-  /// the same task. Absent means any task may handle this split.
+  /// Split group (bucket) this split belongs to, in [0, numGroups). Splits
+  /// sharing a groupId form one group processed together on the worker. Absent
+  /// for non-grouped scans.
   std::optional<int32_t> groupId{std::nullopt};
+
+  /// Task (partition) this split must be routed to, in [0, width). Present for
+  /// grouped execution. Absent means the runtime chooses the task.
+  std::optional<int32_t> partitionId{std::nullopt};
 
   /// Stable connector-generated affinity ID for split affinity. Connectors
   /// that support split affinity must generate the same ID for repeated reads
@@ -55,6 +60,11 @@ struct SplitBatch {
 
   /// True when there are no more splits to return.
   bool noMoreSplits{false};
+
+  /// Groups (buckets) for which no further splits will be returned. Lets the
+  /// runtime finalize a group as soon as its splits are exhausted rather than
+  /// waiting for the whole source to drain.
+  folly::F14FastSet<int32_t> noMoreSplitsForGroupId;
 };
 
 /// Enumerates splits. The table and partitions to cover are given to
@@ -147,8 +157,9 @@ class ConnectorSplitManager {
   /// enumeration metrics (e.g., file listing, Metastore RPCs).
   ///
   /// When 'partitionType' is non-null, the connector tags each emitted Split
-  /// with a groupId in [0, partitionType->numPartitions()). Pass 'nullptr'
-  /// for the non-bucketed case.
+  /// with a groupId (bucket) in [0, partitionType->numGroups()) and a
+  /// partitionId (target task) in [0, partitionType->numPartitions()). Pass
+  /// 'nullptr' for the non-bucketed case.
   ///
   /// When 'samplePercentage' is set (TABLESAMPLE SYSTEM), the source emits each
   /// split with that probability, in the open interval (0, 100); the caller

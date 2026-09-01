@@ -152,7 +152,7 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
     std::shared_ptr<connector::SplitSource> source,
     velox::core::PlanNodeId scanId,
     std::vector<std::shared_ptr<velox::exec::Task>> tasks,
-    bool grouped,
+    std::optional<int32_t> numSplitGroups,
     std::function<void(std::exception_ptr)> onError,
     QueryRuntimeStats& runtimeStats) {
   std::exception_ptr ex;
@@ -162,12 +162,18 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
   const auto cancelToken = co_await folly::coro::co_current_cancellation_token;
   try {
     VELOX_CHECK(!tasks.empty(), "tasks must not be empty");
+    const bool grouped = numSplitGroups.has_value();
+    if (grouped) {
+      VELOX_CHECK_GT(*numSplitGroups, 0, "numSplitGroups must be positive");
+    }
 
     auto getSplitsCpuStart = velox::process::threadCpuNanos();
     auto getSplitsThreadId = std::this_thread::get_id();
     auto getSplitsStart = std::chrono::steady_clock::now();
     int64_t splitCount = 0;
     size_t taskIdx = 0;
+    // Task each seen group was routed to, for per-group noMoreSplitsForGroup.
+    folly::F14FastMap<int32_t, size_t> groupToTask;
     for (;;) {
       // Teardown requested: the tasks are being reaped, so remaining splits are
       // unnecessary. Bounds the reap's split-scope join to one co_getSplits().
@@ -177,14 +183,29 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
       auto batch = co_await source->co_getSplits(1);
       for (auto& split : batch.splits) {
         size_t targetTask;
+        int32_t groupId{-1};
         if (grouped) {
-          // Grouped execution routes each split to the task owning its group.
-          // The connector tags grouped splits with a groupId in
-          // [0, tasks.size()); same-group splits must share a task.
           VELOX_CHECK(
-              split.groupId.has_value(),
-              "Grouped scan produced a split without a groupId: {}",
+              split.groupId.has_value() && split.partitionId.has_value(),
+              "Grouped scan produced a split without groupId or partitionId: {}",
               scanId);
+          groupId = *split.groupId;
+          VELOX_CHECK_GE(groupId, 0);
+          VELOX_CHECK_LT(groupId, *numSplitGroups);
+          VELOX_CHECK_GE(*split.partitionId, 0);
+          targetTask = static_cast<size_t>(*split.partitionId);
+          VELOX_CHECK_LT(targetTask, tasks.size());
+          auto [it, inserted] = groupToTask.emplace(groupId, targetTask);
+          VELOX_CHECK(
+              inserted || it->second == targetTask,
+              "Split group maps to multiple tasks: {}",
+              groupId);
+        } else if (split.partitionId.has_value()) {
+          VELOX_CHECK_GE(*split.partitionId, 0);
+          targetTask = static_cast<size_t>(*split.partitionId);
+          VELOX_CHECK_LT(targetTask, tasks.size());
+        } else if (split.groupId.has_value()) {
+          // Legacy connectors use groupId as the fixed task index.
           VELOX_CHECK_LT(static_cast<size_t>(*split.groupId), tasks.size());
           targetTask = static_cast<size_t>(*split.groupId);
         } else {
@@ -196,8 +217,20 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
         }
         tasks.at(targetTask)
             ->addSplit(
-                scanId, velox::exec::Split(std::move(split.connectorSplit)));
+                scanId,
+                velox::exec::Split(std::move(split.connectorSplit), groupId));
         ++splitCount;
+      }
+      if (grouped) {
+        for (const auto groupId : batch.noMoreSplitsForGroupId) {
+          VELOX_CHECK_GE(groupId, 0);
+          VELOX_CHECK_LT(groupId, *numSplitGroups);
+          const auto it = groupToTask.find(groupId);
+          const size_t targetTask = it != groupToTask.end()
+              ? it->second
+              : static_cast<size_t>(groupId) % tasks.size();
+          tasks.at(targetTask)->noMoreSplitsForGroup(scanId, groupId);
+        }
       }
       if (batch.noMoreSplits) {
         break;
@@ -776,6 +809,10 @@ void LocalRunner::makeStages(
         fragment.type == optimizer::FragmentType::kSource
             ? plan_->options().numWorkers
             : 1);
+    const uint32_t concurrentSplitGroups =
+        fragment.fragment.isGroupedExecution()
+        ? static_cast<uint32_t>(plan_->options().numConcurrentSplitGroups)
+        : 1;
     for (auto i = 0; i < numTasks; ++i) {
       auto taskId = fmt::format(
           "local://{}/{}.{}",
@@ -801,7 +838,7 @@ void LocalRunner::makeStages(
         std::lock_guard<std::mutex> lock(mutex_);
         stages_.back().push_back(task);
       }
-      task->start(plan_->options().numDrivers);
+      task->start(plan_->options().numDrivers, concurrentSplitGroups);
     }
   }
 
@@ -835,6 +872,10 @@ void LocalRunner::makeStages(
             *scan,
             partitionType,
             samplePercentage);
+        const std::optional<int32_t> numSplitGroups =
+            fragment.fragment.leafNodeRunsGroupedExecution(scan->id())
+            ? fragment.numSplitGroups
+            : std::nullopt;
         splitScope_.add(
             folly::coro::co_withExecutor(
                 params_.queryCtx->executor(),
@@ -842,7 +883,7 @@ void LocalRunner::makeStages(
                     source,
                     scan->id(),
                     stage,
-                    /*grouped=*/partitionType != nullptr,
+                    numSplitGroups,
                     onError,
                     runtimeStats_)));
       }

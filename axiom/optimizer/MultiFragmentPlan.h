@@ -176,6 +176,11 @@ struct ExecutableFragment {
       std::shared_ptr<connector::PartitionType>>
       groupedNodes;
 
+  /// Number of split groups (buckets) for a grouped fragment. Distinct from
+  /// 'width' (task count): one task may process several groups in sequence.
+  /// std::nullopt when the fragment has no grouped scans.
+  std::optional<int32_t> numSplitGroups;
+
   /// Sample percentage per scan node for TABLESAMPLE SYSTEM. The split source
   /// for the scan emits each split with this probability, in the open interval
   /// (0, 100). Empty when no scan in this fragment is sampled.
@@ -203,6 +208,15 @@ class MultiFragmentPlan {
     /// Number of threads in a fragment in a worker. If 1, there are no local
     /// exchanges.
     int32_t numDrivers{4};
+
+    /// When true, the v2 optimizer emits fragments with useful certified
+    /// bucketed scans as Velox grouped execution so a task processes one split
+    /// group at a time. The v1 optimizer leaves bucketed fragments ungrouped.
+    bool groupedExecution{false};
+
+    /// In grouped execution, the maximum number of split groups a task
+    /// processes concurrently. Ignored for ungrouped fragments.
+    int32_t numConcurrentSplitGroups{2};
 
     /// Controls how query results are delivered from the final plan fragment.
     ///

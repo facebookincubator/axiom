@@ -686,6 +686,11 @@ void MultiFragmentPlan::checkConsistency(bool mayBeEmpty) const {
     return;
   }
 
+  VELOX_CHECK_GT(
+      options_.numConcurrentSplitGroups,
+      0,
+      "numConcurrentSplitGroups must be positive");
+
   checkFragmentTypes(fragments_, options_.numWorkers);
 
   checkProducerConsumerLinkage(fragments_);

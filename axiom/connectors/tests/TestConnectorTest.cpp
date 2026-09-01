@@ -632,11 +632,13 @@ CO_TEST_F(TestConnectorTest, bucketedTable) {
       co_await splitManager->co_listPartitions(session, tableHandle);
   EXPECT_EQ(partitions.size(), kNumBuckets);
 
-  // Pass a non-null partitionType with numPartitions < numBuckets so the
-  // connector folds buckets into groups and tags each Split with groupId.
-  constexpr int32_t kNumGroups = 2;
+  // Pass a non-null partitionType with numPartitions < numBuckets: the
+  // connector tags each Split with its bucket groupId and a partitionId that
+  // folds buckets into tasks.
+  constexpr int32_t kNumPartitions = 2;
+  constexpr int32_t kNumGroups = 4;
   auto partitionType = std::make_shared<TestPartitionType>(
-      kNumGroups, std::vector<TypePtr>{BIGINT()}, schema);
+      kNumPartitions, kNumGroups, std::vector<TypePtr>{BIGINT()}, schema);
   QueryRuntimeStats noopStats;
   auto source = splitManager->getSplitSource(
       session,
@@ -646,25 +648,36 @@ CO_TEST_F(TestConnectorTest, bucketedTable) {
       /*samplePercentage=*/std::nullopt,
       noopStats);
   std::vector<int32_t> observedGroupIds;
+  folly::F14FastSet<int32_t> completedGroupIds;
+  folly::F14FastSet<int32_t> expectedGroupIds;
   while (true) {
     auto batch = co_await source->co_getSplits(/*maxSplitCount=*/16);
     for (const auto& split : batch.splits) {
       CO_ASSERT_TRUE(split.groupId.has_value());
-      EXPECT_GE(*split.groupId, 0);
-      EXPECT_LT(*split.groupId, kNumGroups);
+      CO_ASSERT_TRUE(split.partitionId.has_value());
       auto testSplit = std::dynamic_pointer_cast<const TestConnectorSplit>(
           split.connectorSplit);
       CO_ASSERT_NE(testSplit, nullptr);
       const auto bucket = table->dataBucketIds()[testSplit->index()];
       EXPECT_EQ(*split.groupId, bucket % kNumGroups);
+      EXPECT_GE(*split.groupId, 0);
+      EXPECT_LT(*split.groupId, kNumGroups);
+      EXPECT_EQ(*split.partitionId, bucket % kNumPartitions);
+      EXPECT_GE(*split.partitionId, 0);
+      EXPECT_LT(*split.partitionId, kNumPartitions);
       observedGroupIds.push_back(*split.groupId);
+      expectedGroupIds.insert(bucket % kNumGroups);
     }
+    completedGroupIds.insert(
+        batch.noMoreSplitsForGroupId.begin(),
+        batch.noMoreSplitsForGroupId.end());
     if (batch.noMoreSplits) {
       break;
     }
   }
   co_await source->co_close();
   EXPECT_FALSE(observedGroupIds.empty());
+  EXPECT_EQ(completedGroupIds, expectedGroupIds);
 }
 
 TEST_F(TestConnectorTest, bucketedTableNonExistentBucketColumn) {

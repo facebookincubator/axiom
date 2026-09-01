@@ -357,17 +357,26 @@ folly::coro::Task<SplitBatch> LocalHiveSplitSource::co_getSplits(
         builder.serdeParameters(serdeParameters_);
       }
       std::optional<int32_t> groupId;
+      std::optional<int32_t> partitionId;
       if (partitionType_ != nullptr) {
         VELOX_CHECK(
             info->bucketNumber.has_value(),
             "Bucketed scan requires bucketNumber on every file");
         const auto* hivePartitionType = partitionType_->as<HivePartitionType>();
         VELOX_CHECK_NOT_NULL(hivePartitionType, "Expected HivePartitionType");
-        groupId =
-            hivePartitionType->mapBucketToPartition(info->bucketNumber.value());
+        const int32_t bucket = info->bucketNumber.value();
+        // groupId is the Velox split group (bucket); partitionId is the task it
+        // routes to. numGroups() normalizes the native bucket into the common
+        // co-partitioned group space so both sides of a join co-locate.
+        groupId = bucket % hivePartitionType->numGroups();
+        partitionId = hivePartitionType->mapBucketToPartition(bucket);
+        splitGroupIds_.insert(*groupId);
       }
       batch.splits.push_back(
-          Split{.connectorSplit = builder.build(), .groupId = groupId});
+          Split{
+              .connectorSplit = builder.build(),
+              .groupId = groupId,
+              .partitionId = partitionId});
       ++splitWithinFile_;
     }
     if (splitWithinFile_ >= splitsPerFile) {
@@ -376,6 +385,9 @@ folly::coro::Task<SplitBatch> LocalHiveSplitSource::co_getSplits(
     }
   }
   batch.noMoreSplits = (fileIdx_ >= files_.size());
+  if (batch.noMoreSplits) {
+    batch.noMoreSplitsForGroupId = splitGroupIds_;
+  }
   co_return batch;
 }
 

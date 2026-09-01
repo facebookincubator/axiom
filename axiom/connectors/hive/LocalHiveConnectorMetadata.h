@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/container/F14Set.h>
 #include <utility>
 
 #include "axiom/connectors/hive/HiveConnectorMetadata.h"
@@ -58,6 +59,7 @@ class LocalHiveSplitSource : public SplitSource {
   // When non-null, used to assign a groupId to each split for bucketed
   // execution.
   const std::shared_ptr<PartitionType> partitionType_;
+  folly::F14FastSet<int32_t> splitGroupIds_;
   size_t fileIdx_{0};
   int64_t splitWithinFile_{0};
 };

@@ -417,8 +417,10 @@ class ToVelox {
   // Translates 'groupedLeaves' (keyed by const RelationOp*) into entries in
   // 'fragment.groupedNodes' (keyed by Velox PlanNodeId) using
   // 'relationOpToNodeId_'. After translation, if any non-null PartitionType
-  // entry is present, sets fragment.type = kFixed and fragment.width =
-  // numPartitions().
+  // entry is present, sets fragment.type = kFixed, fragment.width =
+  // numPartitions() and fragment.numSplitGroups = numGroups(). Grouped
+  // execution itself is enabled only by the v2 emitter, whose scan-level
+  // partition certification makes the optimization safe.
   void applyGroupedLeaves(
       ExecutableFragment& fragment,
       const GroupedLeaves& groupedLeaves);
