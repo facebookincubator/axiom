@@ -1811,6 +1811,7 @@ void Emitter::finalizeGroupedLeaves(ExecutableFragment& fragment) {
   fragment.numSplitGroups = numGroups;
 
   if (options_.groupedExecution) {
+    fragment.numConcurrentSplitGroups = options_.numConcurrentSplitGroups;
     fragment.fragment.executionStrategy =
         velox::core::ExecutionStrategy::kGrouped;
     fragment.fragment.numSplitGroups = numGroups;
