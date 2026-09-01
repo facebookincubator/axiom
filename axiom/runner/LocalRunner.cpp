@@ -65,6 +65,7 @@ std::shared_ptr<connector::SplitSource>
 SimpleSplitSourceFactory::splitSourceForScan(
     const connector::ConnectorSessionPtr& /* session */,
     const velox::core::TableScanNode& scan,
+    connector::PartitionSelectionPtr /*partitionSelection*/,
     const std::shared_ptr<connector::PartitionType>& /*partitionType*/,
     std::optional<double> samplePercentage) {
   VELOX_USER_CHECK(
@@ -81,6 +82,7 @@ std::shared_ptr<connector::SplitSource>
 ConnectorSplitSourceFactory::splitSourceForScan(
     const connector::ConnectorSessionPtr& session,
     const velox::core::TableScanNode& scan,
+    connector::PartitionSelectionPtr partitionSelection,
     const std::shared_ptr<connector::PartitionType>& partitionType,
     std::optional<double> samplePercentage) {
   const auto& handle = scan.tableHandle();
@@ -88,26 +90,33 @@ ConnectorSplitSourceFactory::splitSourceForScan(
       connector::ConnectorMetadataRegistry::get(handle->connectorId());
   auto splitManager = metadata->splitManager();
 
-  auto listCpuStart = velox::process::threadCpuNanos();
-  auto listThreadId = std::this_thread::get_id();
-  auto listStart = std::chrono::steady_clock::now();
-  auto partitions = folly::coro::blockingWait(
-      splitManager->co_listPartitions(session, handle));
-  recordCpuIfSameThread(
-      runtimeStats_,
-      QueryRuntimeStats::kListPartitionsCpuNanos,
-      listCpuStart,
-      listThreadId);
-  runtimeStats_.addTiming(
-      QueryRuntimeStats::kListPartitionsWallNanos,
-      std::chrono::steady_clock::now() - listStart);
-  runtimeStats_.addCount(
-      QueryRuntimeStats::kListPartitionsCount, partitions.size());
+  std::vector<connector::PartitionHandlePtr> listedPartitions;
+  const std::vector<connector::PartitionHandlePtr>* partitions;
+  if (partitionSelection != nullptr) {
+    partitions = &partitionSelection->partitions;
+  } else {
+    auto listCpuStart = velox::process::threadCpuNanos();
+    auto listThreadId = std::this_thread::get_id();
+    auto listStart = std::chrono::steady_clock::now();
+    listedPartitions = folly::coro::blockingWait(
+        splitManager->co_listPartitions(session, handle));
+    recordCpuIfSameThread(
+        runtimeStats_,
+        QueryRuntimeStats::kListPartitionsCpuNanos,
+        listCpuStart,
+        listThreadId);
+    runtimeStats_.addTiming(
+        QueryRuntimeStats::kListPartitionsWallNanos,
+        std::chrono::steady_clock::now() - listStart);
+    runtimeStats_.addCount(
+        QueryRuntimeStats::kListPartitionsCount, listedPartitions.size());
+    partitions = &listedPartitions;
+  }
 
   return splitManager->getSplitSource(
       session,
       handle,
-      partitions,
+      *partitions,
       partitionType,
       samplePercentage,
       runtimeStats_);
@@ -528,8 +537,17 @@ std::shared_ptr<connector::SplitSource> LocalRunner::splitSourceForScan(
     const velox::core::TableScanNode& scan,
     const std::shared_ptr<connector::PartitionType>& partitionType,
     std::optional<double> samplePercentage) {
+  connector::PartitionSelectionPtr partitionSelection;
+  if (auto it = plan_->scanPartitionSelections().find(scan.id());
+      it != plan_->scanPartitionSelections().end()) {
+    partitionSelection = it->second;
+  }
   return splitSourceFactory_->splitSourceForScan(
-      session, scan, partitionType, samplePercentage);
+      session,
+      scan,
+      std::move(partitionSelection),
+      partitionType,
+      samplePercentage);
 }
 
 void LocalRunner::cancelTasks() {

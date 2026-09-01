@@ -1412,7 +1412,12 @@ std::string SqlQueryRunner::runExplainIo(
     velox::exec::SimpleExpressionEvaluator evaluator(
         queryCtx.get(), optimizerPool_.get());
     optimizer::v2::Optimizer optimizer(
-        *logicalPlan, *resolver, *session, evaluator, queryCtx);
+        *logicalPlan,
+        *resolver,
+        *session,
+        evaluator,
+        queryCtx,
+        /*runtimeStats=*/nullptr);
     return optimizer.explainIo(std::move(outputTable));
   }
   std::string text;
@@ -1890,7 +1895,8 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
                *schemaResolver,
                *optimizerSession,
                evaluator,
-               queryCtx)
+               queryCtx,
+               runtimeStats.get())
         .optimize(opts);
   }
 
@@ -2101,10 +2107,14 @@ std::vector<velox::RowVectorPtr> SqlQueryRunner::runShowStatsForQuery(
         queryCtx.get(), optimizerPool_.get());
     auto resolver = orDefaultSchemaResolver(nullptr);
 
-    const auto stats =
-        optimizer::v2::Optimizer(
-            *logicalPlan, *resolver, *session, evaluator, queryCtx)
-            .estimateQueryStats();
+    const auto stats = optimizer::v2::Optimizer(
+                           *logicalPlan,
+                           *resolver,
+                           *session,
+                           evaluator,
+                           queryCtx,
+                           /*runtimeStats=*/nullptr)
+                           .estimateQueryStats();
 
     presto::ShowStatsBuilder builder(roundCardinality(stats.cardinality));
     for (const auto& column : stats.columns) {

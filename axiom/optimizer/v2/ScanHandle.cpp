@@ -16,9 +16,14 @@
 
 #include "axiom/optimizer/v2/ScanHandle.h"
 
+#include <chrono>
+#include <thread>
+
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/Schema.h"
 #include "axiom/optimizer/v2/ExprEmitter.h"
+#include "folly/coro/BlockingWait.h"
 
 namespace facebook::axiom::optimizer::v2 {
 
@@ -28,7 +33,9 @@ ScanHandle ScanHandle::build(
     const ExprVector& filters,
     const OptimizerSession& session,
     velox::core::ExpressionEvaluator& evaluator,
-    ExprVector& rejected) {
+    ExprVector& rejected,
+    bool resolvePartitionSelection,
+    QueryRuntimeStats* runtimeStats) {
   const auto* layout = baseTable.schemaTable->columnGroups[0]->layout;
   auto connectorSession =
       session.toConnectorSession(layout->connector()->connectorId());
@@ -105,6 +112,37 @@ ScanHandle ScanHandle::build(
     rejected.push_back(filters[index]);
   }
 
+  connector::PartitionSelectionPtr partitionSelection;
+  // Some connectors provide table layouts without a registered
+  // ConnectorMetadata. Registered connectors resolve the exact selection
+  // through their split manager when the caller needs it.
+  if (resolvePartitionSelection) {
+    if (auto metadata = connector::ConnectorMetadataRegistry::tryGet(
+            layout->connectorId())) {
+      if (auto* splitManager = metadata->splitManager()) {
+        const auto cpuStart = velox::process::threadCpuNanos();
+        const auto startThreadId = std::this_thread::get_id();
+        const auto start = std::chrono::steady_clock::now();
+        partitionSelection = std::make_shared<connector::PartitionSelection>(
+            folly::coro::blockingWait(splitManager->co_selectPartitions(
+                connectorSession, tableHandle, layout->partitionType())));
+        if (runtimeStats != nullptr) {
+          runtimeStats->addTiming(
+              QueryRuntimeStats::kSelectPartitionsWallNanos,
+              std::chrono::steady_clock::now() - start);
+          recordCpuIfSameThread(
+              *runtimeStats,
+              QueryRuntimeStats::kSelectPartitionsCpuNanos,
+              cpuStart,
+              startThreadId);
+          runtimeStats->addCount(
+              QueryRuntimeStats::kSelectPartitionsCount,
+              partitionSelection->partitions.size());
+        }
+      }
+    }
+  }
+
   PlanObjectSet rejectedColumns;
   rejectedColumns.unionColumns(rejected);
   for (auto& [column, handle] : filterOnlyHandles) {
@@ -115,6 +153,7 @@ ScanHandle ScanHandle::build(
 
   return ScanHandle{
       .tableHandle = std::move(tableHandle),
+      .partitionSelection = std::move(partitionSelection),
       .columnHandles = std::move(columnHandles),
   };
 }

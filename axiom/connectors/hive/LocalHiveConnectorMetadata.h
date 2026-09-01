@@ -168,6 +168,7 @@ class LocalHiveTableLayout : public HiveTableLayout {
   folly::coro::Task<std::optional<FilteredTableStats>> co_estimateStats(
       ConnectorSessionPtr session,
       velox::connector::ConnectorTableHandlePtr tableHandle,
+      PartitionSelectionPtr partitionSelection,
       std::vector<std::string> columns,
       const FilterSelectivityEstimator& estimator) const override;
 
@@ -181,6 +182,7 @@ class LocalHiveTableLayout : public HiveTableLayout {
   co_metadataCounts(
       ConnectorSessionPtr session,
       velox::connector::ConnectorTableHandlePtr tableHandle,
+      PartitionSelectionPtr partitionSelection,
       std::vector<std::string> groupingColumns,
       std::vector<std::string> columns) const override;
 

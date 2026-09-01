@@ -49,7 +49,8 @@ FrontendResult translateAndPushdown(
     Builder& builder,
     const OptimizerSession& session,
     const std::shared_ptr<velox::core::QueryCtx>& queryCtx,
-    PushdownAndPrunePass::ConnectorPushdown connectorPushdown) {
+    PushdownAndPrunePass::ConnectorPushdown connectorPushdown,
+    QueryRuntimeStats* runtimeStats) {
   ConstantPlanRunner constantPlanRunner{queryCtx};
   auto translated = TranslatePass::run(
       plan, schema, evaluator, builder, session, constantPlanRunner);
@@ -61,7 +62,8 @@ FrontendResult translateAndPushdown(
       builder,
       evaluator,
       session,
-      connectorPushdown);
+      connectorPushdown,
+      runtimeStats);
   return {std::move(translated), pushed};
 }
 
@@ -151,7 +153,8 @@ PlanAndStats Optimizer::optimize(const MultiFragmentPlan::Options& options) {
       builder,
       session_,
       queryCtx_,
-      PushdownAndPrunePass::ConnectorPushdown::kOffer);
+      PushdownAndPrunePass::ConnectorPushdown::kOffer,
+      runtimeStats_);
   NodeCP folded =
       FoldMetadataAggregatePass::run(frontend.pushed, builder, session_);
   if (session_.options().useFilteredTableStats) {
@@ -175,7 +178,9 @@ PlanAndStats Optimizer::optimize(const MultiFragmentPlan::Options& options) {
 
   PlanAndStats result;
   result.plan = std::make_shared<MultiFragmentPlan>(
-      std::move(emitted.fragments), planOptions);
+      std::move(emitted.fragments),
+      planOptions,
+      std::move(emitted.scanPartitionSelections));
   result.plan->checkConsistency(
       /*mayBeEmpty=*/plan_.is(logical_plan::NodeKind::kTableWrite));
   result.finishWrite = std::move(emitted.finishWrite);
@@ -215,7 +220,8 @@ std::string Optimizer::explainIo(
       builder,
       session_,
       queryCtx_,
-      PushdownAndPrunePass::ConnectorPushdown::kSkip);
+      PushdownAndPrunePass::ConnectorPushdown::kSkip,
+      /*runtimeStats=*/nullptr);
 
   std::vector<std::pair<BaseTableCP, ExprVector>> tableFilters;
   collectScans(frontend.pushed, tableFilters);
@@ -235,7 +241,8 @@ QueryStats Optimizer::estimateQueryStats() {
       builder,
       session_,
       queryCtx_,
-      PushdownAndPrunePass::ConnectorPushdown::kOffer);
+      PushdownAndPrunePass::ConnectorPushdown::kOffer,
+      runtimeStats_);
   if (session_.options().useFilteredTableStats) {
     EstimateLeafStatsPass::run(frontend.pushed, session_);
   }

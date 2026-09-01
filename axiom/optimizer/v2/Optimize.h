@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "axiom/common/CatalogSchemaTableName.h"
+#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/MultiFragmentPlan.h"
@@ -66,12 +67,14 @@ class Optimizer {
       const connector::SchemaResolver& schemaResolver,
       const OptimizerSession& session,
       velox::core::ExpressionEvaluator& evaluator,
-      std::shared_ptr<velox::core::QueryCtx> queryCtx)
+      std::shared_ptr<velox::core::QueryCtx> queryCtx,
+      QueryRuntimeStats* runtimeStats)
       : plan_{plan},
         schemaResolver_{schemaResolver},
         session_{session},
         evaluator_{evaluator},
-        queryCtx_{std::move(queryCtx)} {}
+        queryCtx_{std::move(queryCtx)},
+        runtimeStats_{runtimeStats} {}
 
   /// Lowers the plan to a distributed Velox execution plan (a
   /// `MultiFragmentPlan` of one or more fragments).
@@ -123,6 +126,7 @@ class Optimizer {
   const OptimizerSession& session_;
   velox::core::ExpressionEvaluator& evaluator_;
   const std::shared_ptr<velox::core::QueryCtx> queryCtx_;
+  QueryRuntimeStats* const runtimeStats_;
 };
 
 } // namespace facebook::axiom::optimizer::v2
