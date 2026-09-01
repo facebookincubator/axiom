@@ -18,6 +18,8 @@
 
 #include <folly/container/F14Map.h>
 
+#include "axiom/common/QueryRuntimeStats.h"
+#include "axiom/connectors/ConnectorSplitManager.h"
 #include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "velox/connectors/Connector.h"
@@ -39,10 +41,16 @@ struct ScanHandle {
       const ExprVector& filters,
       const OptimizerSession& session,
       velox::core::ExpressionEvaluator& evaluator,
-      ExprVector& rejected);
+      ExprVector& rejected,
+      bool resolvePartitionSelection,
+      QueryRuntimeStats* runtimeStats);
 
   /// Table handle with the accepted filters pushed into the connector.
   velox::connector::ConnectorTableHandlePtr tableHandle;
+
+  /// Exact versioned partitions selected for this scan and the storage
+  /// partitioning certified across them.
+  connector::PartitionSelectionPtr partitionSelection;
 
   /// Column handle per column of the connector read schema: every column the
   /// `Scan` outputs, plus the ones only the connector's own filters read,

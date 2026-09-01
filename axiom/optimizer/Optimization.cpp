@@ -197,6 +197,7 @@ void Optimization::estimateAllBaseTableSelectivity(DerivedTable& dt) {
     tasks.push_back(layout->co_estimateStats(
         std::move(connectorSession),
         data->handle,
+        /*partitionSelection=*/nullptr,
         std::move(columnNames),
         estimator));
   }

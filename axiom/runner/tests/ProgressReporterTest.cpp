@@ -72,11 +72,16 @@ class GatedSplitSourceFactory : public SplitSourceFactory {
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
       const connector::ConnectorSessionPtr& session,
       const velox::core::TableScanNode& scan,
+      connector::PartitionSelectionPtr partitionSelection,
       const std::shared_ptr<connector::PartitionType>& partitionType,
       std::optional<double> samplePercentage) override {
     return std::make_shared<GatedSplitSource>(
         inner_.splitSourceForScan(
-            session, scan, partitionType, samplePercentage),
+            session,
+            scan,
+            std::move(partitionSelection),
+            partitionType,
+            samplePercentage),
         gate_);
   }
 

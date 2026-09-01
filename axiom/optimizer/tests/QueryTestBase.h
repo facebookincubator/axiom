@@ -301,6 +301,10 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
 
   std::shared_ptr<connector::TestConnector> testConnector_;
 
+  QueryRuntimeStats& runtimeStats() {
+    return runtimeStats_;
+  }
+
  private:
   std::shared_ptr<velox::memory::MemoryPool> optimizerPool_;
 

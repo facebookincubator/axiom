@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/v2/Builder.h"
 #include "axiom/optimizer/v2/Node.h"
@@ -89,7 +90,8 @@ class PushdownAndPrunePass {
       Builder& builder,
       velox::core::ExpressionEvaluator& evaluator,
       const OptimizerSession& session,
-      ConnectorPushdown connectorPushdown);
+      ConnectorPushdown connectorPushdown,
+      QueryRuntimeStats* runtimeStats);
 };
 
 } // namespace facebook::axiom::optimizer::v2

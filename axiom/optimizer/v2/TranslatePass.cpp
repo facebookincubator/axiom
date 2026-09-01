@@ -3352,7 +3352,9 @@ ExprCP Translator::tryFoldConstantScalar(NodeCP body) {
       filters,
       session_,
       evaluator_,
-      rejected);
+      rejected,
+      /*resolvePartitionSelection=*/false,
+      /*runtimeStats=*/nullptr);
 
   auto connectorSession =
       session_.toConnectorSession(discreteLayout.layout->connectorId());

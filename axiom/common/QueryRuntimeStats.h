@@ -55,6 +55,12 @@ class QueryRuntimeStats : public velox::ConcurrentRuntimeStatWriter {
       "axiom-optimizeToVeloxCpuNanos"};
 
   // Split manager.
+  static constexpr std::string_view kSelectPartitionsWallNanos{
+      "axiom-selectPartitionsWallNanos"};
+  static constexpr std::string_view kSelectPartitionsCpuNanos{
+      "axiom-selectPartitionsCpuNanos"};
+  static constexpr std::string_view kSelectPartitionsCount{
+      "axiom-selectPartitionsCount"};
   static constexpr std::string_view kListPartitionsWallNanos{
       "axiom-listPartitionsWallNanos"};
   static constexpr std::string_view kListPartitionsCpuNanos{

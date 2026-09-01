@@ -46,6 +46,7 @@ class SplitSourceFactory {
   virtual std::shared_ptr<connector::SplitSource> splitSourceForScan(
       const connector::ConnectorSessionPtr& session,
       const velox::core::TableScanNode& scan,
+      connector::PartitionSelectionPtr partitionSelection,
       const std::shared_ptr<connector::PartitionType>& partitionType,
       std::optional<double> samplePercentage) = 0;
 };
@@ -62,6 +63,7 @@ class SimpleSplitSourceFactory : public SplitSourceFactory {
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
       const connector::ConnectorSessionPtr& session,
       const velox::core::TableScanNode& scan,
+      connector::PartitionSelectionPtr partitionSelection,
       const std::shared_ptr<connector::PartitionType>& partitionType,
       std::optional<double> samplePercentage) override;
 
@@ -81,6 +83,7 @@ class ConnectorSplitSourceFactory : public SplitSourceFactory {
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
       const connector::ConnectorSessionPtr& session,
       const velox::core::TableScanNode& scan,
+      connector::PartitionSelectionPtr partitionSelection,
       const std::shared_ptr<connector::PartitionType>& partitionType,
       std::optional<double> samplePercentage) override;
 

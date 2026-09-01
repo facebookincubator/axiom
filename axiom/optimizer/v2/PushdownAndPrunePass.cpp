@@ -641,12 +641,14 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       Builder& builder,
       velox::core::ExpressionEvaluator& evaluator,
       const OptimizerSession& session,
-      PushdownAndPrunePass::ConnectorPushdown connectorPushdown)
+      PushdownAndPrunePass::ConnectorPushdown connectorPushdown,
+      QueryRuntimeStats* runtimeStats)
       : NodeRewriter(builder),
         exprs_(builder),
         evaluator_(evaluator),
         session_(session),
         connectorPushdown_(connectorPushdown),
+        runtimeStats_(runtimeStats),
         simplifier_(builder, evaluator) {}
 
  protected:
@@ -1185,7 +1187,9 @@ class Pushdown : public NodeRewriter<PushdownContext> {
             filters,
             session_,
             evaluator_,
-            rejectedHere));
+            rejectedHere,
+            /*resolvePartitionSelection=*/true,
+            runtimeStats_));
     appendAll(rejected, rejectedHere);
     negotiatedByBaseTableId_.emplace(
         baseTable.id(), Negotiated{handle, filters, std::move(rejectedHere)});
@@ -2021,6 +2025,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
   velox::core::ExpressionEvaluator& evaluator_;
   const OptimizerSession& session_;
   const PushdownAndPrunePass::ConnectorPushdown connectorPushdown_;
+  QueryRuntimeStats* const runtimeStats_;
   ExprSimplifier simplifier_;
 
   // Outcome of one negotiation with the connector.
@@ -2044,8 +2049,9 @@ NodeCP PushdownAndPrunePass::run(
     Builder& builder,
     velox::core::ExpressionEvaluator& evaluator,
     const OptimizerSession& session,
-    ConnectorPushdown connectorPushdown) {
-  Pushdown pass{builder, evaluator, session, connectorPushdown};
+    ConnectorPushdown connectorPushdown,
+    QueryRuntimeStats* runtimeStats) {
+  Pushdown pass{builder, evaluator, session, connectorPushdown, runtimeStats};
   PushdownContext context;
   context.required = PlanObjectSet::fromObjects(outputColumns);
   context.requiredAbove = context.required;

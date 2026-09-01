@@ -226,7 +226,8 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunnerV2(
                    schemaResolver,
                    *optimizerSession,
                    evaluator,
-                   queryCtx)
+                   queryCtx,
+                   /*runtimeStats=*/nullptr)
             .optimize(options);
       });
 }
