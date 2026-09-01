@@ -37,6 +37,8 @@ class EmitPass {
     /// Per-node estimates, keyed by emitted `PlanNodeId`, for EXPLAIN. Empty
     /// when estimates are unavailable.
     NodePredictionMap prediction;
+    /// Query-local partition selections keyed by emitted TableScanNode ID.
+    ScanPartitionSelectionMap scanPartitionSelections;
   };
 
   /// Lowers the tree-IR rooted at 'root' into fragments, projecting to the

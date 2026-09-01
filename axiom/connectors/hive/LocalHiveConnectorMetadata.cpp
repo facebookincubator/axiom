@@ -576,6 +576,7 @@ folly::coro::Task<std::optional<FilteredTableStats>>
 LocalHiveTableLayout::co_estimateStats(
     ConnectorSessionPtr /*session*/,
     velox::connector::ConnectorTableHandlePtr tableHandle,
+    PartitionSelectionPtr /*partitionSelection*/,
     std::vector<std::string> columns,
     const FilterSelectivityEstimator& estimator) const {
   auto hiveHandle =
@@ -632,6 +633,7 @@ folly::coro::Task<std::optional<std::vector<MetadataCountGroup>>>
 LocalHiveTableLayout::co_metadataCounts(
     ConnectorSessionPtr /*session*/,
     velox::connector::ConnectorTableHandlePtr tableHandle,
+    PartitionSelectionPtr /*partitionSelection*/,
     std::vector<std::string> groupingColumns,
     std::vector<std::string> columns) const {
   auto hiveHandle =

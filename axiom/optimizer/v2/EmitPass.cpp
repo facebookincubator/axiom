@@ -582,6 +582,9 @@ class Emitter {
   // takePrediction.
   NodePredictionMap prediction_;
 
+  // Selected partitions keyed by emitted TableScanNode ID.
+  ScanPartitionSelectionMap scanPartitionSelections_;
+
  public:
   // Lowers 'root' (plus the output rename to 'outputNames') into fragments,
   // returning them with the root fragment last.
@@ -599,6 +602,10 @@ class Emitter {
   // Transfers the per-node cardinality predictions collected during emit.
   NodePredictionMap takePrediction() {
     return std::move(prediction_);
+  }
+
+  ScanPartitionSelectionMap takeScanPartitionSelections() {
+    return std::move(scanPartitionSelections_);
   }
 };
 
@@ -656,6 +663,10 @@ velox::core::PlanNodePtr Emitter::emitScan(const Scan& scan) {
       velox::ROW(std::move(scanOutputNames), std::move(scanOutputTypes)),
       tableHandle,
       std::move(assignments));
+
+  if (handle.partitionSelection != nullptr) {
+    scanPartitionSelections_.emplace(scanNode->id(), handle.partitionSelection);
+  }
 
   // A grouped scan makes its fragment bucketed.
   if (const auto* partitionType = scan.groupedPartitionType()) {
@@ -2337,7 +2348,8 @@ EmitPass::Result EmitPass::run(
   return Result{
       std::move(fragments),
       emitter.takeFinishWrite(),
-      emitter.takePrediction()};
+      emitter.takePrediction(),
+      emitter.takeScanPartitionSelections()};
 }
 
 } // namespace facebook::axiom::optimizer::v2

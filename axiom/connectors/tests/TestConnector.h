@@ -127,6 +127,14 @@ class TestTableLayout : public TableLayout {
     return partitionType_;
   }
 
+  void setPartitionsConsistent(bool consistent) {
+    partitionsConsistent_ = consistent;
+  }
+
+  bool partitionsConsistent() const {
+    return partitionsConsistent_;
+  }
+
   /// Records discrete values to use in 'discretePredicateColumns' and
   /// 'discretePredicates' APIs. If called repeatedly, overwrites previous
   /// values.
@@ -161,6 +169,7 @@ class TestTableLayout : public TableLayout {
   std::vector<const Column*> discreteValueColumns_;
   std::vector<velox::Variant> discreteValues_;
   std::shared_ptr<const PartitionType> partitionType_;
+  bool partitionsConsistent_{true};
 };
 
 /// RowVectors are appended using the addData() interface and the vector
@@ -295,6 +304,12 @@ class TestConnectorMetadata;
 /// only for the requested buckets' entries.
 class TestSplitManager : public ConnectorSplitManager {
  public:
+  folly::coro::Task<PartitionSelection> co_selectPartitions(
+      const ConnectorSessionPtr& session,
+      const velox::connector::ConnectorTableHandlePtr& tableHandle,
+      std::shared_ptr<const PartitionType> declaredStoragePartitionType)
+      override;
+
   folly::coro::Task<std::vector<PartitionHandlePtr>> co_listPartitions(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle) override;
@@ -581,6 +596,10 @@ class TestConnectorMetadata : public ConnectorMetadata {
       const SchemaTableName& tableName,
       uint64_t numRows,
       const std::unordered_map<std::string, ColumnStatistics>& columnStats);
+
+  void setPartitionsConsistent(
+      const SchemaTableName& tableName,
+      bool consistent);
 
   TablePtr createTable(
       const ConnectorSessionPtr& session,
@@ -904,6 +923,16 @@ class TestConnector : public velox::connector::Connector {
       const SchemaTableName& tableName,
       uint64_t numRows,
       const std::unordered_map<std::string, ColumnStatistics>& columnStats);
+
+  void setPartitionsConsistent(
+      const SchemaTableName& tableName,
+      bool consistent);
+
+  /// Convenience overload that uses kDefaultSchema as the schema.
+  void setPartitionsConsistent(const std::string& tableName, bool consistent) {
+    setPartitionsConsistent(
+        {std::string(kDefaultSchema), tableName}, consistent);
+  }
 
   /// Convenience overload that uses kDefaultSchema as the schema.
   void setStats(
