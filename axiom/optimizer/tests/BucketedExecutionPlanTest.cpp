@@ -20,6 +20,8 @@
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
+#include "velox/core/PlanFragment.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
 
 namespace facebook::axiom::optimizer {
 namespace {
@@ -105,6 +107,42 @@ class BucketedExecutionTest : public test::QueryTestBase,
         EXPECT_EQ(hashExchanges, expectedHashExchanges);
       }
       found = true;
+    }
+    EXPECT_TRUE(found) << "Expected at least one bucketed fragment";
+  }
+
+  // Asserts the bucketed fragment's Velox grouped-execution metadata.
+  static void expectGroupedExecution(
+      const MultiFragmentPlan& plan,
+      bool grouped) {
+    bool found = false;
+    for (const auto& fragment : plan.fragments()) {
+      if (fragment.groupedNodes.empty()) {
+        continue;
+      }
+      found = true;
+      ASSERT_TRUE(fragment.numSplitGroups.has_value());
+      EXPECT_GT(*fragment.numSplitGroups, 0);
+
+      const auto& veloxFragment = fragment.fragment;
+      if (!grouped) {
+        EXPECT_FALSE(veloxFragment.isGroupedExecution());
+        EXPECT_TRUE(veloxFragment.groupedExecutionLeafNodeIds.empty());
+        continue;
+      }
+
+      EXPECT_TRUE(veloxFragment.isGroupedExecution());
+      EXPECT_EQ(veloxFragment.numSplitGroups, *fragment.numSplitGroups);
+
+      size_t bucketedScans = 0;
+      for (const auto& [nodeId, partitionType] : fragment.groupedNodes) {
+        if (partitionType != nullptr) {
+          ++bucketedScans;
+          EXPECT_TRUE(veloxFragment.leafNodeRunsGroupedExecution(nodeId));
+        }
+      }
+      EXPECT_EQ(
+          veloxFragment.groupedExecutionLeafNodeIds.size(), bucketedScans);
     }
     EXPECT_TRUE(found) << "Expected at least one bucketed fragment";
   }
@@ -202,6 +240,255 @@ TEST_P(BucketedExecutionTest, join) {
           .fragment({.width = 4, .bucketedScans = 1, .bucketedExchanges = 1})
           .gather()
           .build());
+}
+
+TEST_P(BucketedExecutionTest, groupedExecutionFlag) {
+  addBucketedTable("ge_orders", {"customer_id"}, 128);
+  addBucketedTable(
+      "ge_customers", {"id"}, 128, ROW({"id", "name"}, {BIGINT(), VARCHAR()}));
+
+  const auto logicalPlan = parseSelect(
+      "SELECT * FROM ge_orders JOIN ge_customers "
+      "ON ge_orders.customer_id = ge_customers.id",
+      kTestConnectorId);
+
+  {
+    auto plan = planVelox(
+        logicalPlan,
+        {.numWorkers = 4, .numDrivers = 4, .groupedExecution = true},
+        optimizerOptions_);
+    expectBucketedFragmentWithWidth(*plan.plan, 4);
+    expectGroupedExecution(*plan.plan, /*grouped=*/useV2_);
+  }
+
+  {
+    auto plan = planVelox(
+        logicalPlan,
+        {.numWorkers = 4, .numDrivers = 4, .groupedExecution = false},
+        optimizerOptions_);
+    expectBucketedFragmentWithWidth(*plan.plan, 4);
+    expectGroupedExecution(*plan.plan, /*grouped=*/false);
+  }
+}
+
+TEST_P(BucketedExecutionTest, groupedExecutionSkipsScanOnlyFragment) {
+  addBucketedTable("ge_scan_only", {"customer_id"}, 128);
+
+  auto plan = planVelox(
+      parseSelect("SELECT customer_id FROM ge_scan_only", kTestConnectorId),
+      {.numWorkers = 4, .numDrivers = 4, .groupedExecution = true},
+      optimizerOptions_);
+
+  for (const auto& fragment : plan.plan->fragments()) {
+    EXPECT_FALSE(fragment.fragment.isGroupedExecution());
+  }
+}
+
+TEST_P(BucketedExecutionTest, groupedExecutionRunsEndToEnd) {
+  if (!useV2_) {
+    GTEST_SKIP() << "Grouped execution requires scan certification in v2";
+  }
+  // 8 buckets over 2 workers, so each task processes multiple split groups.
+  const auto schema = ROW({"customer_id", "amount"}, {BIGINT(), DOUBLE()});
+  testConnector_->addTable(
+      "ge_run",
+      schema,
+      velox::ROW({}),
+      connector::TestBucketSpec{{"customer_id"}, 8});
+  testConnector_->appendData(
+      "ge_run",
+      makeRowVector(
+          {"customer_id", "amount"},
+          {makeFlatVector<int64_t>(
+               200, [](auto row) { return static_cast<int64_t>(row % 40); }),
+           makeFlatVector<double>(
+               200, [](auto row) { return static_cast<double>(row); })}));
+
+  const auto logicalPlan = parseSelect(
+      "SELECT customer_id, count(*), sum(amount) "
+      "FROM ge_run GROUP BY customer_id",
+      kTestConnectorId);
+
+  auto grouped = runVelox(
+      logicalPlan,
+      {.numWorkers = 2, .numDrivers = 2, .groupedExecution = true});
+  auto ungrouped = runVelox(
+      logicalPlan,
+      {.numWorkers = 2, .numDrivers = 2, .groupedExecution = false});
+
+  velox::exec::test::assertEqualResults(grouped.results, ungrouped.results);
+
+  size_t groupedSplitGroups = 0;
+  for (const auto& stageStats : grouped.stats) {
+    groupedSplitGroups += stageStats.completedSplitGroups.size();
+  }
+  EXPECT_GT(groupedSplitGroups, 0)
+      << "grouped run must complete at least one split group";
+
+  for (const auto& stageStats : ungrouped.stats) {
+    EXPECT_TRUE(stageStats.completedSplitGroups.empty());
+  }
+}
+
+TEST_P(BucketedExecutionTest, groupedJoinRunsEndToEnd) {
+  if (!useV2_) {
+    GTEST_SKIP() << "Grouped execution requires scan certification in v2";
+  }
+  // Two co-bucketed tables on the join key: build bucket N and probe bucket N
+  // run in the same split group, so the hash join executes co-located without a
+  // shuffle. Exercises a multi-source grouped pipeline (the case that a single
+  // grouped scan does not).
+  testConnector_->addTable(
+      "gj_orders",
+      ROW({"customer_id", "amount"}, {BIGINT(), DOUBLE()}),
+      velox::ROW({}),
+      connector::TestBucketSpec{{"customer_id"}, 8});
+  testConnector_->appendData(
+      "gj_orders",
+      makeRowVector(
+          {"customer_id", "amount"},
+          {makeFlatVector<int64_t>(
+               200, [](auto row) { return static_cast<int64_t>(row % 40); }),
+           makeFlatVector<double>(
+               200, [](auto row) { return static_cast<double>(row); })}));
+
+  testConnector_->addTable(
+      "gj_customers",
+      ROW({"id", "tag"}, {BIGINT(), BIGINT()}),
+      velox::ROW({}),
+      connector::TestBucketSpec{{"id"}, 8});
+  testConnector_->appendData(
+      "gj_customers",
+      makeRowVector(
+          {"id", "tag"},
+          {makeFlatVector<int64_t>(
+               40, [](auto row) { return static_cast<int64_t>(row); }),
+           makeFlatVector<int64_t>(
+               40, [](auto row) { return static_cast<int64_t>(row * 10); })}));
+
+  const auto logicalPlan = parseSelect(
+      "SELECT o.customer_id, o.amount, c.tag "
+      "FROM gj_orders o JOIN gj_customers c ON o.customer_id = c.id",
+      kTestConnectorId);
+
+  auto grouped = runVelox(
+      logicalPlan,
+      {.numWorkers = 2, .numDrivers = 2, .groupedExecution = true});
+  auto ungrouped = runVelox(
+      logicalPlan,
+      {.numWorkers = 2, .numDrivers = 2, .groupedExecution = false});
+
+  velox::exec::test::assertEqualResults(grouped.results, ungrouped.results);
+
+  size_t groupedSplitGroups = 0;
+  for (const auto& stageStats : grouped.stats) {
+    groupedSplitGroups += stageStats.completedSplitGroups.size();
+  }
+  EXPECT_GT(groupedSplitGroups, 0)
+      << "grouped join must complete at least one split group";
+}
+
+TEST_P(BucketedExecutionTest, groupedUnionRunsEndToEnd) {
+  if (!useV2_) {
+    GTEST_SKIP() << "Grouped execution requires scan certification in v2";
+  }
+  // UNION ALL of two co-bucketed tables feeding a bucketed aggregation. Both
+  // union legs are grouped, so the local exchange under the union runs grouped
+  // too (the case that errors when only some sources are grouped).
+  for (const auto& name : {"gu_a", "gu_b"}) {
+    testConnector_->addTable(
+        name,
+        ROW({"customer_id", "amount"}, {BIGINT(), DOUBLE()}),
+        velox::ROW({}),
+        connector::TestBucketSpec{{"customer_id"}, 8});
+    testConnector_->appendData(
+        name,
+        makeRowVector(
+            {"customer_id", "amount"},
+            {makeFlatVector<int64_t>(
+                 200, [](auto row) { return static_cast<int64_t>(row % 40); }),
+             makeFlatVector<double>(
+                 200, [](auto row) { return static_cast<double>(row); })}));
+  }
+
+  const auto logicalPlan = parseSelect(
+      "SELECT customer_id, count(*), sum(amount) FROM ("
+      "  SELECT customer_id, amount FROM gu_a"
+      "  UNION ALL"
+      "  SELECT customer_id, amount FROM gu_b"
+      ") GROUP BY customer_id",
+      kTestConnectorId);
+
+  auto grouped = runVelox(
+      logicalPlan,
+      {.numWorkers = 2, .numDrivers = 2, .groupedExecution = true});
+  auto ungrouped = runVelox(
+      logicalPlan,
+      {.numWorkers = 2, .numDrivers = 2, .groupedExecution = false});
+
+  velox::exec::test::assertEqualResults(grouped.results, ungrouped.results);
+
+  size_t groupedSplitGroups = 0;
+  for (const auto& stageStats : grouped.stats) {
+    groupedSplitGroups += stageStats.completedSplitGroups.size();
+  }
+  EXPECT_GT(groupedSplitGroups, 0)
+      << "grouped union must complete at least one split group";
+}
+
+TEST_P(BucketedExecutionTest, groupedMixedJoinRunsEndToEnd) {
+  if (!useV2_) {
+    GTEST_SKIP() << "Grouped execution requires scan certification in v2";
+  }
+  // Mixed grouped execution: a bucketed probe joined with an unbucketed build
+  // that is shuffled into the bucketed fragment. The probe pipeline runs
+  // grouped while the build (behind a remote exchange) runs ungrouped, sharing
+  // a single build hash table across all probe split groups.
+  testConnector_->addTable(
+      "gmj_orders",
+      ROW({"customer_id", "amount"}, {BIGINT(), DOUBLE()}),
+      velox::ROW({}),
+      connector::TestBucketSpec{{"customer_id"}, 8});
+  testConnector_->appendData(
+      "gmj_orders",
+      makeRowVector(
+          {"customer_id", "amount"},
+          {makeFlatVector<int64_t>(
+               200, [](auto row) { return static_cast<int64_t>(row % 40); }),
+           makeFlatVector<double>(
+               200, [](auto row) { return static_cast<double>(row); })}));
+
+  testConnector_->addTable(
+      "gmj_extras", ROW({"customer_id", "extra"}, {BIGINT(), BIGINT()}));
+  testConnector_->appendData(
+      "gmj_extras",
+      makeRowVector(
+          {"customer_id", "extra"},
+          {makeFlatVector<int64_t>(
+               40, [](auto row) { return static_cast<int64_t>(row); }),
+           makeFlatVector<int64_t>(
+               40, [](auto row) { return static_cast<int64_t>(row * 100); })}));
+
+  const auto logicalPlan = parseSelect(
+      "SELECT o.customer_id, o.amount, e.extra "
+      "FROM gmj_orders o JOIN gmj_extras e ON o.customer_id = e.customer_id",
+      kTestConnectorId);
+
+  auto grouped = runVelox(
+      logicalPlan,
+      {.numWorkers = 2, .numDrivers = 2, .groupedExecution = true});
+  auto ungrouped = runVelox(
+      logicalPlan,
+      {.numWorkers = 2, .numDrivers = 2, .groupedExecution = false});
+
+  velox::exec::test::assertEqualResults(grouped.results, ungrouped.results);
+
+  size_t groupedSplitGroups = 0;
+  for (const auto& stageStats : grouped.stats) {
+    groupedSplitGroups += stageStats.completedSplitGroups.size();
+  }
+  EXPECT_GT(groupedSplitGroups, 0)
+      << "grouped mixed join must complete at least one split group";
 }
 
 TEST_P(BucketedExecutionTest, semijoin) {

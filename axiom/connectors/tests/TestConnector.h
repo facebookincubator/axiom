@@ -49,7 +49,19 @@ class TestPartitionType : public PartitionType {
       int32_t numPartitions,
       std::vector<velox::TypePtr> partitionKeyTypes,
       velox::RowTypePtr inputType)
+      : TestPartitionType(
+            numPartitions,
+            numPartitions,
+            std::move(partitionKeyTypes),
+            std::move(inputType)) {}
+
+  TestPartitionType(
+      int32_t numPartitions,
+      int32_t numGroups,
+      std::vector<velox::TypePtr> partitionKeyTypes,
+      velox::RowTypePtr inputType)
       : numPartitions_(numPartitions),
+        numGroups_(numGroups),
         partitionKeyTypes_(std::move(partitionKeyTypes)),
         inputType_(std::move(inputType)) {}
 
@@ -68,10 +80,15 @@ class TestPartitionType : public PartitionType {
     return numPartitions_;
   }
 
+  int32_t numGroups() const override {
+    return numGroups_;
+  }
+
   std::string toString() const override;
 
  private:
   const int32_t numPartitions_;
+  const int32_t numGroups_;
   const std::vector<velox::TypePtr> partitionKeyTypes_;
   const velox::RowTypePtr inputType_;
 };

@@ -1806,6 +1806,20 @@ void Emitter::finalizeGroupedLeaves(ExecutableFragment& fragment) {
   }
   fragment.type = FragmentType::kFixed;
   fragment.width = folded->numPartitions();
+
+  const int32_t numGroups = folded->numGroups();
+  fragment.numSplitGroups = numGroups;
+
+  if (options_.groupedExecution) {
+    fragment.fragment.executionStrategy =
+        velox::core::ExecutionStrategy::kGrouped;
+    fragment.fragment.numSplitGroups = numGroups;
+    for (const auto& [nodeId, partitionType] : fragment.groupedNodes) {
+      if (partitionType != nullptr) {
+        fragment.fragment.groupedExecutionLeafNodeIds.insert(nodeId);
+      }
+    }
+  }
 }
 
 velox::core::PlanNodePtr Emitter::emitChildFragment(

@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 #include "axiom/connectors/hive/HiveConnectorMetadata.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
 
 namespace facebook::axiom::optimizer {
 namespace {
@@ -89,6 +90,31 @@ class HiveBucketedExecutionTest : public test::HiveQueriesTestBase,
         logicalPlan,
         {.numWorkers = numWorkers, .numDrivers = 4},
         optimizerOptions_);
+  }
+
+  // Runs 'sql' distributed with grouped execution on and off, checks the
+  // results match, and returns the number of completed split groups reported
+  // for the grouped run (per-fragment, so groups a single task processed).
+  // Zero means grouped execution did not run; the ungrouped run must report no
+  // split groups at all.
+  size_t runGroupedVsUngrouped(const std::string& sql) {
+    const auto logicalPlan = parseSelect(sql);
+    auto grouped = runVelox(
+        logicalPlan,
+        {.numWorkers = 4, .numDrivers = 4, .groupedExecution = true});
+    auto ungrouped = runVelox(
+        logicalPlan,
+        {.numWorkers = 4, .numDrivers = 4, .groupedExecution = false});
+    velox::exec::test::assertEqualResults(grouped.results, ungrouped.results);
+
+    size_t splitGroups = 0;
+    for (const auto& stageStats : grouped.stats) {
+      splitGroups += stageStats.completedSplitGroups.size();
+    }
+    for (const auto& stageStats : ungrouped.stats) {
+      EXPECT_TRUE(stageStats.completedSplitGroups.empty());
+    }
+    return splitGroups;
   }
 
   std::vector<std::string> tablesToDrop_;
@@ -657,6 +683,62 @@ TEST_P(HiveBucketedExecutionTest, unionAllWithUnbucketedLeg) {
             .gather()
             .build());
   }
+}
+
+TEST_P(HiveBucketedExecutionTest, groupedAggregationRunsEndToEnd) {
+  if (!useV2_) {
+    GTEST_SKIP() << "Grouped execution requires scan certification in v2";
+  }
+  createBucketedTable("ge_agg", 16, {"c_nationkey"}, "SELECT * FROM customer");
+  const auto splitGroups = runGroupedVsUngrouped(
+      "SELECT c_nationkey, count(*) FROM ge_agg GROUP BY 1");
+  EXPECT_GT(splitGroups, 0)
+      << "grouped aggregation must complete at least one split group";
+}
+
+TEST_P(HiveBucketedExecutionTest, groupedJoinRunsEndToEnd) {
+  if (!useV2_) {
+    GTEST_SKIP() << "Grouped execution requires scan certification in v2";
+  }
+  createBucketedTable(
+      "ge_t",
+      16,
+      {"c_nationkey"},
+      "SELECT c_custkey, c_nationkey FROM customer");
+  createBucketedTable(
+      "ge_u",
+      16,
+      {"c_nationkey"},
+      "SELECT DISTINCT c_nationkey, cast(c_nationkey as varchar) as label FROM customer");
+  const auto splitGroups = runGroupedVsUngrouped(
+      "SELECT * FROM ge_t, ge_u WHERE ge_t.c_nationkey = ge_u.c_nationkey");
+  EXPECT_GT(splitGroups, 0)
+      << "co-located grouped join must complete at least one split group";
+}
+
+TEST_P(
+    HiveBucketedExecutionTest,
+    groupedJoinDifferentBucketCountsRunsEndToEnd) {
+  if (!useV2_) {
+    GTEST_SKIP() << "Grouped execution requires scan certification in v2";
+  }
+  // 8 divides 16, so the sides co-partition on a common 8-group space; a key in
+  // the 16-bucket table's bucket b co-locates with the 8-bucket table's bucket
+  // b % 8.
+  createBucketedTable(
+      "ge_t16",
+      16,
+      {"c_nationkey"},
+      "SELECT c_custkey, c_nationkey FROM customer");
+  createBucketedTable(
+      "ge_u8",
+      8,
+      {"c_nationkey"},
+      "SELECT DISTINCT c_nationkey, cast(c_nationkey as varchar) as label FROM customer");
+  const auto splitGroups = runGroupedVsUngrouped(
+      "SELECT * FROM ge_t16, ge_u8 WHERE ge_t16.c_nationkey = ge_u8.c_nationkey");
+  EXPECT_GT(splitGroups, 0)
+      << "grouped join across differing bucket counts must complete at least one split group";
 }
 
 AXIOM_INSTANTIATE_V1_V2(HiveBucketedExecutionTest);

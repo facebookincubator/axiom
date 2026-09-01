@@ -337,6 +337,14 @@ class PartitionType {
   /// Number of partitions.
   virtual int32_t numPartitions() const = 0;
 
+  /// Number of split groups (buckets) rows are distributed into. Defaults to
+  /// numPartitions(); connectors that fold native buckets into fewer partitions
+  /// return the native bucket count so grouped execution can process one bucket
+  /// at a time.
+  virtual int32_t numGroups() const {
+    return numPartitions();
+  }
+
   virtual std::string toString() const = 0;
 
   template <typename T>

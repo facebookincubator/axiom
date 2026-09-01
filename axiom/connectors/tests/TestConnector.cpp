@@ -52,7 +52,10 @@ std::shared_ptr<PartitionType> TestPartitionType::copartition(
     return nullptr;
   }
   return std::make_shared<TestPartitionType>(
-      fewerPartitions, partitionKeyTypes_, inputType_);
+      fewerPartitions,
+      std::min(numGroups_, otherTest->numGroups_),
+      partitionKeyTypes_,
+      inputType_);
 }
 
 std::shared_ptr<PartitionType> TestPartitionType::scaleDown(
@@ -63,7 +66,7 @@ std::shared_ptr<PartitionType> TestPartitionType::scaleDown(
     --scaledPartitions;
   }
   return std::make_shared<TestPartitionType>(
-      scaledPartitions, partitionKeyTypes_, inputType_);
+      scaledPartitions, numGroups_, partitionKeyTypes_, inputType_);
 }
 
 velox::core::PartitionFunctionSpecPtr TestPartitionType::makeSpec(
@@ -421,15 +424,26 @@ folly::coro::Task<SplitBatch> TestSplitSource::co_getSplits(
     auto split =
         std::make_shared<TestConnectorSplit>(connectorId_, dataIndices_[i]);
     std::optional<int32_t> groupId;
+    std::optional<int32_t> partitionId;
     if (partitionType_ != nullptr) {
       VELOX_CHECK_LT(i, dataBucketIds_.size());
-      groupId = dataBucketIds_[i] % partitionType_->numPartitions();
+      groupId = dataBucketIds_[i] % partitionType_->numGroups();
+      partitionId = dataBucketIds_[i] % partitionType_->numPartitions();
     }
     batch.splits.push_back(
-        Split{.connectorSplit = std::move(split), .groupId = groupId});
+        Split{
+            .connectorSplit = std::move(split),
+            .groupId = groupId,
+            .partitionId = partitionId});
   }
   nextOffset_ = end;
   batch.noMoreSplits = (nextOffset_ >= dataIndices_.size());
+  if (batch.noMoreSplits && partitionType_ != nullptr) {
+    for (const auto bucketId : dataBucketIds_) {
+      batch.noMoreSplitsForGroupId.insert(
+          bucketId % partitionType_->numGroups());
+    }
+  }
   co_return batch;
 }
 
