@@ -765,7 +765,12 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   }
 
   NodeCP rewriteAggregate(const Aggregate* node, NoContext& context) override {
-    NodeCP input = rewrite(node->input(), context);
+    return planAggregateStages(node, rewrite(node->input(), context));
+  }
+
+  // Selects single-stage or partial/final execution for an Aggregate whose
+  // input is already physically planned.
+  NodeCP planAggregateStages(const Aggregate* node, NodeCP input) {
     if (isSplittableAggregate(node)) {
       // Remote two-stage: the input must shuffle across workers to co-locate
       // its groups, so the partial reduces rows before that remote exchange.
@@ -775,7 +780,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
                 input, node->groupingKeys(), Alignment::kCoLocated)) {
           input = grouped;
         } else {
-          return rewriteAggregateSplit(node, input, /*remoteExchange=*/true);
+          return planAggregateSplit(node, input, /*remoteExchange=*/true);
         }
       }
       // Local two-stage: the input is already co-located (e.g. a bucketed
@@ -785,9 +790,14 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       // The local exchange itself is not materialized here — emit inserts it at
       // numDrivers > 1 (local exchanges are implicit).
       if (numDrivers_ > 1) {
-        return rewriteAggregateSplit(node, input, /*remoteExchange=*/false);
+        return planAggregateSplit(node, input, /*remoteExchange=*/false);
       }
     }
+    return planSingleAggregate(node, input);
+  }
+
+  // Plans a single-stage Aggregate whose input is already physically planned.
+  NodeCP planSingleAggregate(const Aggregate* node, NodeCP input) {
     // A global () grouping set emits a default row over empty input; a
     // single-stage aggregate must gather (empty keys) so that row is produced
     // once, not once per worker.
@@ -896,10 +906,8 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   // aggregate (e.g. array_agg) gains nothing and pays an extra hash pass; not
   // splitting it needs a reducing/non-reducing classification that does not yet
   // exist, so that pessimization is deferred.
-  NodeCP rewriteAggregateSplit(
-      const Aggregate* node,
-      NodeCP input,
-      bool remoteExchange) {
+  NodeCP
+  planAggregateSplit(const Aggregate* node, NodeCP input, bool remoteExchange) {
     const size_t numKeys = node->groupingKeys().size();
     const auto& finalColumns = node->outputColumns();
 

@@ -359,68 +359,8 @@ class Rewriter : public NodeRewriter<> {
 NodeCP Rewriter::rewriteAggregate(
     const Aggregate* aggregate,
     NoContext& context) {
-  NodeCP newInput = rewrite(aggregate->input(), context);
-  // An Aggregate reads only its grouping keys and aggregate inputs, so the
-  // lifting project outputs just those — dropping any input column kept solely
-  // to feed a lifted aggregate expression.
-  PrecomputeProjections precompute{
-      newInput, builder(), /*projectAllInputs=*/false};
-
-  ExprVector newGroupingKeys;
-  newGroupingKeys.reserve(aggregate->groupingKeys().size());
-  for (size_t i = 0; i < aggregate->groupingKeys().size(); ++i) {
-    // Reuse the existing output column as the projection alias so the
-    // Aggregate's outputColumns identity is preserved.
-    newGroupingKeys.push_back(precompute.toColumn(
-        aggregate->groupingKeys()[i], aggregate->outputColumns()[i]));
-  }
-
-  // A kFinal aggregate's args reference the Partial's raw inputs, which are
-  // absent at the Final's input (it consumes intermediate accumulators), so
-  // leave them untouched rather than precompute them here.
-  AggregateCallVector newAggregates;
-  if (aggregate->step() == AggregateStep::kFinal) {
-    newAggregates = aggregate->aggregates();
-  } else {
-    newAggregates.reserve(aggregate->aggregates().size());
-    for (const auto* call : aggregate->aggregates()) {
-      ExprVector newArgs;
-      newArgs.reserve(call->args().size());
-      for (ExprCP arg : call->args()) {
-        newArgs.push_back(precompute.toColumn(
-            arg, /*alias=*/nullptr, /*allowConstant=*/true));
-      }
-      ExprCP newCondition = call->condition() != nullptr
-          ? precompute.toColumn(
-                call->condition(), /*alias=*/nullptr, /*allowConstant=*/true)
-          : nullptr;
-      ExprVector newOrderKeys;
-      newOrderKeys.reserve(call->orderKeys().size());
-      for (ExprCP key : call->orderKeys()) {
-        newOrderKeys.push_back(precompute.toColumn(key));
-      }
-      newAggregates.push_back(
-          builder().makeAggregate(
-              call->name(),
-              call->value(),
-              std::move(newArgs),
-              call->functions(),
-              call->isDistinct(),
-              newCondition,
-              call->intermediateType(),
-              std::move(newOrderKeys),
-              call->orderTypes()));
-    }
-  }
-
-  return builder().make<Aggregate>(
-      {.input = std::move(precompute).node(),
-       .groupingKeys = std::move(newGroupingKeys),
-       .aggregates = std::move(newAggregates),
-       .outputColumns = aggregate->outputColumns(),
-       .step = aggregate->step(),
-       .groupId = aggregate->groupId(),
-       .globalGroupingSets = aggregate->globalGroupingSets()});
+  return PrecomputeProjectionsPass::prepareAggregateInputs(
+      aggregate, rewrite(aggregate->input(), context), builder());
 }
 
 NodeCP Rewriter::rewriteWindow(const Window* window, NoContext& context) {
@@ -779,6 +719,72 @@ NodeCP Rewriter::rewriteUnionAll(const UnionAll* unionAll, NoContext& context) {
 }
 
 } // namespace
+
+AggregateCP PrecomputeProjectionsPass::prepareAggregateInputs(
+    const Aggregate* aggregate,
+    NodeCP rewrittenInput,
+    Builder& builder) {
+  // An Aggregate reads only its grouping keys and aggregate inputs, so the
+  // lifting project outputs just those — dropping any input column kept solely
+  // to feed a lifted aggregate expression.
+  PrecomputeProjections precompute{
+      rewrittenInput, builder, /*projectAllInputs=*/false};
+
+  ExprVector newGroupingKeys;
+  newGroupingKeys.reserve(aggregate->groupingKeys().size());
+  for (size_t i = 0; i < aggregate->groupingKeys().size(); ++i) {
+    // Reuse the existing output column as the projection alias so the
+    // Aggregate's outputColumns identity is preserved.
+    newGroupingKeys.push_back(precompute.toColumn(
+        aggregate->groupingKeys()[i], aggregate->outputColumns()[i]));
+  }
+
+  // A kFinal aggregate's args reference the Partial's raw inputs, which are
+  // absent at the Final's input (it consumes intermediate accumulators), so
+  // leave them untouched rather than precompute them here.
+  AggregateCallVector newAggregates;
+  if (aggregate->step() == AggregateStep::kFinal) {
+    newAggregates = aggregate->aggregates();
+  } else {
+    newAggregates.reserve(aggregate->aggregates().size());
+    for (const auto* call : aggregate->aggregates()) {
+      ExprVector newArgs;
+      newArgs.reserve(call->args().size());
+      for (ExprCP arg : call->args()) {
+        newArgs.push_back(precompute.toColumn(
+            arg, /*alias=*/nullptr, /*allowConstant=*/true));
+      }
+      ExprCP newCondition = call->condition() != nullptr
+          ? precompute.toColumn(
+                call->condition(), /*alias=*/nullptr, /*allowConstant=*/true)
+          : nullptr;
+      ExprVector newOrderKeys;
+      newOrderKeys.reserve(call->orderKeys().size());
+      for (ExprCP key : call->orderKeys()) {
+        newOrderKeys.push_back(precompute.toColumn(key));
+      }
+      newAggregates.push_back(builder.makeAggregate(
+          call->name(),
+          call->value(),
+          std::move(newArgs),
+          call->functions(),
+          call->isDistinct(),
+          newCondition,
+          call->intermediateType(),
+          std::move(newOrderKeys),
+          call->orderTypes()));
+    }
+  }
+
+  return builder.make<Aggregate>(Aggregate::Key{
+      .input = std::move(precompute).node(),
+      .groupingKeys = std::move(newGroupingKeys),
+      .aggregates = std::move(newAggregates),
+      .outputColumns = aggregate->outputColumns(),
+      .step = aggregate->step(),
+      .groupId = aggregate->groupId(),
+      .globalGroupingSets = aggregate->globalGroupingSets()});
+}
 
 NodeCP PrecomputeProjectionsPass::run(NodeCP node, Builder& builder) {
   return Rewriter{builder}.rewrite(node);
