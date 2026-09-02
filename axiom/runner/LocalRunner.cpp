@@ -22,6 +22,7 @@
 #include <folly/coro/BlockingWait.h>
 #include <folly/coro/Coroutine.h>
 #include <folly/coro/Task.h>
+#include <stack>
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "velox/common/base/SpillConfig.h"
