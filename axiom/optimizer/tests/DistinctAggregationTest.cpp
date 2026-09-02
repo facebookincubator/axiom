@@ -1112,7 +1112,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterExpressionCondition) {
   AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
       plan.plan,
       matchScan("t")
-          .project({"a", "d", "b", "c > 0.0"})
+          .project({"a", "b", "d", "c > 0.0"})
           .distributedMarkDistinct({"a", "b"}, {"m0", "m1", "m2"})
           .distributedAggregation(
               {"a"},
@@ -1122,7 +1122,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterExpressionCondition) {
   AXIOM_ASSERT_PLAN_V1(
       toSingleNodePlan(logicalPlan),
       matchScan("t")
-          .project({"a", "d", "b", "c > 0.0 as p0"})
+          .project({"a", "b", "d", "c > 0.0 as p0"})
           .singleAggregation(
               {"a"},
               {"count(DISTINCT b) filter (where d)",
