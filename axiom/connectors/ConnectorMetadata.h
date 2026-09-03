@@ -1187,6 +1187,15 @@ class ConnectorMetadata {
   /// @return nullptr if table doesn't exist.
   virtual TablePtr findTable(const SchemaTableName& tableName) = 0;
 
+  /// Returns whether a table reference may pin a snapshot (SchemaTableName's
+  /// snapshotId, `FOR VERSION AS OF <id>`). Defaults to false, so the SQL layer
+  /// rejects a versioned reference to a connector that would otherwise ignore
+  /// the snapshot and read the current version. A connector that honors the
+  /// snapshot in findTable overrides this to true.
+  virtual bool supportsTableTimeTravel() const {
+    return false;
+  }
+
   /// Return a ViewPtr given the view name.
   ///
   /// @return nullptr if view doesn't exist.

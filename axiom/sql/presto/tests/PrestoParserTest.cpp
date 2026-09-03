@@ -1166,20 +1166,27 @@ TEST_F(PrestoParserTest, tablesample) {
   }
 }
 
-TEST_F(PrestoParserTest, rejectsTableVersionUntilTimeTravelIsSupported) {
-  // The grammar accepts a FOR ... AS OF clause, but nothing below the parser
-  // reads it yet. Rejecting here keeps a versioned reference from silently
-  // reading the current snapshot.
-  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
-      parseSql("SELECT * FROM nation FOR VERSION AS OF 8"),
-      "Table version (time travel) is not supported yet");
+TEST_F(PrestoParserTest, rejectsUnsupportedTableVersionForms) {
+  // Timestamp and BEFORE are not wired below the parser, so they are rejected
+  // rather than dropped, which would silently read the current snapshot.
   AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       parseSql(
           "SELECT * FROM nation FOR TIMESTAMP AS OF TIMESTAMP '2020-01-01 00:00:00'"),
-      "Table version (time travel) is not supported yet");
+      "Timestamp time travel is not supported yet");
   AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       parseSql("SELECT * FROM nation FOR VERSION BEFORE 8"),
-      "Table version (time travel) is not supported yet");
+      "FOR VERSION BEFORE is not supported yet");
+
+  // VERSION AS OF parses, but the test connector does not honor a snapshot, so
+  // the reference is rejected rather than silently reading the current version.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("SELECT * FROM nation FOR VERSION AS OF 8"),
+      "Time travel (FOR VERSION AS OF) is not supported by connector");
+
+  // A non-integer snapshot id is rejected before the connector is consulted.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("SELECT * FROM nation FOR VERSION AS OF 'abc'"),
+      "FOR VERSION AS OF requires an integer snapshot id");
 }
 
 TEST_F(PrestoParserTest, everything) {

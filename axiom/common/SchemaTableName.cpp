@@ -32,5 +32,9 @@ size_t std::hash<facebook::axiom::SchemaTableName>::operator()(
   auto hash = folly::hasher<std::string>{}(name.table);
   hash = facebook::velox::bits::hashMix(
       hash, folly::hasher<std::string>{}(name.schema));
+  if (name.snapshotId.has_value()) {
+    hash = facebook::velox::bits::hashMix(
+        hash, folly::hasher<int64_t>{}(*name.snapshotId));
+  }
   return hash;
 }

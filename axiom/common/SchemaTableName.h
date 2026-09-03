@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <cstdint>
+#include <optional>
 #include <string>
 
 #include <fmt/format.h>
@@ -30,7 +32,16 @@ struct SchemaTableName {
   std::string schema;
   std::string table;
 
-  /// Returns "schema"."table" for display/logging only.
+  /// Snapshot the reference is pinned to, when the query asked for a specific
+  /// table version (Iceberg time travel, `FOR VERSION AS OF <id>`). Empty for
+  /// an ordinary reference, which reads the current version. Part of the
+  /// identity: two references differing only by snapshot are different tables,
+  /// so a version-aware connector serves each its own state and the optimizer
+  /// caches them apart.
+  std::optional<int64_t> snapshotId;
+
+  /// Returns "schema"."table" for display/logging only, with an `@<id>` suffix
+  /// when pinned to a snapshot.
   std::string toString() const;
 
   bool operator==(const SchemaTableName&) const = default;
@@ -52,6 +63,14 @@ struct fmt::formatter<facebook::axiom::SchemaTableName>
     : fmt::formatter<std::string_view> {
   auto format(const facebook::axiom::SchemaTableName& name, format_context& ctx)
       const {
+    if (name.snapshotId.has_value()) {
+      return fmt::format_to(
+          ctx.out(),
+          R"d("{}"."{}"@{})d",
+          name.schema,
+          name.table,
+          *name.snapshotId);
+    }
     return fmt::format_to(ctx.out(), R"d("{}"."{}")d", name.schema, name.table);
   }
 };

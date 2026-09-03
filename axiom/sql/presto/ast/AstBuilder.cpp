@@ -544,19 +544,40 @@ std::any AstBuilder::visitAliasedRelation(
 std::any AstBuilder::visitTableName(PrestoSqlParser::TableNameContext* ctx) {
   trace("visitTableName");
 
-  // The grammar accepts `FOR ... AS OF`/`BEFORE`, but no layer below the parser
-  // reads a chosen snapshot yet. Reject it rather than build a Table that drops
-  // the clause, which would read the current snapshot as if no version were
-  // given.
-  if (ctx->tableVersionExpression() != nullptr) {
-    AXIOM_PRESTO_SYNTAX_FAIL(
-        getLocation(ctx->tableVersionExpression()),
-        ctx->tableVersionExpression()->getText(),
-        "Table version (time travel) is not supported yet");
+  std::shared_ptr<TableVersionExpression> version;
+  if (auto* versionCtx = ctx->tableVersionExpression()) {
+    auto* tableVersion =
+        dynamic_cast<PrestoSqlParser::TableVersionContext*>(versionCtx);
+    VELOX_CHECK_NOT_NULL(tableVersion);
+
+    // Only `FOR VERSION AS OF <id>` is wired below the parser so far. Reject
+    // the other forms the grammar accepts rather than build a Table that
+    // silently reads the current snapshot.
+    if (tableVersion->TIMESTAMP() != nullptr ||
+        tableVersion->SYSTEM_TIME() != nullptr) {
+      AXIOM_PRESTO_SYNTAX_FAIL(
+          getLocation(tableVersion),
+          tableVersion->getText(),
+          "Timestamp time travel is not supported yet; use FOR VERSION AS OF");
+    }
+    if (dynamic_cast<PrestoSqlParser::TableversionbeforeContext*>(
+            tableVersion->tableVersionState()) != nullptr) {
+      AXIOM_PRESTO_SYNTAX_FAIL(
+          getLocation(tableVersion),
+          tableVersion->getText(),
+          "FOR VERSION BEFORE is not supported yet; use FOR VERSION AS OF");
+    }
+
+    version = std::make_shared<TableVersionExpression>(
+        getLocation(tableVersion),
+        TableVersionExpression::TableVersionType::kVersion,
+        visitTyped<Expression>(tableVersion->valueExpression()));
   }
 
   return std::static_pointer_cast<Relation>(std::make_shared<Table>(
-      getLocation(ctx), getQualifiedName(ctx->qualifiedName())));
+      getLocation(ctx),
+      getQualifiedName(ctx->qualifiedName()),
+      std::move(version)));
 }
 
 std::any AstBuilder::visitSelectAll(PrestoSqlParser::SelectAllContext* ctx) {
