@@ -54,9 +54,9 @@ void mergeConstraints(const ConstraintMap& from, ConstraintMap& into) {
   }
 }
 
-// Row count of one side of an edge: the product of the cardinalities of the
-// leaf relations the side spans. Fixed per relation (leaf estimates), so it is
-// independent of join order. Unknown if any relation's cardinality is unknown.
+// Row count of one endpoint side of an edge: the product of its relations'
+// cardinalities. Fixed per relation (leaf estimates), so it is independent of
+// join order. Unknown if any relation's cardinality is unknown.
 std::optional<float> sideRowCount(
     const RelationSet& side,
     const JoinHypergraph& graph) {
@@ -105,29 +105,28 @@ std::optional<float> innerEdgeSelectivity(
     jointNdvLeft *= *leftNdv;
     jointNdvRight *= *rightNdv;
   }
-  if (const auto leftRows = sideRowCount(edge.left(), graph)) {
+  if (const auto leftRows = sideRowCount(edge.leftEndpoints(), graph)) {
     jointNdvLeft = std::min(jointNdvLeft, *leftRows);
   }
-  if (const auto rightRows = sideRowCount(edge.right(), graph)) {
+  if (const auto rightRows = sideRowCount(edge.rightEndpoints(), graph)) {
     jointNdvRight = std::min(jointNdvRight, *rightRows);
   }
   return 1.0f / std::max(jointNdvLeft, jointNdvRight);
 }
 
-// Applies the selectivities of `extraEdges` — the inner edges that crossed
-// alongside an Unnest or an outer join, which the emitter puts in a Filter
-// above it. An edge whose selectivity is unknown is left out rather than making
-// the cover uncostable: a filter can only reduce, so the unfiltered count stays
-// a valid upper bound, whereas an unknown would drop every candidate for the
-// cover and leave the join graph unplannable.
-std::optional<float> applyExtraEdges(
+// Applies the selectivities of residual inner edges that the emitter puts in a
+// Filter above an operator. An edge whose selectivity is unknown is left out
+// rather than making the cover uncostable: a filter can only reduce, so the
+// unfiltered count stays a valid upper bound, whereas an unknown would drop
+// every candidate for the cover and leave the join graph unplannable.
+std::optional<float> applyResidualEdges(
     std::optional<float> cardinality,
-    const std::vector<size_t>& extraEdges,
+    const std::vector<size_t>& residualEdges,
     const JoinHypergraph& graph,
     const ConstraintMap& constraints) {
-  for (size_t extraIndex : extraEdges) {
-    if (const auto selectivity = innerEdgeSelectivity(
-            graph.edges()[extraIndex], graph, constraints)) {
+  for (size_t index : residualEdges) {
+    if (const auto selectivity =
+            innerEdgeSelectivity(graph.edges()[index], graph, constraints)) {
       cardinality = mul(cardinality, *selectivity);
     }
   }
@@ -157,10 +156,10 @@ ExprVector appliedConjuncts(const JoinOp& join, const JoinHypergraph& graph) {
 
 // Product of the operand cardinalities and the selectivities of the edges
 // crossing the join: its primary edge, plus the extra edges of a cyclic cover
-// when the primary is inner and they join it as keys. This is the inner-join
-// match count, and — for an all-inner cover — the cover's output cardinality.
-// Under a non-inner primary the extra edges filter the shaped output instead,
-// so they are applied by the caller after the join type has been accounted for.
+// when the primary is inner. This is the inner-join match count, and — for an
+// all-inner cover — the cover's output cardinality. Residual edges filter the
+// shaped output instead, so they are applied by the caller after the join type
+// has been accounted for.
 std::optional<float> innerMatchCardinality(
     const JoinOp& join,
     const JoinHypergraph& graph,
@@ -226,8 +225,8 @@ Cost leafCost(
 // Records the estimate for an unnest cover: the input cover's constraints
 // pass through (the unnest adds columns but does not change the
 // input columns' NDVs) and its cardinality scales by the unnest fanout, then by
-// the filters the emitter applies on the expansion: the edges that crossed
-// alongside the unnest (see `applyExtraEdges`) and the pool conjuncts this
+// the filters the emitter applies on the expansion: the residual edges that
+// become eligible alongside the unnest and the pool conjuncts this
 // cover makes ready that the input cover did not already apply. A conjunct of
 // unknown selectivity is skipped for the same reason an edge is.
 const Estimate& unnestEstimate(
@@ -242,9 +241,9 @@ const Estimate& unnestEstimate(
   const Estimate& input = coverEstimate(unnest.input->cover(), bySet);
   Estimate result;
   mergeConstraints(input.constraints, result.constraints);
-  std::optional<float> cardinality = applyExtraEdges(
+  std::optional<float> cardinality = applyResidualEdges(
       mul(input.cardinality, kDefaultUnnestFanout),
-      unnest.extraEdges,
+      unnest.residualEdges,
       graph,
       result.constraints);
   ExprVector conjuncts;
@@ -320,7 +319,8 @@ joinEstimate(const JoinOp& join, const JoinHypergraph& graph, BySetMap& bySet) {
       join, graph, result.constraints, left.cardinality, right.cardinality);
   // Operands are passed in the edge's orientation, which `outputCardinality`
   // requires for kAnti: a reversed antijoin swaps them but has no flipped type.
-  const bool edgeLeftIsPhysicalLeft = edge.left().isSubset(join.left->cover());
+  const bool edgeLeftIsPhysicalLeft =
+      edge.leftEligibility().isSubset(join.left->cover());
   std::optional<float> cardinality = JoinFanout::outputCardinality(
       edge.joinType(),
       edgeLeftIsPhysicalLeft ? left.cardinality : right.cardinality,
@@ -328,13 +328,11 @@ joinEstimate(const JoinOp& join, const JoinHypergraph& graph, BySetMap& bySet) {
       matched,
       appliedConjuncts(join, graph),
       result.constraints);
-  // Extra edges under a non-inner primary are a filter above the join, so they
-  // reduce what the join type shaped — including the null-padded rows, which
-  // fail an equality on the padded side.
-  if (edge.joinType() != velox::core::JoinType::kInner) {
-    cardinality = applyExtraEdges(
-        cardinality, join.extraEdges, graph, result.constraints);
-  }
+  // Residual edges are a filter above the join, so they reduce what the join
+  // type shaped — including null-padded rows, which fail an equality on the
+  // padded side.
+  cardinality = applyResidualEdges(
+      cardinality, join.residualEdges, graph, result.constraints);
   result.cardinality = maxOf(1.0f, cardinality);
   return bySet.emplace(cover, std::move(result)).first->second;
 }
@@ -354,7 +352,8 @@ Cost hashJoinCost(
   ExprVector leftKeys;
   ExprVector rightKeys;
   const auto addEdgeKeys = [&](const JoinEdge& edgeToAdd) {
-    const bool leftIsLeft = edgeToAdd.left().isSubset(join.left->cover());
+    const bool leftIsLeft =
+        edgeToAdd.leftEligibility().isSubset(join.left->cover());
     const auto& edgeLeftKeys =
         leftIsLeft ? edgeToAdd.leftKeys() : edgeToAdd.rightKeys();
     const auto& edgeRightKeys =

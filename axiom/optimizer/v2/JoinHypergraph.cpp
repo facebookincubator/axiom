@@ -67,13 +67,12 @@ RelationSet JoinHypergraph::connectedComponent(
   while (changed) {
     changed = false;
     for (const auto& edge : edges_) {
-      RelationSet endpoints{edge.left()};
-      endpoints.unionSet(edge.right());
-      if (!endpoints.isSubset(bound)) {
+      const RelationSet edgeTes = edge.totalEligibility();
+      if (!edgeTes.isSubset(bound)) {
         continue;
       }
-      if (endpoints.hasIntersection(reached) && !endpoints.isSubset(reached)) {
-        reached.unionSet(endpoints);
+      if (edgeTes.hasIntersection(reached) && !edgeTes.isSubset(reached)) {
+        reached.unionSet(edgeTes);
         changed = true;
       }
     }
@@ -100,7 +99,7 @@ void JoinHypergraph::checkConsistency() const {
     }
     bool found = false;
     for (const auto& edge : edges_) {
-      if (edge.isUnnest() && edge.right().contains(id)) {
+      if (edge.isUnnest() && edge.rightEndpoints().contains(id)) {
         found = true;
         break;
       }
@@ -185,9 +184,8 @@ folly::F14FastMap<ColumnCP, ColumnCP> JoinHypergraph::coverColumnReps(
     if (!provesKeyEquality(edge.joinType())) {
       continue;
     }
-    RelationSet endpoints{edge.left()};
-    endpoints.unionSet(edge.right());
-    if (!endpoints.isSubset(cover)) {
+    const RelationSet edgeTes = edge.totalEligibility();
+    if (!edgeTes.isSubset(cover)) {
       continue;
     }
     const auto& leftKeys = edge.leftKeys();
@@ -227,15 +225,14 @@ PlanObjectSet JoinHypergraph::coverOutputColumns(
   }
   PlanObjectSet neededAbove = targetColumns_;
   for (const auto& edge : edges_) {
-    RelationSet endpoints{edge.left()};
-    endpoints.unionSet(edge.right());
-    if (!endpoints.isSubset(cover)) {
+    const RelationSet edgeTes = edge.totalEligibility();
+    if (!edgeTes.isSubset(cover)) {
       neededAbove.unionColumns(edge.leftKeys());
       neededAbove.unionColumns(edge.rightKeys());
       neededAbove.unionColumns(edge.filter());
       if (edge.isUnnest()) {
         // An Unnest not yet applied reads what it expands from below.
-        neededAbove.unionColumns(relation(edge.right().min())
+        neededAbove.unionColumns(relation(edge.rightEndpoints().min())
                                      .node()
                                      ->as<Unnest>()
                                      ->unnestExpressions());
@@ -262,23 +259,22 @@ PlanObjectSet JoinHypergraph::coverOutputColumns(
       .first->second;
 }
 
-void JoinHypergraph::addEdge(JoinEdge edge, RelationSet tes) {
-  RelationSet touched{edge.left()};
-  touched.unionSet(edge.right());
-  VELOX_CHECK(touched.isSubset(tes), "Edge endpoints must be a subset of TES");
+void JoinHypergraph::addEdge(JoinEdge edge) {
+  const RelationSet eligibility = edge.totalEligibility();
   VELOX_CHECK(
-      tes.isSubset(relationIds_),
-      "TES must reference only relations already added");
+      eligibility.isSubset(relationIds_),
+      "Edge eligibility must reference only relations already added: eligibility={}, relations={}",
+      eligibility.bits(),
+      relationIds_.bits());
   if (edge.isUnnest()) {
     // Relations are registered before the Unnests over them. Enumeration
     // relies on this: a set holding an expanded relation always holds a
     // smaller id, so such a set is never enumerated from the expanded
     // relation as its seed.
-    VELOX_CHECK_LT(edge.left().min(), edge.right().min());
-    expandedRelationIds_.unionSet(edge.right());
+    VELOX_CHECK_LT(edge.leftEndpoints().min(), edge.rightEndpoints().min());
+    expandedRelationIds_.unionSet(edge.rightEndpoints());
   }
   edges_.push_back(std::move(edge));
-  tes_.push_back(tes);
   invalidateCoverCaches();
 }
 

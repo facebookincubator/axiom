@@ -45,30 +45,36 @@ inline bool canBroadcastBuild(velox::core::JoinType joinType) {
       joinType == JoinType::kLeftSemiProject || joinType == JoinType::kAnti;
 }
 
-/// A hyperedge in a join cluster's hypergraph. Three flavors:
+/// A hyperedge in a join cluster's hypergraph. For join edges,
+/// `leftEndpoints()` and `rightEndpoints()` are the relation sets directly
+/// referenced by the corresponding key expressions. `leftEligibility()` and
+/// `rightEligibility()` are the disjoint hypernodes that must lie on opposite
+/// sides of an enumerated partition.
 ///
 ///   - Inner equi-join. `filter` is empty; non-equi conjuncts live in
 ///     `JoinHypergraph::filterConjuncts` so DPhyp can place them at
 ///     the lowest eligible join. `nullAware` and `nullAsValue` are
 ///     unused.
-///   - Outer equi-join (LEFT / RIGHT / FULL). `filter` carries the
-///     ON-clause non-equi conjuncts bound to this edge — moving them
-///     above would let null-padded rows pass through, changing
-///     semantics. `nullAware` and `nullAsValue` carry Velox null
+///   - Non-inner equi-join (outer, semi, or anti). `filter` carries conjuncts
+///     bound to this edge because moving them can change null-padding or
+///     existence semantics. `nullAware` and `nullAsValue` carry Velox null
 ///     semantics.
-///   - Unnest. Built by `JoinEdge::unnest`. `left` covers the
-///     relations whose subtree feeds the Unnest; `right` is the
-///     single Unnest relation. No equi-keys, no filter;
-///     `isUnnest()` discriminates. Unlike the other flavors this
-///     edge never becomes a join: an Unnest expands the rows of the
-///     relations on `left` rather than pairing two inputs, so DPhyp
-///     lowers it to a unary `UnnestOp` over whichever plan covers
-///     `left`. The edge states connectivity and ordering — the
-///     Unnest relation is reachable only through it, so no plan
-///     holds that relation without the relations it expands.
+///   - Unnest. Built by `JoinEdge::unnest`. Its endpoint and eligibility sides
+///     are identical: `leftEndpoints()` covers the relations whose subtree
+///     feeds the Unnest and `rightEndpoints()` is the single Unnest relation.
+///     No equi-keys, no filter; `isUnnest()` discriminates. Unlike the other
+///     flavors this edge never becomes a join: an Unnest expands the rows of
+///     the relations on `leftEndpoints()` rather than pairing two inputs, so
+///     DPhyp lowers it to a unary `UnnestOp` over whichever plan covers those
+///     relations. The edge states
+///     connectivity and ordering — the Unnest relation is reachable only
+///     through it, so no plan holds that relation without the relations it
+///     expands.
 ///
 /// Invariants:
-///   - `left` and `right` are non-empty and disjoint.
+///   - Both pairs of sides are non-empty and disjoint.
+///   - `leftEndpoints()` is a subset of `leftEligibility()`; likewise on the
+///     right.
 ///   - Equi-join flavors: `leftKeys.size() == rightKeys.size()` and
 ///     is non-empty.
 ///   - Unnest flavor: `leftKeys` / `rightKeys` / `filter` empty;
@@ -76,8 +82,10 @@ inline bool canBroadcastBuild(velox::core::JoinType joinType) {
 class JoinEdge {
  public:
   JoinEdge(
-      RelationSet left,
-      RelationSet right,
+      RelationSet leftEndpoints,
+      RelationSet rightEndpoints,
+      RelationSet leftEligibility,
+      RelationSet rightEligibility,
       ExprVector leftKeys,
       ExprVector rightKeys,
       ExprVector filter,
@@ -85,8 +93,10 @@ class JoinEdge {
       bool nullAware,
       bool nullAsValue,
       ColumnCP markColumn = nullptr)
-      : left_{std::move(left)},
-        right_{std::move(right)},
+      : leftEndpoints_{std::move(leftEndpoints)},
+        rightEndpoints_{std::move(rightEndpoints)},
+        leftEligibility_{std::move(leftEligibility)},
+        rightEligibility_{std::move(rightEligibility)},
         leftKeys_{std::move(leftKeys)},
         rightKeys_{std::move(rightKeys)},
         filter_{std::move(filter)},
@@ -94,9 +104,14 @@ class JoinEdge {
         nullAware_{nullAware},
         nullAsValue_{nullAsValue},
         markColumn_{markColumn} {
-    VELOX_CHECK(!left_.empty());
-    VELOX_CHECK(!right_.empty());
-    VELOX_CHECK(!left_.hasIntersection(right_));
+    VELOX_CHECK(!leftEndpoints_.empty());
+    VELOX_CHECK(!rightEndpoints_.empty());
+    VELOX_CHECK(!leftEndpoints_.hasIntersection(rightEndpoints_));
+    VELOX_CHECK(!leftEligibility_.empty());
+    VELOX_CHECK(!rightEligibility_.empty());
+    VELOX_CHECK(!leftEligibility_.hasIntersection(rightEligibility_));
+    VELOX_CHECK(leftEndpoints_.isSubset(leftEligibility_));
+    VELOX_CHECK(rightEndpoints_.isSubset(rightEligibility_));
     VELOX_CHECK_EQ(leftKeys_.size(), rightKeys_.size());
     VELOX_CHECK(
         !leftKeys_.empty(), "Equi-join edge must carry at least one key pair");
@@ -119,12 +134,29 @@ class JoinEdge {
     return JoinEdge{std::move(left), std::move(right)};
   }
 
-  const RelationSet& left() const {
-    return left_;
+  /// Relations in the left endpoint set.
+  const RelationSet& leftEndpoints() const {
+    return leftEndpoints_;
   }
 
-  const RelationSet& right() const {
-    return right_;
+  /// Relations in the right endpoint set.
+  const RelationSet& rightEndpoints() const {
+    return rightEndpoints_;
+  }
+
+  /// Relations on the left eligibility side of this hyperedge.
+  const RelationSet& leftEligibility() const {
+    return leftEligibility_;
+  }
+
+  /// Relations on the right eligibility side of this hyperedge.
+  const RelationSet& rightEligibility() const {
+    return rightEligibility_;
+  }
+
+  /// Returns the Total Eligibility Set of this edge.
+  RelationSet totalEligibility() const {
+    return RelationSet{leftEligibility_.bits() | rightEligibility_.bits()};
   }
 
   /// Equi-join keys aligned by position with `rightKeys()`.
@@ -172,17 +204,21 @@ class JoinEdge {
  private:
   // Builds an unnest edge; see the `unnest` factory.
   JoinEdge(RelationSet left, RelationSet right)
-      : left_{std::move(left)},
-        right_{std::move(right)},
+      : leftEndpoints_{std::move(left)},
+        rightEndpoints_{std::move(right)},
+        leftEligibility_{leftEndpoints_},
+        rightEligibility_{rightEndpoints_},
         joinType_{velox::core::JoinType::kInner},
         isUnnest_{true} {
-    VELOX_CHECK(!left_.empty());
-    VELOX_CHECK(!right_.empty());
-    VELOX_CHECK(!left_.hasIntersection(right_));
+    VELOX_CHECK(!leftEndpoints_.empty());
+    VELOX_CHECK(!rightEndpoints_.empty());
+    VELOX_CHECK(!leftEndpoints_.hasIntersection(rightEndpoints_));
   }
 
-  RelationSet left_;
-  RelationSet right_;
+  RelationSet leftEndpoints_;
+  RelationSet rightEndpoints_;
+  RelationSet leftEligibility_;
+  RelationSet rightEligibility_;
   ExprVector leftKeys_;
   ExprVector rightKeys_;
   ExprVector filter_;

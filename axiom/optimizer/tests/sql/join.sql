@@ -242,6 +242,24 @@ SELECT t1.a, t2.a FROM t t1, t t2, t t3 WHERE t1.a = t3.a AND t1.b < t2.b
 -- error_v2: division by zero
 SELECT t1.a, t2.a FROM t t1, t t2 WHERE t1.b < t2.b AND 1000 / (150 - t1.b) > t2.a
 ----
+-- A join-key operand that references two relations must remain applicable
+-- when the third relation joins.
+SELECT m
+FROM (VALUES (1, 10)) AS t(a, b)
+JOIN (VALUES (1, 1, 100)) AS u(x, y, z) ON t.a = u.x
+JOIN (VALUES (100, 11, 1001), (100, 99, 1002)) AS v(k, l, m)
+  ON u.z = v.k AND t.b + u.y = v.l
+----
+-- Explicit join keys remain enforced when an inferred equality determines the
+-- join order.
+SELECT b
+FROM (((VALUES (1, 10, 100)) AS t(a, b, c)
+       JOIN (VALUES (1, 10)) AS u(e, g) ON t.a = u.e
+       JOIN (VALUES (10)) AS v(h) ON u.g = v.h)
+      LEFT JOIN (VALUES (100)) AS w(i) ON t.c = w.i)
+JOIN (VALUES (1, 10), (1, 999)) AS x(j, k)
+  ON t.a = x.j AND t.b = x.k
+----
 -- Two parallel equality chains connect t through u to v.
 SELECT v.m
 FROM (

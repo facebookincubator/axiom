@@ -56,6 +56,7 @@ JoinOp::JoinOp(
     velox::core::JoinType type,
     bool reversedAnti,
     std::vector<size_t> extraEdges,
+    std::vector<size_t> residualEdges,
     Partitioning outputPartitioning)
     : MemoOp{cost, MemoOpKind::kJoin, std::move(outputPartitioning)},
       left{leftChild},
@@ -64,6 +65,7 @@ JoinOp::JoinOp(
       joinType{type},
       reversedAnti{reversedAnti},
       extraEdges{std::move(extraEdges)},
+      residualEdges{std::move(residualEdges)},
       cover_{combinedCover(leftChild, rightChild)} {}
 
 UnnestOp::UnnestOp(
@@ -71,12 +73,12 @@ UnnestOp::UnnestOp(
     MemoOpCP inputChild,
     size_t edge,
     RelationSet unnestRelation,
-    std::vector<size_t> extraEdges)
+    std::vector<size_t> residualEdges)
     // Unnest expands rows within a task, so the input's partitioning survives.
     : MemoOp{cost, MemoOpKind::kUnnest, inputChild->outputPartitioning()},
       input{inputChild},
       edgeIndex{edge},
-      extraEdges{std::move(extraEdges)},
+      residualEdges{std::move(residualEdges)},
       cover_{expandedCover(inputChild, unnestRelation)} {}
 
 } // namespace facebook::axiom::optimizer::v2

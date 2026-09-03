@@ -26,7 +26,7 @@ This is the worst case for both enumerators, for different reasons:
   (orderings × join-method × build-side at each level) — super-factorial. It is
   the *tie* that disables pruning, not the raw ordering count, which is why even
   N=6 hangs.
-- **v2 DPhyp** (Moerkotte/Neumann 2006) is a memoized bottom-up DP over connected
+- **v2 DPhyp** (Moerkotte/Neumann 2008) is a memoized bottom-up DP over connected
   subgraph / complement pairs. It has no pruning to disable, so ties don't hurt
   it — but on a clique the number of csg-cmp pairs is `3^N - 2^(N+1) + 1` ≈ **3^N**
   (vs polynomial ~O(N^3) on a plain chain). Exponential, but far below N!.

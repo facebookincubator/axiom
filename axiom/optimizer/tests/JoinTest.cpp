@@ -261,6 +261,128 @@ TEST_P(JoinTest, hyperEdge) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+// A key spanning two relations on one side remains enforced when the chosen
+// join order cannot orient it as a join key.
+TEST_P(JoinTest, threeWayJoinWithMultiRelationPredicate) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(
+          100,
+          {
+              {"a", {.numDistinct = 100}},
+              {"b", {.numDistinct = 100}},
+          });
+  testConnector_->addTable("u", ROW({"x", "y", "z"}, BIGINT()))
+      ->setStats(
+          100,
+          {
+              {"x", {.numDistinct = 100}},
+              {"y", {.numDistinct = 100}},
+              {"z", {.numDistinct = 100}},
+          });
+  testConnector_->addTable("v", ROW({"k", "l", "m"}, BIGINT()))
+      ->setStats(
+          10,
+          {
+              {"k", {.numDistinct = 10}},
+              {"l", {.numDistinct = 10}},
+          });
+
+  const auto query =
+      "SELECT m "
+      "FROM t "
+      "JOIN u ON t.a = u.x "
+      "JOIN v ON u.z = v.k AND t.b + u.y = v.l";
+  SCOPED_TRACE(query);
+  const auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+
+  const auto matcher = matchScan("t")
+                           .hashJoinInner(
+                               matchScan("u").hashJoinInner(
+                                   matchScan("v"), {.keys = {{"z = k"}}}),
+                               {.keys = {{"a = x"}}})
+                           .filter("l = b + y")
+                           .project({"m"})
+                           .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  optimizerOptions_.broadcastSizeLimit = 1;
+  const auto distributedPlan = planVelox(parseSelect(query, kTestConnectorId));
+  const auto distributedMatcher =
+      matchScan("t")
+          .shuffle({"a"})
+          .hashJoinInner(
+              matchScan("u")
+                  .shuffle({"z"})
+                  .hashJoinInner(
+                      matchScan("v").shuffle({"k"}), {.keys = {{"z = k"}}})
+                  .shuffle({"x"}),
+              {.keys = {{"a = x"}}})
+          .filter("l = b + y")
+          .project({"m"})
+          .gather()
+          .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
+}
+
+// Every explicit key remains enforced when an inferred equality determines
+// the join order.
+TEST_P(JoinTest, innerJoinAboveLeftJoinWithCompositePredicate) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()))
+      ->setStats(
+          100,
+          {
+              {"a", {.numDistinct = 100}},
+              {"b", {.numDistinct = 100}},
+              {"c", {.numDistinct = 100}},
+          });
+  testConnector_->addTable("u", ROW({"e"}, BIGINT()))
+      ->setStats(100, {{"e", {.numDistinct = 100}}});
+  testConnector_->addTable("w", ROW({"i"}, BIGINT()))
+      ->setStats(1, {{"i", {.numDistinct = 1}}});
+  testConnector_->addTable("x", ROW({"j", "k"}, BIGINT()))
+      ->setStats(1, {{"j", {.numDistinct = 1}}, {"k", {.numDistinct = 1}}});
+
+  const auto query =
+      "SELECT b "
+      "FROM (t JOIN u ON t.a = u.e LEFT JOIN w ON t.c = w.i) "
+      "JOIN x ON t.a = x.j AND t.b = x.k";
+  SCOPED_TRACE(query);
+  const auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+
+  // The inferred e = j edge allows x to join u first. The explicit b = k
+  // predicate remains enforced as a filter when it cannot be a key of the
+  // resulting t-(u,x) partition.
+  const auto matcher =
+      matchScan("t")
+          .hashJoinInner(
+              matchScan("u").hashJoinInner(
+                  matchScan("x"), {.keys = {{"e = j"}}}),
+              {.keys = {{"a = e"}}})
+          .filter("a = e AND b = k")
+          .hashJoinLeft(
+              matchScan("w"), {.keys = std::vector<std::string>{"c = i"}})
+          .build();
+  AXIOM_ASSERT_PLAN_V2(plan, matcher);
+
+  optimizerOptions_.broadcastSizeLimit = 1;
+  const auto distributedPlan = planVelox(parseSelect(query, kTestConnectorId));
+  const auto distributedMatcher =
+      matchScan("t")
+          .shuffle({"a"})
+          .hashJoinInner(
+              matchScan("u").shuffle({"e"}).hashJoinInner(
+                  matchScan("x").shuffle({"j"}), {.keys = {{"e = j"}}}),
+              {.keys = {{"a = e"}}})
+          .filter("a = e AND b = k")
+          .shuffle({"c"})
+          .hashJoinLeft(
+              matchScan("w").shuffle({"i"}),
+              {.keys = std::vector<std::string>{"c = i"}})
+          .gather()
+          .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(distributedPlan.plan, distributedMatcher);
+}
+
 TEST_P(JoinTest, joinWithFilterOverLimit) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y", "z"}, BIGINT()));
