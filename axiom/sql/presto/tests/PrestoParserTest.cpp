@@ -1166,6 +1166,22 @@ TEST_F(PrestoParserTest, tablesample) {
   }
 }
 
+TEST_F(PrestoParserTest, rejectsTableVersionUntilTimeTravelIsSupported) {
+  // The grammar accepts a FOR ... AS OF clause, but nothing below the parser
+  // reads it yet. Rejecting here keeps a versioned reference from silently
+  // reading the current snapshot.
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
+      parseSql("SELECT * FROM nation FOR VERSION AS OF 8"),
+      "Table version (time travel) is not supported yet");
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
+      parseSql(
+          "SELECT * FROM nation FOR TIMESTAMP AS OF TIMESTAMP '2020-01-01 00:00:00'"),
+      "Table version (time travel) is not supported yet");
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
+      parseSql("SELECT * FROM nation FOR VERSION BEFORE 8"),
+      "Table version (time travel) is not supported yet");
+}
+
 TEST_F(PrestoParserTest, everything) {
   auto matcher = matchScan()
                      .join(matchScan().build())
