@@ -44,9 +44,13 @@ struct ScanHandle {
   /// Table handle with the accepted filters pushed into the connector.
   velox::connector::ConnectorTableHandlePtr tableHandle;
 
-  /// Column handle per column of the connector read schema: every column the
-  /// `Scan` outputs, plus the ones only the connector's own filters read,
-  /// which it reads without projecting.
+  /// Estimated logical width of the connector read schema, including columns
+  /// used only by pushed filters.
+  float inputRowBytes{0};
+
+  /// Column handle per column emitted by the `Scan`, including columns needed
+  /// by filters the connector rejected. Columns used only by accepted filters
+  /// contribute to `inputRowBytes` but are not emitted.
   folly::F14FastMap<ColumnCP, velox::connector::ColumnHandlePtr> columnHandles;
 };
 
