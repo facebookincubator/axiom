@@ -77,8 +77,7 @@ class LocalHiveSplitManager : public ConnectorSplitManager {
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
       const std::vector<PartitionHandlePtr>& partitions,
       const std::shared_ptr<PartitionType>& partitionType,
-      std::optional<double> samplePercentage,
-      QueryRuntimeStats& runtimeStats) override;
+      std::optional<double> samplePercentage) override;
 };
 
 // Write-time stats for a single partition (or the whole table if

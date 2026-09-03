@@ -53,9 +53,12 @@ class HiveQueriesTestBase : public QueryTestBase {
   /// Unregisters Parquet reader and writer.
   static void TearDownTestCase();
 
-  static connector::ConnectorSessionPtr makeSession() {
+  connector::ConnectorSessionPtr makeSession() {
     return std::make_shared<connector::ConnectorSession>(
-        /*queryId=*/"test", /*user=*/"test", connector::Properties{});
+        /*queryId=*/"test",
+        /*user=*/"test",
+        connector::Properties{},
+        connectorStatsWriter_);
   }
 
   /// Returns a schema of a table.

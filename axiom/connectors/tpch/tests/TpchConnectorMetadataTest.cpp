@@ -19,6 +19,7 @@
 #include <folly/init/Init.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "axiom/connectors/BaseSession.h"
 
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/expression/Expr.h"
@@ -38,11 +39,12 @@ class TpchConnectorMetadataTest : public ::testing::Test {
     metadata_ = std::make_unique<TpchConnectorMetadata>(connector_.get());
   }
 
-  static ConnectorSessionPtr makeSession() {
+  ConnectorSessionPtr makeSession() {
     return std::make_shared<ConnectorSession>(
         /*queryId=*/"test",
         /*user=*/"test",
-        Properties{});
+        Properties{},
+        facebook::axiom::connector::noopStatWriter());
   }
 
   std::unique_ptr<velox::connector::tpch::TpchConnector> connector_;
@@ -227,14 +229,12 @@ CO_TEST_F(TpchConnectorMetadataTest, splitGeneration) {
       /*session=*/nullptr, tableHandle);
   CO_ASSERT_EQ(partitions.size(), 1);
 
-  QueryRuntimeStats noopStats;
   auto splitSource = splitManager->getSplitSource(
       /*session=*/nullptr,
       tableHandle,
       partitions,
       /*partitionType=*/nullptr,
-      /*samplePercentage=*/std::nullopt,
-      noopStats);
+      /*samplePercentage=*/std::nullopt);
   CO_ASSERT_NE(splitSource, nullptr);
   std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
   while (true) {

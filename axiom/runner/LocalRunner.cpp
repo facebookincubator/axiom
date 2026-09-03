@@ -64,7 +64,7 @@ class SimpleSplitSource : public connector::SplitSource {
 
 std::shared_ptr<connector::SplitSource>
 SimpleSplitSourceFactory::splitSourceForScan(
-    const connector::ConnectorSessionPtr& /* session */,
+    const RunnerSessionPtr& /* session */,
     const velox::core::TableScanNode& scan,
     const std::shared_ptr<connector::PartitionType>& /*partitionType*/,
     std::optional<double> samplePercentage) {
@@ -80,38 +80,29 @@ SimpleSplitSourceFactory::splitSourceForScan(
 
 std::shared_ptr<connector::SplitSource>
 ConnectorSplitSourceFactory::splitSourceForScan(
-    const connector::ConnectorSessionPtr& session,
+    const RunnerSessionPtr& session,
     const velox::core::TableScanNode& scan,
     const std::shared_ptr<connector::PartitionType>& partitionType,
     std::optional<double> samplePercentage) {
+  VELOX_CHECK_NOT_NULL(session);
+
   const auto& handle = scan.tableHandle();
   auto metadata =
       connector::ConnectorMetadataRegistry::get(handle->connectorId());
   auto splitManager = metadata->splitManager();
+  auto connectorSession = session->toConnectorSession(handle->connectorId());
 
-  auto listCpuStart = velox::process::threadCpuNanos();
-  auto listThreadId = std::this_thread::get_id();
   auto listStart = std::chrono::steady_clock::now();
   auto partitions = folly::coro::blockingWait(
-      splitManager->co_listPartitions(session, handle));
-  recordCpuIfSameThread(
-      runtimeStats_,
-      QueryRuntimeStats::kListPartitionsCpuNanos,
-      listCpuStart,
-      listThreadId);
-  runtimeStats_.addTiming(
-      QueryRuntimeStats::kListPartitionsWallNanos,
+      splitManager->co_listPartitions(connectorSession, handle));
+  auto& runnerWriter = session->statsWriter();
+  runnerWriter.addTiming(
+      LocalRunner::kListPartitionsWallNanos,
       std::chrono::steady_clock::now() - listStart);
-  runtimeStats_.addCount(
-      QueryRuntimeStats::kListPartitionsCount, partitions.size());
+  runnerWriter.addCount(LocalRunner::kListPartitionsCount, partitions.size());
 
   return splitManager->getSplitSource(
-      session,
-      handle,
-      partitions,
-      partitionType,
-      samplePercentage,
-      runtimeStats_);
+      connectorSession, handle, partitions, partitionType, samplePercentage);
 }
 
 namespace {
@@ -146,7 +137,7 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
     std::vector<std::shared_ptr<velox::exec::Task>> tasks,
     bool grouped,
     std::function<void(std::exception_ptr)> onError,
-    QueryRuntimeStats& runtimeStats) {
+    velox::BaseRuntimeStatWriter& runnerWriter) {
   std::exception_ptr ex;
   // Injected by CancellableAsyncScope::add(); the runner's co_reap() requests
   // cancellation on teardown so this loop stops enumerating instead of draining
@@ -155,8 +146,6 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
   try {
     VELOX_CHECK(!tasks.empty(), "tasks must not be empty");
 
-    auto getSplitsCpuStart = velox::process::threadCpuNanos();
-    auto getSplitsThreadId = std::this_thread::get_id();
     auto getSplitsStart = std::chrono::steady_clock::now();
     int64_t splitCount = 0;
     size_t taskIdx = 0;
@@ -199,15 +188,10 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
       task->noMoreSplits(scanId);
     }
 
-    recordCpuIfSameThread(
-        runtimeStats,
-        QueryRuntimeStats::kGetSplitsCpuNanos,
-        getSplitsCpuStart,
-        getSplitsThreadId);
-    runtimeStats.addTiming(
-        QueryRuntimeStats::kGetSplitsWallNanos,
+    runnerWriter.addTiming(
+        LocalRunner::kGetSplitsWallNanos,
         std::chrono::steady_clock::now() - getSplitsStart);
-    runtimeStats.addCount(QueryRuntimeStats::kGetSplitsCount, splitCount);
+    runnerWriter.addCount(LocalRunner::kGetSplitsCount, splitCount);
   } catch (const folly::OperationCancelled&) {
     // co_getSplits() observed the teardown cancellation mid-call. This is a
     // clean stop, not a query error, so do not propagate it to onError().
@@ -275,15 +259,13 @@ LocalRunner::LocalRunner(
     std::shared_ptr<velox::core::QueryCtx> queryCtx,
     std::shared_ptr<SplitSourceFactory> splitSourceFactory,
     std::shared_ptr<velox::memory::MemoryPool> outputPool,
-    std::string baseSpillDirectory,
-    QueryRuntimeStats& runtimeStats)
+    std::string baseSpillDirectory)
     : session_{std::move(session)},
       plan_{std::move(plan)},
       fragments_{topologicalSort(plan_->fragments())},
       finishWrite_{std::move(finishWrite)},
       splitSourceFactory_{std::move(splitSourceFactory)},
-      baseSpillDirectory_{std::move(baseSpillDirectory)},
-      runtimeStats_(runtimeStats) {
+      baseSpillDirectory_{std::move(baseSpillDirectory)} {
   params_.queryCtx = std::move(queryCtx);
   params_.outputPool = std::move(outputPool);
   if (params_.outputPool == nullptr) {
@@ -525,7 +507,7 @@ void LocalRunner::start() {
 }
 
 std::shared_ptr<connector::SplitSource> LocalRunner::splitSourceForScan(
-    const connector::ConnectorSessionPtr& session,
+    const RunnerSessionPtr& session,
     const velox::core::TableScanNode& scan,
     const std::shared_ptr<connector::PartitionType>& partitionType,
     std::optional<double> samplePercentage) {
@@ -814,10 +796,7 @@ void LocalRunner::makeStages(
           samplePercentage = it->second;
         }
         auto source = splitSourceForScan(
-            session_->toConnectorSession(scan->tableHandle()->connectorId()),
-            *scan,
-            partitionType,
-            samplePercentage);
+            session_, *scan, partitionType, samplePercentage);
         splitScope_.add(
             folly::coro::co_withExecutor(
                 params_.queryCtx->executor(),
@@ -827,7 +806,7 @@ void LocalRunner::makeStages(
                     stage,
                     /*grouped=*/partitionType != nullptr,
                     onError,
-                    runtimeStats_)));
+                    session_->statsWriter())));
       }
 
       for (const auto& input : fragment.inputStages) {

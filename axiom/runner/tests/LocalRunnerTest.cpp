@@ -26,6 +26,7 @@
 #include <thread>
 #include "axiom/runner/tests/DistributedPlanBuilder.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
+#include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
 namespace facebook::axiom::runner {
@@ -142,13 +143,16 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
     return fmt::format("q{}", queryCounter_++);
   }
 
-  static axiom::runner::RunnerSessionPtr makeRunnerSession(
-      std::string_view queryId) {
+  axiom::runner::RunnerSessionPtr makeRunnerSession(std::string_view queryId) {
     return std::make_shared<axiom::runner::RunnerSession>(
         std::string(queryId),
         "test",
         axiom::runner::Properties{},
-        axiom::connector::ConnectorProperties{});
+        axiom::connector::ConnectorProperties{},
+        runnerWriter_,
+        [this](std::string_view) -> velox::BaseRuntimeStatWriter& {
+          return connectorWriter_;
+        });
   }
 
   template <typename RunnerT = LocalRunner>
@@ -159,17 +163,19 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
         std::move(plan),
         optimizer::FinishWrite{},
         makeQueryCtx(queryId),
-        std::make_shared<ConnectorSplitSourceFactory>(runtimeStats_),
+        std::make_shared<ConnectorSplitSourceFactory>(),
         /*outputPool=*/nullptr,
-        /*baseSpillDirectory=*/"",
-        runtimeStats_);
+        /*baseSpillDirectory=*/"");
   }
 
   std::shared_ptr<velox::core::PlanNodeIdGenerator> idGenerator_{
       std::make_shared<velox::core::PlanNodeIdGenerator>()};
 
   int32_t queryCounter_{0};
-  QueryRuntimeStats runtimeStats_;
+  // The runner's own bucket.
+  velox::ConcurrentRuntimeStatWriter runnerWriter_;
+  // Backs the sessions spawned for scanned connectors.
+  velox::ConcurrentRuntimeStatWriter connectorWriter_;
 
   velox::RowTypePtr rowType_;
 };
@@ -406,6 +412,33 @@ TEST_F(LocalRunnerTest, scan) {
   checkScanCount(3);
 }
 
+// Both halves of split enumeration are the runner's work, so both land in the
+// runner's bucket rather than the scanned connector's.
+TEST_F(LocalRunnerTest, splitEnumerationStatsAreRunnerScoped) {
+  auto localRunner = makeRunner(makeScanPlan(/*numWorkers=*/1));
+  auto generator = localRunner->execute();
+  while (folly::coro::blockingWait(generator.next())) {
+  }
+  folly::coro::blockingWait(localRunner->co_close());
+
+  const auto stats = runnerWriter_.runtimeStats();
+  auto partitions = stats.find(std::string(LocalRunner::kListPartitionsCount));
+  ASSERT_NE(partitions, stats.end());
+  EXPECT_GT(partitions->second.sum, 0);
+  // One scan node, drained in one enumeration loop, so one sample of each.
+  EXPECT_EQ(partitions->second.count, 1);
+  auto splits = stats.find(std::string(LocalRunner::kGetSplitsCount));
+  ASSERT_NE(splits, stats.end());
+  EXPECT_GT(splits->second.sum, 0);
+  EXPECT_EQ(splits->second.count, 1);
+
+  const auto connectorStats = connectorWriter_.runtimeStats();
+  EXPECT_FALSE(
+      connectorStats.contains(std::string(LocalRunner::kListPartitionsCount)));
+  EXPECT_FALSE(
+      connectorStats.contains(std::string(LocalRunner::kGetSplitsCount)));
+}
+
 TEST_F(LocalRunnerTest, broadcast) {
   auto join = makeJoinPlan("c0", true);
   auto localRunner = makeRunner(join);
@@ -464,10 +497,9 @@ TEST_F(LocalRunnerTest, spillDirectoryWiring) {
       std::move(join),
       optimizer::FinishWrite{},
       std::move(queryCtx),
-      std::make_shared<ConnectorSplitSourceFactory>(runtimeStats_),
+      std::make_shared<ConnectorSplitSourceFactory>(),
       /*outputPool=*/nullptr,
-      spillDir->getPath(),
-      runtimeStats_);
+      spillDir->getPath());
 
   std::vector<velox::RowVectorPtr> results;
   localRunner->drain(
