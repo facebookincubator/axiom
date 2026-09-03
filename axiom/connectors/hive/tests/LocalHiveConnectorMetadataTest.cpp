@@ -15,6 +15,7 @@
  */
 
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
+#include "axiom/connectors/BaseSession.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -22,7 +23,9 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
+#include <folly/coro/BlockingWait.h>
 #include <folly/init/Init.h>
+#include <gmock/gmock.h>
 #include <filesystem>
 
 using namespace facebook::velox;
@@ -116,11 +119,12 @@ class LocalHiveConnectorMetadataTest
     compareTableLayout(*getLayout(expected), *getLayout(table));
   }
 
-  static ConnectorSessionPtr makeSession() {
+  ConnectorSessionPtr makeSession() {
     return std::make_shared<ConnectorSession>(
         /*queryId=*/"q-test",
         /*user=*/"u-test",
-        Properties{});
+        Properties{},
+        facebook::axiom::connector::noopStatWriter());
   }
 
   /// Write the specified data to the table with a TableWrite operation. The
@@ -316,6 +320,68 @@ TEST_F(LocalHiveConnectorMetadataTest, sampleWithPathFilter) {
       layout->sample(tableHandle, 100, fields, &allocator, &statsBuilders);
   EXPECT_EQ(kRowsPerVector * kNumVectors, pair.first);
   EXPECT_EQ(kRowsPerVector * kNumVectors, pair.second);
+}
+
+namespace {
+// Returns default estimates so co_estimateStats runs its fold path.
+class NoopFilterSelectivityEstimator : public FilterSelectivityEstimator {
+ public:
+  FilterEstimate estimate(
+      const std::vector<velox::core::TypedExprPtr>& /*filters*/,
+      const folly::F14FastMap<std::string, TypedColumnStatistics>&
+      /*columnStats*/) const override {
+    return {};
+  }
+
+  FilterEstimate estimate(
+      const folly::F14FastMap<std::string, const velox::common::Filter*>&
+      /*filters*/,
+      const folly::F14FastMap<std::string, TypedColumnStatistics>&
+      /*columnStats*/) const override {
+    return {};
+  }
+};
+} // namespace
+
+TEST_F(LocalHiveConnectorMetadataTest, estimateStats) {
+  auto table = metadata_->findTable({kDefaultSchema, "t"});
+  ASSERT_TRUE(table != nullptr);
+  auto* layout = dynamic_cast<const LocalHiveTableLayout*>(table->layouts()[0]);
+  ASSERT_TRUE(layout != nullptr);
+
+  auto columnHandle = layout->createColumnHandle(/*session=*/nullptr, "c0");
+  std::vector<velox::connector::ColumnHandlePtr> columns = {columnHandle};
+  std::vector<core::TypedExprPtr> filters;
+  std::vector<int32_t> rejectedFilterIndices;
+  auto ctx = metadata_->connectorQueryCtx();
+  auto tableHandle = layout->createTableHandle(
+      /*session=*/nullptr,
+      columns,
+      *ctx->expressionEvaluator(),
+      filters,
+      rejectedFilterIndices,
+      /*dataColumns=*/nullptr,
+      /*lookupKeys=*/{});
+
+  NoopFilterSelectivityEstimator estimator;
+  auto stats = folly::coro::blockingWait(
+      layout->co_estimateStats(makeSession(), tableHandle, {"c0"}, estimator));
+  ASSERT_TRUE(stats.has_value());
+  // No filters, so the estimate covers every row of the table.
+  EXPECT_EQ(stats->numRows, kNumFiles * kNumVectors * kRowsPerVector);
+}
+
+TEST_F(LocalHiveConnectorMetadataTest, estimateStatsRejectsNonHiveTableHandle) {
+  auto table = metadata_->findTable({kDefaultSchema, "t"});
+  ASSERT_TRUE(table != nullptr);
+  auto* layout = dynamic_cast<const LocalHiveTableLayout*>(table->layouts()[0]);
+  ASSERT_TRUE(layout != nullptr);
+
+  NoopFilterSelectivityEstimator estimator;
+  VELOX_ASSERT_THROW(
+      folly::coro::blockingWait(layout->co_estimateStats(
+          makeSession(), /*tableHandle=*/nullptr, {"c0"}, estimator)),
+      "Expected HiveTableHandle");
 }
 
 TEST_F(LocalHiveConnectorMetadataTest, createTable) {

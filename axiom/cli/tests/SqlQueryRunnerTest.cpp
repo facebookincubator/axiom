@@ -27,11 +27,14 @@
 #include <gtest/gtest.h>
 #include <stdexcept>
 #include "axiom/cli/QueryIdGenerator.h"
+#include "axiom/cli/common/ComponentMetrics.h"
+#include "axiom/cli/common/QueryRuntimeStats.h"
 #include "axiom/cli/tests/SqlQueryRunnerTestBase.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/runner/QueryProgress.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
+#include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
@@ -659,31 +662,42 @@ TEST_F(SqlQueryRunnerTest, executionCpuTimingUsesVeloxTaskStats) {
           kNumRows, [](auto row) { return static_cast<int64_t>(row); })}));
 
   std::optional<runner::QueryProgress> finalProgress;
-  QueryCompletionInfo completion;
+  // A real aggregate, so the test sees which producer each metric lands under.
+  facebook::axiom::QueryRuntimeStats stats;
   SqlQueryRunner::RunOptions options;
   options.numWorkers = 1;
   options.numDrivers = 1;
+  options.componentStatWriterProvider = [&](std::string_view componentId)
+      -> facebook::velox::BaseRuntimeStatWriter& {
+    return stats.writerFor(componentId);
+  };
   options.onProgress = [&](const runner::QueryProgress& progress) {
     if (progress.stats.state == runner::ExecutionState::kFinished) {
       finalProgress = progress;
     }
   };
-  options.onComplete = [&](const QueryCompletionInfo& info) {
-    completion = info;
-  };
 
   runner_->run("SELECT sum(c) FROM t", options);
 
   ASSERT_TRUE(finalProgress.has_value());
-  ASSERT_NE(completion.runtimeStats, nullptr);
-  const auto metrics = completion.runtimeStats->runtimeStats();
-  const auto executeCpuMetric = metrics.find(
-      std::string(facebook::axiom::QueryRuntimeStats::kExecuteCpuNanos));
-  ASSERT_NE(executeCpuMetric, metrics.end());
+  // The CLI times its own call into the runner, so the sample is the CLI's.
+  const auto executeCpuMetric = stats.find(
+      facebook::axiom::ComponentMetrics::kCli,
+      SqlQueryRunner::kExecuteCpuNanos);
+  ASSERT_TRUE(executeCpuMetric.has_value());
+  // Exactly one recording site per query.
+  EXPECT_EQ(executeCpuMetric->count, 1);
+  EXPECT_FALSE(stats
+                   .find(
+                       facebook::axiom::ComponentMetrics::kRunner,
+                       SqlQueryRunner::kExecuteCpuNanos)
+                   .has_value());
 
+  // The progress sample is taken before teardown and truncated to micros, so
+  // it is a lower bound on the final nanosecond reading, never an equal.
   const auto progressCpuNanos = finalProgress->stats.cpuTimeMicros * 1'000;
   EXPECT_GT(progressCpuNanos, 0);
-  EXPECT_GE(executeCpuMetric->second.sum, progressCpuNanos);
+  EXPECT_GE(executeCpuMetric->sum, progressCpuNanos);
 }
 
 TEST_F(SqlQueryRunnerTest, startCallbackFiredBeforeCompletion) {

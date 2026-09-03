@@ -28,6 +28,9 @@ namespace facebook::axiom::runner {
 /// Runner-scoped property bag.
 using Properties = folly::F14FastMap<std::string, std::string>;
 
+class RunnerSession;
+using RunnerSessionPtr = std::shared_ptr<RunnerSession>;
+
 /// Runner-scoped session view. Carries the shared identity (queryId, user,
 /// connector-session factory) plus the runner's own property slice.
 class RunnerSession final : public connector::BaseSession {
@@ -36,11 +39,15 @@ class RunnerSession final : public connector::BaseSession {
       std::string queryId,
       std::string user,
       Properties properties,
-      connector::ConnectorProperties connectorProperties)
+      connector::ConnectorProperties connectorProperties,
+      velox::BaseRuntimeStatWriter& statsWriter,
+      connector::StatWriterProvider connectorStatWriterProvider)
       : BaseSession(
             std::move(queryId),
             std::move(user),
-            std::move(connectorProperties)),
+            std::move(connectorProperties),
+            statsWriter,
+            std::move(connectorStatWriterProvider)),
         properties_{std::move(properties)} {}
 
   /// Returns the value of runner-scoped property 'name' if set.
@@ -52,10 +59,13 @@ class RunnerSession final : public connector::BaseSession {
     return it->second;
   }
 
+  /// Returns the runner-scoped property slice.
+  const Properties& properties() const {
+    return properties_;
+  }
+
  private:
   const Properties properties_;
 };
-
-using RunnerSessionPtr = std::shared_ptr<RunnerSession>;
 
 } // namespace facebook::axiom::runner

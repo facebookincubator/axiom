@@ -20,8 +20,8 @@
 #include "axiom/optimizer/Cost.h"
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/Filters.h"
+#include "axiom/optimizer/OptimizerMetrics.h"
 #include "axiom/optimizer/PlanUtils.h"
-#include "velox/common/process/ProcessBase.h"
 #include "velox/connectors/ConnectorRegistry.h"
 
 #include <numbers>
@@ -270,18 +270,11 @@ SchemaTableCP FOLLY_NULLABLE Schema::findTable(
 
   VELOX_CHECK_NOT_NULL(source_);
 
-  auto findCpuStart = velox::process::threadCpuNanos();
   auto findStart = std::chrono::steady_clock::now();
   auto connectorTable = source_->findTable(std::string(connectorId), tableName);
-  if (runtimeStats_) {
-    runtimeStats_->addTiming(
-        QueryRuntimeStats::kFindTableCpuNanos,
-        std::chrono::nanoseconds(
-            velox::process::threadCpuNanos() - findCpuStart));
-    runtimeStats_->addTiming(
-        QueryRuntimeStats::kFindTableWallNanos,
-        std::chrono::steady_clock::now() - findStart);
-  }
+  statsWriter_.addTiming(
+      OptimizerMetrics::kFindTableWallNanos,
+      std::chrono::steady_clock::now() - findStart);
   if (!connectorTable) {
     return nullptr;
   }

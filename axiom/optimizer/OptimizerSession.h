@@ -30,17 +30,22 @@ namespace facebook::axiom::optimizer {
 class OptimizerSession final : public connector::BaseSession {
  public:
   /// Constructs an optimizer session with the given identity, typed
-  /// `options`, and the per-connector property map used to spawn
-  /// ConnectorSessions for plan-time metadata calls.
+  /// `options`, the per-connector property map used to spawn ConnectorSessions
+  /// for plan-time metadata calls, the optimizer's stat writer, and the
+  /// connector stat-writer provider.
   OptimizerSession(
       std::string queryId,
       std::string user,
       OptimizerOptions options,
-      connector::ConnectorProperties connectorProperties)
+      connector::ConnectorProperties connectorProperties,
+      velox::BaseRuntimeStatWriter& statsWriter,
+      connector::StatWriterProvider connectorStatWriterProvider)
       : BaseSession(
             std::move(queryId),
             std::move(user),
-            std::move(connectorProperties)),
+            std::move(connectorProperties),
+            statsWriter,
+            std::move(connectorStatWriterProvider)),
         options_{std::move(options)} {}
 
   const OptimizerOptions& options() const {
