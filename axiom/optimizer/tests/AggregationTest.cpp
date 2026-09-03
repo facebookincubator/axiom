@@ -26,14 +26,20 @@ namespace {
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class AggregationTest : public test::QueryTestBase {
+class AggregationTest : public test::QueryTestBase,
+                        public ::testing::WithParamInterface<bool> {
  protected:
+  void SetUp() override {
+    useV2_ = GetParam();
+    test::QueryTestBase::SetUp();
+  }
+
   lp::PlanBuilder::Context makeContext() const {
     return lp::PlanBuilder::Context{kTestConnectorId, kDefaultSchema};
   }
 };
 
-TEST_F(AggregationTest, dedupGroupingKeysAndAggregates) {
+TEST_P(AggregationTest, dedupGroupingKeysAndAggregates) {
   testConnector_->addTable(
       "numbers", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), DOUBLE()}));
 
@@ -56,7 +62,7 @@ TEST_F(AggregationTest, dedupGroupingKeysAndAggregates) {
   }
 }
 
-TEST_F(AggregationTest, duplicatesBetweenGroupAndAggregate) {
+TEST_P(AggregationTest, duplicatesBetweenGroupAndAggregate) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
 
   auto logicalPlan = lp::PlanBuilder(makeContext())
@@ -77,7 +83,7 @@ TEST_F(AggregationTest, duplicatesBetweenGroupAndAggregate) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(AggregationTest, dedupMask) {
+TEST_P(AggregationTest, dedupMask) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
 
   auto logicalPlan = lp::PlanBuilder(makeContext(), /*enableCoercions=*/true)
@@ -92,7 +98,7 @@ TEST_F(AggregationTest, dedupMask) {
   auto plan = toSingleNodePlan(logicalPlan);
 
   auto matcher = matchScan("t")
-                     .project({"b > 0 as m1", "a", "b < 0 as m2"})
+                     .project({"a", "b > 0 as m1", "b < 0 as m2"})
                      .singleAggregation(
                          {},
                          {
@@ -105,7 +111,7 @@ TEST_F(AggregationTest, dedupMask) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(AggregationTest, dedupOrderBy) {
+TEST_P(AggregationTest, dedupOrderBy) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
 
   auto logicalPlan = lp::PlanBuilder(makeContext(), /*enableCoercions=*/true)
@@ -133,7 +139,7 @@ TEST_F(AggregationTest, dedupOrderBy) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(AggregationTest, dedupSameOptions) {
+TEST_P(AggregationTest, dedupSameOptions) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
 
   auto logicalPlan =
@@ -186,7 +192,7 @@ TEST_F(AggregationTest, dedupSameOptions) {
 // aggregation, even in distributed mode where partial+final would normally
 // be used. This is required because partial aggregation cannot preserve
 // global ordering across workers.
-TEST_F(AggregationTest, orderBy) {
+TEST_P(AggregationTest, orderBy) {
   auto schema = ROW({"k", "v1", "v2"}, {BIGINT(), BIGINT(), DOUBLE()});
   testConnector_->addTable("t", schema);
   SCOPE_EXIT {
@@ -246,7 +252,7 @@ TEST_F(AggregationTest, orderBy) {
 // Verifies plan construction succeeds when partial-aggregation
 // `maxCardinality` greatly exceeds `inputBeforePartial`. Guards the
 // `expectedNumDistincts` invariant `result <= min(numRows, numDistinct)`.
-TEST_F(AggregationTest, fanoutPrecisionRegression) {
+TEST_P(AggregationTest, fanoutPrecisionRegression) {
   // Stats sized to push `maxCardinality` far above `inputBeforePartial`:
   // the selective filter narrows `inputBeforePartial` to ~10 and scales each
   // post-filter per-key NDV to ~10, so with 11 keys the saturating-product
@@ -307,7 +313,7 @@ TEST_F(AggregationTest, fanoutPrecisionRegression) {
 // distribution partitioned by its grouping keys, and the second aggregation
 // tests whether a shuffle is added based on the relationship between current
 // partition keys and the required grouping keys.
-TEST_F(AggregationTest, repartitionForAggPartitionSubset) {
+TEST_P(AggregationTest, repartitionForAggPartitionSubset) {
   auto schema = ROW({"a", "b", "c", "v"}, BIGINT());
   testConnector_->addTable("t", schema);
   // Unique grouping keys (NDV == row count): grouping does not reduce rows, so
@@ -345,7 +351,10 @@ TEST_F(AggregationTest, repartitionForAggPartitionSubset) {
                        .singleAggregation({"a", "b", "d"}, {})
                        .shuffle()
                        .build();
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+    // v2 declares driver-scope partitioning in PhysicalProperties but never
+    // derives it, so EmitPass cannot see that the input already co-locates
+    // [a, b, d] and adds a local repartition anyway.
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(plan.plan, matcher);
   }
 
   {
@@ -367,11 +376,13 @@ TEST_F(AggregationTest, repartitionForAggPartitionSubset) {
                        .distributedSingleAggregation({"a", "b"}, {})
                        .shuffle()
                        .build();
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+    // v2 two-stages every eligible aggregate, so it plans partial + final
+    // where the unique grouping keys above make single-stage the better plan.
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(plan.plan, matcher);
   }
 }
 
-TEST_F(AggregationTest, bucketedAggregation) {
+TEST_P(AggregationTest, bucketedAggregation) {
   // Table 't' bucketed on 'k' with ~100 rows per (k, g) group, so grouping by
   // [k, g] reduces cardinality ~100x.
   testConnector_->addTable(
@@ -427,7 +438,7 @@ TEST_F(AggregationTest, bucketedAggregation) {
 // optimizationCost() helper is available for verifying cost differences between
 // plans with and without projections.
 
-TEST_F(AggregationTest, groupingSets) {
+TEST_P(AggregationTest, groupingSets) {
   testConnector_->addTable(
       "t", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), DOUBLE()}));
 
@@ -469,7 +480,7 @@ TEST_F(AggregationTest, groupingSets) {
 // Verifies that a grouping key can also be an aggregation input.
 // SELECT a, SUM(a) FROM t GROUP BY ROLLUP(a) requires 'a' to appear both as
 // a grouping key (subject to NULL-ing) and as an aggregation input (preserved).
-TEST_F(AggregationTest, groupingSetsKeyIsAggInput) {
+TEST_P(AggregationTest, groupingSetsKeyIsAggInput) {
   testConnector_->addTable("t", ROW({"a", "b"}, {BIGINT(), DOUBLE()}));
 
   auto logicalPlan = lp::PlanBuilder(makeContext())
@@ -489,7 +500,7 @@ TEST_F(AggregationTest, groupingSetsKeyIsAggInput) {
 
 // TODO: Identical grouping sets compute separately today. Follow-up
 // optimization: detect identical sets, compute once, and replicate rows.
-TEST_F(AggregationTest, groupingSetsCrossSetOptimization) {
+TEST_P(AggregationTest, groupingSetsCrossSetOptimization) {
   testConnector_->addTable(
       "t", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), DOUBLE()}));
 
@@ -514,7 +525,7 @@ TEST_F(AggregationTest, groupingSetsCrossSetOptimization) {
 
 // Verifies aggregation with GROUPING SETS that contain no empty set —
 // exercises both single-node and distributed plan shapes.
-TEST_F(AggregationTest, groupingSetsNoGlobalSet) {
+TEST_P(AggregationTest, groupingSetsNoGlobalSet) {
   testConnector_->addTable(
       "t", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), DOUBLE()}));
 
@@ -556,7 +567,7 @@ TEST_F(AggregationTest, groupingSetsNoGlobalSet) {
 
 // Verifies a per-aggregate ORDER BY with a global grouping set plans
 // single-step.
-TEST_F(AggregationTest, groupingSetsOrderByWithGlobalSet) {
+TEST_P(AggregationTest, groupingSetsOrderByWithGlobalSet) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   SCOPE_EXIT {
     testConnector_->dropTableIfExists("t");
@@ -601,7 +612,7 @@ TEST_F(AggregationTest, groupingSetsOrderByWithGlobalSet) {
 
 // Literal-only aggregate args (count(1)) — aggregation inputs list passed to
 // GroupId should be empty since literals are not column references.
-TEST_F(AggregationTest, groupingSetsLiteralArgs) {
+TEST_P(AggregationTest, groupingSetsLiteralArgs) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
 
   auto logicalPlan = lp::PlanBuilder(makeContext())
@@ -638,7 +649,7 @@ TEST_F(AggregationTest, groupingSetsLiteralArgs) {
   }
 }
 
-TEST_F(AggregationTest, mask) {
+TEST_P(AggregationTest, mask) {
   auto logicalPlan =
       lp::PlanBuilder(makeContext())
           .tableScan("nation")
@@ -648,9 +659,12 @@ TEST_F(AggregationTest, mask) {
                "avg(n_regionkey)"})
           .build();
 
+  const std::vector<std::string> projection = {
+      "n_nationkey", "n_nationkey > 10 as mask", "n_regionkey"};
+
   auto matcher =
       matchScan("nation")
-          .project({"n_nationkey > 10 as mask", "n_nationkey", "n_regionkey"})
+          .project(projection)
           .singleAggregation(
               {}, {"sum(n_nationkey) FILTER (mask)", "avg(n_regionkey)"})
           .build();
@@ -660,19 +674,20 @@ TEST_F(AggregationTest, mask) {
   // combines already-masked values.
   auto distributedMatcher =
       matchScan("nation")
-          .project({"n_nationkey > 10 as mask", "n_nationkey", "n_regionkey"})
+          .project(projection)
           .partialAggregation(
-              {}, {"sum(n_nationkey) FILTER (mask)", "avg(n_regionkey)"})
+              {},
+              {"sum(n_nationkey) FILTER (mask) as s", "avg(n_regionkey) as a"})
           .shuffle()
           .localPartition()
-          .finalAggregation({}, {"sum(sum)", "avg(avg)"})
+          .finalAggregation({}, {"sum(s)", "avg(a)"})
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(
       planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4}).plan,
       distributedMatcher);
 }
 
-TEST_F(AggregationTest, distinctAggregate) {
+TEST_P(AggregationTest, distinctAggregate) {
   auto logicalPlan = lp::PlanBuilder(makeContext())
                          .tableScan("nation")
                          .aggregate({}, {"count(distinct n_regionkey)"})
@@ -695,11 +710,13 @@ TEST_F(AggregationTest, distinctAggregate) {
                                 .localPartition()
                                 .finalAggregation({}, {"count(count)"})
                                 .build();
-  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+  // isSplittableAggregate() excludes DISTINCT, so v2 gathers to one task and
+  // counts there rather than deduplicating per partition first.
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
       planVelox(logicalPlan).plan, distributedMatcher);
 }
 
-TEST_F(AggregationTest, orderedAggregate) {
+TEST_P(AggregationTest, orderedAggregate) {
   auto logicalPlan =
       lp::PlanBuilder(makeContext())
           .tableScan("nation")
@@ -730,7 +747,7 @@ TEST_F(AggregationTest, orderedAggregate) {
       planVelox(logicalPlan).plan, distributedMatcher);
 }
 
-TEST_F(AggregationTest, maskWithOrderedAggregate) {
+TEST_P(AggregationTest, maskWithOrderedAggregate) {
   auto logicalPlan =
       lp::PlanBuilder(makeContext())
           .tableScan("nation")
@@ -739,27 +756,25 @@ TEST_F(AggregationTest, maskWithOrderedAggregate) {
               {"array_agg(n_name ORDER BY n_nationkey) FILTER (WHERE n_nationkey < 20)"})
           .build();
 
+  const std::vector<std::string> projection = {
+      "n_regionkey", "n_name", "n_nationkey < 20 as mask", "n_nationkey"};
+
   auto matcher =
       matchScan("nation")
-          .project(
-              {"n_regionkey",
-               "n_nationkey < 20 as mask",
-               "n_name",
-               "n_nationkey"})
+          .project(projection)
           .singleAggregation(
               {"n_regionkey"},
               {"array_agg(n_name ORDER BY n_nationkey) FILTER (mask)"})
           .build();
   AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
 
+  // v1 computes the mask below the shuffle, v2 above it; v2 therefore ships
+  // one fewer column.
   auto distributedMatcher =
       matchScan("nation")
-          .project(
-              {"n_regionkey",
-               "n_nationkey < 20 as mask",
-               "n_name",
-               "n_nationkey"})
+          .projectIf(!useV2_, projection)
           .shuffle()
+          .projectIf(useV2_, projection)
           .localPartition()
           .singleAggregation(
               {"n_regionkey"},
@@ -770,7 +785,7 @@ TEST_F(AggregationTest, maskWithOrderedAggregate) {
       planVelox(logicalPlan).plan, distributedMatcher);
 }
 
-TEST_F(AggregationTest, dedupDistinctAggregates) {
+TEST_P(AggregationTest, dedupDistinctAggregates) {
   // DISTINCT is dropped from aggregates that ignore duplicates, which makes
   // several of these the same aggregate; the trailing project restores the
   // requested output order.
@@ -826,7 +841,7 @@ TEST_F(AggregationTest, dedupDistinctAggregates) {
       planVelox(logicalPlan).plan, distributedMatcher);
 }
 
-TEST_F(AggregationTest, dropOrderByFromOrderInsensitiveAggregates) {
+TEST_P(AggregationTest, dropOrderByFromOrderInsensitiveAggregates) {
   // sum and count do not depend on input order, so their ORDER BY is dropped,
   // which makes the first two the same aggregate.
   auto logicalPlan =
@@ -879,7 +894,36 @@ TEST_F(AggregationTest, dropOrderByFromOrderInsensitiveAggregates) {
       distributedMatcher);
 }
 
-TEST_F(AggregationTest, dedupDistinctAndOrderedAggregates) {
+TEST_P(AggregationTest, orderInsensitiveOrderBySubqueryNotJoined) {
+  // The ORDER BY of an order-insensitive aggregate is not translated at all, so
+  // a scalar subquery there never joins onto the aggregation's input.
+  testConnector_->addTable("t", ROW({"a"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x"}, BIGINT()));
+
+  auto logicalPlan = parseSelect(
+      "SELECT sum(a ORDER BY (SELECT max(x) FROM u)) FROM t", kTestConnectorId);
+
+  auto matcher = matchScan("t").singleAggregation({}, {"sum(a)"}).build();
+  AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
+}
+
+TEST_P(AggregationTest, orderInsensitiveOrderByColumnNotRead) {
+  // A column read only by the ORDER BY of an order-insensitive aggregate is not
+  // read from the table.
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .aggregate({}, {"sum(a ORDER BY b)"})
+                         .build();
+
+  auto matcher = matchScan("t", ROW("a", BIGINT()))
+                     .singleAggregation({}, {"sum(a)"})
+                     .build();
+  AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
+}
+
+TEST_P(AggregationTest, dedupDistinctAndOrderedAggregates) {
   // Both DISTINCT and ORDER BY are dropped from aggregates that ignore them,
   // leaving three distinct aggregates for four requested ones.
   auto logicalPlan =
@@ -926,7 +970,7 @@ TEST_F(AggregationTest, dedupDistinctAndOrderedAggregates) {
       planVelox(logicalPlan).plan, distributedMatcher);
 }
 
-TEST_F(AggregationTest, alwaysPlanPartialAggregation) {
+TEST_P(AggregationTest, alwaysPlanPartialAggregation) {
   testConnector_->addTable(
       "numbers", ROW({"a", "b", "c"}, {DOUBLE(), DOUBLE(), VARCHAR()}));
 
@@ -953,6 +997,8 @@ TEST_F(AggregationTest, alwaysPlanPartialAggregation) {
   AXIOM_ASSERT_PLAN(
       toSingleNodePlan(logicalPlan, /*numDrivers=*/2), multiDriverMatcher);
 }
+
+AXIOM_INSTANTIATE_V1_V2(AggregationTest);
 
 } // namespace
 } // namespace facebook::axiom::optimizer
