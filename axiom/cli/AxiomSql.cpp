@@ -26,6 +26,7 @@
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/Console.h"
 #include "axiom/cli/SystemUser.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestTableJson.h"
 #include "velox/common/base/Exceptions.h"
 
@@ -51,7 +52,7 @@ int main(int argc, char** argv) {
   folly::FunctionScheduler progressScheduler;
   axiom::sql::SqlQueryRunner runner{
       axiom::sql::SystemUser::resolve(), &progressScheduler, FLAGS_v2};
-  runner.initialize([&]() {
+  auto initializeConnectors = [&]() {
     VELOX_USER_CHECK(
         FLAGS_data_path.empty() || FLAGS_etc_dir.empty(),
         "--data_path and --etc_dir are mutually exclusive. Use --data_path for "
@@ -116,29 +117,47 @@ int main(int argc, char** argv) {
       connectorId = defaultConnector->connectorId();
     }
 
+    // Not every catalog has a built-in default schema. Leave the schema empty
+    // instead of refusing to start: only bare table names need it, and the
+    // session can set one later with `use <catalog>.<schema>`.
     std::string schema = FLAGS_schema;
     if (schema.empty()) {
-      auto defaultSchemaIterator = defaultSchemas.find(connectorId);
-      VELOX_USER_CHECK(
-          defaultSchemaIterator != defaultSchemas.end() &&
-              !defaultSchemaIterator->second.empty(),
-          "Schema must be specified for connector {}",
-          connectorId);
-      schema = defaultSchemaIterator->second;
+      if (const auto it = defaultSchemas.find(connectorId);
+          it != defaultSchemas.end()) {
+        schema = it->second;
+      }
     }
 
     return std::make_pair(connectorId, schema);
-  });
+  };
 
-  // Register after initialize() so sessionConfig() is available.
-  connectors.registerSystemConnector(runner.sessionConfig());
-  connectors.registerFileConnector();
-
-  axiom::sql::Console console{runner};
-  console.initialize();
-  // Invalid CLI flags throw VeloxUserError; surface them as a clean
-  // 'Error: ...' line and a non-zero exit.
+  // Both connector registration and the console throw VeloxUserError on bad
+  // flags or catalog properties. Keep them inside the handler so either one
+  // prints an 'Error: ' line and exits non-zero instead of escaping main.
   try {
+    runner.initialize(initializeConnectors);
+
+    // Register after initialize() so sessionConfig() is available.
+    connectors.registerSystemConnector(runner.sessionConfig());
+    connectors.registerFileConnector();
+
+    // --catalog is only checked here because the system and file catalogs are
+    // registered above, after the connectors the flag usually names.
+    const auto& catalog = runner.defaultConnectorId();
+    VELOX_USER_CHECK_NOT_NULL(
+        facebook::axiom::connector::ConnectorMetadataRegistry::tryGet(catalog),
+        "Catalog does not exist: {}",
+        catalog);
+
+    if (runner.defaultSchema().empty()) {
+      std::cerr << "Catalog '" << catalog
+                << "' has no default schema. Qualify table names as "
+                   "'<schema>.<table>', or run 'use "
+                << catalog << ".<schema>' to set one." << std::endl;
+    }
+
+    axiom::sql::Console console{runner};
+    console.initialize();
     console.run();
   } catch (const facebook::velox::VeloxUserError& e) {
     std::cerr << "Error: " << e.message() << std::endl;
