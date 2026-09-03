@@ -26,8 +26,8 @@ The examples below use `axiom_sql` for brevity. With Buck, replace
 |------|---------|-------------|
 | `--query` | | SQL text to execute. Supports multiple semicolon-separated statements. If not specified, enters interactive mode. If set to an empty string (`--query ""`), reads semicolon-separated SQL statements from stdin. |
 | `--init` | | Path to a SQL file with semicolon-separated statements to execute on startup before entering interactive mode or running `--query`. |
-| `--catalog` | | Default catalog (connector). If not specified, defaults to `hive` when `--data_path` is set, `tpch` otherwise. |
-| `--schema` | | Default schema. If not specified, defaults to `tiny` for TPC-H and `default` for Hive and Test connectors. |
+| `--catalog` | | Default catalog (connector). If not specified, defaults to `hive` when `--data_path` is set, `tpch` otherwise. Startup fails if the catalog is not registered. |
+| `--schema` | | Default schema. If not specified, defaults to `tiny` for TPC-H and `default` for Hive and Test connectors. Other catalogs, such as `system`, have no default schema: qualify table names as `<schema>.<table>`, or run `use <catalog>.<schema>`. |
 | `--etc_dir` | | Path to a directory of catalog `.properties` files. Mutually exclusive with `--data_path`. External catalogs are not selected automatically; use `--catalog` or fully-qualified names in SQL. |
 | `--data_path` | | Hive specific: root path for Hive-style partitioned data. Registers local Hive connector. Mutually exclusive with `--etc_dir`. |
 | `--data_format` | `parquet` | Hive specific: data format, `parquet`, `dwrf`, or `text`. |
