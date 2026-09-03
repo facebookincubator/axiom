@@ -21,10 +21,12 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <algorithm>
+#include <cstdio>
 #include <iostream>
 #include <iterator>
 #include <optional>
 #include <set>
+#include <sstream>
 #include "axiom/cli/LiveProgressDisplay.h"
 #include "axiom/cli/QueryInterruptHandler.h"
 #include "axiom/cli/ResultPrinter.h"
@@ -48,6 +50,13 @@ DEFINE_uint64(
     "Approx bytes covered by one split");
 
 DEFINE_int32(max_rows, 100, "Max number of printed result rows");
+
+DEFINE_string(
+    pager,
+    "less -SFX",
+    "Command used to view query results on a terminal. The default disables "
+    "line wrapping and exits automatically for short results. Set to empty to "
+    "print directly to stdout.");
 
 DEFINE_int32(num_workers, 4, "Number of in-process workers");
 DEFINE_int32(num_drivers, 4, "Number of drivers per worker");
@@ -102,6 +111,25 @@ int terminalWidth(int fileDescriptor) {
     return windowSize.ws_col;
   }
   return kDefaultTerminalWidth;
+}
+
+// Sends formatted query results to the configured terminal pager. A pager is
+// deliberately used only when stdout is a terminal: redirected output remains
+// plain text for scripts and pipes. Return false so callers can fall back to
+// stdout when the pager cannot be started or fails.
+bool printWithPager(const std::string& text) {
+  if (!isatty(STDOUT_FILENO) || FLAGS_pager.empty()) {
+    return false;
+  }
+
+  std::cout.flush();
+  FILE* pager = popen(FLAGS_pager.c_str(), "w");
+  if (pager == nullptr) {
+    return false;
+  }
+
+  const auto written = std::fwrite(text.data(), 1, text.size(), pager);
+  return written == text.size() && pclose(pager) == 0;
 }
 
 // Extracts a file path argument from a dot-command string like ".run <file>".
@@ -275,7 +303,12 @@ bool Console::runOnce(
       if (FLAGS_debug && !result.results.empty()) {
         std::cout << result.results.front()->rowType()->toString() << std::endl;
       }
-      cli::printResults(result.results, FLAGS_max_rows);
+      std::ostringstream formattedResults;
+      cli::printResults(result.results, FLAGS_max_rows, formattedResults);
+      const auto output = formattedResults.str();
+      if (!printWithPager(output)) {
+        std::cout << output;
+      }
     }
 
     if (printTiming) {

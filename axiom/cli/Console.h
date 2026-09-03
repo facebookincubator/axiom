@@ -21,6 +21,7 @@ DECLARE_string(data_path);
 DECLARE_string(data_format);
 DECLARE_string(etc_dir);
 DECLARE_bool(debug);
+DECLARE_string(pager);
 
 namespace axiom::sql {
 
@@ -61,6 +62,9 @@ class Console {
   /// Runs the CLI. Executes `--query` if set, otherwise reads piped
   /// stdin if non-interactive, otherwise enters the interactive REPL.
   /// Honors `--repeat` for `--query` and piped-stdin paths.
+  /// Result tables written to a terminal are shown through `--pager` (by
+  /// default `less -SFX`), which keeps wide columns on one logical line for
+  /// horizontal navigation. Set `--pager=` to print directly to stdout.
   ///
   /// Throws VeloxUserError on invalid CLI flags. Query failures during
   /// execution are caught internally and printed to stderr; they do
