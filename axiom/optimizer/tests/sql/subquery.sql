@@ -751,6 +751,20 @@ LEFT JOIN (VALUES (1, 'x')) AS u(k, b) ON t.a = u.k
 INNER JOIN (VALUES (1)) AS v(c)
   ON u.b IN (SELECT 'x' FROM (VALUES (1)) AS w(d) WHERE d = v.c)
 ----
+-- A correlated scalar aggregate attaches to p through a LEFT join during
+-- decorrelation. The comparison with sibling ps must remain a filter above
+-- that join instead of becoming a second join edge on the null-producing
+-- aggregate side.
+SELECT ps.k, ps.cost
+FROM (VALUES (1), (2)) AS p(k),
+     (VALUES (1, 100.0), (1, 200.0), (2, 50.0), (2, 30.0)) AS ps(k, cost)
+WHERE p.k = ps.k
+  AND ps.cost = (
+      SELECT min(ps2.cost)
+      FROM (VALUES (1, 100.0), (1, 200.0), (2, 50.0), (2, 30.0)) AS ps2(k, cost)
+      WHERE ps2.k = p.k)
+ORDER BY ps.k
+----
 -- Shared CTE with a nested-IN filter, referenced from both UNION legs,
 -- second leg wrapping it in GROUP BY.
 WITH s AS (

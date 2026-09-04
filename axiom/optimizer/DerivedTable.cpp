@@ -2400,6 +2400,25 @@ bool DerivedTable::addFilter(ExprCP conjunct) {
   return true;
 }
 
+namespace {
+
+// True if 'table' is the null-producing side of an outer join in 'dt'. Such a
+// table cannot take on further join edges: any edge added to it would have to
+// be applied after the outer join, which the join order search cannot express.
+bool isNullProducingSide(const DerivedTableP dt, PlanObjectCP table) {
+  for (const auto* join : dt->joins) {
+    if (join->rightOptional() && join->rightTable() == table) {
+      return true;
+    }
+    if (join->leftOptional() && join->leftTable() == table) {
+      return true;
+    }
+  }
+  return false;
+}
+
+} // namespace
+
 void DerivedTable::distributeConjuncts() {
   if (!having.empty()) {
     VELOX_CHECK_NOT_NULL(aggregation);
@@ -2495,6 +2514,14 @@ void DerivedTable::distributeConjuncts() {
         // One side references this dt's own output (e.g. the nullable column
         // of a contained outer join), so this cannot be a base-table join
         // equality. Leave it in place to evaluate above the join.
+        continue;
+      }
+
+      if (isNullProducingSide(this, tables[0]) ||
+          isNullProducingSide(this, tables[1])) {
+        // The conjunct constrains a table whose join order position is already
+        // pinned by an outer join. Leave it in place to evaluate above that
+        // join.
         continue;
       }
 

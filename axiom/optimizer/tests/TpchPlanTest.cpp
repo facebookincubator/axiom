@@ -149,13 +149,13 @@ TEST_F(TpchPlanTest, q01) {
 TEST_F(TpchPlanTest, q02) {
   // (
   //   ((partsupp INNER part) INNER (supplier INNER (nation INNER region)))
-  //   INNER
+  //   LEFT
   //   agg((
   //     (partsupp LEFT SEMI (FILTER) part)
   //     INNER
   //     (supplier INNER (nation INNER region))
   //   ))
-  // )
+  // ) FILTER ps_supplycost = min
   auto matcher =
       matchScan("partsupp")
           .hashJoinInner(
@@ -164,7 +164,7 @@ TEST_F(TpchPlanTest, q02) {
               matchScan("supplier")
                   .hashJoinInner(matchScan("nation").hashJoinInner(
                       matchScan("region").filter("r_name = 'EUROPE'"))))
-          .hashJoinInner(
+          .hashJoinLeft(
               matchScan("partsupp")
                   .hashJoinLeftSemiFilter(matchScan("part").filter(
                       "p_size = 15 and p_type like '%BRASS'"))
@@ -176,6 +176,7 @@ TEST_F(TpchPlanTest, q02) {
                                   .filter("region_name = 'EUROPE'"))))
                   .aggregation()
                   .project())
+          .filter("ps_supplycost = min")
           .topN()
           .project()
           .build();
