@@ -722,10 +722,26 @@ class RelationPlanner : public AstVisitor {
   }
 
   void processTable(const Table& table) {
-    processTable(table.location(), *table.name());
+    std::optional<int64_t> snapshotId;
+    if (const auto& version = table.version()) {
+      // The AST builder only produces a VERSION (not TIMESTAMP) version here.
+      const auto* snapshot =
+          dynamic_cast<const LongLiteral*>(version->expression().get());
+      if (snapshot == nullptr) {
+        AXIOM_PRESTO_SEMANTIC_FAIL(
+            version->location(),
+            /*token=*/"",
+            "FOR VERSION AS OF requires an integer snapshot id");
+      }
+      snapshotId = snapshot->value();
+    }
+    processTable(table.location(), *table.name(), snapshotId);
   }
 
-  void processTable(const NodeLocation& location, const QualifiedName& name) {
+  void processTable(
+      const NodeLocation& location,
+      const QualifiedName& name,
+      std::optional<int64_t> snapshotId = std::nullopt) {
     const auto tableName = canonicalizeName(name.suffix());
 
     // Only an unqualified single-part name can name a CTE; a qualified
@@ -736,7 +752,7 @@ class RelationPlanner : public AstVisitor {
     }
 
     // Regular base-table reference.
-    const auto [connectorId, connectorTable] = toConnectorTable(
+    auto [connectorId, connectorTable] = toConnectorTable(
         name,
         context_.defaultConnectorId.value(),
         defaultSchema_,
@@ -744,6 +760,19 @@ class RelationPlanner : public AstVisitor {
 
     auto metadata =
         facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId);
+
+    if (snapshotId.has_value()) {
+      // Reject rather than let a connector that ignores the snapshot read the
+      // current version as if no version were given.
+      if (!metadata->supportsTableTimeTravel()) {
+        AXIOM_PRESTO_SEMANTIC_FAIL(
+            location,
+            name.suffix(),
+            "Time travel (FOR VERSION AS OF) is not supported by connector: {}",
+            connectorId);
+      }
+      connectorTable.snapshotId = snapshotId;
+    }
 
     if (metadata->findTable(connectorTable) != nullptr) {
       // Drop display names captured from a sibling FROM relation so
@@ -755,7 +784,8 @@ class RelationPlanner : public AstVisitor {
           connectorId,
           connectorTable.schema,
           connectorTable.table,
-          /*includeHiddenColumns=*/true);
+          /*includeHiddenColumns=*/true,
+          connectorTable.snapshotId);
     } else if (auto view = metadata->findView(connectorTable)) {
       views_.emplace(
           facebook::axiom::CatalogSchemaTableName{connectorId, connectorTable},

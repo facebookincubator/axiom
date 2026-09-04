@@ -241,10 +241,12 @@ PlanBuilder& PlanBuilder::tableScan(
     const std::string& connectorId,
     const std::string& schemaName,
     const std::string& tableName,
-    bool includeHiddenColumns) {
+    bool includeHiddenColumns,
+    std::optional<int64_t> snapshotId) {
   VELOX_USER_CHECK_NULL(node_, "Table scan node must be the leaf node");
 
   SchemaTableName schemaTableName{schemaName, tableName};
+  schemaTableName.snapshotId = snapshotId;
   auto metadata = ConnectorMetadataRegistry::get(connectorId);
   auto table = metadata->findTable(schemaTableName);
   VELOX_USER_CHECK_NOT_NULL(

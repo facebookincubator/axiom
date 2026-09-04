@@ -282,6 +282,9 @@ folly::dynamic TableScanNode::serialize() const {
   obj["connectorId"] = connectorId_;
   obj["tableName"] = tableName_.table;
   obj["schema"] = tableName_.schema;
+  if (tableName_.snapshotId.has_value()) {
+    obj["snapshotId"] = *tableName_.snapshotId;
+  }
   obj["columnNames"] =
       serializeVector(columnNames_, [](const std::string& s) { return s; });
   return obj;
@@ -293,6 +296,9 @@ LogicalPlanNodePtr TableScanNode::create(
     void* /*context*/) {
   SchemaTableName tableName{
       obj.getDefault("schema", "").asString(), obj["tableName"].asString()};
+  if (const auto* snapshotId = obj.get_ptr("snapshotId")) {
+    tableName.snapshotId = snapshotId->asInt();
+  }
   return std::make_shared<TableScanNode>(
       obj["id"].asString(),
       deserializeOutputType(obj),

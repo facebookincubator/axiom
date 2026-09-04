@@ -291,11 +291,16 @@ class PlanBuilder {
   }
 
   /// Equivalent to SELECT * FROM <tableName>.
+  ///
+  /// @param snapshotId Pins the scan to a table snapshot (Iceberg time travel).
+  /// Empty reads the current version. Only a connector whose metadata reports
+  /// supportsTableTimeTravel() honors it.
   PlanBuilder& tableScan(
       const std::string& connectorId,
       const std::string& schemaName,
       const std::string& tableName,
-      bool includeHiddenColumns = false);
+      bool includeHiddenColumns = false,
+      std::optional<int64_t> snapshotId = std::nullopt);
 
   /// @overload Uses the default connector ID from Context.
   PlanBuilder& tableScan(
