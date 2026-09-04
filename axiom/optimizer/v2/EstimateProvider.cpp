@@ -329,8 +329,24 @@ Estimate EstimateProvider::compute(NodeCP node) {
       return result;
     }
 
+    case NodeType::kProject: {
+      const auto* project = node->as<Project>();
+      const auto& input = estimate(project->input());
+      Estimate result;
+      result.cardinality = input.cardinality;
+      const auto& expressions = project->exprs();
+      const auto& outputColumns = project->outputColumns();
+      // Preserve statistics across column aliases.
+      for (size_t i = 0; i < expressions.size(); ++i) {
+        if (expressions[i]->isColumn()) {
+          result.constraints.insert_or_assign(
+              outputColumns[i]->id(), value(input.constraints, expressions[i]));
+        }
+      }
+      return result;
+    }
+
     // Cardinality-neutral operators: pass the input's estimate through.
-    case NodeType::kProject:
     case NodeType::kSort:
     case NodeType::kWindow:
     case NodeType::kGroupId:
