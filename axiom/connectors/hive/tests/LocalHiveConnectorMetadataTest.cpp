@@ -98,7 +98,8 @@ class LocalHiveConnectorMetadataTest
                  v1.end(),
                  v2.begin(),
                  [](const Column* a, const Column* b) {
-                   return (a->name() == b->name()) && (a->type() == b->type());
+                   return (a->name() == b->name()) &&
+                       (*a->type() == *b->type());
                  });
     };
 

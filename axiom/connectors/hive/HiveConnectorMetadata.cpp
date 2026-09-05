@@ -150,6 +150,9 @@ std::vector<std::unique_ptr<const connector::Column>> makeColumns(
           std::make_unique<connector::Column>(
               HiveTable::kBucket, velox::INTEGER(), /*hidden=*/true));
     }
+    columns.emplace_back(
+        std::make_unique<connector::Column>(
+            HiveTable::kRowId, HiveTable::rowIdType(), /*hidden=*/true));
   }
 
   return columns;
@@ -265,6 +268,10 @@ namespace {
 velox::connector::hive::HiveColumnHandle::ColumnType columnType(
     const HiveTableLayout& layout,
     const facebook::axiom::connector::Column* column) {
+  if (column->name() == HiveTable::kRowId) {
+    return velox::connector::hive::HiveColumnHandle::ColumnType::kRowId;
+  }
+
   if (column->hidden()) {
     return velox::connector::hive::HiveColumnHandle::ColumnType::kSynthesized;
   }

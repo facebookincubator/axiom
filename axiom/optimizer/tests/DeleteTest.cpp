@@ -149,4 +149,17 @@ TEST_F(DeleteTest, unpartitionedTable) {
 }
 
 } // namespace
+
+// $row_id resolves, so a row-level delete parses. The optimizer rejects it:
+// it supports only deletes the connector can carry out as a metadata change.
+TEST_F(DeleteTest, rowLevelDelete) {
+  const auto plan = parseDelete(
+      "DELETE FROM nation WHERE \"$row_id\" IN "
+      "(SELECT \"$row_id\" FROM nation WHERE n_regionkey = 1)");
+  ASSERT_NE(plan, nullptr);
+
+  VELOX_ASSERT_THROW(
+      planVelox(plan), "DELETE requires a scan with an optional filter");
+}
+
 } // namespace facebook::axiom::optimizer
