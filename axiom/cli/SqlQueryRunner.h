@@ -179,6 +179,24 @@ struct QueryCompletionInfo {
   std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats;
 };
 
+/// Owned query-level resource estimates produced by optimizer v2.
+struct QueryResourceEstimates {
+  /// Estimated rows read across all scans, or nullopt when unknown.
+  std::optional<float> inputRows;
+
+  /// Estimated logical payload bytes read across all scans, or nullopt when
+  /// unknown. This is not compressed storage I/O.
+  std::optional<float> inputBytes;
+
+  /// Estimated rows in the query result, or nullopt when unknown. For a
+  /// table-write plan, this describes the input to the write.
+  std::optional<float> outputRows;
+
+  /// Estimated logical payload bytes in the query result, or nullopt when
+  /// unknown. For a table-write plan, this describes the input to the write.
+  std::optional<float> outputBytes;
+};
+
 /// Invoked when a query starts, before parsing.
 using QueryStartCallback = std::function<void(const QueryStartInfo&)>;
 
@@ -465,6 +483,24 @@ class SqlQueryRunner {
       std::string_view sql,
       const RunOptions& options);
 
+  /// Returns optimizer-v2 resource estimates for a single SQL statement that
+  /// contains a logical plan, without physical planning or execution. Uses the
+  /// supplied query namespace and runs the configured permission and
+  /// logical-plan checks. Lifecycle callbacks in RunOptions are not invoked.
+  QueryResourceEstimates estimateQueryStats(
+      std::string_view sql,
+      RunOptions options);
+
+  /// Returns optimizer-v2 resource estimates for an arbitrary logical plan.
+  /// For a table-write root, estimates its input rather than the write-status
+  /// result. The logical-plan check runs, but parsing and permission checks
+  /// are the caller's responsibility.
+  QueryResourceEstimates estimateQueryStats(
+      const facebook::axiom::logical_plan::LogicalPlanNode& logicalPlan,
+      RunOptions options,
+      std::shared_ptr<facebook::axiom::connector::SchemaResolver>
+          schemaResolver = nullptr);
+
   /// Generates DOT representation of the query graph for a single SELECT
   /// statement. The output can be rendered using Graphviz:
   ///   dot -Tsvg output.dot -o output.svg
@@ -569,7 +605,8 @@ class SqlQueryRunner {
   makeOptimizerSession(
       std::string_view queryId,
       facebook::axiom::connector::ConnectorProperties connectorProperties,
-      bool explain);
+      bool explain,
+      bool forceFilteredTableStats = false);
 
   std::string runExplain(
       const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,

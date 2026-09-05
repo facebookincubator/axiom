@@ -53,10 +53,12 @@ ScanHandle ScanHandle::build(
   const size_t numColumns = outputColumns.size() + filterOnlyColumns.size();
   std::vector<velox::connector::ColumnHandlePtr> readSchema;
   readSchema.reserve(numColumns);
+  float inputRowBytes{0};
   const auto addHandle = [&](ColumnCP column) {
     auto handle = layout->createColumnHandle(
         connectorSession, column->name(), subfieldsOf(column));
     readSchema.push_back(handle);
+    inputRowBytes += column->value().byteSize();
     return handle;
   };
 
@@ -117,6 +119,7 @@ ScanHandle ScanHandle::build(
 
   return ScanHandle{
       .tableHandle = std::move(tableHandle),
+      .inputRowBytes = inputRowBytes,
       .columnHandles = std::move(columnHandles),
   };
 }

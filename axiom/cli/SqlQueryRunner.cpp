@@ -942,6 +942,72 @@ presto::SqlStatementPtr SqlQueryRunner::parseSingle(
   return statements.front();
 }
 
+QueryResourceEstimates SqlQueryRunner::estimateQueryStats(
+    std::string_view sql,
+    RunOptions options) {
+  options.queryId = options.queryId.value_or(queryIdGenerator_());
+  const auto statement = parseSingle(sql, options);
+
+  const auto& catalog =
+      options.defaultConnectorId.value_or(defaultConnectorId_);
+  const auto& schema = options.defaultSchema.value_or(defaultSchema_);
+  QueryCompletionInfo completionInfo{
+      .startInfo =
+          {*options.queryId,
+           std::string(sql),
+           std::chrono::system_clock::now(),
+           std::string(catalog),
+           std::string(schema),
+           statement->kind()},
+      .referencedTables = statement->referencedTables()};
+  options.tokenProvider = checkPermission(
+      options,
+      completionInfo,
+      statement->views(),
+      statement->referencedTables());
+
+  const auto* logicalPlan = statement->queryPlan();
+  VELOX_USER_CHECK_NOT_NULL(
+      logicalPlan,
+      "Query statistics require a statement with a logical plan, got: {}",
+      statement->kindName());
+  return estimateQueryStats(*logicalPlan, options);
+}
+
+QueryResourceEstimates SqlQueryRunner::estimateQueryStats(
+    const logical_plan::LogicalPlanNode& logicalPlan,
+    RunOptions options,
+    std::shared_ptr<connector::SchemaResolver> schemaResolver) {
+  options.queryId = options.queryId.value_or(queryIdGenerator_());
+  checkLogicalPlan(logicalPlan);
+  const auto& estimationPlan =
+      logicalPlan.is(logical_plan::NodeKind::kTableWrite)
+      ? *logicalPlan.onlyInput()
+      : logicalPlan;
+  auto queryCtx = newQuery(options);
+  auto session = makeOptimizerSession(
+      queryCtx->queryId(),
+      collectConnectorProperties(*sessionConfig_),
+      /*explain=*/false,
+      /*forceFilteredTableStats=*/true);
+  OptimizerContext optimizerContext(
+      optimizerPool_.get(), session->options().maxPlanObjects);
+  velox::exec::SimpleExpressionEvaluator evaluator(
+      queryCtx.get(), optimizerPool_.get());
+  auto resolver = orDefaultSchemaResolver(std::move(schemaResolver));
+  const auto stats =
+      optimizer::v2::Optimizer(
+          estimationPlan, *resolver, *session, evaluator, queryCtx)
+          .estimateQueryStats();
+
+  return {
+      .inputRows = stats.numInputRows,
+      .inputBytes = stats.inputBytes,
+      .outputRows = stats.cardinality,
+      .outputBytes = stats.outputBytes,
+  };
+}
+
 SqlQueryRunner::SqlResult SqlQueryRunner::runUnchecked(
     const presto::SqlStatement& sqlStatement,
     const RunOptions& options) {
@@ -1817,10 +1883,14 @@ std::shared_ptr<optimizer::OptimizerSession>
 SqlQueryRunner::makeOptimizerSession(
     std::string_view queryId,
     connector::ConnectorProperties connectorProperties,
-    bool explain) {
+    bool explain,
+    bool forceFilteredTableStats) {
   auto optimizerOptions = optimizer::OptimizerOptions::from(
       sessionConfig_->effectiveValues(kOptimizerPrefix));
   optimizerOptions.explain = explain;
+  if (forceFilteredTableStats) {
+    optimizerOptions.useFilteredTableStats = true;
+  }
   return std::make_shared<optimizer::OptimizerSession>(
       std::string(queryId),
       user_,

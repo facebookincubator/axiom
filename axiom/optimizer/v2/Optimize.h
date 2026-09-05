@@ -48,12 +48,26 @@ struct QueryColumnStats {
   const velox::Variant* max;
 };
 
-/// Estimated result statistics of a query under the v2 optimizer.
-/// `cardinality` is the estimated output row count (nullopt when unknown);
-/// `columns` is aligned 1:1 with the query's output columns.
+/// Estimated output and resource statistics of a query under optimizer v2.
 struct QueryStats {
+  /// Estimated number of output rows, or nullopt when unknown.
   std::optional<float> cardinality;
+
+  /// Statistics aligned 1:1 with the query's output columns.
   std::vector<QueryColumnStats> columns;
+
+  /// Estimated rows read across all scans, or nullopt when any scan is
+  /// unknown. TABLESAMPLE SYSTEM scales this count by its sampling rate.
+  std::optional<float> numInputRows;
+
+  /// Estimated logical payload bytes read across all scans using
+  /// `Value::byteSize()` for column widths, or nullopt when any scan's row
+  /// count is unknown. This does not estimate compressed storage I/O.
+  std::optional<float> inputBytes;
+
+  /// Estimated logical payload bytes in the query result, or nullopt when
+  /// output cardinality is unknown.
+  std::optional<float> outputBytes;
 };
 
 /// Runs the v2 optimizer over a single logical plan. Construct with the plan
@@ -108,13 +122,10 @@ class Optimizer {
   std::string explainIo(
       std::optional<CatalogSchemaTableName> outputTable = std::nullopt);
 
-  /// Estimates the result statistics of the plan (the estimate behind
-  /// SHOW STATS FOR (<query>)). Runs the shared front end (translate +
-  /// pushdown) and, when the `useFilteredTableStats` option is set,
-  /// EstimateLeafStatsPass, then reads the root estimate via EstimateProvider —
-  /// the v2 analogue of v1 reading the root DerivedTable after logical
-  /// optimization. The returned pointers are valid only for the enclosing
-  /// QueryGraphContext's lifetime.
+  /// Estimates output and resource statistics for the plan. Runs the shared
+  /// front end (translate + pushdown) and, when the `useFilteredTableStats`
+  /// option is set, EstimateLeafStatsPass. The returned pointers are valid
+  /// only for the enclosing QueryGraphContext's lifetime.
   QueryStats estimateQueryStats();
 
  private:
