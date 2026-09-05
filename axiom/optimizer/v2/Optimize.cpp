@@ -17,7 +17,9 @@
 #include "axiom/optimizer/v2/Optimize.h"
 
 #include "axiom/optimizer/ConstantFold.h"
+#include "axiom/optimizer/EstimateMath.h"
 #include "axiom/optimizer/ExplainIo.h"
+#include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/v2/Builder.h"
 #include "axiom/optimizer/v2/DecorrelatePass.h"
 #include "axiom/optimizer/v2/EmitPass.h"
@@ -108,6 +110,61 @@ std::optional<uint64_t> totalRawInputRows(NodeCP node) {
     total += *rows;
   }
 
+  return total;
+}
+
+// Returns the expected rows read by 'scan', including SYSTEM sampling. Row
+// filters do not reduce this count because the connector must read a row before
+// evaluating them.
+std::optional<float> scanInputRows(const Scan& scan) {
+  const auto* baseTable = scan.baseTable();
+  VELOX_CHECK_NOT_NULL(baseTable);
+  const auto numRows = baseTable->numRawInputRows;
+  if (!numRows.has_value()) {
+    return std::nullopt;
+  }
+
+  std::optional<float> result{static_cast<float>(*numRows)};
+  if (const auto sample = baseTable->sampledPercentage) {
+    result = mul(result, *sample / 100.0f);
+  }
+  return result;
+}
+
+// Sums the expected rows read by scans under 'node'. One unknown scan row
+// count makes the total unknown.
+std::optional<float> totalInputRows(NodeCP node) {
+  VELOX_CHECK_NOT_NULL(node);
+  if (node->is(NodeType::kScan)) {
+    const auto* scan = node->as<Scan>();
+    VELOX_CHECK_NOT_NULL(scan);
+    return scanInputRows(*scan);
+  }
+
+  std::optional<float> total{0};
+  for (NodeCP input : node->inputs()) {
+    total = add(total, totalInputRows(input));
+  }
+  return total;
+}
+
+// Sums the estimated logical bytes read by scans under 'node'. One unknown
+// scan row count makes the total unknown.
+std::optional<float> totalInputBytes(NodeCP node) {
+  VELOX_CHECK_NOT_NULL(node);
+  if (node->is(NodeType::kScan)) {
+    const auto* scan = node->as<Scan>();
+    VELOX_CHECK_NOT_NULL(scan);
+    const auto* scanHandle = scan->scanHandle();
+    VELOX_CHECK_NOT_NULL(
+        scanHandle, "Input byte estimation requires a connector read handle");
+    return mul(scanInputRows(*scan), scanHandle->inputRowBytes);
+  }
+
+  std::optional<float> total{0};
+  for (NodeCP input : node->inputs()) {
+    total = add(total, totalInputBytes(input));
+  }
   return total;
 }
 
@@ -249,6 +306,9 @@ QueryStats Optimizer::estimateQueryStats() {
 
   QueryStats result;
   result.cardinality = estimate.cardinality;
+  result.numInputRows = totalInputRows(frontend.pushed);
+  result.inputBytes = totalInputBytes(frontend.pushed);
+  result.outputBytes = mul(estimate.cardinality, byteSize(columns));
   result.columns.reserve(columns.size());
   for (size_t i = 0; i < columns.size(); ++i) {
     // `value` returns the estimator's post-filter refined constraint, falling
