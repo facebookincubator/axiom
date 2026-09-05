@@ -105,6 +105,23 @@ class HiveTable : public Table {
   static constexpr auto kPath = "$path";
   static constexpr auto kFileSize = "$file_size";
   static constexpr auto kBucket = "$bucket";
+  static constexpr auto kRowId = "$row_id";
+
+  /// Type of kRowId, a contract with the connector's execution side: it takes
+  /// a 5-field ROW and addresses the fields by position, filling the first
+  /// from the reader and the rest from the split. The two change together.
+  /// The fields identify a row to the delete logic and are not meant to be
+  /// read for anything else.
+  static const velox::RowTypePtr& rowIdType() {
+    static const velox::RowTypePtr kType = velox::ROW({
+        {"rownumber", velox::BIGINT()},
+        {"rowgroupid", velox::VARCHAR()},
+        {"metadataversion", velox::BIGINT()},
+        {"partitionid", velox::BIGINT()},
+        {"rowguid", velox::VARCHAR()},
+    });
+    return kType;
+  }
 
   HiveTable(
       SchemaTableName name,
@@ -354,8 +371,8 @@ class HiveConnectorMetadata : public ConnectorMetadata {
  public:
   /// @param includeHiddenColumns is an indicator to include hidden columns in
   /// HiveTable creation, i.e. including cols: HiveTable::kPath,
-  /// HiveTable::kBucket, HiveTable::kFileSize apart from the original physical
-  /// schema.
+  /// HiveTable::kBucket, HiveTable::kFileSize, HiveTable::kRowId apart from
+  /// the original physical schema.
   explicit HiveConnectorMetadata(
       velox::connector::hive::HiveConnector* hiveConnector,
       bool includeHiddenColumns = true)
