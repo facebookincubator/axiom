@@ -981,7 +981,7 @@ CreateTableOptions parseCreateTableOptions(
     }
   } else {
     VELOX_USER_CHECK(
-        options.find(HiveWriteOptions::kSortedBy) == options.end(),
+        !options.contains(HiveWriteOptions::kSortedBy),
         "sorted_by requires bucketed_by");
   }
 
