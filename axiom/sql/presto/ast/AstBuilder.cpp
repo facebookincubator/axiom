@@ -256,15 +256,18 @@ std::string stripDigitSeparators(std::string_view text, bool friendlySql) {
   return result;
 }
 
-PrestoSqlParser::IntegerLiteralContext* asIntegerLiteral(
-    PrestoSqlParser::ValueExpressionContext* valueExpr) {
+// Returns the primary expression when no operator is applied to it, or nullptr.
+PrestoSqlParser::PrimaryExpressionContext* FOLLY_NULLABLE
+asPrimaryExpression(PrestoSqlParser::ValueExpressionContext* valueExpr) {
   auto* defaultCtx =
       dynamic_cast<PrestoSqlParser::ValueExpressionDefaultContext*>(valueExpr);
-  if (defaultCtx == nullptr) {
-    return nullptr;
-  }
+  return defaultCtx == nullptr ? nullptr : defaultCtx->primaryExpression();
+}
+
+PrestoSqlParser::IntegerLiteralContext* FOLLY_NULLABLE
+asIntegerLiteral(PrestoSqlParser::ValueExpressionContext* valueExpr) {
   auto* numericCtx = dynamic_cast<PrestoSqlParser::NumericLiteralContext*>(
-      defaultCtx->primaryExpression());
+      asPrimaryExpression(valueExpr));
   if (numericCtx == nullptr) {
     return nullptr;
   }
@@ -1833,6 +1836,28 @@ std::any AstBuilder::visitPredicated(PrestoSqlParser::PredicatedContext* ctx) {
   return visitExpression(ctx->valueExpression());
 }
 
+namespace {
+
+// Returns the expression inside plain parentheses, or nullptr otherwise.
+PrestoSqlParser::BooleanExpressionContext* FOLLY_NULLABLE
+tryUnwrapParentheses(PrestoSqlParser::BooleanExpressionContext* ctx) {
+  auto* predicated = dynamic_cast<PrestoSqlParser::PredicatedContext*>(ctx);
+  if (predicated == nullptr || predicated->predicate() != nullptr) {
+    return nullptr;
+  }
+
+  auto* parenthesized =
+      dynamic_cast<PrestoSqlParser::ParenthesizedExpressionContext*>(
+          asPrimaryExpression(predicated->valueExpression()));
+  if (parenthesized == nullptr) {
+    return nullptr;
+  }
+
+  return parenthesized->expression()->booleanExpression();
+}
+
+} // namespace
+
 std::any AstBuilder::visitLogicalBinary(
     PrestoSqlParser::LogicalBinaryContext* ctx) {
   trace("visitLogicalBinary");
@@ -1843,33 +1868,34 @@ std::any AstBuilder::visitLogicalBinary(
   // Flatten a same-operator chain into one n-ary call.
   std::vector<ExpressionPtr> arguments;
 
-  // Fail fast: reject an oversize chain without building every operand.
-  auto checkWidth = [&] {
+  std::vector<PrestoSqlParser::BooleanExpressionContext*> pending{ctx};
+
+  while (!pending.empty()) {
+    // Each pending node yields at least one operand, so this is a lower bound.
     AXIOM_PRESTO_SEMANTIC_CHECK_LE(
-        arguments.size(),
+        arguments.size() + pending.size(),
         options_.maxExpressionWidth,
         location,
         /*token=*/std::nullopt,
         "Expression exceeds maximum width");
-  };
 
-  auto* current = ctx;
-  while (true) {
-    arguments.push_back(visitExpression(current->right));
-    checkWidth();
-    auto* leftBinary =
-        dynamic_cast<PrestoSqlParser::LogicalBinaryContext*>(current->left);
-    const bool leftIsSameOp =
-        leftBinary != nullptr && (leftBinary->AND() != nullptr) == isAnd;
-    if (!leftIsSameOp) {
-      break;
+    auto* node = pending.back();
+    pending.pop_back();
+
+    while (auto* inner = tryUnwrapParentheses(node)) {
+      node = inner;
     }
-    current = leftBinary;
+
+    auto* binary = dynamic_cast<PrestoSqlParser::LogicalBinaryContext*>(node);
+    if (binary != nullptr && (binary->AND() != nullptr) == isAnd) {
+      // Push right first so operands pop in source order.
+      pending.push_back(binary->right);
+      pending.push_back(binary->left);
+      continue;
+    }
+
+    arguments.push_back(visitExpression(node));
   }
-  arguments.push_back(visitExpression(current->left));
-  checkWidth();
-  // Operands were collected right to left; restore their original order.
-  std::reverse(arguments.begin(), arguments.end());
 
   return std::static_pointer_cast<Expression>(std::make_shared<FunctionCall>(
       location,
