@@ -16,6 +16,8 @@
 
 #include "axiom/optimizer/v2/PhysicalProperties.h"
 
+#include <algorithm>
+
 #include <folly/container/F14Map.h>
 
 #include "axiom/connectors/ConnectorMetadata.h"
@@ -57,6 +59,49 @@ localPropertyKindNames() {
 AXIOM_DEFINE_ENUM_NAME(PropertyScope, propertyScopeNames);
 AXIOM_DEFINE_ENUM_NAME(PartitionKind, partitionKindNames);
 AXIOM_DEFINE_ENUM_NAME(LocalPropertyKind, localPropertyKindNames);
+
+ExprVector computePreGroupedKeys(
+    const LocalPropertyVector& local,
+    const ExprVector& groupingKeys) {
+  if (groupingKeys.empty()) {
+    return {};
+  }
+
+  const auto isGroupingKey = [&](ColumnCP column) {
+    for (ExprCP key : groupingKeys) {
+      if (column->sameOrEqual(*key)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  ExprVector best;
+  for (const LocalProperty& property : local) {
+    ExprVector candidate;
+    if (property.kind == LocalPropertyKind::kSorted) {
+      // Sorted on c1..cn implies grouped on any leading prefix; take the
+      // leading run of sort keys that are grouping keys.
+      for (ColumnCP column : property.columns) {
+        if (!isGroupingKey(column)) {
+          break;
+        }
+        candidate.push_back(column);
+      }
+    } else if (std::ranges::all_of(property.columns, isGroupingKey)) {
+      // Grouped on the whole set jointly; usable only if every member is a
+      // grouping key.
+      for (ColumnCP column : property.columns) {
+        candidate.push_back(column);
+      }
+    }
+    if (candidate.size() > best.size()) {
+      best = std::move(candidate);
+    }
+  }
+
+  return best;
+}
 
 Partitioning Partitioning::globalHash(
     const ExprVector& keys,

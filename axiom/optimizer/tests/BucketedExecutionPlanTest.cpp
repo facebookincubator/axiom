@@ -353,8 +353,10 @@ TEST_P(BucketedExecutionTest, aggregation) {
       AXIOM_ASSERT_DISTRIBUTED_PLAN(
           plan.plan,
           matchScan("a_orders")
-              .localPartition({"customer_id"})
-              .singleAggregation()
+              .localPartition({"customer_id", "amount"})
+              .markDistinct({"customer_id", "amount"}, {"m0"})
+              .localAggregation(
+                  {"customer_id"}, {"count(amount) filter (where m0)"})
               .fragment({.width = 4, .bucketedScans = 1})
               .gather()
               .build());

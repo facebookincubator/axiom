@@ -22,7 +22,8 @@
 namespace facebook::axiom::optimizer::v2 {
 
 /// Runs the physical-planning and emit passes over 'root' and returns the emit
-/// result: PlanPhysical -> PrecomputeProjections -> ExpandAggregate -> Emit.
+/// result: PlanPhysical -> PrecomputeProjections -> Emit. PlanPhysical lowers
+/// DISTINCT aggregates as part of selecting their physical execution.
 /// Shared by full optimization and the translate-time constant fold so the two
 /// cannot drift. 'outputColumns' / 'outputNames' pin the emitted output layout.
 EmitPass::Result physicalPlanAndEmit(

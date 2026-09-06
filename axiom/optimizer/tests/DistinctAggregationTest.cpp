@@ -350,10 +350,6 @@ TEST_P(DistinctAggregationTest, singleDistinctToGroupByWithLiterals) {
   }
 }
 
-// V1 is better: it plans MarkDistinct distribution before selecting the outer
-// Aggregate stages, enabling distributed deduplication and partial aggregation.
-// TODO: Make V2 lower DISTINCT-to-MarkDistinct inside physical aggregation
-// planning.
 TEST_P(DistinctAggregationTest, markDistinctDifferentArgSets) {
   testConnector_->addTable(
       "t", ROW({"a", "b", "c", "d"}, {BIGINT(), DOUBLE(), DOUBLE(), BIGINT()}));
@@ -367,7 +363,7 @@ TEST_P(DistinctAggregationTest, markDistinctDifferentArgSets) {
           .aggregate({"a"}, {"count(DISTINCT b)", "sum(DISTINCT d % 5)"})
           .build();
   auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-  AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
       plan.plan,
       matchScan("t")
           .project({"a", "b as p0", "d % 5 as p1"})
@@ -378,7 +374,7 @@ TEST_P(DistinctAggregationTest, markDistinctDifferentArgSets) {
               {"count(p0) filter (where m0)", "sum(p1) filter (where m1)"})
           .shuffle()
           .build());
-  AXIOM_ASSERT_PLAN_V1(
+  AXIOM_ASSERT_PLAN(
       toSingleNodePlan(logicalPlan),
       matchScan("t")
           .project({"a", "b", "d % 5 as p0"})
@@ -386,10 +382,6 @@ TEST_P(DistinctAggregationTest, markDistinctDifferentArgSets) {
           .build());
 }
 
-// V1 is better: it plans MarkDistinct distribution before selecting the outer
-// Aggregate stages, enabling distributed deduplication and partial aggregation.
-// TODO: Make V2 lower DISTINCT-to-MarkDistinct inside physical aggregation
-// planning.
 TEST_P(DistinctAggregationTest, markDistinctGlobalWithMultipleSets) {
   testConnector_->addTable(
       "t", ROW({"a", "b", "c", "d"}, {BIGINT(), DOUBLE(), DOUBLE(), BIGINT()}));
@@ -403,7 +395,7 @@ TEST_P(DistinctAggregationTest, markDistinctGlobalWithMultipleSets) {
           .aggregate({}, {"count(DISTINCT b)", "sum(DISTINCT d % 5)"})
           .build();
   auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-  AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
       plan.plan,
       matchScan("t")
           .project({"b as p0", "d % 5 as p1"})
@@ -415,7 +407,7 @@ TEST_P(DistinctAggregationTest, markDistinctGlobalWithMultipleSets) {
           .localGather()
           .finalAggregation()
           .build());
-  AXIOM_ASSERT_PLAN_V1(
+  AXIOM_ASSERT_PLAN(
       toSingleNodePlan(logicalPlan),
       matchScan("t")
           .project({"b", "d % 5 as p0"})
@@ -423,10 +415,6 @@ TEST_P(DistinctAggregationTest, markDistinctGlobalWithMultipleSets) {
           .build());
 }
 
-// V1 is better: it plans MarkDistinct distribution before selecting the outer
-// Aggregate stages, enabling distributed deduplication and partial aggregation.
-// TODO: Make V2 lower DISTINCT-to-MarkDistinct inside physical aggregation
-// planning.
 TEST_P(DistinctAggregationTest, markDistinctMixedDistinctAndNonDistinct) {
   testConnector_->addTable(
       "t", ROW({"a", "b", "c", "d"}, {BIGINT(), DOUBLE(), DOUBLE(), BIGINT()}));
@@ -441,7 +429,7 @@ TEST_P(DistinctAggregationTest, markDistinctMixedDistinctAndNonDistinct) {
               {"a"}, {"count(DISTINCT b)", "sum(DISTINCT d % 5)", "avg(b)"})
           .build();
   auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-  AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
       plan.plan,
       matchScan("t")
           .project({"a", "b as p0", "d % 5 as p1"})
@@ -454,7 +442,7 @@ TEST_P(DistinctAggregationTest, markDistinctMixedDistinctAndNonDistinct) {
                "avg(p0)"})
           .shuffle()
           .build());
-  AXIOM_ASSERT_PLAN_V1(
+  AXIOM_ASSERT_PLAN(
       toSingleNodePlan(logicalPlan),
       matchScan("t")
           .project({"a", "b", "d % 5 as p0"})
@@ -463,10 +451,81 @@ TEST_P(DistinctAggregationTest, markDistinctMixedDistinctAndNonDistinct) {
           .build());
 }
 
-// V1 is better: it plans MarkDistinct distribution before selecting the outer
-// Aggregate stages, enabling distributed deduplication and partial aggregation.
-// TODO: Make V2 lower DISTINCT-to-MarkDistinct inside physical aggregation
-// planning.
+TEST_P(DistinctAggregationTest, markDistinctSingleWorkerMultipleDrivers) {
+  testConnector_->addTable(
+      "t", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), DOUBLE()}));
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .aggregate({"a"}, {"count(DISTINCT b)", "avg(c)"})
+                         .build();
+  auto plan = planVelox(
+      logicalPlan, {.numWorkers = 1, .numDrivers = 4}, optimizerOptions_);
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      plan.plan,
+      matchScan("t")
+          .localPartition({"a", "b"})
+          .markDistinct({"a", "b"}, {"m0"})
+          .localAggregation({"a"}, {"count(b) filter (where m0)", "avg(c)"})
+          .build());
+}
+
+TEST_P(DistinctAggregationTest, markDistinctAboveWindow) {
+  testConnector_->addTable("t", ROW("b", BIGINT()));
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  auto logicalPlan = parseSelect(
+      "SELECT count(DISTINCT rn), sum(b) "
+      "FROM ("
+      "  SELECT b, row_number() OVER (ORDER BY b + 1) AS rn "
+      "  FROM t"
+      ")",
+      kTestConnectorId);
+  auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      plan.plan,
+      matchScan("t")
+          .projectIf(!useV2_, {"b", "b + 1 as p0"})
+          .gather()
+          .projectIf(useV2_, {"b", "b + 1 as p0"})
+          .localGather()
+          .window({"row_number() OVER (ORDER BY p0) as rn"})
+          .projectIf(!useV2_, {"b", "rn"})
+          .localPartition({"rn"})
+          .markDistinct({"rn"}, {"m0"})
+          .localAggregation({}, {"count(rn) filter (where m0)", "sum(b)"})
+          .build());
+}
+
+TEST_P(DistinctAggregationTest, preGroupedInputUsesNativeDistinct) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .orderBy({"a"})
+                         .limit(100)
+                         .aggregate({"a", "b"}, {"count(DISTINCT c)", "sum(c)"})
+                         .build();
+  auto plan = planVelox(
+      logicalPlan, {.numWorkers = 1, .numDrivers = 4}, optimizerOptions_);
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      plan.plan,
+      matchScan("t")
+          .topN(100)
+          .localMerge()
+          .finalLimit(0, 100)
+          .singleAggregation({"a", "b"}, {"count(DISTINCT c)", "sum(c)"})
+          .build());
+}
+
 TEST_P(DistinctAggregationTest, markDistinctMultiArgAggregates) {
   testConnector_->addTable(
       "t", ROW({"a", "b", "c", "d"}, {BIGINT(), DOUBLE(), DOUBLE(), BIGINT()}));
@@ -480,7 +539,7 @@ TEST_P(DistinctAggregationTest, markDistinctMultiArgAggregates) {
           .aggregate({"a"}, {"covar_pop(DISTINCT b, c)", "count(DISTINCT d)"})
           .build();
   auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-  AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
       plan.plan,
       matchScan("t")
           .distributedMarkDistinct({"a", "b", "c"}, {"m0"})
@@ -491,7 +550,7 @@ TEST_P(DistinctAggregationTest, markDistinctMultiArgAggregates) {
                "count(d) filter (where m1)"})
           .shuffle()
           .build());
-  AXIOM_ASSERT_PLAN_V1(
+  AXIOM_ASSERT_PLAN(
       toSingleNodePlan(logicalPlan),
       matchScan("t")
           .singleAggregation(
@@ -499,10 +558,6 @@ TEST_P(DistinctAggregationTest, markDistinctMultiArgAggregates) {
           .build());
 }
 
-// V1 is better: it plans MarkDistinct distribution before selecting the outer
-// Aggregate stages, enabling distributed deduplication and partial aggregation.
-// TODO: Make V2 lower DISTINCT-to-MarkDistinct inside physical aggregation
-// planning.
 TEST_P(DistinctAggregationTest, markDistinctSharedMarkers) {
   testConnector_->addTable(
       "t", ROW({"a", "b", "c", "d"}, {BIGINT(), DOUBLE(), DOUBLE(), BIGINT()}));
@@ -521,7 +576,7 @@ TEST_P(DistinctAggregationTest, markDistinctSharedMarkers) {
                 {"count(DISTINCT c)", "covar_pop(DISTINCT b, c)", "sum(c)"})
             .build();
     auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchScan("t")
             .distributedMarkDistinct({"b", "c"}, {"m0"})
@@ -532,7 +587,7 @@ TEST_P(DistinctAggregationTest, markDistinctSharedMarkers) {
                  "sum(c)"})
             .shuffle()
             .build());
-    AXIOM_ASSERT_PLAN_V1(
+    AXIOM_ASSERT_PLAN(
         toSingleNodePlan(logicalPlan),
         matchScan("t")
             .singleAggregation(
@@ -550,7 +605,7 @@ TEST_P(DistinctAggregationTest, markDistinctSharedMarkers) {
             .aggregate({"b"}, {"covar_pop(DISTINCT b, c)", "count(DISTINCT b)"})
             .build();
     auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchScan("t")
             .distributedMarkDistinct({"b", "c"}, {"m0"})
@@ -559,7 +614,7 @@ TEST_P(DistinctAggregationTest, markDistinctSharedMarkers) {
                 {"covar_pop(b, c) filter (where m0)", "count(DISTINCT b)"})
             .shuffle()
             .build());
-    AXIOM_ASSERT_PLAN_V1(
+    AXIOM_ASSERT_PLAN(
         toSingleNodePlan(logicalPlan),
         matchScan("t")
             .singleAggregation(
@@ -568,10 +623,6 @@ TEST_P(DistinctAggregationTest, markDistinctSharedMarkers) {
   }
 }
 
-// V1 is better: it plans MarkDistinct distribution before selecting the outer
-// Aggregate stages, enabling distributed deduplication and partial aggregation.
-// TODO: Make V2 lower DISTINCT-to-MarkDistinct inside physical aggregation
-// planning.
 TEST_P(DistinctAggregationTest, markDistinctOrderBy) {
   testConnector_->addTable(
       "t", ROW({"a", "b", "c", "d"}, {BIGINT(), DOUBLE(), DOUBLE(), BIGINT()}));
@@ -590,7 +641,7 @@ TEST_P(DistinctAggregationTest, markDistinctOrderBy) {
                                 "array_agg(b ORDER BY b)"})
                            .build();
     auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchScan("t")
             .project({"a", "b as p0", "d % 5 as p1"})
@@ -603,7 +654,7 @@ TEST_P(DistinctAggregationTest, markDistinctOrderBy) {
                  "array_agg(p0 ORDER BY p0 ASC NULLS LAST)"})
             .shuffle()
             .build());
-    AXIOM_ASSERT_PLAN_V1(
+    AXIOM_ASSERT_PLAN(
         toSingleNodePlan(logicalPlan),
         matchScan("t")
             .project({"a", "b as p0", "d % 5 as p1"})
@@ -626,7 +677,7 @@ TEST_P(DistinctAggregationTest, markDistinctOrderBy) {
                                 "array_agg(DISTINCT d % 5 ORDER BY d % 5)"})
                            .build();
     auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchScan("t")
             .project({"b as p0", "d % 5 as p1"})
@@ -637,7 +688,7 @@ TEST_P(DistinctAggregationTest, markDistinctOrderBy) {
                 {"array_agg(p0 ORDER BY p0 ASC NULLS LAST) filter (where m0)",
                  "array_agg(p1 ORDER BY p1 ASC NULLS LAST) filter (where m1)"})
             .build());
-    AXIOM_ASSERT_PLAN_V1(
+    AXIOM_ASSERT_PLAN(
         toSingleNodePlan(logicalPlan),
         matchScan("t")
             .project({"b as p0", "d % 5 as p1"})
@@ -649,10 +700,6 @@ TEST_P(DistinctAggregationTest, markDistinctOrderBy) {
   }
 }
 
-// V1 is better: it plans MarkDistinct distribution before selecting the outer
-// Aggregate stages, enabling distributed deduplication and partial aggregation.
-// TODO: Make V2 lower DISTINCT-to-MarkDistinct inside physical aggregation
-// planning.
 TEST_P(DistinctAggregationTest, markDistinctLiterals) {
   testConnector_->addTable(
       "t", ROW({"a", "b", "c", "d"}, {BIGINT(), DOUBLE(), DOUBLE(), BIGINT()}));
@@ -669,7 +716,7 @@ TEST_P(DistinctAggregationTest, markDistinctLiterals) {
             .aggregate({"a"}, {"count(DISTINCT b)", "max_by(DISTINCT d, 1)"})
             .build();
     auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchScan("t")
             .distributedMarkDistinct({"a", "b"}, {"m0"})
@@ -680,7 +727,7 @@ TEST_P(DistinctAggregationTest, markDistinctLiterals) {
                  "max_by(d, 1) filter (where m1)"})
             .shuffle()
             .build());
-    AXIOM_ASSERT_PLAN_V1(
+    AXIOM_ASSERT_PLAN(
         toSingleNodePlan(logicalPlan),
         matchScan("t")
             .singleAggregation(
@@ -697,7 +744,7 @@ TEST_P(DistinctAggregationTest, markDistinctLiterals) {
             .aggregate({"a"}, {"count(DISTINCT b)", "max_by(DISTINCT a, 1)"})
             .build();
     auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchScan("t")
             .distributedMarkDistinct({"a", "b"}, {"m0"})
@@ -705,7 +752,7 @@ TEST_P(DistinctAggregationTest, markDistinctLiterals) {
                 {"a"}, {"count(b) filter (where m0)", "max_by(DISTINCT a, 1)"})
             .shuffle()
             .build());
-    AXIOM_ASSERT_PLAN_V1(
+    AXIOM_ASSERT_PLAN(
         toSingleNodePlan(logicalPlan),
         matchScan("t")
             .singleAggregation(
@@ -722,7 +769,7 @@ TEST_P(DistinctAggregationTest, markDistinctLiterals) {
             .aggregate({"a"}, {"count(DISTINCT b)", "count(DISTINCT 1)"})
             .build();
     auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchScan("t")
             .distributedMarkDistinct({"a", "b"}, {"m0"})
@@ -730,7 +777,7 @@ TEST_P(DistinctAggregationTest, markDistinctLiterals) {
                 {"a"}, {"count(b) filter (where m0)", "count(DISTINCT 1)"})
             .shuffle()
             .build());
-    AXIOM_ASSERT_PLAN_V1(
+    AXIOM_ASSERT_PLAN(
         toSingleNodePlan(logicalPlan),
         matchScan("t")
             .singleAggregation(
@@ -749,7 +796,7 @@ TEST_P(DistinctAggregationTest, markDistinctLiterals) {
                 {"count(DISTINCT b)", "count(DISTINCT 1) FILTER (WHERE d > 0)"})
             .build();
     auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchScan("t")
             .project({"a", "b", "d > 0 as p0"})
@@ -760,7 +807,7 @@ TEST_P(DistinctAggregationTest, markDistinctLiterals) {
                  "count(DISTINCT 1) filter (where p0)"})
             .shuffle()
             .build());
-    AXIOM_ASSERT_PLAN_V1(
+    AXIOM_ASSERT_PLAN(
         toSingleNodePlan(logicalPlan),
         matchScan("t")
             .project({"a", "b", "d > 0 as p0"})
@@ -771,10 +818,6 @@ TEST_P(DistinctAggregationTest, markDistinctLiterals) {
   }
 }
 
-// V1 is better: it plans MarkDistinct distribution before selecting the outer
-// Aggregate stages, enabling distributed deduplication and partial aggregation.
-// TODO: Make V2 lower DISTINCT-to-MarkDistinct inside physical aggregation
-// planning.
 // TODO: Track emitted local partitioning so compatible consecutive
 // MarkDistinct nodes reuse one local exchange.
 TEST_P(DistinctAggregationTest, multipleMarkDistinctWithNoShuffleInBetween) {
@@ -811,10 +854,6 @@ TEST_P(DistinctAggregationTest, multipleMarkDistinctWithNoShuffleInBetween) {
           .build());
 }
 
-// V1 is better: it plans MarkDistinct distribution before selecting the outer
-// Aggregate stages, enabling distributed deduplication and partial aggregation.
-// TODO: Make V2 lower DISTINCT-to-MarkDistinct inside physical aggregation
-// planning.
 TEST_P(DistinctAggregationTest, markDistinctFilterDifferentArgSets) {
   testConnector_->addTable(
       "t",
@@ -834,7 +873,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterDifferentArgSets) {
                                 "count(DISTINCT b) FILTER (WHERE e)"})
                            .build();
     auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchScan("t")
             .distributedMarkDistinct({"a", "b"}, {"m0", "m1", "m2"})
@@ -843,7 +882,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterDifferentArgSets) {
                 {"count(b) filter (where m1)", "count(b) filter (where m2)"})
             .shuffle()
             .build());
-    AXIOM_ASSERT_PLAN_V1(
+    AXIOM_ASSERT_PLAN(
         toSingleNodePlan(logicalPlan),
         matchScan("t")
             .singleAggregation(
@@ -863,7 +902,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterDifferentArgSets) {
                                 "count(DISTINCT c) FILTER (WHERE e)"})
                            .build();
     auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchScan("t")
             .distributedMarkDistinct({"a", "b"}, {"m0", "m1"})
@@ -873,7 +912,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterDifferentArgSets) {
                 {"count(b) filter (where m1)", "count(c) filter (where m3)"})
             .shuffle()
             .build());
-    AXIOM_ASSERT_PLAN_V1(
+    AXIOM_ASSERT_PLAN(
         toSingleNodePlan(logicalPlan),
         matchScan("t")
             .singleAggregation(
@@ -884,10 +923,6 @@ TEST_P(DistinctAggregationTest, markDistinctFilterDifferentArgSets) {
   }
 }
 
-// V1 is better: it plans MarkDistinct distribution before selecting the outer
-// Aggregate stages, enabling distributed deduplication and partial aggregation.
-// TODO: Make V2 lower DISTINCT-to-MarkDistinct inside physical aggregation
-// planning.
 TEST_P(DistinctAggregationTest, markDistinctFilterGlobalAggregation) {
   testConnector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BOOLEAN()}));
   SCOPE_EXIT {
@@ -899,7 +934,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterGlobalAggregation) {
                          .aggregate({}, {"count(DISTINCT a) FILTER (WHERE b)"})
                          .build();
   auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-  AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
       plan.plan,
       matchScan("t")
           .distributedMarkDistinct({"a"}, {"m0", "m1"})
@@ -908,17 +943,13 @@ TEST_P(DistinctAggregationTest, markDistinctFilterGlobalAggregation) {
           .localGather()
           .finalAggregation()
           .build());
-  AXIOM_ASSERT_PLAN_V1(
+  AXIOM_ASSERT_PLAN(
       toSingleNodePlan(logicalPlan),
       matchScan("t")
           .singleAggregation({}, {"count(DISTINCT a) filter (where b)"})
           .build());
 }
 
-// V1 is better: it plans MarkDistinct distribution before selecting the outer
-// Aggregate stages, enabling distributed deduplication and partial aggregation.
-// TODO: Make V2 lower DISTINCT-to-MarkDistinct inside physical aggregation
-// planning.
 TEST_P(DistinctAggregationTest, markDistinctFilterSharedMarkers) {
   testConnector_->addTable(
       "t", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), BOOLEAN()}));
@@ -936,7 +967,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterSharedMarkers) {
                                 "sum(DISTINCT b) FILTER (WHERE c)"})
                            .build();
     auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchScan("t")
             .distributedMarkDistinct({"a", "b"}, {"m0", "m1"})
@@ -945,7 +976,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterSharedMarkers) {
                 {"count(b) filter (where m1)", "sum(b) filter (where m1)"})
             .shuffle()
             .build());
-    AXIOM_ASSERT_PLAN_V1(
+    AXIOM_ASSERT_PLAN(
         toSingleNodePlan(logicalPlan),
         matchScan("t")
             .singleAggregation(
@@ -965,7 +996,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterSharedMarkers) {
                 {"count(DISTINCT b)", "count(DISTINCT b) FILTER (WHERE c)"})
             .build();
     auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchScan("t")
             .distributedMarkDistinct({"a", "b"}, {"m0", "m1"})
@@ -974,7 +1005,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterSharedMarkers) {
                 {"count(b) filter (where m0)", "count(b) filter (where m1)"})
             .shuffle()
             .build());
-    AXIOM_ASSERT_PLAN_V1(
+    AXIOM_ASSERT_PLAN(
         toSingleNodePlan(logicalPlan),
         matchScan("t")
             .singleAggregation(
@@ -984,10 +1015,6 @@ TEST_P(DistinctAggregationTest, markDistinctFilterSharedMarkers) {
   }
 }
 
-// V1 is better: it plans MarkDistinct distribution before selecting the outer
-// Aggregate stages, enabling distributed deduplication and partial aggregation.
-// TODO: Make V2 lower DISTINCT-to-MarkDistinct inside physical aggregation
-// planning.
 TEST_P(DistinctAggregationTest, markDistinctFilterOrderBy) {
   testConnector_->addTable(
       "t", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), BOOLEAN()}));
@@ -1002,7 +1029,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterOrderBy) {
               {"a"}, {"array_agg(DISTINCT b ORDER BY b) FILTER (WHERE c)"})
           .build();
   auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-  AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
       plan.plan,
       matchScan("t")
           .distributedMarkDistinct({"a", "b"}, {"m0", "m1"})
@@ -1011,7 +1038,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterOrderBy) {
               {"array_agg(b ORDER BY b ASC NULLS LAST) filter (where m1)"})
           .shuffle()
           .build());
-  AXIOM_ASSERT_PLAN_V1(
+  AXIOM_ASSERT_PLAN(
       toSingleNodePlan(logicalPlan),
       matchScan("t")
           .singleAggregation(
@@ -1019,10 +1046,6 @@ TEST_P(DistinctAggregationTest, markDistinctFilterOrderBy) {
           .build());
 }
 
-// V1 is better: it plans MarkDistinct distribution before selecting the outer
-// Aggregate stages, enabling distributed deduplication and partial aggregation.
-// TODO: Make V2 lower DISTINCT-to-MarkDistinct inside physical aggregation
-// planning.
 TEST_P(DistinctAggregationTest, markDistinctFilterMixedDistinctAndNonDistinct) {
   testConnector_->addTable(
       "t",
@@ -1040,7 +1063,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterMixedDistinctAndNonDistinct) {
               {"sum(b) FILTER (WHERE e)", "count(DISTINCT c) FILTER (WHERE d)"})
           .build();
   auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-  AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
       plan.plan,
       matchScan("t")
           .distributedMarkDistinct({"a", "c"}, {"m0", "m1"})
@@ -1048,7 +1071,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterMixedDistinctAndNonDistinct) {
               {"a"}, {"sum(b) filter (where e)", "count(c) filter (where m1)"})
           .shuffle()
           .build());
-  AXIOM_ASSERT_PLAN_V1(
+  AXIOM_ASSERT_PLAN(
       toSingleNodePlan(logicalPlan),
       matchScan("t")
           .singleAggregation(
@@ -1086,10 +1109,6 @@ TEST_P(DistinctAggregationTest, markDistinctFilterRedundantKeys) {
           .build());
 }
 
-// V1 is better: it plans MarkDistinct distribution before selecting the outer
-// Aggregate stages, enabling distributed deduplication and partial aggregation.
-// TODO: Make V2 lower DISTINCT-to-MarkDistinct inside physical aggregation
-// planning.
 TEST_P(DistinctAggregationTest, markDistinctFilterExpressionCondition) {
   testConnector_->addTable(
       "t",
@@ -1109,20 +1128,24 @@ TEST_P(DistinctAggregationTest, markDistinctFilterExpressionCondition) {
                               "count(DISTINCT b) FILTER (WHERE c > 0.0)"})
                          .build();
   auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-  AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
       plan.plan,
       matchScan("t")
-          .project({"a", "d", "b", "c > 0.0"})
+          .project(
+              useV2_ ? std::vector<std::string>{"a", "b", "d", "c > 0.0"}
+                     : std::vector<std::string>{"a", "d", "b", "c > 0.0"})
           .distributedMarkDistinct({"a", "b"}, {"m0", "m1", "m2"})
           .distributedAggregation(
               {"a"},
               {"count(b) filter (where m1)", "count(b) filter (where m2)"})
           .shuffle()
           .build());
-  AXIOM_ASSERT_PLAN_V1(
+  AXIOM_ASSERT_PLAN(
       toSingleNodePlan(logicalPlan),
       matchScan("t")
-          .project({"a", "d", "b", "c > 0.0 as p0"})
+          .project(
+              useV2_ ? std::vector<std::string>{"a", "b", "d", "c > 0.0 as p0"}
+                     : std::vector<std::string>{"a", "d", "b", "c > 0.0 as p0"})
           .singleAggregation(
               {"a"},
               {"count(DISTINCT b) filter (where d)",
@@ -1130,10 +1153,6 @@ TEST_P(DistinctAggregationTest, markDistinctFilterExpressionCondition) {
           .build());
 }
 
-// V1 is better: it plans MarkDistinct distribution before selecting the outer
-// Aggregate stages, enabling distributed deduplication and partial aggregation.
-// TODO: Make V2 lower DISTINCT-to-MarkDistinct inside physical aggregation
-// planning.
 TEST_P(
     DistinctAggregationTest,
     markDistinctAllLiteralDistinctMixColumnDistinct) {
@@ -1152,14 +1171,14 @@ TEST_P(
             .aggregate({}, {"count(DISTINCT b)", "count(DISTINCT 1)"})
             .build();
     auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchScan("t")
             .distributedMarkDistinct({"b"}, {"m0"})
             .distributedSingleAggregation(
                 {}, {"count(b) filter (where m0)", "count(DISTINCT 1)"})
             .build());
-    AXIOM_ASSERT_PLAN_V1(
+    AXIOM_ASSERT_PLAN(
         toSingleNodePlan(logicalPlan),
         matchScan("t")
             .singleAggregation({}, {"count(DISTINCT b)", "count(DISTINCT 1)"})
@@ -1175,7 +1194,7 @@ TEST_P(
             .aggregate({"a"}, {"count(DISTINCT b)", "count(DISTINCT 1)"})
             .build();
     auto plan = planVelox(logicalPlan, runnerOptions_, optimizerOptions_);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchScan("t")
             .distributedMarkDistinct({"a", "b"}, {"m0"})
@@ -1183,7 +1202,7 @@ TEST_P(
                 {"a"}, {"count(b) filter (where m0)", "count(DISTINCT 1)"})
             .shuffle()
             .build());
-    AXIOM_ASSERT_PLAN_V1(
+    AXIOM_ASSERT_PLAN(
         toSingleNodePlan(logicalPlan),
         matchScan("t")
             .singleAggregation(
@@ -1235,11 +1254,10 @@ TEST_P(DistinctAggregationTest, groupingSetsDistinctToGroupBy) {
   }
 }
 
-// V1 is better: it produces a valid grouping-set plan. V2 generates duplicate
-// output column `a1` and fails during plan validation.
+// V2 currently rejects this plan because GroupId emits grouping key `a1`,
+// which collides with the aggregate result carrying that name.
 // TODO: Allocate collision-proof optimizer-owned output names for GroupId
-// grouping-key outputs in V2 TranslatePass. Afterward, apply the shared V2
-// DISTINCT-to-MarkDistinct physical-planning fix.
+// grouping-key outputs in V2 TranslatePass.
 TEST_P(DistinctAggregationTest, groupingSetsDistinctToMarkDistinct) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
   SCOPE_EXIT {
