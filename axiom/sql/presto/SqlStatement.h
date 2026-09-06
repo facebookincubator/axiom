@@ -149,6 +149,13 @@ class SqlStatement {
     return referencedTables_;
   }
 
+  /// Returns the logical plan carried by this statement, or nullptr when the
+  /// statement has no query plan.
+  virtual const facebook::axiom::logical_plan::LogicalPlanNode* queryPlan()
+      const {
+    return nullptr;
+  }
+
  protected:
   explicit SqlStatement(SqlStatementKind kind)
       : kind_{kind}, views_{}, referencedTables_{} {}
@@ -186,6 +193,11 @@ class SelectStatement : public SqlStatement {
     return plan_;
   }
 
+  const facebook::axiom::logical_plan::LogicalPlanNode* queryPlan()
+      const override {
+    return plan_.get();
+  }
+
  private:
   const facebook::axiom::logical_plan::LogicalPlanNodePtr plan_;
 };
@@ -204,6 +216,11 @@ class InsertStatement : public SqlStatement {
 
   const facebook::axiom::logical_plan::LogicalPlanNodePtr& plan() const {
     return plan_;
+  }
+
+  const facebook::axiom::logical_plan::LogicalPlanNode* queryPlan()
+      const override {
+    return plan_.get();
   }
 
  private:
@@ -226,6 +243,11 @@ class DeleteStatement : public SqlStatement {
 
   const facebook::axiom::logical_plan::LogicalPlanNodePtr& plan() const {
     return plan_;
+  }
+
+  const facebook::axiom::logical_plan::LogicalPlanNode* queryPlan()
+      const override {
+    return plan_.get();
   }
 
  private:
@@ -342,6 +364,11 @@ class CreateTableAsSelectStatement : public SqlStatement {
 
   const facebook::axiom::logical_plan::LogicalPlanNodePtr& plan() const {
     return plan_;
+  }
+
+  const facebook::axiom::logical_plan::LogicalPlanNode* queryPlan()
+      const override {
+    return plan_.get();
   }
 
  private:
@@ -620,6 +647,11 @@ class ExplainStatement : public SqlStatement {
     return format_;
   }
 
+  const facebook::axiom::logical_plan::LogicalPlanNode* queryPlan()
+      const override {
+    return statement_->queryPlan();
+  }
+
  private:
   const SqlStatementPtr statement_;
   const bool analyze_;
@@ -640,6 +672,11 @@ class ShowStatsForQueryStatement : public SqlStatement {
 
   const SqlStatementPtr& statement() const {
     return statement_;
+  }
+
+  const facebook::axiom::logical_plan::LogicalPlanNode* queryPlan()
+      const override {
+    return statement_->queryPlan();
   }
 
  private:

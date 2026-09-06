@@ -26,6 +26,7 @@ add_executable(
   LiveProgressDisplayTest.cpp
   QueryIdGeneratorTest.cpp
   QueryInterruptHandlerTest.cpp
+  QueryStatsTest.cpp
 )
 
 add_test(NAME axiom_cli_test COMMAND axiom_cli_test)
