@@ -197,7 +197,9 @@ Use conventional commit prefixes with `[Project]` tags:
 ```
 
 Format: `[Project] type(scope): Description`
-- Types: `feat`, `fix`, `refactor`, `test`, `docs`
+- Types: `feat`, `fix`, `perf`, `build`, `test`, `docs`, `refactor`, `misc`
+  (this list is enforced by the `PR Title Format` check in
+  `.github/workflows/preliminary_checks.yml` — keep it in step with that regex)
 - Scope is optional, use for subsystem clarity (e.g., `parser`, `optimizer`)
 - Description starts with a capital letter, no trailing period
 
