@@ -141,7 +141,7 @@ PlanAndStats Optimizer::optimize(const MultiFragmentPlan::Options& options) {
   // Schema is owned here so its `connector::TablePtr`s — and the
   // `TableLayout`s the IR's `BaseTable` nodes hold raw pointers to —
   // stay alive through translate, precompute, and emit.
-  Schema schema(schemaResolver_);
+  Schema schema(schemaResolver_, session_.statsWriter());
 
   Builder builder;
   auto frontend = translateAndPushdown(
@@ -201,7 +201,7 @@ std::string Optimizer::explainIo(
     std::optional<CatalogSchemaTableName> outputTable) {
   // Schema is owned here so its `connector::TablePtr`s — and the raw pointers
   // the IR's `BaseTable` nodes hold into them — stay alive for the duration.
-  Schema schema(schemaResolver_);
+  Schema schema(schemaResolver_, session_.statsWriter());
 
   // Run only the passes that move predicates down to the scans; join ordering
   // and Emit are not needed to report IO. The pushdown pass does not offer
@@ -225,7 +225,7 @@ std::string Optimizer::explainIo(
 QueryStats Optimizer::estimateQueryStats() {
   // Schema is owned here so its tables — and the raw pointers the IR's
   // BaseTable nodes hold into them — stay alive while the estimate is read.
-  Schema schema(schemaResolver_);
+  Schema schema(schemaResolver_, session_.statsWriter());
   Builder builder;
 
   auto frontend = translateAndPushdown(

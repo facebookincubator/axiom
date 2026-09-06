@@ -63,10 +63,13 @@ class NodePrinterTest : public UnitTestBase {
         veloxQueryCtx_->queryId(),
         "test",
         options,
-        connector::ConnectorProperties{});
+        connector::ConnectorProperties{},
+        connector::noopStatWriter(),
+        connector::noopStatWriterProvider());
     schemaResolver_ = std::make_unique<connector::SchemaResolver>(
         connector::ConnectorMetadataRegistry::global());
-    schema_ = std::make_unique<optimizer::Schema>(*schemaResolver_);
+    schema_ = std::make_unique<optimizer::Schema>(
+        *schemaResolver_, session_->statsWriter());
   }
 
   NodeCP translate(const lp::LogicalPlanNodePtr& plan) {

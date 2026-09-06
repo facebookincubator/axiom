@@ -94,7 +94,9 @@ void HiveQueriesTestBase::SetUp() {
           /*queryId=*/"test",
           /*user=*/"test",
           ::axiom::sql::presto::ParserOptions{},
-          connector::ConnectorProperties{}));
+          connector::ConnectorProperties{},
+          statsWriter_,
+          connectorStatWriterProvider()));
 }
 
 // static

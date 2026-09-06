@@ -23,6 +23,8 @@
 
 #include <folly/container/F14Map.h>
 
+#include "velox/common/base/RuntimeMetrics.h"
+
 namespace facebook::axiom::connector {
 
 /// Property bag for a single component or connector.
@@ -31,13 +33,20 @@ using Properties = folly::F14FastMap<std::string, std::string>;
 class ConnectorSession;
 using ConnectorSessionPtr = std::shared_ptr<ConnectorSession>;
 
-/// Read-only query-specific information passed to connectors.
+/// Query-specific information passed to connectors: immutable identity and
+/// properties, plus the stat writer this connector records into.
 class ConnectorSession final {
  public:
-  ConnectorSession(std::string queryId, std::string user, Properties properties)
+  /// 'statsWriter' must outlive this session.
+  ConnectorSession(
+      std::string queryId,
+      std::string user,
+      Properties properties,
+      velox::BaseRuntimeStatWriter& statsWriter)
       : queryId_{std::move(queryId)},
         user_{std::move(user)},
-        properties_{std::move(properties)} {}
+        properties_{std::move(properties)},
+        statsWriter_{statsWriter} {}
 
   /// Returns the query identifier.
   const std::string& queryId() const {
@@ -60,10 +69,16 @@ class ConnectorSession final {
     return it->second;
   }
 
+  /// Returns this connector's write handle into the query-wide stats.
+  velox::BaseRuntimeStatWriter& statsWriter() const {
+    return statsWriter_;
+  }
+
  private:
   const std::string queryId_;
   const std::string user_;
   const Properties properties_;
+  velox::BaseRuntimeStatWriter& statsWriter_;
 };
 
 } // namespace facebook::axiom::connector

@@ -19,6 +19,7 @@
 
 #include <folly/ScopeGuard.h>
 #include <glog/logging.h>
+#include "axiom/connectors/BaseSession.h"
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
@@ -83,9 +84,10 @@ facebook::axiom::connector::TablePtr createTable(
   auto tableSchema = velox::ROW(std::move(schemaNames), std::move(schemaTypes));
 
   auto session = std::make_shared<facebook::axiom::connector::ConnectorSession>(
-      "pyspark_session",
+      /*queryId=*/"pyspark_session",
       /*user=*/"pyspark-optimizer",
-      facebook::axiom::connector::Properties{});
+      facebook::axiom::connector::Properties{},
+      facebook::axiom::connector::noopStatWriter());
   auto table = metadata->createTable(
       session,
       writeNode.tableName(),
@@ -144,12 +146,16 @@ facebook::axiom::optimizer::PlanAndStats optimize(
           queryCtx->queryId(),
           /*user=*/"pyspark-optimizer",
           std::move(optimizerOptions),
-          facebook::axiom::connector::ConnectorProperties{});
+          facebook::axiom::connector::ConnectorProperties{},
+          facebook::axiom::connector::noopStatWriter(),
+          facebook::axiom::connector::noopStatWriterProvider());
   auto runnerSession = std::make_shared<facebook::axiom::runner::RunnerSession>(
       queryCtx->queryId(),
       /*user=*/"pyspark-optimizer",
       facebook::axiom::runner::Properties{},
-      facebook::axiom::connector::ConnectorProperties{});
+      facebook::axiom::connector::ConnectorProperties{},
+      facebook::axiom::connector::noopStatWriter(),
+      facebook::axiom::connector::noopStatWriterProvider());
 
   facebook::axiom::optimizer::Optimization opt(
       std::move(optimizerSession),

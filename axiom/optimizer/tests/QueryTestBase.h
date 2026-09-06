@@ -25,6 +25,7 @@
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/runner/LocalRunner.h"
+#include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
@@ -301,13 +302,23 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
 
   std::shared_ptr<connector::TestConnector> testConnector_;
 
+  // Sink for the component sessions this fixture spawns (parser, optimizer,
+  // runner). Kept separate from connectorStatsWriter_ so a subclass can assert
+  // which side recorded a metric.
+  velox::ConcurrentRuntimeStatWriter statsWriter_;
+
+  // Sink for the connector sessions this fixture spawns.
+  velox::ConcurrentRuntimeStatWriter connectorStatsWriter_;
+
+  // Provider that routes every connector to connectorStatsWriter_.
+  connector::StatWriterProvider connectorStatWriterProvider();
+
  private:
   std::shared_ptr<velox::memory::MemoryPool> optimizerPool_;
 
   // A QueryCtx created for each compiled query.
   std::shared_ptr<velox::core::QueryCtx> queryCtx_;
   std::unique_ptr<optimizer::VeloxHistory> history_;
-  QueryRuntimeStats runtimeStats_;
 
   inline static int32_t gQueryCounter{0};
   inline static std::unique_ptr<VeloxHistory> gSuiteHistory;

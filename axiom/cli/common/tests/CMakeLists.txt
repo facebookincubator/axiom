@@ -12,19 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-if(AXIOM_BUILD_TESTING)
-  add_subdirectory(tests)
-endif()
+add_executable(axiom_query_runtime_stats_test QueryRuntimeStatsTest.cpp)
 
-add_library(
-  axiom_common
-  CatalogSchemaTableName.cpp
-  ConfigRegistry.cpp
-  SchemaFunctionName.cpp
-  SchemaProcedureName.cpp
-  SchemaTableName.cpp
-  SchemaTypeName.cpp
-  SessionConfig.cpp
+add_test(axiom_query_runtime_stats_test axiom_query_runtime_stats_test)
+
+target_link_libraries(
+  axiom_query_runtime_stats_test
+  axiom_query_runtime_stats
+  fmt::fmt
+  GTest::gtest
+  GTest::gmock
+  GTest::gtest_main
 )
-
-target_link_libraries(axiom_common velox_common_base velox_config_property Folly::folly fmt::fmt)

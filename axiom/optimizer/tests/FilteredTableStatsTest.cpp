@@ -16,6 +16,10 @@
 
 #include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
+#include "axiom/optimizer/Optimization.h"
+#include "axiom/optimizer/OptimizerMetrics.h"
+#include "axiom/optimizer/Plan.h"
+#include "axiom/optimizer/RelationOp.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 
 using namespace facebook::velox;
@@ -145,6 +149,52 @@ TEST_P(FilteredTableStatsTest, joinKeyWithZeroDistinctValues) {
 }
 
 AXIOM_INSTANTIATE_V1_V2(FilteredTableStatsTest);
+// Each optimizer drives its own estimate fan-out, so both are checked.
+class EstimateStatsTimingTest : public test::HiveQueriesTestBase,
+                                public testing::WithParamInterface<bool> {
+ protected:
+  static void SetUpTestCase() {
+    test::HiveQueriesTestBase::SetUpTestCase();
+    createTpchTables(
+        {velox::tpch::Table::TBL_NATION, velox::tpch::Table::TBL_REGION});
+  }
+
+  void SetUp() override {
+    test::HiveQueriesTestBase::SetUp();
+    useV2_ = GetParam();
+  }
+};
+
+TEST_P(EstimateStatsTimingTest, optimizerTimesTheEstimateFanOut) {
+  // Both tables are estimated in one fan-out, so a per-call timer records two
+  // samples where a fan-out timer records one.
+  planVelox(parseSelect(
+      "SELECT n_name FROM nation, region WHERE n_regionkey = r_regionkey"));
+
+  const auto componentStats = statsWriter_.runtimeStats();
+  const auto wallNanos = componentStats.find(
+      std::string(OptimizerMetrics::kEstimateStatsWallNanos));
+  ASSERT_NE(wallNanos, componentStats.end());
+  EXPECT_EQ(wallNanos->second.count, 1);
+
+  // The connector reports its own internals, never the caller's observation.
+  EXPECT_FALSE(connectorStatsWriter_.runtimeStats().contains(
+      std::string(OptimizerMetrics::kEstimateStatsWallNanos)));
+}
+
+TEST_P(EstimateStatsTimingTest, optimizerTimesTableLookups) {
+  // The repeat reference is served from the Schema's cache and not sampled.
+  planVelox(parseSelect(
+      "SELECT a.n_name FROM nation a, nation b WHERE a.n_regionkey = b.n_regionkey"));
+
+  const auto componentStats = statsWriter_.runtimeStats();
+  const auto wallNanos =
+      componentStats.find(std::string(OptimizerMetrics::kFindTableWallNanos));
+  ASSERT_NE(wallNanos, componentStats.end());
+  EXPECT_EQ(wallNanos->second.count, 1);
+}
+
+AXIOM_INSTANTIATE_V1_V2(EstimateStatsTimingTest);
 
 } // namespace
 } // namespace facebook::axiom::optimizer

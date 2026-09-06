@@ -17,7 +17,6 @@
 
 #include <folly/container/F14Set.h>
 
-#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/PathSet.h"
 #include "axiom/optimizer/QueryGraph.h"
@@ -80,7 +79,7 @@ class ToGraph {
       const connector::SchemaResolver& schemaResolver,
       velox::core::ExpressionEvaluator& evaluator,
       const OptimizerOptions& options,
-      std::shared_ptr<QueryRuntimeStats> runtimeStats = nullptr);
+      velox::BaseRuntimeStatWriter& statsWriter);
 
   /// Converts 'logicalPlan' to a tree of DerivedTables. Returns the root
   /// DerivedTable. Strips a root OutputNode after SubfieldTracker prunes

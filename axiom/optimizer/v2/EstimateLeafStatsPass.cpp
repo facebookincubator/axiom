@@ -21,6 +21,8 @@
 #include "folly/coro/Collect.h"
 
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/optimizer/Filters.h"
+#include "axiom/optimizer/OptimizerMetrics.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/Schema.h"
@@ -137,8 +139,12 @@ void EstimateLeafStatsPass::run(NodeCP root, const OptimizerSession& session) {
   // No optimizer-time executor is available, so the requests run inline. They
   // are still launched together so a connector that suspends on I/O can
   // overlap them.
+  auto estimateStart = std::chrono::steady_clock::now();
   auto results = folly::coro::blockingWait(
       folly::coro::collectAllRange(std::move(requests)));
+  session.statsWriter().addTiming(
+      OptimizerMetrics::kEstimateStatsWallNanos,
+      std::chrono::steady_clock::now() - estimateStart);
 
   for (size_t i = 0; i < tasks.size(); ++i) {
     applyFilteredStats(*tasks[i].scan, tasks[i].statColumns, results[i]);

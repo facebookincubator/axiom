@@ -24,6 +24,7 @@
 #include "axiom/optimizer/ConnectorPushdownPass.h"
 #include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/FunctionRegistry.h"
+#include "axiom/optimizer/OptimizerMetrics.h"
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
@@ -76,8 +77,7 @@ Optimization::Optimization(
     History& history,
     std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx,
     velox::core::ExpressionEvaluator& evaluator,
-    MultiFragmentPlan::Options runnerOptions,
-    std::shared_ptr<QueryRuntimeStats> runtimeStats)
+    MultiFragmentPlan::Options runnerOptions)
     : optimizerSession_{std::move(optimizerSession)},
       runnerSession_{std::move(runnerSession)},
       runnerOptions_(std::move(runnerOptions)),
@@ -89,9 +89,12 @@ Optimization::Optimization(
           isSingleWorker_,
           isSingleDriver_,
           optimizerSession_->options().alwaysPlanPartialAggregation},
-      toGraph_{schema, evaluator, optimizerSession_->options(), runtimeStats},
-      toVelox_{optimizerSession_, runnerOptions_},
-      runtimeStats_{std::move(runtimeStats)} {
+      toGraph_{
+          schema,
+          evaluator,
+          optimizerSession_->options(),
+          optimizerSession_->statsWriter()},
+      toVelox_{optimizerSession_, runnerOptions_} {
   VELOX_CHECK_NOT_NULL(runnerSession_);
   VELOX_CHECK_NOT_NULL(veloxQueryCtx_);
   queryCtx()->optimization() = this;
@@ -207,22 +210,13 @@ void Optimization::estimateAllBaseTableSelectivity(DerivedTable& dt) {
 
   // Wait for all connector stats requests concurrently. Schedule on the
   // query context executor if available, otherwise run inline.
-  auto estimateCpuStart = velox::process::threadCpuNanos();
-  auto estimateThreadId = std::this_thread::get_id();
   auto estimateStart = std::chrono::steady_clock::now();
   auto results = blockingWaitOn(
       veloxQueryCtx_->executor(),
       folly::coro::collectAllRange(std::move(tasks)));
-  if (runtimeStats_) {
-    recordCpuIfSameThread(
-        *runtimeStats_,
-        QueryRuntimeStats::kEstimateStatsCpuNanos,
-        estimateCpuStart,
-        estimateThreadId);
-    runtimeStats_->addTiming(
-        QueryRuntimeStats::kEstimateStatsWallNanos,
-        std::chrono::steady_clock::now() - estimateStart);
-  }
+  optimizerSession_->statsWriter().addTiming(
+      OptimizerMetrics::kEstimateStatsWallNanos,
+      std::chrono::steady_clock::now() - estimateStart);
 
   // Apply results.
   for (auto& [baseTable, taskIndex, columnIndices] : tableTasks) {

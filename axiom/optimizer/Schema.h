@@ -17,7 +17,6 @@
 #pragma once
 
 #include <folly/CppAttributes.h>
-#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/PlanObject.h"
 
@@ -449,10 +448,11 @@ struct SchemaTable {
 class Schema {
  public:
   /// Constructs a Schema for producing executable plans, backed by 'source'.
-  explicit Schema(
+  /// Records table-lookup timings.
+  Schema(
       const connector::SchemaResolver& source,
-      std::shared_ptr<QueryRuntimeStats> runtimeStats = nullptr)
-      : source_{&source}, runtimeStats_{std::move(runtimeStats)} {}
+      velox::BaseRuntimeStatWriter& statsWriter)
+      : source_{&source}, statsWriter_{statsWriter} {}
 
   /// Returns the table with 'name' or nullptr if not found, using
   /// the connector specified by connectorId to perform table lookups.
@@ -486,7 +486,7 @@ class Schema {
   using ConnectorMap = folly::F14FastMap<std::string_view, TableMap>;
 
   const connector::SchemaResolver* source_;
-  std::shared_ptr<QueryRuntimeStats> runtimeStats_;
+  velox::BaseRuntimeStatWriter& statsWriter_;
   mutable ConnectorMap connectorTables_;
   // Holds `connector::Table`s whose ownership is given directly to
   // the Schema rather than resolved through the source. Keeps them
