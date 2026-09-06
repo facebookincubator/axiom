@@ -117,6 +117,9 @@ SELECT a, count(DISTINCT 1), count(DISTINCT a), count(DISTINCT b) FROM t GROUP B
 -- DISTINCT: global aggregation mixing column DISTINCT and all-literal DISTINCT.
 SELECT count(DISTINCT c), count(DISTINCT 1) FROM t
 ----
+-- DISTINCT: global all-literal aggregation.
+SELECT count(DISTINCT 1), sum(DISTINCT 1) FROM t
+----
 -- DISTINCT: the first MarkDistinct key is a subset of the second, hence no shuffle between multiple MarkDistincts.
 SELECT a, count(DISTINCT b), covar_pop(DISTINCT b, c) FROM t GROUP BY a
 ----

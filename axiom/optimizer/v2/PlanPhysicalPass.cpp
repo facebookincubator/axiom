@@ -32,6 +32,7 @@
 #include "axiom/optimizer/v2/JoinCluster.h"
 #include "axiom/optimizer/v2/JoinTreeEmitter.h"
 #include "axiom/optimizer/v2/NodeRewriter.h"
+#include "axiom/optimizer/v2/PrecomputeProjectionsPass.h"
 
 namespace facebook::axiom::optimizer::v2 {
 
@@ -186,6 +187,151 @@ bool satisfies(
       return partitioning.isBucketedOn(keys);
   }
   VELOX_UNREACHABLE();
+}
+
+// Returns true when any result call requires DISTINCT semantics.
+bool hasDistinct(const Aggregate& aggregate) {
+  return std::ranges::any_of(aggregate.aggregates(), [](const auto* call) {
+    return call->isDistinct();
+  });
+}
+
+// Appends each non-literal argument Column not already present in `keys`.
+ExprVector unionColumnArgs(const ExprVector& keys, const ExprVector& args) {
+  ExprVector merged = keys;
+  PlanObjectSet seen = PlanObjectSet::fromObjects(keys);
+  for (ExprCP arg : args) {
+    if (arg->is(PlanType::kLiteralExpr)) {
+      continue;
+    }
+    VELOX_CHECK(
+        arg->is(PlanType::kColumnExpr),
+        "Expected column or literal aggregate arg: {}",
+        arg->toString());
+    if (seen.contains(arg)) {
+      continue;
+    }
+    seen.add(arg);
+    merged.push_back(arg);
+  }
+  return merged;
+}
+
+// Returns the shared set of non-literal DISTINCT arguments when every call is
+// unfiltered DISTINCT over that same set, or nullopt otherwise. ORDER BY does
+// not affect eligibility because the outer Aggregate preserves each call's
+// original ordering.
+std::optional<ExprVector> commonDistinctArgs(const Aggregate& aggregate) {
+  if (aggregate.aggregates().empty()) {
+    return std::nullopt;
+  }
+
+  std::optional<PlanObjectSet> commonArgSet;
+  ExprVector commonArgs;
+  for (const auto* call : aggregate.aggregates()) {
+    if (!call->isDistinct() || call->condition() != nullptr) {
+      return std::nullopt;
+    }
+
+    ExprVector args = unionColumnArgs({}, call->args());
+    PlanObjectSet argSet = PlanObjectSet::fromObjects(args);
+    if (!commonArgSet.has_value()) {
+      commonArgs = std::move(args);
+      commonArgSet = std::move(argSet);
+    } else if (argSet != *commonArgSet) {
+      return std::nullopt;
+    }
+  }
+  return commonArgs;
+}
+
+// Describes one MarkDistinct node independently of its physical input.
+struct MarkDistinctSpec {
+  ExprVector keys;
+  ColumnVector markers;
+  ColumnVector masks;
+};
+
+// Carries the marker groups and rewritten calls for one result Aggregate.
+struct MarkDistinctLowering {
+  std::vector<MarkDistinctSpec> groups;
+  AggregateCallVector rewrittenCalls;
+};
+
+// Accumulates marker sharing while DISTINCT calls are analyzed.
+struct MarkDistinctGroupState {
+  ExprVector keys;
+  ColumnVector markers;
+  ColumnVector masks;
+  folly::F14FastMap<ExprCP, ColumnCP> filterToMarker;
+};
+
+// Groups DISTINCT calls by marker keys and rewrites them to consume markers.
+MarkDistinctLowering analyzeMarkDistinct(const Aggregate& aggregate) {
+  const PlanObjectSet groupingKeySet =
+      PlanObjectSet::fromObjects(aggregate.groupingKeys());
+  folly::F14VectorMap<PlanObjectSet, MarkDistinctGroupState> groups;
+  folly::F14FastMap<const optimizer::Aggregate*, ColumnCP> aggregateToMarker;
+
+  for (const auto* call : aggregate.aggregates()) {
+    if (!call->isDistinct()) {
+      continue;
+    }
+
+    ExprVector keys = unionColumnArgs(aggregate.groupingKeys(), call->args());
+    const PlanObjectSet keySet = PlanObjectSet::fromObjects(keys);
+    if (keySet == groupingKeySet) {
+      continue;
+    }
+
+    auto [groupIt, isNewGroup] = groups.try_emplace(keySet);
+    auto& group = groupIt->second;
+    if (isNewGroup) {
+      group.keys = std::move(keys);
+      group.markers.push_back(Column::createBoolean("__mark"));
+      group.filterToMarker[nullptr] = group.markers.back();
+    }
+
+    ExprCP filter = call->condition();
+    auto [filterIt, isNewFilter] =
+        group.filterToMarker.try_emplace(filter, nullptr);
+    if (isNewFilter) {
+      group.markers.push_back(Column::createBoolean("__mark"));
+      filterIt->second = group.markers.back();
+
+      ColumnCP maskColumn = filter->as<Column>();
+      VELOX_CHECK_NOT_NULL(
+          maskColumn,
+          "MarkDistinct mask must be a Column reference; got: {}",
+          filter->toString());
+      group.masks.push_back(maskColumn);
+    }
+    aggregateToMarker[call] = filterIt->second;
+  }
+
+  MarkDistinctLowering lowering;
+  lowering.groups.reserve(groups.size());
+  // F14VectorMap iterates in LIFO order. Reverse it so the first encountered
+  // key set is planned closest to the original input.
+  for (auto it = groups.rbegin(); it != groups.rend(); ++it) {
+    auto& group = it->second;
+    lowering.groups.push_back(
+        MarkDistinctSpec{
+            .keys = std::move(group.keys),
+            .markers = std::move(group.markers),
+            .masks = std::move(group.masks)});
+  }
+
+  lowering.rewrittenCalls.reserve(aggregate.aggregates().size());
+  for (const auto* call : aggregate.aggregates()) {
+    if (auto it = aggregateToMarker.find(call); it != aggregateToMarker.end()) {
+      lowering.rewrittenCalls.push_back(
+          call->replaceDistinctAndFilterByMarker(it->second));
+    } else {
+      lowering.rewrittenCalls.push_back(call);
+    }
+  }
+  return lowering;
 }
 
 // True when regrouping the scans under 'node' can make it bucketed. Mirrors
@@ -766,6 +912,125 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
 
   NodeCP rewriteAggregate(const Aggregate* node, NoContext& context) override {
     NodeCP input = rewrite(node->input(), context);
+    if (!hasDistinct(*node) || (numWorkers_ == 1 && numDrivers_ == 1)) {
+      return planAggregateStages(node, input);
+    }
+
+    AggregateCP prepared = PrecomputeProjectionsPass::prepareAggregateInputs(
+        node, input, builder());
+    if (!computePreGroupedKeys(
+             prepared->input()->physicalProperties().local,
+             prepared->groupingKeys())
+             .empty()) {
+      return planAggregateStages(prepared, prepared->input());
+    }
+
+    if (auto commonArgs = commonDistinctArgs(*prepared)) {
+      if (commonArgs->empty() && prepared->groupingKeys().empty()) {
+        // A keyless inner Aggregate would create a row on empty input and
+        // change the result Aggregate's empty-input semantics.
+        return planAggregateStages(prepared, prepared->input());
+      }
+      return planDistinctToGroupBy(prepared, *commonArgs);
+    }
+    return planDistinctToMarkDistinct(prepared);
+  }
+
+  // Plans common-signature DISTINCT calls as an inner deduplication Aggregate
+  // followed by the non-DISTINCT result Aggregate.
+  NodeCP planDistinctToGroupBy(
+      const Aggregate* aggregate,
+      const ExprVector& commonArgs) {
+    ExprVector innerKeys =
+        unionColumnArgs(aggregate->groupingKeys(), commonArgs);
+    ColumnVector innerColumns;
+    innerColumns.reserve(innerKeys.size());
+    for (ExprCP key : innerKeys) {
+      ColumnCP column = key->as<Column>();
+      VELOX_CHECK_NOT_NULL(
+          column,
+          "DISTINCT-to-GroupBy key must be a Column reference; got: {}",
+          key->toString());
+      innerColumns.push_back(column);
+    }
+
+    AggregateCP inner = builder().make<Aggregate>(Aggregate::Key{
+        .input = aggregate->input(),
+        .groupingKeys = std::move(innerKeys),
+        .aggregates = {},
+        .outputColumns = std::move(innerColumns),
+        .step = AggregateStep::kSingle,
+        .groupId = nullptr,
+        .globalGroupingSets = {}});
+    NodeCP physicalInner = planAggregateStages(inner, inner->input());
+
+    ExprVector outerKeys;
+    outerKeys.reserve(aggregate->groupingKeys().size());
+    for (size_t i = 0; i < aggregate->groupingKeys().size(); ++i) {
+      outerKeys.push_back(physicalInner->outputColumns()[i]);
+    }
+
+    AggregateCallVector outerCalls;
+    outerCalls.reserve(aggregate->aggregates().size());
+    for (const auto* call : aggregate->aggregates()) {
+      outerCalls.push_back(call->dropDistinct());
+    }
+
+    AggregateCP outer = builder().make<Aggregate>(Aggregate::Key{
+        .input = physicalInner,
+        .groupingKeys = std::move(outerKeys),
+        .aggregates = std::move(outerCalls),
+        .outputColumns = aggregate->outputColumns(),
+        .step = aggregate->step(),
+        .groupId = aggregate->groupId(),
+        .globalGroupingSets = aggregate->globalGroupingSets()});
+    return planAggregateStages(outer, physicalInner);
+  }
+
+  // Plans the MarkDistinct groups and the rewritten result Aggregate without
+  // recursively rewriting any generated node.
+  NodeCP planDistinctToMarkDistinct(const Aggregate* aggregate) {
+    MarkDistinctLowering lowering = analyzeMarkDistinct(*aggregate);
+    // No marker group is needed when every DISTINCT call's non-literal
+    // arguments are already grouping keys, including literal-only DISTINCT.
+    if (lowering.groups.empty()) {
+      return planAggregateStages(aggregate, aggregate->input());
+    }
+
+    NodeCP input = aggregate->input();
+    for (const auto& group : lowering.groups) {
+      input = planMarkDistinct(input, group);
+    }
+
+    AggregateCP outer = builder().make<Aggregate>(Aggregate::Key{
+        .input = input,
+        .groupingKeys = aggregate->groupingKeys(),
+        .aggregates = std::move(lowering.rewrittenCalls),
+        .outputColumns = aggregate->outputColumns(),
+        .step = aggregate->step(),
+        .groupId = aggregate->groupId(),
+        .globalGroupingSets = aggregate->globalGroupingSets()});
+    return planAggregateStages(outer, input);
+  }
+
+  // Co-locates a marker group's input across workers and constructs the
+  // corresponding MarkDistinct node.
+  NodeCP planMarkDistinct(NodeCP input, const MarkDistinctSpec& spec) {
+    auto [coLocated, keys] = ensureCoLocated(input, spec.keys);
+    ColumnVector outputColumns{coLocated->outputColumns()};
+    outputColumns.insert(
+        outputColumns.end(), spec.markers.begin(), spec.markers.end());
+    return builder().make<MarkDistinct>(MarkDistinct::Key{
+        .input = coLocated,
+        .markers = spec.markers,
+        .distinctKeys = std::move(keys),
+        .masks = spec.masks,
+        .outputColumns = std::move(outputColumns)});
+  }
+
+  // Selects single-stage or partial/final execution for an Aggregate whose
+  // input is already physically planned.
+  NodeCP planAggregateStages(const Aggregate* node, NodeCP input) {
     if (isSplittableAggregate(node)) {
       // Remote two-stage: the input must shuffle across workers to co-locate
       // its groups, so the partial reduces rows before that remote exchange.
@@ -775,7 +1040,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
                 input, node->groupingKeys(), Alignment::kCoLocated)) {
           input = grouped;
         } else {
-          return rewriteAggregateSplit(node, input, /*remoteExchange=*/true);
+          return planAggregateSplit(node, input, /*remoteExchange=*/true);
         }
       }
       // Local two-stage: the input is already co-located (e.g. a bucketed
@@ -785,9 +1050,14 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       // The local exchange itself is not materialized here — emit inserts it at
       // numDrivers > 1 (local exchanges are implicit).
       if (numDrivers_ > 1) {
-        return rewriteAggregateSplit(node, input, /*remoteExchange=*/false);
+        return planAggregateSplit(node, input, /*remoteExchange=*/false);
       }
     }
+    return planSingleAggregate(node, input);
+  }
+
+  // Plans a single-stage Aggregate whose input is already physically planned.
+  NodeCP planSingleAggregate(const Aggregate* node, NodeCP input) {
     // A global () grouping set emits a default row over empty input; a
     // single-stage aggregate must gather (empty keys) so that row is produced
     // once, not once per worker.
@@ -896,10 +1166,8 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   // aggregate (e.g. array_agg) gains nothing and pays an extra hash pass; not
   // splitting it needs a reducing/non-reducing classification that does not yet
   // exist, so that pessimization is deferred.
-  NodeCP rewriteAggregateSplit(
-      const Aggregate* node,
-      NodeCP input,
-      bool remoteExchange) {
+  NodeCP
+  planAggregateSplit(const Aggregate* node, NodeCP input, bool remoteExchange) {
     const size_t numKeys = node->groupingKeys().size();
     const auto& finalColumns = node->outputColumns();
 

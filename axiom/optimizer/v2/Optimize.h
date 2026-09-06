@@ -83,11 +83,11 @@ class Optimizer {
   ///   - PushdownAndPrune — push predicates down, prune unused columns;
   ///   - EstimateLeafStats — populate base-table cardinalities from the
   ///   connector;
-  ///   - PlanPhysical — cost-based join order and distribution;
+  ///   - PlanPhysical — cost-based join order and distribution, including
+  ///     lowering distinct aggregates when needed;
   ///   - PrecomputeProjections — lift compound expressions into `Project`s
   ///   where
   ///     Velox needs a column or literal;
-  ///   - ExpandAggregate — lower distinct aggregates to `MarkDistinct`;
   ///   - Emit — lower to Velox `PlanNode`s.
   ///
   /// `options.numWorkers` / `options.numDrivers` (each >= 1) are the target

@@ -222,6 +222,16 @@ struct LocalProperty {
 /// A relation's per-driver local properties, outermost first.
 using LocalPropertyVector = QGVector<LocalProperty>;
 
+/// Subset of `groupingKeys` that `local` guarantees are pre-grouped (equal-key
+/// rows contiguous), so an aggregation over them can stream rather than build a
+/// full hash table. The larger of: the leading `Sorted` run that are grouping
+/// keys, and a `Grouped(S)` whose columns are all grouping keys (the whole `S`,
+/// since rows are contiguous on the set jointly, not on a bare subset). Empty
+/// when nothing is pre-grouped.
+ExprVector computePreGroupedKeys(
+    const LocalPropertyVector& local,
+    const ExprVector& groupingKeys);
+
 /// A set of columns that is unique across the relation — i.e., functionally
 /// determines the row — at `scope`. Stored minimal: a key-set whose columns are
 /// a superset of another stored key-set is redundant and not kept, but
