@@ -135,6 +135,17 @@ Pruning happens in three successive layers, each narrower than the last:
   partition values, and file statistics, then push the remaining predicate into
   Parquet or ORC readers through Velox where supported.
 
+The first two layers are this connector's to build and to test. The third is
+Velox's contract: row-group and stripe statistics, Parquet column-index page
+skipping, dictionary pruning, and bloom filters all live in the readers, and
+Velox tests them directly (`skippedStrides` assertions in
+`dwio/parquet/tests/reader/E2EFilterTest.cpp` and `exec/tests/TableScanTest.cpp`,
+plus dedicated bloom-filter and page-reader tests). This connector should not
+restate that coverage; its obligation at the third layer is only to hand Velox a
+correct predicate and correct column handles, which an end-to-end read of the
+right rows already demonstrates. A fixture built to span multiple row groups
+would be duplicating Velox's test surface, not extending this connector's.
+
 Responsibilities split cleanly. iceberg-cpp owns catalog and manifest semantics,
 Axiom owns the optimizer-visible planning state and the correctness accounting,
 and Velox owns data-file execution. Statistics come from metadata rather than
@@ -189,10 +200,11 @@ introduces correctness or concurrency requirements that the read path does not:
   orphan-file removal, rollback, registration, migration): rewrites metadata and
   storage objects, requiring stronger permission checks, failure recovery, and
   concurrency handling than scan execution.
-* **Iceberg-specific SQL syntax** (metadata tables, procedures, branch/tag
-  syntax, time-travel syntax): can be added later as explicit extensions. The
-  initial connector integrates through Axiom's existing connector APIs for
-  discovery, resolution, split planning, and execution.
+* **Iceberg-specific SQL syntax** (procedures, branch/tag syntax, time-travel
+  syntax): can be added later as explicit extensions. The initial connector
+  integrates through Axiom's existing connector APIs for discovery, resolution,
+  split planning, and execution. Metadata tables are the exception: a first pair
+  is in scope, described under Metadata Tables.
 * **Iceberg views**: require catalog view operations, view metadata parsing,
   dialect handling, relation expansion, and dependency authorization. Phase 1
   resolves and scans Iceberg tables only.
@@ -310,9 +322,9 @@ iceberg.rest-catalog.warehouse=s3://warehouse/path
 # how they map to the iceberg-cpp FileIO and the Velox filesystem are a design
 # detail; see FileIO and Storage Credentials. Illustrative keys:
 # s3.endpoint=...
-# s3.region=...
-# s3.access-key=...
-# s3.secret-key=...
+# s3.endpoint.region=...
+# s3.aws-access-key=...
+# s3.aws-secret-key=...
 
 # Optional authentication examples.
 # iceberg.rest-catalog.security=OAUTH2
@@ -682,6 +694,9 @@ it converts planned files to splits, without first materializing one Axiom
      filter only prunes files; row-level enforcement stays with the Velox table
      handle (its subfield and remaining filters) and with the filters Axiom kept
      above the scan. The split source does not re-derive either of those.
+   * Request per-file column statistics for the predicated columns only, through
+     `TableScanBuilder::IncludeColumnStats(requested_columns)`. See Selective
+     column statistics and split-time pruning.
    * Use the snapshot pinned when the table was resolved. User-driven snapshot,
      ref, or time-travel selection comes in a later milestone.
 3. Call `Build()` and `PlanFiles()`.
@@ -767,9 +782,28 @@ The conversion from `FileScanTask` to `HiveIcebergSplit` must include:
   in the split's `infoColumns` map.
 * Data-file sequence number.
 * Applicable non-Puffin positional delete files, each with its own sequence
-  number.
-* Applicable equality delete files, each with its equality field IDs and
-  sequence number.
+  number, record count, and file size.
+* Applicable equality delete files, each with its equality field IDs, sequence
+  number, record count, and file size.
+
+  One optional field is worth pairing with sub-file splitting rather than adding
+  now. `IcebergSplitReader::prepareSplit` reads a positional delete file's
+  `upperBounds` entry for Iceberg's reserved position field id
+  (`IcebergMetadataColumn::kPosId`) and skips the delete file when every deleted
+  position falls before the split's start offset. The encoding is Base64 of
+  Iceberg's binary single-value serialization, which `Literal::Serialize()`
+  produces, not a decimal string; the doc comment on `IcebergDeleteFile`
+  suggests otherwise and should not be followed. While this connector emits one
+  whole-file split per data file, the split offset is always zero and the check
+  can never fire, so populating the field would be dead weight. Add it in the
+  same change that starts splitting large files by offset.
+
+  Note the division of labor. Skipping a delete file that holds no entries for
+  the base data file at all needs nothing from the split: the reader builds a
+  `file_path = baseFilePath` filter and evaluates it against the delete file's
+  own footer statistics through `testFilters()`. `lowerBounds` on
+  `IcebergDeleteFile` is consumed only by `DeletionVectorReader`, for the Puffin
+  blob offset, which Phase 1 rejects. Equality deletes consult neither bound.
 * In a later v3 phase, deletion-vector metadata from Puffin-formatted
   position-delete entries, including content offset, content length, and
   referenced data file when present.
@@ -807,11 +841,96 @@ when that is known to be compatible with delete-file semantics.
 The split source should also set the split weight when practical. A file with
 positional deletes or equality deletes costs more to read than a plain data-file
 split of the same byte size, since the reader also opens the delete files and
-builds their bitmaps or hash sets. Velox already carries a `splitWeight` on the
-split and tracks the running table-scan split weight per task, so a higher weight
-on delete-heavy splits lets execution account for their cost. Using that weight
-to balance placement across workers depends on the split-distribution layer
-reading it, so treat it as a refinement rather than a Phase 1 requirement.
+builds their bitmaps or hash sets. Velox already carries a `splitWeight` on
+`HiveConnectorSplit` and tracks the running table-scan split weight per task, so
+a higher weight on delete-heavy splits lets execution account for their cost.
+
+A workable starting model, following Trino's:
+
+```text
+dataWeight = splitLength / targetSplitSize
+weight     = dataWeight
+           + (anyPositionalDeletes ? dataWeight : 0)
+           + totalEqualityDeleteRecords * dataWeight
+```
+
+The three terms encode three different costs. A plain split costs its bytes. A
+positional delete roughly doubles it, because every row position is looked up in
+a bitmap. An equality delete is far worse than its file size suggests: each
+delete record is effectively one more predicate applied to every data row, so the
+term scales with the delete *record count*, not the delete file's bytes. The
+result should be clamped to a configured minimum so a tiny file still gets
+scheduled sensibly. Using the weight to balance placement across workers depends
+on the split-distribution layer reading it, so treat the weight itself as a
+refinement rather than a Phase 1 requirement.
+
+#### Selective column statistics and split-time pruning
+
+Manifest entries carry `column_sizes`, `value_counts`, `null_value_counts`,
+`nan_value_counts`, `lower_bounds`, and `upper_bounds` for *every* column of
+*every* data file. On a wide table that is the bulk of the manifest payload, and
+decoding all of it to evaluate a predicate on two columns is pure waste.
+iceberg-cpp exposes the narrow form,
+`IncludeColumnStats(const std::vector<std::string>& requested_columns)`, and the
+split source should always use it. The requested set is the union of:
+
+* columns carrying a filter the connector accepted for Iceberg pruning,
+* columns carrying a filter Velox will enforce, since the same bounds prune the
+  split before Velox has to open the file, and
+* columns the connector reports statistics for in the same query, so one manifest
+  pass serves both split generation and `co_estimateStats`.
+
+When that union is empty, request no column statistics at all.
+
+With the statistics loaded, the split source has a second pruning opportunity
+that `PlanFiles` cannot take on its own. `PlanFiles` applies the scan filter, but
+the connector may hold predicates it never translated to an Iceberg expression,
+and it knows the file's bounds. Before emitting a split, it should:
+
+* drop the file when a retained predicate provably excludes it, using the file's
+  lower/upper bounds and null counts, and
+* narrow the predicate it hands downstream, by discarding any conjunct whose
+  domain already contains the file's entire statistics range. A predicate that
+  cannot eliminate a single row of this file is not worth carrying into the
+  reader's filter setup.
+
+Both steps are pruning, never enforcement: a conjunct dropped in the second step
+is dropped only because it is trivially true for this file, and the enforcement
+accounting in Predicate classification is unchanged.
+
+One deliberate omission: Axiom's split source receives no dynamic filter, so the
+connector cannot re-prune a split against a filter that tightened after planning
+began. Trino keeps a per-file statistics domain on the split precisely so its
+workers can do that without re-reading a footer. Velox's `HiveIcebergSplit` has
+no read-side statistics field today (`IcebergDataFileStatistics` exists, but only
+on the write path), so carrying one would require a Velox change as well as an
+Axiom split-enumeration hook. Both are out of scope here and are noted so the
+option is not lost.
+
+#### Metadata-only and whole-file fast paths
+
+Two cases let the connector skip work entirely, and both are cheap to detect
+during split conversion.
+
+*Every projected column is an identity partition column.* The values are already
+in the partition tuple, identical for every row of the file, so there is nothing
+to read. The split source can emit a single whole-file split rather than cutting
+the file into pieces, since parallelizing a read of constants buys nothing. Going
+further and answering from `record_count` without opening the file at all
+requires that the file has no delete files attached, that no unenforced predicate
+remains, and that Velox will synthesize the partition values rather than read
+them; the first two the connector can check, the third depends on the reader
+honoring `identityPartitionKeys` for a projection with no data columns. Phase 1
+should implement the whole-file-split half, which is unconditional, and treat the
+zero-read half as a follow-up gated on a reader test.
+
+*The scan has no projected columns at all*, as in a count-shaped query whose
+aggregate `FoldMetadataAggregatePass` did not fold. The same whole-file-split rule
+applies.
+
+These interact with `co_metadataCounts`: when the fold succeeds there is no scan,
+and these paths never run. They matter for the queries the fold rejects, which is
+any query with a filter the connector could not fully account for.
 
 ### Filter Pushdown
 
@@ -854,6 +973,45 @@ incrementally without changing results.
 Initial pushdown should cover these conjunct shapes for primitive scalar columns:
 `=`, `<`, `<=`, `>`, `>=` against a constant; `IN` over constants; and `IS NULL` /
 `IS NOT NULL`. Everything else stays rejected until it is added.
+
+#### Expression rewrites that unlock pruning
+
+Those shapes all compare a bare column with a constant. Many real Iceberg
+predicates do not have that shape: they wrap the column in a call first, as in
+`CAST(ts AS DATE) = DATE '2024-01-01'`, `year(ts) = 2024`, or
+`date_trunc('day', ts) = TIMESTAMP '2024-01-01 00:00:00'`. Under the rules above
+each of these is rejected outright, which means a table partitioned by `day(ts)`
+gets no pruning from exactly the predicate shape its partitioning exists to
+serve.
+
+The connector can rewrite these into a plain range on the source column, because
+it knows something the engine does not: Iceberg stores every `timestamptz` value
+normalized to UTC. Trino depends on the same invariant in
+`UtcConstraintExtractor`, and it is the one place its Iceberg connector does
+connector-specific expression rewriting. Three rewrites carry most of the value:
+
+| Conjunct | Rewritten to |
+| --- | --- |
+| `CAST(ts AS DATE) <op> d` | range on `ts` |
+| `year(ts) <op> n`, and the `month` / `day` / `hour` equivalents | range on `ts` |
+| `date_trunc(unit, ts) <op> v` | range on `ts` |
+
+These are exact equivalences, not relaxations. That matters for the enforcement
+accounting: a rewritten conjunct is an ordinary conjunct afterwards, so Velox can
+enforce it as a subfield filter on `ts` and Iceberg can use it for pruning, and it
+does not land in the Iceberg-pruning-only bucket. A rewrite that were merely
+sound-but-loose would have to.
+
+Placement matters. `makeIcebergFilePruningExpression` translates
+`velox::common::SubfieldFilters`, and a conjunct whose left side is a call never
+becomes a subfield filter on the source column in the first place. The rewrite
+therefore belongs in `createTableHandle`, applied to the conjunct before filters
+are lowered, not inside the Iceberg expression translator.
+
+This is a refinement, not a Phase 1 requirement: without it results stay correct
+and the conjunct is simply rejected. It is called out because it is small,
+self-contained, and disproportionately valuable on time-partitioned tables, which
+describes most large Iceberg tables.
 
 Dynamic filtering already works at execution. The Velox Iceberg data source
 inherits `addDynamicFilter` from the Hive data source (via `FileDataSource`), so a
@@ -1046,6 +1204,15 @@ In v1 the concrete targets are:
   may truncate long string and binary bounds. Do not report `numDistinct` from
   Puffin sketches in Phase 1; add it only after the C++ planning path exposes the
   required statistics safely.
+* Convert `column_sizes` before reporting a per-column data size. `column_sizes`
+  is the *compressed, encoded, on-disk* byte count; a cost model that reasons
+  about memory wants the decoded in-memory size, and the two differ by a factor
+  that depends on type, encoding, and data. Report nothing for fixed-width types,
+  which do not need it. For variable-width types, apply an explicit scaling
+  factor and say so in the code: Trino uses 2.7 for `VARCHAR` and 1.4 for
+  `VARBINARY`, both empirically derived. Passing the raw on-disk number through
+  is worse than reporting nothing, because it is confidently wrong in a direction
+  the optimizer cannot detect.
 
 Reading these metrics means reading manifests, the same work split planning does.
 Statistics, discrete predicates, metadata counts, and split generation all want
@@ -1053,12 +1220,153 @@ manifest information, so the connector should share one per-query manifest plann
 result, or cache small derived metadata keyed by snapshot and predicate. Any cache
 must be invalidated when the table metadata location or current snapshot changes.
 
+Two details decide whether such a cache actually hits. First, the key must be the
+smallest thing that changes the answer. A table handle accumulates fields that do
+not affect statistics at all: projected columns, any scheduling or grouping
+state, and the flags that distinguish one planning attempt from another. Keying
+on the whole handle produces a cache that misses on every query. Key on the
+pinned snapshot id plus the accepted predicate, and nothing else. Second, the
+entry should widen rather than be replaced: a query that asks for statistics on
+columns `a, b` should be able to reuse an entry computed for `a` and extend it to
+cover `b`, instead of discarding it and re-reading the manifests. Trino does
+exactly this, and the two together are what make repeated planning over one table
+cheap.
+
+### Metadata Tables
+
+Iceberg engines expose a table's own metadata as queryable tables named with a
+`$` suffix, so `SELECT * FROM "orders$snapshots"` lists the table's snapshots.
+Trino exposes eleven. This connector starts with two, `$snapshots` and
+`$history`, and treats the rest as deferred rather than unsupported.
+
+The split is not arbitrary. `$snapshots` and `$history` read only fields
+already present in the loaded `TableMetadata`, so they cost a metadata load the
+connector performs anyway and no additional I/O. The deferred ones mostly need
+manifest walking and partition-tuple mapping, `$files`, `$entries`,
+`$manifests`, and `$partitions` most of all. Two more, `$properties` and
+`$refs`, are as cheap as the first pair and are the natural next step.
+
+#### Where the rows come from
+
+Trino uses two mechanisms, and the choice between them is worth understanding
+before copying either.
+
+Six of its metadata tables delegate to the Java library. `MetadataTableUtils.createMetadataTableInstance(table, type)` returns a real, scannable Iceberg
+table, and Trino calls `newScan()` on it and maps rows into pages;
+`SnapshotsTable.addRow` is six append calls and no logic. The other five build
+rows in memory by hand, `$history` among them: it iterates
+`icebergTable.snapshots()` into an `InMemoryRecordSet` and computes
+`is_current_ancestor` from `SnapshotUtil.currentAncestorIds`, because no
+metadata table supplies that column.
+
+iceberg-cpp has no counterpart to `createMetadataTableInstance`, so the
+delegating path is unavailable. Its `inspect` module looks like one at first:
+it defines `SnapshotsTable` and `HistoryTable`, but `MetadataTable` exposes
+only `kind()`, `name()`, `schema()`, and `source_table()`, with no scan or read
+API. Those classes describe a metadata table without being able to produce a
+row of it.
+
+This connector therefore builds rows in memory for both tables, which is what
+Trino already does for `$history` and a small extension of it for `$snapshots`:
+
+- `$snapshots` reads `metadata.snapshots`, one row per entry, taking the
+  snapshot id, parent id, timestamp, manifest list location, and summary map
+  directly, and the operation from `Snapshot::Operation()`.
+- `$history` reads `metadata.snapshot_log`, one row per entry, joining each to
+  its snapshot for the parent id, and computing whether the snapshot is an
+  ancestor of the current one by walking parent links back from the current
+  snapshot.
+
+The column names and types follow the Iceberg spec, matching what Trino and
+Spark expose, rather than whatever `MetadataTable::schema()` returns. Two
+reasons. The deferred tables have no iceberg-cpp equivalent to inherit a schema
+from, so declaring them here is the only way all eleven end up consistent. And
+a schema this connector declares is one it can map to Velox types deliberately,
+rather than translate after the fact.
+
+Nothing here waits on iceberg-cpp gaining metadata tables. Were it to grow
+`createMetadataTableInstance`, the delegating path would become available for
+some tables, but the expensive deferred ones would not benefit: Trino hand-
+builds `$partitions`, `$files`, and `$manifests` too, walking `planFiles()` and
+manifest lists directly. Those are deferred here because they are more work,
+not because an upstream capability is missing.
+
+#### Execution model
+
+A metadata table has no data files, so it cannot go through the Velox Iceberg
+reader. It needs a data source that materializes rows from metadata in memory.
+Axiom already has this shape in its system connector: a Velox connector whose
+data source builds vectors directly, reached through a table handle carrying
+the requested columns, with a split source that emits exactly one split.
+
+The Iceberg connector follows that pattern rather than inventing another. The
+consequences to accept:
+
+- One split, one node. That matches Trino, which runs every metadata table on a
+  single coordinator except `$files`.
+- No filter or projection pushdown in the first version. The engine applies
+  predicates above the scan. These tables return tens to thousands of rows, so
+  the pushdown is not worth its correctness surface yet.
+- No statistics. `co_estimateStats` returns nothing for a metadata table, and
+  the optimizer falls back to its defaults.
+
+#### Resolution
+
+`findTable` parses the `$` suffix before loading anything. A name with no
+suffix resolves as today. A name with a recognized suffix loads the base table
+and returns a metadata table over its metadata. A name with an unrecognized
+suffix fails naming the suffix and listing the supported ones, rather than
+asking the catalog for a table that cannot exist and surfacing a
+table-not-found error that hides the real problem.
+
+Table names may legitimately contain `$`, so only a suffix matching a known
+metadata-table name is treated as one; anything else is part of the table name.
+
 ### Metadata and File-System Caching
 
 Axiom should make metadata caching an explicit connector feature. Iceberg table
 metadata, manifest lists, manifests, and derived planning summaries are often
 small compared with data files but can dominate planning latency on large tables.
-TBD.
+Every Iceberg file except the current metadata pointer is immutable once written,
+which is what makes caching them safe and simple.
+
+Three distinct caches, with different lifetimes:
+
+| Cache | Contents | Key | Invalidation |
+| --- | --- | --- | --- |
+| Table metadata | Parsed `TableMetadata` from the catalog | `SchemaTableName` | On metadata-location change reported by the catalog |
+| Manifest / planning | Manifest list and manifest file bytes, and the derived per-query planning result shared by statistics, discrete predicates, metadata counts, and split generation | Metadata location, or snapshot id plus accepted predicate for derived results | Never, within a metadata location; entries are immutable |
+| Data-file bytes | Data and delete file ranges read during execution | File path | Never; Iceberg data files are immutable |
+
+The table metadata cache is the one with a correctness obligation, because the
+current metadata pointer is the only mutable thing in an Iceberg table. Everything
+it points at is content-addressed in practice: a manifest list, a manifest, or a
+data file at a given path never changes. That is why the data-file cache can key
+on the bare path with no version or mtime component, which Trino relies on too.
+
+For the data-file cache to pay off, splits for the same file must reach the same
+worker across queries. Velox exposes a split weight but the routing decision is
+Axiom's, so the connector should be able to attach a stable affinity key derived
+from the file path and split range, and the split-distribution layer should honor
+it when a file-system cache is enabled. Without affinity a distributed cache
+degrades to a per-worker cache with a low hit rate. This is the same coupling
+Trino has between its split affinity provider and its cache key provider, and it
+is worth designing for even if Phase 1 ships without the cache itself.
+
+Two constraints specific to this connector:
+
+* The metadata cache lives wherever planning runs, and planning reads through
+  iceberg-cpp `FileIO` while execution reads through Velox's filesystem. A cache
+  attached to one is invisible to the other. Sharing bytes between the two paths
+  is not required for correctness and should not be attempted in Phase 1; the two
+  read disjoint sets of files.
+* A cached table metadata entry pins a metadata location, not a snapshot. Snapshot
+  pinning for query consistency is a separate mechanism, described in Connector
+  Metadata, and the cache must not be relied on to provide it.
+
+Phase 1 should implement the table metadata cache and the per-query shared
+planning result, both with an explicit off switch, and defer the file-system
+cache and affinity routing to the milestone that adds them.
 
 ### Dependency and Build Strategy
 
@@ -1166,9 +1474,18 @@ The connector should expose or record:
 * Number of filters pushed to Velox execution.
 * Number of filters rejected and left above the scan.
 * Number of nested fields projected.
-* Number of files pruned by manifest or file statistics.
+* Number of files pruned by manifest or file statistics, separated into files
+  pruned by `PlanFiles` and files pruned by the split source after planning.
+* Number of columns for which per-file statistics were requested, against the
+  table's column count, so an over-broad `IncludeColumnStats` is visible.
+* Number of conjuncts discarded per split as trivially true against that file's
+  statistics.
+* Number of whole-file splits emitted because only identity partition columns
+  were projected.
+* Number of delete files skipped by position bounds.
 * Metadata cache hit/miss counts if caching is implemented.
-* Statistics cache hit/miss counts.
+* Statistics cache hit/miss counts, and how often an entry was widened rather
+  than recomputed.
 * Split planning queue time and split generation batch latency.
 
 ## Test Plan
@@ -1227,6 +1544,23 @@ Unit tests:
 * Filter expression translation.
 * Filter bucket classification: Iceberg-pruning, metadata-enforced,
   Velox-enforced, rejected.
+* Metadata-table name resolution: a plain name, each supported suffix, an
+  unrecognized suffix, and a base table name that itself contains `$`.
+* Timestamp expression rewrites, once implemented: `CAST(ts AS DATE)`, `year`,
+  `month`, `day`, `hour`, and `date_trunc` comparisons each produce the exact
+  range on the source column, including at range boundaries and for negative
+  (pre-epoch) timestamps, and the rewritten conjunct is classified as
+  Velox-enforced rather than Iceberg-pruning-only.
+* Column-statistics request set is the union of predicated and statistics
+  columns, and is empty when the query has no filters and asks for no statistics.
+* Split-time pruning drops a file whose bounds exclude a retained predicate, and
+  the same query returns identical rows with split-time pruning disabled.
+* Predicate narrowing discards a conjunct whose domain contains the file's whole
+  statistics range, and never discards one that does not.
+* Per-column data size is scaled off the on-disk `column_sizes` for
+  variable-width types and omitted for fixed-width types.
+* Statistics cache key ignores projected columns and planning-only handle state,
+  and a request for a superset of columns widens the existing entry.
 * Projection and nested dereference field-ID preservation.
 * `FileScanTask` to `HiveIcebergSplit` conversion.
 * Defensive rejection of Puffin position-delete entries in split conversion.
@@ -1246,6 +1580,17 @@ Integration tests:
   verifying identical results to no pushdown once execution-level query coverage
   is wired.
 * Verify identity partition pruning, transform pruning, and file metric pruning.
+* Query `$snapshots` and `$history` on the fixture table and check the rows
+  against the snapshots the fixture SQL creates, including the parent chain and
+  which snapshots are ancestors of the current one.
+* Verify a query projecting only identity partition columns produces one
+  whole-file split per data file and the correct values.
+* Verify a scan whose delete files do not apply to the rows read returns the
+  same rows as the same scan without them. Whether the reader skipped the
+  delete file internally is Velox's assertion to make, not this connector's.
+* Verify a time-partitioned table prunes on `CAST(ts AS DATE)` and `year(ts)`
+  predicates once the rewrites land, and that results match the same query with
+  the rewrites disabled.
 * Plan scans for a table whose metadata and data files use the supported fixture
   object-store location mapping.
 * Query tables with schema evolution: add, rename, reorder, and drop columns
