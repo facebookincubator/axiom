@@ -38,8 +38,8 @@ class PlanPhysicalPass {
   ///
   /// When `options.syntacticJoinOrder` is true, cost-based reordering is
   /// disabled and every join keeps the order written in the query. The same
-  /// query-order fallback also kicks in per cluster when DPhyp cannot cost a
-  /// plan (a relation or join key lacked statistics).
+  /// query-order fallback also kicks in per cluster when DPhyp produces no
+  /// valid costable plan.
   /// `options.dphypEnumerationBudget` caps DPhyp's enumeration before it falls
   /// back to greedy join ordering; <= 0 means unlimited. `numWorkers` is the
   /// target task count; when > 1 the walk generates remote-exchange candidates

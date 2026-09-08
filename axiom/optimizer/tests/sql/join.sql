@@ -252,6 +252,47 @@ SELECT t1.a, t2.a FROM t t1, t t2 WHERE if(t1.b > 0, true, 1000 / (150 - t2.b) >
 SELECT t1.b, t2.a FROM (VALUES (150), (100)) AS t1(b), (VALUES (1), (2)) AS t2(a)
 WHERE try(1000 / (150 - t1.b) > t2.a)
 ----
+-- A self-join must enforce every equality after reordering.
+WITH ids (id) AS (VALUES (1)),
+     labels (id, label) AS (VALUES (1, 'a'), (1, 'b')),
+     extra (id) AS (VALUES (1)),
+     labeled AS (
+       SELECT ids.id, labels.label
+       FROM ids
+       JOIN labels ON labels.id = ids.id
+       LEFT JOIN extra ON extra.id = ids.id)
+SELECT count(*)
+FROM labeled AS x
+JOIN labeled AS y ON x.id = y.id AND x.label = y.label
+----
+-- A join-key operand that references two relations must remain applicable
+-- when the third relation joins.
+SELECT m
+FROM (VALUES (1, 10)) AS t(a, b)
+JOIN (VALUES (1, 1, 100)) AS u(x, y, z) ON t.a = u.x
+JOIN (VALUES (100, 11, 1001), (100, 99, 1002)) AS v(k, l, m)
+  ON u.z = v.k AND t.b + u.y = v.l
+----
+-- Reordering a semi-join nested between inner joins must preserve every
+-- equality and return the matching row.
+-- duckdb: SELECT 1 AS s
+WITH n AS (
+       SELECT i AS k
+       FROM UNNEST(sequence(1, 1)) AS t(i)),
+     b(k) AS (VALUES (1)),
+     d(k) AS (VALUES (1))
+SELECT ax.k
+FROM (
+  SELECT a.k
+  FROM n AS a
+  JOIN n AS x ON a.k = x.k
+  WHERE EXISTS (
+    SELECT 1
+    FROM b LEFT JOIN d ON b.k = d.k
+    WHERE b.k = a.k)
+) AS ax
+JOIN n AS c ON ax.k = c.k
+----
 -- Two parallel equality chains connect t through u to v.
 SELECT v.m
 FROM (

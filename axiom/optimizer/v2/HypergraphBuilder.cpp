@@ -79,76 +79,124 @@ RelationSet keyRelationsOrOperand(
   return operand;
 }
 
-// Per-Join leaf covers of left and right operands, with the
-// kRight-to-kLeft normalization baked in: for an IR `kRight`
-// join, `left`/`right` are swapped and `joinType` is `kLeft`.
-// The rest of the pipeline never sees `kRight`.
-struct JoinLeaves {
-  RelationSet left;
-  RelationSet right;
-  velox::core::JoinType joinType;
+// Records each Join's normalized operands. `leftLeaves` and `rightLeaves`
+// contain leaf-relation ids used by the algebraic TES rules; a constant-input
+// Unnest is itself a leaf. `leftRelations` and `rightRelations` additionally
+// contain dependent Unnest relation ids used to split the completed TES into
+// hyperedge sides. Right-form joins are stored in their equivalent left form.
+struct JoinInputs {
+  RelationSet leftLeaves;
+  RelationSet rightLeaves;
+  RelationSet leftRelations;
+  RelationSet rightRelations;
+  velox::core::JoinType joinType{velox::core::JoinType::kInner};
 };
 
-// Returns the subtree leaves of `node`; populates `leaves[J]` for
-// every Join `J` reached during the walk. For an IR `kRight` join,
-// `leaves[J]` records the swapped operands and `joinType = kLeft`.
-// Unnest nodes are not in `leafIds`; descend into `input()`.
-RelationSet populateJoinLeaves(
+// Tracks leaf relations and complete hypergraph-relation coverage for a
+// subtree.
+struct SubtreeRelations {
+  RelationSet leaves;
+  RelationSet allRelations;
+};
+
+// Returns the leaf relations and all hypergraph relations below `node`, and
+// records the normalized operands of every Join reached during the walk.
+SubtreeRelations populateJoinInputs(
     NodeCP node,
     const folly::F14FastMap<NodeCP, int8_t>& leafIds,
     const folly::F14FastMap<UnnestCP, int8_t>& unnestIds,
-    folly::F14FastMap<JoinCP, JoinLeaves>& leaves) {
+    folly::F14FastMap<JoinCP, JoinInputs>& inputs) {
   const auto it = leafIds.find(node);
   if (it != leafIds.end()) {
-    return RelationSet::singleton(it->second);
+    const RelationSet relation = RelationSet::singleton(it->second);
+    return {relation, relation};
   }
   if (node->is(NodeType::kUnnest)) {
-    // The cluster does not contain the input of an Unnest of a constant, so
-    // the Unnest's own relation is all its subtree contributes.
     const auto* unnest = node->as<Unnest>();
     NodeCP input = unnest->input();
+    const int8_t unnestId = unnestIds.at(unnest);
+    // The cluster does not contain the input of an Unnest of a constant, so
+    // the Unnest's own relation is all its subtree contributes.
     if (input->outputColumns().empty()) {
-      return RelationSet::singleton(unnestIds.at(unnest));
+      const RelationSet relation = RelationSet::singleton(unnestId);
+      return {relation, relation};
     }
-    return populateJoinLeaves(input, leafIds, unnestIds, leaves);
+    SubtreeRelations subtree =
+        populateJoinInputs(input, leafIds, unnestIds, inputs);
+    subtree.allRelations.add(unnestId);
+    return subtree;
   }
   const auto* join = node->as<Join>();
-  const RelationSet leftLeaves =
-      populateJoinLeaves(join->left(), leafIds, unnestIds, leaves);
-  const RelationSet rightLeaves =
-      populateJoinLeaves(join->right(), leafIds, unnestIds, leaves);
+  const SubtreeRelations left =
+      populateJoinInputs(join->left(), leafIds, unnestIds, inputs);
+  const SubtreeRelations right =
+      populateJoinInputs(join->right(), leafIds, unnestIds, inputs);
   // Normalize right-form joins to their left form by swapping operands.
   // kRight, kRightSemiFilter and kRightSemiProject each map to the
   // matching left-form type; the rest of the pipeline never sees a
   // right-form join.
   switch (join->joinType()) {
     case velox::core::JoinType::kRight:
-      leaves[join] = JoinLeaves{
-          .left = rightLeaves,
-          .right = leftLeaves,
+      inputs[join] = JoinInputs{
+          .leftLeaves = right.leaves,
+          .rightLeaves = left.leaves,
+          .leftRelations = right.allRelations,
+          .rightRelations = left.allRelations,
           .joinType = velox::core::JoinType::kLeft};
       break;
     case velox::core::JoinType::kRightSemiFilter:
-      leaves[join] = JoinLeaves{
-          .left = rightLeaves,
-          .right = leftLeaves,
+      inputs[join] = JoinInputs{
+          .leftLeaves = right.leaves,
+          .rightLeaves = left.leaves,
+          .leftRelations = right.allRelations,
+          .rightRelations = left.allRelations,
           .joinType = velox::core::JoinType::kLeftSemiFilter};
       break;
     case velox::core::JoinType::kRightSemiProject:
-      leaves[join] = JoinLeaves{
-          .left = rightLeaves,
-          .right = leftLeaves,
+      inputs[join] = JoinInputs{
+          .leftLeaves = right.leaves,
+          .rightLeaves = left.leaves,
+          .leftRelations = right.allRelations,
+          .rightRelations = left.allRelations,
           .joinType = velox::core::JoinType::kLeftSemiProject};
       break;
     default:
-      leaves[join] = JoinLeaves{
-          .left = leftLeaves,
-          .right = rightLeaves,
+      inputs[join] = JoinInputs{
+          .leftLeaves = left.leaves,
+          .rightLeaves = right.leaves,
+          .leftRelations = left.allRelations,
+          .rightRelations = right.allRelations,
           .joinType = join->joinType()};
   }
-  RelationSet subtree{leftLeaves};
-  subtree.unionSet(rightLeaves);
+  SubtreeRelations subtree{left};
+  subtree.leaves.unionSet(right.leaves);
+  subtree.allRelations.unionSet(right.allRelations);
   return subtree;
+}
+
+// Splits an operator's total TES between its normalized input covers.
+std::pair<RelationSet, RelationSet> splitTes(
+    const RelationSet& tes,
+    const RelationSet& normalizedLeftRelations,
+    const RelationSet& normalizedRightRelations) {
+  VELOX_CHECK(
+      !normalizedLeftRelations.hasIntersection(normalizedRightRelations),
+      "Normalized join inputs must be disjoint: left={}, right={}",
+      normalizedLeftRelations.bits(),
+      normalizedRightRelations.bits());
+  RelationSet inputRelations{normalizedLeftRelations};
+  inputRelations.unionSet(normalizedRightRelations);
+  VELOX_CHECK(
+      tes.isSubset(inputRelations),
+      "TES must be contained in the normalized join inputs: tes={}, inputs={}",
+      tes.bits(),
+      inputRelations.bits());
+
+  RelationSet leftTes{tes};
+  leftTes.intersect(normalizedLeftRelations);
+  RelationSet rightTes{tes};
+  rightTes.intersect(normalizedRightRelations);
+  return {leftTes, rightTes};
 }
 
 // Returns the leaves an ancestor join must add to its TES to keep
@@ -162,7 +210,7 @@ RelationSet tesExpansion(
     const RelationSet& parentSes,
     bool leftSide,
     const folly::F14FastMap<NodeCP, int8_t>& leafIds,
-    const folly::F14FastMap<JoinCP, JoinLeaves>& leaves) {
+    const folly::F14FastMap<JoinCP, JoinInputs>& inputs) {
   if (leafIds.contains(node)) {
     return RelationSet{};
   }
@@ -173,19 +221,19 @@ RelationSet tesExpansion(
       return RelationSet{};
     }
     return tesExpansion(
-        input, parentType, parentSes, leftSide, leafIds, leaves);
+        input, parentType, parentSes, leftSide, leafIds, inputs);
   }
 
   const auto* childJoin = node->as<Join>();
-  const auto& childLeaves = leaves.at(childJoin);
+  const auto& childInputs = inputs.at(childJoin);
 
   // CD-A: for a LEFT-subtree descendant the M/N table is keyed
   // `(child, parent)`. For a RIGHT-subtree descendant the roles
-  // flip to `(parent, child)`. `childLeaves.joinType` is already
+  // flip to `(parent, child)`. `childInputs.joinType` is already
   // normalized (never kRight).
   auto props = leftSide
-      ? AlgebraicProperties::derive(childLeaves.joinType, parentType)
-      : AlgebraicProperties::derive(parentType, childLeaves.joinType);
+      ? AlgebraicProperties::derive(childInputs.joinType, parentType)
+      : AlgebraicProperties::derive(parentType, childInputs.joinType);
 
   // When the parent's referenced relations overlap a child
   // operand that the equivalence's syntactic precondition
@@ -193,21 +241,21 @@ RelationSet tesExpansion(
   // Skip for inner-over-inner where commutativity makes the
   // equivalences hold regardless of predicate placement.
   const bool involvesOuter =
-      childLeaves.joinType != velox::core::JoinType::kInner ||
+      childInputs.joinType != velox::core::JoinType::kInner ||
       parentType != velox::core::JoinType::kInner;
   if (involvesOuter) {
     if (leftSide) {
-      if (parentSes.hasIntersection(childLeaves.left)) {
+      if (parentSes.hasIntersection(childInputs.leftLeaves)) {
         props.associative = false;
       }
-      if (parentSes.hasIntersection(childLeaves.right)) {
+      if (parentSes.hasIntersection(childInputs.rightLeaves)) {
         props.leftAsscom = false;
       }
     } else {
-      if (parentSes.hasIntersection(childLeaves.right)) {
+      if (parentSes.hasIntersection(childInputs.rightLeaves)) {
         props.associative = false;
       }
-      if (parentSes.hasIntersection(childLeaves.left)) {
+      if (parentSes.hasIntersection(childInputs.leftLeaves)) {
         props.rightAsscom = false;
       }
     }
@@ -216,23 +264,23 @@ RelationSet tesExpansion(
   RelationSet expansion;
   if (leftSide) {
     if (!props.leftAsscom) {
-      expansion.unionSet(childLeaves.right);
+      expansion.unionSet(childInputs.rightLeaves);
     }
     if (!props.associative) {
-      expansion.unionSet(childLeaves.left);
+      expansion.unionSet(childInputs.leftLeaves);
     }
   } else {
     if (!props.rightAsscom) {
-      expansion.unionSet(childLeaves.left);
+      expansion.unionSet(childInputs.leftLeaves);
     }
     if (!props.associative) {
-      expansion.unionSet(childLeaves.right);
+      expansion.unionSet(childInputs.rightLeaves);
     }
   }
   expansion.unionSet(tesExpansion(
-      childJoin->left(), parentType, parentSes, leftSide, leafIds, leaves));
+      childJoin->left(), parentType, parentSes, leftSide, leafIds, inputs));
   expansion.unionSet(tesExpansion(
-      childJoin->right(), parentType, parentSes, leftSide, leafIds, leaves));
+      childJoin->right(), parentType, parentSes, leftSide, leafIds, inputs));
   return expansion;
 }
 
@@ -348,10 +396,10 @@ void addTransitiveInnerEdges(
   for (DerivedEdgeSpec& derivedEdge : derivedEdges) {
     const RelationSet left = RelationSet::singleton(derivedEdge.leftRelation);
     const RelationSet right = RelationSet::singleton(derivedEdge.rightRelation);
-    RelationSet tes{left};
-    tes.unionSet(right);
     graph.addEdge(
         JoinEdge{
+            left,
+            right,
             left,
             right,
             std::move(derivedEdge.leftKeys),
@@ -359,8 +407,7 @@ void addTransitiveInnerEdges(
             ExprVector{},
             velox::core::JoinType::kInner,
             /*nullAware=*/false,
-            /*nullAsValue=*/false},
-        tes);
+            /*nullAsValue=*/false});
   }
 }
 
@@ -434,10 +481,10 @@ JoinHypergraph HypergraphBuilder::build(
     }
   }
 
-  // Build the unnest edge for each Unnest that depends on a relation
-  // of the cluster, and record every Unnest's input relations (the relation ids
-  // its input subtree contributes, resolved via the now-complete columnToLeaf)
-  // for the outer-join barrier applied in the cluster-join loop.
+  // Builds each Unnest edge and records the relation ids referenced by the
+  // Unnest input's output columns. These data dependencies determine whether
+  // an outer join must precede or follow the Unnest; they are distinct from the
+  // complete structural subtree membership recorded in `joinInputs` below.
   folly::F14FastMap<int8_t, RelationSet> unnestInputRelations;
   for (UnnestCP unnest : cluster.unnests) {
     const int8_t id = unnestIds.at(unnest);
@@ -460,17 +507,14 @@ JoinHypergraph HypergraphBuilder::build(
         !inputRelations.empty(),
         "Unnest input subtree must contribute at least one cluster relation");
 
-    RelationSet tes{inputRelations};
-    tes.add(id);
-    graph.addEdge(
-        JoinEdge::unnest(inputRelations, RelationSet::singleton(id)), tes);
+    graph.addEdge(JoinEdge::unnest(inputRelations, RelationSet::singleton(id)));
   }
 
-  folly::F14FastMap<JoinCP, JoinLeaves> joinLeaves;
-  populateJoinLeaves(cluster.root, leafIds, unnestIds, joinLeaves);
+  folly::F14FastMap<JoinCP, JoinInputs> joinInputs;
+  populateJoinInputs(cluster.root, leafIds, unnestIds, joinInputs);
 
   for (JoinCP join : cluster.joins) {
-    const auto& leaves = joinLeaves.at(join);
+    const auto& inputs = joinInputs.at(join);
     if (join->isInner()) {
       // Group keys by endpoint relation-pair and emit one edge per group.
       // Keys sharing an endpoint (a composite key) stay on one edge so
@@ -496,9 +540,9 @@ JoinHypergraph HypergraphBuilder::build(
           rightKeys.push_back(join->rightKeys()[i]);
         }
         const RelationSet leftSet{
-            keyRelationsOrOperand(leftKeys, columnToLeaf, leaves.left)};
+            keyRelationsOrOperand(leftKeys, columnToLeaf, inputs.leftLeaves)};
         const RelationSet rightSet{
-            keyRelationsOrOperand(rightKeys, columnToLeaf, leaves.right)};
+            keyRelationsOrOperand(rightKeys, columnToLeaf, inputs.rightLeaves)};
         RelationSet ses{leftSet};
         ses.unionSet(rightSet);
         RelationSet tes{ses};
@@ -508,26 +552,29 @@ JoinHypergraph HypergraphBuilder::build(
             ses,
             /*leftSide=*/true,
             leafIds,
-            joinLeaves));
+            joinInputs));
         tes.unionSet(tesExpansion(
             join->right(),
             join->joinType(),
             ses,
             /*leftSide=*/false,
             leafIds,
-            joinLeaves));
+            joinInputs));
+        auto [leftTes, rightTes] =
+            splitTes(tes, inputs.leftRelations, inputs.rightRelations);
 
         graph.addEdge(
             JoinEdge{
                 leftSet,
                 rightSet,
+                leftTes,
+                rightTes,
                 leftKeys,
                 rightKeys,
                 ExprVector{},
                 join->joinType(),
                 /*nullAware=*/false,
-                /*nullAsValue=*/false},
-            tes);
+                /*nullAsValue=*/false});
       }
 
       for (ExprCP conjunct : join->filter()) {
@@ -536,8 +583,7 @@ JoinHypergraph HypergraphBuilder::build(
       }
     } else {
       // Swap keys when the IR join is a right-form join so the edge's
-      // leftKeys reference `leaves.left` (already right-normalized to the
-      // matching left form in populateJoinLeaves).
+      // leftKeys reference the normalized left input.
       const bool flip = join->joinType() == velox::core::JoinType::kRight ||
           join->joinType() == velox::core::JoinType::kRightSemiFilter ||
           join->joinType() == velox::core::JoinType::kRightSemiProject;
@@ -549,9 +595,9 @@ JoinHypergraph HypergraphBuilder::build(
       NodeCP normalizedRightChild = flip ? join->left() : join->right();
 
       const RelationSet leftSet{
-          keyRelationsOrOperand(edgeLeftKeys, columnToLeaf, leaves.left)};
-      const RelationSet rightSet{
-          keyRelationsOrOperand(edgeRightKeys, columnToLeaf, leaves.right)};
+          keyRelationsOrOperand(edgeLeftKeys, columnToLeaf, inputs.leftLeaves)};
+      const RelationSet rightSet{keyRelationsOrOperand(
+          edgeRightKeys, columnToLeaf, inputs.rightLeaves)};
       RelationSet ses{leftSet};
       ses.unionSet(rightSet);
       for (ExprCP conjunct : join->filter()) {
@@ -560,25 +606,30 @@ JoinHypergraph HypergraphBuilder::build(
       RelationSet tes{ses};
       tes.unionSet(tesExpansion(
           normalizedLeftChild,
-          leaves.joinType,
+          inputs.joinType,
           ses,
           /*leftSide=*/true,
           leafIds,
-          joinLeaves));
+          joinInputs));
       tes.unionSet(tesExpansion(
           normalizedRightChild,
-          leaves.joinType,
+          inputs.joinType,
           ses,
           /*leftSide=*/false,
           leafIds,
-          joinLeaves));
+          joinInputs));
+
+      // `populateJoinInputs` already applies the same right-form operand swap
+      // as the normalized child selection above.
+      const RelationSet& normalizedLeftRelations = inputs.leftRelations;
+      const RelationSet& normalizedRightRelations = inputs.rightRelations;
 
       // Outer-join barrier: if an Unnest's input subtree contributes a relation
       // on this outer join's null-padded side, the unnest edge must fire before
       // the outer join. Otherwise null-padding flows into UNNEST and rows drop.
       // Expand TES to include the Unnest relation id so DPhyp pins the order.
-      RelationSet joinRelations{leaves.left};
-      joinRelations.unionSet(leaves.right);
+      RelationSet joinRelations{inputs.leftLeaves};
+      joinRelations.unionSet(inputs.rightLeaves);
       for (const auto& [unnestId, inputRelations] : unnestInputRelations) {
         // An outer join inside the Unnest's input subtree is already ordered
         // before the Unnest by the unnest edge. The barrier would demand the
@@ -588,16 +639,24 @@ JoinHypergraph HypergraphBuilder::build(
           continue;
         }
         RelationSet nullPaddedSide;
-        if (leaves.joinType == velox::core::JoinType::kLeft) {
-          nullPaddedSide = leaves.right;
-        } else if (leaves.joinType == velox::core::JoinType::kFull) {
-          nullPaddedSide = leaves.left;
-          nullPaddedSide.unionSet(leaves.right);
+        if (inputs.joinType == velox::core::JoinType::kLeft) {
+          nullPaddedSide = inputs.rightLeaves;
+        } else if (inputs.joinType == velox::core::JoinType::kFull) {
+          nullPaddedSide = inputs.leftLeaves;
+          nullPaddedSide.unionSet(inputs.rightLeaves);
         }
         if (nullPaddedSide.hasIntersection(inputRelations)) {
+          VELOX_CHECK(
+              normalizedLeftRelations.contains(unnestId) ||
+                  normalizedRightRelations.contains(unnestId),
+              "Unnest must belong to one normalized join side: {}",
+              static_cast<int32_t>(unnestId));
           tes.add(unnestId);
         }
       }
+
+      auto [leftTes, rightTes] =
+          splitTes(tes, normalizedLeftRelations, normalizedRightRelations);
 
       // kLeftSemiProject preserves the left side and appends a mark; the
       // Join (and its Apply origin) build outputColumns as
@@ -606,7 +665,7 @@ JoinHypergraph HypergraphBuilder::build(
       // mark through reordering. The filtering forms (kLeftSemiFilter /
       // kAnti) carry no mark.
       ColumnCP markColumn =
-          leaves.joinType == velox::core::JoinType::kLeftSemiProject
+          inputs.joinType == velox::core::JoinType::kLeftSemiProject
           ? join->markColumn()
           : nullptr;
 
@@ -614,14 +673,15 @@ JoinHypergraph HypergraphBuilder::build(
           JoinEdge{
               leftSet,
               rightSet,
+              leftTes,
+              rightTes,
               edgeLeftKeys,
               edgeRightKeys,
               join->filter(),
-              leaves.joinType,
+              inputs.joinType,
               join->nullAware(),
               join->nullAsValue(),
-              markColumn},
-          tes);
+              markColumn});
     }
   }
 

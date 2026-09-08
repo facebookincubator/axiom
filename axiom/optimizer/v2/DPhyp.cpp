@@ -53,14 +53,16 @@ namespace {
 // True for the join types whose output keeps both sides' columns, so an inner
 // equality applied above the join can still read them. Semi and anti keep only
 // one side, so a co-crossing inner edge has nowhere to go.
-bool isOuterJoin(velox::core::JoinType joinType) {
-  return joinType == velox::core::JoinType::kLeft ||
+bool keepsBothInputs(velox::core::JoinType joinType) {
+  return joinType == velox::core::JoinType::kInner ||
+      joinType == velox::core::JoinType::kLeft ||
       joinType == velox::core::JoinType::kRight ||
       joinType == velox::core::JoinType::kFull;
 }
 
-// Vertices reachable from `set` via one hyperedge whose "other" side
-// is fully outside `set`. Excludes any vertex in `forbidden`.
+// Returns the minimum relation id from each reachable opposite hyperedge side,
+// provided the whole side is outside both `set` and `forbidden`. The minimum is
+// DPhyp's canonical seed for growing that side without emitting duplicates.
 RelationSet neighborhood(
     const JoinHypergraph& graph,
     RelationSet set,
@@ -68,16 +70,20 @@ RelationSet neighborhood(
   RelationSet result;
   for (const auto& edge : graph.edges()) {
     RelationSet other;
-    if (edge.left().isSubset(set) && !edge.right().hasIntersection(set)) {
-      other = edge.right();
+    if (edge.leftEligibility().isSubset(set) &&
+        !edge.rightEligibility().hasIntersection(set)) {
+      other = edge.rightEligibility();
     } else if (
-        edge.right().isSubset(set) && !edge.left().hasIntersection(set)) {
-      other = edge.left();
+        edge.rightEligibility().isSubset(set) &&
+        !edge.leftEligibility().hasIntersection(set)) {
+      other = edge.leftEligibility();
     } else {
       continue;
     }
-    other.except(forbidden);
-    result.unionSet(other);
+    if (other.hasIntersection(forbidden)) {
+      continue;
+    }
+    result.add(other.min());
   }
   return result;
 }
@@ -171,7 +177,7 @@ class EnumerationBudget {
   bool enforced_;
 };
 
-// Moerkotte/Neumann 2006 DPhyp (csg/cmp recursion).
+// Moerkotte/Neumann 2008 DPhyp (csg/cmp recursion).
 class Enumerator {
  public:
   // `enumerationBudget` caps the csg/cmp pairs evaluated before falling back to
@@ -272,10 +278,9 @@ class Enumerator {
           combined.unionSet(fragments[j]);
           emitCsgCmp(fragments[i], fragments[j]);
           const auto it = memo_.find(combined);
-          // emitCsgCmp records a pair only when an edge connects it and the
-          // join is costable — considerCandidate drops uncostable plans — so a
-          // missing entry means no edge or an unknown-NDV join key, and a
-          // present entry always has a known cardinality.
+          // emitCsgCmp records a pair only when it is valid and costable —
+          // considerCandidate drops uncostable plans — so a present entry
+          // always has a known cardinality.
           if (it == memo_.end()) {
             continue;
           }
@@ -294,13 +299,8 @@ class Enumerator {
         if (expandOneFragment(fragments)) {
           continue;
         }
-        // No remaining fragment pair can be costed into a single join. In a
-        // connected component connectivity is never the blocker — contracting
-        // merged fragments keeps the graph connected, so an edge-joined pair
-        // always exists — so every such pair must have unknown cardinality (a
-        // join key without NDV). Genuine cross products are split into separate
-        // components upstream, not handled here. Caller falls back to syntactic
-        // order.
+        // No remaining fragment pair produces a valid costable join. The
+        // caller falls back to syntactic order.
         return nullptr;
       }
       fragments[bestLeft] = bestCombined;
@@ -326,11 +326,11 @@ class Enumerator {
       for (const auto& edge : graph_.edges()) {
         RelationSet reached{set};
         reached.unionSet(gained);
-        if (!edge.isUnnest() || !edge.left().isSubset(reached) ||
-            edge.right().isSubset(reached)) {
+        if (!edge.isUnnest() || !edge.leftEligibility().isSubset(reached) ||
+            edge.rightEligibility().isSubset(reached)) {
           continue;
         }
-        gained.unionSet(edge.right());
+        gained.unionSet(edge.rightEligibility());
         grown = true;
       }
     }
@@ -356,11 +356,10 @@ class Enumerator {
         if (edge.isUnnest()) {
           continue;
         }
-        RelationSet endpoints{edge.left()};
-        endpoints.unionSet(edge.right());
+        const RelationSet edgeTes = edge.totalEligibility();
         // An edge wholly inside the expanded fragment joins nothing new; only
         // one reaching outside can merge this fragment with another.
-        if (!endpoints.hasIntersection(gained) || endpoints.isSubset(reached)) {
+        if (!edgeTes.hasIntersection(gained) || edgeTes.isSubset(reached)) {
           continue;
         }
         const RelationSet before = fragment;
@@ -368,8 +367,8 @@ class Enumerator {
         if (fragment != before) {
           return true;
         }
-        // The expansion has no costable plan. Leave this fragment alone and
-        // look for another; expanding it again would not get any further.
+        // The expansion has no valid costable plan. Leave this fragment alone
+        // and look for another; expanding it again would not get any further.
         break;
       }
     }
@@ -386,12 +385,12 @@ class Enumerator {
       for (size_t edgeIndex{0}; edgeIndex < graph_.edges().size();
            ++edgeIndex) {
         const auto& edge = graph_.edges()[edgeIndex];
-        if (!edge.isUnnest() || !edge.left().isSubset(set) ||
-            edge.right().isSubset(set)) {
+        if (!edge.isUnnest() || !edge.leftEligibility().isSubset(set) ||
+            edge.rightEligibility().isSubset(set)) {
           continue;
         }
         RelationSet expanded{set};
-        expanded.unionSet(edge.right());
+        expanded.unionSet(edge.rightEligibility());
         emitUnnest(set, edgeIndex, expanded, {});
         if (cheapestPlan(expanded) == nullptr) {
           continue;
@@ -470,18 +469,32 @@ class Enumerator {
     // DPhyp applies all predicates connecting the two subgraphs at the join;
     // with a cyclic join graph more than one edge can cross.
     folly::small_vector<std::pair<size_t, bool>, 4> crossing;
+    // Inner edges whose two sides do not split across this partition. They
+    // cannot be join keys here, but an inner join keeps every column they
+    // read, so the emitter applies them above it rather than losing the
+    // partition.
+    std::vector<size_t> filterEdges;
     for (size_t edgeIndex{0}; edgeIndex < graph_.edges().size(); ++edgeIndex) {
       const auto& edge = graph_.edges()[edgeIndex];
-      const bool forward =
-          edge.left().isSubset(subgraph) && edge.right().isSubset(complement);
-      const bool reverse =
-          edge.left().isSubset(complement) && edge.right().isSubset(subgraph);
-      if (!forward && !reverse) {
+      const RelationSet edgeTes = edge.totalEligibility();
+      if (edgeTes.isSubset(subgraph) || edgeTes.isSubset(complement)) {
         continue;
       }
-      // Skip edges whose TES is not yet covered.
-      if (!graph_.tes()[edgeIndex].isSubset(combined)) {
+      if (!edgeTes.isSubset(combined)) {
         continue;
+      }
+
+      const bool forward = edge.leftEligibility().isSubset(subgraph) &&
+          edge.rightEligibility().isSubset(complement);
+      const bool reverse = edge.leftEligibility().isSubset(complement) &&
+          edge.rightEligibility().isSubset(subgraph);
+      if (!forward && !reverse) {
+        if (!edge.isUnnest() &&
+            edge.joinType() == velox::core::JoinType::kInner) {
+          filterEdges.push_back(edgeIndex);
+          continue;
+        }
+        return;
       }
       crossing.push_back({edgeIndex, forward});
     }
@@ -489,14 +502,27 @@ class Enumerator {
     if (crossing.empty()) {
       return;
     }
+
+    // Filter edges are evaluated above the primary operator and may reference
+    // either input. A semi or anti join discards one input's columns, so its
+    // output cannot safely evaluate them.
+    const auto canApplyFilterEdges = [&](size_t edgeIndex) {
+      const auto& edge = graph_.edges()[edgeIndex];
+      return filterEdges.empty() || edge.isUnnest() ||
+          keepsBothInputs(edge.joinType());
+    };
     if (crossing.size() == 1) {
+      if (!canApplyFilterEdges(crossing[0].first)) {
+        return;
+      }
       applyCrossingEdge(
           crossing[0].first,
           crossing[0].second,
           subgraph,
           complement,
           combined,
-          {});
+          {},
+          std::move(filterEdges));
       return;
     }
 
@@ -523,12 +549,14 @@ class Enumerator {
 
     if (specialPosition.has_value()) {
       const size_t specialEdge = crossing[*specialPosition].first;
-      std::vector<size_t> residual;
-      residual.reserve(crossing.size() - 1);
+      filterEdges.reserve(filterEdges.size() + crossing.size() - 1);
       for (size_t i = 0; i < crossing.size(); ++i) {
         if (i != *specialPosition) {
-          residual.push_back(crossing[i].first);
+          filterEdges.push_back(crossing[i].first);
         }
+      }
+      if (!canApplyFilterEdges(specialEdge)) {
+        return;
       }
       applyCrossingEdge(
           specialEdge,
@@ -536,7 +564,8 @@ class Enumerator {
           subgraph,
           complement,
           combined,
-          std::move(residual));
+          {},
+          std::move(filterEdges));
       return;
     }
 
@@ -544,7 +573,7 @@ class Enumerator {
     // keys. Reaching here with an Unnest or a non-inner edge means two or more
     // of them cross, which has no single well-defined step; fail rather than
     // drop a predicate.
-    for (const auto& [edgeIndex, forward] : crossing) {
+    for (const auto& [edgeIndex, _] : crossing) {
       const auto& edge = graph_.edges()[edgeIndex];
       VELOX_CHECK(
           edge.joinType() == velox::core::JoinType::kInner && !edge.isUnnest(),
@@ -597,8 +626,8 @@ class Enumerator {
 
     const size_t primary{crossing.front().first};
     markClasses(graph_.edges()[primary]);
-    std::vector<size_t> extras;
-    extras.reserve(crossing.size() - 1);
+    std::vector<size_t> keyEdges;
+    keyEdges.reserve(crossing.size() - 1);
     for (size_t i = 1; i < crossing.size(); ++i) {
       const size_t edgeIndex = crossing[i].first;
       const JoinEdge& edge = graph_.edges()[edgeIndex];
@@ -606,7 +635,7 @@ class Enumerator {
         continue;
       }
       markClasses(edge);
-      extras.push_back(edgeIndex);
+      keyEdges.push_back(edgeIndex);
     }
     considerCandidate(
         leftPlan,
@@ -615,7 +644,8 @@ class Enumerator {
         velox::core::JoinType::kInner,
         combined,
         /*reversedAnti=*/false,
-        extras);
+        keyEdges,
+        filterEdges);
     considerCandidate(
         rightPlan,
         leftPlan,
@@ -623,7 +653,8 @@ class Enumerator {
         velox::core::JoinType::kInner,
         combined,
         /*reversedAnti=*/false,
-        extras);
+        keyEdges,
+        filterEdges);
   }
 
   // Applies the edge crossing this partition: an Unnest expands the side
@@ -635,7 +666,8 @@ class Enumerator {
       RelationSet subgraph,
       RelationSet complement,
       RelationSet combined,
-      std::vector<size_t> extraEdges) {
+      std::vector<size_t> keyEdges,
+      std::vector<size_t> filterEdges) {
     const auto& edge = graph_.edges()[edgeIndex];
     if (edge.isUnnest()) {
       // Enumeration never seeds a subgraph from the Unnest relation and grows
@@ -643,10 +675,11 @@ class Enumerator {
       // the complement, alone. A complement holding anything else is a set the
       // enumeration cannot build; expanding it would record a plan under a
       // cover it never assembled.
-      if (complement != edge.right()) {
+      if (complement != edge.rightEligibility()) {
         return;
       }
-      emitUnnest(subgraph, edgeIndex, combined, std::move(extraEdges));
+      VELOX_DCHECK(keyEdges.empty());
+      emitUnnest(subgraph, edgeIndex, combined, std::move(filterEdges));
       return;
     }
 
@@ -661,7 +694,8 @@ class Enumerator {
         leftPlan,
         rightPlan,
         combined,
-        std::move(extraEdges));
+        std::move(keyEdges),
+        std::move(filterEdges));
   }
 
   // Adds the candidate that expands `inputSet`'s plan by the Unnest relation
@@ -671,7 +705,7 @@ class Enumerator {
       RelationSet inputSet,
       size_t edgeIndex,
       RelationSet combined,
-      std::vector<size_t> extraEdges) {
+      std::vector<size_t> filterEdges) {
     MemoOpCP input = cheapestPlan(inputSet);
     if (input == nullptr) {
       return;
@@ -681,8 +715,8 @@ class Enumerator {
         Cost{},
         input,
         edgeIndex,
-        graph_.edges()[edgeIndex].right(),
-        std::move(extraEdges));
+        graph_.edges()[edgeIndex].rightEndpoints(),
+        std::move(filterEdges));
     // The memo is keyed by cover, so a candidate filed under a set it does not
     // cover would claim relations no operator below it reads.
     VELOX_DCHECK_EQ(candidate->cover().bits(), combined.bits());
@@ -695,22 +729,28 @@ class Enumerator {
 
   // Emits join candidates for a single edge crossing the partition,
   // preserving orientation rules (native-only for anti / null-aware
-  // semi-project; both orientations otherwise). `extraEdges` are
-  // co-crossing inner edges the emitter applies as a filter above the join.
+  // semi-project; both orientations otherwise). `keyEdges` become additional
+  // join keys; `filterEdges` are applied as a filter above the join.
   void emitSingleEdge(
       size_t edgeIndex,
       bool forward,
       MemoOpCP leftPlan,
       MemoOpCP rightPlan,
       RelationSet combined,
-      std::vector<size_t> extraEdges) {
+      std::vector<size_t> keyEdges,
+      std::vector<size_t> filterEdges) {
     const auto& edge = graph_.edges()[edgeIndex];
-    // Extra edges reach the emitter as a filter above the join, which only an
-    // outer join can carry: it keeps every column the equalities read. Semi and
-    // anti keep one side only.
+    // An additional key edge contributes hash keys and a filter edge becomes
+    // a filter above the join. Either way the join must keep every column the
+    // equalities read, which inner and outer joins do. Semi and anti keep one
+    // side only.
     VELOX_CHECK(
-        extraEdges.empty() || isOuterJoin(edge.joinType()),
-        "An edge crossing a join partition alongside a {} edge is not supported",
+        keyEdges.empty() || edge.joinType() == velox::core::JoinType::kInner,
+        "An additional join-key edge alongside a {} edge is not supported",
+        edge.joinTypeName());
+    VELOX_CHECK(
+        filterEdges.empty() || keepsBothInputs(edge.joinType()),
+        "A filter edge alongside a {} edge is not supported",
         edge.joinTypeName());
     // `probeOnLeft` plays the edge's left operand; `probeOnRight` its right.
     MemoOpCP probeOnLeft = forward ? leftPlan : rightPlan;
@@ -727,7 +767,8 @@ class Enumerator {
           edge.joinType(),
           combined,
           /*reversedAnti=*/false,
-          std::move(extraEdges));
+          std::move(keyEdges),
+          std::move(filterEdges));
       // Antijoin can additionally build on the preserved (left) side by
       // probing with the right input (the reversed orientation).
       if (edge.joinType() == velox::core::JoinType::kAnti &&
@@ -744,8 +785,8 @@ class Enumerator {
     }
 
     // Flip the joinType when the subgraph plays the edge's right operand. The
-    // extra edges are equalities filtering the output, so they are carried
-    // unchanged into either orientation.
+    // Filter edges are equalities evaluated above the output, so they are
+    // carried unchanged into either orientation.
     const auto leftTypeForSubgraph =
         forward ? edge.joinType() : flipJoinType(edge.joinType());
     considerCandidate(
@@ -755,7 +796,8 @@ class Enumerator {
         leftTypeForSubgraph,
         combined,
         /*reversedAnti=*/false,
-        extraEdges);
+        keyEdges,
+        filterEdges);
     considerCandidate(
         rightPlan,
         leftPlan,
@@ -763,7 +805,8 @@ class Enumerator {
         flipJoinType(leftTypeForSubgraph),
         combined,
         /*reversedAnti=*/false,
-        std::move(extraEdges));
+        std::move(keyEdges),
+        std::move(filterEdges));
   }
 
   // Records an enforcement exchange and returns a stable pointer to it.
@@ -887,23 +930,23 @@ class Enumerator {
   }
 
   // Equi-keys oriented to the physical (left, right) children across the
-  // primary and extra edges.
+  // primary edge and additional key edges.
   std::pair<ExprVector, ExprVector> orientedKeys(
       MemoOpCP left,
       size_t edgeIndex,
-      const std::vector<size_t>& extraEdges) {
+      const std::vector<size_t>& keyEdges) {
     ExprVector leftKeys;
     ExprVector rightKeys;
     const auto collect = [&](const JoinEdge& edge) {
-      const bool leftIsLeft = edge.left().isSubset(left->cover());
+      const bool leftIsLeft = edge.leftEligibility().isSubset(left->cover());
       const auto& edgeLeft = leftIsLeft ? edge.leftKeys() : edge.rightKeys();
       const auto& edgeRight = leftIsLeft ? edge.rightKeys() : edge.leftKeys();
       leftKeys.insert(leftKeys.end(), edgeLeft.begin(), edgeLeft.end());
       rightKeys.insert(rightKeys.end(), edgeRight.begin(), edgeRight.end());
     };
     collect(graph_.edges()[edgeIndex]);
-    for (size_t extra : extraEdges) {
-      collect(graph_.edges()[extra]);
+    for (size_t keyEdgeIndex : keyEdges) {
+      collect(graph_.edges()[keyEdgeIndex]);
     }
     return {std::move(leftKeys), std::move(rightKeys)};
   }
@@ -937,7 +980,8 @@ class Enumerator {
       velox::core::JoinType joinType,
       RelationSet combined,
       bool reversedAnti,
-      std::vector<size_t> extraEdges,
+      std::vector<size_t> keyEdges,
+      std::vector<size_t> filterEdges,
       Partitioning outputPartitioning) {
     // One budget unit per candidate, not per csg/cmp pair: at numWorkers>1 a
     // pair fans out into several distribution variants, so candidate count is
@@ -950,7 +994,8 @@ class Enumerator {
         edgeIndex,
         joinType,
         reversedAnti,
-        std::move(extraEdges),
+        std::move(keyEdges),
+        std::move(filterEdges),
         std::move(outputPartitioning));
     candidate->cost = costModel_.cost(candidate.get(), graph_);
     // An uncostable subplan cannot be ranked or built on; drop it.
@@ -973,7 +1018,8 @@ class Enumerator {
       velox::core::JoinType joinType,
       RelationSet combined,
       bool reversedAnti,
-      const std::vector<size_t>& extraEdges) {
+      const std::vector<size_t>& keyEdges,
+      const std::vector<size_t>& filterEdges) {
     MemoOpCP leftBucketed = bucketedOn(left->cover(), leftKeys);
     MemoOpCP rightBucketed = bucketedOn(right->cover(), rightKeys);
     if (leftBucketed == nullptr && rightBucketed == nullptr) {
@@ -993,7 +1039,8 @@ class Enumerator {
           joinType,
           combined,
           reversedAnti,
-          extraEdges,
+          keyEdges,
+          filterEdges,
           std::move(outputPartitioning));
     };
 
@@ -1040,7 +1087,8 @@ class Enumerator {
       velox::core::JoinType joinType,
       RelationSet combined,
       bool reversedAnti = false,
-      std::vector<size_t> extraEdges = {}) {
+      std::vector<size_t> keyEdges = {},
+      std::vector<size_t> filterEdges = {}) {
     // Single-fragment: children as selected, no exchange, no output
     // partitioning.
     if (numWorkers_ == 1) {
@@ -1051,7 +1099,8 @@ class Enumerator {
           joinType,
           combined,
           reversedAnti,
-          std::move(extraEdges),
+          std::move(keyEdges),
+          std::move(filterEdges),
           {});
       return;
     }
@@ -1068,12 +1117,12 @@ class Enumerator {
           joinType,
           combined,
           reversedAnti,
-          extraEdges,
+          keyEdges,
+          filterEdges,
           Partitioning::globalGather());
     }
 
-    const auto [leftKeys, rightKeys] =
-        orientedKeys(left, edgeIndex, extraEdges);
+    const auto [leftKeys, rightKeys] = orientedKeys(left, edgeIndex, keyEdges);
     if (!leftKeys.empty()) {
       // Partition strategy: co-partition both inputs on the join keys; the
       // output is partitioned on the keys for same-key reuse above. A
@@ -1083,9 +1132,9 @@ class Enumerator {
       // orientation.
       const auto& edge = graph_.edges()[edgeIndex];
       const bool existenceOnLeft =
-          edge.nullAware() && edge.right().isSubset(left->cover());
+          edge.nullAware() && edge.rightEligibility().isSubset(left->cover());
       const bool existenceOnRight =
-          edge.nullAware() && edge.right().isSubset(right->cover());
+          edge.nullAware() && edge.rightEligibility().isSubset(right->cover());
       MemoOpCP leftPart =
           repartitioned(left->cover(), leftKeys, existenceOnLeft);
       MemoOpCP rightPart =
@@ -1098,7 +1147,8 @@ class Enumerator {
             joinType,
             combined,
             reversedAnti,
-            extraEdges,
+            keyEdges,
+            filterEdges,
             Partitioning::globalHash(keysInCoverSchema(leftKeys, combined)));
       }
 
@@ -1115,7 +1165,8 @@ class Enumerator {
             joinType,
             combined,
             reversedAnti,
-            extraEdges);
+            keyEdges,
+            filterEdges);
       }
     }
 
@@ -1134,7 +1185,8 @@ class Enumerator {
             joinType,
             combined,
             reversedAnti,
-            extraEdges,
+            keyEdges,
+            filterEdges,
             left->outputPartitioning());
       }
     }
@@ -1237,7 +1289,8 @@ void collectAppliedEdges(MemoOpCP plan, folly::F14FastSet<size_t>& applied) {
     case MemoOpKind::kJoin: {
       const auto* join = plan->as<JoinOp>();
       applied.insert(join->edgeIndex);
-      applied.insert(join->extraEdges.begin(), join->extraEdges.end());
+      applied.insert(join->keyEdges.begin(), join->keyEdges.end());
+      applied.insert(join->filterEdges.begin(), join->filterEdges.end());
       collectAppliedEdges(join->left, applied);
       collectAppliedEdges(join->right, applied);
       return;
@@ -1245,7 +1298,7 @@ void collectAppliedEdges(MemoOpCP plan, folly::F14FastSet<size_t>& applied) {
     case MemoOpKind::kUnnest: {
       const auto* unnest = plan->as<UnnestOp>();
       applied.insert(unnest->edgeIndex);
-      applied.insert(unnest->extraEdges.begin(), unnest->extraEdges.end());
+      applied.insert(unnest->filterEdges.begin(), unnest->filterEdges.end());
       collectAppliedEdges(unnest->input, applied);
       return;
     }
@@ -1299,8 +1352,8 @@ const MemoOp* DPhyp::enumerate() {
 
   const auto rootIt = memo_.find(allRelations);
   if (rootIt == memo_.end()) {
-    // No costable plan for the full set: some relation or edge lacked stats.
-    // The caller falls back to the query's syntactic join order.
+    // No valid costable plan for the full set. The caller falls back to the
+    // query's syntactic join order.
     return nullptr;
   }
   MemoOpCP root = rootIt->second.cheapest();
@@ -1335,8 +1388,8 @@ std::vector<MemoOpCP> DPhyp::enumerate(
       root = it == memo_.end() ? nullptr : it->second.cheapest();
     }
     if (root == nullptr) {
-      // A component has no costable plan: some relation or edge lacked stats.
-      // Signal whole-cluster fall back to syntactic order by returning empty.
+      // A component has no valid costable plan. Signal whole-cluster fallback
+      // to syntactic order by returning empty.
       return {};
     }
     roots.push_back(root);

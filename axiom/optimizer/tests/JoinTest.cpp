@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <unordered_map>
+
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
@@ -32,6 +34,19 @@ class JoinTest : public test::QueryTestBase,
     return lp::PlanBuilder::Context{kTestConnectorId, kDefaultSchema};
   }
 
+  // Adds an all-BIGINT table whose columns each have `numRows` distinct values.
+  void addTableWithStats(
+      const std::string& name,
+      const std::vector<std::string>& columns,
+      int64_t numRows) {
+    std::unordered_map<std::string, connector::ColumnStatistics> stats;
+    for (const auto& column : columns) {
+      stats[column] = {.numDistinct = numRows};
+    }
+    testConnector_->addTable(name, ROW(columns, BIGINT()))
+        ->setStats(numRows, stats);
+  }
+
   using test::QueryTestBase::toSingleNodePlan;
 
   velox::core::PlanNodePtr toSingleNodePlan(std::string_view sql) {
@@ -47,20 +62,8 @@ class JoinTest : public test::QueryTestBase,
 // A derived join must preserve every equality class for its relation pair,
 // including classes not covered by a written edge on that pair.
 TEST_P(JoinTest, derivedCompositeEdgePreservesAllEqualities) {
-  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
-      ->setStats(
-          100,
-          {
-              {"a", {.numDistinct = 100}},
-              {"b", {.numDistinct = 100}},
-          });
-  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
-      ->setStats(
-          1'000'000,
-          {
-              {"x", {.numDistinct = 1'000'000}},
-              {"y", {.numDistinct = 1'000'000}},
-          });
+  addTableWithStats("t", {"a", "b"}, 100);
+  addTableWithStats("u", {"x", "y"}, 1'000'000);
   testConnector_->addTable("v", ROW({"k", "l", "m"}, BIGINT()))
       ->setStats(
           10,
@@ -170,33 +173,6 @@ TEST_P(JoinTest, derivedCompositeEdgePreservesAllEqualities) {
   }
 }
 
-// A CTE joined to itself on both of its columns matches each row only with
-// itself, so the query returns one row per CTE row and v1 plans it. v2
-// reordering drops one of the two equalities; until it stops doing so the
-// guard fails the query, which is what this pins.
-//
-// TODO: Move to join.sql once v2 keeps both equalities.
-TEST_P(JoinTest, selfJoinOnEveryColumn) {
-  const auto query =
-      "WITH "
-      "  ids (id) AS (VALUES (1)), "
-      "  labels (id, label) AS (VALUES (1, 'a'), (1, 'b')), "
-      "  extra (id) AS (VALUES (1)), "
-      "  labeled AS ("
-      "    SELECT ids.id, labels.label FROM ids "
-      "    JOIN labels ON labels.id = ids.id "
-      "    LEFT JOIN extra ON extra.id = ids.id) "
-      "SELECT count(*) FROM labeled AS x "
-      "JOIN labeled AS y ON x.id = y.id AND x.label = y.label";
-
-  if (useV2_) {
-    VELOX_ASSERT_THROW(
-        toSingleNodePlan(query), "Plan does not enforce a join equality");
-  } else {
-    ASSERT_NO_THROW(toSingleNodePlan(query));
-  }
-}
-
 TEST_P(JoinTest, pushdownFilterThroughJoin) {
   testConnector_->addTable("t", ROW({"t_id", "t_data"}, BIGINT()));
   testConnector_->addTable("u", ROW({"u_id", "u_data"}, BIGINT()));
@@ -287,6 +263,61 @@ TEST_P(JoinTest, hyperEdge) {
                      .build();
   auto plan = toSingleNodePlan(logicalPlan);
   AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+// A key spanning two relations on one side remains enforced when the chosen
+// join order cannot orient it as a join key.
+TEST_P(JoinTest, multiRelationJoinKey) {
+  addTableWithStats("t", {"a", "b"}, 100);
+  addTableWithStats("u", {"x", "y", "z"}, 100);
+  addTableWithStats("v", {"k", "l", "m"}, 10);
+
+  const auto query =
+      "SELECT m "
+      "FROM t "
+      "JOIN u ON t.a = u.x "
+      "JOIN v ON u.z = v.k AND t.b + u.y = v.l";
+  SCOPED_TRACE(query);
+  const auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+
+  const auto matcher = matchScan("t")
+                           .hashJoinInner(
+                               matchScan("u").hashJoinInner(
+                                   matchScan("v"), {.keys = {{"z = k"}}}),
+                               {.keys = {{"a = x"}}})
+                           .filter("l = b + y")
+                           .project({"m"})
+                           .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+// Join reordering preserves every equality in a composite join condition.
+TEST_P(JoinTest, compositeKeyAboveLeftJoin) {
+  addTableWithStats("t", {"a", "b", "c"}, 100);
+  addTableWithStats("u", {"e"}, 100);
+  addTableWithStats("w", {"i"}, 1);
+  addTableWithStats("x", {"j", "k"}, 1);
+
+  const auto query =
+      "SELECT b "
+      "FROM (t JOIN u ON t.a = u.e LEFT JOIN w ON t.c = w.i) "
+      "JOIN x ON t.a = x.j AND t.b = x.k";
+  SCOPED_TRACE(query);
+  const auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+
+  // TODO: Expect `b = k` as the only filter predicate; the preceding join
+  // already guarantees `a = e`.
+  const auto matcher =
+      matchScan("t")
+          .hashJoinInner(
+              matchScan("u").hashJoinInner(
+                  matchScan("x"), {.keys = {{"e = j"}}}),
+              {.keys = {{"a = e"}}})
+          .filter("a = e AND b = k")
+          .hashJoinLeft(
+              matchScan("w"), {.keys = std::vector<std::string>{"c = i"}})
+          .build();
+  AXIOM_ASSERT_PLAN_V2(plan, matcher);
 }
 
 TEST_P(JoinTest, joinWithFilterOverLimit) {
@@ -1418,10 +1449,7 @@ TEST_P(JoinTest, constantFalseOuterJoinElimination) {
 }
 
 TEST_P(JoinTest, impliedJoins) {
-  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
-      ->setStats(
-          10'000,
-          {{"a", {.numDistinct = 10'000}}, {"b", {.numDistinct = 10'000}}});
+  addTableWithStats("t", {"a", "b"}, 10'000);
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
       ->setStats(
           1'000, {{"x", {.numDistinct = 10}}, {"y", {.numDistinct = 1'000}}});
@@ -1542,10 +1570,7 @@ TEST_P(JoinTest, impliedSameInputJoinFilters) {
     GTEST_SKIP() << "Not supported by the V2 optimizer";
   }
 
-  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
-      ->setStats(
-          10'000,
-          {{"a", {.numDistinct = 10'000}}, {"b", {.numDistinct = 10'000}}});
+  addTableWithStats("t", {"a", "b"}, 10'000);
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
       ->setStats(
           1'000, {{"x", {.numDistinct = 10}}, {"y", {.numDistinct = 1'000}}});
@@ -1612,10 +1637,7 @@ TEST_P(JoinTest, impliedSameInputJoinFilters) {
 // TODO: Assert the V2 plan after it propagates semi-joins across equivalent
 // join keys.
 TEST_P(JoinTest, impliedSemiJoinPropagation) {
-  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
-      ->setStats(
-          10'000,
-          {{"a", {.numDistinct = 10'000}}, {"b", {.numDistinct = 10'000}}});
+  addTableWithStats("t", {"a", "b"}, 10'000);
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
       ->setStats(
           1'000, {{"x", {.numDistinct = 10}}, {"y", {.numDistinct = 1'000}}});
@@ -1986,8 +2008,7 @@ TEST_P(JoinTest, impliedSameTableEqualityBelowAggregation) {
 // output, the implied equality can't push below the aggregation and stays
 // as a post-aggregation Filter (HAVING).
 TEST_P(JoinTest, impliedSameTableEqualityInHaving) {
-  testConnector_->addTable("t", ROW({"k"}, BIGINT()))
-      ->setStats(10'000, {{"k", {.numDistinct = 10'000}}});
+  addTableWithStats("t", {"k"}, 10'000);
   testConnector_->addTable("u", ROW({"x"}, BIGINT()))
       ->setStats(1'000, {{"x", {.numDistinct = 10}}});
 
@@ -2477,18 +2498,10 @@ TEST_P(JoinTest, greedySnowflakeLeftDeep) {
       ->setStats(
           10'000'000,
           {{"fact_a", {.numDistinct = 100}}, {"fact_b", {.numDistinct = 100}}});
-  testConnector_->addTable("dim_a", ROW({"da_key", "da_sub"}, BIGINT()))
-      ->setStats(
-          100,
-          {{"da_key", {.numDistinct = 100}}, {"da_sub", {.numDistinct = 100}}});
-  testConnector_->addTable("sub_a", ROW({"sa_key"}, BIGINT()))
-      ->setStats(10, {{"sa_key", {.numDistinct = 10}}});
-  testConnector_->addTable("dim_b", ROW({"db_key", "db_sub"}, BIGINT()))
-      ->setStats(
-          100,
-          {{"db_key", {.numDistinct = 100}}, {"db_sub", {.numDistinct = 100}}});
-  testConnector_->addTable("sub_b", ROW({"sb_key"}, BIGINT()))
-      ->setStats(10, {{"sb_key", {.numDistinct = 10}}});
+  addTableWithStats("dim_a", {"da_key", "da_sub"}, 100);
+  addTableWithStats("sub_a", {"sa_key"}, 10);
+  addTableWithStats("dim_b", {"db_key", "db_sub"}, 100);
+  addTableWithStats("sub_b", {"sb_key"}, 10);
 
   auto ctx = makeContext();
   auto logicalPlan = lp::PlanBuilder{ctx}
@@ -2626,18 +2639,10 @@ TEST_P(JoinTest, dphypGreedySnowflake) {
       ->setStats(
           10'000'000,
           {{"fact_a", {.numDistinct = 100}}, {"fact_b", {.numDistinct = 100}}});
-  testConnector_->addTable("dim_a", ROW({"da_key", "da_sub"}, BIGINT()))
-      ->setStats(
-          100,
-          {{"da_key", {.numDistinct = 100}}, {"da_sub", {.numDistinct = 100}}});
-  testConnector_->addTable("sub_a", ROW({"sa_key"}, BIGINT()))
-      ->setStats(10, {{"sa_key", {.numDistinct = 10}}});
-  testConnector_->addTable("dim_b", ROW({"db_key", "db_sub"}, BIGINT()))
-      ->setStats(
-          100,
-          {{"db_key", {.numDistinct = 100}}, {"db_sub", {.numDistinct = 100}}});
-  testConnector_->addTable("sub_b", ROW({"sb_key"}, BIGINT()))
-      ->setStats(10, {{"sb_key", {.numDistinct = 10}}});
+  addTableWithStats("dim_a", {"da_key", "da_sub"}, 100);
+  addTableWithStats("sub_a", {"sa_key"}, 10);
+  addTableWithStats("dim_b", {"db_key", "db_sub"}, 100);
+  addTableWithStats("sub_b", {"sb_key"}, 10);
 
   auto ctx = makeContext();
   auto logicalPlan = lp::PlanBuilder{ctx}

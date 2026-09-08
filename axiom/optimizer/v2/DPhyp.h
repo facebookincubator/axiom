@@ -32,7 +32,7 @@ namespace facebook::axiom::optimizer::v2 {
 class CostModel;
 
 /// Bottom-up DP join-order enumeration over a `JoinHypergraph`
-/// (Moerkotte/Neumann 2006 DPhyp: connected-subgraph + complement
+/// (Moerkotte/Neumann 2008 DPhyp: connected-subgraph + complement
 /// enumeration).
 ///
 /// Invariants:
@@ -56,10 +56,9 @@ class DPhyp {
       int32_t numWorkers,
       int64_t broadcastSizeLimit);
 
-  /// Runs the enumeration and returns the root `MemoOp` for the full
-  /// relation set, or nullptr when no costable plan exists (some relation
-  /// or edge had unknown cost). A nullptr return tells the caller to fall
-  /// back to the query's syntactic join order.
+  /// Runs the enumeration and returns the root `MemoOp` for the full relation
+  /// set, or nullptr when no valid costable plan was produced. A nullptr
+  /// return tells the caller to fall back to the query's syntactic join order.
   MemoOpCP enumerate();
 
   /// Runs enumeration once and returns the optimal plan for each
@@ -67,8 +66,8 @@ class DPhyp {
   /// relation set and together they must cover all relations. Use when
   /// the hypergraph is disconnected (genuine cross products); the caller
   /// combines the per-component plans with cross joins. Returns an empty
-  /// vector when any component has no costable plan (some relation or edge
-  /// had unknown cost), telling the caller to fall back to syntactic order.
+  /// vector when any component has no valid costable plan, telling the caller
+  /// to fall back to syntactic order.
   std::vector<MemoOpCP> enumerate(const std::vector<RelationSet>& components);
 
  private:
