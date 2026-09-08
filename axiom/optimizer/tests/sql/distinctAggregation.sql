@@ -60,6 +60,12 @@ SELECT a, covar_pop(DISTINCT c, CAST(b AS DOUBLE)), covar_samp(DISTINCT CAST(b A
 -- DISTINCT: mix of DISTINCT and non-DISTINCT aggregates.
 SELECT a, count(DISTINCT c), sum(CAST(b AS DOUBLE)) FROM t GROUP BY a
 ----
+-- DISTINCT: mixed aggregates after a join expands pre-grouped input.
+SELECT q.a, count(DISTINCT u.b), sum(u.c)
+FROM (SELECT a FROM t GROUP BY a) q
+LEFT JOIN t u ON q.a >= u.a
+GROUP BY q.a
+----
 -- DISTINCT: global aggregation with multiple DISTINCT sets.
 SELECT count(DISTINCT c), sum(DISTINCT CAST(b AS DOUBLE)) FROM t
 ----

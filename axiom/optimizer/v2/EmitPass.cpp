@@ -412,6 +412,11 @@ class Emitter {
   velox::core::PlanNodePtr emitSingleAggregation(const Aggregate& aggregate);
   velox::core::PlanNodePtr emitPartialAggregation(const Aggregate& aggregate);
   velox::core::PlanNodePtr emitFinalAggregation(const Aggregate& aggregate);
+  // Returns local grouping keys that remain valid after emission-time
+  // operators absent from the V2 IR have been inserted.
+  ExprVector preGroupedKeysForEmission(
+      NodeCP input,
+      const ExprVector& groupingKeys) const;
   // Builds an AggregationNode, carrying the grouping-set default-row info
   // (`globalGroupingSets`/`groupId`) from `aggregate` when present.
   velox::core::PlanNodePtr makeAggregationNode(
@@ -948,6 +953,17 @@ buildAggregates(
 
 } // namespace
 
+ExprVector Emitter::preGroupedKeysForEmission(
+    NodeCP input,
+    const ExprVector& groupingKeys) const {
+  // Multi-driver MarkDistinct emission inserts an unmodeled local repartition
+  // on its distinct keys, invalidating inherited grouping and order.
+  if (options_.numDrivers > 1 && input->is(NodeType::kMarkDistinct)) {
+    return {};
+  }
+  return computePreGroupedKeys(input->physicalProperties().local, groupingKeys);
+}
+
 velox::core::PlanNodePtr Emitter::emitAggregation(const Aggregate& aggregate) {
   switch (aggregate.step()) {
     case AggregateStep::kPartial:
@@ -1011,9 +1027,7 @@ velox::core::PlanNodePtr Emitter::emitSingleAggregation(
   // An aggregation over input already grouped on (a prefix of) the keys streams
   // instead of building a full hash table.
   auto preGroupedKeys = toFieldAccessList(
-      computePreGroupedKeys(
-          aggregate.input()->physicalProperties().local,
-          aggregate.groupingKeys()),
+      preGroupedKeysForEmission(aggregate.input(), aggregate.groupingKeys()),
       "Pre-grouped key");
 
   // At numDrivers > 1 a group's rows must all reach one driver. Skip the local
@@ -1642,8 +1656,7 @@ velox::core::PlanNodePtr Emitter::emitEnforceDistinct(
   // Stream (no hash table) over input already grouped on a prefix of the
   // distinct keys, mirroring how the aggregation derives its pre-grouped keys.
   auto preGroupedKeys = toFieldAccessList(
-      computePreGroupedKeys(
-          node.input()->physicalProperties().local, node.distinctKeys()),
+      preGroupedKeysForEmission(node.input(), node.distinctKeys()),
       "EnforceDistinct pre-grouped key");
   // At numDrivers > 1 each distinct-key group must be complete in one driver.
   // Skip when the input is pre-grouped on the keys: a local grouping guarantees

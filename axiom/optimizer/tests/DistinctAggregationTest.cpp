@@ -463,6 +463,39 @@ TEST_P(DistinctAggregationTest, markDistinctMixedDistinctAndNonDistinct) {
           .build());
 }
 
+TEST_P(DistinctAggregationTest, markDistinctPreGroupedInput) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  auto logicalPlan = parseSelect(
+      "SELECT q.a, count(DISTINCT q.d), sum(q.z) "
+      "FROM (SELECT a, max(b) AS d, sum(c) AS z FROM t GROUP BY a) q "
+      "GROUP BY q.a",
+      kTestConnectorId);
+
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(logicalPlan, /*numDrivers=*/1),
+      matchScan("t")
+          .singleAggregation({"a"}, {"max(b)", "sum(c)"})
+          .markDistinct({"a", "d"}, {"m0"})
+          .streamingAggregation({"a"}, {"count(d) filter (where m0)", "sum(z)"})
+          .build());
+
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(logicalPlan, /*numDrivers=*/4),
+      matchScan("t")
+          .partialAggregation({"a"}, {"max(b)", "sum(c)"})
+          .localPartition({"a"})
+          .finalAggregation()
+          .localPartition({"a", "d"})
+          .markDistinct({"a", "d"}, {"m0"})
+          .localPartition({"a"})
+          .singleAggregation({"a"}, {"count(d) filter (where m0)", "sum(z)"})
+          .build());
+}
+
 // V1 is better: it plans MarkDistinct distribution before selecting the outer
 // Aggregate stages, enabling distributed deduplication and partial aggregation.
 // TODO: Make V2 lower DISTINCT-to-MarkDistinct inside physical aggregation
