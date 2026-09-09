@@ -49,8 +49,35 @@ set(VELOX_BUILD_TESTING OFF)
 
 set(VELOX_DEPENDENCY_SOURCE AUTO CACHE STRING "Default dependency source: AUTO SYSTEM or BUNDLED.")
 
+option(
+  AXIOM_PREFER_DEPS_INSTALL
+  "Prefer dependency packages from the local deps-install directory."
+  ON
+)
+
+if(AXIOM_PREFER_DEPS_INSTALL AND EXISTS "${PROJECT_SOURCE_DIR}/deps-install")
+  list(PREPEND CMAKE_PREFIX_PATH "${PROJECT_SOURCE_DIR}/deps-install")
+
+  foreach(_dependency IN ITEMS absl fmt iceberg re2)
+    set(_dependency_dir "${PROJECT_SOURCE_DIR}/deps-install/lib/cmake/${_dependency}")
+    if(EXISTS "${_dependency_dir}")
+      set(${_dependency}_DIR "${_dependency_dir}" CACHE PATH "Path to ${_dependency} package" FORCE)
+    endif()
+  endforeach()
+
+  set(_s2_dir "${PROJECT_SOURCE_DIR}/deps-install/share/s2")
+  if(EXISTS "${_s2_dir}")
+    set(s2_DIR "${_s2_dir}" CACHE PATH "Path to s2 package" FORCE)
+  endif()
+endif()
+
 option(AXIOM_ENABLE_CCACHE "Use ccache if installed." ON)
 option(AXIOM_ENABLE_COLLAGEN "Build Collagen (Spark Connect server)." OFF)
+option(
+  AXIOM_ENABLE_ICEBERG_CPP
+  "Resolve Apache Iceberg C++ REST/catalog dependency for the Iceberg connector."
+  OFF
+)
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
@@ -160,6 +187,10 @@ velox_set_source(antlr4-runtime)
 velox_resolve_dependency(antlr4-runtime)
 
 message(STATUS "Using ANTLR4 runtime from ${ANTLR4_INCLUDE_DIR}")
+
+if(AXIOM_ENABLE_ICEBERG_CPP)
+  include(iceberg-cpp)
+endif()
 
 # Dependencies for the PySpark/Collagen server.
 if(AXIOM_ENABLE_COLLAGEN)
