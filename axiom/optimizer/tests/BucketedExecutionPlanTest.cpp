@@ -73,7 +73,9 @@ class BucketedExecutionTest : public test::QueryTestBase,
 
   PlanAndStats planDistributed(const lp::LogicalPlanNodePtr& logicalPlan) {
     return planVelox(
-        logicalPlan, {.numWorkers = 4, .numDrivers = 4}, optimizerOptions_);
+        logicalPlan,
+        {.maxRemotePartitions = 4, .maxLocalPartitions = 4},
+        optimizerOptions_);
   }
 
   static void expectBucketedFragmentWithWidth(
@@ -87,8 +89,8 @@ class BucketedExecutionTest : public test::QueryTestBase,
         continue;
       }
       EXPECT_EQ(fragment.type, FragmentType::kFixed);
-      ASSERT_TRUE(fragment.width.has_value());
-      EXPECT_EQ(*fragment.width, expectedWidth);
+      ASSERT_TRUE(fragment.numRemotePartitions.has_value());
+      EXPECT_EQ(*fragment.numRemotePartitions, expectedWidth);
       int32_t bucketedScans = 0;
       int32_t hashExchanges = 0;
       for (const auto& [_, partitionType] : fragment.groupedNodes) {
@@ -1095,7 +1097,7 @@ TEST_P(BucketedExecutionTest, incompatibleBucketingOnOneWorker) {
           "SELECT * FROM w1_t JOIN w1_u "
           "ON w1_t.customer_id = w1_u.id",
           kTestConnectorId),
-      {.numWorkers = 1, .numDrivers = 4},
+      {.maxRemotePartitions = 1, .maxLocalPartitions = 4},
       optimizerOptions_);
 
   AXIOM_ASSERT_DISTRIBUTED_PLAN(

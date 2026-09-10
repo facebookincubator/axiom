@@ -132,8 +132,8 @@ facebook::axiom::optimizer::PlanAndStats optimize(
   auto history = std::make_unique<facebook::axiom::optimizer::VeloxHistory>();
 
   facebook::axiom::optimizer::MultiFragmentPlan::Options runnerOpts{
-      .numWorkers = 1,
-      .numDrivers = 1,
+      .maxRemotePartitions = 1,
+      .maxLocalPartitions = 1,
   };
 
   auto queryCtx = velox::core::QueryCtx::create();

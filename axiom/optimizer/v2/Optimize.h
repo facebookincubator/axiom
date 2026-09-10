@@ -90,9 +90,10 @@ class Optimizer {
   ///   - ExpandAggregate — lower distinct aggregates to `MarkDistinct`;
   ///   - Emit — lower to Velox `PlanNode`s.
   ///
-  /// `options.numWorkers` / `options.numDrivers` (each >= 1) are the target
-  /// task and per-task driver counts; at `numWorkers > 1` the plan is
-  /// distributed across fragments with remote exchanges.
+  /// `options.maxRemotePartitions` / `options.maxLocalPartitions` (each >= 1)
+  /// are the target task and per-task driver counts; at
+  /// `maxRemotePartitions > 1` the plan is distributed across fragments with
+  /// remote exchanges.
   ///
   /// Output column names are guaranteed to match the query only when the plan
   /// is rooted in an `OutputNode`, whose field names pin the result names. For

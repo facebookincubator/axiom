@@ -86,7 +86,7 @@ class PrecomputeProjectionTest : public ::testing::Test {
         history,
         veloxQueryCtx,
         evaluator,
-        {.numWorkers = 1, .numDrivers = 1}};
+        {.maxRemotePartitions = 1, .maxLocalPartitions = 1}};
 
     testRoutine(opt.rootDt());
   }

@@ -342,7 +342,7 @@ class Emitter {
   velox::core::PlanNodePtr addLocalPartitionForCountingJoin(
       velox::core::PlanNodePtr probe,
       const std::vector<velox::core::FieldAccessTypedExprPtr>& keys) {
-    if (options_.numDrivers <= 1) {
+    if (options_.maxLocalPartitions <= 1) {
       return probe;
     }
 
@@ -541,8 +541,8 @@ class Emitter {
   const OptimizerSession& session_;
   velox::core::ExpressionEvaluator& evaluator_;
   ExprEmitter exprEmitter_;
-  // A copy, not a reference: emitting a fixed point lowers `numDrivers` for the
-  // recursive subtree and restores it afterwards.
+  // A copy, not a reference: emitting a fixed point lowers
+  // `maxLocalPartitions` for the recursive subtree and restores it afterwards.
   MultiFragmentPlan::Options options_;
   int32_t nextNodeId_{0};
 
@@ -958,7 +958,7 @@ ExprVector Emitter::preGroupedKeysForEmission(
     const ExprVector& groupingKeys) const {
   // Multi-driver MarkDistinct emission inserts an unmodeled local repartition
   // on its distinct keys, invalidating inherited grouping and order.
-  if (options_.numDrivers > 1 && input->is(NodeType::kMarkDistinct)) {
+  if (options_.maxLocalPartitions > 1 && input->is(NodeType::kMarkDistinct)) {
     return {};
   }
   return computePreGroupedKeys(input->physicalProperties().local, groupingKeys);
@@ -1030,11 +1030,11 @@ velox::core::PlanNodePtr Emitter::emitSingleAggregation(
       preGroupedKeysForEmission(aggregate.input(), aggregate.groupingKeys()),
       "Pre-grouped key");
 
-  // At numDrivers > 1 a group's rows must all reach one driver. Skip the local
-  // exchange when the input is pre-grouped on the keys: a local grouping
-  // guarantees driver-confinement by contract (see `LocalProperty` in
+  // At maxLocalPartitions > 1 a group's rows must all reach one driver. Skip
+  // the local exchange when the input is pre-grouped on the keys: a local
+  // grouping guarantees driver-confinement by contract (see `LocalProperty` in
   // PhysicalProperties.h), so the aggregation streams correctly per driver.
-  if (options_.numDrivers > 1 && preGroupedKeys.empty()) {
+  if (options_.maxLocalPartitions > 1 && preGroupedKeys.empty()) {
     input = addLocalPartition(std::move(input), groupingKeys);
   }
 
@@ -1085,11 +1085,11 @@ velox::core::PlanNodePtr Emitter::emitFinalAggregation(
   auto groupingKeys =
       toFieldAccessList(aggregate.groupingKeys(), "Grouping key");
 
-  // At numDrivers > 1 the Final's input rows are spread across drivers (read
-  // round-robin from a remote exchange, or straight from the Partial in a
-  // local-only split), so a local exchange co-partitions each group onto one
+  // At maxLocalPartitions > 1 the Final's input rows are spread across drivers
+  // (read round-robin from a remote exchange, or straight from the Partial in
+  // a local-only split), so a local exchange co-partitions each group onto one
   // driver before the merge.
-  if (options_.numDrivers > 1) {
+  if (options_.maxLocalPartitions > 1) {
     input = addLocalPartition(std::move(input), groupingKeys);
   }
 
@@ -1164,10 +1164,10 @@ velox::core::PlanNodePtr Emitter::emitMarkDistinct(
   std::vector<velox::core::FieldAccessTypedExprPtr> distinctKeys =
       toFieldAccessList(markDistinct.distinctKeys(), "MarkDistinct key");
 
-  // At numDrivers > 1 every row of a distinct-key tuple must reach one driver,
-  // else each driver marks the tuple as first-seen and the distinct count
-  // over-counts. Co-partition the input on the distinct keys.
-  if (options_.numDrivers > 1) {
+  // At maxLocalPartitions > 1 every row of a distinct-key tuple must reach one
+  // driver, else each driver marks the tuple as first-seen and the distinct
+  // count over-counts. Co-partition the input on the distinct keys.
+  if (options_.maxLocalPartitions > 1) {
     input = addLocalPartition(std::move(input), distinctKeys);
   }
 
@@ -1288,7 +1288,7 @@ velox::core::PlanNodePtr Emitter::emitSort(const Sort& sort) {
   // With multiple drivers each driver sorts its rows (a partial sort) and a
   // LocalMerge combines the per-driver runs into one sorted stream. With a
   // single driver a plain final sort suffices.
-  const bool multiDriver = options_.numDrivers > 1;
+  const bool multiDriver = options_.maxLocalPartitions > 1;
   auto ordered = std::make_shared<velox::core::OrderByNode>(
       nextId(),
       sortingKeys,
@@ -1315,14 +1315,15 @@ velox::core::PlanNodePtr Emitter::emitTopN(const TopN& topN) {
       topNCount,
       std::numeric_limits<int32_t>::max(),
       "TopN offset + count exceeds the Velox TopNNode count limit");
-  // At numDrivers > 1 each driver keeps its own top rows (a partial top-n).
-  // Those outputs are already sorted, so an order-preserving merge combines
-  // them and a Limit takes the window — cheaper than sorting them again.
+  // At maxLocalPartitions > 1 each driver keeps its own top rows (a partial
+  // top-n). Those outputs are already sorted, so an order-preserving merge
+  // combines them and a Limit takes the window — cheaper than sorting them
+  // again.
   //
   // TODO: skip the split when the input already feeds one driver. Knowing that
   // takes the emitted plan's local exchanges; the distribution properties here
   // describe tasks, not drivers.
-  if (options_.numDrivers > 1) {
+  if (options_.maxLocalPartitions > 1) {
     velox::core::PlanNodePtr partial = std::make_shared<velox::core::TopNNode>(
         nextId(),
         sortingKeys,
@@ -1362,12 +1363,12 @@ velox::core::PlanNodePtr Emitter::emitTopN(const TopN& topN) {
 
 velox::core::PlanNodePtr Emitter::emitLimit(const Limit& limit) {
   velox::core::PlanNodePtr input = emit(limit.input());
-  // At numDrivers > 1 each driver keeps its own top offset+count rows (a
-  // partial limit); a gather to one driver then applies the final offset/count
-  // so the limit is enforced across the task, not per driver. Velox runs an
-  // exact limit single-threaded either way, so the split is worth it only when
-  // it keeps work below the limit parallel — above a gather exchange the limit
-  // is the whole pipeline.
+  // At maxLocalPartitions > 1 each driver keeps its own top offset+count rows
+  // (a partial limit); a gather to one driver then applies the final
+  // offset/count so the limit is enforced across the task, not per driver.
+  // Velox runs an exact limit single-threaded either way, so the split is
+  // worth it only when it keeps work below the limit parallel — above a gather
+  // exchange the limit is the whole pipeline.
   const bool readsGatherExchange = limit.input()->is(NodeType::kExchange) &&
       limit.input()->physicalProperties().globalPartition.is(
           PartitionKind::kGather);
@@ -1375,7 +1376,8 @@ velox::core::PlanNodePtr Emitter::emitLimit(const Limit& limit) {
   // there is no count, so it would filter nothing.
   const bool partialReduces =
       limit.offsetPlusCount() != std::numeric_limits<int64_t>::max();
-  if (options_.numDrivers > 1 && !readsGatherExchange && partialReduces) {
+  if (options_.maxLocalPartitions > 1 && !readsGatherExchange &&
+      partialReduces) {
     input = std::make_shared<velox::core::LimitNode>(
         nextId(),
         /*offset=*/0,
@@ -1468,10 +1470,10 @@ velox::core::PlanNodePtr Emitter::emitWindow(const Window& window) {
   auto partitionKeys =
       toFieldAccessList(window.partitionKeys(), "Window partition key");
 
-  // At numDrivers > 1 each partition must be complete in one driver:
+  // At maxLocalPartitions > 1 each partition must be complete in one driver:
   // repartition on the PARTITION BY keys, or gather when the window spans the
   // whole input.
-  if (options_.numDrivers > 1) {
+  if (options_.maxLocalPartitions > 1) {
     input = addLocalPartition(std::move(input), partitionKeys);
   }
 
@@ -1531,9 +1533,9 @@ velox::core::PlanNodePtr Emitter::emitRowNumber(const RowNumber& node) {
   velox::core::PlanNodePtr input = emit(node.input());
   auto partitionKeys =
       toFieldAccessList(node.partitionKeys(), "RowNumber partition key");
-  // At numDrivers > 1 each partition must be complete in one driver:
+  // At maxLocalPartitions > 1 each partition must be complete in one driver:
   // repartition on the partition keys, or gather when there are none.
-  if (options_.numDrivers > 1) {
+  if (options_.maxLocalPartitions > 1) {
     input = addLocalPartition(std::move(input), partitionKeys);
   }
   std::optional<std::string> rowNumberColumnName;
@@ -1552,9 +1554,9 @@ velox::core::PlanNodePtr Emitter::emitTopNRowNumber(const TopNRowNumber& node) {
   velox::core::PlanNodePtr input = emit(node.input());
   auto partitionKeys =
       toFieldAccessList(node.partitionKeys(), "TopNRowNumber partition key");
-  // At numDrivers > 1 each partition must be complete in one driver:
+  // At maxLocalPartitions > 1 each partition must be complete in one driver:
   // repartition on the partition keys, or gather when there are none.
-  if (options_.numDrivers > 1) {
+  if (options_.maxLocalPartitions > 1) {
     input = addLocalPartition(std::move(input), partitionKeys);
   }
   auto [sortingKeys, sortingOrders] = toSortingKeys(
@@ -1632,9 +1634,10 @@ velox::core::PlanNodePtr Emitter::emitUnionAll(const UnionAll& unionNode) {
 velox::core::PlanNodePtr Emitter::emitEnforceSingleRow(
     const EnforceSingleRow& node) {
   velox::core::PlanNodePtr input = emit(node.input());
-  // Asserting at most one row is a global check; at numDrivers > 1 gather to
-  // one driver first so the count is across the whole task, not per driver.
-  if (options_.numDrivers > 1) {
+  // Asserting at most one row is a global check; at maxLocalPartitions > 1
+  // gather to one driver first so the count is across the whole task, not per
+  // driver.
+  if (options_.maxLocalPartitions > 1) {
     input =
         velox::core::LocalPartitionNode::gather(nextId(), {std::move(input)});
   }
@@ -1658,10 +1661,10 @@ velox::core::PlanNodePtr Emitter::emitEnforceDistinct(
   auto preGroupedKeys = toFieldAccessList(
       preGroupedKeysForEmission(node.input(), node.distinctKeys()),
       "EnforceDistinct pre-grouped key");
-  // At numDrivers > 1 each distinct-key group must be complete in one driver.
-  // Skip when the input is pre-grouped on the keys: a local grouping guarantees
-  // driver-confinement by contract (see `LocalProperty`).
-  if (options_.numDrivers > 1 && preGroupedKeys.empty()) {
+  // At maxLocalPartitions > 1 each distinct-key group must be complete in one
+  // driver. Skip when the input is pre-grouped on the keys: a local grouping
+  // guarantees driver-confinement by contract (see `LocalProperty`).
+  if (options_.maxLocalPartitions > 1 && preGroupedKeys.empty()) {
     input = addLocalPartition(std::move(input), distinctKeys);
   }
   return std::make_shared<velox::core::EnforceDistinctNode>(
@@ -1740,22 +1743,23 @@ std::optional<FragmentType> fragmentTypeContribution(NodeCP node) {
   }
 }
 
-// Sets 'fragment.type' (and 'width' for kFixed) from an already-computed root
-// 'contribution'. At numWorkers == 1 all parallelism collapses to one task. A
-// nullopt contribution (no split source below -- no scan, only exchanges and/or
-// values) is single-task regardless of output partitioning: kSource requires
-// connector splits to drive its task count, so the fallback is kSingle.
+// Sets 'fragment.type' (and 'numRemotePartitions' for kFixed) from an
+// already-computed root 'contribution'. At maxRemotePartitions == 1 all
+// parallelism collapses to one task. A nullopt contribution (no split source
+// below -- no scan, only exchanges and/or values) is single-task regardless of
+// output partitioning: kSource requires connector splits to drive its task
+// count, so the fallback is kSingle.
 void decideFragmentType(
     std::optional<FragmentType> contribution,
-    int32_t numWorkers,
+    int32_t maxRemotePartitions,
     ExecutableFragment& fragment) {
-  if (numWorkers == 1) {
+  if (maxRemotePartitions == 1) {
     fragment.type = FragmentType::kSingle;
     return;
   }
   fragment.type = contribution.value_or(FragmentType::kSingle);
   if (fragment.type == FragmentType::kFixed) {
-    fragment.width = numWorkers;
+    fragment.numRemotePartitions = maxRemotePartitions;
   }
 }
 
@@ -1763,11 +1767,11 @@ void decideFragmentType(
 // to, not across, inner exchanges -- and sets the fragment type from it.
 void decideFragmentType(
     NodeCP node,
-    int32_t numWorkers,
+    int32_t maxRemotePartitions,
     ExecutableFragment& fragment) {
   decideFragmentType(
-      numWorkers == 1 ? std::nullopt : fragmentTypeContribution(node),
-      numWorkers,
+      maxRemotePartitions == 1 ? std::nullopt : fragmentTypeContribution(node),
+      maxRemotePartitions,
       fragment);
 }
 
@@ -1775,7 +1779,7 @@ void Emitter::finalizeGroupedLeaves(ExecutableFragment& fragment) {
   // Fold the grouped scans' partitionings into the one every task reads by.
   // Planning already coarsened each to the worker count and only groups scans
   // it checked copartition, so the fold must succeed and its count is the
-  // fragment's width.
+  // fragment's numRemotePartitions.
   const connector::PartitionType* folded = nullptr;
   for (const auto& leaf : groupedLeaves_) {
     if (leaf.partitionType == nullptr) {
@@ -1807,7 +1811,7 @@ void Emitter::finalizeGroupedLeaves(ExecutableFragment& fragment) {
             : nullptr);
   }
   fragment.type = FragmentType::kFixed;
-  fragment.width = folded->numPartitions();
+  fragment.numRemotePartitions = folded->numPartitions();
 }
 
 velox::core::PlanNodePtr Emitter::emitChildFragment(
@@ -1828,7 +1832,7 @@ void Emitter::emitGatheredOutput(
       layoutAboveGather && rootProject != nullptr ? rootProject->input() : root;
 
   ExecutableFragment source = newFragment();
-  decideFragmentType(belowRoot, options_.numWorkers, source);
+  decideFragmentType(belowRoot, options_.maxRemotePartitions, source);
   velox::core::PlanNodePtr sourcePlan = layoutAboveGather
       ? emitChildFragment(belowRoot, source)
       : emitInFragment(
@@ -1877,9 +1881,9 @@ velox::core::PlanNodePtr Emitter::makeExchangeProducer(
       // A partitionType aligns this shuffle to a bucketed side: use the
       // connector's partition function so rows land in the same groups as that
       // side. Planning coarsened it to the worker count, so its partition count
-      // is the consumer fragment's width. Otherwise standard Velox hash over
-      // numWorkers partitions.
-      int32_t numPartitions = options_.numWorkers;
+      // is the consumer fragment's numRemotePartitions. Otherwise standard
+      // Velox hash over maxRemotePartitions partitions.
+      int32_t numPartitions = options_.maxRemotePartitions;
       velox::core::PartitionFunctionSpecPtr spec;
       if (partitioning.partitionType != nullptr) {
         numPartitions = partitioning.partitionType->numPartitions();
@@ -1935,7 +1939,7 @@ velox::core::PlanNodePtr Emitter::emitExchange(const Exchange& exchange) {
 
   // Producer fragment: the exchange's input, capped with a PartitionedOutput.
   ExecutableFragment source = newFragment();
-  decideFragmentType(exchange.input(), options_.numWorkers, source);
+  decideFragmentType(exchange.input(), options_.maxRemotePartitions, source);
   velox::core::PlanNodePtr sourcePlan =
       emitChildFragment(exchange.input(), source);
   const auto outputType = sourcePlan->outputType();
@@ -2018,7 +2022,7 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
 
   // Parallelize writers only when the input is already distributed; gathering
   // an already-single-task input would add a redundant exchange.
-  const bool distributed = options_.numWorkers > 1 &&
+  const bool distributed = options_.maxRemotePartitions > 1 &&
       fragmentTypeContribution(tableWrite.input()) != FragmentType::kSingle;
 
   ExecutableFragment* rootFragment = currentFragment_;
@@ -2026,7 +2030,8 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
   std::vector<PendingGroupedLeaf> rootGroupedLeaves;
   if (distributed) {
     writerFragment = newFragment();
-    decideFragmentType(tableWrite.input(), options_.numWorkers, writerFragment);
+    decideFragmentType(
+        tableWrite.input(), options_.maxRemotePartitions, writerFragment);
     rootGroupedLeaves = std::move(groupedLeaves_);
     groupedLeaves_.clear();
     currentFragment_ = &writerFragment;
@@ -2045,7 +2050,7 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
         tableWrite.input()->physicalProperties().globalPartition.partitionType;
     if (exchangeType != nullptr) {
       writerFragment.type = FragmentType::kFixed;
-      writerFragment.width = exchangeType->numPartitions();
+      writerFragment.numRemotePartitions = exchangeType->numPartitions();
     }
   }
 
@@ -2065,9 +2070,9 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
   // target's partition (bucket) columns so each partition's rows go to a single
   // writer driver. The remote bucket exchange added in physical planning has
   // already confined each partition to one worker; this is the within-worker
-  // split (only meaningful at numDrivers > 1).
+  // split (only meaningful at maxLocalPartitions > 1).
   const auto& partitionColumns = layout->partitionColumns();
-  if (options_.numDrivers > 1 && !partitionColumns.empty()) {
+  if (options_.maxLocalPartitions > 1 && !partitionColumns.empty()) {
     input = std::make_shared<velox::core::LocalPartitionNode>(
         nextId(),
         velox::core::LocalPartitionNode::Type::kRepartition,
@@ -2087,13 +2092,15 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
   // source) has one writer producing all rows, so the per-driver stats need no
   // merge. Reporting one driver keeps the plan a bare TableWrite.
   const int32_t writerNumDrivers =
-      !distributed && isSingleThreadedPipeline(input) ? 1 : options_.numDrivers;
+      !distributed && isSingleThreadedPipeline(input)
+      ? 1
+      : options_.maxLocalPartitions;
   WriteStatsBuilder statsBuilder(
       table,
       inputType,
       *handle,
       writerNumDrivers,
-      distributed ? options_.numWorkers : 1);
+      distributed ? options_.maxRemotePartitions : 1);
   std::optional<velox::core::ColumnStatsSpec> writeStatsSpec;
   if (statsBuilder.hasStats()) {
     writeStatsSpec = statsBuilder.writeSpec();
@@ -2174,7 +2181,7 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
 }
 
 velox::core::PlanNodePtr Emitter::emitFixedPoint(const FixedPoint& fixedPoint) {
-  if (options_.numWorkers > 1) {
+  if (options_.maxRemotePartitions > 1) {
     VELOX_NYI("Distributed FixedPoint execution is not yet implemented");
   }
 
@@ -2184,10 +2191,10 @@ velox::core::PlanNodePtr Emitter::emitFixedPoint(const FixedPoint& fixedPoint) {
       fixedPoint.recursiveNumDrivers().value_or(0),
       1,
       "FixedPoint must be physically planned for one recursive driver before emission");
-  const int32_t previousNumDrivers =
-      std::exchange(options_.numDrivers, *fixedPoint.recursiveNumDrivers());
+  const int32_t previousMaxLocalPartitions = std::exchange(
+      options_.maxLocalPartitions, *fixedPoint.recursiveNumDrivers());
   SCOPE_EXIT {
-    options_.numDrivers = previousNumDrivers;
+    options_.maxLocalPartitions = previousMaxLocalPartitions;
   };
   auto stepPlan = emit(fixedPoint.step());
 
@@ -2289,10 +2296,10 @@ std::vector<ExecutableFragment> Emitter::emitFragments(
     // The root's fragment-type contribution drives both the output-gather
     // decision and the root fragment's type; compute it once and reuse it.
     std::optional<FragmentType> rootType;
-    if (options_.numWorkers > 1) {
+    if (options_.maxRemotePartitions > 1) {
       rootType = fragmentTypeContribution(root);
     }
-    const bool gatherForOutput = options_.numWorkers > 1 &&
+    const bool gatherForOutput = options_.maxRemotePartitions > 1 &&
         rootType != FragmentType::kSingle &&
         rootType != FragmentType::kCoordinator;
 
@@ -2301,9 +2308,9 @@ std::vector<ExecutableFragment> Emitter::emitFragments(
       // a PartitionedOutput for remote consumption, with no gather consumer
       // fragment. The fragment type follows the root's contents (kFixed for a
       // multi-worker source, kCoordinator for a coordinator-only scan, kSingle
-      // at numWorkers == 1 or when there is no split source below).
+      // at maxRemotePartitions == 1 or when there is no split source below).
       currentFragment_ = &top;
-      decideFragmentType(rootType, options_.numWorkers, top);
+      decideFragmentType(rootType, options_.maxRemotePartitions, top);
       outputProjection = emitRoot(root, outputColumns, outputNames);
       top.fragment.planNode =
           makeSingleOutput(outputProjection->outputType(), outputProjection);
@@ -2311,7 +2318,7 @@ std::vector<ExecutableFragment> Emitter::emitFragments(
       emitGatheredOutput(root, outputColumns, outputNames, top);
     } else {
       currentFragment_ = &top;
-      decideFragmentType(rootType, options_.numWorkers, top);
+      decideFragmentType(rootType, options_.maxRemotePartitions, top);
       top.fragment.planNode = emitRoot(root, outputColumns, outputNames);
     }
   }

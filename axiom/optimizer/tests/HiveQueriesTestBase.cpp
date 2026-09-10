@@ -151,8 +151,10 @@ velox::core::PlanNodePtr HiveQueriesTestBase::toSingleNodePlan(
     int32_t numDrivers) {
   auto logicalPlan = parseSelect(sql);
 
-  auto plan =
-      planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = numDrivers}).plan;
+  auto plan = planVelox(
+                  logicalPlan,
+                  {.maxRemotePartitions = 1, .maxLocalPartitions = numDrivers})
+                  .plan;
 
   EXPECT_EQ(1, plan->fragments().size());
   return plan->fragments().at(0).fragment.planNode;

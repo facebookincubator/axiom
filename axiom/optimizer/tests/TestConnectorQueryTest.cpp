@@ -71,7 +71,9 @@ class TestConnectorQueryTest : public QueryTestBase,
     return std::make_shared<MultiFragmentPlan>(fragments, options_);
   }
 
-  const MultiFragmentPlan::Options options_{.numWorkers = 1, .numDrivers = 16};
+  const MultiFragmentPlan::Options options_{
+      .maxRemotePartitions = 1,
+      .maxLocalPartitions = 16};
 };
 
 TEST_P(TestConnectorQueryTest, selectFiltered) {

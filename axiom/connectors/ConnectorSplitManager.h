@@ -25,20 +25,23 @@ namespace facebook::axiom::connector {
 
 class PartitionType;
 
-/// Wraps a Velox ConnectorSplit with optional placement metadata. groupId is a
-/// hard within-query routing constraint for grouped execution: splits with the
-/// same groupId are routed to the same task. affinityId is a soft cross-query
-/// affinity hint: schedulers prefer to route splits with the same affinityId
-/// to the same task, but may choose another task for load balancing. When both
-/// are present, grouped-execution routing through groupId takes precedence
-/// over affinityId.
+/// Wraps a Velox ConnectorSplit with optional placement metadata.
+/// remotePartition is a hard within-query routing constraint for grouped
+/// execution: splits with the same remotePartition are routed to the same
+/// task. affinityId is a soft cross-query affinity hint: schedulers prefer to
+/// route splits with the same affinityId to the same task, but may choose
+/// another task for load balancing. When both are present, grouped-execution
+/// routing through remotePartition takes precedence over affinityId.
 struct Split {
   /// The underlying Velox connector split.
   std::shared_ptr<velox::connector::ConnectorSplit> connectorSplit;
 
-  /// Group ID for bucketed routing; splits sharing a groupId are routed to
-  /// the same task. Absent means any task may handle this split.
-  std::optional<int32_t> groupId{std::nullopt};
+  /// Remote partition for bucketed routing. This is a number in
+  /// [0, numRemotePartitions), where numRemotePartitions is the
+  /// ExecutableFragment's numRemotePartitions the split is read by. Splits
+  /// sharing a remotePartition are routed to the same task; the scheduler
+  /// must obey this decision. Absent means any task may handle this split.
+  std::optional<int32_t> remotePartition{std::nullopt};
 
   /// Stable connector-generated affinity ID for split affinity. Connectors
   /// that support split affinity must generate the same ID for repeated reads
@@ -123,8 +126,8 @@ class ConnectorSplitManager {
   /// enumeration metrics (e.g., file listing, Metastore RPCs).
   ///
   /// When 'partitionType' is non-null, the connector tags each emitted Split
-  /// with a groupId in [0, partitionType->numPartitions()). Pass 'nullptr'
-  /// for the non-bucketed case.
+  /// with a remotePartition in [0, partitionType->numPartitions()). Pass
+  /// 'nullptr' for the non-bucketed case.
   ///
   /// When 'samplePercentage' is set (TABLESAMPLE SYSTEM), the source emits each
   /// split with that probability, in the open interval (0, 100); the caller

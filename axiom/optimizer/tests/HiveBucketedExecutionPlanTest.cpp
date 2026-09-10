@@ -87,7 +87,7 @@ class HiveBucketedExecutionTest : public test::HiveQueriesTestBase,
     VELOX_CHECK_GT(numWorkers, 1);
     return planVelox(
         logicalPlan,
-        {.numWorkers = numWorkers, .numDrivers = 4},
+        {.maxRemotePartitions = numWorkers, .maxLocalPartitions = 4},
         optimizerOptions_);
   }
 

@@ -1,6 +1,6 @@
 generated: 2026-06-14 18:29:32 (snapshot; regenerate with TpchPlanTest.makePlans)
-numWorkers: 1
-numDrivers: 1
+maxRemotePartitions: 1
+maxLocalPartitions: 1
 
 Query Graph:
 

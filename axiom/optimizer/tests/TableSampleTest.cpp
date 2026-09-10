@@ -64,8 +64,9 @@ TEST_P(TableSampleTest, system) {
 
   // Returns the single fragment's plan node and its sampled-scan map.
   auto planSampled = [&](const std::string& sample) {
-    auto result =
-        planVelox(parseSampledScan(sample), {.numWorkers = 1, .numDrivers = 1});
+    auto result = planVelox(
+        parseSampledScan(sample),
+        {.maxRemotePartitions = 1, .maxLocalPartitions = 1});
     EXPECT_EQ(result.plan->fragments().size(), 1);
     const auto& fragment = result.plan->fragments().at(0);
     return std::make_pair(fragment.fragment.planNode, fragment.sampledScans);
@@ -100,7 +101,7 @@ TEST_P(TableSampleTest, system) {
           parseSelect(
               "SELECT * FROM (VALUES (1)) AS v (x) TABLESAMPLE SYSTEM (50)",
               kTestConnectorId),
-          {.numWorkers = 1, .numDrivers = 1}),
+          {.maxRemotePartitions = 1, .maxLocalPartitions = 1}),
       "TABLESAMPLE SYSTEM is only supported directly over a table");
 }
 
@@ -109,7 +110,8 @@ TEST_P(TableSampleTest, explainShowsSampleRate) {
 
   auto explain = [&](const std::string& sample) {
     return planVelox(
-               parseSampledScan(sample), {.numWorkers = 1, .numDrivers = 1})
+               parseSampledScan(sample),
+               {.maxRemotePartitions = 1, .maxLocalPartitions = 1})
         .plan->toString();
   };
 

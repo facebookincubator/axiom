@@ -1051,7 +1051,8 @@ TEST_P(UnnestTest, inSubqueryOverUnnest) {
   AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
 
   // Two single-row inputs stay on one task, so distributing changes nothing.
-  auto distributed = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
+  auto distributed = planVelox(
+      logicalPlan, {.maxRemotePartitions = 4, .maxLocalPartitions = 4});
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributed.plan, matcher);
 }
 
@@ -1092,8 +1093,8 @@ TEST_P(UnnestTest, unnestPlacedAboveJoin) {
     SCOPED_TRACE("cost-based enumeration");
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), makeMatcher(false));
 
-    auto distributed =
-        planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
+    auto distributed = planVelox(
+        logicalPlan, {.maxRemotePartitions = 4, .maxLocalPartitions = 4});
     AXIOM_ASSERT_DISTRIBUTED_PLAN(distributed.plan, makeMatcher(true));
   }
 
@@ -1102,8 +1103,8 @@ TEST_P(UnnestTest, unnestPlacedAboveJoin) {
     optimizerOptions_.dphypEnumerationBudget = 1;
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), makeMatcher(false));
 
-    auto distributed =
-        planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
+    auto distributed = planVelox(
+        logicalPlan, {.maxRemotePartitions = 4, .maxLocalPartitions = 4});
     AXIOM_ASSERT_DISTRIBUTED_PLAN(distributed.plan, makeMatcher(true));
   }
 }

@@ -59,7 +59,7 @@ class DistributedPlanBuilder : public velox::exec::test::PlanBuilder {
   optimizer::MultiFragmentPlanPtr build();
 
  private:
-  void newFragment(std::optional<int32_t> width = std::nullopt);
+  void newFragment(std::optional<int32_t> numRemotePartitions = std::nullopt);
 
   void appendFragments(std::vector<optimizer::ExecutableFragment> fragments);
 

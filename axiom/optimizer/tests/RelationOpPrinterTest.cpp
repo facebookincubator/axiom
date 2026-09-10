@@ -176,7 +176,7 @@ class RelationOpPrinterTest : public ::testing::Test {
         history,
         veloxQueryCtx,
         evaluator,
-        {.numWorkers = numWorkers, .numDrivers = numDrivers}};
+        {.maxRemotePartitions = numWorkers, .maxLocalPartitions = numDrivers}};
 
     auto* plan = opt.bestPlan();
     consume(*plan->op);

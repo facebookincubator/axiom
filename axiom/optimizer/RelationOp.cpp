@@ -745,10 +745,10 @@ Repartition::Repartition(
   // and transfer costs scale with the number of workers. 'this->' disambiguates
   // the accessor from the constructor parameter 'distribution'.
   if (this->distribution().isBroadcast()) {
-    const auto numWorkers =
-        queryCtx()->optimization()->runnerOptions().numWorkers;
-    unitCost *= numWorkers;
-    rowBytes *= numWorkers;
+    const auto maxRemotePartitions =
+        queryCtx()->optimization()->runnerOptions().maxRemotePartitions;
+    unitCost *= maxRemotePartitions;
+    rowBytes *= maxRemotePartitions;
   }
 
   cost_.unitCost = unitCost;
@@ -1173,7 +1173,7 @@ void Aggregation::setCostWithGroups(
 
   if (step != velox::core::AggregationNode::Step::kPartial) {
     float localExchangeCost = 0;
-    if (runnerOptions.numDrivers > 1) {
+    if (runnerOptions.maxLocalPartitions > 1) {
       // If more than one driver per fragment, a non-partial group by needs a
       // local exchange. Estimated to be 1/3 of a remote shuffle.
       localExchangeCost = shuffleCost(input_->columns()) / 3;
@@ -1222,7 +1222,8 @@ void Aggregation::setCostWithGroups(
       numGroups / inputBeforePartial,
       partialCapacity / partialInputBetweenFlushes);
 
-  const auto width = runnerOptions.numWorkers * runnerOptions.numDrivers;
+  const auto width =
+      runnerOptions.maxRemotePartitions * runnerOptions.maxLocalPartitions;
   if ((inputBeforePartial > abandonPartialMinRows * width &&
        initialDistincts > abandonPartialMinRows * abandonPartialMinFraction) ||
       (inputBeforePartial > numGroups * 5 &&
@@ -2078,7 +2079,7 @@ MarkDistinct::MarkDistinct(
     // seen, and inserts a new entry if not. Estimated localExchangeCost to be
     // 1/3 of a remote shuffle, following the same cost modeling of Aggregation.
     float localExchangeCost = 0;
-    if (runnerOptions.numDrivers > 1) {
+    if (runnerOptions.maxLocalPartitions > 1) {
       localExchangeCost = shuffleCost(input_->columns()) / 3;
     }
     auto markDistinctCost = Costs::kHashColumnCost * keys_.size() +

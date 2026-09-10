@@ -9,7 +9,7 @@ The optimizer's role is to decide where exchanges go, what partitioning each exc
 **Implementation status.** Sections 1 and 2 describe the fragment and exchange model that is in place today, with two exceptions called out where they appear:
 
 - **`kCoordinator` fragments and SystemConnector isolation** are not yet implemented. Section 1 (UNION ALL with single-task inputs) and Section 2 (`FragmentType::kCoordinator`) describe the intended behavior.
-- **Grouped execution** (Section 3) is partially implemented. The shuffle-avoidance path is in place: the `PartitionType` API, the `groupedNodes` field on `ExecutableFragment`, split-level `groupId` tagging, and `scaleDown` to a `kFixed` fragment whose tasks are routed by `groupId`. The full per-group-processing path — `GroupedSplitSource` (complete groups in order) and the `groupedExecution` flag that clears hash tables between groups — is not yet implemented.
+- **Grouped execution** (Section 3) is partially implemented. The shuffle-avoidance path is in place: the `PartitionType` API, the `groupedNodes` field on `ExecutableFragment`, split-level `remotePartition` tagging, and `scaleDown` to a `kFixed` fragment whose tasks are routed by `remotePartition`. The full per-group-processing path — `GroupedSplitSource` (complete groups in order) and the `groupedExecution` flag that clears hash tables between groups — is not yet implemented.
 
 ### 1. Fragment Structure and Scheduling Constraints
 
@@ -201,7 +201,7 @@ struct InputStage {
 /// Determines how the runtime decides the task count for a fragment.
 enum class FragmentType {
     kSource,       /// Task count driven by splits at runtime.
-    kFixed,        /// Exactly 'width' tasks.
+    kFixed,        /// Exactly 'numRemotePartitions' tasks.
     kSingle,       /// Exactly 1 task, any worker.
     kCoordinator,  /// Exactly 1 task, on coordinator.
 };
@@ -210,7 +210,7 @@ struct ExecutableFragment {
     std::string taskPrefix;
     FragmentType type;
     /// Required for kFixed, optional hint for kSource, nullopt otherwise.
-    std::optional<int32_t> width;
+    std::optional<int32_t> numRemotePartitions;
     velox::core::PlanFragment fragment;
     std::vector<InputStage> inputStages;
     /// See Section 3 for grouped execution fields.
@@ -221,26 +221,27 @@ struct ExecutableFragment {
 
 The runtime determines task count based on `FragmentType`:
 
-- **kFixed** — create exactly `width` tasks. The optimizer guarantees that
-  all hash-partitioned exchange inputs into this fragment use the same
-  `numPartitions` equal to `width`.
+- **kFixed** — create exactly `numRemotePartitions` tasks. The optimizer
+  guarantees that all hash-partitioned exchange inputs into this fragment use
+  the same `numPartitions` equal to `numRemotePartitions`.
 - **kSingle** — create exactly 1 task.
 - **kCoordinator** — create exactly 1 task, on the coordinator node.
-- **kSource** — runtime decides. The optimizer may set `width` as a
-  recommended task count. The runtime may use this as a starting point
+- **kSource** — runtime decides. The optimizer may set `numRemotePartitions`
+  as a recommended task count. The runtime may use this as a starting point
   but is not bound by it — it may adjust based on actual split count
   and available workers.
 
 > **Future work: cardinality-based width selection.** Today the
-> optimizer typically sets `width = numWorkers` for kFixed fragments
-> and leaves kSource width unset. This wastes resources on small
-> queries — a global aggregation over a few thousand rows should not
-> fan out to 100 workers. The optimizer should use cardinality
-> estimates to pick a smaller `width` when the data is small (kFixed:
-> set `width` and the matching upstream `numPartitions`; kSource: set
-> `width` as a hint to the runtime). Cardinality estimates at fragment
-> boundaries are already available — the optimizer just needs to
-> consult them when choosing `width`.
+> optimizer typically sets `numRemotePartitions = maxRemotePartitions` for
+> kFixed fragments and leaves kSource numRemotePartitions unset. This wastes
+> resources on small queries — a global aggregation over a few thousand rows
+> should not fan out to 100 workers. The optimizer should use cardinality
+> estimates to pick a smaller `numRemotePartitions` when the data is small
+> (kFixed: set `numRemotePartitions` and the matching upstream
+> `numPartitions`; kSource: set `numRemotePartitions` as a hint to the
+> runtime). Cardinality estimates at fragment boundaries are already
+> available — the optimizer just needs to consult them when choosing
+> `numRemotePartitions`.
 
 #### Data wiring
 
@@ -286,8 +287,8 @@ For fragments without scans (kSingle, kCoordinator), there are no
 connector splits. Data arrives through exchanges or is embedded in the
 plan (e.g., Values). kFixed fragments typically have no scans, but may have them in grouped execution (see Section 3) or when a scan leg is co-located in a kFixed UNION ALL fragment (see [UnionAllPlanning.md](UnionAllPlanning.md)).
 
-In single-node mode (`numWorkers == 1`), the entire plan runs in a single
-kSingle fragment with no exchanges.
+In single-node mode (`maxRemotePartitions == 1`), the entire plan runs in a
+single kSingle fragment with no exchanges.
 
 #### Examples
 
@@ -327,8 +328,8 @@ The FINAL aggregation lives in the same fragment as the UNION ALL because A6 (kS
 
 > **Status (2026-07-31): partially implemented.** The shuffle-avoidance
 > path is in place — the `PartitionType` API, the `groupedNodes` field on
-> `ExecutableFragment`, split-level `groupId` tagging, and `scaleDown` to a
-> `kFixed` fragment routed by `groupId` (see "Shuffle avoidance without
+> `ExecutableFragment`, split-level `remotePartition` tagging, and `scaleDown`
+> to a `kFixed` fragment routed by `remotePartition` (see "Shuffle avoidance without
 > per-group processing" below). The full per-group-processing path described
 > in this section — `GroupedSplitSource` / `co_getGroups` and the
 > `groupedExecution` flag that clears hash tables between groups — is not yet
@@ -473,13 +474,13 @@ For Hive, `copartition` returns a `HivePartitionType` with `min(bucketsA, bucket
 
 **Mixed inputs.** When joining a bucketed table with a non-bucketed table or intermediate query result, the optimizer hash-partitions the non-bucketed side using the same partition function as the bucketed side.
 
-The optimizer computes group count `g` from the bucketed side(s) via `copartition()`, then finds the exchange width `N` using `scaleDown(numWorkers)`. `N` is the largest value <= `numWorkers` that the connector considers valid given `g` (for Hive, the largest divisor of `g` that is <= `numWorkers`). The resulting `PartitionType` encapsulates both `g` and `N`, so its `makeSpec` produces the optimal partition function (e.g., Hive emits `bucket % N` directly rather than `bucket % g % N`).
+The optimizer computes group count `g` from the bucketed side(s) via `copartition()`, then finds the exchange width `N` using `scaleDown(maxRemotePartitions)`. `N` is the largest value <= `maxRemotePartitions` that the connector considers valid given `g` (for Hive, the largest divisor of `g` that is <= `maxRemotePartitions`). The resulting `PartitionType` encapsulates both `g` and `N`, so its `makeSpec` produces the optimal partition function (e.g., Hive emits `bucket % N` directly rather than `bucket % g % N`).
 
 A hash-partitioned exchange with N partitions is conceptually similar to a table bucketed into N buckets — partition `p` contains all rows whose key hashes to `p`. This is why `groupedNodes` can include both scan nodes and exchange nodes.
 
-`scaleDown` exists because of streaming shuffle's constraint: the consumer fragment must run exactly N tasks concurrently, so N can be at most `numWorkers`. With durable shuffle, the consumer can process groups dynamically and `scaleDown` is unnecessary — the producer can use the bucketed side's native group count `g` directly. See "Mixed inputs (scans + exchanges)" under Runtime contract below for how the streaming vs. durable choice changes fragment type.
+`scaleDown` exists because of streaming shuffle's constraint: the consumer fragment must run exactly N tasks concurrently, so N can be at most `maxRemotePartitions`. With durable shuffle, the consumer can process groups dynamically and `scaleDown` is unnecessary — the producer can use the bucketed side's native group count `g` directly. See "Mixed inputs (scans + exchanges)" under Runtime contract below for how the streaming vs. durable choice changes fragment type.
 
-The consumer fragment is `kFixed` with `width = N`. `groupedNodes` includes both the scan node(s) and the exchange node(s).
+The consumer fragment is `kFixed` with `numRemotePartitions = N`. `groupedNodes` includes both the scan node(s) and the exchange node(s).
 
 For Hive, `scaleDown(maxPartitions)` returns a `HivePartitionType` with the largest divisor of `numBuckets` that is <= `maxPartitions`; its `makeSpec` produces `nativeBucketFunction % N`.
 
@@ -631,11 +632,11 @@ When throughput matters more than latency, grouped execution is still the better
 `scaleDown()` flow as grouped execution to determine a shared
 `PartitionType`. For co-bucketed joins, `copartition()` finds the
 common partitioning across all bucketed inputs. Then
-`scaleDown(numWorkers)` reduces the group count to at most
-`numWorkers`, producing a `PartitionType` with
-`numPartitions() = N` where N <= numWorkers. The fragment is
-kFixed with `width = N` — the optimizer sets the task count so
-the runtime can co-schedule splits by `groupId` deterministically.
+`scaleDown(maxRemotePartitions)` reduces the group count to at most
+`maxRemotePartitions`, producing a `PartitionType` with
+`numPartitions() = N` where N <= maxRemotePartitions. The fragment is
+kFixed with `numRemotePartitions = N` — the optimizer sets the task count so
+the runtime can co-schedule splits by `remotePartition` deterministically.
 (kSource is only possible with `GroupedSplitSource`, which delivers
 complete groups in order — connectors like Hive that discover
 splits incrementally cannot support it, hence this fallback.)
@@ -645,9 +646,9 @@ The optimizer populates `groupedNodes` with the scaled
 and sets `groupedExecution = false`.
 
 **Split delivery.** Since `ConnectorSplit` is a Velox type and
-cannot carry `groupId` directly, Axiom defines its own
+cannot carry `remotePartition` directly, Axiom defines its own
 `axiom::connector::Split` that wraps a `ConnectorSplit` with an
-optional `groupId`. The runtime uses `groupId` to co-schedule
+optional `remotePartition`. The runtime uses `remotePartition` to co-schedule
 splits from the same group on the same task, then passes the inner
 `ConnectorSplit` to Velox for execution. Splits arrive
 incrementally as they are discovered — no ordering or completeness
@@ -658,11 +659,11 @@ data / numTasks rather than per-group data.
 ```cpp
 namespace axiom::connector {
 
-/// Wraps a Velox ConnectorSplit with an optional group ID for
+/// Wraps a Velox ConnectorSplit with an optional remote partition for
 /// bucketed execution routing.
 struct Split {
     std::shared_ptr<velox::connector::ConnectorSplit> connectorSplit;
-    std::optional<int32_t> groupId;
+    std::optional<int32_t> remotePartition;
 };
 
 struct SplitBatch {
@@ -671,7 +672,7 @@ struct SplitBatch {
 };
 
 /// Produces splits incrementally. When configured with a
-/// PartitionType, each Split carries a groupId computed by
+/// PartitionType, each Split carries a remotePartition computed by
 /// the connector.
 class SplitSource {
  public:
@@ -695,7 +696,7 @@ virtual std::shared_ptr<SplitSource> getSplitSource(
     const std::shared_ptr<PartitionType>& partitionType = nullptr) = 0;
 ```
 
-When `partitionType` is set, the connector sets `groupId` on each
+When `partitionType` is set, the connector sets `remotePartition` on each
 `Split` to a value in `0..partitionType->numPartitions()-1`,
 computed using the mapping encoded in the `PartitionType` (e.g.,
 for Hive, `bucketId % partitionType->numPartitions()`).
@@ -703,12 +704,12 @@ for Hive, `bucketId % partitionType->numPartitions()`).
 | | Grouped execution | Shuffle avoidance only |
 |---|---|---|
 | Fragment type | kSource | kFixed |
-| Split delivery | `GroupedSplitSource` (complete groups) | `SplitSource` (incremental, with `groupId`) |
+| Split delivery | `GroupedSplitSource` (complete groups) | `SplitSource` (incremental, with `remotePartition`) |
 | Per-group clearing | Yes | No |
 | Latency | May wait for group completion | Incremental, tasks start immediately |
 | Memory per task | Per-group data | Total data / numTasks |
 
-Shuffle avoidance uses the regular `SplitSource` with `groupId`
+Shuffle avoidance uses the regular `SplitSource` with `remotePartition`
 on each split — no per-group clearing. A future grouped-execution
 path may introduce a `GroupedSplitSource` and a corresponding
 capability bit on `ConnectorSplitManager`; the API surface is not
@@ -716,7 +717,7 @@ defined here.
 
 #### Examples
 
-These examples explain the design and validate it against diverse scenarios. All examples assume `numWorkers = 100`, Hive bucketing, and
+These examples explain the design and validate it against diverse scenarios. All examples assume `maxRemotePartitions = 100`, Hive bucketing, and
 `remoteOutput = true` — results remain distributed across workers.
 When `remoteOutput = false`, a kSingle output fragment is added to
 gather results to a single node. The output fragment is omitted

@@ -40,7 +40,7 @@ class SplitSourceFactory {
   /// Returns a splitSource for one TableScan across all Tasks of
   /// the fragment. The source will be invoked to produce splits for
   /// each individual worker running the scan. When 'partitionType' is
-  /// non-null, emitted Splits are tagged with a groupId. When
+  /// non-null, emitted Splits are tagged with a remotePartition. When
   /// 'samplePercentage' is set (TABLESAMPLE SYSTEM), the source emits each
   /// split with that probability.
   virtual std::shared_ptr<connector::SplitSource> splitSourceForScan(

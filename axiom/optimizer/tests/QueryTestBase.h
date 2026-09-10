@@ -118,8 +118,8 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
       const logical_plan::LogicalPlanNodePtr& plan,
       const MultiFragmentPlan::Options& options =
           {
-              .numWorkers = 4,
-              .numDrivers = 4,
+              .maxRemotePartitions = 4,
+              .maxLocalPartitions = 4,
           },
       const std::optional<OptimizerOptions>& optimizerOptions = std::nullopt,
       const std::optional<std::string>& planFilePathPrefix = std::nullopt);
@@ -129,8 +129,8 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
       const connector::SchemaResolver& schemaResolver,
       const MultiFragmentPlan::Options& options =
           {
-              .numWorkers = 4,
-              .numDrivers = 4,
+              .maxRemotePartitions = 4,
+              .maxLocalPartitions = 4,
           },
       const std::optional<OptimizerOptions>& optimizerOptions = std::nullopt,
       const std::optional<std::string>& planFilePathPrefix = std::nullopt);
@@ -138,16 +138,16 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
   TestResult runVelox(
       const logical_plan::LogicalPlanNodePtr& plan,
       const MultiFragmentPlan::Options& options = {
-          .numWorkers = 4,
-          .numDrivers = 4,
+          .maxRemotePartitions = 4,
+          .maxLocalPartitions = 4,
       });
 
   TestResult runVelox(
       const logical_plan::LogicalPlanNodePtr& plan,
       const connector::SchemaResolver& schemaResolver,
       const MultiFragmentPlan::Options& options = {
-          .numWorkers = 4,
-          .numDrivers = 4,
+          .maxRemotePartitions = 4,
+          .maxLocalPartitions = 4,
       });
 
   TestResult runFragmentedPlan(optimizer::PlanAndStats& plan);
@@ -166,26 +166,26 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
   /// Runs 'referencePlan' single-threaded. Runs 'planNode' multiple times using
   /// different parallelism settings. Runs single-node-single-threaded,
   /// single-node-multi-threaded, multi-node-single-threaded, and
-  /// multi-node-multi-threaded. Uses options.numWorkers for multi-node runs and
-  /// options.numDrivers for multi-threaded runs. Doesn't run with higher
-  /// parallelism than specified in 'options'. E.g. if options = {.numWorkers =
-  /// 1, .numDrivers = 1}, then runs only once (single-node-single-threaded).
-  /// All runs are expected to produce the same result that matches result of
-  /// 'referencePlan'.
+  /// multi-node-multi-threaded. Uses options.maxRemotePartitions for multi-node
+  /// runs and options.maxLocalPartitions for multi-threaded runs. Doesn't run
+  /// with higher parallelism than specified in 'options'. E.g. if options =
+  /// {.maxRemotePartitions = 1, .maxLocalPartitions = 1}, then runs only once
+  /// (single-node-single-threaded). All runs are expected to produce the same
+  /// result that matches result of 'referencePlan'.
   void checkSame(
       const logical_plan::LogicalPlanNodePtr& planNode,
       const velox::core::PlanNodePtr& referencePlan,
       const MultiFragmentPlan::Options& options = {
-          .numWorkers = 4,
-          .numDrivers = 4,
+          .maxRemotePartitions = 4,
+          .maxLocalPartitions = 4,
       });
 
   void checkSame(
       const logical_plan::LogicalPlanNodePtr& planNode,
       const std::vector<velox::RowVectorPtr>& referenceResult,
       const MultiFragmentPlan::Options& options = {
-          .numWorkers = 4,
-          .numDrivers = 4,
+          .maxRemotePartitions = 4,
+          .maxLocalPartitions = 4,
       });
 
   velox::core::PlanNodePtr toSingleNodePlan(
@@ -197,7 +197,9 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
       const velox::core::PlanNodePtr& referencePlan,
       int32_t numDrivers = 1) {
     checkSame(
-        planNode, referencePlan, {.numWorkers = 1, .numDrivers = numDrivers});
+        planNode,
+        referencePlan,
+        {.maxRemotePartitions = 1, .maxLocalPartitions = numDrivers});
   }
 
   void checkSameSingleNode(
@@ -205,7 +207,9 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
       const std::vector<velox::RowVectorPtr>& referenceResult,
       int32_t numDrivers = 1) {
     checkSame(
-        planNode, referenceResult, {.numWorkers = 1, .numDrivers = numDrivers});
+        planNode,
+        referenceResult,
+        {.maxRemotePartitions = 1, .maxLocalPartitions = numDrivers});
   }
 
   velox::memory::MemoryPool& optimizerPool() const {
@@ -218,8 +222,8 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
       const logical_plan::LogicalPlanNodePtr& logicalPlan,
       const MultiFragmentPlan::Options& options =
           {
-              .numWorkers = 1,
-              .numDrivers = 1,
+              .maxRemotePartitions = 1,
+              .maxLocalPartitions = 1,
           },
       const std::optional<OptimizerOptions>& optimizerOptions = std::nullopt);
 

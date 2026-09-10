@@ -123,7 +123,8 @@ TEST_F(FixedPointTest, multipleWorkersRejected) {
       kTestConnectorId);
 
   VELOX_ASSERT_THROW(
-      planVelox(logicalPlan, {.numWorkers = 2, .numDrivers = 1}),
+      planVelox(
+          logicalPlan, {.maxRemotePartitions = 2, .maxLocalPartitions = 1}),
       "Distributed FixedPoint execution is not yet implemented");
 }
 

@@ -124,7 +124,7 @@ class DerivedTablePrinterTest : public ::testing::Test {
         history,
         veloxQueryCtx,
         evaluator,
-        {.numWorkers = 1, .numDrivers = 1}};
+        {.maxRemotePartitions = 1, .maxLocalPartitions = 1}};
 
     const auto dtString = DerivedTablePrinter::toText(*opt.rootDt());
 

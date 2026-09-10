@@ -2639,7 +2639,8 @@ TEST_P(SubqueryTest, constantFoldingWithoutExecutor) {
   auto logicalPlan =
       parseSelect("SELECT * FROM nation WHERE n_regionkey > (SELECT 1)");
 
-  auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
+  auto plan = planVelox(
+      logicalPlan, {.maxRemotePartitions = 4, .maxLocalPartitions = 4});
   EXPECT_EQ(3, plan.plan->fragments().size());
 }
 

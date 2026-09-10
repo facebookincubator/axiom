@@ -60,7 +60,7 @@ class LocalHiveSplitSource : public SplitSource {
   const std::string tableName_;
   std::vector<const FileInfo*> files_;
   const std::unordered_map<std::string, std::string> serdeParameters_;
-  // When non-null, used to assign a groupId to each split for bucketed
+  // When non-null, used to assign a remotePartition to each split for bucketed
   // execution.
   const std::shared_ptr<PartitionType> partitionType_;
   size_t fileIdx_{0};

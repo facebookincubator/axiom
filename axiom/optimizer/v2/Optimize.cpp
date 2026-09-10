@@ -135,8 +135,10 @@ int32_t chooseNumWorkers(
 } // namespace
 
 PlanAndStats Optimizer::optimize(const MultiFragmentPlan::Options& options) {
-  VELOX_USER_CHECK_GE(options.numWorkers, 1, "numWorkers must be at least 1");
-  VELOX_USER_CHECK_GE(options.numDrivers, 1, "numDrivers must be at least 1");
+  VELOX_USER_CHECK_GE(
+      options.maxRemotePartitions, 1, "maxRemotePartitions must be at least 1");
+  VELOX_USER_CHECK_GE(
+      options.maxLocalPartitions, 1, "maxLocalPartitions must be at least 1");
 
   // Schema is owned here so its `connector::TablePtr`s — and the
   // `TableLayout`s the IR's `BaseTable` nodes hold raw pointers to —
@@ -158,11 +160,11 @@ PlanAndStats Optimizer::optimize(const MultiFragmentPlan::Options& options) {
     EstimateLeafStatsPass::run(folded, session_);
   }
 
-  // Decide the width before physical planning, which reads numWorkers to shape
-  // exchanges and to cost broadcasts.
+  // Decide the width before physical planning, which reads maxRemotePartitions
+  // to shape exchanges and to cost broadcasts.
   MultiFragmentPlan::Options planOptions = options;
-  planOptions.numWorkers =
-      chooseNumWorkers(folded, session_.options(), options.numWorkers);
+  planOptions.maxRemotePartitions =
+      chooseNumWorkers(folded, session_.options(), options.maxRemotePartitions);
 
   EmitPass::Result emitted = physicalPlanAndEmit(
       folded,

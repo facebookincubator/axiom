@@ -25,7 +25,7 @@ namespace {
 
 // True if single worker, i.e. do not plan remote exchanges
 bool isSingleWorker() {
-  return queryCtx()->optimization()->runnerOptions().numWorkers == 1;
+  return queryCtx()->optimization()->runnerOptions().maxRemotePartitions == 1;
 }
 
 bool computeGreedyJoinOrder(

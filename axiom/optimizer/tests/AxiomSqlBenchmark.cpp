@@ -582,8 +582,8 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     }
 
     optimizer::MultiFragmentPlan::Options opts;
-    opts.numWorkers = FLAGS_num_workers;
-    opts.numDrivers = FLAGS_num_drivers;
+    opts.maxRemotePartitions = FLAGS_num_workers;
+    opts.maxLocalPartitions = FLAGS_num_drivers;
     auto allocator =
         std::make_unique<HashStringAllocator>(optimizerPool_.get());
     auto context = std::make_unique<optimizer::QueryGraphContext>(

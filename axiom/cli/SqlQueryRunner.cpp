@@ -1857,8 +1857,8 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
     bool explain,
     std::shared_ptr<QueryRuntimeStats> runtimeStats) {
   optimizer::MultiFragmentPlan::Options opts;
-  opts.numWorkers = options.numWorkers;
-  opts.numDrivers = options.numDrivers;
+  opts.maxRemotePartitions = options.numWorkers;
+  opts.maxLocalPartitions = options.numDrivers;
   auto connectorProperties = collectConnectorProperties(*sessionConfig_);
   auto optimizerSession =
       makeOptimizerSession(queryCtx->queryId(), connectorProperties, explain);

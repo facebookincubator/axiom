@@ -47,9 +47,9 @@ The Test connector is designed for three use cases:
   (`addTable(..., TestBucketSpec{...})`). Rows are routed to buckets via a
   generic hash partition function on append, and splits are emitted per
   bucket. When the split manager is asked for splits with a non-null
-  `PartitionType`, each emitted Split is tagged with a `groupId` derived
-  from its bucket, enabling end-to-end exercise of the bucketed-execution
-  scheduling contract.
+  `PartitionType`, each emitted Split is tagged with a `remotePartition`
+  derived from its bucket, enabling end-to-end exercise of the
+  bucketed-execution scheduling contract.
 
 **Not supported:**
 - Filter pushdown.

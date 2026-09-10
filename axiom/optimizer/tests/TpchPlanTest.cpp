@@ -75,8 +75,8 @@ class TpchPlanTest : public test::QueryTestBase {
     return planVelox(
                parseTpch(options.query),
                {
-                   .numWorkers = options.numWorkers,
-                   .numDrivers = options.numDrivers,
+                   .maxRemotePartitions = options.numWorkers,
+                   .maxLocalPartitions = options.numDrivers,
                })
         .plan;
   }
@@ -753,7 +753,8 @@ TEST_F(TpchPlanTest, q22) {
 // Use to re-generate the plans stored in the tpch/plans directory.
 TEST_F(TpchPlanTest, DISABLED_makePlans) {
   const auto path = test::getTestFilePath("tpch/plans");
-  const MultiFragmentPlan::Options options{.numWorkers = 1, .numDrivers = 1};
+  const MultiFragmentPlan::Options options{
+      .maxRemotePartitions = 1, .maxLocalPartitions = 1};
   for (int32_t query = 1; query <= 22; ++query) {
     LOG(ERROR) << "q" << query;
     planVelox(

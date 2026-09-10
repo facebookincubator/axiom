@@ -180,7 +180,7 @@ std::vector<optimizer::ExecutableFragment> createExecutableFragments(
           optimizer::ExecutableFragment{
               .taskPrefix = taskPrefix,
               .type = optimizer::FragmentType::kFixed,
-              .width = planFragmentInfo.numWorkers,
+              .numRemotePartitions = planFragmentInfo.numWorkers,
               .fragment = velox::core::PlanFragment{planFragmentInfo.plan},
               .inputStages = std::move(inputStages),
           });

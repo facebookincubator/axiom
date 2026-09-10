@@ -31,7 +31,11 @@ EmitPass::Result physicalPlanAndEmit(
     velox::core::ExpressionEvaluator& evaluator,
     const MultiFragmentPlan::Options& options) {
   NodeCP physicalPlanned = PlanPhysicalPass::run(
-      root, builder, session.options(), options.numWorkers, options.numDrivers);
+      root,
+      builder,
+      session.options(),
+      options.maxRemotePartitions,
+      options.maxLocalPartitions);
   NodeCP precomputed = PrecomputeProjectionsPass::run(physicalPlanned, builder);
   // Distinct aggregates lower to MarkDistinct here, after physical planning
   // (grouping sets were already lowered to GroupId in translate).

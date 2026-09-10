@@ -58,7 +58,7 @@ ToVelox::ToVelox(
     const MultiFragmentPlan::Options& options)
     : optimizerSession_{std::move(optimizerSession)},
       options_{options},
-      isSingle_{options.numWorkers == 1},
+      isSingle_{options.maxRemotePartitions == 1},
       subscript_{FunctionRegistry::instance()->subscript()},
       elementAt_{FunctionRegistry::instance()->elementAt()} {
   VELOX_CHECK_NOT_NULL(optimizerSession_);
@@ -391,22 +391,22 @@ std::optional<FragmentType> fragmentTypeContribution(const RelationOp& op) {
 // to (but not including) any inner Repartition or leaf, merging contributions
 // per the compatibility rules in docs/UnionAllPlanning.md.
 //
-// For numWorkers == 1, all parallelism collapses to a single task; kSource,
-// kFixed N=1, and kSingle become equivalent. The compatibility rules (which
-// guard against multiplication of kSingle data across parallel tasks) don't
-// apply, so we skip the walk and use kSingle directly.
+// For maxRemotePartitions == 1, all parallelism collapses to a single task;
+// kSource, kFixed N=1, and kSingle become equivalent. The compatibility rules
+// (which guard against multiplication of kSingle data across parallel tasks)
+// don't apply, so we skip the walk and use kSingle directly.
 void decideFragmentType(
     const RelationOp& op,
     const MultiFragmentPlan::Options& options,
     ExecutableFragment& fragment) {
-  if (options.numWorkers == 1) {
+  if (options.maxRemotePartitions == 1) {
     fragment.type = FragmentType::kSingle;
     return;
   }
 
   fragment.type = fragmentTypeContribution(op).value_or(FragmentType::kSource);
   if (fragment.type == FragmentType::kFixed) {
-    fragment.width = options.numWorkers;
+    fragment.numRemotePartitions = options.maxRemotePartitions;
   }
 }
 
@@ -441,7 +441,7 @@ void ToVelox::applyGroupedLeaves(
   // A fragment is bucketed iff at least one groupedLeaves entry has a non-null
   // PartitionType. Non-bucketed fragments leave groupedNodes empty: a
   // fragment that consumes only hash-partitioned exchanges (all-null entries)
-  // doesn't participate in groupId routing.
+  // doesn't participate in remotePartition routing.
   bool anyNonNull = false;
   for (const auto& [_, pt] : groupedLeaves) {
     if (pt != nullptr) {
@@ -464,23 +464,23 @@ void ToVelox::applyGroupedLeaves(
         idIt->second,
         std::const_pointer_cast<connector::PartitionType>(partitionType));
   }
-  int32_t width = -1;
+  int32_t numRemotePartitions = -1;
   for (const auto& [_, pt] : fragment.groupedNodes) {
     if (pt == nullptr) {
       continue;
     }
-    if (width < 0) {
-      width = pt->numPartitions();
+    if (numRemotePartitions < 0) {
+      numRemotePartitions = pt->numPartitions();
     } else {
       VELOX_CHECK_EQ(
           pt->numPartitions(),
-          width,
+          numRemotePartitions,
           "fragment.groupedNodes has non-null PartitionTypes with disagreeing numPartitions");
     }
   }
-  if (width >= 0) {
+  if (numRemotePartitions >= 0) {
     fragment.type = FragmentType::kFixed;
-    fragment.width = width;
+    fragment.numRemotePartitions = numRemotePartitions;
   }
 }
 
@@ -506,7 +506,7 @@ PlanAndStats ToVelox::toVeloxPlan(
   // makeRepartition's consumer logic can treat it as carrying the root
   // fragment's GroupedLeaves (the gather was not present at planning time
   // and so has no entry in groupedLeaves_->perRepartition).
-  if (options_.numWorkers > 1 && !options_.remoteOutput) {
+  if (options_.maxRemotePartitions > 1 && !options_.remoteOutput) {
     plan = addGather(plan, &gatherRepartition_);
   }
 
@@ -1101,7 +1101,7 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
   if (isSingle_ || op.input()->distribution().isGather()) {
     auto input = makeFragment(op.input(), fragment, stages);
 
-    if (options_.numDrivers == 1) {
+    if (options_.maxLocalPartitions == 1) {
       auto node = op.isNoLimit()
           ? std::make_shared<velox::core::OrderByNode>(
                 nextId(), keys, sortOrder, false, input)
@@ -1132,7 +1132,7 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
   // At one driver the per-worker sort yields a single sorted run, so emit a
   // final sort and skip the LocalMerge; the MergeExchange combines the
   // per-worker runs.
-  const bool singleDriver = options_.numDrivers == 1;
+  const bool singleDriver = options_.maxLocalPartitions == 1;
 
   velox::core::PlanNodePtr node;
   if (op.isNoLimit()) {
@@ -1209,7 +1209,7 @@ velox::core::PlanNodePtr ToVelox::makeLimit(
   // partition keys), skip the distributed limit pattern.
   if (isSingle_ || op.input()->distribution().isGather()) {
     auto input = makeFragment(op.input(), fragment, stages);
-    if (options_.numDrivers == 1) {
+    if (options_.maxLocalPartitions == 1) {
       return addFinalLimit(nextId(), op.offset, op.limit, input);
     }
 
@@ -1226,7 +1226,7 @@ velox::core::PlanNodePtr ToVelox::makeLimit(
 
   auto node = addPartialLimit(nextId(), 0, op.offset + op.limit, input);
 
-  if (options_.numDrivers > 1) {
+  if (options_.maxLocalPartitions > 1) {
     node = addLocalGather(nextId(), node);
     node = addFinalLimit(nextId(), 0, op.offset + op.limit, node);
   }
@@ -1292,7 +1292,7 @@ velox::core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
 
 // Adds a local gather (empty partition keys) or local repartition (non-empty
 // partition keys) to ensure all rows for a partition are processed by a single
-// driver when numDrivers > 1.
+// driver when maxLocalPartitions > 1.
 velox::core::PlanNodePtr addLocalPartition(
     const velox::core::PlanNodeId& id,
     const velox::core::PlanNodePtr& input,
@@ -1619,7 +1619,8 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
   // probe side by join keys so each driver processes a non-overlapping subset
   // of keys and accesses independent counters. Skip if the probe is already
   // a counting join (its output is already partitioned by the same keys).
-  if (velox::core::isCountingJoin(join.joinType) && options_.numDrivers > 1) {
+  if (velox::core::isCountingJoin(join.joinType) &&
+      options_.maxLocalPartitions > 1) {
     auto* probeJoin =
         dynamic_cast<const velox::core::HashJoinNode*>(left.get());
     if (!probeJoin || !velox::core::isCountingJoin(probeJoin->joinType())) {
@@ -1738,7 +1739,7 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
     }
   }
 
-  if (op.preGroupedKeys.empty() && options_.numDrivers > 1 &&
+  if (op.preGroupedKeys.empty() && options_.maxLocalPartitions > 1 &&
       (op.step == velox::core::AggregationNode::Step::kFinal ||
        op.step == velox::core::AggregationNode::Step::kSingle)) {
     input = addLocalPartition(nextId(), input, keys);
@@ -1848,7 +1849,7 @@ velox::core::PlanNodePtr ToVelox::makeWindowInput(
   // through its sort/partition.
   auto input =
       maybeTrimColumns(makeFragment(op.input(), fragment, stages), op.input());
-  if (options_.numDrivers > 1) {
+  if (options_.maxLocalPartitions > 1) {
     input = addLocalPartition(nextId(), input, toFieldRefs(partitionKeys));
   }
   return input;
@@ -1976,8 +1977,8 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
         nextId(), outputType, exchangeSerdeKind_, sourcePlan);
   } else {
     VELOX_CHECK_NE(0, keys.size());
-    const auto numPartitions =
-        groupedLeavesWidth(*outerConsumerGroupedLeaves, options_.numWorkers);
+    const auto numPartitions = groupedLeavesWidth(
+        *outerConsumerGroupedLeaves, options_.maxRemotePartitions);
     if (numPartitions == 1) {
       source.fragment.planNode = velox::core::PartitionedOutputNode::single(
           nextId(), outputType, exchangeSerdeKind_, sourcePlan);
@@ -2206,7 +2207,7 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
 
   auto* layout = table.layouts().front();
 
-  if (options_.numDrivers > 1) {
+  if (options_.maxLocalPartitions > 1) {
     const auto& partitionColumns = layout->partitionColumns();
     if (!partitionColumns.empty()) {
       std::vector<velox::column_index_t> channels;
@@ -2242,7 +2243,7 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
 
   auto inputType = ROW(inputNames, inputTypes);
 
-  auto numDrivers = options_.numDrivers;
+  auto numDrivers = options_.maxLocalPartitions;
   if ((fragment.type == FragmentType::kSingle ||
        fragment.type == FragmentType::kCoordinator) &&
       numDrivers > 1 && isSingleThreadedPipeline(input)) {
@@ -2250,10 +2251,12 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
   }
 
   VELOX_CHECK(
-      fragment.type != FragmentType::kFixed || fragment.width.has_value(),
-      "kFixed fragment must have width set");
-  auto numTasks = fragment.width.value_or(
-      fragment.type == FragmentType::kSource ? options_.numWorkers : 1);
+      fragment.type != FragmentType::kFixed ||
+          fragment.numRemotePartitions.has_value(),
+      "kFixed fragment must have numRemotePartitions set");
+  auto numTasks = fragment.numRemotePartitions.value_or(
+      fragment.type == FragmentType::kSource ? options_.maxRemotePartitions
+                                             : 1);
 
   WriteStatsBuilder statsBuilder(
       table, inputType, *handle, numDrivers, numTasks);
@@ -2364,7 +2367,7 @@ velox::core::PlanNodePtr ToVelox::makeMarkDistinct(
     ExecutableFragment& fragment,
     std::vector<ExecutableFragment>& stages) {
   auto input = makeFragment(op.input(), fragment, stages);
-  if (options_.numDrivers > 1) {
+  if (options_.maxLocalPartitions > 1) {
     // Add local partition unless keys are already co-located.
     bool needsLocalPartition = true;
     if (op.input()->relType() != RelType::kRepartition) {

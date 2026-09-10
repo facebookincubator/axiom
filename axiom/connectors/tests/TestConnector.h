@@ -266,7 +266,7 @@ class TestTable : public Table {
 
 /// SplitSource for TestTable. Emits one TestConnectorSplit per index in
 /// 'dataIndices'. When 'partitionType' is set, tags each Split with
-/// groupId = dataBucketIds[i] % partitionType->numPartitions().
+/// remotePartition = dataBucketIds[i] % partitionType->numPartitions().
 class TestSplitSource : public SplitSource {
  public:
   TestSplitSource(

@@ -366,18 +366,20 @@ folly::coro::Task<SplitBatch> LocalHiveSplitSource::co_getSplits(
       if (!serdeParameters_.empty()) {
         builder.serdeParameters(serdeParameters_);
       }
-      std::optional<int32_t> groupId;
+      std::optional<int32_t> remotePartition;
       if (partitionType_ != nullptr) {
         VELOX_CHECK(
             info->bucketNumber.has_value(),
             "Bucketed scan requires bucketNumber on every file");
         const auto* hivePartitionType =
             partitionType_->asChecked<HivePartitionType>();
-        groupId =
+        remotePartition =
             hivePartitionType->mapBucketToPartition(info->bucketNumber.value());
       }
       batch.splits.push_back(
-          Split{.connectorSplit = builder.build(), .groupId = groupId});
+          Split{
+              .connectorSplit = builder.build(),
+              .remotePartition = remotePartition});
       ++splitWithinFile_;
     }
     if (splitWithinFile_ >= splitsPerFile) {

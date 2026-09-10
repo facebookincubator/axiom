@@ -51,8 +51,8 @@ class TpchResultTest : public test::HiveQueriesTestBase,
   // multi-driver ({1,1}, {1,4}, {2,1}, {2,4}) — exercising the local exchanges
   // that numDrivers > 1 inserts.
   static inline const MultiFragmentPlan::Options kMaxParallelism{
-      .numWorkers = 2,
-      .numDrivers = 4,
+      .maxRemotePartitions = 2,
+      .maxLocalPartitions = 4,
   };
 
   void checkTpchQuery(int32_t query) {

@@ -42,7 +42,10 @@ TEST_P(RemoteOutputTest, scan) {
   // wraps output in a PartitionedOutputNode for remote consumption.
   {
     auto plan = planVelox(
-        logicalPlan, {.numWorkers = 2, .numDrivers = 2, .remoteOutput = true});
+        logicalPlan,
+        {.maxRemotePartitions = 2,
+         .maxLocalPartitions = 2,
+         .remoteOutput = true});
     auto matcher = matchScan("t").partitionedOutputSingle().build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
   }
@@ -51,7 +54,10 @@ TEST_P(RemoteOutputTest, scan) {
   // results onto a single node.
   {
     auto plan = planVelox(
-        logicalPlan, {.numWorkers = 2, .numDrivers = 2, .remoteOutput = false});
+        logicalPlan,
+        {.maxRemotePartitions = 2,
+         .maxLocalPartitions = 2,
+         .remoteOutput = false});
     auto matcher = matchScan("t").gather().build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
   }
@@ -60,7 +66,10 @@ TEST_P(RemoteOutputTest, scan) {
   // to enable remote consumption even though there is only one worker.
   {
     auto plan = planVelox(
-        logicalPlan, {.numWorkers = 1, .numDrivers = 2, .remoteOutput = true});
+        logicalPlan,
+        {.maxRemotePartitions = 1,
+         .maxLocalPartitions = 2,
+         .remoteOutput = true});
     auto matcher = matchScan("t").partitionedOutputSingle().build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
   }
@@ -69,7 +78,10 @@ TEST_P(RemoteOutputTest, scan) {
   // are consumed locally.
   {
     auto plan = planVelox(
-        logicalPlan, {.numWorkers = 1, .numDrivers = 2, .remoteOutput = false});
+        logicalPlan,
+        {.maxRemotePartitions = 1,
+         .maxLocalPartitions = 2,
+         .remoteOutput = false});
     auto matcher = matchScan("t").build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
   }
@@ -84,7 +96,9 @@ TEST_P(RemoteOutputTest, globalAggregation) {
     SCOPED_TRACE(remoteOutput ? "remoteOutput=true" : "remoteOutput=false");
     auto plan = planVelox(
         logicalPlan,
-        {.numWorkers = 2, .numDrivers = 2, .remoteOutput = remoteOutput});
+        {.maxRemotePartitions = 2,
+         .maxLocalPartitions = 2,
+         .remoteOutput = remoteOutput});
 
     auto builder = matchScan("t").distributedAggregation({}, {"sum(b)"});
     builder.partitionedOutputSingleIf(remoteOutput);
@@ -103,7 +117,9 @@ TEST_P(RemoteOutputTest, groupByAggregation) {
     SCOPED_TRACE(remoteOutput ? "remoteOutput=true" : "remoteOutput=false");
     auto plan = planVelox(
         logicalPlan,
-        {.numWorkers = 2, .numDrivers = 2, .remoteOutput = remoteOutput});
+        {.maxRemotePartitions = 2,
+         .maxLocalPartitions = 2,
+         .remoteOutput = remoteOutput});
 
     auto builder = matchScan("t")
                        .distributedAggregation({"a"}, {"sum(b) as sum"})
@@ -128,7 +144,9 @@ TEST_P(RemoteOutputTest, repeatedOutputName) {
     SCOPED_TRACE(remoteOutput ? "remoteOutput=true" : "remoteOutput=false");
     auto plan = planVelox(
         logicalPlan,
-        {.numWorkers = 2, .numDrivers = 2, .remoteOutput = remoteOutput});
+        {.maxRemotePartitions = 2,
+         .maxLocalPartitions = 2,
+         .remoteOutput = remoteOutput});
 
     auto builder = matchScan("t");
     if (remoteOutput) {
@@ -158,7 +176,9 @@ TEST_P(RemoteOutputTest, sameColumnTwice) {
     SCOPED_TRACE(remoteOutput ? "remoteOutput=true" : "remoteOutput=false");
     auto plan = planVelox(
         logicalPlan,
-        {.numWorkers = 2, .numDrivers = 2, .remoteOutput = remoteOutput});
+        {.maxRemotePartitions = 2,
+         .maxLocalPartitions = 2,
+         .remoteOutput = remoteOutput});
 
     auto builder = matchScan("t");
     if (remoteOutput) {
@@ -192,7 +212,9 @@ TEST_P(RemoteOutputTest, tableWrite) {
     SCOPED_TRACE(remoteOutput ? "remoteOutput=true" : "remoteOutput=false");
     auto plan = planVelox(
         logicalPlan,
-        {.numWorkers = 2, .numDrivers = 2, .remoteOutput = remoteOutput});
+        {.maxRemotePartitions = 2,
+         .maxLocalPartitions = 2,
+         .remoteOutput = remoteOutput});
 
     auto builder = matchScan("t").tableWrite().localGather().tableWriteMerge();
     // v2 always runs the final TableWriteMerge on a separate coordinator

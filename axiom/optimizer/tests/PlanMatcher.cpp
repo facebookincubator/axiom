@@ -2805,9 +2805,10 @@ PlanMatcherBuilder& PlanMatcherBuilder::fragment(FragmentDetails details) {
       matcher_,
       [details](const axiom::optimizer::ExecutableFragment& fragment) {
         if (details.width.has_value()) {
-          ASSERT_TRUE(fragment.width.has_value())
-              << "fragment width is not set";
-          EXPECT_EQ(*fragment.width, details.width.value()) << "fragment width";
+          ASSERT_TRUE(fragment.numRemotePartitions.has_value())
+              << "fragment numRemotePartitions is not set";
+          EXPECT_EQ(*fragment.numRemotePartitions, details.width.value())
+              << "fragment numRemotePartitions";
         }
         if (!details.bucketedScans.has_value() &&
             !details.bucketedExchanges.has_value()) {

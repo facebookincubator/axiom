@@ -68,8 +68,8 @@ class HivePartitionType : public connector::PartitionType {
 
   /// Returns a HivePartitionType whose partition count is
   /// min(numBuckets, maxPartitions). The native bucket count is preserved;
-  /// the partition count drives fragment width, and makeSpec maps native
-  /// buckets onto partitions via modulo.
+  /// the partition count drives the fragment's numRemotePartitions, and
+  /// makeSpec maps native buckets onto partitions via modulo.
   std::shared_ptr<PartitionType> scaleDown(
       int32_t maxPartitions) const override;
 

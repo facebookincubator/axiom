@@ -43,9 +43,9 @@ class EmitPass {
   /// user-visible layout described by 'outputColumns' and 'outputNames'
   /// (aligned 1:1). Each `ir.Exchange` becomes a fragment boundary (a producer
   /// fragment ending in `PartitionedOutput`, a consumer `Exchange`). For
-  /// `options.numWorkers > 1` a final gather collects the distributed output
-  /// into a single root fragment; for `numWorkers == 1` the result is one
-  /// fragment. 'session' supplies the connector
+  /// `options.maxRemotePartitions > 1` a final gather collects the distributed
+  /// output into a single root fragment; for `maxRemotePartitions == 1` the
+  /// result is one fragment. 'session' supplies the connector
   /// session for table writes; 'evaluator' folds filter constants. A `Scan`
   /// carries the connector handle it is read with. Throws VELOX_NYI for
   /// unsupported node or expression types.

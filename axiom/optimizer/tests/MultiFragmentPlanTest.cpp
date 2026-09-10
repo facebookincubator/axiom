@@ -65,12 +65,12 @@ class MultiFragmentPlanTest : public testing::Test {
   // Creates a single-fragment plan with the given type.
   MultiFragmentPlan makeSingleFragmentPlan(
       FragmentType type,
-      std::optional<int32_t> width = std::nullopt,
+      std::optional<int32_t> numRemotePartitions = std::nullopt,
       const MultiFragmentPlan::Options& options = defaultOptions()) {
     ExecutableFragment fragment;
     fragment.taskPrefix = "stage0";
     fragment.type = type;
-    fragment.width = width;
+    fragment.numRemotePartitions = numRemotePartitions;
     fragment.fragment = values();
     return MultiFragmentPlan({std::move(fragment)}, options);
   }
@@ -78,7 +78,7 @@ class MultiFragmentPlanTest : public testing::Test {
   static MultiFragmentPlan::Options defaultOptions() {
     return {
         .queryId = "test",
-        .numWorkers = 10,
+        .maxRemotePartitions = 10,
     };
   }
 
@@ -109,7 +109,7 @@ TEST_F(MultiFragmentPlanTest, validDistributedPlan) {
   ExecutableFragment consumer;
   consumer.taskPrefix = "stage1";
   consumer.type = FragmentType::kFixed;
-  consumer.width = 4;
+  consumer.numRemotePartitions = 4;
   consumer.fragment = exchange();
   consumer.inputStages.emplace_back(consumer.fragment.planNode->id(), "stage0");
 
@@ -129,33 +129,33 @@ TEST_F(MultiFragmentPlanTest, fixedWithoutWidth) {
   VELOX_ASSERT_THROW(
       makeSingleFragmentPlan(FragmentType::kFixed)
           .checkConsistency(/*mayBeEmpty=*/false),
-      "kFixed fragment must have width set");
+      "kFixed fragment must have numRemotePartitions set");
 }
 
 TEST_F(MultiFragmentPlanTest, singleWithWidth) {
   VELOX_ASSERT_THROW(
       makeSingleFragmentPlan(FragmentType::kSingle, 1)
           .checkConsistency(/*mayBeEmpty=*/false),
-      "fragment must not have width set");
+      "fragment must not have numRemotePartitions set");
 }
 
 TEST_F(MultiFragmentPlanTest, coordinatorWithWidth) {
   VELOX_ASSERT_THROW(
       makeSingleFragmentPlan(FragmentType::kCoordinator, 1)
           .checkConsistency(/*mayBeEmpty=*/false),
-      "fragment must not have width set");
+      "fragment must not have numRemotePartitions set");
 }
 
 TEST_F(MultiFragmentPlanTest, invalidWidth) {
   VELOX_ASSERT_THROW(
       makeSingleFragmentPlan(FragmentType::kFixed, 0)
           .checkConsistency(/*mayBeEmpty=*/false),
-      "Fragment width must be positive");
+      "Fragment numRemotePartitions must be positive");
 
   VELOX_ASSERT_THROW(
       makeSingleFragmentPlan(FragmentType::kFixed, 20)
           .checkConsistency(/*mayBeEmpty=*/false),
-      "Fragment width exceeds numWorkers");
+      "Fragment numRemotePartitions exceeds maxRemotePartitions");
 }
 
 TEST_F(MultiFragmentPlanTest, sourceWithWidthHint) {
@@ -205,13 +205,13 @@ TEST_F(MultiFragmentPlanTest, lastFragmentIsProducer) {
   ExecutableFragment producer;
   producer.taskPrefix = "stage1";
   producer.type = FragmentType::kFixed;
-  producer.width = 4;
+  producer.numRemotePartitions = 4;
   producer.fragment = partitionedOutput(4);
 
   ExecutableFragment consumer;
   consumer.taskPrefix = "stage0";
   consumer.type = FragmentType::kFixed;
-  consumer.width = 4;
+  consumer.numRemotePartitions = 4;
   consumer.fragment = exchange();
   consumer.inputStages.emplace_back(consumer.fragment.planNode->id(), "stage1");
 
@@ -240,7 +240,7 @@ TEST_F(MultiFragmentPlanTest, partitionCountMismatch) {
   ExecutableFragment consumer;
   consumer.taskPrefix = "stage1";
   consumer.type = FragmentType::kFixed;
-  consumer.width = 8;
+  consumer.numRemotePartitions = 8;
   consumer.fragment = exchange();
   consumer.inputStages.emplace_back(consumer.fragment.planNode->id(), "stage0");
 
@@ -281,7 +281,7 @@ TEST_F(MultiFragmentPlanTest, lastFragmentType) {
           .checkConsistency(/*mayBeEmpty=*/false),
       "Last fragment must be kSingle or kCoordinator");
 
-  // kSource is allowed as last fragment with numWorkers == 1.
+  // kSource is allowed as last fragment with maxRemotePartitions == 1.
   EXPECT_NO_THROW(makeSingleFragmentPlan(
                       FragmentType::kSource,
                       std::nullopt,
@@ -306,7 +306,7 @@ TEST_F(MultiFragmentPlanTest, orphanFragment) {
   ExecutableFragment output;
   output.taskPrefix = "stage1";
   output.type = FragmentType::kFixed;
-  output.width = 4;
+  output.numRemotePartitions = 4;
   output.fragment = values();
 
   auto plan =
@@ -328,7 +328,7 @@ TEST_F(MultiFragmentPlanTest, producerReferencedByMultipleConsumers) {
   ExecutableFragment consumerA;
   consumerA.taskPrefix = "stage1";
   consumerA.type = FragmentType::kFixed;
-  consumerA.width = 4;
+  consumerA.numRemotePartitions = 4;
   consumerA.fragment = exchange();
   consumerA.inputStages.emplace_back(
       consumerA.fragment.planNode->id(), "stage0");
@@ -336,7 +336,7 @@ TEST_F(MultiFragmentPlanTest, producerReferencedByMultipleConsumers) {
   ExecutableFragment consumerB;
   consumerB.taskPrefix = "stage2";
   consumerB.type = FragmentType::kFixed;
-  consumerB.width = 4;
+  consumerB.numRemotePartitions = 4;
   consumerB.fragment = exchange();
   consumerB.inputStages.emplace_back(
       consumerB.fragment.planNode->id(), "stage0");

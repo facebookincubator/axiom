@@ -170,19 +170,21 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
       for (auto& split : batch.splits) {
         size_t targetTask;
         if (grouped) {
-          // Grouped execution routes each split to the task owning its group.
-          // The connector tags grouped splits with a groupId in
-          // [0, tasks.size()); same-group splits must share a task.
+          // Grouped execution routes each split to the task owning its
+          // remote partition. The connector tags grouped splits with a
+          // remotePartition in [0, tasks.size()); same-partition splits must
+          // share a task.
           VELOX_CHECK(
-              split.groupId.has_value(),
-              "Grouped scan produced a split without a groupId: {}",
+              split.remotePartition.has_value(),
+              "Grouped scan produced a split without a remotePartition: {}",
               scanId);
-          VELOX_CHECK_LT(static_cast<size_t>(*split.groupId), tasks.size());
-          targetTask = static_cast<size_t>(*split.groupId);
+          VELOX_CHECK_LT(
+              static_cast<size_t>(*split.remotePartition), tasks.size());
+          targetTask = static_cast<size_t>(*split.remotePartition);
         } else {
-          // Not grouped: round-robin. Any groupId a connector stamped is
-          // ignored here rather than used as a task index that could be out of
-          // range.
+          // Not grouped: round-robin. Any remotePartition a connector stamped
+          // is ignored here rather than used as a task index that could be out
+          // of range.
           targetTask = taskIdx;
           taskIdx = (taskIdx + 1) % tasks.size();
         }
@@ -492,12 +494,12 @@ void LocalRunner::start() {
     VELOX_CHECK_EQ(state_, State::kInitialized);
   }
 
-  params_.maxDrivers = plan_->options().numDrivers;
+  params_.maxDrivers = plan_->options().maxLocalPartitions;
   params_.planNode = fragments_.back().fragment.planNode;
   params_.serialExecution = !params_.queryCtx->isExecutorSupplied();
 
   VELOX_CHECK_LE(
-      fragments_.back().width.value_or(1),
+      fragments_.back().numRemotePartitions.value_or(1),
       1,
       "Last fragment must be single-task");
 
@@ -755,9 +757,9 @@ void LocalRunner::makeStages(
       stages_.emplace_back();
     }
 
-    auto numTasks = fragment.width.value_or(
+    auto numTasks = fragment.numRemotePartitions.value_or(
         fragment.type == optimizer::FragmentType::kSource
-            ? plan_->options().numWorkers
+            ? plan_->options().maxRemotePartitions
             : 1);
     for (auto i = 0; i < numTasks; ++i) {
       auto taskId = fmt::format(
@@ -784,7 +786,7 @@ void LocalRunner::makeStages(
         std::lock_guard<std::mutex> lock(mutex_);
         stages_.back().push_back(task);
       }
-      task->start(plan_->options().numDrivers);
+      task->start(plan_->options().maxLocalPartitions);
     }
   }
 

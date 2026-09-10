@@ -164,8 +164,8 @@ class WriteTest : public test::HiveQueriesTestBase,
       const std::function<void(const MultiFragmentPlan& plan)>& verifyPlan =
           nullptr,
       const MultiFragmentPlan::Options& options = {
-          .numWorkers = 4,
-          .numDrivers = 4,
+          .maxRemotePartitions = 4,
+          .maxLocalPartitions = 4,
       }) {
     SCOPED_TRACE(sql);
 
@@ -825,7 +825,7 @@ TEST_P(WriteTest, ctasValuesNoMerge) {
         auto matcher = matchValues().project().tableWrite().build();
         AXIOM_ASSERT_PLAN(nodeAt(plan, 0), matcher);
       },
-      {.numWorkers = 4, .numDrivers = 4});
+      {.maxRemotePartitions = 4, .maxLocalPartitions = 4});
 }
 
 TEST_P(WriteTest, ctasBucketedSql) {
@@ -894,7 +894,7 @@ TEST_P(WriteTest, ctasBucketedSingleNode) {
                            .build();
         AXIOM_ASSERT_PLAN(nodeAt(plan, 0), matcher);
       },
-      {.numWorkers = 1, .numDrivers = 3});
+      {.maxRemotePartitions = 1, .maxLocalPartitions = 3});
 
   verifyPartitionedLayout(getLayout("test"), "key", 128);
 }
@@ -919,7 +919,7 @@ TEST_P(WriteTest, ctasBucketedSingleThreaded) {
                            .build();
         AXIOM_ASSERT_PLAN(nodeAt(plan, 0), matcher);
       },
-      {.numWorkers = 1, .numDrivers = 1});
+      {.maxRemotePartitions = 1, .maxLocalPartitions = 1});
 
   verifyPartitionedLayout(getLayout("test"), "key", 64);
 }

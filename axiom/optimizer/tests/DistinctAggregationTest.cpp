@@ -29,8 +29,8 @@ class DistinctAggregationTest : public test::QueryTestBase,
                                 public ::testing::WithParamInterface<bool> {
  public:
   DistinctAggregationTest() {
-    runnerOptions_.numWorkers = 4;
-    runnerOptions_.numDrivers = 4;
+    runnerOptions_.maxRemotePartitions = 4;
+    runnerOptions_.maxLocalPartitions = 4;
     optimizerOptions_.alwaysPlanPartialAggregation = true;
   }
 

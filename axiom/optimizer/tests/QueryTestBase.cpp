@@ -142,8 +142,8 @@ runner::RunnerSessionPtr makeRunnerSession(const std::string& queryId) {
 
 TestResult QueryTestBase::runVelox(const core::PlanNodePtr& plan) {
   MultiFragmentPlan::Options options;
-  options.numWorkers = 1;
-  options.numDrivers = 1;
+  options.maxRemotePartitions = 1;
+  options.maxLocalPartitions = 1;
   options.queryId = fmt::format("q{}", ++gQueryCounter);
 
   ExecutableFragment fragment(fmt::format("{}.0", options.queryId));
@@ -263,7 +263,8 @@ void QueryTestBase::verifyOptimization(
       history,
       veloxQueryCtx,
       evaluator,
-      MultiFragmentPlan::Options{.numWorkers = 1, .numDrivers = 1});
+      MultiFragmentPlan::Options{
+          .maxRemotePartitions = 1, .maxLocalPartitions = 1});
 
   callback(optimization);
 }
@@ -314,8 +315,8 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
         fmt::format("{}.plans", planFilePathPrefix.value()));
 
     *planPath << "generated: " << formatCurrentTime() << " (snapshot)\n";
-    *planPath << "numWorkers: " << options.numWorkers << "\n";
-    *planPath << "numDrivers: " << options.numDrivers << "\n\n";
+    *planPath << "maxRemotePartitions: " << options.maxRemotePartitions << "\n";
+    *planPath << "maxLocalPartitions: " << options.maxLocalPartitions << "\n\n";
   }
 
   SCOPE_EXIT {
@@ -414,25 +415,31 @@ void QueryTestBase::checkSame(
   VELOX_CHECK_NOT_NULL(planNode);
 
   std::vector<MultiFragmentPlan::Options> testOptions = {
-      {.numWorkers = 1, .numDrivers = 1},
+      {.maxRemotePartitions = 1, .maxLocalPartitions = 1},
   };
 
-  if (options.numDrivers > 1) {
-    testOptions.push_back({.numWorkers = 1, .numDrivers = options.numDrivers});
+  if (options.maxLocalPartitions > 1) {
+    testOptions.push_back(
+        {.maxRemotePartitions = 1,
+         .maxLocalPartitions = options.maxLocalPartitions});
   }
 
-  if (options.numWorkers > 1) {
-    testOptions.push_back({.numWorkers = options.numWorkers, .numDrivers = 1});
+  if (options.maxRemotePartitions > 1) {
+    testOptions.push_back(
+        {.maxRemotePartitions = options.maxRemotePartitions,
+         .maxLocalPartitions = 1});
   }
 
-  if (options.numWorkers > 1 && options.numDrivers > 1) {
+  if (options.maxRemotePartitions > 1 && options.maxLocalPartitions > 1) {
     testOptions.push_back(options);
   }
 
   for (const auto& test : testOptions) {
     SCOPED_TRACE(
         fmt::format(
-            "workers: {}, drivers: {}", test.numWorkers, test.numDrivers));
+            "workers: {}, drivers: {}",
+            test.maxRemotePartitions,
+            test.maxLocalPartitions));
 
     auto plan = planVelox(planNode, test);
 
@@ -445,8 +452,10 @@ void QueryTestBase::checkSame(
 velox::core::PlanNodePtr QueryTestBase::toSingleNodePlan(
     const logical_plan::LogicalPlanNodePtr& logicalPlan,
     int32_t numDrivers) {
-  auto plan =
-      planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = numDrivers}).plan;
+  auto plan = planVelox(
+                  logicalPlan,
+                  {.maxRemotePartitions = 1, .maxLocalPartitions = numDrivers})
+                  .plan;
 
   EXPECT_EQ(1, plan->fragments().size());
   return plan->fragments().at(0).fragment.planNode;

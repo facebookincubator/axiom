@@ -95,7 +95,9 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
   // scan results.
   optimizer::MultiFragmentPlanPtr makeScanPlan(int32_t numWorkers) {
     optimizer::MultiFragmentPlan::Options options = {
-        .queryId = makeQueryId(), .numWorkers = numWorkers, .numDrivers = 2};
+        .queryId = makeQueryId(),
+        .maxRemotePartitions = numWorkers,
+        .maxLocalPartitions = 2};
 
     test::DistributedPlanBuilder builder(options, idGenerator_, pool_.get());
     builder.tableScan("t", rowType_);
@@ -109,7 +111,9 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
       std::string_view project = "c0",
       bool broadcastBuild = false) {
     optimizer::MultiFragmentPlan::Options options = {
-        .queryId = makeQueryId(), .numWorkers = 4, .numDrivers = 2};
+        .queryId = makeQueryId(),
+        .maxRemotePartitions = 4,
+        .maxLocalPartitions = 2};
     const int32_t width = 3;
 
     test::DistributedPlanBuilder rootBuilder(
@@ -423,7 +427,7 @@ TEST_F(LocalRunnerTest, broadcast) {
 
 TEST_F(LocalRunnerTest, lastStageWithMultipleInputs) {
   optimizer::MultiFragmentPlan::Options options = {
-      .queryId = "test.", .numWorkers = 1, .numDrivers = 1};
+      .queryId = "test.", .maxRemotePartitions = 1, .maxLocalPartitions = 1};
 
   test::DistributedPlanBuilder rootBuilder(options, idGenerator_, pool_.get());
   auto probe = test::DistributedPlanBuilder(rootBuilder)

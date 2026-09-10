@@ -125,7 +125,7 @@ class FinishWrite {
 enum class FragmentType {
   /// Parallelism determined by the data source (number of splits).
   kSource,
-  /// Exactly `width` tasks.
+  /// Exactly `numRemotePartitions` tasks.
   kFixed,
   /// Exactly 1 task, any worker.
   kSingle,
@@ -149,9 +149,13 @@ struct ExecutableFragment {
   /// Scheduling type for this fragment.
   FragmentType type;
 
-  /// Number of tasks. Required for kFixed. std::nullopt for kSource (runtime
-  /// decides actual count), kSingle, and kCoordinator.
-  std::optional<int32_t> width;
+  /// Number of remote partitions, i.e. the number of tasks the scheduler
+  /// must run for this fragment. Required for kFixed. std::nullopt for
+  /// kSource (runtime decides actual count), kSingle, and kCoordinator.
+  /// Splits tagged with a remotePartition in [0, numRemotePartitions) are
+  /// routed to the task with that index; the scheduler must obey this
+  /// decision.
+  std::optional<int32_t> numRemotePartitions;
 
   velox::core::PlanFragment fragment;
 
@@ -161,11 +165,12 @@ struct ExecutableFragment {
 
   /// The leaf nodes of a fragment that runs one bucket group at a time. A scan
   /// read that way maps to the partitioning it is read by, already coarsened to
-  /// the worker count, and the connector tags each emitted Split with a groupId
-  /// the runtime routes by. An exchange feeding the same fragment maps to null:
-  /// its partitions line up with those groups by construction. All non-null
-  /// entries share numPartitions(), which is the fragment's width. Empty when
-  /// the fragment does not run grouped.
+  /// the worker count, and the connector tags each emitted Split with a
+  /// remotePartition the runtime routes by. An exchange feeding the same
+  /// fragment maps to null: its partitions line up with those groups by
+  /// construction. All non-null entries share numPartitions(), which is the
+  /// fragment's numRemotePartitions. Empty when the fragment does not run
+  /// grouped.
   folly::F14FastMap<
       velox::core::PlanNodeId,
       std::shared_ptr<connector::PartitionType>>
@@ -189,15 +194,15 @@ class MultiFragmentPlan {
     /// Query id used as a prefix for tasks ids.
     std::string queryId;
 
-    /// Maximum Number of independent Tasks for one stage of execution. If 1,
-    /// there are no exchanges. Starts as the workers available to the query.
+    /// Maximum number of remote partitions for one stage of execution. If 1,
+    /// there are no exchanges.
     /// The optimizer may lower it, so a plan carries the count it was planned
     /// for rather than the count available.
-    int32_t numWorkers{1};
+    int32_t maxRemotePartitions{1};
 
-    /// Number of threads in a fragment in a worker. If 1, there are no local
-    /// exchanges.
-    int32_t numDrivers{4};
+    /// Maximum number of local partitions, i.e. threads in a fragment in a
+    /// worker. If 1, there are no local exchanges.
+    int32_t maxLocalPartitions{4};
 
     /// Controls how query results are delivered from the final plan fragment.
     ///
@@ -218,7 +223,10 @@ class MultiFragmentPlan {
     /// Used by constant folding and join sampling which always run via
     /// LocalRunner regardless of the query's distributed options.
     static Options singleNode() {
-      return Options{.numWorkers = 1, .numDrivers = 1, .remoteOutput = false};
+      return Options{
+          .maxRemotePartitions = 1,
+          .maxLocalPartitions = 1,
+          .remoteOutput = false};
     }
   };
 
@@ -251,7 +259,8 @@ class MultiFragmentPlan {
       velox::core::PlanSummaryOptions options = {}) const;
 
   /// Validates structural consistency of the plan. Checks fragment types,
-  /// widths, producer-consumer linkage, and partition count alignment.
+  /// numRemotePartitions, producer-consumer linkage, and partition count
+  /// alignment.
   /// 'mayBeEmpty' allows a plan with no fragments, which is what a write the
   /// connector performs through metadata alone produces.
   void checkConsistency(bool mayBeEmpty) const;

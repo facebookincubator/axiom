@@ -410,15 +410,15 @@ class ToVelox {
   FinishWrite finishWrite_;
 
   // Pending final merge spec for multi-worker writes. Set by makeWrite
-  // when numWorkers > 1, consumed by toVeloxPlan to add a
+  // when maxRemotePartitions > 1, consumed by toVeloxPlan to add a
   // TableWriteMerge(kFinal) after the gather exchange.
   std::optional<velox::core::ColumnStatsSpec> finalMergeSpec_;
 
   // Translates 'groupedLeaves' (keyed by const RelationOp*) into entries in
   // 'fragment.groupedNodes' (keyed by Velox PlanNodeId) using
   // 'relationOpToNodeId_'. After translation, if any non-null PartitionType
-  // entry is present, sets fragment.type = kFixed and fragment.width =
-  // numPartitions().
+  // entry is present, sets fragment.type = kFixed and
+  // fragment.numRemotePartitions = numPartitions().
   void applyGroupedLeaves(
       ExecutableFragment& fragment,
       const GroupedLeaves& groupedLeaves);

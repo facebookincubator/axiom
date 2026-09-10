@@ -69,8 +69,8 @@ class TpchPlanTest : public optimizer::test::QueryTestBase {
                    optimizer::test::readTpchSql(options.query),
                    kTestConnectorId),
                {
-                   .numWorkers = options.numWorkers,
-                   .numDrivers = options.numDrivers,
+                   .maxRemotePartitions = options.numWorkers,
+                   .maxLocalPartitions = options.numDrivers,
                })
         .plan;
   }
@@ -374,8 +374,10 @@ TEST_F(TpchPlanTest, q09Alt) {
 
   auto logicalPlan =
       parseSelect(optimizer::test::readTpchSql("q9_alt"), kTestConnectorId);
-  ASSERT_NO_THROW(planVelox(logicalPlan, {.numWorkers = 2, .numDrivers = 1}));
-  ASSERT_NO_THROW(planVelox(logicalPlan, {.numWorkers = 2, .numDrivers = 4}));
+  ASSERT_NO_THROW(planVelox(
+      logicalPlan, {.maxRemotePartitions = 2, .maxLocalPartitions = 1}));
+  ASSERT_NO_THROW(planVelox(
+      logicalPlan, {.maxRemotePartitions = 2, .maxLocalPartitions = 4}));
 }
 
 TEST_F(TpchPlanTest, q10) {

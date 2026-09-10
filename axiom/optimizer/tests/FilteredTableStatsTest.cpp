@@ -59,7 +59,7 @@ class FilteredTableStatsTest : public test::HiveQueriesTestBase,
 
     auto planAndStats = planVelox(
         logicalPlan,
-        {.numWorkers = 1, .numDrivers = 1},
+        {.maxRemotePartitions = 1, .maxLocalPartitions = 1},
         std::move(optimizerOptions));
 
     const auto& root = planAndStats.plan->fragments().back().fragment.planNode;

@@ -857,8 +857,9 @@ class PlanMatcherBuilder {
       const std::vector<std::string>& keys,
       const std::vector<std::string>& markerAliases);
 
-  /// Sets whether this matcher describes a multi-threaded (numDrivers > 1)
-  /// plan. When enabled (the default for a new builder), the distributed*
+  /// Sets whether this matcher describes a multi-threaded
+  /// (maxLocalPartitions > 1) plan. When enabled (the default for a new
+  /// builder), the distributed*
   /// helpers (distributedAggregation, distributedSingleAggregation,
   /// distributedOrderBy, distributedMarkDistinct) expect the additional
   /// local-exchange nodes that intra-node parallelism inserts, e.g.

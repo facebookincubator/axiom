@@ -435,13 +435,15 @@ folly::coro::Task<SplitBatch> TestSplitSource::co_getSplits(
   for (auto i = nextOffset_; i < end; ++i) {
     auto split =
         std::make_shared<TestConnectorSplit>(connectorId_, dataIndices_[i]);
-    std::optional<int32_t> groupId;
+    std::optional<int32_t> remotePartition;
     if (partitionType_ != nullptr) {
       VELOX_CHECK_LT(i, dataBucketIds_.size());
-      groupId = dataBucketIds_[i] % partitionType_->numPartitions();
+      remotePartition = dataBucketIds_[i] % partitionType_->numPartitions();
     }
     batch.splits.push_back(
-        Split{.connectorSplit = std::move(split), .groupId = groupId});
+        Split{
+            .connectorSplit = std::move(split),
+            .remotePartition = remotePartition});
   }
   nextOffset_ = end;
   batch.noMoreSplits = (nextOffset_ >= dataIndices_.size());

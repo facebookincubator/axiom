@@ -221,7 +221,8 @@ TEST_F(AggregationTest, orderBy) {
     option.alwaysPlanPartialAggregation = (i == 0);
     auto plan = planVelox(
         logicalPlan,
-        MultiFragmentPlan::Options{.numWorkers = 4, .numDrivers = 4},
+        MultiFragmentPlan::Options{
+            .maxRemotePartitions = 4, .maxLocalPartitions = 4},
         option);
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
   }
@@ -282,7 +283,8 @@ TEST_F(AggregationTest, fanoutPrecisionRegression) {
   options.alwaysPlanPartialAggregation = true;
   auto plan = planVelox(
                   logicalPlan,
-                  MultiFragmentPlan::Options{.numWorkers = 4, .numDrivers = 4},
+                  MultiFragmentPlan::Options{
+                      .maxRemotePartitions = 4, .maxLocalPartitions = 4},
                   options)
                   .plan;
 
@@ -396,7 +398,8 @@ TEST_F(AggregationTest, bucketedAggregation) {
 
   {
     SCOPED_TRACE("multiple drivers: partial reduces before the local exchange");
-    auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
+    auto plan = planVelox(
+        logicalPlan, {.maxRemotePartitions = 4, .maxLocalPartitions = 4});
     auto matcher = matchScan("t")
                        .partialAggregation({"k", "g"}, {"sum(v) as s"})
                        .localPartition({"k", "g"})
@@ -410,7 +413,8 @@ TEST_F(AggregationTest, bucketedAggregation) {
 
   {
     SCOPED_TRACE("single driver: no local exchange, single-step aggregation");
-    auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 1});
+    auto plan = planVelox(
+        logicalPlan, {.maxRemotePartitions = 4, .maxLocalPartitions = 1});
     auto matcher = matchScan("t")
                        .multiThreaded(false)
                        .singleAggregation({"k", "g"}, {"sum(v)"})
@@ -585,7 +589,8 @@ TEST_F(AggregationTest, groupingSetsOrderByWithGlobalSet) {
   {
     auto plan = planVelox(
         logicalPlan,
-        MultiFragmentPlan::Options{.numWorkers = 4, .numDrivers = 4});
+        MultiFragmentPlan::Options{
+            .maxRemotePartitions = 4, .maxLocalPartitions = 4});
 
     auto matcher =
         matchScan("t")
@@ -668,7 +673,9 @@ TEST_F(AggregationTest, mask) {
           .finalAggregation({}, {"sum(sum)", "avg(avg)"})
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(
-      planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4}).plan,
+      planVelox(
+          logicalPlan, {.maxRemotePartitions = 4, .maxLocalPartitions = 4})
+          .plan,
       distributedMatcher);
 }
 
@@ -875,7 +882,9 @@ TEST_F(AggregationTest, dropOrderByFromOrderInsensitiveAggregates) {
                                 .project()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(
-      planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4}).plan,
+      planVelox(
+          logicalPlan, {.maxRemotePartitions = 4, .maxLocalPartitions = 4})
+          .plan,
       distributedMatcher);
 }
 

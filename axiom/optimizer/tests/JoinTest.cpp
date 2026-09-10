@@ -532,8 +532,10 @@ TEST_P(JoinTest, broadcastSizeLimitGatesBroadcast) {
   // The 1000-row build (~16KB) is well under the default 100MB limit, so it is
   // broadcast rather than hash-partitioned.
   {
-    auto distributedPlan =
-        planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 1}, options);
+    auto distributedPlan = planVelox(
+        logicalPlan,
+        {.maxRemotePartitions = 4, .maxLocalPartitions = 1},
+        options);
     // V2 is worse: it adds a Project to reconstruct both equivalent join-key
     // names and emits `b_key` twice under different names.
     // TODO: Eliminate the V2 output-key reconstruction Project.
@@ -549,8 +551,10 @@ TEST_P(JoinTest, broadcastSizeLimitGatesBroadcast) {
   // so both sides are hash-partitioned on the join key.
   {
     options.broadcastSizeLimit = 1024;
-    auto distributedPlan =
-        planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 1}, options);
+    auto distributedPlan = planVelox(
+        logicalPlan,
+        {.maxRemotePartitions = 4, .maxLocalPartitions = 1},
+        options);
     // V2 is worse: it adds a Project to reconstruct both equivalent join-key
     // names after the partitioned join.
     auto matcher =

@@ -148,12 +148,12 @@ OutputDistribution outputDistribution(const velox::core::PlanNodePtr& root) {
 }
 
 std::string formatFragmentHeader(const ExecutableFragment& fragment) {
-  if (fragment.width.has_value()) {
+  if (fragment.numRemotePartitions.has_value()) {
     return fmt::format(
         "{} — {} × {}",
         fragment.taskPrefix,
         FragmentTypeName::toName(fragment.type),
-        fragment.width.value());
+        fragment.numRemotePartitions.value());
   }
   return fmt::format(
       "{} — {}", fragment.taskPrefix, FragmentTypeName::toName(fragment.type));

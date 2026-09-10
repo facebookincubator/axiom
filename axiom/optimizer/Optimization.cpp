@@ -81,8 +81,8 @@ Optimization::Optimization(
     : optimizerSession_{std::move(optimizerSession)},
       runnerSession_{std::move(runnerSession)},
       runnerOptions_(std::move(runnerOptions)),
-      isSingleWorker_(runnerOptions_.numWorkers == 1),
-      isSingleDriver_(runnerOptions_.numDrivers == 1),
+      isSingleWorker_(runnerOptions_.maxRemotePartitions == 1),
+      isSingleDriver_(runnerOptions_.maxLocalPartitions == 1),
       history_(history),
       veloxQueryCtx_(std::move(veloxQueryCtx)),
       aggregationPlanner_{
@@ -325,10 +325,12 @@ namespace {
 // Coarsens 'groupedLeaves' to the runner's task budget by calling scaleDown on
 // each non-null entry. GroupedLeaves is immutable once taken; this is the only
 // point that locks the per-leaf entries to runner-task partition counts.
-void scaleDownGroupedLeaves(GroupedLeaves& groupedLeaves, int32_t numWorkers) {
+void scaleDownGroupedLeaves(
+    GroupedLeaves& groupedLeaves,
+    int32_t maxRemotePartitions) {
   for (auto& [_, partitionType] : groupedLeaves) {
     if (partitionType != nullptr) {
-      partitionType = partitionType->scaleDown(numWorkers);
+      partitionType = partitionType->scaleDown(maxRemotePartitions);
     }
   }
 }
@@ -395,7 +397,7 @@ void commitGroupedLeavesForRepartition(
   collectFragmentLeaves(repartition->input().get(), producerLeaves);
   filterGroupedLeavesToProducerLeaves(groupedLeaves, producerLeaves);
   scaleDownGroupedLeaves(
-      groupedLeaves, state.optimization.runnerOptions().numWorkers);
+      groupedLeaves, state.optimization.runnerOptions().maxRemotePartitions);
   const auto& dist = repartition->distribution();
   if (dist.kind() == Distribution::Kind::kPartitioned &&
       !dist.partitionKeys().empty()) {
@@ -404,17 +406,17 @@ void commitGroupedLeavesForRepartition(
 }
 
 namespace {
-// Calls scaleDown(numWorkers) on 'partitionType' and returns the resulting
-// type, pushed onto 'owned' for lifetime management. Passes null through
-// unchanged.
+// Calls scaleDown(maxRemotePartitions) on 'partitionType' and returns the
+// resulting type, pushed onto 'owned' for lifetime management. Passes null
+// through unchanged.
 const connector::PartitionType* FOLLY_NULLABLE scaleDownPartitionType(
     const connector::PartitionType* partitionType,
-    int32_t numWorkers,
+    int32_t maxRemotePartitions,
     std::vector<std::shared_ptr<connector::PartitionType>>& owned) {
   if (partitionType == nullptr) {
     return nullptr;
   }
-  auto scaled = partitionType->scaleDown(numWorkers);
+  auto scaled = partitionType->scaleDown(maxRemotePartitions);
   const auto* raw = scaled.get();
   owned.push_back(std::move(scaled));
   return raw;
@@ -558,7 +560,8 @@ PlanP Optimization::bestPlan() {
     folly::F14FastSet<const RelationOp*> rootLeaves;
     collectFragmentLeaves(winner->op.get(), rootLeaves);
     filterGroupedLeavesToProducerLeaves(rootGroupedLeaves_, rootLeaves);
-    scaleDownGroupedLeaves(rootGroupedLeaves_, runnerOptions_.numWorkers);
+    scaleDownGroupedLeaves(
+        rootGroupedLeaves_, runnerOptions_.maxRemotePartitions);
   }
   return winner;
 }
@@ -1096,7 +1099,7 @@ uint32_t position(const V& exprs, Getter getter, const Expr& expr) {
 
 // True if single worker, i.e. do not plan remote exchanges
 bool isSingleWorker() {
-  return queryCtx()->optimization()->runnerOptions().numWorkers == 1;
+  return queryCtx()->optimization()->runnerOptions().maxRemotePartitions == 1;
 }
 
 CPSpan<Column> leadingColumns(const ExprVector& exprs) {
@@ -1264,7 +1267,7 @@ void alignJoinSides(
   Distribution distribution{
       scaleDownPartitionType(
           input->distribution().partitionType(),
-          state.optimization.runnerOptions().numWorkers,
+          state.optimization.runnerOptions().maxRemotePartitions,
           state.optimization.derivedPartitionTypes()),
       std::move(distColumns)};
   auto* repartition = make<Repartition>(
@@ -2420,7 +2423,7 @@ void Optimization::joinByHash(
         Distribution distribution{
             scaleDownPartitionType(
                 plan->distribution().partitionType(),
-                runnerOptions_.numWorkers,
+                runnerOptions_.maxRemotePartitions,
                 derivedPartitionTypes_),
             copartition};
         auto* repartition = make<Repartition>(
@@ -3771,7 +3774,7 @@ PlanP Optimization::makeUnionPlan(
     // wrap those.
     const auto* unionPartType = scaleDownPartitionType(
         effectiveDistribution->partitionType,
-        runnerOptions_.numWorkers,
+        runnerOptions_.maxRemotePartitions,
         derivedPartitionTypes_);
     for (auto i = 0; i < inputs.size(); ++i) {
       if (inputNeedsShuffle[i]) {

@@ -89,9 +89,9 @@ Compatibility rules for co-locating legs in one fragment:
   violation: the single-row leg would be multiplied across the parallel
   tasks). The kSingle leg must be wrapped in `Repartition(arbitrary)`.
 - **kFixed N1 + kFixed N2** with N1 ≠ N2 → cannot co-locate (a fragment
-  has one width). One leg must be wrapped. Not produced by the optimizer
-  today — every parallel leg ends up at `numWorkers`; covered here for
-  completeness.
+  has one numRemotePartitions). One leg must be wrapped. Not produced by the
+  optimizer today — every parallel leg ends up at `maxRemotePartitions`;
+  covered here for completeness.
 
 Note: An `arbitrary` exchange consumer can adopt any width, so it never
 constrains the consumer fragment type — it conforms to whatever the

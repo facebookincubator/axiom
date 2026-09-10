@@ -44,7 +44,7 @@ class QueryWidthTest : public test::HiveQueriesTestBase {
   PlanAndStats plan(std::string_view sql, const OptimizerOptions& options) {
     return planVelox(
         parseSelect(sql),
-        {.numWorkers = kWorkersAvailable, .numDrivers = 2},
+        {.maxRemotePartitions = kWorkersAvailable, .maxLocalPartitions = 2},
         options);
   }
 
@@ -56,8 +56,8 @@ class QueryWidthTest : public test::HiveQueriesTestBase {
     return options;
   }
 
-  static int32_t numWorkers(const PlanAndStats& result) {
-    return result.plan->options().numWorkers;
+  static int32_t maxRemotePartitions(const PlanAndStats& result) {
+    return result.plan->options().maxRemotePartitions;
   }
 
   // Sums the raw-input estimates the optimizer recorded for the plan's scans,
@@ -86,19 +86,19 @@ TEST_F(QueryWidthTest, scan) {
     {
       const auto result = plan(sql, narrowingAt(kNationRows));
       EXPECT_EQ(scanRawInputRows(result), kNationRows);
-      EXPECT_EQ(numWorkers(result), 1);
+      EXPECT_EQ(maxRemotePartitions(result), 1);
     }
 
     {
       const auto result = plan(sql, narrowingAt(kNationRows - 1));
       EXPECT_EQ(scanRawInputRows(result), kNationRows);
-      EXPECT_EQ(numWorkers(result), kWorkersAvailable);
+      EXPECT_EQ(maxRemotePartitions(result), kWorkersAvailable);
     }
 
     {
       const auto result = plan(sql, narrowingAt(0));
       EXPECT_EQ(scanRawInputRows(result), kNationRows);
-      EXPECT_EQ(numWorkers(result), kWorkersAvailable);
+      EXPECT_EQ(maxRemotePartitions(result), kWorkersAvailable);
     }
   }
 }
@@ -113,13 +113,13 @@ TEST_F(QueryWidthTest, join) {
   {
     const auto result = plan(sql, narrowingAt(bothTables));
     EXPECT_EQ(scanRawInputRows(result), bothTables);
-    EXPECT_EQ(numWorkers(result), 1);
+    EXPECT_EQ(maxRemotePartitions(result), 1);
   }
 
   {
     const auto result = plan(sql, narrowingAt(bothTables - 1));
     EXPECT_EQ(scanRawInputRows(result), bothTables);
-    EXPECT_EQ(numWorkers(result), kWorkersAvailable);
+    EXPECT_EQ(maxRemotePartitions(result), kWorkersAvailable);
   }
 }
 
@@ -132,7 +132,7 @@ TEST_F(QueryWidthTest, noStats) {
 
   const auto result = plan("SELECT n_nationkey FROM nation", options);
   EXPECT_EQ(scanRawInputRows(result), std::nullopt);
-  EXPECT_EQ(numWorkers(result), kWorkersAvailable);
+  EXPECT_EQ(maxRemotePartitions(result), kWorkersAvailable);
 }
 
 // A narrowed query gets the configured number of workers, never more than the
@@ -143,12 +143,12 @@ TEST_F(QueryWidthTest, narrowWidth) {
   auto options = narrowingAt(kNationRows);
   {
     options.smallQueryNumWorkers = 2;
-    EXPECT_EQ(numWorkers(plan(sql, options)), 2);
+    EXPECT_EQ(maxRemotePartitions(plan(sql, options)), 2);
   }
 
   {
     options.smallQueryNumWorkers = kWorkersAvailable * 2;
-    EXPECT_EQ(numWorkers(plan(sql, options)), kWorkersAvailable);
+    EXPECT_EQ(maxRemotePartitions(plan(sql, options)), kWorkersAvailable);
   }
 }
 

@@ -633,7 +633,8 @@ CO_TEST_F(TestConnectorTest, bucketedTable) {
   EXPECT_EQ(partitions.size(), kNumBuckets);
 
   // Pass a non-null partitionType with numPartitions < numBuckets so the
-  // connector folds buckets into groups and tags each Split with groupId.
+  // connector folds buckets into groups and tags each Split with
+  // remotePartition.
   constexpr int32_t kNumGroups = 2;
   auto partitionType = std::make_shared<TestPartitionType>(
       kNumGroups, std::vector<TypePtr>{BIGINT()}, schema);
@@ -645,26 +646,26 @@ CO_TEST_F(TestConnectorTest, bucketedTable) {
       partitionType,
       /*samplePercentage=*/std::nullopt,
       noopStats);
-  std::vector<int32_t> observedGroupIds;
+  std::vector<int32_t> observedRemotePartitions;
   while (true) {
     auto batch = co_await source->co_getSplits(/*maxSplitCount=*/16);
     for (const auto& split : batch.splits) {
-      CO_ASSERT_TRUE(split.groupId.has_value());
-      EXPECT_GE(*split.groupId, 0);
-      EXPECT_LT(*split.groupId, kNumGroups);
+      CO_ASSERT_TRUE(split.remotePartition.has_value());
+      EXPECT_GE(*split.remotePartition, 0);
+      EXPECT_LT(*split.remotePartition, kNumGroups);
       auto testSplit = std::dynamic_pointer_cast<const TestConnectorSplit>(
           split.connectorSplit);
       CO_ASSERT_NE(testSplit, nullptr);
       const auto bucket = table->dataBucketIds()[testSplit->index()];
-      EXPECT_EQ(*split.groupId, bucket % kNumGroups);
-      observedGroupIds.push_back(*split.groupId);
+      EXPECT_EQ(*split.remotePartition, bucket % kNumGroups);
+      observedRemotePartitions.push_back(*split.remotePartition);
     }
     if (batch.noMoreSplits) {
       break;
     }
   }
   co_await source->co_close();
-  EXPECT_FALSE(observedGroupIds.empty());
+  EXPECT_FALSE(observedRemotePartitions.empty());
 }
 
 TEST_F(TestConnectorTest, bucketedTableNonExistentBucketColumn) {

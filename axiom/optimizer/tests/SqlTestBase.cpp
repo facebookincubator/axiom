@@ -123,8 +123,8 @@ std::shared_ptr<runner::LocalRunner> makeLocalRunnerImpl(
       connector::ConnectorMetadataRegistry::global()};
 
   MultiFragmentPlan::Options options;
-  options.numWorkers = numWorkers;
-  options.numDrivers = numDrivers;
+  options.maxRemotePartitions = numWorkers;
+  options.maxLocalPartitions = numDrivers;
   options.queryId = queryId;
 
   OptimizerOptions optimizerOptions;

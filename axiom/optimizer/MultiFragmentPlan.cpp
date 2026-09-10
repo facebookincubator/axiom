@@ -406,8 +406,9 @@ std::string formatFragmentHeader(
       index,
       fragment.taskPrefix,
       FragmentTypeName::toName(fragment.type),
-      fragment.width.has_value()
-          ? fmt::format(" numWorkers={}", fragment.width.value())
+      fragment.numRemotePartitions.has_value()
+          ? fmt::format(
+                " numRemotePartitions={}", fragment.numRemotePartitions.value())
           : "",
       bucketedSuffix);
 }
@@ -491,27 +492,27 @@ std::string MultiFragmentPlan::toSummaryString(
 
 namespace {
 
-// Checks that each fragment's type is consistent with its width and that width
-// does not exceed numWorkers.
+// Checks that each fragment's type is consistent with its numRemotePartitions
+// and that numRemotePartitions does not exceed maxRemotePartitions.
 void checkFragmentTypes(
     const std::vector<ExecutableFragment>& fragments,
-    int32_t numWorkers) {
+    int32_t maxRemotePartitions) {
   for (const auto& fragment : fragments) {
-    const auto& width = fragment.width;
+    const auto& numRemotePartitions = fragment.numRemotePartitions;
     const auto& taskPrefix = fragment.taskPrefix;
 
     switch (fragment.type) {
       case FragmentType::kFixed:
         VELOX_CHECK(
-            width.has_value(),
-            "kFixed fragment must have width set: {}",
+            numRemotePartitions.has_value(),
+            "kFixed fragment must have numRemotePartitions set: {}",
             taskPrefix);
         break;
       case FragmentType::kSingle:
       case FragmentType::kCoordinator:
         VELOX_CHECK(
-            !width.has_value(),
-            "{} fragment must not have width set: {}",
+            !numRemotePartitions.has_value(),
+            "{} fragment must not have numRemotePartitions set: {}",
             FragmentTypeName::toName(fragment.type),
             taskPrefix);
         break;
@@ -519,13 +520,16 @@ void checkFragmentTypes(
         break;
     }
 
-    if (width.has_value()) {
+    if (numRemotePartitions.has_value()) {
       VELOX_CHECK_GT(
-          width.value(), 0, "Fragment width must be positive: {}", taskPrefix);
+          numRemotePartitions.value(),
+          0,
+          "Fragment numRemotePartitions must be positive: {}",
+          taskPrefix);
       VELOX_CHECK_LE(
-          width.value(),
-          numWorkers,
-          "Fragment width exceeds numWorkers: {}",
+          numRemotePartitions.value(),
+          maxRemotePartitions,
+          "Fragment numRemotePartitions exceeds maxRemotePartitions: {}",
           taskPrefix);
     }
   }
@@ -609,7 +613,7 @@ void checkProducerConsumerLinkage(
 
       VELOX_CHECK_EQ(
           partitionedOutput->numPartitions(),
-          consumer.width.value_or(1),
+          consumer.numRemotePartitions.value_or(1),
           "Partition count mismatch between producer {} and consumer {}",
           producer.taskPrefix,
           consumer.taskPrefix);
@@ -668,13 +672,16 @@ void checkGroupedNodes(const ExecutableFragment& fragment) {
 
 // Checks that the last fragment has a type compatible with local result
 // consumption.
-void checkLastFragment(const ExecutableFragment& last, int32_t numWorkers) {
+void checkLastFragment(
+    const ExecutableFragment& last,
+    int32_t maxRemotePartitions) {
   VELOX_CHECK(
       last.type == FragmentType::kSingle ||
           last.type == FragmentType::kCoordinator ||
-          (last.type == FragmentType::kSource && numWorkers == 1),
+          (last.type == FragmentType::kSource && maxRemotePartitions == 1),
       "Last fragment must be kSingle or kCoordinator "
-      "when remoteOutput is false (kSource allowed only with numWorkers == 1): {}",
+      "when remoteOutput is false (kSource allowed only with "
+      "maxRemotePartitions == 1): {}",
       last.taskPrefix);
 }
 
@@ -686,7 +693,7 @@ void MultiFragmentPlan::checkConsistency(bool mayBeEmpty) const {
     return;
   }
 
-  checkFragmentTypes(fragments_, options_.numWorkers);
+  checkFragmentTypes(fragments_, options_.maxRemotePartitions);
 
   checkProducerConsumerLinkage(fragments_);
 
@@ -695,7 +702,7 @@ void MultiFragmentPlan::checkConsistency(bool mayBeEmpty) const {
   }
 
   if (!options_.remoteOutput) {
-    checkLastFragment(fragments_.back(), options_.numWorkers);
+    checkLastFragment(fragments_.back(), options_.maxRemotePartitions);
   }
 }
 

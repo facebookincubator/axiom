@@ -103,7 +103,9 @@ class ProgressReporterTest : public test::LocalRunnerTestBase {
 
   optimizer::MultiFragmentPlanPtr makeScanPlan() {
     optimizer::MultiFragmentPlan::Options options = {
-        .queryId = "progress-q", .numWorkers = 1, .numDrivers = 1};
+        .queryId = "progress-q",
+        .maxRemotePartitions = 1,
+        .maxLocalPartitions = 1};
     test::DistributedPlanBuilder builder(options, idGenerator_, pool_.get());
     builder.tableScan("t", rowType_);
     return builder.build();
