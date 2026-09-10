@@ -321,7 +321,7 @@ Axiom integrates Velox as a Git submodule, referencing a specific commit of the
 Velox repository. The Velox badge at the top of this README shows the current
 commit and how far behind it is from Velox main.
 
-[See what changed since the current Velox commit.](https://github.com/facebookincubator/velox/compare/e527416d7053ed5ce31613b834ea6df1bd3a7862...main)
+[See what changed since the current Velox commit.](https://github.com/facebookincubator/velox/compare/d7c312b1a35cf99a9d55748fde14ee8c4d5621df...main)
 <!-- pre-commit check-velox-readme validates the SHA above matches the submodule -->
 
 Advance Velox when your changes depend on code in Velox that
