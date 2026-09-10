@@ -544,6 +544,17 @@ std::any AstBuilder::visitAliasedRelation(
 std::any AstBuilder::visitTableName(PrestoSqlParser::TableNameContext* ctx) {
   trace("visitTableName");
 
+  // The grammar accepts `FOR ... AS OF`/`BEFORE`, but no layer below the parser
+  // reads a chosen snapshot yet. Reject it rather than build a Table that drops
+  // the clause, which would read the current snapshot as if no version were
+  // given.
+  if (ctx->tableVersionExpression() != nullptr) {
+    AXIOM_PRESTO_SYNTAX_FAIL(
+        getLocation(ctx->tableVersionExpression()),
+        ctx->tableVersionExpression()->getText(),
+        "Table version (time travel) is not supported yet");
+  }
+
   return std::static_pointer_cast<Relation>(std::make_shared<Table>(
       getLocation(ctx), getQualifiedName(ctx->qualifiedName())));
 }

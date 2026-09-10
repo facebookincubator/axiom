@@ -1177,6 +1177,24 @@ TEST_F(PrestoParserTest, tablesample) {
   }
 }
 
+TEST_F(PrestoParserTest, tableVersion) {
+  // The grammar accepts a FOR ... AS OF clause, but nothing below the parser
+  // reads it yet. Rejecting here keeps a versioned reference from silently
+  // reading the current snapshot.
+  auto verify = [&](std::string_view version) {
+    SCOPED_TRACE(version);
+    AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
+        parseSql(fmt::format("SELECT * FROM nation {}", version)),
+        "Table version (time travel) is not supported yet");
+  };
+
+  verify("FOR VERSION AS OF 8");
+  verify("FOR VERSION BEFORE 8");
+  verify("FOR SYSTEM_VERSION AS OF 8");
+  verify("FOR TIMESTAMP AS OF TIMESTAMP '2020-01-01 00:00:00'");
+  verify("FOR SYSTEM_TIME BEFORE TIMESTAMP '2020-01-01 00:00:00'");
+}
+
 TEST_F(PrestoParserTest, everything) {
   auto matcher = matchScan()
                      .join(matchScan().build())
