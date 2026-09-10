@@ -173,16 +173,28 @@ bool Console::run() {
     interrupt_ = nullptr;
   };
 
+  const bool interactive = isatty(STDIN_FILENO);
+
+  // What follows --init: the REPL when there is no SQL to run instead.
+  const bool entersRepl = FLAGS_query.empty() && interactive;
+
   if (!FLAGS_init.empty()) {
     std::string sql;
     auto success = folly::readFile(FLAGS_init.c_str(), sql);
     VELOX_USER_CHECK(success, "Cannot open init file: {}", FLAGS_init);
     if (!runMultiple(sql, FLAGS_print_timing, /*showProgress=*/false)) {
-      return false;
+      // A script cannot act on a half-built session, so stop. A user at a
+      // prompt can: --init may have built something expensive, and the failure
+      // is on screen right above. Say that the setup is incomplete, since a
+      // greeting and a prompt otherwise look like an ordinary start.
+      if (!entersRepl) {
+        return false;
+      }
+      std::cerr << "--init did not finish, so the session is only partly set "
+                   "up. Opening the prompt anyway."
+                << std::endl;
     }
   }
-
-  const bool interactive = isatty(STDIN_FILENO);
 
   // The live progress grid renders on stderr and is erased before results
   // print, so it needs stderr to be a terminal and the runner to report

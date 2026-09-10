@@ -298,8 +298,10 @@ At the prompt, with no query running:
 | Condition | Exit code |
 |-----------|-----------|
 | Invalid flags or catalog configuration | 1 |
-| `--init`, `--query` or piped stdin: every statement succeeded | 0 |
-| `--init`, `--query` or piped stdin: a statement failed or was cancelled | 1 |
+| `--query` or piped stdin: every statement succeeded | 0 |
+| `--query` or piped stdin: a statement failed or was cancelled | 1 |
+| `--init` failed, with `--query` or piped stdin to follow | 1 |
+| `--init` failed, with the REPL to follow — the prompt still opens | 0 |
 | Interactive REPL: left with `.exit`, `.quit` or Ctrl+D | 0 |
 
 Bad configuration is rejected before any statement runs and prints a
@@ -312,13 +314,21 @@ Once statements start running, a failure prints `Query failed: ...` to
 stderr — `Query cancelled.` if Ctrl+C ended it — and what happens next
 depends on where that statement came from:
 
-- **`--init`, `--query` or piped stdin** — the run stops there: the
-  statements after it are skipped and the CLI exits 1. Because `--init`
-  runs first, a failure in it exits without running `--query` and
-  without opening the prompt.
+- **`--query` or piped stdin** — the run stops there: the statements
+  after it are skipped and the CLI exits 1.
 - **Typed at the REPL prompt** — only that statement ends. The prompt
   returns, the session stays open, and it exits 0 whatever its
   statements did.
+
+`--init` runs before both, and what a failure in it costs depends on
+what was going to follow. With `--query` or piped stdin, neither runs
+and the CLI exits 1. With the REPL, the prompt opens anyway: `--init`
+often builds something expensive, and the prompt is where the user can
+look at what went wrong and finish the job by hand. The rest of the
+`--init` file is skipped either way, so the CLI says so before the
+greeting:
+
+    --init did not finish, so the session is only partly set up. Opening the prompt anyway.
 
 ## Query History
 

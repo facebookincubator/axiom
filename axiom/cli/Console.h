@@ -65,8 +65,10 @@ class Console {
   ///
   /// Returns false if a statement from `--init`, `--query` or piped stdin
   /// failed or was cancelled, so that the caller can exit non-zero; the
-  /// statements after it are skipped. Statements typed into the interactive
-  /// REPL are reported the same way but do not affect the return value.
+  /// statements after it are skipped. A failed `--init` still opens the
+  /// interactive prompt, where the user can act on it, and leaves the return
+  /// value true. Statements typed at the prompt are reported the same way and
+  /// never affect the return value.
   ///
   /// Throws VeloxUserError on invalid CLI flags. Query failures during
   /// execution are caught internally and printed to stderr; they do
