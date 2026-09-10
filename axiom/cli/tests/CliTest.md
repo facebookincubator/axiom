@@ -179,6 +179,22 @@ $ $CLI --query "USE blah.default" 2>&1 | grep Reason
 Reason: Catalog does not exist: blah
 ```
 
+## --catalog naming an unregistered catalog fails before any statement runs
+
+```scrut
+$ $CLI --catalog nosuch --query "SELECT 1" 2>&1 1>/dev/null
+Error: Catalog does not exist: nosuch
+[1]
+```
+
+## --data_path and --etc_dir are mutually exclusive
+
+```scrut
+$ $CLI --data_path /tmp --etc_dir /tmp --query "SELECT 1" 2>&1 1>/dev/null
+Error: --data_path and --etc_dir are mutually exclusive. Use --data_path for the local Hive shorthand or --etc_dir for catalog .properties files.
+[1]
+```
+
 ## Time and timestamp types display formatted values
 
 Verify that current_timestamp, localtime, and current_time display the same
@@ -321,11 +337,66 @@ $ $CLI --query "SELECT * FROM nonexistent_table" 2>&1 >/dev/null | grep 'Query f
 Query failed: * (glob)
 ```
 
-## Query failure does not change the CLI exit code
+## Query failure exits non-zero
 
 ```scrut
 $ $CLI --query "SELECT * FROM nonexistent_table" 2>/dev/null
-[0]
+[1]
+```
+
+## A failed statement stops the statements after it
+
+```scrut
+$ $CLI --query "SELECT 1 AS a; SELECT * FROM nonexistent_table; SELECT 2 AS b" 2>/dev/null
+-
+a
+-
+1
+(1 rows in 1 batches)
+
+[1]
+```
+
+## Piped stdin reports a failed statement in the exit code
+
+```scrut
+$ echo "SELECT * FROM nonexistent_table;" | $CLI --query "" 2>/dev/null
+[1]
+```
+
+## A failed --init statement stops the run before --query
+
+```scrut
+$ echo "SELECT * FROM nonexistent_table;" | $CLI --init /dev/stdin --query "SELECT 1 AS a" 2>/dev/null
+[1]
+```
+
+## A schemaless catalog resolves qualified names
+
+```scrut
+$ $CLI --catalog system --query "SELECT count(*) > 0 AS ok FROM metadata.functions" 2>/dev/null
+----
+  ok
+----
+true
+(1 rows in 1 batches)
+
+```
+
+## A bare table name in a schemaless catalog fails detectably
+
+```scrut
+$ $CLI --catalog system --query "SELECT * FROM functions" 2>&1 >/dev/null
+Query failed: * (glob)
+[1]
+```
+
+## The missing-schema hint stays out of scripted runs
+
+```scrut
+$ $CLI --catalog system --query "SELECT 1 AS a" 2>&1 >/dev/null | grep -c 'has no default schema'
+0
+[1]
 ```
 
 ## Cleanly log dictionary wrapped result vectors (window functions produce encoded vectors)

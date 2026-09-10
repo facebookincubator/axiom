@@ -149,16 +149,11 @@ int main(int argc, char** argv) {
         "Catalog does not exist: {}",
         catalog);
 
-    if (runner.defaultSchema().empty()) {
-      std::cerr << "Catalog '" << catalog
-                << "' has no default schema. Qualify table names as "
-                   "'<schema>.<table>', or run 'use "
-                << catalog << ".<schema>' to set one." << std::endl;
-    }
-
     axiom::sql::Console console{runner};
     console.initialize();
-    console.run();
+    if (!console.run()) {
+      return 1;
+    }
   } catch (const facebook::velox::VeloxUserError& e) {
     std::cerr << "Error: " << e.message() << std::endl;
     return 1;

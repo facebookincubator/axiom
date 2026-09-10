@@ -297,13 +297,28 @@ At the prompt, with no query running:
 
 | Condition | Exit code |
 |-----------|-----------|
-| Invalid CLI flags (e.g. `--repeat 0`, `--repeat` in interactive mode) | 1 |
-| All statements completed | 0 |
-| One or more statements failed at parse / optimize / execute | 0 |
+| Invalid flags or catalog configuration | 1 |
+| `--init`, `--query` or piped stdin: every statement succeeded | 0 |
+| `--init`, `--query` or piped stdin: a statement failed or was cancelled | 1 |
+| Interactive REPL: left with `.exit`, `.quit` or Ctrl+D | 0 |
 
-Query failures print `Query failed: ...` to stderr but do not change
-the exit code. Wrap the CLI in shell tooling if you need to detect
-query failure (e.g. grep for `Query failed:` in stderr).
+Bad configuration is rejected before any statement runs and prints a
+single `Error: ...` line to stderr. This covers `--repeat 0`, `--repeat`
+in interactive mode, `--data_path` together with `--etc_dir`, a
+`--catalog` that names an unregistered catalog, and an `--init` file that
+cannot be read.
+
+Once statements start running, a failure prints `Query failed: ...` to
+stderr — `Query cancelled.` if Ctrl+C ended it — and what happens next
+depends on where that statement came from:
+
+- **`--init`, `--query` or piped stdin** — the run stops there: the
+  statements after it are skipped and the CLI exits 1. Because `--init`
+  runs first, a failure in it exits without running `--query` and
+  without opening the prompt.
+- **Typed at the REPL prompt** — only that statement ends. The prompt
+  returns, the session stays open, and it exits 0 whatever its
+  statements did.
 
 ## Query History
 

@@ -43,14 +43,15 @@ class QueryInterruptHandler;
 ///   SqlQueryRunner runner{user, &scheduler};
 ///   Console console{runner};
 ///   console.initialize();
-///   console.run();
+///   return console.run() ? 0 : 1;
 /// @endcode
 ///
 /// Invariants:
 /// - `runner` must outlive the Console.
 /// - run() owns process-wide stdin/stdout/stderr while it executes; do not
 ///   write to them concurrently.
-/// - Query failures are caught and printed; only invalid CLI flags throw.
+/// - Query failures are caught and printed, then reported by run()'s return
+///   value; only invalid CLI flags throw.
 class Console {
  public:
   explicit Console(SqlQueryRunner& runner);
@@ -62,10 +63,15 @@ class Console {
   /// stdin if non-interactive, otherwise enters the interactive REPL.
   /// Honors `--repeat` for `--query` and piped-stdin paths.
   ///
+  /// Returns false if a statement from `--init`, `--query` or piped stdin
+  /// failed or was cancelled, so that the caller can exit non-zero; the
+  /// statements after it are skipped. Statements typed into the interactive
+  /// REPL are reported the same way but do not affect the return value.
+  ///
   /// Throws VeloxUserError on invalid CLI flags. Query failures during
   /// execution are caught internally and printed to stderr; they do
   /// not throw.
-  void run();
+  bool run();
 
  private:
   // Runs a single SQL statement and prints results/timing. Returns true on
@@ -74,12 +80,13 @@ class Console {
   bool runOnce(std::string_view sql, bool printTiming, bool showProgress);
 
   // Splits 'sql' into individual statements and runs each one in sequence.
-  // Stops on the first failure. Passes 'showProgress' through to each.
-  void runMultiple(std::string_view sql, bool printTiming, bool showProgress);
+  // Stops on the first failure and returns false. Passes 'showProgress'
+  // through to each.
+  bool runMultiple(std::string_view sql, bool printTiming, bool showProgress);
 
   // Runs 'sql' (a single SQL statement) 'repeat' times back-to-back.
-  // Stops on the first failure.
-  void runRepeat(std::string_view sql, int repeat, bool printTiming);
+  // Stops on the first failure and returns false.
+  bool runRepeat(std::string_view sql, int repeat, bool printTiming);
 
   // Reads and executes commands from standard input in interactive mode.
   // Passes 'showProgress' through to the statements it runs.

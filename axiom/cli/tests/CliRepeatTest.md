@@ -32,6 +32,13 @@ $ $CLI --query "SELECT * FROM nonexistent_table" --repeat 3 --print_timing 2>&1 
 Query ID: * | Parsing: (glob)
 ```
 
+## --repeat reports a failed run in the exit code
+
+```scrut
+$ $CLI --query "SELECT * FROM nonexistent_table" --repeat 3 2>/dev/null
+[1]
+```
+
 ## --repeat without --print_timing runs the query N times silently
 
 ```scrut
@@ -41,7 +48,7 @@ $ $CLI --query "SELECT 1 as a" --repeat 3 2>/dev/null | grep 'rows in 1 batches'
 (1 rows in 1 batches)
 ```
 
-## --repeat with multi-statement input fails (CLI exits 0; error to stderr)
+## --repeat with multi-statement input fails
 
 ```scrut
 $ $CLI --query "SELECT 1; SELECT 2" --repeat 2 2>&1 >/dev/null | grep -oE 'Expected a single statement.*'
