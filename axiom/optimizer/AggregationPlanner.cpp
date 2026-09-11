@@ -36,10 +36,6 @@ AggregateVector flattenAggregates(
   flatAggregates.reserve(aggregates.size());
 
   for (const auto& agg : aggregates) {
-    ExprCP condition = nullptr;
-    if (agg->condition()) {
-      condition = precompute.toColumn(agg->condition());
-    }
     ExprVector args;
     args.reserve(agg->args().size());
     for (const auto& arg : agg->args()) {
@@ -48,6 +44,10 @@ AggregateVector flattenAggregates(
       } else {
         args.push_back(precompute.toColumn(arg, nullptr, true));
       }
+    }
+    ExprCP condition = nullptr;
+    if (agg->condition()) {
+      condition = precompute.toColumn(agg->condition());
     }
     auto orderKeys = precompute.toColumns(agg->orderKeys());
     flatAggregates.emplace_back(

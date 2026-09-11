@@ -16,6 +16,7 @@
 
 #include "axiom/optimizer/v2/TranslatePass.h"
 
+#include <tuple>
 #include <utility>
 
 #include <folly/ScopeGuard.h>
@@ -1434,13 +1435,20 @@ const optimizer::Aggregate* Translator::toAggregateCall(
     condition = nullptr;
   }
 
-  auto [orderKeys, orderTypes] =
-      dedupOrdering(aggregateExpr.ordering(), scope, liftTarget);
   Value value(toType(aggregateExpr.type()));
 
   Name aggName = toName(aggregateExpr.name());
   const auto& metadata =
       velox::exec::getAggregateFunctionMetadata(aggregateExpr.name());
+
+  // Only an order-sensitive aggregate reads its ORDER BY, so only that ordering
+  // is translated.
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
+  if (metadata.orderSensitive) {
+    std::tie(orderKeys, orderTypes) =
+        dedupOrdering(aggregateExpr.ordering(), scope, liftTarget);
+  }
 
   FunctionSet funcs = Call::unionArgFunctions(FunctionSet{}, arguments);
   if (metadata.ignoreDuplicates) {
