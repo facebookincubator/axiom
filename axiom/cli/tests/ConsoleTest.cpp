@@ -24,6 +24,7 @@
 #include <signal.h>
 #include <atomic>
 #include <chrono>
+#include <optional>
 #include <thread>
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
@@ -181,7 +182,8 @@ TEST_F(ConsoleTest, sigintCancelsRunningQuery) {
   ASSERT_EQ(sigaction(SIGINT, &ignore, nullptr), 0);
 
   testing::internal::CaptureStderr();
-  std::thread queryThread([&] { console.run(); });
+  std::optional<Console::Outcome> outcome;
+  std::thread queryThread([&] { outcome = console.run(); });
   // Join on any early exit (e.g. an ASSERT failure below) so the thread is
   // never destroyed while joinable -- that would std::terminate the test
   // process.
@@ -200,6 +202,7 @@ TEST_F(ConsoleTest, sigintCancelsRunningQuery) {
 
   // run() carried Console's per-query token through RunOptions into co_run.
   EXPECT_TRUE(runner->sawCancellableToken());
+  EXPECT_EQ(outcome, Console::Outcome::kCancelled);
 
   const std::string captured = testing::internal::GetCapturedStderr();
   EXPECT_NE(captured.find("Query cancelled."), std::string::npos);

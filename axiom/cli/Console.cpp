@@ -159,7 +159,7 @@ void printMissingSchemaHint(const SqlQueryRunner& runner) {
 }
 } // namespace
 
-bool Console::run() {
+Console::Outcome Console::run() {
   gflags::CommandLineFlagInfo repeatInfo;
   gflags::GetCommandLineFlagInfo("repeat", &repeatInfo);
 
@@ -182,13 +182,15 @@ bool Console::run() {
     std::string sql;
     auto success = folly::readFile(FLAGS_init.c_str(), sql);
     VELOX_USER_CHECK(success, "Cannot open init file: {}", FLAGS_init);
-    if (!runMultiple(sql, FLAGS_print_timing, /*showProgress=*/false)) {
+    if (const auto outcome =
+            runMultiple(sql, FLAGS_print_timing, /*showProgress=*/false);
+        outcome != Outcome::kSucceeded) {
       // A script cannot act on a half-built session, so stop. A user at a
       // prompt can: --init may have built something expensive, and the failure
       // is on screen right above. Say that the setup is incomplete, since a
       // greeting and a prompt otherwise look like an ordinary start.
       if (!entersRepl) {
-        return false;
+        return outcome;
       }
       std::cerr << "--init did not finish, so the session is only partly set "
                    "up. Opening the prompt anyway."
@@ -237,7 +239,7 @@ bool Console::run() {
 
   // A statement typed into the REPL that fails has already been reported to
   // the user; it does not make the session itself a failure.
-  return true;
+  return Outcome::kSucceeded;
 }
 
 namespace {
@@ -253,10 +255,8 @@ std::string formatTiming(
 }
 } // namespace
 
-bool Console::runOnce(
-    std::string_view sql,
-    bool printTiming,
-    bool showProgress) {
+Console::Outcome
+Console::runOnce(std::string_view sql, bool printTiming, bool showProgress) {
   QueryCompletionInfo completionInfo;
 
   SqlQueryRunner::RunOptions options{
@@ -315,14 +315,14 @@ bool Console::runOnce(
       std::cout << "Query ID: " << completionInfo.startInfo.queryId << " | "
                 << formatTiming(completionInfo.timing, cpuTiming) << std::endl;
     }
-    return true;
+    return Outcome::kSucceeded;
   } catch (const QueryCancelledError&) {
     // A user cancellation (Ctrl+C) is reported plainly.
     if (progress) {
       progress->clear();
     }
     std::cerr << "Query cancelled." << std::endl;
-    return false;
+    return Outcome::kCancelled;
   } catch (const std::exception&) {
     if (progress) {
       progress->clear();
@@ -335,11 +335,11 @@ bool Console::runOnce(
       std::cerr << "Query ID: " << completionInfo.startInfo.queryId << " | "
                 << formatTiming(completionInfo.timing, cpuTiming) << std::endl;
     }
-    return false;
+    return Outcome::kFailed;
   }
 }
 
-bool Console::runMultiple(
+Console::Outcome Console::runMultiple(
     std::string_view sql,
     bool printTiming,
     bool showProgress) {
@@ -350,20 +350,23 @@ bool Console::runMultiple(
     if (sqlText.empty()) {
       continue;
     }
-    if (!runOnce(sqlText, printTiming, showProgress)) {
-      return false;
+    if (const auto outcome = runOnce(sqlText, printTiming, showProgress);
+        outcome != Outcome::kSucceeded) {
+      return outcome;
     }
   }
-  return true;
+  return Outcome::kSucceeded;
 }
 
-bool Console::runRepeat(std::string_view sql, int repeat, bool printTiming) {
+Console::Outcome
+Console::runRepeat(std::string_view sql, int repeat, bool printTiming) {
   for (int i = 0; i < repeat; ++i) {
-    if (!runOnce(sql, printTiming, /*showProgress=*/false)) {
-      return false;
+    if (const auto outcome = runOnce(sql, printTiming, /*showProgress=*/false);
+        outcome != Outcome::kSucceeded) {
+      return outcome;
     }
   }
-  return true;
+  return Outcome::kSucceeded;
 }
 
 void Console::readCommands(

@@ -19,6 +19,7 @@
 #include <folly/executors/FunctionScheduler.h>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
+#include <csignal>
 #include <filesystem>
 #include <iostream>
 #include <set>
@@ -151,13 +152,18 @@ int main(int argc, char** argv) {
 
     axiom::sql::Console console{runner};
     console.initialize();
-    if (!console.run()) {
-      return 1;
+    switch (console.run()) {
+      case axiom::sql::Console::Outcome::kSucceeded:
+        return 0;
+      case axiom::sql::Console::Outcome::kFailed:
+        return 1;
+      case axiom::sql::Console::Outcome::kCancelled:
+        // What a shell reports for a process that Ctrl+C ended.
+        return 128 + SIGINT;
     }
+    VELOX_UNREACHABLE();
   } catch (const facebook::velox::VeloxUserError& e) {
     std::cerr << "Error: " << e.message() << std::endl;
     return 1;
   }
-
-  return 0;
 }

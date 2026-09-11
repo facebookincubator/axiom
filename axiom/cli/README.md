@@ -284,7 +284,8 @@ Query cancelled.
 Cancellation works on every execution path — `--init`, `--query`, piped stdin,
 `--repeat`, and the interactive REPL. In the REPL the prompt returns and the
 session stays alive; on the non-interactive paths the cancelled statement ends
-the run, so any remaining statements or `--repeat` iterations are skipped.
+the run: any remaining statements or `--repeat` iterations are skipped, and the
+CLI exits 130.
 
 At the prompt, with no query running:
 
@@ -299,8 +300,9 @@ At the prompt, with no query running:
 |-----------|-----------|
 | Invalid flags or catalog configuration | 1 |
 | `--query` or piped stdin: every statement succeeded | 0 |
-| `--query` or piped stdin: a statement failed or was cancelled | 1 |
-| `--init` failed, with `--query` or piped stdin to follow | 1 |
+| `--query` or piped stdin: a statement failed | 1 |
+| `--query` or piped stdin: Ctrl+C cancelled a statement | 130 |
+| `--init` failed, with `--query` or piped stdin to follow | 1, or 130 if Ctrl+C cancelled it |
 | `--init` failed, with the REPL to follow — the prompt still opens | 0 |
 | Interactive REPL: left with `.exit`, `.quit` or Ctrl+D | 0 |
 
@@ -315,18 +317,20 @@ stderr — `Query cancelled.` if Ctrl+C ended it — and what happens next
 depends on where that statement came from:
 
 - **`--query` or piped stdin** — the run stops there: the statements
-  after it are skipped and the CLI exits 1.
+  after it are skipped and the CLI exits 1. Ctrl+C exits 130 instead,
+  the code a shell reports for a process that Ctrl+C ended, so a script
+  can tell a stopped run from a broken one.
 - **Typed at the REPL prompt** — only that statement ends. The prompt
   returns, the session stays open, and it exits 0 whatever its
   statements did.
 
 `--init` runs before both, and what a failure in it costs depends on
-what was going to follow. With `--query` or piped stdin, neither runs
-and the CLI exits 1. With the REPL, the prompt opens anyway: `--init`
-often builds something expensive, and the prompt is where the user can
-look at what went wrong and finish the job by hand. The rest of the
-`--init` file is skipped either way, so the CLI says so before the
-greeting:
+what was going to follow. With `--query` or piped stdin, neither runs,
+and the CLI exits as it would for a failure there. With the REPL, the
+prompt opens anyway: `--init` often builds something expensive, and the
+prompt is where the user can look at what went wrong and finish the job
+by hand. The rest of the `--init` file is skipped either way, so the CLI
+says so before the greeting:
 
     --init did not finish, so the session is only partly set up. Opening the prompt anyway.
 
