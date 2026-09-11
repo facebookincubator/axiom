@@ -26,7 +26,7 @@ target_link_libraries(
   re2::re2
 )
 
-add_executable(axiom_test_connector_test TestConnectorTest.cpp ConnectorMetadataRegistryTest.cpp)
+add_executable(axiom_test_connector_test TestConnectorTest.cpp ConnectorContextTest.cpp ConnectorSessionTest.cpp ConnectorMetadataRegistryTest.cpp)
 
 add_test(axiom_test_connector_test axiom_test_connector_test)
 

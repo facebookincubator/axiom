@@ -191,8 +191,9 @@ void Optimization::estimateAllBaseTableSelectivity(DerivedTable& dt) {
     }
 
     auto* layout = baseTable->schemaTable->connectorTable->layouts()[0];
-    auto connectorSession = optimizerSession_->toConnectorSession(
-        layout->connector()->connectorId());
+    auto metadata =
+        connector::ConnectorMetadataRegistry::get(layout->connectorId());
+    auto connectorSession = optimizerSession_->context()->sessionFor(*metadata);
     tableTasks.push_back({baseTable, tasks.size(), std::move(columnIndices)});
     tasks.push_back(layout->co_estimateStats(
         std::move(connectorSession),

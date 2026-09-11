@@ -15,6 +15,7 @@
  */
 
 #include "axiom/runner/ProgressReporter.h"
+#include "axiom/connectors/tests/TestConnectorContext.h"
 
 #include <folly/coro/Baton.h>
 #include <folly/coro/BlockingWait.h>
@@ -70,7 +71,7 @@ class GatedSplitSourceFactory : public SplitSourceFactory {
       : inner_{runtimeStats}, gate_{std::move(gate)} {}
 
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
-      const connector::ConnectorSessionPtr& session,
+      const RunnerSessionPtr& session,
       const velox::core::TableScanNode& scan,
       const std::shared_ptr<connector::PartitionType>& partitionType,
       std::optional<double> samplePercentage) override {
@@ -113,10 +114,9 @@ class ProgressReporterTest : public test::LocalRunnerTestBase {
 
   static RunnerSessionPtr makeRunnerSession(std::string_view queryId) {
     return std::make_shared<RunnerSession>(
-        std::string(queryId),
-        "test",
-        Properties{},
-        connector::ConnectorProperties{});
+        connector::makeTestContext(queryId),
+        connector::makeTestStatWriter(),
+        Properties{});
   }
 
   velox::RowTypePtr rowType_;

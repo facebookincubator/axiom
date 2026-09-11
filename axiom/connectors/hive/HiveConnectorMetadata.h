@@ -385,6 +385,10 @@ class HiveDeleteWriteHandle : public ConnectorWriteHandle {
 
 class HiveConnectorMetadata : public ConnectorMetadata {
  public:
+  const std::string& connectorId() const override {
+    return hiveConnector_->connectorId();
+  }
+
   /// @param includeHiddenColumns is an indicator to include hidden columns in
   /// HiveTable creation, i.e. including cols: HiveTable::kPath,
   /// HiveTable::kBucket, HiveTable::kFileSize, HiveTable::kRowId apart from

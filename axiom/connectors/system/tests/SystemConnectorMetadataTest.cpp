@@ -18,6 +18,7 @@
 #include <folly/json/json.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "axiom/connectors/tests/TestConnectorContext.h"
 
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
@@ -166,7 +167,8 @@ class SystemConnectorMetadataTest : public ::testing::Test {
     return std::make_shared<ConnectorSession>(
         /*queryId=*/"test",
         /*user=*/"test",
-        Properties{});
+        Properties{},
+        makeTestStatWriter());
   }
 
   // Creates a DataSource for the given schema/table through the connector,

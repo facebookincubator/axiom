@@ -133,6 +133,10 @@ class SystemSplitManager : public ConnectorSplitManager {
 /// Provides the runtime.queries and metadata.session_properties tables.
 class SystemConnectorMetadata : public ConnectorMetadata {
  public:
+  const std::string& connectorId() const override {
+    return connector_->connectorId();
+  }
+
   /// Keep for backward compatibility.
   static constexpr std::string_view kDefaultSchema = kRuntimeSchema;
 

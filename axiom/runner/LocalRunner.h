@@ -44,7 +44,7 @@ class SplitSourceFactory {
   /// 'samplePercentage' is set (TABLESAMPLE SYSTEM), the source emits each
   /// split with that probability.
   virtual std::shared_ptr<connector::SplitSource> splitSourceForScan(
-      const connector::ConnectorSessionPtr& session,
+      const RunnerSessionPtr& session,
       const velox::core::TableScanNode& scan,
       const std::shared_ptr<connector::PartitionType>& partitionType,
       std::optional<double> samplePercentage) = 0;
@@ -60,7 +60,7 @@ class SimpleSplitSourceFactory : public SplitSourceFactory {
       : nodeSplitMap_(std::move(nodeSplitMap)) {}
 
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
-      const connector::ConnectorSessionPtr& session,
+      const RunnerSessionPtr& session,
       const velox::core::TableScanNode& scan,
       const std::shared_ptr<connector::PartitionType>& partitionType,
       std::optional<double> samplePercentage) override;
@@ -79,7 +79,7 @@ class ConnectorSplitSourceFactory : public SplitSourceFactory {
       : runtimeStats_(runtimeStats) {}
 
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
-      const connector::ConnectorSessionPtr& session,
+      const RunnerSessionPtr& session,
       const velox::core::TableScanNode& scan,
       const std::shared_ptr<connector::PartitionType>& partitionType,
       std::optional<double> samplePercentage) override;
@@ -202,7 +202,7 @@ class LocalRunner : public Runner,
   void makeStages(const std::shared_ptr<velox::exec::Task>& lastStageTask);
 
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
-      const connector::ConnectorSessionPtr& session,
+      const RunnerSessionPtr& session,
       const velox::core::TableScanNode& scan,
       const std::shared_ptr<connector::PartitionType>& partitionType,
       std::optional<double> samplePercentage);

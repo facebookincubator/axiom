@@ -24,6 +24,7 @@
 #include <folly/coro/WithCancellation.h>
 #include <folly/synchronization/Baton.h>
 #include <thread>
+#include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/runner/tests/DistributedPlanBuilder.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -149,10 +150,9 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
   static axiom::runner::RunnerSessionPtr makeRunnerSession(
       std::string_view queryId) {
     return std::make_shared<axiom::runner::RunnerSession>(
-        std::string(queryId),
-        "test",
-        axiom::runner::Properties{},
-        axiom::connector::ConnectorProperties{});
+        axiom::connector::makeTestContext(queryId),
+        axiom::connector::makeTestStatWriter(),
+        axiom::runner::Properties{});
   }
 
   template <typename RunnerT = LocalRunner>

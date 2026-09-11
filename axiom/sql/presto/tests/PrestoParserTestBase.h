@@ -19,6 +19,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/sql/presto/PrestoParser.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
@@ -129,10 +130,10 @@ class PrestoParserTestBase : public testing::Test {
 
   static ParserSessionPtr makeParserSession(ParserOptions options = {}) {
     return std::make_shared<ParserSession>(
-        /*queryId=*/"test",
-        /*user=*/"test",
-        std::move(options),
-        facebook::axiom::connector::ConnectorProperties{});
+        facebook::axiom::connector::makeTestContext(/*queryId=*/"test"),
+        facebook::axiom::connector::makeTestStatWriter(),
+        facebook::axiom::connector::Properties{},
+        std::move(options));
   }
 
   /// Creates a PrestoParser configured with the test connector.

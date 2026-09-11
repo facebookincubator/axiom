@@ -41,6 +41,10 @@ class FileSplitSource : public SplitSource {
 /// Resolves file paths as table names.
 class FileConnectorMetadata : public ConnectorMetadata {
  public:
+  const std::string& connectorId() const override {
+    return connector_->connectorId();
+  }
+
   explicit FileConnectorMetadata(velox::connector::Connector* connector)
       : connector_(connector),
         pool_(velox::memory::memoryManager()->addLeafPool("file_metadata")) {}

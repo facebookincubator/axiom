@@ -3449,7 +3449,8 @@ Translator::tryEvaluateOverDiscreteValues(const Aggregate* aggregate) {
       rejected);
 
   auto connectorSession =
-      session_.toConnectorSession(discreteLayout.layout->connectorId());
+      session_.context()->sessionFor(*connector::ConnectorMetadataRegistry::get(
+          discreteLayout.layout->connectorId()));
   auto discretePredicates = discreteLayout.layout->discretePredicates(
       connectorSession, discreteLayout.connectorColumns, handle.tableHandle);
   if (discretePredicates == nullptr) {

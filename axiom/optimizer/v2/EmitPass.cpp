@@ -1998,7 +1998,7 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
   auto* layout = table.layouts().front();
   const auto& connectorId = layout->connector()->connectorId();
   auto metadata = connector::ConnectorMetadataRegistry::get(connectorId);
-  auto connectorSession = session_.toConnectorSession(connectorId);
+  auto connectorSession = session_.context()->sessionFor(*metadata);
 
   const bool isDelete = tableWrite.kind() == connector::WriteKind::kDelete;
   auto handle = metadata->beginWrite(

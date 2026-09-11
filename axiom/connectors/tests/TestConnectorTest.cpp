@@ -17,6 +17,7 @@
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/connectors/tests/TestConnectorContext.h"
 
 #include <folly/coro/GtestHelpers.h>
 #include <folly/init/Init.h>
@@ -58,7 +59,10 @@ class TestConnectorTest : public ::testing::Test, public test::VectorTestBase {
 
   static ConnectorSessionPtr makeSession() {
     return std::make_shared<ConnectorSession>(
-        /*queryId=*/"test", /*user=*/"test", Properties{});
+        /*queryId=*/"test",
+        /*user=*/"test",
+        Properties{},
+        makeTestStatWriter());
   }
 
   std::shared_ptr<TestConnector> connector_;

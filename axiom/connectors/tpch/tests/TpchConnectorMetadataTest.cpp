@@ -19,6 +19,7 @@
 #include <folly/init/Init.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "axiom/connectors/tests/TestConnectorContext.h"
 
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/expression/Expr.h"
@@ -42,7 +43,8 @@ class TpchConnectorMetadataTest : public ::testing::Test {
     return std::make_shared<ConnectorSession>(
         /*queryId=*/"test",
         /*user=*/"test",
-        Properties{});
+        Properties{},
+        makeTestStatWriter());
   }
 
   std::unique_ptr<velox::connector::tpch::TpchConnector> connector_;

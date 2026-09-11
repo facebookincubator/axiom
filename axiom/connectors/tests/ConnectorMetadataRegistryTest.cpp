@@ -35,6 +35,10 @@ class StubConnectorMetadata : public ConnectorMetadata {
   explicit StubConnectorMetadata(std::string label)
       : label_{std::move(label)} {}
 
+  const std::string& connectorId() const override {
+    return label_;
+  }
+
   const std::string& label() const {
     return label_;
   }

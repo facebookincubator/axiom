@@ -64,7 +64,7 @@ class SimpleSplitSource : public connector::SplitSource {
 
 std::shared_ptr<connector::SplitSource>
 SimpleSplitSourceFactory::splitSourceForScan(
-    const connector::ConnectorSessionPtr& /* session */,
+    const RunnerSessionPtr& /* session */,
     const velox::core::TableScanNode& scan,
     const std::shared_ptr<connector::PartitionType>& /*partitionType*/,
     std::optional<double> samplePercentage) {
@@ -80,7 +80,7 @@ SimpleSplitSourceFactory::splitSourceForScan(
 
 std::shared_ptr<connector::SplitSource>
 ConnectorSplitSourceFactory::splitSourceForScan(
-    const connector::ConnectorSessionPtr& session,
+    const RunnerSessionPtr& session,
     const velox::core::TableScanNode& scan,
     const std::shared_ptr<connector::PartitionType>& partitionType,
     std::optional<double> samplePercentage) {
@@ -88,12 +88,13 @@ ConnectorSplitSourceFactory::splitSourceForScan(
   auto metadata =
       connector::ConnectorMetadataRegistry::get(handle->connectorId());
   auto splitManager = metadata->splitManager();
+  auto connectorSession = session->context()->sessionFor(*metadata);
 
   auto listCpuStart = velox::process::threadCpuNanos();
   auto listThreadId = std::this_thread::get_id();
   auto listStart = std::chrono::steady_clock::now();
   auto partitions = folly::coro::blockingWait(
-      splitManager->co_listPartitions(session, handle));
+      splitManager->co_listPartitions(connectorSession, handle));
   recordCpuIfSameThread(
       runtimeStats_,
       QueryRuntimeStats::kListPartitionsCpuNanos,
@@ -106,7 +107,7 @@ ConnectorSplitSourceFactory::splitSourceForScan(
       QueryRuntimeStats::kListPartitionsCount, partitions.size());
 
   return splitManager->getSplitSource(
-      session,
+      connectorSession,
       handle,
       partitions,
       partitionType,
@@ -527,7 +528,7 @@ void LocalRunner::start() {
 }
 
 std::shared_ptr<connector::SplitSource> LocalRunner::splitSourceForScan(
-    const connector::ConnectorSessionPtr& session,
+    const RunnerSessionPtr& session,
     const velox::core::TableScanNode& scan,
     const std::shared_ptr<connector::PartitionType>& partitionType,
     std::optional<double> samplePercentage) {
@@ -816,10 +817,7 @@ void LocalRunner::makeStages(
           samplePercentage = it->second;
         }
         auto source = splitSourceForScan(
-            session_->toConnectorSession(scan->tableHandle()->connectorId()),
-            *scan,
-            partitionType,
-            samplePercentage);
+            session_, *scan, partitionType, samplePercentage);
         splitScope_.add(
             folly::coro::co_withExecutor(
                 params_.queryCtx->executor(),

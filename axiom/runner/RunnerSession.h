@@ -21,39 +21,25 @@
 #include <string_view>
 #include <utility>
 
-#include "axiom/connectors/BaseSession.h"
+#include "axiom/session/BaseSession.h"
 
 namespace facebook::axiom::runner {
 
 /// Runner-scoped property bag.
-using Properties = folly::F14FastMap<std::string, std::string>;
+using Properties = connector::Properties;
 
-/// Runner-scoped session view. Carries the shared identity (queryId, user,
-/// connector-session factory) plus the runner's own property slice.
-class RunnerSession final : public connector::BaseSession {
+/// What the runner is given for one query: the query's context and its writer,
+/// plus the runner's slice of the query's session properties.
+class RunnerSession final : public BaseSession {
  public:
   RunnerSession(
-      std::string queryId,
-      std::string user,
-      Properties properties,
-      connector::ConnectorProperties connectorProperties)
+      connector::ConnectorContextPtr context,
+      std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter,
+      Properties properties)
       : BaseSession(
-            std::move(queryId),
-            std::move(user),
-            std::move(connectorProperties)),
-        properties_{std::move(properties)} {}
-
-  /// Returns the value of runner-scoped property 'name' if set.
-  std::optional<std::string_view> property(std::string_view name) const {
-    auto it = properties_.find(name);
-    if (it == properties_.end()) {
-      return std::nullopt;
-    }
-    return it->second;
-  }
-
- private:
-  const Properties properties_;
+            std::move(context),
+            std::move(statsWriter),
+            std::move(properties)) {}
 };
 
 using RunnerSessionPtr = std::shared_ptr<RunnerSession>;

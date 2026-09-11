@@ -555,6 +555,10 @@ std::shared_ptr<SplitSource> TestSplitManager::getSplitSource(
       partitionType);
 }
 
+const std::string& TestConnectorMetadata::connectorId() const {
+  return connector_->connectorId();
+}
+
 std::shared_ptr<Table> TestConnectorMetadata::findTableInternal(
     const SchemaTableName& tableName) {
   auto it = tables_.find(tableName);

@@ -174,6 +174,10 @@ class TpchTable : public Table {
 
 class TpchConnectorMetadata : public ConnectorMetadata {
  public:
+  const std::string& connectorId() const override {
+    return tpchConnector_->connectorId();
+  }
+
   explicit TpchConnectorMetadata(
       velox::connector::tpch::TpchConnector* tpchConnector);
 

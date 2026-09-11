@@ -520,6 +520,8 @@ class TestConnectorMetadata : public ConnectorMetadata {
  public:
   static constexpr std::string_view kDefaultSchema = "default";
 
+  const std::string& connectorId() const override;
+
   /// CREATE TABLE property to mark columns as hidden.
   /// Example: WITH (hidden = ARRAY['col1', 'col2']).
   static constexpr std::string_view kHidden = "hidden";

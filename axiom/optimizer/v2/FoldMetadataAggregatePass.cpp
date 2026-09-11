@@ -21,6 +21,7 @@
 #include "folly/coro/BlockingWait.h"
 
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/Schema.h"
@@ -131,8 +132,9 @@ class Folder : public NodeRewriter<NoContext> {
         scan->scanHandle(), "Metadata counts need the connector's read handle");
     const ScanHandle& handle = *scan->scanHandle();
 
-    auto connectorSession =
-        session_.toConnectorSession(layout->connector()->connectorId());
+    auto metadata =
+        connector::ConnectorMetadataRegistry::get(layout->connectorId());
+    auto connectorSession = session_.context()->sessionFor(*metadata);
     auto result = folly::coro::blockingWait(layout->co_metadataCounts(
         std::move(connectorSession),
         handle.tableHandle,

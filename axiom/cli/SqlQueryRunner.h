@@ -273,6 +273,10 @@ class SqlQueryRunner {
     /// the permission check callback.
     std::shared_ptr<facebook::velox::filesystems::TokenProvider> tokenProvider;
 
+    /// The query's connector context, so every session of the query shares
+    /// one. Overwritten by the runner once the query id is settled.
+    facebook::axiom::connector::ConnectorContextPtr connectorContext;
+
     /// Override for session start time (milliseconds since epoch). If not
     /// set, uses the current time. Used by tests to verify current_timestamp.
     std::optional<uint64_t> sessionStartTimeMs;
@@ -494,36 +498,36 @@ class SqlQueryRunner {
   }
 
   facebook::axiom::connector::TablePtr createTable(
-      std::string_view queryId,
+      const facebook::axiom::connector::ConnectorContextPtr& context,
       const presto::CreateTableStatement& statement,
       bool explain = false);
 
   facebook::axiom::connector::TablePtr createTable(
-      std::string_view queryId,
+      const facebook::axiom::connector::ConnectorContextPtr& context,
       const presto::CreateTableAsSelectStatement& statement,
       bool explain = false);
 
   std::string dropTable(
-      std::string_view queryId,
+      const facebook::axiom::connector::ConnectorContextPtr& context,
       const presto::DropTableStatement& statement);
 
   std::string addColumn(
-      std::string_view queryId,
+      const facebook::axiom::connector::ConnectorContextPtr& context,
       const presto::AddColumnStatement& statement,
       bool explain = false);
 
   std::string createSchema(
-      std::string_view queryId,
+      const facebook::axiom::connector::ConnectorContextPtr& context,
       const presto::CreateSchemaStatement& statement);
 
   std::string dropSchema(
-      std::string_view queryId,
+      const facebook::axiom::connector::ConnectorContextPtr& context,
       const presto::DropSchemaStatement& statement);
 
   /// Constant-folds the CALL statement's bound arguments and awaits the
   /// procedure's execute(); returns "CALL".
   folly::coro::Task<std::string> co_call(
-      std::string_view queryId,
+      const facebook::axiom::connector::ConnectorContextPtr& context,
       const presto::CallStatement& statement);
 
   /// Returns the default connector ID set during initialization.
@@ -556,19 +560,24 @@ class SqlQueryRunner {
   // run the query. Callers that execute must call checkLogicalPlan() first: a
   // rejected CTAS must not leave an empty table behind.
   std::shared_ptr<facebook::axiom::connector::SchemaResolver> createTargetTable(
-      std::string_view queryId,
+      const facebook::axiom::connector::ConnectorContextPtr& context,
       const presto::CreateTableAsSelectStatement& ctas,
       bool explain);
 
   std::shared_ptr<facebook::velox::core::QueryCtx> newQuery(
       const RunOptions& options);
 
+  // Builds the context for 'queryId' from the current session config's
+  // connector properties. The runner records no metrics, so every connector
+  // gets a discarding writer.
+  facebook::axiom::connector::ConnectorContextPtr makeConnectorContext(
+      std::string_view queryId) const;
+
   // Builds an OptimizerSession from the current session config's optimizer
-  // properties, attaching 'connectorProperties' and the explain flag.
+  // properties, attaching 'context' and the explain flag.
   std::shared_ptr<facebook::axiom::optimizer::OptimizerSession>
   makeOptimizerSession(
-      std::string_view queryId,
-      facebook::axiom::connector::ConnectorProperties connectorProperties,
+      facebook::axiom::connector::ConnectorContextPtr context,
       bool explain);
 
   std::string runExplain(
@@ -678,7 +687,7 @@ class SqlQueryRunner {
   // Executes a CREATE, DROP, or ALTER statement and returns its status message.
   std::string runDataDefinitionStatement(
       const presto::SqlStatement& statement,
-      std::string_view queryId);
+      const facebook::axiom::connector::ConnectorContextPtr& context);
 
   // Runs a SHOW, SET, RESET, or USE session statement.
   folly::coro::AsyncGenerator<SqlResultChunk> co_runSessionStatement(
@@ -708,11 +717,10 @@ class SqlQueryRunner {
       std::shared_ptr<facebook::axiom::QueryRuntimeStats> runtimeStats =
           nullptr);
 
-  // Builds a ConnectorSession for `connectorId` carrying the caller's
-  // queryId, the runner's user, and the connector's effective session
-  // properties from `sessionConfig_`.
+  // Returns the query's session for `connectorId`, made on first use and
+  // shared by every caller of the query.
   facebook::axiom::connector::ConnectorSessionPtr makeConnectorSession(
-      std::string_view queryId,
+      const facebook::axiom::connector::ConnectorContextPtr& context,
       std::string_view connectorId) const;
 
   // Permission check callback invoked before query execution.

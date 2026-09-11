@@ -1220,6 +1220,24 @@ class ConnectorMetadata {
 
   virtual ~ConnectorMetadata() = default;
 
+  /// Returns the id this metadata is registered under. A query's sessions are
+  /// keyed by it, so metadata reporting a different id than it was registered
+  /// with is given another connector's session and property slice.
+  virtual const std::string& connectorId() const = 0;
+
+  /// Returns what this connector keeps for a query, or null if it keeps
+  /// nothing. Called when this connector's session is made and given that
+  /// session, so the state may depend on the query's identity or this
+  /// connector's properties. Runs at most once per successful build; a throw
+  /// from the build runs it again. Must not ask the context for a session,
+  /// which would re-enter it. Remote work here delays this connector's other
+  /// callers, and on a coroutine runtime occupies the thread that got here
+  /// first.
+  virtual std::unique_ptr<ConnectorQueryState> makeQueryState(
+      [[maybe_unused]] const ConnectorSession& session) const {
+    return nullptr;
+  }
+
   /// Return a TablePtr given the table name. The returned Table object is
   /// immutable. If updates to the Table object are required, the
   /// ConnectorMetadata is required to drop its reference to the existing Table

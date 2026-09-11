@@ -90,10 +90,13 @@ std::vector<velox::RowVectorPtr> LocalRunner::execute(
 
   auto runner = std::make_shared<facebook::axiom::runner::LocalRunner>(
       std::make_shared<facebook::axiom::runner::RunnerSession>(
-          queryCtx->queryId(),
-          /*user=*/"pyspark-runner",
-          facebook::axiom::runner::Properties{},
-          facebook::axiom::connector::ConnectorProperties{}),
+          std::make_shared<facebook::axiom::connector::ConnectorContext>(
+              queryCtx->queryId(),
+              /*user=*/"pyspark-runner",
+              facebook::axiom::connector::ConnectorProperties{},
+              facebook::axiom::connector::discardingStatWriters()),
+          std::make_shared<velox::NoopRuntimeStatWriter>(),
+          facebook::axiom::runner::Properties{}),
       plan_,
       std::move(finishWrite_),
       queryCtx,

@@ -19,6 +19,7 @@
 #include <optional>
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
+#include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/ConstantExprEvaluator.h"
 #include "axiom/optimizer/tests/TpchDataGenerator.h"
@@ -91,10 +92,10 @@ void HiveQueriesTestBase::SetUp() {
       exec::test::kHiveConnectorId,
       std::string(connector::hive::LocalHiveConnectorMetadata::kDefaultSchema),
       std::make_shared<::axiom::sql::presto::ParserSession>(
-          /*queryId=*/"test",
-          /*user=*/"test",
-          ::axiom::sql::presto::ParserOptions{},
-          connector::ConnectorProperties{}));
+          connector::makeTestContext("test"),
+          connector::makeTestStatWriter(),
+          connector::Properties{},
+          ::axiom::sql::presto::ParserOptions{}));
 }
 
 // static

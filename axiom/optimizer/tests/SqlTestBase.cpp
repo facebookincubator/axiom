@@ -18,6 +18,7 @@
 #include <folly/coro/BlockingWait.h>
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
+#include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/OptimizerOptions.h"
@@ -27,7 +28,6 @@
 #include "axiom/sql/presto/PrestoParser.h"
 #include "axiom/sql/presto/SqlStatement.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
@@ -129,10 +129,14 @@ std::shared_ptr<runner::LocalRunner> makeLocalRunnerImpl(
 
   OptimizerOptions optimizerOptions;
   optimizerOptions.syntacticJoinOrder = syntacticJoinOrder;
+  auto context = connector::makeTestContext(queryId);
   auto optimizerSession = std::make_shared<OptimizerSession>(
-      queryId, "test", optimizerOptions, connector::ConnectorProperties{});
+      context,
+      connector::makeTestStatWriter(),
+      connector::Properties{},
+      optimizerOptions);
   auto runnerSession = std::make_shared<runner::RunnerSession>(
-      queryId, "test", runner::Properties{}, connector::ConnectorProperties{});
+      context, connector::makeTestStatWriter(), runner::Properties{});
 
   auto planAndStats = plan(
       *logicalPlan,
@@ -238,10 +242,10 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeRunner(
       connectorId_,
       defaultSchema_,
       std::make_shared<::axiom::sql::presto::ParserSession>(
-          /*queryId=*/"test",
-          /*user=*/"test",
-          ::axiom::sql::presto::ParserOptions{},
-          connector::ConnectorProperties{}));
+          connector::makeTestContext("test"),
+          connector::makeTestStatWriter(),
+          connector::Properties{},
+          ::axiom::sql::presto::ParserOptions{}));
   auto statement = parser.parse(sql);
 
   VELOX_CHECK(

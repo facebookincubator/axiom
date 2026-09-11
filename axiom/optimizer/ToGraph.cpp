@@ -444,8 +444,10 @@ Literal* tryFoldConstantDt(DerivedTableP dt) {
   const ToVelox::LeafTableData* leaf = toVelox.leafData(baseTable->id());
   VELOX_CHECK_NOT_NULL(leaf);
 
-  auto session = optimization->optimizerSession()->toConnectorSession(
+  auto metadata = connector::ConnectorMetadataRegistry::get(
       discreteLayout.layout->connectorId());
+  auto session =
+      optimization->optimizerSession()->context()->sessionFor(*metadata);
   auto discretePredicates = discreteLayout.layout->discretePredicates(
       session, discreteLayout.connectorColumns, leaf->handle);
   if (discretePredicates == nullptr) {

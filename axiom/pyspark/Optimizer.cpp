@@ -55,6 +55,7 @@ isCreateTableNode(
 
 // Creates a table with connector metadata.
 facebook::axiom::connector::TablePtr createTable(
+    const facebook::axiom::connector::ConnectorContextPtr& connectorContext,
     const facebook::axiom::logical_plan::TableWriteNode& writeNode,
     const std::string& connectorId) {
   auto* metadata =
@@ -82,10 +83,7 @@ facebook::axiom::connector::TablePtr createTable(
 
   auto tableSchema = velox::ROW(std::move(schemaNames), std::move(schemaTypes));
 
-  auto session = std::make_shared<facebook::axiom::connector::ConnectorSession>(
-      "pyspark_session",
-      /*user=*/"pyspark-optimizer",
-      facebook::axiom::connector::Properties{});
+  auto session = connectorContext->sessionFor(*metadata);
   auto table = metadata->createTable(
       session,
       writeNode.tableName(),
@@ -116,6 +114,14 @@ facebook::axiom::optimizer::PlanAndStats optimize(
     facebook::axiom::optimizer::queryCtx() = nullptr;
   };
 
+  auto queryCtx = velox::core::QueryCtx::create();
+  auto connectorContext =
+      std::make_shared<facebook::axiom::connector::ConnectorContext>(
+          queryCtx->queryId(),
+          /*user=*/"pyspark-optimizer",
+          facebook::axiom::connector::ConnectorProperties{},
+          facebook::axiom::connector::discardingStatWriters());
+
   // Fetch connector and set up schema resolver.
   auto connector = velox::connector::getConnector(connectorId);
   auto schemaResolver =
@@ -124,7 +130,7 @@ facebook::axiom::optimizer::PlanAndStats optimize(
 
   // Check if this is a CREATE TABLE operation and set up schema resolver.
   if (auto* createTableNode = isCreateTableNode(logicalPlan)) {
-    auto table = createTable(*createTableNode, connectorId);
+    auto table = createTable(connectorContext, *createTableNode, connectorId);
     schemaResolver->setTargetTable(
         connectorId, createTableNode->tableName(), std::move(table));
   }
@@ -136,20 +142,17 @@ facebook::axiom::optimizer::PlanAndStats optimize(
       .maxLocalPartitions = 1,
   };
 
-  auto queryCtx = velox::core::QueryCtx::create();
   velox::exec::SimpleExpressionEvaluator evaluator(queryCtx.get(), pool);
-
   auto optimizerSession =
       std::make_shared<facebook::axiom::optimizer::OptimizerSession>(
-          queryCtx->queryId(),
-          /*user=*/"pyspark-optimizer",
-          std::move(optimizerOptions),
-          facebook::axiom::connector::ConnectorProperties{});
+          connectorContext,
+          std::make_shared<velox::NoopRuntimeStatWriter>(),
+          facebook::axiom::connector::Properties{},
+          std::move(optimizerOptions));
   auto runnerSession = std::make_shared<facebook::axiom::runner::RunnerSession>(
-      queryCtx->queryId(),
-      /*user=*/"pyspark-optimizer",
-      facebook::axiom::runner::Properties{},
-      facebook::axiom::connector::ConnectorProperties{});
+      connectorContext,
+      std::make_shared<velox::NoopRuntimeStatWriter>(),
+      facebook::axiom::runner::Properties{});
 
   facebook::axiom::optimizer::Optimization opt(
       std::move(optimizerSession),
