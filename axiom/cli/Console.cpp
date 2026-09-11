@@ -49,8 +49,8 @@ DEFINE_uint64(
 
 DEFINE_int32(max_rows, 100, "Max number of printed result rows");
 
-DEFINE_int32(num_workers, 4, "Number of in-process workers");
-DEFINE_int32(num_drivers, 4, "Number of drivers per worker");
+DEFINE_int32(num_workers, 1, "Number of in-process workers");
+DEFINE_int32(num_drivers, 1, "Number of drivers per worker");
 
 DEFINE_string(
     query,

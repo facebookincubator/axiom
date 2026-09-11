@@ -32,8 +32,8 @@ The examples below use `axiom_sql` for brevity. With Buck, replace
 | `--data_path` | | Hive specific: root path for Hive-style partitioned data. Registers local Hive connector. Mutually exclusive with `--etc_dir`. |
 | `--data_format` | `parquet` | Hive specific: data format, `parquet`, `dwrf`, or `text`. |
 | `--split_target_bytes` | `16MB` | Hive specific: approximate bytes per split. |
-| `--num_workers` | `4` | Number of in-process workers. |
-| `--num_drivers` | `4` | Number of drivers per worker (parallelism). |
+| `--num_workers` | `1` | Number of in-process workers. |
+| `--num_drivers` | `1` | Number of drivers per worker (parallelism). |
 | `--v2` | `false` | Route queries through the v2 optimizer. `EXPLAIN (type graph\|optimized)` is not supported under v2 yet. |
 | `--max_rows` | `100` | Maximum number of printed result rows. |
 | `--show_live_progress` | `false` | Draw the [live progress](#live-progress) grid for `--query` and piped-stdin runs (when stderr is a terminal). The interactive REPL always shows it; this only opts the non-interactive paths in. |
