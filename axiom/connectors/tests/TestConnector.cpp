@@ -436,14 +436,17 @@ folly::coro::Task<SplitBatch> TestSplitSource::co_getSplits(
     auto split =
         std::make_shared<TestConnectorSplit>(connectorId_, dataIndices_[i]);
     std::optional<int32_t> remotePartition;
+    std::optional<int32_t> groupId;
     if (partitionType_ != nullptr) {
       VELOX_CHECK_LT(i, dataBucketIds_.size());
+      groupId = dataBucketIds_[i] % partitionType_->numGroups();
       remotePartition = dataBucketIds_[i] % partitionType_->numPartitions();
     }
     batch.splits.push_back(
         Split{
             .connectorSplit = std::move(split),
-            .remotePartition = remotePartition});
+            .remotePartition = remotePartition,
+            .groupId = groupId});
   }
   nextOffset_ = end;
   batch.noMoreSplits = (nextOffset_ >= dataIndices_.size());

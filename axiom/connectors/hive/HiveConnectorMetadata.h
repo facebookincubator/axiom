@@ -82,6 +82,13 @@ class HivePartitionType : public connector::PartitionType {
     return numPartitions_;
   }
 
+  /// Number of split groups: the bucket count. Split groupIds lie in
+  /// [0, numBuckets()), independent of the (possibly smaller) partition
+  /// count.
+  int32_t numGroups() const override {
+    return numBuckets_;
+  }
+
   /// Native bucket count of the underlying Hive table layout.
   int32_t numBuckets() const {
     return numBuckets_;

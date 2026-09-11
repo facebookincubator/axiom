@@ -352,6 +352,12 @@ class PartitionType {
   /// Number of partitions.
   virtual int32_t numPartitions() const = 0;
 
+  /// Number of split groups. Splits produced under this partitioning carry
+  /// groupIds in [0, numGroups()). May exceed numPartitions(): after
+  /// scaleDown folds several buckets into one partition, each task processes
+  /// multiple groups.
+  virtual int32_t numGroups() const = 0;
+
   virtual std::string toString() const = 0;
 
   template <typename T>

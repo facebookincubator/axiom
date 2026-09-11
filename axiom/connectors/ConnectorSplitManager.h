@@ -30,8 +30,10 @@ class PartitionType;
 /// execution: splits with the same remotePartition are routed to the same
 /// task. affinityId is a soft cross-query affinity hint: schedulers prefer to
 /// route splits with the same affinityId to the same task, but may choose
-/// another task for load balancing. When both are present, grouped-execution
-/// routing through remotePartition takes precedence over affinityId.
+/// another task for load balancing. groupId carries the raw bucket id of a
+/// split from a bucketed table, independent of grouped execution. When both
+/// are present, grouped-execution routing through remotePartition takes
+/// precedence over affinityId.
 struct Split {
   /// The underlying Velox connector split.
   std::shared_ptr<velox::connector::ConnectorSplit> connectorSplit;
@@ -49,6 +51,13 @@ struct Split {
   /// affinityId; such collisions only cause them to share a preferred task. If
   /// unset, no affinityId-based placement hint is available for this split.
   std::optional<int64_t> affinityId{std::nullopt};
+
+  /// Bucket id of this split when the underlying table is bucketed. Unlike
+  /// remotePartition, this is populated whenever the connector knows the
+  /// bucket, even when no PartitionType was passed for grouped execution.
+  /// Under grouped execution it is normalized to the bucket count selected
+  /// by the supplied partitionType. Absent for non-bucketed tables.
+  std::optional<int32_t> groupId{std::nullopt};
 };
 
 /// A batch of splits returned by SplitSource::co_getSplits.

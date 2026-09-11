@@ -68,6 +68,12 @@ class TestPartitionType : public PartitionType {
     return numPartitions_;
   }
 
+  /// Number of split groups. Test partitioning does not fold buckets, so
+  /// groups and partitions coincide.
+  int32_t numGroups() const override {
+    return numPartitions_;
+  }
+
   std::string toString() const override;
 
  private:
@@ -266,7 +272,8 @@ class TestTable : public Table {
 
 /// SplitSource for TestTable. Emits one TestConnectorSplit per index in
 /// 'dataIndices'. When 'partitionType' is set, tags each Split with
-/// remotePartition = dataBucketIds[i] % partitionType->numPartitions().
+/// remotePartition = dataBucketIds[i] % partitionType->numPartitions() and
+/// groupId = dataBucketIds[i].
 class TestSplitSource : public SplitSource {
  public:
   TestSplitSource(

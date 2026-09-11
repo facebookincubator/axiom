@@ -658,6 +658,8 @@ CO_TEST_F(TestConnectorTest, bucketedTable) {
       CO_ASSERT_NE(testSplit, nullptr);
       const auto bucket = table->dataBucketIds()[testSplit->index()];
       EXPECT_EQ(*split.remotePartition, bucket % kNumGroups);
+      CO_ASSERT_TRUE(split.groupId.has_value());
+      EXPECT_EQ(*split.groupId, bucket % kNumGroups);
       observedRemotePartitions.push_back(*split.remotePartition);
     }
     if (batch.noMoreSplits) {

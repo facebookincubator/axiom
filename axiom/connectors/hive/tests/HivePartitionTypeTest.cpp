@@ -82,6 +82,15 @@ TEST(HivePartitionTypeTest, scaleDownPrimePartitionCount) {
   EXPECT_EQ(scaled->numPartitions(), 7);
 }
 
+TEST(HivePartitionTypeTest, numGroupsEqualsNumBuckets) {
+  EXPECT_EQ(makePartitionType(8).numGroups(), 8);
+
+  const auto scaled = makePartitionType(256).scaleDown(100);
+  ASSERT_NE(scaled, nullptr);
+  EXPECT_EQ(scaled->numPartitions(), 100);
+  EXPECT_EQ(scaled->numGroups(), 256);
+}
+
 TEST(HivePartitionTypeTest, scaleDownRejectsNonPositiveMax) {
   const auto partitionType = makePartitionType(8);
 
