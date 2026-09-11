@@ -140,7 +140,7 @@ iterations and is seeded from the anchor.
 | --- | --- | --- |
 | `RecursiveReferenceNode[counter]` | `WorkingTable[counter, latestDelta]` | `StateSourceNode(counter, delta=true)` |
 | anchor branch | anchor branch | `VectorStateDeclaration(counter, append=true)` |
-| — (synthesized in Translate) | `convergence:` `Aggregate count()` -> `Project eq(count, 0)` | `ConvergenceConfig.plan`: `AggregationNode(count)` -> `ProjectNode(count == 0)` |
+| — (synthesized in Translate) | `convergence:` `Aggregate count()` -> `Project eq(count, 0)` | `ConvergenceConfig.plans`: `AggregationNode(count)` -> `ProjectNode(count == 0)` |
 
 `WorkingTableReadMode` also has an `kAccumulated` mode, which emits
 `delta=false` — a read of the whole state rather than the last iteration's
