@@ -110,6 +110,26 @@ class TestTableLayout : public TableLayout {
             /*lookupKeys=*/{},
             /*supportsScan=*/true) {}
 
+  /// Models a table that can only be read by key: 'lookupKeys' are the key
+  /// columns and a full scan is refused. Lets a test drive the optimizer's
+  /// index-lookup path, which no scannable layout reaches.
+  TestTableLayout(
+      const std::string& label,
+      Table* table,
+      velox::connector::Connector* connector,
+      std::vector<const Column*> columns,
+      std::vector<const Column*> lookupKeys)
+      : TableLayout(
+            label,
+            table,
+            connector,
+            std::move(columns),
+            /*partitionColumns=*/{},
+            /*orderColumns=*/{},
+            /*sortOrder=*/{},
+            std::move(lookupKeys),
+            /*supportsScan=*/false) {}
+
   TestTableLayout(
       const std::string& label,
       Table* table,
@@ -407,12 +427,19 @@ class TestTableHandle : public velox::connector::ConnectorTableHandle {
 
   TestTableHandle(
       const TableLayout& layout,
-      std::vector<velox::connector::ColumnHandlePtr> columnHandles)
+      std::vector<velox::connector::ColumnHandlePtr> columnHandles,
+      bool lookup = false)
       : TestTableHandle(
             layout.connector()->connectorId(),
             layout.table().name(),
             getTableSize(layout),
-            std::move(columnHandles)) {}
+            std::move(columnHandles)) {
+    lookup_ = lookup;
+  }
+
+  bool supportsIndexLookup() const override {
+    return lookup_;
+  }
 
   static int64_t getTableSize(const TableLayout& layout) {
     auto& table = dynamic_cast<const TestTable&>(layout.table());
@@ -438,6 +465,9 @@ class TestTableHandle : public velox::connector::ConnectorTableHandle {
   const std::vector<velox::connector::ColumnHandlePtr>& columnHandles() const {
     return columnHandles_;
   }
+
+  // True when the handle was built for an index lookup rather than a scan.
+  bool lookup_{false};
 
   folly::dynamic serialize() const override {
     folly::dynamic obj = folly::dynamic::object;
@@ -528,6 +558,10 @@ class TestConnectorMetadata : public ConnectorMetadata {
   /// Example: WITH (explain_io = ARRAY['ds']).
   static constexpr std::string_view kExplainIo = "explain_io";
 
+  /// CREATE TABLE property naming the key columns of a lookup-only table,
+  /// which cannot be scanned. Example: WITH (lookup_keys = ARRAY['id']).
+  static constexpr std::string_view kLookupKeys = "lookup_keys";
+
   /// CREATE TABLE property. When false, the table reports no row count and no
   /// column statistics regardless of the data it holds, modeling a table the
   /// metastore has no statistics for. Defaults to true.
@@ -576,6 +610,13 @@ class TestConnectorMetadata : public ConnectorMetadata {
       const velox::RowTypePtr& hiddenColumns,
       std::optional<TestBucketSpec> bucketSpec = std::nullopt,
       folly::F14FastMap<std::string, std::string> columnComments = {});
+
+  /// Registers a table that can only be read by key: 'lookupKeyNames' are its
+  /// key columns and a full scan is refused.
+  std::shared_ptr<TestTable> addLookupTable(
+      const std::string& name,
+      const velox::RowTypePtr& schema,
+      const std::vector<std::string>& lookupKeyNames);
 
   /// Appends data to the table with the specified name.
   void appendData(

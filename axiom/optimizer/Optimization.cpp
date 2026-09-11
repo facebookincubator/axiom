@@ -1166,6 +1166,11 @@ RelationOpPtr repartitionForIndex(
 
   ExprVector keyExprs;
   const auto& partitionKeys = distribution.partitionKeys();
+  if (partitionKeys.empty()) {
+    // An unpartitioned index is reachable from every worker, so the probe
+    // needs no shuffle to line up with it.
+    return plan;
+  }
   for (auto key : partitionKeys) {
     // partition is in schema columns, lookupKeys is in BaseTable columns. Use
     // the schema column of lookup key for matching.
@@ -2046,14 +2051,34 @@ void Optimization::joinByIndex(
       fanout = minOf(fanout, 1.0f);
     }
 
-    auto lookupKeys = left.keys;
-    // The number of keys is the prefix that matches index order.
-    lookupKeys.resize(info.lookupKeys.size());
+    // Pair each index key with the probe expression the join equates it to.
+    // 'info.lookupKeys' is in index order and 'left.keys' in join order, so
+    // matching by position would silently swap the probe values whenever the
+    // two orders disagree.
+    ExprVector lookupKeys;
+    lookupKeys.reserve(info.lookupKeys.size());
+    for (auto* lookupColumn : info.lookupKeys) {
+      const auto nth = std::ranges::find(keyColumns, lookupColumn);
+      VELOX_CHECK(
+          nth != keyColumns.end(),
+          "Index lookup key is not one of the join keys: {}",
+          lookupColumn->name());
+      lookupKeys.push_back(left.keys[nth - keyColumns.begin()]);
+    }
     state.placeColumns(availableColumns(rightTable, index));
 
     auto c = state.downstreamColumns();
     c.intersect(state.columns());
     c.unionColumns(rightTable->filter);
+
+    // The lookup key columns must survive column pruning: they name the
+    // right-hand side of the equalities the lookup is driven by.
+    ColumnVector lookupColumns;
+    lookupColumns.reserve(info.lookupKeys.size());
+    for (auto* lookupColumn : info.lookupKeys) {
+      c.add(lookupColumn);
+      lookupColumns.push_back(lookupColumn);
+    }
 
     auto* scan = make<TableScan>(
         newPartition,
@@ -2063,6 +2088,7 @@ void Optimization::joinByIndex(
         fanout,
         c.toObjects<Column>(),
         lookupKeys,
+        std::move(lookupColumns),
         joinType,
         candidate.join->filter());
 
@@ -2292,11 +2318,33 @@ void tryOptimizeSemiProject(
 }
 } // namespace
 
+namespace {
+
+// True if any table in 'candidate' can only be reached by index lookup. A hash
+// join has to scan its build side standalone, which such a table forbids.
+bool isLookupOnly(const JoinCandidate& candidate) {
+  for (auto* table : candidate.tables) {
+    if (!table->is(PlanType::kTableNode)) {
+      continue;
+    }
+    const auto* layout = table->as<BaseTable>()->layout();
+    if (layout != nullptr && !layout->supportsScan()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+} // namespace
+
 void Optimization::joinByHash(
     const RelationOpPtr& plan,
     const JoinCandidate& candidate,
     PlanState& state,
     std::vector<NextJoin>& toTry) {
+  if (isLookupOnly(candidate)) {
+    return;
+  }
   checkTables(candidate);
 
   auto [build, probe] = candidate.joinSides();
@@ -2546,6 +2594,9 @@ void Optimization::joinByHashRight(
     const JoinCandidate& candidate,
     PlanState& state,
     std::vector<NextJoin>& toTry) {
+  if (isLookupOnly(candidate)) {
+    return;
+  }
   checkTables(candidate);
 
   VELOX_CHECK_NULL(candidate.join->rowNumberColumn());

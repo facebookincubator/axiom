@@ -382,6 +382,7 @@ struct TableScan : public RelationOp {
       std::optional<float> fanout,
       ColumnVector columns,
       ExprVector lookupKeys,
+      ColumnVector lookupColumns,
       velox::core::JoinType joinType,
       ExprVector joinFilter);
 
@@ -408,8 +409,12 @@ struct TableScan : public RelationOp {
   /// access.
   ColumnGroupCP const index;
 
-  /// Lookup keys, empty if full table scan.
+  /// Lookup keys, empty if full table scan. These are probe-side expressions.
   const ExprVector keys;
+
+  /// Columns of 'index' the 'keys' are matched against, 1:1 with 'keys'.
+  /// Empty if full table scan.
+  const ColumnVector lookupColumns;
 
   /// If this is a lookup, 'joinType' can be inner, left or anti.
   const velox::core::JoinType joinType;

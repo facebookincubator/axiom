@@ -200,6 +200,18 @@ TestTable::TestTable(
         allColumns(),
         std::move(partitionColumns),
         std::move(partitionType));
+  } else if (auto lookupIt =
+                 options.find(std::string{TestConnectorMetadata::kLookupKeys});
+             lookupIt != options.end()) {
+    std::vector<const Column*> lookupKeys;
+    for (const auto& columnName : lookupIt->second.array<std::string>()) {
+      const auto* column = findColumn(columnName);
+      VELOX_USER_CHECK_NOT_NULL(
+          column, "Lookup key names no column: {}", columnName);
+      lookupKeys.push_back(column);
+    }
+    exportedLayout_ = std::make_unique<TestTableLayout>(
+        tableName, this, connector_, allColumns(), std::move(lookupKeys));
   } else {
     exportedLayout_ = std::make_unique<TestTableLayout>(
         tableName, this, connector_, allColumns());
@@ -788,7 +800,7 @@ velox::connector::ConnectorTableHandlePtr TestTableLayout::createTableHandle(
     std::vector<velox::core::TypedExprPtr> filters,
     std::vector<int32_t>& rejectedFilterIndices,
     velox::RowTypePtr /* dataColumns */,
-    std::optional<LookupKeys> /*lookupKeys*/) const {
+    std::optional<LookupKeys> lookupKeys) const {
   auto* testConnector = dynamic_cast<TestConnector*>(connector());
   VELOX_CHECK_NOT_NULL(testConnector);
   if (const auto& inspector = testConnector->onCreateTableHandle()) {
@@ -796,7 +808,32 @@ velox::connector::ConnectorTableHandlePtr TestTableLayout::createTableHandle(
   }
   rejectedFilterIndices.resize(filters.size());
   std::iota(rejectedFilterIndices.begin(), rejectedFilterIndices.end(), 0);
-  return std::make_shared<TestTableHandle>(*this, std::move(columnHandles));
+  return std::make_shared<TestTableHandle>(
+      *this, std::move(columnHandles), lookupKeys.has_value());
+}
+
+std::shared_ptr<TestTable> TestConnectorMetadata::addLookupTable(
+    const std::string& name,
+    const velox::RowTypePtr& schema,
+    const std::vector<std::string>& lookupKeyNames) {
+  std::vector<velox::Variant> keys;
+  keys.reserve(lookupKeyNames.size());
+  for (const auto& keyName : lookupKeyNames) {
+    keys.emplace_back(keyName);
+  }
+
+  SchemaTableName tableName{std::string(kDefaultSchema), name};
+  schemas_.insert(tableName.schema);
+  auto table = std::make_shared<TestTable>(
+      tableName,
+      schema,
+      velox::ROW({}),
+      connector_,
+      folly::F14FastMap<std::string, velox::Variant>{
+          {std::string(kLookupKeys), velox::Variant::array(std::move(keys))}});
+  auto [it, ok] = tables_.emplace(std::move(tableName), std::move(table));
+  VELOX_CHECK(ok, "Table already exists: {}", it->first.toString());
+  return it->second;
 }
 
 std::shared_ptr<TestTable> TestConnectorMetadata::addTable(
@@ -840,7 +877,8 @@ TablePtr TestConnectorMetadata::createTable(
 
   for (const auto& [key, value] : options) {
     VELOX_USER_CHECK(
-        key == kHidden || key == kExplainIo || key == kCollectStatistics,
+        key == kHidden || key == kExplainIo || key == kCollectStatistics ||
+            key == kLookupKeys,
         "TestConnector does not support CREATE TABLE property: {}",
         key);
   }

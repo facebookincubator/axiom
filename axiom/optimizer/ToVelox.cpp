@@ -141,7 +141,9 @@ RelationOpPtr addGather(
 
 } // namespace
 
-void ToVelox::filterUpdated(BaseTableCP table) {
+void ToVelox::filterUpdated(
+    BaseTableCP table,
+    std::optional<connector::LookupKeys> lookupKeys) {
   PlanObjectSet columnSet;
   columnSet.unionColumns(table->columnFilters);
 
@@ -200,7 +202,9 @@ void ToVelox::filterUpdated(BaseTableCP table) {
       std::move(columns),
       *evaluator,
       std::move(filterConjuncts),
-      rejectedFilterIndices);
+      rejectedFilterIndices,
+      /*dataColumns=*/nullptr,
+      std::move(lookupKeys));
 
   // Each rejected index selects a conjunct to evaluate post-scan (as TypedExpr)
   // and to post-apply selectivity for (as ExprCP).
@@ -1463,17 +1467,79 @@ velox::core::TypedExprPtr toAndWithAliases(
 
 } // namespace
 
+velox::core::PlanNodePtr ToVelox::makeIndexLookupJoin(
+    const TableScan& scan,
+    const velox::core::TableScanNodePtr& lookupSource,
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
+  VELOX_CHECK_EQ(
+      scan.keys.size(),
+      scan.lookupColumns.size(),
+      "Index lookup needs one index column per probe key");
+  VELOX_CHECK(
+      velox::core::IndexLookupJoinNode::isSupported(scan.joinType),
+      "Join type not available by index lookup: {}",
+      velox::core::JoinTypeName::toName(scan.joinType));
+
+  auto probe = makeFragment(scan.input(), fragment, stages);
+
+  ExprVector lookupExprs;
+  lookupExprs.reserve(scan.lookupColumns.size());
+  for (auto* column : scan.lookupColumns) {
+    lookupExprs.push_back(column);
+  }
+
+  // The probe's columns come first so a column named on both sides resolves to
+  // the probe, matching the ordering the optimizer placed them in.
+  std::vector<std::string> names = probe->outputType()->names();
+  std::vector<velox::TypePtr> types = probe->outputType()->children();
+  const auto& lookupType = lookupSource->outputType();
+  for (auto i = 0; i < lookupType->size(); ++i) {
+    if (probe->outputType()->containsChild(lookupType->nameOf(i))) {
+      continue;
+    }
+    names.push_back(lookupType->nameOf(i));
+    types.push_back(lookupType->childAt(i));
+  }
+
+  auto joinNode = std::make_shared<velox::core::IndexLookupJoinNode>(
+      nextId(),
+      scan.joinType,
+      toFieldRefs(scan.keys),
+      toFieldRefs(lookupExprs),
+      /*joinConditions=*/std::vector<velox::core::IndexLookupConditionPtr>{},
+      toAnd(scan.joinFilter),
+      /*hasMarker=*/false,
+      /*splitOutput=*/std::nullopt,
+      std::move(probe),
+      lookupSource,
+      ROW(std::move(names), std::move(types)));
+
+  makePredictionAndHistory(joinNode->id(), &scan);
+  return joinNode;
+}
+
 velox::core::PlanNodePtr ToVelox::makeScan(
     const TableScan& scan,
     ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& /*stages*/) {
+    std::vector<ExecutableFragment>& stages) {
   columnAlteredTypes_.clear();
 
   const bool isSubfieldPushdown = hasSubfieldPushdown(scan);
 
   auto* data = leafData(scan.baseTable->id());
-  if (!data) {
-    filterUpdated(scan.baseTable);
+  if (!data || !scan.keys.empty()) {
+    // A lookup needs a handle the connector built knowing the lookup keys, so
+    // rebuild rather than reuse the cached scan handle.
+    std::optional<connector::LookupKeys> lookupKeys;
+    if (!scan.keys.empty()) {
+      lookupKeys.emplace();
+      lookupKeys->equalityColumns.reserve(scan.lookupColumns.size());
+      for (auto* column : scan.lookupColumns) {
+        lookupKeys->equalityColumns.emplace_back(column->name());
+      }
+    }
+    filterUpdated(scan.baseTable, std::move(lookupKeys));
     data = leafData(scan.baseTable->id());
     VELOX_CHECK_NOT_NULL(data, "No table for scan {}", scan.toString());
   }
@@ -1482,6 +1548,14 @@ velox::core::PlanNodePtr ToVelox::makeScan(
 
   // Add columns used by rejected filters to scan columns.
   ColumnVector allColumns = scan.columns();
+  if (!scan.keys.empty()) {
+    // For a lookup, 'columns' is the join's output: probe columns alongside
+    // the index's. Only the latter are read from the connector; the former
+    // arrive from the probe side.
+    std::erase_if(allColumns, [&](ColumnCP column) {
+      return column->relation() != scan.baseTable;
+    });
+  }
   velox::core::TypedExprPtr filter;
   if (!rejectedFilters.empty()) {
     filter = toAndWithAliases(
@@ -1515,14 +1589,21 @@ velox::core::PlanNodePtr ToVelox::makeScan(
   }
 
   auto scanId = nextId();
-  velox::core::PlanNodePtr result =
-      std::make_shared<velox::core::TableScanNode>(
-          scanId, outputType, tableHandle, assignments);
+  auto scanNode = std::make_shared<velox::core::TableScanNode>(
+      scanId, outputType, tableHandle, assignments);
+  velox::core::PlanNodePtr result = scanNode;
 
   relationOpToNodeId_.insert_or_assign(&scan, scanId);
 
   if (scan.baseTable->sampledPercentage.has_value()) {
     fragment.sampledScans.emplace(scanId, *scan.baseTable->sampledPercentage);
+  }
+
+  if (!scan.keys.empty()) {
+    // Index lookup: the scan is the lookup side of a join whose probe side is
+    // the scan's input. The rejected filters and subfield projections below
+    // apply to the joined rows, so build the join first and let them wrap it.
+    result = makeIndexLookupJoin(scan, scanNode, fragment, stages);
   }
 
   if (filter != nullptr) {

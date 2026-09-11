@@ -373,6 +373,21 @@ IndexInfo SchemaTable::indexInfo(
     }
   }
 
+  // A layout may advertise lookup keys without being sorted on them, in which
+  // case the loop above found nothing. Match the declared keys in order and
+  // stop at the first one the query does not constrain, since a lookup can
+  // only use a leading prefix of the key.
+  if (info.lookupKeys.empty()) {
+    for (const auto* lookupKey : index->layout->lookupKeys()) {
+      auto part = findColumnByName(columnsSpan, toName(lookupKey->name()));
+      if (!part) {
+        break;
+      }
+      covered.add(part);
+      info.lookupKeys.push_back(part);
+    }
+  }
+
   for (auto column : columnsSpan) {
     if (covered.contains(column)) {
       continue;

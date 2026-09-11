@@ -708,6 +708,18 @@ void gatherScans(
     scans.push_back(scan);
     return;
   }
+  if (auto lookupJoin =
+          std::dynamic_pointer_cast<const velox::core::IndexLookupJoinNode>(
+              plan)) {
+    // The lookup side is not a driver source: the join operator reads it
+    // through an IndexSource. Only a lookup source that asks for splits gets
+    // them, and then the operator, not a TableScan, consumes them.
+    gatherScans(lookupJoin->sources()[0], scans);
+    if (lookupJoin->lookupSource()->tableHandle()->needsIndexSplit()) {
+      scans.push_back(lookupJoin->lookupSource());
+    }
+    return;
+  }
   for (const auto& source : plan->sources()) {
     gatherScans(source, scans);
   }

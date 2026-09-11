@@ -98,7 +98,11 @@ class ToVelox {
 
   /// Builds the connector table handle for 'baseTable' from its current
   /// filters and column handles. Populates leafData for the base table.
-  void filterUpdated(BaseTableCP baseTable);
+  /// 'lookupKeys' is set when the handle drives an index lookup rather than a
+  /// scan; the connector then returns a lookup-capable handle.
+  void filterUpdated(
+      BaseTableCP baseTable,
+      std::optional<connector::LookupKeys> lookupKeys = std::nullopt);
 
   /// Returns the leaf data for 'id' populated by filterUpdated, or nullptr
   /// if filterUpdated has not been called for this id.
@@ -218,6 +222,14 @@ class ToVelox {
 
   velox::core::PlanNodePtr makeScan(
       const TableScan& scan,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  // Joins 'scan's probe-side input to 'lookupSource' by index lookup. Only
+  // called for a TableScan carrying lookup keys.
+  velox::core::PlanNodePtr makeIndexLookupJoin(
+      const TableScan& scan,
+      const velox::core::TableScanNodePtr& lookupSource,
       ExecutableFragment& fragment,
       std::vector<ExecutableFragment>& stages);
 

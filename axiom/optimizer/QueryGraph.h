@@ -1197,10 +1197,16 @@ struct BaseTable : public TableObject {
 
   PathSet columnSubfields(int32_t id) const;
 
-  /// Returns possible indices for driving table scan of 'table'.
+  /// Returns possible indices for driving table scan of 'table'. Empty when
+  /// every layout is lookup-only, which leaves index lookup as the sole way
+  /// to reach the table.
   std::vector<ColumnGroupCP> chooseLeafIndex() const {
     VELOX_DCHECK(!schemaTable->columnGroups.empty());
-    return {schemaTable->columnGroups[0]};
+    auto* group = schemaTable->columnGroups[0];
+    if (!group->layout->supportsScan()) {
+      return {};
+    }
+    return {group};
   }
 
   /// The connector table layout backing this scan. A BaseTable always has

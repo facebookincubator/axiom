@@ -129,6 +129,7 @@ TableScan::TableScan(
           /*fanout=*/table->filteredCardinality,
           columns,
           /*lookupKeys=*/{},
+          /*lookupColumns=*/{},
           velox::core::JoinType::kInner,
           /*joinFilter=*/{}) {}
 
@@ -140,6 +141,7 @@ TableScan::TableScan(
     std::optional<float> fanout,
     ColumnVector columns,
     ExprVector lookupKeys,
+    ColumnVector lookupColumns,
     velox::core::JoinType joinType,
     ExprVector joinFilter)
     : RelationOp(
@@ -150,6 +152,7 @@ TableScan::TableScan(
       baseTable(table),
       index(index),
       keys(std::move(lookupKeys)),
+      lookupColumns(std::move(lookupColumns)),
       joinType(joinType),
       joinFilter(std::move(joinFilter)) {
   cost_.inputCardinality = inputCardinality();
