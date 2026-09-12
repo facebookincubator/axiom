@@ -27,6 +27,7 @@
 #include "axiom/optimizer/EstimateMath.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/v2/CostModel.h"
+#include "axiom/optimizer/v2/Node.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::axiom::optimizer::v2 {
@@ -971,6 +972,33 @@ class Enumerator {
     return result;
   }
 
+  Partitioning joinOutputPartitioning(
+      velox::core::JoinType joinType,
+      bool reversedAnti,
+      const ExprVector& leftKeys,
+      const ExprVector& rightKeys,
+      const RelationSet& combined,
+      const connector::PartitionType* partitionType = nullptr) {
+    const ExprVector* outputKeys;
+    if (reversedAnti) {
+      outputKeys = &rightKeys;
+    } else {
+      const auto preservedSides = Join::preservedSides(joinType);
+      if (preservedSides.left) {
+        outputKeys = &leftKeys;
+      } else if (preservedSides.right) {
+        outputKeys = &rightKeys;
+      } else {
+        return {};
+      }
+    }
+
+    auto output =
+        Partitioning::globalHash(keysInCoverSchema(*outputKeys, combined));
+    output.partitionType = partitionType;
+    return output;
+  }
+
   // Builds, costs, and (if costable) inserts one join candidate with the given
   // output partitioning. The children are already distribution-enforced.
   void addJoinCandidate(
@@ -1008,7 +1036,7 @@ class Enumerator {
   // Adds join candidates that avoid shuffling the bucketed side(s): both sides
   // co-located when both are bucketed, or the unbucketed side repartitioned to
   // the bucketed side's connector partitioning. The output is partitioned on
-  // the probe (left) keys with the preserved bucket type.
+  // the preserved side's keys with the preserved bucket type.
   void addCoBucketedCandidate(
       MemoOpCP left,
       MemoOpCP right,
@@ -1029,9 +1057,6 @@ class Enumerator {
     const auto add = [&](MemoOpCP leftChild,
                          MemoOpCP rightChild,
                          const connector::PartitionType* outputType) {
-      Partitioning outputPartitioning =
-          Partitioning::globalHash(keysInCoverSchema(leftKeys, combined));
-      outputPartitioning.partitionType = outputType;
       addJoinCandidate(
           leftChild,
           rightChild,
@@ -1041,7 +1066,13 @@ class Enumerator {
           reversedAnti,
           keyEdges,
           filterEdges,
-          std::move(outputPartitioning));
+          joinOutputPartitioning(
+              joinType,
+              reversedAnti,
+              leftKeys,
+              rightKeys,
+              combined,
+              outputType));
     };
 
     if (leftBucketed != nullptr && rightBucketed != nullptr) {
@@ -1125,7 +1156,8 @@ class Enumerator {
     const auto [leftKeys, rightKeys] = orientedKeys(left, edgeIndex, keyEdges);
     if (!leftKeys.empty()) {
       // Partition strategy: co-partition both inputs on the join keys; the
-      // output is partitioned on the keys for same-key reuse above. A
+      // output is partitioned on the preserved side's keys for same-key reuse
+      // above. A
       // null-aware anti/semi join (NOT IN / IN) needs the existence side's
       // null keys on every probe partition; the existence side is the edge's
       // right operand, which may be either physical child depending on
@@ -1149,7 +1181,8 @@ class Enumerator {
             reversedAnti,
             keyEdges,
             filterEdges,
-            Partitioning::globalHash(keysInCoverSchema(leftKeys, combined)));
+            joinOutputPartitioning(
+                joinType, reversedAnti, leftKeys, rightKeys, combined));
       }
 
       // Skipped for null-aware anti/semi: a connector-bucketed existence side
