@@ -2156,10 +2156,11 @@ void forEachOutputColumn(
 } // namespace
 
 ExprApi PlanBuilder::OutputColumnName::toCol() const {
-  if (alias.has_value()) {
-    return Col(name, Col(*alias));
+  ExprApi column = alias.has_value() ? Col(name, Col(*alias)) : Col(name);
+  if (userName.has_value()) {
+    return column.as(*userName);
   }
-  return Col(name);
+  return column;
 }
 
 std::vector<PlanBuilder::OutputColumnName> PlanBuilder::findOrAssignOutputNames(
@@ -2185,9 +2186,23 @@ PlanBuilder::OutputColumnName PlanBuilder::findOrAssignOutputNameAt(
   auto names = outputMapping_->reverseLookup(id);
 
   if (names.empty()) {
-    // Anonymous column — assign the internal ID as a resolvable name.
+    if (const auto* userName = outputMapping_->userName(id)) {
+      auto resolutionName = nameAllocator_->newName(id);
+      outputMapping_->add(resolutionName, id);
+      return OutputColumnName{
+          std::nullopt, std::move(resolutionName), *userName};
+    }
+
+    // Use the internal ID when it is available as a name. If the ID is also
+    // an ambiguous user-visible name, allocate a distinct access name.
     outputMapping_->add(id, id);
-    return OutputColumnName{std::nullopt, id};
+    std::string resolutionName{id};
+    if (outputMapping_->lookup(id) != id) {
+      resolutionName = nameAllocator_->newName(id);
+      outputMapping_->add(resolutionName, id);
+    }
+
+    return OutputColumnName{std::nullopt, std::move(resolutionName)};
   }
 
   // Extract the user-visible column name (same for all entries) and the
@@ -2202,14 +2217,21 @@ PlanBuilder::OutputColumnName PlanBuilder::findOrAssignOutputNameAt(
     }
   }
 
+  std::optional<std::string> userName;
+  if (const auto* mappedUserName = outputMapping_->userName(id);
+      mappedUserName != nullptr && *mappedUserName != columnName) {
+    userName = *mappedUserName;
+  }
+
   // If the name resolves unambiguously, no alias is needed.
   if (outputMapping_->lookup(columnName) == id) {
-    return OutputColumnName{std::nullopt, columnName};
+    return OutputColumnName{std::nullopt, columnName, std::move(userName)};
   }
 
   // Name is ambiguous (e.g., same column name from multiple joined tables).
   // Alias is required for disambiguation.
-  return OutputColumnName{columnAlias, columnName};
+  return OutputColumnName{
+      std::move(columnAlias), columnName, std::move(userName)};
 }
 
 namespace {

@@ -1090,7 +1090,7 @@ class RelationPlanner : public AstVisitor {
       // Build set of user-visible names for O(1) lookups.
       std::unordered_set<std::string> columnNameSet;
       for (const auto& column : columns) {
-        columnNameSet.insert(column.name);
+        columnNameSet.insert(column.outputName());
       }
 
       // Apply EXCLUDE: remove excluded columns.
@@ -1108,7 +1108,7 @@ class RelationPlanner : public AstVisitor {
         }
 
         std::erase_if(columns, [&](const auto& column) {
-          return excludeSet.contains(column.name);
+          return excludeSet.contains(column.outputName());
         });
         AXIOM_PRESTO_SEMANTIC_CHECK(
             !columns.empty(),
@@ -1134,7 +1134,7 @@ class RelationPlanner : public AstVisitor {
             name);
         auto numMatches = std::count_if(
             columns.begin(), columns.end(), [&](const auto& column) {
-              return column.name == name;
+              return column.outputName() == name;
             });
         AXIOM_PRESTO_SEMANTIC_CHECK(
             numMatches == 1,
@@ -1151,9 +1151,10 @@ class RelationPlanner : public AstVisitor {
     // Build expressions: use replacement if present, otherwise column
     // reference.
     for (const auto& column : columns) {
-      auto it = replaceMap.find(column.name);
+      const auto& outputName = column.outputName();
+      auto it = replaceMap.find(outputName);
       if (it != replaceMap.end()) {
-        exprs.push_back(lp::ExprApi(it->second, column.name));
+        exprs.push_back(lp::ExprApi(it->second, outputName));
       } else {
         exprs.push_back(column.toCol());
       }
@@ -1216,7 +1217,7 @@ class RelationPlanner : public AstVisitor {
             const std::optional<std::string>& prefix) {
           for (const auto& column : columns) {
             displayNames.push_back(
-                displayNames_.displayName(prefix, column.name));
+                displayNames_.displayName(prefix, column.outputName()));
           }
         };
     for (const auto& item : selectItems) {

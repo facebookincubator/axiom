@@ -774,8 +774,16 @@ class PlanBuilder {
     /// resolvable by name alone.
     std::optional<std::string> alias;
 
-    /// Column name.
+    /// Name used to resolve the column.
     std::string name;
+
+    /// User-visible output name when it differs from 'name'.
+    std::optional<std::string> userName;
+
+    /// Returns the user-visible output name.
+    const std::string& outputName() const {
+      return userName.has_value() ? *userName : name;
+    }
 
     /// Returns a column reference expression that resolves unambiguously.
     ExprApi toCol() const;
@@ -783,9 +791,9 @@ class PlanBuilder {
     bool operator==(const OutputColumnName&) const = default;
   };
 
-  /// Returns resolvable names for the output columns. Assigns unique names
-  /// for anonymous columns and uses fully qualified names for ambiguous
-  /// columns (e.g., from joins with overlapping column names).
+  /// Returns resolvable names for the output columns. Assigns unique names for
+  /// anonymous columns and for ambiguous columns without relation aliases.
+  /// Uses fully qualified names for ambiguous columns with relation aliases.
   /// @param includeHiddenColumns Whether to include hidden columns.
   /// @param alias Optional alias to filter output columns. If specified,
   /// returns a subset of columns accessible with the specified alias.
@@ -794,8 +802,8 @@ class PlanBuilder {
       const std::optional<std::string>& alias = std::nullopt) const;
 
   /// Returns the resolvable name of the output column at the given index.
-  /// If the column is anonymous, assigns a unique name. If ambiguous, includes
-  /// the table alias for disambiguation.
+  /// Assigns a unique name if the column is anonymous or ambiguous without a
+  /// relation alias. Includes the relation alias when available.
   OutputColumnName findOrAssignOutputNameAt(size_t index) const;
 
   /// Returns the current plan node as-is.

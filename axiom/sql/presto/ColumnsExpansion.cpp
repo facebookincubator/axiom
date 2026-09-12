@@ -98,7 +98,7 @@ std::vector<lp::PlanBuilder::OutputColumnName> ColumnsExpansion::matchByRegex(
   auto columns =
       builder.findOrAssignOutputNames(/*includeHiddenColumns=*/false, prefix);
   std::erase_if(columns, [&](const auto& column) {
-    return !re2::RE2::FullMatch(column.name, regex);
+    return !re2::RE2::FullMatch(column.outputName(), regex);
   });
   AXIOM_PRESTO_SEMANTIC_CHECK(
       !columns.empty(),

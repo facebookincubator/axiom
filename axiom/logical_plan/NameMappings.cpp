@@ -175,6 +175,15 @@ void NameMappings::merge(const NameMappings& other) {
     }
   }
 
+  const auto preserveOtherUserName = [&](const std::string& id,
+                                         const std::string& fallback) {
+    if (const auto* userName = other.userName(id)) {
+      userNames_.try_emplace(id, *userName);
+    } else {
+      userNames_.try_emplace(id, fallback);
+    }
+  };
+
   for (const auto& [name, id] : other.mappings_) {
     if (auto existing = mappings_.find(name); existing != mappings_.end()) {
       // The same name exists on both sides, so it is ambiguous across the
@@ -182,6 +191,8 @@ void NameMappings::merge(const NameMappings& other) {
       // both sides reuse a relation alias. Referencing a dropped name later
       // fails as unresolved, matching Presto's report-at-reference-time
       // behavior.
+      userNames_.try_emplace(existing->second, name.name);
+      preserveOtherUserName(id, name.name);
       markAmbiguous(name);
     } else if (
         !name.alias.has_value() && leftQualifiedNames.contains(name.name)) {
@@ -189,6 +200,7 @@ void NameMappings::merge(const NameMappings& other) {
       // already has a qualified name with the same base. The name is ambiguous
       // across joined tables even though the left's unqualified entry was
       // removed by an earlier merge.
+      preserveOtherUserName(id, name.name);
     } else {
       insert(name, id);
     }

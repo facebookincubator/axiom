@@ -148,7 +148,7 @@ TEST_F(PlanBuilderTest, duplicateAliasAllowed) {
     return PlanBuilder(context, /*allowAmbiguousOutputNames=*/true);
   };
 
-  // Project: duplicate aliases get unique physical names.
+  // Project: duplicate aliases get unique access names.
   {
     auto builder =
         makeBuilder()
@@ -157,8 +157,23 @@ TEST_F(PlanBuilderTest, duplicateAliasAllowed) {
 
     auto names = builder.findOrAssignOutputNames();
     EXPECT_EQ(4, names.size());
-    EXPECT_EQ("x", names[2].name);
-    EXPECT_TRUE(names[3].name.starts_with("x_"));
+    EXPECT_THAT(
+        (std::vector<std::string>{
+            names[2].outputName(), names[3].outputName()}),
+        testing::ElementsAre("x", "x"));
+    EXPECT_THAT(names[2].name, testing::StartsWith("x_"));
+    EXPECT_THAT(names[3].name, testing::StartsWith("x_"));
+    EXPECT_THAT(names[2].name, testing::Ne(names[3].name));
+
+    EXPECT_THAT(
+        builder.findOrAssignOutputNames(), testing::ElementsAreArray(names));
+
+    builder.project({names[2].toCol(), names[3].toCol()});
+    EXPECT_THAT(
+        builder.outputNames(),
+        testing::ElementsAre(
+            testing::Optional(testing::Eq("x")),
+            testing::Optional(testing::Eq("x"))));
   }
 
   // The duplicate is a column passed through rather than another projection.
@@ -176,13 +191,14 @@ TEST_F(PlanBuilderTest, duplicateAliasAllowed) {
     EXPECT_TRUE(names[2].name.starts_with("a_"));
   }
 
-  // Lookup on duplicate name fails.
+  // Assigning access names does not make a duplicate alias resolvable.
   {
     auto builder =
         makeBuilder()
             .values(ROW({"a", "b"}, BIGINT()), ValuesNode::Variants{})
             .with({"a as x", "b as x"});
 
+    builder.findOrAssignOutputNames();
     VELOX_ASSERT_THROW(builder.project({"x"}), "Cannot resolve");
   }
 

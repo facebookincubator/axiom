@@ -412,6 +412,31 @@ TEST_F(PrestoParserTest, selectStarDuplicateColumns) {
       "WHERE a.n_nationkey = b.n_nationkey",
       matchJoin().output());
 
+  // Star expansion preserves duplicate names from unaliased relations.
+  testSelect(
+      "SELECT *, 3 AS extra FROM (SELECT 1 AS x) "
+      "JOIN (SELECT 2 AS x) ON TRUE",
+      matchValues()
+          .project()
+          .join(matchValues().project().build())
+          .project()
+          .output({"x", "x", "extra"}));
+
+  VELOX_ASSERT_THROW(
+      parseSql(
+          "SELECT x FROM (SELECT *, 3 AS extra FROM (SELECT 1 AS x) "
+          "JOIN (SELECT 2 AS x) ON TRUE)"),
+      "Cannot resolve column: x");
+
+  testSelect(
+      "SELECT * EXCLUDE (x), 3 AS extra FROM (SELECT 1 AS x, 4 AS y) "
+      "JOIN (SELECT 2 AS x) ON TRUE",
+      matchValues()
+          .project()
+          .join(matchValues().project().build())
+          .project()
+          .output({"y", "extra"}));
+
   // Qualified star with additional columns.
   testSelect(
       "SELECT a.*, b.n_nationkey FROM nation a, nation b "
