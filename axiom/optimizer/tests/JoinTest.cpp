@@ -553,6 +553,115 @@ TEST_P(JoinTest, nestedOuterJoins) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+TEST_P(JoinTest, rightJoinPreservesBuildPartitioning) {
+  addTableWithStats("t", {"a"}, 1'000'000);
+  addTableWithStats("u", {"b"}, 1'000);
+  addTableWithStats("v", {"c"}, 1'000'000, {{"c", 1}});
+  optimizerOptions_.broadcastSizeLimit = 1;
+
+  const auto logicalPlan = parseSelect(
+      "SELECT u.b "
+      "FROM t RIGHT JOIN u ON t.a = u.b "
+      "JOIN v ON u.b = v.c",
+      kTestConnectorId);
+  const auto distributedPlan =
+      planVelox(logicalPlan, {.maxRemotePartitions = 2});
+
+  auto matcher =
+      matchScan("v")
+          .shuffle({"c"})
+          .hashJoinInner(
+              matchScan("t").shuffle({"a"}).hashJoin(
+                  matchScan("u").shuffle({"b"}), core::JoinType::kRight),
+              {.keys = {{"c = b"}}})
+          .gather()
+          .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(distributedPlan.plan, matcher);
+}
+
+TEST_P(JoinTest, rightSemiFilterPreservesBuildPartitioning) {
+  addTableWithStats("t", {"a"}, 1'000'000);
+  addTableWithStats("u", {"b"}, 1'000);
+  addTableWithStats("v", {"c"}, 1'000'000, {{"c", 1}});
+  optimizerOptions_.broadcastSizeLimit = 1;
+
+  const auto logicalPlan = parseSelect(
+      "SELECT s.b "
+      "FROM (SELECT u.b FROM u WHERE u.b IN (SELECT a FROM t)) s "
+      "JOIN v ON s.b = v.c",
+      kTestConnectorId);
+  const auto distributedPlan =
+      planVelox(logicalPlan, {.maxRemotePartitions = 2});
+
+  auto matcher = matchScan("v")
+                     .shuffle({"c"})
+                     .hashJoinInner(
+                         matchScan("t").shuffle({"a"}).hashJoin(
+                             matchScan("u").shuffle({"b"}),
+                             core::JoinType::kRightSemiFilter),
+                         {.keys = {{"c = b"}}})
+                     .gather()
+                     .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(distributedPlan.plan, matcher);
+}
+
+TEST_P(JoinTest, rightSemiProjectPreservesBuildPartitioning) {
+  addTableWithStats("t", {"a"}, 1'000'000);
+  addTableWithStats("u", {"b"}, 1'000);
+  addTableWithStats("v", {"c"}, 1'000'000, {{"c", 1}});
+  optimizerOptions_.broadcastSizeLimit = 1;
+
+  const auto logicalPlan = parseSelect(
+      "SELECT s.b, s.matched "
+      "FROM ("
+      "  SELECT u.b, EXISTS (SELECT 1 FROM t WHERE t.a = u.b) AS matched "
+      "  FROM u"
+      ") s "
+      "JOIN v ON s.b = v.c",
+      kTestConnectorId);
+  const auto distributedPlan =
+      planVelox(logicalPlan, {.maxRemotePartitions = 2});
+
+  auto matcher = matchScan("v")
+                     .shuffle({"c"})
+                     .hashJoinInner(
+                         matchScan("t").shuffle({"a"}).hashJoin(
+                             matchScan("u").shuffle({"b"}),
+                             core::JoinType::kRightSemiProject,
+                             {.nullAware = false}),
+                         {.keys = {{"c = b"}}})
+                     .project()
+                     .gather()
+                     .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(distributedPlan.plan, matcher);
+}
+
+TEST_P(JoinTest, countingAntiPreservesProbePartitioning) {
+  // Keep every candidate build above the default broadcast limit.
+  addTableWithStats("t", {"a"}, 100'000'000);
+  addTableWithStats("u", {"b"}, 100'000'000);
+  addTableWithStats("v", {"c"}, 100'000'000, {{"c", 1}});
+
+  const auto logicalPlan = parseSelect(
+      "SELECT s.a "
+      "FROM (SELECT a FROM t EXCEPT ALL SELECT b FROM u) s "
+      "JOIN v ON s.a = v.c",
+      kTestConnectorId);
+  const auto distributedPlan =
+      planVelox(logicalPlan, {.maxRemotePartitions = 2});
+
+  auto matcher =
+      matchScan("t")
+          .shuffle({"a"})
+          .localPartition({"a"})
+          .hashJoin(
+              matchScan("u").shuffle({"b"}), core::JoinType::kCountingAnti)
+          .hashJoinInner(matchScan("v").shuffle({"c"}), {.keys = {{"a = c"}}})
+          .gather()
+          .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(distributedPlan.plan, matcher);
+}
+
 TEST_P(JoinTest, joinWithComputedKeys) {
   auto sql =
       "SELECT count(1) FROM nation n RIGHT JOIN region ON coalesce(n_regionkey, 1) = r_regionkey";

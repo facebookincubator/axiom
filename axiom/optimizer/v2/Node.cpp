@@ -270,8 +270,9 @@ void appendProbeUniqueGroupings(
   }
 }
 
-// The probe (left) side's local properties survive an inner / left join within
-// a driver; build-emitting and cross joins drop them.
+// Local properties follow the physical probe (left) stream. Inner and left
+// joins emit each probe row's matches contiguously; hash-table construction
+// does not preserve the build input's order or grouping.
 // TODO: order through a spillable join is not guaranteed once spilling is
 // enabled; revisit when spilling is modeled.
 LocalPropertyVector joinLocal(
@@ -386,14 +387,9 @@ ExprCP survivingEquiKey(ExprCP key, const PlanObjectSet& outputColumns) {
   return nullptr;
 }
 
-// Output global partitioning of a join. A join keeps the probe's (left's)
-// partitioning when every output row is a probe row carrying its probe column
-// values unchanged, which holds for inner, left, the left semi and anti
-// joins, and the counting semijoin. Right and full joins emit build rows, so
-// they drop it.
-//
-// If every probe key is still an output column, the output is partitioned
-// exactly as the probe was. Otherwise only an inner join recovers a dropped
+// Re-expresses a preserved input's partitioning on the join output. If every
+// partition key is still an output column, the output is partitioned exactly
+// as that input was. Otherwise only an inner join recovers a dropped
 // key: it keeps a key whose columns all survive (a join projects columns
 // unchanged, so a surviving column is identity-projected, and an expression
 // over surviving columns still partitions the output), else substitutes an
@@ -403,55 +399,43 @@ ExprCP survivingEquiKey(ExprCP key, const PlanObjectSet& outputColumns) {
 //
 // A non-hash distribution (gather / broadcast / arbitrary) carries no keys and
 // is inherited by kind, minus any merge order (see `Partitioning::dropOrder`).
-Partitioning joinGlobalPartition(
-    velox::core::JoinType joinType,
-    NodeCP left,
-    NodeCP right,
+Partitioning preservedJoinGlobalPartition(
+    NodeCP preservedInput,
+    NodeCP otherInput,
+    bool allowEquivalentKeySubstitution,
     const ColumnVector& outputColumns) {
-  switch (joinType) {
-    case velox::core::JoinType::kInner:
-    case velox::core::JoinType::kLeft:
-    case velox::core::JoinType::kLeftSemiFilter:
-    case velox::core::JoinType::kLeftSemiProject:
-    case velox::core::JoinType::kAnti:
-    case velox::core::JoinType::kCountingLeftSemiFilter:
-      break;
-    default:
-      return {};
-  }
-
-  Partitioning probe = left->physicalProperties().globalPartition;
-  if (probe.kind != PartitionKind::kPartitioned) {
-    return probe.dropOrder();
+  Partitioning preserved = preservedInput->physicalProperties().globalPartition;
+  if (preserved.kind != PartitionKind::kPartitioned) {
+    return preserved.dropOrder();
   }
 
   // Both sides connector-bucketed: the join runs on the partitioning the two
-  // agree on, which can be coarser than the probe's. Reporting the probe's
-  // would let a consumer align a shuffle to more partitions than the join's
-  // fragment has tasks.
-  const auto* buildType =
-      right->physicalProperties().globalPartition.partitionType;
-  if (probe.partitionType != nullptr && buildType != nullptr) {
+  // agree on, which can be coarser than the preserved input's. Reporting the
+  // original partitioning would let a consumer align a shuffle to more
+  // partitions than the join's fragment has tasks.
+  const auto* otherType =
+      otherInput->physicalProperties().globalPartition.partitionType;
+  if (preserved.partitionType != nullptr && otherType != nullptr) {
     const auto* folded =
-        queryCtx()->copartitionedType(probe.partitionType, buildType);
+        queryCtx()->copartitionedType(preserved.partitionType, otherType);
     if (folded == nullptr) {
       return {};
     }
-    probe.partitionType = folded;
+    preserved.partitionType = folded;
   }
 
   const auto outputSet = PlanObjectSet::fromObjects(outputColumns);
-  if (outputSet.containsAll(probe.keys)) {
-    return probe;
+  if (outputSet.containsAll(preserved.keys)) {
+    return preserved;
   }
 
-  if (joinType != velox::core::JoinType::kInner) {
+  if (!allowEquivalentKeySubstitution) {
     return {};
   }
 
   ExprVector keys;
-  keys.reserve(probe.keys.size());
-  for (ExprCP key : probe.keys) {
+  keys.reserve(preserved.keys.size());
+  for (ExprCP key : preserved.keys) {
     if (outputSet.containsColumns(key)) {
       keys.push_back(key);
       continue;
@@ -463,9 +447,30 @@ Partitioning joinGlobalPartition(
     keys.push_back(equiKey);
   }
 
-  Partitioning result = probe;
+  Partitioning result = preserved;
   result.keys = std::move(keys);
   return result;
+}
+
+// Derives a join's global partitioning from a preserved input. Left-preserving
+// joins use the left input, and right-preserving joins use the right input. An
+// inner join uses the left (probe) input; an equivalent output column may
+// replace an omitted left-side partition key.
+Partitioning joinGlobalPartition(
+    velox::core::JoinType joinType,
+    NodeCP left,
+    NodeCP right,
+    const ColumnVector& outputColumns) {
+  const auto preservedSides = Join::preservedSides(joinType);
+  if (preservedSides.left) {
+    return preservedJoinGlobalPartition(
+        left, right, joinType == velox::core::JoinType::kInner, outputColumns);
+  }
+  if (preservedSides.right) {
+    return preservedJoinGlobalPartition(
+        right, left, /*allowEquivalentKeySubstitution=*/false, outputColumns);
+  }
+  return {};
 }
 
 // The input's partitioning re-expressed on the aggregate's output. An aggregate
