@@ -103,6 +103,7 @@ TEST_F(JoinFilterProjectionTest, lambdaReadingOneSide) {
 // A non-deterministic call produces a new value per evaluation, so moving it
 // out of the filter would change results. It stays, while the deterministic
 // operands around it move.
+
 TEST_F(JoinFilterProjectionTest, nonDeterministic) {
   auto matcher =
       matchScan("t")
@@ -116,6 +117,45 @@ TEST_F(JoinFilterProjectionTest, nonDeterministic) {
   AXIOM_ASSERT_PLAN(
       plan("SELECT a, x FROM t, u WHERE length(b) + random() < length(y)"),
       matcher);
+}
+
+// The move happens before distribution is chosen, so the expression is computed
+// on the side that supplies it and only its value crosses the exchange. Here
+// the build is broadcast to every worker, so what crosses is a bigint rather
+// than the string it was computed from.
+TEST_F(JoinFilterProjectionTest, oneSidedExpressionComputedBeforeShuffle) {
+  testConnector_->addTable("wide", ROW({"name"}, {VARCHAR()}))
+      ->setStats(3, {{"name", {.numDistinct = 3}}});
+  testConnector_->addTable("big", ROW({"threshold"}, {BIGINT()}))
+      ->setStats(10'000, {{"threshold", {.numDistinct = 10'000}}});
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("wide");
+    testConnector_->dropTableIfExists("big");
+  };
+
+  auto logicalPlan = parseSelect(
+      "SELECT count(*) FROM big, wide WHERE length(wide.name) > big.threshold",
+      kTestConnectorId);
+
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan(logicalPlan),
+      matchScan("big")
+          .nestedLoopJoin(
+              matchScan("wide").project({"length(name) as p"}),
+              core::JoinType::kInner,
+              "threshold < p")
+          .singleAggregation({}, {"count(*)"})
+          .build());
+
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(logicalPlan).plan,
+      matchScan("big")
+          .nestedLoopJoin(
+              matchScan("wide").project({"length(name) as p"}).shuffle(),
+              core::JoinType::kInner,
+              "threshold < p")
+          .distributedAggregation({}, {"count(*)"})
+          .build());
 }
 
 } // namespace

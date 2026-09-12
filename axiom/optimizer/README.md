@@ -8,6 +8,7 @@ See also:
 - [Cardinality Estimation](docs/CardinalityEstimation.md) - How output cardinality is estimated for each operator
 - [Window Functions](docs/WindowFunctions.md) - Window function support and ranking optimizations
 - [Existence Pushdown](docs/ExistencePushdown.md) - Pushing semi-joins into subquery aggregations to reduce data before GROUP BY
+- [Expression Evaluation](docs/ExpressionEvaluation.md) - Where the optimizer may evaluate an expression, and what moving one preserves
 - [Testing](docs/Testing.md) - PlanMatcher for plan shape, SqlTest for correctness, test coverage guidelines
 - [DerivedTable Layers](docs/DerivedTableLayers.md) - Layered column ownership model and dependency rules
 - [Distributed Execution](docs/DistributedExecution.md) - How physical plans are split into fragments for distributed execution

@@ -842,7 +842,6 @@ TEST_F(TpchPlanTest, q22) {
           .aliases({std::nullopt, std::nullopt, std::nullopt, "mark"})
           .filter("not(mark)")
           .project()
-          .project()
           .aggregation()
           .orderBy()
           .build();

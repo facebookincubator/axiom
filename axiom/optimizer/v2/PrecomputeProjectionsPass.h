@@ -38,39 +38,9 @@ class PrecomputeProjectionsPass {
   ///   - Unnest: unnest expressions
   ///   - Join: join keys
   ///
-  /// A join filter is one exception: Velox accepts any expression there, so
-  /// the move is an optimization rather than a requirement. A `UnionAll` is
-  /// another: its legs are aligned to the union's output columns because
-  /// Velox's `LocalPartition` requires one shared output `RowType`.
-  ///
-  /// A join with no equi keys evaluates its filter once for every pair of
-  /// input rows. A subexpression of the filter that reads only one side has
-  /// the same value for every pair built from a given row of that side, so
-  /// computing it in that side's input costs one evaluation per row instead of
-  /// one per pair. Each maximal such subexpression is moved. A
-  /// non-deterministic one is not: it has to produce a new value per pair.
-  ///
-  /// A join with equi keys is left alone, because its filter runs only on the
-  /// pairs that match on the keys, and there can be far fewer of those than
-  /// either input has rows.
-  ///
-  /// TODO: Decide from the estimated number of pairs reaching the filter
-  /// rather than from the absence of equi keys.
-  ///
-  /// Moving a subexpression out of a filter takes it out of the filter's error
-  /// masking, where an error from one conjunct is discarded for a row that
-  /// another conjunct evaluates to false. `a <> 0 AND 1000 / a > x` does not
-  /// fail as a filter, but does once `1000 / a` is computed by a `Project`.
-  /// SQL does not define an evaluation order, so that masking is not a
-  /// property the optimizer preserves.
-  ///
-  /// A special form that decides at runtime which arguments to evaluate is
-  /// different: only it can skip them. `IF`, `CASE` and `COALESCE` evaluate
-  /// their first argument for every row, so that one still moves, but their
-  /// branches stay -- otherwise `IF(a = 1, true, fail('bad'))` would fail even
-  /// where `a = 1`. Nothing moves out of a `TRY`, which would stop catching its
-  /// argument's error. Any of these still moves as a unit when one side
-  /// supplies all of its columns.
+  /// A `UnionAll` is an exception: its legs are aligned to the union's output
+  /// columns because Velox's `LocalPartition` requires one shared output
+  /// `RowType`.
   ///
   /// Returns the original tree unchanged when nothing needs to move.
   static NodeCP run(NodeCP node, Builder& builder);

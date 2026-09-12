@@ -18,6 +18,7 @@
 
 #include "axiom/optimizer/v2/Builder.h"
 #include "axiom/optimizer/v2/Node.h"
+#include "axiom/optimizer/v2/PrecomputeProjections.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::axiom::optimizer::v2 {
@@ -135,8 +136,8 @@ class NodeRewriter {
     if (newInput == node->input()) {
       return node;
     }
-    return builder_.template make<Project>(
-        {newInput, node->exprs(), node->outputColumns()});
+    return PrecomputeProjections::makeProject(
+        newInput, node->exprs(), node->outputColumns(), builder_);
   }
 
   virtual NodeCP rewriteLimit(const Limit* node, TContext& context) {

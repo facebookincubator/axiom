@@ -15,8 +15,10 @@
  */
 
 #include "axiom/optimizer/v2/PushdownAndPrunePass.h"
+
 #include "axiom/optimizer/ToSubfield.h"
 #include "axiom/optimizer/v2/ColumnAccess.h"
+#include "axiom/optimizer/v2/JoinFilterRewriter.h"
 
 #include "axiom/optimizer/v2/ScanHandle.h"
 
@@ -603,6 +605,7 @@ bool holdsAtRankOne(
 // Top-down filter pushdown visitor. Every node kind is overridden
 // explicitly so each kind decides whether and how to propagate pending
 // conjuncts.
+
 class Pushdown : public NodeRewriter<PushdownContext> {
  public:
   Pushdown(
@@ -1176,6 +1179,41 @@ class Pushdown : public NodeRewriter<PushdownContext> {
 
     NodeCP newLeft = rewrite(node->left(), leftContext);
     NodeCP newRight = rewrite(node->right(), rightContext);
+
+    // A cross join's filter is evaluated per pair of rows, so the parts of it
+    // reading one side move into that side (see `JoinFilterRewriter`). Running
+    // here, before distribution is chosen, the moved value is what gets
+    // broadcast rather than the columns it reads.
+    if (newLeftKeys.empty() && !newFilter.empty()) {
+      PrecomputeProjections leftPrecompute{
+          newLeft, builder(), /*projectAllInputs=*/false};
+      PrecomputeProjections rightPrecompute{
+          newRight, builder(), /*projectAllInputs=*/false};
+      const auto leftColumns =
+          PlanObjectSet::fromObjects(newLeft->outputColumns());
+      const auto rightColumns =
+          PlanObjectSet::fromObjects(newRight->outputColumns());
+
+      // Each side keeps what the join emits before the moved expressions, so a
+      // projection lists its passthrough columns first.
+      for (ColumnCP column : newOutputColumns) {
+        if (leftColumns.contains(column)) {
+          leftPrecompute.toColumn(column);
+        } else if (rightColumns.contains(column)) {
+          rightPrecompute.toColumn(column);
+        }
+      }
+
+      JoinFilterRewriter rewriter{
+          leftPrecompute,
+          rightPrecompute,
+          leftColumns,
+          rightColumns,
+          builder()};
+      newFilter = rewriter.rewrite(newFilter);
+      newLeft = std::move(leftPrecompute).node();
+      newRight = std::move(rightPrecompute).node();
+    }
 
     NodeCP newJoin = (newLeft == node->left() && newRight == node->right() &&
                       newFilter.size() == node->filter().size() &&

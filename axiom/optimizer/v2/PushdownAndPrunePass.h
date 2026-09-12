@@ -45,7 +45,9 @@ namespace facebook::axiom::optimizer::v2 {
 ///    join itself, and demotes an outer join to inner (or full to left/right)
 ///    when a pending conjunct or a proven-non-NULL column rejects nulls on a
 ///    padded side. It also fuses a consuming mark filter into a
-///    `kLeftSemiProject` join.
+///    `kLeftSemiProject` join. A cross join also moves the single-side parts of
+///    its filter into the inputs, where they are evaluated once per row instead
+///    of once per pair.
 ///  - Window pushes conjuncts that reference only partition keys below the
 ///    window (the rest stay above), prunes window functions no consumer reads,
 ///    and specializes a single ranking function (row_number / rank /

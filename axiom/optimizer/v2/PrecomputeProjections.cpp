@@ -20,15 +20,6 @@
 
 namespace facebook::axiom::optimizer::v2 {
 
-// Builds `Project(exprs -> outColumns)` over `input`, folding into `input` when
-// it is a deterministic Project (substituting the expressions through the
-// child's output->expression map) rather than stacking a second Project. A
-// non-deterministic child is left alone, since a fold could evaluate one of its
-// outputs more than once.
-//
-// TODO: still inline the deterministic outputs when only some are
-// non-deterministic — isolate the non-deterministic ones in a separate Project
-// below and fold the rest.
 NodeCP PrecomputeProjections::makeProject(
     NodeCP input,
     ExprVector exprs,

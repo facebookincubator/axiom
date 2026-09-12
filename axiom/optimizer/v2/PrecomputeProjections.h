@@ -28,6 +28,12 @@ class PrecomputeProjections {
   /// Returns a `Project` computing 'exprs' as 'outColumns' over 'input'. When
   /// 'input' is itself a deterministic `Project`, its expressions are folded
   /// into 'exprs' and it is dropped, rather than stacking a second `Project`.
+  /// A non-deterministic input is left alone, since a fold could evaluate one
+  /// of its outputs more than once.
+  ///
+  /// TODO: still inline the deterministic outputs when only some are
+  /// non-deterministic -- isolate the non-deterministic ones in a separate
+  /// `Project` below and fold the rest.
   static NodeCP makeProject(
       NodeCP input,
       ExprVector exprs,

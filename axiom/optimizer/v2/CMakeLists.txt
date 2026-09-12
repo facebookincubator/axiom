@@ -46,6 +46,7 @@ add_library(
   PhysicalProperties.cpp
   PlanPhysicalPass.cpp
   PlanSet.cpp
+  JoinFilterRewriter.cpp
   PrecomputeProjections.cpp
   PrecomputeProjectionsPass.cpp
   PushdownAndPrunePass.cpp
