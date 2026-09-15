@@ -274,6 +274,9 @@ class AstBuilder : public PrestoSqlVisitor {
 
   std::any visitGroupBy(PrestoSqlParser::GroupByContext* ctx) override;
 
+  std::any visitWindowDefinition(
+      PrestoSqlParser::WindowDefinitionContext* ctx) override;
+
   std::any visitSingleGroupingSet(
       PrestoSqlParser::SingleGroupingSetContext* ctx) override;
 
@@ -507,6 +510,9 @@ class AstBuilder : public PrestoSqlVisitor {
   std::any visitFilter(PrestoSqlParser::FilterContext* ctx) override;
 
   std::any visitOver(PrestoSqlParser::OverContext* ctx) override;
+
+  std::any visitWindowSpecification(
+      PrestoSqlParser::WindowSpecificationContext* ctx) override;
 
   std::any visitWindowFrame(PrestoSqlParser::WindowFrameContext* ctx) override;
 

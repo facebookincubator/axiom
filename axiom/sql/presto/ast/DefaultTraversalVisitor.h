@@ -110,6 +110,9 @@ class DefaultTraversalVisitor : public AstVisitor {
     if (node->having()) {
       node->having()->accept(this);
     }
+    for (const auto& window : node->windows()) {
+      window->accept(this);
+    }
     if (node->orderBy()) {
       node->orderBy()->accept(this);
     }
@@ -836,6 +839,9 @@ class DefaultTraversalVisitor : public AstVisitor {
   }
 
   void visitWindow(Window* node) override {
+    if (node->existingWindowName()) {
+      node->existingWindowName()->accept(this);
+    }
     for (const auto& expr : node->partitionBy()) {
       expr->accept(this);
     }
@@ -845,6 +851,11 @@ class DefaultTraversalVisitor : public AstVisitor {
     if (node->frame()) {
       node->frame()->accept(this);
     }
+  }
+
+  void visitWindowDefinition(WindowDefinition* node) override {
+    node->name()->accept(this);
+    node->window()->accept(this);
   }
 
   void visitWindowFrame(WindowFrame* node) override {

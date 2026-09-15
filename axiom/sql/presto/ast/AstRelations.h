@@ -125,6 +125,7 @@ class QuerySpecification : public QueryBody {
       const ExpressionPtr& where = nullptr,
       const std::shared_ptr<GroupBy>& groupBy = nullptr,
       const ExpressionPtr& having = nullptr,
+      std::vector<WindowDefinitionPtr> windows = {},
       const std::shared_ptr<OrderBy>& orderBy = nullptr,
       const std::shared_ptr<Offset>& offset = nullptr,
       std::optional<std::string> limit = std::nullopt)
@@ -134,6 +135,7 @@ class QuerySpecification : public QueryBody {
         where_(where),
         groupBy_(groupBy),
         having_(having),
+        windows_(std::move(windows)),
         orderBy_(orderBy),
         offset_(offset),
         limit_(std::move(limit)) {}
@@ -158,6 +160,10 @@ class QuerySpecification : public QueryBody {
     return having_;
   }
 
+  const std::vector<WindowDefinitionPtr>& windows() const {
+    return windows_;
+  }
+
   const std::shared_ptr<OrderBy>& orderBy() const {
     return orderBy_;
   }
@@ -179,6 +185,7 @@ class QuerySpecification : public QueryBody {
         Node::deepHash(where_),
         Node::deepHash(groupBy_),
         Node::deepHash(having_),
+        Node::deepHashAll(windows_),
         Node::deepHash(orderBy_),
         Node::deepHash(offset_),
         limit_.has_value() ? std::hash<std::string>{}(*limit_) : 0);
@@ -191,6 +198,7 @@ class QuerySpecification : public QueryBody {
         Node::deepEqual(from_, o.from_) && Node::deepEqual(where_, o.where_) &&
         Node::deepEqual(groupBy_, o.groupBy_) &&
         Node::deepEqual(having_, o.having_) &&
+        Node::deepEqualAll(windows_, o.windows_) &&
         Node::deepEqual(orderBy_, o.orderBy_) &&
         Node::deepEqual(offset_, o.offset_) && limit_ == o.limit_;
   }
@@ -201,6 +209,7 @@ class QuerySpecification : public QueryBody {
   ExpressionPtr where_;
   std::shared_ptr<GroupBy> groupBy_;
   ExpressionPtr having_;
+  std::vector<WindowDefinitionPtr> windows_;
   std::shared_ptr<OrderBy> orderBy_;
   std::shared_ptr<Offset> offset_;
   std::optional<std::string> limit_;

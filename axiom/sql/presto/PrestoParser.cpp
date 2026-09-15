@@ -1741,7 +1741,7 @@ class RelationPlanner : public AstVisitor {
         /*where=*/nullptr,
         /*groupBy=*/nullptr,
         /*having=*/nullptr,
-        /*window=*/nullptr);
+        /*windows=*/std::vector<WindowDefinitionPtr>{});
     visitQuerySpecification(querySpec.get(), /*orderBy=*/nullptr);
   }
 
@@ -1759,6 +1759,17 @@ class RelationPlanner : public AstVisitor {
     // FROM t -> builder.tableScan(t)
     processFrom(node->from());
 
+    const auto& selectItems = node->select()->selectItems();
+    const bool distinct = node->select()->isDistinct();
+    const auto groupBy = node->groupBy();
+    const bool hasAggregate = GroupByPlanner::containsAggregate(
+        selectItems, node->having(), orderBy, node->windows());
+    ExpressionPlanner::WindowScope windows{
+        exprPlanner_,
+        node->windows(),
+        {.allowGrouping = groupBy != nullptr,
+         .deferSubqueries = groupBy != nullptr || hasAggregate}};
+
     // Subqueries inside FROM may have set 'displayNames_.lastNames'. Discard
     // them so only this scope's SELECT-item-derived names reach plan().
     displayNames_.lastNames.clear();
@@ -1766,10 +1777,7 @@ class RelationPlanner : public AstVisitor {
     // WHERE a > 1 -> builder.filter("a > 1")
     addFilter(node->where());
 
-    const auto& selectItems = node->select()->selectItems();
-    const bool distinct = node->select()->isDistinct();
-
-    if (auto groupBy = node->groupBy()) {
+    if (groupBy != nullptr) {
       auto selectExprs = expandSelectExprs(
           selectItems, {.allowGrouping = true, .deferSubqueries = true});
 
@@ -1792,7 +1800,8 @@ class RelationPlanner : public AstVisitor {
           groupBy->isDistinct(),
           selectExprs,
           node->having(),
-          distinct ? noOrderBy : orderBy);
+          distinct ? noOrderBy : orderBy,
+          windows.definitionExprs());
 
       if (distinct) {
         if (sortKeys.has_value()) {
@@ -1804,7 +1813,11 @@ class RelationPlanner : public AstVisitor {
       }
     } else {
       if (GroupByPlanner{builder_, exprPlanner_}.tryPlanGlobalAgg(
-              selectItems, node->having(), orderBy)) {
+              selectItems,
+              node->having(),
+              orderBy,
+              hasAggregate,
+              windows.definitionExprs())) {
         // GroupByPlanner does not go through buildSelectProjections, so
         // stage display names from the SELECT items directly. It also plans
         // ORDER BY over the aggregates. DISTINCT is a no-op since a global

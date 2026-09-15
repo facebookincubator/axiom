@@ -78,6 +78,10 @@ void AstPrinter::visitQuerySpecification(QuerySpecification* node) {
     printChild("HAVING", node->having());
   }
 
+  for (const auto& window : node->windows()) {
+    window->accept(this);
+  }
+
   indent_--;
 }
 
@@ -1172,6 +1176,15 @@ void AstPrinter::visitCallArgument(CallArgument* node) {
 
 void AstPrinter::visitWindow(Window* node) {
   defaultVisit(node);
+}
+
+void AstPrinter::visitWindowDefinition(WindowDefinition* node) {
+  printHeader("WindowDefinition", node, [&](std::ostream& out) {
+    out << node->name()->value();
+  });
+  indent_++;
+  node->window()->accept(this);
+  indent_--;
 }
 
 void AstPrinter::visitWindowFrame(WindowFrame* node) {

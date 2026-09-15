@@ -488,6 +488,11 @@ class PrestoSqlBaseListener : public PrestoSqlListener {
   virtual void exitQuerySpecification(
       PrestoSqlParser::QuerySpecificationContext* /*ctx*/) override {}
 
+  virtual void enterWindowDefinition(
+      PrestoSqlParser::WindowDefinitionContext* /*ctx*/) override {}
+  virtual void exitWindowDefinition(
+      PrestoSqlParser::WindowDefinitionContext* /*ctx*/) override {}
+
   virtual void enterGroupBy(PrestoSqlParser::GroupByContext* /*ctx*/) override {
   }
   virtual void exitGroupBy(PrestoSqlParser::GroupByContext* /*ctx*/) override {}
@@ -924,6 +929,11 @@ class PrestoSqlBaseListener : public PrestoSqlListener {
 
   virtual void enterOver(PrestoSqlParser::OverContext* /*ctx*/) override {}
   virtual void exitOver(PrestoSqlParser::OverContext* /*ctx*/) override {}
+
+  virtual void enterWindowSpecification(
+      PrestoSqlParser::WindowSpecificationContext* /*ctx*/) override {}
+  virtual void exitWindowSpecification(
+      PrestoSqlParser::WindowSpecificationContext* /*ctx*/) override {}
 
   virtual void enterWindowFrame(
       PrestoSqlParser::WindowFrameContext* /*ctx*/) override {}

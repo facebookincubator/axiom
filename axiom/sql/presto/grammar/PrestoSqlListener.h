@@ -396,6 +396,11 @@ class PrestoSqlListener : public antlr4::tree::ParseTreeListener {
   virtual void exitQuerySpecification(
       PrestoSqlParser::QuerySpecificationContext* ctx) = 0;
 
+  virtual void enterWindowDefinition(
+      PrestoSqlParser::WindowDefinitionContext* ctx) = 0;
+  virtual void exitWindowDefinition(
+      PrestoSqlParser::WindowDefinitionContext* ctx) = 0;
+
   virtual void enterGroupBy(PrestoSqlParser::GroupByContext* ctx) = 0;
   virtual void exitGroupBy(PrestoSqlParser::GroupByContext* ctx) = 0;
 
@@ -760,6 +765,11 @@ class PrestoSqlListener : public antlr4::tree::ParseTreeListener {
 
   virtual void enterOver(PrestoSqlParser::OverContext* ctx) = 0;
   virtual void exitOver(PrestoSqlParser::OverContext* ctx) = 0;
+
+  virtual void enterWindowSpecification(
+      PrestoSqlParser::WindowSpecificationContext* ctx) = 0;
+  virtual void exitWindowSpecification(
+      PrestoSqlParser::WindowSpecificationContext* ctx) = 0;
 
   virtual void enterWindowFrame(PrestoSqlParser::WindowFrameContext* ctx) = 0;
   virtual void exitWindowFrame(PrestoSqlParser::WindowFrameContext* ctx) = 0;

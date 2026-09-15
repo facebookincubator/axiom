@@ -498,6 +498,11 @@ class PrestoSqlBaseVisitor : public PrestoSqlVisitor {
     return visitChildren(ctx);
   }
 
+  virtual std::any visitWindowDefinition(
+      PrestoSqlParser::WindowDefinitionContext* ctx) override {
+    return visitChildren(ctx);
+  }
+
   virtual std::any visitGroupBy(PrestoSqlParser::GroupByContext* ctx) override {
     return visitChildren(ctx);
   }
@@ -944,6 +949,11 @@ class PrestoSqlBaseVisitor : public PrestoSqlVisitor {
   }
 
   virtual std::any visitOver(PrestoSqlParser::OverContext* ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitWindowSpecification(
+      PrestoSqlParser::WindowSpecificationContext* ctx) override {
     return visitChildren(ctx);
   }
 

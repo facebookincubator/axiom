@@ -229,6 +229,7 @@ enum class NodeType {
   kProperty,
   kCallArgument,
   kWindow,
+  kWindowDefinition,
   kWindowFrame,
   kFrameBound,
   kIsolation,
