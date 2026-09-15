@@ -17,6 +17,7 @@
 #pragma once
 
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
+#include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
 #include "axiom/sql/presto/PrestoParser.h"
@@ -55,7 +56,10 @@ class HiveQueriesTestBase : public QueryTestBase {
 
   static connector::ConnectorSessionPtr makeSession() {
     return std::make_shared<connector::ConnectorSession>(
-        /*queryId=*/"test", /*user=*/"test", connector::Properties{});
+        /*queryId=*/"test",
+        /*user=*/"test",
+        connector::Properties{},
+        connector::makeTestStatWriter());
   }
 
   /// Returns a schema of a table.

@@ -132,7 +132,7 @@ class Folder : public NodeRewriter<NoContext> {
     const ScanHandle& handle = *scan->scanHandle();
 
     auto connectorSession =
-        session_.toConnectorSession(layout->connector()->connectorId());
+        session_.context()->sessionFor(layout->connectorId());
     auto result = folly::coro::blockingWait(layout->co_metadataCounts(
         std::move(connectorSession),
         handle.tableHandle,

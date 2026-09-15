@@ -20,7 +20,6 @@ add_library(
   axiom_common
   CatalogSchemaTableName.cpp
   ConfigRegistry.cpp
-  QueryRuntimeStats.cpp
   SchemaFunctionName.cpp
   SchemaProcedureName.cpp
   SchemaTableName.cpp

@@ -17,6 +17,8 @@
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/connectors/tests/TestConnectorContext.h"
+#include "axiom/session/BaseSession.h"
 
 #include <folly/coro/GtestHelpers.h>
 #include <folly/init/Init.h>
@@ -56,9 +58,12 @@ class TestConnectorTest : public ::testing::Test, public test::VectorTestBase {
     velox::connector::unregisterConnector(connector_->connectorId());
   }
 
-  static ConnectorSessionPtr makeSession() {
+  ConnectorSessionPtr makeSession() {
     return std::make_shared<ConnectorSession>(
-        /*queryId=*/"test", /*user=*/"test", Properties{});
+        /*queryId=*/"test",
+        /*user=*/"test",
+        Properties{},
+        makeTestStatWriter());
   }
 
   std::shared_ptr<TestConnector> connector_;
@@ -165,14 +170,12 @@ CO_TEST_F(TestConnectorTest, splitManager) {
   auto session = makeSession();
   auto partitions =
       co_await splitManager->co_listPartitions(session, tableHandle);
-  QueryRuntimeStats noopStats;
   auto splitSource = splitManager->getSplitSource(
       session,
       tableHandle,
       partitions,
       /*partitionType=*/nullptr,
-      /*samplePercentage=*/std::nullopt,
-      noopStats);
+      /*samplePercentage=*/std::nullopt);
   EXPECT_NE(splitSource, nullptr);
 
   std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
@@ -638,14 +641,12 @@ CO_TEST_F(TestConnectorTest, bucketedTable) {
   constexpr int32_t kNumGroups = 2;
   auto partitionType = std::make_shared<TestPartitionType>(
       kNumGroups, std::vector<TypePtr>{BIGINT()}, schema);
-  QueryRuntimeStats noopStats;
   auto source = splitManager->getSplitSource(
       session,
       tableHandle,
       partitions,
       partitionType,
-      /*samplePercentage=*/std::nullopt,
-      noopStats);
+      /*samplePercentage=*/std::nullopt);
   std::vector<int32_t> observedRemotePartitions;
   while (true) {
     auto batch = co_await source->co_getSplits(/*maxSplitCount=*/16);

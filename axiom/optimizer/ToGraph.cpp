@@ -195,8 +195,8 @@ ToGraph::ToGraph(
     const connector::SchemaResolver& schema,
     velox::core::ExpressionEvaluator& evaluator,
     const OptimizerOptions& options,
-    std::shared_ptr<QueryRuntimeStats> runtimeStats)
-    : schema_{schema, std::move(runtimeStats)},
+    velox::BaseRuntimeStatWriter& statsWriter)
+    : schema_{schema, statsWriter},
       evaluator_{evaluator},
       options_{options},
       functionNames_{queryCtx()->functionNames()} {
@@ -444,7 +444,7 @@ Literal* tryFoldConstantDt(DerivedTableP dt) {
   const ToVelox::LeafTableData* leaf = toVelox.leafData(baseTable->id());
   VELOX_CHECK_NOT_NULL(leaf);
 
-  auto session = optimization->optimizerSession()->toConnectorSession(
+  auto session = optimization->optimizerSession()->context()->sessionFor(
       discreteLayout.layout->connectorId());
   auto discretePredicates = discreteLayout.layout->discretePredicates(
       session, discreteLayout.connectorColumns, leaf->handle);

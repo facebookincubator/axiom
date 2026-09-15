@@ -27,6 +27,8 @@
 #include <gtest/gtest.h>
 #include <stdexcept>
 #include "axiom/cli/QueryIdGenerator.h"
+#include "axiom/cli/common/ComponentMetrics.h"
+#include "axiom/cli/common/QueryRuntimeStats.h"
 #include "axiom/cli/tests/SqlQueryRunnerTestBase.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/runner/QueryProgress.h"
@@ -366,7 +368,8 @@ TEST_F(SqlQueryRunnerTest, parseAndRunMixedStatementTypes) {
   auto statements = runner_->parseMultiple(
       "SELECT 42; SELECT CAST(1 AS BIGINT) AS value WHERE false; "
       "EXPLAIN (TYPE LOGICAL) SELECT 1; select 7",
-      {});
+      {},
+      /*context=*/nullptr);
   ASSERT_EQ(4, statements.size());
 
   auto selectResult = runner_->runUnchecked(*statements[0], {});
@@ -423,7 +426,8 @@ TEST_F(SqlQueryRunnerTest, invalidStatementThrows) {
 
 TEST_F(SqlQueryRunnerTest, parseMultipleWithInvalidStatement) {
   EXPECT_THROW(
-      runner_->parseMultiple("SELECT 1; INVALID; SELECT 2", {}),
+      runner_->parseMultiple(
+          "SELECT 1; INVALID; SELECT 2", {}, /*context=*/nullptr),
       std::exception);
 }
 
@@ -659,28 +663,55 @@ TEST_F(SqlQueryRunnerTest, executionCpuTimingUsesVeloxTaskStats) {
           kNumRows, [](auto row) { return static_cast<int64_t>(row); })}));
 
   std::optional<runner::QueryProgress> finalProgress;
-  QueryCompletionInfo completion;
+  // A real aggregate, so the test sees which producer each metric lands under.
+  facebook::axiom::QueryRuntimeStats stats;
   SqlQueryRunner::RunOptions options;
   options.numWorkers = 1;
   options.numDrivers = 1;
+  options.componentStatWriterProvider = [&](std::string_view componentId) {
+    return stats.writerFor(componentId);
+  };
   options.onProgress = [&](const runner::QueryProgress& progress) {
     if (progress.stats.state == runner::ExecutionState::kFinished) {
       finalProgress = progress;
     }
   };
-  options.onComplete = [&](const QueryCompletionInfo& info) {
-    completion = info;
-  };
 
   runner_->run("SELECT sum(c) FROM t", options);
 
   ASSERT_TRUE(finalProgress.has_value());
-  ASSERT_NE(completion.runtimeStats, nullptr);
-  const auto metrics = completion.runtimeStats->runtimeStats();
-  const auto executeCpuMetric = metrics.find(
-      std::string(facebook::axiom::QueryRuntimeStats::kExecuteCpuNanos));
-  ASSERT_NE(executeCpuMetric, metrics.end());
+  const auto metrics =
+      stats.toMap(facebook::axiom::QueryRuntimeStats::KeySeparator::kSlash);
+  auto key = [](std::string_view id, std::string_view name) {
+    return facebook::axiom::QueryRuntimeStats::qualifiedKey(
+        id, name, facebook::axiom::QueryRuntimeStats::KeySeparator::kSlash);
+  };
 
+  // The CLI times its own call into the runner, so the sample is the CLI's.
+  const auto executeCpuMetric = metrics.find(
+      key(facebook::axiom::ComponentMetrics::kCli,
+          facebook::axiom::ComponentMetrics::kExecuteCpuNanos));
+  ASSERT_NE(executeCpuMetric, metrics.end());
+  // Exactly one recording site per query.
+  EXPECT_EQ(executeCpuMetric->second.count, 1);
+  // Execution time is the CLI's; the runner records what it measures itself,
+  // so a runner bucket exists but does not carry this metric.
+  EXPECT_THAT(
+      metrics,
+      testing::Not(
+          testing::Contains(
+              testing::Key(
+                  key(facebook::axiom::ComponentMetrics::kRunner,
+                      facebook::axiom::ComponentMetrics::kExecuteCpuNanos)))));
+  EXPECT_THAT(
+      metrics,
+      testing::Contains(
+          testing::Key(
+              key(facebook::axiom::ComponentMetrics::kRunner,
+                  runner::LocalRunner::kGetSplitsCount))));
+
+  // The progress sample is taken before teardown and truncated to micros, so
+  // it is a lower bound on the final nanosecond reading.
   const auto progressCpuNanos = finalProgress->stats.cpuTimeMicros * 1'000;
   EXPECT_GT(progressCpuNanos, 0);
   EXPECT_GE(executeCpuMetric->second.sum, progressCpuNanos);

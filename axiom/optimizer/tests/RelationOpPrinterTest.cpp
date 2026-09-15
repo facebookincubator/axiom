@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/OptimizerOptions.h"
@@ -121,10 +122,10 @@ class RelationOpPrinterTest : public ::testing::Test {
         kTestConnectorId,
         kDefaultSchema,
         std::make_shared<::axiom::sql::presto::ParserSession>(
-            /*queryId=*/"test",
-            /*user=*/"test",
-            ::axiom::sql::presto::ParserOptions{},
-            connector::ConnectorProperties{})};
+            connector::makeTestContext("test"),
+            connector::makeTestStatWriter(),
+            connector::Properties{},
+            ::axiom::sql::presto::ParserOptions{})};
     auto statement = parser.parse(sql);
     VELOX_CHECK(statement->isSelect());
 
@@ -157,16 +158,17 @@ class RelationOpPrinterTest : public ::testing::Test {
     OptimizerOptions options;
     options.sampleJoins = false;
     options.sampleFilters = false;
+    auto connectorContext =
+        connector::makeTestContext(veloxQueryCtx->queryId());
     auto optimizerSession = std::make_shared<OptimizerSession>(
-        veloxQueryCtx->queryId(),
-        "test",
-        std::move(options),
-        connector::ConnectorProperties{});
+        connectorContext,
+        connector::makeTestStatWriter(),
+        connector::Properties{},
+        std::move(options));
     auto runnerSession = std::make_shared<runner::RunnerSession>(
-        veloxQueryCtx->queryId(),
-        "test",
-        runner::Properties{},
-        connector::ConnectorProperties{});
+        connectorContext,
+        connector::makeTestStatWriter(),
+        runner::Properties{});
 
     Optimization opt{
         optimizerSession,

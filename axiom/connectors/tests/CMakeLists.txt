@@ -26,7 +26,12 @@ target_link_libraries(
   re2::re2
 )
 
-add_executable(axiom_test_connector_test TestConnectorTest.cpp ConnectorMetadataRegistryTest.cpp)
+add_executable(
+  axiom_test_connector_test
+  TestConnectorTest.cpp
+  ConnectorContextTest.cpp
+  ConnectorMetadataRegistryTest.cpp
+)
 
 add_test(axiom_test_connector_test axiom_test_connector_test)
 
@@ -38,6 +43,7 @@ target_link_libraries(
   velox_connector
   velox_exec
   velox_vector_test_lib
+  GTest::gmock
   GTest::gtest
   GTest::gtest_main
 )

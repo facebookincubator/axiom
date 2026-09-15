@@ -17,6 +17,7 @@
 #include "axiom/optimizer/PrecomputeProjection.h"
 #include <gtest/gtest.h>
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/OptimizerOptions.h"
@@ -67,16 +68,17 @@ class PrecomputeProjectionTest : public ::testing::Test {
     auto schemaResolver = std::make_shared<connector::SchemaResolver>(
         connector::ConnectorMetadataRegistry::global());
 
+    auto connectorContext =
+        connector::makeTestContext(veloxQueryCtx->queryId());
     auto optimizerSession = std::make_shared<OptimizerSession>(
-        veloxQueryCtx->queryId(),
-        "test",
-        OptimizerOptions{},
-        connector::ConnectorProperties{});
+        connectorContext,
+        connector::makeTestStatWriter(),
+        connector::Properties{},
+        OptimizerOptions{});
     auto runnerSession = std::make_shared<runner::RunnerSession>(
-        veloxQueryCtx->queryId(),
-        "test",
-        runner::Properties{},
-        connector::ConnectorProperties{});
+        connectorContext,
+        connector::makeTestStatWriter(),
+        runner::Properties{});
 
     Optimization opt{
         optimizerSession,

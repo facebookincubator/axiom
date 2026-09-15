@@ -26,6 +26,7 @@
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
+#include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/optimizer/ConstantExprEvaluator.h"
@@ -186,10 +187,12 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
         std::string(
             connector::hive::LocalHiveConnectorMetadata::kDefaultSchema),
         std::make_shared<::axiom::sql::presto::ParserSession>(
-            /*queryId=*/"axiom-sql-benchmark",
-            /*user=*/"axiom-sql-benchmark",
-            ::axiom::sql::presto::ParserOptions{},
-            connector::ConnectorProperties{}));
+            connector::makeTestContext(
+                /*queryId=*/"axiom-sql-benchmark",
+                /*user=*/"axiom-sql-benchmark"),
+            connector::makeTestStatWriter(),
+            connector::Properties{},
+            ::axiom::sql::presto::ParserOptions{}));
 
     history_ = std::make_unique<optimizer::VeloxHistory>();
 
@@ -333,7 +336,10 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     }
 
     auto session = std::make_shared<connector::ConnectorSession>(
-        "test", "test", connector::Properties{});
+        "test",
+        "test",
+        connector::Properties{},
+        connector::makeTestStatWriter());
     auto table = metadata->createTable(
         session,
         statement.tableName(),
@@ -352,7 +358,10 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     const auto& tableName = statement.tableName();
 
     auto session = std::make_shared<connector::ConnectorSession>(
-        "test", "test", connector::Properties{});
+        "test",
+        "test",
+        connector::Properties{},
+        connector::makeTestStatWriter());
     const bool dropped = metadata->dropTable(
         session, tableName, statement.ifExists(), /*explain=*/false);
 
@@ -599,16 +608,17 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
 
     optimizer::OptimizerOptions optimizerOptions;
     optimizerOptions.traceFlags = FLAGS_optimizer_trace;
+    auto connectorContext = connector::makeTestContext(
+        queryCtx->queryId(), /*user=*/"axiom-sql-benchmark");
     auto optimizerSession = std::make_shared<optimizer::OptimizerSession>(
-        queryCtx->queryId(),
-        /*user=*/"axiom-sql-benchmark",
-        std::move(optimizerOptions),
-        connector::ConnectorProperties{});
+        connectorContext,
+        connector::makeTestStatWriter(),
+        connector::Properties{},
+        std::move(optimizerOptions));
     auto runnerSession = std::make_shared<runner::RunnerSession>(
-        queryCtx->queryId(),
-        /*user=*/"axiom-sql-benchmark",
-        runner::Properties{},
-        connector::ConnectorProperties{});
+        connectorContext,
+        connector::makeTestStatWriter(),
+        runner::Properties{});
 
     optimizer::Optimization optimization(
         std::move(optimizerSession),
@@ -663,19 +673,18 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
       optimizer::PlanAndStats& planAndStats,
       const std::shared_ptr<core::QueryCtx>& queryCtx) {
     auto runnerSession = std::make_shared<runner::RunnerSession>(
-        queryCtx->queryId(),
-        /*user=*/"axiom-sql-benchmark",
-        connector::Properties{},
-        connector::ConnectorProperties{});
+        connector::makeTestContext(
+            queryCtx->queryId(), /*user=*/"axiom-sql-benchmark"),
+        connector::makeTestStatWriter(),
+        runner::Properties{});
     return std::make_shared<runner::LocalRunner>(
         std::move(runnerSession),
         planAndStats.plan,
         std::move(planAndStats.finishWrite),
         queryCtx,
-        std::make_shared<runner::ConnectorSplitSourceFactory>(runtimeStats_),
+        std::make_shared<runner::ConnectorSplitSourceFactory>(),
         optimizerPool_,
-        /*baseSpillDirectory=*/"",
-        runtimeStats_);
+        /*baseSpillDirectory=*/"");
   }
 
   /// Runs a query and returns the result as a single vector in *resultVector,
@@ -993,7 +1002,6 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
   // Result from first run of flag value sweep.
   std::vector<RowVectorPtr> referenceResult_;
   std::set<std::string> modifiedFlags_;
-  axiom::QueryRuntimeStats runtimeStats_;
 };
 
 // Reads multi-line command from 'in' until encounters ';' followed by zero or

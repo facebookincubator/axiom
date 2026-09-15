@@ -20,6 +20,7 @@
 
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
+#include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/ConstantFold.h"
 #include "axiom/optimizer/FunctionRegistry.h"
@@ -60,13 +61,14 @@ class NodePrinterTest : public UnitTestBase {
     optimizer::OptimizerOptions options;
     options.recursionLimit = kMaxIterations;
     session_ = std::make_shared<optimizer::OptimizerSession>(
-        veloxQueryCtx_->queryId(),
-        "test",
-        options,
-        connector::ConnectorProperties{});
+        connector::makeTestContext(veloxQueryCtx_->queryId()),
+        connector::makeTestStatWriter(),
+        connector::Properties{},
+        options);
     schemaResolver_ = std::make_unique<connector::SchemaResolver>(
         connector::ConnectorMetadataRegistry::global());
-    schema_ = std::make_unique<optimizer::Schema>(*schemaResolver_);
+    schema_ = std::make_unique<optimizer::Schema>(
+        *schemaResolver_, session_->statsWriter());
   }
 
   NodeCP translate(const lp::LogicalPlanNodePtr& plan) {

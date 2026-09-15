@@ -15,6 +15,7 @@
  */
 
 #include "axiom/runner/ProgressReporter.h"
+#include "axiom/connectors/tests/TestConnectorContext.h"
 
 #include <folly/coro/Baton.h>
 #include <folly/coro/BlockingWait.h>
@@ -64,13 +65,11 @@ class GatedSplitSource : public connector::SplitSource {
 // Wraps ConnectorSplitSourceFactory so the scan's splits flow through a gate.
 class GatedSplitSourceFactory : public SplitSourceFactory {
  public:
-  GatedSplitSourceFactory(
-      QueryRuntimeStats& runtimeStats,
-      std::shared_ptr<folly::coro::Baton> gate)
-      : inner_{runtimeStats}, gate_{std::move(gate)} {}
+  explicit GatedSplitSourceFactory(std::shared_ptr<folly::coro::Baton> gate)
+      : gate_{std::move(gate)} {}
 
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
-      const connector::ConnectorSessionPtr& session,
+      const RunnerSessionPtr& session,
       const velox::core::TableScanNode& scan,
       const std::shared_ptr<connector::PartitionType>& partitionType,
       std::optional<double> samplePercentage) override {
@@ -111,18 +110,16 @@ class ProgressReporterTest : public test::LocalRunnerTestBase {
     return builder.build();
   }
 
-  static RunnerSessionPtr makeRunnerSession(std::string_view queryId) {
+  RunnerSessionPtr makeRunnerSession(std::string_view queryId) {
     return std::make_shared<RunnerSession>(
-        std::string(queryId),
-        "test",
-        Properties{},
-        connector::ConnectorProperties{});
+        connector::makeTestContext(queryId),
+        connector::makeTestStatWriter(),
+        Properties{});
   }
 
   velox::RowTypePtr rowType_;
   std::shared_ptr<velox::core::PlanNodeIdGenerator> idGenerator_{
       std::make_shared<velox::core::PlanNodeIdGenerator>()};
-  QueryRuntimeStats runtimeStats_;
 };
 
 // Releases scan splits one at a time and asserts the scheduler's periodic poll
@@ -138,10 +135,9 @@ TEST_F(ProgressReporterTest, reportsProgressPerSplit) {
       std::move(plan),
       optimizer::FinishWrite{},
       makeQueryCtx(queryId),
-      std::make_shared<GatedSplitSourceFactory>(runtimeStats_, gate),
+      std::make_shared<GatedSplitSourceFactory>(gate),
       /*outputPool=*/nullptr,
-      /*baseSpillDirectory=*/"",
-      runtimeStats_);
+      /*baseSpillDirectory=*/"");
 
   std::mutex mutex;
   std::condition_variable cv;

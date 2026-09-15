@@ -16,11 +16,13 @@
 
 #pragma once
 
+#include <memory>
+
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <functional>
 #include <optional>
-#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/session/BaseSession.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 
 namespace facebook::velox::cache {
@@ -176,8 +178,6 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
   std::shared_ptr<velox::memory::MemoryPool> optimizerPool_;
   // Executor for query execution.
   std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
-
-  QueryRuntimeStats runtimeStats_;
 };
 
 } // namespace facebook::axiom::optimizer::test

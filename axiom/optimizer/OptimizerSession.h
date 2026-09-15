@@ -19,28 +19,25 @@
 #include <string>
 #include <utility>
 
-#include "axiom/connectors/BaseSession.h"
 #include "axiom/optimizer/OptimizerOptions.h"
+#include "axiom/session/BaseSession.h"
 
 namespace facebook::axiom::optimizer {
 
-/// Optimizer-scoped session view. Carries the shared identity (queryId,
-/// user, connector-session factory) plus the typed OptimizerOptions for
-/// this query.
-class OptimizerSession final : public connector::BaseSession {
+/// What the optimizer is given for one query: the query's context and its
+/// writer, plus the typed OptimizerOptions parsed from the optimizer's slice
+/// of the query's session properties.
+class OptimizerSession final : public BaseSession {
  public:
-  /// Constructs an optimizer session with the given identity, typed
-  /// `options`, and the per-connector property map used to spawn
-  /// ConnectorSessions for plan-time metadata calls.
   OptimizerSession(
-      std::string queryId,
-      std::string user,
-      OptimizerOptions options,
-      connector::ConnectorProperties connectorProperties)
+      connector::ConnectorContextPtr context,
+      std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter,
+      connector::Properties properties,
+      OptimizerOptions options)
       : BaseSession(
-            std::move(queryId),
-            std::move(user),
-            std::move(connectorProperties)),
+            std::move(context),
+            std::move(statsWriter),
+            std::move(properties)),
         options_{std::move(options)} {}
 
   const OptimizerOptions& options() const {

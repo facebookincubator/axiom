@@ -22,6 +22,7 @@
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/system/SystemConnectorMetadata.h"
+#include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/optimizer/ConstantExprEvaluator.h"
 #include "axiom/optimizer/tests/SqlFile.h"
 #include "axiom/optimizer/tests/SqlTestBase.h"
@@ -125,14 +126,17 @@ void runSetupStatement(
       connectorId,
       defaultSchema,
       std::make_shared<::axiom::sql::presto::ParserSession>(
-          /*queryId=*/"test",
-          /*user=*/"test",
-          ::axiom::sql::presto::ParserOptions{},
-          connector::ConnectorProperties{}));
+          connector::makeTestContext("test"),
+          connector::makeTestStatWriter(),
+          connector::Properties{},
+          ::axiom::sql::presto::ParserOptions{}));
   auto stmt = parser.parse(sql);
 
   auto session = std::make_shared<connector::ConnectorSession>(
-      /*queryId=*/"test", /*user=*/"test", connector::Properties{});
+      /*queryId=*/"test",
+      /*user=*/"test",
+      connector::Properties{},
+      connector::makeTestStatWriter());
 
   auto evalOptions = [](const auto& properties) {
     folly::F14FastMap<std::string, velox::Variant> options;

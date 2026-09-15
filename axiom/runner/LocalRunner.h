@@ -20,7 +20,6 @@
 
 #include <folly/coro/AsyncScope.h>
 
-#include "axiom/common/QueryRuntimeStats.h"
 #include "axiom/connectors/ConnectorSplitManager.h"
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/runner/Runner.h"
@@ -44,7 +43,7 @@ class SplitSourceFactory {
   /// 'samplePercentage' is set (TABLESAMPLE SYSTEM), the source emits each
   /// split with that probability.
   virtual std::shared_ptr<connector::SplitSource> splitSourceForScan(
-      const connector::ConnectorSessionPtr& session,
+      const RunnerSessionPtr& session,
       const velox::core::TableScanNode& scan,
       const std::shared_ptr<connector::PartitionType>& partitionType,
       std::optional<double> samplePercentage) = 0;
@@ -60,7 +59,7 @@ class SimpleSplitSourceFactory : public SplitSourceFactory {
       : nodeSplitMap_(std::move(nodeSplitMap)) {}
 
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
-      const connector::ConnectorSessionPtr& session,
+      const RunnerSessionPtr& session,
       const velox::core::TableScanNode& scan,
       const std::shared_ptr<connector::PartitionType>& partitionType,
       std::optional<double> samplePercentage) override;
@@ -73,31 +72,43 @@ class SimpleSplitSourceFactory : public SplitSourceFactory {
 };
 
 /// Generic SplitSourceFactory that delegates the work to ConnectorSplitManager.
+/// Split enumeration is the runner's work, so its metrics land in the runner's
+/// bucket of the store 'session' carries, not the scanned connector's.
 class ConnectorSplitSourceFactory : public SplitSourceFactory {
  public:
-  explicit ConnectorSplitSourceFactory(QueryRuntimeStats& runtimeStats)
-      : runtimeStats_(runtimeStats) {}
-
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
-      const connector::ConnectorSessionPtr& session,
+      const RunnerSessionPtr& session,
       const velox::core::TableScanNode& scan,
       const std::shared_ptr<connector::PartitionType>& partitionType,
       std::optional<double> samplePercentage) override;
-
- protected:
-  QueryRuntimeStats& runtimeStats_;
 };
 
 /// Runner for in-process execution of a distributed plan.
 class LocalRunner : public Runner,
                     public std::enable_shared_from_this<LocalRunner> {
  public:
+  /// One sample per scan node, covering the connector call that enumerates the
+  /// partitions to read. Precedes execution rather than nesting in it.
+  static constexpr std::string_view kListPartitionsWallNanos{
+      "listPartitionsWallNanos"};
+
+  /// Sum is the total number of partitions listed; count is the number of scan
+  /// nodes that listed any.
+  static constexpr std::string_view kListPartitionsCount{"listPartitionsCount"};
+
+  /// Covers pulling splits out of a split source. Overlaps the execute phase
+  /// timing, since enumeration runs alongside the tasks it feeds.
+  static constexpr std::string_view kGetSplitsWallNanos{"getSplitsWallNanos"};
+
+  /// Sum is the total number of splits produced; count follows
+  /// kGetSplitsWallNanos.
+  static constexpr std::string_view kGetSplitsCount{"getSplitsCount"};
+
   /// @param outputPool Optional memory pool to use for allocating memory for
   /// query results. Required if 'finishWrite' is set.
   /// @param baseSpillDirectory Base directory for spill files. If non-empty,
   /// each task gets a unique subdirectory under this path. Empty disables
   /// spilling at the task level.
-  /// @param runtimeStats Optional recorder for split enumeration metrics.
   LocalRunner(
       RunnerSessionPtr session,
       optimizer::MultiFragmentPlanPtr plan,
@@ -105,8 +116,7 @@ class LocalRunner : public Runner,
       std::shared_ptr<velox::core::QueryCtx> queryCtx,
       std::shared_ptr<SplitSourceFactory> splitSourceFactory,
       std::shared_ptr<velox::memory::MemoryPool> outputPool,
-      std::string baseSpillDirectory,
-      QueryRuntimeStats& runtimeStats);
+      std::string baseSpillDirectory);
 
   ~LocalRunner() override;
 
@@ -202,7 +212,7 @@ class LocalRunner : public Runner,
   void makeStages(const std::shared_ptr<velox::exec::Task>& lastStageTask);
 
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
-      const connector::ConnectorSessionPtr& session,
+      const RunnerSessionPtr& session,
       const velox::core::TableScanNode& scan,
       const std::shared_ptr<connector::PartitionType>& partitionType,
       std::optional<double> samplePercentage);
@@ -236,7 +246,6 @@ class LocalRunner : public Runner,
   std::shared_ptr<SplitSourceFactory> splitSourceFactory_;
   // Base directory for task spill files. Empty disables spilling.
   std::string baseSpillDirectory_;
-  QueryRuntimeStats& runtimeStats_;
   // Cancellable so teardown can stop split enumeration promptly rather than
   // draining each source to noMoreSplits. co_reap() cancelAndJoinAsync()s it.
   folly::coro::CancellableAsyncScope splitScope_{/*throwOnJoin=*/true};

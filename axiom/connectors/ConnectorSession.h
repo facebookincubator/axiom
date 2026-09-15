@@ -23,21 +23,42 @@
 
 #include <folly/container/F14Map.h>
 
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/base/RuntimeMetrics.h"
+
 namespace facebook::axiom::connector {
 
 /// Property bag for a single component or connector.
 using Properties = folly::F14FastMap<std::string, std::string>;
 
+/// Map of connector id to that connector's property bag.
+using ConnectorProperties = folly::F14FastMap<std::string, Properties>;
+
 class ConnectorSession;
 using ConnectorSessionPtr = std::shared_ptr<ConnectorSession>;
 
-/// Read-only query-specific information passed to connectors.
+/// Holds what one connector is given for one query: the query's identity, this
+/// connector's property slice, and the writer it records into. Every connector
+/// API takes one.
+///
+/// Made by ConnectorContext on first use and released with it; a connector
+/// retains nothing beyond the call it was passed to.
+///
+/// Invariants:
+///   - `statsWriter` is non-null.
 class ConnectorSession final {
  public:
-  ConnectorSession(std::string queryId, std::string user, Properties properties)
+  ConnectorSession(
+      std::string queryId,
+      std::string user,
+      Properties properties,
+      std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter)
       : queryId_{std::move(queryId)},
         user_{std::move(user)},
-        properties_{std::move(properties)} {}
+        properties_{std::move(properties)},
+        statsWriter_{std::move(statsWriter)} {
+    VELOX_CHECK_NOT_NULL(statsWriter_, "ConnectorSession requires a writer");
+  }
 
   /// Returns the query identifier.
   const std::string& queryId() const {
@@ -60,10 +81,16 @@ class ConnectorSession final {
     return it->second;
   }
 
+  /// Returns this connector's write handle into the query's stats.
+  velox::BaseRuntimeStatWriter& statsWriter() const {
+    return *statsWriter_;
+  }
+
  private:
   const std::string queryId_;
   const std::string user_;
   const Properties properties_;
+  const std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter_;
 };
 
 } // namespace facebook::axiom::connector

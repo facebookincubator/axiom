@@ -181,9 +181,8 @@ void ToVelox::filterUpdated(
   const auto& allColumns = table->schemaTable->connectorTable->allColumns();
   auto* layout = table->schemaTable->columnGroups[0]->layout;
 
-  auto connector = layout->connector();
   auto connectorSession =
-      optimizerSession_->toConnectorSession(connector->connectorId());
+      optimizerSession_->context()->sessionFor(layout->connectorId());
 
   std::vector<velox::connector::ColumnHandlePtr> columns;
   for (const auto* column : allColumns) {
@@ -1572,9 +1571,8 @@ velox::core::PlanNodePtr ToVelox::makeScan(
         scan.baseTable, allColumns, scanColumns, columnAlteredTypes_);
   }
 
-  auto* connector = scan.index->layout->connector();
-  auto connectorSession =
-      optimizerSession_->toConnectorSession(connector->connectorId());
+  auto connectorSession = optimizerSession_->context()->sessionFor(
+      scan.index->layout->connectorId());
 
   velox::connector::ColumnHandleMap assignments;
   for (auto column : scanColumns) {
@@ -2314,7 +2312,7 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
 
   const auto& connectorId = layout->connector()->connectorId();
   auto metadata = connector::ConnectorMetadataRegistry::get(connectorId);
-  auto session = optimizerSession_->toConnectorSession(connectorId);
+  auto session = optimizerSession_->context()->sessionFor(connectorId);
   auto handle = metadata->beginWrite(
       session,
       table.shared_from_this(),

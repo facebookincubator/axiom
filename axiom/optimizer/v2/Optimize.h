@@ -77,7 +77,7 @@ class Optimizer {
         session_{session},
         evaluator_{evaluator},
         queryCtx_{std::move(queryCtx)},
-        schema_{schemaResolver_} {}
+        schema_{schemaResolver_, session_.statsWriter()} {}
 
   /// Lowers the plan to a distributed Velox execution plan (a
   /// `MultiFragmentPlan` of one or more fragments).

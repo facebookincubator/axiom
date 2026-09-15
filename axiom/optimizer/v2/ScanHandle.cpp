@@ -32,8 +32,7 @@ ScanHandle ScanHandle::build(
     velox::core::ExpressionEvaluator& evaluator,
     ExprVector& rejected) {
   const auto* layout = baseTable.schemaTable->columnGroups[0]->layout;
-  auto connectorSession =
-      session.toConnectorSession(layout->connector()->connectorId());
+  auto connectorSession = session.context()->sessionFor(layout->connectorId());
 
   // Read schema is the consumer output columns plus the columns referenced
   // only by filters.

@@ -16,6 +16,7 @@
 
 #include "axiom/runner/tests/PrestoQueryReplayRunner.h"
 #include <folly/coro/BlockingWait.h>
+#include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/runner/LocalRunner.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -399,17 +400,15 @@ PrestoQueryReplayRunner::run(
   auto nodeSplitMap = deserializeConnectorSplits(serializedConnectorSplits);
   auto localRunner = std::make_shared<LocalRunner>(
       std::make_shared<RunnerSession>(
-          queryId,
-          /*user=*/"presto-replay",
-          runner::Properties{},
-          connector::ConnectorProperties{}),
+          connector::makeTestContext(queryId, /*user=*/"presto-replay"),
+          connector::makeTestStatWriter(),
+          runner::Properties{}),
       std::move(multiFragmentPlan),
       optimizer::FinishWrite{},
       makeQueryCtx(queryId, queryRootPool),
       std::make_shared<runner::SimpleSplitSourceFactory>(nodeSplitMap),
       /*outputPool=*/nullptr,
-      /*baseSpillDirectory=*/"",
-      runtimeStats_);
+      /*baseSpillDirectory=*/"");
 
   std::vector<velox::RowVectorPtr> result;
   try {

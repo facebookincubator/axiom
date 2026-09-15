@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Fine-grained target so consumers that only need query-id generation (e.g.
-# axel) can link it without pulling in the interactive CLI and its graphviz
-# dependency.
 add_library(axiom_query_id_generator QueryIdGenerator.cpp)
 
 target_link_libraries(axiom_query_id_generator fmt::fmt)
+
+add_library(axiom_query_runtime_stats common/QueryRuntimeStats.cpp)
+
+target_link_libraries(axiom_query_runtime_stats velox_common_base Folly::folly fmt::fmt)
 
 add_library(
   axiom_cli
@@ -84,5 +85,7 @@ target_link_libraries(
 add_executable(axiom_hive_import ImportHiveData.cpp)
 
 target_link_libraries(axiom_hive_import axiom_cli)
+
+add_subdirectory(common/tests)
 
 add_subdirectory(tests)

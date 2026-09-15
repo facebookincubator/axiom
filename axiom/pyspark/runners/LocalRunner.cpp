@@ -70,7 +70,6 @@ class LocalRunner : public Runner {
  private:
   std::shared_ptr<::facebook::velox::memory::MemoryPool> aggregatePool_;
   std::shared_ptr<::facebook::velox::memory::MemoryPool> leafPool_;
-  ::facebook::axiom::QueryRuntimeStats runtimeStats_;
 };
 
 std::vector<velox::RowVectorPtr> LocalRunner::execute(
@@ -85,22 +84,24 @@ std::vector<velox::RowVectorPtr> LocalRunner::execute(
       aggregatePool_);
 
   auto splitSourceFactory =
-      std::make_shared<facebook::axiom::runner::ConnectorSplitSourceFactory>(
-          runtimeStats_);
+      std::make_shared<facebook::axiom::runner::ConnectorSplitSourceFactory>();
 
   auto runner = std::make_shared<facebook::axiom::runner::LocalRunner>(
       std::make_shared<facebook::axiom::runner::RunnerSession>(
-          queryCtx->queryId(),
-          /*user=*/"pyspark-runner",
-          facebook::axiom::runner::Properties{},
-          facebook::axiom::connector::ConnectorProperties{}),
+          std::make_shared<facebook::axiom::connector::ConnectorContext>(
+              queryCtx->queryId(),
+              /*user=*/"pyspark-runner",
+              facebook::axiom::connector::ConnectorProperties{},
+              facebook::axiom::connector::ConnectorContext::
+                  noopStatWriterProvider()),
+          std::make_shared<velox::NoopRuntimeStatWriter>(),
+          facebook::axiom::runner::Properties{}),
       plan_,
       std::move(finishWrite_),
       queryCtx,
       splitSourceFactory,
       leafPool_,
-      /*baseSpillDirectory=*/"",
-      runtimeStats_);
+      /*baseSpillDirectory=*/"");
   runner->drain(
       [&](velox::RowVectorPtr batch) { results.push_back(std::move(batch)); });
   return results;

@@ -19,24 +19,25 @@
 #include <string>
 #include <utility>
 
-#include "axiom/connectors/BaseSession.h"
+#include "axiom/session/BaseSession.h"
 #include "axiom/sql/presto/ParserOptions.h"
 
 namespace axiom::sql::presto {
 
-/// Parser-scoped session view. Carries the shared identity (queryId, user,
-/// per-connector properties) plus the typed ParserOptions for this query.
-class ParserSession final : public facebook::axiom::connector::BaseSession {
+/// What the parser is given for one query: the query's context and its writer,
+/// plus the typed ParserOptions parsed from the parser's slice of the query's
+/// session properties.
+class ParserSession final : public facebook::axiom::BaseSession {
  public:
   ParserSession(
-      std::string queryId,
-      std::string user,
-      ParserOptions options,
-      facebook::axiom::connector::ConnectorProperties connectorProperties)
+      facebook::axiom::connector::ConnectorContextPtr context,
+      std::shared_ptr<facebook::velox::BaseRuntimeStatWriter> statsWriter,
+      facebook::axiom::connector::Properties properties,
+      ParserOptions options)
       : BaseSession(
-            std::move(queryId),
-            std::move(user),
-            std::move(connectorProperties)),
+            std::move(context),
+            std::move(statsWriter),
+            std::move(properties)),
         options_{std::move(options)} {}
 
   const ParserOptions& options() const {

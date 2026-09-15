@@ -18,6 +18,7 @@
 #include <folly/json/json.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "axiom/connectors/tests/TestConnectorContext.h"
 
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
@@ -162,11 +163,12 @@ class SystemConnectorMetadataTest : public ::testing::Test {
     connector_.reset();
   }
 
-  static ConnectorSessionPtr makeSession() {
+  ConnectorSessionPtr makeSession() {
     return std::make_shared<ConnectorSession>(
         /*queryId=*/"test",
         /*user=*/"test",
-        Properties{});
+        Properties{},
+        makeTestStatWriter());
   }
 
   // Creates a DataSource for the given schema/table through the connector,
@@ -344,14 +346,12 @@ TEST_F(SystemConnectorMetadataTest, splitSource) {
       splitManager->co_listPartitions(session, tableHandle));
   EXPECT_EQ(partitions.size(), 1);
 
-  QueryRuntimeStats noopStats;
   auto splitSource = splitManager->getSplitSource(
       session,
       tableHandle,
       partitions,
       /*partitionType=*/nullptr,
-      /*samplePercentage=*/std::nullopt,
-      noopStats);
+      /*samplePercentage=*/std::nullopt);
   ASSERT_NE(splitSource, nullptr);
 
   std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
