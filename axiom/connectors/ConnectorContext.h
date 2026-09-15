@@ -88,6 +88,11 @@ class ConnectorContext {
   /// writer provider is called at most once per successful build; a throw from
   /// the build runs it again, and the writer it returns is shared by every
   /// thread that connector runs on.
+  ///
+  /// Asks the metadata registered globally under 'connectorId' for the state
+  /// that connector keeps for the query, so this runs connector code and throws
+  /// what it throws. An id nothing is registered under when the session is
+  /// first asked for gets a session without state for the life of this context.
   ConnectorSessionPtr sessionFor(std::string_view connectorId);
 
   /// Returns a provider that records nothing.
