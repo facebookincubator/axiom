@@ -24,6 +24,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/connectors/tests/TestConnector.h"
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
@@ -158,6 +160,159 @@ TEST(ConnectorContextTest, nullWriterFromProviderFails) {
       });
   VELOX_ASSERT_THROW(
       context->sessionFor("a"), "Stat writer provider returned null");
+}
+
+// Records what the session carried when the connector was asked for state.
+class RecordedState : public ConnectorQueryState {
+ public:
+  RecordedState(
+      std::string label,
+      std::string queryId,
+      const velox::BaseRuntimeStatWriter* writer)
+      : label_{std::move(label)},
+        queryId_{std::move(queryId)},
+        writer_{writer} {}
+
+  // Identifies the connector that made this, so a test can tell them apart.
+  const std::string& label() const {
+    return label_;
+  }
+
+  const std::string& queryId() const {
+    return queryId_;
+  }
+
+  const velox::BaseRuntimeStatWriter* writer() const {
+    return writer_;
+  }
+
+ private:
+  const std::string label_;
+  const std::string queryId_;
+  const velox::BaseRuntimeStatWriter* const writer_;
+};
+
+class StateMakingMetadata : public TestConnectorMetadata {
+ public:
+  StateMakingMetadata(TestConnector* connector, std::string label)
+      : TestConnectorMetadata(connector), label_{std::move(label)} {}
+
+  std::unique_ptr<ConnectorQueryState> makeQueryState(
+      const ConnectorSession& session) const override {
+    ++numCalls;
+    return std::make_unique<RecordedState>(
+        label_, session.queryId(), &session.statsWriter());
+  }
+
+  mutable int32_t numCalls{0};
+
+ private:
+  const std::string label_;
+};
+
+class ConnectorContextQueryStateTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    ConnectorMetadataRegistry::unregisterAll();
+  }
+
+  void TearDown() override {
+    ConnectorMetadataRegistry::unregisterAll();
+  }
+
+  // Members, so a registration never outlives the connector it points at.
+  TestConnector connectorA_{"a"};
+  TestConnector connectorB_{"b"};
+};
+
+// A connector that keeps nothing leaves its session's slot empty.
+TEST_F(ConnectorContextQueryStateTest, noState) {
+  ConnectorMetadataRegistry::global().insert(
+      "a", std::make_shared<TestConnectorMetadata>(&connectorA_));
+  velox::ConcurrentRuntimeStatWriter writer;
+  std::atomic<int32_t> writerCalls{0};
+  auto context = makeContext({}, &writerCalls, writer);
+
+  EXPECT_EQ(context->sessionFor("a")->queryState(), nullptr);
+}
+
+// An id nothing is registered under yields a session without state.
+TEST_F(ConnectorContextQueryStateTest, noStateWhenUnregistered) {
+  velox::ConcurrentRuntimeStatWriter writer;
+  std::atomic<int32_t> writerCalls{0};
+  auto context = makeContext({}, &writerCalls, writer);
+
+  EXPECT_EQ(context->sessionFor("a")->queryState(), nullptr);
+}
+
+// Each session carries its own connector's state, not any registered one.
+TEST_F(ConnectorContextQueryStateTest, statePerConnector) {
+  ConnectorMetadataRegistry::global().insert(
+      "a", std::make_shared<StateMakingMetadata>(&connectorA_, "a"));
+  ConnectorMetadataRegistry::global().insert(
+      "b", std::make_shared<StateMakingMetadata>(&connectorB_, "b"));
+  velox::ConcurrentRuntimeStatWriter writer;
+  std::atomic<int32_t> writerCalls{0};
+  auto context = makeContext({}, &writerCalls, writer);
+
+  EXPECT_EQ(
+      context->sessionFor("a")->queryStateAs<RecordedState>().label(), "a");
+  EXPECT_EQ(
+      context->sessionFor("b")->queryStateAs<RecordedState>().label(), "b");
+}
+
+// The state is the query's, so it is built with the session and not again.
+TEST_F(ConnectorContextQueryStateTest, builtOnce) {
+  auto metadata = std::make_shared<StateMakingMetadata>(&connectorA_, "a");
+  ConnectorMetadataRegistry::global().insert("a", metadata);
+  velox::ConcurrentRuntimeStatWriter writer;
+  std::atomic<int32_t> writerCalls{0};
+  auto context = makeContext({}, &writerCalls, writer);
+
+  context->sessionFor("a");
+  context->sessionFor("a");
+
+  EXPECT_EQ(metadata->numCalls, 1);
+}
+
+// The session is fully wired before the connector is asked for state.
+TEST_F(ConnectorContextQueryStateTest, seesTheWiredSession) {
+  ConnectorMetadataRegistry::global().insert(
+      "a", std::make_shared<StateMakingMetadata>(&connectorA_, "a"));
+  velox::ConcurrentRuntimeStatWriter writer;
+  std::atomic<int32_t> writerCalls{0};
+  auto context = makeContext({}, &writerCalls, writer);
+
+  const auto& state = context->sessionFor("a")->queryStateAs<RecordedState>();
+
+  EXPECT_EQ(state.queryId(), "q1");
+  EXPECT_EQ(state.writer(), &writer);
+}
+
+// A caller racing the build never reaches a session without state.
+TEST_F(ConnectorContextQueryStateTest, concurrentCallersSeeState) {
+  ConnectorMetadataRegistry::global().insert(
+      "a", std::make_shared<StateMakingMetadata>(&connectorA_, "a"));
+  velox::ConcurrentRuntimeStatWriter writer;
+  std::atomic<int32_t> writerCalls{0};
+  auto context = makeContext({}, &writerCalls, writer);
+
+  constexpr int32_t kThreads = 8;
+  std::vector<const ConnectorQueryState*> states(kThreads);
+  std::vector<std::thread> threads;
+  threads.reserve(kThreads);
+  std::barrier barrier{kThreads};
+  for (int32_t i = 0; i < kThreads; ++i) {
+    threads.emplace_back([&, i] {
+      barrier.arrive_and_wait();
+      states[i] = context->sessionFor("a")->queryState();
+    });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  EXPECT_THAT(states, testing::Each(testing::NotNull()));
 }
 
 } // namespace
