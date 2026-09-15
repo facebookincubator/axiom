@@ -252,40 +252,41 @@ class PrestoSqlParser : public antlr4::Parser {
     WHEN = 227,
     WHERE = 228,
     WITH = 229,
-    WORK = 230,
-    WRITE = 231,
-    YEAR = 232,
-    ZONE = 233,
-    EQ = 234,
-    NEQ = 235,
-    LT = 236,
-    LTE = 237,
-    GT = 238,
-    GTE = 239,
-    PLUS = 240,
-    MINUS = 241,
-    ASTERISK = 242,
-    SLASH = 243,
-    PERCENT = 244,
-    CONCAT = 245,
-    STRING = 246,
-    UNICODE_STRING = 247,
-    BINARY_LITERAL = 248,
-    INTEGER_VALUE = 249,
-    DECIMAL_VALUE = 250,
-    DOUBLE_VALUE = 251,
-    IDENTIFIER = 252,
-    DIGIT_IDENTIFIER = 253,
-    QUOTED_IDENTIFIER = 254,
-    BACKQUOTED_IDENTIFIER = 255,
-    TIME_WITH_TIME_ZONE = 256,
-    TIMESTAMP_WITH_TIME_ZONE = 257,
-    DOUBLE_PRECISION = 258,
-    SIMPLE_COMMENT = 259,
-    BRACKETED_COMMENT = 260,
-    WS = 261,
-    UNRECOGNIZED = 262,
-    DELIMITER = 263
+    WINDOW = 230,
+    WORK = 231,
+    WRITE = 232,
+    YEAR = 233,
+    ZONE = 234,
+    EQ = 235,
+    NEQ = 236,
+    LT = 237,
+    LTE = 238,
+    GT = 239,
+    GTE = 240,
+    PLUS = 241,
+    MINUS = 242,
+    ASTERISK = 243,
+    SLASH = 244,
+    PERCENT = 245,
+    CONCAT = 246,
+    STRING = 247,
+    UNICODE_STRING = 248,
+    BINARY_LITERAL = 249,
+    INTEGER_VALUE = 250,
+    DECIMAL_VALUE = 251,
+    DOUBLE_VALUE = 252,
+    IDENTIFIER = 253,
+    DIGIT_IDENTIFIER = 254,
+    QUOTED_IDENTIFIER = 255,
+    BACKQUOTED_IDENTIFIER = 256,
+    TIME_WITH_TIME_ZONE = 257,
+    TIMESTAMP_WITH_TIME_ZONE = 258,
+    DOUBLE_PRECISION = 259,
+    SIMPLE_COMMENT = 260,
+    BRACKETED_COMMENT = 261,
+    WS = 262,
+    UNRECOGNIZED = 263,
+    DELIMITER = 264
   };
 
   enum {
@@ -317,71 +318,73 @@ class PrestoSqlParser : public antlr4::Parser {
     RuleQueryPrimary = 25,
     RuleSortItem = 26,
     RuleQuerySpecification = 27,
-    RuleGroupBy = 28,
-    RuleGroupingElement = 29,
-    RuleGroupingSet = 30,
-    RuleNamedQuery = 31,
-    RuleSetQuantifier = 32,
-    RuleSelectItem = 33,
-    RuleStarModifiers = 34,
-    RuleExcludeClause = 35,
-    RuleReplaceClause = 36,
-    RuleReplaceItem = 37,
-    RuleRelation = 38,
-    RuleJoinType = 39,
-    RuleJoinCriteria = 40,
-    RuleSampledRelation = 41,
-    RuleSampleType = 42,
-    RuleAliasedRelation = 43,
-    RuleColumnAliases = 44,
-    RuleRelationPrimary = 45,
-    RuleExpression = 46,
-    RuleBooleanExpression = 47,
-    RulePredicate = 48,
-    RuleValueExpression = 49,
-    RulePrimaryExpression = 50,
-    RuleString = 51,
-    RuleNullTreatment = 52,
-    RuleTimeZoneSpecifier = 53,
-    RuleComparisonOperator = 54,
-    RuleComparisonQuantifier = 55,
-    RuleBooleanValue = 56,
-    RuleInterval = 57,
-    RuleIntervalField = 58,
-    RuleNormalForm = 59,
-    RuleTypes = 60,
-    RuleType = 61,
-    RuleTypeParameter = 62,
-    RuleBaseType = 63,
-    RuleWhenClause = 64,
-    RuleFilter = 65,
-    RuleOver = 66,
-    RuleWindowFrame = 67,
-    RuleFrameBound = 68,
-    RuleUpdateAssignment = 69,
-    RuleExplainOption = 70,
-    RuleTransactionMode = 71,
-    RuleLevelOfIsolation = 72,
-    RuleCallArgument = 73,
-    RulePrivilege = 74,
-    RuleQualifiedName = 75,
-    RuleTableVersionExpression = 76,
-    RuleTableVersionState = 77,
-    RuleGrantor = 78,
-    RulePrincipal = 79,
-    RuleRoles = 80,
-    RuleIdentifier = 81,
-    RuleNumber = 82,
-    RuleConstraintSpecification = 83,
-    RuleNamedConstraintSpecification = 84,
-    RuleUnnamedConstraintSpecification = 85,
-    RuleConstraintType = 86,
-    RuleConstraintQualifiers = 87,
-    RuleConstraintQualifier = 88,
-    RuleConstraintRely = 89,
-    RuleConstraintEnabled = 90,
-    RuleConstraintEnforced = 91,
-    RuleNonReserved = 92
+    RuleWindowDefinition = 28,
+    RuleGroupBy = 29,
+    RuleGroupingElement = 30,
+    RuleGroupingSet = 31,
+    RuleNamedQuery = 32,
+    RuleSetQuantifier = 33,
+    RuleSelectItem = 34,
+    RuleStarModifiers = 35,
+    RuleExcludeClause = 36,
+    RuleReplaceClause = 37,
+    RuleReplaceItem = 38,
+    RuleRelation = 39,
+    RuleJoinType = 40,
+    RuleJoinCriteria = 41,
+    RuleSampledRelation = 42,
+    RuleSampleType = 43,
+    RuleAliasedRelation = 44,
+    RuleColumnAliases = 45,
+    RuleRelationPrimary = 46,
+    RuleExpression = 47,
+    RuleBooleanExpression = 48,
+    RulePredicate = 49,
+    RuleValueExpression = 50,
+    RulePrimaryExpression = 51,
+    RuleString = 52,
+    RuleNullTreatment = 53,
+    RuleTimeZoneSpecifier = 54,
+    RuleComparisonOperator = 55,
+    RuleComparisonQuantifier = 56,
+    RuleBooleanValue = 57,
+    RuleInterval = 58,
+    RuleIntervalField = 59,
+    RuleNormalForm = 60,
+    RuleTypes = 61,
+    RuleType = 62,
+    RuleTypeParameter = 63,
+    RuleBaseType = 64,
+    RuleWhenClause = 65,
+    RuleFilter = 66,
+    RuleOver = 67,
+    RuleWindowSpecification = 68,
+    RuleWindowFrame = 69,
+    RuleFrameBound = 70,
+    RuleUpdateAssignment = 71,
+    RuleExplainOption = 72,
+    RuleTransactionMode = 73,
+    RuleLevelOfIsolation = 74,
+    RuleCallArgument = 75,
+    RulePrivilege = 76,
+    RuleQualifiedName = 77,
+    RuleTableVersionExpression = 78,
+    RuleTableVersionState = 79,
+    RuleGrantor = 80,
+    RulePrincipal = 81,
+    RuleRoles = 82,
+    RuleIdentifier = 83,
+    RuleNumber = 84,
+    RuleConstraintSpecification = 85,
+    RuleNamedConstraintSpecification = 86,
+    RuleUnnamedConstraintSpecification = 87,
+    RuleConstraintType = 88,
+    RuleConstraintQualifiers = 89,
+    RuleConstraintQualifier = 90,
+    RuleConstraintRely = 91,
+    RuleConstraintEnabled = 92,
+    RuleConstraintEnforced = 93,
+    RuleNonReserved = 94
   };
 
   explicit PrestoSqlParser(antlr4::TokenStream* input);
@@ -430,6 +433,7 @@ class PrestoSqlParser : public antlr4::Parser {
   class QueryPrimaryContext;
   class SortItemContext;
   class QuerySpecificationContext;
+  class WindowDefinitionContext;
   class GroupByContext;
   class GroupingElementContext;
   class GroupingSetContext;
@@ -469,6 +473,7 @@ class PrestoSqlParser : public antlr4::Parser {
   class WhenClauseContext;
   class FilterContext;
   class OverContext;
+  class WindowSpecificationContext;
   class WindowFrameContext;
   class FrameBoundContext;
   class UpdateAssignmentContext;
@@ -2207,6 +2212,9 @@ class PrestoSqlParser : public antlr4::Parser {
     antlr4::tree::TerminalNode* BY();
     GroupByContext* groupBy();
     antlr4::tree::TerminalNode* HAVING();
+    antlr4::tree::TerminalNode* WINDOW();
+    std::vector<WindowDefinitionContext*> windowDefinition();
+    WindowDefinitionContext* windowDefinition(size_t i);
     std::vector<BooleanExpressionContext*> booleanExpression();
     BooleanExpressionContext* booleanExpression(size_t i);
 
@@ -2217,6 +2225,25 @@ class PrestoSqlParser : public antlr4::Parser {
   };
 
   QuerySpecificationContext* querySpecification();
+
+  class WindowDefinitionContext : public antlr4::ParserRuleContext {
+   public:
+    PrestoSqlParser::IdentifierContext* name = nullptr;
+    WindowDefinitionContext(
+        antlr4::ParserRuleContext* parent,
+        size_t invokingState);
+    virtual size_t getRuleIndex() const override;
+    antlr4::tree::TerminalNode* AS();
+    WindowSpecificationContext* windowSpecification();
+    IdentifierContext* identifier();
+
+    virtual void enterRule(antlr4::tree::ParseTreeListener* listener) override;
+    virtual void exitRule(antlr4::tree::ParseTreeListener* listener) override;
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor* visitor) override;
+  };
+
+  WindowDefinitionContext* windowDefinition();
 
   class GroupByContext : public antlr4::ParserRuleContext {
    public:
@@ -3750,11 +3777,29 @@ class PrestoSqlParser : public antlr4::Parser {
 
   class OverContext : public antlr4::ParserRuleContext {
    public:
-    PrestoSqlParser::ExpressionContext* expressionContext = nullptr;
-    std::vector<ExpressionContext*> partition;
     OverContext(antlr4::ParserRuleContext* parent, size_t invokingState);
     virtual size_t getRuleIndex() const override;
     antlr4::tree::TerminalNode* OVER();
+    IdentifierContext* identifier();
+    WindowSpecificationContext* windowSpecification();
+
+    virtual void enterRule(antlr4::tree::ParseTreeListener* listener) override;
+    virtual void exitRule(antlr4::tree::ParseTreeListener* listener) override;
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor* visitor) override;
+  };
+
+  OverContext* over();
+
+  class WindowSpecificationContext : public antlr4::ParserRuleContext {
+   public:
+    PrestoSqlParser::IdentifierContext* existingWindowName = nullptr;
+    PrestoSqlParser::ExpressionContext* expressionContext = nullptr;
+    std::vector<ExpressionContext*> partition;
+    WindowSpecificationContext(
+        antlr4::ParserRuleContext* parent,
+        size_t invokingState);
+    virtual size_t getRuleIndex() const override;
     antlr4::tree::TerminalNode* PARTITION();
     std::vector<antlr4::tree::TerminalNode*> BY();
     antlr4::tree::TerminalNode* BY(size_t i);
@@ -3762,6 +3807,7 @@ class PrestoSqlParser : public antlr4::Parser {
     std::vector<SortItemContext*> sortItem();
     SortItemContext* sortItem(size_t i);
     WindowFrameContext* windowFrame();
+    IdentifierContext* identifier();
     std::vector<ExpressionContext*> expression();
     ExpressionContext* expression(size_t i);
 
@@ -3771,7 +3817,7 @@ class PrestoSqlParser : public antlr4::Parser {
     virtual std::any accept(antlr4::tree::ParseTreeVisitor* visitor) override;
   };
 
-  OverContext* over();
+  WindowSpecificationContext* windowSpecification();
 
   class WindowFrameContext : public antlr4::ParserRuleContext {
    public:
@@ -4691,6 +4737,7 @@ class PrestoSqlParser : public antlr4::Parser {
     antlr4::tree::TerminalNode* VERBOSE();
     antlr4::tree::TerminalNode* VERSION();
     antlr4::tree::TerminalNode* VIEW();
+    antlr4::tree::TerminalNode* WINDOW();
     antlr4::tree::TerminalNode* WORK();
     antlr4::tree::TerminalNode* WRITE();
     antlr4::tree::TerminalNode* YEAR();

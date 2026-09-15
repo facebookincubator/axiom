@@ -511,6 +511,10 @@ class AstVisitor {
     defaultVisit(node);
   }
 
+  virtual void visitWindowDefinition(WindowDefinition* node) {
+    defaultVisit(node);
+  }
+
   virtual void visitWindowFrame(WindowFrame* node) {
     defaultVisit(node);
   }

@@ -299,6 +299,9 @@ class PrestoSqlVisitor : public antlr4::tree::AbstractParseTreeVisitor {
   virtual std::any visitQuerySpecification(
       PrestoSqlParser::QuerySpecificationContext* context) = 0;
 
+  virtual std::any visitWindowDefinition(
+      PrestoSqlParser::WindowDefinitionContext* context) = 0;
+
   virtual std::any visitGroupBy(PrestoSqlParser::GroupByContext* context) = 0;
 
   virtual std::any visitSingleGroupingSet(
@@ -557,6 +560,9 @@ class PrestoSqlVisitor : public antlr4::tree::AbstractParseTreeVisitor {
   virtual std::any visitFilter(PrestoSqlParser::FilterContext* context) = 0;
 
   virtual std::any visitOver(PrestoSqlParser::OverContext* context) = 0;
+
+  virtual std::any visitWindowSpecification(
+      PrestoSqlParser::WindowSpecificationContext* context) = 0;
 
   virtual std::any visitWindowFrame(
       PrestoSqlParser::WindowFrameContext* context) = 0;

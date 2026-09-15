@@ -21,12 +21,68 @@ A window specification consists of:
   keys.
 - **Order keys**: ORDER BY columns with sort directions. Data must be sorted
   within each partition.
-- **Frame**: ROWS/RANGE/GROUPS with start and end bounds. This is per-function,
-  not per-specification.
+- **Frame**: ROWS/RANGE/GROUPS with start and end bounds. Each function retains
+  its resolved frame even when the optimizer groups functions that share
+  partition and order keys.
 
 Two window functions share the same specification when they have identical
 partition keys and identical order keys (same columns, same order, same sort
 directions).
+
+### Named Window Specifications
+
+Axiom implements the SQL:2003 `WINDOW` clause. The clause appears after
+`HAVING` and before the query's `ORDER BY`:
+
+```sql
+WINDOW name AS (
+  [existing_window_name]
+  [PARTITION BY expression, ...]
+  [ORDER BY sort_item, ...]
+  [frame]
+) [, ...]
+```
+
+A function can use the name directly with `OVER name`, or refine it with
+`OVER (name ...)`. For example:
+
+```sql
+WITH t(a, b) AS (
+  VALUES (1, 10), (1, 20), (2, 5)
+)
+SELECT
+  a,
+  b,
+  sum(b) OVER by_a AS partition_sum,
+  sum(b) OVER (ordered ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS rolling_sum
+FROM t
+WINDOW by_a AS (PARTITION BY a),
+       ordered AS (by_a ORDER BY b)
+ORDER BY a, b
+```
+
+The result is:
+
+| a | b  | partition_sum | rolling_sum |
+|---|----|---------------|-------------|
+| 1 | 10 | 30            | 10          |
+| 1 | 20 | 30            | 30          |
+| 2 | 5  | 5             | 5           |
+
+Named windows follow these rules:
+
+- Names are scoped to one query specification and compared
+  case-insensitively.
+- A definition can reference only a definition that appears earlier in the
+  same `WINDOW` clause.
+- A derived specification cannot add `PARTITION BY`.
+- A derived specification cannot add `ORDER BY` when the referenced window
+  already has one.
+- A derived specification cannot reference a window that has a frame.
+- A direct `OVER name` reference uses the complete named specification,
+  including its frame.
+- Expressions declared in the `WINDOW` clause resolve against query inputs.
+  Parts added inline in the query's `ORDER BY` can resolve `SELECT` aliases.
 
 ## Planning Algorithm
 

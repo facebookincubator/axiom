@@ -273,6 +273,8 @@ class AstPrinter : public AstVisitor {
 
   void visitWindow(Window* node) override;
 
+  void visitWindowDefinition(WindowDefinition* node) override;
+
   void visitWindowFrame(WindowFrame* node) override;
 
   void visitFrameBound(FrameBound* node) override;

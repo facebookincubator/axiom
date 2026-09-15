@@ -1119,14 +1119,23 @@ std::shared_ptr<Select> emptySelect(bool distinct = false) {
 
 std::shared_ptr<QuerySpecification> makeQuerySpec(
     const std::shared_ptr<Select>& select,
-    const RelationPtr& from = nullptr) {
-  return std::make_shared<QuerySpecification>(loc(), select, from);
+    const RelationPtr& from = nullptr,
+    std::vector<WindowDefinitionPtr> windows = {}) {
+  return std::make_shared<QuerySpecification>(
+      loc(), select, from, nullptr, nullptr, nullptr, std::move(windows));
 }
 
 std::shared_ptr<Table> makeTable(const std::string& name) {
   auto qn =
       std::make_shared<QualifiedName>(loc(), std::vector<std::string>{name});
   return std::make_shared<Table>(loc(), qn);
+}
+
+WindowDefinitionPtr makeWindowDefinition(const std::string& name) {
+  return std::make_shared<WindowDefinition>(
+      loc(),
+      std::make_shared<Identifier>(loc(), name, false),
+      std::make_shared<Window>(loc(), std::vector<ExpressionPtr>{longLit(1)}));
 }
 } // namespace
 
@@ -1168,6 +1177,19 @@ TEST(AstEqualityTest, querySpecificationNotEqualFrom) {
   auto a = makeQuerySpec(emptySelect(), makeTable("t1"));
   auto b = makeQuerySpec(emptySelect(), makeTable("t2"));
   EXPECT_FALSE(*a == *b);
+}
+
+TEST(AstEqualityTest, querySpecificationNotEqualWindows) {
+  auto a = makeQuerySpec(emptySelect(), nullptr, {makeWindowDefinition("w")});
+  auto b = makeQuerySpec(emptySelect());
+  EXPECT_FALSE(*a == *b);
+}
+
+TEST(AstEqualityTest, querySpecificationWindowsEqual) {
+  auto a = makeQuerySpec(emptySelect(), nullptr, {makeWindowDefinition("w")});
+  auto b = makeQuerySpec(emptySelect(), nullptr, {makeWindowDefinition("w")});
+  EXPECT_TRUE(*a == *b);
+  EXPECT_EQ(a->hash(), b->hash());
 }
 
 TEST(AstEqualityTest, singleColumnEquals) {
@@ -1628,6 +1650,27 @@ TEST(AstEqualityTest, windowNotEqualPartitionBy) {
       std::make_shared<Window>(loc(), std::vector<ExpressionPtr>{longLit(1)});
   auto b =
       std::make_shared<Window>(loc(), std::vector<ExpressionPtr>{longLit(2)});
+  EXPECT_FALSE(*a == *b);
+}
+
+TEST(AstEqualityTest, windowReferenceForm) {
+  auto name = std::make_shared<Identifier>(loc(), "w", false);
+  auto specification = std::make_shared<Window>(
+      loc(), std::vector<ExpressionPtr>{}, nullptr, nullptr, name);
+  auto reference = std::make_shared<Window>(loc(), name);
+  EXPECT_FALSE(*specification == *reference);
+}
+
+TEST(AstEqualityTest, windowDefinitionEquals) {
+  auto a = makeWindowDefinition("w");
+  auto b = makeWindowDefinition("w");
+  EXPECT_TRUE(*a == *b);
+  EXPECT_EQ(a->hash(), b->hash());
+}
+
+TEST(AstEqualityTest, windowDefinitionNotEqualName) {
+  auto a = makeWindowDefinition("w1");
+  auto b = makeWindowDefinition("w2");
   EXPECT_FALSE(*a == *b);
 }
 

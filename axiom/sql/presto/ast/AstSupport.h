@@ -263,17 +263,34 @@ class WindowFrame : public Node {
   std::shared_ptr<FrameBound> end_;
 };
 
+/// Describes an inline window specification or a direct named reference.
+///
+/// Examples:
+/// - `Window(location, partitionBy, orderBy, frame, inheritedName)` represents
+///   `OVER (inheritedName ...)`.
+/// - `Window(location, name)` represents `OVER name`.
+///
+/// Invariants:
+/// - A direct reference contains only its name.
+/// - An inline specification may inherit from one earlier named window.
 class Window : public Node {
  public:
   explicit Window(
       NodeLocation location,
       const std::vector<ExpressionPtr>& partitionBy,
       const std::shared_ptr<OrderBy>& orderBy = nullptr,
-      const std::shared_ptr<WindowFrame>& frame = nullptr)
+      const std::shared_ptr<WindowFrame>& frame = nullptr,
+      const std::shared_ptr<Identifier>& existingWindowName = nullptr)
       : Node(NodeType::kWindow, location),
         partitionBy_(partitionBy),
         orderBy_(orderBy),
-        frame_(frame) {}
+        frame_(frame),
+        existingWindowName_(existingWindowName) {}
+
+  Window(NodeLocation location, const std::shared_ptr<Identifier>& windowName)
+      : Node(NodeType::kWindow, location),
+        existingWindowName_(windowName),
+        isWindowReference_{true} {}
 
   const std::vector<ExpressionPtr>& partitionBy() const {
     return partitionBy_;
@@ -287,13 +304,23 @@ class Window : public Node {
     return frame_;
   }
 
+  const std::shared_ptr<Identifier>& existingWindowName() const {
+    return existingWindowName_;
+  }
+
+  bool isWindowReference() const {
+    return isWindowReference_;
+  }
+
   void accept(AstVisitor* visitor) override;
 
   size_t hash() const override {
     return folly::hash::hash_combine(
         Node::deepHashAll(partitionBy_),
         Node::deepHash(orderBy_),
-        Node::deepHash(frame_));
+        Node::deepHash(frame_),
+        Node::deepHash(existingWindowName_),
+        isWindowReference_);
   }
 
  protected:
@@ -301,14 +328,60 @@ class Window : public Node {
     const auto& o = *other.as<Window>();
     return Node::deepEqualAll(partitionBy_, o.partitionBy_) &&
         Node::deepEqual(orderBy_, o.orderBy_) &&
-        Node::deepEqual(frame_, o.frame_);
+        Node::deepEqual(frame_, o.frame_) &&
+        Node::deepEqual(existingWindowName_, o.existingWindowName_) &&
+        isWindowReference_ == o.isWindowReference_;
   }
 
  private:
   std::vector<ExpressionPtr> partitionBy_;
   std::shared_ptr<OrderBy> orderBy_;
   std::shared_ptr<WindowFrame> frame_;
+  std::shared_ptr<Identifier> existingWindowName_;
+  // Distinguishes `OVER name` from a parenthesized specification that inherits
+  // from `name`; SQL applies different frame rules to these forms.
+  bool isWindowReference_{false};
 };
+
+/// Associates a query-scoped name with a window specification.
+class WindowDefinition : public Node {
+ public:
+  WindowDefinition(
+      NodeLocation location,
+      const std::shared_ptr<Identifier>& name,
+      const std::shared_ptr<Window>& window)
+      : Node(NodeType::kWindowDefinition, location),
+        name_(name),
+        window_(window) {}
+
+  const std::shared_ptr<Identifier>& name() const {
+    return name_;
+  }
+
+  const std::shared_ptr<Window>& window() const {
+    return window_;
+  }
+
+  void accept(AstVisitor* visitor) override;
+
+  size_t hash() const override {
+    return folly::hash::hash_combine(
+        Node::deepHash(name_), Node::deepHash(window_));
+  }
+
+ protected:
+  bool equals(const Node& other) const override {
+    const auto& o = *other.as<WindowDefinition>();
+    return Node::deepEqual(name_, o.name_) &&
+        Node::deepEqual(window_, o.window_);
+  }
+
+ private:
+  std::shared_ptr<Identifier> name_;
+  std::shared_ptr<Window> window_;
+};
+
+using WindowDefinitionPtr = std::shared_ptr<WindowDefinition>;
 
 // Sorting and Grouping
 class SortItem : public Node {

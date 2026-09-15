@@ -44,22 +44,33 @@ class GroupByPlanner {
   /// When 'distinct' is true (GROUP BY DISTINCT), duplicate grouping sets
   /// are removed after expansion. Accepts a flat list of pre-resolved
   /// ExprApi items (AllColumns / SelectColumns must be expanded by the
-  /// caller).
+  /// caller). Window-definition expressions participate in semantic
+  /// validation but are not projected.
   void plan(
       const std::vector<GroupingElementPtr>& groupingElements,
       bool distinct,
       const std::vector<lp::ExprApi>& selectExprs,
       const ExpressionPtr& having,
-      const OrderByPtr& orderBy) &&;
+      const OrderByPtr& orderBy,
+      const std::vector<lp::ExprApi>& windowDefinitionExprs) &&;
+
+  /// Returns true if the query block contains an aggregate call.
+  static bool containsAggregate(
+      const std::vector<SelectItemPtr>& selectItems,
+      const ExpressionPtr& having,
+      const OrderByPtr& orderBy,
+      const std::vector<WindowDefinitionPtr>& windowDefinitions);
 
   /// Detects implicit global aggregation (e.g. SELECT count(*) FROM t)
   /// and plans it, including any ORDER BY over the aggregates. Returns true if
-  /// aggregation was added. Accepts raw AST select items and resolves them
-  /// internally.
+  /// aggregation was added. Aggregate detection includes WINDOW definitions.
+  /// Accepts raw AST select items and resolves them internally.
   bool tryPlanGlobalAgg(
       const std::vector<SelectItemPtr>& selectItems,
       const ExpressionPtr& having,
-      const OrderByPtr& orderBy) &&;
+      const OrderByPtr& orderBy,
+      bool queryHasAggregate,
+      const std::vector<lp::ExprApi>& windowDefinitionExprs) &&;
 
  private:
   std::vector<std::vector<lp::ExprApi>> expandGroupingSets(
@@ -69,7 +80,8 @@ class GroupByPlanner {
   void collectAggregates(
       const std::vector<lp::ExprApi>& selectExprs,
       const ExpressionPtr& having,
-      const OrderByPtr& orderBy);
+      const OrderByPtr& orderBy,
+      const std::vector<lp::ExprApi>& windowDefinitionExprs);
   void addAggregate(bool useGroupingSets);
   void rewritePostAggregateExprs();
 
@@ -120,6 +132,9 @@ class GroupByPlanner {
   // Maps each grouping-key expression to its index in groupingKeys_.
   facebook::velox::core::ExprMap<int32_t> groupingKeyToIndex_;
   std::vector<lp::ExprApi> projections_;
+
+  // Expressions from WINDOW definitions, retained for semantic validation.
+  std::vector<lp::ExprApi> windowDefinitionExprs_;
 
   // Deduplicated aggregate expressions. Aggregate options are embedded in
   // AggregateCallExpr nodes within the IExpr tree.

@@ -241,10 +241,10 @@ class ExprAnalyzer : public DefaultTraversalVisitor {
     return numAggregates_ > 0;
   }
 
-  // Returns true if 'expression' contains an aggregate call.
-  static bool containsAggregate(const ExpressionPtr& expression) {
+  // Returns true if 'node' contains an aggregate call.
+  static bool containsAggregate(Node& node) {
     ExprAnalyzer analyzer;
-    expression->accept(&analyzer);
+    node.accept(&analyzer);
     return analyzer.hasAggregate();
   }
 
@@ -476,7 +476,8 @@ void GroupByPlanner::plan(
     bool distinct,
     const std::vector<lp::ExprApi>& selectExprs,
     const ExpressionPtr& having,
-    const OrderByPtr& orderBy) && {
+    const OrderByPtr& orderBy,
+    const std::vector<lp::ExprApi>& windowDefinitionExprs) && {
   // Expand ROLLUP, CUBE, GROUPING SETS into a list of grouping sets, then
   // extract deduplicated grouping keys and per-set index vectors.
   // Populates: groupingSets_, groupingKeys_, groupingSetsIndices_,
@@ -493,13 +494,14 @@ void GroupByPlanner::plan(
   // function calls, then add the Aggregate plan node.
   // Populates: aggregates_, projections_, filter_,
   //   sortingKeyExprs_, outputColumns_.
-  collectAggregates(selectExprs, having, orderBy);
+  collectAggregates(selectExprs, having, orderBy, windowDefinitionExprs);
 
   for (const auto& agg : aggregates_) {
     rejectGroupingInAggregates(agg.expr());
   }
 
   resolveGroupingCalls(projections_);
+  resolveGroupingCalls(windowDefinitionExprs_);
   if (filter_.has_value()) {
     filter_ =
         lp::ExprApi(rewriteGroupingMarker(filter_->expr()), filter_->alias());
@@ -536,35 +538,16 @@ void GroupByPlanner::plan(
 bool GroupByPlanner::tryPlanGlobalAgg(
     const std::vector<SelectItemPtr>& selectItems,
     const ExpressionPtr& having,
-    const OrderByPtr& orderBy) && {
+    const OrderByPtr& orderBy,
+    bool queryHasAggregate,
+    const std::vector<lp::ExprApi>& windowDefinitionExprs) && {
   for (const auto& item : selectItems) {
     if (item->is(NodeType::kAllColumns) || item->is(NodeType::kSelectColumns)) {
       return false;
     }
   }
 
-  // Count visible aggregates in SELECT, HAVING and ORDER BY, including
-  // outer-scope aggregates in lift-candidate scalar subqueries.
-  // `ExprAnalyzer` rejects nested aggregates as a side effect of the walk.
-  bool hasAggregate{false};
-
-  for (const auto& item : selectItems) {
-    VELOX_CHECK(item->is(NodeType::kSingleColumn));
-    hasAggregate |=
-        ExprAnalyzer::containsAggregate(item->as<SingleColumn>()->expression());
-  }
-
-  if (having != nullptr) {
-    hasAggregate |= ExprAnalyzer::containsAggregate(having);
-  }
-
-  if (orderBy != nullptr) {
-    for (const auto& sortItem : orderBy->sortItems()) {
-      hasAggregate |= ExprAnalyzer::containsAggregate(sortItem->sortKey());
-    }
-  }
-
-  if (!hasAggregate) {
+  if (!queryHasAggregate) {
     return false;
   }
 
@@ -580,8 +563,46 @@ bool GroupByPlanner::tryPlanGlobalAgg(
     selectExprs.push_back(std::move(expr));
   }
 
-  std::move(*this).plan({}, /*distinct=*/false, selectExprs, having, orderBy);
+  std::move(*this).plan(
+      {},
+      /*distinct=*/false,
+      selectExprs,
+      having,
+      orderBy,
+      windowDefinitionExprs);
   return true;
+}
+
+bool GroupByPlanner::containsAggregate(
+    const std::vector<SelectItemPtr>& selectItems,
+    const ExpressionPtr& having,
+    const OrderByPtr& orderBy,
+    const std::vector<WindowDefinitionPtr>& windowDefinitions) {
+  // `ExprAnalyzer` rejects nested aggregates as a side effect of the walk.
+  bool hasAggregate{false};
+
+  for (const auto& item : selectItems) {
+    if (item->is(NodeType::kSingleColumn)) {
+      hasAggregate |= ExprAnalyzer::containsAggregate(
+          *item->as<SingleColumn>()->expression());
+    }
+  }
+
+  if (having != nullptr) {
+    hasAggregate |= ExprAnalyzer::containsAggregate(*having);
+  }
+
+  if (orderBy != nullptr) {
+    for (const auto& sortItem : orderBy->sortItems()) {
+      hasAggregate |= ExprAnalyzer::containsAggregate(*sortItem->sortKey());
+    }
+  }
+
+  for (const auto& definition : windowDefinitions) {
+    hasAggregate |= ExprAnalyzer::containsAggregate(*definition->window());
+  }
+
+  return hasAggregate;
 }
 
 std::vector<std::vector<lp::ExprApi>> GroupByPlanner::expandGroupingSets(
@@ -664,7 +685,8 @@ void GroupByPlanner::deduplicateGroupingKeys() {
 void GroupByPlanner::collectAggregates(
     const std::vector<lp::ExprApi>& selectExprs,
     const ExpressionPtr& having,
-    const OrderByPtr& orderBy) {
+    const OrderByPtr& orderBy,
+    const std::vector<lp::ExprApi>& windowDefinitionExprs) {
   // Go over SELECT expressions and figure out for each: whether a grouping
   // key, a function of one or more grouping keys, a constant, an aggregate
   // or a function over one or more aggregates and possibly grouping keys.
@@ -685,6 +707,11 @@ void GroupByPlanner::collectAggregates(
     }
 
     projections_.emplace_back(selectExpr);
+  }
+
+  for (const auto& expr : windowDefinitionExprs) {
+    findAggregates(expr.expr(), aggregates_, aggregateSet);
+    windowDefinitionExprs_.push_back(expr);
   }
 
   if (having != nullptr) {
@@ -862,6 +889,10 @@ void GroupByPlanner::rewritePostAggregateExprs() {
   }
 
   for (auto& expr : sortingKeyExprs_) {
+    rewriteExpr(expr);
+  }
+
+  for (auto& expr : windowDefinitionExprs_) {
     rewriteExpr(expr);
   }
 }

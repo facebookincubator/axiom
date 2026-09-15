@@ -226,6 +226,7 @@ const auto& nodeTypeNames() {
       {NodeType::kProperty, "Property"},
       {NodeType::kCallArgument, "CallArgument"},
       {NodeType::kWindow, "Window"},
+      {NodeType::kWindowDefinition, "WindowDefinition"},
       {NodeType::kWindowFrame, "WindowFrame"},
       {NodeType::kFrameBound, "FrameBound"},
       {NodeType::kIsolation, "Isolation"},
@@ -788,6 +789,10 @@ void CallArgument::accept(AstVisitor* visitor) {
 
 void Window::accept(AstVisitor* visitor) {
   visitor->visitWindow(this);
+}
+
+void WindowDefinition::accept(AstVisitor* visitor) {
+  visitor->visitWindowDefinition(this);
 }
 
 void WindowFrame::accept(AstVisitor* visitor) {
