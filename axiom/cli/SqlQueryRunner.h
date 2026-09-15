@@ -244,8 +244,8 @@ class SqlQueryRunner {
       std::function<std::string()> queryIdGenerator = {});
 
   struct RunOptions {
-    int32_t numWorkers{4};
-    int32_t numDrivers{4};
+    int32_t numWorkers{1};
+    int32_t numDrivers{1};
     uint64_t splitTargetBytes{16 << 20};
 
     /// Cooperative execution deadline in microseconds; 0 means no limit. Bounds
