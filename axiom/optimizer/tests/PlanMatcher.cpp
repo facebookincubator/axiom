@@ -383,11 +383,13 @@ class FixedPointMatcher : public PlanMatcherImpl<FixedPointNode> {
     }
 
     if (const auto& convergence = match_->convergencePlan()) {
-      EXPECT_NE(plan.convergenceConfig().plan, nullptr);
+      EXPECT_EQ(plan.convergenceConfig().plans.size(), 1);
       AXIOM_TEST_RETURN_IF_FAILURE
       if (!convergence
                ->match(
-                   plan.convergenceConfig().plan, symbols, /*context=*/nullptr)
+                   plan.convergenceConfig().plans.front(),
+                   symbols,
+                   /*context=*/nullptr)
                .match) {
         return MatchResult::failure();
       }
