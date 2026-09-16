@@ -1220,6 +1220,17 @@ class ConnectorMetadata {
 
   virtual ~ConnectorMetadata() = default;
 
+  /// Returns what this connector keeps for the query, or nullptr if it keeps
+  /// nothing. Takes the session because that state may depend on the query's
+  /// identity or this connector's properties.
+  ///
+  /// Called at most once per successful build of this connector's session, on
+  /// a session that is complete except for the state being made.
+  virtual std::unique_ptr<ConnectorQueryState> makeQueryState(
+      const ConnectorSession& /*session*/) const {
+    return nullptr;
+  }
+
   /// Return a TablePtr given the table name. The returned Table object is
   /// immutable. If updates to the Table object are required, the
   /// ConnectorMetadata is required to drop its reference to the existing Table
