@@ -21,13 +21,14 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <algorithm>
-#include <cstdio>
 #include <iostream>
 #include <iterator>
 #include <optional>
 #include <set>
 #include <sstream>
+#include <string_view>
 #include "axiom/cli/LiveProgressDisplay.h"
+#include "axiom/cli/Pager.h"
 #include "axiom/cli/QueryInterruptHandler.h"
 #include "axiom/cli/ResultPrinter.h"
 #include "axiom/cli/StdinReader.h"
@@ -115,21 +116,15 @@ int terminalWidth(int fileDescriptor) {
 
 // Sends formatted query results to the configured terminal pager. A pager is
 // deliberately used only when stdout is a terminal: redirected output remains
-// plain text for scripts and pipes. Return false so callers can fall back to
-// stdout when the pager cannot be started or fails.
-bool printWithPager(const std::string& text) {
+// plain text for scripts and pipes. Return false when the results still need
+// printing, so callers can fall back to stdout.
+bool printWithPager(std::string_view text) {
   if (!isatty(STDOUT_FILENO) || FLAGS_pager.empty()) {
     return false;
   }
 
   std::cout.flush();
-  FILE* pager = popen(FLAGS_pager.c_str(), "w");
-  if (pager == nullptr) {
-    return false;
-  }
-
-  const auto written = std::fwrite(text.data(), 1, text.size(), pager);
-  return written == text.size() && pclose(pager) == 0;
+  return axiom::cli::Pager::print(text, FLAGS_pager);
 }
 
 // Extracts a file path argument from a dot-command string like ".run <file>".
