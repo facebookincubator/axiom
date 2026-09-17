@@ -18,6 +18,7 @@ target_link_libraries(
   axiom_sql_presto_ast
   axiom_sql_presto_grammar
   axiom_sql_presto_error
+  axiom_sql_presto_parser_options
   velox_exception
 )
 

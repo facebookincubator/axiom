@@ -17,6 +17,18 @@ add_subdirectory(grammar)
 add_library(axiom_sql_presto_error PrestoSqlError.cpp)
 target_link_libraries(axiom_sql_presto_error Folly::folly velox_exception fmt::fmt)
 
+# AstBuilder holds a ParserOptions, so ParserOptions cannot be part of
+# axiom_sql_presto_parser: that library links the AST library, and the resulting
+# cycle only links by accident of archive order.
+add_library(axiom_sql_presto_parser_options ParserOptions.cpp)
+target_link_libraries(
+  axiom_sql_presto_parser_options
+  Folly::folly
+  velox_common_config
+  velox_exception
+  fmt::fmt
+)
+
 add_subdirectory(ast)
 add_subdirectory(example)
 
@@ -26,7 +38,6 @@ add_library(
   DisplayNames.cpp
   ExpressionPlanner.cpp
   GroupByPlanner.cpp
-  ParserOptions.cpp
   RecursiveCteValidator.cpp
   SortProjection.cpp
   PrestoParser.cpp
@@ -40,6 +51,7 @@ target_link_libraries(
   axiom_logical_plan_builder
   axiom_sql_presto_ast
   axiom_sql_presto_error
+  axiom_sql_presto_parser_options
   axiom_system_connector
   velox_common_base
   velox_common_config
