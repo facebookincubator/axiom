@@ -487,7 +487,7 @@ PlanAndStats Optimization::toVeloxPlan(RelationOpPtr plan) {
 }
 
 // static
-PlanAndStats Optimization::toVeloxPlan(
+PlanAndStats Optimization::deprecatedToVeloxPlan(
     OptimizerSessionPtr optimizerSession,
     runner::RunnerSessionPtr runnerSession,
     const logical_plan::LogicalPlanNode& logicalPlan,
@@ -519,7 +519,7 @@ PlanAndStats Optimization::toVeloxPlan(
       evaluator,
       std::move(runnerOptions)};
 
-  auto best = opt.bestPlan();
+  auto best = opt.deprecatedBestPlan();
   return opt.toVeloxPlan(best->op);
 }
 
@@ -536,7 +536,7 @@ void Optimization::trace(
   }
 }
 
-PlanP Optimization::bestPlan() {
+PlanP Optimization::deprecatedBestPlan() {
   PlanObjectSet targetColumns;
   targetColumns.unionObjects(root_->columns);
 

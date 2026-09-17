@@ -45,7 +45,9 @@ class Optimization {
       MultiFragmentPlan::Options runnerOptions);
 
   /// Simplified API for usage in testing and tooling.
-  static PlanAndStats toVeloxPlan(
+  ///
+  /// Deprecated. Plan with `v2::Optimizer::optimize()` instead.
+  static PlanAndStats deprecatedToVeloxPlan(
       OptimizerSessionPtr optimizerSession,
       runner::RunnerSessionPtr runnerSession,
       const logical_plan::LogicalPlanNode& logicalPlan,
@@ -56,7 +58,9 @@ class Optimization {
   Optimization& operator=(const Optimization& other) = delete;
 
   /// Returns the optimized RelationOp plan for 'plan' given at construction.
-  PlanP bestPlan();
+  ///
+  /// Deprecated. Plan with `v2::Optimizer::optimize()` instead.
+  PlanP deprecatedBestPlan();
 
   /// Returns a set of per-stage Velox PlanNode trees.
   PlanAndStats toVeloxPlan(RelationOpPtr plan);
@@ -214,8 +218,8 @@ class Optimization {
     return repartitionGroupedLeaves_;
   }
 
-  /// Final leaf -> PartitionType map for the root fragment, set by bestPlan()
-  /// and read by ToVelox when emitting the root fragment.
+  /// Final leaf -> PartitionType map for the root fragment, set by
+  /// deprecatedBestPlan() and read by ToVelox when emitting the root fragment.
   GroupedLeaves& rootGroupedLeaves() {
     return rootGroupedLeaves_;
   }
@@ -509,8 +513,8 @@ class Optimization {
       repartitionGroupedLeaves_;
 
   // Final leaf -> scaled-down PartitionType map for the root (topmost)
-  // fragment, captured by bestPlan() from the winning Plan's per-leaf map.
-  // Consumed by ToVelox at root emission.
+  // fragment, captured by deprecatedBestPlan() from the winning Plan's per-leaf
+  // map. Consumed by ToVelox at root emission.
   GroupedLeaves rootGroupedLeaves_;
 
   // Per-Plan map from leaf RelationOp to its scaled-down PartitionType,

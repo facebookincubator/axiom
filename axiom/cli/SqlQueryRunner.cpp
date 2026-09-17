@@ -2008,7 +2008,7 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
     return {};
   }
 
-  auto best = optimization.bestPlan();
+  auto best = optimization.deprecatedBestPlan();
   if (checkBestPlan && !checkBestPlan(*best->op)) {
     return {};
   }
