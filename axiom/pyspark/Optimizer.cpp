@@ -163,7 +163,7 @@ facebook::axiom::optimizer::PlanAndStats optimize(
       queryCtx,
       evaluator,
       runnerOpts);
-  auto best = opt.bestPlan();
+  auto best = opt.deprecatedBestPlan();
   LOG(INFO) << "Axiom best plan:\n" << best->toString(false);
 
   return opt.toVeloxPlan(best->op);

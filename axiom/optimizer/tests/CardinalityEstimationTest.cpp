@@ -66,7 +66,7 @@ class CardinalityEstimationTest : public test::QueryTestBase {
     verifyOptimization(
         *logicalPlan,
         [&](Optimization& optimization) {
-          auto* plan = optimization.bestPlan();
+          auto* plan = optimization.deprecatedBestPlan();
           ASSERT_NE(plan, nullptr) << "Best plan should not be null";
 
           callback(*plan);

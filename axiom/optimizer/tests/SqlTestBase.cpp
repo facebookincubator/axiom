@@ -193,7 +193,7 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunner(
             queryCtx,
             evaluator,
             options);
-        auto best = optimization.bestPlan();
+        auto best = optimization.deprecatedBestPlan();
         return optimization.toVeloxPlan(best->op);
       });
 }

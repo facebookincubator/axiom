@@ -180,7 +180,7 @@ class RelationOpPrinterTest : public ::testing::Test {
         evaluator,
         {.maxRemotePartitions = numWorkers, .maxLocalPartitions = numDrivers}};
 
-    auto* plan = opt.bestPlan();
+    auto* plan = opt.deprecatedBestPlan();
     consume(*plan->op);
   }
 
