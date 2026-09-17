@@ -31,7 +31,10 @@ void TpchDataGenerator::createTables(
     const TableStartingCallback& onTableStarting,
     const TableCreatedCallback& onTableCreated) {
   Connectors connectors;
-  ::axiom::sql::SqlQueryRunner runner{"tpch_data_generator"};
+  ::axiom::sql::SqlQueryRunner runner{
+      "tpch_data_generator",
+      /*progressScheduler=*/nullptr,
+      /*useOptimizerV2=*/false};
   runner.initialize([&]() {
     connectors.registerTpchConnector();
     connectors.registerLocalHiveConnector(

@@ -137,8 +137,8 @@ def run_once(
         "--query",
         sql,
     ]
-    if v2:
-        args.append("--v2")
+    if not v2:
+        args.append("--v1")
     return subprocess.run(args, capture_output=True, text=True).stdout
 
 

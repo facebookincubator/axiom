@@ -78,8 +78,8 @@ run_chain() {  # $1 = N, $2 = v1|v2
   local N=$1 mode=$2 from="t1" where="t1.a = t2.a"
   for i in $(seq 2 "$N"); do from="$from, t$i"; done
   for i in $(seq 3 "$N"); do where="$where AND t$((i-1)).a = t$i.a"; done
-  local explain="EXPLAIN (TYPE OPTIMIZED)" flag=""
-  [ "$mode" = v2 ] && explain="EXPLAIN" flag="--v2"
+  local explain="EXPLAIN (TYPE OPTIMIZED)" flag="--v1"
+  [ "$mode" = v2 ] && explain="EXPLAIN" flag=""
   timeout 120 buck2 run @mode/opt fbcode//axiom/cli:cli -- $flag \
     --etc_dir /tmp/chain --catalog repro --num_workers 1 --num_drivers 1 \
     --print_timing \
