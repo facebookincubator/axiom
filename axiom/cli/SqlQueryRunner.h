@@ -203,14 +203,13 @@ class SqlQueryRunner {
   /// `progressScheduler` (not owned, must outlive this runner) drives progress
   /// polling for queries that set RunOptions::onProgress. If null, such a query
   /// fails loudly rather than running without the progress it asked for.
-  /// @param useOptimizerV2 When true, all queries route through the v2
-  /// optimizer. EXPLAIN (type graph|optimized) fails with a user error under
-  /// v2, because it inspects optimizer internals the v2 pipeline does not
-  /// expose.
+  /// @param useOptimizerV2 Routes all queries through the v2 optimizer, the
+  /// default. EXPLAIN (type graph) is supported only under v1, because it
+  /// inspects optimizer internals the v2 pipeline does not expose.
   explicit SqlQueryRunner(
       std::string user,
       folly::FunctionScheduler* progressScheduler = nullptr,
-      bool useOptimizerV2 = false)
+      bool useOptimizerV2 = true)
       : user_{std::move(user)},
         useOptimizerV2_{useOptimizerV2},
         progressScheduler_{progressScheduler} {
@@ -767,7 +766,7 @@ class SqlQueryRunner {
   std::string defaultSchema_;
   const std::string user_;
   std::atomic<int32_t> queryCounter_{0};
-  const bool useOptimizerV2_{false};
+  const bool useOptimizerV2_{true};
 
   // Progress-polling scheduler (see constructor). Started idempotently before
   // each progress-reporting query.

@@ -37,10 +37,10 @@ DEFINE_string(
     "Default catalog (connector). If empty, uses tpch or hive if --data_path is set.");
 DEFINE_string(schema, "", "Default schema.");
 DEFINE_bool(
-    v2,
+    v1,
     false,
-    "Use the v2 optimizer. EXPLAIN (type graph|optimized) is not supported "
-    "under v2 yet.");
+    "Use the legacy v1 optimizer. EXPLAIN (type graph) is supported only "
+    "under v1.");
 
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv, false);
@@ -52,7 +52,7 @@ int main(int argc, char** argv) {
   // Progress-polling scheduler for the console's live progress bar.
   folly::FunctionScheduler progressScheduler;
   axiom::sql::SqlQueryRunner runner{
-      axiom::sql::SystemUser::resolve(), &progressScheduler, FLAGS_v2};
+      axiom::sql::SystemUser::resolve(), &progressScheduler, !FLAGS_v1};
   auto initializeConnectors = [&]() {
     VELOX_USER_CHECK(
         FLAGS_data_path.empty() || FLAGS_etc_dir.empty(),

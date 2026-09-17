@@ -180,7 +180,12 @@ int main(int argc, char** argv) {
       facebook::velox::memory::MemoryManager::Options{});
 
   facebook::axiom::Connectors connectors;
-  axiom::sql::SqlQueryRunner runner{axiom::sql::SystemUser::resolve()};
+  // `--mode graph` renders the v1 DerivedTable, which v2 does not expose.
+  // The other modes plan with the default optimizer.
+  axiom::sql::SqlQueryRunner runner{
+      axiom::sql::SystemUser::resolve(),
+      /*progressScheduler=*/nullptr,
+      /*useOptimizerV2=*/FLAGS_mode != "graph"};
   runner.initialize([&]() {
     auto defaultConnector = connectors.registerTpchConnector();
     auto defaultSchema = "tiny";

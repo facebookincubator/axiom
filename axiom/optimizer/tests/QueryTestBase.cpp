@@ -249,7 +249,7 @@ PlanCost QueryTestBase::optimizationCost(
       queryCtx,
       evaluator,
       options);
-  return opt.bestPlan()->cost;
+  return opt.deprecatedBestPlan()->cost;
 }
 
 void QueryTestBase::verifyOptimization(
@@ -382,7 +382,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
       *planPath << "Query Graph:\n\n" << opt.rootDt()->toString() << "\n\n";
     }
 
-    auto best = opt.bestPlan();
+    auto best = opt.deprecatedBestPlan();
     if (planPath != nullptr) {
       *planPath << "Optimized plan (oneline):\n\n"
                 << best->op->toOneline() << "\n\n";

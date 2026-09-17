@@ -1531,7 +1531,9 @@ std::string SqlQueryRunner::runExplain(
 
     case presto::ExplainStatement::Type::kGraph: {
       VELOX_USER_CHECK(
-          !useOptimizerV2_, "EXPLAIN TYPE GRAPH is not supported with --v2");
+          !useOptimizerV2_,
+          "EXPLAIN TYPE GRAPH is supported only by the v1 optimizer. "
+          "Rerun with --v1.");
       std::string text;
       auto queryCtx = newQuery(options);
       {
@@ -2008,7 +2010,7 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
     return {};
   }
 
-  auto best = optimization.bestPlan();
+  auto best = optimization.deprecatedBestPlan();
   if (checkBestPlan && !checkBestPlan(*best->op)) {
     return {};
   }
