@@ -1152,7 +1152,12 @@ class TableObject : public PlanObject {
 /// BaseTable but the same BaseTable can be referenced from many TableScans, for
 /// example if accessing different indices in a secondary to primary key lookup.
 struct BaseTable : public TableObject {
-  BaseTable() : TableObject{PlanType::kTableNode} {}
+  BaseTable(Name correlationName, SchemaTableCP schema)
+      : TableObject{PlanType::kTableNode},
+        cname{correlationName},
+        schemaTable{schema} {
+    VELOX_CHECK_NOT_NULL(schemaTable);
+  }
 
   /// Correlation name, distinguishes between uses of the same schema table.
   Name cname{nullptr};

@@ -599,21 +599,24 @@ class TestConnectorMetadata : public ConnectorMetadata {
 
   /// Signature of a matcher that, for a given plan subtree, returns
   /// the pushdown roots this connector wants to absorb.
-  using PushdownMatcher = std::function<std::vector<PushdownRoot>(
-      const logical_plan::LogicalPlanNode&)>;
+  using PushdownMatcher =
+      std::function<std::vector<PushdownRoot>(const optimizer::v2::Node&)>;
+  using AsyncPushdownMatcher =
+      std::function<folly::coro::Task<std::vector<PushdownRoot>>(
+          ConnectorSessionPtr,
+          const optimizer::v2::Node&)>;
 
-  /// Installs 'matcher' as the connector's pushdown matcher. A non-null
-  /// matcher opts the connector into pushdown and is invoked from
-  /// `co_pushdownPlan`. Passing nullptr clears the matcher and opts
-  /// out of pushdown.
+  /// Installs a synchronous pushdown matcher. Passing nullptr clears it.
   void setPushdownMatcher(PushdownMatcher matcher);
 
-  bool isPushdownSupported() const override {
-    return pushdownMatcher_ != nullptr;
-  }
+  /// Installs a matcher that may suspend while producing pushdown roots.
+  void setAsyncPushdownMatcher(AsyncPushdownMatcher matcher);
 
-  folly::coro::Task<std::vector<PushdownRoot>> co_pushdownPlan(
-      const logical_plan::LogicalPlanNode& plan) const override;
+  bool isPushdownSupported() const override;
+
+  folly::coro::Task<std::vector<PushdownRoot>> co_pushdown(
+      ConnectorSessionPtr session,
+      const optimizer::v2::Node& offeredSubtree) const override;
 
   TablePtr findTable(const SchemaTableName& tableName) override;
 
@@ -761,7 +764,7 @@ class TestConnectorMetadata : public ConnectorMetadata {
   TestConnector* connector_;
   folly::F14FastMap<SchemaTableName, std::shared_ptr<TestTable>> tables_;
   std::unique_ptr<TestSplitManager> splitManager_;
-  PushdownMatcher pushdownMatcher_;
+  AsyncPushdownMatcher asyncPushdownMatcher_;
 
   struct ViewDefinition {
     velox::RowTypePtr type;

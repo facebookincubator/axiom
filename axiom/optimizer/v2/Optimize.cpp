@@ -19,6 +19,7 @@
 #include "axiom/optimizer/ConstantFold.h"
 #include "axiom/optimizer/ExplainIo.h"
 #include "axiom/optimizer/v2/Builder.h"
+#include "axiom/optimizer/v2/ConnectorPushdownPass.h"
 #include "axiom/optimizer/v2/DecorrelatePass.h"
 #include "axiom/optimizer/v2/EmitPass.h"
 #include "axiom/optimizer/v2/EstimateLeafStatsPass.h"
@@ -110,6 +111,7 @@ const auto& passNames() {
       {Optimizer::Pass::kLimitAndOrder, "LIMIT_AND_ORDER"},
       {Optimizer::Pass::kPushdownAndPrune, "PUSHDOWN_AND_PRUNE"},
       {Optimizer::Pass::kFoldMetadataAggregate, "FOLD_METADATA_AGGREGATE"},
+      {Optimizer::Pass::kConnectorPushdown, "CONNECTOR_PUSHDOWN"},
       {Optimizer::Pass::kEstimateLeafStats, "ESTIMATE_LEAF_STATS"},
       {Optimizer::Pass::kPlanPhysical, "PLAN_PHYSICAL"},
   };
@@ -125,7 +127,13 @@ NodeCP Optimizer::planTo(
     const MultiFragmentPlan::Options* options) {
   ConstantPlanRunner constantPlanRunner{queryCtx_};
   auto translated = TranslatePass::run(
-      plan_, schema_, evaluator_, builder_, session_, constantPlanRunner);
+      plan_,
+      schema_,
+      schemaResolver_,
+      evaluator_,
+      builder_,
+      session_,
+      constantPlanRunner);
   outputColumns_ = translated.outputColumns;
   outputNames_ = translated.outputNames;
   if (pass == Pass::kTranslate) {
@@ -155,6 +163,14 @@ NodeCP Optimizer::planTo(
 
   node = FoldMetadataAggregatePass::run(node, builder_, session_);
   if (pass == Pass::kFoldMetadataAggregate) {
+    return node;
+  }
+
+  if (translated.connectorPushdownSupported) {
+    node = ConnectorPushdownPass::run(
+        node, builder_, schema_, schemaResolver_, session_, evaluator_);
+  }
+  if (pass == Pass::kConnectorPushdown) {
     return node;
   }
 

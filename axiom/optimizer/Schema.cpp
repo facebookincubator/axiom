@@ -151,6 +151,12 @@ std::optional<float> connectorCardinality(
   }
   return std::max<float>(1, static_cast<float>(*numRows));
 }
+
+const std::string& tableConnectorId(const connector::Table& connectorTable) {
+  VELOX_CHECK(!connectorTable.layouts().empty());
+  VELOX_CHECK_NOT_NULL(connectorTable.layouts().front());
+  return connectorTable.layouts().front()->connectorId();
+}
 } // namespace
 
 Value Value::fromColumnStatistics(
@@ -183,12 +189,21 @@ Value Value::fromColumnStatistics(
 }
 
 SchemaTable::SchemaTable(const connector::Table& connectorTable)
+    : SchemaTable(connectorTable, tableConnectorId(connectorTable)) {}
+
+SchemaTable::SchemaTable(
+    const connector::Table& connectorTable,
+    std::string metadataId)
     : connectorTable{&connectorTable},
-      cardinality{connectorCardinality(connectorTable)} {}
+      cardinality{connectorCardinality(connectorTable)},
+      metadataId_{std::move(metadataId)} {
+  VELOX_CHECK(!metadataId_.empty());
+}
 
 SchemaTableCP Schema::buildSchemaTable(
-    const connector::Table& connectorTable) const {
-  auto* schemaTable = make<SchemaTable>(connectorTable);
+    const connector::Table& connectorTable,
+    std::string metadataId) const {
+  auto* schemaTable = make<SchemaTable>(connectorTable, std::move(metadataId));
   auto& schemaColumns = schemaTable->columns;
 
   const auto& tableColumns = connectorTable.columnMap();
@@ -254,7 +269,8 @@ SchemaTableCP Schema::buildSchemaTable(
 SchemaTableCP Schema::adoptConnectorTable(
     connector::TablePtr connectorTable) const {
   VELOX_CHECK_NOT_NULL(connectorTable);
-  auto* schemaTable = buildSchemaTable(*connectorTable);
+  auto* schemaTable =
+      buildSchemaTable(*connectorTable, tableConnectorId(*connectorTable));
   adoptedConnectorTables_.push_back(std::move(connectorTable));
   return schemaTable;
 }
@@ -279,7 +295,8 @@ SchemaTableCP FOLLY_NULLABLE Schema::findTable(
     return nullptr;
   }
 
-  auto* schemaTable = buildSchemaTable(*connectorTable);
+  auto* schemaTable =
+      buildSchemaTable(*connectorTable, std::string{connectorId});
   table = {std::move(connectorTable), schemaTable};
   return schemaTable;
 }

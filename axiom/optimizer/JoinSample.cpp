@@ -122,8 +122,7 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
         velox::Constant<int64_t>>({kSample});
   });
 
-  auto base = make<BaseTable>();
-  base->schemaTable = table;
+  auto base = make<BaseTable>(nullptr, table);
   base->filteredCardinality = table->cardinality;
 
   PlanObjectSet sampleColumns;
