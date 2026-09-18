@@ -477,12 +477,6 @@ class SqlQueryRunner {
       const RunOptions& options,
       const facebook::axiom::connector::ConnectorContextPtr& context);
 
-  /// Generates DOT representation of the query graph for a single SELECT
-  /// statement. The output can be rendered using Graphviz:
-  ///   dot -Tsvg output.dot -o output.svg
-  /// @param sql A single SELECT or EXPLAIN SELECT statement.
-  std::string toQueryGraphDot(std::string_view sql);
-
   /// Generates DOT representation of the logical plan for a single SELECT
   /// statement. The output can be rendered using Graphviz:
   ///   dot -Tsvg output.dot -o output.svg
