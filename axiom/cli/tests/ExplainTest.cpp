@@ -431,7 +431,7 @@ TEST_P(ExplainTest, explainFormatGraphviz) {
   if (useV2_) {
     VELOX_ASSERT_THROW(
         run("EXPLAIN (TYPE GRAPH, FORMAT GRAPHVIZ) SELECT 1 AS x"),
-        "EXPLAIN TYPE GRAPH is not supported with --v2");
+        "EXPLAIN TYPE GRAPH is not supported by the v2 optimizer");
   } else {
     auto graphviz = run("EXPLAIN (TYPE GRAPH, FORMAT GRAPHVIZ) SELECT 1 AS x");
     ASSERT_TRUE(graphviz.message.has_value());

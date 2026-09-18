@@ -1530,7 +1530,8 @@ std::string SqlQueryRunner::runExplain(
 
     case presto::ExplainStatement::Type::kGraph: {
       VELOX_USER_CHECK(
-          !useOptimizerV2_, "EXPLAIN TYPE GRAPH is not supported with --v2");
+          !useOptimizerV2_,
+          "EXPLAIN TYPE GRAPH is not supported by the v2 optimizer.");
       std::string text;
       auto queryCtx = newQuery(options);
       {
