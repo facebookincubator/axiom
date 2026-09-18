@@ -23,16 +23,16 @@ Both optimizers are driven through the Axiom CLI against on-disk TPC-H Parquet:
 # (its best), not the greedy heuristic that kicks in at >=5 tables. Both engines
 # use the same worker/driver count: 1/1 for the single-node baseline shown here.
 SET SESSION optimizer.greedy_join_threshold = 2147483647;
+EXPLAIN (TYPE EXECUTABLE) <query>   --data_path <tpch> --v1 --num_workers 1 --num_drivers 1
+# v2 (the default)
 EXPLAIN (TYPE EXECUTABLE) <query>   --data_path <tpch> --num_workers 1 --num_drivers 1
-# v2
-EXPLAIN (TYPE EXECUTABLE) <query>   --data_path <tpch> --v2 --num_workers 1 --num_drivers 1
 # plan quality: runtime row counts + per-operator CPU:
-EXPLAIN ANALYZE <query>   --data_path <tpch> [--v2] --num_workers 1 --num_drivers 1 --repeat 6 --print_timing
+EXPLAIN ANALYZE <query>   --data_path <tpch> [--v1] --num_workers 1 --num_drivers 1 --repeat 6 --print_timing
 # optimizer speed: the Optimizing: phase from --print_timing (plain EXPLAIN, no execute):
-EXPLAIN <query>           --data_path <tpch> [--v2] --num_workers 1 --num_drivers 1 --repeat 6 --print_timing
+EXPLAIN <query>           --data_path <tpch> [--v1] --num_workers 1 --num_drivers 1 --repeat 6 --print_timing
 ```
 
-`EXPLAIN (TYPE EXECUTABLE)` is the only EXPLAIN form that works under both optimizers — `TYPE GRAPH`/`OPTIMIZED`/`IO` introspect v1-only state and error under `--v2`. For the single-node baseline both engines run one fragment / one driver, so the diff reflects optimizer choices rather than parallelism; the multi-node baseline runs both at the same worker count (see Multi-node). All v1 runs disable the greedy join-order fallback, so the baseline is the plan v1's branch-and-bound considers best. The reference is the optimal plan, not v1: where v1's greedy fallback would differ from its own B&B plan, comparing against greedy would compare against a known-suboptimal heuristic (q7 was exactly this — v1's default greedy plan is ~12x heavier than the B&B plan v2 also finds).
+`TYPE GRAPH` is the one EXPLAIN form that works only under v1 — it introspects v1-only state, so it needs `--v1`. For the single-node baseline both engines run one fragment / one driver, so the diff reflects optimizer choices rather than parallelism; the multi-node baseline runs both at the same worker count (see Multi-node). All v1 runs disable the greedy join-order fallback, so the baseline is the plan v1's branch-and-bound considers best. The reference is the optimal plan, not v1: where v1's greedy fallback would differ from its own B&B plan, comparing against greedy would compare against a known-suboptimal heuristic (q7 was exactly this — v1's default greedy plan is ~12x heavier than the B&B plan v2 also finds).
 
 Verified CLI facts that the procedure below depends on:
 - **v2 honors `--num_workers`/`--num_drivers`** and emits distributed multi-fragment plans at more than one worker, as does v1; run both at the same count. Multi-fragment `EXPLAIN ANALYZE` works for both.
@@ -152,7 +152,7 @@ DATA=<path-to-tpch-parquet>            # one directory per table, e.g. ~/tpch/sf
 
 for n in $(seq 1 22); do
   Q=$(cat "$QDIR/q$n.sql")
-  printf 'SET SESSION optimizer.greedy_join_threshold = 2147483647;\nEXPLAIN (TYPE EXECUTABLE)\n%s' "$Q" | "$CLI" --data_path "$DATA" --num_workers 1 --num_drivers 1 --query "" > v1/q$n.txt
-  printf 'EXPLAIN (TYPE EXECUTABLE)\n%s' "$Q" | "$CLI" --data_path "$DATA" --v2 --query ""                    > v2/q$n.txt
+  printf 'SET SESSION optimizer.greedy_join_threshold = 2147483647;\nEXPLAIN (TYPE EXECUTABLE)\n%s' "$Q" | "$CLI" --data_path "$DATA" --v1 --num_workers 1 --num_drivers 1 --query "" > v1/q$n.txt
+  printf 'EXPLAIN (TYPE EXECUTABLE)\n%s' "$Q" | "$CLI" --data_path "$DATA" --query ""                         > v2/q$n.txt
 done
 ```
