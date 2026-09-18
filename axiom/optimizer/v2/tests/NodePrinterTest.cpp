@@ -76,6 +76,7 @@ class NodePrinterTest : public UnitTestBase {
     return TranslatePass::run(
                *plan,
                *schema_,
+               *schemaResolver_,
                *evaluator_,
                *builder_,
                *session_,

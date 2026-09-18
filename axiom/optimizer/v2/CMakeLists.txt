@@ -22,6 +22,7 @@ add_library(
   AlgebraicProperties.cpp
   Builder.cpp
   ColumnAccess.cpp
+  ConnectorPushdownPass.cpp
   CostModel.cpp
   DecorrelatePass.cpp
   DPhyp.cpp

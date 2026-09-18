@@ -110,8 +110,6 @@ add_executable(
   DistinctAggregationTest.cpp
   OutputNodeTest.cpp
   CardinalityEstimationTest.cpp
-  ConnectorSubtreePushdownTest.cpp
-  ConnectorPushdownPassTest.cpp
   ConnectorPushdownTest.cpp
   CsvReadWriteTest.cpp
   DeleteTest.cpp
