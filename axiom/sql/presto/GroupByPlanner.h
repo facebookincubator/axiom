@@ -44,22 +44,32 @@ class GroupByPlanner {
   /// When 'distinct' is true (GROUP BY DISTINCT), duplicate grouping sets
   /// are removed after expansion. Accepts a flat list of pre-resolved
   /// ExprApi items (AllColumns / SelectColumns must be expanded by the
-  /// caller).
+  /// caller). Window-definition expressions participate in semantic
+  /// validation but are not projected.
   void plan(
       const std::vector<GroupingElementPtr>& groupingElements,
       bool distinct,
       const std::vector<lp::ExprApi>& selectExprs,
       const ExpressionPtr& having,
-      const OrderByPtr& orderBy) &&;
+      const OrderByPtr& orderBy,
+      std::vector<lp::ExprApi> windowDefinitionExprs) &&;
 
-  /// Detects implicit global aggregation (e.g. SELECT count(*) FROM t)
-  /// and plans it, including any ORDER BY over the aggregates. Returns true if
-  /// aggregation was added. Accepts raw AST select items and resolves them
-  /// internally.
-  bool tryPlanGlobalAgg(
+  /// Returns whether the query block contains an aggregate call and rejects
+  /// nested aggregate calls.
+  static bool containsAggregate(
       const std::vector<SelectItemPtr>& selectItems,
       const ExpressionPtr& having,
-      const OrderByPtr& orderBy) &&;
+      const OrderByPtr& orderBy,
+      const std::vector<WindowDefinitionPtr>& windowDefinitions);
+
+  /// Plans implicit global aggregation (e.g. SELECT count(*) FROM t),
+  /// including any ORDER BY over the aggregates. Returns true if aggregation
+  /// was added. AllColumns / SelectColumns must be expanded by the caller.
+  bool tryPlanGlobalAgg(
+      const std::vector<lp::ExprApi>& selectExprs,
+      const ExpressionPtr& having,
+      const OrderByPtr& orderBy,
+      const std::vector<lp::ExprApi>& windowDefinitionExprs) &&;
 
  private:
   std::vector<std::vector<lp::ExprApi>> expandGroupingSets(
@@ -69,15 +79,18 @@ class GroupByPlanner {
   void collectAggregates(
       const std::vector<lp::ExprApi>& selectExprs,
       const ExpressionPtr& having,
-      const OrderByPtr& orderBy);
+      const OrderByPtr& orderBy,
+      const std::vector<lp::ExprApi>& windowDefinitionExprs);
 
   // Adds the Aggregate node and plans expressions evaluated above it.
   void buildAggregationPlan(
       const std::vector<lp::ExprApi>& selectExprs,
-      const OrderByPtr& orderBy);
+      const OrderByPtr& orderBy,
+      std::vector<lp::ExprApi> windowDefinitionExprs);
 
   void addAggregate(bool useGroupingSets);
-  void rewritePostAggregateExprs();
+  void rewritePostAggregateExprs(
+      const std::vector<lp::ExprApi>& windowDefinitionExprs);
 
   // Projects nested window functions (kWindow nodes inside non-window
   // expressions) into a separate plan node via builder_->with(). Records

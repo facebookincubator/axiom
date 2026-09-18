@@ -113,6 +113,15 @@ TEST_F(AggregationParserTest, nestedAggregateRejected) {
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT sum(count(n_nationkey)) FROM nation"),
       "Cannot nest aggregations inside aggregation: sum");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(
+          "SELECT sum(count(n_nationkey)) FROM nation GROUP BY n_regionkey"),
+      "Cannot nest aggregations inside aggregation: sum");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(
+          "SELECT * REPLACE (sum(count(n_nationkey)) AS n_nationkey) "
+          "FROM nation GROUP BY n_nationkey, n_name, n_regionkey, n_comment"),
+      "Cannot nest aggregations inside aggregation: sum");
 }
 
 // A scalar subquery whose body aggregates over only outer columns is

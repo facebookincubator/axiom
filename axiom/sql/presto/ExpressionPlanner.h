@@ -222,6 +222,42 @@ class ExpressionPlanner {
     ExpressionPlanner& planner_;
   };
 
+  /// Makes named windows visible while translating one query specification.
+  /// Example: `WindowScope scope{planner, query->windows(), options};`.
+  ///
+  /// Invariants:
+  /// - Restores the enclosing query block's definitions on destruction.
+  /// - Resolves and translates definitions in declaration order.
+  class [[nodiscard]] WindowScope {
+   public:
+    WindowScope(
+        ExpressionPlanner& planner,
+        const std::vector<WindowDefinitionPtr>& definitions,
+        ExprOptions options);
+
+    ~WindowScope();
+
+    const std::vector<lp::ExprApi>& definitionExprs() const {
+      return definitionExprs_;
+    }
+
+    WindowScope(const WindowScope&) = delete;
+    WindowScope& operator=(const WindowScope&) = delete;
+    WindowScope(WindowScope&&) = delete;
+    WindowScope& operator=(WindowScope&&) = delete;
+
+   private:
+    // Planner whose query-local window state this scope owns.
+    ExpressionPlanner& planner_;
+
+    // Enclosing query block's definitions, restored on destruction.
+    folly::F14FastMap<std::string, lp::WindowSpec> saved_;
+
+    // Translated definition parts used for aggregate discovery and grouping
+    // validation.
+    std::vector<lp::ExprApi> definitionExprs_;
+  };
+
   /// Installs the SELECT output aliases for the duration of the scope, so an
   /// ORDER BY key naming one resolves to that item's expression rather than to
   /// a column of an input relation. See 'setOutputAliases'.
@@ -263,6 +299,12 @@ class ExpressionPlanner {
   lp::WindowSpec convertWindow(
       const std::shared_ptr<Window>& window,
       ExprOptions options);
+
+  // Translates the parts written in 'window' and adds them to 'spec'.
+  lp::WindowSpec convertWindowParts(
+      const std::shared_ptr<Window>& window,
+      ExprOptions options,
+      lp::WindowSpec spec);
 
   // Translates each AST argument via `toExpr`.
   std::vector<lp::ExprApi> translateArgs(
@@ -378,6 +420,9 @@ class ExpressionPlanner {
 
   // Output aliases the clause being translated resolves names against.
   OutputAliases outputAliases_;
+
+  // Named windows in the current query block.
+  folly::F14FastMap<std::string, lp::WindowSpec> windowDefinitions_;
 
   // Lambda parameters currently in scope. Entries are appended on entering a
   // lambda body and dropped on exit, so the vector grows from outermost

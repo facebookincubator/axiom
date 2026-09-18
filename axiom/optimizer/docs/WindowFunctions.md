@@ -21,12 +21,16 @@ A window specification consists of:
   keys.
 - **Order keys**: ORDER BY columns with sort directions. Data must be sorted
   within each partition.
-- **Frame**: ROWS/RANGE/GROUPS with start and end bounds. This is per-function,
-  not per-specification.
+- **Frame**: ROWS/RANGE/GROUPS with start and end bounds. Each function retains
+  its resolved frame even when the optimizer groups functions that share
+  partition and order keys.
 
 Two window functions share the same specification when they have identical
 partition keys and identical order keys (same columns, same order, same sort
 directions).
+
+See [Named WINDOW Clause](../../sql/presto/docs/PrestoSqlExtensions.md#named-window-clause)
+for the SQL syntax and semantics of named window specifications.
 
 ## Planning Algorithm
 

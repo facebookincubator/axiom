@@ -241,10 +241,10 @@ class ExprAnalyzer : public DefaultTraversalVisitor {
     return numAggregates_ > 0;
   }
 
-  // Returns true if 'expression' contains an aggregate call.
-  static bool containsAggregate(const ExpressionPtr& expression) {
+  // Returns true if 'node' contains an aggregate call.
+  static bool containsAggregate(Node& node) {
     ExprAnalyzer analyzer;
-    expression->accept(&analyzer);
+    node.accept(&analyzer);
     return analyzer.hasAggregate();
   }
 
@@ -476,7 +476,8 @@ void GroupByPlanner::plan(
     bool distinct,
     const std::vector<lp::ExprApi>& selectExprs,
     const ExpressionPtr& having,
-    const OrderByPtr& orderBy) && {
+    const OrderByPtr& orderBy,
+    std::vector<lp::ExprApi> windowDefinitionExprs) && {
   // Expand ROLLUP, CUBE, GROUPING SETS into a list of grouping sets, then
   // extract deduplicated grouping keys and per-set index vectors.
   // Populates: groupingSets_, groupingKeys_, groupingSetsIndices_,
@@ -491,19 +492,21 @@ void GroupByPlanner::plan(
 
   // Walk SELECT, HAVING, and ORDER BY expressions to collect aggregate
   // function calls and expressions evaluated above the aggregate.
-  collectAggregates(selectExprs, having, orderBy);
+  collectAggregates(selectExprs, having, orderBy, windowDefinitionExprs);
 
-  buildAggregationPlan(selectExprs, orderBy);
+  buildAggregationPlan(selectExprs, orderBy, std::move(windowDefinitionExprs));
 }
 
 void GroupByPlanner::buildAggregationPlan(
     const std::vector<lp::ExprApi>& selectExprs,
-    const OrderByPtr& orderBy) {
+    const OrderByPtr& orderBy,
+    std::vector<lp::ExprApi> windowDefinitionExprs) {
   for (const auto& agg : aggregates_) {
     rejectGroupingInAggregates(agg.expr());
   }
 
   resolveGroupingCalls(projections_);
+  resolveGroupingCalls(windowDefinitionExprs);
   if (filter_.has_value()) {
     filter_ =
         lp::ExprApi(rewriteGroupingMarker(filter_->expr()), filter_->alias());
@@ -516,7 +519,7 @@ void GroupByPlanner::buildAggregationPlan(
   // aggregate output columns instead of the original input expressions.
   // Populates: flatInputs_.
   // Mutates: filter_, projections_, sortingKeyExprs_.
-  rewritePostAggregateExprs();
+  rewritePostAggregateExprs(windowDefinitionExprs);
 
   // Resolve sorting key ordinals before projecting: ORDER BY expressions
   // that are not in the SELECT list are appended to projections_ so they
@@ -538,59 +541,46 @@ void GroupByPlanner::buildAggregationPlan(
 }
 
 bool GroupByPlanner::tryPlanGlobalAgg(
-    const std::vector<SelectItemPtr>& selectItems,
+    const std::vector<lp::ExprApi>& selectExprs,
     const ExpressionPtr& having,
-    const OrderByPtr& orderBy) && {
-  for (const auto& item : selectItems) {
-    if (item->is(NodeType::kAllColumns) || item->is(NodeType::kSelectColumns)) {
-      return false;
-    }
-  }
-
-  // Count visible aggregates in SELECT, HAVING and ORDER BY, including
-  // outer-scope aggregates in lift-candidate scalar subqueries.
-  // `ExprAnalyzer` rejects nested aggregates as a side effect of the walk.
-  bool hasAggregate{false};
-
-  for (const auto& item : selectItems) {
-    VELOX_CHECK(item->is(NodeType::kSingleColumn));
-    hasAggregate |=
-        ExprAnalyzer::containsAggregate(item->as<SingleColumn>()->expression());
-  }
-
-  if (having != nullptr) {
-    hasAggregate |= ExprAnalyzer::containsAggregate(having);
-  }
-
-  if (orderBy != nullptr) {
-    for (const auto& sortItem : orderBy->sortItems()) {
-      hasAggregate |= ExprAnalyzer::containsAggregate(sortItem->sortKey());
-    }
-  }
-
-  if (!hasAggregate) {
-    return false;
-  }
-
-  std::vector<lp::ExprApi> selectExprs;
-  selectExprs.reserve(selectItems.size());
-  for (const auto& item : selectItems) {
-    auto* singleColumn = item->as<SingleColumn>();
-    auto expr = exprPlanner_.toExpr(
-        singleColumn->expression(), {.deferSubqueries = true});
-    if (singleColumn->alias() != nullptr) {
-      expr = expr.as(canonicalizeIdentifier(*singleColumn->alias()));
-    }
-    selectExprs.push_back(std::move(expr));
-  }
-
-  collectAggregates(selectExprs, having, orderBy);
+    const OrderByPtr& orderBy,
+    const std::vector<lp::ExprApi>& windowDefinitionExprs) && {
+  collectAggregates(selectExprs, having, orderBy, windowDefinitionExprs);
   if (aggregates_.empty()) {
     return false;
   }
 
-  buildAggregationPlan(selectExprs, orderBy);
+  buildAggregationPlan(selectExprs, orderBy, windowDefinitionExprs);
   return true;
+}
+
+bool GroupByPlanner::containsAggregate(
+    const std::vector<SelectItemPtr>& selectItems,
+    const ExpressionPtr& having,
+    const OrderByPtr& orderBy,
+    const std::vector<WindowDefinitionPtr>& windowDefinitions) {
+  // Validate nesting while detecting whether aggregation is needed.
+  bool hasAggregate{false};
+
+  for (const auto& item : selectItems) {
+    hasAggregate |= ExprAnalyzer::containsAggregate(*item);
+  }
+
+  if (having != nullptr) {
+    hasAggregate |= ExprAnalyzer::containsAggregate(*having);
+  }
+
+  if (orderBy != nullptr) {
+    for (const auto& sortItem : orderBy->sortItems()) {
+      hasAggregate |= ExprAnalyzer::containsAggregate(*sortItem->sortKey());
+    }
+  }
+
+  for (const auto& definition : windowDefinitions) {
+    hasAggregate |= ExprAnalyzer::containsAggregate(*definition->window());
+  }
+
+  return hasAggregate;
 }
 
 std::vector<std::vector<lp::ExprApi>> GroupByPlanner::expandGroupingSets(
@@ -673,7 +663,8 @@ void GroupByPlanner::deduplicateGroupingKeys() {
 void GroupByPlanner::collectAggregates(
     const std::vector<lp::ExprApi>& selectExprs,
     const ExpressionPtr& having,
-    const OrderByPtr& orderBy) {
+    const OrderByPtr& orderBy,
+    const std::vector<lp::ExprApi>& windowDefinitionExprs) {
   // Go over SELECT expressions and figure out for each: whether a grouping
   // key, a function of one or more grouping keys, a constant, an aggregate
   // or a function over one or more aggregates and possibly grouping keys.
@@ -694,6 +685,10 @@ void GroupByPlanner::collectAggregates(
     }
 
     projections_.emplace_back(selectExpr);
+  }
+
+  for (const auto& expr : windowDefinitionExprs) {
+    findAggregates(expr.expr(), aggregates_, aggregateSet);
   }
 
   if (having != nullptr) {
@@ -785,7 +780,8 @@ void GroupByPlanner::addAggregate(bool useGroupingSets) {
   outputColumns_ = builder_->findOrAssignOutputNames();
 }
 
-void GroupByPlanner::rewritePostAggregateExprs() {
+void GroupByPlanner::rewritePostAggregateExprs(
+    const std::vector<lp::ExprApi>& windowDefinitionExprs) {
   ExprMap<core::ExprPtr> keyInputs;
   AggregateExprMap aggregateInputs;
 
@@ -809,11 +805,6 @@ void GroupByPlanner::rewritePostAggregateExprs() {
     keyInputs.emplace(groupingSetIdCol, groupingSetIdCol);
   }
 
-  // Rewrites an IExpr to reference post-aggregate columns.
-  auto rewriteIExpr = [&](const core::ExprPtr& expr) {
-    return replaceInputs(expr, keyInputs, aggregateInputs);
-  };
-
   // A marker the substitution leaves behind is a subquery the clause
   // evaluates for itself rather than one the aggregate already computed, so
   // it is planned against the aggregate's output. That is also what makes a
@@ -821,7 +812,8 @@ void GroupByPlanner::rewritePostAggregateExprs() {
   // SQL requires.
   PlannedMarkers planned;
   auto substituteAndPlan = [&](const core::ExprPtr& expr) {
-    return planMarkers(rewriteIExpr(expr), exprPlanner_, planned);
+    return planMarkers(
+        replaceInputs(expr, keyInputs, aggregateInputs), exprPlanner_, planned);
   };
 
   // HAVING takes the same two steps as the clauses below, but a column it
@@ -872,6 +864,21 @@ void GroupByPlanner::rewritePostAggregateExprs() {
 
   for (auto& expr : sortingKeyExprs_) {
     rewriteExpr(expr);
+  }
+
+  auto validateWindowDefinition = [&](const lp::ExprApi& expr) {
+    auto substituted = replaceInputs(
+        expr.expr(),
+        keyInputs,
+        aggregateInputs,
+        [](const core::FieldAccessExpr& field) {
+          VELOX_USER_FAIL(
+              "WINDOW clause cannot reference column: {}", field.name());
+        });
+    (void)planMarkers(substituted, exprPlanner_, planned);
+  };
+  for (const auto& expr : windowDefinitionExprs) {
+    validateWindowDefinition(expr);
   }
 }
 

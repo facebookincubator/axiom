@@ -1293,6 +1293,111 @@ TEST_F(ExpressionParserTest, windowFunction) {
       "corr(CAST(n_nationkey AS REAL), CAST(n_regionkey AS REAL)) OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)");
 }
 
+TEST_F(ExpressionParserTest, namedWindowResolution) {
+  testSelect(
+      "SELECT row_number() OVER W FROM nation "
+      "WINDOW w AS (PARTITION BY n_regionkey ORDER BY n_nationkey)",
+      matchScan()
+          .project({
+              "row_number() OVER (PARTITION BY n_regionkey ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+          })
+          .output());
+
+  testSelect(
+      "SELECT sum(n_nationkey) OVER w FROM nation "
+      "WINDOW w AS (ORDER BY n_nationkey "
+      "ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)",
+      matchScan()
+          .project({
+              "sum(n_nationkey) OVER (ORDER BY n_nationkey ASC NULLS LAST ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)",
+          })
+          .output());
+
+  testSelect(
+      "SELECT sum(n_nationkey) OVER (w "
+      "RANGE BETWEEN 1 PRECEDING AND CURRENT ROW) FROM nation "
+      "WINDOW w AS (ORDER BY n_nationkey)",
+      matchScan()
+          .project({
+              "sum(n_nationkey) OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN minus(n_nationkey, CAST(1 AS BIGINT)) PRECEDING AND CURRENT ROW)",
+          })
+          .output());
+}
+
+TEST_F(ExpressionParserTest, namedWindowNames) {
+  auto verifyError = [&](std::string_view sql, std::string_view error) {
+    SCOPED_TRACE(sql);
+    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(parseSelect(sql), error);
+  };
+
+  verifyError(
+      "SELECT row_number() OVER w FROM nation WINDOW w AS (), W AS ()",
+      "WINDOW name is specified more than once: W");
+  verifyError(
+      "SELECT row_number() OVER w FROM nation",
+      "Cannot resolve WINDOW name: w");
+  verifyError(
+      "SELECT row_number() OVER w2 FROM nation "
+      "WINDOW w2 AS (w1), w1 AS ()",
+      "Cannot resolve WINDOW name: w1");
+  verifyError(
+      "SELECT (SELECT row_number() OVER w) FROM nation WINDOW w AS ()",
+      "Cannot resolve WINDOW name: w");
+}
+
+TEST_F(ExpressionParserTest, namedWindowInheritance) {
+  auto verifyError = [&](std::string_view sql, std::string_view error) {
+    SCOPED_TRACE(sql);
+    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(parseSelect(sql), error);
+  };
+
+  verifyError(
+      "SELECT row_number() OVER (w PARTITION BY n_nationkey) FROM nation "
+      "WINDOW w AS (PARTITION BY n_regionkey)",
+      "Cannot specify PARTITION BY after referencing WINDOW: w");
+  verifyError(
+      "SELECT row_number() OVER (w ORDER BY n_regionkey) FROM nation "
+      "WINDOW w AS (ORDER BY n_nationkey)",
+      "Cannot specify ORDER BY after referencing WINDOW with ORDER BY: w");
+  verifyError(
+      "SELECT row_number() OVER w2 FROM nation "
+      "WINDOW w1 AS (ROWS CURRENT ROW), w2 AS (w1)",
+      "Cannot reference WINDOW with a frame: w1");
+  verifyError(
+      "SELECT row_number() OVER (w) FROM nation "
+      "WINDOW w AS (ROWS CURRENT ROW)",
+      "Cannot reference WINDOW with a frame: w");
+}
+
+TEST_F(ExpressionParserTest, unusedNamedWindow) {
+  testSelect(
+      "SELECT 1 FROM nation WINDOW unused AS (ORDER BY sum(n_nationkey))",
+      matchScan().aggregate({}, {"sum(n_nationkey)"}).project({"1"}).output());
+
+  VELOX_ASSERT_THROW(
+      parseSelect(
+          "SELECT * FROM nation "
+          "WINDOW unused AS (ORDER BY sum(n_nationkey))"),
+      "Cannot resolve column: n_nationkey");
+  VELOX_ASSERT_THROW(
+      parseSelect(
+          "SELECT COLUMNS('n_.*') FROM nation "
+          "WINDOW unused AS (ORDER BY sum(n_nationkey))"),
+      "Cannot resolve column: n_nationkey");
+
+  VELOX_ASSERT_THROW(
+      parseSelect(
+          "SELECT max(n_name) FROM nation GROUP BY n_regionkey "
+          "WINDOW unused AS (PARTITION BY n_nationkey)"),
+      "WINDOW clause cannot reference column: n_nationkey");
+
+  AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
+      parseSelect(
+          "SELECT n_nationkey FROM nation "
+          "WINDOW unused AS (GROUPS CURRENT ROW)"),
+      "GROUPS frame type is not supported yet");
+}
+
 TEST_F(ExpressionParserTest, lambda) {
   ASSERT_NO_THROW(parseExpr("filter(array[1,2,3], x -> x > 1)"));
   ASSERT_NO_THROW(parseExpr("FILTER(array[1,2,3], x -> x > 1)"));

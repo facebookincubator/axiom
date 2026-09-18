@@ -363,7 +363,8 @@ std::any AstBuilder::visitQueryNoWith(
             querySpec->from(),
             querySpec->where(),
             querySpec->groupBy(),
-            querySpec->having()),
+            querySpec->having(),
+            querySpec->windows()),
         orderBy,
         offset,
         limit);
@@ -492,8 +493,16 @@ std::any AstBuilder::visitQuerySpecification(
           visitTyped<Expression>(ctx->where),
           visitTyped<GroupBy>(ctx->groupBy()),
           visitTyped<Expression>(ctx->having),
-          nullptr // window
-          ));
+          visitTyped<WindowDefinition>(ctx->windowDefinition())));
+}
+
+std::any AstBuilder::visitWindowDefinition(
+    PrestoSqlParser::WindowDefinitionContext* ctx) {
+  trace("visitWindowDefinition");
+  return std::make_shared<WindowDefinition>(
+      getLocation(ctx),
+      visitIdentifier(ctx->name),
+      visitTyped<Window>(ctx->windowSpecification()));
 }
 
 std::any AstBuilder::visitSampledRelation(
@@ -2850,6 +2859,18 @@ std::any AstBuilder::visitFilter(PrestoSqlParser::FilterContext* ctx) {
 std::any AstBuilder::visitOver(PrestoSqlParser::OverContext* ctx) {
   trace("visitOver");
 
+  if (ctx->identifier() != nullptr) {
+    return std::make_shared<Window>(
+        getLocation(ctx), visitIdentifier(ctx->identifier()));
+  }
+
+  return visit(ctx->windowSpecification());
+}
+
+std::any AstBuilder::visitWindowSpecification(
+    PrestoSqlParser::WindowSpecificationContext* ctx) {
+  trace("visitWindowSpecification");
+
   auto partitionBy = visitTyped<Expression>(ctx->partition);
 
   std::shared_ptr<OrderBy> orderBy;
@@ -2864,7 +2885,11 @@ std::any AstBuilder::visitOver(PrestoSqlParser::OverContext* ctx) {
   }
 
   return std::make_shared<Window>(
-      getLocation(ctx), partitionBy, orderBy, frame);
+      getLocation(ctx),
+      partitionBy,
+      orderBy,
+      frame,
+      visitIdentifier(ctx->existingWindowName));
 }
 
 std::any AstBuilder::visitWindowFrame(

@@ -280,10 +280,16 @@ querySpecification
       (WHERE where=booleanExpression)?
       (GROUP BY groupBy)?
       (HAVING having=booleanExpression)?
+      (WINDOW windowDefinition (',' windowDefinition)*)?
     | FROM relation (',' relation)*
       (WHERE where=booleanExpression)?
       (GROUP BY groupBy)?
       (HAVING having=booleanExpression)?
+      (WINDOW windowDefinition (',' windowDefinition)*)?
+    ;
+
+windowDefinition
+    : name=identifier AS '(' windowSpecification ')'
     ;
 
 groupBy
@@ -532,11 +538,15 @@ filter
     ;
 
 over
-    : OVER '('
+    : OVER identifier
+    | OVER '(' windowSpecification ')'
+    ;
+
+windowSpecification
+    : existingWindowName=identifier?
         (PARTITION BY partition+=expression (',' partition+=expression)*)?
         (ORDER BY sortItem (',' sortItem)*)?
         windowFrame?
-      ')'
     ;
 
 windowFrame
@@ -691,7 +701,7 @@ nonReserved
     | TABLES | TABLESAMPLE | TEMPORARY | TEXT | TIME | TIMESTAMP | TO | TRANSACTION | TRUNCATE | TRY_CAST | TYPE
     | UNBOUNDED | UNCOMMITTED | UNIQUE | UPDATE | USE | USER
     | VALIDATE | VERBOSE | VERSION | VIEW
-    | WORK | WRITE
+    | WINDOW | WORK | WRITE
     | YEAR
     | ZONE
     ;
@@ -915,6 +925,7 @@ VIEW: 'VIEW';
 WHEN: 'WHEN';
 WHERE: 'WHERE';
 WITH: 'WITH';
+WINDOW: 'WINDOW';
 WORK: 'WORK';
 WRITE: 'WRITE';
 YEAR: 'YEAR';

@@ -923,6 +923,51 @@ TypePtr tryResolveBuiltinType(
 
 } // namespace
 
+ExpressionPlanner::WindowScope::WindowScope(
+    ExpressionPlanner& planner,
+    const std::vector<WindowDefinitionPtr>& definitions,
+    ExprOptions options)
+    : planner_{planner}, saved_{std::move(planner.windowDefinitions_)} {
+  auto restoreOnError = folly::makeGuard(
+      [&] { planner_.windowDefinitions_ = std::move(saved_); });
+  planner_.windowDefinitions_.clear();
+
+  OutputAliasScope aliases{planner_, {}};
+
+  for (const auto& definition : definitions) {
+    const auto name = canonicalizeIdentifier(*definition->name());
+    AXIOM_PRESTO_SEMANTIC_CHECK(
+        !planner_.windowDefinitions_.contains(name),
+        definition->location(),
+        definition->name()->value(),
+        "WINDOW name is specified more than once: {}",
+        definition->name()->value());
+    auto spec = planner_.convertWindow(definition->window(), options);
+
+    definitionExprs_.insert(
+        definitionExprs_.end(),
+        spec.partitionKeys().begin(),
+        spec.partitionKeys().end());
+    for (const auto& key : spec.orderByKeys()) {
+      definitionExprs_.push_back(key.expr);
+    }
+    if (spec.frame().has_value()) {
+      if (spec.frame()->startValue != nullptr) {
+        definitionExprs_.emplace_back(spec.frame()->startValue);
+      }
+      if (spec.frame()->endValue != nullptr) {
+        definitionExprs_.emplace_back(spec.frame()->endValue);
+      }
+    }
+    planner_.windowDefinitions_.emplace(name, std::move(spec));
+  }
+  restoreOnError.dismiss();
+}
+
+ExpressionPlanner::WindowScope::~WindowScope() {
+  planner_.windowDefinitions_ = std::move(saved_);
+}
+
 bool isOuterScopeAggregateLiftCandidate(Query* query) {
   if (query == nullptr || query->with() != nullptr ||
       query->orderBy() != nullptr || query->offset() != nullptr ||
@@ -2079,8 +2124,51 @@ lp::ExprApi ExpressionPlanner::toAggregateCallExpr(
 lp::WindowSpec ExpressionPlanner::convertWindow(
     const std::shared_ptr<Window>& window,
     ExprOptions options) {
-  lp::WindowSpec spec;
+  if (window->existingWindowName() == nullptr) {
+    return convertWindowParts(window, options, {});
+  }
 
+  const auto& identifier = window->existingWindowName();
+  const auto name = canonicalizeIdentifier(*identifier);
+  const auto it = windowDefinitions_.find(name);
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      it != windowDefinitions_.end(),
+      identifier->location(),
+      identifier->value(),
+      "Cannot resolve WINDOW name: {}",
+      identifier->value());
+
+  const auto& definition = it->second;
+  if (window->isWindowReference()) {
+    return definition;
+  }
+
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      window->partitionBy().empty(),
+      window->location(),
+      identifier->value(),
+      "Cannot specify PARTITION BY after referencing WINDOW: {}",
+      identifier->value());
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      definition.orderByKeys().empty() || window->orderBy() == nullptr,
+      window->location(),
+      identifier->value(),
+      "Cannot specify ORDER BY after referencing WINDOW with ORDER BY: {}",
+      identifier->value());
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      !definition.frame().has_value(),
+      window->location(),
+      identifier->value(),
+      "Cannot reference WINDOW with a frame: {}",
+      identifier->value());
+
+  return convertWindowParts(window, options, definition);
+}
+
+lp::WindowSpec ExpressionPlanner::convertWindowParts(
+    const std::shared_ptr<Window>& window,
+    ExprOptions options,
+    lp::WindowSpec spec) {
   if (!window->partitionBy().empty()) {
     std::vector<lp::ExprApi> partitionKeys;
     partitionKeys.reserve(window->partitionBy().size());
@@ -2090,9 +2178,9 @@ lp::WindowSpec ExpressionPlanner::convertWindow(
     spec.partitionBy(std::move(partitionKeys));
   }
 
-  std::vector<lp::SortKey> orderByKeys;
   if (window->orderBy() != nullptr) {
     const auto& sortItems = window->orderBy()->sortItems();
+    std::vector<lp::SortKey> orderByKeys;
     orderByKeys.reserve(sortItems.size());
     for (const auto& item : sortItems) {
       orderByKeys.emplace_back(
@@ -2100,7 +2188,7 @@ lp::WindowSpec ExpressionPlanner::convertWindow(
           item->isAscending(),
           item->isNullsFirst());
     }
-    spec.orderBy(orderByKeys);
+    spec.orderBy(std::move(orderByKeys));
   }
 
   if (window->frame() != nullptr) {
@@ -2128,11 +2216,11 @@ lp::WindowSpec ExpressionPlanner::convertWindow(
     if (frame->frameType() == WindowFrame::Type::kRange &&
         (startValue.has_value() || endValue.has_value())) {
       VELOX_USER_CHECK_EQ(
-          orderByKeys.size(),
+          spec.orderByKeys().size(),
           1,
           "RANGE frame with offset bound requires exactly one ORDER BY key");
-      const auto& orderKey = orderByKeys[0].expr;
-      const bool ascending = orderByKeys[0].ascending;
+      const auto& orderKey = spec.orderByKeys().front().expr;
+      const bool ascending = spec.orderByKeys().front().ascending;
 
       auto rewriteBound = [&](std::optional<lp::ExprApi>& bound,
                               core::WindowCallExpr::BoundType boundType) {

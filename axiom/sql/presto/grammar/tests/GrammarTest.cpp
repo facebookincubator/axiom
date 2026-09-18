@@ -74,6 +74,10 @@ TEST(GrammarTest, selectQueries) {
       // Group by
       "SELECT * FROM table1 GROUP BY a",
       "SELECT * FROM table1 GROUP BY a, b",
+      // WINDOW remains usable as an identifier.
+      "SELECT window FROM table1",
+      "SELECT window.a FROM table1 AS window",
+      "CREATE FUNCTION f(window BIGINT) RETURNS BIGINT RETURN window",
       // Implicit Join
       "SELECT * FROM a, b",
       // Join

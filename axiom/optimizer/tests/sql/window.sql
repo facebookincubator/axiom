@@ -54,6 +54,77 @@ SELECT a, b, sum(b) OVER (PARTITION BY a ORDER BY b ROWS BETWEEN UNBOUNDED PRECE
 -- Multiple window functions with same specification.
 SELECT a, b, sum(b) OVER (PARTITION BY a ORDER BY b) AS s, count(*) OVER (PARTITION BY a ORDER BY b) AS c FROM t
 ----
+-- Multiple window functions reuse a named specification.
+SELECT a, b, sum(b) OVER w AS s, count(*) OVER w AS c FROM t WINDOW w AS (PARTITION BY a ORDER BY b)
+----
+-- A named specification orders grouped rows by an aggregate.
+SELECT a, sum(b) AS total, row_number() OVER w AS rn
+FROM t
+GROUP BY a
+WINDOW w AS (ORDER BY sum(b))
+----
+-- An aggregate in a named specification makes the query an aggregation.
+SELECT row_number() OVER w FROM t WINDOW w AS (ORDER BY sum(b))
+----
+-- An aggregate in an unused named specification makes the query an aggregation.
+-- count 1
+SELECT 1 FROM t WINDOW unused AS (ORDER BY sum(b))
+----
+-- An aggregate in an unused named specification makes wildcard columns
+-- subject to grouping validation.
+-- error: Cannot resolve column: a
+SELECT * FROM t WINDOW unused AS (ORDER BY sum(b))
+----
+-- An unused named specification obeys grouping rules.
+-- error: WINDOW clause cannot reference column: b
+SELECT max(a) FROM t GROUP BY a WINDOW unused AS (PARTITION BY b)
+----
+-- GROUPING() is valid in a named specification of a grouped query.
+-- ordered
+SELECT a, row_number() OVER w AS rn
+FROM t
+GROUP BY GROUPING SETS ((a))
+WINDOW w AS (PARTITION BY grouping(a) ORDER BY a)
+ORDER BY a
+----
+-- A named window is refined with an ordering and frame.
+-- Velox's DuckDB does not preserve inherited parts through this chain.
+-- duckdb: SELECT a, b, sum(b) OVER (PARTITION BY a ORDER BY b ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS s FROM t
+SELECT a, b, sum(b) OVER (ordered ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS s
+FROM t
+WINDOW partitioned AS (PARTITION BY a), ordered AS (partitioned ORDER BY b)
+----
+-- A direct reference retains the named window's frame.
+SELECT a, b, sum(b) OVER framed AS s
+FROM t
+WINDOW framed AS (PARTITION BY a ORDER BY b ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+----
+-- A query ORDER BY can reference a named window from its query specification.
+-- ordered
+SELECT a, b FROM t WINDOW w AS (ORDER BY b) ORDER BY row_number() OVER w LIMIT 3
+----
+-- A named specification is evaluated after a WHERE subquery.
+SELECT a, b, row_number() OVER w AS rn
+FROM t AS outer_t
+WHERE EXISTS (
+  SELECT 1 FROM t AS inner_t
+  WHERE inner_t.a = outer_t.a AND inner_t.b > outer_t.b)
+WINDOW w AS (PARTITION BY a ORDER BY b)
+----
+-- A named specification resolves input columns before SELECT aliases.
+-- ordered
+SELECT a AS b
+FROM t
+WINDOW w AS (ORDER BY b)
+ORDER BY row_number() OVER w
+LIMIT 3
+----
+-- An inline specification in query ORDER BY resolves SELECT aliases first.
+-- ordered
+-- Velox's DuckDB resolves b to the input column instead of the SELECT alias.
+-- duckdb: SELECT a AS b FROM t ORDER BY row_number() OVER (ORDER BY a)
+SELECT a AS b FROM t ORDER BY row_number() OVER (ORDER BY b)
+----
 -- Multiple window functions with different specifications.
 SELECT a, b, sum(b) OVER (PARTITION BY a) AS s, count(*) OVER () AS c FROM t
 ----
