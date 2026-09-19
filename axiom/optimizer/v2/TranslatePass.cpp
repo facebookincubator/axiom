@@ -327,8 +327,8 @@ class SubqueryContext {
   bool correlateLifted(ColumnCP column);
 
   // Prevents lifted-result reuse from reaching targets outside the current
-  // set-operation branch. Reuse within scopes entered after the barrier is
-  // still allowed.
+  // set-operation branch or subquery body. Reuse within scopes entered after
+  // the barrier is still allowed.
   void pushLiftedCorrelationBarrier();
   void popLiftedCorrelationBarrier();
 
@@ -859,10 +859,10 @@ class Translator {
   // Lifted results of each scalar subquery, keyed by its inner plan.
   // Identical subqueries share one inner plan (hash-consed), so a repeated
   // reference reuses a lift instead of lifting again. A lift is reusable
-  // only where its column can be read: from the lift target it landed on,
-  // or from a body it can be correlated into. Lifts on unrelated plans are
-  // not interchangeable, so every lift is kept and the usable one is chosen
-  // per reference. A folded constant (Literal) is on no plan and always
+  // where its column can be read: from the lift target it landed on, or from
+  // a scope entered after it. Lifts on unrelated plans are not
+  // interchangeable, so every lift is kept and the usable one is chosen per
+  // reference. A folded constant (Literal) is on no plan and always
   // reusable.
   folly::F14FastMap<const lp::LogicalPlanNode*, std::vector<ExprCP>>
       scalarSubqueryColumns_;
@@ -3592,18 +3592,16 @@ ExprCP Translator::liftSubquery(
   };
 
   subqueries_.push(outerScope, liftTarget);
-  // A semi Apply emits the outer's columns and a mark, so a lift inside the
-  // body never reaches the outer and the two cannot share one. Reading the
-  // outer's lift is the only way to share it, and that correlates a body the
-  // query left uncorrelated, so the body lifts its own copy. A scalar body
-  // shares freely: its columns reach the outer through the Apply.
-  if (isSemi) {
+  // Reading a lift from an enclosing scope is an outer reference, which
+  // correlates a body the query left uncorrelated. The body lifts its own
+  // copy instead.
+  Translated inner = [&] {
     subqueries_.pushLiftedCorrelationBarrier();
-  }
-  Translated inner = translateNode(*subqueryExpr.subquery(), required);
-  if (isSemi) {
-    subqueries_.popLiftedCorrelationBarrier();
-  }
+    SCOPE_EXIT {
+      subqueries_.popLiftedCorrelationBarrier();
+    };
+    return translateNode(*subqueryExpr.subquery(), required);
+  }();
   ColumnVector correlationColumns = subqueries_.pop();
 
   NodeCP body = inner.node;

@@ -476,9 +476,9 @@ TEST_P(SubqueryTest, uncorrelatedProject) {
 }
 
 TEST_P(SubqueryTest, repeatedUncorrelatedScalar) {
-  // Repeated references to one uncorrelated scalar subquery, including a
-  // reference nested inside another subquery's body, are evaluated once and
-  // joined onto the outer input once.
+  // References to one uncorrelated scalar subquery from the same scope share a
+  // single evaluation. A reference inside another subquery's body evaluates it
+  // again: reading the outer's copy would correlate the body.
   auto query =
       "SELECT "
       "  IF(n_regionkey > (SELECT max(r_regionkey) FROM region), "
@@ -494,10 +494,18 @@ TEST_P(SubqueryTest, repeatedUncorrelatedScalar) {
       plan,
       matchHiveScan("nation")
           .nestedLoopJoin(
-              matchHiveScan("supplier")
-                  .hashJoinRight(matchHiveScan("region").singleAggregation(
-                      {}, {"max(r_regionkey) as max_key"}))
-                  .enforceSingleRow())
+              matchHiveScan("region")
+                  .aliases({"outer_region_key"})
+                  .singleAggregation({}, {"max(outer_region_key) as max_key"})
+                  .nestedLoopJoin(
+                      matchHiveScan("supplier")
+                          .hashJoinInner(
+                              matchHiveScan("region")
+                                  .aliases({"body_region_key"})
+                                  .singleAggregation(
+                                      {}, {"max(body_region_key) as body_max"}),
+                              {.keys = {{"s_suppkey = body_max"}}})
+                          .enforceSingleRow()))
           .project(
               {"if(gt(n_regionkey, max_key), s_suppkey, -1) as a",
                "max_key as b"})
@@ -719,6 +727,28 @@ TEST_P(SubqueryTest, correlatedTopNPerOuter) {
         matchScan("t")
             .hashJoinLeft(
                 matchScan("u").topNRowNumber({"y"}, {"z"}, 1).project(),
+                {.keys = {{"b = y"}}})
+            .build());
+  }
+
+  // A grouped INNER LATERAL body applies ORDER BY and LIMIT independently for
+  // each outer key, including when the key is absent from SELECT and GROUP BY.
+  {
+    auto query =
+        "SELECT t.a, q.x, q.total FROM t CROSS JOIN LATERAL ("
+        "  SELECT u.x, sum(u.z) AS total FROM u WHERE u.y = t.b "
+        "  GROUP BY u.x ORDER BY total DESC LIMIT 2"
+        ") q";
+    SCOPED_TRACE(query);
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchScan("t")
+            .hashJoinInner(
+                matchScan("u")
+                    .singleAggregation({"y", "x"}, {"sum(z) as total"})
+                    .topNRowNumber({"y"}, {"total DESC"}, 2),
                 {.keys = {{"b = y"}}})
             .build());
   }

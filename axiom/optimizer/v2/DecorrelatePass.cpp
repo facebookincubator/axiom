@@ -455,18 +455,21 @@ class Decorrelator : public NodeRewriter<> {
           "Decorrelate: kLeftSemiProject IN over Limit with count >= 1 "
           "not yet implemented (LIMIT must precede the IN equi check)");
     }
-    if (node->isInner()) {
-      VELOX_NYI(
-          "Decorrelate: INNER LATERAL over a Limit body is not yet supported");
+    if (node->isInner() || node->isLeft()) {
+      if (auto equi =
+              limitPeelEqui(node, input, limitBody, count, accumulatedFilter)) {
+        return *equi;
+      }
+      if (node->isInner()) {
+        VELOX_NYI(
+            "Decorrelate: INNER LATERAL over a Limit body is not yet "
+            "supported for this shape");
+      }
     }
     VELOX_USER_CHECK(
         node->isLeft(),
         "Decorrelate Limit peel: unexpected Apply kind {}",
         node->kind());
-    if (auto equi =
-            limitPeelEqui(node, input, limitBody, count, accumulatedFilter)) {
-      return *equi;
-    }
     return limitPeelLeftWindowed(
         node, input, limitBody, count, accumulatedFilter);
   }
@@ -567,33 +570,38 @@ class Decorrelator : public NodeRewriter<> {
 
   // What a join-back produced.
   struct JoinBack {
-    // The LEFT JOIN, with the outer tagged and the scalar bound asserted
-    // where the caller asked for them.
+    // The join, with the outer tagged and the scalar bound asserted where the
+    // caller asked for them.
     NodeCP node;
 
-    // Reads NULL on an outer the body had no row for, or nullptr where the
-    // caller asked for no marker.
+    // Reads NULL on a padded left-join row, or nullptr for an inner join or
+    // where the caller asked for no marker.
     ColumnCP includeMarker;
   };
 
-  // LEFT JOINs a correlation-free 'body' back to 'input' on the lifted equi
-  // keys, so the body is read once rather than once per outer row. The join
-  // publishes the outer columns and 'bodyColumns'.
+  // Joins a correlation-free 'body' back to 'input' on the lifted equi keys,
+  // so the body is read once rather than once per outer row. The join publishes
+  // the outer columns and 'bodyColumns'.
   //
-  // An outer the body has no row for is padded here, and 'markPads' asks for
-  // a marker the pad reads NULL: sourcing it from the body is what makes the
-  // pad visible above, where a literal would claim the outer had a row.
+  // A left join pads an outer the body has no row for. 'markPads' asks for a
+  // marker the pad reads NULL: sourcing it from the body makes the pad visible
+  // above, where a literal would claim the outer had a row.
   //
   // 'enforceSingleRow' tags the outer rows and asserts one row each over the
   // join's output, for a body that can match an outer more than once.
   JoinBack joinBodyBack(
       NodeCP input,
       NodeCP body,
+      velox::core::JoinType joinType,
       const ExprVector& leftKeys,
       const ExprVector& rightKeys,
       const ColumnVector& bodyColumns,
       bool markPads,
       bool enforceSingleRow) {
+    VELOX_CHECK(
+        joinType == velox::core::JoinType::kInner ||
+        joinType == velox::core::JoinType::kLeft);
+    VELOX_CHECK(!markPads || joinType == velox::core::JoinType::kLeft);
     ColumnCP includeMarker = nullptr;
     if (markPads) {
       includeMarker = makeIncludeColumn();
@@ -622,7 +630,7 @@ class Decorrelator : public NodeRewriter<> {
     NodeCP join = builder().make<Join>({
         joinLeft,
         body,
-        velox::core::JoinType::kLeft,
+        joinType,
         leftKeys,
         rightKeys,
         /*filter=*/{},
@@ -636,10 +644,11 @@ class Decorrelator : public NodeRewriter<> {
         includeMarker};
   }
 
-  // kLeft over a Limit whose correlation is an equality: rank the body once,
-  // partitioned by the correlation key, and LEFT JOIN it back to the outer.
-  // The body is read once rather than once per outer row. An outer matching
-  // nothing reads NULL, which is what a scalar subquery over no rows means.
+  // kLeft or kInner over a Limit whose correlation is an equality: rank the
+  // body once, partitioned by the correlation key, and join it back to the
+  // outer. The body is read once rather than once per outer row. The kLeft
+  // join keeps an unmatched outer with NULL body values; the kInner join drops
+  // it.
   //
   // Returns nullopt for the correlations and counts this shape cannot serve,
   // leaving them to the per-outer form.
@@ -673,10 +682,11 @@ class Decorrelator : public NodeRewriter<> {
     JoinBack back = joinBodyBack(
         input,
         *rankedBody,
+        node->kind(),
         correlation->leftKeys,
         correlation->rightKeys,
         limitBody->outputColumns(),
-        /*markPads=*/true,
+        /*markPads=*/node->isLeft(),
         /*enforceSingleRow=*/false);
 
     return projectApplyOutput(node, back.node, back.includeMarker);
@@ -2611,13 +2621,128 @@ class Decorrelator : public NodeRewriter<> {
     ExprVector rightKeys;
   };
 
+  // Describes an Aggregate grouping extended with correlation keys.
+  struct CorrelationGrouping {
+    // Correlation keys followed by original grouping keys not already present.
+    ExprVector groupingKeys;
+    // Output columns positionally corresponding to 'groupingKeys'.
+    ColumnVector groupingOutputColumns;
+    // Output columns corresponding to the correlation keys.
+    ColumnVector rightKeyColumns;
+    // True when an original grouping key is not a correlation key.
+    bool hasNonCorrelationGroupingKey;
+  };
+
+  // Adds input-side correlation keys ahead of an Aggregate's existing
+  // grouping keys and maps each expression to its output column.
+  CorrelationGrouping makeCorrelationGrouping(
+      AggregateCP aggregate,
+      ExprVector rightKeys) {
+    const size_t numGroupingKeys = aggregate->groupingKeys().size();
+    ColumnVector rightKeyColumns;
+    rightKeyColumns.reserve(rightKeys.size());
+    for (ExprCP key : rightKeys) {
+      ColumnCP groupingKeyOutput = nullptr;
+      for (size_t i = 0; i < numGroupingKeys; ++i) {
+        if (aggregate->groupingKeys()[i] == key) {
+          groupingKeyOutput = aggregate->outputColumns()[i];
+          break;
+        }
+      }
+      if (groupingKeyOutput != nullptr) {
+        rightKeyColumns.push_back(groupingKeyOutput);
+      } else if (key->is(PlanType::kColumnExpr)) {
+        rightKeyColumns.push_back(key->as<Column>());
+      } else {
+        rightKeyColumns.push_back(
+            Column::create("__groupingKey", key->value()));
+      }
+    }
+
+    ColumnVector groupingOutputColumns = rightKeyColumns;
+    bool hasNonCorrelationGroupingKey = false;
+    PlanObjectSet keyColumns = PlanObjectSet::fromObjects(rightKeyColumns);
+    for (size_t i = 0; i < numGroupingKeys; ++i) {
+      ColumnCP groupingKeyOutput = aggregate->outputColumns()[i];
+      if (keyColumns.contains(groupingKeyOutput)) {
+        continue;
+      }
+      keyColumns.add(groupingKeyOutput);
+      rightKeys.push_back(aggregate->groupingKeys()[i]);
+      groupingOutputColumns.push_back(groupingKeyOutput);
+      hasNonCorrelationGroupingKey = true;
+    }
+
+    return {
+        std::move(rightKeys),
+        std::move(groupingOutputColumns),
+        std::move(rightKeyColumns),
+        hasNonCorrelationGroupingKey,
+    };
+  }
+
+  // Carries equality-correlation keys through a grouped Aggregate. Adding the
+  // inner key splits each group by the value that filtering before aggregation
+  // would have selected; joining on that key afterward selects the same
+  // groups. A global aggregate has no group to split and its empty-input row
+  // has no key to join back. Grouping sets, residual correlations, and outer
+  // references in aggregate expressions also require different rewrites.
+  std::optional<NodeCP> liftCorrelationThroughGroupedAggregate(
+      AggregateCP aggregate,
+      const ColumnVector& inputColumns,
+      ExprVector& correlation) {
+    if (aggregate->groupingKeys().empty() || aggregate->groupId() != nullptr ||
+        readsOuter(aggregate, inputColumns)) {
+      return std::nullopt;
+    }
+
+    ExprVector inputCorrelation;
+    NodeCP cleanInput = liftCorrelationFromBody(
+        aggregate->input(), inputColumns, inputCorrelation);
+    if (inputCorrelation.empty() ||
+        !recomputeCorrelations(cleanInput, inputColumns).empty()) {
+      return std::nullopt;
+    }
+
+    JoinCondition::Split split = JoinCondition::splitEquiKeys(
+        inputCorrelation,
+        PlanObjectSet::fromObjects(inputColumns),
+        PlanObjectSet::fromObjects(cleanInput->outputColumns()));
+    if (!split.residual.empty()) {
+      return std::nullopt;
+    }
+
+    CorrelationGrouping grouping =
+        makeCorrelationGrouping(aggregate, std::move(split.rightKeys));
+    ColumnVector outputColumns = grouping.groupingOutputColumns;
+    for (size_t i = aggregate->groupingKeys().size();
+         i < aggregate->outputColumns().size();
+         ++i) {
+      outputColumns.push_back(aggregate->outputColumns()[i]);
+    }
+
+    NodeCP grouped = builder().make<Aggregate>({
+        .input = cleanInput,
+        .groupingKeys = std::move(grouping.groupingKeys),
+        .aggregates = aggregate->aggregates(),
+        .outputColumns = std::move(outputColumns),
+        .step = aggregate->step(),
+        .groupId = aggregate->groupId(),
+        .globalGroupingSets = aggregate->globalGroupingSets(),
+    });
+
+    for (size_t i = 0; i < split.leftKeys.size(); ++i) {
+      correlation.push_back(exprFactory_.makeEq(
+          split.leftKeys[i], grouping.rightKeyColumns.at(i)));
+    }
+    return grouped;
+  }
+
   // Removes conjuncts reading 'inputColumns' from the Filters of 'node',
   // collecting them in 'correlation', and returns what is left. Descends
-  // through Sort and through Projects that only pass columns through, since
-  // translating a query leaves those between the operators that carry
-  // predicates. A lifted conjunct becomes a join key, so a rebuilt Project
-  // also carries the columns its body side reads, which that Project may
-  // have pruned.
+  // through Sort, pass-through Projects, and grouped Aggregates. A lifted
+  // conjunct becomes a join key, so a rebuilt Project also carries body-side
+  // columns that its original output may have pruned.
   NodeCP liftCorrelationFromBody(
       NodeCP node,
       const ColumnVector& inputColumns,
@@ -2639,6 +2764,14 @@ class Decorrelator : public NodeRewriter<> {
       }
       return kept.empty() ? input
                           : builder().make<Filter>({input, std::move(kept)});
+    }
+
+    if (node->is(NodeType::kAggregate)) {
+      if (auto lifted = liftCorrelationThroughGroupedAggregate(
+              node->as<Aggregate>(), inputColumns, correlation)) {
+        return *lifted;
+      }
+      return node;
     }
 
     if (const Project* project = asPassThroughProject(node)) {
@@ -2734,51 +2867,11 @@ class Decorrelator : public NodeRewriter<> {
         numGroupingKeys,
         /*coalesceEmptyInput=*/numGroupingKeys == 0);
 
-    // The correlation keys become the new Aggregate's grouping keys and the
-    // join-back's right keys: reuse the body column for a plain column, mint
-    // a fresh column for a computed key.
-    ColumnVector rightKeyColumns;
-    rightKeyColumns.reserve(correlation.rightKeys.size());
-    for (ExprCP key : correlation.rightKeys) {
-      // A key the query also groups by is already published under that
-      // grouping key's column; reuse it rather than name the value twice.
-      ColumnCP groupingKeyOutput = nullptr;
-      for (size_t i = 0; i < numGroupingKeys; ++i) {
-        if (aggregate->groupingKeys()[i] == key) {
-          groupingKeyOutput = aggregate->outputColumns()[i];
-          break;
-        }
-      }
-      if (groupingKeyOutput != nullptr) {
-        rightKeyColumns.push_back(groupingKeyOutput);
-      } else {
-        rightKeyColumns.push_back(
-            key->is(PlanType::kColumnExpr)
-                ? key->as<Column>()
-                : Column::create("__groupingKey", key->value()));
-      }
-    }
-
-    // Aggregate output: [correlation keys, inner gby keys, raw aggregates]. A
-    // correlation key the query also groups by is one key, not two.
-    ColumnVector aggregateOutputColumns;
+    CorrelationGrouping grouping =
+        makeCorrelationGrouping(aggregate, std::move(correlation.rightKeys));
+    ColumnVector aggregateOutputColumns = grouping.groupingOutputColumns;
     aggregateOutputColumns.reserve(
-        rightKeyColumns.size() + numGroupingKeys + wraps.size());
-    appendAll(aggregateOutputColumns, rightKeyColumns);
-
-    ExprVector groupingKeys = std::move(correlation.rightKeys);
-    ColumnVector addedGroupingKeys;
-    PlanObjectSet keyColumns = PlanObjectSet::fromObjects(rightKeyColumns);
-    for (size_t i = 0; i < numGroupingKeys; ++i) {
-      ColumnCP groupingKeyOutput = aggregate->outputColumns()[i];
-      if (keyColumns.contains(groupingKeyOutput)) {
-        continue;
-      }
-      keyColumns.add(groupingKeyOutput);
-      groupingKeys.push_back(aggregate->groupingKeys()[i]);
-      addedGroupingKeys.push_back(groupingKeyOutput);
-    }
-    appendAll(aggregateOutputColumns, addedGroupingKeys);
+        aggregateOutputColumns.size() + wraps.size());
 
     for (const auto& wrap : wraps) {
       aggregateOutputColumns.push_back(wrap.liftedOutput);
@@ -2787,7 +2880,7 @@ class Decorrelator : public NodeRewriter<> {
     AggregateCallVector aggregates = aggregate->aggregates();
     NodeCP groupedBody = builder().make<Aggregate>({
         .input = correlation.cleanBody,
-        .groupingKeys = std::move(groupingKeys),
+        .groupingKeys = std::move(grouping.groupingKeys),
         .aggregates = std::move(aggregates),
         .outputColumns = std::move(aggregateOutputColumns),
     });
@@ -2817,7 +2910,7 @@ class Decorrelator : public NodeRewriter<> {
     }
 
     ExprVector rightKeyExprs;
-    appendAll(rightKeyExprs, rightKeyColumns);
+    appendAll(rightKeyExprs, grouping.rightKeyColumns);
 
     // Without an inner GROUP BY every outer has a row carrying its
     // aggregate's empty-input value, and that row counts, so no marker is
@@ -2826,11 +2919,12 @@ class Decorrelator : public NodeRewriter<> {
     JoinBack back = joinBodyBack(
         input,
         groupedBody,
+        velox::core::JoinType::kLeft,
         correlation.leftKeys,
         rightKeyExprs,
         bodyColumns,
         /*markPads=*/numGroupingKeys > 0,
-        /*enforceSingleRow=*/!addedGroupingKeys.empty() &&
+        /*enforceSingleRow=*/grouping.hasNonCorrelationGroupingKey &&
             node->enforceSingleRow());
 
     return buildAggregateFinalProject(

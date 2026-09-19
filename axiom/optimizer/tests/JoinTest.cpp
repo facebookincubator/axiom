@@ -177,6 +177,40 @@ TEST_P(JoinTest, derivedCompositeEdgePreservesAllEqualities) {
   }
 }
 
+// A join key that equates a column with an expression is applied, even where
+// another join equates the columns it reads.
+TEST_P(JoinTest, expressionJoinKey) {
+  addTableWithStats("t", {"a", "b", "c"}, 10'000);
+  addTableWithStats("u", {"x", "y"}, 200);
+
+  const auto query =
+      "SELECT t1.a "
+      "FROM t t1 "
+      "JOIN u ON u.x + 1 = t1.a AND u.y = t1.b "
+      "LEFT JOIN t t2 ON t1.a = t2.a AND t1.b = t2.b "
+      "WHERE t2.c <> 4";
+  SCOPED_TRACE(query);
+
+  const auto matcher =
+      matchScan("t")
+          .aliases({"t2_a", "t2_b", "t2_c"})
+          .filter("t2_c <> 4")
+          .project({"t2_a", "t2_b"})
+          .hashJoinInner(
+              matchScan("t")
+                  .aliases({"t1_a", "t1_b"})
+                  .hashJoinInner(
+                      matchScan("u")
+                          .aliases({"x", "y"})
+                          .project({"x + 1", "y"})
+                          .aliases({"u_key", "y"}),
+                      {.keys = {{"t1_a = u_key", "t1_b = y"}}}),
+              {.keys = {{"t2_a = t1_a", "t2_b = t1_b"}}})
+          .build();
+
+  AXIOM_ASSERT_PLAN_V2(toSingleNodePlan(query), matcher);
+}
+
 TEST_P(JoinTest, pushdownFilterThroughJoin) {
   testConnector_->addTable("t", ROW({"t_id", "t_data"}, BIGINT()));
   testConnector_->addTable("u", ROW({"u_id", "u_data"}, BIGINT()));

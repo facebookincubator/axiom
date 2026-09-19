@@ -586,23 +586,34 @@ class Enumerator {
           return lhs.first < rhs.first;
         });
 
-    // Drop an edge whose every key is in an equivalence class already covered
-    // by a kept edge: it expresses a transitive equality the kept edges enforce
-    // (closure can add several same-class edges across one partition), so it
-    // would only add redundant join keys. Each side already equates its
-    // same-class columns (the class's first edge was applied when the side was
-    // built), so the dropped equality still holds. The lowest-index edge of
-    // each class is kept, which is deterministic.
+    // Drop an edge whose every key pair equates two columns of an equivalence
+    // class a kept edge already covers: it expresses a transitive equality the
+    // kept edges enforce (closure can add several same-class edges across one
+    // partition), so it would only add redundant join keys. Each side already
+    // equates its same-class columns (the class's first edge was applied when
+    // the side was built), so the dropped equality still holds. The
+    // lowest-index edge of each class is kept, which is deterministic.
+    //
+    // A pair equating a column with an expression asserts an equality no class
+    // carries, so its edge stays.
     folly::F14FastSet<EquivalenceP> seenClasses;
     const auto keyClass = [](ExprCP key) -> EquivalenceP {
       return key->isColumn() ? key->as<Column>()->equivalence() : nullptr;
+    };
+    const auto pairClass = [&](const JoinEdge& joinEdge,
+                               size_t keyIndex) -> EquivalenceP {
+      const EquivalenceP equivalenceClass =
+          keyClass(joinEdge.leftKeys()[keyIndex]);
+      return equivalenceClass == keyClass(joinEdge.rightKeys()[keyIndex])
+          ? equivalenceClass
+          : nullptr;
     };
     const auto coveredBySeen = [&](const JoinEdge& joinEdge) {
       if (joinEdge.leftKeys().empty()) {
         return false;
       }
-      for (ExprCP key : joinEdge.leftKeys()) {
-        const EquivalenceP equivalenceClass = keyClass(key);
+      for (size_t i = 0; i < joinEdge.leftKeys().size(); ++i) {
+        const EquivalenceP equivalenceClass = pairClass(joinEdge, i);
         if (equivalenceClass == nullptr ||
             !seenClasses.contains(equivalenceClass)) {
           return false;
@@ -611,8 +622,8 @@ class Enumerator {
       return true;
     };
     const auto markClasses = [&](const JoinEdge& joinEdge) {
-      for (ExprCP key : joinEdge.leftKeys()) {
-        if (const EquivalenceP equivalenceClass = keyClass(key)) {
+      for (size_t i = 0; i < joinEdge.leftKeys().size(); ++i) {
+        if (const EquivalenceP equivalenceClass = pairClass(joinEdge, i)) {
           seenClasses.insert(equivalenceClass);
         }
       }
