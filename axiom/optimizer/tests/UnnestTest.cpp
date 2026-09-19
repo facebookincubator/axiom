@@ -1128,11 +1128,8 @@ TEST_P(UnnestTest, correlatedExists) {
           .aliases({"k", "row_id", "e", "marker"})
           .project(
               {"k", "row_id", "coalesce(marker and e > 15, false) as matched"})
-          .window(
-              {"bool_or(matched) OVER (PARTITION BY row_id) as any_match",
-               "row_number() OVER (PARTITION BY row_id ROWS BETWEEN "
-               "    UNBOUNDED PRECEDING AND CURRENT ROW) as ordinal"})
-          .filter("ordinal = 1")
+          .streamingAggregation(
+              {"row_id"}, {"bool_or(matched) as any_match", "arbitrary(k)"})
           .project({"k", "any_match"})
           .build();
 
@@ -1187,12 +1184,11 @@ TEST_P(UnnestTest, inOverCorrelatedUnnest) {
                "coalesce(marker and v = e, false) as matched",
                "coalesce(marker and (v = e) is null, false) "
                "as unknown"})
-          .window(
-              {"bool_or(matched) OVER (PARTITION BY row_id) as any_match",
-               "bool_or(unknown) OVER (PARTITION BY row_id) as any_unknown",
-               "row_number() OVER (PARTITION BY row_id ROWS BETWEEN "
-               "    UNBOUNDED PRECEDING AND CURRENT ROW) as ordinal"})
-          .filter("ordinal = 1")
+          .streamingAggregation(
+              {"row_id"},
+              {"bool_or(matched) as any_match",
+               "bool_or(unknown) as any_unknown",
+               "arbitrary(k)"})
           .project(
               {"k",
                "case when any_match then true when any_unknown then null else false end"})

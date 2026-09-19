@@ -1355,41 +1355,130 @@ class Decorrelator : public NodeRewriter<> {
         padOrdinal};
   }
 
-  // Reduces a chain to one row per outer and writes whether any chain row
-  // satisfied `matchedExpr` into the outer Apply's mark column.
-  NodeCP collapseToSemiMark(
+  // Groups rows by outer id while preserving the outer columns.
+  NodeCP aggregatePerOuter(
       ApplyCP node,
-      NodeCP input,
-      NodeCP chain,
+      NodeCP rows,
       ColumnCP rowId,
-      ExprCP matchedExpr) {
-    PerOuterMatch perOuter = markPerOuter(chain, rowId, matchedExpr);
-    NodeCP filtered = builder().make<Filter>(
-        {perOuter.node, ExprVector{isFirstRowOfOuter(perOuter.padOrdinal)}});
+      AggregateCallVector aggregates,
+      const ColumnVector& aggregateOutputs) {
+    VELOX_CHECK_EQ(aggregates.size(), aggregateOutputs.size());
 
-    PlanObjectSet outerColumns =
-        PlanObjectSet::fromObjects(input->outputColumns());
+    PlanObjectSet rowColumns =
+        PlanObjectSet::fromObjects(rows->outputColumns());
+    ColumnVector outerColumns;
+    for (ColumnCP outputColumn : node->outputColumns()) {
+      if (outputColumn == node->markColumn()) {
+        continue;
+      }
+      VELOX_CHECK(
+          rowColumns.contains(outputColumn),
+          "kLeftSemiProject Apply must output only outer columns and its mark");
+      aggregates.push_back(makeArbitrary(outputColumn));
+      outerColumns.push_back(outputColumn);
+    }
+
+    ColumnVector outputs;
+    outputs.reserve(1 + aggregateOutputs.size() + outerColumns.size());
+    outputs.push_back(rowId);
+    appendAll(outputs, aggregateOutputs);
+    appendAll(outputs, outerColumns);
+    return builder().make<Aggregate>(
+        {.input = rows,
+         .groupingKeys = ExprVector{rowId},
+         .aggregates = std::move(aggregates),
+         .outputColumns = std::move(outputs),
+         .step = AggregateStep::kSingle,
+         .groupId = nullptr,
+         .globalGroupingSets = {}});
+  }
+
+  // Projects the outer Apply's schema with `mark` in its mark column.
+  NodeCP projectApplyMark(ApplyCP node, NodeCP input, ExprCP mark) {
     ExprVector finalExprs;
     finalExprs.reserve(node->outputColumns().size());
     for (ColumnCP outputColumn : node->outputColumns()) {
       if (outputColumn == node->markColumn()) {
-        finalExprs.push_back(perOuter.anyMatch);
-        continue;
+        finalExprs.push_back(mark);
+      } else {
+        finalExprs.push_back(outputColumn);
       }
-      VELOX_CHECK(
-          outerColumns.contains(outputColumn),
-          "kLeftSemiProject Apply must output only outer columns and its mark");
-      finalExprs.push_back(outputColumn);
     }
     return builder().make<Project>({
-        filtered,
+        input,
         std::move(finalExprs),
         node->outputColumns(),
     });
   }
 
+  // Reduces rows to one row per outer and writes whether any input row
+  // satisfied `matchedExpr` into the outer Apply's mark column.
+  NodeCP collapseToSemiMark(
+      ApplyCP node,
+      NodeCP rows,
+      ColumnCP rowId,
+      ExprCP matchedExpr) {
+    ColumnCP matched = makeIncludeColumn();
+    NodeCP marked = appendColumn(
+        rows,
+        matched,
+        exprFactory_.makeCoalesce(matchedExpr, builder().makeBoolean(false)));
+
+    AggregateRecovery recovery(builder(), exprFactory_);
+    ColumnCP anyMatch = Column::createBoolean("__any_match");
+    NodeCP collapsed = aggregatePerOuter(
+        node,
+        marked,
+        rowId,
+        AggregateCallVector{recovery.makeBoolOr(matched)},
+        ColumnVector{anyMatch});
+    return projectApplyMark(node, collapsed, anyMatch);
+  }
+
+  // Reduces row-level IN results to one three-valued mark per outer row. A
+  // qualified true comparison makes the result true. Otherwise, a qualified
+  // unknown comparison makes it NULL, and no qualifying comparison makes it
+  // false, including the synthetic row for an empty body.
+  NodeCP collapseToInMark(
+      ApplyCP node,
+      NodeCP rows,
+      ColumnCP rowId,
+      ExprCP qualifies,
+      ExprCP comparison) {
+    const Literal* falseLiteral = builder().makeBoolean(false);
+    ColumnCP matchRow = Column::createBoolean("__in_match");
+    ColumnCP unknownRow = Column::createBoolean("__in_unknown");
+    NodeCP compared = appendColumns(
+        rows,
+        ColumnVector{matchRow, unknownRow},
+        ExprVector{
+            exprFactory_.makeCoalesce(
+                exprFactory_.makeAnd(qualifies, comparison), falseLiteral),
+            exprFactory_.makeCoalesce(
+                exprFactory_.makeAnd(
+                    qualifies, exprFactory_.makeIsNull(comparison)),
+                falseLiteral)});
+
+    ColumnCP anyMatch = Column::createBoolean("__any_match");
+    ColumnCP anyUnknown = Column::createBoolean("__any_unknown");
+    AggregateRecovery recovery(builder(), exprFactory_);
+    NodeCP collapsed = aggregatePerOuter(
+        node,
+        compared,
+        rowId,
+        AggregateCallVector{
+            recovery.makeBoolOr(matchRow), recovery.makeBoolOr(unknownRow)},
+        ColumnVector{anyMatch, anyUnknown});
+
+    ExprCP mark = exprFactory_.makeSwitch(
+        {{anyMatch, builder().makeBoolean(true)},
+         {anyUnknown, builder().makeNull(toType(velox::BOOLEAN()))}},
+        falseLiteral);
+    return projectApplyMark(node, collapsed, mark);
+  }
+
   // Holds the state needed to evaluate the right side of a join body.
-  struct ExistsJoinChainHead {
+  struct SemiJoinChainHead {
     // The kLeft Apply over the body's left input.
     NodeCP leftApply;
     // Groups all chain rows that came from the same outer row.
@@ -1398,8 +1487,41 @@ class Decorrelator : public NodeRewriter<> {
     ColumnCP leftIncludeMarker;
   };
 
-  // Starts an EXISTS join chain while retaining outers with no left-side row.
-  ExistsJoinChainHead makeExistsJoinChainHead(NodeCP input, NodeCP leftSide) {
+  // Groups join-chain filters by the latest leg needed to evaluate them.
+  struct JoinChainFilterSplit {
+    // Conjuncts that read only outer and left-side columns.
+    ExprVector leftAndOuter;
+    // Conjuncts that read a right-side output or semi-project mark.
+    ExprVector rightDependent;
+  };
+
+  // Separates conjuncts that can ride on the left leg from those that require
+  // the right leg.
+  JoinChainFilterSplit splitJoinChainFilters(
+      const ExprVector& filter,
+      JoinCP joinBody) {
+    PlanObjectSet rightColumns =
+        PlanObjectSet::fromObjects(joinBody->right()->outputColumns());
+    if (joinBody->isLeftSemiProject()) {
+      ColumnCP bodyMark = joinBody->markColumn();
+      VELOX_CHECK_NOT_NULL(bodyMark);
+      rightColumns.add(bodyMark);
+    }
+
+    JoinChainFilterSplit split;
+    for (ExprCP conjunct : filter) {
+      if (conjunct->columns().hasIntersection(rightColumns)) {
+        split.rightDependent.push_back(conjunct);
+      } else {
+        split.leftAndOuter.push_back(conjunct);
+      }
+    }
+    return split;
+  }
+
+  // Starts a semi-project join chain while retaining outers with no left row.
+  SemiJoinChainHead
+  makeSemiJoinChainHead(NodeCP input, NodeCP leftSide, ExprVector leftFilter) {
     ColumnCP outerRowId = makeIdColumn();
     NodeCP taggedInput = tagOuterRows(input, outerRowId);
     ColumnCP leftIncludeMarker = makeIncludeColumn();
@@ -1407,7 +1529,7 @@ class Decorrelator : public NodeRewriter<> {
         makeLeftLeg(
             taggedInput,
             leftSide,
-            /*filter=*/ExprVector{},
+            std::move(leftFilter),
             /*enforceSingleRow=*/false,
             leftIncludeMarker),
         outerRowId,
@@ -1477,11 +1599,11 @@ class Decorrelator : public NodeRewriter<> {
     });
   }
 
-  // Outer Apply is kLeftSemiProject. Supports EXISTS shape (inLhs == nullptr)
+  // Outer Apply is kLeftSemiProject. Supports IN over a kInner body and EXISTS
   // over a kInner, kLeft, or non-null-aware kLeftSemiProject body. With
-  // nothing pairing the two sides of an inner Join the mark is markA AND
-  // markB; otherwise it is a property of the pair. IN shape and other Join
-  // kinds NYI loud.
+  // nothing pairing the two sides of an inner Join the EXISTS mark is markA
+  // AND markB; otherwise it is a property of the pair. Other Join kinds NYI
+  // loud.
   NodeCP joinPeelSemi(
       ApplyCP node,
       NodeCP input,
@@ -1489,9 +1611,8 @@ class Decorrelator : public NodeRewriter<> {
       ExprVector joinPredicate,
       ExprVector accumulatedFilter) {
     if (node->inLhs() != nullptr) {
-      VELOX_NYI(
-          "Decorrelate joinPeel: outer kLeftSemiProject IN over Join "
-          "body not yet implemented");
+      return joinPeelSemiIn(
+          node, input, joinBody, std::move(joinPredicate), accumulatedFilter);
     }
     if (joinBody->isLeft() || joinBody->isLeftSemiProject()) {
       return joinPeelSemiWithGuaranteedLeftOutput(
@@ -1565,6 +1686,57 @@ class Decorrelator : public NodeRewriter<> {
     });
   }
 
+  // Evaluates IN against the rows of an inner Join body, retaining one pad
+  // row per outer so an empty body produces false.
+  NodeCP joinPeelSemiIn(
+      ApplyCP node,
+      NodeCP input,
+      JoinCP joinBody,
+      ExprVector joinPredicate,
+      const ExprVector& accumulatedFilter) {
+    if (!joinBody->isInner()) {
+      VELOX_NYI(
+          "Decorrelate joinPeel: outer kLeftSemiProject IN requires a "
+          "kInner body: joinType={}",
+          joinBody->joinTypeName());
+    }
+
+    // applyB resolves the IN key against its body, the Join's right input. A
+    // key reading anything else resolves on the input side, where the pair is
+    // demoted to a filter and the leg loses the null-awareness the mark's
+    // unknown case depends on.
+    PlanObjectSet rightColumns =
+        PlanObjectSet::fromObjects(joinBody->right()->outputColumns());
+    if (!rightColumns.containsColumns(node->inBodyKey())) {
+      VELOX_NYI(
+          "Decorrelate joinPeel: outer kLeftSemiProject IN over a Join body "
+          "requires a body key reading only the Join's right input");
+    }
+
+    JoinChainFilterSplit filterSplit =
+        splitJoinChainFilters(accumulatedFilter, joinBody);
+    SemiJoinChainHead chain = makeSemiJoinChainHead(
+        input, joinBody->left(), std::move(filterSplit.leftAndOuter));
+    ExprVector applyBFilter = std::move(joinPredicate);
+    appendAll(applyBFilter, filterSplit.rightDependent);
+
+    ColumnCP inMark = makeMarkColumn("_join_chain_in");
+    NodeCP applyB = makeSemiLeg(
+        chain.leftApply,
+        joinBody->right(),
+        std::move(applyBFilter),
+        inMark,
+        node->inLhs(),
+        node->inBodyKey());
+
+    return collapseToInMark(
+        node,
+        rewrite(applyB),
+        chain.outerRowId,
+        chain.leftIncludeMarker,
+        inMark);
+  }
+
   // Handles a body that produces at least one output row for every left input
   // row. Keep an empty left side long enough to produce a false outer mark,
   // then reduce to one row per outer.
@@ -1574,8 +1746,22 @@ class Decorrelator : public NodeRewriter<> {
       JoinCP joinBody,
       ExprVector joinPredicate,
       const ExprVector& accumulatedFilter) {
-    ExistsJoinChainHead chain =
-        makeExistsJoinChainHead(input, joinBody->left());
+    JoinChainFilterSplit filterSplit =
+        splitJoinChainFilters(accumulatedFilter, joinBody);
+    SemiJoinChainHead chain = makeSemiJoinChainHead(
+        input, joinBody->left(), std::move(filterSplit.leftAndOuter));
+
+    if (filterSplit.rightDependent.empty()) {
+      // Both supported joins emit at least one row per left row. Their
+      // predicate only chooses right-side matches or computes the body mark,
+      // neither of which affects EXISTS when the remaining filters read only
+      // outer and left columns.
+      return collapseToSemiMark(
+          node,
+          rewrite(chain.leftApply),
+          chain.outerRowId,
+          chain.leftIncludeMarker);
+    }
 
     NodeCP applyB;
     if (joinBody->isLeft()) {
@@ -1604,14 +1790,14 @@ class Decorrelator : public NodeRewriter<> {
           /*inBodyKey=*/nullptr);
     }
 
-    ExprCP matchedExpr = chain.leftIncludeMarker;
-    if (!accumulatedFilter.empty()) {
-      matchedExpr = exprFactory_.makeAnd(
-          chain.leftIncludeMarker, exprFactory_.andAll(accumulatedFilter));
-    }
+    // Evaluating the post-join filter in the mark keeps the pad row that
+    // produces false when no body row qualifies.
+    ExprCP matchedExpr = exprFactory_.makeAnd(
+        chain.leftIncludeMarker,
+        exprFactory_.andAll(filterSplit.rightDependent));
 
     return collapseToSemiMark(
-        node, input, rewrite(applyB), chain.outerRowId, matchedExpr);
+        node, rewrite(applyB), chain.outerRowId, matchedExpr);
   }
 
   // Outer kLeftSemiProject EXISTS over a body kInner Join where some predicate
@@ -1626,11 +1812,13 @@ class Decorrelator : public NodeRewriter<> {
       JoinCP joinBody,
       ExprVector joinPredicate,
       const ExprVector& accumulatedFilter) {
-    ExistsJoinChainHead chain =
-        makeExistsJoinChainHead(input, joinBody->left());
+    JoinChainFilterSplit filterSplit =
+        splitJoinChainFilters(accumulatedFilter, joinBody);
+    SemiJoinChainHead chain = makeSemiJoinChainHead(
+        input, joinBody->left(), std::move(filterSplit.leftAndOuter));
 
     ExprVector applyBFilter = std::move(joinPredicate);
-    appendAll(applyBFilter, accumulatedFilter);
+    appendAll(applyBFilter, filterSplit.rightDependent);
 
     ColumnCP markB = makeMarkColumn("_join_chain_markB");
     NodeCP applyB = makeSemiLeg(
@@ -1641,12 +1829,11 @@ class Decorrelator : public NodeRewriter<> {
         /*inLhs=*/nullptr,
         /*inBodyKey=*/nullptr);
 
-    // A pad row of applyA reads markA NULL, and applyB's existence test over
-    // its NULL columns reads markB false, so neither can make a pad row count
-    // as a match. markPerOuter folds the NULL away before the window.
+    // A pad row of applyA reads its include marker as NULL, and applyB's
+    // existence test over its NULL columns reads false, so padding cannot
+    // count as a match.
     return collapseToSemiMark(
         node,
-        input,
         rewrite(applyB),
         chain.outerRowId,
         exprFactory_.makeAnd(chain.leftIncludeMarker, markB));
@@ -1805,83 +1992,15 @@ class Decorrelator : public NodeRewriter<> {
     }
 
     if (!node->nullAware()) {
-      PerOuterMatch perOuter = markPerOuter(expanded, rowId, qualifies);
-      return markOnePerOuter(
-          node, perOuter.node, perOuter.padOrdinal, perOuter.anyMatch);
+      return collapseToSemiMark(node, expanded, rowId, qualifies);
     }
 
-    // IN is null-aware: true when an element equals the left side, false when
-    // no element does and no comparison was unknown, and unknown otherwise —
-    // a NULL element or a NULL left side could be hiding a match. An empty
-    // array has no comparison at all, so it reads false.
-    ExprCP equality = exprFactory_.makeEq(node->inLhs(), node->inBodyKey());
-    const Literal* falseLiteral = builder().makeBoolean(false);
-    ColumnCP matchRow = Column::createBoolean("__in_match");
-    ColumnCP unknownRow = Column::createBoolean("__in_unknown");
-    NodeCP compared = appendColumns(
+    return collapseToInMark(
+        node,
         expanded,
-        ColumnVector{matchRow, unknownRow},
-        ExprVector{
-            exprFactory_.makeCoalesce(
-                exprFactory_.makeAnd(qualifies, equality), falseLiteral),
-            exprFactory_.makeCoalesce(
-                exprFactory_.makeAnd(
-                    qualifies, exprFactory_.makeIsNull(equality)),
-                falseLiteral)});
-
-    ColumnCP anyMatch = Column::createBoolean("__any_match");
-    ColumnCP anyUnknown = Column::createBoolean("__any_unknown");
-    ColumnCP padOrdinal = makeIdColumn("__pad_rn");
-
-    WindowFunctions functions;
-    functions.push_back(boolOrWindowFunction(matchRow));
-    functions.push_back(boolOrWindowFunction(unknownRow));
-    functions.push_back(rowNumberWindowFunction(padOrdinal));
-
-    ColumnVector windowOutputs;
-    windowOutputs.reserve(compared->outputColumns().size() + 3);
-    appendAll(windowOutputs, compared->outputColumns());
-    windowOutputs.push_back(anyMatch);
-    windowOutputs.push_back(anyUnknown);
-    windowOutputs.push_back(padOrdinal);
-
-    NodeCP windowed = builder().make<Window>({
-        compared,
-        std::move(functions),
-        ExprVector{rowId},
-        /*orderKeys=*/{},
-        /*orderTypes=*/{},
-        std::move(windowOutputs),
-    });
-
-    ExprCP mark = exprFactory_.makeSwitch(
-        {{anyMatch, builder().makeBoolean(true)},
-         {anyUnknown, builder().makeNull(toType(velox::BOOLEAN()))}},
-        falseLiteral);
-    return markOnePerOuter(node, windowed, padOrdinal, mark);
-  }
-
-  // Keeps one row per outer and projects the Apply's schema, reading `mark`
-  // for its mark column.
-  NodeCP markOnePerOuter(
-      ApplyCP node,
-      NodeCP input,
-      ColumnCP padOrdinal,
-      ExprCP mark) {
-    NodeCP oneRowPerOuter = builder().make<Filter>(
-        {input, ExprVector{isFirstRowOfOuter(padOrdinal)}});
-
-    ExprVector finalExprs;
-    finalExprs.reserve(node->outputColumns().size());
-    for (ColumnCP outputColumn : node->outputColumns()) {
-      finalExprs.push_back(
-          outputColumn == node->markColumn() ? mark : outputColumn);
-    }
-    return builder().make<Project>({
-        oneRowPerOuter,
-        std::move(finalExprs),
-        node->outputColumns(),
-    });
+        rowId,
+        qualifies,
+        exprFactory_.makeEq(node->inLhs(), node->inBodyKey()));
   }
 
   // Peels an AssignUniqueId body operator by lifting it above Apply.

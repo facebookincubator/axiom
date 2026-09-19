@@ -95,6 +95,12 @@ B may reference A cols via the Join's predicate even when B's
 relation isn't correlated to `L`; that's handled by `applyB.filter`
 referencing input cols.
 
+Before `joinPeel`, `liftCorrelationAboveJoin` moves correlation predicates
+above the body Join when doing so leaves both inputs uncorrelated. The body
+then remains intact and the normal Apply terminus joins it to L once.
+`joinPeel` serializes the body only when correlation remains inside at least
+one input after that lift, such as an outer reference in a projected value.
+
 ## Outer Apply kind
 
 The outer envelope above depends on the **outer** Apply's kind.
@@ -158,39 +164,40 @@ produces ≥1 row.
 - For a kInner body carrying a predicate, that formula is wrong: existence
   is a property of the (a, b) pair. `AssignUniqueId` tags each outer,
   `applyA` is kLeft over A (so an outer with no a row still reaches the
-  window), `applyB` is kLeftSemiProject over B carrying the predicate and
+  result), `applyB` is kLeftSemiProject over B carrying the predicate and
   the accumulated filter, and a `bool_or(applyA.mark AND applyB.mark)`
-  window over the outer's id answers the mark. One row per outer survives,
-  chosen by `padOrdinal = 1`; that is legal because `bool_or` reads the
-  whole partition and every remaining output column is an outer column.
+  aggregate grouped by the outer's id answers the mark and emits one row per
+  outer. The outer columns use `arbitrary` because the id functionally
+  determines them.
 - For a kLeft body, the chained `applyB` is kLeft. A real A row makes the
   body exist whether B matches or contributes a NULL-padded row. The outer
   mark is therefore `bool_or(applyA.includeMarker AND accumulatedFilter)`.
+  Conjuncts that read only L or A ride on `applyA.filter`. If every conjunct
+  can move there, B cannot affect the outer mark and `applyB` is omitted.
+  Remaining conjuncts are evaluated in the mark expression so the padded row
+  survives long enough to produce false when no body row qualifies.
 - For a non-null-aware kLeftSemiProject body, the chained `applyB` reproduces
   the body's mark. The outer mark is
   `bool_or(applyA.includeMarker AND accumulatedFilter)`, where the accumulated
-  filter may read that body mark.
+  filter may read that body mark. Conjuncts that read only L or A move to
+  `applyA.filter`; if none read the body mark, `applyB` is omitted.
 - Body kLeftSemiFilter, null-aware kLeftSemiProject and kAnti: NYI loud.
 
 ### outerKind = `kLeftSemiProject` IN (inLhs != nullptr, inBodyKey set)
 
 Outer emits `markColumn = (inLhs IN body's output column inBodyKey)`.
-`inBodyKey` references one of body's output columns; under chain
-rewrite, `inBodyKey` references A.cols or B.cols (or an expression
-over them).
+For a kInner body, `applyA` is kLeft so every outer reaches the result, and
+`applyB` is kLeftSemiProject carrying the IN operands and the body's join
+predicate. This produces one three-valued IN mark per A row. Two `bool_or`
+aggregates combine these marks across each outer: the final mark is true if
+any A row matched, NULL if only an unknown result exists, and false otherwise.
+`applyA`'s include marker excludes its synthetic row when A is empty.
+`inBodyKey` must read only B. `applyB` resolves it against its body, so a key
+reading A resolves on the input side instead: `terminusSemi` demotes the
+equality to a residual comparison and leaves no equi-key, and the leg loses
+the null-awareness the mark's unknown case needs. That shape is NYI loud.
 
-- If `inBodyKey` references only A cols: fold IN equi into `applyA`'s
-  semi shape directly; `applyB` becomes a filter on existence rather
-  than the mark source.
-- If `inBodyKey` references B cols: fold into `applyB`'s IN equi. The
-  IN check evaluates after the full (L,A,B) tuple is constructed.
-- If `inBodyKey` is a computed expression over both (rare):
-  intermediate Project after the chain computes it; then a follow-up
-  per-outer aggregate (`bool_or` over `eq(inLhs, inBodyKey)`) collapses
-  to the mark.
-
-The `nullAware` flag on outer Apply propagates to whichever Apply in
-the chain hosts the IN equi.
+Other body Join kinds are NYI loud.
 
 ## INNER pad-row drop with outer kLeft preservation
 
@@ -267,10 +274,11 @@ Combinations across (outerKind, joinKind):
 | kLeft (ESR=false) | kLeftSemiProject | **in scope** |
 | kLeft (ESR=false) | kLeftSemiFilter / kAnti | NYI loud |
 | kLeftSemiProject EXISTS | kInner, with or without predicate | **in scope** (mark composes per §"outerKind = kLeftSemiProject EXISTS") |
-| kLeftSemiProject EXISTS | kLeft | **in scope** (each left row yields output; reduce with `padOrdinal = 1`) |
+| kLeftSemiProject EXISTS | kLeft | **in scope** (each left row yields output; reduce by outer id) |
 | kLeftSemiProject EXISTS | kLeftSemiProject (not null-aware) | **in scope** (body mark stays available to the accumulated filter) |
 | kLeftSemiProject EXISTS | kLeftSemiFilter / null-aware kLeftSemiProject / kAnti | NYI loud |
-| kLeftSemiProject IN | any non-kFull | **in scope** (IN equi routed per `inBodyKey` reference site) |
+| kLeftSemiProject IN | kInner | **in scope** (three-valued comparison reduced per outer) |
+| kLeftSemiProject IN | other Join kinds | NYI loud |
 | any | kFull | NYI loud — needs DAG / re-evaluation of one side |
 
 NYI loud throws `VELOX_NYI` at the dispatch point with the specific
@@ -294,6 +302,13 @@ Limit / nested Join).
 - **Reorder for performance**: chain order is `Apply(L, A)` then
   `Apply(prev, B)` in body-Join's natural left-right order. Optimizer
   later may swap if cost-justified; that's not decorrelate's concern.
+- **Keep the body Join whole**: the chain Applies `A`, then `B`, so the
+  body's own Join never forms as a unit and `L x A` materializes before
+  `B` is read. Taking it apart is what lets the chain accept correlation
+  on either side — engines that decorrelate the body as a unit reject
+  those shapes. A body whose correlation lifts into a join condition
+  could be decorrelated once and joined to `L` whole; that path is not
+  built.
 - **Optimize uncorrelated side**: if A is uncorrelated, `applyA` hits
   terminus fast-path → cross-product Join. No special case in this
   rule.

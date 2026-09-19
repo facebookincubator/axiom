@@ -47,14 +47,50 @@ WHERE EXISTS (SELECT 1 FROM u left_u
                 AND NOT EXISTS (SELECT 1 FROM v inner_v WHERE inner_v.a = outer_u.a))
 ----
 -- EXISTS over a LEFT JOIN preserves rows whose right side is absent.
--- error_v1: Cannot resolve column name
 -- duckdb: VALUES (1), (3), (5)
 SELECT outer_u.a FROM u outer_u
 WHERE EXISTS (
   SELECT 1
-  FROM u left_u LEFT JOIN v right_v ON right_v.a = outer_u.a
-  WHERE right_v.a IS NULL
+  FROM u left_u LEFT JOIN v right_v ON right_v.a = left_u.a
+  WHERE left_u.a = outer_u.a AND right_v.a IS NULL
 )
+----
+-- EXISTS over a LEFT JOIN depends only on matching the left side.
+SELECT outer_u.a FROM (VALUES (0), (1), (2)) outer_u(a)
+WHERE EXISTS (
+  SELECT 1
+  FROM u left_u LEFT JOIN v right_v ON right_v.a = left_u.a
+  WHERE left_u.a = outer_u.a
+)
+----
+-- IN over a correlated inner join returns false for an empty left input, NULL
+-- for only an unknown comparison, and true for a match.
+-- error_v1: Nested correlation across subquery boundaries is not supported yet
+SELECT outer_u.a, 2 * outer_u.a IN (
+  SELECT right_u.a
+  FROM (
+    SELECT a + outer_u.a AS a
+    FROM u
+    WHERE a = outer_u.a
+  ) left_u
+  JOIN (VALUES (NULL), (0), (4)) right_u(a)
+    ON right_u.a IS NULL OR left_u.a = right_u.a
+)
+FROM (VALUES (0), (1), (2)) outer_u(a)
+----
+-- A NULL on the left of IN reads NULL when the body has a row, and false when
+-- the body is empty.
+SELECT outer_u.a, outer_u.a IN (
+  SELECT right_u.a
+  FROM (SELECT t.a + outer_u.b AS a FROM (VALUES (1), (2)) t(a)) left_u
+  JOIN (VALUES (1), (3)) right_u(a) ON left_u.a = right_u.a
+)
+FROM (
+  VALUES
+    (CAST(NULL AS INTEGER), 0),
+    (CAST(NULL AS INTEGER), 100),
+    (1, 0)
+) outer_u(a, b)
 ----
 -- Scalar subquery and EXISTS over the same inner subquery must produce
 -- distinct columns (a scalar value vs a boolean).

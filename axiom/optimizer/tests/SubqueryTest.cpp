@@ -504,6 +504,42 @@ TEST_P(SubqueryTest, repeatedUncorrelatedScalar) {
           .build());
 }
 
+TEST_P(SubqueryTest, repeatedUncorrelatedScalarInSemiBody) {
+  // An IN body and the query around it read the same uncorrelated scalar. A
+  // semi Apply passes out only the outer's columns and a mark, so the body
+  // cannot read the outer's copy without correlating; each evaluates its own.
+  auto query =
+      "SELECT n_name FROM nation "
+      "WHERE n_name = (SELECT max(r_name) FROM region) "
+      "AND n_name IN ("
+      "  SELECT n_name FROM nation "
+      "  WHERE n_name = (SELECT max(r_name) FROM region))";
+  SCOPED_TRACE(query);
+
+  auto plan = toSingleNodePlan(query);
+  AXIOM_ASSERT_PLAN_V2(
+      plan,
+      matchHiveScan("region")
+          .aliases({"outer_region_name"})
+          .singleAggregation({}, {"max(outer_region_name) as outer_max"})
+          .hashJoinInner(
+              matchHiveScan("nation")
+                  .aliases({"outer_name"})
+                  .hashJoinLeftSemiFilter(
+                      matchHiveScan("nation")
+                          .aliases({"inner_name"})
+                          .hashJoinInner(
+                              matchHiveScan("region")
+                                  .aliases({"inner_region_name"})
+                                  .singleAggregation(
+                                      {},
+                                      {"max(inner_region_name) as inner_max"}),
+                              {.keys = {{"inner_name = inner_max"}}}),
+                      {.keys = {{"outer_name = inner_max"}}}),
+              {.keys = {{"outer_max = outer_name"}}})
+          .build());
+}
+
 TEST_P(SubqueryTest, repeatedUncorrelatedScalarInUnion) {
   // A repeated uncorrelated scalar is reused within a UNION leg, but evaluated
   // independently from the enclosing query.
@@ -731,6 +767,39 @@ TEST_P(SubqueryTest, correlatedExistsOverSemiJoin) {
               matchScan("u").hashJoin(
                   matchScan("w"), core::JoinType::kLeftSemiFilter),
               core::JoinType::kLeftSemiFilter)
+          .build());
+}
+
+TEST_P(SubqueryTest, correlatedExistsOverLeftJoin) {
+  if (!useV2_) {
+    GTEST_SKIP();
+  }
+
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
+  testConnector_->addTable("w", ROW("p", BIGINT()));
+
+  // The right side cannot affect EXISTS when the predicate above the LEFT JOIN
+  // reads only the outer and left inputs.
+  auto query =
+      "SELECT t.a FROM t WHERE EXISTS ("
+      "  SELECT 1 FROM (SELECT u.x, u.y + t.a AS y FROM u) u "
+      "  LEFT JOIN w ON u.y = w.p WHERE u.x = t.a)";
+  SCOPED_TRACE(query);
+
+  auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+  AXIOM_ASSERT_PLAN_V2(
+      plan,
+      matchScan("t")
+          .assignUniqueId("row_id")
+          .hashJoinLeft(
+              matchScan("u").project({"x", "true as marker"}),
+              {.keys = {{"a = x"}}})
+          .project({"a", "row_id", "coalesce(marker, false) as matched"})
+          .streamingAggregation(
+              {"row_id"}, {"bool_or(matched) as any_match", "arbitrary(a)"})
+          .filter("any_match")
+          .project({"a"})
           .build());
 }
 

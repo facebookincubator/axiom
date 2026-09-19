@@ -3563,7 +3563,18 @@ ExprCP Translator::liftSubquery(
       isExists ? LpNameSet{} : allNames(*subqueryExpr.subquery()->outputType());
 
   subqueries_.push(outerScope, liftTarget);
+  // A semi Apply emits the outer's columns and a mark, so a lift inside the
+  // body never reaches the outer and the two cannot share one. Reading the
+  // outer's lift is the only way to share it, and that correlates a body the
+  // query left uncorrelated, so the body lifts its own copy. A scalar body
+  // shares freely: its columns reach the outer through the Apply.
+  if (isSemi) {
+    subqueries_.pushLiftedCorrelationBarrier();
+  }
   Translated inner = translateNode(*subqueryExpr.subquery(), required);
+  if (isSemi) {
+    subqueries_.popLiftedCorrelationBarrier();
+  }
   ColumnVector correlationColumns = subqueries_.pop();
 
   NodeCP body = inner.node;
