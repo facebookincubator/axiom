@@ -58,13 +58,18 @@ struct QueryEntry {
   std::string expectedErrorV1;
   std::string expectedErrorV2;
   bool checkColumnNames{false};
+  /// Set by `-- disabled_v1: <reason>`: the query runs under v2 only, and the
+  /// reason says what v1 does with it — wrong results, or a crash. A v1 that
+  /// fails with a message states it as `-- error_v1:` and keeps running.
+  /// Empty when the query runs under both.
+  std::optional<std::string> disabledV1Reason;
   int32_t lineNumber{0};
 
-  /// True if the query expects an error in both optimizers, so no run produces
-  /// a result set. A query that fails in only one optimizer still yields
-  /// results in the other.
-  bool expectError() const {
-    return !expectedErrorV1.empty() && !expectedErrorV2.empty();
+  /// True if at least one optimizer both runs the query and is expected to
+  /// succeed, so some run yields a result set to compare.
+  bool producesResults() const {
+    return (!disabledV1Reason.has_value() && expectedErrorV1.empty()) ||
+        expectedErrorV2.empty();
   }
 };
 
@@ -130,6 +135,13 @@ struct SqlFile {
   ///   -- duckdb: sql     -> use alternate SQL for DuckDB comparison
   ///   -- columns         -> verify column names match DuckDB
   ///   -- disabled        -> skip this query
+  ///   -- disabled_v1: reason -> run under v2 only; the reason states what v1
+  ///                             does with the query
+  /// `-- disabled_v1:` requires a non-empty reason and cannot be combined with
+  /// `-- disabled` or with `-- error:`/`-- error_v1:`.
+  /// Every directive that takes a value requires one, and accepts it with or
+  /// without a space after the separator: `-- error:boom` and `-- error: boom`
+  /// are the same directive.
   /// Unrecognized '-- ' lines before SQL starts are treated as plain
   /// comments and ignored. '-- ' lines after SQL starts are part of the
   /// SQL body.

@@ -723,6 +723,35 @@ class TopNMatcher : public PlanMatcherImpl<TopNNode> {
   const std::optional<int64_t> count_;
 };
 
+// Verifies sort keys and orders against the expected ORDER BY expressions
+// (key + optional ASC/DESC and NULLS FIRST/LAST).
+void verifySortingKeys(
+    const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
+    const std::vector<SortOrder>& sortingOrders,
+    const std::vector<std::string>& ordering,
+    const std::unordered_map<std::string, std::string>& symbols) {
+  EXPECT_EQ(sortingKeys.size(), ordering.size())
+      << "Sorting key count mismatch";
+  AXIOM_TEST_RETURN_IF_FAILURE_VOID
+
+  EXPECT_EQ(sortingOrders.size(), ordering.size())
+      << "Sorting order count mismatch";
+  AXIOM_TEST_RETURN_IF_FAILURE_VOID
+
+  for (size_t i = 0; i < ordering.size(); ++i) {
+    auto expected =
+        parse::DuckSqlExpressionsParser().parseOrderByExpr(ordering[i]);
+    auto expectedExpr = expected.expr;
+    if (!symbols.empty()) {
+      expectedExpr = ExprMatcher::rewriteInputNames(expectedExpr, symbols);
+    }
+    EXPECT_EQ(sortingKeys[i]->toString(), expectedExpr->toString());
+    EXPECT_EQ(sortingOrders[i].isAscending(), expected.ascending);
+    EXPECT_EQ(sortingOrders[i].isNullsFirst(), expected.nullsFirst);
+    AXIOM_TEST_RETURN_IF_FAILURE_VOID
+  }
+}
+
 class OrderByMatcher : public PlanMatcherImpl<OrderByNode> {
  public:
   explicit OrderByMatcher(const std::shared_ptr<PlanMatcher>& matcher)
@@ -748,22 +777,9 @@ class OrderByMatcher : public PlanMatcherImpl<OrderByNode> {
     }
 
     if (!ordering_.empty()) {
-      EXPECT_EQ(plan.sortingOrders().size(), ordering_.size());
+      verifySortingKeys(
+          plan.sortingKeys(), plan.sortingOrders(), ordering_, symbols);
       AXIOM_TEST_RETURN_IF_FAILURE
-
-      for (auto i = 0; i < ordering_.size(); ++i) {
-        auto expected =
-            parse::DuckSqlExpressionsParser().parseOrderByExpr(ordering_[i]);
-        auto expectedExpr = expected.expr;
-        if (!symbols.empty()) {
-          expectedExpr = ExprMatcher::rewriteInputNames(expectedExpr, symbols);
-        }
-
-        EXPECT_EQ(plan.sortingKeys()[i]->toString(), expectedExpr->toString());
-        EXPECT_EQ(plan.sortingOrders()[i].isAscending(), expected.ascending);
-        EXPECT_EQ(plan.sortingOrders()[i].isNullsFirst(), expected.nullsFirst);
-        AXIOM_TEST_RETURN_IF_FAILURE
-      }
     }
 
     return MatchResult::success(symbols);
@@ -1280,30 +1296,6 @@ void verifyShuffleProducer(
   }
 }
 
-// Verifies the MergeExchange's sort keys and orders against the expected ORDER
-// BY expressions (key + optional ASC/DESC and NULLS FIRST/LAST).
-void verifyMergeOrdering(
-    const MergeExchangeNode& merge,
-    const std::vector<std::string>& ordering,
-    const std::unordered_map<std::string, std::string>& symbols) {
-  EXPECT_EQ(merge.sortingKeys().size(), ordering.size())
-      << "Sorting key count mismatch";
-  AXIOM_TEST_RETURN_IF_FAILURE_VOID
-
-  for (size_t i = 0; i < ordering.size(); ++i) {
-    auto expected =
-        parse::DuckSqlExpressionsParser().parseOrderByExpr(ordering[i]);
-    auto expectedExpr = expected.expr;
-    if (!symbols.empty()) {
-      expectedExpr = ExprMatcher::rewriteInputNames(expectedExpr, symbols);
-    }
-    EXPECT_EQ(merge.sortingKeys()[i]->toString(), expectedExpr->toString());
-    EXPECT_EQ(merge.sortingOrders()[i].isAscending(), expected.ascending);
-    EXPECT_EQ(merge.sortingOrders()[i].isNullsFirst(), expected.nullsFirst);
-    AXIOM_TEST_RETURN_IF_FAILURE_VOID
-  }
-}
-
 // Verifies the producer PartitionedOutput's partition keys against the expected
 // key names, applying symbol rewriting.
 void verifyPartitionKeys(
@@ -1382,8 +1374,10 @@ PlanMatcher::MatchResult ShuffleBoundaryMatcher::match(
 
   if (!keys_.empty()) {
     if (type_ == ShuffleType::kOrdered) {
-      verifyMergeOrdering(
-          *static_cast<const MergeExchangeNode*>(plan.get()),
+      const auto& merge = *static_cast<const MergeExchangeNode*>(plan.get());
+      verifySortingKeys(
+          merge.sortingKeys(),
+          merge.sortingOrders(),
           keys_,
           producerResult.symbols);
     } else {
@@ -1828,8 +1822,8 @@ class RowNumberMatcher : public PlanMatcherImpl<RowNumberNode> {
   const std::optional<int32_t> limit_;
 };
 
-// Matches a TopNRowNumberNode and verifies partition keys, sorting keys,
-// and limit.
+// Matches a TopNRowNumberNode and verifies partition keys, sorting keys and
+// their orders, and limit.
 class TopNRowNumberMatcher : public PlanMatcherImpl<TopNRowNumberNode> {
  public:
   TopNRowNumberMatcher(
@@ -1852,7 +1846,8 @@ class TopNRowNumberMatcher : public PlanMatcherImpl<TopNRowNumberNode> {
         plan.partitionKeys(), partitionKeys_, symbols, "Partition key");
     AXIOM_TEST_RETURN_IF_FAILURE
 
-    matchFieldNames(plan.sortingKeys(), sortingKeys_, symbols, "Sorting key");
+    verifySortingKeys(
+        plan.sortingKeys(), plan.sortingOrders(), sortingKeys_, symbols);
     AXIOM_TEST_RETURN_IF_FAILURE
 
     EXPECT_EQ(plan.limit(), limit_) << "Limit mismatch";

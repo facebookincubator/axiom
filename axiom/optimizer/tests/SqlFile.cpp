@@ -38,6 +38,15 @@ AXIOM_DEFINE_EMBEDDED_ENUM_NAME(QueryEntry, Type, typeNames)
 
 namespace {
 
+// Names of the annotations that carry a value. `count` separates its value
+// with a space, the rest with a colon.
+constexpr std::string_view kCountName = "count";
+constexpr std::string_view kErrorName = "error";
+constexpr std::string_view kErrorV1Name = "error_v1";
+constexpr std::string_view kErrorV2Name = "error_v2";
+constexpr std::string_view kDuckDbName = "duckdb";
+constexpr std::string_view kDisabledV1Name = "disabled_v1";
+
 // Returns leading-whitespace-trimmed view of 'sv'.
 std::string_view ltrim(std::string_view sv) {
   size_t i = 0;
@@ -54,6 +63,35 @@ void rtrim(std::string& s) {
           s.back() == '\r')) {
     s.pop_back();
   }
+}
+
+// Reads 'annotation' as the value-carrying directive 'name', whose value
+// follows 'separator'. Returns the trimmed value, empty for the bare name so
+// the caller can report a missing value. Returns nullopt when the annotation
+// names something else, leaving it to be read as a plain comment.
+//
+// Matching on the name rather than on 'name + separator + space' keeps
+// '-- error:boom' a directive: written as a prefix, a missing space makes the
+// line prose and the assertion silently disappears.
+std::optional<std::string> directiveValue(
+    const std::string& annotation,
+    std::string_view name,
+    char separator) {
+  if (!annotation.starts_with(name)) {
+    return std::nullopt;
+  }
+  std::string_view rest{annotation};
+  rest.remove_prefix(name.size());
+  if (rest.empty()) {
+    return std::string{};
+  }
+  if (rest.front() != separator) {
+    return std::nullopt;
+  }
+  rest.remove_prefix(1);
+  std::string value{ltrim(rest)};
+  rtrim(value);
+  return value;
 }
 
 // Splits 'content' on '----' separator lines, trims each statement, and
@@ -119,15 +157,22 @@ std::vector<QueryEntry> parseQueries(
       sqlLines.pop_back();
     }
 
+    if (!sqlLines.empty()) {
+      VELOX_USER_CHECK(
+          !disabled || !current.disabledV1Reason.has_value(),
+          "-- disabled cannot be combined with -- disabled_v1: (line {})",
+          sqlStartLine);
+    }
+
     if (!sqlLines.empty() && !disabled) {
       // `-- columns` checks output column names, so it needs a result set from
-      // at least one optimizer: reject it only for a count query or one that
-      // fails in both v1 and v2.
+      // at least one optimizer: reject it for a count query, and for one no
+      // optimizer both runs and completes.
       VELOX_CHECK(
           !current.checkColumnNames ||
               ((current.type == QueryEntry::Type::kResults ||
                 current.type == QueryEntry::Type::kOrdered) &&
-               !current.expectError()),
+               current.producesResults()),
           "'-- columns' can only be used with 'results' or 'ordered' queries that succeed in at least one optimizer at line {}",
           sqlStartLine);
 
@@ -167,18 +212,46 @@ std::vector<QueryEntry> parseQueries(
         current.type = QueryEntry::Type::kOrdered;
       } else if (annotation == "disabled") {
         disabled = true;
-      } else if (annotation.substr(0, 6) == "count ") {
+      } else if (
+          auto reason = directiveValue(annotation, kDisabledV1Name, ':')) {
+        VELOX_USER_CHECK(
+            !current.disabledV1Reason.has_value(),
+            "duplicate -- disabled_v1: (line {})",
+            lineNumber);
+        VELOX_USER_CHECK(
+            current.expectedErrorV1.empty(),
+            "-- disabled_v1: cannot be combined with -- error: or -- error_v1: (line {})",
+            lineNumber);
+        VELOX_USER_CHECK(
+            !reason->empty(),
+            "-- disabled_v1 requires a reason, as in "
+            "'-- disabled_v1: wrong results' (line {})",
+            lineNumber);
+        current.disabledV1Reason = std::move(*reason);
+      } else if (auto count = directiveValue(annotation, kCountName, ' ')) {
+        VELOX_USER_CHECK(
+            !count->empty(),
+            "-- count requires a row count, as in '-- count 3' (line {})",
+            lineNumber);
         current.type = QueryEntry::Type::kCount;
-        current.expectedCount = std::stoull(annotation.substr(6));
-      } else if (annotation.substr(0, 7) == "error: ") {
+        current.expectedCount = std::stoull(*count);
+      } else if (auto message = directiveValue(annotation, kErrorName, ':')) {
         VELOX_USER_CHECK(
             current.expectedErrorV1.empty() && current.expectedErrorV2.empty(),
             "-- error: cannot be combined with -- error_v1:/-- error_v2: (line {})",
             lineNumber);
-        current.expectedError = annotation.substr(7);
+        VELOX_USER_CHECK(
+            !current.disabledV1Reason.has_value(),
+            "-- error: cannot be combined with -- disabled_v1: (line {})",
+            lineNumber);
+        VELOX_USER_CHECK(
+            !message->empty(),
+            "-- error requires a message (line {})",
+            lineNumber);
+        current.expectedError = std::move(*message);
         current.expectedErrorV1 = current.expectedError;
         current.expectedErrorV2 = current.expectedError;
-      } else if (annotation.substr(0, 10) == "error_v1: ") {
+      } else if (auto message = directiveValue(annotation, kErrorV1Name, ':')) {
         VELOX_USER_CHECK(
             current.expectedError.empty(),
             "-- error_v1: cannot be combined with -- error: (line {})",
@@ -187,8 +260,16 @@ std::vector<QueryEntry> parseQueries(
             current.expectedErrorV1.empty(),
             "duplicate -- error_v1: (line {})",
             lineNumber);
-        current.expectedErrorV1 = annotation.substr(10);
-      } else if (annotation.substr(0, 10) == "error_v2: ") {
+        VELOX_USER_CHECK(
+            !current.disabledV1Reason.has_value(),
+            "-- error_v1: cannot be combined with -- disabled_v1: (line {})",
+            lineNumber);
+        VELOX_USER_CHECK(
+            !message->empty(),
+            "-- error_v1 requires a message (line {})",
+            lineNumber);
+        current.expectedErrorV1 = std::move(*message);
+      } else if (auto message = directiveValue(annotation, kErrorV2Name, ':')) {
         VELOX_USER_CHECK(
             current.expectedError.empty(),
             "-- error_v2: cannot be combined with -- error: (line {})",
@@ -197,9 +278,15 @@ std::vector<QueryEntry> parseQueries(
             current.expectedErrorV2.empty(),
             "duplicate -- error_v2: (line {})",
             lineNumber);
-        current.expectedErrorV2 = annotation.substr(10);
-      } else if (annotation.substr(0, 8) == "duckdb: ") {
-        current.duckDbSql = annotation.substr(8);
+        VELOX_USER_CHECK(
+            !message->empty(),
+            "-- error_v2 requires a message (line {})",
+            lineNumber);
+        current.expectedErrorV2 = std::move(*message);
+      } else if (auto sql = directiveValue(annotation, kDuckDbName, ':')) {
+        VELOX_USER_CHECK(
+            !sql->empty(), "-- duckdb requires a query (line {})", lineNumber);
+        current.duckDbSql = std::move(*sql);
       } else if (annotation == "columns") {
         current.checkColumnNames = true;
       }
