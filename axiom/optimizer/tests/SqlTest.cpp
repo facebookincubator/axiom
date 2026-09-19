@@ -372,6 +372,9 @@ class SqlTest : public SqlTestBase {
   }
 
   void TestBody() override {
+    if (!UseV2 && entry_.disabledV1Reason.has_value()) {
+      GTEST_SKIP() << "Disabled under v1: " << *entry_.disabledV1Reason;
+    }
     const std::string& expectedError =
         UseV2 ? entry_.expectedErrorV2 : entry_.expectedErrorV1;
     try {

@@ -476,9 +476,9 @@ TEST_P(SubqueryTest, uncorrelatedProject) {
 }
 
 TEST_P(SubqueryTest, repeatedUncorrelatedScalar) {
-  // Repeated references to one uncorrelated scalar subquery, including a
-  // reference nested inside another subquery's body, are evaluated once and
-  // joined onto the outer input once.
+  // References to one uncorrelated scalar subquery from the same scope share a
+  // single evaluation. A reference inside another subquery's body evaluates it
+  // again: reading the outer's copy would correlate the body.
   auto query =
       "SELECT "
       "  IF(n_regionkey > (SELECT max(r_regionkey) FROM region), "
@@ -494,10 +494,18 @@ TEST_P(SubqueryTest, repeatedUncorrelatedScalar) {
       plan,
       matchHiveScan("nation")
           .nestedLoopJoin(
-              matchHiveScan("supplier")
-                  .hashJoinRight(matchHiveScan("region").singleAggregation(
-                      {}, {"max(r_regionkey) as max_key"}))
-                  .enforceSingleRow())
+              matchHiveScan("region")
+                  .aliases({"outer_region_key"})
+                  .singleAggregation({}, {"max(outer_region_key) as max_key"})
+                  .nestedLoopJoin(
+                      matchHiveScan("supplier")
+                          .hashJoinInner(
+                              matchHiveScan("region")
+                                  .aliases({"body_region_key"})
+                                  .singleAggregation(
+                                      {}, {"max(body_region_key) as body_max"}),
+                              {.keys = {{"s_suppkey = body_max"}}})
+                          .enforceSingleRow()))
           .project(
               {"if(gt(n_regionkey, max_key), s_suppkey, -1) as a",
                "max_key as b"})
@@ -2749,9 +2757,24 @@ TEST_P(SubqueryTest, constantFoldingWithoutExecutor) {
   auto logicalPlan =
       parseSelect("SELECT * FROM nation WHERE n_regionkey > (SELECT 1)");
 
-  auto plan = planVelox(
-      logicalPlan, {.maxRemotePartitions = 4, .maxLocalPartitions = 4});
-  EXPECT_EQ(3, plan.plan->fragments().size());
+  // `(SELECT 1)` folds to its literal, so the constant reaches the scan as a
+  // filter and planning completes with a null executor.
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchHiveScan("nation", test::gt("n_regionkey", int64_t{1})).build());
+  }
+
+  {
+    auto plan = planVelox(
+        logicalPlan, {.maxRemotePartitions = 4, .maxLocalPartitions = 4});
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        plan.plan,
+        matchHiveScan("nation", test::gt("n_regionkey", int64_t{1}))
+            .gather()
+            .build());
+  }
 }
 
 AXIOM_INSTANTIATE_V1_V2(SubqueryTest);

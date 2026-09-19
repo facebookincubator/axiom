@@ -56,6 +56,17 @@ class PlanNodeVisitorContext;
 /// have two inputs. Union may have many inputs. Most other nodes have just
 /// one input. Every plan node has an output schema (list of names and types
 /// of output columns) expressed as a RowType.
+///
+/// Shape of a plan:
+///
+/// - Column names are unique across the plan, so a name identifies the one
+///   node that produces it.
+/// - The nodes reachable through `inputs()` form a tree: each is the input of
+///   one other node.
+/// - A subquery's plan hangs off a `SubqueryExpr` rather than off `inputs()`,
+///   and the same plan may be embedded in several of them. A consumer that
+///   walks subquery plans therefore visits one plan more than once, and sees
+///   its names more than once with it.
 class LogicalPlanNode : public velox::ISerializable {
  public:
   LogicalPlanNode(
