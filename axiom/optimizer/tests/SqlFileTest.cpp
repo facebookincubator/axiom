@@ -154,6 +154,108 @@ TEST_F(SqlFileTest, disabled) {
   EXPECT_EQ(entries[0].sql, "SELECT 1");
 }
 
+// A value binds to its directive whether or not a space follows the
+// separator, and surrounding whitespace is not part of it.
+TEST_F(SqlFileTest, directiveValueSpacing) {
+  auto entries = parseQueries(
+      "-- error_v1:v1 message\n"
+      "-- error_v2:   v2 message   \n"
+      "-- duckdb:SELECT 1 AS x\n"
+      "SELECT 1 x");
+  ASSERT_THAT(entries, testing::SizeIs(1));
+  EXPECT_EQ(entries[0].expectedErrorV1, "v1 message");
+  EXPECT_EQ(entries[0].expectedErrorV2, "v2 message");
+  EXPECT_EQ(entries[0].duckDbSql, std::optional<std::string>("SELECT 1 AS x"));
+}
+
+TEST_F(SqlFileTest, directiveRequiresValue) {
+  for (const auto* annotation :
+       {"-- error:\n", "-- error_v1:\n", "-- error_v2:\n", "-- duckdb:\n"}) {
+    SCOPED_TRACE(annotation);
+    VELOX_ASSERT_THROW(
+        parseQueries(annotation + std::string("SELECT 1")), "requires a");
+  }
+}
+
+// A comment that opens with a directive's name but no separator stays prose.
+TEST_F(SqlFileTest, directiveNameInProse) {
+  auto entries = parseQueries(
+      "-- error cases are covered below\n"
+      "SELECT 1");
+  ASSERT_THAT(entries, testing::SizeIs(1));
+  EXPECT_EQ(entries[0].expectedError, "");
+  EXPECT_EQ(entries[0].sql, "SELECT 1");
+}
+
+TEST_F(SqlFileTest, disabledV1) {
+  for (const auto* annotation :
+       {"-- disabled_v1: wrong results\n", "-- disabled_v1:wrong results\n"}) {
+    SCOPED_TRACE(annotation);
+    auto entries = parseQueries(annotation + std::string("SELECT 1"));
+    ASSERT_THAT(entries, testing::SizeIs(1));
+    EXPECT_EQ(entries[0].sql, "SELECT 1");
+    ASSERT_TRUE(entries[0].disabledV1Reason.has_value());
+    EXPECT_EQ(*entries[0].disabledV1Reason, "wrong results");
+  }
+}
+
+TEST_F(SqlFileTest, disabledV1RequiresReason) {
+  for (const auto* annotation :
+       {"-- disabled_v1\n", "-- disabled_v1:\n", "-- disabled_v1:   \n"}) {
+    SCOPED_TRACE(annotation);
+    VELOX_ASSERT_THROW(
+        parseQueries(annotation + std::string("SELECT 1")),
+        "requires a reason");
+  }
+}
+
+TEST_F(SqlFileTest, disabledV1Conflicts) {
+  VELOX_ASSERT_THROW(
+      parseQueries(
+          "-- disabled\n"
+          "-- disabled_v1: wrong results\n"
+          "SELECT 1"),
+      "cannot be combined");
+  VELOX_ASSERT_THROW(
+      parseQueries(
+          "-- disabled_v1: wrong results\n"
+          "-- error_v1: boom\n"
+          "SELECT 1"),
+      "cannot be combined");
+  VELOX_ASSERT_THROW(
+      parseQueries(
+          "-- error_v1: boom\n"
+          "-- disabled_v1: wrong results\n"
+          "SELECT 1"),
+      "cannot be combined");
+  VELOX_ASSERT_THROW(
+      parseQueries(
+          "-- disabled_v1: wrong results\n"
+          "-- error: boom\n"
+          "SELECT 1"),
+      "cannot be combined");
+  VELOX_ASSERT_THROW(
+      parseQueries(
+          "-- disabled_v1: wrong results\n"
+          "-- duplicate\n"
+          "-- disabled_v1: again\n"
+          "SELECT 1"),
+      "duplicate");
+}
+
+// `-- columns` compares column names against DuckDB, so it needs a run that
+// both happens and succeeds. With v1 disabled and v2 expected to fail, none
+// does.
+TEST_F(SqlFileTest, columnsWithDisabledV1AndFailingV2) {
+  VELOX_ASSERT_THROW(
+      parseQueries(
+          "-- disabled_v1: wrong results\n"
+          "-- error_v2: boom\n"
+          "-- columns\n"
+          "SELECT 1"),
+      "'-- columns' can only be used with");
+}
+
 TEST_F(SqlFileTest, trailingWhitespace) {
   auto entries = parseQueries("SELECT 1   \n\n");
   ASSERT_THAT(entries, testing::SizeIs(1));

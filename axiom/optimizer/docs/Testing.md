@@ -271,11 +271,14 @@ Tests are written as plain `.sql` files. Queries are separated by `----`. Commen
 | `-- error_v2: message` | Expect the query to fail under the v2 optimizer with an error containing `message`. v1 is verified normally unless it also carries `error_v1`. |
 | `-- duckdb: sql` | Use a different SQL for the DuckDB comparison (when Presto and DuckDB syntax differs). |
 | `-- columns` | Additionally verify that column names match between Axiom and DuckDB. |
+| `-- disabled_v1: reason` | Run this query under v2 only, because v1 answers it wrongly or crashes on it. The reason says which. |
 | `-- disabled` | Skip this query entirely. For use during local development only — do not commit disabled queries. |
 
 Annotations can be combined. For example, `-- ordered` and `-- columns` can be used together.
 
 Use `error_v1`/`error_v2` when the two optimizers legitimately diverge — typically a v1 limitation that v2 fixes (or vice versa). The optimizer without an error annotation runs and is verified normally, so the same query can assert a v1 error and check the v2 result.
+
+Reach for `disabled_v1` only where v1 cannot be asserted against at all: it returns wrong results, or it crashes. A v1 that fails with a message is still testable — state the message as `error_v1`.
 
 **Example:**
 

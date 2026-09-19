@@ -1140,13 +1140,16 @@ TEST_P(SubfieldTest, subquery) {
 
   {
     auto logicalPlan = parseSelect(
-        "SELECT a.y FROM t_subquery WHERE a.x = (SELECT 1)", kHiveConnectorId);
+        "SELECT a.y FROM t_subquery "
+        "WHERE a.x = (SELECT count(*) FROM t_subquery)",
+        kHiveConnectorId);
 
     auto plan = toSingleNodePlan(logicalPlan);
 
     auto matcher = matchHiveScan("t_subquery", {{"a", {".x", ".y"}}})
                        .project()
-                       .hashJoin(matchValues().project())
+                       .projectIf(optimizerOptions_.pushdownSubfields)
+                       .hashJoin(matchHiveScan("t_subquery").aggregation())
                        .project()
                        .build();
     AXIOM_ASSERT_PLAN(plan, matcher);

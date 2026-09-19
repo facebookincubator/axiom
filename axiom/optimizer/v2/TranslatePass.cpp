@@ -303,23 +303,6 @@ void populateScope(
   }
 }
 
-// Builds one fresh Column per field of 'rowType' and populates 'scope' to
-// map each field name to its column.
-ColumnVector makeOutputColumns(
-    const velox::RowType& rowType,
-    float cardinality,
-    Scope& scope) {
-  ColumnVector columns;
-  columns.reserve(rowType.size());
-  for (size_t i = 0; i < rowType.size(); ++i) {
-    Value value(toType(rowType.childAt(i)), cardinality);
-    columns.push_back(
-        Column::createForSymbol(toName(rowType.nameOf(i)), value));
-  }
-  populateScope(rowType, columns, scope);
-  return columns;
-}
-
 struct Translated {
   NodeCP node{nullptr};
   Scope scope;
@@ -344,8 +327,8 @@ class SubqueryContext {
   bool correlateLifted(ColumnCP column);
 
   // Prevents lifted-result reuse from reaching targets outside the current
-  // set-operation branch. Reuse within scopes entered after the barrier is
-  // still allowed.
+  // set-operation branch or subquery body. Reuse within scopes entered after
+  // the barrier is still allowed.
   void pushLiftedCorrelationBarrier();
   void popLiftedCorrelationBarrier();
 
@@ -740,6 +723,19 @@ class Translator {
   // and nothing else from outside.
   bool tryJoinIntoPendingLifts(NodeCP body, LiftTarget& target);
 
+  // Creates the Column a translated logical-plan node outputs under 'symbol'.
+  // Names it after 'symbol', except while re-translating a subquery plan an
+  // earlier reference already translated, whose columns are named
+  // synthetically.
+  ColumnCP columnForSymbol(Name symbol, const Value& value);
+
+  // Builds one fresh Column per field of 'rowType' and populates 'scope' to
+  // map each field name to its column.
+  ColumnVector makeOutputColumns(
+      const velox::RowType& rowType,
+      float cardinality,
+      Scope& scope);
+
   // Renames a lifted body's single output column when the target already
   // outputs one of that name, wrapping 'body' in an aliasing Project.
   // Returns the column the parent expression reads.
@@ -802,9 +798,10 @@ class Translator {
       LiftTarget* liftTarget);
 
   // Returns the value a scalar subquery over 'body' produces, when 'body' is a
-  // constant `Values`: its single row's value, or NULL if it has no rows.
-  // Returns nullptr when 'body' is anything else. Fails if 'body' has more than
-  // one row, which no scalar subquery may.
+  // constant `Values` or a `Project` over one: the single row's value, or NULL
+  // if it has no rows. Returns nullptr for any other 'body', and for a
+  // `Project` whose expression is not a literal. Fails if the body has more
+  // than one row, which no scalar subquery may.
   ExprCP tryScalarFromValues(NodeCP body);
 
   // Evaluates 'aggregate' from the listed discrete-predicate (e.g. partition)
@@ -862,13 +859,20 @@ class Translator {
   // Lifted results of each scalar subquery, keyed by its inner plan.
   // Identical subqueries share one inner plan (hash-consed), so a repeated
   // reference reuses a lift instead of lifting again. A lift is reusable
-  // only where its column can be read: from the lift target it landed on,
-  // or from a body it can be correlated into. Lifts on unrelated plans are
-  // not interchangeable, so every lift is kept and the usable one is chosen
-  // per reference. A folded constant (Literal) is on no plan and always
+  // where its column can be read: from the lift target it landed on, or from
+  // a scope entered after it. Lifts on unrelated plans are not
+  // interchangeable, so every lift is kept and the usable one is chosen per
+  // reference. A folded constant (Literal) is on no plan and always
   // reusable.
   folly::F14FastMap<const lp::LogicalPlanNode*, std::vector<ExprCP>>
       scalarSubqueryColumns_;
+
+  // Subquery plans translated so far. A plan embedded in several
+  // `SubqueryExpr`s is translated once per reference.
+  folly::F14FastSet<const lp::LogicalPlanNode*> translatedSubqueries_;
+
+  // True while translating a plan already in 'translatedSubqueries_'.
+  bool translatingDuplicate_{false};
 
   // Result column of every inference call already lifted, so a call appearing
   // more than once is evaluated once. A column is reusable only where the
@@ -1696,7 +1700,7 @@ NodeCP Translator::maybeWrapInWindow(
           WindowFunction{call, frame, windowExpr->ignoreNulls()});
 
       const auto& name = projectNames[projectIndex];
-      auto* column = Column::createForSymbol(toName(name), value);
+      auto* column = columnForSymbol(toName(name), value);
       functionColumns.push_back(column);
       windowScope[name] = column;
     }
@@ -1780,11 +1784,7 @@ ColumnCP Translator::materializeColumn(
   }
   PrecomputeProjections precompute{*node, builder_};
   Name outName = toName(std::string{name});
-  auto* column = make<Column>(
-      queryCtx()->newName(outName),
-      /*relation=*/nullptr,
-      expr->value(),
-      /*alias=*/outName);
+  auto* column = columnForSymbol(outName, expr->value());
   precompute.toColumn(expr, column);
   *node = std::move(precompute).node();
   materialized_.insert_or_assign(expr, column);
@@ -2030,7 +2030,7 @@ void Translator::translateGroupingKeys(
     } else if (keyExpr->is(PlanType::kColumnExpr)) {
       column = keyExpr->as<Column>();
     } else {
-      column = Column::createForSymbol(toName(names[i]), keyExpr->value());
+      column = columnForSymbol(toName(names[i]), keyExpr->value());
     }
     if (!hasGroupingSets) {
       keyToOutput.emplace(keyExpr, column);
@@ -2110,8 +2110,8 @@ Translated Translator::translateAggregate(
     // empty-set result.
     if (aggregateCall->condition() != nullptr &&
         aggregateCall->condition()->is(PlanType::kLiteralExpr)) {
-      auto* column = Column::createForSymbol(
-          toName(aggregateName), aggregateCall->value());
+      auto* column =
+          columnForSymbol(toName(aggregateName), aggregateCall->value());
       foldedColumns.push_back(column);
       foldedExprs.push_back(emptySetResult(aggregateCall));
       newScope[aggregateName] = column;
@@ -2124,7 +2124,7 @@ Translated Translator::translateAggregate(
     }
     aggregates.push_back(aggregateCall);
     auto* column =
-        Column::createForSymbol(toName(aggregateName), aggregateCall->value());
+        columnForSymbol(toName(aggregateName), aggregateCall->value());
     aggregateToOutput.emplace(aggregateCall, column);
     outputColumns.push_back(column);
     newScope[aggregateName] = column;
@@ -2241,8 +2241,7 @@ NodeCP Translator::lowerGroupingSets(
   Value groupIdValue(
       toType(aggregate.outputType()->childAt(names.size() - 1)),
       static_cast<float>(groupingSets.size()));
-  ColumnCP groupIdColumn =
-      Column::createForSymbol(toName(groupIdName), groupIdValue);
+  ColumnCP groupIdColumn = columnForSymbol(toName(groupIdName), groupIdValue);
   newScope[groupIdName] = groupIdColumn;
 
   ColumnVector groupIdOutputs;
@@ -2408,7 +2407,7 @@ Translated Translator::translateUnnest(
     for (const auto& name : names) {
       Value value = clampCardinality(
           Value{toType(outputType->childAt(outputIndex)), unnestCardinality});
-      auto* column = Column::createForSymbol(toName(name), value);
+      auto* column = columnForSymbol(toName(name), value);
       perExpr.push_back(column);
       newScope[name] = column;
       ++outputIndex;
@@ -2420,7 +2419,7 @@ Translated Translator::translateUnnest(
   if (unnest.ordinalityName().has_value()) {
     const auto& name = unnest.ordinalityName().value();
     Value value(toType(outputType->childAt(outputIndex)), unnestCardinality);
-    ordinalityColumn = Column::createForSymbol(toName(name), value);
+    ordinalityColumn = columnForSymbol(toName(name), value);
     newScope[name] = ordinalityColumn;
   }
 
@@ -2532,8 +2531,7 @@ Translated Translator::buildUnionAll(
       }
     }
     Value value(toType(outputType->childAt(j)), cardinality);
-    auto* column =
-        Column::createForSymbol(toName(outputType->nameOf(j)), value);
+    auto* column = columnForSymbol(toName(outputType->nameOf(j)), value);
     outputColumns.push_back(column);
     scope[outputType->nameOf(j)] = column;
   }
@@ -3059,6 +3057,25 @@ bool Translator::tryJoinIntoPendingLifts(NodeCP body, LiftTarget& target) {
   return true;
 }
 
+ColumnVector Translator::makeOutputColumns(
+    const velox::RowType& rowType,
+    float cardinality,
+    Scope& scope) {
+  ColumnVector columns;
+  columns.reserve(rowType.size());
+  for (size_t i = 0; i < rowType.size(); ++i) {
+    Value value(toType(rowType.childAt(i)), cardinality);
+    columns.push_back(columnForSymbol(toName(rowType.nameOf(i)), value));
+  }
+  populateScope(rowType, columns, scope);
+  return columns;
+}
+
+ColumnCP Translator::columnForSymbol(Name symbol, const Value& value) {
+  return translatingDuplicate_ ? Column::create(symbol, value)
+                               : Column::createForSymbol(symbol, value);
+}
+
 ColumnCP Translator::aliasIfNameCollides(
     NodeCP& body,
     ColumnCP returnedColumn,
@@ -3562,19 +3579,29 @@ ExprCP Translator::liftSubquery(
   const LpNameSet required =
       isExists ? LpNameSet{} : allNames(*subqueryExpr.subquery()->outputType());
 
+  // A subquery's plan is never shared between references: each reference
+  // translates it again. Only the first translation names its columns after
+  // the plan's symbols, since two Columns cannot answer to one name where the
+  // translations meet.
+  const bool duplicate =
+      !translatedSubqueries_.insert(subqueryExpr.subquery().get()).second;
+  const bool wasTranslatingDuplicate =
+      std::exchange(translatingDuplicate_, translatingDuplicate_ || duplicate);
+  SCOPE_EXIT {
+    translatingDuplicate_ = wasTranslatingDuplicate;
+  };
+
   subqueries_.push(outerScope, liftTarget);
-  // A semi Apply emits the outer's columns and a mark, so a lift inside the
-  // body never reaches the outer and the two cannot share one. Reading the
-  // outer's lift is the only way to share it, and that correlates a body the
-  // query left uncorrelated, so the body lifts its own copy. A scalar body
-  // shares freely: its columns reach the outer through the Apply.
-  if (isSemi) {
+  // Reading a lift from an enclosing scope is an outer reference, which
+  // correlates a body the query left uncorrelated. The body lifts its own
+  // copy instead.
+  Translated inner = [&] {
     subqueries_.pushLiftedCorrelationBarrier();
-  }
-  Translated inner = translateNode(*subqueryExpr.subquery(), required);
-  if (isSemi) {
-    subqueries_.popLiftedCorrelationBarrier();
-  }
+    SCOPE_EXIT {
+      subqueries_.popLiftedCorrelationBarrier();
+    };
+    return translateNode(*subqueryExpr.subquery(), required);
+  }();
   ColumnVector correlationColumns = subqueries_.pop();
 
   NodeCP body = inner.node;
@@ -3698,15 +3725,38 @@ ExprCP Translator::liftSubquery(
 }
 
 ExprCP Translator::tryScalarFromValues(NodeCP body) {
+  VELOX_CHECK_EQ(body->outputColumns().size(), 1);
+  const TypeCP type = body->outputColumns()[0]->value().type;
+
+  // A Project that computes a constant over a one-row body is that constant,
+  // whatever the body reads.
+  if (body->is(NodeType::kProject)) {
+    const auto* project = body->as<Project>();
+    const NodeCP input = project->input();
+    if (!input->is(NodeType::kValues)) {
+      return nullptr;
+    }
+
+    const size_t numRows = input->as<Values>()->cardinality();
+    if (numRows == 0) {
+      return builder_.makeNull(type);
+    }
+
+    VELOX_USER_CHECK_EQ(
+        numRows, 1, "Scalar subquery produced more than one row");
+
+    const ExprCP expr = project->exprs()[0];
+    if (expr->is(PlanType::kLiteralExpr)) {
+      return expr;
+    }
+    return nullptr;
+  }
+
   if (!body->is(NodeType::kValues)) {
     return nullptr;
   }
 
-  VELOX_CHECK_EQ(body->outputColumns().size(), 1);
-
   const auto* values = body->as<Values>();
-  const TypeCP type = body->outputColumns()[0]->value().type;
-
   const size_t numRows = values->cardinality();
   if (numRows == 0) {
     // A scalar subquery over no rows is SQL NULL.
