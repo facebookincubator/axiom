@@ -21,6 +21,7 @@
 
 #include <folly/ScopeGuard.h>
 #include <folly/container/F14Map.h>
+#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/ConstantFold.h"
 #include "axiom/optimizer/EstimateMath.h"
 #include "axiom/optimizer/Filters.h"
@@ -436,11 +437,13 @@ class Translator {
  public:
   Translator(
       optimizer::Schema& schema,
+      const connector::SchemaResolver& schemaResolver,
       velox::core::ExpressionEvaluator& evaluator,
       Builder& builder,
       const OptimizerSession& session,
       const ConstantPlanRunner& constantPlanRunner)
       : schema_(schema),
+        schemaResolver_(schemaResolver),
         builder_(builder),
         exprFactory_(builder),
         simplifier_(builder, evaluator),
@@ -501,7 +504,12 @@ class Translator {
           materializeColumn(&translated.node, it->second, sourceName));
       outputNames.push_back(outputName);
     }
-    return {translated.node, std::move(outputColumns), std::move(outputNames)};
+    return {
+        translated.node,
+        std::move(outputColumns),
+        std::move(outputNames),
+        connectorPushdownSupported_,
+    };
   }
 
  private:
@@ -844,6 +852,8 @@ class Translator {
 
   SubqueryContext subqueries_;
   Schema& schema_;
+  const connector::SchemaResolver& schemaResolver_;
+  bool connectorPushdownSupported_{false};
   // Column materialized for an expression, consulted before materializing
   // another.
   folly::F14FastMap<ExprCP, ColumnCP> materialized_;
@@ -1192,10 +1202,12 @@ Translated Translator::translateScan(
   const auto* schemaTable =
       schema_.findTable(scan.connectorId(), scan.tableName());
   VELOX_CHECK_NOT_NULL(schemaTable);
+  connectorPushdownSupported_ = connectorPushdownSupported_ ||
+      schemaResolver_.findMetadata(schemaTable->metadataId())
+          ->isPushdownSupported();
 
-  auto* baseTable = make<BaseTable>();
-  baseTable->cname = toName(fmt::format("t{}", baseTableCounter_++));
-  baseTable->schemaTable = schemaTable;
+  auto* baseTable = make<BaseTable>(
+      toName(fmt::format("t{}", baseTableCounter_++)), schemaTable);
   // filteredCardinality stays 0 until estimateLeafStats populates it from
   // connector stats; cardinality estimation falls back to constraint-based
   // selectivity while it is unset.
@@ -3915,12 +3927,13 @@ Translator::tryEvaluateOverDiscreteValues(const Aggregate* aggregate) {
 TranslatePass::Result TranslatePass::run(
     const lp::LogicalPlanNode& plan,
     optimizer::Schema& schema,
+    const connector::SchemaResolver& schemaResolver,
     velox::core::ExpressionEvaluator& evaluator,
     Builder& builder,
     const OptimizerSession& session,
     const ConstantPlanRunner& constantPlanRunner) {
   Translator translator(
-      schema, evaluator, builder, session, constantPlanRunner);
+      schema, schemaResolver, evaluator, builder, session, constantPlanRunner);
   return translator.run(plan);
 }
 

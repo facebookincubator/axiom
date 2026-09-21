@@ -50,6 +50,10 @@ class SchemaResolver {
       const std::string& connectorId,
       const SchemaTableName& tableName) const;
 
+  /// Resolves connector metadata in this resolver's registry scope.
+  std::shared_ptr<ConnectorMetadata> findMetadata(
+      std::string_view connectorId) const;
+
  private:
   // Reference member: SchemaResolver is intentionally non-assignable and
   // non-movable. The referenced Registry must outlive this resolver. Callers

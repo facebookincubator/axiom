@@ -399,7 +399,13 @@ struct IndexInfo {
 /// partitioned physical representations (ColumnGroups). Not all ColumnGroups
 /// (aka indices) need to contain all columns.
 struct SchemaTable {
+  /// Builds a table whose metadata and execution connector IDs are the same.
   explicit SchemaTable(const connector::Table& connectorTable);
+
+  /// Builds a table resolved through `metadataId`.
+  SchemaTable(
+      const connector::Table& connectorTable,
+      std::string_view metadataId);
 
   ColumnGroupCP addIndex(
       const connector::TableLayout& layout,
@@ -419,9 +425,14 @@ struct SchemaTable {
     return connectorTable->name();
   }
 
-  /// Returns the connector ID (catalog name) for this table.
+  /// Returns the execution connector ID used by this table's layouts.
   const std::string& connectorId() const {
     return columnGroups[0]->layout->connectorId();
+  }
+
+  /// Returns the metadata registry ID used to resolve this table.
+  std::string_view metadataId() const {
+    return metadataId_;
   }
 
   /// Table description from external schema.
@@ -435,6 +446,10 @@ struct SchemaTable {
 
   /// All indices. Must contain at least one.
   QGVector<ColumnGroupCP> columnGroups;
+
+ private:
+  // Registry key that resolved this table's metadata.
+  const Name metadataId_;
 };
 
 /// Represents a collection of tables. Normally filled in ad hoc given
@@ -472,7 +487,9 @@ class Schema {
   // Builds a `SchemaTable` from `connectorTable` without taking
   // ownership. Caller retains `connectorTable` for the lifetime of
   // the returned `SchemaTable`.
-  SchemaTableCP buildSchemaTable(const connector::Table& connectorTable) const;
+  SchemaTableCP buildSchemaTable(
+      const connector::Table& connectorTable,
+      std::string_view metadataId) const;
 
   struct Table {
     connector::TablePtr connectorTable;

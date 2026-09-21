@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <filesystem>
+#include <optional>
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/system/SystemConnectorMetadata.h"
@@ -266,6 +267,19 @@ class SqlTest : public SqlTestBase {
       runSetupStatement(
           statement, connectorId(), defaultSchema(), *metadata, runnerFactory);
     }
+
+    if (pushdownTable.has_value()) {
+      auto* testMetadata =
+          dynamic_cast<connector::TestConnectorMetadata*>(metadata);
+      VELOX_CHECK_NOT_NULL(testMetadata);
+      auto replacement = testMetadata->findTableInternal(
+          {defaultSchema(), pushdownTable.value()});
+      VELOX_CHECK_NOT_NULL(replacement);
+      testMetadata->setPushdownMatcher([replacement = std::move(replacement)](
+                                           const optimizer::v2::Node& subtree) {
+        return std::vector<connector::PushdownRoot>{{&subtree, replacement}};
+      });
+    }
   }
 
   // Connector id / default schema the file's setup DDL and queries run against.
@@ -350,6 +364,9 @@ class SqlTest : public SqlTestBase {
 
   // Connector the file's queries run against, populated at registration time.
   static TestConnectorKind connectorKind;
+
+  // Virtual table that replaces each complete connector offer, when set.
+  static std::optional<std::string> pushdownTable;
 
  protected:
   exec::test::DuckDbQueryRunner& duckDbRunner() override {
@@ -447,6 +464,9 @@ TestConnectorKind SqlTest<Name, UseV2>::connectorKind =
     TestConnectorKind::kTest;
 
 template <FileName Name, bool UseV2>
+std::optional<std::string> SqlTest<Name, UseV2>::pushdownTable;
+
+template <FileName Name, bool UseV2>
 std::shared_ptr<velox::common::testutil::TempDirectoryPath>
     SqlTest<Name, UseV2>::suiteHiveDir_;
 
@@ -461,6 +481,12 @@ template <FileName Name, bool UseV2>
 void registerVariant(const SqlFile& file, const std::string& path) {
   SqlTest<Name, UseV2>::setupStatements = file.setupStatements;
   SqlTest<Name, UseV2>::connectorKind = file.connector;
+  if (const auto it = file.directives.find("pushdown_table");
+      it != file.directives.end()) {
+    SqlTest<Name, UseV2>::pushdownTable = it->second;
+  } else {
+    SqlTest<Name, UseV2>::pushdownTable.reset();
+  }
 
   const auto suiteName =
       fmt::format("{}/SqlTest_{}", UseV2 ? "V2" : "V1", Name.value);
@@ -497,7 +523,22 @@ void registerQueryFile(bool v2Only = false) {
   VELOX_CHECK(
       folly::readFile(path.c_str(), content), "Failed to read: {}", path);
   auto baseDir = std::filesystem::path(path).parent_path().string();
-  auto file = SqlFile::parse(content, baseDir);
+  auto file = SqlFile::parse(
+      content, baseDir, {.customSetupDirectives = {"pushdown_table"}});
+
+  const bool configuresPushdown = file.directives.contains("pushdown_table");
+  VELOX_CHECK(
+      !configuresPushdown || !file.directives.at("pushdown_table").empty(),
+      "SQL pushdown table must not be empty: {}",
+      path);
+  VELOX_CHECK(
+      !configuresPushdown || v2Only,
+      "SQL files that configure connector pushdown must be v2-only: {}",
+      path);
+  VELOX_CHECK(
+      !configuresPushdown || file.connector == TestConnectorKind::kTest,
+      "SQL files that configure connector pushdown must use TestConnector: {}",
+      path);
 
   VELOX_CHECK(
       !file.entries.empty(),
@@ -525,6 +566,7 @@ int main(int argc, char** argv) {
   registerQueryFile<"basic">();
   registerQueryFile<"bucketedExecution">();
   registerQueryFile<"coercion">();
+  registerQueryFile<"connectorPushdown">(/*v2Only=*/true);
   registerQueryFile<"cte">();
   registerQueryFile<"datetime">();
   registerQueryFile<"distinctAggregation">();

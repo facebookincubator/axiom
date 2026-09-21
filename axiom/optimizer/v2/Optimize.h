@@ -87,6 +87,9 @@ class Optimizer {
   ///   - Decorrelate — rewrite correlated subqueries as joins;
   ///   - LimitAndOrder — fold limits into ordering operators;
   ///   - PushdownAndPrune — push predicates down, prune unused columns;
+  ///   - FoldMetadataAggregate — replace supported aggregates with metadata
+  ///     results;
+  ///   - ConnectorPushdown — negotiate native connector subtrees;
   ///   - EstimateLeafStats — populate base-table cardinalities from the
   ///   connector;
   ///   - PlanPhysical — cost-based join order and distribution;
@@ -130,6 +133,7 @@ class Optimizer {
     kLimitAndOrder,
     kPushdownAndPrune,
     kFoldMetadataAggregate,
+    kConnectorPushdown,
 
     /// Annotates base tables with connector statistics rather than rewriting
     /// the tree, so the root it returns is the one the pass before produced.

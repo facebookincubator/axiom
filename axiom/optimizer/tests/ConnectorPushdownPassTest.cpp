@@ -13,345 +13,634 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "axiom/optimizer/ConnectorPushdownPass.h"
 
-#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <functional>
+
+#include <folly/coro/Baton.h>
+
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/tests/TestConnector.h"
-#include "axiom/logical_plan/PlanBuilder.h"
-#include "folly/coro/BlockingWait.h"
+#include "axiom/connectors/tests/TestConnectorContext.h"
+#include "axiom/optimizer/OptimizerSession.h"
+#include "axiom/optimizer/tests/PlanMatcher.h"
+#include "axiom/optimizer/tests/QueryTestBase.h"
+#include "axiom/optimizer/v2/Node.h"
+#include "axiom/sql/presto/PrestoParser.h"
+#include "axiom/sql/presto/SqlStatement.h"
+#include "folly/coro/CurrentExecutor.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/ConnectorRegistry.h"
-#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
-using namespace facebook::velox;
-
-namespace facebook::axiom::optimizer {
+namespace facebook::axiom::optimizer::test {
 namespace {
 
-namespace lp = logical_plan;
+using namespace facebook::velox;
+using namespace facebook::axiom::optimizer::v2;
 using connector::PushdownRoot;
-using PushdownMatcher = connector::TestConnectorMetadata::PushdownMatcher;
 
-// Returns the first PushdownRoot in 'roots' whose 'root' equals 'node',
-// or nullptr if none.
-const PushdownRoot* findRoot(
-    const std::vector<PushdownRoot>& roots,
-    const lp::LogicalPlanNode* node) {
-  for (const auto& root : roots) {
-    if (root.root == node) {
-      return &root;
-    }
-  }
-  return nullptr;
+NodeCP requireNodeOfType(NodeCP root, NodeType target) {
+  NodeCP found = Node::findFirstNode(
+      root, [target](NodeCP node) { return node->is(target); });
+  VELOX_CHECK_NOT_NULL(found);
+  return found;
 }
 
-class ConnectorPushdownPassTest : public testing::Test {
- protected:
-  static constexpr auto kConnectorA = "connector_a";
-  static constexpr auto kConnectorB = "connector_b";
+bool containsScanFromConnector(const Node* node, std::string_view connectorId) {
+  return Node::findFirstNode(node, [&](NodeCP candidate) {
+           return candidate->is(NodeType::kScan) &&
+               candidate->as<Scan>()->baseTable()->schemaTable->connectorId() ==
+               connectorId;
+         }) != nullptr;
+}
 
-  // A registered connector together with its TestConnectorMetadata,
-  // returned by 'addConnector'.
-  struct RegisteredConnector {
+class ConnectorPushdownPassTest : public optimizer::test::QueryTestBase {
+ protected:
+  ConnectorPushdownPassTest() {
+    useV2_ = true;
+  }
+
+  void SetUp() override {
+    QueryTestBase::SetUp();
+    testMetadata_ = dynamic_cast<connector::TestConnectorMetadata*>(
+        testConnector_->metadata().get());
+    VELOX_CHECK_NOT_NULL(testMetadata_);
+  }
+
+  struct ScopedConnectorRegistration {
+    ScopedConnectorRegistration(
+        std::string connectorId,
+        std::shared_ptr<connector::TestConnector> connector,
+        connector::TestConnectorMetadata* metadata)
+        : connectorId{std::move(connectorId)},
+          connector{std::move(connector)},
+          metadata{metadata} {}
+
+    ScopedConnectorRegistration(ScopedConnectorRegistration&&) = default;
+    ScopedConnectorRegistration& operator=(ScopedConnectorRegistration&&) =
+        delete;
+    ScopedConnectorRegistration(const ScopedConnectorRegistration&) = delete;
+    ScopedConnectorRegistration& operator=(const ScopedConnectorRegistration&) =
+        delete;
+
+    ~ScopedConnectorRegistration() {
+      if (connector == nullptr) {
+        return;
+      }
+      connector::ConnectorMetadataRegistry::global().erase(connectorId);
+      velox::connector::ConnectorRegistry::global().erase(connectorId);
+    }
+
+    std::string connectorId;
     std::shared_ptr<connector::TestConnector> connector;
     connector::TestConnectorMetadata* metadata;
   };
 
-  static void SetUpTestSuite() {
-    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-    functions::prestosql::registerAllScalarFunctions();
-  }
-
-  void SetUp() override {
-    auto a = addConnector(kConnectorA);
-    connectorA_ = std::move(a.connector);
-    metadataA_ = a.metadata;
-    auto b = addConnector(kConnectorB);
-    connectorB_ = std::move(b.connector);
-    metadataB_ = b.metadata;
-
-    const auto schema = ROW({"a", "b"}, BIGINT());
-    connectorA_->addTable("t", schema);
-    connectorB_->addTable("u", schema);
-  }
-
-  void TearDown() override {
-    removeConnector(kConnectorA);
-    removeConnector(kConnectorB);
-    connectorA_.reset();
-    connectorB_.reset();
-    metadataA_ = nullptr;
-    metadataB_ = nullptr;
-  }
-
-  // Creates a TestConnector under 'connectorId', inserts it into the
-  // connector and metadata registries, and returns it together with
-  // its typed metadata so callers can wire matchers without per-call
-  // dynamic_cast.
-  static RegisteredConnector addConnector(std::string_view connectorId) {
+  ScopedConnectorRegistration registerScopedConnector(std::string_view id) {
     auto connector =
-        std::make_shared<connector::TestConnector>(std::string(connectorId));
+        std::make_shared<connector::TestConnector>(std::string(id));
     auto* metadata = dynamic_cast<connector::TestConnectorMetadata*>(
         connector->metadata().get());
     VELOX_CHECK_NOT_NULL(metadata);
     velox::connector::ConnectorRegistry::global().insert(
         connector->connectorId(), connector);
     connector::ConnectorMetadataRegistry::global().insert(
-        std::string(connectorId), connector->metadata());
-    return {std::move(connector), metadata};
+        std::string(id), connector->metadata());
+    return {std::string(id), std::move(connector), metadata};
   }
 
-  static void removeConnector(std::string_view connectorId) {
-    connector::ConnectorMetadataRegistry::global().erase(
-        std::string(connectorId));
-    velox::connector::ConnectorRegistry::global().erase(
-        std::string(connectorId));
+  logical_plan::LogicalPlanNodePtr aggregatePlan(
+      std::string_view tableName = "t",
+      std::string_view aggregate = "sum(b)") {
+    return parseSelect(
+        std::string{"SELECT a, "} + std::string{aggregate} + " FROM " +
+            std::string{tableName} + " GROUP BY a",
+        kTestConnectorId);
   }
 
-  // Registers a fresh TestTable on 'conn' under 'label' and returns it
-  // as a connector::TablePtr suitable for `PushdownRoot::table`.
-  connector::TablePtr makePushdownTable(
-      connector::TestConnector* conn,
-      std::string_view label) {
-    static const auto kSchema = ROW({"a", "b"}, BIGINT());
-    return conn->addTable(std::string(label), kSchema);
+  logical_plan::LogicalPlanNodePtr recursivePlan() {
+    return parseSelect(
+        "WITH RECURSIVE counter(n) AS ("
+        "SELECT max(a) FROM seed "
+        "UNION ALL SELECT n - 1 FROM counter WHERE n > 0) "
+        "SELECT n FROM counter",
+        kTestConnectorId);
   }
 
-  static PushdownMatcher onePushdownRoot(
-      const lp::LogicalPlanNode* root,
-      connector::TablePtr table) {
-    return [root, table](const lp::LogicalPlanNode&) {
-      return std::vector<PushdownRoot>{{root, table}};
-    };
+  logical_plan::LogicalPlanNodePtr parseInsert(std::string_view sql) {
+    ::axiom::sql::presto::PrestoParser parser(
+        kTestConnectorId,
+        kDefaultSchema,
+        std::make_shared<::axiom::sql::presto::ParserSession>(
+            connector::makeTestContext("test"),
+            connector::makeTestStatWriter(),
+            connector::Properties{},
+            ::axiom::sql::presto::ParserOptions{}));
+    auto statement = parser.parse(sql);
+    VELOX_CHECK(statement->isInsert());
+    return statement->as<::axiom::sql::presto::InsertStatement>()->plan();
   }
 
-  // Synchronously drives the pushdown pass over 'plan'.
-  static std::vector<PushdownRoot> collectRoots(
-      const lp::LogicalPlanNode& plan) {
-    return folly::coro::blockingWait(collectConnectorPushdownRoots(plan));
+  void setWholeSubtreeReplacement(connector::TablePtr replacement) {
+    testMetadata_->setPushdownMatcher(
+        [replacement = std::move(replacement)](const Node& subtree) {
+          return std::vector<PushdownRoot>{{&subtree, replacement}};
+        });
   }
 
-  // Builds a scan over 'tableName' on 'connectorId' in the fixture's
-  // default schema. Threads the shared 'context_' so node IDs and
-  // column names stay globally unique across legs of the same plan.
-  // Exists because PlanBuilder::tableScan(connectorId, schema, table)
-  // overload-resolves ambiguously when the table-name arg is a string
-  // literal; this helper picks the right overload and absorbs the
-  // std::string conversions.
-  lp::PlanBuilder scanOn(
-      std::string_view connectorId,
-      std::string_view tableName,
-      std::string_view schema = connector::TestConnector::kDefaultSchema) {
-    return lp::PlanBuilder(context_).tableScan(
-        std::string(connectorId), std::string(schema), std::string(tableName));
+  void expectConcurrentOffers(
+      std::initializer_list<connector::TestConnectorMetadata*> metadata,
+      size_t expectedCalls,
+      const std::function<void()>& run,
+      std::function<std::vector<PushdownRoot>(
+          connector::TestConnectorMetadata*,
+          const Node&)> respond = {}) {
+    std::atomic<size_t> numCalls{0};
+    std::atomic<size_t> numInFlight{0};
+    std::atomic<bool> callsOverlapped{false};
+    for (auto* connectorMetadata : metadata) {
+      connectorMetadata->setAsyncPushdownMatcher(
+          [&, connectorMetadata](
+              connector::ConnectorSessionPtr, const Node& subtree)
+              -> folly::coro::Task<std::vector<PushdownRoot>> {
+            ++numCalls;
+            if (numInFlight.fetch_add(1) != 0) {
+              callsOverlapped.store(true);
+            }
+            co_await folly::coro::co_reschedule_on_current_executor;
+            --numInFlight;
+            co_return respond ? respond(connectorMetadata, subtree)
+                              : std::vector<PushdownRoot>{};
+          });
+    }
+
+    run();
+
+    EXPECT_EQ(numCalls.load(), expectedCalls);
+    EXPECT_TRUE(callsOverlapped.load());
   }
 
-  // Shared across all builders within one test so plan-node IDs and
-  // column names stay globally unique. Default connector is A; reach
-  // other connectors via 'scanOn'.
-  lp::PlanBuilder::Context context_{
-      std::string(kConnectorA),
-      std::string(connector::TestConnector::kDefaultSchema)};
-  std::shared_ptr<connector::TestConnector> connectorA_;
-  std::shared_ptr<connector::TestConnector> connectorB_;
-  connector::TestConnectorMetadata* metadataA_{nullptr};
-  connector::TestConnectorMetadata* metadataB_{nullptr};
+  connector::TestConnectorMetadata* testMetadata_{nullptr};
 };
 
-TEST_F(ConnectorPushdownPassTest, absorbsRoot) {
-  // Plan root is a Filter (a non-scan node) so the connector is
-  // executing real work above the scan.
-  auto plan =
-      lp::PlanBuilder(context_).tableScan("t").filter("a > 0").planNode();
-  auto table = makePushdownTable(connectorA_.get(), "v");
-  metadataA_->setPushdownMatcher(onePushdownRoot(plan.get(), table));
+TEST_F(ConnectorPushdownPassTest, positionalOutput) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  auto virtualTable =
+      testConnector_->addTable("u", ROW({"group_key", "total"}, BIGINT()));
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({7}),
+      makeFlatVector<int64_t>({100}),
+  });
+  virtualTable->addData(expected);
 
-  auto roots = collectRoots(*plan);
-  ASSERT_THAT(roots, testing::SizeIs(1));
-  EXPECT_EQ(roots[0].root, plan.get());
-  EXPECT_EQ(roots[0].table.get(), table.get());
+  auto logicalPlan = aggregatePlan("t", "sum(b) as s");
+  setWholeSubtreeReplacement(virtualTable);
+
+  checkSame(logicalPlan, {expected});
 }
 
-TEST_F(ConnectorPushdownPassTest, absorbsDeepSubtree) {
-  // Inner Filter is the absorbed root (non-scan, executes work above
-  // the scan).
-  const lp::LogicalPlanNode* innerFilter = nullptr;
-  auto plan = lp::PlanBuilder(context_)
-                  .tableScan("t")
-                  .filter("a > 0")
-                  .capturePlanNode(&innerFilter)
-                  .filter("b > 0")
-                  .planNode();
-  auto table = makePushdownTable(connectorA_.get(), "v");
-  metadataA_->setPushdownMatcher(onePushdownRoot(innerFilter, table));
+TEST_F(ConnectorPushdownPassTest, workerSelection) {
+  auto source = testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  source->setStats(10'000, {});
+  auto virtualTable =
+      testConnector_->addTable("small_result", ROW({"key", "total"}, BIGINT()));
+  virtualTable->setStats(1, {});
 
-  auto roots = collectRoots(*plan);
-  ASSERT_THAT(roots, testing::SizeIs(1));
-  EXPECT_EQ(roots[0].root, innerFilter);
-  EXPECT_EQ(roots[0].table.get(), table.get());
+  auto logicalPlan = aggregatePlan();
+  setWholeSubtreeReplacement(virtualTable);
+
+  // The source exceeds the small-query threshold, but its replacement does
+  // not. Worker selection must therefore use the replacement's row count.
+  OptimizerOptions options;
+  options.smallQueryMaxScanRows = 10;
+  options.smallQueryNumWorkers = 1;
+  const auto result = planVelox(
+      logicalPlan,
+      {.maxRemotePartitions = 4, .maxLocalPartitions = 2},
+      options);
+  EXPECT_EQ(result.plan->options().maxRemotePartitions, 1);
 }
 
-TEST_F(ConnectorPushdownPassTest, crossConnectorRoots) {
-  // Each leg is a Filter over its scan — a real non-scan root the
-  // connector can absorb.
-  const lp::LogicalPlanNode* filterA = nullptr;
-  const lp::LogicalPlanNode* filterB = nullptr;
-  auto plan = lp::PlanBuilder(context_)
-                  .tableScan("t")
-                  .filter("a > 0")
-                  .capturePlanNode(&filterA)
-                  .unionAll(scanOn(kConnectorB, "u")
-                                .filter("a > 0")
-                                .capturePlanNode(&filterB))
-                  .planNode();
-  auto tableA = makePushdownTable(connectorA_.get(), "v");
-  auto tableB = makePushdownTable(connectorB_.get(), "w");
+TEST_F(ConnectorPushdownPassTest, schemaResolver) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  auto scopedPool = velox::memory::memoryManager()
+                        ->addRootPool("scoped_connector_pushdown")
+                        ->addAggregateChild("tables");
+  auto scopedConnector = std::make_shared<connector::TestConnector>(
+      "scoped-layout", nullptr, std::move(scopedPool));
+  scopedConnector->addTable("t", ROW({"a", "b"}, BIGINT()));
+  auto scopedRegistry = connector::ConnectorMetadataRegistry::create(
+      &connector::ConnectorMetadataRegistry::global());
+  scopedRegistry->insert(kTestConnectorId, scopedConnector->metadata());
+  connector::SchemaResolver resolver{*scopedRegistry};
 
-  metadataA_->setPushdownMatcher(onePushdownRoot(filterA, tableA));
-  metadataB_->setPushdownMatcher(onePushdownRoot(filterB, tableB));
-
-  auto roots = collectRoots(*plan);
-  ASSERT_THAT(roots, testing::SizeIs(2));
-  const auto* foundA = findRoot(roots, filterA);
-  const auto* foundB = findRoot(roots, filterB);
-  ASSERT_NE(foundA, nullptr);
-  ASSERT_NE(foundB, nullptr);
-  EXPECT_EQ(foundA->table.get(), tableA.get());
-  EXPECT_EQ(foundB->table.get(), tableB.get());
-}
-
-TEST_F(ConnectorPushdownPassTest, notSupportedSkipped) {
-  // No matcher installed -> connector is opted out of pushdown and the
-  // pass returns no roots.
-  auto plan = lp::PlanBuilder(context_).tableScan("t").planNode();
-  EXPECT_THAT(collectRoots(*plan), testing::IsEmpty());
-}
-
-TEST_F(ConnectorPushdownPassTest, noPushdownRootsReturnsEmpty) {
-  auto plan = lp::PlanBuilder(context_).tableScan("t").planNode();
-  metadataA_->setPushdownMatcher(
-      [](const lp::LogicalPlanNode&) { return std::vector<PushdownRoot>{}; });
-  EXPECT_THAT(collectRoots(*plan), testing::IsEmpty());
-}
-
-TEST_F(ConnectorPushdownPassTest, nestedRootsFails) {
-  const lp::LogicalPlanNode* innerFilter = nullptr;
-  auto plan = lp::PlanBuilder(context_)
-                  .tableScan("t")
-                  .filter("a > 0")
-                  .capturePlanNode(&innerFilter)
-                  .filter("b > 0")
-                  .planNode();
-  auto outer = makePushdownTable(connectorA_.get(), "v");
-  auto inner = makePushdownTable(connectorA_.get(), "w");
-
-  metadataA_->setPushdownMatcher(
-      [innerFilter, outer, inner](const lp::LogicalPlanNode& subtree) {
-        return std::vector<PushdownRoot>{
-            {&subtree, outer},
-            {innerFilter, inner},
-        };
+  std::atomic<size_t> globalCalls{0};
+  testMetadata_->setPushdownMatcher([&](const Node&) {
+    ++globalCalls;
+    return std::vector<PushdownRoot>{};
+  });
+  std::atomic<size_t> scopedCalls{0};
+  setConnectorSession(kTestConnectorId, "pushdown_mode", "scoped");
+  scopedConnector->metadata()->setAsyncPushdownMatcher(
+      [&](connector::ConnectorSessionPtr session,
+          const Node&) -> folly::coro::Task<std::vector<PushdownRoot>> {
+        ++scopedCalls;
+        EXPECT_EQ(session->property("pushdown_mode"), "scoped");
+        co_return std::vector<PushdownRoot>{};
       });
 
-  VELOX_ASSERT_THROW(collectRoots(*plan), "overlapping pushdown roots");
+  auto logicalPlan = aggregatePlan();
+  planVelox(
+      logicalPlan,
+      resolver,
+      {.maxRemotePartitions = 1, .maxLocalPartitions = 1});
+
+  EXPECT_EQ(scopedCalls.load(), 1);
+  EXPECT_EQ(globalCalls.load(), 0);
 }
 
-TEST_F(ConnectorPushdownPassTest, pushdownRootOutsideSubtreeFails) {
-  // Each connector receives only the maximal subtree referencing it.
-  // A connector that returns a root pointing outside that subtree is
-  // malformed; the pass must reject it.
-  auto plan = lp::PlanBuilder(context_)
-                  .tableScan("t")
-                  .unionAll(scanOn(kConnectorB, "u"))
-                  .planNode();
-  auto stolen = makePushdownTable(connectorA_.get(), "v");
+TEST_F(ConnectorPushdownPassTest, connectorSession) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  setConnectorSession(kTestConnectorId, "pushdown_mode", "enabled");
 
-  // Connector A's matcher returns the UnionAll root (not within A's
-  // subtree, which is just the scan). Connector B does not install a
-  // matcher, so it stays opted out.
-  metadataA_->setPushdownMatcher(
-      [planPtr = plan.get(), stolen](const lp::LogicalPlanNode&) {
-        return std::vector<PushdownRoot>{{planPtr, stolen}};
+  std::atomic<size_t> numCalls{0};
+  testMetadata_->setAsyncPushdownMatcher(
+      [&](connector::ConnectorSessionPtr session,
+          const Node&) -> folly::coro::Task<std::vector<PushdownRoot>> {
+        ++numCalls;
+        EXPECT_EQ(session->property("pushdown_mode"), "enabled");
+        co_return std::vector<PushdownRoot>{};
       });
 
-  VELOX_ASSERT_THROW(collectRoots(*plan), "outside the subtree it was given");
+  toSingleNodePlan(aggregatePlan());
+  EXPECT_EQ(numCalls.load(), 1);
 }
 
-TEST_F(ConnectorPushdownPassTest, barePushdownRootFails) {
-  // A bare TableScanNode root is a no-op pushdown: the scan already
-  // runs on the connector. The pass rejects it as a connector bug.
-  auto plan = lp::PlanBuilder(context_).tableScan("t").planNode();
-  auto table = makePushdownTable(connectorA_.get(), "v");
-  metadataA_->setPushdownMatcher(onePushdownRoot(plan.get(), table));
+TEST_F(ConnectorPushdownPassTest, crossConnectorJoin) {
+  auto probe = registerScopedConnector("probe");
 
-  VELOX_ASSERT_THROW(collectRoots(*plan), "bare TableScanNode");
-}
+  const auto probeSchema = ROW({"a", "b"}, BIGINT());
+  const auto buildSchema = ROW({"c", "d"}, BIGINT());
+  probe.connector->addTable("p", probeSchema);
+  testConnector_->addTable("q", buildSchema);
+  auto replacement =
+      testConnector_->addTable("virt_q", ROW({"key", "total"}, BIGINT()));
 
-TEST_F(ConnectorPushdownPassTest, federatedPlanScopedToOwnSubtree) {
-  const lp::LogicalPlanNode* scanANode = nullptr;
-  const lp::LogicalPlanNode* scanBNode = nullptr;
-  auto plan =
-      lp::PlanBuilder(context_)
-          .tableScan("t")
-          .capturePlanNode(&scanANode)
-          .unionAll(scanOn(kConnectorB, "u").capturePlanNode(&scanBNode))
-          .planNode();
+  auto logicalPlan = parseSelect(
+      "SELECT p.a, p.b, q.c, q.sd "
+      "FROM probe.default.p p "
+      "JOIN (SELECT c, sum(d) AS sd FROM q GROUP BY c) q ON p.a = q.c",
+      kTestConnectorId);
 
-  // Record which subtree each connector received.
-  const lp::LogicalPlanNode* seenByA = nullptr;
-  const lp::LogicalPlanNode* seenByB = nullptr;
-  metadataA_->setPushdownMatcher(
-      [&seenByA](const lp::LogicalPlanNode& subtree) {
-        seenByA = &subtree;
-        return std::vector<PushdownRoot>{};
-      });
-  metadataB_->setPushdownMatcher(
-      [&seenByB](const lp::LogicalPlanNode& subtree) {
-        seenByB = &subtree;
-        return std::vector<PushdownRoot>{};
-      });
-
-  collectRoots(*plan);
-  EXPECT_EQ(seenByA, scanANode);
-  EXPECT_EQ(seenByB, scanBNode);
-}
-
-TEST_F(ConnectorPushdownPassTest, singleConnectorUnionAbsorbedAtUnion) {
-  // Both children of the Union belong to connector A. The maximal
-  // single-connector subtree is the Union itself, not the individual
-  // scans — connector A receives the Union.
-  auto plan = lp::PlanBuilder(context_)
-                  .tableScan("t")
-                  .unionAll(lp::PlanBuilder(context_).tableScan("t"))
-                  .planNode();
-
-  const lp::LogicalPlanNode* seenByA = nullptr;
-  metadataA_->setPushdownMatcher(
-      [&seenByA](const lp::LogicalPlanNode& subtree) {
-        seenByA = &subtree;
-        return std::vector<PushdownRoot>{};
-      });
-
-  collectRoots(*plan);
-  EXPECT_EQ(seenByA, plan.get());
-}
-
-TEST_F(ConnectorPushdownPassTest, noTableScansReturnsEmpty) {
-  // No TableScanNodes in the plan — no connectors to ask, even though
-  // a matcher is registered.
-  bool matcherCalled = false;
-  metadataA_->setPushdownMatcher([&matcherCalled](const lp::LogicalPlanNode&) {
-    matcherCalled = true;
+  testMetadata_->setPushdownMatcher([&, replacement](const Node& subtree) {
+    EXPECT_TRUE(containsScanFromConnector(&subtree, kTestConnectorId));
+    EXPECT_FALSE(
+        containsScanFromConnector(&subtree, probe.connector->connectorId()));
+    const auto* aggregate = requireNodeOfType(&subtree, NodeType::kAggregate);
+    return std::vector<PushdownRoot>{{aggregate, replacement}};
+  });
+  bool probeCalled = false;
+  probe.metadata->setPushdownMatcher([&](const Node&) {
+    probeCalled = true;
     return std::vector<PushdownRoot>{};
   });
 
-  auto plan = lp::PlanBuilder(context_).values({"x"}, {{"1"}}).planNode();
-  EXPECT_THAT(collectRoots(*plan), testing::IsEmpty());
-  EXPECT_FALSE(matcherCalled);
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan(logicalPlan),
+      matchScan("p").hashJoin(matchScan("virt_q").project()).build());
+
+  EXPECT_FALSE(probeCalled);
+}
+
+TEST_F(ConnectorPushdownPassTest, duplicateSourceNames) {
+  testConnector_->addTable("left_table", ROW({"k", "a"}, BIGINT()));
+  testConnector_->addTable("right_table", ROW({"k", "a"}, BIGINT()));
+  auto virtualTable = testConnector_->addTable(
+      "virtual_join", ROW({"left_value", "right_value"}, BIGINT()));
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({10}),
+      makeFlatVector<int64_t>({20}),
+  });
+  virtualTable->addData(expected);
+
+  auto logicalPlan = parseSelect(
+      "SELECT l.a AS left_a, r.a AS right_a "
+      "FROM left_table l JOIN right_table r ON l.k = r.k",
+      kTestConnectorId);
+  testMetadata_->setPushdownMatcher(
+      [virtualTable = std::move(virtualTable)](const Node& subtree) {
+        const auto* join = requireNodeOfType(&subtree, NodeType::kJoin);
+        return std::vector<PushdownRoot>{{join, virtualTable}};
+      });
+
+  checkSame(logicalPlan, {expected});
+}
+
+TEST_F(ConnectorPushdownPassTest, independentConnectors) {
+  auto probe = registerScopedConnector("probe");
+
+  probe.connector->addTable("p", ROW({"a", "b"}, BIGINT()));
+  testConnector_->addTable("q", ROW({"c", "d"}, BIGINT()));
+  auto probeReplacement =
+      probe.connector->addTable("virt_p", ROW({"key", "total"}, BIGINT()));
+  auto testReplacement =
+      testConnector_->addTable("virt_q", ROW({"key", "total"}, BIGINT()));
+
+  auto logicalPlan = parseSelect(
+      "SELECT p.a, p.sb, q.c, q.sd "
+      "FROM (SELECT a, sum(b) AS sb FROM probe.default.p GROUP BY a) p "
+      "JOIN (SELECT c, sum(d) AS sd FROM q GROUP BY c) q ON p.a = q.c",
+      kTestConnectorId);
+
+  expectConcurrentOffers(
+      {probe.metadata, testMetadata_},
+      2,
+      [&] {
+        AXIOM_ASSERT_PLAN(
+            toSingleNodePlan(logicalPlan),
+            matchScan("virt_p")
+                .project()
+                .hashJoin(matchScan("virt_q").project())
+                .build());
+      },
+      [&](connector::TestConnectorMetadata* metadata, const Node& subtree) {
+        const auto* aggregate =
+            requireNodeOfType(&subtree, NodeType::kAggregate);
+        return std::vector<PushdownRoot>{{
+            aggregate,
+            metadata == probe.metadata ? probeReplacement : testReplacement,
+        }};
+      });
+}
+
+TEST_F(ConnectorPushdownPassTest, concurrentOffers) {
+  auto otherConnector = registerScopedConnector("other");
+  testConnector_->addTable("left_input", ROW({"a"}, BIGINT()));
+  testConnector_->addTable("right_input", ROW({"b"}, BIGINT()));
+  otherConnector.connector->addTable("u", ROW({"c"}, BIGINT()));
+
+  // The other connector keeps the two local inputs as separate offers.
+  auto logicalPlan = parseSelect(
+      "(SELECT a FROM left_input LIMIT 10) "
+      "UNION ALL (SELECT b FROM right_input LIMIT 10) "
+      "UNION ALL (SELECT c FROM other.default.u LIMIT 10)",
+      kTestConnectorId);
+  expectConcurrentOffers(
+      {testMetadata_}, 2, [&] { toSingleNodePlan(logicalPlan); });
+}
+
+TEST_F(ConnectorPushdownPassTest, bareScan) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  auto replacement =
+      testConnector_->addTable("u", ROW({"first", "second"}, BIGINT()));
+  auto logicalPlan = aggregatePlan();
+
+  testMetadata_->setPushdownMatcher([replacement](const Node& subtree) {
+    const auto* scan = requireNodeOfType(&subtree, NodeType::kScan);
+    return std::vector<PushdownRoot>{{scan, replacement}};
+  });
+
+  VELOX_ASSERT_THROW(toSingleNodePlan(logicalPlan), "cannot be a Scan");
+}
+
+TEST_F(ConnectorPushdownPassTest, ineligiblePlans) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  size_t numCalls{0};
+  testMetadata_->setPushdownMatcher([&](const Node&) {
+    ++numCalls;
+    return std::vector<PushdownRoot>{};
+  });
+
+  toSingleNodePlan(parseSelect("SELECT * FROM t", kTestConnectorId));
+  toSingleNodePlan(parseSelect("SELECT 1 AS a", kTestConnectorId));
+  EXPECT_EQ(numCalls, 0);
+}
+
+TEST_F(ConnectorPushdownPassTest, tableWrite) {
+  testConnector_->addTable("source", ROW({"a"}, BIGINT()));
+  testConnector_->addTable("target", ROW({"a"}, BIGINT()));
+  auto logicalPlan =
+      parseInsert("INSERT INTO target SELECT a FROM source LIMIT 10");
+
+  size_t numCalls{0};
+  testMetadata_->setPushdownMatcher([&](const Node& subtree) {
+    ++numCalls;
+    EXPECT_EQ(subtree.nodeType(), NodeType::kLimit);
+    return std::vector<PushdownRoot>{};
+  });
+
+  toSingleNodePlan(logicalPlan);
+  EXPECT_EQ(numCalls, 1);
+}
+
+TEST_F(ConnectorPushdownPassTest, recursiveAnchor) {
+  testConnector_->addTable("seed", ROW({"a"}, BIGINT()));
+  auto replacement =
+      testConnector_->addTable("virt_seed", ROW("value", BIGINT()));
+
+  auto logicalPlan = recursivePlan();
+
+  testMetadata_->setPushdownMatcher([replacement](const Node& subtree) {
+    const auto* fixedPoint = subtree.as<FixedPoint>();
+    return std::vector<PushdownRoot>{{fixedPoint->anchor(), replacement}};
+  });
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .fixedPoint(
+                         core::FixedPointMatch("counter")
+                             .outputState(
+                                 /*append=*/true,
+                                 matchScan("virt_seed")
+                                     .aliases({"value"})
+                                     .project({"value"}))
+                             .plan(
+                                 core::PlanMatcherBuilder()
+                                     .stateSource("counter", /*delta=*/true)
+                                     .aliases({"n"})
+                                     .filter("n > 0")
+                                     .project({"n - 1"}))
+                             .convergeOnEmpty())
+                     .aliases({"n"})
+                     .project({"n"})
+                     .build();
+  AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
+}
+
+TEST_F(ConnectorPushdownPassTest, recursiveRoots) {
+  testConnector_->addTable("seed", ROW({"a"}, BIGINT()));
+  auto replacement =
+      testConnector_->addTable("virt_recursive", ROW("value", BIGINT()));
+  auto logicalPlan = recursivePlan();
+
+  // Replacing only the recursive step would leave its state reference
+  // unbound. Replacing the whole fixed point removes that reference safely.
+  testMetadata_->setPushdownMatcher([replacement](const Node& subtree) {
+    const auto* fixedPoint = subtree.as<FixedPoint>();
+    return std::vector<PushdownRoot>{{fixedPoint->step(), replacement}};
+  });
+  VELOX_ASSERT_THROW(
+      toSingleNodePlan(logicalPlan), "depend on unbound recursive state");
+
+  setWholeSubtreeReplacement(replacement);
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan(logicalPlan),
+      matchScan("virt_recursive").project().build());
+}
+
+TEST_F(ConnectorPushdownPassTest, conflictingRoots) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  auto firstTable =
+      testConnector_->addTable("first", ROW({"key", "total"}, BIGINT()));
+  auto secondTable =
+      testConnector_->addTable("second", ROW({"key", "total"}, BIGINT()));
+  auto outerTable = testConnector_->addTable("outer", ROW("value", BIGINT()));
+
+  auto logicalPlan = parseSelect(
+      "SELECT a + 1 FROM (SELECT a, sum(b) FROM t GROUP BY a)",
+      kTestConnectorId);
+
+  testMetadata_->setPushdownMatcher([firstTable,
+                                     secondTable](const Node& subtree) {
+    const auto* aggregate = requireNodeOfType(&subtree, NodeType::kAggregate);
+    return std::vector<PushdownRoot>{
+        {aggregate, firstTable},
+        {aggregate, secondTable},
+    };
+  });
+
+  VELOX_ASSERT_THROW(
+      toSingleNodePlan(logicalPlan), "Pushdown root was returned twice");
+
+  testMetadata_->setPushdownMatcher([outerTable,
+                                     firstTable](const Node& subtree) {
+    const auto* aggregate = requireNodeOfType(&subtree, NodeType::kAggregate);
+    return std::vector<PushdownRoot>{
+        {&subtree, outerTable},
+        {aggregate, firstTable},
+    };
+  });
+
+  VELOX_ASSERT_THROW(
+      toSingleNodePlan(logicalPlan), "Pushdown roots cannot be nested");
+}
+
+TEST_F(ConnectorPushdownPassTest, strictDescendant) {
+  const auto schema = ROW({"a", "b"}, BIGINT());
+  testConnector_->addTable("t", schema);
+  auto replacement =
+      testConnector_->addTable("virt_agg", ROW({"key", "total"}, BIGINT()));
+
+  auto planWithFilterDependingOnAggregate = parseSelect(
+      "SELECT a, s FROM (SELECT a, sum(b) AS s FROM t GROUP BY a) "
+      "WHERE s > 10",
+      kTestConnectorId);
+
+  testMetadata_->setPushdownMatcher([replacement](const Node& subtree) {
+    const auto* aggregate = requireNodeOfType(&subtree, NodeType::kAggregate);
+    EXPECT_NE(&subtree, aggregate);
+    return std::vector<PushdownRoot>{{aggregate, replacement}};
+  });
+
+  auto plan = toSingleNodePlan(planWithFilterDependingOnAggregate);
+  auto matcher = matchScan("virt_agg").project().filter("s > 10").build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+TEST_F(ConnectorPushdownPassTest, disjointRoots) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"c", "d"}, BIGINT()));
+  auto leftReplacement =
+      testConnector_->addTable("virt_left", ROW({"key", "total"}, BIGINT()));
+  auto rightReplacement =
+      testConnector_->addTable("virt_right", ROW({"key", "total"}, BIGINT()));
+
+  auto logicalPlan = parseSelect(
+      "SELECT l.a, l.sb, r.c, r.sd "
+      "FROM (SELECT a, sum(b) AS sb FROM t GROUP BY a) l "
+      "JOIN (SELECT c, sum(d) AS sd FROM u GROUP BY c) r ON l.a = r.c",
+      kTestConnectorId);
+
+  testMetadata_->setPushdownMatcher([leftReplacement,
+                                     rightReplacement](const Node& subtree) {
+    const auto inputs = subtree.inputs();
+    const auto* leftAgg = requireNodeOfType(inputs[0], NodeType::kAggregate);
+    const auto* rightAgg = requireNodeOfType(inputs[1], NodeType::kAggregate);
+    return std::vector<PushdownRoot>{
+        {leftAgg, leftReplacement},
+        {rightAgg, rightReplacement},
+    };
+  });
+
+  auto plan = toSingleNodePlan(logicalPlan);
+  auto buildMatcher = matchScan("virt_right").project();
+  auto matcher =
+      matchScan("virt_left").project().hashJoin(buildMatcher).build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+TEST_F(ConnectorPushdownPassTest, outsideRoot) {
+  auto otherConnector = registerScopedConnector("other");
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+  otherConnector.connector->addTable("u", ROW("b", BIGINT()));
+
+  auto logicalPlan = parseSelect(
+      "(SELECT a FROM t LIMIT 10) "
+      "UNION ALL (SELECT b FROM other.default.u LIMIT 10)",
+      kTestConnectorId);
+  auto stolen = testConnector_->addTable("stolen", ROW("value", BIGINT()));
+  folly::coro::Baton outsideReady;
+  std::atomic<NodeCP> outside{nullptr};
+  otherConnector.metadata->setAsyncPushdownMatcher(
+      [&](connector::ConnectorSessionPtr,
+          const Node& subtree) -> folly::coro::Task<std::vector<PushdownRoot>> {
+        outside.store(&subtree);
+        outsideReady.post();
+        co_return std::vector<PushdownRoot>{};
+      });
+  testMetadata_->setAsyncPushdownMatcher(
+      [&, stolen = std::move(stolen)](
+          connector::ConnectorSessionPtr,
+          const Node&) -> folly::coro::Task<std::vector<PushdownRoot>> {
+        co_await outsideReady;
+        co_return std::vector<PushdownRoot>{{outside.load(), stolen}};
+      });
+
+  VELOX_ASSERT_THROW(
+      toSingleNodePlan(logicalPlan), "outside the offered subtree");
+}
+
+TEST_F(ConnectorPushdownPassTest, invalidVirtualTables) {
+  auto foreignConnector = registerScopedConnector("foreign");
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  auto logicalPlan = aggregatePlan("t", "sum(b) as s");
+
+  const auto expectRejected = [&](std::string_view label,
+                                  connector::TablePtr replacement,
+                                  const char* message) {
+    SCOPED_TRACE(label);
+    setWholeSubtreeReplacement(std::move(replacement));
+    VELOX_ASSERT_THROW(toSingleNodePlan(logicalPlan), message);
+  };
+
+  expectRejected(
+      "foreign connector",
+      foreignConnector.connector->addTable(
+          "foreign", ROW({"key", "total"}, BIGINT())),
+      "belongs to a different connector");
+
+  expectRejected(
+      "wrong arity",
+      testConnector_->addTable("wrong_arity", ROW("value", BIGINT())),
+      "must have one visible column per root output");
+  expectRejected(
+      "wrong type",
+      testConnector_->addTable(
+          "wrong_type", ROW({"first", "second"}, VARCHAR())),
+      "column type does not match root output");
 }
 
 } // namespace
-} // namespace facebook::axiom::optimizer
+} // namespace facebook::axiom::optimizer::test

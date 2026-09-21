@@ -22,6 +22,10 @@
 #include "axiom/optimizer/v2/Node.h"
 #include "velox/core/Expressions.h"
 
+namespace facebook::axiom::connector {
+class SchemaResolver;
+} // namespace facebook::axiom::connector
+
 namespace facebook::axiom::optimizer {
 class OptimizerSession;
 class ConstantPlanRunner;
@@ -35,10 +39,13 @@ class TranslatePass {
   /// Output of `run`. `outputColumns` and `outputNames` describe the
   /// user-visible output layout, aligned 1:1 with each other. `outputColumns`
   /// may contain duplicate `Column*` entries (e.g., `SELECT v, v`).
+  /// `connectorPushdownSupported` is true when at least one referenced
+  /// connector advertises pushdown support.
   struct Result {
     NodeCP root;
     ColumnVector outputColumns;
     std::vector<std::string> outputNames;
+    bool connectorPushdownSupported{false};
   };
 
   /// Translates 'plan' into a tree-IR plus its user-visible output layout.
@@ -66,6 +73,7 @@ class TranslatePass {
   static Result run(
       const logical_plan::LogicalPlanNode& plan,
       optimizer::Schema& schema,
+      const connector::SchemaResolver& schemaResolver,
       velox::core::ExpressionEvaluator& evaluator,
       Builder& builder,
       const OptimizerSession& session,

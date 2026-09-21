@@ -326,6 +326,7 @@ Test tables are declared at the top of the `.sql` file via setup directives. Sta
 | `-- connector: <test\|hive>` | Selects the connector the file's setup DDL and queries run against. Defaults to `test`. |
 | `-- setup_file: relative.sql` | Splice in the contents of another `.sql` file as setup statements. Path is relative to the directory of the file containing the directive. |
 | `-- setup` … `-- end_setup` | Inline block of setup statements. |
+| `-- pushdown_table: table` | For a v2-only TestConnector file, replace each complete connector offer with the named setup table. |
 
 Both forms can appear any number of times, in any order, before the first query. Setup directives appearing after a query has started are rejected — install all tables first, then write queries.
 

@@ -580,15 +580,35 @@ TablePtr TestConnectorMetadata::findTable(const SchemaTableName& tableName) {
 }
 
 void TestConnectorMetadata::setPushdownMatcher(PushdownMatcher matcher) {
-  pushdownMatcher_ = std::move(matcher);
+  if (matcher == nullptr) {
+    asyncPushdownMatcher_ = nullptr;
+    return;
+  }
+  asyncPushdownMatcher_ = [matcher = std::move(matcher)](
+                              ConnectorSessionPtr,
+                              const optimizer::v2::Node& offeredSubtree)
+      -> folly::coro::Task<std::vector<PushdownRoot>> {
+    co_return matcher(offeredSubtree);
+  };
 }
 
-folly::coro::Task<std::vector<PushdownRoot>>
-TestConnectorMetadata::co_pushdownPlan(
-    const logical_plan::LogicalPlanNode& plan) const {
-  VELOX_CHECK_NOT_NULL(
-      pushdownMatcher_, "co_pushdownPlan called with no matcher installed");
-  co_return pushdownMatcher_(plan);
+void TestConnectorMetadata::setAsyncPushdownMatcher(
+    AsyncPushdownMatcher matcher) {
+  asyncPushdownMatcher_ = std::move(matcher);
+}
+
+bool TestConnectorMetadata::isPushdownSupported() const {
+  return asyncPushdownMatcher_ != nullptr;
+}
+
+folly::coro::Task<std::vector<PushdownRoot>> TestConnectorMetadata::co_pushdown(
+    ConnectorSessionPtr session,
+    const optimizer::v2::Node& offeredSubtree) const {
+  if (asyncPushdownMatcher_ != nullptr) {
+    co_return co_await asyncPushdownMatcher_(
+        std::move(session), offeredSubtree);
+  }
+  co_return {};
 }
 
 velox::TypePtr TestConnectorMetadata::findType(const SchemaTypeName& typeName) {

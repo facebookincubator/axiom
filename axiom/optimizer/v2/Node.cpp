@@ -73,6 +73,20 @@ std::string Node::toString() const {
   return NodePrinter::toText(this);
 }
 
+NodeCP FOLLY_NULLABLE
+Node::findFirstNode(NodeCP root, const std::function<bool(NodeCP)>& predicate) {
+  VELOX_CHECK_NOT_NULL(root);
+  if (predicate(root)) {
+    return root;
+  }
+  for (NodeCP input : root->inputs()) {
+    if (NodeCP found = findFirstNode(input, predicate)) {
+      return found;
+    }
+  }
+  return nullptr;
+}
+
 RequiredStates Node::deriveRequiredStates() const {
   RequiredStates states;
   for (NodeCP input : inputs()) {

@@ -17,8 +17,11 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <optional>
 #include <span>
+
+#include <folly/CppAttributes.h>
 
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/QueryGraph.h"
@@ -160,6 +163,11 @@ class Node : public PlanObject {
     VELOX_CHECK_EQ(1, nodeInputs.size());
     return nodeInputs[0];
   }
+
+  /// Returns the first node in `root`'s subtree that satisfies `predicate`, or
+  /// nullptr when none does.
+  static NodeCP FOLLY_NULLABLE
+  findFirstNode(NodeCP root, const std::function<bool(NodeCP)>& predicate);
 
   /// Double-dispatch hook for `NodeVisitor`.
   virtual void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
