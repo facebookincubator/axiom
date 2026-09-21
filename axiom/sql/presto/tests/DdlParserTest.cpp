@@ -223,6 +223,10 @@ TEST_F(DdlParserTest, createTable) {
       "CREATE TABLE t (price DECIMAL(10, 2))",
       "t",
       ROW({"price"}, {DECIMAL(10, 2)}));
+  testCreateTable(
+      "CREATE TABLE t (name VARCHAR(255), aliases ARRAY<VARCHAR(20)>)",
+      "t",
+      ROW({"name", "aliases"}, {VARCHAR(), ARRAY(VARCHAR())}));
 
   // like clause
   {

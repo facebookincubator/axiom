@@ -349,6 +349,84 @@ int32_t parseInt(const TypeSignaturePtr& type) {
   }
 }
 
+std::optional<int32_t> boundedVarcharLength(const TypeSignaturePtr& type) {
+  if (type->parameters().empty()) {
+    return std::nullopt;
+  }
+
+  auto baseName = type->baseName();
+  folly::toUpperAscii(baseName);
+  if (baseName != "VARCHAR") {
+    return std::nullopt;
+  }
+
+  AXIOM_PRESTO_SEMANTIC_CHECK_EQ(
+      type->parameters().size(),
+      static_cast<size_t>(1),
+      type->location(),
+      baseName,
+      "VARCHAR expects 1 parameter");
+  const auto length = parseInt(type->parameters().front());
+  // Presto reserves INT32_MAX for unbounded VARCHAR. Explicit bounds stop one
+  // below that sentinel.
+  constexpr auto kMaxVarcharLength = std::numeric_limits<int32_t>::max() - 1;
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      length >= 0 && length <= kMaxVarcharLength,
+      type->location(),
+      type->parameters().front()->baseName(),
+      "Invalid VARCHAR length");
+  return length;
+}
+
+const TypeSignature* findNestedBoundedVarchar(const TypeSignaturePtr& type) {
+  for (const auto& parameter : type->parameters()) {
+    auto baseName = parameter->baseName();
+    folly::toUpperAscii(baseName);
+    if (baseName == "VARCHAR" && !parameter->parameters().empty()) {
+      return parameter.get();
+    }
+    if (const auto* nested = findNestedBoundedVarchar(parameter)) {
+      return nested;
+    }
+  }
+  return nullptr;
+}
+
+lp::ExprApi castWithVarcharLength(
+    const TypeSignaturePtr& type,
+    const TypePtr& resolvedType,
+    const lp::ExprApi& input,
+    bool isSafe) {
+  if (const auto length = boundedVarcharLength(type)) {
+    const auto cast = lp::Cast(resolvedType, input);
+    const auto truncated = lp::Call(
+        "substr", cast, lp::Lit(int64_t{1}), lp::Lit(int64_t{*length}));
+    const auto fits = lp::Call("is_null", cast) ||
+        lp::Call("length", cast) <= lp::Lit(int64_t{*length});
+    const auto message = lp::Call(
+        "concat",
+        lp::Lit("Value "),
+        cast,
+        lp::Lit(fmt::format(" cannot be represented as varchar({})", *length)));
+    const auto checked = lp::Call("if", fits, cast, lp::Call("fail", message));
+    const auto bounded = lp::Call(
+        "if",
+        lp::Call("typeof", input) == lp::Lit("varchar"),
+        truncated,
+        checked);
+    return isSafe ? lp::Call("try", bounded) : bounded;
+  }
+  if (const auto* nested = findNestedBoundedVarchar(type)) {
+    AXIOM_PRESTO_SEMANTIC_CHECK(
+        false,
+        nested->location(),
+        nested->baseName(),
+        "Nested bounded VARCHAR types are not supported");
+  }
+  return isSafe ? lp::TryCast(resolvedType, input)
+                : lp::Cast(resolvedType, input);
+}
+
 std::string toFunctionName(ComparisonExpression::Operator op) {
   switch (op) {
     case ComparisonExpression::Operator::kEqual:
@@ -904,6 +982,10 @@ TypePtr tryResolveBuiltinType(
       parameters.emplace_back(parseInt(type->parameters().at(0)));
       parameters.emplace_back(
           numParams == 1 ? 0 : parseInt(type->parameters().at(1)));
+    } else if (baseName == "VARCHAR") {
+      // Velox has no bounded VARCHAR type. Validate schema declarations here;
+      // expression planning separately preserves bounds for scalar values.
+      (void)boundedVarcharLength(type);
     } else if (baseName == "TDIGEST" || baseName == "QDIGEST") {
       AXIOM_PRESTO_SEMANTIC_CHECK_EQ(
           numParams,
@@ -1317,12 +1399,8 @@ lp::ExprApi ExpressionPlanner::toExpr(
     case NodeType::kCast: {
       auto* cast = node->as<Cast>();
       const auto type = resolveType(cast->toType());
-
-      if (cast->isSafe()) {
-        return lp::TryCast(type, toExpr(cast->expression(), options));
-      } else {
-        return lp::Cast(type, toExpr(cast->expression(), options));
-      }
+      const auto input = toExpr(cast->expression(), options);
+      return castWithVarcharLength(cast->toType(), type, input, cast->isSafe());
     }
 
     case NodeType::kAtTimeZone: {
@@ -1503,7 +1581,11 @@ lp::ExprApi ExpressionPlanner::toExpr(
       if (facebook::velox::isJsonType(type)) {
         return lp::Call("json_parse", lp::Lit(literal->value()));
       }
-      return lp::Cast(type, lp::Lit(literal->value()));
+      return castWithVarcharLength(
+          literal->valueType(),
+          type,
+          lp::Lit(literal->value()),
+          /*isSafe=*/false);
     }
 
     case NodeType::kTimeLiteral: {
