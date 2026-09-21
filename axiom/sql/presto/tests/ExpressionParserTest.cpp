@@ -143,6 +143,35 @@ TEST_F(ExpressionParserTest, types) {
   test("null as row(a int, b double)", ROW({"a", "b"}, {INTEGER(), DOUBLE()}));
 }
 
+TEST_F(ExpressionParserTest, boundedVarcharCast) {
+  auto cast = parseExpr("CAST('banana' AS VARCHAR(3))");
+  VELOX_EXPECT_EQ_TYPES(cast->type(), VARCHAR());
+  EXPECT_THAT(
+      cast->toString(),
+      testing::HasSubstr("substr(CAST(banana AS VARCHAR), 1, 3)"));
+
+  auto tryCast = parseExpr("TRY_CAST(123456 AS VARCHAR(3))");
+  VELOX_EXPECT_EQ_TYPES(tryCast->type(), VARCHAR());
+  EXPECT_THAT(tryCast->toString(), testing::HasSubstr("fail("));
+
+  auto literal = parseExpr("VARCHAR(3) 'banana'");
+  VELOX_EXPECT_EQ_TYPES(literal->type(), VARCHAR());
+  EXPECT_THAT(
+      literal->toString(),
+      testing::HasSubstr("substr(CAST(banana AS VARCHAR), 1, 3)"));
+
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseExpr("CAST('x' AS VARCHAR(1, 2))"), "VARCHAR expects 1 parameter");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseExpr("CAST('x' AS VARCHAR(value))"),
+      "Could not be converted to INTEGER_LITERAL");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseExpr("CAST('x' AS VARCHAR(2147483647))"), "Invalid VARCHAR length");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseExpr("CAST(ARRAY['banana'] AS ARRAY<VARCHAR(3)>)"),
+      "Nested bounded VARCHAR types are not supported");
+}
+
 TEST_F(ExpressionParserTest, intervalDayTime) {
   auto test = [&](std::string_view sql, int64_t expectedMillis) {
     SCOPED_TRACE(sql);

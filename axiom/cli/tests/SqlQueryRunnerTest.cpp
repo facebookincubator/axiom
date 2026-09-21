@@ -131,6 +131,32 @@ TEST_F(SqlQueryRunnerTest, runSingleStatement) {
   }
 }
 
+TEST_F(SqlQueryRunnerTest, boundedVarcharCast) {
+  const std::vector<std::pair<std::string, std::string>> testCases = {
+      {"SELECT CAST('banana' AS VARCHAR(3))", "ban"},
+      {"SELECT TRY_CAST('éclair' AS VARCHAR(2))", "éc"},
+      {"SELECT CAST(123 AS VARCHAR(3))", "123"},
+      {"SELECT CAST('x' AS VARCHAR(0))", ""},
+      {"SELECT VARCHAR(3) 'banana'", "ban"},
+  };
+
+  for (const auto& [query, expected] : testCases) {
+    SCOPED_TRACE(query);
+    const auto row = fetchSingleRow(query);
+    ASSERT_EQ(row->childrenSize(), 1);
+    EXPECT_EQ(
+        row->childAt(0)->as<SimpleVector<StringView>>()->valueAt(0), expected);
+  }
+
+  VELOX_ASSERT_THROW(
+      fetchSingleRow("SELECT CAST(123456 AS VARCHAR(3))"),
+      "Value 123456 cannot be represented as varchar(3)");
+
+  const auto row = fetchSingleRow("SELECT TRY_CAST(123456 AS VARCHAR(3))");
+  ASSERT_EQ(row->childrenSize(), 1);
+  EXPECT_TRUE(row->childAt(0)->isNullAt(0));
+}
+
 TEST_F(SqlQueryRunnerTest, executionTimeout) {
   // A six-way cross join over 25 rows produces 25^6 = ~244M rows, far more than
   // can be processed within the 10ms deadline, and the max of the concatenated
