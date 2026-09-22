@@ -18,13 +18,11 @@
 #include "axiom/optimizer/OptimizerOptions.h"
 
 #include <folly/ScopeGuard.h>
-#include <glog/logging.h>
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
-#include "axiom/optimizer/Optimization.h"
-#include "axiom/optimizer/VeloxHistory.h"
+#include "axiom/optimizer/v2/Optimize.h"
 #include "velox/expression/Expr.h"
 
 using namespace facebook;
@@ -102,7 +100,6 @@ facebook::axiom::optimizer::PlanAndStats optimize(
     const std::string& connectorId,
     velox::memory::MemoryPool* pool) {
   facebook::axiom::optimizer::OptimizerOptions optimizerOptions;
-  optimizerOptions.sampleJoins = false;
 
   // Set up thread local structures.
   auto allocator = std::make_unique<velox::HashStringAllocator>(pool);
@@ -135,8 +132,6 @@ facebook::axiom::optimizer::PlanAndStats optimize(
         connectorId, createTableNode->tableName(), std::move(table));
   }
 
-  auto history = std::make_unique<facebook::axiom::optimizer::VeloxHistory>();
-
   facebook::axiom::optimizer::MultiFragmentPlan::Options runnerOpts{
       .maxRemotePartitions = 1,
       .maxLocalPartitions = 1,
@@ -149,24 +144,13 @@ facebook::axiom::optimizer::PlanAndStats optimize(
           std::make_shared<velox::NoopRuntimeStatWriter>(),
           facebook::axiom::connector::Properties{},
           std::move(optimizerOptions));
-  auto runnerSession = std::make_shared<facebook::axiom::runner::RunnerSession>(
-      connectorContext,
-      std::make_shared<velox::NoopRuntimeStatWriter>(),
-      facebook::axiom::runner::Properties{});
-
-  facebook::axiom::optimizer::Optimization opt(
-      std::move(optimizerSession),
-      std::move(runnerSession),
-      *logicalPlan,
-      *schemaResolver,
-      *history,
-      queryCtx,
-      evaluator,
-      runnerOpts);
-  auto best = opt.deprecatedBestPlan();
-  LOG(INFO) << "Axiom best plan:\n" << best->toString(false);
-
-  return opt.toVeloxPlan(best->op);
+  return facebook::axiom::optimizer::v2::Optimizer(
+             *logicalPlan,
+             *schemaResolver,
+             *optimizerSession,
+             evaluator,
+             queryCtx)
+      .optimize(runnerOpts);
 }
 
 } // namespace axiom::collagen

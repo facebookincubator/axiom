@@ -44,6 +44,7 @@ target_link_libraries(
   axiom_connectors
   axiom_logical_plan
   axiom_optimizer
+  axiom_optimizer_v2
   velox_exec
   velox_expression
   velox_function_registry
