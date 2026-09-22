@@ -840,22 +840,6 @@ SqlQueryRunner::co_run(std::string sql, RunOptions options) {
   }
 }
 
-std::string SqlQueryRunner::toQueryGraphDot(std::string_view sql) {
-  const auto logicalPlan = toLogicalPlan(sql);
-
-  std::string dotOutput;
-  RunOptions options;
-  auto queryCtx = newQuery(options);
-  const auto context = makeConnectorContext(queryCtx->queryId(), options);
-  optimize(logicalPlan, queryCtx, options, context, [&](const auto& dt) {
-    std::ostringstream out;
-    graphviz::DerivedTableDotPrinter::print(dt, out);
-    dotOutput = out.str();
-    return false; // Stop optimization.
-  });
-  return dotOutput;
-}
-
 std::string SqlQueryRunner::toLogicalPlanDot(std::string_view sql) {
   const auto logicalPlan = toLogicalPlan(sql);
 

@@ -147,7 +147,7 @@ The query graph consists of a BaseTable t2 that represents 'nation' and a Derive
 
 <img src="docs/images/readme_count_query_graph.svg" width="300" alt="count(*) query graph">
 
-> See [Query Graphviz CLI](docs/QueryGraphviz.md) for a tool to generate query graph and logical plan visualizations from SQL queries.
+> See [Query Graphviz CLI](docs/QueryGraphviz.md) for a tool to generate logical plan and distributed plan visualizations from SQL queries.
 
 A bit more involved query would count the number of African nations by joining nation and region tables.
 
