@@ -14,18 +14,13 @@
  * limitations under the License.
  */
 
-/// A command line tool to generate query graph, logical plan, or
-/// distributed plan visualization from a SQL query. Supports TPC-H tables
-/// by default, or local tables in Parquet/DWRF/text format when --data_path
-/// is specified.
+/// A command line tool to generate logical plan or distributed plan
+/// visualization from a SQL query. Supports TPC-H tables by default, or
+/// local tables in Parquet/DWRF/text format when --data_path is specified.
 ///
-/// Generate query graph (default):
+/// Generate logical plan (default):
 ///   buck2 run //axiom/cli:graphviz -- --query "SELECT * FROM customer" \
-///       --output query.svg
-///
-/// Generate logical plan:
-///   buck2 run //axiom/cli:graphviz -- --mode=logical \
-///       --query "SELECT * FROM customer" --output plan.svg
+///       --output plan.svg
 ///
 /// Generate distributed plan:
 ///   buck2 run //axiom/cli:graphviz -- --mode=distributed \
@@ -38,11 +33,11 @@
 ///
 /// Generate DOT file (no .svg extension):
 ///   buck2 run //axiom/cli:graphviz -- --query "SELECT * FROM customer" \
-///       --output query
+///       --output plan
 ///
 /// The query can also be passed via stdin:
 ///   echo "SELECT * FROM customer" | buck2 run //axiom/cli:graphviz -- \
-///       --query "" --output query.svg
+///       --query "" --output plan.svg
 
 #include <folly/Subprocess.h>
 #include <folly/init/Init.h>
@@ -63,10 +58,7 @@ DEFINE_string(
     output,
     "",
     "Output file path. Use .svg extension to generate SVG.");
-DEFINE_string(
-    mode,
-    "graph",
-    "Visualization mode: graph, logical, or distributed.");
+DEFINE_string(mode, "logical", "Visualization mode: logical or distributed.");
 DEFINE_string(
     data_path,
     "",
@@ -145,12 +137,11 @@ int main(int argc, char** argv) {
     std::cerr << "   or: echo \"SELECT ...\" | " << argv[0]
               << " --query \"\" --output <file.svg>" << std::endl;
     std::cerr << std::endl;
-    std::cerr
-        << "Generates query graph, logical plan, or distributed plan visualization."
-        << std::endl;
+    std::cerr << "Generates logical plan or distributed plan visualization."
+              << std::endl;
     std::cerr << std::endl;
     std::cerr << "Options:" << std::endl;
-    std::cerr << "  --mode          graph (default), logical, or distributed"
+    std::cerr << "  --mode          logical (default) or distributed"
               << std::endl;
     std::cerr << "  --data_path     Path to local tables (default: TPC-H)"
               << std::endl;
@@ -180,7 +171,10 @@ int main(int argc, char** argv) {
       facebook::velox::memory::MemoryManager::Options{});
 
   facebook::axiom::Connectors connectors;
-  axiom::sql::SqlQueryRunner runner{axiom::sql::SystemUser::resolve()};
+  axiom::sql::SqlQueryRunner runner{
+      axiom::sql::SystemUser::resolve(),
+      /*progressScheduler=*/nullptr,
+      /*useOptimizerV2=*/true};
   runner.initialize([&]() {
     auto defaultConnector = connectors.registerTpchConnector();
     auto defaultSchema = "tiny";
@@ -193,16 +187,14 @@ int main(int argc, char** argv) {
   });
 
   std::string dot;
-  if (FLAGS_mode == "graph") {
-    dot = runner.toQueryGraphDot(query);
-  } else if (FLAGS_mode == "logical") {
+  if (FLAGS_mode == "logical") {
     dot = runner.toLogicalPlanDot(query);
   } else if (FLAGS_mode == "distributed") {
     dot = runner.toMultiFragmentPlanDot(
         query, FLAGS_num_workers, FLAGS_num_drivers);
   } else {
     std::cerr << "Unknown --mode: " << FLAGS_mode
-              << ". Expected graph, logical, or distributed." << std::endl;
+              << ". Expected logical or distributed." << std::endl;
     return 1;
   }
 
