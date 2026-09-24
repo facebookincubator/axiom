@@ -16,6 +16,8 @@
 
 #include "axiom/cli/Connectors.h"
 
+#include <algorithm>
+
 #include <folly/system/HardwareConcurrency.h>
 #include "axiom/common/SessionConfig.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
@@ -128,10 +130,25 @@ void Connectors::registerConnector(
 
 void Connectors::registerConnectorMetadataAlias(
     std::string alias,
-    const std::string& targetConnectorId) {
-  auto metadata = connector::ConnectorMetadataRegistry::get(targetConnectorId);
+    const std::string& targetCatalogName) {
+  const auto target = std::find_if(
+      catalogInfos_.begin(), catalogInfos_.end(), [&](const auto& catalog) {
+        return catalog.catalogName == targetCatalogName;
+      });
+  VELOX_CHECK(
+      target != catalogInfos_.end(),
+      "Catalog information not found for metadata alias target: {}",
+      targetCatalogName);
+  auto metadata = connector::ConnectorMetadataRegistry::get(targetCatalogName);
   connector::ConnectorMetadataRegistry::global().insert(alias, metadata);
+  recordCatalog(alias, target->connectorName);
   metadataAliasIds_.push_back(std::move(alias));
+}
+
+void Connectors::recordCatalog(
+    const std::string& catalogName,
+    std::string connectorName) {
+  catalogInfos_.push_back({catalogName, std::move(connectorName)});
 }
 
 std::shared_ptr<velox::connector::Connector> Connectors::registerTpchConnector(
@@ -149,6 +166,7 @@ std::shared_ptr<velox::connector::Connector> Connectors::registerTpchConnector(
   connector::ConnectorMetadataRegistry::global().insert(
       connector->connectorId(),
       std::make_shared<connector::tpch::TpchConnectorMetadata>(tpchConnector));
+  recordCatalog(connectorId, "tpch");
 
   return connector;
 }
@@ -180,6 +198,7 @@ Connectors::registerLocalHiveConnector(
           hiveConnector,
           rootPool ? std::move(rootPool)
                    : velox::memory::memoryManager()->addRootPool()));
+  recordCatalog(connectorId, "hive");
 
   return connector;
 }
@@ -237,6 +256,7 @@ std::shared_ptr<velox::connector::Connector> Connectors::registerTestConnector(
   VELOX_CHECK_NOT_NULL(testConnector);
   connector::ConnectorMetadataRegistry::global().insert(
       connector->connectorId(), testConnector->metadata());
+  recordCatalog(connectorId, "test");
 
   return connector;
 }
@@ -249,11 +269,14 @@ void Connectors::registerSystemConnector(
 
   // The CLI speaks Presto SQL, so information_schema spells types the way
   // Presto does.
+  auto catalogInfos = catalogInfos_;
+  catalogInfos.push_back({connectorId, "system"});
   auto connector = std::make_shared<connector::system::SystemConnector>(
       connectorId,
       /*queryInfoProvider=*/nullptr,
       sessionPropertiesProvider_.get(),
-      velox::PrestoTypes::displayName);
+      velox::PrestoTypes::displayName,
+      std::move(catalogInfos));
   registerConnector(connector);
   connector::ConnectorMetadataRegistry::global().insert(
       connector->connectorId(),
@@ -271,6 +294,7 @@ void Connectors::registerFileConnector(const std::string& connectorId) {
       connector->connectorId(),
       std::make_shared<connector::file::FileConnectorMetadata>(
           connector.get()));
+  recordCatalog(connectorId, "file");
 }
 
 } // namespace facebook::axiom

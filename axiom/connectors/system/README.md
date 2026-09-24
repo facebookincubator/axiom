@@ -15,13 +15,14 @@ belonging to any one connector.
 
 ### system.metadata
 
-Configuration metadata, including session-scoped properties and function
-signatures.
+Configuration metadata, including session-scoped properties, function
+signatures, and registered catalogs.
 
 | Table | Description |
 |-------|-------------|
 | `session_properties` | All registered session properties with current values, defaults, and descriptions. |
 | `functions` | All registered function signatures with types, arguments, and metadata. |
+| `catalogs` | All registered catalogs with their connector identifiers and implementation names. |
 
 ### <catalog>.information_schema
 
@@ -141,6 +142,11 @@ WHERE kind = 'aggregate' ORDER BY 1;
 SELECT DISTINCT name FROM system.metadata.functions
 WHERE is_variadic ORDER BY 1;
 
+-- List catalogs and their connector implementations.
+SELECT catalog_name, connector_name
+FROM system.metadata.catalogs
+ORDER BY catalog_name;
+
 -- List all active queries.
 SELECT query_id, state, query, elapsed_time_ms
 FROM system.runtime.queries;
@@ -200,6 +206,14 @@ WHERE table_schema = 'sales' AND table_name = 'daily_orders';
 | `properties` | VARCHAR | Type-specific metadata as JSON (e.g. `{"deterministic": true}`). |
 
 One row per function signature (overload).
+
+### system.metadata.catalogs
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `catalog_name` | VARCHAR | Catalog name accepted in SQL. |
+| `connector_id` | VARCHAR | Catalog identifier. Matches `catalog_name` in Axiom. |
+| `connector_name` | VARCHAR | Connector implementation name. |
 
 <details>
 <summary>system.runtime.queries (30 columns)</summary>
@@ -291,8 +305,9 @@ The system connector has two layers:
 Each system table has a corresponding data source class that knows how
 to populate its columns. The data source reads from a **provider
 interface** — `QueryInfoProvider` for the queries table,
-`SessionPropertiesProvider` for session properties, and
-`FunctionsProvider` for function metadata. These interfaces
+`SessionPropertiesProvider` for session properties, and a catalog snapshot
+for catalogs. Function metadata comes directly from Velox's function
+registries. These interfaces
 decouple the connector from the rest of the system: the connector
 defines what data it needs, and the application supplies it.
 

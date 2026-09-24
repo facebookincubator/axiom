@@ -12,6 +12,21 @@ cnt
 
 ```
 
+## Catalog metadata includes all registered CLI catalogs
+
+```scrut
+$ $CLI --query "SELECT catalog_name, connector_id, connector_name FROM system.metadata.catalogs ORDER BY catalog_name" 2>/dev/null
+-------------+--------------+---------------
+catalog_name | connector_id | connector_name
+-------------+--------------+---------------
+file         | file         | file
+system       | system       | system
+test         | test         | test
+tpch         | tpch         | tpch
+(4 rows in 1 batches)
+
+```
+
 ## Read query from stdin without trailing semicolon
 
 ```scrut
