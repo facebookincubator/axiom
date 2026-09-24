@@ -94,6 +94,9 @@ Connectors::Connectors() {
 }
 
 Connectors::~Connectors() {
+  for (const auto& alias : metadataAliasIds_) {
+    connector::ConnectorMetadataRegistry::global().erase(alias);
+  }
   for (const auto& connectorId : connectorIds_) {
     // Unregister metadata first since it may reference the connector.
     connector::ConnectorMetadataRegistry::global().erase(connectorId);
@@ -121,6 +124,14 @@ void Connectors::registerConnector(
   connectorIds_.push_back(connector->connectorId());
   velox::connector::ConnectorRegistry::global().insert(
       connector->connectorId(), connector);
+}
+
+void Connectors::registerConnectorMetadataAlias(
+    std::string alias,
+    const std::string& targetConnectorId) {
+  auto metadata = connector::ConnectorMetadataRegistry::get(targetConnectorId);
+  connector::ConnectorMetadataRegistry::global().insert(alias, metadata);
+  metadataAliasIds_.push_back(std::move(alias));
 }
 
 std::shared_ptr<velox::connector::Connector> Connectors::registerTpchConnector(
