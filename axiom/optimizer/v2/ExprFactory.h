@@ -106,6 +106,10 @@ class ExprFactory {
       const std::vector<std::pair<ExprCP, ExprCP>>& when,
       ExprCP elseExpr);
 
+  /// Builds a window-function call with the classification shared by all
+  /// translated window functions.
+  ExprCP makeWindowCall(Name name, const Value& value, ExprVector args);
+
   /// Maps a subexpression to what it should be replaced by.
   using ExprSubstitution = folly::F14FastMap<ExprCP, ExprCP>;
 
@@ -147,9 +151,22 @@ class ExprFactory {
 
   /// Returns `call` with its arguments replaced by 'args', preserving
   /// the name, value and special-form-ness and recomputing the
-  /// `FunctionSet` from the new arguments. Goes through
-  /// `Builder::makeCall` so hash-consing stays canonical.
+  /// `FunctionSet` from the new arguments. Goes through `Builder::makeCall` so
+  /// hash-consing stays canonical.
   ExprCP rebuildCall(const Call* call, ExprVector args);
+
+  /// Rebuilds a translated window call with new arguments while preserving
+  /// the function classification assigned during translation.
+  ExprCP rebuildWindowCall(const Call* call, ExprVector args);
+
+  /// Rebuilds an aggregate call with new child expressions while preserving
+  /// aggregate-owned properties and recomputing transitive function flags.
+  const optimizer::Aggregate* rebuildAggregateCall(
+      const optimizer::Aggregate* aggregate,
+      ExprVector args,
+      ExprCP condition,
+      ExprVector orderKeys,
+      const optimizer::Aggregate* fallback);
 
   /// Returns `field` with its base replaced by 'base', preserving whether
   /// the field is named or positional. `Field` is arena-allocated rather

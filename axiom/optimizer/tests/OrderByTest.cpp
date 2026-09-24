@@ -76,6 +76,32 @@ TEST_P(OrderByTest, orderByOfUnreadRowsDrops) {
           .build());
 }
 
+TEST_P(OrderByTest, coalesceJoinKey) {
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+  testConnector_->addTable("u", ROW("b", BIGINT()));
+
+  const auto logicalPlan = parseSelect(
+      "SELECT a FROM t LEFT JOIN u ON a = b "
+      "ORDER BY coalesce(a, b) DESC NULLS FIRST",
+      kTestConnectorId);
+
+  // The coalesce order-by key is rewritten to a. No remote shuffle is needed
+  // before the OrderBy node.
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(logicalPlan).plan,
+      matchScan("t")
+          .shuffle({"a"})
+          .hashJoinLeft(
+              matchScan("u").shuffle({"b"}),
+              {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
+          .project({"a", "a as key"})
+          .orderBy({"key DESC NULLS FIRST"})
+          .localMerge()
+          .shuffleMerge()
+          .project({"a"})
+          .build());
+}
+
 AXIOM_INSTANTIATE_V1_V2(OrderByTest);
 
 } // namespace

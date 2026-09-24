@@ -762,6 +762,11 @@ const FunctionSet& Expr::functions() const {
   return empty;
 }
 
+bool Expr::propagatesNullsFrom(const PlanObjectSet& nullColumns) const {
+  return columns_.hasIntersection(nullColumns) &&
+      !containsFunction(FunctionSet::kNonDefaultNullBehavior);
+}
+
 bool Expr::sameOrEqual(const Expr& other) const {
   if (this == &other) {
     return true;

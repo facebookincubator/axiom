@@ -201,6 +201,15 @@ ExprCP ExprFactory::makeSwitch(
       switchName, resultValue, std::move(arguments), functions);
 }
 
+ExprCP
+ExprFactory::makeWindowCall(Name name, const Value& value, ExprVector args) {
+  const FunctionSet functions = Call::unionArgFunctions(
+      FunctionSet{} | FunctionSet::kNonDeterministic |
+          FunctionSet::kNonDefaultNullBehavior,
+      args);
+  return builder_.makeCall(name, value, std::move(args), functions);
+}
+
 namespace {
 
 // Rebuilds `call` with each argument replaced, sharing the original
@@ -344,6 +353,38 @@ ExprCP ExprFactory::rebuildCall(const Call* call, ExprVector args) {
       Call::unionArgFunctions(functionBits(call->name(), specialForm), args);
   return builder_.makeCall(
       call->name(), call->value(), std::move(args), functions);
+}
+
+ExprCP ExprFactory::rebuildWindowCall(const Call* call, ExprVector args) {
+  return makeWindowCall(call->name(), call->value(), std::move(args));
+}
+
+const optimizer::Aggregate* ExprFactory::rebuildAggregateCall(
+    const optimizer::Aggregate* aggregate,
+    ExprVector args,
+    ExprCP condition,
+    ExprVector orderKeys,
+    const optimizer::Aggregate* fallback) {
+  FunctionSet functions = Call::unionArgFunctions(FunctionSet{}, args);
+  if (aggregate->functions().contains(
+          FunctionSet::kIgnoreDuplicatesAggregate)) {
+    functions = functions | FunctionSet::kIgnoreDuplicatesAggregate;
+  }
+  if (aggregate->functions().contains(FunctionSet::kOrderSensitiveAggregate)) {
+    functions = functions | FunctionSet::kOrderSensitiveAggregate;
+  }
+  return builder_.makeAggregate(
+      aggregate->name(),
+      aggregate->value(),
+      std::move(args),
+      functions,
+      aggregate->isDistinct(),
+      condition,
+      aggregate->intermediateType(),
+      std::move(orderKeys),
+      aggregate->orderTypes(),
+      aggregate->specialKind(),
+      fallback);
 }
 
 } // namespace facebook::axiom::optimizer::v2

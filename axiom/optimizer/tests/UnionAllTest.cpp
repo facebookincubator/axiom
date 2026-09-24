@@ -71,6 +71,36 @@ TEST_P(UnionAllTest, twoScans) {
   }
 }
 
+TEST_P(UnionAllTest, coalesceJoinKeyContexts) {
+  auto logicalPlan = parseSelect(
+      "SELECT coalesce(a, b) FROM t LEFT JOIN u ON a = b "
+      "UNION ALL "
+      "SELECT coalesce(a, b) FROM t FULL JOIN u ON a = b",
+      kTestConnectorId);
+
+  // Substitutions stay branch-local: the coalesce projection in left-join leg
+  // is rewritten to a, while the full-join leg retains the coalesce.
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(logicalPlan).plan,
+      matchScan("t")
+          .aliases({"a1"})
+          .hashJoinLeft(
+              matchScan("u").aliases({"b1"}).broadcast(),
+              {.keys = {{"a1 = b1"}}, .outputColumnNames = {{"a1"}}})
+          .project({"a1"})
+          .localPartition(
+              matchScan("t")
+                  .aliases({"a2"})
+                  .shuffle({"a2"})
+                  .hashJoinFull(
+                      matchScan("u").aliases({"b2"}).shuffle({"b2"}),
+                      {.keys = {{"a2 = b2"}},
+                       .outputColumnNames = {{"a2", "b2"}}})
+                  .project({"coalesce(a2, b2)"}))
+          .gather()
+          .build());
+}
+
 // Two DISTINCTs (kFixed N + kFixed N) co-locate in one kFixed N fragment
 // with both incoming hash exchanges.
 TEST_P(UnionAllTest, twoDistincts) {

@@ -2015,6 +2015,38 @@ TEST_P(SubqueryTest, correlatedExistsThenUncorrelatedIn) {
 
 // Correlated scalar subqueries without aggregation.
 // These require EnforceDistinct to validate single-row semantics.
+TEST_P(SubqueryTest, coalesceJoinKeyInScalarSubquery) {
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+  testConnector_->addTable("u", ROW("b", BIGINT()));
+  testConnector_->addTable("v", ROW("c", BIGINT()));
+
+  const auto query =
+      "SELECT (SELECT c FROM v WHERE c = coalesce(a, b)) "
+      "FROM t LEFT JOIN u ON a = b";
+
+  // The scalar-subquery's coalesce join key is rewritten to a and the
+  // subquery's join needs no remote shuffle after the first join.
+  const auto matcher =
+      matchScan("t")
+          .shuffle({"a"})
+          .hashJoinLeft(
+              matchScan("u").shuffle({"b"}),
+              {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
+          .assignUniqueId("id")
+          .hashJoinLeft(
+              matchScan("v").shuffle({"c"}),
+              {.keys = {{"a = c"}}, .outputColumnNames = {{"id", "c"}}})
+          .shuffle({"id"})
+          .localPartition({"id"})
+          .enforceDistinct({"id"})
+          .project({"c"})
+          .gather()
+          .build();
+
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(parseSelect(query, kTestConnectorId)).plan, matcher);
+}
+
 TEST_P(SubqueryTest, correlatedScalarWithoutAggregation) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   testConnector_->addTable("u", ROW({"c", "d"}, BIGINT()));

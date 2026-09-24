@@ -70,6 +70,40 @@ TEST_P(WindowTest, partitionBy) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+TEST_P(WindowTest, coalesceJoinKey) {
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+  testConnector_->addTable("u", ROW("b", BIGINT()));
+
+  auto logicalPlan = parseSelect(
+      "SELECT first_value(coalesce(b, a)) OVER ("
+      "PARTITION BY coalesce(a, b) ORDER BY coalesce(b, a) "
+      "ROWS BETWEEN coalesce(a, b) PRECEDING "
+      "AND coalesce(b, a) FOLLOWING) AS value "
+      "FROM t LEFT JOIN u ON a = b",
+      kTestConnectorId);
+
+  // All window-owned coalesce expressions after the join are rewritten to a. No
+  // remote shuffle is needed before the Window node.
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(logicalPlan).plan,
+      matchScan("t")
+          .shuffle({"a"})
+          .hashJoinLeft(
+              matchScan("u").shuffle({"b"}),
+              {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
+          .project({"a as partition_key", "a as order_key"})
+          .localPartition({"partition_key"})
+          .window({
+              "first_value(order_key) OVER (PARTITION BY partition_key "
+              "ORDER BY order_key "
+              "ROWS BETWEEN partition_key PRECEDING "
+              "AND order_key FOLLOWING) as value",
+          })
+          .project({"value"})
+          .gather()
+          .build());
+}
+
 TEST_P(WindowTest, multipleFunctionsSameSpec) {
   // Multiple window functions with the same partition/order spec should be
   // grouped into a single Window operator.

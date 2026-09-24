@@ -188,6 +188,267 @@ TEST_P(AggregationTest, dedupSameOptions) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+TEST_P(AggregationTest, coalesceJoinKey) {
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+  testConnector_->addTable("u", ROW("b", BIGINT()));
+
+  {
+    SCOPED_TRACE("Left join with reversed coalesce arguments");
+    const auto logicalPlan = parseSelect(
+        "SELECT coalesce(b, a) AS c, count(*) "
+        "FROM t LEFT JOIN u ON a = b "
+        "GROUP BY coalesce(b, a)",
+        kTestConnectorId);
+
+    // Aggregation grouping key is rewritten to a. No remote shuffle is needed
+    // during the aggregation after the join.
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchScan("t")
+            .shuffle({"a"})
+            .hashJoinLeft(
+                matchScan("u").shuffle({"b"}),
+                {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
+            .project({"a as key"})
+            .partialAggregation({"key"}, {"count(*) as count"})
+            .localPartition({"key"})
+            .finalAggregation({"key"}, {"count(count) as count"})
+            .project({"key as c", "count"})
+            .gather()
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("Inner join");
+    const auto logicalPlan = parseSelect(
+        "SELECT coalesce(a, b) AS c, count(*) "
+        "FROM t JOIN u ON a = b "
+        "GROUP BY coalesce(a, b)",
+        kTestConnectorId);
+
+    // Aggregation grouping key is rewritten to a. No remote shuffle is needed
+    // during the aggregation after the join.
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchScan("t")
+            .shuffle({"a"})
+            .hashJoinInner(
+                matchScan("u").shuffle({"b"}),
+                {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
+            .project({"a as key"})
+            .partialAggregation({"key"}, {"count(*) as count"})
+            .localPartition({"key"})
+            .finalAggregation({"key"}, {"count(count) as count"})
+            .project({"key as c", "count"})
+            .gather()
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("Right join");
+    const auto logicalPlan = parseSelect(
+        "SELECT coalesce(a, b) AS c, count(*) "
+        "FROM t RIGHT JOIN u ON a = b "
+        "GROUP BY coalesce(a, b)",
+        kTestConnectorId);
+
+    // Aggregation grouping key is rewritten to b.
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchScan("t")
+            .shuffle({"a"})
+            .hashJoinRight(
+                matchScan("u").shuffle({"b"}),
+                {.keys = {{"a = b"}}, .outputColumnNames = {{"b"}}})
+            .project({"b as key"})
+            .partialAggregation({"key"}, {"count(*) as count"})
+            .shuffle({"key"})
+            .localPartition({"key"})
+            .finalAggregation({"key"}, {"count(count) as count"})
+            .project({"key as c", "count"})
+            .gather()
+            .build());
+  }
+}
+
+TEST_P(AggregationTest, coalesceJoinKeyIndependentRead) {
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+  testConnector_->addTable("u", ROW("b", BIGINT()));
+
+  const auto logicalPlan = parseSelect(
+      "SELECT coalesce(a, b) AS c, max(b) "
+      "FROM t LEFT JOIN u ON a = b "
+      "GROUP BY coalesce(a, b)",
+      kTestConnectorId);
+
+  // Aggregation grouping key is rewritten to a and projected after aggregation.
+  // No remote shuffle during the aggregation after the join.
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(logicalPlan).plan,
+      matchScan("t")
+          .shuffle({"a"})
+          .hashJoinLeft(
+              matchScan("u").shuffle({"b"}),
+              {.keys = {{"a = b"}}, .outputColumnNames = {{"a", "b"}}})
+          .project({"a as key", "b"})
+          .partialAggregation({"key"}, {"max(b) as max"})
+          .localPartition({"key"})
+          .finalAggregation({"key"}, {"max(max) as max"})
+          .project({"key as c", "max"})
+          .gather()
+          .build());
+}
+
+TEST_P(AggregationTest, coalesceComputedJoinKey) {
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+  testConnector_->addTable("u", ROW("b", BIGINT()));
+
+  const auto logicalPlan = parseSelect(
+      "SELECT coalesce(a + 1, b) AS c, count(*) "
+      "FROM t LEFT JOIN u ON a + 1 = b "
+      "GROUP BY coalesce(a + 1, b)",
+      kTestConnectorId);
+
+  // The grouping key uses the preserved computed join key, so b is pruned.
+  // The computed value is not exposed by the join, so aggregation still
+  // repartitions it.
+  // TODO: Preserve the semantic partitioning by a + 1 across physical join
+  // emission so aggregation can reuse the join partitioning without another
+  // remote shuffle.
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(logicalPlan).plan,
+      matchScan("t")
+          .project({"a", "a + 1 as join_key"})
+          .shuffle({"join_key"})
+          .hashJoinLeft(
+              matchScan("u").shuffle({"b"}),
+              {.keys = {{"join_key = b"}}, .outputColumnNames = {{"a"}}})
+          .project({"a + 1 as key"})
+          .partialAggregation({"key"}, {"count(*) as count"})
+          .shuffle({"key"})
+          .localPartition({"key"})
+          .finalAggregation({"key"}, {"count(count) as count"})
+          .project({"key as c", "count"})
+          .gather()
+          .build());
+}
+
+TEST_P(AggregationTest, coalesceJoinKeyNotRewritten) {
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+  testConnector_->addTable("u", ROW("b", BIGINT()));
+
+  {
+    SCOPED_TRACE("Full join");
+    const auto logicalPlan = parseSelect(
+        "SELECT coalesce(a, b) AS c, count(*) "
+        "FROM t FULL JOIN u ON a = b "
+        "GROUP BY coalesce(a, b)",
+        kTestConnectorId);
+
+    // The matcher verifies that a full join retains both keys and the
+    // coalesce, which requires repartitioning the computed grouping key.
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchScan("t")
+            .shuffle({"a"})
+            .hashJoinFull(
+                matchScan("u").shuffle({"b"}),
+                {.keys = {{"a = b"}}, .outputColumnNames = {{"a", "b"}}})
+            .project({"coalesce(a, b) as key"})
+            .partialAggregation({"key"}, {"count(*) as count"})
+            .shuffle({"key"})
+            .localPartition({"key"})
+            .finalAggregation({"key"}, {"count(count) as count"})
+            .project({"key as c", "count"})
+            .gather()
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("Three arguments");
+    const auto logicalPlan = parseSelect(
+        "SELECT coalesce(a, b, 0) AS c, count(*) "
+        "FROM t LEFT JOIN u ON a = b "
+        "GROUP BY coalesce(a, b, 0)",
+        kTestConnectorId);
+
+    // The matcher verifies that an n-ary coalesce retains both join keys and
+    // requires repartitioning the computed grouping key.
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchScan("t")
+            .shuffle({"a"})
+            .hashJoinLeft(
+                matchScan("u").shuffle({"b"}),
+                {.keys = {{"a = b"}}, .outputColumnNames = {{"a", "b"}}})
+            .project({"coalesce(a, b, 0) as key"})
+            .partialAggregation({"key"}, {"count(*) as count"})
+            .shuffle({"key"})
+            .localPartition({"key"})
+            .finalAggregation({"key"}, {"count(count) as count"})
+            .project({"key as c", "count"})
+            .gather()
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("Non-default-null join key");
+    const auto logicalPlan = parseSelect(
+        "SELECT coalesce(a, coalesce(b, 0)) AS c, count(*) "
+        "FROM t LEFT JOIN u ON a = coalesce(b, 0) "
+        "GROUP BY coalesce(a, coalesce(b, 0))",
+        kTestConnectorId);
+
+    // A key that can produce a non-null value from a null-padded row does
+    // not establish a coalesce rewrite.
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchScan("t")
+            .shuffle({"a"})
+            .hashJoinLeft(
+                matchScan("u")
+                    .project({"b", "coalesce(b, 0) as join_key"})
+                    .shuffle({"join_key"}),
+                {.keys = {{"a = join_key"}}, .outputColumnNames = {{"a", "b"}}})
+            .project({"coalesce(a, coalesce(b, 0)) as key"})
+            .partialAggregation({"key"}, {"count(*) as count"})
+            .shuffle({"key"})
+            .localPartition({"key"})
+            .finalAggregation({"key"}, {"count(count) as count"})
+            .project({"key as c", "count"})
+            .gather()
+            .build());
+  }
+}
+
+TEST_P(AggregationTest, coalesceJoinKeyAliases) {
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+  testConnector_->addTable("u", ROW("b", BIGINT()));
+
+  const auto logicalPlan = parseSelect(
+      "SELECT coalesce(a, b) AS c1, coalesce(b, a) AS c2, sum(a) "
+      "FROM t LEFT JOIN u ON a = b "
+      "GROUP BY coalesce(a, b), coalesce(b, a)",
+      kTestConnectorId);
+
+  // Both grouping aliases are rewritten to a and require no remote shuffle
+  // during the aggregation after join.
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(logicalPlan).plan,
+      matchScan("t")
+          .shuffle({"a"})
+          .hashJoinLeft(
+              matchScan("u").shuffle({"b"}),
+              {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
+          .project({"a as key1", "a as key2"})
+          .partialAggregation({"key1", "key2"}, {"sum(key1) as sum"})
+          .localPartition({"key1", "key2"})
+          .finalAggregation({"key1", "key2"}, {"sum(sum) as sum"})
+          .project({"key1 as c1", "key2 as c2", "sum"})
+          .gather()
+          .build());
+}
+
 // Verifies that aggregation with ORDER BY keys always uses single-step
 // aggregation, even in distributed mode where partial+final would normally
 // be used. This is required because partial aggregation cannot preserve
@@ -499,6 +760,38 @@ TEST_P(AggregationTest, groupingSetsKeyIsAggInput) {
                      .project({"key_a as a", "total", "gid"})
                      .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+TEST_P(AggregationTest, coalesceJoinKeyGroupingSets) {
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+  testConnector_->addTable("u", ROW("b", BIGINT()));
+
+  const auto logicalPlan = parseSelect(
+      "SELECT coalesce(a, b) AS c, count(*) "
+      "FROM t LEFT JOIN u ON a = b "
+      "GROUP BY GROUPING SETS ((coalesce(a, b)), ())",
+      kTestConnectorId);
+
+  // The coalesce grouping key in GroupId is rewritten to a. Remote shuffle
+  // during aggregation is still needed because empty grouping sets in GroupId
+  // introduces rows with NULL grouping key values, invalidating the
+  // input partitioning.
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(logicalPlan).plan,
+      matchScan("t")
+          .shuffle({"a"})
+          .hashJoinLeft(
+              matchScan("u").shuffle({"b"}),
+              {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
+          .project({"a as key"})
+          .groupId({{"key"}, {}}, {}, "gid", {{"key", "grouping_key"}})
+          .partialAggregation({"grouping_key", "gid"}, {"count(*) as count"})
+          .shuffle({"grouping_key", "gid"})
+          .localPartition({"grouping_key", "gid"})
+          .finalAggregation({"grouping_key", "gid"}, {"count(count) as count"})
+          .project({"grouping_key as c", "count"})
+          .gather()
+          .build());
 }
 
 // TODO: Identical grouping sets compute separately today. Follow-up

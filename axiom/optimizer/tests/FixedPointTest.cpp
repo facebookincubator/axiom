@@ -76,6 +76,47 @@ TEST_F(FixedPointTest, recursiveCte) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+TEST_F(FixedPointTest, coalesceJoinKeyContexts) {
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+  testConnector_->addTable("u", ROW("b", BIGINT()));
+  testConnector_->addTable("v", ROW("c", BIGINT()));
+
+  auto logicalPlan = parseSelect(
+      "WITH RECURSIVE r(n) AS ("
+      "SELECT coalesce(a, b) "
+      "FROM t LEFT JOIN u ON a = b "
+      "UNION ALL "
+      "SELECT coalesce(n, c) + 1 "
+      "FROM r LEFT JOIN v ON n = c WHERE n < 3) "
+      "SELECT n FROM r",
+      kTestConnectorId);
+
+  // The anchor and recursive delta independently have their coalesced join keys
+  // rewritten to the preserved-side columns. The recursive n < 3 filter then
+  // propagates to c < 3 on the right join input.
+  auto matcher =
+      core::PlanMatcherBuilder()
+          .fixedPoint(matchFixedPoint("r")
+                          .outputState(
+                              /*append=*/true,
+                              matchScan("t")
+                                  .hashJoinLeft(
+                                      matchScan("u"),
+                                      {.keys = {{"a = b"}},
+                                       .outputColumnNames = {{"a"}}})
+                                  .project({"a"}))
+                          .plan(matchDelta("r", {"n"})
+                                    .filter("n < 3")
+                                    .hashJoinLeft(
+                                        matchScan("v").filter("c < 3"),
+                                        {.keys = {{"n = c"}},
+                                         .outputColumnNames = {{"n"}}})
+                                    .project({"n + 1"}))
+                          .convergeOnEmpty())
+          .build();
+  AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
+}
+
 TEST_F(FixedPointTest, singleDriverStep) {
   auto counter = singleRow("n", 1);
   auto recursiveStep = lp::PlanBuilder(context_)

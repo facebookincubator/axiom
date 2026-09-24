@@ -162,16 +162,6 @@ ExprCP substituteOrNull(
                          : exprFactory.substitute(expr, sources, targets);
 }
 
-// True if `expr` evaluates to NULL on a pad row of a kLeft Apply,
-// where every column of `bodyColumns` is NULL. A default-null
-// function returns NULL for a NULL argument, so an expression built
-// only from those and reading at least one body column is NULL there
-// already and needs no includeMarker guard.
-bool isNullOnPadRows(ExprCP expr, const PlanObjectSet& bodyColumns) {
-  return expr->columns().hasIntersection(bodyColumns) &&
-      !expr->containsFunction(FunctionSet::kNonDefaultNullBehavior);
-}
-
 // True if `node` is a `Values` with one row and no columns — what the FROM of
 // a subquery that selects only from an UNNEST lowers to. Joining with it
 // neither adds columns nor changes cardinality.
@@ -353,7 +343,7 @@ class Decorrelator : public NodeRewriter<> {
       }
       liftedSeen.add(outputColumn);
       ExprCP expr = projectBody->exprs()[i];
-      if (hasMarker && !isNullOnPadRows(expr, bodyColumns)) {
+      if (hasMarker && !expr->propagatesNullsFrom(bodyColumns)) {
         // kLeft: NULL out exprs a pad row would otherwise give a value.
         const Literal* nullLiteral = builder().makeNull(expr->value().type);
         liftedExprs.push_back(
@@ -794,12 +784,8 @@ class Decorrelator : public NodeRewriter<> {
         rowNumberName.has_value(),
         "Decorrelate requires row_number registered via "
         "FunctionRegistry::registerRowNumber");
-    ExprCP call = builder().makeCall(
-        toName(*rowNumberName),
-        rowNumberColumn->value(),
-        ExprVector{},
-        FunctionSet{} | FunctionSet::kNonDeterministic |
-            FunctionSet::kNonDefaultNullBehavior);
+    ExprCP call = exprFactory_.makeWindowCall(
+        toName(*rowNumberName), rowNumberColumn->value(), ExprVector{});
     return WindowFunction{call, Frame::toCurrentRow(), /*ignoreNulls=*/false};
   }
 
@@ -813,12 +799,10 @@ class Decorrelator : public NodeRewriter<> {
         "FunctionRegistry::registerBoolOr");
 
     // bool_or yields a BOOLEAN (two distinct values).
-    ExprCP call = builder().makeCall(
+    ExprCP call = exprFactory_.makeWindowCall(
         toName(*boolOrName),
         Value(toType(velox::BOOLEAN()), /*cardinality=*/2),
-        ExprVector{source},
-        source->functions() | FunctionSet::kNonDeterministic |
-            FunctionSet::kNonDefaultNullBehavior);
+        ExprVector{source});
     return WindowFunction{call, Frame::wholePartition(), /*ignoreNulls=*/false};
   }
 

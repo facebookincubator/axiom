@@ -231,3 +231,9 @@ FROM (VALUES (1, ARRAY[10, 20]), (2, ARRAY[30])) AS s(k, a)
 -- duckdb: VALUES (1, true), (2, false)
 SELECT k, EXISTS (SELECT 1 FROM UNNEST(a, b) AS _(e, f) WHERE e > f)
 FROM (VALUES (1, ARRAY[10, 20], ARRAY[5, 50]), (2, ARRAY[1], ARRAY[9])) AS s(k, a, b)
+----
+-- A coalesced array join key is unnested after the outer join.
+SELECT value
+FROM (VALUES (ARRAY[1, 2]), (ARRAY[3])) AS l(a)
+LEFT JOIN (VALUES (ARRAY[1, 2])) AS r(b) ON l.a = r.b
+CROSS JOIN UNNEST(coalesce(l.a, r.b)) AS u(value)

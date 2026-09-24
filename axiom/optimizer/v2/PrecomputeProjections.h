@@ -45,8 +45,8 @@ class PrecomputeProjections {
   /// and 'keys' with each such key replaced by its column. An `Exchange`
   /// requires column keys; materializing before the shuffle is placed lets the
   /// consumer above read the same column instead of computing the value a
-  /// second time. Returns 'input' and 'keys' unchanged when every key is
-  /// already a column.
+  /// second time. Without 'aliases', returns 'input' and 'keys' unchanged when
+  /// every key is already a column.
   ///
   /// 'aliases' names the materialized columns positionally; a null entry, or an
   /// empty vector, mints a fresh name. A caller whose node already publishes
@@ -71,13 +71,13 @@ class PrecomputeProjections {
       Builder& builder,
       bool projectAllInputs = true);
 
-  // Returns the ExprCP that the consumer should reference in place of
-  // 'expr'. Pass-throughs:
-  //   - 'expr' is a Column: returned unchanged.
-  //   - 'expr' is a Literal and 'allowConstant' is true: returned unchanged.
-  // Otherwise lifts 'expr' into a projected column. If 'alias' is
-  // non-null, that exact Column is used as the projection's output;
-  // otherwise a fresh `__pXX` column is synthesized.
+  // Returns the ExprCP that the consumer should reference in place of 'expr'.
+  // Lambdas always pass through because a Project cannot evaluate them. For
+  // other expressions, a non-null 'alias' is the required output column,
+  // including when 'expr' is already a column. Without an alias, columns pass
+  // through, allowed literals remain literals, and other expressions are
+  // lifted into fresh `__pXX` columns. A later request for an expression
+  // already emitted under an alias returns that alias.
   ExprCP
   toColumn(ExprCP expr, ColumnCP alias = nullptr, bool allowConstant = false);
 
