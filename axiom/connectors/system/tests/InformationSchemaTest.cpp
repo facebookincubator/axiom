@@ -20,8 +20,10 @@
 
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/system/SystemConnectorMetadata.h"
+#include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
 #include "velox/connectors/ConnectorRegistry.h"
+#include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/functions/prestosql/types/PrestoTypes.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -31,10 +33,10 @@ namespace {
 using namespace facebook::velox;
 
 constexpr std::string_view kSystemConnectorId = "system";
+constexpr std::string_view kTpchConnectorId = "tpch";
 
-/// Queries the information_schema relations of the test catalog. The .sql
-/// tests cover the relations over tables; this covers what SQL cannot set up,
-/// a view, since CREATE VIEW is not supported.
+// Covers information_schema behavior that SQL setup cannot express, including
+// views and connector-advertised schema lists.
 class InformationSchemaTest : public optimizer::test::QueryTestBase {
  protected:
   void SetUp() override {
@@ -50,6 +52,13 @@ class InformationSchemaTest : public optimizer::test::QueryTestBase {
   }
 
   void TearDown() override {
+    if (tpchConnector_ != nullptr) {
+      ConnectorMetadataRegistry::global().erase(std::string(kTpchConnectorId));
+      velox::connector::ConnectorRegistry::global().erase(
+          std::string(kTpchConnectorId));
+      tpchConnector_.reset();
+    }
+
     ConnectorMetadataRegistry::global().erase(std::string(kSystemConnectorId));
     velox::connector::ConnectorRegistry::global().erase(
         std::string(kSystemConnectorId));
@@ -84,8 +93,126 @@ class InformationSchemaTest : public optimizer::test::QueryTestBase {
     return runVelox(parseSelect(sql, kTestConnectorId)).results;
   }
 
+  void registerTpchConnector() {
+    auto config = std::make_shared<velox::config::ConfigBase>(
+        std::unordered_map<std::string, std::string>{});
+    tpchConnector_ = std::make_shared<velox::connector::tpch::TpchConnector>(
+        std::string(kTpchConnectorId), std::move(config), nullptr);
+    velox::connector::ConnectorRegistry::global().insert(
+        std::string(kTpchConnectorId), tpchConnector_);
+    ConnectorMetadataRegistry::global().insert(
+        std::string(kTpchConnectorId),
+        std::make_shared<connector::tpch::TpchConnectorMetadata>(
+            tpchConnector_.get()));
+  }
+
   std::shared_ptr<SystemConnector> systemConnector_;
+  std::shared_ptr<velox::connector::tpch::TpchConnector> tpchConnector_;
 };
+
+TEST_F(InformationSchemaTest, schemata) {
+  testConnector_->addTable(
+      SchemaTableName{"analytics", "events"}, ROW("event_id", BIGINT()));
+  // Reports information_schema once when the catalog already lists it.
+  testConnector_->addTable(
+      SchemaTableName{"information_schema", "reserved"},
+      ROW("value", BIGINT()));
+
+  auto results =
+      run("SELECT catalog_name, schema_name FROM information_schema.schemata "
+          "ORDER BY schema_name");
+  velox::test::assertEqualVectors(
+      makeRowVector({
+          makeFlatVector<std::string>(
+              {std::string(kTestConnectorId),
+               std::string(kTestConnectorId),
+               std::string(kTestConnectorId)}),
+          makeFlatVector<std::string>(
+              {"analytics", "default", "information_schema"}),
+      }),
+      results.at(0));
+
+  results = run("SHOW SCHEMAS");
+  velox::test::assertEqualVectors(
+      makeRowVector(
+          {"Schema"},
+          {makeFlatVector<std::string>(
+              {"analytics", "default", "information_schema"})}),
+      results.at(0));
+
+  for (const char* predicate :
+       {"schema_name = 'analytics'", "schema_name LIKE 'analytics%'"}) {
+    SCOPED_TRACE(predicate);
+    results = run(
+        std::string(
+            "SELECT catalog_name, schema_name FROM information_schema.schemata "
+            "WHERE ") +
+        predicate);
+    velox::test::assertEqualVectors(
+        makeRowVector({
+            makeFlatVector<std::string>({std::string(kTestConnectorId)}),
+            makeFlatVector<std::string>({"analytics"}),
+        }),
+        results.at(0));
+  }
+}
+
+TEST_F(InformationSchemaTest, schemataMembership) {
+  registerTpchConnector();
+
+  auto results =
+      run("SELECT schema_name FROM tpch.information_schema.schemata "
+          "ORDER BY schema_name");
+  velox::test::assertEqualVectors(
+      makeRowVector({makeFlatVector<std::string>({
+          "information_schema",
+          "sf1",
+          "sf100",
+          "sf1000",
+          "sf10000",
+          "sf100000",
+          "sf300",
+          "sf3000",
+          "sf30000",
+          "tiny",
+      })}),
+      results.at(0));
+
+  // TPC-H accepts sf42 but does not advertise it. Schemata excludes
+  // valid-but-unadvertised schemas from unfiltered, equality, and pattern
+  // queries.
+  for (const char* predicate :
+       {"schema_name = 'sf42'", "schema_name LIKE 'sf4%'"}) {
+    SCOPED_TRACE(predicate);
+    EXPECT_THAT(
+        run(std::string(
+                "SELECT schema_name FROM tpch.information_schema.schemata "
+                "WHERE ") +
+            predicate),
+        testing::IsEmpty());
+  }
+
+  results =
+      run("SELECT table_name, table_type "
+          "FROM tpch.information_schema.tables "
+          "WHERE table_schema = 'information_schema' "
+          "AND table_name = 'schemata'");
+  velox::test::assertEqualVectors(
+      makeRowVector({
+          makeFlatVector<std::string>({"schemata"}),
+          makeFlatVector<std::string>({"BASE TABLE"}),
+      }),
+      results.at(0));
+
+  results =
+      run("SELECT column_name FROM tpch.information_schema.columns "
+          "WHERE table_schema = 'information_schema' "
+          "AND table_name = 'schemata' ORDER BY ordinal_position");
+  velox::test::assertEqualVectors(
+      makeRowVector(
+          {makeFlatVector<std::string>({"catalog_name", "schema_name"})}),
+      results.at(0));
+}
 
 TEST_F(InformationSchemaTest, view) {
   // A view reports the text it was defined with, and is not a base table.

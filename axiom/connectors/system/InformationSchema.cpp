@@ -15,6 +15,10 @@
  */
 #include "axiom/connectors/system/InformationSchema.h"
 
+#include <numeric>
+
+#include <folly/CppAttributes.h>
+
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/system/SystemConnector.h"
 #include "velox/core/Expressions.h"
@@ -68,8 +72,9 @@ velox::Variant scaleOf(const velox::TypePtr& type) {
   return nullBigint();
 }
 
-// Marks how far a scan has read. Holds the (schema, table) pair being read,
-// the table or view it resolved to, and, for kColumns, the column within it.
+// Marks how far a scan has read. Holds the schema and optional table being
+// described, the table or view it resolved to or the virtual relation's type,
+// and, for kColumns, the current column.
 struct RowPosition {
   const InformationSchemaTableHandle* handle{nullptr};
   size_t schemaIndex{0};
@@ -77,6 +82,7 @@ struct RowPosition {
   size_t columnIndex{0};
   TablePtr table;
   ViewPtr view;
+  velox::RowTypePtr informationSchemaTableType;
 
   // Spelling of the types kColumns reports. Never null while reading.
   const InformationSchema::TypeNameFormatter* typeName{nullptr};
@@ -85,9 +91,8 @@ struct RowPosition {
     return handle->catalog();
   }
 
-  // Report the name the query asked for, not the catalog's own spelling. The
-  // scan consumes the filters naming it, so a row spelling it differently
-  // would not pass the query's predicate.
+  // Schemata uses names advertised by the catalog. Table-level scans use names
+  // from the query because the scan consumes their filters.
   const std::string& schema() const {
     return handle->schemas()[schemaIndex];
   }
@@ -96,9 +101,10 @@ struct RowPosition {
     return handle->tables()[tableIndex];
   }
 
-  // True once a named table has resolved to a table or a view.
+  // True once a named table has resolved.
   bool resolved() const {
-    return table != nullptr || view != nullptr;
+    return table != nullptr || view != nullptr ||
+        informationSchemaTableType != nullptr;
   }
 
   // True when the row describes a view. A view's columns come from its type,
@@ -107,10 +113,10 @@ struct RowPosition {
     return view != nullptr;
   }
 
-  // The column kColumns is describing. Only a table has one, so a caller
-  // checks 'isView' first.
+  // The connector column kColumns is describing.
   const Column& column() const {
-    VELOX_CHECK_NOT_NULL(table, "A view has no columns to describe");
+    VELOX_CHECK_NOT_NULL(
+        table, "Only a catalog table has connector column metadata");
     const auto& name = rowType()->nameOf(columnIndex);
     const auto* found = table->findColumn(name);
     VELOX_CHECK_NOT_NULL(found, "Column not found: {}", name);
@@ -120,7 +126,10 @@ struct RowPosition {
   // Columns of the table being described.
   const velox::RowTypePtr& rowType() const {
     VELOX_CHECK(resolved(), "No table to describe");
-    return table != nullptr ? table->type() : view->type();
+    if (table != nullptr) {
+      return table->type();
+    }
+    return view != nullptr ? view->type() : informationSchemaTableType;
   }
 };
 
@@ -148,6 +157,14 @@ velox::Variant alwaysNull(const RowPosition& /*at*/) {
   return nullVarchar();
 }
 
+const std::vector<RelationColumn>& schemataColumns() {
+  static const std::vector<RelationColumn> kRelation{
+      {"catalog_name", velox::VARCHAR(), catalogOf},
+      {"schema_name", velox::VARCHAR(), schemaOf},
+  };
+  return kRelation;
+}
+
 const std::vector<RelationColumn>& tablesColumns() {
   static const std::vector<RelationColumn> kRelation{
       {"table_catalog", velox::VARCHAR(), catalogOf},
@@ -158,8 +175,8 @@ const std::vector<RelationColumn>& tablesColumns() {
        [](const RowPosition& position) {
          return velox::Variant(
              std::string(
-                 position.table != nullptr ? InformationSchema::kBaseTableType
-                                           : InformationSchema::kViewType));
+                 position.isView() ? InformationSchema::kViewType
+                                   : InformationSchema::kBaseTableType));
        }},
   };
   return kRelation;
@@ -214,8 +231,7 @@ const std::vector<RelationColumn>& columnsColumns() {
       {"comment",
        velox::VARCHAR(),
        [](const RowPosition& position) {
-         if (position.isView()) {
-           // A view's columns carry no description.
+         if (position.table == nullptr) {
            return nullVarchar();
          }
          const auto& comment = position.column().comment();
@@ -225,8 +241,7 @@ const std::vector<RelationColumn>& columnsColumns() {
       {"extra_info",
        velox::VARCHAR(),
        [](const RowPosition& position) {
-         if (position.isView()) {
-           // A view's columns have no connector-assigned role.
+         if (position.table == nullptr) {
            return nullVarchar();
          }
          // The connector says what a column's role is, if anything.
@@ -255,7 +270,11 @@ const std::vector<RelationColumn>& columnsColumns() {
 
 // Returns the columns of the relation 'name', or nullptr if no relation goes
 // by that name.
-const std::vector<RelationColumn>* findRelation(std::string_view name) {
+const std::vector<RelationColumn>* FOLLY_NULLABLE
+findRelation(std::string_view name) {
+  if (name == InformationSchema::kSchemata) {
+    return &schemataColumns();
+  }
   if (name == InformationSchema::kTables) {
     return &tablesColumns();
   }
@@ -405,6 +424,25 @@ InformationSchemaTableLayout::createTableHandle(
   constexpr std::string_view kTableSchemaColumn = "table_schema";
   constexpr std::string_view kTableNameColumn = "table_name";
 
+  const auto& relation = table().name().table;
+  const auto catalog = InformationSchema::catalog(table().name().schema);
+  const auto metadata =
+      ConnectorMetadataRegistry::get(std::string{catalog.value()});
+  if (relation == InformationSchema::kSchemata) {
+    // The rows come from listSchemaNames(), which takes no schema-name
+    // argument, so a pushed filter would not narrow what the scan reads. Every
+    // filter is rejected and applied above the scan.
+    rejectedFilterIndices.resize(filters.size());
+    std::iota(rejectedFilterIndices.begin(), rejectedFilterIndices.end(), 0);
+
+    auto schemas = InformationSchema::listedSchemaNames(*metadata, session);
+    return std::make_shared<InformationSchemaTableHandle>(
+        connectorId(),
+        table().name(),
+        std::move(schemas),
+        std::vector<std::string>{});
+  }
+
   std::optional<std::vector<std::string>> schemas;
   std::optional<std::vector<std::string>> tables;
   const auto& parser = velox::exec::ExprToSubfieldFilterParser::getInstance();
@@ -421,14 +459,16 @@ InformationSchemaTableLayout::createTableHandle(
     }
 
     const std::string columnName = subfieldFilter->first.toString();
-    if (columnName != kTableSchemaColumn && columnName != kTableNameColumn) {
+    const bool filtersSchema = columnName == kTableSchemaColumn;
+    const bool filtersTable = columnName == kTableNameColumn;
+    if (!filtersSchema && !filtersTable) {
       rejectedFilterIndices.push_back(static_cast<int32_t>(i));
       continue;
     }
 
     // A column named by two conjuncts is taken from the first; the rest
     // narrow the rows further, which the caller does above the scan.
-    auto& pinned = columnName == kTableSchemaColumn ? schemas : tables;
+    auto& pinned = filtersSchema ? schemas : tables;
     if (pinned.has_value()) {
       rejectedFilterIndices.push_back(static_cast<int32_t>(i));
       continue;
@@ -443,7 +483,6 @@ InformationSchemaTableLayout::createTableHandle(
     pinned = std::move(values);
   }
 
-  const auto& relation = table().name().table;
   VELOX_USER_CHECK(
       schemas.has_value(),
       "Querying information_schema.{} requires a filter naming table_schema, e.g. table_schema = 's'",
@@ -453,15 +492,13 @@ InformationSchemaTableLayout::createTableHandle(
       "Querying information_schema.{} requires a filter naming table_name, e.g. table_name = 't'",
       relation);
 
-  // A schema the catalog does not have describes nothing. Dropping it here
-  // keeps the scan from asking the catalog about it, which a catalog may
-  // answer with an error rather than an empty result.
-  const auto catalog = InformationSchema::catalog(table().name().schema);
-  const auto metadata =
-      ConnectorMetadataRegistry::get(std::string{catalog.value()});
+  // A schema named by a filter but absent from the catalog contributes no rows.
+  // Dropping it here keeps the scan from asking, which a catalog may answer
+  // with an error.
   std::vector<std::string> existing;
   for (auto& schema : schemas.value()) {
-    if (metadata->schemaExists(session, schema)) {
+    if (schema == InformationSchema::kInformationSchema ||
+        metadata->schemaExists(session, schema)) {
       existing.push_back(std::move(schema));
     }
   }
@@ -528,9 +565,8 @@ class InformationSchemaDataSource : public velox::connector::DataSource {
       const velox::RowTypePtr& outputType,
       const velox::connector::ColumnHandleMap& columnHandles) const;
 
-  // Moves to the row the relation describes next and returns false once every
-  // named table has been described. A named table that does not exist
-  // contributes no rows.
+  // Moves to the next row and returns false when the relation is exhausted. A
+  // named table that does not exist contributes no rows.
   bool advance();
 
   // Advances to the next table to describe, resolving it in the catalog.
@@ -544,6 +580,7 @@ class InformationSchemaDataSource : public velox::connector::DataSource {
   const std::vector<const RelationColumn*> outputColumns_;
 
   RowPosition position_;
+  bool visitedSchema_{false};
   // Whether a named table has been visited, so the next one is the one after
   // it rather than the first.
   bool visitedTable_{false};
@@ -598,9 +635,17 @@ bool InformationSchemaDataSource::nextTable() {
     for (; position_.tableIndex < tables.size(); ++position_.tableIndex) {
       const SchemaTableName name{
           schemas[position_.schemaIndex], tables[position_.tableIndex]};
-      position_.table = metadata_->findTable(name);
-      position_.view =
-          position_.table == nullptr ? metadata_->findView(name) : nullptr;
+      position_.table.reset();
+      position_.view.reset();
+      position_.informationSchemaTableType.reset();
+      if (name.schema == InformationSchema::kInformationSchema) {
+        position_.informationSchemaTableType =
+            InformationSchema::tableSchema(name.table);
+      } else {
+        position_.table = metadata_->findTable(name);
+        position_.view =
+            position_.table == nullptr ? metadata_->findView(name) : nullptr;
+      }
       position_.columnIndex = 0;
       visitedTable_ = true;
 
@@ -623,6 +668,18 @@ bool InformationSchemaDataSource::advance() {
   }
 
   const auto& relation = tableHandle_->relation();
+
+  if (relation == InformationSchema::kSchemata) {
+    if (visitedSchema_) {
+      ++position_.schemaIndex;
+    }
+    visitedSchema_ = true;
+    if (position_.schemaIndex < tableHandle_->schemas().size()) {
+      return true;
+    }
+    exhausted_ = true;
+    return false;
+  }
 
   if (relation == InformationSchema::kColumns && position_.resolved() &&
       ++position_.columnIndex < position_.rowType()->size()) {
@@ -695,9 +752,22 @@ std::optional<std::string_view> InformationSchema::catalog(
   return catalog;
 }
 
+std::vector<std::string> InformationSchema::listedSchemaNames(
+    ConnectorMetadata& metadata,
+    const ConnectorSessionPtr& session) {
+  auto schemas = metadata.listSchemaNames(session);
+  // A catalog may already include the virtual schema in its own list.
+  if (std::find(schemas.begin(), schemas.end(), kInformationSchema) ==
+      schemas.end()) {
+    schemas.emplace_back(kInformationSchema);
+  }
+  return schemas;
+}
+
 const std::vector<std::string>& InformationSchema::tableNames() {
   static const std::vector<std::string> kNames{
       std::string{InformationSchema::kColumns},
+      std::string{InformationSchema::kSchemata},
       std::string{InformationSchema::kTables},
       std::string{InformationSchema::kViews}};
   return kNames;
@@ -709,10 +779,7 @@ const velox::RowTypePtr& InformationSchema::tableSchema(
   static const folly::F14FastMap<std::string_view, velox::RowTypePtr> kSchemas =
       [] {
         folly::F14FastMap<std::string_view, velox::RowTypePtr> schemas;
-        for (const auto& name :
-             {InformationSchema::kTables,
-              InformationSchema::kViews,
-              InformationSchema::kColumns}) {
+        for (const auto& name : InformationSchema::tableNames()) {
           std::vector<std::string> names;
           std::vector<velox::TypePtr> types;
           for (const auto& column : relationColumns(name)) {

@@ -519,7 +519,7 @@ TEST_F(SystemConnectorMetadataTest, informationSchema) {
   // A catalog's relations resolve under its information_schema name.
   EXPECT_THAT(
       metadata_->listTableNames(session, schema),
-      testing::UnorderedElementsAre("columns", "tables", "views"));
+      testing::UnorderedElementsAre("columns", "schemata", "tables", "views"));
 
   const auto table =
       metadata_->findTable(SchemaTableName{schema, std::string("columns")});
@@ -544,10 +544,19 @@ TEST_F(SystemConnectorMetadataTest, informationSchema) {
   // The rows come from catalog metadata, which only the coordinator reads.
   EXPECT_TRUE(table->layouts().at(0)->runsOnCoordinator());
 
+  const auto schemata =
+      metadata_->findTable(SchemaTableName{schema, std::string("schemata")});
+  ASSERT_NE(schemata, nullptr);
+  EXPECT_THAT(
+      schemata->type()->names(),
+      testing::ElementsAre("catalog_name", "schema_name"));
   // A name that is not a relation is not a table.
   EXPECT_EQ(
-      metadata_->findTable(SchemaTableName{schema, std::string("schemata")}),
+      metadata_->findTable(
+          SchemaTableName{schema, std::string("table_privileges")}),
       nullptr);
+
+  // Relations do not resolve under the public information_schema name.
   EXPECT_EQ(
       metadata_->findTable(SchemaTableName{"information_schema", "columns"}),
       nullptr);

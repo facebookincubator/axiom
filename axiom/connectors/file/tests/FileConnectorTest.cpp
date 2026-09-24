@@ -213,15 +213,15 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
             {makeFlatVector(schema->names()), makeFlatVector(types)}));
   }
 
-  // Asserts SHOW SCHEMAS via 'sql' returns exactly 'expectedSchema' in the
+  // Asserts SHOW SCHEMAS via 'sql' returns exactly 'expectedSchemas' in the
   // single-column "Schema" result.
   void assertShowSchemas(
       const std::string& sql,
-      const std::string& expectedSchema) {
+      const std::vector<std::string>& expectedSchemas) {
     test::assertEqualVectors(
         query(sql),
         makeRowVector(
-            {"Schema"}, {makeFlatVector<std::string>({expectedSchema})}));
+            {"Schema"}, {makeFlatVector<std::string>(expectedSchemas)}));
   }
 
   std::unique_ptr<Connectors> connectors_;
@@ -389,12 +389,13 @@ TEST_F(FileConnectorTest, columnChunksStatistics) {
 }
 
 TEST_F(FileConnectorTest, showSchemas) {
-  // Only the Parquet handler is registered.
-  assertShowSchemas("SHOW SCHEMAS FROM file", "parquet");
+  // The file connector advertises its Parquet handler and information_schema.
+  assertShowSchemas(
+      "SHOW SCHEMAS FROM file", {"information_schema", "parquet"});
 
   // Without an explicit FROM, SHOW SCHEMAS resolves against the session's
   // default connector ('file').
-  assertShowSchemas("SHOW SCHEMAS", "parquet");
+  assertShowSchemas("SHOW SCHEMAS", {"information_schema", "parquet"});
 
   // A LIKE pattern that matches no handler yields zero rows.
   EXPECT_EQ(countResultRows("SHOW SCHEMAS FROM file LIKE 'orc'"), 0);

@@ -5,8 +5,42 @@ CREATE TABLE t (a BIGINT, b VARCHAR, c DOUBLE, d DECIMAL(10, 2))
 CREATE TABLE p (v BIGINT, k BIGINT) WITH (partitioned_by = ARRAY['k'])
 -- end_setup
 
--- A catalog's tables and columns are described by information_schema, for
--- queries whose filters name the tables to describe.
+-- A catalog's metadata is described by information_schema. Table-level
+-- relations require filters that name the tables to describe.
+
+-- The catalog's schemas plus information_schema are enumerated without a
+-- filter.
+-- duckdb: VALUES ('test-hive', 'default'), ('test-hive', 'information_schema')
+SELECT catalog_name, schema_name
+FROM information_schema.schemata
+
+----
+
+-- A schema filter is applied to the enumerated rows.
+-- duckdb: VALUES ('test-hive', 'default')
+SELECT catalog_name, schema_name
+FROM information_schema.schemata
+WHERE schema_name = 'default'
+
+----
+
+-- The virtual schema's relations describe themselves as base tables.
+-- duckdb: VALUES ('schemata', 'BASE TABLE')
+SELECT table_name, table_type
+FROM information_schema.tables
+WHERE table_schema = 'information_schema' AND table_name = 'schemata'
+
+----
+
+-- The virtual relation's columns are listed in declaration order.
+-- ordered
+-- duckdb: VALUES ('catalog_name'), ('schema_name')
+SELECT column_name
+FROM information_schema.columns
+WHERE table_schema = 'information_schema' AND table_name = 'schemata'
+ORDER BY ordinal_position
+
+----
 
 -- The columns of a table, in declaration order.
 -- ordered

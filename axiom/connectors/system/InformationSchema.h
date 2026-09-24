@@ -21,10 +21,11 @@
 
 namespace facebook::axiom::connector::system {
 
-/// Table handle for an information_schema relation. Carries the tables the
-/// scan describes: a scan is accepted only when its filters name them, so the
-/// set is known once the filters are pushed, and reading is a lookup of each
-/// name in the source catalog.
+/// Table handle for an information_schema relation. Carries the schemas and,
+/// for table-level relations, the tables the scan describes. Scans of
+/// 'tables', 'views', and 'columns' are accepted only when their filters name
+/// the tables. A 'schemata' scan carries the catalog's advertised schemas plus
+/// 'information_schema'; all of its filters remain above the scan.
 ///
 /// A scan of the 'columns' relation of catalog 'hive', whose filters pin
 /// table_schema to 'sales' and table_name to 'orders' and 'lineitem', carries
@@ -53,20 +54,21 @@ class InformationSchemaTableHandle
     return catalog_;
   }
 
-  /// Relation being read: 'tables', 'views' or 'columns'.
+  /// Relation being read: 'schemata', 'tables', 'views', or 'columns'.
   const std::string& relation() const {
     return schemaTableName_.table;
   }
 
-  /// Schemas the query names, in the source catalog. Empty when its filters
-  /// admit no name, which describes nothing.
+  /// Schemas the scan describes. For 'schemata', these are the names advertised
+  /// by the source catalog plus 'information_schema'. For other relations,
+  /// these are the names admitted by pushed filters; empty describes nothing.
   const std::vector<std::string>& schemas() const {
     return schemas_;
   }
 
-  /// Table names the query names, empty on the same terms as schemas(). Every
-  /// (schema, table) pair is described; a pair no table answers to
-  /// contributes no rows.
+  /// Table names the query names. Empty for 'schemata', or when filters admit
+  /// no table name. Every (schema, table) pair is described; a pair no table
+  /// answers to contributes no rows.
   const std::vector<std::string>& tables() const {
     return tables_;
   }
@@ -91,8 +93,8 @@ class InformationSchemaTableHandle
   const std::vector<std::string> tables_;
 };
 
-/// The information_schema relations — 'tables', 'views' and 'columns' — as
-/// served for one catalog.
+/// The information_schema relations — 'schemata', 'tables', 'views', and
+/// 'columns' — as served for one catalog.
 class InformationSchema {
  public:
   /// Spells a column's type for information_schema.columns.data_type. A SQL
@@ -114,7 +116,11 @@ class InformationSchema {
   /// catalog maps it onto this schema.
   static constexpr std::string_view kPrefix = "$info_schema@";
 
+  /// Schema that exposes a catalog's metadata relations.
+  static constexpr std::string_view kInformationSchema = "information_schema";
+
   /// The relations, one per kind of object described.
+  static constexpr std::string_view kSchemata = "schemata";
   static constexpr std::string_view kTables = "tables";
   static constexpr std::string_view kViews = "views";
   static constexpr std::string_view kColumns = "columns";
@@ -130,6 +136,12 @@ class InformationSchema {
   /// Returns the catalog a schema name refers to, as a view into
   /// 'schemaName', or std::nullopt if it is not an information_schema name.
   static std::optional<std::string_view> catalog(std::string_view schemaName);
+
+  /// Returns the schema names advertised by 'metadata' plus
+  /// kInformationSchema, without duplicates.
+  static std::vector<std::string> listedSchemaNames(
+      ConnectorMetadata& metadata,
+      const ConnectorSessionPtr& session);
 
   /// Names of the relations, sorted.
   static const std::vector<std::string>& tableNames();

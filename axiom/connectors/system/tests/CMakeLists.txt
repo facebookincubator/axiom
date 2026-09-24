@@ -26,6 +26,7 @@ target_link_libraries(
   axiom_system_connector_test
   axiom_system_connector
   axiom_connectors
+  axiom_tpch_connector_metadata
   axiom_optimizer_tests_query_test_base
   axiom_optimizer_tests_plan_matcher
   axiom_runner_tests_utils
@@ -36,6 +37,7 @@ target_link_libraries(
   velox_expression
   velox_function_registry
   velox_presto_types
+  velox_tpch_connector
   velox_vector_test_lib
   GTest::gmock
   GTest::gtest

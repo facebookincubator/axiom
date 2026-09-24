@@ -445,15 +445,15 @@ TEST_F(SqlQueryRunnerTest, createTableRunsWritePath) {
 }
 
 TEST_F(SqlQueryRunnerTest, createAndDropSchema) {
-  assertSchemas({kDefaultSchema});
+  assertSchemas({kDefaultSchema, "information_schema"});
 
   auto createResult = run("CREATE SCHEMA foo");
   EXPECT_EQ("Created schema: foo", createResult.message);
-  assertSchemas({kDefaultSchema, "foo"});
+  assertSchemas({kDefaultSchema, "foo", "information_schema"});
 
   auto dropResult = run("DROP SCHEMA foo");
   EXPECT_EQ("Dropped schema: foo", dropResult.message);
-  assertSchemas({kDefaultSchema});
+  assertSchemas({kDefaultSchema, "information_schema"});
 }
 
 TEST_F(SqlQueryRunnerTest, createSchemaErrors) {
@@ -470,7 +470,7 @@ TEST_F(SqlQueryRunnerTest, dropSchemaErrors) {
   EXPECT_EQ("Dropped schema: nonexistent", result.message);
 
   VELOX_ASSERT_THROW(run("DROP SCHEMA default"), "Cannot drop the default");
-  assertSchemas({kDefaultSchema});
+  assertSchemas({kDefaultSchema, "information_schema"});
 
   AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       run("DROP SCHEMA default CASCADE"), "CASCADE is not supported");

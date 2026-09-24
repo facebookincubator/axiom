@@ -25,7 +25,7 @@ signatures.
 
 ### <catalog>.information_schema
 
-What a catalog contains: its tables, its views, and their columns. A
+What a catalog contains: its schemas, tables, views, and columns. A
 query names these per catalog, as `hive.information_schema.columns`.
 The parser resolves that to this connector, carrying the catalog in the
 schema: `system."$info_schema@hive".columns`. Nobody types the resolved
@@ -34,11 +34,24 @@ name; `$info_schema@` is reserved so a catalog name cannot collide with
 
 | Table | Description |
 |-------|-------------|
+| `schemata` | One row per schema. |
 | `tables` | One row per table or view, with its type. |
 | `views` | One row per view, with the text it was defined with. |
 | `columns` | One row per column of a table or view. |
 
-#### What a query may ask
+#### Schema enumeration
+
+`schemata` lists the schemas the catalog advertises, plus `information_schema`.
+It accepts any filter, or none.
+
+A catalog may accept schemas it does not advertise. TPC-H lists a fixed set of
+scale factors, so `sf42` does not appear in `schemata` even though
+`tpch.sf42.nation` can be queried.
+
+#### Table metadata
+
+The `tables` and `columns` relations describe the relations in
+`information_schema` when a query names that schema and relation.
 
 **A query must name the tables to describe.** Its filters have to pin
 `table_schema` and `table_name`, and only these forms name them:
@@ -132,6 +145,11 @@ WHERE is_variadic ORDER BY 1;
 SELECT query_id, state, query, elapsed_time_ms
 FROM system.runtime.queries;
 
+-- Find a schema by name.
+SELECT catalog_name, schema_name
+FROM information_schema.schemata
+WHERE schema_name = 'sales';
+
 -- Columns of one table, as a client introspecting a schema asks for them.
 SELECT column_name, data_type, ordinal_position
 FROM information_schema.columns
@@ -150,6 +168,13 @@ WHERE table_schema = 'sales' AND table_name = 'daily_orders';
 ```
 
 ## Table Schemas
+
+### <catalog>.information_schema.schemata
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `catalog_name` | VARCHAR | Catalog the schema belongs to. |
+| `schema_name` | VARCHAR | Schema name. |
 
 ### system.metadata.session_properties
 

@@ -56,6 +56,7 @@ namespace {
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
 using facebook::axiom::connector::SqlFunctionDefinitionPtr;
+using facebook::axiom::connector::system::InformationSchema;
 
 class ErrorListener : public antlr4::BaseErrorListener {
  public:
@@ -213,8 +214,7 @@ class ParserHelper {
 // A catalog's information_schema relations are served by another connector,
 // so a name whose schema is information_schema resolves there.
 bool isInformationSchema(std::string_view schema) {
-  static constexpr std::string_view kInformationSchema = "information_schema";
-  return boost::iequals(schema, kInformationSchema);
+  return boost::iequals(schema, InformationSchema::kInformationSchema);
 }
 
 std::pair<std::string, facebook::axiom::SchemaTableName>
@@ -258,9 +258,7 @@ std::pair<std::string, facebook::axiom::SchemaTableName> toConnectorTable(
 
   return {
       std::string(informationSchemaConnectorId),
-      {facebook::axiom::connector::system::InformationSchema::schemaName(
-           connectorId),
-       std::move(table.table)}};
+      {InformationSchema::schemaName(connectorId), std::move(table.table)}};
 }
 
 // Statement paths that do not carry the session's options resolve
@@ -3214,7 +3212,7 @@ SqlStatementPtr parseShowSchemas(
   auto metadata =
       facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId);
   auto session = parserSession->context()->sessionFor(connectorId);
-  auto schemaNames = metadata->listSchemaNames(session);
+  auto schemaNames = InformationSchema::listedSchemaNames(*metadata, session);
   std::sort(schemaNames.begin(), schemaNames.end());
 
   std::vector<Variant> data;
@@ -3264,8 +3262,7 @@ SqlStatementPtr parseShowTables(
   // A catalog's information_schema is served by another connector, with the
   // catalog carried in the schema.
   if (isInformationSchema(schema)) {
-    schema = facebook::axiom::connector::system::InformationSchema::schemaName(
-        connectorId);
+    schema = InformationSchema::schemaName(connectorId);
     connectorId =
         std::string(ParserOptions::kInformationSchemaConnectorIdDefault);
   }
