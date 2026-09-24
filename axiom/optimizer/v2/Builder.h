@@ -58,7 +58,9 @@ class Builder {
   /// A `Join` or `Filter` key is normalized first. A join drops repeated and
   /// implied equi-key pairs and may gain a filter on an input, so the node's
   /// keys can be fewer than 'key' holds and joins differing only in a repeated
-  /// equality are one node. A filter drops repeated predicates.
+  /// equality are one node. A filter drops repeated predicates. Join
+  /// construction also receives this `Builder` so derived full-join partition
+  /// expressions use the same expression interning as the rest of the query.
   template <typename T>
   const T* make(typename T::Key key) {
     if constexpr (std::is_same_v<T, Join> || std::is_same_v<T, Filter>) {
@@ -68,7 +70,12 @@ class Builder {
     if (auto it = dedup.find(key); it != dedup.end()) {
       return *it;
     }
-    const T* node = optimizer::make<T>(std::move(key));
+    const T* node;
+    if constexpr (std::is_same_v<T, Join>) {
+      node = optimizer::make<T>(std::move(key), *this);
+    } else {
+      node = optimizer::make<T>(std::move(key));
+    }
     // After construction, so `inputs()` is available and the set allocates in
     // this node's `QueryGraphContext`.
     node->primeRequiredStates();

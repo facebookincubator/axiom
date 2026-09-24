@@ -29,6 +29,7 @@
 
 namespace facebook::axiom::optimizer::v2 {
 
+class Builder;
 class CostModel;
 
 /// Bottom-up DP join-order enumeration over a `JoinHypergraph`
@@ -38,6 +39,7 @@ class CostModel;
 /// Invariants:
 ///   - The hypergraph passed to the constructor must outlive the
 ///     `DPhyp` instance.
+///   - The builder passed to the constructor must outlive the `DPhyp` instance.
 ///   - The hypergraph must contain at least two relations.
 class DPhyp {
  public:
@@ -48,10 +50,12 @@ class DPhyp {
   /// (repartition / broadcast) candidates; at 1 it stays single-fragment.
   /// `broadcastSizeLimit` caps the estimated build size a broadcast candidate
   /// may replicate to every task (bytes); <= 0 disables the limit. See
-  /// `OptimizerOptions::broadcastSizeLimit`.
+  /// `OptimizerOptions::broadcastSizeLimit`. `builder` interns expressions
+  /// that describe candidate output partitioning.
   DPhyp(
       const JoinHypergraph& graph,
       const CostModel& costModel,
+      Builder& builder,
       int64_t enumerationBudget,
       int32_t numWorkers,
       int64_t broadcastSizeLimit);
@@ -73,6 +77,8 @@ class DPhyp {
  private:
   const JoinHypergraph& graph_;
   const CostModel& costModel_;
+  // Interns computed partition keys shared by memo candidates.
+  Builder& builder_;
   const int64_t enumerationBudget_;
   const int32_t numWorkers_;
   const int64_t broadcastSizeLimit_;

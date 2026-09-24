@@ -406,20 +406,6 @@ NodeCP JoinKeyCoalesceRewriter::rewriteUnionAll(
   });
 }
 
-bool supportsJoinKeyCoalesceRewrite(TypeCP type) {
-  if (type->kind() == velox::TypeKind::REAL ||
-      type->kind() == velox::TypeKind::DOUBLE ||
-      type->providesCustomComparison()) {
-    return false;
-  }
-  for (size_t i = 0; i < type->size(); ++i) {
-    if (!supportsJoinKeyCoalesceRewrite(type->childAt(i).get())) {
-      return false;
-    }
-  }
-  return true;
-}
-
 bool isSideLocalDeterministicKey(ExprCP key, const PlanObjectSet& sideColumns) {
   return !key->columns().empty() && sideColumns.containsColumns(key) &&
       !key->containsNonDeterministic();
@@ -442,7 +428,8 @@ NodeCP JoinKeyCoalesceRewriter::rewriteJoin(
   const bool canRewriteCoalesce =
       node->joinType() == velox::core::JoinType::kInner ||
       node->joinType() == velox::core::JoinType::kLeft ||
-      node->joinType() == velox::core::JoinType::kRight;
+      node->joinType() == velox::core::JoinType::kRight ||
+      node->joinType() == velox::core::JoinType::kFull;
   if (canRewriteCoalesce) {
     const auto leftColumns = PlanObjectSet::fromObjects(left->outputColumns());
     const auto rightColumns =
@@ -455,12 +442,18 @@ NodeCP JoinKeyCoalesceRewriter::rewriteJoin(
         continue;
       }
       if (leftKey->value().type != rightKey->value().type ||
-          !supportsJoinKeyCoalesceRewrite(leftKey->value().type)) {
+          !Join::supportsCoalesceKey(leftKey->value().type)) {
         continue;
       }
 
       ExprCP replacement;
-      if (node->joinType() == velox::core::JoinType::kLeft) {
+      if (node->joinType() == velox::core::JoinType::kFull) {
+        replacement =
+            Join::tryMakeCanonicalCoalesceKey(leftKey, rightKey, builder());
+        if (replacement == nullptr) {
+          continue;
+        }
+      } else if (node->joinType() == velox::core::JoinType::kLeft) {
         if (!rightKey->propagatesNullsFrom(rightColumns)) {
           continue;
         }

@@ -22,16 +22,16 @@
 
 namespace facebook::axiom::optimizer::v2 {
 
-/// Replaces a binary coalesce of eligible equijoin keys with the key preserved
-/// by the join, before required columns are calculated. For example,
-/// `coalesce(leftKey, rightKey)` becomes `leftKey` above a left join.
+/// Canonicalizes a binary coalesce of eligible equijoin keys before required
+/// columns are calculated. For example, `coalesce(leftKey, rightKey)` becomes
+/// `leftKey` above a left join.
 ///
 /// Matched rows satisfy `leftKey = rightKey`, so either key has the same SQL
 /// value. On an unmatched outer-join row, eligibility requires the
 /// non-preserved key to evaluate to NULL after its side is null-padded, so the
-/// preserved key has the coalesce value. This permits these choices: inner and
-/// left joins use the left key, right joins use the right key, and full joins
-/// have no single representative.
+/// preserved key has the coalesce value. Inner and left joins use the left key,
+/// and right joins use the right key. A full join has no single representative,
+/// so bare column keys retain a coalesce with canonically ordered arguments.
 ///
 /// The rewrite relies on these invariants:
 ///  - Keys are deterministic expressions over columns from their respective
@@ -50,8 +50,9 @@ namespace facebook::axiom::optimizer::v2 {
 ///    and `Exchange` are introduced by later passes.
 class JoinKeyCoalesceNormalizer {
  public:
-  /// Returns `root` with eligible coalesces replaced by their representative
-  /// join keys. `evaluator` backs expression simplification after replacement.
+  /// Returns `root` with eligible coalesces replaced by their canonical join
+  /// keys or key expressions. `evaluator` backs expression simplification
+  /// after replacement.
   static NodeCP normalize(
       NodeCP root,
       Builder& builder,

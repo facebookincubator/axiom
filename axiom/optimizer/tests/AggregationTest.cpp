@@ -358,20 +358,23 @@ TEST_P(AggregationTest, coalesceComputedJoinKey) {
           .build());
 }
 
-TEST_P(AggregationTest, coalesceJoinKeyNotRewritten) {
+TEST_P(AggregationTest, fullJoinPartitioning) {
   testConnector_->addTable("t", ROW("a", BIGINT()));
   testConnector_->addTable("u", ROW("b", BIGINT()));
 
-  {
-    SCOPED_TRACE("Full join");
+  for (const auto* key : {"coalesce(a, b)", "coalesce(b, a)"}) {
+    SCOPED_TRACE(fmt::format("Full join: {}", key));
     const auto logicalPlan = parseSelect(
-        "SELECT coalesce(a, b) AS c, count(*) "
-        "FROM t FULL JOIN u ON a = b "
-        "GROUP BY coalesce(a, b)",
+        fmt::format(
+            "SELECT {} AS c, count(*) "
+            "FROM t FULL JOIN u ON a = b "
+            "GROUP BY {}",
+            key,
+            key),
         kTestConnectorId);
 
-    // The matcher verifies that a full join retains both keys and the
-    // coalesce, which requires repartitioning the computed grouping key.
+    // The full join retains the coalesce and preserves its canonical
+    // partitioning.
     AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
         planVelox(logicalPlan).plan,
         matchScan("t")
@@ -381,13 +384,17 @@ TEST_P(AggregationTest, coalesceJoinKeyNotRewritten) {
                 {.keys = {{"a = b"}}, .outputColumnNames = {{"a", "b"}}})
             .project({"coalesce(a, b) as key"})
             .partialAggregation({"key"}, {"count(*) as count"})
-            .shuffle({"key"})
             .localPartition({"key"})
             .finalAggregation({"key"}, {"count(count) as count"})
             .project({"key as c", "count"})
             .gather()
             .build());
   }
+}
+
+TEST_P(AggregationTest, coalesceJoinKeyNotReducedToColumn) {
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+  testConnector_->addTable("u", ROW("b", BIGINT()));
 
   {
     SCOPED_TRACE("Three arguments");
@@ -470,6 +477,32 @@ TEST_P(AggregationTest, coalesceJoinKeyAliases) {
           .localPartition({"key1", "key2"})
           .finalAggregation({"key1", "key2"}, {"sum(sum) as sum"})
           .project({"key1 as c1", "key2 as c2", "sum"})
+          .gather()
+          .build());
+}
+
+TEST_P(AggregationTest, fullJoinOptionalKeyPartitioning) {
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+  testConnector_->addTable("u", ROW("b", BIGINT()));
+
+  const auto logicalPlan = parseSelect(
+      "SELECT a, count(*) "
+      "FROM t FULL JOIN u ON a = b "
+      "GROUP BY a",
+      kTestConnectorId);
+
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(
+          logicalPlan, {.maxRemotePartitions = 4, .maxLocalPartitions = 1})
+          .plan,
+      matchScan("t")
+          .shuffle({"a"})
+          .hashJoinFull(
+              matchScan("u").shuffle({"b"}),
+              {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
+          .partialAggregation({"a"}, {"count(*) as count"})
+          .shuffle({"a"})
+          .finalAggregation({"a"}, {"count(count) as count"})
           .gather()
           .build());
 }

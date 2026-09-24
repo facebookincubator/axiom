@@ -1042,6 +1042,35 @@ TEST_P(JoinTest, reversedAntiPartitioningInParentJoin) {
           .build());
 }
 
+TEST_P(JoinTest, fullJoinPartitioningInParentJoin) {
+  addTableWithStats("t", {"a"}, 1'000'000);
+  addTableWithStats("u", {"b"}, 1'000'000);
+  addTableWithStats("v", {"c"}, 1'000);
+  optimizerOptions_.broadcastSizeLimit = 1;
+
+  const auto query =
+      "SELECT b FROM ("
+      "t FULL JOIN u ON a = b"
+      ") LEFT JOIN v ON coalesce(b, a) = c";
+
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(
+          parseSelect(query, kTestConnectorId),
+          {.maxRemotePartitions = 4, .maxLocalPartitions = 1})
+          .plan,
+      matchScan("t")
+          .shuffle({"a"})
+          .hashJoinFull(
+              matchScan("u").shuffle({"b"}),
+              {.keys = {{"a = b"}}, .outputColumnNames = {{"a", "b"}}})
+          .project({"coalesce(a, b) as key", "b"})
+          .hashJoinLeft(
+              matchScan("v").shuffle({"c"}),
+              {.keys = {{"key = c"}}, .outputColumnNames = {{"b"}}})
+          .gather()
+          .build());
+}
+
 TEST_P(JoinTest, coalesceJoinKeyThroughNullPadding) {
   testConnector_->addTable("t", ROW("a", BIGINT()));
   testConnector_->addTable("u", ROW("b", BIGINT()));
