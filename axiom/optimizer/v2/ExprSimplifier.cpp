@@ -131,7 +131,62 @@ std::optional<bool> constantBoolean(ExprCP expr) {
 } // namespace
 
 ExprCP ExprSimplifier::simplify(ExprCP expr) {
-  return tryFoldConjunct(tryFoldConstant(expr));
+  return tryFoldCoalesce(tryFoldConjunct(tryFoldConstant(expr)));
+}
+
+ExprCP ExprSimplifier::simplifyTree(ExprCP expr) {
+  switch (expr->type()) {
+    case PlanType::kColumnExpr:
+    case PlanType::kLiteralExpr:
+      return simplify(expr);
+    case PlanType::kCallExpr: {
+      const auto* call = expr->as<Call>();
+      ExprVector args;
+      args.reserve(call->args().size());
+      bool changed = false;
+      for (ExprCP arg : call->args()) {
+        ExprCP simplified = simplifyTree(arg);
+        changed |= simplified != arg;
+        args.push_back(simplified);
+      }
+      return simplify(
+          changed ? ExprFactory{builder_}.rebuildCall(call, std::move(args))
+                  : expr);
+    }
+    case PlanType::kFieldExpr: {
+      const auto* field = expr->as<Field>();
+      ExprCP base = simplifyTree(field->base());
+      return simplify(
+          base == field->base()
+              ? expr
+              : ExprFactory{builder_}.rebuildField(field, base));
+    }
+    case PlanType::kLambdaExpr: {
+      const auto* lambda = expr->as<Lambda>();
+      ExprCP body = simplifyTree(lambda->body());
+      // A Lambda is a binding expression, so only its body is simplified.
+      return body == lambda->body()
+          ? expr
+          : make<Lambda>(lambda->args(), lambda->value().type, body);
+    }
+    default:
+      VELOX_NYI(
+          "ExprSimplifier::simplifyTree: unsupported expression type {}",
+          expr->typeName());
+  }
+}
+
+ExprCP ExprSimplifier::tryFoldCoalesce(ExprCP expr) {
+  if (!expr->is(PlanType::kCallExpr)) {
+    return expr;
+  }
+  const auto* call = expr->as<Call>();
+  if (call->name() != SpecialFormCallNames::kCoalesce ||
+      call->args().size() != 2 || call->args()[0] != call->args()[1] ||
+      call->args()[0]->containsNonDeterministic()) {
+    return expr;
+  }
+  return call->args()[0];
 }
 
 ExprCP ExprSimplifier::tryFoldConjunct(ExprCP expr) {

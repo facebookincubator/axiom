@@ -166,6 +166,27 @@ TEST_F(MetadataCountsTest, fallsBack) {
       matchHiveScan("t").singleAggregation({}, {"count(*)", "sum(a)"}).build());
 }
 
+TEST_F(MetadataCountsTest, coalesceJoinKeyFallback) {
+  // Coalesce in fallback after join is rewritten to a.
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      planVelox(parseSelect(
+                    "SELECT approx_null_count(coalesce(l.a, r.a)) "
+                    "FROM t l LEFT JOIN t r ON l.a = r.a"))
+          .plan,
+      matchHiveScan("t")
+          .aliases({"a1"})
+          .shuffle({"a1"})
+          .hashJoinLeft(
+              matchHiveScan("t").aliases({"a2"}).shuffle({"a2"}),
+              {.keys = {{"a1 = a2"}}, .outputColumnNames = {{"a1"}}})
+          .project({"is_null(a1) as n"})
+          .partialAggregation({}, {"count_if(n) as count"})
+          .gather()
+          .localGather()
+          .finalAggregation({}, {"count_if(count)"})
+          .build());
+}
+
 TEST_F(MetadataCountsTest, unionAll) {
   // One leg is answered from metadata (folds to a constant), the other reads
   // the data.

@@ -369,3 +369,11 @@ FROM (VALUES (1, 1), (1, 1), (1, 2),
              (2, 3), (2, 3), (2, 4)) AS t(a, b)
 GROUP BY a, b
 HAVING count(*) > 1
+----
+-- Coalesced join keys used in all window-owned expression positions.
+SELECT first_value(coalesce(r.b, l.a)) OVER (
+        PARTITION BY coalesce(l.a, r.b)
+        ORDER BY coalesce(r.b, l.a)
+        ROWS BETWEEN coalesce(l.a, r.b) PRECEDING AND coalesce(r.b, l.a) FOLLOWING)
+FROM (VALUES (1), (2)) AS l(a)
+LEFT JOIN (VALUES (1), (3)) AS r(b) ON l.a = r.b

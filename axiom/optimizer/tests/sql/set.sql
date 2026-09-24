@@ -241,3 +241,12 @@ SELECT i.a, i.b, t.c FROM (
   INTERSECT ALL
   SELECT a, b FROM t WHERE b <= 50
 ) i JOIN t ON t.b = i.b WHERE i.a = 1
+----
+-- Join-key substitutions remain local to one UNION ALL leg.
+SELECT coalesce(l.a, r.b) AS k
+FROM (VALUES (1), (2)) AS l(a)
+LEFT JOIN (VALUES (1)) AS r(b) ON l.a = r.b
+UNION ALL
+SELECT coalesce(l.a, r.b) AS k
+FROM (VALUES (3), (4)) AS l(a)
+FULL JOIN (VALUES (3), (5)) AS r(b) ON l.a = r.b

@@ -20,6 +20,7 @@
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::axiom::optimizer {
 namespace {
@@ -955,6 +956,264 @@ TEST_P(JoinTest, joinWithComputedAndProjectedKeys) {
 
   auto plan = toSingleNodePlan(query);
   AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+TEST_P(JoinTest, coalesceJoinKeyInParentJoin) {
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+  testConnector_->addTable("u", ROW("b", BIGINT()));
+  testConnector_->addTable("v", ROW("c", BIGINT()));
+
+  {
+    SCOPED_TRACE("Left join");
+    const auto query =
+        "SELECT c FROM ("
+        "t LEFT JOIN u ON a = b"
+        ") JOIN v ON coalesce(a, b) = c";
+
+    // The second join's coalesce key is rewritten to a and requires no shuffle
+    // on the left input.
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(parseSelect(query, kTestConnectorId)).plan,
+        matchScan("t")
+            .shuffle({"a"})
+            .hashJoinLeft(
+                matchScan("u").shuffle({"b"}),
+                {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
+            .hashJoinInner(
+                matchScan("v").shuffle({"c"}),
+                {.keys = {{"a = c"}}, .outputColumnNames = {{"c"}}})
+            .gather()
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("Right join");
+    const auto query =
+        "SELECT b FROM ("
+        "t RIGHT JOIN u ON a = b"
+        ") LEFT JOIN v ON coalesce(a, b) = c";
+
+    // The parent join reuses the right join's partitioning on b.
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(parseSelect(query, kTestConnectorId)).plan,
+        matchScan("t")
+            .shuffle({"a"})
+            .hashJoinRight(
+                matchScan("u").shuffle({"b"}),
+                {.keys = {{"a = b"}}, .outputColumnNames = {{"b"}}})
+            .hashJoinLeft(
+                matchScan("v").shuffle({"c"}),
+                {.keys = {{"b = c"}}, .outputColumnNames = {{"b"}}})
+            .gather()
+            .build());
+  }
+}
+
+TEST_P(JoinTest, reversedAntiPartitioningInParentJoin) {
+  testConnector_->addTable("t", ROW("a", BIGINT()))
+      ->setStats(100, {{"a", {.numDistinct = 100}}});
+  testConnector_->addTable("u", ROW("b", BIGINT()))
+      ->setStats(10'000, {{"b", {.numDistinct = 10'000}}});
+  testConnector_->addTable("v", ROW("c", BIGINT()))
+      ->setStats(10'000, {{"c", {.numDistinct = 10'000}}});
+
+  const auto query =
+      "SELECT a FROM ("
+      "  SELECT a FROM t "
+      "  WHERE NOT EXISTS (SELECT 1 FROM u WHERE b = a)"
+      ") s LEFT JOIN v ON a = c";
+
+  // The parent join reuses the reversed anti join's partitioning on a.
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(parseSelect(query, kTestConnectorId)).plan,
+      matchScan("v")
+          .shuffle({"c"})
+          .hashJoinRight(
+              matchScan("u")
+                  .shuffle({"b"})
+                  .hashJoinRightSemiProject(
+                      matchScan("t").shuffle({"a"}),
+                      {.nullAware = false, .keys = {{"b = a"}}})
+                  .aliases({"a", "matched"})
+                  .filter("not(matched)")
+                  .project({"a"}),
+              {.keys = {{"c = a"}}, .outputColumnNames = {{"a"}}})
+          .gather()
+          .build());
+}
+
+TEST_P(JoinTest, fullJoinPartitioningInParentJoin) {
+  addTableWithStats("t", {"a"}, 1'000'000);
+  addTableWithStats("u", {"b"}, 1'000'000);
+  addTableWithStats("v", {"c"}, 1'000);
+  optimizerOptions_.broadcastSizeLimit = 1;
+
+  const auto query =
+      "SELECT b FROM ("
+      "t FULL JOIN u ON a = b"
+      ") LEFT JOIN v ON coalesce(b, a) = c";
+
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(
+          parseSelect(query, kTestConnectorId),
+          {.maxRemotePartitions = 4, .maxLocalPartitions = 1})
+          .plan,
+      matchScan("t")
+          .shuffle({"a"})
+          .hashJoinFull(
+              matchScan("u").shuffle({"b"}),
+              {.keys = {{"a = b"}}, .outputColumnNames = {{"a", "b"}}})
+          .project({"coalesce(a, b) as key", "b"})
+          .hashJoinLeft(
+              matchScan("v").shuffle({"c"}),
+              {.keys = {{"key = c"}}, .outputColumnNames = {{"b"}}})
+          .gather()
+          .build());
+}
+
+TEST_P(JoinTest, coalesceJoinKeyThroughNullPadding) {
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+  testConnector_->addTable("u", ROW("b", BIGINT()));
+  testConnector_->addTable("v", ROW("c", BIGINT()));
+
+  const auto query =
+      "SELECT coalesce(a, b) AS value FROM ("
+      "t LEFT JOIN u ON a = b"
+      ") RIGHT JOIN v ON a = c";
+
+  // Coalesce(a, b) becomes a after the left join and propagates through the
+  // null-padding right join.
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(parseSelect(query, kTestConnectorId)).plan,
+      matchScan("t")
+          .shuffle({"a"})
+          .hashJoinLeft(
+              matchScan("u").shuffle({"b"}),
+              {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
+          .hashJoinRight(
+              matchScan("v").shuffle({"c"}),
+              {.keys = {{"a = c"}}, .outputColumnNames = {{"a"}}})
+          .project({"a as value"})
+          .gather()
+          .build());
+}
+
+TEST_P(JoinTest, coalesceJoinKeyFilter) {
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+  testConnector_->addTable("u", ROW("b", BIGINT()));
+
+  const auto query =
+      "SELECT a FROM t LEFT JOIN u ON a = b "
+      "WHERE coalesce(a, b) > 0";
+
+  // Filter on coalesce(a, b) > 0 after the join is rewritten to a > 0 and
+  // pushed below the join. Equality propagation then derives b > 0 for the
+  // right input.
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(parseSelect(query, kTestConnectorId)).plan,
+      matchScan("t")
+          .filter("a > 0")
+          .shuffle({"a"})
+          .hashJoinLeft(
+              matchScan("u").filter("b > 0").shuffle({"b"}),
+              {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
+          .gather()
+          .build());
+}
+
+TEST_P(JoinTest, nestedCoalesceJoinKey) {
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+  testConnector_->addTable("u", ROW("b", BIGINT()));
+  testConnector_->addTable("v", ROW("c", BIGINT()));
+
+  const auto query =
+      "SELECT coalesce(coalesce(a, b), c) AS value FROM ("
+      "t LEFT JOIN u ON a = b"
+      ") LEFT JOIN v ON a = c";
+
+  // Nested expression coalesce(coalesce(a, b), c) is rewritten to a after the
+  // two joins.
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(parseSelect(query, kTestConnectorId)).plan,
+      matchScan("t")
+          .shuffle({"a"})
+          .hashJoinLeft(
+              matchScan("u").shuffle({"b"}),
+              {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
+          .hashJoinLeft(
+              matchScan("v").shuffle({"c"}),
+              {.keys = {{"a = c"}}, .outputColumnNames = {{"a"}}})
+          .project({"a as value"})
+          .gather()
+          .build());
+}
+
+TEST_P(JoinTest, coalesceJoinKeyProjectionAlias) {
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+  testConnector_->addTable("u", ROW("b", BIGINT()));
+
+  const auto query =
+      "SELECT coalesce(c, a) AS value FROM ("
+      "SELECT coalesce(a, b) AS c, a "
+      "FROM t LEFT JOIN u ON a = b"
+      ")";
+
+  // The join-key rewrite turns both references into a, coalesce(a, a) is then
+  // simplifed to a.
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(parseSelect(query, kTestConnectorId)).plan,
+      matchScan("t")
+          .shuffle({"a"})
+          .hashJoinLeft(
+              matchScan("u").shuffle({"b"}),
+              {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
+          .project({"a as value"})
+          .gather()
+          .build());
+}
+
+TEST_P(JoinTest, coalesceJoinKeyType) {
+  struct TestCase {
+    std::string name;
+    velox::TypePtr type;
+    bool rewritten;
+  };
+  const std::vector<TestCase> typeCases{
+      {"real", REAL(), false},
+      {"double", DOUBLE(), false},
+      {"timestamp_with_time_zone", TIMESTAMP_WITH_TIME_ZONE(), false},
+      {"row_double", ROW({"safe", "unsafe"}, {BIGINT(), DOUBLE()}), false},
+      {"array_bigint", ARRAY(BIGINT()), true},
+  };
+
+  for (const auto& [typeName, type, rewritten] : typeCases) {
+    SCOPED_TRACE(typeName);
+    const std::string leftTable = "t_" + typeName;
+    const std::string rightTable = "u_" + typeName;
+    testConnector_->addTable(leftTable, ROW("a", type));
+    testConnector_->addTable(rightTable, ROW("b", type));
+
+    const std::string query = fmt::format(
+        "SELECT coalesce(b, a) AS value FROM {} LEFT JOIN {} ON a = b",
+        leftTable,
+        rightTable);
+
+    // Coalesce(b, a) is rewritten to a for supported complex types. It remains
+    // unchanged for floating-point and custom-comparison types.
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(parseSelect(query, kTestConnectorId)).plan,
+        matchScan(leftTable)
+            .shuffle({"a"})
+            .hashJoinLeft(
+                matchScan(rightTable).shuffle({"b"}),
+                {.keys = {{"a = b"}},
+                 .outputColumnNames = rewritten
+                     ? std::vector<std::string>{"a"}
+                     : std::vector<std::string>{"a", "b"}})
+            .project({rewritten ? "a as value" : "coalesce(b, a) as value"})
+            .gather()
+            .build());
+  }
 }
 
 TEST_P(JoinTest, crossThanOrderBy) {

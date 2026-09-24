@@ -492,3 +492,42 @@ SELECT a FROM (VALUES (1), (2), (3)) AS t(a)
 WHERE NOT EXISTS (
   SELECT 1 FROM (VALUES (1, 1), (null, 1), (1, null), (2, 2)) AS u(x, y)
   WHERE u.x = t.a AND u.y = t.a)
+----
+-- A rewritten key is used directly by a parent join.
+SELECT c
+FROM ((VALUES (1), (2)) AS t(a)
+  LEFT JOIN (VALUES (1)) AS u(b) ON a = b)
+JOIN (VALUES (1), (3)) AS v(c) ON coalesce(a, b) = c
+----
+-- A rewritten key remains valid when a parent right join null-pads its input.
+SELECT coalesce(a, b) AS value
+FROM ((VALUES (1), (2)) AS t(a)
+  LEFT JOIN (VALUES (1)) AS u(b) ON a = b)
+RIGHT JOIN (VALUES (1), (3)) AS v(c) ON a = c
+----
+-- A right join's preserved key is also the value of its coalesced join keys,
+-- including for rows unmatched on the left.
+SELECT coalesce(l.a, r.a), count(*)
+FROM (SELECT * FROM t WHERE a > 1) l
+RIGHT JOIN t r ON l.a = r.a
+GROUP BY coalesce(l.a, r.a)
+----
+-- A filter on a coalesced key is rewritten and pushed below the join.
+SELECT a
+FROM (VALUES (1), (2)) AS t(a)
+LEFT JOIN (VALUES (1)) AS u(b) ON a = b
+WHERE coalesce(a, b) > 0
+----
+-- Repeated substitution rewrites nested coalesces to the preserved key.
+SELECT coalesce(coalesce(a, b), c) AS value
+FROM ((VALUES (1), (2)) AS t(a)
+  LEFT JOIN (VALUES (1)) AS u(b) ON a = b)
+LEFT JOIN (VALUES (1), (3)) AS v(c) ON a = c
+----
+-- A projection alias is inlined before its surrounding coalesce is rewritten.
+SELECT coalesce(c, a) AS value
+FROM (
+  SELECT coalesce(a, b) AS c, a
+  FROM (VALUES (1), (2)) AS t(a)
+  LEFT JOIN (VALUES (1)) AS u(b) ON a = b
+)

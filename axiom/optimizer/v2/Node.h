@@ -35,6 +35,7 @@
 namespace facebook::axiom::optimizer::v2 {
 
 struct ScanHandle;
+class Builder;
 
 /// Discriminator for Node subtypes.
 enum class NodeType : uint8_t {
@@ -1258,7 +1259,8 @@ class Join : public Node {
     bool operator()(const Join* node, const Key& key) const;
   };
 
-  explicit Join(Key key);
+  /// Constructs a join and derives its physical properties from its inputs.
+  explicit Join(Key key, Builder& builder);
 
   NodeCP left() const {
     return inputs_[0];
@@ -1304,6 +1306,29 @@ class Join : public Node {
   /// -- but it never nulls the row's columns and never invents a row the input
   /// did not have.
   static PreservedSides preservedSides(velox::core::JoinType joinType);
+
+  /// Returns whether values of `type` that compare equal are indistinguishable,
+  /// making either coalesce argument order equivalent.
+  static bool supportsCoalesceKey(TypeCP type);
+
+  /// Returns a canonically ordered coalesce of `leftKey` and `rightKey`.
+  /// Returns nullptr when either key is not a bare column, their types differ,
+  /// or `supportsCoalesceKey` rejects the type.
+  static ExprCP tryMakeCanonicalCoalesceKey(
+      ExprCP leftKey,
+      ExprCP rightKey,
+      Builder& builder);
+
+  /// Returns the full join's output partition keys. Matched rows have equal
+  /// keys, while an unmatched row has NULL for the key from its missing side,
+  /// so each partition key is a canonical coalesce of the pair. Returns
+  /// nullopt when a pair is ineligible or its key cannot be expressed over
+  /// `outputColumns`. Requires equally sized key vectors.
+  static std::optional<ExprVector> maybeDerivePartitionKeysAfterFullJoin(
+      const ExprVector& leftKeys,
+      const ExprVector& rightKeys,
+      const PlanObjectSet& outputColumns,
+      Builder& builder);
 
   /// Returns the BOOLEAN mark this semi-project join adds to the preserved
   /// side's columns, which is its last output column. Only semi-project joins

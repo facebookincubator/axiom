@@ -35,6 +35,7 @@
 #include "axiom/optimizer/v2/ExprSimplifier.h"
 #include "axiom/optimizer/v2/ImpliedFilters.h"
 #include "axiom/optimizer/v2/JoinCondition.h"
+#include "axiom/optimizer/v2/JoinKeyCoalesceNormalizer.h"
 #include "axiom/optimizer/v2/NodeRewriter.h"
 
 namespace facebook::axiom::optimizer::v2 {
@@ -2832,6 +2833,7 @@ NodeCP PushdownAndPrunePass::run(
     velox::core::ExpressionEvaluator& evaluator,
     const OptimizerSession& session,
     ConnectorPushdown connectorPushdown) {
+  root = JoinKeyCoalesceNormalizer::normalize(root, builder, evaluator);
   Pushdown pass{builder, evaluator, session, connectorPushdown, outputColumns};
   PushdownContext context;
   context.required = PlanObjectSet::fromObjects(outputColumns);

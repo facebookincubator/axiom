@@ -38,6 +38,7 @@ add_library(
   JoinCondition.cpp
   JoinFanout.cpp
   JoinHypergraph.cpp
+  JoinKeyCoalesceNormalizer.cpp
   JoinTreeEmitter.cpp
   LimitAndOrderPass.cpp
   MemoOp.cpp

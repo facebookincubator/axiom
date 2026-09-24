@@ -137,3 +137,34 @@ SELECT a, array_agg(b ORDER BY b) FILTER (WHERE b < 100) FROM t GROUP BY a
 ----
 -- sum and count do not depend on input order, so the ORDER BY has no effect.
 SELECT sum(b ORDER BY a), count(c ORDER BY b) FROM t
+----
+-- A coalesced left-join key is grouped while the other key remains independently required.
+SELECT coalesce(l.a, r.b) AS c, max(r.b)
+FROM (VALUES (1), (2), (CAST(NULL AS BIGINT))) AS l(a)
+LEFT JOIN (VALUES (1), (3)) AS r(b) ON l.a = r.b
+GROUP BY coalesce(l.a, r.b)
+----
+-- A deterministic, null-propagating computed join key represents the
+-- coalesce on matched and null-padded rows.
+SELECT coalesce(l.a + 1, r.b) AS c, count(*)
+FROM (VALUES (1), (2), (CAST(NULL AS BIGINT))) AS l(a)
+LEFT JOIN (VALUES (2), (4)) AS r(b) ON l.a + 1 = r.b
+GROUP BY coalesce(l.a + 1, r.b)
+----
+-- A non-default-null key on the padded side cannot represent the coalesce.
+SELECT coalesce(l.a, coalesce(r.b, 0)) AS c, count(*)
+FROM (VALUES (CAST(NULL AS BIGINT)), (1)) AS l(a)
+LEFT JOIN (VALUES (2)) AS r(b) ON l.a = coalesce(r.b, 0)
+GROUP BY coalesce(l.a, coalesce(r.b, 0))
+----
+-- A full join has no single key that represents null-padded rows from both sides.
+SELECT coalesce(l.a, r.b) AS c, count(*)
+FROM (VALUES (1), (2), (CAST(NULL AS BIGINT))) AS l(a)
+FULL JOIN (VALUES (1), (3)) AS r(b) ON l.a = r.b
+GROUP BY coalesce(l.a, r.b)
+----
+-- A three-argument coalesce is outside the binary join-key rewrite.
+SELECT coalesce(l.a, r.b, 0) AS c, count(*)
+FROM (VALUES (1), (2), (CAST(NULL AS BIGINT))) AS l(a)
+LEFT JOIN (VALUES (1), (3)) AS r(b) ON l.a = r.b
+GROUP BY coalesce(l.a, r.b, 0)

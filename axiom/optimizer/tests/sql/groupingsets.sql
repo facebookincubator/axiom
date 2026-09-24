@@ -127,3 +127,9 @@ SELECT a, array_agg(b ORDER BY b) AS arr FROM t GROUP BY ROLLUP(a)
 -- ORDER BY in an aggregate with a global grouping set over empty input.
 SELECT a, array_agg(b ORDER BY b) AS arr FROM t WHERE a > 1000 GROUP BY ROLLUP(a)
 ----
+-- A coalesced join key feeds a grouping-set key.
+SELECT coalesce(l.a, r.b) AS c, count(*)
+FROM (VALUES (1), (2)) AS l(a)
+LEFT JOIN (VALUES (1), (3)) AS r(b) ON l.a = r.b
+GROUP BY GROUPING SETS ((coalesce(l.a, r.b)), ())
+----

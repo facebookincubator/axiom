@@ -34,11 +34,13 @@ namespace facebook::axiom::optimizer::v2 {
 DPhyp::DPhyp(
     const JoinHypergraph& graph,
     const CostModel& costModel,
+    Builder& builder,
     int64_t enumerationBudget,
     int32_t numWorkers,
     int64_t broadcastSizeLimit)
     : graph_{graph},
       costModel_{costModel},
+      builder_{builder},
       enumerationBudget_{enumerationBudget},
       numWorkers_{numWorkers},
       broadcastSizeLimit_{broadcastSizeLimit} {
@@ -185,6 +187,7 @@ class Enumerator {
   Enumerator(
       const JoinHypergraph& graph,
       const CostModel& costModel,
+      Builder& builder,
       folly::F14NodeMap<RelationSet, PlanSet>& memo,
       int64_t enumerationBudget,
       int32_t numWorkers,
@@ -192,6 +195,7 @@ class Enumerator {
       std::vector<std::unique_ptr<MemoOp>>& enforcementOps)
       : graph_{graph},
         costModel_{costModel},
+        builder_{builder},
         memo_{memo},
         budget_{enumerationBudget},
         numWorkers_{numWorkers},
@@ -982,6 +986,81 @@ class Enumerator {
     return result;
   }
 
+  // Resolves each full-join key in its input schema because equivalences that
+  // cross the two inputs do not hold for null-extended rows. The combined
+  // output schema is used only to check that the derived keys are available.
+  Partitioning fullJoinOutputPartitioning(
+      MemoOpCP left,
+      MemoOpCP right,
+      const ExprVector& leftKeys,
+      const ExprVector& rightKeys,
+      RelationSet combined,
+      const connector::PartitionType* partitionType) {
+    const auto leftCoverKeys = keysInCoverSchema(leftKeys, left->cover());
+    const auto rightCoverKeys = keysInCoverSchema(rightKeys, right->cover());
+    auto outputKeys = Join::maybeDerivePartitionKeysAfterFullJoin(
+        leftCoverKeys,
+        rightCoverKeys,
+        graph_.coverOutputColumns(combined),
+        builder_);
+    if (!outputKeys.has_value()) {
+      return {};
+    }
+    Partitioning result = Partitioning::globalHash(std::move(*outputKeys));
+    result.partitionType = partitionType;
+    return result;
+  }
+
+  // Describes the output of inputs partitioned on the oriented join keys. The
+  // surviving side's keys are resolved in the combined output schema.
+  Partitioning preservedJoinOutputPartitioning(
+      velox::core::JoinType joinType,
+      bool reversedAnti,
+      const ExprVector& leftKeys,
+      const ExprVector& rightKeys,
+      RelationSet combined,
+      const connector::PartitionType* partitionType) {
+    auto preserved = Join::preservedSides(joinType);
+    if (reversedAnti) {
+      VELOX_DCHECK_EQ(joinType, velox::core::JoinType::kAnti);
+      std::swap(preserved.left, preserved.right);
+    }
+    const ExprVector* keys{nullptr};
+    if (preserved.left) {
+      keys = &leftKeys;
+    } else if (preserved.right) {
+      keys = &rightKeys;
+    } else {
+      return {};
+    }
+    Partitioning result =
+        Partitioning::globalHash(keysInCoverSchema(*keys, combined));
+    result.partitionType = partitionType;
+    return result;
+  }
+
+  // Uses coalesced keys for full joins and preserved-side keys otherwise.
+  Partitioning joinOutputPartitioning(
+      MemoOpCP left,
+      MemoOpCP right,
+      velox::core::JoinType joinType,
+      bool reversedAnti,
+      const ExprVector& leftKeys,
+      const ExprVector& rightKeys,
+      RelationSet combined,
+      const connector::PartitionType* partitionType) {
+    return joinType == velox::core::JoinType::kFull
+        ? fullJoinOutputPartitioning(
+              left, right, leftKeys, rightKeys, combined, partitionType)
+        : preservedJoinOutputPartitioning(
+              joinType,
+              reversedAnti,
+              leftKeys,
+              rightKeys,
+              combined,
+              partitionType);
+  }
+
   // Builds, costs, and (if costable) inserts one join candidate with the given
   // output partitioning. The children are already distribution-enforced.
   void addJoinCandidate(
@@ -1018,8 +1097,8 @@ class Enumerator {
 
   // Adds join candidates that avoid shuffling the bucketed side(s): both sides
   // co-located when both are bucketed, or the unbucketed side repartitioned to
-  // the bucketed side's connector partitioning. The output is partitioned on
-  // the probe (left) keys with the preserved bucket type.
+  // the bucketed side's connector partitioning. The output keeps the join
+  // type's valid key expressions with the preserved bucket type.
   void addCoBucketedCandidate(
       MemoOpCP left,
       MemoOpCP right,
@@ -1040,9 +1119,6 @@ class Enumerator {
     const auto add = [&](MemoOpCP leftChild,
                          MemoOpCP rightChild,
                          const connector::PartitionType* outputType) {
-      Partitioning outputPartitioning =
-          Partitioning::globalHash(keysInCoverSchema(leftKeys, combined));
-      outputPartitioning.partitionType = outputType;
       addJoinCandidate(
           leftChild,
           rightChild,
@@ -1052,7 +1128,15 @@ class Enumerator {
           reversedAnti,
           keyEdges,
           filterEdges,
-          std::move(outputPartitioning));
+          joinOutputPartitioning(
+              leftChild,
+              rightChild,
+              joinType,
+              reversedAnti,
+              leftKeys,
+              rightKeys,
+              combined,
+              outputType));
     };
 
     if (leftBucketed != nullptr && rightBucketed != nullptr) {
@@ -1160,7 +1244,15 @@ class Enumerator {
             reversedAnti,
             keyEdges,
             filterEdges,
-            Partitioning::globalHash(keysInCoverSchema(leftKeys, combined)));
+            joinOutputPartitioning(
+                leftPart,
+                rightPart,
+                joinType,
+                reversedAnti,
+                leftKeys,
+                rightKeys,
+                combined,
+                nullptr));
       }
 
       // Skipped for null-aware anti/semi: a connector-bucketed existence side
@@ -1280,6 +1372,8 @@ class Enumerator {
 
   const JoinHypergraph& graph_;
   const CostModel& costModel_;
+  // Interns computed partition keys shared with the emitted plan.
+  Builder& builder_;
   folly::F14NodeMap<RelationSet, PlanSet>& memo_;
   // Pair budget; <= 0 means unlimited.
   EnumerationBudget budget_;
@@ -1341,6 +1435,7 @@ const MemoOp* DPhyp::enumerate() {
   Enumerator enumerator{
       graph_,
       costModel_,
+      builder_,
       memo_,
       enumerationBudget_,
       numWorkers_,
@@ -1378,6 +1473,7 @@ std::vector<MemoOpCP> DPhyp::enumerate(
   Enumerator enumerator{
       graph_,
       costModel_,
+      builder_,
       memo_,
       enumerationBudget_,
       numWorkers_,

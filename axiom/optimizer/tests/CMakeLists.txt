@@ -182,6 +182,7 @@ target_link_libraries(
   velox_async_rpc_function_registry
   velox_dwio_text_reader_register
   velox_dwio_text_writer_register
+  velox_presto_types
   GTest::gmock
   glog::glog
   GTest::gtest

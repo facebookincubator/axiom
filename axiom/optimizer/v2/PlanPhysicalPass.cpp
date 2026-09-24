@@ -675,8 +675,10 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
           std::tie(newRight, rightKeys) =
               PrecomputeProjections::materializeKeys(
                   newRight, rightKeys, builder());
-          newLeft = partition(newLeft, leftKeys, nullAware && !rightIsBuild);
-          newRight = partition(newRight, rightKeys, nullAware && rightIsBuild);
+          newLeft =
+              ensurePartitioned(newLeft, leftKeys, nullAware && !rightIsBuild);
+          newRight =
+              ensurePartitioned(newRight, rightKeys, nullAware && rightIsBuild);
         }
       } else if (canBroadcastBuild(node->joinType())) {
         newRight = broadcast(newRight);
@@ -801,6 +803,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     DPhyp dphyp{
         graph,
         costModel,
+        builder(),
         options_.dphypEnumerationBudget,
         numWorkers_,
         options_.broadcastSizeLimit};
@@ -844,6 +847,18 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       bool replicateNullsAndAny = false) {
     return builder().make<Exchange>(
         {input, Partitioning::globalHash(keys, replicateNullsAndAny)});
+  }
+
+  // Reuses an input whose hash partitioning exactly matches the requirement.
+  NodeCP ensurePartitioned(
+      NodeCP input,
+      const ExprVector& keys,
+      bool replicateNullsAndAny = false) {
+    const auto required = Partitioning::globalHash(keys, replicateNullsAndAny);
+    if (input->physicalProperties().globalPartition.sameClassAs(required)) {
+      return input;
+    }
+    return partition(input, keys, replicateNullsAndAny);
   }
 
   NodeCP broadcast(NodeCP input) {

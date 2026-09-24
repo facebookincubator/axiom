@@ -83,6 +83,29 @@ TEST_F(InferenceTest, singleCall) {
   AXIOM_ASSERT_PLAN_V2(plan, matcher);
 }
 
+TEST_F(InferenceTest, coalesceJoinKey) {
+  testConnector_->addTable("t", ROW("a", VARCHAR()));
+  testConnector_->addTable("u", ROW("b", VARCHAR()));
+
+  auto logicalPlan = parseSelect(
+      "SELECT test_inference(coalesce(a, b)) AS embedding "
+      "FROM t LEFT JOIN u ON a = b",
+      kTestConnectorId);
+
+  // Coalesce input of inference after join is rewritten to a.
+  auto matcher = matchScan("t")
+                     .shuffle({"a"})
+                     .hashJoinLeft(
+                         matchScan("u").shuffle({"b"}),
+                         {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
+                     .project({"a as input"})
+                     .inference("test_inference(input) as embedding")
+                     .project({"embedding"})
+                     .gather()
+                     .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(planVelox(logicalPlan).plan, matcher);
+}
+
 // A special form holds a call in any input every row reaches.
 TEST_F(InferenceTest, underSpecialForm) {
   auto plan = toSingleNodePlan(

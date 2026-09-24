@@ -23,8 +23,8 @@
 
 namespace facebook::axiom::optimizer::v2 {
 
-/// Top-down pass over the tree IR that combines filter pushdown with column
-/// pruning:
+/// Normalizes coalesced join keys, then runs a top-down pass over the tree IR
+/// that combines filter pushdown with column pruning:
 ///
 ///  - Filter pushdown. Each `Filter`'s conjuncts are flattened into a `pending`
 ///    set carried down the tree. At every node, conjuncts the node's rule

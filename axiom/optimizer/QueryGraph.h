@@ -78,6 +78,10 @@ class Expr : public PlanObject {
     return containsFunction(FunctionSet::kNonDeterministic);
   }
 
+  /// Returns true if setting every column in `nullColumns` to NULL guarantees
+  /// that this expression evaluates to NULL.
+  bool propagatesNullsFrom(const PlanObjectSet& nullColumns) const;
+
   /// True if 'this' contains any function from 'set'. See FunctionSet.
   virtual bool containsFunction(uint64_t /*set*/) const {
     return false;

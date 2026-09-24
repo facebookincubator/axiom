@@ -18,6 +18,8 @@
 
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/optimizer/Schema.h"
+#include "axiom/optimizer/v2/Builder.h"
+#include "axiom/optimizer/v2/ExprFactory.h"
 #include "axiom/optimizer/v2/KeyHash.h"
 #include "axiom/optimizer/v2/NodePrinter.h"
 #include "axiom/optimizer/v2/NodeVisitor.h"
@@ -401,14 +403,80 @@ ExprCP survivingEquiKey(ExprCP key, const PlanObjectSet& outputColumns) {
   return nullptr;
 }
 
-// Output global partitioning of a join. A join keeps the probe's (left's)
-// partitioning when every output row is a probe row carrying its probe column
-// values unchanged, which holds for inner, left, the left semi and anti
-// joins, and the counting semijoin. Right and full joins emit build rows, so
-// they drop it.
+// Checks that a hash distribution corresponds positionally to every join key.
+// Null replication can place the same key on multiple partitions, so it does
+// not establish partitioning on the key.
+bool isPartitionedOnJoinKeys(
+    const Partitioning& partitioning,
+    const ExprVector& joinKeys) {
+  if (partitioning.kind != PartitionKind::kPartitioned ||
+      partitioning.keys.size() != joinKeys.size() ||
+      partitioning.replicateNullsAndAny) {
+    return false;
+  }
+  for (size_t i = 0; i < joinKeys.size(); ++i) {
+    if (!partitioning.keys[i]->sameOrEqual(*joinKeys[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Describes the distribution retained by a full join when both inputs are
+// gathered, or when they are positionally partitioned on their join keys
+// without null replication. Connector partition types must both be absent or
+// compatible, and every coalesced key must be expressible over the output.
+Partitioning fullJoinGlobalPartition(
+    NodeCP left,
+    NodeCP right,
+    const ExprVector& leftKeys,
+    const ExprVector& rightKeys,
+    const ColumnVector& outputColumns,
+    Builder& builder) {
+  const auto& leftPartition = left->physicalProperties().globalPartition;
+  const auto& rightPartition = right->physicalProperties().globalPartition;
+  VELOX_CHECK_EQ(leftKeys.size(), rightKeys.size());
+  if (leftPartition.kind == PartitionKind::kGather &&
+      rightPartition.kind == PartitionKind::kGather) {
+    return Partitioning::globalGather();
+  }
+  if (!isPartitionedOnJoinKeys(leftPartition, leftKeys) ||
+      !isPartitionedOnJoinKeys(rightPartition, rightKeys)) {
+    return {};
+  }
+  if ((leftPartition.partitionType == nullptr) !=
+      (rightPartition.partitionType == nullptr)) {
+    return {};
+  }
+
+  const connector::PartitionType* partitionType{nullptr};
+  if (leftPartition.partitionType != nullptr) {
+    partitionType = queryCtx()->copartitionedType(
+        leftPartition.partitionType, rightPartition.partitionType);
+    if (partitionType == nullptr) {
+      return {};
+    }
+  }
+
+  auto outputKeys = Join::maybeDerivePartitionKeysAfterFullJoin(
+      leftKeys, rightKeys, PlanObjectSet::fromObjects(outputColumns), builder);
+  if (!outputKeys.has_value()) {
+    return {};
+  }
+
+  Partitioning result = leftPartition.dropOrder();
+  result.partitionType = partitionType;
+  result.keys = std::move(*outputKeys);
+  return result;
+}
+
+// Output global partitioning of a join. Full joins use the distribution shared
+// by both inputs. Other joins keep a preserved side's partitioning when every
+// output row carries that side's column values unchanged. When both sides
+// qualify (an inner join), use the left.
 //
-// If every probe key is still an output column, the output is partitioned
-// exactly as the probe was. Otherwise only an inner join recovers a dropped
+// If every source key is still an output column, the output is partitioned
+// exactly as the source was. Otherwise only an inner join recovers a dropped
 // key: it keeps a key whose columns all survive (a join projects columns
 // unchanged, so a surviving column is identity-projected, and an expression
 // over surviving columns still partitions the output), else substitutes an
@@ -422,42 +490,45 @@ Partitioning joinGlobalPartition(
     velox::core::JoinType joinType,
     NodeCP left,
     NodeCP right,
-    const ColumnVector& outputColumns) {
-  switch (joinType) {
-    case velox::core::JoinType::kInner:
-    case velox::core::JoinType::kLeft:
-    case velox::core::JoinType::kLeftSemiFilter:
-    case velox::core::JoinType::kLeftSemiProject:
-    case velox::core::JoinType::kAnti:
-    case velox::core::JoinType::kCountingLeftSemiFilter:
-      break;
-    default:
-      return {};
+    const ExprVector& leftKeys,
+    const ExprVector& rightKeys,
+    const ColumnVector& outputColumns,
+    Builder& builder) {
+  if (joinType == velox::core::JoinType::kFull) {
+    return fullJoinGlobalPartition(
+        left, right, leftKeys, rightKeys, outputColumns, builder);
   }
 
-  Partitioning probe = left->physicalProperties().globalPartition;
-  if (probe.kind != PartitionKind::kPartitioned) {
-    return probe.dropOrder();
+  const auto preserved = Join::preservedSides(joinType);
+  if (!preserved.left && !preserved.right) {
+    return {};
+  }
+  const NodeCP source = preserved.left ? left : right;
+  const NodeCP other = preserved.left ? right : left;
+
+  Partitioning partitioning = source->physicalProperties().globalPartition;
+  if (partitioning.kind != PartitionKind::kPartitioned) {
+    return partitioning.dropOrder();
   }
 
   // Both sides connector-bucketed: the join runs on the partitioning the two
-  // agree on, which can be coarser than the probe's. Reporting the probe's
-  // would let a consumer align a shuffle to more partitions than the join's
-  // fragment has tasks.
-  const auto* buildType =
-      right->physicalProperties().globalPartition.partitionType;
-  if (probe.partitionType != nullptr && buildType != nullptr) {
+  // agree on, which can be coarser than the source side's. Reporting the
+  // source side's would let a consumer align a shuffle to more partitions than
+  // the join's fragment has tasks.
+  const auto* otherType =
+      other->physicalProperties().globalPartition.partitionType;
+  if (partitioning.partitionType != nullptr && otherType != nullptr) {
     const auto* folded =
-        queryCtx()->copartitionedType(probe.partitionType, buildType);
+        queryCtx()->copartitionedType(partitioning.partitionType, otherType);
     if (folded == nullptr) {
       return {};
     }
-    probe.partitionType = folded;
+    partitioning.partitionType = folded;
   }
 
   const auto outputSet = PlanObjectSet::fromObjects(outputColumns);
-  if (outputSet.containsAll(probe.keys)) {
-    return probe;
+  if (outputSet.containsAll(partitioning.keys)) {
+    return partitioning;
   }
 
   if (joinType != velox::core::JoinType::kInner) {
@@ -465,8 +536,8 @@ Partitioning joinGlobalPartition(
   }
 
   ExprVector keys;
-  keys.reserve(probe.keys.size());
-  for (ExprCP key : probe.keys) {
+  keys.reserve(partitioning.keys.size());
+  for (ExprCP key : partitioning.keys) {
     if (outputSet.containsColumns(key)) {
       keys.push_back(key);
       continue;
@@ -478,7 +549,7 @@ Partitioning joinGlobalPartition(
     keys.push_back(equiKey);
   }
 
-  Partitioning result = probe;
+  Partitioning result = partitioning;
   result.keys = std::move(keys);
   return result;
 }
@@ -1559,7 +1630,7 @@ bool projectsMark(velox::core::JoinType joinType) {
 }
 } // namespace
 
-Join::Join(Key key)
+Join::Join(Key key, Builder& builder)
     : Node(
           NodeType::kJoin,
           ColumnVector{key.outputColumns},
@@ -1568,7 +1639,10 @@ Join::Join(Key key)
                   key.joinType,
                   key.left,
                   key.right,
-                  key.outputColumns),
+                  key.leftKeys,
+                  key.rightKeys,
+                  key.outputColumns,
+                  builder),
               .local = joinLocal(key.joinType, key.left, key.outputColumns)}),
       inputs_{key.left, key.right},
       joinType_(key.joinType),
@@ -1635,6 +1709,64 @@ Join::PreservedSides Join::preservedSides(velox::core::JoinType joinType) {
       break;
   }
   VELOX_UNREACHABLE();
+}
+
+bool Join::supportsCoalesceKey(TypeCP type) {
+  if (type->kind() == velox::TypeKind::REAL ||
+      type->kind() == velox::TypeKind::DOUBLE ||
+      type->providesCustomComparison()) {
+    return false;
+  }
+  for (size_t i = 0; i < type->size(); ++i) {
+    if (!supportsCoalesceKey(type->childAt(i).get())) {
+      return false;
+    }
+  }
+  return true;
+}
+
+ExprCP Join::tryMakeCanonicalCoalesceKey(
+    ExprCP leftKey,
+    ExprCP rightKey,
+    Builder& builder) {
+  // TODO: Relax the column-only restriction to support eligible expression
+  // keys.
+  if (!leftKey->is(PlanType::kColumnExpr) ||
+      !rightKey->is(PlanType::kColumnExpr)) {
+    return nullptr;
+  }
+  const auto* leftColumn = leftKey->as<Column>();
+  const auto* rightColumn = rightKey->as<Column>();
+  if (leftColumn->value().type != rightColumn->value().type ||
+      !supportsCoalesceKey(leftColumn->value().type)) {
+    return nullptr;
+  }
+  const std::string_view leftName{leftColumn->name()};
+  const std::string_view rightName{rightColumn->name()};
+  if (rightName < leftName ||
+      (rightName == leftName && rightColumn->id() < leftColumn->id())) {
+    std::swap(leftColumn, rightColumn);
+  }
+  return ExprFactory{builder}.makeCoalesce(leftColumn, rightColumn);
+}
+
+std::optional<ExprVector> Join::maybeDerivePartitionKeysAfterFullJoin(
+    const ExprVector& leftKeys,
+    const ExprVector& rightKeys,
+    const PlanObjectSet& outputColumns,
+    Builder& builder) {
+  VELOX_CHECK_EQ(leftKeys.size(), rightKeys.size());
+  ExprVector outputKeys;
+  outputKeys.reserve(leftKeys.size());
+  for (size_t i = 0; i < leftKeys.size(); ++i) {
+    ExprCP key =
+        tryMakeCanonicalCoalesceKey(leftKeys[i], rightKeys[i], builder);
+    if (key == nullptr || !outputColumns.containsColumns(key)) {
+      return std::nullopt;
+    }
+    outputKeys.push_back(key);
+  }
+  return outputKeys;
 }
 
 ColumnCP Join::markColumn() const {

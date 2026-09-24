@@ -775,6 +775,13 @@ class PlanMatcherBuilder {
   /// @param count Maximum number of rows to return.
   PlanMatcherBuilder& topN(int64_t count);
 
+  /// Matches a TopN node with the specified ordering and count.
+  /// @param ordering List of sort keys in DuckDB SQL syntax.
+  /// @param count Maximum number of rows to return.
+  PlanMatcherBuilder& topN(
+      const std::vector<std::string>& ordering,
+      int64_t count);
+
   /// Matches any OrderBy node.
   PlanMatcherBuilder& orderBy();
 

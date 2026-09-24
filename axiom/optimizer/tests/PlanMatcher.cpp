@@ -706,6 +706,14 @@ class TopNMatcher : public PlanMatcherImpl<TopNNode> {
   TopNMatcher(const std::shared_ptr<PlanMatcher>& matcher, int64_t count)
       : PlanMatcherImpl<TopNNode>({matcher}), count_{count} {}
 
+  TopNMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      const std::vector<std::string>& ordering,
+      int64_t count)
+      : PlanMatcherImpl<TopNNode>({matcher}),
+        ordering_{ordering},
+        count_{count} {}
+
   MatchResult matchDetails(
       const TopNNode& plan,
       const std::unordered_map<std::string, std::string>& symbols)
@@ -714,12 +722,33 @@ class TopNMatcher : public PlanMatcherImpl<TopNNode> {
 
     if (count_.has_value()) {
       EXPECT_EQ(plan.count(), count_.value());
+      AXIOM_TEST_RETURN_IF_FAILURE
+    }
+
+    if (!ordering_.empty()) {
+      EXPECT_EQ(plan.sortingOrders().size(), ordering_.size());
+      AXIOM_TEST_RETURN_IF_FAILURE
+
+      for (auto i = 0; i < ordering_.size(); ++i) {
+        auto expected =
+            parse::DuckSqlExpressionsParser().parseOrderByExpr(ordering_[i]);
+        auto expectedExpr = expected.expr;
+        if (!symbols.empty()) {
+          expectedExpr = ExprMatcher::rewriteInputNames(expectedExpr, symbols);
+        }
+
+        EXPECT_EQ(plan.sortingKeys()[i]->toString(), expectedExpr->toString());
+        EXPECT_EQ(plan.sortingOrders()[i].isAscending(), expected.ascending);
+        EXPECT_EQ(plan.sortingOrders()[i].isNullsFirst(), expected.nullsFirst);
+        AXIOM_TEST_RETURN_IF_FAILURE
+      }
     }
 
     return MatchResult::success(symbols);
   }
 
  private:
+  const std::vector<std::string> ordering_;
   const std::optional<int64_t> count_;
 };
 
@@ -2022,11 +2051,14 @@ class GroupIdMatcher : public PlanMatcherImpl<GroupIdNode> {
       }
     }
 
-    // Propagate explicit key aliases for keys that overlap with aggregate
-    // inputs (where automatic symbol propagation is skipped).
+    // Matcher aliases name values from the child plan, so resolve them before
+    // comparing them with GroupId's physical input columns.
     for (const auto& [inputName, alias] : keyAliases_) {
+      const auto symbol = symbols.find(inputName);
+      const auto& resolvedInputName =
+          symbol != symbols.end() ? symbol->second : inputName;
       for (const auto& info : plan.groupingKeyInfos()) {
-        if (info.input->name() == inputName) {
+        if (info.input->name() == resolvedInputName) {
           newSymbols[alias] = info.output;
           break;
         }
@@ -2048,8 +2080,13 @@ class GroupIdMatcher : public PlanMatcherImpl<GroupIdNode> {
         AXIOM_TEST_RETURN_IF_FAILURE
 
         for (auto j = 0; j < expectedSet.size(); ++j) {
-          // Resolve input column name → output key name via groupingKeyInfos.
+          // Resolve the child matcher alias before mapping the GroupId input
+          // column to its output column.
           auto expected = expectedSet[j];
+          if (const auto symbol = symbols.find(expected);
+              symbol != symbols.end()) {
+            expected = symbol->second;
+          }
           for (const auto& info : plan.groupingKeyInfos()) {
             if (info.input->name() == expected) {
               expected = info.output;
@@ -2641,6 +2678,14 @@ PlanMatcherBuilder& PlanMatcherBuilder::topN() {
 PlanMatcherBuilder& PlanMatcherBuilder::topN(int64_t count) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<TopNMatcher>(matcher_, count);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::topN(
+    const std::vector<std::string>& ordering,
+    int64_t count) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<TopNMatcher>(matcher_, ordering, count);
   return *this;
 }
 

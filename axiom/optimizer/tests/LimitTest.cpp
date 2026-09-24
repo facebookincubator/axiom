@@ -182,6 +182,32 @@ TEST_P(LimitTest, orderByOffsetAndLimit) {
           .build());
 }
 
+TEST_P(LimitTest, coalesceJoinKey) {
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+  testConnector_->addTable("u", ROW("b", BIGINT()));
+
+  const auto sql =
+      "SELECT a FROM t LEFT JOIN u ON a = b "
+      "ORDER BY coalesce(a, b) DESC NULLS FIRST OFFSET 2 LIMIT 7";
+
+  // Coalesce order key after join is rewritten to a.
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(parseSelect(sql, kTestConnectorId)).plan,
+      matchScan("t")
+          .shuffle({"a"})
+          .hashJoinLeft(
+              matchScan("u").shuffle({"b"}),
+              {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
+          .project({"a", "a as key"})
+          .topN({"key DESC NULLS FIRST"}, 9)
+          .localMerge()
+          .finalLimit(0, 9)
+          .shuffleMerge()
+          .finalLimit(2, 7)
+          .project({"a"})
+          .build());
+}
+
 TEST_P(LimitTest, orderByDirectlyBelowLimitBecomesTopN) {
   // Only the ORDER BY directly below a limit folds into a TopN. The trailing
   // ORDER BY has no limit and stays a full sort.

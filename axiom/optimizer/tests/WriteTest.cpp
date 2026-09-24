@@ -530,6 +530,23 @@ TEST_P(WriteTest, insertSql) {
       }));
 }
 
+TEST_P(WriteTest, insertCoalesceJoinKey) {
+  SCOPE_EXIT {
+    dropTableIfExists("test");
+  };
+
+  createTable("test", ROW("k", BIGINT()), {});
+
+  auto logicalPlan = parseInsert(
+      "INSERT INTO test "
+      "SELECT coalesce(l.a, r.b) "
+      "FROM (VALUES (1), (2)) AS l(a) "
+      "LEFT JOIN (VALUES (1)) AS r(b) ON l.a = r.b");
+  checkWrittenRows(runVelox(logicalPlan), 2);
+
+  checkTableData("test", makeRowVector({makeFlatVector<int64_t>({1, 2})}));
+}
+
 // INSERT into a bucketed table where the column feeding the bucket column is
 // named differently from the target column.
 TEST_P(WriteTest, insertBucketedSql) {

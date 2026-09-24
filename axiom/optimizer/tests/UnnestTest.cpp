@@ -198,6 +198,29 @@ TEST_P(UnnestTest, unnest) {
   }
 }
 
+TEST_P(UnnestTest, coalesceJoinKey) {
+  testConnector_->addTable("t", ROW("a", ARRAY(BIGINT())));
+  testConnector_->addTable("u", ROW("b", ARRAY(BIGINT())));
+
+  auto logicalPlan = parseSelect(
+      "SELECT value "
+      "FROM t LEFT JOIN u ON a = b "
+      "CROSS JOIN UNNEST(coalesce(a, b)) AS u(value)",
+      kTestConnectorId);
+
+  // The unnest's coalesce input after join is rewritten to a.
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(logicalPlan).plan,
+      matchScan("t")
+          .shuffle({"a"})
+          .hashJoinLeft(
+              matchScan("u").shuffle({"b"}),
+              {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
+          .unnest({}, {"a"})
+          .gather()
+          .build());
+}
+
 TEST_P(UnnestTest, project) {
   auto startLogicalPlan = [&]() {
     return lp::PlanBuilder{}.values({rowVector_});

@@ -22,23 +22,25 @@
 
 namespace facebook::axiom::optimizer::v2 {
 
-/// Reduces expressions to simpler equivalent forms — today constant
-/// folding of column-free expressions; algebraic and boolean identities
-/// (`a + 0 → a`, `true AND f → f`, …) plug in as the rule set grows.
+/// Reduces expressions to simpler equivalent forms through constant folding
+/// and local algebraic and boolean identities.
 ///
 /// `evaluator` must outlive this `ExprSimplifier` and any IR it
-/// produces: folded constants register `Variant`s in the
-/// `QueryGraphContext`, but vectors produced during compilation are
-/// allocated on the evaluator's pool and may be referenced by Velox
-/// plan nodes that emit later constructs from the same IR.
+/// produces: folded constants register `Variant`s in the `QueryGraphContext`,
+/// but vectors produced during compilation are allocated on the evaluator's
+/// pool and may be referenced by Velox plan nodes that emit later constructs
+/// from the same IR.
 class ExprSimplifier {
  public:
   ExprSimplifier(Builder& builder, velox::core::ExpressionEvaluator& evaluator)
       : builder_(builder), evaluator_(evaluator) {}
 
   /// Returns the simplified `expr`, or `expr` unchanged if no rule
-  /// applies.
+  /// applies. Only apply simplification to the top-level `expr`.
   ExprCP simplify(ExprCP expr);
+
+  /// Simplifies an expression tree recursively from bottom up.
+  ExprCP simplifyTree(ExprCP expr);
 
   /// Evaluates a column-free `expr` to a single value. Places no determinism
   /// or constant-ness requirement on `expr`: for contexts like VALUES where an
@@ -67,12 +69,19 @@ class ExprSimplifier {
   // simplified.
   ExprCP tryFoldConjunct(ExprCP expr);
 
+  // Folds a binary COALESCE whose arguments are the same deterministic
+  // expression.
+  ExprCP tryFoldCoalesce(ExprCP expr);
+
   // Folds `expr` to a `Literal` when it has no column refs and the
   // evaluator produces a single constant value. Otherwise returns
   // `expr` unchanged.
   ExprCP tryFoldConstant(ExprCP expr);
 
+  // Provides canonical construction for synthesized expressions.
   Builder& builder_;
+
+  // Compiles and evaluates column-free expressions.
   velox::core::ExpressionEvaluator& evaluator_;
 
   // Reusable single empty row, the input for evaluate().

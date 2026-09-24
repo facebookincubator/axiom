@@ -1686,12 +1686,8 @@ NodeCP Translator::maybeWrapInWindow(
             /*alias=*/nullptr, /*allowConstant=*/
             true);
       }
-      // Window functions are non-deterministic with non-default null behavior.
-      FunctionSet windowFuncs =
-          Call::unionArgFunctions(FunctionSet{}, windowArgs) |
-          FunctionSet::kNonDeterministic | FunctionSet::kNonDefaultNullBehavior;
-      auto* call = builder_.makeCall(
-          windowName, value, std::move(windowArgs), windowFuncs);
+      ExprCP call =
+          exprFactory_.makeWindowCall(windowName, value, std::move(windowArgs));
       Frame frame = toFrame(windowExpr->frame(), inputScope);
       // With no ordering every row of a partition is a peer, so a RANGE bound
       // at CURRENT ROW reaches the end of the partition in either direction.

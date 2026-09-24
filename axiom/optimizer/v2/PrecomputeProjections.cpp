@@ -91,24 +91,45 @@ ExprCP PrecomputeProjections::toColumn(
     return expr;
   }
 
-  if (expr->is(PlanType::kColumnExpr)) {
-    // In narrowing mode the project is not seeded with the input columns, so a
-    // referenced passthrough column must be added explicitly. This is not a
-    // lifted expression, so it does not by itself require a project.
-    if (!projectAllInputs_ && !seen_.contains(expr)) {
-      addToProject(expr, expr->as<Column>());
-    }
-    return expr;
-  }
-
-  // Lambdas are consumed by their parent higher-order function directly
-  // and cannot be evaluated by a Project node.
+  // Lambdas are consumed by their parent higher-order function directly and
+  // cannot be evaluated by a Project node.
   if (expr->is(PlanType::kLambdaExpr)) {
     return expr;
   }
 
+  if (alias != nullptr) {
+    for (size_t i = 0; i < outColumns_.size(); ++i) {
+      if (outColumns_[i] != alias) {
+        continue;
+      }
+      VELOX_CHECK(
+          outExprs_[i] == expr,
+          "Projection alias is already assigned to a different expression: {}",
+          alias->toString());
+      return alias;
+    }
+
+    outColumns_.push_back(alias);
+    outExprs_.push_back(expr);
+    // Keep the first lookup result while emitting the expression under every
+    // required alias.
+    seen_.try_emplace(expr, alias);
+    needsProject_ |= expr != alias;
+    return alias;
+  }
+
   if (auto it = seen_.find(expr); it != seen_.end()) {
     return it->second;
+  }
+
+  if (expr->is(PlanType::kColumnExpr)) {
+    // In narrowing mode the project is not seeded with the input columns, so a
+    // referenced passthrough column must be added explicitly. This is not a
+    // lifted expression, so it does not by itself require a project.
+    if (!projectAllInputs_) {
+      addToProject(expr, expr->as<Column>());
+    }
+    return expr;
   }
 
   // The input may already compute this expression -- a name the query
@@ -126,12 +147,6 @@ ExprCP PrecomputeProjections::toColumn(
         return column;
       }
     }
-  }
-
-  if (alias != nullptr) {
-    addToProject(expr, alias);
-    needsProject_ = true;
-    return alias;
   }
 
   ColumnCP column = Column::create("__p", expr->value());
