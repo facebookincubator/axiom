@@ -33,6 +33,9 @@ const velox::RowTypePtr& sessionPropertiesTableSchema();
 /// Returns the schema for the system.metadata.functions table.
 const velox::RowTypePtr& functionsTableSchema();
 
+/// Returns the schema for the system.metadata.catalogs table.
+const velox::RowTypePtr& catalogsTableSchema();
+
 // ===================== Axiom Metadata Layer =====================
 
 /// Table layout for system connector tables.
@@ -129,7 +132,7 @@ class SystemSplitManager : public ConnectorSplitManager {
 };
 
 /// Axiom ConnectorMetadata for the system connector.
-/// Provides the runtime.queries and metadata.session_properties tables.
+/// Provides the system catalog's runtime and metadata tables.
 class SystemConnectorMetadata : public ConnectorMetadata {
  public:
   /// Keep for backward compatibility.
@@ -168,6 +171,7 @@ class SystemConnectorMetadata : public ConnectorMetadata {
   std::shared_ptr<SystemTable> queriesTable_;
   std::shared_ptr<SystemTable> sessionPropertiesTable_;
   std::shared_ptr<SystemTable> functionsTable_;
+  std::shared_ptr<SystemTable> catalogsTable_;
 };
 
 } // namespace facebook::axiom::connector::system

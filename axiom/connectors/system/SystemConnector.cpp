@@ -18,6 +18,7 @@
 #include "axiom/connectors/system/InformationSchema.h"
 
 #include <algorithm>
+#include <limits>
 
 #include <folly/json/json.h>
 
@@ -93,6 +94,14 @@ enum class FunctionColumn : int32_t {
   kIsVariadic,
   kOwner,
   kProperties,
+};
+
+// Indices into the catalogs table schema, matching the column order returned
+// by catalogsTableSchema().
+enum class CatalogColumn : int32_t {
+  kCatalogName = 0,
+  kConnectorId,
+  kConnectorName,
 };
 
 // Converts a system_clock time_point to a Velox Timestamp.
@@ -254,6 +263,28 @@ class FunctionsDataSource : public SystemDataSourceBase {
 
  protected:
   velox::RowVectorPtr buildResults() override;
+};
+
+// Reads the catalog snapshot supplied when the connector was registered.
+class CatalogsDataSource : public SystemDataSourceBase {
+ public:
+  CatalogsDataSource(
+      const velox::RowTypePtr& outputType,
+      const velox::connector::ColumnHandleMap& columnHandles,
+      const std::vector<CatalogInfo>& catalogInfos,
+      velox::memory::MemoryPool* pool)
+      : SystemDataSourceBase(
+            outputType,
+            catalogsTableSchema(),
+            columnHandles,
+            pool),
+        catalogInfos_(catalogInfos) {}
+
+ protected:
+  velox::RowVectorPtr buildResults() override;
+
+ private:
+  const std::vector<CatalogInfo> catalogInfos_;
 };
 
 } // namespace
@@ -857,17 +888,60 @@ velox::RowVectorPtr FunctionsDataSource::buildResults() {
       pool_, outputType_, nullptr, numRows, std::move(children));
 }
 
+// ===================== CatalogsDataSource =====================
+
+velox::RowVectorPtr CatalogsDataSource::buildResults() {
+  if (catalogInfos_.empty()) {
+    return velox::RowVector::createEmpty(outputType_, pool_);
+  }
+
+  VELOX_CHECK_LE(
+      catalogInfos_.size(),
+      static_cast<size_t>(std::numeric_limits<velox::vector_size_t>::max()));
+  const auto numRows = static_cast<velox::vector_size_t>(catalogInfos_.size());
+  const auto& fullSchema = catalogsTableSchema();
+  auto getValue = [&](velox::vector_size_t row,
+                      CatalogColumn column) -> const std::string& {
+    switch (column) {
+      case CatalogColumn::kCatalogName:
+        return catalogInfos_[row].catalogName;
+      case CatalogColumn::kConnectorId:
+        return catalogInfos_[row].catalogName;
+      case CatalogColumn::kConnectorName:
+        return catalogInfos_[row].connectorName;
+    }
+    VELOX_UNREACHABLE();
+  };
+
+  std::vector<velox::VectorPtr> children;
+  children.reserve(outputType_->size());
+  for (auto fullIdx : outputColumnMappings_) {
+    const auto column = static_cast<CatalogColumn>(fullIdx);
+    auto vector =
+        createFlat<velox::StringView>(fullSchema->childAt(fullIdx), numRows);
+    for (velox::vector_size_t row = 0; row < numRows; ++row) {
+      vector->set(row, velox::StringView(getValue(row, column)));
+    }
+    children.push_back(std::move(vector));
+  }
+
+  return std::make_shared<velox::RowVector>(
+      pool_, outputType_, nullptr, numRows, std::move(children));
+}
+
 // ===================== SystemConnector =====================
 
 SystemConnector::SystemConnector(
     const std::string& id,
     const QueryInfoProvider* queryInfoProvider,
     const SessionPropertiesProvider* sessionPropertiesProvider,
-    InformationSchema::TypeNameFormatter typeName)
+    InformationSchema::TypeNameFormatter typeName,
+    std::vector<CatalogInfo> catalogInfos)
     : Connector(id),
       queryInfoProvider_(queryInfoProvider),
       sessionPropertiesProvider_(sessionPropertiesProvider),
-      typeName_(std::move(typeName)) {
+      typeName_(std::move(typeName)),
+      catalogInfos_(std::move(catalogInfos)) {
   VELOX_CHECK(typeName_, "Type name formatter must be callable");
 }
 
@@ -883,6 +957,7 @@ std::unique_ptr<velox::connector::DataSource> SystemConnector::createDataSource(
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
     const velox::connector::ColumnHandleMap& columnHandles,
     velox::connector::ConnectorQueryCtx* connectorQueryCtx) {
+  VELOX_CHECK_NOT_NULL(connectorQueryCtx);
   if (auto infoSchemaHandle =
           std::dynamic_pointer_cast<const InformationSchemaTableHandle>(
               tableHandle)) {
@@ -909,6 +984,14 @@ std::unique_ptr<velox::connector::DataSource> SystemConnector::createDataSource(
   if (schemaTableName == kFunctionsTable) {
     return std::make_unique<FunctionsDataSource>(
         outputType, columnHandles, connectorQueryCtx->memoryPool());
+  }
+
+  if (schemaTableName == kCatalogsTable) {
+    return std::make_unique<CatalogsDataSource>(
+        outputType,
+        columnHandles,
+        catalogInfos_,
+        connectorQueryCtx->memoryPool());
   }
 
   if (schemaTableName == kQueriesTable) {
