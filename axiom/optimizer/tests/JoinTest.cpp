@@ -1071,8 +1071,8 @@ TEST_P(JoinTest, coalesceJoinKeyProjectionAlias) {
       "FROM t LEFT JOIN u ON a = b"
       ")";
 
-  // The join-key rewrite turns both references into a, leaving expression
-  // simplification to collapse the resulting coalesce(a, a).
+  // The join-key rewrite turns both references into a, coalesce(a, a) is then
+  // simplifed to a.
   AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
       planVelox(parseSelect(query, kTestConnectorId)).plan,
       matchScan("t")
@@ -1080,7 +1080,7 @@ TEST_P(JoinTest, coalesceJoinKeyProjectionAlias) {
           .hashJoinLeft(
               matchScan("u").shuffle({"b"}),
               {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
-          .project({"coalesce(a, a) as value"})
+          .project({"a as value"})
           .gather()
           .build());
 }

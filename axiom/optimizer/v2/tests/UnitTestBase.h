@@ -26,6 +26,8 @@
 #include "axiom/optimizer/v2/Builder.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/core/QueryCtx.h"
+#include "velox/expression/Expr.h"
 #include "velox/type/Type.h"
 
 namespace facebook::axiom::optimizer::v2::test {
@@ -33,8 +35,8 @@ namespace facebook::axiom::optimizer::v2::test {
 /// Base for unit tests that construct optimizer IR directly via
 /// `make<T>` / `Builder` rather than going through the full
 /// SQL/Logical Plan → translate → emit pipeline. Sets up the per-test
-/// `QueryGraphContext`, arena allocator, and Velox memory pool so
-/// `queryCtx()` is valid for the duration of the test.
+/// `QueryGraphContext`, arena allocator, Velox memory pool, and expression
+/// evaluator so `queryCtx()` is valid for the duration of the test.
 ///
 /// Use this for substrate-level tests (RelationSet, Relation,
 /// JoinHypergraph, NodePrinter, etc.). For tests that need a full
@@ -45,6 +47,9 @@ class UnitTestBase : public ::testing::Test {
     velox::memory::MemoryManager::testingSetInstance({});
     pool_ = velox::memory::memoryManager()->addLeafPool(
         ::testing::UnitTest::GetInstance()->current_test_info()->name());
+    veloxQueryCtx_ = velox::core::QueryCtx::create();
+    evaluator_ = std::make_unique<velox::exec::SimpleExpressionEvaluator>(
+        veloxQueryCtx_.get(), pool_.get());
     allocator_ = std::make_unique<velox::HashStringAllocator>(pool_.get());
     context_ = std::make_unique<optimizer::QueryGraphContext>(
         *allocator_, OptimizerOptions::kMaxPlanObjectsDefault);
@@ -57,6 +62,8 @@ class UnitTestBase : public ::testing::Test {
     optimizer::queryCtx() = nullptr;
     context_.reset();
     allocator_.reset();
+    evaluator_.reset();
+    veloxQueryCtx_.reset();
     pool_.reset();
   }
 
@@ -70,6 +77,10 @@ class UnitTestBase : public ::testing::Test {
   }
 
   std::shared_ptr<velox::memory::MemoryPool> pool_;
+  // Supplies query-scoped state to the expression evaluator.
+  std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx_;
+  // Evaluates expressions against `pool_` for the lifetime of each test.
+  std::unique_ptr<velox::exec::SimpleExpressionEvaluator> evaluator_;
   std::unique_ptr<velox::HashStringAllocator> allocator_;
   std::unique_ptr<optimizer::QueryGraphContext> context_;
   std::unique_ptr<Builder> builder_;

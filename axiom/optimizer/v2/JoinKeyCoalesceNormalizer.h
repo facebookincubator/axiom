@@ -18,6 +18,7 @@
 
 #include "axiom/optimizer/v2/Builder.h"
 #include "axiom/optimizer/v2/Node.h"
+#include "velox/core/ExpressionEvaluator.h"
 
 namespace facebook::axiom::optimizer::v2 {
 
@@ -50,8 +51,11 @@ namespace facebook::axiom::optimizer::v2 {
 class JoinKeyCoalesceNormalizer {
  public:
   /// Returns `root` with eligible coalesces replaced by their representative
-  /// join keys.
-  static NodeCP normalize(NodeCP root, Builder& builder);
+  /// join keys. `evaluator` backs expression simplification after replacement.
+  static NodeCP normalize(
+      NodeCP root,
+      Builder& builder,
+      velox::core::ExpressionEvaluator& evaluator);
 };
 
 } // namespace facebook::axiom::optimizer::v2

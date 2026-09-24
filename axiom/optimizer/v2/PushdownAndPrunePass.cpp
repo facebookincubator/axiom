@@ -2833,7 +2833,7 @@ NodeCP PushdownAndPrunePass::run(
     velox::core::ExpressionEvaluator& evaluator,
     const OptimizerSession& session,
     ConnectorPushdown connectorPushdown) {
-  root = JoinKeyCoalesceNormalizer::normalize(root, builder);
+  root = JoinKeyCoalesceNormalizer::normalize(root, builder, evaluator);
   Pushdown pass{builder, evaluator, session, connectorPushdown, outputColumns};
   PushdownContext context;
   context.required = PlanObjectSet::fromObjects(outputColumns);

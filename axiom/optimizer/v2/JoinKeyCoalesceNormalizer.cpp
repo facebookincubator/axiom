@@ -17,6 +17,7 @@
 #include "axiom/optimizer/v2/JoinKeyCoalesceNormalizer.h"
 
 #include "axiom/optimizer/v2/ExprFactory.h"
+#include "axiom/optimizer/v2/ExprSimplifier.h"
 #include "axiom/optimizer/v2/NodeRewriter.h"
 
 namespace facebook::axiom::optimizer::v2 {
@@ -35,8 +36,12 @@ struct CoalesceRewriteResult {
 // Synthesizes substitutions from each subtree and caches them by original node.
 class JoinKeyCoalesceRewriter : public NodeRewriter<CoalesceSubstitutions> {
  public:
-  explicit JoinKeyCoalesceRewriter(Builder& builder)
-      : NodeRewriter(builder), exprs_(builder) {}
+  JoinKeyCoalesceRewriter(
+      Builder& builder,
+      velox::core::ExpressionEvaluator& evaluator)
+      : NodeRewriter(builder),
+        exprs_(builder),
+        simplifier_(builder, evaluator) {}
 
   using NodeRewriter::rewrite;
 
@@ -112,6 +117,7 @@ class JoinKeyCoalesceRewriter : public NodeRewriter<CoalesceSubstitutions> {
       const PlanObjectSet& reboundColumns);
 
   ExprFactory exprs_;
+  ExprSimplifier simplifier_;
   folly::F14FastMap<NodeCP, CoalesceRewriteResult> rewrittenCache_;
 };
 
@@ -141,7 +147,7 @@ ExprCP JoinKeyCoalesceRewriter::replaceAll(
     if (replaced == expr) {
       return expr;
     }
-    expr = replaced;
+    expr = simplifier_.simplifyTree(replaced);
   }
 }
 
@@ -632,9 +638,13 @@ NodeCP JoinKeyCoalesceRewriter::rewriteFixedPoint(
 
 } // namespace
 
-NodeCP JoinKeyCoalesceNormalizer::normalize(NodeCP root, Builder& builder) {
+NodeCP JoinKeyCoalesceNormalizer::normalize(
+    NodeCP root,
+    Builder& builder,
+    velox::core::ExpressionEvaluator& evaluator) {
   CoalesceSubstitutions substitutions;
-  return JoinKeyCoalesceRewriter(builder).rewrite(root, substitutions);
+  return JoinKeyCoalesceRewriter(builder, evaluator)
+      .rewrite(root, substitutions);
 }
 
 } // namespace facebook::axiom::optimizer::v2

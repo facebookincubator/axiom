@@ -31,8 +31,6 @@
 #include "axiom/optimizer/v2/NodePrinter.h"
 #include "axiom/optimizer/v2/TranslatePass.h"
 #include "axiom/optimizer/v2/tests/UnitTestBase.h"
-#include "velox/core/QueryCtx.h"
-#include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 namespace facebook::axiom::optimizer::v2::test {
@@ -56,9 +54,6 @@ class NodePrinterTest : public UnitTestBase {
 
   void SetUp() override {
     UnitTestBase::SetUp();
-    veloxQueryCtx_ = velox::core::QueryCtx::create();
-    evaluator_ = std::make_unique<velox::exec::SimpleExpressionEvaluator>(
-        veloxQueryCtx_.get(), pool_.get());
     optimizer::OptimizerOptions options;
     options.recursionLimit = kMaxIterations;
     session_ = std::make_shared<optimizer::OptimizerSession>(
@@ -109,8 +104,6 @@ class NodePrinterTest : public UnitTestBase {
   }
 
   lp::PlanBuilder::Context context_;
-  std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx_;
-  std::unique_ptr<velox::exec::SimpleExpressionEvaluator> evaluator_;
   std::shared_ptr<optimizer::OptimizerSession> session_;
   std::unique_ptr<connector::SchemaResolver> schemaResolver_;
   std::unique_ptr<optimizer::Schema> schema_;
