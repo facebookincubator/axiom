@@ -126,6 +126,27 @@ bool hasRightProjectVariant(const JoinEdge& edge) {
   return !(edge.nullAware() && !edge.filter().empty());
 }
 
+// Returns the physical child's join keys whose partitioning survives the
+// join, or null when neither child's partitioning survives.
+const ExprVector* outputPartitionKeys(
+    velox::core::JoinType joinType,
+    bool reversedAnti,
+    const ExprVector& leftKeys,
+    const ExprVector& rightKeys) {
+  auto preserved = Join::preservedSides(joinType);
+  if (reversedAnti) {
+    VELOX_DCHECK_EQ(joinType, velox::core::JoinType::kAnti);
+    std::swap(preserved.left, preserved.right);
+  }
+  if (preserved.left) {
+    return &leftKeys;
+  }
+  if (preserved.right) {
+    return &rightKeys;
+  }
+  return nullptr;
+}
+
 // Caps DPhyp's connected-subgraph/complement enumeration. DPhyp is polynomial
 // in the number of csg/cmp pairs for sparse graphs but exponential for dense
 // ones (e.g. a same-key N-way join the transitive-equality closure turns into a
@@ -1018,8 +1039,8 @@ class Enumerator {
 
   // Adds join candidates that avoid shuffling the bucketed side(s): both sides
   // co-located when both are bucketed, or the unbucketed side repartitioned to
-  // the bucketed side's connector partitioning. The output is partitioned on
-  // the probe (left) keys with the preserved bucket type.
+  // the bucketed side's connector partitioning. The output keeps the selected
+  // preserved side's keys and the compatible bucket type.
   void addCoBucketedCandidate(
       MemoOpCP left,
       MemoOpCP right,
@@ -1040,9 +1061,13 @@ class Enumerator {
     const auto add = [&](MemoOpCP leftChild,
                          MemoOpCP rightChild,
                          const connector::PartitionType* outputType) {
-      Partitioning outputPartitioning =
-          Partitioning::globalHash(keysInCoverSchema(leftKeys, combined));
-      outputPartitioning.partitionType = outputType;
+      Partitioning outputPartitioning;
+      if (const auto* outputKeys = outputPartitionKeys(
+              joinType, reversedAnti, leftKeys, rightKeys)) {
+        outputPartitioning =
+            Partitioning::globalHash(keysInCoverSchema(*outputKeys, combined));
+        outputPartitioning.partitionType = outputType;
+      }
       addJoinCandidate(
           leftChild,
           rightChild,
@@ -1151,6 +1176,12 @@ class Enumerator {
       MemoOpCP rightPart =
           repartitioned(right->cover(), rightKeys, existenceOnRight);
       if (leftPart != nullptr && rightPart != nullptr) {
+        Partitioning outputPartitioning;
+        if (const auto* outputKeys = outputPartitionKeys(
+                joinType, reversedAnti, leftKeys, rightKeys)) {
+          outputPartitioning = Partitioning::globalHash(
+              keysInCoverSchema(*outputKeys, combined));
+        }
         addJoinCandidate(
             leftPart,
             rightPart,
@@ -1160,7 +1191,7 @@ class Enumerator {
             reversedAnti,
             keyEdges,
             filterEdges,
-            Partitioning::globalHash(keysInCoverSchema(leftKeys, combined)));
+            std::move(outputPartitioning));
       }
 
       // Skipped for null-aware anti/semi: a connector-bucketed existence side

@@ -963,23 +963,81 @@ TEST_P(JoinTest, coalesceJoinKeyInParentJoin) {
   testConnector_->addTable("u", ROW("b", BIGINT()));
   testConnector_->addTable("v", ROW("c", BIGINT()));
 
-  const auto query =
-      "SELECT c FROM ("
-      "t LEFT JOIN u ON a = b"
-      ") JOIN v ON coalesce(a, b) = c";
+  {
+    SCOPED_TRACE("Left join");
+    const auto query =
+        "SELECT c FROM ("
+        "t LEFT JOIN u ON a = b"
+        ") JOIN v ON coalesce(a, b) = c";
 
-  // The second join's coalesce key is rewritten to a and requires no shuffle
-  // on the left input.
+    // The second join's coalesce key is rewritten to a and requires no shuffle
+    // on the left input.
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(parseSelect(query, kTestConnectorId)).plan,
+        matchScan("t")
+            .shuffle({"a"})
+            .hashJoinLeft(
+                matchScan("u").shuffle({"b"}),
+                {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
+            .hashJoinInner(
+                matchScan("v").shuffle({"c"}),
+                {.keys = {{"a = c"}}, .outputColumnNames = {{"c"}}})
+            .gather()
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("Right join");
+    const auto query =
+        "SELECT b FROM ("
+        "t RIGHT JOIN u ON a = b"
+        ") LEFT JOIN v ON coalesce(a, b) = c";
+
+    // The parent join reuses the right join's partitioning on b.
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(parseSelect(query, kTestConnectorId)).plan,
+        matchScan("t")
+            .shuffle({"a"})
+            .hashJoinRight(
+                matchScan("u").shuffle({"b"}),
+                {.keys = {{"a = b"}}, .outputColumnNames = {{"b"}}})
+            .hashJoinLeft(
+                matchScan("v").shuffle({"c"}),
+                {.keys = {{"b = c"}}, .outputColumnNames = {{"b"}}})
+            .gather()
+            .build());
+  }
+}
+
+TEST_P(JoinTest, reversedAntiPartitioningInParentJoin) {
+  testConnector_->addTable("t", ROW("a", BIGINT()))
+      ->setStats(100, {{"a", {.numDistinct = 100}}});
+  testConnector_->addTable("u", ROW("b", BIGINT()))
+      ->setStats(10'000, {{"b", {.numDistinct = 10'000}}});
+  testConnector_->addTable("v", ROW("c", BIGINT()))
+      ->setStats(10'000, {{"c", {.numDistinct = 10'000}}});
+
+  const auto query =
+      "SELECT a FROM ("
+      "  SELECT a FROM t "
+      "  WHERE NOT EXISTS (SELECT 1 FROM u WHERE b = a)"
+      ") s LEFT JOIN v ON a = c";
+
+  // The parent join reuses the reversed anti join's partitioning on a.
   AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
       planVelox(parseSelect(query, kTestConnectorId)).plan,
-      matchScan("t")
-          .shuffle({"a"})
-          .hashJoinLeft(
-              matchScan("u").shuffle({"b"}),
-              {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
-          .hashJoinInner(
-              matchScan("v").shuffle({"c"}),
-              {.keys = {{"a = c"}}, .outputColumnNames = {{"c"}}})
+      matchScan("v")
+          .shuffle({"c"})
+          .hashJoinRight(
+              matchScan("u")
+                  .shuffle({"b"})
+                  .hashJoinRightSemiProject(
+                      matchScan("t").shuffle({"a"}),
+                      {.nullAware = false, .keys = {{"b = a"}}})
+                  .aliases({"a", "matched"})
+                  .filter("not(matched)")
+                  .project({"a"}),
+              {.keys = {{"c = a"}}, .outputColumnNames = {{"a"}}})
           .gather()
           .build());
 }

@@ -505,6 +505,13 @@ FROM ((VALUES (1), (2)) AS t(a)
   LEFT JOIN (VALUES (1)) AS u(b) ON a = b)
 RIGHT JOIN (VALUES (1), (3)) AS v(c) ON a = c
 ----
+-- A right join's preserved key is also the value of its coalesced join keys,
+-- including for rows unmatched on the left.
+SELECT coalesce(l.a, r.a), count(*)
+FROM (SELECT * FROM t WHERE a > 1) l
+RIGHT JOIN t r ON l.a = r.a
+GROUP BY coalesce(l.a, r.a)
+----
 -- A filter on a coalesced key is rewritten and pushed below the join.
 SELECT a
 FROM (VALUES (1), (2)) AS t(a)

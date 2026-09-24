@@ -252,7 +252,8 @@ TEST_P(AggregationTest, coalesceJoinKey) {
         "GROUP BY coalesce(a, b)",
         kTestConnectorId);
 
-    // Aggregation grouping key is rewritten to b.
+    // Aggregation grouping key is rewritten to b, whose partitioning is
+    // preserved by the right join.
     AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
         planVelox(logicalPlan).plan,
         matchScan("t")
@@ -262,10 +263,34 @@ TEST_P(AggregationTest, coalesceJoinKey) {
                 {.keys = {{"a = b"}}, .outputColumnNames = {{"b"}}})
             .project({"b as key"})
             .partialAggregation({"key"}, {"count(*) as count"})
-            .shuffle({"key"})
             .localPartition({"key"})
             .finalAggregation({"key"}, {"count(count) as count"})
             .project({"key as c", "count"})
+            .gather()
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("Right join null-padded key");
+    const auto logicalPlan = parseSelect(
+        "SELECT a, count(*) "
+        "FROM t RIGHT JOIN u ON a = b "
+        "GROUP BY a",
+        kTestConnectorId);
+
+    // A right join preserves partitioning on b, not the null-padded a, so
+    // grouping by a requires a remote shuffle.
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchScan("t")
+            .shuffle({"a"})
+            .hashJoinRight(
+                matchScan("u").shuffle({"b"}),
+                {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
+            .partialAggregation({"a"}, {"count(*) as count"})
+            .shuffle({"a"})
+            .localPartition({"a"})
+            .finalAggregation({"a"}, {"count(count) as count"})
             .gather()
             .build());
   }
@@ -447,6 +472,65 @@ TEST_P(AggregationTest, coalesceJoinKeyAliases) {
           .project({"key1 as c1", "key2 as c2", "sum"})
           .gather()
           .build());
+}
+
+TEST_P(AggregationTest, rightSemiJoinPartitioning) {
+  testConnector_->addTable("t", ROW({"a", "x"}, BIGINT()))
+      ->setStats(
+          100, {{"a", {.numDistinct = 100}}, {"x", {.numDistinct = 100}}});
+  testConnector_->addTable("u", ROW("b", BIGINT()))
+      ->setStats(10'000, {{"b", {.numDistinct = 10'000}}});
+
+  {
+    SCOPED_TRACE("Filter");
+    const auto logicalPlan = parseSelect(
+        "SELECT a, count(*) "
+        "FROM t "
+        "WHERE EXISTS (SELECT 1 FROM u WHERE b = a) "
+        "GROUP BY a",
+        kTestConnectorId);
+
+    // EXISTS lowers to a right semi filter that preserves its right input's
+    // partitioning, so the aggregation requires no remote shuffle.
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchScan("u")
+            .shuffle({"b"})
+            .hashJoinRightSemiFilter(
+                matchScan("t").shuffle({"a"}),
+                {.keys = {{"b = a"}}, .outputColumnNames = {{"a"}}})
+            .partialAggregation({"a"}, {"count(*) as count"})
+            .localPartition({"a"})
+            .finalAggregation({"a"}, {"count(count) as count"})
+            .gather()
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("Different grouping key");
+    const auto logicalPlan = parseSelect(
+        "SELECT x, count(*) "
+        "FROM t "
+        "WHERE EXISTS (SELECT 1 FROM u WHERE b = a) "
+        "GROUP BY x",
+        kTestConnectorId);
+
+    // The join's partitioning on a cannot satisfy aggregation on x, so a
+    // remote shuffle is required.
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchScan("u")
+            .shuffle({"b"})
+            .hashJoinRightSemiFilter(
+                matchScan("t").shuffle({"a"}),
+                {.keys = {{"b = a"}}, .outputColumnNames = {{"a", "x"}}})
+            .partialAggregation({"x"}, {"count(*) as count"})
+            .shuffle({"x"})
+            .localPartition({"x"})
+            .finalAggregation({"x"}, {"count(count) as count"})
+            .gather()
+            .build());
+  }
 }
 
 // Verifies that aggregation with ORDER BY keys always uses single-step

@@ -206,6 +206,32 @@ TEST_P(BucketedExecutionTest, join) {
           .build());
 }
 
+TEST_P(BucketedExecutionTest, joinAggregation) {
+  // Give the preserved t side fewer rows so it remains the physical build
+  // input. The aggregation reuses t.a's bucket partitioning.
+  addBucketedTable("t", {"a"}, 128, ROW("a", BIGINT()), 1'000);
+  addBucketedTable("u", {"b"}, 128, ROW("b", BIGINT()));
+  auto plan = planDistributed(parseSelect(
+      "SELECT coalesce(b, a) AS key, count(*) "
+      "FROM u RIGHT JOIN t ON b = a "
+      "GROUP BY coalesce(b, a)",
+      kTestConnectorId));
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      plan.plan,
+      matchScan("u")
+          .hashJoinRight(
+              matchScan("t"),
+              {.keys = {{"b = a"}}, .outputColumnNames = {{"a"}}})
+          .project({"a as key"})
+          .partialAggregation({"key"}, {"count(*) as count"})
+          .localPartition({"key"})
+          .finalAggregation({"key"}, {"count(count) as count"})
+          .project({"key", "count"})
+          .fragment({.width = 4, .bucketedScans = 2})
+          .gather()
+          .build());
+}
+
 TEST_P(BucketedExecutionTest, semijoin) {
   addBucketedTable("sj_orders", {"customer_id"}, 128);
   addBucketedTable(
