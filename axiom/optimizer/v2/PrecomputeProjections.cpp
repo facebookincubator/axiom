@@ -115,16 +115,12 @@ ExprCP PrecomputeProjections::toColumn(
   // projects, lifted here for an operator that reads the same value. Read that
   // column instead of computing it a second time.
   if (alias == nullptr && input_->is(NodeType::kProject)) {
-    const auto* project = input_->as<Project>();
-    for (size_t i = 0; i < project->exprs().size(); ++i) {
-      if (project->exprs()[i] == expr) {
-        ColumnCP column = project->outputColumns()[i];
-        if (!projectAllInputs_ && !seen_.contains(column)) {
-          addToProject(column, column);
-        }
-        seen_.emplace(expr, column);
-        return column;
+    if (ColumnCP column = input_->as<Project>()->columnFor(expr)) {
+      if (!projectAllInputs_ && !seen_.contains(column)) {
+        addToProject(column, column);
       }
+      seen_.emplace(expr, column);
+      return column;
     }
   }
 

@@ -291,6 +291,34 @@ void flattenAndConjuncts(
 // output column name to the Column that produces it.
 using Scope = folly::F14FastMap<std::string, ExprCP>;
 
+// Expressions a node needed as columns of its input, paired with the columns
+// computed for them.
+struct MaterializedKeys {
+  ExprVector exprs;
+  ExprVector columns;
+
+  // Records that 'column' was computed for 'expr'.
+  void add(ExprCP expr, ExprCP column) {
+    exprs.push_back(expr);
+    columns.push_back(column);
+  }
+};
+
+// Rebinds every name of 'scope' that resolves to one of 'keys' to the column
+// computed for it. Velox reads a sort or window key as a column, so the key is
+// computed below the node and passed through it; a name left on the expression
+// would have a consumer above compute the same value a second time.
+void bindToColumns(Scope& scope, const MaterializedKeys& keys) {
+  for (auto& [name, expr] : scope) {
+    for (size_t i = 0; i < keys.exprs.size(); ++i) {
+      if (expr == keys.exprs[i]) {
+        expr = keys.columns[i];
+        break;
+      }
+    }
+  }
+}
+
 // Populates 'scope' with one entry per field of 'rowType' pointing at the
 // matching Column in 'columns'. 'columns' must align 1:1 with 'rowType'.
 void populateScope(
@@ -556,11 +584,6 @@ class Translator {
   ColumnCP
   columnInScope(NodeCP* node, const Scope& scope, const std::string& name);
 
-  ExprCP materializeInto(
-      PrecomputeProjections& precompute,
-      ExprCP expr,
-      bool allowConstant = false);
-
   // Translates ordering keys, dropping any key that repeats an earlier one. A
   // repeated key cannot refine the order its first occurrence imposes, and
   // Velox rejects Sort/TopN nodes with duplicate keys.
@@ -646,12 +669,16 @@ class Translator {
   // own operator, so it cannot stay inside the expression that reads it.
   ExprCP liftInferenceCall(const Call* call, LiftTarget* liftTarget);
 
+  // Wraps 'input' in the `Window` nodes 'projectExprs' call for, binding each
+  // window function's name in 'windowScope' and reporting the keys it computed
+  // below them in 'keys'.
   NodeCP maybeWrapInWindow(
       NodeCP input,
       const Scope& inputScope,
       const std::vector<lp::ExprPtr>& projectExprs,
       const std::vector<std::string>& projectNames,
-      Scope& windowScope);
+      Scope& windowScope,
+      MaterializedKeys& keys);
   // `dedupAbove` says the caller dedups the result, which subsumes a nested
   // UNION's own dedup and so allows flattening such a leg.
   Translated buildUnionAll(
@@ -854,9 +881,6 @@ class Translator {
   Schema& schema_;
   const connector::SchemaResolver& schemaResolver_;
   bool connectorPushdownSupported_{false};
-  // Column materialized for an expression, consulted before materializing
-  // another.
-  folly::F14FastMap<ExprCP, ColumnCP> materialized_;
 
   Builder& builder_;
   ExprFactory exprFactory_;
@@ -1368,8 +1392,9 @@ Translated Translator::translateProject(
     keptNames.push_back(names[idx]);
   }
   Scope windowScope = input.scope;
+  MaterializedKeys windowKeys;
   NodeCP currentInput = maybeWrapInWindow(
-      input.node, input.scope, keptExprs, keptNames, windowScope);
+      input.node, input.scope, keptExprs, keptNames, windowScope, windowKeys);
 
   Scope newScope;
   for (size_t idx : keptIndices) {
@@ -1392,6 +1417,7 @@ Translated Translator::translateProject(
         ? materializeColumn(&currentInput, translatedExpr, name)
         : translatedExpr;
   }
+  bindToColumns(newScope, windowKeys);
 
   return {currentInput, std::move(newScope)};
 }
@@ -1551,7 +1577,8 @@ NodeCP Translator::maybeWrapInWindow(
     const Scope& inputScope,
     const std::vector<lp::ExprPtr>& projectExprs,
     const std::vector<std::string>& projectNames,
-    Scope& windowScope) {
+    Scope& windowScope,
+    MaterializedKeys& keys) {
   std::vector<size_t> windowIndices;
   for (size_t i = 0; i < projectExprs.size(); ++i) {
     if (projectExprs[i]->isWindow()) {
@@ -1651,11 +1678,15 @@ NodeCP Translator::maybeWrapInWindow(
     PrecomputeProjections precompute{current, builder_};
     ExprVector partitionKeys = spec.partitionKeys;
     for (ExprCP& key : partitionKeys) {
-      key = materializeInto(precompute, key);
+      ExprCP expr = key;
+      key = precompute.toColumn(key);
+      keys.add(expr, key);
     }
     ExprVector orderKeys = spec.orderKeys;
     for (ExprCP& key : orderKeys) {
-      key = materializeInto(precompute, key);
+      ExprCP expr = key;
+      key = precompute.toColumn(key);
+      keys.add(expr, key);
     }
 
     // A ROWS bound is an offset in rows, which Velox reads as a constant. A
@@ -1663,7 +1694,7 @@ NodeCP Translator::maybeWrapInWindow(
     // column, so that stays a column even when it folds to a literal.
     auto liftBound = [&](ExprCP value, bool allowConstant) -> ExprCP {
       return value != nullptr
-          ? materializeInto(precompute, value, allowConstant)
+          ? precompute.toColumn(value, /*alias=*/nullptr, allowConstant)
           : nullptr;
     };
 
@@ -1772,14 +1803,13 @@ std::pair<ExprVector, OrderTypeVector> Translator::dedupOrdering(
   return {std::move(orderKeys), std::move(orderTypes)};
 }
 
-// Materializes 'expr' through 'precompute' and records the column, so a later
-// boundary reading the same expression reuses it rather than recomputing.
-// Returns 'expr' as a column of '*node', extending '*node' with a `Project`
-// computing it when it is not already a column. A column already materialized
-// for the same expression is reused while it is still in '*node''s output, so
-// a second boundary reading that expression does not compute it again.
+// Returns 'expr' as a column of '*node': 'expr' itself when it is a column, the
+// column '*node' already computes it into when '*node' is a `Project`, or else
+// a new column of a `Project` built over '*node'. Only '*node' is consulted: a
+// column computed further down can read differently here, because a
+// null-extending node in between sets it to NULL on the rows it pads.
 // Successive calls share one `Project`, which `makeProject` folds as each is
-// built over the last.
+// built over the last, so a later call finds what an earlier one computed.
 ColumnCP Translator::materializeColumn(
     NodeCP* node,
     ExprCP expr,
@@ -1787,11 +1817,9 @@ ColumnCP Translator::materializeColumn(
   if (expr->is(PlanType::kColumnExpr)) {
     return expr->as<Column>();
   }
-  if (auto it = materialized_.find(expr); it != materialized_.end()) {
-    const auto& outputs = (*node)->outputColumns();
-    if (std::find(outputs.begin(), outputs.end(), it->second) !=
-        outputs.end()) {
-      return it->second;
+  if ((*node)->is(NodeType::kProject)) {
+    if (ColumnCP computed = (*node)->as<Project>()->columnFor(expr)) {
+      return computed;
     }
   }
   PrecomputeProjections precompute{*node, builder_};
@@ -1799,7 +1827,6 @@ ColumnCP Translator::materializeColumn(
   auto* column = columnForSymbol(outName, expr->value());
   precompute.toColumn(expr, column);
   *node = std::move(precompute).node();
-  materialized_.insert_or_assign(expr, column);
   return column;
 }
 
@@ -1857,17 +1884,6 @@ ColumnCP Translator::columnInScope(
   return materializeColumn(node, it->second, name);
 }
 
-ExprCP Translator::materializeInto(
-    PrecomputeProjections& precompute,
-    ExprCP expr,
-    bool allowConstant) {
-  ExprCP result = precompute.toColumn(expr, /*alias=*/nullptr, allowConstant);
-  if (result != expr && result->is(PlanType::kColumnExpr)) {
-    materialized_.insert_or_assign(expr, result->as<Column>());
-  }
-  return result;
-}
-
 Translated Translator::translateSort(
     const lp::SortNode& sort,
     const LpNameSet& required) {
@@ -1889,14 +1905,14 @@ Translated Translator::translateSort(
 
   // Velox reads a sort key as a column of the input.
   PrecomputeProjections precompute{currentInput, builder_};
-  for (ExprCP& key : orderKeys) {
-    key = materializeInto(precompute, key);
+  MaterializedKeys keys;
+  for (ExprCP key : orderKeys) {
+    keys.add(key, precompute.toColumn(key));
   }
 
   SortCP sortNode = builder_.make<Sort>(
-      {std::move(precompute).node(),
-       std::move(orderKeys),
-       std::move(orderTypes)});
+      {std::move(precompute).node(), keys.columns, std::move(orderTypes)});
+  bindToColumns(input.scope, keys);
   return {sortNode, std::move(input.scope)};
 }
 

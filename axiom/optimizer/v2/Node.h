@@ -412,6 +412,9 @@ class Project : public Node {
   /// semantics.
   bool isDeterministic() const;
 
+  /// Returns the output column 'expr' computes, or nullptr if no output does.
+  ColumnCP columnFor(ExprCP expr) const;
+
   std::span<const NodeCP> inputs() const override {
     return {&input_, 1};
   }
