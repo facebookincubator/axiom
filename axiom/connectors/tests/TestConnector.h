@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 #include <functional>
@@ -200,6 +201,9 @@ class TestTableLayout : public TableLayout {
 /// a table the metastore has no statistics for. setStats() is then rejected.
 class TestTable : public Table {
  public:
+  /// Names the hidden stable row identifier exposed for DELETE planning.
+  static constexpr std::string_view kRowId = "$row_id";
+
   TestTable(
       SchemaTableName name,
       const velox::RowTypePtr& schema,
@@ -224,6 +228,19 @@ class TestTable : public Table {
     return data_;
   }
 
+  /// Returns row identifiers aligned with entries and rows in data(). Empty
+  /// when the table does not declare kRowId.
+  const std::vector<velox::VectorPtr>& rowIds() const {
+    return rowIds_;
+  }
+
+  /// Returns the hidden row identifier used by row-level DELETE.
+  std::vector<std::string> rowIdColumns(WriteKind kind) const override {
+    return kind == WriteKind::kDelete && findColumn(kRowId) != nullptr
+        ? std::vector<std::string>{std::string{kRowId}}
+        : std::vector<std::string>{};
+  }
+
   /// Bucket id of the i-th entry in 'data'. Empty for unbucketed tables.
   const std::vector<int32_t>& dataBucketIds() const {
     return dataBucketIds_;
@@ -244,6 +261,9 @@ class TestTable : public Table {
   void addData(
       const velox::RowVectorPtr& data,
       bool collectColumnStatistics = true);
+
+  /// Removes rows whose stable identifiers appear in 'rowIds'.
+  int64_t deleteRows(const folly::F14FastSet<int64_t>& rowIds);
 
   TestTableLayout* mutableLayout() {
     return exportedLayout_.get();
@@ -280,10 +300,16 @@ class TestTable : public Table {
   std::unique_ptr<TestTableLayout> exportedLayout_;
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::vector<velox::RowVectorPtr> data_;
+  // Stores row identifiers positionally aligned with data_.
+  std::vector<velox::VectorPtr> rowIds_;
   std::vector<int32_t> dataBucketIds_;
+  // Assigns each appended row an identifier that survives later deletions.
+  int64_t nextRowId_{0};
   uint64_t numRows_{0};
   uint64_t dataRows_{0};
   bool collectStatistics_{true};
+  // Preserves the per-write choice to skip column statistics.
+  bool hasColumnStatistics_{false};
   std::vector<ColumnTracker> columnTrackers_;
 
   std::optional<TestBucketSpec> bucketSpec_;
@@ -539,6 +565,51 @@ class TestInsertTableHandle
   const SchemaTableName tableName_;
 };
 
+/// Carries the row identifiers collected by TestDataSink for one DELETE.
+class TestDeleteTableHandle
+    : public velox::connector::ConnectorInsertTableHandle {
+ public:
+  explicit TestDeleteTableHandle(SchemaTableName tableName)
+      : tableName_(std::move(tableName)) {}
+
+  const SchemaTableName& tableName() const {
+    return tableName_;
+  }
+
+  /// Adds the non-null BIGINT row identifiers a writer received.
+  void addDeletedRowIds(const velox::RowVectorPtr& rows) const;
+
+  folly::F14FastSet<int64_t> deletedRowIds() const {
+    return deletedRowIds_.copy();
+  }
+
+  std::string toString() const override {
+    return tableName_.toString();
+  }
+
+ private:
+  const SchemaTableName tableName_;
+  // Accepts concurrent writer drivers and deduplicates repeated row IDs.
+  mutable folly::Synchronized<folly::F14FastSet<int64_t>> deletedRowIds_;
+};
+
+/// Describes the row identity TestConnector passes to a DELETE writer.
+class TestDeleteWriteHandle : public ConnectorWriteHandle {
+ public:
+  explicit TestDeleteWriteHandle(
+      std::shared_ptr<TestDeleteTableHandle> veloxHandle,
+      velox::RowTypePtr resultType)
+      : ConnectorWriteHandle(std::move(veloxHandle), std::move(resultType)),
+        deleteInput_({}, {}, {}) {}
+
+  const DeleteInput* deleteInput() const override {
+    return &deleteInput_;
+  }
+
+ private:
+  const DeleteInput deleteInput_;
+};
+
 /// Provides a metadata-owned session property for TestConnector.
 class TestMetadataConfigProvider : public velox::config::ConfigProvider {
  public:
@@ -674,7 +745,13 @@ class TestConnectorMetadata : public ConnectorMetadata {
       const ConnectorSessionPtr& session,
       const TablePtr& table,
       WriteKind kind,
+      bool explain) override;
+
+  ConnectorWriteHandlePtr beginDelete(
+      const ConnectorSessionPtr& session,
+      const TablePtr& table,
       const velox::connector::ConnectorTableHandlePtr& scanHandle,
+      bool scanIdentifiesDeletedRows,
       bool explain) override;
 
   RowsFuture finishWrite(
@@ -683,6 +760,11 @@ class TestConnectorMetadata : public ConnectorMetadata {
       const std::vector<velox::RowVectorPtr>& writeResults,
       velox::RowVectorPtr groupingKeys,
       std::vector<std::vector<ColumnStatistics>> groupStats) override;
+
+  RowsFuture finishDelete(
+      const ConnectorSessionPtr& session,
+      const ConnectorWriteHandlePtr& handle,
+      const std::vector<velox::RowVectorPtr>& writeResults) override;
 
   bool dropTable(
       const ConnectorSessionPtr& session,
@@ -820,7 +902,8 @@ class TestDataSource : public velox::connector::DataSource {
   velox::memory::MemoryPool* pool_;
   std::shared_ptr<TestConnectorSplit> split_;
   std::vector<velox::RowVectorPtr> data_;
-  std::vector<velox::column_index_t> outputMappings_;
+  std::vector<std::optional<velox::column_index_t>> outputMappings_;
+  std::vector<velox::VectorPtr> rowIds_;
   uint64_t completedBytes_{0};
   uint64_t completedRows_{0};
   bool more_{false};
@@ -876,9 +959,8 @@ class TestConfigProvider : public velox::config::ConfigProvider {
 /// Contains an embedded TestConnectorMetadata to which TestTables are
 /// added at runtime using the addTable API. Data is appended to a
 /// TestTable via the appendData method. createDataSource creates a
-/// TestDataSource object which returns appended data. createDataSink
-/// creates a TestDataSink object which appends additional data to
-/// the associated table.
+/// TestDataSource object which returns appended data. createDataSink creates a
+/// TestDataSink object which appends data or records rows for deletion.
 class TestConnector : public velox::connector::Connector {
  public:
   static constexpr std::string_view kDefaultSchema =
@@ -1064,19 +1146,21 @@ class TestConnectorFactory : public velox::connector::ConnectorFactory {
       folly::Executor* cpuExecutor = nullptr) override;
 };
 
-/// Data appended to the sink is copied to the internal data vector
-/// contained in the corresponding table.
+/// Appends inserted rows to a TestTable or collects row identifiers for a
+/// row-level DELETE.
 class TestDataSink : public velox::connector::DataSink {
  public:
-  TestDataSink(std::shared_ptr<Table> table, bool collectStats)
-      : collectColumnStatistics_(collectStats) {
+  TestDataSink(
+      std::shared_ptr<Table> table,
+      std::shared_ptr<const TestDeleteTableHandle> deleteHandle,
+      bool collectStats)
+      : deleteHandle_(std::move(deleteHandle)),
+        collectColumnStatistics_(collectStats) {
     table_ = std::dynamic_pointer_cast<TestTable>(table);
     VELOX_CHECK(table_, "table {} not a TestTable", table->name().toString());
   }
 
-  /// Data is copied to the memory pool internal to the
-  /// corresponding Table object and appended to the Table's
-  /// data buffer.
+  /// Appends inserted data or records the identifiers of deleted rows.
   void appendData(velox::RowVectorPtr vector) override;
 
   /// Data append is completed inside appendData, so the finish()
@@ -1097,6 +1181,8 @@ class TestDataSink : public velox::connector::DataSink {
 
  private:
   std::shared_ptr<TestTable> table_;
+  // Selects row-id collection when this sink belongs to a DELETE.
+  std::shared_ptr<const TestDeleteTableHandle> deleteHandle_;
   bool collectColumnStatistics_;
 };
 

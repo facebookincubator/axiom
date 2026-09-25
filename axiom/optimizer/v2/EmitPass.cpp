@@ -17,6 +17,7 @@
 #include "axiom/optimizer/v2/EmitPass.h"
 #include "axiom/optimizer/v2/ScanHandle.h"
 
+#include <folly/CppAttributes.h>
 #include <folly/ScopeGuard.h>
 #include <folly/container/F14Set.h>
 #include <limits>
@@ -482,10 +483,22 @@ class Emitter {
   velox::core::PlanNodePtr emitFixedPoint(const FixedPoint& fixedPoint);
   velox::core::PlanNodePtr emitWorkingTable(const WorkingTable& workingTable);
 
-  // Returns the handle of the scan whose rows 'tableWrite' deletes. Fails if
-  // that scan's handle does not describe exactly the rows to remove.
+  // Returns the marked target scan, including below an engine-side filter.
+  NodeCP deletedRowsScan(const TableWrite& tableWrite);
+
+  // Returns the target scan handle after connector pushdown.
   velox::connector::ConnectorTableHandlePtr deletedRowsHandle(
       const TableWrite& tableWrite);
+
+  // Builds the writer's input for a delete that records the rows it removes:
+  // the columns Table::rowIdColumns() names, then 'deleteInput's shuffle keys,
+  // shuffled so the rows of one group reach one writer and sorted within the
+  // group. Appends to 'columnNames' what the connector calls each column.
+  velox::core::PlanNodePtr emitDeleteInput(
+      const TableWrite& tableWrite,
+      const connector::DeleteInput& deleteInput,
+      bool distributed,
+      std::vector<std::string>& columnNames);
 
   // Builds the producer-side `PartitionedOutput` capping 'sourcePlan' for
   // 'partitioning'. A connector-bucketed partitioning that scales to a single
@@ -2197,20 +2210,57 @@ velox::core::PlanNodePtr Emitter::emitExchange(const Exchange& exchange) {
   return consumer;
 }
 
+namespace {
+
+// Rejects fields outside the row identity after rewriting input names.
+void checkReadsOnlyRowIdColumns(
+    const velox::core::TypedExprPtr& expr,
+    const std::vector<std::string>& names,
+    size_t numRowIdColumns,
+    const std::string& keyName) {
+  if (expr->isFieldAccessKind()) {
+    const auto* field = expr->asUnchecked<velox::core::FieldAccessTypedExpr>();
+    if (field->isInputColumn()) {
+      VELOX_CHECK(
+          std::find(
+              names.begin(), names.begin() + numRowIdColumns, field->name()) !=
+              names.begin() + numRowIdColumns,
+          "A delete shuffle key reads a column outside the row identity: {}, {}",
+          keyName,
+          field->name());
+    }
+  }
+  for (const auto& input : expr->inputs()) {
+    checkReadsOnlyRowIdColumns(input, names, numRowIdColumns, keyName);
+  }
+}
+
+// The logical-plan mark distinguishes the target from a same-table subquery
+// after decorrelation.
+NodeCP FOLLY_NULLABLE findDeleteTargetScan(NodeCP node) {
+  if (node->is(NodeType::kScan) &&
+      node->as<Scan>()->baseTable()->isDeleteTarget) {
+    return node;
+  }
+  for (const auto input : node->inputs()) {
+    if (const auto found = findDeleteTargetScan(input)) {
+      return found;
+    }
+  }
+  return nullptr;
+}
+
+} // namespace
+
+NodeCP Emitter::deletedRowsScan(const TableWrite& tableWrite) {
+  const auto marked = findDeleteTargetScan(tableWrite.input());
+  VELOX_CHECK_NOT_NULL(marked, "A delete reached emit with no marked scan");
+  return marked;
+}
+
 velox::connector::ConnectorTableHandlePtr Emitter::deletedRowsHandle(
     const TableWrite& tableWrite) {
-  // The scan handle is the only description of the rows to remove, so the rows
-  // reaching the write must be the rows the scan reads.
-  NodeCP input = tableWrite.input();
-  if (input->is(NodeType::kFilter) &&
-      input->as<Filter>()->input()->is(NodeType::kScan)) {
-    VELOX_USER_FAIL(
-        "Connector cannot apply this WHERE clause for DELETE: {}",
-        input->as<Filter>()->predicates().front()->toString());
-  }
-  VELOX_USER_CHECK(
-      input->is(NodeType::kScan),
-      "DELETE requires a scan with an optional filter");
+  NodeCP input = deletedRowsScan(tableWrite);
 
   const auto& scan = *input->as<Scan>();
   // The connector reads the filters as constraints on the table it is about to
@@ -2226,6 +2276,149 @@ velox::connector::ConnectorTableHandlePtr Emitter::deletedRowsHandle(
   return scan.scanHandle()->tableHandle;
 }
 
+velox::core::PlanNodePtr Emitter::emitDeleteInput(
+    const TableWrite& tableWrite,
+    const connector::DeleteInput& deleteInput,
+    bool distributed,
+    std::vector<std::string>& columnNames) {
+  const auto& table = *tableWrite.table();
+
+  // The scan reads the row identity under symbols of the plan's choosing, while
+  // the connector's expressions name the table's columns. Both lists below are
+  // in the order the writer receives the columns.
+  std::vector<std::string> names;
+  std::vector<velox::core::TypedExprPtr> values;
+  std::unordered_map<std::string, velox::core::TypedExprPtr> planNames;
+  for (const auto column : tableWrite.rowIdColumns()) {
+    names.push_back(column->outputName());
+    auto value = std::make_shared<velox::core::FieldAccessTypedExpr>(
+        toTypePtr(column->value().type), names.back());
+    values.emplace_back(value);
+    planNames.emplace(column->name(), std::move(value));
+    columnNames.emplace_back(column->name());
+  }
+  const auto numRowIdColumns = names.size();
+
+  std::vector<velox::core::FieldAccessTypedExprPtr> shuffleKeys;
+  shuffleKeys.reserve(deleteInput.shuffleKeys().size());
+  for (const auto& key : deleteInput.shuffleKeys()) {
+    const auto existing =
+        std::find(columnNames.begin(), columnNames.end(), key.name);
+    if (existing != columnNames.end()) {
+      VELOX_CHECK(
+          key.expr->isFieldAccessKind() &&
+              key.expr->asUnchecked<velox::core::FieldAccessTypedExpr>()
+                      ->name() == key.name,
+          "A delete shuffle key naming a column the writer receives must read "
+          "that column and nothing else: {}",
+          key.name);
+      const auto index = existing - columnNames.begin();
+      shuffleKeys.emplace_back(
+          std::make_shared<velox::core::FieldAccessTypedExpr>(
+              values.at(index)->type(), names.at(index)));
+      continue;
+    }
+
+    names.push_back(key.name);
+    values.push_back(key.expr->rewriteInputNames(planNames));
+    checkReadsOnlyRowIdColumns(values.back(), names, numRowIdColumns, key.name);
+    shuffleKeys.emplace_back(
+        std::make_shared<velox::core::FieldAccessTypedExpr>(
+            values.back()->type(), key.name));
+    columnNames.push_back(key.name);
+  }
+
+  // Each connector-defined group must reach one writer across workers and
+  // local drivers.
+  ExecutableFragment source;
+  velox::core::PlanNodePtr sourcePlan;
+  if (distributed) {
+    source = newFragment();
+    decideFragmentType(
+        tableWrite.input(),
+        options_.maxRemotePartitions,
+        hashPartitionCount(),
+        source);
+    sourcePlan = emitChildFragment(tableWrite.input(), source);
+  } else {
+    sourcePlan = emit(tableWrite.input());
+  }
+  for (size_t i = 0; i < numRowIdColumns; ++i) {
+    VELOX_USER_CHECK(
+        sourcePlan->outputType()->containsChild(names[i]),
+        "Cannot plan a row-level DELETE: the input does not produce a "
+        "column identifying the rows to remove: {}, {}",
+        table.name().toString(),
+        columnNames[i]);
+  }
+
+  sourcePlan = std::make_shared<velox::core::ProjectNode>(
+      nextId(), std::move(names), std::move(values), std::move(sourcePlan));
+  const auto outputType = sourcePlan->outputType();
+
+  velox::core::PlanNodePtr input;
+  if (distributed) {
+    const auto numPartitions = hashPartitionCount();
+    const auto& serdeKind = chooseExchangeSerdeKind(*outputType);
+    source.fragment.planNode =
+        std::make_shared<velox::core::PartitionedOutputNode>(
+            nextId(),
+            velox::core::PartitionedOutputNode::Kind::kPartitioned,
+            std::vector<velox::core::TypedExprPtr>{
+                shuffleKeys.begin(), shuffleKeys.end()},
+            numPartitions,
+            /*replicateNullsAndAny=*/false,
+            makeHashPartitionSpec(outputType, shuffleKeys),
+            outputType,
+            serdeKind,
+            std::move(sourcePlan));
+    input = std::make_shared<velox::core::ExchangeNode>(
+        nextId(), outputType, serdeKind);
+    currentFragment_->inputStages.emplace_back(input->id(), source.fragmentId);
+    stages_.push_back(std::move(source));
+    currentFragment_->type = FragmentType::kFixed;
+    currentFragment_->numRemotePartitions = numPartitions;
+  } else {
+    input = std::move(sourcePlan);
+  }
+
+  if (options_.maxLocalPartitions > 1) {
+    input = addLocalPartition(std::move(input), shuffleKeys);
+  }
+
+  if (deleteInput.sortKeys().empty()) {
+    return input;
+  }
+
+  std::vector<velox::core::FieldAccessTypedExprPtr> sortKeys;
+  std::vector<velox::core::SortOrder> sortOrders;
+  sortKeys.reserve(deleteInput.sortKeys().size());
+  sortOrders.reserve(deleteInput.sortOrders().size());
+  for (size_t i = 0; i < deleteInput.sortKeys().size(); ++i) {
+    const auto& column = deleteInput.sortKeys().at(i);
+    // Resolve the connector's sort-key name to the writer input's plan symbol.
+    const auto it = std::find(columnNames.begin(), columnNames.end(), column);
+    VELOX_CHECK(
+        it != columnNames.end(),
+        "Delete sort key is not a column the writer receives: {}",
+        column);
+    const auto idx =
+        static_cast<velox::column_index_t>(it - columnNames.begin());
+    sortKeys.push_back(
+        std::make_shared<velox::core::FieldAccessTypedExpr>(
+            outputType->childAt(idx), outputType->nameOf(idx)));
+    sortOrders.emplace_back(
+        deleteInput.sortOrders().at(i).isAscending,
+        deleteInput.sortOrders().at(i).isNullsFirst);
+  }
+  return std::make_shared<velox::core::OrderByNode>(
+      nextId(),
+      std::move(sortKeys),
+      std::move(sortOrders),
+      /*isPartial=*/false,
+      std::move(input));
+}
+
 velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
   const auto& table = *tableWrite.table();
   auto* layout = table.layouts().front();
@@ -2234,22 +2427,42 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
   auto connectorSession = session_.context()->sessionFor(connectorId);
 
   const bool isDelete = tableWrite.kind() == connector::WriteKind::kDelete;
-  auto handle = metadata->beginWrite(
-      connectorSession,
-      table.shared_from_this(),
-      tableWrite.kind(),
-      isDelete ? deletedRowsHandle(tableWrite) : nullptr,
-      session_.options().explain);
+  const bool scanIdentifiesDeletedRows =
+      tableWrite.input()->is(NodeType::kScan);
+  auto handle = isDelete ? metadata->beginDelete(
+                               connectorSession,
+                               table.shared_from_this(),
+                               deletedRowsHandle(tableWrite),
+                               scanIdentifiesDeletedRows,
+                               session_.options().explain)
+                         : metadata->beginWrite(
+                               connectorSession,
+                               table.shared_from_this(),
+                               tableWrite.kind(),
+                               session_.options().explain);
 
-  if (isDelete) {
-    if (handle->veloxHandle() != nullptr) {
-      VELOX_NYI(
-          "Row-level delete is not supported: {}", table.name().toString());
+  // A metadata DELETE is safe only when the scan handle identifies every row
+  // to remove.
+  if (isDelete && handle->deleteInput() == nullptr) {
+    if (!scanIdentifiesDeletedRows) {
+      VELOX_USER_FAIL(
+          "DELETE selects its rows through another operator, which the "
+          "connector cannot yet turn into a row level delete. Only a predicate "
+          "the connector absorbs into the scan is supported.");
     }
+
+    VELOX_USER_CHECK_NULL(
+        handle->veloxHandle(),
+        "Row-level delete is not supported: {}",
+        table.name().toString());
 
     VELOX_CHECK(!finishWrite_, "Only one TableWrite per query is supported");
     finishWrite_ = FinishWrite{
-        metadata, connectorId, std::move(connectorSession), std::move(handle)};
+        metadata,
+        connectorId,
+        std::move(connectorSession),
+        std::move(handle),
+        /*isDelete=*/true};
     return nullptr;
   }
 
@@ -2273,14 +2486,22 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
     currentFragment_ = &writerFragment;
   }
 
-  velox::core::PlanNodePtr input = emit(tableWrite.input());
+  std::vector<std::string> columnNames;
+  velox::core::PlanNodePtr input;
+  if (isDelete) {
+    input = emitDeleteInput(
+        tableWrite, *handle->deleteInput(), distributed, columnNames);
+  } else {
+    input = emit(tableWrite.input());
+    columnNames = table.type()->names();
+  }
 
   // A bucketed write reads a bucket exchange (physical planning inserts one
   // unless the source is already co-bucketed), and its writer task count must
   // equal that exchange's partition count: one task per bucket group, each
   // producing one bucket file. The fragment runs no grouped scan, so this is a
   // task count, not grouped execution.
-  if (distributed && !layout->partitionColumns().empty() &&
+  if (!isDelete && distributed && !layout->partitionColumns().empty() &&
       tableWrite.input()->is(NodeType::kExchange)) {
     const auto& exchangeType =
         tableWrite.input()->physicalProperties().globalPartition.partitionType;
@@ -2298,7 +2519,8 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
   // already confined each partition to one worker; this is the within-worker
   // split (only meaningful at maxLocalPartitions > 1).
   const auto& partitionColumns = layout->partitionColumns();
-  if (options_.maxLocalPartitions > 1 && !partitionColumns.empty()) {
+  if (!isDelete && options_.maxLocalPartitions > 1 &&
+      !partitionColumns.empty()) {
     input = std::make_shared<velox::core::LocalPartitionNode>(
         nextId(),
         velox::core::LocalPartitionNode::Type::kRepartition,
@@ -2345,13 +2567,14 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
       connectorId,
       std::move(connectorSession),
       std::move(handle),
+      isDelete,
       statsBuilder.statsMapping()};
 
   velox::core::PlanNodePtr result =
       std::make_shared<velox::core::TableWriteNode>(
           nextId(),
           inputType,
-          table.type()->names(),
+          std::move(columnNames),
           std::move(writeStatsSpec),
           std::move(insertTableHandle),
           /*hasPartitioningScheme=*/false,

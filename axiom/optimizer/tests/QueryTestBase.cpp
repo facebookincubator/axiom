@@ -107,6 +107,7 @@ void QueryTestBase::TearDown() {
     gSuiteHistory = std::move(history_);
   }
   queryCtx_.reset();
+  connectorContext_.reset();
   optimizerPool_.reset();
   connector::ConnectorMetadataRegistry::global().erase(kTestConnectorId);
   velox::connector::unregisterConnector(kTestConnectorId);
@@ -178,10 +179,20 @@ TestResult QueryTestBase::runVelox(const core::PlanNodePtr& plan) {
   return runFragmentedPlan(planAndStats);
 }
 
+const connector::ConnectorContextPtr& QueryTestBase::getConnectorContext() {
+  if (connectorContext_ == nullptr) {
+    connectorContext_ = std::make_shared<connector::ConnectorContext>(
+        getQueryCtx()->queryId(),
+        "test",
+        connectorSessionProperties_,
+        connectorStatWriterProvider());
+  }
+  return connectorContext_;
+}
+
 TestResult QueryTestBase::runFragmentedPlan(
     optimizer::PlanAndStats& planAndStats) {
-  auto runnerSession = makeRunnerSession(
-      connector::makeTestContext(getQueryCtx()->queryId()), statsWriter_);
+  auto runnerSession = makeRunnerSession(getConnectorContext(), statsWriter_);
   auto runner = std::make_shared<runner::LocalRunner>(
       std::move(runnerSession),
       planAndStats.plan,
@@ -193,6 +204,7 @@ TestResult QueryTestBase::runFragmentedPlan(
 
   SCOPE_EXIT {
     queryCtx_.reset();
+    connectorContext_.reset();
   };
 
   TestResult result;
@@ -232,11 +244,7 @@ PlanCost QueryTestBase::optimizationCost(
       queryCtx.get(), optimizerPool_.get());
   connector::SchemaResolver schemaResolver{
       connector::ConnectorMetadataRegistry::global()};
-  auto connectorContext = std::make_shared<connector::ConnectorContext>(
-      queryCtx->queryId(),
-      "test",
-      connectorSessionProperties_,
-      connectorStatWriterProvider());
+  const auto& connectorContext = getConnectorContext();
   Optimization opt(
       makeOptimizerSession(
           connectorContext,
@@ -273,11 +281,7 @@ void QueryTestBase::verifyOptimization(
       connector::ConnectorMetadataRegistry::global()};
   VeloxHistory history;
 
-  auto connectorContext = std::make_shared<connector::ConnectorContext>(
-      veloxQueryCtx->queryId(),
-      "test",
-      connectorSessionProperties_,
-      connectorStatWriterProvider());
+  const auto& connectorContext = getConnectorContext();
   Optimization optimization(
       makeOptimizerSession(
           connectorContext,
@@ -386,11 +390,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
     }
   };
 
-  auto connectorContext = std::make_shared<connector::ConnectorContext>(
-      queryCtx->queryId(),
-      "test",
-      connectorSessionProperties_,
-      connectorStatWriterProvider());
+  const auto& connectorContext = getConnectorContext();
   auto session = makeOptimizerSession(
       connectorContext,
       optimizerOptions.value_or(optimizerOptions_),

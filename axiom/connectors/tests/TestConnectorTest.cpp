@@ -104,6 +104,8 @@ TEST_F(TestConnectorTest, table) {
   EXPECT_EQ(table->columnMap().size(), 2);
   EXPECT_TRUE(table->columnMap().contains("a"));
   EXPECT_TRUE(table->columnMap().contains("b"));
+  EXPECT_FALSE(table->columnMap().contains(TestTable::kRowId));
+  EXPECT_TRUE(table->rowIdColumns(WriteKind::kDelete).empty());
 
   auto vector = makeRowVector(
       {makeFlatVector<int>({0, 1, 2}),
@@ -120,7 +122,15 @@ TEST_F(TestConnectorTest, table) {
   table = metadata_->findTable({kDefaultSchema, "noschema"});
   EXPECT_NE(table, nullptr);
   EXPECT_EQ(table->numRows(), 0);
-  EXPECT_EQ(table->columnMap().size(), 0);
+  EXPECT_TRUE(table->columnMap().empty());
+
+  connector_->addTable(
+      "row_id_table", schema, ROW(std::string{TestTable::kRowId}, BIGINT()));
+  table = metadata_->findTable({kDefaultSchema, "row_id_table"});
+  EXPECT_TRUE(table->columnMap().at(TestTable::kRowId)->hidden());
+  EXPECT_EQ(
+      table->rowIdColumns(WriteKind::kDelete),
+      std::vector<std::string>{std::string{TestTable::kRowId}});
 
   table = metadata_->findTable({kDefaultSchema, "notable"});
   EXPECT_EQ(table, nullptr);

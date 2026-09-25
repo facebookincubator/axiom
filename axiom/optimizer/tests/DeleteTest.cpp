@@ -59,6 +59,37 @@ class DeleteTest : public test::HiveQueriesTestBase {
     SCOPED_TRACE(sql);
     return runVelox(parseSelect(sql)).getOnlyResult<int64_t>();
   }
+
+  lp::LogicalPlanNodePtr parseTestDelete(std::string_view sql) {
+    ::axiom::sql::presto::PrestoParser parser(
+        kTestConnectorId,
+        kDefaultSchema,
+        std::make_shared<::axiom::sql::presto::ParserSession>(
+            connector::makeTestContext("test"),
+            connector::makeTestStatWriter(),
+            connector::Properties{},
+            ::axiom::sql::presto::ParserOptions{}));
+    auto statement = parser.parse(sql);
+    VELOX_CHECK(statement->isDelete());
+    return statement->as<::axiom::sql::presto::DeleteStatement>()->plan();
+  }
+
+  int64_t runTestCount(std::string_view fromClause) {
+    return runVelox(parseSelect(
+                        fmt::format("SELECT count(*) {}", fromClause),
+                        kTestConnectorId))
+        .getOnlyResult<int64_t>();
+  }
+
+  void addTestRows(std::string_view tableName) {
+    auto table = testConnector_->addTable(
+        std::string{tableName},
+        ROW({"id", "value"}, BIGINT()),
+        ROW(std::string{connector::TestTable::kRowId}, BIGINT()));
+    table->addData(makeRowVector(
+        {makeFlatVector<int64_t>({0, 1, 2, 3}),
+         makeFlatVector<int64_t>({10, 20, 30, 40})}));
+  }
 };
 
 // Deletes against one table partitioned by two columns: a predicate on both
@@ -148,16 +179,55 @@ TEST_F(DeleteTest, unpartitionedTable) {
   EXPECT_EQ(0, runCount("FROM test"));
 }
 
-// $row_id resolves, so a row-level delete parses. The optimizer rejects it:
-// it supports only deletes the connector can carry out as a metadata change.
-TEST_F(DeleteTest, rowLevelDelete) {
+// A delete whose rows come from a subquery over the same table selects rows
+// inside a partition, which a connector that removes them by dropping whole
+// partitions cannot carry out.
+TEST_F(DeleteTest, subqueryWithoutRowLevelDelete) {
   const auto plan = parseDelete(
       "DELETE FROM nation WHERE \"$row_id\" IN "
       "(SELECT \"$row_id\" FROM nation WHERE n_regionkey = 1)");
   ASSERT_NE(plan, nullptr);
 
   VELOX_ASSERT_USER_THROW(
-      planVelox(plan), "DELETE requires a scan with an optional filter");
+      planVelox(plan), "DELETE requires row-level support from the connector");
+}
+
+TEST_F(DeleteTest, unabsorbedFilter) {
+  addTestRows("rows");
+  auto plan = planVelox(
+      parseTestDelete("DELETE FROM rows WHERE value >= 30"),
+      {.maxRemotePartitions = 1, .maxLocalPartitions = 1});
+
+  ASSERT_EQ(plan.plan->fragments().size(), 1);
+  AXIOM_ASSERT_PLAN(
+      plan.plan->fragments().front().fragment.planNode,
+      matchScan("rows").filter().project().tableWrite().build());
+  EXPECT_EQ(runFragmentedPlan(plan).getOnlyResult<int64_t>(), 2);
+  EXPECT_EQ(runTestCount("FROM rows"), 2);
+  EXPECT_EQ(runTestCount("FROM rows WHERE value >= 30"), 0);
+}
+
+TEST_F(DeleteTest, rowIdSubquery) {
+  addTestRows("rows");
+  auto plan = planVelox(
+      parseTestDelete(
+          "DELETE FROM rows WHERE \"$row_id\" IN "
+          "(SELECT \"$row_id\" FROM rows WHERE id IN (1, 3))"),
+      {.maxRemotePartitions = 1, .maxLocalPartitions = 1});
+
+  ASSERT_EQ(plan.plan->fragments().size(), 1);
+  AXIOM_ASSERT_PLAN(
+      plan.plan->fragments().front().fragment.planNode,
+      matchScan("rows")
+          .hashJoin(
+              matchScan("rows").filter().project(),
+              velox::core::JoinType::kLeftSemiFilter)
+          .project()
+          .tableWrite()
+          .build());
+  EXPECT_EQ(runFragmentedPlan(plan).getOnlyResult<int64_t>(), 2);
+  EXPECT_EQ(runTestCount("FROM rows"), 2);
+  EXPECT_EQ(runTestCount("FROM rows WHERE id IN (1, 3)"), 0);
 }
 
 } // namespace

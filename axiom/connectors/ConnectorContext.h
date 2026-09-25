@@ -25,6 +25,7 @@
 #include <folly/container/F14Map.h>
 #include <folly/synchronization/CallOnce.h>
 
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/ConnectorSession.h"
 
 namespace facebook::axiom::connector {
@@ -38,11 +39,11 @@ class ConnectorContext;
 using ConnectorContextPtr = std::shared_ptr<ConnectorContext>;
 
 /// A per-query factory and cache for `ConnectorSession`, parameterized by a
-/// properties map and a writer provider. `sessionFor()` slices the properties
-/// by connector id, asks the provider for that id's writer, and builds the
-/// session once. The application makes one when a query begins, drops it when
-/// the query is finished with, and gives every component session of that query
-/// the same one.
+/// properties map, writer provider, and metadata registry. `sessionFor()`
+/// slices the properties by connector id and builds the session once from the
+/// metadata visible to this query. The application makes one when a query
+/// begins, drops it when the query is finished with, and gives every component
+/// session of that query the same one.
 ///
 /// A component is handed its property slice and writer directly
 /// (`BaseSession(context, stats.writerFor(kOptimizer), properties)`) while a
@@ -51,20 +52,35 @@ using ConnectorContextPtr = std::shared_ptr<ConnectorContext>;
 ///
 /// Example:
 ///   auto context = std::make_shared<ConnectorContext>(
-///       queryId, user, connectorProperties, statWriterProvider);
+///       queryId,
+///       user,
+///       connectorProperties,
+///       statWriterProvider,
+///       metadataRegistry);
 ///   metadata->beginWrite(context->sessionFor(connectorId), ...);
 ///
 /// Invariants:
 ///   - `statWriterProvider` is non-empty.
+///   - `metadataRegistry` is non-null and lives as long as this context.
 ///   - One session per connector id, and the same one for the life of this
 ///     context.
 class ConnectorContext {
  public:
+  /// Creates a query scope over the global metadata registry.
   ConnectorContext(
       std::string queryId,
       std::string user,
       ConnectorProperties properties,
       StatWriterProvider statWriterProvider);
+
+  /// Uses 'metadataRegistry' for connector-specific query state.
+  ConnectorContext(
+      std::string queryId,
+      std::string user,
+      ConnectorProperties properties,
+      StatWriterProvider statWriterProvider,
+      std::shared_ptr<const ConnectorMetadataRegistry::Registry>
+          metadataRegistry);
 
   ConnectorContext(const ConnectorContext&) = delete;
   ConnectorContext& operator=(const ConnectorContext&) = delete;
@@ -88,6 +104,11 @@ class ConnectorContext {
   /// writer provider is called at most once per successful build; a throw from
   /// the build runs it again, and the writer it returns is shared by every
   /// thread that connector runs on.
+  ///
+  /// Asks this query's metadata registry for the state that connector keeps,
+  /// so this runs connector code and throws what it throws. If nothing is
+  /// registered under the id when the session is first asked for, that session
+  /// goes without state for the life of this context.
   ConnectorSessionPtr sessionFor(std::string_view connectorId);
 
   /// Returns a provider that records nothing.
@@ -106,6 +127,8 @@ class ConnectorContext {
   const std::string user_;
   const ConnectorProperties properties_;
   const StatWriterProvider statWriterProvider_;
+  const std::shared_ptr<const ConnectorMetadataRegistry::Registry>
+      metadataRegistry_;
   // The lock guards the map alone; a session is built under its entry's flag.
   folly::Synchronized<folly::F14FastMap<std::string, std::shared_ptr<Entry>>>
       sessions_;

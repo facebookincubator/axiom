@@ -2340,12 +2340,34 @@ TableWrite::TableWrite(Key key)
       input_(key.input),
       table_(key.table),
       kind_(key.kind),
-      columnExprs_(std::move(key.columnExprs)) {
+      columnExprs_(std::move(key.columnExprs)),
+      rowIdColumns_(std::move(key.rowIdColumns)) {
   VELOX_CHECK_NOT_NULL(input_);
   VELOX_CHECK_NOT_NULL(table_);
   if (kind_ == connector::WriteKind::kDelete) {
     VELOX_CHECK(columnExprs_.empty(), "Delete writes no columns");
+    const auto expectedRowIdColumns =
+        table_->rowIdColumns(connector::WriteKind::kDelete);
+    VELOX_CHECK_EQ(
+        rowIdColumns_.size(),
+        expectedRowIdColumns.size(),
+        "A delete carries the row identity its table names");
+    for (size_t i = 0; i < rowIdColumns_.size(); ++i) {
+      VELOX_CHECK_EQ(
+          rowIdColumns_[i]->name(),
+          expectedRowIdColumns[i],
+          "A delete carries its table's row identity in order");
+      VELOX_CHECK(
+          std::find(
+              input_->outputColumns().begin(),
+              input_->outputColumns().end(),
+              rowIdColumns_[i]) != input_->outputColumns().end(),
+          "A delete's input does not produce row identity column: {}",
+          expectedRowIdColumns[i]);
+    }
   } else {
+    VELOX_CHECK(
+        rowIdColumns_.empty(), "Only a delete identifies the rows it writes");
     VELOX_CHECK(
         !columnExprs_.empty(), "TableWrite must write at least one column");
     VELOX_CHECK_EQ(columnExprs_.size(), table_->type()->size());
@@ -2367,12 +2389,17 @@ size_t TableWrite::KeyHash::operator()(const TableWrite* node) const {
       node->input(),
       node->table(),
       static_cast<uint8_t>(node->kind()),
-      node->columnExprs());
+      node->columnExprs(),
+      node->rowIdColumns());
 }
 
 size_t TableWrite::KeyHash::operator()(const Key& key) const {
   return hashOf(
-      key.input, key.table, static_cast<uint8_t>(key.kind), key.columnExprs);
+      key.input,
+      key.table,
+      static_cast<uint8_t>(key.kind),
+      key.columnExprs,
+      key.rowIdColumns);
 }
 
 bool TableWrite::KeyEq::operator()(
@@ -2380,13 +2407,15 @@ bool TableWrite::KeyEq::operator()(
     const TableWrite* right) const {
   return left->input() == right->input() && left->table() == right->table() &&
       left->kind() == right->kind() &&
-      left->columnExprs() == right->columnExprs();
+      left->columnExprs() == right->columnExprs() &&
+      left->rowIdColumns() == right->rowIdColumns();
 }
 
 bool TableWrite::KeyEq::operator()(const Key& key, const TableWrite* node)
     const {
   return key.input == node->input() && key.table == node->table() &&
-      key.kind == node->kind() && key.columnExprs == node->columnExprs();
+      key.kind == node->kind() && key.columnExprs == node->columnExprs() &&
+      key.rowIdColumns == node->rowIdColumns();
 }
 
 bool TableWrite::KeyEq::operator()(const TableWrite* node, const Key& key)

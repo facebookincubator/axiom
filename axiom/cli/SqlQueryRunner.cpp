@@ -431,7 +431,6 @@ connector::TablePtr SqlQueryRunner::createTable(
         session,
         table,
         connector::WriteKind::kCreate,
-        /*scanHandle=*/nullptr,
         /*explain=*/false);
     // TODO: Make the commit timeout configurable (e.g. via a DdlOptions).
     constexpr std::chrono::seconds kCommitTimeout{60};

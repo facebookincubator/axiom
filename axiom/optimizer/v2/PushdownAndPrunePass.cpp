@@ -2467,21 +2467,25 @@ class Pushdown : public NodeRewriter<PushdownContext> {
   }
 
   // A write is the plan root: nothing consumes its row-count output, so the
-  // only demand on its input is the columns the write's value expressions read.
-  // Recurse with exactly those required, or the input scan gets pruned to
-  // nothing. There is no pending predicate to route — a root carries none.
+  // only demand on its input is what the write itself reads. Recurse with
+  // exactly that required, or the input scan gets pruned to nothing. There is
+  // no pending predicate to route — a root carries none.
   NodeCP rewriteTableWrite(const TableWrite* node, PushdownContext& context)
       override {
     VELOX_DCHECK(context.pending.empty());
     PushdownContext child;
     child.required.unionColumns(node->columnExprs());
+    // A delete evaluates no value expressions, so what identifies a row is its
+    // whole demand.
+    for (const auto column : node->rowIdColumns()) {
+      child.required.add(column);
+    }
+    const bool isDelete = node->kind() == connector::WriteKind::kDelete;
     child.requiredAbove = child.required;
     child.nonNullColumns = context.nonNullColumns;
-    // A delete reads no column values: the connector's handle says which rows
-    // go. An insert writes its input columns, so only a delete can take a
-    // wider input.
-    child.consumerDropsExtraColumns =
-        node->kind() == connector::WriteKind::kDelete;
+    // An insert writes its input columns, so only a delete can take a wider
+    // input than it writes.
+    child.consumerDropsExtraColumns = isDelete;
     return NodeRewriter::rewriteTableWrite(node, child);
   }
 

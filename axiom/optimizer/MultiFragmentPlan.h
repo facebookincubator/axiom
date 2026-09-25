@@ -92,6 +92,7 @@ class FinishWrite {
       std::string connectorId,
       connector::ConnectorSessionPtr session,
       connector::ConnectorWriteHandlePtr handle,
+      bool isDelete,
       WriteStatsMapping statsMapping = {});
 
   /// Best-effort abort if not already committed or aborted.
@@ -118,6 +119,8 @@ class FinishWrite {
   std::string connectorId_;
   connector::ConnectorSessionPtr session_;
   connector::ConnectorWriteHandlePtr handle_;
+  // Selects the connector lifecycle used to commit the handle.
+  bool isDelete_{false};
   WriteStatsMapping statsMapping_;
 };
 

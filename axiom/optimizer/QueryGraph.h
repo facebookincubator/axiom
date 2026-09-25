@@ -1164,6 +1164,11 @@ struct BaseTable : public TableObject {
 
   SchemaTableCP schemaTable{nullptr};
 
+  /// True for the table a DELETE removes rows from. A query may read that
+  /// table more than once -- the rows to delete are often selected by a
+  /// subquery over it -- and only this one drives the delete.
+  bool isDeleteTarget{false};
+
   /// Top level conjuncts on single columns and literals, column to the left.
   ExprVector columnFilters;
 

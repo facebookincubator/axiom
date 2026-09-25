@@ -2084,6 +2084,12 @@ class TableWrite : public Node {
     /// Each is a column of `input`, which produces exactly these, in order.
     /// Empty for a delete, which writes no columns.
     ExprVector columnExprs;
+
+    /// The columns identifying the rows a delete removes, in the order
+    /// `Table::rowIdColumns()` names them. A delete evaluates no value
+    /// expressions, so these are the whole of what it reads. Empty for every
+    /// other write kind.
+    ColumnVector rowIdColumns;
   };
 
   /// Transparent hasher for interning `TableWrite`s by identity.
@@ -2119,6 +2125,13 @@ class TableWrite : public Node {
     return columnExprs_;
   }
 
+  /// The columns a delete reads to identify the rows it removes, in the order
+  /// `Table::rowIdColumns()` names them. Resolved while the scan producing
+  /// them is translated.
+  const ColumnVector& rowIdColumns() const {
+    return rowIdColumns_;
+  }
+
   std::span<const NodeCP> inputs() const override {
     return {&input_, 1};
   }
@@ -2131,6 +2144,7 @@ class TableWrite : public Node {
   const connector::Table* const table_;
   const connector::WriteKind kind_;
   const ExprVector columnExprs_;
+  const ColumnVector rowIdColumns_;
 };
 
 using TableWriteCP = const TableWrite*;

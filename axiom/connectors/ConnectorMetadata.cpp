@@ -99,6 +99,24 @@ const auto& writeKindNames() {
 
 AXIOM_DEFINE_ENUM_NAME(WriteKind, writeKindNames);
 
+DeleteInput::DeleteInput(
+    std::vector<Column> shuffleKeys,
+    std::vector<std::string> sortKeys,
+    std::vector<SortOrder> sortOrders)
+    : shuffleKeys_{std::move(shuffleKeys)},
+      sortKeys_{std::move(sortKeys)},
+      sortOrders_{std::move(sortOrders)} {
+  VELOX_CHECK_EQ(
+      sortKeys_.size(),
+      sortOrders_.size(),
+      "Delete sort keys and sort orders must be one-to-one");
+  for (const auto& key : shuffleKeys_) {
+    VELOX_CHECK(!key.name.empty(), "Delete shuffle key requires a name");
+    VELOX_CHECK_NOT_NULL(
+        key.expr, "Delete shuffle key requires an expression: {}", key.name);
+  }
+}
+
 void MetadataCountGroup::checkConsistency() const {
   VELOX_CHECK_GE(numRows, 0, "Row count must be non-negative");
   for (const auto nulls : numNulls) {
