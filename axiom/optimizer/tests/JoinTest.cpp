@@ -909,6 +909,31 @@ TEST_P(JoinTest, rightJoin) {
   }
 }
 
+TEST_P(JoinTest, rightJoinPartitioning) {
+  addTableWithStats("t", {"a"}, 10'000);
+  addTableWithStats("u", {"b"}, 100);
+  addTableWithStats("v", {"c", "d"}, 10);
+  optimizerOptions_.broadcastSizeLimit = 1;
+
+  const auto logicalPlan = parseSelect(
+      "SELECT * "
+      "FROM t RIGHT JOIN u ON a = b "
+      "LEFT JOIN v ON b = c AND (a IS NULL OR a < d)",
+      kTestConnectorId);
+
+  // The parent join consumes the right join's preserved-key partitioning.
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(logicalPlan).plan,
+      matchScan("t")
+          .shuffle({"a"})
+          .hashJoinRight(matchScan("u").shuffle({"b"}), {.keys = {{"a = b"}}})
+          .hashJoinLeft(
+              matchScan("v").shuffle({"c"}),
+              {.keys = {{"b = c"}}, .filter = "is_null(a) OR a < d"})
+          .gather()
+          .build());
+}
+
 TEST_P(JoinTest, crossThenLeft) {
   testConnector_->addTable("t", ROW({"t0", "t1"}, INTEGER()));
   testConnector_->addTable("u", ROW({"u0", "u1"}, BIGINT()));

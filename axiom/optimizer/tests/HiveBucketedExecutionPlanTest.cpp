@@ -193,6 +193,52 @@ TEST_P(HiveBucketedExecutionTest, join) {
           .build());
 }
 
+TEST_P(HiveBucketedExecutionTest, rightJoinPartitioning) {
+  createBucketedTable(
+      "left_table",
+      16,
+      {"left_key"},
+      "SELECT c_custkey, c_nationkey AS left_key FROM customer");
+  createBucketedTable(
+      "right_table",
+      16,
+      {"right_key"},
+      "SELECT DISTINCT c_nationkey AS right_key FROM customer");
+  createBucketedTable(
+      "parent_table",
+      16,
+      {"parent_key"},
+      "SELECT DISTINCT c_nationkey AS parent_key, "
+      "  c_nationkey + 1 AS parent_value FROM customer");
+
+  const auto logicalPlan = parseSelect(
+      "SELECT right_key, count(*) "
+      "FROM left_table RIGHT JOIN right_table "
+      "  ON left_key = right_key "
+      "LEFT JOIN parent_table "
+      "  ON right_key = parent_key "
+      "  AND (left_key IS NULL OR left_key < parent_value) "
+      "GROUP BY right_key");
+
+  // Both joins and the aggregation reuse the compatible bucket partitioning.
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planDistributed(logicalPlan).plan,
+      matchHiveScan("left_table")
+          .hashJoinRight(
+              matchHiveScan("right_table"),
+              {.keys = {{"left_key = right_key"}}})
+          .hashJoinLeft(
+              matchHiveScan("parent_table"),
+              {.keys = {{"right_key = parent_key"}},
+               .filter = "is_null(left_key) OR left_key < parent_value"})
+          .partialAggregation({"right_key"}, {"count(*) as count"})
+          .localPartition({"right_key"})
+          .finalAggregation({"right_key"}, {"count(count) as count"})
+          .fragment({.width = 4, .bucketedScans = 3})
+          .gather()
+          .build());
+}
+
 TEST_P(HiveBucketedExecutionTest, semijoin) {
   createBucketedTable(
       "t", 16, {"c_nationkey"}, "SELECT c_custkey, c_nationkey FROM customer");
