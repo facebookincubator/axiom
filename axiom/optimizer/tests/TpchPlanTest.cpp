@@ -38,6 +38,8 @@ class TpchPlanTest : public test::QueryTestBase {
   static constexpr double kScaleFactor = 1.0;
 
   void SetUp() override {
+    // v2's TPC-H plans are asserted in optimizer/v2/tests/TpchPlanTest.cpp.
+    useV2_ = false;
     QueryTestBase::SetUp();
     // Pin TPC-H golden plans to exhaustive branch-and-bound.
     // TODO: Drop this override and have greedy match B&B at the default

@@ -120,6 +120,8 @@ class SubfieldTest : public HiveQueriesTestBase,
     optimizerOptions_ = OptimizerOptions{};
     optimizerOptions_.traceFlags = FLAGS_optimizer_trace;
 
+    // `pushdownSubfields` and `mapAsStruct` are v1-only options.
+    useV2_ = GetParam() == 4;
     switch (GetParam()) {
       case 1:
         optimizerOptions_.pushdownSubfields = false;
@@ -133,8 +135,6 @@ class SubfieldTest : public HiveQueriesTestBase,
             "float_features", "id_list_features", "id_score_list_features"};
         break;
       case 4:
-        // `pushdownSubfields` and `mapAsStruct` are v1-only options.
-        useV2_ = true;
         break;
       default:
         FAIL();

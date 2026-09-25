@@ -51,6 +51,8 @@ int32_t countNodes(const optimizer::PlanAndStats& plan) {
 class IndexLookupJoinTest : public QueryTestBase {
  protected:
   void SetUp() override {
+    // TODO: Run under v2 once it plans index lookup joins.
+    useV2_ = false;
     QueryTestBase::SetUp();
     testConnector_->addTable("probe", ROW({"a", "b"}, BIGINT()));
     testConnector_->metadata()->addLookupTable(
