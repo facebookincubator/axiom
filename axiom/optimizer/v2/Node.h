@@ -1305,6 +1305,22 @@ class Join : public Node {
   /// did not have.
   static PreservedSides preservedSides(velox::core::JoinType joinType);
 
+  /// Returns a join's output partition keys. A join keeps a preserved side's
+  /// partitioning when every output row carries that side's column values
+  /// unchanged. When both sides qualify (an inner join), uses the left; when
+  /// neither qualifies (a full join), returns `std::nullopt`.
+  ///
+  /// If every source key is still an output column, returns the source keys.
+  /// Otherwise only an inner join can recover a dropped key: an expression
+  /// remains valid when all its columns survive, and a dropped column key can
+  /// be replaced by a surviving member of its equality class. Other join types
+  /// return `std::nullopt` once a source key cannot be expressed on the output.
+  static std::optional<ExprVector> outputPartitionKeys(
+      velox::core::JoinType joinType,
+      const ExprVector& leftPartitionKeys,
+      const ExprVector& rightPartitionKeys,
+      const PlanObjectSet& outputColumns);
+
   /// Returns the BOOLEAN mark this semi-project join adds to the preserved
   /// side's columns, which is its last output column. Only semi-project joins
   /// project one.

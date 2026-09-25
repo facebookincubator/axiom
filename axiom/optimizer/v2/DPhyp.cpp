@@ -1010,6 +1010,28 @@ class Enumerator {
     return result;
   }
 
+  // Returns the output partitioning of the physical join DPhyp will emit.
+  Partitioning joinOutputPartitioning(
+      MemoOpCP left,
+      MemoOpCP right,
+      velox::core::JoinType joinType,
+      bool reversedAnti,
+      RelationSet combined,
+      const connector::PartitionType* partitionType) {
+    auto outputKeys = Join::outputPartitionKeys(
+        JoinOp::emittedJoinType(joinType, reversedAnti),
+        left->outputPartitioning().keys,
+        right->outputPartitioning().keys,
+        graph_.coverOutputColumns(combined));
+    if (!outputKeys.has_value()) {
+      return {};
+    }
+
+    Partitioning output = Partitioning::globalHash(*outputKeys);
+    output.partitionType = partitionType;
+    return output;
+  }
+
   // Builds, costs, and (if costable) inserts one join candidate with the given
   // output partitioning. The children are already distribution-enforced.
   void addJoinCandidate(
@@ -1046,8 +1068,8 @@ class Enumerator {
 
   // Adds join candidates that avoid shuffling the bucketed side(s): both sides
   // co-located when both are bucketed, or the unbucketed side repartitioned to
-  // the bucketed side's connector partitioning. The output is partitioned on
-  // the probe (left) keys with the preserved bucket type.
+  // the bucketed side's connector partitioning. When the join has a preserved
+  // side, the output keeps that side's keys and the compatible bucket type.
   void addCoBucketedCandidate(
       MemoOpCP left,
       MemoOpCP right,
@@ -1068,9 +1090,6 @@ class Enumerator {
     const auto add = [&](MemoOpCP leftChild,
                          MemoOpCP rightChild,
                          const connector::PartitionType* outputType) {
-      Partitioning outputPartitioning =
-          Partitioning::globalHash(keysInCoverSchema(leftKeys, combined));
-      outputPartitioning.partitionType = outputType;
       addJoinCandidate(
           leftChild,
           rightChild,
@@ -1080,7 +1099,13 @@ class Enumerator {
           reversedAnti,
           keyEdges,
           filterEdges,
-          std::move(outputPartitioning));
+          joinOutputPartitioning(
+              leftChild,
+              rightChild,
+              joinType,
+              reversedAnti,
+              combined,
+              outputType));
     };
 
     if (leftBucketed != nullptr && rightBucketed != nullptr) {
@@ -1163,12 +1188,12 @@ class Enumerator {
 
     const auto [leftKeys, rightKeys] = orientedKeys(left, edgeIndex, keyEdges);
     if (!leftKeys.empty()) {
-      // Partition strategy: co-partition both inputs on the join keys; the
-      // output is partitioned on the keys for same-key reuse above. A
-      // null-aware anti/semi join (NOT IN / IN) needs the existence side's
-      // null keys on every probe partition; the existence side is the edge's
-      // right operand, which may be either physical child depending on
-      // orientation.
+      // Partition strategy: co-partition both inputs on the join keys. A join
+      // with a preserved side exposes that side's keys for same-key reuse
+      // above; a full join exposes no key partitioning. A null-aware anti/semi
+      // join (NOT IN / IN) needs the existence side's null keys on every probe
+      // partition; the existence side is the edge's right operand, which may
+      // be either physical child depending on orientation.
       const auto& edge = graph_.edges()[edgeIndex];
       const bool existenceOnLeft =
           edge.nullAware() && edge.rightEligibility().isSubset(left->cover());
@@ -1188,7 +1213,13 @@ class Enumerator {
             reversedAnti,
             keyEdges,
             filterEdges,
-            Partitioning::globalHash(keysInCoverSchema(leftKeys, combined)));
+            joinOutputPartitioning(
+                leftPart,
+                rightPart,
+                joinType,
+                reversedAnti,
+                combined,
+                /*partitionType=*/nullptr));
       }
 
       // Skipped for null-aware anti/semi: a connector-bucketed existence side

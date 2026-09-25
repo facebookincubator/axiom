@@ -594,10 +594,10 @@ Emitted buildReversedAnti(
   auto materialized = merge(probe.materialized, build.materialized);
   const auto substitution =
       merge(collapsedColumns(mergedChildReps(join, state)), materialized);
-  NodeCP rightSemiProject = PhysicalJoin::makeJoin(
+  NodeCP marked = PhysicalJoin::makeJoin(
       {probe.node,
        build.node,
-       velox::core::JoinType::kRightSemiProject,
+       JoinOp::emittedJoinType(join->joinType, join->reversedAnti),
        rewrite(ExprVector{edge.rightKeys()}, substitution, state),
        rewrite(ExprVector{edge.leftKeys()}, substitution, state),
        rewrite(ExprVector{edge.filter()}, substitution, state),
@@ -608,7 +608,7 @@ Emitted buildReversedAnti(
       state.simplifier);
 
   NodeCP filtered = state.builder.make<Filter>(
-      {rightSemiProject, ExprVector{state.exprs.makeNot(mark)}});
+      {marked, ExprVector{state.exprs.makeNot(mark)}});
 
   // Project away the mark, restoring the antijoin's output schema. Every
   // entry is a pass-through of the preserved-side column.

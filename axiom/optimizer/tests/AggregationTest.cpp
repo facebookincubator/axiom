@@ -383,6 +383,151 @@ TEST_P(AggregationTest, repartitionForAggPartitionSubset) {
   }
 }
 
+TEST_P(AggregationTest, rightSemiJoinPartitioning) {
+  testConnector_->addTable("t", ROW("a", BIGINT()))
+      ->setStats(100, {{"a", {.numDistinct = 100}}});
+  testConnector_->addTable("u", ROW("b", BIGINT()))
+      ->setStats(10'000, {{"b", {.numDistinct = 10'000}}});
+
+  const auto logicalPlan = parseSelect(
+      "SELECT a, count(*) "
+      "FROM t "
+      "WHERE EXISTS (SELECT 1 FROM u WHERE b = a) "
+      "GROUP BY a",
+      kTestConnectorId);
+
+  // EXISTS lowers to a right semi filter that preserves its right input's
+  // partitioning, so the aggregation requires no remote shuffle.
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(logicalPlan).plan,
+      matchScan("u")
+          .shuffle({"b"})
+          .hashJoinRightSemiFilter(
+              matchScan("t").shuffle({"a"}),
+              {.keys = {{"b = a"}}, .outputColumnNames = {{"a"}}})
+          .partialAggregation({"a"}, {"count(*) as count"})
+          .localPartition({"a"})
+          .finalAggregation({"a"}, {"count(count) as count"})
+          .gather()
+          .build());
+}
+
+TEST_P(AggregationTest, reversedAntiJoinPartitioning) {
+  testConnector_->addTable("t", ROW("a", BIGINT()))
+      ->setStats(100, {{"a", {.numDistinct = 100}}});
+  testConnector_->addTable("u", ROW("b", BIGINT()))
+      ->setStats(10'000, {{"b", {.numDistinct = 10'000}}});
+
+  {
+    SCOPED_TRACE("NOT EXISTS");
+    const auto logicalPlan = parseSelect(
+        "SELECT a, count(*) "
+        "FROM t "
+        "WHERE NOT EXISTS (SELECT 1 FROM u WHERE b = a) "
+        "GROUP BY a",
+        kTestConnectorId);
+
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchScan("u")
+            .shuffle({"b"})
+            .hashJoinRightSemiProject(
+                matchScan("t").shuffle({"a"}),
+                {.nullAware = false, .keys = {{"b = a"}}})
+            .aliases({"a", "matched"})
+            .filter("not(matched)")
+            .project({"a"})
+            .partialAggregation({"a"}, {"count(*) as count"})
+            .localPartition({"a"})
+            .finalAggregation({"a"}, {"count(count) as count"})
+            .gather()
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("NOT IN");
+    const auto logicalPlan = parseSelect(
+        "SELECT a, count(*) "
+        "FROM t "
+        "WHERE a NOT IN (SELECT b FROM u) "
+        "GROUP BY a",
+        kTestConnectorId);
+
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchScan("u")
+            .shuffle({"b"}, /*replicateNullsAndAny=*/true)
+            .hashJoinRightSemiProject(
+                matchScan("t").shuffle({"a"}),
+                {.nullAware = true, .keys = {{"b = a"}}})
+            .aliases({"a", "matched"})
+            .filter("not(matched)")
+            .project({"a"})
+            .partialAggregation({"a"}, {"count(*) as count"})
+            .localPartition({"a"})
+            .finalAggregation({"a"}, {"count(count) as count"})
+            .gather()
+            .build());
+  }
+}
+
+TEST_P(AggregationTest, rightJoinPartitioning) {
+  testConnector_->addTable("t", ROW("a", BIGINT()))
+      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
+  testConnector_->addTable("u", ROW({"b", "b2"}, BIGINT()))
+      ->setStats(
+          100, {{"b", {.numDistinct = 100}}, {"b2", {.numDistinct = 100}}});
+
+  {
+    SCOPED_TRACE("grouping on the preserved join key");
+    const auto logicalPlan = parseSelect(
+        "SELECT b, count(*) "
+        "FROM t RIGHT JOIN u ON a = b "
+        "GROUP BY b",
+        kTestConnectorId);
+
+    // The aggregation reuses the right join's partitioning on its preserved
+    // right key.
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchScan("t")
+            .shuffle({"a"})
+            .hashJoinRight(
+                matchScan("u").shuffle({"b"}),
+                {.keys = {{"a = b"}}, .outputColumnNames = {{"b"}}})
+            .partialAggregation({"b"}, {"count(*) as count"})
+            .localPartition({"b"})
+            .finalAggregation({"b"}, {"count(count) as count"})
+            .gather()
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("join key dropped from the output");
+    const auto logicalPlan = parseSelect(
+        "SELECT b2, count(*) "
+        "FROM t RIGHT JOIN u ON a = b "
+        "GROUP BY b2",
+        kTestConnectorId);
+
+    // The join key does not reach the output, so the join reports no key
+    // partitioning and the aggregation shuffles on the grouping key.
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchScan("t")
+            .shuffle({"a"})
+            .hashJoinRight(
+                matchScan("u").shuffle({"b"}),
+                {.keys = {{"a = b"}}, .outputColumnNames = {{"b2"}}})
+            .partialAggregation({"b2"}, {"count(*) as count"})
+            .shuffle({"b2"})
+            .localPartition({"b2"})
+            .finalAggregation({"b2"}, {"count(count) as count"})
+            .gather()
+            .build());
+  }
+}
+
 TEST_P(AggregationTest, bucketedAggregation) {
   // Table 't' bucketed on 'k' with ~100 rows per (k, g) group, so grouping by
   // [k, g] reduces cardinality ~100x.
