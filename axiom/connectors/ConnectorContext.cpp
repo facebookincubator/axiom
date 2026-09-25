@@ -16,6 +16,9 @@
 
 #include "axiom/connectors/ConnectorContext.h"
 
+#include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
+
 namespace facebook::axiom::connector {
 
 ConnectorContext::ConnectorContext(
@@ -23,12 +26,29 @@ ConnectorContext::ConnectorContext(
     std::string user,
     ConnectorProperties properties,
     StatWriterProvider statWriterProvider)
+    : ConnectorContext(
+          std::move(queryId),
+          std::move(user),
+          std::move(properties),
+          std::move(statWriterProvider),
+          ConnectorMetadataRegistry::create(
+              &ConnectorMetadataRegistry::global())) {}
+
+ConnectorContext::ConnectorContext(
+    std::string queryId,
+    std::string user,
+    ConnectorProperties properties,
+    StatWriterProvider statWriterProvider,
+    std::shared_ptr<const ConnectorMetadataRegistry::Registry> metadataRegistry)
     : queryId_{std::move(queryId)},
       user_{std::move(user)},
       properties_{std::move(properties)},
-      statWriterProvider_{std::move(statWriterProvider)} {
+      statWriterProvider_{std::move(statWriterProvider)},
+      metadataRegistry_{std::move(metadataRegistry)} {
   VELOX_CHECK(
       statWriterProvider_, "ConnectorContext requires a stat writer provider");
+  VELOX_CHECK_NOT_NULL(
+      metadataRegistry_, "ConnectorContext requires a metadata registry");
 }
 
 namespace {
@@ -69,11 +89,18 @@ ConnectorSessionPtr ConnectorContext::sessionFor(std::string_view connectorId) {
     VELOX_CHECK_NOT_NULL(
         statsWriter, "Stat writer provider returned null for {}", connectorId);
 
-    entry->session = std::make_shared<ConnectorSession>(
+    auto session = std::make_shared<ConnectorSession>(
         queryId_,
         user_,
         propertiesFor(properties_, connectorId),
         std::move(statsWriter));
+    // Attach before publishing the entry.
+    if (auto metadata = metadataRegistry_->find(std::string{connectorId})) {
+      if (auto queryState = metadata->makeQueryState(*session)) {
+        session->initQueryState(std::move(queryState));
+      }
+    }
+    entry->session = std::move(session);
   });
 
   return entry->session;

@@ -139,10 +139,20 @@ std::vector<std::unique_ptr<const Column>> makeTestTableColumns(
     const velox::RowTypePtr& hiddenColumns,
     const folly::F14FastMap<std::string, velox::Variant>& options,
     folly::F14FastMap<std::string, std::string> columnComments) {
-  return appendHiddenColumns(
+  auto columns = appendHiddenColumns(
       makeColumnsWithExplainIo(
           schema, extractExplainIoColumns(options), std::move(columnComments)),
       hiddenColumns);
+  const auto rowId = std::find_if(columns.begin(), columns.end(), [](auto& c) {
+    return c->name() == TestTable::kRowId;
+  });
+  if (rowId != columns.end()) {
+    VELOX_USER_CHECK(
+        (*rowId)->hidden() && (*rowId)->type()->isBigint(),
+        "Reserved row ID column must be a hidden BIGINT: {}",
+        TestTable::kRowId);
+  }
+  return columns;
 }
 
 bool extractCollectStatistics(
@@ -346,20 +356,32 @@ void TestTable::addData(
   VELOX_CHECK_GT(data->size(), 0, "Cannot append empty RowVector");
   auto copy = std::dynamic_pointer_cast<velox::RowVector>(
       velox::BaseVector::copy(*data, pool_.get()));
+  auto appendRows = [&](velox::RowVectorPtr rows) {
+    if (findColumn(kRowId) != nullptr) {
+      auto rowIds =
+          velox::BaseVector::create(velox::BIGINT(), rows->size(), pool_.get());
+      for (velox::vector_size_t row = 0; row < rows->size(); ++row) {
+        rowIds->asFlatVector<int64_t>()->set(row, nextRowId_++);
+      }
+      rowIds_.push_back(std::move(rowIds));
+    }
+    data_.push_back(std::move(rows));
+  };
   if (partitionFunction_ != nullptr) {
     for (auto& bucketed : splitByBucket(
              copy, *partitionFunction_, bucketSpec_->numBuckets, pool_.get())) {
-      data_.push_back(std::move(bucketed.rows));
+      appendRows(std::move(bucketed.rows));
       dataBucketIds_.push_back(bucketed.bucketId);
     }
   } else {
-    data_.push_back(copy);
+    appendRows(std::move(copy));
   }
   dataRows_ += data->size();
 
   if (!collectColumnStatistics || !collectStatistics_) {
     return;
   }
+  hasColumnStatistics_ = true;
 
   // Compute per-column statistics incrementally.
   const auto& rowType = type();
@@ -372,6 +394,87 @@ void TestTable::addData(
         ->setStats(
             tracker.toColumnStatistics(dataRows_, data->childAt(i)->type()));
   }
+}
+
+int64_t TestTable::deleteRows(const folly::F14FastSet<int64_t>& rowIds) {
+  VELOX_CHECK_EQ(
+      rowIds_.size(),
+      data_.size(),
+      "Table does not expose row IDs: {}",
+      name().toString());
+  std::vector<velox::RowVectorPtr> keptData;
+  std::vector<velox::VectorPtr> keptRowIds;
+  std::vector<int32_t> keptBucketIds;
+  int64_t deletedRows = 0;
+
+  for (size_t split = 0; split < data_.size(); ++split) {
+    const auto& data = data_[split];
+    const auto* ids = rowIds_[split]->as<velox::SimpleVector<int64_t>>();
+    std::vector<velox::vector_size_t> kept;
+    kept.reserve(data->size());
+    for (velox::vector_size_t row = 0; row < data->size(); ++row) {
+      if (rowIds.contains(ids->valueAt(row))) {
+        ++deletedRows;
+      } else {
+        kept.push_back(row);
+      }
+    }
+    if (kept.empty()) {
+      continue;
+    }
+    if (kept.size() == static_cast<size_t>(data->size())) {
+      keptData.push_back(data);
+      keptRowIds.push_back(rowIds_[split]);
+    } else {
+      const auto numKeptRows = static_cast<velox::vector_size_t>(kept.size());
+      auto indices = velox::allocateIndices(numKeptRows, pool_.get());
+      std::copy(
+          kept.begin(), kept.end(), indices->asMutable<velox::vector_size_t>());
+      std::vector<velox::VectorPtr> children;
+      children.reserve(data->childrenSize());
+      for (const auto& child : data->children()) {
+        children.push_back(
+            velox::BaseVector::wrapInDictionary(
+                nullptr, indices, numKeptRows, child));
+      }
+      keptData.push_back(
+          std::make_shared<velox::RowVector>(
+              pool_.get(),
+              data->type(),
+              nullptr,
+              numKeptRows,
+              std::move(children)));
+      keptRowIds.push_back(
+          velox::BaseVector::wrapInDictionary(
+              nullptr, indices, numKeptRows, rowIds_[split]));
+    }
+    if (!dataBucketIds_.empty()) {
+      keptBucketIds.push_back(dataBucketIds_[split]);
+    }
+  }
+
+  data_ = std::move(keptData);
+  rowIds_ = std::move(keptRowIds);
+  dataBucketIds_ = std::move(keptBucketIds);
+  dataRows_ -= deletedRows;
+
+  if (hasColumnStatistics_) {
+    columnTrackers_.assign(type()->size(), {});
+    for (const auto& data : data_) {
+      for (velox::column_index_t column = 0; column < data->childrenSize();
+           ++column) {
+        columnTrackers_[column].append(*data->childAt(column));
+      }
+    }
+    for (velox::column_index_t column = 0; column < type()->size(); ++column) {
+      const auto& name = type()->nameOf(column);
+      const_cast<Column*>(columnMap().at(name))
+          ->setStats(
+              columnTrackers_[column].toColumnStatistics(
+                  dataRows_, type()->childAt(column)));
+    }
+  }
+  return deletedRows;
 }
 
 void TestTable::ColumnTracker::append(const velox::BaseVector& vector) {
@@ -936,11 +1039,21 @@ ConnectorWriteHandlePtr TestConnectorMetadata::beginWrite(
     const ConnectorSessionPtr& /*session*/,
     const TablePtr& table,
     WriteKind /*kind*/,
-    const velox::connector::ConnectorTableHandlePtr& /*scanHandle*/,
     bool /*explain*/) {
   auto insertHandle = std::make_shared<TestInsertTableHandle>(table->name());
   return std::make_shared<ConnectorWriteHandle>(
       std::move(insertHandle),
+      velox::exec::TableWriteTraits::outputType(std::nullopt));
+}
+
+ConnectorWriteHandlePtr TestConnectorMetadata::beginDelete(
+    const ConnectorSessionPtr& /*session*/,
+    const TablePtr& table,
+    const velox::connector::ConnectorTableHandlePtr& /*scanHandle*/,
+    bool /*scanIdentifiesDeletedRows*/,
+    bool /*explain*/) {
+  return std::make_shared<TestDeleteWriteHandle>(
+      std::make_shared<TestDeleteTableHandle>(table->name()),
       velox::exec::TableWriteTraits::outputType(std::nullopt));
 }
 
@@ -967,6 +1080,17 @@ RowsFuture TestConnectorMetadata::finishWrite(
     }
   }
   return folly::makeSemiFuture(std::optional<int64_t>{rows});
+}
+
+RowsFuture TestConnectorMetadata::finishDelete(
+    const ConnectorSessionPtr& /*session*/,
+    const ConnectorWriteHandlePtr& handle,
+    const std::vector<velox::RowVectorPtr>& /*writeResults*/) {
+  const auto* deleteHandle =
+      handle->veloxHandle()->asChecked<TestDeleteTableHandle>();
+  auto table = tables_.at(deleteHandle->tableName());
+  return folly::makeSemiFuture(
+      std::optional<int64_t>{table->deleteRows(deleteHandle->deletedRowIds())});
 }
 
 bool TestConnectorMetadata::dropTable(
@@ -1092,6 +1216,7 @@ TestDataSource::TestDataSource(
     : outputType_(outputType), pool_(pool) {
   auto maybeTable = velox::checkedPointerCast<const TestTable>(table);
   data_ = maybeTable->data();
+  rowIds_ = maybeTable->rowIds();
 
   auto tableType = table->type();
   outputMappings_.reserve(outputType_->size());
@@ -1103,13 +1228,17 @@ TestDataSource::TestDataSource(
         table->name().toString());
     auto handle = handles.find(name)->second;
 
-    const auto idx = tableType->getChildIdxIfExists(handle->name());
-    VELOX_CHECK(
-        idx.has_value(),
-        "column '{}' not found in table '{}'.",
-        handle->name(),
-        table->name().toString());
-    outputMappings_.emplace_back(idx.value());
+    if (handle->name() == TestTable::kRowId) {
+      outputMappings_.emplace_back(std::nullopt);
+    } else {
+      const auto idx = tableType->getChildIdxIfExists(handle->name());
+      VELOX_CHECK(
+          idx.has_value(),
+          "column '{}' not found in table '{}'.",
+          handle->name(),
+          table->name().toString());
+      outputMappings_.emplace_back(idx.value());
+    }
   }
 }
 
@@ -1139,7 +1268,9 @@ std::optional<velox::RowVectorPtr> TestDataSource::next(
   std::vector<velox::VectorPtr> children;
   children.reserve(outputMappings_.size());
   for (const auto idx : outputMappings_) {
-    children.emplace_back(vector->childAt(idx));
+    children.emplace_back(
+        idx.has_value() ? vector->childAt(idx.value())
+                        : rowIds_[split_->index()]);
   }
 
   return std::make_shared<velox::RowVector>(
@@ -1173,16 +1304,36 @@ std::unique_ptr<velox::connector::DataSink> TestConnector::createDataSink(
     velox::connector::ConnectorQueryCtx* connectorQueryCtx,
     velox::connector::CommitStrategy) {
   VELOX_CHECK(tableHandle, "table handle must be non-null");
-  const auto* testHandle = tableHandle->asChecked<TestInsertTableHandle>();
-  auto table = metadata_->findTableInternal(testHandle->tableName());
+  auto insertHandle =
+      std::dynamic_pointer_cast<const TestInsertTableHandle>(tableHandle);
+  auto deleteHandle =
+      std::dynamic_pointer_cast<const TestDeleteTableHandle>(tableHandle);
+  VELOX_CHECK(
+      insertHandle != nullptr || deleteHandle != nullptr,
+      "Expected a TestConnector write handle");
+  const auto& tableName = insertHandle != nullptr ? insertHandle->tableName()
+                                                  : deleteHandle->tableName();
+  auto table = metadata_->findTableInternal(tableName);
   VELOX_CHECK(
       table,
       "cannot create data sink for nonexistent table {}",
-      testHandle->tableName().toString());
+      tableName.toString());
   const auto collectColumnStatistics =
       connectorQueryCtx->sessionProperties()->get<bool>(
           TestConfigProvider::kCollectColumnStatistics, true);
-  return std::make_unique<TestDataSink>(table, collectColumnStatistics);
+  return std::make_unique<TestDataSink>(
+      table, std::move(deleteHandle), collectColumnStatistics);
+}
+
+void TestDeleteTableHandle::addDeletedRowIds(
+    const velox::RowVectorPtr& rows) const {
+  VELOX_CHECK_EQ(rows->childrenSize(), 1);
+  velox::DecodedVector decoded(*rows->childAt(0));
+  auto locked = deletedRowIds_.wlock();
+  for (velox::vector_size_t row = 0; row < rows->size(); ++row) {
+    VELOX_CHECK(!decoded.isNullAt(row));
+    locked->insert(decoded.valueAt<int64_t>(row));
+  }
 }
 
 std::shared_ptr<TestTable> TestConnector::addTable(
@@ -1433,7 +1584,12 @@ std::shared_ptr<velox::connector::Connector> TestConnectorFactory::newConnector(
 }
 
 void TestDataSink::appendData(velox::RowVectorPtr vector) {
-  if (vector) {
+  if (!vector) {
+    return;
+  }
+  if (deleteHandle_ != nullptr) {
+    deleteHandle_->addDeletedRowIds(vector);
+  } else {
     table_->addData(vector, collectColumnStatistics_);
   }
 }

@@ -330,11 +330,13 @@ FinishWrite::FinishWrite(
     std::string connectorId,
     connector::ConnectorSessionPtr session,
     connector::ConnectorWriteHandlePtr handle,
+    bool isDelete,
     WriteStatsMapping statsMapping)
     : metadata_{std::move(metadata)},
       connectorId_{std::move(connectorId)},
       session_{std::move(session)},
       handle_{std::move(handle)},
+      isDelete_{isDelete},
       statsMapping_{std::move(statsMapping)} {
   VELOX_CHECK_NOT_NULL(metadata_);
   VELOX_CHECK_NOT_NULL(session_);
@@ -363,6 +365,10 @@ connector::RowsFuture FinishWrite::commit(
   SCOPE_EXIT {
     *this = {};
   };
+
+  if (isDelete_) {
+    return metadata_->finishDelete(session_, handle_, writeResults);
+  }
 
   if (statsMapping_.columns.empty()) {
     return metadata_->finishWrite(session_, handle_, writeResults, nullptr, {});

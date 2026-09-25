@@ -527,6 +527,22 @@ class Translator {
     return translateNode(node, allNames(*node.outputType()));
   }
 
+  // The scan a delete removes rows from, and the columns that scan must
+  // produce to identify them. The columns are empty when the connector cannot
+  // delete row by row; the scan is set for every delete.
+  struct DeleteTarget {
+    const lp::TableScanNode* scan{nullptr};
+    std::vector<Name> rowIdColumns;
+
+    void clear() {
+      *this = {};
+    }
+  };
+
+  DeleteTarget findDeleteTarget(
+      const lp::TableWriteNode& tableWrite,
+      const connector::Table& connectorTable) const;
+
   Translated translateScan(
       const lp::TableScanNode& scan,
       const LpNameSet& required);
@@ -866,6 +882,13 @@ class Translator {
   const ConstantPlanRunner& constantPlanRunner_;
   int32_t baseTableCounter_{0};
 
+  // Held by node because a subquery may scan the same table as the delete
+  // target.
+  DeleteTarget deleteTarget_;
+
+  // Columns the target scan produces, in the connector's required order.
+  ColumnVector deleteRowIdColumns_;
+
   // Lifted results of each scalar subquery, keyed by its inner plan.
   // Identical subqueries share one inner plan (hash-consed), so a repeated
   // reference reuses a lift instead of lifting again. A lift is reusable
@@ -901,6 +924,44 @@ class Translator {
   std::optional<ActiveFixedPoint> activeFixedPoint_;
 };
 
+// Finds the target scan under the optional DELETE filter.
+Translator::DeleteTarget Translator::findDeleteTarget(
+    const lp::TableWriteNode& tableWrite,
+    const connector::Table& connectorTable) const {
+  const lp::LogicalPlanNode* input = tableWrite.onlyInput().get();
+  if (input->kind() == lp::NodeKind::kFilter) {
+    input = input->onlyInput().get();
+  }
+  VELOX_USER_CHECK(
+      input->kind() == lp::NodeKind::kTableScan,
+      "DELETE requires a scan with an optional filter");
+
+  const auto* scan = input->as<lp::TableScanNode>();
+  VELOX_USER_CHECK_EQ(
+      scan->connectorId(),
+      tableWrite.connectorId(),
+      "DELETE scans a table of another connector");
+  VELOX_USER_CHECK(
+      scan->tableName() == tableWrite.tableName(),
+      "DELETE scans the wrong table: deletes {}, scans {}",
+      tableWrite.tableName().toString(),
+      scan->tableName().toString());
+
+  // Empty row identity leaves only the metadata-delete path.
+  const auto columnNames =
+      connectorTable.rowIdColumns(connector::WriteKind::kDelete);
+  if (columnNames.empty()) {
+    return {scan, {}};
+  }
+
+  std::vector<Name> rowIdColumns;
+  rowIdColumns.reserve(columnNames.size());
+  for (const auto& columnName : columnNames) {
+    rowIdColumns.push_back(toName(columnName));
+  }
+  return {scan, std::move(rowIdColumns)};
+}
+
 Translated Translator::translateTableWrite(
     const lp::TableWriteNode& tableWrite,
     const LpNameSet& /*required*/) {
@@ -924,11 +985,26 @@ Translated Translator::translateTableWrite(
   VELOX_CHECK_NOT_NULL(connectorTable);
   const auto& tableSchema = *connectorTable->type();
 
-  // The child must supply every column a write expression reads.
   LpNameSet childRequired;
   for (const auto& columnExpr : tableWrite.columnExpressions()) {
     collectUsedNames(*columnExpr, childRequired);
   }
+  auto outerDeleteTarget = std::move(deleteTarget_);
+  auto outerDeleteRowIdColumns = std::move(deleteRowIdColumns_);
+  deleteTarget_.clear();
+  deleteRowIdColumns_.clear();
+  if (kind == connector::WriteKind::kDelete) {
+    deleteTarget_ = findDeleteTarget(tableWrite, *connectorTable);
+    for (auto column : deleteTarget_.rowIdColumns) {
+      childRequired.insert(column);
+    }
+  }
+  // Saved and restored, so a nested write leaves the outer write's columns
+  // intact.
+  SCOPE_EXIT {
+    deleteTarget_ = std::move(outerDeleteTarget);
+    deleteRowIdColumns_ = std::move(outerDeleteRowIdColumns);
+  };
   Translated input = translateNode(*tableWrite.onlyInput(), childRequired);
   NodeCP currentInput = input.node;
 
@@ -990,7 +1066,11 @@ Translated Translator::translateTableWrite(
   }
 
   NodeCP writeNode = builder_.make<TableWrite>(
-      {currentInput, connectorTable, kind, std::move(columnExprs)});
+      {currentInput,
+       connectorTable,
+       kind,
+       std::move(columnExprs),
+       deleteRowIdColumns_});
 
   // The single output column is the written row count.
   Scope scope;
@@ -1217,12 +1297,14 @@ Translated Translator::translateScan(
   ColumnVector outputColumns;
   outputColumns.reserve(columnNames.size());
   Scope scope;
+  folly::F14FastSet<Name> emitted;
   for (size_t i = 0; i < columnNames.size(); ++i) {
     const auto& outName = outputType->nameOf(i);
     if (!required.contains(outName)) {
       continue;
     }
     Name inTableName = toName(columnNames[i]);
+    emitted.insert(inTableName);
     Name outNameInterned = toName(outName);
     ColumnCP schemaColumn = schemaTable->findColumn(inTableName);
     VELOX_CHECK_NOT_NULL(schemaColumn);
@@ -1236,6 +1318,55 @@ Translated Translator::translateScan(
     outputColumns.push_back(column);
     scope[outName] = column;
   }
+
+  // Only the target scan receives the connector's row-identity columns.
+  if (&scan != deleteTarget_.scan) {
+    ScanCP scanNode =
+        builder_.make<Scan>({baseTable, std::move(outputColumns)});
+    return {scanNode, std::move(scope)};
+  }
+
+  baseTable->isDeleteTarget = true;
+  for (auto name : deleteTarget_.rowIdColumns) {
+    // Deduplicate by schema name, not the query's output symbol.
+    if (!emitted.insert(name).second) {
+      continue;
+    }
+    VELOX_CHECK(
+        schemaTable->columns.contains(name),
+        "Connector asked a delete to read a column the table does not "
+        "have: {}, {}",
+        name,
+        scan.tableName());
+    // Query-wide symbols must remain unique.
+    Name symbol = queryCtx()->newName(name);
+    ColumnCP schemaColumn = schemaTable->findColumn(name);
+    VELOX_CHECK_NOT_NULL(schemaColumn);
+    auto* column = make<Column>(
+        name, baseTable, schemaColumn->value(), symbol, schemaColumn->name());
+    baseTable->columns.push_back(column);
+    outputColumns.push_back(column);
+    scope[symbol] = column;
+  }
+
+  // Resolve the write's row identity where schema names become columns.
+  deleteRowIdColumns_.reserve(deleteTarget_.rowIdColumns.size());
+  for (auto name : deleteTarget_.rowIdColumns) {
+    auto it = std::find_if(
+        outputColumns.begin(), outputColumns.end(), [&](ColumnCP candidate) {
+          return candidate->name() == name;
+        });
+    VELOX_CHECK(
+        it != outputColumns.end(),
+        "Scan does not produce a column its delete reads: {}, {}",
+        scan.tableName(),
+        name);
+    deleteRowIdColumns_.push_back(*it);
+  }
+
+  // Prevent later subquery scans from claiming the target mark.
+  deleteTarget_.clear();
+
   ScanCP scanNode = builder_.make<Scan>({baseTable, std::move(outputColumns)});
   return {scanNode, std::move(scope)};
 }

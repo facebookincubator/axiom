@@ -399,7 +399,13 @@ class HiveConnectorMetadata : public ConnectorMetadata {
       const ConnectorSessionPtr& session,
       const TablePtr& table,
       WriteKind kind,
+      bool explain) override;
+
+  ConnectorWriteHandlePtr beginDelete(
+      const ConnectorSessionPtr& session,
+      const TablePtr& table,
       const velox::connector::ConnectorTableHandlePtr& scanHandle,
+      bool scanIdentifiesDeletedRows,
       bool explain) override;
 
  protected:
@@ -409,6 +415,18 @@ class HiveConnectorMetadata : public ConnectorMetadata {
   virtual ConnectorWriteHandlePtr makeDeleteWriteHandle(
       const TablePtr& table,
       velox::common::SubfieldFilters filters) const;
+
+  // Returns the handle for a delete that records the rows it removes, for the
+  // rows 'scanHandle' selects. Returns nullptr when the connector removes rows
+  // only by dropping whole partitions, which leaves the caller to report why
+  // this delete is not one of those.
+  virtual ConnectorWriteHandlePtr makeRowLevelDeleteWriteHandle(
+      const ConnectorSessionPtr& /*session*/,
+      const TablePtr& /*table*/,
+      const velox::connector::ConnectorTableHandlePtr& /*scanHandle*/,
+      bool /*explain*/) const {
+    return nullptr;
+  }
 
   virtual void ensureInitialized() const {}
 

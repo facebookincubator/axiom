@@ -1656,7 +1656,11 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       return node;
     }
     return builder().make<TableWrite>(
-        {newInput, node->table(), node->kind(), node->columnExprs()});
+        {newInput,
+         node->table(),
+         node->kind(),
+         node->columnExprs(),
+         node->rowIdColumns()});
   }
 
  private:

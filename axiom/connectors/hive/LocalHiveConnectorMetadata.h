@@ -339,6 +339,11 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
       velox::RowVectorPtr groupingKeys,
       std::vector<std::vector<ColumnStatistics>> groupStats) override;
 
+  RowsFuture finishDelete(
+      const ConnectorSessionPtr& session,
+      const ConnectorWriteHandlePtr& handle,
+      const std::vector<velox::RowVectorPtr>& writeResults) override;
+
   velox::ContinueFuture abortWrite(
       const ConnectorSessionPtr& session,
       const ConnectorWriteHandlePtr& handle) noexcept override;

@@ -1803,10 +1803,6 @@ RowsFuture LocalHiveConnectorMetadata::finishWrite(
     const std::vector<velox::RowVectorPtr>& writeResults,
     velox::RowVectorPtr groupingKeys,
     std::vector<std::vector<ColumnStatistics>> groupStats) {
-  if (const auto* deleteHandle = handle->as<HiveDeleteWriteHandle>()) {
-    return removePartitions(*deleteHandle);
-  }
-
   uint64_t rows = 0;
   velox::DecodedVector decoded;
   for (const auto& result : writeResults) {
@@ -1870,6 +1866,13 @@ RowsFuture LocalHiveConnectorMetadata::finishWrite(
   loadTable(hiveHandle->table()->name().table, targetPath);
 
   return rows;
+}
+
+RowsFuture LocalHiveConnectorMetadata::finishDelete(
+    const ConnectorSessionPtr& /*session*/,
+    const ConnectorWriteHandlePtr& handle,
+    const std::vector<velox::RowVectorPtr>& /*writeResults*/) {
+  return removePartitions(*handle->asChecked<HiveDeleteWriteHandle>());
 }
 
 void LocalHiveConnectorMetadata::reloadTableFromPath(

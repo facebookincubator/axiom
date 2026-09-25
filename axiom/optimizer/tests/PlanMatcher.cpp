@@ -1883,6 +1883,32 @@ class TopNRowNumberMatcher : public PlanMatcherImpl<TopNRowNumberNode> {
   const int32_t limit_;
 };
 
+// Matches a TableWriteNode and verifies the names the connector receives the
+// written columns under, in order.
+class TableWriteColumnNamesMatcher : public PlanMatcherImpl<TableWriteNode> {
+ public:
+  TableWriteColumnNamesMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      std::vector<std::string> columnNames)
+      : PlanMatcherImpl<TableWriteNode>({matcher}),
+        columnNames_{std::move(columnNames)} {}
+
+  MatchResult matchDetails(
+      const TableWriteNode& plan,
+      const std::unordered_map<std::string, std::string>& /*symbols*/)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
+    EXPECT_EQ(plan.columnNames(), columnNames_);
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    return MatchResult::success();
+  }
+
+ private:
+  const std::vector<std::string> columnNames_;
+};
+
 // Matches a LocalPartitionNode and verifies its type (gather or repartition)
 // and optionally partition keys.
 class LocalPartitionTypeMatcher : public PlanMatcherImpl<LocalPartitionNode> {
@@ -2667,6 +2693,14 @@ PlanMatcherBuilder& PlanMatcherBuilder::orderBy(
 PlanMatcherBuilder& PlanMatcherBuilder::tableWrite() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<PlanMatcherImpl<TableWriteNode>>(matcher_);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::tableWrite(
+    const std::vector<std::string>& columnNames) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ =
+      std::make_shared<TableWriteColumnNamesMatcher>(matcher_, columnNames);
   return *this;
 }
 

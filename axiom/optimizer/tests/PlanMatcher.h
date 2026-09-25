@@ -799,6 +799,11 @@ class PlanMatcherBuilder {
   /// Matches any TableWrite node.
   PlanMatcherBuilder& tableWrite();
 
+  /// Matches a TableWrite node whose `columnNames()` equal 'columnNames', in
+  /// order. These are the names the connector knows the written columns by,
+  /// which for a delete is what tells it which column identifies a row.
+  PlanMatcherBuilder& tableWrite(const std::vector<std::string>& columnNames);
+
   /// Matches any TableWriteMerge node.
   PlanMatcherBuilder& tableWriteMerge();
 

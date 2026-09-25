@@ -110,7 +110,6 @@ class WriteTest : public test::HiveQueriesTestBase,
         session,
         table,
         connector::WriteKind::kCreate,
-        /*scanHandle=*/nullptr,
         /*explain=*/false);
     metadata.finishWrite(session, handle, {}, nullptr, {}).get();
     return table;
