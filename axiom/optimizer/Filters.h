@@ -127,8 +127,8 @@ Value exprConstraint(
 Value clampCardinality(const Value& value);
 
 /// Returns the maximum number of distinct values an integer column's [min, max]
-/// range can hold (1 + max - min), or nullopt when the type is not an integer
-/// or either bound is unknown.
+/// range can hold: 1 + max - min, or 0 when max < min. Returns nullopt when the
+/// type is not an integer or either bound is unknown.
 std::optional<float>
 rangeCardinality(TypeCP type, VariantCP min, VariantCP max);
 

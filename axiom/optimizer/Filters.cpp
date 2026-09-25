@@ -188,14 +188,22 @@ Value clampCardinality(const Value& value) {
 
 namespace {
 
-// Computes the maximum cardinality for an integer range: 1 + (max - min).
+// Computes the maximum cardinality for an integer range: 1 + (max - min), or 0
+// when max < min.
 template <velox::TypeKind KIND>
 float rangeCardinality(VariantCP minPtr, VariantCP maxPtr) {
-  const auto upper = static_cast<long double>(maxPtr->value<KIND>());
-  const auto lower = static_cast<long double>(minPtr->value<KIND>());
+  const auto upper = maxPtr->value<KIND>();
+  const auto lower = minPtr->value<KIND>();
+  if (upper < lower) {
+    return 0;
+  }
+  // Subtracting in unsigned 128-bit arithmetic is exact for every integer
+  // type. Converted to double first, bounds above 2^53 would round.
+  const auto width = static_cast<velox::uint128_t>(upper) -
+      static_cast<velox::uint128_t>(lower);
   return static_cast<float>(std::min(
-      1.0L + upper - lower,
-      static_cast<long double>(std::numeric_limits<float>::max())));
+      1.0 + static_cast<double>(width),
+      static_cast<double>(std::numeric_limits<float>::max())));
 }
 
 } // namespace
