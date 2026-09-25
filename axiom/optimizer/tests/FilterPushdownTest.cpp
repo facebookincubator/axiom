@@ -25,10 +25,16 @@ namespace {
 using namespace velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class FilterPushdownTest : public test::HiveQueriesTestBase {
+class FilterPushdownTest : public test::HiveQueriesTestBase,
+                           public ::testing::WithParamInterface<bool> {
  protected:
   static const inline std::string kDefaultSchema{
       connector::hive::LocalHiveConnectorMetadata::kDefaultSchema};
+
+  void SetUp() override {
+    useV2_ = GetParam();
+    test::HiveQueriesTestBase::SetUp();
+  }
 
   static void SetUpTestCase() {
     test::HiveQueriesTestBase::SetUpTestCase();
@@ -44,7 +50,7 @@ class FilterPushdownTest : public test::HiveQueriesTestBase {
   }
 };
 
-TEST_F(FilterPushdownTest, throughAggregation) {
+TEST_P(FilterPushdownTest, throughAggregation) {
   auto logicalPlan = lp::PlanBuilder(makeContext())
                          .tableScan("orders")
                          .aggregate({"o_custkey"}, {"sum(o_totalprice) as a0"})
@@ -91,7 +97,7 @@ TEST_F(FilterPushdownTest, throughAggregation) {
   }
 }
 
-TEST_F(FilterPushdownTest, redundantCast) {
+TEST_P(FilterPushdownTest, redundantCast) {
   auto logicalPlan = lp::PlanBuilder(makeContext())
                          .tableScan("nation")
                          .filter("cast(n_nationkey as bigint) < 10")
@@ -104,16 +110,19 @@ TEST_F(FilterPushdownTest, redundantCast) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-TEST_F(FilterPushdownTest, throughJoin) {
+TEST_P(FilterPushdownTest, throughJoin) {
   auto startMatcher = [](const auto& tableName) {
     return matchHiveScan(tableName);
   };
 
-  // Filter uses columns from both sides of the join. Expected to stay after the
-  // join.
-  for (const auto& filter : {
-           "n_nationkey < r_regionkey",
-           "cardinality(filter(array[n_name], n -> n = r_name)) > 0",
+  // Filter uses columns from both sides of the join, so it cannot move below
+  // it. v1 evaluates it in a Filter above the join; v2 evaluates it in the join
+  // itself. 'joinFilter' is the predicate as v2 normalizes it.
+  for (const auto& [filter, joinFilter] :
+       std::vector<std::pair<const char*, const char*>>{
+           {"n_nationkey < r_regionkey", "n_nationkey < r_regionkey"},
+           {"cardinality(filter(array[n_name], n -> n = r_name)) > 0",
+            "cardinality(filter(array[n_name], n -> r_name = n)) > 0"},
        }) {
     lp::PlanBuilder::Context ctx(exec::test::kHiveConnectorId, kDefaultSchema);
     auto logicalPlan =
@@ -125,12 +134,14 @@ TEST_F(FilterPushdownTest, throughJoin) {
 
     auto plan = toSingleNodePlan(logicalPlan);
 
-    auto matcher =
-        startMatcher("nation")
-            .hashJoin(startMatcher("region"), velox::core::JoinType::kInner)
-            .filter()
-            .aggregation()
-            .build();
+    auto matcher = startMatcher("nation")
+                       .hashJoin(
+                           startMatcher("region"),
+                           velox::core::JoinType::kInner,
+                           {.filter = useV2_ ? joinFilter : ""})
+                       .filterIf(!useV2_)
+                       .aggregation()
+                       .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
@@ -199,12 +210,14 @@ TEST_F(FilterPushdownTest, throughJoin) {
             .aggregation()
             .build();
 
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    // TODO: Assert the V2 plan after transitive inference propagates the
+    // filter across the join equality.
+    AXIOM_ASSERT_PLAN_V1(plan, matcher);
   }
 }
 
 // Duplicate literals in an IN list should be deduplicated.
-TEST_F(FilterPushdownTest, inListWithDuplicates) {
+TEST_P(FilterPushdownTest, inListWithDuplicates) {
   auto logicalPlan = lp::PlanBuilder(makeContext())
                          .tableScan("nation")
                          .filter("n_nationkey in (5, 5)")
@@ -218,7 +231,7 @@ TEST_F(FilterPushdownTest, inListWithDuplicates) {
 // Verify that OR with a disjunct that is fully subsumed by extracted common
 // factors does not crash. E.g. A OR (A AND B): the first disjunct is fully
 // subsumed, leaving an empty residual. The result should be just A.
-TEST_F(FilterPushdownTest, orWithSubsumedDisjunct) {
+TEST_P(FilterPushdownTest, orWithSubsumedDisjunct) {
   auto logicalPlan = lp::PlanBuilder(makeContext())
                          .tableScan("nation")
                          .filter(
@@ -233,7 +246,7 @@ TEST_F(FilterPushdownTest, orWithSubsumedDisjunct) {
 
 // Verify that multi-table OR filter with per-table extraction preserves the
 // cross-combination filter.
-TEST_F(FilterPushdownTest, multiTableOrFilter) {
+TEST_P(FilterPushdownTest, multiTableOrFilter) {
   lp::PlanBuilder::Context ctx(exec::test::kHiveConnectorId, kDefaultSchema);
   auto logicalPlan = lp::PlanBuilder(ctx)
                          .from({"nation", "region"})
@@ -244,14 +257,18 @@ TEST_F(FilterPushdownTest, multiTableOrFilter) {
                          .build();
 
   auto plan = toSingleNodePlan(logicalPlan);
+  constexpr auto kCrossFilter =
+      "(n_name = 'FRANCE' AND r_name = 'EUROPE') OR "
+      "(n_name = 'JAPAN' AND r_name = 'ASIA')";
   auto matcher =
       matchHiveScan("nation", test::in("n_name", {"FRANCE", "JAPAN"}))
           .hashJoin(
               matchHiveScan("region", test::in("r_name", {"ASIA", "EUROPE"})),
-              velox::core::JoinType::kInner)
-          .filter(
-              "(n_name = 'FRANCE' AND r_name = 'EUROPE') OR "
-              "(n_name = 'JAPAN' AND r_name = 'ASIA')")
+              velox::core::JoinType::kInner,
+              {.filter = useV2_ ? kCrossFilter : ""})
+          .filterIf(!useV2_, kCrossFilter)
+          // TODO: Eliminate the V2 output-key reconstruction Project.
+          .projectIf(useV2_)
           .build();
 
   AXIOM_ASSERT_PLAN(plan, matcher);
@@ -259,7 +276,7 @@ TEST_F(FilterPushdownTest, multiTableOrFilter) {
 
 // Two base-column predicates (a <> 0 and c = 5) are evaluated below the cross
 // join, on the Values(t) side.
-TEST_F(FilterPushdownTest, belowSingleRowSubqueryCrossJoin) {
+TEST_P(FilterPushdownTest, belowSingleRowSubqueryCrossJoin) {
   auto plan = toSingleNodePlan(
       "WITH t AS (SELECT * FROM (VALUES (0, 5), (1, 5), (2, 99)) AS _(a, c)), "
       "     u AS (SELECT * FROM (VALUES (10)) AS _(b)) "
@@ -269,14 +286,19 @@ TEST_F(FilterPushdownTest, belowSingleRowSubqueryCrossJoin) {
 
   auto matcher = matchValues()
                      .filter("neq(c0, 0) AND eq(c1, 5)")
-                     .nestedLoopJoin(matchValues().singleAggregation())
-                     .filter()
+                     .nestedLoopJoin(
+                         matchValues().singleAggregation(),
+                         velox::core::JoinType::kInner,
+                         useV2_ ? "gt(divide(max, c0), 1)" : "")
+                     .filterIf(!useV2_)
                      .project()
                      .singleAggregation()
                      .build();
 
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
+
+AXIOM_INSTANTIATE_V1_V2(FilterPushdownTest);
 
 } // namespace
 } // namespace facebook::axiom::optimizer
