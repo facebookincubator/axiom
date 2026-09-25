@@ -65,6 +65,45 @@ SELECT s.a, element_at(coalesce(r.numbers, s.numbers), 2)
 FROM s LEFT JOIN r ON s.a = r.a WHERE element_at(coalesce(r.numbers, s.numbers), 1) > 0
 
 ----
+-- Both operand orders return the left key for matched and unmatched left rows.
+SELECT coalesce(t_k, u_k), coalesce(u_k, t_k)
+FROM (VALUES (1), (2), (NULL)) AS t(t_k)
+LEFT JOIN (VALUES (1), (3)) AS u(u_k) ON t_k = u_k
+
+----
+-- Both operand orders return the right key for matched and unmatched right rows.
+SELECT coalesce(t_k, u_k), coalesce(u_k, t_k)
+FROM (VALUES (1), (2)) AS t(t_k)
+RIGHT JOIN (VALUES (1), (3), (NULL)) AS u(u_k) ON t_k = u_k
+
+----
+-- Both operand orders return the available key for every FULL join row.
+SELECT coalesce(t_k, u_k), coalesce(u_k, t_k)
+FROM (VALUES (1), (2), (NULL)) AS t(t_k)
+FULL JOIN (VALUES (1), (3), (NULL)) AS u(u_k) ON t_k = u_k
+
+----
+-- A null-padded key with non-default null behavior cannot be discarded.
+SELECT coalesce(t_k, coalesce(u_k, 0))
+FROM (VALUES (NULL), (1), (2)) AS t(t_k)
+LEFT JOIN (VALUES (NULL), (1), (3)) AS u(u_k)
+  ON t_k = coalesce(u_k, 0)
+
+----
+-- COALESCE of equal join keys can be rewritten after grouping by both keys.
+SELECT coalesce(t_k, u_k), count(*)
+FROM (VALUES (NULL), (1), (2)) AS t(t_k)
+LEFT JOIN (VALUES (NULL), (1), (3)) AS u(u_k) ON t_k = u_k
+GROUP BY t_k, u_k
+
+----
+-- ROLLUP can null the two join keys independently.
+SELECT coalesce(t_k, u_k), grouping(u_k), grouping(t_k), count(*)
+FROM (VALUES (NULL), (1), (2)) AS t(t_k)
+LEFT JOIN (VALUES (NULL), (1), (3)) AS u(u_k) ON t_k = u_k
+GROUP BY ROLLUP(u_k, t_k)
+
+----
 -- LEFT-to-INNER JOIN conversion with aggregation. replaceJoinOutputs must not
 -- replace post-aggregation references (exprs) with pre-aggregation expressions.
 SELECT DISTINCT b.c

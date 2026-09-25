@@ -115,6 +115,13 @@ const Call* Builder::makeCall(
   return call;
 }
 
+ExprCP Builder::canonicalizeCoalesce(ExprCP a, ExprCP b) {
+  if (shouldInvert(a, b)) {
+    std::swap(a, b);
+  }
+  return ExprFactory(*this).makeCoalesce(a, b);
+}
+
 const optimizer::Aggregate* Builder::makeAggregate(
     Name name,
     const Value& value,

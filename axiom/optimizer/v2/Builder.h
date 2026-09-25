@@ -98,6 +98,11 @@ class Builder {
       ExprVector args,
       FunctionSet functions);
 
+  /// Returns `coalesce(a, b)` with its operands in canonical order. This may
+  /// reorder the operands and therefore requires that 'a' and 'b' are equal
+  /// whenever both are non-null, as with equi-join keys above a full join.
+  ExprCP canonicalizeCoalesce(ExprCP a, ExprCP b);
+
   /// Returns a canonical aggregate `Call`. Result type and 'intermediateType'
   /// are determined by (name, args), so identity excludes them. 'specialKind'
   /// and 'fallback' mark a metadata aggregate (see optimizer::Aggregate); they

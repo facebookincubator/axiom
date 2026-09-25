@@ -778,6 +778,13 @@ class PlanMatcherBuilder {
   /// @param count Maximum number of rows to return.
   PlanMatcherBuilder& topN(int64_t count);
 
+  /// Matches a TopN node with the specified count and ordering.
+  /// @param count Maximum number of rows to return.
+  /// @param ordering List of sort keys. Uses the same syntax as `orderBy`.
+  PlanMatcherBuilder& topN(
+      int64_t count,
+      const std::vector<std::string>& ordering);
+
   /// Matches any OrderBy node.
   PlanMatcherBuilder& orderBy();
 

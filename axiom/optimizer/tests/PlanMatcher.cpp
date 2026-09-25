@@ -698,31 +698,6 @@ class LimitMatcher : public PlanMatcherImpl<LimitNode> {
   const std::optional<bool> partial_;
 };
 
-class TopNMatcher : public PlanMatcherImpl<TopNNode> {
- public:
-  explicit TopNMatcher(const std::shared_ptr<PlanMatcher>& matcher)
-      : PlanMatcherImpl<TopNNode>({matcher}) {}
-
-  TopNMatcher(const std::shared_ptr<PlanMatcher>& matcher, int64_t count)
-      : PlanMatcherImpl<TopNNode>({matcher}), count_{count} {}
-
-  MatchResult matchDetails(
-      const TopNNode& plan,
-      const std::unordered_map<std::string, std::string>& symbols)
-      const override {
-    SCOPED_TRACE(plan.toString(true, false));
-
-    if (count_.has_value()) {
-      EXPECT_EQ(plan.count(), count_.value());
-    }
-
-    return MatchResult::success(symbols);
-  }
-
- private:
-  const std::optional<int64_t> count_;
-};
-
 // Verifies sort keys and orders against the expected ORDER BY expressions
 // (key + optional ASC/DESC and NULLS FIRST/LAST).
 void verifySortingKeys(
@@ -751,6 +726,44 @@ void verifySortingKeys(
     AXIOM_TEST_RETURN_IF_FAILURE_VOID
   }
 }
+
+class TopNMatcher : public PlanMatcherImpl<TopNNode> {
+ public:
+  explicit TopNMatcher(const std::shared_ptr<PlanMatcher>& matcher)
+      : PlanMatcherImpl<TopNNode>({matcher}) {}
+
+  TopNMatcher(const std::shared_ptr<PlanMatcher>& matcher, int64_t count)
+      : PlanMatcherImpl<TopNNode>({matcher}), count_{count} {}
+
+  TopNMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      int64_t count,
+      const std::vector<std::string>& ordering)
+      : PlanMatcherImpl<TopNNode>({matcher}),
+        count_{count},
+        ordering_{ordering} {}
+
+  MatchResult matchDetails(
+      const TopNNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
+    if (count_.has_value()) {
+      EXPECT_EQ(plan.count(), count_.value());
+    }
+    if (ordering_.has_value()) {
+      verifySortingKeys(
+          plan.sortingKeys(), plan.sortingOrders(), *ordering_, symbols);
+    }
+
+    return MatchResult::success(symbols);
+  }
+
+ private:
+  const std::optional<int64_t> count_;
+  const std::optional<std::vector<std::string>> ordering_;
+};
 
 class OrderByMatcher : public PlanMatcherImpl<OrderByNode> {
  public:
@@ -2648,6 +2661,14 @@ PlanMatcherBuilder& PlanMatcherBuilder::topN() {
 PlanMatcherBuilder& PlanMatcherBuilder::topN(int64_t count) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<TopNMatcher>(matcher_, count);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::topN(
+    int64_t count,
+    const std::vector<std::string>& ordering) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<TopNMatcher>(matcher_, count, ordering);
   return *this;
 }
 

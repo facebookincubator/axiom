@@ -567,6 +567,341 @@ TEST_P(JoinTest, outerJoinWithInnerJoin) {
   }
 }
 
+TEST_P(JoinTest, coalesceJoinKeys) {
+  if (!useV2_) {
+    return;
+  }
+
+  testConnector_->addTable("t", ROW("t_k", BIGINT()));
+  testConnector_->addTable("u", ROW("u_k", BIGINT()));
+
+  for (const auto joinType : {
+           core::JoinType::kInner,
+           core::JoinType::kLeft,
+           core::JoinType::kRight,
+       }) {
+    const auto expectedExpression = fmt::format(
+        "{} + 1", joinType == core::JoinType::kRight ? "u_k" : "t_k");
+
+    for (std::string_view operandList : {"u_k, t_k", "t_k, u_k"}) {
+      const auto query = fmt::format(
+          "SELECT coalesce({}) + 1 FROM t {} JOIN u ON t_k = u_k",
+          operandList,
+          core::JoinTypeName::toName(joinType));
+      SCOPED_TRACE(query);
+      const auto plan = toSingleNodePlan(query);
+
+      AXIOM_ASSERT_PLAN_V2(
+          plan,
+          matchScan("t")
+              .hashJoin(matchScan("u"), joinType, {.keys = {{"t_k = u_k"}}})
+              .project({expectedExpression})
+              .build());
+    }
+  }
+
+  {
+    // Both operand orders use one expression for the available full-join key.
+    const auto query =
+        "SELECT coalesce(t_k, u_k) + 1, coalesce(u_k, t_k) + 2 "
+        "FROM t FULL JOIN u ON t_k = u_k";
+    SCOPED_TRACE(query);
+    const auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchScan("t")
+            .hashJoinFull(matchScan("u"), {.keys = {{"t_k = u_k"}}})
+            .project({"coalesce(t_k, u_k) + 1", "coalesce(t_k, u_k) + 2"})
+            .build());
+  }
+
+  {
+    const auto query =
+        "SELECT coalesce(t_k + 1, u_k), coalesce(u_k, t_k + 1) "
+        "FROM t FULL JOIN u ON t_k + 1 = u_k";
+    SCOPED_TRACE(query);
+    const auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchScan("t")
+            .project({"t_k + 1 as joined_t_k", "t_k"})
+            .hashJoinFull(matchScan("u"), {.keys = {{"joined_t_k = u_k"}}})
+            .project({"coalesce(u_k, t_k + 1)", "coalesce(u_k, t_k + 1)"})
+            .build());
+  }
+
+  {
+    const auto query =
+        "SELECT coalesce(coalesce(coalesce(t_k, u_k), u_k), u_k) "
+        "FROM t LEFT JOIN u ON t_k = u_k";
+    SCOPED_TRACE(query);
+    const auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchScan("t")
+            .hashJoinLeft(matchScan("u"), {.keys = {{"t_k = u_k"}}})
+            .project({"t_k"})
+            .build());
+  }
+
+  {
+    const auto query =
+        "SELECT sum(coalesce(t_k, u_k)) FROM t LEFT JOIN u ON t_k = u_k";
+    SCOPED_TRACE(query);
+    const auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchScan("t")
+            .hashJoinLeft(matchScan("u"), {.keys = {{"t_k = u_k"}}})
+            .singleAggregation({}, {"sum(t_k)"})
+            .build());
+  }
+
+  {
+    const auto query =
+        "SELECT approx_non_null_count(coalesce(t_k, u_k)) "
+        "FROM t LEFT JOIN u ON t_k = u_k";
+    SCOPED_TRACE(query);
+    const auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchScan("t")
+            .hashJoinLeft(matchScan("u"), {.keys = {{"t_k = u_k"}}})
+            .singleAggregation({}, {"count(t_k)"})
+            .build());
+  }
+
+  {
+    const auto query =
+        "SELECT t_k FROM t, u "
+        "WHERE t_k = u_k AND coalesce(t_k, u_k) > 0";
+    SCOPED_TRACE(query);
+    const auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchScan("t")
+            .hashJoin(
+                matchScan("u"),
+                core::JoinType::kInner,
+                {.keys = {{"t_k = u_k"}}, .filter = "t_k > 0"})
+            .build());
+  }
+}
+
+// Keeps COALESCE when a null-padded key expression does not return NULL on
+// NULL input.
+TEST_P(JoinTest, coalesceNullBehavior) {
+  if (!useV2_) {
+    return;
+  }
+
+  testConnector_->addTable("t", ROW("t_k", BIGINT()));
+  testConnector_->addTable("u", ROW("u_k", BIGINT()));
+
+  {
+    // On an unmatched row, coalesce(u_k, 0) is 0. Replacing the outer
+    // COALESCE with t_k would change that 0 to NULL.
+    const auto query =
+        "SELECT coalesce(t_k, coalesce(u_k, 0)) "
+        "FROM t LEFT JOIN u ON t_k = coalesce(u_k, 0)";
+    SCOPED_TRACE(query);
+    const auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchScan("t")
+            .hashJoinLeft(
+                matchScan("u").project(
+                    {"coalesce(u_k, 0) as joined_u_k", "u_k"}),
+                {.keys = {{"t_k = joined_u_k"}}})
+            .project({"coalesce(t_k, coalesce(u_k, 0))"})
+            .build());
+  }
+
+  {
+    const auto query =
+        "SELECT coalesce(t_k, coalesce(u_k, 0)) "
+        "FROM t INNER JOIN u ON t_k = coalesce(u_k, 0)";
+    SCOPED_TRACE(query);
+    const auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchScan("t")
+            .hashJoinInner(
+                matchScan("u").project(
+                    {"coalesce(u_k, 0) as joined_u_k", "u_k"}),
+                {.keys = {{"t_k = joined_u_k"}}})
+            .project({"t_k"})
+            .build());
+  }
+
+  {
+    const auto query =
+        "SELECT coalesce(t_k, coalesce(u_k, 0)), coalesce(coalesce(u_k, 0), t_k) "
+        "FROM t FULL JOIN u ON t_k = coalesce(u_k, 0)";
+    SCOPED_TRACE(query);
+    const auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchScan("t")
+            .hashJoinFull(
+                matchScan("u").project(
+                    {"coalesce(u_k, 0) as joined_u_k", "u_k"}),
+                {.keys = {{"t_k = joined_u_k"}}})
+            .project(
+                {"coalesce(t_k, coalesce(u_k, 0))",
+                 "coalesce(coalesce(u_k, 0), t_k)"})
+            .build());
+  }
+}
+
+TEST_P(JoinTest, coalescePropagation) {
+  if (!useV2_) {
+    return;
+  }
+
+  testConnector_->addTable("t", ROW("t_k", BIGINT()));
+  testConnector_->addTable("u", ROW("u_k", BIGINT()));
+  testConnector_->addTable("v", ROW("k", BIGINT()));
+
+  {
+    // A row-count barrier preserves the join-key identity for expressions
+    // above.
+    const auto query =
+        "SELECT coalesce(t_k, u_k) FROM ("
+        "  SELECT t_k, u_k "
+        "  FROM t LEFT JOIN u ON t_k = u_k "
+        "  LIMIT 10"
+        ")";
+    SCOPED_TRACE(query);
+    const auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchScan("t")
+            .hashJoinLeft(matchScan("u"), {.keys = {{"t_k = u_k"}}})
+            .finalLimit(0, 10)
+            .project({"t_k"})
+            .build());
+  }
+
+  {
+    const auto query =
+        "SELECT coalesce(t_k, u_k) "
+        "FROM t LEFT JOIN u ON t_k = u_k "
+        "ORDER BY t_k LIMIT 10";
+    SCOPED_TRACE(query);
+    const auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchScan("t")
+            .hashJoinLeft(matchScan("u"), {.keys = {{"t_k = u_k"}}})
+            .topN(10, {"t_k"})
+            .project({"t_k"})
+            .build());
+  }
+
+  {
+    const auto query =
+        "SELECT coalesce(t_k, u_k), sum(u_k) OVER (PARTITION BY t_k) AS s "
+        "FROM t LEFT JOIN u ON t_k = u_k";
+    SCOPED_TRACE(query);
+    const auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchScan("t")
+            .hashJoinLeft(matchScan("u"), {.keys = {{"t_k = u_k"}}})
+            .window({"sum(u_k) OVER (PARTITION BY t_k) as s"})
+            .project({"t_k", "s"})
+            .build());
+  }
+
+  {
+    const auto query =
+        "SELECT coalesce(t_k, u_k) "
+        "FROM t LEFT JOIN u ON t_k = u_k "
+        "CROSS JOIN UNNEST(ARRAY[t_k]) AS v(k)";
+    SCOPED_TRACE(query);
+    const auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchScan("t")
+            .hashJoinLeft(matchScan("u"), {.keys = {{"t_k = u_k"}}})
+            .project({"t_k", "u_k", "array[t_k] as arr"})
+            .unnest({"t_k", "u_k"}, {"arr"})
+            .project({"t_k"})
+            .build());
+  }
+
+  {
+    const auto query =
+        "SELECT coalesce(t_k, u_k), "
+        "  (SELECT k FROM v WHERE k = t_k LIMIT 2) "
+        "FROM t LEFT JOIN u ON t_k = u_k";
+    SCOPED_TRACE(query);
+    const auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchScan("t")
+            .hashJoinLeft(matchScan("u"), {.keys = {{"t_k = u_k"}}})
+            .assignUniqueId("row_id")
+            .hashJoinLeft(matchScan("v"), {.keys = {{"t_k = k"}}})
+            .rowNumber({"row_id"}, 2)
+            .enforceDistinct({"row_id"})
+            .project({"t_k", "k"})
+            .build());
+  }
+
+  {
+    const auto query =
+        "SELECT coalesce(t_k, u_k) "
+        "FROM t LEFT JOIN u ON t_k = u_k "
+        "GROUP BY t_k, u_k";
+    SCOPED_TRACE(query);
+    const auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchScan("t")
+            .hashJoinLeft(matchScan("u"), {.keys = {{"t_k = u_k"}}})
+            .singleAggregation({"t_k", "u_k"}, {})
+            .project({"t_k"})
+            .build());
+  }
+
+  {
+    const auto query =
+        "SELECT coalesce(t_k, u_k) "
+        "FROM t LEFT JOIN u ON t_k = u_k "
+        "GROUP BY ROLLUP(u_k, t_k)";
+    SCOPED_TRACE(query);
+    const auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchScan("t")
+            .hashJoinLeft(matchScan("u"), {.keys = {{"t_k = u_k"}}})
+            .groupId({{"u_k", "t_k"}, {"u_k"}, {}}, {}, "group_id")
+            .singleAggregation({"u_k", "t_k", "group_id"}, {})
+            .project({"coalesce(t_k, u_k)"})
+            .build());
+  }
+
+  {
+    // Join-key identities compose through a chain of joins.
+    const auto query =
+        "SELECT coalesce(coalesce(t_k, u_k), k) "
+        "FROM t "
+        "LEFT JOIN u ON t_k = u_k "
+        "LEFT JOIN v ON coalesce(t_k, u_k) = k";
+    SCOPED_TRACE(query);
+    const auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchScan("t")
+            .hashJoinLeft(matchScan("u"), {.keys = {{"t_k = u_k"}}})
+            .hashJoinLeft(matchScan("v"), {.keys = {{"t_k = k"}}})
+            .project({"t_k"})
+            .build());
+  }
+}
+
 TEST_P(JoinTest, nestedOuterJoins) {
   auto sql =
       "SELECT r2.r_name "
