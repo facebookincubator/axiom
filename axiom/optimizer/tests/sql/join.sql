@@ -256,6 +256,26 @@ WHERE coalesce(y, 1) > 0
 -- The projected b is the left side's, not the right side's filtered b.
 SELECT t_left.b FROM t t_left JOIN t t_right ON t_left.a = t_right.a WHERE t_right.b = 10
 ----
+-- A constant projected above a full outer join is that constant on every row,
+-- including the ones the join pads, where the side below it computes the equal
+-- constant into a column that reads NULL.
+SELECT p.v, c.k, 0 AS m
+FROM (SELECT k, 0 AS v FROM (VALUES (1)) AS s(k)) AS p
+FULL JOIN (VALUES (2)) AS c(k) ON p.k = c.k
+----
+-- The same expression written on each side of a full outer join is two
+-- different values on a padded row: the one computed below reads NULL, while
+-- the one above reads the NULL the join pads with and returns the default.
+SELECT p.w, c.k, coalesce(p.a, 9) AS m
+FROM (SELECT k, a, coalesce(a, 9) AS w FROM (VALUES (1, 5)) AS s(k, a)) AS p
+FULL JOIN (VALUES (2)) AS c(k) ON p.k = c.k
+----
+-- The preserved side's constant keeps its value on a row the join pads, where
+-- the padded side computes the equal constant into a column that reads NULL.
+SELECT h.k FROM (SELECT 7 AS k) AS h
+LEFT JOIN (SELECT 7 AS k FROM (VALUES (1)) AS s(x) WHERE false) AS n ON h.k = n.k
+WHERE n.k IS NULL
+----
 -- 8-way self-join hitting the greedy join-enumeration cutoff.
 SELECT count(*)
 FROM t t1

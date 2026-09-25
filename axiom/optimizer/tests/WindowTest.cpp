@@ -264,6 +264,23 @@ TEST_P(WindowTest, expressionInputs) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+TEST_P(WindowTest, partitionKeyReuse) {
+  // A projected expression that is also the partition key is computed once,
+  // below the window, and read above it from the partition key's column.
+  auto plan = toSingleNodePlan(
+      "SELECT n_regionkey + 1 AS k, "
+      "sum(n_nationkey) OVER (PARTITION BY n_regionkey + 1) AS s "
+      "FROM nation");
+
+  auto matcher =
+      matchScan("nation")
+          .project({"n_nationkey", "n_regionkey + 1 as partKey"})
+          .window({"sum(n_nationkey) OVER (PARTITION BY partKey) as s"})
+          .project({"partKey", "s"})
+          .build();
+  AXIOM_ASSERT_PLAN_V2(plan, matcher);
+}
+
 TEST_P(WindowTest, windowAfterFilter) {
   auto plan = toSingleNodePlan(
       "SELECT n_name, "

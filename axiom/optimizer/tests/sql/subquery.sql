@@ -182,6 +182,13 @@ FROM (SELECT 20 AS x, 30 AS y) v
 -- constant, for an outer row the subquery has no row for.
 SELECT a, (SELECT 1 FROM v WHERE v.a = t.a) AS one FROM t
 ----
+-- A constant beside an uncorrelated scalar subquery projecting the same
+-- constant keeps its value when the subquery returns no row.
+SELECT (SELECT 0 FROM v WHERE v.a > 100) AS s, 0 AS m
+----
+-- The same where the subquery correlates, so it reads NULL per outer row.
+SELECT t.a, (SELECT 0 FROM v WHERE v.a = t.a AND v.a > 100) AS s, 0 AS m FROM t
+----
 -- A correlated count(*) reads 0, not NULL, for an outer row the subquery
 -- has no row for, so a HAVING on that count still sees 0.
 -- error_v1: (0 vs. 1)

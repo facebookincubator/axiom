@@ -969,6 +969,31 @@ TEST_P(PlanTest, orderByDuplicateKeys) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+TEST_P(PlanTest, sortKeyReuse) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+
+  // A value computed as the sort key is computed once: a read of it above the
+  // TopN, or above a Filter on the TopN, takes the key's column.
+  auto sortedByKey = [] {
+    return matchScan("t").project({"a + b as x"}).topN(5);
+  };
+  const std::vector<
+      std::pair<std::string, std::shared_ptr<velox::core::PlanMatcher>>>
+      testCases = {
+          {"SELECT a + b AS s FROM t ORDER BY a + b LIMIT 5",
+           sortedByKey().project({"x"}).build()},
+          {"SELECT s FROM (SELECT a + b AS s FROM t ORDER BY a + b LIMIT 5) "
+           "WHERE s > 3",
+           sortedByKey().filter("x > 3").project({"x"}).build()},
+      };
+
+  for (const auto& [sql, matcher] : testCases) {
+    SCOPED_TRACE(sql);
+    auto plan = toSingleNodePlan(parseSelect(sql, kTestConnectorId));
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
+  }
+}
+
 TEST_P(PlanTest, lambdaArgs) {
   testConnector_->addTable(
       "t", ROW({"a", "b"}, {ARRAY(ARRAY(REAL())), BIGINT()}));

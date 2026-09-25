@@ -714,6 +714,15 @@ bool Project::isDeterministic() const {
   return true;
 }
 
+ColumnCP Project::columnFor(ExprCP expr) const {
+  for (size_t i = 0; i < exprs_.size(); ++i) {
+    if (exprs_[i] == expr) {
+      return outputColumns()[i];
+    }
+  }
+  return nullptr;
+}
+
 size_t Project::KeyHash::operator()(const Project* node) const {
   return hashOf(node->input(), node->outputColumns(), node->exprs());
 }
