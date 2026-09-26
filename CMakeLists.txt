@@ -51,6 +51,7 @@ set(VELOX_DEPENDENCY_SOURCE AUTO CACHE STRING "Default dependency source: AUTO S
 
 option(AXIOM_ENABLE_CCACHE "Use ccache if installed." ON)
 option(AXIOM_ENABLE_COLLAGEN "Build Collagen (Spark Connect server)." OFF)
+option(AXIOM_BUILD_TESTING "Enable Axiom tests." ON)
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
@@ -130,7 +131,10 @@ endif()
 
 message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
 
-include(CTest) # include after project() but before add_subdirectory()
+if(AXIOM_BUILD_TESTING)
+  set(BUILD_TESTING ON)
+  include(CTest) # include after project() but before add_subdirectory()
+endif()
 
 # Always bundle gtest to avoid ABI conflicts with system-installed versions.
 set(gtest_SOURCE BUNDLED)
