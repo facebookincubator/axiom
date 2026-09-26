@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-if(AXIOM_BUILD_TESTING)
+if(AXIOM_BUILD_TESTING OR AXIOM_BUILD_TEST_UTILS)
   add_subdirectory(tests)
 endif()
 

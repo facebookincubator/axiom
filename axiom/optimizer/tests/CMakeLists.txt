@@ -83,126 +83,135 @@ target_link_libraries(
   Boost::headers
 )
 
-add_executable(axiom_optimizer_tpch_plan_test TpchPlanTest.cpp TpchResultTest.cpp)
+# Holds a support library and no suite, so it follows the libraries above.
+add_subdirectory(utils)
 
-add_test(
-  NAME axiom_optimizer_tpch_plan_test
-  COMMAND axiom_optimizer_tpch_plan_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-)
+# A consumer can add this directory for the libraries above while leaving
+# AXIOM_BUILD_TESTING off; the suites below stay out of its ctest run.
+if(AXIOM_BUILD_TESTING)
+  add_executable(axiom_optimizer_tpch_plan_test TpchPlanTest.cpp TpchResultTest.cpp)
 
-target_link_libraries(
-  axiom_optimizer_tpch_plan_test
-  velox_dwio_common_test_utils
-  velox_exec_test_lib
-  axiom_optimizer_tests_tpch_data_generator
-  axiom_optimizer_tests_tpch_queries
-  axiom_optimizer_tests_query_test_base
-  axiom_optimizer_tests_hive_queries_test_base
-  axiom_runner_tests_utils
-  GTest::gtest
-)
+  add_test(
+    NAME axiom_optimizer_tpch_plan_test
+    COMMAND axiom_optimizer_tpch_plan_test
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  )
 
-add_executable(
-  axiom_optimizer_tests
-  AggregationTest.cpp
-  BitSetTest.cpp
-  DistinctAggregationTest.cpp
-  OutputNodeTest.cpp
-  CardinalityEstimationTest.cpp
-  ConnectorPushdownPassTest.cpp
-  ConnectorPushdownTest.cpp
-  CsvReadWriteTest.cpp
-  DeleteTest.cpp
-  DerivedTablePrinterTest.cpp
-  DomainTest.cpp
-  ExchangeSerdeTest.cpp
-  ExprMatcherTest.cpp
-  ExistencePushdownTest.cpp
-  FilterPushdownTest.cpp
-  FilteredTableStatsTest.cpp
-  FiltersTest.cpp
-  FixedPointTest.cpp
-  HiveRowIdentityTest.cpp
-  InferenceTest.cpp
-  JoinFilterPropagationTest.cpp
-  JoinFilterProjectionTest.cpp
-  JoinTest.cpp
-  LimitTest.cpp
-  MetadataCountsTest.cpp
-  MultiFragmentPlanTest.cpp
-  NonDeterministicFlagTest.cpp
-  OptimizerOptionsTest.cpp
-  OrderByTest.cpp
-  TpchDataGenerator.cpp
-  PrecomputeProjectionTest.cpp
-  PlanTest.cpp
-  RemoteOutputTest.cpp
-  QueryGraphContextTest.cpp
-  QueryWidthTest.cpp
-  RankingTest.cpp
-  RelationOpPrinterTest.cpp
-  SetTest.cpp
-  SubfieldTest.cpp
-  SubqueryTest.cpp
-  SubqueryFoldTest.cpp
-  SyntacticJoinOrderTest.cpp
-  TableSampleTest.cpp
-  FeatureGen.cpp
-  Genies.cpp
-  BucketedExecutionPlanTest.cpp
-  HiveBucketedExecutionPlanTest.cpp
-  TestConnectorQueryTest.cpp
-  TpchConnectorQueryTest.cpp
-  UnionAllTest.cpp
-  UnnestTest.cpp
-  UnknownStatsJoinTest.cpp
-  ValuesTest.cpp
-  WindowTest.cpp
-  WriteTest.cpp
-)
+  target_link_libraries(
+    axiom_optimizer_tpch_plan_test
+    velox_dwio_common_test_utils
+    velox_exec_test_lib
+    axiom_optimizer_tests_tpch_data_generator
+    axiom_optimizer_tests_tpch_queries
+    axiom_optimizer_tests_query_test_base
+    axiom_optimizer_tests_hive_queries_test_base
+    axiom_runner_tests_utils
+    GTest::gtest
+  )
 
-add_test(
-  NAME axiom_optimizer_tests
-  COMMAND axiom_optimizer_tests
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-)
+  add_executable(
+    axiom_optimizer_tests
+    AggregationTest.cpp
+    BitSetTest.cpp
+    DistinctAggregationTest.cpp
+    OutputNodeTest.cpp
+    CardinalityEstimationTest.cpp
+    ConnectorPushdownPassTest.cpp
+    ConnectorPushdownTest.cpp
+    CsvReadWriteTest.cpp
+    DeleteTest.cpp
+    DerivedTablePrinterTest.cpp
+    DomainTest.cpp
+    ExchangeSerdeTest.cpp
+    ExprMatcherTest.cpp
+    ExistencePushdownTest.cpp
+    FilterPushdownTest.cpp
+    FilteredTableStatsTest.cpp
+    FiltersTest.cpp
+    FixedPointTest.cpp
+    HiveRowIdentityTest.cpp
+    InferenceTest.cpp
+    JoinFilterPropagationTest.cpp
+    JoinFilterProjectionTest.cpp
+    JoinTest.cpp
+    LimitTest.cpp
+    MetadataCountsTest.cpp
+    MultiFragmentPlanTest.cpp
+    NonDeterministicFlagTest.cpp
+    OptimizerOptionsTest.cpp
+    OrderByTest.cpp
+    TpchDataGenerator.cpp
+    PrecomputeProjectionTest.cpp
+    PlanTest.cpp
+    RemoteOutputTest.cpp
+    QueryGraphContextTest.cpp
+    QueryWidthTest.cpp
+    RankingTest.cpp
+    RelationOpPrinterTest.cpp
+    SetTest.cpp
+    SubfieldTest.cpp
+    SubqueryTest.cpp
+    SubqueryFoldTest.cpp
+    SyntacticJoinOrderTest.cpp
+    TableSampleTest.cpp
+    FeatureGen.cpp
+    Genies.cpp
+    BucketedExecutionPlanTest.cpp
+    HiveBucketedExecutionPlanTest.cpp
+    TestConnectorQueryTest.cpp
+    TpchConnectorQueryTest.cpp
+    UnionAllTest.cpp
+    UnnestTest.cpp
+    UnknownStatsJoinTest.cpp
+    ValuesTest.cpp
+    WindowTest.cpp
+    WriteTest.cpp
+  )
 
-target_link_libraries(
-  axiom_optimizer_tests
-  axiom_optimizer_test_utils
-  axiom_optimizer
-  axiom_logical_plan_builder
-  axiom_optimizer_tests_hive_queries_test_base
-  axiom_optimizer_tests_tpch_data_generator
-  axiom_optimizer_tests_plan_matcher
-  axiom_optimizer_tests_query_test_base
-  axiom_runner_tests_utils
-  axiom_test_connector
-  velox_async_rpc_function_registry
-  velox_dwio_text_reader_register
-  velox_dwio_text_writer_register
-  GTest::gmock
-  glog::glog
-  GTest::gtest
-  GTest::gtest_main
-)
+  add_test(
+    NAME axiom_optimizer_tests
+    COMMAND axiom_optimizer_tests
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  )
+
+  target_link_libraries(
+    axiom_optimizer_tests
+    axiom_optimizer_test_utils
+    axiom_optimizer
+    axiom_logical_plan_builder
+    axiom_optimizer_tests_hive_queries_test_base
+    axiom_optimizer_tests_tpch_data_generator
+    axiom_optimizer_tests_plan_matcher
+    axiom_optimizer_tests_query_test_base
+    axiom_runner_tests_utils
+    axiom_test_connector
+    velox_async_rpc_function_registry
+    velox_dwio_text_reader_register
+    velox_dwio_text_writer_register
+    GTest::gmock
+    glog::glog
+    GTest::gtest
+    GTest::gtest_main
+  )
+endif()
 
 add_library(axiom_optimizer_tests_sql_file SqlFile.cpp)
 
 target_link_libraries(axiom_optimizer_tests_sql_file velox_exception)
 
-add_executable(axiom_optimizer_sql_file_test SqlFileTest.cpp)
+if(AXIOM_BUILD_TESTING)
+  add_executable(axiom_optimizer_sql_file_test SqlFileTest.cpp)
 
-add_test(NAME axiom_optimizer_sql_file_test COMMAND axiom_optimizer_sql_file_test)
+  add_test(NAME axiom_optimizer_sql_file_test COMMAND axiom_optimizer_sql_file_test)
 
-target_link_libraries(
-  axiom_optimizer_sql_file_test
-  axiom_optimizer_tests_sql_file
-  GTest::gmock
-  GTest::gtest
-  GTest::gtest_main
-)
+  target_link_libraries(
+    axiom_optimizer_sql_file_test
+    axiom_optimizer_tests_sql_file
+    GTest::gmock
+    GTest::gtest
+    GTest::gtest_main
+  )
+endif()
 
 add_library(axiom_optimizer_tests_sql_test_base SqlTestBase.cpp)
 
@@ -222,59 +231,59 @@ target_link_libraries(
   velox_window
 )
 
-add_executable(axiom_optimizer_sql_test SqlTest.cpp)
+if(AXIOM_BUILD_TESTING)
+  add_executable(axiom_optimizer_sql_test SqlTest.cpp)
 
-# One ctest entry per (optimizer version, query .sql file) so ctest runs the
-# files in parallel. Each .sql file has its own heavy per-file SetUpTestCase
-# (DuckDB runner + reference tables), so per-file is the right granularity:
-# gtest_discover_tests or gtest sharding would re-run that setup per test/shard.
-# The registerQueryFile<> list in SqlTest.cpp's main() remains the source of
-# truth for which files are registered. Deleting a registered file makes
-# registration throw, but adding a .sql file without a registerQueryFile<> call
-# is NOT caught here: its ctest entry matches no tests and gtest still exits 0.
-# Keep main()'s list in sync when adding query files.
-file(
-  GLOB _sql_files
-  CONFIGURE_DEPENDS
-  RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/sql
-  ${CMAKE_CURRENT_SOURCE_DIR}/sql/*.sql
-)
-# Setup fragments (e.g. common_setup.sql) are not query files.
-list(FILTER _sql_files EXCLUDE REGEX "_setup\\.sql$")
-foreach(_ver V1 V2)
-  string(TOLOWER ${_ver} _vlower)
-  foreach(_f ${_sql_files})
-    get_filename_component(_name ${_f} NAME_WE)
-    add_test(
-      NAME axiom_optimizer_sql_test_${_vlower}_${_name}
-      COMMAND axiom_optimizer_sql_test --gtest_filter=${_ver}/SqlTest_${_name}.*
-      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    )
+  # One ctest entry per (optimizer version, query .sql file) so ctest runs the
+  # files in parallel. Each .sql file has its own heavy per-file SetUpTestCase
+  # (DuckDB runner + reference tables), so per-file is the right granularity:
+  # gtest_discover_tests or gtest sharding would re-run that setup per test/shard.
+  # The registerQueryFile<> list in SqlTest.cpp's main() remains the source of
+  # truth for which files are registered. Deleting a registered file makes
+  # registration throw, but adding a .sql file without a registerQueryFile<> call
+  # is NOT caught here: its ctest entry matches no tests and gtest still exits 0.
+  # Keep main()'s list in sync when adding query files.
+  file(
+    GLOB _sql_files
+    CONFIGURE_DEPENDS
+    RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/sql
+    ${CMAKE_CURRENT_SOURCE_DIR}/sql/*.sql
+  )
+  # Setup fragments (e.g. common_setup.sql) are not query files.
+  list(FILTER _sql_files EXCLUDE REGEX "_setup\\.sql$")
+  foreach(_ver V1 V2)
+    string(TOLOWER ${_ver} _vlower)
+    foreach(_f ${_sql_files})
+      get_filename_component(_name ${_f} NAME_WE)
+      add_test(
+        NAME axiom_optimizer_sql_test_${_vlower}_${_name}
+        COMMAND axiom_optimizer_sql_test --gtest_filter=${_ver}/SqlTest_${_name}.*
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+      )
+    endforeach()
   endforeach()
-endforeach()
 
-target_link_libraries(
-  axiom_optimizer_sql_test
-  axiom_optimizer_tests_sql_test_base
-  axiom_optimizer_tests_sql_file
-  velox_connector_registry
-  velox_dwio_common_test_utils
-  velox_presto_types
-  GTest::gtest
-)
+  target_link_libraries(
+    axiom_optimizer_sql_test
+    axiom_optimizer_tests_sql_test_base
+    axiom_optimizer_tests_sql_file
+    velox_connector_registry
+    velox_dwio_common_test_utils
+    velox_presto_types
+    GTest::gtest
+  )
 
-add_subdirectory(utils)
+  add_executable(axiom_model_test ModelTest.cpp)
 
-add_executable(axiom_model_test ModelTest.cpp)
+  add_test(axiom_model_test axiom_model_test)
 
-add_test(axiom_model_test axiom_model_test)
-
-target_link_libraries(
-  axiom_model_test
-  axiom_optimizer
-  Boost::headers
-  glog::glog
-  GTest::gtest
-  GTest::gtest_main
-  pthread
-)
+  target_link_libraries(
+    axiom_model_test
+    axiom_optimizer
+    Boost::headers
+    glog::glog
+    GTest::gtest
+    GTest::gtest_main
+    pthread
+  )
+endif()

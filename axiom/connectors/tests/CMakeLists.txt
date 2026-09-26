@@ -26,48 +26,56 @@ target_link_libraries(
   re2::re2
 )
 
-add_executable(
-  axiom_test_connector_test
-  TestConnectorTest.cpp
-  ConnectorContextTest.cpp
-  ConnectorMetadataRegistryTest.cpp
-)
+# A consumer can add this directory for the libraries above while leaving
+# AXIOM_BUILD_TESTING off; the suites below stay out of its ctest run.
+if(AXIOM_BUILD_TESTING)
+  add_executable(
+    axiom_test_connector_test
+    TestConnectorTest.cpp
+    ConnectorContextTest.cpp
+    ConnectorMetadataRegistryTest.cpp
+  )
 
-add_test(axiom_test_connector_test axiom_test_connector_test)
+  add_test(axiom_test_connector_test axiom_test_connector_test)
 
-target_link_libraries(
-  axiom_test_connector_test
-  axiom_test_connector
-  velox_common_base
-  velox_memory
-  velox_connector
-  velox_exec
-  velox_vector_test_lib
-  GTest::gmock
-  GTest::gtest
-  GTest::gtest_main
-)
+  target_link_libraries(
+    axiom_test_connector_test
+    axiom_test_connector
+    velox_common_base
+    velox_memory
+    velox_connector
+    velox_exec
+    velox_vector_test_lib
+    GTest::gmock
+    GTest::gtest
+    GTest::gtest_main
+  )
 
-add_executable(axiom_test_table_json_test TestTableJsonTest.cpp)
+  add_executable(axiom_test_table_json_test TestTableJsonTest.cpp)
 
-add_test(axiom_test_table_json_test axiom_test_table_json_test)
+  add_test(axiom_test_table_json_test axiom_test_table_json_test)
 
-target_link_libraries(
-  axiom_test_table_json_test
-  axiom_test_connector
-  velox_common_base
-  velox_common_config
-  velox_memory
-  velox_test_util
-  velox_type
-  GTest::gtest
-  GTest::gtest_main
-)
+  target_link_libraries(
+    axiom_test_table_json_test
+    axiom_test_connector
+    velox_common_base
+    velox_common_config
+    velox_memory
+    velox_test_util
+    velox_type
+    GTest::gtest
+    GTest::gtest_main
+  )
 
-add_executable(axiom_connectors_tests SchemaResolverTest.cpp)
+  add_executable(axiom_connectors_tests SchemaResolverTest.cpp)
 
-add_test(axiom_connectors_tests axiom_connectors_tests)
+  add_test(axiom_connectors_tests axiom_connectors_tests)
 
-target_link_libraries(axiom_connectors_tests axiom_connectors axiom_test_connector gtest gtest_main)
-
-target_link_libraries(axiom_connectors velox_core gtest gtest_main gmock)
+  target_link_libraries(
+    axiom_connectors_tests
+    axiom_connectors
+    axiom_test_connector
+    gtest
+    gtest_main
+  )
+endif()

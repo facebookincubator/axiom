@@ -52,6 +52,7 @@ set(VELOX_DEPENDENCY_SOURCE AUTO CACHE STRING "Default dependency source: AUTO S
 option(AXIOM_ENABLE_CCACHE "Use ccache if installed." ON)
 option(AXIOM_ENABLE_COLLAGEN "Build Collagen (Spark Connect server)." OFF)
 option(AXIOM_BUILD_TESTING "Enable Axiom tests." ON)
+option(AXIOM_BUILD_TEST_UTILS "Build Axiom test-support libraries." OFF)
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
