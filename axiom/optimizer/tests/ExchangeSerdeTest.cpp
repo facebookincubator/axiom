@@ -25,7 +25,6 @@ using namespace velox;
 class ExchangeSerdeTest : public test::QueryTestBase {
  protected:
   void SetUp() override {
-    useV2_ = true;
     test::QueryTestBase::SetUp();
     testConnector_->addTable("t", ROW({"c", "v"}, {VARCHAR(), BIGINT()}));
   }

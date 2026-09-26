@@ -24,10 +24,6 @@ using namespace velox;
 
 class JoinFilterPropagationTest : public test::QueryTestBase {
  protected:
-  JoinFilterPropagationTest() {
-    useV2_ = true;
-  }
-
   void SetUp() override {
     test::QueryTestBase::SetUp();
     testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))

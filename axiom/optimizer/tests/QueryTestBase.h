@@ -310,8 +310,8 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
 
   // When true, `optimize()` routes through the v2 optimizer pipeline instead of
   // v1. Lets one fixture run the same tests through either optimizer (e.g. set
-  // from a TEST_P parameter). Default false = v1.
-  bool useV2_{false};
+  // from a TEST_P parameter).
+  bool useV2_{true};
 
   std::shared_ptr<connector::TestConnector> testConnector_;
 

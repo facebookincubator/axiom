@@ -39,8 +39,8 @@ class SqlQueryRunnerTestBase : public ::testing::Test,
   // Installs the process-wide Velox MemoryManager the runner allocates from.
   static void SetUpTestCase();
 
-  // Builds runner_ for the optimizer selected by useV2_ (default v1). A derived
-  // fixture selects v2 by setting useV2_ before calling this.
+  // Builds runner_ for the optimizer selected by useV2_. A derived fixture
+  // selects v1 by setting useV2_ = false before calling this.
   void SetUp() override;
 
   // Destroys runner_ and unregisters the connectors makeRunner() registered
@@ -94,7 +94,7 @@ class SqlQueryRunnerTestBase : public ::testing::Test,
 
   // Selects the optimizer makeRunner() builds; a parameterized fixture sets
   // this before calling makeRunner() and branches its expectations on v1 vs v2.
-  bool useV2_{false};
+  bool useV2_{true};
 
  private:
   std::vector<std::string> connectorIds_;

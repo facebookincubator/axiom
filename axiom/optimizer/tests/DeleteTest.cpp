@@ -30,11 +30,6 @@ class DeleteTest : public test::HiveQueriesTestBase {
   const std::string kDefaultSchema{
       connector::hive::LocalHiveConnectorMetadata::kDefaultSchema};
 
-  void SetUp() override {
-    test::HiveQueriesTestBase::SetUp();
-    useV2_ = true;
-  }
-
   static void SetUpTestCase() {
     test::HiveQueriesTestBase::SetUpTestCase();
     createTpchTables({velox::tpch::Table::TBL_NATION});

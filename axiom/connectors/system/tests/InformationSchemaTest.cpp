@@ -40,7 +40,6 @@ constexpr std::string_view kTpchConnectorId = "tpch";
 class InformationSchemaTest : public optimizer::test::QueryTestBase {
  protected:
   void SetUp() override {
-    useV2_ = true;
     optimizer::test::QueryTestBase::SetUp();
 
     registerSystemConnector(velox::PrestoTypes::displayName);

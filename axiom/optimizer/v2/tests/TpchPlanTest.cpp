@@ -32,11 +32,6 @@ using namespace facebook::velox;
 // `axiom/optimizer/v2/docs/TpchV1V2PlanComparison.md`. Result correctness is
 // checked separately in `TpchResultTest`.
 class TpchPlanTest : public optimizer::test::QueryTestBase {
- public:
-  TpchPlanTest() {
-    useV2_ = true;
-  }
-
  protected:
   static constexpr double kScaleFactor = 1.0;
 

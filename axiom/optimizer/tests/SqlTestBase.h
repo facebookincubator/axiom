@@ -137,7 +137,7 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
 
   // When true, makeRunner routes queries through the v2 optimizer
   // (axiom/optimizer/v2) instead of v1.
-  bool useV2_{false};
+  bool useV2_{true};
 
   // Returns the DuckDbQueryRunner used for table installation and result
   // comparison. The default returns 'duckDbQueryRunner_' (per-test,

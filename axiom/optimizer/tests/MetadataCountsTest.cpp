@@ -34,10 +34,6 @@ namespace {
 // 9/8/8 rows (25 total), so a has 9 nulls and 16 non-nulls.
 class MetadataCountsTest : public test::HiveQueriesTestBase {
  protected:
-  MetadataCountsTest() {
-    useV2_ = true;
-  }
-
   static void SetUpTestCase() {
     test::HiveQueriesTestBase::SetUpTestCase();
     createTpchTables({velox::tpch::Table::TBL_NATION});
