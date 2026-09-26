@@ -109,11 +109,24 @@ ExprCP PrecomputeProjections::toColumn(
   }
 
   if (expr->is(PlanType::kColumnExpr)) {
+    const auto* column = expr->as<Column>();
+    if (alias != nullptr && alias->outputName() != column->outputName()) {
+      if (auto it = seen_.find(expr); it != seen_.end()) {
+        if (it->second == alias) {
+          return alias;
+        }
+        seen_.erase(it);
+      }
+      addToProject(expr, alias);
+      needsProject_ = true;
+      return alias;
+    }
+
     // In narrowing mode the project is not seeded with the input columns, so a
     // referenced passthrough column must be added explicitly. This is not a
     // lifted expression, so it does not by itself require a project.
     if (!projectAllInputs_ && !seen_.contains(expr)) {
-      addToProject(expr, expr->as<Column>());
+      addToProject(expr, column);
     }
     return expr;
   }
