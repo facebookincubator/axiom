@@ -39,18 +39,22 @@ target_link_libraries(
   velox_tpch_connector
 )
 
-add_executable(axiom_runner_local_runner_test LocalRunnerTest.cpp Main.cpp)
+# A consumer can add this directory for the libraries above while leaving
+# AXIOM_BUILD_TESTING off; the suites below stay out of its ctest run.
+if(AXIOM_BUILD_TESTING)
+  add_executable(axiom_runner_local_runner_test LocalRunnerTest.cpp Main.cpp)
 
-add_test(axiom_runner_local_runner_test axiom_runner_local_runner_test)
+  add_test(axiom_runner_local_runner_test axiom_runner_local_runner_test)
 
-target_link_libraries(
-  axiom_runner_local_runner_test
-  axiom_runner_tests_utils
-  velox_exec_test_lib
-  velox_parse_parser
-  velox_parse_expression
-  GTest::gtest
-)
+  target_link_libraries(
+    axiom_runner_local_runner_test
+    axiom_runner_tests_utils
+    velox_exec_test_lib
+    velox_parse_parser
+    velox_parse_expression
+    GTest::gtest
+  )
+endif()
 
 add_library(axiom_runner_presto_query_replay_runner_test_utils PrestoQueryReplayRunner.cpp)
 
@@ -61,43 +65,48 @@ target_link_libraries(
   velox_exec_test_lib
 )
 
-add_executable(
-  axiom_runner_presto_query_replay_runner_test
-  PrestoQueryReplayRunnerTest.cpp
-  Main.cpp
-)
+if(AXIOM_BUILD_TESTING)
+  add_executable(
+    axiom_runner_presto_query_replay_runner_test
+    PrestoQueryReplayRunnerTest.cpp
+    Main.cpp
+  )
 
-add_test(axiom_runner_presto_query_replay_runner_test axiom_runner_presto_query_replay_runner_test)
+  add_test(
+    axiom_runner_presto_query_replay_runner_test
+    axiom_runner_presto_query_replay_runner_test
+  )
 
-target_link_libraries(
-  axiom_runner_presto_query_replay_runner_test
-  axiom_runner_presto_query_replay_runner_test_utils
-  velox_exec_test_lib
-  velox_exec
-  GTest::gtest
-)
+  target_link_libraries(
+    axiom_runner_presto_query_replay_runner_test
+    axiom_runner_presto_query_replay_runner_test_utils
+    velox_exec_test_lib
+    velox_exec
+    GTest::gtest
+  )
 
-add_executable(axiom_runner_progress_test QueryProgressBuilderTest.cpp Main.cpp)
+  add_executable(axiom_runner_progress_test QueryProgressBuilderTest.cpp Main.cpp)
 
-add_test(axiom_runner_progress_test axiom_runner_progress_test)
+  add_test(axiom_runner_progress_test axiom_runner_progress_test)
 
-target_link_libraries(
-  axiom_runner_progress_test
-  axiom_runner_local_runner
-  axiom_optimizer_multifragment_plan
-  velox_exec
-  GTest::gtest
-)
+  target_link_libraries(
+    axiom_runner_progress_test
+    axiom_runner_local_runner
+    axiom_optimizer_multifragment_plan
+    velox_exec
+    GTest::gtest
+  )
 
-add_executable(axiom_runner_progress_reporter_test ProgressReporterTest.cpp Main.cpp)
+  add_executable(axiom_runner_progress_reporter_test ProgressReporterTest.cpp Main.cpp)
 
-add_test(axiom_runner_progress_reporter_test axiom_runner_progress_reporter_test)
+  add_test(axiom_runner_progress_reporter_test axiom_runner_progress_reporter_test)
 
-target_link_libraries(
-  axiom_runner_progress_reporter_test
-  axiom_runner_tests_utils
-  axiom_runner_local_runner
-  velox_exec_test_lib
-  velox_exec
-  GTest::gtest
-)
+  target_link_libraries(
+    axiom_runner_progress_reporter_test
+    axiom_runner_tests_utils
+    axiom_runner_local_runner
+    velox_exec_test_lib
+    velox_exec
+    GTest::gtest
+  )
+endif()

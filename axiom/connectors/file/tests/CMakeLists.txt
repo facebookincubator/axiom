@@ -36,6 +36,7 @@ target_link_libraries(
   axiom_file_connector
   axiom_file_handler_parquet
   velox_type
+  GTest::gmock
   GTest::gtest
   GTest::gtest_main
 )

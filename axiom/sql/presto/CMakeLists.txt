@@ -60,6 +60,6 @@ target_link_libraries(
   re2::re2
 )
 
-if(AXIOM_BUILD_TESTING)
+if(AXIOM_BUILD_TESTING OR AXIOM_BUILD_TEST_UTILS)
   add_subdirectory(tests)
 endif()
