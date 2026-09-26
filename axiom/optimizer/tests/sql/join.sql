@@ -97,6 +97,13 @@ LEFT JOIN (VALUES (NULL), (1), (3)) AS u(u_k) ON t_k = u_k
 GROUP BY t_k, u_k
 
 ----
+-- Groups matched and unmatched LEFT JOIN rows by their available key.
+SELECT coalesce(t_k, u_k) AS user_rid, count(*)
+FROM (VALUES (NULL), (1), (2)) AS t(t_k)
+LEFT JOIN (VALUES (NULL), (1), (3)) AS u(u_k) ON t_k = u_k
+GROUP BY 1
+
+----
 -- ROLLUP can null the two join keys independently.
 SELECT coalesce(t_k, u_k), grouping(u_k), grouping(t_k), count(*)
 FROM (VALUES (NULL), (1), (2)) AS t(t_k)
