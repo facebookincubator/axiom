@@ -25,11 +25,6 @@ namespace {
 using namespace facebook::velox;
 
 class FilterSimplificationTest : public optimizer::test::QueryTestBase {
- public:
-  FilterSimplificationTest() {
-    useV2_ = true;
-  }
-
  protected:
   void configureTestConnector() override {
     testConnector_->addTable("t", ROW({"i8", "i64"}, {TINYINT(), BIGINT()}));

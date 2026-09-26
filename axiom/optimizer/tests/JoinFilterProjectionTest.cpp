@@ -27,10 +27,6 @@ using namespace velox;
 // dependencies and semantics allow.
 class JoinFilterProjectionTest : public test::QueryTestBase {
  protected:
-  JoinFilterProjectionTest() {
-    useV2_ = true;
-  }
-
   void SetUp() override {
     test::QueryTestBase::SetUp();
     testConnector_->addTable("t", ROW({"a", "b"}, {BIGINT(), VARCHAR()}));

@@ -40,10 +40,6 @@ core::PlanMatcherBuilder matchDelta(
 
 class FixedPointTest : public test::QueryTestBase {
  protected:
-  FixedPointTest() {
-    useV2_ = true;
-  }
-
   lp::PlanBuilder singleRow(const std::string& name, int64_t value) {
     return lp::PlanBuilder(context_).values(
         ROW(name, BIGINT()), std::vector<Variant>{Variant::row({value})});

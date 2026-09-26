@@ -52,10 +52,6 @@ class CoordinatorSchedulingTest : public optimizer::test::QueryTestBase {
  protected:
   static constexpr auto kSystemConnectorId = "testsystem";
 
-  CoordinatorSchedulingTest() {
-    useV2_ = true;
-  }
-
   void SetUp() override {
     optimizer::test::QueryTestBase::SetUp();
 

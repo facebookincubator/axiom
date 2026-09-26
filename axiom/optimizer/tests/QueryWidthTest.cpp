@@ -37,11 +37,6 @@ class QueryWidthTest : public test::HiveQueriesTestBase {
         {velox::tpch::Table::TBL_NATION, velox::tpch::Table::TBL_REGION});
   }
 
-  void SetUp() override {
-    useV2_ = true;
-    test::HiveQueriesTestBase::SetUp();
-  }
-
   PlanAndStats plan(std::string_view sql, const OptimizerOptions& options) {
     return planVelox(
         parseSelect(sql),

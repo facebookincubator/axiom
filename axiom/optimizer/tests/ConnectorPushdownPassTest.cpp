@@ -59,10 +59,6 @@ bool containsScanFromConnector(const Node* node, std::string_view connectorId) {
 
 class ConnectorPushdownPassTest : public optimizer::test::QueryTestBase {
  protected:
-  ConnectorPushdownPassTest() {
-    useV2_ = true;
-  }
-
   void SetUp() override {
     QueryTestBase::SetUp();
     testMetadata_ = dynamic_cast<connector::TestConnectorMetadata*>(

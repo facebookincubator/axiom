@@ -37,7 +37,6 @@ class DeleteTest : public SqlQueryRunnerTestBase {
   static constexpr auto kFileFormat = dwio::common::FileFormat::DWRF;
 
   void SetUp() override {
-    useV2_ = true;
     dataPath_ = exec::test::TempDirectoryPath::create();
 
     runner_ = makeRunner([&]() {

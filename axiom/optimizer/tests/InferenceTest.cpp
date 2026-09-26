@@ -28,7 +28,6 @@ using namespace velox;
 class InferenceTest : public test::QueryTestBase {
  protected:
   void SetUp() override {
-    useV2_ = true;
     test::QueryTestBase::SetUp();
 
     registerInference(
