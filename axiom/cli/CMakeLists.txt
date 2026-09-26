@@ -86,6 +86,7 @@ add_executable(axiom_hive_import ImportHiveData.cpp)
 
 target_link_libraries(axiom_hive_import axiom_cli)
 
-add_subdirectory(common/tests)
-
-add_subdirectory(tests)
+if(AXIOM_BUILD_TESTING)
+  add_subdirectory(common/tests)
+  add_subdirectory(tests)
+endif()
