@@ -94,7 +94,6 @@ void EstimateLeafStatsPass::run(NodeCP root, const OptimizerSession& session) {
   std::vector<TableTask> tasks;
   std::vector<folly::coro::Task<std::optional<connector::FilteredTableStats>>>
       requests;
-  folly::F14FastSet<int32_t> seen;
 
   // Shared helper offered to each connector's co_estimateStats. Outlives the
   // coroutines below, which run under blockingWait before this returns.
@@ -102,9 +101,6 @@ void EstimateLeafStatsPass::run(NodeCP root, const OptimizerSession& session) {
 
   for (ScanCP scan : scans) {
     const auto* baseTable = scan->baseTable();
-    if (!seen.insert(baseTable->id()).second) {
-      continue;
-    }
     const ScanHandle* handle = scan->scanHandle();
     VELOX_CHECK_NOT_NULL(
         handle, "Filtered-table stats need the connector's read handle");

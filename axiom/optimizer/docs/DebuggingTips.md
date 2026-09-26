@@ -64,6 +64,9 @@ The types correspond to stages of the query compilation pipeline:
 3. **OPTIMIZED** — Optimizer produces the best physical plan
 4. **EXECUTABLE** — Physical plan translated to Velox operators for execution
 
+For the v2 pass order and the `last_pass` setting used to inspect intermediate
+IR, see [Optimizer v2 Pass Cheat Sheet](../v2/docs/OptimizerPasses.md).
+
 ### TPC-H Data Directories
 
 Two pre-generated TPC-H datasets are available:

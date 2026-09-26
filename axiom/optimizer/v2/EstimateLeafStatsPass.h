@@ -24,7 +24,7 @@ namespace facebook::axiom::optimizer::v2 {
 /// Annotates base tables with connector filtered-table statistics.
 class EstimateLeafStatsPass {
  public:
-  /// For each base table reachable from 'root', calls
+  /// For each Scan reachable from 'root', calls
   /// `TableLayout::co_estimateStats` with the handle its `Scan` points at, and
   /// writes the post-filter row count into `BaseTable::filteredCardinality` and
   /// the per-column min/max/ndv into each `Column::value()`, in place;
