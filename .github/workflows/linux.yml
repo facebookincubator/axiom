@@ -106,3 +106,24 @@ jobs:
       - name: Run Tests
         run: |
           ctest --test-dir _build/${{ matrix.build_type }} -j 8 --output-on-failure --no-tests=error
+
+      # The Makefile always configures AXIOM_BUILD_TESTING=ON, so the run above
+      # never exercises what a consumer gets. Configure the other combination
+      # into a second tree and stop there, compiling nothing: a suite that
+      # escapes its guard lands in that consumer's ctest run. CMake logic does
+      # not vary by build type, so once is enough.
+      - name: Check the consumer configuration registers no suites
+        if: matrix.build_type == 'debug'
+        run: |
+          cmake -B _build/test_utils -GNinja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DAXIOM_BUILD_TEST_UTILS=ON \
+            -DAXIOM_BUILD_TESTING=OFF \
+            -DVELOX_MONO_LIBRARY=ON \
+            -DVELOX_BUILD_SHARED=ON
+          registered=$(cd _build/test_utils && ctest -N 2>/dev/null | grep "axiom_" || true)
+          if [ -n "${registered}" ]; then
+            echo "Registered with AXIOM_BUILD_TESTING=OFF:"
+            echo "${registered}"
+            exit 1
+          fi

@@ -16,36 +16,38 @@ add_library(axiom_logical_plan_matcher ExprMatcher.cpp LogicalPlanMatcher.cpp)
 
 target_link_libraries(axiom_logical_plan_matcher axiom_logical_plan GTest::gtest)
 
-add_executable(
-  axiom_sql_presto_test
-  AggregationParserTest.cpp
-  CallParserTest.cpp
-  ColumnFilteringTest.cpp
-  DdlParserTest.cpp
-  EnumLiteralTest.cpp
-  ExprMatcherTest.cpp
-  ExpressionParserTest.cpp
-  PrestoSqlErrorTest.cpp
-  PrestoParserTest.cpp
-  PrestoParserTestBase.cpp
-  ReferencedTablesTest.cpp
-  SortParserTest.cpp
-  SplitStatementsTest.cpp
-  SqlFunctionTest.cpp
-  WithRecursiveTest.cpp
-)
+if(AXIOM_BUILD_TESTING)
+  add_executable(
+    axiom_sql_presto_test
+    AggregationParserTest.cpp
+    CallParserTest.cpp
+    ColumnFilteringTest.cpp
+    DdlParserTest.cpp
+    EnumLiteralTest.cpp
+    ExprMatcherTest.cpp
+    ExpressionParserTest.cpp
+    PrestoSqlErrorTest.cpp
+    PrestoParserTest.cpp
+    PrestoParserTestBase.cpp
+    ReferencedTablesTest.cpp
+    SortParserTest.cpp
+    SplitStatementsTest.cpp
+    SqlFunctionTest.cpp
+    WithRecursiveTest.cpp
+  )
 
-add_test(axiom_sql_presto_test axiom_sql_presto_test)
+  add_test(axiom_sql_presto_test axiom_sql_presto_test)
 
-target_link_libraries(
-  axiom_sql_presto_test
-  axiom_logical_plan_matcher
-  axiom_logical_plan_builder
-  axiom_sql_presto_parser
-  axiom_system_connector
-  axiom_test_connector
-  GTest::gmock
-  glog::glog
-  GTest::gtest
-  GTest::gtest_main
-)
+  target_link_libraries(
+    axiom_sql_presto_test
+    axiom_logical_plan_matcher
+    axiom_logical_plan_builder
+    axiom_sql_presto_parser
+    axiom_system_connector
+    axiom_test_connector
+    GTest::gmock
+    glog::glog
+    GTest::gtest
+    GTest::gtest_main
+  )
+endif()

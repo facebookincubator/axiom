@@ -21,6 +21,33 @@ of the connectors is a separate CMake target.
 
 Avoid introducing new CMake targets unless there is a clear reason to do so.
 
+### Tests and test-support libraries
+
+Two options gate what a build produces:
+
+- `AXIOM_BUILD_TESTING` (on by default) builds Axiom's test suites and registers
+  them with ctest.
+- `AXIOM_BUILD_TEST_UTILS` (off by default) builds the support libraries that
+  test directories define, without the suites. A project that embeds Axiom and
+  links those libraries configures `-DAXIOM_BUILD_TEST_UTILS=ON
+  -DAXIOM_BUILD_TESTING=OFF` and adds no `axiom/*/tests` directory of its own.
+
+Two rules keep that working:
+
+- A `tests` directory that defines a library is added by its parent under
+  `if(AXIOM_BUILD_TESTING OR AXIOM_BUILD_TEST_UTILS)`. A directory holding only
+  suites keeps the plain `if(AXIOM_BUILD_TESTING)`.
+- Inside a `tests` directory, `add_library` sits outside any guard, while the
+  executables and their `add_test` calls sit behind `if(AXIOM_BUILD_TESTING)`.
+
+Adding an `add_library` to a suites-only test directory means its parent needs
+the `OR` too. Nothing fails if you forget: the library is quietly unavailable to
+consumers.
+
+Link gtest through `GTest::gtest`, `GTest::gtest_main` and `GTest::gmock`. The
+bare names can resolve to a system gtest whose headers do not match the bundled
+one.
+
 ## Design guidelines
 
 ### Keep Axiom generic

@@ -41,6 +41,6 @@ if(VELOX_ENABLE_TPCH_CONNECTOR)
   add_subdirectory(tpch)
 endif()
 
-if(AXIOM_BUILD_TESTING)
+if(AXIOM_BUILD_TESTING OR AXIOM_BUILD_TEST_UTILS)
   add_subdirectory(tests)
 endif()
