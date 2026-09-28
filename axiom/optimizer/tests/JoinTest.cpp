@@ -700,6 +700,30 @@ TEST_P(JoinTest, outerJoinWithInnerJoin) {
   }
 }
 
+// An inner join on a column of an outer join's null-padded side drops the
+// padded rows. Below a window partitioned by that column, the outer join
+// becomes inner: the padded rows form one partition, and the inner join
+// drops all of it. The query returns the same rows either way, so only the plan
+// shows it.
+TEST_P(JoinTest, demotionScope) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
+  testConnector_->addTable("v", ROW("p", BIGINT()));
+
+  auto plan = toSingleNodePlan(
+      "SELECT s.b, s.cnt FROM ("
+      "  SELECT t.b, u.y, count(*) OVER (PARTITION BY u.y) AS cnt"
+      "  FROM t LEFT JOIN u ON t.a = u.x) s "
+      "JOIN v ON s.y = v.p");
+  AXIOM_ASSERT_PLAN_V2(
+      plan,
+      matchScan("t")
+          .hashJoinInner(matchScan("u"), {.keys = {{"a = x"}}})
+          .window({"count(*) OVER (PARTITION BY y) as cnt"})
+          .hashJoinInner(matchScan("v"), {.keys = {{"y = p"}}})
+          .build());
+}
+
 TEST_P(JoinTest, coalesceJoinKeys) {
   if (!useV2_) {
     return;

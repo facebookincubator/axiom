@@ -299,6 +299,124 @@ FROM (VALUES (1, 10), (2, 20)) t(a, b)
 FULL JOIN (VALUES (1, 1), (3, 3)) u(x, y) ON a = x
 WHERE coalesce(y, 1) > 0
 ----
+-- An inner join on a column of a LEFT JOIN's null-padded side drops the padded
+-- rows. A window between the two joins still sees them: count(*) counts all 15
+-- rows, and each partition of l.a holds 5.
+SELECT s.b, s.rb, s.cnt, s.cnt_a
+FROM (
+  SELECT l.b, r.b AS rb,
+         count(*) OVER () AS cnt,
+         count(*) OVER (PARTITION BY l.a) AS cnt_a
+  FROM t l LEFT JOIN t r ON l.b = r.b AND r.b IN (100, 140, 150)
+) s
+JOIN t u ON s.rb = u.b
+----
+-- The same for a rank: the padded rows rank ahead of b = 100.
+SELECT s.b, s.rb, s.rnk
+FROM (
+  SELECT l.b, r.b AS rb, rank() OVER (ORDER BY l.b DESC) AS rnk
+  FROM t l LEFT JOIN t r ON l.b = r.b AND r.b IN (100, 140, 150)
+) s
+JOIN t u ON s.rb = u.b
+----
+-- A window ordered by the inner join's column still reads the padded rows:
+-- they sort first, so b = 100 is row 13.
+SELECT s.b, s.rb, s.rn
+FROM (
+  SELECT l.b, r.b AS rb,
+         row_number() OVER (ORDER BY r.b NULLS FIRST, l.b) AS rn
+  FROM t l LEFT JOIN t r ON l.b = r.b AND r.b IN (100, 140, 150)
+) s
+JOIN t u ON s.rb = u.b
+----
+-- The top row of each l.a partition. It is padded for a = 1, so the inner join
+-- drops that partition.
+SELECT s.a, s.rb
+FROM (
+  SELECT l.a, r.b AS rb,
+         row_number() OVER (PARTITION BY l.a ORDER BY l.b DESC) AS rn
+  FROM t l LEFT JOIN t r ON l.b = r.b AND r.b IN (100, 140, 150)
+) s
+JOIN t u ON s.rb = u.b
+WHERE s.rn = 1
+----
+-- A window partitioned by the inner join's column: the padded rows form the
+-- partition the inner join drops.
+SELECT s.b, s.rb, s.cnt
+FROM (
+  SELECT l.b, r.b AS rb, count(*) OVER (PARTITION BY r.b) AS cnt
+  FROM t l LEFT JOIN t r ON l.b = r.b AND r.b IN (100, 140, 150)
+) s
+JOIN t u ON s.rb = u.b
+----
+-- A window partitioned by an expression that is also NULL for b = 100: that
+-- row shares the partition of the 12 padded rows, so its count is 13.
+SELECT s.b, s.rb, s.cnt
+FROM (
+  SELECT l.b, r.b AS rb, count(*) OVER (PARTITION BY nullif(r.b, 100)) AS cnt
+  FROM t l LEFT JOIN t r ON l.b = r.b AND r.b IN (100, 140, 150)
+) s
+JOIN t u ON s.rb = u.b
+----
+-- A FULL JOIN keeps its padded rows under a window as well: count(*) counts
+-- all 15 rows.
+SELECT s.lb, s.rb, s.cnt
+FROM (
+  SELECT l.b AS lb, r.b AS rb, count(*) OVER () AS cnt
+  FROM (SELECT b FROM t WHERE b <= 100) l
+  FULL JOIN (SELECT b FROM t WHERE b >= 100) r ON l.b = r.b
+) s
+JOIN t u ON s.rb = u.b
+----
+-- ORDER BY with LIMIT keeps the three largest b, and one of them is padded.
+SELECT s.b, s.rb
+FROM (
+  SELECT l.b, r.b AS rb
+  FROM t l LEFT JOIN t r ON l.b = r.b AND r.b IN (100, 140, 150)
+  ORDER BY l.b DESC
+  LIMIT 3
+) s
+JOIN t u ON s.rb = u.b
+----
+-- ORDER BY with OFFSET skips the twelve smallest b, and 100 is among them.
+SELECT s.b, s.rb
+FROM (
+  SELECT l.b, r.b AS rb
+  FROM t l LEFT JOIN t r ON l.b = r.b AND r.b IN (100, 140, 150)
+  ORDER BY l.b
+  OFFSET 12
+) s
+JOIN t u ON s.rb = u.b
+----
+-- ORDER BY with LIMIT over a RIGHT JOIN, whose null-padded side is on the left.
+SELECT s.b, s.rb
+FROM (
+  SELECT l.b, r.b AS rb
+  FROM t r RIGHT JOIN t l ON l.b = r.b AND r.b IN (100, 140, 150)
+  ORDER BY l.b DESC
+  LIMIT 3
+) s
+JOIN t u ON s.rb = u.b
+----
+-- A scalar subquery over the LEFT JOIN returns its 15 rows, padded ones
+-- included, and fails.
+-- error: Expected single row of input.
+SELECT u.b
+FROM t u
+JOIN (
+  SELECT (SELECT r.b FROM t l LEFT JOIN t r ON l.b = r.b AND r.b = 100) AS rb
+) s ON u.b = s.rb
+----
+-- The same for a correlated scalar subquery, which returns 5 rows for each o.a.
+-- error: Scalar sub-query has returned multiple rows
+SELECT s.a, s.rb
+FROM (
+  SELECT o.a,
+         (SELECT r.b FROM t l LEFT JOIN t r ON l.b = r.b AND r.b = 100 WHERE l.a = o.a) AS rb
+  FROM t o
+) s
+JOIN t u ON s.rb = u.b
+----
 -- The projected b is the left side's, not the right side's filtered b.
 SELECT t_left.b FROM t t_left JOIN t t_right ON t_left.a = t_right.a WHERE t_right.b = 10
 ----

@@ -85,9 +85,12 @@ struct PushdownContext {
   // adding a `Project` to drop them.
   bool consumerDropsExtraColumns{false};
 
-  // `Column*`s whose values are guaranteed non-NULL in the current
-  // subtree (derived from default-null-behavior equi-keys of an
-  // ancestor inner join). Never inserted into the plan.
+  // `Column*`s for which an ancestor drops every row holding NULL (derived
+  // from default-null-behavior equi-keys of an ancestor inner join). A node
+  // passes a column to its input only when removing the input rows where it
+  // is NULL removes only output rows where it is NULL and leaves the other
+  // output rows unchanged. A TopN or a Window over all rows fails this: its
+  // other output rows read the removed rows. Never inserted into the plan.
   PlanObjectSet nonNullColumns;
 
   // Expression identities established by joins in this subtree. A parent
@@ -2270,6 +2273,8 @@ class Pushdown : public NodeRewriter<PushdownContext> {
 
     PushdownContext childContext =
         makeChildContext(std::move(pushable), context);
+    // Unnest computes the output rows of each input row from that row alone.
+    childContext.nonNullColumns = context.nonNullColumns;
     childContext.required.unionColumns(node->unnestExpressions());
     childContext.required.unionObjects(survivingReplicated);
     childContext.required.unionColumns(blocked);
@@ -2394,6 +2399,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       // The input supplies what the call reads; the result is produced here.
       child.required.unionColumns(node->call());
       child.requiredAbove = child.required;
+      child.nonNullColumns = context.nonNullColumns;
       NodeCP newInput = rewrite(node->input(), child);
 
       ColumnVector outputColumns = newInput->outputColumns();
@@ -2408,6 +2414,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
   // constant, so a deterministic conjunct keeps or drops the partition whole.
   // All others stay above, as do nondeterministic conjuncts, which would
   // instead thin a partition and change what the window functions read.
+  // Non-NULL hints from above pass below only for partition-key columns.
   // A single ranking function then specializes into the cheapest node
   // that computes it; anything else stays a Window with unread functions
   // pruned.
@@ -2464,7 +2471,10 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     childContext.required.unionColumns(node->partitionKeys());
     childContext.required.unionColumns(node->orderKeys());
     childContext.required.unionColumns(blocked);
+    // Rows with a NULL partition key form partitions of their own, and every
+    // output row of those partitions holds that NULL.
     childContext.nonNullColumns = context.nonNullColumns;
+    childContext.nonNullColumns.intersect(partitionKeyColumns);
 
     NodeCP result;
     if (fusion) {
@@ -2641,6 +2651,8 @@ class Pushdown : public NodeRewriter<PushdownContext> {
 
     PushdownContext childContext =
         makeChildContext(std::move(pushable), context);
+    // Each input row passes through on its own, with a unique id added.
+    childContext.nonNullColumns = context.nonNullColumns;
     childContext.required.unionColumns(blocked);
     childContext.requiredAbove = childContext.required;
     if (!outputsKept.contains(node->idColumn())) {
@@ -2662,12 +2674,13 @@ class Pushdown : public NodeRewriter<PushdownContext> {
   NodeCP rewriteEnforceDistinct(
       const EnforceDistinct* node,
       PushdownContext& context) override {
+    // Non-NULL hints stay above: a row they would drop can be the duplicate
+    // this node must fail on.
     PushdownContext childContext;
     childContext.required = context.required;
     childContext.required.unionColumns(context.pending);
     childContext.required.unionColumns(node->distinctKeys());
     childContext.requiredAbove = childContext.required;
-    childContext.nonNullColumns = context.nonNullColumns;
     NodeCP newInput = rewrite(node->input(), childContext);
     ExprVector distinctKeys = node->distinctKeys();
     ExprVector pending = std::move(context.pending);
@@ -2820,7 +2833,9 @@ class Pushdown : public NodeRewriter<PushdownContext> {
   // Builds a child `PushdownContext` whose required column set is
   // `parent.required` plus the columns referenced by any conjunct in
   // `pending`. Callers augment the result with the node's own column
-  // reads before recursing.
+  // reads before recursing. Non-NULL hints stay above; a caller whose node
+  // computes the output rows of each input row from that row alone passes them
+  // on.
   PushdownContext makeChildContext(
       ExprVector pending,
       const PushdownContext& parent) {
@@ -2830,7 +2845,6 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     child.required.unionColumns(child.pending);
     // Conservative: callers that push a fusable mark down refine this.
     child.requiredAbove = parent.required;
-    child.nonNullColumns = parent.nonNullColumns;
     return child;
   }
 
@@ -2875,7 +2889,9 @@ class Pushdown : public NodeRewriter<PushdownContext> {
   // Invokes `recurse` with an empty-pending context — letting the
   // subtree rewrite under its own clean pending state, while still
   // propagating `required` — then wraps the caller's `context.pending`
-  // as a Filter above the recursed result.
+  // as a Filter above the recursed result. Non-NULL hints stay above as
+  // well; a caller whose node computes the output rows of each input row from
+  // that row alone restores them in `recurse`.
   template <typename Recurse>
   NodeCP blockAt(PushdownContext& context, Recurse recurse) {
     PushdownContext empty;
@@ -2884,7 +2900,6 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     // Blocked conjuncts wrap as a Filter above the recursed subtree, so
     // everything is "above" it.
     empty.requiredAbove = empty.required;
-    empty.nonNullColumns = context.nonNullColumns;
     NodeCP recursed = recurse(empty);
     ExprVector blocked = std::move(context.pending);
     applyOutputRewrites(empty, blocked);
