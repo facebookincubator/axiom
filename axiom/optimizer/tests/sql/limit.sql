@@ -30,6 +30,42 @@ SELECT * FROM t ORDER BY b + c DESC LIMIT 3
 -- ordered
 SELECT * FROM (VALUES (1, 2), (3, 1), (2, 5)) t(a, b) ORDER BY a + b DESC LIMIT 2
 ----
+-- A WHERE above ORDER BY with LIMIT filters the rows the limit keeps, the three
+-- largest b, even when nothing above the WHERE reads a column of them. Two of
+-- the three pass. Smaller b pass the WHERE too, and the limit drops them.
+SELECT count(*) FROM (SELECT b FROM t ORDER BY b DESC LIMIT 3) WHERE b < 145
+----
+-- Same, returning a constant for each row that passes.
+SELECT 1 FROM (SELECT b FROM t ORDER BY b DESC LIMIT 3) WHERE b < 145
+----
+-- Same, with an OFFSET that skips the largest b.
+SELECT count(*) FROM (SELECT b FROM t ORDER BY b DESC OFFSET 1 LIMIT 2)
+WHERE b < 135
+----
+-- Same, filtering on a column that is not the ORDER BY key.
+SELECT count(*) FROM (SELECT b, c FROM t ORDER BY b DESC LIMIT 3) WHERE c < 15
+----
+-- Same, filtering on an expression computed above the limit.
+SELECT count(*)
+FROM (SELECT b + 1 AS w FROM (SELECT b FROM t ORDER BY b DESC LIMIT 3))
+WHERE w < 146
+----
+-- Same, filtering one side of a cross join.
+SELECT count(*)
+FROM (SELECT b FROM t ORDER BY b DESC LIMIT 3) x
+CROSS JOIN (VALUES (1), (2)) u(z)
+WHERE x.b < 145
+----
+-- Same, with the filter in the ON clause of a join.
+SELECT count(*)
+FROM (SELECT b FROM t ORDER BY b DESC LIMIT 3) x
+JOIN (VALUES (1), (2)) u(z) ON x.b < 145
+----
+-- Same, inside an EXISTS. None of the three largest b passes.
+SELECT count(*) FROM (VALUES (1), (2)) u(z)
+WHERE EXISTS (
+  SELECT 1 FROM (SELECT b FROM t ORDER BY b DESC LIMIT 3) WHERE b < 125)
+----
 -- count 0
 SELECT a, b FROM t LIMIT 0
 ----

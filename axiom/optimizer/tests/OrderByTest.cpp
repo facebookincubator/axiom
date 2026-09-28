@@ -76,6 +76,22 @@ TEST_P(OrderByTest, orderByOfUnreadRowsDrops) {
           .build());
 }
 
+TEST_P(OrderByTest, unreadTopN) {
+  // Nothing reads a column of the rows an ORDER BY with LIMIT keeps, so only
+  // their count is observable, and a plain limit keeps the same count.
+  auto plan = scan("nation")
+                  .orderBy({"n_nationkey"})
+                  .limit(3)
+                  .aggregate({}, {"count(1)"});
+
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(plan.build()),
+      matchScan("nation")
+          .finalLimit(0, 3)
+          .singleAggregation({}, {"count(1)"})
+          .build());
+}
+
 AXIOM_INSTANTIATE_V1_V2(OrderByTest);
 
 } // namespace

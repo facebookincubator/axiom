@@ -67,11 +67,12 @@ struct PushdownContext {
   // a conjunct lands).
   PlanObjectSet required;
 
-  // Subset of `required` demanded by consumers strictly above this node,
-  // i.e. `required` without the columns folded in for `pending`. A
-  // kLeftSemiProject mark in this set is live above and must not be
-  // fused away. Conservatively defaults to `required` on paths that do
-  // not refine it, which only blocks (never wrongly enables) fusion.
+  // Columns that consumers strictly above this node read, not counting the
+  // conjuncts in `pending`. A conjunct in `pending` that ends up in a Filter
+  // above this node reads its rows too; `blockAt` adds those columns back for
+  // its callback. Paths that do not refine this set default to `required`,
+  // which can keep a mark, a Sort, a TopN or a column that is not needed but
+  // never drops one that is.
   PlanObjectSet requiredAbove;
 
   // Per-partition row cap implied by a `Limit` or `TopN` directly above a
@@ -2127,12 +2128,12 @@ class Pushdown : public NodeRewriter<PushdownContext> {
   // TopN: a filter barrier like Limit (its bound depends on the row set), and
   // its order keys must survive in the child like Sort.
   NodeCP rewriteTopN(const TopN* node, PushdownContext& context) override {
-    // As in rewriteSort, with no column read above only the row count the
-    // TopN keeps is observable, which a Limit keeps as well.
-    const bool rowsUnread =
-        !context.requiredAbove.containsAny(node->outputColumns());
     return blockAt(context, [&](PushdownContext& empty) -> NodeCP {
-      if (rowsUnread) {
+      // With no column read above, only the row count the TopN keeps is
+      // observable, which a Limit keeps as well. The conjuncts blocked here
+      // filter the rows the TopN keeps, so `empty.requiredAbove` includes the
+      // columns they read.
+      if (!empty.requiredAbove.containsAny(node->outputColumns())) {
         return builder().make<Limit>(
             {rewrite(node->input(), empty), node->offset(), node->count()});
       }
