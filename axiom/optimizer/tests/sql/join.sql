@@ -1,4 +1,12 @@
 -- setup_file: common_setup.sql
+-- setup
+-- A larger relation with a strict key subset gives joins a stable physical
+-- orientation while retaining both matching and non-matching keys.
+CREATE TABLE t_large AS
+SELECT source.a AS k, source.b AS v
+FROM t source CROSS JOIN t multiplier
+WHERE source.a < 3
+-- end_setup
 
 -- A join condition no row satisfies keeps every left row and reads NULL for
 -- the right side.
@@ -549,3 +557,47 @@ WITH lookup(keys, map_values) AS (
 )
 SELECT a, map(keys, map_values)[a], map(keys, map_values)[a + 1]
 FROM t CROSS JOIN lookup
+----
+-- Grouping a full outer join by the coalesce of its key pair.
+SELECT coalesce(o.a, r.a) AS k, count(*)
+FROM t o
+FULL OUTER JOIN t r ON o.a = r.a AND r.b > 140
+GROUP BY 1
+----
+-- A right join grouped by its preserved right key.
+SELECT preserved.a, count(*)
+FROM t_large matching
+RIGHT JOIN t preserved ON matching.k = preserved.a
+GROUP BY preserved.a
+----
+-- A right join feeding a left join on its preserved right key. The second
+-- join condition also reads the first join's null-supplying side.
+SELECT preserved.a, count(parent.a)
+FROM t_large matching
+RIGHT JOIN t preserved ON matching.k = preserved.a
+LEFT JOIN t parent
+  ON preserved.a = parent.a
+  AND (matching.k IS NULL OR matching.v < parent.b)
+GROUP BY preserved.a
+----
+-- EXISTS grouped by its correlated outer key.
+SELECT outer_table.a, count(*)
+FROM t outer_table
+WHERE EXISTS (
+  SELECT 1 FROM t_large inner_table
+  WHERE inner_table.k = outer_table.a)
+GROUP BY outer_table.a
+----
+-- NOT EXISTS grouped by its correlated outer key.
+SELECT outer_table.a, count(*)
+FROM t outer_table
+WHERE NOT EXISTS (
+  SELECT 1 FROM t_large inner_table
+  WHERE inner_table.k = outer_table.a)
+GROUP BY outer_table.a
+----
+-- NOT IN grouped by its left-hand key.
+SELECT outer_table.a, count(*)
+FROM t outer_table
+WHERE outer_table.a NOT IN (SELECT k FROM t_large)
+GROUP BY outer_table.a

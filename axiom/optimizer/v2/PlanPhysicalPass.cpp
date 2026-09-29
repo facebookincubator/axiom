@@ -815,6 +815,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     DPhyp dphyp{
         graph,
         costModel,
+        builder(),
         options_.dphypEnumerationBudget,
         numWorkers_,
         options_.hashStageTasks(numWorkers_),

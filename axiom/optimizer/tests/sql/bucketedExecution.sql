@@ -78,6 +78,17 @@ SELECT a.v, c.v FROM t a JOIN v c ON a.k = c.k AND a.j = c.j
 -- Aggregation above a join, grouping on the probe's bucket key.
 SELECT a.k, count(*) FROM t a JOIN u b ON a.k = b.k GROUP BY a.k
 ----
+-- A right join over co-bucketed inputs feeds a left join on its preserved
+-- right key, followed by grouping on that key. The second join condition also
+-- reads the first join's null-supplying side.
+SELECT preserved.k, count(parent.k)
+FROM u matching
+RIGHT JOIN u preserved ON matching.k = preserved.k
+LEFT JOIN b16 parent
+  ON preserved.k = parent.k
+  AND (matching.k IS NULL OR matching.v > parent.v)
+GROUP BY preserved.k
+----
 -- Every leg of a union bucketed the same way.
 SELECT k, count(*) FROM (SELECT k FROM t UNION ALL SELECT k FROM u) GROUP BY k
 ----

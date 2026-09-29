@@ -35,6 +35,7 @@
 namespace facebook::axiom::optimizer::v2 {
 
 struct ScanHandle;
+class Builder;
 
 /// Discriminator for Node subtypes.
 enum class NodeType : uint8_t {
@@ -1262,7 +1263,7 @@ class Join : public Node {
     bool operator()(const Join* node, const Key& key) const;
   };
 
-  explicit Join(Key key);
+  Join(Key key, Builder& builder);
 
   NodeCP left() const {
     return inputs_[0];
@@ -1314,6 +1315,33 @@ class Join : public Node {
       velox::core::JoinType joinType,
       bool leftIsKnownEmpty,
       bool rightIsKnownEmpty);
+
+  /// Derives a join's output partitioning from both inputs. Inputs that both
+  /// sit on one task keep that, whatever the join type. Otherwise a join keeps
+  /// a preserved side's partitioning when every output row carries that side's
+  /// column values unchanged; when both sides qualify (an inner join), it uses
+  /// the left.
+  ///
+  /// A full join preserves neither side, but every output row still carries the
+  /// value that placed it in the coalesce of each equi-key pair: matched rows
+  /// agree on the pair, and an unmatched row's null side falls through to the
+  /// key from the side it came from. Co-partitioned inputs therefore yield a
+  /// partitioning on those coalesces. Output derivation and consumer rewrites
+  /// use the same canonical operand order, so either physical join orientation
+  /// and either consumer spelling describe the same partitioning.
+  ///
+  /// Non-hash partitioning is inherited without its merge order. For hash
+  /// partitioning, compatible connector bucket types are folded and every key
+  /// must remain expressible on the output. An inner join can replace a dropped
+  /// column key with a surviving member of its equality class.
+  static Partitioning outputPartitioning(
+      velox::core::JoinType joinType,
+      const Partitioning& leftPartitioning,
+      const Partitioning& rightPartitioning,
+      const ExprVector& leftKeys,
+      const ExprVector& rightKeys,
+      const PlanObjectSet& outputColumns,
+      Builder& builder);
 
   /// Returns the BOOLEAN mark this semi-project join adds to the preserved
   /// side's columns, which is its last output column. Only semi-project joins

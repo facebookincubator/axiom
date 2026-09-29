@@ -144,6 +144,13 @@ class JoinOp : public MemoOp {
       std::vector<size_t> filterEdges = {},
       Partitioning outputPartitioning = {});
 
+  /// Returns the Velox join type a candidate with `joinType` and `reversedAnti`
+  /// lowers to at emit. A reversed antijoin is synthesized from a
+  /// `kRightSemiProject`, which passes through the same physical right input.
+  static velox::core::JoinType emittedJoinType(
+      velox::core::JoinType joinType,
+      bool reversedAnti);
+
   RelationSet cover() const override {
     return cover_;
   }

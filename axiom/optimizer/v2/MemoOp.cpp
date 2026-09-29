@@ -18,6 +18,8 @@
 
 #include <folly/container/F14Map.h>
 
+#include "velox/common/base/Exceptions.h"
+
 namespace facebook::axiom::optimizer::v2 {
 
 namespace {
@@ -67,6 +69,16 @@ JoinOp::JoinOp(
       keyEdges{std::move(keyEdges)},
       filterEdges{std::move(filterEdges)},
       cover_{combinedCover(leftChild, rightChild)} {}
+
+velox::core::JoinType JoinOp::emittedJoinType(
+    velox::core::JoinType joinType,
+    bool reversedAnti) {
+  if (!reversedAnti) {
+    return joinType;
+  }
+  VELOX_CHECK_EQ(joinType, velox::core::JoinType::kAnti);
+  return velox::core::JoinType::kRightSemiProject;
+}
 
 UnnestOp::UnnestOp(
     Cost cost,

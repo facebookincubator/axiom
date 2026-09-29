@@ -928,6 +928,39 @@ TEST_P(BucketedExecutionTest, bucketedAggThenBucketedJoin) {
           .build());
 }
 
+TEST_P(BucketedExecutionTest, fullJoinCoBucketed) {
+  addBucketedTable("fj_left", {"customer_id"}, 16);
+  addBucketedTable(
+      "fj_right", {"id"}, 16, ROW({"id", "name"}, {BIGINT(), VARCHAR()}));
+  const auto logicalPlan = parseSelect(
+      "SELECT coalesce(customer_id, id) AS k, COUNT(*) AS cnt "
+      "FROM fj_left FULL OUTER JOIN fj_right ON customer_id = id "
+      "GROUP BY 1",
+      kTestConnectorId);
+  // The full join states the bucketing both sides share on the coalesce of
+  // its key pair, so the aggregation above it needs no shuffle.
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(logicalPlan, /*numDrivers=*/4),
+      matchScan("fj_left")
+          .hashJoinFull(matchScan("fj_right"), {.keys = {{"customer_id = id"}}})
+          .project({"coalesce(customer_id, id) as k"})
+          .localAggregation({"k"}, {"count(*) as cnt"})
+          .build());
+
+  const auto plan = planDistributed(logicalPlan);
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      plan.plan,
+      matchScan("fj_left")
+          .hashJoinFull(matchScan("fj_right"), {.keys = {{"customer_id = id"}}})
+          .project({"coalesce(customer_id, id) as k"})
+          .partialAggregation({"k"}, {"count(*) as cnt"})
+          .localPartition({"k"})
+          .finalAggregation({"k"}, {"count(cnt) as cnt"})
+          .fragment({.width = 4, .bucketedScans = 2})
+          .gather()
+          .build());
+}
+
 TEST_P(BucketedExecutionTest, bucketedAggThenBroadcastJoin) {
   addBucketedTable("bc_orders", {"customer_id"}, 16);
   addUnbucketedTable(

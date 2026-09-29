@@ -441,6 +441,45 @@ TEST_P(SetTest, exceptAll) {
   }
 }
 
+TEST_P(SetTest, exceptAllPartitioning) {
+  testConnector_->addTable("t", ROW("a", BIGINT()))
+      ->setStats(100, {{"a", {.numDistinct = 100}}});
+  testConnector_->addTable("u", ROW("b", BIGINT()))
+      ->setStats(10'000, {{"b", {.numDistinct = 10'000}}});
+
+  const auto logicalPlan = parseSelect(
+      "SELECT a, count(*) FROM ("
+      "  SELECT a FROM t EXCEPT ALL SELECT b FROM u"
+      ") s GROUP BY a");
+
+  // The aggregation reuses the counting anti join's partitioning on a.
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(logicalPlan, /*numDrivers=*/4),
+      matchScan("t")
+          .localPartition({"a"})
+          .hashJoin(
+              matchScan("u"),
+              core::JoinType::kCountingAnti,
+              {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
+          .localAggregation({"a"}, {"count(*) as count"})
+          .build());
+
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(logicalPlan).plan,
+      matchScan("t")
+          .shuffle({"a"})
+          .localPartition({"a"})
+          .hashJoin(
+              matchScan("u").shuffle({"b"}),
+              core::JoinType::kCountingAnti,
+              {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
+          .partialAggregation({"a"}, {"count(*) as count"})
+          .localPartition({"a"})
+          .finalAggregation({"a"}, {"count(count) as count"})
+          .gather()
+          .build());
+}
+
 TEST_P(SetTest, intersectAll) {
   // t1 is much larger than t2 and t3, so the optimizer keeps t1 on probe.
   testConnector_->addTable("t1", ROW({"a"}, BIGINT()))

@@ -1377,6 +1377,183 @@ TEST_P(JoinTest, rightJoin) {
   }
 }
 
+TEST_P(JoinTest, rightJoinPartitioning) {
+  addTableWithStats("t", {"a"}, 10'000);
+  addTableWithStats("u", {"b"}, 100);
+  addTableWithStats("v", {"c", "d"}, 10);
+  optimizerOptions_.broadcastSizeLimit = 1;
+
+  const auto logicalPlan = parseSelect(
+      "SELECT * "
+      "FROM t RIGHT JOIN u ON a = b "
+      "LEFT JOIN v ON b = c AND (a IS NULL OR a < d)",
+      kTestConnectorId);
+
+  // The extra predicate reads 'a' from the first join, forcing the left join
+  // to remain above the right join. The parent can then consume the right
+  // join's preserved-key partitioning.
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(logicalPlan, /*numDrivers=*/4),
+      matchScan("t")
+          .hashJoinRight(matchScan("u"), {.keys = {{"a = b"}}})
+          .hashJoinLeft(
+              matchScan("v"),
+              {.keys = {{"b = c"}}, .filter = "is_null(a) OR a < d"})
+          .build());
+
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(logicalPlan).plan,
+      matchScan("t")
+          .shuffle({"a"})
+          .hashJoinRight(matchScan("u").shuffle({"b"}), {.keys = {{"a = b"}}})
+          .hashJoinLeft(
+              matchScan("v").shuffle({"c"}),
+              {.keys = {{"b = c"}}, .filter = "is_null(a) OR a < d"})
+          .gather()
+          .build());
+}
+
+TEST_P(JoinTest, fullJoinPartitioning) {
+  // The key names sort opposite their creation order, so producer and consumer
+  // canonicalization must still agree.
+  addTableWithStats("t", {"z"}, 10'000);
+  addTableWithStats("u", {"a"}, 100);
+
+  const std::string query =
+      "SELECT coalesce(z, a) AS k, count(*) "
+      "FROM t FULL OUTER JOIN u ON z = a "
+      "GROUP BY 1";
+
+  {
+    // The aggregation reuses the full join's coalesced-key partitioning.
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(
+            parseSelect(query, kTestConnectorId), /*numDrivers=*/4),
+        matchScan("t")
+            .hashJoinFull(matchScan("u"), {.keys = {{"z = a"}}})
+            .project({"coalesce(z, a) as k"})
+            .localAggregation({"k"}, {"count(*) as count"})
+            .build());
+
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(parseSelect(query, kTestConnectorId)).plan,
+        matchScan("t")
+            .shuffle({"z"})
+            .hashJoinFull(matchScan("u").shuffle({"a"}), {.keys = {{"z = a"}}})
+            .project({"coalesce(z, a) as k"})
+            .partialAggregation({"k"}, {"count(*) as count"})
+            .localPartition({"k"})
+            .finalAggregation({"k"}, {"count(count) as count"})
+            .gather()
+            .build());
+  }
+
+  {
+    // Make t the build side so the physical join reverses the SQL operands.
+    // The full join must still describe its output using canonical
+    // coalesce(z, a), allowing the aggregation to reuse that partitioning
+    // without a shuffle.
+    testConnector_->setStats("t", 100, {{"z", {.numDistinct = 100}}});
+    testConnector_->setStats("u", 10'000, {{"a", {.numDistinct = 10'000}}});
+
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(
+            parseSelect(query, kTestConnectorId), /*numDrivers=*/4),
+        matchScan("u")
+            .hashJoinFull(matchScan("t"), {.keys = {{"a = z"}}})
+            .project({"coalesce(z, a) as k"})
+            .localAggregation({"k"}, {"count(*) as count"})
+            .build());
+
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(parseSelect(query, kTestConnectorId)).plan,
+        matchScan("u")
+            .shuffle({"a"})
+            .hashJoinFull(matchScan("t").shuffle({"z"}), {.keys = {{"a = z"}}})
+            .project({"coalesce(z, a) as k"})
+            .partialAggregation({"k"}, {"count(*) as count"})
+            .localPartition({"k"})
+            .finalAggregation({"k"}, {"count(count) as count"})
+            .gather()
+            .build());
+  }
+}
+
+// Inputs that both sit on one task keep that, and a full join is no
+// exception even though it preserves neither side's key partitioning.
+TEST_P(JoinTest, fullJoinGathered) {
+  addTableWithStats("t", {"a"}, 10'000);
+  addTableWithStats("u", {"b"}, 10'000);
+
+  // An ungrouped aggregation leaves its result on one task, so both inputs
+  // arrive gathered.
+  const auto logicalPlan = parseSelect(
+      "SELECT coalesce(x, y) AS k, count(*) "
+      "FROM (SELECT count(a) AS x FROM t) "
+      "FULL OUTER JOIN (SELECT count(b) AS y FROM u) ON x = y "
+      "GROUP BY 1",
+      kTestConnectorId);
+
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(logicalPlan, /*numDrivers=*/4),
+      matchScan("t")
+          .localAggregation({}, {"count(a) as x"})
+          .hashJoinFull(
+              matchScan("u").localAggregation({}, {"count(b) as y"}),
+              {.keys = {{"x = y"}}})
+          .project({"coalesce(x, y) as k"})
+          .localAggregation({"k"}, {"count(*) as count"})
+          .build());
+
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(logicalPlan).plan,
+      matchScan("t")
+          .distributedAggregation({}, {"count(a) as x"})
+          .hashJoinFull(
+              matchScan("u").distributedAggregation({}, {"count(b) as y"}),
+              {.keys = {{"x = y"}}})
+          .project({"coalesce(x, y) as k"})
+          .localAggregation({"k"}, {"count(*) as count"})
+          .build());
+}
+
+// A floating-point key is ineligible: -0.0 and 0.0 compare equal but hash
+// differently, so the coalesce of a pair does not say where a row sits.
+TEST_P(JoinTest, fullJoinFloatingPointKey) {
+  testConnector_->addTable("t", ROW({"a"}, DOUBLE()))
+      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
+  testConnector_->addTable("u", ROW({"b"}, DOUBLE()))
+      ->setStats(10'000, {{"b", {.numDistinct = 10'000}}});
+  optimizerOptions_.broadcastSizeLimit = 1;
+
+  const auto logicalPlan = parseSelect(
+      "SELECT coalesce(a, b) AS k, count(*) "
+      "FROM t FULL OUTER JOIN u ON a = b "
+      "GROUP BY 1",
+      kTestConnectorId);
+
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(logicalPlan, /*numDrivers=*/4),
+      matchScan("t")
+          .hashJoinFull(matchScan("u"), {.keys = {{"a = b"}}})
+          .project({"coalesce(a, b) as k"})
+          .localAggregation({"k"}, {"count(*) as count"})
+          .build());
+
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(logicalPlan).plan,
+      matchScan("t")
+          .shuffle({"a"})
+          .hashJoinFull(matchScan("u").shuffle({"b"}), {.keys = {{"a = b"}}})
+          .project({"coalesce(a, b) as k"})
+          .partialAggregation({"k"}, {"count(*) as count"})
+          .shuffle({"k"})
+          .localPartition({"k"})
+          .finalAggregation({"k"}, {"count(count) as count"})
+          .gather()
+          .build());
+}
+
 TEST_P(JoinTest, crossThenLeft) {
   testConnector_->addTable("t", ROW({"t0", "t1"}, INTEGER()));
   testConnector_->addTable("u", ROW({"u0", "u1"}, BIGINT()));

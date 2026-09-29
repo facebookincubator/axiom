@@ -32,6 +32,14 @@ SELECT a FROM t WHERE a < 3
 EXCEPT ALL
 SELECT a FROM t WHERE a <= 1 AND b <= 40
 ----
+-- EXCEPT ALL followed by grouping, with multiple copies of each result key.
+-- duckdb: VALUES (1, 3), (2, 5)
+SELECT a, count(*) FROM (
+  SELECT a FROM t WHERE a < 3
+  EXCEPT ALL
+  SELECT a FROM t WHERE a <= 1 AND b <= 40
+) GROUP BY a
+----
 -- Same query with EXCEPT (DISTINCT).
 -- duckdb: VALUES (2)
 SELECT a FROM t WHERE a < 3
