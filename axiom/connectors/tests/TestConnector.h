@@ -200,6 +200,9 @@ class TestTableLayout : public TableLayout {
 /// a table the metastore has no statistics for. setStats() is then rejected.
 class TestTable : public Table {
  public:
+  /// Name of the stable hidden row identifier stored with each row.
+  static constexpr std::string_view kRowId = "$row_id";
+
   TestTable(
       SchemaTableName name,
       const velox::RowTypePtr& schema,
@@ -222,6 +225,11 @@ class TestTable : public Table {
 
   const std::vector<velox::RowVectorPtr>& data() const {
     return data_;
+  }
+
+  /// Type of the RowVectors returned by data().
+  const velox::RowTypePtr& dataType() const {
+    return dataType_;
   }
 
   /// Bucket id of the i-th entry in 'data'. Empty for unbucketed tables.
@@ -279,8 +287,10 @@ class TestTable : public Table {
   std::vector<const TableLayout*> layouts_;
   std::unique_ptr<TestTableLayout> exportedLayout_;
   std::shared_ptr<velox::memory::MemoryPool> pool_;
+  velox::RowTypePtr dataType_;
   std::vector<velox::RowVectorPtr> data_;
   std::vector<int32_t> dataBucketIds_;
+  int64_t nextRowId_{0};
   uint64_t numRows_{0};
   uint64_t dataRows_{0};
   bool collectStatistics_{true};

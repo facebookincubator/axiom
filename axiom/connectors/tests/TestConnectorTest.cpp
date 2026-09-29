@@ -101,15 +101,30 @@ TEST_F(TestConnectorTest, table) {
   EXPECT_NE(table, nullptr);
   EXPECT_EQ(table->name(), (SchemaTableName{kDefaultSchema, "table"}));
   EXPECT_EQ(table->numRows(), 0);
-  EXPECT_EQ(table->columnMap().size(), 2);
+  EXPECT_EQ(table->columnMap().size(), 3);
   EXPECT_TRUE(table->columnMap().contains("a"));
   EXPECT_TRUE(table->columnMap().contains("b"));
+  EXPECT_TRUE(table->columnMap().contains(TestTable::kRowId));
+  EXPECT_TRUE(table->columnMap().at(TestTable::kRowId)->hidden());
 
   auto vector = makeRowVector(
       {makeFlatVector<int>({0, 1, 2}),
        makeFlatVector<StringView>({"a", "b", "c"})});
   connector_->appendData("table", vector);
   EXPECT_EQ(table->numRows(), 3);
+
+  connector_->appendData(
+      "table",
+      makeRowVector(
+          {makeFlatVector<int>({3, 4}),
+           makeFlatVector<StringView>({"d", "e"})}));
+  EXPECT_EQ(table->numRows(), 5);
+  const auto* testTable = table->asChecked<TestTable>();
+  ASSERT_EQ(testTable->data().size(), 2);
+  test::assertEqualVectors(
+      makeFlatVector<int64_t>({0, 1, 2}), testTable->data()[0]->childAt(2));
+  test::assertEqualVectors(
+      makeFlatVector<int64_t>({3, 4}), testTable->data()[1]->childAt(2));
 
   vector = makeRowVector({makeFlatVector<int>({0, 1, 2})});
   VELOX_ASSERT_THROW(
@@ -120,7 +135,31 @@ TEST_F(TestConnectorTest, table) {
   table = metadata_->findTable({kDefaultSchema, "noschema"});
   EXPECT_NE(table, nullptr);
   EXPECT_EQ(table->numRows(), 0);
-  EXPECT_EQ(table->columnMap().size(), 0);
+  EXPECT_EQ(table->columnMap().size(), 1);
+  EXPECT_TRUE(table->columnMap().contains(TestTable::kRowId));
+
+  VELOX_ASSERT_THROW(
+      metadata_->addColumn(
+          makeSession(),
+          {kDefaultSchema, "noschema"},
+          std::string{TestTable::kRowId},
+          BIGINT(),
+          /*ifTableExists=*/false,
+          /*ifNotExists=*/false,
+          /*explain=*/false),
+      "Column already exists");
+  EXPECT_EQ(metadata_->findTable({kDefaultSchema, "noschema"}), table);
+
+  VELOX_ASSERT_THROW(
+      connector_->addTable(
+          "reserved-visible", ROW(std::string{TestTable::kRowId}, BIGINT())),
+      "Table schema declares reserved column: $row_id");
+  VELOX_ASSERT_THROW(
+      connector_->addTable(
+          "reserved-hidden",
+          ROW({"a"}, INTEGER()),
+          ROW(std::string{TestTable::kRowId}, BIGINT())),
+      "Hidden columns declare reserved column: $row_id");
 
   table = metadata_->findTable({kDefaultSchema, "notable"});
   EXPECT_EQ(table, nullptr);
@@ -257,6 +296,8 @@ TEST_F(TestConnectorTest, dataSource) {
   std::vector<velox::connector::ColumnHandlePtr> columns;
   columns.push_back(layout.createColumnHandle(/*session=*/nullptr, "a"));
   columns.push_back(layout.createColumnHandle(/*session=*/nullptr, "b"));
+  columns.push_back(layout.createColumnHandle(
+      /*session=*/nullptr, std::string{TestTable::kRowId}));
 
   auto evaluator =
       std::make_unique<exec::SimpleExpressionEvaluator>(nullptr, nullptr);
@@ -280,8 +321,15 @@ TEST_F(TestConnectorTest, dataSource) {
   velox::connector::ColumnHandleMap handleMap;
   handleMap.emplace("a", layout.createColumnHandle(/*session=*/nullptr, "a"));
   handleMap.emplace("b", layout.createColumnHandle(/*session=*/nullptr, "b"));
+  handleMap.emplace(
+      TestTable::kRowId,
+      layout.createColumnHandle(
+          /*session=*/nullptr, std::string{TestTable::kRowId}));
+  auto outputType =
+      ROW({"a", "b", std::string{TestTable::kRowId}},
+          {INTEGER(), VARCHAR(), BIGINT()});
   auto dataSource = std::make_shared<TestDataSource>(
-      schema, std::move(handleMap), table, pool());
+      outputType, std::move(handleMap), table, pool());
   EXPECT_EQ(dataSource->getCompletedRows(), 0);
 
   auto split0 =
@@ -293,7 +341,12 @@ TEST_F(TestConnectorTest, dataSource) {
   EXPECT_TRUE(result.has_value());
   EXPECT_EQ(result.value()->size(), 2);
   EXPECT_EQ(dataSource->getCompletedRows(), 2);
-  test::assertEqualVectors(vector1, result.value());
+  test::assertEqualVectors(
+      makeRowVector(
+          {vector1->childAt(0),
+           vector1->childAt(1),
+           makeFlatVector<int64_t>({0, 1})}),
+      result.value());
 
   result = dataSource->next(0, future);
   EXPECT_TRUE(result.has_value());
@@ -307,7 +360,12 @@ TEST_F(TestConnectorTest, dataSource) {
   EXPECT_TRUE(result.has_value());
   EXPECT_EQ(result.value()->size(), 2);
   EXPECT_EQ(dataSource->getCompletedRows(), 4);
-  test::assertEqualVectors(vector2, result.value());
+  test::assertEqualVectors(
+      makeRowVector(
+          {vector2->childAt(0),
+           vector2->childAt(1),
+           makeFlatVector<int64_t>({2, 3})}),
+      result.value());
 
   result = dataSource->next(0, future);
   EXPECT_TRUE(result.has_value());

@@ -124,6 +124,7 @@ TEST_P(TestConnectorQueryTest, writeFiltered) {
   auto expected = makeRowVector({
       makeFlatVector<int64_t>({0, 1}),
       makeFlatVector<StringView>({"str", "ing"}),
+      makeFlatVector<int64_t>({0, 1}),
   });
 
   auto fragmentedPlan = planVelox(logicalPlan, options_);

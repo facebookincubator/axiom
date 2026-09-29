@@ -875,7 +875,10 @@ TEST_F(ExpressionParserTest, in) {
   // Subquery IN in WHERE clause produces a filter with IN(column, subquery).
   testSelect(
       "SELECT * FROM nation WHERE n_regionkey IN (SELECT r_regionkey FROM region WHERE r_name like 'A%')",
-      matchScan().filter(R"("in"(n_regionkey, any_subquery()))").output());
+      matchScan()
+          .filter(R"("in"(n_regionkey, any_subquery()))")
+          .project()
+          .output());
 
   // Subquery IN in SELECT clause produces a project with IN(column, subquery).
   testSelect(
@@ -887,13 +890,22 @@ TEST_F(ExpressionParserTest, quantifiedComparison) {
   // '= ANY' and '= SOME' mean IN; '<> ALL' means NOT IN.
   testSelect(
       "SELECT * FROM nation WHERE n_regionkey = ANY (SELECT r_regionkey FROM region)",
-      matchScan().filter(R"("in"(n_regionkey, any_subquery()))").output());
+      matchScan()
+          .filter(R"("in"(n_regionkey, any_subquery()))")
+          .project()
+          .output());
   testSelect(
       "SELECT * FROM nation WHERE n_regionkey = SOME (SELECT r_regionkey FROM region)",
-      matchScan().filter(R"("in"(n_regionkey, any_subquery()))").output());
+      matchScan()
+          .filter(R"("in"(n_regionkey, any_subquery()))")
+          .project()
+          .output());
   testSelect(
       "SELECT * FROM nation WHERE n_regionkey <> ALL (SELECT r_regionkey FROM region)",
-      matchScan().filter(R"(not("in"(n_regionkey, any_subquery())))").output());
+      matchScan()
+          .filter(R"(not("in"(n_regionkey, any_subquery())))")
+          .project()
+          .output());
 
   // The remaining operator and quantifier combinations have no lowering.
   AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(

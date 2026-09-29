@@ -104,6 +104,7 @@ TEST_F(SortParserTest, basic) {
     auto matcher =
         matchScan("nation")
             .sort({"n_regionkey", "n_name desc"})
+            .project()
             .output({"n_nationkey", "n_name", "n_regionkey", "n_comment"});
 
     testSelect(
@@ -276,6 +277,7 @@ TEST_F(SortParserTest, star) {
       "SELECT * FROM t ORDER BY 1, 3, e, f, a + c",
       matchScan()
           .sort({"a", "c", "e", "f", "a + c"})
+          .project()
           .output({"a", "b", "c", "d", "e", "f"}));
 }
 
@@ -304,7 +306,14 @@ TEST_F(SortParserTest, qualifiedSortKeyWithDuplicateOutputNames) {
       "SELECT x.*, y.* FROM t x JOIN t y ON x.k = y.k "
       "ORDER BY x.v DESC",
       matchScan()
-          .join(matchScan().build(), {"left_k", "left_v", "right_k", "right_v"})
+          .join(
+              matchScan().build(),
+              {"left_k",
+               "left_v",
+               "left_row_id",
+               "right_k",
+               "right_v",
+               "right_row_id"})
           .project({"left_k", "left_v", "right_k", "right_v"})
           .sort({"left_v desc"})
           .output({"k", "v", "k", "v"}));
@@ -319,7 +328,14 @@ TEST_F(SortParserTest, sortKeyShadowsOutputName) {
       "SELECT a FROM ("
       "  SELECT v.a AS a FROM t u JOIN t v ON u.k = v.k ORDER BY u.a DESC)",
       matchScan()
-          .join(matchScan().build(), {"left_k", "left_a", "right_k", "right_a"})
+          .join(
+              matchScan().build(),
+              {"left_k",
+               "left_a",
+               "left_row_id",
+               "right_k",
+               "right_a",
+               "right_row_id"})
           .project({"right_a as out", "left_a as sortKey"})
           .sort({"sortKey desc"})
           .project({"out as trimmed"})
@@ -336,7 +352,14 @@ TEST_F(SortParserTest, distinctQualifiedSortKeyOnJoin) {
       "SELECT DISTINCT x.v AS xv, y.v AS yv FROM t x JOIN t y ON x.k = y.k "
       "ORDER BY y.v DESC",
       matchScan()
-          .join(matchScan().build(), {"left_k", "left_v", "right_k", "right_v"})
+          .join(
+              matchScan().build(),
+              {"left_k",
+               "left_v",
+               "left_row_id",
+               "right_k",
+               "right_v",
+               "right_row_id"})
           .project({"left_v as xv", "right_v as yv"})
           .aggregate({"xv", "yv"}, {})
           .sort({"yv desc"})

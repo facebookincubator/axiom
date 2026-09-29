@@ -30,7 +30,7 @@ class DdlParserTest : public PrestoParserTestBase {};
 
 TEST_F(DdlParserTest, insertIntoTable) {
   {
-    auto matcher = matchScan().tableWrite();
+    auto matcher = matchScan().project().tableWrite();
     testInsert("INSERT INTO nation SELECT * FROM nation", matcher);
   }
 
@@ -95,7 +95,7 @@ TEST_F(DdlParserTest, createTableAsSelect) {
             ->findTable(facebook::axiom::SchemaTableName{"default", "nation"})
             ->type();
 
-    auto matcher = matchScan().tableWrite();
+    auto matcher = matchScan().project().tableWrite();
     testCtas(
         "CREATE TABLE t AS SELECT * FROM nation", "t", nationSchema, matcher);
   }

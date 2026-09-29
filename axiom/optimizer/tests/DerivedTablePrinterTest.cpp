@@ -210,7 +210,7 @@ TEST_F(DerivedTablePrinterTest, basic) {
             testing::Eq("  tables: t2, t3"),
             testing::Eq("  joins:"),
             testing::StartsWith("    t2 LEFT t3 ON t2.a = t3.x"),
-            testing::Eq("  syntactic join order: 3, 8"),
+            testing::Eq("  syntactic join order: 4, 10"),
             testing::Eq("  aggregates: sum(multiply(t2.b, dt1.y)) AS sum"),
             testing::Eq("  grouping keys: t2.a"),
             testing::Eq(""),

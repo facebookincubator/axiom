@@ -27,6 +27,8 @@ The Test connector is designed for three use cases:
   execution — multiple drivers can scan different splits concurrently.
 - User-defined hidden columns (specified at table creation time, not included
   in `SELECT *`, but available for explicit queries).
+- A hidden BIGINT `$row_id` column whose values are stable and unique for the
+  lifetime of a table.
 
 **Writes:**
 - `CREATE TABLE`.

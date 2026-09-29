@@ -136,6 +136,7 @@ TEST_F(SqlFunctionTest, inlines) {
               "      when n_nationkey + n_regionkey < 20::bigint then 2 "
               "      else 3 end) "
               " = 2")
+          .project()
           .output());
 
   // Constant. f(x) := array['red', 'green', 'blue']

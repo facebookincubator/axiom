@@ -139,10 +139,22 @@ std::vector<std::unique_ptr<const Column>> makeTestTableColumns(
     const velox::RowTypePtr& hiddenColumns,
     const folly::F14FastMap<std::string, velox::Variant>& options,
     folly::F14FastMap<std::string, std::string> columnComments) {
-  return appendHiddenColumns(
+  VELOX_USER_CHECK(
+      !schema->containsChild(TestTable::kRowId),
+      "Table schema declares reserved column: {}",
+      TestTable::kRowId);
+  VELOX_USER_CHECK(
+      !hiddenColumns->containsChild(TestTable::kRowId),
+      "Hidden columns declare reserved column: {}",
+      TestTable::kRowId);
+  auto columns = appendHiddenColumns(
       makeColumnsWithExplainIo(
           schema, extractExplainIoColumns(options), std::move(columnComments)),
       hiddenColumns);
+  columns.emplace_back(
+      std::make_unique<const Column>(
+          std::string{TestTable::kRowId}, velox::BIGINT(), /*hidden=*/true));
+  return columns;
 }
 
 bool extractCollectStatistics(
@@ -150,6 +162,14 @@ bool extractCollectStatistics(
   const auto it =
       options.find(std::string{TestConnectorMetadata::kCollectStatistics});
   return it == options.end() ? true : it->second.value<bool>();
+}
+
+velox::RowTypePtr makeTestTableDataType(const velox::RowTypePtr& schema) {
+  auto names = schema->names();
+  auto types = schema->children();
+  names.emplace_back(TestTable::kRowId);
+  types.push_back(velox::BIGINT());
+  return velox::ROW(std::move(names), std::move(types));
 }
 } // namespace
 
@@ -170,6 +190,7 @@ TestTable::TestTable(
               std::move(columnComments)),
           options),
       connector_(connector),
+      dataType_(makeTestTableDataType(schema)),
       collectStatistics_(extractCollectStatistics(options)),
       bucketSpec_(std::move(bucketSpec)) {
   VELOX_CHECK_NOT_NULL(connector);
@@ -346,6 +367,15 @@ void TestTable::addData(
   VELOX_CHECK_GT(data->size(), 0, "Cannot append empty RowVector");
   auto copy = std::dynamic_pointer_cast<velox::RowVector>(
       velox::BaseVector::copy(*data, pool_.get()));
+  auto rowIds = velox::BaseVector::create<velox::FlatVector<int64_t>>(
+      velox::BIGINT(), copy->size(), pool_.get());
+  for (velox::vector_size_t row = 0; row < copy->size(); ++row) {
+    rowIds->set(row, nextRowId_++);
+  }
+  auto children = copy->children();
+  children.push_back(std::move(rowIds));
+  copy = std::make_shared<velox::RowVector>(
+      pool_.get(), dataType_, copy->nulls(), copy->size(), std::move(children));
   if (partitionFunction_ != nullptr) {
     for (auto& bucketed : splitByBucket(
              copy, *partitionFunction_, bucketSpec_->numBuckets, pool_.get())) {
@@ -1008,7 +1038,7 @@ std::optional<bool> TestConnectorMetadata::addColumn(
   }
 
   auto existingType = it->second->type();
-  if (existingType->containsChild(columnName)) {
+  if (it->second->columnMap().contains(columnName)) {
     if (ifNotExists) {
       return false;
     }
@@ -1034,12 +1064,15 @@ std::optional<bool> TestConnectorMetadata::addColumn(
   auto newType = velox::ROW(std::move(names), std::move(types));
 
   std::vector<std::string> hiddenNames;
+  std::vector<velox::TypePtr> hiddenTypes;
   for (const auto* col : it->second->allColumns()) {
-    if (col->hidden()) {
+    if (col->hidden() && col->name() != TestTable::kRowId) {
       hiddenNames.push_back(col->name());
+      hiddenTypes.push_back(col->type());
     }
   }
-  auto hiddenColumns = velox::ROW(std::move(hiddenNames), velox::VARCHAR());
+  auto hiddenColumns =
+      velox::ROW(std::move(hiddenNames), std::move(hiddenTypes));
 
   auto savedOptions = it->second->options();
   tables_.erase(it);
@@ -1092,8 +1125,6 @@ TestDataSource::TestDataSource(
     : outputType_(outputType), pool_(pool) {
   auto maybeTable = velox::checkedPointerCast<const TestTable>(table);
   data_ = maybeTable->data();
-
-  auto tableType = table->type();
   outputMappings_.reserve(outputType_->size());
   for (const auto& name : outputType->names()) {
     VELOX_CHECK(
@@ -1103,7 +1134,8 @@ TestDataSource::TestDataSource(
         table->name().toString());
     auto handle = handles.find(name)->second;
 
-    const auto idx = tableType->getChildIdxIfExists(handle->name());
+    const auto idx =
+        maybeTable->dataType()->getChildIdxIfExists(handle->name());
     VELOX_CHECK(
         idx.has_value(),
         "column '{}' not found in table '{}'.",

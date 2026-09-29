@@ -579,6 +579,7 @@ int main(int argc, char** argv) {
   registerQueryFile<"nondeterministic">();
   registerQueryFile<"nullif">();
   registerQueryFile<"partitionFold">();
+  registerQueryFile<"rowId">();
   registerQueryFile<"set">();
   registerQueryFile<"sort">();
   registerQueryFile<"subfield">();

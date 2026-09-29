@@ -140,14 +140,14 @@ TEST_F(PrestoParserTest, unnest) {
       matchValues().unnest().project().project().output({"ord"}));
 
   {
-    auto matcher = matchScan().unnest().output();
+    auto matcher = matchScan().unnest().project().output();
     testSelect(
         "SELECT * FROM nation, unnest(array[n_nationkey, n_regionkey])",
         matcher);
   }
 
   {
-    auto matcher = matchScan().unnest().output(
+    auto matcher = matchScan().unnest().project().output(
         {"n_nationkey", "n_name", "n_regionkey", "n_comment", "x"});
 
     testSelect(
@@ -182,7 +182,7 @@ TEST_F(PrestoParserTest, unnest) {
   // Cross join unnest with ordinality alias.
   testSelect(
       "SELECT * FROM nation cross join unnest(array[n_nationkey]) with ordinality as t(x, ord)",
-      matchScan().unnest().output(
+      matchScan().unnest().project().output(
           {"n_nationkey", "n_name", "n_regionkey", "n_comment", "x", "ord"}));
 
   {
@@ -362,8 +362,8 @@ TEST_F(PrestoParserTest, schemaQualifiedColumnAccess) {
 
 TEST_F(PrestoParserTest, tableShorthand) {
   // `TABLE t` is shorthand for `SELECT * FROM t`.
-  auto matcher =
-      matchScan().output({"n_nationkey", "n_name", "n_regionkey", "n_comment"});
+  auto matcher = matchScan().project().output(
+      {"n_nationkey", "n_name", "n_regionkey", "n_comment"});
   testSelect("TABLE nation", matcher);
   testSelect("(TABLE nation)", matcher);
   testSelect("SELECT * FROM (TABLE nation)", matcher);
@@ -371,7 +371,7 @@ TEST_F(PrestoParserTest, tableShorthand) {
 
 TEST_F(PrestoParserTest, selectStar) {
   {
-    auto matcher = matchScan().output(
+    auto matcher = matchScan().project().output(
         {"n_nationkey", "n_name", "n_regionkey", "n_comment"});
     testSelect("SELECT * FROM nation", matcher);
     testSelect("(SELECT * FROM nation)", matcher);
@@ -433,10 +433,12 @@ TEST_F(PrestoParserTest, selectStarDuplicateColumns) {
                 "a_name",
                 "a_rk",
                 "a_comment",
+                "a_row_id",
                 "b_nk",
                 "b_name",
                 "b_rk",
                 "b_comment",
+                "b_row_id",
             })
         .filter("a_nk = b_nk")
         .project();
@@ -804,6 +806,7 @@ TEST_F(PrestoParserTest, join) {
   {
     auto matcher = matchScan()
                        .join(matchScan().build())
+                       .project()
                        .output(
                            {"n_nationkey",
                             "n_name",
@@ -844,8 +847,10 @@ TEST_F(PrestoParserTest, join) {
         "Cannot resolve column");
 
     // Qualified references are not ambiguous.
-    auto matcher =
-        matchScan().join(matchScan().build()).output({"id", "a", "id", "b"});
+    auto matcher = matchScan()
+                       .join(matchScan().build())
+                       .project()
+                       .output({"id", "a", "id", "b"});
     testSelect("SELECT * FROM t1 JOIN t2 ON t1.id = t2.id", matcher);
 
     // Non-existent column in ON clause.
@@ -881,6 +886,7 @@ TEST_F(PrestoParserTest, join) {
     auto matcher = matchScan()
                        .join(matchScan().build())
                        .filter()
+                       .project()
                        .output(
                            {"n_nationkey",
                             "n_name",
@@ -1047,6 +1053,7 @@ TEST_F(PrestoParserTest, existsOuterScopeAggregateRejected) {
 TEST_F(PrestoParserTest, joinOnSubquery) {
   auto matcher = matchScan()
                      .join(matchScan().build())
+                     .project()
                      .output(
                          {"n_nationkey",
                           "n_name",
@@ -1199,8 +1206,8 @@ TEST_F(PrestoParserTest, unionAllUnresolvedColumn) {
 
 TEST_F(PrestoParserTest, exists) {
   {
-    auto matcher =
-        matchScan().filter().output({"r_regionkey", "r_name", "r_comment"});
+    auto matcher = matchScan().filter().project().output(
+        {"r_regionkey", "r_name", "r_comment"});
 
     testSelect(
         "SELECT * FROM region WHERE exists (SELECT * from nation WHERE n_name like 'A%' and r_regionkey = n_regionkey)",
@@ -1239,7 +1246,7 @@ TEST_F(PrestoParserTest, structDereferenceInCorrelatedSubquery) {
   connector_->addTable("u", ROW({"y"}, {INTEGER()}));
 
   // Correlated subquery references a struct field from the outer query.
-  auto matcher = matchScan().filter().output({"s", "x"});
+  auto matcher = matchScan().filter().project().output({"s", "x"});
   testSelect(
       "SELECT * FROM t WHERE EXISTS (SELECT 1 FROM u WHERE s.a = y)", matcher);
 }
@@ -1275,7 +1282,7 @@ TEST_F(PrestoParserTest, values) {
 
 TEST_F(PrestoParserTest, tablesample) {
   {
-    auto matcher = matchScan().sample().output(
+    auto matcher = matchScan().sample().project().output(
         {"n_nationkey", "n_name", "n_regionkey", "n_comment"});
 
     testSelect("SELECT * FROM nation TABLESAMPLE BERNOULLI (10.0)", matcher);
@@ -1329,7 +1336,7 @@ TEST_F(PrestoParserTest, everything) {
 
 TEST_F(PrestoParserTest, explainSelect) {
   {
-    auto matcher = matchScan().output(
+    auto matcher = matchScan().project().output(
         {"n_nationkey", "n_name", "n_regionkey", "n_comment"});
     testExplain("EXPLAIN SELECT * FROM nation", matcher);
   }
@@ -1547,7 +1554,7 @@ TEST_F(PrestoParserTest, explainShow) {
 
 TEST_F(PrestoParserTest, explainInsert) {
   {
-    auto matcher = matchScan().tableWrite();
+    auto matcher = matchScan().project().tableWrite();
     testExplain("EXPLAIN INSERT INTO region SELECT * FROM region", matcher);
   }
 
@@ -2156,7 +2163,7 @@ TEST_F(PrestoParserTest, limit) {
       "n_nationkey", "n_name", "n_regionkey", "n_comment"};
 
   {
-    auto matcher = matchScan().limit(0, 10).output(nationColumns);
+    auto matcher = matchScan().project().limit(0, 10).output(nationColumns);
     testSelect("SELECT * FROM nation LIMIT 10", matcher);
     testSelect("SELECT * FROM nation FETCH FIRST 10 ROWS ONLY", matcher);
   }
@@ -2172,8 +2179,11 @@ TEST_F(PrestoParserTest, limit) {
   }
 
   {
-    auto matcher =
-        matchScan().sort({"n_name"}).limit(0, 100).output(nationColumns);
+    auto matcher = matchScan()
+                       .sort({"n_name"})
+                       .project()
+                       .limit(0, 100)
+                       .output(nationColumns);
     testSelect("SELECT * FROM nation ORDER BY n_name LIMIT 100", matcher);
     testSelect(
         "SELECT * FROM nation ORDER BY n_name FETCH FIRST 100 ROWS ONLY",
@@ -2181,30 +2191,33 @@ TEST_F(PrestoParserTest, limit) {
   }
 
   {
-    auto matcher = matchScan().limit(0, 2'147'483'647).output(nationColumns);
+    auto matcher =
+        matchScan().project().limit(0, 2'147'483'647).output(nationColumns);
     testSelect("SELECT * FROM nation LIMIT 2147483647", matcher);
   }
 
   {
-    auto matcher = matchScan().limit(0, 2'147'483'648).output(nationColumns);
+    auto matcher =
+        matchScan().project().limit(0, 2'147'483'648).output(nationColumns);
     testSelect("SELECT * FROM nation LIMIT 2147483648", matcher);
   }
 
   {
-    auto matcher = matchScan().limit(0, 24'859'023'574).output(nationColumns);
+    auto matcher =
+        matchScan().project().limit(0, 24'859'023'574).output(nationColumns);
     testSelect("SELECT * FROM nation LIMIT 24859023574", matcher);
   }
 
   // LIMIT ALL means "no limit" — should not add a LimitNode.
   // Similarly, LIMIT of INT64_MAX is effectively no limit.
   {
-    auto matcher = matchScan().output(nationColumns);
+    auto matcher = matchScan().project().output(nationColumns);
     testSelect("SELECT * FROM nation LIMIT ALL", matcher);
     testSelect("SELECT * FROM nation LIMIT 9223372036854775807", matcher);
   }
 
   {
-    auto matcher = matchScan().sort({"n_name"}).output(nationColumns);
+    auto matcher = matchScan().sort({"n_name"}).project().output(nationColumns);
     testSelect("SELECT * FROM nation ORDER BY n_name LIMIT ALL", matcher);
   }
 }
@@ -2215,6 +2228,7 @@ TEST_F(PrestoParserTest, offset) {
 
   {
     auto matcher = matchScan()
+                       .project()
                        .limit(5, std::numeric_limits<int64_t>::max())
                        .output(nationColumns);
     testSelect("SELECT * FROM nation OFFSET 5", matcher);
@@ -2222,6 +2236,7 @@ TEST_F(PrestoParserTest, offset) {
 
   {
     auto matcher = matchScan()
+                       .project()
                        .limit(5, std::numeric_limits<int64_t>::max())
                        .limit(0, 10)
                        .output(nationColumns);
@@ -2232,28 +2247,29 @@ TEST_F(PrestoParserTest, offset) {
 
   {
     auto matcher = matchScan()
+                       .project()
                        .limit(1, std::numeric_limits<int64_t>::max())
                        .output(nationColumns);
     testSelect("SELECT * FROM nation OFFSET 1", matcher);
   }
 
   {
-    auto matcher = matchScan().output(nationColumns);
+    auto matcher = matchScan().project().output(nationColumns);
     testSelect("SELECT * FROM nation OFFSET 0", matcher);
   }
 
   {
-    auto matcher = matchScan().sort({"n_name"}).output(nationColumns);
+    auto matcher = matchScan().sort({"n_name"}).project().output(nationColumns);
     testSelect("SELECT * FROM nation ORDER BY n_name OFFSET 0", matcher);
   }
 
   {
-    auto matcher = matchScan().limit(0, 10).output(nationColumns);
+    auto matcher = matchScan().project().limit(0, 10).output(nationColumns);
     testSelect("SELECT * FROM nation OFFSET 0 LIMIT 10", matcher);
   }
 
   {
-    auto matcher = matchScan().limit(0, 0).output(nationColumns);
+    auto matcher = matchScan().project().limit(0, 0).output(nationColumns);
     testSelect("SELECT * FROM nation OFFSET 0 LIMIT 0", matcher);
   }
 }
@@ -2304,6 +2320,7 @@ TEST_F(PrestoParserTest, nestedWindowFunction) {
           .project({
               "a",
               "b",
+              R"("$row_id")",
               "sum(a) OVER (PARTITION BY b) AS w",
           })
           .project({"w * 2::bigint"})
@@ -2317,6 +2334,7 @@ TEST_F(PrestoParserTest, nestedWindowFunction) {
           .project({
               "a",
               "b",
+              R"("$row_id")",
               "sum(a) OVER (PARTITION BY b) AS s",
               "count() OVER () AS c",
           })
@@ -2333,6 +2351,7 @@ TEST_F(PrestoParserTest, nestedWindowFunction) {
           .project({
               "a",
               "b",
+              R"("$row_id")",
               "sum(a) OVER (PARTITION BY b) AS w",
           })
           .project({
@@ -2348,6 +2367,7 @@ TEST_F(PrestoParserTest, nestedWindowFunction) {
           .project({
               "a",
               "b",
+              R"("$row_id")",
               "sum(a) OVER (PARTITION BY b) AS w",
           })
           .project({"b", "w * 2::bigint"})

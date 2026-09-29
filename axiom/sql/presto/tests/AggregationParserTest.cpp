@@ -958,7 +958,7 @@ TEST_F(AggregationParserTest, distinct) {
   }
 
   {
-    auto matcher = matchScan().distinct().output();
+    auto matcher = matchScan().project().distinct().output();
     testSelect("SELECT DISTINCT * FROM nation", matcher);
   }
 }
@@ -1016,7 +1016,7 @@ TEST_F(AggregationParserTest, correlatedSubqueryWithGroupBy) {
   // Capturing it as 'ux' lets the grouping key be asserted without naming it.
   const auto scanJoinAggregate = [] {
     return matchScan("t")
-        .join(matchScan("u").build(), {"tx", "ux"})
+        .join(matchScan("u").build(), {"tx", "t_row_id", "ux", "u_row_id"})
         .aggregate({"ux"}, {});
   };
 
@@ -1036,7 +1036,7 @@ TEST_F(AggregationParserTest, correlatedSubqueryWithGroupBy) {
   testSelect(
       "SELECT (SELECT 1 WHERE u.x = 1) FROM t, u GROUP BY t.x, u.x",
       matchScan("t")
-          .join(matchScan("u").build(), {"tx", "ux"})
+          .join(matchScan("u").build(), {"tx", "t_row_id", "ux", "u_row_id"})
           .aggregate({"tx", "ux"}, {})
           .project()
           .output());

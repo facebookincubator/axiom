@@ -362,7 +362,8 @@ TEST_P(ExistencePushdownTest, multipleTables) {
       matchScan("s")
           .hashJoin(
               matchScan("s")
-                  .shuffle({"a_0"})
+                  .aliases({"s_a"})
+                  .shuffle({"s_a"})
                   .hashJoin(
                       matchScan("u")
                           .hashJoin(

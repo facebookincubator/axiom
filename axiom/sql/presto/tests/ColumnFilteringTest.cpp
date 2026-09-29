@@ -382,6 +382,7 @@ TEST_F(ColumnFilteringTest, columnsInOrderBy) {
       "SELECT * FROM nation ORDER BY COLUMNS('.*key')",
       matchScan("nation")
           .sort({"n_nationkey ASC NULLS LAST", "n_regionkey ASC NULLS LAST"})
+          .project()
           .output({"n_nationkey", "n_name", "n_regionkey", "n_comment"}));
 
   // COLUMNS with DESC ordering.
@@ -389,6 +390,7 @@ TEST_F(ColumnFilteringTest, columnsInOrderBy) {
       "SELECT * FROM nation ORDER BY COLUMNS('.*key') DESC",
       matchScan("nation")
           .sort({"n_nationkey DESC NULLS LAST", "n_regionkey DESC NULLS LAST"})
+          .project()
           .output({"n_nationkey", "n_name", "n_regionkey", "n_comment"}));
 
   // COLUMNS mixed with a regular sort key.
@@ -399,6 +401,7 @@ TEST_F(ColumnFilteringTest, columnsInOrderBy) {
               {"n_name ASC NULLS LAST",
                "n_nationkey DESC NULLS LAST",
                "n_regionkey DESC NULLS LAST"})
+          .project()
           .output({"n_nationkey", "n_name", "n_regionkey", "n_comment"}));
 
   // COLUMNS in ORDER BY with projection that doesn't include the sort keys.
@@ -424,6 +427,7 @@ TEST_F(ColumnFilteringTest, columnsInWhere) {
       "SELECT * FROM nation WHERE COLUMNS('.*key') > 0",
       matchScan("nation")
           .filter("n_nationkey > 0::bigint AND n_regionkey > 0::bigint")
+          .project()
           .output({"n_nationkey", "n_name", "n_regionkey", "n_comment"}));
 
   // Single column match — no AND needed.
@@ -431,6 +435,7 @@ TEST_F(ColumnFilteringTest, columnsInWhere) {
       "SELECT * FROM nation WHERE COLUMNS('n_nationkey') > 0",
       matchScan("nation")
           .filter("n_nationkey > 0::bigint")
+          .project()
           .output({"n_nationkey", "n_name", "n_regionkey", "n_comment"}));
 
   // COLUMNS inside a complex expression in WHERE.
@@ -440,6 +445,7 @@ TEST_F(ColumnFilteringTest, columnsInWhere) {
           .filter(
               "n_nationkey + 1::bigint > 10::bigint AND "
               "n_regionkey + 1::bigint > 10::bigint")
+          .project()
           .output({"n_nationkey", "n_name", "n_regionkey", "n_comment"}));
 
   // No columns match in WHERE.
