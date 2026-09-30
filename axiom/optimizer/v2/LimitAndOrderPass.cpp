@@ -134,10 +134,12 @@ class LimitAndOrderRewriter : public NodeRewriter<LimitContext> {
     if (dropSort) {
       return newInput;
     }
-    const NodeCP sort = newInput == node->input()
-        ? node
-        : builder().make<Sort>(
-              {newInput, node->orderKeys(), node->orderTypes()});
+    const NodeCP sort = newInput == node->input() ? node
+                                                  : builder().make<Sort>(
+                                                        {newInput,
+                                                         node->orderKeys(),
+                                                         node->orderTypes(),
+                                                         node->perDriver()});
     return materialize(pending, sort);
   }
 

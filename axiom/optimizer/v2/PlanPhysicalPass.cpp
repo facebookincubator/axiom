@@ -25,6 +25,7 @@
 #include <folly/container/F14Set.h>
 
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/v2/AppendAll.h"
 #include "axiom/optimizer/v2/CostModel.h"
@@ -39,6 +40,8 @@
 #include "axiom/optimizer/v2/NodeRewriter.h"
 #include "axiom/optimizer/v2/PhysicalJoin.h"
 #include "axiom/optimizer/v2/PrecomputeProjections.h"
+#include "axiom/optimizer/v2/ScanHandle.h"
+#include "velox/core/Expressions.h"
 
 namespace facebook::axiom::optimizer::v2 {
 
@@ -591,15 +594,154 @@ class GroupedScanRewriter : public NodeRewriter<> {
   bool regrouped_{false};
 };
 
+ExprCP importDeleteExpr(
+    const velox::core::TypedExprPtr& expr,
+    const folly::F14FastMap<std::string_view, ColumnCP>& columns,
+    Builder& builder) {
+  switch (expr->kind()) {
+    case velox::core::ExprKind::kInput: {
+      const auto& inputType = expr->type()->asRow();
+      ExprVector args;
+      args.reserve(inputType.size());
+      for (const auto& name : inputType.names()) {
+        const auto it = columns.find(name);
+        VELOX_CHECK(
+            it != columns.end(),
+            "A computed delete column reads outside the row identity: {}",
+            name);
+        args.push_back(it->second);
+      }
+      const Name name = toName("row_constructor");
+      const FunctionSet functions = Call::unionArgFunctions(
+          functionBits(name, /*specialForm=*/false), args);
+      return builder.makeCall(
+          name, Value(toType(expr->type())), std::move(args), functions);
+    }
+    case velox::core::ExprKind::kFieldAccess: {
+      const auto* field =
+          expr->asUnchecked<velox::core::FieldAccessTypedExpr>();
+      if (field->isInputColumn()) {
+        const auto it = columns.find(field->name());
+        VELOX_CHECK(
+            it != columns.end(),
+            "A computed delete column reads outside the row identity: {}",
+            field->name());
+        return it->second;
+      }
+      VELOX_CHECK_EQ(field->inputs().size(), 1);
+      return make<Field>(
+          toType(field->type()),
+          importDeleteExpr(field->inputs().front(), columns, builder),
+          toName(field->name()));
+    }
+    case velox::core::ExprKind::kDereference: {
+      const auto* field =
+          expr->asUnchecked<velox::core::DereferenceTypedExpr>();
+      VELOX_CHECK_EQ(field->inputs().size(), 1);
+      return make<Field>(
+          toType(field->type()),
+          importDeleteExpr(field->inputs().front(), columns, builder),
+          static_cast<int32_t>(field->index()));
+    }
+    case velox::core::ExprKind::kConstant: {
+      const auto* constant =
+          expr->asUnchecked<velox::core::ConstantTypedExpr>();
+      velox::Variant value = constant->hasValueVector()
+          ? constant->valueVector()->variantAt(0)
+          : constant->value();
+      return builder.makeLiteral(std::move(value), toType(expr->type()));
+    }
+    case velox::core::ExprKind::kCall: {
+      const auto* call = expr->asUnchecked<velox::core::CallTypedExpr>();
+      ExprVector args;
+      args.reserve(call->inputs().size());
+      for (const auto& input : call->inputs()) {
+        args.push_back(importDeleteExpr(input, columns, builder));
+      }
+      const Name name = toName(call->name());
+      const bool isSpecialForm =
+          SpecialFormCallNames::tryFromCallName(name).has_value();
+      const FunctionSet functions =
+          Call::unionArgFunctions(functionBits(name, isSpecialForm), args);
+      return builder.makeCall(
+          name, Value(toType(call->type())), std::move(args), functions);
+    }
+    case velox::core::ExprKind::kCast: {
+      const auto* cast = expr->asUnchecked<velox::core::CastTypedExpr>();
+      VELOX_CHECK_EQ(cast->inputs().size(), 1);
+      ExprVector args{
+          importDeleteExpr(cast->inputs().front(), columns, builder)};
+      const Name name = cast->isTryCast() ? SpecialFormCallNames::kTryCast
+                                          : SpecialFormCallNames::kCast;
+      const FunctionSet functions = Call::unionArgFunctions(
+          functionBits(name, /*specialForm=*/true), args);
+      return builder.makeCall(
+          name, Value(toType(cast->type())), std::move(args), functions);
+    }
+    case velox::core::ExprKind::kConcat: {
+      ExprVector args;
+      args.reserve(expr->inputs().size());
+      for (const auto& input : expr->inputs()) {
+        args.push_back(importDeleteExpr(input, columns, builder));
+      }
+      const Name name = toName("row_constructor");
+      const FunctionSet functions = Call::unionArgFunctions(
+          functionBits(name, /*specialForm=*/false), args);
+      return builder.makeCall(
+          name, Value(toType(expr->type())), std::move(args), functions);
+    }
+    case velox::core::ExprKind::kLambda: {
+      const auto* lambda = expr->asUnchecked<velox::core::LambdaTypedExpr>();
+      auto bodyColumns = columns;
+      ColumnVector args;
+      args.reserve(lambda->signature()->size());
+      for (uint32_t i = 0; i < lambda->signature()->size(); ++i) {
+        const auto& name = lambda->signature()->nameOf(i);
+        ColumnCP column = Column::create(
+            toName(name), Value(toType(lambda->signature()->childAt(i)), 1));
+        args.push_back(column);
+        bodyColumns.insert_or_assign(name, column);
+      }
+      return make<Lambda>(
+          std::move(args),
+          toType(lambda->type()),
+          importDeleteExpr(lambda->body(), bodyColumns, builder));
+    }
+    case velox::core::ExprKind::kNullIf: {
+      const auto* nullIf = expr->asUnchecked<velox::core::NullIfTypedExpr>();
+      VELOX_CHECK_EQ(nullIf->inputs().size(), 2);
+      ExprVector args{
+          importDeleteExpr(nullIf->inputs()[0], columns, builder),
+          importDeleteExpr(nullIf->inputs()[1], columns, builder),
+          builder.makeNull(toType(nullIf->commonType()))};
+      const Name name = SpecialFormCallNames::kNullIf;
+      const FunctionSet functions = Call::unionArgFunctions(
+          functionBits(name, /*specialForm=*/true), args);
+      return builder.makeCall(
+          name, Value(toType(nullIf->type())), std::move(args), functions);
+    }
+  }
+  VELOX_UNREACHABLE();
+}
+
+NodeCP FOLLY_NULLABLE findDeleteTargetScan(NodeCP node) {
+  return Node::findFirstNode(node, [](NodeCP candidate) {
+    return candidate->is(NodeType::kScan) &&
+        candidate->as<Scan>()->baseTable()->isDeleteTarget;
+  });
+}
+
 class PhysicalPlanRewriter : public NodeRewriter<> {
  public:
   PhysicalPlanRewriter(
       Builder& builder,
       ExprSimplifier& simplifier,
+      const OptimizerSession& session,
       const OptimizerOptions& options,
       int32_t numWorkers,
       int32_t numDrivers)
       : NodeRewriter(builder),
+        session_{session},
         options_{options},
         numWorkers_{numWorkers},
         numDrivers_{numDrivers},
@@ -639,6 +781,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     PhysicalPlanRewriter singleThreaded{
         builder(),
         simplifier_,
+        session_,
         options_,
         /*numWorkers=*/1,
         /*numDrivers=*/kRecursiveNumDrivers};
@@ -1181,6 +1324,61 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     return {partition(keyed, columnKeys), columnKeys};
   }
 
+  bool locallyCoLocated(NodeCP input, const ExprVector& keys) const {
+    if (numDrivers_ == 1) {
+      return true;
+    }
+    const auto& properties = input->physicalProperties();
+    if (properties.driverPartition.is(PartitionKind::kGather) ||
+        properties.driverPartition.coLocates(keys)) {
+      return true;
+    }
+    if (keys.empty()) {
+      return false;
+    }
+    const auto keySet = PlanObjectSet::fromObjects(keys);
+    for (const auto& property : properties.local) {
+      if (PlanObjectSet::fromObjects(property.columns).isSubset(keySet)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  NodeCP ensureLocallyCoLocated(NodeCP input, const ExprVector& keys) {
+    if (locallyCoLocated(input, keys)) {
+      return input;
+    }
+    Partitioning partitioning{
+        .kind =
+            keys.empty() ? PartitionKind::kGather : PartitionKind::kPartitioned,
+        .keys = keys,
+        .scope = PropertyScope::kDriver};
+    return builder().make<Exchange>({input, std::move(partitioning)});
+  }
+
+  static bool hasOrder(
+      NodeCP input,
+      const ExprVector& keys,
+      const OrderTypeVector& orders) {
+    if (keys.empty()) {
+      return true;
+    }
+    const auto& local = input->physicalProperties().local;
+    if (local.empty() || local.front().kind != LocalPropertyKind::kSorted ||
+        local.front().columns.size() < keys.size()) {
+      return false;
+    }
+    for (size_t i = 0; i < keys.size(); ++i) {
+      if (!keys[i]->is(PlanType::kColumnExpr) ||
+          !keys[i]->sameOrEqual(*local.front().columns[i]) ||
+          orders[i] != local.front().orders[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   // Returns 'node's output columns with the leading input-column prefix
   // replaced by 'newInput's columns, for a node whose output is its input's
   // columns followed by what it appends (Window, TopNRowNumber).
@@ -1511,6 +1709,16 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   // already physically planned.
   NodeCP rewriteSort(const Sort* node, NoContext& context) override {
     NodeCP input = rewrite(node->input(), context);
+    if (node->perDriver()) {
+      if (input == node->input()) {
+        return node;
+      }
+      return builder().make<Sort>(
+          {input,
+           node->orderKeys(),
+           node->orderTypes(),
+           /*perDriver=*/true});
+    }
     if (numWorkers_ == 1 || isGathered(input)) {
       if (input == node->input()) {
         return node;
@@ -1708,16 +1916,173 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         {std::move(newInputs), node->legColumns(), node->outputColumns()});
   }
 
-  // A write to a bucketed/partitioned layout needs each partition (bucket) on a
-  // single worker, else workers race to create the same bucket file.
-  // Repartition the input on the target's partition columns using the target's
-  // connector partitioning, unless the input is already compatibly bucketed (a
-  // collocated write), the query runs on one worker, or the write is a delete,
-  // which writes no columns and so has no key to shuffle on.
+  // Starts a DELETE after its target scan handle is final.
+  connector::ConnectorDeleteHandlePtr
+  beginDelete(const TableWrite& write, NodeCP input, bool exact) {
+    const auto& table = *write.table();
+    const auto& connectorId = table.layouts().front()->connectorId();
+    const auto& connectorContext = session_.context();
+    VELOX_CHECK_NOT_NULL(
+        connectorContext, "Optimizer session requires a context");
+    auto metadata = connectorContext->metadataFor(connectorId);
+    VELOX_CHECK_NOT_NULL(
+        metadata, "Connector metadata is not registered: {}", connectorId);
+
+    NodeCP target = findDeleteTargetScan(input);
+    VELOX_CHECK_NOT_NULL(
+        target, "A delete reached physical planning with no marked scan");
+    const auto& scan = *target->as<Scan>();
+    VELOX_USER_CHECK(
+        scan.baseTable()->schemaTable->connectorTable == write.table(),
+        "DELETE scans the wrong table: deletes {}, scans {}",
+        table.name().toString(),
+        scan.baseTable()->schemaTable->connectorTable->name().toString());
+    VELOX_CHECK_NOT_NULL(
+        scan.scanHandle(),
+        "Delete target scan reached physical planning without a handle");
+
+    auto handle = metadata->beginDelete(
+        connectorContext->sessionFor(connectorId),
+        scan.scanHandle()->tableHandle,
+        exact,
+        session_.options().explain);
+    VELOX_CHECK_NOT_NULL(handle);
+    return handle;
+  }
+
+  // Adds the columns, distribution and per-writer order a row-level DELETE
+  // requires.
+  NodeCP prepareDeleteInput(
+      NodeCP input,
+      const ColumnVector& rowIdColumns,
+      const connector::DeleteInput& deleteInput) {
+    folly::F14FastMap<std::string_view, ColumnCP> rowIdByName;
+    folly::F14FastMap<std::string_view, ColumnCP> writerColumnByName;
+    ExprVector projections;
+    ColumnVector writerColumns;
+    const size_t numWriterColumns =
+        rowIdColumns.size() + deleteInput.computedColumns().size();
+    projections.reserve(numWriterColumns);
+    writerColumns.reserve(numWriterColumns);
+    for (ColumnCP column : rowIdColumns) {
+      VELOX_CHECK(
+          std::ranges::find(input->outputColumns(), column) !=
+              input->outputColumns().end(),
+          "Delete input does not produce a row-id column: {}",
+          column->name());
+      rowIdByName.emplace(column->name(), column);
+      writerColumnByName.emplace(column->name(), column);
+      projections.push_back(column);
+      writerColumns.push_back(column);
+    }
+    for (const auto& computed : deleteInput.computedColumns()) {
+      VELOX_CHECK(
+          !writerColumnByName.contains(computed.name),
+          "Computed delete column duplicates a writer column: {}",
+          computed.name);
+      ExprCP expr = importDeleteExpr(computed.expr, rowIdByName, builder());
+      ColumnCP column = Column::createForSymbol(
+          toName(computed.name), Value(toType(computed.expr->type())));
+      writerColumnByName.emplace(computed.name, column);
+      projections.push_back(expr);
+      writerColumns.push_back(column);
+    }
+    if (writerColumns != input->outputColumns()) {
+      input = builder().make<Project>(
+          {input, std::move(projections), writerColumns});
+    }
+
+    const auto resolveKeys = [&](const std::vector<std::string>& names) {
+      ExprVector keys;
+      keys.reserve(names.size());
+      for (const auto& name : names) {
+        const auto it = writerColumnByName.find(name);
+        VELOX_CHECK(
+            it != writerColumnByName.end(),
+            "Delete key is not a column the writer receives: {}",
+            name);
+        keys.push_back(it->second);
+      }
+      return keys;
+    };
+
+    if (!deleteInput.shuffleKeys().empty()) {
+      auto [coLocatedInput, shuffleKeys] =
+          ensureCoLocated(input, resolveKeys(deleteInput.shuffleKeys()));
+      input = ensureLocallyCoLocated(coLocatedInput, shuffleKeys);
+    }
+
+    ExprVector sortKeys = resolveKeys(deleteInput.sortKeys());
+    OrderTypeVector sortOrders;
+    sortOrders.reserve(deleteInput.sortOrders().size());
+    for (const auto& order : deleteInput.sortOrders()) {
+      sortOrders.push_back(
+          order.isAscending ? (order.isNullsFirst ? OrderType::kAscNullsFirst
+                                                  : OrderType::kAscNullsLast)
+                            : (order.isNullsFirst ? OrderType::kDescNullsFirst
+                                                  : OrderType::kDescNullsLast));
+    }
+    if (!hasOrder(input, sortKeys, sortOrders)) {
+      input = builder().make<Sort>(
+          {input,
+           std::move(sortKeys),
+           std::move(sortOrders),
+           /*perDriver=*/true});
+    }
+    return input;
+  }
+
+  // Rewrites a DELETE after its source has been physically planned.
+  NodeCP rewriteDelete(const TableWrite& write, NodeCP input) {
+    if (input->is(NodeType::kValues) &&
+        input->as<Values>()->cardinality() == 0) {
+      if (input == write.input()) {
+        return &write;
+      }
+      return builder().make<TableWrite>(
+          {input,
+           write.table(),
+           write.kind(),
+           write.columnExprs(),
+           write.rowIdColumns(),
+           /*deleteHandle=*/nullptr});
+    }
+
+    const bool exact = write.input()->is(NodeType::kScan);
+    auto deleteHandle = beginDelete(write, input, exact);
+    if (deleteHandle->kind() ==
+        connector::ConnectorDeleteHandle::Kind::kMetadata) {
+      VELOX_USER_CHECK(
+          exact,
+          "DELETE selects its rows through another operator, which the "
+          "connector cannot yet turn into a row level delete. Only a "
+          "predicate the connector absorbs into the scan is supported.");
+    } else {
+      input = prepareDeleteInput(
+          input, write.rowIdColumns(), deleteHandle->deleteInput());
+    }
+
+    return builder().make<TableWrite>(
+        {input,
+         write.table(),
+         write.kind(),
+         write.columnExprs(),
+         write.rowIdColumns(),
+         builder().takeDeleteHandle(std::move(deleteHandle))});
+  }
+
+  // A CREATE or INSERT into a bucketed/partitioned layout needs each partition
+  // on one worker, else workers race to create the same bucket file.
+  // Repartition unless the input is already compatibly bucketed or runs on one
+  // worker.
   NodeCP rewriteTableWrite(const TableWrite* node, NoContext& context)
       override {
     NodeCP newInput = rewrite(node->input(), context);
-    if (numWorkers_ > 1 && node->kind() != connector::WriteKind::kDelete) {
+    if (node->kind() == connector::WriteKind::kDelete) {
+      return rewriteDelete(*node, newInput);
+    }
+
+    if (numWorkers_ > 1) {
       const auto* layout = node->table()->layouts().front();
       const auto& partitionColumns = layout->partitionColumns();
       if (!partitionColumns.empty()) {
@@ -1755,10 +2120,16 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       return node;
     }
     return builder().make<TableWrite>(
-        {newInput, node->table(), node->kind(), node->columnExprs()});
+        {newInput,
+         node->table(),
+         node->kind(),
+         node->columnExprs(),
+         node->rowIdColumns(),
+         node->deleteHandle()});
   }
 
  private:
+  const OptimizerSession& session_;
   const OptimizerOptions& options_;
   // A per-plan property, not an OptimizerOptions field, so it is held
   // separately.
@@ -1781,6 +2152,7 @@ NodeCP PlanPhysicalPass::run(
     NodeCP root,
     Builder& builder,
     velox::core::ExpressionEvaluator& evaluator,
+    const OptimizerSession& session,
     const OptimizerOptions& options,
     int32_t numWorkers,
     int32_t numDrivers) {
@@ -1789,7 +2161,7 @@ NodeCP PlanPhysicalPass::run(
 
   ExprSimplifier simplifier{builder, evaluator};
   PhysicalPlanRewriter rewriter{
-      builder, simplifier, options, numWorkers, numDrivers};
+      builder, simplifier, session, options, numWorkers, numDrivers};
   return rewriter.rewrite(root);
 }
 

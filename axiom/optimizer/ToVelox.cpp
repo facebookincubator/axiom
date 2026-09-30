@@ -2318,7 +2318,6 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
       session,
       table.shared_from_this(),
       write.kind(),
-      /*scanHandle=*/nullptr,
       optimizerSession_->options().explain);
 
   auto inputType = ROW(inputNames, inputTypes);

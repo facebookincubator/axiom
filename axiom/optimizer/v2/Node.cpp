@@ -314,6 +314,7 @@ PhysicalProperties passThroughProperties(NodeCP input) {
   const PhysicalProperties& props = input->physicalProperties();
   return PhysicalProperties{
       .globalPartition = props.globalPartition.dropOrder(),
+      .driverPartition = props.driverPartition.dropOrder(),
       .local = props.local,
       .unique = props.unique};
 }
@@ -325,6 +326,7 @@ PhysicalProperties rankedProperties(NodeCP input) {
   const PhysicalProperties& props = input->physicalProperties();
   return PhysicalProperties{
       .globalPartition = props.globalPartition.dropOrder(),
+      .driverPartition = props.driverPartition.dropOrder(),
       .unique = props.unique};
 }
 
@@ -341,6 +343,7 @@ PhysicalProperties sortedProperties(
   const PhysicalProperties& props = input->physicalProperties();
   return PhysicalProperties{
       .globalPartition = props.globalPartition.dropOrder(),
+      .driverPartition = props.driverPartition.dropOrder(),
       .local = sortedLocal(orderKeys, orderTypes),
       .unique = props.unique};
 }
@@ -352,18 +355,16 @@ PhysicalProperties sortedProperties(
 // partition). A key not projected as a bare column — dropped, or appearing only
 // inside a computed expression — drops the partition to unspecified. Gather and
 // unspecified pass through unchanged.
-Partitioning projectGlobalPartition(
-    NodeCP input,
+Partitioning projectPartition(
+    const Partitioning& inputPartition,
     const ExprVector& exprs,
     const ColumnVector& outputColumns) {
-  const Partitioning& partitioning =
-      input->physicalProperties().globalPartition;
-  if (partitioning.kind != PartitionKind::kPartitioned) {
-    return partitioning.dropOrder();
+  if (inputPartition.kind != PartitionKind::kPartitioned) {
+    return inputPartition.dropOrder();
   }
   ExprVector keys;
-  keys.reserve(partitioning.keys.size());
-  for (ExprCP key : partitioning.keys) {
+  keys.reserve(inputPartition.keys.size());
+  for (ExprCP key : inputPartition.keys) {
     ExprCP projected = nullptr;
     for (size_t i = 0; i < exprs.size(); ++i) {
       if (exprs[i]->sameOrEqual(*key)) {
@@ -376,7 +377,7 @@ Partitioning projectGlobalPartition(
     }
     keys.push_back(projected);
   }
-  Partitioning result = partitioning;
+  Partitioning result = inputPartition;
   result.keys = std::move(keys);
   return result;
 }
@@ -612,8 +613,12 @@ Project::Project(Key key)
           NodeType::kProject,
           ColumnVector{key.outputColumns},
           PhysicalProperties{
-              .globalPartition = projectGlobalPartition(
-                  key.input,
+              .globalPartition = projectPartition(
+                  key.input->physicalProperties().globalPartition,
+                  key.exprs,
+                  key.outputColumns),
+              .driverPartition = projectPartition(
+                  key.input->physicalProperties().driverPartition,
                   key.exprs,
                   key.outputColumns),
               .local = retainedLocal(key.input, key.outputColumns),
@@ -732,7 +737,8 @@ Sort::Sort(Key key)
           sortedProperties(key.input, key.orderKeys, key.orderTypes)),
       input_(key.input),
       orderKeys_(std::move(key.orderKeys)),
-      orderTypes_(std::move(key.orderTypes)) {
+      orderTypes_(std::move(key.orderTypes)),
+      perDriver_(key.perDriver) {
   VELOX_CHECK_NOT_NULL(input_);
   VELOX_CHECK(!orderKeys_.empty(), "Sort must have at least one order key");
   VELOX_CHECK_EQ(orderKeys_.size(), orderTypes_.size());
@@ -740,22 +746,25 @@ Sort::Sort(Key key)
 }
 
 size_t Sort::KeyHash::operator()(const Sort* node) const {
-  return hashOf(node->input(), node->orderKeys(), node->orderTypes());
+  return hashOf(
+      node->input(), node->orderKeys(), node->orderTypes(), node->perDriver());
 }
 
 size_t Sort::KeyHash::operator()(const Key& key) const {
-  return hashOf(key.input, key.orderKeys, key.orderTypes);
+  return hashOf(key.input, key.orderKeys, key.orderTypes, key.perDriver);
 }
 
 bool Sort::KeyEq::operator()(const Sort* left, const Sort* right) const {
   return left->input() == right->input() &&
       left->orderKeys() == right->orderKeys() &&
-      left->orderTypes() == right->orderTypes();
+      left->orderTypes() == right->orderTypes() &&
+      left->perDriver() == right->perDriver();
 }
 
 bool Sort::KeyEq::operator()(const Key& key, const Sort* node) const {
   return key.input == node->input() && key.orderKeys == node->orderKeys() &&
-      key.orderTypes == node->orderTypes();
+      key.orderTypes == node->orderTypes() &&
+      key.perDriver == node->perDriver();
 }
 
 bool Sort::KeyEq::operator()(const Sort* node, const Key& key) const {
@@ -2447,16 +2456,20 @@ Exchange::Exchange(Key key)
     : Node(
           NodeType::kExchange,
           ColumnVector{key.input->outputColumns()},
-          // A remote exchange drops per-driver local order/grouping (rows
-          // interleave) — except an order-preserving gather, which keeps the
-          // merged sort order. Uniqueness survives per uniqueAcrossExchange
-          // (global-scope only, none under a broadcast).
-          PhysicalProperties{
-              .globalPartition = key.partitioning,
-              .local = exchangeLocal(key.partitioning),
-              .unique = uniqueAcrossExchange(
-                  key.input->physicalProperties().unique,
-                  key.partitioning)}),
+          key.partitioning.scope == PropertyScope::kGlobal
+              ? PhysicalProperties{
+                    .globalPartition = key.partitioning,
+                    .local = exchangeLocal(key.partitioning),
+                    .unique = uniqueAcrossExchange(
+                        key.input->physicalProperties().unique,
+                        key.partitioning)}
+              : PhysicalProperties{
+                    .globalPartition = key.input->physicalProperties()
+                                           .globalPartition.dropOrder(),
+                    .driverPartition = key.partitioning,
+                    .unique = uniqueAcrossExchange(
+                        key.input->physicalProperties().unique,
+                        key.partitioning)}),
       input_(key.input),
       partitioning_(std::move(key.partitioning)) {
   VELOX_CHECK_NOT_NULL(input_);
@@ -2515,12 +2528,37 @@ TableWrite::TableWrite(Key key)
       input_(key.input),
       table_(key.table),
       kind_(key.kind),
-      columnExprs_(std::move(key.columnExprs)) {
+      columnExprs_(std::move(key.columnExprs)),
+      rowIdColumns_(std::move(key.rowIdColumns)),
+      deleteHandle_(key.deleteHandle) {
   VELOX_CHECK_NOT_NULL(input_);
   VELOX_CHECK_NOT_NULL(table_);
   if (kind_ == connector::WriteKind::kDelete) {
     VELOX_CHECK(columnExprs_.empty(), "Delete writes no columns");
+    const auto expectedRowIdColumns =
+        table_->rowIdColumns(connector::WriteKind::kDelete);
+    VELOX_CHECK_EQ(
+        rowIdColumns_.size(),
+        expectedRowIdColumns.size(),
+        "A delete carries the row identity its table names");
+    for (size_t i = 0; i < rowIdColumns_.size(); ++i) {
+      VELOX_CHECK_EQ(
+          rowIdColumns_[i]->name(),
+          expectedRowIdColumns[i],
+          "A delete carries its table's row identity in order");
+      VELOX_CHECK(
+          std::find(
+              input_->outputColumns().begin(),
+              input_->outputColumns().end(),
+              rowIdColumns_[i]) != input_->outputColumns().end(),
+          "A delete's input does not produce row identity column: {}",
+          expectedRowIdColumns[i]);
+    }
   } else {
+    VELOX_CHECK_NULL(
+        deleteHandle_, "Only a delete carries a connector delete handle");
+    VELOX_CHECK(
+        rowIdColumns_.empty(), "Only a delete identifies the rows it writes");
     VELOX_CHECK(
         !columnExprs_.empty(), "TableWrite must write at least one column");
     VELOX_CHECK_EQ(columnExprs_.size(), table_->type()->size());
@@ -2542,12 +2580,19 @@ size_t TableWrite::KeyHash::operator()(const TableWrite* node) const {
       node->input(),
       node->table(),
       static_cast<uint8_t>(node->kind()),
-      node->columnExprs());
+      node->columnExprs(),
+      node->rowIdColumns(),
+      node->deleteHandle());
 }
 
 size_t TableWrite::KeyHash::operator()(const Key& key) const {
   return hashOf(
-      key.input, key.table, static_cast<uint8_t>(key.kind), key.columnExprs);
+      key.input,
+      key.table,
+      static_cast<uint8_t>(key.kind),
+      key.columnExprs,
+      key.rowIdColumns,
+      key.deleteHandle);
 }
 
 bool TableWrite::KeyEq::operator()(
@@ -2555,13 +2600,17 @@ bool TableWrite::KeyEq::operator()(
     const TableWrite* right) const {
   return left->input() == right->input() && left->table() == right->table() &&
       left->kind() == right->kind() &&
-      left->columnExprs() == right->columnExprs();
+      left->columnExprs() == right->columnExprs() &&
+      left->rowIdColumns() == right->rowIdColumns() &&
+      left->deleteHandle() == right->deleteHandle();
 }
 
 bool TableWrite::KeyEq::operator()(const Key& key, const TableWrite* node)
     const {
   return key.input == node->input() && key.table == node->table() &&
-      key.kind == node->kind() && key.columnExprs == node->columnExprs();
+      key.kind == node->kind() && key.columnExprs == node->columnExprs() &&
+      key.rowIdColumns == node->rowIdColumns() &&
+      key.deleteHandle == node->deleteHandle();
 }
 
 bool TableWrite::KeyEq::operator()(const TableWrite* node, const Key& key)

@@ -334,21 +334,36 @@ FinishWrite::FinishWrite(
     : metadata_{std::move(metadata)},
       connectorId_{std::move(connectorId)},
       session_{std::move(session)},
-      handle_{std::move(handle)},
+      writeHandle_{std::move(handle)},
       statsMapping_{std::move(statsMapping)} {
   VELOX_CHECK_NOT_NULL(metadata_);
   VELOX_CHECK_NOT_NULL(session_);
-  VELOX_CHECK_NOT_NULL(handle_);
+  VELOX_CHECK_NOT_NULL(writeHandle_);
+}
+
+FinishWrite::FinishWrite(
+    std::shared_ptr<connector::ConnectorMetadata> metadata,
+    std::string connectorId,
+    connector::ConnectorSessionPtr session,
+    connector::ConnectorDeleteHandlePtr handle)
+    : metadata_{std::move(metadata)},
+      connectorId_{std::move(connectorId)},
+      session_{std::move(session)},
+      deleteHandle_{std::move(handle)} {
+  VELOX_CHECK_NOT_NULL(metadata_);
+  VELOX_CHECK_NOT_NULL(session_);
+  VELOX_CHECK_NOT_NULL(deleteHandle_);
 }
 
 std::string FinishWrite::toString() const {
-  if (handle_ == nullptr) {
+  if (!*this) {
     return "";
   }
   return fmt::format(
       "Metadata write via connector '{}': {}",
       connectorId_,
-      handle_->toString());
+      writeHandle_ != nullptr ? writeHandle_->toString()
+                              : deleteHandle_->toString());
 }
 
 FinishWrite::~FinishWrite() {
@@ -364,21 +379,29 @@ connector::RowsFuture FinishWrite::commit(
     *this = {};
   };
 
+  if (deleteHandle_ != nullptr) {
+    return metadata_->finishDelete(session_, deleteHandle_, writeResults);
+  }
+
   if (statsMapping_.columns.empty()) {
-    return metadata_->finishWrite(session_, handle_, writeResults, nullptr, {});
+    return metadata_->finishWrite(
+        session_, writeHandle_, writeResults, nullptr, {});
   }
 
   auto [statsRows, dataRows] = splitWriteResults(
-      writeResults, handle_->resultType()->size(), handle_->resultType());
+      writeResults,
+      writeHandle_->resultType()->size(),
+      writeHandle_->resultType());
 
   if (statsRows.empty()) {
-    return metadata_->finishWrite(session_, handle_, dataRows, nullptr, {});
+    return metadata_->finishWrite(
+        session_, writeHandle_, dataRows, nullptr, {});
   }
 
   auto [partitionKeys, partitionStats] = extractStats(statsMapping_, statsRows);
   return metadata_->finishWrite(
       session_,
-      handle_,
+      writeHandle_,
       dataRows,
       std::move(partitionKeys),
       std::move(partitionStats));
@@ -389,7 +412,9 @@ velox::ContinueFuture FinishWrite::abort() && noexcept {
   SCOPE_EXIT {
     *this = {};
   };
-  return metadata_->abortWrite(session_, handle_);
+  return deleteHandle_ != nullptr
+      ? metadata_->abortDelete(session_, deleteHandle_)
+      : metadata_->abortWrite(session_, writeHandle_);
 }
 
 namespace {

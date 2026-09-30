@@ -32,7 +32,6 @@
 #include "velox/core/PlanConsistencyChecker.h"
 #include "velox/core/TableWriteTraits.h"
 #include "velox/exec/HashPartitionFunction.h"
-#include "velox/expression/ExprConstants.h"
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
 
@@ -208,10 +207,12 @@ bool isSingleThreadedPipeline(const velox::core::PlanNodePtr& node) {
 class Emitter {
  public:
   Emitter(
+      const Builder& builder,
       const OptimizerSession& session,
       velox::core::ExpressionEvaluator& evaluator,
       const MultiFragmentPlan::Options& options)
-      : session_{session},
+      : builder_{builder},
+        session_{session},
         evaluator_{evaluator},
         exprEmitter_{evaluator.pool()},
         options_{options} {}
@@ -482,11 +483,6 @@ class Emitter {
   velox::core::PlanNodePtr emitFixedPoint(const FixedPoint& fixedPoint);
   velox::core::PlanNodePtr emitWorkingTable(const WorkingTable& workingTable);
 
-  // Returns the handle of the scan whose rows 'tableWrite' deletes. Fails if
-  // that scan's handle does not describe exactly the rows to remove.
-  velox::connector::ConnectorTableHandlePtr deletedRowsHandle(
-      const TableWrite& tableWrite);
-
   // Builds the producer-side `PartitionedOutput` capping 'sourcePlan' for
   // 'partitioning'. A connector-bucketed partitioning that scales to a single
   // destination degrades to a single (gather) output.
@@ -562,6 +558,7 @@ class Emitter {
     return ExecutableFragment{.fragmentId = ++fragmentCounter_};
   }
 
+  const Builder& builder_;
   const OptimizerSession& session_;
   velox::core::ExpressionEvaluator& evaluator_;
   ExprEmitter exprEmitter_;
@@ -1453,9 +1450,8 @@ velox::core::PlanNodePtr Emitter::emitSort(const Sort& sort) {
   velox::core::PlanNodePtr input = emit(sort.input());
   auto [sortingKeys, sortingOrders] =
       toSortingKeys(sort.orderKeys(), sort.orderTypes(), "Sort key");
-  // With multiple drivers each driver sorts its rows (a partial sort) and a
-  // LocalMerge combines the per-driver runs into one sorted stream. With a
-  // single driver a plain final sort suffices.
+  // With multiple drivers each driver sorts its rows (a partial sort). A
+  // task-wide sort merges those runs; a writer-local sort leaves them separate.
   const bool multiDriver = options_.maxLocalPartitions > 1;
   auto ordered = std::make_shared<velox::core::OrderByNode>(
       nextId(),
@@ -1463,7 +1459,7 @@ velox::core::PlanNodePtr Emitter::emitSort(const Sort& sort) {
       sortingOrders,
       /*isPartial=*/multiDriver,
       std::move(input));
-  if (!multiDriver) {
+  if (!multiDriver || sort.perDriver()) {
     return ordered;
   }
   return std::make_shared<velox::core::LocalMergeNode>(
@@ -2165,6 +2161,35 @@ velox::core::PlanNodePtr Emitter::makeExchangeConsumer(
 
 velox::core::PlanNodePtr Emitter::emitExchange(const Exchange& exchange) {
   const auto& partitioning = exchange.partitioning();
+  if (partitioning.scope == PropertyScope::kDriver) {
+    auto input = emit(exchange.input());
+    if (partitioning.kind == PartitionKind::kGather) {
+      return velox::core::LocalPartitionNode::gather(
+          nextId(), {std::move(input)});
+    }
+    VELOX_CHECK_EQ(
+        partitioning.kind,
+        PartitionKind::kPartitioned,
+        "Driver exchange requires partitioned or gather distribution");
+    auto fields =
+        toFieldAccessList(partitioning.keys, "Local exchange partition key");
+    velox::core::PartitionFunctionSpecPtr spec;
+    if (partitioning.partitionType != nullptr) {
+      spec = connectorPartitionSpec(
+          *partitioning.partitionType,
+          input->outputType(),
+          fields,
+          /*isLocal=*/true);
+    } else {
+      spec = makeHashPartitionSpec(input->outputType(), fields);
+    }
+    return std::make_shared<velox::core::LocalPartitionNode>(
+        nextId(),
+        velox::core::LocalPartitionNode::Type::kRepartition,
+        /*scaleWriter=*/false,
+        std::move(spec),
+        std::vector<velox::core::PlanNodePtr>{std::move(input)});
+  }
 
   // Producer fragment: the exchange's input, capped with a PartitionedOutput.
   ExecutableFragment source = newFragment();
@@ -2197,35 +2222,6 @@ velox::core::PlanNodePtr Emitter::emitExchange(const Exchange& exchange) {
   return consumer;
 }
 
-velox::connector::ConnectorTableHandlePtr Emitter::deletedRowsHandle(
-    const TableWrite& tableWrite) {
-  // The scan handle is the only description of the rows to remove, so the rows
-  // reaching the write must be the rows the scan reads.
-  NodeCP input = tableWrite.input();
-  if (input->is(NodeType::kFilter) &&
-      input->as<Filter>()->input()->is(NodeType::kScan)) {
-    VELOX_USER_FAIL(
-        "Connector cannot apply this WHERE clause for DELETE: {}",
-        input->as<Filter>()->predicates().front()->toString());
-  }
-  VELOX_USER_CHECK(
-      input->is(NodeType::kScan),
-      "DELETE requires a scan with an optional filter");
-
-  const auto& scan = *input->as<Scan>();
-  // The connector reads the filters as constraints on the table it is about to
-  // change, so the two must be the same table.
-  VELOX_USER_CHECK(
-      scan.baseTable()->schemaTable->connectorTable == tableWrite.table(),
-      "DELETE scans the wrong table: deletes {}, scans {}",
-      tableWrite.table()->name().toString(),
-      scan.baseTable()->schemaTable->connectorTable->name().toString());
-
-  VELOX_CHECK_NOT_NULL(
-      scan.scanHandle(), "Scan reaches emit without a connector handle");
-  return scan.scanHandle()->tableHandle;
-}
-
 velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
   const bool isDelete = tableWrite.kind() == connector::WriteKind::kDelete;
 
@@ -2246,25 +2242,37 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
   const auto& table = *tableWrite.table();
   auto* layout = table.layouts().front();
   const auto& connectorId = layout->connector()->connectorId();
-  auto metadata = connector::ConnectorMetadataRegistry::get(connectorId);
-  auto connectorSession = session_.context()->sessionFor(connectorId);
+  const auto& context = session_.context();
+  VELOX_CHECK_NOT_NULL(context, "Optimizer session requires a context");
+  auto metadata = context->metadataFor(connectorId);
+  VELOX_CHECK_NOT_NULL(
+      metadata, "Connector metadata is not registered: {}", connectorId);
+  auto connectorSession = context->sessionFor(connectorId);
 
-  auto handle = metadata->beginWrite(
-      connectorSession,
-      table.shared_from_this(),
-      tableWrite.kind(),
-      isDelete ? deletedRowsHandle(tableWrite) : nullptr,
-      session_.options().explain);
-
+  connector::ConnectorWriteHandlePtr writeHandle;
+  connector::ConnectorDeleteHandlePtr deleteHandle;
   if (isDelete) {
-    if (handle->veloxHandle() != nullptr) {
-      VELOX_NYI(
-          "Row-level delete is not supported: {}", table.name().toString());
-    }
+    VELOX_CHECK_NOT_NULL(
+        tableWrite.deleteHandle(),
+        "Delete reached emission without a connector delete handle");
+    deleteHandle = builder_.deleteHandle(tableWrite.deleteHandle());
+  } else {
+    writeHandle = metadata->beginWrite(
+        connectorSession,
+        table.shared_from_this(),
+        tableWrite.kind(),
+        session_.options().explain);
+  }
 
+  if (isDelete &&
+      deleteHandle->kind() ==
+          connector::ConnectorDeleteHandle::Kind::kMetadata) {
     VELOX_CHECK(!finishWrite_, "Only one TableWrite per query is supported");
     finishWrite_ = FinishWrite{
-        metadata, connectorId, std::move(connectorSession), std::move(handle)};
+        metadata,
+        connectorId,
+        std::move(connectorSession),
+        std::move(deleteHandle)};
     return nullptr;
   }
 
@@ -2288,14 +2296,28 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
     currentFragment_ = &writerFragment;
   }
 
+  std::vector<std::string> columnNames;
   velox::core::PlanNodePtr input = emit(tableWrite.input());
+  if (!isDelete) {
+    columnNames = table.type()->names();
+  } else {
+    columnNames.reserve(
+        tableWrite.rowIdColumns().size() +
+        deleteHandle->deleteInput().computedColumns().size());
+    for (ColumnCP column : tableWrite.rowIdColumns()) {
+      columnNames.emplace_back(column->name());
+    }
+    for (const auto& computed : deleteHandle->deleteInput().computedColumns()) {
+      columnNames.push_back(computed.name);
+    }
+  }
 
   // A bucketed write reads a bucket exchange (physical planning inserts one
   // unless the source is already co-bucketed), and its writer task count must
   // equal that exchange's partition count: one task per bucket group, each
   // producing one bucket file. The fragment runs no grouped scan, so this is a
   // task count, not grouped execution.
-  if (distributed && !layout->partitionColumns().empty() &&
+  if (!isDelete && distributed && !layout->partitionColumns().empty() &&
       tableWrite.input()->is(NodeType::kExchange)) {
     const auto& exchangeType =
         tableWrite.input()->physicalProperties().globalPartition.partitionType;
@@ -2313,7 +2335,8 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
   // already confined each partition to one worker; this is the within-worker
   // split (only meaningful at maxLocalPartitions > 1).
   const auto& partitionColumns = layout->partitionColumns();
-  if (options_.maxLocalPartitions > 1 && !partitionColumns.empty()) {
+  if (!isDelete && options_.maxLocalPartitions > 1 &&
+      !partitionColumns.empty()) {
     input = std::make_shared<velox::core::LocalPartitionNode>(
         nextId(),
         velox::core::LocalPartitionNode::Type::kRepartition,
@@ -2335,38 +2358,50 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
       !distributed && isSingleThreadedPipeline(input)
       ? 1
       : options_.maxLocalPartitions;
-  WriteStatsBuilder statsBuilder(
-      table,
-      inputType,
-      *handle,
-      writerNumDrivers,
-      distributed ? options_.maxRemotePartitions : 1);
+  std::unique_ptr<WriteStatsBuilder> statsBuilder;
+  if (!isDelete) {
+    statsBuilder = std::make_unique<WriteStatsBuilder>(
+        table,
+        inputType,
+        *writeHandle,
+        writerNumDrivers,
+        distributed ? options_.maxRemotePartitions : 1);
+  }
   std::optional<velox::core::ColumnStatsSpec> writeStatsSpec;
-  if (statsBuilder.hasStats()) {
-    writeStatsSpec = statsBuilder.writeSpec();
+  if (statsBuilder != nullptr && statsBuilder->hasStats()) {
+    writeStatsSpec = statsBuilder->writeSpec();
   }
   auto writeOutputType = writeStatsSpec.has_value()
       ? velox::core::TableWriteTraits::outputType(writeStatsSpec)
-      : handle->resultType();
+      : isDelete ? deleteHandle->resultType()
+                 : writeHandle->resultType();
 
   VELOX_CHECK(!finishWrite_, "Only one TableWrite per query is supported");
   auto insertTableHandle =
       std::make_shared<const velox::core::InsertTableHandle>(
           connectorId,
-          handle->veloxHandle(),
+          isDelete ? deleteHandle->veloxHandle() : writeHandle->veloxHandle(),
           /*notNullColumns=*/folly::F14FastSet<std::string>{});
-  finishWrite_ = FinishWrite{
-      metadata,
-      connectorId,
-      std::move(connectorSession),
-      std::move(handle),
-      statsBuilder.statsMapping()};
+  if (isDelete) {
+    finishWrite_ = FinishWrite{
+        metadata,
+        connectorId,
+        std::move(connectorSession),
+        std::move(deleteHandle)};
+  } else {
+    finishWrite_ = FinishWrite{
+        metadata,
+        connectorId,
+        std::move(connectorSession),
+        std::move(writeHandle),
+        statsBuilder->statsMapping()};
+  }
 
   velox::core::PlanNodePtr result =
       std::make_shared<velox::core::TableWriteNode>(
           nextId(),
           inputType,
-          table.type()->names(),
+          std::move(columnNames),
           std::move(writeStatsSpec),
           std::move(insertTableHandle),
           /*hasPartitioningScheme=*/false,
@@ -2375,10 +2410,10 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
           std::move(input));
 
   // Combine the per-driver write stats within a worker.
-  if (statsBuilder.needsMerge()) {
+  if (statsBuilder != nullptr && statsBuilder->needsMerge()) {
     result = velox::core::LocalPartitionNode::gather(
         nextId(), std::vector<velox::core::PlanNodePtr>{result});
-    auto localMergeSpec = statsBuilder.localMergeSpec(result->outputType());
+    auto localMergeSpec = statsBuilder->localMergeSpec(result->outputType());
     auto localMergeOutputType =
         velox::core::TableWriteTraits::outputType(localMergeSpec);
     result = std::make_shared<velox::core::TableWriteMergeNode>(
@@ -2405,13 +2440,13 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
       gather->id(), writerFragment.fragmentId);
   stages_.push_back(std::move(writerFragment));
 
-  if (!statsBuilder.needsFinalMerge()) {
+  if (statsBuilder == nullptr || !statsBuilder->needsFinalMerge()) {
     return gather;
   }
 
   // The coordinator merges the per-worker intermediates into final scalar
   // stats.
-  auto finalMergeSpec = statsBuilder.finalMergeSpec(gather->outputType());
+  auto finalMergeSpec = statsBuilder->finalMergeSpec(gather->outputType());
   auto finalMergeOutputType =
       velox::core::TableWriteTraits::outputType(finalMergeSpec);
   return std::make_shared<velox::core::TableWriteMergeNode>(
@@ -2591,11 +2626,12 @@ EmitPass::Result EmitPass::run(
     NodeCP root,
     const ColumnVector& outputColumns,
     const std::vector<std::string>& outputNames,
+    const Builder& builder,
     const OptimizerSession& session,
     velox::core::ExpressionEvaluator& evaluator,
     const MultiFragmentPlan::Options& options) {
   VELOX_CHECK_EQ(outputColumns.size(), outputNames.size());
-  Emitter emitter(session, evaluator, options);
+  Emitter emitter(builder, session, evaluator, options);
   auto fragments = emitter.emitFragments(root, outputColumns, outputNames);
   return Result{
       std::move(fragments),

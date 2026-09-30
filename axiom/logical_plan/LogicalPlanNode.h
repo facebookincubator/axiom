@@ -880,10 +880,9 @@ enum class WriteKind {
   kDelete = 3,
 
   // Column values in individual rows are changed. The TableWriter
-  // gets first the row ids as per Table::rowIdHandles()
-  // and then new values for the columns being changed. The new values
-  // may overlap with row ids if the row id is a set of primary key
-  // columns.
+  // gets first the columns Table::rowIdColumns() names and then new values
+  // for the columns being changed. The new values may overlap with the row id
+  // if the row id is a set of primary key columns.
   kUpdate = 4,
 };
 
