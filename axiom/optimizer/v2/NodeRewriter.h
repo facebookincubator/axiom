@@ -159,7 +159,7 @@ class NodeRewriter {
       return node;
     }
     return builder_.template make<Sort>(
-        {newInput, node->orderKeys(), node->orderTypes()});
+        {newInput, node->orderKeys(), node->orderTypes(), node->perDriver()});
   }
 
   virtual NodeCP rewriteTopN(const TopN* node, TContext& context) {
@@ -396,7 +396,12 @@ class NodeRewriter {
       return node;
     }
     return builder_.template make<TableWrite>(
-        {newInput, node->table(), node->kind(), node->columnExprs()});
+        {newInput,
+         node->table(),
+         node->kind(),
+         node->columnExprs(),
+         node->rowIdColumns(),
+         node->deleteHandle()});
   }
 
   virtual NodeCP rewriteWorkingTable(

@@ -34,6 +34,7 @@ The Test connector is designed for three use cases:
 - `CREATE TABLE`.
 - `CREATE TABLE AS SELECT`.
 - `INSERT INTO`.
+- Row-level `DELETE`.
 - `DROP TABLE`.
 - Automatic statistics collection: per-column NDV, min/max, null percentage,
   and max length are computed incrementally as data is added.
@@ -177,13 +178,18 @@ auto table = connector->addTable(
     TestBucketSpec{{"customer_id"}, 16});    // 16 buckets on customer_id
 ```
 
-`TestBucketSpec::bucketColumns` lists the column names that compose the bucket
-key (must reference visible columns); `numBuckets` is the fixed bucket count.
+`TestBucketSpec::bucketColumns` lists the stored column names that compose the
+bucket key (visible columns or the generated `$row_id`); `numBuckets` is the
+fixed bucket count.
 
 ### Hidden Columns
 
 Tables can have hidden columns that are not included in `SELECT *`, `DESC`,
 or `SHOW CREATE TABLE` output but can be queried explicitly by name.
+
+Every table has a hidden BIGINT `$row_id` by default. The connector assigns
+monotonically increasing values as rows are appended and never reuses an ID,
+including after a delete.
 
 Hidden columns can be defined via SQL using the `hidden` property:
 
@@ -193,7 +199,8 @@ CREATE TABLE events (event_id BIGINT, payload VARCHAR)
 ```
 
 Hidden column names must not conflict with schema column names. All hidden
-columns are created with type VARCHAR.
+columns created through the `hidden` property are VARCHAR. `$row_id` is
+reserved and cannot be declared through that property or in the visible schema.
 
 Hidden columns can also be defined via the C++ API with explicit types:
 

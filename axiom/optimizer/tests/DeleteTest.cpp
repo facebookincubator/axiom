@@ -18,6 +18,9 @@
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
+#include <algorithm>
+#include <array>
+
 namespace facebook::axiom::optimizer {
 namespace {
 
@@ -53,6 +56,42 @@ class DeleteTest : public test::HiveQueriesTestBase {
     const auto sql = fmt::format("SELECT count(*) {}", fromClause);
     SCOPED_TRACE(sql);
     return runVelox(parseSelect(sql)).getOnlyResult<int64_t>();
+  }
+
+  lp::LogicalPlanNodePtr parseTestDelete(std::string_view sql) {
+    ::axiom::sql::presto::PrestoParser parser(
+        kTestConnectorId,
+        kDefaultSchema,
+        std::make_shared<::axiom::sql::presto::ParserSession>(
+            connector::makeTestContext("test"),
+            connector::makeTestStatWriter(),
+            connector::Properties{},
+            ::axiom::sql::presto::ParserOptions{}));
+    auto statement = parser.parse(sql);
+    VELOX_CHECK(statement->isDelete());
+    return statement->as<::axiom::sql::presto::DeleteStatement>()->plan();
+  }
+
+  int64_t runTestCount(std::string_view fromClause) {
+    return runVelox(parseSelect(
+                        fmt::format("SELECT count(*) {}", fromClause),
+                        kTestConnectorId))
+        .getOnlyResult<int64_t>();
+  }
+
+  void addTestRows(std::string_view tableName) {
+    auto table = testConnector_->addTable(
+        std::string{tableName}, ROW({"id", "value"}, BIGINT()));
+    table->addData(makeRowVector(
+        {makeFlatVector<int64_t>({0, 1}), makeFlatVector<int64_t>({10, 20})}));
+    table->addData(makeRowVector(
+        {makeFlatVector<int64_t>({2, 3}), makeFlatVector<int64_t>({30, 40})}));
+  }
+
+  std::shared_ptr<connector::TestTable> testTable(std::string_view name) {
+    return velox::checkedPointerCast<connector::TestTable>(
+        testConnector_->metadata()->findTableInternal(
+            {std::string(kDefaultSchema), std::string(name)}));
   }
 };
 
@@ -144,16 +183,206 @@ TEST_F(DeleteTest, unpartitionedTable) {
   EXPECT_EQ(0, runCount("FROM test"));
 }
 
-// $row_id resolves, so a row-level delete parses. The optimizer rejects it:
-// it supports only deletes the connector can carry out as a metadata change.
-TEST_F(DeleteTest, rowLevelDelete) {
+// A delete whose rows come from a subquery over the same table selects rows
+// inside a partition, which a connector that removes them by dropping whole
+// partitions cannot carry out.
+TEST_F(DeleteTest, subqueryWithoutRowLevelDelete) {
   const auto plan = parseDelete(
       "DELETE FROM nation WHERE \"$row_id\" IN "
       "(SELECT \"$row_id\" FROM nation WHERE n_regionkey = 1)");
   ASSERT_NE(plan, nullptr);
 
   VELOX_ASSERT_USER_THROW(
-      planVelox(plan), "DELETE requires a scan with an optional filter");
+      planVelox(plan), "DELETE requires row-level support from the connector");
+}
+
+// A filter left above the scan selects rows for the writer rather than
+// preventing a row-level DELETE.
+TEST_F(DeleteTest, unabsorbedFilter) {
+  addTestRows("rows");
+  auto plan = planVelox(
+      parseTestDelete("DELETE FROM rows WHERE value >= 30"),
+      {.maxRemotePartitions = 1, .maxLocalPartitions = 1});
+
+  ASSERT_EQ(plan.plan->fragments().size(), 1);
+  AXIOM_ASSERT_PLAN(
+      plan.plan->fragments().front().fragment.planNode,
+      matchScan("rows")
+          .filter("value >= 30")
+          .project({"\"$row_id\""})
+          .tableWrite({std::string{connector::TestTable::kRowId}})
+          .build());
+  EXPECT_EQ(runFragmentedPlan(plan).getOnlyResult<int64_t>(), 2);
+  EXPECT_EQ(runTestCount("FROM rows"), 2);
+  EXPECT_EQ(runTestCount("FROM rows WHERE value >= 30"), 0);
+  EXPECT_EQ(testTable("rows")->deleteLog(), std::vector<int64_t>{2});
+}
+
+// A second DELETE correctly reads row IDs from data retained by the first.
+TEST_F(DeleteTest, consecutiveDeletes) {
+  addTestRows("rows");
+  auto first = planVelox(parseTestDelete("DELETE FROM rows WHERE value >= 30"));
+  EXPECT_EQ(runFragmentedPlan(first).getOnlyResult<int64_t>(), 2);
+  auto second = planVelox(parseTestDelete("DELETE FROM rows WHERE id = 1"));
+  EXPECT_EQ(runFragmentedPlan(second).getOnlyResult<int64_t>(), 1);
+  EXPECT_EQ(runTestCount("FROM rows"), 1);
+}
+
+// A membership subquery can select exact row IDs for a row-level DELETE.
+TEST_F(DeleteTest, rowIdSubquery) {
+  addTestRows("rows");
+  auto plan = planVelox(
+      parseTestDelete(
+          "DELETE FROM rows WHERE \"$row_id\" IN "
+          "(SELECT \"$row_id\" FROM rows WHERE id IN (1, 3))"),
+      {.maxRemotePartitions = 1, .maxLocalPartitions = 1});
+
+  ASSERT_EQ(plan.plan->fragments().size(), 1);
+  AXIOM_ASSERT_PLAN(
+      plan.plan->fragments().front().fragment.planNode,
+      matchScan("rows")
+          .aliases({"target_row_id"})
+          .hashJoin(
+              matchScan("rows")
+                  .aliases({"selected_row_id", "selected_id"})
+                  .filter("selected_id IN (1, 3)")
+                  .project({"selected_row_id"}),
+              velox::core::JoinType::kLeftSemiFilter)
+          .tableWrite({std::string{connector::TestTable::kRowId}})
+          .build());
+  EXPECT_EQ(runFragmentedPlan(plan).getOnlyResult<int64_t>(), 2);
+  EXPECT_EQ(runTestCount("FROM rows"), 2);
+  EXPECT_EQ(runTestCount("FROM rows WHERE id IN (1, 3)"), 0);
+}
+
+// A writer with no distribution requirement retains the input's parallelism.
+TEST_F(DeleteTest, noDeleteDistributionRequirement) {
+  auto table = testConnector_->addTable(
+      "unconstrained_delete_rows",
+      ROW({"id", "value"}, BIGINT()),
+      ROW({}),
+      connector::TestBucketSpec{{"id"}, 4});
+  table->addData(makeRowVector(
+      {makeFlatVector<int64_t>({0, 1, 2, 3}),
+       makeFlatVector<int64_t>({10, 20, 30, 40})}));
+
+  auto plan = planVelox(
+      parseTestDelete("DELETE FROM unconstrained_delete_rows WHERE value > 0"),
+      {.maxRemotePartitions = 4, .maxLocalPartitions = 2});
+
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      plan.plan,
+      matchScan("unconstrained_delete_rows")
+          .filter("value > 0")
+          .project({"\"$row_id\""})
+          .tableWrite({std::string{connector::TestTable::kRowId}})
+          .gather()
+          .build());
+}
+
+// Missing writer properties add the required shuffle, local partition, and
+// sort before the row-level DELETE writer.
+TEST_F(DeleteTest, distributedRowLevelDelete) {
+  auto table = testConnector_->addTable(
+      "distributed_rows", ROW({"id", "value"}, BIGINT()));
+  table->addData(makeRowVector(
+      {makeFlatVector<int64_t>({0, 1, 2, 3}),
+       makeFlatVector<int64_t>({10, 20, 30, 40})}));
+  table->addData(makeRowVector(
+      {makeFlatVector<int64_t>({4, 5, 6, 7}),
+       makeFlatVector<int64_t>({50, 60, 70, 80})}));
+
+  auto rowId = std::make_shared<velox::core::FieldAccessTypedExpr>(
+      BIGINT(), std::string{connector::TestTable::kRowId});
+  auto group = std::make_shared<velox::core::CallTypedExpr>(
+      BIGINT(),
+      "mod",
+      rowId,
+      std::make_shared<velox::core::ConstantTypedExpr>(
+          BIGINT(), velox::Variant(int64_t{2})));
+  auto rowKey = std::make_shared<velox::core::ConcatTypedExpr>(
+      std::vector<std::string>{"id"},
+      std::vector<velox::core::TypedExprPtr>{rowId});
+  table->setDeleteInput(
+      connector::DeleteInput{
+          {{"delete_group", std::move(group)}, {"row_key", std::move(rowKey)}},
+          {"delete_group"},
+          {std::string{connector::TestTable::kRowId}},
+          {{/*isAscending=*/true, /*isNullsFirst=*/false}}});
+
+  auto plan = planVelox(
+      parseTestDelete("DELETE FROM distributed_rows WHERE value > 0"),
+      {.maxRemotePartitions = 4, .maxLocalPartitions = 2});
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      plan.plan,
+      matchScan("distributed_rows")
+          .filter("value > 0")
+          .project(
+              {"\"$row_id\"",
+               "mod(\"$row_id\", 2) as delete_group",
+               "row_constructor(\"$row_id\") as row_key"})
+          .shuffle({"delete_group"})
+          .localPartition({"delete_group"})
+          .orderBy({"\"$row_id\""})
+          .tableWrite(
+              {std::string{connector::TestTable::kRowId},
+               "delete_group",
+               "row_key"})
+          .gather()
+          .build());
+
+  EXPECT_EQ(runFragmentedPlan(plan).getOnlyResult<int64_t>(), 8);
+  EXPECT_EQ(runTestCount("FROM distributed_rows"), 0);
+  ASSERT_GT(table->deleteWriterLog().size(), 1);
+  std::array<std::optional<size_t>, 2> writerByGroup;
+  for (size_t writer = 0; writer < table->deleteWriterLog().size(); ++writer) {
+    const auto& rowIds = table->deleteWriterLog()[writer];
+    EXPECT_TRUE(std::is_sorted(rowIds.begin(), rowIds.end()));
+    for (const auto row : rowIds) {
+      const auto groupId = static_cast<size_t>(row % 2);
+      if (writerByGroup[groupId].has_value()) {
+        EXPECT_EQ(writerByGroup[groupId], writer);
+      } else {
+        writerByGroup[groupId] = writer;
+      }
+    }
+  }
+  EXPECT_TRUE(writerByGroup[0].has_value());
+  EXPECT_TRUE(writerByGroup[1].has_value());
+}
+
+// Input already bucketed by the writer's key does not add a remote shuffle.
+TEST_F(DeleteTest, bucketedDelete) {
+  auto table = testConnector_->addTable(
+      "bucketed_delete_rows",
+      ROW({"id", "value"}, BIGINT()),
+      ROW({}),
+      connector::TestBucketSpec{
+          {std::string{connector::TestTable::kRowId}}, 4});
+  table->addData(makeRowVector(
+      {makeFlatVector<int64_t>({0, 1, 2, 3}),
+       makeFlatVector<int64_t>({10, 20, 30, 40})}));
+  table->addData(makeRowVector(
+      {makeFlatVector<int64_t>({4, 5, 6, 7}),
+       makeFlatVector<int64_t>({50, 60, 70, 80})}));
+  table->setDeleteInput(
+      connector::DeleteInput{
+          {}, {std::string{connector::TestTable::kRowId}}, {}, {}});
+
+  auto plan = planVelox(
+      parseTestDelete("DELETE FROM bucketed_delete_rows WHERE value > 0"),
+      {.maxRemotePartitions = 4, .maxLocalPartitions = 1});
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      plan.plan,
+      matchScan("bucketed_delete_rows")
+          .filter("value > 0")
+          .project({"\"$row_id\""})
+          .tableWrite({std::string{connector::TestTable::kRowId}})
+          .gather()
+          .build());
+
+  EXPECT_EQ(runFragmentedPlan(plan).getOnlyResult<int64_t>(), 8);
+  EXPECT_EQ(runTestCount("FROM bucketed_delete_rows"), 0);
 }
 
 } // namespace

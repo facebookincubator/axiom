@@ -16,6 +16,8 @@
 
 #include "axiom/optimizer/v2/Builder.h"
 
+#include <algorithm>
+
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/v2/ExprFactory.h"
 
@@ -28,6 +30,26 @@ Builder::Builder() : functionNames_{queryCtx()->functionNames()} {
     reversibleFunctions_.emplace(toName(name), toName(reverseName));
     reversibleFunctions_.emplace(toName(reverseName), toName(name));
   }
+}
+
+const connector::ConnectorDeleteHandle* Builder::takeDeleteHandle(
+    std::shared_ptr<connector::ConnectorDeleteHandle> handle) {
+  VELOX_CHECK_NOT_NULL(handle);
+  const auto* pointer = handle.get();
+  deleteHandles_.push_back(std::move(handle));
+  return pointer;
+}
+
+std::shared_ptr<connector::ConnectorDeleteHandle> Builder::deleteHandle(
+    const connector::ConnectorDeleteHandle* pointer) const {
+  auto it = std::find_if(
+      deleteHandles_.begin(), deleteHandles_.end(), [&](const auto& handle) {
+        return handle.get() == pointer;
+      });
+  VELOX_CHECK(
+      it != deleteHandles_.end(),
+      "DELETE handle is not owned by this plan's Builder");
+  return *it;
 }
 
 const Values* Builder::makeSingleRowValues(

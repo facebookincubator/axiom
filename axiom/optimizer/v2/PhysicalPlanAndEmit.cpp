@@ -32,11 +32,18 @@ EmitPass::Result physicalPlanAndEmit(
       root,
       builder,
       evaluator,
+      session,
       session.options(),
       options.maxRemotePartitions,
       options.maxLocalPartitions);
   return EmitPass::run(
-      physicalPlanned, outputColumns, outputNames, session, evaluator, options);
+      physicalPlanned,
+      outputColumns,
+      outputNames,
+      builder,
+      session,
+      evaluator,
+      options);
 }
 
 } // namespace facebook::axiom::optimizer::v2

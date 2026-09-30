@@ -363,7 +363,7 @@ class HiveWriteOptions {
 /// partitions to remove, all of them on partition columns. The filters are
 /// resolved to a partition list at commit, which can be long and so is not
 /// materialized here.
-class HiveDeleteWriteHandle : public ConnectorWriteHandle {
+class HiveDeleteWriteHandle : public ConnectorDeleteHandle {
  public:
   HiveDeleteWriteHandle(TablePtr table, velox::common::SubfieldFilters filters)
       : table_{std::move(table)}, filters_{std::move(filters)} {}
@@ -399,16 +399,37 @@ class HiveConnectorMetadata : public ConnectorMetadata {
       const ConnectorSessionPtr& session,
       const TablePtr& table,
       WriteKind kind,
+      bool explain) override;
+
+  ConnectorDeleteHandlePtr beginDelete(
+      const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& scanHandle,
+      bool exact,
       bool explain) override;
 
  protected:
+  // Resolves the table described by a connector-owned scan handle.
+  virtual TablePtr tableFromScanHandle(
+      const velox::connector::ConnectorTableHandlePtr& scanHandle);
+
   // Returns the handle for a delete of the rows 'filters' select, all of them
   // on partition columns. A connector overrides this to carry its own
   // description of the delete.
-  virtual ConnectorWriteHandlePtr makeDeleteWriteHandle(
+  virtual ConnectorDeleteHandlePtr makeDeleteWriteHandle(
       const TablePtr& table,
       velox::common::SubfieldFilters filters) const;
+
+  // Returns the handle for a delete that records the rows it removes, for the
+  // rows 'scanHandle' selects. Returns nullptr when the connector removes rows
+  // only by dropping whole partitions, which leaves the caller to report why
+  // this delete is not one of those.
+  virtual ConnectorDeleteHandlePtr makeRowLevelDeleteWriteHandle(
+      const ConnectorSessionPtr& /*session*/,
+      const TablePtr& /*table*/,
+      const velox::connector::ConnectorTableHandlePtr& /*scanHandle*/,
+      bool /*explain*/) const {
+    return nullptr;
+  }
 
   virtual void ensureInitialized() const {}
 

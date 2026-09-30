@@ -95,9 +95,50 @@ const auto& writeKindNames() {
   return kNames;
 }
 
+const auto& deleteHandleKindNames() {
+  static const folly::F14FastMap<ConnectorDeleteHandle::Kind, std::string_view>
+      kNames = {
+          {ConnectorDeleteHandle::Kind::kMetadata, "METADATA"},
+          {ConnectorDeleteHandle::Kind::kRowLevel, "ROW_LEVEL"},
+      };
+  return kNames;
+}
+
 } // namespace
 
 AXIOM_DEFINE_ENUM_NAME(WriteKind, writeKindNames);
+AXIOM_DEFINE_EMBEDDED_ENUM_NAME(
+    ConnectorDeleteHandle,
+    Kind,
+    deleteHandleKindNames);
+
+DeleteInput::DeleteInput(
+    std::vector<Column> computedColumns,
+    std::vector<std::string> shuffleKeys,
+    std::vector<std::string> sortKeys,
+    std::vector<SortOrder> sortOrders)
+    : computedColumns_{std::move(computedColumns)},
+      shuffleKeys_{std::move(shuffleKeys)},
+      sortKeys_{std::move(sortKeys)},
+      sortOrders_{std::move(sortOrders)} {
+  VELOX_CHECK_EQ(
+      sortKeys_.size(),
+      sortOrders_.size(),
+      "Delete sort keys and sort orders must be one-to-one");
+  for (const auto& column : computedColumns_) {
+    VELOX_CHECK(!column.name.empty(), "Computed delete column requires a name");
+    VELOX_CHECK_NOT_NULL(
+        column.expr,
+        "Computed delete column requires an expression: {}",
+        column.name);
+  }
+  for (const auto& key : shuffleKeys_) {
+    VELOX_CHECK(!key.empty(), "Delete shuffle key requires a name");
+  }
+  for (const auto& key : sortKeys_) {
+    VELOX_CHECK(!key.empty(), "Delete sort key requires a name");
+  }
+}
 
 void MetadataCountGroup::checkConsistency() const {
   VELOX_CHECK_GE(numRows, 0, "Row count must be non-negative");
