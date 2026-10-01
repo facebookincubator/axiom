@@ -24,18 +24,6 @@ ConnectorContext::ConnectorContext(
     std::string queryId,
     std::string user,
     ConnectorProperties properties,
-    StatWriterProvider statWriterProvider)
-    : ConnectorContext{
-          std::move(queryId),
-          std::move(user),
-          std::move(properties),
-          std::move(statWriterProvider),
-          ConnectorEnvironment::global()} {}
-
-ConnectorContext::ConnectorContext(
-    std::string queryId,
-    std::string user,
-    ConnectorProperties properties,
     StatWriterProvider statWriterProvider,
     std::shared_ptr<const ConnectorEnvironment> environment)
     : queryId_{std::move(queryId)},

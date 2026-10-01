@@ -18,8 +18,7 @@
 #include "axiom/optimizer/OptimizerOptions.h"
 
 #include <folly/ScopeGuard.h>
-#include "axiom/connectors/ConnectorMetadata.h"
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/connectors/ConnectorEnvironment.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/v2/Optimize.h"
@@ -56,8 +55,7 @@ facebook::axiom::connector::TablePtr createTable(
     const facebook::axiom::connector::ConnectorContextPtr& connectorContext,
     const facebook::axiom::logical_plan::TableWriteNode& writeNode,
     const std::string& connectorId) {
-  auto* metadata =
-      facebook::axiom::connector::ConnectorMetadata::metadata(connectorId);
+  auto metadata = connectorContext->environment()->metadata(connectorId);
 
   // Convert string options to velox::Variant options
   folly::F14FastMap<std::string, velox::Variant> options;
@@ -112,18 +110,22 @@ facebook::axiom::optimizer::PlanAndStats optimize(
   };
 
   auto queryCtx = velox::core::QueryCtx::create();
+  auto connectorEnvironment =
+      facebook::axiom::connector::ConnectorEnvironment::global();
+  connectorEnvironment->attachTo(*queryCtx);
   auto connectorContext = std::make_shared<
       facebook::axiom::connector::ConnectorContext>(
       queryCtx->queryId(),
       /*user=*/"pyspark-optimizer",
       facebook::axiom::connector::ConnectorProperties{},
-      facebook::axiom::connector::ConnectorContext::noopStatWriterProvider());
+      facebook::axiom::connector::ConnectorContext::noopStatWriterProvider(),
+      connectorEnvironment);
 
   // Fetch connector and set up schema resolver.
-  auto connector = velox::connector::getConnector(connectorId);
+  auto connector = connectorEnvironment->connector(connectorId);
   auto schemaResolver =
       std::make_shared<facebook::axiom::connector::SchemaResolver>(
-          facebook::axiom::connector::ConnectorMetadataRegistry::global());
+          connectorEnvironment->metadataRegistry());
 
   // Check if this is a CREATE TABLE operation and set up schema resolver.
   if (auto* createTableNode = isCreateTableNode(logicalPlan)) {

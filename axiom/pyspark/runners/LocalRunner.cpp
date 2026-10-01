@@ -21,6 +21,7 @@
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
+#include "axiom/connectors/ConnectorEnvironment.h"
 #include "axiom/pyspark/Exception.h"
 #include "axiom/pyspark/runners/Runner.h"
 #include "axiom/runner/LocalRunner.h"
@@ -93,7 +94,8 @@ std::vector<velox::RowVectorPtr> LocalRunner::execute(
               /*user=*/"pyspark-runner",
               facebook::axiom::connector::ConnectorProperties{},
               facebook::axiom::connector::ConnectorContext::
-                  noopStatWriterProvider()),
+                  noopStatWriterProvider(),
+              facebook::axiom::connector::ConnectorEnvironment::global()),
           std::make_shared<velox::NoopRuntimeStatWriter>(),
           facebook::axiom::runner::Properties{}),
       plan_,

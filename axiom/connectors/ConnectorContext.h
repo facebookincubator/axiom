@@ -63,13 +63,6 @@ using ConnectorContextPtr = std::shared_ptr<ConnectorContext>;
 ///     context.
 class ConnectorContext {
  public:
-  /// Uses the process-global connector environment.
-  ConnectorContext(
-      std::string queryId,
-      std::string user,
-      ConnectorProperties properties,
-      StatWriterProvider statWriterProvider);
-
   ConnectorContext(
       std::string queryId,
       std::string user,

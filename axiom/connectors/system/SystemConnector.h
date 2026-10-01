@@ -220,15 +220,6 @@ struct SystemSplit : public velox::connector::ConnectorSplit {
 /// for reading live query metadata and session properties.
 class SystemConnector : public velox::connector::Connector {
  public:
-  /// Uses the process-global metadata registry. The provider must outlive the
-  /// connector.
-  SystemConnector(
-      const std::string& id,
-      const QueryInfoProvider* queryInfoProvider,
-      const SessionPropertiesProvider* sessionPropertiesProvider = nullptr,
-      InformationSchema::TypeNameFormatter typeName =
-          InformationSchema::defaultTypeName);
-
   /// @param sessionPropertiesProvider Supplies metadata.session_properties
   /// rows. The connector retains it for its complete lifetime.
   /// @param typeName Spelling of the types information_schema.columns
