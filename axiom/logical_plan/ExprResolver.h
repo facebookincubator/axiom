@@ -211,14 +211,15 @@ class ExprResolver {
       const std::string& name,
       const std::vector<ExprPtr>& inputs) const;
 
-  // Resolves lambda arguments using already resolved non-lambda arguments.
-  // Populates 'resolvedInputs' entries that correspond to lambda arguments.
+  // Resolves lambda arguments in order, using the already resolved non-lambda
+  // arguments and the lambdas before each one. Populates 'resolvedInputs'
+  // entries that correspond to lambda arguments.
   //
   // @param inputs Function arguments.
   // @param signature Function signature.
   // @param resolvedInputs Partially resolved function arguments. 1:1 with
   // 'inputs'. Non-lambda arguments are resolved and therefore not null. Lambda
-  // arguments may be null.
+  // entries are ignored and overwritten.
   // @return True if all arguments were resolved successfully and
   // 'resolvedInputs' was updated. False otherwise.
   bool resolveLambdaArguments(

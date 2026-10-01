@@ -26,3 +26,10 @@ SELECT cardinality(
 -- Expressions in a VALUES list are evaluated, and a NULL takes its type from
 -- the other rows.
 SELECT * FROM (VALUES (1 + 2, CAST(0.1 AS REAL), 'foo'), (10 + 20, CAST(0.2 AS REAL), NULL)) AS t(a, b, c)
+----
+-- A NULL initial state of reduce takes the type the input lambda returns.
+-- duckdb: SELECT 1
+SELECT reduce(ARRAY[CAST(ROW(1) AS ROW(a INTEGER))], NULL, (s, x) -> COALESCE(s, x), s -> s.a)
+----
+-- duckdb: SELECT 'p/a'
+SELECT reduce(ARRAY['a'], NULL, (s, x) -> x, s -> CASE WHEN s IS NULL THEN '' ELSE 'p/' || s END)

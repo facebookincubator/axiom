@@ -597,34 +597,40 @@ bool ExprResolver::resolveLambdaArguments(
 
   std::vector<velox::TypePtr> argTypes(numArgs);
   for (auto i = 0; i < numArgs; ++i) {
-    if (resolvedInputs[i] != nullptr) {
+    if (!isLambdaArgument(signature.argumentTypes()[i])) {
       argTypes[i] = resolvedInputs[i]->type();
     }
   }
 
-  velox::exec::SignatureBinder binder(
-      signature, argTypes, velox::TypeCoercer::defaults());
-  // Bind with coercions so an UNKNOWN argument resolves the lambda's type
-  // variables.
-  std::vector<velox::Coercion> coercions;
-  binder.tryBindWithCoercions(coercions);
   for (auto i = 0; i < numArgs; ++i) {
-    auto argSignature = signature.argumentTypes()[i];
-    if (isLambdaArgument(argSignature)) {
-      std::vector<velox::TypePtr> lambdaTypes;
-      for (auto j = 0; j < argSignature.parameters().size() - 1; ++j) {
-        auto type = binder.tryResolveType(argSignature.parameters()[j]);
-        if (type == nullptr) {
-          return false;
-        }
-        lambdaTypes.push_back(type);
-      }
-
-      resolvedInputs[i] = resolveLambdaExpr(
-          dynamic_cast<const velox::core::LambdaExpr&>(*inputs[i]),
-          lambdaTypes,
-          inputNameResolver);
+    const auto& argSignature = signature.argumentTypes()[i];
+    if (!isLambdaArgument(argSignature)) {
+      continue;
     }
+
+    // A lambda's return type can widen a type variable that a later lambda
+    // takes as a parameter, e.g. reduce's state when the initial state is
+    // NULL. Bind with coercions so an UNKNOWN argument resolves the lambda's
+    // type variables.
+    velox::exec::SignatureBinder binder(
+        signature, argTypes, velox::TypeCoercer::defaults());
+    std::vector<velox::Coercion> coercions;
+    binder.tryBindWithCoercions(coercions);
+
+    std::vector<velox::TypePtr> lambdaTypes;
+    for (auto j = 0; j < argSignature.parameters().size() - 1; ++j) {
+      auto type = binder.tryResolveType(argSignature.parameters()[j]);
+      if (type == nullptr) {
+        return false;
+      }
+      lambdaTypes.push_back(type);
+    }
+
+    resolvedInputs[i] = resolveLambdaExpr(
+        dynamic_cast<const velox::core::LambdaExpr&>(*inputs[i]),
+        lambdaTypes,
+        inputNameResolver);
+    argTypes[i] = resolvedInputs[i]->type();
   }
 
   return true;

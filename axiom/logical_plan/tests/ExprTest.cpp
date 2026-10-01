@@ -40,8 +40,13 @@ class ExprTest : public testing::Test {
   static ExprResolver::InputNameResolver inputResolver(
       const RowTypePtr& schema) {
     return [schema](
-               const std::optional<std::string>&,
+               const std::optional<std::string>& alias,
                const std::string& name) -> ExprPtr {
+      // The schema has no table aliases, so 's.a' names field 'a' of 's'.
+      // Returning nullptr lets the resolver dereference it.
+      if (alias.has_value()) {
+        return nullptr;
+      }
       return std::make_shared<InputReferenceExpr>(
           schema->findChild(name), name);
     };
@@ -297,6 +302,24 @@ TEST_F(ExprTest, reduceOverNull) {
   VELOX_EXPECT_EQ_TYPES(
       resolveScalar("reduce(null, 0, (s, e) -> s + e, s -> s)")->type(),
       BIGINT());
+}
+
+TEST_F(ExprTest, reduceStateFromInputLambda) {
+  // A NULL initial state takes the type the input lambda returns, and the
+  // output lambda sees that type.
+  VELOX_EXPECT_EQ_TYPES(
+      resolveScalar(
+          "reduce(arr, null, (s, x) -> coalesce(s, x), s -> s.a)",
+          ROW("arr", ARRAY(ROW("a", INTEGER()))))
+          ->type(),
+      INTEGER());
+  VELOX_EXPECT_EQ_TYPES(
+      resolveScalar(
+          "reduce(arr, null, (s, x) -> x, "
+          "s -> CASE WHEN s IS NULL THEN '' ELSE concat('p/', s) END)",
+          ROW("arr", ARRAY(VARCHAR())))
+          ->type(),
+      VARCHAR());
 }
 
 TEST_F(ExprTest, scalarLambdaWithTypedInput) {
