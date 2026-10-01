@@ -16,6 +16,7 @@
 
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/common/SchemaTableName.h"
+#include "axiom/connectors/ConnectorEnvironment.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/session/BaseSession.h"
@@ -63,7 +64,8 @@ class TestConnectorTest : public ::testing::Test, public test::VectorTestBase {
         /*queryId=*/"test",
         /*user=*/"test",
         Properties{},
-        makeTestStatWriter());
+        makeTestStatWriter(),
+        ConnectorEnvironment::global());
   }
 
   std::shared_ptr<TestConnector> connector_;

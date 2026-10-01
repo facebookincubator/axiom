@@ -29,6 +29,8 @@
 
 namespace facebook::axiom::connector {
 
+class ConnectorEnvironment;
+
 /// Asks the application for the writer a component or connector records into.
 using StatWriterProvider =
     std::function<std::shared_ptr<velox::BaseRuntimeStatWriter>(
@@ -51,20 +53,29 @@ using ConnectorContextPtr = std::shared_ptr<ConnectorContext>;
 ///
 /// Example:
 ///   auto context = std::make_shared<ConnectorContext>(
-///       queryId, user, connectorProperties, statWriterProvider);
+///       queryId, user, connectorProperties, statWriterProvider, environment);
 ///   metadata->beginWrite(context->sessionFor(connectorId), ...);
 ///
 /// Invariants:
 ///   - `statWriterProvider` is non-empty.
+///   - `environment` is non-null and remains immutable while queries use it.
 ///   - One session per connector id, and the same one for the life of this
 ///     context.
 class ConnectorContext {
  public:
+  /// Uses the process-global connector environment.
   ConnectorContext(
       std::string queryId,
       std::string user,
       ConnectorProperties properties,
       StatWriterProvider statWriterProvider);
+
+  ConnectorContext(
+      std::string queryId,
+      std::string user,
+      ConnectorProperties properties,
+      StatWriterProvider statWriterProvider,
+      std::shared_ptr<const ConnectorEnvironment> environment);
 
   ConnectorContext(const ConnectorContext&) = delete;
   ConnectorContext& operator=(const ConnectorContext&) = delete;
@@ -81,6 +92,11 @@ class ConnectorContext {
   /// Returns the identity of the user who submitted the query.
   const std::string& user() const {
     return user_;
+  }
+
+  /// Returns the engine-owned connector environment for this query.
+  const std::shared_ptr<const ConnectorEnvironment>& environment() const {
+    return environment_;
   }
 
   /// Returns 'connectorId's session, made on first use. Concurrent callers get
@@ -106,6 +122,7 @@ class ConnectorContext {
   const std::string user_;
   const ConnectorProperties properties_;
   const StatWriterProvider statWriterProvider_;
+  const std::shared_ptr<const ConnectorEnvironment> environment_;
   // The lock guards the map alone; a session is built under its entry's flag.
   folly::Synchronized<folly::F14FastMap<std::string, std::shared_ptr<Entry>>>
       sessions_;

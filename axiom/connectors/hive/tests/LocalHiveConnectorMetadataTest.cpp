@@ -15,6 +15,7 @@
  */
 
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
+#include "axiom/connectors/ConnectorEnvironment.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
@@ -130,7 +131,8 @@ class LocalHiveConnectorMetadataTest
         /*queryId=*/"q-test",
         /*user=*/"u-test",
         Properties{},
-        makeTestStatWriter());
+        makeTestStatWriter(),
+        ConnectorEnvironment::global());
   }
 
   /// Write the specified data to the table with a TableWrite operation. The

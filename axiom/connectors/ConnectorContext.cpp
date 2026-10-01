@@ -16,6 +16,8 @@
 
 #include "axiom/connectors/ConnectorContext.h"
 
+#include "axiom/connectors/ConnectorEnvironment.h"
+
 namespace facebook::axiom::connector {
 
 ConnectorContext::ConnectorContext(
@@ -23,12 +25,28 @@ ConnectorContext::ConnectorContext(
     std::string user,
     ConnectorProperties properties,
     StatWriterProvider statWriterProvider)
+    : ConnectorContext{
+          std::move(queryId),
+          std::move(user),
+          std::move(properties),
+          std::move(statWriterProvider),
+          ConnectorEnvironment::global()} {}
+
+ConnectorContext::ConnectorContext(
+    std::string queryId,
+    std::string user,
+    ConnectorProperties properties,
+    StatWriterProvider statWriterProvider,
+    std::shared_ptr<const ConnectorEnvironment> environment)
     : queryId_{std::move(queryId)},
       user_{std::move(user)},
       properties_{std::move(properties)},
-      statWriterProvider_{std::move(statWriterProvider)} {
+      statWriterProvider_{std::move(statWriterProvider)},
+      environment_{std::move(environment)} {
   VELOX_CHECK(
       statWriterProvider_, "ConnectorContext requires a stat writer provider");
+  VELOX_CHECK_NOT_NULL(
+      environment_, "ConnectorContext requires a connector environment");
 }
 
 namespace {
@@ -73,7 +91,8 @@ ConnectorSessionPtr ConnectorContext::sessionFor(std::string_view connectorId) {
         queryId_,
         user_,
         propertiesFor(properties_, connectorId),
-        std::move(statsWriter));
+        std::move(statsWriter),
+        environment_);
   });
 
   return entry->session;

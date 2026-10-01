@@ -18,6 +18,7 @@
 
 #include <gtest/gtest.h>
 
+#include "axiom/connectors/ConnectorEnvironment.h"
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 
 namespace facebook::axiom::runner {
@@ -38,7 +39,8 @@ TEST(RunnerSessionTest, connectorSessionUsesProviderWriter) {
         EXPECT_EQ(connectorId, "a");
         return std::shared_ptr<velox::BaseRuntimeStatWriter>(
             &connectorWriter, [](auto*) {});
-      });
+      },
+      connector::ConnectorEnvironment::global());
 
   RunnerSession session{
       context,

@@ -15,6 +15,7 @@
  */
 
 #include "axiom/connectors/ConnectorContext.h"
+#include "axiom/connectors/ConnectorEnvironment.h"
 
 #include <atomic>
 #include <barrier>
@@ -43,7 +44,8 @@ ConnectorContextPtr makeContext(
         ++*writerCalls;
         return std::shared_ptr<velox::BaseRuntimeStatWriter>(
             &writer, [](auto*) {});
-      });
+      },
+      ConnectorEnvironment::global());
 }
 
 // Every caller in a query reaches a connector through one session.
@@ -133,7 +135,8 @@ TEST(ConnectorContextTest, sessionIsBuiltAfterAFailedAttempt) {
         }
         return std::shared_ptr<velox::BaseRuntimeStatWriter>(
             &writer, [](auto*) {});
-      });
+      },
+      ConnectorEnvironment::global());
 
   VELOX_ASSERT_THROW(context->sessionFor("a"), "Writer unavailable");
 
@@ -143,7 +146,8 @@ TEST(ConnectorContextTest, sessionIsBuiltAfterAFailedAttempt) {
 // A context without a writer provider has no way to wire a session.
 TEST(ConnectorContextTest, contextRequiresAWriterProvider) {
   VELOX_ASSERT_THROW(
-      ConnectorContext("q1", "user", {}, nullptr),
+      ConnectorContext(
+          "q1", "user", {}, nullptr, ConnectorEnvironment::global()),
       "requires a stat writer provider");
 }
 
@@ -155,7 +159,8 @@ TEST(ConnectorContextTest, nullWriterFromProviderFails) {
       ConnectorProperties{},
       [](std::string_view) -> std::shared_ptr<velox::BaseRuntimeStatWriter> {
         return nullptr;
-      });
+      },
+      ConnectorEnvironment::global());
   VELOX_ASSERT_THROW(
       context->sessionFor("a"), "Stat writer provider returned null");
 }

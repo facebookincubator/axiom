@@ -17,6 +17,7 @@
 #include <velox/common/base/Exceptions.h>
 #include <numeric>
 #include <vector>
+#include "axiom/connectors/ConnectorEnvironment.h"
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/logical_plan/NameMappings.h"
@@ -24,6 +25,18 @@
 #include "velox/type/TypeCoercer.h"
 
 namespace facebook::axiom::logical_plan {
+
+namespace {
+
+std::shared_ptr<connector::ConnectorMetadata> metadataFor(
+    const std::shared_ptr<const connector::ConnectorEnvironment>& environment,
+    std::string_view connectorId) {
+  return environment
+      ? environment->metadata(connectorId)
+      : connector::ConnectorMetadataRegistry::get(std::string{connectorId});
+}
+
+} // namespace
 
 using connector::ConnectorMetadataRegistry;
 
@@ -245,7 +258,7 @@ PlanBuilder& PlanBuilder::tableScan(
   VELOX_USER_CHECK_NULL(node_, "Table scan node must be the leaf node");
 
   SchemaTableName schemaTableName{schemaName, tableName};
-  auto metadata = ConnectorMetadataRegistry::get(connectorId);
+  auto metadata = metadataFor(connectorEnvironment_, connectorId);
   auto table = metadata->findTable(schemaTableName);
   VELOX_USER_CHECK_NOT_NULL(
       table, "Table not found: {}", schemaTableName.toString());
@@ -340,7 +353,7 @@ PlanBuilder& PlanBuilder::tableScan(
   VELOX_USER_CHECK_NULL(node_, "Table scan node must be the leaf node");
 
   SchemaTableName schemaTableName{schemaName, tableName};
-  auto metadata = ConnectorMetadataRegistry::get(connectorId);
+  auto metadata = metadataFor(connectorEnvironment_, connectorId);
   auto table = metadata->findTable(schemaTableName);
   VELOX_USER_CHECK_NOT_NULL(
       table, "Table not found: {}", schemaTableName.toString());
@@ -1848,7 +1861,7 @@ PlanBuilder& PlanBuilder::tableWrite(
   }
 
   if (kind == WriteKind::kInsert || kind == WriteKind::kDelete) {
-    auto metadata = ConnectorMetadataRegistry::get(connectorId);
+    auto metadata = metadataFor(connectorEnvironment_, connectorId);
     auto table = metadata->findTable(schemaTableName);
     VELOX_USER_CHECK_NOT_NULL(
         table, "Table not found: {}", schemaTableName.toString());

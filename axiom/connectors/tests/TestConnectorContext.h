@@ -21,6 +21,7 @@
 #include <utility>
 
 #include "axiom/connectors/ConnectorContext.h"
+#include "axiom/connectors/ConnectorEnvironment.h"
 
 namespace facebook::axiom::connector {
 
@@ -34,7 +35,8 @@ inline ConnectorContextPtr makeTestContext(
       std::string{queryId},
       std::string{user},
       std::move(properties),
-      ConnectorContext::noopStatWriterProvider());
+      ConnectorContext::noopStatWriterProvider(),
+      ConnectorEnvironment::global());
 }
 
 /// Returns a writer for a test component or connector that records no metrics.

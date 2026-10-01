@@ -28,6 +28,8 @@
 
 namespace facebook::axiom::connector {
 
+class ConnectorEnvironment;
+
 /// Property bag for a single component or connector.
 using Properties = folly::F14FastMap<std::string, std::string>;
 
@@ -46,18 +48,24 @@ using ConnectorSessionPtr = std::shared_ptr<ConnectorSession>;
 ///
 /// Invariants:
 ///   - `statsWriter` is non-null.
+///   - `environment` is non-null and outlives every registry lookup made by
+///     this session.
 class ConnectorSession final {
  public:
   ConnectorSession(
       std::string queryId,
       std::string user,
       Properties properties,
-      std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter)
+      std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter,
+      std::shared_ptr<const ConnectorEnvironment> environment)
       : queryId_{std::move(queryId)},
         user_{std::move(user)},
         properties_{std::move(properties)},
-        statsWriter_{std::move(statsWriter)} {
+        statsWriter_{std::move(statsWriter)},
+        environment_{std::move(environment)} {
     VELOX_CHECK_NOT_NULL(statsWriter_, "ConnectorSession requires a writer");
+    VELOX_CHECK_NOT_NULL(
+        environment_, "ConnectorSession requires a connector environment");
   }
 
   /// Returns the query identifier.
@@ -86,11 +94,17 @@ class ConnectorSession final {
     return *statsWriter_;
   }
 
+  /// Returns the engine-owned connector environment for this query.
+  const std::shared_ptr<const ConnectorEnvironment>& environment() const {
+    return environment_;
+  }
+
  private:
   const std::string queryId_;
   const std::string user_;
   const Properties properties_;
   const std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter_;
+  const std::shared_ptr<const ConnectorEnvironment> environment_;
 };
 
 } // namespace facebook::axiom::connector

@@ -15,6 +15,7 @@
  */
 #include "axiom/optimizer/ToVelox.h"
 #include <folly/container/F14Set.h>
+#include "axiom/connectors/ConnectorEnvironment.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
@@ -2312,7 +2313,8 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
   }
 
   const auto& connectorId = layout->connector()->connectorId();
-  auto metadata = connector::ConnectorMetadataRegistry::get(connectorId);
+  auto metadata =
+      optimizerSession_->context()->environment()->metadata(connectorId);
   auto session = optimizerSession_->context()->sessionFor(connectorId);
   auto handle = metadata->beginWrite(
       session,

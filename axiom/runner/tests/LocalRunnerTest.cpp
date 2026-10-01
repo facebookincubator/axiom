@@ -158,7 +158,8 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
             std::string_view) -> std::shared_ptr<velox::BaseRuntimeStatWriter> {
           return std::shared_ptr<velox::BaseRuntimeStatWriter>(
               &connectorWriter_, [](auto*) {});
-        });
+        },
+        axiom::connector::ConnectorEnvironment::global());
     return std::make_shared<axiom::runner::RunnerSession>(
         std::move(context),
         std::shared_ptr<velox::BaseRuntimeStatWriter>(

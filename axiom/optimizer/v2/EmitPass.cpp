@@ -21,6 +21,7 @@
 #include <folly/container/F14Set.h>
 #include <limits>
 
+#include "axiom/connectors/ConnectorEnvironment.h"
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/Schema.h"
@@ -2246,7 +2247,7 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
   const auto& table = *tableWrite.table();
   auto* layout = table.layouts().front();
   const auto& connectorId = layout->connector()->connectorId();
-  auto metadata = connector::ConnectorMetadataRegistry::get(connectorId);
+  auto metadata = session_.context()->environment()->metadata(connectorId);
   auto connectorSession = session_.context()->sessionFor(connectorId);
 
   auto handle = metadata->beginWrite(

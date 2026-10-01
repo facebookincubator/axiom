@@ -257,13 +257,15 @@ class SqlTest : public SqlTestBase {
             std::string(kSystemConnectorId),
             /*queryInfoProvider=*/nullptr,
             /*sessionPropertiesProvider=*/nullptr,
-            velox::PrestoTypes::displayName);
+            velox::PrestoTypes::displayName,
+            connector::ConnectorMetadataRegistry::global());
     velox::connector::ConnectorRegistry::global().insert(
         std::string(kSystemConnectorId), suiteSystemConnector_);
     connector::ConnectorMetadataRegistry::global().insert(
         std::string(kSystemConnectorId),
         std::make_shared<connector::system::SystemConnectorMetadata>(
-            suiteSystemConnector_.get()));
+            suiteSystemConnector_.get(),
+            connector::ConnectorMetadataRegistry::global()));
 
     for (const auto& statement : setupStatements) {
       suiteDuckDbRunner_->execute(stripTablePropertiesForDuckDb(statement));

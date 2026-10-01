@@ -337,7 +337,8 @@ class InformationSchemaTableLayout : public TableLayout {
   InformationSchemaTableLayout(
       Table* table,
       velox::connector::Connector* connector,
-      std::vector<const Column*> columns)
+      std::vector<const Column*> columns,
+      const ConnectorMetadataRegistry::Registry& metadataRegistry)
       : TableLayout(
             "default",
             table,
@@ -347,7 +348,8 @@ class InformationSchemaTableLayout : public TableLayout {
             /*orderColumns=*/{},
             /*sortOrder=*/{},
             /*lookupKeys=*/{},
-            /*supportsScan=*/true) {}
+            /*supportsScan=*/true),
+        metadataRegistry_{&metadataRegistry} {}
 
   bool supportsSampling() const override {
     return false;
@@ -375,6 +377,9 @@ class InformationSchemaTableLayout : public TableLayout {
       std::vector<int32_t>& rejectedFilterIndices,
       velox::RowTypePtr dataColumns,
       std::optional<LookupKeys> lookupKeys) const override;
+
+ private:
+  const ConnectorMetadataRegistry::Registry* const metadataRegistry_;
 };
 
 // An information_schema relation of one catalog.
@@ -385,10 +390,11 @@ class InformationSchemaTable : public Table {
   InformationSchemaTable(
       const SchemaTableName& tableName,
       const velox::RowTypePtr& schema,
-      velox::connector::Connector* serving)
+      velox::connector::Connector* serving,
+      const ConnectorMetadataRegistry::Registry& metadataRegistry)
       : Table(tableName, Table::makeColumns(schema)) {
     layout_ = std::make_unique<InformationSchemaTableLayout>(
-        this, serving, allColumns());
+        this, serving, allColumns(), metadataRegistry);
     layouts_.push_back(layout_.get());
   }
 
@@ -426,8 +432,9 @@ InformationSchemaTableLayout::createTableHandle(
 
   const auto& relation = table().name().table;
   const auto catalog = InformationSchema::catalog(table().name().schema);
-  const auto metadata =
-      ConnectorMetadataRegistry::get(std::string{catalog.value()});
+  const auto metadata = metadataRegistry_->find(std::string{catalog.value()});
+  VELOX_CHECK_NOT_NULL(
+      metadata, "Catalog metadata is not registered: {}", catalog.value());
   if (relation == InformationSchema::kSchemata) {
     // The rows come from listSchemaNames(), which takes no schema-name
     // argument, so a pushed filter would not narrow what the scan reads. Every
@@ -519,14 +526,20 @@ class InformationSchemaDataSource : public velox::connector::DataSource {
       std::shared_ptr<const InformationSchemaTableHandle> tableHandle,
       const velox::connector::ColumnHandleMap& columnHandles,
       velox::memory::MemoryPool* pool,
+      const ConnectorMetadataRegistry::Registry& metadataRegistry,
       const InformationSchema::TypeNameFormatter& typeName)
       : outputType_{outputType},
         tableHandle_{std::move(tableHandle)},
         relation_{relationColumns(tableHandle_->relation())},
-        metadata_{ConnectorMetadataRegistry::get(tableHandle_->catalog())},
+        metadata_{metadataRegistry.find(tableHandle_->catalog())},
         outputColumns_{findOutputColumns(outputType, columnHandles)},
         position_{.handle = tableHandle_.get(), .typeName = &typeName},
-        pool_{pool} {}
+        pool_{pool} {
+    VELOX_CHECK_NOT_NULL(
+        metadata_,
+        "Catalog metadata is not registered: {}",
+        tableHandle_->catalog());
+  }
 
   void addSplit(
       std::shared_ptr<velox::connector::ConnectorSplit> split) override {
@@ -853,7 +866,8 @@ velox::connector::ConnectorTableHandlePtr InformationSchemaTableHandle::create(
 
 TablePtr InformationSchema::findTable(
     const SchemaTableName& tableName,
-    velox::connector::Connector* serving) {
+    velox::connector::Connector* serving,
+    const ConnectorMetadataRegistry::Registry& metadataRegistry) {
   if (!catalog(tableName.schema).has_value()) {
     return nullptr;
   }
@@ -865,12 +879,13 @@ TablePtr InformationSchema::findTable(
 
   // A catalog nobody registered describes nothing, which reads as no such
   // table rather than a failure when the scan starts.
-  if (ConnectorMetadataRegistry::tryGet(
-          std::string{catalog(tableName.schema).value()}) == nullptr) {
+  if (metadataRegistry.find(std::string{catalog(tableName.schema).value()}) ==
+      nullptr) {
     return nullptr;
   }
 
-  return std::make_shared<InformationSchemaTable>(tableName, schema, serving);
+  return std::make_shared<InformationSchemaTable>(
+      tableName, schema, serving, metadataRegistry);
 }
 
 std::string InformationSchema::defaultTypeName(const velox::Type& type) {
@@ -882,9 +897,10 @@ std::unique_ptr<velox::connector::DataSource> InformationSchema::makeDataSource(
     const velox::RowTypePtr& outputType,
     const velox::connector::ColumnHandleMap& columnHandles,
     velox::memory::MemoryPool* pool,
+    const ConnectorMetadataRegistry::Registry& metadataRegistry,
     const TypeNameFormatter& typeName) {
   return std::make_unique<InformationSchemaDataSource>(
-      outputType, tableHandle, columnHandles, pool, typeName);
+      outputType, tableHandle, columnHandles, pool, metadataRegistry, typeName);
 }
 
 } // namespace facebook::axiom::connector::system

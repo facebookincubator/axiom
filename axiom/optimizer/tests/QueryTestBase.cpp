@@ -235,7 +235,8 @@ PlanCost QueryTestBase::optimizationCost(
       queryCtx->queryId(),
       "test",
       connectorSessionProperties_,
-      connectorStatWriterProvider());
+      connectorStatWriterProvider(),
+      connector::ConnectorEnvironment::global());
   Optimization opt(
       makeOptimizerSession(
           connectorContext,
@@ -276,7 +277,8 @@ void QueryTestBase::verifyOptimization(
       veloxQueryCtx->queryId(),
       "test",
       connectorSessionProperties_,
-      connectorStatWriterProvider());
+      connectorStatWriterProvider(),
+      connector::ConnectorEnvironment::global());
   Optimization optimization(
       makeOptimizerSession(
           connectorContext,
@@ -317,7 +319,8 @@ void QueryTestBase::verifyOptimization(
       veloxQueryCtx->queryId(),
       "test",
       connectorSessionProperties_,
-      connectorStatWriterProvider());
+      connectorStatWriterProvider(),
+      connector::ConnectorEnvironment::global());
   auto session = makeOptimizerSession(
       connectorContext,
       optimizerOptions.value_or(optimizerOptions_),
@@ -389,7 +392,8 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
       queryCtx->queryId(),
       "test",
       connectorSessionProperties_,
-      connectorStatWriterProvider());
+      connectorStatWriterProvider(),
+      connector::ConnectorEnvironment::global());
   auto session = makeOptimizerSession(
       connectorContext,
       optimizerOptions.value_or(optimizerOptions_),

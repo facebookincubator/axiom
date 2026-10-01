@@ -24,6 +24,7 @@
 #include <folly/coro/Task.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <stack>
+#include "axiom/connectors/ConnectorEnvironment.h"
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "velox/common/base/SpillConfig.h"
@@ -90,7 +91,7 @@ ConnectorSplitSourceFactory::splitSourceForScan(
 
   const auto& handle = scan.tableHandle();
   auto metadata =
-      connector::ConnectorMetadataRegistry::get(handle->connectorId());
+      session->context()->environment()->metadata(handle->connectorId());
   auto splitManager = metadata->splitManager();
   auto connectorSession = session->context()->sessionFor(handle->connectorId());
 

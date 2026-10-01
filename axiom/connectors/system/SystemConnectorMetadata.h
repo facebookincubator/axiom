@@ -135,8 +135,13 @@ class SystemConnectorMetadata : public ConnectorMetadata {
   /// Keep for backward compatibility.
   static constexpr std::string_view kDefaultSchema = kRuntimeSchema;
 
-  explicit SystemConnectorMetadata(velox::connector::Connector* connector)
+  /// Uses `metadataRegistry` to expose the catalogs in information_schema.
+  /// The registry must outlive this metadata object.
+  SystemConnectorMetadata(
+      velox::connector::Connector* connector,
+      const ConnectorMetadataRegistry::Registry& metadataRegistry)
       : connector_(connector),
+        metadataRegistry_{&metadataRegistry},
         splitManager_(std::make_unique<SystemSplitManager>()) {}
 
   TablePtr findTable(const SchemaTableName& tableName) override;
@@ -160,6 +165,8 @@ class SystemConnectorMetadata : public ConnectorMetadata {
 
  private:
   velox::connector::Connector* connector_;
+  // Owned by the same connector environment and outlives this metadata.
+  const ConnectorMetadataRegistry::Registry* const metadataRegistry_;
   std::unique_ptr<SystemSplitManager> splitManager_;
   // One table object per information_schema relation of a catalog, so a
   // second lookup of the same name returns the same columns.

@@ -28,6 +28,10 @@
 #include "axiom/sql/presto/ParserOptions.h"
 #include "axiom/sql/presto/ast/AstNodesAll.h"
 
+namespace facebook::axiom::connector {
+class ConnectorEnvironment;
+}
+
 namespace axiom::sql::presto {
 
 namespace lp = facebook::axiom::logical_plan;
@@ -131,14 +135,17 @@ class ExpressionPlanner {
       const ParserOptions& options,
       ShouldDropQualifier shouldDropQualifier = nullptr,
       ColumnResolver columnResolver = nullptr,
-      RelationQualifierResolver relationQualifierResolver = nullptr)
+      RelationQualifierResolver relationQualifierResolver = nullptr,
+      std::shared_ptr<const facebook::axiom::connector::ConnectorEnvironment>
+          connectorEnvironment = nullptr)
       : user_{std::move(user)},
         subqueryPlanner_(std::move(subqueryPlanner)),
         sortingKeyResolver_(std::move(sortingKeyResolver)),
         shouldDropQualifier_(std::move(shouldDropQualifier)),
         columnResolver_(std::move(columnResolver)),
         relationQualifierResolver_(std::move(relationQualifierResolver)),
-        options_{options} {}
+        options_{options},
+        connectorEnvironment_{std::move(connectorEnvironment)} {}
 
   /// Finds WindowCallExpr nodes nested inside non-window expressions.
   /// Skips top-level window projections (where the ExprApi itself is a
@@ -388,6 +395,11 @@ class ExpressionPlanner {
   RelationQualifierResolver relationQualifierResolver_;
 
   ParserOptions options_;
+
+  // Selects connector metadata for user-defined types; null uses the legacy
+  // process-global registry.
+  const std::shared_ptr<const facebook::axiom::connector::ConnectorEnvironment>
+      connectorEnvironment_;
 
   // Per-query cache for user-defined type lookups. Entries with nullptr values
   // represent negatively cached (not-found) types.
