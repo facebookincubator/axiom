@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <atomic>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -34,38 +33,33 @@ namespace facebook::axiom::connector {
 
 /// Owns the Velox connectors and Axiom metadata visible to one engine.
 ///
-/// Build an isolated environment, register connector and metadata pairs, seal
-/// it before serving queries, and attach it to every execution QueryCtx:
+/// Build an isolated environment, register connector and metadata pairs, and
+/// attach the completed environment to every execution QueryCtx:
 ///
-///   auto environment = ConnectorEnvironment::create();
-///   environment->registerConnector(connector, metadata);
-///   environment->seal();
+///   auto builder = ConnectorEnvironment::Builder::create();
+///   builder->registerConnector(connector, metadata);
+///   auto environment = builder->build();
 ///   environment->attachTo(*queryCtx);
 ///
 /// A child may inherit an immutable parent environment. The child retains the
 /// parent because ScopedRegistry stores a non-owning parent pointer.
 ///
 /// Invariants:
-///   - Owned environments accept registration only before seal().
-///   - The legacy global environment remains mutable for application startup.
-///   - Connector metadata is destroyed before its matching connector.
+///   - Owned environments are immutable after Builder::build().
+///   - The process-wide global environment remains mutable for application
+///     startup.
+///   - The environment releases metadata registrations before connector
+///     registrations.
 ///   - A child environment retains its parent for its complete lifetime.
 class ConnectorEnvironment final
     : public std::enable_shared_from_this<ConnectorEnvironment> {
  public:
+  class Builder;
+
   /// Key used to retain the complete environment on a QueryCtx.
   static constexpr std::string_view kRegistryKey = "connectorEnvironment";
 
-  /// Creates an isolated environment with no inherited catalogs.
-  static std::shared_ptr<ConnectorEnvironment> create();
-
-  /// Creates an environment whose missing catalogs resolve through `parent`.
-  /// The parent must own its registries and already be sealed. The mutable
-  /// legacy global environment cannot be a parent.
-  static std::shared_ptr<ConnectorEnvironment> createChild(
-      std::shared_ptr<const ConnectorEnvironment> parent);
-
-  /// Returns the legacy process-global environment. Its registries remain
+  /// Returns the process-wide global environment. Its registries remain
   /// mutable for application-root startup registration.
   static std::shared_ptr<ConnectorEnvironment> global();
 
@@ -76,23 +70,17 @@ class ConnectorEnvironment final
 
   ~ConnectorEnvironment();
 
-  /// Registers one execution connector and its matching metadata atomically.
-  void registerConnector(
+  /// Registers one execution connector and its matching metadata in the
+  /// process-wide global environment.
+  void registerProcessWideConnector(
       std::shared_ptr<velox::connector::Connector> connector,
       std::shared_ptr<ConnectorMetadata> metadata);
 
-  /// Registers metadata for a catalog that has no execution connector.
-  void registerMetadata(
+  /// Registers metadata for a catalog without an execution connector in the
+  /// process-wide global environment.
+  void registerProcessWideMetadata(
       std::string connectorId,
       std::shared_ptr<ConnectorMetadata> metadata);
-
-  /// Prevents further registration and makes the environment query-safe.
-  void seal();
-
-  /// Returns true after seal() has completed.
-  bool sealed() const {
-    return sealed_.load(std::memory_order_acquire);
-  }
 
   /// Returns the execution connector registered under `connectorId`.
   std::shared_ptr<velox::connector::Connector> connector(
@@ -128,8 +116,16 @@ class ConnectorEnvironment final
           connectorRegistry,
       std::shared_ptr<ConnectorMetadataRegistry::Registry> metadataRegistry,
       std::shared_ptr<const ConnectorEnvironment> parent,
-      bool sealed,
+      bool mutableEnvironment,
       bool ownsRegistries);
+
+  void registerConnector(
+      std::shared_ptr<velox::connector::Connector> connector,
+      std::shared_ptr<ConnectorMetadata> metadata);
+
+  void registerMetadata(
+      std::string connectorId,
+      std::shared_ptr<ConnectorMetadata> metadata);
 
   // Keeps a scoped registry's non-owning parent pointers valid.
   const std::shared_ptr<const ConnectorEnvironment> parent_;
@@ -138,8 +134,67 @@ class ConnectorEnvironment final
   const std::shared_ptr<velox::connector::ConnectorRegistry::Registry>
       connectorRegistry_;
   const std::shared_ptr<ConnectorMetadataRegistry::Registry> metadataRegistry_;
-  std::atomic<bool> sealed_{false};
+  bool mutableEnvironment_{false};
   const bool ownsRegistries_{true};
+};
+
+/// Accumulates catalog registrations for one owned ConnectorEnvironment.
+///
+///   auto builder = ConnectorEnvironment::Builder::create();
+///   builder->registerConnector(connector, metadata);
+///   auto environment = builder->build();
+///
+/// Invariants:
+///   - Registration and inspection occur before build().
+///   - build() succeeds exactly once.
+///   - The returned environment is immutable.
+class ConnectorEnvironment::Builder final {
+ public:
+  /// Creates a builder for an isolated environment with no inherited catalogs.
+  static std::shared_ptr<Builder> create();
+
+  /// Creates a builder whose missing catalogs resolve through `parent`.
+  /// The parent must be an owned environment returned by build(). The mutable
+  /// process-wide global environment cannot be a parent.
+  static std::shared_ptr<Builder> createChild(
+      std::shared_ptr<const ConnectorEnvironment> parent);
+
+  Builder(const Builder&) = delete;
+  Builder& operator=(const Builder&) = delete;
+  Builder(Builder&&) = delete;
+  Builder& operator=(Builder&&) = delete;
+
+  /// Registers one execution connector and its matching metadata atomically.
+  void registerConnector(
+      std::shared_ptr<velox::connector::Connector> connector,
+      std::shared_ptr<ConnectorMetadata> metadata);
+
+  /// Registers metadata for a catalog that has no execution connector.
+  void registerMetadata(
+      std::string connectorId,
+      std::shared_ptr<ConnectorMetadata> metadata);
+
+  /// Returns the execution connectors registered so far.
+  std::vector<
+      std::pair<std::string, std::shared_ptr<velox::connector::Connector>>>
+  connectors() const;
+
+  /// Returns metadata registered under `connectorId`, or nullptr if absent.
+  std::shared_ptr<ConnectorMetadata> tryMetadata(
+      std::string_view connectorId) const;
+
+  /// Returns the metadata registry for registration-time dependencies.
+  const ConnectorMetadataRegistry::Registry& metadataRegistry() const;
+
+  /// Completes registration and returns the immutable environment.
+  std::shared_ptr<ConnectorEnvironment> build();
+
+ private:
+  explicit Builder(std::shared_ptr<ConnectorEnvironment> environment);
+
+  ConnectorEnvironment& mutableEnvironment() const;
+
+  std::shared_ptr<ConnectorEnvironment> environment_;
 };
 
 } // namespace facebook::axiom::connector

@@ -142,8 +142,7 @@ class PlanBuilder {
     std::shared_ptr<velox::core::QueryCtx> queryCtx;
 
     /// Selects the connector and metadata scope used by table operations.
-    /// A null value preserves the process-global behavior for standalone
-    /// PlanBuilder callers.
+    /// Table operations require a non-null environment.
     std::shared_ptr<const connector::ConnectorEnvironment> connectorEnvironment;
 
     /// Rewrites function calls during expression resolution, e.g. maps
@@ -979,8 +978,8 @@ class PlanBuilder {
   // Parses SQL expression strings into Velox expression trees.
   const std::shared_ptr<velox::parse::SqlExpressionsParser> sqlParser_;
 
-  // Selects connector metadata for table operations; null uses the legacy
-  // process-global registry.
+  // Selects connector metadata for table operations. Table operations reject
+  // a null environment.
   const std::shared_ptr<const connector::ConnectorEnvironment>
       connectorEnvironment_;
 

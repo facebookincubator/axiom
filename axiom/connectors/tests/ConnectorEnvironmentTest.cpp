@@ -33,18 +33,17 @@ class ConnectorEnvironmentTest : public testing::Test {
   }
 };
 
-TEST_F(ConnectorEnvironmentTest, isolatesCatalogsWithSameId) {
-  auto firstEnvironment = ConnectorEnvironment::create();
-  auto secondEnvironment = ConnectorEnvironment::create();
+TEST_F(ConnectorEnvironmentTest, catalogIsolation) {
+  auto firstBuilder = ConnectorEnvironment::Builder::create();
+  auto secondBuilder = ConnectorEnvironment::Builder::create();
   auto firstConnector = std::make_shared<TestConnector>("catalog");
   auto secondConnector = std::make_shared<TestConnector>("catalog");
 
-  firstEnvironment->registerConnector(
-      firstConnector, firstConnector->metadata());
-  secondEnvironment->registerConnector(
+  firstBuilder->registerConnector(firstConnector, firstConnector->metadata());
+  secondBuilder->registerConnector(
       secondConnector, secondConnector->metadata());
-  firstEnvironment->seal();
-  secondEnvironment->seal();
+  auto firstEnvironment = firstBuilder->build();
+  auto secondEnvironment = secondBuilder->build();
 
   EXPECT_EQ(firstEnvironment->connector("catalog"), firstConnector);
   EXPECT_EQ(secondEnvironment->connector("catalog"), secondConnector);
@@ -53,16 +52,17 @@ TEST_F(ConnectorEnvironmentTest, isolatesCatalogsWithSameId) {
       secondEnvironment->metadata("catalog"), secondConnector->metadata());
 }
 
-TEST_F(ConnectorEnvironmentTest, childInheritsSealedParent) {
-  auto parent = ConnectorEnvironment::create();
+TEST_F(ConnectorEnvironmentTest, parentInheritance) {
+  auto parentBuilder = ConnectorEnvironment::Builder::create();
   auto parentConnector = std::make_shared<TestConnector>("parent");
-  parent->registerConnector(parentConnector, parentConnector->metadata());
-  parent->seal();
+  parentBuilder->registerConnector(
+      parentConnector, parentConnector->metadata());
+  auto parent = parentBuilder->build();
 
-  auto child = ConnectorEnvironment::createChild(parent);
+  auto childBuilder = ConnectorEnvironment::Builder::createChild(parent);
   auto childConnector = std::make_shared<TestConnector>("child");
-  child->registerConnector(childConnector, childConnector->metadata());
-  child->seal();
+  childBuilder->registerConnector(childConnector, childConnector->metadata());
+  auto child = childBuilder->build();
 
   EXPECT_EQ(child->connector("parent"), parentConnector);
   EXPECT_EQ(child->metadata("parent"), parentConnector->metadata());
@@ -70,55 +70,45 @@ TEST_F(ConnectorEnvironmentTest, childInheritsSealedParent) {
   EXPECT_EQ(child->metadata("child"), childConnector->metadata());
 }
 
-TEST_F(ConnectorEnvironmentTest, childRejectsLegacyGlobalParent) {
-  EXPECT_FALSE(ConnectorEnvironment::global()->sealed());
+TEST_F(ConnectorEnvironmentTest, globalParent) {
   VELOX_ASSERT_THROW(
-      ConnectorEnvironment::global()->seal(),
-      "Legacy global connector environment is mutable");
-  VELOX_ASSERT_THROW(
-      ConnectorEnvironment::createChild(ConnectorEnvironment::global()),
-      "Legacy global connector environment cannot be used as a parent");
+      ConnectorEnvironment::Builder::createChild(
+          ConnectorEnvironment::global()),
+      "Process-wide global connector environment cannot be used as a parent");
 }
 
-TEST_F(ConnectorEnvironmentTest, childRejectsUnsealedParent) {
-  auto parent = ConnectorEnvironment::create();
-
-  VELOX_ASSERT_THROW(
-      ConnectorEnvironment::createChild(std::move(parent)),
-      "Connector environment parent must be sealed");
-}
-
-TEST_F(ConnectorEnvironmentTest, sealingRejectsRegistration) {
-  auto environment = ConnectorEnvironment::create();
-  environment->seal();
+TEST_F(ConnectorEnvironmentTest, completedBuilder) {
+  auto builder = ConnectorEnvironment::Builder::create();
+  builder->build();
   auto connector = std::make_shared<TestConnector>("catalog");
 
   VELOX_ASSERT_THROW(
-      environment->registerConnector(connector, connector->metadata()),
-      "Connector environment is sealed");
+      builder->registerConnector(connector, connector->metadata()),
+      "Connector environment builder has already completed");
 }
 
-TEST_F(ConnectorEnvironmentTest, metadataFailureRollsBackConnector) {
-  auto environment = ConnectorEnvironment::create();
+TEST_F(ConnectorEnvironmentTest, registrationRollback) {
+  auto builder = ConnectorEnvironment::Builder::create();
   auto existingConnector = std::make_shared<TestConnector>("existing");
-  environment->registerMetadata("catalog", existingConnector->metadata());
+  builder->registerMetadata("catalog", existingConnector->metadata());
   auto conflictingConnector = std::make_shared<TestConnector>("catalog");
 
   VELOX_ASSERT_THROW(
-      environment->registerConnector(
+      builder->registerConnector(
           conflictingConnector, conflictingConnector->metadata()),
       "Key already registered: catalog");
+  auto environment = builder->build();
   VELOX_ASSERT_THROW(
       environment->connector("catalog"),
       "Connector is not registered: catalog");
   EXPECT_EQ(environment->metadata("catalog"), existingConnector->metadata());
 }
 
-TEST_F(ConnectorEnvironmentTest, attachesBothRegistriesToQueryContext) {
-  auto environment = ConnectorEnvironment::create();
+TEST_F(ConnectorEnvironmentTest, queryContext) {
+  auto builder = ConnectorEnvironment::Builder::create();
   auto connector = std::make_shared<TestConnector>("catalog");
-  environment->registerConnector(connector, connector->metadata());
-  environment->seal();
+  builder->registerConnector(connector, connector->metadata());
+  auto environment = builder->build();
   auto queryCtx = velox::core::QueryCtx::create();
 
   environment->attachTo(*queryCtx);

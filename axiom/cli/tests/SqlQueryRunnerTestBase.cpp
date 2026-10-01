@@ -58,7 +58,7 @@ std::unique_ptr<SqlQueryRunner> SqlQueryRunnerTestBase::makeRunner(
 std::unique_ptr<SqlQueryRunner> SqlQueryRunnerTestBase::makeRunner(
     const std::function<std::pair<std::string, std::string>(
         const std::shared_ptr<
-            facebook::axiom::connector::ConnectorEnvironment>&)>&
+            facebook::axiom::connector::ConnectorEnvironment::Builder>&)>&
         initializeConnectors,
     std::function<std::string()> queryIdGenerator,
     PermissionCheck permissionCheck,
@@ -67,7 +67,10 @@ std::unique_ptr<SqlQueryRunner> SqlQueryRunnerTestBase::makeRunner(
       "test_user", &progressScheduler_, useV2_);
 
   runner->initialize(
-      [&]() { return initializeConnectors(runner->connectorEnvironment()); },
+      [&]() {
+        return initializeConnectors(runner->connectorEnvironmentBuilder());
+      },
+      {},
       std::move(permissionCheck),
       std::move(logicalPlanCheck),
       std::move(queryIdGenerator));

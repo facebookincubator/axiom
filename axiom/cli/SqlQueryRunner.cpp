@@ -249,6 +249,7 @@ SqlQueryRunner::SqlResult::SqlResult(velox::RowTypePtr resultType)
 void SqlQueryRunner::initialize(
     const std::function<std::pair<std::string, std::string>()>&
         initializeConnectors,
+    SessionConnectorInitializer initializeSessionConnectors,
     PermissionCheck permissionCheck,
     LogicalPlanCheck logicalPlanCheck,
     std::function<std::string()> queryIdGenerator) {
@@ -312,8 +313,9 @@ void SqlQueryRunner::initialize(
 
   // Register config providers for connectors that support session properties.
   for (const auto& [connectorId, veloxConnector] :
-       connectorEnvironment_->connectors()) {
-    const auto metadata = connectorEnvironment_->tryMetadata(connectorId);
+       connectorEnvironmentBuilder_->connectors()) {
+    const auto metadata =
+        connectorEnvironmentBuilder_->tryMetadata(connectorId);
     std::shared_ptr<const velox::config::ConfigProvider> executionProvider;
     if (const auto* provider = veloxConnector->configProvider()) {
       executionProvider = std::shared_ptr<const velox::config::ConfigProvider>(
@@ -353,6 +355,26 @@ void SqlQueryRunner::initialize(
       velox::functions::prestosql::PrestoQueryConfig::kPrefix,
       velox::functions::prestosql::PrestoQueryConfig::kArrayAggIgnoreNulls,
       "true");
+
+  if (initializeSessionConnectors) {
+    initializeSessionConnectors(sessionConfig_);
+  }
+  connectorEnvironment_ = connectorEnvironmentBuilder_->build();
+  connectorEnvironmentBuilder_.reset();
+}
+
+const std::shared_ptr<connector::ConnectorEnvironment::Builder>&
+SqlQueryRunner::connectorEnvironmentBuilder() const {
+  VELOX_CHECK_NOT_NULL(
+      connectorEnvironmentBuilder_, "SqlQueryRunner is already initialized");
+  return connectorEnvironmentBuilder_;
+}
+
+const std::shared_ptr<connector::ConnectorEnvironment>&
+SqlQueryRunner::connectorEnvironment() const {
+  VELOX_CHECK_NOT_NULL(
+      connectorEnvironment_, "SqlQueryRunner is not initialized");
+  return connectorEnvironment_;
 }
 
 namespace {
@@ -897,7 +919,6 @@ std::vector<presto::SqlStatementPtr> SqlQueryRunner::parseMultiple(
     std::string_view sql,
     const RunOptions& options,
     const connector::ConnectorContextPtr& context) {
-  connectorEnvironment_->seal();
   const std::string& defaultConnectorId =
       options.defaultConnectorId.value_or(defaultConnectorId_);
   const auto& defaultSchema = options.defaultSchema.value_or(defaultSchema_);
@@ -1364,7 +1385,6 @@ std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
       /*spillExecutor=*/nullptr,
       queryId,
       options.tokenProvider);
-  connectorEnvironment_->seal();
   connectorEnvironment_->attachTo(*queryCtx);
   return queryCtx;
 }

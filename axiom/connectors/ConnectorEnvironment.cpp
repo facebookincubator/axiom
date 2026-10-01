@@ -34,12 +34,12 @@ ConnectorEnvironment::ConnectorEnvironment(
         connectorRegistry,
     std::shared_ptr<ConnectorMetadataRegistry::Registry> metadataRegistry,
     std::shared_ptr<const ConnectorEnvironment> parent,
-    bool sealed,
+    bool mutableEnvironment,
     bool ownsRegistries)
     : parent_{std::move(parent)},
       connectorRegistry_{std::move(connectorRegistry)},
       metadataRegistry_{std::move(metadataRegistry)},
-      sealed_{sealed},
+      mutableEnvironment_{mutableEnvironment},
       ownsRegistries_{ownsRegistries} {
   VELOX_CHECK_NOT_NULL(connectorRegistry_);
   VELOX_CHECK_NOT_NULL(metadataRegistry_);
@@ -52,29 +52,37 @@ ConnectorEnvironment::~ConnectorEnvironment() {
   }
 }
 
-std::shared_ptr<ConnectorEnvironment> ConnectorEnvironment::create() {
-  return std::shared_ptr<ConnectorEnvironment>{new ConnectorEnvironment{
-      velox::connector::ConnectorRegistry::create(),
-      ConnectorMetadataRegistry::create(),
-      /*parent=*/nullptr,
-      /*sealed=*/false,
-      /*ownsRegistries=*/true}};
+std::shared_ptr<ConnectorEnvironment::Builder>
+ConnectorEnvironment::Builder::create() {
+  auto environment =
+      std::shared_ptr<ConnectorEnvironment>{new ConnectorEnvironment{
+          velox::connector::ConnectorRegistry::create(),
+          ConnectorMetadataRegistry::create(),
+          /*parent=*/nullptr,
+          /*mutableEnvironment=*/true,
+          /*ownsRegistries=*/true}};
+  return std::shared_ptr<Builder>{new Builder{std::move(environment)}};
 }
 
-std::shared_ptr<ConnectorEnvironment> ConnectorEnvironment::createChild(
+std::shared_ptr<ConnectorEnvironment::Builder>
+ConnectorEnvironment::Builder::createChild(
     std::shared_ptr<const ConnectorEnvironment> parent) {
   VELOX_CHECK_NOT_NULL(parent, "Connector environment parent is required");
   VELOX_CHECK(
       parent->ownsRegistries_,
-      "Legacy global connector environment cannot be used as a parent");
-  VELOX_CHECK(parent->sealed(), "Connector environment parent must be sealed");
-  return std::shared_ptr<ConnectorEnvironment>{new ConnectorEnvironment{
-      velox::connector::ConnectorRegistry::create(
-          parent->connectorRegistry_.get()),
-      ConnectorMetadataRegistry::create(parent->metadataRegistry_.get()),
-      std::move(parent),
-      /*sealed=*/false,
-      /*ownsRegistries=*/true}};
+      "Process-wide global connector environment cannot be used as a parent");
+  VELOX_CHECK(
+      !parent->mutableEnvironment_,
+      "Connector environment parent must be built");
+  auto environment =
+      std::shared_ptr<ConnectorEnvironment>{new ConnectorEnvironment{
+          velox::connector::ConnectorRegistry::create(
+              parent->connectorRegistry_.get()),
+          ConnectorMetadataRegistry::create(parent->metadataRegistry_.get()),
+          std::move(parent),
+          /*mutableEnvironment=*/true,
+          /*ownsRegistries=*/true}};
+  return std::shared_ptr<Builder>{new Builder{std::move(environment)}};
 }
 
 std::shared_ptr<ConnectorEnvironment> ConnectorEnvironment::global() {
@@ -83,18 +91,37 @@ std::shared_ptr<ConnectorEnvironment> ConnectorEnvironment::global() {
           nonOwning(velox::connector::ConnectorRegistry::global()),
           nonOwning(ConnectorMetadataRegistry::global()),
           /*parent=*/nullptr,
-          /*sealed=*/false,
+          /*mutableEnvironment=*/true,
           /*ownsRegistries=*/false}};
   return kGlobal;
+}
+
+void ConnectorEnvironment::registerProcessWideConnector(
+    std::shared_ptr<velox::connector::Connector> connector,
+    std::shared_ptr<ConnectorMetadata> metadata) {
+  VELOX_CHECK(
+      !ownsRegistries_,
+      "Process-wide registration requires the global connector environment");
+  registerConnector(std::move(connector), std::move(metadata));
+}
+
+void ConnectorEnvironment::registerProcessWideMetadata(
+    std::string connectorId,
+    std::shared_ptr<ConnectorMetadata> metadata) {
+  VELOX_CHECK(
+      !ownsRegistries_,
+      "Process-wide registration requires the global connector environment");
+  registerMetadata(std::move(connectorId), std::move(metadata));
 }
 
 void ConnectorEnvironment::registerConnector(
     std::shared_ptr<velox::connector::Connector> connector,
     std::shared_ptr<ConnectorMetadata> metadata) {
-  VELOX_CHECK(!ownsRegistries_ || !sealed(), "Connector environment is sealed");
   VELOX_CHECK_NOT_NULL(connector);
   VELOX_CHECK_NOT_NULL(metadata);
 
+  VELOX_CHECK(
+      mutableEnvironment_, "Connector environment registration is complete");
   const auto connectorId = connector->connectorId();
   connectorRegistry_->insert(connectorId, connector);
   try {
@@ -108,15 +135,10 @@ void ConnectorEnvironment::registerConnector(
 void ConnectorEnvironment::registerMetadata(
     std::string connectorId,
     std::shared_ptr<ConnectorMetadata> metadata) {
-  VELOX_CHECK(!ownsRegistries_ || !sealed(), "Connector environment is sealed");
   VELOX_CHECK_NOT_NULL(metadata);
-  metadataRegistry_->insert(std::move(connectorId), std::move(metadata));
-}
-
-void ConnectorEnvironment::seal() {
   VELOX_CHECK(
-      ownsRegistries_, "Legacy global connector environment is mutable");
-  sealed_.store(true, std::memory_order_release);
+      mutableEnvironment_, "Connector environment registration is complete");
+  metadataRegistry_->insert(std::move(connectorId), std::move(metadata));
 }
 
 std::shared_ptr<velox::connector::Connector> ConnectorEnvironment::connector(
@@ -158,8 +180,8 @@ std::vector<std::string> ConnectorEnvironment::metadataIds() const {
 
 void ConnectorEnvironment::attachTo(velox::core::QueryCtx& queryCtx) const {
   VELOX_CHECK(
-      !ownsRegistries_ || sealed(),
-      "Connector environment must be sealed before use");
+      !ownsRegistries_ || !mutableEnvironment_,
+      "Connector environment must be built before use");
   queryCtx.setRegistry(
       velox::connector::ConnectorRegistry::kRegistryKey, connectorRegistry_);
   queryCtx.setRegistry(
@@ -167,6 +189,60 @@ void ConnectorEnvironment::attachTo(velox::core::QueryCtx& queryCtx) const {
   queryCtx.setRegistry(
       kRegistryKey,
       std::const_pointer_cast<ConnectorEnvironment>(shared_from_this()));
+}
+
+ConnectorEnvironment::Builder::Builder(
+    std::shared_ptr<ConnectorEnvironment> environment)
+    : environment_{std::move(environment)} {
+  VELOX_CHECK_NOT_NULL(environment_);
+  VELOX_CHECK(
+      environment_->ownsRegistries_ && environment_->mutableEnvironment_,
+      "Connector environment builder requires mutable owned state");
+}
+
+ConnectorEnvironment& ConnectorEnvironment::Builder::mutableEnvironment()
+    const {
+  VELOX_CHECK_NOT_NULL(
+      environment_, "Connector environment builder has already completed");
+  return *environment_;
+}
+
+void ConnectorEnvironment::Builder::registerConnector(
+    std::shared_ptr<velox::connector::Connector> connector,
+    std::shared_ptr<ConnectorMetadata> metadata) {
+  mutableEnvironment().registerConnector(
+      std::move(connector), std::move(metadata));
+}
+
+void ConnectorEnvironment::Builder::registerMetadata(
+    std::string connectorId,
+    std::shared_ptr<ConnectorMetadata> metadata) {
+  mutableEnvironment().registerMetadata(
+      std::move(connectorId), std::move(metadata));
+}
+
+std::vector<
+    std::pair<std::string, std::shared_ptr<velox::connector::Connector>>>
+ConnectorEnvironment::Builder::connectors() const {
+  return mutableEnvironment().connectors();
+}
+
+std::shared_ptr<ConnectorMetadata> ConnectorEnvironment::Builder::tryMetadata(
+    std::string_view connectorId) const {
+  return mutableEnvironment().tryMetadata(connectorId);
+}
+
+const ConnectorMetadataRegistry::Registry&
+ConnectorEnvironment::Builder::metadataRegistry() const {
+  return mutableEnvironment().metadataRegistry();
+}
+
+std::shared_ptr<ConnectorEnvironment> ConnectorEnvironment::Builder::build() {
+  auto environment = std::move(environment_);
+  VELOX_CHECK_NOT_NULL(
+      environment, "Connector environment builder has already completed");
+  environment->mutableEnvironment_ = false;
+  return environment;
 }
 
 } // namespace facebook::axiom::connector

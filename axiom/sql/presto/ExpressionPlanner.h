@@ -396,8 +396,8 @@ class ExpressionPlanner {
 
   ParserOptions options_;
 
-  // Selects connector metadata for user-defined types; null uses the legacy
-  // process-global registry.
+  // Selects connector metadata for user-defined types. A null environment
+  // disables user-defined type resolution.
   const std::shared_ptr<const facebook::axiom::connector::ConnectorEnvironment>
       connectorEnvironment_;
 

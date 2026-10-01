@@ -32,9 +32,16 @@ namespace facebook::axiom {
 
 class SessionConfig;
 
-/**
- * Registers connectors into one ConnectorEnvironment.
- */
+/// Registers standard connectors through one ConnectorEnvironment builder.
+///
+///   auto builder = connector::ConnectorEnvironment::Builder::create();
+///   Connectors connectors{builder};
+///   connectors.registerTpchConnector();
+///   auto environment = builder->build();
+///
+/// Invariants:
+///   - Exactly one builder or process-wide global environment is non-null.
+///   - The builder remains incomplete while catalogs are registered.
 class Connectors {
  public:
   static constexpr const char* kTpchConnectorId = "tpch";
@@ -42,10 +49,11 @@ class Connectors {
   static constexpr const char* kTestConnectorId = "test";
   static constexpr const char* kSystemConnectorId = "system";
 
-  Connectors();
+  /// Registers connectors into `builder` before it produces an environment.
+  explicit Connectors(
+      std::shared_ptr<connector::ConnectorEnvironment::Builder> builder);
 
-  /// Registers connectors into `environment`. The environment must remain in
-  /// its build phase until registration finishes.
+  /// Registers connectors into the process-wide global environment.
   explicit Connectors(
       std::shared_ptr<connector::ConnectorEnvironment> environment);
 
@@ -107,7 +115,7 @@ class Connectors {
   /// Registers the system connector for the runtime.queries and
   /// metadata.session_properties tables.
   void registerSystemConnector(
-      const SessionConfig& sessionConfig,
+      std::shared_ptr<const SessionConfig> sessionConfig,
       const std::string& connectorId = kSystemConnectorId);
 
   /// Registers the file connector for querying raw files via SQL.
@@ -133,12 +141,20 @@ class Connectors {
       std::string connectorId,
       std::shared_ptr<connector::ConnectorMetadata> metadata);
 
+  /// Returns the metadata registry receiving catalog registrations.
+  const connector::ConnectorMetadataRegistry::Registry& metadataRegistry()
+      const;
+
  private:
   static std::shared_ptr<folly::IOThreadPoolExecutor> getSharedIoExecutor();
   std::shared_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
 
-  // Owns the catalog registrations for the lifetime of this registrar.
-  const std::shared_ptr<connector::ConnectorEnvironment> environment_;
+  // Owns mutable registration state for an isolated environment.
+  const std::shared_ptr<connector::ConnectorEnvironment::Builder> builder_;
+
+  // Identifies the process-wide registration destination.
+  const std::shared_ptr<connector::ConnectorEnvironment>
+      processWideEnvironment_;
 };
 
 } // namespace facebook::axiom

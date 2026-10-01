@@ -26,6 +26,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <stdexcept>
+#include "axiom/cli/Connectors.h"
 #include "axiom/cli/QueryIdGenerator.h"
 #include "axiom/cli/common/ComponentMetrics.h"
 #include "axiom/cli/common/QueryRuntimeStats.h"
@@ -129,6 +130,37 @@ TEST_F(SqlQueryRunnerTest, runSingleStatement) {
     EXPECT_TRUE(result.results.empty());
     VELOX_EXPECT_EQ_TYPES(result.resultType, ROW("value", BIGINT()));
   }
+}
+
+TEST_F(SqlQueryRunnerTest, sessionConfigLifetime) {
+  std::weak_ptr<const facebook::axiom::SessionConfig> sessionConfig;
+  {
+    auto runner = std::make_unique<SqlQueryRunner>(
+        "test_user", &progressScheduler_, useV2_);
+    auto builder = runner->connectorEnvironmentBuilder();
+    facebook::axiom::Connectors connectors{builder};
+    runner->initialize(
+        [&]() {
+          auto connector =
+              std::make_shared<facebook::axiom::connector::TestConnector>(
+                  "session_config_lifetime");
+          builder->registerConnector(connector, connector->metadata());
+          return std::make_pair(
+              connector->connectorId(),
+              std::string{
+                  facebook::axiom::connector::TestConnector::kDefaultSchema});
+        },
+        [&](auto config) {
+          sessionConfig = config;
+          connectors.registerSystemConnector(std::move(config));
+        });
+    auto environment = runner->connectorEnvironment();
+
+    runner.reset();
+
+    EXPECT_FALSE(sessionConfig.expired());
+  }
+  EXPECT_TRUE(sessionConfig.expired());
 }
 
 TEST_F(SqlQueryRunnerTest, executionTimeout) {

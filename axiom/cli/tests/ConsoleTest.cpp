@@ -106,7 +106,7 @@ class ConsoleTest : public ::testing::Test, public test::VectorTestBase {
           auto testConnector =
               std::make_shared<facebook::axiom::connector::TestConnector>(
                   fmt::format("console_test{}", kCounter++));
-          runnerPtr->connectorEnvironment()->registerConnector(
+          runnerPtr->connectorEnvironmentBuilder()->registerConnector(
               testConnector, testConnector->metadata());
 
           return std::make_pair(
@@ -114,6 +114,7 @@ class ConsoleTest : public ::testing::Test, public test::VectorTestBase {
               std::string(
                   facebook::axiom::connector::TestConnector::kDefaultSchema));
         },
+        {},
         std::move(permissionCheck));
 
     return runner;

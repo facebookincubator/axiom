@@ -60,14 +60,17 @@ void initializeFileFormats() {
 class SessionConfigPropertiesProvider
     : public connector::system::SessionPropertiesProvider {
  public:
-  explicit SessionConfigPropertiesProvider(const SessionConfig& sessionConfig)
-      : sessionConfig_(sessionConfig) {}
+  explicit SessionConfigPropertiesProvider(
+      std::shared_ptr<const SessionConfig> sessionConfig)
+      : sessionConfig_{std::move(sessionConfig)} {
+    VELOX_CHECK_NOT_NULL(sessionConfig_);
+  }
 
   std::vector<connector::system::SessionPropertyInfo> getSessionProperties()
       const override {
     using velox::config::ConfigPropertyTypeName;
 
-    auto entries = sessionConfig_.all();
+    auto entries = sessionConfig_->all();
     std::vector<connector::system::SessionPropertyInfo> result;
     result.reserve(entries.size());
     for (const auto& entry : entries) {
@@ -84,18 +87,25 @@ class SessionConfigPropertiesProvider
   }
 
  private:
-  const SessionConfig& sessionConfig_;
+  std::shared_ptr<const SessionConfig> sessionConfig_;
 };
 
 } // namespace
 
-Connectors::Connectors()
-    : Connectors{connector::ConnectorEnvironment::global()} {}
+Connectors::Connectors(
+    std::shared_ptr<connector::ConnectorEnvironment::Builder> builder)
+    : builder_{std::move(builder)} {
+  VELOX_CHECK_NOT_NULL(builder_);
+  initialize();
+}
 
 Connectors::Connectors(
     std::shared_ptr<connector::ConnectorEnvironment> environment)
-    : environment_{std::move(environment)} {
-  VELOX_CHECK_NOT_NULL(environment_);
+    : processWideEnvironment_{std::move(environment)} {
+  VELOX_CHECK_EQ(
+      processWideEnvironment_,
+      connector::ConnectorEnvironment::global(),
+      "Direct registration requires the process-wide global environment");
   initialize();
 }
 
@@ -117,13 +127,31 @@ void Connectors::initialize() {
 void Connectors::registerConnector(
     std::shared_ptr<velox::connector::Connector> connector,
     std::shared_ptr<connector::ConnectorMetadata> metadata) {
-  environment_->registerConnector(std::move(connector), std::move(metadata));
+  if (builder_ != nullptr) {
+    builder_->registerConnector(std::move(connector), std::move(metadata));
+    return;
+  }
+  processWideEnvironment_->registerProcessWideConnector(
+      std::move(connector), std::move(metadata));
 }
 
 void Connectors::registerMetadata(
     std::string connectorId,
     std::shared_ptr<connector::ConnectorMetadata> metadata) {
-  environment_->registerMetadata(std::move(connectorId), std::move(metadata));
+  if (builder_ != nullptr) {
+    builder_->registerMetadata(std::move(connectorId), std::move(metadata));
+    return;
+  }
+  processWideEnvironment_->registerProcessWideMetadata(
+      std::move(connectorId), std::move(metadata));
+}
+
+const connector::ConnectorMetadataRegistry::Registry&
+Connectors::metadataRegistry() const {
+  if (builder_ != nullptr) {
+    return builder_->metadataRegistry();
+  }
+  return processWideEnvironment_->metadataRegistry();
 }
 
 std::shared_ptr<velox::connector::Connector> Connectors::registerTpchConnector(
@@ -230,10 +258,11 @@ std::shared_ptr<velox::connector::Connector> Connectors::registerTestConnector(
 }
 
 void Connectors::registerSystemConnector(
-    const SessionConfig& sessionConfig,
+    std::shared_ptr<const SessionConfig> sessionConfig,
     const std::string& connectorId) {
   auto sessionPropertiesProvider =
-      std::make_shared<SessionConfigPropertiesProvider>(sessionConfig);
+      std::make_shared<SessionConfigPropertiesProvider>(
+          std::move(sessionConfig));
 
   // The CLI speaks Presto SQL, so information_schema spells types the way
   // Presto does.
@@ -242,11 +271,11 @@ void Connectors::registerSystemConnector(
       /*queryInfoProvider=*/nullptr,
       std::move(sessionPropertiesProvider),
       velox::PrestoTypes::displayName,
-      environment_->metadataRegistry());
+      metadataRegistry());
   registerConnector(
       connector,
       std::make_shared<connector::system::SystemConnectorMetadata>(
-          connector.get(), environment_->metadataRegistry()));
+          connector.get(), metadataRegistry()));
 }
 
 void Connectors::registerFileConnector(const std::string& connectorId) {

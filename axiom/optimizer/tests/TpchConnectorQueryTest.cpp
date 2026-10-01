@@ -35,7 +35,8 @@ class TpchConnectorQueryTest : public QueryTestBase,
   void SetUp() override {
     useV2_ = GetParam();
     QueryTestBase::SetUp();
-    connectors_ = std::make_unique<Connectors>();
+    connectors_ =
+        std::make_unique<Connectors>(connector::ConnectorEnvironment::global());
     connectors_->registerTpchConnector(kTpchConnectorId);
   }
 

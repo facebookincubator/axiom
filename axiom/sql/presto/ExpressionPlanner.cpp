@@ -737,9 +737,7 @@ TypePtr findQualifiedType(
     return it->second;
   }
 
-  auto metadata = environment
-      ? environment->tryMetadata(catalog)
-      : facebook::axiom::connector::ConnectorMetadataRegistry::tryGet(catalog);
+  auto metadata = environment ? environment->tryMetadata(catalog) : nullptr;
   if (metadata == nullptr) {
     typeCache.emplace(qualifiedName, nullptr);
     return nullptr;
@@ -811,10 +809,8 @@ std::optional<lp::ExprApi> tryResolveEnumLiteral(
   auto type =
       findQualifiedType(catalog, schemaTypeName, typeCache, environment);
   if (type == nullptr) {
-    const auto metadata = environment
-        ? environment->tryMetadata(catalog)
-        : facebook::axiom::connector::ConnectorMetadataRegistry::tryGet(
-              catalog);
+    const auto metadata =
+        environment ? environment->tryMetadata(catalog) : nullptr;
     if (metadata != nullptr) {
       AXIOM_PRESTO_SEMANTIC_FAIL(
           location,

@@ -31,9 +31,10 @@ namespace {
 std::shared_ptr<connector::ConnectorMetadata> metadataFor(
     const std::shared_ptr<const connector::ConnectorEnvironment>& environment,
     std::string_view connectorId) {
-  return environment
-      ? environment->metadata(connectorId)
-      : connector::ConnectorMetadataRegistry::get(std::string{connectorId});
+  VELOX_CHECK_NOT_NULL(
+      environment,
+      "PlanBuilder table operations require a connector environment");
+  return environment->metadata(connectorId);
 }
 
 } // namespace

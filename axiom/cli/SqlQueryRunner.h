@@ -184,6 +184,10 @@ using QueryCompletionCallback = std::function<void(const QueryCompletionInfo&)>;
 /// Executes SQL queries.
 class SqlQueryRunner {
  public:
+  /// Registers connectors that depend on the completed session configuration.
+  using SessionConnectorInitializer = std::function<void(
+      std::shared_ptr<const facebook::axiom::SessionConfig>)>;
+
   /// Prefix for optimizer session properties (e.g., "optimizer.sample_joins").
   static constexpr const char* kOptimizerPrefix = "optimizer";
 
@@ -215,8 +219,9 @@ class SqlQueryRunner {
       : user_{std::move(user)},
         useOptimizerV2_{useOptimizerV2},
         progressScheduler_{progressScheduler},
-        connectorEnvironment_{
-            facebook::axiom::connector::ConnectorEnvironment::create()} {
+        connectorEnvironmentBuilder_{
+            facebook::axiom::connector::ConnectorEnvironment::Builder::
+                create()} {
     VELOX_USER_CHECK(!user_.empty(), "SqlQueryRunner user must be non-empty");
   }
 
@@ -242,6 +247,7 @@ class SqlQueryRunner {
   void initialize(
       const std::function<std::pair<std::string, std::string>()>&
           initializeConnectors,
+      SessionConnectorInitializer initializeSessionConnectors = {},
       PermissionCheck permissionCheck = {},
       LogicalPlanCheck logicalPlanCheck = {},
       std::function<std::string()> queryIdGenerator = {});
@@ -502,12 +508,20 @@ class SqlQueryRunner {
     return *sessionConfig_;
   }
 
-  /// Returns the environment into which this runner's connectors must be
-  /// registered. Registration closes when the first query is parsed.
-  const std::shared_ptr<facebook::axiom::connector::ConnectorEnvironment>&
-  connectorEnvironment() const {
-    return connectorEnvironment_;
+  /// Returns shared ownership of the session configuration.
+  const std::shared_ptr<facebook::axiom::SessionConfig>& sessionConfigHandle()
+      const {
+    return sessionConfig_;
   }
+
+  /// Returns the builder into which initialize() callbacks register catalogs.
+  const std::shared_ptr<
+      facebook::axiom::connector::ConnectorEnvironment::Builder>&
+  connectorEnvironmentBuilder() const;
+
+  /// Returns the immutable environment built by initialize().
+  const std::shared_ptr<facebook::axiom::connector::ConnectorEnvironment>&
+  connectorEnvironment() const;
 
   facebook::axiom::connector::TablePtr createTable(
       const facebook::axiom::connector::ConnectorContextPtr& context,
@@ -775,8 +789,12 @@ class SqlQueryRunner {
   // each progress-reporting query.
   folly::FunctionScheduler* const progressScheduler_;
 
-  // Owns connector and metadata registrations for this runner.
-  const std::shared_ptr<facebook::axiom::connector::ConnectorEnvironment>
+  // Accumulates catalog registrations until initialize() completes.
+  std::shared_ptr<facebook::axiom::connector::ConnectorEnvironment::Builder>
+      connectorEnvironmentBuilder_;
+
+  // Owns immutable connector and metadata registrations after initialization.
+  std::shared_ptr<facebook::axiom::connector::ConnectorEnvironment>
       connectorEnvironment_;
 };
 

@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
   folly::FunctionScheduler progressScheduler;
   axiom::sql::SqlQueryRunner runner{
       axiom::sql::SystemUser::resolve(), &progressScheduler, !FLAGS_v1};
-  facebook::axiom::Connectors connectors{runner.connectorEnvironment()};
+  facebook::axiom::Connectors connectors{runner.connectorEnvironmentBuilder()};
   auto initializeConnectors = [&]() {
     VELOX_USER_CHECK(
         FLAGS_data_path.empty() || FLAGS_etc_dir.empty(),
@@ -135,14 +135,14 @@ int main(int argc, char** argv) {
   // flags or catalog properties. Keep them inside the handler so either one
   // prints an 'Error: ' line and exits non-zero instead of escaping main.
   try {
-    runner.initialize(initializeConnectors);
-
-    // Register after initialize() so sessionConfig() is available.
-    connectors.registerSystemConnector(runner.sessionConfig());
-    connectors.registerFileConnector();
+    runner.initialize(initializeConnectors, [&](auto sessionConfig) {
+      connectors.registerSystemConnector(std::move(sessionConfig));
+      connectors.registerFileConnector();
+    });
 
     // --catalog is only checked here because the system and file catalogs are
-    // registered above, after the connectors the flag usually names.
+    // registered during initialization, after the connectors the flag usually
+    // names.
     const auto& catalog = runner.defaultConnectorId();
     VELOX_USER_CHECK_NOT_NULL(
         runner.connectorEnvironment()->tryMetadata(catalog),

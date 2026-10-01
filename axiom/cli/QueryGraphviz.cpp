@@ -174,7 +174,7 @@ int main(int argc, char** argv) {
       axiom::sql::SystemUser::resolve(),
       /*progressScheduler=*/nullptr,
       /*useOptimizerV2=*/true};
-  facebook::axiom::Connectors connectors{runner.connectorEnvironment()};
+  facebook::axiom::Connectors connectors{runner.connectorEnvironmentBuilder()};
   runner.initialize([&]() {
     auto defaultConnector = connectors.registerTpchConnector();
     auto defaultSchema = "tiny";

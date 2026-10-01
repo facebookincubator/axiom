@@ -60,7 +60,7 @@ class SqlQueryRunnerTestBase : public ::testing::Test,
   std::unique_ptr<SqlQueryRunner> makeRunner(
       const std::function<std::pair<std::string, std::string>(
           const std::shared_ptr<
-              facebook::axiom::connector::ConnectorEnvironment>&)>&
+              facebook::axiom::connector::ConnectorEnvironment::Builder>&)>&
           initializeConnectors,
       std::function<std::string()> queryIdGenerator = {},
       PermissionCheck permissionCheck = {},
