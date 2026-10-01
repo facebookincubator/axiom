@@ -23,6 +23,7 @@
 
 #include <folly/container/F14Map.h>
 
+#include "axiom/connectors/ConnectorEnvironment.h"
 #include "axiom/connectors/system/SystemConnector.h"
 #include "folly/executors/IOThreadPoolExecutor.h"
 #include "velox/connectors/Connector.h"
@@ -32,11 +33,7 @@ namespace facebook::axiom {
 class SessionConfig;
 
 /**
- * Helper class to register connectors for Axiom and Velox.
- *
- * This class handles the details of registering TPCH connectors
- * and connectors for tables stored in the local filesystem in
- * Parquet or ORC format.
+ * Registers connectors into one ConnectorEnvironment.
  */
 class Connectors {
  public:
@@ -47,13 +44,17 @@ class Connectors {
 
   Connectors();
 
+  /// Registers connectors into `environment`. The environment must remain in
+  /// its build phase until registration finishes.
+  explicit Connectors(
+      std::shared_ptr<connector::ConnectorEnvironment> environment);
+
   Connectors(const Connectors&) = delete;
   Connectors& operator=(const Connectors&) = delete;
   Connectors(Connectors&&) = default;
   Connectors& operator=(Connectors&&) = default;
 
-  /// Unregister all connectors with ids in `connectorIds_`.
-  virtual ~Connectors();
+  virtual ~Connectors() = default;
 
   /// Registers the TPCH connector under the connector ID "tpch".
   /// This allows queries like "select * from tpch.sf1.lineitem".
@@ -122,22 +123,22 @@ class Connectors {
     return ioExecutor_.get();
   }
 
-  /// Registers a connector in the global registry and tracks it for
-  /// cleanup on destruction.
+  /// Registers an execution connector and its metadata as one catalog.
   void registerConnector(
-      const std::shared_ptr<velox::connector::Connector>& connector);
+      std::shared_ptr<velox::connector::Connector> connector,
+      std::shared_ptr<connector::ConnectorMetadata> metadata);
 
-  // Unregister these on destruction.
-  std::vector<std::string> connectorIds_;
+  /// Registers metadata for a catalog that has no execution connector.
+  void registerMetadata(
+      std::string connectorId,
+      std::shared_ptr<connector::ConnectorMetadata> metadata);
 
  private:
   static std::shared_ptr<folly::IOThreadPoolExecutor> getSharedIoExecutor();
   std::shared_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
 
-  // Adapts SessionConfig to SessionPropertiesProvider. Stored here to
-  // ensure the provider outlives the system connector.
-  std::unique_ptr<connector::system::SessionPropertiesProvider>
-      sessionPropertiesProvider_;
+  // Owns the catalog registrations for the lifetime of this registrar.
+  const std::shared_ptr<connector::ConnectorEnvironment> environment_;
 };
 
 } // namespace facebook::axiom

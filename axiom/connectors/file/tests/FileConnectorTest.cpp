@@ -49,8 +49,8 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
   }
 
   void SetUp() override {
-    connectors_ = std::make_unique<Connectors>();
     runner_ = std::make_unique<::axiom::sql::SqlQueryRunner>("test_user");
+    connectors_ = std::make_unique<Connectors>(runner_->connectorEnvironment());
     runner_->initialize([this]() {
       connectors_->registerFileConnector(kConnectorId);
       return std::make_pair(std::string(kConnectorId), std::string("parquet"));

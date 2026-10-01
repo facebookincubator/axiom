@@ -26,9 +26,7 @@
 #include <chrono>
 #include <optional>
 #include <thread>
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
-#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 DECLARE_string(query);
@@ -94,29 +92,22 @@ class ConsoleTest : public ::testing::Test, public test::VectorTestBase {
   void TearDown() override {
     // Restore FLAGS_query to avoid polluting other tests.
     FLAGS_query = "";
-    for (const auto& id : connectorIds_) {
-      facebook::axiom::connector::ConnectorMetadataRegistry::global().erase(id);
-      facebook::velox::connector::ConnectorRegistry::global().erase(id);
-    }
   }
 
   template <typename RunnerT = SqlQueryRunner>
   std::unique_ptr<RunnerT> makeRunner(PermissionCheck permissionCheck = {}) {
     auto runner = std::make_unique<RunnerT>("test_user");
+    auto* runnerPtr = runner.get();
 
     runner->initialize(
-        [&]() {
+        [runnerPtr]() {
           static int32_t kCounter = 0;
 
           auto testConnector =
               std::make_shared<facebook::axiom::connector::TestConnector>(
                   fmt::format("console_test{}", kCounter++));
-          facebook::velox::connector::ConnectorRegistry::global().insert(
-              testConnector->connectorId(), testConnector);
-          facebook::axiom::connector::ConnectorMetadataRegistry::global()
-              .insert(testConnector->connectorId(), testConnector->metadata());
-
-          connectorIds_.emplace_back(testConnector->connectorId());
+          runnerPtr->connectorEnvironment()->registerConnector(
+              testConnector, testConnector->metadata());
 
           return std::make_pair(
               testConnector->connectorId(),
@@ -127,9 +118,6 @@ class ConsoleTest : public ::testing::Test, public test::VectorTestBase {
 
     return runner;
   }
-
- private:
-  std::vector<std::string> connectorIds_;
 };
 
 TEST_F(ConsoleTest, permissionCheckCalledBeforeExecution) {

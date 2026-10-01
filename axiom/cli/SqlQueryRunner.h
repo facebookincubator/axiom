@@ -26,6 +26,7 @@
 #include <vector>
 #include "axiom/common/ConfigRegistry.h"
 #include "axiom/common/SessionConfig.h"
+#include "axiom/connectors/ConnectorEnvironment.h"
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/ToVelox.h"
@@ -213,7 +214,9 @@ class SqlQueryRunner {
       bool useOptimizerV2 = false)
       : user_{std::move(user)},
         useOptimizerV2_{useOptimizerV2},
-        progressScheduler_{progressScheduler} {
+        progressScheduler_{progressScheduler},
+        connectorEnvironment_{
+            facebook::axiom::connector::ConnectorEnvironment::create()} {
     VELOX_USER_CHECK(!user_.empty(), "SqlQueryRunner user must be non-empty");
   }
 
@@ -499,6 +502,13 @@ class SqlQueryRunner {
     return *sessionConfig_;
   }
 
+  /// Returns the environment into which this runner's connectors must be
+  /// registered. Registration closes when the first query is parsed.
+  const std::shared_ptr<facebook::axiom::connector::ConnectorEnvironment>&
+  connectorEnvironment() const {
+    return connectorEnvironment_;
+  }
+
   facebook::axiom::connector::TablePtr createTable(
       const facebook::axiom::connector::ConnectorContextPtr& context,
       const presto::CreateTableStatement& statement,
@@ -764,6 +774,10 @@ class SqlQueryRunner {
   // Progress-polling scheduler (see constructor). Started idempotently before
   // each progress-reporting query.
   folly::FunctionScheduler* const progressScheduler_;
+
+  // Owns connector and metadata registrations for this runner.
+  const std::shared_ptr<facebook::axiom::connector::ConnectorEnvironment>
+      connectorEnvironment_;
 };
 
 } // namespace axiom::sql
