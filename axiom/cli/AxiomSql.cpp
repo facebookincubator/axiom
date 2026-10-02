@@ -27,7 +27,6 @@
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/Console.h"
 #include "axiom/cli/SystemUser.h"
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestTableJson.h"
 #include "velox/common/base/Exceptions.h"
 
@@ -48,11 +47,12 @@ int main(int argc, char** argv) {
   facebook::velox::memory::MemoryManager::initialize(
       facebook::velox::memory::MemoryManager::Options{});
 
-  facebook::axiom::Connectors connectors;
   // Progress-polling scheduler for the console's live progress bar.
   folly::FunctionScheduler progressScheduler;
   axiom::sql::SqlQueryRunner runner{
       axiom::sql::SystemUser::resolve(), &progressScheduler, !FLAGS_v1};
+  facebook::axiom::Connectors connectors{
+      runner.connectorRegistry(), runner.metadataRegistry()};
   auto initializeConnectors = [&]() {
     VELOX_USER_CHECK(
         FLAGS_data_path.empty() || FLAGS_etc_dir.empty(),
@@ -129,6 +129,7 @@ int main(int argc, char** argv) {
       }
     }
 
+    connectors.registerFileConnector();
     return std::make_pair(connectorId, schema);
   };
 
@@ -136,17 +137,15 @@ int main(int argc, char** argv) {
   // flags or catalog properties. Keep them inside the handler so either one
   // prints an 'Error: ' line and exits non-zero instead of escaping main.
   try {
-    runner.initialize(initializeConnectors);
-
-    // Register after initialize() so sessionConfig() is available.
-    connectors.registerSystemConnector(runner.sessionConfig());
-    connectors.registerFileConnector();
+    runner.initialize(initializeConnectors, [&](auto sessionConfig) {
+      connectors.registerSystemConnector(std::move(sessionConfig));
+    });
 
     // --catalog is only checked here because the system and file catalogs are
     // registered above, after the connectors the flag usually names.
     const auto& catalog = runner.defaultConnectorId();
     VELOX_USER_CHECK_NOT_NULL(
-        facebook::axiom::connector::ConnectorMetadataRegistry::tryGet(catalog),
+        runner.metadataRegistry()->find(catalog),
         "Catalog does not exist: {}",
         catalog);
 

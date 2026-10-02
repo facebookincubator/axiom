@@ -64,7 +64,6 @@
 #include "axiom/sql/presto/ShowStatsBuilder.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/time/Timer.h"
-#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/core/QueryConfigProvider.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
@@ -182,15 +181,25 @@ class OptimizerContext {
   std::unique_ptr<optimizer::QueryGraphContext> context_;
 };
 
-// Returns 'schemaResolver' if non-null, else a default resolver over the global
-// connector metadata registry.
+// Resolves metadata from this runner's registry and rejects missing catalogs.
+std::shared_ptr<connector::ConnectorMetadata> connectorMetadata(
+    const std::shared_ptr<connector::ConnectorMetadataRegistry::Registry>&
+        registry,
+    std::string_view connectorId) {
+  auto metadata = registry->find(std::string{connectorId});
+  VELOX_CHECK_NOT_NULL(
+      metadata, "Connector metadata is not registered: {}", connectorId);
+  return metadata;
+}
+
+// Returns 'schemaResolver' if non-null, else one over the runner registry.
 std::shared_ptr<connector::SchemaResolver> orDefaultSchemaResolver(
-    std::shared_ptr<connector::SchemaResolver> schemaResolver) {
+    std::shared_ptr<connector::SchemaResolver> schemaResolver,
+    const connector::ConnectorMetadataRegistry::Registry& metadataRegistry) {
   if (schemaResolver != nullptr) {
     return schemaResolver;
   }
-  return std::make_shared<connector::SchemaResolver>(
-      connector::ConnectorMetadataRegistry::global());
+  return std::make_shared<connector::SchemaResolver>(metadataRegistry);
 }
 
 // Returns the destination table for an EXPLAIN (TYPE IO) over an INSERT or
@@ -249,6 +258,7 @@ SqlQueryRunner::SqlResult::SqlResult(velox::RowTypePtr resultType)
 void SqlQueryRunner::initialize(
     const std::function<std::pair<std::string, std::string>()>&
         initializeConnectors,
+    const SessionConnectorInitializer& initializeSessionConnectors,
     PermissionCheck permissionCheck,
     LogicalPlanCheck logicalPlanCheck,
     std::function<std::string()> queryIdGenerator) {
@@ -312,9 +322,8 @@ void SqlQueryRunner::initialize(
 
   // Register config providers for connectors that support session properties.
   for (const auto& [connectorId, veloxConnector] :
-       velox::connector::ConnectorRegistry::global().snapshot()) {
-    const auto metadata =
-        connector::ConnectorMetadataRegistry::tryGet(connectorId);
+       connectorRegistry_->snapshot()) {
+    const auto metadata = metadataRegistry_->find(connectorId);
     std::shared_ptr<const velox::config::ConfigProvider> executionProvider;
     if (const auto* provider = veloxConnector->configProvider()) {
       executionProvider = std::shared_ptr<const velox::config::ConfigProvider>(
@@ -354,6 +363,10 @@ void SqlQueryRunner::initialize(
       velox::functions::prestosql::PrestoQueryConfig::kPrefix,
       velox::functions::prestosql::PrestoQueryConfig::kArrayAggIgnoreNulls,
       "true");
+
+  if (initializeSessionConnectors) {
+    initializeSessionConnectors(sessionConfig_);
+  }
 }
 
 namespace {
@@ -361,10 +374,10 @@ namespace {
 // Returns per-connector property maps for connectors with at least one
 // effective value set.
 connector::ConnectorProperties collectConnectorProperties(
-    const SessionConfig& config) {
+    const SessionConfig& config,
+    const connector::ConnectorMetadataRegistry::Registry& metadataRegistry) {
   connector::ConnectorProperties result;
-  for (const auto& id :
-       connector::ConnectorMetadataRegistry::allMetadataIds()) {
+  for (const auto& [id, _] : metadataRegistry.snapshot()) {
     connector::Properties properties = config.effectiveValues(id);
     if (!properties.empty()) {
       result.emplace(id, std::move(properties));
@@ -406,7 +419,7 @@ connector::TablePtr SqlQueryRunner::createTable(
     const facebook::axiom::connector::ConnectorContextPtr& context,
     const presto::CreateTableStatement& statement,
     bool explain) {
-  auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
+  auto metadata = connectorMetadata(metadataRegistry_, statement.connectorId());
 
   folly::F14FastMap<std::string, velox::Variant> options;
   for (const auto& [key, value] : statement.properties()) {
@@ -465,7 +478,7 @@ connector::TablePtr SqlQueryRunner::createTable(
     const facebook::axiom::connector::ConnectorContextPtr& context,
     const presto::CreateTableAsSelectStatement& statement,
     bool explain) {
-  auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
+  auto metadata = connectorMetadata(metadataRegistry_, statement.connectorId());
 
   folly::F14FastMap<std::string, velox::Variant> options;
   for (const auto& [key, value] : statement.properties()) {
@@ -487,7 +500,7 @@ connector::TablePtr SqlQueryRunner::createTable(
 std::string SqlQueryRunner::dropTable(
     const facebook::axiom::connector::ConnectorContextPtr& context,
     const presto::DropTableStatement& statement) {
-  auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
+  auto metadata = connectorMetadata(metadataRegistry_, statement.connectorId());
 
   const auto& tableName = statement.tableName();
 
@@ -530,7 +543,7 @@ std::string SqlQueryRunner::addColumn(
     const facebook::axiom::connector::ConnectorContextPtr& context,
     const presto::AddColumnStatement& statement,
     bool explain) {
-  auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
+  auto metadata = connectorMetadata(metadataRegistry_, statement.connectorId());
 
   auto result = metadata->addColumn(
       makeConnectorSession(context, statement.connectorId()),
@@ -560,7 +573,7 @@ std::string SqlQueryRunner::addColumn(
 std::string SqlQueryRunner::createSchema(
     const facebook::axiom::connector::ConnectorContextPtr& context,
     const presto::CreateSchemaStatement& statement) {
-  auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
+  auto metadata = connectorMetadata(metadataRegistry_, statement.connectorId());
 
   folly::F14FastMap<std::string, velox::Variant> properties;
   for (const auto& [key, value] : statement.properties()) {
@@ -579,7 +592,7 @@ std::string SqlQueryRunner::createSchema(
 std::string SqlQueryRunner::dropSchema(
     const facebook::axiom::connector::ConnectorContextPtr& context,
     const presto::DropSchemaStatement& statement) {
-  auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
+  auto metadata = connectorMetadata(metadataRegistry_, statement.connectorId());
   metadata->dropSchema(
       makeConnectorSession(context, statement.connectorId()),
       statement.schemaName(),
@@ -994,7 +1007,7 @@ SqlQueryRunner::co_runExplainStatement(
   } else if (statement->isDropTable()) {
     const auto* drop = statement->as<presto::DropTableStatement>();
     if (!drop->ifExists()) {
-      auto metadata = ConnectorMetadataRegistry::get(drop->connectorId());
+      auto metadata = connectorMetadata(metadataRegistry_, drop->connectorId());
       VELOX_USER_CHECK(
           metadata->findTable(drop->tableName()),
           "Table does not exist: {}.{}",
@@ -1232,7 +1245,7 @@ SqlQueryRunner::co_runSessionStatement(
         ? use->catalog().value()
         : defaultConnectorId_;
     VELOX_USER_CHECK(
-        ConnectorMetadataRegistry::tryGet(connectorId) != nullptr,
+        metadataRegistry_->find(connectorId) != nullptr,
         "Catalog does not exist: {}",
         connectorId);
     defaultConnectorId_ = connectorId;
@@ -1344,8 +1357,7 @@ std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
   // Build per-connector session properties.
   std::unordered_map<std::string, std::shared_ptr<velox::config::ConfigBase>>
       connectorConfigs;
-  for (const auto& [connectorId, connector] :
-       velox::connector::ConnectorRegistry::global().snapshot()) {
+  for (const auto& [connectorId, connector] : connectorRegistry_->snapshot()) {
     if (connector->configProvider()) {
       auto connectorProps = sessionConfig_->effectiveValues(connectorId);
       if (!connectorProps.empty()) {
@@ -1357,7 +1369,7 @@ std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
     }
   }
 
-  return velox::core::QueryCtx::create(
+  auto queryCtx = velox::core::QueryCtx::create(
       executor_.get(),
       velox::core::QueryConfig(std::move(queryConfig)),
       std::move(connectorConfigs),
@@ -1366,6 +1378,11 @@ std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
       /*spillExecutor=*/nullptr,
       queryId,
       options.tokenProvider);
+  queryCtx->setRegistry(
+      velox::connector::ConnectorRegistry::kRegistryKey, connectorRegistry_);
+  queryCtx->setRegistry(
+      connector::ConnectorMetadataRegistry::kRegistryKey, metadataRegistry_);
+  return queryCtx;
 }
 
 template <typename Operation>
@@ -1377,7 +1394,7 @@ auto SqlQueryRunner::withOptimizerV2(
     const std::shared_ptr<connector::SchemaResolver>& schemaResolver,
     bool explain,
     Operation&& operation) {
-  auto resolver = orDefaultSchemaResolver(schemaResolver);
+  auto resolver = orDefaultSchemaResolver(schemaResolver, *metadataRegistry_);
   auto session = makeOptimizerSession(
       context,
       explain,
@@ -1858,11 +1875,13 @@ folly::coro::AsyncGenerator<velox::RowVectorPtr> co_drainQuery(
 connector::ConnectorContextPtr SqlQueryRunner::makeConnectorContext(
     std::string_view queryId,
     const RunOptions& options) const {
-  return connector::ConnectorContext::createProcessWide(
+  return std::make_shared<connector::ConnectorContext>(
       std::string(queryId),
       user_,
-      collectConnectorProperties(*sessionConfig_),
-      options.connectorStatWriterProvider);
+      collectConnectorProperties(*sessionConfig_, *metadataRegistry_),
+      options.connectorStatWriterProvider,
+      connectorRegistry_,
+      metadataRegistry_);
 }
 
 connector::ConnectorSessionPtr SqlQueryRunner::makeConnectorSession(
@@ -1968,8 +1987,8 @@ std::shared_ptr<connector::SchemaResolver> SqlQueryRunner::createTargetTable(
     const presto::CreateTableAsSelectStatement& ctas,
     bool explain) {
   auto table = createTable(context, ctas, explain);
-  auto schemaResolver = std::make_shared<connector::SchemaResolver>(
-      connector::ConnectorMetadataRegistry::global());
+  auto schemaResolver =
+      std::make_shared<connector::SchemaResolver>(*metadataRegistry_);
   schemaResolver->setTargetTable(ctas.connectorId(), ctas.tableName(), table);
   return schemaResolver;
 }
@@ -2000,7 +2019,8 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
       queryCtx.get(), optimizerPool_.get());
 
   auto history = std::make_unique<optimizer::VeloxHistory>();
-  schemaResolver = orDefaultSchemaResolver(std::move(schemaResolver));
+  schemaResolver =
+      orDefaultSchemaResolver(std::move(schemaResolver), *metadataRegistry_);
   auto runnerSession = std::make_shared<runner::RunnerSession>(
       context,
       options.componentStatWriterProvider(
