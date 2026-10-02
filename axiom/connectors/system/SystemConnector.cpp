@@ -862,12 +862,14 @@ velox::RowVectorPtr FunctionsDataSource::buildResults() {
 SystemConnector::SystemConnector(
     const std::string& id,
     const QueryInfoProvider* queryInfoProvider,
-    const SessionPropertiesProvider* sessionPropertiesProvider,
-    InformationSchema::TypeNameFormatter typeName)
+    std::shared_ptr<const SessionPropertiesProvider> sessionPropertiesProvider,
+    InformationSchema::TypeNameFormatter typeName,
+    const ConnectorMetadataRegistry::Registry& metadataRegistry)
     : Connector(id),
       queryInfoProvider_(queryInfoProvider),
-      sessionPropertiesProvider_(sessionPropertiesProvider),
-      typeName_(std::move(typeName)) {
+      sessionPropertiesProvider_(std::move(sessionPropertiesProvider)),
+      typeName_(std::move(typeName)),
+      metadataRegistry_{&metadataRegistry} {
   VELOX_CHECK(typeName_, "Type name formatter must be callable");
 }
 
@@ -891,6 +893,7 @@ std::unique_ptr<velox::connector::DataSource> SystemConnector::createDataSource(
         outputType,
         columnHandles,
         connectorQueryCtx->memoryPool(),
+        *metadataRegistry_,
         typeName_);
   }
 
@@ -902,7 +905,7 @@ std::unique_ptr<velox::connector::DataSource> SystemConnector::createDataSource(
     return std::make_unique<SessionPropertiesDataSource>(
         outputType,
         columnHandles,
-        sessionPropertiesProvider_,
+        sessionPropertiesProvider_.get(),
         connectorQueryCtx->memoryPool());
   }
 

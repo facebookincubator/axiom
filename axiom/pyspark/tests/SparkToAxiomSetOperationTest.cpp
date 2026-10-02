@@ -22,6 +22,7 @@
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/pyspark/SparkToAxiom.h"
 #include "axiom/pyspark/SparkVeloxConverter.h"
+#include "axiom/pyspark/tests/SparkToAxiomTestContext.h"
 #include "axiom/pyspark/third-party/protos/relations.grpc.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
 #include "velox/common/memory/Memory.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -41,9 +42,6 @@ registerTestConnector(const std::string& connectorId) {
   connector->addTable(
       "feature_table", velox::ROW({"primary_rid"}, {velox::BIGINT()}));
 
-  velox::connector::registerConnector(connector);
-  facebook::axiom::connector::ConnectorMetadataRegistry::global().insert(
-      connectorId, connector->metadata());
   return connector;
 }
 
@@ -58,12 +56,6 @@ class SparkToAxiomSetOperationTest : public ::testing::Test {
 
     // Set up test connector
     connector_ = registerTestConnector("test_connector");
-  }
-
-  void TearDown() override {
-    facebook::axiom::connector::ConnectorMetadataRegistry::global().erase(
-        connector_->connectorId());
-    velox::connector::unregisterConnector(connector_->connectorId());
   }
 
   std::shared_ptr<facebook::axiom::connector::TestConnector> connector_;
@@ -144,7 +136,11 @@ TEST_F(SparkToAxiomSetOperationTest, visitSetOperationUnion) {
       1);
 
   // Convert to Axiom
-  SparkToAxiom converter("test_connector", "default", pool_.get());
+  SparkToAxiom converter(
+      "test_connector",
+      "default",
+      pool_.get(),
+      SparkToAxiomTestContext::createConnectorContext(connector_));
   SparkPlanVisitorContext context;
   converter.SparkPlanVisitor::visit(unionRelation, context);
 
@@ -175,7 +171,11 @@ TEST_F(SparkToAxiomSetOperationTest, visitSetOperationUnionAll) {
       1);
 
   // Convert to Axiom
-  SparkToAxiom converter("test_connector", "default", pool_.get());
+  SparkToAxiom converter(
+      "test_connector",
+      "default",
+      pool_.get(),
+      SparkToAxiomTestContext::createConnectorContext(connector_));
   SparkPlanVisitorContext context;
   converter.SparkPlanVisitor::visit(unionAllRelation, context);
 
@@ -206,7 +206,11 @@ TEST_F(SparkToAxiomSetOperationTest, visitSetOperationIntersect) {
       1);
 
   // Convert to Axiom
-  SparkToAxiom converter("test_connector", "default", pool_.get());
+  SparkToAxiom converter(
+      "test_connector",
+      "default",
+      pool_.get(),
+      SparkToAxiomTestContext::createConnectorContext(connector_));
   SparkPlanVisitorContext context;
   converter.SparkPlanVisitor::visit(intersectRelation, context);
 
@@ -237,7 +241,11 @@ TEST_F(SparkToAxiomSetOperationTest, visitSetOperationExcept) {
       1);
 
   // Convert to Axiom
-  SparkToAxiom converter("test_connector", "default", pool_.get());
+  SparkToAxiom converter(
+      "test_connector",
+      "default",
+      pool_.get(),
+      SparkToAxiomTestContext::createConnectorContext(connector_));
   SparkPlanVisitorContext context;
   converter.SparkPlanVisitor::visit(exceptRelation, context);
 
@@ -281,7 +289,11 @@ TEST_F(SparkToAxiomSetOperationTest, visitSetOperationWithComplexInputs) {
       1);
 
   // Convert to Axiom
-  SparkToAxiom converter("test_connector", "default", pool_.get());
+  SparkToAxiom converter(
+      "test_connector",
+      "default",
+      pool_.get(),
+      SparkToAxiomTestContext::createConnectorContext(connector_));
   SparkPlanVisitorContext context;
   converter.SparkPlanVisitor::visit(finalRelation, context);
 

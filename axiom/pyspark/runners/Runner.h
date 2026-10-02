@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "axiom/connectors/ConnectorContext.h"
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -28,6 +29,7 @@ class Runner {
       const std::string& runId,
       facebook::axiom::optimizer::MultiFragmentPlanPtr plan,
       facebook::axiom::optimizer::FinishWrite finishWrite,
+      facebook::axiom::connector::ConnectorContextPtr connectorContext,
       std::shared_ptr<::facebook::velox::memory::MemoryPool> pool);
 
   virtual ~Runner() = default;
@@ -43,6 +45,8 @@ class Runner {
 
   facebook::axiom::optimizer::FinishWrite finishWrite_;
 
+  const facebook::axiom::connector::ConnectorContextPtr connectorContext_;
+
   std::shared_ptr<::facebook::velox::memory::MemoryPool> rootPool_;
 };
 
@@ -50,6 +54,7 @@ using TRunnerFactory = std::function<std::unique_ptr<Runner>(
     const std::string&,
     facebook::axiom::optimizer::MultiFragmentPlanPtr,
     facebook::axiom::optimizer::FinishWrite,
+    facebook::axiom::connector::ConnectorContextPtr,
     std::shared_ptr<::facebook::velox::memory::MemoryPool>)>;
 
 /// Registers a factory for a given runnerId.
@@ -62,6 +67,7 @@ std::unique_ptr<Runner> buildRunner(
     const std::string& runId,
     facebook::axiom::optimizer::MultiFragmentPlanPtr plan,
     facebook::axiom::optimizer::FinishWrite finishWrite,
+    facebook::axiom::connector::ConnectorContextPtr connectorContext,
     std::shared_ptr<::facebook::velox::memory::MemoryPool> pool);
 
 } // namespace axiom::collagen::runner

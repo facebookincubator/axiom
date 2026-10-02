@@ -150,7 +150,7 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
 
   axiom::runner::RunnerSessionPtr makeRunnerSession(std::string_view queryId) {
     // The runner and its connectors record into separate writers.
-    auto context = std::make_shared<axiom::connector::ConnectorContext>(
+    auto context = axiom::connector::ConnectorContext::createProcessWide(
         std::string(queryId),
         "test",
         axiom::connector::ConnectorProperties{},

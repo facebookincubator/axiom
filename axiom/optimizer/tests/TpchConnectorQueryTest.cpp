@@ -35,12 +35,16 @@ class TpchConnectorQueryTest : public QueryTestBase,
   void SetUp() override {
     useV2_ = GetParam();
     QueryTestBase::SetUp();
-    connectors_ = std::make_unique<Connectors>();
+    connectors_ = std::make_unique<Connectors>(
+        velox::connector::ConnectorRegistry::processWide(),
+        connector::ConnectorMetadataRegistry::processWide());
     connectors_->registerTpchConnector(kTpchConnectorId);
   }
 
   void TearDown() override {
     connectors_.reset();
+    connector::ConnectorMetadataRegistry::global().erase(kTpchConnectorId);
+    velox::connector::ConnectorRegistry::global().erase(kTpchConnectorId);
     QueryTestBase::TearDown();
   }
 

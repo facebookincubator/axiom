@@ -20,7 +20,9 @@
 #include <memory>
 #include <string>
 
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/pyspark/CollagenService.h"
+#include "velox/connectors/ConnectorRegistry.h"
 
 namespace axiom::collagen {
 
@@ -49,11 +51,25 @@ class CollagenMain {
   void registerTpchConnector();
   void registerTestConnector();
   void registerLocalHiveConnector();
+  // Installs an execution connector and its metadata as one catalog.
+  void registerCatalog(
+      std::shared_ptr<facebook::velox::connector::Connector> connector,
+      std::shared_ptr<facebook::axiom::connector::ConnectorMetadata> metadata);
 
   const std::string runnerId_;
   const std::string catalog_;
   const std::string schema_;
   const int port_;
+
+  // Execution connectors owned by this Collagen server.
+  const std::shared_ptr<facebook::velox::connector::ConnectorRegistry::Registry>
+      connectorRegistry_{
+          facebook::velox::connector::ConnectorRegistry::create()};
+  // Connector metadata paired with this server's execution connectors.
+  const std::shared_ptr<
+      facebook::axiom::connector::ConnectorMetadataRegistry::Registry>
+      metadataRegistry_{
+          facebook::axiom::connector::ConnectorMetadataRegistry::create()};
 
   std::unique_ptr<CollagenService> service_;
   std::unique_ptr<grpc::Server> server_;

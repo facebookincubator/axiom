@@ -61,7 +61,7 @@ class IndexLookupJoinTest : public QueryTestBase {
 
   // Plans `probe join lookup on probe.a = lookup.id`.
   optimizer::PlanAndStats planJoin() {
-    lp::PlanBuilder::Context context(kTestConnectorId, kDefaultSchema);
+    auto context = makePlanBuilderContext();
     auto logicalPlan = lp::PlanBuilder(context)
                            .tableScan("probe")
                            .join(

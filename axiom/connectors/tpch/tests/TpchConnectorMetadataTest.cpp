@@ -19,6 +19,7 @@
 #include <folly/init/Init.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "axiom/connectors/ConnectorContext.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
 
 #include "velox/connectors/tpch/TpchConnector.h"
@@ -40,7 +41,7 @@ class TpchConnectorMetadataTest : public ::testing::Test {
   }
 
   ConnectorSessionPtr makeSession() {
-    return std::make_shared<ConnectorSession>(
+    return ConnectorSession::createProcessWide(
         /*queryId=*/"test",
         /*user=*/"test",
         Properties{},

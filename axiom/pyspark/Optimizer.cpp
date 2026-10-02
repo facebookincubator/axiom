@@ -18,8 +18,6 @@
 #include "axiom/optimizer/OptimizerOptions.h"
 
 #include <folly/ScopeGuard.h>
-#include "axiom/connectors/ConnectorMetadata.h"
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/v2/Optimize.h"
@@ -56,8 +54,7 @@ facebook::axiom::connector::TablePtr createTable(
     const facebook::axiom::connector::ConnectorContextPtr& connectorContext,
     const facebook::axiom::logical_plan::TableWriteNode& writeNode,
     const std::string& connectorId) {
-  auto* metadata =
-      facebook::axiom::connector::ConnectorMetadata::metadata(connectorId);
+  auto metadata = connectorContext->metadata(connectorId);
 
   // Convert string options to velox::Variant options
   folly::F14FastMap<std::string, velox::Variant> options;
@@ -98,7 +95,8 @@ facebook::axiom::connector::TablePtr createTable(
 facebook::axiom::optimizer::PlanAndStats optimize(
     const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
     const std::string& connectorId,
-    velox::memory::MemoryPool* pool) {
+    velox::memory::MemoryPool* pool,
+    facebook::axiom::connector::ConnectorContextPtr connectorContext) {
   facebook::axiom::optimizer::OptimizerOptions optimizerOptions;
 
   // Set up thread local structures.
@@ -112,18 +110,14 @@ facebook::axiom::optimizer::PlanAndStats optimize(
   };
 
   auto queryCtx = velox::core::QueryCtx::create();
-  auto connectorContext = std::make_shared<
-      facebook::axiom::connector::ConnectorContext>(
-      queryCtx->queryId(),
-      /*user=*/"pyspark-optimizer",
-      facebook::axiom::connector::ConnectorProperties{},
-      facebook::axiom::connector::ConnectorContext::noopStatWriterProvider());
+  VELOX_CHECK_NOT_NULL(connectorContext);
+  connectorContext->attachTo(*queryCtx);
 
   // Fetch connector and set up schema resolver.
-  auto connector = velox::connector::getConnector(connectorId);
+  auto connector = connectorContext->connector(connectorId);
   auto schemaResolver =
       std::make_shared<facebook::axiom::connector::SchemaResolver>(
-          facebook::axiom::connector::ConnectorMetadataRegistry::global());
+          *connectorContext->metadataRegistry());
 
   // Check if this is a CREATE TABLE operation and set up schema resolver.
   if (auto* createTableNode = isCreateTableNode(logicalPlan)) {

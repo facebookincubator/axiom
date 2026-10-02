@@ -19,8 +19,11 @@
 #include <folly/io/async/AsyncSignalHandler.h>
 #include <grpcpp/grpcpp.h> // @manual=//grpc_fb/cpp:grpc
 #include <signal.h>
+#include <atomic>
 #include <string>
+#include <string_view>
 
+#include "axiom/connectors/ConnectorContext.h"
 #include "axiom/pyspark/third-party/protos/base.grpc.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryPool.h"
@@ -37,7 +40,12 @@ class CollagenService final
   CollagenService(
       std::string runnerId,
       std::string catalog,
-      std::string schema);
+      std::string schema,
+      std::shared_ptr<facebook::velox::connector::ConnectorRegistry::Registry>
+          connectorRegistry,
+      std::shared_ptr<
+          facebook::axiom::connector::ConnectorMetadataRegistry::Registry>
+          metadataRegistry);
 
   ~CollagenService() = default;
 
@@ -67,7 +75,12 @@ class CollagenService final
 
   PlanAndStats plan(
       const spark::connect::Plan& plan,
-      std::string& logicalPlanStr);
+      std::string& logicalPlanStr,
+      const facebook::axiom::connector::ConnectorContextPtr& connectorContext);
+
+  // Creates a query context backed by this service's registry pair.
+  facebook::axiom::connector::ConnectorContextPtr makeConnectorContext(
+      std::string_view sessionId);
 
   // Runner id (e.g., "local").
   const std::string runnerId_;
@@ -75,6 +88,15 @@ class CollagenService final
   const std::string catalog_;
   // Schema to prepend to table names (e.g., "tiny" for TPCH).
   const std::string schema_;
+  // Execution connectors owned by this service instance.
+  const std::shared_ptr<facebook::velox::connector::ConnectorRegistry::Registry>
+      connectorRegistry_;
+  // Connector metadata paired with this service's execution connectors.
+  const std::shared_ptr<
+      facebook::axiom::connector::ConnectorMetadataRegistry::Registry>
+      metadataRegistry_;
+  // Produces a distinct query identifier for each request in a Spark session.
+  std::atomic<uint64_t> nextQueryId_{0};
 
   using MemoryPool = facebook::velox::memory::MemoryPool;
 
