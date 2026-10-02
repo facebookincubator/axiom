@@ -16,6 +16,7 @@
 
 #include <folly/ScopeGuard.h>
 #include <folly/coro/BlockingWait.h>
+#include <glog/logging.h>
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/runner/LocalRunner.h"
@@ -180,14 +181,21 @@ std::unique_ptr<KeyFreq> runJoinSample(
   // Pull batches one at a time so sampling can stop early once it has enough
   // rows. blockingWait runs on the optimizer planning thread, not a Velox
   // executor thread.
-  auto generator = runner.execute();
-  // Early stop is "stop pulling, then co_close()". co_close() must run on every
-  // exit -- including when a pull throws -- so the runner is reaped before it
-  // is destroyed (its destructor asserts co_close() ran). co_close() does not
-  // throw, so this is safe during exception unwinding.
+  // Declare the cleanup guard before the generator so destruction stops
+  // consumption before co_close() reaps runner-owned resources. Cleanup must
+  // run on every exit, but its failure must not escape during unwinding.
   SCOPE_EXIT {
-    folly::coro::blockingWait(runner.co_close());
+    try {
+      folly::coro::blockingWait(runner.co_close());
+    } catch (const std::exception& exception) {
+      LOG(WARNING) << "Failed to close join sample runner: "
+                   << exception.what();
+    } catch (...) {
+      LOG(WARNING) << "Failed to close join sample runner with a non-standard "
+                      "exception";
+    }
   };
+  auto generator = runner.execute();
   while (auto rows = folly::coro::blockingWait(generator.next())) {
     const velox::RowVectorPtr& batch = *rows;
     rowCount += batch->size();

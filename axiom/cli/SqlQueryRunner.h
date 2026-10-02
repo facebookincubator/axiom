@@ -35,6 +35,10 @@
 #include "axiom/sql/presto/SqlStatement.h"
 #include "velox/common/file/TokenProvider.h"
 
+namespace folly {
+class Timekeeper;
+}
+
 namespace axiom::sql {
 
 /// Checks permissions before query execution. Throws on denial and may return
@@ -231,6 +235,10 @@ class SqlQueryRunner {
   bool supportsProgress() const {
     return progressScheduler_ != nullptr;
   }
+
+  /// Overrides the execution timekeeper for deterministic tests. Must be
+  /// called before starting a query.
+  void testingSetTimekeeper(std::shared_ptr<folly::Timekeeper> timekeeper);
 
   /// Initializes the runner with connectors, an optional permission check, an
   /// optional logical plan check that rejects plans the deployment cannot
@@ -764,6 +772,10 @@ class SqlQueryRunner {
   // Progress-polling scheduler (see constructor). Started idempotently before
   // each progress-reporting query.
   folly::FunctionScheduler* const progressScheduler_;
+
+  // Test override propagated to each runner. Null uses Folly's process
+  // timekeeper.
+  std::shared_ptr<folly::Timekeeper> timeoutTimekeeper_;
 };
 
 } // namespace axiom::sql

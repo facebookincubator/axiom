@@ -24,7 +24,6 @@
 #include <folly/coro/Coroutine.h>
 #include <folly/coro/Invoke.h>
 #include <folly/coro/Task.h>
-#include <folly/coro/Timeout.h>
 #include <folly/coro/WithCancellation.h>
 #include <folly/json.h>
 #include <folly/system/HardwareConcurrency.h>
@@ -244,6 +243,12 @@ SqlQueryRunner::SqlResult::SqlResult(std::vector<velox::RowVectorPtr> results)
 SqlQueryRunner::SqlResult::SqlResult(velox::RowTypePtr resultType)
     : resultType{std::move(resultType)} {
   VELOX_CHECK_NOT_NULL(this->resultType);
+}
+
+void SqlQueryRunner::testingSetTimekeeper(
+    std::shared_ptr<folly::Timekeeper> timekeeper) {
+  VELOX_CHECK_NOT_NULL(timekeeper);
+  timeoutTimekeeper_ = std::move(timekeeper);
 }
 
 void SqlQueryRunner::initialize(
@@ -1737,98 +1742,24 @@ int64_t executionCpuNanos(const runner::Runner& runner) {
   return cpuNs;
 }
 
-// Drives the runner under the awaiting scope's cancellation and an optional
-// deadline, yielding each result batch as it is produced and reaping via
-// co_close() once the stream ends. The deadline (folly::FutureTimeout) becomes
-// a VELOX_USER_FAIL; an external cancel re-raises folly::OperationCancelled for
-// co_run() to normalize; a genuine execution error propagates as itself.
-// A consumer that stops early must cancel via the token; silently destroying
-// this generator mid-stream skips the shielded reap and leaks the Velox task.
-// Finalized wall and Velox task CPU timings are recorded after the reap.
+// Drives the runner while recording finalized execution timing. Runner owns
+// deadline, cancellation, and reap semantics; this adapter only preserves the
+// CLI metrics when execution throws.
 folly::coro::AsyncGenerator<velox::RowVectorPtr> co_drainQuery(
     runner::Runner& runner,
     int64_t timeoutMicros,
     uint64_t& wallMicros,
     std::shared_ptr<velox::BaseRuntimeStatWriter> cliWriter) {
   std::exception_ptr error;
-  bool cancelled{false};
-  bool timedOut{false};
   {
     velox::MicrosecondTimer wallTimer(&wallMicros);
-    // Keeps the generator in this coroutine's frame so its AsyncGenerator
-    // producer (execute()) outlives the per-batch timeout and the shielded
-    // co_close() reap. External cancellation flows in ambiently through the
-    // awaiting scope's token.
-    auto generator = runner.execute();
-    // Absolute deadline for the whole drain: folly::coro::timeout can't wrap a
-    // loop that co_yields, so each next() is bounded by the time remaining,
-    // which still caps total execution time (matching the pre-streaming
-    // behavior).
-    std::optional<std::chrono::steady_clock::time_point> deadline;
-    if (timeoutMicros > 0) {
-      deadline = std::chrono::steady_clock::now() +
-          std::chrono::microseconds(timeoutMicros);
-    }
+    auto generator = runner.execute(timeoutMicros);
     try {
-      while (true) {
-        if (deadline) {
-          // folly::coro::timeout -> folly::futures::sleep takes microseconds,
-          // so round the remaining time up to microseconds once and reuse it
-          // for the guard and the pull. ceil (not duration_cast) avoids
-          // truncating a positive sub-microsecond remainder to zero, which
-          // would time out early.
-          const auto remaining = std::chrono::ceil<std::chrono::microseconds>(
-              *deadline - std::chrono::steady_clock::now());
-          if (remaining.count() <= 0) {
-            timedOut = true;
-            break;
-          }
-          auto batch =
-              co_await folly::coro::timeout(generator.next(), remaining);
-          if (!batch) {
-            break;
-          }
-          co_yield std::move(*batch);
-        } else {
-          auto batch = co_await generator.next();
-          if (!batch) {
-            break;
-          }
-          co_yield std::move(*batch);
-        }
+      while (auto batch = co_await generator.next()) {
+        co_yield std::move(*batch);
       }
-    } catch (const folly::FutureTimeout&) {
-      timedOut = true;
-    } catch (const folly::OperationCancelled&) {
-      cancelled = true;
     } catch (...) {
-      // Any failure (std::exception or not) still hits the shielded reap below,
-      // so capture it and follow the error path.
       error = std::current_exception();
-    }
-    // Reap regardless, shielded from the caller's cancellation so a
-    // cancelled scope still winds the run down. A reap failure must not
-    // mask the original stop reason: if the drain already timed out,
-    // cancelled, or failed, keep that and let the reap error be secondary.
-    try {
-      co_await folly::coro::co_withCancellation(
-          folly::CancellationToken{}, runner.co_close());
-    } catch (const std::exception& e) {
-      if (!timedOut && !cancelled && !error) {
-        error = std::current_exception();
-      } else {
-        LOG(WARNING) << "co_close() failed during reap, surfacing the "
-                        "original stop reason instead: "
-                     << e.what();
-      }
-    } catch (...) {
-      // A non-std exception must not mask the original stop reason either.
-      if (!timedOut && !cancelled && !error) {
-        error = std::current_exception();
-      } else {
-        LOG(WARNING) << "co_close() failed during reap with a non-standard "
-                        "exception, surfacing the original stop reason instead";
-      }
     }
   }
 
@@ -1838,16 +1769,6 @@ folly::coro::AsyncGenerator<velox::RowVectorPtr> co_drainQuery(
   cliWriter->addTiming(
       facebook::axiom::ComponentMetrics::kExecuteCpuNanos,
       std::chrono::nanoseconds(executionCpuNanos(runner)));
-  if (timedOut) {
-    VELOX_USER_FAIL(
-        "Query exceeded maximum time limit of {:.2f}s",
-        timeoutMicros / 1'000'000.0);
-  }
-  if (cancelled) {
-    // Re-raise after the shielded reap; co_run() normalizes it to the dedicated
-    // QueryCancelledError so every async path reports cancellation uniformly.
-    throw folly::OperationCancelled{};
-  }
   if (error) {
     std::rethrow_exception(error);
   }
@@ -2052,7 +1973,7 @@ std::shared_ptr<runner::LocalRunner> SqlQueryRunner::makeLocalRunner(
       options.componentStatWriterProvider(
           facebook::axiom::ComponentMetrics::kRunner),
       sessionConfig_->effectiveValues(kRunnerPrefix));
-  return std::make_shared<runner::LocalRunner>(
+  auto runner = std::make_shared<runner::LocalRunner>(
       std::move(runnerSession),
       planAndStats.plan,
       std::move(planAndStats.finishWrite),
@@ -2060,6 +1981,10 @@ std::shared_ptr<runner::LocalRunner> SqlQueryRunner::makeLocalRunner(
       std::make_shared<runner::ConnectorSplitSourceFactory>(),
       executorPool_,
       /*baseSpillDirectory=*/"");
+  if (timeoutTimekeeper_ != nullptr) {
+    runner->testingSetTimekeeper(timeoutTimekeeper_);
+  }
+  return runner;
 }
 
 folly::coro::AsyncGenerator<SqlQueryRunner::SqlResultChunk>

@@ -359,11 +359,11 @@ folly::coro::Task<velox::RowVectorPtr> LocalRunner::co_pull() {
   co_return nullptr;
 }
 
-folly::coro::AsyncGenerator<velox::RowVectorPtr> LocalRunner::execute() {
+folly::coro::AsyncGenerator<velox::RowVectorPtr> LocalRunner::executeImpl() {
   // Cancelling the awaiting scope cancels the tasks; the next moveNext() then
   // surfaces the task error. The callback may run on another thread, but
-  // cancelTasks() is safe from any thread. One registration covers the whole
-  // drain, including the write path below.
+  // cancelTasks() is safe from any thread. Runner supplies one stable token for
+  // the complete local result stream, including the write path below.
   const auto token = co_await folly::coro::co_current_cancellation_token;
   folly::CancellationCallback cancelCallback{token, [this] { cancelTasks(); }};
 
@@ -672,7 +672,7 @@ folly::coro::Task<void> LocalRunner::co_reap() {
   }
 }
 
-folly::coro::Task<void> LocalRunner::co_close() {
+folly::coro::Task<void> LocalRunner::co_closeImpl() {
   // Idempotent: a second close, or one after the co_runWrite() error path
   // already reaped, is a no-op.
   if (closed_) {

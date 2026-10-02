@@ -127,17 +127,6 @@ class LocalRunner : public Runner,
   LocalRunner(LocalRunner&&) = delete;
   LocalRunner& operator=(LocalRunner&&) = delete;
 
-  /// Execution starts lazily on the first pull of the returned generator, not
-  /// when execute() is called.
-  folly::coro::AsyncGenerator<velox::RowVectorPtr> execute() override;
-
-  /// Terminal wind-down: cancels any still-running work and reaps it (split
-  /// scope joined, tasks completed, final stats captured, pools released).
-  /// Awaited (never blocks the awaiting thread), so it is safe on a Velox
-  /// executor thread. Idempotent, and safe when execute() was never pulled
-  /// (state() == kInitialized): it just joins the empty split scope.
-  folly::coro::Task<void> co_close() override;
-
   /// Returns a list of fragments from the 'plan' specified in constructor
   /// sorted in topological order.
   ///
@@ -175,7 +164,14 @@ class LocalRunner : public Runner,
     return state_;
   }
 
+ protected:
+  // Cancels local tasks and reaps split generation, final stats, and pools.
+  folly::coro::Task<void> co_closeImpl() override;
+
  private:
+  // Produces the local result stream under Runner's stable cancellation token.
+  folly::coro::AsyncGenerator<velox::RowVectorPtr> executeImpl() override;
+
   // Fixed timeout for co_reap()'s task waits (stop running, then release
   // resources).
   static constexpr int32_t kReapTimeoutMicros = 1'000'000;

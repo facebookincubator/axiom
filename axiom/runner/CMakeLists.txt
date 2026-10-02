@@ -30,6 +30,7 @@ target_link_libraries(
   axiom_common
   axiom_optimizer_multifragment_plan
   axiom_connectors
+  Folly::folly
   velox_common_base
   velox_memory
   velox_hive_connector
