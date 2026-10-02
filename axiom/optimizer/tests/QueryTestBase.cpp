@@ -99,6 +99,21 @@ void QueryTestBase::configureTestConnector() {
   testConnector_->addTpchTables();
 }
 
+logical_plan::PlanBuilder::Context QueryTestBase::makePlanBuilderContext(
+    const std::string& defaultConnectorId,
+    const std::string& defaultSchema,
+    std::shared_ptr<velox::core::QueryCtx> queryCtx,
+    logical_plan::ExprResolver::FunctionRewriteHook hook) {
+  logical_plan::PlanBuilder::Context context{
+      defaultConnectorId, defaultSchema, std::move(queryCtx), std::move(hook)};
+  context.connectorContext = connector::ConnectorContext::createProcessWide(
+      getQueryCtx()->queryId(),
+      "test",
+      connectorSessionProperties_,
+      connectorStatWriterProvider());
+  return context;
+}
+
 void QueryTestBase::TearDown() {
   // If we mean to save the history of running the suite, move the local history
   // to its static location.
@@ -231,7 +246,7 @@ PlanCost QueryTestBase::optimizationCost(
       queryCtx.get(), optimizerPool_.get());
   connector::SchemaResolver schemaResolver{
       connector::ConnectorMetadataRegistry::global()};
-  auto connectorContext = std::make_shared<connector::ConnectorContext>(
+  auto connectorContext = connector::ConnectorContext::createProcessWide(
       queryCtx->queryId(),
       "test",
       connectorSessionProperties_,
@@ -272,7 +287,7 @@ void QueryTestBase::verifyOptimization(
       connector::ConnectorMetadataRegistry::global()};
   VeloxHistory history;
 
-  auto connectorContext = std::make_shared<connector::ConnectorContext>(
+  auto connectorContext = connector::ConnectorContext::createProcessWide(
       veloxQueryCtx->queryId(),
       "test",
       connectorSessionProperties_,
@@ -313,7 +328,7 @@ void QueryTestBase::verifyOptimization(
       veloxQueryCtx.get(), optimizerPool_.get());
   connector::SchemaResolver schemaResolver{
       connector::ConnectorMetadataRegistry::global()};
-  auto connectorContext = std::make_shared<connector::ConnectorContext>(
+  auto connectorContext = connector::ConnectorContext::createProcessWide(
       veloxQueryCtx->queryId(),
       "test",
       connectorSessionProperties_,
@@ -385,7 +400,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
     }
   };
 
-  auto connectorContext = std::make_shared<connector::ConnectorContext>(
+  auto connectorContext = connector::ConnectorContext::createProcessWide(
       queryCtx->queryId(),
       "test",
       connectorSessionProperties_,

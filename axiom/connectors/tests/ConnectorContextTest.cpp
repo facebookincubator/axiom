@@ -24,8 +24,11 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "axiom/connectors/tests/TestConnector.h"
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/memory/Memory.h"
+#include "velox/core/QueryCtx.h"
 
 namespace facebook::axiom::connector {
 namespace {
@@ -43,7 +46,9 @@ ConnectorContextPtr makeContext(
         ++*writerCalls;
         return std::shared_ptr<velox::BaseRuntimeStatWriter>(
             &writer, [](auto*) {});
-      });
+      },
+      velox::connector::ConnectorRegistry::create(),
+      ConnectorMetadataRegistry::create());
 }
 
 // Every caller in a query reaches a connector through one session.
@@ -133,7 +138,9 @@ TEST(ConnectorContextTest, sessionIsBuiltAfterAFailedAttempt) {
         }
         return std::shared_ptr<velox::BaseRuntimeStatWriter>(
             &writer, [](auto*) {});
-      });
+      },
+      velox::connector::ConnectorRegistry::create(),
+      ConnectorMetadataRegistry::create());
 
   VELOX_ASSERT_THROW(context->sessionFor("a"), "Writer unavailable");
 
@@ -143,8 +150,35 @@ TEST(ConnectorContextTest, sessionIsBuiltAfterAFailedAttempt) {
 // A context without a writer provider has no way to wire a session.
 TEST(ConnectorContextTest, contextRequiresAWriterProvider) {
   VELOX_ASSERT_THROW(
-      ConnectorContext("q1", "user", {}, nullptr),
+      ConnectorContext(
+          "q1",
+          "user",
+          {},
+          nullptr,
+          velox::connector::ConnectorRegistry::create(),
+          ConnectorMetadataRegistry::create()),
       "requires a stat writer provider");
+}
+
+TEST(ConnectorContextTest, contextRequiresBothRegistries) {
+  VELOX_ASSERT_THROW(
+      ConnectorContext(
+          "q1",
+          "user",
+          {},
+          ConnectorContext::noopStatWriterProvider(),
+          nullptr,
+          ConnectorMetadataRegistry::create()),
+      "requires a connector registry");
+  VELOX_ASSERT_THROW(
+      ConnectorContext(
+          "q1",
+          "user",
+          {},
+          ConnectorContext::noopStatWriterProvider(),
+          velox::connector::ConnectorRegistry::create(),
+          nullptr),
+      "requires a connector metadata registry");
 }
 
 // A provider that yields no writer fails rather than leaving a session unwired.
@@ -155,9 +189,70 @@ TEST(ConnectorContextTest, nullWriterFromProviderFails) {
       ConnectorProperties{},
       [](std::string_view) -> std::shared_ptr<velox::BaseRuntimeStatWriter> {
         return nullptr;
-      });
+      },
+      velox::connector::ConnectorRegistry::create(),
+      ConnectorMetadataRegistry::create());
   VELOX_ASSERT_THROW(
       context->sessionFor("a"), "Stat writer provider returned null");
+}
+
+TEST(ConnectorContextTest, registriesAreIsolatedPerEngine) {
+  auto firstConnectorRegistry = velox::connector::ConnectorRegistry::create();
+  auto firstMetadataRegistry = ConnectorMetadataRegistry::create();
+  auto secondConnectorRegistry = velox::connector::ConnectorRegistry::create();
+  auto secondMetadataRegistry = ConnectorMetadataRegistry::create();
+
+  auto firstConnector = std::make_shared<TestConnector>("catalog");
+  auto secondConnector = std::make_shared<TestConnector>("catalog");
+  firstConnectorRegistry->insert("catalog", firstConnector);
+  firstMetadataRegistry->insert("catalog", firstConnector->metadata());
+  secondConnectorRegistry->insert("catalog", secondConnector);
+  secondMetadataRegistry->insert("catalog", secondConnector->metadata());
+
+  auto first = std::make_shared<ConnectorContext>(
+      "q1",
+      "user",
+      ConnectorProperties{},
+      ConnectorContext::noopStatWriterProvider(),
+      firstConnectorRegistry,
+      firstMetadataRegistry);
+  auto second = std::make_shared<ConnectorContext>(
+      "q2",
+      "user",
+      ConnectorProperties{},
+      ConnectorContext::noopStatWriterProvider(),
+      secondConnectorRegistry,
+      secondMetadataRegistry);
+
+  EXPECT_EQ(first->connector("catalog"), firstConnector);
+  EXPECT_EQ(first->metadata("catalog"), firstConnector->metadata());
+  EXPECT_EQ(second->connector("catalog"), secondConnector);
+  EXPECT_EQ(second->metadata("catalog"), secondConnector->metadata());
+  EXPECT_EQ(first->sessionFor("catalog")->connector("catalog"), firstConnector);
+  EXPECT_EQ(
+      second->sessionFor("catalog")->metadata("catalog"),
+      secondConnector->metadata());
+}
+
+// Attaching a context makes both engine registries visible to Velox execution.
+TEST(ConnectorContextTest, attachToQueryContext) {
+  velox::memory::MemoryManager::testingSetInstance({});
+  velox::ConcurrentRuntimeStatWriter writer;
+  std::atomic<int32_t> writerCalls{0};
+  auto context = makeContext({}, &writerCalls, writer);
+  auto connector = std::make_shared<TestConnector>("catalog");
+  context->connectorRegistry()->insert("catalog", connector);
+  context->metadataRegistry()->insert("catalog", connector->metadata());
+  auto queryCtx = velox::core::QueryCtx::create();
+
+  context->attachTo(*queryCtx);
+
+  EXPECT_EQ(
+      velox::connector::ConnectorRegistry::tryGet(*queryCtx, "catalog"),
+      connector);
+  EXPECT_EQ(
+      ConnectorMetadataRegistry::tryGet(*queryCtx, "catalog"),
+      connector->metadata());
 }
 
 } // namespace

@@ -46,6 +46,11 @@ Registry& ConnectorMetadataRegistry::global() {
 }
 
 // static
+std::shared_ptr<Registry> ConnectorMetadataRegistry::processWide() {
+  return std::shared_ptr<Registry>{&global(), [](Registry*) {}};
+}
+
+// static
 std::shared_ptr<ConnectorMetadataRegistry::Registry>
 ConnectorMetadataRegistry::create(const Registry* parent) {
   return std::make_shared<Registry>(parent);

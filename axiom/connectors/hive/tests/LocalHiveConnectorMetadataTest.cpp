@@ -15,6 +15,7 @@
  */
 
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
+#include "axiom/connectors/ConnectorContext.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
@@ -126,7 +127,7 @@ class LocalHiveConnectorMetadataTest
   }
 
   static ConnectorSessionPtr makeSession() {
-    return std::make_shared<ConnectorSession>(
+    return ConnectorSession::createProcessWide(
         /*queryId=*/"q-test",
         /*user=*/"u-test",
         Properties{},

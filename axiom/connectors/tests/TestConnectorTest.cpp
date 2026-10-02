@@ -16,6 +16,7 @@
 
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/common/SchemaTableName.h"
+#include "axiom/connectors/ConnectorContext.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/session/BaseSession.h"
@@ -59,7 +60,7 @@ class TestConnectorTest : public ::testing::Test, public test::VectorTestBase {
   }
 
   ConnectorSessionPtr makeSession() {
-    return std::make_shared<ConnectorSession>(
+    return ConnectorSession::createProcessWide(
         /*queryId=*/"test",
         /*user=*/"test",
         Properties{},

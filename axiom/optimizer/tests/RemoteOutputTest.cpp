@@ -202,11 +202,10 @@ TEST_P(RemoteOutputTest, tableWrite) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   testConnector_->addTable("w", ROW({"a", "b"}, BIGINT()));
 
-  auto logicalPlan =
-      lp::PlanBuilder(lp::PlanBuilder::Context(kTestConnectorId, "default"))
-          .tableScan("t")
-          .tableWrite("w", lp::WriteKind::kInsert, {"a", "b"})
-          .build();
+  auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
+                         .tableScan("t")
+                         .tableWrite("w", lp::WriteKind::kInsert, {"a", "b"})
+                         .build();
 
   for (bool remoteOutput : {false, true}) {
     SCOPED_TRACE(remoteOutput ? "remoteOutput=true" : "remoteOutput=false");
