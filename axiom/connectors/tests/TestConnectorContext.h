@@ -30,7 +30,7 @@ inline ConnectorContextPtr makeTestContext(
     std::string_view queryId,
     std::string_view user = "test",
     ConnectorProperties properties = {}) {
-  return std::make_shared<ConnectorContext>(
+  return ConnectorContext::createProcessWide(
       std::string{queryId},
       std::string{user},
       std::move(properties),

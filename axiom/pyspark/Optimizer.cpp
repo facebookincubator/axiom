@@ -112,12 +112,13 @@ facebook::axiom::optimizer::PlanAndStats optimize(
   };
 
   auto queryCtx = velox::core::QueryCtx::create();
-  auto connectorContext = std::make_shared<
-      facebook::axiom::connector::ConnectorContext>(
-      queryCtx->queryId(),
-      /*user=*/"pyspark-optimizer",
-      facebook::axiom::connector::ConnectorProperties{},
-      facebook::axiom::connector::ConnectorContext::noopStatWriterProvider());
+  auto connectorContext =
+      facebook::axiom::connector::ConnectorContext::createProcessWide(
+          queryCtx->queryId(),
+          /*user=*/"pyspark-optimizer",
+          facebook::axiom::connector::ConnectorProperties{},
+          facebook::axiom::connector::ConnectorContext::
+              noopStatWriterProvider());
 
   // Fetch connector and set up schema resolver.
   auto connector = velox::connector::getConnector(connectorId);
