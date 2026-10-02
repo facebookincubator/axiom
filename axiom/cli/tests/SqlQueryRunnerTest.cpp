@@ -17,10 +17,12 @@
 #include "axiom/cli/SqlQueryRunner.h"
 #include <folly/CancellationToken.h>
 #include <folly/coro/BlockingWait.h>
+#include <folly/coro/GtestHelpers.h>
 #include <folly/coro/Task.h>
 #include <folly/coro/WithCancellation.h>
 #include <folly/dynamic.h>
 #include <folly/executors/FunctionScheduler.h>
+#include <folly/futures/ManualTimekeeper.h>
 #include <folly/init/Init.h>
 #include <folly/synchronization/Baton.h>
 #include <gmock/gmock.h>
@@ -131,28 +133,71 @@ TEST_F(SqlQueryRunnerTest, runSingleStatement) {
   }
 }
 
-TEST_F(SqlQueryRunnerTest, executionTimeout) {
-  // A six-way cross join over 25 rows produces 25^6 = ~244M rows, far more than
-  // can be processed within the 10ms deadline, and the max of the concatenated
-  // values cannot be short-circuited, so the run is still executing when the
-  // deadline elapses and fails with a timeout user error. A single worker keeps
-  // the plan to one fragment with no exchange: cancelling a multi-stage query
-  // can leave a LocalExchangeSource pinning its memory pool until process exit
-  // (the arbitrator then aborts), and a single-fragment plan avoids that.
-  testConnector_->addTable("t", ROW("s", VARCHAR()))
-      ->addData(makeRowVector({makeFlatVector<std::string>(
-          25, [](auto row) { return fmt::format("value_{:04d}", row); })}));
+CO_TEST_F(SqlQueryRunnerTest, executionTimeoutAfterFirstBatch) {
+  auto timekeeper = std::make_shared<folly::ManualTimekeeper>();
+  auto runner = makeRunner("timeout_after_batch");
+  runner->testingSetTimekeeper(timekeeper);
 
+  std::optional<QueryCompletionInfo> completion;
   SqlQueryRunner::RunOptions options;
-  options.timeoutMicros = 10'000; // 10ms
-  options.numWorkers = 1;
-  options.numDrivers = 1;
-  VELOX_ASSERT_THROW(
-      runner_->run(
-          "SELECT max(a.s || b.s || c.s || d.s || e.s || f.s) "
-          "FROM t a, t b, t c, t d, t e, t f",
-          options),
-      "exceeded maximum time limit");
+  options.timeoutMicros = 1'000'000;
+  options.onComplete = [&](const QueryCompletionInfo& info) {
+    completion = info;
+  };
+
+  auto generator = runner->co_run("SELECT 1", options);
+  auto first = co_await generator.next();
+  CO_ASSERT_TRUE(first.has_value());
+  CO_ASSERT_NE(first->batch, nullptr);
+  test::assertEqualVectors(
+      first->batch, makeRowVector({makeFlatVector<int32_t>({1})}));
+  EXPECT_FALSE(completion.has_value());
+  co_await folly::coro::co_reschedule_on_current_executor;
+  EXPECT_EQ(timekeeper->numScheduled(), 1);
+
+  timekeeper->advance(std::chrono::seconds(1));
+  co_await folly::coro::co_reschedule_on_current_executor;
+
+  auto result = co_await folly::coro::co_awaitTry(generator.next());
+  auto* error = result.tryGetExceptionObject<VeloxUserError>();
+  CO_ASSERT_NE(error, nullptr);
+  EXPECT_EQ(error->message(), "Query exceeded maximum time limit of 1.00s");
+
+  CO_ASSERT_TRUE(completion.has_value());
+  EXPECT_FALSE(completion->cancelled);
+  CO_ASSERT_TRUE(completion->errorInfo.has_value());
+  EXPECT_EQ(completion->errorInfo->message, error->what());
+}
+
+CO_TEST_F(SqlQueryRunnerTest, executionTimeoutAllowsCompleteStream) {
+  auto timekeeper = std::make_shared<folly::ManualTimekeeper>();
+  auto runner = makeRunner("timeout_complete_stream");
+  runner->testingSetTimekeeper(timekeeper);
+
+  std::optional<QueryCompletionInfo> completion;
+  SqlQueryRunner::RunOptions options;
+  options.timeoutMicros = 1'000'000;
+  options.onComplete = [&](const QueryCompletionInfo& info) {
+    completion = info;
+  };
+
+  auto generator = runner->co_run("SELECT 1", options);
+
+  auto first = co_await generator.next();
+  CO_ASSERT_TRUE(first.has_value());
+  CO_ASSERT_NE(first->batch, nullptr);
+  test::assertEqualVectors(
+      first->batch, makeRowVector({makeFlatVector<int32_t>({1})}));
+  EXPECT_FALSE(completion.has_value());
+  co_await folly::coro::co_reschedule_on_current_executor;
+  EXPECT_EQ(timekeeper->numScheduled(), 1);
+
+  EXPECT_FALSE((co_await generator.next()).has_value());
+
+  CO_ASSERT_TRUE(completion.has_value());
+  EXPECT_EQ(completion->numOutputRows, 1);
+  EXPECT_FALSE(completion->cancelled);
+  EXPECT_FALSE(completion->errorInfo.has_value());
 }
 
 TEST_F(SqlQueryRunnerTest, externalCancellation) {

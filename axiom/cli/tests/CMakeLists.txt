@@ -37,6 +37,7 @@ target_link_libraries(
   axiom_test_connector
   velox_exec_test_lib
   velox_vector_test_lib
+  Folly::folly
   GTest::gtest
   GTest::gmock
   re2::re2

@@ -47,6 +47,7 @@ if(AXIOM_BUILD_TESTING)
   target_link_libraries(
     axiom_runner_local_runner_test
     axiom_runner_tests_utils
+    Folly::folly
     velox_exec_test_lib
     velox_parse_parser
     velox_parse_expression
