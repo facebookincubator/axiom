@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "axiom/connectors/ConnectorContext.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/pyspark/SparkPlanVisitor.h"
 #include "axiom/pyspark/third-party/protos/relations.grpc.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
@@ -37,8 +38,17 @@ class SparkToAxiom : public SparkPlanVisitor {
   using PlanNodeIdGenerator = ::facebook::velox::core::PlanNodeIdGenerator;
   using MemoryPool = ::facebook::velox::memory::MemoryPool;
 
-  SparkToAxiom(std::string catalog, std::string schema, MemoryPool* pool)
-      : catalog_(std::move(catalog)), schema_(std::move(schema)), pool_(pool) {}
+  SparkToAxiom(
+      std::string catalog,
+      std::string schema,
+      MemoryPool* pool,
+      facebook::axiom::connector::ConnectorContextPtr connectorContext)
+      : catalog_(std::move(catalog)),
+        schema_(std::move(schema)),
+        pool_(pool),
+        connectorContext_(std::move(connectorContext)) {
+    VELOX_CHECK_NOT_NULL(connectorContext_);
+  }
 
   virtual ~SparkToAxiom() = default;
 
@@ -196,6 +206,8 @@ class SparkToAxiom : public SparkPlanVisitor {
       std::make_shared<PlanNodeIdGenerator>()};
 
   MemoryPool* pool_;
+
+  const facebook::axiom::connector::ConnectorContextPtr connectorContext_;
 
   /// Maintain mappings between the Spark Connect plan id and aliases to the
   /// Axiom logical plan created as the plan tree is traversed.

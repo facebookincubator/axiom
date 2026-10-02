@@ -21,9 +21,9 @@
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/pyspark/SparkToAxiom.h"
+#include "axiom/pyspark/tests/SparkToAxiomTestContext.h"
 #include "axiom/pyspark/third-party/protos/relations.grpc.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
 #include "velox/common/memory/Memory.h"
-#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 using namespace facebook;
@@ -38,30 +38,19 @@ class SparkToAxiomUnnestTest : public ::testing::Test {
     velox::memory::MemoryManager::testingSetInstance({});
 
     connectorId_ = "test-connector-unnest";
-    auto connector =
-        std::make_shared<facebook::axiom::connector::TestConnector>(
-            connectorId_);
-    connector->addTable(
+    connector_ = std::make_shared<facebook::axiom::connector::TestConnector>(
+        connectorId_);
+    connector_->addTable(
         "test_table_with_array",
         velox::ROW(
             {"id", "arr"}, {velox::BIGINT(), velox::ARRAY(velox::INTEGER())}));
-    connector->addTable(
+    connector_->addTable(
         "test_table_with_map",
         velox::ROW(
             {"id", "m"},
             {velox::BIGINT(), velox::MAP(velox::VARCHAR(), velox::INTEGER())}));
-    velox::connector::ConnectorRegistry::global().insert(
-        connectorId_, connector);
-    facebook::axiom::connector::ConnectorMetadataRegistry::global().insert(
-        connectorId_, connector->metadata());
 
     pool_ = velox::memory::memoryManager()->addLeafPool();
-  }
-
-  void TearDown() override {
-    facebook::axiom::connector::ConnectorMetadataRegistry::global().erase(
-        connectorId_);
-    velox::connector::ConnectorRegistry::global().erase(connectorId_);
   }
 
   // Builds a Project relation wrapping a table scan with the given generator
@@ -112,6 +101,7 @@ class SparkToAxiomUnnestTest : public ::testing::Test {
   }
 
   std::string connectorId_;
+  std::shared_ptr<facebook::axiom::connector::TestConnector> connector_;
   std::shared_ptr<velox::memory::MemoryPool> pool_;
 };
 
@@ -119,7 +109,11 @@ TEST_F(SparkToAxiomUnnestTest, explodeCreatesUnnestNode) {
   auto relation = buildProjectWithExplode(
       "test_table_with_array", "explode", "arr", {"elem"}, {"id"});
 
-  SparkToAxiom converter(connectorId_, "default", pool_.get());
+  SparkToAxiom converter(
+      connectorId_,
+      "default",
+      pool_.get(),
+      SparkToAxiomTestContext::createConnectorContext(connector_));
   SparkPlanVisitorContext context;
   converter.visit(relation, context);
 
@@ -163,7 +157,11 @@ TEST_F(SparkToAxiomUnnestTest, explodeWithoutAlias) {
   auto relation =
       buildProjectWithExplode("test_table_with_array", "explode", "arr", {});
 
-  SparkToAxiom converter(connectorId_, "default", pool_.get());
+  SparkToAxiom converter(
+      connectorId_,
+      "default",
+      pool_.get(),
+      SparkToAxiomTestContext::createConnectorContext(connector_));
   SparkPlanVisitorContext context;
   converter.visit(relation, context);
 
@@ -192,7 +190,11 @@ TEST_F(SparkToAxiomUnnestTest, explodeOuterThrowsNYI) {
   auto relation = buildProjectWithExplode(
       "test_table_with_array", "explode_outer", "arr", {"elem"});
 
-  SparkToAxiom converter(connectorId_, "default", pool_.get());
+  SparkToAxiom converter(
+      connectorId_,
+      "default",
+      pool_.get(),
+      SparkToAxiomTestContext::createConnectorContext(connector_));
   SparkPlanVisitorContext context;
   EXPECT_THROW(converter.visit(relation, context), std::exception);
 }
@@ -201,7 +203,11 @@ TEST_F(SparkToAxiomUnnestTest, posexplodeOuterThrowsNYI) {
   auto relation = buildProjectWithExplode(
       "test_table_with_array", "posexplode_outer", "arr", {"elem"});
 
-  SparkToAxiom converter(connectorId_, "default", pool_.get());
+  SparkToAxiom converter(
+      connectorId_,
+      "default",
+      pool_.get(),
+      SparkToAxiomTestContext::createConnectorContext(connector_));
   SparkPlanVisitorContext context;
   EXPECT_THROW(converter.visit(relation, context), std::exception);
 }
@@ -229,7 +235,11 @@ TEST_F(SparkToAxiomUnnestTest, multipleGeneratorsRejected) {
       ->mutable_unresolved_attribute()
       ->set_unparsed_identifier("arr");
 
-  SparkToAxiom converter(connectorId_, "default", pool_.get());
+  SparkToAxiom converter(
+      connectorId_,
+      "default",
+      pool_.get(),
+      SparkToAxiomTestContext::createConnectorContext(connector_));
   SparkPlanVisitorContext context;
   EXPECT_THROW(converter.visit(relation, context), std::exception);
 }
@@ -238,7 +248,11 @@ TEST_F(SparkToAxiomUnnestTest, mapExplodeWithMultiNameAlias) {
   auto relation = buildProjectWithExplode(
       "test_table_with_map", "explode", "m", {"k", "v"});
 
-  SparkToAxiom converter(connectorId_, "default", pool_.get());
+  SparkToAxiom converter(
+      connectorId_,
+      "default",
+      pool_.get(),
+      SparkToAxiomTestContext::createConnectorContext(connector_));
   SparkPlanVisitorContext context;
   converter.visit(relation, context);
 
@@ -269,7 +283,11 @@ TEST_F(SparkToAxiomUnnestTest, mapExplodeDefaultNames) {
   auto relation =
       buildProjectWithExplode("test_table_with_map", "explode", "m", {});
 
-  SparkToAxiom converter(connectorId_, "default", pool_.get());
+  SparkToAxiom converter(
+      connectorId_,
+      "default",
+      pool_.get(),
+      SparkToAxiomTestContext::createConnectorContext(connector_));
   SparkPlanVisitorContext context;
   converter.visit(relation, context);
 
@@ -301,7 +319,11 @@ TEST_F(SparkToAxiomUnnestTest, bareExplodeArrayWithAliasDropsInputColumns) {
   auto relation =
       buildProjectWithExplode("test_table_with_array", "explode", "arr", {"e"});
 
-  SparkToAxiom converter(connectorId_, "default", pool_.get());
+  SparkToAxiom converter(
+      connectorId_,
+      "default",
+      pool_.get(),
+      SparkToAxiomTestContext::createConnectorContext(connector_));
   SparkPlanVisitorContext context;
   converter.visit(relation, context);
 
@@ -323,7 +345,11 @@ TEST_F(SparkToAxiomUnnestTest, posexplodeWrapsWithMinusOne) {
   auto relation =
       buildProjectWithExplode("test_table_with_array", "posexplode", "arr", {});
 
-  SparkToAxiom converter(connectorId_, "default", pool_.get());
+  SparkToAxiom converter(
+      connectorId_,
+      "default",
+      pool_.get(),
+      SparkToAxiomTestContext::createConnectorContext(connector_));
   SparkPlanVisitorContext context;
   converter.visit(relation, context);
 
@@ -367,7 +393,11 @@ TEST_F(SparkToAxiomUnnestTest, posexplodeAliasOrderingIsPosThenElement) {
   auto relation = buildProjectWithExplode(
       "test_table_with_array", "posexplode", "arr", {"my_pos", "my_elem"});
 
-  SparkToAxiom converter(connectorId_, "default", pool_.get());
+  SparkToAxiom converter(
+      connectorId_,
+      "default",
+      pool_.get(),
+      SparkToAxiomTestContext::createConnectorContext(connector_));
   SparkPlanVisitorContext context;
   converter.visit(relation, context);
 

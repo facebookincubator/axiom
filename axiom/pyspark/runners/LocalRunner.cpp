@@ -48,11 +48,13 @@ class LocalRunner : public Runner {
       const std::string& runId,
       ::facebook::axiom::optimizer::MultiFragmentPlanPtr plan,
       ::facebook::axiom::optimizer::FinishWrite finishWrite,
+      ::facebook::axiom::connector::ConnectorContextPtr connectorContext,
       std::shared_ptr<::facebook::velox::memory::MemoryPool> pool)
       : Runner(
             runId,
             std::move(plan),
             std::move(finishWrite),
+            std::move(connectorContext),
             std::move(pool)) {
     aggregatePool_ = rootPool_->addAggregateChild("TestRunner");
     COLLAGEN_CHECK_NOT_NULL(aggregatePool_, "Failed to create aggregate pool");
@@ -82,18 +84,14 @@ std::vector<velox::RowVectorPtr> LocalRunner::execute(
       {}, // Connector configs
       velox::cache::AsyncDataCache::getInstance(),
       aggregatePool_);
+  connectorContext_->attachTo(*queryCtx);
 
   auto splitSourceFactory =
       std::make_shared<facebook::axiom::runner::ConnectorSplitSourceFactory>();
 
   auto runner = std::make_shared<facebook::axiom::runner::LocalRunner>(
       std::make_shared<facebook::axiom::runner::RunnerSession>(
-          facebook::axiom::connector::ConnectorContext::createProcessWide(
-              queryCtx->queryId(),
-              /*user=*/"pyspark-runner",
-              facebook::axiom::connector::ConnectorProperties{},
-              facebook::axiom::connector::ConnectorContext::
-                  noopStatWriterProvider()),
+          connectorContext_,
           std::make_shared<velox::NoopRuntimeStatWriter>(),
           facebook::axiom::runner::Properties{}),
       plan_,
@@ -115,9 +113,14 @@ void registerLocalRunnerFactory(const std::string& runnerId) {
       [](const std::string& runId,
          ::facebook::axiom::optimizer::MultiFragmentPlanPtr plan,
          ::facebook::axiom::optimizer::FinishWrite finishWrite,
+         ::facebook::axiom::connector::ConnectorContextPtr connectorContext,
          std::shared_ptr<::facebook::velox::memory::MemoryPool> pool) {
         return std::make_unique<LocalRunner>(
-            runId, std::move(plan), std::move(finishWrite), std::move(pool));
+            runId,
+            std::move(plan),
+            std::move(finishWrite),
+            std::move(connectorContext),
+            std::move(pool));
       });
 }
 

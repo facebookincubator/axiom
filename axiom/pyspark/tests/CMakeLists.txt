@@ -16,6 +16,7 @@ add_executable(
   collagen_spark_velox_converter_test
   SparkToAxiomLambdaTest.cpp
   SparkToAxiomSetOperationTest.cpp
+  SparkToAxiomTestContext.cpp
   SparkToAxiomUnnestTest.cpp
   SparkToAxiomWithColumnsRenamedTest.cpp
   SparkToAxiomWithColumnsTest.cpp
@@ -27,6 +28,7 @@ target_link_libraries(
   collagen_converter
   collagen_spark_velox_converter
   collagen_proto
+  axiom_connectors
   axiom_logical_plan
   axiom_test_connector
   velox_connector_registry

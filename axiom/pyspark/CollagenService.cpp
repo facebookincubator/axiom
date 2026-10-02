@@ -51,26 +51,49 @@ namespace axiom::collagen {
 CollagenService::CollagenService(
     std::string runnerId,
     std::string catalog,
-    std::string schema)
+    std::string schema,
+    std::shared_ptr<facebook::velox::connector::ConnectorRegistry::Registry>
+        connectorRegistry,
+    std::shared_ptr<
+        facebook::axiom::connector::ConnectorMetadataRegistry::Registry>
+        metadataRegistry)
     : runnerId_(std::move(runnerId)),
       catalog_(std::move(catalog)),
-      schema_(std::move(schema)) {
+      schema_(std::move(schema)),
+      connectorRegistry_(std::move(connectorRegistry)),
+      metadataRegistry_(std::move(metadataRegistry)) {
+  VELOX_CHECK_NOT_NULL(connectorRegistry_);
+  VELOX_CHECK_NOT_NULL(metadataRegistry_);
   if (rootPool_->reclaimer() == nullptr) {
     rootPool_->setReclaimer(facebook::velox::memory::MemoryReclaimer::create());
   }
 }
 
+facebook::axiom::connector::ConnectorContextPtr
+CollagenService::makeConnectorContext(std::string_view sessionId) {
+  auto queryId = "collagen:" + std::string{sessionId} + ":" +
+      std::to_string(nextQueryId_.fetch_add(1, std::memory_order_relaxed));
+  return std::make_shared<facebook::axiom::connector::ConnectorContext>(
+      std::move(queryId),
+      /*user=*/"collagen",
+      facebook::axiom::connector::ConnectorProperties{},
+      facebook::axiom::connector::ConnectorContext::noopStatWriterProvider(),
+      connectorRegistry_,
+      metadataRegistry_);
+}
+
 // In Spark Connect, Relation represents any execution plan node.
 PlanAndStats CollagenService::plan(
     const spark::connect::Plan& plan,
-    std::string& logicalPlanStr) {
+    std::string& logicalPlanStr,
+    const facebook::axiom::connector::ConnectorContextPtr& connectorContext) {
   auto startTime = std::chrono::high_resolution_clock::now();
 
   // TODO: just for debugging for now.
   LOG(INFO) << "Spark Connect logical plan:\n" << printSparkPlan(plan);
 
   LOG(INFO) << "Converting to Axiom plan:";
-  SparkToAxiom converter(catalog_, schema_, pool_.get());
+  SparkToAxiom converter(catalog_, schema_, pool_.get(), connectorContext);
   SparkPlanVisitorContext axiomContext;
   converter.visit(plan, axiomContext);
 
@@ -79,7 +102,7 @@ PlanAndStats CollagenService::plan(
 
   // Optimize it into a Velox physical plan.
   auto veloxPlanAndStats =
-      optimize(converter.planNode(), catalog_, pool_.get());
+      optimize(converter.planNode(), catalog_, pool_.get(), connectorContext);
 
   LOG(INFO) << "Generated Velox physical plan with "
             << veloxPlanAndStats.plan->fragments().size() << " fragments:\n"
@@ -105,9 +128,10 @@ grpc::Status CollagenService::ExecutePlan(
 
   std::string logicalPlanStr;
   PlanAndStats veloxPlanStats;
+  auto connectorContext = makeConnectorContext(request->session_id());
 
   try {
-    veloxPlanStats = plan(request->plan(), logicalPlanStr);
+    veloxPlanStats = plan(request->plan(), logicalPlanStr, connectorContext);
 
     if (veloxPlanStats.plan == nullptr) {
       return grpc::Status(
@@ -127,6 +151,7 @@ grpc::Status CollagenService::ExecutePlan(
       "Test",
       veloxPlanStats.plan,
       std::move(veloxPlanStats.finishWrite),
+      connectorContext,
       rootPool_);
   std::vector<velox::RowVectorPtr> results;
 
@@ -173,7 +198,10 @@ grpc::Status CollagenService::AnalyzePlan(
     std::string logicalPlanStr;
     switch (request->analyze_case()) {
       case spark::connect::AnalyzePlanRequest::kExplain:
-        veloxPlanStats = plan(request->explain().plan(), logicalPlanStr);
+        veloxPlanStats = plan(
+            request->explain().plan(),
+            logicalPlanStr,
+            makeConnectorContext(request->session_id()));
         break;
 
       default:

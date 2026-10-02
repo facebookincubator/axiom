@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "axiom/connectors/ConnectorContext.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/ToVelox.h"
 #include "velox/common/memory/Memory.h"
@@ -32,5 +33,6 @@ namespace axiom::collagen {
 ::facebook::axiom::optimizer::PlanAndStats optimize(
     const ::facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
     const std::string& connectorId,
-    ::facebook::velox::memory::MemoryPool* pool);
+    ::facebook::velox::memory::MemoryPool* pool,
+    ::facebook::axiom::connector::ConnectorContextPtr connectorContext);
 } // namespace axiom::collagen

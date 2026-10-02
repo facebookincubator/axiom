@@ -172,8 +172,7 @@ void SparkToAxiom::visit(
             << tableName.toString() << "'.";
 
   // Lookup table metadata on the connector.
-  auto* metadata =
-      facebook::axiom::connector::ConnectorMetadata::metadata(catalog_);
+  auto metadata = connectorContext_->metadata(catalog_);
   auto table = metadata->findTable(tableName);
 
   COLLAGEN_CHECK_NOT_NULL(table);
