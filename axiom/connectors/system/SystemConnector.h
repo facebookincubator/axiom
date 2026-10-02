@@ -220,16 +220,20 @@ struct SystemSplit : public velox::connector::ConnectorSplit {
 /// for reading live query metadata and session properties.
 class SystemConnector : public velox::connector::Connector {
  public:
+  /// @param sessionPropertiesProvider Supplies metadata.session_properties
+  /// rows. The connector retains it for its complete lifetime.
   /// @param typeName Spelling of the types information_schema.columns
-  /// reports. Defaults to 'InformationSchema::defaultTypeName'; a SQL dialect
-  /// whose clients read these names registers its own, e.g. Presto's
-  /// 'array(real)'.
+  /// reports. A SQL dialect whose clients read these names supplies its own
+  /// formatter, e.g. Presto's 'array(real)'.
+  /// @param metadataRegistry Catalog metadata exposed through
+  /// information_schema. The registry must outlive this connector.
   SystemConnector(
       const std::string& id,
       const QueryInfoProvider* queryInfoProvider,
-      const SessionPropertiesProvider* sessionPropertiesProvider = nullptr,
-      InformationSchema::TypeNameFormatter typeName =
-          InformationSchema::defaultTypeName);
+      std::shared_ptr<const SessionPropertiesProvider>
+          sessionPropertiesProvider,
+      InformationSchema::TypeNameFormatter typeName,
+      const ConnectorMetadataRegistry::Registry& metadataRegistry);
 
   ~SystemConnector() override = default;
 
@@ -252,8 +256,11 @@ class SystemConnector : public velox::connector::Connector {
 
  private:
   const QueryInfoProvider* queryInfoProvider_;
-  const SessionPropertiesProvider* sessionPropertiesProvider_;
+  const std::shared_ptr<const SessionPropertiesProvider>
+      sessionPropertiesProvider_;
   const InformationSchema::TypeNameFormatter typeName_;
+  // Owned by the same engine registries and outlives this connector.
+  const ConnectorMetadataRegistry::Registry* const metadataRegistry_;
 };
 
 } // namespace facebook::axiom::connector::system

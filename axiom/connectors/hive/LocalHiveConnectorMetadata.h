@@ -71,7 +71,8 @@ class LocalHiveConnectorMetadata;
 
 class LocalHiveSplitManager : public ConnectorSplitManager {
  public:
-  explicit LocalHiveSplitManager(LocalHiveConnectorMetadata* /* metadata */) {}
+  explicit LocalHiveSplitManager(LocalHiveConnectorMetadata* metadata)
+      : metadata_{metadata} {}
 
   folly::coro::Task<std::vector<PartitionHandlePtr>> co_listPartitions(
       const ConnectorSessionPtr& session,
@@ -83,6 +84,10 @@ class LocalHiveSplitManager : public ConnectorSplitManager {
       const std::vector<PartitionHandlePtr>& partitions,
       const std::shared_ptr<PartitionType>& partitionType,
       std::optional<double> samplePercentage) override;
+
+ private:
+  // Points to the metadata object that owns this split manager.
+  LocalHiveConnectorMetadata* const metadata_;
 };
 
 // Write-time stats for a single partition (or the whole table if
@@ -117,6 +122,7 @@ class LocalHiveTableLayout : public HiveTableLayout {
       std::vector<const Column*> hivePartitionColumns,
       velox::dwio::common::FileFormat fileFormat,
       std::shared_ptr<HiveMetadataConfig> hiveMetadataConfig,
+      std::shared_ptr<velox::connector::ConnectorQueryCtx> connectorQueryCtx,
       std::unordered_map<std::string, std::string> serdeParameters = {})
       : HiveTableLayout(
             label,
@@ -131,6 +137,7 @@ class LocalHiveTableLayout : public HiveTableLayout {
             std::move(hivePartitionColumns),
             fileFormat),
         hiveMetadataConfig_(std::move(hiveMetadataConfig)),
+        connectorQueryCtx_(std::move(connectorQueryCtx)),
         serdeParameters_(std::move(serdeParameters)) {}
 
   bool supportsSampling() const override {
@@ -201,6 +208,8 @@ class LocalHiveTableLayout : public HiveTableLayout {
  private:
   // Configuration for local Hive metadata.
   std::shared_ptr<HiveMetadataConfig> hiveMetadataConfig_;
+  // Keeps the connector memory pool alive for metadata sampling reads.
+  std::shared_ptr<velox::connector::ConnectorQueryCtx> connectorQueryCtx_;
   std::vector<std::unique_ptr<const FileInfo>> files_;
   std::vector<std::unique_ptr<const FileInfo>> ownedFiles_;
   // Per-partition (or per-table for unpartitioned) write-time stats loaded

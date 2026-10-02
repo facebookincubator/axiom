@@ -19,7 +19,6 @@
 #include <string>
 #include <vector>
 
-#include "axiom/connectors/ConnectorMetadata.h"
 #include "velox/common/ScopedRegistry.h"
 
 namespace facebook::velox::core {
@@ -27,6 +26,8 @@ class QueryCtx;
 } // namespace facebook::velox::core
 
 namespace facebook::axiom::connector {
+
+class ConnectorMetadata;
 
 /// Manages connector metadata registration and lookup. All methods are
 /// thread-safe.
@@ -50,6 +51,11 @@ class ConnectorMetadataRegistry {
 
   /// Return the global registry (root scope).
   static Registry& global();
+
+  /// Return shared access to the process-wide global registry. The registry
+  /// has process lifetime; the shared pointer only carries that lifetime into
+  /// APIs that also accept engine-owned registries.
+  static std::shared_ptr<Registry> processWide();
 
   /// Create a per-query registry. If 'parent' is provided, lookups fall back
   /// to it. Pass nullptr for isolation mode (no fallback).

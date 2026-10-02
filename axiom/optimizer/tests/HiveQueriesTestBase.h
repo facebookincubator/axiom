@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "axiom/connectors/ConnectorContext.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
@@ -55,7 +56,7 @@ class HiveQueriesTestBase : public QueryTestBase {
   static void TearDownTestCase();
 
   static connector::ConnectorSessionPtr makeSession() {
-    return std::make_shared<connector::ConnectorSession>(
+    return connector::ConnectorSession::createProcessWide(
         /*queryId=*/"test",
         /*user=*/"test",
         connector::Properties{},

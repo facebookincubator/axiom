@@ -30,12 +30,14 @@
 #include "axiom/cli/common/ComponentMetrics.h"
 #include "axiom/cli/common/QueryRuntimeStats.h"
 #include "axiom/cli/tests/SqlQueryRunnerTestBase.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/runner/QueryProgress.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -108,6 +110,45 @@ class SqlQueryRunnerTest : public SqlQueryRunnerTestBase {
         expectedDefault);
   }
 };
+
+// The system catalog retains the session config for the connector's lifetime.
+TEST_F(SqlQueryRunnerTest, configLifetime) {
+  std::weak_ptr<const facebook::axiom::SessionConfig> sessionConfig;
+  std::shared_ptr<facebook::velox::connector::ConnectorRegistry::Registry>
+      connectorRegistry;
+  std::shared_ptr<
+      facebook::axiom::connector::ConnectorMetadataRegistry::Registry>
+      metadataRegistry;
+  {
+    auto runner = std::make_unique<SqlQueryRunner>("test_user");
+    facebook::axiom::Connectors connectors{
+        runner->connectorRegistry(), runner->metadataRegistry()};
+    runner->initialize(
+        [&]() {
+          auto connector = connectors.registerTestConnector("lifetime_test");
+          return std::make_pair(
+              connector->connectorId(),
+              std::string(
+                  facebook::axiom::connector::TestConnector::kDefaultSchema));
+        },
+        [&](auto config) {
+          sessionConfig = config;
+          connectors.registerSystemConnector(std::move(config));
+        });
+
+    EXPECT_FALSE(sessionConfig.expired());
+    EXPECT_NE(runner->metadataRegistry()->find("system"), nullptr);
+    connectorRegistry = runner->connectorRegistry();
+    metadataRegistry = runner->metadataRegistry();
+  }
+
+  // The retained connector still owns its provider, which owns the session
+  // config, after both the registrar and runner have been destroyed.
+  EXPECT_FALSE(sessionConfig.expired());
+  connectorRegistry->clear();
+  metadataRegistry->clear();
+  EXPECT_TRUE(sessionConfig.expired());
+}
 
 TEST_F(SqlQueryRunnerTest, runSingleStatement) {
   {
@@ -1288,8 +1329,9 @@ TEST_F(SqlQueryRunnerTest, connectorProperties) {
 
 TEST_F(SqlQueryRunnerTest, addColumn) {
   auto findTable = [&]() {
-    auto metadata = facebook::axiom::connector::ConnectorMetadataRegistry::get(
-        testConnector_->connectorId());
+    auto metadata =
+        runner_->metadataRegistry()->find(testConnector_->connectorId());
+    VELOX_CHECK_NOT_NULL(metadata);
     return metadata->findTable({"default", "t"});
   };
 

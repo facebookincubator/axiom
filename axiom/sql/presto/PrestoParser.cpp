@@ -25,8 +25,8 @@
 #include <span>
 #include <unordered_set>
 #include "axiom/common/CatalogSchemaTableName.h"
+#include "axiom/connectors/ConnectorContext.h"
 #include "axiom/connectors/ConnectorMetadata.h"
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/system/InformationSchema.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/sql/presto/ColumnsExpansion.h"
@@ -336,7 +336,8 @@ core::ExprPtr replaceInputs(
 lp::ExprResolver::SqlFunctionResolver makeSqlFunctionResolver(
     std::string user,
     std::function<std::shared_ptr<Statement>(std::string_view)> parseSql,
-    const TypeCoercer* coercer);
+    const TypeCoercer* coercer,
+    facebook::axiom::connector::ConnectorContextPtr connectorContext);
 
 class RelationPlanner : public AstVisitor {
  public:
@@ -346,12 +347,14 @@ class RelationPlanner : public AstVisitor {
       const std::string& defaultSchema,
       const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
           std::string_view /*sql*/)>& parseSql,
+      facebook::axiom::connector::ConnectorContextPtr connectorContext,
       const ParserOptions& options = {})
       : context_{makePrestoContext(
             user,
             defaultConnectorId,
             defaultSchema,
-            parseSql)},
+            parseSql,
+            std::move(connectorContext))},
         defaultSchema_{defaultSchema},
         parseSql_{parseSql},
         user_{std::move(user)},
@@ -363,7 +366,8 @@ class RelationPlanner : public AstVisitor {
       const std::string& defaultConnectorId,
       const std::string& defaultSchema,
       const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
-          std::string_view /*sql*/)>& parseSql) {
+          std::string_view /*sql*/)>& parseSql,
+      facebook::axiom::connector::ConnectorContextPtr connectorContext) {
     lp::PlanBuilder::Context ctx{
         defaultConnectorId,
         defaultSchema,
@@ -372,8 +376,9 @@ class RelationPlanner : public AstVisitor {
         std::make_shared<lp::ThrowingSqlExpressionsParser>(),
         &::facebook::velox::functions::prestosql::typeCoercer()};
     ctx.identifierCanonicalizer = &canonicalizeName;
-    ctx.sqlFunctionResolver =
-        makeSqlFunctionResolver(user, parseSql, ctx.coercer);
+    ctx.connectorContext = std::move(connectorContext);
+    ctx.sqlFunctionResolver = makeSqlFunctionResolver(
+        user, parseSql, ctx.coercer, ctx.connectorContext);
     return ctx;
   }
 
@@ -794,8 +799,7 @@ class RelationPlanner : public AstVisitor {
         defaultSchema_,
         options_.informationSchemaConnectorId);
 
-    auto metadata =
-        facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId);
+    auto metadata = context_.connectorContext->metadata(connectorId);
 
     if (metadata->findTable(connectorTable) != nullptr) {
       // Drop display names captured from a sibling FROM relation so
@@ -1966,6 +1970,7 @@ class RelationPlanner : public AstVisitor {
         return toSortingKey(expr, options);
       },
       options_,
+      context_.connectorContext,
       [this](const std::string& qualifier, const std::string& name) {
         // Only canonicalize if the qualifier resolves as a table alias (not a
         // struct field dereference) and the unqualified name is unambiguous.
@@ -2148,7 +2153,8 @@ namespace {
 core::ExprPtr parseFunctionBody(
     const std::string& user,
     const std::function<std::shared_ptr<Statement>(std::string_view)>& parseSql,
-    const std::string& body) {
+    const std::string& body,
+    facebook::axiom::connector::ConnectorContextPtr connectorContext) {
   auto statement = parseSql(fmt::format("SELECT {}", body));
   auto* query = statement->as<Query>();
   VELOX_USER_CHECK_NOT_NULL(query, "SQL function body is not an expression");
@@ -2164,7 +2170,11 @@ core::ExprPtr parseFunctionBody(
       user,
       /*subqueryPlanner=*/nullptr,
       /*sortingKeyResolver=*/nullptr,
-      ParserOptions{}};
+      ParserOptions{},
+      std::move(connectorContext),
+      /*shouldDropQualifier=*/nullptr,
+      /*columnResolver=*/nullptr,
+      /*relationQualifierResolver=*/nullptr};
   return exprPlanner.toExpr(column->expression()).expr();
 }
 
@@ -2292,10 +2302,14 @@ SqlFunctionDefinitionPtr resolveSqlFunctionOverload(
 lp::ExprResolver::SqlFunctionResolver makeSqlFunctionResolver(
     std::string user,
     std::function<std::shared_ptr<Statement>(std::string_view)> parseSql,
-    const TypeCoercer* coercer) {
+    const TypeCoercer* coercer,
+    facebook::axiom::connector::ConnectorContextPtr connectorContext) {
   VELOX_CHECK_NOT_NULL(
       coercer, "A coercer is required to inline SQL functions");
-  return [user = std::move(user), parseSql = std::move(parseSql), coercer](
+  return [user = std::move(user),
+          parseSql = std::move(parseSql),
+          coercer,
+          connectorContext = std::move(connectorContext)](
              const std::string& name, const std::vector<TypePtr>& argTypes)
              -> std::optional<lp::ExprResolver::ResolvedSqlFunction> {
     VELOX_CHECK(!name.empty(), "Function call has an empty name");
@@ -2311,8 +2325,7 @@ lp::ExprResolver::SqlFunctionResolver makeSqlFunctionResolver(
         "Qualified function name must be catalog.schema.function: {}",
         name.substr(1));
 
-    auto metadata =
-        facebook::axiom::connector::ConnectorMetadataRegistry::tryGet(parts[0]);
+    auto metadata = connectorContext->tryMetadata(parts[0]);
     VELOX_USER_CHECK_NOT_NULL(metadata, "Catalog not found: {}", parts[0]);
 
     auto overloads =
@@ -2328,7 +2341,8 @@ lp::ExprResolver::SqlFunctionResolver makeSqlFunctionResolver(
     resolved.argumentNames = definition.argumentNames;
     resolved.argumentTypes = definition.argumentTypes;
     resolved.returnType = definition.returnType;
-    resolved.body = parseFunctionBody(user, parseSql, definition.body);
+    resolved.body =
+        parseFunctionBody(user, parseSql, definition.body, connectorContext);
     if (definition.defaultNullBehavior) {
       resolved.nullWrapper = wrapWithNullGuard;
     }
@@ -2338,12 +2352,17 @@ lp::ExprResolver::SqlFunctionResolver makeSqlFunctionResolver(
 
 lp::ExprPtr resolveSqlExpression(
     const std::string& user,
-    const ExpressionPtr& expr) {
+    const ExpressionPtr& expr,
+    facebook::axiom::connector::ConnectorContextPtr connectorContext) {
   ExpressionPlanner exprPlanner{
       user,
       /*subqueryPlanner=*/nullptr,
       /*sortingKeyResolver=*/nullptr,
-      ParserOptions{}};
+      ParserOptions{},
+      std::move(connectorContext),
+      /*shouldDropQualifier=*/nullptr,
+      /*columnResolver=*/nullptr,
+      /*relationQualifierResolver=*/nullptr};
 
   auto plan = lp::PlanBuilder()
                   .values(ROW({}), {Variant::row({})})
@@ -2466,12 +2485,12 @@ SqlStatementPtr parseExplain(
 static facebook::axiom::connector::TablePtr findTable(
     const QualifiedName& name,
     const std::string& defaultConnectorId,
-    const std::string& defaultSchema) {
+    const std::string& defaultSchema,
+    const facebook::axiom::connector::ConnectorContextPtr& connectorContext) {
   const auto [connectorId, connectorTable] =
       toConnectorTable(name, defaultConnectorId, defaultSchema);
 
-  auto metadata =
-      facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId);
+  auto metadata = connectorContext->metadata(connectorId);
 
   auto table = metadata->findTable(connectorTable);
 
@@ -2489,10 +2508,10 @@ static facebook::axiom::connector::TablePtr findTable(
 static facebook::axiom::connector::TablePtr findTable(
     const QualifiedName& name,
     const std::string& connectorId,
-    const facebook::axiom::SchemaTableName& connectorTable) {
+    const facebook::axiom::SchemaTableName& connectorTable,
+    const facebook::axiom::connector::ConnectorContextPtr& connectorContext) {
   auto table =
-      facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId)
-          ->findTable(connectorTable);
+      connectorContext->metadata(connectorId)->findTable(connectorTable);
   AXIOM_PRESTO_SEMANTIC_CHECK(
       table != nullptr,
       name.location(),
@@ -2518,9 +2537,9 @@ lp::ExprApi makeLikeExpr(
 
 SqlStatementPtr parseShowCatalogs(
     const ShowCatalogs& showCatalogs,
-    const std::string& defaultConnectorId) {
-  const auto connectorIds =
-      facebook::axiom::connector::ConnectorMetadataRegistry::allMetadataIds();
+    const std::string& defaultConnectorId,
+    const facebook::axiom::connector::ConnectorContextPtr& connectorContext) {
+  const auto connectorIds = connectorContext->metadataIds();
 
   std::vector<Variant> data;
   data.reserve(connectorIds.size());
@@ -2529,6 +2548,7 @@ SqlStatementPtr parseShowCatalogs(
   }
 
   lp::PlanBuilder::Context ctx(defaultConnectorId);
+  ctx.connectorContext = connectorContext;
   lp::PlanBuilder builder(ctx);
   builder.values(
       ROW({"catalog_name", "connector_id", "connector_name"}, VARCHAR()),
@@ -2548,12 +2568,12 @@ SqlStatementPtr parseShowCatalogs(
 SqlStatementPtr parseShowColumns(
     const ShowColumns& showColumns,
     const std::string& defaultConnectorId,
-    const std::string& defaultSchema) {
+    const std::string& defaultSchema,
+    const facebook::axiom::connector::ConnectorContextPtr& connectorContext) {
   const auto [connectorId, connectorTable] =
       toConnectorTable(*showColumns.table(), defaultConnectorId, defaultSchema);
 
-  const auto metadata =
-      facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId);
+  const auto metadata = connectorContext->metadata(connectorId);
   facebook::velox::RowTypePtr schema;
   if (const auto table = metadata->findTable(connectorTable)) {
     schema = table->type();
@@ -2575,6 +2595,7 @@ SqlStatementPtr parseShowColumns(
   }
 
   lp::PlanBuilder::Context ctx(defaultConnectorId);
+  ctx.connectorContext = connectorContext;
   return std::make_shared<SelectStatement>(
       lp::PlanBuilder(ctx)
           .values(ROW({"column", "type"}, VARCHAR()), data)
@@ -2625,14 +2646,15 @@ std::string variantToSql(const Variant& value) {
 SqlStatementPtr parseShowCreateTable(
     const ShowCreateTable& showCreateTable,
     const std::string& defaultConnectorId,
-    const std::string& defaultSchema) {
+    const std::string& defaultSchema,
+    const facebook::axiom::connector::ConnectorContextPtr& connectorContext) {
   using facebook::velox::PrestoTypes;
 
   const auto [connectorId, schemaTableName] = toConnectorTable(
       *showCreateTable.name(), defaultConnectorId, defaultSchema);
 
-  const auto table =
-      findTable(*showCreateTable.name(), connectorId, schemaTableName);
+  const auto table = findTable(
+      *showCreateTable.name(), connectorId, schemaTableName, connectorContext);
   const auto& schema = table->type();
   const auto& options = table->options();
 
@@ -2685,13 +2707,13 @@ SqlStatementPtr parseShowCreateTable(
 SqlStatementPtr parseShowCreateView(
     const ShowCreateView& showCreateView,
     const std::string& defaultConnectorId,
-    const std::string& defaultSchema) {
+    const std::string& defaultSchema,
+    const facebook::axiom::connector::ConnectorContextPtr& connectorContext) {
   const auto [connectorId, schemaTableName] = toConnectorTable(
       *showCreateView.name(), defaultConnectorId, defaultSchema);
 
   const auto view =
-      facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId)
-          ->findView(schemaTableName);
+      connectorContext->metadata(connectorId)->findView(schemaTableName);
   AXIOM_PRESTO_SEMANTIC_CHECK(
       view != nullptr,
       showCreateView.name()->location(),
@@ -2717,11 +2739,13 @@ SqlStatementPtr parseShowCreateView(
 SqlStatementPtr parseShowStats(
     const ShowStats& showStats,
     const std::string& defaultConnectorId,
-    const std::string& defaultSchema) {
+    const std::string& defaultSchema,
+    const facebook::axiom::connector::ConnectorContextPtr& connectorContext) {
   const auto [connectorId, connectorTable] =
       toConnectorTable(*showStats.table(), defaultConnectorId, defaultSchema);
 
-  const auto table = findTable(*showStats.table(), connectorId, connectorTable);
+  const auto table = findTable(
+      *showStats.table(), connectorId, connectorTable, connectorContext);
   const auto schema = table->type();
 
   const auto tableNumRows = table->numRows();
@@ -2764,6 +2788,7 @@ SqlStatementPtr parseShowStats(
   }
 
   lp::PlanBuilder::Context ctx(defaultConnectorId);
+  ctx.connectorContext = connectorContext;
   return std::make_shared<SelectStatement>(
       lp::PlanBuilder(ctx)
           .values(ShowStatsBuilder::outputType(), builder.rows())
@@ -2778,7 +2803,8 @@ SqlStatementPtr parseShowStats(
 
 SqlStatementPtr parseShowFunctions(
     const ShowFunctions& showFunctions,
-    const std::string& defaultConnectorId) {
+    const std::string& defaultConnectorId,
+    const facebook::axiom::connector::ConnectorContextPtr& connectorContext) {
   std::vector<Variant> rows;
 
   auto const& allScalarFunctions = getFunctionSignatures();
@@ -2824,6 +2850,7 @@ SqlStatementPtr parseShowFunctions(
   }
 
   lp::PlanBuilder::Context ctx(defaultConnectorId);
+  ctx.connectorContext = connectorContext;
   lp::PlanBuilder builder(ctx);
   builder.values(
       ROW(
@@ -2862,12 +2889,12 @@ SqlStatementPtr parseInsert(
     const std::string& defaultConnectorId,
     const std::string& defaultSchema,
     const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
-        std::string_view /*sql*/)>& parseSql) {
+        std::string_view /*sql*/)>& parseSql,
+    facebook::axiom::connector::ConnectorContextPtr connectorContext) {
   const auto [connectorId, connectorTable] =
       toConnectorTable(*insert.target(), defaultConnectorId, defaultSchema);
 
-  auto insertMetadata =
-      facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId);
+  auto insertMetadata = connectorContext->metadata(connectorId);
 
   const auto table = insertMetadata->findTable(connectorTable);
 
@@ -2892,7 +2919,8 @@ SqlStatementPtr parseInsert(
     }
   }
 
-  RelationPlanner planner(user, defaultConnectorId, defaultSchema, parseSql);
+  RelationPlanner planner(
+      user, defaultConnectorId, defaultSchema, parseSql, connectorContext);
   insert.query()->accept(&planner);
 
   auto inputColumns = planner.builder().findOrAssignOutputNames();
@@ -2921,15 +2949,21 @@ SqlStatementPtr parseDelete(
     const std::string& defaultConnectorId,
     const std::string& defaultSchema,
     const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
-        std::string_view /*sql*/)>& parseSql) {
+        std::string_view /*sql*/)>& parseSql,
+    facebook::axiom::connector::ConnectorContextPtr connectorContext) {
   const auto [connectorId, connectorTable] =
       toConnectorTable(*deleteNode.table(), defaultConnectorId, defaultSchema);
 
   // Reject a missing target before planning the scan, which would otherwise
   // resolve a view of that name and write to a table that does not exist.
-  findTable(*deleteNode.table(), connectorId, connectorTable);
+  findTable(*deleteNode.table(), connectorId, connectorTable, connectorContext);
 
-  RelationPlanner planner(user, defaultConnectorId, defaultSchema, parseSql);
+  RelationPlanner planner(
+      user,
+      defaultConnectorId,
+      defaultSchema,
+      parseSql,
+      std::move(connectorContext));
   planner.planDelete(deleteNode, connectorId, connectorTable);
 
   return std::make_shared<DeleteStatement>(
@@ -2943,13 +2977,14 @@ SqlStatementPtr parseDelete(
 
 std::unordered_map<std::string, lp::ExprPtr> parseTableProperties(
     const std::string& user,
-    const std::vector<std::shared_ptr<Property>>& props) {
+    const std::vector<std::shared_ptr<Property>>& props,
+    const facebook::axiom::connector::ConnectorContextPtr& connectorContext) {
   std::unordered_map<std::string, lp::ExprPtr> properties;
   for (const auto& p : props) {
     // Property names are identifiers; canonicalize so connectors receive
     // canonical option keys regardless of the case or quoting the user wrote.
     const auto name = canonicalizeIdentifier(*p->name());
-    auto expr = resolveSqlExpression(user, p->value());
+    auto expr = resolveSqlExpression(user, p->value(), connectorContext);
     AXIOM_PRESTO_SEMANTIC_CHECK(
         expr->looksConstant(),
         p->location(),
@@ -2968,14 +3003,17 @@ SqlStatementPtr parseCreateTableAsSelect(
     const std::string& defaultConnectorId,
     const std::string& defaultSchema,
     const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
-        std::string_view /*sql*/)>& parseSql) {
+        std::string_view /*sql*/)>& parseSql,
+    facebook::axiom::connector::ConnectorContextPtr connectorContext) {
   auto [connectorId, connectorTable] =
       toConnectorTable(*ctas.name(), defaultConnectorId, defaultSchema);
 
-  RelationPlanner planner(user, defaultConnectorId, defaultSchema, parseSql);
+  RelationPlanner planner(
+      user, defaultConnectorId, defaultSchema, parseSql, connectorContext);
   ctas.query()->accept(&planner);
 
-  auto properties = parseTableProperties(user, ctas.properties());
+  auto properties =
+      parseTableProperties(user, ctas.properties(), connectorContext);
 
   auto& planBuilder = planner.builder();
 
@@ -3041,11 +3079,13 @@ SqlStatementPtr parseCreateTable(
     const std::string& user,
     const CreateTable& createTable,
     const std::string& defaultConnectorId,
-    const std::string& defaultSchema) {
+    const std::string& defaultSchema,
+    const facebook::axiom::connector::ConnectorContextPtr& connectorContext) {
   auto [connectorId, connectorTable] =
       toConnectorTable(*createTable.name(), defaultConnectorId, defaultSchema);
 
-  auto properties = parseTableProperties(user, createTable.properties());
+  auto properties =
+      parseTableProperties(user, createTable.properties(), connectorContext);
 
   std::vector<std::string> names;
   std::vector<TypePtr> types;
@@ -3069,7 +3109,10 @@ SqlStatementPtr parseCreateTable(
       case NodeType::kLikeClause: {
         auto* likeClause = element->as<LikeClause>();
         auto table = findTable(
-            *likeClause->tableName(), defaultConnectorId, defaultSchema);
+            *likeClause->tableName(),
+            defaultConnectorId,
+            defaultSchema,
+            connectorContext);
 
         auto schema = table->type();
         for (auto i = 0; i < schema->size(); ++i) {
@@ -3164,7 +3207,8 @@ SqlStatementPtr parseAddColumn(
 SqlStatementPtr parseCreateSchema(
     const std::string& user,
     const CreateSchema& createSchema,
-    const std::string& defaultConnectorId) {
+    const std::string& defaultConnectorId,
+    const facebook::axiom::connector::ConnectorContextPtr& connectorContext) {
   const auto& parts = createSchema.schemaName()->parts();
   AXIOM_PRESTO_SEMANTIC_CHECK(
       parts.size() == 1 || parts.size() == 2,
@@ -3178,7 +3222,8 @@ SqlStatementPtr parseCreateSchema(
   std::string connectorId = parts.size() == 2 ? parts[0] : defaultConnectorId;
   std::string schemaName = parts.size() == 2 ? parts[1] : parts[0];
 
-  auto properties = parseTableProperties(user, createSchema.properties());
+  auto properties =
+      parseTableProperties(user, createSchema.properties(), connectorContext);
 
   return std::make_shared<CreateSchemaStatement>(
       std::move(connectorId),
@@ -3219,8 +3264,7 @@ SqlStatementPtr parseShowSchemas(
     const ParserSessionPtr& parserSession) {
   const auto connectorId = showSchemas.catalog().value_or(defaultConnectorId);
 
-  auto metadata =
-      facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId);
+  auto metadata = parserSession->context()->metadata(connectorId);
   auto session = parserSession->context()->sessionFor(connectorId);
   auto schemaNames = InformationSchema::listedSchemaNames(*metadata, session);
   std::sort(schemaNames.begin(), schemaNames.end());
@@ -3232,6 +3276,7 @@ SqlStatementPtr parseShowSchemas(
   }
 
   lp::PlanBuilder::Context ctx(defaultConnectorId);
+  ctx.connectorContext = parserSession->context();
   lp::PlanBuilder builder(ctx);
   builder.values(ROW({"Schema"}, VARCHAR()), std::move(data));
 
@@ -3277,8 +3322,7 @@ SqlStatementPtr parseShowTables(
         std::string(ParserOptions::kInformationSchemaConnectorIdDefault);
   }
 
-  auto metadata =
-      facebook::axiom::connector::ConnectorMetadataRegistry::get(connectorId);
+  auto metadata = parserSession->context()->metadata(connectorId);
   auto session = parserSession->context()->sessionFor(connectorId);
   VELOX_USER_CHECK(
       metadata->schemaExists(session, schema),
@@ -3298,6 +3342,7 @@ SqlStatementPtr parseShowTables(
   }
 
   lp::PlanBuilder::Context ctx(connectorId);
+  ctx.connectorContext = parserSession->context();
   lp::PlanBuilder builder(ctx);
   builder.values(
       ROW({std::string(kTableColumnName)}, VARCHAR()), std::move(data));
@@ -3388,8 +3433,9 @@ lp::ExprPtr bindProcedureArgument(
     const std::string& user,
     const ExpressionPtr& valueExpr,
     const TypePtr& declaredType,
-    const std::string& token) {
-  auto expr = resolveSqlExpression(user, valueExpr);
+    const std::string& token,
+    const facebook::axiom::connector::ConnectorContextPtr& connectorContext) {
+  auto expr = resolveSqlExpression(user, valueExpr, connectorContext);
   AXIOM_PRESTO_SEMANTIC_CHECK(
       expr->looksConstant(),
       valueExpr->location(),
@@ -3417,12 +3463,12 @@ SqlStatementPtr parseCall(
     const std::string& user,
     const Call& call,
     const std::string& defaultConnectorId,
-    const std::string& defaultSchema) {
+    const std::string& defaultSchema,
+    const facebook::axiom::connector::ConnectorContextPtr& connectorContext) {
   auto [connectorId, procedureName] =
       toConnectorProcedure(*call.name(), defaultConnectorId, defaultSchema);
 
-  auto metadata = facebook::axiom::connector::ConnectorMetadataRegistry::tryGet(
-      connectorId);
+  auto metadata = connectorContext->tryMetadata(connectorId);
   AXIOM_PRESTO_SEMANTIC_CHECK(
       metadata != nullptr,
       call.location(),
@@ -3504,7 +3550,11 @@ SqlStatementPtr parseCall(
     const auto& parameter = parameters[i];
     if (supplied[i] != nullptr) {
       arguments.push_back(bindProcedureArgument(
-          user, supplied[i]->value(), parameter.type, parameter.name));
+          user,
+          supplied[i]->value(),
+          parameter.type,
+          parameter.name,
+          connectorContext));
     } else {
       AXIOM_PRESTO_SEMANTIC_CHECK(
           parameter.defaultValue.has_value(),
@@ -3532,6 +3582,7 @@ SqlStatementPtr doPlan(
         std::string_view /*sql*/)>& parseSql,
     const ParserSessionPtr& parserSession) {
   const auto& user = parserSession->user();
+  const auto& connectorContext = parserSession->context();
 
   // Statements that don't reference tables and don't need planning.
   if (query->is(NodeType::kShowSession)) {
@@ -3565,7 +3616,8 @@ SqlStatementPtr doPlan(
         *query->as<Insert>(),
         defaultConnectorId,
         defaultSchema,
-        parseSql);
+        parseSql,
+        connectorContext);
   }
 
   if (query->is(NodeType::kDelete)) {
@@ -3574,7 +3626,8 @@ SqlStatementPtr doPlan(
         *query->as<Delete>(),
         defaultConnectorId,
         defaultSchema,
-        parseSql);
+        parseSql,
+        connectorContext);
   }
 
   if (query->is(NodeType::kCreateTableAsSelect)) {
@@ -3583,12 +3636,17 @@ SqlStatementPtr doPlan(
         *query->as<CreateTableAsSelect>(),
         defaultConnectorId,
         defaultSchema,
-        parseSql);
+        parseSql,
+        connectorContext);
   }
 
   if (query->is(NodeType::kCreateTable)) {
     return parseCreateTable(
-        user, *query->as<CreateTable>(), defaultConnectorId, defaultSchema);
+        user,
+        *query->as<CreateTable>(),
+        defaultConnectorId,
+        defaultSchema,
+        connectorContext);
   }
 
   if (query->is(NodeType::kDropTable)) {
@@ -3603,7 +3661,7 @@ SqlStatementPtr doPlan(
 
   if (query->is(NodeType::kCreateSchema)) {
     return parseCreateSchema(
-        user, *query->as<CreateSchema>(), defaultConnectorId);
+        user, *query->as<CreateSchema>(), defaultConnectorId, connectorContext);
   }
 
   if (query->is(NodeType::kDropSchema)) {
@@ -3612,7 +3670,11 @@ SqlStatementPtr doPlan(
 
   if (query->is(NodeType::kCall)) {
     return parseCall(
-        user, *query->as<Call>(), defaultConnectorId, defaultSchema);
+        user,
+        *query->as<Call>(),
+        defaultConnectorId,
+        defaultSchema,
+        connectorContext);
   }
 
   if (query->is(NodeType::kShowSchemas)) {
@@ -3629,32 +3691,46 @@ SqlStatementPtr doPlan(
   }
 
   if (query->is(NodeType::kShowCatalogs)) {
-    return parseShowCatalogs(*query->as<ShowCatalogs>(), defaultConnectorId);
+    return parseShowCatalogs(
+        *query->as<ShowCatalogs>(), defaultConnectorId, connectorContext);
   }
 
   if (query->is(NodeType::kShowCreate)) {
     return parseShowCreateTable(
-        *query->as<ShowCreateTable>(), defaultConnectorId, defaultSchema);
+        *query->as<ShowCreateTable>(),
+        defaultConnectorId,
+        defaultSchema,
+        connectorContext);
   }
 
   if (query->is(NodeType::kShowCreateView)) {
     return parseShowCreateView(
-        *query->as<ShowCreateView>(), defaultConnectorId, defaultSchema);
+        *query->as<ShowCreateView>(),
+        defaultConnectorId,
+        defaultSchema,
+        connectorContext);
   }
 
   if (query->is(NodeType::kShowColumns)) {
     return parseShowColumns(
-        *query->as<ShowColumns>(), defaultConnectorId, defaultSchema);
+        *query->as<ShowColumns>(),
+        defaultConnectorId,
+        defaultSchema,
+        connectorContext);
   }
 
   if (query->is(NodeType::kShowStats)) {
     return parseShowStats(
-        *query->as<ShowStats>(), defaultConnectorId, defaultSchema);
+        *query->as<ShowStats>(),
+        defaultConnectorId,
+        defaultSchema,
+        connectorContext);
   }
 
   if (query->is(NodeType::kShowStatsForQuery)) {
     auto* showStats = query->as<ShowStatsForQuery>();
-    RelationPlanner planner(user, defaultConnectorId, defaultSchema, parseSql);
+    RelationPlanner planner(
+        user, defaultConnectorId, defaultSchema, parseSql, connectorContext);
     showStats->query()->accept(&planner);
     auto innerStatement = std::make_shared<SelectStatement>(
         planner.plan(),
@@ -3665,7 +3741,8 @@ SqlStatementPtr doPlan(
   }
 
   if (query->is(NodeType::kShowFunctions)) {
-    return parseShowFunctions(*query->as<ShowFunctions>(), defaultConnectorId);
+    return parseShowFunctions(
+        *query->as<ShowFunctions>(), defaultConnectorId, connectorContext);
   }
 
   if (query->is(NodeType::kQuery)) {
@@ -3674,6 +3751,7 @@ SqlStatementPtr doPlan(
         defaultConnectorId,
         defaultSchema,
         parseSql,
+        connectorContext,
         parserSession->options());
     query->accept(&planner);
     return std::make_shared<SelectStatement>(

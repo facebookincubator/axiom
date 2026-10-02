@@ -23,21 +23,27 @@
 
 #include <folly/container/F14Map.h>
 
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/system/SystemConnector.h"
 #include "folly/executors/IOThreadPoolExecutor.h"
 #include "velox/connectors/Connector.h"
+#include "velox/connectors/ConnectorRegistry.h"
 
 namespace facebook::axiom {
 
 class SessionConfig;
 
-/**
- * Helper class to register connectors for Axiom and Velox.
- *
- * This class handles the details of registering TPCH connectors
- * and connectors for tables stored in the local filesystem in
- * Parquet or ORC format.
- */
+/// Registers catalogs into one engine's connector and metadata registries.
+///
+/// Example:
+///   auto connectors = Connectors(
+///       velox::connector::ConnectorRegistry::create(),
+///       connector::ConnectorMetadataRegistry::create());
+///   connectors.registerTpchConnector();
+///
+/// Both registries must be non-null and must outlive all queries that use the
+/// registered catalogs. A catalog's connector and metadata are installed as a
+/// pair unless the catalog intentionally provides metadata only.
 class Connectors {
  public:
   static constexpr const char* kTpchConnectorId = "tpch";
@@ -45,15 +51,18 @@ class Connectors {
   static constexpr const char* kTestConnectorId = "test";
   static constexpr const char* kSystemConnectorId = "system";
 
-  Connectors();
+  Connectors(
+      std::shared_ptr<velox::connector::ConnectorRegistry::Registry>
+          connectorRegistry,
+      std::shared_ptr<connector::ConnectorMetadataRegistry::Registry>
+          metadataRegistry);
 
   Connectors(const Connectors&) = delete;
   Connectors& operator=(const Connectors&) = delete;
   Connectors(Connectors&&) = default;
   Connectors& operator=(Connectors&&) = default;
 
-  /// Unregister all connectors with ids in `connectorIds_`.
-  virtual ~Connectors();
+  virtual ~Connectors() = default;
 
   /// Registers the TPCH connector under the connector ID "tpch".
   /// This allows queries like "select * from tpch.sf1.lineitem".
@@ -106,11 +115,32 @@ class Connectors {
   /// Registers the system connector for the runtime.queries and
   /// metadata.session_properties tables.
   void registerSystemConnector(
-      const SessionConfig& sessionConfig,
+      std::shared_ptr<const SessionConfig> sessionConfig,
       const std::string& connectorId = kSystemConnectorId);
 
   /// Registers the file connector for querying raw files via SQL.
   void registerFileConnector(const std::string& connectorId = "file");
+
+  /// Registers an execution connector and its metadata as one catalog. If
+  /// metadata registration fails, the connector insertion is rolled back.
+  void registerCatalog(
+      std::shared_ptr<velox::connector::Connector> connector,
+      std::shared_ptr<connector::ConnectorMetadata> metadata);
+
+  /// Registers an execution connector and its metadata into the supplied
+  /// registries as one catalog. Application roots that create connectors
+  /// directly use this overload to preserve the same rollback contract.
+  static void registerCatalog(
+      velox::connector::ConnectorRegistry::Registry& connectorRegistry,
+      connector::ConnectorMetadataRegistry::Registry& metadataRegistry,
+      std::shared_ptr<velox::connector::Connector> connector,
+      std::shared_ptr<connector::ConnectorMetadata> metadata);
+
+  /// Registers metadata for a catalog that has no execution connector, such
+  /// as Capella's user-defined types and SQL functions.
+  void registerMetadataCatalog(
+      std::string connectorId,
+      std::shared_ptr<connector::ConnectorMetadata> metadata);
 
  protected:
   /// Initialize file formats and ioExecutor. Must be called before
@@ -122,22 +152,18 @@ class Connectors {
     return ioExecutor_.get();
   }
 
-  /// Registers a connector in the global registry and tracks it for
-  /// cleanup on destruction.
-  void registerConnector(
-      const std::shared_ptr<velox::connector::Connector>& connector);
-
-  // Unregister these on destruction.
-  std::vector<std::string> connectorIds_;
-
  private:
+  // Returns the process-shared I/O executor retained by each instance.
   static std::shared_ptr<folly::IOThreadPoolExecutor> getSharedIoExecutor();
+  // Retains the executor used by connectors created through this instance.
   std::shared_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
 
-  // Adapts SessionConfig to SessionPropertiesProvider. Stored here to
-  // ensure the provider outlives the system connector.
-  std::unique_ptr<connector::system::SessionPropertiesProvider>
-      sessionPropertiesProvider_;
+  // Registry that receives execution connectors for this engine.
+  const std::shared_ptr<velox::connector::ConnectorRegistry::Registry>
+      connectorRegistry_;
+  // Registry that receives connector metadata for this engine.
+  const std::shared_ptr<connector::ConnectorMetadataRegistry::Registry>
+      metadataRegistry_;
 };
 
 } // namespace facebook::axiom
