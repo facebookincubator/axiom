@@ -301,8 +301,7 @@ std::shared_ptr<SplitSource> LocalHiveSplitManager::getSplitSource(
       "SYSTEM sampling is not supported by this connector");
   // Since there are only unpartitioned tables now, always makes a SplitSource
   // that goes over all the files in the handle's layout.
-  auto metadata = ConnectorMetadataRegistry::get(tableHandle->connectorId());
-  auto table = metadata->findTable(
+  auto table = metadata_->findTable(
       {std::string(LocalHiveConnectorMetadata::kDefaultSchema),
        tableHandle->name()});
   VELOX_CHECK_NOT_NULL(
@@ -536,10 +535,6 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
 
   const auto outputType = ROW(std::move(names), std::move(types));
 
-  auto metadataPtr = ConnectorMetadataRegistry::get(connector()->connectorId());
-  auto connectorQueryCtx =
-      metadataPtr->asChecked<LocalHiveConnectorMetadata>()->connectorQueryCtx();
-
   // Treat unknown row count as "no cap" (scan all selected files).
   const auto numRows = table().numRows();
   const std::optional<int64_t> maxRowsToScan = numRows.has_value()
@@ -556,7 +551,7 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
 
   for (const auto* file : selectedFiles) {
     auto dataSource = connector()->createDataSource(
-        outputType, tableHandle, columnHandles, connectorQueryCtx.get());
+        outputType, tableHandle, columnHandles, connectorQueryCtx_.get());
 
     auto split = velox::connector::hive::HiveConnectorSplitBuilder(file->path)
                      .fileFormat(fileFormat_)
@@ -877,7 +872,8 @@ LocalHiveTableLayout* LocalTable::makeDefaultLayout(
       /*lookupKeys=*/empty,
       /*hivePartitionColumns=*/empty,
       metadata.fileFormat(),
-      metadata.hiveMetadataConfig());
+      metadata.hiveMetadataConfig(),
+      metadata.connectorQueryCtx());
   layout->setFiles(std::move(files));
   auto* result = layout.get();
   exportedLayouts_.push_back(result);
@@ -1170,7 +1166,8 @@ std::shared_ptr<LocalTable> createLocalTable(
     const velox::RowTypePtr& schema,
     const CreateTableOptions& createTableOptions,
     velox::connector::Connector* connector,
-    std::shared_ptr<HiveMetadataConfig> hiveMetadataConfig) {
+    std::shared_ptr<HiveMetadataConfig> hiveMetadataConfig,
+    std::shared_ptr<velox::connector::ConnectorQueryCtx> connectorQueryCtx) {
   folly::F14FastMap<std::string, velox::Variant> options;
   if (createTableOptions.compressionKind.has_value()) {
     options[HiveWriteOptions::kCompressionKind] =
@@ -1284,6 +1281,7 @@ std::shared_ptr<LocalTable> createLocalTable(
       partitionedBy,
       createTableOptions.fileFormat.value(),
       std::move(hiveMetadataConfig),
+      std::move(connectorQueryCtx),
       std::move(serdeParameters));
   table->addLayout(std::move(layout));
   return table;
@@ -1294,7 +1292,8 @@ std::shared_ptr<LocalTable> createTableFromSchema(
     std::string_view path,
     velox::dwio::common::FileFormat defaultFileFormat,
     velox::connector::Connector* connector,
-    std::shared_ptr<HiveMetadataConfig> hiveMetadataConfig) {
+    std::shared_ptr<HiveMetadataConfig> hiveMetadataConfig,
+    std::shared_ptr<velox::connector::ConnectorQueryCtx> connectorQueryCtx) {
   auto jsons = readConcatenatedDynamicsFromFile(schemaPath(path));
   if (jsons.empty()) {
     return nullptr;
@@ -1307,7 +1306,12 @@ std::shared_ptr<LocalTable> createTableFromSchema(
   const auto schema = parseSchema(json);
 
   return createLocalTable(
-      name, schema, options, connector, std::move(hiveMetadataConfig));
+      name,
+      schema,
+      options,
+      connector,
+      std::move(hiveMetadataConfig),
+      std::move(connectorQueryCtx));
 }
 
 // Parses a Hive partition directory named '<expectedColumn>=<value>'. Returns
@@ -1454,7 +1458,8 @@ void LocalHiveConnectorMetadata::loadTable(
       tablePath.native(),
       format_,
       hiveConnector(),
-      hiveMetadataConfig_);
+      hiveMetadataConfig_,
+      connectorQueryCtx_);
   VELOX_CHECK_NOT_NULL(
       table,
       "Schema file (.schema) not found for table: {}. "
@@ -1661,7 +1666,8 @@ TablePtr LocalHiveConnectorMetadata::createTable(
         rowType,
         createTableOptions,
         hiveConnector(),
-        hiveMetadataConfig_);
+        hiveMetadataConfig_,
+        connectorQueryCtx_);
   }
 
   auto path = tablePath(tableName);
@@ -1698,7 +1704,8 @@ TablePtr LocalHiveConnectorMetadata::createTable(
       rowType,
       createTableOptions,
       hiveConnector(),
-      hiveMetadataConfig_);
+      hiveMetadataConfig_,
+      connectorQueryCtx_);
   tables_[tableName.table] = table;
   return table;
 }

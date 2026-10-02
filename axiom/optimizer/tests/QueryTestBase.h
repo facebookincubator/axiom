@@ -20,6 +20,7 @@
 #include <gflags/gflags.h>
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/RelationOp.h"
 #include "axiom/optimizer/VeloxHistory.h"
@@ -108,6 +109,14 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
   /// TPC-H tables without statistics. Override to register different tables or
   /// to attach statistics (e.g. via addTpchTables(scaleFactor)).
   virtual void configureTestConnector();
+
+  /// Creates a plan-builder context that resolves tables through this
+  /// fixture's process-wide test connector registries.
+  logical_plan::PlanBuilder::Context makePlanBuilderContext(
+      const std::string& defaultConnectorId = kTestConnectorId,
+      const std::string& defaultSchema = kDefaultSchema,
+      std::shared_ptr<velox::core::QueryCtx> queryCtx = nullptr,
+      logical_plan::ExprResolver::FunctionRewriteHook hook = nullptr);
 
   logical_plan::LogicalPlanNodePtr parseSelect(
       std::string_view sql,

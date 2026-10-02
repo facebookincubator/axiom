@@ -35,8 +35,8 @@ class BucketedExecutionTest : public test::QueryTestBase,
     useV2_ = GetParam();
   }
 
-  lp::PlanBuilder::Context makeContext() const {
-    return lp::PlanBuilder::Context{kTestConnectorId, kDefaultSchema};
+  lp::PlanBuilder::Context makeContext() {
+    return makePlanBuilderContext();
   }
 
   void addBucketedTable(

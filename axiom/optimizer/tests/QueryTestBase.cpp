@@ -99,6 +99,21 @@ void QueryTestBase::configureTestConnector() {
   testConnector_->addTpchTables();
 }
 
+logical_plan::PlanBuilder::Context QueryTestBase::makePlanBuilderContext(
+    const std::string& defaultConnectorId,
+    const std::string& defaultSchema,
+    std::shared_ptr<velox::core::QueryCtx> queryCtx,
+    logical_plan::ExprResolver::FunctionRewriteHook hook) {
+  logical_plan::PlanBuilder::Context context{
+      defaultConnectorId, defaultSchema, std::move(queryCtx), std::move(hook)};
+  context.connectorContext = connector::ConnectorContext::createProcessWide(
+      getQueryCtx()->queryId(),
+      "test",
+      connectorSessionProperties_,
+      connectorStatWriterProvider());
+  return context;
+}
+
 void QueryTestBase::TearDown() {
   // If we mean to save the history of running the suite, move the local history
   // to its static location.

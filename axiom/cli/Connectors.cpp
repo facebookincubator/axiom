@@ -247,7 +247,7 @@ void Connectors::registerSystemConnector(
   connector::ConnectorMetadataRegistry::global().insert(
       connector->connectorId(),
       std::make_shared<connector::system::SystemConnectorMetadata>(
-          connector.get()));
+          connector.get(), connector::ConnectorMetadataRegistry::global()));
 }
 
 void Connectors::registerFileConnector(const std::string& connectorId) {

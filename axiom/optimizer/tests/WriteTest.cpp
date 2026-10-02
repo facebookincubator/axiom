@@ -363,8 +363,9 @@ class WriteTest : public test::HiveQueriesTestBase,
       const std::string& tableName,
       const RowVectorPtr& expectedData) {
     auto logicalPlan =
-        lp::PlanBuilder()
-            .tableScan(exec::test::kHiveConnectorId, kDefaultSchema, tableName)
+        lp::PlanBuilder(makePlanBuilderContext(
+                            exec::test::kHiveConnectorId, kDefaultSchema))
+            .tableScan(tableName)
             .build();
 
     checkSameSingleNode(logicalPlan, {expectedData});
@@ -425,8 +426,8 @@ TEST_P(WriteTest, basic) {
   static constexpr vector_size_t kTestBatchSize = 2048;
   auto data = makeTestData(10, kTestBatchSize);
 
-  lp::PlanBuilder::Context context(
-      exec::test::kHiveConnectorId, kDefaultSchema);
+  auto context =
+      makePlanBuilderContext(exec::test::kHiveConnectorId, kDefaultSchema);
   auto writePlan =
       lp::PlanBuilder(context)
           .values({data})
