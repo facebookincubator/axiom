@@ -228,8 +228,9 @@ TEST_P(ExplainTest, explainDropTable) {
 
 TEST_P(ExplainTest, explainAddColumn) {
   auto findTable = [&]() {
-    auto metadata = facebook::axiom::connector::ConnectorMetadataRegistry::get(
-        testConnector_->connectorId());
+    auto metadata =
+        runner_->metadataRegistry()->find(testConnector_->connectorId());
+    VELOX_CHECK_NOT_NULL(metadata);
     return metadata->findTable({"default", "t"});
   };
 

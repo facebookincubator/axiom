@@ -143,13 +143,18 @@ class SystemConnectorMetadataTest : public ::testing::Test {
     velox::memory::MemoryManager::testingSetInstance({});
 
     queryProvider_ = std::make_unique<MockQueryInfoProvider>();
-    sessionProvider_ = std::make_unique<MockSessionPropertiesProvider>();
+    sessionProvider_ = std::make_shared<MockSessionPropertiesProvider>();
 
     connector_ = std::make_shared<SystemConnector>(
-        kSystemCatalog, queryProvider_.get(), sessionProvider_.get());
+        kSystemCatalog,
+        queryProvider_.get(),
+        sessionProvider_,
+        InformationSchema::defaultTypeName,
+        ConnectorMetadataRegistry::global());
     velox::connector::registerConnector(connector_);
 
-    metadata_ = std::make_shared<SystemConnectorMetadata>(connector_.get());
+    metadata_ = std::make_shared<SystemConnectorMetadata>(
+        connector_.get(), ConnectorMetadataRegistry::global());
     ConnectorMetadataRegistry::global().insert(kSystemCatalog, metadata_);
 
     pool_ = velox::memory::memoryManager()->addLeafPool();
@@ -164,7 +169,7 @@ class SystemConnectorMetadataTest : public ::testing::Test {
   }
 
   ConnectorSessionPtr makeSession() {
-    return std::make_shared<ConnectorSession>(
+    return ConnectorSession::createProcessWide(
         /*queryId=*/"test",
         /*user=*/"test",
         Properties{},
@@ -236,7 +241,7 @@ class SystemConnectorMetadataTest : public ::testing::Test {
   }
 
   std::unique_ptr<MockQueryInfoProvider> queryProvider_;
-  std::unique_ptr<MockSessionPropertiesProvider> sessionProvider_;
+  std::shared_ptr<MockSessionPropertiesProvider> sessionProvider_;
   std::shared_ptr<SystemConnector> connector_;
   std::shared_ptr<SystemConnectorMetadata> metadata_;
   std::shared_ptr<velox::memory::MemoryPool> pool_;

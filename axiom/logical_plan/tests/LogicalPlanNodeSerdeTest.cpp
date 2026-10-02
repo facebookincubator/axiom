@@ -18,6 +18,7 @@
 
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
@@ -64,11 +65,14 @@ class LogicalPlanNodeSerdeTest : public testing::Test {
     velox::connector::registerConnector(connector_);
     connector::ConnectorMetadataRegistry::global().insert(
         kTestConnectorId, connector_->metadata());
+    context_.connectorContext =
+        connector::makeTestContext("LogicalPlanNodeSerdeTest");
   }
 
   void TearDown() override {
     connector::ConnectorMetadataRegistry::global().erase(kTestConnectorId);
     velox::connector::unregisterConnector(kTestConnectorId);
+    context_.connectorContext.reset();
     connector_.reset();
     pool_.reset();
   }

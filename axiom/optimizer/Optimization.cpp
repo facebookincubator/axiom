@@ -19,6 +19,7 @@
 #include <iostream>
 #include <limits>
 #include <utility>
+#include "axiom/connectors/ConnectorContext.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/optimizer/AggregationPlanner.h"
 #include "axiom/optimizer/Filters.h"
@@ -486,11 +487,13 @@ PlanAndStats Optimization::deprecatedToVeloxPlan(
     queryCtx() = nullptr;
   };
 
+  const auto connectorContext = optimizerSession->context();
   auto veloxQueryCtx = velox::core::QueryCtx::create();
+  connectorContext->attachTo(*veloxQueryCtx);
   velox::exec::SimpleExpressionEvaluator evaluator(veloxQueryCtx.get(), &pool);
 
   auto schemaResolver = std::make_shared<connector::SchemaResolver>(
-      connector::ConnectorMetadataRegistry::global());
+      *connectorContext->metadataRegistry());
 
   VeloxHistory history;
 

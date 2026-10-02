@@ -28,6 +28,8 @@
 #include "axiom/sql/presto/ParserOptions.h"
 #include "axiom/sql/presto/ast/AstNodesAll.h"
 
+#include "axiom/connectors/ConnectorContext.h"
+
 namespace axiom::sql::presto {
 
 namespace lp = facebook::axiom::logical_plan;
@@ -129,6 +131,7 @@ class ExpressionPlanner {
       SubqueryPlanner subqueryPlanner,
       SortingKeyResolver sortingKeyResolver,
       const ParserOptions& options,
+      facebook::axiom::connector::ConnectorContextPtr connectorContext,
       ShouldDropQualifier shouldDropQualifier = nullptr,
       ColumnResolver columnResolver = nullptr,
       RelationQualifierResolver relationQualifierResolver = nullptr)
@@ -138,7 +141,11 @@ class ExpressionPlanner {
         shouldDropQualifier_(std::move(shouldDropQualifier)),
         columnResolver_(std::move(columnResolver)),
         relationQualifierResolver_(std::move(relationQualifierResolver)),
-        options_{options} {}
+        options_{options},
+        connectorContext_{std::move(connectorContext)} {
+    VELOX_CHECK_NOT_NULL(
+        connectorContext_, "ExpressionPlanner requires a connector context");
+  }
 
   /// Finds WindowCallExpr nodes nested inside non-window expressions.
   /// Skips top-level window projections (where the ExprApi itself is a
@@ -388,6 +395,9 @@ class ExpressionPlanner {
   RelationQualifierResolver relationQualifierResolver_;
 
   ParserOptions options_;
+
+  // Selects connector metadata for user-defined types.
+  const facebook::axiom::connector::ConnectorContextPtr connectorContext_;
 
   // Per-query cache for user-defined type lookups. Entries with nullptr values
   // represent negatively cached (not-found) types.

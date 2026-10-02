@@ -195,7 +195,8 @@ TablePtr SystemConnectorMetadata::findTable(const SchemaTableName& tableName) {
         return it->second;
       }
 
-      auto table = InformationSchema::findTable(tableName, connector_);
+      auto table = InformationSchema::findTable(
+          tableName, connector_, *metadataRegistry_);
       if (table != nullptr) {
         tables.emplace(tableName, table);
       }
@@ -210,7 +211,7 @@ std::vector<std::string> SystemConnectorMetadata::listSchemaNames(
     const ConnectorSessionPtr& /*session*/) {
   std::vector<std::string> names{
       std::string(kRuntimeSchema), std::string(kMetadataSchema)};
-  for (const auto& catalog : ConnectorMetadataRegistry::allMetadataIds()) {
+  for (const auto& [catalog, _] : metadataRegistry_->snapshot()) {
     names.push_back(InformationSchema::schemaName(catalog));
   }
   return names;
@@ -224,8 +225,7 @@ bool SystemConnectorMetadata::schemaExists(
   }
   auto catalog = InformationSchema::catalog(schemaName);
   return catalog.has_value() &&
-      ConnectorMetadataRegistry::tryGet(std::string{catalog.value()}) !=
-      nullptr;
+      metadataRegistry_->find(std::string{catalog.value()}) != nullptr;
 }
 
 std::vector<std::string> SystemConnectorMetadata::listTableNames(

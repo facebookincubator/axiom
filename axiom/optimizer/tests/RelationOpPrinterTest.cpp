@@ -184,8 +184,11 @@ class RelationOpPrinterTest : public ::testing::Test {
     consume(*plan->op);
   }
 
-  lp::PlanBuilder::Context makeContext() const {
-    return lp::PlanBuilder::Context{kTestConnectorId, kDefaultSchema};
+  lp::PlanBuilder::Context makeContext() {
+    lp::PlanBuilder::Context context{kTestConnectorId, kDefaultSchema};
+    context.connectorContext =
+        connector::makeTestContext("RelationOpPrinterTest");
+    return context;
   }
 
   std::shared_ptr<velox::memory::MemoryPool> rootPool_;
