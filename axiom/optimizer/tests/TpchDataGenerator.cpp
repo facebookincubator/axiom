@@ -30,8 +30,8 @@ void TpchDataGenerator::createTables(
     dwio::common::FileFormat format,
     const TableStartingCallback& onTableStarting,
     const TableCreatedCallback& onTableCreated) {
-  Connectors connectors;
   ::axiom::sql::SqlQueryRunner runner{"tpch_data_generator"};
+  Connectors connectors{runner.connectorRegistry(), runner.metadataRegistry()};
   runner.initialize([&]() {
     connectors.registerTpchConnector();
     connectors.registerLocalHiveConnector(

@@ -21,8 +21,8 @@
 #include <memory>
 #include <string>
 #include <string_view>
-#include <vector>
 
+#include "axiom/cli/Connectors.h"
 #include "axiom/cli/SqlQueryRunner.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -43,27 +43,25 @@ class SqlQueryRunnerTestBase : public ::testing::Test,
   // selects v1 by setting useV2_ = false before calling this.
   void SetUp() override;
 
-  // Destroys runner_ and unregisters the connectors makeRunner() registered
-  // itself. Connectors registered by a caller-supplied callback are the
-  // caller's to unregister.
+  // Releases the runner-owned connector registries.
   void TearDown() override;
 
   // Builds a SqlQueryRunner over a freshly created TestConnector registered
-  // under 'connectorId', wired as the default connector/schema. The connector
-  // is unregistered in TearDown. Selects the optimizer per 'useV2_', which a
-  // parameterized fixture sets before calling.
+  // under 'connectorId', wired as the default connector/schema. Selects the
+  // optimizer per 'useV2_', which a parameterized fixture sets before calling.
   std::unique_ptr<SqlQueryRunner> makeRunner(
       const std::string& connectorId = "test",
       std::function<std::string()> queryIdGenerator = {},
       PermissionCheck permissionCheck = {},
       LogicalPlanCheck logicalPlanCheck = {});
 
-  // Builds a SqlQueryRunner over the connectors 'initConnectors' registers; it
-  // returns the connector id and schema to use by default. The caller
-  // unregisters them. Selects the optimizer per 'useV2_'.
+  // Builds a SqlQueryRunner over the connectors 'initializeConnectors'
+  // registers through the supplied registrar. The callback returns the
+  // connector ID and schema to use by default. Selects the optimizer per
+  // 'useV2_'.
   std::unique_ptr<SqlQueryRunner> makeRunner(
-      const std::function<std::pair<std::string, std::string>()>&
-          initConnectors,
+      const std::function<std::pair<std::string, std::string>(
+          facebook::axiom::Connectors&)>& initializeConnectors,
       std::function<std::string()> queryIdGenerator = {},
       PermissionCheck permissionCheck = {},
       LogicalPlanCheck logicalPlanCheck = {});
@@ -95,9 +93,6 @@ class SqlQueryRunnerTestBase : public ::testing::Test,
   // Selects the optimizer makeRunner() builds; a parameterized fixture sets
   // this before calling makeRunner() and branches its expectations on v1 vs v2.
   bool useV2_{true};
-
- private:
-  std::vector<std::string> connectorIds_;
 };
 
 } // namespace axiom::sql
