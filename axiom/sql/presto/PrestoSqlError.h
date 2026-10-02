@@ -23,6 +23,7 @@
 
 #include <fmt/format.h>
 #include <folly/Likely.h>
+#include <folly/portability/SourceLocation.h>
 #include "axiom/common/Enums.h"
 
 namespace axiom::sql::presto {
@@ -48,14 +49,16 @@ class PrestoSqlError : public std::exception {
       size_t column,
       std::optional<std::string> token,
       PrestoSqlErrorKind kind = PrestoSqlErrorKind::kSyntax,
-      std::string messageTemplate = "")
+      std::string messageTemplate = "",
+      folly::source_location sourceLocation = folly::source_location::current())
       : formatted_(formatWhat(kind, line, column, token, message)),
         messageTemplate_(std::move(messageTemplate)),
         messageLength_(message.size()),
         line_(line),
         column_(column),
         token_(std::move(token)),
-        kind_(kind) {}
+        kind_(kind),
+        sourceLocation_(sourceLocation) {}
 
   /// 0-based line number.
   size_t line() const {
@@ -89,6 +92,16 @@ class PrestoSqlError : public std::exception {
     return kind_;
   }
 
+  /// C++ source file where the exception was constructed.
+  std::string_view sourceFile() const noexcept {
+    return sourceLocation_.file_name();
+  }
+
+  /// 1-based C++ source line where the exception was constructed.
+  size_t sourceLine() const noexcept {
+    return sourceLocation_.line();
+  }
+
   const char* what() const noexcept override {
     return formatted_.data();
   }
@@ -101,7 +114,8 @@ class PrestoSqlError : public std::exception {
         column_ + columnOffset,
         token_,
         kind_,
-        messageTemplate_);
+        messageTemplate_,
+        sourceLocation_);
   }
 
  private:
@@ -119,6 +133,8 @@ class PrestoSqlError : public std::exception {
   size_t column_;
   std::optional<std::string> token_;
   PrestoSqlErrorKind kind_;
+
+  folly::source_location sourceLocation_;
 };
 
 /// Error source and Presto error code that a PrestoSqlError should surface

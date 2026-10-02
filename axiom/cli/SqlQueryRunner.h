@@ -95,16 +95,16 @@ struct ErrorInfo {
   /// similar failures.
   std::string messageTemplate;
 
-  /// Raw Velox error code (e.g. "INVALID_ARGUMENT", "MEM_CAP_EXCEEDED") from
-  /// the caught VeloxException. Empty for non-Velox exceptions.
+  /// Error code (e.g. "INVALID_ARGUMENT" or "SYNTAX_ERROR") from the
+  /// structured exception classification. Empty for unclassified exceptions.
   std::string errorCode;
 
-  /// Raw Velox error source (e.g. "USER", "RUNTIME", "SYSTEM", "EXTERNAL") from
-  /// the caught VeloxException. Empty for non-Velox exceptions.
+  /// Error source (e.g. "USER", "RUNTIME", "SYSTEM", "EXTERNAL") from the
+  /// structured exception classification. Empty for unclassified exceptions.
   std::string errorSource;
 
   /// Source file the failure was raised from. Empty for exceptions that carry
-  /// no throw site, such as PrestoSqlError.
+  /// no throw site.
   std::string file;
 
   /// Line within `file`. Meaningful only when `file` is set.

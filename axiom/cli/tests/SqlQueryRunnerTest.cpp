@@ -819,21 +819,26 @@ TEST_F(SqlQueryRunnerTest, completionCapturesFailureSourceLocation) {
   EXPECT_GT(captured.errorInfo->line, 0);
 }
 
-// A PrestoSqlError carries no throw site, so the location stays unset rather
-// than reporting a misleading zero line against an empty file.
-TEST_F(SqlQueryRunnerTest, completionHasNoSourceLocationForSqlError) {
+// Captures the exact semantic-check site that rejected the query.
+TEST_F(SqlQueryRunnerTest, completionCapturesSqlErrorSourceLocation) {
   QueryCompletionInfo captured;
 
-  EXPECT_THROW(
-      runner_->run(
-          "SELECT * FROM nonexistent_table",
-          {.onComplete =
-               [&](const QueryCompletionInfo& info) { captured = info; }}),
-      std::exception);
-
-  ASSERT_TRUE(captured.errorInfo.has_value());
-  EXPECT_TRUE(captured.errorInfo->file.empty());
-  EXPECT_EQ(captured.errorInfo->line, 0);
+  try {
+    runner_->run(
+        "SELECT * FROM nonexistent_table",
+        {.onComplete = [&](const QueryCompletionInfo& info) {
+          captured = info;
+        }});
+    FAIL() << "Expected PrestoSqlError";
+  } catch (const presto::PrestoSqlError& error) {
+    ASSERT_TRUE(captured.errorInfo.has_value());
+    EXPECT_EQ(captured.errorInfo->file, error.sourceFile());
+    EXPECT_EQ(captured.errorInfo->line, error.sourceLine());
+    EXPECT_THAT(
+        captured.errorInfo->file,
+        testing::EndsWith("axiom/sql/presto/PrestoParser.cpp"));
+    EXPECT_GT(captured.errorInfo->line, 0);
+  }
 }
 
 TEST(MessageTemplateOfTest, veloxExceptionUsesTemplate) {

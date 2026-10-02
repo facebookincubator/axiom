@@ -23,6 +23,43 @@ namespace {
 
 class PrestoSqlErrorTest : public PrestoParserTestBase {};
 
+TEST_F(PrestoSqlErrorTest, directSourceLocation) {
+  const auto expectedSourceLine = __LINE__ + 1;
+  const PrestoSqlError error("test error", 3, 4, std::nullopt);
+
+  EXPECT_EQ(error.sourceFile(), __FILE__);
+  EXPECT_EQ(error.sourceLine(), expectedSourceLine);
+}
+
+TEST_F(PrestoSqlErrorTest, macroSourceLocation) {
+  struct Location {
+    int line;
+    int charPosition;
+  };
+  const Location location{1, 0};
+  const auto expectedSourceLine = __LINE__ + 2;
+  try {
+    AXIOM_PRESTO_SEMANTIC_FAIL(location, std::nullopt, "test error");
+    FAIL() << "Expected PrestoSqlError";
+  } catch (const PrestoSqlError& error) {
+    EXPECT_EQ(error.message(), "test error");
+    EXPECT_EQ(error.sourceFile(), __FILE__);
+    EXPECT_EQ(error.sourceLine(), expectedSourceLine);
+  }
+}
+
+TEST_F(PrestoSqlErrorTest, offsetPreservesSourceLocation) {
+  const auto expectedSourceLine = __LINE__ + 1;
+  const PrestoSqlError error("test error", 3, 4, std::nullopt);
+
+  const auto adjusted = error.withOffset(5, 6);
+
+  EXPECT_EQ(adjusted.line(), 8);
+  EXPECT_EQ(adjusted.column(), 10);
+  EXPECT_EQ(adjusted.sourceFile(), __FILE__);
+  EXPECT_EQ(adjusted.sourceLine(), expectedSourceLine);
+}
+
 auto hasLocation(size_t line, size_t column, const std::string& token) {
   return testing::AllOf(
       testing::Property(&PrestoSqlError::line, line),

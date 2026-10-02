@@ -646,7 +646,9 @@ class QueryFinalizer {
         .message = error.what(),
         .messageTemplate = messageTemplateOf(error),
         .errorCode = std::string(classification.errorCode),
-        .errorSource = std::string(classification.errorSource)};
+        .errorSource = std::string(classification.errorSource),
+        .file = std::string(error.sourceFile()),
+        .line = error.sourceLine()};
     finalize();
   }
 
