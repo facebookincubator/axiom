@@ -18,6 +18,7 @@
 
 #include <gtest/gtest.h>
 
+#include "axiom/connectors/ConnectorContext.h"
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 
 namespace facebook::axiom::runner {

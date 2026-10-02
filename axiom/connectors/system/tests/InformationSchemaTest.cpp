@@ -80,12 +80,14 @@ class InformationSchemaTest : public optimizer::test::QueryTestBase {
         std::string(kSystemConnectorId),
         /*queryInfoProvider=*/nullptr,
         /*sessionPropertiesProvider=*/nullptr,
-        std::move(typeName));
+        std::move(typeName),
+        ConnectorMetadataRegistry::global());
     velox::connector::ConnectorRegistry::global().insert(
         std::string(kSystemConnectorId), systemConnector_);
     ConnectorMetadataRegistry::global().insert(
         std::string(kSystemConnectorId),
-        std::make_shared<SystemConnectorMetadata>(systemConnector_.get()));
+        std::make_shared<SystemConnectorMetadata>(
+            systemConnector_.get(), ConnectorMetadataRegistry::global()));
   }
 
   std::vector<RowVectorPtr> run(std::string_view sql) {

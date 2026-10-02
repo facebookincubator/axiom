@@ -33,8 +33,8 @@ class OutputNodeTest : public test::QueryTestBase,
     QueryTestBase::SetUp();
   }
 
-  lp::PlanBuilder::Context makeContext() const {
-    return lp::PlanBuilder::Context{kTestConnectorId, kDefaultSchema};
+  lp::PlanBuilder::Context makeContext() {
+    return makePlanBuilderContext();
   }
 };
 

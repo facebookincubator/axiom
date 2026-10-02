@@ -44,11 +44,14 @@ class PrestoParserTest : public PrestoParserTestBase {
     systemConnector_ = std::make_shared<connector::system::SystemConnector>(
         kSystemConnectorId,
         /*queryInfoProvider=*/nullptr,
-        /*sessionPropertiesProvider=*/nullptr);
+        /*sessionPropertiesProvider=*/nullptr,
+        connector::system::InformationSchema::defaultTypeName,
+        connector::ConnectorMetadataRegistry::global());
     connector::ConnectorMetadataRegistry::global().insert(
         kSystemConnectorId,
         std::make_shared<connector::system::SystemConnectorMetadata>(
-            systemConnector_.get()));
+            systemConnector_.get(),
+            connector::ConnectorMetadataRegistry::global()));
   }
 
   void TearDown() override {

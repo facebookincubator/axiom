@@ -24,6 +24,8 @@
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
 
+#include "axiom/connectors/ConnectorContext.h"
+
 namespace facebook::axiom::logical_plan {
 
 class NameMappings;
@@ -137,6 +139,9 @@ class PlanBuilder {
     /// evaluating constant expressions.
     std::shared_ptr<velox::core::QueryCtx> queryCtx;
 
+    /// Query context used to resolve connector metadata for table operations.
+    connector::ConnectorContextPtr connectorContext;
+
     /// Rewrites function calls during expression resolution, e.g. maps
     /// SQL function names to Velox runtime functions.
     ExprResolver::FunctionRewriteHook hook;
@@ -222,6 +227,7 @@ class PlanBuilder {
         nameAllocator_{context.nameAllocator},
         outerScope_{std::move(outerScope)},
         sqlParser_{context.sqlParser},
+        connectorContext_{context.connectorContext},
         allowAmbiguousOutputNames_{allowAmbiguousOutputNames},
         coercer_{context.coercer},
         identifierCanonicalizer_{context.identifierCanonicalizer},
@@ -968,6 +974,9 @@ class PlanBuilder {
 
   // Parses SQL expression strings into Velox expression trees.
   const std::shared_ptr<velox::parse::SqlExpressionsParser> sqlParser_;
+
+  // Selects connector metadata for table operations.
+  const connector::ConnectorContextPtr connectorContext_;
 
   const bool allowAmbiguousOutputNames_;
 

@@ -21,7 +21,7 @@
 #include <random>
 #include <utility>
 
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/connectors/ConnectorContext.h"
 #include "axiom/connectors/tests/TestTableJson.h"
 #include "velox/common/Casts.h"
 #include "velox/exec/HashPartitionFunction.h"
@@ -498,10 +498,11 @@ folly::coro::Task<SplitBatch> TestSplitSource::co_getSplits(
 namespace {
 
 const TestTable& findTestTableForHandle(
+    const ConnectorSessionPtr& session,
     const velox::connector::ConnectorTableHandlePtr& tableHandle) {
   auto testHandle =
       velox::checkedPointerCast<const TestTableHandle>(tableHandle);
-  auto table = ConnectorMetadataRegistry::get(testHandle->connectorId())
+  auto table = session->metadata(testHandle->connectorId())
                    ->findTable(testHandle->schemaTableName());
   VELOX_CHECK(table, "Table does not exist: {}", testHandle->name());
   return dynamic_cast<const TestTable&>(*table);
@@ -519,7 +520,7 @@ TestSplitManager::co_listPartitions(
     VELOX_USER_FAIL("{}", *error);
   }
 
-  const auto& testTable = findTestTableForHandle(tableHandle);
+  const auto& testTable = findTestTableForHandle(session, tableHandle);
   if (!testTable.bucketSpec().has_value()) {
     co_return std::vector<PartitionHandlePtr>{
         std::make_shared<PartitionHandle>()};
@@ -540,7 +541,7 @@ std::shared_ptr<SplitSource> TestSplitManager::getSplitSource(
     const std::shared_ptr<PartitionType>& partitionType,
     std::optional<double> samplePercentage) {
   VELOX_CHECK_NOT_NULL(session);
-  const auto& testTable = findTestTableForHandle(tableHandle);
+  const auto& testTable = findTestTableForHandle(session, tableHandle);
 
   std::vector<size_t> dataIndices;
   std::vector<int32_t> dataBucketIds;
