@@ -862,21 +862,6 @@ velox::RowVectorPtr FunctionsDataSource::buildResults() {
 SystemConnector::SystemConnector(
     const std::string& id,
     const QueryInfoProvider* queryInfoProvider,
-    const SessionPropertiesProvider* sessionPropertiesProvider,
-    InformationSchema::TypeNameFormatter typeName)
-    : SystemConnector{
-          id,
-          queryInfoProvider,
-          sessionPropertiesProvider == nullptr
-              ? nullptr
-              : std::shared_ptr<
-                    const SessionPropertiesProvider>{sessionPropertiesProvider, [](const SessionPropertiesProvider*) {}},
-          std::move(typeName),
-          ConnectorMetadataRegistry::global()} {}
-
-SystemConnector::SystemConnector(
-    const std::string& id,
-    const QueryInfoProvider* queryInfoProvider,
     std::shared_ptr<const SessionPropertiesProvider> sessionPropertiesProvider,
     InformationSchema::TypeNameFormatter typeName,
     const ConnectorMetadataRegistry::Registry& metadataRegistry)
