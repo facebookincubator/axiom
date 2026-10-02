@@ -29,7 +29,7 @@ TEST(RunnerSessionTest, connectorSessionUsesProviderWriter) {
   velox::ConcurrentRuntimeStatWriter componentWriter;
   velox::ConcurrentRuntimeStatWriter connectorWriter;
 
-  auto context = std::make_shared<connector::ConnectorContext>(
+  auto context = connector::ConnectorContext::createProcessWide(
       "q1",
       "user",
       connector::ConnectorProperties{},

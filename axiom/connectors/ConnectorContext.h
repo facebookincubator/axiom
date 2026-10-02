@@ -20,12 +20,19 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
 #include <folly/synchronization/CallOnce.h>
 
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/ConnectorSession.h"
+#include "velox/connectors/ConnectorRegistry.h"
+
+namespace facebook::velox::core {
+class QueryCtx;
+}
 
 namespace facebook::axiom::connector {
 
@@ -51,20 +58,37 @@ using ConnectorContextPtr = std::shared_ptr<ConnectorContext>;
 ///
 /// Example:
 ///   auto context = std::make_shared<ConnectorContext>(
-///       queryId, user, connectorProperties, statWriterProvider);
+///       queryId,
+///       user,
+///       connectorProperties,
+///       statWriterProvider,
+///       connectorRegistry,
+///       metadataRegistry);
 ///   metadata->beginWrite(context->sessionFor(connectorId), ...);
 ///
 /// Invariants:
 ///   - `statWriterProvider` is non-empty.
+///   - Both engine registry pointers are non-null.
 ///   - One session per connector id, and the same one for the life of this
 ///     context.
 class ConnectorContext {
  public:
-  ConnectorContext(
+  /// Creates a context over the process-wide registries for a non-Axiom host
+  /// that still owns registration at process scope.
+  static ConnectorContextPtr createProcessWide(
       std::string queryId,
       std::string user,
       ConnectorProperties properties,
       StatWriterProvider statWriterProvider);
+
+  ConnectorContext(
+      std::string queryId,
+      std::string user,
+      ConnectorProperties properties,
+      StatWriterProvider statWriterProvider,
+      std::shared_ptr<velox::connector::ConnectorRegistry::Registry>
+          connectorRegistry,
+      std::shared_ptr<ConnectorMetadataRegistry::Registry> metadataRegistry);
 
   ConnectorContext(const ConnectorContext&) = delete;
   ConnectorContext& operator=(const ConnectorContext&) = delete;
@@ -81,6 +105,34 @@ class ConnectorContext {
   /// Returns the identity of the user who submitted the query.
   const std::string& user() const {
     return user_;
+  }
+
+  /// Returns the execution connector registered under `connectorId`.
+  std::shared_ptr<velox::connector::Connector> connector(
+      std::string_view connectorId) const;
+
+  /// Returns metadata registered under `connectorId`, or nullptr if absent.
+  std::shared_ptr<ConnectorMetadata> tryMetadata(
+      std::string_view connectorId) const;
+
+  /// Returns metadata registered under `connectorId`.
+  std::shared_ptr<ConnectorMetadata> metadata(
+      std::string_view connectorId) const;
+
+  /// Returns all metadata IDs registered for this engine.
+  std::vector<std::string> metadataIds() const;
+
+  /// Installs this engine's registries on a Velox execution context.
+  void attachTo(velox::core::QueryCtx& queryCtx) const;
+
+  const std::shared_ptr<velox::connector::ConnectorRegistry::Registry>&
+  connectorRegistry() const {
+    return connectorRegistry_;
+  }
+
+  const std::shared_ptr<ConnectorMetadataRegistry::Registry>& metadataRegistry()
+      const {
+    return metadataRegistry_;
   }
 
   /// Returns 'connectorId's session, made on first use. Concurrent callers get
@@ -106,6 +158,9 @@ class ConnectorContext {
   const std::string user_;
   const ConnectorProperties properties_;
   const StatWriterProvider statWriterProvider_;
+  const std::shared_ptr<velox::connector::ConnectorRegistry::Registry>
+      connectorRegistry_;
+  const std::shared_ptr<ConnectorMetadataRegistry::Registry> metadataRegistry_;
   // The lock guards the map alone; a session is built under its entry's flag.
   folly::Synchronized<folly::F14FastMap<std::string, std::shared_ptr<Entry>>>
       sessions_;

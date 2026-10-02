@@ -164,7 +164,7 @@ class SystemConnectorMetadataTest : public ::testing::Test {
   }
 
   ConnectorSessionPtr makeSession() {
-    return std::make_shared<ConnectorSession>(
+    return ConnectorSession::createProcessWide(
         /*queryId=*/"test",
         /*user=*/"test",
         Properties{},
