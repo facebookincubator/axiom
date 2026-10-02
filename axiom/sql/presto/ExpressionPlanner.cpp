@@ -24,6 +24,7 @@
 #include <limits>
 
 #include "axiom/common/SchemaTypeName.h"
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/sql/presto/GroupByPlanner.h"
 #include "axiom/sql/presto/PrestoSqlError.h"

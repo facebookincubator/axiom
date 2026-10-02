@@ -126,7 +126,7 @@ class LocalHiveConnectorMetadataTest
   }
 
   static ConnectorSessionPtr makeSession() {
-    return std::make_shared<ConnectorSession>(
+    return ConnectorSession::createProcessWide(
         /*queryId=*/"q-test",
         /*user=*/"u-test",
         Properties{},

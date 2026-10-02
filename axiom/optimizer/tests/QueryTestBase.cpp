@@ -231,7 +231,7 @@ PlanCost QueryTestBase::optimizationCost(
       queryCtx.get(), optimizerPool_.get());
   connector::SchemaResolver schemaResolver{
       connector::ConnectorMetadataRegistry::global()};
-  auto connectorContext = std::make_shared<connector::ConnectorContext>(
+  auto connectorContext = connector::ConnectorContext::createProcessWide(
       queryCtx->queryId(),
       "test",
       connectorSessionProperties_,
@@ -272,7 +272,7 @@ void QueryTestBase::verifyOptimization(
       connector::ConnectorMetadataRegistry::global()};
   VeloxHistory history;
 
-  auto connectorContext = std::make_shared<connector::ConnectorContext>(
+  auto connectorContext = connector::ConnectorContext::createProcessWide(
       veloxQueryCtx->queryId(),
       "test",
       connectorSessionProperties_,
@@ -313,7 +313,7 @@ void QueryTestBase::verifyOptimization(
       veloxQueryCtx.get(), optimizerPool_.get());
   connector::SchemaResolver schemaResolver{
       connector::ConnectorMetadataRegistry::global()};
-  auto connectorContext = std::make_shared<connector::ConnectorContext>(
+  auto connectorContext = connector::ConnectorContext::createProcessWide(
       veloxQueryCtx->queryId(),
       "test",
       connectorSessionProperties_,
@@ -385,7 +385,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
     }
   };
 
-  auto connectorContext = std::make_shared<connector::ConnectorContext>(
+  auto connectorContext = connector::ConnectorContext::createProcessWide(
       queryCtx->queryId(),
       "test",
       connectorSessionProperties_,

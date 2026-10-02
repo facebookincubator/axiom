@@ -16,19 +16,83 @@
 
 #include "axiom/connectors/ConnectorContext.h"
 
+#include "velox/core/QueryCtx.h"
+
 namespace facebook::axiom::connector {
+
+ConnectorContextPtr ConnectorContext::createProcessWide(
+    std::string queryId,
+    std::string user,
+    ConnectorProperties properties,
+    StatWriterProvider statWriterProvider) {
+  return std::make_shared<ConnectorContext>(
+      std::move(queryId),
+      std::move(user),
+      std::move(properties),
+      std::move(statWriterProvider),
+      velox::connector::ConnectorRegistry::processWide(),
+      ConnectorMetadataRegistry::processWide());
+}
 
 ConnectorContext::ConnectorContext(
     std::string queryId,
     std::string user,
     ConnectorProperties properties,
-    StatWriterProvider statWriterProvider)
+    StatWriterProvider statWriterProvider,
+    std::shared_ptr<velox::connector::ConnectorRegistry::Registry>
+        connectorRegistry,
+    std::shared_ptr<ConnectorMetadataRegistry::Registry> metadataRegistry)
     : queryId_{std::move(queryId)},
       user_{std::move(user)},
       properties_{std::move(properties)},
-      statWriterProvider_{std::move(statWriterProvider)} {
+      statWriterProvider_{std::move(statWriterProvider)},
+      connectorRegistry_{std::move(connectorRegistry)},
+      metadataRegistry_{std::move(metadataRegistry)} {
   VELOX_CHECK(
       statWriterProvider_, "ConnectorContext requires a stat writer provider");
+  VELOX_CHECK_NOT_NULL(
+      connectorRegistry_, "ConnectorContext requires a connector registry");
+  VELOX_CHECK_NOT_NULL(
+      metadataRegistry_,
+      "ConnectorContext requires a connector metadata registry");
+}
+
+std::shared_ptr<velox::connector::Connector> ConnectorContext::connector(
+    std::string_view connectorId) const {
+  auto connector = connectorRegistry_->find(std::string{connectorId});
+  VELOX_CHECK_NOT_NULL(
+      connector, "Connector is not registered: {}", connectorId);
+  return connector;
+}
+
+std::shared_ptr<ConnectorMetadata> ConnectorContext::tryMetadata(
+    std::string_view connectorId) const {
+  return metadataRegistry_->find(std::string{connectorId});
+}
+
+std::shared_ptr<ConnectorMetadata> ConnectorContext::metadata(
+    std::string_view connectorId) const {
+  auto metadata = tryMetadata(connectorId);
+  VELOX_CHECK_NOT_NULL(
+      metadata, "Connector metadata is not registered: {}", connectorId);
+  return metadata;
+}
+
+std::vector<std::string> ConnectorContext::metadataIds() const {
+  auto entries = metadataRegistry_->snapshot();
+  std::vector<std::string> ids;
+  ids.reserve(entries.size());
+  for (auto&& [id, _] : entries) {
+    ids.emplace_back(std::move(id));
+  }
+  return ids;
+}
+
+void ConnectorContext::attachTo(velox::core::QueryCtx& queryCtx) const {
+  queryCtx.setRegistry(
+      velox::connector::ConnectorRegistry::kRegistryKey, connectorRegistry_);
+  queryCtx.setRegistry(
+      ConnectorMetadataRegistry::kRegistryKey, metadataRegistry_);
 }
 
 namespace {
@@ -73,7 +137,9 @@ ConnectorSessionPtr ConnectorContext::sessionFor(std::string_view connectorId) {
         queryId_,
         user_,
         propertiesFor(properties_, connectorId),
-        std::move(statsWriter));
+        std::move(statsWriter),
+        connectorRegistry_,
+        metadataRegistry_);
   });
 
   return entry->session;
