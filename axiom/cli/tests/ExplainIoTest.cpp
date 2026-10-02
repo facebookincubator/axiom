@@ -450,6 +450,75 @@ TEST_P(ExplainIoTest, columnConstraints) {
           "   WHERE ds <> 'foo'"),
       noConstraints);
 
+  // IS DISTINCT FROM NULL allows every non-NULL value.
+  ASSERT_EQ(
+      getJson(
+          "EXPLAIN (TYPE IO) "
+          "SELECT * FROM t "
+          "   WHERE ds IS DISTINCT FROM NULL"),
+      makeTable(makeConstraint(
+          "ds",
+          "VARCHAR",
+          R"({
+            "nullsAllowed": false,
+            "ranges": [{}]
+          })")));
+
+  // IS NOT DISTINCT FROM NULL allows only NULL.
+  ASSERT_EQ(
+      getJson(
+          "EXPLAIN (TYPE IO) "
+          "SELECT * FROM t "
+          "   WHERE ds IS NOT DISTINCT FROM NULL"),
+      makeTable(makeConstraint(
+          "ds",
+          "VARCHAR",
+          R"({
+            "nullsAllowed": true,
+            "ranges": []
+          })")));
+
+  // IS DISTINCT FROM a non-NULL literal includes NULL and excludes the
+  // literal.
+  ASSERT_EQ(
+      getJson(
+          "EXPLAIN (TYPE IO) "
+          "SELECT * FROM t "
+          "   WHERE ds IS DISTINCT FROM '2026-03-17'"),
+      makeTable(makeConstraint(
+          "ds",
+          "VARCHAR",
+          R"({
+            "nullsAllowed": true,
+            "ranges": [
+              {
+                "high": {"value": "2026-03-17", "bound": "BELOW"}
+              },
+              {
+                "low": {"value": "2026-03-17", "bound": "ABOVE"}
+              }
+            ]
+          })")));
+
+  // IS NOT DISTINCT FROM a non-NULL literal allows only the literal.
+  ASSERT_EQ(
+      getJson(
+          "EXPLAIN (TYPE IO) "
+          "SELECT * FROM t "
+          "   WHERE ds IS NOT DISTINCT FROM '2026-03-17'"),
+      makeTable(makeConstraint(
+          "ds",
+          "VARCHAR",
+          R"({
+            "nullsAllowed": false,
+            "ranges": [
+              {
+                "low": {"value": "2026-03-17", "bound": "EXACTLY"},
+                "high": {"value": "2026-03-17", "bound": "EXACTLY"}
+              }
+            ]
+          })")));
+
   // NOT BETWEEN produces two exclusive ranges.
   ASSERT_EQ(
       getJson(
@@ -792,13 +861,19 @@ TEST_P(ExplainIoTest, columnConstraints) {
             ]
           })")));
 
-  // ds <= x OR ds >= x covers all values — constraint is omitted.
+  // ds <= x OR ds >= x covers every non-NULL value.
   ASSERT_EQ(
       getJson(
           "EXPLAIN (TYPE IO) "
           "SELECT * FROM t "
           "   WHERE ds <= '2026-03-17' OR ds >= '2026-03-17'"),
-      noConstraints);
+      makeTable(makeConstraint(
+          "ds",
+          "VARCHAR",
+          R"({
+            "nullsAllowed": false,
+            "ranges": [{}]
+          })")));
 
   // Same table scanned twice with filters on different columns: neither column
   // is constrained in both scans, so the whole table may be read.

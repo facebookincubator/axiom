@@ -163,6 +163,15 @@ bool FunctionRegistry::registerIsNull(std::string_view name) {
   return true;
 }
 
+bool FunctionRegistry::registerDistinctFrom(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (distinctFrom_.has_value() && distinctFrom_.value() != name) {
+    return false;
+  }
+  distinctFrom_ = name;
+  return true;
+}
+
 bool FunctionRegistry::registerBetween(std::string_view name) {
   VELOX_USER_CHECK(!name.empty());
   if (between_.has_value() && between_.value() != name) {
@@ -442,6 +451,7 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
   registry->registerGreaterThan(fullName("gt"));
   registry->registerGreaterThanOrEqual(fullName("gte"));
   registry->registerIsNull(fullName("is_null"));
+  registry->registerDistinctFrom(fullName("distinct_from"));
   registry->registerBetween(fullName("between"));
   registry->registerLike(fullName("like"));
   registry->registerRandom(fullName("rand"));

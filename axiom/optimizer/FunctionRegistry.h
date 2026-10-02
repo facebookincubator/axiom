@@ -426,6 +426,18 @@ class FunctionRegistry {
     return isNull_;
   }
 
+  /// Registers function 'name' that returns whether its two arguments differ,
+  /// comparing NULL as a value: NULL differs from every non-NULL value and not
+  /// from NULL. Never returns NULL.
+  /// @return true if successfully registered, false if a different
+  /// 'distinctFrom' function is already registered.
+  bool registerDistinctFrom(std::string_view name);
+
+  /// Returns the name of the 'distinctFrom' function.
+  const std::optional<std::string>& distinctFrom() const {
+    return distinctFrom_;
+  }
+
   /// Registers function 'name' that has semantics of Presto's 'between', i.e.
   /// returns true if the first argument is within the inclusive range bounded
   /// by the second and third arguments.
@@ -571,6 +583,7 @@ class FunctionRegistry {
   std::optional<std::string> greaterThan_;
   std::optional<std::string> greaterThanOrEqual_;
   std::optional<std::string> isNull_;
+  std::optional<std::string> distinctFrom_;
   std::optional<std::string> between_;
   std::optional<std::string> like_;
   std::optional<std::string> random_;

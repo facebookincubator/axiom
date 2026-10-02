@@ -110,6 +110,26 @@ TEST_P(FilterPushdownTest, redundantCast) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+TEST_P(FilterPushdownTest, distinctFromDomain) {
+  auto assertFilter = [&](const std::string& predicate,
+                          std::unique_ptr<common::Filter> filter) {
+    SCOPED_TRACE(predicate);
+    auto plan = toSingleNodePlan(
+        parseSelect(fmt::format("SELECT * FROM orders WHERE {}", predicate)));
+    auto matcher =
+        matchHiveScan(
+            "orders",
+            common::test::singleSubfieldFilter("o_orderkey", std::move(filter)))
+            .build();
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
+  };
+
+  assertFilter("o_orderkey IS DISTINCT FROM NULL", exec::isNotNull());
+  assertFilter("o_orderkey IS NOT DISTINCT FROM NULL", exec::isNull());
+  assertFilter("o_orderkey IS DISTINCT FROM 1", exec::notEqual(1, true));
+  assertFilter("o_orderkey IS NOT DISTINCT FROM 1", exec::equal(1));
+}
+
 TEST_P(FilterPushdownTest, throughJoin) {
   auto startMatcher = [](const auto& tableName) {
     return matchHiveScan(tableName);

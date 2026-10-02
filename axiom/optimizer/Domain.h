@@ -140,8 +140,7 @@ class Domain {
   /// Returns true if both domains contain the same values.
   bool operator==(const Domain& other) const;
 
-  /// Returns true if this domain is unconstrained (all non-null values match).
-  /// Ignores nullsAllowed since a null-only constraint is not useful for IO.
+  /// Returns true if this domain contains every value, including null.
   bool isAll() const;
 
   /// Returns true if no values match this domain.
@@ -180,6 +179,7 @@ using ExprCP = const Expr*;
 ///
 /// Recognized expressions:
 ///   - Comparisons with literals: eq, lt, lte, gt, gte(column, literal)
+///   - NULL-safe comparison with a literal: distinct_from(column, literal)
 ///   - BETWEEN(column, literal, literal) — closed range [low, high]
 ///   - LIKE(column, literal) — prefix range, or equality if wildcard-free
 ///   - IN(column, literal, literal, ...)

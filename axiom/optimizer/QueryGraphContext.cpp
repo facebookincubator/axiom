@@ -384,6 +384,10 @@ void QueryGraphContext::populateFunctionNames() {
     functionNames_.isNull = this->toName(isNull.value());
   }
 
+  if (auto distinctFrom = registry->distinctFrom()) {
+    functionNames_.distinctFrom = this->toName(distinctFrom.value());
+  }
+
   if (auto between = registry->between()) {
     functionNames_.between = this->toName(between.value());
   }

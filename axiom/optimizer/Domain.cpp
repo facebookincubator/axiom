@@ -301,7 +301,8 @@ bool Domain::operator==(const Domain& other) const {
 }
 
 bool Domain::isAll() const {
-  return ranges_.size() == 1 && !ranges_[0].low() && !ranges_[0].high();
+  return nullsAllowed_ && ranges_.size() == 1 && !ranges_[0].low() &&
+      !ranges_[0].high();
 }
 
 bool Domain::isNone() const {
@@ -428,34 +429,50 @@ std::optional<Domain> comparisonDomain(
     Name functionName,
     const velox::Variant& literal,
     PredicateResult result) {
-  auto value = normalizeLiteral(column, literal);
-  if (!value.has_value()) {
-    return std::nullopt;
-  }
-  if (value->isNull()) {
-    return Domain::none();
+  const auto& functionNames = queryCtx()->functionNames();
+  if (functionName == functionNames.distinctFrom) {
+    auto value = normalizeLiteral(column, literal);
+    if (!value.has_value()) {
+      return std::nullopt;
+    }
+    const auto nonNullValues = nonNullDomain(column);
+    auto equalValues = value->isNull()
+        ? Domain::onlyNull()
+        : Domain::singleValue(std::move(*value)).intersect(nonNullValues);
+    const auto allValues = nonNullValues.unite(Domain::onlyNull());
+    return result == PredicateResult::kTrue ? allValues.subtract(equalValues)
+                                            : std::move(equalValues);
   }
 
-  const auto& functionNames = queryCtx()->functionNames();
-  std::optional<Domain> trueValues;
+  Domain (*makeTrueValues)(velox::Variant){nullptr};
   if (functionName == functionNames.equality) {
-    trueValues = Domain::singleValue(std::move(*value));
+    makeTrueValues = &Domain::singleValue;
   } else if (functionName == functionNames.lt) {
-    trueValues = Domain::lessThan(std::move(*value));
+    makeTrueValues = &Domain::lessThan;
   } else if (functionName == functionNames.lte) {
-    trueValues = Domain::lessThanOrEqual(std::move(*value));
+    makeTrueValues = &Domain::lessThanOrEqual;
   } else if (functionName == functionNames.gt) {
-    trueValues = Domain::greaterThan(std::move(*value));
+    makeTrueValues = &Domain::greaterThan;
   } else if (functionName == functionNames.gte) {
-    trueValues = Domain::greaterThanOrEqual(std::move(*value));
+    makeTrueValues = &Domain::greaterThanOrEqual;
   } else {
     return std::nullopt;
   }
 
+  auto value = normalizeLiteral(column, literal);
+  if (!value.has_value()) {
+    return std::nullopt;
+  }
+  // eq, lt, lte, gt and gte return NULL for a NULL literal, so no row makes
+  // them TRUE or FALSE.
+  if (value->isNull()) {
+    return Domain::none();
+  }
+
   const auto validValues = nonNullDomain(column);
-  trueValues = trueValues->intersect(validValues);
-  return result == PredicateResult::kTrue ? std::move(*trueValues)
-                                          : validValues.subtract(*trueValues);
+  auto trueValues = makeTrueValues(std::move(*value)).intersect(validValues);
+  return result == PredicateResult::kTrue ? std::move(trueValues)
+                                          : validValues.subtract(trueValues);
 }
 
 // Returns the exclusive upper bound for all strings that start with 'prefix':

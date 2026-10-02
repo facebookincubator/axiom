@@ -109,8 +109,7 @@ TEST_F(DomainTest, nulls) {
 
   auto notNull = Domain::notNull();
   ASSERT_FALSE(notNull.nullsAllowed());
-  // notNull has one unbounded range — isAll() ignores nullsAllowed.
-  ASSERT_TRUE(notNull.isAll());
+  ASSERT_FALSE(notNull.isAll());
   ASSERT_FALSE(notNull.isNone());
 
   auto result = onlyNull.unite(Domain::singleValue(Variant("x")));

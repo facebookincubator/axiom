@@ -338,6 +338,7 @@ struct FunctionNames {
   Name gt{nullptr};
   Name gte{nullptr};
   Name isNull{nullptr};
+  Name distinctFrom{nullptr};
   Name between{nullptr};
   Name like{nullptr};
   Name random{nullptr};
