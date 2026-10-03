@@ -25,7 +25,10 @@
 #include <iterator>
 #include <optional>
 #include <set>
+#include <sstream>
+#include <string_view>
 #include "axiom/cli/LiveProgressDisplay.h"
+#include "axiom/cli/Pager.h"
 #include "axiom/cli/QueryInterruptHandler.h"
 #include "axiom/cli/ResultPrinter.h"
 #include "axiom/cli/StdinReader.h"
@@ -48,6 +51,13 @@ DEFINE_uint64(
     "Approx bytes covered by one split");
 
 DEFINE_int32(max_rows, 100, "Max number of printed result rows");
+
+DEFINE_string(
+    pager,
+    "less -SFX",
+    "Command used to view query results on a terminal. The default disables "
+    "line wrapping and exits automatically for short results. Set to empty to "
+    "print directly to stdout.");
 
 DEFINE_int32(num_workers, 1, "Number of in-process workers");
 DEFINE_int32(num_drivers, 1, "Number of drivers per worker");
@@ -102,6 +112,19 @@ int terminalWidth(int fileDescriptor) {
     return windowSize.ws_col;
   }
   return kDefaultTerminalWidth;
+}
+
+// Sends formatted query results to the configured terminal pager. A pager is
+// deliberately used only when stdout is a terminal: redirected output remains
+// plain text for scripts and pipes. Return false when the results still need
+// printing, so callers can fall back to stdout.
+bool printWithPager(std::string_view text) {
+  if (!isatty(STDOUT_FILENO) || FLAGS_pager.empty()) {
+    return false;
+  }
+
+  std::cout.flush();
+  return axiom::cli::Pager::print(text, FLAGS_pager);
 }
 
 // Extracts a file path argument from a dot-command string like ".run <file>".
@@ -308,7 +331,12 @@ Console::runOnce(std::string_view sql, bool printTiming, bool showProgress) {
       if (FLAGS_debug && !result.results.empty()) {
         std::cout << result.results.front()->rowType()->toString() << std::endl;
       }
-      cli::printResults(result.results, FLAGS_max_rows);
+      std::ostringstream formattedResults;
+      cli::printResults(result.results, FLAGS_max_rows, formattedResults);
+      const auto output = formattedResults.str();
+      if (!printWithPager(output)) {
+        std::cout << output;
+      }
     }
 
     if (printTiming) {
