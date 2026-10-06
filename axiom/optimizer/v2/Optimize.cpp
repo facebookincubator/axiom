@@ -240,6 +240,7 @@ NodeCP Optimizer::planTo(
       node,
       builder_,
       evaluator_,
+      session_,
       session_.options(),
       planOptions_.maxRemotePartitions,
       planOptions_.maxLocalPartitions);
@@ -276,6 +277,7 @@ PlanAndStats Optimizer::optimize(const MultiFragmentPlan::Options& options) {
       planned,
       outputColumns_,
       outputNames_,
+      builder_,
       session_,
       evaluator_,
       planOptions_);

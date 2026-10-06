@@ -19,7 +19,9 @@
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 #include <deque>
+#include <memory>
 #include <numeric>
+#include <vector>
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/v2/Node.h"
@@ -193,6 +195,18 @@ class Builder {
     return &scanHandles_.emplace_back(std::move(handle));
   }
 
+  /// Takes ownership of 'layout' and returns the stable pointer a
+  /// `TableWrite` carries through physical planning. `TableWrite` nodes live
+  /// in an arena that does not run destructors, so the owning shared pointer
+  /// stays here instead of in the node.
+  const connector::DeleteLayout* takeDeleteLayout(
+      connector::DeleteLayoutPtr layout);
+
+  /// Returns an owning reference for a DELETE layout previously registered by
+  /// `takeDeleteLayout`.
+  connector::DeleteLayoutPtr deleteLayout(
+      const connector::DeleteLayout* pointer) const;
+
  private:
   // For a binary `Call` whose 'name' is in `reversibleFunctions_`,
   // swaps 'args' (and renames to the reverse) when `args[0]` should
@@ -315,6 +329,11 @@ class Builder {
   // Owns the connector handles the IR's `Scan`s point at. A deque so the
   // pointers stay valid as more are added.
   std::deque<ScanHandle> scanHandles_;
+
+  // Owns the connector layouts the IR's `TableWrite`s point at. The plans
+  // themselves are heap allocated, so their pointers stay stable as this
+  // vector grows.
+  std::vector<connector::DeleteLayoutPtr> deleteLayouts_;
 };
 
 } // namespace facebook::axiom::optimizer::v2

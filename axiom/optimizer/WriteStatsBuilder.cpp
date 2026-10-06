@@ -58,6 +58,12 @@ WriteStatsBuilder::WriteStatsBuilder(
     const connector::ConnectorWriteHandle& writeHandle,
     int32_t numDrivers,
     int32_t numWorkers) {
+  // Statistics are read positionally, so the input's columns are the table's.
+  VELOX_CHECK_EQ(
+      inputType->size(),
+      table.type()->size(),
+      "A write's input is the table's columns, in order");
+
   const auto* registry = FunctionRegistry::instance();
   const auto& statsAggs = registry->statsAggregates();
   const auto& countName = registry->count();

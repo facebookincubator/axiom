@@ -16,6 +16,8 @@
 
 #include "axiom/optimizer/v2/Builder.h"
 
+#include <algorithm>
+
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/v2/ExprFactory.h"
 
@@ -28,6 +30,26 @@ Builder::Builder() : functionNames_{queryCtx()->functionNames()} {
     reversibleFunctions_.emplace(toName(name), toName(reverseName));
     reversibleFunctions_.emplace(toName(reverseName), toName(name));
   }
+}
+
+const connector::DeleteLayout* Builder::takeDeleteLayout(
+    connector::DeleteLayoutPtr layout) {
+  VELOX_CHECK_NOT_NULL(layout);
+  const auto* pointer = layout.get();
+  deleteLayouts_.push_back(std::move(layout));
+  return pointer;
+}
+
+connector::DeleteLayoutPtr Builder::deleteLayout(
+    const connector::DeleteLayout* pointer) const {
+  auto it = std::find_if(
+      deleteLayouts_.begin(), deleteLayouts_.end(), [&](const auto& layout) {
+        return layout.get() == pointer;
+      });
+  VELOX_CHECK(
+      it != deleteLayouts_.end(),
+      "DELETE layout is not owned by this plan's Builder");
+  return *it;
 }
 
 const Values* Builder::makeSingleRowValues(

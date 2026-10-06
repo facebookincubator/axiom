@@ -1794,10 +1794,6 @@ RowsFuture LocalHiveConnectorMetadata::finishWrite(
     const std::vector<velox::RowVectorPtr>& writeResults,
     velox::RowVectorPtr groupingKeys,
     std::vector<std::vector<ColumnStatistics>> groupStats) {
-  if (const auto* deleteHandle = handle->as<HiveDeleteWriteHandle>()) {
-    return removePartitions(*deleteHandle);
-  }
-
   uint64_t rows = 0;
   velox::DecodedVector decoded;
   for (const auto& result : writeResults) {
@@ -1863,6 +1859,16 @@ RowsFuture LocalHiveConnectorMetadata::finishWrite(
   return rows;
 }
 
+RowsFuture LocalHiveConnectorMetadata::finishDelete(
+    const ConnectorSessionPtr& /*session*/,
+    const ConnectorDeleteHandlePtr& handle,
+    const std::vector<velox::RowVectorPtr>& writeResults) {
+  VELOX_CHECK(
+      writeResults.empty(),
+      "A metadata-only DELETE cannot produce writer results");
+  return removePartitions(*handle->asChecked<HiveDeleteWriteHandle>());
+}
+
 void LocalHiveConnectorMetadata::reloadTableFromPath(
     const SchemaTableName& tableName) {
   std::lock_guard<std::mutex> l(mutex_);
@@ -1872,12 +1878,6 @@ void LocalHiveConnectorMetadata::reloadTableFromPath(
 velox::ContinueFuture LocalHiveConnectorMetadata::abortWrite(
     const ConnectorSessionPtr& /*session*/,
     const ConnectorWriteHandlePtr& handle) noexcept try {
-  if (handle->as<HiveDeleteWriteHandle>() != nullptr) {
-    // Partitions are removed in finishWrite, so an aborted delete leaves
-    // nothing behind.
-    return {};
-  }
-
   std::lock_guard<std::mutex> l(mutex_);
   const auto* hiveHandle = handle->asChecked<HiveConnectorWriteHandle>();
   const auto* veloxHandle =

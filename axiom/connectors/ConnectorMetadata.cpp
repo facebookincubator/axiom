@@ -99,6 +99,38 @@ const auto& writeKindNames() {
 
 AXIOM_DEFINE_ENUM_NAME(WriteKind, writeKindNames);
 
+void DeleteLayout::checkConsistency() const {
+  VELOX_CHECK(
+      hasWriter ||
+          (shuffleKeys.empty() && partitionType == nullptr &&
+           sortKeys.empty() && sortOrders.empty()),
+      "Metadata-only DELETE cannot carry writer requirements");
+  VELOX_CHECK_EQ(
+      sortKeys.size(),
+      sortOrders.size(),
+      "Delete sort keys and sort orders must be one-to-one");
+  VELOX_CHECK_EQ(
+      shuffleKeys.empty(),
+      partitionType == nullptr,
+      "Delete shuffle keys and partition type must be specified together");
+  for (const auto& key : shuffleKeys) {
+    VELOX_CHECK(!key.empty(), "Delete shuffle key requires a name");
+  }
+  for (const auto& key : sortKeys) {
+    VELOX_CHECK(!key.empty(), "Delete sort key requires a name");
+  }
+}
+
+ConnectorDeleteHandle::ConnectorDeleteHandle(
+    velox::connector::ConnectorInsertTableHandlePtr veloxHandle,
+    velox::RowTypePtr resultType)
+    : veloxHandle_{std::move(veloxHandle)}, resultType_{std::move(resultType)} {
+  VELOX_CHECK_EQ(
+      veloxHandle_ == nullptr,
+      resultType_ == nullptr,
+      "Delete writer handle and result type must be specified together");
+}
+
 void MetadataCountGroup::checkConsistency() const {
   VELOX_CHECK_GE(numRows, 0, "Row count must be non-negative");
   for (const auto nulls : numNulls) {

@@ -246,6 +246,11 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
 
   std::shared_ptr<velox::core::QueryCtx>& getQueryCtx();
 
+  /// Connectors see the query through this, so state a connector keeps for a
+  /// query reaches planning and execution alike. Lives as long as the query
+  /// context does.
+  const connector::ConnectorContextPtr& getConnectorContext();
+
   static VeloxHistory& suiteHistory() {
     return *gSuiteHistory;
   }
@@ -297,11 +302,15 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
       const std::string& key,
       std::string value) {
     connectorSessionProperties_[connectorId][key] = std::move(value);
+    // The context carries the properties it was made with, so the next query
+    // needs one made with these.
+    connectorContext_.reset();
   }
 
   /// Clears all connector session properties set via setConnectorSession.
   void clearConnectorSession() {
     connectorSessionProperties_.clear();
+    connectorContext_.reset();
   }
 
   // Per-connector session properties passed to the OptimizerSession. Tests set
@@ -331,6 +340,9 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
 
   // A QueryCtx created for each compiled query.
   std::shared_ptr<velox::core::QueryCtx> queryCtx_;
+
+  // Connector context shared by planning and execution of that query.
+  connector::ConnectorContextPtr connectorContext_;
   std::unique_ptr<optimizer::VeloxHistory> history_;
 
   inline static int32_t gQueryCounter{0};

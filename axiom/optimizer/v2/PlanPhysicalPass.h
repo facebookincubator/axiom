@@ -17,6 +17,7 @@
 #pragma once
 
 #include "axiom/optimizer/OptimizerOptions.h"
+#include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/v2/Builder.h"
 #include "axiom/optimizer/v2/Node.h"
 
@@ -59,6 +60,7 @@ class PlanPhysicalPass {
       NodeCP root,
       Builder& builder,
       velox::core::ExpressionEvaluator& evaluator,
+      const OptimizerSession& session,
       const OptimizerOptions& options,
       int32_t numWorkers,
       int32_t numDrivers);

@@ -22,6 +22,7 @@
 
 #include <folly/coro/GtestHelpers.h>
 #include <folly/init/Init.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <numeric>
 
@@ -96,7 +97,7 @@ TEST_F(TestConnectorTest, connectorRegister) {
 
 TEST_F(TestConnectorTest, table) {
   auto schema = ROW({{"a", INTEGER()}, {"b", VARCHAR()}});
-  connector_->addTable("table", schema);
+  auto testTable = connector_->addTable("table", schema);
   auto table = metadata_->findTable({kDefaultSchema, "table"});
   EXPECT_NE(table, nullptr);
   EXPECT_EQ(table->name(), (SchemaTableName{kDefaultSchema, "table"}));
@@ -106,6 +107,9 @@ TEST_F(TestConnectorTest, table) {
   EXPECT_TRUE(table->columnMap().contains("b"));
   EXPECT_TRUE(table->columnMap().contains(TestTable::kRowId));
   EXPECT_TRUE(table->columnMap().at(TestTable::kRowId)->hidden());
+  EXPECT_EQ(
+      table->rowIdColumns(WriteKind::kDelete),
+      std::vector<std::string>{std::string{TestTable::kRowId}});
 
   auto vector = makeRowVector(
       {makeFlatVector<int>({0, 1, 2}),
@@ -119,12 +123,24 @@ TEST_F(TestConnectorTest, table) {
           {makeFlatVector<int>({3, 4}),
            makeFlatVector<StringView>({"d", "e"})}));
   EXPECT_EQ(table->numRows(), 5);
-  const auto* testTable = table->asChecked<TestTable>();
   ASSERT_EQ(testTable->data().size(), 2);
-  test::assertEqualVectors(
-      makeFlatVector<int64_t>({0, 1, 2}), testTable->data()[0]->childAt(2));
-  test::assertEqualVectors(
-      makeFlatVector<int64_t>({3, 4}), testTable->data()[1]->childAt(2));
+  std::vector<int64_t> rowIds;
+  for (const auto& batch : testTable->data()) {
+    const auto* rowIdVector = batch->childAt(2)->asFlatVector<int64_t>();
+    for (vector_size_t i = 0; i < batch->size(); ++i) {
+      rowIds.push_back(rowIdVector->valueAt(i));
+    }
+  }
+  EXPECT_THAT(rowIds, testing::ElementsAre(0, 1, 2, 3, 4));
+  EXPECT_EQ(testTable->deleteRows(folly::F14FastSet<int64_t>{1}), 1);
+  connector_->appendData(
+      "table",
+      makeRowVector(
+          {makeFlatVector<int>({5}), makeFlatVector<StringView>({"f"})}));
+  EXPECT_EQ(table->numRows(), 5);
+  EXPECT_EQ(
+      testTable->data().back()->childAt(2)->asFlatVector<int64_t>()->valueAt(0),
+      5);
 
   vector = makeRowVector({makeFlatVector<int>({0, 1, 2})});
   VELOX_ASSERT_THROW(
@@ -286,6 +302,18 @@ TEST_F(TestConnectorTest, dataSink) {
 
   EXPECT_TRUE(dataSink->finish());
   EXPECT_TRUE(dataSink->close().empty());
+
+  auto deleteSink = connector_->createDataSink(
+      ROW(std::string{TestTable::kRowId}, BIGINT()),
+      std::make_shared<TestDeleteTableHandle>(
+          SchemaTableName{std::string(TestConnector::kDefaultSchema), "table"}),
+      connectorQueryCtx.get(),
+      velox::connector::CommitStrategy::kNoCommit);
+  deleteSink->appendData(makeRowVector({makeFlatVector<int64_t>({1, 3})}));
+  EXPECT_EQ(table->numRows(), 5);
+  EXPECT_TRUE(deleteSink->finish());
+  EXPECT_EQ(deleteSink->close(), std::vector<std::string>{"1,3"});
+  EXPECT_EQ(table->numRows(), 5);
 }
 
 TEST_F(TestConnectorTest, dataSource) {

@@ -18,6 +18,7 @@
 
 #include <array>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <vector>
@@ -284,6 +285,9 @@ class Scan : public Node {
 
   explicit Scan(Key key);
 
+  /// Returns the scan marked as a DELETE target by TranslatePass, or nullptr.
+  static const Scan* FOLLY_NULLABLE findDeleteTarget(NodeCP root);
+
   BaseTableCP baseTable() const {
     return baseTable_;
   }
@@ -529,9 +533,18 @@ class Limit : public Node {
 
 using LimitCP = const Limit*;
 
-/// Sorts rows by `orderKeys` with directions in `orderTypes`. Does not change
-/// the schema: `outputColumns()` are the input's columns unchanged (the same
-/// `Column` pointers).
+/// Sorts rows by `orderKeys` with directions in `orderTypes`. A regular sort
+/// merges the local drivers into one task-wide sorted stream; a per-driver sort
+/// keeps one sorted stream per driver, for consumers such as parallel writers.
+/// Does not change the schema: `outputColumns()` are the input's columns
+/// unchanged (the same `Column` pointers).
+///
+/// Example: `Sort({input, {key}, {OrderType::kAscNullsLast}})` produces one
+/// task-wide stream ordered by `key`.
+///
+/// Invariants:
+///   - `orderKeys` is non-empty and contains only input columns.
+///   - `orderKeys` and `orderTypes` have equal size.
 class Sort : public Node {
  public:
   struct Key {
@@ -541,6 +554,8 @@ class Sort : public Node {
     ExprVector orderKeys;
     /// Sort direction per key; positional with `orderKeys`.
     OrderTypeVector orderTypes;
+    /// Leaves one sorted stream per driver instead of merging the streams.
+    bool perDriver{false};
   };
 
   /// Transparent hasher for interning `Sort`s by identity.
@@ -572,6 +587,11 @@ class Sort : public Node {
     return orderTypes_;
   }
 
+  /// Returns whether the sorted driver streams remain separate.
+  bool perDriver() const {
+    return perDriver_;
+  }
+
   std::span<const NodeCP> inputs() const override {
     return {&input_, 1};
   }
@@ -587,6 +607,7 @@ class Sort : public Node {
   const NodeCP input_;
   const ExprVector orderKeys_;
   const OrderTypeVector orderTypes_;
+  const bool perDriver_;
 };
 
 using SortCP = const Sort*;
@@ -2214,14 +2235,14 @@ class EnforceDistinct : public Node {
 
 using EnforceDistinctCP = const EnforceDistinct*;
 
-/// Redistributes input rows across tasks with a remote exchange — lowered to a
-/// `PartitionedOutput`→`Exchange` pair straddling a fragment boundary — setting
-/// `partitioning` as the output's global partitioning. Does not change the
+/// Repartitions rows at `partitioning.scope`: a global exchange becomes a
+/// `PartitionedOutput`→`Exchange` pair across fragments, while a driver-scope
+/// exchange becomes a local exchange within one fragment. Does not change the
 /// schema: `outputColumns()` are the input's columns unchanged (the same
-/// `Column` pointers). The only node that repartitions: it imposes a global
-/// partitioning via a shuffle, whereas other nodes derive theirs from their
-/// input. The distributed memo places it when a consumer needs a partitioning
-/// the input lacks.
+/// `Column` pointers).
+///
+/// Example: `Exchange({input, Partitioning::globalHash({key})})` sends equal
+/// keys to the same task.
 ///
 /// Invariants:
 ///   - `input` is non-null.
@@ -2232,7 +2253,7 @@ class Exchange : public Node {
   struct Key {
     /// Input node.
     NodeCP input;
-    /// Global partitioning imposed on the output via the shuffle.
+    /// Partitioning imposed at `partitioning.scope`.
     Partitioning partitioning;
   };
 
@@ -2279,7 +2300,8 @@ class Exchange : public Node {
 
 using ExchangeCP = const Exchange*;
 
-/// Writes its input rows to a table (CTAS / INSERT; DELETE / UPDATE deferred).
+/// Writes rows for CREATE or INSERT, or row identity for DELETE. UPDATE is
+/// deferred.
 /// A root sink: its single BIGINT output column is the
 /// written row count, consumed by no node.
 class TableWrite : public Node {
@@ -2287,8 +2309,7 @@ class TableWrite : public Node {
   struct Key {
     /// Input node (rows to write).
     NodeCP input;
-    /// Target table; emit reads its `type()` and `layouts()` for the insert
-    /// handle.
+    /// Target table used to build the connector's write or delete handle.
     const connector::Table* table;
     /// Write form (INSERT / CTAS / ...).
     connector::WriteKind kind;
@@ -2296,6 +2317,17 @@ class TableWrite : public Node {
     /// Each is a column of `input`, which produces exactly these, in order.
     /// Empty for a delete, which writes no columns.
     ExprVector columnExprs;
+
+    /// The columns identifying the rows a delete removes, in the order
+    /// `Table::rowIdColumns()` names them. A delete evaluates no value
+    /// expressions, so these are the whole of what it reads. Empty for every
+    /// other write kind.
+    ColumnVector rowIdColumns;
+
+    /// Non-owning connector DELETE layout negotiated after scan pushdown and
+    /// carried through physical planning to emission. `Builder` owns it. Null
+    /// before physical planning and for every other write kind.
+    const connector::DeleteLayout* deleteLayout;
   };
 
   /// Transparent hasher for interning `TableWrite`s by identity.
@@ -2331,6 +2363,19 @@ class TableWrite : public Node {
     return columnExprs_;
   }
 
+  /// The columns a delete reads to identify the rows it removes, in the order
+  /// `Table::rowIdColumns()` names them. Resolved while the scan producing
+  /// them is translated.
+  const ColumnVector& rowIdColumns() const {
+    return rowIdColumns_;
+  }
+
+  /// Returns the connector DELETE layout negotiated during physical planning,
+  /// or null before that pass and for non-DELETE writes.
+  const connector::DeleteLayout* deleteLayout() const {
+    return deleteLayout_;
+  }
+
   std::span<const NodeCP> inputs() const override {
     return {&input_, 1};
   }
@@ -2347,6 +2392,8 @@ class TableWrite : public Node {
   const connector::Table* const table_;
   const connector::WriteKind kind_;
   const ExprVector columnExprs_;
+  const ColumnVector rowIdColumns_;
+  const connector::DeleteLayout* const deleteLayout_;
 };
 
 using TableWriteCP = const TableWrite*;
