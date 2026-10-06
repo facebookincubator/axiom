@@ -227,6 +227,16 @@ JOIN t matching ON preserved.a = matching.a AND matching.b = 10
 SELECT padded.v, preserved.k, 0 AS above
 FROM (SELECT k, 0 AS v FROM (VALUES (1)) AS input(k)) AS padded
 FULL JOIN (VALUES (2)) AS preserved(k) ON padded.k = preserved.k
+----
+-- A left join's padded key passes through a full join above it when an inner
+-- join on the padded side equates the key with another column.
+SELECT t.k, u.z
+FROM (VALUES (1), (2)) AS t(k)
+LEFT JOIN (
+  (SELECT 1 AS z UNION ALL SELECT 3) AS u
+  JOIN (VALUES (1), (3)) AS v(k) ON u.z = v.k
+) ON t.k = u.z
+FULL JOIN (VALUES (1), (2)) AS w(k) ON t.k = w.k
 
 ----
 -- Groups by the right key of an inner join while counting the left key.

@@ -70,12 +70,14 @@ ColumnVector coverNarrowedColumns(
   return columns;
 }
 
-// Adds fresh outputs at the join boundary that defines their values.
+// Adds fresh outputs at the join boundary that defines their values. `sources`
+// holds the child column each edge output reads.
 ColumnVector joinOutputColumns(
     const JoinOp* join,
     const JoinHypergraph& graph,
     NodeCP left,
-    NodeCP right) {
+    NodeCP right,
+    const ColumnVector& sources) {
   ColumnVector columns =
       coverNarrowedColumns(graph, join->cover(), left, right);
   const PlanObjectSet needed = graph.coverOutputColumns(join->cover());
@@ -86,7 +88,7 @@ ColumnVector joinOutputColumns(
         std::ranges::find(columns, output) != columns.end()) {
       continue;
     }
-    const auto source = std::ranges::find(columns, edge.sourceColumns()[i]);
+    const auto source = std::ranges::find(columns, sources[i]);
     if (source == columns.end()) {
       columns.push_back(output);
     } else {
@@ -522,6 +524,9 @@ Emitted buildJoin(
     const Emitted& left,
     const Emitted& right,
     ColumnVector outputColumns,
+    const ExprFactory::ExprSubstitution& childReps,
+    const ExprFactory::ExprSubstitution& beforeJoin,
+    const ColumnVector& sources,
     EmitState& state) {
   const auto& edge = state.graph.edges()[join->edgeIndex];
   const bool isInner = edge.joinType() == velox::core::JoinType::kInner;
@@ -579,8 +584,6 @@ Emitted buildJoin(
   }
 
   auto materialized = merge(left.materialized, right.materialized);
-  const auto childReps = collapsedColumns(mergedChildReps(join, state));
-  const auto beforeJoin = merge(childReps, materialized);
   leftKeys = rewrite(leftKeys, beforeJoin, state);
   rightKeys = rewrite(rightKeys, beforeJoin, state);
   filter = rewrite(filter, beforeJoin, state);
@@ -649,11 +652,7 @@ Emitted buildJoin(
     ColumnCP source =
         inputColumns.contains(output) || it == edge.outputColumns().end()
         ? output
-        : edge.sourceColumns()[it - edge.outputColumns().begin()];
-    if (const auto mapped = beforeJoin.find(source);
-        mapped != beforeJoin.end()) {
-      source = mapped->second->as<Column>();
-    }
+        : sources[it - edge.outputColumns().begin()];
     VELOX_CHECK(
         inputColumns.contains(source) ||
             (it != edge.outputColumns().end() && source == output),
@@ -703,6 +702,7 @@ Emitted buildReversedAnti(
     const Emitted& probe,
     const Emitted& build,
     const ColumnVector& outputColumns,
+    const ExprFactory::ExprSubstitution& beforeJoin,
     EmitState& state) {
   const auto& edge = state.graph.edges()[join->edgeIndex];
 
@@ -714,15 +714,13 @@ Emitted buildReversedAnti(
   // edge.leftKeys reference the preserved (build) side, rightKeys the probe
   // side. The IR Join's leftKeys must reference its left (probe) input.
   auto materialized = merge(probe.materialized, build.materialized);
-  const auto substitution =
-      merge(collapsedColumns(mergedChildReps(join, state)), materialized);
   NodeCP marked = state.joinFactory(
       {probe.node,
        build.node,
        JoinOp::emittedJoinType(join->joinType, join->reversedAnti),
-       rewrite(ExprVector{edge.rightKeys()}, substitution, state),
-       rewrite(ExprVector{edge.leftKeys()}, substitution, state),
-       rewrite(ExprVector{edge.filter()}, substitution, state),
+       rewrite(ExprVector{edge.rightKeys()}, beforeJoin, state),
+       rewrite(ExprVector{edge.leftKeys()}, beforeJoin, state),
+       rewrite(ExprVector{edge.filter()}, beforeJoin, state),
        edge.nullAware(),
        edge.nullAsValue(),
        std::move(joinOutput)});
@@ -769,20 +767,42 @@ Emitted emitJoin(
   Emitted left = emitOp(join->left, state);
   Emitted right = emitOp(join->right, state);
 
+  // The join edge records each output's source as the column it was before
+  // the children collapsed or materialized it.
+  const auto childReps = collapsedColumns(mergedChildReps(join, state));
+  const auto beforeJoin =
+      merge(childReps, merge(left.materialized, right.materialized));
+  const auto& edge = state.graph.edges()[join->edgeIndex];
+  ColumnVector sources;
+  sources.reserve(edge.sourceColumns().size());
+  for (ColumnCP source : edge.sourceColumns()) {
+    const auto it = beforeJoin.find(source);
+    sources.push_back(
+        it == beforeJoin.end() ? source : it->second->as<Column>());
+  }
+
   const auto buildWithOutput = [&](ColumnVector outputColumns) {
     return join->reversedAnti
-        ? buildReversedAnti(join, left, right, outputColumns, state)
-        : buildJoin(join, left, right, std::move(outputColumns), state);
+        ? buildReversedAnti(join, left, right, outputColumns, beforeJoin, state)
+        : buildJoin(
+              join,
+              left,
+              right,
+              std::move(outputColumns),
+              childReps,
+              beforeJoin,
+              sources,
+              state);
   };
 
   if (rootOutputColumns == nullptr) {
     return buildWithOutput(
-        joinOutputColumns(join, state.graph, left.node, right.node));
+        joinOutputColumns(join, state.graph, left.node, right.node, sources));
   }
 
   const auto rootReps = state.graph.coverColumnReps(join->cover());
   ColumnVector outputColumns = hasCollapsedTarget(rootReps, *rootOutputColumns)
-      ? joinOutputColumns(join, state.graph, left.node, right.node)
+      ? joinOutputColumns(join, state.graph, left.node, right.node, sources)
       : ColumnVector{*rootOutputColumns};
   return restoreRootOutput(
       buildWithOutput(std::move(outputColumns)),
