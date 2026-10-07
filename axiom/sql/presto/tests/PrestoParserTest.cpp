@@ -842,7 +842,7 @@ TEST_F(PrestoParserTest, join) {
     // Unqualified reference to a column on both sides is ambiguous.
     VELOX_ASSERT_THROW(
         parseSql("SELECT * FROM t1 JOIN t2 ON id = id"),
-        "Cannot resolve column");
+        "Column is ambiguous: id");
 
     // Qualified references are not ambiguous.
     auto matcher = matchScan()
@@ -857,9 +857,7 @@ TEST_F(PrestoParserTest, join) {
         "Cannot resolve column");
 
     // Correlated subquery in ON clause with unqualified reference to a column
-    // that exists on both sides of the join is ambiguous. This exercises the
-    // joinScope lambda (resolveJoinColumn) rather than the NameMappings::merge
-    // path used for simple ON conditions.
+    // that exists on both sides of the join is ambiguous.
     VELOX_ASSERT_THROW(
         parseSql(
             "SELECT * FROM t1 JOIN t2 "
@@ -909,6 +907,87 @@ TEST_F(PrestoParserTest, join) {
     testSelect(
         "SELECT n_name, r_name FROM nation, region WHERE n_regionkey = r_regionkey",
         matcher);
+  }
+}
+
+// Verifies that a name that names more than one column fails where it is
+// referenced, even when the other side of a join or an enclosing query has the
+// name.
+TEST_F(PrestoParserTest, ambiguousColumn) {
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      // The right side of a join is itself a join.
+      {"SELECT x FROM (VALUES 1) t(x) "
+       "JOIN ((VALUES 2) u(x) CROSS JOIN (VALUES 3) v(x)) ON true",
+       "x"},
+      {"SELECT count(*) FROM (VALUES 1) t(x) "
+       "JOIN ((VALUES 2) u(x) CROSS JOIN (VALUES 3) v(x)) ON x = 1",
+       "x"},
+      {"SELECT w.x FROM ((VALUES 1) t(x) "
+       "JOIN ((VALUES 2) u(x) CROSS JOIN (VALUES 3) v(x)) ON true) w",
+       "w.x"},
+      // A correlated subquery, over a nested and a left-deep join.
+      {"SELECT (SELECT x FROM (VALUES 1) u(x) "
+       "JOIN ((VALUES 2) v(x) CROSS JOIN (VALUES 3) w(x)) ON true) "
+       "FROM (VALUES 9) t(x)",
+       "x"},
+      {"SELECT (SELECT x FROM (VALUES 1) u(x) CROSS JOIN (VALUES 2) v(x)) "
+       "FROM (VALUES 9) t(x)",
+       "x"},
+      {"SELECT (SELECT t.x FROM ((VALUES 1) u(x) CROSS JOIN (VALUES 2) v(x)) "
+       "t) FROM (VALUES 9) t(x)",
+       "t.x"},
+      // 'x.f' is a field of the inner query's 'x', which names two columns.
+      {"SELECT (SELECT x.f FROM (VALUES 1) u(x) CROSS JOIN (VALUES 2) v(x)) "
+       "FROM (VALUES 9) x(f)",
+       "x"},
+      // A subquery in the ON clause.
+      {"SELECT count(*) FROM (VALUES 1) t(x) "
+       "JOIN ((VALUES 2) u(x) CROSS JOIN (VALUES 3) v(x)) "
+       "ON EXISTS (SELECT 1 WHERE x = 1)",
+       "x"},
+      {"SELECT count(*) FROM ((VALUES 1) t(x) CROSS JOIN (VALUES 2) u(x)) "
+       "JOIN (VALUES 3) v(x) ON EXISTS (SELECT 1 WHERE x = 1)",
+       "x"},
+      {"SELECT count(*) FROM (VALUES 1) t(x) JOIN (VALUES 2) t(x) "
+       "ON EXISTS (SELECT 1 WHERE t.x = 1)",
+       "t.x"},
+      // A reused relation alias stays ambiguous after a later join.
+      {"SELECT u.x FROM (VALUES 1) t(x) "
+       "JOIN ((VALUES 2) u(x) CROSS JOIN (VALUES 3) u(x)) ON true "
+       "JOIN (VALUES 4) u(x) ON true",
+       "u.x"},
+      // Derived tables, a CTE, a window projection and a set operation keep
+      // the name ambiguous.
+      {"SELECT (SELECT x FROM "
+       "(SELECT * FROM (VALUES 1) u(x) CROSS JOIN (VALUES 2) u(x))) "
+       "FROM (VALUES 9) t(x)",
+       "x"},
+      {"WITH w AS (SELECT * FROM (VALUES 1) u(x) CROSS JOIN (VALUES 2) v(x)) "
+       "SELECT (SELECT x FROM w) FROM (VALUES 9) t(x)",
+       "x"},
+      {"SELECT x + 0 * sum(1) OVER () "
+       "FROM (SELECT 1 AS x) CROSS JOIN (VALUES 2) t(x)",
+       "x"},
+      {"SELECT (SELECT x + 0 * sum(1) OVER () "
+       "FROM (VALUES 1) u(x) CROSS JOIN (VALUES 2) v(x)) FROM (VALUES 9) t(x)",
+       "x"},
+      {"SELECT (SELECT x FROM "
+       "(SELECT * FROM (VALUES 1) u(x) CROSS JOIN (VALUES 2) v(x) "
+       "UNION ALL SELECT 3, 4) LIMIT 1) "
+       "FROM (VALUES 9) t(x)",
+       "x"},
+      // A USING column, ambiguous on either side.
+      {"SELECT * FROM (VALUES 1) t(x) CROSS JOIN (VALUES 2) u(x) "
+       "JOIN (VALUES 3) v(x) USING (x)",
+       "x"},
+      {"SELECT * FROM (VALUES 1) t(x) "
+       "JOIN ((VALUES 2) u(x) CROSS JOIN (VALUES 3) v(x)) USING (x)",
+       "x"},
+  };
+
+  for (const auto& [sql, name] : cases) {
+    SCOPED_TRACE(sql);
+    VELOX_ASSERT_THROW(parseSql(sql), "Column is ambiguous: " + name);
   }
 }
 
@@ -1722,7 +1801,7 @@ TEST_F(PrestoParserTest, duplicateAliases) {
       parseSql(
           "SELECT u FROM UNNEST(ARRAY[1], ARRAY[2]) AS t(a, u) "
           "CROSS JOIN UNNEST(ARRAY[3], ARRAY[4]) AS t(b, u)"),
-      "Cannot resolve column: u");
+      "Column is ambiguous: u");
 }
 
 // A derived table exposes only column names. The relation aliases used inside
@@ -1753,7 +1832,7 @@ TEST_F(PrestoParserTest, derivedTableHidesInnerAlias) {
   VELOX_ASSERT_THROW(
       parseSql(
           "SELECT a FROM (SELECT * FROM (VALUES 1) AS t1(a), (VALUES 2) AS t2(a))"),
-      "Cannot resolve column: a");
+      "Column is ambiguous: a");
 
   VELOX_ASSERT_THROW(
       parseSql(

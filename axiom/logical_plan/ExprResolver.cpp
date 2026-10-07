@@ -480,6 +480,10 @@ ExprPtr ExprResolver::resolveLambdaExpr(
         return std::make_shared<InputReferenceExpr>(
             signature->childAt(maybeIdx.value()), fieldName);
       }
+    } else if (signature->containsChild(alias.value())) {
+      // A lambda argument shadows any relation of the same name. The caller
+      // dereferences it to read 'fieldName'.
+      return nullptr;
     }
     return inputNameResolver(alias, fieldName);
   };

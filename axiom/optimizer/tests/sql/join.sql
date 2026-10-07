@@ -362,6 +362,105 @@ LEFT JOIN (VALUES ('d3')) b(ds) ON (a.ds = b.ds)
 LEFT JOIN (SELECT 'x' as ds WHERE false) c ON (a.ds = c.ds)
 GROUP BY 1
 ----
+-- The right side of a join is itself a join, and all three relations have a
+-- column 'x'. Each qualified name reads its own relation's column.
+SELECT t.x, u.x, v.x
+FROM (VALUES (1)) t(x)
+JOIN ((VALUES (2)) u(x) CROSS JOIN (VALUES (3)) v(x)) ON true
+----
+-- The same when the left side has no alias.
+SELECT u.x, v.x
+FROM (SELECT 1 AS x)
+JOIN ((VALUES (2)) u(x) CROSS JOIN (VALUES (3)) v(x)) ON true
+----
+-- The same when the inner join names its key with USING.
+SELECT t.x, u.x, v.x
+FROM (VALUES (1, 0)) t(x, k)
+JOIN ((VALUES (2, 0)) u(x, k) JOIN (VALUES (3, 0)) v(x, k) USING (k)) ON true
+----
+-- A comma binds looser than JOIN, so u JOIN v is the right side. The filter
+-- on u.ds reads u's column.
+SELECT t.id, u.id, u.ds, v.ds
+FROM (VALUES (1, 'd1'), (2, 'd2')) t(id, ds),
+  (VALUES (1, 'd1'), (2, 'd2')) u(id, ds)
+  JOIN (VALUES (1, 'd1'), (2, 'd2')) v(id, ds) ON u.id = v.id
+WHERE t.ds = 'd1' AND u.ds = 'd2'
+----
+-- The same for a join condition in WHERE: t.k = u.k compares t with u.
+SELECT count(*)
+FROM (VALUES (1), (2), (3)) t(k),
+  (VALUES (1), (2), (3)) u(k)
+  JOIN (VALUES (1), (2), (3)) v(k) ON u.k = v.k
+WHERE t.k = u.k
+----
+-- The same under a LEFT JOIN with a parenthesized right side.
+SELECT t.ds, u.ds, v.ds
+FROM (VALUES (1, 'd1'), (1, 'd2')) t(id, ds)
+LEFT JOIN (
+  (VALUES (1, 'd1'), (1, 'd2')) u(id, ds)
+  JOIN (VALUES (1, 'd1'), (1, 'd2')) v(id, ds)
+    ON u.id = v.id AND u.ds = v.ds)
+  ON t.id = u.id
+WHERE u.ds = 'd1'
+----
+-- GROUP BY and ORDER BY a qualified column of the right side.
+-- ordered
+SELECT u.b, count(*)
+FROM t
+JOIN (t u JOIN t v ON u.b = v.b) ON t.b + 10 = u.b
+GROUP BY u.b
+ORDER BY u.b
+----
+-- Without parentheses, 'JOIN u JOIN v ON .. ON ..' nests u JOIN v the same
+-- way.
+SELECT t.b, u.b, v.b
+FROM t
+JOIN t u JOIN t v ON u.b = v.b ON t.b + 10 = u.b
+----
+-- An alias over a join hides the aliases inside it, so 't.x' names the
+-- relation outside it. DuckDB rejects a reused alias.
+-- duckdb: VALUES (3)
+SELECT t.x
+FROM ((VALUES (1)) t(x) CROSS JOIN (VALUES (2)) t(x)) u
+CROSS JOIN (VALUES (3)) t(x)
+----
+-- The same for a derived table.
+-- duckdb: VALUES (3)
+SELECT t.x
+FROM (SELECT * FROM (VALUES (1)) t(x) CROSS JOIN (VALUES (2)) t(x))
+CROSS JOIN (VALUES (3)) t(x)
+----
+-- 'w.*' expands to every column of the aliased join, including columns whose
+-- names are ambiguous.
+-- duckdb: VALUES (1, 2)
+SELECT w.* FROM ((VALUES (1)) t(x) CROSS JOIN (VALUES (2)) u(x)) w
+----
+-- duckdb: VALUES (1, 2)
+SELECT w.* FROM ((VALUES (1)) t(x) CROSS JOIN (VALUES (2)) t(x)) w
+----
+-- duckdb: VALUES (1, 2, 3)
+SELECT w.*
+FROM ((VALUES (1)) t(x) JOIN ((VALUES (2)) u(x) CROSS JOIN (VALUES (3)) v(x)) ON true) w
+----
+-- duckdb: VALUES (1, 2, 3)
+SELECT w.*
+FROM ((VALUES (1)) t(x) JOIN ((VALUES (2)) u(x) CROSS JOIN (VALUES (3)) u(x)) ON true) w
+----
+-- duckdb: VALUES (1, 5, 2, 3)
+SELECT w.*
+FROM ((VALUES (1, 5)) t(x, y) JOIN ((VALUES (2)) u(x) CROSS JOIN (VALUES (3)) v(x)) ON true) w
+----
+-- The same after a USING join with another relation, which keeps w's columns
+-- except the USING column.
+-- duckdb: VALUES (1, 2)
+SELECT w.*
+FROM ((VALUES (1, 0)) t(x, k) CROSS JOIN (VALUES (2)) u(x)) w
+JOIN (VALUES (0)) v(k) USING (k)
+----
+-- 't.*' expands to the columns of both relations named 't'.
+-- duckdb: VALUES (1, 2)
+SELECT t.* FROM (VALUES (1)) t(x) CROSS JOIN (VALUES (2)) t(x)
+----
 -- A repeated equi-condition joins on that pair once.
 SELECT * FROM (VALUES (1)) t(a) JOIN (VALUES (1)) u(b) ON t.a = u.b AND t.a = u.b
 ----

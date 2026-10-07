@@ -193,18 +193,23 @@ point in the fluent chain. It is a flat dictionary from
 |-----------|-------------|
 | `lookup(name)` | Resolve an unqualified column name to an internal ID. |
 | `lookup(alias, name)` | Resolve a qualified column name (`alias.name`) to an internal ID. |
-| `merge()` | Combine two NameMappings for JOINs. Remove ambiguous unqualified names. |
+| `isAmbiguous(name)` | Check whether a name names more than one column. |
+| `merge()` | Combine two NameMappings for JOINs. Mark names used on both sides as ambiguous. |
 | `setAlias()` | Add qualified entries for every column under a table alias. |
 | `enableUnqualifiedAccess()` | Add unqualified entries for column names that appear exactly once. |
 
-`merge()` is called when building JOINs. If an unqualified name exists in
-both sides, it is removed, forcing the user to qualify it. Qualified names
-(`t.column`) are always kept.
+`merge()` is called when building JOINs. If both sides use a name in any
+form, its unqualified form is marked ambiguous, forcing the user to qualify
+it. A qualified name (`t.column`) is marked only when both sides reuse the
+alias `t`. Marks survive later joins, and referencing a marked name fails
+with `Column is ambiguous`.
 
 `setAlias()` is called by `PlanBuilder::as("t")` after a table scan to
 enable qualified references like `t.column`. For example, after
 `builder.tableScan("nation").as("n")`, column `n_name` can be referenced as
-both `n_name` and `n.n_name`.
+both `n_name` and `n.n_name`. `t.*` expands to every column of the
+relation, including columns whose names are ambiguous. Marks under the
+aliases that `t` replaces are dropped.
 
 `enableUnqualifiedAccess()` is called after operations that build new
 NameMappings from scratch (e.g. `project()`, `aggregate()`, `joinUsing()`).
@@ -224,22 +229,29 @@ using Scope = std::function<ExprPtr(
 ```
 
 `PlanBuilder::resolveInputName()` first looks up the name in its own
-`outputMapping_`. If not found, it delegates to `outerScope_` (a Scope
-closure captured at construction time). This creates an implicit scope chain
-of arbitrary depth via nested closures.
+`outputMapping_`:
+
+- A name that names more than one column fails as ambiguous.
+- `p.f`, where `p` is a ROW column or names more than one column, returns
+  nothing, so the caller reads `f` as a field of `p`.
+- Any other name that is not found is delegated to `outerScope_` (a Scope
+  closure captured at construction time).
+
+This creates an implicit scope chain of arbitrary depth via nested closures.
 
 #### Join Scoping
 
-When processing a JOIN ON clause, `RelationPlanner` captures the left and
-right scopes as closures and combines them into a `joinScope` lambda. The
-`resolveJoinColumn()` helper handles resolution:
+When processing a JOIN ON clause, `RelationPlanner` builds the scope for
+subqueries in the ON expression with `PlanBuilder::joinScope(left, right)`.
+It resolves a name against both sides before the join exists:
 
-- **Qualified names** (`t.col`): tries left, then right. Table aliases are
-  unique, so no ambiguity check is needed.
-- **Unqualified names**: uses `PlanBuilder::hasColumn()` to probe both sides.
-  If both sides have the column, it raises an ambiguity error. If neither
-  side has it, it delegates to the outer scope (for correlated subqueries).
-  Otherwise, it resolves from the side that has it.
+- A name that one side has resolves to that side's column.
+- A name that both sides have, or that either side marks ambiguous, fails as
+  ambiguous.
+- `p.f`, where `p` is a ROW column of either side or names more than one
+  column, returns nothing, so the caller reads `f` as a field of `p`.
+- Any other name resolves in the enclosing scope of the left side (for
+  correlated subqueries).
 
 This temporary scope is used only for translating the ON expression. After
 the join, `NameMappings::merge()` combines both sides' mappings for
@@ -248,9 +260,10 @@ downstream use.
 #### Correlated Subqueries
 
 When a subquery is encountered in an expression, the current builder's scope
-is captured and passed as the `outerScope_` of a new builder. Any column
-reference that fails to resolve locally falls through to the outer scope.
-This works for arbitrary nesting depth.
+is captured and passed as the `outerScope_` of a new builder. A column
+reference that names no column locally falls through to the outer scope. One
+that names more than one column fails where it is referenced. This works for
+arbitrary nesting depth.
 
 #### CTEs (WITH Queries)
 
@@ -268,14 +281,15 @@ where CTEs are inlined during planning.
 
 `ExpressionPlanner` translates `t.column` into `Col("column", Col("t"))`,
 which is ambiguous: it could be a table-qualified column or a struct field
-access. `ExprResolver` disambiguates by first trying
-`NameMappings::lookup("t", "column")`. If that resolves, it is a column
-reference. Otherwise, it resolves the inner expression and treats it as a
-struct dereference. This means table aliases take priority over struct column
-names: if both a table alias `t` and a struct-typed column `t` exist in scope,
-`t.x` resolves to the table-qualified column. This matches Presto Java
-semantics, where the same `DereferenceExpression` AST node is used for both
-cases and disambiguation happens during analysis.
+access. `ExprResolver` resolves it scope by scope, innermost first:
+
+- In a lambda whose argument is `t`, it is a field of the argument.
+- In a scope where `t.column` names a column, it is that column, so a table
+  alias takes priority over a struct column `t` in the same scope.
+- In a scope where `t` is a ROW column, it is a field of that column.
+
+This matches Presto Java semantics, where the same `DereferenceExpression`
+AST node is used for both cases and disambiguation happens during analysis.
 
 #### Summary
 

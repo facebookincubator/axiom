@@ -733,6 +733,17 @@ class PlanBuilder {
     };
   }
 
+  /// Returns a Scope that resolves column names against both sides of a join
+  /// before the join is built, as a subquery in its ON clause sees them:
+  /// - A name that names one column of the two sides resolves to it.
+  /// - A name that names more than one column fails as ambiguous.
+  /// - 'p.f', where 'p' is a ROW column of either side or names more than one
+  ///   column, returns nullptr, so the caller reads 'f' as a field of 'p'.
+  /// - Any other name resolves in the enclosing scope of 'left'.
+  static Scope joinScope(
+      std::shared_ptr<const PlanBuilder> left,
+      std::shared_ptr<const PlanBuilder> right);
+
   /// Returns the enclosing scope this builder resolves against for correlated
   /// references, or nullptr if there is none. Unlike scope(), this does not
   /// expose the builder's own output columns.

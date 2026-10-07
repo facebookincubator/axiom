@@ -26,6 +26,61 @@ SELECT (SELECT a + 1) FROM t
 -- and inner columns at top level.
 SELECT (SELECT t.a + u.a FROM u WHERE u.a = 1) FROM t
 ----
+-- 't.f' is a field of the inner query's struct column 't', so it does not
+-- reach the outer relation 't'.
+-- duckdb: VALUES (1)
+SELECT (SELECT t.f FROM (SELECT CAST(ROW(1) AS ROW(f INTEGER)) AS t))
+FROM (VALUES (2)) t(f)
+----
+-- The same when the outer relation's 'v.f' names two columns.
+-- duckdb: VALUES (1)
+SELECT (SELECT v.f FROM (SELECT CAST(ROW(1) AS ROW(f INTEGER)) AS v))
+FROM ((VALUES (2)) t(f) CROSS JOIN (VALUES (3)) u(f)) v
+----
+-- The same in a join condition, and in a subquery in a join condition on
+-- either side of the join.
+-- duckdb: SELECT 1::BIGINT
+SELECT (
+  SELECT count(*)
+  FROM (SELECT CAST(ROW(1) AS ROW(f INTEGER)) AS t) u
+  JOIN (VALUES (1)) v(y) ON t.f = 1)
+FROM (VALUES (2)) t(f)
+----
+-- duckdb: SELECT 1::BIGINT
+SELECT (
+  SELECT count(*)
+  FROM (SELECT CAST(ROW(1) AS ROW(f INTEGER)) AS t) u
+  JOIN (VALUES (1)) v(y) ON EXISTS (SELECT 1 WHERE t.f = 1))
+FROM (VALUES (2)) t(f)
+----
+-- duckdb: SELECT 1::BIGINT
+SELECT (
+  SELECT count(*)
+  FROM (VALUES (1)) u(y)
+  JOIN (SELECT CAST(ROW(1) AS ROW(f INTEGER)) AS t) v
+    ON EXISTS (SELECT 1 WHERE t.f = 1))
+FROM (VALUES (2)) t(f)
+----
+-- A qualified name in a subquery in a join condition reads the side of the
+-- join that has it.
+-- duckdb: SELECT 1::BIGINT
+SELECT (
+  SELECT count(*)
+  FROM (VALUES (1)) u(y)
+  JOIN (VALUES (2)) t(x) ON EXISTS (SELECT 1 WHERE t.x = 2))
+FROM (VALUES (9)) t(x)
+----
+-- The outer relation's qualified name stays reachable when the inner query
+-- has an unnamed column. The aliases 'e' and 'expr' match the internal names
+-- of the unnamed UNNEST element and expression.
+-- duckdb: SELECT 2::BIGINT
+SELECT (SELECT count(*) FROM UNNEST(ARRAY[1, 2]) AS u WHERE e.x > 0)
+FROM (VALUES (1)) e(x)
+----
+-- duckdb: SELECT 1::BIGINT
+SELECT (SELECT count(*) FROM (SELECT 1) AS u WHERE expr.x > 0)
+FROM (VALUES (1)) expr(x)
+----
 -- Correlated WHERE plus correlated projection: outer column added to an
 -- inner aggregate result.
 SELECT (SELECT max(u.a) + t.a FROM u WHERE u.a = t.a) FROM t
