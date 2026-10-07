@@ -55,7 +55,7 @@ class HiveQueriesTestBase : public QueryTestBase {
   static void TearDownTestCase();
 
   static connector::ConnectorSessionPtr makeSession() {
-    return std::make_shared<connector::ConnectorSession>(
+    return connector::ConnectorSession::createProcessWide(
         /*queryId=*/"test",
         /*user=*/"test",
         connector::Properties{},

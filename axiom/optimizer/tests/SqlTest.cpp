@@ -133,7 +133,7 @@ void runSetupStatement(
           ::axiom::sql::presto::ParserOptions{}));
   auto stmt = parser.parse(sql);
 
-  auto session = std::make_shared<connector::ConnectorSession>(
+  auto session = connector::ConnectorSession::createProcessWide(
       /*queryId=*/"test",
       /*user=*/"test",
       connector::Properties{},

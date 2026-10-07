@@ -17,6 +17,7 @@ add_library(
   ConnectorContext.cpp
   ConnectorMetadata.cpp
   ConnectorMetadataRegistry.cpp
+  ConnectorSession.cpp
   SchemaResolver.cpp
 )
 
@@ -26,6 +27,7 @@ target_link_libraries(
   velox_common_base
   velox_memory
   velox_connector
+  velox_connector_registry
   velox_core
   Folly::folly
 )

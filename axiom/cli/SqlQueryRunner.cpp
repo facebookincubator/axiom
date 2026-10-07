@@ -1921,7 +1921,7 @@ folly::coro::CleanableAsyncGenerator<velox::RowVectorPtr> co_drainQuery(
 connector::ConnectorContextPtr SqlQueryRunner::makeConnectorContext(
     std::string_view queryId,
     const RunOptions& options) const {
-  return std::make_shared<connector::ConnectorContext>(
+  return connector::ConnectorContext::createProcessWide(
       std::string(queryId),
       user_,
       collectConnectorProperties(*sessionConfig_),

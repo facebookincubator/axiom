@@ -23,8 +23,9 @@
 
 #include <folly/container/F14Map.h>
 
-#include "velox/common/base/Exceptions.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/connectors/ConnectorRegistry.h"
 
 namespace facebook::axiom::connector {
 
@@ -46,19 +47,26 @@ using ConnectorSessionPtr = std::shared_ptr<ConnectorSession>;
 ///
 /// Invariants:
 ///   - `statsWriter` is non-null.
+///   - Both engine registry pointers are non-null and outlive lookups made by
+///     this session.
 class ConnectorSession final {
  public:
+  /// Creates a connector session over process-wide registries for a non-Axiom
+  /// host or a connector-focused test.
+  static ConnectorSessionPtr createProcessWide(
+      std::string queryId,
+      std::string user,
+      Properties properties,
+      std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter);
+
   ConnectorSession(
       std::string queryId,
       std::string user,
       Properties properties,
-      std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter)
-      : queryId_{std::move(queryId)},
-        user_{std::move(user)},
-        properties_{std::move(properties)},
-        statsWriter_{std::move(statsWriter)} {
-    VELOX_CHECK_NOT_NULL(statsWriter_, "ConnectorSession requires a writer");
-  }
+      std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter,
+      std::shared_ptr<velox::connector::ConnectorRegistry::Registry>
+          connectorRegistry,
+      std::shared_ptr<ConnectorMetadataRegistry::Registry> metadataRegistry);
 
   /// Returns the query identifier.
   const std::string& queryId() const {
@@ -73,24 +81,29 @@ class ConnectorSession final {
   /// Returns the value of session property 'name' if set on this session,
   /// or std::nullopt otherwise. The returned view is valid for the lifetime
   /// of this ConnectorSession.
-  std::optional<std::string_view> property(std::string_view name) const {
-    auto it = properties_.find(name);
-    if (it == properties_.end()) {
-      return std::nullopt;
-    }
-    return it->second;
-  }
+  std::optional<std::string_view> property(std::string_view name) const;
 
   /// Returns this connector's write handle into the query's stats.
   velox::BaseRuntimeStatWriter& statsWriter() const {
     return *statsWriter_;
   }
 
+  /// Returns the execution connector registered under `connectorId`.
+  std::shared_ptr<velox::connector::Connector> connector(
+      std::string_view connectorId) const;
+
+  /// Returns metadata registered under `connectorId`.
+  std::shared_ptr<ConnectorMetadata> metadata(
+      std::string_view connectorId) const;
+
  private:
   const std::string queryId_;
   const std::string user_;
   const Properties properties_;
   const std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter_;
+  const std::shared_ptr<velox::connector::ConnectorRegistry::Registry>
+      connectorRegistry_;
+  const std::shared_ptr<ConnectorMetadataRegistry::Registry> metadataRegistry_;
 };
 
 } // namespace facebook::axiom::connector
