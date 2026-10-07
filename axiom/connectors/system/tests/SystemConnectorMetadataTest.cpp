@@ -106,6 +106,12 @@ void registerTestFunctions() {
 
 const char* const kSystemCatalog = "test-system";
 
+const std::vector<CatalogInfo> kCatalogInfos{
+    {"analytics", "hive"},
+    {"batch", "hive"},
+    {"system", "system"},
+};
+
 /// In-memory mock that stores QueryInfos directly.
 class MockQueryInfoProvider : public QueryInfoProvider {
  public:
@@ -146,7 +152,11 @@ class SystemConnectorMetadataTest : public ::testing::Test {
     sessionProvider_ = std::make_unique<MockSessionPropertiesProvider>();
 
     connector_ = std::make_shared<SystemConnector>(
-        kSystemCatalog, queryProvider_.get(), sessionProvider_.get());
+        kSystemCatalog,
+        queryProvider_.get(),
+        sessionProvider_.get(),
+        InformationSchema::defaultTypeName,
+        kCatalogInfos);
     velox::connector::registerConnector(connector_);
 
     metadata_ = std::make_shared<SystemConnectorMetadata>(connector_.get());
@@ -473,6 +483,34 @@ TEST_F(SystemConnectorMetadataTest, dataSourceNullSource) {
   EXPECT_TRUE(vector->childAt(0)->isNullAt(0));
 }
 
+// ===================== system.metadata.catalogs tests =====================
+
+TEST_F(SystemConnectorMetadataTest, findCatalogsTable) {
+  auto table = metadata_->findTable(kCatalogsTable);
+
+  ASSERT_NE(table, nullptr);
+  EXPECT_EQ(table->name(), kCatalogsTable);
+  EXPECT_THAT(
+      table->type()->names(),
+      testing::ElementsAre("catalog_name", "connector_id", "connector_name"));
+}
+
+TEST_F(SystemConnectorMetadataTest, catalogsDataSource) {
+  auto expected = velox::BaseVector::createFromVariants(
+      catalogsTableSchema(),
+      {
+          velox::Variant::row({"analytics", "analytics", "hive"}),
+          velox::Variant::row({"batch", "batch", "hive"}),
+          velox::Variant::row({"system", "system", "system"}),
+      },
+      pool_.get());
+
+  auto actual = readTable(kCatalogsTable, catalogsTableSchema());
+  velox::test::assertEqualVectors(expected, actual);
+}
+
+// ================ system.metadata.session_properties tests ================
+
 TEST_F(SystemConnectorMetadataTest, findSessionPropertiesTable) {
   auto table = metadata_->findTable(kSessionPropertiesTable);
   ASSERT_NE(table, nullptr);
@@ -496,6 +534,24 @@ TEST_F(SystemConnectorMetadataTest, sessionPropertiesSchema) {
     EXPECT_EQ(
         table->type()->childAt(i)->kind(), expectedSchema->childAt(i)->kind());
   }
+}
+
+TEST_F(SystemConnectorMetadataTest, sessionPropertiesAllColumns) {
+  sessionProvider_->addProperty(
+      {"a", "x", "boolean", "true", "false", "First."});
+  sessionProvider_->addProperty({"b", "y", "string", "", "hello", "Second."});
+
+  auto expected = velox::BaseVector::createFromVariants(
+      sessionPropertiesTableSchema(),
+      {
+          velox::Variant::row({"a", "x", "boolean", "true", "false", "First."}),
+          velox::Variant::row({"b", "y", "string", "", "hello", "Second."}),
+      },
+      pool_.get());
+
+  auto actual =
+      readTable(kSessionPropertiesTable, sessionPropertiesTableSchema());
+  velox::test::assertEqualVectors(expected, actual);
 }
 
 TEST_F(SystemConnectorMetadataTest, schemas) {
@@ -570,27 +626,11 @@ TEST_F(SystemConnectorMetadataTest, listTableNames) {
   EXPECT_THAT(
       metadata_->listTableNames(session, std::string(kMetadataSchema)),
       testing::UnorderedElementsAre(
-          kSessionPropertiesTable.table, kFunctionsTable.table));
+          kSessionPropertiesTable.table,
+          kFunctionsTable.table,
+          kCatalogsTable.table));
   EXPECT_THAT(
       metadata_->listTableNames(session, "unknown"), testing::IsEmpty());
-}
-
-TEST_F(SystemConnectorMetadataTest, sessionPropertiesAllColumns) {
-  sessionProvider_->addProperty(
-      {"a", "x", "boolean", "true", "false", "First."});
-  sessionProvider_->addProperty({"b", "y", "string", "", "hello", "Second."});
-
-  auto expected = velox::BaseVector::createFromVariants(
-      sessionPropertiesTableSchema(),
-      {
-          velox::Variant::row({"a", "x", "boolean", "true", "false", "First."}),
-          velox::Variant::row({"b", "y", "string", "", "hello", "Second."}),
-      },
-      pool_.get());
-
-  auto actual =
-      readTable(kSessionPropertiesTable, sessionPropertiesTableSchema());
-  velox::test::assertEqualVectors(expected, actual);
 }
 
 // ===================== system.metadata.functions tests =====================

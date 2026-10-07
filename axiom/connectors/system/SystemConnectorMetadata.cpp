@@ -86,6 +86,15 @@ const velox::RowTypePtr& functionsTableSchema() {
   return kSchema;
 }
 
+const velox::RowTypePtr& catalogsTableSchema() {
+  static auto kSchema = velox::ROW({
+      {"catalog_name", velox::VARCHAR()},
+      {"connector_id", velox::VARCHAR()},
+      {"connector_name", velox::VARCHAR()},
+  });
+  return kSchema;
+}
+
 // ===================== SystemTableLayout =====================
 
 velox::connector::ColumnHandlePtr SystemTableLayout::createColumnHandle(
@@ -188,6 +197,14 @@ TablePtr SystemConnectorMetadata::findTable(const SchemaTableName& tableName) {
     return functionsTable_;
   }
 
+  if (tableName == kCatalogsTable) {
+    if (!catalogsTable_) {
+      catalogsTable_ = std::make_shared<SystemTable>(
+          tableName, catalogsTableSchema(), connector_);
+    }
+    return catalogsTable_;
+  }
+
   if (InformationSchema::catalog(tableName.schema).has_value()) {
     return informationSchemaTables_.withWLock([&](auto& tables) -> TablePtr {
       const auto it = tables.find(tableName);
@@ -238,6 +255,7 @@ std::vector<std::string> SystemConnectorMetadata::listTableNames(
     return {
         std::string(kSessionPropertiesTable.table),
         std::string(kFunctionsTable.table),
+        std::string(kCatalogsTable.table),
     };
   }
   if (InformationSchema::catalog(schemaName).has_value()) {
