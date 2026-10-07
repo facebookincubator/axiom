@@ -25,6 +25,8 @@
 #include <folly/container/F14Set.h>
 
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/v2/AppendAll.h"
 #include "axiom/optimizer/v2/CostModel.h"
@@ -41,6 +43,7 @@
 #include "axiom/optimizer/v2/NodeRewriter.h"
 #include "axiom/optimizer/v2/PhysicalJoin.h"
 #include "axiom/optimizer/v2/PrecomputeProjections.h"
+#include "axiom/optimizer/v2/ScanHandle.h"
 
 namespace facebook::axiom::optimizer::v2 {
 
@@ -509,6 +512,33 @@ enum class Alignment {
   kExactKeys,
 };
 
+// Physical distribution and ordering required by one connector writer.
+struct WriterRequirements {
+  // Expressions that choose a writer partition.
+  ExprVector partitionKeys;
+  // Native connector partitioning within one worker.
+  std::shared_ptr<const connector::PartitionType> partitionType;
+  // Compatibility required when reusing grouped scan partitioning.
+  Alignment alignment{Alignment::kExactKeys};
+  // Expressions that order rows within each writer.
+  ExprVector orderKeys;
+  // Direction and null placement corresponding to `orderKeys`.
+  OrderTypeVector orderTypes;
+};
+
+OrderTypeVector toOrderTypes(std::span<const connector::SortOrder> sortOrders) {
+  OrderTypeVector orderTypes;
+  orderTypes.reserve(sortOrders.size());
+  for (const auto& order : sortOrders) {
+    orderTypes.push_back(
+        order.isAscending ? (order.isNullsFirst ? OrderType::kAscNullsFirst
+                                                : OrderType::kAscNullsLast)
+                          : (order.isNullsFirst ? OrderType::kDescNullsFirst
+                                                : OrderType::kDescNullsLast));
+  }
+  return orderTypes;
+}
+
 // True when 'partitioning' meets 'alignment' on 'keys'.
 bool satisfies(
     const Partitioning& partitioning,
@@ -528,10 +558,12 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   PhysicalPlanRewriter(
       Builder& builder,
       ExprSimplifier& simplifier,
+      const OptimizerSession& session,
       const OptimizerOptions& options,
       int32_t numWorkers,
       int32_t numDrivers)
       : NodeRewriter(builder),
+        session_{session},
         options_{options},
         numWorkers_{numWorkers},
         numDrivers_{numDrivers},
@@ -571,6 +603,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     PhysicalPlanRewriter singleThreaded{
         builder(),
         simplifier_,
+        session_,
         options_,
         /*numWorkers=*/1,
         /*numDrivers=*/kRecursiveNumDrivers};
@@ -1085,6 +1118,28 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     return {partition(keyed, columnKeys), columnKeys};
   }
 
+  static bool hasOrder(
+      NodeCP input,
+      const ExprVector& keys,
+      const OrderTypeVector& orders) {
+    if (keys.empty()) {
+      return true;
+    }
+    const auto& local = input->physicalProperties().local;
+    if (local.empty() || local.front().kind != LocalPropertyKind::kSorted ||
+        local.front().columns.size() < keys.size()) {
+      return false;
+    }
+    for (size_t i = 0; i < keys.size(); ++i) {
+      if (!keys[i]->is(PlanType::kColumnExpr) ||
+          !keys[i]->sameOrEqual(*local.front().columns[i]) ||
+          orders[i] != local.front().orders[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   // Returns 'node's output columns with the leading input-column prefix
   // replaced by 'newInput's columns, for a node whose output is its input's
   // columns followed by what it appends (Window, TopNRowNumber).
@@ -1403,6 +1458,16 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   // already physically planned.
   NodeCP rewriteSort(const Sort* node, NoContext& context) override {
     NodeCP input = rewrite(node->input(), context);
+    if (node->perDriver()) {
+      if (input == node->input()) {
+        return node;
+      }
+      return builder().make<Sort>(
+          {input,
+           node->orderKeys(),
+           node->orderTypes(),
+           /*perDriver=*/true});
+    }
     if (numWorkers_ == 1 || isGathered(input)) {
       if (input == node->input()) {
         return node;
@@ -1600,59 +1665,226 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         {std::move(newInputs), node->legColumns(), node->outputColumns()});
   }
 
-  // A write to a bucketed/partitioned layout needs each partition (bucket) on a
-  // single worker, else workers race to create the same bucket file.
-  // Repartition the input on the target's partition columns using the target's
-  // connector partitioning, unless the input is already compatibly bucketed (a
-  // collocated write), the query runs on one worker, or the write is a delete,
-  // which writes no columns and so has no key to shuffle on.
+  // Describes a DELETE after its target scan handle is final.
+  connector::DeleteLayoutPtr
+  planDelete(const TableWrite& write, NodeCP input, bool exact) {
+    const auto& table = *write.table();
+    const auto& connectorId = table.layouts().front()->connectorId();
+    const auto& connectorContext = session_.context();
+    VELOX_CHECK_NOT_NULL(
+        connectorContext, "Optimizer session requires a context");
+    auto metadata = connector::ConnectorMetadataRegistry::get(connectorId);
+
+    ScanCP target = Scan::findDeleteTarget(input);
+    VELOX_CHECK_NOT_NULL(
+        target, "A delete reached physical planning with no marked scan");
+    const auto& scan = *target;
+    VELOX_CHECK(
+        scan.baseTable()->schemaTable->connectorTable == write.table(),
+        "DELETE target scan no longer refers to the table being mutated");
+    VELOX_CHECK_NOT_NULL(
+        scan.scanHandle(),
+        "Delete target scan reached physical planning without a handle");
+
+    auto layout = metadata->planDelete(
+        connectorContext->sessionFor(connectorId),
+        scan.scanHandle()->tableHandle,
+        exact);
+    VELOX_CHECK_NOT_NULL(layout);
+    layout->checkConsistency();
+    return layout;
+  }
+
+  // Projects the exact row-ID tuple consumed by a DELETE writer.
+  NodeCP projectDeleteInput(NodeCP input, const ColumnVector& rowIdColumns) {
+    ExprVector projections;
+    projections.reserve(rowIdColumns.size());
+    for (ColumnCP column : rowIdColumns) {
+      VELOX_CHECK(
+          std::ranges::find(input->outputColumns(), column) !=
+              input->outputColumns().end(),
+          "Delete input does not produce a row-id column: {}",
+          column->name());
+      projections.push_back(column);
+    }
+    if (rowIdColumns == input->outputColumns()) {
+      return input;
+    }
+    return builder().make<Project>(
+        {input, std::move(projections), rowIdColumns});
+  }
+
+  // Resolves target-layout column names into INSERT input expressions.
+  WriterRequirements resolveInsertRequirements(const TableWrite& write) {
+    const auto* layout = write.table()->layouts().front();
+    const auto& schema = write.table()->type();
+    const auto resolveColumns =
+        [&](const std::vector<const connector::Column*>& columns) {
+          ExprVector expressions;
+          expressions.reserve(columns.size());
+          for (const auto* column : columns) {
+            expressions.push_back(
+                write.columnExprs().at(schema->getChildIdx(column->name())));
+          }
+          return expressions;
+        };
+
+    return WriterRequirements{
+        .partitionKeys = resolveColumns(layout->partitionColumns()),
+        .partitionType = layout->partitionType(),
+        .alignment = Alignment::kExactKeys,
+        .orderKeys = resolveColumns(layout->orderColumns()),
+        .orderTypes = toOrderTypes(layout->sortOrder()),
+    };
+  }
+
+  // Resolves layout field names into the projected DELETE row-ID tuple.
+  WriterRequirements resolveDeleteRequirements(
+      const ColumnVector& rowIdColumns,
+      const connector::DeleteLayout& deleteLayout) {
+    folly::F14FastMap<std::string_view, ColumnCP> writerColumnByName;
+    for (ColumnCP column : rowIdColumns) {
+      writerColumnByName.emplace(column->name(), column);
+    }
+    const auto resolveKeys = [&](const std::vector<std::string>& names) {
+      ExprVector keys;
+      keys.reserve(names.size());
+      for (const auto& name : names) {
+        const auto it = writerColumnByName.find(name);
+        VELOX_CHECK(
+            it != writerColumnByName.end(),
+            "Delete key is not a column the writer receives: {}",
+            name);
+        keys.push_back(it->second);
+      }
+      return keys;
+    };
+
+    return WriterRequirements{
+        .partitionKeys = resolveKeys(deleteLayout.shuffleKeys),
+        .partitionType = deleteLayout.partitionType,
+        .alignment = Alignment::kCoLocated,
+        .orderKeys = resolveKeys(deleteLayout.sortKeys),
+        .orderTypes = toOrderTypes(deleteLayout.sortOrders),
+    };
+  }
+
+  // Adds the shared global, driver, and per-writer ordering topology.
+  NodeCP applyWriterRequirements(
+      NodeCP input,
+      const WriterRequirements& requirements) {
+    if (!requirements.partitionKeys.empty()) {
+      VELOX_CHECK_NOT_NULL(requirements.partitionType);
+      const auto* nativeType = requirements.partitionType.get();
+      const auto* globalType =
+          queryCtx()->scaledPartitionType(nativeType, numWorkers_);
+      if (numWorkers_ > 1 &&
+          !input->physicalProperties()
+               .globalPartition.satisfiesWritePartitioning(
+                   requirements.partitionKeys, *globalType)) {
+        if (NodeCP grouped = groupedRead(
+                input, requirements.partitionKeys, requirements.alignment)) {
+          input = grouped;
+        }
+      }
+      if (numWorkers_ > 1 &&
+          !input->physicalProperties()
+               .globalPartition.satisfiesWritePartitioning(
+                   requirements.partitionKeys, *globalType)) {
+        input = partitionTo(input, requirements.partitionKeys, globalType);
+      }
+      if (numDrivers_ > 1 &&
+          !input->physicalProperties()
+               .driverPartition.satisfiesWritePartitioning(
+                   requirements.partitionKeys, *nativeType)) {
+        input = builder().make<Exchange>(
+            {input,
+             Partitioning{
+                 .kind = PartitionKind::kPartitioned,
+                 .partitionType = nativeType,
+                 .keys = requirements.partitionKeys,
+                 .scope = PropertyScope::kDriver}});
+      }
+    }
+
+    if (!requirements.orderKeys.empty() &&
+        !hasOrder(input, requirements.orderKeys, requirements.orderTypes)) {
+      input = builder().make<Sort>(
+          {input,
+           requirements.orderKeys,
+           requirements.orderTypes,
+           /*perDriver=*/true});
+    }
+    return input;
+  }
+
+  // Rewrites a DELETE after its source has been physically planned.
+  NodeCP rewriteDelete(const TableWrite& write, NodeCP input) {
+    if (input->is(NodeType::kValues) &&
+        input->as<Values>()->cardinality() == 0) {
+      if (input == write.input()) {
+        return &write;
+      }
+      return builder().make<TableWrite>(
+          {input,
+           write.table(),
+           write.kind(),
+           write.columnExprs(),
+           write.rowIdColumns(),
+           /*deleteLayout=*/nullptr});
+    }
+
+    const bool exact = write.input()->is(NodeType::kScan);
+    auto deleteLayout = planDelete(write, input, exact);
+    if (!deleteLayout->hasWriter) {
+      VELOX_USER_CHECK(
+          exact,
+          "DELETE selects its rows through another operator, which the "
+          "connector cannot yet turn into a row level delete. Only a "
+          "predicate the connector absorbs into the scan is supported.");
+    } else {
+      input = projectDeleteInput(input, write.rowIdColumns());
+      input = applyWriterRequirements(
+          input,
+          resolveDeleteRequirements(write.rowIdColumns(), *deleteLayout));
+    }
+
+    return builder().make<TableWrite>(
+        {input,
+         write.table(),
+         write.kind(),
+         write.columnExprs(),
+         write.rowIdColumns(),
+         builder().takeDeleteLayout(std::move(deleteLayout))});
+  }
+
+  // A CREATE or INSERT into a bucketed/partitioned layout needs each partition
+  // on one worker, else workers race to create the same bucket file.
+  // Repartition unless the input is already compatibly bucketed or runs on one
+  // worker.
   NodeCP rewriteTableWrite(const TableWrite* node, NoContext& context)
       override {
     NodeCP newInput = rewrite(node->input(), context);
-    if (numWorkers_ > 1 && node->kind() != connector::WriteKind::kDelete) {
-      const auto* layout = node->table()->layouts().front();
-      const auto& partitionColumns = layout->partitionColumns();
-      if (!partitionColumns.empty()) {
-        // Coarsened here, not at emit: the exchange's partition count and the
-        // writer fragment's task count are the same decision.
-        const auto* targetType = queryCtx()->scaledPartitionType(
-            layout->partitionType().get(), numWorkers_);
-        const auto& schema = node->table()->type();
-        ExprVector keys;
-        keys.reserve(partitionColumns.size());
-        for (const auto* partitionColumn : partitionColumns) {
-          keys.push_back(node->columnExprs().at(
-              schema->getChildIdx(partitionColumn->name())));
-        }
-        // Reading the source by its own bucketing can deliver rows already
-        // grouped the way the target is written, which saves the shuffle.
-        if (!newInput->physicalProperties()
-                 .globalPartition.satisfiesWritePartitioning(
-                     keys, *targetType)) {
-          if (NodeCP grouped =
-                  groupedRead(newInput, keys, Alignment::kExactKeys)) {
-            if (grouped->physicalProperties()
-                    .globalPartition.satisfiesWritePartitioning(
-                        keys, *targetType)) {
-              newInput = grouped;
-            }
-          }
-        }
-        if (!newInput->physicalProperties()
-                 .globalPartition.satisfiesWritePartitioning(
-                     keys, *targetType)) {
-          newInput = partitionTo(newInput, keys, targetType);
-        }
-      }
+    if (node->kind() == connector::WriteKind::kDelete) {
+      return rewriteDelete(*node, newInput);
     }
+
+    newInput =
+        applyWriterRequirements(newInput, resolveInsertRequirements(*node));
     if (newInput == node->input()) {
       return node;
     }
     return builder().make<TableWrite>(
-        {newInput, node->table(), node->kind(), node->columnExprs()});
+        {newInput,
+         node->table(),
+         node->kind(),
+         node->columnExprs(),
+         node->rowIdColumns(),
+         node->deleteLayout()});
   }
 
  private:
+  const OptimizerSession& session_;
   const OptimizerOptions& options_;
   // A per-plan property, not an OptimizerOptions field, so it is held
   // separately.
@@ -1675,6 +1907,7 @@ NodeCP PlanPhysicalPass::run(
     NodeCP root,
     Builder& builder,
     velox::core::ExpressionEvaluator& evaluator,
+    const OptimizerSession& session,
     const OptimizerOptions& options,
     int32_t numWorkers,
     int32_t numDrivers) {
@@ -1683,7 +1916,7 @@ NodeCP PlanPhysicalPass::run(
 
   ExprSimplifier simplifier{builder, evaluator};
   PhysicalPlanRewriter rewriter{
-      builder, simplifier, options, numWorkers, numDrivers};
+      builder, simplifier, session, options, numWorkers, numDrivers};
   return rewriter.rewrite(root);
 }
 

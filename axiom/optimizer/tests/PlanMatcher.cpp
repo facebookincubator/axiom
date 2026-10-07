@@ -22,7 +22,6 @@
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/FixedPointPlanNodes.h"
 #include "velox/duckdb/conversion/DuckParser.h"
-#include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/parse/ExprRewriter.h"
 #include "velox/parse/Expressions.h"
@@ -1896,6 +1895,32 @@ class TopNRowNumberMatcher : public PlanMatcherImpl<TopNRowNumberNode> {
   const int32_t limit_;
 };
 
+// Matches a TableWriteNode and verifies the names the connector receives the
+// written columns under, in order.
+class TableWriteColumnNamesMatcher : public PlanMatcherImpl<TableWriteNode> {
+ public:
+  TableWriteColumnNamesMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      std::vector<std::string> columnNames)
+      : PlanMatcherImpl<TableWriteNode>({matcher}),
+        columnNames_{std::move(columnNames)} {}
+
+  MatchResult matchDetails(
+      const TableWriteNode& plan,
+      const std::unordered_map<std::string, std::string>& /*symbols*/)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
+    EXPECT_EQ(plan.columnNames(), columnNames_);
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    return MatchResult::success();
+  }
+
+ private:
+  const std::vector<std::string> columnNames_;
+};
+
 // Matches a LocalPartitionNode and verifies its type (gather or repartition)
 // and optionally partition keys.
 class LocalPartitionTypeMatcher : public PlanMatcherImpl<LocalPartitionNode> {
@@ -1934,9 +1959,20 @@ class LocalPartitionTypeMatcher : public PlanMatcherImpl<LocalPartitionNode> {
         keyChannels.push_back(outputType->getChildIdx(name));
       }
 
-      auto expected =
-          exec::HashPartitionFunctionSpec(outputType, keyChannels).toString();
-      EXPECT_EQ(plan.partitionFunctionSpec().toString(), expected);
+      const auto serialized = plan.partitionFunctionSpec().serialize();
+      const auto* serializedKeys = serialized.get_ptr("keyChannels");
+      if (serializedKeys == nullptr) {
+        serializedKeys = serialized.get_ptr("keys");
+      }
+      if (serializedKeys == nullptr) {
+        ADD_FAILURE() << "Partition function does not expose its key channels: "
+                      << plan.partitionFunctionSpec().toString();
+        return MatchResult::failure();
+      }
+      const auto actualChannels =
+          ISerializable::deserialize<std::vector<column_index_t>>(
+              *serializedKeys, nullptr);
+      EXPECT_EQ(actualChannels, keyChannels);
       AXIOM_TEST_RETURN_IF_FAILURE
     }
 
@@ -2696,6 +2732,14 @@ PlanMatcherBuilder& PlanMatcherBuilder::orderBy(
 PlanMatcherBuilder& PlanMatcherBuilder::tableWrite() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<PlanMatcherImpl<TableWriteNode>>(matcher_);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::tableWrite(
+    const std::vector<std::string>& columnNames) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ =
+      std::make_shared<TableWriteColumnNamesMatcher>(matcher_, columnNames);
   return *this;
 }
 

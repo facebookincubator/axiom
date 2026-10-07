@@ -110,7 +110,6 @@ class WriteTest : public test::HiveQueriesTestBase,
         session,
         table,
         connector::WriteKind::kCreate,
-        /*scanHandle=*/nullptr,
         /*explain=*/false);
     metadata.finishWrite(session, handle, {}, nullptr, {}).get();
     return table;
@@ -897,6 +896,23 @@ void verifyPartitionedWrite(const MultiFragmentPlan& plan) {
   AXIOM_ASSERT_DISTRIBUTED_PLAN(&plan, matcher);
 }
 
+// Verifies that writer ordering follows global and driver partitioning.
+void verifyPartitionedSortedWrite(const MultiFragmentPlan& plan) {
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .project()
+                     .shuffle({"n_nationkey"})
+                     .localPartition({"n_nationkey"})
+                     .orderBy({"n_name ASC NULLS FIRST"})
+                     .tableWrite()
+                     .localGather()
+                     .tableWriteMerge()
+                     .shuffle()
+                     .tableWriteMerge()
+                     .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(&plan, matcher);
+}
+
 // Verify that table write is collocated with table scan (no exchange between
 // the two).
 void verifyCollocatedWrite(const MultiFragmentPlan& plan) {
@@ -912,6 +928,22 @@ void verifyCollocatedWrite(const MultiFragmentPlan& plan) {
                      .tableWriteMerge()
                      .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(&plan, matcher);
+}
+
+// Verifies that a co-bucketed scan keeps grouped execution through the local
+// writer repartition and runs one task per coarsened bucket group.
+void verifyGroupedCollocatedWrite(const MultiFragmentPlan& plan) {
+  verifyCollocatedWrite(plan);
+  const auto& fragments = plan.fragments();
+  const auto writer = std::ranges::find_if(fragments, [](const auto& fragment) {
+    return !fragment.groupedNodes.empty();
+  });
+  ASSERT_NE(writer, fragments.end());
+  EXPECT_EQ(writer->type, FragmentType::kFixed);
+  EXPECT_EQ(writer->numRemotePartitions, 4);
+  ASSERT_EQ(writer->groupedNodes.size(), 1);
+  ASSERT_NE(writer->groupedNodes.begin()->second, nullptr);
+  EXPECT_EQ(writer->groupedNodes.begin()->second->numPartitions(), 4);
 }
 
 // Verifies that CTAS with a Values input (single-fragment, single-threaded
@@ -985,7 +1017,7 @@ TEST_P(WriteTest, ctasBucketedSql) {
       "CREATE TABLE more WITH (bucket_count = 16, bucketed_by = ARRAY['key']) AS "
       "SELECT key, l_orderkey, l_linenumber + 1 as x FROM test",
       600'572,
-      verifyCollocatedWrite);
+      useV2_ ? verifyGroupedCollocatedWrite : verifyCollocatedWrite);
 
   verifyPartitionedLayout(getLayout("more"), "key", 16);
 
@@ -994,7 +1026,7 @@ TEST_P(WriteTest, ctasBucketedSql) {
       "CREATE TABLE same WITH (bucket_count = 8, bucketed_by = ARRAY['key']) AS "
       "SELECT key, l_orderkey, l_linenumber + 1 as x FROM test",
       600'572,
-      verifyCollocatedWrite);
+      useV2_ ? verifyGroupedCollocatedWrite : verifyCollocatedWrite);
 
   verifyPartitionedLayout(getLayout("same"), "key", 8);
 
@@ -1070,7 +1102,7 @@ TEST_P(WriteTest, ctasBucketedAndSorted) {
       "CREATE TABLE test WITH (bucket_count = 16, bucketed_by = ARRAY['n_nationkey'], sorted_by = ARRAY['n_name']) AS "
       "SELECT n_nationkey, n_name, 'bar' as y FROM nation",
       25,
-      verifyPartitionedWrite);
+      useV2_ ? verifyPartitionedSortedWrite : verifyPartitionedWrite);
 
   verifyPartitionedLayout(getLayout("test"), "n_nationkey", 16, "n_name");
 }

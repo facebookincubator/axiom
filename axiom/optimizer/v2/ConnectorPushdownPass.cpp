@@ -373,6 +373,10 @@ NodeCP ConnectorPushdownPass::run(
         response.offer.subtree,
         response.offer.connectorId);
     for (const auto& acceptedRoot : response.acceptedRoots) {
+      // A virtual scan can preserve the rows but not the table DELETE mutates.
+      if (Scan::findDeleteTarget(acceptedRoot.root) != nullptr) {
+        continue;
+      }
       replacements.emplace(
           acceptedRoot.root,
           makeReplacementScan(
