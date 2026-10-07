@@ -1273,6 +1273,43 @@ TEST_F(PrestoParserTest, values) {
         matchValues(ROW({{"c0", REAL()}, {"c1", INTEGER()}})).output();
     testSelect("SELECT * FROM (VALUES (real '1', 1 + 2))", matcher);
   }
+
+  // A row constructor contributes one column per item; any other row is one
+  // column.
+  {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                       .values(ROW("c0", INTEGER()))
+                       .output();
+    testSelect("SELECT * FROM (VALUES ROW(1), 2)", matcher);
+    testSelect("SELECT * FROM (VALUES ROW(1), NULL)", matcher);
+    testSelect("SELECT * FROM (VALUES 1, ROW(2))", matcher);
+  }
+
+  {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                       .values(ROW({"c0", "c1"}, INTEGER()))
+                       .output();
+    testSelect("SELECT * FROM (VALUES (1, 2), ROW(3 AS a, 4 AS b))", matcher);
+    testSelect("SELECT * FROM (VALUES ROW(1 AS a, 2 AS b), (3, 4))", matcher);
+  }
+}
+
+// Every VALUES row must contribute as many columns as the first.
+TEST_F(PrestoParserTest, valuesColumnCount) {
+  for (const auto* sql : {
+           "SELECT * FROM (VALUES (1, 2), 3)",
+           "SELECT * FROM (VALUES (1, 2), (3))",
+           "SELECT * FROM (VALUES (1, 2), NULL)",
+           "SELECT * FROM (VALUES NULL, (1, 2))",
+           "SELECT * FROM (VALUES (1, 2), (3, 4, 5))",
+           "SELECT * FROM (VALUES (1, 2), "
+           "CAST(ROW(3, 4) AS ROW(a INTEGER, b INTEGER)))",
+           "INSERT INTO region VALUES (1, 'a', 'b'), (2)",
+       }) {
+    SCOPED_TRACE(sql);
+    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+        parseSql(sql), "VALUES rows have different numbers of columns");
+  }
 }
 
 TEST_F(PrestoParserTest, tablesample) {

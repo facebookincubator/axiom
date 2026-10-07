@@ -1857,24 +1857,33 @@ class RelationPlanner : public AstVisitor {
   void visitValues(Values* node) override {
     VELOX_CHECK(!node->rows().empty());
 
-    const auto& firstRow = node->rows().front();
-    const bool isRow = firstRow->is(NodeType::kRow);
-    const auto numColumns = isRow ? firstRow->as<Row>()->items().size() : 1;
-
     std::vector<std::vector<lp::ExprApi>> rows;
     rows.reserve(node->rows().size());
 
+    size_t numColumns{0};
     for (const auto& row : node->rows()) {
       std::vector<lp::ExprApi> values;
-      if (isRow) {
-        const auto& columns = row->as<Row>()->items();
-        VELOX_CHECK_EQ(numColumns, columns.size());
-
-        for (const auto& expr : columns) {
+      if (row->is(NodeType::kRow)) {
+        for (const auto& expr : row->as<Row>()->items()) {
+          values.emplace_back(toExpr(expr));
+        }
+      } else if (row->is(NodeType::kNamedRow)) {
+        for (const auto& expr : row->as<NamedRow>()->items()) {
           values.emplace_back(toExpr(expr));
         }
       } else {
         values.emplace_back(toExpr(row));
+      }
+
+      if (rows.empty()) {
+        numColumns = values.size();
+      } else {
+        AXIOM_PRESTO_SEMANTIC_CHECK_EQ(
+            numColumns,
+            values.size(),
+            row->location(),
+            /*token=*/std::nullopt,
+            "VALUES rows have different numbers of columns");
       }
 
       rows.emplace_back(std::move(values));
