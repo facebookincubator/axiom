@@ -96,6 +96,22 @@ void NameMappings::copyUserName(
   }
 }
 
+void NameMappings::copyAliases(
+    const std::string& id,
+    const NameMappings& source) {
+  for (const auto& [alias, ids] : source.aliasIds_) {
+    if (ids.contains(id)) {
+      aliasIds_[alias].insert(id);
+    }
+  }
+}
+
+void NameMappings::copyAmbiguousNames(const NameMappings& source) {
+  for (const auto& name : source.ambiguousNames_) {
+    markAmbiguous(name);
+  }
+}
+
 std::optional<std::string> NameMappings::lookup(const std::string& name) const {
   auto it = mappings_.find(QualifiedName{.alias = {}, .name = name});
   if (it != mappings_.end()) {
@@ -114,6 +130,10 @@ std::optional<std::string> NameMappings::lookup(
   }
 
   return std::nullopt;
+}
+
+bool NameMappings::isAmbiguous(const QualifiedName& name) const {
+  return ambiguousNames_.contains(name);
 }
 
 std::vector<NameMappings::QualifiedName> NameMappings::reverseLookup(
@@ -135,11 +155,16 @@ void NameMappings::clearAliases() {
   folly::erase_if(mappings_, [](const auto& entry) {
     return entry.first.alias.has_value();
   });
+  folly::erase_if(
+      ambiguousNames_, [](const auto& name) { return name.alias.has_value(); });
+  aliasIds_.clear();
 
   rebuildReverseIndex();
 }
 
-void NameMappings::setAlias(const std::string& alias) {
+void NameMappings::setAlias(
+    const std::string& alias,
+    const std::vector<std::string>& ids) {
   std::vector<std::pair<std::string, std::string>> names;
   for (auto it = mappings_.begin(); it != mappings_.end();) {
     if (it->first.alias.has_value()) {
@@ -149,6 +174,22 @@ void NameMappings::setAlias(const std::string& alias) {
       ++it;
     }
   }
+
+  aliasIds_.clear();
+  aliasIds_.emplace(
+      alias, folly::F14FastSet<std::string>(ids.begin(), ids.end()));
+
+  // Drop the old aliases' marks, and mark 'alias.name' for each ambiguous
+  // unqualified name.
+  std::vector<QualifiedName> aliasedNames;
+  folly::erase_if(ambiguousNames_, [&](const auto& name) {
+    if (name.alias.has_value()) {
+      return true;
+    }
+    aliasedNames.push_back(QualifiedName{.alias = alias, .name = name.name});
+    return false;
+  });
+  ambiguousNames_.insert(aliasedNames.begin(), aliasedNames.end());
 
   // Every surviving entry gets the new alias.
   for (auto& [name, id] : names) {
@@ -166,12 +207,24 @@ void NameMappings::rebuildReverseIndex() {
 }
 
 void NameMappings::merge(const NameMappings& other) {
-  // Snapshot qualified names from the left side before merging. Used below to
-  // detect names that are ambiguous across previously-joined tables.
-  folly::F14FastSet<std::string> leftQualifiedNames;
-  for (const auto& [key, _] : mappings_) {
-    if (key.alias.has_value()) {
-      leftQualifiedNames.emplace(key.name);
+  // A side that is itself a join may reach a column only as 'alias.name', or
+  // through no name at all, so qualified and ambiguous names count too.
+  const auto baseNames = [](const NameMappings& mappings) {
+    folly::F14FastSet<std::string> names;
+    for (const auto& [key, _] : mappings.mappings_) {
+      names.emplace(key.name);
+    }
+    for (const auto& key : mappings.ambiguousNames_) {
+      names.emplace(key.name);
+    }
+    return names;
+  };
+
+  const auto otherNames = baseNames(other);
+  folly::F14FastSet<std::string> sharedNames;
+  for (const auto& name : baseNames(*this)) {
+    if (otherNames.contains(name)) {
+      sharedNames.emplace(name);
     }
   }
 
@@ -184,26 +237,34 @@ void NameMappings::merge(const NameMappings& other) {
     }
   };
 
+  for (const auto& name : sharedNames) {
+    if (const auto id = lookup(name)) {
+      userNames_.try_emplace(id.value(), name);
+    }
+    markAmbiguous(QualifiedName{.alias = std::nullopt, .name = name});
+  }
+
   for (const auto& [name, id] : other.mappings_) {
     if (auto existing = mappings_.find(name); existing != mappings_.end()) {
-      // The same name exists on both sides, so it is ambiguous across the
-      // merged relations: drop it. A qualified name collides here only when
-      // both sides reuse a relation alias. Referencing a dropped name later
-      // fails as unresolved, matching Presto's report-at-reference-time
-      // behavior.
+      // Both sides reuse a relation alias, so 'alias.name' names a column on
+      // each side: drop it.
       userNames_.try_emplace(existing->second, name.name);
       preserveOtherUserName(id, name.name);
       markAmbiguous(name);
-    } else if (
-        !name.alias.has_value() && leftQualifiedNames.contains(name.name)) {
-      // Don't add an unqualified name from the right side if the left side
-      // already has a qualified name with the same base. The name is ambiguous
-      // across joined tables even though the left's unqualified entry was
-      // removed by an earlier merge.
+    } else if (!name.alias.has_value() && sharedNames.contains(name.name)) {
+      // Marked ambiguous above. Keep only the column's user-visible name.
       preserveOtherUserName(id, name.name);
     } else {
       insert(name, id);
     }
+  }
+
+  // A name ambiguous in 'other' stays ambiguous, so a later merge cannot make
+  // it resolve.
+  copyAmbiguousNames(other);
+
+  for (const auto& [alias, ids] : other.aliasIds_) {
+    aliasIds_[alias].insert(ids.begin(), ids.end());
   }
 
   for (const auto& id : other.hiddenIds_) {
@@ -249,6 +310,9 @@ folly::F14FastMap<std::string, std::string> NameMappings::uniqueNames() const {
 folly::F14FastSet<std::string> NameMappings::idsWithAlias(
     const std::string& alias) const {
   folly::F14FastSet<std::string> ids;
+  if (auto it = aliasIds_.find(alias); it != aliasIds_.end()) {
+    ids = it->second;
+  }
   for (const auto& [name, id] : mappings_) {
     if (name.alias.has_value() && name.alias.value() == alias) {
       ids.emplace(id);

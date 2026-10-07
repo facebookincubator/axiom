@@ -105,6 +105,55 @@ TEST_F(PlanBuilderTest, ambiguousOutputNamesFullOverlap) {
   }));
 }
 
+// Verifies that a name that names more than one column fails where it is
+// referenced: in a projection whose enclosing scope also has the name, and as
+// a USING column.
+TEST_F(PlanBuilderTest, ambiguousName) {
+  PlanBuilder::Context context;
+
+  auto buildValues = [&](const std::string& alias) {
+    return PlanBuilder(context)
+        .values(ROW("a", BIGINT()), ValuesNode::Variants{})
+        .as(alias);
+  };
+
+  PlanBuilder::Scope outerScope;
+  auto outer = buildValues("t");
+  outer.captureScope(outerScope);
+
+  auto inner =
+      PlanBuilder(context, /*allowAmbiguousOutputNames=*/false, outerScope)
+          .values(ROW("a", BIGINT()), ValuesNode::Variants{})
+          .as("u")
+          .join(buildValues("v"), "", JoinType::kInner);
+
+  VELOX_ASSERT_THROW(inner.project({"a"}), "Column is ambiguous: a");
+  VELOX_ASSERT_THROW(
+      inner.joinUsing(buildValues("w"), {"a"}, JoinType::kInner),
+      "Column is ambiguous: a");
+}
+
+// Verifies that an alias keeps naming every column of its relation, including
+// columns whose names are ambiguous, after 'with' appends a column.
+TEST_F(PlanBuilderTest, aliasColumns) {
+  PlanBuilder::Context context;
+
+  auto buildValues = [&](const std::string& alias) {
+    return PlanBuilder(context)
+        .values(ROW("a", BIGINT()), ValuesNode::Variants{})
+        .as(alias);
+  };
+
+  auto builder = buildValues("t")
+                     .join(buildValues("u"), "", JoinType::kInner)
+                     .as("v")
+                     .with({"1 as c"});
+
+  auto names =
+      builder.findOrAssignOutputNames(/*includeHiddenColumns=*/false, "v");
+  EXPECT_EQ(2, names.size());
+}
+
 // Verifies that findOrAssignOutputNames returns aliases only for ambiguous
 // columns when tables partially overlap.
 TEST_F(PlanBuilderTest, ambiguousOutputNamesPartialOverlap) {

@@ -27,6 +27,19 @@ namespace facebook::axiom::logical_plan {
 /// Unique names may be accessed by name alone. Non-unique names must be
 /// disambiguated using an alias. Also tracks optional user-specified output
 /// names per column ID to support duplicate and empty names in query output.
+///
+/// A name that names more than one column is marked ambiguous. 'lookup'
+/// returns std::nullopt for it, as for a name that names no column, and
+/// 'isAmbiguous' tells the two apart. For example, after merging relations 't'
+/// and 'u' that both have a column 'x':
+///
+///   lookup("t", "x")                                   // t's column
+///   lookup("x")                                        // std::nullopt
+///   isAmbiguous({.alias = std::nullopt, .name = "x"})  // true
+///
+/// Invariants:
+/// - A name maps to one column or is marked ambiguous, never both.
+/// - A marked name names two or more columns of the scope.
 class NameMappings {
  public:
   struct QualifiedName {
@@ -63,6 +76,9 @@ class NameMappings {
       const std::string& alias,
       const std::string& name) const;
 
+  /// Returns true if 'name' names more than one column.
+  bool isAmbiguous(const QualifiedName& name) const;
+
   /// Returns true if the specified 'id' was marked as hidden via 'markHidden'
   /// API.
   bool isHidden(const std::string& id) const;
@@ -73,18 +89,24 @@ class NameMappings {
 
   /// Sets new alias for the names. Unique names will be accessible both with
   /// the new alias and without. Ambiguous names will no longer be accessible.
+  /// 'ids' are the IDs of all columns of the relation; 'idsWithAlias' returns
+  /// them all for the new alias. An ambiguous unqualified name is also
+  /// ambiguous under the new alias.
   ///
   /// Used in PlanBuilder::as() API.
-  void setAlias(const std::string& alias);
+  void setAlias(const std::string& alias, const std::vector<std::string>& ids);
 
-  /// Drops all qualified names, leaving only unqualified access. Columns that
-  /// were reachable only through an alias are no longer accessible by name.
+  /// Drops all aliases and qualified names, ambiguous ones included, leaving
+  /// only unqualified access. Columns that were reachable only through an alias
+  /// are no longer accessible by name.
   ///
   /// Used in PlanBuilder::clearAliases() API.
   void clearAliases();
 
   /// Merges mappings and user names from 'other' into this. Removes
-  /// unqualified access to non-unique names.
+  /// unqualified access to names that both sides use in any form: qualified,
+  /// unqualified or ambiguous. Keeps both sides' ambiguous names and the
+  /// columns each alias names.
   ///
   /// @pre IDs are unique across 'this' and 'other'. This expectation is not
   /// verified explicitly. Violations would lead to undefined behavior.
@@ -101,8 +123,9 @@ class NameMappings {
   /// Used to produce final output.
   folly::F14FastMap<std::string, std::string> uniqueNames() const;
 
-  /// Returns a set of IDs for all columns that are accessible using specified
-  /// 'alias'.
+  /// Returns the IDs of the columns that 'alias' names: the columns of the
+  /// relation it was set on with 'setAlias', and the columns reachable as
+  /// 'alias.name'.
   folly::F14FastSet<std::string> idsWithAlias(const std::string& alias) const;
 
   /// Stores a user-specified output name for the given column ID. May be empty
@@ -113,6 +136,14 @@ class NameMappings {
   /// 'source', if one exists. Does nothing if 'source' has no user name for
   /// the given ID.
   void copyUserName(const std::string& id, const NameMappings& source);
+
+  /// Adds the column 'id' to every alias that names it in 'source'. Used when
+  /// a scope rebuilt from 'source' keeps that column.
+  void copyAliases(const std::string& id, const NameMappings& source);
+
+  /// Marks every name that 'source' marks ambiguous. Used when a scope rebuilt
+  /// from 'source' keeps all of its columns.
+  void copyAmbiguousNames(const NameMappings& source);
 
   /// Returns the user-specified output name for the given column ID, or
   /// nullptr.
@@ -125,6 +156,7 @@ class NameMappings {
     reverseIndex_.clear();
     userNames_.clear();
     ambiguousNames_.clear();
+    aliasIds_.clear();
   }
 
  private:
@@ -150,6 +182,10 @@ class NameMappings {
 
   // Names that resolved to more than one column.
   folly::F14FastSet<QualifiedName, QualifiedNameHasher> ambiguousNames_;
+
+  // Maps each alias set with 'setAlias' to the IDs of its relation's columns,
+  // including columns that no name in mappings_ reaches.
+  folly::F14FastMap<std::string, folly::F14FastSet<std::string>> aliasIds_;
 
   // IDs of hidden columns.
   folly::F14FastSet<std::string> hiddenIds_;
