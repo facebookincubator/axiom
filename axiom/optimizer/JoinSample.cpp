@@ -181,12 +181,9 @@ std::unique_ptr<KeyFreq> runJoinSample(
   // rows. blockingWait runs on the optimizer planning thread, not a Velox
   // executor thread.
   auto generator = runner.execute();
-  // Early stop is "stop pulling, then co_close()". co_close() must run on every
-  // exit -- including when a pull throws -- so the runner is reaped before it
-  // is destroyed (its destructor asserts co_close() ran). co_close() does not
-  // throw, so this is safe during exception unwinding.
+  // Await async cleanup on every exit, including after sampling stops early.
   SCOPE_EXIT {
-    folly::coro::blockingWait(runner.co_close());
+    folly::coro::blockingWait(std::move(generator).cleanup());
   };
   while (auto rows = folly::coro::blockingWait(generator.next())) {
     const velox::RowVectorPtr& batch = *rows;

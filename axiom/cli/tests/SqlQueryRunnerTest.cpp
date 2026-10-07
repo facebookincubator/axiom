@@ -17,6 +17,9 @@
 #include "axiom/cli/SqlQueryRunner.h"
 #include <folly/CancellationToken.h>
 #include <folly/coro/BlockingWait.h>
+#include <folly/coro/Cleanup.h>
+#include <folly/coro/GtestHelpers.h>
+#include <folly/coro/ScopeExit.h>
 #include <folly/coro/Task.h>
 #include <folly/coro/WithCancellation.h>
 #include <folly/dynamic.h>
@@ -57,8 +60,9 @@ class SqlQueryRunnerTest : public SqlQueryRunnerTestBase {
             [&]() -> folly::coro::Task<
                       std::vector<SqlQueryRunner::SqlResultChunk>> {
               std::vector<SqlQueryRunner::SqlResultChunk> chunks;
-              auto generator =
-                  runner_->co_run(std::string(sql), std::move(options));
+              auto&& [generator] = co_await folly::coro::co_scope_exit(
+                  folly::coro::co_cleanup,
+                  runner_->co_run(std::string(sql), std::move(options)));
               while (auto chunk = co_await generator.next()) {
                 chunks.push_back(std::move(*chunk));
               }
@@ -180,8 +184,9 @@ TEST_F(SqlQueryRunnerTest, externalCancellation) {
           folly::coro::co_withCancellation(
               source.getToken(),
               folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
-                auto generator =
-                    runner_->co_run("SELECT count(*) FROM t", options);
+                auto&& [generator] = co_await folly::coro::co_scope_exit(
+                    folly::coro::co_cleanup,
+                    runner_->co_run("SELECT count(*) FROM t", options));
                 while (co_await generator.next()) {
                 }
               }))),
@@ -250,6 +255,61 @@ TEST_F(SqlQueryRunnerTest, coRunYieldsChunks) {
   }
 }
 
+CO_TEST_F(SqlQueryRunnerTest, coRunEarlyStop) {
+  {
+    auto&& [unpulled] = co_await folly::coro::co_scope_exit(
+        folly::coro::co_cleanup, runner_->co_run("SELECT 0", {}));
+    co_await std::move(unpulled).cleanup();
+  }
+
+  constexpr int64_t kNumRows = 100'000;
+  testConnector_->addTable("t", ROW("c", BIGINT()))
+      ->addData(makeRowVector({makeFlatVector<int64_t>(
+          kNumRows, [](auto row) { return static_cast<int64_t>(row); })}));
+
+  auto completion = std::make_shared<std::optional<QueryCompletionInfo>>();
+  facebook::axiom::QueryRuntimeStats stats;
+  SqlQueryRunner::RunOptions options;
+  options.componentStatWriterProvider = [&](std::string_view componentId) {
+    return stats.writerFor(componentId);
+  };
+  options.onComplete = [completion](const QueryCompletionInfo& info) {
+    *completion = info;
+  };
+  int64_t numRowsRead{0};
+  {
+    auto&& [generator] = co_await folly::coro::co_scope_exit(
+        folly::coro::co_cleanup,
+        runner_->co_run("SELECT c FROM t", std::move(options)));
+    auto first = co_await generator.next();
+    CO_ASSERT_TRUE(first.has_value());
+    CO_ASSERT_NE(first->batch, nullptr);
+    numRowsRead = first->batch->size();
+    co_await std::move(generator).cleanup();
+  }
+
+  CO_ASSERT_TRUE(completion->has_value());
+  EXPECT_TRUE(completion->value().cancelled);
+  EXPECT_FALSE(completion->value().errorInfo.has_value());
+  EXPECT_EQ(completion->value().numOutputRows, numRowsRead);
+  EXPECT_GT(completion->value().timing.execute, 0);
+
+  const auto metrics =
+      stats.toMap(facebook::axiom::QueryRuntimeStats::KeySeparator::kSlash);
+  const auto executeCpuMetric = metrics.find(
+      facebook::axiom::QueryRuntimeStats::qualifiedKey(
+          facebook::axiom::ComponentMetrics::kCli,
+          facebook::axiom::ComponentMetrics::kExecuteCpuNanos,
+          facebook::axiom::QueryRuntimeStats::KeySeparator::kSlash));
+  CO_ASSERT_NE(executeCpuMetric, metrics.end());
+  EXPECT_EQ(executeCpuMetric->second.count, 1);
+
+  const auto result = runner_->run("SELECT 2", {});
+  CO_ASSERT_EQ(result.results.size(), 1);
+  test::assertEqualVectors(
+      result.results.front(), makeRowVector({makeFlatVector<int32_t>({2})}));
+}
+
 TEST_F(SqlQueryRunnerTest, coRunRowCountAcrossChunks) {
   // A multi-row SELECT is delivered as one or more batch chunks; the row count
   // summed across chunks and the reported numOutputRows both match the input.
@@ -306,8 +366,11 @@ TEST_F(SqlQueryRunnerTest, coRunCancelMidStream) {
               folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
                 // A six-way cross join streams ~244M rows, so the query is
                 // still producing long after the first batch.
-                auto generator = runner_->co_run(
-                    "SELECT a.s FROM t a, t b, t c, t d, t e, t f", options);
+                auto&& [generator] = co_await folly::coro::co_scope_exit(
+                    folly::coro::co_cleanup,
+                    runner_->co_run(
+                        "SELECT a.s FROM t a, t b, t c, t d, t e, t f",
+                        options));
                 bool cancelled = false;
                 while (auto chunk = co_await generator.next()) {
                   if (!cancelled) {
@@ -341,8 +404,9 @@ TEST_F(SqlQueryRunnerTest, coRunErrorSurfacesFromGenerator) {
   EXPECT_THROW(
       folly::coro::blockingWait(
           folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
-            auto generator =
-                runner_->co_run("SELECT 1 / (c - 2000) FROM t", options);
+            auto&& [generator] = co_await folly::coro::co_scope_exit(
+                folly::coro::co_cleanup,
+                runner_->co_run("SELECT 1 / (c - 2000) FROM t", options));
             while (co_await generator.next()) {
             }
           })),
@@ -351,6 +415,7 @@ TEST_F(SqlQueryRunnerTest, coRunErrorSurfacesFromGenerator) {
   ASSERT_TRUE(completion.has_value());
   EXPECT_FALSE(completion->cancelled);
   EXPECT_TRUE(completion->errorInfo.has_value());
+  EXPECT_GT(completion->timing.execute, 0);
 }
 
 TEST_F(SqlQueryRunnerTest, currentUser) {
@@ -975,6 +1040,20 @@ TEST_F(SqlQueryRunnerTest, onStartExceptionSwallowed) {
   EXPECT_FALSE(captured.errorInfo.has_value());
 }
 
+TEST_F(SqlQueryRunnerTest, onCompleteExceptionSwallowed) {
+  // NOLINTNEXTLINE(clang-diagnostic-missing-noreturn)
+  const auto throwingCallback = [](const QueryCompletionInfo&) {
+    // Exercises callbacks that throw outside std::exception.
+    // NOLINTNEXTLINE(facebook-hte-ThrowNonStdExceptionIssue)
+    throw 42;
+  };
+
+  EXPECT_NO_THROW(runner_->run("SELECT 1", {.onComplete = throwingCallback}));
+  EXPECT_THROW(
+      runner_->run("INVALID SYNTAX HERE", {.onComplete = throwingCallback}),
+      presto::PrestoSqlError);
+}
+
 TEST_F(SqlQueryRunnerTest, completionCallbackOnParseFailure) {
   QueryCompletionInfo captured;
 
@@ -1046,6 +1125,37 @@ TEST_F(SqlQueryRunnerTest, completionCallbackOnPermissionCheckFailure) {
   EXPECT_GT(captured.timing.checkPermission, 0);
   EXPECT_EQ(captured.timing.optimize, 0);
   EXPECT_EQ(captured.timing.execute, 0);
+}
+
+TEST_F(SqlQueryRunnerTest, completionCallbackOnNonStandardFailure) {
+  QueryCompletionInfo captured;
+
+  auto runner = makeRunner(
+      "test_non_standard_failure",
+      {},
+      // NOLINTNEXTLINE(clang-diagnostic-missing-noreturn)
+      [](std::string_view,
+         std::string_view,
+         std::string_view,
+         std::optional<std::string_view>,
+         const auto&,
+         const auto&)
+          -> std::shared_ptr<facebook::velox::filesystems::TokenProvider> {
+        // Exercises telemetry for exceptions outside std::exception.
+        // NOLINTNEXTLINE(facebook-hte-ThrowNonStdExceptionIssue)
+        throw 42;
+      });
+
+  EXPECT_THROW(
+      runner->run(
+          "SELECT 1",
+          {.onComplete =
+               [&](const QueryCompletionInfo& info) { captured = info; }}),
+      int);
+
+  EXPECT_FALSE(captured.cancelled);
+  ASSERT_TRUE(captured.errorInfo.has_value());
+  EXPECT_EQ(captured.errorInfo->message, "Non-standard exception");
 }
 
 TEST_F(SqlQueryRunnerTest, completionCallbackOnOptimizationFailure) {

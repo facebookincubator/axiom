@@ -16,7 +16,9 @@
 
 #pragma once
 
+#include <atomic>
 #include <functional>
+#include <memory>
 
 #include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/Task.h>
@@ -37,6 +39,21 @@ namespace facebook::axiom::runner {
 /// and different scheduling either in process or in a cluster. Unless
 /// otherwise stated, the member functions are thread safe as long as
 /// the caller holds an owning reference to the runner.
+///
+/// A caller normally consumes one execution to completion:
+/// @code
+/// auto&& [results] = co_await folly::coro::co_scope_exit(
+///     folly::coro::co_cleanup,
+///     runner->execute(timeoutMicros));
+/// while (auto batch = co_await results.next()) {
+///   consume(std::move(*batch));
+/// }
+/// @endcode
+/// Lifecycle:
+/// - Pull at most one execution from a Runner.
+/// - Await `cleanup()` on every generator returned by `execute()`, pulled or
+///   not, before destroying the runner.
+/// - Result batches stay valid until the runner is destroyed.
 class Runner {
  public:
   enum class State { kInitialized, kRunning, kFinished, kError, kCancelled };
@@ -45,45 +62,37 @@ class Runner {
 
   virtual ~Runner() = default;
 
-  /// Returns a generator that yields successive result batches until the query
-  /// is done (the generator ends). `co_await gen.next()` rethrows any
-  /// execution-time error. Each batch is backed by a memory pool owned by the
-  /// runner and stays valid only until the runner is destroyed; a caller that
-  /// needs a batch to outlive the runner must copy it out (as optimizer
-  /// constant folding does).
+  /// Executes the plan and yields successive result batches.
   ///
-  /// The caller must `co_await co_close()` exactly once when done with the
-  /// generator — whether it drained fully, stopped early, or was unwound by an
-  /// exception — before destroying the runner. To stop early, stop pulling and
-  /// then co_await co_close(); dropping the generator alone does NOT reap.
-  /// External or deadline cancellation still composes through the awaiting
-  /// scope's cancellation token (e.g. folly::coro::timeout or
-  /// co_withCancellation); there is no separate public cancel.
+  /// Execution outcomes:
+  /// - Drained: the generator ends.
+  /// - Execution error: rethrown as-is.
+  /// - Caller cancels a pending pull: the complete execution stops, and the
+  ///   pull throws `folly::OperationCancelled`.
+  /// - Deadline expires: it starts on the first pull, runs between pulls, and
+  ///   throws `VeloxUserError`.
   ///
-  /// Awaiting the read/produce-drain path never blocks the awaiting thread, so
-  /// it is safe on a Velox executor thread. Exception: on the write path the
-  /// INSERT/CTAS commit is a point of no return that runs to completion, and
-  /// its error-path cleanup waits for tasks to stop — both may block, so a
-  /// write-plan execute() should not be awaited on an executor thread.
-  virtual folly::coro::AsyncGenerator<velox::RowVectorPtr> execute() = 0;
-
-  /// Terminal, owner-scoped wind-down of one execute() run: stops anything
-  /// still running and reaps it (split generation joined, tasks completed,
-  /// final stats captured, pools released), and does not complete until that is
-  /// done. The owner co_awaits this exactly once before destroying the runner,
-  /// whether the generator drained fully or stopped early — the destructor
-  /// asserts it ran rather than doing blocking teardown itself. Because it is
-  /// awaited (not a blocking destructor), it is safe to co_await on a Velox
-  /// executor thread. Idempotent. This is not an external cancel that returns
-  /// before work stops; deadline/scope cancellation still composes through
-  /// execute()'s awaiting token, while co_close() is the owner's lifecycle
-  /// finish.
-  virtual folly::coro::Task<void> co_close() = 0;
+  /// Each pull's cancellation token applies only while that pull is pending.
+  /// A zero `timeoutMicros` disables the deadline.
+  ///
+  /// A terminal pull finishes execution cleanup before returning end-of-stream
+  /// or throwing, so `stats()` then returns final task stats. Uses Folly's
+  /// `CleanableAsyncGenerator` async-cleanup pattern: the owner must await
+  /// `cleanup()` on every exit, including for a generator that was never
+  /// pulled. Cleanup stops an execution that was not drained, finishes its
+  /// cleanup, and cancels its deadline.
+  ///
+  /// Result batches are backed by a memory pool owned by the runner and remain
+  /// valid only until the runner is destroyed. Awaiting the read path never
+  /// blocks the awaiting thread. A write commit is a point of no return and may
+  /// block, so a write-plan execution must not run on an executor thread.
+  folly::coro::CleanableAsyncGenerator<velox::RowVectorPtr> execute(
+      int64_t timeoutMicros = 0);
 
   /// Returns Task stats for each fragment of the plan. The stats correspond 1:1
   /// to the stages in the MultiFragmentPlan. May be called at any time: while
   /// the query is running it returns an in-progress snapshot; once execution
-  /// has been reaped it returns the final stats.
+  /// cleanup has finished it returns the final stats.
   virtual std::vector<velox::exec::TaskStats> stats() const = 0;
 
   /// Returns the executable fragments of the plan being run, ordered so that
@@ -94,21 +103,26 @@ class Runner {
   /// Returns the state of execution.
   virtual State state() const = 0;
 
-  /// Synchronous convenience that drives execute() to completion (or the
-  /// deadline), invokes 'onBatch' for each result batch, then reaps via
-  /// co_close() before returning. For non-coroutine callers that do not need
-  /// external cancellation — simple entry points, tests, benchmarks. Blocks the
-  /// calling thread, so it must NOT be called from a Velox executor thread.
-  ///
-  /// When 'timeoutMicros' > 0, enforces a cooperative deadline over execution
-  /// only (not the parse/permission/optimize phases nor a write commit; a
-  /// non-yielding operator can overrun it), failing with VELOX_USER_FAIL on the
-  /// deadline. A caller that needs external cancellation does not use drain():
-  /// it drives execute()/co_close() under its own co_withCancellation scope and
-  /// catches folly::OperationCancelled (see SqlQueryRunner::run).
+  /// Synchronous convenience that drives `execute()` to completion and invokes
+  /// `onBatch` for each result batch. An `onBatch` exception stops the
+  /// execution and finishes cleanup before propagation. Blocks the calling
+  /// thread, so it must not be called from a Velox executor thread.
   void drain(
       const std::function<void(velox::RowVectorPtr)>& onBatch,
       int64_t timeoutMicros = 0);
+
+ protected:
+  // Produces the runner-specific result stream under the stable cancellation
+  // token supplied by `execute()`.
+  virtual folly::coro::AsyncGenerator<velox::RowVectorPtr> executeImpl() = 0;
+
+  // Stops runner-specific work and releases its resources. Implementations
+  // must be idempotent across terminal and scope-exit cleanup.
+  virtual folly::coro::Task<void> co_cleanupImpl() = 0;
+
+ private:
+  // Prevents a second result stream from being pulled from this Runner.
+  std::atomic<bool> executionStarted_{false};
 };
 
 } // namespace facebook::axiom::runner

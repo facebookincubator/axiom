@@ -127,17 +127,6 @@ class LocalRunner : public Runner,
   LocalRunner(LocalRunner&&) = delete;
   LocalRunner& operator=(LocalRunner&&) = delete;
 
-  /// Execution starts lazily on the first pull of the returned generator, not
-  /// when execute() is called.
-  folly::coro::AsyncGenerator<velox::RowVectorPtr> execute() override;
-
-  /// Terminal wind-down: cancels any still-running work and reaps it (split
-  /// scope joined, tasks completed, final stats captured, pools released).
-  /// Awaited (never blocks the awaiting thread), so it is safe on a Velox
-  /// executor thread. Idempotent, and safe when execute() was never pulled
-  /// (state() == kInitialized): it just joins the empty split scope.
-  folly::coro::Task<void> co_close() override;
-
   /// Returns a list of fragments from the 'plan' specified in constructor
   /// sorted in topological order.
   ///
@@ -175,7 +164,14 @@ class LocalRunner : public Runner,
     return state_;
   }
 
+ protected:
+  // Cancels local tasks and reaps split generation, final stats, and pools.
+  folly::coro::Task<void> co_cleanupImpl() override;
+
  private:
+  // Produces the local result stream under Runner's stable cancellation token.
+  folly::coro::AsyncGenerator<velox::RowVectorPtr> executeImpl() override;
+
   // Fixed timeout for co_reap()'s task waits (stop running, then release
   // resources).
   static constexpr int32_t kReapTimeoutMicros = 1'000'000;
@@ -187,9 +183,10 @@ class LocalRunner : public Runner,
   // the in-flight or next pull surfaces cooperative cancellation.
   void cancelTasks();
 
-  // Awaited reap shared by co_close() and the co_runWrite() error path. Joins
-  // the split scope, then waits for all tasks to complete in two phases (stop
-  // running, then release resources), each bounded by kReapTimeoutMicros.
+  // Awaited reap shared by result generator cleanup and the co_runWrite() error
+  // path. Joins the split scope, then waits for all tasks to complete in two
+  // phases (stop running, then release resources), each bounded by
+  // kReapTimeoutMicros.
   // Captures a final stats snapshot once every task has stopped running, so a
   // subsequent stats() returns final stats rather than the in-progress
   // snapshot. Idempotent (re-entry is a no-op once the scope is joined and
@@ -262,9 +259,8 @@ class LocalRunner : public Runner,
   // draining each source to noMoreSplits. co_reap() cancelAndJoinAsync()s it.
   folly::coro::CancellableAsyncScope splitScope_{/*throwOnJoin=*/true};
   bool splitScopeJoined_{false};
-  // Set once co_close() has reaped. The destructor asserts this (or that
-  // execution never started) rather than reaping itself, so no drop blocks a
-  // thread. See co_close().
+  // Set once result generator cleanup has reaped. The destructor asserts that
+  // cleanup completed or that execution never started.
   bool closed_{false};
 };
 

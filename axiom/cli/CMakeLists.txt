@@ -63,6 +63,7 @@ target_link_libraries(
   velox_parse_parser
   velox_parse_expression
   velox_parse_utils
+  Folly::folly
 )
 
 add_executable(axiom_sql AxiomSql.cpp)

@@ -297,16 +297,18 @@ LocalRunner::LocalRunner(
 }
 
 LocalRunner::~LocalRunner() {
-  // A started runner must be wound down via co_await co_close() before being
-  // destroyed; the destructor asserts that rather than reaping here, so no drop
-  // ever runs blocking teardown on an executor thread. A never-started runner
-  // (execute() created but never pulled) needs no close.
+  // A started runner must be wound down by awaiting its result generator's
+  // cleanup before destruction. The destructor asserts that cleanup completed.
+  // The generator returned by execute() still requires cleanup when it was
+  // never pulled.
   VELOX_CHECK(
       closed_ || state_ == State::kInitialized,
-      "co_close() must be awaited before destroying a started LocalRunner");
+      "Result generator cleanup must be awaited before destroying a started "
+      "LocalRunner");
   // CancellableAsyncScope requires cancelAndJoinAsync()/joinAsync() to complete
-  // before it is destroyed. co_close() already did so for a started runner; for
-  // a never-started one the scope is empty and this returns immediately.
+  // before it is destroyed. Generator cleanup already did so for a started
+  // runner; for a never-started one the scope is empty and this returns
+  // immediately.
   if (!splitScopeJoined_) {
     folly::coro::blockingWait(splitScope_.cancelAndJoinAsync());
   }
@@ -359,11 +361,11 @@ folly::coro::Task<velox::RowVectorPtr> LocalRunner::co_pull() {
   co_return nullptr;
 }
 
-folly::coro::AsyncGenerator<velox::RowVectorPtr> LocalRunner::execute() {
+folly::coro::AsyncGenerator<velox::RowVectorPtr> LocalRunner::executeImpl() {
   // Cancelling the awaiting scope cancels the tasks; the next moveNext() then
   // surfaces the task error. The callback may run on another thread, but
-  // cancelTasks() is safe from any thread. One registration covers the whole
-  // drain, including the write path below.
+  // cancelTasks() is safe from any thread. Runner supplies one stable token for
+  // the complete local result stream, including the write path below.
   const auto token = co_await folly::coro::co_current_cancellation_token;
   folly::CancellationCallback cancelCallback{token, [this] { cancelTasks(); }};
 
@@ -411,8 +413,8 @@ folly::coro::Task<std::optional<int64_t>> LocalRunner::co_runWrite() {
     // callback already recorded the terminal state. Release the write resources
     // and rethrow the drain error without touching state_. Both cleanup steps
     // are best-effort: log their own failures but never mask the drain error.
-    // co_reap() here matches what the owner's co_close() would run; co_close()
-    // is idempotent, so a later close is a no-op.
+    // co_reap() here matches what the result generator's cleanup will run. The
+    // later cleanup is idempotent.
     try {
       co_await co_reap();
     } catch (const std::exception& e) {
@@ -672,8 +674,8 @@ folly::coro::Task<void> LocalRunner::co_reap() {
   }
 }
 
-folly::coro::Task<void> LocalRunner::co_close() {
-  // Idempotent: a second close, or one after the co_runWrite() error path
+folly::coro::Task<void> LocalRunner::co_cleanupImpl() {
+  // Idempotent: a second cleanup, or one after the co_runWrite() error path
   // already reaped, is a no-op.
   if (closed_) {
     co_return;
@@ -684,17 +686,15 @@ folly::coro::Task<void> LocalRunner::co_close() {
   if (state_ == State::kRunning) {
     cancelTasks();
   }
-  // Teardown must not throw: callers blockingWait(co_close()) on exception
-  // paths (drain()'s error handling, ~AxiomReader, JoinSample's scope guard),
-  // where a throw would mask the query's real error or std::terminate in a
-  // destructor. The query error is already surfaced through the pull; a
-  // split-scope join or task-teardown error here is secondary, so log and
-  // swallow it. closed_ is set regardless so the destructor's assert passes and
-  // it does not re-join.
+  // Teardown must not replace the execution outcome with a cleanup failure.
+  // Log secondary failures and mark cleanup complete so destruction does not
+  // attempt another join.
   try {
     co_await co_reap();
   } catch (const std::exception& e) {
     LOG(ERROR) << "Error during LocalRunner teardown: " << e.what();
+  } catch (...) {
+    LOG(ERROR) << "Non-standard exception during LocalRunner teardown";
   }
   closed_ = true;
 }

@@ -59,7 +59,7 @@ class FakeCancelRunner : public SqlQueryRunner {
     return sawCancellableToken_.load();
   }
 
-  folly::coro::AsyncGenerator<SqlResultChunk> co_run(
+  folly::coro::CleanableAsyncGenerator<SqlResultChunk> co_run(
       std::string /*sql*/,
       RunOptions options) override {
     sawCancellableToken_.store(options.cancellationToken.canBeCancelled());

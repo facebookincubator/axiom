@@ -20,7 +20,12 @@
 #include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/Baton.h>
 #include <folly/coro/BlockingWait.h>
+#include <folly/coro/Cleanup.h>
+#include <folly/coro/Collect.h>
+#include <folly/coro/GtestHelpers.h>
+#include <folly/coro/ScopeExit.h>
 #include <folly/coro/Task.h>
+#include <folly/coro/Timeout.h>
 #include <folly/coro/WithCancellation.h>
 #include <folly/synchronization/Baton.h>
 #include <thread>
@@ -196,40 +201,65 @@ int64_t extractSingleInt64(const std::vector<velox::RowVectorPtr>& vectors) {
       0);
 }
 
-// A LocalRunner whose co_close() throws after the real reap, to exercise
-// drain()'s policy that a reap failure must not mask the original stop reason.
+// A LocalRunner whose cleanup throws after the real reap, to exercise the
+// policy that a reap failure must not mask the original stop reason.
 class ReapFailingLocalRunner : public LocalRunner {
  public:
   using LocalRunner::LocalRunner;
 
-  folly::coro::Task<void> co_close() override {
-    co_await LocalRunner::co_close();
+  folly::coro::Task<void> co_cleanupImpl() override {
+    co_await LocalRunner::co_cleanupImpl();
     VELOX_FAIL("injected reap failure");
   }
 };
 
-// A Runner whose execute() yields no batches and blocks until the awaiting
-// scope is cancelled, so drain()'s deadline is the only thing that ends the
-// run. Exercises the timeout deterministically, without depending on how long a
-// real query happens to take.
+// Exposes when a real LocalRunner has finished its asynchronous cleanup.
+class CleanupTrackingLocalRunner : public LocalRunner {
+ public:
+  using LocalRunner::LocalRunner;
+
+  bool cleanupComplete() const {
+    return cleanupComplete_;
+  }
+
+ protected:
+  folly::coro::Task<void> co_cleanupImpl() override {
+    co_await LocalRunner::co_cleanupImpl();
+    cleanupComplete_ = true;
+  }
+
+ private:
+  // Tracks completion of the cleanup contract.
+  bool cleanupComplete_{false};
+};
+
+// A Runner whose result stream raises an implementation-specific error when
+// its execution token is cancelled.
 class BlockingRunner : public Runner {
  public:
-  folly::coro::AsyncGenerator<velox::RowVectorPtr> execute() override {
+  BlockingRunner() = default;
+
+  explicit BlockingRunner(folly::coro::Baton& pending) : pending_{&pending} {}
+
+  folly::coro::AsyncGenerator<velox::RowVectorPtr> executeImpl() override {
+    state_ = State::kRunning;
     const auto token = co_await folly::coro::co_current_cancellation_token;
     folly::coro::Baton baton;
     folly::CancellationCallback unblock{token, [&baton] { baton.post(); }};
+    if (pending_) {
+      pending_->post();
+    }
     co_await baton;
-    // Surface the deadline the way LocalRunner surfaces a cancel, so drain()'s
-    // folly::coro::timeout classifies it as a timeout.
-    throw folly::OperationCancelled{};
+    state_ = State::kCancelled;
+    VELOX_FAIL("injected cancellation error");
   }
 
-  folly::coro::Task<void> co_close() override {
+  folly::coro::Task<void> co_cleanupImpl() override {
     co_return;
   }
 
-  // Only execute() and co_close() are exercised by drain(); the rest of the
-  // Runner interface is required but unused here.
+  // Only execute() and co_cleanupImpl() are exercised by drain(); the rest of
+  // the Runner interface is required but unused here.
   std::vector<velox::exec::TaskStats> stats() const override {
     VELOX_UNREACHABLE();
   }
@@ -239,8 +269,129 @@ class BlockingRunner : public Runner {
   }
 
   State state() const override {
+    return state_;
+  }
+
+ private:
+  // Signals when the result pull starts waiting for cancellation.
+  folly::coro::Baton* pending_{nullptr};
+  // Tracks execution while the result pull waits for cancellation.
+  std::atomic<State> state_{State::kInitialized};
+};
+
+// Holds a terminal runner state until a test releases the result pull.
+class ControlledTerminalRunner : public Runner {
+ public:
+  enum class Result { kFinished, kError };
+
+  explicit ControlledTerminalRunner(Result result) : result_{result} {}
+
+  folly::coro::AsyncGenerator<velox::RowVectorPtr> executeImpl() override {
+    state_ = State::kRunning;
+    const auto token = co_await folly::coro::co_current_cancellation_token;
+    folly::coro::Baton cancelled;
+    folly::CancellationCallback cancellation{
+        token, [&cancelled] { cancelled.post(); }};
+    switch (result_) {
+      case Result::kFinished:
+        state_ = State::kFinished;
+        break;
+      case Result::kError:
+        state_ = State::kError;
+        break;
+    }
+    co_await cancelled;
+    if (result_ == Result::kError) {
+      VELOX_FAIL("injected execution error");
+    }
+  }
+
+  folly::coro::Task<void> co_cleanupImpl() override {
+    co_return;
+  }
+
+  std::vector<velox::exec::TaskStats> stats() const override {
     VELOX_UNREACHABLE();
   }
+
+  const std::vector<optimizer::ExecutableFragment>& fragments() const override {
+    VELOX_UNREACHABLE();
+  }
+
+  State state() const override {
+    return state_;
+  }
+
+ private:
+  // Selects the terminal outcome produced by executeImpl().
+  const Result result_;
+  // Exposes the terminal transition through Runner::state().
+  std::atomic<State> state_{State::kInitialized};
+};
+
+// Blocks the first split request until the test releases it or split
+// enumeration is cancelled, placing the result pull in a pending state.
+class PendingSplitSource : public connector::SplitSource {
+ public:
+  PendingSplitSource(
+      std::shared_ptr<connector::SplitSource> inner,
+      std::shared_ptr<folly::coro::Baton> gate,
+      std::shared_ptr<folly::coro::Baton> waiting)
+      : inner_{std::move(inner)},
+        gate_{std::move(gate)},
+        waiting_{std::move(waiting)} {}
+
+  folly::coro::Task<connector::SplitBatch> co_getSplits(
+      uint32_t maxSplitCount) override {
+    waiting_->post();
+    const auto token = co_await folly::coro::co_current_cancellation_token;
+    folly::CancellationCallback unblock{
+        token, [gate = gate_] { gate->post(); }};
+    co_await *gate_;
+    co_return co_await inner_->co_getSplits(maxSplitCount);
+  }
+
+ protected:
+  folly::coro::Task<void> co_closeImpl() noexcept override {
+    co_await inner_->co_close();
+  }
+
+ private:
+  // Provides split batches after the pending gate opens.
+  std::shared_ptr<connector::SplitSource> inner_;
+  // Holds the first split request until the test or cancellation releases it.
+  std::shared_ptr<folly::coro::Baton> gate_;
+  // Signals that the first split request is waiting on the gate.
+  std::shared_ptr<folly::coro::Baton> waiting_;
+};
+
+// Wraps scan split sources with a deterministic pending gate.
+class PendingSplitSourceFactory : public SplitSourceFactory {
+ public:
+  PendingSplitSourceFactory(
+      std::shared_ptr<folly::coro::Baton> gate,
+      std::shared_ptr<folly::coro::Baton> waiting)
+      : gate_{std::move(gate)}, waiting_{std::move(waiting)} {}
+
+  std::shared_ptr<connector::SplitSource> splitSourceForScan(
+      const RunnerSessionPtr& session,
+      const velox::core::TableScanNode& scan,
+      const std::shared_ptr<connector::PartitionType>& partitionType,
+      std::optional<double> samplePercentage) override {
+    return std::make_shared<PendingSplitSource>(
+        inner_.splitSourceForScan(
+            session, scan, partitionType, samplePercentage),
+        gate_,
+        waiting_);
+  }
+
+ private:
+  // Creates connector split sources before wrapping them with the gate.
+  ConnectorSplitSourceFactory inner_;
+  // Shares the pending gate with each wrapped split source.
+  std::shared_ptr<folly::coro::Baton> gate_;
+  // Receives the first-wait notification from each wrapped split source.
+  std::shared_ptr<folly::coro::Baton> waiting_;
 };
 
 TEST_F(LocalRunnerTest, count) {
@@ -305,14 +456,227 @@ TEST_F(LocalRunnerTest, execute) {
     while (auto rows = co_await generator.next()) {
       results.push_back(std::move(*rows));
     }
+    co_await std::move(generator).cleanup();
   }());
-  // Mandatory owner-scoped wind-down before the runner is destroyed.
-  folly::coro::blockingWait(localRunner->co_close());
 
   EXPECT_EQ(1, results.size());
   EXPECT_EQ(kNumRows, extractSingleInt64(results));
   results.clear();
   EXPECT_EQ(Runner::State::kFinished, localRunner->state());
+}
+
+// A terminal pull reports its result only after runner cleanup completes.
+CO_TEST_F(LocalRunnerTest, terminalCleanup) {
+  enum class Outcome { kFinished, kError, kCancelled };
+  struct TestCase {
+    std::string_view name;
+    Outcome outcome;
+  };
+  const TestCase testCases[] = {
+      {"finished", Outcome::kFinished},
+      {"error", Outcome::kError},
+      {"cancelled", Outcome::kCancelled},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.name);
+    auto plan = testCase.outcome == Outcome::kCancelled
+        ? makeScanPlan(/*numWorkers=*/1)
+        : makeJoinPlan(
+              testCase.outcome == Outcome::kError
+                  ? "if (c0 = 111, c0 / 0, c0 + 1) as c0"
+                  : "c0");
+    auto localRunner = makeRunner<CleanupTrackingLocalRunner>(std::move(plan));
+    auto&& [generator] = co_await folly::coro::co_scope_exit(
+        folly::coro::co_cleanup, localRunner->execute());
+    folly::CancellationSource cancellation;
+
+    auto result = co_await folly::coro::co_awaitTry(
+        folly::coro::co_withCancellation(
+            cancellation.getToken(),
+            folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+              while (co_await generator.next()) {
+                if (testCase.outcome == Outcome::kCancelled) {
+                  cancellation.requestCancellation();
+                }
+              }
+            })));
+
+    switch (testCase.outcome) {
+      case Outcome::kFinished:
+        EXPECT_TRUE(result.hasValue());
+        break;
+      case Outcome::kError:
+        EXPECT_TRUE(result.hasException());
+        break;
+      case Outcome::kCancelled:
+        EXPECT_NE(
+            result.tryGetExceptionObject<folly::OperationCancelled>(), nullptr);
+        break;
+    }
+    EXPECT_TRUE(localRunner->cleanupComplete());
+    co_await std::move(generator).cleanup();
+  }
+}
+
+// The result stream completes when each pull runs under its own timeout.
+TEST_F(LocalRunnerTest, perPullTimeout) {
+  auto scan = makeScanPlan(/*numWorkers=*/1);
+  auto localRunner = makeRunner(scan);
+
+  int64_t numRows{0};
+  EXPECT_NO_THROW(folly::coro::blockingWait([&]() -> folly::coro::Task<void> {
+    auto&& [generator] = co_await folly::coro::co_scope_exit(
+        folly::coro::co_cleanup, localRunner->execute());
+    while (auto rows = co_await folly::coro::timeout(
+               generator.next(), std::chrono::seconds(10))) {
+      numRows += (*rows)->size();
+    }
+  }()));
+  EXPECT_EQ(kNumRows, numRows);
+  EXPECT_EQ(Runner::State::kFinished, localRunner->state());
+}
+
+// The runner's terminal state decides the outcome when a deadline races with
+// completion or an execution error.
+CO_TEST_F(LocalRunnerTest, deadlineRace) {
+  struct TestCase {
+    std::string_view name;
+    ControlledTerminalRunner::Result result;
+  };
+  const TestCase testCases[] = {
+      {"finished", ControlledTerminalRunner::Result::kFinished},
+      {"error", ControlledTerminalRunner::Result::kError},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.name);
+    ControlledTerminalRunner runner{testCase.result};
+    auto generator = runner.execute(/*timeoutMicros=*/10'000);
+
+    auto pullResult = co_await folly::coro::co_awaitTry(
+        folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+          while (co_await generator.next()) {
+          }
+        }));
+
+    co_await std::move(generator).cleanup();
+
+    switch (testCase.result) {
+      case ControlledTerminalRunner::Result::kFinished:
+        EXPECT_TRUE(pullResult.hasValue());
+        break;
+      case ControlledTerminalRunner::Result::kError: {
+        auto* error =
+            pullResult.tryGetExceptionObject<velox::VeloxRuntimeError>();
+        CO_ASSERT_NE(error, nullptr);
+        EXPECT_EQ(error->message(), "injected execution error");
+        break;
+      }
+    }
+  }
+}
+
+// Caller cancellation has one public exception type across Runner
+// implementations.
+CO_TEST_F(LocalRunnerTest, cancellationContract) {
+  folly::coro::Baton pending;
+  BlockingRunner runner{pending};
+  auto generator = runner.execute();
+  folly::CancellationSource cancellation;
+
+  auto [pullResult, cancellationResult] = co_await folly::coro::collectAllTry(
+      folly::coro::co_withCancellation(
+          cancellation.getToken(),
+          folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+            while (co_await generator.next()) {
+            }
+          })),
+      [&]() -> folly::coro::Task<void> {
+        co_await pending;
+        cancellation.requestCancellation();
+      }());
+
+  co_await folly::coro::co_cleanup(std::move(generator));
+
+  CO_ASSERT_TRUE(cancellationResult.hasValue());
+  EXPECT_NE(
+      pullResult.tryGetExceptionObject<folly::OperationCancelled>(), nullptr);
+}
+
+// Each blockingWait() pull returns its batch while a deadline is armed.
+TEST_F(LocalRunnerTest, blockingWaitPerPull) {
+  auto localRunner = makeRunner(makeScanPlan(/*numWorkers=*/1));
+  auto generator = localRunner->execute(/*timeoutMicros=*/3'600'000'000);
+
+  int64_t numRows{0};
+  while (auto batch = folly::coro::blockingWait(generator.next())) {
+    numRows += (*batch)->size();
+  }
+  folly::coro::blockingWait(std::move(generator).cleanup());
+
+  EXPECT_EQ(kNumRows, numRows);
+  EXPECT_EQ(Runner::State::kFinished, localRunner->state());
+}
+
+// A pending result pull reports whether its deadline or caller cancellation
+// stops execution.
+CO_TEST_F(LocalRunnerTest, timeoutWhilePending) {
+  struct TestCase {
+    std::string_view name;
+    bool callerCancels;
+    int64_t timeoutMicros;
+  };
+  const TestCase testCases[] = {
+      {"deadline", false, 10'000},
+      {"caller", true, 3'600'000'000},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.name);
+    auto gate = std::make_shared<folly::coro::Baton>();
+    auto waiting = std::make_shared<folly::coro::Baton>();
+    auto scan = makeScanPlan(/*numWorkers=*/1);
+    const auto queryId = scan->options().queryId;
+    auto localRunner = std::make_shared<LocalRunner>(
+        makeRunnerSession(queryId),
+        std::move(scan),
+        optimizer::FinishWrite{},
+        makeQueryCtx(queryId),
+        std::make_shared<PendingSplitSourceFactory>(gate, waiting),
+        /*outputPool=*/nullptr,
+        /*baseSpillDirectory=*/"");
+    auto generator = localRunner->execute(testCase.timeoutMicros);
+    folly::CancellationSource callerCancellation;
+
+    auto [pullResult, controlResult] = co_await folly::coro::collectAllTry(
+        folly::coro::co_withCancellation(
+            callerCancellation.getToken(),
+            folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+              while (co_await generator.next()) {
+              }
+            })),
+        [&]() -> folly::coro::Task<void> {
+          if (testCase.callerCancels) {
+            co_await *waiting;
+            callerCancellation.requestCancellation();
+          }
+        }());
+
+    co_await std::move(generator).cleanup();
+
+    CO_ASSERT_TRUE(controlResult.hasValue());
+    if (testCase.callerCancels) {
+      EXPECT_NE(
+          pullResult.tryGetExceptionObject<folly::OperationCancelled>(),
+          nullptr);
+    } else {
+      auto* error = pullResult.tryGetExceptionObject<velox::VeloxUserError>();
+      CO_ASSERT_NE(error, nullptr);
+      EXPECT_EQ(error->message(), "Query exceeded maximum time limit of 0.01s");
+    }
+    EXPECT_EQ(Runner::State::kCancelled, localRunner->state());
+  }
 }
 
 // Cancelling the awaiting scope interrupts execute() and surfaces the error;
@@ -326,7 +690,8 @@ TEST_F(LocalRunnerTest, executeCancellation) {
   source.requestCancellation();
 
   auto drainLoop = [&]() -> folly::coro::Task<void> {
-    auto generator = localRunner->execute();
+    auto&& [generator] = co_await folly::coro::co_scope_exit(
+        folly::coro::co_cleanup, localRunner->execute());
     while (co_await generator.next()) {
     }
   };
@@ -337,7 +702,6 @@ TEST_F(LocalRunnerTest, executeCancellation) {
       folly::coro::blockingWait(
           folly::coro::co_withCancellation(source.getToken(), drainLoop())),
       folly::OperationCancelled);
-  folly::coro::blockingWait(localRunner->co_close());
 
   EXPECT_EQ(Runner::State::kCancelled, localRunner->state());
 }
@@ -365,7 +729,8 @@ TEST_F(LocalRunnerTest, executeCancellationFromAnotherThread) {
   });
 
   auto drainLoop = [&]() -> folly::coro::Task<void> {
-    auto generator = localRunner->execute();
+    auto&& [generator] = co_await folly::coro::co_scope_exit(
+        folly::coro::co_cleanup, localRunner->execute());
     auto first = co_await generator.next();
     EXPECT_TRUE(first.has_value());
     gotBatch.post();
@@ -378,29 +743,25 @@ TEST_F(LocalRunnerTest, executeCancellationFromAnotherThread) {
           folly::coro::co_withCancellation(source.getToken(), drainLoop())),
       folly::OperationCancelled);
   canceller.join();
-  folly::coro::blockingWait(localRunner->co_close());
 
   EXPECT_EQ(Runner::State::kCancelled, localRunner->state());
 }
 
-// Early stop is "stop pulling, then co_close()": after one batch the caller
-// drops the generator (which no longer reaps on its own) and awaits co_close(),
-// which cancels the still-running work and reaps without hanging. The runner
-// reaches a terminal kCancelled state.
-TEST_F(LocalRunnerTest, earlyStopClosesAndReaps) {
-  auto scan = makeScanPlan(/*numWorkers=*/3);
-  auto localRunner = makeRunner(scan);
+// Awaiting cleanup after one batch cancels and reaps the still-running work,
+// with or without an active execution deadline.
+TEST_F(LocalRunnerTest, earlyStop) {
+  for (const int64_t timeoutMicros : {int64_t{0}, int64_t{3'600'000'000}}) {
+    SCOPED_TRACE(timeoutMicros);
+    auto localRunner = makeRunner(makeScanPlan(/*numWorkers=*/3));
 
-  {
-    auto gen = localRunner->execute();
-    auto first = folly::coro::blockingWait(gen.next());
-    EXPECT_TRUE(first.has_value());
-    // Stop pulling; 'gen' goes out of scope. Dropping it does not reap.
+    folly::coro::blockingWait([&]() -> folly::coro::Task<void> {
+      auto generator = localRunner->execute(timeoutMicros);
+      auto first = co_await generator.next();
+      EXPECT_TRUE(first.has_value());
+      co_await std::move(generator).cleanup();
+    }());
+    EXPECT_EQ(Runner::State::kCancelled, localRunner->state());
   }
-  // The still-running run is wound down and reaped here.
-  folly::coro::blockingWait(localRunner->co_close());
-
-  EXPECT_EQ(Runner::State::kCancelled, localRunner->state());
 }
 
 TEST_F(LocalRunnerTest, error) {
@@ -416,6 +777,19 @@ TEST_F(LocalRunnerTest, error) {
   EXPECT_EQ(Runner::State::kError, localRunner->state());
 }
 
+// A callback failure stops and reaps an execution with an active deadline
+// before the callback error is rethrown.
+TEST_F(LocalRunnerTest, drainCallbackError) {
+  auto localRunner = makeRunner(makeScanPlan(/*numWorkers=*/1));
+
+  VELOX_ASSERT_THROW(
+      localRunner->drain(
+          [](velox::RowVectorPtr) { VELOX_FAIL("injected callback failure"); },
+          /*timeoutMicros=*/3'600'000'000),
+      "injected callback failure");
+  EXPECT_EQ(Runner::State::kCancelled, localRunner->state());
+}
+
 // drain(..., timeoutMicros) fails with a user error when execution overruns the
 // cooperative deadline. BlockingRunner blocks until the deadline cancels it, so
 // the timeout is the sole exit and the test is deterministic regardless of
@@ -427,9 +801,8 @@ TEST_F(LocalRunnerTest, drainTimeout) {
       "exceeded maximum time limit");
 }
 
-// A reap (co_close) failure must not mask the original stop reason: the genuine
-// execution error surfaces from drain() while the secondary reap failure is
-// logged, not thrown.
+// A reap failure must not mask the original stop reason: the genuine execution
+// error surfaces from drain() while the secondary reap failure is logged.
 TEST_F(LocalRunnerTest, drainReapFailureDoesNotMaskError) {
   auto join = makeJoinPlan("if (c0 = 111, c0 / 0, c0 + 1) as c0");
   auto localRunner = makeRunner<ReapFailingLocalRunner>(join);
@@ -450,7 +823,7 @@ TEST_F(LocalRunnerTest, scan) {
       while (auto rows = folly::coro::blockingWait(generator.next())) {
         count += (*rows)->size();
       }
-      folly::coro::blockingWait(localRunner->co_close());
+      folly::coro::blockingWait(std::move(generator).cleanup());
       EXPECT_EQ(kNumRows, count);
     }
   };
@@ -466,7 +839,7 @@ TEST_F(LocalRunnerTest, splitEnumerationStatsAreRunnerScoped) {
   auto generator = localRunner->execute();
   while (folly::coro::blockingWait(generator.next())) {
   }
-  folly::coro::blockingWait(localRunner->co_close());
+  folly::coro::blockingWait(std::move(generator).cleanup());
 
   const auto stats = runnerWriter_.runtimeStats();
   auto partitions = stats.find(std::string(LocalRunner::kListPartitionsCount));
@@ -526,7 +899,7 @@ TEST_F(LocalRunnerTest, lastStageWithMultipleInputs) {
   while (auto rows = folly::coro::blockingWait(generator.next())) {
     numRows += (*rows)->size();
   }
-  folly::coro::blockingWait(localRunner->co_close());
+  folly::coro::blockingWait(std::move(generator).cleanup());
 
   EXPECT_EQ(kNumRows, numRows);
   EXPECT_EQ(Runner::State::kFinished, localRunner->state());

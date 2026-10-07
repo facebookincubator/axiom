@@ -418,15 +418,12 @@ class SqlQueryRunner {
   /// query surfaces a QueryCancelledError. Cancellation applies to query
   /// execution (the result drain) and takes effect once execution begins.
   ///
-  /// Cleanup contract (mirrors runner::Runner::execute()): the consumer must
-  /// drive this to a terminal state -- either drain it fully (pull until next()
-  /// returns empty) or, to stop early, cancel via the token and keep pulling
-  /// until the cancellation surfaces. Reaching a terminal state runs the
-  /// shielded runner reap (co_close()). Dropping the generator while it is
-  /// suspended does NOT reap and aborts -- exactly as dropping an execute()
-  /// generator does -- because LocalRunner asserts on destroy-before-close
-  /// rather than running blocking teardown on an executor thread.
-  virtual folly::coro::AsyncGenerator<SqlResultChunk> co_run(
+  /// Uses Folly's `CleanableAsyncGenerator` async-cleanup pattern. The owner
+  /// must await `cleanup()` on every exit, including for a generator that was
+  /// never pulled. Cleanup stops any active execution, finishes its cleanup,
+  /// and cancels its deadline. Cleanup after partial consumption completes
+  /// telemetry as cancelled.
+  virtual folly::coro::CleanableAsyncGenerator<SqlResultChunk> co_run(
       std::string sql,
       RunOptions options);
 
@@ -675,7 +672,7 @@ class SqlQueryRunner {
 
   // Runs a parsed SQL statement, writing optimize/execute timing into 'timing'
   // and the serialized Velox plan into 'planString'.
-  folly::coro::AsyncGenerator<SqlResultChunk> co_runUnchecked(
+  folly::coro::CleanableAsyncGenerator<SqlResultChunk> co_runUnchecked(
       const presto::SqlStatement& statement,
       const RunOptions& options,
       const facebook::axiom::connector::ConnectorContextPtr& context,
@@ -691,7 +688,7 @@ class SqlQueryRunner {
       QueryTiming& timing);
 
   // Executes a CTAS, INSERT, or SELECT statement and yields its result batches.
-  folly::coro::AsyncGenerator<SqlResultChunk> co_runPlanStatement(
+  folly::coro::CleanableAsyncGenerator<SqlResultChunk> co_runPlanStatement(
       const presto::SqlStatement& statement,
       std::string_view queryId,
       const RunOptions& options,
@@ -705,7 +702,7 @@ class SqlQueryRunner {
       const facebook::axiom::connector::ConnectorContextPtr& context);
 
   // Runs a SHOW, SET, RESET, or USE session statement.
-  folly::coro::AsyncGenerator<SqlResultChunk> co_runSessionStatement(
+  folly::coro::CleanableAsyncGenerator<SqlResultChunk> co_runSessionStatement(
       const presto::SqlStatement& statement,
       const RunOptions& options,
       const facebook::axiom::connector::ConnectorContextPtr& context,
@@ -714,7 +711,7 @@ class SqlQueryRunner {
 
   // Executes SHOW SESSION and yields batches or a type-only chunk when no
   // session properties match.
-  folly::coro::AsyncGenerator<SqlResultChunk> co_showSession(
+  folly::coro::CleanableAsyncGenerator<SqlResultChunk> co_showSession(
       const presto::ShowSessionStatement& statement,
       const RunOptions& options,
       const facebook::axiom::connector::ConnectorContextPtr& context,
@@ -724,7 +721,8 @@ class SqlQueryRunner {
   // Optimizes and executes a logical plan, yielding each result batch as it is
   // produced. Writes timing and plan string directly into the passed-in
   // references so values survive exceptions.
-  folly::coro::AsyncGenerator<facebook::velox::RowVectorPtr> co_runLogicalPlan(
+  folly::coro::CleanableAsyncGenerator<facebook::velox::RowVectorPtr>
+  co_runLogicalPlan(
       const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
       const RunOptions& options,
       const facebook::axiom::connector::ConnectorContextPtr& context,

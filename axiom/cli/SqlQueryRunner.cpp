@@ -21,10 +21,11 @@
 #include <folly/container/F14Map.h>
 #include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/BlockingWait.h>
+#include <folly/coro/Cleanup.h>
 #include <folly/coro/Coroutine.h>
 #include <folly/coro/Invoke.h>
+#include <folly/coro/ScopeExit.h>
 #include <folly/coro/Task.h>
-#include <folly/coro/Timeout.h>
 #include <folly/coro/WithCancellation.h>
 #include <folly/json.h>
 #include <folly/system/HardwareConcurrency.h>
@@ -396,6 +397,9 @@ void onComplete(
       options.onComplete(completionInfo);
     } catch (const std::exception& ex) {
       LOG(WARNING) << "Completion callback failed: " << ex.what();
+    } catch (...) {
+      LOG(WARNING)
+          << "Completion callback failed with a non-standard exception";
     }
   }
 }
@@ -611,20 +615,42 @@ namespace {
 class QueryFinalizer {
  public:
   QueryFinalizer(
-      const SqlQueryRunner::RunOptions& options,
-      QueryCompletionInfo& completionInfo)
-      : options_{options}, completionInfo_{completionInfo} {}
+      SqlQueryRunner::RunOptions options,
+      QueryCompletionInfo completionInfo)
+      : options_{std::move(options)},
+        completionInfo_{std::move(completionInfo)} {}
 
-  // Records the output row count and completes a successful query.
-  void succeed(int64_t numOutputRows) {
-    completionInfo_.numOutputRows = numOutputRows;
-    finalize();
+  QueryFinalizer(const QueryFinalizer&) = delete;
+  QueryFinalizer& operator=(const QueryFinalizer&) = delete;
+  QueryFinalizer(QueryFinalizer&&) = default;
+  QueryFinalizer& operator=(QueryFinalizer&&) = delete;
+  ~QueryFinalizer() = default;
+
+  SqlQueryRunner::RunOptions& options() {
+    return options_;
   }
 
-  // Marks the query as cancelled and completes its telemetry.
+  QueryCompletionInfo& completionInfo() {
+    return completionInfo_;
+  }
+
+  // Adds rows delivered to the consumer.
+  void addOutputRows(int64_t numRows) {
+    numOutputRows_ += numRows;
+  }
+
+  // Records the output row count and completes a successful query.
+  void succeed() {
+    finalize(numOutputRows_);
+  }
+
+  // Marks an unfinished query as cancelled and completes its telemetry.
   void cancel() {
+    if (finalized_) {
+      return;
+    }
     completionInfo_.cancelled = true;
-    finalize();
+    finalize(numOutputRows_);
   }
 
   // Records a Velox failure and completes the query telemetry.
@@ -636,7 +662,7 @@ class QueryFinalizer {
         .errorSource = error.errorSource(),
         .file = error.file() != nullptr ? error.file() : "",
         .line = error.line()};
-    finalize();
+    finalize(numOutputRows_);
   }
 
   // Records a Presto SQL failure and completes the query telemetry.
@@ -649,19 +675,27 @@ class QueryFinalizer {
         .errorSource = std::string(classification.errorSource),
         .file = std::string(error.sourceFile()),
         .line = error.sourceLine()};
-    finalize();
+    finalize(numOutputRows_);
   }
 
   // Records a failure without a structured error code or source.
   void fail(const std::exception& error) {
     completionInfo_.errorInfo = ErrorInfo{
         .message = error.what(), .messageTemplate = messageTemplateOf(error)};
-    finalize();
+    finalize(numOutputRows_);
+  }
+
+  // Records a failure that carries no std::exception message.
+  void fail() {
+    completionInfo_.errorInfo = ErrorInfo{.message = "Non-standard exception"};
+    finalize(numOutputRows_);
   }
 
  private:
   // Captures end-to-end timing and fires the completion callback.
-  void finalize() {
+  void finalize(int64_t numOutputRows) {
+    finalized_ = true;
+    completionInfo_.numOutputRows = numOutputRows;
     completionInfo_.endTime = std::chrono::system_clock::now();
     completionInfo_.timing.total =
         std::chrono::duration_cast<std::chrono::microseconds>(
@@ -670,11 +704,17 @@ class QueryFinalizer {
     onComplete(options_, completionInfo_);
   }
 
-  // Non-owning run options held by the enclosing query coroutine.
-  const SqlQueryRunner::RunOptions& options_;
+  // Owns lifecycle callbacks through asynchronous cleanup.
+  SqlQueryRunner::RunOptions options_;
 
-  // Non-owning completion record held by the enclosing query coroutine.
-  QueryCompletionInfo& completionInfo_;
+  // Accumulates metadata reported to the completion callback.
+  QueryCompletionInfo completionInfo_;
+
+  // Counts rows yielded before the query reaches a terminal outcome.
+  int64_t numOutputRows_{0};
+
+  // Prevents early-stop cleanup from reporting a second outcome.
+  bool finalized_{false};
 };
 
 // Returns the plan SHOW SESSION runs: the session properties as literal rows,
@@ -726,7 +766,10 @@ logical_plan::LogicalPlanNodePtr showSessionPlan(
 }
 
 folly::coro::Task<SqlQueryRunner::SqlResult> materializeResult(
-    folly::coro::AsyncGenerator<SqlQueryRunner::SqlResultChunk> generator) {
+    folly::coro::CleanableAsyncGenerator<SqlQueryRunner::SqlResultChunk>
+        resultGenerator) {
+  auto&& [generator] = co_await folly::coro::co_scope_exit(
+      folly::coro::co_cleanup, std::move(resultGenerator));
   std::optional<std::string> message;
   std::vector<velox::RowVectorPtr> results;
   velox::RowTypePtr emptyResultType;
@@ -766,28 +809,37 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
           })));
 }
 
-folly::coro::AsyncGenerator<SqlQueryRunner::SqlResultChunk>
+folly::coro::CleanableAsyncGenerator<SqlQueryRunner::SqlResultChunk>
 SqlQueryRunner::co_run(std::string sql, RunOptions options) {
-  auto runOptions = std::move(options);
-  runOptions.queryId = runOptions.queryId.value_or(queryIdGenerator_());
-  const auto context = makeConnectorContext(*runOptions.queryId, runOptions);
+  auto initialRunOptions = std::move(options);
+  initialRunOptions.queryId =
+      initialRunOptions.queryId.value_or(queryIdGenerator_());
+  const auto context =
+      makeConnectorContext(*initialRunOptions.queryId, initialRunOptions);
   const auto& catalog =
-      runOptions.defaultConnectorId.value_or(defaultConnectorId_);
-  const auto& schema = runOptions.defaultSchema.value_or(defaultSchema_);
+      initialRunOptions.defaultConnectorId.value_or(defaultConnectorId_);
+  const auto& schema = initialRunOptions.defaultSchema.value_or(defaultSchema_);
 
-  QueryCompletionInfo completionInfo{
+  QueryCompletionInfo initialCompletionInfo{
       .startInfo = {
-          *runOptions.queryId,
+          *initialRunOptions.queryId,
           std::string(sql),
           std::chrono::system_clock::now(),
           std::string(catalog),
           std::string(schema),
           std::nullopt}};
 
-  onStart(runOptions, completionInfo);
-  QueryFinalizer finalizer{runOptions, completionInfo};
+  onStart(initialRunOptions, initialCompletionInfo);
+  auto&& [finalizer] = co_await folly::coro::co_scope_exit(
+      [](QueryFinalizer unfinishedQuery) -> folly::coro::Task<void> {
+        unfinishedQuery.cancel();
+        co_return;
+      },
+      QueryFinalizer{
+          std::move(initialRunOptions), std::move(initialCompletionInfo)});
+  auto& runOptions = finalizer.options();
+  auto& completionInfo = finalizer.completionInfo();
 
-  int64_t numOutputRows{0};
   try {
     presto::SqlStatementPtr statement;
     {
@@ -811,20 +863,22 @@ SqlQueryRunner::co_run(std::string sql, RunOptions options) {
         facebook::axiom::ComponentMetrics::kPermissionCheckWallNanos,
         std::chrono::microseconds(completionInfo.timing.checkPermission));
 
-    auto generator = co_runUnchecked(
-        *statement,
-        runOptions,
-        context,
-        completionInfo.timing,
-        completionInfo.planString);
+    auto&& [generator] = co_await folly::coro::co_scope_exit(
+        folly::coro::co_cleanup,
+        co_runUnchecked(
+            *statement,
+            runOptions,
+            context,
+            completionInfo.timing,
+            completionInfo.planString));
     while (auto chunk = co_await generator.next()) {
       if (chunk->batch != nullptr) {
-        numOutputRows += chunk->batch->size();
+        finalizer.addOutputRows(chunk->batch->size());
       }
       co_yield std::move(*chunk);
     }
 
-    finalizer.succeed(numOutputRows);
+    finalizer.succeed();
   } catch (const folly::OperationCancelled&) {
     // Cancellation from the awaiting scope's token (any async path -- the drain
     // or a CALL procedure) is a benign stop: record no errorInfo, mark it
@@ -840,6 +894,9 @@ SqlQueryRunner::co_run(std::string sql, RunOptions options) {
     throw;
   } catch (const std::exception& e) {
     finalizer.fail(e);
+    throw;
+  } catch (...) {
+    finalizer.fail();
     throw;
   }
 }
@@ -1101,7 +1158,7 @@ SqlQueryRunner::co_runExplainStatement(
       logicalPlan, explain, options, context, timing, schemaResolver)};
 }
 
-folly::coro::AsyncGenerator<SqlQueryRunner::SqlResultChunk>
+folly::coro::CleanableAsyncGenerator<SqlQueryRunner::SqlResultChunk>
 SqlQueryRunner::co_runPlanStatement(
     const presto::SqlStatement& sqlStatement,
     std::string_view queryId,
@@ -1138,8 +1195,10 @@ SqlQueryRunner::co_runPlanStatement(
     schemaResolver = createTargetTable(context, *ctas, /*explain=*/false);
   }
 
-  auto generator = co_runLogicalPlan(
-      logicalPlan, options, context, timing, planString, schemaResolver);
+  auto&& [generator] = co_await folly::coro::co_scope_exit(
+      folly::coro::co_cleanup,
+      co_runLogicalPlan(
+          logicalPlan, options, context, timing, planString, schemaResolver));
   bool yieldedBatch{false};
   while (auto batch = co_await generator.next()) {
     yieldedBatch = true;
@@ -1189,7 +1248,7 @@ std::string SqlQueryRunner::runDataDefinitionStatement(
       "Unexpected data definition statement: {}", sqlStatement.kindName());
 }
 
-folly::coro::AsyncGenerator<SqlQueryRunner::SqlResultChunk>
+folly::coro::CleanableAsyncGenerator<SqlQueryRunner::SqlResultChunk>
 SqlQueryRunner::co_runSessionStatement(
     const presto::SqlStatement& sqlStatement,
     const RunOptions& options,
@@ -1197,12 +1256,14 @@ SqlQueryRunner::co_runSessionStatement(
     QueryTiming& timing,
     std::string& planString) {
   if (sqlStatement.isShowSession()) {
-    auto generator = co_showSession(
-        *sqlStatement.as<presto::ShowSessionStatement>(),
-        options,
-        context,
-        timing,
-        planString);
+    auto&& [generator] = co_await folly::coro::co_scope_exit(
+        folly::coro::co_cleanup,
+        co_showSession(
+            *sqlStatement.as<presto::ShowSessionStatement>(),
+            options,
+            context,
+            timing,
+            planString));
     while (auto chunk = co_await generator.next()) {
       co_yield std::move(*chunk);
     }
@@ -1246,7 +1307,7 @@ SqlQueryRunner::co_runSessionStatement(
       "Unexpected session statement: {}", sqlStatement.kindName());
 }
 
-folly::coro::AsyncGenerator<SqlQueryRunner::SqlResultChunk>
+folly::coro::CleanableAsyncGenerator<SqlQueryRunner::SqlResultChunk>
 SqlQueryRunner::co_runUnchecked(
     const presto::SqlStatement& sqlStatement,
     const RunOptions& options,
@@ -1270,8 +1331,10 @@ SqlQueryRunner::co_runUnchecked(
 
   if (sqlStatement.isCreateTableAsSelect() || sqlStatement.isInsert() ||
       sqlStatement.isDelete()) {
-    auto generator = co_runPlanStatement(
-        sqlStatement, queryId, options, context, timing, planString);
+    auto&& [generator] = co_await folly::coro::co_scope_exit(
+        folly::coro::co_cleanup,
+        co_runPlanStatement(
+            sqlStatement, queryId, options, context, timing, planString));
     while (auto chunk = co_await generator.next()) {
       co_yield std::move(*chunk);
     }
@@ -1301,8 +1364,10 @@ SqlQueryRunner::co_runUnchecked(
 
   if (sqlStatement.isShowSession() || sqlStatement.isSetSession() ||
       sqlStatement.isResetSession() || sqlStatement.isUse()) {
-    auto generator = co_runSessionStatement(
-        sqlStatement, options, context, timing, planString);
+    auto&& [generator] = co_await folly::coro::co_scope_exit(
+        folly::coro::co_cleanup,
+        co_runSessionStatement(
+            sqlStatement, options, context, timing, planString));
     while (auto chunk = co_await generator.next()) {
       co_yield std::move(*chunk);
     }
@@ -1310,8 +1375,10 @@ SqlQueryRunner::co_runUnchecked(
   }
 
   VELOX_CHECK(sqlStatement.isSelect());
-  auto generator = co_runPlanStatement(
-      sqlStatement, queryId, options, context, timing, planString);
+  auto&& [generator] = co_await folly::coro::co_scope_exit(
+      folly::coro::co_cleanup,
+      co_runPlanStatement(
+          sqlStatement, queryId, options, context, timing, planString));
   while (auto chunk = co_await generator.next()) {
     co_yield std::move(*chunk);
   }
@@ -1762,117 +1829,88 @@ int64_t executionCpuNanos(const runner::Runner& runner) {
   return cpuNs;
 }
 
-// Drives the runner under the awaiting scope's cancellation and an optional
-// deadline, yielding each result batch as it is produced and reaping via
-// co_close() once the stream ends. The deadline (folly::FutureTimeout) becomes
-// a VELOX_USER_FAIL; an external cancel re-raises folly::OperationCancelled for
-// co_run() to normalize; a genuine execution error propagates as itself.
-// A consumer that stops early must cancel via the token; silently destroying
-// this generator mid-stream skips the shielded reap and leaks the Velox task.
-// Finalized wall and Velox task CPU timings are recorded after the reap.
-folly::coro::AsyncGenerator<velox::RowVectorPtr> co_drainQuery(
-    runner::Runner& runner,
-    int64_t timeoutMicros,
-    uint64_t& wallMicros,
-    std::shared_ptr<velox::BaseRuntimeStatWriter> cliWriter) {
-  std::exception_ptr error;
-  bool cancelled{false};
-  bool timedOut{false};
-  {
-    velox::MicrosecondTimer wallTimer(&wallMicros);
-    // Keeps the generator in this coroutine's frame so its AsyncGenerator
-    // producer (execute()) outlives the per-batch timeout and the shielded
-    // co_close() reap. External cancellation flows in ambiently through the
-    // awaiting scope's token.
-    auto generator = runner.execute();
-    // Absolute deadline for the whole drain: folly::coro::timeout can't wrap a
-    // loop that co_yields, so each next() is bounded by the time remaining,
-    // which still caps total execution time (matching the pre-streaming
-    // behavior).
-    std::optional<std::chrono::steady_clock::time_point> deadline;
-    if (timeoutMicros > 0) {
-      deadline = std::chrono::steady_clock::now() +
-          std::chrono::microseconds(timeoutMicros);
+// Records execution timings once runner cleanup has finalized task stats.
+class ExecutionTimingRecorder {
+ public:
+  ExecutionTimingRecorder(
+      QueryTiming& timing,
+      std::shared_ptr<velox::BaseRuntimeStatWriter> cliWriter)
+      : timing_{timing},
+        cliWriter_{std::move(cliWriter)},
+        startTime_{std::chrono::steady_clock::now()} {}
+
+  // Records wall and CPU timing at most once.
+  void record(const runner::Runner& runner) {
+    if (recorded_) {
+      return;
     }
-    try {
-      while (true) {
-        if (deadline) {
-          // folly::coro::timeout -> folly::futures::sleep takes microseconds,
-          // so round the remaining time up to microseconds once and reuse it
-          // for the guard and the pull. ceil (not duration_cast) avoids
-          // truncating a positive sub-microsecond remainder to zero, which
-          // would time out early.
-          const auto remaining = std::chrono::ceil<std::chrono::microseconds>(
-              *deadline - std::chrono::steady_clock::now());
-          if (remaining.count() <= 0) {
-            timedOut = true;
-            break;
-          }
-          auto batch =
-              co_await folly::coro::timeout(generator.next(), remaining);
-          if (!batch) {
-            break;
-          }
-          co_yield std::move(*batch);
-        } else {
-          auto batch = co_await generator.next();
-          if (!batch) {
-            break;
-          }
-          co_yield std::move(*batch);
-        }
-      }
-    } catch (const folly::FutureTimeout&) {
-      timedOut = true;
-    } catch (const folly::OperationCancelled&) {
-      cancelled = true;
-    } catch (...) {
-      // Any failure (std::exception or not) still hits the shielded reap below,
-      // so capture it and follow the error path.
-      error = std::current_exception();
-    }
-    // Reap regardless, shielded from the caller's cancellation so a
-    // cancelled scope still winds the run down. A reap failure must not
-    // mask the original stop reason: if the drain already timed out,
-    // cancelled, or failed, keep that and let the reap error be secondary.
-    try {
-      co_await folly::coro::co_withCancellation(
-          folly::CancellationToken{}, runner.co_close());
-    } catch (const std::exception& e) {
-      if (!timedOut && !cancelled && !error) {
-        error = std::current_exception();
-      } else {
-        LOG(WARNING) << "co_close() failed during reap, surfacing the "
-                        "original stop reason instead: "
-                     << e.what();
-      }
-    } catch (...) {
-      // A non-std exception must not mask the original stop reason either.
-      if (!timedOut && !cancelled && !error) {
-        error = std::current_exception();
-      } else {
-        LOG(WARNING) << "co_close() failed during reap with a non-standard "
-                        "exception, surfacing the original stop reason instead";
-      }
-    }
+    recorded_ = true;
+    timing_.get().execute =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - startTime_)
+            .count();
+    cliWriter_->addTiming(
+        facebook::axiom::ComponentMetrics::kExecuteCpuNanos,
+        std::chrono::nanoseconds(executionCpuNanos(runner)));
+    cliWriter_->addTiming(
+        facebook::axiom::ComponentMetrics::kExecuteWallNanos,
+        std::chrono::microseconds(timing_.get().execute));
   }
 
-  cliWriter->addTiming(
-      facebook::axiom::ComponentMetrics::kExecuteWallNanos,
-      std::chrono::microseconds(wallMicros));
-  cliWriter->addTiming(
-      facebook::axiom::ComponentMetrics::kExecuteCpuNanos,
-      std::chrono::nanoseconds(executionCpuNanos(runner)));
-  if (timedOut) {
-    VELOX_USER_FAIL(
-        "Query exceeded maximum time limit of {:.2f}s",
-        timeoutMicros / 1'000'000.0);
+ private:
+  // Receives the finalized wall time.
+  std::reference_wrapper<QueryTiming> timing_;
+
+  // Receives the execution wall and CPU metrics.
+  std::shared_ptr<velox::BaseRuntimeStatWriter> cliWriter_;
+
+  // Marks the beginning of result draining.
+  std::chrono::steady_clock::time_point startTime_;
+
+  // Prevents terminal completion and early cleanup from recording twice.
+  bool recorded_{false};
+};
+
+// Cleans the result stream and records timing when consumption stops early.
+folly::coro::Task<void> co_cleanupRunnerResultGenerator(
+    std::shared_ptr<runner::Runner> runner,
+    folly::coro::CleanableAsyncGenerator<velox::RowVectorPtr> generator,
+    ExecutionTimingRecorder timingRecorder) {
+  co_await std::move(generator).cleanup();
+  try {
+    timingRecorder.record(*runner);
+  } catch (const std::exception& error) {
+    LOG(ERROR) << "Execution timing cleanup failed: " << error.what();
+  } catch (...) {
+    LOG(ERROR)
+        << "Execution timing cleanup failed with a non-standard exception";
   }
-  if (cancelled) {
-    // Re-raise after the shielded reap; co_run() normalizes it to the dedicated
-    // QueryCancelledError so every async path reports cancellation uniformly.
-    throw folly::OperationCancelled{};
+}
+
+// Drives the runner and records finalized execution timing before reporting a
+// terminal result.
+folly::coro::CleanableAsyncGenerator<velox::RowVectorPtr> co_drainQuery(
+    std::shared_ptr<runner::Runner> runner,
+    int64_t timeoutMicros,
+    QueryTiming& timing,
+    std::shared_ptr<velox::BaseRuntimeStatWriter> cliWriter) {
+  std::exception_ptr error;
+  auto resultGenerator = runner->execute(timeoutMicros);
+  auto&& [cleanupRunner, generator, timingRecorder] =
+      co_await folly::coro::co_scope_exit(
+          co_cleanupRunnerResultGenerator,
+          std::move(runner),
+          std::move(resultGenerator),
+          ExecutionTimingRecorder{timing, std::move(cliWriter)});
+  try {
+    while (auto batch = co_await generator.next()) {
+      co_yield std::move(*batch);
+    }
+  } catch (...) {
+    error = std::current_exception();
   }
+
+  timingRecorder.record(*cleanupRunner);
   if (error) {
     std::rethrow_exception(error);
   }
@@ -1944,19 +1982,18 @@ folly::coro::Task<std::string> SqlQueryRunner::co_runExplainAnalyze(
 
   auto runner = makeLocalRunner(planAndStats, queryCtx, options, context);
 
-  {
-    auto progress =
-        startProgressReporter(*runner, queryCtx->queryId(), options);
-    // Executed for its runtime stats (printed below); the result batches are
-    // not used, so drain and discard them.
-    auto generator = co_drainQuery(
-        *runner,
-        options.timeoutMicros,
-        timing.execute,
-        options.componentStatWriterProvider(
-            facebook::axiom::ComponentMetrics::kCli));
-    while (co_await generator.next()) {
-    }
+  auto progress = startProgressReporter(*runner, queryCtx->queryId(), options);
+  // Executed for its runtime stats (printed below); the result batches are
+  // not used, so drain and discard them.
+  auto&& [generator] = co_await folly::coro::co_scope_exit(
+      folly::coro::co_cleanup,
+      co_drainQuery(
+          runner,
+          options.timeoutMicros,
+          timing,
+          options.componentStatWriterProvider(
+              facebook::axiom::ComponentMetrics::kCli)));
+  while (co_await generator.next()) {
   }
 
   std::stringstream out;
@@ -2087,7 +2124,7 @@ std::shared_ptr<runner::LocalRunner> SqlQueryRunner::makeLocalRunner(
       /*baseSpillDirectory=*/"");
 }
 
-folly::coro::AsyncGenerator<SqlQueryRunner::SqlResultChunk>
+folly::coro::CleanableAsyncGenerator<SqlQueryRunner::SqlResultChunk>
 SqlQueryRunner::co_showSession(
     const presto::ShowSessionStatement& statement,
     const RunOptions& options,
@@ -2102,8 +2139,9 @@ SqlQueryRunner::co_showSession(
   // Not checked: this plan is built from the session config rather than parsed
   // from the statement, so a blocklist match would name a feature the user did
   // not write and cannot rephrase.
-  auto generator =
-      co_runLogicalPlan(plan, options, context, timing, planString);
+  auto&& [generator] = co_await folly::coro::co_scope_exit(
+      folly::coro::co_cleanup,
+      co_runLogicalPlan(plan, options, context, timing, planString));
   bool yieldedBatch{false};
   while (auto batch = co_await generator.next()) {
     yieldedBatch = true;
@@ -2114,7 +2152,7 @@ SqlQueryRunner::co_showSession(
   }
 }
 
-folly::coro::AsyncGenerator<velox::RowVectorPtr>
+folly::coro::CleanableAsyncGenerator<velox::RowVectorPtr>
 SqlQueryRunner::co_runLogicalPlan(
     const logical_plan::LogicalPlanNodePtr& logicalPlan,
     const RunOptions& options,
@@ -2148,18 +2186,17 @@ SqlQueryRunner::co_runLogicalPlan(
 
   auto runner = makeLocalRunner(planAndStats, queryCtx, options, context);
 
-  {
-    auto progress =
-        startProgressReporter(*runner, queryCtx->queryId(), options);
-    auto generator = co_drainQuery(
-        *runner,
-        options.timeoutMicros,
-        timing.execute,
-        options.componentStatWriterProvider(
-            facebook::axiom::ComponentMetrics::kCli));
-    while (auto batch = co_await generator.next()) {
-      co_yield std::move(*batch);
-    }
+  auto progress = startProgressReporter(*runner, queryCtx->queryId(), options);
+  auto&& [generator] = co_await folly::coro::co_scope_exit(
+      folly::coro::co_cleanup,
+      co_drainQuery(
+          runner,
+          options.timeoutMicros,
+          timing,
+          options.componentStatWriterProvider(
+              facebook::axiom::ComponentMetrics::kCli)));
+  while (auto batch = co_await generator.next()) {
+    co_yield std::move(*batch);
   }
 }
 
