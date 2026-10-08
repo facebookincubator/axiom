@@ -604,6 +604,10 @@ class TestConnectorMetadata : public ConnectorMetadata {
   /// Example: WITH (collect_statistics = false).
   static constexpr std::string_view kCollectStatistics = "collect_statistics";
 
+  /// Adds a stable hidden $row_id column to metadata and stored data.
+  /// Defaults to true. Example: WITH (enable_row_id = false).
+  static constexpr std::string_view kEnableRowId = "enable_row_id";
+
   explicit TestConnectorMetadata(TestConnector* connector)
       : connector_(connector),
         splitManager_(std::make_unique<TestSplitManager>()) {}
