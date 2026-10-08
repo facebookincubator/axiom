@@ -16,17 +16,20 @@
 
 #pragma once
 
+#include <ostream>
 #include <vector>
 #include "velox/vector/ComplexVector.h"
 
 namespace axiom::cli {
 
-/// Prints results to stdout in a formatted table.
+/// Prints results to a formatted table.
 /// @param results The results to print.
 /// @param maxRows The maximum number of rows to print.
+/// @param output The stream that receives the formatted table.
 /// @return The total number of rows in the results.
 int32_t printResults(
     const std::vector<facebook::velox::RowVectorPtr>& results,
-    int64_t maxRows);
+    int64_t maxRows,
+    std::ostream& output);
 
 } // namespace axiom::cli
