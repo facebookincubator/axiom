@@ -165,6 +165,29 @@ TEST_F(TestConnectorTest, table) {
   EXPECT_EQ(table, nullptr);
 }
 
+TEST_F(TestConnectorTest, rowIdOption) {
+  auto data = makeRowVector(
+      {makeFlatVector<int>({1, 2}), makeFlatVector<StringView>({"a", "b"})});
+  for (bool enabled : {false, true}) {
+    SCOPED_TRACE(enabled);
+    auto table = connector_->addTable(
+        enabled ? "with_row_id" : "without_row_id",
+        ROW({"a", "b"}, {INTEGER(), VARCHAR()}),
+        {{std::string{TestConnectorMetadata::kEnableRowId}, enabled}});
+    EXPECT_EQ(table->columnMap().contains(TestTable::kRowId), enabled);
+    table->addData(data);
+    ASSERT_EQ(table->data().size(), 1);
+    auto expected = enabled ? makeRowVector(
+                                  {data->childAt(0),
+                                   data->childAt(1),
+                                   makeFlatVector<int64_t>({0, 1})})
+                            : data;
+    EXPECT_TRUE(table->dataType()->equivalent(*expected->type()));
+    EXPECT_EQ(*table->data()[0]->type(), *table->dataType());
+    test::assertEqualVectors(expected, table->data()[0]);
+  }
+}
+
 TEST_F(TestConnectorTest, columnHandle) {
   auto schema = ROW({{"a", INTEGER()}, {"b", VARCHAR()}});
   connector_->addTable("table", schema);

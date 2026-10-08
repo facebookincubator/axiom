@@ -134,6 +134,13 @@ std::vector<std::unique_ptr<const Column>> appendHiddenColumns(
 } // namespace
 
 namespace {
+bool isRowIdEnabled(
+    const folly::F14FastMap<std::string, velox::Variant>& options) {
+  const auto it =
+      options.find(std::string{TestConnectorMetadata::kEnableRowId});
+  return it == options.end() ? true : it->second.value<bool>();
+}
+
 std::vector<std::unique_ptr<const Column>> makeTestTableColumns(
     const velox::RowTypePtr& schema,
     const velox::RowTypePtr& hiddenColumns,
@@ -151,9 +158,11 @@ std::vector<std::unique_ptr<const Column>> makeTestTableColumns(
       makeColumnsWithExplainIo(
           schema, extractExplainIoColumns(options), std::move(columnComments)),
       hiddenColumns);
-  columns.emplace_back(
-      std::make_unique<const Column>(
-          std::string{TestTable::kRowId}, velox::BIGINT(), /*hidden=*/true));
+  if (isRowIdEnabled(options)) {
+    columns.emplace_back(
+        std::make_unique<const Column>(
+            std::string{TestTable::kRowId}, velox::BIGINT(), /*hidden=*/true));
+  }
   return columns;
 }
 
@@ -164,7 +173,12 @@ bool extractCollectStatistics(
   return it == options.end() ? true : it->second.value<bool>();
 }
 
-velox::RowTypePtr makeTestTableDataType(const velox::RowTypePtr& schema) {
+velox::RowTypePtr makeTestTableDataType(
+    const velox::RowTypePtr& schema,
+    bool enableRowId) {
+  if (!enableRowId) {
+    return schema;
+  }
   auto names = schema->names();
   auto types = schema->children();
   names.emplace_back(TestTable::kRowId);
@@ -190,7 +204,7 @@ TestTable::TestTable(
               std::move(columnComments)),
           options),
       connector_(connector),
-      dataType_(makeTestTableDataType(schema)),
+      dataType_(makeTestTableDataType(schema, isRowIdEnabled(options))),
       collectStatistics_(extractCollectStatistics(options)),
       bucketSpec_(std::move(bucketSpec)) {
   VELOX_CHECK_NOT_NULL(connector);
@@ -375,13 +389,15 @@ void TestTable::addData(
   VELOX_CHECK_GT(data->size(), 0, "Cannot append empty RowVector");
   auto copy = std::dynamic_pointer_cast<velox::RowVector>(
       velox::BaseVector::copy(*data, pool_.get()));
-  auto rowIds = velox::BaseVector::create<velox::FlatVector<int64_t>>(
-      velox::BIGINT(), copy->size(), pool_.get());
-  for (velox::vector_size_t row = 0; row < copy->size(); ++row) {
-    rowIds->set(row, nextRowId_++);
-  }
   auto children = copy->children();
-  children.push_back(std::move(rowIds));
+  if (dataType_->containsChild(kRowId)) {
+    auto rowIds = velox::BaseVector::create<velox::FlatVector<int64_t>>(
+        velox::BIGINT(), copy->size(), pool_.get());
+    for (velox::vector_size_t row = 0; row < copy->size(); ++row) {
+      rowIds->set(row, nextRowId_++);
+    }
+    children.push_back(std::move(rowIds));
+  }
   copy = std::make_shared<velox::RowVector>(
       pool_.get(), dataType_, copy->nulls(), copy->size(), std::move(children));
   if (partitionFunction_ != nullptr) {
@@ -948,7 +964,7 @@ TablePtr TestConnectorMetadata::createTable(
   for (const auto& [key, value] : options) {
     VELOX_USER_CHECK(
         key == kHidden || key == kExplainIo || key == kCollectStatistics ||
-            key == kLookupKeys,
+            key == kLookupKeys || key == kEnableRowId,
         "TestConnector does not support CREATE TABLE property: {}",
         key);
   }
