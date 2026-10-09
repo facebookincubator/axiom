@@ -84,9 +84,8 @@ struct PushdownContext {
   // parent-child pair.
   std::optional<int32_t> rankLimit;
 
-  // Set when the consumer lists its own output columns, so a `Scan` below may
-  // leave the columns only a refused conjunct reads in its output rather than
-  // adding a `Project` to drop them.
+  // Set when the consumer drops the columns it does not read, so a node below
+  // may leave them in its output.
   bool consumerDropsExtraColumns{false};
 
   // `Column*`s for which an ancestor drops every row holding NULL (derived
@@ -97,8 +96,8 @@ struct PushdownContext {
   // other output rows read the removed rows. Never inserted into the plan.
   PlanObjectSet nonNullColumns;
 
-  // Expression identities established by joins in this subtree. A parent
-  // applies them while rebuilding on the way back up.
+  // Expression identities established in this subtree. A parent applies them
+  // while rebuilding on the way back up.
   PlanSubstitutions outputSubstitutions;
 };
 
@@ -141,6 +140,19 @@ PlanObjectSet rewriteColumnSet(
   PlanObjectSet result;
   columns.forEach<Column>([&](ColumnCP column) {
     result.add(rewriteColumn(exprs, column, substitutions));
+  });
+  return result;
+}
+
+// Returns the columns a consumer reads in place of 'columns' once it applies
+// 'substitutions'.
+PlanObjectSet replacementColumns(
+    ExprFactory& exprs,
+    const PlanObjectSet& columns,
+    const PlanSubstitutions& substitutions) {
+  PlanObjectSet result;
+  columns.forEach<Column>([&](ColumnCP column) {
+    result.unionColumns(substitutions.apply(column, exprs));
   });
   return result;
 }
@@ -881,15 +893,15 @@ class Pushdown : public NodeRewriter<PushdownContext> {
 
   // Adds the `Project` that `Node::emitsInputColumns` describes, here rather
   // than at the root, so the column stays out of everything in between.
-  NodeCP narrowed(NodeCP node, const PushdownContext& context) {
-    if (!node->emitsInputColumns()) {
+  NodeCP narrowed(NodeCP node, PushdownContext& context) {
+    if (!node->emitsInputColumns() || context.consumerDropsExtraColumns) {
       return node;
     }
     // A required column may have been replaced below; the parent reads its
     // replacement instead.
     PlanObjectSet required = context.required;
-    rewriteColumnSet(exprs_, context.required, context.outputSubstitutions)
-        .forEach<Column>([&](ColumnCP column) { required.add(column); });
+    required.unionSet(replacementColumns(
+        exprs_, context.required, context.outputSubstitutions));
     ColumnVector keep;
     for (ColumnCP column : node->outputColumns()) {
       if (required.contains(column)) {
@@ -903,8 +915,10 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       return node;
     }
     ExprVector exprs(keep.begin(), keep.end());
-    return PrecomputeProjections::makeProject(
+    NodeCP project = PrecomputeProjections::makeProject(
         node, std::move(exprs), keep, builder(), simplifier_);
+    context.outputSubstitutions.retainVisible(project->outputColumns(), exprs_);
+    return project;
   }
 
   NodeCP finishSimplifiedNode(
@@ -2239,10 +2253,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       NodeCP filtered = builder().make<Filter>(
           {newInput, ExprVector{exprs_.orAll(nonEmpty)}});
       return finishSimplifiedNode(
-          {narrowed(filtered, context),
-           std::move(childContext.outputSubstitutions)},
-          {},
-          context);
+          {filtered, std::move(childContext.outputSubstitutions)}, {}, context);
     }
 
     // Unnest accepts a subset of structured-field outputs as
@@ -2435,10 +2446,8 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       ExprVector blocked) {
     childContext.required.unionColumns(childContext.pending);
     childContext.requiredAbove = childContext.required;
-    NodeCP newInput = rewrite(node->input(), childContext);
-    const PlanObjectSet rewrittenRequired = rewriteColumnSet(
-        exprs_, childContext.required, childContext.outputSubstitutions);
-    newInput = dropColumnsForWindow(newInput, rewrittenRequired);
+    NodeCP newInput = dropColumnsForWindow(
+        rewrite(node->input(), childContext), childContext);
     applyOutputSubstitutions(childContext, blocked);
 
     // Emit the rank column only when a consumer above still needs it.
@@ -2484,8 +2493,11 @@ class Pushdown : public NodeRewriter<PushdownContext> {
 
   // Velox's window operators pass every input column through, so a column
   // that only an operator below the window reads would ride through it. Adds
-  // a Project that keeps just 'required' when the input has more.
-  NodeCP dropColumnsForWindow(NodeCP input, const PlanObjectSet& required) {
+  // a Project that keeps just the columns the window and its consumers read
+  // when the input has more.
+  NodeCP dropColumnsForWindow(NodeCP input, PushdownContext& context) {
+    const PlanObjectSet required = replacementColumns(
+        exprs_, context.required, context.outputSubstitutions);
     ExprVector exprs;
     ColumnVector columns;
     for (ColumnCP column : input->outputColumns()) {
@@ -2499,8 +2511,10 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       return input;
     }
 
-    return builder().make<Project>(
-        {input, std::move(exprs), std::move(columns)});
+    NodeCP project =
+        builder().make<Project>({input, std::move(exprs), std::move(columns)});
+    context.outputSubstitutions.retainVisible(project->outputColumns(), exprs_);
+    return project;
   }
 
   // Keeps the Window, dropping the functions no consumer reads.
@@ -2531,10 +2545,8 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     }
     childContext.required.unionColumns(childContext.pending);
     childContext.requiredAbove = childContext.required;
-    NodeCP newInput = rewrite(node->input(), childContext);
-    const PlanObjectSet rewrittenRequired = rewriteColumnSet(
-        exprs_, childContext.required, childContext.outputSubstitutions);
-    newInput = dropColumnsForWindow(newInput, rewrittenRequired);
+    NodeCP newInput = dropColumnsForWindow(
+        rewrite(node->input(), childContext), childContext);
 
     // With every function pruned the node computes nothing and emits its
     // input's columns.

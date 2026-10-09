@@ -197,6 +197,32 @@ SELECT rn FROM (SELECT row_number() OVER () AS rn FROM t) WHERE rn <= 4
 -- Computed PARTITION BY: rows are numbered within the value of the expression.
 SELECT a, b FROM (SELECT a, b, row_number() OVER (PARTITION BY a % 2 ORDER BY b) AS rn FROM t) WHERE rn = 1
 ----
+-- A join on the computed PARTITION BY expression.
+SELECT u.p
+FROM (SELECT a + 1 AS p, row_number() OVER (PARTITION BY a + 1) AS rn FROM t) AS u
+JOIN t ON u.p = t.a
+WHERE u.rn = 1
+----
+-- An aggregate over the computed PARTITION BY expression.
+SELECT sum(a + 1) AS s
+FROM (SELECT a, row_number() OVER (PARTITION BY a + 1) AS rn FROM t)
+WHERE rn = 1
+----
+-- A join filter on the computed PARTITION BY expression.
+SELECT u.a, t.b
+FROM (SELECT a, row_number() OVER (PARTITION BY a + 1) AS rn FROM t) AS u, t
+WHERE u.a + 1 > t.a AND u.rn = 1
+----
+-- A filter above a window reads the expression a LIMIT below orders by, with
+-- another filter between the LIMIT and the window.
+SELECT a, rn
+FROM (
+  SELECT a, row_number() OVER (PARTITION BY b) AS rn
+  FROM (SELECT a, b FROM t ORDER BY a + 1 LIMIT 3)
+  WHERE a + 1 > 1
+)
+WHERE a + 1 > rn
+----
 -- RANGE frame with a CURRENT ROW bound and no ORDER BY.
 SELECT a, b, sum(b) OVER (PARTITION BY a RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS s FROM t
 ----

@@ -57,6 +57,17 @@ SELECT a, a IN (
 )
 FROM (VALUES (1), (CAST(NULL AS INTEGER))) AS probe(a)
 ----
+-- A marker over a one-row build, output above a LIMIT.
+SELECT m, b FROM (SELECT b, a IN (SELECT 2) AS m FROM t) ORDER BY b LIMIT 3
+----
+-- The same, read by an aggregate.
+SELECT count(*) FILTER (WHERE NOT m) AS c, max(b) AS mb
+FROM (SELECT m, b FROM (SELECT b, a IN (SELECT 2) AS m FROM t) ORDER BY b LIMIT 3)
+----
+-- The same, output above a window.
+SELECT m, rn
+FROM (SELECT m, row_number() OVER (ORDER BY b) AS rn FROM (SELECT b, a IN (SELECT 2) AS m FROM t))
+----
 -- A NULL probe key is NULL when the build has rows.
 SELECT CAST(NULL AS INTEGER) IN (
   SELECT x FROM (VALUES (1), (2)) AS build(x)
