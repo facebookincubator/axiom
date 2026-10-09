@@ -569,6 +569,24 @@ TEST_P(WindowTest, redundantOrderByMultipleWindowsSameOrderBy) {
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
 
+TEST_P(WindowTest, redundantOrderByExpression) {
+  // The window orders by the query's ORDER BY expression, so a limit replaces
+  // the sort, and the expression is computed once.
+  // TODO: n_nationkey rides through the Window though nothing above reads it.
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(
+          "SELECT n_name, sum(n_regionkey) OVER (ORDER BY n_nationkey + 1) AS s "
+          "FROM nation ORDER BY n_nationkey + 1 LIMIT 10"),
+      matchScan("nation")
+          .project(
+              {"n_nationkey", "n_name", "n_regionkey", "n_nationkey + 1 AS k"})
+          .window({"sum(n_regionkey) OVER (ORDER BY k)"})
+          .project({"n_name", "s", "k"})
+          .finalLimit(0, 10)
+          .project({"n_name", "s"})
+          .build());
+}
+
 TEST_P(WindowTest, nonRedundantOrderByMultipleWindowsDifferentOrderBy) {
   // Multiple window functions with different ORDER BY — query ORDER BY is NOT
   // redundant.

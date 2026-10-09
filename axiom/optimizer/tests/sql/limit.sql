@@ -34,6 +34,11 @@ SELECT * FROM t ORDER BY b + c DESC LIMIT 3
 -- ordered
 SELECT * FROM (VALUES (1, 2), (3, 1), (2, 5)) t(a, b) ORDER BY a + b DESC LIMIT 2
 ----
+-- A join on the ORDER BY expression.
+SELECT u.a, t.b
+FROM (SELECT a FROM t ORDER BY a + 1 LIMIT 2) u
+JOIN t ON u.a + 1 = t.a
+----
 -- A WHERE above ORDER BY with LIMIT filters the rows the limit keeps, the three
 -- largest b, even when nothing above the WHERE reads a column of them. Two of
 -- the three pass. Smaller b pass the WHERE too, and the limit drops them.
