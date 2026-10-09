@@ -1466,6 +1466,54 @@ TEST_F(ExpressionParserTest, bigintToRealCoercion) {
   EXPECT_EQ(*REAL(), *parseExpr("real '1' / bigint '2'")->type());
 }
 
+// Integer operands preserve DECIMAL arithmetic through their DECIMAL coercion
+// targets.
+TEST_F(ExpressionParserTest, integerToDecimal) {
+  const auto division =
+      parseExpr("CAST('777253211338.00900000' AS DECIMAL(38, 8)) / 100");
+  VELOX_EXPECT_EQ_TYPES(division->inputAt(1)->type(), DECIMAL(10, 0));
+  VELOX_EXPECT_EQ_TYPES(division->type(), DECIMAL(38, 8));
+
+  struct TestCase {
+    std::string_view integerLiteral;
+    TypePtr coercionType;
+    TypePtr resultType;
+  };
+
+  const std::vector<TestCase> testCases{
+      {"TINYINT '1'", DECIMAL(3, 0), DECIMAL(11, 2)},
+      {"SMALLINT '1'", DECIMAL(5, 0), DECIMAL(11, 2)},
+      {"INTEGER '1'", DECIMAL(10, 0), DECIMAL(13, 2)},
+      {"BIGINT '1'", DECIMAL(19, 0), DECIMAL(22, 2)},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.integerLiteral);
+    const auto expr = parseExpr(
+        fmt::format(
+            "CAST(1.25 AS DECIMAL(10, 2)) + {}", testCase.integerLiteral));
+    VELOX_EXPECT_EQ_TYPES(expr->inputAt(1)->type(), testCase.coercionType);
+    VELOX_EXPECT_EQ_TYPES(expr->type(), testCase.resultType);
+  }
+}
+
+// Operands sharing DECIMAL parameters widen to one common DECIMAL type.
+TEST_F(ExpressionParserTest, sharedDecimalCoercion) {
+  const auto between =
+      parseExpr("CAST(1.25 AS DECIMAL(10, 2)) BETWEEN 1 AND 2");
+  ASSERT_EQ(between->inputs().size(), 3);
+  for (const auto& input : between->inputs()) {
+    VELOX_EXPECT_EQ_TYPES(input->type(), DECIMAL(12, 2));
+  }
+}
+
+// An UNKNOWN operand uses DECIMAL(1, 0) in decimal arithmetic.
+TEST_F(ExpressionParserTest, unknownToDecimal) {
+  const auto withNull = parseExpr("CAST(1.25 AS DECIMAL(10, 2)) + NULL");
+  VELOX_EXPECT_EQ_TYPES(withNull->inputAt(1)->type(), DECIMAL(1, 0));
+  VELOX_EXPECT_EQ_TYPES(withNull->type(), DECIMAL(11, 2));
+}
+
 // SQL identifiers are case-insensitive: a column declared with mixed case
 // in the table schema must resolve when referenced with any case.
 TEST_F(ExpressionParserTest, mixedCaseColumnName) {
