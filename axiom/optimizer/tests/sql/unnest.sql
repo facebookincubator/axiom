@@ -95,6 +95,56 @@ SELECT a.x, s
 FROM arrays a
 LEFT JOIN (SELECT s FROM UNNEST(ARRAY[7, 8]) AS u(s)) ON a.x = s
 ----
+-- A filter between an outer join and an inner join reads the unnested value
+-- the outer join pads.
+SELECT t.k
+FROM (VALUES (1), (2)) AS t(k)
+LEFT JOIN (
+  (VALUES (1)) AS r(k) CROSS JOIN UNNEST(ARRAY[10]) AS u(e)
+) ON t.k = r.k
+JOIN (VALUES (1), (2)) AS s(k) ON s.k = t.k
+WHERE u.e IS NULL
+----
+-- The same with the filter on the table's column and the join key on the
+-- unnested value.
+SELECT t.k
+FROM (VALUES (1), (2)) AS t(k)
+LEFT JOIN (
+  (VALUES (1, ARRAY[10]), (2, ARRAY[20])) AS r(k, arr)
+  CROSS JOIN UNNEST(r.arr) AS u(e)
+) ON t.k * 10 = u.e
+JOIN (VALUES (1), (2)) AS s(k) ON s.k = t.k
+WHERE r.k IS DISTINCT FROM 2
+----
+-- An unnest that reads another unnest on an outer join's null-supplying side.
+SELECT count(*)
+FROM (VALUES (1), (2)) AS t(k)
+LEFT JOIN (
+  (VALUES (ARRAY[1])) AS r(arr)
+  CROSS JOIN UNNEST(r.arr) AS u(e)
+  CROSS JOIN UNNEST(ARRAY[e, e]) AS w(f)
+) ON t.k = u.e
+LEFT JOIN (VALUES (1)) AS z(c) ON u.e = z.c
+----
+-- The same for a FULL join.
+SELECT count(*)
+FROM (VALUES (1), (2)) AS t(k)
+FULL JOIN (
+  (VALUES (ARRAY[1])) AS r(arr)
+  CROSS JOIN UNNEST(r.arr) AS u(e)
+  CROSS JOIN UNNEST(ARRAY[e, e]) AS w(f)
+) ON t.k = u.e
+LEFT JOIN (VALUES (1)) AS z(c) ON u.e = z.c
+----
+-- An unnest that reads the unnested value an outer join pads.
+SELECT count(*), count(w.f)
+FROM (VALUES (1), (2)) AS t(k)
+LEFT JOIN (
+  (VALUES (ARRAY[1])) AS r(arr) CROSS JOIN UNNEST(r.arr) AS u(e)
+) ON t.k = u.e
+CROSS JOIN UNNEST(ARRAY[e, e]) AS w(f)
+LEFT JOIN (VALUES (1)) AS z(c) ON z.c = w.f
+----
 -- An 'x' with no array of its own reads no elements, so it matches none and
 -- keeps a NULL. Every other 'x' whose array holds a listed element reads its
 -- own value back.
