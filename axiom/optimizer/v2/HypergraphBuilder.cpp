@@ -82,8 +82,9 @@ RelationSet keyRelationsOrOperand(
 // Records each Join's normalized operands. `leftLeaves` and `rightLeaves`
 // contain leaf-relation ids used by the algebraic TES rules; a constant-input
 // Unnest is itself a leaf. `leftRelations` and `rightRelations` additionally
-// contain dependent Unnest relation ids used to split the completed TES into
-// hyperedge sides. Right-form joins are stored in their equivalent left form.
+// contain dependent Unnest relation ids. They split the completed TES into
+// hyperedge sides and decide which Unnests must run below the join.
+// Right-form joins are stored in their equivalent left form.
 struct JoinInputs {
   RelationSet leftLeaves;
   RelationSet rightLeaves;
@@ -538,9 +539,11 @@ folly::F14FastMap<int8_t, RelationSet> addUnnestEdges(
 // Adds to 'tes' the Unnests this non-inner join must not be reordered past.
 //
 // An Unnest reading an array from the join's null-padded side has to run
-// before the join: after it, the padded row carries a NULL array, which
-// unnests to no rows and drops the row the outer join preserved. Adding the
-// Unnest's relation id to the TES is what pins that order for DPhyp.
+// before the join. After it, the Unnest reads the padded row's NULLs. A NULL
+// array unnests to no rows and drops the row the outer join preserved. An
+// array built from NULLs, such as one holding `e` and `e + 1`, repeats the
+// row. Adding the Unnest's relation id to the TES is what pins that order for
+// DPhyp.
 //
 // An Unnest in a semi or anti join's existence side also has to run first.
 // Below the join its rows collapse to presence or absence; above the join they
@@ -563,10 +566,10 @@ void addUnnestBarriers(
   bool rightSideDeterminesExistence{false};
   bool bothSidesDetermineMultiplicity{false};
   if (inputs.joinType == velox::core::JoinType::kLeft) {
-    nullPaddedSide = inputs.rightLeaves;
+    nullPaddedSide = inputs.rightRelations;
   } else if (inputs.joinType == velox::core::JoinType::kFull) {
-    nullPaddedSide = inputs.leftLeaves;
-    nullPaddedSide.unionSet(inputs.rightLeaves);
+    nullPaddedSide = inputs.leftRelations;
+    nullPaddedSide.unionSet(inputs.rightRelations);
   } else if (
       inputs.joinType == velox::core::JoinType::kLeftSemiFilter ||
       inputs.joinType == velox::core::JoinType::kLeftSemiProject ||
@@ -789,9 +792,9 @@ void addLeafRelations(
   }
 }
 
-// Resolves a fresh join output to the relation supplying its value. Filter
-// eligibility still includes the join that creates the value, so the mapping
-// identifies its relation without allowing the filter below NULL padding.
+// Resolves a fresh join output to the relation supplying its value, so an
+// Unnest whose input reads the output depends on that relation. Runs after the
+// Unnest columns are registered, so an output padded from one resolves too.
 void addJoinOutputRelations(
     const JoinCluster& cluster,
     folly::F14FastMap<ColumnCP, int8_t>& columnToLeaf) {
@@ -812,33 +815,40 @@ void addJoinOutputRelations(
   } while (changed);
 }
 
-// Adds the cluster's Filter predicates as graph conjuncts. A predicate that
-// reads a side an outer join null-extends takes that edge's eligibility, so it
-// cannot fire before the padding exists. Edges are normalized to left form, so
-// no edge carries kRight.
+// Adds the cluster's Filter predicates as graph conjuncts. A fresh output of
+// an outer join exists once that join has run. Its source can itself be a
+// fresh output of a join below, so a predicate that reads one takes the
+// eligibility of every join on that chain and the relation the chain starts
+// from.
 void addClusterConjuncts(
     const ExprVector& predicates,
     const folly::F14FastMap<ColumnCP, int8_t>& columnToLeaf,
     JoinHypergraph& graph) {
-  for (ExprCP predicate : predicates) {
-    RelationSet relations = expressionRelations(predicate, columnToLeaf);
-    for (const auto& edge : graph.edges()) {
-      RelationSet extended;
-      switch (edge.joinType()) {
-        case velox::core::JoinType::kLeft:
-          extended = edge.rightEligibility();
-          break;
-        case velox::core::JoinType::kFull:
-          extended = edge.leftEligibility();
-          extended.unionSet(edge.rightEligibility());
-          break;
-        default:
-          continue;
-      }
-      if (relations.hasIntersection(extended)) {
-        relations.unionSet(edge.totalEligibility());
+  struct FreshOutput {
+    RelationSet eligibility;
+    ColumnCP source;
+  };
+  folly::F14FastMap<ColumnCP, FreshOutput> freshOutputs;
+  for (const auto& edge : graph.edges()) {
+    for (size_t i = 0; i < edge.outputColumns().size(); ++i) {
+      if (edge.outputColumns()[i] != edge.sourceColumns()[i]) {
+        freshOutputs.emplace(
+            edge.outputColumns()[i],
+            FreshOutput{edge.totalEligibility(), edge.sourceColumns()[i]});
       }
     }
+  }
+  for (ExprCP predicate : predicates) {
+    RelationSet relations;
+    predicate->columns().forEach<Column>([&](ColumnCP column) {
+      ColumnCP source = column;
+      for (auto it = freshOutputs.find(source); it != freshOutputs.end();
+           it = freshOutputs.find(source)) {
+        relations.unionSet(it->second.eligibility);
+        source = it->second.source;
+      }
+      relations.unionSet(expressionRelations(source, columnToLeaf));
+    });
     graph.addFilterConjunct({predicate, relations});
   }
 }
@@ -863,10 +873,9 @@ JoinHypergraph HypergraphBuilder::build(
   folly::F14FastMap<NodeCP, int8_t> leafIds;
   addLeafRelations(
       cluster, rewrittenLeaves, estimateProvider, graph, columnToLeaf, leafIds);
-  addJoinOutputRelations(cluster, columnToLeaf);
-
   folly::F14FastMap<UnnestCP, int8_t> unnestIds =
       addUnnestRelations(cluster, estimateProvider, graph, columnToLeaf);
+  addJoinOutputRelations(cluster, columnToLeaf);
 
   folly::F14FastMap<int8_t, RelationSet> unnestInputRelations =
       addUnnestEdges(cluster, unnestIds, columnToLeaf, graph);
