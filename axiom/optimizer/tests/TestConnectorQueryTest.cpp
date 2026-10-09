@@ -136,22 +136,26 @@ TEST_P(TestConnectorQueryTest, writeFiltered) {
   velox::test::assertEqualVectors(actual, expected);
 }
 
-// A chain of CTEs that each square the previous column inlines into a single
-// expression whose shared subexpressions form a DAG with 2^depth-way sharing.
-// Converting that expression to a Velox plan must reuse each shared node's
-// result rather than re-expanding it per reference, which would be exponential.
-TEST_P(TestConnectorQueryTest, sharedSubexpressionConversion) {
+// Planning finishes for a chain of CTEs whose steps each read the previous
+// column twice, including from inside a lambda body. Expanding every reference
+// would visit 2^depth paths and never finish.
+TEST_P(TestConnectorQueryTest, sharedSubexpressionPlanning) {
   testConnector_->addTable("t", ROW({"x"}, {BIGINT()}));
 
-  constexpr int kDepth = 28;
-  std::string sql = "WITH t0 AS (SELECT x FROM t)";
-  for (int i = 1; i <= kDepth; ++i) {
-    sql += fmt::format(", t{0} AS (SELECT x * x AS x FROM t{1})", i, i - 1);
-  }
-  sql += fmt::format(" SELECT x FROM t{}", kDepth);
+  constexpr int kDepth = 64;
+  for (const std::string_view step :
+       {"x * x", "element_at(transform(ARRAY[x], e -> e * x), 1)"}) {
+    SCOPED_TRACE(step);
+    std::string sql = "WITH t0 AS (SELECT x FROM t)";
+    for (int i = 1; i <= kDepth; ++i) {
+      sql +=
+          fmt::format(", t{0} AS (SELECT {2} AS x FROM t{1})", i, i - 1, step);
+    }
+    sql += fmt::format(" SELECT x FROM t{}", kDepth);
 
-  auto logicalPlan = parseSelect(sql);
-  ASSERT_NO_THROW(toSingleNodePlan(logicalPlan));
+    auto logicalPlan = parseSelect(sql);
+    ASSERT_NO_THROW(toSingleNodePlan(logicalPlan));
+  }
 }
 
 // A wide same-operator OR chain flattens into one n-ary call and executes;

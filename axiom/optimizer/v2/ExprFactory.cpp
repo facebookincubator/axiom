@@ -16,6 +16,10 @@
 
 #include "axiom/optimizer/v2/ExprFactory.h"
 
+#include <folly/container/F14Map.h>
+
+#include <algorithm>
+
 namespace facebook::axiom::optimizer::v2 {
 
 ExprCP ExprFactory::makeBooleanCall(
@@ -252,18 +256,30 @@ ExprCP ExprFactory::makeSwitch(
 
 namespace {
 
+// Maps each call, field and lambda reached under one mapping to its rewrite.
+using ReplaceMemo = folly::F14FastMap<ExprCP, ExprCP>;
+
+// Rewrites `expr` under `mapping`. `memo` holds the rewrites already made under
+// the same mapping and records the new ones.
+ExprCP replaceExpr(
+    ExprFactory& factory,
+    ExprCP expr,
+    const ExprFactory::ExprSubstitution& mapping,
+    ReplaceMemo& memo);
+
 // Rebuilds `call` with each argument replaced, sharing the original
 // when no argument changed.
 ExprCP replaceInCall(
     ExprFactory& factory,
     const Call* call,
-    const ExprFactory::ExprSubstitution& mapping) {
+    const ExprFactory::ExprSubstitution& mapping,
+    ReplaceMemo& memo) {
   ExprVector newArgs;
   newArgs.reserve(call->args().size());
 
   bool anyChange = false;
   for (ExprCP arg : call->args()) {
-    ExprCP newArg = factory.replace(arg, mapping);
+    ExprCP newArg = replaceExpr(factory, arg, mapping, memo);
     anyChange |= newArg != arg;
     newArgs.push_back(newArg);
   }
@@ -280,8 +296,9 @@ ExprCP replaceInCall(
 ExprCP replaceInField(
     ExprFactory& factory,
     const Field* field,
-    const ExprFactory::ExprSubstitution& mapping) {
-  ExprCP newBase = factory.replace(field->base(), mapping);
+    const ExprFactory::ExprSubstitution& mapping,
+    ReplaceMemo& memo) {
+  ExprCP newBase = replaceExpr(factory, field->base(), mapping, memo);
   if (newBase == field->base()) {
     return field;
   }
@@ -293,22 +310,25 @@ ExprCP replaceInField(
 ExprCP replaceInLambda(
     ExprFactory& factory,
     const Lambda* lambda,
-    const ExprFactory::ExprSubstitution& mapping) {
-  ExprFactory::ExprSubstitution visible;
-  visible.reserve(mapping.size());
-  for (const auto& [source, target] : mapping) {
-    bool isBound = false;
+    const ExprFactory::ExprSubstitution& mapping,
+    ReplaceMemo& memo) {
+  const bool shadowsMapping = std::ranges::any_of(
+      lambda->args(),
+      [&](ColumnCP boundArg) { return mapping.contains(boundArg); });
+  ExprCP newBody{nullptr};
+  if (!shadowsMapping) {
+    // The body can capture subexpressions that the enclosing expression also
+    // reads, so it shares the memo.
+    newBody = replaceExpr(factory, lambda->body(), mapping, memo);
+  } else {
+    // The body sees a narrower mapping, so it gets a memo of its own.
+    ExprFactory::ExprSubstitution visible{mapping};
     for (ColumnCP boundArg : lambda->args()) {
-      if (boundArg == source) {
-        isBound = true;
-        break;
-      }
+      visible.erase(boundArg);
     }
-    if (!isBound) {
-      visible.emplace(source, target);
-    }
+    ReplaceMemo bodyMemo;
+    newBody = replaceExpr(factory, lambda->body(), visible, bodyMemo);
   }
-  ExprCP newBody = factory.replace(lambda->body(), visible);
   if (newBody == lambda->body()) {
     return lambda;
   }
@@ -329,39 +349,58 @@ ExprFactory::ExprSubstitution toSubstitution(
   return mapping;
 }
 
-} // namespace
-
-ExprCP ExprFactory::replace(ExprCP expr, const ExprSubstitution& mapping) {
+ExprCP replaceExpr(
+    ExprFactory& factory,
+    ExprCP expr,
+    const ExprFactory::ExprSubstitution& mapping,
+    ReplaceMemo& memo) {
   if (expr == nullptr) {
     return nullptr;
   }
   if (auto it = mapping.find(expr); it != mapping.end()) {
     return it->second;
   }
+  if (auto it = memo.find(expr); it != memo.end()) {
+    return it->second;
+  }
+  ExprCP result{nullptr};
   switch (expr->type()) {
     case PlanType::kColumnExpr:
     case PlanType::kLiteralExpr:
       return expr;
     case PlanType::kCallExpr:
-      return replaceInCall(*this, expr->as<Call>(), mapping);
+      result = replaceInCall(factory, expr->as<Call>(), mapping, memo);
+      break;
     case PlanType::kFieldExpr:
-      return replaceInField(*this, expr->as<Field>(), mapping);
+      result = replaceInField(factory, expr->as<Field>(), mapping, memo);
+      break;
     case PlanType::kLambdaExpr:
-      return replaceInLambda(*this, expr->as<Lambda>(), mapping);
+      result = replaceInLambda(factory, expr->as<Lambda>(), mapping, memo);
+      break;
     default:
       VELOX_NYI(
           "ExprFactory::replace: unsupported expression type {}",
           expr->typeName());
   }
+  memo.emplace(expr, result);
+  return result;
+}
+
+} // namespace
+
+ExprCP ExprFactory::replace(ExprCP expr, const ExprSubstitution& mapping) {
+  ReplaceMemo memo;
+  return replaceExpr(*this, expr, mapping, memo);
 }
 
 ExprVector ExprFactory::replace(
     const ExprVector& exprs,
     const ExprSubstitution& mapping) {
+  ReplaceMemo memo;
   ExprVector result;
   result.reserve(exprs.size());
   for (ExprCP expr : exprs) {
-    result.push_back(replace(expr, mapping));
+    result.push_back(replaceExpr(*this, expr, mapping, memo));
   }
   return result;
 }

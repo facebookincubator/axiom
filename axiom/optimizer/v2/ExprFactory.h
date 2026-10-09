@@ -136,10 +136,13 @@ class ExprFactory {
   /// because expressions are hash-consed. A replaced subexpression is not
   /// descended into. A lambda's bound arguments are dropped from the mapping
   /// before its body is visited, since they shadow anything outside.
+  ///
+  /// A subexpression shared by several parents is rewritten once.
   ExprCP replace(ExprCP expr, const ExprSubstitution& mapping);
 
   /// Applies `replace` to each element of `exprs`, returning the rewritten
-  /// vector in the same order.
+  /// vector in the same order. A subexpression shared by several elements is
+  /// rewritten once.
   ExprVector replace(const ExprVector& exprs, const ExprSubstitution& mapping);
 
   /// Substitutes the i-th source `Column*` with the i-th `target`
