@@ -20,6 +20,7 @@
 #include <folly/coro/Task.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/executors/FunctionScheduler.h>
+#include <folly/system/HardwareConcurrency.h>
 #include <chrono>
 #include <exception>
 #include <functional>
@@ -211,7 +212,9 @@ class SqlQueryRunner {
       std::string user,
       folly::FunctionScheduler* progressScheduler = nullptr,
       bool useOptimizerV2 = false)
-      : user_{std::move(user)},
+      : executor_{std::make_shared<folly::CPUThreadPoolExecutor>(
+            std::max<int32_t>(folly::available_concurrency() * 2, 64))},
+        user_{std::move(user)},
         useOptimizerV2_{useOptimizerV2},
         progressScheduler_{progressScheduler} {
     VELOX_USER_CHECK(!user_.empty(), "SqlQueryRunner user must be non-empty");
