@@ -618,6 +618,14 @@ class PlanMatcherBuilder {
   PlanMatcherBuilder& localPartition(
       const std::vector<std::string>& partitionKeys);
 
+  /// Matches a keyed LocalPartition node only when 'condition' is true;
+  /// otherwise a no-op.
+  PlanMatcherBuilder& localPartitionIf(
+      bool condition,
+      const std::vector<std::string>& partitionKeys) {
+    return condition ? localPartition(partitionKeys) : *this;
+  }
+
   /// Matches a LocalPartition node with the specified source matchers.
   /// @param sources Matchers for the partition sources.
   PlanMatcherBuilder& localPartition(
@@ -633,8 +641,31 @@ class PlanMatcherBuilder {
   /// keys).
   PlanMatcherBuilder& localGather();
 
+  /// Matches a local gather with the specified additional source matchers.
+  PlanMatcherBuilder& localGather(
+      std::initializer_list<PlanMatcherBuilder> sources);
+
+  /// Matches a local gather with one additional source matcher.
+  PlanMatcherBuilder& localGather(PlanMatcherBuilder matcher) {
+    return localGather({std::move(matcher)});
+  }
+
+  /// Matches a local gather only when 'condition' is true; otherwise a no-op.
+  PlanMatcherBuilder& localGatherIf(bool condition) {
+    return condition ? localGather() : *this;
+  }
+
   /// Matches any LocalMerge node.
   PlanMatcherBuilder& localMerge();
+
+  /// Matches a LocalMerge and verifies its sort ordering. Each entry is an
+  /// ORDER BY expression with optional direction and null ordering.
+  PlanMatcherBuilder& localMerge(const std::vector<std::string>& ordering);
+
+  /// Matches a LocalMerge only when 'condition' is true; otherwise a no-op.
+  PlanMatcherBuilder& localMergeIf(bool condition) {
+    return condition ? localMerge() : *this;
+  }
 
   /// Matches any Exchange node.
   [[deprecated("Use shuffle() with AXIOM_ASSERT_DISTRIBUTED_PLAN instead")]]
@@ -790,6 +821,13 @@ class PlanMatcherBuilder {
   /// @param offset Number of rows to skip.
   /// @param count Maximum number of rows to return.
   PlanMatcherBuilder& localLimit(int64_t offset, int64_t count);
+
+  /// Matches the local limit pattern only when 'condition' is true; otherwise
+  /// a no-op.
+  PlanMatcherBuilder&
+  localLimitIf(bool condition, int64_t offset, int64_t count) {
+    return condition ? localLimit(offset, count) : *this;
+  }
 
   /// Matches the distributed limit pattern: localLimit(0, offset + count) →
   /// gather → finalLimit(offset, count).

@@ -678,10 +678,8 @@ TEST_P(BucketedExecutionTest, unionall) {
       AXIOM_ASSERT_DISTRIBUTED_PLAN(
           plan.plan,
           matchScan("u_a")
-              .localPartition(matchScan("u_b").project())
-              .partialAggregation()
-              .localPartition({"customer_id"})
-              .finalAggregation()
+              .localGather(matchScan("u_b").project())
+              .singleAggregation({"customer_id"}, {"sum(amount)"})
               .fragment({.width = 4, .bucketedScans = 2})
               .gather()
               .build());
@@ -715,10 +713,8 @@ TEST_P(BucketedExecutionTest, unionall) {
       AXIOM_ASSERT_DISTRIBUTED_PLAN(
           plan.plan,
           matchScan("u_diff_cust")
-              .localPartition(matchScan("u_diff_acct").project())
-              .partialAggregation()
-              .localPartition({"customer_id"})
-              .finalAggregation()
+              .localGather(matchScan("u_diff_acct").project())
+              .singleAggregation({"customer_id"}, {"sum(amount)"})
               .fragment({.width = 4, .bucketedScans = 2})
               .gather()
               .build());

@@ -314,21 +314,17 @@ TEST_P(UnionAllTest, groupByOverTwoDistincts) {
   }
 
   {
-    // The two distinct legs co-partition on the union output key, so the GROUP
-    // BY runs in the union fragment with no remote shuffle. v2 does a local
-    // two-stage aggregation (partial → local HASH → final); v1 a single
-    // aggregation after the hash.
-    auto builder =
-        matchScan("t").distributedAggregation({"a"}, {}).localPartition(
-            matchScan("u").distributedAggregation({"b"}, {}).project());
-    if (useV2_) {
-      builder.partialAggregation({"a"}, {"count(*)"})
-          .localPartition({"a"})
-          .finalAggregation();
-    } else {
-      builder.localPartition({"a"}).singleAggregation({"a"}, {"count(*)"});
-    }
-    auto matcher = builder.gather(FragmentType::kFixed).build();
+    // Once UNION ALL gathers both inputs onto one driver, GROUP BY needs no
+    // further local exchange.
+    auto matcher =
+        matchScan("t")
+            .distributedAggregation({"a"}, {})
+            .localPartition(
+                matchScan("u").distributedAggregation({"b"}, {}).project())
+            .localPartitionIf(!useV2_, {"a"})
+            .singleAggregation({"a"}, {"count(*)"})
+            .gather(FragmentType::kFixed)
+            .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
@@ -353,20 +349,15 @@ TEST_P(UnionAllTest, groupByOverTwoValues) {
   }
 
   {
-    // The union is kSingle (all-gather inputs), so the GROUP BY runs entirely
-    // in that fragment with no remote shuffle. v2 does a local two-stage
-    // aggregation (partial → local HASH → final) to pre-aggregate before the
-    // intra-fragment exchange; v1 does a single aggregation after the hash.
-    auto builder =
-        matchValues().localPartition(matchValues().projectIf(!useV2_));
-    if (useV2_) {
-      builder.partialAggregation({"c0"}, {"count(*)"})
-          .localPartition({"c0"})
-          .finalAggregation();
-    } else {
-      builder.localPartition({"c0"}).singleAggregation({"c0"}, {"count(*)"});
-    }
-    auto matcher = builder.project().output(FragmentType::kSingle).build();
+    // Once UNION ALL gathers both inputs onto one driver, GROUP BY needs no
+    // further local exchange.
+    auto matcher = matchValues()
+                       .localPartition(matchValues().projectIf(!useV2_))
+                       .localPartitionIf(!useV2_, {"c0"})
+                       .singleAggregation({"c0"}, {"count(*)"})
+                       .project()
+                       .output(FragmentType::kSingle)
+                       .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
@@ -511,15 +502,12 @@ TEST_P(UnionAllTest, groupByOverScanAndDistinctAndValues) {
 // ORDER BY. kSingle legs would ideally co-locate in the final fragment
 // directly.
 //
-// In all distributed plans, OrderBy splits into PARTIAL (in the parallel
-// fragment) + LocalMerge + PartitionedOutput[SINGLE] + MergeExchange (in the
-// final kSingle fragment). The matcher uses orderBy().localMerge().
-// shuffleMerge().
+// ORDER BY requires one driver per task. A remote merge combines the sorted
+// task streams when the union is not globally gathered.
 // ---------------------------------------------------------------------------
 
-// ORDER BY over two scans. Both scans co-locate in one kSource fragment
-// per A1; that fragment's OrderBy is split into PARTIAL+LocalMerge with a
-// merge exchange to the final kSingle fragment.
+// ORDER BY over two scans. The merge exchange carries their sorted task
+// streams to the final kSingle fragment.
 TEST_P(UnionAllTest, orderByOverTwoScans) {
   auto logicalPlan =
       parseSelect("SELECT * FROM (FROM t UNION ALL FROM u) ORDER BY a");
@@ -536,7 +524,7 @@ TEST_P(UnionAllTest, orderByOverTwoScans) {
     auto matcher = matchScan("t")
                        .localPartition(matchScan("u").project())
                        .orderBy({"a ASC NULLS LAST"})
-                       .localMerge()
+                       .localMergeIf(!useV2_)
                        .shuffleMerge(FragmentType::kSource)
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
@@ -564,16 +552,15 @@ TEST_P(UnionAllTest, orderByOverTwoValues) {
     auto matcher = matchValues()
                        .localPartition(matchValues().projectIf(!useV2_))
                        .orderBy({"c0 ASC NULLS LAST"})
-                       .localMerge()
+                       .localMergeIf(!useV2_)
                        .output(FragmentType::kSingle)
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
 
-// ORDER BY over two DISTINCTs. Both DISTINCTs co-locate in kFixed N per A2;
-// the ORDER BY's PARTIAL runs there with a gather (merge exchange) to the
-// kSingle final fragment.
+// ORDER BY over two DISTINCTs. The merge exchange carries their sorted task
+// streams to the final kSingle fragment.
 TEST_P(UnionAllTest, orderByOverTwoDistincts) {
   auto logicalPlan = parseSelect(
       "SELECT * FROM ("
@@ -598,7 +585,7 @@ TEST_P(UnionAllTest, orderByOverTwoDistincts) {
             .localPartition(
                 matchScan("u").distributedAggregation({"b"}, {}).project())
             .orderBy({"a ASC NULLS LAST"})
-            .localMerge()
+            .localMergeIf(!useV2_)
             .shuffleMerge(FragmentType::kFixed)
             .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
@@ -632,7 +619,7 @@ TEST_P(UnionAllTest, orderByOverScanAndValues) {
             .localPartition(
                 matchValues().arbitrary(FragmentType::kSingle).project())
             .orderBy({"a ASC NULLS LAST"})
-            .localMerge()
+            .localMergeIf(!useV2_)
             .shuffleMerge(FragmentType::kSource)
             .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(planVelox(logicalPlan).plan, matcher);
@@ -662,7 +649,7 @@ TEST_P(UnionAllTest, orderByOverDistinctAndValues) {
             .localPartition(
                 matchValues().arbitrary(FragmentType::kSingle).project())
             .orderBy({"a ASC NULLS LAST"})
-            .localMerge()
+            .localMergeIf(!useV2_)
             .shuffleMerge(FragmentType::kFixed)
             .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(planVelox(logicalPlan).plan, matcher);
@@ -691,7 +678,7 @@ TEST_P(UnionAllTest, orderByOverScanAndDistinct) {
             .localPartition(
                 matchScan("u").distributedAggregation({"b"}, {}).project())
             .orderBy({"a ASC NULLS LAST"})
-            .localMerge()
+            .localMergeIf(!useV2_)
             .shuffleMerge(FragmentType::kFixed)
             .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
@@ -730,7 +717,7 @@ TEST_P(UnionAllTest, orderByOverScanAndDistinctAndValues) {
                 {matchScan("u").distributedAggregation({"b"}, {}).project(),
                  matchValues().arbitrary(FragmentType::kSingle).project()})
             .orderBy({"a ASC NULLS LAST"})
-            .localMerge()
+            .localMergeIf(!useV2_)
             .shuffleMerge(FragmentType::kFixed)
             .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(planVelox(logicalPlan).plan, matcher);

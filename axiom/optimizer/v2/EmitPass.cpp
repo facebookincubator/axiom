@@ -335,43 +335,6 @@ class Emitter {
         .numOutputBytesPerRow = rowSize(node->outputColumns())};
   }
 
-  // Whether every key of `inner` is also a key of `outer`.
-  bool keysContainAll(
-      const std::vector<velox::core::FieldAccessTypedExprPtr>& outer,
-      const std::vector<velox::core::FieldAccessTypedExprPtr>& inner) {
-    folly::F14FastSet<std::string_view> names;
-    for (const auto& key : outer) {
-      names.insert(key->name());
-    }
-    for (const auto& key : inner) {
-      if (!names.contains(key->name())) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  // A counting join needs each key on one driver: its per-key build counters
-  // are per-driver. Returns `probe` wrapped in a local partition on `keys`,
-  // unless each key already reaches one driver: with a single driver, or with
-  // a probe that is itself a counting join partitioned on a subset of these
-  // keys, since rows agreeing on these keys agree on those.
-  velox::core::PlanNodePtr addLocalPartitionForCountingJoin(
-      velox::core::PlanNodePtr probe,
-      const std::vector<velox::core::FieldAccessTypedExprPtr>& keys) {
-    if (options_.maxLocalPartitions <= 1) {
-      return probe;
-    }
-
-    const auto* probeJoin = probe->as<velox::core::HashJoinNode>();
-    if (probeJoin != nullptr &&
-        velox::core::isCountingJoin(probeJoin->joinType()) &&
-        keysContainAll(keys, probeJoin->leftKeys())) {
-      return probe;
-    }
-    return addLocalPartition(std::move(probe), keys);
-  }
-
   // Returns `input` wrapped in a local exchange that brings all rows agreeing
   // on `keys` to one driver: a hash repartition on `keys`, or a gather to a
   // single driver when there are none.
@@ -445,11 +408,6 @@ class Emitter {
   velox::core::PlanNodePtr emitSingleAggregation(const Aggregate& aggregate);
   velox::core::PlanNodePtr emitPartialAggregation(const Aggregate& aggregate);
   velox::core::PlanNodePtr emitFinalAggregation(const Aggregate& aggregate);
-  // Returns local grouping keys that remain valid after emission-time
-  // operators absent from the V2 IR have been inserted.
-  ExprVector preGroupedKeysForEmission(
-      NodeCP input,
-      const ExprVector& groupingKeys) const;
   // Builds an AggregationNode, carrying the grouping-set default-row info
   // (`globalGroupingSets`/`groupId`) from `aggregate` when present.
   velox::core::PlanNodePtr makeAggregationNode(
@@ -1180,17 +1138,6 @@ buildAggregates(
 
 } // namespace
 
-ExprVector Emitter::preGroupedKeysForEmission(
-    NodeCP input,
-    const ExprVector& groupingKeys) const {
-  // Multi-driver MarkDistinct emission inserts an unmodeled local repartition
-  // on its distinct keys, invalidating inherited grouping and order.
-  if (options_.maxLocalPartitions > 1 && input->is(NodeType::kMarkDistinct)) {
-    return {};
-  }
-  return computePreGroupedKeys(input->physicalProperties().local, groupingKeys);
-}
-
 velox::core::PlanNodePtr Emitter::emitAggregation(const Aggregate& aggregate) {
   switch (aggregate.step()) {
     case AggregateStep::kPartial:
@@ -1254,16 +1201,10 @@ velox::core::PlanNodePtr Emitter::emitSingleAggregation(
   // An aggregation over input already grouped on (a prefix of) the keys streams
   // instead of building a full hash table.
   auto preGroupedKeys = toFieldAccessList(
-      preGroupedKeysForEmission(aggregate.input(), aggregate.groupingKeys()),
+      computePreGroupedKeys(
+          aggregate.input()->physicalProperties().local,
+          aggregate.groupingKeys()),
       "Pre-grouped key");
-
-  // At maxLocalPartitions > 1 a group's rows must all reach one driver. Skip
-  // the local exchange when the input is pre-grouped on the keys: a local
-  // grouping guarantees driver-confinement by contract (see `LocalProperty` in
-  // PhysicalProperties.h), so the aggregation streams correctly per driver.
-  if (options_.maxLocalPartitions > 1 && preGroupedKeys.empty()) {
-    input = addLocalPartition(std::move(input), groupingKeys);
-  }
 
   auto [names, aggregates] = buildAggregates(aggregate, [&](size_t i) {
     const auto* aggregateExpr = aggregate.aggregates()[i];
@@ -1306,47 +1247,11 @@ velox::core::PlanNodePtr Emitter::emitPartialAggregation(
       std::move(input));
 }
 
-// True when 'node' is a remote exchange that gathers to one task.
-bool isGatherExchange(NodeCP node) {
-  return node->is(NodeType::kExchange) &&
-      node->physicalProperties().globalPartition.is(PartitionKind::kGather);
-}
-
-// True when 'node' emits on one driver: a Limit applies its final step on one
-// driver, and a final aggregate over a gather exchange, or over an input that
-// is already on one driver, stays there.
-bool runsOnOneDriver(NodeCP node) {
-  if (node->is(NodeType::kLimit)) {
-    return true;
-  }
-  if (!node->is(NodeType::kAggregate)) {
-    return false;
-  }
-  const auto* aggregate = node->as<Aggregate>();
-  return aggregate->step() == AggregateStep::kFinal &&
-      (isGatherExchange(aggregate->input()) ||
-       runsOnOneDriver(aggregate->input()));
-}
-
 velox::core::PlanNodePtr Emitter::emitFinalAggregation(
     const Aggregate& aggregate) {
   velox::core::PlanNodePtr input = emit(aggregate.input());
   auto groupingKeys =
       toFieldAccessList(aggregate.groupingKeys(), "Grouping key");
-
-  // At maxLocalPartitions > 1 the Final's input rows are spread across drivers
-  // (read round-robin from a remote exchange, or straight from the Partial in
-  // a local-only split), so a local exchange co-partitions each group onto one
-  // driver before the merge. Input gathered to one task is merged on one
-  // driver.
-  if (options_.maxLocalPartitions > 1 && !runsOnOneDriver(aggregate.input())) {
-    input = addLocalPartition(
-        std::move(input),
-        isGatherExchange(aggregate.input())
-            ? std::vector<velox::core::FieldAccessTypedExprPtr>{}
-            : groupingKeys);
-  }
-
   // The Final's input is the (exchanged) Partial output: grouping keys followed
   // by one intermediate accumulator per aggregate, so the i-th accumulator is
   // at input column `numKeys + i`.
@@ -1418,13 +1323,6 @@ velox::core::PlanNodePtr Emitter::emitMarkDistinct(
   std::vector<velox::core::FieldAccessTypedExprPtr> distinctKeys =
       toFieldAccessList(markDistinct.distinctKeys(), "MarkDistinct key");
 
-  // At maxLocalPartitions > 1 every row of a distinct-key tuple must reach one
-  // driver, else each driver marks the tuple as first-seen and the distinct
-  // count over-counts. Co-partition the input on the distinct keys.
-  if (options_.maxLocalPartitions > 1) {
-    input = addLocalPartition(std::move(input), distinctKeys);
-  }
-
   return std::make_shared<velox::core::MarkDistinctNode>(
       nextId(),
       std::move(markerNames),
@@ -1456,10 +1354,6 @@ velox::core::PlanNodePtr Emitter::emitJoin(const Join& join) {
   if (!join.leftKeys().empty()) {
     auto leftKeys = toFieldAccessList(join.leftKeys(), "Join leftKey");
     auto rightKeys = toFieldAccessList(join.rightKeys(), "Join rightKey");
-
-    if (velox::core::isCountingJoin(join.joinType())) {
-      left = addLocalPartitionForCountingJoin(std::move(left), leftKeys);
-    }
 
     return finishJoin(
         std::make_shared<velox::core::HashJoinNode>(
@@ -1591,24 +1485,8 @@ velox::core::PlanNodePtr Emitter::emitSort(const Sort& sort) {
   velox::core::PlanNodePtr input = emit(sort.input());
   auto [sortingKeys, sortingOrders] =
       toSortingKeys(sort.orderKeys(), sort.orderTypes(), "Sort key");
-  // With multiple drivers each driver sorts its rows (a partial sort) and a
-  // LocalMerge combines the per-driver runs into one sorted stream. With a
-  // single driver a plain final sort suffices.
-  const bool multiDriver = options_.maxLocalPartitions > 1;
-  auto ordered = std::make_shared<velox::core::OrderByNode>(
-      nextId(),
-      sortingKeys,
-      sortingOrders,
-      /*isPartial=*/multiDriver,
-      std::move(input));
-  if (!multiDriver) {
-    return ordered;
-  }
-  return std::make_shared<velox::core::LocalMergeNode>(
-      nextId(),
-      sortingKeys,
-      sortingOrders,
-      std::vector<velox::core::PlanNodePtr>{std::move(ordered)});
+  return std::make_shared<velox::core::OrderByNode>(
+      nextId(), sortingKeys, sortingOrders, sort.isPartial(), std::move(input));
 }
 
 velox::core::PlanNodePtr Emitter::emitTopN(const TopN& topN) {
@@ -1621,32 +1499,14 @@ velox::core::PlanNodePtr Emitter::emitTopN(const TopN& topN) {
       topNCount,
       std::numeric_limits<int32_t>::max(),
       "TopN offset + count exceeds the Velox TopNNode count limit");
-  // At maxLocalPartitions > 1 each driver keeps its own top rows (a partial
-  // top-n). Those outputs are already sorted, so an order-preserving merge
-  // combines them and a Limit takes the window — cheaper than sorting them
-  // again.
-  //
-  // TODO: skip the split when the input already feeds one driver. Knowing that
-  // takes the emitted plan's local exchanges; the distribution properties here
-  // describe tasks, not drivers.
-  if (options_.maxLocalPartitions > 1) {
-    velox::core::PlanNodePtr partial = std::make_shared<velox::core::TopNNode>(
+  if (topN.isPartial()) {
+    return std::make_shared<velox::core::TopNNode>(
         nextId(),
         sortingKeys,
         sortingOrders,
         static_cast<int32_t>(topNCount),
         /*isPartial=*/true,
         std::move(input));
-    return std::make_shared<velox::core::LimitNode>(
-        nextId(),
-        topN.offset(),
-        topN.count(),
-        /*isPartial=*/false,
-        std::make_shared<velox::core::LocalMergeNode>(
-            nextId(),
-            sortingKeys,
-            sortingOrders,
-            std::vector<velox::core::PlanNodePtr>{std::move(partial)}));
   }
 
   velox::core::PlanNodePtr result = std::make_shared<velox::core::TopNNode>(
@@ -1669,31 +1529,11 @@ velox::core::PlanNodePtr Emitter::emitTopN(const TopN& topN) {
 
 velox::core::PlanNodePtr Emitter::emitLimit(const Limit& limit) {
   velox::core::PlanNodePtr input = emit(limit.input());
-  // At maxLocalPartitions > 1 each driver keeps its own top offset+count rows
-  // (a partial limit); a gather to one driver then applies the final
-  // offset/count so the limit is enforced across the task, not per driver.
-  // Velox runs an exact limit single-threaded either way, so the split is
-  // worth it only when it keeps work below the limit parallel — above a gather
-  // exchange the limit is the whole pipeline.
-  const bool readsGatherExchange = isGatherExchange(limit.input());
-  // A per-driver partial that keeps offset + count rows keeps every row when
-  // there is no count, so it would filter nothing.
-  if (options_.maxLocalPartitions > 1 && !readsGatherExchange &&
-      !runsOnOneDriver(limit.input()) && limit.isBounded()) {
-    input = std::make_shared<velox::core::LimitNode>(
-        nextId(),
-        /*offset=*/0,
-        limit.offsetPlusCount(),
-        /*isPartial=*/true,
-        std::move(input));
-    input =
-        velox::core::LocalPartitionNode::gather(nextId(), {std::move(input)});
-  }
   return std::make_shared<velox::core::LimitNode>(
       nextId(),
       limit.offset(),
       limit.count(),
-      /*isPartial=*/false,
+      limit.isPartial(),
       std::move(input));
 }
 
@@ -1772,13 +1612,6 @@ velox::core::PlanNodePtr Emitter::emitWindow(const Window& window) {
   auto partitionKeys =
       toFieldAccessList(window.partitionKeys(), "Window partition key");
 
-  // At maxLocalPartitions > 1 each partition must be complete in one driver:
-  // repartition on the PARTITION BY keys, or gather when the window spans the
-  // whole input.
-  if (options_.maxLocalPartitions > 1) {
-    input = addLocalPartition(std::move(input), partitionKeys);
-  }
-
   std::vector<velox::core::FieldAccessTypedExprPtr> sortingKeys;
   std::vector<velox::core::SortOrder> sortingOrders;
   sortingKeys.reserve(window.orderKeys().size());
@@ -1852,11 +1685,6 @@ velox::core::PlanNodePtr Emitter::emitRowNumber(const RowNumber& node) {
   velox::core::PlanNodePtr input = emit(node.input());
   auto partitionKeys =
       toFieldAccessList(node.partitionKeys(), "RowNumber partition key");
-  // At maxLocalPartitions > 1 each partition must be complete in one driver:
-  // repartition on the partition keys, or gather when there are none.
-  if (options_.maxLocalPartitions > 1) {
-    input = addLocalPartition(std::move(input), partitionKeys);
-  }
   std::optional<std::string> rowNumberColumnName;
   if (node.rankColumn() != nullptr) {
     rowNumberColumnName = node.rankColumn()->outputName();
@@ -1873,11 +1701,6 @@ velox::core::PlanNodePtr Emitter::emitTopNRowNumber(const TopNRowNumber& node) {
   velox::core::PlanNodePtr input = emit(node.input());
   auto partitionKeys =
       toFieldAccessList(node.partitionKeys(), "TopNRowNumber partition key");
-  // At maxLocalPartitions > 1 each partition must be complete in one driver:
-  // repartition on the partition keys, or gather when there are none.
-  if (options_.maxLocalPartitions > 1) {
-    input = addLocalPartition(std::move(input), partitionKeys);
-  }
   auto [sortingKeys, sortingOrders] = toSortingKeys(
       node.orderKeys(), node.orderTypes(), "TopNRowNumber order key");
   std::optional<std::string> rowNumberColumnName;
@@ -2041,13 +1864,6 @@ velox::core::PlanNodePtr Emitter::emitUnionAll(const UnionAll& unionNode) {
 velox::core::PlanNodePtr Emitter::emitEnforceSingleRow(
     const EnforceSingleRow& node) {
   velox::core::PlanNodePtr input = emit(node.input());
-  // Asserting at most one row is a global check; at maxLocalPartitions > 1
-  // gather to one driver first so the count is across the whole task, not per
-  // driver.
-  if (options_.maxLocalPartitions > 1) {
-    input =
-        velox::core::LocalPartitionNode::gather(nextId(), {std::move(input)});
-  }
   return std::make_shared<velox::core::EnforceSingleRowNode>(
       nextId(), std::move(input));
 }
@@ -2066,14 +1882,9 @@ velox::core::PlanNodePtr Emitter::emitEnforceDistinct(
   // Stream (no hash table) over input already grouped on a prefix of the
   // distinct keys, mirroring how the aggregation derives its pre-grouped keys.
   auto preGroupedKeys = toFieldAccessList(
-      preGroupedKeysForEmission(node.input(), node.distinctKeys()),
+      computePreGroupedKeys(
+          node.input()->physicalProperties().local, node.distinctKeys()),
       "EnforceDistinct pre-grouped key");
-  // At maxLocalPartitions > 1 each distinct-key group must be complete in one
-  // driver. Skip when the input is pre-grouped on the keys: a local grouping
-  // guarantees driver-confinement by contract (see `LocalProperty`).
-  if (options_.maxLocalPartitions > 1 && preGroupedKeys.empty()) {
-    input = addLocalPartition(std::move(input), distinctKeys);
-  }
   return std::make_shared<velox::core::EnforceDistinctNode>(
       nextId(),
       std::move(distinctKeys),
@@ -2121,7 +1932,11 @@ std::optional<FragmentType> mergeFragmentTypes(
 // coordinator-only layout.
 std::optional<FragmentType> fragmentTypeContribution(NodeCP node) {
   if (node->is(NodeType::kExchange)) {
-    switch (node->as<Exchange>()->partitioning().kind) {
+    const auto& partitioning = node->as<Exchange>()->partitioning();
+    if (partitioning.scope == PropertyScope::kDriver) {
+      return fragmentTypeContribution(node->as<Exchange>()->input());
+    }
+    switch (partitioning.kind) {
       case PartitionKind::kPartitioned:
         return FragmentType::kFixed;
       case PartitionKind::kGather:
@@ -2189,7 +2004,10 @@ void decideFragmentType(
 
 const connector::PartitionType* commonFragmentPartitionType(NodeCP node) {
   if (node->is(NodeType::kExchange)) {
-    return nullptr;
+    const auto* exchange = node->as<Exchange>();
+    return exchange->partitioning().scope == PropertyScope::kDriver
+        ? commonFragmentPartitionType(exchange->input())
+        : nullptr;
   }
 
   const connector::PartitionType* result = node->is(NodeType::kScan)
@@ -2363,6 +2181,47 @@ velox::core::PlanNodePtr Emitter::makeExchangeConsumer(
 velox::core::PlanNodePtr Emitter::emitExchange(const Exchange& exchange) {
   const auto& partitioning = exchange.partitioning();
 
+  if (partitioning.scope == PropertyScope::kDriver) {
+    velox::core::PlanNodePtr input = emit(exchange.input());
+    switch (partitioning.kind) {
+      case PartitionKind::kGather:
+        if (!partitioning.orderKeys.empty()) {
+          auto [sortingKeys, sortingOrders] = toSortingKeys(
+              partitioning.orderKeys,
+              partitioning.orderTypes,
+              "Driver merge key");
+          return std::make_shared<velox::core::LocalMergeNode>(
+              nextId(),
+              std::move(sortingKeys),
+              std::move(sortingOrders),
+              std::vector<velox::core::PlanNodePtr>{std::move(input)});
+        }
+        return addLocalPartition(std::move(input), {});
+      case PartitionKind::kPartitioned: {
+        auto keys =
+            toFieldAccessList(partitioning.keys, "Driver partition key");
+        if (partitioning.partitionType == nullptr) {
+          return addLocalPartition(std::move(input), keys);
+        }
+        const auto outputType = input->outputType();
+        return std::make_shared<velox::core::LocalPartitionNode>(
+            nextId(),
+            velox::core::LocalPartitionNode::Type::kRepartition,
+            /*scaleWriter=*/false,
+            connectorPartitionSpec(
+                *partitioning.partitionType,
+                outputType,
+                keys,
+                /*isLocal=*/true),
+            std::vector<velox::core::PlanNodePtr>{std::move(input)});
+      }
+      case PartitionKind::kBroadcast:
+      case PartitionKind::kArbitrary:
+      case PartitionKind::kUnspecified:
+        VELOX_UNREACHABLE("Unsupported driver exchange kind");
+    }
+  }
+
   // Producer fragment: the exchange's input, capped with a PartitionedOutput.
   ExecutableFragment source = newFragment();
   decideFragmentType(
@@ -2507,27 +2366,6 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
   }
 
   const auto& inputType = input->outputType();
-
-  // A write to a bucketed/partitioned layout repartitions its input on the
-  // target's partition (bucket) columns so each partition's rows go to a single
-  // writer driver. The remote bucket exchange added in physical planning has
-  // already confined each partition to one worker; this is the within-worker
-  // split (only meaningful at maxLocalPartitions > 1).
-  const auto& partitionColumns = layout->partitionColumns();
-  if (options_.maxLocalPartitions > 1 && !partitionColumns.empty()) {
-    input = std::make_shared<velox::core::LocalPartitionNode>(
-        nextId(),
-        velox::core::LocalPartitionNode::Type::kRepartition,
-        /*scaleWriter=*/false,
-        connectorPartitionSpec(
-            *layout->partitionType(),
-            // 'partitionColumns' name the target schema, while 'input' carries
-            // optimizer column names, so resolve channels via the schema.
-            table.type(),
-            partitionColumns,
-            /*isLocal=*/true),
-        std::vector<velox::core::PlanNodePtr>{std::move(input)});
-  }
 
   // A single-fragment write over a single-threaded pipeline (e.g. a Values
   // source) has one writer producing all rows, so the per-driver stats need no

@@ -893,6 +893,11 @@ FROM t_large matching
 RIGHT JOIN t preserved ON matching.k = preserved.a
 GROUP BY preserved.a
 ----
+SELECT preserved.k, count(*)
+FROM t matching
+RIGHT JOIN (SELECT 1 AS k LIMIT 1) preserved ON matching.a = preserved.k
+GROUP BY preserved.k
+----
 -- A right join feeding a left join on its preserved right key. The second
 -- join condition also reads the first join's null-supplying side.
 SELECT preserved.a, count(parent.a)

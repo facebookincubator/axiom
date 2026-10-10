@@ -32,8 +32,8 @@ class PlanPhysicalPass {
   /// Returns the distributed physical plan for `root`. In one bottom-up walk it
   /// chooses cost-based join order (DPhyp over maximal chains of reorderable
   /// equi-joins) and the distribution of aggregations and order/limit
-  /// operators, inserting remote exchanges so each operator's input satisfies
-  /// its required partitioning.
+  /// operators, inserting global and driver-scoped exchanges so each
+  /// operator's input satisfies its required partitioning.
   ///
   /// Automatic fallbacks preserve operators that cannot be safely reordered.
   /// When DPhyp cannot cost an inner-join cluster, the fallback retains
@@ -47,14 +47,14 @@ class PlanPhysicalPass {
   /// in the query.
   /// `options.dphypEnumerationBudget` caps DPhyp's enumeration before it falls
   /// back to greedy join ordering; <= 0 means unlimited. `numWorkers` is the
-  /// target task count; when > 1 the walk generates remote-exchange candidates
+  /// target task count; when > 1 the walk generates global-exchange candidates
   /// so operators co-partition, gather, or broadcast their inputs. `numDrivers`
-  /// is the per-worker driver (local pipeline) count; when > 1, an aggregate
-  /// whose input is already co-located on its grouping keys still needs a local
-  /// exchange to bring each group to one driver, so it two-stages (partial →
-  /// local exchange → final). `numWorkers` and `numDrivers` are per-plan
-  /// properties, not `OptimizerOptions` fields, so they are passed separately.
-  /// `evaluator` folds constants exposed while projection expressions merge.
+  /// is the per-worker driver (local pipeline) count; when > 1 the walk inserts
+  /// driver-scoped hash, connector, or gather exchanges where an operator
+  /// requires co-location within a task. `numWorkers` and `numDrivers` are
+  /// per-plan properties, not `OptimizerOptions` fields, so they are passed
+  /// separately. `evaluator` folds constants exposed while projection
+  /// expressions merge.
   static NodeCP run(
       NodeCP root,
       Builder& builder,
