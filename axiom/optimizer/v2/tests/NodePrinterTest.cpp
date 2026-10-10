@@ -155,5 +155,38 @@ TEST_F(NodePrinterTest, indexLookupJoin) {
   });
 }
 
+TEST_F(NodePrinterTest, exchangePartitioning) {
+  const auto plan = parseSelect("SELECT * FROM t");
+
+  verifyOptimization(*plan, Optimizer::Pass::kTranslate, [&](NodeCP root) {
+    Builder builder;
+    const ExprVector keys{root->outputColumns().front()};
+    NodeCP hash = builder.make<Exchange>(
+        {root, Partitioning::hash(PropertyScope::kDriver, keys)});
+    EXPECT_THAT(
+        toLines(hash),
+        ElementsAre(
+            Eq("- Exchange -> a:BIGINT"),
+            Eq("  partitioning: Driver Partitioned"),
+            Eq("  partitionKeys: a"),
+            Eq("  - Scan[\"default\".\"t\"] -> a:BIGINT"),
+            Eq("")));
+
+    const OrderTypeVector orderTypes{OrderType::kAscNullsFirst};
+    NodeCP gatherMerge = builder.make<Exchange>(
+        {root,
+         Partitioning::gatherMerge(PropertyScope::kGlobal, keys, orderTypes)});
+    EXPECT_THAT(
+        toLines(gatherMerge),
+        ElementsAre(
+            Eq("- Exchange -> a:BIGINT"),
+            Eq("  partitioning: Global Gather"),
+            Eq("  orderKeys: a"),
+            Eq("  orderTypes: ASC NULLS FIRST"),
+            Eq("  - Scan[\"default\".\"t\"] -> a:BIGINT"),
+            Eq("")));
+  });
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer::v2::test

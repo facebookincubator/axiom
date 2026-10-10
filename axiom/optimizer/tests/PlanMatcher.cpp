@@ -727,6 +727,27 @@ void verifySortingKeys(
   }
 }
 
+class LocalMergeMatcher : public PlanMatcherImpl<LocalMergeNode> {
+ public:
+  LocalMergeMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      const std::vector<std::string>& ordering)
+      : PlanMatcherImpl<LocalMergeNode>({matcher}), ordering_{ordering} {}
+
+  MatchResult matchDetails(
+      const LocalMergeNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+    verifySortingKeys(
+        plan.sortingKeys(), plan.sortingOrders(), ordering_, symbols);
+    AXIOM_TEST_RETURN
+  }
+
+ private:
+  const std::vector<std::string> ordering_;
+};
+
 class TopNMatcher : public PlanMatcherImpl<TopNNode> {
  public:
   explicit TopNMatcher(const std::shared_ptr<PlanMatcher>& matcher)
@@ -1968,6 +1989,12 @@ class LocalPartitionTypeMatcher : public PlanMatcherImpl<LocalPartitionNode> {
         expectedType_{expectedType},
         partitionKeys_{std::move(partitionKeys)} {}
 
+  LocalPartitionTypeMatcher(
+      const std::vector<std::shared_ptr<PlanMatcher>>& matchers,
+      LocalPartitionNode::Type expectedType)
+      : PlanMatcherImpl<LocalPartitionNode>(matchers),
+        expectedType_{expectedType} {}
+
   MatchResult matchDetails(
       const LocalPartitionNode& plan,
       const std::unordered_map<std::string, std::string>& symbols)
@@ -2529,6 +2556,18 @@ PlanMatcherBuilder& PlanMatcherBuilder::localGather() {
   return *this;
 }
 
+PlanMatcherBuilder& PlanMatcherBuilder::localGather(
+    std::initializer_list<PlanMatcherBuilder> sources) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  std::vector<std::shared_ptr<PlanMatcher>> sourceMatchers{matcher_};
+  for (const auto& source : sources) {
+    sourceMatchers.push_back(source.build());
+  }
+  matcher_ = std::make_shared<LocalPartitionTypeMatcher>(
+      std::move(sourceMatchers), LocalPartitionNode::Type::kGather);
+  return *this;
+}
+
 PlanMatcherBuilder& PlanMatcherBuilder::localPartition(
     const std::vector<std::string>& partitionKeys) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
@@ -2552,6 +2591,13 @@ PlanMatcherBuilder& PlanMatcherBuilder::localPartition(
 PlanMatcherBuilder& PlanMatcherBuilder::localMerge() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<PlanMatcherImpl<LocalMergeNode>>(matcher_);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::localMerge(
+    const std::vector<std::string>& ordering) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<LocalMergeMatcher>(matcher_, ordering);
   return *this;
 }
 
@@ -2926,7 +2972,7 @@ PlanMatcherBuilder& PlanMatcherBuilder::distributedOrderBy(
   matcher_ = std::make_shared<OrderByMatcher>(
       matcher_, ordering, /*partial=*/localExchanges_);
   if (localExchanges_) {
-    localMerge();
+    localMerge(ordering);
   }
   return shuffleMerge(ordering);
 }

@@ -481,14 +481,14 @@ TEST_P(WindowTest, nonRedundantOrderByWithPartitionKeys) {
   auto distributedMatcher = useV2_ ? distributedWindow()
                                          .project({"n_name", "s"})
                                          .topN(10)
-                                         .localMerge()
+                                         .localMerge({"n_name"})
                                          .finalLimit(0, 10)
                                          .shuffleMerge()
                                          .finalLimit(0, 10)
                                          .build()
                                    : distributedWindow()
                                          .topN(10)
-                                         .localMerge()
+                                         .localMerge({"n_name"})
                                          .shuffleMerge()
                                          .finalLimit(0, 10)
                                          .project({"n_name", "s"})
@@ -519,19 +519,13 @@ TEST_P(WindowTest, nonRedundantOrderByWithDifferentKeys) {
     return matchScan("nation").gather().localGather().window(
         {"sum(n_regionkey) OVER (ORDER BY n_name)"});
   };
-  auto distributedMatcher = useV2_ ? distributedWindow()
-                                         .project()
-                                         .topN(10)
-                                         .localMerge()
-                                         .finalLimit(0, 10)
-                                         .project()
-                                         .build()
-                                   : distributedWindow()
-                                         .topN(10)
-                                         .localMerge()
-                                         .finalLimit(0, 10)
-                                         .project()
-                                         .build();
+  auto distributedMatcher = distributedWindow()
+                                .projectIf(useV2_)
+                                .topN(10)
+                                .localMergeIf(!useV2_)
+                                .finalLimitIf(!useV2_, 0, 10)
+                                .project()
+                                .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
 
@@ -563,9 +557,12 @@ TEST_P(WindowTest, redundantOrderByMultipleWindowsSameOrderBy) {
         {"sum(n_regionkey) OVER (ORDER BY n_name)",
          "avg(n_nationkey) OVER (ORDER BY n_name)"});
   };
-  auto distributedMatcher = useV2_
-      ? distributedWindows().project().localLimit(0, 10).build()
-      : distributedWindows().localLimit(0, 10).project().build();
+  auto distributedMatcher = distributedWindows()
+                                .projectIf(useV2_)
+                                .localLimitIf(!useV2_, 0, 10)
+                                .finalLimitIf(useV2_, 0, 10)
+                                .projectIf(!useV2_)
+                                .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
 
@@ -593,27 +590,20 @@ TEST_P(WindowTest, nonRedundantOrderByMultipleWindowsDifferentOrderBy) {
   // No partition keys — gather, then two Windows + TopN + project, all on the
   // one task the gather already produced.
   auto distributedPlan = toDistributedPlan(sql);
-  auto distributedWindows = [] {
-    return matchScan("nation")
-        .gather()
-        .localGather()
-        .window({"sum(n_regionkey) OVER (ORDER BY n_name)"})
-        .project()
-        .localGather()
-        .window({"avg(n_nationkey) OVER (ORDER BY n_nationkey)"});
-  };
-  auto distributedMatcher = useV2_ ? distributedWindows()
-                                         .project()
-                                         .topN(10)
-                                         .localMerge()
-                                         .finalLimit(0, 10)
-                                         .build()
-                                   : distributedWindows()
-                                         .topN(10)
-                                         .localMerge()
-                                         .finalLimit(0, 10)
-                                         .project()
-                                         .build();
+  auto distributedMatcher =
+      matchScan("nation")
+          .gather()
+          .localGather()
+          .window({"sum(n_regionkey) OVER (ORDER BY n_name)"})
+          .project()
+          .localGatherIf(!useV2_)
+          .window({"avg(n_nationkey) OVER (ORDER BY n_nationkey)"})
+          .projectIf(useV2_)
+          .topN(10)
+          .localMergeIf(!useV2_)
+          .finalLimitIf(!useV2_, 0, 10)
+          .projectIf(!useV2_)
+          .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
 
@@ -667,8 +657,7 @@ TEST_P(WindowTest, dependentWindowFunctions) {
                                   .localGather()
                                   .window({"lag(b) OVER (ORDER BY a) as w"})
                                   .project({"a", "a + w as n"})
-                                  // TODO: Eliminate redundant local gather.
-                                  .localGather()
+                                  .localGatherIf(!useV2_)
                                   .window({"sum(n) OVER (ORDER BY a)"})
                                   .project()
                                   .build();
@@ -717,15 +706,13 @@ TEST_P(WindowTest, dependentWindowFunctions) {
             .shuffle({"a"})
             .localPartition({"a"})
             .window({"sum(b) OVER (PARTITION BY a ORDER BY b) as cum_sum"})
-            // TODO: Eliminate redundant local partition.
-            .localPartition({"a"})
+            .localPartitionIf(!useV2_, {"a"})
             .window({"sum(b) OVER (PARTITION BY a) as total_sum"})
             .project(
                 {"a",
                  "b",
                  "floor(cast(cum_sum as double) * 100.0 / cast(total_sum as double)) as pct"})
-            // TODO: Eliminate redundant local partition.
-            .localPartition({"a"})
+            .localPartitionIf(!useV2_, {"a"})
             .window({"lag(pct) OVER (PARTITION BY a ORDER BY b) as lag_pct"})
             .project({"lag_pct"})
             .gather()

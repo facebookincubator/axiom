@@ -1431,17 +1431,23 @@ TEST_P(JoinTest, coalescePropagation) {
         "  (SELECT k FROM v WHERE k = t_k LIMIT 2) "
         "FROM t LEFT JOIN u ON t_k = u_k";
     SCOPED_TRACE(query);
-    const auto plan = toSingleNodePlan(query);
+    const auto logicalPlan = parseSelect(query);
+    const auto expectedPlan = [](bool multiDriver) {
+      return matchScan("t")
+          .hashJoinLeft(matchScan("u"), {.keys = {{"t_k = u_k"}}})
+          .assignUniqueId("row_id")
+          .hashJoinLeft(matchScan("v"), {.keys = {{"t_k = k"}}})
+          .rowNumber({"row_id"}, 2)
+          .localPartitionIf(multiDriver, {"row_id"})
+          .enforceDistinct({"row_id"})
+          .project({"t_k", "k"})
+          .build();
+    };
     AXIOM_ASSERT_PLAN_V2(
-        plan,
-        matchScan("t")
-            .hashJoinLeft(matchScan("u"), {.keys = {{"t_k = u_k"}}})
-            .assignUniqueId("row_id")
-            .hashJoinLeft(matchScan("v"), {.keys = {{"t_k = k"}}})
-            .rowNumber({"row_id"}, 2)
-            .enforceDistinct({"row_id"})
-            .project({"t_k", "k"})
-            .build());
+        toSingleNodePlan(logicalPlan), expectedPlan(/*multiDriver=*/false));
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan, /*numDrivers=*/4),
+        expectedPlan(/*multiDriver=*/true));
   }
 
   {
@@ -2178,7 +2184,7 @@ TEST_P(JoinTest, fullJoinGathered) {
               matchScan("u").localAggregation({}, {"count(b) as y"}),
               {.keys = {{"x = y"}}})
           .project({"coalesce(x, y) as k"})
-          .localAggregation({"k"}, {"count(*) as count"})
+          .singleAggregation({"k"}, {"count(*) as count"})
           .build());
 
   AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
@@ -2189,7 +2195,7 @@ TEST_P(JoinTest, fullJoinGathered) {
               matchScan("u").distributedAggregation({}, {"count(b) as y"}),
               {.keys = {{"x = y"}}})
           .project({"coalesce(x, y) as k"})
-          .localAggregation({"k"}, {"count(*) as count"})
+          .singleAggregation({"k"}, {"count(*) as count"})
           .build());
 }
 
@@ -2218,16 +2224,21 @@ TEST_P(JoinTest, gatheredProbe) {
   AXIOM_ASSERT_PLAN_V2(
       toSingleNodePlan(logicalPlan, /*numDrivers=*/4),
       matchProbe(matchScan("t")
-                     .partialAggregation({"a"}, {})
-                     .localLimit(0, 1)
+                     .markDistinct({"a"}, {"m0"})
+                     .filter("m0")
+                     .project({"a"})
+                     .partialLimit(0, 1)
+                     .localGather()
                      .finalAggregation({"a"}, {})
                      .finalLimit(0, 1)));
 
   AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
       planVelox(logicalPlan).plan,
       matchProbe(matchScan("t")
-                     .partialAggregation({"a"}, {})
-                     .localLimit(0, 1)
+                     .markDistinct({"a"}, {"m0"})
+                     .filter("m0")
+                     .project({"a"})
+                     .partialLimit(0, 1)
                      .gather()
                      .localGather()
                      .finalAggregation({"a"}, {})

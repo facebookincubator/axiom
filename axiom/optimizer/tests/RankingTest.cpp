@@ -104,7 +104,7 @@ TEST_P(RankingTest, rowNumberWithLimit) {
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher = matchScan("nation")
                                 .distributedLimit(0, 10)
-                                .localGather()
+                                .localGatherIf(!useV2_)
                                 .rowNumber({})
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
@@ -130,7 +130,7 @@ TEST_P(RankingTest, rowNumberWithPartitionByAndLimit) {
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher = matchScan("nation")
                                 .distributedLimit(0, 10)
-                                .localPartition({"n_regionkey"})
+                                .localPartitionIf(!useV2_, {"n_regionkey"})
                                 .rowNumber({"n_regionkey"})
                                 .project({"n_name", "rn"})
                                 .build();
@@ -176,7 +176,8 @@ TEST_P(RankingTest, rankWithOrderByAndLimit) {
                                 .gather()
                                 .localGather()
                                 .topNRowNumber({}, {"n_name"}, 10)
-                                .localLimit(0, 10)
+                                .localLimitIf(!useV2_, 0, 10)
+                                .finalLimitIf(useV2_, 0, 10)
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -242,7 +243,8 @@ TEST_P(RankingTest, multipleWindowFunctionsWithLimitNoOptimization) {
                                     {"row_number() OVER (ORDER BY n_name)",
                                      "sum(n_regionkey) OVER (ORDER BY n_name)"})
                                 .projectIf(useV2_, {"n_name", "rn", "s"})
-                                .localLimit(0, 10)
+                                .localLimitIf(!useV2_, 0, 10)
+                                .finalLimitIf(useV2_, 0, 10)
                                 .projectIf(!useV2_, {"n_name", "rn", "s"})
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
@@ -347,8 +349,8 @@ TEST_P(RankingTest, redundantQueryOrderBy) {
                                 .localGather()
                                 .topNRowNumber({}, {"n_name"}, 10)
                                 .topN(10)
-                                .localMerge()
-                                .finalLimit(0, 10)
+                                .localMergeIf(!useV2_)
+                                .finalLimitIf(!useV2_, 0, 10)
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -591,16 +593,15 @@ TEST_P(RankingTest, filterOnRowNumberGreaterThan) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   auto distributedPlan = toDistributedPlan(sql);
-  auto distributedMatcher = matchScan("nation")
-                                .shuffle()
-                                .localGather()
-                                .rowNumber({})
-                                .filter("rn > 1")
-                                .partialAggregation({}, {"count(1)"})
-                                .localPartition()
-                                .finalAggregation()
-                                .build();
-  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+  auto distributedMatcher =
+      matchScan("nation").shuffle().localGather().rowNumber({}).filter(
+          "rn > 1");
+  if (useV2_) {
+    distributedMatcher.singleAggregation({}, {"count(1) as count"});
+  } else {
+    distributedMatcher.localAggregation({}, {"count(1)"});
+  }
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher.build());
 }
 
 TEST_P(RankingTest, filterWithAdditionalPredicates) {
@@ -679,7 +680,8 @@ TEST_P(RankingTest, filterOnOutputWithLimit) {
                                 .gather()
                                 .localGather()
                                 .topNRowNumber({}, {"n_name"}, 5)
-                                .localLimit(0, 3)
+                                .localLimitIf(!useV2_, 0, 3)
+                                .finalLimitIf(useV2_, 0, 3)
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -710,7 +712,8 @@ TEST_P(RankingTest, filterOnOutputWithLargerLimit) {
                                 .gather()
                                 .localGather()
                                 .topNRowNumber({}, {"n_name"}, 3)
-                                .localLimit(0, 10)
+                                .localLimitIf(!useV2_, 0, 10)
+                                .finalLimitIf(useV2_, 0, 10)
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -879,7 +882,7 @@ TEST_P(RankingTest, partitionKeyFilterWithMultipleWindows) {
           .localPartition({"n_regionkey"})
           .window(
               {"row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
-          .localPartition({"n_regionkey"})
+          .localPartitionIf(!useV2_, {"n_regionkey"})
           .window({"count() OVER (PARTITION BY n_regionkey)"})
           .projectIf(useV2_, {"n_name", "2", "rn", "cnt"})
           .gather()

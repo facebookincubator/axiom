@@ -165,35 +165,55 @@ LocalPropertyVector retainedLocal(NodeCP input, const ColumnVector& columns) {
       input->physicalProperties().local, PlanObjectSet::fromObjects(columns));
 }
 
+// Returns no mapping when any key is not projected as a bare column.
+std::optional<PlanObjectSet> remapKeySet(
+    const PlanObjectSet& keys,
+    const ExprVector& sourceExprs,
+    const ColumnVector& outputColumns) {
+  ColumnVector mapped;
+  mapped.reserve(keys.size());
+  for (ColumnCP key : keys.toObjects<Column>()) {
+    const auto it = std::ranges::find_if(
+        sourceExprs, [&](ExprCP expr) { return expr->sameOrEqual(*key); });
+    if (it == sourceExprs.end()) {
+      return std::nullopt;
+    }
+    mapped.push_back(outputColumns[it - sourceExprs.begin()]);
+  }
+  return PlanObjectSet::fromObjects(mapped);
+}
+
+// Remaps input unique keys through a projection and drops keys that are not
+// projected as bare columns.
+UniqueKeySetVector projectUnique(
+    NodeCP input,
+    const ExprVector& exprs,
+    const ColumnVector& outputColumns) {
+  UniqueKeySetVector result;
+  for (const UniqueKeySet& key : input->physicalProperties().unique) {
+    if (auto mapped = remapKeySet(key.columns, exprs, outputColumns)) {
+      result.push_back(
+          UniqueKeySet{.columns = std::move(*mapped), .scope = key.scope});
+    }
+  }
+  return result;
+}
+
 // Keeps an input's partitioning when a node emits only a subset of its input:
 // the rows stay on the task they arrived on, so the distribution survives as
 // long as every partition key does. A dropped key leaves the output with no
 // expressible partitioning.
-Partitioning retainedGlobalPartition(
+Partitioning retainedPartition(
     const Partitioning& inputPartition,
     const ColumnVector& columns) {
   Partitioning partition = inputPartition.dropOrder();
   const auto columnSet = PlanObjectSet::fromObjects(columns);
   for (ExprCP key : partition.keys) {
     if (!key->columns().isSubset(columnSet)) {
-      return Partitioning{};
+      return Partitioning::unspecified(inputPartition.scope);
     }
   }
   return partition;
-}
-
-// Keeps an input's unique key-sets whose columns all survive in `columns`, for
-// a node that emits only a subset of its input. A key-set with a dropped member
-// is no longer a key of the output, so it is removed whole.
-UniqueKeySetVector retainedUnique(NodeCP input, const ColumnVector& columns) {
-  const auto columnSet = PlanObjectSet::fromObjects(columns);
-  UniqueKeySetVector result;
-  for (const UniqueKeySet& key : input->physicalProperties().unique) {
-    if (key.columns.isSubset(columnSet)) {
-      result.push_back(key);
-    }
-  }
-  return result;
 }
 
 // A single `Sorted` property over the leading run of `keys` that are columns,
@@ -249,9 +269,11 @@ LocalPropertyVector groupedLocal(ColumnCP column) {
   return groupedLocal(columns);
 }
 
-// A single global unique key over 'column' (e.g. AssignUniqueId's id).
-UniqueKeySetVector globalUniqueKey(ColumnCP column) {
-  UniqueKeySetVector result;
+// Adds a globally unique output column to the existing uniqueness proofs.
+UniqueKeySetVector withGlobalUniqueKey(
+    const UniqueKeySetVector& unique,
+    ColumnCP column) {
+  UniqueKeySetVector result = unique;
   result.push_back(
       UniqueKeySet{
           .columns = PlanObjectSet::single(column),
@@ -259,10 +281,8 @@ UniqueKeySetVector globalUniqueKey(ColumnCP column) {
   return result;
 }
 
-// Uniqueness that survives a remote exchange. A repartition/gather moves rows
-// without duplicating them, so global uniqueness holds; but it can gather
-// cross-driver duplicates onto one driver, so driver-scope uniqueness does not
-// survive. A broadcast replicates rows and destroys even global uniqueness.
+// Repartition and gather preserve global uniqueness but may co-locate
+// driver-local duplicates. Broadcast also destroys global uniqueness.
 UniqueKeySetVector uniqueAcrossExchange(
     const UniqueKeySetVector& unique,
     const Partitioning& partitioning) {
@@ -278,13 +298,8 @@ UniqueKeySetVector uniqueAcrossExchange(
   return result;
 }
 
-// Local grouping an inner/left join gains from probe uniqueness: a hash join
-// emits each probe row's matches as one contiguous run, so the output is
-// grouped by any key unique on the probe whose columns all survive —
-// independent of the probe's input order, so this holds even after an exchange
-// erased the probe's own local grouping. Caveat: a spilling probe or a
-// driver-scrambling local exchange breaks it; valid at single-fragment,
-// numDrivers=1.
+// A hash join emits each probe row's matches contiguously, preserving grouping
+// by every surviving probe unique key. A spilling probe may break this.
 void appendProbeUniqueGroupings(
     NodeCP left,
     const PlanObjectSet& outputColumns,
@@ -299,16 +314,15 @@ void appendProbeUniqueGroupings(
   }
 }
 
-// The probe (left) side's local properties survive an inner / left join within
-// a driver; build-emitting and cross joins drop them.
+// The probe (left) side's local properties survive when the join preserves
+// probe rows. Build-emitting and cross joins drop them.
 // TODO: order through a spillable join is not guaranteed once spilling is
 // enabled; revisit when spilling is modeled.
 LocalPropertyVector joinLocal(
     velox::core::JoinType joinType,
     NodeCP left,
     const ColumnVector& outputColumns) {
-  if (joinType == velox::core::JoinType::kInner ||
-      joinType == velox::core::JoinType::kLeft) {
+  if (Join::preservedSides(joinType).left) {
     LocalPropertyVector local = retainedLocal(left, outputColumns);
     appendProbeUniqueGroupings(
         left, PlanObjectSet::fromObjects(outputColumns), local);
@@ -317,43 +331,42 @@ LocalPropertyVector joinLocal(
   return {};
 }
 
-// Partitioning of an operator that keeps every row on the task it arrived on:
-// the input's, minus its merge order, which belonged to the gather it came from
-// (see `Partitioning::dropOrder`).
+// Preserves placement at its existing scope while dropping merge order, which
+// belongs only to the producing gather.
 Partitioning inheritedPartition(const Partitioning& inputPartition) {
   return inputPartition.dropOrder();
 }
 
-// Properties an operator inherits when it neither repartitions nor changes
-// which rows exist in a way that breaks them: the input's distribution (minus
-// its merge order, which belonged to the gather it came from — see
-// `Partitioning::dropOrder`), local properties, and uniqueness. Such an
-// operator keeps all of the input's columns, so every inherited property
-// already references output columns.
+// Preserves task and driver placement, local properties, and uniqueness for an
+// operator that neither moves nor reshapes rows.
 PhysicalProperties passThroughProperties(NodeCP input) {
   const PhysicalProperties& props = input->physicalProperties();
   return PhysicalProperties{
       .globalPartition = inheritedPartition(props.globalPartition),
+      .driverPartition = inheritedPartition(props.driverPartition),
       .local = props.local,
       .unique = props.unique};
 }
 
-// Properties of a ranking node: it keeps every surviving row on the task it
-// arrived on and only drops rows, so the input's distribution and uniqueness
-// survive. Its local order does not.
+// An exact Limit runs on one driver. It preserves the input's global
+// partitioning, local properties, and uniqueness, while gathering its output
+// at driver scope.
+PhysicalProperties limitProperties(NodeCP input) {
+  PhysicalProperties properties = passThroughProperties(input);
+  properties.driverPartition = Partitioning::gather(PropertyScope::kDriver);
+  return properties;
+}
+
+// Ranking preserves placement and uniqueness but not local order.
 PhysicalProperties rankedProperties(NodeCP input) {
   const PhysicalProperties& props = input->physicalProperties();
   return PhysicalProperties{
       .globalPartition = inheritedPartition(props.globalPartition),
+      .driverPartition = inheritedPartition(props.driverPartition),
       .unique = props.unique};
 }
 
-// Properties of an operator that sorts its input on `orderKeys` without moving
-// rows across tasks: it keeps the input's distribution and uniqueness and adds
-// the per-driver sort order. A distributed sort is a per-task sort under a
-// separate gather-merge exchange, and a single-stage sort runs over an
-// already-gathered input — so the sort node itself inherits the input's
-// partitioning either way (it is not the gather).
+// Sorting preserves placement and uniqueness while establishing local order.
 PhysicalProperties sortedProperties(
     NodeCP input,
     const ExprVector& orderKeys,
@@ -361,6 +374,7 @@ PhysicalProperties sortedProperties(
   const PhysicalProperties& props = input->physicalProperties();
   return PhysicalProperties{
       .globalPartition = inheritedPartition(props.globalPartition),
+      .driverPartition = inheritedPartition(props.driverPartition),
       .local = sortedLocal(orderKeys, orderTypes),
       .unique = props.unique};
 }
@@ -372,7 +386,7 @@ PhysicalProperties sortedProperties(
 // partition). A key not projected as a bare column — dropped, or appearing only
 // inside a computed expression — drops the partition to unspecified. Gather and
 // unspecified pass through unchanged.
-Partitioning projectGlobalPartition(
+Partitioning projectPartition(
     const Partitioning& partitioning,
     const ExprVector& exprs,
     const ColumnVector& outputColumns) {
@@ -390,7 +404,7 @@ Partitioning projectGlobalPartition(
       }
     }
     if (projected == nullptr) {
-      return {};
+      return Partitioning::unspecified(partitioning.scope);
     }
     keys.push_back(projected);
   }
@@ -446,7 +460,7 @@ Partitioning aggregateInputPartition(
   for (ExprCP key : inputPartition.keys) {
     const auto it = std::ranges::find(groupingKeys, key);
     if (it == groupingKeys.end()) {
-      return {};
+      return Partitioning::unspecified(inputPartition.scope);
     }
     keys.push_back(groupingColumns[it - groupingKeys.begin()]);
   }
@@ -467,7 +481,8 @@ Partitioning aggregatePartition(
     const ExprVector& groupingKeys,
     const ColumnVector& groupingColumns) {
   if (step != AggregateStep::kPartial && groupingKeys.empty()) {
-    return Partitioning::globalGather();
+    return Partitioning{
+        .kind = PartitionKind::kGather, .scope = inputPartition.scope};
   }
   return aggregateInputPartition(inputPartition, groupingKeys, groupingColumns);
 }
@@ -536,7 +551,7 @@ Partitioning scanGlobalPartition(
   // partition, like Values); the coordinator placement itself is a separate
   // leaf fact read at fragment-typing time.
   if (layout->runsOnCoordinator()) {
-    return Partitioning::globalGather();
+    return Partitioning::gather(PropertyScope::kGlobal);
   }
   return bucketPartition(layout, outputColumns, groupedPartitionType);
 }
@@ -664,7 +679,7 @@ bool Filter::KeyEq::operator()(const Filter* filter, const Key& key) const {
 Partitioning Project::globalPartition(
     std::span<const Partitioning> inputPartitions,
     Builder& /*builder*/) const {
-  return projectGlobalPartition(inputPartitions[0], exprs_, outputColumns());
+  return projectPartition(inputPartitions[0], exprs_, outputColumns());
 }
 
 Project::Project(Key key)
@@ -672,12 +687,17 @@ Project::Project(Key key)
           NodeType::kProject,
           ColumnVector{key.outputColumns},
           PhysicalProperties{
-              .globalPartition = projectGlobalPartition(
+              .globalPartition = projectPartition(
                   key.input->physicalProperties().globalPartition,
                   key.exprs,
                   key.outputColumns),
+              .driverPartition = projectPartition(
+                  key.input->physicalProperties().driverPartition,
+                  key.exprs,
+                  key.outputColumns),
               .local = retainedLocal(key.input, key.outputColumns),
-              .unique = retainedUnique(key.input, key.outputColumns)}),
+              .unique =
+                  projectUnique(key.input, key.exprs, key.outputColumns)}),
       input_(key.input),
       exprs_(std::move(key.exprs)) {
   VELOX_CHECK_NOT_NULL(input_);
@@ -734,31 +754,35 @@ Limit::Limit(Key key)
     : Node(
           NodeType::kLimit,
           ColumnVector{key.input->outputColumns()},
-          passThroughProperties(key.input)),
+          key.partial ? passThroughProperties(key.input)
+                      : limitProperties(key.input)),
       input_(key.input),
       offset_(key.offset),
-      count_(key.count) {
+      count_(key.count),
+      partial_(key.partial) {
   VELOX_CHECK_NOT_NULL(input_);
   VELOX_CHECK_GE(offset_, 0);
   VELOX_CHECK_GE(count_, 0);
 }
 
 size_t Limit::KeyHash::operator()(const Limit* node) const {
-  return hashOf(node->input(), node->offset(), node->count());
+  return hashOf(
+      node->input(), node->offset(), node->count(), node->isPartial());
 }
 
 size_t Limit::KeyHash::operator()(const Key& key) const {
-  return hashOf(key.input, key.offset, key.count);
+  return hashOf(key.input, key.offset, key.count, key.partial);
 }
 
 bool Limit::KeyEq::operator()(const Limit* left, const Limit* right) const {
   return left->input() == right->input() && left->offset() == right->offset() &&
-      left->count() == right->count();
+      left->count() == right->count() &&
+      left->isPartial() == right->isPartial();
 }
 
 bool Limit::KeyEq::operator()(const Key& key, const Limit* node) const {
   return key.input == node->input() && key.offset == node->offset() &&
-      key.count == node->count();
+      key.count == node->count() && key.partial == node->isPartial();
 }
 
 bool Limit::KeyEq::operator()(const Limit* node, const Key& key) const {
@@ -812,7 +836,8 @@ Sort::Sort(Key key)
           sortedProperties(key.input, key.orderKeys, key.orderTypes)),
       input_(key.input),
       orderKeys_(std::move(key.orderKeys)),
-      orderTypes_(std::move(key.orderTypes)) {
+      orderTypes_(std::move(key.orderTypes)),
+      partial_(key.partial) {
   VELOX_CHECK_NOT_NULL(input_);
   VELOX_CHECK(!orderKeys_.empty(), "Sort must have at least one order key");
   VELOX_CHECK_EQ(orderKeys_.size(), orderTypes_.size());
@@ -820,22 +845,24 @@ Sort::Sort(Key key)
 }
 
 size_t Sort::KeyHash::operator()(const Sort* node) const {
-  return hashOf(node->input(), node->orderKeys(), node->orderTypes());
+  return hashOf(
+      node->input(), node->orderKeys(), node->orderTypes(), node->isPartial());
 }
 
 size_t Sort::KeyHash::operator()(const Key& key) const {
-  return hashOf(key.input, key.orderKeys, key.orderTypes);
+  return hashOf(key.input, key.orderKeys, key.orderTypes, key.partial);
 }
 
 bool Sort::KeyEq::operator()(const Sort* left, const Sort* right) const {
   return left->input() == right->input() &&
       left->orderKeys() == right->orderKeys() &&
-      left->orderTypes() == right->orderTypes();
+      left->orderTypes() == right->orderTypes() &&
+      left->isPartial() == right->isPartial();
 }
 
 bool Sort::KeyEq::operator()(const Key& key, const Sort* node) const {
   return key.input == node->input() && key.orderKeys == node->orderKeys() &&
-      key.orderTypes == node->orderTypes();
+      key.orderTypes == node->orderTypes() && key.partial == node->isPartial();
 }
 
 bool Sort::KeyEq::operator()(const Sort* node, const Key& key) const {
@@ -857,7 +884,8 @@ TopN::TopN(Key key)
       orderKeys_(std::move(key.orderKeys)),
       orderTypes_(std::move(key.orderTypes)),
       offset_(key.offset),
-      count_(key.count) {
+      count_(key.count),
+      partial_(key.partial) {
   VELOX_CHECK_NOT_NULL(input_);
   VELOX_CHECK(!orderKeys_.empty(), "TopN must have at least one order key");
   VELOX_CHECK_EQ(orderKeys_.size(), orderTypes_.size());
@@ -872,25 +900,32 @@ size_t TopN::KeyHash::operator()(const TopN* node) const {
       node->orderKeys(),
       node->orderTypes(),
       node->offset(),
-      node->count());
+      node->count(),
+      node->isPartial());
 }
 
 size_t TopN::KeyHash::operator()(const Key& key) const {
   return hashOf(
-      key.input, key.orderKeys, key.orderTypes, key.offset, key.count);
+      key.input,
+      key.orderKeys,
+      key.orderTypes,
+      key.offset,
+      key.count,
+      key.partial);
 }
 
 bool TopN::KeyEq::operator()(const TopN* left, const TopN* right) const {
   return left->input() == right->input() &&
       left->orderKeys() == right->orderKeys() &&
       left->orderTypes() == right->orderTypes() &&
-      left->offset() == right->offset() && left->count() == right->count();
+      left->offset() == right->offset() && left->count() == right->count() &&
+      left->isPartial() == right->isPartial();
 }
 
 bool TopN::KeyEq::operator()(const Key& key, const TopN* node) const {
   return key.input == node->input() && key.orderKeys == node->orderKeys() &&
       key.orderTypes == node->orderTypes() && key.offset == node->offset() &&
-      key.count == node->count();
+      key.count == node->count() && key.partial == node->isPartial();
 }
 
 bool TopN::KeyEq::operator()(const TopN* node, const Key& key) const {
@@ -917,10 +952,16 @@ PhysicalProperties aggregateProperties(const Aggregate::Key& key) {
       key.input->physicalProperties().globalPartition,
       key.groupingKeys,
       groupingColumns);
+  const Partitioning driverPartition = aggregatePartition(
+      key.step,
+      key.input->physicalProperties().driverPartition,
+      key.groupingKeys,
+      groupingColumns);
   if (key.step == AggregateStep::kPartial) {
+    // The same group may be emitted by multiple drivers, so this is not a
+    // Grouped local property even though each driver's output is grouped.
     return PhysicalProperties{
-        .globalPartition = globalPartition,
-        .local = groupedLocal(groupingColumns)};
+        .globalPartition = globalPartition, .driverPartition = driverPartition};
   }
   // An aggregate emits one row per distinct grouping-key combination, so the
   // grouping output columns are a global unique key (the empty grouping is the
@@ -928,6 +969,7 @@ PhysicalProperties aggregateProperties(const Aggregate::Key& key) {
   // group-id is one of the keys, so distinct key sets stay distinct).
   return PhysicalProperties{
       .globalPartition = globalPartition,
+      .driverPartition = driverPartition,
       .local = groupedLocal(groupingColumns),
       .unique = {UniqueKeySet{
           .columns = PlanObjectSet::fromObjects(groupingColumns),
@@ -1017,13 +1059,22 @@ bool Aggregate::KeyEq::operator()(const Aggregate* node, const Key& key) const {
 }
 
 Partitioning GroupId::globalPartition(
-    std::span<const Partitioning> /*inputPartitions*/,
+    std::span<const Partitioning> inputPartitions,
     Builder& /*builder*/) const {
-  return {};
+  return retainedPartition(inputPartitions[0], outputColumns());
 }
 
 GroupId::GroupId(Key key)
-    : Node(NodeType::kGroupId, ColumnVector{key.outputColumns}, {}),
+    : Node(
+          NodeType::kGroupId,
+          ColumnVector{key.outputColumns},
+          PhysicalProperties{
+              .globalPartition = retainedPartition(
+                  key.input->physicalProperties().globalPartition,
+                  key.outputColumns),
+              .driverPartition = retainedPartition(
+                  key.input->physicalProperties().driverPartition,
+                  key.outputColumns)}),
       input_(key.input),
       groupingKeys_(std::move(key.groupingKeys)),
       aggregationInputs_(std::move(key.aggregationInputs)),
@@ -1180,14 +1231,14 @@ bool MarkDistinct::KeyEq::operator()(const MarkDistinct* node, const Key& key)
 Partitioning Values::globalPartition(
     std::span<const Partitioning> /*inputPartitions*/,
     Builder& /*builder*/) const {
-  return Partitioning::globalGather();
+  return Partitioning::gather(PropertyScope::kGlobal);
 }
 
 Values::Values(Key key)
     : Node(
           NodeType::kValues,
           ColumnVector{key.outputColumns},
-          {.globalPartition = Partitioning::globalGather()}),
+          {.globalPartition = Partitioning::gather(PropertyScope::kGlobal)}),
       source_(key.source),
       rows_(key.rows),
       channels_(std::move(key.channels)) {
@@ -1277,7 +1328,7 @@ bool Values::KeyEq::operator()(const Values* node, const Key& key) const {
 Partitioning Unnest::globalPartition(
     std::span<const Partitioning> inputPartitions,
     Builder& /*builder*/) const {
-  return retainedGlobalPartition(inputPartitions[0], replicatedColumns());
+  return retainedPartition(inputPartitions[0], replicatedColumns());
 }
 
 PlanObjectSet Unnest::generatedColumns() const {
@@ -1299,8 +1350,11 @@ Unnest::Unnest(Key key)
           NodeType::kUnnest,
           ColumnVector{key.outputColumns},
           PhysicalProperties{
-              .globalPartition = retainedGlobalPartition(
+              .globalPartition = retainedPartition(
                   key.input->physicalProperties().globalPartition,
+                  key.replicatedColumns),
+              .driverPartition = retainedPartition(
+                  key.input->physicalProperties().driverPartition,
                   key.replicatedColumns),
               .local = retainedLocal(key.input, key.replicatedColumns)}),
       input_(key.input),
@@ -1470,7 +1524,7 @@ Partitioning unionGlobalPartition(
     }
   }
   if (allGathered) {
-    return Partitioning::globalGather();
+    return Partitioning::gather(PropertyScope::kGlobal);
   }
 
   // A partitionType of nullptr is standard hash partitioning; a non-null one is
@@ -1546,7 +1600,9 @@ UnionAll::UnionAll(Key key)
               .globalPartition = unionGlobalPartition(
                   Node::globalPartitions(key.inputs),
                   key.legColumns,
-                  key.outputColumns)}),
+                  key.outputColumns),
+              // UnionAll combines all input streams through one local gather.
+              .driverPartition = Partitioning::gather(PropertyScope::kDriver)}),
       inputs_(std::move(key.inputs)),
       legColumns_(std::move(key.legColumns)) {
   VELOX_CHECK_GE(inputs_.size(), 2, "UnionAll requires at least two inputs");
@@ -1651,6 +1707,31 @@ Partitioning Join::globalPartition(
       builder);
 }
 
+namespace {
+
+Partitioning joinDriverPartitioning(const Join::Key& key, Builder& builder) {
+  // Probe placement survives only when the join preserves probe rows. Two
+  // gathered inputs remain gathered for every join type.
+  const Partitioning& left = key.left->physicalProperties().driverPartition;
+  const Partitioning& right = key.right->physicalProperties().driverPartition;
+  if (!Join::preservedSides(key.joinType).left &&
+      !(left.is(PartitionKind::kGather) && right.is(PartitionKind::kGather))) {
+    return Partitioning::unspecified(PropertyScope::kDriver);
+  }
+  return Join::outputPartitioning(
+      key.joinType,
+      left,
+      right,
+      key.leftKeys,
+      key.rightKeys,
+      PlanObjectSet::fromObjects(key.outputColumns),
+      key.outputColumns,
+      key.effectiveSourceColumns(),
+      builder);
+}
+
+} // namespace
+
 Join::Join(Key key, Builder& builder)
     : Node(
           NodeType::kJoin,
@@ -1666,6 +1747,7 @@ Join::Join(Key key, Builder& builder)
                   key.outputColumns,
                   key.effectiveSourceColumns(),
                   builder),
+              .driverPartition = joinDriverPartitioning(key, builder),
               .local = joinLocal(key.joinType, key.left, key.outputColumns)}),
       inputs_{key.left, key.right},
       joinType_(key.joinType),
@@ -1766,7 +1848,7 @@ Join::PreservedSides Join::preservedSides(velox::core::JoinType joinType) {
 Partitioning IndexLookupJoin::globalPartition(
     std::span<const Partitioning> inputPartitions,
     Builder& /*builder*/) const {
-  return retainedGlobalPartition(inputPartitions[0], outputColumns());
+  return retainedPartition(inputPartitions[0], outputColumns());
 }
 
 IndexLookupJoin::IndexLookupJoin(Key key)
@@ -1774,8 +1856,11 @@ IndexLookupJoin::IndexLookupJoin(Key key)
           NodeType::kIndexLookupJoin,
           ColumnVector{key.outputColumns},
           PhysicalProperties{
-              .globalPartition = retainedGlobalPartition(
+              .globalPartition = retainedPartition(
                   key.probe->physicalProperties().globalPartition,
+                  key.outputColumns),
+              .driverPartition = retainedPartition(
+                  key.probe->physicalProperties().driverPartition,
                   key.outputColumns)}),
       probe_(key.probe),
       lookupTable_(key.lookupTable),
@@ -2007,19 +2092,19 @@ Partitioning fullJoinPartitioning(
     Builder& builder) {
   // A keyless full join has no pair to coalesce, so nothing places its rows.
   if (leftKeys.empty()) {
-    return {};
+    return Partitioning::unspecified(leftPartitioning.scope);
   }
   if (leftPartitioning.kind != PartitionKind::kPartitioned ||
       rightPartitioning.kind != PartitionKind::kPartitioned ||
       leftPartitioning.replicateNullsAndAny ||
       rightPartitioning.replicateNullsAndAny ||
       leftPartitioning.keys.size() != rightPartitioning.keys.size()) {
-    return {};
+    return Partitioning::unspecified(leftPartitioning.scope);
   }
   const auto partitionType = Partitioning::commonJoinPartitionType(
       leftPartitioning.partitionType, rightPartitioning.partitionType);
   if (!partitionType.has_value()) {
-    return {};
+    return Partitioning::unspecified(leftPartitioning.scope);
   }
 
   ExprVector keys;
@@ -2038,7 +2123,7 @@ Partitioning fullJoinPartitioning(
       }
     }
     if (!joinKeyIndex.has_value()) {
-      return {};
+      return Partitioning::unspecified(leftPartitioning.scope);
     }
     const ExprCP leftKey = exprs.substitute(
         leftKeys[*joinKeyIndex], joinSourceColumns, joinOutputExpressions);
@@ -2050,18 +2135,19 @@ Partitioning fullJoinPartitioning(
         rightKey->containsNonDefaultNullBehavior() ||
         leftKey->value().type != rightKey->value().type ||
         !supportsCoalesceKey(leftKey->value().type)) {
-      return {};
+      return Partitioning::unspecified(leftPartitioning.scope);
     }
     const ExprCP key = builder.canonicalizeCoalesce(leftKey, rightKey);
     if (!outputColumns.containsColumns(key)) {
-      return {};
+      return Partitioning::unspecified(leftPartitioning.scope);
     }
     keys.push_back(key);
   }
 
-  Partitioning result = Partitioning::globalHash(keys);
-  result.partitionType = partitionType->connectorType;
-  return result;
+  return partitionType->connectorType == nullptr
+      ? Partitioning::hash(leftPartitioning.scope, keys)
+      : Partitioning::connectorHash(
+            leftPartitioning.scope, keys, partitionType->connectorType);
 }
 
 } // namespace
@@ -2083,7 +2169,8 @@ Partitioning Join::outputPartitioning(
   // side.
   if (leftPartitioning.is(PartitionKind::kGather) &&
       rightPartitioning.is(PartitionKind::kGather)) {
-    return Partitioning::globalGather();
+    return Partitioning{
+        .kind = PartitionKind::kGather, .scope = leftPartitioning.scope};
   }
 
   if (joinType == velox::core::JoinType::kFull) {
@@ -2100,7 +2187,7 @@ Partitioning Join::outputPartitioning(
 
   const auto preserved = preservedSides(joinType);
   if (!preserved.left && !preserved.right) {
-    return {};
+    return Partitioning::unspecified(leftPartitioning.scope);
   }
   const Partitioning& source =
       preserved.left ? leftPartitioning : rightPartitioning;
@@ -2116,7 +2203,7 @@ Partitioning Join::outputPartitioning(
     const auto commonType = Partitioning::commonJoinPartitionType(
         output.partitionType, other.partitionType);
     if (!commonType.has_value()) {
-      return {};
+      return Partitioning::unspecified(source.scope);
     }
     output.partitionType = commonType->connectorType;
   }
@@ -2126,7 +2213,7 @@ Partitioning Join::outputPartitioning(
   }
 
   if (joinType != velox::core::JoinType::kInner) {
-    return {};
+    return Partitioning::unspecified(source.scope);
   }
 
   ExprVector outputKeys;
@@ -2138,7 +2225,7 @@ Partitioning Join::outputPartitioning(
     }
     ExprCP survivingKey = survivingEquiKey(key, outputColumns);
     if (survivingKey == nullptr) {
-      return {};
+      return Partitioning::unspecified(source.scope);
     }
     outputKeys.push_back(survivingKey);
   }
@@ -2754,8 +2841,12 @@ AssignUniqueId::AssignUniqueId(Key key)
           PhysicalProperties{
               .globalPartition = inheritedPartition(
                   key.input->physicalProperties().globalPartition),
+              .driverPartition = inheritedPartition(
+                  key.input->physicalProperties().driverPartition),
               .local = groupedLocal(key.idColumn),
-              .unique = globalUniqueKey(key.idColumn)}),
+              .unique = withGlobalUniqueKey(
+                  key.input->physicalProperties().unique,
+                  key.idColumn)}),
       input_(key.input),
       idColumn_(key.idColumn) {
   VELOX_CHECK_NOT_NULL(input_);
@@ -2793,7 +2884,7 @@ bool AssignUniqueId::KeyEq::operator()(
 Partitioning EnforceSingleRow::globalPartition(
     std::span<const Partitioning> inputPartitions,
     Builder& /*builder*/) const {
-  return projectGlobalPartition(
+  return projectPartition(
       inputPartitions[0],
       ExprVector{
           input_->outputColumns().begin(), input_->outputColumns().end()},
@@ -2805,8 +2896,14 @@ EnforceSingleRow::EnforceSingleRow(Key key)
           NodeType::kEnforceSingleRow,
           ColumnVector{key.outputColumns},
           PhysicalProperties{
-              .globalPartition = projectGlobalPartition(
+              .globalPartition = projectPartition(
                   key.input->physicalProperties().globalPartition,
+                  ExprVector{
+                      key.input->outputColumns().begin(),
+                      key.input->outputColumns().end()},
+                  key.outputColumns),
+              .driverPartition = projectPartition(
+                  key.input->physicalProperties().driverPartition,
                   ExprVector{
                       key.input->outputColumns().begin(),
                       key.input->outputColumns().end()},
@@ -2912,19 +3009,52 @@ Exchange::Exchange(Key key)
     : Node(
           NodeType::kExchange,
           ColumnVector{key.input->outputColumns()},
-          // A remote exchange drops per-driver local order/grouping (rows
-          // interleave) — except an order-preserving gather, which keeps the
-          // merged sort order. Uniqueness survives per uniqueAcrossExchange
-          // (global-scope only, none under a broadcast).
-          PhysicalProperties{
-              .globalPartition = key.partitioning,
-              .local = exchangeLocal(key.partitioning),
-              .unique = uniqueAcrossExchange(
-                  key.input->physicalProperties().unique,
-                  key.partitioning)}),
+          key.partitioning.scope == PropertyScope::kGlobal
+              ? PhysicalProperties{
+                    .globalPartition = key.partitioning,
+                    .local = exchangeLocal(key.partitioning),
+                    .unique = uniqueAcrossExchange(
+                        key.input->physicalProperties().unique,
+                        key.partitioning)}
+              : PhysicalProperties{
+                    .globalPartition = key.input->physicalProperties()
+                                           .globalPartition.dropOrder(),
+                    .driverPartition = key.partitioning,
+                    .local = exchangeLocal(key.partitioning),
+                    .unique = uniqueAcrossExchange(
+                        key.input->physicalProperties().unique,
+                        key.partitioning)}),
       input_(key.input),
       partitioning_(std::move(key.partitioning)) {
   VELOX_CHECK_NOT_NULL(input_);
+  VELOX_CHECK_NE(
+      partitioning_.kind,
+      PartitionKind::kUnspecified,
+      "Exchange requires concrete partitioning");
+  VELOX_CHECK_EQ(
+      partitioning_.keys.empty(),
+      partitioning_.kind != PartitionKind::kPartitioned,
+      "Only a partitioned exchange has partition keys");
+  VELOX_CHECK_EQ(
+      partitioning_.orderKeys.size(), partitioning_.orderTypes.size());
+  VELOX_CHECK(
+      partitioning_.orderKeys.empty() ||
+          partitioning_.kind == PartitionKind::kGather,
+      "Only a gather exchange has merge order");
+  VELOX_CHECK(
+      partitioning_.partitionType == nullptr ||
+          partitioning_.kind == PartitionKind::kPartitioned,
+      "Only a partitioned exchange has a partition function");
+  VELOX_CHECK(
+      !partitioning_.replicateNullsAndAny ||
+          (partitioning_.scope == PropertyScope::kGlobal &&
+           partitioning_.kind == PartitionKind::kPartitioned),
+      "Replicating nulls and any row requires global partitioning");
+  VELOX_CHECK(
+      partitioning_.scope == PropertyScope::kGlobal ||
+          partitioning_.kind == PartitionKind::kPartitioned ||
+          partitioning_.kind == PartitionKind::kGather,
+      "A driver exchange must partition or gather");
 
   // A partition or merge-order key must be a column the input produces:
   // whoever places the shuffle materializes an expression key first, so the

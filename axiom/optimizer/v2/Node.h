@@ -477,6 +477,8 @@ class Limit : public Node {
     /// `std::numeric_limits<int64_t>::max()` means no limit (e.g. `OFFSET n`
     /// with no `LIMIT`), 0 means empty result.
     int64_t count;
+    /// True for a per-driver pre-limit; false for the exact task result.
+    bool partial{false};
   };
 
   /// Transparent hasher for interning `Limit`s by identity.
@@ -508,6 +510,10 @@ class Limit : public Node {
     return count_;
   }
 
+  bool isPartial() const {
+    return partial_;
+  }
+
   /// Returns offset + count, saturated at INT64_MAX so a no-limit count
   /// (INT64_MAX) does not overflow. The '>=' matches the no-limit boundary used
   /// by RelationOp's isNoLimit.
@@ -536,6 +542,7 @@ class Limit : public Node {
   const NodeCP input_;
   const int64_t offset_;
   const int64_t count_;
+  const bool partial_;
 };
 
 using LimitCP = const Limit*;
@@ -552,6 +559,8 @@ class Sort : public Node {
     ExprVector orderKeys;
     /// Sort direction per key; positional with `orderKeys`.
     OrderTypeVector orderTypes;
+    /// True when this is one driver-local input to a merge.
+    bool partial{false};
   };
 
   /// Transparent hasher for interning `Sort`s by identity.
@@ -583,6 +592,10 @@ class Sort : public Node {
     return orderTypes_;
   }
 
+  bool isPartial() const {
+    return partial_;
+  }
+
   std::span<const NodeCP> inputs() const override {
     return {&input_, 1};
   }
@@ -598,6 +611,7 @@ class Sort : public Node {
   const NodeCP input_;
   const ExprVector orderKeys_;
   const OrderTypeVector orderTypes_;
+  const bool partial_;
 };
 
 using SortCP = const Sort*;
@@ -622,6 +636,8 @@ class TopN : public Node {
     /// with no `LIMIT` is a `Sort`, so `Limit`'s no-limit sentinel never
     /// reaches here and `offsetPlusCount()` saturates only on overflow.
     int64_t count;
+    /// True when this is one driver-local input to a merge.
+    bool partial{false};
   };
 
   /// Transparent hasher for interning `TopN`s by identity.
@@ -661,6 +677,10 @@ class TopN : public Node {
     return count_;
   }
 
+  bool isPartial() const {
+    return partial_;
+  }
+
   /// Returns offset + count, saturated at INT64_MAX so a no-limit count does
   /// not overflow.
   int64_t offsetPlusCount() const {
@@ -686,6 +706,7 @@ class TopN : public Node {
   const OrderTypeVector orderTypes_;
   const int64_t offset_;
   const int64_t count_;
+  const bool partial_;
 };
 
 using TopNCP = const TopN*;
@@ -2332,25 +2353,27 @@ class EnforceDistinct : public Node {
 
 using EnforceDistinctCP = const EnforceDistinct*;
 
-/// Redistributes input rows across tasks with a remote exchange — lowered to a
-/// `PartitionedOutput`→`Exchange` pair straddling a fragment boundary — setting
-/// `partitioning` as the output's global partitioning. Does not change the
-/// schema: `outputColumns()` are the input's columns unchanged (the same
-/// `Column` pointers). The only node that repartitions: it imposes a global
-/// partitioning via a shuffle, whereas other nodes derive theirs from their
-/// input. The distributed memo places it when a consumer needs a partitioning
-/// the input lacks.
+/// Redistributes input rows at the scope specified by `partitioning`. A global
+/// exchange lowers to a `PartitionedOutput`/`Exchange` pair across a fragment
+/// boundary. A driver exchange stays within its fragment and lowers to a Velox
+/// local partition or merge. Does not change the schema: `outputColumns()` are
+/// the input's columns unchanged (the same `Column` pointers).
 ///
 /// Invariants:
 ///   - `input` is non-null.
+///   - `partitioning.kind` is not `kUnspecified`.
+///   - A driver exchange is `kPartitioned` or `kGather`.
 ///   - Every key in `partitioning.keys` is a `Column`.
 ///   - Every key in `partitioning.orderKeys` is a `Column`.
+///
+/// For example, a driver hash exchange co-locates equal keys before a local
+/// aggregate.
 class Exchange : public Node {
  public:
   struct Key {
     /// Input node.
     NodeCP input;
-    /// Global partitioning imposed on the output via the shuffle.
+    /// Partitioning imposed on the output by this exchange.
     Partitioning partitioning;
   };
 

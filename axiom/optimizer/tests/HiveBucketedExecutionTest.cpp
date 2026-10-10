@@ -687,10 +687,8 @@ TEST_P(HiveBucketedExecutionTest, unionall) {
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchHiveScan("t")
-            .localPartition(matchHiveScan("u").project())
-            .partialAggregation()
-            .localPartition({"c_nationkey"})
-            .finalAggregation()
+            .localGather(matchHiveScan("u").project())
+            .singleAggregation({"c_nationkey"}, {"count(*)"})
             .fragment({.width = 4, .bucketedScans = 2})
             .gather()
             .build());
@@ -777,8 +775,8 @@ TEST_P(HiveBucketedExecutionTest, unionAllWithUnbucketedLeg) {
     AXIOM_ASSERT_DISTRIBUTED_PLAN(
         plan.plan,
         matchHiveScan("t")
-            .localPartition(matchHiveScan("u").project())
-            .partialAggregation()
+            .localGather(matchHiveScan("u").project())
+            .partialAggregation({"c_nationkey"}, {"count(*)"})
             .notBucketed()
             .shuffle({"c_nationkey"})
             .localPartition({"c_nationkey"})
