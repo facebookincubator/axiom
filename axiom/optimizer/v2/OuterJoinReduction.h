@@ -16,7 +16,11 @@
 
 #pragma once
 
+#include "axiom/optimizer/PlanObject.h"
+#include "axiom/optimizer/QueryGraphContext.h"
+#include "axiom/optimizer/v2/Node.h"
 #include "axiom/optimizer/v2/PlanSubstitutions.h"
+#include "velox/core/PlanNode.h"
 
 namespace facebook::axiom::optimizer::v2 {
 

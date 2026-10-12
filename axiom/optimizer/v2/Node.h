@@ -16,18 +16,34 @@
 
 #pragma once
 
+#include <stddef.h>
+#include <stdint.h>
 #include <array>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <span>
+#include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
+#include <folly/ConstexprMath.h>
 #include <folly/CppAttributes.h>
+#include <folly/lang/Hint.h>
 
+#include "axiom/common/Enums.h"
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
+#include "axiom/optimizer/PlanObject.h"
 #include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/QueryGraphContext.h"
+#include "axiom/optimizer/Schema.h"
 #include "axiom/optimizer/v2/PhysicalProperties.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/core/PlanNode.h"
+#include "velox/type/Type.h"
+#include "velox/type/Variant.h"
 
 /// Tree-IR for the optimizer.
 ///

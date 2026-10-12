@@ -16,6 +16,14 @@
 
 #include "axiom/optimizer/v2/OuterJoinReduction.h"
 
+#include <stddef.h>
+#include <vector>
+
+#include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/v2/Node.h"
+#include "axiom/optimizer/v2/PlanSubstitutions.h"
+#include "velox/common/base/Exceptions.h"
+
 namespace facebook::axiom::optimizer::v2 {
 namespace {
 

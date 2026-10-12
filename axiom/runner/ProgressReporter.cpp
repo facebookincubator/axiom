@@ -17,11 +17,16 @@
 #include "axiom/runner/ProgressReporter.h"
 
 #include <fmt/core.h>
+#include <folly/Function.h>
 #include <folly/executors/FunctionScheduler.h>
 #include <glog/logging.h>
 #include <algorithm>
 #include <atomic>
+#include <exception>
+#include <ostream>
+#include <utility>
 
+#include "axiom/runner/QueryProgress.h"
 #include "axiom/runner/QueryProgressBuilder.h"
 #include "axiom/runner/Runner.h"
 

@@ -15,7 +15,12 @@
  */
 #pragma once
 
+#include <vector>
+
+#include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/v2/Node.h"
+#include "axiom/optimizer/v2/PhysicalProperties.h"
 
 namespace facebook::axiom::optimizer::v2 {
 

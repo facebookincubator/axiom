@@ -16,14 +16,30 @@
 
 #pragma once
 
+#include <memory>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+
+#include <folly/container/HeterogeneousAccess.h>
+#include <folly/lang/Hint.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "axiom/connectors/ConnectorSession.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
+#include "axiom/logical_plan/ExprApi.h"
+#include "axiom/sql/presto/ParserOptions.h"
+#include "axiom/sql/presto/ParserSession.h"
 #include "axiom/sql/presto/PrestoParser.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
+#include "axiom/sql/presto/SqlStatement.h"
 #include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "axiom/sql/presto/tests/LogicalPlanMatcher.h"
+#include "velox/type/Type.h"
 
 namespace axiom::sql::presto::test {
 

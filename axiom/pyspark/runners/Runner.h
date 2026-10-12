@@ -16,7 +16,14 @@
 
 #pragma once
 
+#include <functional>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
 #include "axiom/optimizer/MultiFragmentPlan.h"
+#include "velox/common/memory/MemoryPool.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace axiom::collagen::runner {

@@ -15,12 +15,25 @@
  */
 
 #include "axiom/sql/presto/tests/LogicalPlanMatcher.h"
+#include <folly/Demangle.h>
+#include <folly/FBString.h>
 #include <gtest/gtest.h>
+#include <stdlib.h>
+#include <optional>
 #include <set>
+#include <typeinfo>
+#include "axiom/common/SchemaTableName.h"
+#include "axiom/logical_plan/Expr.h"
+#include "axiom/logical_plan/ExprApi.h"
+#include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/sql/presto/tests/ExprMatcher.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/parse/ExprRewriter.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
+#include "velox/parse/IExpr.h"
+#include "velox/parse/SqlExpressionsParser.h"
+#include "velox/type/TypeKind.h"
 
 namespace facebook::axiom::logical_plan::test {
 namespace {

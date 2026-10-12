@@ -16,12 +16,40 @@
 
 #include "axiom/optimizer/v2/NodeSimplifier.h"
 
-#include <folly/container/F14Set.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <algorithm>
+#include <initializer_list>
+#include <iterator>
+#include <optional>
+#include <span>
+#include <string>
+#include <utility>
 
+#include <fmt/core.h>
+#include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
+#include <folly/container/HeterogeneousAccess.h>
+#include <folly/lang/Hint.h>
+
+#include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/logical_plan/Expr.h"
+#include "axiom/optimizer/PlanObject.h"
 #include "axiom/optimizer/PlanUtils.h"
+#include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/v2/AppendAll.h"
+#include "axiom/optimizer/v2/Builder.h"
+#include "axiom/optimizer/v2/ExprFactory.h"
+#include "axiom/optimizer/v2/ExprSimplifier.h"
 #include "axiom/optimizer/v2/JoinFilterRewriter.h"
+#include "axiom/optimizer/v2/Node.h"
+#include "axiom/optimizer/v2/PlanSubstitutions.h"
 #include "axiom/optimizer/v2/PrecomputeProjections.h"
+#include "velox/common/base/BitUtil.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/type/Type.h"
+#include "velox/type/TypeKind.h"
+#include "velox/type/Variant.h"
 
 namespace facebook::axiom::optimizer::v2 {
 namespace {

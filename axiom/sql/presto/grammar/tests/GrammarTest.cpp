@@ -14,6 +14,11 @@
  * limitations under the License.
  */
 
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include <CommonTokenStream.h>
 #include <antlr4-runtime.h>
 #include <gtest/gtest.h>
 

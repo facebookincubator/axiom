@@ -16,8 +16,15 @@
 
 #include "axiom/session/BaseSession.h"
 
+#include <memory>
+#include <optional>
+#include <string>
+
+#include <folly/container/HeterogeneousAccess.h>
+#include <folly/lang/Hint.h>
 #include <gtest/gtest.h>
 
+#include "axiom/connectors/ConnectorSession.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
 #include "velox/common/base/tests/GTestUtils.h"
 

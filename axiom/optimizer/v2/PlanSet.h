@@ -20,6 +20,8 @@
 #include <optional>
 #include <vector>
 
+#include "axiom/optimizer/QueryGraphContext.h"
+#include "axiom/optimizer/v2/Cost.h"
 #include "axiom/optimizer/v2/MemoOp.h"
 #include "axiom/optimizer/v2/PhysicalProperties.h"
 

@@ -15,14 +15,20 @@
  */
 #pragma once
 
+#include <folly/ConstexprMath.h>
 #include <folly/container/F14Map.h>
+#include <folly/container/HeterogeneousAccess.h>
+#include <folly/lang/Hint.h>
+#include <stddef.h>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "axiom/logical_plan/PlanBuilder.h"
+#include "axiom/sql/presto/ast/AstExpressions.h"
 #include "axiom/sql/presto/ast/AstNodesAll.h"
+#include "axiom/sql/presto/ast/AstRelations.h"
 
 namespace axiom::sql::presto {
 

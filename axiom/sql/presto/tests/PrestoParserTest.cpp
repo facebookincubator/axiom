@@ -14,15 +14,43 @@
  * limitations under the License.
  */
 
+#include <stdint.h>
+#include <initializer_list>
+#include <iterator>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+
+#include <fmt/core.h>
+#include <folly/ConstexprMath.h>
 #include <folly/ScopeGuard.h>
+#include <folly/lang/Assume.h>
+#include <folly/lang/Hint.h>
 #include <gmock/gmock.h>
+#include "axiom/common/SchemaTableName.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/system/InformationSchema.h"
+#include "axiom/connectors/system/SystemConnector.h"
 #include "axiom/connectors/system/SystemConnectorMetadata.h"
+#include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/logical_plan/Expr.h"
+#include "axiom/logical_plan/LogicalPlanNode.h"
+#include "axiom/sql/presto/ParserOptions.h"
+#include "axiom/sql/presto/PrestoParser.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
+#include "axiom/sql/presto/SqlStatement.h"
 #include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
+#include "axiom/sql/presto/tests/LogicalPlanMatcher.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
+#include "gtest/gtest.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/type/Type.h"
+#include "velox/type/TypeKind.h"
 
 namespace axiom::sql::presto::test {
 

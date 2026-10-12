@@ -16,12 +16,29 @@
 
 #include "axiom/sql/presto/ast/AstBuilder.h"
 
+#include <stddef.h>
+#include <cctype>
+#include <optional>
+#include <tuple>
 #include <unordered_set>
+#include <utility>
 
+#include <Token.h>
 #include <folly/Conv.h>
+#include <folly/Expected.h>
 #include <folly/Unicode.h>
+#include <tree/TerminalNode.h>
 #include <algorithm>
+#include "axiom/sql/presto/ParserOptions.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
+#include "axiom/sql/presto/ast/AstExpressions.h"
+#include "axiom/sql/presto/ast/AstFunctions.h"
+#include "axiom/sql/presto/ast/AstLiterals.h"
+#include "axiom/sql/presto/ast/AstNode.h"
+#include "axiom/sql/presto/ast/AstRelations.h"
+#include "axiom/sql/presto/ast/AstStatements.h"
+#include "axiom/sql/presto/ast/AstSupport.h"
+#include "axiom/sql/presto/grammar/PrestoSqlParser.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace axiom::sql::presto {

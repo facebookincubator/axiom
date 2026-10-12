@@ -15,7 +15,15 @@
  */
 
 #include "axiom/sql/presto/PrestoSqlError.h"
+
+#include <stddef.h>
+#include <optional>
+#include <string>
+
+#include "axiom/sql/presto/PrestoParser.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 
 namespace axiom::sql::presto::test {
 

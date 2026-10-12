@@ -16,10 +16,22 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include "axiom/logical_plan/Expr.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/pyspark/SparkPlanVisitor.h"
+#include "axiom/pyspark/third-party/protos/expressions.pb.h"
 #include "axiom/pyspark/third-party/protos/relations.grpc.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
+#include "axiom/pyspark/third-party/protos/relations.pb.h"
+#include "velox/common/memory/MemoryPool.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
+#include "velox/type/Type.h"
 
 namespace axiom::collagen {
 

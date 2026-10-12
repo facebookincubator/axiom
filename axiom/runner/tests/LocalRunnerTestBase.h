@@ -16,8 +16,19 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <functional>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include <folly/executors/CPUThreadPoolExecutor.h>
+
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/core/QueryCtx.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
+#include "velox/type/Type.h"
+#include "velox/vector/ComplexVector.h"
 
 namespace facebook::axiom::runner::test {
 

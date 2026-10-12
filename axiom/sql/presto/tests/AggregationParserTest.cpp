@@ -14,11 +14,29 @@
  * limitations under the License.
  */
 
+#include <fmt/compile.h>
+#include <fmt/core.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
+#include <folly/ScopeGuard.h>
+#include <stdint.h>
+#include <initializer_list>
+#include <memory>
 #include <numeric>
+#include <string>
+#include <utility>
+#include <vector>
+#include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/logical_plan/Expr.h"
+#include "axiom/logical_plan/LogicalPlanNode.h"
+#include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
+#include "axiom/sql/presto/tests/LogicalPlanMatcher.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/parse/ExpressionsParser.h"
+#include "velox/type/Type.h"
 
 namespace axiom::sql::presto::test {
 

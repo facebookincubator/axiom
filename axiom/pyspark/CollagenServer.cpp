@@ -14,11 +14,14 @@
  * limitations under the License.
  */
 
+#include <string>
+
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
 #include "axiom/pyspark/CollagenMain.h"
+#include "velox/common/base/VeloxException.h"
 
 DEFINE_int32(port, 12345, "TCP port to listen to.");
 DEFINE_string(catalog, "tpch", "Catalog to use: test, tpch, hive");

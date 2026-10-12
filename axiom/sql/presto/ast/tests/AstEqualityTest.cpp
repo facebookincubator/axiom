@@ -14,10 +14,17 @@
  * limitations under the License.
  */
 
+#include <stdint.h>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include <gtest/gtest.h>
 #include "axiom/sql/presto/ast/AstExpressions.h"
 #include "axiom/sql/presto/ast/AstFunctions.h"
 #include "axiom/sql/presto/ast/AstLiterals.h"
+#include "axiom/sql/presto/ast/AstNode.h"
 #include "axiom/sql/presto/ast/AstRelations.h"
 #include "axiom/sql/presto/ast/AstSupport.h"
 

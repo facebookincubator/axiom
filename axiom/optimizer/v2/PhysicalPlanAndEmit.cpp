@@ -16,6 +16,9 @@
 
 #include "axiom/optimizer/v2/PhysicalPlanAndEmit.h"
 
+#include "axiom/optimizer/v2/Builder.h"
+#include "axiom/optimizer/v2/EmitPass.h"
+#include "axiom/optimizer/v2/Node.h"
 #include "axiom/optimizer/v2/PlanPhysicalPass.h"
 
 namespace facebook::axiom::optimizer::v2 {

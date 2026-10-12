@@ -15,6 +15,16 @@
  */
 #pragma once
 
+#include <memory>
+#include <optional>
+#include <vector>
+
+#include "axiom/sql/presto/ast/AstExpressions.h"
+#include "axiom/sql/presto/ast/AstFunctions.h"
+#include "axiom/sql/presto/ast/AstNode.h"
+#include "axiom/sql/presto/ast/AstRelations.h"
+#include "axiom/sql/presto/ast/AstStatements.h"
+#include "axiom/sql/presto/ast/AstSupport.h"
 #include "axiom/sql/presto/ast/AstVisitor.h"
 #include "velox/common/base/Exceptions.h"
 

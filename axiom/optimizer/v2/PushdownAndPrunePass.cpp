@@ -16,7 +16,20 @@
 
 #include "axiom/optimizer/v2/PushdownAndPrunePass.h"
 
+#include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/optimizer/BitSet.h"
+#include "axiom/optimizer/OptimizerSession.h"
+#include "axiom/optimizer/PlanObject.h"
+#include "axiom/optimizer/Schema.h"
+#include "axiom/optimizer/v2/Builder.h"
+#include "axiom/optimizer/v2/Node.h"
 #include "axiom/optimizer/v2/PrecomputeProjections.h"
+#include "velox/common/base/BitUtil.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/core/ExpressionEvaluator.h"
+#include "velox/core/PlanNode.h"
+#include "velox/type/Type.h"
+#include "velox/type/Variant.h"
 
 #include "axiom/optimizer/ToSubfield.h"
 #include "axiom/optimizer/v2/ColumnAccess.h"
@@ -27,8 +40,16 @@
 
 #include "axiom/optimizer/v2/TableAccessHandle.h"
 
+#include <stddef.h>
+#include <stdint.h>
+#include <algorithm>
+#include <iterator>
 #include <limits>
 #include <optional>
+#include <span>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/PlanUtils.h"
@@ -40,7 +61,12 @@
 #include "axiom/optimizer/v2/NodeRewriter.h"
 #include "axiom/optimizer/v2/NodeSimplifier.h"
 
+#include <fmt/core.h>
+#include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
+#include <folly/container/HeterogeneousAccess.h>
+#include <folly/lang/Assume.h>
+#include <folly/lang/Hint.h>
 
 namespace facebook::axiom::optimizer::v2 {
 namespace {

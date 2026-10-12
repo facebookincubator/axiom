@@ -16,10 +16,26 @@
 
 #include "axiom/optimizer/v2/PlanSubstitutions.h"
 
+#include <stddef.h>
+#include <algorithm>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "axiom/optimizer/FunctionRegistry.h"
+#include "axiom/optimizer/PlanObject.h"
+#include "axiom/optimizer/Schema.h"
+#include "axiom/optimizer/v2/Builder.h"
+#include "axiom/optimizer/v2/ExprFactory.h"
 #include "axiom/optimizer/v2/ExprSimplifier.h"
+#include "axiom/optimizer/v2/Node.h"
 #include "axiom/optimizer/v2/PrecomputeProjections.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/type/Variant.h"
 
 #include <folly/container/F14Set.h>
+#include <folly/lang/Hint.h>
 
 namespace facebook::axiom::optimizer::v2 {
 namespace {

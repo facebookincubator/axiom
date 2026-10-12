@@ -17,7 +17,15 @@
 #include <gtest/gtest.h>
 
 #include "axiom/pyspark/SparkVeloxConverter.h"
+
+#include <memory>
+#include <string>
+
+#include "axiom/pyspark/third-party/protos/expressions.pb.h"
+#include "axiom/pyspark/third-party/protos/types.pb.h"
 #include "velox/type/Type.h"
+#include "velox/type/TypeKind.h"
+#include "velox/type/Variant.h"
 
 using namespace facebook;
 

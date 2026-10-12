@@ -16,8 +16,13 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <memory>
+#include <vector>
+
 #include "arrow/api.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/memory/MemoryPool.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
 

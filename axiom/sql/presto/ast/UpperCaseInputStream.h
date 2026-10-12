@@ -15,8 +15,10 @@
  */
 #pragma once
 
+#include <ANTLRInputStream.h>
 #include <sys/types.h>
 #include <cstddef>
+#include <string_view>
 
 #include <antlr4-runtime.h>
 

@@ -16,17 +16,38 @@
 
 #include "axiom/pyspark/CollagenService.h"
 
-#include <folly/json.h>
-#include <glog/logging.h>
+#include <stdint.h>
+#include <chrono>
+#include <exception>
+#include <initializer_list>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
+#include <folly/json.h>
+#include <folly/json/json.h>
+#include <glog/logging.h>
+#include <grpcpp/support/status.h>
+#include <grpcpp/support/status_code_enum.h>
+#include <grpcpp/support/sync_stream.h>
+
+#include "arrow/buffer.h"
+#include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/optimizer/ToVelox.h"
 #include "axiom/pyspark/ArrowIpcLib.h"
 #include "axiom/pyspark/Exception.h"
 #include "axiom/pyspark/Optimizer.h"
 #include "axiom/pyspark/SparkPlanPrinter.h"
+#include "axiom/pyspark/SparkPlanVisitor.h"
 #include "axiom/pyspark/SparkToAxiom.h"
 #include "axiom/pyspark/runners/Runner.h"
+#include "gflags/gflags.h"
+#include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/memory/MemoryPool.h"
+#include "velox/core/PlanFragment.h"
+#include "velox/core/PlanNode.h"
+#include "velox/type/Type.h"
+#include "velox/vector/ComplexVector.h"
 
 using namespace ::facebook;
 using facebook::axiom::optimizer::PlanAndStats;

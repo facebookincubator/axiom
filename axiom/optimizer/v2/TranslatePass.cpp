@@ -16,18 +16,44 @@
 
 #include "axiom/optimizer/v2/TranslatePass.h"
 
+#include <stddef.h>
+#include <stdint.h>
+#include <algorithm>
+#include <compare>
+#include <functional>
+#include <iterator>
+#include <limits>
+#include <memory>
+#include <numeric>
+#include <optional>
+#include <span>
+#include <string_view>
 #include <tuple>
 #include <utility>
+#include <variant>
 
+#include <fmt/core.h>
+#include <folly/Function.h>
 #include <folly/ScopeGuard.h>
 #include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
+#include <folly/container/HeterogeneousAccess.h>
+#include <folly/lang/Assume.h>
+#include <folly/lang/Hint.h>
+#include "axiom/common/SchemaTableName.h"
+#include "axiom/connectors/ConnectorContext.h"
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/SchemaResolver.h"
+#include "axiom/logical_plan/Expr.h"
+#include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/ConstantFold.h"
 #include "axiom/optimizer/EstimateMath.h"
 #include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/MultiFragmentPlan.h"
+#include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/OptimizerSession.h"
+#include "axiom/optimizer/PlanObject.h"
 #include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/Schema.h"
@@ -37,13 +63,22 @@
 #include "axiom/optimizer/v2/ExprFactory.h"
 #include "axiom/optimizer/v2/ExprSimplifier.h"
 #include "axiom/optimizer/v2/JoinCondition.h"
+#include "axiom/optimizer/v2/Node.h"
 #include "axiom/optimizer/v2/NodeExpressions.h"
 #include "axiom/optimizer/v2/NodeSimplifier.h"
 #include "axiom/optimizer/v2/PhysicalPlanAndEmit.h"
+#include "axiom/optimizer/v2/PlanSubstitutions.h"
 #include "axiom/optimizer/v2/PrecomputeProjections.h"
 #include "axiom/optimizer/v2/TableAccessHandle.h"
+#include "velox/common/base/BitUtil.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/core/PlanNode.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
+#include "velox/type/Subfield.h"
+#include "velox/type/Type.h"
+#include "velox/type/TypeKind.h"
+#include "velox/type/Variant.h"
 
 namespace facebook::axiom::optimizer::v2 {
 namespace lp = logical_plan;

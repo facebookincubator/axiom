@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <variant>
 
 #include "velox/common/base/Exceptions.h"
 

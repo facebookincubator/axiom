@@ -18,7 +18,10 @@
 
 #include <string>
 
+#include "axiom/sql/presto/ast/AstNode.h"
 #include "axiom/sql/presto/ast/AstNodesAll.h"
+#include "axiom/sql/presto/ast/AstRelations.h"
+#include "axiom/sql/presto/ast/AstSupport.h"
 
 namespace axiom::sql::presto {
 

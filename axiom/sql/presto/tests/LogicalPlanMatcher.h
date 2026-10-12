@@ -16,10 +16,18 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <functional>
+#include <initializer_list>
+#include <memory>
+#include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 #include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "velox/parse/ExpressionsParser.h"
+#include "velox/type/Type.h"
 
 namespace facebook::axiom::logical_plan::test {
 

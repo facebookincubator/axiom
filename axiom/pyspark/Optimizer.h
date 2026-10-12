@@ -16,9 +16,12 @@
 
 #pragma once
 
+#include <string>
+
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/ToVelox.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/memory/MemoryPool.h"
 
 namespace axiom::collagen {
 

@@ -16,8 +16,14 @@
 
 #pragma once
 
+#include <span>
+#include <type_traits>
+#include <utility>
+
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/v2/Builder.h"
 #include "axiom/optimizer/v2/Node.h"
+#include "axiom/optimizer/v2/PhysicalProperties.h"
 #include "axiom/optimizer/v2/PrecomputeProjections.h"
 #include "velox/common/base/Exceptions.h"
 

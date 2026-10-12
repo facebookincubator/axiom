@@ -14,14 +14,25 @@
  * limitations under the License.
  */
 
+#include <fmt/core.h>
 #include <folly/String.h>
+#include <folly/lang/Hint.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
+#include "axiom/optimizer/v2/EstimateProvider.h"
 #include "axiom/optimizer/v2/Node.h"
 #include "axiom/optimizer/v2/NodePrinter.h"
+#include "axiom/optimizer/v2/Optimize.h"
+#include "velox/type/Type.h"
 
+#include <functional>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
 namespace facebook::axiom::optimizer::v2::test {
 namespace {
 

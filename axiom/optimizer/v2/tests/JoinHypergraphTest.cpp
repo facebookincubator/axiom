@@ -16,13 +16,36 @@
 
 #include "axiom/optimizer/v2/JoinHypergraph.h"
 
+#include <stddef.h>
+#include <stdint.h>
 #include <array>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
+#include <fmt/core.h>
+#include <folly/container/F14Set.h>
+#include <folly/lang/Hint.h>
+
+#include "axiom/optimizer/BitSet.h"
+#include "axiom/optimizer/PlanObject.h"
+#include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/v2/Builder.h"
 #include "axiom/optimizer/v2/EstimateProvider.h"
 #include "axiom/optimizer/v2/HypergraphBuilder.h"
+#include "axiom/optimizer/v2/JoinCluster.h"
+#include "axiom/optimizer/v2/JoinEdge.h"
+#include "axiom/optimizer/v2/Node.h"
+#include "axiom/optimizer/v2/RelationSet.h"
 #include "axiom/optimizer/v2/tests/UnitTestBase.h"
+#include "gtest/gtest.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/PlanNode.h"
+#include "velox/type/Type.h"
 
 namespace facebook::axiom::optimizer::v2::test {
 namespace {

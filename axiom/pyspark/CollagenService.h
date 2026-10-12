@@ -17,11 +17,16 @@
 #pragma once
 
 #include <folly/io/async/AsyncSignalHandler.h>
+#include <folly/io/async/EventBase.h>
+#include <glog/logging.h>
 #include <grpcpp/grpcpp.h> // @manual=//grpc_fb/cpp:grpc
 #include <signal.h>
+#include <memory>
+#include <ostream>
 #include <string>
 
 #include "axiom/pyspark/third-party/protos/base.grpc.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
+#include "axiom/pyspark/third-party/protos/base.pb.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryPool.h"
 

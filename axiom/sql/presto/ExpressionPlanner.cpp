@@ -16,19 +16,33 @@
 
 #include "axiom/sql/presto/ExpressionPlanner.h"
 
+#include <fmt/core.h>
+#include <folly/ConstexprMath.h>
+#include <folly/Conv.h>
 #include <folly/ScopeGuard.h>
 #include <folly/String.h>
+#include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
+#include <folly/lang/Assume.h>
 
+#include <stdlib.h>
 #include <algorithm>
 #include <cctype>
 #include <limits>
+#include <string_view>
 
 #include "axiom/common/SchemaTypeName.h"
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/logical_plan/Expr.h"
+#include "axiom/logical_plan/ExprApi.h"
 #include "axiom/sql/presto/GroupByPlanner.h"
+#include "axiom/sql/presto/ParserOptions.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/SpecialAggregates.h"
 #include "axiom/sql/presto/ast/DefaultTraversalVisitor.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Status.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/functions/prestosql/types/BigintEnumType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
@@ -36,7 +50,11 @@
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/VarcharEnumType.h"
 #include "velox/parse/Expressions.h"
+#include "velox/type/SimpleFunctionTags.h"
 #include "velox/type/Time.h"
+#include "velox/type/TimestampConversion.h"
+#include "velox/type/TypeKind.h"
+#include "velox/type/Variant.h"
 
 namespace axiom::sql::presto {
 

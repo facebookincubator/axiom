@@ -16,12 +16,26 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include <folly/container/F14Map.h>
+#include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/json/dynamic.h>
 
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/session/BaseSession.h"
+#include "velox/common/memory/MemoryPool.h"
 #include "velox/connectors/Connector.h"
+#include "velox/core/PlanNode.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/vector/ComplexVector.h"
 
 namespace facebook::axiom::runner {
 

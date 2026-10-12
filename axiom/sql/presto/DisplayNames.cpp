@@ -16,6 +16,12 @@
 
 #include "axiom/sql/presto/DisplayNames.h"
 
+#include <memory>
+
+#include <folly/container/F14Map.h>
+
+#include "axiom/logical_plan/PlanBuilder.h"
+#include "axiom/sql/presto/ast/AstNode.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace axiom::sql::presto {

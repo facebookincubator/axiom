@@ -16,12 +16,25 @@
 
 #pragma once
 
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+
 #include <folly/container/F14Map.h>
+#include <folly/lang/Hint.h>
 #include "axiom/common/CatalogSchemaTableName.h"
 #include "axiom/common/Enums.h"
 #include "axiom/common/SchemaProcedureName.h"
+#include "axiom/common/SchemaTableName.h"
+#include "axiom/logical_plan/Expr.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/logical_plan/ReferencedTables.h"
+#include "velox/type/Type.h"
 #include "velox/type/Variant.h"
 
 namespace facebook::axiom::connector {

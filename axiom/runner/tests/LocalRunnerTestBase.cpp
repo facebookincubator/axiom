@@ -15,13 +15,33 @@
  */
 
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
+
+#include <unordered_map>
+#include <utility>
+
+#include <fmt/core.h>
+#include <folly/ConstexprMath.h>
+#include <folly/lang/Assume.h>
+#include <folly/lang/Hint.h>
+
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/hive/LocalTableMetadata.h"
+#include "velox/common/caching/AsyncDataCache.h"
+#include "velox/common/config/Config.h"
+#include "velox/common/file/FileSystems.h"
+#include "velox/common/memory/Memory.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/core/QueryConfig.h"
+#include "velox/dwio/common/Options.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
+#include "velox/exec/ExchangeSource.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 
 namespace facebook::axiom::runner::test {

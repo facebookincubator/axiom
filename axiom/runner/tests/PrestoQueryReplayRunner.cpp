@@ -15,11 +15,36 @@
  */
 
 #include "axiom/runner/tests/PrestoQueryReplayRunner.h"
+
+#include <algorithm>
+#include <atomic>
+#include <exception>
+#include <functional>
+#include <ostream>
+
+#include <fmt/core.h>
+#include <folly/container/F14Set.h>
+#include <folly/container/HeterogeneousAccess.h>
 #include <folly/coro/BlockingWait.h>
+#include <folly/json/json.h>
+#include <folly/lang/Assume.h>
+#include <folly/lang/Hint.h>
+#include <glog/logging.h>
 #include "axiom/connectors/tests/TestConnectorContext.h"
+#include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/runner/LocalRunner.h"
+#include "axiom/runner/RunnerSession.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/caching/AsyncDataCache.h"
+#include "velox/common/config/Config.h"
+#include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/core/PlanFragment.h"
+#include "velox/core/QueryConfig.h"
+#include "velox/core/QueryCtx.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/parse/PlanNodeIdGenerator.h"
+#include "velox/vector/BaseVector.h"
 
 namespace facebook::axiom::runner {
 namespace {

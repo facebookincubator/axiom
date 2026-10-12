@@ -15,8 +15,13 @@
  */
 #include "axiom/sql/presto/SpecialAggregates.h"
 
+#include <stddef.h>
 #include <array>
 #include <cctype>
+#include <iterator>
+#include <utility>
+
+#include "axiom/logical_plan/Expr.h"
 
 namespace axiom::sql::presto {
 

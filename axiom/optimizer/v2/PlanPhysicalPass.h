@@ -16,9 +16,12 @@
 
 #pragma once
 
+#include <stdint.h>
+
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/v2/Builder.h"
 #include "axiom/optimizer/v2/Node.h"
+#include "velox/core/ExpressionEvaluator.h"
 
 namespace facebook::velox::core {
 class ExpressionEvaluator;

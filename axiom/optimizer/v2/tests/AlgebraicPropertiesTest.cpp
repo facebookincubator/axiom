@@ -15,12 +15,15 @@
  */
 
 #include <array>
+#include <string>
+#include <string_view>
 
 #include <fmt/core.h>
 #include <gtest/gtest.h>
 
 #include "axiom/optimizer/v2/AlgebraicProperties.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/PlanNode.h"
 
 namespace facebook::axiom::optimizer::v2::test {
 namespace {

@@ -15,15 +15,32 @@
  */
 
 #include "axiom/sql/presto/GroupByPlanner.h"
+#include <algorithm>
+#include <iterator>
 #include <set>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include "axiom/logical_plan/ExprApi.h"
+#include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/sql/presto/ColumnsExpansion.h"
+#include "axiom/sql/presto/ExpressionPlanner.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/SortProjection.h"
 #include "axiom/sql/presto/SpecialAggregates.h"
+#include "axiom/sql/presto/ast/AstExpressions.h"
+#include "axiom/sql/presto/ast/AstFunctions.h"
+#include "axiom/sql/presto/ast/AstLiterals.h"
 #include "axiom/sql/presto/ast/DefaultTraversalVisitor.h"
+#include "folly/CppAttributes.h"
+#include "folly/container/F14Map.h"
 #include "folly/container/F14Set.h"
-#include "velox/common/base/BitUtil.h"
+#include "folly/lang/Assume.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/exec/Aggregate.h"
+#include "velox/parse/Expressions.h"
+#include "velox/parse/IExpr.h"
+#include "velox/type/Variant.h"
 
 namespace axiom::sql::presto {
 

@@ -16,8 +16,11 @@
 
 #pragma once
 
+#include <string>
+
 #include "axiom/pyspark/SparkPlanVisitor.h"
 #include "axiom/pyspark/third-party/protos/base.grpc.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
+#include "axiom/pyspark/third-party/protos/base.pb.h"
 
 namespace axiom::collagen {
 

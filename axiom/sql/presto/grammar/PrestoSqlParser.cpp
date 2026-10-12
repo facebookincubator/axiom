@@ -21,6 +21,32 @@
 
 #include "PrestoSqlParser.h"
 
+#include <assert.h>
+#include <stdint.h>
+#include <any>
+#include <exception>
+#include <memory>
+#include <utility>
+
+#include <ANTLRErrorStrategy.h>
+#include <FailedPredicateException.h>
+#include <NoViableAltException.h>
+#include <RecognitionException.h>
+#include <RuleContext.h>
+#include <Vocabulary.h>
+#include <atn/ATN.h>
+#include <atn/ATNDeserializer.h>
+#include <atn/ATNSimulator.h>
+#include <atn/ParserATNSimulator.h>
+#include <atn/PredictionContextCache.h>
+#include <atn/SerializedATNView.h>
+#include <dfa/DFA.h>
+#include <support/CPPUtils.h>
+#include <support/Casts.h>
+#include <tree/ParseTree.h>
+#include <tree/ParseTreeListener.h>
+#include <tree/ParseTreeVisitor.h>
+
 using namespace antlrcpp;
 
 using namespace antlr4;

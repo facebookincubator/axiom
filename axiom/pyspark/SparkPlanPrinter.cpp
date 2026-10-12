@@ -16,8 +16,20 @@
 
 #include "axiom/pyspark/SparkPlanPrinter.h"
 
+#include <stdint.h>
+#include <memory>
 #include <sstream>
+#include <string_view>
+
+#include <google/protobuf/repeated_ptr_field.h>
+
+#include "axiom/pyspark/Exception.h"
+#include "axiom/pyspark/SparkPlanVisitor.h"
 #include "axiom/pyspark/SparkVeloxConverter.h"
+#include "axiom/pyspark/third-party/protos/commands.pb.h"
+#include "axiom/pyspark/third-party/protos/expressions.pb.h"
+#include "axiom/pyspark/third-party/protos/relations.pb.h"
+#include "velox/type/Variant.h"
 
 namespace axiom::collagen {
 namespace {

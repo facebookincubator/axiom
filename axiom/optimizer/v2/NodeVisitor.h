@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <span>
+
 #include "axiom/optimizer/v2/Node.h"
 
 namespace facebook::axiom::optimizer::v2 {

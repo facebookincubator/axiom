@@ -14,11 +14,33 @@
  * limitations under the License.
  */
 
+#include <fmt/core.h>
 #include <fmt/format.h>
+#include <folly/Conv.h>
+#include <folly/ScopeGuard.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <limits>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+#include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/logical_plan/Expr.h"
+#include "axiom/logical_plan/ExprApi.h"
+#include "axiom/logical_plan/LogicalPlanNode.h"
+#include "axiom/sql/presto/ParserOptions.h"
+#include "axiom/sql/presto/PrestoParser.h"
+#include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "axiom/sql/presto/tests/ExprMatcher.h"
+#include "axiom/sql/presto/tests/LogicalPlanMatcher.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/expression/FunctionSignature.h"
+#include "velox/expression/rpc/AsyncRPCFunction.h"
 #include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
 #include "velox/functions/prestosql/types/QDigestRegistration.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
@@ -27,6 +49,9 @@
 #include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/parse/ExpressionsParser.h"
+#include "velox/type/Type.h"
+#include "velox/type/TypeKind.h"
+#include "velox/type/Variant.h"
 
 namespace axiom::sql::presto::test {
 

@@ -16,9 +16,19 @@
 
 #include "axiom/optimizer/v2/PhysicalProperties.h"
 
-#include <folly/container/F14Map.h>
+#include <stddef.h>
+#include <string_view>
+#include <vector>
 
+#include <folly/container/F14Map.h>
+#include <folly/lang/Hint.h>
+
+#include "axiom/common/Enums.h"
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/optimizer/PlanObject.h"
+#include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/Schema.h"
+#include "velox/common/base/Exceptions.h"
 
 namespace facebook::axiom::optimizer::v2 {
 

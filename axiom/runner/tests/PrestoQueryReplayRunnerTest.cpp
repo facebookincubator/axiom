@@ -16,11 +16,41 @@
 
 #include "axiom/runner/tests/PrestoQueryReplayRunner.h"
 
+#include <stdint.h>
+#include <string.h>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#include <boost/smart_ptr/intrusive_ptr.hpp>
+#include <fmt/core.h>
+#include <folly/Conv.h>
+#include <folly/String.h>
+
+#include "gtest/gtest.h"
+#include "velox/buffer/Buffer.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Nulls.h"
+#include "velox/common/file/FileSystems.h"
+#include "velox/common/memory/Memory.h"
+#include "velox/common/memory/MemoryPool.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/core/ITypedExpr.h"
+#include "velox/core/PlanNode.h"
+#include "velox/exec/ExchangeSource.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/type/Type.h"
+#include "velox/type/TypeKind.h"
+#include "velox/vector/ComplexVector.h"
+#include "xsimd/arch/xsimd_avx.hpp"
+#include "xsimd/types/xsimd_api.hpp"
 
 using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::exec::test;

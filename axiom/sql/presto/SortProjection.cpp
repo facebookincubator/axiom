@@ -15,7 +15,18 @@
  */
 #include "axiom/sql/presto/SortProjection.h"
 
+#include <optional>
+#include <string>
+#include <utility>
+
+#include "axiom/logical_plan/ExprApi.h"
+#include "axiom/logical_plan/PlanBuilder.h"
+#include "axiom/sql/presto/ast/AstSupport.h"
 #include "folly/container/F14Set.h"
+#include "folly/container/HeterogeneousAccess.h"
+#include "folly/lang/Assume.h"
+#include "folly/lang/Hint.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/parse/IExpr.h"
 
 namespace axiom::sql::presto {

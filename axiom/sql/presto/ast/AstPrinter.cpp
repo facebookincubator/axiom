@@ -15,8 +15,22 @@
  */
 
 #include "axiom/sql/presto/ast/AstPrinter.h"
+
+#include <stddef.h>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include <fmt/core.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
+#include "axiom/sql/presto/ast/AstExpressions.h"
+#include "axiom/sql/presto/ast/AstFunctions.h"
+#include "axiom/sql/presto/ast/AstLiterals.h"
+#include "axiom/sql/presto/ast/AstNode.h"
+#include "axiom/sql/presto/ast/AstRelations.h"
+#include "axiom/sql/presto/ast/AstStatements.h"
+#include "axiom/sql/presto/ast/AstSupport.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace axiom::sql::presto {

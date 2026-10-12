@@ -16,9 +16,24 @@
 
 #include "axiom/sql/presto/ColumnsExpansion.h"
 
+#include <stddef.h>
+#include <iterator>
+#include <memory>
+#include <string_view>
+#include <unordered_map>
+#include <utility>
+
 #include <re2/re2.h>
+#include "axiom/logical_plan/ExprApi.h"
+#include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
+#include "axiom/sql/presto/ast/AstNode.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/parse/Expressions.h"
+#include "velox/parse/IExpr.h"
+#include "velox/type/Type.h"
+#include "velox/type/TypeKind.h"
+#include "velox/type/Variant.h"
 
 namespace axiom::sql::presto {
 

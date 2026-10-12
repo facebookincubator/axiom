@@ -16,8 +16,21 @@
 
 #include "axiom/optimizer/v2/PrecomputeProjections.h"
 
+#include <stddef.h>
+#include <algorithm>
+#include <string>
+#include <vector>
+
+#include <folly/container/HeterogeneousAccess.h>
+
+#include "axiom/optimizer/PlanObject.h"
+#include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/v2/Builder.h"
 #include "axiom/optimizer/v2/ExprFactory.h"
 #include "axiom/optimizer/v2/ExprSimplifier.h"
+#include "axiom/optimizer/v2/Node.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/type/Type.h"
 
 namespace facebook::axiom::optimizer::v2 {
 

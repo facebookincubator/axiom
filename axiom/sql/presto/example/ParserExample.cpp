@@ -14,10 +14,16 @@
  * limitations under the License.
  */
 
+#include <CommonTokenStream.h>
 #include <folly/init/Init.h>
+#include <any>
 #include <iostream>
+#include <memory>
+#include <string>
+#include "axiom/sql/presto/ParserOptions.h"
 #include "axiom/sql/presto/ast/AstBuilder.h"
 #include "axiom/sql/presto/ast/AstPrinter.h"
+#include "axiom/sql/presto/ast/AstRelations.h"
 #include "axiom/sql/presto/ast/UpperCaseInputStream.h"
 #include "axiom/sql/presto/grammar/PrestoSqlLexer.h"
 #include "axiom/sql/presto/grammar/PrestoSqlParser.h"

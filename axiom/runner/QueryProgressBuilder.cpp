@@ -16,10 +16,20 @@
 
 #include "axiom/runner/QueryProgressBuilder.h"
 
+#include <stddef.h>
+#include <string>
+#include <unordered_map>
+#include <utility>
+
 #include <folly/container/F14Map.h>
+#include <folly/container/HeterogeneousAccess.h>
+#include <folly/lang/Hint.h>
 
 #include "axiom/optimizer/MultiFragmentPlan.h"
+#include "axiom/runner/QueryProgress.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/RuntimeMetrics.h"
+#include "velox/exec/OperatorStats.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/TaskStats.h"
 

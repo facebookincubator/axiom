@@ -16,6 +16,7 @@
 #pragma once
 
 #include <iostream>
+#include <string_view>
 
 #include "axiom/sql/presto/ast/AstExpressions.h"
 #include "axiom/sql/presto/ast/AstFunctions.h"

@@ -14,21 +14,56 @@
  * limitations under the License.
  */
 
+#include <boost/smart_ptr/intrusive_ptr.hpp>
+#include <fmt/compile.h>
+#include <fmt/core.h>
+#include <folly/Conv.h>
 #include <folly/String.h>
+#include <folly/container/F14Map.h>
+#include <folly/container/HeterogeneousAccess.h>
+#include <folly/lang/Assume.h>
+#include <folly/lang/Hint.h>
+#include <glog/logging.h>
+#include <google/protobuf/repeated_ptr_field.h>
+#include <stdint.h>
+#include <string.h>
+#include <algorithm>
+#include <iterator>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <ostream>
 #include <string>
+#include <string_view>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
+#include "arrow/buffer.h"
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/logical_plan/ExprPrinter.h"
+#include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/pyspark/ArrowIpcLib.h"
 #include "axiom/pyspark/Exception.h"
+#include "axiom/pyspark/SparkPlanVisitor.h"
 #include "axiom/pyspark/SparkToAxiom.h"
 #include "axiom/pyspark/SparkVeloxConverter.h"
+#include "axiom/pyspark/third-party/protos/commands.pb.h"
+#include "axiom/pyspark/third-party/protos/expressions.pb.h"
+#include "axiom/pyspark/third-party/protos/relations.pb.h"
+#include "velox/buffer/Buffer.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
+#include "velox/expression/FunctionSignature.h"
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/type/Type.h"
+#include "velox/type/TypeCoercer.h"
+#include "velox/type/TypeKind.h"
+#include "velox/type/Variant.h"
+#include "velox/vector/BaseVector.h"
+#include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
 
 using namespace facebook;

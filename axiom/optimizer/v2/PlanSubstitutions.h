@@ -16,8 +16,13 @@
 
 #pragma once
 
+#include <folly/container/HeterogeneousAccess.h>
+
+#include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/v2/Builder.h"
 #include "axiom/optimizer/v2/ExprFactory.h"
+#include "axiom/optimizer/v2/Node.h"
 
 namespace facebook::axiom::optimizer::v2 {
 

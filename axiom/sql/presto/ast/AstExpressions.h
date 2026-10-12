@@ -15,7 +15,13 @@
  */
 #pragma once
 
+#include <folly/String.h>
 #include <folly/hash/Hash.h>
+#include <stddef.h>
+#include <functional>
+#include <memory>
+#include <string>
+#include <string_view>
 #include <vector>
 #include "axiom/sql/presto/ast/AstNode.h"
 
