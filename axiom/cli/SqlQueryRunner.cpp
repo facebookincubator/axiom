@@ -28,7 +28,6 @@
 #include <folly/coro/Task.h>
 #include <folly/coro/WithCancellation.h>
 #include <folly/json.h>
-#include <folly/system/HardwareConcurrency.h>
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -1386,10 +1385,6 @@ SqlQueryRunner::co_runUnchecked(
 
 std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
     const RunOptions& options) {
-  executor_ = std::make_shared<folly::CPUThreadPoolExecutor>(std::max<int32_t>(
-      folly::available_concurrency() * 2,
-      options.numWorkers * options.numDrivers * 2 + 2));
-
   const auto queryId =
       options.queryId.value_or(fmt::format("query_{}", ++queryCounter_));
 
