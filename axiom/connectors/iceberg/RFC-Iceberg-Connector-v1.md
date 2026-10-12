@@ -55,7 +55,10 @@ support, and an interface-oriented design for `Catalog`, `FileIO`, file formats,
 and related extension points. The same documentation calls out REST catalog
 support, Arrow-native data APIs, and built-in Parquet and Avro readers and
 writers. The connector should therefore use iceberg-cpp as the Iceberg semantic
-layer wherever the public API already exposes the required behavior.
+layer wherever the public API already exposes the required behavior. The library
+itself builds as C++23, but it can be built so that its public headers are
+consumable from C++20, which is what lets Axiom's C++20 code call it directly;
+see Dependency and Build Strategy.
 
 The relevant public API concepts are:
 
@@ -74,14 +77,22 @@ The relevant public API concepts are:
   support non-REST catalogs in later phases.
 
 The rule that follows: don't build a second Iceberg object model next to
-iceberg-cpp's. Keep a thin adapter boundary, and inside it work with
-iceberg-cpp's own objects. The adapter can hand out the small descriptors the
-rest of Axiom actually needs: table and namespace names, column descriptors with
-field IDs and Velox types, table identity (metadata location, snapshot/schema/spec
-IDs), and scan-task descriptors for building Velox splits. Those descriptors have
-to stay thin. The moment they start standing in for iceberg-cpp's catalog, table,
-scan, expression, or FileIO contracts, the boundary has failed and Axiom is
-maintaining a parallel Iceberg implementation.
+iceberg-cpp's. Connector code holds and passes iceberg-cpp's own objects: the
+`Catalog`, the loaded `Table`, its `Schema` and `PartitionSpec`s, the
+`Expression`s it builds for pruning, and the planned `FileScanTask`s. Axiom-side
+types appear only at the two edges where another contract takes over:
+
+* Toward the optimizer, a loaded table becomes the Axiom `Table`, `Column`, and
+  `TableLayout` objects that `ConnectorMetadata` requires.
+* Toward execution, a schema field becomes a Velox `IcebergColumnHandle` and a
+  scan task becomes a Velox `HiveIcebergSplit`.
+
+Each is a one-way translation into an interface Axiom or Velox already defines.
+Nothing sits between those translations and iceberg-cpp: no descriptor structs
+that restate a table, a scan task, a delete file, or an expression in Axiom
+terms. A layer like that would stand in for iceberg-cpp's catalog, table, scan,
+expression, or FileIO contracts, and Axiom would be maintaining a parallel
+Iceberg implementation.
 
 Velox already contains an Iceberg connector under
 `velox/velox/connectors/hive/iceberg`. Its runtime surface is well suited for
@@ -257,7 +268,6 @@ connector. Phase 1 therefore uses this compatibility baseline:
 graph LR
     SQL["Axiom SQL and optimizer"]
     Metadata["Axiom IcebergConnectorMetadata"]
-    Adapter["Axiom iceberg-cpp adapter (C++23)"]
     Catalog["iceberg-cpp Catalog (REST in Phase 1)"]
     Table["iceberg-cpp Table / TableMetadata"]
     Scan["iceberg-cpp TableScan / FileScanTask"]
@@ -266,8 +276,7 @@ graph LR
     Files["Object store / filesystem data and delete files"]
 
     SQL --> Metadata
-    Metadata --> Adapter
-    Adapter --> Catalog
+    Metadata --> Catalog
     Catalog --> Table
     Table --> Scan
     Scan --> Splits
@@ -277,7 +286,7 @@ graph LR
 
 The connector is split into three concerns:
 
-1. Iceberg semantics: iceberg-cpp public APIs behind an Axiom C++23 adapter.
+1. Iceberg semantics: iceberg-cpp public APIs, called directly by the connector.
 2. Axiom planning: connector metadata, table layouts, handles, and split
    sources.
 3. Execution: Velox Iceberg connector backed by Velox's Hive file readers.
@@ -345,7 +354,7 @@ Internally these should be converted to iceberg-cpp catalog properties and used
 to create an `iceberg::Catalog`. For REST, that means building
 `iceberg::rest::RestCatalogProperties`, creating `iceberg::rest::RestCatalog`,
 and calling `AsCatalog()` to get the generic catalog interface used by the rest
-of the adapter.
+of the connector.
 
 The RFC recommends keeping Axiom-facing REST properties under the
 `iceberg.rest-catalog.*` prefix and mapping only supported authentication
@@ -374,7 +383,7 @@ Add `IcebergConnectorMetadata`, deriving from `ConnectorMetadata`. It owns or
 references:
 
 * The Velox `IcebergConnector`.
-* An Axiom iceberg-cpp adapter backed by `iceberg::Catalog`.
+* The `iceberg::Catalog` created from the catalog properties.
 * A table cache keyed by `SchemaTableName`.
 * Connector configuration and authentication properties.
 * Optional metadata refresh/cache controls.
@@ -400,8 +409,7 @@ The main API mapping is:
 
 The table object should retain enough Iceberg context for split planning:
 
-* Adapter-managed `std::shared_ptr<iceberg::Table>` identity or an opaque table
-  reference.
+* The loaded `std::shared_ptr<iceberg::Table>`.
 * Current snapshot ID used for the table instance.
 * Current schema ID and partition spec ID.
 * Field-ID mapping from Iceberg schema fields to Velox column handles.
@@ -413,12 +421,14 @@ could disagree. Pinning the snapshot ID at `findTable` and threading it through
 the table handle keeps a query reading one consistent table state even if the
 catalog advances the table concurrently.
 
-For this invariant to hold, the adapter's planning and statistics entry points
-must take the pinned snapshot id (or an opaque pinned table reference), not just a
-table name and filters. An entry point that re-resolves the current snapshot at
-plan time can let split planning and statistics land on different snapshots
-within one query. A test should assert that the stats and splits for a single
-query resolve to the same snapshot id.
+For this invariant to hold, the connector's planning and statistics entry points
+must take the loaded `iceberg::Table` together with the pinned snapshot id, not
+just a table name and filters, and every scan they build must select that
+snapshot with `TableScanBuilder::UseSnapshot`. An entry point that reloads the
+table, or lets a scan default to the current snapshot at plan time, can let
+split planning and statistics land on different snapshots within one query. A
+test should assert that the stats and splits for a single query resolve to the
+same snapshot id.
 
 ### Table and Layout Model
 
@@ -1118,8 +1128,7 @@ open every planned file.
 
 iceberg-cpp exposes `FileIO` as a public extension point, and the bundled build
 (`iceberg_bundle`) can use Arrow-backed file systems. Axiom should use that API
-directly inside the adapter instead of inventing an Iceberg metadata-file
-reader.
+directly instead of inventing an Iceberg metadata-file reader.
 
 For v1, supported storage backends should be explicitly enumerated in
 documentation and tests. The stock S3 filesystem path does not automatically
@@ -1370,17 +1379,66 @@ cache and affinity routing to the milestone that adds them.
 
 ### Dependency and Build Strategy
 
-Current Axiom and Velox build with C++20. iceberg-cpp's getting-started guide
-requires a C++23 compiler and CMake 3.25+ or Meson 1.5+, so the connector should
-use an adapter boundary rather than move the whole Axiom build to C++23.
+Axiom and Velox build as C++20; iceberg-cpp builds as C++23. The connector
+includes iceberg-cpp's public headers and uses its types directly from ordinary
+C++20 translation units. It has no adapter target, no per-file language-standard
+override, and no rule about which Axiom headers may mention an iceberg-cpp type.
 
-The production connector should keep C++23 types and iceberg-cpp headers out of
-Axiom's existing connector, planner, and Velox-facing code. A small
-iceberg-cpp-backed adapter target should compile as C++23, link the selected
-iceberg-cpp libraries, and expose only plain C++20-compatible types to the rest
-of Axiom: namespace names, table identifiers, schemas with field IDs, snapshot
-metadata, planned data and delete files, residual filter descriptions, and scan
-metrics.
+This rests on iceberg-cpp's C++20 compatibility mode, added upstream in
+apache/iceberg-cpp#936. A library built with `ICEBERG_CXX20_COMPAT=ON` installs
+public headers that a C++20 consumer can include and use, while the library's
+own sources still compile as C++23. The piece that matters most is `Result<T>`,
+the return type of nearly every catalog, table, and scan call: it is
+`iceberg::expected`, a backport of `std::expected` that iceberg-cpp vendors, so
+it no longer pulls C++23 into every caller.
+
+What the Axiom build has to get right:
+
+* **Build iceberg-cpp in compatibility mode.** The mode is fixed when the
+  library is built and recorded in the installed package. Its headers stop with
+  an `#error` naming the option when a C++20 translation unit includes a
+  default-mode package, and its CMake package config exports
+  `ICEBERG_CXX20_COMPAT`. Axiom's dependency resolution should check that
+  variable and fail at configure time, which is earlier and clearer than the
+  first compile error.
+* **Use one installation.** The two modes define some public classes
+  differently, so headers and libraries must come from the same installation,
+  and a default-mode and a compatibility-mode package must not be mixed in one
+  program.
+* **Pin a revision that has the mode.** #936 merged on 2026-10-09 as commit
+  `dab8664f`, after the v0.4.0 release. The connector pins a commit at or after
+  it until a release contains the change. iceberg-cpp is pre-1.0 and its public
+  headers still change between commits, and it is on the correctness path for
+  catalog access, scan planning, and delete applicability. Moving the pin is
+  therefore a deliberate change that fixes any source breaks and reruns the
+  connector's fixture tests.
+* **Keep the connector opt-in.** Axiom's own sources need nothing beyond C++20,
+  but an Iceberg-enabled build asks more of the toolchain in two places.
+  Building iceberg-cpp itself needs a C++23 compiler (upstream documents GCC 14+
+  or Clang 18+), and its C++20 headers use C++20 library features such as
+  `std::format`, which the standard library must provide. The connector is
+  therefore built only when a CMake option enables it
+  (`AXIOM_ENABLE_ICEBERG_CPP`, off by default), and a build without it keeps
+  Axiom's existing compiler floor.
+
+Upstream guards the C++20 surface itself. Its CI compiles every public header as
+C++20 and builds and links a C++20 example against an installed compatibility
+package, so a header that stops compiling as C++20 fails there before it can
+reach Axiom's pin.
+
+Compatibility mode has one API difference worth knowing. Setters inherited from
+a builder base class return a reference to the base class instead of the derived
+type, so a derived-specific call cannot be chained after one and has to be made
+as a separate statement. The classes this touches in practice are the
+`SnapshotUpdate` family on the write path, which Phase 1 does not use.
+`TableScanBuilder`'s own setters return `TableScanBuilder&` in both modes, so
+read-path scan construction chains as usual.
+
+iceberg-cpp reports failures through `Result<T>` return values, not exceptions,
+and with no adapter in between those values reach connector code at every call.
+The connector converts a failed result into a Velox exception at the call site,
+naming the operation that failed, so Iceberg errors surface like any other
+connector error and no `Result<T>` crosses into Axiom's connector interfaces.
 
 ### Error Handling
 
@@ -1405,11 +1463,11 @@ blocked the operation.
 
 ### Reimplement REST, Metadata Parsing, and Manifest Planning in Axiom
 
-This would avoid an external dependency and the C++23 build concern, but it
-would duplicate a large amount of Iceberg behavior: REST protocol handling,
-metadata JSON parsing, snapshot resolution, manifest list reading, partition
-spec evolution, delete-file applicability, and residual filters. This is not
-recommended.
+This would avoid an external dependency and the C++23 compiler needed to build
+it, but it would duplicate a large amount of Iceberg behavior: REST protocol
+handling, metadata JSON parsing, snapshot resolution, manifest list reading,
+partition spec evolution, delete-file applicability, and residual filters. This
+is not recommended.
 
 ### Use Velox Iceberg Connector Alone
 
@@ -1425,6 +1483,27 @@ execution already uses Velox vectors and Velox readers. Replacing Velox's
 Iceberg reader in v1 would increase risk and duplicate integration work. It
 may be worth revisiting only if Velox lacks required Iceberg semantics.
 
+### Isolate iceberg-cpp Behind a C++23 Adapter
+
+An earlier revision of this RFC proposed a small adapter target, compiled as
+C++23, that linked iceberg-cpp and exposed only plain C++20 types to the rest of
+Axiom. It followed from iceberg-cpp's public headers requiring C++23
+(apache/iceberg-cpp#928): no C++20 translation unit, and so no Axiom header,
+could include one, and the alternative was moving all of Axiom to C++23.
+
+Its cost is the one Background warns against. With every iceberg-cpp type
+hidden, each table, schema, scan task, delete file, and expression has to be
+restated as an Axiom descriptor, and the descriptor set grows with every Iceberg
+feature the connector exposes. That is a second Iceberg object model by
+construction. It also splits the connector across two language standards, with
+per-file compiler settings and a rule about which headers may include which.
+
+A middle path was to carry a local patch that made the pinned revision's public
+headers compile as C++20. That removed the adapter but left Axiom rebasing the
+patch whenever upstream touched those headers. The upstream compatibility mode
+described in Dependency and Build Strategy makes both unnecessary, so neither is
+proposed.
+
 ## Adoption Plan
 
 The Iceberg connector should be introduced behind a new catalog configuration.
@@ -1438,14 +1517,14 @@ Initial user-facing behavior:
 * Unsupported features fail clearly.
 * Writes and DDL fail with clear errors until write support is implemented.
 
-Write support is a separate future phase. It should reuse the iceberg-cpp
-adapter and table metadata model, but it needs its own connector contract for
-data-file generation, file metrics, manifest writes, snapshot commits,
-optimistic concurrency, cleanup, and failure recovery. It should start with
-append-style writes (`INSERT`, `CREATE TABLE AS SELECT`) before row-level
-mutations. The Phase 1 implementation should avoid API names, comments, and
-class boundaries that make writes look permanently excluded; it should simply
-leave write hooks unimplemented until the write design is ready.
+Write support is a separate future phase. It should reuse the same iceberg-cpp
+catalog and table objects and the Axiom table model built on them, but it needs
+its own connector contract for data-file generation, file metrics, manifest
+writes, snapshot commits, optimistic concurrency, cleanup, and failure recovery.
+It should start with append-style writes (`INSERT`, `CREATE TABLE AS SELECT`)
+before row-level mutations. The Phase 1 implementation should avoid API names,
+comments, and class boundaries that make writes look permanently excluded; it
+should simply leave write hooks unimplemented until the write design is ready.
 
 Documentation should cover:
 
@@ -1642,6 +1721,9 @@ Manual validation:
   https://cpp.iceberg.apache.org/getting-started/
 * Apache Iceberg C++ API documentation:
   https://cpp.iceberg.apache.org/api/
+* Apache Iceberg C++ public headers consumable as C++20:
+  https://github.com/apache/iceberg-cpp/pull/936 (resolves
+  https://github.com/apache/iceberg-cpp/issues/928)
 * Apache Iceberg C++ SQL catalog documentation:
   https://cpp.iceberg.apache.org/sql-catalog/
 * Apache Iceberg implementation status:
