@@ -218,6 +218,15 @@ FROM first_rows
 LEFT JOIN partition_counts
   ON partition_counts.partition_key = first_rows.a % 2
 ----
+-- Filters below and above a window can read the expression a LIMIT orders by.
+SELECT a, rn
+FROM (
+  SELECT a, row_number() OVER (PARTITION BY b) AS rn
+  FROM (SELECT a, b FROM t ORDER BY a + 1 LIMIT 3)
+  WHERE a + 1 > 1
+)
+WHERE a + 1 > rn
+----
 -- RANGE frame with a CURRENT ROW bound and no ORDER BY.
 SELECT a, b, sum(b) OVER (PARTITION BY a RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS s FROM t
 ----

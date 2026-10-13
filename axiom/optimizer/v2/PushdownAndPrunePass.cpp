@@ -76,6 +76,11 @@ struct PushdownContext {
   // never drops one that is.
   PlanObjectSet requiredAbove;
 
+  // Expressions the consumers above evaluate over this node's output, set when
+  // every consumer on the path lists them. Narrowing keeps what they read once
+  // the replacements from below apply.
+  std::optional<ExprVector> reads;
+
   // Per-partition row cap implied by a `Limit` or `TopN` directly above a
   // ranking `Window`: it keeps at most `offset + count` rows overall, so no
   // partition can contribute more than that many. Set only for that immediate
@@ -95,8 +100,8 @@ struct PushdownContext {
   // other output rows read the removed rows. Never inserted into the plan.
   PlanObjectSet nonNullColumns;
 
-  // Expression identities established by joins in this subtree. A parent
-  // applies them while rebuilding on the way back up.
+  // Expression identities established in this subtree. A parent applies them
+  // while rebuilding on the way back up.
   PlanSubstitutions outputSubstitutions;
 };
 
@@ -875,11 +880,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     if (!node->emitsInputColumns()) {
       return node;
     }
-    // A required column may have been replaced below; the parent reads its
-    // replacement instead.
-    PlanObjectSet required = context.required;
-    rewriteColumnSet(exprs_, context.required, context.outputSubstitutions)
-        .forEach<Column>([&](ColumnCP column) { required.add(column); });
+    const PlanObjectSet required = readColumns(context);
     ColumnVector keep;
     for (ColumnCP column : node->outputColumns()) {
       if (required.contains(column)) {
@@ -898,6 +899,57 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     context.outputSubstitutions.retainVisible(
         narrowedNode->outputColumns(), exprs_);
     return narrowedNode;
+  }
+
+  // Returns the columns the consumers above read once they apply
+  // 'context.outputSubstitutions'.
+  PlanObjectSet readColumns(const PushdownContext& context) {
+    PlanObjectSet columns;
+    if (!context.reads.has_value()) {
+      // A required column may have been replaced below; the parent reads its
+      // replacement instead.
+      columns = context.required;
+      context.required.forEach<Column>([&](ColumnCP column) {
+        columns.unionColumns(context.outputSubstitutions.apply(column, exprs_));
+      });
+      return columns;
+    }
+    for (ExprCP expression : *context.reads) {
+      columns.unionColumns(
+          context.outputSubstitutions.apply(expression, exprs_));
+    }
+    return columns;
+  }
+
+  // Adds what a node reads from its input to the input's context.
+  static void addReads(PushdownContext& context, ExprCP expression) {
+    context.required.unionColumns(expression);
+    if (context.reads.has_value()) {
+      context.reads->push_back(expression);
+    }
+  }
+
+  static void addReads(
+      PushdownContext& context,
+      const ExprVector& expressions) {
+    context.required.unionColumns(expressions);
+    if (context.reads.has_value()) {
+      appendAll(*context.reads, expressions);
+    }
+  }
+
+  // `reads` holds scalar expressions, so an aggregate adds its inputs.
+  static void addReads(
+      PushdownContext& context,
+      optimizer::AggregateCP aggregate) {
+    context.required.unionColumns(aggregate);
+    if (context.reads.has_value()) {
+      appendAll(*context.reads, aggregate->args());
+      if (aggregate->condition() != nullptr) {
+        context.reads->push_back(aggregate->condition());
+      }
+      appendAll(*context.reads, aggregate->orderKeys());
+    }
   }
 
   NodeCP finishSimplifiedNode(
@@ -986,6 +1038,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     PushdownContext childContext;
     childContext.pending = std::move(pushable);
     childContext.required.unionColumns(survivingExprs);
+    childContext.reads = survivingExprs;
     // Demand from above the child excludes the conjuncts pushed into
     // `pending`; it is exactly what the surviving projections read.
     childContext.requiredAbove = childContext.required;
@@ -1032,10 +1085,11 @@ class Pushdown : public NodeRewriter<PushdownContext> {
 
       PushdownContext childContext;
       childContext.required = context.required;
-      childContext.required.unionColumns(context.pending);
-      childContext.required.unionColumns(node->groupingKeys());
+      childContext.reads.emplace();
+      addReads(childContext, context.pending);
+      addReads(childContext, node->groupingKeys());
       for (const auto* aggregate : node->aggregates()) {
-        childContext.required.unionColumns(aggregate);
+        addReads(childContext, aggregate);
       }
       childContext.requiredAbove = childContext.required;
       childContext.nonNullColumns = context.nonNullColumns;
@@ -1096,9 +1150,10 @@ class Pushdown : public NodeRewriter<PushdownContext> {
 
     PushdownContext childContext;
     childContext.pending = std::move(pushable);
-    childContext.required.unionColumns(node->groupingKeys());
+    childContext.reads.emplace();
+    addReads(childContext, node->groupingKeys());
     for (const auto* aggregate : survivingAggregates) {
-      childContext.required.unionColumns(aggregate);
+      addReads(childContext, aggregate);
     }
     childContext.requiredAbove = childContext.required;
     childContext.required.unionColumns(childContext.pending);
@@ -1636,6 +1691,22 @@ class Pushdown : public NodeRewriter<PushdownContext> {
         std::move(routed.rightInputPredicates),
         sideRequired,
         std::move(childNonNullColumns));
+    // Outputs equal to their sources pass the expressions above through; the
+    // others read their sources.
+    ExprVector reads = toExprs(pruned.sourceColumns);
+    if (context.reads.has_value()) {
+      reads = readsAbove(context, prepared, pruned);
+      for (size_t i = 0; i < pruned.outputColumns.size(); ++i) {
+        if (pruned.outputColumns[i] != pruned.sourceColumns[i]) {
+          reads.push_back(pruned.sourceColumns[i]);
+        }
+      }
+    }
+    appendAll(reads, routed.leftKeys);
+    appendAll(reads, routed.rightKeys);
+    appendAll(reads, routed.joinPredicates);
+    leftContext.reads = reads;
+    rightContext.reads = std::move(reads);
     allowJoinInputDeduplication(
         prepared.joinType,
         routed.leftKeys,
@@ -1651,6 +1722,70 @@ class Pushdown : public NodeRewriter<PushdownContext> {
         std::move(routed.leftKeys),
         std::move(routed.rightKeys),
         std::move(routed.joinPredicates));
+  }
+
+  // Returns what the consumers and the predicates kept above read from the
+  // join's outputs, naming the outputs that outer join reduction rewrote.
+  ExprVector readsAbove(
+      const PushdownContext& context,
+      const PreparedJoin& prepared,
+      const PrunedJoin& pruned) {
+    ExprVector reads =
+        prepared.reductionSubstitutions.apply(*context.reads, exprs_);
+    appendAll(reads, pruned.above);
+    return reads;
+  }
+
+  // Forwards the input columns the consumers above read once they apply the
+  // inputs' replacements. An output that differs from its source stays.
+  void narrowJoinOutputs(
+      const Join* node,
+      const PushdownContext& context,
+      const PreparedJoin& prepared,
+      const RewrittenJoinInputs& rewritten,
+      PrunedJoin& pruned) {
+    // A semi-project join produces its mark and outputs it last.
+    const ColumnCP mark =
+        Join::projectsMark(prepared.joinType) ? node->markColumn() : nullptr;
+    bool keepsMark{false};
+    PlanSubstitutions replacements{rewritten.leftSubstitutions};
+    replacements.merge(rewritten.rightSubstitutions);
+    PlanObjectSet read;
+    for (ExprCP expression : readsAbove(context, prepared, pruned)) {
+      read.unionColumns(replacements.apply(expression, exprs_));
+    }
+    ColumnVector outputs;
+    ColumnVector sources;
+    PlanObjectSet kept;
+    for (size_t i = 0; i < pruned.outputColumns.size(); ++i) {
+      const ColumnCP output = pruned.outputColumns[i];
+      if (output == mark) {
+        keepsMark = true;
+        continue;
+      }
+      // The join maps a replaced source to its output itself.
+      if (output != pruned.sourceColumns[i] || read.contains(output) ||
+          replacements.apply(output, exprs_) != output) {
+        outputs.push_back(output);
+        sources.push_back(pruned.sourceColumns[i]);
+        kept.add(output);
+      }
+    }
+    for (NodeCP input : {rewritten.left, rewritten.right}) {
+      for (ColumnCP column : input->outputColumns()) {
+        if (read.contains(column) && !kept.contains(column)) {
+          outputs.push_back(column);
+          sources.push_back(column);
+          kept.add(column);
+        }
+      }
+    }
+    if (keepsMark) {
+      outputs.push_back(mark);
+      sources.push_back(mark);
+    }
+    pruned.outputColumns = std::move(outputs);
+    pruned.sourceColumns = std::move(sources);
   }
 
   // Restores predicates above the replacement and publishes its visible
@@ -1750,6 +1885,9 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     }
     auto rewritten =
         rewriteJoinChildren(node, context, prepared, std::move(routed), pruned);
+    if (context.reads.has_value()) {
+      narrowJoinOutputs(node, context, prepared, rewritten, pruned);
+    }
     auto simplified = nodeSimplifier_.make(
         Join::Key{
             rewritten.left,
@@ -2006,7 +2144,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     if (!context.requiredAbove.containsAny(node->outputColumns())) {
       return rewrite(node->input(), context);
     }
-    context.required.unionColumns(node->orderKeys());
+    addReads(context, node->orderKeys());
     context.requiredAbove.unionColumns(node->orderKeys());
     // A Sort outputs its input's columns, so it is not the consumer the flag
     // describes.
@@ -2063,7 +2201,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
         return builder().make<Limit>(
             {rewrite(node->input(), empty), node->offset(), node->count()});
       }
-      empty.required.unionColumns(node->orderKeys());
+      addReads(empty, node->orderKeys());
       empty.requiredAbove.unionColumns(node->orderKeys());
 
       // Sorting by what the window below ranks on means a row past rank
@@ -2119,8 +2257,8 @@ class Pushdown : public NodeRewriter<PushdownContext> {
   NodeCP rewriteGroupId(const GroupId* node, PushdownContext& context)
       override {
     return blockAt(context, [&](PushdownContext& empty) -> NodeCP {
-      empty.required.unionColumns(node->groupingKeys());
-      empty.required.unionColumns(node->aggregationInputs());
+      addReads(empty, node->groupingKeys());
+      addReads(empty, node->aggregationInputs());
       empty.requiredAbove.unionColumns(node->groupingKeys());
       empty.requiredAbove.unionColumns(node->aggregationInputs());
       NodeCP newInput = rewrite(node->input(), empty);
@@ -2201,9 +2339,9 @@ class Pushdown : public NodeRewriter<PushdownContext> {
         makeChildContext(std::move(pushable), context);
     // Unnest computes the output rows of each input row from that row alone.
     childContext.nonNullColumns = context.nonNullColumns;
-    childContext.required.unionColumns(node->unnestExpressions());
-    childContext.required.unionObjects(survivingReplicated);
-    childContext.required.unionColumns(blocked);
+    addReads(childContext, node->unnestExpressions());
+    addReads(childContext, toExprs(survivingReplicated));
+    addReads(childContext, blocked);
     childContext.requiredAbove = childContext.required;
     childContext.mayDropDuplicates = collapseDuplicates;
     // This collapse still evaluates the collection once per input row. A
@@ -2325,7 +2463,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       override {
     return blockAt(context, [&](PushdownContext& child) -> NodeCP {
       // The input supplies what the call reads; the result is produced here.
-      child.required.unionColumns(node->call());
+      addReads(child, node->call());
       child.requiredAbove = child.required;
       child.nonNullColumns = context.nonNullColumns;
       NodeCP newInput = rewrite(node->input(), child);
@@ -2397,9 +2535,10 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     PushdownContext childContext;
     childContext.pending = std::move(pushable);
     childContext.required = context.required;
-    childContext.required.unionColumns(node->partitionKeys());
-    childContext.required.unionColumns(node->orderKeys());
-    childContext.required.unionColumns(blocked);
+    childContext.reads = context.reads;
+    addReads(childContext, node->partitionKeys());
+    addReads(childContext, node->orderKeys());
+    addReads(childContext, blocked);
     // Rows with a NULL partition key form partitions of their own, and every
     // output row of those partitions holds that NULL.
     childContext.nonNullColumns = context.nonNullColumns;
@@ -2428,10 +2567,8 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       ExprVector blocked) {
     childContext.required.unionColumns(childContext.pending);
     childContext.requiredAbove = childContext.required;
-    NodeCP newInput = rewrite(node->input(), childContext);
-    const PlanObjectSet rewrittenRequired = rewriteColumnSet(
-        exprs_, childContext.required, childContext.outputSubstitutions);
-    newInput = dropColumnsForWindow(newInput, rewrittenRequired);
+    NodeCP newInput = dropColumnsForWindow(
+        rewrite(node->input(), childContext), childContext);
     applyOutputSubstitutions(childContext, blocked);
 
     // Emit the rank column only when a consumer above still needs it.
@@ -2477,8 +2614,10 @@ class Pushdown : public NodeRewriter<PushdownContext> {
 
   // Velox's window operators pass every input column through, so a column
   // that only an operator below the window reads would ride through it. Adds
-  // a Project that keeps just 'required' when the input has more.
-  NodeCP dropColumnsForWindow(NodeCP input, const PlanObjectSet& required) {
+  // a Project that keeps just the columns the window and its consumers read
+  // when the input has more.
+  NodeCP dropColumnsForWindow(NodeCP input, PushdownContext& context) {
+    const PlanObjectSet required = readColumns(context);
     ExprVector exprs;
     ColumnVector columns;
     for (ColumnCP column : input->outputColumns()) {
@@ -2492,8 +2631,10 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       return input;
     }
 
-    return builder().make<Project>(
-        {input, std::move(exprs), std::move(columns)});
+    NodeCP project = PrecomputeProjections::makeProject(
+        input, std::move(exprs), columns, builder(), simplifier_);
+    context.outputSubstitutions.retainVisible(project->outputColumns(), exprs_);
+    return project;
   }
 
   // Keeps the Window, dropping the functions no consumer reads.
@@ -2514,20 +2655,18 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       }
     }
     for (const auto& function : survivingFunctions) {
-      childContext.required.unionColumns(function.call);
+      addReads(childContext, function.call);
       if (function.frame.startValue != nullptr) {
-        childContext.required.unionColumns(function.frame.startValue);
+        addReads(childContext, function.frame.startValue);
       }
       if (function.frame.endValue != nullptr) {
-        childContext.required.unionColumns(function.frame.endValue);
+        addReads(childContext, function.frame.endValue);
       }
     }
     childContext.required.unionColumns(childContext.pending);
     childContext.requiredAbove = childContext.required;
-    NodeCP newInput = rewrite(node->input(), childContext);
-    const PlanObjectSet rewrittenRequired = rewriteColumnSet(
-        exprs_, childContext.required, childContext.outputSubstitutions);
-    newInput = dropColumnsForWindow(newInput, rewrittenRequired);
+    NodeCP newInput = dropColumnsForWindow(
+        rewrite(node->input(), childContext), childContext);
 
     // With every function pruned the node computes nothing and emits its
     // input's columns.
@@ -2572,7 +2711,9 @@ class Pushdown : public NodeRewriter<PushdownContext> {
         }
       }
 
+      // The outputs rename the input's columns.
       empty.required = PlanObjectSet::fromObjects(sourceColumns);
+      empty.reads.reset();
       empty.requiredAbove = empty.required;
       NodeCP newInput = rewrite(node->input(), empty);
       auto simplified = nodeSimplifier_.make(
@@ -2600,7 +2741,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
         makeChildContext(std::move(pushable), context);
     // Each input row passes through on its own, with a unique id added.
     childContext.nonNullColumns = context.nonNullColumns;
-    childContext.required.unionColumns(blocked);
+    addReads(childContext, blocked);
     childContext.requiredAbove = childContext.required;
     if (!outputsKept.contains(node->idColumn())) {
       NodeCP newInput = rewrite(node->input(), childContext);
@@ -2627,8 +2768,9 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     // this node must fail on.
     PushdownContext childContext;
     childContext.required = context.required;
-    childContext.required.unionColumns(context.pending);
-    childContext.required.unionColumns(node->distinctKeys());
+    childContext.reads = context.reads;
+    addReads(childContext, context.pending);
+    addReads(childContext, node->distinctKeys());
     childContext.requiredAbove = childContext.required;
     NodeCP newInput = rewrite(node->input(), childContext);
     ExprVector pending = std::move(context.pending);
@@ -2649,6 +2791,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     VELOX_DCHECK(context.pending.empty());
     PushdownContext child;
     child.required.unionColumns(node->columnExprs());
+    child.reads = node->columnExprs();
     child.requiredAbove = child.required;
     child.nonNullColumns = context.nonNullColumns;
     // A delete reads no column values: the connector's handle says which rows
@@ -2740,6 +2883,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     child.pending = std::move(pending);
     child.required = parent.required;
     child.required.unionColumns(child.pending);
+    child.reads = parent.reads;
     // Conservative: callers that push a fusable mark down refine this.
     child.requiredAbove = parent.required;
     return child;
@@ -2793,7 +2937,8 @@ class Pushdown : public NodeRewriter<PushdownContext> {
   NodeCP blockAt(PushdownContext& context, Recurse recurse) {
     PushdownContext empty;
     empty.required = context.required;
-    empty.required.unionColumns(context.pending);
+    empty.reads = context.reads;
+    addReads(empty, context.pending);
     // Blocked conjuncts wrap as a Filter above the recursed subtree, so
     // everything is "above" it.
     empty.requiredAbove = empty.required;
@@ -2822,7 +2967,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     auto [pushable, blocked] = partition(parent.pending, outputOnlyColumns);
     PushdownContext childContext =
         makeChildContext(std::move(pushable), parent);
-    childContext.required.unionColumns(blocked);
+    addReads(childContext, blocked);
     childContext.requiredAbove = childContext.required;
     NodeCP newInput = rewrite(node->input(), childContext);
     NodeCP newNode = (newInput == node->input()) ? static_cast<NodeCP>(node)
@@ -2924,6 +3069,7 @@ PushdownAndPrunePass::Result PushdownAndPrunePass::run(
   PushdownContext context;
   context.required = PlanObjectSet::fromObjects(outputColumns);
   context.requiredAbove = context.required;
+  context.reads = toExprs(outputColumns);
   NodeCP result = pass.rewrite(root, context);
 
   ExprSimplifier simplifier{builder, evaluator};
