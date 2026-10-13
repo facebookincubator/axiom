@@ -101,15 +101,25 @@ lp::ExprApi rewriteWindowExpr(
 // Given an expression, and pairs of search-and-replace sub-expressions,
 // produces a new expression with sub-expressions replaced. Uses keyReplacements
 // for grouping keys and aggregateReplacements for aggregates. If
-// 'onUnreplacedLeaf' is provided, invokes the callback for any
-// FieldAccessExpr that is not in the replacement map and whose children were
-// not replaced either. Used to detect invalid column references in HAVING.
+// 'onUnreplacedLeaf' is provided, invokes the callback for any unbound
+// root-column FieldAccessExpr that is not in the replacement map. A
+// FieldAccessExpr on a computed value represents a dereference. Used to detect
+// invalid column references after aggregation.
 core::ExprPtr replaceInputs(
     const core::ExprPtr& expr,
     const ExprMap<core::ExprPtr>& keyReplacements,
     const AggregateExprMap& aggregateReplacements,
     const std::function<void(const core::FieldAccessExpr&)>& onUnreplacedLeaf =
-        nullptr) {
+        nullptr,
+    const folly::F14FastSet<std::string>& lambdaArguments = {}) {
+  if (expr->is(core::IExpr::Kind::kFieldAccess)) {
+    const auto* field = expr->as<core::FieldAccessExpr>();
+    VELOX_CHECK_NOT_NULL(field);
+    if (field->isRootColumn() && lambdaArguments.contains(field->name())) {
+      return expr;
+    }
+  }
+
   // First try grouping keys.
   auto keyIt = keyReplacements.find(expr);
   if (keyIt != keyReplacements.end()) {
@@ -122,11 +132,34 @@ core::ExprPtr replaceInputs(
     return aggIt->second;
   }
 
+  if (expr->is(core::IExpr::Kind::kLambda)) {
+    const auto* lambda = expr->as<core::LambdaExpr>();
+    VELOX_CHECK_NOT_NULL(lambda);
+    auto nestedArguments = lambdaArguments;
+    nestedArguments.insert(
+        lambda->arguments().begin(), lambda->arguments().end());
+    auto newBody = replaceInputs(
+        lambda->body(),
+        keyReplacements,
+        aggregateReplacements,
+        onUnreplacedLeaf,
+        nestedArguments);
+    if (newBody.get() == lambda->body().get()) {
+      return expr;
+    }
+    return std::make_shared<core::LambdaExpr>(
+        lambda->arguments(), std::move(newBody));
+  }
+
   std::vector<core::ExprPtr> newInputs;
   bool hasNewInput = false;
   for (const auto& input : expr->inputs()) {
     auto newInput = replaceInputs(
-        input, keyReplacements, aggregateReplacements, onUnreplacedLeaf);
+        input,
+        keyReplacements,
+        aggregateReplacements,
+        onUnreplacedLeaf,
+        lambdaArguments);
     if (newInput.get() != input.get()) {
       hasNewInput = true;
     }
@@ -135,7 +168,11 @@ core::ExprPtr replaceInputs(
 
   if (!hasNewInput && onUnreplacedLeaf &&
       expr->is(core::IExpr::Kind::kFieldAccess)) {
-    onUnreplacedLeaf(*expr->as<core::FieldAccessExpr>());
+    const auto* field = expr->as<core::FieldAccessExpr>();
+    VELOX_CHECK_NOT_NULL(field);
+    if (field->isRootColumn()) {
+      onUnreplacedLeaf(*field);
+    }
   }
 
   if (hasNewInput) {
@@ -812,8 +849,14 @@ void GroupByPlanner::rewritePostAggregateExprs(
   // SQL requires.
   PlannedMarkers planned;
   auto substituteAndPlan = [&](const core::ExprPtr& expr) {
-    return planMarkers(
-        replaceInputs(expr, keyInputs, aggregateInputs), exprPlanner_, planned);
+    auto substituted = replaceInputs(
+        expr,
+        keyInputs,
+        aggregateInputs,
+        [](const core::FieldAccessExpr& field) {
+          VELOX_USER_FAIL("Cannot resolve column: {}", field.name());
+        });
+    return planMarkers(substituted, exprPlanner_, planned);
   };
 
   // HAVING takes the same two steps as the clauses below, but a column it
@@ -846,9 +889,6 @@ void GroupByPlanner::rewritePostAggregateExprs(
   // partition/order keys. Non-window expressions use replaceInputs which also
   // substitutes nested window references added to keyInputs by
   // projectNestedWindows above.
-
-  // TODO: Verify that SELECT expressions don't depend on anything other
-  // than grouping keys and aggregates.
 
   auto rewriteExpr = [&](lp::ExprApi& item) {
     if (item.expr()->is(core::IExpr::Kind::kWindow)) {

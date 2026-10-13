@@ -65,6 +65,24 @@ TEST_F(AggregationParserTest, countStar) {
   }
 }
 
+TEST_F(AggregationParserTest, computedRowDereferenceAfterAggregation) {
+  testSelect(
+      "SELECT count(*), CAST(ROW(1) AS ROW(x BIGINT)).x FROM nation",
+      matchScan("nation").aggregate().project().output());
+}
+
+TEST_F(AggregationParserTest, lambdaReferencesAfterAggregation) {
+  testSelect(
+      "SELECT count(*), transform(ARRAY[1], x -> x + 1) FROM nation",
+      matchScan("nation").aggregate().project().output());
+
+  VELOX_ASSERT_THROW(
+      parseSql(
+          "SELECT count(*) AS x, transform(ARRAY[1], y -> x + y) "
+          "FROM (SELECT 1 AS x)"),
+      "Cannot resolve column: x");
+}
+
 // A window whose ORDER BY key is an aggregate and whose frame is a RANGE
 // offset, over a GROUP BY.
 TEST_F(AggregationParserTest, aggregateInWindowFrameBound) {
@@ -1213,6 +1231,75 @@ TEST_F(AggregationParserTest, orderByAggregateWithoutGroupBy) {
           .sort({"sum"})
           .project({"x"})
           .output());
+}
+
+TEST_F(AggregationParserTest, starRequiresFrom) {
+  for (const auto& sql : {"SELECT *", "SELECT count(*), *"}) {
+    SCOPED_TRACE(sql);
+    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+        parseSelect(sql),
+        "SELECT * not allowed in queries without FROM clause");
+  }
+
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSelect("SELECT count(*), t.*"), "Table not found: t");
+}
+
+TEST_F(AggregationParserTest, aggregationRejectsUngroupedExpandedColumns) {
+  for (const auto& sql : {
+           "SELECT count(*) AS x, * FROM (SELECT 1 AS x)",
+           "SELECT count(*) AS x, COLUMNS('^x$') FROM (SELECT 1 AS x)",
+           "SELECT y, count(*) AS x, * "
+           "FROM (VALUES (1, 2)) AS t(x, y) GROUP BY y",
+           "SELECT y, count(*) AS x, COLUMNS('^x$') "
+           "FROM (VALUES (1, 2)) AS t(x, y) GROUP BY y",
+       }) {
+    SCOPED_TRACE(sql);
+    VELOX_ASSERT_THROW(parseSelect(sql), "Cannot resolve column: x");
+  }
+}
+
+// A global aggregation names each output column after the SELECT item that
+// produced it, including items that expand to several columns.
+TEST_F(AggregationParserTest, globalAggOutputNames) {
+  const auto outputNames = [&](std::string_view sql) {
+    return parseSelect(sql)->outputType()->names();
+  };
+
+  // COLUMNS(...) inside an aggregate names its columns as the equivalent
+  // list of aggregates does, and a named item after it keeps its name.
+  EXPECT_EQ(
+      outputNames(
+          "SELECT min(COLUMNS('n_.*key')), max(COLUMNS('n_.*key')), "
+          "count(*) AS c FROM nation"),
+      outputNames(
+          "SELECT min(n_nationkey), min(n_regionkey), max(n_nationkey), "
+          "max(n_regionkey), count(*) AS c FROM nation"));
+
+  // An alias on COLUMNS(...) gives each expanded column the capitalization
+  // written in the query.
+  EXPECT_EQ(
+      outputNames(
+          "SELECT min(COLUMNS('n_.*key')) AS M, count(*) AS c FROM nation"),
+      outputNames(
+          "SELECT min(n_nationkey) AS M, min(n_regionkey) AS M, count(*) AS c "
+          "FROM nation"));
+  EXPECT_THAT(
+      outputNames("SELECT sum(COLUMNS('^x$')) AS Total FROM (SELECT 1 AS x)"),
+      testing::ElementsAre("Total"));
+
+  // Star and COLUMNS(...) keep names for columns rewritten by REPLACE.
+  const std::vector<std::pair<std::string, std::vector<std::string>>> cases{
+      {"SELECT * REPLACE (count(*) AS x) FROM (SELECT 1 AS x)", {"x"}},
+      {"SELECT t.* EXCLUDE (y) REPLACE (sum(x) AS x), count(*) AS c "
+       "FROM (SELECT 1 AS x, 2 AS y) t",
+       {"x", "c"}},
+      {"SELECT COLUMNS('x') REPLACE (sum(x) AS x) FROM (SELECT 1 AS x)", {"x"}},
+  };
+  for (const auto& [sql, expected] : cases) {
+    SCOPED_TRACE(sql);
+    EXPECT_THAT(outputNames(sql), testing::ElementsAreArray(expected));
+  }
 }
 
 TEST_F(AggregationParserTest, scalarOverAgg) {

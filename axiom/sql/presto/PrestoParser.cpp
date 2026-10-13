@@ -1212,13 +1212,9 @@ class RelationPlanner : public AstVisitor {
 
     std::vector<lp::ExprApi> exprs;
     // Parallel to 'exprs'. Star and COLUMNS(...) expansions emit nullopt
-    // unless the source relation captured a display-case override.
+    // unless the source relation captured a display-case override, or an
+    // alias names the expansion.
     std::vector<std::optional<std::string>> displayNames;
-    const auto recordDisplayUpTo = [&]() {
-      while (displayNames.size() < exprs.size()) {
-        displayNames.emplace_back(std::nullopt);
-      }
-    };
     // Appends per-column display-name overrides for star/regex expansions.
     const auto recordDisplayForExpansion =
         [&](const std::vector<lp::PlanBuilder::OutputColumnName>& columns,
@@ -1280,7 +1276,12 @@ class RelationPlanner : public AstVisitor {
 
         if (tryExpandColumnsInExpression(
                 expr, alias, exprs, singleColumn->expression()->location())) {
-          recordDisplayUpTo();
+          // An alias names every column of the expansion. Without one, each
+          // column keeps the name the expansion gives it.
+          if (!alias.has_value()) {
+            display.reset();
+          }
+          displayNames.resize(exprs.size(), display);
         } else {
           // Normal SingleColumn handling.
           if (alias.has_value()) {
@@ -1760,9 +1761,33 @@ class RelationPlanner : public AstVisitor {
   void visitQuerySpecification(
       QuerySpecification* node,
       const OrderByPtr& orderBy) {
+    VELOX_CHECK_NOT_NULL(node);
+
     // Deferred-subquery markers belong to this block. The scope nests, so a
     // subquery body planned from here gets its own.
     ExpressionPlanner::MarkerScope markers{exprPlanner_};
+
+    if (node->from() == nullptr) {
+      for (const auto& item : node->select()->selectItems()) {
+        if (item->is(NodeType::kAllColumns)) {
+          const auto* allColumns = item->as<AllColumns>();
+          VELOX_CHECK_NOT_NULL(allColumns);
+          const auto* prefix = allColumns->prefix().get();
+          if (prefix == nullptr) {
+            AXIOM_PRESTO_SEMANTIC_FAIL(
+                item->location(),
+                "*",
+                "SELECT * not allowed in queries without FROM clause");
+          } else {
+            AXIOM_PRESTO_SEMANTIC_FAIL(
+                prefix->location(),
+                prefix->suffix(),
+                "Table not found: {}",
+                prefix->fullyQualifiedName());
+          }
+        }
+      }
+    }
 
     // FROM t -> builder.tableScan(t)
     processFrom(node->from());
@@ -1833,13 +1858,9 @@ class RelationPlanner : public AstVisitor {
                 windows.definitionExprs());
       }
 
-      if (plannedGlobalAggregation) {
-        // GroupByPlanner does not go through buildSelectProjections, so
-        // stage display names from the SELECT items directly. It also plans
-        // ORDER BY over the aggregates. DISTINCT is a no-op since a global
-        // aggregation without a GROUP BY produces one row.
-        displayNames_.captureLastNames(selectItems);
-      } else {
+      // A global aggregation already plans ORDER BY and produces at most one
+      // row, so DISTINCT is a no-op.
+      if (!plannedGlobalAggregation) {
         // Without an aggregation, HAVING filters rows like WHERE.
         addFilter(node->having());
 
