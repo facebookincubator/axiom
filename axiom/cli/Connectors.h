@@ -52,7 +52,7 @@ class Connectors {
   Connectors(Connectors&&) = default;
   Connectors& operator=(Connectors&&) = default;
 
-  /// Unregister all connectors with ids in `connectorIds_`.
+  /// Unregisters all registered connectors and metadata aliases.
   virtual ~Connectors();
 
   /// Registers the TPCH connector under the connector ID "tpch".
@@ -127,8 +127,23 @@ class Connectors {
   void registerConnector(
       const std::shared_ptr<velox::connector::Connector>& connector);
 
+  /// Registers `alias` as another catalog name for the metadata already
+  /// registered under `targetCatalogName`, which must already be registered.
+  void registerConnectorMetadataAlias(
+      std::string alias,
+      const std::string& targetCatalogName);
+
+  /// Records a catalog for `system.metadata.catalogs`.
+  void recordCatalog(const std::string& catalogName, std::string connectorName);
+
   // Unregister these on destruction.
   std::vector<std::string> connectorIds_;
+
+  // Unregister these metadata-only catalog names on destruction.
+  std::vector<std::string> metadataAliasIds_;
+
+  // Catalogs registered before the system connector starts.
+  std::vector<connector::system::CatalogInfo> catalogInfos_;
 
  private:
   static std::shared_ptr<folly::IOThreadPoolExecutor> getSharedIoExecutor();

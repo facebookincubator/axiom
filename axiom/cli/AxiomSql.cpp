@@ -138,9 +138,10 @@ int main(int argc, char** argv) {
   try {
     runner.initialize(initializeConnectors);
 
-    // Register after initialize() so sessionConfig() is available.
-    connectors.registerSystemConnector(runner.sessionConfig());
     connectors.registerFileConnector();
+    // Register after initialize() so sessionConfig() is available and after
+    // all other catalogs so metadata.catalogs contains the complete snapshot.
+    connectors.registerSystemConnector(runner.sessionConfig());
 
     // --catalog is only checked here because the system and file catalogs are
     // registered above, after the connectors the flag usually names.

@@ -18,6 +18,8 @@
 
 #include <chrono>
 #include <optional>
+#include <string>
+#include <vector>
 
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/connectors/system/InformationSchema.h"
@@ -37,6 +39,18 @@ inline const SchemaTableName kSessionPropertiesTable{
 inline const SchemaTableName kFunctionsTable{
     std::string(kMetadataSchema),
     "functions"};
+inline const SchemaTableName kCatalogsTable{
+    std::string(kMetadataSchema),
+    "catalogs"};
+
+/// Describes a catalog registered by the application.
+struct CatalogInfo {
+  /// Catalog name accepted in SQL and reported as the connector ID.
+  std::string catalogName;
+
+  /// Connector implementation name.
+  std::string connectorName;
+};
 
 /// Snapshot of a single query's state, used by the system connector to
 /// populate the system.runtime.queries table.
@@ -216,20 +230,24 @@ struct SystemSplit : public velox::connector::ConnectorSplit {
   VELOX_DEFINE_CLASS_NAME(SystemSplit)
 };
 
-/// Velox connector for the system catalog. Creates data source instances
-/// for reading live query metadata and session properties.
+/// Velox connector for the system catalog. Creates data source instances for
+/// reading runtime and metadata tables.
 class SystemConnector : public velox::connector::Connector {
  public:
   /// @param typeName Spelling of the types information_schema.columns
   /// reports. Defaults to 'InformationSchema::defaultTypeName'; a SQL dialect
   /// whose clients read these names registers its own, e.g. Presto's
   /// 'array(real)'.
+  /// @param catalogInfos Snapshot of catalogs visible through
+  /// system.metadata.catalogs. Applications register the system catalog last
+  /// and include it in this snapshot.
   SystemConnector(
       const std::string& id,
       const QueryInfoProvider* queryInfoProvider,
       const SessionPropertiesProvider* sessionPropertiesProvider = nullptr,
       InformationSchema::TypeNameFormatter typeName =
-          InformationSchema::defaultTypeName);
+          InformationSchema::defaultTypeName,
+      std::vector<CatalogInfo> catalogInfos = {});
 
   ~SystemConnector() override = default;
 
@@ -254,6 +272,7 @@ class SystemConnector : public velox::connector::Connector {
   const QueryInfoProvider* queryInfoProvider_;
   const SessionPropertiesProvider* sessionPropertiesProvider_;
   const InformationSchema::TypeNameFormatter typeName_;
+  const std::vector<CatalogInfo> catalogInfos_;
 };
 
 } // namespace facebook::axiom::connector::system
