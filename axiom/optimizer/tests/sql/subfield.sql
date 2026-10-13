@@ -25,6 +25,17 @@
 -- duckdb: SELECT 1
 SELECT a.x FROM (SELECT ROW(1 AS x, 2 AS y) AS a)
 ----
+-- A lambda argument shadows a relation alias of the same name, so 't.f' is a
+-- field of the argument.
+-- duckdb: SELECT [5]
+SELECT transform(ARRAY[CAST(ROW(5) AS ROW(f INTEGER))], t -> t.f)
+FROM (VALUES (1)) t(f)
+----
+-- The same when the relation's 'v.f' names two columns.
+-- duckdb: SELECT [5]
+SELECT transform(ARRAY[CAST(ROW(5) AS ROW(f INTEGER))], v -> v.f)
+FROM ((VALUES (1)) t(f) CROSS JOIN (VALUES (2)) u(f)) v
+----
 -- Nested aggregation across DT boundary: transform wrapping array_agg in
 -- a CTE, with the result used inside an aggregate in the outer query.
 -- duckdb: SELECT a, 5 AS b FROM (VALUES (1), (2), (3)) AS data(a)

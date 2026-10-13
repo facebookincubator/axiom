@@ -802,9 +802,11 @@ PlanBuilder& PlanBuilder::with(const std::vector<ExprApi>& projections) {
     }
 
     newOutputMapping->copyUserName(id, *outputMapping_);
+    newOutputMapping->copyAliases(id, *outputMapping_);
 
     exprs.push_back(makeInputRef(inputType->childAt(i), id));
   }
+  newOutputMapping->copyAmbiguousNames(*outputMapping_);
 
   resolveProjections(projections, outputNames, exprs, *newOutputMapping);
 
@@ -1296,15 +1298,48 @@ PlanBuilder& PlanBuilder::join(
 
 namespace {
 
+// Fails if 'alias.name', or 'name' when 'alias' is not set, names more than
+// one column of 'mapping'. Called before any enclosing scope is tried, so an
+// ambiguous name fails where it is referenced.
+void checkNotAmbiguous(
+    const NameMappings& mapping,
+    const std::optional<std::string>& alias,
+    const std::string& name) {
+  const NameMappings::QualifiedName qualifiedName{.alias = alias, .name = name};
+  VELOX_USER_CHECK(
+      !mapping.isAmbiguous(qualifiedName),
+      "Column is ambiguous: {}",
+      qualifiedName.toString());
+}
+
+// Returns true if 'qualifier' is a ROW column of 'mapping' or names more than
+// one column. 'qualifier.name' then reads a field of 'qualifier', and
+// resolution stops at this scope.
+bool isFieldQualifier(
+    const NameMappings& mapping,
+    const velox::RowType& inputType,
+    const std::string& qualifier) {
+  if (const auto id = mapping.lookup(qualifier)) {
+    return inputType.findChild(id.value())->isRow();
+  }
+  return mapping.isAmbiguous({.alias = std::nullopt, .name = qualifier});
+}
+
 ExprPtr resolveJoinInputName(
     const std::optional<std::string>& alias,
     const std::string& name,
     const NameMappings& mapping,
     const velox::RowTypePtr& inputRowType,
     const PlanBuilder::Scope& outerScope) {
+  checkNotAmbiguous(mapping, alias, name);
+
   if (alias.has_value()) {
     if (auto id = mapping.lookup(alias.value(), name)) {
       return makeInputRef(inputRowType->findChild(id.value()), id.value());
+    }
+
+    if (isFieldQualifier(mapping, *inputRowType, alias.value())) {
+      return nullptr;
     }
 
     // The ON condition may reference outer-scope columns when the JOIN
@@ -1331,6 +1366,46 @@ ExprPtr resolveJoinInputName(
       mapping.toString());
 }
 } // namespace
+
+// static
+PlanBuilder::Scope PlanBuilder::joinScope(
+    std::shared_ptr<const PlanBuilder> left,
+    std::shared_ptr<const PlanBuilder> right) {
+  return [left = std::move(left), right = std::move(right)](
+             const std::optional<std::string>& alias,
+             const std::string& name) -> ExprPtr {
+    const auto has = [&](const PlanBuilder& builder) {
+      return alias.has_value()
+          ? builder.outputMapping_->lookup(alias.value(), name).has_value()
+          : builder.outputMapping_->lookup(name).has_value();
+    };
+
+    checkNotAmbiguous(*left->outputMapping_, alias, name);
+    checkNotAmbiguous(*right->outputMapping_, alias, name);
+    const bool leftHas = has(*left);
+    const bool rightHas = has(*right);
+    VELOX_USER_CHECK(
+        !(leftHas && rightHas),
+        "Column is ambiguous: {}",
+        NameMappings::QualifiedName{.alias = alias, .name = name}.toString());
+
+    if (rightHas) {
+      return right->resolveInputName(alias, name);
+    }
+
+    if (!leftHas && alias.has_value() &&
+        (isFieldQualifier(
+             *left->outputMapping_, *left->node_->outputType(), *alias) ||
+         isFieldQualifier(
+             *right->outputMapping_, *right->node_->outputType(), *alias))) {
+      return nullptr;
+    }
+
+    // On the left side, or on neither: the left side resolves the name or
+    // tries its enclosing scope.
+    return left->resolveInputName(alias, name);
+  };
+}
 
 PlanBuilder& PlanBuilder::join(
     const PlanBuilder& right,
@@ -1419,11 +1494,13 @@ PlanBuilder& PlanBuilder::joinUsing(
   std::vector<UsingColumn> usingColumns;
   usingColumns.reserve(columns.size());
   for (const auto& column : columns) {
+    checkNotAmbiguous(*outputMapping_, std::nullopt, column);
     auto leftId = outputMapping_->lookup(column);
     VELOX_USER_CHECK(
         leftId.has_value(),
         "USING column not found on the left side of the join: {}",
         column);
+    checkNotAmbiguous(*right.outputMapping_, std::nullopt, column);
     auto rightId = right.outputMapping_->lookup(column);
     VELOX_USER_CHECK(
         rightId.has_value(),
@@ -1576,6 +1653,7 @@ void PlanBuilder::addJoinUsingProjection(
     }
 
     newOutputMapping->copyUserName(id, *outputMapping_);
+    newOutputMapping->copyAliases(id, *outputMapping_);
   }
 
   node_ = std::make_shared<ProjectNode>(
@@ -1682,6 +1760,7 @@ std::shared_ptr<NameMappings> remapSetOutputMapping(
       mapping->markHidden(newId);
     }
   }
+  mapping->copyAmbiguousNames(firstBranchMapping);
   return mapping;
 }
 
@@ -2017,10 +2096,17 @@ ExprPtr PlanBuilder::resolveInputName(
     return outerScope_(alias, name);
   }
 
+  checkNotAmbiguous(*outputMapping_, alias, name);
+
   if (alias.has_value()) {
     if (auto id = outputMapping_->lookup(alias.value(), name)) {
       return makeInputRef(
           node_->outputType()->findChild(id.value()), id.value());
+    }
+
+    if (isFieldQualifier(
+            *outputMapping_, *node_->outputType(), alias.value())) {
+      return nullptr;
     }
 
     if (outerScope_ != nullptr) {
@@ -2070,7 +2156,7 @@ WindowExprPtr PlanBuilder::resolveWindowTypes(
 }
 
 PlanBuilder& PlanBuilder::as(const std::string& alias) {
-  outputMapping_->setAlias(alias);
+  outputMapping_->setAlias(alias, node_->outputType()->names());
   return *this;
 }
 
