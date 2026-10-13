@@ -839,7 +839,7 @@ TEST_P(UnnestTest, crossJoinSingleRowAggregateAndUnnest) {
   AXIOM_ASSERT_PLAN(
       plan,
       matchScan("t")
-          .projectIf(useV2_, {"a", "ids", "a::BIGINT"})
+          .projectIf(useV2_, {"ids", "a::BIGINT"})
           .nestedLoopJoin(
               matchScan("u").singleAggregation({}, {"count(*) as c"}))
           .filterIf(!useV2_, "c > a::BIGINT")
