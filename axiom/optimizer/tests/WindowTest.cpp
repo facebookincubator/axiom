@@ -634,6 +634,48 @@ TEST_P(WindowTest, windowOutputAsGroupByKey) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+// An aggregation above a window streams on the window's partition key, and not
+// on a column the window's input is sorted on.
+TEST_P(WindowTest, aggregationAboveWindow) {
+  testConnector_->addTable("t", ROW({"x", "y"}, BIGINT()));
+
+  {
+    const auto query =
+        "SELECT x, count(*) AS c, max(s) AS m FROM ("
+        "  SELECT x, sum(x) OVER (PARTITION BY y) AS s"
+        "  FROM (SELECT x, y FROM t ORDER BY x LIMIT 10)"
+        ") GROUP BY x";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("t")
+            .topN(10)
+            .window({"sum(x) OVER (PARTITION BY y) as s"})
+            .project({"x", "s"})
+            .singleAggregation({"x"}, {"count(*) as c", "max(s) as m"})
+            .build();
+    AXIOM_ASSERT_PLAN_V2(toSingleNodePlan(query), matcher);
+  }
+
+  {
+    const auto query =
+        "SELECT y, count(*) AS c, max(s) AS m FROM ("
+        "  SELECT y, sum(x) OVER (PARTITION BY y) AS s"
+        "  FROM (SELECT x, y FROM t ORDER BY x LIMIT 10)"
+        ") GROUP BY y";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("t")
+            .topN(10)
+            .window({"sum(x) OVER (PARTITION BY y) as s"})
+            .project({"y", "s"})
+            .streamingAggregation({"y"}, {"count(*) as c", "max(s) as m"})
+            .build();
+    AXIOM_ASSERT_PLAN_V2(toSingleNodePlan(query), matcher);
+  }
+}
+
 // Dependent window functions must be split into separate Window nodes.
 // When a window function's input expression references another window
 // function's output, they cannot share a Window node — the referenced

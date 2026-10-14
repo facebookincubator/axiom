@@ -209,6 +209,25 @@ TEST_F(InferenceTest, inWindowPartitionKey) {
   AXIOM_ASSERT_PLAN_V2(plan, matcher);
 }
 
+// An aggregation above an inference call does not stream on a column the
+// call's input is sorted on.
+TEST_F(InferenceTest, aggregationAboveInference) {
+  testConnector_->addTable("t", ROW({"x", "s"}, {BIGINT(), VARCHAR()}));
+
+  auto plan = toSingleNodePlan(
+      "SELECT x, max(test_summarize(s)) AS m "
+      "FROM (SELECT x, s FROM t ORDER BY x LIMIT 10) "
+      "GROUP BY x");
+
+  auto matcher = matchScan("t")
+                     .topN(10)
+                     .inference("test_summarize(s) as summary")
+                     .project({"x", "summary"})
+                     .singleAggregation({"x"}, {"max(summary) as m"})
+                     .build();
+  AXIOM_ASSERT_PLAN_V2(plan, matcher);
+}
+
 TEST_F(InferenceTest, inLambda) {
   VELOX_ASSERT_USER_THROW(
       toSingleNodePlan(

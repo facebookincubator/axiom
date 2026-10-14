@@ -510,3 +510,30 @@ FROM (
 )
 WHERE r <= 1
 ----
+-- GROUP BY on a column the window's input is sorted on, above a window
+-- partitioned on another column.
+-- disabled_v1: wrong results
+SELECT x, count(*) AS c, max(s) AS m
+FROM (
+  SELECT x, sum(x) OVER (PARTITION BY y) AS s
+  FROM (SELECT x, y FROM (VALUES (0, 0), (0, 1), (1, 0)) v(x, y) ORDER BY x LIMIT 10)
+)
+GROUP BY x
+----
+-- Same, with an ordered aggregate.
+-- disabled_v1: wrong results
+SELECT x, array_agg(s ORDER BY s) AS a
+FROM (
+  SELECT x, sum(x) OVER (PARTITION BY y) AS s
+  FROM (SELECT x, y FROM (VALUES (0, 0), (0, 1), (1, 0)) v(x, y) ORDER BY x LIMIT 10)
+)
+GROUP BY x
+----
+-- GROUP BY on the window's partition key.
+SELECT y, count(*) AS c, max(s) AS m
+FROM (
+  SELECT y, sum(x) OVER (PARTITION BY y) AS s
+  FROM (SELECT x, y FROM (VALUES (0, 0), (0, 1), (1, 0)) v(x, y) ORDER BY x LIMIT 10)
+)
+GROUP BY y
+----

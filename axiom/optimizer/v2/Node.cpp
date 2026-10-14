@@ -338,13 +338,29 @@ PhysicalProperties passThroughProperties(NodeCP input) {
       .unique = props.unique};
 }
 
-// Properties of a ranking node: it keeps every surviving row on the task it
-// arrived on and only drops rows, so the input's distribution and uniqueness
-// survive. Its local order does not.
+// A ranking or inference node keeps each row it emits on its task, emits no row
+// twice, and does not keep input order: placement and uniqueness survive.
 PhysicalProperties rankedProperties(NodeCP input) {
   const PhysicalProperties& props = input->physicalProperties();
   return PhysicalProperties{
       .globalPartition = inheritedPartition(props.globalPartition),
+      .unique = props.unique};
+}
+
+// A window keeps rows on their task and emits each partition contiguously in an
+// order unrelated to its input: placement and uniqueness survive, and the
+// output is grouped on the partition keys only.
+PhysicalProperties windowProperties(
+    NodeCP input,
+    const ExprVector& partitionKeys) {
+  const PhysicalProperties& props = input->physicalProperties();
+  ColumnVector partitionColumns;
+  for (ExprCP key : partitionKeys) {
+    partitionColumns.push_back(key->as<Column>());
+  }
+  return PhysicalProperties{
+      .globalPartition = inheritedPartition(props.globalPartition),
+      .local = groupedLocal(partitionColumns),
       .unique = props.unique};
 }
 
@@ -2218,7 +2234,7 @@ Inference::Inference(Key key)
     : Node(
           NodeType::kInference,
           ColumnVector{key.outputColumns},
-          passThroughProperties(key.input)),
+          rankedProperties(key.input)),
       input_(key.input),
       call_(key.call),
       result_(key.result) {
@@ -2265,7 +2281,7 @@ Window::Window(Key key)
     : Node(
           NodeType::kWindow,
           ColumnVector{key.outputColumns},
-          passThroughProperties(key.input)),
+          windowProperties(key.input, key.partitionKeys)),
       input_(key.input),
       functions_(std::move(key.functions)),
       partitionKeys_(std::move(key.partitionKeys)),
