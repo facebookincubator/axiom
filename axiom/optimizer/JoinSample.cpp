@@ -86,7 +86,8 @@ ExprCP bigintLit(int64_t n) {
 
 std::shared_ptr<velox::core::QueryCtx> sampleQueryCtx(
     const velox::core::QueryCtx& original) {
-  std::atomic<int64_t> kQueryCounter;
+  static std::atomic<int64_t> kQueryCounter{0};
+  const auto sampleId = ++kQueryCounter;
 
   std::unordered_map<std::string, std::string> empty;
   return velox::core::QueryCtx::create(
@@ -94,9 +95,10 @@ std::shared_ptr<velox::core::QueryCtx> sampleQueryCtx(
       velox::core::QueryConfig(std::move(empty)),
       original.connectorSessionProperties(),
       original.cache(),
-      original.pool()->shared_from_this(),
+      original.pool()->addAggregateChild(
+          fmt::format("joinSample.{}", sampleId)),
       nullptr,
-      fmt::format("sample:{}", ++kQueryCounter));
+      fmt::format("sample:{}", sampleId));
 }
 
 std::shared_ptr<runner::Runner> prepareSampleRunner(
