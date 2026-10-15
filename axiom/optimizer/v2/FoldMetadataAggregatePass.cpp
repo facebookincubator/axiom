@@ -232,6 +232,7 @@ class Folder : public NodeRewriter<NoContext> {
          .aggregates = std::move(aggregates),
          .outputColumns = node->outputColumns(),
          .step = node->step(),
+         .scope = node->scope(),
          .groupId = node->groupId(),
          .globalGroupingSets = node->globalGroupingSets()});
   }

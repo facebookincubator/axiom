@@ -35,9 +35,10 @@ namespace facebook::axiom::optimizer::v2 {
 ///       input = GroupedRead::rewrite(input, numWorkers, builder);
 ///     }
 ///
-/// Which operators carry a scan's bucketing upward is each node's own rule
-/// (`Node::globalPartition`): a join keeps its probe's, a union keeps what its
-/// legs agree on, and an exchange keeps nothing from below.
+/// Each node decides whether it preserves a scan's bucketing. A join may keep
+/// its probe input's placement, a union keeps placement shared by every input,
+/// and a global exchange ends propagation. A driver exchange preserves task
+/// placement and is rebuilt over the grouped input.
 class GroupedRead {
  public:
   /// Global partitioning 'node' has when read grouped. Builds no nodes.

@@ -39,9 +39,10 @@ const connector::PartitionType* groupedPartitionType(
 }
 
 // True when regrouping the scans under 'node' can make it bucketed. Only a scan
-// of a bucketed table contributes, and an exchange ends the search.
+// of a bucketed table contributes, and a global exchange ends the search.
 bool hasRegroupableScan(NodeCP node) {
-  if (node->is(NodeType::kExchange)) {
+  if (node->is(NodeType::kExchange) &&
+      node->as<Exchange>()->partitioning().scope == PropertyScope::kGlobal) {
     return false;
   }
   if (node->is(NodeType::kScan)) {
@@ -63,11 +64,13 @@ class GroupedScanRewriter : public NodeRewriter<> {
       : NodeRewriter<>(builder), numWorkers_{numWorkers} {}
 
  protected:
-  // Past an exchange the rows are redistributed, so how the source was read
-  // cannot help this consumer; leave that subtree alone.
-  NodeCP rewriteExchange(const Exchange* node, NoContext& /*context*/)
-      override {
-    return node;
+  // A global exchange ends grouped-read propagation. Rebuild a driver exchange
+  // because it preserves task placement.
+  NodeCP rewriteExchange(const Exchange* node, NoContext& context) override {
+    if (node->partitioning().scope == PropertyScope::kGlobal) {
+      return node;
+    }
+    return NodeRewriter<>::rewriteExchange(node, context);
   }
 
   // A union is bucketed only when every leg is, so one ungroupable leg forfeits
@@ -106,7 +109,11 @@ Partitioning
 GroupedRead::partitioning(NodeCP node, int32_t numWorkers, Builder& builder) {
   switch (node->nodeType()) {
     case NodeType::kExchange:
-      return node->physicalProperties().globalPartition;
+      return node->as<Exchange>()->partitioning().scope ==
+              PropertyScope::kGlobal
+          ? node->physicalProperties().globalPartition
+          : partitioning(node->inputs().front(), numWorkers, builder)
+                .dropOrder();
     case NodeType::kScan: {
       const auto* scan = node->as<Scan>();
       const auto* partitionType = groupedPartitionType(scan, numWorkers);

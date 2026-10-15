@@ -16,6 +16,8 @@
 
 #include "axiom/optimizer/v2/PhysicalProperties.h"
 
+#include <algorithm>
+
 #include <folly/container/F14Map.h>
 
 #include "axiom/connectors/ConnectorMetadata.h"
@@ -74,17 +76,22 @@ int32_t Partitioning::numStageTasks(int32_t numWorkers, int32_t hashStageTasks)
   VELOX_UNREACHABLE();
 }
 
-Partitioning Partitioning::globalHash(
+Partitioning Partitioning::hash(
+    PropertyScope scope,
     const ExprVector& keys,
     bool replicateNullsAndAny) {
+  VELOX_CHECK(
+      !replicateNullsAndAny || scope == PropertyScope::kGlobal,
+      "Replicating nulls and any row requires global partitioning");
   return Partitioning{
       .kind = PartitionKind::kPartitioned,
       .keys = keys,
-      .scope = PropertyScope::kGlobal,
+      .scope = scope,
       .replicateNullsAndAny = replicateNullsAndAny};
 }
 
-Partitioning Partitioning::globalConnectorHash(
+Partitioning Partitioning::connectorHash(
+    PropertyScope scope,
     const ExprVector& keys,
     const connector::PartitionType* partitionType) {
   VELOX_DCHECK_NOT_NULL(partitionType);
@@ -92,7 +99,7 @@ Partitioning Partitioning::globalConnectorHash(
       .kind = PartitionKind::kPartitioned,
       .partitionType = partitionType,
       .keys = keys,
-      .scope = PropertyScope::kGlobal,
+      .scope = scope,
   };
 }
 
@@ -125,19 +132,19 @@ std::optional<Partitioning::CommonType> Partitioning::commonJoinPartitionType(
       : std::nullopt;
 }
 
-Partitioning Partitioning::globalGather() {
-  return Partitioning{
-      .kind = PartitionKind::kGather, .scope = PropertyScope::kGlobal};
+Partitioning Partitioning::gather(PropertyScope scope) {
+  return Partitioning{.kind = PartitionKind::kGather, .scope = scope};
 }
 
-Partitioning Partitioning::globalGatherMerge(
+Partitioning Partitioning::gatherMerge(
+    PropertyScope scope,
     const ExprVector& orderKeys,
     const OrderTypeVector& orderTypes) {
   return Partitioning{
       .kind = PartitionKind::kGather,
       .orderKeys = orderKeys,
       .orderTypes = orderTypes,
-      .scope = PropertyScope::kGlobal};
+      .scope = scope};
 }
 
 Partitioning Partitioning::globalBroadcast() {
@@ -146,13 +153,12 @@ Partitioning Partitioning::globalBroadcast() {
 }
 
 Partitioning Partitioning::globalReplicatedTo(const Partitioning& consumer) {
-  return consumer.is(PartitionKind::kGather) ? globalGather()
+  return consumer.is(PartitionKind::kGather) ? gather(PropertyScope::kGlobal)
                                              : globalBroadcast();
 }
 
-Partitioning Partitioning::globalArbitrary() {
-  return Partitioning{
-      .kind = PartitionKind::kArbitrary, .scope = PropertyScope::kGlobal};
+Partitioning Partitioning::arbitrary(PropertyScope scope) {
+  return Partitioning{.kind = PartitionKind::kArbitrary, .scope = scope};
 }
 
 bool Partitioning::coLocates(const ExprVector& columns) const {
@@ -206,8 +212,44 @@ bool Partitioning::sameClassAs(const Partitioning& other) const {
   return true;
 }
 
+bool PhysicalProperties::driverCoLocates(const ExprVector& keys) const {
+  if (driverPartition.is(PartitionKind::kGather)) {
+    return true;
+  }
+  if (!keys.empty() && driverPartition.coLocates(keys)) {
+    return true;
+  }
+
+  const auto keySet = PlanObjectSet::fromObjects(keys);
+  if (std::ranges::any_of(unique, [&](const UniqueKeySet& key) {
+        return key.scope == PropertyScope::kGlobal &&
+            key.columns.isSubset(keySet);
+      })) {
+    return true;
+  }
+  if (keys.empty()) {
+    return false;
+  }
+  const auto isKey = [&](ColumnCP column) {
+    return std::ranges::any_of(
+        keys, [&](ExprCP key) { return column->sameOrEqual(*key); });
+  };
+  return std::ranges::any_of(local, [&](const LocalProperty& property) {
+    return property.kind == LocalPropertyKind::kGrouped &&
+        std::ranges::all_of(property.columns, isKey);
+  });
+}
+
 void PhysicalProperties::checkReferencesColumns(
     const PlanObjectSet& outputColumns) const {
+  VELOX_CHECK_EQ(
+      globalPartition.scope,
+      PropertyScope::kGlobal,
+      "globalPartition must have global scope");
+  VELOX_CHECK_EQ(
+      driverPartition.scope,
+      PropertyScope::kDriver,
+      "driverPartition must have driver scope");
   // A partitioning may be on computed expressions (the partition function's
   // input, e.g. a cast); the requirement is that it is evaluable here — every
   // column its keys and merge order depend on is an output column.

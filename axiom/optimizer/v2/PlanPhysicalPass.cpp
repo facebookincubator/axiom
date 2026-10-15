@@ -245,7 +245,8 @@ DistinctExpansion expandDistinct(
     NodeCP input,
     const ExprVector& groupingKeys,
     const AggregateCallVector& aggregates,
-    Builder& builder) {
+    Builder& builder,
+    int32_t numDrivers) {
   if (aggregates.empty() || canUseNativeDistinct(aggregates)) {
     return {input, aggregates};
   }
@@ -301,6 +302,14 @@ DistinctExpansion expandDistinct(
   // first encountered key set sits closest to the original input.
   for (auto it = groups.rbegin(); it != groups.rend(); ++it) {
     auto& group = it->second;
+    // Each distinct key must reach one driver so it receives exactly one
+    // first-row marker.
+    if (numDrivers > 1 &&
+        !currentInput->physicalProperties().driverCoLocates(group.keys)) {
+      currentInput = builder.make<Exchange>(
+          {currentInput,
+           Partitioning::hash(PropertyScope::kDriver, group.keys)});
+    }
     ColumnVector outputColumns;
     outputColumns.reserve(
         currentInput->outputColumns().size() + group.markers.size());
@@ -885,6 +894,16 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     };
   }
 
+  NodeCP makeDriverPhysicalJoin(Join::Key join) {
+    // Counting joins maintain per-key build counters per driver, so equal
+    // probe keys must reach one driver.
+    if (velox::core::isCountingJoin(join.joinType)) {
+      std::tie(join.left, join.leftKeys) =
+          ensureDriverCoLocated(join.left, join.leftKeys);
+    }
+    return PhysicalJoin::makeJoin(std::move(join), builder(), simplifier_);
+  }
+
   // Adds the exchanges required by a join outside DPhyp and translates it.
   NodeCP makePhysicalJoin(Join::Key join) {
     if (numWorkers_ > 1) {
@@ -928,7 +947,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         }
       }
     }
-    return PhysicalJoin::makeJoin(std::move(join), builder(), simplifier_);
+    return makeDriverPhysicalJoin(std::move(join));
   }
 
   // Keeps the written join tree while choosing the build side automatically.
@@ -960,24 +979,8 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       roots = dphyp.enumerate(components);
     }
 
-    if (roots.size() == 1) {
-      return JoinTreeEmitter::emit(
-          roots.front(),
-          graph,
-          outputColumns,
-          builder(),
-          simplifier_,
-          numWorkers_);
-    }
-    if (!roots.empty()) {
-      return JoinTreeEmitter::emitComponents(
-          roots, graph, outputColumns, builder(), simplifier_, numWorkers_);
-    }
-
-    FallbackJoinPlanner fallbackPlanner{graph};
-    roots = fallbackPlanner.build(components);
     const auto joinFactory = [&](Join::Key join) {
-      return makePhysicalJoin(chooseBuildSide(std::move(join)));
+      return makeDriverPhysicalJoin(std::move(join));
     };
     if (roots.size() == 1) {
       return JoinTreeEmitter::emit(
@@ -989,10 +992,40 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
           numWorkers_,
           joinFactory);
     }
+    if (!roots.empty()) {
+      const auto crossJoinFactory = [&](Join::Key join) {
+        return makePhysicalJoin(std::move(join));
+      };
+      return JoinTreeEmitter::emitComponents(
+          roots,
+          graph,
+          outputColumns,
+          builder(),
+          simplifier_,
+          numWorkers_,
+          joinFactory,
+          crossJoinFactory);
+    }
+
+    FallbackJoinPlanner fallbackPlanner{graph};
+    roots = fallbackPlanner.build(components);
+    const auto fallbackJoinFactory = [&](Join::Key join) {
+      return makePhysicalJoin(chooseBuildSide(std::move(join)));
+    };
+    if (roots.size() == 1) {
+      return JoinTreeEmitter::emit(
+          roots.front(),
+          graph,
+          outputColumns,
+          builder(),
+          simplifier_,
+          numWorkers_,
+          fallbackJoinFactory);
+    }
     if (roots.empty()) {
       return nullptr;
     }
-    // 'joinFactory' adds distribution to component and cross joins.
+    // 'fallbackJoinFactory' adds distribution to component and cross joins.
     return JoinTreeEmitter::emitComponents(
         roots,
         graph,
@@ -1000,8 +1033,8 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         builder(),
         simplifier_,
         /*numWorkers=*/1,
-        joinFactory,
-        joinFactory);
+        fallbackJoinFactory,
+        fallbackJoinFactory);
   }
 
   NodeCP rewriteJoin(const Join* node, NoContext& context) override {
@@ -1079,7 +1112,8 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
 
   // Remote exchanges that unconditionally establish a partitioning on 'input'.
   NodeCP gather(NodeCP input) {
-    return builder().make<Exchange>({input, Partitioning::globalGather()});
+    return builder().make<Exchange>(
+        {input, Partitioning::gather(PropertyScope::kGlobal)});
   }
 
   // An order-preserving gather: merges the sorted per-task streams (the input
@@ -1090,7 +1124,9 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       const ExprVector& orderKeys,
       const OrderTypeVector& orderTypes) {
     return builder().make<Exchange>(
-        {input, Partitioning::globalGatherMerge(orderKeys, orderTypes)});
+        {input,
+         Partitioning::gatherMerge(
+             PropertyScope::kGlobal, orderKeys, orderTypes)});
   }
 
   NodeCP partition(
@@ -1098,7 +1134,9 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       const ExprVector& keys,
       bool replicateNullsAndAny = false) {
     return builder().make<Exchange>(
-        {input, Partitioning::globalHash(keys, replicateNullsAndAny)});
+        {input,
+         Partitioning::hash(
+             PropertyScope::kGlobal, keys, replicateNullsAndAny)});
   }
 
   // Gives every task of the stage that runs 'probe' a full copy of 'build'.
@@ -1118,7 +1156,9 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       const ExprVector& keys,
       const connector::PartitionType* targetType) {
     return builder().make<Exchange>(
-        {input, Partitioning::globalConnectorHash(keys, targetType)});
+        {input,
+         Partitioning::connectorHash(
+             PropertyScope::kGlobal, keys, targetType)});
   }
 
   // Follows single-input nodes down to a scan and returns the bucketing its
@@ -1238,7 +1278,42 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   }
 
   NodeCP arbitrary(NodeCP input) {
-    return builder().make<Exchange>({input, Partitioning::globalArbitrary()});
+    return builder().make<Exchange>(
+        {input, Partitioning::arbitrary(PropertyScope::kGlobal)});
+  }
+
+  NodeCP driverPartition(NodeCP input, const ExprVector& keys) {
+    return builder().make<Exchange>(
+        {input,
+         keys.empty() ? Partitioning::gather(PropertyScope::kDriver)
+                      : Partitioning::hash(PropertyScope::kDriver, keys)});
+  }
+
+  NodeCP driverGatherMerge(
+      NodeCP input,
+      const ExprVector& orderKeys,
+      const OrderTypeVector& orderTypes) {
+    return builder().make<Exchange>(
+        {input,
+         Partitioning::gatherMerge(
+             PropertyScope::kDriver, orderKeys, orderTypes)});
+  }
+
+  // Co-locates rows on one driver and returns any materialized key columns.
+  // Existing placement proofs pass through; empty keys otherwise gather.
+  std::pair<NodeCP, ExprVector> ensureDriverCoLocated(
+      NodeCP input,
+      const ExprVector& keys,
+      const ColumnVector& keyAliases = {}) {
+    if (numDrivers_ == 1 || input->physicalProperties().driverCoLocates(keys)) {
+      return {input, keys};
+    }
+    if (keys.empty()) {
+      return {driverPartition(input, keys), keys};
+    }
+    auto [keyed, columnKeys] = PrecomputeProjections::materializeKeys(
+        input, keys, builder(), simplifier_, keyAliases);
+    return {driverPartition(keyed, columnKeys), columnKeys};
   }
 
   // True when 'input' already produces all rows on one task.
@@ -1323,25 +1398,14 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
                 input, node->groupingKeys(), Alignment::kCoLocated)) {
           input = grouped;
         } else {
-          return rewriteAggregateSplit(
-              node,
-              input,
-              /*remoteExchange=*/true,
-              /*partialLimit=*/std::nullopt);
+          return rewriteAggregateSplit(node, input, /*remoteExchange=*/true);
         }
       }
-      // Local two-stage: the input is already co-located (e.g. a bucketed
-      // scan's grouped fragment), but at numDrivers > 1 a local exchange still
-      // brings each group to one driver, so the partial reduces rows before it.
-      // At numDrivers == 1 there is no exchange, so a single stage is optimal.
-      // The local exchange itself is not materialized here — emit inserts it at
-      // numDrivers > 1 (local exchanges are implicit).
-      if (numDrivers_ > 1) {
-        return rewriteAggregateSplit(
-            node,
-            input,
-            /*remoteExchange=*/false,
-            /*partialLimit=*/std::nullopt);
+      // A single stage is safe when input properties already prove each group
+      // stays on one driver.
+      if (numDrivers_ > 1 &&
+          !input->physicalProperties().driverCoLocates(node->groupingKeys())) {
+        return rewriteAggregateSplit(node, input, /*remoteExchange=*/false);
       }
     }
     // A global () grouping set emits a default row over empty input; a
@@ -1391,7 +1455,16 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     // MarkDistinct chain can land: between the co-located input and the
     // aggregate, above whatever exchange brought the groups together.
     auto [distinctInput, aggregates] = expandDistinct(
-        coLocatedInput, groupingKeys, precomputedAggregates, builder());
+        coLocatedInput,
+        groupingKeys,
+        precomputedAggregates,
+        builder(),
+        numDrivers_);
+    const ColumnVector groupingAliases{
+        node->outputColumns().begin(),
+        node->outputColumns().begin() + groupingKeys.size()};
+    std::tie(distinctInput, groupingKeys) =
+        ensureDriverCoLocated(distinctInput, groupingKeys, groupingAliases);
 
     return builder().make<Aggregate>(
         {.input = distinctInput,
@@ -1399,6 +1472,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
          .aggregates = std::move(aggregates),
          .outputColumns = node->outputColumns(),
          .step = node->step(),
+         .scope = node->scope(),
          .groupId = node->groupId(),
          .globalGroupingSets = node->globalGroupingSets()});
   }
@@ -1472,14 +1546,10 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   // aggregate (e.g. array_agg) gains nothing and pays an extra hash pass; not
   // splitting it needs a reducing/non-reducing classification that does not yet
   // exist, so that pessimization is deferred.
-  //
-  // With 'partialLimit', the partial's output is limited to that many rows,
-  // and with a remote exchange gathered, so the final runs on one task.
   NodeCP rewriteAggregateSplit(
       const Aggregate* node,
       NodeCP input,
-      bool remoteExchange,
-      std::optional<int64_t> partialLimit) {
+      bool remoteExchange) {
     const size_t numKeys = node->groupingKeys().size();
     const auto& finalColumns = node->outputColumns();
 
@@ -1557,15 +1627,11 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
                     aggregate->orderTypes()));
     }
 
-    // Without a remote exchange the partial and final share one fragment; the
-    // final's local repartition (added at emit for numDrivers > 1) co-locates
-    // each group's partials on one driver.
-    if (partialLimit) {
-      partial = builder().make<Limit>({partial, /*offset=*/0, *partialLimit});
-    }
-    NodeCP finalInput = !remoteExchange     ? partial
-        : finalKeys.empty() || partialLimit ? gather(partial)
-                                            : partition(partial, finalKeys);
+    NodeCP finalInput = !remoteExchange ? partial
+        : finalKeys.empty()             ? gather(partial)
+                                        : partition(partial, finalKeys);
+    std::tie(finalInput, finalKeys) =
+        ensureDriverCoLocated(finalInput, finalKeys);
 
     return builder().make<Aggregate>(
         {.input = finalInput,
@@ -1584,6 +1650,8 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   NodeCP rewriteWindow(const Window* node, NoContext& context) override {
     auto [input, partitionKeys] =
         ensureCoLocated(rewrite(node->input(), context), node->partitionKeys());
+    std::tie(input, partitionKeys) =
+        ensureDriverCoLocated(input, partitionKeys);
     if (input == node->input()) {
       return node;
     }
@@ -1602,6 +1670,8 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   NodeCP rewriteRowNumber(const RowNumber* node, NoContext& context) override {
     auto [input, partitionKeys] =
         ensureCoLocated(rewrite(node->input(), context), node->partitionKeys());
+    std::tie(input, partitionKeys) =
+        ensureDriverCoLocated(input, partitionKeys);
     if (input == node->input()) {
       return node;
     }
@@ -1619,6 +1689,8 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       override {
     auto [input, partitionKeys] =
         ensureCoLocated(rewrite(node->input(), context), node->partitionKeys());
+    std::tie(input, partitionKeys) =
+        ensureDriverCoLocated(input, partitionKeys);
     if (input == node->input()) {
       return node;
     }
@@ -1633,24 +1705,24 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
          outputFollowingInput(node, input)});
   }
 
-  // Distributes a global ORDER BY (Sort). At numWorkers>1 each task sorts its
-  // own rows and an order-preserving merge gather (MergeExchange) combines the
-  // sorted streams onto one task, so the sort parallelizes across tasks instead
-  // of running on a single gathered task. A single worker, or an input already
-  // gathered onto one task, sorts in one pass. Runs bottom-up, so the input is
-  // already physically planned.
+  // Distributes a global ORDER BY at both scopes. Multiple drivers sort in
+  // parallel and merge to one stream per task. Multiple tasks merge those
+  // streams globally; an existing driver or task gather skips its merge.
   NodeCP rewriteSort(const Sort* node, NoContext& context) override {
     NodeCP input = rewrite(node->input(), context);
-    if (numWorkers_ == 1 || isGathered(input)) {
-      if (input == node->input()) {
-        return node;
-      }
-      return builder().make<Sort>(
-          {input, node->orderKeys(), node->orderTypes()});
+    const bool needsDriverMerge = numDrivers_ > 1 &&
+        !input->physicalProperties().driverCoLocates(/*keys=*/{});
+    NodeCP sorted = !needsDriverMerge && input == node->input()
+        ? node
+        : builder().make<Sort>(
+              {input, node->orderKeys(), node->orderTypes(), needsDriverMerge});
+    if (needsDriverMerge) {
+      sorted = driverGatherMerge(sorted, node->orderKeys(), node->orderTypes());
     }
-    NodeCP partialSort =
-        builder().make<Sort>({input, node->orderKeys(), node->orderTypes()});
-    return gatherMerge(partialSort, node->orderKeys(), node->orderTypes());
+    if (numWorkers_ == 1 || isGathered(input)) {
+      return sorted;
+    }
+    return gatherMerge(sorted, node->orderKeys(), node->orderTypes());
   }
 
   // An Unnest outside any join cluster.
@@ -1673,6 +1745,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       const EnforceSingleRow* node,
       NoContext& context) override {
     NodeCP input = ensureGathered(rewrite(node->input(), context));
+    std::tie(input, std::ignore) = ensureDriverCoLocated(input, {});
     if (input == node->input()) {
       return node;
     }
@@ -1686,6 +1759,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       override {
     auto [input, distinctKeys] =
         ensureCoLocated(rewrite(node->input(), context), node->distinctKeys());
+    std::tie(input, distinctKeys) = ensureDriverCoLocated(input, distinctKeys);
     if (input == node->input()) {
       return node;
     }
@@ -1693,79 +1767,139 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         {input, distinctKeys, node->errorMessage()});
   }
 
-  // Distributes a LIMIT: at numWorkers>1 a per-task partial keeps the first
-  // offset+count rows, the gather brings them to one task, and the full Limit
-  // applies offset/count there.
+  // Distributes a bounded LIMIT at both scopes. Each driver keeps
+  // offset+count rows before one exact Limit per task; each task keeps the same
+  // bound before the global gather and final exact Limit. An exact Limit runs
+  // on one driver, so an unbounded path needs no explicit driver gather.
   //
-  // Over a DISTINCT (an aggregate with grouping keys only) that would split
-  // into partial and final, the partial DISTINCT carries that partial Limit,
-  // and the gathered rows are deduplicated once before the Limit, so the
-  // shuffle on the keys is gone. A partial DISTINCT emits each key the first
-  // time it sees it, so a task or driver stops reading once its limit is met.
+  // A bounded LIMIT over a DISTINCT whose input does not already co-locate the
+  // distinct keys at both scopes is planned by `distributeDistinctLimit`.
   NodeCP rewriteLimit(const Limit* node, NoContext& context) override {
     const auto* distinct =
         isDistinct(node->input()) ? node->input()->as<Aggregate>() : nullptr;
-    NodeCP newInput;
+    NodeCP input;
     if (distinct != nullptr) {
       NodeCP distinctInput = rewrite(distinct->input(), context);
-      const bool remoteExchange = numWorkers_ > 1 &&
-          needsShuffle(distinctInput, distinct->groupingKeys());
-      if (node->isBounded() && (remoteExchange || numDrivers_ > 1)) {
-        NodeCP split = rewriteAggregateSplit(
-            distinct, distinctInput, remoteExchange, node->offsetPlusCount());
-        return builder().make<Limit>({split, node->offset(), node->count()});
+      const auto& keys = distinct->groupingKeys();
+      const bool taskCoLocated =
+          numWorkers_ == 1 || !needsShuffle(distinctInput, keys);
+      const bool driverCoLocated = numDrivers_ == 1 ||
+          distinctInput->physicalProperties().driverCoLocates(keys);
+      if (node->isBounded() && !(taskCoLocated && driverCoLocated)) {
+        return distributeDistinctLimit(node, distinct, distinctInput);
       }
-      newInput = distributeAggregate(distinct, distinctInput);
+      input = distributeAggregate(distinct, distinctInput);
     } else {
-      newInput = rewrite(node->input(), context);
+      input = rewrite(node->input(), context);
     }
 
-    if (numWorkers_ == 1 || isGathered(newInput)) {
-      if (newInput == node->input()) {
-        return node;
-      }
-      return builder().make<Limit>({newInput, node->offset(), node->count()});
-    }
-
-    // A partial keeps the first offset + count rows of each task; with no
-    // count that is every row, so there is nothing to reduce before the gather.
-    if (!node->isBounded()) {
+    const bool needsGlobalGather = numWorkers_ > 1 && !isGathered(input);
+    if (needsGlobalGather && !node->isBounded()) {
       return builder().make<Limit>(
-          {gather(newInput), node->offset(), node->count()});
+          {gather(input), node->offset(), node->count()});
     }
 
-    NodeCP partial = builder().make<Limit>(
-        {newInput, /*offset=*/0, node->offsetPlusCount()});
+    const int64_t taskOffset = needsGlobalGather ? 0 : node->offset();
+    const int64_t taskCount =
+        needsGlobalGather ? node->offsetPlusCount() : node->count();
+    NodeCP taskLimit;
+    if (numDrivers_ > 1 && node->isBounded() &&
+        !input->physicalProperties().driverCoLocates(/*keys=*/{})) {
+      NodeCP partial = builder().make<Limit>(
+          {input,
+           /*offset=*/0,
+           node->offsetPlusCount(),
+           /*partial=*/true});
+      taskLimit = builder().make<Limit>(
+          {driverPartition(partial, {}), taskOffset, taskCount});
+    } else {
+      taskLimit = builder().make<Limit>({input, taskOffset, taskCount});
+    }
+    if (!needsGlobalGather) {
+      return taskLimit;
+    }
     return builder().make<Limit>(
-        {gather(partial), node->offset(), node->count()});
+        {gather(taskLimit), node->offset(), node->count()});
   }
 
-  // Distributes a bounded ORDER BY (TopN, an ORDER BY + LIMIT): at numWorkers>1
-  // a per-task partial keeps its own top offset+count rows, and an
-  // order-preserving merge gather combines those sorted streams, so the one
-  // task only has to drop rows outside offset/count rather than sort again.
+  // Plans a bounded LIMIT over 'distinct', a DISTINCT over 'input'. Each driver
+  // deduplicates its own rows and keeps the first offset + count keys, so at
+  // most that many rows per driver reach one driver, where a single aggregate
+  // deduplicates across drivers and tasks before the exact Limit.
+  NodeCP distributeDistinctLimit(
+      const Limit* node,
+      const Aggregate* distinct,
+      NodeCP input) {
+    const size_t numKeys = distinct->groupingKeys().size();
+    const auto& outputColumns = distinct->outputColumns();
+
+    // Both aggregates publish each key under the DISTINCT's output column.
+    PrecomputeProjections precompute{
+        input, builder(), simplifier_, /*projectAllInputs=*/false};
+    ExprVector driverKeys;
+    driverKeys.reserve(numKeys);
+    for (size_t i = 0; i < numKeys; ++i) {
+      driverKeys.push_back(
+          precompute.toColumn(distinct->groupingKeys()[i], outputColumns[i]));
+    }
+    NodeCP result = builder().make<Aggregate>(
+        {.input = std::move(precompute).node(),
+         .groupingKeys = std::move(driverKeys),
+         .outputColumns = outputColumns,
+         .scope = PropertyScope::kDriver,
+         .groupId = distinct->groupId(),
+         .globalGroupingSets = distinct->globalGroupingSets()});
+    result = builder().make<Limit>(
+        {result, /*offset=*/0, node->offsetPlusCount(), /*partial=*/true});
+    result = ensureGathered(result);
+    std::tie(result, std::ignore) = ensureDriverCoLocated(result, {});
+
+    result = builder().make<Aggregate>(
+        {.input = result,
+         .groupingKeys =
+             ExprVector{outputColumns.begin(), outputColumns.begin() + numKeys},
+         .outputColumns = outputColumns,
+         .groupId = distinct->groupId(),
+         .globalGroupingSets = distinct->globalGroupingSets()});
+    return builder().make<Limit>({result, node->offset(), node->count()});
+  }
+
+  // Distributes a bounded ORDER BY at both scopes. Drivers compute partial
+  // TopN and merge to one ordered stream per task. Tasks retain offset+count
+  // rows before the global merge, and the final Limit applies offset/count.
   NodeCP rewriteTopN(const TopN* node, NoContext& context) override {
     NodeCP newInput = rewrite(node->input(), context);
-    if (numWorkers_ == 1 || isGathered(newInput)) {
-      if (newInput == node->input()) {
-        return node;
-      }
-      return builder().make<TopN>(
+    const bool needsGlobalGather = numWorkers_ > 1 && !isGathered(newInput);
+    const int64_t taskOffset = needsGlobalGather ? 0 : node->offset();
+    const int64_t taskCount =
+        needsGlobalGather ? node->offsetPlusCount() : node->count();
+    NodeCP localTopN;
+    if (numDrivers_ > 1 &&
+        !newInput->physicalProperties().driverCoLocates(/*keys=*/{})) {
+      NodeCP partial = builder().make<TopN>(
           {newInput,
            node->orderKeys(),
            node->orderTypes(),
-           node->offset(),
-           node->count()});
+           /*offset=*/0,
+           node->offsetPlusCount(),
+           /*partial=*/true});
+      localTopN = builder().make<Limit>(
+          {driverGatherMerge(partial, node->orderKeys(), node->orderTypes()),
+           taskOffset,
+           taskCount});
+    } else {
+      localTopN = builder().make<TopN>(
+          {newInput,
+           node->orderKeys(),
+           node->orderTypes(),
+           taskOffset,
+           taskCount});
     }
-
-    NodeCP partial = builder().make<TopN>(
-        {newInput,
-         node->orderKeys(),
-         node->orderTypes(),
-         /*offset=*/0,
-         node->offsetPlusCount()});
+    if (!needsGlobalGather) {
+      return localTopN;
+    }
     return builder().make<Limit>(
-        {gatherMerge(partial, node->orderKeys(), node->orderTypes()),
+        {gatherMerge(localTopN, node->orderKeys(), node->orderTypes()),
          node->offset(),
          node->count()});
   }
@@ -1869,40 +2003,53 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   NodeCP rewriteTableWrite(const TableWrite* node, NoContext& context)
       override {
     NodeCP newInput = rewrite(node->input(), context);
-    if (numWorkers_ > 1 && node->kind() != connector::WriteKind::kDelete) {
-      const auto* layout = node->table()->layouts().front();
-      const auto& partitionColumns = layout->partitionColumns();
-      if (!partitionColumns.empty()) {
+    const auto* layout = node->table()->layouts().front();
+    const auto& partitionColumns = layout->partitionColumns();
+    if (node->kind() != connector::WriteKind::kDelete &&
+        !partitionColumns.empty() && (numWorkers_ > 1 || numDrivers_ > 1)) {
+      const auto& schema = node->table()->type();
+      ExprVector keys;
+      keys.reserve(partitionColumns.size());
+      for (const auto* partitionColumn : partitionColumns) {
+        keys.push_back(node->columnExprs().at(
+            schema->getChildIdx(partitionColumn->name())));
+      }
+      if (numWorkers_ > 1) {
         // Coarsened here, not at emit: the exchange's partition count and the
         // writer fragment's task count are the same decision.
-        const auto* targetType = queryCtx()->scaledPartitionType(
+        const auto* taskPartitionType = queryCtx()->scaledPartitionType(
             layout->partitionType().get(), numWorkers_);
-        const auto& schema = node->table()->type();
-        ExprVector keys;
-        keys.reserve(partitionColumns.size());
-        for (const auto* partitionColumn : partitionColumns) {
-          keys.push_back(node->columnExprs().at(
-              schema->getChildIdx(partitionColumn->name())));
-        }
         // Reading the source by its own bucketing can deliver rows already
         // grouped the way the target is written, which saves the shuffle.
         if (!newInput->physicalProperties()
                  .globalPartition.satisfiesWritePartitioning(
-                     keys, *targetType)) {
+                     keys, *taskPartitionType)) {
           if (NodeCP grouped =
                   groupedRead(newInput, keys, Alignment::kExactKeys)) {
             if (grouped->physicalProperties()
                     .globalPartition.satisfiesWritePartitioning(
-                        keys, *targetType)) {
+                        keys, *taskPartitionType)) {
               newInput = grouped;
             }
           }
         }
         if (!newInput->physicalProperties()
                  .globalPartition.satisfiesWritePartitioning(
-                     keys, *targetType)) {
-          newInput = partitionTo(newInput, keys, targetType);
+                     keys, *taskPartitionType)) {
+          newInput = partitionTo(newInput, keys, taskPartitionType);
         }
+      }
+      // Keep the native layout type here. Connector local specs derive the
+      // bucket-to-driver map from the runtime driver count; the scaled task
+      // type already embeds the bucket-to-task map.
+      if (numDrivers_ > 1 &&
+          !newInput->physicalProperties()
+               .driverPartition.satisfiesWritePartitioning(
+                   keys, *layout->partitionType())) {
+        newInput = builder().make<Exchange>(
+            {newInput,
+             Partitioning::connectorHash(
+                 PropertyScope::kDriver, keys, layout->partitionType().get())});
       }
     }
     if (newInput == node->input()) {

@@ -1058,6 +1058,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
               node->aggregates(),
               node->outputColumns(),
               node->step(),
+              node->scope(),
               node->groupId(),
               node->globalGroupingSets()},
           {newInput, std::move(childContext.outputSubstitutions)});
@@ -1122,6 +1123,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
             std::move(survivingAggregates),
             std::move(survivingOutputs),
             node->step(),
+            node->scope(),
             node->groupId(),
             node->globalGroupingSets()},
         {newInput, std::move(childContext.outputSubstitutions)});

@@ -29,7 +29,15 @@ distributed execution, the plan must be split into fragments that can run
 independently on different nodes. Exchanges are the boundaries where
 fragments connect — they define how data moves between fragments.
 
-> **Note.** Single-node multi-threaded execution faces the same concerns at a different scale: data still needs to be repartitioned, gathered, or broadcast — just between threads within one task instead of between tasks on different nodes. Velox handles this through `LocalPartitionNode`. Conceptually, local and remote exchanges are the same primitive at different scopes, but this document focuses on the cross-fragment case. A unified optimizer model that treats both uniformly is future work — it is not a straightforward reuse: local and remote exchanges have very different cost profiles (local is in-process memory copy; remote adds serialization, network transfer, and buffering), and mixed plans (parallelism within a fragment plus parallelism across fragments) require reasoning about both at once.
+> **Note.** Single-node multi-threaded execution faces the same concerns at a
+> different scale: data still needs to be repartitioned or gathered between
+> drivers within one task. The physical IR represents both movements as
+> `Exchange`, distinguished by `PropertyScope::kGlobal` and
+> `PropertyScope::kDriver`. Global exchanges become fragment boundaries;
+> driver exchanges stay within a fragment and lower to Velox
+> `LocalPartitionNode` or `LocalMergeNode`. Planning both scopes together lets
+> an operator reuse an input partitioning instead of adding a redundant local
+> exchange during emission.
 
 Exchanges are needed for:
 
