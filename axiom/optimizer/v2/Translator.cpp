@@ -3853,6 +3853,7 @@ Translator::tryEvaluateOverDiscreteValues(const Aggregate* aggregate) {
           .aggregates = aggregate->aggregates(),
           .outputColumns = aggregate->outputColumns(),
           .step = aggregate->step(),
+          .scope = aggregate->scope(),
           .groupId = aggregate->groupId(),
           .globalGroupingSets = aggregate->globalGroupingSets(),
       },

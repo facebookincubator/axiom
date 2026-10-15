@@ -3030,6 +3030,7 @@ class Decorrelator : public NodeRewriter<> {
         .aggregates = aggregate->aggregates(),
         .outputColumns = std::move(outputColumns),
         .step = aggregate->step(),
+        .scope = aggregate->scope(),
         .groupId = aggregate->groupId(),
         .globalGroupingSets = aggregate->globalGroupingSets(),
     });

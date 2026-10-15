@@ -215,6 +215,7 @@ class EmptyScanSimplifier : public NodeRewriter<SimplifiedNodeContext> {
               .aggregates = node->aggregates(),
               .outputColumns = node->outputColumns(),
               .step = node->step(),
+              .scope = node->scope(),
               .groupId = node->groupId(),
               .globalGroupingSets = node->globalGroupingSets()},
           std::move(input));
