@@ -16,6 +16,7 @@
 
 #include "axiom/optimizer/BitSet.h"
 #include <gtest/gtest.h>
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "velox/common/memory/Memory.h"
 
@@ -31,8 +32,11 @@ class BitSetTest : public ::testing::Test {
   void SetUp() override {
     pool_ = velox::memory::memoryManager()->addLeafPool();
     allocator_ = std::make_unique<velox::HashStringAllocator>(pool_.get());
+    functionRegistry_ = FunctionRegistry::createPresto();
     ctx_ = std::make_unique<QueryGraphContext>(
-        *allocator_, OptimizerOptions::kMaxPlanObjectsDefault);
+        *allocator_,
+        OptimizerOptions::kMaxPlanObjectsDefault,
+        functionRegistry_);
     queryCtx() = ctx_.get();
   }
 
@@ -45,6 +49,7 @@ class BitSetTest : public ::testing::Test {
 
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::unique_ptr<velox::HashStringAllocator> allocator_;
+  std::shared_ptr<FunctionRegistry> functionRegistry_;
   std::unique_ptr<QueryGraphContext> ctx_;
 };
 

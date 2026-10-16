@@ -229,12 +229,31 @@ struct StatsAggregates {
   std::string sumDataSize;
 };
 
+/// Stores the function semantics used by one optimizer engine.
+///
+/// Example:
+///   auto functions = FunctionRegistry::createPresto();
+///   functions->registerFunction("custom", customMetadata());
+///   auto session = std::make_shared<OptimizerSession>(
+///       context, functions, statsWriter, properties, options);
 class FunctionRegistry {
-  FunctionRegistry() = default;
-
  public:
+  FunctionRegistry() = default;
   FunctionRegistry(FunctionRegistry&&) = delete;
   FunctionRegistry(const FunctionRegistry&) = delete;
+
+  /// Creates an independent registry populated with unprefixed Presto function
+  /// semantics. The caller may add engine-specific functions during setup.
+  static std::shared_ptr<FunctionRegistry> createPresto();
+
+  /// Creates an independent registry populated with prefixed Presto function
+  /// semantics. The caller may add engine-specific functions during setup.
+  static std::shared_ptr<FunctionRegistry> createPresto(
+      std::string_view prefix);
+
+  /// Returns the process-wide Presto registry for tests and hosts that have
+  /// not migrated to engine-owned registries.
+  static std::shared_ptr<const FunctionRegistry> testingCreate();
 
   /// Callback that returns the result of an aggregate function over empty
   /// input. Only used for "counting-like" aggregates that return non-NULL
@@ -270,7 +289,7 @@ class FunctionRegistry {
     return cardinality_;
   }
 
-  const std::string& specialForm(logical_plan::SpecialForm specialForm) {
+  const std::string& specialForm(logical_plan::SpecialForm specialForm) const {
     auto it = specialForms_.find(specialForm);
     VELOX_USER_CHECK(it != specialForms_.end());
     return it->second;
@@ -525,13 +544,6 @@ class FunctionRegistry {
       std::string_view name,
       std::string_view reverseName);
 
-  static FunctionRegistry* instance();
-
-  /// Registers Presto functions transform, transform_values and zip along with
-  /// metadata. Registers reversible Presto functions eq, lt, gt, lte, gte,
-  /// plus, multiply, and, or.
-  static void registerPrestoFunctions(std::string_view prefix = "");
-
   /// Registers a callback that provides results for aggregate functions over
   /// empty input. The callback is invoked for functions in 'names'.
   ///
@@ -570,6 +582,9 @@ class FunctionRegistry {
       std::span<const velox::Type* const> argTypes) const;
 
  private:
+  // Populates this registry with Presto optimizer semantics.
+  void addPrestoFunctions(std::string_view prefix);
+
   folly::F14FastMap<std::string, std::unique_ptr<FunctionMetadata>> metadata_;
 
   // Scalar functions.
@@ -606,7 +621,7 @@ class FunctionRegistry {
       aggregateEmptyResultResolvers_;
 };
 
-/// Shortcut for FunctionRegistry::instance()->metadata(name).
+/// Returns metadata for `name` from the active query's function registry.
 FunctionMetadataCP functionMetadata(std::string_view name);
 
 /// Returns FunctionSet bits for a scalar function or special form. If

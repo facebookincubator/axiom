@@ -54,7 +54,7 @@ TEST_F(LogicalPlanNodeEqualityTest, valuesNodeEquality) {
   EXPECT_EQ(*makeNode(), *makeNode());
 
   // Different id — still equal because id_ is not compared.
-  PlanBuilder::Context ctx;
+  auto ctx = PlanBuilder::Context::forConnectorlessPlan();
   ctx.planNodeIdGenerator->next();
   auto differentId = PlanBuilder(ctx).values({"x", "y"}, rows).planNode();
   EXPECT_EQ(*makeNode(), *differentId);
@@ -464,7 +464,7 @@ TEST_F(LogicalPlanNodeEqualityTest, outputNodeEquality) {
 
 TEST_F(LogicalPlanNodeEqualityTest, graphMatchNodeEquality) {
   auto makeNode = [](std::string_view predicate, std::string_view output) {
-    PlanBuilder::Context context;
+    auto context = PlanBuilder::Context::forConnectorlessPlan();
     auto graph =
         GraphBuilder(context, "g")
             .vertex("T", {"id", "name"})

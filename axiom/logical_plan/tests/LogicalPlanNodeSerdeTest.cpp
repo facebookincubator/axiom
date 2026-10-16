@@ -18,6 +18,7 @@
 
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/GraphBuilder.h"
@@ -66,11 +67,16 @@ class LogicalPlanNodeSerdeTest : public testing::Test {
     velox::connector::registerConnector(connector_);
     connector::ConnectorMetadataRegistry::global().insert(
         kTestConnectorId, connector_->metadata());
+    context_.emplace(
+        connector::makeTestContext("LogicalPlanNodeSerdeTest"),
+        std::string(kTestConnectorId),
+        std::string(connector::TestConnector::kDefaultSchema));
   }
 
   void TearDown() override {
     connector::ConnectorMetadataRegistry::global().erase(kTestConnectorId);
     velox::connector::unregisterConnector(kTestConnectorId);
+    context_.reset();
     connector_.reset();
     pool_.reset();
   }
@@ -89,9 +95,7 @@ class LogicalPlanNodeSerdeTest : public testing::Test {
   std::shared_ptr<memory::MemoryPool> pool_;
   std::shared_ptr<connector::TestConnector> connector_;
 
-  PlanBuilder::Context context_{
-      std::string(kTestConnectorId),
-      std::string(connector::TestConnector::kDefaultSchema)};
+  std::optional<PlanBuilder::Context> context_;
 };
 
 TEST_F(LogicalPlanNodeSerdeTest, valuesNodeWithVariants) {
@@ -159,7 +163,7 @@ TEST_F(LogicalPlanNodeSerdeTest, valuesNodeWithMultipleVectors) {
 
 TEST_F(LogicalPlanNodeSerdeTest, tableScanNode) {
   auto plan =
-      PlanBuilder(context_).tableScan("test_table", {"a", "b"}).planNode();
+      PlanBuilder(*context_).tableScan("test_table", {"a", "b"}).planNode();
   testRoundTrip(plan);
 }
 
@@ -279,7 +283,7 @@ TEST_F(LogicalPlanNodeSerdeTest, unionAllNode) {
 }
 
 TEST_F(LogicalPlanNodeSerdeTest, unnestNode) {
-  auto plan = PlanBuilder(context_)
+  auto plan = PlanBuilder(*context_)
                   .tableScan("test_table", {"arr"})
                   .unnest({Col("arr").unnestAs("elem")})
                   .build();
@@ -287,7 +291,7 @@ TEST_F(LogicalPlanNodeSerdeTest, unnestNode) {
 }
 
 TEST_F(LogicalPlanNodeSerdeTest, unnestNodeWithOrdinality) {
-  auto plan = PlanBuilder(context_)
+  auto plan = PlanBuilder(*context_)
                   .tableScan("test_table", {"arr"})
                   .unnest({Col("arr").unnestAs("elem")}, Ordinality())
                   .build();
@@ -305,7 +309,7 @@ TEST_F(LogicalPlanNodeSerdeTest, sampleNode) {
 }
 
 TEST_F(LogicalPlanNodeSerdeTest, tableWriteNode) {
-  auto plan = PlanBuilder(context_)
+  auto plan = PlanBuilder(*context_)
                   .tableScan("test_table", {"a", "b"})
                   .tableWrite(
                       "output_table",
@@ -330,13 +334,13 @@ TEST_F(LogicalPlanNodeSerdeTest, fixedPointNode) {
 
 TEST_F(LogicalPlanNodeSerdeTest, graphMatchNode) {
   auto graph =
-      GraphBuilder(context_, "g")
+      GraphBuilder(*context_, "g")
           .vertex("A", {"b", "c"})
           .backedBy("test_table", {"a"}, {"upper(b) AS c"})
           .edge("B", {})
           .backedBy(
               "u",
-              PlanBuilder(context_).values(
+              PlanBuilder(*context_).values(
                   ROW({"s", "d"}, BIGINT()), std::vector<Variant>{}),
               {"s", "d"},
               GraphBuilder::Endpoint{.table = "test_table", .columns = {"s"}},
@@ -353,7 +357,7 @@ TEST_F(LogicalPlanNodeSerdeTest, graphMatchNode) {
       std::vector<GraphLabelExpressionPtr>{
           std::make_shared<GraphLabelName>("A"),
           std::make_shared<GraphLabelWildcard>()});
-  auto plan = PlanBuilder(context_)
+  auto plan = PlanBuilder(*context_)
                   .startGraphMatch(graph)
                   .path("p", GraphPathSelector::any(2), GraphPathMode::kTrail)
                   .vertex("x", "A", "x.c = 'Y'")

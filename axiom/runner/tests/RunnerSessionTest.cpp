@@ -18,6 +18,9 @@
 
 #include <gtest/gtest.h>
 
+#include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/connectors/tests/TestConnectorContext.h"
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 
 namespace facebook::axiom::runner {
@@ -29,8 +32,11 @@ TEST(RunnerSessionTest, connectorSessionUsesProviderWriter) {
   velox::ConcurrentRuntimeStatWriter componentWriter;
   velox::ConcurrentRuntimeStatWriter connectorWriter;
 
-  auto context = std::make_shared<connector::ConnectorContext>(
+  auto metadataOwner = std::make_shared<connector::TestConnector>("a");
+  auto isolated = connector::makeTestContext(
       "q1",
+      std::vector<connector::TestCatalogRegistration>{
+          {metadataOwner, metadataOwner->metadata()}},
       "user",
       connector::ConnectorProperties{},
       [&](std::string_view connectorId)
@@ -39,9 +45,11 @@ TEST(RunnerSessionTest, connectorSessionUsesProviderWriter) {
         return std::shared_ptr<velox::BaseRuntimeStatWriter>(
             &connectorWriter, [](auto*) {});
       });
+  const auto& context = isolated.connectorContext;
 
   RunnerSession session{
       context,
+      optimizer::FunctionRegistry::createPresto(),
       std::shared_ptr<velox::BaseRuntimeStatWriter>(
           &componentWriter, [](auto*) {}),
       Properties{}};

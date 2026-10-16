@@ -16,9 +16,6 @@
 
 #include "axiom/cli/tests/SqlQueryRunnerTestBase.h"
 
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
-#include "velox/connectors/ConnectorRegistry.h"
-
 using namespace facebook::velox;
 
 namespace axiom::sql {
@@ -36,10 +33,6 @@ void SqlQueryRunnerTestBase::SetUp() {
 
 void SqlQueryRunnerTestBase::TearDown() {
   runner_.reset();
-  for (const auto& id : connectorIds_) {
-    facebook::axiom::connector::ConnectorMetadataRegistry::global().erase(id);
-    connector::ConnectorRegistry::global().erase(id);
-  }
 }
 
 std::unique_ptr<SqlQueryRunner> SqlQueryRunnerTestBase::makeRunner(
@@ -48,16 +41,17 @@ std::unique_ptr<SqlQueryRunner> SqlQueryRunnerTestBase::makeRunner(
     PermissionCheck permissionCheck,
     LogicalPlanCheck logicalPlanCheck) {
   return makeRunner(
-      [&]() {
+      [&](facebook::axiom::Connectors&,
+          auto& connectorRegistry,
+          auto& metadataRegistry) {
         testConnector_ =
             std::make_shared<facebook::axiom::connector::TestConnector>(
                 connectorId);
-        connector::ConnectorRegistry::global().insert(
-            testConnector_->connectorId(), testConnector_);
-        facebook::axiom::connector::ConnectorMetadataRegistry::global().insert(
-            testConnector_->connectorId(), testConnector_->metadata());
-
-        connectorIds_.emplace_back(testConnector_->connectorId());
+        facebook::axiom::connector::ConnectorMetadataRegistry::registerCatalog(
+            connectorRegistry,
+            metadataRegistry,
+            testConnector_,
+            testConnector_->metadata());
 
         return std::make_pair(testConnector_->connectorId(), kDefaultSchema);
       },
@@ -67,15 +61,15 @@ std::unique_ptr<SqlQueryRunner> SqlQueryRunnerTestBase::makeRunner(
 }
 
 std::unique_ptr<SqlQueryRunner> SqlQueryRunnerTestBase::makeRunner(
-    const std::function<std::pair<std::string, std::string>()>& initConnectors,
+    const SqlQueryRunner::ConnectorInitializer& initializeConnectors,
     std::function<std::string()> queryIdGenerator,
     PermissionCheck permissionCheck,
     LogicalPlanCheck logicalPlanCheck) {
   auto runner = std::make_unique<SqlQueryRunner>(
       "test_user", &progressScheduler_, useV2_);
-
   runner->initialize(
-      initConnectors,
+      initializeConnectors,
+      {},
       std::move(permissionCheck),
       std::move(logicalPlanCheck),
       std::move(queryIdGenerator));

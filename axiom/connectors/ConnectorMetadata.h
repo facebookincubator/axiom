@@ -1204,15 +1204,18 @@ struct Procedure {
 
 using ProcedurePtr = std::shared_ptr<const Procedure>;
 
+/// Describes one catalog's planning interface. The static methods below are
+/// legacy process-wide entry points; Axiom components resolve catalogs through
+/// ConnectorContext.
 class ConnectorMetadata {
  public:
   /// Return the metadata for a given connector ID. Throws if not registered.
-  [[deprecated("Use ConnectorMetadataRegistry::tryGet() instead.")]]
+  [[deprecated("Use ConnectorContext::metadata() instead.")]]
   static ConnectorMetadata* metadata(std::string_view connectorId);
 
   /// Return the metadata for a given connector ID, or nullptr if not
   /// registered.
-  [[deprecated("Use ConnectorMetadataRegistry::tryGet() instead.")]]
+  [[deprecated("Use ConnectorContext::tryMetadata() instead.")]]
   static ConnectorMetadata* FOLLY_NULLABLE
   tryMetadata(std::string_view connectorId);
 

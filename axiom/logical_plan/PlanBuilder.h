@@ -24,6 +24,8 @@
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
 
+#include "axiom/connectors/ConnectorContext.h"
+
 namespace facebook::axiom::logical_plan {
 
 class NameMappings;
@@ -95,7 +97,7 @@ class ThrowingSqlExpressionsParser : public velox::parse::SqlExpressionsParser {
 /// column names. Set the default connector ID in Context to omit it from
 /// individual tableScan calls:
 ///
-///   PlanBuilder::Context ctx(connectorId);
+///   PlanBuilder::Context ctx(connectorContext, connectorId);
 ///   auto plan = PlanBuilder(ctx)
 ///     .tableScan("orders")
 ///     .join(PlanBuilder(ctx).tableScan("customers"), "o_custkey = c_custkey",
@@ -115,7 +117,14 @@ class ThrowingSqlExpressionsParser : public velox::parse::SqlExpressionsParser {
 class PlanBuilder {
  public:
   /// Shared state across PlanBuilder instances. Pass the same Context to
-  /// multiple builders to keep plan-node IDs and column names globally unique.
+  /// multiple builders to keep plan-node IDs, column names, and connector
+  /// lookup consistent.
+  ///
+  /// Example:
+  ///   Context context{connectorContext, "hive", "default"};
+  ///   auto left = PlanBuilder(context).tableScan("orders").build();
+  ///   auto right = PlanBuilder(context).tableScan("customers").build();
+  ///
   struct Context {
     /// Identifies the connector to use when tableScan omits the catalog prefix.
     std::optional<std::string> defaultConnectorId;
@@ -136,6 +145,10 @@ class PlanBuilder {
     /// Enables constant folding when set. Also provides a memory pool for
     /// evaluating constant expressions.
     std::shared_ptr<velox::core::QueryCtx> queryCtx;
+
+    /// Query context used to resolve connector metadata for table operations.
+    /// Null for connectorless plans.
+    const connector::ConnectorContextPtr connectorContext;
 
     /// Rewrites function calls during expression resolution, e.g. maps
     /// SQL function names to Velox runtime functions.
@@ -162,7 +175,11 @@ class PlanBuilder {
     /// leaving names as-is.
     std::function<std::string(const std::string&)> identifierCanonicalizer;
 
+    /// Creates shared state for a plan that cannot access connector catalogs.
+    static Context forConnectorlessPlan();
+
     explicit Context(
+        connector::ConnectorContextPtr connectorContext,
         const std::optional<std::string>& defaultConnectorId = std::nullopt,
         const std::optional<std::string>& defaultSchema = std::nullopt,
         std::shared_ptr<velox::core::QueryCtx> queryCtxPtr = nullptr,
@@ -178,12 +195,26 @@ class PlanBuilder {
               std::make_shared<velox::core::PlanNodeIdGenerator>()},
           nameAllocator{std::make_shared<NameAllocator>()},
           queryCtx{std::move(queryCtxPtr)},
+          connectorContext{std::move(connectorContext)},
           hook{std::move(hook)},
           pool{
               queryCtx && queryCtx->pool()
                   ? queryCtx->pool()->addLeafChild("literals")
                   : nullptr},
-          coercer{coercer} {}
+          coercer{coercer} {
+      VELOX_CHECK_NOT_NULL(
+          this->connectorContext, "PlanBuilder::Context requires a context");
+    }
+
+   private:
+    struct ConnectorlessTag {};
+    explicit Context(ConnectorlessTag)
+        : sqlParser{std::make_shared<velox::parse::DuckSqlExpressionsParser>(
+              velox::parse::ParseOptions{.parseInListAsArray = false})},
+          planNodeIdGenerator{
+              std::make_shared<velox::core::PlanNodeIdGenerator>()},
+          nameAllocator{std::make_shared<NameAllocator>()},
+          connectorContext{nullptr} {}
   };
 
   /// Resolves a column reference from an outer query scope. Used to support
@@ -193,9 +224,10 @@ class PlanBuilder {
       const std::optional<std::string>& alias,
       const std::string& name)>;
 
+  /// Creates a builder for a connectorless plan.
   explicit PlanBuilder(Scope outerScope = nullptr)
       : PlanBuilder{
-            Context{},
+            Context::forConnectorlessPlan(),
             /*allowAmbiguousOutputNames=*/false,
             std::move(outerScope)} {}
 
@@ -222,6 +254,7 @@ class PlanBuilder {
         nameAllocator_{context.nameAllocator},
         outerScope_{std::move(outerScope)},
         sqlParser_{context.sqlParser},
+        connectorContext_{context.connectorContext},
         allowAmbiguousOutputNames_{allowAmbiguousOutputNames},
         coercer_{context.coercer},
         identifierCanonicalizer_{context.identifierCanonicalizer},
@@ -957,6 +990,10 @@ class PlanBuilder {
       std::vector<AggregateExprPtr>& exprs,
       NameMappings& mappings);
 
+  // Returns metadata for a connector operation.
+  std::shared_ptr<connector::ConnectorMetadata> connectorMetadata(
+      std::string_view connectorId) const;
+
   // Connector ID used when table names omit the catalog prefix.
   const std::optional<std::string> defaultConnectorId_;
 
@@ -976,6 +1013,9 @@ class PlanBuilder {
 
   // Parses SQL expression strings into Velox expression trees.
   const std::shared_ptr<velox::parse::SqlExpressionsParser> sqlParser_;
+
+  // Selects connector metadata for table operations.
+  const connector::ConnectorContextPtr connectorContext_;
 
   const bool allowAmbiguousOutputNames_;
 

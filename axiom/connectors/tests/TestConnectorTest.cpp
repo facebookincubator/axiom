@@ -59,7 +59,7 @@ class TestConnectorTest : public ::testing::Test, public test::VectorTestBase {
   }
 
   ConnectorSessionPtr makeSession() {
-    return std::make_shared<ConnectorSession>(
+    return ConnectorSession::testingCreate(
         /*queryId=*/"test",
         /*user=*/"test",
         Properties{},

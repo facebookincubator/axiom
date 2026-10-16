@@ -19,6 +19,7 @@
 
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/connectors/tests/TestConnector.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryCtx.h"
 
@@ -84,8 +85,7 @@ TEST_F(ConnectorMetadataRegistryTest, queryCtxFallback) {
   ConnectorMetadataRegistry::global().insert("catalog", globalMetadata);
 
   auto queryCtx = core::QueryCtx::create();
-  auto queryRegistry =
-      ConnectorMetadataRegistry::create(&ConnectorMetadataRegistry::global());
+  auto queryRegistry = ConnectorMetadataRegistry::create();
   auto queryMetadata = std::make_shared<StubConnectorMetadata>("query");
   queryRegistry->insert("catalog", queryMetadata);
   queryCtx->setRegistry(ConnectorMetadataRegistry::kRegistryKey, queryRegistry);
@@ -120,15 +120,14 @@ TEST_F(ConnectorMetadataRegistryTest, allMetadataIds) {
   ConnectorMetadataRegistry::global().insert("global-catalog", globalMetadata);
 
   auto queryCtx = core::QueryCtx::create();
-  auto queryRegistry =
-      ConnectorMetadataRegistry::create(&ConnectorMetadataRegistry::global());
+  auto queryRegistry = ConnectorMetadataRegistry::create();
   auto queryMetadata = std::make_shared<StubConnectorMetadata>("query");
   queryRegistry->insert("query-catalog", queryMetadata);
   queryCtx->setRegistry(ConnectorMetadataRegistry::kRegistryKey, queryRegistry);
 
   EXPECT_THAT(
       ConnectorMetadataRegistry::allMetadataIds(*queryCtx),
-      testing::UnorderedElementsAre("global-catalog", "query-catalog"));
+      testing::ElementsAre("query-catalog"));
 
   EXPECT_THAT(
       ConnectorMetadataRegistry::allMetadataIds(),
@@ -154,6 +153,37 @@ TEST_F(ConnectorMetadataRegistryTest, duplicateRegistration) {
       ConnectorMetadata::metadata("catalog")->as<StubConnectorMetadata>();
   ASSERT_NE(result, nullptr);
   EXPECT_EQ(result->label(), "first");
+}
+
+TEST_F(ConnectorMetadataRegistryTest, registerCatalog) {
+  auto connectorRegistry = velox::connector::ConnectorRegistry::create();
+  auto metadataRegistry = ConnectorMetadataRegistry::create();
+  auto connector = std::make_shared<TestConnector>("catalog");
+
+  ConnectorMetadataRegistry::registerCatalog(
+      *connectorRegistry, *metadataRegistry, connector, connector->metadata());
+
+  EXPECT_EQ(connectorRegistry->find("catalog"), connector);
+  EXPECT_EQ(metadataRegistry->find("catalog"), connector->metadata());
+}
+
+TEST_F(ConnectorMetadataRegistryTest, catalogRollback) {
+  auto connectorRegistry = velox::connector::ConnectorRegistry::create();
+  auto metadataRegistry = ConnectorMetadataRegistry::create();
+  auto existingMetadata = std::make_shared<StubConnectorMetadata>("existing");
+  metadataRegistry->insert("catalog", existingMetadata);
+  auto connector = std::make_shared<TestConnector>("catalog");
+
+  VELOX_ASSERT_THROW(
+      ConnectorMetadataRegistry::registerCatalog(
+          *connectorRegistry,
+          *metadataRegistry,
+          connector,
+          connector->metadata()),
+      "Key already registered: catalog");
+
+  EXPECT_EQ(connectorRegistry->find("catalog"), nullptr);
+  EXPECT_EQ(metadataRegistry->find("catalog"), existingMetadata);
 }
 
 } // namespace

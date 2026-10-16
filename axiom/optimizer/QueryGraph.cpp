@@ -21,6 +21,7 @@
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "folly/hash/Hash.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/expression/ScopedVarSetter.h"
@@ -358,8 +359,9 @@ bool Aggregate::KeyEq::operator()(
 }
 
 velox::Variant Aggregate::emptyInputResult() const {
-  auto result = FunctionRegistry::instance()->aggregateResultForEmptyInput(
-      name(), rawInputType_);
+  auto result = QueryGraphContext::current()
+                    .functionRegistry()
+                    .aggregateResultForEmptyInput(name(), rawInputType_);
   return result.isNull() ? velox::Variant::null(value().type->kind()) : result;
 }
 

@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include <folly/Indestructible.h>
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "velox/core/QueryCtx.h"
 
@@ -30,6 +31,20 @@ using Registry = ConnectorMetadataRegistry::Registry;
 using QueryCtx = velox::core::QueryCtx;
 
 namespace {
+
+struct CatalogOwner {
+  std::shared_ptr<velox::connector::Connector> connector;
+  std::shared_ptr<ConnectorMetadata> metadata;
+};
+
+std::shared_ptr<ConnectorMetadata> retainCatalog(
+    std::shared_ptr<velox::connector::Connector> connector,
+    std::shared_ptr<ConnectorMetadata> metadata) {
+  auto owner =
+      std::make_shared<CatalogOwner>(std::move(connector), std::move(metadata));
+  auto* metadataPointer = owner->metadata.get();
+  return {std::move(owner), metadataPointer};
+}
 
 Registry& registryFor(const QueryCtx& queryCtx) {
   auto registry =
@@ -41,14 +56,40 @@ Registry& registryFor(const QueryCtx& queryCtx) {
 
 // static
 Registry& ConnectorMetadataRegistry::global() {
-  static Registry kMetadataRegistry;
-  return kMetadataRegistry;
+  return *globalPtr();
+}
+
+// static
+const std::shared_ptr<Registry>& ConnectorMetadataRegistry::globalPtr() {
+  static const folly::Indestructible<std::shared_ptr<Registry>>
+      kMetadataRegistry{std::make_shared<Registry>()};
+  return *kMetadataRegistry;
 }
 
 // static
 std::shared_ptr<ConnectorMetadataRegistry::Registry>
-ConnectorMetadataRegistry::create(const Registry* parent) {
-  return std::make_shared<Registry>(parent);
+ConnectorMetadataRegistry::create() {
+  return std::make_shared<Registry>();
+}
+
+// static
+void ConnectorMetadataRegistry::registerCatalog(
+    velox::connector::ConnectorRegistry::Registry& connectorRegistry,
+    Registry& metadataRegistry,
+    std::shared_ptr<velox::connector::Connector> connector,
+    std::shared_ptr<ConnectorMetadata> metadata) {
+  VELOX_CHECK_NOT_NULL(connector);
+  VELOX_CHECK_NOT_NULL(metadata);
+
+  const auto connectorId = connector->connectorId();
+  connectorRegistry.insert(connectorId, connector);
+  try {
+    metadataRegistry.insert(
+        connectorId, retainCatalog(std::move(connector), std::move(metadata)));
+  } catch (...) {
+    connectorRegistry.erase(connectorId);
+    throw;
+  }
 }
 
 // static
@@ -83,9 +124,9 @@ std::shared_ptr<ConnectorMetadata> ConnectorMetadataRegistry::get(
   return metadata;
 }
 
-namespace {
-
-std::vector<std::string> metadataIds(const Registry& registry) {
+// static
+std::vector<std::string> ConnectorMetadataRegistry::allMetadataIds(
+    const Registry& registry) {
   auto entries = registry.snapshot();
   auto ids = std::vector<std::string>{};
   ids.reserve(entries.size());
@@ -95,17 +136,15 @@ std::vector<std::string> metadataIds(const Registry& registry) {
   return ids;
 }
 
-} // namespace
-
 // static
 std::vector<std::string> ConnectorMetadataRegistry::allMetadataIds(
     const QueryCtx& queryCtx) {
-  return metadataIds(registryFor(queryCtx));
+  return allMetadataIds(registryFor(queryCtx));
 }
 
 // static
 std::vector<std::string> ConnectorMetadataRegistry::allMetadataIds() {
-  return metadataIds(global());
+  return allMetadataIds(global());
 }
 
 // static

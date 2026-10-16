@@ -18,11 +18,15 @@
 
 #include "axiom/logical_plan/Expr.h"
 
+namespace facebook::axiom::optimizer {
+class FunctionRegistry;
+}
+
 namespace facebook::axiom::optimizer::test {
 
 /// Add map_row_from_map, padded_make_row_from_map, and make_named_row
 /// functions to the Optimizer's registry.
-void registerDfFunctions();
+void registerDfFunctions(FunctionRegistry& registry);
 
 /// Pass to logical_plan::PlanBuilder to allow it to resolve types for
 /// make-row functions.

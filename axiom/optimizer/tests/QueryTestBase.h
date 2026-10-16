@@ -20,6 +20,8 @@
 #include <gflags/gflags.h>
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/logical_plan/PlanBuilder.h"
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/RelationOp.h"
 #include "axiom/optimizer/VeloxHistory.h"
@@ -27,6 +29,10 @@
 #include "axiom/optimizer/v2/Optimize.h"
 #include "axiom/runner/LocalRunner.h"
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
+#include "velox/common/memory/CustomMemoryResourceRegistry.h"
+#include "velox/connectors/ConnectorRegistry.h"
+#include "velox/exec/ExchangeTransportRegistry.h"
+#include "velox/exec/OutputTransportRegistry.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
@@ -114,6 +120,13 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
   logical_plan::LogicalPlanNodePtr parseSelect(std::string_view sql) {
     return parseSelect(sql, defaultConnectorId_);
   }
+
+  /// Creates a plan-builder context that resolves table metadata through this
+  /// fixture's query-scoped connector context.
+  logical_plan::PlanBuilder::Context makePlanBuilderContext(
+      const std::string& defaultConnectorId = kTestConnectorId,
+      const std::string& defaultSchema = kDefaultSchema,
+      logical_plan::ExprResolver::FunctionRewriteHook hook = nullptr);
 
   logical_plan::LogicalPlanNodePtr parseSelect(
       std::string_view sql,
@@ -250,7 +263,25 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
       const std::function<void(v2::NodeCP)>& callback,
       const std::optional<OptimizerOptions>& optimizerOptions = std::nullopt);
 
-  std::shared_ptr<velox::core::QueryCtx>& getQueryCtx();
+  const std::shared_ptr<velox::core::QueryCtx>& getQueryCtx();
+
+  const connector::ConnectorContextPtr& getConnectorContext();
+
+  /// Selects the connector context for the next query. Tests with a private
+  /// catalog scope call this before parsing or planning the query.
+  void setConnectorContextForNextQuery(
+      connector::ConnectorContextPtr connectorContext,
+      std::shared_ptr<velox::connector::ConnectorRegistry::Registry>
+          connectorRegistry,
+      std::shared_ptr<connector::ConnectorMetadataRegistry::Registry>
+          metadataRegistry);
+
+  /// Uses `executor` for the next query's Velox context.
+  void setExecutorForNextQuery(folly::Executor* executor);
+
+  const std::shared_ptr<FunctionRegistry>& functionRegistry() const {
+    return functionRegistry_;
+  }
 
   static VeloxHistory& suiteHistory() {
     return *gSuiteHistory;
@@ -305,11 +336,6 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
       const std::vector<std::vector<std::optional<T>>>& rows) {
     return matchValues(makeRowVector(names, makeColumns(names.size(), rows)));
   }
-
-  /// Creates a QueryCtx with the specified query ID.
-  std::shared_ptr<velox::core::QueryCtx> makeQueryCtx(
-      const std::string& queryId);
-
   inline static std::unordered_map<std::string, std::string> config_;
 
   OptimizerOptions optimizerOptions_;
@@ -321,11 +347,13 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
       const std::string& key,
       std::string value) {
     connectorSessionProperties_[connectorId][key] = std::move(value);
+    queryState_.reset();
   }
 
   /// Clears all connector session properties set via setConnectorSession.
   void clearConnectorSession() {
     connectorSessionProperties_.clear();
+    queryState_.reset();
   }
 
   // Per-connector session properties passed to the OptimizerSession. Tests set
@@ -338,6 +366,16 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
   bool useV2_{true};
 
   std::shared_ptr<connector::TestConnector> testConnector_;
+  std::shared_ptr<velox::connector::ConnectorRegistry::Registry>
+      connectorRegistry_;
+  std::shared_ptr<connector::ConnectorMetadataRegistry::Registry>
+      metadataRegistry_;
+  std::shared_ptr<velox::exec::OutputTransportRegistry::Registry>
+      outputTransportRegistry_;
+  std::shared_ptr<velox::exec::ExchangeTransportRegistry::Registry>
+      exchangeTransportRegistry_;
+  std::shared_ptr<velox::memory::CustomMemoryResourceRegistry::Registry>
+      customMemoryResourceRegistry_;
 
   // When set, called after each v2 optimizer pass in every planVelox call of
   // the test. Set it while debugging to inspect the IR between passes.
@@ -379,10 +417,37 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
     return columns;
   }
 
+  struct QueryState {
+    std::shared_ptr<velox::core::QueryCtx> veloxContext;
+    connector::ConnectorContextPtr connectorContext;
+    std::shared_ptr<velox::connector::ConnectorRegistry::Registry>
+        connectorRegistry;
+    std::shared_ptr<connector::ConnectorMetadataRegistry::Registry>
+        metadataRegistry;
+  };
+
+  QueryState makeQueryState(
+      const std::string& queryId,
+      folly::Executor* executor);
+  QueryState makeQueryState(
+      connector::ConnectorContextPtr connectorContext,
+      std::shared_ptr<velox::connector::ConnectorRegistry::Registry>
+          connectorRegistry,
+      std::shared_ptr<connector::ConnectorMetadataRegistry::Registry>
+          metadataRegistry,
+      folly::Executor* executor);
+  QueryState& queryState();
+
+  TestResult runFragmentedPlan(
+      optimizer::PlanAndStats& plan,
+      QueryState& state);
+
   std::shared_ptr<velox::memory::MemoryPool> optimizerPool_;
 
-  // A QueryCtx created for each compiled query.
-  std::shared_ptr<velox::core::QueryCtx> queryCtx_;
+  // The query's Velox and connector contexts. Parsing, planning, optimization,
+  // and execution share this state until execution completes.
+  std::unique_ptr<QueryState> queryState_;
+  std::shared_ptr<FunctionRegistry> functionRegistry_;
   std::unique_ptr<optimizer::VeloxHistory> history_;
 
   inline static int32_t gQueryCounter{0};

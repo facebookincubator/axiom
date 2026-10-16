@@ -96,7 +96,9 @@ class FiltersTest : public test::QueryTestBase {
   void withContext(const std::function<void()>& callback) {
     HashStringAllocator allocator(&optimizerPool());
     auto context = std::make_unique<optimizer::QueryGraphContext>(
-        allocator, OptimizerOptions::kMaxPlanObjectsDefault);
+        allocator,
+        OptimizerOptions::kMaxPlanObjectsDefault,
+        functionRegistry());
     optimizer::queryCtx() = context.get();
 
     SCOPE_EXIT {

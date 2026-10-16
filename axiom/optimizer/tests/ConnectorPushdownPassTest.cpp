@@ -21,7 +21,6 @@
 
 #include <folly/coro/Baton.h>
 
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
@@ -33,7 +32,6 @@
 #include "axiom/sql/presto/SqlStatement.h"
 #include "folly/coro/CurrentExecutor.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/connectors/ConnectorRegistry.h"
 
 namespace facebook::axiom::optimizer::test {
 namespace {
@@ -68,12 +66,9 @@ class ConnectorPushdownPassTest : public optimizer::test::QueryTestBase {
 
   struct ScopedConnectorRegistration {
     ScopedConnectorRegistration(
-        std::string connectorId,
         std::shared_ptr<connector::TestConnector> connector,
         connector::TestConnectorMetadata* metadata)
-        : connectorId{std::move(connectorId)},
-          connector{std::move(connector)},
-          metadata{metadata} {}
+        : connector{std::move(connector)}, metadata{metadata} {}
 
     ScopedConnectorRegistration(ScopedConnectorRegistration&&) = default;
     ScopedConnectorRegistration& operator=(ScopedConnectorRegistration&&) =
@@ -82,15 +77,6 @@ class ConnectorPushdownPassTest : public optimizer::test::QueryTestBase {
     ScopedConnectorRegistration& operator=(const ScopedConnectorRegistration&) =
         delete;
 
-    ~ScopedConnectorRegistration() {
-      if (connector == nullptr) {
-        return;
-      }
-      connector::ConnectorMetadataRegistry::global().erase(connectorId);
-      velox::connector::ConnectorRegistry::global().erase(connectorId);
-    }
-
-    std::string connectorId;
     std::shared_ptr<connector::TestConnector> connector;
     connector::TestConnectorMetadata* metadata;
   };
@@ -101,11 +87,12 @@ class ConnectorPushdownPassTest : public optimizer::test::QueryTestBase {
     auto* metadata = dynamic_cast<connector::TestConnectorMetadata*>(
         connector->metadata().get());
     VELOX_CHECK_NOT_NULL(metadata);
-    velox::connector::ConnectorRegistry::global().insert(
-        connector->connectorId(), connector);
-    connector::ConnectorMetadataRegistry::global().insert(
-        std::string(id), connector->metadata());
-    return {std::string(id), std::move(connector), metadata};
+    connector::ConnectorMetadataRegistry::registerCatalog(
+        *connectorRegistry_,
+        *metadataRegistry_,
+        connector,
+        connector->metadata());
+    return {std::move(connector), metadata};
   }
 
   logical_plan::LogicalPlanNodePtr aggregatePlan(
@@ -128,7 +115,8 @@ class ConnectorPushdownPassTest : public optimizer::test::QueryTestBase {
         kTestConnectorId,
         kDefaultSchema,
         std::make_shared<::axiom::sql::presto::ParserSession>(
-            connector::makeTestContext("test"),
+            getConnectorContext(),
+            functionRegistry(),
             connector::makeTestStatWriter(),
             connector::Properties{},
             ::axiom::sql::presto::ParserOptions{}));
@@ -221,12 +209,21 @@ TEST_F(ConnectorPushdownPassTest, schemaResolver) {
                         ->addRootPool("scoped_connector_pushdown")
                         ->addAggregateChild("tables");
   auto scopedConnector = std::make_shared<connector::TestConnector>(
-      "scoped-layout", nullptr, std::move(scopedPool));
+      kTestConnectorId, nullptr, std::move(scopedPool));
   scopedConnector->addTable("t", ROW({"a", "b"}, BIGINT()));
-  auto scopedRegistry = connector::ConnectorMetadataRegistry::create(
-      &connector::ConnectorMetadataRegistry::global());
-  scopedRegistry->insert(kTestConnectorId, scopedConnector->metadata());
-  connector::SchemaResolver resolver{*scopedRegistry};
+  setConnectorSession(kTestConnectorId, "pushdown_mode", "scoped");
+  auto isolated = connector::makeTestContext(
+      "scoped-connector-pushdown",
+      std::vector<connector::TestCatalogRegistration>{
+          {scopedConnector, scopedConnector->metadata()}},
+      /*user=*/"test",
+      connectorSessionProperties_,
+      connectorStatWriterProvider());
+  setConnectorContextForNextQuery(
+      isolated.connectorContext,
+      isolated.connectorRegistry,
+      isolated.metadataRegistry);
+  connector::SchemaResolver resolver{isolated.connectorContext};
 
   std::atomic<size_t> globalCalls{0};
   testMetadata_->setPushdownMatcher([&](const Node&) {
@@ -234,7 +231,6 @@ TEST_F(ConnectorPushdownPassTest, schemaResolver) {
     return std::vector<PushdownRoot>{};
   });
   std::atomic<size_t> scopedCalls{0};
-  setConnectorSession(kTestConnectorId, "pushdown_mode", "scoped");
   scopedConnector->metadata()->setAsyncPushdownMatcher(
       [&](connector::ConnectorSessionPtr session,
           const Node&) -> folly::coro::Task<std::vector<PushdownRoot>> {
