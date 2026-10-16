@@ -57,8 +57,9 @@ support, Arrow-native data APIs, and built-in Parquet and Avro readers and
 writers. The connector should therefore use iceberg-cpp as the Iceberg semantic
 layer wherever the public API already exposes the required behavior. The library
 itself builds as C++23, but it can be built so that its public headers are
-consumable from C++20, which is what lets Axiom's C++20 code call it directly;
-see Dependency and Build Strategy.
+consumable from C++20, which is what lets Axiom's C++20 code call it directly.
+It is also built on a newer Arrow release than Velox, and the Axiom build keeps
+the two Arrows apart. Dependency and Build Strategy covers both.
 
 The relevant public API concepts are:
 
@@ -308,6 +309,14 @@ Existing Axiom modules:
 Existing Velox module:
 
 * `velox/velox/connectors/hive/iceberg`
+
+New build files:
+
+* `scripts/setup-iceberg-cpp.sh`, which installs the pinned iceberg-cpp revision
+  and the Arrow release it is built on.
+* `CMake/resolve_dependency_modules/iceberg-cpp.cmake` and its `iceberg-cpp/`
+  directory, which define `axiom_iceberg_cpp`, the only target through which
+  Axiom links iceberg-cpp.
 
 ### Configuration
 
@@ -1126,9 +1135,12 @@ is not enough for the REST catalog to load table metadata successfully; the same
 query must also give Velox the credentials and filesystem settings required to
 open every planned file.
 
-iceberg-cpp exposes `FileIO` as a public extension point, and the bundled build
-(`iceberg_bundle`) can use Arrow-backed file systems. Axiom should use that API
-directly instead of inventing an Iceberg metadata-file reader.
+iceberg-cpp exposes `FileIO` as a public extension point. The connector
+implements it on Velox's filesystem and registers it with iceberg-cpp, so
+iceberg-cpp still parses table metadata and manifests itself, but fetches them
+through the same filesystem and configuration that execution uses. The
+Arrow-backed file systems in iceberg-cpp's bundled build (`iceberg_bundle`) are
+not used.
 
 For v1, supported storage backends should be explicitly enumerated in
 documentation and tests. The stock S3 filesystem path does not automatically
@@ -1379,10 +1391,23 @@ cache and affinity routing to the milestone that adds them.
 
 ### Dependency and Build Strategy
 
-Axiom and Velox build as C++20; iceberg-cpp builds as C++23. The connector
-includes iceberg-cpp's public headers and uses its types directly from ordinary
-C++20 translation units. It has no adapter target, no per-file language-standard
-override, and no rule about which Axiom headers may mention an iceberg-cpp type.
+iceberg-cpp differs from Axiom's other dependencies in two ways:
+
+* It builds as C++23, while Axiom and Velox build as C++20. The connector uses
+  iceberg-cpp's C++20 compatibility mode and includes its public headers
+  directly.
+* It is built on Arrow 25, while Velox is built on Arrow 18. Axiom links all of
+  iceberg-cpp, with its Arrow, into one shared library that exposes no Arrow
+  symbol, so the two releases never meet.
+
+Both use iceberg-cpp and Velox as published, with no local patches.
+
+#### C++20 public headers
+
+The connector includes iceberg-cpp's public headers and uses its types directly
+from ordinary C++20 translation units. It has no adapter target, no per-file
+language-standard override, and no rule about which Axiom headers may mention an
+iceberg-cpp type.
 
 This rests on iceberg-cpp's C++20 compatibility mode, added upstream in
 apache/iceberg-cpp#936. A library built with `ICEBERG_CXX20_COMPAT=ON` installs
@@ -1405,21 +1430,6 @@ What the Axiom build has to get right:
   differently, so headers and libraries must come from the same installation,
   and a default-mode and a compatibility-mode package must not be mixed in one
   program.
-* **Pin a revision that has the mode.** #936 merged on 2026-10-09 as commit
-  `dab8664f`, after the v0.4.0 release. The connector pins a commit at or after
-  it until a release contains the change. iceberg-cpp is pre-1.0 and its public
-  headers still change between commits, and it is on the correctness path for
-  catalog access, scan planning, and delete applicability. Moving the pin is
-  therefore a deliberate change that fixes any source breaks and reruns the
-  connector's fixture tests.
-* **Keep the connector opt-in.** Axiom's own sources need nothing beyond C++20,
-  but an Iceberg-enabled build asks more of the toolchain in two places.
-  Building iceberg-cpp itself needs a C++23 compiler (upstream documents GCC 14+
-  or Clang 18+), and its C++20 headers use C++20 library features such as
-  `std::format`, which the standard library must provide. The connector is
-  therefore built only when a CMake option enables it
-  (`AXIOM_ENABLE_ICEBERG_CPP`, off by default), and a build without it keeps
-  Axiom's existing compiler floor.
 
 Upstream guards the C++20 surface itself. Its CI compiles every public header as
 C++20 and builds and links a C++20 example against an installed compatibility
@@ -1439,6 +1449,98 @@ and with no adapter in between those values reach connector code at every call.
 The connector converts a failed result into a Velox exception at the call site,
 naming the operation that failed, so Iceberg errors surface like any other
 connector error and no `Result<T>` crosses into Axiom's connector interfaces.
+
+#### Two Arrow releases in one process
+
+Velox's Parquet reader and writer are built on Arrow 18. iceberg-cpp's
+`iceberg_bundle` library, which holds the Avro reader the connector needs for
+manifest lists and manifests, is built on Arrow 25, and the pinned revision does
+not build against Arrow 18. A process that runs the connector therefore contains
+both releases.
+
+They cannot simply be linked side by side. The two define the same symbols with
+different class layouts, and the static linker and the dynamic loader both bind
+a symbol by name to the first definition they find. Linking iceberg-cpp's static
+libraries straight into Axiom binaries went wrong in both directions:
+
+* Velox's Arrow calls bound to Arrow 25. `arrow::DictionaryArray` is 72 bytes in
+  Arrow 18 and 80 in Arrow 25, so Arrow 25's constructor wrote 8 bytes past an
+  object Velox had allocated, and Parquet writes corrupted the heap.
+* With the link order reversed, iceberg-cpp's Arrow calls bound to Arrow 18.
+
+Reads happened to work either way, so running queries does not reveal the
+problem.
+
+Axiom therefore links iceberg-cpp only through `axiom_iceberg_cpp`, a shared
+library that holds all of iceberg-cpp together with its Arrow, Parquet, and the
+dependencies Arrow bundles. The connector depends on it like on any other
+library and never names an iceberg-cpp target:
+
+```cmake
+target_link_libraries(axiom_iceberg_connector_metadata PRIVATE axiom_iceberg_cpp)
+```
+
+Four rules make this work:
+
+* **iceberg-cpp's Arrow calls are bound inside the library.** They resolve
+  to its own Arrow when the library is linked, and nothing is left for the
+  loader to bind to whichever Arrow the process has.
+* **No Arrow symbol leaves the library.** Its Arrow libraries are linked
+  hidden, and every symbol whose name mentions the `arrow` or `parquet`
+  namespace is kept out of its exports. Hiding the libraries alone is not
+  enough, because iceberg-cpp's own objects carry Arrow templates and inline
+  functions compiled from Arrow 25 headers.
+* **iceberg-cpp is linked once.** All of iceberg-cpp is inside the library,
+  so its registries, such as reader factories and `FileIO` implementations,
+  exist once per process.
+* **Code that uses the library compiles against Velox's Arrow.** It gets
+  iceberg-cpp's headers but not Arrow 25's. The setup script installs Arrow 25
+  in a directory of its own, and configuration fails if Arrow headers sit in
+  iceberg-cpp's include directory. iceberg-cpp's CMake package is also resolved
+  in a directory scope of its own, because its imported Arrow targets have the
+  same names as Velox's.
+
+On macOS the library is linked with ld64's `-load_hidden` and an unexported
+symbols list. On Linux it uses `--exclude-libs`, a version script, and `-z defs`.
+
+A leak corrupts memory without making tests fail reliably, so it is checked
+mechanically. Every link of the library reads its symbol table and fails if the
+library exports or imports an `arrow` or `parquet` symbol, and a test applies
+the same check to the binaries that link the connector.
+
+What this means for the connector:
+
+* It cannot call an iceberg-cpp function whose signature mentions an Arrow C++
+  type; such a call fails to link. Phase 1 needs none. The catalog, table, scan,
+  and `FileIO` APIs it uses have no Arrow C++ types, and neither does the one
+  `iceberg_bundle` function it calls, `iceberg::avro::RegisterAll()`.
+  iceberg-cpp's Arrow-typed APIs are mostly its data readers and writers and its
+  Arrow file-system `FileIO`, which the connector replaces with Velox's readers
+  and its Velox-backed `FileIO`. A later phase that needs one can pass data
+  through the Arrow C data interface, which is stable across Arrow releases.
+* `libaxiom_iceberg_cpp` ships next to every binary that uses the connector,
+  like `libvelox`.
+* Setting up an Iceberg-enabled build compiles a second Arrow, with Parquet.
+
+#### Pinning and opt-in
+
+* **Pin a revision that has the compatibility mode.** #936 merged on 2026-10-09
+  as commit `dab8664f`, after the v0.4.0 release. The connector pins a commit at
+  or after it until a release contains the change. iceberg-cpp is pre-1.0 and
+  its public headers still change between commits, and it is on the correctness
+  path for catalog access, scan planning, and delete applicability. Moving the
+  pin is therefore a deliberate change that fixes any source breaks and reruns
+  the connector's fixture tests. The Arrow release is pinned alongside it, to
+  the one that revision is built and tested against.
+* **Keep the connector opt-in.** Axiom's own sources need nothing beyond C++20,
+  but an Iceberg-enabled build asks more of the toolchain. Building iceberg-cpp
+  needs a C++23 compiler (upstream documents GCC 14+ or Clang 18+), and Axiom is
+  then built with the same compiler, because iceberg-cpp's libraries need that
+  compiler's C++ standard library. iceberg-cpp's C++20 headers also use C++20
+  library features such as `std::format`. The connector is therefore built only
+  when a CMake option enables it (`AXIOM_ENABLE_ICEBERG_CPP`, off by default),
+  and a build without it keeps Axiom's existing compiler floor and contains a
+  single Arrow.
 
 ### Error Handling
 
@@ -1463,11 +1565,11 @@ blocked the operation.
 
 ### Reimplement REST, Metadata Parsing, and Manifest Planning in Axiom
 
-This would avoid an external dependency and the C++23 compiler needed to build
-it, but it would duplicate a large amount of Iceberg behavior: REST protocol
-handling, metadata JSON parsing, snapshot resolution, manifest list reading,
-partition spec evolution, delete-file applicability, and residual filters. This
-is not recommended.
+This would avoid an external dependency, the C++23 compiler needed to build it,
+and the second Arrow release it brings, but it would duplicate a large amount of
+Iceberg behavior: REST protocol handling, metadata JSON parsing, snapshot
+resolution, manifest list reading, partition spec evolution, delete-file
+applicability, and residual filters. This is not recommended.
 
 ### Use Velox Iceberg Connector Alone
 
@@ -1503,6 +1605,39 @@ headers compile as C++20. That removed the adapter but left Axiom rebasing the
 patch whenever upstream touched those headers. The upstream compatibility mode
 described in Dependency and Build Strategy makes both unnecessary, so neither is
 proposed.
+
+### Use One Arrow Release
+
+The shared library in Dependency and Build Strategy exists only because the
+process holds two Arrow releases. Three ways to get down to one were examined.
+Each needs a change outside Axiom.
+
+* **Build iceberg-cpp against Velox's Arrow 18.** Of iceberg-cpp's libraries
+  only `iceberg_bundle` uses Arrow C++, and most of it builds against Arrow 18.
+  What does not is one unused include of a newer Arrow header, and iceberg-cpp's
+  own Parquet data reader, which uses newer Parquet APIs and which the connector
+  never calls. A prototype that added an upstream option to build the bundle
+  without Parquet ran the connector with a single Arrow. It is not proposed.
+  The upstream change would serve only Axiom, and it would hold iceberg-cpp to
+  an Arrow release seven major versions behind the one it is developed and
+  tested on. iceberg-cpp's own tests do not build there, so any pin bump could
+  break the build again.
+* **Move Velox to iceberg-cpp's Arrow.** This is a port, not a version bump.
+  Most Velox sources that include Arrow headers, nearly all of them in its
+  Parquet reader and writer, fail to compile against Arrow 25, and some headers
+  they include are no longer shipped. An earlier attempt to move Velox's bundled
+  Arrow forward, facebookincubator/velox#14102, was closed without merging. It
+  is Velox's decision and outside this connector's scope.
+* **Use iceberg-cpp without Arrow C++.** Its core, data, and REST libraries do
+  not use Arrow C++, but the connector cannot leave out the bundle. Manifest
+  lists and manifests are Avro files, a REST catalog returns table metadata
+  that points at them rather than at data files, and iceberg-cpp's Avro reader
+  is written on Arrow C++. Porting that reader to nanoarrow, which iceberg-cpp's
+  core already uses, would remove the dependency, but it is a larger upstream
+  change than the connector should wait for.
+
+If one of these lands later, `axiom_iceberg_cpp` can become an ordinary link of
+iceberg-cpp's static libraries without any change to connector code.
 
 ## Adoption Plan
 
@@ -1680,6 +1815,12 @@ Integration tests:
 * Verify Puffin position-delete metadata is rejected during split conversion.
 * Verify Iceberg views fail with actionable unsupported-feature messages.
 * Verify unsupported Iceberg features fail with actionable messages.
+
+Build checks:
+
+* Every link of `axiom_iceberg_cpp` fails if the library exports or imports a
+  symbol that mentions the `arrow` or `parquet` namespace.
+* A test applies the same check to the connector test binary and the CLI.
 
 ### Bucket-aware Execution Follow-up Tests
 
