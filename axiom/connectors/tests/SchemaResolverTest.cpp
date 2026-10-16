@@ -19,6 +19,7 @@
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/connectors/tests/TestConnectorContext.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
 using namespace facebook::velox;
@@ -33,7 +34,12 @@ class SchemaResolverTest : public ::testing::Test {
     baseCatalog_ = generateCatalog("base", "baseschema");
     otherCatalog_ = generateCatalog("other", "otherschema");
     resolver_ = std::make_shared<SchemaResolver>(
-        ConnectorMetadataRegistry::global(), baseCatalog_.schema);
+        ConnectorContext::testingCreate(
+            "test",
+            "test",
+            ConnectorProperties{},
+            ConnectorContext::noopStatWriterProvider()),
+        baseCatalog_.schema);
   }
 
   void TearDown() override {
@@ -126,10 +132,6 @@ TEST_F(SchemaResolverTest, unregisteredConnectorThrows) {
 }
 
 TEST_F(SchemaResolverTest, scopedRegistryLookup) {
-  // Create a scoped registry that is a child of the global registry.
-  auto scopedRegistry =
-      ConnectorMetadataRegistry::create(&ConnectorMetadataRegistry::global());
-
   // Register a new connector with a table in the scoped registry only.
   auto scopedConnector = std::make_shared<connector::TestConnector>("scoped");
   const auto& scopedMetadata = scopedConnector->metadata();
@@ -142,35 +144,15 @@ TEST_F(SchemaResolverTest, scopedRegistryLookup) {
       {},
       /*ifNotExists=*/false,
       /*explain=*/false);
-  scopedRegistry->insert("scoped", scopedMetadata);
-
-  auto resolver{SchemaResolver{*scopedRegistry, "scopedschema"}};
+  auto isolated = makeTestContext(
+      "test",
+      std::vector<TestCatalogRegistration>{{scopedConnector, scopedMetadata}});
+  auto resolver{SchemaResolver{isolated.connectorContext, "scopedschema"}};
   auto table = resolver.findTable("scoped", {"scopedschema", "scoped_orders"});
   ASSERT_NE(table, nullptr);
 
   // The scoped registration must not have leaked into the global registry.
   ASSERT_EQ(ConnectorMetadataRegistry::tryGet("scoped"), nullptr);
-}
-
-TEST_F(SchemaResolverTest, scopedRegistryFallsBackToParent) {
-  // Create a scoped registry with no local entries that falls back to global.
-  auto scopedRegistry =
-      ConnectorMetadataRegistry::create(&ConnectorMetadataRegistry::global());
-
-  // Register a table in the globally-registered "base" catalog.
-  auto metadata = ConnectorMetadataRegistry::get("base");
-  metadata->createTable(
-      nullptr,
-      {"baseschema", "parent_table"},
-      ROW({}),
-      {},
-      /*ifNotExists=*/false,
-      /*explain=*/false);
-
-  // Resolver using scoped registry should still find the global table.
-  auto resolver{SchemaResolver{*scopedRegistry, "baseschema"}};
-  auto table = resolver.findTable("base", {"baseschema", "parent_table"});
-  ASSERT_NE(table, nullptr);
 }
 
 } // namespace

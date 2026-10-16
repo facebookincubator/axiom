@@ -17,7 +17,6 @@
 #include <folly/init/Init.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
@@ -41,20 +40,16 @@ class PlanTest : public test::HiveQueriesTestBase,
          velox::tpch::Table::TBL_REGION,
          velox::tpch::Table::TBL_LINEITEM,
          velox::tpch::Table::TBL_PART});
-    test::registerDfFunctions();
   }
 
   void SetUp() override {
     useV2_ = GetParam();
     test::HiveQueriesTestBase::SetUp();
+    test::registerDfFunctions(*functionRegistry());
   }
 
-  lp::PlanBuilder::Context makeContext() const {
-    return lp::PlanBuilder::Context{kTestConnectorId, kDefaultSchema};
-  }
-
-  lp::PlanBuilder::Context makeCoercingContext() const {
-    auto ctx = makeContext();
+  lp::PlanBuilder::Context makeCoercingContext() {
+    auto ctx = makePlanBuilderContext();
     ctx.coercer = &velox::TypeCoercer::defaults();
     return ctx;
   }
@@ -92,11 +87,8 @@ TEST_P(PlanTest, rejectedFilters) {
       "t", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), mapType}));
 
   auto scan = [&]() {
-    lp::PlanBuilder::Context ctx(
-        kTestConnectorId,
-        kDefaultSchema,
-        getQueryCtx(),
-        test::resolveDfFunction);
+    auto ctx = makePlanBuilderContext(
+        kTestConnectorId, kDefaultSchema, test::resolveDfFunction);
     ctx.coercer = &velox::TypeCoercer::defaults();
     return lp::PlanBuilder(ctx).tableScan("t");
   };
@@ -235,7 +227,7 @@ TEST_P(PlanTest, booleanSimplification) {
   for (const auto& [expr, expectedFilter, expectedProjection] : testCases) {
     {
       SCOPED_TRACE("Filter: " + expr);
-      auto logicalPlan = lp::PlanBuilder(makeContext())
+      auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                              .tableScan("numbers")
                              .filter(expr)
                              .map({"a + 2"})
@@ -261,7 +253,7 @@ TEST_P(PlanTest, booleanSimplification) {
 
     {
       SCOPED_TRACE("Project: " + expr);
-      auto logicalPlan = lp::PlanBuilder(makeContext())
+      auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                              .tableScan("numbers")
                              .map({expr})
                              .build();
@@ -307,7 +299,7 @@ TEST_P(PlanTest, specialFormConstantFold) {
 
   for (const auto& [expr, expected] : filterTestCases) {
     SCOPED_TRACE("Filter: " + expr);
-    auto logicalPlan = lp::PlanBuilder(makeContext())
+    auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                            .tableScan("numbers")
                            .filter(expr)
                            .map({"a + 2"})
@@ -365,7 +357,7 @@ TEST_P(PlanTest, specialFormConstantFold) {
 
   for (const auto& [expr, expected] : projectTestCases) {
     SCOPED_TRACE("Expression: " + expr);
-    auto logicalPlan = lp::PlanBuilder(makeContext())
+    auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                            .tableScan("numbers")
                            .project({expr, "a", "b"})
                            .build();
@@ -485,8 +477,7 @@ TEST_P(PlanTest, inList) {
       "numbers", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
 
   auto scan = [&]() {
-    lp::PlanBuilder::Context context(
-        kTestConnectorId, kDefaultSchema, getQueryCtx());
+    auto context = makePlanBuilderContext(kTestConnectorId, kDefaultSchema);
     return lp::PlanBuilder(context).tableScan("numbers");
   };
 
@@ -531,18 +522,16 @@ TEST_P(PlanTest, inList) {
 
 TEST_P(PlanTest, multipleConnectors) {
   auto extraConnector = std::make_shared<connector::TestConnector>("extra");
-  velox::connector::registerConnector(extraConnector);
-  connector::ConnectorMetadataRegistry::global().insert(
-      "extra", extraConnector->metadata());
-  SCOPE_EXIT {
-    connector::ConnectorMetadataRegistry::global().erase("extra");
-    velox::connector::unregisterConnector("extra");
-  };
+  connector::ConnectorMetadataRegistry::registerCatalog(
+      *connectorRegistry_,
+      *metadataRegistry_,
+      extraConnector,
+      extraConnector->metadata());
 
   testConnector_->addTable("table1", ROW({"a"}, {BIGINT()}));
   extraConnector->addTable("table2", ROW({"b"}, {BIGINT()}));
 
-  auto context = makeContext();
+  auto context = makePlanBuilderContext();
   auto logicalPlan =
       lp::PlanBuilder(context)
           .tableScan("table1")
@@ -566,8 +555,8 @@ TEST_P(PlanTest, filterToJoinEdge) {
   auto nationType = ROW({"n_regionkey"}, BIGINT());
   auto regionType = ROW({"r_regionkey"}, BIGINT());
 
-  lp::PlanBuilder::Context context(
-      exec::test::kHiveConnectorId, kDefaultSchema);
+  auto context =
+      makePlanBuilderContext(exec::test::kHiveConnectorId, kDefaultSchema);
   auto logicalPlan = lp::PlanBuilder(context)
                          .from({"nation", "region"})
                          .map({"n_regionkey", "r_regionkey"})
@@ -661,8 +650,8 @@ TEST_P(PlanTest, filterBreakup) {
       "                and l_shipinstruct = 'DELIVER IN PERSON'\n"
       "        )\n";
 
-  lp::PlanBuilder::Context context(
-      exec::test::kHiveConnectorId, kDefaultSchema);
+  auto context =
+      makePlanBuilderContext(exec::test::kHiveConnectorId, kDefaultSchema);
   auto logicalPlan =
       lp::PlanBuilder(context)
           .from({"lineitem", "part"})
@@ -735,7 +724,7 @@ TEST_P(PlanTest, values) {
       });
 
   {
-    auto context = makeContext();
+    auto context = makePlanBuilderContext();
     auto makeLogicalPlan = [&](const std::string& filter) {
       return lp::PlanBuilder(context)
           .values({rowVector})
@@ -779,7 +768,8 @@ TEST_P(PlanTest, values) {
   // We don't check produced plan, only that it results in the same rows as
   // correct exection plan.
   {
-    lp::PlanBuilder::Context ctx(exec::test::kHiveConnectorId, kDefaultSchema);
+    auto ctx =
+        makePlanBuilderContext(exec::test::kHiveConnectorId, kDefaultSchema);
     auto makeLogicalPlan = [&](uint8_t leafType,
                                const std::string& filter,
                                std::string_view alias) {
@@ -1006,7 +996,7 @@ TEST_P(PlanTest, lastProjection) {
   testConnector_->addTable(
       "numbers", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
 
-  auto logicalPlan = lp::PlanBuilder(makeContext())
+  auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                          .tableScan("numbers", {"a", "b"})
                          .aggregate({"a", "b"}, {"count(1)"})
                          .project({"a"})
@@ -1026,7 +1016,7 @@ TEST_P(PlanTest, lastProjection) {
 TEST_P(PlanTest, orderByDuplicateKeys) {
   testConnector_->addTable("t", ROW({"a"}, {BIGINT()}));
 
-  auto logicalPlan = lp::PlanBuilder(makeContext())
+  auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                          .tableScan("t")
                          .project({"2 * a AS x", "a * 2 AS y"})
                          .orderBy({"x DESC", "y ASC"})
@@ -1046,7 +1036,7 @@ TEST_P(PlanTest, lambdaArgs) {
   testConnector_->addTable(
       "t", ROW({"a", "b"}, {ARRAY(ARRAY(REAL())), BIGINT()}));
 
-  auto logicalPlan = lp::PlanBuilder(makeContext())
+  auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                          .tableScan("t")
                          .with({"b * 2 as x"})
                          .with({

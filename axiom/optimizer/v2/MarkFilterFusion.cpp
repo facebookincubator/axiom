@@ -17,6 +17,7 @@
 #include "axiom/optimizer/v2/MarkFilterFusion.h"
 
 #include "axiom/optimizer/FunctionRegistry.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 
 namespace facebook::axiom::optimizer::v2 {
 namespace {
@@ -26,7 +27,8 @@ bool isNot(ExprCP expression, ExprCP& argument) {
     return false;
   }
   const Call* call = expression->as<Call>();
-  if (call->name() != toName(FunctionRegistry::instance()->negation()) ||
+  if (call->name() !=
+          toName(QueryGraphContext::current().functionRegistry().negation()) ||
       call->args().size() != 1) {
     return false;
   }

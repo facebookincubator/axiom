@@ -21,6 +21,7 @@
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/pyspark/Exception.h"
 #include "axiom/pyspark/runners/Runner.h"
 #include "axiom/runner/LocalRunner.h"
@@ -87,12 +88,13 @@ std::vector<velox::RowVectorPtr> LocalRunner::execute(
 
   auto runner = std::make_shared<facebook::axiom::runner::LocalRunner>(
       std::make_shared<facebook::axiom::runner::RunnerSession>(
-          std::make_shared<facebook::axiom::connector::ConnectorContext>(
+          facebook::axiom::connector::ConnectorContext::testingCreate(
               queryCtx->queryId(),
               /*user=*/"pyspark-runner",
               facebook::axiom::connector::ConnectorProperties{},
               facebook::axiom::connector::ConnectorContext::
                   noopStatWriterProvider()),
+          facebook::axiom::optimizer::FunctionRegistry::testingCreate(),
           std::make_shared<velox::NoopRuntimeStatWriter>(),
           facebook::axiom::runner::Properties{}),
       plan_,

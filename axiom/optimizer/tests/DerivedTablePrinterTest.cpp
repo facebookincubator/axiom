@@ -15,16 +15,22 @@
  */
 
 #include "axiom/optimizer/DerivedTablePrinter.h"
+#include <folly/ScopeGuard.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/logical_plan/PlanBuilder.h"
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/OptimizerOptions.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/VeloxHistory.h"
+#include "axiom/runner/RunnerSession.h"
 #include "axiom/sql/presto/PrestoParser.h"
+#include "velox/common/memory/HashStringAllocator.h"
+#include "velox/core/QueryCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -47,8 +53,6 @@ class DerivedTablePrinterTest : public ::testing::Test {
 
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
-
-    optimizer::FunctionRegistry::registerPrestoFunctions();
   }
 
   void SetUp() override {
@@ -56,22 +60,18 @@ class DerivedTablePrinterTest : public ::testing::Test {
     optimizerPool_ = rootPool_->addLeafChild("optimizer");
 
     connector_ = std::make_shared<connector::TestConnector>(kTestConnectorId);
-    velox::connector::registerConnector(connector_);
-    connector::ConnectorMetadataRegistry::global().insert(
-        kTestConnectorId, connector_->metadata());
-  }
-
-  void TearDown() override {
-    connector::ConnectorMetadataRegistry::global().erase(kTestConnectorId);
-    velox::connector::unregisterConnector(kTestConnectorId);
+    functionRegistry_ = FunctionRegistry::createPresto();
   }
 
   std::vector<std::string> toLines(const std::string& sql) {
+    auto scope = connector::makeTestContext(
+        "DerivedTablePrinterTest", {{connector_, connector_->metadata()}});
     ::axiom::sql::presto::PrestoParser parser{
         kTestConnectorId,
         kDefaultSchema,
         std::make_shared<::axiom::sql::presto::ParserSession>(
-            connector::makeTestContext("test"),
+            scope.connectorContext,
+            functionRegistry_,
             connector::makeTestStatWriter(),
             connector::Properties{},
             ::axiom::sql::presto::ParserOptions{})};
@@ -81,70 +81,69 @@ class DerivedTablePrinterTest : public ::testing::Test {
     const auto& plan =
         *statement->as<::axiom::sql::presto::SelectStatement>()->plan();
 
-    return toLines(plan);
+    return toLines(plan, scope);
   }
 
-  std::vector<std::string> toLines(const lp::LogicalPlanNode& plan) {
+  std::vector<std::string> toLines(
+      const lp::LogicalPlanNode& plan,
+      const connector::IsolatedTestContext& scope) {
     auto allocator =
         std::make_unique<velox::HashStringAllocator>(optimizerPool_.get());
-    auto context = std::make_unique<QueryGraphContext>(
-        *allocator, OptimizerOptions::kMaxPlanObjectsDefault);
-    queryCtx() = context.get();
+    auto graphContext = std::make_unique<QueryGraphContext>(
+        *allocator,
+        OptimizerOptions::kMaxPlanObjectsDefault,
+        functionRegistry_);
+    queryCtx() = graphContext.get();
     SCOPE_EXIT {
       queryCtx() = nullptr;
     };
 
     auto veloxQueryCtx = velox::core::QueryCtx::create();
+    veloxQueryCtx->setRegistry(
+        velox::connector::ConnectorRegistry::kRegistryKey,
+        scope.connectorRegistry);
     velox::exec::SimpleExpressionEvaluator evaluator(
         veloxQueryCtx.get(), optimizerPool_.get());
-
     VeloxHistory history;
-
-    auto schemaResolver = std::make_shared<connector::SchemaResolver>(
-        connector::ConnectorMetadataRegistry::global());
 
     OptimizerOptions options;
     options.sampleJoins = false;
     options.sampleFilters = false;
-    auto connectorContext =
-        connector::makeTestContext(veloxQueryCtx->queryId());
+    connector::SchemaResolver schemaResolver{scope.connectorContext};
     auto optimizerSession = std::make_shared<OptimizerSession>(
-        connectorContext,
+        scope.connectorContext,
+        functionRegistry_,
         connector::makeTestStatWriter(),
         connector::Properties{},
         std::move(options));
     auto runnerSession = std::make_shared<runner::RunnerSession>(
-        connectorContext,
+        scope.connectorContext,
+        functionRegistry_,
         connector::makeTestStatWriter(),
         runner::Properties{});
 
-    Optimization opt{
+    Optimization optimization{
         optimizerSession,
         runnerSession,
         plan,
-        *schemaResolver,
+        schemaResolver,
         history,
         veloxQueryCtx,
         evaluator,
         {.maxRemotePartitions = 1, .maxLocalPartitions = 1}};
 
-    const auto dtString = DerivedTablePrinter::toText(*opt.rootDt());
-
-    LOG(INFO) << std::endl << dtString;
+    const auto text = DerivedTablePrinter::toText(*optimization.rootDt());
+    LOG(INFO) << std::endl << text;
 
     std::vector<std::string> lines;
-    folly::split('\n', dtString, lines);
-
+    folly::split('\n', text, lines);
     return lines;
-  }
-
-  lp::PlanBuilder::Context makeContext() const {
-    return lp::PlanBuilder::Context{kTestConnectorId, kDefaultSchema};
   }
 
   std::shared_ptr<velox::memory::MemoryPool> rootPool_;
   std::shared_ptr<velox::memory::MemoryPool> optimizerPool_;
   std::shared_ptr<connector::TestConnector> connector_;
+  std::shared_ptr<FunctionRegistry> functionRegistry_;
 };
 
 TEST_F(DerivedTablePrinterTest, basic) {
@@ -274,13 +273,17 @@ TEST_F(DerivedTablePrinterTest, write) {
   connector_->addTable("c", ROW({"a", "b"}, INTEGER()));
   connector_->addTable("z", ROW({"x", "y"}, INTEGER()));
 
+  const auto scope = connector::makeTestContext(
+      "DerivedTablePrinterTest", {{connector_, connector_->metadata()}});
   auto plan =
-      lp::PlanBuilder(makeContext())
+      lp::PlanBuilder(
+          lp::PlanBuilder::Context{
+              scope.connectorContext, kTestConnectorId, kDefaultSchema})
           .tableScan("c")
           .tableWrite("z", lp::WriteKind::kInsert, {"y", "x"}, {"a", "b"})
           .build();
 
-  auto lines = toLines(*plan);
+  auto lines = toLines(*plan, scope);
 
   EXPECT_THAT(
       lines,

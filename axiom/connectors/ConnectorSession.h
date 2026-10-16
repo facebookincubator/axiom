@@ -23,10 +23,11 @@
 
 #include <folly/container/F14Map.h>
 
-#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RuntimeMetrics.h"
 
 namespace facebook::axiom::connector {
+
+class ConnectorMetadata;
 
 /// Property bag for a single component or connector.
 using Properties = folly::F14FastMap<std::string, std::string>;
@@ -41,24 +42,31 @@ using ConnectorSessionPtr = std::shared_ptr<ConnectorSession>;
 /// connector's property slice, and the writer it records into. Every connector
 /// API takes one.
 ///
-/// Made by ConnectorContext on first use and released with it; a connector
-/// retains nothing beyond the call it was passed to.
+/// Made by ConnectorContext on first use. A session retains its catalog's
+/// metadata for its full lifetime.
+///
+/// Example:
+///   auto session = context->sessionFor("hive");
 ///
 /// Invariants:
 ///   - `statsWriter` is non-null.
 class ConnectorSession final {
  public:
-  ConnectorSession(
+  /// Creates a session that retains the connector's metadata when registered.
+  static ConnectorSessionPtr create(
       std::string queryId,
       std::string user,
       Properties properties,
-      std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter)
-      : queryId_{std::move(queryId)},
-        user_{std::move(user)},
-        properties_{std::move(properties)},
-        statsWriter_{std::move(statsWriter)} {
-    VELOX_CHECK_NOT_NULL(statsWriter_, "ConnectorSession requires a writer");
-  }
+      std::shared_ptr<ConnectorMetadata> metadata,
+      std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter);
+
+  /// Creates a connector-focused test or benchmark session. Production Axiom
+  /// queries obtain sessions from ConnectorContext::sessionFor().
+  static ConnectorSessionPtr testingCreate(
+      std::string queryId,
+      std::string user,
+      Properties properties,
+      std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter);
 
   /// Returns the query identifier.
   const std::string& queryId() const {
@@ -91,9 +99,17 @@ class ConnectorSession final {
   }
 
  private:
+  ConnectorSession(
+      std::string queryId,
+      std::string user,
+      Properties properties,
+      std::shared_ptr<ConnectorMetadata> metadata,
+      std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter);
+
   const std::string queryId_;
   const std::string user_;
   const Properties properties_;
+  const std::shared_ptr<ConnectorMetadata> metadata_;
   const std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter_;
 };
 

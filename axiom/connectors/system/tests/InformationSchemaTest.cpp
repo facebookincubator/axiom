@@ -22,7 +22,6 @@
 #include "axiom/connectors/system/SystemConnectorMetadata.h"
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
-#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/functions/prestosql/types/PrestoTypes.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -51,16 +50,7 @@ class InformationSchemaTest : public optimizer::test::QueryTestBase {
   }
 
   void TearDown() override {
-    if (tpchConnector_ != nullptr) {
-      ConnectorMetadataRegistry::global().erase(std::string(kTpchConnectorId));
-      velox::connector::ConnectorRegistry::global().erase(
-          std::string(kTpchConnectorId));
-      tpchConnector_.reset();
-    }
-
-    ConnectorMetadataRegistry::global().erase(std::string(kSystemConnectorId));
-    velox::connector::ConnectorRegistry::global().erase(
-        std::string(kSystemConnectorId));
+    tpchConnector_.reset();
     systemConnector_.reset();
 
     optimizer::test::QueryTestBase::TearDown();
@@ -70,22 +60,28 @@ class InformationSchemaTest : public optimizer::test::QueryTestBase {
   // 'typeName' spelling the types information_schema.columns reports.
   void registerSystemConnector(InformationSchema::TypeNameFormatter typeName) {
     if (systemConnector_ != nullptr) {
-      ConnectorMetadataRegistry::global().erase(
-          std::string(kSystemConnectorId));
-      velox::connector::ConnectorRegistry::global().erase(
-          std::string(kSystemConnectorId));
+      metadataRegistry_->clear();
+      connectorRegistry_->clear();
+      ConnectorMetadataRegistry::registerCatalog(
+          *connectorRegistry_,
+          *metadataRegistry_,
+          testConnector_,
+          testConnector_->metadata());
     }
 
     systemConnector_ = std::make_shared<SystemConnector>(
         std::string(kSystemConnectorId),
         /*queryInfoProvider=*/nullptr,
         /*sessionPropertiesProvider=*/nullptr,
-        std::move(typeName));
-    velox::connector::ConnectorRegistry::global().insert(
-        std::string(kSystemConnectorId), systemConnector_);
-    ConnectorMetadataRegistry::global().insert(
-        std::string(kSystemConnectorId),
-        std::make_shared<SystemConnectorMetadata>(systemConnector_.get()));
+        std::move(typeName),
+        metadataRegistry_);
+    auto metadata = std::make_shared<SystemConnectorMetadata>(
+        systemConnector_.get(), metadataRegistry_);
+    ConnectorMetadataRegistry::registerCatalog(
+        *connectorRegistry_,
+        *metadataRegistry_,
+        systemConnector_,
+        std::move(metadata));
   }
 
   std::vector<RowVectorPtr> run(std::string_view sql) {
@@ -97,10 +93,10 @@ class InformationSchemaTest : public optimizer::test::QueryTestBase {
         std::unordered_map<std::string, std::string>{});
     tpchConnector_ = std::make_shared<velox::connector::tpch::TpchConnector>(
         std::string(kTpchConnectorId), std::move(config), nullptr);
-    velox::connector::ConnectorRegistry::global().insert(
-        std::string(kTpchConnectorId), tpchConnector_);
-    ConnectorMetadataRegistry::global().insert(
-        std::string(kTpchConnectorId),
+    ConnectorMetadataRegistry::registerCatalog(
+        *connectorRegistry_,
+        *metadataRegistry_,
+        tpchConnector_,
         std::make_shared<connector::tpch::TpchConnectorMetadata>(
             tpchConnector_.get()));
   }

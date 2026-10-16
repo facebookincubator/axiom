@@ -46,6 +46,7 @@ if(AXIOM_BUILD_TESTING)
 
   target_link_libraries(
     axiom_runner_local_runner_test
+    axiom_optimizer
     axiom_runner_tests_utils
     Folly::folly
     velox_exec_test_lib
@@ -59,6 +60,7 @@ add_library(axiom_runner_presto_query_replay_runner_test_utils PrestoQueryReplay
 
 target_link_libraries(
   axiom_runner_presto_query_replay_runner_test_utils
+  axiom_optimizer
   axiom_runner_local_runner
   velox_hive_connector
   velox_exec_test_lib
@@ -102,6 +104,7 @@ if(AXIOM_BUILD_TESTING)
 
   target_link_libraries(
     axiom_runner_progress_reporter_test
+    axiom_optimizer
     axiom_runner_tests_utils
     axiom_runner_local_runner
     velox_exec_test_lib

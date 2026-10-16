@@ -19,7 +19,7 @@
 #include <iostream>
 #include <limits>
 #include <utility>
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/connectors/ConnectorContext.h"
 #include "axiom/optimizer/AggregationPlanner.h"
 #include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/FunctionRegistry.h"
@@ -84,6 +84,20 @@ Optimization::Optimization(
       toVelox_{optimizerSession_, runnerOptions_} {
   VELOX_CHECK_NOT_NULL(runnerSession_);
   VELOX_CHECK_NOT_NULL(veloxQueryCtx_);
+  VELOX_CHECK(
+      optimizerSession_->context() == runnerSession_->context(),
+      "Optimizer and runner sessions require the same connector context");
+  VELOX_CHECK(
+      optimizerSession_->context() == schema.context(),
+      "Optimizer session and schema resolver require the same connector context");
+  VELOX_CHECK(
+      optimizerSession_->functionRegistry() ==
+          runnerSession_->functionRegistry(),
+      "Optimizer and runner sessions require the same function registry");
+  VELOX_CHECK(
+      &queryCtx()->functionRegistry() ==
+          optimizerSession_->functionRegistry().get(),
+      "Query graph and optimizer session require the same function registry");
   queryCtx()->optimization() = this;
 
   if (logicalPlan.is(logical_plan::NodeKind::kOutput)) {
@@ -488,17 +502,20 @@ PlanAndStats Optimization::deprecatedToVeloxPlan(
     MultiFragmentPlan::Options runnerOptions) {
   auto allocator = std::make_unique<velox::HashStringAllocator>(&pool);
   auto context = std::make_unique<QueryGraphContext>(
-      *allocator, optimizerSession->options().maxPlanObjects);
+      *allocator,
+      optimizerSession->options().maxPlanObjects,
+      optimizerSession->functionRegistry());
   queryCtx() = context.get();
   SCOPE_EXIT {
     queryCtx() = nullptr;
   };
 
+  const auto connectorContext = optimizerSession->context();
   auto veloxQueryCtx = velox::core::QueryCtx::create();
   velox::exec::SimpleExpressionEvaluator evaluator(veloxQueryCtx.get(), &pool);
 
-  auto schemaResolver = std::make_shared<connector::SchemaResolver>(
-      connector::ConnectorMetadataRegistry::global());
+  auto schemaResolver =
+      std::make_shared<connector::SchemaResolver>(connectorContext);
 
   VeloxHistory history;
 
@@ -1514,8 +1531,8 @@ bool sameOrderTypes(const OrderTypeVector& lhs, const OrderTypeVector& rhs) {
 }
 
 bool isRowNumber(std::string_view name) {
-  const auto* registry = FunctionRegistry::instance();
-  return registry->rowNumber().has_value() && name == *registry->rowNumber();
+  const auto& registry = QueryGraphContext::current().functionRegistry();
+  return registry.rowNumber().has_value() && name == *registry.rowNumber();
 }
 
 // Returns the RankFunction if the function name is a ranking function,
@@ -1527,11 +1544,11 @@ std::optional<velox::core::TopNRowNumberNode::RankFunction> toRankFunction(
     return RankFunction::kRowNumber;
   }
 
-  const auto* registry = FunctionRegistry::instance();
-  if (registry->rank().has_value() && name == *registry->rank()) {
+  const auto& registry = QueryGraphContext::current().functionRegistry();
+  if (registry.rank().has_value() && name == *registry.rank()) {
     return RankFunction::kRank;
   }
-  if (registry->denseRank().has_value() && name == *registry->denseRank()) {
+  if (registry.denseRank().has_value() && name == *registry.denseRank()) {
     return RankFunction::kDenseRank;
   }
   return std::nullopt;

@@ -88,7 +88,7 @@ TEST_P(TestConnectorQueryTest, selectFiltered) {
   auto expected = makeRowVector({makeFlatVector<int64_t>({1, 2})});
 
   // Filter on a selected column.
-  lp::PlanBuilder::Context context(kTestConnectorId, kDefaultSchema);
+  auto context = makePlanBuilderContext();
   {
     auto logicalPlan =
         lp::PlanBuilder(context).tableScan("t", {"a"}).filter("a > 0").build();
@@ -118,7 +118,7 @@ TEST_P(TestConnectorQueryTest, writeFiltered) {
   auto table = testConnector_->addTable("u", schema);
   EXPECT_NE(table, nullptr);
 
-  lp::PlanBuilder::Context context;
+  auto context = makePlanBuilderContext();
   auto logicalPlan =
       lp::PlanBuilder(context).values({vector}).filter("b < 2").build();
   auto expected = makeRowVector({

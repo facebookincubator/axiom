@@ -18,19 +18,17 @@
 
 #include <string>
 
+#include "axiom/connectors/ConnectorContext.h"
 #include "axiom/connectors/ConnectorMetadata.h"
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
 
 namespace facebook::axiom::connector {
 
 class SchemaResolver {
  public:
-  using Registry = ConnectorMetadataRegistry::Registry;
-
-  /// Constructs a SchemaResolver scoped to the given registry, with an
+  /// Constructs a SchemaResolver scoped to the given query context, with an
   /// optional default schema.
   explicit SchemaResolver(
-      const Registry& registry,
+      ConnectorContextPtr context,
       std::string defaultSchema = "");
 
   virtual ~SchemaResolver() = default;
@@ -44,21 +42,22 @@ class SchemaResolver {
       TablePtr table);
 
   /// Resolves a table name to a Table, or nullptr if the table doesn't exist.
-  /// If the table name has no schema, defaultSchema is used. If a connector
-  /// for the specified catalog doesn't exist, an error will be returned.
+  /// Throws a user error if the catalog has no registered metadata.
   virtual TablePtr findTable(
       const std::string& connectorId,
       const SchemaTableName& tableName) const;
 
-  /// Resolves connector metadata in this resolver's registry scope.
+  /// Resolves connector metadata in this resolver's catalog scope.
   std::shared_ptr<ConnectorMetadata> findMetadata(
       std::string_view connectorId) const;
 
+  /// Returns the query context that scopes this resolver.
+  const ConnectorContextPtr& context() const {
+    return context_;
+  }
+
  private:
-  // Reference member: SchemaResolver is intentionally non-assignable and
-  // non-movable. The referenced Registry must outlive this resolver. Callers
-  // typically construct one resolver per query.
-  const Registry& registry_;
+  const ConnectorContextPtr context_;
   const std::string defaultSchema_;
 
   std::string targetConnectorId_;

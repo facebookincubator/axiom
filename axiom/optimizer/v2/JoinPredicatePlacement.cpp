@@ -17,6 +17,7 @@
 #include "axiom/optimizer/v2/JoinPredicatePlacement.h"
 
 #include "axiom/optimizer/FunctionRegistry.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/v2/AppendAll.h"
 #include "axiom/optimizer/v2/ImpliedFilters.h"
 #include "axiom/optimizer/v2/JoinCondition.h"
@@ -169,7 +170,8 @@ std::pair<ColumnVector, ColumnVector> JoinPredicatePlacement::equiColumnPairs(
     }
   }
 
-  const Name equalityName = toName(FunctionRegistry::instance()->equality());
+  const Name equalityName =
+      toName(QueryGraphContext::current().functionRegistry().equality());
   const auto addEqualityPair = [&](ExprCP conjunct) {
     if (!conjunct->is(PlanType::kCallExpr)) {
       return;

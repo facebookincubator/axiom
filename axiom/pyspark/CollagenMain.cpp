@@ -204,7 +204,6 @@ void CollagenMain::registerFunctions() {
   facebook::velox::functions::prestosql::registerAllScalarFunctions();
   facebook::velox::aggregate::prestosql::registerAllAggregateFunctions();
   facebook::velox::serializer::presto::PrestoVectorSerde::registerVectorSerde();
-  facebook::axiom::optimizer::FunctionRegistry::registerPrestoFunctions();
 }
 
 } // namespace axiom::collagen

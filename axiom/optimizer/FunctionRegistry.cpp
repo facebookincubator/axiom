@@ -22,6 +22,23 @@
 
 namespace facebook::axiom::optimizer {
 
+std::shared_ptr<FunctionRegistry> FunctionRegistry::createPresto() {
+  return createPresto("");
+}
+
+std::shared_ptr<FunctionRegistry> FunctionRegistry::createPresto(
+    std::string_view prefix) {
+  auto registry = std::make_shared<FunctionRegistry>();
+  registry->addPrestoFunctions(prefix);
+  return registry;
+}
+
+std::shared_ptr<const FunctionRegistry> FunctionRegistry::testingCreate() {
+  static const std::shared_ptr<const FunctionRegistry> kRegistry =
+      createPresto();
+  return kRegistry;
+}
+
 namespace lp = facebook::axiom::logical_plan;
 
 FunctionMetadataCP FunctionRegistry::metadata(std::string_view name) const {
@@ -281,14 +298,8 @@ velox::Variant FunctionRegistry::aggregateResultForEmptyInput(
   return velox::Variant();
 }
 
-// static
-FunctionRegistry* FunctionRegistry::instance() {
-  static std::unique_ptr<FunctionRegistry> registry{new FunctionRegistry{}};
-  return registry.get();
-}
-
 FunctionMetadataCP functionMetadata(std::string_view name) {
-  return FunctionRegistry::instance()->metadata(name);
+  return QueryGraphContext::current().functionRegistry().metadata(name);
 }
 
 bool isInferenceFunction(Name name) {
@@ -333,11 +344,11 @@ FunctionSet functionBits(Name name, bool specialForm) {
 }
 
 const std::string& specialForm(lp::SpecialForm specialForm) {
-  return FunctionRegistry::instance()->specialForm(specialForm);
+  return QueryGraphContext::current().functionRegistry().specialForm(
+      specialForm);
 }
 
-// static
-void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
+void FunctionRegistry::addPrestoFunctions(std::string_view prefix) {
   auto fullName = [&](std::string_view name) {
     return prefix.empty() ? std::string(name)
                           : fmt::format("{}{}", prefix, name);
@@ -345,7 +356,7 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
 
   auto registerFunction = [&](std::string_view name,
                               std::unique_ptr<FunctionMetadata> metadata) {
-    FunctionRegistry::instance()->registerFunction(name, std::move(metadata));
+    this->registerFunction(name, std::move(metadata));
   };
 
   {
@@ -389,7 +400,7 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
     registerFunction(fullName("zip"), std::move(metadata));
   }
 
-  auto* registry = FunctionRegistry::instance();
+  auto* registry = this;
 
   registry->registerEquality(fullName("eq"));
   registry->registerNegation(fullName("not"));

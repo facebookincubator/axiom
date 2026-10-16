@@ -50,10 +50,11 @@ class PrecomputeProjectionTest : public ::testing::Test {
   void runTest(
       const lp::LogicalPlanNodePtr& plan,
       const std::function<void(DerivedTableCP dt)>& testRoutine) {
+    auto functionRegistry = FunctionRegistry::createPresto();
     auto allocator =
         std::make_unique<velox::HashStringAllocator>(optimizerPool_.get());
     auto context = std::make_unique<QueryGraphContext>(
-        *allocator, OptimizerOptions::kMaxPlanObjectsDefault);
+        *allocator, OptimizerOptions::kMaxPlanObjectsDefault, functionRegistry);
     queryCtx() = context.get();
     SCOPE_EXIT {
       queryCtx() = nullptr;
@@ -65,18 +66,19 @@ class PrecomputeProjectionTest : public ::testing::Test {
 
     VeloxHistory history;
 
-    auto schemaResolver = std::make_shared<connector::SchemaResolver>(
-        connector::ConnectorMetadataRegistry::global());
-
     auto connectorContext =
         connector::makeTestContext(veloxQueryCtx->queryId());
+    auto schemaResolver =
+        std::make_shared<connector::SchemaResolver>(connectorContext);
     auto optimizerSession = std::make_shared<OptimizerSession>(
         connectorContext,
+        functionRegistry,
         connector::makeTestStatWriter(),
         connector::Properties{},
         OptimizerOptions{});
     auto runnerSession = std::make_shared<runner::RunnerSession>(
         connectorContext,
+        functionRegistry,
         connector::makeTestStatWriter(),
         runner::Properties{});
 
@@ -98,7 +100,7 @@ class PrecomputeProjectionTest : public ::testing::Test {
 };
 
 TEST_F(PrecomputeProjectionTest, basic) {
-  lp::PlanBuilder::Context context;
+  auto context = lp::PlanBuilder::Context::forConnectorlessPlan();
   context.coercer = &velox::TypeCoercer::defaults();
   auto logicalPlan = lp::PlanBuilder{context}
                          .values(

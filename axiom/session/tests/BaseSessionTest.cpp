@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 
 #include "axiom/connectors/tests/TestConnectorContext.h"
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
 namespace facebook::axiom {
@@ -27,9 +28,12 @@ namespace {
 // Identity is the query's, not the component's.
 TEST(BaseSessionTest, identityComesFromTheContext) {
   auto context = connector::makeTestContext("q1");
-  BaseSession session{context, connector::makeTestStatWriter(), {}};
+  auto functionRegistry = optimizer::FunctionRegistry::createPresto();
+  BaseSession session{
+      context, functionRegistry, connector::makeTestStatWriter(), {}};
 
   EXPECT_EQ(session.context(), context);
+  EXPECT_EQ(session.functionRegistry(), functionRegistry);
   EXPECT_EQ(session.queryId(), "q1");
   EXPECT_EQ(session.user(), "test");
 }
@@ -38,6 +42,7 @@ TEST(BaseSessionTest, identityComesFromTheContext) {
 TEST(BaseSessionTest, propertyReadsThisComponentsSlice) {
   BaseSession session{
       connector::makeTestContext("q1"),
+      optimizer::FunctionRegistry::createPresto(),
       connector::makeTestStatWriter(),
       connector::Properties{{"max_plan_objects", "100"}}};
 
@@ -47,13 +52,31 @@ TEST(BaseSessionTest, propertyReadsThisComponentsSlice) {
 
 TEST(BaseSessionTest, aContextIsRequired) {
   VELOX_ASSERT_THROW(
-      BaseSession(nullptr, connector::makeTestStatWriter(), {}),
+      BaseSession(
+          nullptr,
+          optimizer::FunctionRegistry::createPresto(),
+          connector::makeTestStatWriter(),
+          {}),
       "requires a context");
+}
+
+TEST(BaseSessionTest, aFunctionRegistryIsRequired) {
+  VELOX_ASSERT_THROW(
+      BaseSession(
+          connector::makeTestContext("q1"),
+          nullptr,
+          connector::makeTestStatWriter(),
+          {}),
+      "requires a function registry");
 }
 
 TEST(BaseSessionTest, aWriterIsRequired) {
   VELOX_ASSERT_THROW(
-      BaseSession(connector::makeTestContext("q1"), nullptr, {}),
+      BaseSession(
+          connector::makeTestContext("q1"),
+          optimizer::FunctionRegistry::createPresto(),
+          nullptr,
+          {}),
       "requires a writer");
 }
 
