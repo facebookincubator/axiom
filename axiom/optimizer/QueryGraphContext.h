@@ -33,6 +33,8 @@
 
 namespace facebook::axiom::optimizer {
 
+class FunctionRegistry;
+
 /// Pointer to an arena allocated interned copy of a null terminated string.
 /// Used for identifiers. Allows comparing strings by comparing pointers.
 using Name = const char*;
@@ -373,6 +375,10 @@ class QueryGraphContext {
  public:
   static constexpr int32_t kArenaAlignment = 8;
 
+  /// Returns the calling thread's active context and fails when no
+  /// optimization is in progress.
+  static QueryGraphContext& current();
+
   /// 'maxPlanObjects' caps how many plan objects this query may create; a
   /// query that exceeds it fails rather than planning. The sets kept per
   /// object are indexed by object id, so planning memory grows with the
@@ -380,7 +386,8 @@ class QueryGraphContext {
   /// erroring. See OptimizerOptions::kMaxPlanObjectsDefault.
   QueryGraphContext(
       velox::HashStringAllocator& allocator,
-      int32_t maxPlanObjects);
+      int32_t maxPlanObjects,
+      std::shared_ptr<const FunctionRegistry> functionRegistry);
 
   /// Returns a new unique id to use for 'object' and associates 'object' to
   /// this id. Tagging objects with integers ids is useful for efficiently
@@ -463,6 +470,11 @@ class QueryGraphContext {
   /// Returns the function names used for expression analysis.
   const FunctionNames& functionNames() const {
     return functionNames_;
+  }
+
+  /// Returns the function semantics selected by this query's engine.
+  const FunctionRegistry& functionRegistry() const {
+    return *functionRegistry_;
   }
 
   /// Returns the interned representation of 'str', i.e. Returns a
@@ -555,6 +567,9 @@ class QueryGraphContext {
   // See the constructor. Always >= 1, so the comparison in newId() is
   // meaningful; size_t to compare against objects_.size() without a cast.
   const size_t maxPlanObjects_;
+
+  // Retains the engine's function semantics for the duration of planning.
+  const std::shared_ptr<const FunctionRegistry> functionRegistry_;
 
   // Set of interned copies of identifiers. insert() into this returns the
   // canonical interned copy of any string. Lifetime is limited to 'allocator_'.

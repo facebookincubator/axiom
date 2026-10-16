@@ -49,7 +49,7 @@ class SetTest : public test::QueryTestBase,
 };
 
 TEST_P(SetTest, unionAll) {
-  lp::PlanBuilder::Context ctx{kTestConnectorId, kDefaultSchema};
+  auto ctx = makePlanBuilderContext();
   auto t1 = lp::PlanBuilder(ctx).tableScan("nation").filter("n_nationkey < 11");
   auto t2 = lp::PlanBuilder(ctx).tableScan("nation").filter("n_nationkey > 13");
 
@@ -363,7 +363,7 @@ TEST_P(SetTest, lambdaFilterPushdownThroughUnionAll) {
   testConnector_->addTable("t", ROW({"a", "b"}, ARRAY(BIGINT())));
   testConnector_->addTable("u", ROW({"a", "b"}, ARRAY(BIGINT())));
 
-  lp::PlanBuilder::Context ctx(kTestConnectorId, kDefaultSchema);
+  auto ctx = makePlanBuilderContext();
   auto logicalPlan = lp::PlanBuilder(ctx)
                          .tableScan("t")
                          .unionAll(lp::PlanBuilder(ctx).tableScan("u"))
@@ -381,7 +381,7 @@ TEST_P(SetTest, lambdaFilterPushdownThroughUnionAll) {
 }
 
 TEST_P(SetTest, unionJoin) {
-  lp::PlanBuilder::Context ctx(kTestConnectorId, kDefaultSchema);
+  auto ctx = makePlanBuilderContext();
   auto ps1 = lp::PlanBuilder(ctx)
                  .tableScan("partsupp", {"ps_partkey", "ps_availqty"})
                  .filter("ps_availqty < 1000::int")
@@ -473,7 +473,7 @@ TEST_P(SetTest, unionFlatten) {
            },
 
        }) {
-    lp::PlanBuilder::Context ctx{kTestConnectorId, kDefaultSchema};
+    auto ctx = makePlanBuilderContext();
     auto makeT1 = [&] {
       return lp::PlanBuilder(ctx).tableScan("nation").filter(
           "n_nationkey < 11");
@@ -567,7 +567,7 @@ TEST_P(SetTest, intersect) {
           {{"small_key", {.numDistinct = 100}},
            {"small_value", {.numDistinct = 100}}});
 
-  lp::PlanBuilder::Context ctx{kTestConnectorId, kDefaultSchema};
+  auto ctx = makePlanBuilderContext();
   auto large = lp::PlanBuilder(ctx).tableScan("large");
   auto medium = lp::PlanBuilder(ctx).tableScan("medium");
   auto small = lp::PlanBuilder(ctx).tableScan("small");
@@ -600,7 +600,7 @@ TEST_P(SetTest, intersect) {
 }
 
 TEST_P(SetTest, except) {
-  lp::PlanBuilder::Context ctx{kTestConnectorId, kDefaultSchema};
+  auto ctx = makePlanBuilderContext();
   auto t1 = lp::PlanBuilder(ctx)
                 .tableScan("nation")
                 .filter("n_nationkey < 21")

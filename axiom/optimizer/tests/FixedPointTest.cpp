@@ -45,7 +45,8 @@ class FixedPointTest : public test::QueryTestBase {
         ROW(name, BIGINT()), std::vector<Variant>{Variant::row({value})});
   }
 
-  lp::PlanBuilder::Context context_;
+  lp::PlanBuilder::Context context_{
+      lp::PlanBuilder::Context::forConnectorlessPlan()};
 };
 
 TEST_F(FixedPointTest, recursiveCte) {

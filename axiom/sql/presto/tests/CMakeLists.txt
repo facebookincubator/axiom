@@ -44,6 +44,7 @@ if(AXIOM_BUILD_TESTING)
     axiom_sql_presto_test
     axiom_logical_plan_matcher
     axiom_logical_plan_builder
+    axiom_optimizer
     axiom_sql_presto_parser
     axiom_system_connector
     axiom_test_connector

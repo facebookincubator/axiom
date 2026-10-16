@@ -862,13 +862,16 @@ velox::RowVectorPtr FunctionsDataSource::buildResults() {
 SystemConnector::SystemConnector(
     const std::string& id,
     const QueryInfoProvider* queryInfoProvider,
-    const SessionPropertiesProvider* sessionPropertiesProvider,
-    InformationSchema::TypeNameFormatter typeName)
+    std::shared_ptr<const SessionPropertiesProvider> sessionPropertiesProvider,
+    InformationSchema::TypeNameFormatter typeName,
+    std::shared_ptr<const ConnectorMetadataRegistry::Registry> metadataRegistry)
     : Connector(id),
       queryInfoProvider_(queryInfoProvider),
-      sessionPropertiesProvider_(sessionPropertiesProvider),
-      typeName_(std::move(typeName)) {
+      sessionPropertiesProvider_(std::move(sessionPropertiesProvider)),
+      typeName_(std::move(typeName)),
+      metadataRegistry_{metadataRegistry} {
   VELOX_CHECK(typeName_, "Type name formatter must be callable");
+  VELOX_CHECK_NOT_NULL(metadataRegistry);
 }
 
 void SystemConnector::registerSerDe() {
@@ -886,11 +889,15 @@ std::unique_ptr<velox::connector::DataSource> SystemConnector::createDataSource(
   if (auto infoSchemaHandle =
           std::dynamic_pointer_cast<const InformationSchemaTableHandle>(
               tableHandle)) {
+    auto metadataRegistry = metadataRegistry_.lock();
+    VELOX_CHECK_NOT_NULL(
+        metadataRegistry, "System connector metadata registry is unavailable");
     return InformationSchema::makeDataSource(
         infoSchemaHandle,
         outputType,
         columnHandles,
         connectorQueryCtx->memoryPool(),
+        *metadataRegistry,
         typeName_);
   }
 
@@ -902,7 +909,7 @@ std::unique_ptr<velox::connector::DataSource> SystemConnector::createDataSource(
     return std::make_unique<SessionPropertiesDataSource>(
         outputType,
         columnHandles,
-        sessionPropertiesProvider_,
+        sessionPropertiesProvider_.get(),
         connectorQueryCtx->memoryPool());
   }
 

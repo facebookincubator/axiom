@@ -17,9 +17,12 @@
 #include <folly/ScopeGuard.h>
 #include <folly/coro/BlockingWait.h>
 #include "axiom/optimizer/Optimization.h"
-#include "axiom/optimizer/Plan.h"
 #include "axiom/runner/LocalRunner.h"
 #include "velox/common/base/AsyncSource.h"
+#include "velox/common/memory/CustomMemoryResourceRegistry.h"
+#include "velox/connectors/ConnectorRegistry.h"
+#include "velox/exec/ExchangeTransportRegistry.h"
+#include "velox/exec/OutputTransportRegistry.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
 
@@ -84,13 +87,38 @@ ExprCP bigintLit(int64_t n) {
   return make<Literal>(bigintValue(), registerVariant(n));
 }
 
+template <typename Registry>
+void copyRegistry(
+    const velox::core::QueryCtx& source,
+    velox::core::QueryCtx& destination,
+    std::string_view key) {
+  if (auto registry = source.registry<Registry>(key)) {
+    destination.setRegistry(key, std::move(registry));
+  }
+}
+
+void copyRegistries(
+    const velox::core::QueryCtx& source,
+    velox::core::QueryCtx& destination) {
+  copyRegistry<velox::connector::ConnectorRegistry::Registry>(
+      source, destination, velox::connector::ConnectorRegistry::kRegistryKey);
+  copyRegistry<velox::exec::OutputTransportRegistry::Registry>(
+      source, destination, velox::exec::OutputTransportRegistry::kRegistryKey);
+  copyRegistry<velox::exec::ExchangeTransportRegistry::Registry>(
+      source,
+      destination,
+      velox::exec::ExchangeTransportRegistry::kRegistryKey);
+  copyRegistry<velox::memory::CustomMemoryResourceRegistry::Registry>(
+      source, destination, velox::memory::kCustomMemoryResourceRegistryKey);
+}
+
 std::shared_ptr<velox::core::QueryCtx> sampleQueryCtx(
     const velox::core::QueryCtx& original) {
   static std::atomic<int64_t> kQueryCounter{0};
   const auto sampleId = ++kQueryCounter;
 
   std::unordered_map<std::string, std::string> empty;
-  return velox::core::QueryCtx::create(
+  auto sampleContext = velox::core::QueryCtx::create(
       original.executor(),
       velox::core::QueryConfig(std::move(empty)),
       original.connectorSessionProperties(),
@@ -99,6 +127,8 @@ std::shared_ptr<velox::core::QueryCtx> sampleQueryCtx(
           fmt::format("joinSample.{}", sampleId)),
       nullptr,
       fmt::format("sample:{}", sampleId));
+  copyRegistries(original, *sampleContext);
+  return sampleContext;
 }
 
 std::shared_ptr<runner::Runner> prepareSampleRunner(

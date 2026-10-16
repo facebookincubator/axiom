@@ -14,16 +14,22 @@
  * limitations under the License.
  */
 #include "axiom/optimizer/RelationOpPrinter.h"
+#include <folly/ScopeGuard.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/logical_plan/PlanBuilder.h"
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/OptimizerOptions.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/VeloxHistory.h"
+#include "axiom/runner/RunnerSession.h"
 #include "axiom/sql/presto/PrestoParser.h"
+#include "velox/common/memory/HashStringAllocator.h"
+#include "velox/core/QueryCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -53,24 +59,24 @@ class RelationOpPrinterTest : public ::testing::Test {
     optimizerPool_ = rootPool_->addLeafChild("optimizer");
 
     connector_ = std::make_shared<connector::TestConnector>(kTestConnectorId);
-    velox::connector::registerConnector(connector_);
-    connector::ConnectorMetadataRegistry::global().insert(
-        kTestConnectorId, connector_->metadata());
+    functionRegistry_ = FunctionRegistry::createPresto();
   }
 
-  void TearDown() override {
-    connector::ConnectorMetadataRegistry::global().erase(kTestConnectorId);
-    velox::connector::unregisterConnector(kTestConnectorId);
-  }
+  struct ParsedQuery {
+    lp::LogicalPlanNodePtr plan;
+    connector::IsolatedTestContext scope;
+  };
 
   std::vector<std::string> toLines(
       const std::string& sql,
       const RelationOpToTextOptions& options = {}) {
-    return toLines(*parse(sql), options);
+    auto parsed = parse(sql);
+    return toLines(*parsed.plan, parsed.scope, options);
   }
 
   std::vector<std::string> toLines(
       const lp::LogicalPlanNode& logicalPlan,
+      const connector::IsolatedTestContext& scope,
       const RelationOpToTextOptions& options = {},
       int32_t numWorkers = 1,
       int32_t numDrivers = 1) {
@@ -83,17 +89,20 @@ class RelationOpPrinterTest : public ::testing::Test {
           LOG(INFO) << std::endl << planString;
           folly::split('\n', planString, lines);
         },
+        scope,
         numWorkers,
         numDrivers);
     return lines;
   }
 
   std::string toOneline(const std::string& sql) {
-    return toOneline(*parse(sql));
+    auto parsed = parse(sql);
+    return toOneline(*parsed.plan, parsed.scope);
   }
 
   std::string toOneline(
       const lp::LogicalPlanNode& logicalPlan,
+      const connector::IsolatedTestContext& scope,
       int32_t numWorkers = 1,
       int32_t numDrivers = 1) {
     std::string planString;
@@ -102,6 +111,7 @@ class RelationOpPrinterTest : public ::testing::Test {
         [&](const RelationOp& op) {
           planString = RelationOpPrinter::toOneline(op);
         },
+        scope,
         numWorkers,
         numDrivers);
     return planString;
@@ -109,88 +119,95 @@ class RelationOpPrinterTest : public ::testing::Test {
 
   std::vector<std::string> toDistributedLines(
       const lp::LogicalPlanNode& logicalPlan,
+      const connector::IsolatedTestContext& scope,
       const RelationOpToTextOptions& options = {}) {
-    return toLines(logicalPlan, options, 4, 4);
+    return toLines(logicalPlan, scope, options, 4, 4);
   }
 
-  std::string toDistributedOneline(const lp::LogicalPlanNode& logicalPlan) {
-    return toOneline(logicalPlan, 4, 4);
+  std::string toDistributedOneline(
+      const lp::LogicalPlanNode& logicalPlan,
+      const connector::IsolatedTestContext& scope) {
+    return toOneline(logicalPlan, scope, 4, 4);
   }
 
-  lp::LogicalPlanNodePtr parse(const std::string& sql) {
+  ParsedQuery parse(const std::string& sql) {
+    auto scope = connector::makeTestContext(
+        "RelationOpPrinterTest", {{connector_, connector_->metadata()}});
     ::axiom::sql::presto::PrestoParser parser{
         kTestConnectorId,
         kDefaultSchema,
         std::make_shared<::axiom::sql::presto::ParserSession>(
-            connector::makeTestContext("test"),
+            scope.connectorContext,
+            functionRegistry_,
             connector::makeTestStatWriter(),
             connector::Properties{},
             ::axiom::sql::presto::ParserOptions{})};
     auto statement = parser.parse(sql);
     VELOX_CHECK(statement->isSelect());
 
-    return statement->as<::axiom::sql::presto::SelectStatement>()->plan();
+    return {
+        .plan = statement->as<::axiom::sql::presto::SelectStatement>()->plan(),
+        .scope = std::move(scope),
+    };
   }
 
   void optimize(
       const lp::LogicalPlanNode& logicalPlan,
       const std::function<void(const RelationOp& op)>& consume,
+      const connector::IsolatedTestContext& scope,
       int32_t numWorkers = 1,
       int32_t numDrivers = 1) {
     auto allocator =
         std::make_unique<velox::HashStringAllocator>(optimizerPool_.get());
-    auto context = std::make_unique<QueryGraphContext>(
-        *allocator, OptimizerOptions::kMaxPlanObjectsDefault);
-    queryCtx() = context.get();
+    auto graphContext = std::make_unique<QueryGraphContext>(
+        *allocator,
+        OptimizerOptions::kMaxPlanObjectsDefault,
+        functionRegistry_);
+    queryCtx() = graphContext.get();
     SCOPE_EXIT {
       queryCtx() = nullptr;
     };
 
     auto veloxQueryCtx = velox::core::QueryCtx::create();
+    veloxQueryCtx->setRegistry(
+        velox::connector::ConnectorRegistry::kRegistryKey,
+        scope.connectorRegistry);
     velox::exec::SimpleExpressionEvaluator evaluator(
         veloxQueryCtx.get(), optimizerPool_.get());
-
     VeloxHistory history;
-
-    auto schemaResolver = std::make_shared<connector::SchemaResolver>(
-        connector::ConnectorMetadataRegistry::global());
 
     OptimizerOptions options;
     options.sampleJoins = false;
     options.sampleFilters = false;
-    auto connectorContext =
-        connector::makeTestContext(veloxQueryCtx->queryId());
+    connector::SchemaResolver schemaResolver{scope.connectorContext};
     auto optimizerSession = std::make_shared<OptimizerSession>(
-        connectorContext,
+        scope.connectorContext,
+        functionRegistry_,
         connector::makeTestStatWriter(),
         connector::Properties{},
         std::move(options));
     auto runnerSession = std::make_shared<runner::RunnerSession>(
-        connectorContext,
+        scope.connectorContext,
+        functionRegistry_,
         connector::makeTestStatWriter(),
         runner::Properties{});
 
-    Optimization opt{
+    Optimization optimization{
         optimizerSession,
         runnerSession,
         logicalPlan,
-        *schemaResolver,
+        schemaResolver,
         history,
         veloxQueryCtx,
         evaluator,
         {.maxRemotePartitions = numWorkers, .maxLocalPartitions = numDrivers}};
-
-    auto* plan = opt.deprecatedBestPlan();
-    consume(*plan->op);
-  }
-
-  lp::PlanBuilder::Context makeContext() const {
-    return lp::PlanBuilder::Context{kTestConnectorId, kDefaultSchema};
+    consume(*optimization.deprecatedBestPlan()->op);
   }
 
   std::shared_ptr<velox::memory::MemoryPool> rootPool_;
   std::shared_ptr<velox::memory::MemoryPool> optimizerPool_;
   std::shared_ptr<connector::TestConnector> connector_;
+  std::shared_ptr<FunctionRegistry> functionRegistry_;
 };
 
 TEST_F(RelationOpPrinterTest, basic) {
@@ -275,8 +292,16 @@ TEST_F(RelationOpPrinterTest, limit) {
   connector_->addTable("t", ROW({"t_key", "a"}, INTEGER()));
 
   {
-    auto plan = lp::PlanBuilder(makeContext()).tableScan("t").limit(10).build();
-    auto lines = toLines(*plan);
+    const auto scope = connector::makeTestContext(
+        "RelationOpPrinterTest", {{connector_, connector_->metadata()}});
+    auto plan =
+        lp::PlanBuilder(
+            lp::PlanBuilder::Context{
+                scope.connectorContext, kTestConnectorId, kDefaultSchema})
+            .tableScan("t")
+            .limit(10)
+            .build();
+    auto lines = toLines(*plan, scope);
     EXPECT_THAT(
         lines,
         testing::ElementsAre(
@@ -290,12 +315,17 @@ TEST_F(RelationOpPrinterTest, limit) {
   }
 
   {
-    auto plan = lp::PlanBuilder(makeContext())
-                    .tableScan("t")
-                    .offset(5)
-                    .limit(10)
-                    .build();
-    auto lines = toLines(*plan);
+    const auto scope = connector::makeTestContext(
+        "RelationOpPrinterTest", {{connector_, connector_->metadata()}});
+    auto plan =
+        lp::PlanBuilder(
+            lp::PlanBuilder::Context{
+                scope.connectorContext, kTestConnectorId, kDefaultSchema})
+            .tableScan("t")
+            .offset(5)
+            .limit(10)
+            .build();
+    auto lines = toLines(*plan, scope);
     EXPECT_THAT(
         lines,
         testing::ElementsAre(
@@ -313,12 +343,15 @@ TEST_F(RelationOpPrinterTest, unionAll) {
   connector_->addTable("t", ROW({"t_key", "a"}, INTEGER()));
   connector_->addTable("u", ROW({"u_key", "b"}, INTEGER()));
 
-  auto context = makeContext();
+  const auto scope = connector::makeTestContext(
+      "RelationOpPrinterTest", {{connector_, connector_->metadata()}});
+  lp::PlanBuilder::Context context{
+      scope.connectorContext, kTestConnectorId, kDefaultSchema};
   auto plan = lp::PlanBuilder(context)
                   .tableScan("t")
                   .unionAll(lp::PlanBuilder(context).tableScan("u"))
                   .build();
-  auto lines = toLines(*plan);
+  auto lines = toLines(*plan, scope);
   EXPECT_THAT(
       lines,
       testing::ElementsAre(
@@ -346,13 +379,17 @@ TEST_F(RelationOpPrinterTest, markDistinct) {
   // Multiple DISTINCT aggregates with different argument sets trigger
   // MarkDistinct. Requires numWorkers * numDrivers > 1 since the single-driver
   // path skips the MarkDistinct transformation.
+  const auto scope = connector::makeTestContext(
+      "RelationOpPrinterTest", {{connector_, connector_->metadata()}});
   auto logicalPlan =
-      lp::PlanBuilder(makeContext())
+      lp::PlanBuilder(
+          lp::PlanBuilder::Context{
+              scope.connectorContext, kTestConnectorId, kDefaultSchema})
           .tableScan("t")
           .aggregate({"a"}, {"count(DISTINCT b)", "sum(DISTINCT c)"})
           .build();
 
-  auto lines = toDistributedLines(*logicalPlan);
+  auto lines = toDistributedLines(*logicalPlan, scope);
   EXPECT_THAT(
       lines,
       testing::ElementsAre(
@@ -375,7 +412,7 @@ TEST_F(RelationOpPrinterTest, markDistinct) {
           testing::StartsWith("                  table: \"default\".\"t\""),
           testing::Eq("")));
 
-  EXPECT_EQ("agg(agg(t))", toDistributedOneline(*logicalPlan));
+  EXPECT_EQ("agg(agg(t))", toDistributedOneline(*logicalPlan, scope));
 }
 
 TEST_F(RelationOpPrinterTest, cost) {

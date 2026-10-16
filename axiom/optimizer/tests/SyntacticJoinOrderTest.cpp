@@ -55,8 +55,8 @@ class SyntacticJoinOrderTest : public test::HiveQueriesTestBase,
 };
 
 TEST_P(SyntacticJoinOrderTest, innerJoins) {
-  lp::PlanBuilder::Context context(
-      exec::test::kHiveConnectorId, kDefaultSchema);
+  auto context =
+      makePlanBuilderContext(exec::test::kHiveConnectorId, kDefaultSchema);
 
   optimizerOptions_.sampleJoins = false;
 
@@ -377,7 +377,7 @@ TEST_P(SyntacticJoinOrderTest, manyJoinsBoundedByOrder) {
         ->setStats(1'000, {{key, {.numDistinct = 1'000}}});
   }
 
-  lp::PlanBuilder::Context context(kTestConnectorId, "default");
+  auto context = makePlanBuilderContext(kTestConnectorId, "default");
   lp::PlanBuilder builder(context);
   builder.tableScan("t0");
   for (int32_t i = 1; i < kNumTables; ++i) {

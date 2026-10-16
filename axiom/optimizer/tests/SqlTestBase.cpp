@@ -44,11 +44,14 @@ void SqlTestBase::SetUpTestCase() {
   functions::prestosql::registerAllScalarFunctions();
   aggregate::prestosql::registerAllAggregateFunctions();
   window::prestosql::registerAllWindowFunctions();
-  FunctionRegistry::registerPrestoFunctions();
 }
 
 void SqlTestBase::SetUp() {
   OperatorTestBase::SetUp();
+
+  if (functionRegistry_ == nullptr) {
+    functionRegistry_ = FunctionRegistry::createPresto();
+  }
 
   velox::exec::ExchangeSource::factories().clear();
   velox::exec::ExchangeSource::registerFactory(
@@ -62,6 +65,7 @@ void SqlTestBase::TearDown() {
   optimizerPool_.reset();
   velox::exec::ExchangeSource::factories().clear();
   executor_.reset();
+  functionRegistry_.reset();
 
   OperatorTestBase::TearDown();
 }
@@ -91,12 +95,13 @@ std::shared_ptr<runner::LocalRunner> makeLocalRunnerImpl(
     cache::AsyncDataCache* asyncDataCache,
     const std::shared_ptr<memory::MemoryPool>& rootPool,
     const std::shared_ptr<memory::MemoryPool>& optimizerPool,
+    connector::ConnectorContextPtr connectorContext,
+    std::shared_ptr<const FunctionRegistry> functionRegistry,
     int32_t numWorkers,
     int32_t numDrivers,
     bool syntacticJoinOrder,
     PlanFn plan) {
-  static std::atomic<int32_t> queryCounter{0};
-  auto queryId = fmt::format("sql_test_{}", ++queryCounter);
+  const auto& queryId = connectorContext->queryId();
   auto queryCtx = core::QueryCtx::create(
       executor,
       core::QueryConfig{{}},
@@ -107,10 +112,9 @@ std::shared_ptr<runner::LocalRunner> makeLocalRunnerImpl(
       // Task ids are built from this, and exchanges find their source by task
       // id.
       queryId);
-
   auto allocator = std::make_unique<HashStringAllocator>(optimizerPool.get());
   auto graphContext = std::make_unique<optimizer::QueryGraphContext>(
-      *allocator, OptimizerOptions::kMaxPlanObjectsDefault);
+      *allocator, OptimizerOptions::kMaxPlanObjectsDefault, functionRegistry);
   optimizer::queryCtx() = graphContext.get();
   SCOPE_EXIT {
     optimizer::queryCtx() = nullptr;
@@ -119,9 +123,6 @@ std::shared_ptr<runner::LocalRunner> makeLocalRunnerImpl(
   exec::SimpleExpressionEvaluator evaluator(
       queryCtx.get(), optimizerPool.get());
 
-  connector::SchemaResolver schemaResolver{
-      connector::ConnectorMetadataRegistry::global()};
-
   MultiFragmentPlan::Options options;
   options.maxRemotePartitions = numWorkers;
   options.maxLocalPartitions = numDrivers;
@@ -129,14 +130,18 @@ std::shared_ptr<runner::LocalRunner> makeLocalRunnerImpl(
 
   OptimizerOptions optimizerOptions;
   optimizerOptions.syntacticJoinOrder = syntacticJoinOrder;
-  auto context = connector::makeTestContext(queryId);
+  connector::SchemaResolver schemaResolver{connectorContext};
   auto optimizerSession = std::make_shared<OptimizerSession>(
-      context,
+      connectorContext,
+      functionRegistry,
       connector::makeTestStatWriter(),
       connector::Properties{},
       optimizerOptions);
   auto runnerSession = std::make_shared<runner::RunnerSession>(
-      context, connector::makeTestStatWriter(), runner::Properties{});
+      connectorContext,
+      functionRegistry,
+      connector::makeTestStatWriter(),
+      runner::Properties{});
 
   auto planAndStats = plan(
       *logicalPlan,
@@ -160,6 +165,8 @@ std::shared_ptr<runner::LocalRunner> makeLocalRunnerImpl(
 
 std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunner(
     const logical_plan::LogicalPlanNodePtr& logicalPlan,
+    connector::ConnectorContextPtr connectorContext,
+    std::shared_ptr<const FunctionRegistry> functionRegistry,
     folly::Executor* executor,
     cache::AsyncDataCache* asyncDataCache,
     const std::shared_ptr<memory::MemoryPool>& rootPool,
@@ -173,6 +180,8 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunner(
       asyncDataCache,
       rootPool,
       optimizerPool,
+      std::move(connectorContext),
+      std::move(functionRegistry),
       numWorkers,
       numDrivers,
       syntacticJoinOrder,
@@ -200,6 +209,8 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunner(
 
 std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunnerV2(
     const logical_plan::LogicalPlanNodePtr& logicalPlan,
+    connector::ConnectorContextPtr connectorContext,
+    std::shared_ptr<const FunctionRegistry> functionRegistry,
     folly::Executor* executor,
     cache::AsyncDataCache* asyncDataCache,
     const std::shared_ptr<memory::MemoryPool>& rootPool,
@@ -213,6 +224,8 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunnerV2(
       asyncDataCache,
       rootPool,
       optimizerPool,
+      std::move(connectorContext),
+      std::move(functionRegistry),
       numWorkers,
       numDrivers,
       syntacticJoinOrder,
@@ -235,6 +248,10 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunnerV2(
 
 std::shared_ptr<runner::LocalRunner> SqlTestBase::makeRunner(
     std::string_view sql) {
+  static std::atomic<int32_t> queryCounter{0};
+  auto connectorContext =
+      connector::makeTestContext(fmt::format("sql_test_{}", ++queryCounter));
+
   // Parse SQL to logical plan.
   ::axiom::sql::presto::ParserOptions parserOptions;
   parserOptions.graphQueries = true;
@@ -242,7 +259,8 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeRunner(
       connectorId_,
       defaultSchema_,
       std::make_shared<::axiom::sql::presto::ParserSession>(
-          connector::makeTestContext("test"),
+          connectorContext,
+          functionRegistry_,
           connector::makeTestStatWriter(),
           connector::Properties{},
           parserOptions));
@@ -252,14 +270,20 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeRunner(
       statement->isSelect(), "Only SELECT statements are supported: {}", sql);
 
   return makeRunner(
-      statement->as<::axiom::sql::presto::SelectStatement>()->plan());
+      statement->as<::axiom::sql::presto::SelectStatement>()->plan(),
+      std::move(connectorContext),
+      functionRegistry_);
 }
 
 std::shared_ptr<runner::LocalRunner> SqlTestBase::makeRunner(
-    const logical_plan::LogicalPlanNodePtr& logicalPlan) {
+    const logical_plan::LogicalPlanNodePtr& logicalPlan,
+    connector::ConnectorContextPtr connectorContext,
+    std::shared_ptr<const FunctionRegistry> functionRegistry) {
   const auto buildRunner = useV2_ ? makeLocalRunnerV2 : makeLocalRunner;
   return buildRunner(
       logicalPlan,
+      std::move(connectorContext),
+      std::move(functionRegistry),
       executor_.get(),
       cache::AsyncDataCache::getInstance(),
       rootPool_,

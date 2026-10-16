@@ -22,7 +22,6 @@
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
-#include "velox/connectors/Connector.h"
 
 namespace facebook::axiom {
 namespace {
@@ -55,31 +54,36 @@ class CoordinatorSchedulingTest : public optimizer::test::QueryTestBase {
   void SetUp() override {
     optimizer::test::QueryTestBase::SetUp();
 
+    sessionProvider_ = std::make_shared<EmptySessionPropertiesProvider>();
+
     systemConnector_ = std::make_shared<connector::system::SystemConnector>(
-        kSystemConnectorId, &queryProvider_, &sessionProvider_);
-    velox::connector::registerConnector(systemConnector_);
+        kSystemConnectorId,
+        &queryProvider_,
+        sessionProvider_,
+        connector::system::InformationSchema::defaultTypeName,
+        metadataRegistry_);
 
     systemMetadata_ =
         std::make_shared<connector::system::SystemConnectorMetadata>(
-            systemConnector_.get());
-    connector::ConnectorMetadataRegistry::global().insert(
-        kSystemConnectorId, systemMetadata_);
+            systemConnector_.get(), metadataRegistry_);
+    connector::ConnectorMetadataRegistry::registerCatalog(
+        *connectorRegistry_,
+        *metadataRegistry_,
+        systemConnector_,
+        systemMetadata_);
 
     defaultConnectorId_ = kSystemConnectorId;
   }
 
   void TearDown() override {
-    connector::ConnectorMetadataRegistry::global().erase(kSystemConnectorId);
     systemMetadata_.reset();
-
-    velox::connector::unregisterConnector(kSystemConnectorId);
     systemConnector_.reset();
 
     optimizer::test::QueryTestBase::TearDown();
   }
 
   EmptyQueryInfoProvider queryProvider_;
-  EmptySessionPropertiesProvider sessionProvider_;
+  std::shared_ptr<EmptySessionPropertiesProvider> sessionProvider_;
   std::shared_ptr<connector::system::SystemConnector> systemConnector_;
   std::shared_ptr<connector::system::SystemConnectorMetadata> systemMetadata_;
 };

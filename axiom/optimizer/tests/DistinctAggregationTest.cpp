@@ -40,10 +40,6 @@ class DistinctAggregationTest : public test::QueryTestBase,
     useV2_ = GetParam();
   }
 
-  lp::PlanBuilder::Context makeContext() const {
-    return lp::PlanBuilder::Context{kTestConnectorId, kDefaultSchema};
-  }
-
   MultiFragmentPlan::Options runnerOptions_;
   OptimizerOptions optimizerOptions_;
 };
@@ -68,7 +64,7 @@ TEST_P(DistinctAggregationTest, singleDistinctToGroupBy) {
     SCOPED_TRACE(
         "Global aggregation with multiple DISTINCT aggregates on the same set of columns.");
     auto logicalPlan =
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("t")
             .aggregate({}, {"count(DISTINCT b)", "covar_pop(DISTINCT b, b)"})
             .build();
@@ -89,7 +85,7 @@ TEST_P(DistinctAggregationTest, singleDistinctToGroupBy) {
 
   {
     SCOPED_TRACE("Single DISTINCT aggregate with grouping keys.");
-    auto logicalPlan = lp::PlanBuilder(makeContext())
+    auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                            .tableScan("t")
                            .aggregate({"a"}, {"count(DISTINCT b)"})
                            .build();
@@ -109,7 +105,7 @@ TEST_P(DistinctAggregationTest, singleDistinctToGroupBy) {
   {
     SCOPED_TRACE("Multiple DISTINCT aggregates on the same set of columns.");
     auto logicalPlan =
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("t")
             .aggregate({"a"}, {"count(DISTINCT b)", "covar_pop(DISTINCT b, b)"})
             .build();
@@ -144,7 +140,7 @@ TEST_P(DistinctAggregationTest, singleDistinctToGroupByWithExpressionInputs) {
   {
     SCOPED_TRACE("Expression-based grouping keys and distinct args.");
     auto logicalPlan =
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("t")
             .aggregate(
                 {"a + 1"}, {"count(DISTINCT b + c)", "sum(DISTINCT b + c)"})
@@ -171,7 +167,7 @@ TEST_P(DistinctAggregationTest, singleDistinctToGroupByWithExpressionInputs) {
     SCOPED_TRACE(
         "Same set of distinct args with different order and duplicates: (b, c) and (c, b) have the same set {b, c}.");
     auto logicalPlan =
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("t")
             .aggregate(
                 {"a"},
@@ -197,7 +193,7 @@ TEST_P(DistinctAggregationTest, singleDistinctToGroupByWithExpressionInputs) {
 
   {
     SCOPED_TRACE("DISTINCT argument overlap with grouping keys.");
-    auto logicalPlan = lp::PlanBuilder(makeContext())
+    auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                            .tableScan("t")
                            .aggregate({"b"}, {"covar_pop(DISTINCT b, c)"})
                            .build();
@@ -231,7 +227,7 @@ TEST_P(DistinctAggregationTest, singleDistinctToGroupByWithOrderBy) {
   {
     SCOPED_TRACE(
         "DISTINCT with ORDER BY where ORDER BY keys are a subset of distinct args.");
-    auto logicalPlan = lp::PlanBuilder(makeContext())
+    auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                            .tableScan("t")
                            .aggregate(
                                {"c"},
@@ -259,7 +255,7 @@ TEST_P(DistinctAggregationTest, singleDistinctToGroupByWithOrderBy) {
 
   {
     SCOPED_TRACE("DISTINCT with ORDER BY and literal args.");
-    auto logicalPlan = lp::PlanBuilder(makeContext())
+    auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                            .tableScan("t")
                            .aggregate(
                                {"a"},
@@ -300,7 +296,7 @@ TEST_P(DistinctAggregationTest, singleDistinctToGroupByWithLiterals) {
   {
     SCOPED_TRACE("DISTINCT aggregate with mixed column and literal args.");
     auto logicalPlan =
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("t")
             .aggregate(
                 {"a"}, {"max_by(DISTINCT b, 1)", "min_by(DISTINCT b, 2)"})
@@ -327,7 +323,7 @@ TEST_P(DistinctAggregationTest, singleDistinctToGroupByWithLiterals) {
     // between inner final and outer partial aggregation since inner and outer
     // keys are the same.
     auto logicalPlan =
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("t")
             .aggregate({"a"}, {"count(DISTINCT 1)", "count(DISTINCT 2)"})
             .build();
@@ -360,7 +356,7 @@ TEST_P(DistinctAggregationTest, markDistinctCompoundGroupingKey) {
   };
 
   auto logicalPlan =
-      lp::PlanBuilder(makeContext())
+      lp::PlanBuilder(makePlanBuilderContext())
           .tableScan("t")
           .aggregate({"a + 1"}, {"count(DISTINCT b)", "sum(DISTINCT c)"})
           .build();
@@ -389,7 +385,7 @@ TEST_P(DistinctAggregationTest, markDistinctDifferentArgSets) {
   };
 
   auto logicalPlan =
-      lp::PlanBuilder(makeContext())
+      lp::PlanBuilder(makePlanBuilderContext())
           .tableScan("t")
           .aggregate({"a"}, {"count(DISTINCT b)", "sum(DISTINCT d % 5)"})
           .build();
@@ -425,7 +421,7 @@ TEST_P(DistinctAggregationTest, markDistinctGlobalWithMultipleSets) {
   };
 
   auto logicalPlan =
-      lp::PlanBuilder(makeContext())
+      lp::PlanBuilder(makePlanBuilderContext())
           .tableScan("t")
           .aggregate({}, {"count(DISTINCT b)", "sum(DISTINCT d % 5)"})
           .build();
@@ -462,7 +458,7 @@ TEST_P(DistinctAggregationTest, markDistinctMixedDistinctAndNonDistinct) {
   };
 
   auto logicalPlan =
-      lp::PlanBuilder(makeContext())
+      lp::PlanBuilder(makePlanBuilderContext())
           .tableScan("t")
           .aggregate(
               {"a"}, {"count(DISTINCT b)", "sum(DISTINCT d % 5)", "avg(b)"})
@@ -534,7 +530,7 @@ TEST_P(DistinctAggregationTest, markDistinctMultiArgAggregates) {
   };
 
   auto logicalPlan =
-      lp::PlanBuilder(makeContext())
+      lp::PlanBuilder(makePlanBuilderContext())
           .tableScan("t")
           .aggregate({"a"}, {"covar_pop(DISTINCT b, c)", "count(DISTINCT d)"})
           .build();
@@ -573,7 +569,7 @@ TEST_P(DistinctAggregationTest, markDistinctSharedMarkers) {
     SCOPED_TRACE(
         "DISTINCT aggregates with the same set of non-grouping-key arguments share a single marker column.");
     auto logicalPlan =
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("t")
             .aggregate(
                 {"b"},
@@ -604,7 +600,7 @@ TEST_P(DistinctAggregationTest, markDistinctSharedMarkers) {
     SCOPED_TRACE(
         "DISTINCT args overlapping with grouping keys are deduplicated in MarkDistinct keys.");
     auto logicalPlan =
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("t")
             .aggregate({"b"}, {"covar_pop(DISTINCT b, c)", "count(DISTINCT b)"})
             .build();
@@ -640,7 +636,7 @@ TEST_P(DistinctAggregationTest, markDistinctOrderBy) {
 
   {
     SCOPED_TRACE("GroupBy with DISTINCT + ORDER BY via MarkDistinct.");
-    auto logicalPlan = lp::PlanBuilder(makeContext())
+    auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                            .tableScan("t")
                            .aggregate(
                                {"a"},
@@ -677,7 +673,7 @@ TEST_P(DistinctAggregationTest, markDistinctOrderBy) {
   {
     SCOPED_TRACE(
         "Global aggregation with DISTINCT + ORDER BY via MarkDistinct.");
-    auto logicalPlan = lp::PlanBuilder(makeContext())
+    auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                            .tableScan("t")
                            .aggregate(
                                {},
@@ -723,7 +719,7 @@ TEST_P(DistinctAggregationTest, markDistinctLiterals) {
     SCOPED_TRACE("Literal in args alongside different DISTINCT column sets.");
     // The literal should not be included as MarkDistinct keys.
     auto logicalPlan =
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("t")
             .aggregate({"a"}, {"count(DISTINCT b)", "max_by(DISTINCT d, 1)"})
             .build();
@@ -751,7 +747,7 @@ TEST_P(DistinctAggregationTest, markDistinctLiterals) {
     SCOPED_TRACE(
         "DISTINCT aggregate whose column args are all grouping keys plus a literal.");
     auto logicalPlan =
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("t")
             .aggregate({"a"}, {"count(DISTINCT b)", "max_by(DISTINCT a, 1)"})
             .build();
@@ -776,7 +772,7 @@ TEST_P(DistinctAggregationTest, markDistinctLiterals) {
     SCOPED_TRACE(
         "DISTINCT aggregate with all-literal args alongside DISTINCT aggregate with column args.");
     auto logicalPlan =
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("t")
             .aggregate({"a"}, {"count(DISTINCT b)", "count(DISTINCT 1)"})
             .build();
@@ -801,7 +797,7 @@ TEST_P(DistinctAggregationTest, markDistinctLiterals) {
     SCOPED_TRACE(
         "all-literal DISTINCT with FILTER + column DISTINCT → one MarkDistinct only for column DISTINCT");
     auto logicalPlan =
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("t")
             .aggregate(
                 {"a"},
@@ -844,7 +840,7 @@ TEST_P(DistinctAggregationTest, multipleMarkDistinctWithNoShuffleInBetween) {
   };
 
   auto logicalPlan =
-      lp::PlanBuilder(makeContext())
+      lp::PlanBuilder(makePlanBuilderContext())
           .tableScan("t")
           .aggregate({"a"}, {"count(DISTINCT b)", "covar_pop(DISTINCT b, c)"})
           .build();
@@ -885,7 +881,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterDifferentArgSets) {
 
   {
     SCOPED_TRACE("same key set, different filters → one MarkDistinct");
-    auto logicalPlan = lp::PlanBuilder(makeContext())
+    auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                            .tableScan("t")
                            .aggregate(
                                {"a"},
@@ -914,7 +910,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterDifferentArgSets) {
 
   {
     SCOPED_TRACE("different key sets → separate MarkDistincts");
-    auto logicalPlan = lp::PlanBuilder(makeContext())
+    auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                            .tableScan("t")
                            .aggregate(
                                {"a"},
@@ -953,7 +949,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterGlobalAggregation) {
     testConnector_->dropTableIfExists("t");
   };
 
-  auto logicalPlan = lp::PlanBuilder(makeContext())
+  auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                          .tableScan("t")
                          .aggregate({}, {"count(DISTINCT a) FILTER (WHERE b)"})
                          .build();
@@ -987,7 +983,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterSharedMarkers) {
 
   {
     SCOPED_TRACE("same args + same filter → shared marker");
-    auto logicalPlan = lp::PlanBuilder(makeContext())
+    auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                            .tableScan("t")
                            .aggregate(
                                {"a"},
@@ -1017,7 +1013,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterSharedMarkers) {
   {
     SCOPED_TRACE("filtered + unfiltered same args → use no-mask marker");
     auto logicalPlan =
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("t")
             .aggregate(
                 {"a"},
@@ -1055,7 +1051,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterOrderBy) {
   };
 
   auto logicalPlan =
-      lp::PlanBuilder(makeContext())
+      lp::PlanBuilder(makePlanBuilderContext())
           .tableScan("t")
           .aggregate(
               {"a"}, {"array_agg(DISTINCT b ORDER BY b) FILTER (WHERE c)"})
@@ -1092,7 +1088,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterMixedDistinctAndNonDistinct) {
   };
 
   auto logicalPlan =
-      lp::PlanBuilder(makeContext())
+      lp::PlanBuilder(makePlanBuilderContext())
           .tableScan("t")
           .aggregate(
               {"a"},
@@ -1126,7 +1122,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterRedundantKeys) {
   // partitions on those columns, so DISTINCT is kept on the aggregate and no
   // MarkDistinct is added.
   auto logicalPlan =
-      lp::PlanBuilder(makeContext())
+      lp::PlanBuilder(makePlanBuilderContext())
           .tableScan("t")
           .aggregate({"a"}, {"count(DISTINCT a) FILTER (WHERE b)"})
           .build();
@@ -1160,7 +1156,7 @@ TEST_P(DistinctAggregationTest, markDistinctFilterExpressionCondition) {
   // Two filters on the same distinct key set: one boolean column, one
   // expression. Verifies expression filters are materialized into a Project
   // before MarkDistinct and that both kinds fold into one MarkDistinct.
-  auto logicalPlan = lp::PlanBuilder(makeContext())
+  auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                          .tableScan("t")
                          .aggregate(
                              {"a"},
@@ -1206,7 +1202,7 @@ TEST_P(
     SCOPED_TRACE(
         "Global aggregation mixing column DISTINCT and all-literal DISTINCT.");
     auto logicalPlan =
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("t")
             .aggregate({}, {"count(DISTINCT b)", "count(DISTINCT 1)"})
             .build();
@@ -1229,7 +1225,7 @@ TEST_P(
     SCOPED_TRACE(
         "Grouped aggregation mixing column DISTINCT and all-literal DISTINCT.");
     auto logicalPlan =
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("t")
             .aggregate({"a"}, {"count(DISTINCT b)", "count(DISTINCT 1)"})
             .build();
@@ -1261,7 +1257,7 @@ TEST_P(DistinctAggregationTest, groupingSetsDistinctToGroupBy) {
     testConnector_->dropTableIfExists("t");
   };
 
-  auto logicalPlan = lp::PlanBuilder(makeContext())
+  auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                          .tableScan("t")
                          .rollup({"a"}, {"count(DISTINCT b) as cnt"}, "gid")
                          .build();
@@ -1354,7 +1350,7 @@ TEST_P(DistinctAggregationTest, groupingSetsDistinctWithOrderBy) {
   };
 
   auto logicalPlan =
-      lp::PlanBuilder(makeContext())
+      lp::PlanBuilder(makePlanBuilderContext())
           .tableScan("t")
           .aggregate(
               {{"a"}, {"b"}}, {"array_agg(DISTINCT c ORDER BY c) as a0"}, "gid")

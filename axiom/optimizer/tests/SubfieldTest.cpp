@@ -111,11 +111,11 @@ class SubfieldTest : public HiveQueriesTestBase,
     HiveQueriesTestBase::SetUpTestCase();
 
     localFileFormat_ = velox::dwio::common::FileFormat::DWRF;
-    registerDfFunctions();
   }
 
   void SetUp() override {
     HiveQueriesTestBase::SetUp();
+    registerDfFunctions(*functionRegistry());
 
     optimizerOptions_ = OptimizerOptions{};
     optimizerOptions_.traceFlags = FLAGS_optimizer_trace;
@@ -148,13 +148,13 @@ class SubfieldTest : public HiveQueriesTestBase,
     metadata->fieldIndexForArg = {1, 2, 3};
     metadata->argOrdinal = {1, 2, 3};
 
-    auto* registry = FunctionRegistry::instance();
-    registry->registerFunction(
+    auto& registry = *functionRegistry();
+    registry.registerFunction(
         "genie", std::make_unique<FunctionMetadata>(*metadata));
 
     auto explodingMetadata = std::make_unique<FunctionMetadata>(*metadata);
     explodingMetadata->explode = explodeGenie;
-    registry->registerFunction("exploding_genie", std::move(explodingMetadata));
+    registry.registerFunction("exploding_genie", std::move(explodingMetadata));
   }
 
   static folly::F14FastMap<PathCP, lp::ExprPtr> explodeGenie(
@@ -269,11 +269,8 @@ class SubfieldTest : public HiveQueriesTestBase,
   };
 
   void testMakeRowFromMap() {
-    lp::PlanBuilder::Context ctx(
-        exec::test::kHiveConnectorId,
-        kDefaultSchema,
-        getQueryCtx(),
-        resolveDfFunction);
+    auto ctx = makePlanBuilderContext(
+        exec::test::kHiveConnectorId, kDefaultSchema, resolveDfFunction);
     auto logicalPlan =
         lp::PlanBuilder(ctx)
             .tableScan("features")
@@ -430,10 +427,6 @@ class SubfieldTest : public HiveQueriesTestBase,
     FeatureOptions opts;
     return createFeaturesTable(opts);
   }
-
-  lp::PlanBuilder::Context makeContext() const {
-    return lp::PlanBuilder::Context{kHiveConnectorId, kDefaultSchema};
-  }
 };
 
 TEST_P(SubfieldTest, structs) {
@@ -471,11 +464,14 @@ TEST_P(SubfieldTest, structs) {
 
   {
     // Dereference struct fields by indices.
-    auto logicalPlan = lp::PlanBuilder(makeContext(), /*enableCoercions=*/true)
-                           .tableScan("structs", rowType->names())
-                           .project({"s[1] as s1", "s[2].s2s1", "s[3][1]"})
-                           .filter("s1 < 10")
-                           .build();
+    auto logicalPlan =
+        lp::PlanBuilder(
+            makePlanBuilderContext(kHiveConnectorId, kDefaultSchema),
+            /*allowAmbiguousOutputNames=*/true)
+            .tableScan("structs", rowType->names())
+            .project({"s[1] as s1", "s[2].s2s1", "s[3][1]"})
+            .filter("s1 < 10")
+            .build();
     AXIOM_ASSERT_PLAN(
         toSingleNodePlan(logicalPlan),
         matchHiveScan("structs", {{"s", {".s1", ".s2.s2s1", ".s3[1]"}}})
@@ -556,7 +552,8 @@ TEST_P(SubfieldTest, anonymousStructTableScan) {
 
   {
     // Anonymous struct access in project.
-    auto logicalPlan = lp::PlanBuilder(makeContext())
+    auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext(
+                                           kHiveConnectorId, kDefaultSchema))
                            .tableScan("anon_scan", rowType->names())
                            .project({"s[1] as s1", "s[3][1]"})
                            .build();
@@ -567,11 +564,14 @@ TEST_P(SubfieldTest, anonymousStructTableScan) {
 
   {
     // Anonymous struct access in filter.
-    auto logicalPlan = lp::PlanBuilder(makeContext(), /*enableCoercions=*/true)
-                           .tableScan("anon_scan", rowType->names())
-                           .project({"s[3][1] as arr_elem"})
-                           .filter("arr_elem > 0")
-                           .build();
+    auto logicalPlan =
+        lp::PlanBuilder(
+            makePlanBuilderContext(kHiveConnectorId, kDefaultSchema),
+            /*allowAmbiguousOutputNames=*/true)
+            .tableScan("anon_scan", rowType->names())
+            .project({"s[3][1] as arr_elem"})
+            .filter("arr_elem > 0")
+            .build();
 
     VELOX_ASSERT_THROW(
         planVelox(logicalPlan), "Index subfield not suitable for pruning");
@@ -591,7 +591,8 @@ TEST_P(SubfieldTest, genie) {
   // accessed and should not be in the table scan.
   {
     auto logicalPlan =
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(
+            makePlanBuilderContext(kHiveConnectorId, kDefaultSchema))
             .tableScan("features")
             .project(
                 {"genie(uid, float_features, id_list_features, id_score_list_features) as g"})
@@ -619,7 +620,8 @@ TEST_P(SubfieldTest, genie) {
   // All of genie is returned.
   {
     auto logicalPlan =
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(
+            makePlanBuilderContext(kHiveConnectorId, kDefaultSchema))
             .tableScan("features")
             .project(
                 {"genie(uid, float_features, id_list_features, id_score_list_features) as gtemp"})
@@ -649,7 +651,8 @@ TEST_P(SubfieldTest, genie) {
   // We expect the genie to explode and the filters to be first.
   {
     auto logicalPlan =
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(
+            makePlanBuilderContext(kHiveConnectorId, kDefaultSchema))
             .tableScan("features")
             .project(
                 {"exploding_genie(uid, float_features, id_list_features, id_score_list_features) as g"})
@@ -687,7 +690,7 @@ TEST_P(SubfieldTest, maps) {
   }
 
   {
-    lp::PlanBuilder::Context ctx(kHiveConnectorId, kDefaultSchema);
+    auto ctx = makePlanBuilderContext(kHiveConnectorId, kDefaultSchema);
     auto logicalPlan =
         lp::PlanBuilder(ctx)
             .tableScan("features")
@@ -733,7 +736,8 @@ TEST_P(SubfieldTest, maps) {
   }
   {
     auto logicalPlan =
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(
+            makePlanBuilderContext(kHiveConnectorId, kDefaultSchema))
             .tableScan("features")
             .project(
                 {"float_features[10100::int] as f1",
@@ -873,7 +877,7 @@ TEST_P(SubfieldTest, parallelExpr) {
   opts.rng.seed(1);
   makeLogicalExprs(opts, names, exprs);
 
-  auto ctx = makeContext();
+  auto ctx = makePlanBuilderContext(kHiveConnectorId, kDefaultSchema);
   auto logicalPlan = std::make_shared<lp::ProjectNode>(
       ctx.planNodeIdGenerator->next(),
       lp::PlanBuilder(ctx).tableScan("features", rowType->names()).build(),
@@ -1203,8 +1207,8 @@ TEST_P(SubfieldTest, blackbox) {
 
   createTable("t", {data});
 
-  lp::PlanBuilder::Context ctx(
-      kHiveConnectorId, kDefaultSchema, getQueryCtx(), resolveDfFunction);
+  auto ctx = makePlanBuilderContext(
+      kHiveConnectorId, kDefaultSchema, resolveDfFunction);
 
   auto logicalPlan =
       lp::PlanBuilder(ctx)

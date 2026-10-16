@@ -16,6 +16,7 @@
 
 #include "axiom/runner/ProgressReporter.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
+#include "axiom/optimizer/FunctionRegistry.h"
 
 #include <folly/coro/Baton.h>
 #include <folly/coro/BlockingWait.h>
@@ -114,6 +115,7 @@ class ProgressReporterTest : public test::LocalRunnerTestBase {
   RunnerSessionPtr makeRunnerSession(std::string_view queryId) {
     return std::make_shared<RunnerSession>(
         connector::makeTestContext(queryId),
+        optimizer::FunctionRegistry::createPresto(),
         connector::makeTestStatWriter(),
         Properties{});
   }
