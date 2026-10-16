@@ -29,7 +29,8 @@ bool isCountStar(optimizer::AggregateCP aggregate) {
   // `COUNT(*)` is the dialect's count aggregate (per FunctionRegistry)
   // invoked with no args. Aggregates with args, or aggregates from a
   // dialect that hasn't registered count, are not the count-bug case.
-  const auto& countName = FunctionRegistry::instance()->count();
+  const auto& countName =
+      QueryGraphContext::current().functionRegistry().count();
   return countName.has_value() && aggregate->name() == toName(*countName) &&
       aggregate->args().empty();
 }
@@ -110,7 +111,8 @@ optimizer::AggregateCP AggregateRecovery::makeBoolOr(ExprCP arg) {
       velox::TypeKind::BOOLEAN,
       "bool_or expects a BOOLEAN argument");
 
-  const auto& boolOrName = FunctionRegistry::instance()->boolOr();
+  const auto& boolOrName =
+      QueryGraphContext::current().functionRegistry().boolOr();
   VELOX_USER_CHECK(
       boolOrName.has_value(),
       "Decorrelate semi recovery requires bool_or registered via "

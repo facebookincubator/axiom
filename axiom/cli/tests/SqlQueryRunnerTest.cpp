@@ -113,6 +113,161 @@ class SqlQueryRunnerTest : public SqlQueryRunnerTestBase {
   }
 };
 
+// Exposes the embedding write API for its end-to-end test.
+class WriteDataSqlQueryRunner : public SqlQueryRunner {
+ public:
+  using SqlQueryRunner::SqlQueryRunner;
+  using SqlQueryRunner::writeDataToTableUnchecked;
+};
+
+// A runner rejects a prepared statement created by another runner.
+TEST_F(SqlQueryRunnerTest, preparedStatementRunnerOwnership) {
+  auto secondRunner = makeRunner("second");
+  auto statement = runner_->prepare("SELECT 1", {});
+  VELOX_ASSERT_USER_THROW(
+      secondRunner->runUnchecked(std::move(statement)),
+      "Prepared statement belongs to a different SqlQueryRunner");
+}
+
+// A prepared statement retains the execution settings supplied during
+// preparation even if the runner's session changes before execution.
+TEST_F(SqlQueryRunnerTest, preparedStatementRetainsExecutionSettings) {
+  auto statement = runner_->prepare(
+      "SELECT 1",
+      {},
+      SqlQueryRunner::ExecutionSettings{
+          .applySessionProperties = true,
+          .parserProperties = {},
+          .optimizerProperties =
+              {{std::string{facebook::axiom::optimizer::OptimizerOptions::
+                                kMaxPlanObjects},
+                "1"}},
+      });
+  runner_->sessionConfig().set(
+      SqlQueryRunner::kOptimizerPrefix,
+      facebook::axiom::optimizer::OptimizerOptions::kMaxPlanObjects,
+      "1000000");
+
+  VELOX_ASSERT_THROW(
+      runner_->runUnchecked(std::move(statement)),
+      "exceeds the plan object limit");
+}
+
+TEST_F(SqlQueryRunnerTest, independentCatalogs) {
+  testConnector_->addTable("engine_data", ROW({"value"}, {BIGINT()}));
+  testConnector_->appendData(
+      "engine_data", makeRowVector({makeFlatVector<int64_t>({11})}));
+
+  auto secondTableRoot = facebook::velox::memory::memoryManager()->addRootPool(
+      "sql_runner_second_catalog");
+  std::shared_ptr<facebook::axiom::connector::TestConnector> secondConnector;
+  auto secondRunner = makeRunner([&](facebook::axiom::Connectors&,
+                                     auto& connectorRegistry,
+                                     auto& metadataRegistry) {
+    secondConnector =
+        std::make_shared<facebook::axiom::connector::TestConnector>(
+            "test", /*config=*/nullptr, secondTableRoot);
+    secondConnector->addTable("engine_data", ROW({"value"}, {BIGINT()}));
+    secondConnector->appendData(
+        "engine_data", makeRowVector({makeFlatVector<int64_t>({22})}));
+    facebook::axiom::connector::ConnectorMetadataRegistry::registerCatalog(
+        connectorRegistry,
+        metadataRegistry,
+        secondConnector,
+        secondConnector->metadata());
+    return std::make_pair(secondConnector->connectorId(), kDefaultSchema);
+  });
+
+  {
+    const auto firstResult = runner_->run("SELECT value FROM engine_data", {});
+    const auto secondResult =
+        secondRunner->run("SELECT value FROM engine_data", {});
+    test::assertEqualVectors(
+        firstResult.results.at(0),
+        makeRowVector({makeFlatVector<int64_t>({11})}));
+    test::assertEqualVectors(
+        secondResult.results.at(0),
+        makeRowVector({makeFlatVector<int64_t>({22})}));
+  }
+
+  runner_.reset();
+  const auto survivingResult =
+      secondRunner->run("SELECT value FROM engine_data", {});
+  test::assertEqualVectors(
+      survivingResult.results.at(0),
+      makeRowVector({makeFlatVector<int64_t>({22})}));
+}
+
+TEST_F(SqlQueryRunnerTest, metadataCatalog) {
+  std::shared_ptr<facebook::axiom::connector::TestConnector> metadataOwner;
+  auto runner = makeRunner([&](facebook::axiom::Connectors& connectors,
+                               auto&,
+                               auto& metadataRegistry) {
+    auto connector = connectors.registerTestConnector("test");
+    metadataOwner = std::make_shared<facebook::axiom::connector::TestConnector>(
+        "metadata_only");
+    metadataRegistry.insert("metadata_only", metadataOwner->metadata());
+    return std::make_pair(connector->connectorId(), kDefaultSchema);
+  });
+
+  const auto context = runner->createConnectorContext("metadata-query");
+  EXPECT_EQ(context->metadata("metadata_only"), metadataOwner->metadata());
+}
+
+// The embedding write API creates a missing table and inserts into an existing
+// table through the runner's catalog.
+TEST_F(SqlQueryRunnerTest, writeDataToTable) {
+  WriteDataSqlQueryRunner runner{"test_user"};
+  std::shared_ptr<facebook::axiom::connector::TestConnector> connector;
+  runner.initialize([&](facebook::axiom::Connectors&,
+                        auto& connectorRegistry,
+                        auto& metadataRegistry) {
+    connector = std::make_shared<facebook::axiom::connector::TestConnector>(
+        "write_test");
+    facebook::axiom::connector::ConnectorMetadataRegistry::registerCatalog(
+        connectorRegistry, metadataRegistry, connector, connector->metadata());
+    return std::make_pair(connector->connectorId(), kDefaultSchema);
+  });
+
+  const facebook::axiom::SchemaTableName tableName{kDefaultSchema, "written"};
+  runner.writeDataToTableUnchecked(
+      makeRowVector({"c"}, {makeFlatVector<int64_t>({1, 2})}),
+      connector->connectorId(),
+      tableName,
+      {});
+  auto result = runner.run("SELECT c FROM written ORDER BY c", {});
+  test::assertEqualVectors(
+      result.results.at(0),
+      makeRowVector({"c"}, {makeFlatVector<int64_t>({1, 2})}));
+
+  runner.writeDataToTableUnchecked(
+      makeRowVector({"c"}, {makeFlatVector<int64_t>({3})}),
+      connector->connectorId(),
+      tableName,
+      {});
+  result = runner.run("SELECT c FROM written ORDER BY c", {});
+  test::assertEqualVectors(
+      result.results.at(0),
+      makeRowVector({"c"}, {makeFlatVector<int64_t>({1, 2, 3})}));
+}
+
+// Queries from one runner resolve the same engine-owned catalog state.
+TEST_F(SqlQueryRunnerTest, catalogPersistence) {
+  SqlQueryRunner::RunOptions options;
+  options.queryId = "explicit-query";
+  options.defaultConnectorId = "test";
+  options.defaultSchema = kDefaultSchema;
+
+  auto statement = runner_->prepare(
+      "CREATE TABLE through_context AS SELECT 1 AS c", options);
+  runner_->runUnchecked(std::move(statement));
+
+  const auto context = runner_->createConnectorContext("inspection-query");
+  EXPECT_NE(
+      context->metadata("test")->findTable({kDefaultSchema, "through_context"}),
+      nullptr);
+}
+
 TEST_F(SqlQueryRunnerTest, runSingleStatement) {
   {
     const auto result = run("SELECT 1");
@@ -429,15 +584,50 @@ TEST_F(SqlQueryRunnerTest, runRejectsMultipleStatements) {
   VELOX_ASSERT_THROW(run("SELECT 1; SELECT 2"), "Expected a single statement");
 }
 
-TEST_F(SqlQueryRunnerTest, parseAndRunMixedStatementTypes) {
-  auto statements = runner_->parseMultiple(
+// A prepared SELECT exposes its analysis and executes exactly once.
+TEST_F(SqlQueryRunnerTest, preparedStatement) {
+  SqlQueryRunner::RunOptions options;
+  options.queryId = "prepared-statement";
+  auto statement = runner_->prepare("SELECT 42 AS value", options);
+
+  EXPECT_EQ(statement->analysis().kind, presto::SqlStatementKind::kSelect);
+  VELOX_EXPECT_EQ_TYPES(
+      statement->analysis().outputType, ROW("value", INTEGER()));
+
+  const auto result = runner_->runUnchecked(std::move(statement));
+  ASSERT_EQ(result.results.size(), 1);
+  test::assertEqualVectors(
+      result.results.front(), makeRowVector({makeFlatVector<int32_t>({42})}));
+}
+
+// Analysis handles multiple statement kinds while each prepared statement
+// keeps its own query state for execution.
+TEST_F(SqlQueryRunnerTest, mixedStatements) {
+  SqlQueryRunner::RunOptions options;
+  options.queryId = "mixed-statements-analysis";
+  const auto analyses = runner_->analyzeMultiple(
       "SELECT 42; SELECT CAST(1 AS BIGINT) AS value WHERE false; "
       "EXPLAIN (TYPE LOGICAL) SELECT 1; select 7",
-      {},
-      /*context=*/nullptr);
-  ASSERT_EQ(4, statements.size());
+      options);
+  EXPECT_THAT(
+      analyses,
+      testing::ElementsAre(
+          testing::Field(
+              &SqlQueryRunner::StatementAnalysis::kind,
+              presto::SqlStatementKind::kSelect),
+          testing::Field(
+              &SqlQueryRunner::StatementAnalysis::kind,
+              presto::SqlStatementKind::kSelect),
+          testing::Field(
+              &SqlQueryRunner::StatementAnalysis::kind,
+              presto::SqlStatementKind::kExplain),
+          testing::Field(
+              &SqlQueryRunner::StatementAnalysis::kind,
+              presto::SqlStatementKind::kSelect)));
 
-  auto selectResult = runner_->runUnchecked(*statements[0], {});
+  options.queryId = "mixed-statements-select";
+  auto selectStatement = runner_->prepare("SELECT 42", options);
+  auto selectResult = runner_->runUnchecked(std::move(selectStatement));
   ASSERT_FALSE(selectResult.message.has_value());
   ASSERT_EQ(selectResult.results.size(), 1);
   const auto& selectBatch = selectResult.results.front();
@@ -446,16 +636,24 @@ TEST_F(SqlQueryRunnerTest, parseAndRunMixedStatementTypes) {
   test::assertEqualVectors(
       selectBatch, makeRowVector({makeFlatVector<int32_t>({42})}));
 
-  auto emptyResult = runner_->runUnchecked(*statements[1], {});
+  options.queryId = "mixed-statements-empty";
+  auto emptyStatement = runner_->prepare(
+      "SELECT CAST(1 AS BIGINT) AS value WHERE false", options);
+  auto emptyResult = runner_->runUnchecked(std::move(emptyStatement));
   ASSERT_FALSE(emptyResult.message.has_value());
   EXPECT_TRUE(emptyResult.results.empty());
   VELOX_EXPECT_EQ_TYPES(emptyResult.resultType, ROW("value", BIGINT()));
 
-  auto explainResult = runner_->runUnchecked(*statements[2], {});
+  options.queryId = "mixed-statements-explain";
+  auto explainStatement =
+      runner_->prepare("EXPLAIN (TYPE LOGICAL) SELECT 1", options);
+  auto explainResult = runner_->runUnchecked(std::move(explainStatement));
   ASSERT_TRUE(explainResult.message.has_value());
   ASSERT_FALSE(explainResult.message.value().empty());
 
-  auto lastResult = runner_->runUnchecked(*statements[3], {});
+  options.queryId = "mixed-statements-last";
+  auto lastStatement = runner_->prepare("SELECT 7", options);
+  auto lastResult = runner_->runUnchecked(std::move(lastStatement));
   ASSERT_FALSE(lastResult.message.has_value());
   test::assertEqualVectors(
       lastResult.results[0], makeRowVector({makeFlatVector<int32_t>({7})}));
@@ -490,9 +688,10 @@ TEST_F(SqlQueryRunnerTest, invalidStatementThrows) {
 }
 
 TEST_F(SqlQueryRunnerTest, parseMultipleWithInvalidStatement) {
+  SqlQueryRunner::RunOptions options;
+  options.queryId = "invalid-multiple-statements";
   EXPECT_THROW(
-      runner_->parseMultiple(
-          "SELECT 1; INVALID; SELECT 2", {}, /*context=*/nullptr),
+      runner_->analyzeMultiple("SELECT 1; INVALID; SELECT 2", options),
       std::exception);
 }
 
@@ -1400,9 +1599,7 @@ TEST_F(SqlQueryRunnerTest, connectorProperties) {
 
 TEST_F(SqlQueryRunnerTest, addColumn) {
   auto findTable = [&]() {
-    auto metadata = facebook::axiom::connector::ConnectorMetadataRegistry::get(
-        testConnector_->connectorId());
-    return metadata->findTable({"default", "t"});
+    return testConnector_->metadata()->findTable({"default", "t"});
   };
 
   // Basic add followed by schema verification.

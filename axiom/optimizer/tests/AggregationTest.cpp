@@ -33,10 +33,6 @@ class AggregationTest : public test::QueryTestBase,
     useV2_ = GetParam();
     test::QueryTestBase::SetUp();
   }
-
-  lp::PlanBuilder::Context makeContext() const {
-    return lp::PlanBuilder::Context{kTestConnectorId, kDefaultSchema};
-  }
 };
 
 TEST_P(AggregationTest, dedupGroupingKeysAndAggregates) {
@@ -44,7 +40,7 @@ TEST_P(AggregationTest, dedupGroupingKeysAndAggregates) {
       "numbers", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), DOUBLE()}));
 
   {
-    auto logicalPlan = lp::PlanBuilder(makeContext())
+    auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                            .tableScan("numbers")
                            .project({"a + b as x", "a + b as y", "c"})
                            .aggregate({"x", "y"}, {"count(1)", "count(1)"})
@@ -149,7 +145,7 @@ TEST_P(AggregationTest, constantGroupingKeys) {
 TEST_P(AggregationTest, duplicatesBetweenGroupAndAggregate) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
 
-  auto logicalPlan = lp::PlanBuilder(makeContext())
+  auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                          .tableScan("t")
                          .project({"a + b AS ab1", "a + b AS ab2"})
                          .aggregate({"ab1", "ab2"}, {"count(ab2) AS c1"})
@@ -170,14 +166,16 @@ TEST_P(AggregationTest, duplicatesBetweenGroupAndAggregate) {
 TEST_P(AggregationTest, dedupMask) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
 
-  auto logicalPlan = lp::PlanBuilder(makeContext(), /*enableCoercions=*/true)
-                         .tableScan("t")
-                         .aggregate(
-                             {},
-                             {"sum(a) FILTER (WHERE b > 0)",
-                              "sum(a) FILTER (WHERE b < 0)",
-                              "sum(a) FILTER (WHERE b > 0)"})
-                         .build();
+  auto logicalPlan =
+      lp::PlanBuilder(
+          makePlanBuilderContext(), /*allowAmbiguousOutputNames=*/true)
+          .tableScan("t")
+          .aggregate(
+              {},
+              {"sum(a) FILTER (WHERE b > 0)",
+               "sum(a) FILTER (WHERE b < 0)",
+               "sum(a) FILTER (WHERE b > 0)"})
+          .build();
 
   auto plan = toSingleNodePlan(logicalPlan);
 
@@ -218,15 +216,17 @@ TEST_P(AggregationTest, constantFilter) {
 TEST_P(AggregationTest, dedupOrderBy) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
 
-  auto logicalPlan = lp::PlanBuilder(makeContext(), /*enableCoercions=*/true)
-                         .tableScan("t")
-                         .aggregate(
-                             {},
-                             {"array_agg(a ORDER BY a, a)",
-                              "array_agg(b ORDER BY b, a, b, a)",
-                              "array_agg(a ORDER BY a + b, a + b DESC, c)",
-                              "array_agg(c ORDER BY b * 2, b * 2)"})
-                         .build();
+  auto logicalPlan =
+      lp::PlanBuilder(
+          makePlanBuilderContext(), /*allowAmbiguousOutputNames=*/true)
+          .tableScan("t")
+          .aggregate(
+              {},
+              {"array_agg(a ORDER BY a, a)",
+               "array_agg(b ORDER BY b, a, b, a)",
+               "array_agg(a ORDER BY a + b, a + b DESC, c)",
+               "array_agg(c ORDER BY b * 2, b * 2)"})
+          .build();
 
   auto plan = toSingleNodePlan(logicalPlan);
 
@@ -247,7 +247,8 @@ TEST_P(AggregationTest, dedupSameOptions) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
 
   auto logicalPlan =
-      lp::PlanBuilder(makeContext(), /*enableCoercions=*/true)
+      lp::PlanBuilder(
+          makePlanBuilderContext(), /*allowAmbiguousOutputNames=*/true)
           .tableScan("t")
           .aggregate(
               {},
@@ -316,7 +317,7 @@ TEST_P(AggregationTest, orderBy) {
   // Query with ORDER BY in aggregate should use single aggregation step, even
   // if the optimizer option requires always planning partial aggregation.
   auto logicalPlan =
-      lp::PlanBuilder(makeContext())
+      lp::PlanBuilder(makePlanBuilderContext())
           .tableScan("t")
           .aggregate({"k"}, {"array_agg(v1 ORDER BY v2)", "sum(v1)"})
           .build();
@@ -338,7 +339,7 @@ TEST_P(AggregationTest, orderBy) {
   }
 
   // Query without ORDER BY - should use partial + final aggregation.
-  logicalPlan = lp::PlanBuilder(makeContext())
+  logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                     .tableScan("t")
                     .aggregate({"k"}, {"sum(v1)"})
                     .build();
@@ -383,7 +384,7 @@ TEST_P(AggregationTest, fanoutPrecisionRegression) {
   testConnector_->addTable("t", ROW(folly::copy(keys), BIGINT()))
       ->setStats(kHugeStat, colStats);
 
-  auto logicalPlan = lp::PlanBuilder(makeContext())
+  auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                          .tableScan("t")
                          .filter(fmt::format("{} > 99999999990", keys[0]))
                          .aggregate(keys, {"count(1)"})
@@ -438,7 +439,7 @@ TEST_P(AggregationTest, repartitionForAggPartitionSubset) {
   {
     SCOPED_TRACE(
         "partitionKeys is a subset of groupingKeys, no shuffle needed");
-    auto logicalPlan = lp::PlanBuilder(makeContext())
+    auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                            .tableScan("t")
                            .aggregate({"a", "b"}, {})
                            .with({"a + b as d"})
@@ -465,7 +466,7 @@ TEST_P(AggregationTest, repartitionForAggPartitionSubset) {
   {
     SCOPED_TRACE(
         "partitionKeys is not a subset of groupingKeys, shuffle needed");
-    auto logicalPlan = lp::PlanBuilder(makeContext())
+    auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                            .tableScan("t")
                            .aggregate({"a", "b", "c"}, {})
                            .aggregate({"a", "b"}, {})
@@ -765,7 +766,7 @@ TEST_P(AggregationTest, bucketedAggregation) {
     testConnector_->dropTableIfExists("t");
   };
 
-  auto logicalPlan = lp::PlanBuilder(makeContext())
+  auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                          .tableScan("t")
                          .aggregate({"k", "g"}, {"sum(v)"})
                          .build();
@@ -809,7 +810,7 @@ TEST_P(AggregationTest, groupingSets) {
   testConnector_->addTable(
       "t", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), DOUBLE()}));
 
-  auto logicalPlan = lp::PlanBuilder(makeContext())
+  auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                          .tableScan("t")
                          .rollup({"a", "b"}, {"sum(c) as total"}, "gid")
                          .build();
@@ -850,7 +851,7 @@ TEST_P(AggregationTest, groupingSets) {
 TEST_P(AggregationTest, groupingSetsKeyIsAggInput) {
   testConnector_->addTable("t", ROW({"a", "b"}, {BIGINT(), DOUBLE()}));
 
-  auto logicalPlan = lp::PlanBuilder(makeContext())
+  auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                          .tableScan("t")
                          .rollup({"a"}, {"sum(a) as total"}, "gid")
                          .build();
@@ -874,7 +875,7 @@ TEST_P(AggregationTest, groupingSetsCrossSetOptimization) {
   // GROUP BY GROUPING SETS ((a, b), (b, a), (a, b)) — all three sets are
   // order-insensitively identical but treated as separate sets today.
   auto logicalPlan =
-      lp::PlanBuilder(makeContext())
+      lp::PlanBuilder(makePlanBuilderContext())
           .tableScan("t")
           .aggregate(
               {{"a", "b"}, {"b", "a"}, {"a", "b"}}, {"count(1) as c"}, "gid")
@@ -897,7 +898,7 @@ TEST_P(AggregationTest, groupingSetsNoGlobalSet) {
       "t", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), DOUBLE()}));
 
   // GROUPING SETS ((a), (b)) — no empty set.
-  auto logicalPlan = lp::PlanBuilder(makeContext())
+  auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                          .tableScan("t")
                          .aggregate({{"a"}, {"b"}}, {"count(1) as c"}, "gid")
                          .build();
@@ -941,7 +942,7 @@ TEST_P(AggregationTest, groupingSetsOrderByWithGlobalSet) {
   };
 
   auto logicalPlan =
-      lp::PlanBuilder(makeContext())
+      lp::PlanBuilder(makePlanBuilderContext())
           .tableScan("t")
           .rollup({"a"}, {"array_agg(b ORDER BY b) as arr"}, "gid")
           .build();
@@ -983,7 +984,7 @@ TEST_P(AggregationTest, groupingSetsOrderByWithGlobalSet) {
 TEST_P(AggregationTest, groupingSetsLiteralArgs) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
 
-  auto logicalPlan = lp::PlanBuilder(makeContext())
+  auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                          .tableScan("t")
                          .rollup({"a"}, {"count(1) as c"}, "gid")
                          .build();
@@ -1019,7 +1020,7 @@ TEST_P(AggregationTest, groupingSetsLiteralArgs) {
 
 TEST_P(AggregationTest, mask) {
   auto logicalPlan =
-      lp::PlanBuilder(makeContext())
+      lp::PlanBuilder(makePlanBuilderContext())
           .tableScan("nation")
           .aggregate(
               {},
@@ -1060,7 +1061,7 @@ TEST_P(AggregationTest, mask) {
 TEST_P(AggregationTest, ifToMask) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
 
-  auto logicalPlan = lp::PlanBuilder(makeContext())
+  auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                          .tableScan("t")
                          .project(
                              {"if(b > 0, a, null) as x",
@@ -1095,7 +1096,7 @@ TEST_P(AggregationTest, ifToMask) {
 }
 
 TEST_P(AggregationTest, distinctAggregate) {
-  auto logicalPlan = lp::PlanBuilder(makeContext())
+  auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                          .tableScan("nation")
                          .aggregate({}, {"count(distinct n_regionkey)"})
                          .build();
@@ -1125,7 +1126,7 @@ TEST_P(AggregationTest, distinctAggregate) {
 
 TEST_P(AggregationTest, orderedAggregate) {
   auto logicalPlan =
-      lp::PlanBuilder(makeContext())
+      lp::PlanBuilder(makePlanBuilderContext())
           .tableScan("nation")
           .aggregate(
               {"n_regionkey"},
@@ -1156,7 +1157,7 @@ TEST_P(AggregationTest, orderedAggregate) {
 
 TEST_P(AggregationTest, maskWithOrderedAggregate) {
   auto logicalPlan =
-      lp::PlanBuilder(makeContext())
+      lp::PlanBuilder(makePlanBuilderContext())
           .tableScan("nation")
           .aggregate(
               {"n_regionkey"},
@@ -1197,7 +1198,7 @@ TEST_P(AggregationTest, dedupDistinctAggregates) {
   // several of these the same aggregate; the trailing project restores the
   // requested output order.
   auto logicalPlan =
-      lp::PlanBuilder(makeContext())
+      lp::PlanBuilder(makePlanBuilderContext())
           .tableScan("nation")
           .aggregate(
               {},
@@ -1252,7 +1253,7 @@ TEST_P(AggregationTest, dropOrderByFromOrderInsensitiveAggregates) {
   // sum and count do not depend on input order, so their ORDER BY is dropped,
   // which makes the first two the same aggregate.
   auto logicalPlan =
-      lp::PlanBuilder(makeContext())
+      lp::PlanBuilder(makePlanBuilderContext())
           .tableScan("nation")
           .aggregate(
               {},
@@ -1329,7 +1330,7 @@ TEST_P(AggregationTest, dedupDistinctAndOrderedAggregates) {
   // Both DISTINCT and ORDER BY are dropped from aggregates that ignore them,
   // leaving three distinct aggregates for four requested ones.
   auto logicalPlan =
-      lp::PlanBuilder(makeContext())
+      lp::PlanBuilder(makePlanBuilderContext())
           .tableScan("nation")
           .aggregate(
               {},
@@ -1378,7 +1379,7 @@ TEST_P(AggregationTest, alwaysPlanPartialAggregation) {
 
   optimizerOptions_.alwaysPlanPartialAggregation = true;
 
-  auto logicalPlan = lp::PlanBuilder(makeContext())
+  auto logicalPlan = lp::PlanBuilder(makePlanBuilderContext())
                          .tableScan("numbers", {"a", "b"})
                          .aggregate({"a"}, {"sum(a + b)"})
                          .build();

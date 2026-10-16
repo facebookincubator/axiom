@@ -20,6 +20,7 @@
 #include <memory>
 #include <string_view>
 
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/PlanObject.h"
 #include "axiom/optimizer/QueryGraphContext.h"
@@ -46,8 +47,11 @@ class UnitTestBase : public ::testing::Test {
     pool_ = velox::memory::memoryManager()->addLeafPool(
         ::testing::UnitTest::GetInstance()->current_test_info()->name());
     allocator_ = std::make_unique<velox::HashStringAllocator>(pool_.get());
+    functionRegistry_ = FunctionRegistry::createPresto();
     context_ = std::make_unique<optimizer::QueryGraphContext>(
-        *allocator_, OptimizerOptions::kMaxPlanObjectsDefault);
+        *allocator_,
+        OptimizerOptions::kMaxPlanObjectsDefault,
+        functionRegistry_);
     optimizer::queryCtx() = context_.get();
     builder_ = std::make_unique<Builder>();
   }
@@ -56,6 +60,7 @@ class UnitTestBase : public ::testing::Test {
     builder_.reset();
     optimizer::queryCtx() = nullptr;
     context_.reset();
+    functionRegistry_.reset();
     allocator_.reset();
     pool_.reset();
   }
@@ -71,6 +76,7 @@ class UnitTestBase : public ::testing::Test {
 
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::unique_ptr<velox::HashStringAllocator> allocator_;
+  std::shared_ptr<FunctionRegistry> functionRegistry_;
   std::unique_ptr<optimizer::QueryGraphContext> context_;
   std::unique_ptr<Builder> builder_;
 };

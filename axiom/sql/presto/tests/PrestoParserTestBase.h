@@ -20,6 +20,7 @@
 #include <gtest/gtest.h>
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/sql/presto/PrestoParser.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
@@ -147,6 +148,7 @@ class PrestoParserTestBase : public testing::Test {
   static ParserSessionPtr makeParserSession(ParserOptions options = {}) {
     return std::make_shared<ParserSession>(
         facebook::axiom::connector::makeTestContext(/*queryId=*/"test"),
+        facebook::axiom::optimizer::FunctionRegistry::createPresto(),
         facebook::axiom::connector::makeTestStatWriter(),
         facebook::axiom::connector::Properties{},
         std::move(options));

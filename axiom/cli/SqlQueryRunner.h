@@ -18,16 +18,19 @@
 #include <folly/CancellationToken.h>
 #include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/Task.h>
-#include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/executors/FunctionScheduler.h>
 #include <folly/system/HardwareConcurrency.h>
 #include <chrono>
 #include <exception>
 #include <functional>
+#include <memory>
 #include <vector>
+#include "axiom/cli/Connectors.h"
 #include "axiom/common/ConfigRegistry.h"
 #include "axiom/common/SessionConfig.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/optimizer/DerivedTable.h"
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/ToVelox.h"
 #include "axiom/runner/LocalRunner.h"
@@ -35,6 +38,10 @@
 #include "axiom/runner/QueryProgress.h"
 #include "axiom/sql/presto/SqlStatement.h"
 #include "velox/common/file/TokenProvider.h"
+#include "velox/common/memory/CustomMemoryResourceRegistry.h"
+#include "velox/connectors/ConnectorRegistry.h"
+#include "velox/exec/ExchangeTransportRegistry.h"
+#include "velox/exec/OutputTransportRegistry.h"
 
 namespace axiom::sql {
 
@@ -181,9 +188,34 @@ using QueryStartCallback = std::function<void(const QueryStartInfo&)>;
 /// Invoked when a query completes, whether it succeeded or failed.
 using QueryCompletionCallback = std::function<void(const QueryCompletionInfo&)>;
 
-/// Executes SQL queries.
+/// Executes SQL queries using catalogs and optimizer functions owned by this
+/// runner.
+///
+/// Example:
+///   SqlQueryRunner runner{"user"};
+///   runner.initialize(registerCatalogs);
+///   auto result = runner.run("SELECT * FROM test.t", {});
+///
+/// Invariants:
+///   - initialize() completes before query APIs are used.
+///   - Every query resolves catalogs and optimizer functions from this runner.
+///   - Each Velox QueryCtx retains its executor for the QueryCtx's lifetime.
 class SqlQueryRunner {
  public:
+  /// Registers catalogs before the runner builds its session configuration.
+  /// Receives connector-specific helpers and the runner-owned connector and
+  /// metadata registries.
+  using ConnectorInitializer =
+      std::function<std::pair<std::string, std::string>(
+          facebook::axiom::Connectors&,
+          facebook::velox::connector::ConnectorRegistry::Registry&,
+          facebook::axiom::connector::ConnectorMetadataRegistry::Registry&)>;
+
+  /// Registers catalogs that require the completed session configuration.
+  using SessionConnectorInitializer = std::function<void(
+      facebook::axiom::Connectors&,
+      std::shared_ptr<const facebook::axiom::SessionConfig>)>;
+
   /// Prefix for optimizer session properties (e.g., "optimizer.sample_joins").
   static constexpr const char* kOptimizerPrefix = "optimizer";
 
@@ -210,16 +242,9 @@ class SqlQueryRunner {
   explicit SqlQueryRunner(
       std::string user,
       folly::FunctionScheduler* progressScheduler = nullptr,
-      bool useOptimizerV2 = true)
-      : executor_{std::make_shared<folly::CPUThreadPoolExecutor>(
-            folly::available_concurrency() * 2)},
-        user_{std::move(user)},
-        useOptimizerV2_{useOptimizerV2},
-        progressScheduler_{progressScheduler} {
-    VELOX_USER_CHECK(!user_.empty(), "SqlQueryRunner user must be non-empty");
-  }
+      bool useOptimizerV2 = true);
 
-  virtual ~SqlQueryRunner() = default;
+  virtual ~SqlQueryRunner();
 
   /// Identity of the user running queries. Used as the table owner in DDL and
   /// for the SQL `CURRENT_USER` function.
@@ -237,13 +262,21 @@ class SqlQueryRunner {
   /// Initializes the runner with connectors, an optional permission check, an
   /// optional logical plan check that rejects plans the deployment cannot
   /// execute, and a query ID generator (defaults to QueryIdGenerator if not
-  /// provided). Call once before running queries.
+  /// provided). `initializeSessionConnectors`, when provided, runs after the
+  /// session config is built. Call once before running queries.
   void initialize(
-      const std::function<std::pair<std::string, std::string>()>&
-          initializeConnectors,
+      const ConnectorInitializer& initializeConnectors,
+      const SessionConnectorInitializer& initializeSessionConnectors = {},
       PermissionCheck permissionCheck = {},
       LogicalPlanCheck logicalPlanCheck = {},
       std::function<std::string()> queryIdGenerator = {});
+
+  /// Describes one semantically parsed statement.
+  struct StatementAnalysis {
+    presto::SqlStatementKind kind;
+    facebook::axiom::logical_plan::ReferencedTables referencedTables;
+    facebook::velox::RowTypePtr outputType;
+  };
 
   struct RunOptions {
     int32_t numWorkers{1};
@@ -312,6 +345,50 @@ class SqlQueryRunner {
     facebook::axiom::connector::StatWriterProvider connectorStatWriterProvider{
         facebook::axiom::connector::ConnectorContext::noopStatWriterProvider()};
   };
+
+  /// Fixed settings for a prepared statement. When absent, preparation and
+  /// execution use the runner's session settings.
+  ///
+  /// Example:
+  ///   auto statement = runner.prepare(
+  ///       "SELECT 1", options, ExecutionSettings{.parserProperties = {}});
+  struct ExecutionSettings {
+    /// Number of threads reserved for execution, or the run option default.
+    std::optional<int32_t> executorThreads;
+
+    /// Whether execution receives the runner's connector, runner, and Velox
+    /// session properties.
+    bool applySessionProperties{true};
+
+    /// Parser properties used while preparing the statement.
+    facebook::axiom::connector::Properties parserProperties;
+
+    /// Optimizer properties used while executing the statement.
+    facebook::axiom::connector::Properties optimizerProperties;
+  };
+
+  /// A semantically analyzed statement prepared by this runner. It retains the
+  /// query context, options, and execution settings captured by prepare(). The
+  /// implementation also retains the preparing runner identity; execution
+  /// compares it with the receiving runner before accessing the statement.
+  ///
+  /// Example:
+  ///   auto statement = runner.prepare("SELECT 1", options);
+  ///   auto result = runner.runUnchecked(std::move(statement));
+  ///
+  /// A statement can be executed once and only by the runner that prepared it.
+  class PreparedStatement {
+   public:
+    virtual ~PreparedStatement() = default;
+
+    /// Returns the statement's semantic analysis.
+    virtual const StatementAnalysis& analysis() const = 0;
+
+    /// Returns the parsed SQL statement.
+    virtual const presto::SqlStatement& statement() const = 0;
+  };
+
+  using PreparedStatementPtr = std::unique_ptr<PreparedStatement>;
 
   /// Represents one increment of a streamed query result from co_run().
   /// Runner-produced chunks have one of these shapes:
@@ -434,46 +511,39 @@ class SqlQueryRunner {
   /// Velox executor thread or within a coroutine (co_await co_run() there).
   SqlResult run(std::string_view sql, const RunOptions& options);
 
-  /// Runs a single parsed SQL statement without lifecycle hooks (no permission
-  /// check, no callbacks). The logical plan check still applies: it is a
-  /// correctness gate rather than a lifecycle hook, so no entry point skips
-  /// it. Use run(string_view, RunOptions) for the full lifecycle.
-  SqlResult runUnchecked(
-      const presto::SqlStatement& statement,
-      const RunOptions& options);
+  /// Parses and semantically analyzes exactly one statement. The returned
+  /// statement retains its query context and the supplied execution settings,
+  /// and can be executed once by this runner through runUnchecked() or
+  /// executeSelectOrInsert().
+  PreparedStatementPtr prepare(
+      std::string_view sql,
+      RunOptions options,
+      std::optional<ExecutionSettings> executionSettings = std::nullopt);
 
-  /// Runs a single SELECT or INSERT statement and returns the LocalRunner. The
-  /// caller is responsible for retrieving the results from LocalRunner.
-  /// @return LocalRunner executing the provided `statement`.
-  /// @throws VeloxUserError if `statement` is not SELECT or INSERT
+  /// Runs a prepared statement without permission or lifecycle callbacks. The
+  /// logical plan check still applies because it is a correctness gate. Use
+  /// run() for the full lifecycle.
+  SqlResult runUnchecked(PreparedStatementPtr statement);
+
+  /// Starts local execution for a prepared SELECT or INSERT statement without
+  /// permission or lifecycle callbacks. The caller must retrieve the results
+  /// and close the returned LocalRunner.
+  /// @throws VeloxUserError if the statement is not SELECT or INSERT.
   std::shared_ptr<facebook::axiom::runner::LocalRunner> executeSelectOrInsert(
-      const presto::SqlStatement& statement,
-      const RunOptions& options);
+      PreparedStatementPtr statement);
 
   /// Splits SQL text into individual statements separated by semicolons.
   /// @param sql SQL text containing one or more statements.
   /// @return Vector of individual SQL statements.
   std::vector<std::string_view> splitStatements(std::string_view sql);
 
-  /// Parses SQL text containing one or more semicolon-separated statements.
-  /// @param sql SQL text to parse.
-  /// @param context The query's connector context, so the parser's sessions
-  /// are the ones the rest of the query uses. A null value makes a context for
-  /// the parse alone.
-  /// @return Vector of parsed statements.
-  std::vector<presto::SqlStatementPtr> parseMultiple(
+  /// Returns semantic information for each parsed SQL statement.
+  std::vector<StatementAnalysis> analyzeMultiple(
       std::string_view sql,
-      const RunOptions& options,
-      const facebook::axiom::connector::ConnectorContextPtr& context);
+      RunOptions options);
 
-  /// Parses SQL text containing one statement.
-  /// @param context See parseMultiple().
-  /// @return Parsed statement.
-  /// @throw VeloxUserError if the SQL text contains multiple statements.
-  presto::SqlStatementPtr parseSingle(
-      std::string_view sql,
-      const RunOptions& options,
-      const facebook::axiom::connector::ConnectorContextPtr& context);
+  /// Returns semantic information for exactly one SQL statement.
+  StatementAnalysis analyzeSingle(std::string_view sql, RunOptions options);
 
   /// Generates DOT representation of the logical plan for a single SELECT
   /// statement. The output can be rendered using Graphviz:
@@ -493,9 +563,17 @@ class SqlQueryRunner {
       int32_t numDrivers);
 
   /// Returns the session configuration.
-  facebook::axiom::SessionConfig& sessionConfig() {
-    return *sessionConfig_;
-  }
+  facebook::axiom::SessionConfig& sessionConfig();
+
+  /// Creates the query-owned connector context for `queryId`.
+  facebook::axiom::connector::ConnectorContextPtr createConnectorContext(
+      std::string_view queryId) const;
+
+  /// Returns the default connector ID set during initialization.
+  const std::string& defaultConnectorId() const;
+
+  /// Returns the default schema set during initialization.
+  const std::string& defaultSchema() const;
 
   facebook::axiom::connector::TablePtr createTable(
       const facebook::axiom::connector::ConnectorContextPtr& context,
@@ -530,17 +608,85 @@ class SqlQueryRunner {
       const facebook::axiom::connector::ConnectorContextPtr& context,
       const presto::CallStatement& statement);
 
-  /// Returns the default connector ID set during initialization.
-  const std::string& defaultConnectorId() const {
-    return defaultConnectorId_;
-  }
+ protected:
+  // Constructs the catalog registrar over this runner's owned registries.
+  using ConnectorsFactory =
+      std::function<std::unique_ptr<facebook::axiom::Connectors>(
+          facebook::velox::connector::ConnectorRegistry::Registry&,
+          std::shared_ptr<facebook::axiom::connector::
+                              ConnectorMetadataRegistry::Registry>)>;
 
-  /// Returns the default schema set during initialization.
-  const std::string& defaultSchema() const {
-    return defaultSchema_;
+  // Constructor for subclasses that install a specialized catalog registrar.
+  SqlQueryRunner(
+      std::string user,
+      folly::FunctionScheduler* progressScheduler,
+      bool useOptimizerV2,
+      const ConnectorsFactory& connectorsFactory);
+
+  // Writes a row vector to a table without permission or lifecycle callbacks.
+  SqlResult writeDataToTableUnchecked(
+      facebook::velox::RowVectorPtr data,
+      std::string_view connectorId,
+      const facebook::axiom::SchemaTableName& tableName,
+      RunOptions options);
+
+  // Returns the optimizer functions owned by this runner.
+  std::shared_ptr<const facebook::axiom::optimizer::FunctionRegistry>
+  functionRegistry() const {
+    return functionRegistry_;
   }
 
  private:
+  class PreparedStatementImpl;
+
+  // Validates ownership and returns the concrete prepared statement.
+  PreparedStatementImpl& checkPrepared(
+      const PreparedStatementPtr& statement) const;
+
+  // Keeps one public operation's options and connector context together.
+  struct QueryState {
+    RunOptions options;
+    facebook::axiom::connector::ConnectorContextPtr context;
+  };
+
+  // Creates one query's options and connector context.
+  QueryState createQueryState(
+      RunOptions options,
+      const ExecutionSettings* executionSettings = nullptr) const;
+
+  // Creates the query-owned connector context using per-query options.
+  facebook::axiom::connector::ConnectorContextPtr createConnectorContext(
+      std::string_view queryId,
+      const RunOptions& options,
+      const ExecutionSettings* executionSettings = nullptr) const;
+
+  // Parses SQL text using the supplied query state.
+  std::vector<presto::SqlStatementPtr> parseMultiple(
+      std::string_view sql,
+      const RunOptions& options,
+      const facebook::axiom::connector::ConnectorContextPtr& context,
+      const ExecutionSettings* executionSettings = nullptr);
+
+  // Parses exactly one SQL statement using the supplied query state.
+  presto::SqlStatementPtr parseSingle(
+      std::string_view sql,
+      const RunOptions& options,
+      const facebook::axiom::connector::ConnectorContextPtr& context,
+      const ExecutionSettings* executionSettings = nullptr);
+
+  // Runs an already-parsed statement with its matching query state.
+  SqlResult runStatementUnchecked(
+      const presto::SqlStatement& statement,
+      const RunOptions& options,
+      const facebook::axiom::connector::ConnectorContextPtr& context,
+      const ExecutionSettings* executionSettings = nullptr);
+
+  // Creates a Velox query context carrying this runner's connector scope.
+  std::shared_ptr<facebook::velox::core::QueryCtx> createQueryContext(
+      const RunOptions& options,
+      const facebook::axiom::connector::ConnectorContextPtr& context,
+      const ExecutionSettings* executionSettings = nullptr);
+
   // Checks permissions for the query via the configured PermissionCheck
   // callback. Returns a TokenProvider for authenticated file system access.
   std::shared_ptr<facebook::velox::filesystems::TokenProvider> checkPermission(
@@ -564,23 +710,13 @@ class SqlQueryRunner {
       const presto::CreateTableAsSelectStatement& ctas,
       bool explain);
 
-  std::shared_ptr<facebook::velox::core::QueryCtx> newQuery(
-      const RunOptions& options);
-
-  // Builds the context for 'queryId' from the current session config's
-  // connector properties, and the writer provider the caller supplied.
-  facebook::axiom::connector::ConnectorContextPtr makeConnectorContext(
-      std::string_view queryId,
-      const RunOptions& options) const;
-
-  // Builds an OptimizerSession from the current session config's optimizer
-  // properties, attaching 'context', the explain flag, the
-  // optimizer's stat writer, and the connector stat-writer provider.
+  // Builds an OptimizerSession from the session config and query overrides.
   std::shared_ptr<facebook::axiom::optimizer::OptimizerSession>
   makeOptimizerSession(
       facebook::axiom::connector::ConnectorContextPtr context,
+      const RunOptions& options,
       bool explain,
-      std::shared_ptr<facebook::velox::BaseRuntimeStatWriter> statsWriter);
+      const ExecutionSettings* executionSettings = nullptr);
 
   // Runs 'operation' on a v2 Optimizer over 'logicalPlan'. The optimizer's
   // arena, session and evaluator live for the duration of the call, so
@@ -594,6 +730,7 @@ class SqlQueryRunner {
       const std::shared_ptr<facebook::axiom::connector::SchemaResolver>&
           schemaResolver,
       bool explain,
+      const ExecutionSettings* executionSettings,
       Operation&& operation);
 
   std::string runExplain(
@@ -603,7 +740,8 @@ class SqlQueryRunner {
       const facebook::axiom::connector::ConnectorContextPtr& context,
       QueryTiming& timing,
       std::shared_ptr<facebook::axiom::connector::SchemaResolver>
-          schemaResolver = nullptr);
+          schemaResolver = nullptr,
+      const ExecutionSettings* executionSettings = nullptr);
 
   // Optimizes 'logicalPlan' and renders EXPLAIN (TYPE IO) output. Synchronous
   // (no execution), so it is kept out of the co_run() coroutine chain.
@@ -614,7 +752,8 @@ class SqlQueryRunner {
       const facebook::axiom::connector::ConnectorContextPtr& context,
       QueryTiming& timing,
       std::shared_ptr<facebook::axiom::connector::SchemaResolver>
-          schemaResolver);
+          schemaResolver,
+      const ExecutionSettings* executionSettings = nullptr);
 
   folly::coro::Task<std::string> co_runExplainAnalyze(
       const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
@@ -622,14 +761,16 @@ class SqlQueryRunner {
       const facebook::axiom::connector::ConnectorContextPtr& context,
       QueryTiming& timing,
       std::shared_ptr<facebook::axiom::connector::SchemaResolver>
-          schemaResolver = nullptr);
+          schemaResolver = nullptr,
+      const ExecutionSettings* executionSettings = nullptr);
 
   // Runs SHOW STATS FOR (<query>): optimizes the inner query's logical plan
   // and returns per-column and table-level statistics as a VALUES result.
   std::vector<facebook::velox::RowVectorPtr> runShowStatsForQuery(
       const presto::SqlStatement& sqlStatement,
       const RunOptions& options,
-      const facebook::axiom::connector::ConnectorContextPtr& context);
+      const facebook::axiom::connector::ConnectorContextPtr& context,
+      const ExecutionSettings* executionSettings = nullptr);
 
   // Parses SQL and returns the logical plan.
   facebook::axiom::logical_plan::LogicalPlanNodePtr toLogicalPlan(
@@ -654,13 +795,22 @@ class SqlQueryRunner {
           checkBestPlan = nullptr,
       std::shared_ptr<facebook::axiom::connector::SchemaResolver>
           schemaResolver = nullptr,
-      bool explain = false);
+      bool explain = false,
+      const ExecutionSettings* executionSettings = nullptr);
 
   std::shared_ptr<facebook::axiom::runner::LocalRunner> makeLocalRunner(
       facebook::axiom::optimizer::PlanAndStats& planAndStats,
       const std::shared_ptr<facebook::velox::core::QueryCtx>& queryCtx,
       const RunOptions& options,
-      const facebook::axiom::connector::ConnectorContextPtr& context);
+      const facebook::axiom::connector::ConnectorContextPtr& context,
+      const ExecutionSettings* executionSettings = nullptr);
+
+  // Starts local execution for an already-parsed SELECT or INSERT.
+  std::shared_ptr<facebook::axiom::runner::LocalRunner> executeSelectOrInsert(
+      const presto::SqlStatement& statement,
+      const RunOptions& options,
+      const facebook::axiom::connector::ConnectorContextPtr& context,
+      const ExecutionSettings* executionSettings);
 
   // Returns a ProgressReporter polling `runner` (starting the shared scheduler
   // first) when options.onProgress is set, otherwise nullptr. Held behind a
@@ -679,7 +829,8 @@ class SqlQueryRunner {
       const RunOptions& options,
       const facebook::axiom::connector::ConnectorContextPtr& context,
       QueryTiming& timing,
-      std::string& planString);
+      std::string& planString,
+      const ExecutionSettings* executionSettings = nullptr);
 
   // Runs an EXPLAIN statement, including IO and ANALYZE variants.
   folly::coro::AsyncGenerator<SqlResultChunk> co_runExplainStatement(
@@ -687,7 +838,8 @@ class SqlQueryRunner {
       std::string_view queryId,
       const RunOptions& options,
       const facebook::axiom::connector::ConnectorContextPtr& context,
-      QueryTiming& timing);
+      QueryTiming& timing,
+      const ExecutionSettings* executionSettings = nullptr);
 
   // Executes a CTAS, INSERT, or SELECT statement and yields its result batches.
   folly::coro::CleanableAsyncGenerator<SqlResultChunk> co_runPlanStatement(
@@ -696,7 +848,8 @@ class SqlQueryRunner {
       const RunOptions& options,
       const facebook::axiom::connector::ConnectorContextPtr& context,
       QueryTiming& timing,
-      std::string& planString);
+      std::string& planString,
+      const ExecutionSettings* executionSettings = nullptr);
 
   // Executes a CREATE, DROP, or ALTER statement and returns its status message.
   std::string runDataDefinitionStatement(
@@ -731,7 +884,8 @@ class SqlQueryRunner {
       QueryTiming& timing,
       std::string& planString,
       std::shared_ptr<facebook::axiom::connector::SchemaResolver>
-          schemaResolver = nullptr);
+          schemaResolver = nullptr,
+      const ExecutionSettings* executionSettings = nullptr);
 
   // Returns the query's session for `connectorId`, made on first use and
   // shared by every caller of the query.
@@ -751,18 +905,39 @@ class SqlQueryRunner {
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool_;
   std::shared_ptr<facebook::velox::memory::MemoryPool> optimizerPool_;
   std::shared_ptr<facebook::velox::memory::MemoryPool> executorPool_;
-  std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
   std::shared_ptr<facebook::axiom::ConfigRegistry> configRegistry_;
   std::shared_ptr<facebook::axiom::SessionConfig> sessionConfig_;
   std::string defaultConnectorId_;
   std::string defaultSchema_;
   const std::string user_;
-  std::atomic<int32_t> queryCounter_{0};
   const bool useOptimizerV2_{true};
-
   // Progress-polling scheduler (see constructor). Started idempotently before
   // each progress-reporting query.
   folly::FunctionScheduler* const progressScheduler_;
+
+  // Own this runner's catalogs, optimizer semantics, and execution resources.
+  const std::shared_ptr<facebook::velox::connector::ConnectorRegistry::Registry>
+      connectorRegistry_;
+  const std::shared_ptr<
+      facebook::axiom::connector::ConnectorMetadataRegistry::Registry>
+      metadataRegistry_;
+  const std::shared_ptr<facebook::axiom::optimizer::FunctionRegistry>
+      functionRegistry_;
+  const std::shared_ptr<
+      facebook::velox::exec::OutputTransportRegistry::Registry>
+      outputTransportRegistry_;
+  const std::shared_ptr<
+      facebook::velox::exec::ExchangeTransportRegistry::Registry>
+      exchangeTransportRegistry_;
+  const std::shared_ptr<
+      facebook::velox::memory::CustomMemoryResourceRegistry::Registry>
+      customMemoryResourceRegistry_;
+
+  // Creates the catalog registrar at the start of each initialization attempt.
+  const ConnectorsFactory connectorsFactory_;
+
+  // Owns connector-side initialization and configuration state.
+  std::unique_ptr<facebook::axiom::Connectors> connectors_;
 };
 
 } // namespace axiom::sql

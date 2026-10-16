@@ -106,10 +106,14 @@ axiom_sql --init init.sql --query "SELECT sum(b) FROM t"
 ### Creating Tables and Adding Data
 
 ```cpp
+auto connectorRegistry = velox::connector::ConnectorRegistry::create();
+auto metadataRegistry = ConnectorMetadataRegistry::create();
 auto connector = std::make_shared<TestConnector>("test");
-velox::connector::registerConnector(connector);
-ConnectorMetadataRegistry::global().insert(
-    connector->connectorId(), connector->metadata());
+ConnectorMetadataRegistry::registerCatalog(
+    *connectorRegistry,
+    *metadataRegistry,
+    connector,
+    connector->metadata());
 
 // Create a table with schema.
 auto table = connector->addTable(

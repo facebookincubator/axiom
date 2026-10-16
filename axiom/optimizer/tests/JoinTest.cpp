@@ -16,6 +16,7 @@
 
 #include <unordered_map>
 
+#include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
@@ -30,10 +31,6 @@ namespace lp = facebook::axiom::logical_plan;
 class JoinTest : public test::QueryTestBase,
                  public ::testing::WithParamInterface<bool> {
  protected:
-  lp::PlanBuilder::Context makeContext() const {
-    return lp::PlanBuilder::Context{kTestConnectorId, kDefaultSchema};
-  }
-
   // Adds an all-BIGINT table whose columns each have `numRows` distinct values,
   // except those named in `numDistinct`.
   void addTableWithStats(
@@ -62,6 +59,46 @@ class JoinTest : public test::QueryTestBase,
     useV2_ = GetParam();
   }
 };
+
+// Join sampling resolves a catalog installed only in the query's engine.
+TEST_P(JoinTest, engineScopedCatalog) {
+  if (useV2_) {
+    return;
+  }
+
+  auto scopedConnector =
+      std::make_shared<connector::TestConnector>(kTestConnectorId);
+  scopedConnector->addTable("sample_left", ROW("k", BIGINT()));
+  scopedConnector->addTable("sample_right", ROW("k", BIGINT()));
+  scopedConnector->appendData(
+      "sample_left", makeRowVector({makeFlatVector<int64_t>({1, 2, 3})}));
+  scopedConnector->appendData(
+      "sample_right", makeRowVector({makeFlatVector<int64_t>({1, 2, 3})}));
+
+  auto isolated = connector::makeTestContext(
+      "join-sampling",
+      std::vector<connector::TestCatalogRegistration>{
+          {scopedConnector, scopedConnector->metadata()}});
+  setConnectorContextForNextQuery(
+      isolated.connectorContext,
+      isolated.connectorRegistry,
+      isolated.metadataRegistry);
+  optimizerOptions_.sampleJoins = true;
+
+  std::atomic<int32_t> tableHandleCount{0};
+  scopedConnector->setOnCreateTableHandle(
+      [&](const std::vector<velox::core::TypedExprPtr>&) {
+        ++tableHandleCount;
+      });
+
+  auto logicalPlan = parseSelect(
+      "SELECT l.k FROM sample_left l JOIN sample_right r ON l.k = r.k",
+      kTestConnectorId);
+  EXPECT_NE(
+      planVelox(logicalPlan, MultiFragmentPlan::Options::singleNode()).plan,
+      nullptr);
+  EXPECT_EQ(tableHandleCount, 4);
+}
 
 // A derived join must preserve every equality class for its relation pair,
 // including classes not covered by a written edge on that pair.
@@ -412,7 +449,7 @@ TEST_P(JoinTest, pushdownFilterThroughJoin) {
   testConnector_->addTable("u", ROW({"u_id", "u_data"}, BIGINT()));
 
   auto makePlan = [&](lp::JoinType joinType) {
-    auto ctx = makeContext();
+    auto ctx = makePlanBuilderContext();
     return lp::PlanBuilder{ctx}
         .tableScan("t")
         .join(lp::PlanBuilder{ctx}.tableScan("u"), "t_id = u_id", joinType)
@@ -964,7 +1001,7 @@ TEST_P(JoinTest, hyperEdge) {
   testConnector_->addTable("u", ROW({"u_id", "u_key", "u_data"}, BIGINT()));
   testConnector_->addTable("v", ROW({"v_key", "v_data"}, BIGINT()));
 
-  auto ctx = makeContext();
+  auto ctx = makePlanBuilderContext();
   auto logicalPlan = lp::PlanBuilder{ctx}
                          .from({"t", "u"})
                          .filter("t_id = u_id")
@@ -1051,7 +1088,7 @@ TEST_P(JoinTest, joinWithFilterOverLimit) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y", "z"}, BIGINT()));
 
-  auto ctx = makeContext();
+  auto ctx = makePlanBuilderContext();
   auto logicalPlan =
       lp::PlanBuilder(ctx)
           .tableScan("t")
@@ -1081,7 +1118,7 @@ TEST_P(JoinTest, joinWithTopNOnBothSides) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
 
-  auto ctx = makeContext();
+  auto ctx = makePlanBuilderContext();
   auto logicalPlan =
       lp::PlanBuilder(ctx)
           .tableScan("t")
@@ -1110,7 +1147,7 @@ TEST_P(JoinTest, outerJoinWithInnerJoin) {
   {
     SCOPED_TRACE("left join with inner join on right");
 
-    auto ctx = makeContext();
+    auto ctx = makePlanBuilderContext();
     auto logicalPlan = lp::PlanBuilder(ctx)
                            .tableScan("t")
                            .filter("b > 50")
@@ -1138,7 +1175,7 @@ TEST_P(JoinTest, outerJoinWithInnerJoin) {
   {
     SCOPED_TRACE("aggregation left join filter over inner join");
 
-    auto ctx = makeContext();
+    auto ctx = makePlanBuilderContext();
     auto logicalPlan = lp::PlanBuilder(ctx)
                            .tableScan("t")
                            .filter("b > 50")
@@ -1651,7 +1688,7 @@ TEST_P(JoinTest, crossJoin) {
   testConnector_->addTable("v", ROW({"n", "m"}, BIGINT()));
 
   {
-    auto ctx = makeContext();
+    auto ctx = makePlanBuilderContext();
     auto logicalPlan =
         lp::PlanBuilder{ctx}.from({"t", "u"}).project({"a + x"}).build();
 
@@ -1667,7 +1704,7 @@ TEST_P(JoinTest, crossJoin) {
   }
 
   {
-    auto ctx = makeContext();
+    auto ctx = makePlanBuilderContext();
     auto logicalPlan =
         lp::PlanBuilder{ctx}.from({"t", "u"}).filter("a > x").build();
 
@@ -1687,7 +1724,7 @@ TEST_P(JoinTest, crossJoin) {
   }
 
   {
-    auto ctx = makeContext();
+    auto ctx = makePlanBuilderContext();
     auto logicalPlan = lp::PlanBuilder{ctx}
                            .from({"t", "u"})
                            .aggregate({}, {"count(1)"})
@@ -1718,7 +1755,7 @@ TEST_P(JoinTest, crossJoin) {
   }
 
   {
-    auto ctx = makeContext();
+    auto ctx = makePlanBuilderContext();
     auto logicalPlan = parseSelect("SELECT * FROM t, (SELECT count(*) FROM u)");
 
     auto matcher =
@@ -1743,7 +1780,7 @@ TEST_P(JoinTest, crossJoin) {
   // Cross join with a subquery that looks like single-row, but may not be. The
   // subquery is not ignored.
   {
-    auto ctx = makeContext();
+    auto ctx = makePlanBuilderContext();
     auto logicalPlan =
         parseSelect("SELECT a FROM t, (SELECT * FROM u LIMIT 1)");
 
@@ -3187,7 +3224,7 @@ TEST_P(JoinTest, impliedJoinChain) {
   testConnector_->addTable("t4", ROW({"id4", "data4"}, BIGINT()))
       ->setStats(100, {{"id4", {.numDistinct = 100}}});
 
-  auto ctx = makeContext();
+  auto ctx = makePlanBuilderContext();
   auto logicalPlan = lp::PlanBuilder{ctx}
                          .tableScan("t1")
                          .join(
@@ -3980,7 +4017,7 @@ TEST_P(JoinTest, greedyJoinOrder) {
   testConnector_->addTable("t4", ROW({"id4", "data4"}, BIGINT()))
       ->setStats(800, {{"id4", {.numDistinct = 800}}});
 
-  auto ctx = makeContext();
+  auto ctx = makePlanBuilderContext();
   auto logicalPlan = lp::PlanBuilder{ctx}
                          .tableScan("t1")
                          .join(
@@ -4035,7 +4072,7 @@ TEST_P(JoinTest, greedyDtStart) {
   testConnector_->addTable("base1", ROW({"id1", "x1"}, {BIGINT(), BIGINT()}))
       ->setStats(500, {});
 
-  auto ctx = makeContext();
+  auto ctx = makePlanBuilderContext();
   auto logicalPlan = lp::PlanBuilder{ctx}
                          .tableScan("t")
                          .aggregate({"a"}, {"sum(b) as s"})
@@ -4072,7 +4109,7 @@ TEST_P(JoinTest, greedySnowflakeLeftDeep) {
   addTableWithStats("dim_b", {"db_key", "db_sub"}, 100);
   addTableWithStats("sub_b", {"sb_key"}, 10);
 
-  auto ctx = makeContext();
+  auto ctx = makePlanBuilderContext();
   auto logicalPlan = lp::PlanBuilder{ctx}
                          .tableScan("fact")
                          .join(
@@ -4121,7 +4158,7 @@ TEST_P(JoinTest, greedyValuesStart) {
 
   auto rowVector = makeRowVector({"v"}, {makeFlatVector<int64_t>({1, 2, 3})});
 
-  auto ctx = makeContext();
+  auto ctx = makePlanBuilderContext();
   auto logicalPlan = lp::PlanBuilder{ctx}
                          .values({rowVector})
                          .join(
@@ -4161,7 +4198,7 @@ TEST_P(JoinTest, dphypBudgetFallsBackToGreedy) {
   testConnector_->addTable("t3", ROW({"id3", "data3"}, BIGINT()))
       ->setStats(400, {{"id3", {.numDistinct = 400}}});
 
-  auto ctx = makeContext();
+  auto ctx = makePlanBuilderContext();
   auto logicalPlan = lp::PlanBuilder{ctx}
                          .tableScan("t1")
                          .join(
@@ -4213,7 +4250,7 @@ TEST_P(JoinTest, dphypGreedySnowflake) {
   addTableWithStats("dim_b", {"db_key", "db_sub"}, 100);
   addTableWithStats("sub_b", {"sb_key"}, 10);
 
-  auto ctx = makeContext();
+  auto ctx = makePlanBuilderContext();
   auto logicalPlan = lp::PlanBuilder{ctx}
                          .tableScan("fact")
                          .join(

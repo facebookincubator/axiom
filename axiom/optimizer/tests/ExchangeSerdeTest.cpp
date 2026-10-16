@@ -26,7 +26,11 @@ class ExchangeSerdeTest : public test::QueryTestBase {
  protected:
   void SetUp() override {
     test::QueryTestBase::SetUp();
-    testConnector_->addTable("t", ROW({"c", "v"}, {VARCHAR(), BIGINT()}));
+    testConnector_->addTable("t", ROW({"c", "v"}, {VARCHAR(), BIGINT()}))
+        ->addData(makeRowVector({
+            makeFlatVector<std::string>({"a", "a", "b"}),
+            makeFlatVector<int64_t>({1, 2, 4}),
+        }));
   }
 
   // Plans 'sql' with two workers and the requested exchange settings.
@@ -86,6 +90,19 @@ TEST_F(ExchangeSerdeTest, selection) {
       AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher.build());
     }
   }
+}
+
+TEST_F(ExchangeSerdeTest, engineScopedShuffle) {
+  auto result = runVelox(
+      parseSelect("SELECT c, sum(v) FROM t GROUP BY c", kTestConnectorId),
+      {.maxRemotePartitions = 2, .maxLocalPartitions = 2});
+
+  velox::exec::test::assertEqualResults(
+      {makeRowVector({
+          makeFlatVector<std::string>({"a", "b"}),
+          makeFlatVector<int64_t>({3, 4}),
+      })},
+      result.results);
 }
 
 } // namespace

@@ -49,10 +49,9 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
   }
 
   void SetUp() override {
-    connectors_ = std::make_unique<Connectors>();
     runner_ = std::make_unique<::axiom::sql::SqlQueryRunner>("test_user");
-    runner_->initialize([this]() {
-      connectors_->registerFileConnector(kConnectorId);
+    runner_->initialize([](Connectors& connectors, auto&, auto&) {
+      connectors.registerFileConnector(kConnectorId);
       return std::make_pair(std::string(kConnectorId), std::string("parquet"));
     });
 
@@ -63,8 +62,6 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
 
   void TearDown() override {
     runner_.reset();
-    // Connectors' destructor unregisters the connector and its metadata.
-    connectors_.reset();
   }
 
   // Writes 'data' to 'path' as a Parquet file. A positive 'rowsInRowGroup'
@@ -224,7 +221,6 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
             {"Schema"}, {makeFlatVector<std::string>(expectedSchemas)}));
   }
 
-  std::unique_ptr<Connectors> connectors_;
   std::unique_ptr<::axiom::sql::SqlQueryRunner> runner_;
   // Temp directory holding all Parquet files; its destructor removes the
   // directory and everything written into it.

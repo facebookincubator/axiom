@@ -16,13 +16,12 @@
 
 #include <gtest/gtest.h>
 
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/pyspark/SparkToAxiom.h"
 #include "axiom/pyspark/third-party/protos/relations.pb.h"
 #include "velox/common/memory/Memory.h"
-#include "velox/connectors/Connector.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 using namespace facebook;
@@ -30,7 +29,8 @@ using namespace facebook;
 namespace axiom::collagen::test {
 namespace {
 
-void registerTestConnector(const std::string& connectorId) {
+std::shared_ptr<facebook::axiom::connector::TestConnector> makeTestConnector(
+    const std::string& connectorId) {
   auto connector =
       std::make_shared<facebook::axiom::connector::TestConnector>(connectorId);
 
@@ -39,9 +39,7 @@ void registerTestConnector(const std::string& connectorId) {
       velox::ROW(
           {"viewer_rid", "feature_a"}, {velox::BIGINT(), velox::DOUBLE()}));
 
-  velox::connector::registerConnector(connector);
-  facebook::axiom::connector::ConnectorMetadataRegistry::global().insert(
-      connectorId, connector->metadata());
+  return connector;
 }
 
 class SparkToAxiomWithColumnsTest : public ::testing::Test {
@@ -51,19 +49,19 @@ class SparkToAxiomWithColumnsTest : public ::testing::Test {
     velox::memory::MemoryManager::testingSetInstance({});
 
     connectorId_ = "test-connector-with-columns";
-    registerTestConnector(connectorId_);
+    connector_ = makeTestConnector(connectorId_);
+    connectorContext_ =
+        facebook::axiom::connector::makeTestContext(
+            "pyspark-test", {{connector_, connector_->metadata()}})
+            .connectorContext;
 
     pool_ = velox::memory::memoryManager()->addLeafPool();
   }
 
-  void TearDown() override {
-    facebook::axiom::connector::ConnectorMetadataRegistry::global().erase(
-        connectorId_);
-    velox::connector::unregisterConnector(connectorId_);
-  }
-
  protected:
   std::string connectorId_;
+  std::shared_ptr<facebook::axiom::connector::TestConnector> connector_;
+  facebook::axiom::connector::ConnectorContextPtr connectorContext_;
   std::shared_ptr<velox::memory::MemoryPool> pool_;
 };
 
@@ -88,7 +86,8 @@ TEST_F(SparkToAxiomWithColumnsTest, AddNewColumn) {
   literal->set_long_(42);
 
   // Convert using SparkToAxiom
-  SparkToAxiom converter(connectorId_, "default", pool_.get());
+  SparkToAxiom converter(
+      connectorId_, "default", pool_.get(), connectorContext_);
   SparkPlanVisitorContext context;
   converter.visit(relation, context);
 
@@ -142,7 +141,8 @@ TEST_F(SparkToAxiomWithColumnsTest, ReplaceExistingColumn) {
   literal->set_integer(100);
 
   // Convert using SparkToAxiom
-  SparkToAxiom converter(connectorId_, "default", pool_.get());
+  SparkToAxiom converter(
+      connectorId_, "default", pool_.get(), connectorContext_);
   SparkPlanVisitorContext context;
   converter.visit(relation, context);
 
@@ -208,7 +208,8 @@ TEST_F(SparkToAxiomWithColumnsTest, AddMultipleColumns) {
   literal2->set_long_(2);
 
   // Convert using SparkToAxiom
-  SparkToAxiom converter(connectorId_, "default", pool_.get());
+  SparkToAxiom converter(
+      connectorId_, "default", pool_.get(), connectorContext_);
   SparkPlanVisitorContext context;
   converter.visit(relation, context);
 
@@ -276,7 +277,8 @@ TEST_F(SparkToAxiomWithColumnsTest, MixedAddAndReplace) {
   literal2->set_boolean(true);
 
   // Convert using SparkToAxiom
-  SparkToAxiom converter(connectorId_, "default", pool_.get());
+  SparkToAxiom converter(
+      connectorId_, "default", pool_.get(), connectorContext_);
   SparkPlanVisitorContext context;
   converter.visit(relation, context);
 

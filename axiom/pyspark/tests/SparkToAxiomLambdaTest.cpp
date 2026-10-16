@@ -17,8 +17,8 @@
 #include <gtest/gtest.h>
 #include <memory>
 
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/pyspark/SparkToAxiom.h"
 #include "axiom/pyspark/third-party/protos/relations.grpc.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
@@ -45,18 +45,14 @@ class SparkToAxiomLambdaTest : public ::testing::Test {
     // Set up test connector
     connector_ = std::make_shared<facebook::axiom::connector::TestConnector>(
         "test_connector");
-    velox::connector::registerConnector(connector_);
-    facebook::axiom::connector::ConnectorMetadataRegistry::global().insert(
-        connector_->connectorId(), connector_->metadata());
-  }
-
-  void TearDown() override {
-    facebook::axiom::connector::ConnectorMetadataRegistry::global().erase(
-        connector_->connectorId());
-    velox::connector::unregisterConnector(connector_->connectorId());
+    connectorContext_ =
+        facebook::axiom::connector::makeTestContext(
+            "pyspark-test", {{connector_, connector_->metadata()}})
+            .connectorContext;
   }
 
   std::shared_ptr<facebook::axiom::connector::TestConnector> connector_;
+  facebook::axiom::connector::ConnectorContextPtr connectorContext_;
   std::shared_ptr<velox::memory::MemoryPool> pool_;
 };
 
@@ -129,7 +125,7 @@ TEST_F(SparkToAxiomLambdaTest, visitSimpleLambdaFunction) {
   auto lambdaExpr = createSimpleLambdaExpression("x");
 
   // Convert to Axiom
-  SparkToAxiom converter("test_connector", "", pool_.get());
+  SparkToAxiom converter("test_connector", "", pool_.get(), connectorContext_);
   SparkPlanVisitorContext context;
 
   // Visit the lambda expression
@@ -156,7 +152,7 @@ TEST_F(SparkToAxiomLambdaTest, visitTwoParamLambdaFunction) {
   auto lambdaExpr = createTwoParamLambdaExpression("k", "v");
 
   // Convert to Axiom
-  SparkToAxiom converter("test_connector", "", pool_.get());
+  SparkToAxiom converter("test_connector", "", pool_.get(), connectorContext_);
   SparkPlanVisitorContext context;
 
   // Visit the lambda expression
@@ -195,7 +191,7 @@ TEST_F(SparkToAxiomLambdaTest, visitUnresolvedNamedLambdaVariable) {
   lambdaVar->add_name_parts("x");
 
   // Convert to Axiom
-  SparkToAxiom converter("test_connector", "", pool_.get());
+  SparkToAxiom converter("test_connector", "", pool_.get(), connectorContext_);
   SparkPlanVisitorContext context;
   converter.visit(lambdaExpr, context);
 
@@ -221,7 +217,7 @@ TEST_F(SparkToAxiomLambdaTest, visitUnregisteredLambdaVariableThrows) {
   auto* lambdaVar = expr.mutable_unresolved_named_lambda_variable();
   lambdaVar->add_name_parts("unknown_var");
 
-  SparkToAxiom converter("test_connector", "", pool_.get());
+  SparkToAxiom converter("test_connector", "", pool_.get(), connectorContext_);
   SparkPlanVisitorContext context;
 
   // This should throw because the variable is not registered
@@ -245,7 +241,7 @@ TEST_F(SparkToAxiomLambdaTest, visitLambdaWithCompoundVariableName) {
   lambdaVar->add_name_parts("field");
 
   // Convert to Axiom
-  SparkToAxiom converter("test_connector", "", pool_.get());
+  SparkToAxiom converter("test_connector", "", pool_.get(), connectorContext_);
   SparkPlanVisitorContext context;
   converter.visit(lambdaExpr, context);
 
@@ -290,7 +286,7 @@ TEST_F(SparkToAxiomLambdaTest, visitTransformWithLambda) {
   *unresolvedFunc->add_arguments() = lambdaExpr;
 
   // Convert to Axiom - should not throw
-  SparkToAxiom converter("test_connector", "", pool_.get());
+  SparkToAxiom converter("test_connector", "", pool_.get(), connectorContext_);
   SparkPlanVisitorContext context;
 
   // Note: The actual transform function resolution may fail if not registered,
@@ -326,7 +322,7 @@ TEST_F(SparkToAxiomLambdaTest, visitNestedLambdaWithShadowedVariable) {
   auto* lambdaVar = body->mutable_unresolved_named_lambda_variable();
   lambdaVar->add_name_parts("x");
 
-  SparkToAxiom converter("test_connector", "", pool_.get());
+  SparkToAxiom converter("test_connector", "", pool_.get(), connectorContext_);
   converter.visit(innerLambdaExpr, context);
 
   // Verify the inner lambda correctly used the pre-inferred BIGINT type
@@ -373,7 +369,7 @@ TEST_F(SparkToAxiomLambdaTest, visitNestedLambdaWithDistinctVariables) {
   auto* lambdaVar = body->mutable_unresolved_named_lambda_variable();
   lambdaVar->add_name_parts("x");
 
-  SparkToAxiom converter("test_connector", "", pool_.get());
+  SparkToAxiom converter("test_connector", "", pool_.get(), connectorContext_);
   converter.visit(innerLambdaExpr, context);
 
   // Verify the inner lambda has parameter "y" and body referencing "x".
@@ -422,7 +418,7 @@ TEST_F(SparkToAxiomLambdaTest, visitFindFirstIndexWithLambda) {
   auto lambdaExpr = createSimpleLambdaExpression("x");
   *unresolvedFunc->add_arguments() = lambdaExpr;
 
-  SparkToAxiom converter("test_connector", "", pool_.get());
+  SparkToAxiom converter("test_connector", "", pool_.get(), connectorContext_);
   SparkPlanVisitorContext context;
 
   try {
@@ -498,7 +494,7 @@ TEST_F(SparkToAxiomLambdaTest, visitAggregateWithTwoLambdas) {
     *unresolvedFunc->add_arguments() = outputLambdaExpr;
   }
 
-  SparkToAxiom converter("test_connector", "", pool_.get());
+  SparkToAxiom converter("test_connector", "", pool_.get(), connectorContext_);
   SparkPlanVisitorContext context;
 
   try {

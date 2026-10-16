@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "axiom/connectors/ConnectorContext.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
@@ -54,12 +55,9 @@ class HiveQueriesTestBase : public QueryTestBase {
   /// Unregisters Parquet reader and writer.
   static void TearDownTestCase();
 
-  static connector::ConnectorSessionPtr makeSession() {
-    return std::make_shared<connector::ConnectorSession>(
-        /*queryId=*/"test",
-        /*user=*/"test",
-        connector::Properties{},
-        connector::makeTestStatWriter());
+  connector::ConnectorSessionPtr makeSession() {
+    return getConnectorContext()->sessionFor(
+        velox::exec::test::kHiveConnectorId);
   }
 
   /// Returns a schema of a table.
@@ -77,9 +75,8 @@ class HiveQueriesTestBase : public QueryTestBase {
       std::string_view sql,
       const velox::core::PlanNodePtr& referencePlan);
 
-  ::axiom::sql::presto::PrestoParser& prestoParser() {
-    return *prestoParser_;
-  }
+  /// Creates a parser for the current query state.
+  ::axiom::sql::presto::PrestoParser prestoParser();
 
   connector::hive::LocalHiveConnectorMetadata& hiveMetadata() const {
     return *hiveMetadata_;
@@ -155,7 +152,6 @@ class HiveQueriesTestBase : public QueryTestBase {
   inline static std::shared_ptr<velox::common::testutil::TempDirectoryPath>
       gTempDirectory;
 
-  std::unique_ptr<::axiom::sql::presto::PrestoParser> prestoParser_;
   connector::hive::LocalHiveConnectorMetadata* hiveMetadata_{};
 };
 

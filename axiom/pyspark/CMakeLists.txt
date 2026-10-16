@@ -62,7 +62,12 @@ target_link_libraries(
   collagen_converter
   collagen_proto
   collagen_runners
+  axiom_connectors
   axiom_optimizer
+  velox_caching
+  velox_connector_registry
+  velox_custom_memory_resource_registry
+  velox_exec
   velox_memory
   Folly::folly
   gRPC::grpc++
@@ -80,6 +85,8 @@ target_link_libraries(
   axiom_test_connector
   axiom_optimizer
   velox_connector_registry
+  velox_custom_memory_resource_registry
+  velox_exec
   velox_hive_connector
   velox_tpch_connector
   velox_dwio_common

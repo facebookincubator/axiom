@@ -18,6 +18,8 @@
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <string_view>
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -38,8 +40,11 @@ class QueryGraphContextTest : public ::testing::Test {
   void SetUp() override {
     pool_ = velox::memory::memoryManager()->addLeafPool();
     allocator_ = std::make_unique<velox::HashStringAllocator>(pool_.get());
+    functionRegistry_ = FunctionRegistry::createPresto();
     ctx_ = std::make_unique<QueryGraphContext>(
-        *allocator_, OptimizerOptions::kMaxPlanObjectsDefault);
+        *allocator_,
+        OptimizerOptions::kMaxPlanObjectsDefault,
+        functionRegistry_);
     queryCtx() = ctx_.get();
   }
 
@@ -52,6 +57,7 @@ class QueryGraphContextTest : public ::testing::Test {
 
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::unique_ptr<velox::HashStringAllocator> allocator_;
+  std::shared_ptr<FunctionRegistry> functionRegistry_;
   std::unique_ptr<QueryGraphContext> ctx_;
 };
 
@@ -63,6 +69,23 @@ TEST_F(QueryGraphContextTest, allocateAlignment) {
         0u);
     queryCtx()->free(ptr);
   }
+}
+
+TEST_F(QueryGraphContextTest, functionRegistry) {
+  auto firstRegistry = FunctionRegistry::createPresto("first_");
+  auto secondRegistry = FunctionRegistry::createPresto("second_");
+
+  QueryGraphContext firstContext(
+      *allocator_, OptimizerOptions::kMaxPlanObjectsDefault, firstRegistry);
+  QueryGraphContext secondContext(
+      *allocator_, OptimizerOptions::kMaxPlanObjectsDefault, secondRegistry);
+
+  EXPECT_EQ(
+      std::string_view{firstContext.functionNames().equality}, "first_eq");
+  EXPECT_EQ(
+      std::string_view{secondContext.functionNames().equality}, "second_eq");
+  EXPECT_EQ(&firstContext.functionRegistry(), firstRegistry.get());
+  EXPECT_EQ(&secondContext.functionRegistry(), secondRegistry.get());
 }
 
 TEST_F(QueryGraphContextTest, f14Map) {
@@ -299,7 +322,8 @@ TEST_F(QueryGraphContextTest, planObjectLimit) {
   // context so the limit is reached in a few objects.
   constexpr int32_t kLimit = 8;
   velox::HashStringAllocator allocator(pool_.get());
-  auto context = std::make_unique<QueryGraphContext>(allocator, kLimit);
+  auto context =
+      std::make_unique<QueryGraphContext>(allocator, kLimit, functionRegistry_);
   queryCtx() = context.get();
   SCOPE_EXIT {
     queryCtx() = ctx_.get();

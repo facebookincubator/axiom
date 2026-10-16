@@ -25,7 +25,7 @@
 #include <span>
 
 #include "axiom/common/SchemaTypeName.h"
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/sql/presto/GroupByPlanner.h"
 #include "axiom/sql/presto/IntervalParser.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
@@ -496,7 +496,8 @@ bool extractQualifiedParts(
 TypePtr findQualifiedType(
     const std::string& catalog,
     const facebook::axiom::SchemaTypeName& typeName,
-    folly::F14FastMap<std::string, TypePtr>& typeCache) {
+    folly::F14FastMap<std::string, TypePtr>& typeCache,
+    const facebook::axiom::connector::ConnectorContextPtr& context) {
   auto qualifiedName =
       fmt::format("{}.{}.{}", catalog, typeName.schema, typeName.type);
 
@@ -505,8 +506,7 @@ TypePtr findQualifiedType(
     return it->second;
   }
 
-  auto metadata =
-      facebook::axiom::connector::ConnectorMetadataRegistry::tryGet(catalog);
+  auto metadata = context->tryMetadata(catalog);
   if (metadata == nullptr) {
     typeCache.emplace(qualifiedName, nullptr);
     return nullptr;
@@ -522,7 +522,8 @@ TypePtr findQualifiedType(
 // fewer than two dots or the connector does not know the type.
 TypePtr tryConnectorBasedTypeResolution(
     std::string_view baseName,
-    folly::F14FastMap<std::string, TypePtr>& typeCache) {
+    folly::F14FastMap<std::string, TypePtr>& typeCache,
+    const facebook::axiom::connector::ConnectorContextPtr& context) {
   auto firstDot = baseName.find('.');
   if (firstDot == std::string_view::npos) {
     return nullptr;
@@ -539,7 +540,7 @@ TypePtr tryConnectorBasedTypeResolution(
     return nullptr;
   }
   return findQualifiedType(
-      catalog, {std::move(schema), std::move(typeName)}, typeCache);
+      catalog, {std::move(schema), std::move(typeName)}, typeCache, context);
 }
 
 // Attempts to resolve a qualified name (e.g., "catalog.schema.status.active")
@@ -550,7 +551,8 @@ TypePtr tryConnectorBasedTypeResolution(
 std::optional<lp::ExprApi> tryResolveEnumLiteral(
     const std::vector<std::string>& parts,
     folly::F14FastMap<std::string, TypePtr>& typeCache,
-    NodeLocation location) {
+    NodeLocation location,
+    const facebook::axiom::connector::ConnectorContextPtr& context) {
   if (parts.size() < 4) {
     return std::nullopt;
   }
@@ -568,10 +570,10 @@ std::optional<lp::ExprApi> tryResolveEnumLiteral(
       valueName.begin(),
       [](unsigned char character) { return std::toupper(character); });
 
-  auto type = findQualifiedType(catalog, schemaTypeName, typeCache);
+  auto type = findQualifiedType(catalog, schemaTypeName, typeCache, context);
   if (type == nullptr) {
-    if (facebook::axiom::connector::ConnectorMetadataRegistry::tryGet(
-            catalog) != nullptr) {
+    const auto metadata = context->tryMetadata(catalog);
+    if (metadata != nullptr) {
       AXIOM_PRESTO_SEMANTIC_FAIL(
           location,
           fmt::format("{}.{}", catalog, schemaTypeName),
@@ -830,7 +832,8 @@ TypePtr ExpressionPlanner::resolveType(const TypeSignaturePtr& type) {
         return resolveType(nestedType);
       });
   if (veloxType == nullptr) {
-    veloxType = tryConnectorBasedTypeResolution(type->baseName(), typeCache_);
+    veloxType = tryConnectorBasedTypeResolution(
+        type->baseName(), typeCache_, connectorContext_);
   }
   AXIOM_PRESTO_SEMANTIC_CHECK(
       veloxType != nullptr,
@@ -959,8 +962,8 @@ lp::ExprApi ExpressionPlanner::toExpr(
             columnResolver_ != nullptr && columnResolver_(parts[0], parts[1]);
 
         if (!isColumn) {
-          auto resolved =
-              tryResolveEnumLiteral(parts, typeCache_, node->location());
+          auto resolved = tryResolveEnumLiteral(
+              parts, typeCache_, node->location(), connectorContext_);
           if (resolved.has_value()) {
             return *resolved;
           }

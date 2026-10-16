@@ -28,7 +28,8 @@
 #include "axiom/optimizer/tests/TestDataPath.h"
 #include "axiom/optimizer/v2/Optimize.h"
 #include "axiom/sql/presto/PrestoParser.h"
-#include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
+#include "velox/exec/InMemoryExchangeClient.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/expression/Expr.h"
@@ -53,7 +54,6 @@ void QueryTestBase::SetUpTestCase() {
   velox::window::prestosql::registerAllWindowFunctions();
 
   executor_ = std::make_unique<folly::CPUThreadPoolExecutor>(4);
-  optimizer::FunctionRegistry::registerPrestoFunctions();
 }
 
 // static
@@ -69,14 +69,28 @@ void QueryTestBase::SetUp() {
   velox::exec::ExchangeSource::registerFactory(
       velox::exec::test::createLocalExchangeSource);
 
+  connectorRegistry_ = velox::connector::ConnectorRegistry::create();
+  metadataRegistry_ = connector::ConnectorMetadataRegistry::create();
+  functionRegistry_ = FunctionRegistry::createPresto();
+  outputTransportRegistry_ = velox::exec::OutputTransportRegistry::create();
+  outputTransportRegistry_->insert(
+      std::string{velox::core::TransportKind::kInMemory},
+      velox::exec::DefaultOutputBufferManager::makeDefaultTransportEntry());
+  exchangeTransportRegistry_ = velox::exec::ExchangeTransportRegistry::create();
+  exchangeTransportRegistry_->insert(
+      std::string{velox::core::TransportKind::kInMemory},
+      velox::exec::InMemoryExchangeClient::makeDefaultTransportEntry());
+  customMemoryResourceRegistry_ =
+      velox::memory::CustomMemoryResourceRegistry::createRegistry(nullptr);
   testConnector_ = std::make_shared<connector::TestConnector>(kTestConnectorId);
-  velox::connector::registerConnector(testConnector_);
-  connector::ConnectorMetadataRegistry::global().insert(
-      kTestConnectorId, testConnector_->metadata());
+  connector::ConnectorMetadataRegistry::registerCatalog(
+      *connectorRegistry_,
+      *metadataRegistry_,
+      testConnector_,
+      testConnector_->metadata());
   configureTestConnector();
 
   optimizerPool_ = rootPool_->addLeafChild("optimizer");
-
   if (gSuiteHistory) {
     history_ = std::move(gSuiteHistory);
   } else {
@@ -99,17 +113,35 @@ void QueryTestBase::configureTestConnector() {
   testConnector_->addTpchTables();
 }
 
+logical_plan::PlanBuilder::Context QueryTestBase::makePlanBuilderContext(
+    const std::string& defaultConnectorId,
+    const std::string& defaultSchema,
+    logical_plan::ExprResolver::FunctionRewriteHook hook) {
+  return logical_plan::PlanBuilder::Context{
+      getConnectorContext(),
+      defaultConnectorId,
+      defaultSchema,
+      getQueryCtx(),
+      std::move(hook)};
+}
+
 void QueryTestBase::TearDown() {
   // If we mean to save the history of running the suite, move the local history
   // to its static location.
   if (!FLAGS_history_save_path.empty()) {
     gSuiteHistory = std::move(history_);
   }
-  queryCtx_.reset();
+  queryState_.reset();
   optimizerPool_.reset();
-  connector::ConnectorMetadataRegistry::global().erase(kTestConnectorId);
-  velox::connector::unregisterConnector(kTestConnectorId);
   testConnector_.reset();
+  metadataRegistry_->clear();
+  connectorRegistry_->clear();
+  connectorRegistry_.reset();
+  metadataRegistry_.reset();
+  outputTransportRegistry_.reset();
+  exchangeTransportRegistry_.reset();
+  customMemoryResourceRegistry_.reset();
+  functionRegistry_.reset();
   velox::exec::ExchangeSource::factories().clear();
   HiveConnectorTestBase::TearDown();
 }
@@ -124,7 +156,8 @@ logical_plan::LogicalPlanNodePtr QueryTestBase::parseSelect(
       defaultConnectorId,
       defaultSchema,
       std::make_shared<::axiom::sql::presto::ParserSession>(
-          connector::makeTestContext("test"),
+          getConnectorContext(),
+          functionRegistry_,
           connector::makeTestStatWriter(),
           connector::Properties{},
           parserOptions));
@@ -144,10 +177,12 @@ std::shared_ptr<velox::BaseRuntimeStatWriter> borrow(
 
 OptimizerSessionPtr makeOptimizerSession(
     const connector::ConnectorContextPtr& connectorContext,
+    std::shared_ptr<const FunctionRegistry> functionRegistry,
     OptimizerOptions options,
     velox::BaseRuntimeStatWriter& statsWriter) {
   return std::make_shared<OptimizerSession>(
       connectorContext,
+      std::move(functionRegistry),
       borrow(statsWriter),
       connector::Properties{},
       std::move(options));
@@ -155,9 +190,13 @@ OptimizerSessionPtr makeOptimizerSession(
 
 runner::RunnerSessionPtr makeRunnerSession(
     const connector::ConnectorContextPtr& connectorContext,
+    std::shared_ptr<const FunctionRegistry> functionRegistry,
     velox::BaseRuntimeStatWriter& statsWriter) {
   return std::make_shared<runner::RunnerSession>(
-      connectorContext, borrow(statsWriter), runner::Properties{});
+      connectorContext,
+      std::move(functionRegistry),
+      borrow(statsWriter),
+      runner::Properties{});
 }
 } // namespace
 
@@ -166,6 +205,7 @@ TestResult QueryTestBase::runVelox(const core::PlanNodePtr& plan) {
   options.maxRemotePartitions = 1;
   options.maxLocalPartitions = 1;
   options.queryId = fmt::format("q{}", ++gQueryCounter);
+  const auto queryId = options.queryId;
 
   ExecutableFragment fragment{.fragmentId = 0};
   fragment.fragment = core::PlanFragment(plan);
@@ -176,25 +216,32 @@ TestResult QueryTestBase::runVelox(const core::PlanNodePtr& plan) {
           std::move(options)),
   };
 
-  return runFragmentedPlan(planAndStats);
+  auto state = makeQueryState(queryId, executor_.get());
+  return runFragmentedPlan(planAndStats, state);
 }
 
 TestResult QueryTestBase::runFragmentedPlan(
     optimizer::PlanAndStats& planAndStats) {
+  auto& state = queryState();
+  SCOPE_EXIT {
+    queryState_.reset();
+  };
+  return runFragmentedPlan(planAndStats, state);
+}
+
+TestResult QueryTestBase::runFragmentedPlan(
+    optimizer::PlanAndStats& planAndStats,
+    QueryState& state) {
   auto runnerSession = makeRunnerSession(
-      connector::makeTestContext(getQueryCtx()->queryId()), statsWriter_);
+      state.connectorContext, functionRegistry_, statsWriter_);
   auto runner = std::make_shared<runner::LocalRunner>(
       std::move(runnerSession),
       planAndStats.plan,
       std::move(planAndStats.finishWrite),
-      getQueryCtx(),
+      state.veloxContext,
       std::make_shared<runner::ConnectorSplitSourceFactory>(),
       optimizerPool_,
       /*baseSpillDirectory=*/"");
-
-  SCOPE_EXIT {
-    queryCtx_.reset();
-  };
 
   TestResult result;
   result.runner = std::move(runner);
@@ -207,14 +254,44 @@ TestResult QueryTestBase::runFragmentedPlan(
   return result;
 }
 
-std::shared_ptr<core::QueryCtx>& QueryTestBase::getQueryCtx() {
-  if (queryCtx_) {
-    return queryCtx_;
+const std::shared_ptr<core::QueryCtx>& QueryTestBase::getQueryCtx() {
+  return queryState().veloxContext;
+}
+
+const connector::ConnectorContextPtr& QueryTestBase::getConnectorContext() {
+  return queryState().connectorContext;
+}
+
+void QueryTestBase::setConnectorContextForNextQuery(
+    connector::ConnectorContextPtr connectorContext,
+    std::shared_ptr<velox::connector::ConnectorRegistry::Registry>
+        connectorRegistry,
+    std::shared_ptr<connector::ConnectorMetadataRegistry::Registry>
+        metadataRegistry) {
+  VELOX_CHECK_NOT_NULL(connectorContext);
+  VELOX_CHECK_NOT_NULL(connectorRegistry);
+  VELOX_CHECK_NOT_NULL(metadataRegistry);
+  VELOX_CHECK_NULL(
+      queryState_,
+      "The connector context must be selected before the query starts");
+  queryState_ = std::make_unique<QueryState>(makeQueryState(
+      std::move(connectorContext),
+      std::move(connectorRegistry),
+      std::move(metadataRegistry),
+      executor_.get()));
+}
+
+void QueryTestBase::setExecutorForNextQuery(folly::Executor* executor) {
+  queryState_ = std::make_unique<QueryState>(
+      makeQueryState(fmt::format("q{}", ++gQueryCounter), executor));
+}
+
+QueryTestBase::QueryState& QueryTestBase::queryState() {
+  if (queryState_ == nullptr) {
+    queryState_ = std::make_unique<QueryState>(
+        makeQueryState(fmt::format("q{}", ++gQueryCounter), executor_.get()));
   }
-
-  queryCtx_ = makeQueryCtx(fmt::format("q{}", ++gQueryCounter));
-
-  return queryCtx_;
+  return *queryState_;
 }
 
 PlanCost QueryTestBase::optimizationCost(
@@ -224,26 +301,22 @@ PlanCost QueryTestBase::optimizationCost(
   auto& queryCtx = getQueryCtx();
   auto allocator = std::make_unique<HashStringAllocator>(optimizerPool_.get());
   auto context = std::make_unique<optimizer::QueryGraphContext>(
-      *allocator, OptimizerOptions::kMaxPlanObjectsDefault);
+      *allocator, OptimizerOptions::kMaxPlanObjectsDefault, functionRegistry_);
   optimizer::queryCtx() = context.get();
   SCOPE_EXIT {
     optimizer::queryCtx() = nullptr;
   };
   exec::SimpleExpressionEvaluator evaluator(
       queryCtx.get(), optimizerPool_.get());
-  connector::SchemaResolver schemaResolver{
-      connector::ConnectorMetadataRegistry::global()};
-  auto connectorContext = std::make_shared<connector::ConnectorContext>(
-      queryCtx->queryId(),
-      "test",
-      connectorSessionProperties_,
-      connectorStatWriterProvider());
+  auto connectorContext = getConnectorContext();
+  connector::SchemaResolver schemaResolver{connectorContext};
   Optimization opt(
       makeOptimizerSession(
           connectorContext,
+          functionRegistry_,
           optimizerOptions.value_or(optimizerOptions_),
           statsWriter_),
-      makeRunnerSession(connectorContext, statsWriter_),
+      makeRunnerSession(connectorContext, functionRegistry_, statsWriter_),
       *logicalPlan,
       schemaResolver,
       *history_,
@@ -261,7 +334,7 @@ void QueryTestBase::verifyOptimization(
 
   HashStringAllocator allocator(optimizerPool_.get());
   auto context = std::make_unique<optimizer::QueryGraphContext>(
-      allocator, OptimizerOptions::kMaxPlanObjectsDefault);
+      allocator, OptimizerOptions::kMaxPlanObjectsDefault, functionRegistry_);
   optimizer::queryCtx() = context.get();
   SCOPE_EXIT {
     optimizer::queryCtx() = nullptr;
@@ -270,21 +343,17 @@ void QueryTestBase::verifyOptimization(
   exec::SimpleExpressionEvaluator evaluator(
       veloxQueryCtx.get(), optimizerPool_.get());
 
-  connector::SchemaResolver schemaResolver{
-      connector::ConnectorMetadataRegistry::global()};
+  auto connectorContext = getConnectorContext();
+  connector::SchemaResolver schemaResolver{connectorContext};
   VeloxHistory history;
 
-  auto connectorContext = std::make_shared<connector::ConnectorContext>(
-      veloxQueryCtx->queryId(),
-      "test",
-      connectorSessionProperties_,
-      connectorStatWriterProvider());
   Optimization optimization(
       makeOptimizerSession(
           connectorContext,
+          functionRegistry_,
           optimizerOptions.value_or(optimizerOptions_),
           statsWriter_),
-      makeRunnerSession(connectorContext, statsWriter_),
+      makeRunnerSession(connectorContext, functionRegistry_, statsWriter_),
       logicalPlan,
       schemaResolver,
       history,
@@ -305,7 +374,7 @@ void QueryTestBase::verifyOptimization(
 
   HashStringAllocator allocator(optimizerPool_.get());
   auto context = std::make_unique<optimizer::QueryGraphContext>(
-      allocator, OptimizerOptions::kMaxPlanObjectsDefault);
+      allocator, OptimizerOptions::kMaxPlanObjectsDefault, functionRegistry_);
   optimizer::queryCtx() = context.get();
   SCOPE_EXIT {
     optimizer::queryCtx() = nullptr;
@@ -313,15 +382,11 @@ void QueryTestBase::verifyOptimization(
 
   exec::SimpleExpressionEvaluator evaluator(
       veloxQueryCtx.get(), optimizerPool_.get());
-  connector::SchemaResolver schemaResolver{
-      connector::ConnectorMetadataRegistry::global()};
-  auto connectorContext = std::make_shared<connector::ConnectorContext>(
-      veloxQueryCtx->queryId(),
-      "test",
-      connectorSessionProperties_,
-      connectorStatWriterProvider());
+  auto connectorContext = getConnectorContext();
+  connector::SchemaResolver schemaResolver{connectorContext};
   auto session = makeOptimizerSession(
       connectorContext,
+      functionRegistry_,
       optimizerOptions.value_or(optimizerOptions_),
       statsWriter_);
   v2::Optimizer optimizer{
@@ -336,8 +401,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
     const MultiFragmentPlan::Options& options,
     const std::optional<OptimizerOptions>& optimizerOptions,
     const std::optional<std::string>& planFilePathPrefix) {
-  connector::SchemaResolver schemaResolver{
-      connector::ConnectorMetadataRegistry::global()};
+  connector::SchemaResolver schemaResolver{getConnectorContext()};
   return planVelox(
       plan, schemaResolver, options, optimizerOptions, planFilePathPrefix);
 }
@@ -363,7 +427,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
 
   auto allocator = std::make_unique<HashStringAllocator>(optimizerPool_.get());
   auto context = std::make_unique<optimizer::QueryGraphContext>(
-      *allocator, OptimizerOptions::kMaxPlanObjectsDefault);
+      *allocator, OptimizerOptions::kMaxPlanObjectsDefault, functionRegistry_);
   optimizer::queryCtx() = context.get();
   SCOPE_EXIT {
     optimizer::queryCtx() = nullptr;
@@ -387,13 +451,10 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
     }
   };
 
-  auto connectorContext = std::make_shared<connector::ConnectorContext>(
-      queryCtx->queryId(),
-      "test",
-      connectorSessionProperties_,
-      connectorStatWriterProvider());
+  auto connectorContext = getConnectorContext();
   auto session = makeOptimizerSession(
       connectorContext,
+      functionRegistry_,
       optimizerOptions.value_or(optimizerOptions_),
       statsWriter_);
 
@@ -405,7 +466,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
   } else {
     optimizer::Optimization opt(
         session,
-        makeRunnerSession(connectorContext, statsWriter_),
+        makeRunnerSession(connectorContext, functionRegistry_, statsWriter_),
         *plan,
         schemaResolver,
         *history_,
@@ -480,6 +541,9 @@ void QueryTestBase::checkSame(
     const std::vector<velox::RowVectorPtr>& referenceResult,
     const MultiFragmentPlan::Options& options) {
   VELOX_CHECK_NOT_NULL(planNode);
+  const auto connectorContext = getConnectorContext();
+  const auto connectorRegistry = queryState().connectorRegistry;
+  const auto metadataRegistry = queryState().metadataRegistry;
 
   std::vector<MultiFragmentPlan::Options> testOptions = {
       {.maxRemotePartitions = 1, .maxLocalPartitions = 1},
@@ -502,6 +566,10 @@ void QueryTestBase::checkSame(
   }
 
   for (const auto& test : testOptions) {
+    if (queryState_ == nullptr) {
+      setConnectorContextForNextQuery(
+          connectorContext, connectorRegistry, metadataRegistry);
+    }
     SCOPED_TRACE(
         fmt::format(
             "workers: {}, drivers: {}",
@@ -532,16 +600,56 @@ std::string QueryTestBase::getTestDataPath(const std::string& filename) {
   return test::getTestFilePath(fmt::format("test_data/{}", filename));
 }
 
-std::shared_ptr<velox::core::QueryCtx> QueryTestBase::makeQueryCtx(
-    const std::string& queryId) {
-  return velox::core::QueryCtx::create(
-      executor_.get(),
+QueryTestBase::QueryState QueryTestBase::makeQueryState(
+    const std::string& queryId,
+    folly::Executor* executor) {
+  return makeQueryState(
+      std::make_shared<connector::ConnectorContext>(
+          queryId,
+          "test",
+          connectorSessionProperties_,
+          connectorStatWriterProvider(),
+          metadataRegistry_),
+      connectorRegistry_,
+      metadataRegistry_,
+      executor);
+}
+
+QueryTestBase::QueryState QueryTestBase::makeQueryState(
+    connector::ConnectorContextPtr connectorContext,
+    std::shared_ptr<velox::connector::ConnectorRegistry::Registry>
+        connectorRegistry,
+    std::shared_ptr<connector::ConnectorMetadataRegistry::Registry>
+        metadataRegistry,
+    folly::Executor* executor) {
+  const auto& queryId = connectorContext->queryId();
+  VELOX_CHECK_NOT_NULL(connectorRegistry);
+  VELOX_CHECK_NOT_NULL(metadataRegistry);
+  auto veloxContext = velox::core::QueryCtx::create(
+      executor,
       velox::core::QueryConfig(folly::copy(config_)),
       /*connectorConfigs=*/{},
       velox::cache::AsyncDataCache::getInstance(),
       /*pool=*/nullptr,
       /*spillExecutor=*/nullptr,
       queryId);
+  veloxContext->setRegistry(
+      velox::connector::ConnectorRegistry::kRegistryKey, connectorRegistry);
+  veloxContext->setRegistry(
+      velox::exec::OutputTransportRegistry::kRegistryKey,
+      outputTransportRegistry_);
+  veloxContext->setRegistry(
+      velox::exec::ExchangeTransportRegistry::kRegistryKey,
+      exchangeTransportRegistry_);
+  veloxContext->setRegistry(
+      velox::memory::kCustomMemoryResourceRegistryKey,
+      customMemoryResourceRegistry_);
+  return {
+      .veloxContext = std::move(veloxContext),
+      .connectorContext = std::move(connectorContext),
+      .connectorRegistry = std::move(connectorRegistry),
+      .metadataRegistry = std::move(metadataRegistry),
+  };
 }
 
 } // namespace facebook::axiom::optimizer::test

@@ -35,10 +35,6 @@ class BucketedExecutionTest : public test::QueryTestBase,
     useV2_ = GetParam();
   }
 
-  lp::PlanBuilder::Context makeContext() const {
-    return lp::PlanBuilder::Context{kTestConnectorId, kDefaultSchema};
-  }
-
   void addBucketedTable(
       const std::string& name,
       const std::vector<std::string>& bucketColumns,
@@ -363,7 +359,7 @@ TEST_P(BucketedExecutionTest, aggregation) {
 
   {
     auto plan = planDistributed(
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("a_orders")
             .aggregate({"customer_id"}, {"sum(amount)"})
             .build());
@@ -382,7 +378,7 @@ TEST_P(BucketedExecutionTest, aggregation) {
   // whole on one task.
   {
     auto plan = planDistributed(
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("a_orders")
             .aggregate({"customer_id", "order_date"}, {"sum(amount)"})
             .build());
@@ -410,7 +406,7 @@ TEST_P(BucketedExecutionTest, aggregation) {
 
   {
     auto plan = planDistributed(
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("a_orders")
             .aggregate(
                 {"customer_id"},
@@ -429,7 +425,7 @@ TEST_P(BucketedExecutionTest, aggregation) {
 
   {
     auto plan = planDistributed(
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("a_orders")
             .aggregate({"customer_id"}, {"count(distinct amount)"})
             .build());
@@ -476,7 +472,8 @@ TEST_P(BucketedExecutionTest, aggregation) {
 
   {
     auto plan = planDistributed(
-        lp::PlanBuilder(makeContext(), /*allowAmbiguousOutputNames=*/true)
+        lp::PlanBuilder(
+            makePlanBuilderContext(), /*allowAmbiguousOutputNames=*/true)
             .tableScan("a_orders")
             .aggregate(
                 {"customer_id"}, {"array_agg(amount ORDER BY order_date)"})
@@ -495,7 +492,7 @@ TEST_P(BucketedExecutionTest, aggregation) {
   // the source fragment.
   {
     auto plan = planDistributed(
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("a_orders")
             .aggregate({"customer_id"}, {"sum(amount)"})
             .limit(0, 100)
@@ -518,7 +515,7 @@ TEST_P(BucketedExecutionTest, aggregation) {
   // does not read it grouped.
   {
     auto plan = planDistributed(
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("a_orders")
             .aggregate({"order_date"}, {"sum(amount)"})
             .build());
@@ -547,7 +544,7 @@ TEST_P(BucketedExecutionTest, select) {
   {
     addBucketedTable("s_one", {"customer_id"}, 1);
     auto plan = planDistributed(
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("s_one")
             .aggregate({"customer_id"}, {"sum(amount)"})
             .build());
@@ -601,7 +598,7 @@ TEST_P(BucketedExecutionTest, select) {
        {"amount", {.numDistinct = 500'000}}});
   {
     auto plan = planDistributed(
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("s_composite")
             .aggregate({"region", "customer_id"}, {"sum(amount)"})
             .build());
@@ -632,7 +629,7 @@ TEST_P(BucketedExecutionTest, select) {
   // partial+shuffle+final and nothing reads the table grouped.
   {
     auto plan = planDistributed(
-        lp::PlanBuilder(makeContext())
+        lp::PlanBuilder(makePlanBuilderContext())
             .tableScan("s_composite")
             .aggregate({"region"}, {"sum(amount)"})
             .build());
@@ -734,7 +731,7 @@ TEST_P(BucketedExecutionTest, unionall) {
 TEST_P(BucketedExecutionTest, alwaysPlanPartialAggregation) {
   addBucketedTable("g_orders", {"customer_id"}, 128);
 
-  auto plan = lp::PlanBuilder(makeContext())
+  auto plan = lp::PlanBuilder(makePlanBuilderContext())
                   .tableScan("g_orders")
                   .aggregate({"customer_id"}, {"sum(amount)"})
                   .build();

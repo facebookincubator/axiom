@@ -21,6 +21,7 @@
 
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "velox/common/ScopedRegistry.h"
+#include "velox/connectors/ConnectorRegistry.h"
 
 namespace facebook::velox::core {
 class QueryCtx;
@@ -51,9 +52,20 @@ class ConnectorMetadataRegistry {
   /// Return the global registry (root scope).
   static Registry& global();
 
-  /// Create a per-query registry. If 'parent' is provided, lookups fall back
-  /// to it. Pass nullptr for isolation mode (no fallback).
-  static std::shared_ptr<Registry> create(const Registry* parent = nullptr);
+  /// Returns shared ownership of the global registry.
+  static const std::shared_ptr<Registry>& globalPtr();
+
+  /// Creates an isolated registry scope.
+  static std::shared_ptr<Registry> create();
+
+  /// Registers an execution connector and its matching metadata under the
+  /// connector ID. Rolls back the connector insertion if metadata registration
+  /// fails.
+  static void registerCatalog(
+      velox::connector::ConnectorRegistry::Registry& connectorRegistry,
+      Registry& metadataRegistry,
+      std::shared_ptr<velox::connector::Connector> connector,
+      std::shared_ptr<ConnectorMetadata> metadata);
 
   /// Return the metadata connector with the specified ID, or nullptr if
   /// not registered.  Checks per-query override on QueryCtx first, falls back
@@ -113,6 +125,9 @@ class ConnectorMetadataRegistry {
   /// unique.
   static std::vector<std::string> allMetadataIds(
       const velox::core::QueryCtx& queryCtx);
+
+  /// Returns all IDs in `registry`.
+  static std::vector<std::string> allMetadataIds(const Registry& registry);
 
   /// Return all registered ids from the global registry.
   static std::vector<std::string> allMetadataIds();

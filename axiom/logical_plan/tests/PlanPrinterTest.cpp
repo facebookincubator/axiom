@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/logical_plan/GraphBuilder.h"
 #include "axiom/logical_plan/GraphMatchBuilder.h"
 #include "axiom/logical_plan/PlanBuilder.h"
@@ -96,6 +97,7 @@ class PlanPrinterTest : public testing::Test {
   std::shared_ptr<connector::TestConnector> connector_;
 
   PlanBuilder::Context context_{
+      connector::makeTestContext("PlanPrinterTest"),
       std::string(kTestConnectorId),
       std::string(kDefaultSchema)};
 };
@@ -786,7 +788,7 @@ TEST_F(PlanPrinterTest, unnest) {
   }
 
   {
-    PlanBuilder::Context context;
+    auto context = PlanBuilder::Context::forConnectorlessPlan();
     context.coercer = &velox::TypeCoercer::defaults();
     auto plan = PlanBuilder(context)
                     .unnest({Sql("map(array[1, 2, 3], array[10, 20, 30])")
@@ -872,7 +874,7 @@ TEST_F(PlanPrinterTest, union) {
       Variant::row({4, 4.4}),
   };
 
-  auto context = PlanBuilder::Context();
+  auto context = PlanBuilder::Context::forConnectorlessPlan();
   auto plan = PlanBuilder(context)
                   .values(type, data1)
                   .unionAll(PlanBuilder(context).values(type, data2))
@@ -935,7 +937,7 @@ TEST_F(PlanPrinterTest, subquery) {
       Variant::row({2, 20}),
   };
 
-  auto context = PlanBuilder::Context();
+  auto context = PlanBuilder::Context::forConnectorlessPlan();
 
   // Subquery in a project.
   PlanBuilder::Scope scope;
@@ -1000,9 +1002,9 @@ TEST_F(PlanPrinterTest, subquery) {
           testing::Eq("- VALUES [0]: 1 fields"), testing::Eq("")));
 
   // Subquery in a filter.
-  context = PlanBuilder::Context();
+  auto filterContext = PlanBuilder::Context::forConnectorlessPlan();
   plan =
-      PlanBuilder(context)
+      PlanBuilder(filterContext)
           .values(ROW({"a"}, {INTEGER()}), data)
           .as("l")
           .captureScope(scope)
@@ -1010,7 +1012,7 @@ TEST_F(PlanPrinterTest, subquery) {
               Col("a") >
               Subquery(
                   PlanBuilder(
-                      context, /*allowAmbiguousOutputNames=*/false, scope)
+                      filterContext, /*allowAmbiguousOutputNames=*/false, scope)
                       .values(ROW({"a", "b"}, {INTEGER(), INTEGER()}), lookup)
                       .as("r")
                       .filter("l.a = r.a")
@@ -1067,7 +1069,7 @@ TEST_F(PlanPrinterTest, inSubquery) {
 
   PlanBuilder::Scope scope;
   // In subquery
-  auto context = PlanBuilder::Context();
+  auto context = PlanBuilder::Context::forConnectorlessPlan();
   auto plan =
       PlanBuilder(context)
           .values(ROW({"a"}, {INTEGER()}), data)
@@ -1134,7 +1136,7 @@ TEST_F(PlanPrinterTest, existsSubquery) {
 
   PlanBuilder::Scope scope;
   // Exists subquery
-  auto context = PlanBuilder::Context();
+  auto context = PlanBuilder::Context::forConnectorlessPlan();
   auto plan =
       PlanBuilder(context)
           .values(ROW({"a"}, {INTEGER()}), data)
@@ -1198,7 +1200,7 @@ TEST_F(PlanPrinterTest, join) {
       Variant::row({2, 22}),
   };
 
-  auto context = PlanBuilder::Context();
+  auto context = PlanBuilder::Context::forConnectorlessPlan();
   auto plan = PlanBuilder(context)
                   .values(leftType, leftData)
                   .as("l")
@@ -1270,7 +1272,7 @@ TEST_F(PlanPrinterTest, crossJoin) {
       Variant::row({2, 22}),
   };
 
-  PlanBuilder::Context context;
+  auto context = PlanBuilder::Context::forConnectorlessPlan();
   auto plan = PlanBuilder(context)
                   .values(leftType, leftData)
                   .as("l")
@@ -1497,7 +1499,7 @@ TEST_F(PlanPrinterTest, coercions) {
       Variant::row({2, 20LL}),
   };
 
-  PlanBuilder::Context context;
+  auto context = PlanBuilder::Context::forConnectorlessPlan();
   context.coercer = &velox::TypeCoercer::defaults();
   auto plan = PlanBuilder(context)
                   .values(rowType, data)
@@ -1536,7 +1538,9 @@ TEST_F(PlanPrinterTest, tableWrite) {
     };
 
     PlanBuilder::Context context{
-        std::string(kTestConnectorId), std::string(kDefaultSchema)};
+        connector::makeTestContext("PlanPrinterTest"),
+        std::string(kTestConnectorId),
+        std::string(kDefaultSchema)};
     auto plan = PlanBuilder(context)
                     .tableScan("test", {"a", "b"})
                     .tableWrite(
@@ -1644,7 +1648,7 @@ TEST_F(PlanPrinterTest, fixedPointCounter) {
   //   SELECT n + 1 FROM t
   // )
   auto rowType = ROW("n", BIGINT());
-  PlanBuilder::Context context;
+  auto context = PlanBuilder::Context::forConnectorlessPlan();
 
   auto anchor = PlanBuilder(context).values(
       rowType, std::vector<Variant>{Variant::row({1LL})});
@@ -1713,7 +1717,7 @@ TEST_F(PlanPrinterTest, fixedPointSelfJoin) {
   //     SELECT r1.n FROM r r1 JOIN r r2 ON r1.n = r2.n
   //   )
   auto rowType = ROW("n", BIGINT());
-  PlanBuilder::Context context;
+  auto context = PlanBuilder::Context::forConnectorlessPlan();
 
   auto anchor = PlanBuilder(context).values(
       rowType, std::vector<Variant>{Variant::row({1LL})});

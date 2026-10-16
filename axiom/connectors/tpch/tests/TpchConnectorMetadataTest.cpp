@@ -40,7 +40,7 @@ class TpchConnectorMetadataTest : public ::testing::Test {
   }
 
   ConnectorSessionPtr makeSession() {
-    return std::make_shared<ConnectorSession>(
+    return ConnectorSession::testingCreate(
         /*queryId=*/"test",
         /*user=*/"test",
         Properties{},

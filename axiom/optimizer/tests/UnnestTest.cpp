@@ -543,7 +543,7 @@ TEST_P(UnnestTest, join) {
 
     const std::vector<std::string> expectedNames{"x1", "a_y1", "a_z2"};
 
-    lp::PlanBuilder::Context ctx;
+    auto ctx = lp::PlanBuilder::Context::forConnectorlessPlan();
     auto logicalPlan =
         startLogicalPlan(ctx)
             .project({"x AS x1", "a_a_y AS a_a_y1", "a_a_z AS a_a_z1"})
@@ -580,7 +580,7 @@ TEST_P(UnnestTest, join) {
 
     const std::vector<std::string> expectedNames{"x1", "a_y1", "a_z2"};
 
-    lp::PlanBuilder::Context ctx;
+    auto ctx = lp::PlanBuilder::Context::forConnectorlessPlan();
     auto logicalPlan =
         startLogicalPlan(ctx)
             .project({"x AS x1", "a_a_y AS a_a_y1", "a_a_z AS a_a_z1"})
@@ -617,7 +617,7 @@ TEST_P(UnnestTest, join) {
 
     const std::vector<std::string> expectedNames{"x1", "a_y1", "a_z2"};
 
-    lp::PlanBuilder::Context ctx;
+    auto ctx = lp::PlanBuilder::Context::forConnectorlessPlan();
     auto logicalPlan =
         startLogicalPlan(ctx)
             .unnest({
@@ -665,7 +665,7 @@ TEST_P(UnnestTest, join) {
 
     const std::vector<std::string> expectedNames{"x1", "a_y1", "x2", "a_z2"};
 
-    lp::PlanBuilder::Context ctx;
+    auto ctx = lp::PlanBuilder::Context::forConnectorlessPlan();
     auto logicalPlan =
         startLogicalPlan(ctx)
             .project({"x AS x1", "a_a_y AS a_a_y1", "a_a_z AS a_a_z1"})

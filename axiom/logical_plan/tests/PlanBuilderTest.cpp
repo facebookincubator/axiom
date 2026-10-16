@@ -54,6 +54,13 @@ class PlanBuilderTest : public testing::Test {
   }
 };
 
+TEST_F(PlanBuilderTest, connectorlessTableScan) {
+  VELOX_ASSERT_THROW(
+      PlanBuilder().tableScan(
+          "test", "default", "table", /*includeHiddenColumns=*/false),
+      "Plan builder has no connector context");
+}
+
 TEST_F(PlanBuilderTest, anonymousOutputNames) {
   auto builder =
       PlanBuilder()
@@ -80,7 +87,7 @@ TEST_F(PlanBuilderTest, anonymousOutputNames) {
 // Verifies that findOrAssignOutputNames returns aliases for all ambiguous
 // column names from a join where both sides have the same columns.
 TEST_F(PlanBuilderTest, ambiguousOutputNamesFullOverlap) {
-  PlanBuilder::Context context;
+  auto context = PlanBuilder::Context::forConnectorlessPlan();
 
   auto buildValues = [&](const std::string& alias) {
     return PlanBuilder(context, /*allowAmbiguousOutputNames=*/true)
@@ -108,7 +115,7 @@ TEST_F(PlanBuilderTest, ambiguousOutputNamesFullOverlap) {
 // Verifies that findOrAssignOutputNames returns aliases only for ambiguous
 // columns when tables partially overlap.
 TEST_F(PlanBuilderTest, ambiguousOutputNamesPartialOverlap) {
-  PlanBuilder::Context context;
+  auto context = PlanBuilder::Context::forConnectorlessPlan();
 
   auto buildValues = [&](const std::string& alias) {
     return PlanBuilder(context, /*allowAmbiguousOutputNames=*/true)
@@ -142,7 +149,7 @@ TEST_F(PlanBuilderTest, ambiguousOutputNamesPartialOverlap) {
 }
 
 TEST_F(PlanBuilderTest, duplicateAliasAllowed) {
-  PlanBuilder::Context context;
+  auto context = PlanBuilder::Context::forConnectorlessPlan();
 
   auto makeBuilder = [&context]() {
     return PlanBuilder(context, /*allowAmbiguousOutputNames=*/true);
@@ -246,7 +253,7 @@ TEST_F(PlanBuilderTest, duplicateAliasAllowed) {
 }
 
 TEST_F(PlanBuilderTest, emptyAliasAllowed) {
-  PlanBuilder::Context context;
+  auto context = PlanBuilder::Context::forConnectorlessPlan();
 
   auto makeValues = [&context](const RowTypePtr& rowType) {
     return PlanBuilder(context, /*allowAmbiguousOutputNames=*/true)
@@ -345,7 +352,7 @@ TEST_F(PlanBuilderTest, mixedUnnestAliases) {
 }
 
 TEST_F(PlanBuilderTest, unusedUnnestAlias) {
-  PlanBuilder::Context context;
+  auto context = PlanBuilder::Context::forConnectorlessPlan();
   auto plan =
       PlanBuilder(context, /*allowAmbiguousOutputNames=*/true)
           .values(ROW("a", ARRAY(BIGINT())), ValuesNode::Variants{})
@@ -362,7 +369,7 @@ TEST_F(PlanBuilderTest, setOperationTypeCoercion) {
 
   // (INTEGER, REAL) + (BIGINT, DOUBLE) -> (BIGINT, DOUBLE)
   {
-    PlanBuilder::Context context;
+    auto context = PlanBuilder::Context::forConnectorlessPlan();
     context.coercer = &velox::TypeCoercer::defaults();
     auto plan = PlanBuilder(context)
                     .setOperation(
@@ -386,7 +393,7 @@ TEST_F(PlanBuilderTest, setOperationTypeCoercion) {
 
   // Same types stay the same. No project nodes needed.
   {
-    PlanBuilder::Context context;
+    auto context = PlanBuilder::Context::forConnectorlessPlan();
     context.coercer = &velox::TypeCoercer::defaults();
     auto plan = PlanBuilder(context)
                     .setOperation(
@@ -408,7 +415,7 @@ TEST_F(PlanBuilderTest, setOperationTypeCoercion) {
 
   // Incompatible types fail.
   {
-    PlanBuilder::Context context;
+    auto context = PlanBuilder::Context::forConnectorlessPlan();
     context.coercer = &velox::TypeCoercer::defaults();
     VELOX_ASSERT_THROW(
         PlanBuilder(context)
@@ -424,7 +431,7 @@ TEST_F(PlanBuilderTest, setOperationTypeCoercion) {
 
   // Mismatched types fail when coercions are disabled.
   {
-    PlanBuilder::Context context;
+    auto context = PlanBuilder::Context::forConnectorlessPlan();
     VELOX_ASSERT_THROW(
         PlanBuilder(context)
             .setOperation(
@@ -455,7 +462,7 @@ TEST_F(PlanBuilderTest, joinUsingTypeCoercion) {
 
   // INTEGER vs BIGINT -> BIGINT.
   {
-    PlanBuilder::Context context;
+    auto context = PlanBuilder::Context::forConnectorlessPlan();
     auto [left, right] = makeBuilders(
         context,
         ROW({"c0", "c1"}, {INTEGER(), VARCHAR()}),
@@ -474,7 +481,7 @@ TEST_F(PlanBuilderTest, joinUsingTypeCoercion) {
 
   // Same types on both sides.
   {
-    PlanBuilder::Context context;
+    auto context = PlanBuilder::Context::forConnectorlessPlan();
     auto [left, right] = makeBuilders(
         context,
         ROW({"c0", "c1"}, {BIGINT(), VARCHAR()}),
@@ -493,7 +500,7 @@ TEST_F(PlanBuilderTest, joinUsingTypeCoercion) {
 
   // Incompatible types (VARCHAR vs INTEGER) fail even with coercions enabled.
   {
-    PlanBuilder::Context context;
+    auto context = PlanBuilder::Context::forConnectorlessPlan();
     auto [left, right] = makeBuilders(
         context,
         ROW({"c0", "c1"}, {VARCHAR(), BIGINT()}),
@@ -506,7 +513,7 @@ TEST_F(PlanBuilderTest, joinUsingTypeCoercion) {
 
   // Mismatched types fail when coercions are disabled.
   {
-    PlanBuilder::Context context;
+    auto context = PlanBuilder::Context::forConnectorlessPlan();
     auto [left, right] = makeBuilders(
         context,
         ROW({"c0", "c1"}, {INTEGER(), VARCHAR()}),
@@ -520,7 +527,7 @@ TEST_F(PlanBuilderTest, joinUsingTypeCoercion) {
 
   // RIGHT JOIN with coercion.
   {
-    PlanBuilder::Context context;
+    auto context = PlanBuilder::Context::forConnectorlessPlan();
     auto [left, right] = makeBuilders(
         context,
         ROW({"c0", "c1"}, {INTEGER(), VARCHAR()}),
@@ -539,7 +546,7 @@ TEST_F(PlanBuilderTest, joinUsingTypeCoercion) {
 
   // FULL OUTER JOIN with coercion.
   {
-    PlanBuilder::Context context;
+    auto context = PlanBuilder::Context::forConnectorlessPlan();
     auto [left, right] = makeBuilders(
         context,
         ROW({"c0", "c1"}, {INTEGER(), VARCHAR()}),
@@ -558,7 +565,7 @@ TEST_F(PlanBuilderTest, joinUsingTypeCoercion) {
 
   // Nested ROW field names are reconciled in join keys and USING outputs.
   for (const auto joinType : {JoinType::kInner, JoinType::kFull}) {
-    PlanBuilder::Context context;
+    auto context = PlanBuilder::Context::forConnectorlessPlan();
     auto [left, right] = makeBuilders(
         context,
         ROW("c0", ROW("x", INTEGER())),
@@ -575,7 +582,7 @@ TEST_F(PlanBuilderTest, joinUsingTypeCoercion) {
 
   // Multiple USING columns with mixed match/mismatch.
   {
-    PlanBuilder::Context context;
+    auto context = PlanBuilder::Context::forConnectorlessPlan();
     auto [left, right] = makeBuilders(
         context,
         ROW({"c0", "c1", "c2"}, {INTEGER(), VARCHAR(), REAL()}),
@@ -759,7 +766,7 @@ LogicalPlanNodePtr buildValues(
     const std::vector<std::string>& columns,
     const std::vector<std::vector<std::string>>& rows,
     bool enableCoercions = true) {
-  PlanBuilder::Context context;
+  auto context = PlanBuilder::Context::forConnectorlessPlan();
   if (enableCoercions) {
     context.coercer = &velox::TypeCoercer::defaults();
   }
@@ -832,7 +839,7 @@ namespace {
 // Values with an INTEGER column 'a' and a null literal column, which types as
 // UNKNOWN.
 PlanBuilder makeValuesWithNull(bool enableCoercions = true) {
-  PlanBuilder::Context context;
+  auto context = PlanBuilder::Context::forConnectorlessPlan();
   if (enableCoercions) {
     context.coercer = &velox::TypeCoercer::defaults();
   }
@@ -842,7 +849,7 @@ PlanBuilder makeValuesWithNull(bool enableCoercions = true) {
 }
 
 PlanBuilder makeBooleanValues() {
-  PlanBuilder::Context context;
+  auto context = PlanBuilder::Context::forConnectorlessPlan();
   context.coercer = &velox::TypeCoercer::defaults();
   const std::vector<std::vector<std::string>> rows{{"true"}};
   return PlanBuilder(context).values({"m"}, rows);

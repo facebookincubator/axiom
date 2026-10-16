@@ -26,7 +26,9 @@
 #include "axiom/pyspark/SparkPlanPrinter.h"
 #include "axiom/pyspark/SparkToAxiom.h"
 #include "axiom/pyspark/runners/Runner.h"
+#include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/memory/MemoryPool.h"
+#include "velox/core/QueryCtx.h"
 
 using namespace ::facebook;
 using facebook::axiom::optimizer::PlanAndStats;
@@ -44,6 +46,47 @@ std::vector<facebook::velox::RowVectorPtr> getDummyRowVector(
   return response;
 }
 
+::axiom::collagen::runner::QueryCtxFactory makeQueryCtxFactory(
+    std::shared_ptr<facebook::velox::connector::ConnectorRegistry::Registry>
+        connectorRegistry,
+    std::shared_ptr<facebook::velox::exec::OutputTransportRegistry::Registry>
+        outputTransportRegistry,
+    std::shared_ptr<facebook::velox::exec::ExchangeTransportRegistry::Registry>
+        exchangeTransportRegistry,
+    std::shared_ptr<
+        facebook::velox::memory::CustomMemoryResourceRegistry::Registry>
+        customMemoryResourceRegistry) {
+  return
+      [connectorRegistry = std::move(connectorRegistry),
+       outputTransportRegistry = std::move(outputTransportRegistry),
+       exchangeTransportRegistry = std::move(exchangeTransportRegistry),
+       customMemoryResourceRegistry = std::move(customMemoryResourceRegistry)](
+          folly::Executor* executor,
+          const std::unordered_map<std::string, std::string>& queryConfigs,
+          const std::shared_ptr<facebook::velox::memory::MemoryPool>& pool) {
+        auto queryCtx = facebook::velox::core::QueryCtx::create(
+            executor,
+            facebook::velox::core::QueryConfig{queryConfigs},
+            /*connectorConfigs=*/{},
+            facebook::velox::cache::AsyncDataCache::getInstance(),
+            pool,
+            /*spillExecutor=*/nullptr);
+        queryCtx->setRegistry(
+            facebook::velox::connector::ConnectorRegistry::kRegistryKey,
+            connectorRegistry);
+        queryCtx->setRegistry(
+            facebook::velox::exec::OutputTransportRegistry::kRegistryKey,
+            outputTransportRegistry);
+        queryCtx->setRegistry(
+            facebook::velox::exec::ExchangeTransportRegistry::kRegistryKey,
+            exchangeTransportRegistry);
+        queryCtx->setRegistry(
+            facebook::velox::memory::kCustomMemoryResourceRegistryKey,
+            customMemoryResourceRegistry);
+        return queryCtx;
+      };
+}
+
 } // namespace
 
 namespace axiom::collagen {
@@ -51,26 +94,63 @@ namespace axiom::collagen {
 CollagenService::CollagenService(
     std::string runnerId,
     std::string catalog,
-    std::string schema)
+    std::string schema,
+    std::shared_ptr<facebook::velox::connector::ConnectorRegistry::Registry>
+        connectorRegistry,
+    std::shared_ptr<
+        facebook::axiom::connector::ConnectorMetadataRegistry::Registry>
+        metadataRegistry,
+    std::shared_ptr<const facebook::axiom::optimizer::FunctionRegistry>
+        functionRegistry,
+    std::shared_ptr<facebook::velox::exec::OutputTransportRegistry::Registry>
+        outputTransportRegistry,
+    std::shared_ptr<facebook::velox::exec::ExchangeTransportRegistry::Registry>
+        exchangeTransportRegistry,
+    std::shared_ptr<
+        facebook::velox::memory::CustomMemoryResourceRegistry::Registry>
+        customMemoryResourceRegistry)
     : runnerId_(std::move(runnerId)),
       catalog_(std::move(catalog)),
-      schema_(std::move(schema)) {
+      schema_(std::move(schema)),
+      connectorRegistry_(std::move(connectorRegistry)),
+      metadataRegistry_(std::move(metadataRegistry)),
+      functionRegistry_(std::move(functionRegistry)),
+      outputTransportRegistry_(std::move(outputTransportRegistry)),
+      exchangeTransportRegistry_(std::move(exchangeTransportRegistry)),
+      customMemoryResourceRegistry_(std::move(customMemoryResourceRegistry)) {
+  VELOX_CHECK_NOT_NULL(connectorRegistry_);
+  VELOX_CHECK_NOT_NULL(metadataRegistry_);
+  VELOX_CHECK_NOT_NULL(functionRegistry_);
+  VELOX_CHECK_NOT_NULL(outputTransportRegistry_);
+  VELOX_CHECK_NOT_NULL(exchangeTransportRegistry_);
+  VELOX_CHECK_NOT_NULL(customMemoryResourceRegistry_);
   if (rootPool_->reclaimer() == nullptr) {
     rootPool_->setReclaimer(facebook::velox::memory::MemoryReclaimer::create());
   }
 }
 
+facebook::axiom::connector::ConnectorContextPtr
+CollagenService::makeConnectorContext() {
+  return std::make_shared<facebook::axiom::connector::ConnectorContext>(
+      /*queryId=*/"",
+      /*user=*/"collagen",
+      facebook::axiom::connector::ConnectorProperties{},
+      facebook::axiom::connector::ConnectorContext::noopStatWriterProvider(),
+      metadataRegistry_);
+}
+
 // In Spark Connect, Relation represents any execution plan node.
 PlanAndStats CollagenService::plan(
     const spark::connect::Plan& plan,
-    std::string& logicalPlanStr) {
+    std::string& logicalPlanStr,
+    const facebook::axiom::connector::ConnectorContextPtr& connectorContext) {
   auto startTime = std::chrono::high_resolution_clock::now();
 
   // TODO: just for debugging for now.
   LOG(INFO) << "Spark Connect logical plan:\n" << printSparkPlan(plan);
 
   LOG(INFO) << "Converting to Axiom plan:";
-  SparkToAxiom converter(catalog_, schema_, pool_.get());
+  SparkToAxiom converter(catalog_, schema_, pool_.get(), connectorContext);
   SparkPlanVisitorContext axiomContext;
   converter.visit(plan, axiomContext);
 
@@ -78,8 +158,12 @@ PlanAndStats CollagenService::plan(
   LOG(INFO) << "Axiom logical input:\n" << logicalPlanStr;
 
   // Optimize it into a Velox physical plan.
-  auto veloxPlanAndStats =
-      optimize(converter.planNode(), catalog_, pool_.get());
+  auto veloxPlanAndStats = optimize(
+      converter.planNode(),
+      catalog_,
+      pool_.get(),
+      connectorContext,
+      functionRegistry_);
 
   LOG(INFO) << "Generated Velox physical plan with "
             << veloxPlanAndStats.plan->fragments().size() << " fragments:\n"
@@ -105,9 +189,11 @@ grpc::Status CollagenService::ExecutePlan(
 
   std::string logicalPlanStr;
   PlanAndStats veloxPlanStats;
+  facebook::axiom::connector::ConnectorContextPtr connectorContext;
 
   try {
-    veloxPlanStats = plan(request->plan(), logicalPlanStr);
+    connectorContext = makeConnectorContext();
+    veloxPlanStats = plan(request->plan(), logicalPlanStr, connectorContext);
 
     if (veloxPlanStats.plan == nullptr) {
       return grpc::Status(
@@ -127,6 +213,13 @@ grpc::Status CollagenService::ExecutePlan(
       "Test",
       veloxPlanStats.plan,
       std::move(veloxPlanStats.finishWrite),
+      connectorContext,
+      functionRegistry_,
+      makeQueryCtxFactory(
+          connectorRegistry_,
+          outputTransportRegistry_,
+          exchangeTransportRegistry_,
+          customMemoryResourceRegistry_),
       rootPool_);
   std::vector<velox::RowVectorPtr> results;
 
@@ -173,7 +266,8 @@ grpc::Status CollagenService::AnalyzePlan(
     std::string logicalPlanStr;
     switch (request->analyze_case()) {
       case spark::connect::AnalyzePlanRequest::kExplain:
-        veloxPlanStats = plan(request->explain().plan(), logicalPlanStr);
+        veloxPlanStats = plan(
+            request->explain().plan(), logicalPlanStr, makeConnectorContext());
         break;
 
       default:
