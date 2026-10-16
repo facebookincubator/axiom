@@ -82,10 +82,6 @@ struct DisplayNames {
   /// 'WITH t(a, b) AS ...' or AliasedRelation '... AS sub(a, b)').
   void captureLastNames(const std::vector<IdentifierPtr>& aliases);
 
-  /// Captures 'lastNames' from SELECT items. All items must be SingleColumn
-  /// (the global-aggregate path enforces this).
-  void captureLastNames(const std::vector<SelectItemPtr>& items);
-
   /// Captures 'lastNames' into 'accumulatedNames' as the display names of
   /// 'builder' columns under 'relationAlias', so an enclosing SELECT's star
   /// or COLUMNS expansion can recover them. Must not register new output

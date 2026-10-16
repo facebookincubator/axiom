@@ -161,6 +161,35 @@ SELECT 1 AS x FROM t HAVING sum(a) > 10
 -- An aggregate in ORDER BY forms a global aggregation on its own.
 SELECT 1 AS x FROM t ORDER BY sum(a)
 ----
+-- A star whose REPLACE list turns its columns into aggregates forms a global
+-- aggregation, and each output keeps the name of the column it replaces.
+-- columns
+SELECT * REPLACE (sum(a) AS a, max(b) AS b, min(c) AS c) FROM t
+----
+-- columns
+SELECT * EXCLUDE (b, c) REPLACE (sum(a) AS a) FROM t
+----
+-- Expanded columns in a global aggregation must be aggregates.
+-- error: Cannot resolve column: x
+SELECT count(*) AS x, * FROM (SELECT 1 AS x)
+----
+-- error: Cannot resolve column: x
+SELECT count(*) AS x, COLUMNS('^x$') FROM (SELECT 1 AS x)
+----
+-- Expanded columns in a grouped aggregation must be grouping keys or
+-- aggregates.
+-- error: Cannot resolve column: x
+SELECT y, count(*) AS x, * FROM (VALUES (1, 2)) AS t(x, y) GROUP BY y
+----
+-- error: Cannot resolve column: x
+SELECT y, count(*) AS x, COLUMNS('^x$') FROM (VALUES (1, 2)) AS t(x, y) GROUP BY y
+----
+-- An alias on COLUMNS(...) gives each expanded column the capitalization
+-- written in the query.
+-- columns
+-- duckdb: SELECT sum(a) AS Total FROM t
+SELECT sum(COLUMNS('^a$')) AS Total FROM t
+----
 -- HAVING with no aggregate filters rows like WHERE; DuckDB rejects it.
 -- duckdb: SELECT a FROM t WHERE b > 140
 SELECT a FROM t HAVING b > 140
