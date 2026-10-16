@@ -88,7 +88,7 @@ TEST_P(ValuesTest, complexTypes) {
 }
 
 TEST_P(ValuesTest, expressions) {
-  lp::PlanBuilder::Context context;
+  auto context = lp::PlanBuilder::Context::forConnectorlessPlan();
   context.coercer = &velox::TypeCoercer::defaults();
   auto logicalPlan = lp::PlanBuilder(context)
                          .values(

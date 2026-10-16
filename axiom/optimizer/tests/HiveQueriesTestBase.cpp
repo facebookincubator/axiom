@@ -17,12 +17,12 @@
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include <gflags/gflags.h>
 #include <optional>
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/ConstantExprEvaluator.h"
 #include "axiom/optimizer/tests/TpchDataGenerator.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
@@ -88,12 +88,15 @@ void HiveQueriesTestBase::SetUp() {
   defaultConnectorId_ = velox::exec::test::kHiveConnectorId;
 
   setupHiveConnector();
+}
 
-  prestoParser_ = std::make_unique<::axiom::sql::presto::PrestoParser>(
+::axiom::sql::presto::PrestoParser HiveQueriesTestBase::prestoParser() {
+  return ::axiom::sql::presto::PrestoParser(
       exec::test::kHiveConnectorId,
       std::string(connector::hive::LocalHiveConnectorMetadata::kDefaultSchema),
       std::make_shared<::axiom::sql::presto::ParserSession>(
-          connector::makeTestContext("test"),
+          getConnectorContext(),
+          functionRegistry(),
           connector::makeTestStatWriter(),
           connector::Properties{},
           ::axiom::sql::presto::ParserOptions{}));
@@ -114,9 +117,6 @@ void HiveQueriesTestBase::createTpchTables(
 
 void HiveQueriesTestBase::TearDown() {
   hiveMetadata_ = nullptr;
-  connector::ConnectorMetadataRegistry::global().erase(
-      velox::exec::test::kHiveConnectorId);
-
   test::QueryTestBase::TearDown();
 }
 
@@ -130,16 +130,23 @@ void HiveQueriesTestBase::setupHiveConnector() {
   resetHiveConnector(
       std::make_shared<velox::config::ConfigBase>(std::move(configs)));
 
-  auto hiveConnector = dynamic_cast<velox::connector::hive::HiveConnector*>(
-      velox::connector::getConnector(velox::exec::test::kHiveConnectorId)
-          .get());
+  auto connector = velox::connector::ConnectorRegistry::tryGet(
+      velox::exec::test::kHiveConnectorId);
+  VELOX_CHECK_NOT_NULL(
+      connector,
+      "Connector with ID is not registered: {}",
+      velox::exec::test::kHiveConnectorId);
+  auto* hiveConnector =
+      dynamic_cast<velox::connector::hive::HiveConnector*>(connector.get());
 
   auto metadata = std::make_shared<connector::hive::LocalHiveConnectorMetadata>(
       hiveConnector, velox::memory::memoryManager()->addRootPool());
   hiveMetadata_ = metadata.get();
-
-  connector::ConnectorMetadataRegistry::global().insert(
-      velox::exec::test::kHiveConnectorId, std::move(metadata));
+  connector::ConnectorMetadataRegistry::registerCatalog(
+      *connectorRegistry_,
+      *metadataRegistry_,
+      std::move(connector),
+      std::move(metadata));
 }
 
 RowTypePtr HiveQueriesTestBase::getSchema(std::string_view tableName) {
@@ -173,7 +180,7 @@ void HiveQueriesTestBase::checkResults(
 }
 
 lp::LogicalPlanNodePtr HiveQueriesTestBase::parseInsert(std::string_view sql) {
-  auto statement = prestoParser_->parse(sql);
+  auto statement = prestoParser().parse(sql);
 
   VELOX_CHECK(statement->isInsert());
   return statement->as<::axiom::sql::presto::InsertStatement>()->plan();
@@ -206,8 +213,8 @@ void HiveQueriesTestBase::createEmptyTable(
 void HiveQueriesTestBase::checkTableData(
     const std::string& tableName,
     const std::vector<RowVectorPtr>& expectedData) {
-  lp::PlanBuilder::Context context(
-      exec::test::kHiveConnectorId, kDefaultSchema);
+  auto context =
+      makePlanBuilderContext(exec::test::kHiveConnectorId, kDefaultSchema);
   auto logicalPlan = lp::PlanBuilder(context).tableScan(tableName).build();
 
   checkSameSingleNode(logicalPlan, expectedData);
@@ -250,7 +257,7 @@ std::string HiveQueriesTestBase::localTablePath(std::string_view tableName) {
 }
 
 void HiveQueriesTestBase::runCtas(const std::string& sql) {
-  auto statement = prestoParser_->parse(sql);
+  auto statement = prestoParser().parse(sql);
   VELOX_CHECK(statement->isCreateTableAsSelect());
 
   auto ctasStatement =
@@ -273,8 +280,7 @@ void HiveQueriesTestBase::runCtas(const std::string& sql) {
       /*explain=*/false);
   VELOX_CHECK_NOT_NULL(table);
 
-  connector::SchemaResolver schemaResolver{
-      connector::ConnectorMetadataRegistry::global()};
+  connector::SchemaResolver schemaResolver{getConnectorContext()};
   schemaResolver.setTargetTable(
       ctasStatement->connectorId(), ctasStatement->tableName(), table);
 

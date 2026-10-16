@@ -16,6 +16,7 @@ add_library(collagen_runners Runner.cpp LocalRunner.cpp)
 
 target_link_libraries(
   collagen_runners
+  axiom_optimizer
   axiom_runner_local_runner
   axiom_optimizer_multifragment_plan
   velox_memory

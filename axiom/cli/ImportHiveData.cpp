@@ -32,10 +32,12 @@
 #include <chrono>
 #include <filesystem>
 #include "axiom/cli/Connectors.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/hive/LocalTableBuilder.h"
 #include "axiom/connectors/hive/LocalTableMetadata.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/type/Type.h"
 
@@ -90,7 +92,11 @@ int main(int argc, char** argv) {
   auto pool = memory::memoryManager()->addLeafPool("import");
 
   // Register a Hive connector so LocalTableBuilder can sample for NDV.
-  facebook::axiom::Connectors connectors;
+  auto connectorRegistry = connector::ConnectorRegistry::create();
+  auto metadataRegistry =
+      facebook::axiom::connector::ConnectorMetadataRegistry::create();
+  facebook::axiom::Connectors connectors{
+      *connectorRegistry, std::move(metadataRegistry)};
   auto connector =
       connectors.registerLocalHiveConnector(FLAGS_data_path, FLAGS_data_format);
   auto* hiveConnector =

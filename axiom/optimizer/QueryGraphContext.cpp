@@ -62,11 +62,15 @@ std::string QueryGraphContext::topPlanObjectTypes(size_t top) const {
 
 QueryGraphContext::QueryGraphContext(
     velox::HashStringAllocator& allocator,
-    int32_t maxPlanObjects)
+    int32_t maxPlanObjects,
+    std::shared_ptr<const FunctionRegistry> functionRegistry)
     : allocator_(allocator),
       cache_(allocator_),
-      maxPlanObjects_(maxPlanObjects) {
+      maxPlanObjects_(maxPlanObjects),
+      functionRegistry_(std::move(functionRegistry)) {
   VELOX_USER_CHECK_GE(maxPlanObjects, 1, "max_plan_objects must be >= 1");
+  VELOX_CHECK_NOT_NULL(
+      functionRegistry_, "QueryGraphContext requires a function registry");
 
   auto addName = [&](const char* name) {
     names_.emplace(std::string_view(name, strlen(name)));
@@ -89,6 +93,13 @@ QueryGraphContext::QueryGraphContext(
 QueryGraphContext*& queryCtx() {
   static thread_local QueryGraphContext* context;
   return context;
+}
+
+QueryGraphContext& QueryGraphContext::current() {
+  auto* context = queryCtx();
+  VELOX_CHECK_NOT_NULL(
+      context, "No QueryGraphContext is active on this thread");
+  return *context;
 }
 
 const char* QueryGraphContext::toName(std::string_view str) {
@@ -385,7 +396,7 @@ PathCP toPath(std::span<const Step> steps, bool reverse) {
 }
 
 void QueryGraphContext::populateFunctionNames() {
-  auto* registry = FunctionRegistry::instance();
+  const auto* registry = functionRegistry_.get();
 
   functionNames_.equality = this->toName(registry->equality());
   functionNames_.negation = this->toName(registry->negation());

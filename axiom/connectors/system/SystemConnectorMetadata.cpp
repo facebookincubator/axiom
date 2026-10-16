@@ -25,6 +25,23 @@
 
 namespace facebook::axiom::connector::system {
 
+SystemConnectorMetadata::SystemConnectorMetadata(
+    velox::connector::Connector* connector,
+    std::shared_ptr<const ConnectorMetadataRegistry::Registry> metadataRegistry)
+    : connector_(connector),
+      metadataRegistry_{metadataRegistry},
+      splitManager_(std::make_unique<SystemSplitManager>()) {
+  VELOX_CHECK_NOT_NULL(metadataRegistry);
+}
+
+std::shared_ptr<const ConnectorMetadataRegistry::Registry>
+SystemConnectorMetadata::metadataRegistry() const {
+  auto registry = metadataRegistry_.lock();
+  VELOX_CHECK_NOT_NULL(
+      registry, "System connector metadata registry is unavailable");
+  return registry;
+}
+
 const velox::RowTypePtr& queriesTableSchema() {
   static auto kSchema = velox::ROW({
       {"query_id", velox::VARCHAR()},
@@ -196,7 +213,8 @@ TablePtr SystemConnectorMetadata::findTable(const SchemaTableName& tableName) {
         return it->second;
       }
 
-      auto table = InformationSchema::findTable(tableName, connector_);
+      auto table = InformationSchema::findTable(
+          tableName, connector_, *metadataRegistry());
       if (table != nullptr) {
         tables.emplace(tableName, table);
       }
@@ -211,7 +229,8 @@ std::vector<std::string> SystemConnectorMetadata::listSchemaNames(
     const ConnectorSessionPtr& /*session*/) {
   std::vector<std::string> names{
       std::string(kRuntimeSchema), std::string(kMetadataSchema)};
-  for (const auto& catalog : ConnectorMetadataRegistry::allMetadataIds()) {
+  for (const auto& catalog :
+       ConnectorMetadataRegistry::allMetadataIds(*metadataRegistry())) {
     names.push_back(InformationSchema::schemaName(catalog));
   }
   return names;
@@ -225,8 +244,7 @@ bool SystemConnectorMetadata::schemaExists(
   }
   auto catalog = InformationSchema::catalog(schemaName);
   return catalog.has_value() &&
-      ConnectorMetadataRegistry::tryGet(std::string{catalog.value()}) !=
-      nullptr;
+      metadataRegistry()->find(std::string{catalog.value()}) != nullptr;
 }
 
 std::vector<std::string> SystemConnectorMetadata::listTableNames(

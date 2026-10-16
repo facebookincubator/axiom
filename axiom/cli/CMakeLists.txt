@@ -56,6 +56,7 @@ target_link_libraries(
   axiom_sql_presto_parser
   velox_exec
   velox_exec_test_lib
+  velox_custom_memory_resource_registry
   velox_function_registry
   velox_dwio_common
   velox_dwio_parquet_reader

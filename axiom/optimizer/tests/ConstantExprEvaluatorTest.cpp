@@ -17,6 +17,7 @@
 #include "axiom/optimizer/ConstantExprEvaluator.h"
 #include <gtest/gtest.h>
 #include "axiom/connectors/tests/TestConnectorContext.h"
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/sql/presto/PrestoParser.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
@@ -38,6 +39,7 @@ class ConstantExprEvaluatorTest : public ::testing::Test {
         "default",
         std::make_shared<::axiom::sql::presto::ParserSession>(
             connector::makeTestContext("test"),
+            FunctionRegistry::testingCreate(),
             connector::makeTestStatWriter(),
             connector::Properties{},
             ::axiom::sql::presto::ParserOptions{}));

@@ -353,7 +353,7 @@ TEST_F(ExprEqualityTest, subquery) {
       *std::make_shared<SubqueryExpr>(treeDifferentValues));
 
   // Different node ID.
-  PlanBuilder::Context altCtx;
+  auto altCtx = PlanBuilder::Context::forConnectorlessPlan();
   altCtx.planNodeIdGenerator->next();
   auto treeDifferentId = PlanBuilder(altCtx)
                              .values({"x", "y"}, rows)

@@ -34,10 +34,12 @@ class RunnerSession final : public BaseSession {
  public:
   RunnerSession(
       connector::ConnectorContextPtr context,
+      std::shared_ptr<const optimizer::FunctionRegistry> functionRegistry,
       std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter,
       Properties properties)
       : BaseSession(
             std::move(context),
+            std::move(functionRegistry),
             std::move(statsWriter),
             std::move(properties)) {}
 };

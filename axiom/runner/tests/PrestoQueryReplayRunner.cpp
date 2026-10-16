@@ -17,6 +17,7 @@
 #include "axiom/runner/tests/PrestoQueryReplayRunner.h"
 #include <folly/coro/BlockingWait.h>
 #include "axiom/connectors/tests/TestConnectorContext.h"
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/runner/LocalRunner.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -410,6 +411,7 @@ PrestoQueryReplayRunner::run(
   auto localRunner = std::make_shared<LocalRunner>(
       std::make_shared<RunnerSession>(
           connector::makeTestContext(queryId, /*user=*/"presto-replay"),
+          optimizer::FunctionRegistry::createPresto(),
           connector::makeTestStatWriter(),
           runner::Properties{}),
       std::move(multiFragmentPlan),

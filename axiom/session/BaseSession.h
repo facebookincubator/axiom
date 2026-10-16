@@ -23,6 +23,10 @@
 
 #include "axiom/connectors/ConnectorContext.h"
 
+namespace facebook::axiom::optimizer {
+class FunctionRegistry;
+}
+
 namespace facebook::axiom {
 
 /// Holds what one component is given for one query: the query's context, this
@@ -34,17 +38,21 @@ namespace facebook::axiom {
 ///   metadata->beginWrite(session->context()->sessionFor(connectorId), ...);
 ///
 /// Invariants:
-///   - `context` and `statsWriter` are non-null.
+///   - `context`, `functionRegistry`, and `statsWriter` are non-null.
 class BaseSession {
  public:
   BaseSession(
       connector::ConnectorContextPtr context,
+      std::shared_ptr<const optimizer::FunctionRegistry> functionRegistry,
       std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter,
       connector::Properties properties)
       : context_{std::move(context)},
+        functionRegistry_{std::move(functionRegistry)},
         statsWriter_{std::move(statsWriter)},
         properties_{std::move(properties)} {
     VELOX_CHECK_NOT_NULL(context_, "BaseSession requires a context");
+    VELOX_CHECK_NOT_NULL(
+        functionRegistry_, "BaseSession requires a function registry");
     VELOX_CHECK_NOT_NULL(statsWriter_, "BaseSession requires a writer");
   }
 
@@ -54,6 +62,13 @@ class BaseSession {
   /// the query and with nothing outside it.
   const connector::ConnectorContextPtr& context() const {
     return context_;
+  }
+
+  /// Returns the function semantics shared by every component session of the
+  /// query.
+  const std::shared_ptr<const optimizer::FunctionRegistry>& functionRegistry()
+      const {
+    return functionRegistry_;
   }
 
   /// Returns the query identifier.
@@ -84,6 +99,7 @@ class BaseSession {
 
  private:
   const connector::ConnectorContextPtr context_;
+  const std::shared_ptr<const optimizer::FunctionRegistry> functionRegistry_;
   const std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter_;
   const connector::Properties properties_;
 };

@@ -82,6 +82,8 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
   /// runSetupStatement.
   static std::shared_ptr<runner::LocalRunner> makeLocalRunner(
       const logical_plan::LogicalPlanNodePtr& logicalPlan,
+      connector::ConnectorContextPtr connectorContext,
+      std::shared_ptr<const FunctionRegistry> functionRegistry,
       folly::Executor* executor,
       velox::cache::AsyncDataCache* asyncDataCache,
       const std::shared_ptr<velox::memory::MemoryPool>& rootPool,
@@ -94,6 +96,8 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
   /// optimizer pipeline (axiom/optimizer/v2) instead of v1.
   static std::shared_ptr<runner::LocalRunner> makeLocalRunnerV2(
       const logical_plan::LogicalPlanNodePtr& logicalPlan,
+      connector::ConnectorContextPtr connectorContext,
+      std::shared_ptr<const FunctionRegistry> functionRegistry,
       folly::Executor* executor,
       velox::cache::AsyncDataCache* asyncDataCache,
       const std::shared_ptr<velox::memory::MemoryPool>& rootPool,
@@ -149,6 +153,9 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
 
   std::shared_ptr<connector::TestConnector> connector_;
 
+  // Function semantics shared by every session participating in a query.
+  std::shared_ptr<const FunctionRegistry> functionRegistry_;
+
   // Connector id and default schema used to parse this fixture's queries.
   // Defaults to the in-memory TestConnector; a Hive-backed fixture overrides
   // them so queries resolve against the Hive catalog.
@@ -172,7 +179,9 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
   // execute), routing through the v2 optimizer when useV2_ is set and v1
   // otherwise.
   std::shared_ptr<runner::LocalRunner> makeRunner(
-      const logical_plan::LogicalPlanNodePtr& logicalPlan);
+      const logical_plan::LogicalPlanNodePtr& logicalPlan,
+      connector::ConnectorContextPtr connectorContext,
+      std::shared_ptr<const FunctionRegistry> functionRegistry);
 
   // Memory pool for optimizer allocations.
   std::shared_ptr<velox::memory::MemoryPool> optimizerPool_;

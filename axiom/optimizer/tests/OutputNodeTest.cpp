@@ -32,10 +32,6 @@ class OutputNodeTest : public test::QueryTestBase,
     useV2_ = GetParam();
     QueryTestBase::SetUp();
   }
-
-  lp::PlanBuilder::Context makeContext() const {
-    return lp::PlanBuilder::Context{kTestConnectorId, kDefaultSchema};
-  }
 };
 
 // Verifies the optimizer honors OutputNode entry shapes documented in
@@ -45,7 +41,7 @@ TEST_P(OutputNodeTest, entries) {
 
   auto makePlan = [&](const std::vector<lp::OutputNode::Entry>& entries)
       -> velox::core::PlanNodePtr {
-    auto ctx = makeContext();
+    auto ctx = makePlanBuilderContext();
     auto scan = lp::PlanBuilder(ctx).tableScan("t").planNode();
     auto logicalPlan = std::make_shared<lp::OutputNode>(
         ctx.planNodeIdGenerator->next(), scan, entries);

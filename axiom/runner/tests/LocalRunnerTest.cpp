@@ -30,6 +30,7 @@
 #include <folly/synchronization/Baton.h>
 #include <thread>
 #include "axiom/connectors/tests/TestConnectorContext.h"
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/runner/tests/DistributedPlanBuilder.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
@@ -155,7 +156,7 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
 
   axiom::runner::RunnerSessionPtr makeRunnerSession(std::string_view queryId) {
     // The runner and its connectors record into separate writers.
-    auto context = std::make_shared<axiom::connector::ConnectorContext>(
+    auto context = axiom::connector::ConnectorContext::testingCreate(
         std::string(queryId),
         "test",
         axiom::connector::ConnectorProperties{},
@@ -166,6 +167,7 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
         });
     return std::make_shared<axiom::runner::RunnerSession>(
         std::move(context),
+        axiom::optimizer::FunctionRegistry::createPresto(),
         std::shared_ptr<velox::BaseRuntimeStatWriter>(
             &runnerWriter_, [](auto*) {}),
         axiom::runner::Properties{});

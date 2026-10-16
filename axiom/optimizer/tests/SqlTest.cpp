@@ -20,11 +20,13 @@
 #include <algorithm>
 #include <filesystem>
 #include <optional>
+#include "axiom/connectors/ConnectorContext.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/system/SystemConnectorMetadata.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/optimizer/ConstantExprEvaluator.h"
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/tests/SqlFile.h"
 #include "axiom/optimizer/tests/SqlTestBase.h"
 #include "axiom/optimizer/tests/TestDataPath.h"
@@ -121,19 +123,24 @@ void runSetupStatement(
     const std::string& connectorId,
     const std::string& defaultSchema,
     connector::ConnectorMetadata& metadata,
+    std::shared_ptr<const FunctionRegistry> functionRegistry,
     const std::function<std::shared_ptr<runner::LocalRunner>(
-        const logical_plan::LogicalPlanNodePtr&)>& runnerFactory) {
+        const logical_plan::LogicalPlanNodePtr&,
+        connector::ConnectorContextPtr,
+        std::shared_ptr<const FunctionRegistry>)>& runnerFactory) {
+  auto connectorContext = connector::makeTestContext("test");
   ::axiom::sql::presto::PrestoParser parser(
       connectorId,
       defaultSchema,
       std::make_shared<::axiom::sql::presto::ParserSession>(
-          connector::makeTestContext("test"),
+          connectorContext,
+          functionRegistry,
           connector::makeTestStatWriter(),
           connector::Properties{},
           ::axiom::sql::presto::ParserOptions{}));
   auto stmt = parser.parse(sql);
 
-  auto session = std::make_shared<connector::ConnectorSession>(
+  auto session = connector::ConnectorSession::testingCreate(
       /*queryId=*/"test",
       /*user=*/"test",
       connector::Properties{},
@@ -179,7 +186,8 @@ void runSetupStatement(
     VELOX_USER_FAIL("Unsupported setup statement: {}", sql);
   }
 
-  auto runner = runnerFactory(plan);
+  auto runner = runnerFactory(
+      plan, std::move(connectorContext), std::move(functionRegistry));
   runner->drain([](velox::RowVectorPtr) {});
 }
 
@@ -219,21 +227,27 @@ class SqlTest : public SqlTestBase {
         memory::MemoryReclaimer::create());
     suiteOptimizerPool_ = suiteRootPool_->addLeafChild("optimizer");
     suiteDuckDbRunner_ = std::make_unique<exec::test::DuckDbQueryRunner>();
+    suiteFunctionRegistry_ = FunctionRegistry::createPresto();
 
     // Setup statements install tables; a file's queries are what it tests.
     // Running them single-node keeps a CTAS off the remote-exchange path.
-    auto runnerFactory = [](const logical_plan::LogicalPlanNodePtr& plan) {
-      const auto buildRunner = UseV2 ? makeLocalRunnerV2 : makeLocalRunner;
-      return buildRunner(
-          plan,
-          suiteExecutor_.get(),
-          /*asyncDataCache=*/nullptr,
-          suiteRootPool_,
-          suiteOptimizerPool_,
-          /*numWorkers=*/1,
-          /*numDrivers=*/1,
-          /*syntacticJoinOrder=*/false);
-    };
+    auto runnerFactory =
+        [](const logical_plan::LogicalPlanNodePtr& plan,
+           connector::ConnectorContextPtr connectorContext,
+           std::shared_ptr<const FunctionRegistry> functionRegistry) {
+          const auto buildRunner = UseV2 ? makeLocalRunnerV2 : makeLocalRunner;
+          return buildRunner(
+              plan,
+              std::move(connectorContext),
+              std::move(functionRegistry),
+              suiteExecutor_.get(),
+              /*asyncDataCache=*/nullptr,
+              suiteRootPool_,
+              suiteOptimizerPool_,
+              /*numWorkers=*/1,
+              /*numDrivers=*/1,
+              /*syntacticJoinOrder=*/false);
+        };
 
     connector::ConnectorMetadata* metadata = nullptr;
     if (connectorKind == TestConnectorKind::kLocalHive) {
@@ -257,18 +271,25 @@ class SqlTest : public SqlTestBase {
             std::string(kSystemConnectorId),
             /*queryInfoProvider=*/nullptr,
             /*sessionPropertiesProvider=*/nullptr,
-            velox::PrestoTypes::displayName);
+            velox::PrestoTypes::displayName,
+            connector::ConnectorMetadataRegistry::globalPtr());
     velox::connector::ConnectorRegistry::global().insert(
         std::string(kSystemConnectorId), suiteSystemConnector_);
     connector::ConnectorMetadataRegistry::global().insert(
         std::string(kSystemConnectorId),
         std::make_shared<connector::system::SystemConnectorMetadata>(
-            suiteSystemConnector_.get()));
+            suiteSystemConnector_.get(),
+            connector::ConnectorMetadataRegistry::globalPtr()));
 
     for (const auto& statement : setupStatements) {
       suiteDuckDbRunner_->execute(stripTablePropertiesForDuckDb(statement));
       runSetupStatement(
-          statement, connectorId(), defaultSchema(), *metadata, runnerFactory);
+          statement,
+          connectorId(),
+          defaultSchema(),
+          *metadata,
+          suiteFunctionRegistry_,
+          runnerFactory);
     }
 
     if (pushdownTable.has_value()) {
@@ -359,6 +380,7 @@ class SqlTest : public SqlTestBase {
     suiteOptimizerPool_.reset();
     suiteRootPool_.reset();
     suiteExecutor_.reset();
+    suiteFunctionRegistry_.reset();
     suiteManager_.reset();
   }
 
@@ -377,6 +399,7 @@ class SqlTest : public SqlTestBase {
   }
 
   void SetUp() override {
+    functionRegistry_ = suiteFunctionRegistry_;
     SqlTestBase::SetUp();
     // connector_ is suite-scoped (null in the hive suite, where queries resolve
     // via the connector registry).
@@ -424,6 +447,7 @@ class SqlTest : public SqlTestBase {
   static std::shared_ptr<folly::CPUThreadPoolExecutor> suiteExecutor_;
   static std::shared_ptr<memory::MemoryPool> suiteRootPool_;
   static std::shared_ptr<memory::MemoryPool> suiteOptimizerPool_;
+  static std::shared_ptr<const FunctionRegistry> suiteFunctionRegistry_;
   static std::shared_ptr<connector::TestConnector> suiteConnector_;
   static std::shared_ptr<connector::system::SystemConnector>
       suiteSystemConnector_;
@@ -447,6 +471,10 @@ std::shared_ptr<memory::MemoryPool> SqlTest<Name, UseV2>::suiteRootPool_;
 
 template <FileName Name, bool UseV2>
 std::shared_ptr<memory::MemoryPool> SqlTest<Name, UseV2>::suiteOptimizerPool_;
+
+template <FileName Name, bool UseV2>
+std::shared_ptr<const FunctionRegistry>
+    SqlTest<Name, UseV2>::suiteFunctionRegistry_;
 
 template <FileName Name, bool UseV2>
 std::shared_ptr<connector::TestConnector> SqlTest<Name, UseV2>::suiteConnector_;

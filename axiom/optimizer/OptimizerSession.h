@@ -19,6 +19,7 @@
 #include <string>
 #include <utility>
 
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/session/BaseSession.h"
 
@@ -31,11 +32,13 @@ class OptimizerSession final : public BaseSession {
  public:
   OptimizerSession(
       connector::ConnectorContextPtr context,
+      std::shared_ptr<const FunctionRegistry> functionRegistry,
       std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter,
       connector::Properties properties,
       OptimizerOptions options)
       : BaseSession(
             std::move(context),
+            std::move(functionRegistry),
             std::move(statsWriter),
             std::move(properties)),
         options_{std::move(options)} {}

@@ -39,6 +39,7 @@ if(AXIOM_BUILD_TESTING)
   target_link_libraries(
     axiom_test_connector_test
     axiom_test_connector
+    axiom_optimizer
     velox_common_base
     velox_memory
     velox_connector
@@ -72,6 +73,7 @@ if(AXIOM_BUILD_TESTING)
   target_link_libraries(
     axiom_connectors_tests
     axiom_connectors
+    axiom_optimizer
     axiom_test_connector
     GTest::gtest
     GTest::gtest_main

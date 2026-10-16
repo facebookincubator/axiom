@@ -18,17 +18,52 @@
 
 namespace facebook::axiom::connector {
 
+ConnectorContextPtr ConnectorContext::testingCreate(
+    std::string queryId,
+    std::string user,
+    ConnectorProperties properties,
+    StatWriterProvider statWriterProvider) {
+  return std::make_shared<ConnectorContext>(
+      std::move(queryId),
+      std::move(user),
+      std::move(properties),
+      std::move(statWriterProvider),
+      ConnectorMetadataRegistry::globalPtr());
+}
+
 ConnectorContext::ConnectorContext(
     std::string queryId,
     std::string user,
     ConnectorProperties properties,
-    StatWriterProvider statWriterProvider)
+    StatWriterProvider statWriterProvider,
+    std::shared_ptr<ConnectorMetadataRegistry::Registry> metadataRegistry)
     : queryId_{std::move(queryId)},
       user_{std::move(user)},
       properties_{std::move(properties)},
-      statWriterProvider_{std::move(statWriterProvider)} {
+      statWriterProvider_{std::move(statWriterProvider)},
+      metadataRegistry_{std::move(metadataRegistry)} {
   VELOX_CHECK(
       statWriterProvider_, "ConnectorContext requires a stat writer provider");
+  VELOX_CHECK_NOT_NULL(
+      metadataRegistry_,
+      "ConnectorContext requires a connector metadata registry");
+}
+
+std::shared_ptr<ConnectorMetadata> ConnectorContext::tryMetadata(
+    std::string_view connectorId) const {
+  return metadataRegistry_->find(std::string{connectorId});
+}
+
+std::shared_ptr<ConnectorMetadata> ConnectorContext::metadata(
+    std::string_view connectorId) const {
+  auto metadata = tryMetadata(connectorId);
+  VELOX_CHECK_NOT_NULL(
+      metadata, "ConnectorMetadata not registered: {}", connectorId);
+  return metadata;
+}
+
+std::vector<std::string> ConnectorContext::metadataIds() const {
+  return ConnectorMetadataRegistry::allMetadataIds(*metadataRegistry_);
 }
 
 namespace {
@@ -68,11 +103,13 @@ ConnectorSessionPtr ConnectorContext::sessionFor(std::string_view connectorId) {
     auto statsWriter = statWriterProvider_(connectorId);
     VELOX_CHECK_NOT_NULL(
         statsWriter, "Stat writer provider returned null for {}", connectorId);
+    auto metadata = tryMetadata(connectorId);
 
-    entry->session = std::make_shared<ConnectorSession>(
+    entry->session = ConnectorSession::create(
         queryId_,
         user_,
         propertiesFor(properties_, connectorId),
+        std::move(metadata),
         std::move(statsWriter));
   });
 

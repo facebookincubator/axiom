@@ -217,12 +217,10 @@ folly::F14FastMap<PathCP, lp::ExprPtr> makeNamedRowExplode(
 }
 } // namespace
 
-void registerDfFunctions() {
+void registerDfFunctions(FunctionRegistry& registry) {
   static const auto kMakeRowFromMap = "make_row_from_map";
   static const auto kPaddedMakeRowFromMap = "padded_make_row_from_map";
   static const auto kMakeNamedRow = "make_named_row";
-
-  auto registry = FunctionRegistry::instance();
 
   {
     registerFeatureFuncHook(kMakeRowFromMap, makeRowFromMapHook);
@@ -230,7 +228,7 @@ void registerDfFunctions() {
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->explode = makeRowFromMapExplode;
     metadata->valuePathToArgPath = makeRowFromMapSubfield;
-    registry->registerFunction(kMakeRowFromMap, std::move(metadata));
+    registry.registerFunction(kMakeRowFromMap, std::move(metadata));
   }
 
   {
@@ -239,7 +237,7 @@ void registerDfFunctions() {
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->explode = paddedMakeRowFromMapExplode;
     metadata->valuePathToArgPath = makeRowFromMapSubfield;
-    registry->registerFunction(kPaddedMakeRowFromMap, std::move(metadata));
+    registry.registerFunction(kPaddedMakeRowFromMap, std::move(metadata));
   }
 
   {
@@ -248,7 +246,7 @@ void registerDfFunctions() {
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->valuePathToArgPath = makeNamedRowSubfield;
     metadata->explode = makeNamedRowExplode;
-    registry->registerFunction(kMakeNamedRow, std::move(metadata));
+    registry.registerFunction(kMakeNamedRow, std::move(metadata));
   }
 }
 

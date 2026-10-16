@@ -18,6 +18,7 @@ add_test(axiom_session_test axiom_session_test)
 
 target_link_libraries(
   axiom_session_test
+  axiom_optimizer
   axiom_session
   axiom_test_connector
   velox_common_base

@@ -18,7 +18,6 @@
 
 #include <folly/system/HardwareConcurrency.h>
 #include "axiom/common/SessionConfig.h"
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/file/FileConnector.h"
 #include "axiom/connectors/file/core/FileConnectorMetadata.h"
 #include "axiom/connectors/file/parquet/ParquetFileHandler.h"
@@ -30,7 +29,6 @@
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
@@ -60,14 +58,17 @@ void initializeFileFormats() {
 class SessionConfigPropertiesProvider
     : public connector::system::SessionPropertiesProvider {
  public:
-  explicit SessionConfigPropertiesProvider(const SessionConfig& sessionConfig)
-      : sessionConfig_(sessionConfig) {}
+  explicit SessionConfigPropertiesProvider(
+      std::shared_ptr<const SessionConfig> sessionConfig)
+      : sessionConfig_{std::move(sessionConfig)} {
+    VELOX_CHECK_NOT_NULL(sessionConfig_);
+  }
 
   std::vector<connector::system::SessionPropertyInfo> getSessionProperties()
       const override {
     using velox::config::ConfigPropertyTypeName;
 
-    auto entries = sessionConfig_.all();
+    auto entries = sessionConfig_->all();
     std::vector<connector::system::SessionPropertyInfo> result;
     result.reserve(entries.size());
     for (const auto& entry : entries) {
@@ -84,21 +85,19 @@ class SessionConfigPropertiesProvider
   }
 
  private:
-  const SessionConfig& sessionConfig_;
+  const std::shared_ptr<const SessionConfig> sessionConfig_;
 };
 
 } // namespace
 
-Connectors::Connectors() {
+Connectors::Connectors(
+    velox::connector::ConnectorRegistry::Registry& connectorRegistry,
+    std::shared_ptr<connector::ConnectorMetadataRegistry::Registry>
+        metadataRegistry)
+    : connectorRegistry_{connectorRegistry},
+      metadataRegistry_{std::move(metadataRegistry)} {
+  VELOX_CHECK_NOT_NULL(metadataRegistry_);
   initialize();
-}
-
-Connectors::~Connectors() {
-  for (const auto& connectorId : connectorIds_) {
-    // Unregister metadata first since it may reference the connector.
-    connector::ConnectorMetadataRegistry::global().erase(connectorId);
-    velox::connector::ConnectorRegistry::global().erase(connectorId);
-  }
 }
 
 // static
@@ -116,13 +115,6 @@ void Connectors::initialize() {
   ioExecutor_ = getSharedIoExecutor();
 }
 
-void Connectors::registerConnector(
-    const std::shared_ptr<velox::connector::Connector>& connector) {
-  connectorIds_.push_back(connector->connectorId());
-  velox::connector::ConnectorRegistry::global().insert(
-      connector->connectorId(), connector);
-}
-
 std::shared_ptr<velox::connector::Connector> Connectors::registerTpchConnector(
     const std::string& connectorId) {
   auto emptyConfig = std::make_shared<velox::config::ConfigBase>(
@@ -130,13 +122,14 @@ std::shared_ptr<velox::connector::Connector> Connectors::registerTpchConnector(
 
   velox::connector::tpch::TpchConnectorFactory factory;
   auto connector = factory.newConnector(connectorId, emptyConfig);
-  registerConnector(connector);
 
   auto tpchConnector =
       dynamic_cast<velox::connector::tpch::TpchConnector*>(connector.get());
   VELOX_CHECK_NOT_NULL(tpchConnector);
-  connector::ConnectorMetadataRegistry::global().insert(
-      connector->connectorId(),
+  connector::ConnectorMetadataRegistry::registerCatalog(
+      connectorRegistry_,
+      *metadataRegistry_,
+      connector,
       std::make_shared<connector::tpch::TpchConnectorMetadata>(tpchConnector));
 
   return connector;
@@ -158,13 +151,14 @@ Connectors::registerLocalHiveConnector(
 
   velox::connector::hive::HiveConnectorFactory factory;
   auto connector = factory.newConnector(connectorId, configBase, ioExecutor());
-  registerConnector(connector);
 
   auto hiveConnector =
       dynamic_cast<velox::connector::hive::HiveConnector*>(connector.get());
   VELOX_CHECK_NOT_NULL(hiveConnector);
-  connector::ConnectorMetadataRegistry::global().insert(
-      connector->connectorId(),
+  connector::ConnectorMetadataRegistry::registerCatalog(
+      connectorRegistry_,
+      *metadataRegistry_,
+      connector,
       std::make_shared<connector::hive::LocalHiveConnectorMetadata>(
           hiveConnector,
           rootPool ? std::move(rootPool)
@@ -219,35 +213,40 @@ std::shared_ptr<velox::connector::Connector> Connectors::registerTestConnector(
 
   connector::TestConnectorFactory factory(connectorId.c_str());
   auto connector = factory.newConnector(connectorId, std::move(config));
-  registerConnector(connector);
 
   auto* testConnector =
       dynamic_cast<connector::TestConnector*>(connector.get());
   VELOX_CHECK_NOT_NULL(testConnector);
-  connector::ConnectorMetadataRegistry::global().insert(
-      connector->connectorId(), testConnector->metadata());
+  connector::ConnectorMetadataRegistry::registerCatalog(
+      connectorRegistry_,
+      *metadataRegistry_,
+      connector,
+      testConnector->metadata());
 
   return connector;
 }
 
 void Connectors::registerSystemConnector(
-    const SessionConfig& sessionConfig,
+    std::shared_ptr<const SessionConfig> sessionConfig,
     const std::string& connectorId) {
   sessionPropertiesProvider_ =
-      std::make_unique<SessionConfigPropertiesProvider>(sessionConfig);
+      std::make_shared<SessionConfigPropertiesProvider>(
+          std::move(sessionConfig));
 
   // The CLI speaks Presto SQL, so information_schema spells types the way
   // Presto does.
   auto connector = std::make_shared<connector::system::SystemConnector>(
       connectorId,
       /*queryInfoProvider=*/nullptr,
-      sessionPropertiesProvider_.get(),
-      velox::PrestoTypes::displayName);
-  registerConnector(connector);
-  connector::ConnectorMetadataRegistry::global().insert(
-      connector->connectorId(),
+      sessionPropertiesProvider_,
+      velox::PrestoTypes::displayName,
+      metadataRegistry_);
+  connector::ConnectorMetadataRegistry::registerCatalog(
+      connectorRegistry_,
+      *metadataRegistry_,
+      connector,
       std::make_shared<connector::system::SystemConnectorMetadata>(
-          connector.get()));
+          connector.get(), metadataRegistry_));
 }
 
 void Connectors::registerFileConnector(const std::string& connectorId) {
@@ -255,9 +254,10 @@ void Connectors::registerFileConnector(const std::string& connectorId) {
 
   auto connector =
       std::make_shared<connector::file::FileConnector>(connectorId);
-  registerConnector(connector);
-  connector::ConnectorMetadataRegistry::global().insert(
-      connector->connectorId(),
+  connector::ConnectorMetadataRegistry::registerCatalog(
+      connectorRegistry_,
+      *metadataRegistry_,
+      connector,
       std::make_shared<connector::file::FileConnectorMetadata>(
           connector.get()));
 }

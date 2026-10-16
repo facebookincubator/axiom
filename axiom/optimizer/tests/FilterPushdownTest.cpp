@@ -43,19 +43,16 @@ class FilterPushdownTest : public test::HiveQueriesTestBase,
          velox::tpch::Table::TBL_REGION,
          velox::tpch::Table::TBL_ORDERS});
   }
-
-  lp::PlanBuilder::Context makeContext() const {
-    return lp::PlanBuilder::Context{
-        exec::test::kHiveConnectorId, kDefaultSchema};
-  }
 };
 
 TEST_P(FilterPushdownTest, throughAggregation) {
-  auto logicalPlan = lp::PlanBuilder(makeContext())
-                         .tableScan("orders")
-                         .aggregate({"o_custkey"}, {"sum(o_totalprice) as a0"})
-                         .filter("o_custkey < 100 and a0 > 200.0")
-                         .build();
+  auto logicalPlan =
+      lp::PlanBuilder(
+          makePlanBuilderContext(exec::test::kHiveConnectorId, kDefaultSchema))
+          .tableScan("orders")
+          .aggregate({"o_custkey"}, {"sum(o_totalprice) as a0"})
+          .filter("o_custkey < 100 and a0 > 200.0")
+          .build();
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
@@ -79,13 +76,15 @@ TEST_P(FilterPushdownTest, throughAggregation) {
   // The same split happens when the predicates arrive as separate filters:
   // the one over grouping keys moves down, and the rest are combined above.
   {
-    auto separateFilters = lp::PlanBuilder(makeContext())
-                               .tableScan("nation")
-                               .aggregate({"n_name"}, {"count(1) as cnt"})
-                               .filter("n_name > 'a'")
-                               .filter("cnt > 10")
-                               .filter("length(n_name) < cnt")
-                               .build();
+    auto separateFilters =
+        lp::PlanBuilder(makePlanBuilderContext(
+                            exec::test::kHiveConnectorId, kDefaultSchema))
+            .tableScan("nation")
+            .aggregate({"n_name"}, {"count(1) as cnt"})
+            .filter("n_name > 'a'")
+            .filter("cnt > 10")
+            .filter("length(n_name) < cnt")
+            .build();
 
     auto plan = toSingleNodePlan(separateFilters);
     auto matcher = matchHiveScan("nation", test::gt("n_name", std::string("a")))
@@ -98,10 +97,12 @@ TEST_P(FilterPushdownTest, throughAggregation) {
 }
 
 TEST_P(FilterPushdownTest, redundantCast) {
-  auto logicalPlan = lp::PlanBuilder(makeContext())
-                         .tableScan("nation")
-                         .filter("cast(n_nationkey as bigint) < 10")
-                         .build();
+  auto logicalPlan =
+      lp::PlanBuilder(
+          makePlanBuilderContext(exec::test::kHiveConnectorId, kDefaultSchema))
+          .tableScan("nation")
+          .filter("cast(n_nationkey as bigint) < 10")
+          .build();
 
   auto plan = toSingleNodePlan(logicalPlan);
   auto matcher =
@@ -158,7 +159,8 @@ TEST_P(FilterPushdownTest, throughJoin) {
            {"cardinality(filter(array[n_name], n -> n = r_name)) > 0",
             "cardinality(filter(array[n_name], n -> r_name = n)) > 0"},
        }) {
-    lp::PlanBuilder::Context ctx(exec::test::kHiveConnectorId, kDefaultSchema);
+    auto ctx =
+        makePlanBuilderContext(exec::test::kHiveConnectorId, kDefaultSchema);
     auto logicalPlan =
         lp::PlanBuilder(ctx)
             .from({"nation", "region"})
@@ -183,7 +185,8 @@ TEST_P(FilterPushdownTest, throughJoin) {
   // Filter uses columns from only one sides of the join. Expected to be pushed
   // down below the join.
   {
-    lp::PlanBuilder::Context ctx(exec::test::kHiveConnectorId, kDefaultSchema);
+    auto ctx =
+        makePlanBuilderContext(exec::test::kHiveConnectorId, kDefaultSchema);
     auto logicalPlan =
         lp::PlanBuilder(ctx)
             .from({"nation", "region"})
@@ -203,7 +206,8 @@ TEST_P(FilterPushdownTest, throughJoin) {
   }
 
   {
-    lp::PlanBuilder::Context ctx(exec::test::kHiveConnectorId, kDefaultSchema);
+    auto ctx =
+        makePlanBuilderContext(exec::test::kHiveConnectorId, kDefaultSchema);
     auto logicalPlan =
         lp::PlanBuilder(ctx)
             .from({"nation", "region"})
@@ -226,7 +230,8 @@ TEST_P(FilterPushdownTest, throughJoin) {
 
   // Filter on a join key propagates to the other side via the equivalence.
   {
-    lp::PlanBuilder::Context ctx(exec::test::kHiveConnectorId, kDefaultSchema);
+    auto ctx =
+        makePlanBuilderContext(exec::test::kHiveConnectorId, kDefaultSchema);
     auto logicalPlan =
         lp::PlanBuilder(ctx)
             .from({"nation", "region"})
@@ -252,10 +257,12 @@ TEST_P(FilterPushdownTest, throughJoin) {
 
 // Duplicate literals in an IN list should be deduplicated.
 TEST_P(FilterPushdownTest, inListWithDuplicates) {
-  auto logicalPlan = lp::PlanBuilder(makeContext())
-                         .tableScan("nation")
-                         .filter("n_nationkey in (5, 5)")
-                         .build();
+  auto logicalPlan =
+      lp::PlanBuilder(
+          makePlanBuilderContext(exec::test::kHiveConnectorId, kDefaultSchema))
+          .tableScan("nation")
+          .filter("n_nationkey in (5, 5)")
+          .build();
 
   auto plan = toSingleNodePlan(logicalPlan);
   auto matcher =
@@ -269,12 +276,14 @@ TEST_P(FilterPushdownTest, inListWithDuplicates) {
 // factors does not crash. E.g. A OR (A AND B): the first disjunct is fully
 // subsumed, leaving an empty residual. The result should be just A.
 TEST_P(FilterPushdownTest, orWithSubsumedDisjunct) {
-  auto logicalPlan = lp::PlanBuilder(makeContext())
-                         .tableScan("nation")
-                         .filter(
-                             "(n_regionkey = 1) OR "
-                             "(n_regionkey = 1 AND n_name like 'A%')")
-                         .build();
+  auto logicalPlan =
+      lp::PlanBuilder(
+          makePlanBuilderContext(exec::test::kHiveConnectorId, kDefaultSchema))
+          .tableScan("nation")
+          .filter(
+              "(n_regionkey = 1) OR "
+              "(n_regionkey = 1 AND n_name like 'A%')")
+          .build();
 
   auto plan = toSingleNodePlan(logicalPlan);
   auto matcher =
@@ -287,7 +296,8 @@ TEST_P(FilterPushdownTest, orWithSubsumedDisjunct) {
 // Verify that multi-table OR filter with per-table extraction preserves the
 // cross-combination filter.
 TEST_P(FilterPushdownTest, multiTableOrFilter) {
-  lp::PlanBuilder::Context ctx(exec::test::kHiveConnectorId, kDefaultSchema);
+  auto ctx =
+      makePlanBuilderContext(exec::test::kHiveConnectorId, kDefaultSchema);
   auto logicalPlan = lp::PlanBuilder(ctx)
                          .from({"nation", "region"})
                          .filter(

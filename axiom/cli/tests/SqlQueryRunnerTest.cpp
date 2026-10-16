@@ -113,6 +113,67 @@ class SqlQueryRunnerTest : public SqlQueryRunnerTestBase {
   }
 };
 
+TEST_F(SqlQueryRunnerTest, independentCatalogs) {
+  testConnector_->addTable("engine_data", ROW({"value"}, {BIGINT()}));
+  testConnector_->appendData(
+      "engine_data", makeRowVector({makeFlatVector<int64_t>({11})}));
+
+  auto secondTableRoot = facebook::velox::memory::memoryManager()->addRootPool(
+      "sql_runner_second_catalog");
+  std::shared_ptr<facebook::axiom::connector::TestConnector> secondConnector;
+  auto secondRunner = makeRunner([&](facebook::axiom::Connectors&,
+                                     auto& connectorRegistry,
+                                     auto& metadataRegistry) {
+    secondConnector =
+        std::make_shared<facebook::axiom::connector::TestConnector>(
+            "test", /*config=*/nullptr, secondTableRoot);
+    secondConnector->addTable("engine_data", ROW({"value"}, {BIGINT()}));
+    secondConnector->appendData(
+        "engine_data", makeRowVector({makeFlatVector<int64_t>({22})}));
+    facebook::axiom::connector::ConnectorMetadataRegistry::registerCatalog(
+        connectorRegistry,
+        metadataRegistry,
+        secondConnector,
+        secondConnector->metadata());
+    return std::make_pair(secondConnector->connectorId(), kDefaultSchema);
+  });
+
+  {
+    const auto firstResult = runner_->run("SELECT value FROM engine_data", {});
+    const auto secondResult =
+        secondRunner->run("SELECT value FROM engine_data", {});
+    test::assertEqualVectors(
+        firstResult.results.at(0),
+        makeRowVector({makeFlatVector<int64_t>({11})}));
+    test::assertEqualVectors(
+        secondResult.results.at(0),
+        makeRowVector({makeFlatVector<int64_t>({22})}));
+  }
+
+  runner_.reset();
+  const auto survivingResult =
+      secondRunner->run("SELECT value FROM engine_data", {});
+  test::assertEqualVectors(
+      survivingResult.results.at(0),
+      makeRowVector({makeFlatVector<int64_t>({22})}));
+}
+
+TEST_F(SqlQueryRunnerTest, metadataCatalog) {
+  std::shared_ptr<facebook::axiom::connector::TestConnector> metadataOwner;
+  auto runner = makeRunner([&](facebook::axiom::Connectors& connectors,
+                               auto&,
+                               auto& metadataRegistry) {
+    auto connector = connectors.registerTestConnector("test");
+    metadataOwner = std::make_shared<facebook::axiom::connector::TestConnector>(
+        "metadata_only");
+    metadataRegistry.insert("metadata_only", metadataOwner->metadata());
+    return std::make_pair(connector->connectorId(), kDefaultSchema);
+  });
+
+  const auto context = runner->createConnectorContext("metadata-query");
+  EXPECT_EQ(context->metadata("metadata_only"), metadataOwner->metadata());
+}
+
 TEST_F(SqlQueryRunnerTest, runSingleStatement) {
   {
     const auto result = run("SELECT 1");
@@ -1400,9 +1461,7 @@ TEST_F(SqlQueryRunnerTest, connectorProperties) {
 
 TEST_F(SqlQueryRunnerTest, addColumn) {
   auto findTable = [&]() {
-    auto metadata = facebook::axiom::connector::ConnectorMetadataRegistry::get(
-        testConnector_->connectorId());
-    return metadata->findTable({"default", "t"});
+    return testConnector_->metadata()->findTable({"default", "t"});
   };
 
   // Basic add followed by schema verification.

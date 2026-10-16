@@ -31,11 +31,14 @@ class ParserSession final : public facebook::axiom::BaseSession {
  public:
   ParserSession(
       facebook::axiom::connector::ConnectorContextPtr context,
+      std::shared_ptr<const facebook::axiom::optimizer::FunctionRegistry>
+          functionRegistry,
       std::shared_ptr<facebook::velox::BaseRuntimeStatWriter> statsWriter,
       facebook::axiom::connector::Properties properties,
       ParserOptions options)
       : BaseSession(
             std::move(context),
+            std::move(functionRegistry),
             std::move(statsWriter),
             std::move(properties)),
         options_{std::move(options)} {}

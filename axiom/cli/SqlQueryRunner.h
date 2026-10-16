@@ -24,10 +24,14 @@
 #include <chrono>
 #include <exception>
 #include <functional>
+#include <memory>
 #include <vector>
+#include "axiom/cli/Connectors.h"
 #include "axiom/common/ConfigRegistry.h"
 #include "axiom/common/SessionConfig.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/optimizer/DerivedTable.h"
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/ToVelox.h"
 #include "axiom/runner/LocalRunner.h"
@@ -35,6 +39,10 @@
 #include "axiom/runner/QueryProgress.h"
 #include "axiom/sql/presto/SqlStatement.h"
 #include "velox/common/file/TokenProvider.h"
+#include "velox/common/memory/CustomMemoryResourceRegistry.h"
+#include "velox/connectors/ConnectorRegistry.h"
+#include "velox/exec/ExchangeTransportRegistry.h"
+#include "velox/exec/OutputTransportRegistry.h"
 
 namespace axiom::sql {
 
@@ -181,9 +189,24 @@ using QueryStartCallback = std::function<void(const QueryStartInfo&)>;
 /// Invoked when a query completes, whether it succeeded or failed.
 using QueryCompletionCallback = std::function<void(const QueryCompletionInfo&)>;
 
-/// Executes SQL queries.
+/// Executes SQL queries using catalogs and optimizer functions owned by this
+/// runner.
 class SqlQueryRunner {
  public:
+  /// Registers catalogs before the runner builds its session configuration.
+  /// Receives connector-specific helpers and the runner-owned connector and
+  /// metadata registries.
+  using ConnectorInitializer =
+      std::function<std::pair<std::string, std::string>(
+          facebook::axiom::Connectors&,
+          facebook::velox::connector::ConnectorRegistry::Registry&,
+          facebook::axiom::connector::ConnectorMetadataRegistry::Registry&)>;
+
+  /// Registers catalogs that require the completed session configuration.
+  using SessionConnectorInitializer = std::function<void(
+      facebook::axiom::Connectors&,
+      std::shared_ptr<const facebook::axiom::SessionConfig>)>;
+
   /// Prefix for optimizer session properties (e.g., "optimizer.sample_joins").
   static constexpr const char* kOptimizerPrefix = "optimizer";
 
@@ -210,16 +233,9 @@ class SqlQueryRunner {
   explicit SqlQueryRunner(
       std::string user,
       folly::FunctionScheduler* progressScheduler = nullptr,
-      bool useOptimizerV2 = true)
-      : executor_{std::make_shared<folly::CPUThreadPoolExecutor>(
-            folly::available_concurrency() * 2)},
-        user_{std::move(user)},
-        useOptimizerV2_{useOptimizerV2},
-        progressScheduler_{progressScheduler} {
-    VELOX_USER_CHECK(!user_.empty(), "SqlQueryRunner user must be non-empty");
-  }
+      bool useOptimizerV2 = true);
 
-  virtual ~SqlQueryRunner() = default;
+  virtual ~SqlQueryRunner();
 
   /// Identity of the user running queries. Used as the table owner in DDL and
   /// for the SQL `CURRENT_USER` function.
@@ -237,10 +253,11 @@ class SqlQueryRunner {
   /// Initializes the runner with connectors, an optional permission check, an
   /// optional logical plan check that rejects plans the deployment cannot
   /// execute, and a query ID generator (defaults to QueryIdGenerator if not
-  /// provided). Call once before running queries.
+  /// provided). `initializeSessionConnectors`, when provided, runs after the
+  /// session config is built. Call once before running queries.
   void initialize(
-      const std::function<std::pair<std::string, std::string>()>&
-          initializeConnectors,
+      const ConnectorInitializer& initializeConnectors,
+      const SessionConnectorInitializer& initializeSessionConnectors = {},
       PermissionCheck permissionCheck = {},
       LogicalPlanCheck logicalPlanCheck = {},
       std::function<std::string()> queryIdGenerator = {});
@@ -497,6 +514,10 @@ class SqlQueryRunner {
     return *sessionConfig_;
   }
 
+  /// Creates the query-owned connector context for `queryId`.
+  facebook::axiom::connector::ConnectorContextPtr createConnectorContext(
+      std::string_view queryId) const;
+
   facebook::axiom::connector::TablePtr createTable(
       const facebook::axiom::connector::ConnectorContextPtr& context,
       const presto::CreateTableStatement& statement,
@@ -540,6 +561,36 @@ class SqlQueryRunner {
     return defaultSchema_;
   }
 
+ protected:
+  // Constructs the catalog registrar over this runner's owned registries.
+  using ConnectorsFactory =
+      std::function<std::unique_ptr<facebook::axiom::Connectors>(
+          facebook::velox::connector::ConnectorRegistry::Registry&,
+          std::shared_ptr<facebook::axiom::connector::
+                              ConnectorMetadataRegistry::Registry>)>;
+
+  // Constructor for subclasses that install a specialized catalog registrar.
+  SqlQueryRunner(
+      std::string user,
+      folly::FunctionScheduler* progressScheduler,
+      bool useOptimizerV2,
+      const ConnectorsFactory& connectorsFactory);
+
+  // Creates a Velox query context carrying this runner's registries.
+  std::shared_ptr<facebook::velox::core::QueryCtx> newQuery(
+      const RunOptions& options);
+
+  // Returns the optimizer functions owned by this runner.
+  std::shared_ptr<const facebook::axiom::optimizer::FunctionRegistry>
+  functionRegistry() const {
+    return functionRegistry_;
+  }
+
+  // Returns the executor retained by the most recent newQuery() call.
+  const std::shared_ptr<folly::CPUThreadPoolExecutor>& queryExecutor() const {
+    return executor_;
+  }
+
  private:
   // Checks permissions for the query via the configured PermissionCheck
   // callback. Returns a TokenProvider for authenticated file system access.
@@ -564,12 +615,9 @@ class SqlQueryRunner {
       const presto::CreateTableAsSelectStatement& ctas,
       bool explain);
 
-  std::shared_ptr<facebook::velox::core::QueryCtx> newQuery(
-      const RunOptions& options);
-
   // Builds the context for 'queryId' from the current session config's
   // connector properties, and the writer provider the caller supplied.
-  facebook::axiom::connector::ConnectorContextPtr makeConnectorContext(
+  facebook::axiom::connector::ConnectorContextPtr createConnectorContext(
       std::string_view queryId,
       const RunOptions& options) const;
 
@@ -759,10 +807,33 @@ class SqlQueryRunner {
   const std::string user_;
   std::atomic<int32_t> queryCounter_{0};
   const bool useOptimizerV2_{true};
-
   // Progress-polling scheduler (see constructor). Started idempotently before
   // each progress-reporting query.
   folly::FunctionScheduler* const progressScheduler_;
+
+  // Own this runner's catalogs, optimizer semantics, and execution resources.
+  const std::shared_ptr<facebook::velox::connector::ConnectorRegistry::Registry>
+      connectorRegistry_;
+  const std::shared_ptr<
+      facebook::axiom::connector::ConnectorMetadataRegistry::Registry>
+      metadataRegistry_;
+  const std::shared_ptr<facebook::axiom::optimizer::FunctionRegistry>
+      functionRegistry_;
+  const std::shared_ptr<
+      facebook::velox::exec::OutputTransportRegistry::Registry>
+      outputTransportRegistry_;
+  const std::shared_ptr<
+      facebook::velox::exec::ExchangeTransportRegistry::Registry>
+      exchangeTransportRegistry_;
+  const std::shared_ptr<
+      facebook::velox::memory::CustomMemoryResourceRegistry::Registry>
+      customMemoryResourceRegistry_;
+
+  // Creates the catalog registrar at the start of each initialization attempt.
+  const ConnectorsFactory connectorsFactory_;
+
+  // Owns connector-side initialization and configuration state.
+  std::unique_ptr<facebook::axiom::Connectors> connectors_;
 };
 
 } // namespace axiom::sql
