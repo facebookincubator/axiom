@@ -27,6 +27,7 @@ target_link_libraries(
   collagen_converter
   collagen_spark_velox_converter
   collagen_proto
+  axiom_connectors
   axiom_logical_plan
   axiom_test_connector
   velox_connector_registry
@@ -38,3 +39,29 @@ target_link_libraries(
 )
 
 add_test(NAME collagen_spark_velox_converter_test COMMAND collagen_spark_velox_converter_test)
+
+add_executable(
+  collagen_registry_ownership_test
+  CollagenRegistryOwnershipTest.cpp
+)
+
+target_link_libraries(
+  collagen_registry_ownership_test
+  collagen_service
+  collagen_converter
+  collagen_runners
+  axiom_optimizer
+  axiom_test_connector
+  velox_aggregates
+  velox_connector_registry
+  velox_custom_memory_resource_registry
+  velox_exec_test_lib
+  velox_functions_prestosql
+  velox_memory
+  velox_vector_test_lib
+  Arrow::arrow
+  GTest::gtest
+  GTest::gtest_main
+)
+
+add_test(NAME collagen_registry_ownership_test COMMAND collagen_registry_ownership_test)

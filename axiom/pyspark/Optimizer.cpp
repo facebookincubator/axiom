@@ -18,8 +18,6 @@
 #include "axiom/optimizer/OptimizerOptions.h"
 
 #include <folly/ScopeGuard.h>
-#include "axiom/connectors/ConnectorMetadata.h"
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/FunctionRegistry.h"
@@ -98,10 +96,13 @@ facebook::axiom::connector::TablePtr createTable(
 facebook::axiom::optimizer::PlanAndStats optimize(
     const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
     const std::string& connectorId,
-    velox::memory::MemoryPool* pool) {
+    velox::memory::MemoryPool* pool,
+    const facebook::axiom::connector::ConnectorContextPtr& connectorContext,
+    const std::shared_ptr<const facebook::axiom::optimizer::FunctionRegistry>&
+        functionRegistry) {
   facebook::axiom::optimizer::OptimizerOptions optimizerOptions;
-  const auto& functionRegistry =
-      facebook::axiom::optimizer::FunctionRegistry::testingCreate();
+  VELOX_CHECK_NOT_NULL(connectorContext);
+  VELOX_CHECK_NOT_NULL(functionRegistry);
 
   // Set up thread local structures.
   auto allocator = std::make_unique<velox::HashStringAllocator>(pool);
@@ -114,16 +115,6 @@ facebook::axiom::optimizer::PlanAndStats optimize(
   };
 
   auto queryCtx = velox::core::QueryCtx::create();
-  auto connectorContext =
-      facebook::axiom::connector::ConnectorContext::testingCreate(
-          queryCtx->queryId(),
-          /*user=*/"pyspark-optimizer",
-          facebook::axiom::connector::ConnectorProperties{},
-          facebook::axiom::connector::ConnectorContext::
-              noopStatWriterProvider());
-
-  // Fetch connector and set up schema resolver.
-  auto connector = velox::connector::getConnector(connectorId);
   auto schemaResolver =
       std::make_shared<facebook::axiom::connector::SchemaResolver>(
           connectorContext);

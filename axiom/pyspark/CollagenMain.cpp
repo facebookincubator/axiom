@@ -20,11 +20,9 @@
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
-#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
-#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/pyspark/runners/LocalRunner.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/HiveConnector.h"
@@ -34,6 +32,8 @@
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
+#include "velox/exec/InMemoryExchangeClient.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -65,10 +65,18 @@ CollagenMain::CollagenMain(
     : runnerId_(std::move(runnerId)),
       catalog_(std::move(catalog)),
       schema_(std::move(schema)),
-      port_(port) {}
+      port_(port) {
+  outputTransportRegistry_->insert(
+      std::string{facebook::velox::core::TransportKind::kInMemory},
+      facebook::velox::exec::DefaultOutputBufferManager::
+          makeDefaultTransportEntry());
+  exchangeTransportRegistry_->insert(
+      std::string{facebook::velox::core::TransportKind::kInMemory},
+      facebook::velox::exec::InMemoryExchangeClient::
+          makeDefaultTransportEntry());
+}
 
 CollagenMain::~CollagenMain() {
-  facebook::axiom::connector::ConnectorMetadata::unregisterMetadata(catalog_);
   facebook::velox::connector::unregisterConnector(catalog_);
 }
 
@@ -84,7 +92,16 @@ void CollagenMain::init() {
   registerFunctions();
 
   std::string serverAddress(fmt::format("0.0.0.0:{}", port_));
-  service_ = std::make_unique<CollagenService>(runnerId_, catalog_, schema_);
+  service_ = std::make_unique<CollagenService>(
+      runnerId_,
+      catalog_,
+      schema_,
+      connectorRegistry_,
+      metadataRegistry_,
+      functionRegistry_,
+      outputTransportRegistry_,
+      exchangeTransportRegistry_,
+      customMemoryResourceRegistry_);
 
   grpc::ServerBuilder builder;
   builder.AddListeningPort(serverAddress, grpc::InsecureServerCredentials());
@@ -140,9 +157,7 @@ void CollagenMain::registerTestConnector() {
       "feature_table",
       facebook::velox::ROW({"primary_rid"}, {facebook::velox::BIGINT()}));
 
-  facebook::velox::connector::registerConnector(connector);
-  facebook::axiom::connector::ConnectorMetadata::registerMetadata(
-      catalog_, connector->metadata());
+  registerCatalog(connector, connector->metadata());
 }
 
 void CollagenMain::registerTpchConnector() {
@@ -151,10 +166,8 @@ void CollagenMain::registerTpchConnector() {
 
   facebook::velox::connector::tpch::TpchConnectorFactory factory;
   auto tpchConnector = factory.newConnector(catalog_, emptyConfig);
-  facebook::velox::connector::registerConnector(tpchConnector);
-
-  facebook::axiom::connector::ConnectorMetadata::registerMetadata(
-      catalog_,
+  registerCatalog(
+      tpchConnector,
       std::make_shared<facebook::axiom::connector::tpch::TpchConnectorMetadata>(
           dynamic_cast<facebook::velox::connector::tpch::TpchConnector*>(
               tpchConnector.get())));
@@ -176,15 +189,23 @@ void CollagenMain::registerLocalHiveConnector() {
 
   facebook::velox::connector::hive::HiveConnectorFactory factory;
   auto hiveConnector = factory.newConnector(catalog_, config);
-  facebook::velox::connector::registerConnector(hiveConnector);
-
-  facebook::axiom::connector::ConnectorMetadata::registerMetadata(
-      catalog_,
+  registerCatalog(
+      hiveConnector,
       std::make_shared<
           facebook::axiom::connector::hive::LocalHiveConnectorMetadata>(
           dynamic_cast<facebook::velox::connector::hive::HiveConnector*>(
               hiveConnector.get()),
           facebook::velox::memory::memoryManager()->addRootPool()));
+}
+
+void CollagenMain::registerCatalog(
+    std::shared_ptr<facebook::velox::connector::Connector> connector,
+    std::shared_ptr<facebook::axiom::connector::ConnectorMetadata> metadata) {
+  facebook::axiom::connector::ConnectorMetadataRegistry::registerCatalog(
+      *connectorRegistry_,
+      *metadataRegistry_,
+      std::move(connector),
+      std::move(metadata));
 }
 
 void CollagenMain::registerConnector() {

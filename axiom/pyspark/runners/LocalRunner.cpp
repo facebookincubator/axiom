@@ -21,7 +21,6 @@
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
-#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/pyspark/Exception.h"
 #include "axiom/pyspark/runners/Runner.h"
 #include "axiom/runner/LocalRunner.h"
@@ -48,12 +47,20 @@ class LocalRunner : public Runner {
       const std::string& runId,
       ::facebook::axiom::optimizer::MultiFragmentPlanPtr plan,
       ::facebook::axiom::optimizer::FinishWrite finishWrite,
+      ::facebook::axiom::connector::ConnectorContextPtr connectorContext,
+      std::shared_ptr<const ::facebook::axiom::optimizer::FunctionRegistry>
+          functionRegistry,
+      QueryCtxFactory queryCtxFactory,
       std::shared_ptr<::facebook::velox::memory::MemoryPool> pool)
       : Runner(
             runId,
             std::move(plan),
             std::move(finishWrite),
-            std::move(pool)) {
+            std::move(connectorContext),
+            std::move(functionRegistry),
+            std::move(pool)),
+        queryCtxFactory_(std::move(queryCtxFactory)) {
+    COLLAGEN_CHECK(queryCtxFactory_, "Query context factory cannot be null");
     aggregatePool_ = rootPool_->addAggregateChild("TestRunner");
     COLLAGEN_CHECK_NOT_NULL(aggregatePool_, "Failed to create aggregate pool");
 
@@ -68,6 +75,7 @@ class LocalRunner : public Runner {
       override;
 
  private:
+  const QueryCtxFactory queryCtxFactory_;
   std::shared_ptr<::facebook::velox::memory::MemoryPool> aggregatePool_;
   std::shared_ptr<::facebook::velox::memory::MemoryPool> leafPool_;
 };
@@ -76,25 +84,16 @@ std::vector<velox::RowVectorPtr> LocalRunner::execute(
     const std::unordered_map<std::string, std::string>& queryConfigs) {
   std::vector<velox::RowVectorPtr> results;
 
-  auto queryCtx = velox::core::QueryCtx::create(
-      getCPUExecutor(),
-      velox::core::QueryConfig{queryConfigs},
-      {}, // Connector configs
-      velox::cache::AsyncDataCache::getInstance(),
-      aggregatePool_);
+  auto queryCtx =
+      queryCtxFactory_(getCPUExecutor(), queryConfigs, aggregatePool_);
 
   auto splitSourceFactory =
       std::make_shared<facebook::axiom::runner::ConnectorSplitSourceFactory>();
 
   auto runner = std::make_shared<facebook::axiom::runner::LocalRunner>(
       std::make_shared<facebook::axiom::runner::RunnerSession>(
-          facebook::axiom::connector::ConnectorContext::testingCreate(
-              queryCtx->queryId(),
-              /*user=*/"pyspark-runner",
-              facebook::axiom::connector::ConnectorProperties{},
-              facebook::axiom::connector::ConnectorContext::
-                  noopStatWriterProvider()),
-          facebook::axiom::optimizer::FunctionRegistry::testingCreate(),
+          connectorContext_,
+          functionRegistry_,
           std::make_shared<velox::NoopRuntimeStatWriter>(),
           facebook::axiom::runner::Properties{}),
       plan_,
@@ -116,9 +115,19 @@ void registerLocalRunnerFactory(const std::string& runnerId) {
       [](const std::string& runId,
          ::facebook::axiom::optimizer::MultiFragmentPlanPtr plan,
          ::facebook::axiom::optimizer::FinishWrite finishWrite,
+         ::facebook::axiom::connector::ConnectorContextPtr connectorContext,
+         std::shared_ptr<const ::facebook::axiom::optimizer::FunctionRegistry>
+             functionRegistry,
+         QueryCtxFactory queryCtxFactory,
          std::shared_ptr<::facebook::velox::memory::MemoryPool> pool) {
         return std::make_unique<LocalRunner>(
-            runId, std::move(plan), std::move(finishWrite), std::move(pool));
+            runId,
+            std::move(plan),
+            std::move(finishWrite),
+            std::move(connectorContext),
+            std::move(functionRegistry),
+            std::move(queryCtxFactory),
+            std::move(pool));
       });
 }
 

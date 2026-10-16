@@ -16,7 +16,9 @@
 
 #pragma once
 
+#include "axiom/connectors/ConnectorContext.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/ToVelox.h"
 #include "velox/common/memory/Memory.h"
 
@@ -26,11 +28,16 @@ namespace axiom::collagen {
 /// plan fragments using Axiom (axiom/optimizer).
 ///
 /// @param logicalPlan The input logical plan.
-/// @param connectorId Id of the connector to be used to resolve metadata.
+/// @param connectorId Catalog that receives a CREATE TABLE result.
 /// @param pool Memory pool to be used for allocating structures required by the
 /// query optimizer.
+/// @param connectorContext Metadata and connector sessions for this query.
+/// @param functionRegistry Function signatures used by this server.
 ::facebook::axiom::optimizer::PlanAndStats optimize(
     const ::facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
     const std::string& connectorId,
-    ::facebook::velox::memory::MemoryPool* pool);
+    ::facebook::velox::memory::MemoryPool* pool,
+    const ::facebook::axiom::connector::ConnectorContextPtr& connectorContext,
+    const std::shared_ptr<const ::facebook::axiom::optimizer::FunctionRegistry>&
+        functionRegistry);
 } // namespace axiom::collagen

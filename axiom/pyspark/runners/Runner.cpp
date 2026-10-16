@@ -31,13 +31,22 @@ Runner::Runner(
     const std::string& runId,
     ::facebook::axiom::optimizer::MultiFragmentPlanPtr plan,
     ::facebook::axiom::optimizer::FinishWrite finishWrite,
+    ::facebook::axiom::connector::ConnectorContextPtr connectorContext,
+    std::shared_ptr<const ::facebook::axiom::optimizer::FunctionRegistry>
+        functionRegistry,
     std::shared_ptr<::facebook::velox::memory::MemoryPool> pool)
     : runId_(runId),
       plan_(std::move(plan)),
       finishWrite_(std::move(finishWrite)),
+      connectorContext_(std::move(connectorContext)),
+      functionRegistry_(std::move(functionRegistry)),
       rootPool_(std::move(pool)) {
   COLLAGEN_CHECK_NOT_NULL(rootPool_, "Memory pool cannot be null");
   COLLAGEN_CHECK_NOT_NULL(plan_, "Plan cannot be null");
+  COLLAGEN_CHECK_NOT_NULL(
+      connectorContext_, "Connector context cannot be null");
+  COLLAGEN_CHECK_NOT_NULL(
+      functionRegistry_, "Function registry cannot be null");
 }
 
 void registerRunnerFactory(const std::string runnerId, TRunnerFactory factory) {
@@ -51,6 +60,10 @@ std::unique_ptr<Runner> buildRunner(
     const std::string& runId,
     ::facebook::axiom::optimizer::MultiFragmentPlanPtr plan,
     ::facebook::axiom::optimizer::FinishWrite finishWrite,
+    ::facebook::axiom::connector::ConnectorContextPtr connectorContext,
+    std::shared_ptr<const ::facebook::axiom::optimizer::FunctionRegistry>
+        functionRegistry,
+    QueryCtxFactory queryCtxFactory,
     std::shared_ptr<::facebook::velox::memory::MemoryPool> pool) {
   auto it = runnerFactories().find(runnerId);
   VELOX_CHECK(
@@ -58,7 +71,13 @@ std::unique_ptr<Runner> buildRunner(
       "RunnerFactory with name '{}' not registered.",
       runnerId);
   return it->second(
-      runId, std::move(plan), std::move(finishWrite), std::move(pool));
+      runId,
+      std::move(plan),
+      std::move(finishWrite),
+      std::move(connectorContext),
+      std::move(functionRegistry),
+      std::move(queryCtxFactory),
+      std::move(pool));
 }
 
 } // namespace axiom::collagen::runner
