@@ -891,7 +891,7 @@ class Decorrelator : public NodeRewriter<> {
   // `bool_or(source)` over the whole partition, reading true when any row of
   // the partition has it.
   WindowFunction boolOrWindowFunction(ColumnCP source) {
-    const auto& boolOrName = FunctionRegistry::instance()->boolOr();
+    const auto& boolOrName = queryCtx()->functionRegistry().boolOr();
     VELOX_USER_CHECK(
         boolOrName.has_value(),
         "Decorrelate requires bool_or registered via "
@@ -2620,7 +2620,7 @@ class Decorrelator : public NodeRewriter<> {
       bool coalesceEmptyInput) {
     std::vector<AggregateWrap> wraps;
     wraps.reserve(aggregate->aggregates().size());
-    const auto* registry = FunctionRegistry::instance();
+    const auto& registry = queryCtx()->functionRegistry();
     for (size_t i = 0; i < aggregate->aggregates().size(); ++i) {
       const auto* aggregateCall = aggregate->aggregates()[i];
       // outputColumns positional layout: [gby_cols, agg_result_cols].
@@ -2631,7 +2631,7 @@ class Decorrelator : public NodeRewriter<> {
       for (ExprCP argument : aggregateCall->args()) {
         argumentTypes.push_back(argument->value().type);
       }
-      velox::Variant emptyValue = registry->aggregateResultForEmptyInput(
+      velox::Variant emptyValue = registry.aggregateResultForEmptyInput(
           aggregateCall->name(), argumentTypes);
 
       if (!coalesceEmptyInput || emptyValue.isNull()) {
@@ -4173,7 +4173,7 @@ class Decorrelator : public NodeRewriter<> {
   // distinct values) inherits the argument's NDV — `arbitrary(x)`
   // ranges over x's distinct values, not a single value.
   const optimizer::Aggregate* makeArbitrary(ExprCP argument) {
-    const auto& arbitraryName = FunctionRegistry::instance()->arbitrary();
+    const auto& arbitraryName = queryCtx()->functionRegistry().arbitrary();
     VELOX_USER_CHECK(
         arbitraryName.has_value(),
         "Decorrelate outer-column carry-through requires arbitrary "

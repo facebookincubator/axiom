@@ -26,7 +26,7 @@ bool isNot(ExprCP expression, ExprCP& argument) {
     return false;
   }
   const Call* call = expression->as<Call>();
-  if (call->name() != toName(FunctionRegistry::instance()->negation()) ||
+  if (call->name() != toName(queryCtx()->functionRegistry().negation()) ||
       call->args().size() != 1) {
     return false;
   }

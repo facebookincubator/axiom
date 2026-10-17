@@ -22,6 +22,7 @@
 #include <ctime>
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
+#include "axiom/functions/prestosql/PrestoFunctions.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/VeloxHistory.h"
@@ -54,14 +55,15 @@ void QueryTestBase::SetUpTestCase() {
   velox::window::prestosql::registerAllWindowFunctions();
 
   executor_ = std::make_unique<folly::CPUThreadPoolExecutor>(4);
-  optimizer::FunctionRegistry::registerPrestoFunctions();
+  functionRegistry_ = functions::prestosql::PrestoFunctions::makeRegistry();
   velox::functions::axiom::registerFunctions("axiom_");
-  optimizer::FunctionRegistry::instance()->registerInternalPrefix("axiom_");
+  functionRegistry_->registerInternalPrefix("axiom_");
 }
 
 // static
 void QueryTestBase::TearDownTestCase() {
   executor_.reset();
+  functionRegistry_.reset();
   HiveConnectorTestBase::TearDownTestCase();
 }
 
@@ -147,10 +149,12 @@ std::shared_ptr<velox::BaseRuntimeStatWriter> borrow(
 
 OptimizerSessionPtr makeOptimizerSession(
     const connector::ConnectorContextPtr& connectorContext,
+    std::shared_ptr<const FunctionRegistry> functionRegistry,
     OptimizerOptions options,
     velox::BaseRuntimeStatWriter& statsWriter) {
   return std::make_shared<OptimizerSession>(
       connectorContext,
+      std::move(functionRegistry),
       borrow(statsWriter),
       connector::Properties{},
       std::move(options));
@@ -227,7 +231,7 @@ PlanCost QueryTestBase::optimizationCost(
   auto& queryCtx = getQueryCtx();
   auto allocator = std::make_unique<HashStringAllocator>(optimizerPool_.get());
   auto context = std::make_unique<optimizer::QueryGraphContext>(
-      *allocator, OptimizerOptions::kMaxPlanObjectsDefault);
+      *allocator, OptimizerOptions::kMaxPlanObjectsDefault, functionRegistry_);
   optimizer::queryCtx() = context.get();
   SCOPE_EXIT {
     optimizer::queryCtx() = nullptr;
@@ -244,6 +248,7 @@ PlanCost QueryTestBase::optimizationCost(
   Optimization opt(
       makeOptimizerSession(
           connectorContext,
+          functionRegistry_,
           optimizerOptions.value_or(optimizerOptions_),
           statsWriter_),
       makeRunnerSession(connectorContext, statsWriter_),
@@ -264,7 +269,7 @@ void QueryTestBase::verifyOptimization(
 
   HashStringAllocator allocator(optimizerPool_.get());
   auto context = std::make_unique<optimizer::QueryGraphContext>(
-      allocator, OptimizerOptions::kMaxPlanObjectsDefault);
+      allocator, OptimizerOptions::kMaxPlanObjectsDefault, functionRegistry_);
   optimizer::queryCtx() = context.get();
   SCOPE_EXIT {
     optimizer::queryCtx() = nullptr;
@@ -285,6 +290,7 @@ void QueryTestBase::verifyOptimization(
   Optimization optimization(
       makeOptimizerSession(
           connectorContext,
+          functionRegistry_,
           optimizerOptions.value_or(optimizerOptions_),
           statsWriter_),
       makeRunnerSession(connectorContext, statsWriter_),
@@ -308,7 +314,7 @@ void QueryTestBase::verifyOptimization(
 
   HashStringAllocator allocator(optimizerPool_.get());
   auto context = std::make_unique<optimizer::QueryGraphContext>(
-      allocator, OptimizerOptions::kMaxPlanObjectsDefault);
+      allocator, OptimizerOptions::kMaxPlanObjectsDefault, functionRegistry_);
   optimizer::queryCtx() = context.get();
   SCOPE_EXIT {
     optimizer::queryCtx() = nullptr;
@@ -325,6 +331,7 @@ void QueryTestBase::verifyOptimization(
       connectorStatWriterProvider());
   auto session = makeOptimizerSession(
       connectorContext,
+      functionRegistry_,
       optimizerOptions.value_or(optimizerOptions_),
       statsWriter_);
   v2::Optimizer optimizer{
@@ -366,7 +373,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
 
   auto allocator = std::make_unique<HashStringAllocator>(optimizerPool_.get());
   auto context = std::make_unique<optimizer::QueryGraphContext>(
-      *allocator, OptimizerOptions::kMaxPlanObjectsDefault);
+      *allocator, OptimizerOptions::kMaxPlanObjectsDefault, functionRegistry_);
   optimizer::queryCtx() = context.get();
   SCOPE_EXIT {
     optimizer::queryCtx() = nullptr;
@@ -397,6 +404,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
       connectorStatWriterProvider());
   auto session = makeOptimizerSession(
       connectorContext,
+      functionRegistry_,
       optimizerOptions.value_or(optimizerOptions_),
       statsWriter_);
 

@@ -44,7 +44,7 @@ class RelationOpPrinterTest : public ::testing::Test {
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
 
-    functions::prestosql::registerAllScalarFunctions();
+    velox::functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
   }
 
@@ -140,7 +140,9 @@ class RelationOpPrinterTest : public ::testing::Test {
     auto allocator =
         std::make_unique<velox::HashStringAllocator>(optimizerPool_.get());
     auto context = std::make_unique<QueryGraphContext>(
-        *allocator, OptimizerOptions::kMaxPlanObjectsDefault);
+        *allocator,
+        OptimizerOptions::kMaxPlanObjectsDefault,
+        functionRegistry_);
     queryCtx() = context.get();
     SCOPE_EXIT {
       queryCtx() = nullptr;
@@ -162,6 +164,7 @@ class RelationOpPrinterTest : public ::testing::Test {
         connector::makeTestContext(veloxQueryCtx->queryId());
     auto optimizerSession = std::make_shared<OptimizerSession>(
         connectorContext,
+        functionRegistry_,
         connector::makeTestStatWriter(),
         connector::Properties{},
         std::move(options));
@@ -188,6 +191,8 @@ class RelationOpPrinterTest : public ::testing::Test {
     return lp::PlanBuilder::Context{kTestConnectorId, kDefaultSchema};
   }
 
+  const std::shared_ptr<FunctionRegistry> functionRegistry_{
+      std::make_shared<FunctionRegistry>()};
   std::shared_ptr<velox::memory::MemoryPool> rootPool_;
   std::shared_ptr<velox::memory::MemoryPool> optimizerPool_;
   std::shared_ptr<connector::TestConnector> connector_;

@@ -18,6 +18,7 @@
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 #include <algorithm>
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -39,7 +40,9 @@ class QueryGraphContextTest : public ::testing::Test {
     pool_ = velox::memory::memoryManager()->addLeafPool();
     allocator_ = std::make_unique<velox::HashStringAllocator>(pool_.get());
     ctx_ = std::make_unique<QueryGraphContext>(
-        *allocator_, OptimizerOptions::kMaxPlanObjectsDefault);
+        *allocator_,
+        OptimizerOptions::kMaxPlanObjectsDefault,
+        std::make_shared<FunctionRegistry>());
     queryCtx() = ctx_.get();
   }
 
@@ -299,7 +302,8 @@ TEST_F(QueryGraphContextTest, planObjectLimit) {
   // context so the limit is reached in a few objects.
   constexpr int32_t kLimit = 8;
   velox::HashStringAllocator allocator(pool_.get());
-  auto context = std::make_unique<QueryGraphContext>(allocator, kLimit);
+  auto context = std::make_unique<QueryGraphContext>(
+      allocator, kLimit, std::make_shared<FunctionRegistry>());
   queryCtx() = context.get();
   SCOPE_EXIT {
     queryCtx() = ctx_.get();

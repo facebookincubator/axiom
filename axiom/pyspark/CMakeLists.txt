@@ -79,6 +79,7 @@ target_link_libraries(
   axiom_tpch_connector_metadata
   axiom_test_connector
   axiom_optimizer
+  axiom_functions_prestosql
   velox_connector_registry
   velox_hive_connector
   velox_tpch_connector

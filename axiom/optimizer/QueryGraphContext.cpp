@@ -62,11 +62,14 @@ std::string QueryGraphContext::topPlanObjectTypes(size_t top) const {
 
 QueryGraphContext::QueryGraphContext(
     velox::HashStringAllocator& allocator,
-    int32_t maxPlanObjects)
+    int32_t maxPlanObjects,
+    std::shared_ptr<const FunctionRegistry> functionRegistry)
     : allocator_(allocator),
       cache_(allocator_),
-      maxPlanObjects_(maxPlanObjects) {
+      maxPlanObjects_(maxPlanObjects),
+      functionRegistry_(std::move(functionRegistry)) {
   VELOX_USER_CHECK_GE(maxPlanObjects, 1, "max_plan_objects must be >= 1");
+  VELOX_CHECK_NOT_NULL(functionRegistry_);
 
   auto addName = [&](const char* name) {
     names_.emplace(std::string_view(name, strlen(name)));
@@ -385,83 +388,83 @@ PathCP toPath(std::span<const Step> steps, bool reverse) {
 }
 
 void QueryGraphContext::populateFunctionNames() {
-  auto* registry = FunctionRegistry::instance();
+  const auto& registry = *functionRegistry_;
 
-  functionNames_.equality = this->toName(registry->equality());
-  functionNames_.negation = this->toName(registry->negation());
+  functionNames_.equality = this->toName(registry.equality());
+  functionNames_.negation = this->toName(registry.negation());
 
-  if (auto elementAt = registry->elementAt()) {
+  if (auto elementAt = registry.elementAt()) {
     functionNames_.elementAt = this->toName(elementAt.value());
   }
 
-  if (auto subscript = registry->subscript()) {
+  if (auto subscript = registry.subscript()) {
     functionNames_.subscript = this->toName(subscript.value());
   }
 
-  if (auto cardinality = registry->cardinality()) {
+  if (auto cardinality = registry.cardinality()) {
     functionNames_.cardinality = this->toName(cardinality.value());
   }
 
-  if (auto arbitrary = registry->arbitrary()) {
+  if (auto arbitrary = registry.arbitrary()) {
     functionNames_.arbitrary = this->toName(arbitrary.value());
   }
 
-  if (auto count = registry->count()) {
+  if (auto count = registry.count()) {
     functionNames_.count = this->toName(count.value());
   }
 
-  if (auto prefix = registry->internalPrefix()) {
+  if (auto prefix = registry.internalPrefix()) {
     internalFunctionNames_.bigintAdd = this->toName(*prefix + "bigint_add");
     internalFunctionNames_.arrayAppend = this->toName(*prefix + "array_append");
     internalFunctionNames_.arrayPrepend =
         this->toName(*prefix + "array_prepend");
   }
 
-  if (auto lt = registry->lessThan()) {
+  if (auto lt = registry.lessThan()) {
     functionNames_.lt = this->toName(lt.value());
   }
 
-  if (auto lte = registry->lessThanOrEqual()) {
+  if (auto lte = registry.lessThanOrEqual()) {
     functionNames_.lte = this->toName(lte.value());
   }
 
-  if (auto gt = registry->greaterThan()) {
+  if (auto gt = registry.greaterThan()) {
     functionNames_.gt = this->toName(gt.value());
   }
 
-  if (auto gte = registry->greaterThanOrEqual()) {
+  if (auto gte = registry.greaterThanOrEqual()) {
     functionNames_.gte = this->toName(gte.value());
   }
 
-  if (auto isNull = registry->isNull()) {
+  if (auto isNull = registry.isNull()) {
     functionNames_.isNull = this->toName(isNull.value());
   }
 
-  if (auto distinctFrom = registry->distinctFrom()) {
+  if (auto distinctFrom = registry.distinctFrom()) {
     functionNames_.distinctFrom = this->toName(distinctFrom.value());
   }
 
-  if (auto between = registry->between()) {
+  if (auto between = registry.between()) {
     functionNames_.between = this->toName(between.value());
   }
 
-  if (auto like = registry->like()) {
+  if (auto like = registry.like()) {
     functionNames_.like = this->toName(like.value());
   }
 
-  if (auto random = registry->random()) {
+  if (auto random = registry.random()) {
     functionNames_.random = this->toName(random.value());
   }
 
-  if (auto rowNumber = registry->rowNumber()) {
+  if (auto rowNumber = registry.rowNumber()) {
     functionNames_.rowNumber = this->toName(rowNumber.value());
   }
 
-  if (auto rank = registry->rank()) {
+  if (auto rank = registry.rank()) {
     functionNames_.rank = this->toName(rank.value());
   }
 
-  if (auto denseRank = registry->denseRank()) {
+  if (auto denseRank = registry.denseRank()) {
     functionNames_.denseRank = this->toName(denseRank.value());
   }
 }

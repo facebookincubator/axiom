@@ -358,7 +358,7 @@ bool Aggregate::KeyEq::operator()(
 }
 
 velox::Variant Aggregate::emptyInputResult() const {
-  auto result = FunctionRegistry::instance()->aggregateResultForEmptyInput(
+  auto result = queryCtx()->functionRegistry().aggregateResultForEmptyInput(
       name(), rawInputType_);
   return result.isNull() ? velox::Variant::null(value().type->kind()) : result;
 }

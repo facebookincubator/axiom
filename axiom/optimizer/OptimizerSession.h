@@ -24,13 +24,20 @@
 
 namespace facebook::axiom::optimizer {
 
+class FunctionRegistry;
+
 /// What the optimizer is given for one query: the query's context and its
-/// writer, plus the typed OptimizerOptions parsed from the optimizer's slice
-/// of the query's session properties.
+/// writer, the function semantics to plan with, plus the typed
+/// OptimizerOptions parsed from the optimizer's slice of the query's session
+/// properties.
+///
+/// Invariants:
+///   - `functionRegistry` is non-null.
 class OptimizerSession final : public BaseSession {
  public:
   OptimizerSession(
       connector::ConnectorContextPtr context,
+      std::shared_ptr<const FunctionRegistry> functionRegistry,
       std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter,
       connector::Properties properties,
       OptimizerOptions options)
@@ -38,13 +45,23 @@ class OptimizerSession final : public BaseSession {
             std::move(context),
             std::move(statsWriter),
             std::move(properties)),
-        options_{std::move(options)} {}
+        functionRegistry_{std::move(functionRegistry)},
+        options_{std::move(options)} {
+    VELOX_CHECK_NOT_NULL(
+        functionRegistry_, "OptimizerSession requires a function registry");
+  }
+
+  /// Returns the function semantics to plan with.
+  const std::shared_ptr<const FunctionRegistry>& functionRegistry() const {
+    return functionRegistry_;
+  }
 
   const OptimizerOptions& options() const {
     return options_;
   }
 
  private:
+  const std::shared_ptr<const FunctionRegistry> functionRegistry_;
   const OptimizerOptions options_;
 };
 

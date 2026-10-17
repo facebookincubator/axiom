@@ -16,7 +16,6 @@
 
 #include "axiom/optimizer/FunctionRegistry.h"
 
-#include "velox/expression/ExprConstants.h"
 #include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
 #include "velox/functions/FunctionRegistry.h"
 
@@ -290,13 +289,13 @@ velox::Variant FunctionRegistry::aggregateResultForEmptyInput(
 }
 
 // static
-FunctionRegistry* FunctionRegistry::instance() {
-  static std::unique_ptr<FunctionRegistry> registry{new FunctionRegistry{}};
-  return registry.get();
+const std::shared_ptr<FunctionRegistry>& FunctionRegistry::deprecatedGlobal() {
+  static const auto kRegistry = std::make_shared<FunctionRegistry>();
+  return kRegistry;
 }
 
 FunctionMetadataCP functionMetadata(std::string_view name) {
-  return FunctionRegistry::instance()->metadata(name);
+  return queryCtx()->functionRegistry().metadata(name);
 }
 
 bool isInferenceFunction(Name name) {
@@ -341,125 +340,7 @@ FunctionSet functionBits(Name name, bool specialForm) {
 }
 
 const std::string& specialForm(lp::SpecialForm specialForm) {
-  return FunctionRegistry::instance()->specialForm(specialForm);
-}
-
-// static
-void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
-  auto fullName = [&](std::string_view name) {
-    return prefix.empty() ? std::string(name)
-                          : fmt::format("{}{}", prefix, name);
-  };
-
-  auto registerFunction = [&](std::string_view name,
-                              std::unique_ptr<FunctionMetadata> metadata) {
-    FunctionRegistry::instance()->registerFunction(name, std::move(metadata));
-  };
-
-  {
-    LambdaInfo info{
-        .ordinal = 1,
-        .lambdaArg = {LambdaArg::kKey, LambdaArg::kValue},
-        .argOrdinal = {0, 0},
-    };
-
-    auto metadata = std::make_unique<FunctionMetadata>();
-    metadata->lambdas.push_back(std::move(info));
-    metadata->subfieldArg = 0;
-    metadata->cost = 40;
-    registerFunction(fullName("transform_values"), std::move(metadata));
-  }
-
-  {
-    LambdaInfo info{
-        .ordinal = 1,
-        .lambdaArg = {LambdaArg::kElement},
-        .argOrdinal = {0},
-    };
-
-    auto metadata = std::make_unique<FunctionMetadata>();
-    metadata->lambdas.push_back(std::move(info));
-    metadata->subfieldArg = 0;
-    metadata->cost = 20;
-    registerFunction(fullName("transform"), std::move(metadata));
-  }
-
-  {
-    LambdaInfo info{
-        .ordinal = 2,
-        .lambdaArg = {LambdaArg::kElement, LambdaArg::kElement},
-        .argOrdinal = {0, 1},
-    };
-
-    auto metadata = std::make_unique<FunctionMetadata>();
-    metadata->lambdas.push_back(std::move(info));
-    metadata->cost = 20;
-    registerFunction(fullName("zip"), std::move(metadata));
-  }
-
-  auto* registry = FunctionRegistry::instance();
-
-  registry->registerEquality(fullName("eq"));
-  registry->registerNegation(fullName("not"));
-  registry->registerElementAt(fullName("element_at"));
-  registry->registerSubscript(fullName("subscript"));
-  registry->registerCardinality(fullName("cardinality"));
-  registry->registerArbitrary(fullName("arbitrary"));
-  registry->registerCount(fullName("count"));
-  registry->registerBoolOr(fullName("bool_or"));
-  registry->registerLessThan(fullName("lt"));
-  registry->registerLessThanOrEqual(fullName("lte"));
-  registry->registerGreaterThan(fullName("gt"));
-  registry->registerGreaterThanOrEqual(fullName("gte"));
-  registry->registerIsNull(fullName("is_null"));
-  registry->registerDistinctFrom(fullName("distinct_from"));
-  registry->registerBetween(fullName("between"));
-  registry->registerLike(fullName("like"));
-  registry->registerRandom(fullName("rand"));
-  registry->registerRowNumber(fullName("row_number"));
-  registry->registerRank(fullName("rank"));
-  registry->registerDenseRank(fullName("dense_rank"));
-
-  registry->registerStatsAggregates({
-      .min = fullName("min"),
-      .max = fullName("max"),
-      .countIf = fullName("count_if"),
-      .approxDistinct = fullName("approx_distinct"),
-      .sumDataSize = fullName("sum_data_size_for_stats"),
-  });
-
-  registry->registerAggregateEmptyResultResolver(
-      {fullName("count_if"), fullName("approx_distinct")},
-      [](std::string_view /*name*/,
-         std::span<const velox::Type* const> /*argTypes*/) {
-        return velox::Variant::create<velox::TypeKind::BIGINT>(0);
-      });
-
-  registry->registerReversibleFunction(fullName("eq"));
-  registry->registerReversibleFunction(fullName("lt"), fullName("gt"));
-  registry->registerReversibleFunction(fullName("lte"), fullName("gte"));
-  registry->registerReversibleFunction(fullName("plus"));
-  registry->registerReversibleFunction(fullName("multiply"));
-
-  // Presto special form functions created without prefix, so we register them
-  // without prefix too.
-  registry->registerSpecialForm(lp::SpecialForm::kAnd, velox::expression::kAnd);
-  registry->registerSpecialForm(lp::SpecialForm::kOr, velox::expression::kOr);
-  registry->registerSpecialForm(
-      lp::SpecialForm::kCast, velox::expression::kCast);
-  registry->registerSpecialForm(
-      lp::SpecialForm::kTryCast, velox::expression::kTryCast);
-  registry->registerSpecialForm(lp::SpecialForm::kTry, velox::expression::kTry);
-  registry->registerSpecialForm(lp::SpecialForm::kIf, velox::expression::kIf);
-  registry->registerSpecialForm(
-      lp::SpecialForm::kCoalesce, velox::expression::kCoalesce);
-  registry->registerSpecialForm(
-      lp::SpecialForm::kSwitch, velox::expression::kSwitch);
-  registry->registerSpecialForm(lp::SpecialForm::kIn, "in");
-  registry->registerSpecialForm(
-      lp::SpecialForm::kNullIf, velox::expression::kNullIf);
-  registry->registerSpecialForm(
-      lp::SpecialForm::kRowConstructor, velox::expression::kRowConstructor);
+  return queryCtx()->functionRegistry().specialForm(specialForm);
 }
 
 } // namespace facebook::axiom::optimizer

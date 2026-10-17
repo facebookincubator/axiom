@@ -51,10 +51,13 @@ namespace axiom::collagen {
 CollagenService::CollagenService(
     std::string runnerId,
     std::string catalog,
-    std::string schema)
+    std::string schema,
+    std::shared_ptr<const facebook::axiom::optimizer::FunctionRegistry>
+        functionRegistry)
     : runnerId_(std::move(runnerId)),
       catalog_(std::move(catalog)),
-      schema_(std::move(schema)) {
+      schema_(std::move(schema)),
+      functionRegistry_(std::move(functionRegistry)) {
   if (rootPool_->reclaimer() == nullptr) {
     rootPool_->setReclaimer(facebook::velox::memory::MemoryReclaimer::create());
   }
@@ -79,7 +82,7 @@ PlanAndStats CollagenService::plan(
 
   // Optimize it into a Velox physical plan.
   auto veloxPlanAndStats =
-      optimize(converter.planNode(), catalog_, pool_.get());
+      optimize(converter.planNode(), catalog_, pool_.get(), functionRegistry_);
 
   LOG(INFO) << "Generated Velox physical plan with "
             << veloxPlanAndStats.plan->fragments().size() << " fragments:\n"

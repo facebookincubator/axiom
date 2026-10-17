@@ -200,9 +200,9 @@ ToGraph::ToGraph(
       evaluator_{evaluator},
       options_{options},
       functionNames_{queryCtx()->functionNames()} {
-  auto* registry = FunctionRegistry::instance();
+  const auto& registry = queryCtx()->functionRegistry();
 
-  const auto& reversibleFunctions = registry->reversibleFunctions();
+  const auto& reversibleFunctions = registry.reversibleFunctions();
   for (const auto& [name, reverseName] : reversibleFunctions) {
     reversibleFunctions_[toName(name)] = toName(reverseName);
     reversibleFunctions_[toName(reverseName)] = toName(name);
@@ -3437,7 +3437,7 @@ namespace {
 // if the aggregate returns NULL for empty input. Used to wrap count-like
 // aggregates with COALESCE when decorrelating scalar subqueries.
 Literal* tryMakeLiteralForEmptyInput(AggregateCP agg) {
-  auto result = FunctionRegistry::instance()->aggregateResultForEmptyInput(
+  auto result = queryCtx()->functionRegistry().aggregateResultForEmptyInput(
       agg->name(), agg->rawInputType());
   if (result.isNull()) {
     return nullptr;

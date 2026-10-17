@@ -19,6 +19,7 @@
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
+#include "axiom/functions/prestosql/PrestoFunctions.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/OptimizerOptions.h"
@@ -42,12 +43,12 @@ using namespace facebook::velox;
 void SqlTestBase::SetUpTestCase() {
   OperatorTestBase::SetUpTestCase();
 
-  functions::prestosql::registerAllScalarFunctions();
+  velox::functions::prestosql::registerAllScalarFunctions();
   aggregate::prestosql::registerAllAggregateFunctions();
   window::prestosql::registerAllWindowFunctions();
-  FunctionRegistry::registerPrestoFunctions();
-  functions::axiom::registerFunctions("axiom_");
-  FunctionRegistry::instance()->registerInternalPrefix("axiom_");
+  functionRegistry_ = functions::prestosql::PrestoFunctions::makeRegistry();
+  velox::functions::axiom::registerFunctions("axiom_");
+  functionRegistry_->registerInternalPrefix("axiom_");
 }
 
 void SqlTestBase::SetUp() {
@@ -94,6 +95,7 @@ std::shared_ptr<runner::LocalRunner> makeLocalRunnerImpl(
     cache::AsyncDataCache* asyncDataCache,
     const std::shared_ptr<memory::MemoryPool>& rootPool,
     const std::shared_ptr<memory::MemoryPool>& optimizerPool,
+    const std::shared_ptr<const FunctionRegistry>& functionRegistry,
     int32_t numWorkers,
     int32_t numDrivers,
     bool syntacticJoinOrder,
@@ -113,7 +115,7 @@ std::shared_ptr<runner::LocalRunner> makeLocalRunnerImpl(
 
   auto allocator = std::make_unique<HashStringAllocator>(optimizerPool.get());
   auto graphContext = std::make_unique<optimizer::QueryGraphContext>(
-      *allocator, OptimizerOptions::kMaxPlanObjectsDefault);
+      *allocator, OptimizerOptions::kMaxPlanObjectsDefault, functionRegistry);
   optimizer::queryCtx() = graphContext.get();
   SCOPE_EXIT {
     optimizer::queryCtx() = nullptr;
@@ -135,6 +137,7 @@ std::shared_ptr<runner::LocalRunner> makeLocalRunnerImpl(
   auto context = connector::makeTestContext(queryId);
   auto optimizerSession = std::make_shared<OptimizerSession>(
       context,
+      functionRegistry,
       connector::makeTestStatWriter(),
       connector::Properties{},
       optimizerOptions);
@@ -176,6 +179,7 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunner(
       asyncDataCache,
       rootPool,
       optimizerPool,
+      functionRegistry_,
       numWorkers,
       numDrivers,
       syntacticJoinOrder,
@@ -216,6 +220,7 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunnerV2(
       asyncDataCache,
       rootPool,
       optimizerPool,
+      functionRegistry_,
       numWorkers,
       numDrivers,
       syntacticJoinOrder,

@@ -75,7 +75,7 @@ class TypedExprPolicy {
     // compares against. Built once from the registry so it covers every special
     // form, stays dialect-agnostic, and makes name() a single lookup per call.
     for (const auto& [form, veloxName] :
-         FunctionRegistry::instance()->specialForms()) {
+         queryCtx()->functionRegistry().specialForms()) {
       specialFormNames_.emplace(
           veloxName, SpecialFormCallNames::toCallName(form));
     }

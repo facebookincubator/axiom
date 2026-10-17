@@ -169,7 +169,7 @@ std::pair<ColumnVector, ColumnVector> JoinPredicatePlacement::equiColumnPairs(
     }
   }
 
-  const Name equalityName = toName(FunctionRegistry::instance()->equality());
+  const Name equalityName = toName(queryCtx()->functionRegistry().equality());
   const auto addEqualityPair = [&](ExprCP conjunct) {
     if (!conjunct->is(PlanType::kCallExpr)) {
       return;

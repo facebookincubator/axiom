@@ -49,13 +49,13 @@ SubfieldTracker::SubfieldTracker(
     std::function<logical_plan::ConstantExprPtr(const logical_plan::ExprPtr&)>
         tryFoldConstant)
     : tryFoldConstant_(std::move(tryFoldConstant)) {
-  auto* registry = FunctionRegistry::instance();
+  const auto& registry = queryCtx()->functionRegistry();
 
-  if (auto elementAt = registry->elementAt()) {
+  if (auto elementAt = registry.elementAt()) {
     elementAt_ = toName(elementAt.value());
   }
 
-  if (auto subscript = registry->subscript()) {
+  if (auto subscript = registry.subscript()) {
     subscript_ = toName(subscript.value());
   }
 }

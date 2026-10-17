@@ -38,7 +38,7 @@ class PrecomputeProjectionTest : public ::testing::Test {
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
 
-    functions::prestosql::registerAllScalarFunctions();
+    velox::functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
   }
 
@@ -53,7 +53,9 @@ class PrecomputeProjectionTest : public ::testing::Test {
     auto allocator =
         std::make_unique<velox::HashStringAllocator>(optimizerPool_.get());
     auto context = std::make_unique<QueryGraphContext>(
-        *allocator, OptimizerOptions::kMaxPlanObjectsDefault);
+        *allocator,
+        OptimizerOptions::kMaxPlanObjectsDefault,
+        functionRegistry_);
     queryCtx() = context.get();
     SCOPE_EXIT {
       queryCtx() = nullptr;
@@ -72,6 +74,7 @@ class PrecomputeProjectionTest : public ::testing::Test {
         connector::makeTestContext(veloxQueryCtx->queryId());
     auto optimizerSession = std::make_shared<OptimizerSession>(
         connectorContext,
+        functionRegistry_,
         connector::makeTestStatWriter(),
         connector::Properties{},
         OptimizerOptions{});
@@ -93,6 +96,8 @@ class PrecomputeProjectionTest : public ::testing::Test {
     testRoutine(opt.rootDt());
   }
 
+  const std::shared_ptr<FunctionRegistry> functionRegistry_{
+      std::make_shared<FunctionRegistry>()};
   std::shared_ptr<velox::memory::MemoryPool> rootPool_;
   std::shared_ptr<velox::memory::MemoryPool> optimizerPool_;
 };

@@ -38,6 +38,7 @@ target_link_libraries(
   axiom_optimizer_tests_query_test_base
   axiom_optimizer
   velox_functions_axiom
+  axiom_functions_prestosql
   axiom_optimizer_v2
   axiom_sql_presto_parser
   axiom_test_connector
@@ -220,6 +221,7 @@ target_link_libraries(
   axiom_optimizer_tests_sql_test_base
   axiom_common
   axiom_optimizer
+  axiom_functions_prestosql
   axiom_optimizer_v2
   axiom_runner_local_runner
   axiom_sql_presto_parser

@@ -65,14 +65,14 @@ if (name == "row_number") {
 }
 
 // ✅ Correct — use registered name from FunctionRegistry.
-const auto* registry = FunctionRegistry::instance();
-if (registry->rowNumber().has_value() && name == *registry->rowNumber()) {
+const auto& registry = queryCtx()->functionRegistry();
+if (registry.rowNumber().has_value() && name == *registry.rowNumber()) {
   return RankFunction::kRowNumber;
 }
 ```
 
 When adding a new optimization that depends on recognizing a specific function,
 add a registration method to `FunctionRegistry` (e.g., `registerRowNumber`) and
-register the function in `registerPrestoFunctions` (or the equivalent for other
-dialects). This ensures the optimization works regardless of the function name
-used by a particular dialect.
+register the function in `PrestoFunctions::registerAll` (or the equivalent for
+other dialects). This ensures the optimization works regardless of the function
+name used by a particular dialect.

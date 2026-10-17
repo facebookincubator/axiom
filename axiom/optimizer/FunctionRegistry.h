@@ -229,10 +229,18 @@ struct StatsAggregates {
   std::string sumDataSize;
 };
 
+/// Function semantics the optimizer plans with. An application creates one,
+/// populates it with its dialect's functions, and passes it to
+/// OptimizerSession and QueryGraphContext.
+///
+/// Example:
+///   auto registry = std::make_shared<FunctionRegistry>();
+///   registry->registerEquality("eq");
+///   auto session = std::make_shared<OptimizerSession>(
+///       context, registry, statsWriter, properties, options);
 class FunctionRegistry {
-  FunctionRegistry() = default;
-
  public:
+  FunctionRegistry() = default;
   FunctionRegistry(FunctionRegistry&&) = delete;
   FunctionRegistry(const FunctionRegistry&) = delete;
 
@@ -270,7 +278,7 @@ class FunctionRegistry {
     return cardinality_;
   }
 
-  const std::string& specialForm(logical_plan::SpecialForm specialForm) {
+  const std::string& specialForm(logical_plan::SpecialForm specialForm) const {
     auto it = specialForms_.find(specialForm);
     VELOX_USER_CHECK(it != specialForms_.end());
     return it->second;
@@ -539,12 +547,12 @@ class FunctionRegistry {
       std::string_view name,
       std::string_view reverseName);
 
-  static FunctionRegistry* instance();
-
-  /// Registers Presto functions transform, transform_values and zip along with
-  /// metadata. Registers reversible Presto functions eq, lt, gt, lte, gte,
-  /// plus, multiply, and, or.
-  static void registerPrestoFunctions(std::string_view prefix = "");
+  /// Returns the process-wide registry, for applications that do not create
+  /// their own yet. New code creates a registry and passes it to
+  /// OptimizerSession and QueryGraphContext.
+  [[deprecated(
+      "Create a FunctionRegistry and pass it to OptimizerSession and QueryGraphContext.")]]
+  static const std::shared_ptr<FunctionRegistry>& deprecatedGlobal();
 
   /// Registers a callback that provides results for aggregate functions over
   /// empty input. The callback is invoked for functions in 'names'.
@@ -621,7 +629,8 @@ class FunctionRegistry {
       aggregateEmptyResultResolvers_;
 };
 
-/// Shortcut for FunctionRegistry::instance()->metadata(name).
+/// Returns metadata for 'name' from the active QueryGraphContext's function
+/// registry.
 FunctionMetadataCP functionMetadata(std::string_view name);
 
 /// Returns FunctionSet bits for a scalar function or special form. If

@@ -105,8 +105,8 @@ Name registeredName(const std::optional<std::string>& name) {
 } // namespace
 
 ColumnAccess::ColumnAccess()
-    : subscript_(registeredName(FunctionRegistry::instance()->subscript())),
-      elementAt_(registeredName(FunctionRegistry::instance()->elementAt())) {}
+    : subscript_(registeredName(queryCtx()->functionRegistry().subscript())),
+      elementAt_(registeredName(queryCtx()->functionRegistry().elementAt())) {}
 
 void ColumnAccess::add(ExprCP expr) {
   std::vector<Step> steps;

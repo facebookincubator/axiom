@@ -488,7 +488,9 @@ PlanAndStats Optimization::deprecatedToVeloxPlan(
     MultiFragmentPlan::Options runnerOptions) {
   auto allocator = std::make_unique<velox::HashStringAllocator>(&pool);
   auto context = std::make_unique<QueryGraphContext>(
-      *allocator, optimizerSession->options().maxPlanObjects);
+      *allocator,
+      optimizerSession->options().maxPlanObjects,
+      optimizerSession->functionRegistry());
   queryCtx() = context.get();
   SCOPE_EXIT {
     queryCtx() = nullptr;
@@ -1514,8 +1516,8 @@ bool sameOrderTypes(const OrderTypeVector& lhs, const OrderTypeVector& rhs) {
 }
 
 bool isRowNumber(std::string_view name) {
-  const auto* registry = FunctionRegistry::instance();
-  return registry->rowNumber().has_value() && name == *registry->rowNumber();
+  const auto& registry = queryCtx()->functionRegistry();
+  return registry.rowNumber().has_value() && name == *registry.rowNumber();
 }
 
 // Returns the RankFunction if the function name is a ranking function,
@@ -1527,11 +1529,11 @@ std::optional<velox::core::TopNRowNumberNode::RankFunction> toRankFunction(
     return RankFunction::kRowNumber;
   }
 
-  const auto* registry = FunctionRegistry::instance();
-  if (registry->rank().has_value() && name == *registry->rank()) {
+  const auto& registry = queryCtx()->functionRegistry();
+  if (registry.rank().has_value() && name == *registry.rank()) {
     return RankFunction::kRank;
   }
-  if (registry->denseRank().has_value() && name == *registry->denseRank()) {
+  if (registry.denseRank().has_value() && name == *registry.denseRank()) {
     return RankFunction::kDenseRank;
   }
   return std::nullopt;

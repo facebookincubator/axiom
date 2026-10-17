@@ -29,6 +29,10 @@ namespace facebook::axiom::optimizer {
 struct PlanAndStats;
 }
 
+namespace facebook::axiom::optimizer {
+class FunctionRegistry;
+} // namespace facebook::axiom::optimizer
+
 namespace axiom::collagen {
 
 class CollagenService final
@@ -37,7 +41,9 @@ class CollagenService final
   CollagenService(
       std::string runnerId,
       std::string catalog,
-      std::string schema);
+      std::string schema,
+      std::shared_ptr<const facebook::axiom::optimizer::FunctionRegistry>
+          functionRegistry);
 
   ~CollagenService() = default;
 
@@ -75,6 +81,10 @@ class CollagenService final
   const std::string catalog_;
   // Schema to prepend to table names (e.g., "tiny" for TPCH).
   const std::string schema_;
+
+  // Function semantics the optimizer plans with.
+  const std::shared_ptr<const facebook::axiom::optimizer::FunctionRegistry>
+      functionRegistry_;
 
   using MemoryPool = facebook::velox::memory::MemoryPool;
 

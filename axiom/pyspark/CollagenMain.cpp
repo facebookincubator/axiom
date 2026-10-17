@@ -24,7 +24,7 @@
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
-#include "axiom/optimizer/FunctionRegistry.h"
+#include "axiom/functions/prestosql/PrestoFunctions.h"
 #include "axiom/pyspark/runners/LocalRunner.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/HiveConnector.h"
@@ -85,7 +85,11 @@ void CollagenMain::init() {
   registerFunctions();
 
   std::string serverAddress(fmt::format("0.0.0.0:{}", port_));
-  service_ = std::make_unique<CollagenService>(runnerId_, catalog_, schema_);
+  auto functionRegistry =
+      facebook::axiom::functions::prestosql::PrestoFunctions::makeRegistry();
+  functionRegistry->registerInternalPrefix("axiom_");
+  service_ = std::make_unique<CollagenService>(
+      runnerId_, catalog_, schema_, std::move(functionRegistry));
 
   grpc::ServerBuilder builder;
   builder.AddListeningPort(serverAddress, grpc::InsecureServerCredentials());
@@ -205,10 +209,7 @@ void CollagenMain::registerFunctions() {
   facebook::velox::functions::prestosql::registerAllScalarFunctions();
   facebook::velox::aggregate::prestosql::registerAllAggregateFunctions();
   facebook::velox::serializer::presto::PrestoVectorSerde::registerVectorSerde();
-  facebook::axiom::optimizer::FunctionRegistry::registerPrestoFunctions();
   facebook::velox::functions::axiom::registerFunctions("axiom_");
-  facebook::axiom::optimizer::FunctionRegistry::instance()
-      ->registerInternalPrefix("axiom_");
 }
 
 } // namespace axiom::collagen

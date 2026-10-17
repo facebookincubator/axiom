@@ -98,14 +98,16 @@ facebook::axiom::connector::TablePtr createTable(
 facebook::axiom::optimizer::PlanAndStats optimize(
     const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
     const std::string& connectorId,
-    velox::memory::MemoryPool* pool) {
+    velox::memory::MemoryPool* pool,
+    const std::shared_ptr<const facebook::axiom::optimizer::FunctionRegistry>&
+        functionRegistry) {
   facebook::axiom::optimizer::OptimizerOptions optimizerOptions;
 
   // Set up thread local structures.
   auto allocator = std::make_unique<velox::HashStringAllocator>(pool);
   auto context =
       std::make_unique<facebook::axiom::optimizer::QueryGraphContext>(
-          *allocator, optimizerOptions.maxPlanObjects);
+          *allocator, optimizerOptions.maxPlanObjects, functionRegistry);
   facebook::axiom::optimizer::queryCtx() = context.get();
   SCOPE_EXIT {
     facebook::axiom::optimizer::queryCtx() = nullptr;
@@ -141,6 +143,7 @@ facebook::axiom::optimizer::PlanAndStats optimize(
   auto optimizerSession =
       std::make_shared<facebook::axiom::optimizer::OptimizerSession>(
           connectorContext,
+          functionRegistry,
           std::make_shared<velox::NoopRuntimeStatWriter>(),
           facebook::axiom::connector::Properties{},
           std::move(optimizerOptions));

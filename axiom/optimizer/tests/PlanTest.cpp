@@ -41,7 +41,7 @@ class PlanTest : public test::HiveQueriesTestBase,
          velox::tpch::Table::TBL_REGION,
          velox::tpch::Table::TBL_LINEITEM,
          velox::tpch::Table::TBL_PART});
-    test::registerDfFunctions();
+    test::registerDfFunctions(*functionRegistry());
   }
 
   void SetUp() override {

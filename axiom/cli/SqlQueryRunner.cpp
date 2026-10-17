@@ -42,6 +42,7 @@
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
+#include "axiom/functions/prestosql/PrestoFunctions.h"
 #include "axiom/graphviz/DerivedTableDotPrinter.h"
 #include "axiom/graphviz/LogicalPlanDotPrinter.h"
 #include "axiom/graphviz/MultiFragmentPlanDotPrinter.h"
@@ -161,12 +162,15 @@ std::string getLocalTimezone() {
 // thread-local queryCtx(), clearing it on destruction.
 class OptimizerContext {
  public:
-  OptimizerContext(velox::memory::MemoryPool* pool, int32_t maxPlanObjects)
+  OptimizerContext(
+      velox::memory::MemoryPool* pool,
+      const optimizer::OptimizerSession& session)
       : allocator_(std::make_unique<velox::HashStringAllocator>(pool)),
         context_(
             std::make_unique<optimizer::QueryGraphContext>(
                 *allocator_,
-                maxPlanObjects)) {
+                session.options().maxPlanObjects,
+                session.functionRegistry())) {
     optimizer::queryCtx() = context_.get();
   }
 
@@ -260,9 +264,6 @@ void SqlQueryRunner::initialize(
     velox::window::prestosql::registerAllWindowFunctions();
     velox::functions::axiom::registerFunctions("axiom_");
 
-    optimizer::FunctionRegistry::registerPrestoFunctions();
-    optimizer::FunctionRegistry::instance()->registerInternalPrefix("axiom_");
-
     velox::filesystems::registerLocalFileSystem();
 
     velox::exec::ExchangeSource::registerFactory(
@@ -280,6 +281,9 @@ void SqlQueryRunner::initialize(
       fmt::format("axiom_sql{}", kCounter++));
   optimizerPool_ = rootPool_->addLeafChild("optimizer");
   executorPool_ = rootPool_->addLeafChild("executor");
+  auto functionRegistry = functions::prestosql::PrestoFunctions::makeRegistry();
+  functionRegistry->registerInternalPrefix("axiom_");
+  functionRegistry_ = std::move(functionRegistry);
 
   auto [defaultConnectorId, defaultSchema] = initializeConnectors();
   defaultConnectorId_ = std::move(defaultConnectorId);
@@ -1446,8 +1450,7 @@ auto SqlQueryRunner::withOptimizerV2(
       explain,
       options.componentStatWriterProvider(
           facebook::axiom::ComponentMetrics::kOptimizer));
-  OptimizerContext optimizerContext(
-      optimizerPool_.get(), session->options().maxPlanObjects);
+  OptimizerContext optimizerContext(optimizerPool_.get(), *session);
   velox::exec::SimpleExpressionEvaluator evaluator(
       queryCtx.get(), optimizerPool_.get());
 
@@ -2009,6 +2012,7 @@ SqlQueryRunner::makeOptimizerSession(
   optimizerOptions.explain = explain;
   return std::make_shared<optimizer::OptimizerSession>(
       std::move(context),
+      functionRegistry_,
       std::move(statsWriter),
       std::move(properties),
       std::move(optimizerOptions));
@@ -2051,8 +2055,7 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
       options.componentStatWriterProvider(
           facebook::axiom::ComponentMetrics::kOptimizer));
 
-  OptimizerContext optimizerContext(
-      optimizerPool_.get(), optimizerSession->options().maxPlanObjects);
+  OptimizerContext optimizerContext(optimizerPool_.get(), *optimizerSession);
 
   velox::exec::SimpleExpressionEvaluator evaluator(
       queryCtx.get(), optimizerPool_.get());

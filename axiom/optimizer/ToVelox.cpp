@@ -59,8 +59,8 @@ ToVelox::ToVelox(
     : optimizerSession_{std::move(optimizerSession)},
       options_{options},
       isSingle_{options.maxRemotePartitions == 1},
-      subscript_{FunctionRegistry::instance()->subscript()},
-      elementAt_{FunctionRegistry::instance()->elementAt()} {
+      subscript_{queryCtx()->functionRegistry().subscript()},
+      elementAt_{queryCtx()->functionRegistry().elementAt()} {
   VELOX_CHECK_NOT_NULL(optimizerSession_);
 }
 

@@ -751,6 +751,11 @@ class SqlQueryRunner {
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool_;
   std::shared_ptr<facebook::velox::memory::MemoryPool> optimizerPool_;
   std::shared_ptr<facebook::velox::memory::MemoryPool> executorPool_;
+
+  // Presto function semantics this runner plans with. Set in initialize().
+  std::shared_ptr<const facebook::axiom::optimizer::FunctionRegistry>
+      functionRegistry_;
+
   std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
   std::shared_ptr<facebook::axiom::ConfigRegistry> configRegistry_;
   std::shared_ptr<facebook::axiom::SessionConfig> sessionConfig_;

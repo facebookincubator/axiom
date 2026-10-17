@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <memory>
+
 #include <fmt/format.h>
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
@@ -32,6 +34,8 @@
 /// Thread local context and utilities for query planning.
 
 namespace facebook::axiom::optimizer {
+
+class FunctionRegistry;
 
 /// Pointer to an arena allocated interned copy of a null terminated string.
 /// Used for identifiers. Allows comparing strings by comparing pointers.
@@ -389,9 +393,12 @@ class QueryGraphContext {
   /// object are indexed by object id, so planning memory grows with the
   /// square of this count, and an unbounded plan exhausts memory instead of
   /// erroring. See OptimizerOptions::kMaxPlanObjectsDefault.
+  /// 'functionRegistry' supplies function semantics for the query and must be
+  /// non-null.
   QueryGraphContext(
       velox::HashStringAllocator& allocator,
-      int32_t maxPlanObjects);
+      int32_t maxPlanObjects,
+      std::shared_ptr<const FunctionRegistry> functionRegistry);
 
   /// Returns a new unique id to use for 'object' and associates 'object' to
   /// this id. Tagging objects with integers ids is useful for efficiently
@@ -479,6 +486,11 @@ class QueryGraphContext {
   /// Returns the names of the internal functions.
   const InternalFunctionNames& internalFunctionNames() const {
     return internalFunctionNames_;
+  }
+
+  /// Returns the function semantics used to plan this query.
+  const FunctionRegistry& functionRegistry() const {
+    return *functionRegistry_;
   }
 
   /// Returns the interned representation of 'str', i.e. Returns a
@@ -571,6 +583,8 @@ class QueryGraphContext {
   // See the constructor. Always >= 1, so the comparison in newId() is
   // meaningful; size_t to compare against objects_.size() without a cast.
   const size_t maxPlanObjects_;
+
+  const std::shared_ptr<const FunctionRegistry> functionRegistry_;
 
   // Set of interned copies of identifiers. insert() into this returns the
   // canonical interned copy of any string. Lifetime is limited to 'allocator_'.

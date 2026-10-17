@@ -38,6 +38,10 @@ namespace facebook::axiom::runner {
 class LocalRunner;
 } // namespace facebook::axiom::runner
 
+namespace facebook::axiom::optimizer {
+class FunctionRegistry;
+} // namespace facebook::axiom::optimizer
+
 namespace facebook::axiom::optimizer::test {
 
 /// End-to-end SQL testing framework for Axiom. Runs a SQL query through the
@@ -157,6 +161,10 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
       std::string(connector::TestConnector::kDefaultSchema)};
 
  private:
+  // Function semantics the suite plans with: Presto functions, registered in
+  // SetUpTestCase.
+  inline static std::shared_ptr<FunctionRegistry> functionRegistry_;
+
   // Runs SQL through Axiom's full pipeline without storing results. Returns
   // the total number of rows.
   uint64_t run(std::string_view sql);

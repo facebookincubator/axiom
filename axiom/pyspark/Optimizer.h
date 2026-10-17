@@ -29,8 +29,11 @@ namespace axiom::collagen {
 /// @param connectorId Id of the connector to be used to resolve metadata.
 /// @param pool Memory pool to be used for allocating structures required by the
 /// query optimizer.
+/// @param functionRegistry Function semantics to plan with.
 ::facebook::axiom::optimizer::PlanAndStats optimize(
     const ::facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
     const std::string& connectorId,
-    ::facebook::velox::memory::MemoryPool* pool);
+    ::facebook::velox::memory::MemoryPool* pool,
+    const std::shared_ptr<const ::facebook::axiom::optimizer::FunctionRegistry>&
+        functionRegistry);
 } // namespace axiom::collagen

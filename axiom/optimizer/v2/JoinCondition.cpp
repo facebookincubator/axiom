@@ -25,7 +25,7 @@ JoinCondition::Split JoinCondition::splitEquiKeys(
     const PlanObjectSet& leftColumns,
     const PlanObjectSet& rightColumns) {
   Split result;
-  const Name equalityName = toName(FunctionRegistry::instance()->equality());
+  const Name equalityName = toName(queryCtx()->functionRegistry().equality());
   for (ExprCP conjunct : conjuncts) {
     if (!conjunct->is(PlanType::kCallExpr)) {
       result.residual.push_back(conjunct);

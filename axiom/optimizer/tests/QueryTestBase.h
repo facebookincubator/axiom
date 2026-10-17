@@ -224,6 +224,13 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
     return *optimizerPool_;
   }
 
+  /// Returns the function semantics the suite plans with: Presto functions,
+  /// registered in SetUpTestCase. Subclasses may register more.
+  static const std::shared_ptr<optimizer::FunctionRegistry>&
+  functionRegistry() {
+    return functionRegistry_;
+  }
+
   /// Returns the optimizer's total cost for the best plan. Useful for verifying
   /// that cost tracking includes specific operators (e.g., projections).
   optimizer::PlanCost optimizationCost(
@@ -419,6 +426,7 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
   inline static int32_t gQueryCounter{0};
   inline static std::unique_ptr<VeloxHistory> gSuiteHistory;
   inline static std::unique_ptr<folly::CPUThreadPoolExecutor> executor_;
+  inline static std::shared_ptr<optimizer::FunctionRegistry> functionRegistry_;
 };
 
 /// Filters on BIGINT columns.

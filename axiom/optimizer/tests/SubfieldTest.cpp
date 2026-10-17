@@ -111,7 +111,7 @@ class SubfieldTest : public HiveQueriesTestBase,
     HiveQueriesTestBase::SetUpTestCase();
 
     localFileFormat_ = velox::dwio::common::FileFormat::DWRF;
-    registerDfFunctions();
+    registerDfFunctions(*functionRegistry());
   }
 
   void SetUp() override {
@@ -148,13 +148,13 @@ class SubfieldTest : public HiveQueriesTestBase,
     metadata->fieldIndexForArg = {1, 2, 3};
     metadata->argOrdinal = {1, 2, 3};
 
-    auto* registry = FunctionRegistry::instance();
-    registry->registerFunction(
+    functionRegistry()->registerFunction(
         "genie", std::make_unique<FunctionMetadata>(*metadata));
 
     auto explodingMetadata = std::make_unique<FunctionMetadata>(*metadata);
     explodingMetadata->explode = explodeGenie;
-    registry->registerFunction("exploding_genie", std::move(explodingMetadata));
+    functionRegistry()->registerFunction(
+        "exploding_genie", std::move(explodingMetadata));
   }
 
   static folly::F14FastMap<PathCP, lp::ExprPtr> explodeGenie(

@@ -58,9 +58,9 @@ WriteStatsBuilder::WriteStatsBuilder(
     const connector::ConnectorWriteHandle& writeHandle,
     int32_t numDrivers,
     int32_t numWorkers) {
-  const auto* registry = FunctionRegistry::instance();
-  const auto& statsAggs = registry->statsAggregates();
-  const auto& countName = registry->count();
+  const auto& registry = queryCtx()->functionRegistry();
+  const auto& statsAggs = registry.statsAggregates();
+  const auto& countName = registry.count();
   if (!statsAggs.has_value() || !countName.has_value()) {
     return;
   }
