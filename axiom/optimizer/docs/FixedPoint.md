@@ -258,8 +258,10 @@ fixed point's output has no partitioning, or is gathered when its anchor is.
 
 A step that needs every row of a key on one task, such as a visited-set
 anti-join, needs partitioned loops: the delta repartitioned on a key each
-iteration, and a stop condition that every worker evaluates over all of them.
-Velox supports both; the optimizer does not plan them yet.
+iteration, and one stop decision over every worker's delta. Velox supports
+both: a body that repartitions, and a verdict plan that worker 0 runs for every
+worker (`ConvergenceConfig::globalVerdict`). The optimizer does not plan them
+yet.
 
 ## Boundaries
 
