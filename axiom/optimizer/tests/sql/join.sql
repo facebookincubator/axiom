@@ -916,6 +916,12 @@ FROM t o
 FULL OUTER JOIN t r ON o.a = r.a AND r.b > 140
 GROUP BY 1
 ----
+-- The same grouping over a full join of two grouped inputs with NULL keys.
+SELECT coalesce(l.k, r.k) AS k, count(*)
+FROM (SELECT nullif(a, 3) AS k FROM t GROUP BY 1) l
+FULL OUTER JOIN (SELECT nullif(a, 1) AS k FROM t GROUP BY 1) r ON l.k = r.k
+GROUP BY 1
+----
 -- Join the coalesced key from a full join that has an additional key.
 SELECT coalesce(t1.a, t2.a) AS k
 FROM t t1
@@ -928,6 +934,12 @@ SELECT preserved.a, count(*)
 FROM t_large matching
 RIGHT JOIN t preserved ON matching.k = preserved.a
 GROUP BY preserved.a
+----
+-- Same, with a one-row preserved side.
+SELECT preserved.k, count(*)
+FROM t matching
+RIGHT JOIN (SELECT 1 AS k LIMIT 1) preserved ON matching.a = preserved.k
+GROUP BY preserved.k
 ----
 -- A right join feeding a left join on its preserved right key. The second
 -- join condition also reads the first join's null-supplying side.

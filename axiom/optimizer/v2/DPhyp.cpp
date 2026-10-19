@@ -757,7 +757,8 @@ class Enumerator {
              .has_value()) {
       return nullptr;
     }
-    return bestOnPartitioning(input->cover(), Partitioning::globalGather());
+    return bestOnPartitioning(
+        input->cover(), Partitioning::gather(PropertyScope::kGlobal));
   }
 
   // Cheapest plan for `cover` standard-hash partitioned on `keys`.
@@ -767,8 +768,10 @@ class Enumerator {
       bool replicateNullsAndAny) {
     return bestOnPartitioning(
         cover,
-        Partitioning::globalHash(
-            keysInCoverSchema(keys, cover), replicateNullsAndAny));
+        Partitioning::hash(
+            PropertyScope::kGlobal,
+            keysInCoverSchema(keys, cover),
+            replicateNullsAndAny));
   }
 
   // Cheapest plan for `cover` repartitioned on `keys` using `targetType`
@@ -780,8 +783,10 @@ class Enumerator {
       const connector::PartitionType* targetType) {
     return bestOnPartitioning(
         cover,
-        Partitioning::globalConnectorHash(
-            keysInCoverSchema(keys, cover), targetType));
+        Partitioning::connectorHash(
+            PropertyScope::kGlobal,
+            keysInCoverSchema(keys, cover),
+            targetType));
   }
 
   // Plans for `cover` partitioned on a subset of `keys`. May add a grouped

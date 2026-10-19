@@ -740,7 +740,7 @@ TEST_P(SetTest, exceptAllPartitioning) {
               matchScan("u"),
               core::JoinType::kCountingAnti,
               {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
-          .localAggregation({"a"}, {"count(*) as count"})
+          .singleAggregation({"a"}, {"count(*) as count"})
           .build());
 
   AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
@@ -752,9 +752,7 @@ TEST_P(SetTest, exceptAllPartitioning) {
               matchScan("u").shuffle({"b"}),
               core::JoinType::kCountingAnti,
               {.keys = {{"a = b"}}, .outputColumnNames = {{"a"}}})
-          .partialAggregation({"a"}, {"count(*) as count"})
-          .localPartition({"a"})
-          .finalAggregation({"a"}, {"count(count) as count"})
+          .singleAggregation({"a"}, {"count(*) as count"})
           .gather()
           .build());
 }

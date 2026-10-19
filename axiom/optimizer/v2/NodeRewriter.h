@@ -154,7 +154,7 @@ class NodeRewriter {
       return node;
     }
     return builder_.template make<Limit>(
-        {newInput, node->offset(), node->count()});
+        {newInput, node->offset(), node->count(), node->isPartial()});
   }
 
   virtual NodeCP rewriteSort(const Sort* node, TContext& context) {
@@ -163,7 +163,7 @@ class NodeRewriter {
       return node;
     }
     return builder_.template make<Sort>(
-        {newInput, node->orderKeys(), node->orderTypes()});
+        {newInput, node->orderKeys(), node->orderTypes(), node->isPartial()});
   }
 
   virtual NodeCP rewriteTopN(const TopN* node, TContext& context) {
@@ -176,7 +176,8 @@ class NodeRewriter {
          node->orderKeys(),
          node->orderTypes(),
          node->offset(),
-         node->count()});
+         node->count(),
+         node->isPartial()});
   }
 
   virtual NodeCP rewriteAggregate(const Aggregate* node, TContext& context) {

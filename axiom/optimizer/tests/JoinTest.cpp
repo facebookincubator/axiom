@@ -1460,9 +1460,8 @@ TEST_P(JoinTest, coalescePropagation) {
         "  (SELECT k FROM v WHERE k = t_k LIMIT 2) "
         "FROM t LEFT JOIN u ON t_k = u_k";
     SCOPED_TRACE(query);
-    const auto plan = toSingleNodePlan(query);
-    AXIOM_ASSERT_PLAN_V2(
-        plan,
+    const auto logicalPlan = parseSelect(query);
+    const auto expectedPlan =
         matchScan("t")
             .hashJoinLeft(matchScan("u"), {.keys = {{"t_k = u_k"}}})
             .assignUniqueId("row_id")
@@ -1470,7 +1469,31 @@ TEST_P(JoinTest, coalescePropagation) {
             .rowNumber({"row_id"}, 2)
             .enforceDistinct({"row_id"})
             .project({"t_k", "k"})
-            .build());
+            .build();
+    AXIOM_ASSERT_PLAN_V2(toSingleNodePlan(logicalPlan), expectedPlan);
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan, /*numDrivers=*/4), expectedPlan);
+  }
+
+  {
+    const auto query =
+        "SELECT coalesce(t_k, u_k), "
+        "  (SELECT k FROM v WHERE k = t_k ORDER BY k LIMIT 2) "
+        "FROM t LEFT JOIN u ON t_k = u_k";
+    SCOPED_TRACE(query);
+    const auto logicalPlan = parseSelect(query);
+    const auto expectedPlan =
+        matchScan("t")
+            .hashJoinLeft(matchScan("u"), {.keys = {{"t_k = u_k"}}})
+            .assignUniqueId("row_id")
+            .hashJoinLeft(matchScan("v"), {.keys = {{"t_k = k"}}})
+            .topNRowNumber({"row_id"}, {"k"}, 2)
+            .enforceDistinct({"row_id"})
+            .project({"t_k", "k"})
+            .build();
+    AXIOM_ASSERT_PLAN_V2(toSingleNodePlan(logicalPlan), expectedPlan);
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan, /*numDrivers=*/4), expectedPlan);
   }
 
   {
@@ -2207,7 +2230,7 @@ TEST_P(JoinTest, fullJoinGathered) {
               matchScan("u").localAggregation({}, {"count(b) as y"}),
               {.keys = {{"x = y"}}})
           .project({"coalesce(x, y) as k"})
-          .localAggregation({"k"}, {"count(*) as count"})
+          .singleAggregation({"k"}, {"count(*) as count"})
           .build());
 
   AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
@@ -2218,6 +2241,30 @@ TEST_P(JoinTest, fullJoinGathered) {
               matchScan("u").distributedAggregation({}, {"count(b) as y"}),
               {.keys = {{"x = y"}}})
           .project({"coalesce(x, y) as k"})
+          .singleAggregation({"k"}, {"count(*) as count"})
+          .build());
+}
+
+// A full join over inputs each partitioned on the join key across drivers does
+// not keep that partitioning, so an aggregation on the coalesced key
+// repartitions across drivers.
+TEST_P(JoinTest, fullJoinDriverPartitionedInputs) {
+  addTableWithStats("t", {"a"}, 10'000);
+  addTableWithStats("u", {"b"}, 10'000);
+
+  const auto logicalPlan = parseSelect(
+      "SELECT coalesce(x, y) AS k, count(*) "
+      "FROM (SELECT a AS x FROM t GROUP BY a) "
+      "FULL OUTER JOIN (SELECT b AS y FROM u GROUP BY b) ON x = y "
+      "GROUP BY 1");
+
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(logicalPlan, /*numDrivers=*/4),
+      matchScan("t")
+          .localAggregation({"a"}, {})
+          .hashJoinFull(
+              matchScan("u").localAggregation({"b"}, {}), {.keys = {{"a = b"}}})
+          .project({"coalesce(a, b) as k"})
           .localAggregation({"k"}, {"count(*) as count"})
           .build());
 }
@@ -2247,19 +2294,20 @@ TEST_P(JoinTest, gatheredProbe) {
   AXIOM_ASSERT_PLAN_V2(
       toSingleNodePlan(logicalPlan, /*numDrivers=*/4),
       matchProbe(matchScan("t")
-                     .partialAggregation({"a"}, {})
-                     .localLimit(0, 1)
-                     .finalAggregation({"a"}, {})
+                     .singleAggregation({"a"}, {})
+                     .partialLimit(0, 1)
+                     .localGather()
+                     .singleAggregation({"a"}, {})
                      .finalLimit(0, 1)));
 
   AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
       planVelox(logicalPlan).plan,
       matchProbe(matchScan("t")
-                     .partialAggregation({"a"}, {})
-                     .localLimit(0, 1)
+                     .singleAggregation({"a"}, {})
+                     .partialLimit(0, 1)
                      .gather()
                      .localGather()
-                     .finalAggregation({"a"}, {})
+                     .singleAggregation({"a"}, {})
                      .finalLimit(0, 1)));
 }
 

@@ -371,9 +371,24 @@ class Printer : public NodeVisitor {
   void visit(const Exchange& node, NodeVisitorContext& context) const override {
     auto& ctx = static_cast<Context&>(context);
     header(ctx, node);
-    ctx.out << spaces(ctx.indent + 2)
-            << "partitionKeys: " << formatExprs(node.partitioning().keys)
-            << '\n';
+    const auto& partitioning = node.partitioning();
+    const auto pad = spaces(ctx.indent + 2);
+    ctx.out << pad << "partitioning: " << partitioning.scope << ' '
+            << partitioning.kind << '\n';
+    if (!partitioning.keys.empty()) {
+      ctx.out << pad << "partitionKeys: " << formatExprs(partitioning.keys)
+              << '\n';
+    }
+    if (!partitioning.orderKeys.empty()) {
+      ctx.out << pad << "orderKeys: " << formatExprs(partitioning.orderKeys)
+              << '\n';
+      auto orderTypes =
+          partitioning.orderTypes | std::views::transform([](OrderType type) {
+            return OrderTypeName::toName(type);
+          });
+      ctx.out << pad << "orderTypes: "
+              << fmt::format("{}", fmt::join(orderTypes, ", ")) << '\n';
+    }
     visitInputs(node, ctx);
   }
 

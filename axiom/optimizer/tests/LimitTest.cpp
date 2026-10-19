@@ -126,21 +126,88 @@ TEST_P(LimitTest, distinctLimit) {
   AXIOM_ASSERT_PLAN_V2(
       toSingleNodePlan(sql, /*numDrivers=*/4),
       matchScan("nation")
-          .partialAggregation({"n_regionkey"}, {})
-          .localLimit(0, 5)
-          .finalAggregation({"n_regionkey"}, {})
+          .singleAggregation({"n_regionkey"}, {})
+          .partialLimit(0, 5)
+          .localGather()
+          .singleAggregation({"n_regionkey"}, {})
           .finalLimit(2, 3)
           .build());
 
   AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
       toDistributedPlan(sql),
       matchScan("nation")
-          .partialAggregation({"n_regionkey"}, {})
-          .localLimit(0, 5)
+          .singleAggregation({"n_regionkey"}, {})
+          .partialLimit(0, 5)
           .gather()
           .localGather()
-          .finalAggregation({"n_regionkey"}, {})
+          .singleAggregation({"n_regionkey"}, {})
           .finalLimit(2, 3)
+          .build());
+}
+
+// Input already partitioned on the distinct keys across tasks but not across
+// drivers still gathers each driver's limited distinct keys to one driver.
+TEST_P(LimitTest, distinctLimitOverPartitionedInput) {
+  if (!useV2_) {
+    return;
+  }
+
+  testConnector_->addTable("t", ROW("t_k", BIGINT()))
+      ->setStats(1'000'000, {{"t_k", {.numDistinct = 1'000'000}}});
+  testConnector_->addTable("u", ROW("u_k", BIGINT()))
+      ->setStats(1'000'000, {{"u_k", {.numDistinct = 1'000'000}}});
+  optimizerOptions_.broadcastSizeLimit = 1;
+
+  constexpr auto sql = "SELECT DISTINCT t_k FROM t JOIN u ON t_k = u_k LIMIT 3";
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      toDistributedPlan(sql),
+      matchScan("t")
+          .shuffle({"t_k"})
+          .hashJoinInner(
+              matchScan("u").shuffle({"u_k"}), {.keys = {{"t_k = u_k"}}})
+          .singleAggregation({"t_k"}, {})
+          .partialLimit(0, 3)
+          .gather()
+          .localGather()
+          .singleAggregation({"t_k"}, {})
+          .finalLimit(0, 3)
+          .build());
+}
+
+// Input already partitioned on the distinct keys across tasks and drivers
+// deduplicates once, before the limit.
+TEST_P(LimitTest, distinctLimitOverCoLocatedInput) {
+  if (!useV2_) {
+    return;
+  }
+
+  constexpr auto sql =
+      "SELECT DISTINCT n_regionkey, "
+      "  rank() OVER (PARTITION BY n_regionkey ORDER BY n_name) AS r "
+      "FROM nation "
+      "LIMIT 3";
+
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(sql, /*numDrivers=*/4),
+      matchScan("nation")
+          .localPartition({"n_regionkey"})
+          .window(
+              {"rank() OVER (PARTITION BY n_regionkey ORDER BY n_name) as r"})
+          .project({"n_regionkey", "r"})
+          .singleAggregation({"n_regionkey", "r"}, {})
+          .localLimit(0, 3)
+          .build());
+
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      toDistributedPlan(sql),
+      matchScan("nation")
+          .shuffle({"n_regionkey"})
+          .localPartition({"n_regionkey"})
+          .window(
+              {"rank() OVER (PARTITION BY n_regionkey ORDER BY n_name) as r"})
+          .project({"n_regionkey", "r"})
+          .singleAggregation({"n_regionkey", "r"}, {})
+          .distributedLimit(0, 3)
           .build());
 }
 
@@ -181,7 +248,11 @@ TEST_P(LimitTest, orderByLimit) {
   // final limit trims to 10.
   AXIOM_ASSERT_PLAN(
       toSingleNodePlan(sql, /*numDrivers=*/4),
-      matchScan("nation").topN(10).localMerge().finalLimit(0, 10).build());
+      matchScan("nation")
+          .topN(10)
+          .localMerge({"n_name DESC"})
+          .finalLimit(0, 10)
+          .build());
 
   // Each worker limits what it sends over the merge exchange, and the final
   // limit trims the merged output of all workers. v1 omits the per-worker
@@ -190,7 +261,7 @@ TEST_P(LimitTest, orderByLimit) {
       toDistributedPlan(sql),
       matchScan("nation")
           .topN(10)
-          .localMerge()
+          .localMerge({"n_name DESC"})
           .finalLimitIf(useV2_, 0, 10)
           .shuffleMerge()
           .finalLimit(0, 10)
@@ -210,7 +281,7 @@ TEST_P(LimitTest, orderByOffsetAndLimit) {
       toDistributedPlan(sql),
       matchScan("nation")
           .topN(15)
-          .localMerge()
+          .localMerge({"n_name DESC"})
           .finalLimitIf(useV2_, 0, 15)
           .shuffleMerge()
           .finalLimit(5, 10)

@@ -511,10 +511,8 @@ TEST_P(DistinctAggregationTest, markDistinctPreGroupedInput) {
           .partialAggregation({"a"}, {"max(b)", "sum(c)"})
           .localPartition({"a"})
           .finalAggregation()
-          .localPartition({"a", "d"})
           .markDistinct({"a", "d"}, {"m0"})
-          .localPartition({"a"})
-          .singleAggregation({"a"}, {"count(d) filter (where m0)", "sum(z)"})
+          .streamingAggregation({"a"}, {"count(d) filter (where m0)", "sum(z)"})
           .build());
 }
 

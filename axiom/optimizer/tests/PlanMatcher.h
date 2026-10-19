@@ -629,6 +629,14 @@ class PlanMatcherBuilder {
   PlanMatcherBuilder& localPartition(
       const std::vector<std::string>& partitionKeys);
 
+  /// Matches a keyed LocalPartition node only when 'condition' is true;
+  /// otherwise a no-op.
+  PlanMatcherBuilder& localPartitionIf(
+      bool condition,
+      const std::vector<std::string>& partitionKeys) {
+    return condition ? localPartition(partitionKeys) : *this;
+  }
+
   /// Matches a LocalPartition node with the specified source matchers.
   /// @param sources Matchers for the partition sources.
   PlanMatcherBuilder& localPartition(
@@ -644,8 +652,22 @@ class PlanMatcherBuilder {
   /// keys).
   PlanMatcherBuilder& localGather();
 
+  /// Matches a local gather only when 'condition' is true; otherwise a no-op.
+  PlanMatcherBuilder& localGatherIf(bool condition) {
+    return condition ? localGather() : *this;
+  }
+
   /// Matches any LocalMerge node.
   PlanMatcherBuilder& localMerge();
+
+  /// Matches a LocalMerge and verifies its sort ordering. Each entry is an
+  /// ORDER BY expression with optional direction and null ordering.
+  PlanMatcherBuilder& localMerge(const std::vector<std::string>& ordering);
+
+  /// Matches a LocalMerge only when 'condition' is true; otherwise a no-op.
+  PlanMatcherBuilder& localMergeIf(bool condition) {
+    return condition ? localMerge() : *this;
+  }
 
   /// Matches any Exchange node.
   [[deprecated("Use shuffle() with AXIOM_ASSERT_DISTRIBUTED_PLAN instead")]]
@@ -802,6 +824,13 @@ class PlanMatcherBuilder {
   /// @param count Maximum number of rows to return.
   PlanMatcherBuilder& localLimit(int64_t offset, int64_t count);
 
+  /// Matches the local limit pattern only when 'condition' is true; otherwise
+  /// a no-op.
+  PlanMatcherBuilder&
+  localLimitIf(bool condition, int64_t offset, int64_t count) {
+    return condition ? localLimit(offset, count) : *this;
+  }
+
   /// Matches the distributed limit pattern: localLimit(0, offset + count) →
   /// gather → finalLimit(offset, count).
   /// @param offset Number of rows to skip.
@@ -951,6 +980,15 @@ class PlanMatcherBuilder {
   PlanMatcherBuilder& localAggregation(
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates);
+
+  /// Matches the local aggregation pattern only when 'condition' is true;
+  /// otherwise a no-op.
+  PlanMatcherBuilder& localAggregationIf(
+      bool condition,
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates) {
+    return condition ? localAggregation(groupingKeys, aggregates) : *this;
+  }
 
   /// Matches the distributed (split) aggregation pattern:
   /// partialAggregation(groupingKeys, aggregates) → shuffle →

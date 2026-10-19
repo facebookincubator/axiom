@@ -29,12 +29,11 @@
 /// declares the data shapes only; per-operator derivation and the satisfaction
 /// / shuffle-cost queries live alongside the memo that consumes them.
 ///
-/// The model splits properties by how they behave under distribution. Three
-/// categories:
+/// The model splits properties by how they behave under distribution:
 ///   - per-driver local: ordering and grouping (`LocalProperty`),
 ///   - distribution: two independent partitioning slots, global and driver
 ///     (`Partitioning` with a `PropertyScope`),
-///   - relation-level: uniqueness (`UniqueKeySet`).
+///   - relation-level: uniqueness.
 namespace facebook::axiom::optimizer::v2 {
 
 /// Scope at which a property holds. The two runtime levels distributed
@@ -60,7 +59,9 @@ enum class PartitionKind : uint8_t {
   /// No specific partitioning is guaranteed.
   kUnspecified,
   /// Partitioned on `keys` using `partitionType` (connector-specific) or
-  /// standard Velox hash when `partitionType` is null.
+  /// standard Velox hash when `partitionType` is null. At driver scope with a
+  /// null `partitionType`, the placement need not come from a hash; consumers
+  /// rely only on rows with equal `keys` sharing a driver.
   kPartitioned,
   /// All rows on one partition (single task, or single driver at driver scope).
   kGather,
@@ -78,10 +79,13 @@ AXIOM_DECLARE_ENUM_NAME(PartitionKind);
 /// two are independent.
 ///
 /// Invariants:
-///   - `keys` is non-empty only when `kind == kPartitioned`.
-///   - `orderKeys` / `orderTypes` are non-empty only for an order-preserving
-///     `kGather` (see `globalGatherMerge`).
-///   - `partitionType` is null for standard Velox hash partitioning.
+///   - `keys` is non-empty exactly when `kind == kPartitioned`.
+///   - `orderKeys` and `orderTypes` have equal size and are non-empty only for
+///     an order-preserving `kGather` (see `gatherMerge`).
+///   - `partitionType` is non-null only for connector `kPartitioned`; null
+///     means standard Velox hash partitioning, or at driver scope any
+///     placement that keeps equal `keys` on one driver.
+///   - `replicateNullsAndAny` is valid only for global `kPartitioned`.
 ///   - As a requirement a consumer states, `keys` and `orderKeys` may be any
 ///     expression. On the `Partitioning` an `Exchange` carries they must be
 ///     columns the exchange's input produces: whoever places the shuffle
@@ -109,7 +113,7 @@ struct Partitioning {
 
   /// Sort keys and their orders that an order-preserving gather merges on
   /// (lowered to a Velox `MergeExchange`). Non-empty only for a `kGather`
-  /// produced by `globalGatherMerge`; empty for a plain gather.
+  /// produced by `gatherMerge`; empty for a plain gather.
   ExprVector orderKeys;
   OrderTypeVector orderTypes;
 
@@ -132,6 +136,11 @@ struct Partitioning {
   /// data, `hashStageTasks` for standard hash, and `numWorkers` otherwise.
   int32_t numStageTasks(int32_t numWorkers, int32_t hashStageTasks) const;
 
+  /// No partitioning guarantee at `scope`.
+  static Partitioning unspecified(PropertyScope scope) {
+    return Partitioning{.scope = scope};
+  }
+
   /// A copy without the merge order (`orderKeys` / `orderTypes`). The merge
   /// order belongs to the gather-merge exchange that produced it; an operator
   /// that inherits a distribution without being that exchange keeps the kind
@@ -144,15 +153,18 @@ struct Partitioning {
     return result;
   }
 
-  /// A standard global hash partitioning on `keys`. Set `replicateNullsAndAny`
-  /// for the existence side of a null-aware anti/semi join.
-  static Partitioning globalHash(
+  /// A standard hash partitioning on `keys` at `scope`. Set
+  /// `replicateNullsAndAny` for the global existence side of a null-aware
+  /// anti/semi join.
+  static Partitioning hash(
+      PropertyScope scope,
       const ExprVector& keys,
       bool replicateNullsAndAny = false);
 
-  /// A global hash partitioning on `keys` using a connector partition
+  /// A hash partitioning on `keys` at `scope` using a connector partition
   /// function.
-  static Partitioning globalConnectorHash(
+  static Partitioning connectorHash(
+      PropertyScope scope,
       const ExprVector& keys,
       const connector::PartitionType* partitionType);
 
@@ -169,13 +181,12 @@ struct Partitioning {
       const connector::PartitionType* left,
       const connector::PartitionType* right);
 
-  /// A global gather (all rows on one task) partitioning.
-  static Partitioning globalGather();
+  /// A gather at `scope` (all rows on one task or one driver).
+  static Partitioning gather(PropertyScope scope);
 
-  /// A global gather that preserves ordering by merging the sorted per-task
-  /// streams (lowered to a Velox `MergeExchange`). `orderKeys` / `orderTypes`
-  /// are the sort keys to merge on.
-  static Partitioning globalGatherMerge(
+  /// A gather at `scope` that merges sorted input streams.
+  static Partitioning gatherMerge(
+      PropertyScope scope,
       const ExprVector& orderKeys,
       const OrderTypeVector& orderTypes);
 
@@ -187,8 +198,8 @@ struct Partitioning {
   /// broadcast otherwise.
   static Partitioning globalReplicatedTo(const Partitioning& consumer);
 
-  /// A global arbitrary (round-robin / shared-pool) partitioning.
-  static Partitioning globalArbitrary();
+  /// Arbitrary (round-robin / shared-pool) assignment at `scope`.
+  static Partitioning arbitrary(PropertyScope scope);
 
   /// True when this co-locates rows that agree on `columns` — i.e. it
   /// hash-partitions on a subset of `columns`, so every group of equal
@@ -226,11 +237,11 @@ struct Partitioning {
 /// Kind of a per-driver local property.
 enum class LocalPropertyKind : uint8_t {
   /// Rows with equal `columns` are contiguous (not necessarily ordered) within
-  /// a driver, and every such group is wholly within one driver. See
-  /// `LocalProperty` for the confinement contract.
+  /// a driver. Equal keys may occur on multiple drivers.
   kGrouped,
-  /// Rows ordered by `columns`, outermost key first, with the direction of each
-  /// given by the matching entry in `orders`.
+  /// Rows ordered within each driver by `columns`, outermost key first, with
+  /// the direction of each given by the matching entry in `orders`. Equal keys
+  /// may occur on multiple drivers.
   kSorted,
 };
 
@@ -245,16 +256,10 @@ AXIOM_DECLARE_ENUM_NAME(LocalPropertyKind);
 /// both in parallel: `columns` are the sort keys outermost first, and
 /// `orders[i]` is the direction of `columns[i]`.
 ///
-/// A local property carries driver-confinement as part of its contract, not
-/// just contiguity: a `kGrouped` set of equal `columns` (or a `kSorted`
-/// equal-key run) is both contiguous within a driver's stream AND wholly
-/// confined to that one driver — no group spans drivers. Producers must attach
-/// a local property only when both hold; a source with mere per-driver
-/// contiguity but no confinement (e.g. a bucketed/sorted scan whose splits
-/// round-robin across drivers) must not. Consumers that decide driver placement
-/// (e.g. skipping a local repartition before a single-stage aggregation) rely
-/// on this directly: a local grouping on the keys means the groups are already
-/// driver-confined.
+/// Local properties describe each driver's stream on its own and say nothing
+/// about which driver a row is on; co-location comes from partitioning and
+/// global uniqueness (see `PhysicalProperties::coLocates`). Equality is
+/// grouping equality: NULL equals NULL.
 struct LocalProperty {
   LocalPropertyKind kind{LocalPropertyKind::kGrouped};
   ColumnVector columns;
@@ -265,18 +270,16 @@ struct LocalProperty {
 using LocalPropertyVector = QGVector<LocalProperty>;
 
 /// A set of columns that is unique across the relation — i.e., functionally
-/// determines the row — at `scope`. Stored minimal: a key-set whose columns are
-/// a superset of another stored key-set is redundant and not kept, but
-/// independent minimal key-sets (e.g. `{a}` and `{b}` both unique) are all
-/// retained. `columns` is a set (a `PlanObjectSet`) so consumers can test
-/// containment ("is some unique key-set ⊆ the columns I care about?") directly.
+/// determines the row — at `scope`. `columns` is a set (a `PlanObjectSet`) so
+/// consumers can test containment ("is some unique key-set ⊆ the columns I
+/// care about?") directly. Equality is grouping equality: NULL equals NULL, so
+/// at most one row has a NULL key.
 struct UniqueKeySet {
   PlanObjectSet columns;
   PropertyScope scope{PropertyScope::kGlobal};
 };
 
-/// Unique key-sets of a relation. May hold several independent minimal
-/// key-sets, each at its own scope.
+/// Unique key-sets of a relation, each at its own scope.
 using UniqueKeySetVector = QGVector<UniqueKeySet>;
 
 /// The physical properties of one relation — the output of per-operator
@@ -298,14 +301,22 @@ struct PhysicalProperties {
   /// Unique key-sets, relation-level, each scope-tagged.
   UniqueKeySetVector unique;
 
+  /// Returns true when the partitioning at `scope` or global uniqueness
+  /// guarantees equal `keys` occur on one task (`kGlobal`) or one driver
+  /// (`kDriver`). Empty `keys` asks whether all rows are on one task or driver.
+  bool coLocates(PropertyScope scope, const ExprVector& keys) const;
+
   /// Checks the invariant that these properties are expressed over the node's
   /// own `outputColumns`. A partitioning's keys and merge order may be computed
   /// expressions (the partition function's input), but every column they depend
   /// on must be an output column, so the partitioning is evaluable here.
-  /// Local-property columns and every unique key-set must themselves be output
+  /// Local-property columns and unique key-sets must themselves be output
   /// columns. Fails (`VELOX_CHECK`) on violation. Called by the `Node` base
   /// constructor.
   void checkReferencesColumns(const PlanObjectSet& outputColumns) const;
 };
 
 } // namespace facebook::axiom::optimizer::v2
+
+AXIOM_ENUM_FORMATTER(facebook::axiom::optimizer::v2::PropertyScope);
+AXIOM_ENUM_FORMATTER(facebook::axiom::optimizer::v2::PartitionKind);
