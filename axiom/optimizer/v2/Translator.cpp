@@ -1659,21 +1659,18 @@ void Translator::translateGroupingKeys(
         continue;
       }
     }
-    // Reuse the input column when the grouping key is a column reference:
-    // Velox `AggregationNode` emits grouping-key output under the input
-    // field-access name. For grouping sets, `GroupIdNode` requires output
-    // names distinct from the input columns for the NULL-padded copies, so
-    // mint a fresh column rather than reusing the (possibly colliding) LP
-    // symbol.
+    // For grouping sets, `GroupIdNode` requires output names distinct from the
+    // input columns for the NULL-padded copies, so mint a fresh column rather
+    // than reusing the (possibly colliding) LP symbol.
     ColumnCP column;
     if (hasGroupingSets) {
       column = Column::create(toName(names[i]), keyExpr->value());
-    } else if (keyExpr->is(PlanType::kColumnExpr)) {
-      column = keyExpr->as<Column>();
     } else {
-      column = columnForSymbol(toName(names[i]), keyExpr->value());
-    }
-    if (!hasGroupingSets) {
+      column = groupingKeyOutput(translatedKeys, i, names[i]);
+      if (column == nullptr) {
+        scope[names[i]] = keyExpr;
+        continue;
+      }
       keyToOutput.emplace(keyExpr, column);
     }
     const bool constantAboveAggregation = keyExpr->is(PlanType::kLiteralExpr) &&
@@ -1685,6 +1682,19 @@ void Translator::translateGroupingKeys(
     keys.push_back(keyExpr);
     columns.push_back(column);
   }
+}
+
+ColumnCP Translator::groupingKeyOutput(
+    const ExprVector& keys,
+    size_t index,
+    std::string_view name) {
+  if (!NodeSimplifier::keepsGroupingKey(keys, index)) {
+    return nullptr;
+  }
+  ExprCP key = keys[index];
+  return key->is(PlanType::kColumnExpr)
+      ? key->as<Column>()
+      : columnForSymbol(toName(name), key->value());
 }
 
 Translated Translator::translateAggregate(
@@ -2306,16 +2316,7 @@ Translated Translator::translateSet(
           set.outputType(),
           allNames(*set.outputType()),
           /*dedupAbove=*/true);
-      const ColumnVector& cols = all.node->outputColumns();
-      auto simplified = nodeSimplifier_.make(
-          Aggregate::Key{
-              all.node,
-              ExprVector{cols.begin(), cols.end()},
-              AggregateCallVector{},
-              ColumnVector{cols}},
-          {all.node, {}});
-      applySubstitutions(simplified.substitutions, all.scope);
-      return {nodeSimplifier_.materialize(simplified), std::move(all.scope)};
+      return dedupSetOutputs(all.node, std::move(all.scope), *set.outputType());
     }
     case lp::SetOperation::kIntersect:
     case lp::SetOperation::kIntersectAll:
@@ -2412,22 +2413,39 @@ Translated Translator::translateSet(
       }
 
       if (isDistinct) {
-        NodeCP setNode = simplified.node;
-        simplified = nodeSimplifier_.make(
-            Aggregate::Key{
-                setNode,
-                ExprVector{setOutputColumns.begin(), setOutputColumns.end()},
-                AggregateCallVector{},
-                setOutputColumns},
-            std::move(simplified));
-        applySubstitutions(simplified.substitutions, scope);
-        VELOX_CHECK(!simplified.empty());
-        return {simplified.node, std::move(scope)};
+        return dedupSetOutputs(
+            simplified.node, std::move(scope), *set.outputType());
       }
       return {simplified.node, std::move(scope)};
     }
   }
   VELOX_UNREACHABLE();
+}
+
+Translated Translator::dedupSetOutputs(
+    NodeCP node,
+    Scope scope,
+    const velox::RowType& outputType) {
+  ExprVector keys;
+  keys.reserve(outputType.size());
+  for (const auto& name : outputType.names()) {
+    keys.push_back(scope.at(name));
+  }
+
+  ExprVector keptKeys;
+  ColumnVector outputs;
+  for (size_t i = 0; i < keys.size(); ++i) {
+    if (ColumnCP output = groupingKeyOutput(keys, i, outputType.nameOf(i))) {
+      keptKeys.push_back(keys[i]);
+      outputs.push_back(output);
+    }
+  }
+  auto simplified = nodeSimplifier_.make(
+      Aggregate::Key{
+          node, std::move(keptKeys), AggregateCallVector{}, std::move(outputs)},
+      {node, {}});
+  applySubstitutions(simplified.substitutions, scope);
+  return {nodeSimplifier_.materialize(simplified), std::move(scope)};
 }
 
 namespace {

@@ -316,3 +316,26 @@ SELECT 1 INTERSECT SELECT a FROM t
 -- duckdb: VALUES (100)
 SELECT 100 EXCEPT SELECT a FROM t
 ----
+-- A UNION whose inputs all give each output the same constant returns one row
+-- when an input has rows and none otherwise.
+-- count 0
+SELECT 1 FROM t WHERE a > 5 UNION SELECT 1 FROM t WHERE b > 1000
+----
+SELECT CAST(NULL AS BIGINT), 'x' FROM t WHERE a > 5
+UNION SELECT CAST(NULL AS BIGINT), 'x' FROM t WHERE a > 2
+----
+-- A UNION with an empty input returns each distinct row of the other input
+-- once.
+SELECT 1 FROM t WHERE a > 0 UNION SELECT a FROM t WHERE false
+----
+SELECT a % 2 FROM t WHERE b > 0 UNION SELECT a FROM t WHERE false
+----
+-- A constant UNION whose inputs reference an outer column is not supported.
+-- error_v1: Correlated reference inside a UNION ALL branch is not supported yet
+-- error_v2: Correlated reference inside a UnionAll branch is not supported yet
+SELECT count(*) FROM t AS u
+WHERE EXISTS (
+  SELECT 1 FROM t WHERE t.a = u.a AND t.b > 1000
+  UNION
+  SELECT 1 FROM t WHERE t.a = u.a AND t.b > 1000)
+----

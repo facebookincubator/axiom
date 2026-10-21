@@ -274,6 +274,16 @@ class Translator {
       ColumnVector& columns,
       Scope& scope);
 
+  // Returns the column an Aggregate publishes the key at 'index' of 'keys'
+  // under, or nullptr when the Aggregate does not keep the key
+  // (`NodeSimplifier::keepsGroupingKey`). A column key is its own output, since
+  // Velox `AggregationNode` emits a grouping key under its input field-access
+  // name; any other kept key gets a column named 'name'.
+  ColumnCP groupingKeyOutput(
+      const ExprVector& keys,
+      size_t index,
+      std::string_view name);
+
   // Lowers GROUPING SETS / ROLLUP / CUBE to a GroupId plus a plain aggregate
   // keyed on an explicit group-id column. Returns the aggregation node.
   NodeCP lowerGroupingSets(
@@ -293,6 +303,12 @@ class Translator {
   Translated translateSet(
       const logical_plan::SetNode& set,
       const LpNameSet& required);
+
+  // Dedups the rows 'node' produces for a set operation. Groups by what 'scope'
+  // binds each name of 'outputType' to: a column of 'node' or a literal.
+  Translated
+  dedupSetOutputs(NodeCP node, Scope scope, const velox::RowType& outputType);
+
   Translated translateJoin(
       const logical_plan::JoinNode& join,
       const LpNameSet& required);
@@ -372,8 +388,10 @@ class Translator {
 
   // Concatenates 'legs'. 'legExprs[i][j]' is the expression leg i produces at
   // output position j, which leg i materializes as a column named
-  // 'legNames[i][j]'. The result publishes position j under 'names[j]' in a
-  // column 'makeColumn' creates from the position's value of type 'types[j]'.
+  // 'legNames[i][j]'. The result's scope binds 'names[j]' to a column
+  // 'makeColumn' creates from the position's value of type 'types[j]', or to
+  // what simplifying the UnionAll substitutes for it: a literal, or a column of
+  // the one remaining leg.
   Translated makeUnionAll(
       std::vector<NodeCP> legs,
       const std::vector<ExprVector>& legExprs,

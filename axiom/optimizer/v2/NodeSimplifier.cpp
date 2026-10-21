@@ -365,21 +365,15 @@ NodeSimplifier::SimplifiedNode NodeSimplifier::make(
 
   const size_t originalNumKeys = key.groupingKeys.size();
   VELOX_CHECK_GE(key.outputColumns.size(), originalNumKeys);
-  const size_t numNonLiteralKeys =
-      std::ranges::count_if(key.groupingKeys, [](ExprCP groupingKey) {
-        return !groupingKey->is(PlanType::kLiteralExpr);
-      });
 
   PlanSubstitutions outputSubstitutions;
   ExprVector keptKeys;
   ColumnVector keptKeyOutputs;
   folly::F14FastMap<ExprCP, ColumnCP> firstOutputForKey;
-  bool keptLiteral = false;
   for (size_t i = 0; i < originalNumKeys; ++i) {
     ExprCP groupingKey = key.groupingKeys[i];
     ColumnCP output = key.outputColumns[i];
-    if (groupingKey->is(PlanType::kLiteralExpr) &&
-        (numNonLiteralKeys != 0 || keptLiteral)) {
+    if (!keepsGroupingKey(key.groupingKeys, i)) {
       outputSubstitutions.add(output, groupingKey);
       continue;
     }
@@ -393,7 +387,6 @@ NodeSimplifier::SimplifiedNode NodeSimplifier::make(
     }
     keptKeys.push_back(groupingKey);
     keptKeyOutputs.push_back(output);
-    keptLiteral |= groupingKey->is(PlanType::kLiteralExpr);
   }
 
   AggregateCallVector keptAggregates;
@@ -446,6 +439,17 @@ NodeSimplifier::SimplifiedNode NodeSimplifier::make(
   outputSubstitutions.merge(input.substitutions);
   outputSubstitutions.retainVisible(output->outputColumns(), exprs_);
   return {output, std::move(outputSubstitutions)};
+}
+
+// static
+bool NodeSimplifier::keepsGroupingKey(
+    const ExprVector& groupingKeys,
+    size_t index) {
+  const auto isLiteral = [](ExprCP key) {
+    return key->is(PlanType::kLiteralExpr);
+  };
+  return !isLiteral(groupingKeys[index]) ||
+      (index == 0 && std::ranges::all_of(groupingKeys, isLiteral));
 }
 
 NodeSimplifier::SimplifiedNode NodeSimplifier::make(

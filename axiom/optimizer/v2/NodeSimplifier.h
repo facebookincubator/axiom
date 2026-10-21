@@ -105,6 +105,13 @@ class NodeSimplifier {
   /// constant FILTER conditions.
   SimplifiedNode make(Aggregate::Key key, SimplifiedNode input);
 
+  /// Returns whether an Aggregate grouping by 'groupingKeys' keeps the key at
+  /// 'index' or replaces it with its literal value. A literal key has one value
+  /// in every row, so the Aggregate keeps a literal only when every key is a
+  /// literal, and then only the first: that key still makes the Aggregate
+  /// return no row for no input.
+  static bool keepsGroupingKey(const ExprVector& groupingKeys, size_t index);
+
   /// Builds a GroupId after simplifying its grouping-key layout.
   SimplifiedNode make(GroupId::Key key, SimplifiedNode input);
 
@@ -160,6 +167,8 @@ class NodeSimplifier {
       std::optional<SimplifiedNode> end);
 
   /// Builds a UnionAll after restoring each leg's positional columns.
+  /// Substitutes outputs that are one literal in every non-empty leg, and
+  /// returns a single non-empty leg as is.
   SimplifiedNode make(UnionAll::Key key, std::vector<SimplifiedNode> inputs);
 
   /// Builds an inner, outer, or semi Join after simplifying constant equi-key
