@@ -339,6 +339,10 @@ class TestConnectorMetadata;
 /// only for the requested buckets' entries.
 class TestSplitManager : public ConnectorSplitManager {
  public:
+  /// `metadata` must outlive this split manager.
+  explicit TestSplitManager(TestConnectorMetadata& metadata)
+      : metadata_{metadata} {}
+
   folly::coro::Task<std::vector<PartitionHandlePtr>> co_listPartitions(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
@@ -350,6 +354,10 @@ class TestSplitManager : public ConnectorSplitManager {
       const std::vector<PartitionHandlePtr>& partitions,
       const std::shared_ptr<PartitionType>& partitionType,
       std::optional<double> samplePercentage) override;
+
+ private:
+  // Metadata that resolves the tables this split manager enumerates.
+  TestConnectorMetadata& metadata_;
 };
 
 class TestColumnHandle : public velox::connector::ColumnHandle {
@@ -607,7 +615,7 @@ class TestConnectorMetadata : public ConnectorMetadata {
 
   explicit TestConnectorMetadata(TestConnector* connector)
       : connector_(connector),
-        splitManager_(std::make_unique<TestSplitManager>()) {}
+        splitManager_(std::make_unique<TestSplitManager>(*this)) {}
 
   const velox::config::ConfigProvider* configProvider() const override {
     static const TestMetadataConfigProvider kProvider;
