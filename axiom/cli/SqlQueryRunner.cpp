@@ -271,6 +271,26 @@ SqlQueryRunner::SqlQueryRunner(
         connectorRegistry,
     std::shared_ptr<connector::ConnectorMetadataRegistry::Registry>
         metadataRegistry)
+    : SqlQueryRunner(
+          std::move(user),
+          progressScheduler,
+          useOptimizerV2,
+          std::move(connectorRegistry),
+          std::move(metadataRegistry),
+          [](auto& connectorRegistry, auto& metadataRegistry) {
+            return std::make_unique<facebook::axiom::Connectors>(
+                connectorRegistry, metadataRegistry);
+          }) {}
+
+SqlQueryRunner::SqlQueryRunner(
+    std::string user,
+    folly::FunctionScheduler* progressScheduler,
+    bool useOptimizerV2,
+    std::shared_ptr<velox::connector::ConnectorRegistry::Registry>
+        connectorRegistry,
+    std::shared_ptr<connector::ConnectorMetadataRegistry::Registry>
+        metadataRegistry,
+    ConnectorsFactory connectorsFactory)
     : executor_{std::make_shared<folly::CPUThreadPoolExecutor>(
           folly::available_concurrency() * 2)},
       user_{std::move(user)},
@@ -298,7 +318,8 @@ SqlQueryRunner::SqlQueryRunner(
           connectorRegistry
               ? velox::memory::CustomMemoryResourceRegistry::createRegistry(
                     nullptr)
-              : nullptr} {
+              : nullptr},
+      connectorsFactory_{std::move(connectorsFactory)} {
   VELOX_CHECK_EQ(
       connectorRegistry == nullptr,
       metadataRegistry == nullptr,
@@ -321,8 +342,8 @@ void SqlQueryRunner::initialize(
     PermissionCheck permissionCheck,
     LogicalPlanCheck logicalPlanCheck,
     std::function<std::string()> queryIdGenerator) {
-  connectors_ = std::make_unique<facebook::axiom::Connectors>(
-      *connectorRegistry_, *metadataRegistry_);
+  connectors_ = connectorsFactory_(*connectorRegistry_, *metadataRegistry_);
+  VELOX_CHECK_NOT_NULL(connectors_);
 
   static folly::once_flag kInitialized;
 

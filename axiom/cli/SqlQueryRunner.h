@@ -564,6 +564,26 @@ class SqlQueryRunner {
     return defaultSchema_;
   }
 
+ protected:
+  // Creates the catalog registration helper used by initialize().
+  using ConnectorsFactory =
+      std::function<std::unique_ptr<facebook::axiom::Connectors>(
+          facebook::velox::connector::ConnectorRegistry::Registry&,
+          facebook::axiom::connector::ConnectorMetadataRegistry::Registry&)>;
+
+  // Constructs a runner whose initialize() callback receives the connector
+  // helper created by connectorsFactory.
+  SqlQueryRunner(
+      std::string user,
+      folly::FunctionScheduler* progressScheduler,
+      bool useOptimizerV2,
+      std::shared_ptr<facebook::velox::connector::ConnectorRegistry::Registry>
+          connectorRegistry,
+      std::shared_ptr<
+          facebook::axiom::connector::ConnectorMetadataRegistry::Registry>
+          metadataRegistry,
+      ConnectorsFactory connectorsFactory);
+
  private:
   // Creates a query context over this runner's execution state. The context
   // must not outlive the runner.
@@ -820,6 +840,9 @@ class SqlQueryRunner {
   const std::shared_ptr<
       facebook::velox::memory::CustomMemoryResourceRegistry::Registry>
       customMemoryResourceRegistry_;
+
+  // Builds the connector helper during initialize().
+  const ConnectorsFactory connectorsFactory_;
 
   // Registers catalogs into this runner's connector and metadata registries.
   std::unique_ptr<facebook::axiom::Connectors> connectors_;
