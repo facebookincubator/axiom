@@ -2407,7 +2407,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
               newInput, node->call(), node->result(), node->outputColumns()},
           {newInput, std::move(child.outputSubstitutions)});
       child.outputSubstitutions = std::move(simplified.substitutions);
-      return simplified.node;
+      return nodeSimplifier_.materialize(simplified);
     });
   }
 
@@ -2544,9 +2544,8 @@ class Pushdown : public NodeRewriter<PushdownContext> {
                   rankColumn,
                   std::move(newOutputColumns)},
               {newInput, std::move(childContext.outputSubstitutions)});
-    childContext.outputSubstitutions = std::move(simplified.substitutions);
-    blocked = childContext.outputSubstitutions.apply(blocked, exprs_);
-    return maybeWrapFilter(simplified.node, std::move(blocked));
+    return finishSimplifiedNode(
+        std::move(simplified), std::move(blocked), childContext);
   }
 
   // Velox's window operators pass every input column through, so a column

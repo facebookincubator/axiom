@@ -335,6 +335,33 @@ FROM (
 )
 WHERE event_type = 'turn'
 ----
+-- A partition-key filter that no input row satisfies empties a ranking
+-- window, with or without a filter left above it, an ORDER BY or a read of
+-- the rank.
+-- count 0
+SELECT b
+FROM (
+  SELECT a, b, row_number() OVER (PARTITION BY a) AS rn
+  FROM (SELECT 1 AS a, 10 AS b UNION ALL SELECT 2, 20) AS u
+)
+WHERE rn = 1 AND a = 3 AND b > 0
+----
+-- count 0
+SELECT b
+FROM (
+  SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b) AS rn
+  FROM (SELECT 1 AS a, 10 AS b UNION ALL SELECT 2, 20) AS u
+)
+WHERE rn = 1 AND a = 3
+----
+-- count 0
+SELECT b, rn
+FROM (
+  SELECT a, b, rank() OVER (PARTITION BY a ORDER BY b) AS rn
+  FROM (SELECT 1 AS a, 10 AS b UNION ALL SELECT 2, 20) AS u
+)
+WHERE rn <= 2 AND a = 3
+----
 -- Non-partition filter stays above window.
 SELECT * FROM (SELECT a, b, sum(b) OVER (PARTITION BY a) AS s FROM t) WHERE s > 40
 ----

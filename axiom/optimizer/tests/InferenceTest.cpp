@@ -103,6 +103,33 @@ TEST_F(InferenceTest, joinKey) {
           .build());
 }
 
+// A call over an input with no rows plans to a Values with no rows that holds
+// the columns read above it.
+TEST_F(InferenceTest, emptyInput) {
+  const std::string query =
+      "SELECT test_inference(a) AS b "
+      "FROM ("
+      "  SELECT a "
+      "  FROM (SELECT 'x' AS a UNION ALL SELECT 'y') AS u "
+      "  WHERE a = 'z')";
+  const auto noRows =
+      makeRowVector(ROW({{"a", VARCHAR()}, {"b", ARRAY(REAL())}}), 0);
+  {
+    SCOPED_TRACE("no filter above");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(query), matchValues(noRows).project({"b"}).build());
+  }
+  {
+    SCOPED_TRACE("filter above");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(query + " WHERE test_inference(a)[1] > 0.5"),
+        matchValues(noRows)
+            .filter("subscript(b, 1)::double > 0.5")
+            .project({"b"})
+            .build());
+  }
+}
+
 // A special form holds a call in any input every row reaches.
 TEST_F(InferenceTest, underSpecialForm) {
   auto plan = toSingleNodePlan(
