@@ -29,6 +29,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <stdexcept>
+#include "axiom/cli/Connectors.h"
 #include "axiom/cli/QueryIdGenerator.h"
 #include "axiom/cli/common/ComponentMetrics.h"
 #include "axiom/cli/common/QueryRuntimeStats.h"
@@ -39,6 +40,7 @@
 #include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/memory/Memory.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -112,6 +114,134 @@ class SqlQueryRunnerTest : public SqlQueryRunnerTestBase {
         expectedDefault);
   }
 };
+
+// Runners with the same catalog name resolve their own metadata and execution
+// connector without changing the process-wide registries.
+TEST_F(SqlQueryRunnerTest, independentCatalogs) {
+  const auto processWideConnector =
+      facebook::velox::connector::ConnectorRegistry::global().find("test");
+  const auto processWideMetadata =
+      facebook::axiom::connector::ConnectorMetadataRegistry::global().find(
+          "test");
+
+  auto makeOwnedRunner = [&](std::string_view uniqueCatalog, int64_t value) {
+    auto runner = std::make_unique<SqlQueryRunner>(
+        "test_user",
+        &progressScheduler_,
+        useV2_,
+        facebook::velox::connector::ConnectorRegistry::create(nullptr),
+        facebook::axiom::connector::ConnectorMetadataRegistry::create(nullptr));
+    runner->initialize([&](facebook::axiom::Connectors& connectors,
+                           auto& connectorRegistry,
+                           auto& metadataRegistry) {
+      auto connector =
+          std::make_shared<facebook::axiom::connector::TestConnector>(
+              "test",
+              nullptr,
+              memory::memoryManager()->addRootPool(
+                  fmt::format("{}_sql_runner_catalog", uniqueCatalog)));
+      connector->addTable("t", ROW("value", BIGINT()));
+      connector->appendData(
+          "t", makeRowVector({makeFlatVector<int64_t>({value})}));
+      facebook::axiom::connector::ConnectorMetadataRegistry::registerCatalog(
+          connectorRegistry,
+          metadataRegistry,
+          connector,
+          connector->metadata());
+      connectors.registerTestConnector(std::string{uniqueCatalog});
+      connectors.registerSystemConnector(runner->sessionConfig());
+      return std::make_pair(std::string{"test"}, kDefaultSchema);
+    });
+    return runner;
+  };
+
+  runner_ = makeOwnedRunner("first_only", 11);
+  auto secondRunner = makeOwnedRunner("second_only", 22);
+
+  test::assertEqualVectors(
+      runner_->run("SELECT value FROM t", {}).results.at(0),
+      makeRowVector({makeFlatVector<int64_t>({11})}));
+  test::assertEqualVectors(
+      secondRunner->run("SELECT value FROM t", {}).results.at(0),
+      makeRowVector({makeFlatVector<int64_t>({22})}));
+
+  test::assertEqualVectors(
+      runner_
+          ->run(
+              "SELECT catalog_name FROM "
+              "first_only.information_schema.schemata "
+              "WHERE schema_name = 'information_schema'",
+              {})
+          .results.at(0),
+      makeRowVector({makeFlatVector<std::string>({"first_only"})}));
+  test::assertEqualVectors(
+      secondRunner
+          ->run(
+              "SELECT catalog_name FROM "
+              "second_only.information_schema.schemata "
+              "WHERE schema_name = 'information_schema'",
+              {})
+          .results.at(0),
+      makeRowVector({makeFlatVector<std::string>({"second_only"})}));
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      secondRunner->run(
+          "SELECT catalog_name FROM "
+          "first_only.information_schema.schemata",
+          {}),
+      "Table not found: first_only.information_schema.schemata");
+  EXPECT_EQ(
+      facebook::velox::connector::ConnectorRegistry::global().find("test"),
+      processWideConnector);
+  EXPECT_EQ(
+      facebook::axiom::connector::ConnectorMetadataRegistry::global().find(
+          "test"),
+      processWideMetadata);
+
+  runner_.reset();
+  test::assertEqualVectors(
+      secondRunner->run("SELECT value FROM t", {}).results.at(0),
+      makeRowVector({makeFlatVector<int64_t>({22})}));
+}
+
+// Join sampling executes both sample scans through the runner-owned connector
+// registry.
+TEST_F(SqlQueryRunnerTest, joinSampling) {
+  useV2_ = false;
+  runner_ = makeRunner("sampled");
+  testConnector_->addTable("left_table", ROW("key", BIGINT()))
+      ->addData(makeRowVector({makeFlatVector<int64_t>({1, 1, 2})}));
+  testConnector_->addTable("right_table", ROW("key", BIGINT()))
+      ->addData(makeRowVector({makeFlatVector<int64_t>({1, 2, 2})}));
+
+  runner_->run("SET SESSION optimizer.sample_joins = true", {});
+  facebook::axiom::QueryRuntimeStats stats;
+  SqlQueryRunner::RunOptions options;
+  options.componentStatWriterProvider = [&](std::string_view componentId) {
+    return stats.writerFor(componentId);
+  };
+
+  test::assertEqualVectors(
+      runner_
+          ->run(
+              "SELECT count(*) FROM left_table l JOIN right_table r "
+              "ON l.key = r.key",
+              options)
+          .results.at(0),
+      makeRowVector({makeFlatVector<int64_t>({4})}));
+
+  const auto metrics =
+      stats.toMap(facebook::axiom::QueryRuntimeStats::KeySeparator::kSlash);
+  const auto getSplits = metrics.find(
+      facebook::axiom::QueryRuntimeStats::qualifiedKey(
+          facebook::axiom::ComponentMetrics::kRunner,
+          runner::LocalRunner::kGetSplitsCount,
+          facebook::axiom::QueryRuntimeStats::KeySeparator::kSlash));
+  ASSERT_NE(getSplits, metrics.end());
+  EXPECT_GE(getSplits->second.count, 3);
+  EXPECT_EQ(
+      facebook::velox::connector::ConnectorRegistry::global().find("sampled"),
+      nullptr);
+}
 
 TEST_F(SqlQueryRunnerTest, runSingleStatement) {
   {
@@ -1400,9 +1530,7 @@ TEST_F(SqlQueryRunnerTest, connectorProperties) {
 
 TEST_F(SqlQueryRunnerTest, addColumn) {
   auto findTable = [&]() {
-    auto metadata = facebook::axiom::connector::ConnectorMetadataRegistry::get(
-        testConnector_->connectorId());
-    return metadata->findTable({"default", "t"});
+    return testConnector_->metadata()->findTable({"default", "t"});
   };
 
   // Basic add followed by schema verification.
