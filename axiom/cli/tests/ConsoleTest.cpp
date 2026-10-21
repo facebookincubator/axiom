@@ -26,6 +26,7 @@
 #include <chrono>
 #include <optional>
 #include <thread>
+#include "axiom/cli/Connectors.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "velox/connectors/ConnectorRegistry.h"
@@ -94,29 +95,23 @@ class ConsoleTest : public ::testing::Test, public test::VectorTestBase {
   void TearDown() override {
     // Restore FLAGS_query to avoid polluting other tests.
     FLAGS_query = "";
-    for (const auto& id : connectorIds_) {
-      facebook::axiom::connector::ConnectorMetadataRegistry::global().erase(id);
-      facebook::velox::connector::ConnectorRegistry::global().erase(id);
-    }
   }
 
   template <typename RunnerT = SqlQueryRunner>
   std::unique_ptr<RunnerT> makeRunner(PermissionCheck permissionCheck = {}) {
-    auto runner = std::make_unique<RunnerT>("test_user");
+    auto runner = std::make_unique<RunnerT>(
+        "test_user",
+        /*progressScheduler=*/nullptr,
+        /*useOptimizerV2=*/true,
+        facebook::velox::connector::ConnectorRegistry::create(nullptr),
+        facebook::axiom::connector::ConnectorMetadataRegistry::create(nullptr));
 
     runner->initialize(
-        [&]() {
+        [](facebook::axiom::Connectors& connectors, auto&, auto&) {
           static int32_t kCounter = 0;
 
-          auto testConnector =
-              std::make_shared<facebook::axiom::connector::TestConnector>(
-                  fmt::format("console_test{}", kCounter++));
-          facebook::velox::connector::ConnectorRegistry::global().insert(
-              testConnector->connectorId(), testConnector);
-          facebook::axiom::connector::ConnectorMetadataRegistry::global()
-              .insert(testConnector->connectorId(), testConnector->metadata());
-
-          connectorIds_.emplace_back(testConnector->connectorId());
+          auto testConnector = connectors.registerTestConnector(
+              fmt::format("console_test{}", kCounter++));
 
           return std::make_pair(
               testConnector->connectorId(),
@@ -127,9 +122,6 @@ class ConsoleTest : public ::testing::Test, public test::VectorTestBase {
 
     return runner;
   }
-
- private:
-  std::vector<std::string> connectorIds_;
 };
 
 TEST_F(ConsoleTest, permissionCheckCalledBeforeExecution) {

@@ -23,11 +23,13 @@
 
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/SqlQueryRunner.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/file/tests/FaultyFileSystemOperations.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -49,22 +51,20 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
   }
 
   void SetUp() override {
-    connectors_ = std::make_unique<Connectors>();
-    runner_ = std::make_unique<::axiom::sql::SqlQueryRunner>("test_user");
-    runner_->initialize([this]() {
-      connectors_->registerFileConnector(kConnectorId);
+    runner_ = std::make_unique<::axiom::sql::SqlQueryRunner>(
+        "test_user",
+        /*progressScheduler=*/nullptr,
+        /*useOptimizerV2=*/true,
+        velox::connector::ConnectorRegistry::create(nullptr),
+        ConnectorMetadataRegistry::create(nullptr));
+    runner_->initialize([](Connectors& connectors, auto&, auto&) {
+      connectors.registerFileConnector(kConnectorId);
       return std::make_pair(std::string(kConnectorId), std::string("parquet"));
     });
 
     tempDir_ = velox::common::testutil::TempDirectoryPath::create();
     parquetPath_ = fmt::format("{}/test.parquet", tempDir_->getPath());
     writeTestParquetFile(parquetPath_);
-  }
-
-  void TearDown() override {
-    runner_.reset();
-    // Connectors' destructor unregisters the connector and its metadata.
-    connectors_.reset();
   }
 
   // Writes 'data' to 'path' as a Parquet file. A positive 'rowsInRowGroup'
@@ -224,7 +224,6 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
             {"Schema"}, {makeFlatVector<std::string>(expectedSchemas)}));
   }
 
-  std::unique_ptr<Connectors> connectors_;
   std::unique_ptr<::axiom::sql::SqlQueryRunner> runner_;
   // Temp directory holding all Parquet files; its destructor removes the
   // directory and everything written into it.

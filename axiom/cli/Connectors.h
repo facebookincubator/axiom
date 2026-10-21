@@ -23,9 +23,11 @@
 
 #include <folly/container/F14Map.h>
 
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/system/SystemConnector.h"
 #include "folly/executors/IOThreadPoolExecutor.h"
 #include "velox/connectors/Connector.h"
+#include "velox/connectors/ConnectorRegistry.h"
 
 namespace facebook::axiom {
 
@@ -36,7 +38,8 @@ class SessionConfig;
  *
  * This class handles the details of registering TPCH connectors
  * and connectors for tables stored in the local filesystem in
- * Parquet or ORC format.
+ * Parquet or ORC format. Registries passed to the constructor must outlive
+ * this helper.
  */
 class Connectors {
  public:
@@ -46,6 +49,10 @@ class Connectors {
   static constexpr const char* kSystemConnectorId = "system";
 
   Connectors();
+
+  explicit Connectors(
+      velox::connector::ConnectorRegistry::Registry& connectorRegistry,
+      connector::ConnectorMetadataRegistry::Registry& metadataRegistry);
 
   Connectors(const Connectors&) = delete;
   Connectors& operator=(const Connectors&) = delete;
@@ -122,10 +129,13 @@ class Connectors {
     return ioExecutor_.get();
   }
 
-  /// Registers a connector in the global registry and tracks it for
-  /// cleanup on destruction.
-  void registerConnector(
-      const std::shared_ptr<velox::connector::Connector>& connector);
+  velox::connector::ConnectorRegistry::Registry& connectorRegistry() {
+    return *connectorRegistry_;
+  }
+
+  connector::ConnectorMetadataRegistry::Registry& metadataRegistry() {
+    return *metadataRegistry_;
+  }
 
   // Unregister these on destruction.
   std::vector<std::string> connectorIds_;
@@ -138,6 +148,12 @@ class Connectors {
   // ensure the provider outlives the system connector.
   std::unique_ptr<connector::system::SessionPropertiesProvider>
       sessionPropertiesProvider_;
+
+  // Execution connectors registered by this helper. The caller owns it.
+  velox::connector::ConnectorRegistry::Registry* connectorRegistry_;
+
+  // Metadata registered by this helper. The caller owns it.
+  connector::ConnectorMetadataRegistry::Registry* metadataRegistry_;
 };
 
 } // namespace facebook::axiom

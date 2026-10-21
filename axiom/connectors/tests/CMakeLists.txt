@@ -42,6 +42,7 @@ if(AXIOM_BUILD_TESTING)
     velox_common_base
     velox_memory
     velox_connector
+    velox_connector_registry
     velox_exec
     velox_vector_test_lib
     GTest::gmock
