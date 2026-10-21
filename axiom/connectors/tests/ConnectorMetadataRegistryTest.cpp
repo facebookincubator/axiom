@@ -19,6 +19,7 @@
 
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/connectors/tests/TestConnector.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryCtx.h"
 
@@ -161,6 +162,80 @@ TEST_F(ConnectorMetadataRegistryTest, duplicateRegistration) {
       ConnectorMetadata::metadata("catalog")->as<StubConnectorMetadata>();
   ASSERT_NE(result, nullptr);
   EXPECT_EQ(result->label(), "first");
+}
+
+// Catalog registration inserts the connector and its matching metadata.
+TEST_F(ConnectorMetadataRegistryTest, registersCatalogPair) {
+  auto connectorRegistry = velox::connector::ConnectorRegistry::create();
+  auto metadataRegistry = ConnectorMetadataRegistry::create();
+  auto connector = std::make_shared<TestConnector>("catalog");
+
+  ConnectorMetadataRegistry::registerCatalog(
+      *connectorRegistry, *metadataRegistry, connector, connector->metadata());
+
+  EXPECT_EQ(connectorRegistry->find("catalog"), connector);
+  EXPECT_EQ(metadataRegistry->find("catalog"), connector->metadata());
+}
+
+// Registering the same catalog twice throws and preserves the first pair.
+TEST_F(ConnectorMetadataRegistryTest, duplicateCatalogPreservesFirstPair) {
+  auto connectorRegistry = velox::connector::ConnectorRegistry::create();
+  auto metadataRegistry = ConnectorMetadataRegistry::create();
+  auto firstConnector = std::make_shared<TestConnector>("catalog");
+  auto secondConnector = std::make_shared<TestConnector>("catalog");
+
+  ConnectorMetadataRegistry::registerCatalog(
+      *connectorRegistry,
+      *metadataRegistry,
+      firstConnector,
+      firstConnector->metadata());
+  VELOX_ASSERT_THROW(
+      ConnectorMetadataRegistry::registerCatalog(
+          *connectorRegistry,
+          *metadataRegistry,
+          secondConnector,
+          secondConnector->metadata()),
+      "Key already registered: catalog");
+
+  EXPECT_EQ(connectorRegistry->find("catalog"), firstConnector);
+  EXPECT_EQ(metadataRegistry->find("catalog"), firstConnector->metadata());
+}
+
+// A metadata conflict rolls back the connector inserted for the same catalog.
+TEST_F(ConnectorMetadataRegistryTest, rollsBackConnectorOnMetadataConflict) {
+  auto connectorRegistry = velox::connector::ConnectorRegistry::create();
+  auto metadataRegistry = ConnectorMetadataRegistry::create();
+  auto existingMetadata = std::make_shared<StubConnectorMetadata>("existing");
+  metadataRegistry->insert("catalog", existingMetadata);
+  auto connector = std::make_shared<TestConnector>("catalog");
+
+  VELOX_ASSERT_THROW(
+      ConnectorMetadataRegistry::registerCatalog(
+          *connectorRegistry,
+          *metadataRegistry,
+          connector,
+          connector->metadata()),
+      "Key already registered: catalog");
+
+  EXPECT_EQ(connectorRegistry->find("catalog"), nullptr);
+  EXPECT_EQ(metadataRegistry->find("catalog"), existingMetadata);
+}
+
+// A metadata entry keeps its matching execution connector alive.
+TEST_F(ConnectorMetadataRegistryTest, metadataRetainsConnector) {
+  auto connectorRegistry = velox::connector::ConnectorRegistry::create();
+  auto metadataRegistry = ConnectorMetadataRegistry::create();
+  auto connector = std::make_shared<TestConnector>("catalog");
+  std::weak_ptr<velox::connector::Connector> weakConnector = connector;
+
+  ConnectorMetadataRegistry::registerCatalog(
+      *connectorRegistry, *metadataRegistry, connector, connector->metadata());
+  connector.reset();
+  connectorRegistry->erase("catalog");
+
+  EXPECT_FALSE(weakConnector.expired());
+  metadataRegistry->erase("catalog");
+  EXPECT_TRUE(weakConnector.expired());
 }
 
 } // namespace

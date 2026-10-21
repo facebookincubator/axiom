@@ -31,6 +31,22 @@ using QueryCtx = velox::core::QueryCtx;
 
 namespace {
 
+struct CatalogOwner {
+  std::shared_ptr<velox::connector::Connector> connector;
+  std::shared_ptr<ConnectorMetadata> metadata;
+};
+
+std::shared_ptr<ConnectorMetadata> retainCatalog(
+    std::shared_ptr<velox::connector::Connector> connector,
+    std::shared_ptr<ConnectorMetadata> metadata) {
+  // The alias points at metadata while the shared owner retains both halves of
+  // the catalog.
+  auto owner =
+      std::make_shared<CatalogOwner>(std::move(connector), std::move(metadata));
+  auto* metadataPointer = owner->metadata.get();
+  return {std::move(owner), metadataPointer};
+}
+
 Registry& registryFor(const QueryCtx& queryCtx) {
   auto registry =
       queryCtx.registry<Registry>(ConnectorMetadataRegistry::kRegistryKey);
@@ -49,6 +65,26 @@ Registry& ConnectorMetadataRegistry::global() {
 std::shared_ptr<ConnectorMetadataRegistry::Registry>
 ConnectorMetadataRegistry::create(const Registry* parent) {
   return std::make_shared<Registry>(parent);
+}
+
+// static
+void ConnectorMetadataRegistry::registerCatalog(
+    velox::connector::ConnectorRegistry::Registry& connectorRegistry,
+    Registry& metadataRegistry,
+    std::shared_ptr<velox::connector::Connector> connector,
+    std::shared_ptr<ConnectorMetadata> metadata) {
+  VELOX_CHECK_NOT_NULL(connector);
+  VELOX_CHECK_NOT_NULL(metadata);
+
+  const auto connectorId = connector->connectorId();
+  connectorRegistry.insert(connectorId, connector);
+  try {
+    metadataRegistry.insert(
+        connectorId, retainCatalog(std::move(connector), std::move(metadata)));
+  } catch (...) {
+    connectorRegistry.erase(connectorId);
+    throw;
+  }
 }
 
 std::shared_ptr<ConnectorMetadata> Registry::get(
