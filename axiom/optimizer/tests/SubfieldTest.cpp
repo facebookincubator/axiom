@@ -495,9 +495,8 @@ TEST_P(SubfieldTest, structs) {
 }
 
 TEST_P(SubfieldTest, anonymousStructs) {
-  if (useV2_) {
-    GTEST_SKIP() << "v2 does not rewrite a field read of a constructed row "
-                    "into the argument that supplies it";
+  if (!useV2_) {
+    return;
   }
 
   auto rowType = ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), ARRAY(BIGINT())});
@@ -509,10 +508,10 @@ TEST_P(SubfieldTest, anonymousStructs) {
     auto logicalPlan = parseSelect(
         "SELECT row(a, b, c).field0, row(a, b, c)[3][1] FROM anon_structs",
         kHiveConnectorId);
-    AXIOM_ASSERT_PLAN(
+    AXIOM_ASSERT_PLAN_V2(
         toSingleNodePlan(logicalPlan),
         matchHiveScan("anon_structs", {{"a", {}}, {"c", {"[1]"}}})
-            .project()
+            .project({"a", "c[1]"})
             .build());
 
     auto referencePlan = PlanBuilder()
@@ -528,9 +527,11 @@ TEST_P(SubfieldTest, anonymousStructs) {
     auto logicalPlan = parseSelect(
         "SELECT row(a, b, c).field2[1] FROM anon_structs WHERE row(a, b, c).field0 > 0 ",
         kHiveConnectorId);
-    AXIOM_ASSERT_PLAN(
+    AXIOM_ASSERT_PLAN_V2(
         toSingleNodePlan(logicalPlan),
-        matchHiveScan("anon_structs", {{"c", {"[1]"}}}).project().build());
+        matchHiveScan("anon_structs", {{"c", {"[1]"}}})
+            .project({"c[1]"})
+            .build());
 
     auto referencePlan = PlanBuilder()
                              .tableScan("anon_structs", rowType)

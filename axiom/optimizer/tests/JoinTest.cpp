@@ -2469,28 +2469,34 @@ TEST_P(JoinTest, joinOnClause) {
   }
 }
 
-// TODO: Assert the V2 plan after it keeps both Values inputs co-located for a
-// local join.
 TEST_P(JoinTest, leftJoinOverValues) {
+  if (!useV2_) {
+    return;
+  }
+
   auto query =
       "SELECT * FROM (VALUES 1, 2, 3, 4) as t(x) LEFT JOIN (VALUES 1, 2) as u(y) ON x = y";
   SCOPED_TRACE(query);
 
-  auto matcher = matchValues()
-                     .hashJoin(matchValues(), core::JoinType::kLeft)
-                     .project()
-                     .build();
+  auto matcher =
+      matchValues<int32_t>({"x"}, {{1}, {2}, {3}, {4}})
+          .hashJoinLeft(
+              matchValues<int32_t>({"y"}, {{1}, {2}})
+                  .filter("y IN (1, 2, 3, 4)", {.parseIntegerAsBigint = false}),
+              {.keys = {{"x = y"}}, .filter = ""})
+          .project({"x", "y"})
+          .build();
 
   auto logicalPlan = parseSelect(query);
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
   }
 
   {
     auto distributedPlan = planVelox(logicalPlan);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(distributedPlan.plan, matcher);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(distributedPlan.plan, matcher);
   }
 }
 
@@ -3120,10 +3126,8 @@ TEST_P(JoinTest, impliedJoins) {
   }
 }
 
-// TODO: Run with V2 after it adds implied same-input filters and handles
-// many-to-one join keys without duplicate substitutions.
 TEST_P(JoinTest, impliedSameInputJoinFilters) {
-  if (useV2_) {
+  if (!useV2_) {
     return;
   }
 
@@ -3134,42 +3138,40 @@ TEST_P(JoinTest, impliedSameInputJoinFilters) {
   testConnector_->addTable("v", ROW({"n", "m"}, BIGINT()))
       ->setStats(100, {{"n", {.numDistinct = 100}}});
 
-  // Same-table equality dedup: ON t.a = u.x AND t.b = u.x merges {t.a, t.b,
-  // u.x}, so an explicit WHERE t.a = t.b becomes the same interned Call as
-  // the inferred one and is added only once.
-  // V2 fails planning this query with "Duplicate substitution source: x".
+  // An explicit same-table equality is applied once before the join.
   {
     auto query =
         "SELECT count(*) FROM t JOIN u ON t.a = u.x AND t.b = u.x WHERE t.a = t.b";
     SCOPED_TRACE(query);
 
-    auto matcher =
-        matchScan("u")
-            .hashJoin(matchScan("t").filter("a = b"), core::JoinType::kInner)
-            .aggregation()
-            .build();
+    auto matcher = matchScan("u")
+                       .hashJoinInner(
+                           matchScan("t").filter("a = b").project({"a"}),
+                           {.keys = {{"x = a"}}, .filter = ""})
+                       .singleAggregation({}, {"count(*)"})
+                       .build();
 
     auto plan = toSingleNodePlan(query);
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
   }
 
-  // V2 keeps both join keys and does not infer the same-input `a = b` filter.
+  // Two join equalities imply an equality between columns of the same table.
   {
     auto query = "SELECT count(*) FROM t JOIN u ON t.a = u.x AND t.b = u.x";
     SCOPED_TRACE(query);
 
-    auto matcher =
-        matchScan("u")
-            .hashJoin(matchScan("t").filter("a = b"), core::JoinType::kInner)
-            .aggregation()
-            .build();
+    auto matcher = matchScan("u")
+                       .hashJoinInner(
+                           matchScan("t").filter("a = b").project({"a"}),
+                           {.keys = {{"x = a"}}, .filter = ""})
+                       .singleAggregation({}, {"count(*)"})
+                       .build();
 
     auto plan = toSingleNodePlan(query);
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
   }
 
-  // Three tables with same-table filter on t. V2 does not infer `a = b` on t
-  // before planning the joins.
+  // The same-table equality is applied before joining a third table.
   {
     auto query =
         "SELECT count(*) FROM t "
@@ -3177,17 +3179,17 @@ TEST_P(JoinTest, impliedSameInputJoinFilters) {
         "JOIN v ON u.x = v.n";
     SCOPED_TRACE(query);
 
-    auto matcher =
-        matchScan("u")
-            .hashJoin(
-                matchScan("v").hashJoin(
-                    matchScan("t").filter("a = b"), core::JoinType::kInner),
-                core::JoinType::kInner)
-            .aggregation()
-            .build();
+    auto matcher = matchScan("u")
+                       .hashJoinInner(
+                           matchScan("v").hashJoinInner(
+                               matchScan("t").filter("a = b").project({"a"}),
+                               {.keys = {{"n = a"}}, .filter = ""}),
+                           {.keys = {{"x = a"}}, .filter = ""})
+                       .singleAggregation({}, {"count(*)"})
+                       .build();
 
     auto plan = toSingleNodePlan(query);
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
   }
 }
 
