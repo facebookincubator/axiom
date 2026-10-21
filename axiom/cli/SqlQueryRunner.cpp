@@ -1521,20 +1521,28 @@ std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
       /*spillExecutor=*/nullptr,
       queryId,
       options.tokenProvider);
+  installExecutionRegistries(*queryCtx);
+  return queryCtx;
+}
+
+void SqlQueryRunner::installExecutionRegistries(
+    velox::core::QueryCtx& queryCtx) const {
+  VELOX_CHECK_NOT_NULL(
+      connectors_,
+      "SqlQueryRunner must be initialized before creating queries");
   if (outputTransportRegistry_) {
-    queryCtx->setRegistry(
+    queryCtx.setRegistry(
         velox::connector::ConnectorRegistry::kRegistryKey, connectorRegistry_);
-    queryCtx->setRegistry(
+    queryCtx.setRegistry(
         velox::exec::OutputTransportRegistry::kRegistryKey,
         outputTransportRegistry_);
-    queryCtx->setRegistry(
+    queryCtx.setRegistry(
         velox::exec::ExchangeTransportRegistry::kRegistryKey,
         exchangeTransportRegistry_);
-    queryCtx->setRegistry(
+    queryCtx.setRegistry(
         velox::memory::kCustomMemoryResourceRegistryKey,
         customMemoryResourceRegistry_);
   }
-  return queryCtx;
 }
 
 template <typename Operation>
@@ -2018,6 +2026,16 @@ folly::coro::CleanableAsyncGenerator<velox::RowVectorPtr> co_drainQuery(
 }
 
 } // namespace
+
+connector::ConnectorContextPtr SqlQueryRunner::createConnectorContext(
+    std::string_view queryId) const {
+  return std::make_shared<connector::ConnectorContext>(
+      std::string(queryId),
+      user_,
+      connector::ConnectorProperties{},
+      connector::ConnectorContext::noopStatWriterProvider(),
+      metadataRegistry_);
+}
 
 connector::ConnectorContextPtr SqlQueryRunner::makeConnectorContext(
     std::string_view queryId,

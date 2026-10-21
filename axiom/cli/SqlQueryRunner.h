@@ -521,6 +521,11 @@ class SqlQueryRunner {
     return *sessionConfig_;
   }
 
+  /// Creates a session-independent connector context over this runner's
+  /// metadata registry with no connector properties.
+  facebook::axiom::connector::ConnectorContextPtr createConnectorContext(
+      std::string_view queryId) const;
+
   facebook::axiom::connector::TablePtr createTable(
       const facebook::axiom::connector::ConnectorContextPtr& context,
       const presto::CreateTableStatement& statement,
@@ -583,6 +588,18 @@ class SqlQueryRunner {
           facebook::axiom::connector::ConnectorMetadataRegistry::Registry>
           metadataRegistry,
       ConnectorsFactory connectorsFactory);
+
+  /// Installs this runner's execution registries on queryCtx. Call only after
+  /// initialize(), and keep the runner alive until queryCtx is destroyed.
+  void installExecutionRegistries(
+      facebook::velox::core::QueryCtx& queryCtx) const;
+
+  /// Returns the function registry populated by initialize(). Valid only after
+  /// initialize().
+  std::shared_ptr<const facebook::axiom::optimizer::FunctionRegistry>
+  functionRegistry() const {
+    return functionRegistry_;
+  }
 
  private:
   // Creates a query context over this runner's execution state. The context

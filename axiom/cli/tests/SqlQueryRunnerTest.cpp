@@ -1528,6 +1528,18 @@ TEST_F(SqlQueryRunnerTest, connectorProperties) {
   VELOX_ASSERT_THROW(run("SELECT * FROM t"), "boom from split-gen");
 }
 
+// A fixed-settings connector context does not inherit connector properties set
+// on the runner session.
+TEST_F(SqlQueryRunnerTest, fixedConnectorContextIgnoresSessionProperties) {
+  run("SET SESSION test.list_partitions_error = 'boom from split-gen'");
+
+  const auto context = runner_->createConnectorContext("fixed-context");
+
+  EXPECT_FALSE(context->sessionFor("test")
+                   ->property("list_partitions_error")
+                   .has_value());
+}
+
 TEST_F(SqlQueryRunnerTest, addColumn) {
   auto findTable = [&]() {
     return testConnector_->metadata()->findTable({"default", "t"});
