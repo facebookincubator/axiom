@@ -82,6 +82,7 @@ target_link_libraries(
   axiom_runner_local_runner
   velox_async_rpc_function_registry
   velox_connector
+  velox_custom_memory_resource_registry
 )
 
 add_subdirectory(v2)

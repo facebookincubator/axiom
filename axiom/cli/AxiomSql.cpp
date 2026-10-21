@@ -30,6 +30,7 @@
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestTableJson.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/connectors/ConnectorRegistry.h"
 
 DEFINE_string(
     catalog,
@@ -48,12 +49,21 @@ int main(int argc, char** argv) {
   facebook::velox::memory::MemoryManager::initialize(
       facebook::velox::memory::MemoryManager::Options{});
 
-  facebook::axiom::Connectors connectors;
+  auto connectorRegistry =
+      facebook::velox::connector::ConnectorRegistry::create(nullptr);
+  auto metadataRegistry =
+      facebook::axiom::connector::ConnectorMetadataRegistry::create(nullptr);
   // Progress-polling scheduler for the console's live progress bar.
   folly::FunctionScheduler progressScheduler;
   axiom::sql::SqlQueryRunner runner{
-      axiom::sql::SystemUser::resolve(), &progressScheduler, !FLAGS_v1};
-  auto initializeConnectors = [&]() {
+      axiom::sql::SystemUser::resolve(),
+      &progressScheduler,
+      !FLAGS_v1,
+      connectorRegistry,
+      metadataRegistry};
+  auto initializeConnectors = [&](facebook::axiom::Connectors& connectors,
+                                  auto&,
+                                  auto&) {
     VELOX_USER_CHECK(
         FLAGS_data_path.empty() || FLAGS_etc_dir.empty(),
         "--data_path and --etc_dir are mutually exclusive. Use --data_path for "
@@ -129,6 +139,8 @@ int main(int argc, char** argv) {
       }
     }
 
+    connectors.registerSystemConnector(runner.sessionConfig());
+    connectors.registerFileConnector();
     return std::make_pair(connectorId, schema);
   };
 
@@ -138,17 +150,11 @@ int main(int argc, char** argv) {
   try {
     runner.initialize(initializeConnectors);
 
-    // Register after initialize() so sessionConfig() is available.
-    connectors.registerSystemConnector(runner.sessionConfig());
-    connectors.registerFileConnector();
-
     // --catalog is only checked here because the system and file catalogs are
     // registered above, after the connectors the flag usually names.
     const auto& catalog = runner.defaultConnectorId();
     VELOX_USER_CHECK_NOT_NULL(
-        facebook::axiom::connector::ConnectorMetadataRegistry::tryGet(catalog),
-        "Catalog does not exist: {}",
-        catalog);
+        metadataRegistry->find(catalog), "Catalog does not exist: {}", catalog);
 
     axiom::sql::Console console{runner};
     console.initialize();

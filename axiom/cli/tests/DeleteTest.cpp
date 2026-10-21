@@ -39,14 +39,15 @@ class DeleteTest : public SqlQueryRunnerTestBase {
   void SetUp() override {
     dataPath_ = exec::test::TempDirectoryPath::create();
 
-    runner_ = makeRunner([&]() {
-      connectors_.registerLocalHiveConnector(
-          dataPath_->getPath(),
-          std::string(dwio::common::FileFormatName::toName(kFileFormat)),
-          std::string(kConnectorId));
-      return std::make_pair(
-          std::string(kConnectorId), std::string(kHiveSchema));
-    });
+    runner_ =
+        makeRunner([&](facebook::axiom::Connectors& connectors, auto&, auto&) {
+          connectors.registerLocalHiveConnector(
+              dataPath_->getPath(),
+              std::string(dwio::common::FileFormatName::toName(kFileFormat)),
+              std::string(kConnectorId));
+          return std::make_pair(
+              std::string(kConnectorId), std::string(kHiveSchema));
+        });
   }
 
   // Parses and re-serializes JSON with sorted keys so the comparison does not
@@ -80,7 +81,6 @@ class DeleteTest : public SqlQueryRunnerTestBase {
   }
 
   std::shared_ptr<exec::test::TempDirectoryPath> dataPath_;
-  facebook::axiom::Connectors connectors_;
 };
 
 // Explains and then runs a delete against one table: creating a Hive table is

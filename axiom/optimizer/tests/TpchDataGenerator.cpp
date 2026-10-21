@@ -17,6 +17,8 @@
 #include "axiom/optimizer/tests/TpchDataGenerator.h"
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/SqlQueryRunner.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "velox/connectors/ConnectorRegistry.h"
 
 using namespace facebook::velox;
 
@@ -30,9 +32,13 @@ void TpchDataGenerator::createTables(
     dwio::common::FileFormat format,
     const TableStartingCallback& onTableStarting,
     const TableCreatedCallback& onTableCreated) {
-  Connectors connectors;
-  ::axiom::sql::SqlQueryRunner runner{"tpch_data_generator"};
-  runner.initialize([&]() {
+  ::axiom::sql::SqlQueryRunner runner{
+      "tpch_data_generator",
+      /*progressScheduler=*/nullptr,
+      /*useOptimizerV2=*/true,
+      velox::connector::ConnectorRegistry::create(nullptr),
+      connector::ConnectorMetadataRegistry::create(nullptr)};
+  runner.initialize([&](Connectors& connectors, auto&, auto&) {
     connectors.registerTpchConnector();
     connectors.registerLocalHiveConnector(
         std::string(path),
