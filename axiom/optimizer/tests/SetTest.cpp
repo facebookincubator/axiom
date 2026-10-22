@@ -1127,8 +1127,8 @@ TEST_P(SetTest, constantFalseFilterInUnionAll) {
     auto plan = toSingleNodePlan(logicalPlan);
     // The surviving branch ends with a rename Project that prunes x and keeps
     // y.
-    AXIOM_ASSERT_PLAN_V1(
-        plan, matchScan("t").filter("x > 0").project().build());
+    AXIOM_ASSERT_PLAN_V2(
+        plan, matchScan("t").filter("x > 0").project({"y"}).build());
   }
 
   // All branches constant-false (0 > 0 and -1 > 0).
@@ -1141,7 +1141,7 @@ TEST_P(SetTest, constantFalseFilterInUnionAll) {
         ") WHERE a > 0");
 
     auto plan = toSingleNodePlan(logicalPlan);
-    AXIOM_ASSERT_PLAN_V1(plan, matchValues().project().build());
+    AXIOM_ASSERT_PLAN_V2(plan, matchValues<int32_t>({"b"}, {}).build());
   }
 
   // Mix: branch 1 (5 > 0) true, branch 2 (0 > 0) false, branch 3 (3 > 0)
@@ -1157,11 +1157,10 @@ TEST_P(SetTest, constantFalseFilterInUnionAll) {
         ") WHERE a > 0");
 
     auto plan = toSingleNodePlan(logicalPlan);
-    AXIOM_ASSERT_PLAN_V1(
+    AXIOM_ASSERT_PLAN_V2(
         plan,
-        matchValues()
-            .project()
-            .localPartition(matchValues().project())
+        matchValues<int32_t>({"b"}, {{1}})
+            .localPartition(matchValues<int32_t>({"b"}, {{3}}))
             .build());
   }
 }
