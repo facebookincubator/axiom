@@ -20,6 +20,10 @@
 #include "axiom/optimizer/QueryGraphContext.h"
 #include "velox/type/Variant.h"
 
+namespace facebook::axiom::connector {
+struct ColumnStatisticRequest;
+} // namespace facebook::axiom::connector
+
 namespace facebook::axiom::optimizer {
 
 /// A bit set that qualifies an Expr. Represents which functions/kinds
@@ -202,8 +206,8 @@ using FunctionMetadataCP = const FunctionMetadata*;
 /// table writes. Registered by the dialect (e.g., Presto) to map semantic
 /// slots to concrete Velox function names.
 ///
-/// All functions take a single argument. 'count' is not included here since
-/// it has its own slot via registerCount().
+/// Each function takes a column, then any constant arguments. 'count' is not
+/// here because it has its own slot, registerCount().
 struct StatsAggregates {
   /// min(x) -> same type as x. Applicable to orderable types (numeric, date,
   /// timestamp). Not used for boolean, varchar, varbinary, array, map, or row.
@@ -227,6 +231,22 @@ struct StatsAggregates {
   /// are null. Used for variable-width types to estimate the average size of
   /// a column's values, so an approximate size is acceptable.
   std::string sumDataSize;
+
+  /// approx_set(x [, error]) -> a HyperLogLog sketch of the distinct values.
+  /// Sketches of different groups can be merged.
+  std::string approxSet;
+};
+
+/// The aggregate that computes one statistic over a column, with its types.
+struct StatisticAggregate {
+  /// The Velox aggregate function's name.
+  std::string name;
+
+  /// The column's type, then the types of the statistic's constant arguments.
+  std::vector<velox::TypePtr> argumentTypes;
+
+  /// The type the aggregate returns.
+  velox::TypePtr resultType;
 };
 
 /// Function semantics the optimizer plans with. An application creates one,
@@ -378,6 +398,15 @@ class FunctionRegistry {
   const std::optional<StatsAggregates>& statsAggregates() const {
     return statsAggregates_;
   }
+
+  /// Returns the aggregate that computes 'statistic' over a column of type
+  /// 'columnType'. Returns std::nullopt if that aggregate can't take the
+  /// column's type; writes and ANALYZE then skip the statistic. 'count' and the
+  /// stats aggregates must be registered. Throws if a kAggregate statistic
+  /// names a function that is not registered.
+  std::optional<StatisticAggregate> statisticAggregate(
+      const connector::ColumnStatisticRequest& statistic,
+      const velox::TypePtr& columnType) const;
 
   /// Records the prefix of the internal functions: those the optimizer adds to
   /// plans for its own computation, such as the hop count of a graph walk. The

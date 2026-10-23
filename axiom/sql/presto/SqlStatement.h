@@ -52,6 +52,7 @@ enum class SqlStatementKind {
   kUse,
   kAddColumn,
   kCall,
+  kAnalyze,
 };
 
 AXIOM_DECLARE_ENUM_NAME(SqlStatementKind);
@@ -124,6 +125,10 @@ class SqlStatement {
 
   bool isAddColumn() const {
     return kind_ == SqlStatementKind::kAddColumn;
+  }
+
+  bool isAnalyze() const {
+    return kind_ == SqlStatementKind::kAnalyze;
   }
 
   bool isCall() const {
@@ -352,6 +357,40 @@ class CreateTableAsSelectStatement : public SqlStatement {
   std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>
       properties_;
   const facebook::axiom::logical_plan::LogicalPlanNodePtr plan_;
+};
+
+/// ANALYZE <table> [WITH (properties)]. It reads the table and saves statistics
+/// about it, so the table is both an input and an output.
+class AnalyzeStatement : public SqlStatement {
+ public:
+  AnalyzeStatement(
+      std::string connectorId,
+      facebook::axiom::SchemaTableName tableName,
+      std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>
+          properties)
+      : SqlStatement(
+            SqlStatementKind::kAnalyze,
+            {},
+            {{{connectorId, tableName}}, {{connectorId, tableName}}}),
+        connectorId_{std::move(connectorId)},
+        tableName_{std::move(tableName)},
+        properties_{std::move(properties)} {}
+  const auto& connectorId() const {
+    return connectorId_;
+  }
+  const auto& tableName() const {
+    return tableName_;
+  }
+  /// The WITH properties by name, not yet evaluated.
+  const auto& properties() const {
+    return properties_;
+  }
+
+ private:
+  std::string connectorId_;
+  facebook::axiom::SchemaTableName tableName_;
+  std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>
+      properties_;
 };
 
 class DropTableStatement : public SqlStatement {

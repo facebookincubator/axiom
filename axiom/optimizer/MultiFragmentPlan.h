@@ -25,47 +25,19 @@
 
 namespace facebook::axiom::optimizer {
 
-/// Identifies which field of ColumnStatistics an aggregate populates.
-enum class ColumnStatField {
-  kCount,
-  kCountIf,
-  kMin,
-  kMax,
-  kApproxDistinct,
-  kSumDataSize,
-};
-
-AXIOM_DECLARE_ENUM_NAME(ColumnStatField);
-
-/// Maps stats aggregates for one table column to the ColumnStatistics fields
-/// they populate.
-struct ColumnStatMapping {
-  /// Name of the column in the table schema.
-  std::string columnName;
-
-  /// Ordered list of stat fields collected for this column. Each field
-  /// corresponds to one consecutive stats channel in the Velox write output.
-  std::vector<ColumnStatField> fields;
-};
-
 /// Describes how to extract column statistics from Velox write results.
 /// Built by the optimizer alongside ColumnStatsSpec and stored on FinishWrite.
+/// Empty when the write collects no statistics.
 struct WriteStatsMapping {
-  /// Per-column stat mappings. The aggregate channels appear in this order
-  /// in the stats output, after any grouping key columns.
-  std::vector<ColumnStatMapping> columns;
+  /// The statistics the write handle asked for, plus the ones they need. Its
+  /// grouping columns are table column names, and so are the grouping keys
+  /// passed to finishWrite.
+  connector::StatisticsRequest request;
 
-  /// Number of grouping key columns in the stats aggregation. These appear
-  /// as the first stats columns (after row_count, fragment, context). Zero
-  /// when there are no grouping keys.
-  uint32_t numGroupingKeys{0};
-
-  /// Table-level names for the grouping key columns, in the same order as
-  /// they appear in the stats output. The stats output may use write-input
-  /// column names (e.g. "expr_0"), but the grouping keys RowVector passed to
-  /// finishWrite must use table column names (e.g. "pk"). Empty when there
-  /// are no grouping keys.
-  std::vector<std::string> groupingKeyNames;
+  /// For each of 'request.statistics', whether the stats output computes it.
+  /// The computed ones come after the grouping keys and the row count, in
+  /// request order.
+  std::vector<bool> collected;
 };
 
 /// Describes an exchange source for an ExchangeNode a non-leaf stage.

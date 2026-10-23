@@ -37,6 +37,7 @@
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/process/ProcessBase.h"
 
+#include "axiom/analyze/TableAnalyzer.h"
 #include "axiom/cli/QueryIdGenerator.h"
 #include "axiom/cli/common/ComponentMetrics.h"
 #include "axiom/connectors/ConnectorMetadata.h"
@@ -451,8 +452,7 @@ connector::TablePtr SqlQueryRunner::createTable(
               session,
               handle,
               /*writeResults=*/{},
-              /*groupingKeys=*/nullptr,
-              /*groupStats=*/{})
+              /*statistics=*/{})
           .get(kCommitTimeout);
     } catch (...) {
       // Best-effort abort so a failed commit does not leak connector-side
@@ -510,6 +510,46 @@ std::string SqlQueryRunner::dropTable(
   } else {
     return fmt::format("Table doesn't exist: {}", tableName);
   }
+}
+
+std::unique_ptr<facebook::axiom::analyze::TableAnalyzer>
+SqlQueryRunner::makeTableAnalyzer(
+    const presto::AnalyzeStatement& statement,
+    const connector::ConnectorContextPtr& context,
+    const RunOptions& options) {
+  auto metadata = ConnectorMetadataRegistry::get(statement.connectorId());
+  auto table = metadata->findTable(statement.tableName());
+  VELOX_USER_CHECK_NOT_NULL(
+      table, "Table does not exist: {}", statement.tableName());
+  connector::AnalyzeOptions analyzeOptions;
+  for (const auto& [name, expression] : statement.properties()) {
+    auto value =
+        optimizer::ConstantExprEvaluator::evaluateConstantExpr(*expression);
+    if (name == "columns") {
+      VELOX_USER_CHECK(
+          value.kind() == velox::TypeKind::ARRAY && !value.isNull(),
+          "ANALYZE property columns must be an array of column names");
+      analyzeOptions.columns.emplace();
+      for (const auto& column : value.array()) {
+        VELOX_USER_CHECK(
+            column.kind() == velox::TypeKind::VARCHAR && !column.isNull(),
+            "ANALYZE property columns must be an array of column names");
+        analyzeOptions.columns->push_back(column.value<std::string>());
+      }
+    } else {
+      analyzeOptions.properties.emplace(name, std::move(value));
+    }
+  }
+  logical_plan::PlanBuilder::Context builderContext(
+      statement.connectorId(), statement.tableName().schema, newQuery(options));
+  builderContext.connectorContext = context;
+  return std::make_unique<facebook::axiom::analyze::TableAnalyzer>(
+      metadata,
+      makeConnectorSession(context, statement.connectorId()),
+      table,
+      std::move(analyzeOptions),
+      std::move(builderContext),
+      *functionRegistry_);
 }
 
 folly::coro::Task<std::string> SqlQueryRunner::co_call(
@@ -1017,10 +1057,20 @@ SqlQueryRunner::co_runExplainStatement(
     QueryTiming& timing) {
   const auto& statement = explain.statement();
 
+  VELOX_USER_CHECK(
+      !(explain.isAnalyze() && statement->isAnalyze()),
+      "EXPLAIN ANALYZE ANALYZE is not supported");
+
   if (explain.type() == presto::ExplainStatement::Type::kValidate) {
     // An invalid query has already failed: parsing resolved it and the caller
     // checked permissions. Presto reports the outcome the same way for every
-    // statement kind, and does not resolve a DDL target.
+    // statement kind, and does not resolve a DDL target. Parsing checks less
+    // for ANALYZE, so build its statistics query too: that runs the rest of its
+    // checks and changes nothing.
+    if (statement->isAnalyze()) {
+      makeTableAnalyzer(
+          *statement->as<presto::AnalyzeStatement>(), context, options);
+    }
     auto result = std::dynamic_pointer_cast<velox::RowVector>(
         velox::BaseVector::createFromVariants(
             velox::ROW("result", velox::BOOLEAN()),
@@ -1030,6 +1080,7 @@ SqlQueryRunner::co_runExplainStatement(
     co_return;
   }
 
+  std::unique_ptr<facebook::axiom::analyze::TableAnalyzer> analyzer;
   logical_plan::LogicalPlanNodePtr logicalPlan;
   std::shared_ptr<connector::SchemaResolver> schemaResolver;
   const presto::CreateTableAsSelectStatement* ctas{nullptr};
@@ -1080,6 +1131,10 @@ SqlQueryRunner::co_runExplainStatement(
         add->columnName(),
         add->columnType()->toString())};
     co_return;
+  } else if (statement->isAnalyze()) {
+    analyzer = makeTableAnalyzer(
+        *statement->as<presto::AnalyzeStatement>(), context, options);
+    logicalPlan = analyzer->plan();
   } else if (statement->isShowSession()) {
     logicalPlan = showSessionPlan(
         *sessionConfig_,
@@ -1330,6 +1385,30 @@ SqlQueryRunner::co_runUnchecked(
     while (auto chunk = co_await generator.next()) {
       co_yield std::move(*chunk);
     }
+    co_return;
+  }
+
+  if (sqlStatement.isAnalyze()) {
+    auto analyzer = makeTableAnalyzer(
+        *sqlStatement.as<presto::AnalyzeStatement>(), context, options);
+    auto execute = [&](const logical_plan::LogicalPlanNodePtr& plan)
+        -> folly::coro::Task<std::vector<velox::RowVectorPtr>> {
+      std::vector<velox::RowVectorPtr> batches;
+      auto&& [generator] = co_await folly::coro::co_scope_exit(
+          folly::coro::co_cleanup,
+          co_runLogicalPlan(plan, options, context, timing, planString));
+      while (auto batch = co_await generator.next()) {
+        batches.push_back(std::move(*batch));
+      }
+      co_return batches;
+    };
+    auto rows = co_await analyzer->co_run(execute, optimizerPool_.get());
+    auto result = std::dynamic_pointer_cast<velox::RowVector>(
+        velox::BaseVector::createFromVariants(
+            velox::ROW({"rows"}, {velox::BIGINT()}),
+            {velox::Variant::row({velox::Variant(rows)})},
+            optimizerPool_.get()));
+    co_yield SqlResultChunk{std::move(result)};
     co_return;
   }
 

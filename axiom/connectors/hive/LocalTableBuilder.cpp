@@ -71,6 +71,9 @@ folly::dynamic columnStatsToJson(const ColumnStatistics& stats) {
   json["name"] = stats.name;
   json["numValues"] = stats.numValues;
   json["nullPct"] = stats.nullPct;
+  if (stats.numTrue) {
+    json["numTrue"] = *stats.numTrue;
+  }
   if (stats.min.has_value()) {
     json["min"] = stats.min->serialize();
   }

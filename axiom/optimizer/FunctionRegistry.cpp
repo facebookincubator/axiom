@@ -16,6 +16,9 @@
 
 #include "axiom/optimizer/FunctionRegistry.h"
 
+#include "axiom/connectors/StatisticsRequest.h"
+#include "velox/exec/Aggregate.h"
+#include "velox/expression/SignatureBinder.h"
 #include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
 #include "velox/functions/FunctionRegistry.h"
 
@@ -113,10 +116,72 @@ bool FunctionRegistry::registerStatsAggregates(StatsAggregates aggregates) {
         statsAggregates_->max == aggregates.max &&
         statsAggregates_->countIf == aggregates.countIf &&
         statsAggregates_->approxDistinct == aggregates.approxDistinct &&
-        statsAggregates_->sumDataSize == aggregates.sumDataSize;
+        statsAggregates_->sumDataSize == aggregates.sumDataSize &&
+        statsAggregates_->approxSet == aggregates.approxSet;
   }
   statsAggregates_ = std::move(aggregates);
   return true;
+}
+
+std::optional<StatisticAggregate> FunctionRegistry::statisticAggregate(
+    const connector::ColumnStatisticRequest& statistic,
+    const velox::TypePtr& columnType) const {
+  VELOX_CHECK(
+      count_.has_value() && statsAggregates_.has_value(),
+      "Statistics aggregates are not registered");
+  std::string name;
+  switch (statistic.kind) {
+    case connector::ColumnStatisticKind::kNonNullCount:
+      name = *count_;
+      break;
+    case connector::ColumnStatisticKind::kTrueCount:
+      name = statsAggregates_->countIf;
+      break;
+    case connector::ColumnStatisticKind::kMin:
+      name = statsAggregates_->min;
+      break;
+    case connector::ColumnStatisticKind::kMax:
+      name = statsAggregates_->max;
+      break;
+    case connector::ColumnStatisticKind::kDistinctCount:
+      name = statsAggregates_->approxDistinct;
+      break;
+    case connector::ColumnStatisticKind::kTotalSize:
+      name = statsAggregates_->sumDataSize;
+      break;
+    case connector::ColumnStatisticKind::kDistinctSketch:
+      name = statsAggregates_->approxSet;
+      break;
+    case connector::ColumnStatisticKind::kAggregate:
+      name = statistic.aggregate;
+      break;
+  }
+  std::vector<velox::TypePtr> argumentTypes{columnType};
+  for (const auto& argument : statistic.arguments) {
+    argumentTypes.push_back(argument.inferType());
+  }
+  const auto signatures = velox::exec::getAggregateFunctionSignatures(name);
+  VELOX_USER_CHECK(
+      signatures.has_value(),
+      "Statistics aggregate is not registered: {}",
+      name);
+  // Use the first signature that matches. Writes merge partial results, so
+  // the intermediate type must also resolve.
+  for (const auto& signature : *signatures) {
+    velox::exec::SignatureBinder binder(
+        *signature, argumentTypes, velox::TypeCoercer::defaults());
+    if (!binder.tryBind() ||
+        binder.tryResolveType(signature->intermediateType()) == nullptr) {
+      continue;
+    }
+    auto resultType = binder.tryResolveType(signature->returnType());
+    if (resultType == nullptr) {
+      return std::nullopt;
+    }
+    return StatisticAggregate{
+        std::move(name), std::move(argumentTypes), std::move(resultType)};
+  }
+  return std::nullopt;
 }
 
 bool FunctionRegistry::registerInternalPrefix(std::string_view prefix) {

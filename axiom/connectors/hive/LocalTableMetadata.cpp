@@ -47,6 +47,9 @@ folly::dynamic columnStatsToJson(const ColumnStatistics& stats) {
   if (stats.max.has_value()) {
     json["max"] = stats.max->serialize();
   }
+  if (stats.numTrue.has_value()) {
+    json["numTrue"] = *stats.numTrue;
+  }
   if (stats.numDistinct.has_value()) {
     json["numDistinct"] = stats.numDistinct.value();
   }
@@ -84,6 +87,9 @@ ColumnStatistics columnStatsFromJson(const folly::dynamic& json) {
   if (json.count("max")) {
     stats.max = velox::Variant::create(json["max"]);
   }
+  if (json.count("numTrue")) {
+    stats.numTrue = json["numTrue"].asInt();
+  }
   if (json.count("numDistinct")) {
     stats.numDistinct = json["numDistinct"].asInt();
   }
@@ -111,6 +117,14 @@ PersistedStats persistedStatsFromJson(const folly::dynamic& json) {
 void mergeColumnStatsValues(
     ColumnStatistics& target,
     const ColumnStatistics& source) {
+  if ((target.numTrue.has_value() || target.numValues == 0) &&
+      (source.numTrue.has_value() || source.numValues == 0)) {
+    if (target.numTrue || source.numTrue) {
+      target.numTrue = target.numTrue.value_or(0) + source.numTrue.value_or(0);
+    }
+  } else {
+    target.numTrue.reset();
+  }
   target.numValues += source.numValues;
 
   if (source.min.has_value()) {
@@ -201,6 +215,14 @@ void PersistedStats::merge(
   }
 
   numRows += otherNumRows;
+  for (auto& column : columns) {
+    column.nullPct =
+        numRows == 0 ? 0 : 100.0 * (1.0 - double(column.numValues) / numRows);
+    if (column.numTrue) {
+      column.numDistinct =
+          (*column.numTrue > 0) + (column.numValues > *column.numTrue);
+    }
+  }
 }
 
 std::optional<PersistedStats> PersistedStats::read(

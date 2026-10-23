@@ -16,42 +16,9 @@
 
 #include "axiom/optimizer/WriteStatsBuilder.h"
 #include "axiom/optimizer/FunctionRegistry.h"
-#include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
-#include "velox/expression/SignatureBinder.h"
 
 namespace facebook::axiom::optimizer {
-namespace {
-
-using AggregateSignatures =
-    std::vector<velox::exec::AggregateFunctionSignaturePtr>;
-
-AggregateSignatures getAggregateSignatures(const std::string& functionName) {
-  auto signatures = velox::exec::getAggregateFunctionSignatures(functionName);
-  VELOX_CHECK(
-      signatures.has_value(),
-      "Aggregate function is not registered: {}",
-      functionName);
-  return std::move(*signatures);
-}
-
-bool supportsAggregateInputType(
-    const AggregateSignatures& signatures,
-    const velox::TypePtr& inputType) {
-  const std::vector<velox::TypePtr> inputTypes{inputType};
-  for (const auto& signature : signatures) {
-    velox::exec::SignatureBinder binder(
-        *signature, inputTypes, velox::TypeCoercer::defaults());
-    if (binder.tryBind() &&
-        binder.tryResolveType(signature->intermediateType()) != nullptr) {
-      return true;
-    }
-  }
-  return false;
-}
-
-} // namespace
-
 WriteStatsBuilder::WriteStatsBuilder(
     const connector::Table& table,
     const velox::RowTypePtr& inputType,
@@ -68,130 +35,61 @@ WriteStatsBuilder::WriteStatsBuilder(
   needsMerge_ = numDrivers > 1 || numWorkers > 1;
   needsFinalMerge_ = numWorkers > 1;
 
-  const auto minSignatures = getAggregateSignatures(statsAggs->min);
-  const auto maxSignatures = getAggregateSignatures(statsAggs->max);
-  const auto countIfSignatures = getAggregateSignatures(statsAggs->countIf);
-  const auto approxDistinctSignatures =
-      getAggregateSignatures(statsAggs->approxDistinct);
-  const auto sumDataSizeSignatures =
-      getAggregateSignatures(statsAggs->sumDataSize);
-
-  // When there are grouping keys, add a count(*) aggregate (no input
-  // columns) as the first stats channel to provide exact per-group row
-  // counts.
-  const bool hasGroupingKeys = !writeHandle.statsGroupingKeys().empty();
-  if (hasGroupingKeys) {
-    static constexpr auto kRowCount = "$row_count";
-
-    velox::core::AggregationNode::Aggregate agg;
-    agg.call = std::make_shared<velox::core::CallTypedExpr>(
-        velox::BIGINT(), *countName);
-    aggregates_.push_back(std::move(agg));
-    aggregateNames_.push_back(kRowCount);
-  }
-
-  for (velox::column_index_t i = 0; i < inputType->size(); ++i) {
-    const auto& colType = inputType->childAt(i);
-
-    auto inputField = std::make_shared<velox::core::FieldAccessTypedExpr>(
-        colType, inputType->nameOf(i));
-
-    ColumnStatMapping mapping;
-    mapping.columnName = table.type()->nameOf(i);
-
-    auto addAggregate = [&](const std::string& funcName,
-                            const velox::TypePtr& returnType) {
-      velox::core::AggregationNode::Aggregate agg;
-      agg.call = std::make_shared<velox::core::CallTypedExpr>(
-          returnType, funcName, inputField);
-      agg.rawInputTypes = {colType};
-      aggregates_.push_back(std::move(agg));
-
-      aggregateNames_.push_back(
-          fmt::format("{}.{}", table.type()->nameOf(i), funcName));
-    };
-
-    auto addAggregateIfSupported = [&](const AggregateSignatures& signatures,
-                                       ColumnStatField field,
-                                       const std::string& functionName,
-                                       const velox::TypePtr& returnType) {
-      if (supportsAggregateInputType(signatures, colType)) {
-        mapping.fields.push_back(field);
-        addAggregate(functionName, returnType);
-      }
-    };
-
-    mapping.fields.push_back(ColumnStatField::kCount);
-    addAggregate(*countName, velox::BIGINT());
-
-    switch (colType->kind()) {
-      case velox::TypeKind::BOOLEAN:
-        addAggregateIfSupported(
-            countIfSignatures,
-            ColumnStatField::kCountIf,
-            statsAggs->countIf,
-            velox::BIGINT());
-        break;
-
-      case velox::TypeKind::TINYINT:
-      case velox::TypeKind::SMALLINT:
-      case velox::TypeKind::INTEGER:
-      case velox::TypeKind::BIGINT:
-      case velox::TypeKind::REAL:
-      case velox::TypeKind::DOUBLE:
-      case velox::TypeKind::TIMESTAMP:
-      case velox::TypeKind::VARCHAR:
-      case velox::TypeKind::VARBINARY:
-        addAggregateIfSupported(
-            minSignatures, ColumnStatField::kMin, statsAggs->min, colType);
-        addAggregateIfSupported(
-            maxSignatures, ColumnStatField::kMax, statsAggs->max, colType);
-        addAggregateIfSupported(
-            approxDistinctSignatures,
-            ColumnStatField::kApproxDistinct,
-            statsAggs->approxDistinct,
-            velox::BIGINT());
-        break;
-
-      default:
-        break;
-    }
-
-    if (!colType->isFixedWidth()) {
-      addAggregateIfSupported(
-          sumDataSizeSignatures,
-          ColumnStatField::kSumDataSize,
-          statsAggs->sumDataSize,
-          velox::BIGINT());
-    }
-
-    statsMapping_.columns.push_back(std::move(mapping));
-  }
-
-  if (aggregates_.empty() || (hasGroupingKeys && aggregates_.size() == 1)) {
-    // No per-column stats (or only $row_count with no column stats).
-    aggregates_.clear();
-    aggregateNames_.clear();
-    statsMapping_.columns.clear();
+  auto request = writeHandle.statisticsRequest(table.type());
+  request.addDependencies();
+  if (request.statistics.empty()) {
     return;
   }
+  velox::core::AggregationNode::Aggregate rowCount;
+  rowCount.call =
+      std::make_shared<velox::core::CallTypedExpr>(velox::BIGINT(), *countName);
+  aggregates_.push_back(std::move(rowCount));
+  aggregateNames_.push_back("$row_count");
 
-  // Build grouping keys. The write handle specifies which table columns to
-  // group by (e.g. partition columns). Column names come from the table
-  // schema (e.g. "pk") but inputType uses write input names from the query
-  // output (e.g. "expr_0"). Look up by position in the table schema to
-  // find the matching input column.
-  const auto& groupingKeyNames = writeHandle.statsGroupingKeys();
-  for (const auto& keyName : groupingKeyNames) {
-    auto idx = table.type()->getChildIdx(keyName);
-    groupingKeys_.push_back(
+  // The write input matches the table's columns by position, not by name. Map
+  // each table column name to its input column once, then look up statistic
+  // columns and grouping keys by name.
+  std::unordered_map<std::string, velox::core::FieldAccessTypedExprPtr> fields;
+  for (auto i = 0; i < table.type()->size(); ++i) {
+    fields.emplace(
+        table.type()->nameOf(i),
         std::make_shared<velox::core::FieldAccessTypedExpr>(
-            inputType->childAt(idx), inputType->nameOf(idx)));
+            inputType->childAt(i), inputType->nameOf(i)));
   }
-
-  statsMapping_.numGroupingKeys =
-      static_cast<uint32_t>(groupingKeyNames.size());
-  statsMapping_.groupingKeyNames = groupingKeyNames;
+  std::vector<bool> collected;
+  collected.reserve(request.statistics.size());
+  for (const auto& stat : request.statistics) {
+    const auto& input = fields.at(stat.column);
+    auto aggregate = registry.statisticAggregate(stat, input->type());
+    if (!aggregate.has_value()) {
+      collected.push_back(false);
+      continue;
+    }
+    std::vector<velox::core::TypedExprPtr> inputs{input};
+    for (size_t i = 0; i < stat.arguments.size(); ++i) {
+      inputs.push_back(
+          std::make_shared<velox::core::ConstantTypedExpr>(
+              aggregate->argumentTypes[i + 1], stat.arguments[i]));
+    }
+    velox::core::AggregationNode::Aggregate agg;
+    agg.call = std::make_shared<velox::core::CallTypedExpr>(
+        aggregate->resultType, aggregate->name, inputs);
+    agg.rawInputTypes = std::move(aggregate->argumentTypes);
+    aggregates_.push_back(std::move(agg));
+    aggregateNames_.push_back(fmt::format("$stat_{}", aggregateNames_.size()));
+    collected.push_back(true);
+  }
+  // If only the row count is left, collect no statistics at all.
+  if (aggregates_.size() == 1) {
+    aggregates_.clear();
+    aggregateNames_.clear();
+    return;
+  }
+  for (const auto& name : request.groupingColumns) {
+    groupingKeys_.push_back(fields.at(name));
+  }
+  statsMapping_.request = std::move(request);
+  statsMapping_.collected = std::move(collected);
 
   hasStats_ = true;
 }
@@ -211,9 +109,7 @@ velox::core::ColumnStatsSpec WriteStatsBuilder::writeSpec() const {
             intermediateType, aggregate.call->name());
       } else {
         aggregate.call = std::make_shared<velox::core::CallTypedExpr>(
-            intermediateType,
-            aggregate.call->name(),
-            aggregate.call->inputs()[0]);
+            intermediateType, aggregate.call->name(), aggregate.call->inputs());
       }
     }
   }
@@ -250,11 +146,19 @@ velox::core::ColumnStatsSpec WriteStatsBuilder::buildMergeSpec(
   std::vector<velox::core::AggregationNode::Aggregate> aggregates;
   for (size_t i = 0; i < aggregates_.size(); ++i) {
     auto aggregate = aggregates_[i];
+    std::vector<velox::core::TypedExprPtr> inputs{
+        std::make_shared<velox::core::FieldAccessTypedExpr>(
+            sourceType->findChild(aggregateNames_[i]), aggregateNames_[i])};
+    const auto& originalInputs = aggregates_[i].call->inputs();
+    // Constant arguments are the same at every aggregation step, so pass them
+    // again.
+    for (size_t arg = 1; arg < originalInputs.size(); ++arg) {
+      inputs.push_back(originalInputs[arg]);
+    }
     aggregate.call = std::make_shared<velox::core::CallTypedExpr>(
         outputAggregates[i].call->type(),
         aggregate.call->name(),
-        std::make_shared<velox::core::FieldAccessTypedExpr>(
-            sourceType->findChild(aggregateNames_[i]), aggregateNames_[i]));
+        std::move(inputs));
     aggregates.push_back(std::move(aggregate));
   }
 

@@ -38,6 +38,7 @@ add_library(
 target_link_libraries(
   axiom_cli
   axiom_query_id_generator
+  axiom_analyze
   velox_connector_registry
   velox_functions_axiom
   velox_presto_query_config

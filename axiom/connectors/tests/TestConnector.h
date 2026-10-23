@@ -703,12 +703,47 @@ class TestConnectorMetadata : public ConnectorMetadata {
       const velox::connector::ConnectorTableHandlePtr& scanHandle,
       bool explain) override;
 
+  /// Builds the request that getStatisticsRequest returns.
+  using AnalyzeRequestFactory = std::function<std::shared_ptr<
+      const StatisticsRequest>(const TablePtr&, const AnalyzeOptions&)>;
+  /// When set, getStatisticsRequest returns its result instead of the
+  /// standard request.
+  AnalyzeRequestFactory analyzeRequestFactory;
+  /// Called by co_finishAnalyze with the results before they are stored. If it
+  /// throws, nothing is stored.
+  std::function<void(const StatisticsResults&)> onFinishAnalyze;
+  /// Memory for the stored results, which must outlive the query that
+  /// computed them.
+  std::shared_ptr<velox::memory::MemoryPool> analyzePool;
+  /// The results of the last ANALYZE that committed.
+  std::optional<StatisticsResults> analyzedStatistics;
+
+  /// When set, writes collect the statistics this returns instead of the
+  /// standard ones.
+  std::function<StatisticsRequest(const velox::RowTypePtr&)>
+      writeStatisticsRequestFactory;
+
+  /// Called by finishWrite with the write results and statistics it received.
+  std::function<
+      void(const std::vector<velox::RowVectorPtr>&, const StatisticsResults&)>
+      onFinishWrite;
+
+  std::shared_ptr<const StatisticsRequest> getStatisticsRequest(
+      const ConnectorSessionPtr& session,
+      const TablePtr& table,
+      const AnalyzeOptions& options) const override;
+
+  folly::coro::Task<void> co_finishAnalyze(
+      const ConnectorSessionPtr& session,
+      const TablePtr& table,
+      const StatisticsRequest& request,
+      StatisticsResults results) override;
+
   RowsFuture finishWrite(
       const ConnectorSessionPtr& session,
       const ConnectorWriteHandlePtr& handle,
       const std::vector<velox::RowVectorPtr>& writeResults,
-      velox::RowVectorPtr groupingKeys,
-      std::vector<std::vector<ColumnStatistics>> groupStats) override;
+      StatisticsResults statistics) override;
 
   bool dropTable(
       const ConnectorSessionPtr& session,

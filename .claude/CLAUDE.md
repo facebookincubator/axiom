@@ -575,6 +575,7 @@ violation is a bug in the code that owns the invariant; fix it there.
 | `axiom/runner/` | Multi-stage Velox execution |
 | `axiom/connectors/` | Velox connector extensions |
 | `axiom/common/` | Shared utilities |
+| `axiom/analyze/` | Runs the ANALYZE statement; shared by the frontends |
 | `axiom/cli/` | Command-line SQL interface |
 
 ## Key Documentation

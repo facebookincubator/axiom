@@ -983,6 +983,30 @@ TablePtr TestConnectorMetadata::createTable(
   return it->second;
 }
 
+namespace {
+
+// A write handle that collects the statistics a test asks for.
+class TestWriteHandle : public ConnectorWriteHandle {
+ public:
+  TestWriteHandle(
+      velox::connector::ConnectorInsertTableHandlePtr veloxHandle,
+      velox::RowTypePtr resultType,
+      std::function<StatisticsRequest(const velox::RowTypePtr&)> requestFactory)
+      : ConnectorWriteHandle(std::move(veloxHandle), std::move(resultType)),
+        requestFactory_{std::move(requestFactory)} {}
+
+  StatisticsRequest statisticsRequest(
+      const velox::RowTypePtr& type) const override {
+    return requestFactory_(type);
+  }
+
+ private:
+  const std::function<StatisticsRequest(const velox::RowTypePtr&)>
+      requestFactory_;
+};
+
+} // namespace
+
 ConnectorWriteHandlePtr TestConnectorMetadata::beginWrite(
     const ConnectorSessionPtr& /*session*/,
     const TablePtr& table,
@@ -990,18 +1014,74 @@ ConnectorWriteHandlePtr TestConnectorMetadata::beginWrite(
     const velox::connector::ConnectorTableHandlePtr& /*scanHandle*/,
     bool /*explain*/) {
   auto insertHandle = std::make_shared<TestInsertTableHandle>(table->name());
+  if (writeStatisticsRequestFactory) {
+    return std::make_shared<TestWriteHandle>(
+        std::move(insertHandle),
+        velox::exec::TableWriteTraits::outputType(std::nullopt),
+        writeStatisticsRequestFactory);
+  }
   return std::make_shared<ConnectorWriteHandle>(
       std::move(insertHandle),
       velox::exec::TableWriteTraits::outputType(std::nullopt));
+}
+
+std::shared_ptr<const StatisticsRequest>
+TestConnectorMetadata::getStatisticsRequest(
+    const ConnectorSessionPtr&,
+    const TablePtr& table,
+    const AnalyzeOptions& options) const {
+  if (analyzeRequestFactory) {
+    return analyzeRequestFactory(table, options);
+  }
+  VELOX_USER_CHECK(
+      options.properties.empty(),
+      "Unknown ANALYZE property: {}",
+      options.properties.empty() ? "" : options.properties.begin()->first);
+  auto request = std::make_shared<StatisticsRequest>(
+      StatisticsRequest::standard(table->type()));
+  request->table = table->name();
+  if (options.columns) {
+    std::erase_if(request->statistics, [&](const auto& stat) {
+      return std::find(
+                 options.columns->begin(),
+                 options.columns->end(),
+                 stat.column) == options.columns->end();
+    });
+  }
+  return request;
+}
+
+folly::coro::Task<void> TestConnectorMetadata::co_finishAnalyze(
+    const ConnectorSessionPtr&,
+    const TablePtr&,
+    const StatisticsRequest&,
+    StatisticsResults results) {
+  if (onFinishAnalyze) {
+    onFinishAnalyze(results);
+  }
+  if (!analyzePool) {
+    auto* root = connector_->tableRootPool();
+    analyzePool = root
+        ? root->addLeafChild("analyze_results")
+        : velox::memory::memoryManager()->addLeafPool("analyze_results");
+  }
+  results.groups = std::static_pointer_cast<velox::RowVector>(
+      velox::BaseVector::copy(*results.groups, analyzePool.get()));
+  results.sketches = std::static_pointer_cast<velox::RowVector>(
+      velox::BaseVector::copy(*results.sketches, analyzePool.get()));
+  analyzedStatistics = std::move(results);
+  co_return;
 }
 
 RowsFuture TestConnectorMetadata::finishWrite(
     const ConnectorSessionPtr& session,
     const ConnectorWriteHandlePtr& /*handle*/,
     const std::vector<velox::RowVectorPtr>& writeResults,
-    velox::RowVectorPtr /*groupingKeys*/,
-    std::vector<std::vector<ColumnStatistics>> /*groupStats*/) {
+    StatisticsResults statistics) {
   VELOX_CHECK_NOT_NULL(session);
+  if (onFinishWrite) {
+    onFinishWrite(writeResults, statistics);
+  }
   if (auto error = session->property(TestConfigProvider::kFinishWriteError);
       error.has_value() && !error->empty()) {
     VELOX_USER_FAIL("{}", *error);

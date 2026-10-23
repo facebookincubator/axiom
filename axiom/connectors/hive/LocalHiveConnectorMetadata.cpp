@@ -1807,8 +1807,9 @@ RowsFuture LocalHiveConnectorMetadata::finishWrite(
     const ConnectorSessionPtr& /*session*/,
     const ConnectorWriteHandlePtr& handle,
     const std::vector<velox::RowVectorPtr>& writeResults,
-    velox::RowVectorPtr groupingKeys,
-    std::vector<std::vector<ColumnStatistics>> groupStats) {
+    StatisticsResults statistics) {
+  auto& groupingKeys = statistics.groups;
+  auto& groupStats = statistics.columnStats;
   if (const auto* deleteHandle = handle->as<HiveDeleteWriteHandle>()) {
     return removePartitions(*deleteHandle);
   }
@@ -1838,7 +1839,7 @@ RowsFuture LocalHiveConnectorMetadata::finishWrite(
   // Persist write-time stats. For partitioned tables, write per-partition
   // .stats files. For unpartitioned tables, write a single .stats file in
   // the table directory. Merges with existing stats from prior writes.
-  if (groupingKeys != nullptr) {
+  if (groupingKeys != nullptr && groupingKeys->childrenSize() > 1) {
     VELOX_CHECK_EQ(
         groupStats.size(),
         groupingKeys->size(),

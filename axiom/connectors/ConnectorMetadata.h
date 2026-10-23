@@ -23,6 +23,7 @@
 #include "axiom/common/SchemaTypeName.h"
 #include "axiom/connectors/ConnectorSession.h"
 #include "axiom/connectors/ConnectorSplitManager.h"
+#include "axiom/connectors/StatisticsRequest.h"
 #include "folly/CppAttributes.h"
 #include "folly/coro/Task.h"
 #include "velox/common/Casts.h"
@@ -64,58 +65,6 @@ class Node;
 namespace facebook::axiom::connector {
 
 class TableLayout;
-
-/// Represents statistics of a column. The statistics may represent the column
-/// across the table or may be calculated over a sample of a layout of the
-/// table. All fields are optional.
-struct ColumnStatistics {
-  /// Empty for top level column. Struct member name or string of key for struct
-  /// or flat map subfield.
-  std::string name;
-
-  /// If true, the column cannot have nulls.
-  bool nonNull{false};
-
-  /// Observed percentage of nulls. 0 does not mean that there are no nulls.
-  float nullPct{0};
-
-  /// Minimum observed value for comparable scalar column.
-  std::optional<velox::Variant> min;
-
-  /// Maximum observed value for a comparable scalar column.
-  std::optional<velox::Variant> max;
-
-  /// For string, varbinary, array and map, the maximum observed number of
-  /// characters/bytes/elements/key-value pairs.
-  std::optional<int32_t> maxLength;
-
-  /// Percentage of values where the next row is > the previous. 50 for a random
-  /// distribution, 0 for descending, 100 for ascending.
-  std::optional<float> ascendingPct;
-
-  std::optional<float> descendingPct;
-
-  /// Average count of characters/bytes/elements/key-value pairs.
-  std::optional<int32_t> avgLength;
-
-  /// Average size of the column's value per row in bytes, including nested
-  /// children. Null rows count toward the average. Not populated for
-  /// fixed-width types, whose size comes from the type.
-  std::optional<int32_t> avgSizeInBytes;
-
-  /// Estimated number of distinct values. Not specified for complex types.
-  std::optional<int64_t> numDistinct;
-
-  /// Count of non-nulls.
-  int64_t numValues{0};
-
-  /// For complex type columns, statistics of children. For array, contains one
-  /// element describing the array elements. For struct, has one element for
-  /// each member. For map, has an element for keys and one for values. For flat
-  /// map, may have one element for each key. In all cases, stats may be
-  /// missing.
-  std::vector<ColumnStatistics> children;
-};
 
 /// Result of estimating a conjunction of filters against column statistics.
 struct FilterEstimate {
@@ -1070,12 +1019,22 @@ class ConnectorWriteHandle {
   }
 
   /// Returns the column names to use as grouping keys for column statistics
-  /// collection. Stats are aggregated per group and passed to finishWrite
-  /// alongside a grouping keys RowVector. Returns empty if stats should not
-  /// be grouped (e.g. unpartitioned tables produce a single set of stats).
+  /// collection. finishWrite gets one result row per group. Returns empty when
+  /// the statistics are not grouped, for example for an unpartitioned table.
   virtual const std::vector<std::string>& statsGroupingKeys() const {
     static const std::vector<std::string> kEmpty;
     return kEmpty;
+  }
+
+  /// Returns the statistics this write collects for a table with columns
+  /// 'type'. By default these are the standard statistics, grouped by
+  /// statsGroupingKeys(). The engine skips any statistic whose aggregate can't
+  /// take the column's type.
+  virtual StatisticsRequest statisticsRequest(
+      const velox::RowTypePtr& type) const {
+    auto request = StatisticsRequest::standard(type);
+    request.groupingColumns = statsGroupingKeys();
+    return request;
   }
 
   /// Returns what the connector will do, for EXPLAIN. A handle with no
@@ -1372,6 +1331,24 @@ class ConnectorMetadata {
     VELOX_UNSUPPORTED();
   }
 
+  /// Returns what ANALYZE should collect for 'table', given the columns and
+  /// properties in 'options'. It must not change anything, because EXPLAIN
+  /// calls it too. The default throws: the connector does not support ANALYZE.
+  virtual std::shared_ptr<const StatisticsRequest> getStatisticsRequest(
+      const ConnectorSessionPtr& session,
+      const TablePtr& table,
+      const AnalyzeOptions& options) const;
+
+  /// Stores the statistics that ANALYZE computed for 'request'. It is called at
+  /// most once, and only after the statistics query succeeds. When it returns,
+  /// the next query must see the new statistics through findTable and
+  /// co_estimateStats.
+  virtual folly::coro::Task<void> co_finishAnalyze(
+      const ConnectorSessionPtr& session,
+      const TablePtr& table,
+      const StatisticsRequest& request,
+      StatisticsResults results);
+
   /// Finalizes the table write operation represented by the provided handle.
   /// Returns a future containing the number of rows written.
   ///
@@ -1380,21 +1357,15 @@ class ConnectorMetadata {
   /// @param writeResults Result sets from the table writer fragments. Contains
   /// only data rows (row counts and file fragments). Stats rows are stripped
   /// by the runner before calling finishWrite.
-  /// @param groupingKeys A RowVector with one row per stats group. Contains
-  /// one column per grouping key from ConnectorWriteHandle::statsGroupingKeys,
-  /// followed by a "$row_count" BIGINT column with the exact row count per
-  /// group. nullptr when there are no grouping keys.
-  /// @param groupStats Per-group column statistics. groupStats[i] contains
-  /// per-column statistics for group i, aligned with rows in groupingKeys.
-  /// Empty if no stats were collected. Each ColumnStatistics has a 'name'
-  /// field identifying the table column it describes. Use
-  /// Table::findColumn(stats.name) to match stats to columns.
+  /// @param statistics The statistics the write collected, with one row per
+  /// group. An ungrouped write has one group. Empty when the write collected
+  /// none. A write adds these to the stored statistics; ANALYZE replaces them
+  /// through co_finishAnalyze.
   virtual RowsFuture finishWrite(
       [[maybe_unused]] const ConnectorSessionPtr& session,
       [[maybe_unused]] const ConnectorWriteHandlePtr& handle,
       [[maybe_unused]] const std::vector<velox::RowVectorPtr>& writeResults,
-      [[maybe_unused]] velox::RowVectorPtr groupingKeys,
-      [[maybe_unused]] std::vector<std::vector<ColumnStatistics>> groupStats) {
+      [[maybe_unused]] StatisticsResults statistics) {
     VELOX_UNSUPPORTED();
   }
 

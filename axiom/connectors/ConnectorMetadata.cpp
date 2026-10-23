@@ -21,6 +21,26 @@
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 
 namespace facebook::axiom::connector {
+std::shared_ptr<const StatisticsRequest>
+ConnectorMetadata::getStatisticsRequest(
+    const ConnectorSessionPtr&,
+    const TablePtr& table,
+    const AnalyzeOptions&) const {
+  VELOX_UNSUPPORTED(
+      "ANALYZE is not supported by connector: {}",
+      table->layouts().front()->connectorId());
+}
+
+folly::coro::Task<void> ConnectorMetadata::co_finishAnalyze(
+    const ConnectorSessionPtr&,
+    const TablePtr& table,
+    const StatisticsRequest&,
+    StatisticsResults) {
+  VELOX_UNSUPPORTED(
+      "ANALYZE is not supported by connector: {}",
+      table->layouts().front()->connectorId());
+  co_return;
+}
 
 void applyFilterEstimates(
     const folly::F14FastMap<std::string, const velox::common::Filter*>&
