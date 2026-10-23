@@ -179,7 +179,8 @@ TestTable::TestTable(
     TestConnector* connector,
     const folly::F14FastMap<std::string, velox::Variant>& options,
     std::optional<TestBucketSpec> bucketSpec,
-    folly::F14FastMap<std::string, std::string> columnComments)
+    folly::F14FastMap<std::string, std::string> columnComments,
+    std::shared_ptr<velox::memory::MemoryPool> dataPool)
     : Table(
           std::move(name),
           makeTestTableColumns(
@@ -253,7 +254,8 @@ TestTable::TestTable(
   // occur in more than one schema or connector.
   const auto label = fmt::format(
       "{}.{}.{}", connector->connectorId(), this->name().schema, tableName);
-  pool_ = tableRootPool != nullptr
+  pool_ = dataPool ? std::move(dataPool)
+      : tableRootPool != nullptr
       ? tableRootPool->addLeafChild(label + "_table")
       : velox::memory::memoryManager()->addLeafPool(label + "_table");
   columnTrackers_.resize(schema->size());
@@ -300,6 +302,59 @@ void TestTable::setStats(
           std::make_unique<ColumnStatistics>());
     }
   }
+}
+
+std::shared_ptr<TestTable> TestTable::withAnalyzedStatistics(
+    const std::vector<ColumnStatistics>& statistics) const {
+  std::vector<std::string> hiddenNames;
+  std::vector<velox::TypePtr> hiddenTypes;
+  folly::F14FastMap<std::string, std::string> comments;
+  for (const auto* column : allColumns()) {
+    if (column->hidden() && column->name() != kRowId) {
+      hiddenNames.push_back(column->name());
+      hiddenTypes.push_back(column->type());
+    }
+    if (column->comment()) {
+      comments.emplace(column->name(), *column->comment());
+    }
+  }
+  auto replacement = std::make_shared<TestTable>(
+      name(),
+      type(),
+      velox::ROW(hiddenNames, hiddenTypes),
+      static_cast<TestConnector*>(connector_),
+      options(),
+      bucketSpec_,
+      comments,
+      pool_);
+  replacement->data_ = data_;
+  replacement->dataBucketIds_ = dataBucketIds_;
+  replacement->nextRowId_ = nextRowId_;
+  replacement->numRows_ = numRows_;
+  replacement->dataRows_ = dataRows_;
+  replacement->columnTrackers_ = columnTrackers_;
+  replacement->tracksAllRows_ = tracksAllRows_;
+  for (const auto* column : allColumns()) {
+    if (column->stats()) {
+      const_cast<Column*>(replacement->findColumn(column->name()))
+          ->setStats(std::make_unique<ColumnStatistics>(*column->stats()));
+    }
+  }
+  for (const auto& stats : statistics) {
+    auto* column = replacement->findColumn(stats.name);
+    VELOX_CHECK_NOT_NULL(column, "Unknown analyzed column: {}", stats.name);
+    const_cast<Column*>(column)->setStats(
+        std::make_unique<ColumnStatistics>(stats));
+  }
+  std::vector<std::string> discreteNames;
+  for (const auto* column : exportedLayout_->discretePredicateColumns()) {
+    discreteNames.push_back(column->name());
+  }
+  if (!discreteNames.empty()) {
+    replacement->exportedLayout_->setDiscreteValues(
+        discreteNames, exportedLayout_->discreteValues());
+  }
+  return replacement;
 }
 
 namespace {
@@ -394,7 +449,13 @@ void TestTable::addData(
   }
   dataRows_ += data->size();
 
-  if (!collectColumnStatistics || !collectStatistics_) {
+  tracksAllRows_ &= collectColumnStatistics;
+  if (!tracksAllRows_ || !collectStatistics_) {
+    // Once rows are added without tracking, the trackers no longer cover the
+    // whole table. Drop the column statistics, including any from ANALYZE.
+    for (const auto* column : allColumns()) {
+      const_cast<Column*>(column)->setStats(nullptr);
+    }
     return;
   }
 
@@ -1053,9 +1114,28 @@ TestConnectorMetadata::getStatisticsRequest(
 
 folly::coro::Task<void> TestConnectorMetadata::co_finishAnalyze(
     const ConnectorSessionPtr&,
-    const TablePtr&,
-    const StatisticsRequest&,
+    const TablePtr& table,
+    const StatisticsRequest& request,
     StatisticsResults results) {
+  std::shared_ptr<TestTable> replacement;
+  if (publishAnalyzedStatistics) {
+    VELOX_USER_CHECK(
+        request.groupingColumns.empty() && !request.groups,
+        "TestConnector statistics publication requires an ungrouped whole-table ANALYZE");
+    VELOX_CHECK_EQ(results.groups->size(), 1);
+    auto current = tables_.at(table->name());
+    VELOX_USER_CHECK(
+        current.get() == table.get(),
+        "ANALYZE target metadata changed during collection");
+    VELOX_USER_CHECK(
+        current->numRows().has_value(),
+        "Statistics publication requires visible row counts");
+    VELOX_USER_CHECK_EQ(
+        results.groups->childAt(0)->variantAt(0).value<int64_t>(),
+        *current->numRows(),
+        "ANALYZE target row count changed during collection");
+    replacement = current->withAnalyzedStatistics(results.columnStats.at(0));
+  }
   if (onFinishAnalyze) {
     onFinishAnalyze(results);
   }
@@ -1070,6 +1150,9 @@ folly::coro::Task<void> TestConnectorMetadata::co_finishAnalyze(
   results.sketches = std::static_pointer_cast<velox::RowVector>(
       velox::BaseVector::copy(*results.sketches, analyzePool.get()));
   analyzedStatistics = std::move(results);
+  if (replacement) {
+    tables_.at(table->name()) = std::move(replacement);
+  }
   co_return;
 }
 

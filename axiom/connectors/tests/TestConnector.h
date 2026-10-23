@@ -165,6 +165,12 @@ class TestTableLayout : public TableLayout {
 
   std::span<const Column* const> discretePredicateColumns() const override;
 
+  /// Returns the values given to setDiscreteValues. Each is a ROW with one
+  /// field per column in discretePredicateColumns().
+  const std::vector<velox::Variant>& discreteValues() const {
+    return discreteValues_;
+  }
+
   std::unique_ptr<DiscretePredicates> discretePredicates(
       const ConnectorSessionPtr& session,
       const std::vector<const Column*>& columns,
@@ -213,7 +219,8 @@ class TestTable : public Table {
       TestConnector* connector,
       const folly::F14FastMap<std::string, velox::Variant>& options,
       std::optional<TestBucketSpec> bucketSpec = std::nullopt,
-      folly::F14FastMap<std::string, std::string> columnComments = {});
+      folly::F14FastMap<std::string, std::string> columnComments = {},
+      std::shared_ptr<velox::memory::MemoryPool> dataPool = nullptr);
 
   const std::vector<const TableLayout*>& layouts() const override {
     return layouts_;
@@ -256,6 +263,12 @@ class TestTable : public Table {
   void addData(
       const velox::RowVectorPtr& data,
       bool collectColumnStatistics = true);
+
+  /// Returns a copy of this table that shares its data and replaces the
+  /// statistics of the given columns. Code that still holds this table keeps
+  /// seeing the old statistics. No data is copied.
+  std::shared_ptr<TestTable> withAnalyzedStatistics(
+      const std::vector<ColumnStatistics>& statistics) const;
 
   TestTableLayout* mutableLayout() {
     return exportedLayout_.get();
@@ -300,6 +313,7 @@ class TestTable : public Table {
   uint64_t numRows_{0};
   uint64_t dataRows_{0};
   bool collectStatistics_{true};
+  bool tracksAllRows_{true};
   std::vector<ColumnTracker> columnTrackers_;
 
   std::optional<TestBucketSpec> bucketSpec_;
@@ -709,6 +723,11 @@ class TestConnectorMetadata : public ConnectorMetadata {
   /// When set, getStatisticsRequest returns its result instead of the
   /// standard request.
   AnalyzeRequestFactory analyzeRequestFactory;
+  /// When true, ANALYZE results replace the table's column statistics, so
+  /// later queries plan with them. By default the results are only kept in
+  /// analyzedStatistics. Publishing needs a whole-table, ungrouped request; a
+  /// column list is fine.
+  bool publishAnalyzedStatistics{false};
   /// Called by co_finishAnalyze with the results before they are stored. If it
   /// throws, nothing is stored.
   std::function<void(const StatisticsResults&)> onFinishAnalyze;

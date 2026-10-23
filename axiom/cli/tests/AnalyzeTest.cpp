@@ -84,6 +84,52 @@ TEST_F(AnalyzeTest, standard) {
   EXPECT_EQ(stat(stats, "s").avgSizeInBytes, 4);
 }
 
+TEST_F(AnalyzeTest, publishStatisticsWithoutChangingData) {
+  auto original =
+      testConnector_->addTable("t", ROW({"x", "b"}, {BIGINT(), BOOLEAN()}));
+  original->addData(
+      makeRowVector(
+          {"x", "b"},
+          {makeNullableFlatVector<int64_t>({1, 2, std::nullopt}),
+           makeNullableFlatVector<bool>({true, false, std::nullopt})}),
+      false);
+  metadata().publishAnalyzedStatistics = true;
+  EXPECT_EQ(original->numRows(), 3);
+  EXPECT_FALSE(original->findColumn("x")->stats());
+  run("ANALYZE t WITH (columns = ARRAY['x'])");
+  auto first = metadata().findTable({"default", "t"});
+  ASSERT_NE(first.get(), original.get());
+  ASSERT_TRUE(first->findColumn("x")->stats());
+  EXPECT_EQ(first->findColumn("x")->stats()->numDistinct, 2);
+  EXPECT_FALSE(first->findColumn("b")->stats());
+  EXPECT_FALSE(original->findColumn("x")->stats());
+  metadata().onFinishAnalyze = [](const auto&) {
+    VELOX_USER_FAIL("finish failed");
+  };
+  VELOX_ASSERT_THROW(run("ANALYZE t"), "finish failed");
+  EXPECT_EQ(first, metadata().findTable({"default", "t"}));
+  metadata().onFinishAnalyze = nullptr;
+  run("ANALYZE t WITH (columns = ARRAY['b'])");
+  auto second = metadata().findTable({"default", "t"});
+  EXPECT_EQ(second->findColumn("x")->stats()->numDistinct, 2);
+  EXPECT_EQ(second->findColumn("b")->stats()->numTrue, 1);
+  EXPECT_EQ(
+      std::static_pointer_cast<const TestTable>(second)->data()[0].get(),
+      original->data()[0].get());
+  testConnector_->appendData(
+      "t",
+      makeRowVector(
+          {"x", "b"},
+          {makeFlatVector<int64_t>({3}), makeFlatVector<bool>({true})}));
+  auto appended = metadata().findTable({"default", "t"});
+  EXPECT_EQ(appended->numRows(), 4);
+  EXPECT_FALSE(appended->findColumn("x")->stats());
+  run("ANALYZE t");
+  auto final = metadata().findTable({"default", "t"});
+  EXPECT_EQ(final->findColumn("x")->stats()->numDistinct, 3);
+  EXPECT_EQ(final->findColumn("b")->stats()->numTrue, 2);
+}
+
 TEST_F(AnalyzeTest, approximateDistinctCount) {
   testConnector_->addTable("t", ROW({"x"}, {BIGINT()}));
   testConnector_->appendData(
