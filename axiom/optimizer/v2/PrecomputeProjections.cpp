@@ -122,6 +122,25 @@ PrecomputeProjections::PrecomputeProjections(
   }
 }
 
+namespace {
+
+// The column of 'input' that computes 'expr' when 'input' is a Project, or
+// nullptr.
+ColumnCP computedColumn(NodeCP input, ExprCP expr) {
+  if (!input->is(NodeType::kProject)) {
+    return nullptr;
+  }
+  const auto* project = input->as<Project>();
+  for (size_t i = 0; i < project->exprs().size(); ++i) {
+    if (project->exprs()[i] == expr) {
+      return project->outputColumns()[i];
+    }
+  }
+  return nullptr;
+}
+
+} // namespace
+
 ExprCP PrecomputeProjections::toColumn(
     ExprCP expr,
     ColumnCP alias,
@@ -133,15 +152,7 @@ ExprCP PrecomputeProjections::toColumn(
   if (expr->is(PlanType::kColumnExpr)) {
     const auto* column = expr->as<Column>();
     if (alias != nullptr && alias->outputName() != column->outputName()) {
-      if (auto it = seen_.find(expr); it != seen_.end()) {
-        if (it->second == alias) {
-          return alias;
-        }
-        seen_.erase(it);
-      }
-      addToProject(expr, alias);
-      needsProject_ = true;
-      return alias;
+      return projectAs(expr, alias);
     }
 
     // In narrowing mode the project is not seeded with the input columns, so a
@@ -172,6 +183,10 @@ ExprCP PrecomputeProjections::toColumn(
     return expr;
   }
 
+  if (alias != nullptr) {
+    return projectAs(expr, alias);
+  }
+
   if (auto it = seen_.find(expr); it != seen_.end()) {
     return it->second;
   }
@@ -179,30 +194,34 @@ ExprCP PrecomputeProjections::toColumn(
   // The input may already compute this expression -- a name the query
   // projects, lifted here for an operator that reads the same value. Read that
   // column instead of computing it a second time.
-  if (alias == nullptr && input_->is(NodeType::kProject)) {
-    const auto* project = input_->as<Project>();
-    for (size_t i = 0; i < project->exprs().size(); ++i) {
-      if (project->exprs()[i] == expr) {
-        ColumnCP column = project->outputColumns()[i];
-        if (!projectAllInputs_ && !seen_.contains(column)) {
-          addToProject(column, column);
-        }
-        seen_.emplace(expr, column);
-        return column;
-      }
+  if (ColumnCP column = computedColumn(input_, expr)) {
+    if (!projectAllInputs_ && !seen_.contains(column)) {
+      addToProject(column, column);
     }
-  }
-
-  if (alias != nullptr) {
-    addToProject(expr, alias);
-    needsProject_ = true;
-    return alias;
+    seen_.emplace(expr, column);
+    return column;
   }
 
   ColumnCP column = Column::create("__p", expr->value());
   addToProject(expr, column);
   needsProject_ = true;
   return column;
+}
+
+ColumnCP PrecomputeProjections::projectAs(ExprCP expr, ColumnCP alias) {
+  ColumnCP computed =
+      expr->is(PlanType::kColumnExpr) ? nullptr : computedColumn(input_, expr);
+  ExprCP value = computed != nullptr ? computed : expr;
+  seen_.insert_or_assign(expr, alias);
+  for (size_t i = 0; i < outColumns_.size(); ++i) {
+    if (outColumns_[i] == alias && outExprs_[i] == value) {
+      return alias;
+    }
+  }
+  outColumns_.push_back(alias);
+  outExprs_.push_back(value);
+  needsProject_ = true;
+  return alias;
 }
 
 NodeCP PrecomputeProjections::node() && {

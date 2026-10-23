@@ -851,6 +851,29 @@ void checkColumns(const ExprVector& exprs, std::string_view role) {
   }
 }
 
+// Checks that each partition key appears once, and each order key once and
+// never as a partition key. 'node' names the node in the error.
+void checkDistinctKeys(
+    const ExprVector& partitionKeys,
+    const ExprVector& orderKeys,
+    std::string_view node) {
+  folly::F14FastSet<ExprCP> seen;
+  for (ExprCP key : partitionKeys) {
+    VELOX_CHECK(
+        seen.insert(key).second,
+        "{} partition key repeats: {}",
+        node,
+        key->toString());
+  }
+  for (ExprCP key : orderKeys) {
+    VELOX_CHECK(
+        seen.insert(key).second,
+        "{} order key repeats a key: {}",
+        node,
+        key->toString());
+  }
+}
+
 } // namespace
 
 ColumnVector Node::outputsAmong(const ColumnVector& columns) const {
@@ -2455,6 +2478,7 @@ Window::Window(Key key)
   VELOX_CHECK_EQ(orderKeys_.size(), orderTypes_.size());
   checkColumns(partitionKeys_, "Window partition key");
   checkColumns(orderKeys_, "Window order key");
+  checkDistinctKeys(partitionKeys_, orderKeys_, "Window");
   for (const auto& function : functions_) {
     // A ROWS bound is an offset in rows, which Velox reads as a constant.
     if (function.frame.type != logical_plan::WindowExpr::WindowType::kRange) {
@@ -2548,6 +2572,7 @@ RowNumber::RowNumber(Key key)
       this->outputColumns().size(),
       input_->outputColumns().size() + (rankColumn_ != nullptr ? 1 : 0));
   checkColumns(partitionKeys_, "RowNumber partition key");
+  checkDistinctKeys(partitionKeys_, /*orderKeys=*/{}, "RowNumber");
 }
 
 size_t RowNumber::KeyHash::operator()(const RowNumber* node) const {
@@ -2610,6 +2635,7 @@ TopNRowNumber::TopNRowNumber(Key key)
   VELOX_CHECK(!orderKeys_.empty(), "TopNRowNumber must have order keys");
   checkColumns(partitionKeys_, "TopNRowNumber partition key");
   checkColumns(orderKeys_, "TopNRowNumber order key");
+  checkDistinctKeys(partitionKeys_, orderKeys_, "TopNRowNumber");
   VELOX_CHECK_EQ(
       this->outputColumns().size(),
       input_->outputColumns().size() + (rankColumn_ != nullptr ? 1 : 0));

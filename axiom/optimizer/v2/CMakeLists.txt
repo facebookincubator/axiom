@@ -63,6 +63,7 @@ add_library(
   PlanSubstitutions.cpp
   PrecomputeProjections.cpp
   PushdownAndPrunePass.cpp
+  RedundantKeys.cpp
   TableAccessHandle.cpp
   GraphMatchLowering.cpp
   TranslatePass.cpp

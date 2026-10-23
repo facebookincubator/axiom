@@ -85,6 +85,19 @@ WITH ranked AS (
 )
 SELECT a FROM ranked WHERE rn <= 2
 ----
+-- Ranking stays correct when removing a branch that matches no partition makes
+-- the PARTITION BY and ORDER BY keys one column.
+SELECT a, count(*), max(rn)
+FROM (
+  SELECT a, row_number() OVER (PARTITION BY a ORDER BY b) AS rn
+  FROM (
+    SELECT k, k FROM t
+    UNION ALL
+    SELECT k, a FROM t WHERE ds = '1900-01-01'
+  ) AS v(a, b)
+)
+GROUP BY a
+----
 -- A scalar subquery over no matching partitions produces NULL.
 SELECT (SELECT a FROM t WHERE ds = '1900-01-01')
 ----

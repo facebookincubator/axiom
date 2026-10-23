@@ -101,20 +101,73 @@ TEST_P(WindowTest, constantKeysAfterJoin) {
 TEST_P(WindowTest, multipleFunctionsSameSpec) {
   // Multiple window functions with the same partition/order spec should be
   // grouped into a single Window operator.
-  auto plan = toSingleNodePlan(
-      "SELECT n_name, "
-      "row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name) as rn, "
-      "sum(n_nationkey) OVER (PARTITION BY n_regionkey ORDER BY n_name) as s "
-      "FROM nation");
+  {
+    SCOPED_TRACE("Same partition and order keys");
+    auto plan = toSingleNodePlan(
+        "SELECT n_name, "
+        "row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name) as rn, "
+        "sum(n_nationkey) OVER (PARTITION BY n_regionkey ORDER BY n_name) as s "
+        "FROM nation");
 
-  auto matcher =
-      matchScan("nation")
-          .window(
-              {"row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name)",
-               "sum(n_nationkey) OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
-          .project()
-          .build();
-  AXIOM_ASSERT_PLAN(plan, matcher);
+    auto matcher =
+        matchScan("nation")
+            .window(
+                {"row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name)",
+                 "sum(n_nationkey) OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
+            .project()
+            .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // A literal partition key changes no result, so it does not separate
+  // windows either.
+  {
+    SCOPED_TRACE("Literal partition key");
+    auto plan = toSingleNodePlan(
+        "SELECT sum(n_nationkey) OVER (PARTITION BY 1) AS s, "
+        "count(*) OVER () AS c "
+        "FROM nation");
+
+    auto matcher =
+        matchScan("nation")
+            .window({"sum(n_nationkey) OVER () as s", "count() OVER () as c"})
+            .project({"s", "c"})
+            .build();
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
+  }
+
+  // A RANGE frame that measures a bound on its ORDER BY key keeps the key even
+  // when it equals a partition key, under a column of its own, so its window
+  // forms its own group. v1 rejects that frame.
+  {
+    SCOPED_TRACE("RANGE frame with a boundary value");
+    if (!useV2_) {
+      return;
+    }
+    auto plan = toSingleNodePlan(
+        "SELECT "
+        "sum(n_nationkey) OVER (PARTITION BY n_regionkey ORDER BY n_regionkey "
+        "  RANGE BETWEEN 1 PRECEDING AND CURRENT ROW) AS s, "
+        "count(*) OVER (PARTITION BY n_regionkey ORDER BY n_regionkey) AS c "
+        "FROM nation");
+
+    auto matcher =
+        matchScan("nation")
+            .project({
+                "n_nationkey",
+                "n_regionkey",
+                "n_regionkey - 1 as frameStart",
+                "n_regionkey as k",
+            })
+            .window(
+                {"sum(n_nationkey) OVER (PARTITION BY n_regionkey ORDER BY k "
+                 "RANGE BETWEEN frameStart PRECEDING AND CURRENT ROW) as s"})
+            .project({"n_regionkey", "s"})
+            .window({"count() OVER (PARTITION BY n_regionkey) as c"})
+            .project({"s", "c"})
+            .build();
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
+  }
 }
 
 TEST_P(WindowTest, stackedWindows) {

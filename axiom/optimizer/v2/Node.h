@@ -1767,9 +1767,11 @@ class Window : public Node {
     /// Window function invocations sharing this partition / order; non-empty.
     /// Each carries its own frame.
     WindowFunctions functions;
-    /// Partition-by keys; empty for a single global partition.
+    /// Partition-by keys, distinct columns; empty for a single global
+    /// partition.
     ExprVector partitionKeys;
-    /// Order-by keys; positional with `orderTypes`.
+    /// Order-by keys, distinct columns that are not partition keys;
+    /// positional with `orderTypes`.
     ExprVector orderKeys;
     /// Sort direction per order key; positional with `orderKeys`.
     OrderTypeVector orderTypes;
@@ -1843,7 +1845,8 @@ class RowNumber : public Node {
   struct Key {
     /// Input node.
     NodeCP input;
-    /// Partition-by keys; empty for a single global partition.
+    /// Partition-by keys, distinct columns; empty for a single global
+    /// partition.
     ExprVector partitionKeys;
     /// Per-partition row cap; > 0 when set, absent for no cap.
     std::optional<int32_t> limit;
@@ -1921,9 +1924,11 @@ class TopNRowNumber : public Node {
     NodeCP input;
     /// Ranking function (row_number / rank / dense_rank).
     RankFunction rankFunction;
-    /// Partition-by keys; empty for a single global partition.
+    /// Partition-by keys, distinct columns; empty for a single global
+    /// partition.
     ExprVector partitionKeys;
-    /// Order-by keys; positional with `orderTypes`, non-empty.
+    /// Order-by keys, distinct columns that are not partition keys;
+    /// positional with `orderTypes`, non-empty.
     ExprVector orderKeys;
     /// Sort direction per order key; positional with `orderKeys`.
     OrderTypeVector orderTypes;
