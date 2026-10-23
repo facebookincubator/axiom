@@ -148,37 +148,88 @@ TEST_F(NodePrinterTest, indexLookupJoin) {
   });
 }
 
-TEST_F(NodePrinterTest, exchangePartitioning) {
-  const auto plan = parseSelect("SELECT * FROM t");
+TEST_F(NodePrinterTest, physicalSteps) {
+  const auto physicalPlan = [&](std::string_view sql) {
+    std::vector<std::string> lines;
+    afterPass_ = [&](Optimizer::Pass pass, NodeCP root) {
+      if (pass == Optimizer::Pass::kPlanPhysical) {
+        lines = toLines(root);
+      }
+    };
+    planVelox(
+        parseSelect(sql), {.maxRemotePartitions = 2, .maxLocalPartitions = 2});
+    afterPass_ = nullptr;
+    return lines;
+  };
 
-  verifyOptimization(*plan, Optimizer::Pass::kTranslate, [&](NodeCP root) {
-    Builder builder;
-    const ExprVector keys{root->outputColumns().front()};
-    NodeCP hash = builder.make<Exchange>(
-        {root, Partitioning::hash(PropertyScope::kDriver, keys)});
-    EXPECT_THAT(
-        toLines(hash),
-        ElementsAre(
-            Eq("- Exchange -> a:BIGINT"),
-            Eq("  partitioning: Driver Partitioned"),
-            Eq("  partitionKeys: a"),
-            Eq("  - Scan[\"default\".\"t\"] -> a:BIGINT"),
-            Eq("")));
+  EXPECT_THAT(
+      physicalPlan("SELECT * FROM t LIMIT 10"),
+      ElementsAre(
+          Eq("- Limit[0, 10] -> a:BIGINT"),
+          Eq("  - Exchange -> a:BIGINT"),
+          Eq("    partitioning: Global Gather"),
+          Eq("    - Limit[0, 10] -> a:BIGINT"),
+          Eq("      - Exchange -> a:BIGINT"),
+          Eq("        partitioning: Driver Gather"),
+          Eq("        - Limit[PARTIAL, 0, 10] -> a:BIGINT"),
+          Eq("          - Scan[\"default\".\"t\"] -> a:BIGINT"),
+          Eq("            handle: \"default\".\"t\""),
+          Eq("")));
 
-    const OrderTypeVector orderTypes{OrderType::kAscNullsFirst};
-    NodeCP gatherMerge = builder.make<Exchange>(
-        {root,
-         Partitioning::gatherMerge(PropertyScope::kGlobal, keys, orderTypes)});
-    EXPECT_THAT(
-        toLines(gatherMerge),
-        ElementsAre(
-            Eq("- Exchange -> a:BIGINT"),
-            Eq("  partitioning: Global Gather"),
-            Eq("  orderKeys: a"),
-            Eq("  orderTypes: ASC NULLS FIRST"),
-            Eq("  - Scan[\"default\".\"t\"] -> a:BIGINT"),
-            Eq("")));
-  });
+  EXPECT_THAT(
+      physicalPlan("SELECT * FROM t ORDER BY a"),
+      ElementsAre(
+          Eq("- Exchange -> a:BIGINT"),
+          Eq("  partitioning: Global Gather"),
+          Eq("  orderKeys: a"),
+          Eq("  orderTypes: ASC NULLS LAST"),
+          Eq("  - Exchange -> a:BIGINT"),
+          Eq("    partitioning: Driver Gather"),
+          Eq("    orderKeys: a"),
+          Eq("    orderTypes: ASC NULLS LAST"),
+          Eq("    - Sort[PARTIAL] -> a:BIGINT"),
+          Eq("      orderKeys: a"),
+          Eq("      - Scan[\"default\".\"t\"] -> a:BIGINT"),
+          Eq("        handle: \"default\".\"t\""),
+          Eq("")));
+
+  EXPECT_THAT(
+      physicalPlan("SELECT * FROM t ORDER BY a LIMIT 10"),
+      ElementsAre(
+          Eq("- Limit[0, 10] -> a:BIGINT"),
+          Eq("  - Exchange -> a:BIGINT"),
+          Eq("    partitioning: Global Gather"),
+          Eq("    orderKeys: a"),
+          Eq("    orderTypes: ASC NULLS LAST"),
+          Eq("    - Limit[0, 10] -> a:BIGINT"),
+          Eq("      - Exchange -> a:BIGINT"),
+          Eq("        partitioning: Driver Gather"),
+          Eq("        orderKeys: a"),
+          Eq("        orderTypes: ASC NULLS LAST"),
+          Eq("        - TopN[PARTIAL, 0, 10] -> a:BIGINT"),
+          Eq("          orderKeys: a"),
+          Eq("          - Scan[\"default\".\"t\"] -> a:BIGINT"),
+          Eq("            handle: \"default\".\"t\""),
+          Eq("")));
+
+  EXPECT_THAT(
+      physicalPlan("SELECT a, avg(a) FROM t GROUP BY a"),
+      ElementsAre(
+          StartsWith("- Aggregate[FINAL] -> a:BIGINT, "),
+          Eq("  groupingKeys: a"),
+          Eq("  aggregates: avg(a)"),
+          StartsWith("  - Exchange -> a:BIGINT, "),
+          Eq("    partitioning: Driver Partitioned"),
+          Eq("    partitionKeys: a"),
+          StartsWith("    - Exchange -> a:BIGINT, "),
+          Eq("      partitioning: Global Partitioned"),
+          Eq("      partitionKeys: a"),
+          StartsWith("      - Aggregate[PARTIAL] -> a:BIGINT, "),
+          Eq("        groupingKeys: a"),
+          Eq("        aggregates: avg(a)"),
+          Eq("        - Scan[\"default\".\"t\"] -> a:BIGINT"),
+          Eq("          handle: \"default\".\"t\""),
+          Eq("")));
 }
 
 } // namespace

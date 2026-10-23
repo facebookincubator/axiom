@@ -117,13 +117,18 @@ class Printer : public NodeVisitor {
 
   void visit(const Limit& node, NodeVisitorContext& context) const override {
     auto& ctx = static_cast<Context&>(context);
-    header(ctx, node, fmt::format("[{}, {}]", node.offset(), node.count()));
+    header(
+        ctx,
+        node,
+        node.isPartial()
+            ? fmt::format("[PARTIAL, {}, {}]", node.offset(), node.count())
+            : fmt::format("[{}, {}]", node.offset(), node.count()));
     visitInputs(node, ctx);
   }
 
   void visit(const Sort& node, NodeVisitorContext& context) const override {
     auto& ctx = static_cast<Context&>(context);
-    header(ctx, node);
+    header(ctx, node, node.isPartial() ? "[PARTIAL]" : "");
     ctx.out << spaces(ctx.indent + 2)
             << "orderKeys: " << formatExprs(node.orderKeys()) << '\n';
     visitInputs(node, ctx);
@@ -131,7 +136,12 @@ class Printer : public NodeVisitor {
 
   void visit(const TopN& node, NodeVisitorContext& context) const override {
     auto& ctx = static_cast<Context&>(context);
-    header(ctx, node, fmt::format("[{}, {}]", node.offset(), node.count()));
+    header(
+        ctx,
+        node,
+        node.isPartial()
+            ? fmt::format("[PARTIAL, {}, {}]", node.offset(), node.count())
+            : fmt::format("[{}, {}]", node.offset(), node.count()));
     ctx.out << spaces(ctx.indent + 2)
             << "orderKeys: " << formatExprs(node.orderKeys()) << '\n';
     visitInputs(node, ctx);
@@ -140,7 +150,10 @@ class Printer : public NodeVisitor {
   void visit(const Aggregate& node, NodeVisitorContext& context)
       const override {
     auto& ctx = static_cast<Context&>(context);
-    header(ctx, node);
+    header(
+        ctx,
+        node,
+        fmt::format("[{}]", velox::core::AggregationNode::toName(node.step())));
     const auto pad = spaces(ctx.indent + 2);
     if (!node.groupingKeys().empty()) {
       ctx.out << pad << "groupingKeys: " << formatExprs(node.groupingKeys())
