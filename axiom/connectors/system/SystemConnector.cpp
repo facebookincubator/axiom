@@ -863,12 +863,12 @@ SystemConnector::SystemConnector(
     const std::string& id,
     const ConnectorMetadataRegistry::Registry& metadataRegistry,
     const QueryInfoProvider* queryInfoProvider,
-    const SessionPropertiesProvider* sessionPropertiesProvider,
+    std::shared_ptr<const SessionPropertiesProvider> sessionPropertiesProvider,
     InformationSchema::TypeNameFormatter typeName)
     : Connector(id),
       metadataRegistry_(metadataRegistry),
       queryInfoProvider_(queryInfoProvider),
-      sessionPropertiesProvider_(sessionPropertiesProvider),
+      sessionPropertiesProvider_(std::move(sessionPropertiesProvider)),
       typeName_(std::move(typeName)) {
   VELOX_CHECK(typeName_, "Type name formatter must be callable");
 }
@@ -905,7 +905,7 @@ std::unique_ptr<velox::connector::DataSource> SystemConnector::createDataSource(
     return std::make_unique<SessionPropertiesDataSource>(
         outputType,
         columnHandles,
-        sessionPropertiesProvider_,
+        sessionPropertiesProvider_.get(),
         connectorQueryCtx->memoryPool());
   }
 

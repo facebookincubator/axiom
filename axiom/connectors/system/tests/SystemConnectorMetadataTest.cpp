@@ -143,13 +143,13 @@ class SystemConnectorMetadataTest : public ::testing::Test {
     velox::memory::MemoryManager::testingSetInstance({});
 
     queryProvider_ = std::make_unique<MockQueryInfoProvider>();
-    sessionProvider_ = std::make_unique<MockSessionPropertiesProvider>();
+    sessionProvider_ = std::make_shared<MockSessionPropertiesProvider>();
 
     connector_ = std::make_shared<SystemConnector>(
         kSystemCatalog,
         ConnectorMetadataRegistry::global(),
         queryProvider_.get(),
-        sessionProvider_.get());
+        sessionProvider_);
     velox::connector::registerConnector(connector_);
 
     metadata_ = std::make_shared<SystemConnectorMetadata>(connector_.get());
@@ -239,7 +239,7 @@ class SystemConnectorMetadataTest : public ::testing::Test {
   }
 
   std::unique_ptr<MockQueryInfoProvider> queryProvider_;
-  std::unique_ptr<MockSessionPropertiesProvider> sessionProvider_;
+  std::shared_ptr<MockSessionPropertiesProvider> sessionProvider_;
   std::shared_ptr<SystemConnector> connector_;
   std::shared_ptr<SystemConnectorMetadata> metadata_;
   std::shared_ptr<velox::memory::MemoryPool> pool_;
@@ -521,7 +521,7 @@ TEST_F(SystemConnectorMetadataTest, describesItsRegistry) {
   const std::string catalog{"own_system"};
   auto registry = ConnectorMetadataRegistry::create();
   auto connector = std::make_shared<SystemConnector>(
-      catalog, *registry, queryProvider_.get(), sessionProvider_.get());
+      catalog, *registry, queryProvider_.get(), sessionProvider_);
   auto metadata = std::make_shared<SystemConnectorMetadata>(connector.get());
   registry->insert(catalog, metadata);
 

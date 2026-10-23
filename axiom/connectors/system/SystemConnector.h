@@ -222,6 +222,8 @@ class SystemConnector : public velox::connector::Connector {
  public:
   /// @param metadataRegistry The catalogs information_schema describes. Must
   /// outlive this connector.
+  /// @param sessionPropertiesProvider The source for session property rows.
+  /// Retained for this connector's lifetime.
   /// @param typeName Spelling of the types information_schema.columns
   /// reports. Defaults to 'InformationSchema::defaultTypeName'; a SQL dialect
   /// whose clients read these names registers its own, e.g. Presto's
@@ -230,7 +232,8 @@ class SystemConnector : public velox::connector::Connector {
       const std::string& id,
       const ConnectorMetadataRegistry::Registry& metadataRegistry,
       const QueryInfoProvider* queryInfoProvider,
-      const SessionPropertiesProvider* sessionPropertiesProvider = nullptr,
+      std::shared_ptr<const SessionPropertiesProvider>
+          sessionPropertiesProvider = nullptr,
       InformationSchema::TypeNameFormatter typeName =
           InformationSchema::defaultTypeName);
 
@@ -261,7 +264,8 @@ class SystemConnector : public velox::connector::Connector {
  private:
   const ConnectorMetadataRegistry::Registry& metadataRegistry_;
   const QueryInfoProvider* queryInfoProvider_;
-  const SessionPropertiesProvider* sessionPropertiesProvider_;
+  const std::shared_ptr<const SessionPropertiesProvider>
+      sessionPropertiesProvider_;
   const InformationSchema::TypeNameFormatter typeName_;
 };
 

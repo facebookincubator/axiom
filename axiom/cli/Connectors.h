@@ -16,27 +16,35 @@
 
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include <memory>
 #include <string>
 #include <string_view>
-#include <vector>
 
-#include <folly/container/F14Map.h>
-
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/system/SystemConnector.h"
 #include "folly/executors/IOThreadPoolExecutor.h"
 #include "velox/connectors/Connector.h"
+#include "velox/connectors/ConnectorRegistry.h"
 
 namespace facebook::axiom {
 
 class SessionConfig;
 
 /**
- * Helper class to register connectors for Axiom and Velox.
+ * Populates application-owned Axiom and Velox connector registries.
  *
  * This class handles the details of registering TPCH connectors
  * and connectors for tables stored in the local filesystem in
- * Parquet or ORC format.
+ * Parquet or ORC format. Catalogs remain in the registries after this helper
+ * is destroyed.
+ *
+ * @code
+ * auto connectorRegistry = velox::connector::ConnectorRegistry::create();
+ * auto metadataRegistry = connector::ConnectorMetadataRegistry::create();
+ * Connectors connectors{*connectorRegistry, *metadataRegistry};
+ * connectors.registerTpchConnector();
+ * @endcode
  */
 class Connectors {
  public:
@@ -45,15 +53,18 @@ class Connectors {
   static constexpr const char* kTestConnectorId = "test";
   static constexpr const char* kSystemConnectorId = "system";
 
-  Connectors();
+  /// Registers catalogs into the supplied registries, which must outlive this
+  /// helper.
+  Connectors(
+      velox::connector::ConnectorRegistry::Registry& connectorRegistry,
+      connector::ConnectorMetadataRegistry::Registry& metadataRegistry);
 
   Connectors(const Connectors&) = delete;
   Connectors& operator=(const Connectors&) = delete;
   Connectors(Connectors&&) = default;
   Connectors& operator=(Connectors&&) = default;
 
-  /// Unregister all connectors with ids in `connectorIds_`.
-  virtual ~Connectors();
+  virtual ~Connectors() = default;
 
   /// Registers the TPCH connector under the connector ID "tpch".
   /// This allows queries like "select * from tpch.sf1.lineitem".
@@ -122,22 +133,24 @@ class Connectors {
     return ioExecutor_.get();
   }
 
-  /// Registers a connector in the global registry and tracks it for
-  /// cleanup on destruction.
-  void registerConnector(
-      const std::shared_ptr<velox::connector::Connector>& connector);
+  velox::connector::ConnectorRegistry::Registry& connectorRegistry() {
+    return *connectorRegistry_;
+  }
 
-  // Unregister these on destruction.
-  std::vector<std::string> connectorIds_;
+  connector::ConnectorMetadataRegistry::Registry& metadataRegistry() {
+    return *metadataRegistry_;
+  }
 
  private:
   static std::shared_ptr<folly::IOThreadPoolExecutor> getSharedIoExecutor();
   std::shared_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
 
-  // Adapts SessionConfig to SessionPropertiesProvider. Stored here to
-  // ensure the provider outlives the system connector.
-  std::unique_ptr<connector::system::SessionPropertiesProvider>
-      sessionPropertiesProvider_;
+  // Registry this helper registers execution connectors into. The caller owns
+  // it.
+  velox::connector::ConnectorRegistry::Registry* connectorRegistry_;
+
+  // Registry this helper registers metadata into. The caller owns it.
+  connector::ConnectorMetadataRegistry::Registry* metadataRegistry_;
 };
 
 } // namespace facebook::axiom

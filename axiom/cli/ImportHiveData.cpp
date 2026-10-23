@@ -90,7 +90,9 @@ int main(int argc, char** argv) {
   auto pool = memory::memoryManager()->addLeafPool("import");
 
   // Register a Hive connector so LocalTableBuilder can sample for NDV.
-  facebook::axiom::Connectors connectors;
+  facebook::axiom::Connectors connectors{
+      connector::ConnectorRegistry::global(),
+      facebook::axiom::connector::ConnectorMetadataRegistry::global()};
   auto connector =
       connectors.registerLocalHiveConnector(FLAGS_data_path, FLAGS_data_format);
   auto* hiveConnector =

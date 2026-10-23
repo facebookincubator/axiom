@@ -48,7 +48,9 @@ int main(int argc, char** argv) {
   facebook::velox::memory::MemoryManager::initialize(
       facebook::velox::memory::MemoryManager::Options{});
 
-  facebook::axiom::Connectors connectors;
+  facebook::axiom::Connectors connectors{
+      facebook::velox::connector::ConnectorRegistry::global(),
+      facebook::axiom::connector::ConnectorMetadataRegistry::global()};
   // Progress-polling scheduler for the console's live progress bar.
   folly::FunctionScheduler progressScheduler;
   axiom::sql::SqlQueryRunner runner{
@@ -138,7 +140,7 @@ int main(int argc, char** argv) {
   try {
     runner.initialize(initializeConnectors);
 
-    // Register after initialize() so sessionConfig() is available.
+    // Register after initialize() so the session configuration is available.
     connectors.registerSystemConnector(runner.sessionConfig());
     connectors.registerFileConnector();
 

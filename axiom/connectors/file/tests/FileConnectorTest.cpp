@@ -49,7 +49,9 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
   }
 
   void SetUp() override {
-    connectors_ = std::make_unique<Connectors>();
+    connectors_ = std::make_unique<Connectors>(
+        velox::connector::ConnectorRegistry::global(),
+        connector::ConnectorMetadataRegistry::global());
     runner_ = std::make_unique<::axiom::sql::SqlQueryRunner>("test_user");
     runner_->initialize([this]() {
       connectors_->registerFileConnector(kConnectorId);
@@ -63,8 +65,9 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
 
   void TearDown() override {
     runner_.reset();
-    // Connectors' destructor unregisters the connector and its metadata.
     connectors_.reset();
+    connector::ConnectorMetadataRegistry::global().erase(kConnectorId);
+    velox::connector::ConnectorRegistry::global().erase(kConnectorId);
   }
 
   // Writes 'data' to 'path' as a Parquet file. A positive 'rowsInRowGroup'

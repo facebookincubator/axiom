@@ -59,7 +59,7 @@ class CoordinatorSchedulingTest : public optimizer::test::QueryTestBase {
         kSystemConnectorId,
         connector::ConnectorMetadataRegistry::global(),
         &queryProvider_,
-        &sessionProvider_);
+        sessionProvider_);
     velox::connector::registerConnector(systemConnector_);
 
     systemMetadata_ =
@@ -82,7 +82,8 @@ class CoordinatorSchedulingTest : public optimizer::test::QueryTestBase {
   }
 
   EmptyQueryInfoProvider queryProvider_;
-  EmptySessionPropertiesProvider sessionProvider_;
+  std::shared_ptr<EmptySessionPropertiesProvider> sessionProvider_{
+      std::make_shared<EmptySessionPropertiesProvider>()};
   std::shared_ptr<connector::system::SystemConnector> systemConnector_;
   std::shared_ptr<connector::system::SystemConnectorMetadata> systemMetadata_;
 };

@@ -170,7 +170,9 @@ int main(int argc, char** argv) {
   facebook::velox::memory::MemoryManager::initialize(
       facebook::velox::memory::MemoryManager::Options{});
 
-  facebook::axiom::Connectors connectors;
+  facebook::axiom::Connectors connectors{
+      facebook::velox::connector::ConnectorRegistry::global(),
+      facebook::axiom::connector::ConnectorMetadataRegistry::global()};
   axiom::sql::SqlQueryRunner runner{axiom::sql::SystemUser::resolve()};
   runner.initialize([&]() {
     auto defaultConnector = connectors.registerTpchConnector();

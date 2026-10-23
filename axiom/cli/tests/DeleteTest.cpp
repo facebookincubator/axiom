@@ -36,6 +36,11 @@ class DeleteTest : public SqlQueryRunnerTestBase {
   static constexpr std::string_view kHiveSchema = "default";
   static constexpr auto kFileFormat = dwio::common::FileFormat::DWRF;
 
+  DeleteTest()
+      : connectors_{
+            connector::ConnectorRegistry::global(),
+            facebook::axiom::connector::ConnectorMetadataRegistry::global()} {}
+
   void SetUp() override {
     dataPath_ = exec::test::TempDirectoryPath::create();
 
@@ -47,6 +52,13 @@ class DeleteTest : public SqlQueryRunnerTestBase {
       return std::make_pair(
           std::string(kConnectorId), std::string(kHiveSchema));
     });
+  }
+
+  void TearDown() override {
+    SqlQueryRunnerTestBase::TearDown();
+    facebook::axiom::connector::ConnectorMetadataRegistry::global().erase(
+        std::string(kConnectorId));
+    connector::ConnectorRegistry::global().erase(std::string(kConnectorId));
   }
 
   // Parses and re-serializes JSON with sorted keys so the comparison does not
