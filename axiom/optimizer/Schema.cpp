@@ -172,6 +172,11 @@ Value Value::fromColumnStatistics(
   value.max =
       stats.max.has_value() ? registerVariant(stats.max.value()) : nullptr;
   value.nullFraction = stats.nullPct / 100.0f;
+  if (stats.numTrue.has_value()) {
+    value.trueFraction = stats.numValues == 0
+        ? 0
+        : (1.0f - *value.nullFraction) * *stats.numTrue / stats.numValues;
+  }
   value.avgSizeInBytes = stats.avgSizeInBytes;
   value.nullable = !stats.nonNull;
   // The connector must report bounds whose kind matches the column type.

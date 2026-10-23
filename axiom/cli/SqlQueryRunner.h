@@ -36,6 +36,10 @@
 #include "axiom/sql/presto/SqlStatement.h"
 #include "velox/common/file/TokenProvider.h"
 
+namespace facebook::axiom::analyze {
+class TableAnalyzer;
+} // namespace facebook::axiom::analyze
+
 namespace axiom::sql {
 
 /// Checks permissions before query execution. Throws on denial and may return
@@ -58,7 +62,8 @@ using PermissionCheck =
 /// INSERT, DELETE, CREATE TABLE AS SELECT, and EXPLAIN ANALYZE. Not offered
 /// EXPLAIN in any other form, which does not execute and stays usable for
 /// diagnosing a rejected query, nor SHOW SESSION, whose plan the runner builds
-/// from the session config rather than parsing it from the statement.
+/// from the session config rather than parsing it from the statement, nor
+/// ANALYZE, whose plan the runner builds from the connector's request.
 ///
 /// An empty value disables checking. A single instance serves every query and
 /// is called from planner threads, so implementations must be thread-safe.
@@ -680,6 +685,14 @@ class SqlQueryRunner {
       const facebook::axiom::connector::ConnectorContextPtr& context,
       QueryTiming& timing,
       std::string& planString);
+
+  // Finds the table to analyze, evaluates the WITH properties, and builds the
+  // statistics query. It runs nothing and stores nothing, so EXPLAIN uses it
+  // too.
+  std::unique_ptr<facebook::axiom::analyze::TableAnalyzer> makeTableAnalyzer(
+      const presto::AnalyzeStatement& statement,
+      const facebook::axiom::connector::ConnectorContextPtr& context,
+      const RunOptions& options);
 
   // Runs an EXPLAIN statement, including IO and ANALYZE variants.
   folly::coro::AsyncGenerator<SqlResultChunk> co_runExplainStatement(

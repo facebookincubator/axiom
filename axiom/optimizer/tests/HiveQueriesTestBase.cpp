@@ -200,7 +200,7 @@ void HiveQueriesTestBase::createEmptyTable(
       connector::WriteKind::kCreate,
       /*scanHandle=*/nullptr,
       /*explain=*/false);
-  hiveMetadata().finishWrite(session, handle, {}, nullptr, {}).get();
+  hiveMetadata().finishWrite(session, handle, {}, {}).get();
 }
 
 void HiveQueriesTestBase::checkTableData(

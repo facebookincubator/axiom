@@ -18,6 +18,7 @@ add_library(
   ConnectorMetadata.cpp
   ConnectorMetadataRegistry.cpp
   SchemaResolver.cpp
+  StatisticsRequest.cpp
 )
 
 target_link_libraries(

@@ -385,6 +385,26 @@ class FiltersTest : public test::QueryTestBase {
 // Selectivity algebra unit tests
 // ============================================================
 
+TEST_F(FiltersTest, booleanColumnStatistics) {
+  withContext([&]() {
+    connector::ColumnStatistics stats;
+    stats.numValues = 8;
+    stats.numTrue = 6;
+    stats.nullPct = 20;
+    auto value = Value::fromColumnStatistics(toType(BOOLEAN()), stats);
+    ASSERT_TRUE(value.trueFraction);
+    EXPECT_FLOAT_EQ(*value.trueFraction, 0.6f);
+    EXPECT_FLOAT_EQ(*value.nullFraction, 0.2f);
+    stats.numValues = 0;
+    stats.numTrue = 0;
+    value = Value::fromColumnStatistics(toType(BOOLEAN()), stats);
+    EXPECT_EQ(value.trueFraction, 0);
+    stats.numTrue.reset();
+    value = Value::fromColumnStatistics(toType(BOOLEAN()), stats);
+    EXPECT_FALSE(value.trueFraction);
+  });
+}
+
 TEST_F(FiltersTest, combineConjunctsBasic) {
   std::vector<std::optional<Selectivity>> conjuncts = {
       Selectivity{0.8, 0.0}, // 80% true, 0% null, 20% false

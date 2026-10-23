@@ -165,11 +165,7 @@ class LocalHiveConnectorMetadataTest
     auto result = exec::test::AssertQueryBuilder(plan).copyResults(pool());
     metadata_
         ->finishWrite(
-            session,
-            handle,
-            std::vector<velox::RowVectorPtr>{result},
-            nullptr,
-            {})
+            session, handle, std::vector<velox::RowVectorPtr>{result}, {})
         .get();
   }
 
@@ -769,8 +765,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
       WriteKind::kCreate,
       /*scanHandle=*/nullptr,
       /*explain=*/false);
-  metadata_->finishWrite(session, handle, /*writeResults=*/{}, nullptr, {})
-      .get();
+  metadata_->finishWrite(session, handle, /*writeResults=*/{}, {}).get();
 
   auto created = metadata_->findTable({kDefaultSchema, "test_insert"});
   compareTableLayout(staged, created);
@@ -859,8 +854,7 @@ TEST_F(LocalHiveConnectorMetadataTest, abortCreateWithRetry) {
       WriteKind::kCreate,
       /*scanHandle=*/nullptr,
       /*explain=*/false);
-  metadata_->finishWrite(session, handle, /*writeResults=*/{}, nullptr, {})
-      .get();
+  metadata_->finishWrite(session, handle, /*writeResults=*/{}, {}).get();
   EXPECT_TRUE(std::filesystem::exists(tablePath));
   auto created = metadata_->findTable({kDefaultSchema, "test_abort"});
   EXPECT_NE(created, nullptr);

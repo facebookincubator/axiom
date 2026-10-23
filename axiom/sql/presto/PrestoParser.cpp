@@ -3512,6 +3512,17 @@ SqlStatementPtr doPlan(
         parseSql);
   }
 
+  if (query->is(NodeType::kAnalyze)) {
+    const auto* analyze = query->as<Analyze>();
+    auto [connectorId, tableName] = toConnectorTable(
+        *analyze->tableName(), defaultConnectorId, defaultSchema);
+    findTable(parserSession, *analyze->tableName(), connectorId, tableName);
+    return std::make_shared<AnalyzeStatement>(
+        connectorId,
+        tableName,
+        parseTableProperties(parserSession, analyze->properties()));
+  }
+
   if (query->is(NodeType::kCreateTable)) {
     return parseCreateTable(
         parserSession,

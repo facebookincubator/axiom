@@ -112,7 +112,7 @@ class WriteTest : public test::HiveQueriesTestBase,
         connector::WriteKind::kCreate,
         /*scanHandle=*/nullptr,
         /*explain=*/false);
-    metadata.finishWrite(session, handle, {}, nullptr, {}).get();
+    metadata.finishWrite(session, handle, {}, {}).get();
     return table;
   }
 
@@ -774,6 +774,34 @@ TEST_P(WriteTest, columnStatsEmptyTable) {
   EXPECT_EQ(2, s->numValues);
   EXPECT_EQ(2, s->numDistinct);
   EXPECT_EQ(8, s->avgSizeInBytes);
+}
+
+// Writes and ANALYZE compute null and boolean statistics the same way. After a
+// second INSERT, the counts must still be right once saved and reloaded.
+TEST_P(WriteTest, booleanAndNullStatistics) {
+  SCOPE_EXIT {
+    dropTableIfExists("test");
+  };
+  runCtas(
+      "CREATE TABLE test AS SELECT b FROM (VALUES true, false, CAST(NULL AS BOOLEAN)) AS t(b)",
+      3);
+  auto table = hiveMetadata().findTable({kDefaultSchema, "test"});
+  ASSERT_NE(table, nullptr);
+  const auto* stats = table->findColumn("b")->stats();
+  ASSERT_NE(stats, nullptr);
+  EXPECT_EQ(stats->numValues, 2);
+  EXPECT_EQ(stats->numTrue, 1);
+  EXPECT_NEAR(stats->nullPct, 100.0 / 3, 0.001);
+  auto plan =
+      parseInsert("INSERT INTO test VALUES true, true, CAST(NULL AS BOOLEAN)");
+  checkWrittenRows(runVelox(plan), 3);
+  table = hiveMetadata().findTable({kDefaultSchema, "test"});
+  stats = table->findColumn("b")->stats();
+  ASSERT_NE(stats, nullptr);
+  EXPECT_EQ(stats->numValues, 4);
+  EXPECT_EQ(stats->numTrue, 3);
+  EXPECT_EQ(stats->numDistinct, 2);
+  EXPECT_NEAR(stats->nullPct, 100.0 / 3, 0.001);
 }
 
 // Verifies that CTAS collects only statistics supported by each custom type.
