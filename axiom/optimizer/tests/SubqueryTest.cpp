@@ -2660,13 +2660,19 @@ TEST_P(SubqueryTest, existsWithNoFromClause) {
   AXIOM_ASSERT_PLAN_V1(plan, matcher);
 }
 
-// EXISTS (SELECT ... LIMIT 0) should fold to false because the subquery
-// produces zero rows.
+// EXISTS and NOT EXISTS with LIMIT 0 should fold to Boolean Values because the
+// subquery produces zero rows.
 TEST_P(SubqueryTest, existsWithLimitZero) {
-  auto plan = toSingleNodePlan("SELECT EXISTS (SELECT 1 LIMIT 0)");
-
-  auto matcher = matchValues(ROW({})).project({"false"}).build();
-  AXIOM_ASSERT_PLAN_V1(plan, matcher);
+  const std::vector<std::pair<std::string, bool>> queries = {
+      {"SELECT EXISTS (SELECT 1 LIMIT 0)", false},
+      {"SELECT NOT EXISTS (SELECT 1 LIMIT 0)", true},
+  };
+  for (const auto& [query, expected] : queries) {
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    auto matcher = matchValues<bool>({{expected}}).build();
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
+  }
 }
 
 // IN subquery in a projection combined with a correlated NOT EXISTS in the
