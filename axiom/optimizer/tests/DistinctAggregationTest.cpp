@@ -1301,13 +1301,16 @@ TEST_P(DistinctAggregationTest, groupingSetsDistinctToMarkDistinct) {
   // V2 lowers DISTINCT to MarkDistinct.
   {
     auto plan = toSingleNodePlan(logicalPlan);
-    AXIOM_ASSERT_PLAN_V1(
+    AXIOM_ASSERT_PLAN_V2(
         plan,
         matchScan("t")
             .groupId({{"a"}, {}}, {"b", "c"}, "gid")
+            .markDistinct({"a", "gid", "b"}, {"m0"})
+            .markDistinct({"a", "gid", "c"}, {"m1"})
             .singleAggregation(
                 {"a", "gid"},
-                {"count(DISTINCT b) as a0", "sum(DISTINCT c) as a1"})
+                {"count(b) filter (where m0) as a0",
+                 "sum(c) filter (where m1) as a1"})
             .project({"a", "a0", "a1"})
             .build());
   }
