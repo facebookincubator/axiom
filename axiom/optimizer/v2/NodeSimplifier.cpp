@@ -1040,7 +1040,10 @@ NodeSimplifier::SimplifiedNode NodeSimplifier::make(
     SimplifiedNode input,
     const ColumnVector& originalOutputs) {
   if (input.empty()) {
-    key.input = builder_.makeEmptyValues(toColumns(key.columnExprs));
+    // A delete's input carries the row identity columns its write reads.
+    key.input = builder_.makeEmptyValues(
+        key.kind == connector::WriteKind::kDelete ? key.rowIdColumns
+                                                  : toColumns(key.columnExprs));
   } else {
     key.input = input.node;
     if (key.kind != connector::WriteKind::kDelete) {

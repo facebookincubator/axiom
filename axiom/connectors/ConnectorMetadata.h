@@ -360,6 +360,9 @@ class PartitionType {
   /// Number of partitions.
   virtual int32_t numPartitions() const = 0;
 
+  /// Types of the keys the partition function reads, in order.
+  virtual const std::vector<velox::TypePtr>& keyTypes() const = 0;
+
   /// Number of split groups. Splits produced under this partitioning carry
   /// groupIds in [0, numGroups()). May exceed numPartitions(): after
   /// scaleDown folds several buckets into one partition, each task processes
@@ -882,15 +885,14 @@ enum class WriteKind {
   /// adds whole rows.
   kInsert = 2,
 
-  /// Individual rows are deleted. Only row ids as per
-  /// Table::rowIdHandles() are passed to the TableWriter.
+  /// Individual rows are deleted. Only the columns Table::rowIdColumns()
+  /// names are passed to the TableWriter.
   kDelete = 3,
 
   /// Column values in individual rows are changed. The TableWriter
-  /// gets first the row ids as per Table::rowIdHandles()
-  /// and then new values for the columns being changed. The new values
-  /// may overlap with row ids if the row id is a set of primary key
-  /// columns.
+  /// gets first the columns Table::rowIdColumns() names and then new values
+  /// for the columns being changed. The new values may overlap with the row
+  /// id if the row id is a set of primary key columns.
   kUpdate = 4,
 };
 
@@ -972,12 +974,13 @@ class Table : public std::enable_shared_from_this<Table> {
   /// their column granularity.
   virtual std::vector<std::string> ioColumnPriority() const;
 
-  /// Returns column handles whose value uniquely identifies a row for creating
-  /// an update or delete record. These may be for example some connector
-  /// specific opaque row id or primary key columns.
-  virtual std::vector<velox::connector::ColumnHandlePtr> rowIdHandles(
-      WriteKind /*kind*/) const {
-    VELOX_UNSUPPORTED();
+  /// Returns the columns a row-level write of 'kind' reads from this table,
+  /// beyond those its expressions name. Empty means the table does not support
+  /// row-level writes of 'kind'.
+  ///
+  /// The plan produces these columns in this order.
+  virtual std::vector<std::string> rowIdColumns(WriteKind /*kind*/) const {
+    return {};
   }
 
   template <typename T>
@@ -1038,16 +1041,11 @@ class View {
 
 using ViewPtr = std::shared_ptr<const View>;
 
-/// Contains the information for an in-progress write operation. This may
-/// include insert, update, or delete of an existing table, or insertion into a
-/// new table. The ConnectorWriteHandle is generated when a table write
-/// operation is initiated in beginWrite and used to commit or abort any
-/// completed write operations in finishWrite or abortWrite. Derived classes of
-/// the write handle must contain all the information required by the connector
-/// to finish or abort a write operation.
+/// Contains the information needed to finish or abort CREATE or INSERT.
 class ConnectorWriteHandle {
  public:
-  explicit ConnectorWriteHandle(
+  /// Creates a write backed by a Velox table writer.
+  ConnectorWriteHandle(
       velox::connector::ConnectorInsertTableHandlePtr veloxHandle,
       velox::RowTypePtr resultType)
       : veloxHandle_{std::move(veloxHandle)},
@@ -1058,13 +1056,12 @@ class ConnectorWriteHandle {
 
   virtual ~ConnectorWriteHandle() = default;
 
-  /// Returns null if the connector carries out the write itself in finishWrite,
-  /// in which case there is no writer and no plan.
+  /// Handle passed to the Velox table writer.
   const velox::connector::ConnectorInsertTableHandlePtr& veloxHandle() const {
     return veloxHandle_;
   }
 
-  /// Null whenever 'veloxHandle' is null.
+  /// Schema of each writer result passed to finishWrite.
   const velox::RowTypePtr& resultType() const {
     return resultType_;
   }
@@ -1078,12 +1075,8 @@ class ConnectorWriteHandle {
     return kEmpty;
   }
 
-  /// Returns what the connector will do, for EXPLAIN. A handle with no
-  /// 'veloxHandle' must override this: such a write has no plan, so this is
-  /// the only detail EXPLAIN can show for it.
+  /// Returns what the connector will do, for EXPLAIN.
   virtual std::string toString() const {
-    VELOX_CHECK_NOT_NULL(
-        veloxHandle_, "A write with no plan must describe itself for EXPLAIN");
     return "carried out by the Velox writer";
   }
 
@@ -1098,17 +1091,164 @@ class ConnectorWriteHandle {
     return velox::checkedPointerCast<const T>(this);
   }
 
- protected:
-  // Creates a handle with no 'veloxHandle', for a write the connector carries
-  // out itself. The derived class must carry the description of the write.
-  ConnectorWriteHandle() = default;
-
  private:
   const velox::connector::ConnectorInsertTableHandlePtr veloxHandle_;
   const velox::RowTypePtr resultType_;
 };
 
 using ConnectorWriteHandlePtr = std::shared_ptr<ConnectorWriteHandle>;
+
+/// Describes how rows must reach the Velox writer of a row-level DELETE:
+/// distribution across writers and order within each. A metadata-only DELETE
+/// has no writer.
+///
+/// Values have these invariants by construction:
+/// - Computed columns have unique, non-empty names and non-null expressions.
+/// - Shuffle keys and partition type are both present or both absent, and the
+///   shuffle keys match the partition type's keys in number.
+/// - Sort keys and sort orders have the same cardinality.
+/// - Shuffle and sort key names are non-empty.
+///
+/// Example:
+///   auto layout = DeleteLayout::rowLevel(
+///       {{"bucket", bucketExpr}}, {"bucket"}, partitionType, {}, {});
+class DeleteLayout final {
+ public:
+  /// A connector-defined writer column computed from the row-ID columns.
+  struct ComputedColumn {
+    /// Name of the computed output column.
+    std::string name;
+
+    /// Expression evaluated from the row-ID columns.
+    velox::core::TypedExprPtr expr;
+  };
+
+  /// Creates a metadata-only layout with no writer requirements.
+  static DeleteLayout metadata();
+
+  /// Creates a row-level layout and validates its writer requirements.
+  static DeleteLayout rowLevel(
+      std::vector<ComputedColumn> computedColumns,
+      std::vector<std::string> shuffleKeys,
+      std::shared_ptr<const PartitionType> partitionType,
+      std::vector<std::string> sortKeys,
+      std::vector<SortOrder> sortOrders);
+
+  /// True for a row-level DELETE, which runs a Velox writer; false for a
+  /// metadata-only DELETE.
+  bool hasWriter() const {
+    return hasWriter_;
+  }
+
+  /// Columns appended after the row-ID columns. Expressions may read only
+  /// row-ID columns.
+  const std::vector<ComputedColumn>& computedColumns() const {
+    return computedColumns_;
+  }
+
+  /// Names row-ID or computed fields used to distribute rows among writers.
+  const std::vector<std::string>& shuffleKeys() const {
+    return shuffleKeys_;
+  }
+
+  /// Supplies connector partitioning semantics for `shuffleKeys()`.
+  const std::shared_ptr<const PartitionType>& partitionType() const {
+    return partitionType_;
+  }
+
+  /// Names row-ID or computed fields used to order rows within each writer.
+  const std::vector<std::string>& sortKeys() const {
+    return sortKeys_;
+  }
+
+  /// Supplies direction and null placement corresponding to `sortKeys()`.
+  const std::vector<SortOrder>& sortOrders() const {
+    return sortOrders_;
+  }
+
+ private:
+  DeleteLayout(
+      bool hasWriter,
+      std::vector<ComputedColumn> computedColumns,
+      std::vector<std::string> shuffleKeys,
+      std::shared_ptr<const PartitionType> partitionType,
+      std::vector<std::string> sortKeys,
+      std::vector<SortOrder> sortOrders)
+      : hasWriter_{hasWriter},
+        computedColumns_{std::move(computedColumns)},
+        shuffleKeys_{std::move(shuffleKeys)},
+        partitionType_{std::move(partitionType)},
+        sortKeys_{std::move(sortKeys)},
+        sortOrders_{std::move(sortOrders)} {}
+
+  bool hasWriter_;
+  std::vector<ComputedColumn> computedColumns_;
+  std::vector<std::string> shuffleKeys_;
+  std::shared_ptr<const PartitionType> partitionType_;
+  std::vector<std::string> sortKeys_;
+  std::vector<SortOrder> sortOrders_;
+};
+
+/// Owns the state needed to finish or abort DELETE.
+///
+/// Example:
+///   auto handle =
+///       std::make_shared<ConnectorDeleteHandle>(veloxHandle, resultType);
+///
+/// Invariants:
+/// - Row-level DELETE: `veloxHandle()` and `resultType()` are non-null.
+/// - Metadata-only DELETE: both are null.
+class ConnectorDeleteHandle {
+ public:
+  /// Creates a handle for a row-level DELETE. `veloxHandle` configures the
+  /// Velox writer; `resultType` is the schema of each writer result passed to
+  /// `finishDelete`.
+  ConnectorDeleteHandle(
+      velox::connector::ConnectorInsertTableHandlePtr veloxHandle,
+      velox::RowTypePtr resultType);
+
+  virtual ~ConnectorDeleteHandle() = default;
+
+  /// Returns the handle passed to the Velox writer.
+  const velox::connector::ConnectorInsertTableHandlePtr& veloxHandle() const {
+    return veloxHandle_;
+  }
+
+  /// Returns the schema of each writer result passed to `finishDelete`.
+  const velox::RowTypePtr& resultType() const {
+    return resultType_;
+  }
+
+  /// Describes the operation for EXPLAIN output.
+  virtual std::string toString() const {
+    return veloxHandle_ == nullptr ? "carried out by connector metadata"
+                                   : "carried out by the Velox writer";
+  }
+
+  /// Returns this object as type 'T', or nullptr when the type differs.
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
+  }
+
+  /// Returns this object as type 'T'. Throws when the type differs.
+  template <typename T>
+  const T* asChecked() const {
+    return velox::checkedPointerCast<const T>(this);
+  }
+
+ protected:
+  /// Creates a metadata-only handle.
+  ConnectorDeleteHandle() = default;
+
+ private:
+  // Handle passed to the Velox writer.
+  const velox::connector::ConnectorInsertTableHandlePtr veloxHandle_;
+  // Schema of each writer result passed to `finishDelete`.
+  const velox::RowTypePtr resultType_;
+};
+
+using ConnectorDeleteHandlePtr = std::shared_ptr<ConnectorDeleteHandle>;
 
 /// Replaces one optimizer subtree with a scan of a connector-owned virtual
 /// table. The table's visible columns must correspond positionally 1:1 with
@@ -1352,23 +1492,48 @@ class ConnectorMetadata {
   /// generate the write handle. Insert data using the insert handle provided by
   /// the write handle and call finishWrite. Transaction semantics are
   /// connector-dependent, and ConnectorSession may be null for connectors which
-  /// do not require it.
+  /// do not require it. The optimizer sends every row for a target partition to
+  /// one writer, but does not sort INSERT rows. A connector that stores sorted
+  /// data must configure its writer to sort according to the table layout.
   ///
   /// When 'explain' is true, the connector must build and return a valid
   /// ConnectorWriteHandle for plan display, but must leave nothing behind: no
   /// state allocated, reserved or recorded outside the handle, and nothing
   /// that needs cleanup. The handle's location is not read on this path.
-  /// @param scanHandle For a delete, the handle of the scan the rows come
-  /// from, carrying the filters the connector absorbed. nullptr for other
-  /// write kinds. Fails if the connector cannot delete the rows the handle
-  /// selects; a returned handle with a null 'veloxHandle' means the connector
-  /// removes them in finishWrite, with nothing to execute.
   virtual ConnectorWriteHandlePtr beginWrite(
       const ConnectorSessionPtr& /*session*/,
       const TablePtr& /*table*/,
       WriteKind /*kind*/,
-      const velox::connector::ConnectorTableHandlePtr& /*scanHandle*/,
       bool /*explain*/) {
+    VELOX_UNSUPPORTED();
+  }
+
+  /// Describes how to delete rows selected by 'scanHandle'. 'exact' is true
+  /// when the DELETE reads that scan directly, with no operator above it. This
+  /// method must be side-effect-free: no handle exists yet to abort, so any
+  /// connector state it allocated would leak. It fails when the connector
+  /// cannot delete the selected rows. A metadata-only layout is valid only
+  /// when 'exact' is true.
+  virtual DeleteLayout deleteLayout(
+      [[maybe_unused]] const ConnectorSessionPtr& session,
+      [[maybe_unused]] const velox::connector::ConnectorTableHandlePtr&
+          scanHandle,
+      [[maybe_unused]] bool exact) {
+    VELOX_UNSUPPORTED();
+  }
+
+  /// Begins a DELETE described by 'layout'. For a row-level layout, returns a
+  /// handle whose `veloxHandle()` configures the Velox writer. For a
+  /// metadata-only layout, returns a handle without one, and `finishDelete`
+  /// removes the rows.
+  ///
+  /// When 'explain' is true, the side-effect restrictions of beginWrite apply.
+  virtual ConnectorDeleteHandlePtr beginDelete(
+      [[maybe_unused]] const ConnectorSessionPtr& session,
+      [[maybe_unused]] const velox::connector::ConnectorTableHandlePtr&
+          scanHandle,
+      [[maybe_unused]] const DeleteLayout& layout,
+      [[maybe_unused]] bool explain) {
     VELOX_UNSUPPORTED();
   }
 
@@ -1398,6 +1563,16 @@ class ConnectorMetadata {
     VELOX_UNSUPPORTED();
   }
 
+  /// Finalizes a DELETE started by beginDelete and returns the number of rows
+  /// removed. 'deleteResults' contains the results produced by row-level delete
+  /// writers, or is empty when the connector performs a metadata-only delete.
+  virtual RowsFuture finishDelete(
+      [[maybe_unused]] const ConnectorSessionPtr& session,
+      [[maybe_unused]] const ConnectorDeleteHandlePtr& handle,
+      [[maybe_unused]] const std::vector<velox::RowVectorPtr>& deleteResults) {
+    VELOX_UNSUPPORTED();
+  }
+
   /// Aborts an abandoned or failed write operation. Abort is not guaranteed to
   /// run in all failure cases. After abort is triggered for the write operation
   /// represented by ConnectorWriteHandle, this handle can no longer be used to
@@ -1408,6 +1583,14 @@ class ConnectorMetadata {
   virtual velox::ContinueFuture abortWrite(
       const ConnectorSessionPtr& /*session*/,
       const ConnectorWriteHandlePtr& /*handle*/) noexcept {
+    return {};
+  }
+
+  /// Aborts an abandoned or failed DELETE. If not implemented, abort is a
+  /// no-op.
+  virtual velox::ContinueFuture abortDelete(
+      [[maybe_unused]] const ConnectorSessionPtr& session,
+      [[maybe_unused]] const ConnectorDeleteHandlePtr& handle) noexcept {
     return {};
   }
 

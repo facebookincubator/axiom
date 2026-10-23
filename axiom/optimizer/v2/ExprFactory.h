@@ -16,7 +16,10 @@
 
 #pragma once
 
+#include <folly/container/F14Map.h>
+
 #include "axiom/optimizer/v2/Builder.h"
+#include "velox/core/ITypedExpr.h"
 
 namespace facebook::axiom::optimizer::v2 {
 
@@ -206,6 +209,13 @@ class ExprFactory {
   /// than hash-consed, so this goes through `make`.
   ExprCP rebuildField(const Field* field, ExprCP base);
 
+  /// Converts a Velox expression, such as one a connector supplies, into IR.
+  /// 'columns' binds by name each input column the expression reads; reading a
+  /// column outside it fails.
+  ExprCP importVeloxExpr(
+      const velox::core::TypedExprPtr& expr,
+      const folly::F14FastMap<std::string_view, ColumnCP>& columns);
+
   /// Left-folds a non-empty sequence of boolean predicates with
   /// `makeAnd`: `[p1, p2, p3]` → `AND(AND(p1, p2), p3)`. Single-element
   /// input returns the predicate unchanged. The empty case is a
@@ -238,6 +248,13 @@ class ExprFactory {
   }
 
  private:
+  // Converts 'expr' for importVeloxExpr. 'specialFormNames' maps each Velox
+  // special-form name to its IR call name.
+  ExprCP importExpr(
+      const velox::core::TypedExprPtr& expr,
+      const folly::F14FastMap<std::string_view, ColumnCP>& columns,
+      const folly::F14FastMap<std::string_view, Name>& specialFormNames);
+
   // Builds a call named `name` over `arguments` that returns `value`, seeding
   // the `FunctionSet` from the function's own bits (`specialForm` selects
   // special-form vs registered-function lookup) OR'd with each argument's.

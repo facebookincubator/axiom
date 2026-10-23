@@ -111,6 +111,7 @@ void QueryTestBase::TearDown() {
     gSuiteHistory = std::move(history_);
   }
   queryCtx_.reset();
+  connectorContext_.reset();
   optimizerPool_.reset();
   connector::ConnectorMetadataRegistry::global().erase(kTestConnectorId);
   velox::connector::unregisterConnector(kTestConnectorId);
@@ -127,7 +128,8 @@ logical_plan::PlanBuilder::Context QueryTestBase::makeContext(
   return context;
 }
 
-logical_plan::LogicalPlanNodePtr QueryTestBase::parseSelect(
+namespace {
+::axiom::sql::presto::SqlStatementPtr parseStatement(
     std::string_view sql,
     const std::string& defaultConnectorId,
     const std::string& defaultSchema) {
@@ -141,11 +143,26 @@ logical_plan::LogicalPlanNodePtr QueryTestBase::parseSelect(
           connector::makeTestStatWriter(),
           connector::Properties{},
           parserOptions));
+  return parser.parse(sql);
+}
+} // namespace
 
-  auto statement = parser.parse(sql);
+logical_plan::LogicalPlanNodePtr QueryTestBase::parseSelect(
+    std::string_view sql,
+    const std::string& defaultConnectorId,
+    const std::string& defaultSchema) {
+  auto statement = parseStatement(sql, defaultConnectorId, defaultSchema);
 
   VELOX_CHECK(statement->isSelect());
   return statement->as<::axiom::sql::presto::SelectStatement>()->plan();
+}
+
+logical_plan::LogicalPlanNodePtr QueryTestBase::parseDelete(
+    std::string_view sql) {
+  auto statement = parseStatement(sql, defaultConnectorId_, "default");
+
+  VELOX_CHECK(statement->isDelete());
+  return statement->as<::axiom::sql::presto::DeleteStatement>()->plan();
 }
 
 namespace {
@@ -194,10 +211,20 @@ TestResult QueryTestBase::runVelox(const core::PlanNodePtr& plan) {
   return runFragmentedPlan(planAndStats);
 }
 
+const connector::ConnectorContextPtr& QueryTestBase::getConnectorContext() {
+  if (connectorContext_ == nullptr) {
+    connectorContext_ = std::make_shared<connector::ConnectorContext>(
+        getQueryCtx()->queryId(),
+        "test",
+        connectorSessionProperties_,
+        connectorStatWriterProvider());
+  }
+  return connectorContext_;
+}
+
 TestResult QueryTestBase::runFragmentedPlan(
     optimizer::PlanAndStats& planAndStats) {
-  auto runnerSession = makeRunnerSession(
-      connector::makeTestContext(getQueryCtx()->queryId()), statsWriter_);
+  auto runnerSession = makeRunnerSession(getConnectorContext(), statsWriter_);
   auto runner = std::make_shared<runner::LocalRunner>(
       std::move(runnerSession),
       planAndStats.plan,
@@ -209,6 +236,7 @@ TestResult QueryTestBase::runFragmentedPlan(
 
   SCOPE_EXIT {
     queryCtx_.reset();
+    connectorContext_.reset();
   };
 
   TestResult result;
@@ -248,11 +276,7 @@ PlanCost QueryTestBase::optimizationCost(
       queryCtx.get(), optimizerPool_.get());
   connector::SchemaResolver schemaResolver{
       connector::ConnectorMetadataRegistry::global()};
-  auto connectorContext = std::make_shared<connector::ConnectorContext>(
-      queryCtx->queryId(),
-      "test",
-      connectorSessionProperties_,
-      connectorStatWriterProvider());
+  const auto& connectorContext = getConnectorContext();
   Optimization opt(
       makeOptimizerSession(
           connectorContext,
@@ -290,11 +314,7 @@ void QueryTestBase::verifyOptimization(
       connector::ConnectorMetadataRegistry::global()};
   VeloxHistory history;
 
-  auto connectorContext = std::make_shared<connector::ConnectorContext>(
-      veloxQueryCtx->queryId(),
-      "test",
-      connectorSessionProperties_,
-      connectorStatWriterProvider());
+  const auto& connectorContext = getConnectorContext();
   Optimization optimization(
       makeOptimizerSession(
           connectorContext,
@@ -405,11 +425,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
     }
   };
 
-  auto connectorContext = std::make_shared<connector::ConnectorContext>(
-      queryCtx->queryId(),
-      "test",
-      connectorSessionProperties_,
-      connectorStatWriterProvider());
+  const auto& connectorContext = getConnectorContext();
   auto session = makeOptimizerSession(
       connectorContext,
       functionRegistry_,

@@ -151,7 +151,6 @@ class LocalHiveConnectorMetadataTest
         session,
         table,
         kind,
-        /*scanHandle=*/nullptr,
         /*explain=*/false);
 
     auto builder = exec::test::PlanBuilder().values({values});
@@ -287,6 +286,15 @@ TEST_F(LocalHiveConnectorMetadataTest, basic) {
       /*dataColumns=*/nullptr,
       /*lookupKeys=*/{});
   EXPECT_TRUE(rejectedFilterIndices.empty());
+
+  const auto deleteLayout =
+      metadata_->deleteLayout(makeSession(), tableHandle, /*exact=*/true);
+  EXPECT_FALSE(deleteLayout.hasWriter());
+  EXPECT_TRUE(deleteLayout.shuffleKeys().empty());
+  EXPECT_EQ(deleteLayout.partitionType(), nullptr);
+  EXPECT_TRUE(deleteLayout.sortKeys().empty());
+  EXPECT_TRUE(deleteLayout.sortOrders().empty());
+
   std::vector<common::Subfield> fields;
   auto c0 = common::Subfield::create("c0");
   fields.push_back(std::move(*c0));
@@ -767,7 +775,6 @@ TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
       session,
       staged,
       WriteKind::kCreate,
-      /*scanHandle=*/nullptr,
       /*explain=*/false);
   metadata_->finishWrite(session, handle, /*writeResults=*/{}, nullptr, {})
       .get();
@@ -800,16 +807,10 @@ TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
           session,
           created,
           WriteKind::kUpdate,
-          /*scanHandle=*/nullptr,
           /*explain=*/false),
-      "Only CREATE/INSERT/DELETE supported, not UPDATE");
+      "Only CREATE/INSERT supported, not UPDATE");
   VELOX_ASSERT_THROW(
-      metadata_->beginWrite(
-          session,
-          created,
-          WriteKind::kDelete,
-          /*scanHandle=*/nullptr,
-          /*explain=*/false),
+      metadata_->deleteLayout(session, /*scanHandle=*/nullptr, /*exact=*/true),
       "DELETE requires a scan of the table");
 }
 
@@ -830,7 +831,6 @@ TEST_F(LocalHiveConnectorMetadataTest, abortCreateWithRetry) {
       session,
       table,
       WriteKind::kCreate,
-      /*scanHandle=*/nullptr,
       /*explain=*/false);
   EXPECT_TRUE(std::filesystem::exists(tablePath));
 
@@ -857,7 +857,6 @@ TEST_F(LocalHiveConnectorMetadataTest, abortCreateWithRetry) {
       session,
       table,
       WriteKind::kCreate,
-      /*scanHandle=*/nullptr,
       /*explain=*/false);
   metadata_->finishWrite(session, handle, /*writeResults=*/{}, nullptr, {})
       .get();

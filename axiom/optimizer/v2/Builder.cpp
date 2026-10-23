@@ -16,6 +16,8 @@
 
 #include "axiom/optimizer/v2/Builder.h"
 
+#include <algorithm>
+
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/v2/ExprFactory.h"
 
@@ -31,6 +33,11 @@ Builder::Builder()
     reversibleFunctions_.emplace(toName(name), toName(reverseName));
     reversibleFunctions_.emplace(toName(reverseName), toName(name));
   }
+}
+
+const connector::DeleteLayout* Builder::takeDeleteLayout(
+    connector::DeleteLayout layout) {
+  return &deleteLayouts_.emplace_back(std::move(layout));
 }
 
 const Values* Builder::makeSingleRowValues(

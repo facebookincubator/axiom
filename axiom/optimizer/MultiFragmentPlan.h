@@ -95,15 +95,22 @@ class FinishWrite {
       connector::ConnectorWriteHandlePtr handle,
       WriteStatsMapping statsMapping = {});
 
+  /// Commits a DELETE through finishDelete and aborts it through abortDelete.
+  FinishWrite(
+      std::shared_ptr<connector::ConnectorMetadata> metadata,
+      std::string connectorId,
+      connector::ConnectorSessionPtr session,
+      connector::ConnectorDeleteHandlePtr handle);
+
   /// Best-effort abort if not already committed or aborted.
   ~FinishWrite();
 
   explicit operator bool() const {
-    return handle_ != nullptr;
+    return writeHandle_ != nullptr || deleteHandle_ != nullptr;
   }
 
-  /// Commits the write by extracting stats from write results and calling
-  /// ConnectorMetadata::finishWrite. Returns the number of rows written.
+  /// Commits a CREATE or INSERT through finishWrite, or a DELETE through
+  /// finishDelete. Returns the number of rows written or removed.
   [[nodiscard]] connector::RowsFuture commit(
       const std::vector<velox::RowVectorPtr>& writeResults) &&;
 
@@ -118,7 +125,9 @@ class FinishWrite {
   std::shared_ptr<connector::ConnectorMetadata> metadata_;
   std::string connectorId_;
   connector::ConnectorSessionPtr session_;
-  connector::ConnectorWriteHandlePtr handle_;
+  // Exactly one of 'writeHandle_' and 'deleteHandle_' is set.
+  connector::ConnectorWriteHandlePtr writeHandle_;
+  connector::ConnectorDeleteHandlePtr deleteHandle_;
   WriteStatsMapping statsMapping_;
 };
 
