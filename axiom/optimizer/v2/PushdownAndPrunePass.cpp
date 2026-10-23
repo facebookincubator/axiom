@@ -3033,7 +3033,8 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     if (conjuncts.empty()) {
       return body;
     }
-    return builder().make<Filter>({body, std::move(conjuncts)});
+    return nodeSimplifier_.materialize(nodeSimplifier_.make(
+        Filter::Key{body, std::move(conjuncts)}, {body, {}, {}}));
   }
 
   // Builds an empty `Values` node with the same output schema as `node`.
