@@ -16,12 +16,19 @@
 
 #pragma once
 
+#include <functional>
+#include <vector>
+
 #include <folly/container/F14Map.h>
+#include <folly/container/HeterogeneousAccess.h>
 
 #include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "velox/connectors/Connector.h"
+#include "velox/core/ExpressionEvaluator.h"
 #include "velox/core/Expressions.h"
+#include "velox/type/Subfield.h"
 
 namespace facebook::axiom::optimizer::v2 {
 

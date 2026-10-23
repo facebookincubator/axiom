@@ -15,12 +15,28 @@
  */
 
 #include "axiom/optimizer/v2/NodePrinter.h"
+#include "axiom/common/SchemaTableName.h"
+#include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/QueryGraphContext.h"
+#include "axiom/optimizer/Schema.h"
+#include "axiom/optimizer/v2/EstimateProvider.h"
+#include "axiom/optimizer/v2/Node.h"
+#include "axiom/optimizer/v2/PhysicalProperties.h"
 #include "axiom/optimizer/v2/TableAccessHandle.h"
+#include "velox/connectors/Connector.h"
+#include "velox/core/PlanNode.h"
 
+#include <fmt/compile.h>
+#include <fmt/core.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
+#include <folly/String.h>
+#include <stddef.h>
+#include <optional>
 #include <ranges>
 #include <sstream>
+#include <string_view>
+#include <vector>
 #include "axiom/optimizer/EstimateMath.h"
 #include "axiom/optimizer/v2/NodeVisitor.h"
 

@@ -21,7 +21,13 @@
 #include <string_view>
 #include <utility>
 
+#include <folly/container/HeterogeneousAccess.h>
+#include <folly/lang/Hint.h>
+
+#include "axiom/connectors/ConnectorContext.h"
+#include "axiom/connectors/ConnectorSession.h"
 #include "axiom/session/BaseSession.h"
+#include "velox/common/base/RuntimeMetrics.h"
 
 namespace facebook::axiom::runner {
 

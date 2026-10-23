@@ -16,14 +16,19 @@
 
 #pragma once
 
+#include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/pyspark/third-party/protos/commands.grpc.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
 #include "axiom/pyspark/third-party/protos/expressions.grpc.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
+#include "axiom/pyspark/third-party/protos/expressions.pb.h"
 #include "axiom/pyspark/third-party/protos/relations.grpc.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
+#include "axiom/pyspark/third-party/protos/relations.pb.h"
+#include "axiom/pyspark/third-party/protos/types.pb.h"
 #include "velox/type/Type.h"
 #include "velox/type/Variant.h"
 

@@ -16,11 +16,18 @@
 
 #pragma once
 
+#include <stddef.h>
+#include <optional>
 #include <vector>
 
+#include "axiom/optimizer/QueryGraphContext.h"
+#include "axiom/optimizer/Schema.h"
+#include "axiom/optimizer/v2/Builder.h"
+#include "axiom/optimizer/v2/ExprFactory.h"
 #include "axiom/optimizer/v2/ExprSimplifier.h"
 #include "axiom/optimizer/v2/Node.h"
 #include "axiom/optimizer/v2/PlanSubstitutions.h"
+#include "velox/core/PlanNode.h"
 
 namespace facebook::axiom::optimizer::v2 {
 

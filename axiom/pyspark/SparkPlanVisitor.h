@@ -17,6 +17,11 @@
 #pragma once
 
 #include <glog/logging.h>
+#include <google/protobuf/repeated_ptr_field.h>
+#include <stdint.h>
+#include <iterator>
+#include <memory>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <utility>

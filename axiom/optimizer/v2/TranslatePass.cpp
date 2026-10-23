@@ -16,6 +16,9 @@
 
 #include "axiom/optimizer/v2/TranslatePass.h"
 
+#include "axiom/logical_plan/LogicalPlanNode.h"
+#include "axiom/optimizer/Schema.h"
+#include "axiom/optimizer/v2/Builder.h"
 #include "axiom/optimizer/v2/Translator.h"
 
 namespace facebook::axiom::optimizer::v2 {

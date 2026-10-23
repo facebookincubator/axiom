@@ -14,17 +14,26 @@
  * limitations under the License.
  */
 
+#include <fmt/core.h>
 #include <gtest/gtest.h>
+#include <stdint.h>
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
+#include "axiom/pyspark/SparkPlanVisitor.h"
 #include "axiom/pyspark/SparkToAxiom.h"
 #include "axiom/pyspark/SparkVeloxConverter.h"
 #include "axiom/pyspark/third-party/protos/relations.grpc.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
+#include "axiom/pyspark/third-party/protos/relations.pb.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/memory/MemoryPool.h"
+#include "velox/connectors/Connector.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/type/Type.h"
 
 using namespace facebook;
 

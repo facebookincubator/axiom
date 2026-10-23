@@ -16,15 +16,18 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <vector>
 
 #include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/Task.h>
 
 #include "axiom/common/Enums.h"
 #include "velox/exec/TaskStats.h"
+#include "velox/vector/ComplexVector.h"
 
 namespace facebook::axiom::optimizer {
 struct ExecutableFragment;

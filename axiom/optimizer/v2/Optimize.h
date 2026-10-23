@@ -17,22 +17,30 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "axiom/common/CatalogSchemaTableName.h"
+#include "axiom/common/Enums.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/optimizer/OptimizerSession.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/Schema.h"
 #include "axiom/optimizer/ToVelox.h"
 #include "axiom/optimizer/v2/Builder.h"
 #include "axiom/optimizer/v2/EstimateProvider.h"
+#include "axiom/optimizer/v2/Node.h"
 #include "axiom/optimizer/v2/PushdownAndPrunePass.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/core/ExpressionEvaluator.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/type/Type.h"
 #include "velox/type/Variant.h"
 
 namespace facebook::axiom::optimizer::v2 {

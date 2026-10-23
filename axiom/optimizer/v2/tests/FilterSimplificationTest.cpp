@@ -14,10 +14,19 @@
  * limitations under the License.
  */
 
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include <fmt/core.h>
 #include <gtest/gtest.h>
 
+#include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
+#include "velox/core/PlanNode.h"
+#include "velox/type/Type.h"
 
 namespace facebook::axiom::optimizer::v2::test {
 namespace {

@@ -17,10 +17,14 @@
 #pragma once
 
 #include <cstdint>
+#include <initializer_list>
+#include <optional>
 
 #include "axiom/common/Enums.h"
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/optimizer/PlanObject.h"
 #include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/Schema.h"
 
 /// Physical-property types for the optimizer: the per-operator output ordering,

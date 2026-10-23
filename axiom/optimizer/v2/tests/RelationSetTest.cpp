@@ -17,6 +17,11 @@
 #include <gtest/gtest.h>
 
 #include "axiom/optimizer/v2/RelationSet.h"
+
+#include <stdint.h>
+#include <string>
+#include <vector>
+
 #include "velox/common/base/tests/GTestUtils.h"
 
 namespace facebook::axiom::optimizer::v2::test {

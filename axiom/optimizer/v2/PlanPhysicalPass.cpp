@@ -16,17 +16,37 @@
 
 #include "axiom/optimizer/v2/PlanPhysicalPass.h"
 
+#include <stddef.h>
 #include <algorithm>
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <numeric>
+#include <optional>
+#include <span>
+#include <string>
+#include <tuple>
+#include <utility>
 #include <vector>
 
+#include <fmt/core.h>
+#include <folly/Function.h>
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
+#include <folly/container/HeterogeneousAccess.h>
+#include <folly/lang/Assume.h>
+#include <folly/lang/Hint.h>
 
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/optimizer/FunctionRegistry.h"
+#include "axiom/optimizer/OptimizerOptions.h"
+#include "axiom/optimizer/PlanObject.h"
 #include "axiom/optimizer/PlanUtils.h"
+#include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/QueryGraphContext.h"
+#include "axiom/optimizer/Schema.h"
 #include "axiom/optimizer/v2/AppendAll.h"
+#include "axiom/optimizer/v2/Builder.h"
 #include "axiom/optimizer/v2/CostModel.h"
 #include "axiom/optimizer/v2/DPhyp.h"
 #include "axiom/optimizer/v2/EstimateProvider.h"
@@ -36,11 +56,23 @@
 #include "axiom/optimizer/v2/GroupedRead.h"
 #include "axiom/optimizer/v2/HypergraphBuilder.h"
 #include "axiom/optimizer/v2/JoinCluster.h"
+#include "axiom/optimizer/v2/JoinEdge.h"
+#include "axiom/optimizer/v2/JoinHypergraph.h"
 #include "axiom/optimizer/v2/JoinPartitioning.h"
 #include "axiom/optimizer/v2/JoinTreeEmitter.h"
+#include "axiom/optimizer/v2/MemoOp.h"
+#include "axiom/optimizer/v2/Node.h"
 #include "axiom/optimizer/v2/NodeRewriter.h"
 #include "axiom/optimizer/v2/PhysicalJoin.h"
+#include "axiom/optimizer/v2/PhysicalProperties.h"
 #include "axiom/optimizer/v2/PrecomputeProjections.h"
+#include "axiom/optimizer/v2/Relation.h"
+#include "axiom/optimizer/v2/RelationSet.h"
+#include "velox/common/base/BitUtil.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/core/PlanNode.h"
+#include "velox/type/Type.h"
+#include "velox/type/Variant.h"
 
 namespace facebook::axiom::optimizer::v2 {
 

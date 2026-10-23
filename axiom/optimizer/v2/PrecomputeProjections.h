@@ -16,6 +16,12 @@
 
 #pragma once
 
+#include <utility>
+
+#include <folly/container/F14Map.h>
+#include <folly/lang/Hint.h>
+
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/v2/Builder.h"
 #include "axiom/optimizer/v2/Node.h"
 

@@ -16,10 +16,17 @@
 
 #pragma once
 
+#include <string>
+#include <vector>
+
+#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
+#include "axiom/optimizer/OptimizerSession.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/Schema.h"
 #include "axiom/optimizer/v2/Builder.h"
 #include "axiom/optimizer/v2/Node.h"
+#include "velox/core/ExpressionEvaluator.h"
 #include "velox/core/Expressions.h"
 
 namespace facebook::axiom::connector {

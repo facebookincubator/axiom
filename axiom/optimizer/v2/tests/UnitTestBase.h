@@ -16,17 +16,22 @@
 
 #pragma once
 
+#include <folly/lang/Hint.h>
 #include <gtest/gtest.h>
 #include <memory>
+#include <string>
 #include <string_view>
 
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/PlanObject.h"
+#include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/QueryGraphContext.h"
+#include "axiom/optimizer/Schema.h"
 #include "axiom/optimizer/v2/Builder.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/memory/MemoryPool.h"
 #include "velox/type/Type.h"
 
 namespace facebook::axiom::optimizer::v2::test {

@@ -16,14 +16,33 @@
 
 #include "axiom/optimizer/v2/Optimize.h"
 
+#include <stddef.h>
+#include <stdint.h>
+#include <algorithm>
+#include <exception>
 #include <functional>
+#include <iterator>
 #include <limits>
+#include <ostream>
+#include <span>
+#include <string_view>
 
+#include <folly/container/F14Map.h>
+#include <folly/lang/Hint.h>
 #include <glog/logging.h>
 
+#include "axiom/common/CatalogSchemaTableName.h"
+#include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/ConstantFold.h"
 #include "axiom/optimizer/ExplainIo.h"
+#include "axiom/optimizer/Filters.h"
+#include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/optimizer/OptimizerMetrics.h"
+#include "axiom/optimizer/OptimizerOptions.h"
+#include "axiom/optimizer/OptimizerSession.h"
+#include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/Schema.h"
+#include "axiom/optimizer/ToVelox.h"
 #include "axiom/optimizer/v2/Builder.h"
 #include "axiom/optimizer/v2/ConnectorPushdownPass.h"
 #include "axiom/optimizer/v2/DecorrelatePass.h"
@@ -33,9 +52,13 @@
 #include "axiom/optimizer/v2/FoldMetadataAggregatePass.h"
 #include "axiom/optimizer/v2/LimitAndOrderPass.h"
 #include "axiom/optimizer/v2/LowerRepeatPass.h"
+#include "axiom/optimizer/v2/Node.h"
 #include "axiom/optimizer/v2/PlanPhysicalPass.h"
 #include "axiom/optimizer/v2/PushdownAndPrunePass.h"
 #include "axiom/optimizer/v2/TranslatePass.h"
+#include "velox/common/base/RuntimeMetrics.h"
+#include "velox/core/PlanFragment.h"
+#include "velox/core/PlanNode.h"
 
 namespace facebook::axiom::optimizer::v2 {
 

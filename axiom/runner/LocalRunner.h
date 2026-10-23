@@ -16,17 +16,41 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <atomic>
+#include <exception>
+#include <functional>
+#include <iosfwd>
+#include <memory>
+#include <mutex>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
+#include <folly/container/F14Map.h>
+#include <folly/container/HeterogeneousAccess.h>
 #include <folly/coro/AsyncScope.h>
+#include <folly/coro/Task.h>
+#include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/lang/Hint.h>
 
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorSplitManager.h"
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/runner/Runner.h"
 #include "axiom/runner/RunnerSession.h"
 #include "velox/common/base/SpillConfig.h"
+#include "velox/common/memory/MemoryPool.h"
 #include "velox/connectors/Connector.h"
+#include "velox/core/ExpressionEvaluator.h"
+#include "velox/core/PlanNode.h"
+#include "velox/core/QueryCtx.h"
 #include "velox/exec/Cursor.h"
+#include "velox/exec/Task.h"
+#include "velox/exec/TaskStats.h"
+#include "velox/vector/ComplexVector.h"
 
 namespace folly {
 class CPUThreadPoolExecutor;

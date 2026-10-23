@@ -15,7 +15,12 @@
  */
 
 #include "axiom/pyspark/runners/Runner.h"
+
+#include <utility>
+
+#include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/pyspark/Exception.h"
+#include "velox/common/base/Exceptions.h"
 
 namespace axiom::collagen::runner {
 namespace {

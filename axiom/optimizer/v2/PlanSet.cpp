@@ -16,10 +16,18 @@
 
 #include "axiom/optimizer/v2/PlanSet.h"
 
+#include <stddef.h>
+#include <stdint.h>
+#include <compare>
 #include <tuple>
+#include <utility>
 
+#include "axiom/optimizer/v2/Cost.h"
 #include "axiom/optimizer/v2/CostModel.h"
 #include "axiom/optimizer/v2/JoinHypergraph.h"
+#include "axiom/optimizer/v2/MemoOp.h"
+#include "axiom/optimizer/v2/PhysicalProperties.h"
+#include "axiom/optimizer/v2/RelationSet.h"
 
 namespace facebook::axiom::optimizer::v2 {
 

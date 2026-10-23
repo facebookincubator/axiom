@@ -16,8 +16,18 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
 #include "axiom/optimizer/MultiFragmentPlan.h"
+#include "velox/common/memory/MemoryPool.h"
+#include "velox/core/PlanNode.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/parse/PlanNodeIdGenerator.h"
+#include "velox/type/Type.h"
 
 namespace facebook::axiom::runner::test {
 

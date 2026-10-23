@@ -15,12 +15,24 @@
  */
 
 #include "axiom/pyspark/ArrowIpcLib.h"
+
+#include <ostream>
+#include <string>
+
+#include <glog/logging.h>
+
 #include "arrow/api.h"
+#include "arrow/c/abi.h"
 #include "arrow/c/bridge.h"
 #include "arrow/io/api.h"
+#include "arrow/io/memory.h"
 #include "arrow/ipc/api.h"
+#include "arrow/ipc/reader.h"
+#include "arrow/ipc/writer.h"
 #include "axiom/pyspark/Exception.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/vector/BaseVector.h"
+#include "velox/vector/ComplexVector.h"
 #include "velox/vector/arrow/Bridge.h"
 
 using namespace facebook;

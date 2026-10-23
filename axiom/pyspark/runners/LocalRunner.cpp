@@ -16,15 +16,31 @@
 
 #include "axiom/pyspark/runners/LocalRunner.h"
 
+#include <functional>
+#include <memory>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include <folly/container/HeterogeneousAccess.h>
 #include <folly/coro/BlockingWait.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/lang/Hint.h>
 #include <gflags/gflags.h>
-#include <glog/logging.h>
 
+#include "axiom/connectors/ConnectorContext.h"
+#include "axiom/connectors/ConnectorSession.h"
+#include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/pyspark/Exception.h"
 #include "axiom/pyspark/runners/Runner.h"
 #include "axiom/runner/LocalRunner.h"
+#include "axiom/runner/RunnerSession.h"
+#include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/caching/AsyncDataCache.h"
+#include "velox/common/memory/MemoryPool.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/vector/ComplexVector.h"
 
 DEFINE_int32(num_workers, 4, "Number of in-process workers");
 DEFINE_int32(num_drivers, 4, "Number of drivers per worker");

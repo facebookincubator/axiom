@@ -16,19 +16,36 @@
 
 #include "axiom/pyspark/CollagenMain.h"
 
-#include <folly/io/async/EventBase.h>
+#include <stdlib.h>
+#include <ostream>
+#include <unordered_map>
+#include <utility>
+
+#include <fmt/core.h>
+#include <folly/executors/GlobalExecutor.h>
+#include <folly/lang/Hint.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "axiom/functions/prestosql/PrestoFunctions.h"
+#include "axiom/optimizer/FunctionRegistry.h"
+#include "axiom/pyspark/CollagenService.h"
 #include "axiom/pyspark/runners/LocalRunner.h"
+#include "grpcpp/grpcpp.h"
+#include "grpcpp/security/server_credentials.h"
+#include "velox/common/config/Config.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/tpch/TpchConnector.h"
+#include "velox/core/ITypedExpr.h"
+#include "velox/core/PlanNode.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
@@ -38,6 +55,8 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/type/Filter.h"
+#include "velox/type/Type.h"
 
 DEFINE_string(
     local_hive_data_path,

@@ -15,10 +15,20 @@
  */
 
 #include "axiom/pyspark/SparkVeloxConverter.h"
-#include <folly/String.h>
+#include <fmt/core.h>
 #include <folly/json.h>
+#include <folly/json/dynamic.h>
+#include <folly/json/json.h>
+#include <stdint.h>
 #include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+#include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/pyspark/Exception.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/type/Type.h"
+#include "velox/type/Variant.h"
 
 using namespace facebook;
 

@@ -16,10 +16,29 @@
 
 #include "axiom/optimizer/v2/TableAccessHandle.h"
 
+#include <stddef.h>
+#include <stdint.h>
+#include <optional>
+#include <string>
+#include <utility>
+
+#include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
+#include <folly/lang/Assume.h>
+
+#include "axiom/connectors/ConnectorContext.h"
+#include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorSession.h"
+#include "axiom/optimizer/OptimizerSession.h"
+#include "axiom/optimizer/PlanObject.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/Schema.h"
 #include "axiom/optimizer/ToSubfield.h"
 #include "axiom/optimizer/v2/ExprEmitter.h"
+#include "velox/common/base/BitUtil.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/connectors/Connector.h"
+#include "velox/core/ITypedExpr.h"
 
 namespace facebook::axiom::optimizer::v2 {
 namespace {

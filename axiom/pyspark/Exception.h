@@ -16,10 +16,15 @@
 
 #pragma once
 
+#include <fmt/core.h>
 #include <fmt/format.h>
 #include <grpcpp/grpcpp.h> // @manual=//grpc_fb/cpp:grpc
+#include <grpcpp/support/status.h>
+#include <grpcpp/support/status_code_enum.h>
+#include <stddef.h>
 #include <exception>
 #include <string>
+#include <string_view>
 
 namespace axiom::collagen {
 

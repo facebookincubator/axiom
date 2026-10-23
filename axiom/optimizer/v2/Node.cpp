@@ -16,7 +16,22 @@
 
 #include "axiom/optimizer/v2/Node.h"
 
+#include <algorithm>
+#include <initializer_list>
+#include <memory>
+
+#include <fmt/core.h>
+#include <folly/CppAttributes.h>
+#include <folly/Function.h>
+#include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
+#include <folly/container/HeterogeneousAccess.h>
+#include <folly/lang/Assume.h>
+
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/logical_plan/Expr.h"
+#include "axiom/logical_plan/LogicalPlanNode.h"
+#include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/Schema.h"
 #include "axiom/optimizer/v2/AppendAll.h"
 #include "axiom/optimizer/v2/Builder.h"
@@ -24,7 +39,11 @@
 #include "axiom/optimizer/v2/KeyHash.h"
 #include "axiom/optimizer/v2/NodePrinter.h"
 #include "axiom/optimizer/v2/NodeVisitor.h"
+#include "axiom/optimizer/v2/PhysicalProperties.h"
 #include "axiom/optimizer/v2/TableAccessHandle.h"
+#include "velox/common/base/BitUtil.h"
+#include "velox/core/PlanNode.h"
+#include "velox/type/TypeKind.h"
 
 namespace facebook::axiom::optimizer::v2 {
 

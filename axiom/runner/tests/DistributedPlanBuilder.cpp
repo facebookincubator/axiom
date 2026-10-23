@@ -16,6 +16,18 @@
 
 #include "axiom/runner/tests/DistributedPlanBuilder.h"
 
+#include <utility>
+
+#include <folly/container/F14Map.h>
+#include <folly/container/HeterogeneousAccess.h>
+#include <folly/lang/Hint.h>
+
+#include "axiom/optimizer/MultiFragmentPlan.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/core/PlanFragment.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/vector/VectorStream.h"
+
 namespace facebook::axiom::runner::test {
 
 DistributedPlanBuilder::DistributedPlanBuilder(

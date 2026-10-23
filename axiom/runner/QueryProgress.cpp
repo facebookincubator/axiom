@@ -16,7 +16,13 @@
 
 #include "axiom/runner/QueryProgress.h"
 
+#include <string_view>
+
 #include <folly/container/F14Map.h>
+#include <folly/lang/Hint.h>
+
+#include "axiom/common/Enums.h"
+#include "velox/common/base/Exceptions.h"
 
 namespace facebook::axiom::runner {
 namespace {

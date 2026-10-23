@@ -15,9 +15,32 @@
  */
 
 #include "axiom/pyspark/Optimizer.h"
-#include "axiom/optimizer/OptimizerOptions.h"
 
+#include <stddef.h>
+#include <utility>
+#include <vector>
+
+#include "axiom/connectors/ConnectorContext.h"
+#include "axiom/connectors/ConnectorSession.h"
+#include "axiom/logical_plan/Expr.h"
+#include "axiom/optimizer/MultiFragmentPlan.h"
+#include "axiom/optimizer/OptimizerOptions.h"
+#include "axiom/optimizer/OptimizerSession.h"
+#include "axiom/optimizer/QueryGraphContext.h"
+#include "axiom/optimizer/ToVelox.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/memory/HashStringAllocator.h"
+#include "velox/connectors/Connector.h"
+#include "velox/core/QueryCtx.h"
+#include "velox/type/Type.h"
+#include "velox/type/Variant.h"
+
+#include <folly/CppAttributes.h>
 #include <folly/ScopeGuard.h>
+#include <folly/container/F14Map.h>
+#include <folly/container/HeterogeneousAccess.h>
+#include <folly/lang/Hint.h>
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
