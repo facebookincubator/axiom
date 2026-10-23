@@ -115,6 +115,10 @@ WITH b(k, x, o) AS (VALUES (1, 'p', 2), (1, 'q', 1), (2, 'r', 5))
 SELECT t.k, (SELECT b.x FROM b WHERE b.k = t.k ORDER BY b.o DESC LIMIT 1)
 FROM (VALUES (1), (2), (3)) AS t(k)
 ----
+-- Ordering first by the correlated column leaves the order to the next key.
+-- error_v1: LIMIT in a correlated scalar subquery is not supported yet
+SELECT u.a, (SELECT t.b FROM t WHERE t.a = u.a ORDER BY t.a, t.b DESC LIMIT 1) FROM u
+----
 -- An outer the subquery has no row for reads NULL, even where the expression
 -- above it would turn a row into a value.
 -- error_v1: LIMIT in a correlated scalar subquery is not supported yet

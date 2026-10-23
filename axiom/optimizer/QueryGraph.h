@@ -1522,6 +1522,13 @@ struct Frame {
 
   bool operator==(const Frame& other) const = default;
 
+  /// True for a RANGE frame with an n PRECEDING or n FOLLOWING bound, whose
+  /// value is a boundary value compared against the ORDER BY key.
+  bool hasBoundaryValue() const {
+    return type == logical_plan::WindowExpr::WindowType::kRange &&
+        (startValue != nullptr || endValue != nullptr);
+  }
+
   /// ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING — every
   /// row sees the whole partition (e.g. a partition-wide aggregate).
   static Frame wholePartition() {

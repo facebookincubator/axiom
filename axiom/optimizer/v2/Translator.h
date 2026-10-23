@@ -242,10 +242,9 @@ class Translator {
       ExprCP expr,
       bool allowConstant = false);
 
-  // Translates ordering keys, dropping any key that repeats an earlier one. A
-  // repeated key cannot refine the order its first occurrence imposes, and
-  // Velox rejects Sort/TopN nodes with duplicate keys.
-  std::pair<ExprVector, OrderTypeVector> dedupOrdering(
+  // Translates ordering keys and drops the redundant ones (`RedundantKeys`).
+  // Velox rejects Sort and TopN nodes with duplicate keys.
+  std::pair<ExprVector, OrderTypeVector> translateOrdering(
       const std::vector<logical_plan::SortingField>& ordering,
       const Scope& scope,
       LiftTarget* liftTarget);

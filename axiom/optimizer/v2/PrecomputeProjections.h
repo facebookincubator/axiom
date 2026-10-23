@@ -101,6 +101,12 @@ class PrecomputeProjections {
  private:
   void addToProject(ExprCP expr, ColumnCP column);
 
+  // Projects 'expr' under 'alias', which later calls for 'expr' then return,
+  // even when an earlier call projected 'expr' under another column. An
+  // expression the input computes is read from the input's column. Projecting
+  // the same value under 'alias' again adds nothing.
+  ColumnCP projectAs(ExprCP expr, ColumnCP alias);
+
   NodeCP input_;
   Builder& builder_;
   ExprSimplifier& simplifier_;

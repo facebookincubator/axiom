@@ -41,6 +41,7 @@
 #include "axiom/optimizer/v2/NodeSimplifier.h"
 #include "axiom/optimizer/v2/PhysicalPlanAndEmit.h"
 #include "axiom/optimizer/v2/PrecomputeProjections.h"
+#include "axiom/optimizer/v2/RedundantKeys.h"
 #include "axiom/optimizer/v2/TableAccessHandle.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
@@ -1147,7 +1148,7 @@ const optimizer::Aggregate* Translator::toAggregateCall(
   OrderTypeVector orderTypes;
   if (metadata.orderSensitive) {
     std::tie(orderKeys, orderTypes) =
-        dedupOrdering(aggregateExpr.ordering(), scope, liftTarget);
+        translateOrdering(aggregateExpr.ordering(), scope, liftTarget);
   }
 
   FunctionSet funcs = Call::unionArgFunctions(FunctionSet{}, arguments);
@@ -1195,12 +1196,8 @@ NodeCP Translator::maybeWrapInWindow(
     return input;
   }
 
-  // Pre-translate each lp WindowExpr into its effective spec (partition
-  // keys, order keys). Drop repeated partition keys, and sort keys that
-  // duplicate a partition key (every row in a partition shares that value) or
-  // repeat an earlier sort key — all are redundant. Grouping below compares
-  // the effective specs, so two windows that differ only in a dropped key — or
-  // only in frame, which is per-function — still share a single `Window` node.
+  // Pre-translate each lp WindowExpr into its effective spec: its partition
+  // and order keys without those that change no result.
   struct Spec {
     ExprVector partitionKeys;
     ExprVector orderKeys;
@@ -1216,24 +1213,25 @@ NodeCP Translator::maybeWrapInWindow(
       const auto* windowExpr =
           projectExprs[windowIndices[i]]->as<lp::WindowExpr>();
       Spec& spec = specs[i];
-      folly::F14FastSet<ExprCP> seenKeys;
       spec.partitionKeys.reserve(windowExpr->partitionKeys().size());
       for (const auto& partitionKey : windowExpr->partitionKeys()) {
-        ExprCP key = translateExpr(*partitionKey, inputScope, &target);
-        if (seenKeys.insert(key).second) {
-          spec.partitionKeys.push_back(key);
-        }
+        spec.partitionKeys.push_back(
+            translateExpr(*partitionKey, inputScope, &target));
       }
+      RedundantKeys::dropFromPartitionKeys(spec.partitionKeys);
 
       spec.orderKeys.reserve(windowExpr->ordering().size());
       spec.orderTypes.reserve(windowExpr->ordering().size());
       for (const auto& field : windowExpr->ordering()) {
-        ExprCP key = translateExpr(*field.expression, inputScope, &target);
-        if (!seenKeys.insert(key).second) {
-          continue;
-        }
-        spec.orderKeys.push_back(key);
+        spec.orderKeys.push_back(
+            translateExpr(*field.expression, inputScope, &target));
         spec.orderTypes.push_back(toOrderType(field.order));
+      }
+      // A RANGE frame that measures a bound on its ORDER BY key needs the key,
+      // so the spec keeps it.
+      if (!windowExpr->frame().hasBoundaryValue()) {
+        RedundantKeys::dropFromSortKeys(
+            spec.partitionKeys, spec.orderKeys, spec.orderTypes);
       }
     }
   });
@@ -1242,16 +1240,13 @@ NodeCP Translator::maybeWrapInWindow(
   // `Window` node. Multiple groups are chained.
   std::vector<std::vector<size_t>> groups;
   for (size_t i = 0; i < windowIndices.size(); ++i) {
-    bool placed = false;
-    for (auto& group : groups) {
-      if (specs[group.front()] == specs[i]) {
-        group.push_back(i);
-        placed = true;
-        break;
-      }
-    }
-    if (!placed) {
+    auto it = std::ranges::find_if(groups, [&](const auto& group) {
+      return specs[group.front()] == specs[i];
+    });
+    if (it == groups.end()) {
       groups.push_back({i});
+    } else {
+      it->push_back(i);
     }
   }
 
@@ -1284,6 +1279,7 @@ NodeCP Translator::maybeWrapInWindow(
     PrecomputeProjections precompute{current, builder_, simplifier_};
     ExprVector partitionKeys = spec.partitionKeys;
     ExprVector orderKeys = spec.orderKeys;
+    OrderTypeVector orderTypes = spec.orderTypes;
 
     // A ROWS bound is an offset in rows, which Velox reads as a constant. A
     // RANGE bound is the boundary value for each row, which it reads from a
@@ -1348,7 +1344,7 @@ NodeCP Translator::maybeWrapInWindow(
             std::move(functions),
             std::move(partitionKeys),
             std::move(orderKeys),
-            spec.orderTypes,
+            std::move(orderTypes),
             std::move(outputColumns)},
         {current, {}});
     applySubstitutions(simplified.substitutions, windowScope);
@@ -1373,7 +1369,7 @@ Translated Translator::translateLimit(
   return {nodeSimplifier_.materialize(simplified), std::move(input.scope)};
 }
 
-std::pair<ExprVector, OrderTypeVector> Translator::dedupOrdering(
+std::pair<ExprVector, OrderTypeVector> Translator::translateOrdering(
     const std::vector<lp::SortingField>& ordering,
     const Scope& scope,
     LiftTarget* liftTarget) {
@@ -1381,15 +1377,11 @@ std::pair<ExprVector, OrderTypeVector> Translator::dedupOrdering(
   OrderTypeVector orderTypes;
   orderKeys.reserve(ordering.size());
   orderTypes.reserve(ordering.size());
-  folly::F14FastSet<ExprCP> seen;
   for (const auto& field : ordering) {
-    ExprCP key = translateExpr(*field.expression, scope, liftTarget);
-    if (!seen.insert(key).second) {
-      continue;
-    }
-    orderKeys.push_back(key);
+    orderKeys.push_back(translateExpr(*field.expression, scope, liftTarget));
     orderTypes.push_back(toOrderType(field.order));
   }
+  RedundantKeys::dropFromSortKeys(/*partitionKeys=*/{}, orderKeys, orderTypes);
   return {std::move(orderKeys), std::move(orderTypes)};
 }
 
@@ -1570,7 +1562,7 @@ Translated Translator::translateSort(
   OrderTypeVector orderTypes;
   currentInput = withLiftTarget(currentInput, [&](LiftTarget& target) {
     std::tie(orderKeys, orderTypes) =
-        dedupOrdering(sort.ordering(), input.scope, &target);
+        translateOrdering(sort.ordering(), input.scope, &target);
   });
 
   auto simplified = nodeSimplifier_.make(

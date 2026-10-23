@@ -870,6 +870,13 @@ class WindowExpr : public Expr {
     /// Returns true if frame type, bound types, and bound values are equal.
     bool operator==(const Frame& other) const;
 
+    /// True for a RANGE frame with an n PRECEDING or n FOLLOWING bound, whose
+    /// value is a boundary value compared against the ORDER BY key.
+    bool hasBoundaryValue() const {
+      return type == WindowType::kRange &&
+          (startValue != nullptr || endValue != nullptr);
+    }
+
     folly::dynamic serialize() const;
 
     static Frame deserialize(const folly::dynamic& obj, void* context);
