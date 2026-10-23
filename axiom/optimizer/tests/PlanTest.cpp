@@ -611,16 +611,20 @@ TEST_P(PlanTest, filterToJoinEdge) {
   {
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher =
-        matchHiveScan("nation")
-            // TODO Why is this filter not pushed down into scan?
-            .filter("rand() < 2.0")
-            .project()
-            .hashJoin(matchHiveScan("region").filter("rand() < 3.0").project())
-            .filter("rand() < 4.0")
-            .project()
+        matchHiveScan("nation", {})
+            .aliases({"n_regionkey"})
+            .project({"n_regionkey + 1 as nk", "n_regionkey"})
+            .hashJoinInner(
+                matchHiveScan("region", {})
+                    .aliases({"r_regionkey"})
+                    .project({"r_regionkey + 1 as rk", "r_regionkey"}),
+                {.keys = {{"nk = rk"}},
+                 .filter = "rand() < 4.0",
+                 .outputColumnNames = {{"n_regionkey", "r_regionkey"}}})
+            .project({"n_regionkey", "r_regionkey"})
             .build();
 
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
   }
 
   checkSame(logicalPlan, referencePlan);

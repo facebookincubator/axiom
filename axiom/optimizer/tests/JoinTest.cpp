@@ -3193,8 +3193,6 @@ TEST_P(JoinTest, impliedSameInputJoinFilters) {
   }
 }
 
-// TODO: Assert the V2 plan after it propagates semi-joins across equivalent
-// join keys.
 TEST_P(JoinTest, impliedSemiJoinPropagation) {
   addTableWithStats("t", {"a", "b"}, 10'000);
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
@@ -3212,13 +3210,17 @@ TEST_P(JoinTest, impliedSemiJoinPropagation) {
       "WHERE t.a = u.x AND u.x IN (SELECT n FROM v)";
   SCOPED_TRACE(query);
 
-  auto matcher = matchScan("t")
-                     .hashJoin(matchScan("v"), core::JoinType::kLeftSemiFilter)
-                     .hashJoin(matchScan("u"), core::JoinType::kInner)
-                     .build();
+  auto matcher =
+      matchScan("u")
+          .hashJoinInner(
+              matchScan("t").hashJoinLeftSemiFilter(
+                  matchScan("v"), {.keys = {{"a = n"}}, .filter = ""}),
+              {.keys = {{"x = a"}}, .filter = ""})
+          .project({"a", "b", "a", "y"})
+          .build();
 
   auto plan = toSingleNodePlan(query);
-  AXIOM_ASSERT_PLAN_V1(plan, matcher);
+  AXIOM_ASSERT_PLAN_V2(plan, matcher);
 }
 
 // Implied join edges from an equivalence class must not reference tables
