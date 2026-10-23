@@ -16,6 +16,13 @@
 
 #include "axiom/sql/presto/ShowStatsBuilder.h"
 
+#include <memory>
+#include <string>
+
+#include "velox/type/Type.h"
+#include "velox/type/TypeKind.h"
+#include "velox/type/Variant.h"
+
 namespace axiom::sql::presto {
 
 using namespace facebook::velox;

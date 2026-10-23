@@ -18,6 +18,10 @@
 
 #pragma once
 
+#include <any>
+
+#include <tree/AbstractParseTreeVisitor.h>
+
 #include "PrestoSqlParser.h"
 #include "antlr4-runtime.h"
 

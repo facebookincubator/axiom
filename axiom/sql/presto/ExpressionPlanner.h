@@ -15,19 +15,38 @@
  */
 #pragma once
 
+#include <stddef.h>
+#include <stdint.h>
+#include <memory>
+#include <optional>
 #include <span>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
+#include <folly/container/HeterogeneousAccess.h>
+#include <folly/lang/Hint.h>
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
 
 #include "axiom/logical_plan/ExprApi.h"
+#include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/sql/presto/ParserOptions.h"
 #include "axiom/sql/presto/ParserSession.h"
+#include "axiom/sql/presto/ast/AstExpressions.h"
+#include "axiom/sql/presto/ast/AstFunctions.h"
+#include "axiom/sql/presto/ast/AstLiterals.h"
+#include "axiom/sql/presto/ast/AstNode.h"
 #include "axiom/sql/presto/ast/AstNodesAll.h"
+#include "axiom/sql/presto/ast/AstRelations.h"
+#include "axiom/sql/presto/ast/AstSupport.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/parse/IExpr.h"
+#include "velox/type/Type.h"
 
 namespace axiom::sql::presto {
 

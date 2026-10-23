@@ -16,13 +16,34 @@
 
 #include "axiom/runner/ProgressReporter.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
+#include "axiom/optimizer/MultiFragmentPlan.h"
+#include "axiom/runner/QueryProgress.h"
+#include "axiom/runner/RunnerSession.h"
+#include "velox/parse/PlanNodeIdGenerator.h"
+#include "velox/type/Type.h"
+#include "velox/vector/ComplexVector.h"
 
+#include <folly/ExceptionWrapper.h>
+#include <folly/ScopeGuard.h>
+#include <folly/container/HeterogeneousAccess.h>
 #include <folly/coro/Baton.h>
 #include <folly/coro/BlockingWait.h>
+#include <folly/coro/Task.h>
+#include <folly/coro/ViaIfAsync.h>
 #include <folly/executors/FunctionScheduler.h>
+#include <folly/lang/Hint.h>
 #include <gtest/gtest.h>
+#include <stdint.h>
+#include <chrono>
 #include <condition_variable>
+#include <coroutine>
+#include <functional>
+#include <memory>
 #include <mutex>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include "axiom/connectors/ConnectorSplitManager.h"

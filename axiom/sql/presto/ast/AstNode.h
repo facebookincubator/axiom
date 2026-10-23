@@ -16,6 +16,8 @@
 #pragma once
 
 #include <folly/hash/Hash.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <memory>
 #include <vector>
 #include "axiom/common/Enums.h"

@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <memory>
+
 #include "axiom/sql/presto/ast/AstExpressions.h"
 #include "axiom/sql/presto/ast/AstFunctions.h"
 #include "axiom/sql/presto/ast/AstGraph.h"

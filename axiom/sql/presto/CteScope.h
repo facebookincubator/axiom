@@ -18,6 +18,10 @@
 #include <folly/ScopeGuard.h>
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
+#include <folly/container/HeterogeneousAccess.h>
+#include <folly/lang/Assume.h>
+#include <folly/lang/Hint.h>
+#include <stddef.h>
 #include <memory>
 #include <string>
 #include <utility>
@@ -26,6 +30,7 @@
 #include "axiom/common/CatalogSchemaTableName.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/sql/presto/ast/AstNodesAll.h"
+#include "axiom/sql/presto/ast/AstSupport.h"
 
 namespace axiom::sql::presto {
 

@@ -15,7 +15,10 @@
  */
 #pragma once
 
+#include <stddef.h>
 #include <functional>
+#include <memory>
+#include <vector>
 
 #include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/PlanBuilder.h"

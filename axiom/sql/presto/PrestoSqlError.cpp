@@ -16,6 +16,13 @@
 
 #include "axiom/sql/presto/PrestoSqlError.h"
 
+#include <fmt/core.h>
+#include <folly/FixedString.h>
+#include <folly/container/F14Map.h>
+#include <folly/lang/Hint.h>
+
+#include "axiom/common/Enums.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/VeloxException.h"
 
 namespace axiom::sql::presto {

@@ -16,8 +16,15 @@
 
 #include "axiom/sql/presto/ParserOptions.h"
 
+#include <stddef.h>
+#include <optional>
+#include <utility>
+
 #include <fmt/format.h>
 #include <folly/Conv.h>
+#include <folly/container/F14Map.h>
+#include <folly/lang/Assume.h>
+#include <folly/lang/Hint.h>
 
 #include "velox/common/base/Exceptions.h"
 

@@ -15,8 +15,13 @@
  */
 
 #include <folly/init/Init.h>
+#include <any>
 #include <iostream>
+#include <memory>
+#include <string>
+#include "axiom/sql/presto/ParserOptions.h"
 #include "axiom/sql/presto/ast/AstBuilder.h"
+#include "axiom/sql/presto/ast/AstNode.h"
 #include "axiom/sql/presto/ast/AstPrinter.h"
 #include "axiom/sql/presto/grammar/SyntaxParser.h"
 

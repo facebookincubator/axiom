@@ -18,6 +18,17 @@
 
 #pragma once
 
+#include <stddef.h>
+#include <string>
+#include <vector>
+
+#include <Parser.h>
+#include <ParserRuleContext.h>
+#include <Token.h>
+#include <TokenStream.h>
+#include <atn/ParserATNSimulatorOptions.h>
+#include <tree/TerminalNode.h>
+
 #include "antlr4-runtime.h"
 
 class PrestoSqlParser : public antlr4::Parser {

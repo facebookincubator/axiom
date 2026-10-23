@@ -19,6 +19,7 @@
 #pragma once
 
 #include "PrestoSqlListener.h"
+#include "PrestoSqlParser.h"
 #include "antlr4-runtime.h"
 
 /**

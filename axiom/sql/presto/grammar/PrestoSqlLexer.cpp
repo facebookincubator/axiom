@@ -18,6 +18,22 @@
 
 #include "PrestoSqlLexer.h"
 
+#include <assert.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <memory>
+#include <utility>
+#include <vector>
+
+#include <Vocabulary.h>
+#include <atn/ATN.h>
+#include <atn/ATNDeserializer.h>
+#include <atn/ATNSimulator.h>
+#include <atn/LexerATNSimulator.h>
+#include <atn/PredictionContextCache.h>
+#include <atn/SerializedATNView.h>
+#include <dfa/DFA.h>
+
 using namespace antlr4;
 
 using namespace antlr4;

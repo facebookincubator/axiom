@@ -16,9 +16,16 @@
 
 #include "axiom/sql/presto/RecursiveCteValidator.h"
 
+#include <memory>
+#include <optional>
+#include <utility>
+#include <vector>
+
 #include "axiom/sql/presto/ExpressionPlanner.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/SpecialAggregates.h"
+#include "axiom/sql/presto/ast/AstExpressions.h"
+#include "axiom/sql/presto/ast/AstFunctions.h"
 #include "axiom/sql/presto/ast/DefaultTraversalVisitor.h"
 #include "velox/exec/Aggregate.h"
 

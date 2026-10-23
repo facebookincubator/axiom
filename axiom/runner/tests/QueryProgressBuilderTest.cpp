@@ -15,13 +15,27 @@
  */
 
 #include "axiom/runner/QueryProgressBuilder.h"
+#include <fmt/core.h>
+#include <folly/container/F14Map.h>
+#include <folly/container/HeterogeneousAccess.h>
+#include <folly/lang/Hint.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/runner/QueryProgress.h"
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/PlanFragment.h"
+#include "velox/exec/OperatorStats.h"
+#include "velox/exec/OutputBufferStats.h"
 #include "velox/exec/TaskStats.h"
 
 namespace facebook::axiom::runner {

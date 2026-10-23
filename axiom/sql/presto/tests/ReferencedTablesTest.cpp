@@ -14,10 +14,24 @@
  * limitations under the License.
  */
 
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <unordered_set>
+#include <vector>
+
+#include <fmt/core.h>
 #include <folly/ScopeGuard.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "axiom/common/CatalogSchemaTableName.h"
+#include "axiom/common/SchemaTableName.h"
+#include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/logical_plan/ReferencedTables.h"
+#include "axiom/sql/presto/SqlStatement.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
+#include "velox/type/Type.h"
 
 namespace axiom::sql::presto {
 namespace {

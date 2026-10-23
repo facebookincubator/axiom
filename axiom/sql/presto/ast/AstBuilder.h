@@ -16,9 +16,22 @@
 
 #pragma once
 
+#include <ParserRuleContext.h>
 #include <antlr4-runtime.h>
+#include <folly/ScopeGuard.h>
+#include <stdint.h>
+#include <tree/ParseTree.h>
+#include <any>
 #include <iostream>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
 #include "axiom/sql/presto/ParserOptions.h"
+#include "axiom/sql/presto/ast/AstExpressions.h"
+#include "axiom/sql/presto/ast/AstGraph.h"
+#include "axiom/sql/presto/ast/AstNode.h"
 #include "axiom/sql/presto/ast/AstNodesAll.h"
 #include "axiom/sql/presto/grammar/PrestoSqlParser.h"
 #include "axiom/sql/presto/grammar/PrestoSqlVisitor.h"

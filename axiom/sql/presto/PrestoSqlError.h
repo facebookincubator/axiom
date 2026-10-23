@@ -16,10 +16,13 @@
 
 #pragma once
 
+#include <stddef.h>
 #include <cassert>
 #include <exception>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 
 #include <fmt/format.h>
 #include <folly/Likely.h>

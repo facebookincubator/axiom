@@ -16,7 +16,12 @@
 #pragma once
 
 #include <folly/hash/Hash.h>
+#include <stddef.h>
+#include <functional>
+#include <memory>
 #include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 #include "axiom/sql/presto/ast/AstExpressions.h"
 #include "axiom/sql/presto/ast/AstNode.h"

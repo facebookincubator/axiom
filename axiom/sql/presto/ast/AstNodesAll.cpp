@@ -15,7 +15,29 @@
  */
 
 #include "axiom/sql/presto/ast/AstNodesAll.h"
+
+#include <stddef.h>
+#include <stdint.h>
+#include <functional>
+#include <optional>
+#include <string_view>
+#include <vector>
+
+#include <folly/container/F14Map.h>
+#include <folly/hash/Hash.h>
+#include <folly/lang/Hint.h>
+
+#include "axiom/common/Enums.h"
+#include "axiom/sql/presto/ast/AstExpressions.h"
+#include "axiom/sql/presto/ast/AstFunctions.h"
+#include "axiom/sql/presto/ast/AstGraph.h"
+#include "axiom/sql/presto/ast/AstLiterals.h"
+#include "axiom/sql/presto/ast/AstNode.h"
+#include "axiom/sql/presto/ast/AstRelations.h"
+#include "axiom/sql/presto/ast/AstStatements.h"
+#include "axiom/sql/presto/ast/AstSupport.h"
 #include "axiom/sql/presto/ast/AstVisitor.h"
+#include "velox/common/base/Exceptions.h"
 
 namespace axiom::sql::presto {
 

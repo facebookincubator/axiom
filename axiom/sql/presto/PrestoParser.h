@@ -15,6 +15,12 @@
  */
 #pragma once
 
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#include "axiom/logical_plan/Expr.h"
 #include "axiom/sql/presto/ParserSession.h"
 #include "axiom/sql/presto/SqlStatement.h"
 #include "velox/common/base/Exceptions.h"

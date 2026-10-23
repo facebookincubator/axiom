@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+#include <string>
+#include <string_view>
+#include <vector>
+
 #include <gtest/gtest.h>
 
 #include "axiom/sql/presto/ParserOptions.h"

@@ -16,9 +16,18 @@
 
 #include "axiom/runner/RunnerSession.h"
 
+#include <memory>
+#include <string>
+#include <string_view>
+
+#include <folly/container/HeterogeneousAccess.h>
+#include <folly/lang/Hint.h>
 #include <gtest/gtest.h>
 
+#include "axiom/connectors/ConnectorContext.h"
+#include "axiom/connectors/ConnectorSession.h"
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
+#include "velox/common/base/RuntimeMetrics.h"
 
 namespace facebook::axiom::runner {
 namespace {

@@ -18,6 +18,11 @@
 
 #pragma once
 
+#include <string>
+
+#include <CharStream.h>
+#include <Lexer.h>
+
 #include "antlr4-runtime.h"
 
 class PrestoSqlLexer : public antlr4::Lexer {

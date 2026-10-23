@@ -16,7 +16,16 @@
 
 #include "axiom/sql/presto/SqlStatement.h"
 
+#include <algorithm>
+#include <cctype>
+
 #include <folly/container/F14Map.h>
+
+#include "axiom/common/CatalogSchemaTableName.h"
+#include "axiom/common/Enums.h"
+#include "axiom/logical_plan/LogicalPlanNode.h"
+#include "axiom/logical_plan/ReferencedTables.h"
+#include "velox/common/base/Exceptions.h"
 
 namespace axiom::sql::presto {
 

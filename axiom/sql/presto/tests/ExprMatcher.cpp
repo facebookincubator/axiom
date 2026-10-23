@@ -15,10 +15,23 @@
  */
 
 #include "axiom/sql/presto/tests/ExprMatcher.h"
+#include <ctype.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <algorithm>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+#include "axiom/logical_plan/Expr.h"
 #include "axiom/logical_plan/ExprApi.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/parse/Expressions.h"
+#include "velox/parse/IExpr.h"
+#include "velox/type/Type.h"
+#include "velox/type/TypeKind.h"
+#include "velox/type/Variant.h"
 
 namespace facebook::axiom::logical_plan::test {
 namespace {

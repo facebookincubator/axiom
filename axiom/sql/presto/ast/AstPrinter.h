@@ -16,7 +16,11 @@
 #pragma once
 
 #include <functional>
+#include <memory>
+#include <ostream>
+#include <string_view>
 
+#include "axiom/sql/presto/ast/AstNode.h"
 #include "axiom/sql/presto/ast/AstVisitor.h"
 
 namespace axiom::sql::presto {

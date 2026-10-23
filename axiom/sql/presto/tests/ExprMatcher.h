@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <string_view>
+
 #include <gtest/gtest.h>
 #include "axiom/logical_plan/Expr.h"
 #include "velox/parse/IExpr.h"
