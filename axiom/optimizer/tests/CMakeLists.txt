@@ -148,6 +148,7 @@ if(AXIOM_BUILD_TESTING)
     QueryWidthTest.cpp
     RankingTest.cpp
     RelationOpPrinterTest.cpp
+    RowLevelDeleteTest.cpp
     SetTest.cpp
     SubfieldTest.cpp
     SubqueryTest.cpp

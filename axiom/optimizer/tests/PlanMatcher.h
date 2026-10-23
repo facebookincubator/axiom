@@ -909,6 +909,10 @@ class PlanMatcherBuilder {
   /// "c DESC" means "c DESC NULLS LAST".
   PlanMatcherBuilder& orderBy(const std::vector<std::string>& ordering);
 
+  /// Matches a partial OrderBy node with the specified ordering: each driver
+  /// sorts its own rows. 'ordering' is parsed as in orderBy(ordering).
+  PlanMatcherBuilder& partialOrderBy(const std::vector<std::string>& ordering);
+
   /// Adds an OrderBy matcher (see orderBy()) only when 'condition' is true;
   /// otherwise a no-op.
   PlanMatcherBuilder& orderByIf(
@@ -919,6 +923,11 @@ class PlanMatcherBuilder {
 
   /// Matches any TableWrite node.
   PlanMatcherBuilder& tableWrite();
+
+  /// Matches a TableWrite node whose `columnNames()` equal 'columnNames', in
+  /// order. These are the names the connector knows the written columns by,
+  /// which for a delete is what tells it which column identifies a row.
+  PlanMatcherBuilder& tableWrite(const std::vector<std::string>& columnNames);
 
   /// Matches any TableWriteMerge node.
   PlanMatcherBuilder& tableWriteMerge();

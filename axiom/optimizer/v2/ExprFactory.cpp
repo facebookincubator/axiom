@@ -16,10 +16,13 @@
 
 #include "axiom/optimizer/v2/ExprFactory.h"
 
+#include <algorithm>
+
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 
-#include <algorithm>
+#include "axiom/optimizer/FunctionRegistry.h"
+#include "velox/core/Expressions.h"
 
 namespace facebook::axiom::optimizer::v2 {
 
@@ -515,6 +518,140 @@ ExprCP ExprFactory::rebuildCall(const Call* call, ExprVector args) {
       Call::unionArgFunctions(call->functions(), args);
   return builder_.makeCall(
       call->name(), call->value(), std::move(args), functions);
+}
+
+ExprCP ExprFactory::importVeloxExpr(
+    const velox::core::TypedExprPtr& expr,
+    const folly::F14FastMap<std::string_view, ColumnCP>& columns) {
+  folly::F14FastMap<std::string_view, Name> specialFormNames;
+  for (const auto& [form, veloxName] :
+       queryCtx()->functionRegistry().specialForms()) {
+    specialFormNames.emplace(veloxName, SpecialFormCallNames::toCallName(form));
+  }
+  return importExpr(expr, columns, specialFormNames);
+}
+
+ExprCP ExprFactory::importExpr(
+    const velox::core::TypedExprPtr& expr,
+    const folly::F14FastMap<std::string_view, ColumnCP>& columns,
+    const folly::F14FastMap<std::string_view, Name>& specialFormNames) {
+  switch (expr->kind()) {
+    case velox::core::ExprKind::kInput: {
+      const auto& inputType = expr->type()->asRow();
+      ExprVector args;
+      args.reserve(inputType.size());
+      for (const auto& name : inputType.names()) {
+        const auto it = columns.find(name);
+        VELOX_CHECK(
+            it != columns.end(),
+            "Expression reads a column outside its bindings: {}",
+            name);
+        args.push_back(it->second);
+      }
+      return makeRowConstructor(std::move(args), toType(expr->type()));
+    }
+    case velox::core::ExprKind::kFieldAccess: {
+      const auto* field =
+          expr->asUnchecked<velox::core::FieldAccessTypedExpr>();
+      if (field->isInputColumn()) {
+        const auto it = columns.find(field->name());
+        VELOX_CHECK(
+            it != columns.end(),
+            "Expression reads a column outside its bindings: {}",
+            field->name());
+        return it->second;
+      }
+      VELOX_CHECK_EQ(field->inputs().size(), 1);
+      return make<Field>(
+          toType(field->type()),
+          importExpr(field->inputs().front(), columns, specialFormNames),
+          toName(field->name()));
+    }
+    case velox::core::ExprKind::kDereference: {
+      const auto* field =
+          expr->asUnchecked<velox::core::DereferenceTypedExpr>();
+      VELOX_CHECK_EQ(field->inputs().size(), 1);
+      return make<Field>(
+          toType(field->type()),
+          importExpr(field->inputs().front(), columns, specialFormNames),
+          static_cast<int32_t>(field->index()));
+    }
+    case velox::core::ExprKind::kConstant: {
+      const auto* constant =
+          expr->asUnchecked<velox::core::ConstantTypedExpr>();
+      velox::Variant value = constant->hasValueVector()
+          ? constant->valueVector()->variantAt(0)
+          : constant->value();
+      return builder_.makeLiteral(std::move(value), toType(expr->type()));
+    }
+    case velox::core::ExprKind::kCall: {
+      const auto* call = expr->asUnchecked<velox::core::CallTypedExpr>();
+      ExprVector args;
+      args.reserve(call->inputs().size());
+      for (const auto& input : call->inputs()) {
+        args.push_back(importExpr(input, columns, specialFormNames));
+      }
+      const auto specialForm = specialFormNames.find(call->name());
+      const bool isSpecialForm = specialForm != specialFormNames.end();
+      const Name name =
+          isSpecialForm ? specialForm->second : toName(call->name());
+      return makeCall(
+          name, Value(toType(call->type())), std::move(args), isSpecialForm);
+    }
+    case velox::core::ExprKind::kCast: {
+      const auto* cast = expr->asUnchecked<velox::core::CastTypedExpr>();
+      VELOX_CHECK_EQ(cast->inputs().size(), 1);
+      ExprVector args{
+          importExpr(cast->inputs().front(), columns, specialFormNames)};
+      const Name name = cast->isTryCast() ? SpecialFormCallNames::kTryCast
+                                          : SpecialFormCallNames::kCast;
+      return makeCall(
+          name,
+          Value(toType(cast->type())),
+          std::move(args),
+          /*specialForm=*/true);
+    }
+    case velox::core::ExprKind::kConcat: {
+      ExprVector args;
+      args.reserve(expr->inputs().size());
+      for (const auto& input : expr->inputs()) {
+        args.push_back(importExpr(input, columns, specialFormNames));
+      }
+      return makeRowConstructor(std::move(args), toType(expr->type()));
+    }
+    case velox::core::ExprKind::kLambda: {
+      const auto* lambda = expr->asUnchecked<velox::core::LambdaTypedExpr>();
+      auto bodyColumns = columns;
+      ColumnVector args;
+      args.reserve(lambda->signature()->size());
+      for (uint32_t i = 0; i < lambda->signature()->size(); ++i) {
+        const auto& name = lambda->signature()->nameOf(i);
+        ColumnCP column = Column::create(
+            toName(name), Value(toType(lambda->signature()->childAt(i)), 1));
+        args.push_back(column);
+        bodyColumns.insert_or_assign(name, column);
+      }
+      return make<Lambda>(
+          std::move(args),
+          toType(lambda->type()),
+          importExpr(lambda->body(), bodyColumns, specialFormNames));
+    }
+    case velox::core::ExprKind::kNullIf: {
+      const auto* nullIf = expr->asUnchecked<velox::core::NullIfTypedExpr>();
+      VELOX_CHECK_EQ(nullIf->inputs().size(), 2);
+      ExprVector args{
+          importExpr(nullIf->inputs()[0], columns, specialFormNames),
+          importExpr(nullIf->inputs()[1], columns, specialFormNames),
+          builder_.makeNull(toType(nullIf->commonType()))};
+      const Name name = SpecialFormCallNames::kNullIf;
+      return makeCall(
+          name,
+          Value(toType(nullIf->type())),
+          std::move(args),
+          /*specialForm=*/true);
+    }
+  }
+  VELOX_UNREACHABLE();
 }
 
 } // namespace facebook::axiom::optimizer::v2

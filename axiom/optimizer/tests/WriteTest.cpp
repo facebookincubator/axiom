@@ -110,7 +110,6 @@ class WriteTest : public test::HiveQueriesTestBase,
         session,
         table,
         connector::WriteKind::kCreate,
-        /*scanHandle=*/nullptr,
         /*explain=*/false);
     metadata.finishWrite(session, handle, {}, nullptr, {}).get();
     return table;
@@ -880,10 +879,12 @@ const velox::core::PlanNodePtr nodeAt(
 
 // Verify that distributed plan has exchange before table write and
 // tableWriteMerge after. The coordinator gets a kFinal merge after the
-// gather exchange.
-void verifyPartitionedWrite(const MultiFragmentPlan& plan) {
+// gather exchange. 'bucketedScan' is whether the scan reads one bucket group
+// at a time.
+void verifyPartitionedWrite(const MultiFragmentPlan& plan, bool bucketedScan) {
   auto matcher = core::PlanMatcherBuilder()
                      .tableScan()
+                     .bucketed(bucketedScan)
                      .project()
                      .shuffle()
                      .localPartition()
@@ -897,17 +898,18 @@ void verifyPartitionedWrite(const MultiFragmentPlan& plan) {
 }
 
 // Verify that table write is collocated with table scan (no exchange between
-// the two).
+// the two) and runs one task per bucket group.
 void verifyCollocatedWrite(const MultiFragmentPlan& plan) {
   auto matcher = core::PlanMatcherBuilder()
-                     .tableScan()
-                     .project()
+                     .tableScan("test")
+                     .fragment({.width = 4, .bucketedScans = 1})
+                     .project({"key", "l_orderkey", "l_linenumber + 1 as x"})
                      // TODO Enhance the optimizer to eliminate local exchange.
-                     .localPartition()
-                     .tableWrite()
+                     .localPartition({"key"})
+                     .tableWrite({"key", "l_orderkey", "x"})
                      .localGather()
                      .tableWriteMerge()
-                     .shuffle()
+                     .gather()
                      .tableWriteMerge()
                      .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(&plan, matcher);
@@ -975,7 +977,9 @@ TEST_P(WriteTest, ctasBucketedSql) {
       "CREATE TABLE test WITH (bucket_count = 8, bucketed_by = ARRAY['key']) AS "
       "SELECT rand() as key, l_orderkey, l_partkey, l_linenumber FROM lineitem",
       600'572,
-      verifyPartitionedWrite);
+      [](const auto& plan) {
+        verifyPartitionedWrite(plan, /*bucketedScan=*/false);
+      });
 
   verifyPartitionedLayout(getLayout("test"), "key", 8);
 
@@ -1002,7 +1006,9 @@ TEST_P(WriteTest, ctasBucketedSql) {
       "CREATE TABLE fewer WITH (bucket_count = 2, bucketed_by = ARRAY['key']) AS "
       "SELECT key, l_orderkey, l_linenumber + 1 as x FROM test",
       600'572,
-      verifyPartitionedWrite);
+      [this](const auto& plan) {
+        verifyPartitionedWrite(plan, /*bucketedScan=*/!useV2_);
+      });
 
   verifyPartitionedLayout(getLayout("fewer"), "key", 2);
 }
@@ -1069,7 +1075,9 @@ TEST_P(WriteTest, ctasBucketedAndSorted) {
       "CREATE TABLE test WITH (bucket_count = 16, bucketed_by = ARRAY['n_nationkey'], sorted_by = ARRAY['n_name']) AS "
       "SELECT n_nationkey, n_name, 'bar' as y FROM nation",
       25,
-      verifyPartitionedWrite);
+      [](const auto& plan) {
+        verifyPartitionedWrite(plan, /*bucketedScan=*/false);
+      });
 
   verifyPartitionedLayout(getLayout("test"), "n_nationkey", 16, "n_name");
 }

@@ -35,12 +35,6 @@ class DeleteTest : public test::HiveQueriesTestBase {
     createTpchTables({velox::tpch::Table::TBL_NATION});
   }
 
-  lp::LogicalPlanNodePtr parseDelete(std::string_view sql) {
-    auto statement = prestoParser().parse(sql);
-    VELOX_CHECK(statement->isDelete());
-    return statement->as<::axiom::sql::presto::DeleteStatement>()->plan();
-  }
-
   // Runs 'sql' and returns the number of rows it reports removing.
   int64_t runDelete(std::string_view sql) {
     SCOPED_TRACE(sql);
@@ -109,6 +103,17 @@ TEST_F(DeleteTest, partitionPredicates) {
   EXPECT_EQ(0, runCount("FROM test"));
 }
 
+// A row-ID subquery selects individual rows, which a delete that drops whole
+// partitions cannot carry out.
+TEST_F(DeleteTest, rowIdSubquery) {
+  VELOX_ASSERT_USER_THROW(
+      planVelox(parseDelete(
+          "DELETE FROM nation "
+          "WHERE \"$row_id\" IN ("
+          "    SELECT \"$row_id\" FROM nation WHERE n_regionkey = 1)")),
+      "DELETE requires row-level support from the connector");
+}
+
 // Deleting one partition of a bucketed table removes that partition's rows and
 // leaves the rest.
 TEST_F(DeleteTest, bucketedTable) {
@@ -141,18 +146,6 @@ TEST_F(DeleteTest, unpartitionedTable) {
   EXPECT_TRUE(
       runVelox(parseDelete("DELETE FROM test")).getOnlyResult().isNull());
   EXPECT_EQ(0, runCount("FROM test"));
-}
-
-// $row_id resolves, so a row-level delete parses. The optimizer rejects it:
-// it supports only deletes the connector can carry out as a metadata change.
-TEST_F(DeleteTest, rowLevelDelete) {
-  const auto plan = parseDelete(
-      "DELETE FROM nation WHERE \"$row_id\" IN "
-      "(SELECT \"$row_id\" FROM nation WHERE n_regionkey = 1)");
-  ASSERT_NE(plan, nullptr);
-
-  VELOX_ASSERT_USER_THROW(
-      planVelox(plan), "DELETE requires a scan with an optional filter");
 }
 
 } // namespace

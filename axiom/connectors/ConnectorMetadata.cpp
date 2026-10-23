@@ -99,6 +99,67 @@ const auto& writeKindNames() {
 
 AXIOM_DEFINE_ENUM_NAME(WriteKind, writeKindNames);
 
+// static
+DeleteLayout DeleteLayout::metadata() {
+  return DeleteLayout(false, {}, {}, nullptr, {}, {});
+}
+
+// static
+DeleteLayout DeleteLayout::rowLevel(
+    std::vector<ComputedColumn> computedColumns,
+    std::vector<std::string> shuffleKeys,
+    std::shared_ptr<const PartitionType> partitionType,
+    std::vector<std::string> sortKeys,
+    std::vector<SortOrder> sortOrders) {
+  VELOX_CHECK_EQ(
+      sortKeys.size(),
+      sortOrders.size(),
+      "Delete sort keys and sort orders must be one-to-one");
+  VELOX_CHECK_EQ(
+      shuffleKeys.empty(),
+      partitionType == nullptr,
+      "Delete shuffle keys and partition type must be specified together");
+  if (partitionType != nullptr) {
+    VELOX_CHECK_EQ(
+        shuffleKeys.size(),
+        partitionType->keyTypes().size(),
+        "Delete shuffle keys must match the partition type's keys");
+  }
+  folly::F14FastSet<std::string_view> computedNames;
+  for (const auto& column : computedColumns) {
+    VELOX_CHECK(!column.name.empty(), "Computed delete column requires a name");
+    VELOX_CHECK_NOT_NULL(
+        column.expr,
+        "Computed delete column requires an expression: {}",
+        column.name);
+    VELOX_CHECK(
+        computedNames.emplace(column.name).second,
+        "Computed delete column name is duplicated: {}",
+        column.name);
+  }
+  for (const auto& key : shuffleKeys) {
+    VELOX_CHECK(!key.empty(), "Delete shuffle key requires a name");
+  }
+  for (const auto& key : sortKeys) {
+    VELOX_CHECK(!key.empty(), "Delete sort key requires a name");
+  }
+  return DeleteLayout(
+      true,
+      std::move(computedColumns),
+      std::move(shuffleKeys),
+      std::move(partitionType),
+      std::move(sortKeys),
+      std::move(sortOrders));
+}
+
+ConnectorDeleteHandle::ConnectorDeleteHandle(
+    velox::connector::ConnectorInsertTableHandlePtr veloxHandle,
+    velox::RowTypePtr resultType)
+    : veloxHandle_{std::move(veloxHandle)}, resultType_{std::move(resultType)} {
+  VELOX_CHECK_NOT_NULL(veloxHandle_, "Delete writer handle must not be null");
+  VELOX_CHECK_NOT_NULL(resultType_, "Delete result type must not be null");
+}
+
 void MetadataCountGroup::checkConsistency() const {
   VELOX_CHECK_GE(numRows, 0, "Row count must be non-negative");
   for (const auto nulls : numNulls) {

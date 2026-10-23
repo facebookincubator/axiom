@@ -425,7 +425,13 @@ class NodeRewriter {
       return node;
     }
     return builder_.template make<TableWrite>(
-        {newInput, node->table(), node->kind(), node->columnExprs()});
+        {newInput,
+         node->table(),
+         node->kind(),
+         node->columnExprs(),
+         node->rowIdColumns(),
+         node->deleteTarget(),
+         node->deleteLayout()});
   }
 
   virtual NodeCP rewriteWorkingTable(
