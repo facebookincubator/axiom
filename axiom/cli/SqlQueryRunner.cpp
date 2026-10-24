@@ -250,28 +250,6 @@ SqlQueryRunner::SqlResult::SqlResult(velox::RowTypePtr resultType)
   VELOX_CHECK_NOT_NULL(this->resultType);
 }
 
-namespace {
-template <typename Registry>
-std::shared_ptr<Registry> processWideRegistry(Registry& registry) {
-  // Keep one member shape for owned registries and non-owning process-wide
-  // registries without deleting the latter when the runner is destroyed.
-  return std::shared_ptr<Registry>(std::shared_ptr<void>{}, &registry);
-}
-
-} // namespace
-
-SqlQueryRunner::SqlQueryRunner(
-    std::string user,
-    folly::FunctionScheduler* progressScheduler,
-    bool useOptimizerV2)
-    : SqlQueryRunner{
-          std::move(user),
-          progressScheduler,
-          useOptimizerV2,
-          processWideRegistry(velox::connector::ConnectorRegistry::global()),
-          processWideRegistry(
-              connector::ConnectorMetadataRegistry::global())} {}
-
 SqlQueryRunner::SqlQueryRunner(
     std::string user,
     folly::FunctionScheduler* progressScheduler,

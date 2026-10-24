@@ -204,26 +204,15 @@ class SqlQueryRunner {
   /// "execution.session_timezone").
   static constexpr const char* kExecutionPrefix = "execution";
 
-  /// Constructs a compatibility runner over the process-wide connector and
-  /// metadata registries. Prefer the registry overload when the application
-  /// owns its catalog registries.
-  /// The user must be non-empty; it is exposed by the SQL `CURRENT_USER`
-  /// function and used as the default table owner in DDL.
-  ///
-  /// `progressScheduler` (not owned, must outlive this runner) drives progress
-  /// polling for queries that set RunOptions::onProgress. If null, such a query
-  /// fails loudly rather than running without the progress it asked for.
-  /// @param useOptimizerV2 Routes all queries through the v2 optimizer, the
-  /// default. EXPLAIN (type graph) is supported only under v1, because it
-  /// inspects optimizer internals the v2 pipeline does not expose.
-  explicit SqlQueryRunner(
-      std::string user,
-      folly::FunctionScheduler* progressScheduler = nullptr,
-      bool useOptimizerV2 = true);
-
   /// Constructs a runner that resolves catalogs through the given registries.
   /// The runner retains both registries and installs the connector registry on
   /// every Velox query context it creates.
+  /// @param user Non-empty SQL `CURRENT_USER` value and default DDL owner.
+  /// @param progressScheduler Non-owned scheduler for progress callbacks; it
+  /// must outlive this runner. If null, a query that requests progress
+  /// reporting fails.
+  /// @param useOptimizerV2 Routes all queries through the v2 optimizer.
+  /// `EXPLAIN (TYPE GRAPH)` is supported only under v1.
   /// @param connectorRegistry Non-null execution connector registry.
   /// @param metadataRegistry Non-null catalog metadata registry.
   SqlQueryRunner(

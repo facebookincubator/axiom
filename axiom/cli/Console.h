@@ -40,7 +40,12 @@ class QueryInterruptHandler;
 ///
 /// @code
 ///   folly::FunctionScheduler scheduler;  // enables progress reporting
-///   SqlQueryRunner runner{user, &scheduler};
+///   auto connectorRegistry =
+///       velox::connector::ConnectorRegistry::create(nullptr);
+///   auto metadataRegistry =
+///       connector::ConnectorMetadataRegistry::create(nullptr);
+///   SqlQueryRunner runner{
+///       user, &scheduler, true, connectorRegistry, metadataRegistry};
 ///   Console console{runner};
 ///   console.initialize();
 ///   const Console::Outcome outcome = console.run();
