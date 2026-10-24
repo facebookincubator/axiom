@@ -219,8 +219,9 @@ class Builder {
   void normalizeKey(Join::Key& key);
   void normalizeKey(Filter::Key& key);
 
-  // In debug builds, checks that 'node's partitioning rule applied to its
-  // inputs' partitionings reproduces the partitioning it was constructed with.
+  // In debug builds, checks that a placed 'node's partitioning rule applied to
+  // its inputs' partitionings reproduces the partitioning it was constructed
+  // with.
   void checkGlobalPartition(NodeCP node);
 
   template <typename T>

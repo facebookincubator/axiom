@@ -94,9 +94,103 @@ std::vector<Partitioning> Node::globalPartitions(
   return partitions;
 }
 
+Node::Node(NodeType nodeType, ColumnVector outputColumns, Properties properties)
+    : PlanObject(PlanType::kV2Node),
+      nodeType_(nodeType),
+      outputColumns_(std::move(outputColumns)),
+      properties_(std::move(properties)) {
+  const auto columns = PlanObjectSet::fromObjects(outputColumns_);
+  std::visit(
+      [&](const auto& nodeProperties) {
+        nodeProperties.checkReferencesColumns(columns);
+      },
+      properties_);
+}
+
+const PhysicalProperties& Node::physicalProperties() const {
+  VELOX_CHECK(placed(), "Node is not placed yet: {}", nodeTypeName());
+  return std::get<PhysicalProperties>(properties_);
+}
+
+const RelationalProperties& Node::relationalProperties() const {
+  VELOX_CHECK(!placed(), "Node is already placed: {}", nodeTypeName());
+  return std::get<RelationalProperties>(properties_);
+}
+
 std::string Node::toString() const {
   return NodePrinter::toText(this);
 }
+
+namespace {
+
+// True when the inputs are placed. Skips absent inputs.
+bool placedInputs(std::span<const NodeCP> inputs) {
+  std::optional<bool> placed;
+  for (NodeCP input : inputs) {
+    if (input == nullptr) {
+      continue;
+    }
+    VELOX_CHECK(
+        !placed.has_value() || *placed == input->placed(),
+        "Node inputs disagree on placement");
+    placed = input->placed();
+  }
+  VELOX_CHECK(placed.has_value(), "Node has no inputs");
+  return *placed;
+}
+
+// Properties of a node over 'inputs': 'physical()' when the inputs are placed,
+// 'relational()' otherwise.
+template <typename Physical, typename Relational>
+Node::Properties derivedProperties(
+    std::initializer_list<NodeCP> inputs,
+    Physical&& physical,
+    Relational&& relational) {
+  if (placedInputs({inputs.begin(), inputs.size()})) {
+    return physical();
+  }
+  return relational();
+}
+
+// Properties of a node that exists only in a placed plan.
+template <typename Physical>
+Node::Properties placedProperties(
+    std::initializer_list<NodeCP> inputs,
+    Physical&& physical) {
+  VELOX_CHECK(
+      placedInputs({inputs.begin(), inputs.size()}),
+      "Node requires placed inputs");
+  return physical();
+}
+
+// The relational properties of a node that emits a subset of 'input''s rows,
+// with its columns or more.
+RelationalProperties subsetRelational(NodeCP input) {
+  return {.unique = input->relationalProperties().unique};
+}
+
+// The relational properties of a node that emits each of 'input''s rows once,
+// with its columns or more.
+RelationalProperties sameRowsRelational(NodeCP input) {
+  return input->relationalProperties();
+}
+
+// A relation of exactly one row, which is unique on the empty set.
+RelationalProperties singleRowRelational() {
+  return {.unique = {PlanObjectSet{}}, .singleRow = true};
+}
+
+// The properties of a leaf: 'physical()' when PlanPhysical placed it, none
+// otherwise.
+template <typename Physical>
+Node::Properties leafProperties(bool placed, Physical&& physical) {
+  if (placed) {
+    return physical();
+  }
+  return RelationalProperties{};
+}
+
+} // namespace
 
 NodeCP FOLLY_NULLABLE
 Node::findFirstNode(NodeCP root, const std::function<bool(NodeCP)>& predicate) {
@@ -193,6 +287,21 @@ std::optional<PlanObjectSet> remapKeySet(
   return PlanObjectSet::fromObjects(mapped);
 }
 
+// Re-expresses 'keys' on 'outputColumns', which project 'sourceExprs', dropping
+// keys that are not projected as bare columns.
+QGVector<PlanObjectSet> remapKeySets(
+    const QGVector<PlanObjectSet>& keys,
+    const ExprVector& sourceExprs,
+    const ColumnVector& outputColumns) {
+  QGVector<PlanObjectSet> result;
+  for (const PlanObjectSet& key : keys) {
+    if (auto mapped = remapKeySet(key, sourceExprs, outputColumns)) {
+      result.push_back(std::move(*mapped));
+    }
+  }
+  return result;
+}
+
 // Remaps input unique keys through a projection and drops keys that are not
 // projected as bare columns.
 UniqueKeySetVector projectUnique(
@@ -207,6 +316,19 @@ UniqueKeySetVector projectUnique(
     }
   }
   return result;
+}
+
+// A projection emits each input row once: it keeps the input's single row and
+// the unique keys it projects as bare columns.
+RelationalProperties projectRelational(
+    NodeCP input,
+    const ExprVector& exprs,
+    const ColumnVector& outputColumns) {
+  const RelationalProperties& inputProperties = input->relationalProperties();
+  return {
+      .unique = remapKeySets(inputProperties.unique, exprs, outputColumns),
+      .singleRow = inputProperties.singleRow,
+  };
 }
 
 // Keeps an input's partitioning when a node emits only a subset of its input:
@@ -365,7 +487,7 @@ Partitioning keptDriverPartition(
 
 // Preserves task and driver placement, local properties, and uniqueness for an
 // operator that neither moves nor reshapes rows.
-PhysicalProperties passThroughProperties(NodeCP input) {
+PhysicalProperties passThroughPhysical(NodeCP input) {
   const PhysicalProperties& props = input->physicalProperties();
   return PhysicalProperties{
       .globalPartition = inheritedPartition(props.globalPartition),
@@ -377,8 +499,8 @@ PhysicalProperties passThroughProperties(NodeCP input) {
 // An exact Limit runs on one driver. It preserves the input's global
 // partitioning, local properties, and uniqueness, while gathering its output
 // at driver scope.
-PhysicalProperties limitProperties(NodeCP input) {
-  PhysicalProperties properties = passThroughProperties(input);
+PhysicalProperties limitPhysical(NodeCP input) {
+  PhysicalProperties properties = passThroughPhysical(input);
   properties.driverPartition = Partitioning::gather(PropertyScope::kDriver);
   return properties;
 }
@@ -386,7 +508,7 @@ PhysicalProperties limitProperties(NodeCP input) {
 // A ranking or inference node keeps each row it emits on its task and driver,
 // emits no row twice, and does not keep input order: placement, co-location on
 // 'partitionKeys', and uniqueness survive.
-PhysicalProperties rankedProperties(
+PhysicalProperties rankedPhysical(
     NodeCP input,
     const ExprVector& partitionKeys) {
   const PhysicalProperties& props = input->physicalProperties();
@@ -400,7 +522,7 @@ PhysicalProperties rankedProperties(
 // contiguously in an order unrelated to its input: placement, co-location on
 // the partition keys, and uniqueness survive, and the output is grouped on the
 // partition keys only.
-PhysicalProperties windowProperties(
+PhysicalProperties windowPhysical(
     NodeCP input,
     const ExprVector& partitionKeys) {
   const PhysicalProperties& props = input->physicalProperties();
@@ -416,7 +538,7 @@ PhysicalProperties windowProperties(
 }
 
 // Sorting preserves placement and uniqueness while establishing local order.
-PhysicalProperties sortedProperties(
+PhysicalProperties sortedPhysical(
     NodeCP input,
     const ExprVector& orderKeys,
     const OrderTypeVector& orderTypes) {
@@ -616,11 +738,15 @@ Scan::Scan(Key key)
     : Node(
           NodeType::kScan,
           ColumnVector{key.outputColumns},
-          PhysicalProperties{
-              .globalPartition = scanGlobalPartition(
-                  key.baseTable,
-                  key.outputColumns,
-                  key.groupedPartitionType)}),
+          leafProperties(
+              key.placed,
+              [&] {
+                return PhysicalProperties{
+                    .globalPartition = scanGlobalPartition(
+                        key.baseTable,
+                        key.outputColumns,
+                        key.groupedPartitionType)};
+              })),
       baseTable_(key.baseTable),
       scanHandle_(key.scanHandle),
       groupedPartitionType_(key.groupedPartitionType) {
@@ -646,7 +772,8 @@ size_t Scan::KeyHash::operator()(const Scan* node) const {
       node->baseTable(),
       node->outputColumns(),
       node->scanHandle(),
-      node->groupedPartitionType());
+      node->groupedPartitionType(),
+      node->placed());
 }
 
 Partitioning Scan::groupedPartition(
@@ -665,21 +792,24 @@ size_t Scan::KeyHash::operator()(const Key& key) const {
       key.baseTable,
       key.outputColumns,
       key.scanHandle,
-      key.groupedPartitionType);
+      key.groupedPartitionType,
+      key.placed);
 }
 
 bool Scan::KeyEq::operator()(const Scan* left, const Scan* right) const {
   return left->baseTable() == right->baseTable() &&
       left->outputColumns() == right->outputColumns() &&
       left->scanHandle() == right->scanHandle() &&
-      left->groupedPartitionType() == right->groupedPartitionType();
+      left->groupedPartitionType() == right->groupedPartitionType() &&
+      left->placed() == right->placed();
 }
 
 bool Scan::KeyEq::operator()(const Key& key, const Scan* node) const {
   return key.baseTable == node->baseTable() &&
       key.outputColumns == node->outputColumns() &&
       key.scanHandle == node->scanHandle() &&
-      key.groupedPartitionType == node->groupedPartitionType();
+      key.groupedPartitionType == node->groupedPartitionType() &&
+      key.placed == node->placed();
 }
 
 bool Scan::KeyEq::operator()(const Scan* node, const Key& key) const {
@@ -696,7 +826,10 @@ Filter::Filter(Key key)
     : Node(
           NodeType::kFilter,
           ColumnVector{key.input->outputColumns()},
-          passThroughProperties(key.input)),
+          derivedProperties(
+              {key.input},
+              [&] { return passThroughPhysical(key.input); },
+              [&] { return subsetRelational(key.input); })),
       input_(key.input),
       predicates_(std::move(key.predicates)) {
   VELOX_CHECK_NOT_NULL(input_);
@@ -734,18 +867,26 @@ Project::Project(Key key)
     : Node(
           NodeType::kProject,
           ColumnVector{key.outputColumns},
-          PhysicalProperties{
-              .globalPartition = projectPartition(
-                  key.input->physicalProperties().globalPartition,
-                  key.exprs,
-                  key.outputColumns),
-              .driverPartition = projectPartition(
-                  key.input->physicalProperties().driverPartition,
-                  key.exprs,
-                  key.outputColumns),
-              .local = retainedLocal(key.input, key.outputColumns),
-              .unique =
-                  projectUnique(key.input, key.exprs, key.outputColumns)}),
+          derivedProperties(
+              {key.input},
+              [&] {
+                return PhysicalProperties{
+                    .globalPartition = projectPartition(
+                        key.input->physicalProperties().globalPartition,
+                        key.exprs,
+                        key.outputColumns),
+                    .driverPartition = projectPartition(
+                        key.input->physicalProperties().driverPartition,
+                        key.exprs,
+                        key.outputColumns),
+                    .local = retainedLocal(key.input, key.outputColumns),
+                    .unique =
+                        projectUnique(key.input, key.exprs, key.outputColumns)};
+              },
+              [&] {
+                return projectRelational(
+                    key.input, key.exprs, key.outputColumns);
+              })),
       input_(key.input),
       exprs_(std::move(key.exprs)) {
   VELOX_CHECK_NOT_NULL(input_);
@@ -802,8 +943,13 @@ Limit::Limit(Key key)
     : Node(
           NodeType::kLimit,
           ColumnVector{key.input->outputColumns()},
-          key.partial ? passThroughProperties(key.input)
-                      : limitProperties(key.input)),
+          derivedProperties(
+              {key.input},
+              [&] {
+                return key.partial ? passThroughPhysical(key.input)
+                                   : limitPhysical(key.input);
+              },
+              [&] { return subsetRelational(key.input); })),
       input_(key.input),
       offset_(key.offset),
       count_(key.count),
@@ -892,7 +1038,12 @@ Sort::Sort(Key key)
     : Node(
           NodeType::kSort,
           ColumnVector{key.input->outputColumns()},
-          sortedProperties(key.input, key.orderKeys, key.orderTypes)),
+          derivedProperties(
+              {key.input},
+              [&] {
+                return sortedPhysical(key.input, key.orderKeys, key.orderTypes);
+              },
+              [&] { return sameRowsRelational(key.input); })),
       input_(key.input),
       orderKeys_(std::move(key.orderKeys)),
       orderTypes_(std::move(key.orderTypes)),
@@ -938,7 +1089,12 @@ TopN::TopN(Key key)
     : Node(
           NodeType::kTopN,
           ColumnVector{key.input->outputColumns()},
-          sortedProperties(key.input, key.orderKeys, key.orderTypes)),
+          derivedProperties(
+              {key.input},
+              [&] {
+                return sortedPhysical(key.input, key.orderKeys, key.orderTypes);
+              },
+              [&] { return subsetRelational(key.input); })),
       input_(key.input),
       orderKeys_(std::move(key.orderKeys)),
       orderTypes_(std::move(key.orderTypes)),
@@ -1000,7 +1156,7 @@ namespace {
 // `kSingle` / `kFinal` emit each group once per driver, and partitioned on the
 // grouping keys when the input is (the `kFinal`'s input is the exchange that
 // partitioned the partials).
-PhysicalProperties aggregateProperties(const Aggregate::Key& key) {
+PhysicalProperties aggregatePhysical(const Aggregate::Key& key) {
   // The grouping values are materialized as the leading output columns, aligned
   // one-to-one with `groupingKeys`; properties are expressed over those output
   // columns, not the (possibly computed) grouping-key expressions.
@@ -1035,6 +1191,21 @@ PhysicalProperties aggregateProperties(const Aggregate::Key& key) {
               complete ? PropertyScope::kGlobal : PropertyScope::kDriver}}};
 }
 
+// A single-step aggregation emits each group once, so it is unique on its
+// grouping columns. Without grouping keys it emits exactly one row.
+RelationalProperties aggregateRelational(const Aggregate::Key& key) {
+  VELOX_CHECK(
+      key.step == AggregateStep::kSingle,
+      "A partial or final aggregation requires placed inputs");
+  if (key.groupingKeys.empty()) {
+    return singleRowRelational();
+  }
+  return {
+      .unique = {PlanObjectSet::fromObjects(aggregateGroupingColumns(
+          key.outputColumns, key.groupingKeys.size()))},
+  };
+}
+
 } // namespace
 
 Partitioning Aggregate::globalPartition(
@@ -1051,7 +1222,10 @@ Aggregate::Aggregate(Key key)
     : Node(
           NodeType::kAggregate,
           ColumnVector{key.outputColumns},
-          aggregateProperties(key)),
+          derivedProperties(
+              {key.input},
+              [&] { return aggregatePhysical(key); },
+              [&] { return aggregateRelational(key); })),
       input_(key.input),
       groupingKeys_(std::move(key.groupingKeys)),
       aggregates_(std::move(key.aggregates)),
@@ -1127,13 +1301,18 @@ GroupId::GroupId(Key key)
     : Node(
           NodeType::kGroupId,
           ColumnVector{key.outputColumns},
-          PhysicalProperties{
-              .globalPartition = retainedPartition(
-                  key.input->physicalProperties().globalPartition,
-                  key.outputColumns),
-              .driverPartition = retainedPartition(
-                  key.input->physicalProperties().driverPartition,
-                  key.outputColumns)}),
+          derivedProperties(
+              {key.input},
+              [&] {
+                return PhysicalProperties{
+                    .globalPartition = retainedPartition(
+                        key.input->physicalProperties().globalPartition,
+                        key.outputColumns),
+                    .driverPartition = retainedPartition(
+                        key.input->physicalProperties().driverPartition,
+                        key.outputColumns)};
+              },
+              [] { return RelationalProperties{}; })),
       input_(key.input),
       groupingKeys_(std::move(key.groupingKeys)),
       aggregationInputs_(std::move(key.aggregationInputs)),
@@ -1227,7 +1406,10 @@ MarkDistinct::MarkDistinct(Key key)
     : Node(
           NodeType::kMarkDistinct,
           ColumnVector{key.outputColumns},
-          passThroughProperties(key.input)),
+          derivedProperties(
+              {key.input},
+              [&] { return passThroughPhysical(key.input); },
+              [&] { return sameRowsRelational(key.input); })),
       input_(key.input),
       markers_(std::move(key.markers)),
       distinctKeys_(std::move(key.distinctKeys)),
@@ -1297,7 +1479,13 @@ Values::Values(Key key)
     : Node(
           NodeType::kValues,
           ColumnVector{key.outputColumns},
-          {.globalPartition = Partitioning::gather(PropertyScope::kGlobal)}),
+          leafProperties(
+              key.placed,
+              [&] {
+                return PhysicalProperties{
+                    .globalPartition =
+                        Partitioning::gather(PropertyScope::kGlobal)};
+              })),
       source_(key.source),
       rows_(key.rows),
       channels_(std::move(key.channels)) {
@@ -1361,23 +1549,29 @@ bool Values::isSingleRowNoColumns(NodeCP node) {
 
 size_t Values::KeyHash::operator()(const Values* node) const {
   return hashOf(
-      node->source(), node->rows(), node->outputColumns(), node->channels());
+      node->source(),
+      node->rows(),
+      node->outputColumns(),
+      node->channels(),
+      node->placed());
 }
 
 size_t Values::KeyHash::operator()(const Key& key) const {
-  return hashOf(key.source, key.rows, key.outputColumns, key.channels);
+  return hashOf(
+      key.source, key.rows, key.outputColumns, key.channels, key.placed);
 }
 
 bool Values::KeyEq::operator()(const Values* left, const Values* right) const {
   return left->source() == right->source() && left->rows() == right->rows() &&
       left->outputColumns() == right->outputColumns() &&
-      left->channels() == right->channels();
+      left->channels() == right->channels() &&
+      left->placed() == right->placed();
 }
 
 bool Values::KeyEq::operator()(const Key& key, const Values* node) const {
   return key.source == node->source() && key.rows == node->rows() &&
       key.outputColumns == node->outputColumns() &&
-      key.channels == node->channels();
+      key.channels == node->channels() && key.placed == node->placed();
 }
 
 bool Values::KeyEq::operator()(const Values* node, const Key& key) const {
@@ -1408,14 +1602,19 @@ Unnest::Unnest(Key key)
     : Node(
           NodeType::kUnnest,
           ColumnVector{key.outputColumns},
-          PhysicalProperties{
-              .globalPartition = retainedPartition(
-                  key.input->physicalProperties().globalPartition,
-                  key.replicatedColumns),
-              .driverPartition = retainedPartition(
-                  key.input->physicalProperties().driverPartition,
-                  key.replicatedColumns),
-              .local = retainedLocal(key.input, key.replicatedColumns)}),
+          derivedProperties(
+              {key.input},
+              [&] {
+                return PhysicalProperties{
+                    .globalPartition = retainedPartition(
+                        key.input->physicalProperties().globalPartition,
+                        key.replicatedColumns),
+                    .driverPartition = retainedPartition(
+                        key.input->physicalProperties().driverPartition,
+                        key.replicatedColumns),
+                    .local = retainedLocal(key.input, key.replicatedColumns)};
+              },
+              [] { return RelationalProperties{}; })),
       input_(key.input),
       unnestExpressions_(std::move(key.unnestExpressions)),
       replicatedColumns_(std::move(key.replicatedColumns)),
@@ -1673,10 +1872,19 @@ void checkColumns(const UnionAll::Key& key) {
 
 // Checks the columns before deriving the partitioning, which maps them by
 // position.
-Partitioning unionGlobalPartition(const UnionAll::Key& key) {
+Node::Properties unionProperties(const UnionAll::Key& key) {
   checkColumns(key);
-  return unionGlobalPartition(
-      Node::globalPartitions(key.inputs), key.legColumns, key.outputColumns);
+  if (!placedInputs(key.inputs)) {
+    return RelationalProperties{};
+  }
+  return PhysicalProperties{
+      .globalPartition = unionGlobalPartition(
+          Node::globalPartitions(key.inputs),
+          key.legColumns,
+          key.outputColumns),
+      // UnionAll deals input batches round-robin across drivers, so no driver
+      // placement is guaranteed.
+      .driverPartition = Partitioning::arbitrary(PropertyScope::kDriver)};
 }
 
 } // namespace
@@ -1691,12 +1899,7 @@ UnionAll::UnionAll(Key key)
     : Node(
           NodeType::kUnionAll,
           ColumnVector{key.outputColumns},
-          PhysicalProperties{
-              .globalPartition = unionGlobalPartition(key),
-              // UnionAll deals input batches round-robin across drivers, so no
-              // driver placement is guaranteed.
-              .driverPartition =
-                  Partitioning::arbitrary(PropertyScope::kDriver)}),
+          unionProperties(key)),
       inputs_(std::move(key.inputs)),
       legColumns_(std::move(key.legColumns)) {}
 
@@ -1815,25 +2018,104 @@ Partitioning joinDriverPartitioning(const Join::Key& key, Builder& builder) {
   return result;
 }
 
+// The columns of 'keys' when every key is a column.
+std::optional<PlanObjectSet> columnSet(const ExprVector& keys) {
+  PlanObjectSet columns;
+  for (ExprCP key : keys) {
+    if (!key->is(PlanType::kColumnExpr)) {
+      return std::nullopt;
+    }
+    columns.add(key);
+  }
+  return columns;
+}
+
+// True when 'side' has at most one row for each value of 'keys'.
+bool uniqueOn(NodeCP side, const ExprVector& keys) {
+  const std::optional<PlanObjectSet> columns = columnSet(keys);
+  return columns.has_value() &&
+      std::ranges::any_of(
+             side->relationalProperties().unique,
+             [&](const PlanObjectSet& unique) {
+               return unique.isSubset(*columns);
+             });
+}
+
+// A join emits each row of a side at most once when it matches that row with
+// at most one row of the other side, or emits only rows of that side. That
+// side's unique keys then hold for the output, re-expressed on the output
+// columns.
+RelationalProperties joinRelational(const Join::Key& key) {
+  ExprVector sources;
+  for (ColumnCP source : key.effectiveSourceColumns()) {
+    sources.push_back(source);
+  }
+  RelationalProperties result;
+  const auto keepUniqueOf = [&](NodeCP side) {
+    for (PlanObjectSet& unique : remapKeySets(
+             side->relationalProperties().unique, sources, key.outputColumns)) {
+      result.unique.push_back(std::move(unique));
+    }
+  };
+  switch (key.joinType) {
+    case velox::core::JoinType::kInner:
+      if (uniqueOn(key.right, key.rightKeys)) {
+        keepUniqueOf(key.left);
+      }
+      if (uniqueOn(key.left, key.leftKeys)) {
+        keepUniqueOf(key.right);
+      }
+      break;
+    case velox::core::JoinType::kLeft:
+      if (uniqueOn(key.right, key.rightKeys)) {
+        keepUniqueOf(key.left);
+      }
+      break;
+    case velox::core::JoinType::kRight:
+      if (uniqueOn(key.left, key.leftKeys)) {
+        keepUniqueOf(key.right);
+      }
+      break;
+    case velox::core::JoinType::kLeftSemiFilter:
+    case velox::core::JoinType::kLeftSemiProject:
+    case velox::core::JoinType::kAnti:
+      keepUniqueOf(key.left);
+      break;
+    case velox::core::JoinType::kRightSemiFilter:
+    case velox::core::JoinType::kRightSemiProject:
+      keepUniqueOf(key.right);
+      break;
+    default:
+      break;
+  }
+  return result;
+}
+
 } // namespace
 
 Join::Join(Key key, Builder& builder)
     : Node(
           NodeType::kJoin,
           ColumnVector{key.outputColumns},
-          PhysicalProperties{
-              .globalPartition = outputPartitioning(
-                  key.joinType,
-                  key.left->physicalProperties().globalPartition,
-                  key.right->physicalProperties().globalPartition,
-                  key.leftKeys,
-                  key.rightKeys,
-                  PlanObjectSet::fromObjects(key.outputColumns),
-                  key.outputColumns,
-                  key.effectiveSourceColumns(),
-                  builder),
-              .driverPartition = joinDriverPartitioning(key, builder),
-              .local = joinLocal(key.joinType, key.left, key.outputColumns)}),
+          derivedProperties(
+              {key.left, key.right},
+              [&] {
+                return PhysicalProperties{
+                    .globalPartition = outputPartitioning(
+                        key.joinType,
+                        key.left->physicalProperties().globalPartition,
+                        key.right->physicalProperties().globalPartition,
+                        key.leftKeys,
+                        key.rightKeys,
+                        PlanObjectSet::fromObjects(key.outputColumns),
+                        key.outputColumns,
+                        key.effectiveSourceColumns(),
+                        builder),
+                    .driverPartition = joinDriverPartitioning(key, builder),
+                    .local =
+                        joinLocal(key.joinType, key.left, key.outputColumns)};
+              },
+              [&] { return joinRelational(key); })),
       inputs_{key.left, key.right},
       joinType_(key.joinType),
       leftKeys_(std::move(key.leftKeys)),
@@ -1940,13 +2222,18 @@ IndexLookupJoin::IndexLookupJoin(Key key)
     : Node(
           NodeType::kIndexLookupJoin,
           ColumnVector{key.outputColumns},
-          PhysicalProperties{
-              .globalPartition = retainedPartition(
-                  key.probe->physicalProperties().globalPartition,
-                  key.outputColumns),
-              .driverPartition = retainedPartition(
-                  key.probe->physicalProperties().driverPartition,
-                  key.outputColumns)}),
+          derivedProperties(
+              {key.probe},
+              [&] {
+                return PhysicalProperties{
+                    .globalPartition = retainedPartition(
+                        key.probe->physicalProperties().globalPartition,
+                        key.outputColumns),
+                    .driverPartition = retainedPartition(
+                        key.probe->physicalProperties().driverPartition,
+                        key.outputColumns)};
+              },
+              [] { return RelationalProperties{}; })),
       probe_(key.probe),
       lookupTable_(key.lookupTable),
       index_(key.index),
@@ -2394,7 +2681,10 @@ Inference::Inference(Key key)
     : Node(
           NodeType::kInference,
           ColumnVector{key.outputColumns},
-          rankedProperties(key.input, /*partitionKeys=*/{})),
+          derivedProperties(
+              {key.input},
+              [&] { return rankedPhysical(key.input, /*partitionKeys=*/{}); },
+              [] { return RelationalProperties{}; })),
       input_(key.input),
       call_(key.call),
       result_(key.result) {
@@ -2441,7 +2731,10 @@ Window::Window(Key key)
     : Node(
           NodeType::kWindow,
           ColumnVector{key.outputColumns},
-          windowProperties(key.input, key.partitionKeys)),
+          derivedProperties(
+              {key.input},
+              [&] { return windowPhysical(key.input, key.partitionKeys); },
+              [&] { return sameRowsRelational(key.input); })),
       input_(key.input),
       functions_(std::move(key.functions)),
       partitionKeys_(std::move(key.partitionKeys)),
@@ -2535,7 +2828,13 @@ RowNumber::RowNumber(Key key)
     : Node(
           NodeType::kRowNumber,
           ColumnVector{key.outputColumns},
-          rankedProperties(key.input, key.partitionKeys)),
+          derivedProperties(
+              {key.input},
+              [&] { return rankedPhysical(key.input, key.partitionKeys); },
+              [&] {
+                return key.limit.has_value() ? subsetRelational(key.input)
+                                             : sameRowsRelational(key.input);
+              })),
       input_(key.input),
       partitionKeys_(std::move(key.partitionKeys)),
       limit_(key.limit),
@@ -2598,7 +2897,10 @@ TopNRowNumber::TopNRowNumber(Key key)
     : Node(
           NodeType::kTopNRowNumber,
           ColumnVector{key.outputColumns},
-          rankedProperties(key.input, key.partitionKeys)),
+          derivedProperties(
+              {key.input},
+              [&] { return rankedPhysical(key.input, key.partitionKeys); },
+              [&] { return subsetRelational(key.input); })),
       input_(key.input),
       rankFunction_(key.rankFunction),
       partitionKeys_(std::move(key.partitionKeys)),
@@ -2680,7 +2982,13 @@ Partitioning Apply::globalPartition(
 }
 
 Apply::Apply(Key key)
-    : Node(NodeType::kApply, ColumnVector{key.outputColumns}, {}),
+    : Node(
+          NodeType::kApply,
+          ColumnVector{key.outputColumns},
+          derivedProperties(
+              {key.input, key.body},
+              [] { return PhysicalProperties{}; },
+              [] { return RelationalProperties{}; })),
       inputs_{key.input, key.body},
       correlationColumns_(std::move(key.correlationColumns)),
       kind_(key.kind),
@@ -2927,15 +3235,24 @@ AssignUniqueId::AssignUniqueId(Key key)
     : Node(
           NodeType::kAssignUniqueId,
           withIdColumn(key.input->outputColumns(), key.idColumn),
-          PhysicalProperties{
-              .globalPartition = inheritedPartition(
-                  key.input->physicalProperties().globalPartition),
-              .driverPartition = inheritedPartition(
-                  key.input->physicalProperties().driverPartition),
-              .local = groupedLocal(key.idColumn),
-              .unique = withGlobalUniqueKey(
-                  key.input->physicalProperties().unique,
-                  key.idColumn)}),
+          derivedProperties(
+              {key.input},
+              [&] {
+                return PhysicalProperties{
+                    .globalPartition = inheritedPartition(
+                        key.input->physicalProperties().globalPartition),
+                    .driverPartition = inheritedPartition(
+                        key.input->physicalProperties().driverPartition),
+                    .local = groupedLocal(key.idColumn),
+                    .unique = withGlobalUniqueKey(
+                        key.input->physicalProperties().unique, key.idColumn)};
+              },
+              [&] {
+                RelationalProperties properties = sameRowsRelational(key.input);
+                properties.unique.push_back(
+                    PlanObjectSet::single(key.idColumn));
+                return properties;
+              })),
       input_(key.input),
       idColumn_(key.idColumn) {
   VELOX_CHECK_NOT_NULL(input_);
@@ -2984,19 +3301,23 @@ EnforceSingleRow::EnforceSingleRow(Key key)
     : Node(
           NodeType::kEnforceSingleRow,
           ColumnVector{key.outputColumns},
-          PhysicalProperties{
-              .globalPartition = projectPartition(
-                  key.input->physicalProperties().globalPartition,
-                  ExprVector{
-                      key.input->outputColumns().begin(),
-                      key.input->outputColumns().end()},
-                  key.outputColumns),
-              .driverPartition = projectPartition(
-                  key.input->physicalProperties().driverPartition,
-                  ExprVector{
-                      key.input->outputColumns().begin(),
-                      key.input->outputColumns().end()},
-                  key.outputColumns)}),
+          derivedProperties(
+              {key.input},
+              [&] {
+                const ExprVector inputColumns{
+                    key.input->outputColumns().begin(),
+                    key.input->outputColumns().end()};
+                return PhysicalProperties{
+                    .globalPartition = projectPartition(
+                        key.input->physicalProperties().globalPartition,
+                        inputColumns,
+                        key.outputColumns),
+                    .driverPartition = projectPartition(
+                        key.input->physicalProperties().driverPartition,
+                        inputColumns,
+                        key.outputColumns)};
+              },
+              [] { return singleRowRelational(); })),
       input_(key.input) {
   VELOX_CHECK_NOT_NULL(input_);
   VELOX_CHECK_EQ(outputColumns().size(), input_->outputColumns().size());
@@ -3046,7 +3367,17 @@ EnforceDistinct::EnforceDistinct(Key key)
     : Node(
           NodeType::kEnforceDistinct,
           ColumnVector{key.input->outputColumns()},
-          passThroughProperties(key.input)),
+          derivedProperties(
+              {key.input},
+              [&] { return passThroughPhysical(key.input); },
+              [&] {
+                RelationalProperties properties = sameRowsRelational(key.input);
+                if (std::optional<PlanObjectSet> distinctColumns =
+                        columnSet(key.distinctKeys)) {
+                  properties.unique.push_back(std::move(*distinctColumns));
+                }
+                return properties;
+              })),
       input_(key.input),
       distinctKeys_(std::move(key.distinctKeys)),
       errorMessage_(key.errorMessage) {
@@ -3098,21 +3429,24 @@ Exchange::Exchange(Key key)
     : Node(
           NodeType::kExchange,
           ColumnVector{key.input->outputColumns()},
-          key.partitioning.scope == PropertyScope::kGlobal
-              ? PhysicalProperties{
-                    .globalPartition = key.partitioning,
-                    .local = exchangeLocal(key.partitioning),
-                    .unique = uniqueAcrossExchange(
-                        key.input->physicalProperties().unique,
-                        key.partitioning)}
-              : PhysicalProperties{
-                    .globalPartition = key.input->physicalProperties()
-                                           .globalPartition.dropOrder(),
-                    .driverPartition = key.partitioning,
-                    .local = exchangeLocal(key.partitioning),
-                    .unique = uniqueAcrossExchange(
-                        key.input->physicalProperties().unique,
-                        key.partitioning)}),
+          placedProperties(
+              {key.input},
+              [&] {
+                const PhysicalProperties& input =
+                    key.input->physicalProperties();
+                return key.partitioning.scope == PropertyScope::kGlobal
+                ? PhysicalProperties{
+                      .globalPartition = key.partitioning,
+                      .local = exchangeLocal(key.partitioning),
+                      .unique = uniqueAcrossExchange(
+                          input.unique, key.partitioning)}
+                : PhysicalProperties{
+                      .globalPartition = input.globalPartition.dropOrder(),
+                      .driverPartition = key.partitioning,
+                      .local = exchangeLocal(key.partitioning),
+                      .unique = uniqueAcrossExchange(
+                          input.unique, key.partitioning)};
+              })),
       input_(key.input),
       partitioning_(std::move(key.partitioning)) {
   VELOX_CHECK_NOT_NULL(input_);
@@ -3201,7 +3535,10 @@ TableWrite::TableWrite(Key key)
     : Node(
           NodeType::kTableWrite,
           ColumnVector{Column::create("rows", Value(toType(velox::BIGINT())))},
-          {}),
+          derivedProperties(
+              {key.input},
+              [] { return PhysicalProperties{}; },
+              [] { return RelationalProperties{}; })),
       input_(key.input),
       table_(key.table),
       kind_(key.kind),
@@ -3332,7 +3669,12 @@ WorkingTable::WorkingTable(const Key& key)
     : Node(
           NodeType::kWorkingTable,
           ColumnVector{key.outputColumns},
-          {.globalPartition = readPartitioning(key)}),
+          leafProperties(
+              key.placed,
+              [&] {
+                return PhysicalProperties{
+                    .globalPartition = readPartitioning(key)};
+              })),
       name_(key.name),
       stateColumns_(key.stateColumns),
       readMode_(key.readMode),
@@ -3368,7 +3710,8 @@ size_t WorkingTable::KeyHash::operator()(const WorkingTable* node) const {
       node->outputColumns(),
       node->readMode(),
       node->partitioning().kind,
-      node->partitioning().keys);
+      node->partitioning().keys,
+      node->placed());
 }
 
 size_t WorkingTable::KeyHash::operator()(const Key& key) const {
@@ -3378,7 +3721,8 @@ size_t WorkingTable::KeyHash::operator()(const Key& key) const {
       key.outputColumns,
       key.readMode,
       key.partitioning.kind,
-      key.partitioning.keys);
+      key.partitioning.keys,
+      key.placed);
 }
 
 bool WorkingTable::KeyEq::operator()(
@@ -3388,7 +3732,8 @@ bool WorkingTable::KeyEq::operator()(
       left->stateColumns() == right->stateColumns() &&
       left->outputColumns() == right->outputColumns() &&
       left->readMode() == right->readMode() &&
-      left->partitioning() == right->partitioning();
+      left->partitioning() == right->partitioning() &&
+      left->placed() == right->placed();
 }
 
 bool WorkingTable::KeyEq::operator()(const Key& key, const WorkingTable* node)
@@ -3396,7 +3741,7 @@ bool WorkingTable::KeyEq::operator()(const Key& key, const WorkingTable* node)
   return key.name == node->name() && key.stateColumns == node->stateColumns() &&
       key.outputColumns == node->outputColumns() &&
       key.readMode == node->readMode() &&
-      key.partitioning == node->partitioning();
+      key.partitioning == node->partitioning() && key.placed == node->placed();
 }
 
 bool WorkingTable::KeyEq::operator()(const WorkingTable* node, const Key& key)
@@ -3532,16 +3877,25 @@ void checkColumns(const FixedPoint::Key& key) {
   }
 }
 
-// Checks the columns before deriving the partitioning, which maps them by
-// position.
 Partitioning fixedPointPartition(const FixedPoint::Key& key) {
-  checkColumns(key);
   return fixedPointPartition(
       key.anchor->physicalProperties().globalPartition,
       key.step->physicalProperties().globalPartition,
       key.sourceColumns,
       key.step->outputColumns(),
       key.outputColumns);
+}
+
+// Checks the columns before deriving the partitioning, which maps them by
+// position.
+Node::Properties fixedPointProperties(const FixedPoint::Key& key) {
+  checkColumns(key);
+  return derivedProperties(
+      {key.anchor, key.step, key.convergence},
+      [&] {
+        return PhysicalProperties{.globalPartition = fixedPointPartition(key)};
+      },
+      [] { return RelationalProperties{}; });
 }
 
 } // namespace
@@ -3561,7 +3915,7 @@ FixedPoint::FixedPoint(const Key& key)
     : Node(
           NodeType::kFixedPoint,
           ColumnVector{key.outputColumns},
-          {.globalPartition = fixedPointPartition(key)}),
+          fixedPointProperties(key)),
       inputs_{fixedPointInputs(key)},
       name_(key.name),
       sourceColumns_(key.sourceColumns),
@@ -3586,10 +3940,16 @@ FixedPoint::FixedPoint(const Key& key)
         1,
         "FixedPoint step must read its state through one WorkingTable");
   }
-  checkPlacedLikeState(
-      inputs_[0], sourceColumns_, outputColumns(), state, "anchor");
-  checkPlacedLikeState(
-      inputs_[1], inputs_[1]->outputColumns(), outputColumns(), state, "step");
+  if (placed()) {
+    checkPlacedLikeState(
+        inputs_[0], sourceColumns_, outputColumns(), state, "anchor");
+    checkPlacedLikeState(
+        inputs_[1],
+        inputs_[1]->outputColumns(),
+        outputColumns(),
+        state,
+        "step");
+  }
 
   if (convergence() != nullptr) {
     checkBranchReadsState(convergence(), name_, outputColumns(), "convergence");
@@ -3724,7 +4084,10 @@ Partitioning Repeat::globalPartition(
 }
 
 Repeat::Repeat(const Key& key)
-    : Node(NodeType::kRepeat, ColumnVector{key.outputColumns}, {}),
+    : Node(
+          NodeType::kRepeat,
+          ColumnVector{key.outputColumns},
+          RelationalProperties{}),
       inputs_(repeatInputs(key)),
       startKeys_(key.startKeys),
       hopSourceKeys_(key.hopSourceKeys),

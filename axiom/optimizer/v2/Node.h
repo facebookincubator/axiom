@@ -20,6 +20,7 @@
 #include <functional>
 #include <optional>
 #include <span>
+#include <variant>
 #include <vector>
 
 #include <folly/CppAttributes.h>
@@ -28,6 +29,7 @@
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/v2/PhysicalProperties.h"
+#include "axiom/optimizer/v2/RelationalProperties.h"
 #include "velox/core/PlanNode.h"
 
 /// Tree-IR for the optimizer.
@@ -114,11 +116,18 @@ using RequiredStates = QGF14FastMap<Name, StateRead>;
 /// producer. The IR never binds by column name; names on `Column::name_` /
 /// `alias_` exist only as display labels for EXPLAIN.
 ///
-/// A node's `PhysicalProperties`, by contrast, always reference this node's own
-/// output columns — an invariant each derivation upholds and the base
-/// constructor verifies (`checkReferencesColumns`). Velox's column-key
+/// A node's properties, by contrast, always reference this node's own output
+/// columns — an invariant each derivation upholds and the base constructor
+/// verifies (`checkReferencesColumns`). Velox's column-key
 /// requirement for aggregation / ordering / windowing / exchange is a separate,
 /// emit-time concern that `PrecomputeProjections` materializes.
+///
+/// A node carries one kind of properties. Before PlanPhysical a node computes a
+/// relation, and carries `RelationalProperties`. PlanPhysical rebuilds every
+/// node it places, leaves included, and those nodes are operators in a
+/// distributed plan that carry `PhysicalProperties`. A leaf's `Key` says
+/// whether PlanPhysical placed it; every other node is placed exactly when its
+/// inputs are.
 ///
 /// Each node kind enforces its own column-identity contract: outputs contain no
 /// duplicate columns, and each kind extends or transforms its input schema in a
@@ -162,14 +171,23 @@ class Node : public PlanObject {
   /// Returns the entries of 'columns' this node produces, in their order.
   ColumnVector outputsAmong(const ColumnVector& columns) const;
 
-  /// Physical properties of this node's output: per-driver local ordering /
-  /// grouping, distribution, and relation-level facts. Derived from the inputs
-  /// at construction and immutable. Fields stay unset until decided — e.g.
-  /// distribution is unspecified until an exchange is placed, which mints a new
-  /// node rather than mutating this one.
-  const PhysicalProperties& physicalProperties() const {
-    return physicalProperties_;
+  /// The one kind of properties a node carries.
+  using Properties = std::variant<RelationalProperties, PhysicalProperties>;
+
+  /// True when PlanPhysical placed this node: it carries
+  /// `physicalProperties()`. Otherwise it carries `relationalProperties()`.
+  bool placed() const {
+    return std::holds_alternative<PhysicalProperties>(properties_);
   }
+
+  /// Physical properties of this node's output: per-driver local ordering /
+  /// grouping, distribution, and uniqueness at global or driver scope. Derived
+  /// from the inputs at construction and immutable. Requires `placed()`.
+  const PhysicalProperties& physicalProperties() const;
+
+  /// Facts about the relation this node computes, derived from the inputs at
+  /// construction and immutable. Requires `!placed()`.
+  const RelationalProperties& relationalProperties() const;
 
   /// Inputs in dependency order; empty for leaves. Returns a view into
   /// node-owned storage; callers must not retain it past the node's
@@ -225,17 +243,7 @@ class Node : public PlanObject {
   std::string toString() const override;
 
  protected:
-  Node(
-      NodeType nodeType,
-      ColumnVector outputColumns,
-      PhysicalProperties properties)
-      : PlanObject(PlanType::kV2Node),
-        nodeType_(nodeType),
-        outputColumns_(std::move(outputColumns)),
-        physicalProperties_(std::move(properties)) {
-    physicalProperties_.checkReferencesColumns(
-        PlanObjectSet::fromObjects(outputColumns_));
-  }
+  Node(NodeType nodeType, ColumnVector outputColumns, Properties properties);
 
   // Unions the inputs' entries, rejecting two reads of one state that disagree
   // on columns. `WorkingTable` requires the state it reads and `FixedPoint`
@@ -245,7 +253,7 @@ class Node : public PlanObject {
  private:
   const NodeType nodeType_;
   const ColumnVector outputColumns_;
-  const PhysicalProperties physicalProperties_;
+  const Properties properties_;
   // Set by `primeRequiredStates()`. Mutable because that runs after
   // construction, from `Builder::make` on an already-const node; safe under the
   // single-threaded planning assumption (see `QueryGraphContext`). A pure
@@ -282,6 +290,10 @@ class Scan : public Node {
     /// ungrouped read of the same table are different plans with different
     /// execution properties.
     const connector::PartitionType* groupedPartitionType{nullptr};
+
+    /// True when PlanPhysical placed this scan (see `Node::placed()`). Part of
+    /// the scan's identity.
+    bool placed{false};
   };
 
   /// Transparent hasher for interning `Scan`s by identity.
@@ -1067,6 +1079,9 @@ class Values : public Node {
     /// output column — Builder::makeValues fills identity for the emit-all
     /// case.
     QGVector<velox::column_index_t> channels;
+    /// True when PlanPhysical placed this node (see `Node::placed()`). Part of
+    /// its identity.
+    bool placed{false};
   };
 
   /// Transparent hasher for interning `Values`s by identity.
@@ -2574,6 +2589,9 @@ class WorkingTable : public Node {
     /// when the loop runs on one task, hash-partitioned in a loop partitioned
     /// on its state's columns, unspecified otherwise. Set by physical planning.
     Partitioning partitioning;
+    /// True when PlanPhysical placed this read (see `Node::placed()`). Part of
+    /// its identity.
+    bool placed{false};
   };
 
   /// Transparent hasher for interning `WorkingTable`s by identity.

@@ -18,6 +18,7 @@ add_executable(
   FilterSimplificationTest.cpp
   JoinHypergraphTest.cpp
   NodePrinterTest.cpp
+  RelationalPropertiesTest.cpp
   RelationSetTest.cpp
   TpchPlanTest.cpp
 )

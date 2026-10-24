@@ -96,7 +96,8 @@ class GroupedScanRewriter : public NodeRewriter<> {
         {.baseTable = node->baseTable(),
          .outputColumns = node->outputColumns(),
          .scanHandle = node->scanHandle(),
-         .groupedPartitionType = partitionType});
+         .groupedPartitionType = partitionType,
+         .placed = true});
   }
 
  private:

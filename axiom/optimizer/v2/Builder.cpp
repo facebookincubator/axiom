@@ -381,6 +381,9 @@ NodeCP withImpliedEqualities(
 
 void Builder::checkGlobalPartition([[maybe_unused]] NodeCP node) {
 #ifndef NDEBUG
+  if (!node->placed()) {
+    return;
+  }
   VELOX_CHECK(
       node->globalPartition(Node::globalPartitions(node->inputs()), *this) ==
           node->physicalProperties().globalPartition,

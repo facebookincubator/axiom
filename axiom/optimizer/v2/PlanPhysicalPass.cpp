@@ -858,17 +858,33 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     VELOX_UNREACHABLE("Repeat is lowered before physical planning");
   }
 
+  NodeCP rewriteScan(const Scan* node, NoContext& /*context*/) override {
+    return builder().make<Scan>(
+        {.baseTable = node->baseTable(),
+         .outputColumns = node->outputColumns(),
+         .scanHandle = node->scanHandle(),
+         .groupedPartitionType = node->groupedPartitionType(),
+         .placed = true});
+  }
+
+  NodeCP rewriteValues(const Values* node, NoContext& /*context*/) override {
+    return builder().make<Values>(
+        {.source = node->source(),
+         .rows = node->rows(),
+         .outputColumns = node->outputColumns(),
+         .channels = node->channels(),
+         .placed = true});
+  }
+
   NodeCP rewriteWorkingTable(const WorkingTable* node, NoContext& /*context*/)
       override {
-    if (node->partitioning() == statePartitioning_) {
-      return node;
-    }
     return builder().make<WorkingTable>(
         {.name = node->name(),
          .stateColumns = node->stateColumns(),
          .outputColumns = node->outputColumns(),
          .readMode = node->readMode(),
-         .partitioning = statePartitioning_});
+         .partitioning = statePartitioning_,
+         .placed = true});
   }
 
   // With several workers, the loop is one partitioned loop when it cannot run
