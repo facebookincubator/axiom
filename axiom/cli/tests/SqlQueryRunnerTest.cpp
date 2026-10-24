@@ -29,6 +29,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <stdexcept>
+#include "axiom/cli/Connectors.h"
 #include "axiom/cli/QueryIdGenerator.h"
 #include "axiom/cli/common/ComponentMetrics.h"
 #include "axiom/cli/common/QueryRuntimeStats.h"
@@ -112,6 +113,114 @@ class SqlQueryRunnerTest : public SqlQueryRunnerTestBase {
         expectedDefault);
   }
 };
+
+// Runners with the same catalog name resolve their own metadata and execution
+// connector.
+TEST_F(SqlQueryRunnerTest, independentCatalogs) {
+  std::shared_ptr<facebook::axiom::connector::TestConnector> firstConnector;
+  auto first = makeRunner([&](facebook::axiom::Connectors& connectors) {
+    firstConnector =
+        std::dynamic_pointer_cast<facebook::axiom::connector::TestConnector>(
+            connectors.registerTestConnector("test"));
+    connectors.registerTestConnector("first_only");
+    return std::make_pair(std::string{"test"}, kDefaultSchema);
+  });
+  ASSERT_NE(firstConnector, nullptr);
+  firstConnector->addTable("first_table", ROW("value", BIGINT()))
+      ->addData(makeRowVector({makeFlatVector<int64_t>({11})}));
+
+  std::shared_ptr<facebook::axiom::connector::TestConnector> secondConnector;
+  auto second = makeRunner([&](facebook::axiom::Connectors& connectors) {
+    secondConnector =
+        std::dynamic_pointer_cast<facebook::axiom::connector::TestConnector>(
+            connectors.registerTestConnector("test"));
+    connectors.registerTestConnector("second_only");
+    return std::make_pair(std::string{"test"}, kDefaultSchema);
+  });
+  ASSERT_NE(secondConnector, nullptr);
+  secondConnector->addTable("second_table", ROW("value", BIGINT()))
+      ->addData(makeRowVector({makeFlatVector<int64_t>({22})}));
+
+  test::assertEqualVectors(
+      first->run("SELECT value FROM first_table", {}).results.at(0),
+      makeRowVector({makeFlatVector<int64_t>({11})}));
+  test::assertEqualVectors(
+      second->run("SELECT value FROM second_table", {}).results.at(0),
+      makeRowVector({makeFlatVector<int64_t>({22})}));
+
+  test::assertEqualVectors(
+      first
+          ->run(
+              "SELECT catalog_name FROM "
+              "first_only.information_schema.schemata "
+              "WHERE schema_name = 'information_schema'",
+              {})
+          .results.at(0),
+      makeRowVector({makeFlatVector<std::string>({"first_only"})}));
+  test::assertEqualVectors(
+      second
+          ->run(
+              "SELECT catalog_name FROM "
+              "second_only.information_schema.schemata "
+              "WHERE schema_name = 'information_schema'",
+              {})
+          .results.at(0),
+      makeRowVector({makeFlatVector<std::string>({"second_only"})}));
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      second->run(
+          "SELECT catalog_name FROM "
+          "first_only.information_schema.schemata",
+          {}),
+      "Table not found: first_only.information_schema.schemata");
+  first.reset();
+  test::assertEqualVectors(
+      second->run("SELECT value FROM second_table", {}).results.at(0),
+      makeRowVector({makeFlatVector<int64_t>({22})}));
+}
+
+// Catalogs remain usable after the temporary helper that registered them is
+// destroyed, including the system connector's session-properties provider.
+TEST_F(SqlQueryRunnerTest, systemCatalogLifetime) {
+  test::assertEqualVectors(
+      runner_
+          ->run(
+              "SELECT count(*) > 0 FROM system.metadata.session_properties", {})
+          .results.at(0),
+      makeRowVector({makeFlatVector<bool>({true})}));
+}
+
+// Join sampling executes both sample scans through the runner-owned connector
+// registry.
+TEST_F(SqlQueryRunnerTest, joinSampling) {
+  useV2_ = false;
+  runner_ = makeRunner("sampled");
+  testConnector_->addTable("t", ROW("a", BIGINT()))
+      ->addData(makeRowVector({makeFlatVector<int64_t>({1, 1, 2})}));
+  testConnector_->addTable("u", ROW("a", BIGINT()))
+      ->addData(makeRowVector({makeFlatVector<int64_t>({1, 2, 2})}));
+
+  runner_->run("SET SESSION optimizer.sample_joins = true", {});
+  facebook::axiom::QueryRuntimeStats stats;
+  SqlQueryRunner::RunOptions options;
+  options.componentStatWriterProvider = [&](std::string_view componentId) {
+    return stats.writerFor(componentId);
+  };
+
+  test::assertEqualVectors(
+      runner_->run("SELECT count(*) FROM t JOIN u ON t.a = u.a", options)
+          .results.at(0),
+      makeRowVector({makeFlatVector<int64_t>({4})}));
+
+  const auto metrics =
+      stats.toMap(facebook::axiom::QueryRuntimeStats::KeySeparator::kSlash);
+  const auto getSplits = metrics.find(
+      facebook::axiom::QueryRuntimeStats::qualifiedKey(
+          facebook::axiom::ComponentMetrics::kRunner,
+          runner::LocalRunner::kGetSplitsCount,
+          facebook::axiom::QueryRuntimeStats::KeySeparator::kSlash));
+  ASSERT_NE(getSplits, metrics.end());
+  EXPECT_GE(getSplits->second.count, 3);
+}
 
 TEST_F(SqlQueryRunnerTest, runSingleStatement) {
   {
@@ -1400,9 +1509,7 @@ TEST_F(SqlQueryRunnerTest, connectorProperties) {
 
 TEST_F(SqlQueryRunnerTest, addColumn) {
   auto findTable = [&]() {
-    auto metadata = facebook::axiom::connector::ConnectorMetadataRegistry::get(
-        testConnector_->connectorId());
-    return metadata->findTable({"default", "t"});
+    return testConnector_->metadata()->findTable({"default", "t"});
   };
 
   // Basic add followed by schema verification.

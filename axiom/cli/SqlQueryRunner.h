@@ -24,9 +24,11 @@
 #include <chrono>
 #include <exception>
 #include <functional>
+#include <memory>
 #include <vector>
 #include "axiom/common/ConfigRegistry.h"
 #include "axiom/common/SessionConfig.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/ToVelox.h"
@@ -35,6 +37,7 @@
 #include "axiom/runner/QueryProgress.h"
 #include "axiom/sql/presto/SqlStatement.h"
 #include "velox/common/file/TokenProvider.h"
+#include "velox/connectors/ConnectorRegistry.h"
 
 namespace axiom::sql {
 
@@ -184,6 +187,10 @@ using QueryCompletionCallback = std::function<void(const QueryCompletionInfo&)>;
 /// Executes SQL queries.
 class SqlQueryRunner {
  public:
+  /// Registers catalogs and returns the default catalog and schema.
+  using ConnectorInitializer =
+      std::function<std::pair<std::string, std::string>()>;
+
   /// Prefix for optimizer session properties (e.g., "optimizer.sample_joins").
   static constexpr const char* kOptimizerPrefix = "optimizer";
 
@@ -197,27 +204,26 @@ class SqlQueryRunner {
   /// "execution.session_timezone").
   static constexpr const char* kExecutionPrefix = "execution";
 
-  /// Constructs the runner with the given session user identity. The user
-  /// must be non-empty; it is exposed by the SQL `CURRENT_USER` function and
-  /// used as the default table owner in DDL.
-  ///
-  /// `progressScheduler` (not owned, must outlive this runner) drives progress
-  /// polling for queries that set RunOptions::onProgress. If null, such a query
-  /// fails loudly rather than running without the progress it asked for.
-  /// @param useOptimizerV2 Routes all queries through the v2 optimizer, the
-  /// default. EXPLAIN (type graph) is supported only under v1, because it
-  /// inspects optimizer internals the v2 pipeline does not expose.
-  explicit SqlQueryRunner(
+  /// Constructs a runner that resolves catalogs through the given registries.
+  /// The runner retains both registries and installs the connector registry on
+  /// every Velox query context it creates.
+  /// @param user Non-empty SQL `CURRENT_USER` value and default DDL owner.
+  /// @param progressScheduler Non-owned scheduler for progress callbacks; it
+  /// must outlive this runner. If null, a query that requests progress
+  /// reporting fails.
+  /// @param useOptimizerV2 Routes all queries through the v2 optimizer.
+  /// `EXPLAIN (TYPE GRAPH)` is supported only under v1.
+  /// @param connectorRegistry Non-null execution connector registry.
+  /// @param metadataRegistry Non-null catalog metadata registry.
+  SqlQueryRunner(
       std::string user,
-      folly::FunctionScheduler* progressScheduler = nullptr,
-      bool useOptimizerV2 = true)
-      : executor_{std::make_shared<folly::CPUThreadPoolExecutor>(
-            folly::available_concurrency() * 2)},
-        user_{std::move(user)},
-        useOptimizerV2_{useOptimizerV2},
-        progressScheduler_{progressScheduler} {
-    VELOX_USER_CHECK(!user_.empty(), "SqlQueryRunner user must be non-empty");
-  }
+      folly::FunctionScheduler* progressScheduler,
+      bool useOptimizerV2,
+      std::shared_ptr<facebook::velox::connector::ConnectorRegistry::Registry>
+          connectorRegistry,
+      std::shared_ptr<
+          facebook::axiom::connector::ConnectorMetadataRegistry::Registry>
+          metadataRegistry);
 
   virtual ~SqlQueryRunner() = default;
 
@@ -239,8 +245,7 @@ class SqlQueryRunner {
   /// execute, and a query ID generator (defaults to QueryIdGenerator if not
   /// provided). Call once before running queries.
   void initialize(
-      const std::function<std::pair<std::string, std::string>()>&
-          initializeConnectors,
+      const ConnectorInitializer& initializeConnectors,
       PermissionCheck permissionCheck = {},
       LogicalPlanCheck logicalPlanCheck = {},
       std::function<std::string()> queryIdGenerator = {});
@@ -497,6 +502,13 @@ class SqlQueryRunner {
     return *sessionConfig_;
   }
 
+  /// Returns the function semantics used for planning. Valid after
+  /// initialize().
+  const std::shared_ptr<const facebook::axiom::optimizer::FunctionRegistry>&
+  functionRegistry() const {
+    return functionRegistry_;
+  }
+
   facebook::axiom::connector::TablePtr createTable(
       const facebook::axiom::connector::ConnectorContextPtr& context,
       const presto::CreateTableStatement& statement,
@@ -564,6 +576,8 @@ class SqlQueryRunner {
       const presto::CreateTableAsSelectStatement& ctas,
       bool explain);
 
+  // Creates a query context over this runner's execution state. The context
+  // must not outlive the runner.
   std::shared_ptr<facebook::velox::core::QueryCtx> newQuery(
       const RunOptions& options);
 
@@ -768,6 +782,16 @@ class SqlQueryRunner {
   // Progress-polling scheduler (see constructor). Started idempotently before
   // each progress-reporting query.
   folly::FunctionScheduler* const progressScheduler_;
+
+  // Declared before the metadata registry: catalog metadata holds pointers
+  // into its connector, so the metadata registry must be destroyed first.
+  const std::shared_ptr<facebook::velox::connector::ConnectorRegistry::Registry>
+      connectorRegistry_;
+
+  // Catalog metadata used by ConnectorContext.
+  const std::shared_ptr<
+      facebook::axiom::connector::ConnectorMetadataRegistry::Registry>
+      metadataRegistry_;
 };
 
 } // namespace axiom::sql

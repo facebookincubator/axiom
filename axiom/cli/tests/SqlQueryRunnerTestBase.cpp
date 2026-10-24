@@ -16,6 +16,7 @@
 
 #include "axiom/cli/tests/SqlQueryRunnerTestBase.h"
 
+#include "axiom/cli/Connectors.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "velox/connectors/ConnectorRegistry.h"
 
@@ -34,30 +35,17 @@ void SqlQueryRunnerTestBase::SetUp() {
   runner_ = makeRunner();
 }
 
-void SqlQueryRunnerTestBase::TearDown() {
-  runner_.reset();
-  for (const auto& id : connectorIds_) {
-    facebook::axiom::connector::ConnectorMetadataRegistry::global().erase(id);
-    connector::ConnectorRegistry::global().erase(id);
-  }
-}
-
 std::unique_ptr<SqlQueryRunner> SqlQueryRunnerTestBase::makeRunner(
     const std::string& connectorId,
     std::function<std::string()> queryIdGenerator,
     PermissionCheck permissionCheck,
     LogicalPlanCheck logicalPlanCheck) {
   return makeRunner(
-      [&]() {
-        testConnector_ =
-            std::make_shared<facebook::axiom::connector::TestConnector>(
-                connectorId);
-        connector::ConnectorRegistry::global().insert(
-            testConnector_->connectorId(), testConnector_);
-        facebook::axiom::connector::ConnectorMetadataRegistry::global().insert(
-            testConnector_->connectorId(), testConnector_->metadata());
-
-        connectorIds_.emplace_back(testConnector_->connectorId());
+      [&](facebook::axiom::Connectors& connectors) {
+        testConnector_ = std::dynamic_pointer_cast<
+            facebook::axiom::connector::TestConnector>(
+            connectors.registerTestConnector(connectorId));
+        VELOX_CHECK_NOT_NULL(testConnector_);
 
         return std::make_pair(testConnector_->connectorId(), kDefaultSchema);
       },
@@ -67,19 +55,33 @@ std::unique_ptr<SqlQueryRunner> SqlQueryRunnerTestBase::makeRunner(
 }
 
 std::unique_ptr<SqlQueryRunner> SqlQueryRunnerTestBase::makeRunner(
-    const std::function<std::pair<std::string, std::string>()>& initConnectors,
+    const TestConnectorInitializer& initializeConnectors,
     std::function<std::string()> queryIdGenerator,
     PermissionCheck permissionCheck,
     LogicalPlanCheck logicalPlanCheck) {
+  auto connectorRegistry =
+      facebook::velox::connector::ConnectorRegistry::create(nullptr);
+  auto metadataRegistry =
+      facebook::axiom::connector::ConnectorMetadataRegistry::create(nullptr);
   auto runner = std::make_unique<SqlQueryRunner>(
-      "test_user", &progressScheduler_, useV2_);
+      "test_user",
+      &progressScheduler_,
+      useV2_,
+      connectorRegistry,
+      metadataRegistry);
 
   runner->initialize(
-      initConnectors,
+      [&]() {
+        facebook::axiom::Connectors connectors{
+            *connectorRegistry, *metadataRegistry};
+        return initializeConnectors(connectors);
+      },
       std::move(permissionCheck),
       std::move(logicalPlanCheck),
       std::move(queryIdGenerator));
 
+  facebook::axiom::Connectors connectors{*connectorRegistry, *metadataRegistry};
+  connectors.registerSystemConnector(runner->sessionConfig());
   return runner;
 }
 

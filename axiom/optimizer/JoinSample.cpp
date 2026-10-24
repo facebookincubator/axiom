@@ -90,7 +90,7 @@ std::shared_ptr<velox::core::QueryCtx> sampleQueryCtx(
   const auto sampleId = ++kQueryCounter;
 
   std::unordered_map<std::string, std::string> empty;
-  return velox::core::QueryCtx::create(
+  auto sampleContext = velox::core::QueryCtx::create(
       original.executor(),
       velox::core::QueryConfig(std::move(empty)),
       original.connectorSessionProperties(),
@@ -99,6 +99,8 @@ std::shared_ptr<velox::core::QueryCtx> sampleQueryCtx(
           fmt::format("joinSample.{}", sampleId)),
       nullptr,
       fmt::format("sample:{}", sampleId));
+  sampleContext->copyRegistriesFrom(original);
+  return sampleContext;
 }
 
 std::shared_ptr<runner::Runner> prepareSampleRunner(
