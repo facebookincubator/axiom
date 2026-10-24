@@ -53,6 +53,11 @@ option(AXIOM_ENABLE_CCACHE "Use ccache if installed." ON)
 option(AXIOM_ENABLE_COLLAGEN "Build Collagen (Spark Connect server)." OFF)
 option(AXIOM_BUILD_TESTING "Enable Axiom tests." ON)
 option(AXIOM_BUILD_TEST_UTILS "Build Axiom test-support libraries." OFF)
+option(
+  AXIOM_ENABLE_ICEBERG_CPP
+  "Resolve Apache Iceberg C++ REST/catalog dependency for the Iceberg connector."
+  OFF
+)
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
@@ -165,6 +170,10 @@ velox_set_source(antlr4-runtime)
 velox_resolve_dependency(antlr4-runtime)
 
 message(STATUS "Using ANTLR4 runtime from ${ANTLR4_INCLUDE_DIR}")
+
+if(AXIOM_ENABLE_ICEBERG_CPP)
+  include(iceberg-cpp)
+endif()
 
 # Dependencies for the PySpark/Collagen server.
 if(AXIOM_ENABLE_COLLAGEN)
