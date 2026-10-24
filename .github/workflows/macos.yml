@@ -93,14 +93,13 @@ jobs:
           # block (introduced by velox#16019), hit whenever
           # VELOX_ENABLE_PARQUET is on (always, for axiom). Each
           # install builds against the previous, so order matters:
-          #   boost/fmt/ranges_v3 — folly's build deps
+          #   boost/fmt — folly's build deps
           #   folly — fizz/wangle/mvfst/fbthrift's runtime dep
           #   fizz/wangle/mvfst — fbthrift's runtime deps
           # We do NOT call install_velox_deps wholesale: it pulls in
           # install_arrow, which axiom doesn't install today (velox
           # bundles arrow itself via VELOX_DEPENDENCY_SOURCE=AUTO)
           # and arrow's macOS build has its own Boost::process issue.
-          install_ranges_v3
           install_boost
           install_fmt
           install_folly
