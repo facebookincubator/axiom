@@ -1400,9 +1400,7 @@ TEST_F(SqlQueryRunnerTest, connectorProperties) {
 
 TEST_F(SqlQueryRunnerTest, addColumn) {
   auto findTable = [&]() {
-    auto metadata = facebook::axiom::connector::ConnectorMetadataRegistry::get(
-        testConnector_->connectorId());
-    return metadata->findTable({"default", "t"});
+    return testConnector_->metadata()->findTable({"default", "t"});
   };
 
   // Basic add followed by schema verification.

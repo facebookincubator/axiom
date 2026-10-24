@@ -229,9 +229,7 @@ TEST_P(ExplainTest, explainDropTable) {
 
 TEST_P(ExplainTest, explainAddColumn) {
   auto findTable = [&]() {
-    auto metadata = facebook::axiom::connector::ConnectorMetadataRegistry::get(
-        testConnector_->connectorId());
-    return metadata->findTable({"default", "t"});
+    return testConnector_->metadata()->findTable({"default", "t"});
   };
 
   run("CREATE TABLE t(x BIGINT)");
