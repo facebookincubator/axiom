@@ -16,6 +16,7 @@
 
 #include "axiom/cli/tests/SqlQueryRunnerTestBase.h"
 
+#include "axiom/cli/Connectors.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "velox/connectors/ConnectorRegistry.h"
 
@@ -32,14 +33,6 @@ void SqlQueryRunnerTestBase::SetUpTestCase() {
 
 void SqlQueryRunnerTestBase::SetUp() {
   runner_ = makeRunner();
-}
-
-void SqlQueryRunnerTestBase::TearDown() {
-  runner_.reset();
-  for (const auto& id : connectorIds_) {
-    facebook::axiom::connector::ConnectorMetadataRegistry::global().erase(id);
-    connector::ConnectorRegistry::global().erase(id);
-  }
 }
 
 std::unique_ptr<SqlQueryRunner> SqlQueryRunnerTestBase::makeRunner(
@@ -66,22 +59,29 @@ std::unique_ptr<SqlQueryRunner> SqlQueryRunnerTestBase::makeRunner(
     std::function<std::string()> queryIdGenerator,
     PermissionCheck permissionCheck,
     LogicalPlanCheck logicalPlanCheck) {
+  auto connectorRegistry =
+      facebook::velox::connector::ConnectorRegistry::create(nullptr);
+  auto metadataRegistry =
+      facebook::axiom::connector::ConnectorMetadataRegistry::create(nullptr);
   auto runner = std::make_unique<SqlQueryRunner>(
-      "test_user", &progressScheduler_, useV2_);
+      "test_user",
+      &progressScheduler_,
+      useV2_,
+      connectorRegistry,
+      metadataRegistry);
 
   runner->initialize(
       [&]() {
         facebook::axiom::Connectors connectors{
-            connector::ConnectorRegistry::global(),
-            facebook::axiom::connector::ConnectorMetadataRegistry::global()};
-        auto catalog = initializeConnectors(connectors);
-        connectorIds_.emplace_back(catalog.first);
-        return catalog;
+            *connectorRegistry, *metadataRegistry};
+        return initializeConnectors(connectors);
       },
       std::move(permissionCheck),
       std::move(logicalPlanCheck),
       std::move(queryIdGenerator));
 
+  facebook::axiom::Connectors connectors{*connectorRegistry, *metadataRegistry};
+  connectors.registerSystemConnector(runner->sessionConfig());
   return runner;
 }
 
