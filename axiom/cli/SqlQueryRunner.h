@@ -513,6 +513,13 @@ class SqlQueryRunner {
     return *sessionConfig_;
   }
 
+  /// Returns the function semantics used for planning. Valid after
+  /// initialize().
+  const std::shared_ptr<const facebook::axiom::optimizer::FunctionRegistry>&
+  functionRegistry() const {
+    return functionRegistry_;
+  }
+
   facebook::axiom::connector::TablePtr createTable(
       const facebook::axiom::connector::ConnectorContextPtr& context,
       const presto::CreateTableStatement& statement,
