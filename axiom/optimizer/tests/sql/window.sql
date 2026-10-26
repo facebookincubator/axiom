@@ -493,6 +493,57 @@ LEFT JOIN (SELECT a AS x FROM t WHERE false) AS v ON t.a = v.x
 SELECT sum(x) OVER (PARTITION BY x, x, a, b ORDER BY x)
 FROM (SELECT y AS x, 'All' AS a, 'All' AS b FROM (VALUES (1), (2), (2)) AS t(y)) AS u
 ----
+-- PARTITION BY and ORDER BY keys that become one column once the filter
+-- empties a UNION ALL input. An ORDER BY key equal to a partition key ties
+-- every row of the partition, and a repeated partition key partitions nothing
+-- further.
+SELECT a, c, sum(c) OVER (PARTITION BY a, b ORDER BY b)
+FROM (SELECT a, a, b FROM t UNION ALL SELECT 4, 4, 4) AS u(a, b, c)
+WHERE a < 4
+----
+SELECT a, c
+FROM (
+  SELECT a, c, row_number() OVER (PARTITION BY a ORDER BY b, c) AS rn
+  FROM (SELECT a, a, b FROM t UNION ALL SELECT 4, 4, 4) AS u(a, b, c)
+  WHERE a < 4
+)
+WHERE rn = 1
+----
+-- The same over an outer join that the filter makes inner, which equates the
+-- join keys. A RANGE frame that measures a bound on its ORDER BY key keeps
+-- the key: every row of a partition is within 1 before the current row, and
+-- none is 1 to 2 after it.
+SELECT
+  t.a,
+  u.b,
+  sum(u.b) OVER (PARTITION BY t.a ORDER BY u.a RANGE BETWEEN 1 PRECEDING AND CURRENT ROW),
+  sum(u.b) OVER (PARTITION BY t.a ORDER BY u.a RANGE BETWEEN 1 FOLLOWING AND 2 FOLLOWING)
+FROM t
+LEFT JOIN (SELECT a, b FROM t WHERE b <= 50) AS u ON t.a = u.a
+WHERE u.b > 0
+----
+-- The same RANGE frames over an ORDER BY key the query repeats from
+-- PARTITION BY, ascending and descending.
+-- error_v1: Window frame of type RANGE PRECEDING or FOLLOWING requires single sorting key in ORDER BY
+SELECT
+  a,
+  b,
+  sum(b) OVER (PARTITION BY a ORDER BY a RANGE BETWEEN 1 PRECEDING AND CURRENT ROW),
+  sum(b) OVER (PARTITION BY a ORDER BY a RANGE BETWEEN 1 FOLLOWING AND 2 FOLLOWING),
+  sum(b) OVER (PARTITION BY a ORDER BY a DESC RANGE BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM t
+----
+-- RANGE frames with value bounds over two keys that each repeat a partition
+-- key. A NULL key frames the whole partition, and a non-NULL key frames no
+-- rows.
+-- error_v1: Window frame of type RANGE PRECEDING or FOLLOWING requires single sorting key in ORDER BY
+SELECT
+  a,
+  b,
+  sum(c) OVER (PARTITION BY a, b ORDER BY a RANGE BETWEEN 1 FOLLOWING AND 2 FOLLOWING),
+  sum(c) OVER (PARTITION BY a, b ORDER BY b RANGE BETWEEN 1 FOLLOWING AND 2 FOLLOWING)
+FROM (SELECT nullif(a, 1), a, b FROM t) AS u(a, b, c)
+----
 -- A window aggregate whose argument is computed, over UNNEST of an aggregated
 -- array, with two columns holding the same constant.
 SELECT a, b, sum(v + 1) OVER (PARTITION BY d) AS r

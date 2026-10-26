@@ -870,6 +870,14 @@ class WindowExpr : public Expr {
     /// Returns true if frame type, bound types, and bound values are equal.
     bool operator==(const Frame& other) const;
 
+    /// True for a k RANGE frame: a RANGE frame with an n PRECEDING or n
+    /// FOLLOWING bound, which Velox computes from the current row's ORDER BY
+    /// key plus or minus n. Such a frame needs its single ORDER BY key.
+    bool isKRangeFrame() const {
+      return type == WindowType::kRange &&
+          (startValue != nullptr || endValue != nullptr);
+    }
+
     folly::dynamic serialize() const;
 
     static Frame deserialize(const folly::dynamic& obj, void* context);

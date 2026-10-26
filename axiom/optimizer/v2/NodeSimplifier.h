@@ -229,10 +229,16 @@ class NodeSimplifier {
       const PlanSubstitutions& substitutions,
       const ExprVector& expressions);
 
-  // Applies input substitutions, simplifies keys, and removes literal and
-  // duplicate positions while keeping order types aligned.
+  // Applies input substitutions, simplifies keys, and drops redundant ones.
+  void simplifyPartitionKeys(
+      const PlanSubstitutions& substitutions,
+      ExprVector& keys);
+
+  // Applies input substitutions, simplifies keys, and drops redundant ones
+  // given 'partitionKeys', keeping order types aligned.
   void simplifyOrderKeys(
       const PlanSubstitutions& substitutions,
+      const ExprVector& partitionKeys,
       ExprVector& keys,
       OrderTypeVector& types);
 

@@ -1529,6 +1529,14 @@ struct Frame {
 
   bool operator==(const Frame& other) const = default;
 
+  /// True for a k RANGE frame: a RANGE frame with an n PRECEDING or n
+  /// FOLLOWING bound, which Velox computes from the current row's ORDER BY key
+  /// plus or minus n. Such a frame needs its single ORDER BY key.
+  bool isKRangeFrame() const {
+    return type == logical_plan::WindowExpr::WindowType::kRange &&
+        (startValue != nullptr || endValue != nullptr);
+  }
+
   /// ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING — every
   /// row sees the whole partition (e.g. a partition-wide aggregate).
   static Frame wholePartition() {

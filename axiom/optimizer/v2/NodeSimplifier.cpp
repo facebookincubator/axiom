@@ -23,6 +23,7 @@
 #include "axiom/optimizer/v2/JoinFilterRewriter.h"
 #include "axiom/optimizer/v2/NonNullOutput.h"
 #include "axiom/optimizer/v2/PrecomputeProjections.h"
+#include "axiom/optimizer/v2/RedundantKeys.h"
 
 namespace facebook::axiom::optimizer::v2 {
 namespace {
@@ -57,27 +58,20 @@ ExprVector NodeSimplifier::simplifyExpressions(
   return simplified;
 }
 
+void NodeSimplifier::simplifyPartitionKeys(
+    const PlanSubstitutions& substitutions,
+    ExprVector& keys) {
+  keys = simplifyExpressions(substitutions, keys);
+  RedundantKeys::dropFromPartitionKeys(keys);
+}
+
 void NodeSimplifier::simplifyOrderKeys(
     const PlanSubstitutions& substitutions,
+    const ExprVector& partitionKeys,
     ExprVector& keys,
     OrderTypeVector& types) {
-  VELOX_DCHECK_EQ(keys.size(), types.size());
-  ExprVector simplifiedKeys;
-  OrderTypeVector simplifiedTypes;
-  simplifiedKeys.reserve(keys.size());
-  simplifiedTypes.reserve(types.size());
-  folly::F14FastSet<ExprCP> seen;
-  ExprVector rewritten = simplifyExpressions(substitutions, keys);
-  for (size_t i = 0; i < keys.size(); ++i) {
-    ExprCP key = rewritten[i];
-    if (key->is(PlanType::kLiteralExpr) || !seen.insert(key).second) {
-      continue;
-    }
-    simplifiedKeys.push_back(key);
-    simplifiedTypes.push_back(types[i]);
-  }
-  keys = std::move(simplifiedKeys);
-  types = std::move(simplifiedTypes);
+  keys = simplifyExpressions(substitutions, keys);
+  RedundantKeys::dropFromSortKeys(partitionKeys, keys, types);
 }
 
 PlanSubstitutions NodeSimplifier::visibleSubstitutions(
@@ -282,7 +276,8 @@ NodeSimplifier::SimplifiedNode NodeSimplifier::make(
   }
   key.input = input.node;
   const ExprVector originalOrderKeys = key.orderKeys;
-  simplifyOrderKeys(input.substitutions, key.orderKeys, key.orderTypes);
+  simplifyOrderKeys(
+      input.substitutions, /*partitionKeys=*/{}, key.orderKeys, key.orderTypes);
   NodeCP output = input.node;
   if (!key.orderKeys.empty()) {
     PrecomputeProjections precompute{input.node, builder_, simplifier_};
@@ -332,7 +327,8 @@ NodeSimplifier::SimplifiedNode NodeSimplifier::make(
     return emptyPassThroughResult(key.input, input);
   }
   key.input = input.node;
-  simplifyOrderKeys(input.substitutions, key.orderKeys, key.orderTypes);
+  simplifyOrderKeys(
+      input.substitutions, /*partitionKeys=*/{}, key.orderKeys, key.orderTypes);
   NodeCP output = key.orderKeys.empty()
       ? static_cast<NodeCP>(
             builder_.make<Limit>({input.node, key.offset, key.count}))
@@ -574,58 +570,46 @@ NodeSimplifier::SimplifiedNode NodeSimplifier::make(
   }
 
   key.input = input.node;
-  key.partitionKeys =
-      simplifyExpressions(input.substitutions, key.partitionKeys);
-  std::erase_if(key.partitionKeys, [](ExprCP partitionKey) {
-    return partitionKey->is(PlanType::kLiteralExpr);
-  });
+  simplifyPartitionKeys(input.substitutions, key.partitionKeys);
 
   key.orderKeys = simplifyExpressions(input.substitutions, key.orderKeys);
-  const auto isOffsetBound = [](logical_plan::WindowExpr::BoundType bound) {
-    return bound == logical_plan::WindowExpr::BoundType::kPreceding ||
-        bound == logical_plan::WindowExpr::BoundType::kFollowing;
-  };
   for (auto& function : key.functions) {
     function.call = input.substitutions.apply(function.call, exprs_);
-    const auto simplifyBound = [&](ExprCP& value,
-                                   logical_plan::WindowExpr::BoundType type) {
+    const auto simplifyBound = [&](ExprCP& value) {
       if (value == nullptr) {
         return;
       }
       ExprCP replacement =
           simplifier_.simplify(input.substitutions.apply(value, exprs_));
-      if (function.frame.type == logical_plan::WindowExpr::WindowType::kRange &&
-          isOffsetBound(type)) {
+      if (function.frame.type == logical_plan::WindowExpr::WindowType::kRange) {
         value = restoreColumnPositions(
             key.input, ExprVector{value}, ExprVector{replacement})[0];
       } else {
         value = replacement;
       }
     };
-    simplifyBound(function.frame.startValue, function.frame.startType);
-    simplifyBound(function.frame.endValue, function.frame.endType);
+    simplifyBound(function.frame.startValue);
+    simplifyBound(function.frame.endValue);
   }
 
-  const bool hasRangeOffset =
-      std::ranges::any_of(key.functions, [&](const WindowFunction& function) {
-        return function.frame.type ==
-            logical_plan::WindowExpr::WindowType::kRange &&
-            (isOffsetBound(function.frame.startType) ||
-             isOffsetBound(function.frame.endType));
+  const bool hasKRangeFrame =
+      std::ranges::any_of(key.functions, [](const WindowFunction& function) {
+        return function.frame.isKRangeFrame();
       });
   const bool hasConstantOrderKey = key.orderKeys.size() == 1 &&
       key.orderKeys.front()->is(PlanType::kLiteralExpr);
   // Every row is a peer when the sole RANGE key is constant. Offset frames
   // retain their key so Velox validates the offset value.
-  if (hasConstantOrderKey && !hasRangeOffset) {
+  if (hasConstantOrderKey && !hasKRangeFrame) {
     for (auto& function : key.functions) {
       if (function.frame.type == logical_plan::WindowExpr::WindowType::kRange) {
         function.frame = Frame::wholePartition();
       }
     }
   }
-  if (!(hasConstantOrderKey && hasRangeOffset)) {
-    simplifyOrderKeys({}, key.orderKeys, key.orderTypes);
+  if (!hasKRangeFrame) {
+    RedundantKeys::dropFromSortKeys(
+        key.partitionKeys, key.orderKeys, key.orderTypes);
   }
 
   if (key.orderKeys.empty()) {
@@ -646,12 +630,21 @@ NodeSimplifier::SimplifiedNode NodeSimplifier::make(
     }
   }
 
+  // The sole key of a RANGE frame that measures a bound on it stays when it
+  // equals a partition key. Velox needs the key lists disjoint, so it gets a
+  // column of its own.
+  const bool orderKeyRepeatsPartitionKey = key.orderKeys.size() == 1 &&
+      std::ranges::find(key.partitionKeys, key.orderKeys.front()) !=
+          key.partitionKeys.end();
   PrecomputeProjections precompute{key.input, builder_, simplifier_};
   for (ExprCP& partitionKey : key.partitionKeys) {
     partitionKey = precompute.toColumn(partitionKey);
   }
   for (ExprCP& orderKey : key.orderKeys) {
-    orderKey = precompute.toColumn(orderKey);
+    orderKey = precompute.toColumn(
+        orderKey,
+        orderKeyRepeatsPartitionKey ? Column::create("__p", orderKey->value())
+                                    : nullptr);
   }
   VELOX_CHECK_GE(key.outputColumns.size(), key.functions.size());
   ColumnVector functionOutputs(
@@ -692,13 +685,7 @@ NodeSimplifier::SimplifiedNode NodeSimplifier::make(
   }
 
   key.input = input.node;
-  key.partitionKeys =
-      simplifyExpressions(input.substitutions, key.partitionKeys);
-  folly::F14FastSet<ExprCP> seen;
-  std::erase_if(key.partitionKeys, [&](ExprCP partitionKey) {
-    return partitionKey->is(PlanType::kLiteralExpr) ||
-        !seen.insert(partitionKey).second;
-  });
+  simplifyPartitionKeys(input.substitutions, key.partitionKeys);
 
   key.outputColumns = input.node->outputColumns();
   if (key.rankColumn != nullptr) {
@@ -722,14 +709,9 @@ NodeSimplifier::SimplifiedNode NodeSimplifier::make(
     return emptyResult(std::move(key.outputColumns));
   }
 
-  key.partitionKeys =
-      simplifyExpressions(input.substitutions, key.partitionKeys);
-  folly::F14FastSet<ExprCP> seenPartitions;
-  std::erase_if(key.partitionKeys, [&](ExprCP partitionKey) {
-    return partitionKey->is(PlanType::kLiteralExpr) ||
-        !seenPartitions.insert(partitionKey).second;
-  });
-  simplifyOrderKeys(input.substitutions, key.orderKeys, key.orderTypes);
+  simplifyPartitionKeys(input.substitutions, key.partitionKeys);
+  simplifyOrderKeys(
+      input.substitutions, key.partitionKeys, key.orderKeys, key.orderTypes);
 
   if (key.orderKeys.empty()) {
     if (key.rankFunction == TopNRowNumber::RankFunction::kRowNumber) {

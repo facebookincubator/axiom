@@ -24,6 +24,7 @@
 #include "axiom/optimizer/v2/JoinCondition.h"
 #include "axiom/optimizer/v2/NodeExpressions.h"
 #include "axiom/optimizer/v2/NodeRewriter.h"
+#include "axiom/optimizer/v2/NodeSimplifier.h"
 #include "axiom/optimizer/v2/PrecomputeProjections.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
@@ -170,7 +171,8 @@ class Decorrelator : public NodeRewriter<> {
   Decorrelator(Builder& builder, velox::core::ExpressionEvaluator& evaluator)
       : NodeRewriter(builder),
         exprFactory_(builder),
-        simplifier_(builder, evaluator) {}
+        simplifier_(builder, evaluator),
+        nodeSimplifier_(builder, simplifier_) {}
 
  protected:
   NodeCP rewriteApply(ApplyCP node, NoContext& context) override {
@@ -944,14 +946,16 @@ class Decorrelator : public NodeRewriter<> {
     appendAll(outputs, input->outputColumns());
     outputs.push_back(rowNumberColumn);
 
-    return builder().make<Window>({
-        input,
-        std::move(functions),
-        std::move(partitionKeys),
-        std::move(orderKeys),
-        std::move(orderTypes),
-        std::move(outputs),
-    });
+    return nodeSimplifier_.materialize(nodeSimplifier_.make(
+        Window::Key{
+            input,
+            std::move(functions),
+            std::move(partitionKeys),
+            std::move(orderKeys),
+            std::move(orderTypes),
+            std::move(outputs),
+        },
+        {input, {}}));
   }
 
   // What a lift leaves behind.
@@ -4211,6 +4215,7 @@ class Decorrelator : public NodeRewriter<> {
 
   ExprFactory exprFactory_;
   ExprSimplifier simplifier_;
+  NodeSimplifier nodeSimplifier_;
 };
 
 } // namespace
