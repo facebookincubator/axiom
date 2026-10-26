@@ -442,20 +442,18 @@ TEST_P(AggregationTest, repartitionForAggPartitionSubset) {
                            .build();
     auto plan = planVelox(logicalPlan);
 
-    // There should be only ONE shuffle (for the first
-    // aggregation). The second aggregation should NOT require a shuffle
-    // because partitionKeys [a, b] ⊆ groupingKeys [a, b, d].
+    // The projection preserves partitioning on [a, b], which also co-locates
+    // the second aggregation's groups on [a, b, d].
     auto matcher = matchScan("t")
-                       .distributedSingleAggregation({"a", "b"}, {})
-                       .project()
-                       // No shuffle here - partitionKeys ⊆ groupingKeys
-                       .localPartition()
+                       .partialAggregation({"a", "b"}, {})
+                       .shuffle({"a", "b"})
+                       .localPartition({"a", "b"})
+                       .finalAggregation({"a", "b"}, {})
+                       .project({"a", "b", "a + b as d"})
                        .singleAggregation({"a", "b", "d"}, {})
-                       .shuffle()
+                       .gather()
                        .build();
-    // v2 never derives driver-scope partitioning, so it adds a local
-    // repartition even though the input already co-locates [a, b, d].
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(plan.plan, matcher);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(plan.plan, matcher);
   }
 
   {
