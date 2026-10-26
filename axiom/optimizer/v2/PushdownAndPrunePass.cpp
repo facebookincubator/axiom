@@ -2133,8 +2133,10 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       // filter the rows the TopN keeps, so `empty.requiredAbove` includes the
       // columns they read.
       if (!empty.requiredAbove.containsAny(node->outputColumns())) {
-        return builder().make<Limit>(
-            {rewrite(node->input(), empty), node->offset(), node->count()});
+        NodeCP newInput = rewrite(node->input(), empty);
+        return nodeSimplifier_.materialize(nodeSimplifier_.make(
+            Limit::Key{newInput, node->offset(), node->count()},
+            {newInput, {}, {}}));
       }
       empty.required.unionColumns(node->orderKeys());
       empty.requiredAbove.unionColumns(node->orderKeys());
@@ -2302,8 +2304,9 @@ class Pushdown : public NodeRewriter<PushdownContext> {
         nonEmpty.push_back(exprs_.makeLessThanOrEqual(
             one, exprs_.makeCardinality(expression)));
       }
-      NodeCP filtered = builder().make<Filter>(
-          {newInput, ExprVector{exprs_.orAll(nonEmpty)}});
+      NodeCP filtered = nodeSimplifier_.materialize(nodeSimplifier_.make(
+          Filter::Key{newInput, ExprVector{exprs_.orAll(nonEmpty)}},
+          {newInput, {}, {}}));
       return finishSimplifiedNode(
           {narrowed(filtered, context),
            std::move(childContext.outputSubstitutions)},
@@ -2568,8 +2571,9 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       return input;
     }
 
-    NodeCP output =
-        builder().make<Project>({input, std::move(exprs), std::move(columns)});
+    NodeCP output = nodeSimplifier_.materialize(nodeSimplifier_.make(
+        Project::Key{input, std::move(exprs), std::move(columns)},
+        {input, {}, {}}));
     substitutions.retainVisible(output->outputColumns(), exprs_);
     return output;
   }
@@ -3033,7 +3037,8 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     if (conjuncts.empty()) {
       return body;
     }
-    return builder().make<Filter>({body, std::move(conjuncts)});
+    return nodeSimplifier_.materialize(nodeSimplifier_.make(
+        Filter::Key{body, std::move(conjuncts)}, {body, {}, {}}));
   }
 
   // Builds an empty `Values` node with the same output schema as `node`.

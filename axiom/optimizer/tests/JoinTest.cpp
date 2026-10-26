@@ -791,6 +791,21 @@ TEST_P(JoinTest, constantSemiFilterJoinKeys) {
   }
 }
 
+// A query whose join input is empty plans to an empty Values, with no Filter
+// for a conjunct held above the join.
+TEST_P(JoinTest, conjunctAboveEmptyJoin) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
+
+  const auto query =
+      "SELECT b "
+      "FROM t "
+      "WHERE ((a = 1 AND a = 2 AND b = 10) OR (a = 3 AND a = 4)) "
+      "  AND (b IN (SELECT y FROM u) OR a > 100)";
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(query), matchEmptyValues().project({"b"}).build());
+}
+
 TEST_P(JoinTest, constantSemiProjectJoinKeys) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));

@@ -292,6 +292,9 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
     return velox::core::PlanMatcherBuilder().values();
   }
 
+  /// Matches a Values node with no rows, whatever its columns.
+  static velox::core::PlanMatcherBuilder matchEmptyValues();
+
   /// Matches any FixedPointNode.
   static velox::core::PlanMatcherBuilder matchFixedPoint() {
     return velox::core::PlanMatcherBuilder().fixedPoint();

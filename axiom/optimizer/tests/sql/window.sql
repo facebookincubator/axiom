@@ -49,6 +49,12 @@ ORDER BY b
 -- row_number with partition and order.
 SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b) AS rn FROM t
 ----
+-- row_number over an input with no rows.
+-- count 0
+SELECT a, row_number() OVER (PARTITION BY a) AS rn
+FROM t
+WHERE (a = 1 AND a = 2 AND b = 10) OR (a = 3 AND a = 4)
+----
 -- rank with partition and order.
 SELECT a, b, rank() OVER (PARTITION BY a ORDER BY b) AS r FROM t
 ----

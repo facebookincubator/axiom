@@ -95,3 +95,13 @@ WITH t(a) AS (
 SELECT a
 FROM t
 WHERE a IS NOT DISTINCT FROM NULL AND a > 1
+----
+-- A conjunct held above a join whose input is empty selects no rows.
+-- count 0
+WITH
+t AS (SELECT * FROM (VALUES (1, 10), (3, 20)) AS _(a, b)),
+u AS (SELECT * FROM (VALUES (1, 10), (3, 20)) AS _(x, y))
+SELECT b
+FROM t
+WHERE ((a = 1 AND a = 2 AND b = 10) OR (a = 3 AND a = 4))
+  AND (b IN (SELECT y FROM u) OR a > 100)

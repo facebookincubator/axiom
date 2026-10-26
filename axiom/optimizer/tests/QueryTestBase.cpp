@@ -137,6 +137,17 @@ logical_plan::PlanBuilder::Context QueryTestBase::makeContext(
   return context;
 }
 
+// static
+velox::core::PlanMatcherBuilder QueryTestBase::matchEmptyValues() {
+  return velox::core::PlanMatcherBuilder().values(
+      [](const velox::core::PlanNodePtr& node) {
+        for (const auto& vector :
+             node->as<velox::core::ValuesNode>()->values()) {
+          EXPECT_EQ(vector->size(), 0);
+        }
+      });
+}
+
 logical_plan::LogicalPlanNodePtr QueryTestBase::parseSelect(
     std::string_view sql,
     const std::string& defaultConnectorId,

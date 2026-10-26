@@ -26,6 +26,15 @@ SELECT a, b FROM t ORDER BY b LIMIT 3
 -- count 0
 SELECT * FROM (SELECT a FROM t WHERE false) LIMIT 5
 ----
+-- A TopN whose columns nothing reads, over an input with no rows.
+SELECT count(*)
+FROM (
+    SELECT a
+    FROM t
+    WHERE (a = 1 AND a = 2 AND b = 10) OR (a = 3 AND a = 4)
+    ORDER BY a
+    LIMIT 5)
+----
 -- ORDER BY an expression that is not in the select list, with LIMIT.
 -- ordered
 SELECT * FROM t ORDER BY b + c DESC LIMIT 3

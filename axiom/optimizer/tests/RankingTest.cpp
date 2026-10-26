@@ -456,6 +456,18 @@ TEST_P(RankingTest, unreadRankColumn) {
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
 
+TEST_P(RankingTest, emptyInput) {
+  // A ranking over an input with no rows numbers no rows.
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+
+  constexpr auto sql =
+      "SELECT a, row_number() OVER (PARTITION BY a) AS rn "
+      "FROM t "
+      "WHERE (a = 1 AND a = 2 AND b = 10) "
+      "   OR (a = 3 AND a = 4)";
+  AXIOM_ASSERT_PLAN_V2(toSingleNodePlan(sql), matchEmptyValues().build());
+}
+
 // --- Ranking function + filter on output ---
 
 TEST_P(RankingTest, filterOnOutput) {

@@ -1065,6 +1065,26 @@ TEST_P(UnnestTest, unusedOutputUnderExists) {
   AXIOM_ASSERT_PLAN_V2(toSingleNodePlan(logicalPlan), matcher);
 }
 
+// NOT EXISTS over an UNNEST of an input with no rows keeps every outer row.
+TEST_P(UnnestTest, emptyInputUnderExists) {
+  testConnector_->addTable(
+      "t", ROW({"t_k", "t_n", "t_csv"}, {BIGINT(), BIGINT(), VARCHAR()}));
+  testConnector_->addTable("u", ROW("u_k", BIGINT()));
+
+  const auto query =
+      "SELECT u_k "
+      "FROM u "
+      "WHERE NOT EXISTS ("
+      "    SELECT 1 "
+      "    FROM t "
+      "    CROSS JOIN UNNEST(split(t_csv, ',')) "
+      "    WHERE t_k = u_k "
+      "      AND ((t_k = 1 AND t_k = 2 AND t_n = 10) "
+      "        OR (t_k = 3 AND t_k = 4)))";
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(parseSelect(query)), matchScan("u").build());
+}
+
 // A non-deterministic collection collapses, but an earlier UNNEST must remain
 // so the collection is evaluated once per expanded row.
 TEST_P(UnnestTest, nondeterministicCollectionUnderExists) {

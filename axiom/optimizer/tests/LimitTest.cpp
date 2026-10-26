@@ -406,6 +406,25 @@ TEST_P(LimitTest, zeroLimit) {
   AXIOM_ASSERT_PLAN_V2(emptyJoinPlan, matchValues().build());
 }
 
+// A TopN whose columns nothing reads keeps only a row count, which is zero
+// over an input with no rows.
+TEST_P(LimitTest, emptyUnreadTopN) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+
+  const auto query =
+      "SELECT count(*) "
+      "FROM ("
+      "    SELECT a "
+      "    FROM t "
+      "    WHERE (a = 1 AND a = 2 AND b = 10) "
+      "       OR (a = 3 AND a = 4) "
+      "    ORDER BY a "
+      "    LIMIT 5)";
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(query),
+      matchEmptyValues().singleAggregation({}, {"count(*) as cnt"}).build());
+}
+
 AXIOM_INSTANTIATE_V1_V2(LimitTest);
 
 } // namespace

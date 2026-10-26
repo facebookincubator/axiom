@@ -123,10 +123,7 @@ TEST_F(InferenceTest, emptyInput) {
     SCOPED_TRACE("filter above");
     AXIOM_ASSERT_PLAN_V2(
         toSingleNodePlan(query + " WHERE test_inference(a)[1] > 0.5"),
-        matchValues(noRows)
-            .filter("subscript(b, 1)::double > 0.5")
-            .project({"b"})
-            .build());
+        matchValues(noRows).project({"b"}).build());
   }
 }
 

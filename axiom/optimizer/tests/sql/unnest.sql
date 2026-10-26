@@ -254,6 +254,16 @@ WHERE NOT EXISTS (
   ) p
   WHERE p.projected_k = u.k)
 ----
+-- NOT EXISTS over an UNNEST of an input with no rows keeps every outer row.
+SELECT k
+FROM (VALUES (1), (3)) AS u(k)
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM (VALUES (1, 10, 'x,y'), (3, 20, 'z')) AS p(k, n, csv)
+  CROSS JOIN UNNEST(split(csv, ',')) AS t(item)
+  WHERE p.k = u.k
+    AND ((p.k = 1 AND p.k = 2 AND p.n = 10) OR (p.k = 3 AND p.k = 4)))
+----
 -- INTERSECT ALL counts the rows produced by UNNEST on both inputs.
 -- duckdb: VALUES (1)
 SELECT k
