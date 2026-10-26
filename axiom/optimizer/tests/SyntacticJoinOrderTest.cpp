@@ -403,7 +403,6 @@ TEST_P(SyntacticJoinOrderTest, manyJoinsBoundedByOrder) {
     worker.detach();
     FAIL() << "Optimization timed out after " << kTimeout.count() << "s; "
            << "syntactic_join_order failed to bound enumeration";
-    return;
   }
   worker.join();
   future.get();

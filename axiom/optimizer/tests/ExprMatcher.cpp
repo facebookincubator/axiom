@@ -206,7 +206,6 @@ void matchSubscript(
   } else {
     FAIL() << "Expected integer subscript index, got "
            << indexExpr->type()->toString() << ".";
-    return;
   }
 
   EXPECT_EQ(static_cast<int64_t>(actual.index() + 1), expectedIndex)
