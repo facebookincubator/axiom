@@ -23,7 +23,7 @@
 
 #include <fmt/format.h>
 #include <folly/Likely.h>
-#include <folly/portability/SourceLocation.h>
+#include <source_location>
 #include "axiom/common/Enums.h"
 
 namespace axiom::sql::presto {
@@ -50,7 +50,7 @@ class PrestoSqlError : public std::exception {
       std::optional<std::string> token,
       PrestoSqlErrorKind kind = PrestoSqlErrorKind::kSyntax,
       std::string messageTemplate = "",
-      folly::source_location sourceLocation = folly::source_location::current())
+      std::source_location sourceLocation = std::source_location::current())
       : formatted_(formatWhat(kind, line, column, token, message)),
         messageTemplate_(std::move(messageTemplate)),
         messageLength_(message.size()),
@@ -134,7 +134,7 @@ class PrestoSqlError : public std::exception {
   std::optional<std::string> token_;
   PrestoSqlErrorKind kind_;
 
-  folly::source_location sourceLocation_;
+  std::source_location sourceLocation_;
 };
 
 /// Error source and Presto error code that a PrestoSqlError should surface
