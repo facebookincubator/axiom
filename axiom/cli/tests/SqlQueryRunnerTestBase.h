@@ -23,6 +23,7 @@
 #include <string_view>
 #include <vector>
 
+#include "axiom/cli/Connectors.h"
 #include "axiom/cli/SqlQueryRunner.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -43,9 +44,7 @@ class SqlQueryRunnerTestBase : public ::testing::Test,
   // selects v1 by setting useV2_ = false before calling this.
   void SetUp() override;
 
-  // Destroys runner_ and unregisters the connectors makeRunner() registered
-  // itself. Connectors registered by a caller-supplied callback are the
-  // caller's to unregister.
+  // Destroys runner_ and unregisters the catalogs makeRunner() registered.
   void TearDown() override;
 
   // Builds a SqlQueryRunner over a freshly created TestConnector registered
@@ -58,12 +57,12 @@ class SqlQueryRunnerTestBase : public ::testing::Test,
       PermissionCheck permissionCheck = {},
       LogicalPlanCheck logicalPlanCheck = {});
 
-  // Builds a SqlQueryRunner over the connectors 'initConnectors' registers; it
-  // returns the connector id and schema to use by default. The caller
-  // unregisters them. Selects the optimizer per 'useV2_'.
+  // Builds a SqlQueryRunner over the catalog 'initializeConnectors' registers;
+  // it returns the connector id and schema to use by default. The catalog is
+  // unregistered in TearDown. Selects the optimizer per 'useV2_'.
   std::unique_ptr<SqlQueryRunner> makeRunner(
-      const std::function<std::pair<std::string, std::string>()>&
-          initConnectors,
+      const std::function<std::pair<std::string, std::string>(
+          facebook::axiom::Connectors&)>& initializeConnectors,
       std::function<std::string()> queryIdGenerator = {},
       PermissionCheck permissionCheck = {},
       LogicalPlanCheck logicalPlanCheck = {});

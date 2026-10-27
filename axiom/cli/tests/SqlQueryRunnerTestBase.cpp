@@ -48,16 +48,11 @@ std::unique_ptr<SqlQueryRunner> SqlQueryRunnerTestBase::makeRunner(
     PermissionCheck permissionCheck,
     LogicalPlanCheck logicalPlanCheck) {
   return makeRunner(
-      [&]() {
-        testConnector_ =
-            std::make_shared<facebook::axiom::connector::TestConnector>(
-                connectorId);
-        connector::ConnectorRegistry::global().insert(
-            testConnector_->connectorId(), testConnector_);
-        facebook::axiom::connector::ConnectorMetadataRegistry::global().insert(
-            testConnector_->connectorId(), testConnector_->metadata());
-
-        connectorIds_.emplace_back(testConnector_->connectorId());
+      [&](facebook::axiom::Connectors& connectors) {
+        testConnector_ = std::dynamic_pointer_cast<
+            facebook::axiom::connector::TestConnector>(
+            connectors.registerTestConnector(connectorId));
+        VELOX_CHECK_NOT_NULL(testConnector_);
 
         return std::make_pair(testConnector_->connectorId(), kDefaultSchema);
       },
@@ -67,7 +62,8 @@ std::unique_ptr<SqlQueryRunner> SqlQueryRunnerTestBase::makeRunner(
 }
 
 std::unique_ptr<SqlQueryRunner> SqlQueryRunnerTestBase::makeRunner(
-    const std::function<std::pair<std::string, std::string>()>& initConnectors,
+    const std::function<std::pair<std::string, std::string>(
+        facebook::axiom::Connectors&)>& initializeConnectors,
     std::function<std::string()> queryIdGenerator,
     PermissionCheck permissionCheck,
     LogicalPlanCheck logicalPlanCheck) {
@@ -75,7 +71,14 @@ std::unique_ptr<SqlQueryRunner> SqlQueryRunnerTestBase::makeRunner(
       "test_user", &progressScheduler_, useV2_);
 
   runner->initialize(
-      initConnectors,
+      [&]() {
+        facebook::axiom::Connectors connectors{
+            connector::ConnectorRegistry::global(),
+            facebook::axiom::connector::ConnectorMetadataRegistry::global()};
+        auto catalog = initializeConnectors(connectors);
+        connectorIds_.emplace_back(catalog.first);
+        return catalog;
+      },
       std::move(permissionCheck),
       std::move(logicalPlanCheck),
       std::move(queryIdGenerator));
