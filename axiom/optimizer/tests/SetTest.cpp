@@ -621,30 +621,52 @@ TEST_P(SetTest, except) {
                          .build();
 
   auto plan = toSingleNodePlan(logicalPlan);
-  // Aliases bind stable names to each leg's scan output (the non-first scans of
-  // nation are disambiguated). The t1 (probe) leg also carries the combined
-  // (regionkey + 1) % 3 = 1 predicate pushed down from above the except.
-  // TODO Fix this plan to push down (n_regionkey + 1) % 3 = 1 to all branches
-  // of 'except'.
+  // V2 propagates the probe's predicates to both subtractors and reorders them.
   auto matchLeg = [](const std::string& filter) {
     return matchScan("nation")
         .aliases({"nationkey", "regionkey"})
         .filter(filter);
   };
-  auto matcher = matchLeg("nationkey < 21 and (regionkey + 1) % 3 = 1")
-                     .hashJoin(
-                         matchLeg("nationkey > 16"),
-                         core::JoinType::kAnti,
-                         {.nullAware = false})
-                     .hashJoin(
-                         matchLeg("nationkey <= 5"),
-                         core::JoinType::kAnti,
-                         {.nullAware = false})
-                     .singleAggregation()
-                     .project()
-                     .build();
+  auto matcher =
+      matchScan("nation")
+          .filter("n_nationkey < 21 and (n_regionkey + 1) % 3 = 1")
+          .hashJoin(
+              matchLeg(
+                  "\"and\"(nationkey < 21, (regionkey + 1) % 3 = 1, nationkey <= 5)")
+                  .aliases({"first_nationkey", "first_regionkey"}),
+              core::JoinType::kAnti,
+              {
+                  .nullAware = false,
+                  .keys =
+                      {
+                          {
+                              "n_nationkey = first_nationkey",
+                              "n_regionkey = first_regionkey",
+                          },
+                      },
+                  .outputColumnNames = {{"n_nationkey", "n_regionkey"}},
+              })
+          .hashJoin(
+              matchLeg(
+                  "\"and\"(nationkey < 21, (regionkey + 1) % 3 = 1, nationkey > 16)")
+                  .aliases({"second_nationkey", "second_regionkey"}),
+              core::JoinType::kAnti,
+              {
+                  .nullAware = false,
+                  .keys =
+                      {
+                          {
+                              "n_nationkey = second_nationkey",
+                              "n_regionkey = second_regionkey",
+                          },
+                      },
+                  .outputColumnNames = {{"n_nationkey", "n_regionkey"}},
+              })
+          .singleAggregation({"n_nationkey", "n_regionkey"}, {})
+          .project({"n_nationkey", "n_regionkey + 1 as rk"})
+          .build();
 
-  AXIOM_ASSERT_PLAN_V1(plan, matcher);
+  AXIOM_ASSERT_PLAN_V2(plan, matcher);
 }
 
 TEST_P(SetTest, exceptAll) {
@@ -660,21 +682,41 @@ TEST_P(SetTest, exceptAll) {
   auto matchBuild = [](const std::string& filter) {
     return matchScan("nation")
         .aliases({"nationkey", "regionkey"})
-        .filter(filter);
+        .filter("nationkey < 21 and (" + filter + ")");
+  };
+  const core::HashJoinDetails firstJoin{
+      .keys =
+          {{"n_nationkey = first_nationkey", "n_regionkey = first_regionkey"}},
+      .outputColumnNames = {{"n_nationkey", "n_regionkey"}},
+  };
+  const core::HashJoinDetails secondJoin{
+      .keys =
+          {
+              {
+                  "n_nationkey = second_nationkey",
+                  "n_regionkey = second_regionkey",
+              },
+          },
+      .outputColumnNames = {{"n_nationkey", "n_regionkey"}},
   };
 
   {
     // Single-node, single-driver: counting anti joins, no aggregation.
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = matchScan("nation")
-                       .filter("n_nationkey < 21")
-                       .hashJoin(
-                           matchBuild("nationkey > 16 and nationkey < 21"),
-                           core::JoinType::kCountingAnti)
-                       .hashJoin(
-                           matchBuild("nationkey <= 5 and nationkey < 21"),
-                           core::JoinType::kCountingAnti)
-                       .build();
+    auto matcher =
+        matchScan("nation")
+            .filter("n_nationkey < 21")
+            .hashJoin(
+                matchBuild("nationkey > 16")
+                    .aliases({"first_nationkey", "first_regionkey"}),
+                core::JoinType::kCountingAnti,
+                firstJoin)
+            .hashJoin(
+                matchBuild("nationkey <= 5")
+                    .aliases({"second_nationkey", "second_regionkey"}),
+                core::JoinType::kCountingAnti,
+                secondJoin)
+            .build();
     AXIOM_ASSERT_PLAN_V2(plan, matcher);
   }
 
@@ -687,36 +729,47 @@ TEST_P(SetTest, exceptAll) {
             .filter("n_nationkey < 21")
             .localPartition({"n_nationkey", "n_regionkey"})
             .hashJoin(
-                matchBuild("nationkey > 16"), core::JoinType::kCountingAnti)
+                matchBuild("nationkey > 16")
+                    .aliases({"first_nationkey", "first_regionkey"}),
+                core::JoinType::kCountingAnti,
+                firstJoin)
             .hashJoin(
-                matchBuild("nationkey <= 5"), core::JoinType::kCountingAnti)
+                matchBuild("nationkey <= 5")
+                    .aliases({"second_nationkey", "second_regionkey"}),
+                core::JoinType::kCountingAnti,
+                secondJoin)
             .build();
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
   }
 
-  auto matchPartitionedBuild = [](const std::string& filter) {
-    return matchScan("nation")
-        .aliases({"nationkey", "regionkey"})
-        .filter(filter)
-        .shuffle();
-  };
+  auto matchPartitionedBuild =
+      [&](const std::string& filter,
+          const std::vector<std::optional<std::string>>& aliases) {
+        return matchBuild(filter).aliases(aliases).shuffle(
+            {"nationkey", "regionkey"});
+      };
 
   {
     // Distributed: all sides co-partitioned by join keys (no broadcast).
     auto distributedPlan = planVelox(logicalPlan);
-    auto matcher = matchScan("nation")
-                       .filter("n_nationkey < 21")
-                       .shuffle({"n_nationkey", "n_regionkey"})
-                       .localPartition({"n_nationkey", "n_regionkey"})
-                       .hashJoin(
-                           matchPartitionedBuild("nationkey > 16"),
-                           core::JoinType::kCountingAnti)
-                       .hashJoin(
-                           matchPartitionedBuild("nationkey <= 5"),
-                           core::JoinType::kCountingAnti)
-                       .gather()
-                       .build();
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(distributedPlan.plan, matcher);
+    auto matcher =
+        matchScan("nation")
+            .filter("n_nationkey < 21")
+            .shuffle({"n_nationkey", "n_regionkey"})
+            .localPartition({"n_nationkey", "n_regionkey"})
+            .hashJoin(
+                matchPartitionedBuild(
+                    "nationkey > 16", {"first_nationkey", "first_regionkey"}),
+                core::JoinType::kCountingAnti,
+                firstJoin)
+            .hashJoin(
+                matchPartitionedBuild(
+                    "nationkey <= 5", {"second_nationkey", "second_regionkey"}),
+                core::JoinType::kCountingAnti,
+                secondJoin)
+            .gather()
+            .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(distributedPlan.plan, matcher);
   }
 }
 
@@ -771,15 +824,14 @@ TEST_P(SetTest, intersectAll) {
       "INTERSECT ALL SELECT a FROM t2 "
       "INTERSECT ALL SELECT a FROM t3");
 
-  auto matchBuild = [](const std::string& table) { return matchScan(table); };
   {
     // Single-driver: counting left semi filter joins, no aggregation.
     auto plan = toSingleNodePlan(logicalPlan);
 
     auto matcher =
         matchScan("t1")
-            .hashJoin(matchBuild("t2"), core::JoinType::kCountingLeftSemiFilter)
-            .hashJoin(matchBuild("t3"), core::JoinType::kCountingLeftSemiFilter)
+            .hashJoin(matchScan("t2"), core::JoinType::kCountingLeftSemiFilter)
+            .hashJoin(matchScan("t3"), core::JoinType::kCountingLeftSemiFilter)
             .build();
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
@@ -791,31 +843,35 @@ TEST_P(SetTest, intersectAll) {
     auto matcher =
         matchScan("t1")
             .localPartition({"a"})
-            .hashJoin(matchBuild("t2"), core::JoinType::kCountingLeftSemiFilter)
-            .hashJoin(matchBuild("t3"), core::JoinType::kCountingLeftSemiFilter)
+            .hashJoin(matchScan("t2"), core::JoinType::kCountingLeftSemiFilter)
+            .hashJoin(matchScan("t3"), core::JoinType::kCountingLeftSemiFilter)
             .build();
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
-  auto matchPartitionedBuild = [](const std::string& table) {
-    return matchScan(table).shuffle();
+  auto matchPartitionedBuild = [](const std::string& table,
+                                  const std::string& key) {
+    return matchScan(table).aliases({key}).shuffle({key});
   };
 
   {
     // Distributed: all sides co-partitioned by join keys (no broadcast).
     auto distributedPlan = planVelox(logicalPlan);
-    auto matcher = matchScan("t1")
-                       .shuffle({"a"})
-                       .localPartition({"a"})
-                       .hashJoin(
-                           matchPartitionedBuild("t2"),
-                           core::JoinType::kCountingLeftSemiFilter)
-                       .hashJoin(
-                           matchPartitionedBuild("t3"),
-                           core::JoinType::kCountingLeftSemiFilter)
-                       .gather()
-                       .build();
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(distributedPlan.plan, matcher);
+    auto matcher =
+        matchScan("t1")
+            .shuffle({"a"})
+            .localPartition({"a"})
+            .hashJoin(
+                matchPartitionedBuild("t2", "t2_a"),
+                core::JoinType::kCountingLeftSemiFilter,
+                {.keys = {{"a = t2_a"}}, .outputColumnNames = {{"a"}}})
+            .hashJoin(
+                matchPartitionedBuild("t3", "t3_a"),
+                core::JoinType::kCountingLeftSemiFilter,
+                {.keys = {{"a = t3_a"}}, .outputColumnNames = {{"a"}}})
+            .gather()
+            .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
   }
 }
 
@@ -827,14 +883,16 @@ TEST_P(SetTest, intersectAllSideSwap) {
   testConnector_->addTable("small", ROW({"x"}, BIGINT()))
       ->setStats(100, {{"x", {.numDistinct = 100}}});
 
-  auto startMatcher = [&]() {
+  auto startMatcher = []() {
     return matchScan("big").hashJoin(
         matchScan("small"), core::JoinType::kCountingLeftSemiFilter);
   };
 
-  auto startDistributedMatcher = [&]() {
+  auto startDistributedMatcher = []() {
     return matchScan("big").shuffle({"a"}).localPartition({"a"}).hashJoin(
-        matchScan("small").shuffle(), core::JoinType::kCountingLeftSemiFilter);
+        matchScan("small").shuffle({"x"}),
+        core::JoinType::kCountingLeftSemiFilter,
+        {.keys = {{"a = x"}}, .outputColumnNames = {{"a"}}});
   };
 
   // big INTERSECT ALL small: 'big' is probe, 'small' is build.
@@ -844,7 +902,7 @@ TEST_P(SetTest, intersectAllSideSwap) {
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), startMatcher().build());
 
     auto distributedPlan = planVelox(logicalPlan);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
         distributedPlan.plan, startDistributedMatcher().gather().build());
   }
 
@@ -860,7 +918,7 @@ TEST_P(SetTest, intersectAllSideSwap) {
     // Output rename project: join outputs 'a' (probe) but query expects
     // 'x' (the original left side column name).
     auto distributedPlan = planVelox(logicalPlan);
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
         distributedPlan.plan,
         startDistributedMatcher().project({"a as x"}).gather().build());
   }
@@ -924,24 +982,18 @@ TEST_P(SetTest, unionDistinctOverGatherInputs) {
 
   AXIOM_ASSERT_PLAN_V2(
       toSingleNodePlan(logicalPlan),
-      matchValues()
-          .localPartition(matchValues())
+      matchValues<int32_t>({"k"}, {{1}})
+          .localPartition(matchValues<int32_t>({"k"}, {{2}}))
           .singleAggregation({"k"}, {})
           .build());
 
-  // TODO: The inner localPartition({"k"}) is a redundant hash repartition
-  // immediately after the round-robin local merge from UnionAll. ToVelox's
-  // makeAggregation adds it for multi-driver hash co-location even though
-  // the round-robin just spread the data. Folding the two would let
-  // makeAggregation skip this step.
-  AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
-      planVelox(logicalPlan).plan,
-      matchValues()
-          .project()
-          .localPartition(matchValues().project())
-          .localPartition({"k"})
-          .singleAggregation({"k"}, {})
-          .build());
+  auto matcher = matchValues<int32_t>({"k"}, {{1}})
+                     .localPartition(matchValues<int32_t>({"k"}, {{2}}))
+                     .partialAggregation({"k"}, {})
+                     .localPartition({"k"})
+                     .finalAggregation({"k"}, {})
+                     .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(planVelox(logicalPlan).plan, matcher);
 }
 
 // A nondeterministic filter pushes below UNION ALL (no dedup → safe) but
@@ -985,15 +1037,18 @@ TEST_P(SetTest, nondeterministicFilterAboveUnion) {
             .filter("k::double > rand()")
             .build());
 
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(
-        planVelox(logicalPlan).plan,
+    auto matcher =
         matchScan("nation")
             .project({"n_nationkey as k"})
             .localPartition(matchScan("region").project({"r_regionkey as k"}))
-            .distributedSingleAggregation({"k"}, {})
+            .partialAggregation({"k"}, {})
+            .shuffle({"k"})
+            .localPartition({"k"})
+            .finalAggregation({"k"}, {})
             .filter("k::double > rand()")
             .gather()
-            .build());
+            .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(planVelox(logicalPlan).plan, matcher);
   }
 }
 
@@ -1017,20 +1072,23 @@ TEST_P(SetTest, filterOnDuplicateColumnInUnionAll) {
     auto matcher = matchScan("t")
                        .filter("x > 0")
                        .project()
-                       .localPartition(matchValues().projectIf(!useV2_))
+                       .localPartition(matchValues())
                        .build();
-    AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
+    AXIOM_ASSERT_PLAN_V2(toSingleNodePlan(logicalPlan), matcher);
   }
 
   {
     // Values is isolated behind an arbitrary exchange.
     auto matcher = matchScan("t")
                        .filter("x > 0")
-                       .project()
-                       .localPartition(matchValues().project().arbitrary())
+                       .project({"x as b"})
+                       .localPartition(
+                           matchValues<int64_t>({"value"}, {{3}})
+                               .arbitrary()
+                               .project({"value as b"}))
                        .gather()
                        .build();
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(planVelox(logicalPlan).plan, matcher);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(planVelox(logicalPlan).plan, matcher);
   }
 }
 

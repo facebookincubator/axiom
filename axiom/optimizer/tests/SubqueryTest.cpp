@@ -1780,27 +1780,35 @@ TEST_P(SubqueryTest, nonEquiCorrelatedProject) {
     }
 
     {
-      auto matcher = matchHiveScan("region")
-                         .assignUniqueId("unique_id")
-                         .nestedLoopJoin(
-                             matchHiveScan("nation")
-                                 .project({"true as marker", "n_regionkey"})
-                                 .broadcast(),
-                             velox::core::JoinType::kLeft)
-                         .streamingAggregation(
-                             {"unique_id"},
-                             {
-                                 "count(*) filter (where marker) as cnt",
-                                 "arbitrary(r_regionkey)",
-                                 "arbitrary(r_name) as r_name",
-                             })
-                         .project({"length(r_name)", "cnt"})
-                         .gather()
-                         .project()
-                         .build();
+      auto matcher =
+          matchHiveScan("region")
+              .assignUniqueId("unique_id")
+              .nestedLoopJoin(
+                  matchHiveScan("nation")
+                      .project({"n_regionkey", "true as marker"})
+                      .broadcast(),
+                  velox::core::JoinType::kLeft,
+                  "r_regionkey > n_regionkey")
+              .partialAggregation(
+                  {"unique_id"},
+                  {
+                      "count(*) filter (where marker) as partial_count",
+                      "arbitrary(r_name) as partial_name",
+                  })
+              .shuffle({"unique_id"})
+              .localPartition({"unique_id"})
+              .finalAggregation(
+                  {"unique_id"},
+                  {
+                      "count(partial_count) as cnt",
+                      "arbitrary(partial_name) as r_name",
+                  })
+              .project({"length(r_name)", "cnt"})
+              .gather()
+              .build();
 
       auto distributedPlan = planVelox(logicalPlan);
-      AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(distributedPlan.plan, matcher);
+      AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(distributedPlan.plan, matcher);
     }
   }
 }
