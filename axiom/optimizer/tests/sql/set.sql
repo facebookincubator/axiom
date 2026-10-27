@@ -330,6 +330,9 @@ SELECT 1 FROM t WHERE a > 0 UNION SELECT a FROM t WHERE false
 ----
 SELECT a % 2 FROM t WHERE b > 0 UNION SELECT a FROM t WHERE false
 ----
+SELECT a FROM (VALUES (1), (2)) AS u(a)
+UNION SELECT a FROM (VALUES (3)) AS v(a) WHERE false
+----
 -- A constant UNION whose inputs reference an outer column is not supported.
 -- error_v1: Correlated reference inside a UNION ALL branch is not supported yet
 -- error_v2: Correlated reference inside a UnionAll branch is not supported yet

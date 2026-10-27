@@ -76,7 +76,8 @@ NodeCP PrecomputeProjections::makeProject(
           {values->source(),
            values->rows(),
            std::move(outColumns),
-           std::move(channels)});
+           std::move(channels),
+           values->placement()});
     }
   }
   return builder.make<Project>(
