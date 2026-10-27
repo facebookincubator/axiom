@@ -472,7 +472,7 @@ parser plans a `GRAPH_TABLE` as a GraphMatch logical plan node, which
 optimizer does not run them. With v2, a query that uses any of these fails
 with an error that names it:
 
-- a path mode other than `WALK`;
+- a path mode other than `WALK` on a path with repetition or on a subpath;
 - a repetition with no upper bound, or a shortest-path selector on a path
   with repetition;
 - a repeated or optional subpath that starts or ends with an edge pattern;

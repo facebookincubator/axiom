@@ -383,3 +383,9 @@ SELECT * FROM GRAPH_TABLE (g
   MATCH p = (a IS Person WHERE a.name = 'Alice')
     ((x IS Person) -[IS Knows]-> (m IS Person))? (b IS Person)
   COLUMNS (b.name AS b, path_length(p) AS n))
+----
+-- error: Graph path mode on a path with repetition is not supported yet: TRAIL
+WITH ${graph}
+SELECT * FROM GRAPH_TABLE (g
+  MATCH TRAIL (a IS Person) -[IS Knows]->{1,2} (b IS Person)
+  COLUMNS (b.name AS b))

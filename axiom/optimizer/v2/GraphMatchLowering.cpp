@@ -16,6 +16,7 @@
 
 #include "axiom/optimizer/v2/GraphMatchLowering.h"
 
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <numeric>
@@ -323,17 +324,24 @@ void Translator::GraphMatchLowering::copySharedElements() {
       if (pathInfo.last == original) {
         pathInfo.last = index;
       }
+      // The mode compares the elements this path binds, so its own copy.
+      std::ranges::replace(pathInfo.vertices, original, index);
+      std::ranges::replace(pathInfo.edges, original, index);
     }
   }
 }
 
 std::vector<std::vector<Translator::GraphMatchLowering::EdgeEnd>>
 Translator::GraphMatchLowering::fold() {
-  // A selector partitions a path's matches by its endpoints' identities.
+  // A selector partitions a path's matches by its endpoints' identities, and
+  // a mode compares the identities of the path's vertices or edges.
   for (const auto& path : paths_) {
     if (path.limit.has_value()) {
       elements_[path.first].needsIdentity = true;
       elements_[path.last].needsIdentity = true;
+    }
+    for (const auto element : path.comparedElements()) {
+      elements_[element].needsIdentity = true;
     }
   }
   // A walk joins its ends, and the hops of a repeated subpath, on their
@@ -425,11 +433,12 @@ void Translator::GraphMatchLowering::addPath(
         "Shortest-path selector on a path with repetition is not supported "
         "yet");
   }
-  if (path.mode != lp::GraphPathMode::kWalk) {
+  if (repeats && path.mode != lp::GraphPathMode::kWalk) {
     VELOX_NYI(
-        "Graph path mode is not supported yet: {}",
+        "Graph path mode on a path with repetition is not supported yet: {}",
         lp::GraphPathModeName::toName(path.mode));
   }
+  pathInfo.mode = path.mode;
 
   TermCursor cursor{.path = pathIndex, .predicates = &pathInfo.predicates};
   if (!path.name.empty()) {
@@ -488,6 +497,7 @@ void Translator::GraphMatchLowering::addVertex(
 
   const auto index = bind(pattern);
   elements_[index].paths.insert(cursor.path);
+  paths_[cursor.path].vertices.push_back(index);
   if (!cursor.vertex.has_value()) {
     cursor.first = index;
   }
@@ -531,6 +541,7 @@ void Translator::GraphMatchLowering::addEdge(
   edgeAt(index).undirected = undirected;
   const bool pointsRight = edge.direction() != Direction::kLeft;
   if (repetition == nullptr) {
+    paths_[cursor.path].edges.push_back(index);
     cursor.pendingEdge = EdgeOccurrence{
         .edge = index,
         .from = *cursor.vertex,
@@ -561,7 +572,7 @@ void Translator::GraphMatchLowering::addSubpath(
     TermCursor& cursor) {
   if (subpath.mode() != lp::GraphPathMode::kWalk) {
     VELOX_NYI(
-        "Graph path mode is not supported yet: {}",
+        "Graph subpath mode is not supported yet: {}",
         lp::GraphPathModeName::toName(subpath.mode()));
   }
 
@@ -1454,6 +1465,69 @@ std::set<size_t> Translator::GraphMatchLowering::componentPaths(
   return paths;
 }
 
+std::span<const size_t> Translator::GraphMatchLowering::Path::comparedElements()
+    const {
+  switch (mode) {
+    case lp::GraphPathMode::kWalk:
+      return {};
+    case lp::GraphPathMode::kTrail:
+      return edges;
+    case lp::GraphPathMode::kAcyclic:
+    case lp::GraphPathMode::kSimple:
+      return vertices;
+  }
+  VELOX_UNREACHABLE();
+}
+
+ExprVector Translator::GraphMatchLowering::modePredicates(
+    const Path& path) const {
+  const auto elements = path.comparedElements();
+  ExprVector conjuncts;
+  for (size_t i = 0; i < elements.size(); ++i) {
+    for (size_t j = i + 1; j < elements.size(); ++j) {
+      if (path.mode == lp::GraphPathMode::kSimple && i == 0 &&
+          j == elements.size() - 1) {
+        continue;
+      }
+      if (auto distinct = makeDistinct(elements[i], elements[j])) {
+        conjuncts.push_back(distinct);
+      }
+    }
+  }
+  return conjuncts;
+}
+
+ExprCP FOLLY_NULLABLE
+Translator::GraphMatchLowering::makeDistinct(size_t lhs, size_t rhs) const {
+  if (lhs == rhs) {
+    return translator_.builder_.makeBoolean(false);
+  }
+  const auto tableIds = [&](size_t element) {
+    folly::F14FastSet<int32_t> ids;
+    for (const auto& leg : elements_[element].legs) {
+      ids.insert(leg.table->id);
+    }
+    return ids;
+  };
+  const auto lhsIds = tableIds(lhs);
+  const auto rhsIds = tableIds(rhs);
+  if (std::none_of(lhsIds.begin(), lhsIds.end(), [&](int32_t id) {
+        return rhsIds.contains(id);
+      })) {
+    return nullptr;
+  }
+  const bool withTableId = lhsIds.size() > 1 || rhsIds.size() > 1;
+  const auto lhsIdentity = identityOf(lhs, withTableId);
+  const auto rhsIdentity = identityOf(rhs, withTableId);
+  VELOX_CHECK_EQ(lhsIdentity.size(), rhsIdentity.size());
+  auto& factory = translator_.exprFactory_;
+  ExprVector equalities;
+  for (size_t i = 0; i < lhsIdentity.size(); ++i) {
+    equalities.push_back(factory.makeEq(lhsIdentity[i], rhsIdentity[i]));
+  }
+  return factory.makeNot(factory.andAll(equalities));
+}
+
 NodeCP Translator::GraphMatchLowering::limitMatches(
     NodeCP node,
     const Path& path) {
@@ -1490,7 +1564,9 @@ NodeCP Translator::GraphMatchLowering::limitMatches(
 NodeCP Translator::GraphMatchLowering::lowerComponent(
     const std::vector<size_t>& component) {
   auto pathPredicates = [&](size_t path) {
-    return translatePredicates(paths_[path].predicates, path);
+    auto conjuncts = translatePredicates(paths_[path].predicates, path);
+    appendAll(conjuncts, modePredicates(paths_[path]));
+    return conjuncts;
   };
 
   // Each path with a selector joins, filters and limits its own elements.
@@ -1517,8 +1593,8 @@ NodeCP Translator::GraphMatchLowering::lowerComponent(
       }
     }
     NodeCP node = join(singletons, std::move(memberNodes));
-    if (!paths_[path].predicates.empty()) {
-      node = filter(node, pathPredicates(path));
+    if (auto conjuncts = pathPredicates(path); !conjuncts.empty()) {
+      node = filter(node, std::move(conjuncts));
     }
     groups.push_back(std::move(members));
     nodes.push_back(limitMatches(node, paths_[path]));

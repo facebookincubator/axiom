@@ -18,7 +18,10 @@
 
 #include <array>
 #include <set>
+#include <span>
 #include <variant>
+
+#include <folly/CppAttributes.h>
 
 #include "axiom/optimizer/v2/Translator.h"
 
@@ -318,12 +321,21 @@ class Translator::GraphMatchLowering {
   };
 
   // A path pattern: its selector's limit on matches per pair of endpoints,
-  // its endpoint vertices, and its term predicates.
+  // its endpoint vertices, its term predicates, and its mode with the
+  // vertices and edges it binds, in path order.
   struct Path {
     std::optional<int32_t> limit;
     size_t first{0};
     size_t last{0};
     std::vector<const logical_plan::Expr*> predicates;
+    logical_plan::GraphPathMode mode{logical_plan::GraphPathMode::kWalk};
+    std::vector<size_t> vertices;
+    std::vector<size_t> edges;
+
+    // Returns the elements the mode compares: the edges of a trail, or the
+    // vertices of an acyclic or simple path. See modePredicates for which
+    // pairs of them must differ.
+    std::span<const size_t> comparedElements() const;
   };
 
   // The length of a named path or subpath: its edges outside repetitions,
@@ -626,6 +638,15 @@ class Translator::GraphMatchLowering {
   // Applies node simplification facts to every expression the lowering
   // holds: element columns and rows, and connection keys.
   void substitute(const PlanSubstitutions& substitutions);
+
+  // Returns the conditions the mode of 'path' puts on its elements: each two
+  // compared elements differ, except a simple path's first and last vertices.
+  ExprVector modePredicates(const Path& path) const;
+
+  // Returns a condition that elements 'lhs' and 'rhs' differ, or nullptr when
+  // their tables cannot hold one element. Elements that each match one table
+  // match the same one and differ by key; others differ by table ID or key.
+  ExprCP FOLLY_NULLABLE makeDistinct(size_t lhs, size_t rhs) const;
 
   // Translates 'predicates' against the pattern names. In the predicates of
   // 'path', a name stands for the copy of its element that path binds.

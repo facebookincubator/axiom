@@ -368,3 +368,95 @@ WITH ${graph}
 SELECT * FROM GRAPH_TABLE (g
   MATCH (a IS Person) -[IS LivesIn]-> (c IS City), (p IS Person)
   COLUMNS (a.name AS a, p.name AS p))
+----
+-- Who reaches whom in two steps over two different edges: a trail follows
+-- Dave's edge to himself once.
+-- duckdb:
+--   VALUES
+--     ('Alice', 'Bob', 'Alice'),
+--     ('Alice', 'Bob', 'Carol'),
+--     ('Bob', 'Alice', 'Bob'),
+--     ('Bob', 'Carol', 'Dave'),
+--     ('Carol', 'Dave', 'Dave')
+WITH ${graph}
+SELECT * FROM GRAPH_TABLE (g
+  MATCH TRAIL (a IS Person) -[IS Knows]-> (b IS Person)
+    -[IS Knows]-> (c IS Person)
+  COLUMNS (a.name AS a, b.name AS b, c.name AS c))
+----
+-- Who follows one edge twice in a trail: a trail matches no path that binds
+-- one edge pattern twice.
+-- count 0
+WITH ${graph}
+SELECT * FROM GRAPH_TABLE (g
+  MATCH TRAIL (a IS Person) -[k IS Knows]-> (b IS Person) -[k]-> (c IS Person)
+  COLUMNS (a.name AS a))
+----
+-- Who reaches whom in two steps through three different people.
+-- duckdb: VALUES ('Alice', 'Bob', 'Carol'), ('Bob', 'Carol', 'Dave')
+WITH ${graph}
+SELECT * FROM GRAPH_TABLE (g
+  MATCH ACYCLIC (a IS Person) -[IS Knows]-> (b IS Person)
+    -[IS Knows]-> (c IS Person)
+  COLUMNS (a.name AS a, b.name AS b, c.name AS c))
+----
+-- Who knows someone living in a listed city, without meeting a vertex twice:
+-- a person and a city are never the same vertex.
+-- duckdb:
+--   VALUES
+--     ('Alice', 'Bob', 'Rome'),
+--     ('Bob', 'Alice', 'Paris'),
+--     ('Bob', 'Carol', 'Paris')
+WITH ${graph}
+SELECT * FROM GRAPH_TABLE (g
+  MATCH ACYCLIC (a IS Person) -[IS Knows]-> (b IS Person)
+    -[IS LivesIn]-> (c IS City)
+  COLUMNS (a.name AS a, b.name AS b, c.name AS c))
+----
+-- Whom or where each person knows or works at, but for themselves: Alice and
+-- Acme share the key 1 and are different vertices.
+-- duckdb:
+--   VALUES
+--     ('Alice', 'Bob'),
+--     ('Bob', 'Alice'),
+--     ('Bob', 'Carol'),
+--     ('Carol', 'Dave'),
+--     ('Alice', 'Acme'),
+--     ('Carol', 'Acme'),
+--     ('Dave', 'Globex')
+WITH ${graph}
+SELECT * FROM GRAPH_TABLE (g
+  MATCH ACYCLIC (a IS Person) -[IS Knows | WorksAt]-> (x IS Person | Company)
+  COLUMNS (a.name AS a, x.name AS x))
+----
+-- Who reaches whom in two steps without meeting a person twice, but for
+-- returning to the start: a simple path may end where it starts.
+-- duckdb:
+--   VALUES
+--     ('Alice', 'Bob', 'Alice'),
+--     ('Alice', 'Bob', 'Carol'),
+--     ('Bob', 'Alice', 'Bob'),
+--     ('Bob', 'Carol', 'Dave')
+WITH ${graph}
+SELECT * FROM GRAPH_TABLE (g
+  MATCH SIMPLE (a IS Person) -[IS Knows]-> (b IS Person)
+    -[IS Knows]-> (c IS Person)
+  COLUMNS (a.name AS a, b.name AS b, c.name AS c))
+----
+-- Who knows the same person as whom over a different edge: a trail compares
+-- edges whichever way the path follows them.
+-- duckdb: VALUES ('Carol', 'Dave', 'Dave'), ('Dave', 'Dave', 'Carol')
+WITH ${graph}
+SELECT * FROM GRAPH_TABLE (g
+  MATCH TRAIL (a IS Person) -[IS Knows]-> (b IS Person)
+    <-[IS Knows]- (c IS Person)
+  COLUMNS (a.name AS a, b.name AS b, c.name AS c))
+----
+-- Where each person lives, and whom they reach in two steps through three
+-- different people: the second path compares its own copy of the shared 'a'.
+-- duckdb: VALUES ('Alice', 'Paris', 'Bob', 'Carol'), ('Bob', 'Rome', 'Carol', 'Dave')
+WITH ${graph}
+SELECT * FROM GRAPH_TABLE (g
+  MATCH ANY (a IS Person) -[IS LivesIn]-> (x IS City),
+    ANY ACYCLIC (a) -[IS Knows]-> (b IS Person) -[IS Knows]-> (c IS Person)
+  COLUMNS (a.name AS a, x.name AS x, b.name AS b, c.name AS c))

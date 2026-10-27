@@ -157,8 +157,8 @@ Each fails with an error that names it:
 - Repeated or optional subpaths that start or end with an edge pattern, and
   repetition with no upper bound.
 - A repetition or an optional subpath inside a repeated or optional subpath.
-- Path modes other than `WALK`, and shortest-path selectors on a path with
-  repetition.
+- Path modes other than `WALK` on a path with repetition or on a subpath, and
+  shortest-path selectors on a path with repetition.
 - The length of a named optional subpath.
 - A vertex whose tables have keys of different types where its identity is
   compared.
