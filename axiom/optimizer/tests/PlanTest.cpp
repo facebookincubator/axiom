@@ -193,7 +193,7 @@ TEST_P(PlanTest, rejectedFilters) {
 
 TEST_P(PlanTest, booleanSimplification) {
   if (!useV2_) {
-    GTEST_SKIP() << "Only supported by the V2 optimizer";
+    return;
   }
 
   testConnector_->addTable("numbers", ROW({"a", "b", "c"}, BIGINT()));

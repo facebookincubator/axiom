@@ -393,9 +393,6 @@ class SqlTest : public SqlTestBase {
   }
 
   void TestBody() override {
-    if (!UseV2 && entry_.disabledV1Reason.has_value()) {
-      GTEST_SKIP() << "Disabled under v1: " << *entry_.disabledV1Reason;
-    }
     const std::string& expectedError =
         UseV2 ? entry_.expectedErrorV2 : entry_.expectedErrorV1;
     try {
@@ -479,9 +476,10 @@ connector::hive::LocalHiveConnectorMetadata*
     SqlTest<Name, UseV2>::suiteHiveMetadata_ = nullptr;
 
 // Registers every query in 'file' as an individual gtest test under the suite
-// 'V1/SqlTest_<name>' or 'V2/SqlTest_<name>' (per UseV2). Each query runs under
-// both cost-based (default) and syntactic join ordering, on several workers.
-// With 'singleNodeAndDistributed', each query also runs on one worker as
+// 'V1/SqlTest_<name>' or 'V2/SqlTest_<name>' (per UseV2). The v1 suite leaves
+// out queries marked '-- disabled_v1:'. Each query runs under both cost-based
+// (default) and syntactic join ordering, on several workers. With
+// 'singleNodeAndDistributed', each query also runs on one worker as
 // 'l<line>_single_node'.
 template <FileName Name, bool UseV2>
 void registerVariant(
@@ -519,6 +517,9 @@ void registerVariant(
         });
   };
   for (const auto& entry : file.entries) {
+    if (!UseV2 && entry.disabledV1Reason.has_value()) {
+      continue;
+    }
     registerTest(
         entry,
         fmt::format("l{}", entry.lineNumber),
