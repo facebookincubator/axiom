@@ -354,20 +354,32 @@ Translator::GraphMatchLowering::fold() {
       elements_[repetition.last].needsIdentity = true;
     }
   }
+  // The edges at each vertex's ends, one entry per end.
+  std::vector<std::vector<size_t>> edgesAt(elements_.size());
   for (const auto& occurrence : occurrences_) {
     for (const auto& end : occurrence.ends()) {
       ++vertexAt(end.vertex).numEdgeEnds;
+      edgesAt[end.vertex].push_back(occurrence.edge);
     }
   }
+  const auto betweenEdges = [&](size_t vertex) {
+    const auto& edges = edgesAt[vertex];
+    return edges.size() == 2 && edges[0] != edges[1] &&
+        !elements_[edges[0]].inZeroHops && !elements_[edges[1]].inZeroHops;
+  };
   std::vector<std::vector<EdgeEnd>> foldedEnds(elements_.size());
   for (const auto& occurrence : occurrences_) {
     for (const auto& end : occurrence.ends()) {
-      if (elements_[end.vertex].folds()) {
-        auto& vertex = vertexAt(end.vertex);
-        vertex.foldedEdge = occurrence.edge;
-        vertex.foldedAtSource = end.source;
-        foldedEnds[occurrence.edge].push_back(end);
+      auto& vertex = vertexAt(end.vertex);
+      if (vertex.folded ||
+          !(vertex.numEdgeEnds == 1 ||
+            (betweenEdges(end.vertex) && isEdgeRow(occurrence.edge, end)))) {
+        continue;
       }
+      vertex.folded = true;
+      vertex.foldedEdge = occurrence.edge;
+      vertex.foldedAtSource = end.source;
+      foldedEnds[occurrence.edge].push_back(end);
     }
   }
   return foldedEnds;
@@ -968,6 +980,26 @@ bool sameRow(
 
 } // namespace
 
+bool Translator::GraphMatchLowering::isEdgeRow(size_t edge, const EdgeEnd& end)
+    const {
+  const auto& edgeLegs = elements_[edge].legs;
+  const auto& vertexLegs = elements_[end.vertex].legs;
+  if (edgeLegs.size() != 1 || vertexLegs.size() != 1) {
+    return false;
+  }
+  const auto& leg = edgeLegs[0];
+  const auto& vertexTable = *vertexLegs[0].table;
+  const auto edgeScanned = ScannedTable::of(*leg.table);
+  const auto vertexScanned = ScannedTable::of(vertexTable);
+  return edgeScanned.has_value() && vertexScanned.has_value() &&
+      leg.tableId(end.source) == vertexTable.id &&
+      sameRow(
+             *edgeScanned,
+             leg.keyColumns(end.source),
+             *vertexScanned,
+             vertexTable.keyColumns);
+}
+
 Translated Translator::GraphMatchLowering::translateTable(
     const ElementTable& table) {
   auto planGuard = translator_.translatingPlan(*table.plan);
@@ -1026,8 +1058,11 @@ void Translator::GraphMatchLowering::buildEdge(
       continue;
     }
     for (const auto& end : occurrence.ends()) {
+      // A vertex that joins inside this edge alone reads nothing from the end
+      // unless it needs its identity.
       const auto& vertex = elements_[end.vertex];
-      if (!vertex.folds() || vertex.needsIdentity) {
+      const auto& state = std::get<VertexState>(vertex.state);
+      if (!vertex.folds() || state.numEdgeEnds > 1 || vertex.needsIdentity) {
         keepEnd[end.source] = true;
       }
     }
@@ -1353,12 +1388,15 @@ void Translator::GraphMatchLowering::connect() {
     if (edge.inZeroHops) {
       continue;
     }
+    // A folded vertex's rows are in the edge it joins inside, where the other
+    // edges at it join its identity.
     for (const auto& end : occurrence.ends()) {
-      if (elements_[end.vertex].folds()) {
+      const auto holder = holderOf(end.vertex);
+      if (holder == occurrence.edge) {
         continue;
       }
       connections_.push_back(
-          {end.vertex,
+          {holder,
            identityOf(end.vertex, /*withTableId=*/false),
            occurrence.edge,
            edge.identity(end.source)});

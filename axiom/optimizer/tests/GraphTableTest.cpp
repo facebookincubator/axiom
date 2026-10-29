@@ -39,6 +39,17 @@ constexpr std::string_view kPeopleGraph =
     "    SOURCE KEY (src) REFERENCES person (id)"
     "    DESTINATION KEY (dst) REFERENCES person (id) LABEL Knows))";
 
+// Employees, with an edge from each employee to their manager that is the
+// employee's own row.
+constexpr std::string_view kManagerGraph =
+    "GRAPH g AS ("
+    "  VERTEX TABLES (employee KEY (id) LABEL Employee PROPERTIES (name))"
+    "  EDGE TABLES ("
+    "    employee AS reports_to KEY (id)"
+    "      SOURCE KEY (id) REFERENCES employee (id)"
+    "      DESTINATION KEY (manager) REFERENCES employee (id)"
+    "      LABEL ReportsTo))";
+
 class GraphTableTest : public test::QueryTestBase {
  protected:
   velox::core::PlanNodePtr toSingleNodePlan(
@@ -67,6 +78,14 @@ class GraphTableTest : public test::QueryTestBase {
     testConnector_
         ->addTable("knows", velox::ROW({"src", "dst"}, velox::BIGINT()))
         ->setStats(10'000, {});
+    testConnector_
+        ->addTable(
+            "employee",
+            velox::ROW(
+                {{"id", velox::BIGINT()},
+                 {"manager", velox::BIGINT()},
+                 {"name", velox::VARCHAR()}}))
+        ->setStats(1'000, {});
   }
 };
 
@@ -296,6 +315,31 @@ TEST_F(GraphTableTest, narrowing) {
               matchScan("nation").aliases({"b_name", "b_regionkey"}),
               {.keys = {{"a_regionkey = b_regionkey"}}})
           .project({"a_name", "r_name", "b_name"})
+          .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+// A vertex between two edges reads its row from an edge whose rows are its
+// rows. Each ReportsTo edge is its employee's row, so the manager between two
+// hops is the second hop's row: employee is read once per hop and once for the
+// top manager, and m's name comes from the second read.
+TEST_F(GraphTableTest, edgeRows) {
+  auto plan = toSingleNodePlan(
+      kManagerGraph,
+      "MATCH (a IS Employee) -[IS ReportsTo]-> (m IS Employee) "
+      "-[IS ReportsTo]-> (b IS Employee) "
+      "COLUMNS (a.name AS a, m.name AS m, b.name AS b)");
+  auto matcher =
+      matchScan("employee")
+          .aliases({"a_manager", "a_name"})
+          .hashJoinInner(
+              matchScan("employee")
+                  .aliases({"m_id", "m_manager", "m_name"})
+                  .hashJoinInner(
+                      matchScan("employee").aliases({"b_id", "b_name"}),
+                      {.keys = {{"m_manager = b_id"}}}),
+              {.keys = {{"a_manager = m_id"}}})
+          .project({"a_name", "m_name", "b_name"})
           .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 }

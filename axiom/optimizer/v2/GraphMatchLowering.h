@@ -41,12 +41,14 @@ namespace facebook::axiom::optimizer::v2 {
 ///    for each of them but the first, since each such path is limited on its
 ///    own before paths join. A copy matches its original on identity.
 /// 4. Fold: a vertex at a single edge end joins inside the legs of that edge,
-///    and reads its identity from that end. A vertex table that reads the
-///    edge table's own rows is projected over the edge's scan. Other vertices
-///    keep a relation of their own.
+///    and reads its identity from that end; so does a vertex between two
+///    edges inside an edge whose rows are its rows. A vertex table that reads
+///    the edge table's own rows is projected over the edge's scan. Other
+///    vertices keep a relation of their own.
 /// 5. Build: builds each element's relation.
-/// 6. Connect: connects each edge to the unfolded vertices next to it, and
-///    each copy to its original, on their identities.
+/// 6. Connect: connects each edge to the vertices next to it, an unfolded
+///    vertex's relation or the edge another vertex folds into, and each copy
+///    to its original, on their identities.
 /// 7. Join: builds each repeated pattern's hops. Joins each path with a
 ///    selector on its own, filters it with its term predicates, and limits it
 ///    to the selector's matches per pair of endpoints. Then joins the rest of
@@ -131,8 +133,9 @@ class Translator::GraphMatchLowering {
     // Number of edge ends it sits at.
     int32_t numEdgeEnds{0};
 
-    // For a vertex that folds, the edge whose legs it joins inside, and
-    // whether it sits at that edge's source end.
+    // True for a vertex that joins inside the legs of an edge: 'foldedEdge',
+    // at its source end if 'foldedAtSource'.
+    bool folded{false};
     size_t foldedEdge{0};
     bool foldedAtSource{false};
   };
@@ -205,11 +208,11 @@ class Translator::GraphMatchLowering {
       return std::holds_alternative<EdgeState>(state);
     }
 
-    // True for a vertex that joins inside the legs of its one edge: it sits
-    // at a single edge end. Any other vertex has a relation of its own that
-    // the edges join on its identity.
+    // True for a vertex that joins inside the legs of an edge (see fold()).
+    // Any other vertex has a relation of its own that the edges join on its
+    // identity.
     bool folds() const {
-      return isVertex() && std::get<VertexState>(state).numEdgeEnds == 1;
+      return isVertex() && std::get<VertexState>(state).folded;
     }
 
     // Adds the IDs of the tables of its legs to 'ids'.
@@ -443,9 +446,17 @@ class Translator::GraphMatchLowering {
   // earlier path with a selector binds.
   void copySharedElements();
 
-  // Sets each vertex's VertexState. Returns, for each edge, the ends whose
-  // vertices join inside its legs.
+  // Sets each vertex's VertexState. A vertex at a single edge end joins
+  // inside that edge's legs. A vertex at the ends of two edges joins inside
+  // one whose rows are its rows (see isEdgeRow), and the other edge joins it
+  // there on its identity. Returns, for each edge, the ends whose vertices
+  // join inside its legs.
   std::vector<std::vector<EdgeEnd>> fold();
+
+  // True if each row of edge 'edge' is the row of the vertex at 'end' that it
+  // references: each matches one table, and the two scan one table whose key
+  // the edge's end columns are.
+  bool isEdgeRow(size_t edge, const EdgeEnd& end) const;
 
   // Translates the plan of 'table'.
   Translated translateTable(const ElementTable& table);
