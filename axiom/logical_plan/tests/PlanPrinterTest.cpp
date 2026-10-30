@@ -782,7 +782,8 @@ TEST_F(PlanPrinterTest, unnest) {
         lines,
         testing::ElementsAre(
             testing::Eq("- Unnest: -> ROW<k:BIGINT,v:BIGINT>"),
-            testing::Eq("    [k, v] := map([1,2,3], [10,20,30])"),
+            testing::Eq(
+                "    [k, v] := [{\"key\":1,\"value\":10},{\"key\":2,\"value\":20},{\"key\":3,\"value\":30}]"),
             testing::Eq("  - Values: 1 rows -> ROW<>"),
             testing::Eq("")));
   }
@@ -804,7 +805,8 @@ TEST_F(PlanPrinterTest, unnest) {
             testing::StartsWith("- Project:"),
             testing::StartsWith("    expr := plus(x, y)"),
             testing::Eq("  - Unnest: -> ROW<x:BIGINT,y:BIGINT>"),
-            testing::Eq("      [x, y] := map([1,2,3], [10,20,30])"),
+            testing::Eq(
+                "      [x, y] := [{\"key\":1,\"value\":10},{\"key\":2,\"value\":20},{\"key\":3,\"value\":30}]"),
             testing::Eq("    - Values: 1 rows -> ROW<>"),
             testing::Eq("")));
   }
