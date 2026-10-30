@@ -23,10 +23,10 @@
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/functions/prestosql/PrestoFunctions.h"
-#include "axiom/optimizer/Optimization.h"
-#include "axiom/optimizer/Plan.h"
-#include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/optimizer/tests/TestDataPath.h"
+#include "axiom/optimizer/v1/Optimization.h"
+#include "axiom/optimizer/v1/Plan.h"
+#include "axiom/optimizer/v1/VeloxHistory.h"
 #include "axiom/optimizer/v2/Optimize.h"
 #include "axiom/sql/presto/PrestoParser.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
@@ -85,7 +85,7 @@ void QueryTestBase::SetUp() {
   if (gSuiteHistory) {
     history_ = std::move(gSuiteHistory);
   } else {
-    history_ = std::make_unique<optimizer::VeloxHistory>();
+    history_ = std::make_unique<optimizer::v1::VeloxHistory>();
   }
 
   optimizerOptions_ = OptimizerOptions();
@@ -277,7 +277,7 @@ std::shared_ptr<core::QueryCtx>& QueryTestBase::getQueryCtx() {
   return queryCtx_;
 }
 
-PlanCost QueryTestBase::optimizationCost(
+v1::PlanCost QueryTestBase::optimizationCost(
     const logical_plan::LogicalPlanNodePtr& logicalPlan,
     const MultiFragmentPlan::Options& options,
     const std::optional<OptimizerOptions>& optimizerOptions) {
@@ -294,7 +294,7 @@ PlanCost QueryTestBase::optimizationCost(
   connector::SchemaResolver schemaResolver{
       connector::ConnectorMetadataRegistry::global()};
   const auto& connectorContext = getConnectorContext();
-  Optimization opt(
+  v1::Optimization opt(
       makeOptimizerSession(
           connectorContext,
           functionRegistry_,
@@ -312,7 +312,7 @@ PlanCost QueryTestBase::optimizationCost(
 
 void QueryTestBase::verifyOptimization(
     const logical_plan::LogicalPlanNode& logicalPlan,
-    const std::function<void(Optimization&)>& callback,
+    const std::function<void(v1::Optimization&)>& callback,
     const std::optional<OptimizerOptions>& optimizerOptions) {
   auto& veloxQueryCtx = getQueryCtx();
 
@@ -329,10 +329,10 @@ void QueryTestBase::verifyOptimization(
 
   connector::SchemaResolver schemaResolver{
       connector::ConnectorMetadataRegistry::global()};
-  VeloxHistory history;
+  v1::VeloxHistory history;
 
   const auto& connectorContext = getConnectorContext();
-  Optimization optimization(
+  v1::Optimization optimization(
       makeOptimizerSession(
           connectorContext,
           functionRegistry_,
@@ -451,7 +451,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
         v2::Optimizer(*plan, schemaResolver, *session, evaluator, queryCtx)
             .optimize(options, afterPass_);
   } else {
-    optimizer::Optimization opt(
+    optimizer::v1::Optimization opt(
         session,
         makeRunnerSession(connectorContext, statsWriter_),
         *plan,

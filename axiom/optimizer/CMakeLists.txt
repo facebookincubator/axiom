@@ -35,6 +35,7 @@ target_link_libraries(
 add_library(
   axiom_optimizer_core
   BitSet.cpp
+  ConstantExprEvaluator.cpp
   ConstantFold.cpp
   Cost.cpp
   Domain.cpp
@@ -70,42 +71,5 @@ target_link_libraries(
   velox_function_registry
 )
 
-add_library(
-  axiom_optimizer
-  AggregationPlanner.cpp
-  ConstantExprEvaluator.cpp
-  CostV1.cpp
-  DerivedTable.cpp
-  DerivedTableFlattener.cpp
-  DerivedTablePrinter.cpp
-  ExplainIoV1.cpp
-  JoinSample.cpp
-  MemoKey.cpp
-  Model.cpp
-  Optimization.cpp
-  ParallelExpr.cpp
-  Plan.cpp
-  PrecomputeProjection.cpp
-  QueryGraphV1.cpp
-  RelationOp.cpp
-  RelationOpPrinter.cpp
-  SubfieldTracker.cpp
-  ToGraph.cpp
-  ToVelox.cpp
-  VeloxHistory.cpp
-)
-
-target_link_libraries(
-  axiom_optimizer
-  velox_core
-  axiom_common
-  axiom_connectors
-  axiom_logical_plan
-  axiom_optimizer_core
-  axiom_optimizer_multifragment_plan
-  axiom_runner_local_runner
-  velox_async_rpc_function_registry
-  velox_connector
-)
-
+add_subdirectory(v1)
 add_subdirectory(v2)

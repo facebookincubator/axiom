@@ -1,0 +1,3989 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "axiom/optimizer/v1/Optimization.h"
+#include <algorithm>
+#include <iostream>
+#include <limits>
+#include <utility>
+#include "axiom/optimizer/Filters.h"
+#include "axiom/optimizer/FunctionRegistry.h"
+#include "axiom/optimizer/OptimizerMetrics.h"
+#include "axiom/optimizer/OptimizerOptions.h"
+#include "axiom/optimizer/PlanUtils.h"
+#include "axiom/optimizer/StatsFilterSelectivityEstimator.h"
+#include "axiom/optimizer/v1/AggregationPlanner.h"
+#include "axiom/optimizer/v1/Plan.h"
+#include "axiom/optimizer/v1/PrecomputeProjection.h"
+#include "axiom/optimizer/v1/VeloxHistory.h"
+#include "folly/coro/BlockingWait.h"
+#include "folly/coro/Collect.h"
+#include "folly/coro/Task.h"
+#include "velox/expression/ConstantExpr.h"
+#include "velox/expression/Expr.h"
+
+namespace lp = facebook::axiom::logical_plan;
+
+namespace facebook::axiom::optimizer::v1 {
+namespace {
+
+// Runs 'task' to completion, hopping to 'executor' first when one is
+// available so the caller doesn't block the producer thread. Used to
+// bridge async connector calls into the synchronous optimizer
+// interface.
+template <typename T>
+T blockingWaitOn(folly::Executor* executor, folly::coro::Task<T> task) {
+  if (executor != nullptr) {
+    return folly::coro::blockingWait(
+        co_withExecutor(executor, std::move(task)));
+  }
+  return folly::coro::blockingWait(std::move(task));
+}
+
+} // namespace
+
+Optimization::Optimization(
+    OptimizerSessionPtr optimizerSession,
+    runner::RunnerSessionPtr runnerSession,
+    const logical_plan::LogicalPlanNode& logicalPlan,
+    const connector::SchemaResolver& schema,
+    History& history,
+    std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx,
+    velox::core::ExpressionEvaluator& evaluator,
+    MultiFragmentPlan::Options runnerOptions)
+    : optimizerSession_{std::move(optimizerSession)},
+      runnerSession_{std::move(runnerSession)},
+      runnerOptions_(std::move(runnerOptions)),
+      isSingleWorker_(runnerOptions_.maxRemotePartitions == 1),
+      isSingleDriver_(runnerOptions_.maxLocalPartitions == 1),
+      history_(history),
+      veloxQueryCtx_(std::move(veloxQueryCtx)),
+      aggregationPlanner_{
+          isSingleWorker_,
+          isSingleDriver_,
+          optimizerSession_->options().alwaysPlanPartialAggregation},
+      toGraph_{
+          schema,
+          evaluator,
+          optimizerSession_->options(),
+          optimizerSession_->statsWriter()},
+      toVelox_{optimizerSession_, runnerOptions_} {
+  VELOX_CHECK_NOT_NULL(runnerSession_);
+  VELOX_CHECK_NOT_NULL(veloxQueryCtx_);
+  queryCtx()->optimization() = this;
+
+  if (logicalPlan.is(logical_plan::NodeKind::kOutput)) {
+    // Resolve entries to source names so addOutputRenames can look up by
+    // name; pruning may invalidate the original ordinals.
+    const auto& output = *logicalPlan.as<logical_plan::OutputNode>();
+    const auto& inputType = *output.onlyInput()->outputType();
+    outputColumnMappings_.reserve(output.entries().size());
+    for (const auto& entry : output.entries()) {
+      outputColumnMappings_.push_back(
+          {inputType.nameOf(entry.index), entry.name});
+    }
+  }
+
+  root_ = toGraph_.makeQueryGraph(logicalPlan);
+  root_->initializePlans();
+}
+
+void Optimization::estimateLeafSelectivity(BaseTable& baseTable) {
+  if (!estimatedBaseTables_.insert(baseTable.id()).second) {
+    return;
+  }
+  if (!baseTable.layout()->supportsScan()) {
+    return;
+  }
+  filterUpdated(&baseTable);
+  auto tableHandle = toVelox_.leafData(baseTable.id())->handle;
+  history_.estimateLeafSelectivity(baseTable, tableHandle);
+}
+
+namespace {
+void collectBaseTables(DerivedTable* dt, std::vector<BaseTable*>& baseTables) {
+  if (dt->isUnion()) {
+    for (auto* child : dt->unionInputs) {
+      collectBaseTables(child, baseTables);
+    }
+  } else {
+    for (auto* table : dt->tables) {
+      if (table->is(PlanType::kTableNode)) {
+        baseTables.push_back(const_cast<PlanObject*>(table)->as<BaseTable>());
+      } else if (table->is(PlanType::kDerivedTableNode)) {
+        collectBaseTables(
+            const_cast<PlanObject*>(table)->as<DerivedTable>(), baseTables);
+      }
+    }
+  }
+}
+} // namespace
+
+void Optimization::estimateAllBaseTableSelectivity(DerivedTable& dt) {
+  if (!options().useFilteredTableStats) {
+    return;
+  }
+
+  std::vector<BaseTable*> baseTables;
+  collectBaseTables(&dt, baseTables);
+
+  if (baseTables.empty()) {
+    return;
+  }
+
+  // Prepare table handles and launch async stats requests.
+  struct TableTask {
+    BaseTable* baseTable;
+    size_t taskIndex;
+    // Indices into baseTable->columns for the top-level columns we requested
+    // stats for. columnStats[i] corresponds to
+    // baseTable->columns[columnIndices[i]].
+    std::vector<size_t> columnIndices;
+  };
+  std::vector<TableTask> tableTasks;
+  std::vector<folly::coro::Task<std::optional<connector::FilteredTableStats>>>
+      tasks;
+
+  // Shared helper offered to each connector's co_estimateStats. Outlives the
+  // coroutines below, which run under blockingWaitOn before this returns.
+  StatsFilterSelectivityEstimator estimator;
+
+  for (auto* baseTable : baseTables) {
+    if (estimatedBaseTables_.contains(baseTable->id())) {
+      continue;
+    }
+    auto* layout = baseTable->layout();
+    if (!layout->supportsScan()) {
+      estimatedBaseTables_.insert(baseTable->id());
+      continue;
+    }
+    filterUpdated(baseTable);
+
+    const auto* data = toVelox_.leafData(baseTable->id());
+
+    // Collect top-level table column names referenced by the query. Subfield
+    // columns (e.g. m.[1]) don't have connector-level stats.
+    std::vector<std::string> columnNames;
+    std::vector<size_t> columnIndices;
+    for (size_t i = 0; i < baseTable->columns.size(); ++i) {
+      if (baseTable->columns[i]->topColumn() == nullptr) {
+        columnNames.emplace_back(baseTable->columns[i]->name());
+        columnIndices.push_back(i);
+      }
+    }
+
+    auto connectorSession =
+        optimizerSession_->context()->sessionFor(layout->connectorId());
+    tableTasks.push_back({baseTable, tasks.size(), std::move(columnIndices)});
+    tasks.push_back(layout->co_estimateStats(
+        std::move(connectorSession),
+        data->handle,
+        *evaluator(),
+        std::move(columnNames),
+        estimator));
+  }
+
+  if (tasks.empty()) {
+    return;
+  }
+
+  // Wait for all connector stats requests concurrently. Schedule on the
+  // query context executor if available, otherwise run inline.
+  auto estimateStart = std::chrono::steady_clock::now();
+  auto results = blockingWaitOn(
+      veloxQueryCtx_->executor(),
+      folly::coro::collectAllRange(std::move(tasks)));
+  optimizerSession_->statsWriter().addTiming(
+      OptimizerMetrics::kEstimateStatsWallNanos,
+      std::chrono::steady_clock::now() - estimateStart);
+
+  // Apply results.
+  for (auto& [baseTable, taskIndex, columnIndices] : tableTasks) {
+    applyFilteredStats(*baseTable, results[taskIndex], columnIndices);
+    applySampleRate(*baseTable);
+  }
+}
+
+void Optimization::applySampleRate(BaseTable& baseTable) {
+  if (!baseTable.sampledPercentage.has_value() ||
+      !baseTable.filteredCardinality.has_value()) {
+    return;
+  }
+
+  // TABLESAMPLE SYSTEM is an additional selectivity on the scan, applied on top
+  // of the filter selectivity. Scale the filtered cardinality, floored at 1 so
+  // downstream estimates never divide by zero.
+  const float sampledCardinality = std::max<float>(
+      1,
+      *baseTable.filteredCardinality * (*baseTable.sampledPercentage / 100.0f));
+  baseTable.filteredCardinality = sampledCardinality;
+
+  // A column cannot have more distinct values than the sampled row count.
+  for (auto* column : baseTable.columns) {
+    const auto& value = column->value();
+    if (value.cardinality.has_value() &&
+        *value.cardinality > sampledCardinality) {
+      const_cast<Value&>(value).cardinality = sampledCardinality;
+    }
+  }
+}
+
+void Optimization::applyFilteredStats(
+    BaseTable& baseTable,
+    const std::optional<connector::FilteredTableStats>& stats,
+    const std::vector<size_t>& columnIndices) {
+  VELOX_CHECK(
+      estimatedBaseTables_.insert(baseTable.id()).second,
+      "Duplicate estimation for BaseTable: {}",
+      baseTable.cname);
+
+  // Fall back to the history-based estimation path if the connector does not
+  // support stats estimation.
+  if (!stats.has_value()) {
+    auto tableHandle = toVelox_.leafData(baseTable.id())->handle;
+    history_.estimateLeafSelectivity(baseTable, tableHandle);
+    return;
+  }
+
+  // Apply connector-provided column statistics first so that
+  // conjunctsSelectivity uses connector-refined values for rejected filters.
+  if (!stats->columnStats.empty()) {
+    VELOX_CHECK_EQ(stats->columnStats.size(), columnIndices.size());
+    for (size_t i = 0; i < stats->columnStats.size(); ++i) {
+      const auto& columnStats = stats->columnStats[i];
+      auto& existing = baseTable.columns[columnIndices[i]]->value();
+      const_cast<Value&>(existing) =
+          Value::fromColumnStatistics(existing.type, columnStats);
+    }
+  }
+
+  // The connector accounted for the filters it accepted into the handle in
+  // numRows. Post-apply selectivity for the filters createTableHandle rejected
+  // (kept as ExprCP), which the optimizer owns.
+  const auto& rejectedFilters =
+      toVelox_.leafData(baseTable.id())->rejectedExprs;
+  if (rejectedFilters.empty()) {
+    baseTable.filteredCardinality = stats->numRows;
+    return;
+  }
+
+  // Compute selectivity for the rejected filters and apply constraints.
+  ConstraintMap constraints;
+  auto selectivity = conjunctsSelectivity(constraints, rejectedFilters, true);
+
+  // Connector-boundary producer: keep emitting a concrete filtered
+  // cardinality. Fall back to the no-op selectivity (1.0) when unknown.
+  const double rejectedSelectivity =
+      selectivity.has_value() ? selectivity->trueFraction : 1.0;
+  baseTable.filteredCardinality = stats->numRows * rejectedSelectivity;
+
+  // Update column values with refined constraints from rejected filters.
+  for (const auto& [columnId, constrainedValue] : constraints) {
+    for (auto* column : baseTable.columns) {
+      if (column->id() == columnId) {
+        auto& value = const_cast<Value&>(column->value());
+        value.cardinality = constrainedValue.cardinality;
+        value.min = constrainedValue.min;
+        value.max = constrainedValue.max;
+        value.trueFraction = constrainedValue.trueFraction;
+        value.nullFraction = constrainedValue.nullFraction;
+        value.nullable = constrainedValue.nullable;
+        break;
+      }
+    }
+  }
+}
+
+namespace {
+// Coarsens 'groupedLeaves' to the runner's task budget by calling scaleDown on
+// each non-null entry. GroupedLeaves is immutable once taken; this is the only
+// point that locks the per-leaf entries to runner-task partition counts.
+void scaleDownGroupedLeaves(
+    GroupedLeaves& groupedLeaves,
+    int32_t maxRemotePartitions) {
+  for (auto& [_, partitionType] : groupedLeaves) {
+    if (partitionType != nullptr) {
+      partitionType = partitionType->scaleDown(maxRemotePartitions);
+    }
+  }
+}
+
+// Collects the per-fragment leaves of 'op': TableScans physically inside this
+// fragment plus Repartitions whose consumer-side Exchange lives here.
+// Bounded by Repartition descendants — those are separate fragments.
+void collectFragmentLeaves(
+    const RelationOp* op,
+    folly::F14FastSet<const RelationOp*>& leaves) {
+  if (op == nullptr) {
+    return;
+  }
+  if (op->is(RelType::kTableScan)) {
+    leaves.insert(op);
+    return;
+  }
+  if (op->is(RelType::kRepartition)) {
+    leaves.insert(op);
+    return;
+  }
+  if (op->is(RelType::kJoin)) {
+    const auto& join = *op->as<Join>();
+    collectFragmentLeaves(join.input().get(), leaves);
+    collectFragmentLeaves(join.right.get(), leaves);
+    return;
+  }
+  if (op->is(RelType::kUnionAll)) {
+    for (const auto& input : op->as<UnionAll>()->inputs) {
+      collectFragmentLeaves(input.get(), leaves);
+    }
+    return;
+  }
+  collectFragmentLeaves(op->input().get(), leaves);
+}
+
+// Drops entries from 'groupedLeaves' whose RelationOp* is not in 'leaves'.
+void filterGroupedLeavesToProducerLeaves(
+    GroupedLeaves& groupedLeaves,
+    const folly::F14FastSet<const RelationOp*>& leaves) {
+  for (auto it = groupedLeaves.begin(); it != groupedLeaves.end();) {
+    if (!leaves.contains(it->first)) {
+      it = groupedLeaves.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+} // namespace
+
+void commitGroupedLeavesForRepartition(
+    PlanState& state,
+    const Repartition* repartition) {
+  auto& groupedLeaves =
+      state.optimization.repartitionGroupedLeaves()[repartition];
+  // Overwrite atomically; an entry for 'repartition' may already exist if a
+  // memoized RelationOp was shared across planning candidates.
+  groupedLeaves =
+      std::exchange(state.mutableCurrentGroupedLeaves(), GroupedLeaves{});
+  // Drop entries injected from sibling fragments via mergeFragmentMaps or
+  // PlanStateSaver across planning branches.
+  folly::F14FastSet<const RelationOp*> producerLeaves;
+  collectFragmentLeaves(repartition->input().get(), producerLeaves);
+  filterGroupedLeavesToProducerLeaves(groupedLeaves, producerLeaves);
+  scaleDownGroupedLeaves(
+      groupedLeaves, state.optimization.runnerOptions().maxRemotePartitions);
+  const auto& dist = repartition->distribution();
+  if (dist.kind() == Distribution::Kind::kPartitioned &&
+      !dist.partitionKeys().empty()) {
+    state.mutableCurrentGroupedLeaves().emplace(repartition, nullptr);
+  }
+}
+
+namespace {
+// Calls scaleDown(maxRemotePartitions) on 'partitionType' and returns the
+// resulting type, pushed onto 'owned' for lifetime management. Passes null
+// through unchanged.
+const connector::PartitionType* FOLLY_NULLABLE scaleDownPartitionType(
+    const connector::PartitionType* partitionType,
+    int32_t maxRemotePartitions,
+    std::vector<std::shared_ptr<connector::PartitionType>>& owned) {
+  if (partitionType == nullptr) {
+    return nullptr;
+  }
+  auto scaled = partitionType->scaleDown(maxRemotePartitions);
+  const auto* raw = scaled.get();
+  owned.push_back(std::move(scaled));
+  return raw;
+}
+
+// Folds copartition() across all non-null PartitionType values in 'values'.
+// Returns nullptr if 'values' is empty or any pair is incompatible.
+std::shared_ptr<const connector::PartitionType> foldCopartition(
+    const std::vector<std::shared_ptr<const connector::PartitionType>>&
+        values) {
+  if (values.empty()) {
+    return nullptr;
+  }
+  std::shared_ptr<const connector::PartitionType> result = values.front();
+  for (size_t i = 1; result != nullptr && i < values.size(); ++i) {
+    result = result->copartition(*values[i]);
+  }
+  return result;
+}
+
+// Merges 'producer' into 'consumer' with per-leaf coarsening: if both maps
+// contain non-null PartitionTypes, fold copartition() across them to find a
+// common, then replace each non-null value with entry.copartition(*common).
+// Null entries pass through unchanged. Used at every join/union site that
+// combines two PlanStates' current fragment maps.
+void mergeFragmentMaps(GroupedLeaves& consumer, GroupedLeaves producer) {
+  std::vector<std::shared_ptr<const connector::PartitionType>> nonNullValues;
+  for (const auto& [_, partitionType] : consumer) {
+    if (partitionType != nullptr) {
+      nonNullValues.push_back(partitionType);
+    }
+  }
+  for (const auto& [_, partitionType] : producer) {
+    if (partitionType != nullptr) {
+      nonNullValues.push_back(partitionType);
+    }
+  }
+
+  if (nonNullValues.size() >= 2) {
+    std::sort(
+        nonNullValues.begin(),
+        nonNullValues.end(),
+        [](const auto& lhs, const auto& rhs) {
+          return lhs->numPartitions() < rhs->numPartitions();
+        });
+    auto result = foldCopartition(nonNullValues);
+    if (result != nullptr) {
+      for (auto& [_, partitionType] : consumer) {
+        if (partitionType != nullptr) {
+          partitionType = partitionType->copartition(*result);
+        }
+      }
+      for (auto& [_, partitionType] : producer) {
+        if (partitionType != nullptr) {
+          partitionType = partitionType->copartition(*result);
+        }
+      }
+    }
+  }
+
+  for (auto& [key, partitionType] : producer) {
+    consumer.emplace(key, std::move(partitionType));
+  }
+  producer.clear();
+}
+} // namespace
+
+PlanAndStats Optimization::toVeloxPlan(RelationOpPtr plan) {
+  return toVelox_.toVeloxPlan(
+      std::move(plan),
+      runnerOptions_,
+      outputColumnMappings_,
+      {repartitionGroupedLeaves_, rootGroupedLeaves_});
+}
+
+// static
+PlanAndStats Optimization::deprecatedToVeloxPlan(
+    OptimizerSessionPtr optimizerSession,
+    runner::RunnerSessionPtr runnerSession,
+    const logical_plan::LogicalPlanNode& logicalPlan,
+    velox::memory::MemoryPool& pool,
+    MultiFragmentPlan::Options runnerOptions) {
+  auto allocator = std::make_unique<velox::HashStringAllocator>(&pool);
+  auto context = std::make_unique<QueryGraphContext>(
+      *allocator,
+      optimizerSession->options().maxPlanObjects,
+      optimizerSession->functionRegistry());
+  queryCtx() = context.get();
+  SCOPE_EXIT {
+    queryCtx() = nullptr;
+  };
+
+  auto veloxQueryCtx = velox::core::QueryCtx::create();
+  velox::exec::SimpleExpressionEvaluator evaluator(veloxQueryCtx.get(), &pool);
+
+  auto schemaResolver = std::make_shared<connector::SchemaResolver>(
+      optimizerSession->context()->metadataRegistry());
+
+  VeloxHistory history;
+
+  Optimization opt{
+      std::move(optimizerSession),
+      std::move(runnerSession),
+      logicalPlan,
+      *schemaResolver,
+      history,
+      veloxQueryCtx,
+      evaluator,
+      std::move(runnerOptions)};
+
+  auto best = opt.deprecatedBestPlan();
+  return opt.toVeloxPlan(best->op);
+}
+
+void Optimization::trace(
+    uint32_t event,
+    int32_t id,
+    const PlanCost& cost,
+    RelationOp& plan) const {
+  if (event & options().traceFlags) {
+    std::cout << (event == OptimizerOptions::kRetained ? "Retained: "
+                                                       : "Abandoned: ")
+              << id << ": " << cost.toString() << ": " << " " << plan.toString()
+              << std::endl;
+  }
+}
+
+PlanP Optimization::deprecatedBestPlan() {
+  PlanObjectSet targetColumns;
+  targetColumns.unionObjects(root_->columns);
+
+  topState_.emplace(*this, root_, options().syntacticJoinOrder);
+  topState_->setTargetExprsForDt(targetColumns);
+
+  makeJoinsWithSyntacticFallback(*topState_);
+
+  auto* winner = topState_->plans.best();
+  if (auto it = planGroupedLeaves_.find(winner);
+      it != planGroupedLeaves_.end()) {
+    // Move-out is safe: 'winner' is the single plan ToVelox will emit, no
+    // further consumer of planGroupedLeaves_[winner] exists past this point.
+    rootGroupedLeaves_ = std::move(it->second);
+    folly::F14FastSet<const RelationOp*> rootLeaves;
+    collectFragmentLeaves(winner->op.get(), rootLeaves);
+    filterGroupedLeavesToProducerLeaves(rootGroupedLeaves_, rootLeaves);
+    scaleDownGroupedLeaves(
+        rootGroupedLeaves_, runnerOptions_.maxRemotePartitions);
+  }
+  return winner;
+}
+
+namespace {
+// Thresholds used in reducing-joins logic.
+//
+// These constants control when the optimizer introduces "reducing" semi-joins
+// that pre-filter a table before joining with the main query. The goal is to
+// reduce intermediate result sizes when small dimension tables can filter
+// large fact tables early.
+//
+// The values are empirically tuned based on TPC-H and production workloads:
+// - Too aggressive (low thresholds): Creates unnecessary semi-joins that add
+//   overhead without sufficient row reduction.
+// - Too conservative (high thresholds): Misses opportunities to reduce
+//   intermediate result sizes.
+struct ReducingJoinsMagic {
+  // Maximum single-edge fanout to follow during DFS traversal.
+  // Edges with fanout > 1.2 are unlikely to reduce rows enough to justify
+  // the overhead of a semi-join. The 1.2 threshold allows for slight row
+  // expansion while exploring paths that ultimately reduce overall cardinality.
+  static constexpr float kMaxEdgeFanout = 1.2;
+
+  // Cumulative fanout below which a path is declared "reducing"
+  // and its tables are added to the result.
+  // A path with cumulative fanout < 0.9 reduces total rows by at least 10%,
+  // which typically justifies the cost of an additional semi-join operation.
+  static constexpr float kReducingPathThreshold = 0.9;
+
+  // Minimum reduction required to create a semi-join existence.
+  // Existence checks (semi-joins) have lower overhead than full joins, so we
+  // require at least 30% row reduction (fanout < 0.7) to justify adding them.
+  // This is more conservative than kReducingPathThreshold because existence
+  // semi-joins add an extra table scan and hash build.
+  static constexpr float kExistenceReductionThreshold = 0.7;
+};
+
+// Traverses joins from 'candidate'. Follows any join that goes to a table not
+// in 'visited' with a fanout < 'maxFanout'. 'fanoutFromRoot' is the product of
+// the fanouts between 'candidate' and the 'candidate' of the top level call to
+// this. 'path' is the set of joined tables between this invocation and the top
+// level. 'fanoutFromRoot' is thus the selectivity of the linear join sequence
+// in 'path'. When a reducing join sequence is found, the tables on the path
+// are added to 'result'. 'reduction' is the product of the fanouts of all the
+// reducing join paths added to 'result'.
+void reducingJoinsRecursive(
+    const PlanState& state,
+    PlanObjectCP candidate,
+    float fanoutFromRoot,
+    float maxFanout,
+    std::vector<PlanObjectCP>& path,
+    PlanObjectSet& visited,
+    PlanObjectSet& result,
+    float& reduction,
+    const std::function<
+        void(const std::vector<PlanObjectCP>& path, float reduction)>&
+        resultFunc = {}) {
+  bool isLeaf = true;
+  for (auto join : joinedBy(candidate)) {
+    if (join->isLeftOuter() && join->leftTable() != nullptr &&
+        candidate == join->rightTable() &&
+        candidate->is(PlanType::kDerivedTableNode)) {
+      // One can restrict the build of the optional side by a restriction on the
+      // probe. This happens specially when value subqueries are represented as
+      // optional sides of left join. These are often aggregations and there is
+      // no point creating values for groups that can't be probed.
+      ;
+    } else if (join->leftOptional() || join->rightOptional()) {
+      continue;
+    }
+
+    JoinSide other = join->sideOf(candidate, true);
+    if (other.table == nullptr) {
+      continue;
+    }
+
+    if (!state.dt->hasTable(other.table) || !state.dt->hasJoin(join)) {
+      continue;
+    }
+
+    if (other.table->isNot(PlanType::kTableNode) &&
+        other.table->isNot(PlanType::kValuesTableNode) &&
+        other.table->isNot(PlanType::kUnnestTableNode)) {
+      continue;
+    }
+
+    if (visited.contains(other.table)) {
+      continue;
+    }
+
+    // An unknown fanout cannot participate in reducing-path analysis; skip.
+    if (!other.fanout.has_value() || *other.fanout > maxFanout) {
+      continue;
+    }
+
+    visited.add(other.table);
+    auto fanout = fanoutFromRoot * *other.fanout;
+    auto nextMaxFanout = maxFanout;
+    if (fanout < ReducingJoinsMagic::kReducingPathThreshold) {
+      result.add(other.table);
+      for (auto step : path) {
+        result.add(step);
+        nextMaxFanout = 1;
+      }
+    }
+
+    path.push_back(other.table);
+    isLeaf = false;
+    reducingJoinsRecursive(
+        state,
+        other.table,
+        fanout,
+        nextMaxFanout,
+        path,
+        visited,
+        result,
+        reduction,
+        resultFunc);
+    path.pop_back();
+  }
+  if (fanoutFromRoot < 1 && isLeaf) {
+    // We are at the end of a reducing sequence of joins. Update the total
+    // fanout for the set of all reducing join paths from the top level
+    // 'candidate'.
+    reduction *= fanoutFromRoot;
+    if (resultFunc) {
+      resultFunc(path, fanoutFromRoot);
+    }
+  }
+}
+
+// Result of searching for bushy reducing joins from a start table.
+struct BushyJoins {
+  PlanObjectSet tables;
+  float reduction;
+};
+
+// Traverses join edges from 'startTable', skipping tables in
+// 'excludedTables', looking for paths whose cumulative fanout is
+// below kReducingPathThreshold. Returns the set of tables (including
+// 'startTable') and the cumulative reduction, or std::nullopt if no
+// reducing path is found.
+std::optional<BushyJoins> findReducingBushyJoins(
+    const PlanState& state,
+    PlanObjectCP startTable,
+    const PlanObjectSet& excludedTables = {}) {
+  PlanObjectSet reducingTables;
+  PlanObjectSet visited = state.placed();
+  visited.add(startTable);
+  visited.unionSet(excludedTables);
+  reducingTables.add(startTable);
+  std::vector<PlanObjectCP> path{startTable};
+  float reduction = 1;
+  reducingJoinsRecursive(
+      state,
+      startTable,
+      /*fanoutFromRoot=*/1,
+      ReducingJoinsMagic::kMaxEdgeFanout,
+      path,
+      visited,
+      reducingTables,
+      reduction);
+  if (reduction < ReducingJoinsMagic::kReducingPathThreshold) {
+    return BushyJoins{std::move(reducingTables), reduction};
+  }
+  return std::nullopt;
+}
+
+// Traverses join edges from 'startTable', skipping tables in
+// 'excludedTables', looking for paths whose cumulative fanout is
+// below kExistenceReductionThreshold. Each qualifying path becomes
+// a semi-join existence appended to 'existences'. Returns the
+// cumulative existence reduction, or 1 if none found.
+float findReducingExistences(
+    const PlanState& state,
+    PlanObjectCP startTable,
+    const PlanObjectSet& excludedTables,
+    std::vector<PlanObjectSet>& existences) {
+  std::vector<PlanObjectCP> path{startTable};
+  PlanObjectSet exists;
+  auto visitedCopy = excludedTables;
+  // Required by reducingJoinsRecursive but unused; only
+  // existenceReduction matters.
+  float reduction = 1;
+  float existenceReduction = 1;
+  reducingJoinsRecursive(
+      state,
+      startTable,
+      /*fanoutFromRoot=*/1,
+      ReducingJoinsMagic::kMaxEdgeFanout,
+      path,
+      visitedCopy,
+      exists,
+      reduction,
+      [&](auto& path, float reduction) {
+        if (reduction < ReducingJoinsMagic::kExistenceReductionThreshold) {
+          // The original table is added to the reducing existences because
+          // the path starts with it but it is not joined twice since it
+          // already is the start of the main join.
+          PlanObjectSet added;
+          for (auto i = 1; i < path.size(); ++i) {
+            added.add(path[i]);
+          }
+          existences.push_back(std::move(added));
+          existenceReduction *= reduction;
+        }
+      });
+  return existenceReduction;
+}
+
+// Result of the two-pass reducing-join discovery: bushy tables and
+// existences, with their respective reductions.
+struct ReducingJoinsResult {
+  std::vector<PlanObjectCP> bushyTables;
+  std::vector<PlanObjectSet> existences;
+  float bushyReduction{1};
+  float existenceReduction{1};
+};
+
+// Runs both reducing-join passes (bushy inner joins + existences) from
+// 'startTable'. Tables in 'excludedTables' are skipped. Bushy joins are
+// only discovered when 'allowBushyJoins' is true.
+ReducingJoinsResult findReducingJoins(
+    const PlanState& state,
+    PlanObjectCP startTable,
+    const PlanObjectSet& excludedTables,
+    bool allowBushyJoins) {
+  ReducingJoinsResult result;
+
+  // Pass 1: bushy reducing inner joins.
+  PlanObjectSet reducingTables;
+  if (allowBushyJoins) {
+    if (auto bushy =
+            findReducingBushyJoins(state, startTable, excludedTables)) {
+      // startTable must be first in bushyTables (see JoinCandidate::tables).
+      result.bushyTables.push_back(startTable);
+      bushy->tables.forEach([&](auto object) {
+        if (object != startTable) {
+          result.bushyTables.push_back(object);
+        }
+      });
+      result.bushyReduction = bushy->reduction;
+      reducingTables = std::move(bushy->tables);
+    }
+  }
+
+  // Pass 2: reducing existences (semi-joins from probe side).
+  if (state.optimization.options().enableReducingExistences &&
+      !state.dt->noImportOfExists) {
+    reducingTables.add(startTable);
+    reducingTables.unionSet(excludedTables);
+    result.existenceReduction = findReducingExistences(
+        state, startTable, reducingTables, result.existences);
+  }
+
+  return result;
+}
+
+bool allowReducingInnerJoins(const JoinCandidate& candidate) {
+  if (!candidate.join->isInner()) {
+    return false;
+  }
+  if (candidate.tables[0]->is(PlanType::kDerivedTableNode)) {
+    return false;
+  }
+  return true;
+}
+
+// JoinCandidate.tables may contain a single derived table or one or more base
+// tables.
+void checkTables(const JoinCandidate& candidate) {
+  VELOX_DCHECK(!candidate.tables.empty());
+  if (candidate.tables[0]->is(PlanType::kDerivedTableNode)) {
+    VELOX_DCHECK_EQ(1, candidate.tables.size());
+  }
+}
+
+// For an inner join candidate, looks for co-located tables whose joins reduce
+// cardinality and bundles them into a bushy build side. Also looks for reducing
+// existences (semi-joins) that can be imported from the probe side to shrink
+// the build.
+//
+// Returns a new JoinCandidate with the expanded table list, accumulated
+// existences, and adjusted fanout. Returns std::nullopt if no reduction is
+// found.
+std::optional<JoinCandidate> reducingJoins(
+    const PlanState& state,
+    const JoinCandidate& candidate) {
+  checkTables(candidate);
+
+  VELOX_DCHECK_EQ(candidate.tables.size(), 1);
+  auto startTable = candidate.tables[0];
+
+  auto result = findReducingJoins(
+      state,
+      startTable,
+      state.dt->importedExistences,
+      /*allowBushyJoins=*/allowReducingInnerJoins(candidate));
+
+  if (result.bushyTables.empty() && result.existences.empty()) {
+    return std::nullopt;
+  }
+
+  auto fanout = candidate.fanout;
+  if (!result.bushyTables.empty()) {
+    fanout = mul(fanout, result.bushyReduction);
+  }
+
+  JoinCandidate reducing(candidate.join, startTable, fanout);
+  if (result.bushyTables.empty()) {
+    reducing.tables = candidate.tables;
+  } else {
+    reducing.tables = std::move(result.bushyTables);
+  }
+  reducing.existences = std::move(result.existences);
+  reducing.existsFanout = result.existenceReduction;
+  return reducing;
+}
+
+// Returns true if every table referenced by the join's left keys is placed.
+bool leftKeysPlaced(const PlanState& state, JoinEdgeP join) {
+  for (auto key : join->leftKeys()) {
+    if (!key->allTables().isSubset(state.placed())) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Calls 'func' with join, joined table and fanout for the joinable tables.
+template <typename Func>
+void forJoinedTables(const PlanState& state, Func func) {
+  folly::F14FastSet<JoinEdgeP> visited;
+  state.placed().forEach([&](PlanObjectCP placedTable) {
+    if (!placedTable->isTable()) {
+      return;
+    }
+
+    for (auto join : joinedBy(placedTable)) {
+      if (join->isNonCommutative()) {
+        if (!visited.insert(join).second) {
+          continue;
+        }
+        if (leftKeysPlaced(state, join) &&
+            (state.mayConsiderNext(join->rightTable()) || join->markColumn() ||
+             join->rowNumberColumn())) {
+          func(join, join->rightTable(), join->lrFanout());
+        }
+      } else {
+        auto [table, fanout] = join->otherTable(placedTable);
+        if (!state.dt->hasTable(table) || !state.mayConsiderNext(table)) {
+          continue;
+        }
+        func(join, table, fanout);
+      }
+    }
+  });
+}
+
+void addExtraEdges(PlanState& state, JoinCandidate& candidate) {
+  // See if there are more join edges from the first of 'candidate' to already
+  // placed tables. Fill in the non-redundant equalities into the join edge.
+  // Make a new edge if the edge would be altered.
+  auto* originalJoin = candidate.join;
+  for (auto* table : candidate.tables) {
+    for (auto* otherJoin : joinedBy(table)) {
+      if (otherJoin == originalJoin || !otherJoin->isInner()) {
+        continue;
+      }
+      auto [otherTable, fanout] = otherJoin->otherTable(table);
+      if (!state.dt->hasTable(otherTable)) {
+        continue;
+      }
+      if (candidate.isDominantEdge(state, otherJoin)) {
+        break;
+      }
+      candidate.addEdge(state, otherJoin, table);
+    }
+  }
+}
+
+// Equi-join candidate connecting 'table' to an already-placed table via a plain
+// inner join, or nullopt if there is none.
+std::optional<JoinCandidate> equiJoinCandidate(
+    const PlanState& state,
+    PlanObjectCP table) {
+  for (auto* join : joinedBy(table)) {
+    if (join->numKeys() == 0 || !state.dt->hasJoin(join)) {
+      continue;
+    }
+    // A directed inner join (CROSS JOIN UNNEST) is not freely reorderable.
+    if (!join->isInner() || join->directed()) {
+      continue;
+    }
+    auto* other = join->otherSide(table);
+    if (other && state.isPlaced(other)) {
+      // 'other' is the placed side, so this is the fan-out into 'table'.
+      return JoinCandidate{join, table, join->otherTable(other).second};
+    }
+  }
+  return std::nullopt;
+}
+} // namespace
+
+std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
+  std::vector<JoinCandidate> candidates;
+  candidates.reserve(state.dt->tables.size());
+  forJoinedTables(
+      state,
+      [&](JoinEdgeP join, PlanObjectCP joined, std::optional<float> fanout) {
+        if (!state.isPlaced(joined) && state.dt->hasJoin(join) &&
+            state.dt->hasTable(joined)) {
+          candidates.emplace_back(join, joined, fanout);
+          if (join->isInner()) {
+            addExtraEdges(state, candidates.back());
+          }
+        }
+      });
+
+  if (candidates.empty()) {
+    // In the internal syntactic pass (only when the user did not pin the
+    // order), place the earliest table in join order that has an equi-join to a
+    // placed table, avoiding a cross join.
+    if (state.syntacticJoinOrder() && !options().syntacticJoinOrder) {
+      for (auto id : state.dt->joinOrder) {
+        auto* object = queryCtx()->objectAt(id);
+        if (state.isPlaced(object)) {
+          continue;
+        }
+        if (auto candidate = equiJoinCandidate(state, object)) {
+          addExtraEdges(state, *candidate);
+          return {std::move(*candidate)};
+        }
+      }
+    }
+
+    // There are no join edges. There could still be cross joins.
+    state.dt->startTables.forEach([&](PlanObjectCP object) {
+      if (!state.isPlaced(object) && state.mayConsiderNext(object)) {
+        candidates.emplace_back(
+            nullptr, object, object->as<TableObject>()->cardinality());
+      }
+    });
+
+    return candidates;
+  }
+
+  // Take the first hand joined tables and bundle them with reducing joins that
+  // can go on the build side.
+
+  if (!state.syntacticJoinOrder() && !state.greedyJoinOrder() &&
+      !candidates.empty()) {
+    std::vector<JoinCandidate> bushes;
+    for (auto& candidate : candidates) {
+      if (auto bush = reducingJoins(state, candidate)) {
+        bushes.push_back(std::move(bush.value()));
+        addExtraEdges(state, bushes.back());
+      }
+    }
+    candidates.insert(candidates.end(), bushes.begin(), bushes.end());
+  }
+
+  std::ranges::sort(
+      candidates, [](const JoinCandidate& left, const JoinCandidate& right) {
+        // Order by fanout; an unknown fanout sorts last so candidates with a
+        // computable cost are explored first.
+        if (!left.fanout.has_value()) {
+          return false;
+        }
+        if (!right.fanout.has_value()) {
+          return true;
+        }
+        return *left.fanout < *right.fanout;
+      });
+
+  // Keep only the candidate that matches the next unplaced table in
+  // dt->joinOrder.
+  if (state.syntacticJoinOrder() && candidates.size() > 1) {
+    auto nextIt = std::find_if(
+        state.dt->joinOrder.begin(),
+        state.dt->joinOrder.end(),
+        [&](int32_t id) { return !state.isPlaced(queryCtx()->objectAt(id)); });
+    VELOX_CHECK(
+        nextIt != state.dt->joinOrder.end(),
+        "syntactic_join_order: all tables already placed but candidates remain");
+    const int32_t nextId = *nextIt;
+    auto it = std::find_if(
+        candidates.begin(),
+        candidates.end(),
+        [&](const JoinCandidate& candidate) {
+          return candidate.tables[0]->id() == nextId;
+        });
+    VELOX_CHECK(
+        it != candidates.end(),
+        "syntactic_join_order: next-in-order table {} is not among current join candidates",
+        nextId);
+    JoinCandidate match = std::move(*it);
+    candidates.clear();
+    candidates.push_back(std::move(match));
+  }
+
+  return candidates;
+}
+
+namespace {
+constexpr uint32_t kNotFound = ~0U;
+
+/// Returns index of 'expr' in collection 'exprs'. kNotFound if not found.
+/// Compares with equivalence classes, so that equal columns are
+/// interchangeable.
+template <typename V>
+uint32_t position(const V& exprs, const Expr& expr) {
+  for (auto i = 0; i < exprs.size(); ++i) {
+    if (exprs[i]->sameOrEqual(expr)) {
+      return i;
+    }
+  }
+  return kNotFound;
+}
+
+/// Returns index of 'expr' in collection 'exprs'. kNotFound if not found.
+/// Compares with equivalence classes, so that equal columns are
+/// interchangeable. Applies 'getter' to each element of 'exprs' before
+/// comparison.
+template <typename V, typename Getter>
+uint32_t position(const V& exprs, Getter getter, const Expr& expr) {
+  for (auto i = 0; i < exprs.size(); ++i) {
+    if (getter(exprs[i])->sameOrEqual(expr)) {
+      return i;
+    }
+  }
+  return kNotFound;
+}
+
+// True if single worker, i.e. do not plan remote exchanges
+bool isSingleWorker() {
+  return queryCtx()->optimization()->runnerOptions().maxRemotePartitions == 1;
+}
+
+CPSpan<Column> leadingColumns(const ExprVector& exprs) {
+  size_t i = 0;
+  for (; i < exprs.size(); ++i) {
+    if (exprs[i]->isNot(PlanType::kColumnExpr)) {
+      break;
+    }
+  }
+  return {reinterpret_cast<ColumnCP const*>(exprs.data()), i};
+}
+
+bool isIndexColocated(
+    const IndexInfo& info,
+    const ExprVector& lookupValues,
+    const RelationOpPtr& input) {
+  const auto& distribution = info.index->distribution;
+  if (distribution.isBroadcast()) {
+    return true;
+  }
+
+  // True if 'input' is partitioned so that each partitioning key is joined to
+  // the corresponding partition key in 'info'.
+  if (input->distribution().kind() != distribution.kind() ||
+      input->distribution().partitionType() != distribution.partitionType()) {
+    return false;
+  }
+
+  const auto& inputPartitionKeys = input->distribution().partitionKeys();
+
+  if (inputPartitionKeys.empty()) {
+    return false;
+  }
+
+  const auto& indexPartitionKeys = distribution.partitionKeys();
+  if (inputPartitionKeys.size() != indexPartitionKeys.size()) {
+    return false;
+  }
+
+  for (auto i = 0; i < inputPartitionKeys.size(); ++i) {
+    auto nthKey = position(lookupValues, *inputPartitionKeys[i]);
+    if (nthKey != kNotFound) {
+      if (info.schemaColumn(info.lookupKeys.at(nthKey)) !=
+          indexPartitionKeys.at(i)) {
+        return false;
+      }
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+RelationOpPtr repartitionForIndex(
+    const IndexInfo& info,
+    const ExprVector& lookupValues,
+    const RelationOpPtr& plan,
+    PlanState& state) {
+  if (isSingleWorker() || isIndexColocated(info, lookupValues, plan)) {
+    return plan;
+  }
+
+  const auto& distribution = info.index->distribution;
+
+  ExprVector keyExprs;
+  const auto& partitionKeys = distribution.partitionKeys();
+  if (partitionKeys.empty()) {
+    // An unpartitioned index is reachable from every worker, so the probe
+    // needs no shuffle to line up with it.
+    return plan;
+  }
+  for (auto key : partitionKeys) {
+    // partition is in schema columns, lookupKeys is in BaseTable columns. Use
+    // the schema column of lookup key for matching.
+    auto nthKey = position(
+        info.lookupKeys,
+        [](auto c) {
+          return c->is(PlanType::kColumnExpr)
+              ? c->template as<Column>()->schemaColumn()
+              : c;
+        },
+        *key);
+    if (nthKey == kNotFound) {
+      return nullptr;
+    }
+
+    keyExprs.push_back(lookupValues[nthKey]);
+  }
+
+  auto* repartition = make<Repartition>(
+      plan,
+      Distribution{distribution.partitionType(), std::move(keyExprs)},
+      plan->columns());
+  state.addCost(*repartition);
+  commitGroupedLeavesForRepartition(state, repartition);
+  return repartition;
+}
+
+PlanObjectSet availableColumns(PlanObjectCP object) {
+  PlanObjectSet set;
+  VELOX_CHECK(object->isTable(), "Joinable must be a table or derived table");
+  set.unionObjects(object->as<TableObject>()->columns);
+  return set;
+}
+
+PlanObjectSet availableColumns(BaseTableCP baseTable, ColumnGroupCP index) {
+  // The columns of base table that exist in 'index'.
+  PlanObjectSet result;
+  for (auto column : index->columns) {
+    for (auto baseColumn : baseTable->columns) {
+      if (baseColumn->name() == column->name()) {
+        result.add(baseColumn);
+        break;
+      }
+    }
+  }
+  return result;
+}
+
+bool isBroadcastableSize(PlanP build) {
+  const auto cardinality = build->cost.cardinality;
+  if (!cardinality.has_value()) {
+    // Unknown size: a broadcast copy might not fit in each worker's memory.
+    return false;
+  }
+  const auto rowBytes = byteSize(build->op->columns());
+  const int64_t limit =
+      queryCtx()->optimization()->options().broadcastSizeLimit;
+  return static_cast<double>(*cardinality) * rowBytes <=
+      static_cast<double>(limit);
+}
+
+// The 'other' side gets shuffled to align with 'input'. If 'input' is not
+// partitioned on its keys, shuffle the 'input' too.
+void alignJoinSides(
+    RelationOpPtr& input,
+    const ExprVector& keys,
+    PlanState& state,
+    RelationOpPtr& otherInput,
+    const ExprVector& otherKeys,
+    PlanState& otherState,
+    bool replicateNullsAndAny) {
+  if (input->distribution().isGather() &&
+      otherInput->distribution().isGather()) {
+    // No alignment needed.
+    return;
+  }
+
+  auto part = joinKeyPartition(input, keys);
+  if (part.empty()) {
+    Distribution distribution{/*partitionType=*/nullptr, keys};
+    auto* repartition = make<Repartition>(
+        input, std::move(distribution), input->columns(), replicateNullsAndAny);
+    state.addCost(*repartition);
+    commitGroupedLeavesForRepartition(state, repartition);
+    input = repartition;
+  }
+
+  ExprVector distColumns;
+  for (size_t i = 0; i < keys.size(); ++i) {
+    auto nthKey = position(input->distribution().partitionKeys(), *keys[i]);
+    if (nthKey != kNotFound) {
+      if (distColumns.size() <= nthKey) {
+        distColumns.resize(nthKey + 1);
+      }
+      distColumns[nthKey] = otherKeys[i];
+    }
+  }
+
+  Distribution distribution{
+      scaleDownPartitionType(
+          input->distribution().partitionType(),
+          state.optimization.runnerOptions().maxRemotePartitions,
+          state.optimization.derivedPartitionTypes()),
+      std::move(distColumns)};
+  auto* repartition = make<Repartition>(
+      otherInput, std::move(distribution), otherInput->columns());
+  otherState.addCost(*repartition);
+  commitGroupedLeavesForRepartition(otherState, repartition);
+  otherInput = repartition;
+}
+
+// Check if 'plan' is an identity projection. If so, return its input.
+// Otherwise, return 'plan'.
+const RelationOpPtr& maybeDropProject(const RelationOpPtr& plan) {
+  if (plan->is(RelType::kProject)) {
+    bool redundant = true;
+
+    const auto* project = plan->as<Project>();
+    for (auto i = 0; i < project->columns().size(); ++i) {
+      if (project->columns()[i] != project->exprs()[i]) {
+        redundant = false;
+        break;
+      }
+    }
+
+    if (redundant) {
+      return plan->input();
+    }
+  }
+
+  return plan;
+}
+
+std::shared_ptr<connector::PartitionType> copartitionType(
+    const connector::PartitionType* first,
+    const connector::PartitionType* second) {
+  if (first != nullptr && second != nullptr) {
+    return first->copartition(*second);
+  }
+
+  return nullptr;
+}
+
+RelationOpPtr repartitionForWrite(const RelationOpPtr& plan, PlanState& state) {
+  if (isSingleWorker() || plan->distribution().isGather()) {
+    return plan;
+  }
+
+  const auto* write = state.dt->write;
+
+  // TODO Introduce layout-for-write or primary layout to remove the assumption
+  // that first layout is the right one.
+  VELOX_CHECK_EQ(
+      1,
+      write->table().layouts().size(),
+      "Writes to tables with multiple-layouts are not supported yet");
+
+  const auto* layout = write->table().layouts().at(0);
+  const auto& partitionColumns = layout->partitionColumns();
+  if (partitionColumns.empty()) {
+    // Unpartitioned write.
+    return plan;
+  }
+
+  const auto& tableSchema = write->table().type();
+
+  // Find values for all partition columns.
+  ExprVector keyValues;
+  keyValues.reserve(partitionColumns.size());
+  for (const auto* column : partitionColumns) {
+    const auto index = tableSchema->getChildIdx(column->name());
+    keyValues.emplace_back(write->columnExprs().at(index));
+  }
+
+  const auto* planPartitionType = plan->distribution().partitionType();
+
+  auto copartition =
+      copartitionType(planPartitionType, layout->partitionType().get());
+
+  bool shuffle = !copartition || planPartitionType == nullptr ||
+      copartition->numPartitions() != planPartitionType->numPartitions();
+  if (!shuffle) {
+    // Check that the partition keys of the plan are assigned pairwise to the
+    // partition columns of the layout.
+    for (auto i = 0; i < keyValues.size(); ++i) {
+      if (!plan->distribution().partitionKeys()[i]->sameOrEqual(
+              *keyValues[i])) {
+        shuffle = true;
+        break;
+      }
+    }
+
+    if (!shuffle) {
+      return plan;
+    }
+  }
+
+  Distribution distribution(
+      layout->partitionType().get(), std::move(keyValues));
+  auto* repartition =
+      make<Repartition>(plan, std::move(distribution), plan->columns());
+  state.addCost(*repartition);
+  commitGroupedLeavesForRepartition(state, repartition);
+  return repartition;
+}
+
+} // namespace
+
+void Optimization::addPostprocess(
+    DerivedTableCP dt,
+    RelationOpPtr& plan,
+    PlanState& state) const {
+  // Sanity check that all tables and conjuncts have been placed.
+  for (const auto& table : state.dt->tables) {
+    VELOX_CHECK(
+        state.isPlaced(table),
+        "Failed to place a table: {}",
+        table->toString());
+  }
+
+  for (const auto* conjunct : state.dt->conjuncts) {
+    VELOX_CHECK(
+        state.isPlaced(conjunct),
+        "Failed to place a conjunct: {}",
+        conjunct->toString());
+  }
+
+  if (dt->write) {
+    VELOX_DCHECK(!dt->hasAggregation());
+    VELOX_DCHECK(!dt->hasOrderBy());
+    VELOX_DCHECK(!dt->hasLimit());
+    PrecomputeProjection precompute{plan, dt, /*projectAllInputs=*/false};
+    auto writeColumns = precompute.toColumns(dt->write->columnExprs());
+    plan = std::move(precompute).maybeProject();
+    state.addCost(*plan);
+
+    plan = repartitionForWrite(plan, state);
+    plan = make<TableWrite>(plan, std::move(writeColumns), dt->write);
+
+    // Table write is present in every candidate plan and it is the root node.
+    // Hence, it doesn't affect the choice of candidate plan. Hence, no need to
+    // track the cost.
+    return;
+  }
+
+  if (dt->aggregation) {
+    addAggregation(dt, plan, state);
+  }
+
+  if (!dt->having.empty()) {
+    auto filter = make<Filter>(plan, dt->having);
+    state.place(dt->having);
+    state.addCost(*filter);
+    plan = filter;
+  }
+
+  const bool limitConsumedByWindow = addWindow(dt, plan, state);
+
+  // We probably want to make this decision based on cost.
+  static constexpr int64_t kMaxLimitBeforeProject = 8'192;
+  if (dt->hasOrderBy()) {
+    addOrderBy(dt, plan, state);
+  } else if (
+      !limitConsumedByWindow && dt->hasLimit() &&
+      dt->limit <= kMaxLimitBeforeProject) {
+    auto limit = make<Limit>(plan, dt->limit, dt->offset);
+    state.addCost(*limit);
+    plan = limit;
+  }
+
+  if (dt->outputColumns.has_value()) {
+    ExprVector outputExprs;
+    for (auto* column : *dt->outputColumns) {
+      bool found = false;
+      for (size_t i = 0; i < dt->columns.size(); ++i) {
+        if (dt->columns[i] == column) {
+          outputExprs.emplace_back(state.toColumn(dt->exprs[i]));
+          found = true;
+          break;
+        }
+      }
+      VELOX_CHECK(found, "outputColumn not in columns: {}", column->toString());
+    }
+
+    auto& projectInput = maybeDropProject(plan);
+    plan = make<Project>(
+        projectInput,
+        outputExprs,
+        *dt->outputColumns,
+        Project::isRedundant(projectInput, outputExprs, *dt->outputColumns));
+  }
+
+  if (!limitConsumedByWindow && !dt->hasOrderBy() &&
+      dt->limit > kMaxLimitBeforeProject) {
+    auto limit = make<Limit>(plan, dt->limit, dt->offset);
+    state.addCost(*limit);
+    plan = limit;
+  }
+
+  if (dt->enforceSingleRow) {
+    // EnforceSingleRow requires gather input. Single-worker plans
+    // satisfy this by construction; no Repartition needed there.
+    if (!isSingleWorker_ && !plan->distribution().isGather()) {
+      auto* gather =
+          make<Repartition>(plan, Distribution::gather(), plan->columns());
+      state.addCost(*gather);
+      commitGroupedLeavesForRepartition(state, gather);
+      plan = gather;
+    }
+    auto enforceSingleRow = make<EnforceSingleRow>(plan);
+    state.addCost(*enforceSingleRow);
+    plan = enforceSingleRow;
+  }
+}
+
+void Optimization::addAggregation(
+    DerivedTableCP dt,
+    RelationOpPtr& plan,
+    PlanState& state) const {
+  aggregationPlanner_.plan(dt, plan, state);
+}
+
+namespace {
+
+// Appends all elements of 'src' to the end of 'dst'.
+template <typename T>
+void append(QGVector<T>& dst, const QGVector<T>& src) {
+  dst.insert(dst.end(), src.begin(), src.end());
+}
+
+// Returns true if 'lhs' is a prefix of 'rhs'.
+template <typename T>
+bool isPrefix(const T& lhs, const T& rhs) {
+  if (lhs.size() > rhs.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < lhs.size(); ++i) {
+    if (lhs[i] != rhs[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Returns true if two expression vectors are equal (same pointers, same
+// order).
+bool sameKeys(const ExprVector& lhs, const ExprVector& rhs) {
+  return lhs.size() == rhs.size() && isPrefix(lhs, rhs);
+}
+
+// Returns true if two order type vectors are equal.
+bool sameOrderTypes(const OrderTypeVector& lhs, const OrderTypeVector& rhs) {
+  return lhs.size() == rhs.size() && isPrefix(lhs, rhs);
+}
+
+bool isRowNumber(std::string_view name) {
+  const auto& registry = queryCtx()->functionRegistry();
+  return registry.rowNumber().has_value() && name == *registry.rowNumber();
+}
+
+// Returns the RankFunction if the function name is a ranking function,
+// std::nullopt otherwise.
+std::optional<velox::core::TopNRowNumberNode::RankFunction> toRankFunction(
+    std::string_view name) {
+  using RankFunction = velox::core::TopNRowNumberNode::RankFunction;
+  if (isRowNumber(name)) {
+    return RankFunction::kRowNumber;
+  }
+
+  const auto& registry = queryCtx()->functionRegistry();
+  if (registry.rank().has_value() && name == *registry.rank()) {
+    return RankFunction::kRank;
+  }
+  if (registry.denseRank().has_value() && name == *registry.denseRank()) {
+    return RankFunction::kDenseRank;
+  }
+  return std::nullopt;
+}
+
+// Groups window functions by partition keys and order keys specification.
+struct WindowGroup {
+  ExprVector partitionKeys;
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
+  WindowFunctionVector functions;
+  ColumnVector outputColumns;
+
+  // Creates a new group from a single window function and its output column.
+  static WindowGroup create(
+      WindowFunctionCP windowFunc,
+      ColumnCP outputColumn) {
+    WindowGroup group;
+    group.partitionKeys = windowFunc->partitionKeys();
+    group.orderKeys = windowFunc->orderKeys();
+    group.orderTypes = windowFunc->orderTypes();
+    group.functions.push_back(windowFunc);
+    group.outputColumns.push_back(outputColumn);
+    return group;
+  }
+
+  // Tries to add a window function to this group. Returns true if the function
+  // has matching specification, no dependency on existing output columns, and
+  // was added. Window functions whose arguments reference another function's
+  // output cannot share a Window node — the output isn't available until the
+  // Window runs.
+  bool tryAdd(WindowFunctionCP windowFunc, ColumnCP outputColumn) {
+    if (!sameKeys(partitionKeys, windowFunc->partitionKeys()) ||
+        !sameKeys(orderKeys, windowFunc->orderKeys()) ||
+        !sameOrderTypes(orderTypes, windowFunc->orderTypes())) {
+      return false;
+    }
+
+    auto outputColumnSet = PlanObjectSet::fromObjects(outputColumns);
+    for (const auto* arg : windowFunc->args()) {
+      if (arg->columns().hasIntersection(outputColumnSet)) {
+        return false;
+      }
+    }
+
+    functions.push_back(windowFunc);
+    outputColumns.push_back(outputColumn);
+    return true;
+  }
+
+  void appendAll(const WindowGroup& other) {
+    append(functions, other.functions);
+    append(outputColumns, other.outputColumns);
+  }
+};
+
+// Returns true if all window functions in the group use ROWS frames.
+bool allRowsFrames(const WindowFunctionVector& functions) {
+  return std::all_of(
+      functions.begin(), functions.end(), [](WindowFunctionCP func) {
+        return func->frame().type == lp::WindowExpr::WindowType::kRows;
+      });
+}
+
+// Groups window functions by specification (partition keys + order keys),
+// merges compatible ROWS-frame groups, and sorts for optimal execution order.
+std::vector<WindowGroup> groupWindowFunctions(WindowPlanCP windowPlan) {
+  // Group by specification.
+  std::vector<WindowGroup> groups;
+  for (size_t i = 0; i < windowPlan->functions().size(); ++i) {
+    auto windowFunc = windowPlan->functions()[i];
+    auto outputColumn = windowPlan->columns()[i];
+    bool found = false;
+    for (auto& group : groups) {
+      if (group.tryAdd(windowFunc, outputColumn)) {
+        found = true;
+        break;
+      }
+    }
+
+    if (!found) {
+      groups.push_back(WindowGroup::create(windowFunc, outputColumn));
+    }
+  }
+
+  // ROWS-only merge: merge shorter-ORDER-BY group into longer when all
+  // functions in the shorter group use ROWS frames and the shorter ORDER BY
+  // is a prefix of the longer, and partition keys match.
+  for (size_t i = 0; i < groups.size(); ++i) {
+    for (size_t j = i + 1; j < groups.size();) {
+      auto& target = groups[i];
+      auto& candidate = groups[j];
+
+      if (!sameKeys(target.partitionKeys, candidate.partitionKeys)) {
+        ++j;
+        continue;
+      }
+
+      // Try merging candidate into target or target into candidate.
+      if (isPrefix(candidate.orderKeys, target.orderKeys) &&
+          isPrefix(candidate.orderTypes, target.orderTypes) &&
+          allRowsFrames(candidate.functions)) {
+        target.appendAll(candidate);
+        groups.erase(groups.begin() + j);
+      } else if (
+          isPrefix(target.orderKeys, candidate.orderKeys) &&
+          isPrefix(target.orderTypes, candidate.orderTypes) &&
+          allRowsFrames(target.functions)) {
+        candidate.appendAll(target);
+        groups.erase(groups.begin() + i);
+        // Don't increment i since the element at i has changed.
+        j = i + 1;
+      } else {
+        ++j;
+      }
+    }
+  }
+
+  // Order groups: same partition keys adjacent, longer ORDER BY first,
+  // empty partition keys last.
+  std::sort(groups.begin(), groups.end(), [](const auto& lhs, const auto& rhs) {
+    // Empty partition keys go last.
+    if (lhs.partitionKeys.empty() != rhs.partitionKeys.empty()) {
+      return !lhs.partitionKeys.empty();
+    }
+    // Same partition keys adjacent: compare by first partition key id.
+    if (!lhs.partitionKeys.empty() && !rhs.partitionKeys.empty()) {
+      auto lhsId = lhs.partitionKeys[0]->id();
+      auto rhsId = rhs.partitionKeys[0]->id();
+      if (lhsId != rhsId) {
+        return lhsId < rhsId;
+      }
+    }
+    // Longer ORDER BY first within same partition.
+    return lhs.orderKeys.size() > rhs.orderKeys.size();
+  });
+
+  return groups;
+}
+
+// Creates the appropriate operator for a window function group: RowNumber for
+// row_number() without ORDER BY, TopNRowNumber for a ranking function with
+// ORDER BY + LIMIT, or Window for the general case.
+RelationOpPtr makeWindowOp(
+    const RelationOpPtr& plan,
+    DerivedTableCP dt,
+    WindowGroup& group,
+    ExprVector partitionKeys,
+    ExprVector orderKeys,
+    WindowFunctionVector windowFunctions,
+    bool inputsSorted,
+    ColumnVector columns,
+    std::optional<int32_t> rankingFilterLimit) {
+  if (group.functions.size() == 1) {
+    auto rankFunction =
+        toRankFunction(std::string_view(group.functions[0]->name()));
+
+    if (rankFunction.has_value() && group.orderKeys.empty() &&
+        *rankFunction ==
+            velox::core::TopNRowNumberNode::RankFunction::kRowNumber) {
+      return make<RowNumber>(
+          plan,
+          std::move(partitionKeys),
+          rankingFilterLimit,
+          group.outputColumns[0],
+          std::move(columns));
+    }
+
+    // Use the minimum of DT limit and ranking filter limit. The query returns
+    // rows offset..offset + limit, so a partition must supply that many before
+    // the offset drops any. INT64_MAX is `OFFSET n` with no `LIMIT`, which
+    // bounds no partition.
+    auto topNLimit = rankingFilterLimit;
+    const int64_t rowsBeforeOffset = dt->limit >= INT64_MAX - dt->offset
+        ? INT64_MAX
+        : dt->limit + dt->offset;
+    if (dt->hasLimit() && !dt->hasOrderBy() &&
+        rowsBeforeOffset <= std::numeric_limits<int32_t>::max()) {
+      topNLimit = topNLimit.has_value()
+          ? std::min(*topNLimit, static_cast<int32_t>(rowsBeforeOffset))
+          : std::optional<int32_t>(rowsBeforeOffset);
+    }
+    if (rankFunction.has_value() && !group.orderKeys.empty() &&
+        topNLimit.has_value()) {
+      return make<TopNRowNumber>(
+          plan,
+          std::move(partitionKeys),
+          std::move(orderKeys),
+          std::move(group.orderTypes),
+          *rankFunction,
+          *topNLimit,
+          group.outputColumns[0],
+          std::move(columns));
+    }
+  }
+
+  VELOX_CHECK(
+      !rankingFilterLimit.has_value(),
+      "Ranking filter limit not consumed by RowNumber or TopNRowNumber.");
+
+  return make<Window>(
+      plan,
+      std::move(partitionKeys),
+      std::move(orderKeys),
+      std::move(group.orderTypes),
+      std::move(windowFunctions),
+      inputsSorted,
+      std::move(columns));
+}
+
+// Adds a Project to drop columns from 'plan' that are not in 'neededColumns'.
+// No-op if all columns are needed.
+void maybeDropColumns(RelationOpPtr& plan, const PlanObjectSet& neededColumns) {
+  ExprVector exprs;
+  ColumnVector cols;
+  for (auto* column : plan->columns()) {
+    if (neededColumns.contains(column)) {
+      exprs.emplace_back(column);
+      cols.emplace_back(column);
+    }
+  }
+
+  if (cols.size() < plan->columns().size()) {
+    plan = make<Project>(
+        plan, std::move(exprs), std::move(cols), /*redundant=*/false);
+  }
+}
+
+// Precomputes window function args and frame bound values, returning new
+// WindowFunction objects with column references in place of expressions.
+WindowFunctionVector flattenWindowFunctions(
+    const WindowFunctionVector& functions,
+    PrecomputeProjection& precompute) {
+  WindowFunctionVector result;
+  result.reserve(functions.size());
+  for (const auto& func : functions) {
+    auto args = precompute.toColumns(
+        func->args(), /*aliases=*/nullptr, /*preserveLiterals=*/true);
+    Frame frame = func->frame();
+    // A ROWS bound is an offset in rows, which Velox reads as a constant. A
+    // RANGE bound is the boundary value for each row, which Velox reads from a
+    // column, so it stays a column even when it folds to a literal — as it
+    // does when the ORDER BY key is constant.
+    const bool preserveLiterals =
+        frame.type == logical_plan::WindowExpr::WindowType::kRows;
+    if (frame.startValue) {
+      frame.startValue = precompute.toColumn(
+          frame.startValue, /*alias=*/nullptr, preserveLiterals);
+    }
+    if (frame.endValue) {
+      frame.endValue = precompute.toColumn(
+          frame.endValue, /*alias=*/nullptr, preserveLiterals);
+    }
+    result.emplace_back(
+        make<WindowFunction>(
+            func->name(),
+            func->value(),
+            std::move(args),
+            func->functions(),
+            func->partitionKeys(),
+            func->orderKeys(),
+            func->orderTypes(),
+            frame,
+            func->ignoreNulls()));
+  }
+  return result;
+}
+
+bool isSingleWindowWithLimit(
+    DerivedTableCP dt,
+    const std::vector<WindowGroup>& groups) {
+  return dt->hasLimit() && !dt->hasOrderBy() && groups.size() == 1 &&
+      groups[0].functions.size() == 1;
+}
+
+} // namespace
+
+bool Optimization::addWindow(
+    DerivedTableCP dt,
+    RelationOpPtr& plan,
+    PlanState& state) const {
+  if (!dt->windowPlan) {
+    return false;
+  }
+
+  state.place(dt->windowPlan);
+
+  auto groups = groupWindowFunctions(dt->windowPlan);
+
+  // Check for ranking function + LIMIT optimizations. Only applies when there
+  // is exactly one window function group with a single ranking function.
+  bool limitConsumed = false;
+  bool addLimitAfterTopN = false;
+  if (isSingleWindowWithLimit(dt, groups)) {
+    const auto& group = groups[0];
+    const auto functionName = group.functions[0]->name();
+
+    if (group.orderKeys.empty() && isRowNumber(functionName)) {
+      // row_number() without ORDER BY + LIMIT. Push LIMIT below RowNumber.
+      // The row numbering is non-deterministic (no ORDER BY), so computing
+      // row numbers on a smaller set produces a valid result.
+      plan = make<Limit>(plan, dt->limit, dt->offset);
+      state.addCost(*plan);
+      limitConsumed = true;
+    } else if (
+        !group.orderKeys.empty() && group.partitionKeys.empty() &&
+        toRankFunction(functionName).has_value()) {
+      // Ranking function with ORDER BY + LIMIT, no partition keys. After
+      // gather, TopNRowNumber runs on a single node — no distributed limit
+      // needed. row_number never produces ties, so the limit is fully
+      // absorbed. rank() and dense_rank() may produce ties, so a Limit is
+      // added after TopNRowNumber.
+      // The ranking caps each partition at offset + count, so the offset and
+      // the final count still apply above it. Only a row_number with no offset
+      // needs nothing: its cap is exactly the rows the query keeps.
+      limitConsumed = true;
+      addLimitAfterTopN = !isRowNumber(functionName) || dt->offset > 0;
+    }
+  }
+
+  // Order keys of the last group emitted, as columns of its input.
+  ExprVector resortKeys;
+  OrderTypeVector resortTypes;
+
+  // Emit Window operators.
+  for (size_t groupIndex = 0; groupIndex < groups.size(); ++groupIndex) {
+    auto& group = groups[groupIndex];
+
+    // Precompute projection for window function arguments, partition keys,
+    // order keys, frame bound expressions, and downstream columns.
+    PrecomputeProjection precompute(plan, dt, /*projectAllInputs=*/false);
+
+    // Add input columns needed downstream (by operators above all window
+    // groups). Uses downstreamColumns which accounts for placed expressions.
+    const auto downstream = state.downstreamColumns();
+    for (auto* column : plan->columns()) {
+      if (downstream.contains(column)) {
+        precompute.toColumn(column);
+      }
+    }
+
+    // Precompute window function args and frame bound values.
+    auto windowFunctions = flattenWindowFunctions(group.functions, precompute);
+
+    auto partitionKeys = precompute.toColumns(group.partitionKeys);
+    auto orderKeys = precompute.toColumns(group.orderKeys);
+    // A sort restored below reads the same columns this group orders by.
+    resortKeys = orderKeys;
+    resortTypes = group.orderTypes;
+    auto planBeforeProject = plan;
+    plan = std::move(precompute).maybeProject();
+
+    // Velox WindowNode passes through all input columns. When precompute
+    // didn't add a Project (all needed columns are simple pass-throughs of
+    // input columns), drop columns not needed by this or subsequent window
+    // groups or by downstream operators.
+    if (plan == planBeforeProject) {
+      maybeDropColumns(plan, downstream);
+    }
+
+    if (!isSingleWorker_) {
+      PlanCost repartitionCost;
+      std::tie(plan, repartitionCost) =
+          maybeRepartition(plan, ExprVector(partitionKeys), state);
+      state.cost.add(repartitionCost);
+    }
+
+    // Build output columns: all input columns + window function result columns.
+    ColumnVector columns = plan->columns();
+    append(columns, group.outputColumns);
+
+    // Check inputsSorted: true if the previous group had the same partition
+    // keys and this group's ORDER BY is a prefix of the previous.
+    bool inputsSorted = groupIndex > 0 &&
+        sameKeys(groups[groupIndex - 1].partitionKeys, group.partitionKeys) &&
+        isPrefix(group.orderKeys, groups[groupIndex - 1].orderKeys);
+
+    plan = makeWindowOp(
+        plan,
+        dt,
+        group,
+        std::move(partitionKeys),
+        std::move(orderKeys),
+        std::move(windowFunctions),
+        inputsSorted,
+        std::move(columns),
+        dt->windowPlan->rankingLimit());
+    state.addCost(*plan);
+
+    // Map original window function expressions to their output columns and
+    // mark them as placed so that downstreamColumns() is recomputed for the
+    // next group.
+    for (size_t i = 0; i < group.outputColumns.size(); ++i) {
+      state.addExprToColumn(group.functions[i], group.outputColumns[i]);
+      state.place(group.functions[i]);
+    }
+  }
+
+  // Only the last group's output reaches the consumer, so these apply once, to
+  // the node the loop ended on.
+  //
+  // An ORDER BY dropped as redundant relied on the group being a Window. A
+  // ranking node in its place emits each partition greatest-rank first, so sort
+  // again — and let that sort apply the limit, since picking rows before
+  // sorting would keep an arbitrary set of any tied ones. Drop the sort if
+  // https://github.com/facebookincubator/velox/issues/18494 makes the two
+  // operators agree on output order.
+  if (dt->windowOrderDropped && plan->is(RelType::kTopNRowNumber)) {
+    plan = make<OrderBy>(
+        plan,
+        std::move(resortKeys),
+        std::move(resortTypes),
+        dt->hasLimit() ? dt->limit : std::numeric_limits<int64_t>::max(),
+        dt->offset);
+    state.addCost(*plan);
+    limitConsumed = dt->hasLimit();
+  } else if (addLimitAfterTopN) {
+    plan = make<Limit>(plan, dt->limit, dt->offset);
+    state.addCost(*plan);
+  }
+
+  return limitConsumed;
+}
+
+void Optimization::addOrderBy(
+    DerivedTableCP dt,
+    RelationOpPtr& plan,
+    PlanState& state) const {
+  PrecomputeProjection precompute(plan, dt, /*projectAllInputs=*/false);
+  auto orderKeys = precompute.toColumns(dt->orderKeys);
+
+  for (auto i = 0; i < orderKeys.size(); ++i) {
+    state.addExprToColumn(dt->orderKeys[i], orderKeys[i]);
+  }
+
+  state.place(dt->orderKeys);
+
+  const auto& downstreamColumns = state.downstreamColumns();
+  for (auto* column : plan->columns()) {
+    if (downstreamColumns.contains(column)) {
+      precompute.toColumn(column);
+    }
+  }
+
+  auto* orderBy = make<OrderBy>(
+      std::move(precompute).maybeProject(),
+      std::move(orderKeys),
+      dt->orderTypes,
+      dt->hasLimit() ? dt->limit : std::numeric_limits<int64_t>::max(),
+      dt->offset);
+  state.addCost(*orderBy);
+  plan = orderBy;
+}
+
+void Optimization::joinByIndex(
+    const RelationOpPtr& plan,
+    const JoinCandidate& candidate,
+    PlanState& state,
+    std::vector<NextJoin>& toTry) {
+  if (candidate.tables.size() != 1 ||
+      candidate.tables[0]->isNot(PlanType::kTableNode) ||
+      !candidate.existences.empty()) {
+    // Index applies to single base tables.
+    return;
+  }
+
+  auto [right, left] = candidate.joinSides();
+
+  auto& keys = right.keys;
+  auto keyColumns = leadingColumns(keys);
+  if (keyColumns.empty()) {
+    return;
+  }
+
+  auto rightTable = candidate.tables.at(0)->as<BaseTable>();
+  for (auto& index : rightTable->schemaTable->columnGroups) {
+    auto info = rightTable->schemaTable->indexInfo(index, keyColumns);
+    if (info.lookupKeys.empty()) {
+      continue;
+    }
+    PlanStateSaver save(state, candidate);
+    auto newPartition = repartitionForIndex(info, left.keys, plan, state);
+    if (!newPartition) {
+      continue;
+    }
+    state.place(candidate.tables.at(0));
+    auto joinType = right.leftJoinType();
+    if (joinType == velox::core::JoinType::kFull ||
+        joinType == velox::core::JoinType::kRight) {
+      // Not available by index.
+      return;
+    }
+
+    // Index lookup fanout is unknown when the right table's filtered
+    // cardinality is unknown.
+    std::optional<float> fanout = divide(
+        mul(info.scanCardinality, rightTable->filteredCardinality),
+        rightTable->schemaTable->cardinality);
+    if (joinType == velox::core::JoinType::kLeft) {
+      fanout = maxOf(fanout, 1.0f);
+    } else if (joinType == velox::core::JoinType::kLeftSemiProject) {
+      fanout = 1;
+    } else if (joinType == velox::core::JoinType::kLeftSemiFilter) {
+      fanout = minOf(fanout, 1.0f);
+    }
+
+    // Pair each index key with the probe expression the join equates it to.
+    // 'info.lookupKeys' is in index order and 'left.keys' in join order, so
+    // matching by position would silently swap the probe values whenever the
+    // two orders disagree.
+    ExprVector lookupKeys;
+    lookupKeys.reserve(info.lookupKeys.size());
+    for (auto* lookupColumn : info.lookupKeys) {
+      const auto nth = std::ranges::find(keyColumns, lookupColumn);
+      VELOX_CHECK(
+          nth != keyColumns.end(),
+          "Index lookup key is not one of the join keys: {}",
+          lookupColumn->name());
+      lookupKeys.push_back(left.keys[nth - keyColumns.begin()]);
+    }
+    state.placeColumns(availableColumns(rightTable, index));
+
+    auto c = state.downstreamColumns();
+    c.intersect(state.columns());
+    c.unionColumns(rightTable->filter);
+
+    // The lookup key columns must survive column pruning: they name the
+    // right-hand side of the equalities the lookup is driven by.
+    ColumnVector lookupColumns;
+    lookupColumns.reserve(info.lookupKeys.size());
+    for (auto* lookupColumn : info.lookupKeys) {
+      c.add(lookupColumn);
+      lookupColumns.push_back(lookupColumn);
+    }
+
+    auto* scan = make<TableScan>(
+        newPartition,
+        newPartition->distribution(),
+        rightTable,
+        info.index,
+        fanout,
+        c.toObjects<Column>(),
+        lookupKeys,
+        std::move(lookupColumns),
+        joinType,
+        candidate.join->filter());
+
+    state.placeColumns(c);
+    state.addCost(*scan);
+    if (auto partitionType = info.index->layout->partitionType()) {
+      state.mutableCurrentGroupedLeaves().emplace(
+          scan, std::move(partitionType));
+    }
+    state.addNextJoin(&candidate, scan, toTry);
+  }
+}
+
+namespace {
+
+struct ProjectionBuilder {
+  ColumnVector columns;
+  ExprVector exprs;
+
+  // Project 'expr' as 'column'.
+  void add(ColumnCP column, ExprCP expr) {
+    VELOX_DCHECK(
+        expr->isColumn(), "Expr is not a column: {}", expr->toString());
+    columns.emplace_back(column);
+    exprs.emplace_back(expr);
+  }
+
+  RelationOp* build(RelationOp* input) {
+    return make<Project>(
+        input, exprs, columns, Project::isRedundant(input, exprs, columns));
+  }
+
+  ColumnVector inputColumns() const {
+    ColumnVector columns;
+    columns.reserve(exprs.size());
+    for (const auto* expr : exprs) {
+      VELOX_DCHECK(
+          expr->isColumn(), "Expr is not a column: {}", expr->toString());
+      columns.emplace_back(expr->as<Column>());
+    }
+
+    return columns;
+  }
+
+  PlanObjectSet outputColumns() const {
+    PlanObjectSet columnSet;
+    columnSet.unionObjects(columns);
+    return columnSet;
+  }
+};
+
+folly::F14FastMap<PlanObjectCP, ExprCP> makeJoinColumnMapping(
+    JoinEdgeP joinEdge) {
+  folly::F14FastMap<PlanObjectCP, ExprCP> mapping;
+  for (auto i = 0; i < joinEdge->leftColumns().size(); ++i) {
+    mapping.emplace(joinEdge->leftColumns()[i], joinEdge->leftExprs()[i]);
+  }
+
+  for (auto i = 0; i < joinEdge->rightColumns().size(); ++i) {
+    mapping.emplace(joinEdge->rightColumns()[i], joinEdge->rightExprs()[i]);
+  }
+
+  return mapping;
+}
+
+// Computes columns from the join filter that belong to each side of the join.
+//
+// @param filter The join filter expressions.
+// @param sideAColumns Columns available from side A.
+// @param sideBColumns Columns available from side B.
+// @return A pair of filter columns for {sideA, sideB}.
+std::pair<PlanObjectSet, PlanObjectSet> computeJoinFilterColumns(
+    const ExprVector& filter,
+    const PlanObjectSet& sideAColumns,
+    const PlanObjectSet& sideBColumns) {
+  PlanObjectSet allFilterColumns;
+  allFilterColumns.unionColumns(filter);
+
+  auto a = allFilterColumns;
+  a.intersect(sideAColumns);
+
+  auto b = allFilterColumns;
+  b.intersect(sideBColumns);
+
+  return {a, b};
+}
+
+// Computes the minimal set of columns needed from one side of a join,
+// enabling column pruning by projecting only what's required downstream.
+// Includes filter columns for filter evaluation.
+//
+// Note: Keys are handled separately by precomputeJoinInputs, which precomputes
+// key expressions and adds only the result columns to the output.
+//
+// @param availableColumns Columns available from the input relation.
+// @param side Join side containing join edge columns.
+// @param downstreamColumns Columns needed by operators above the join.
+// @param filterColumns Columns used in the join filter from this side.
+PlanObjectSet computeJoinSideOutputColumns(
+    const PlanObjectSet& availableColumns,
+    const JoinSide& side,
+    const PlanObjectSet& downstreamColumns,
+    const PlanObjectSet& filterColumns) {
+  auto outputColumns = availableColumns;
+  outputColumns.unionObjects(side.columns);
+  outputColumns.intersect(downstreamColumns);
+  outputColumns.unionSet(filterColumns);
+  return outputColumns;
+}
+
+// Result of precomputing join column expressions and keys on both sides of
+// a join.
+struct PrecomputedJoinInputs {
+  RelationOpPtr probeInput;
+  RelationOpPtr buildInput;
+  ExprVector probeKeys;
+  ExprVector buildKeys;
+  folly::F14FastMap<PlanObjectCP, ExprCP> joinColumnMapping;
+};
+
+// Precomputes join column expressions and keys, projecting only the columns
+// in probeOutputColumns and buildOutputColumns.
+PrecomputedJoinInputs precomputeJoinInputs(
+    RelationOpPtr probeInput,
+    RelationOpPtr buildInput,
+    const JoinSide& probe,
+    const JoinSide& build,
+    const DerivedTable* dt,
+    const PlanObjectSet& probeOutputColumns,
+    const PlanObjectSet& buildOutputColumns,
+    const folly::F14FastMap<PlanObjectCP, ExprCP>& columnMapping) {
+  folly::F14FastMap<PlanObjectCP, ExprCP> updatedMapping;
+
+  // Adds columns from outputColumns to the projection.
+  // Uses columnMapping for lookup of non-identity projections.
+  // Adds projected non-identity columns to updatedMapping.
+  auto addOutputColumns = [&](PrecomputeProjection& precompute,
+                              const PlanObjectSet& outputColumns) {
+    outputColumns.forEach<Column>([&](ColumnCP column) {
+      auto it = columnMapping.find(column);
+      if (it != columnMapping.end()) {
+        // Non-identity: project expression as column, track result.
+        auto projected = precompute.toColumn(it->second, column);
+        updatedMapping.emplace(column, projected);
+      } else {
+        // Pass-through: column passes through as-is.
+        precompute.toColumn(column);
+      }
+    });
+  };
+
+  // Probe side: project output columns (includes keys).
+  PrecomputeProjection precomputeProbe(
+      probeInput, dt, /*projectAllInputs=*/false);
+  addOutputColumns(precomputeProbe, probeOutputColumns);
+  // Compute keys in case they are expressions (e.g., a + 1).
+  auto probeKeys = precomputeProbe.toColumns(probe.keys);
+  probeInput = std::move(precomputeProbe).maybeProject();
+
+  // Build side: project output columns (includes keys).
+  PrecomputeProjection precomputeBuild(
+      buildInput, dt, /*projectAllInputs=*/false);
+  addOutputColumns(precomputeBuild, buildOutputColumns);
+  // Compute keys in case they are expressions (e.g., b + 2).
+  auto buildKeys = precomputeBuild.toColumns(build.keys);
+  buildInput = std::move(precomputeBuild).maybeProject();
+
+  return {
+      std::move(probeInput),
+      std::move(buildInput),
+      std::move(probeKeys),
+      std::move(buildKeys),
+      std::move(updatedMapping)};
+}
+
+// Translates columns from outside the join to columns below the join if there
+// is a rename, as in the case of optional sides of outer joins.
+PlanObjectSet translateToJoinInput(
+    const PlanObjectSet& columns,
+    const folly::F14FastMap<PlanObjectCP, ExprCP>& mapping) {
+  PlanObjectSet result;
+  columns.forEach([&](PlanObjectCP object) {
+    auto it = mapping.find(object);
+    if (it != mapping.end()) {
+      result.unionColumns(it->second);
+    } else {
+      result.add(object);
+    }
+  });
+  return result;
+}
+
+// Check if 'mark' column produced by a SemiProject join is used only to
+// filter the results using 'mark' or 'not(mark)' condition. If so, replace
+// the join with a SemiFilter and remove the filter.
+void tryOptimizeSemiProject(
+    velox::core::JoinType& joinType,
+    ColumnCP& mark,
+    PlanState& state) {
+  if (mark) {
+    const bool leftProject =
+        joinType == velox::core::JoinType::kLeftSemiProject;
+    const bool rightProject =
+        joinType == velox::core::JoinType::kRightSemiProject;
+
+    if (leftProject || rightProject) {
+      if (auto markFilter = state.isDownstreamFilterOnly(mark)) {
+        if (markFilter == mark) {
+          joinType = leftProject ? velox::core::JoinType::kLeftSemiFilter
+                                 : velox::core::JoinType::kRightSemiFilter;
+          mark = nullptr;
+          state.place(markFilter);
+          return;
+        }
+
+        if (leftProject &&
+            isCallExpr(markFilter, queryCtx()->functionNames().negation) &&
+            markFilter->as<Call>()->argAt(0) == mark) {
+          joinType = velox::core::JoinType::kAnti;
+          mark = nullptr;
+          state.place(markFilter);
+          return;
+        }
+      }
+    }
+  }
+}
+} // namespace
+
+namespace {
+
+// True if any table in 'candidate' can only be reached by index lookup. A hash
+// join has to scan its build side standalone, which such a table forbids.
+bool isLookupOnly(const JoinCandidate& candidate) {
+  for (auto* table : candidate.tables) {
+    if (!table->is(PlanType::kTableNode)) {
+      continue;
+    }
+    const auto* layout = table->as<BaseTable>()->layout();
+    if (layout != nullptr && !layout->supportsScan()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+} // namespace
+
+void Optimization::joinByHash(
+    const RelationOpPtr& plan,
+    const JoinCandidate& candidate,
+    PlanState& state,
+    std::vector<NextJoin>& toTry) {
+  if (isLookupOnly(candidate)) {
+    return;
+  }
+  checkTables(candidate);
+
+  auto [build, probe] = candidate.joinSides();
+
+  const auto partKeys = joinKeyPartition(plan, probe.keys);
+  ExprVector copartition;
+  if (partKeys.empty()) {
+    // Prefer to make a build partitioned on join keys and shuffle probe to
+    // align with build.
+    copartition = build.keys;
+  }
+
+  PlanStateSaver save(state, candidate);
+
+  auto extendedPlan = placeSingleRowDtsForJoinFilter(plan, candidate, state);
+
+  auto probeColumns = PlanObjectSet::fromObjects(extendedPlan->columns());
+
+  auto [probeFilterColumns, buildFilterColumns] = computeJoinFilterColumns(
+      candidate.join->filter(),
+      probeColumns,
+      availableColumns(candidate.tables[0]));
+
+  PlanObjectSet buildTables;
+  PlanObjectSet buildColumns;
+  for (auto buildTable : candidate.tables) {
+    buildColumns.unionSet(availableColumns(buildTable));
+    buildTables.add(buildTable);
+  }
+
+  state.place(buildTables);
+
+  const auto downstreamColumns = state.downstreamColumns();
+
+  // Mapping from join output column to probe or build side input.
+  auto joinColumnMapping = makeJoinColumnMapping(candidate.join);
+  buildColumns.intersect(
+      translateToJoinInput(downstreamColumns, joinColumnMapping));
+
+  buildColumns.unionColumns(build.keys);
+  buildColumns.unionSet(buildFilterColumns);
+
+  state.placeColumns(buildColumns);
+
+  MemoKey memoKey = MemoKey::create(
+      candidate.tables[0], buildColumns, buildTables, candidate.existences);
+
+  std::optional<DesiredDistribution> forBuild;
+  if (!copartition.empty()) {
+    forBuild = {nullptr, copartition};
+  } else if (!partKeys.empty()) {
+    ExprVector buildPartKeys;
+    for (auto i : partKeys) {
+      buildPartKeys.push_back(build.keys[i]);
+    }
+    forBuild = {plan->distribution().partitionType(), std::move(buildPartKeys)};
+  }
+
+  bool needsShuffle = false;
+  auto buildPlan = makePlan(
+      *state.dt, memoKey, forBuild, candidate.existsFanout, needsShuffle);
+
+  PlanState buildState(state.optimization, state.dt, buildPlan);
+
+  auto precomputed = [&]() {
+    auto probeOutputColumns = computeJoinSideOutputColumns(
+        probeColumns, probe, downstreamColumns, probeFilterColumns);
+    auto buildOutputColumns = computeJoinSideOutputColumns(
+        buildColumns, build, downstreamColumns, buildFilterColumns);
+
+    return precomputeJoinInputs(
+        extendedPlan,
+        buildPlan->op,
+        probe,
+        build,
+        state.dt,
+        probeOutputColumns,
+        buildOutputColumns,
+        joinColumnMapping);
+  }();
+
+  auto probeInput = std::move(precomputed.probeInput);
+  auto buildInput = std::move(precomputed.buildInput);
+  auto probeKeys = std::move(precomputed.probeKeys);
+  auto buildKeys = std::move(precomputed.buildKeys);
+  joinColumnMapping = std::move(precomputed.joinColumnMapping);
+
+  // Add AssignUniqueId for correlated scalar subquery decorrelation.
+  // For non-equi correlation with aggregation: rowNumberColumn is set,
+  // multipleMatchesError is null. For equi-correlation without aggregation:
+  // rowNumberColumn is set and multipleMatchesError is set.
+  ColumnCP enforceDistinctColumn = nullptr;
+  if (auto* rowNumColumn = candidate.join->rowNumberColumn()) {
+    probeInput = make<AssignUniqueId>(probeInput, rowNumColumn);
+    probeColumns.add(rowNumColumn);
+
+    if (candidate.join->multipleMatchesError()) {
+      enforceDistinctColumn = rowNumColumn;
+    }
+  }
+
+  if (!isSingleWorker_ &&
+      !(probeInput->distribution().isGather() &&
+        buildInput->distribution().isGather())) {
+    // For null-aware IN/NOT IN, the build side's shuffle must replicate
+    // rows with NULLs in partition keys (and one arbitrary non-null row) to
+    // all workers. Both IN and NOT IN need this:
+    //   NOT IN: each worker must know if the build side contains a NULL
+    //     (return no rows) or is empty (return all probe rows).
+    //   IN: each worker must correctly produce NULL (not false) for the mark
+    //     column when the build side contains a NULL that could match.
+    // Without replication, NULL rows are hash-partitioned to one worker and
+    // other workers produce wrong results.
+    // See https://facebookincubator.github.io/velox/develop/anti-join.html
+    const bool replicateNullsAndAny = candidate.join->isNullAwareIn();
+
+    if (!partKeys.empty()) {
+      if (needsShuffle) {
+        if (copartition.empty()) {
+          for (auto i : partKeys) {
+            copartition.push_back(buildKeys[i]);
+          }
+        }
+        Distribution distribution{
+            scaleDownPartitionType(
+                plan->distribution().partitionType(),
+                runnerOptions_.maxRemotePartitions,
+                derivedPartitionTypes_),
+            copartition};
+        auto* repartition = make<Repartition>(
+            buildInput,
+            std::move(distribution),
+            buildInput->columns(),
+            replicateNullsAndAny);
+        buildState.addCost(*repartition);
+        commitGroupedLeavesForRepartition(buildState, repartition);
+        buildInput = repartition;
+      }
+    } else if (
+        candidate.join->isBroadcastableType() &&
+        isBroadcastableSize(buildPlan)) {
+      auto* broadcast = make<Repartition>(
+          buildInput, Distribution::broadcast(), buildInput->columns());
+      buildState.addCost(*broadcast);
+      commitGroupedLeavesForRepartition(buildState, broadcast);
+      buildInput = broadcast;
+    } else {
+      // The probe gets shuffled to align with build. If build is not
+      // partitioned on its keys, shuffle the build too.
+      alignJoinSides(
+          buildInput,
+          buildKeys,
+          buildState,
+          probeInput,
+          probeKeys,
+          state,
+          replicateNullsAndAny);
+    }
+  }
+
+  auto* buildOp = make<HashBuild>(buildInput, buildKeys, buildPlan);
+  buildState.addCost(*buildOp);
+
+  auto joinType = build.leftJoinType();
+  const bool probeOnly = velox::core::isProbeOnlyJoin(joinType);
+
+  ProjectionBuilder projectionBuilder;
+  bool needsProjection = false;
+
+  ColumnCP mark = nullptr;
+
+  downstreamColumns.forEach<Column>([&](auto column) {
+    if (column == build.markColumn) {
+      mark = column;
+      return;
+    }
+
+    if (auto it = joinColumnMapping.find(column);
+        it != joinColumnMapping.end()) {
+      projectionBuilder.add(column, it->second);
+      needsProjection = true;
+      return;
+    }
+
+    if ((probeOnly || !buildColumns.contains(column)) &&
+        !probeColumns.contains(column)) {
+      return;
+    }
+
+    projectionBuilder.add(column, column);
+  });
+
+  tryOptimizeSemiProject(joinType, mark, state);
+
+  // If there is an existence flag, it is the rightmost result column.
+  if (mark) {
+    projectionBuilder.add(mark, mark);
+  }
+
+  // Add the row-number column for EnforceDistinct. It is not part of
+  // downstreamColumns, so we need to add it explicitly.
+  if (enforceDistinctColumn &&
+      !downstreamColumns.contains(enforceDistinctColumn)) {
+    projectionBuilder.add(enforceDistinctColumn, enforceDistinctColumn);
+  }
+
+  state.replaceColumns(projectionBuilder.outputColumns());
+
+  RelationOp* join = make<Join>(
+      JoinMethod::kHash,
+      joinType,
+      candidate.join->isNullAwareIn(),
+      candidate.join->isNullAsValue(),
+      probeInput,
+      buildOp,
+      std::move(probeKeys),
+      std::move(buildKeys),
+      candidate.join->filter(),
+      candidate.fanout,
+      candidate.join->rlFanout(),
+      projectionBuilder.inputColumns());
+
+  state.addCost(*join);
+  state.cost.cost = add(state.cost.cost, buildState.cost.cost);
+  mergeFragmentMaps(
+      state.mutableCurrentGroupedLeaves(),
+      std::move(buildState.mutableCurrentGroupedLeaves()));
+
+  if (enforceDistinctColumn != nullptr) {
+    join = make<EnforceDistinct>(
+        join,
+        ExprVector{enforceDistinctColumn},
+        ExprVector{enforceDistinctColumn},
+        candidate.join->multipleMatchesError());
+    state.addCost(*join);
+  }
+
+  if (needsProjection) {
+    join = projectionBuilder.build(join);
+  }
+
+  state.addNextJoin(&candidate, join, toTry);
+}
+
+void Optimization::joinByHashRight(
+    const RelationOpPtr& plan,
+    const JoinCandidate& candidate,
+    PlanState& state,
+    std::vector<NextJoin>& toTry) {
+  if (isLookupOnly(candidate)) {
+    return;
+  }
+  checkTables(candidate);
+
+  VELOX_CHECK_NULL(candidate.join->rowNumberColumn());
+
+  auto [probe, build] = candidate.joinSides();
+
+  PlanStateSaver save(state, candidate);
+
+  auto extendedPlan = placeSingleRowDtsForJoinFilter(plan, candidate, state);
+
+  PlanObjectSet probeTables;
+  PlanObjectSet probeColumns;
+  for (auto probeTable : candidate.tables) {
+    probeColumns.unionSet(availableColumns(probeTable));
+    probeTables.add(probeTable);
+  }
+
+  auto buildColumns = PlanObjectSet::fromObjects(extendedPlan->columns());
+
+  auto [probeFilterColumns, buildFilterColumns] = computeJoinFilterColumns(
+      candidate.join->filter(), probeColumns, buildColumns);
+
+  state.place(probeTables);
+  const auto downstreamColumns = state.downstreamColumns();
+
+  auto joinColumnMapping = makeJoinColumnMapping(candidate.join);
+  probeColumns.intersect(
+      translateToJoinInput(downstreamColumns, joinColumnMapping));
+  probeColumns.unionColumns(probe.keys);
+  probeColumns.unionSet(probeFilterColumns);
+
+  state.placeColumns(probeColumns);
+
+  MemoKey memoKey = MemoKey::create(
+      candidate.tables[0], probeColumns, probeTables, candidate.existences);
+
+  bool needsShuffle = false;
+  auto probePlan = makePlan(
+      *state.dt, memoKey, std::nullopt, candidate.existsFanout, needsShuffle);
+
+  PlanState probeState(state.optimization, state.dt, probePlan);
+
+  auto precomputed = [&]() {
+    auto probeOutputColumns = computeJoinSideOutputColumns(
+        probeColumns, probe, downstreamColumns, probeFilterColumns);
+    auto buildOutputColumns = computeJoinSideOutputColumns(
+        buildColumns, build, downstreamColumns, buildFilterColumns);
+
+    return precomputeJoinInputs(
+        probePlan->op,
+        extendedPlan,
+        probe,
+        build,
+        state.dt,
+        probeOutputColumns,
+        buildOutputColumns,
+        joinColumnMapping);
+  }();
+
+  auto probeInput = std::move(precomputed.probeInput);
+  auto buildInput = std::move(precomputed.buildInput);
+  auto probeKeys = std::move(precomputed.probeKeys);
+  auto buildKeys = std::move(precomputed.buildKeys);
+  joinColumnMapping = std::move(precomputed.joinColumnMapping);
+
+  buildColumns = PlanObjectSet::fromObjects(buildInput->columns());
+
+  const auto leftJoinType = probe.leftJoinType();
+  // Change the join type to the right join variant.
+  auto rightJoinType = reverseJoinType(leftJoinType);
+
+  VELOX_CHECK(
+      leftJoinType != rightJoinType ||
+          velox::core::isCountingLeftSemiFilterJoin(leftJoinType),
+      "Join type does not have right hash join variant");
+
+  // For counting joins (INTERSECT ALL), downstream columns reference
+  // build-side keys (the original left side of the set operation). Map them
+  // to probe-side keys through join equalities so the output references the
+  // correct (probe) side.
+  if (velox::core::isCountingJoin(rightJoinType)) {
+    VELOX_DCHECK(
+        joinColumnMapping.empty(),
+        "Counting joins should not have column mappings from outer join "
+        "columns or precomputed expressions");
+    const auto& leftKeys = candidate.join->leftKeys();
+    const auto& rightKeys = candidate.join->rightKeys();
+    for (size_t i = 0; i < candidate.join->numKeys(); ++i) {
+      joinColumnMapping.emplace(leftKeys[i], rightKeys[i]);
+    }
+  }
+
+  const bool buildOnly =
+      rightJoinType == velox::core::JoinType::kRightSemiFilter ||
+      rightJoinType == velox::core::JoinType::kRightSemiProject;
+
+  ColumnCP mark = nullptr;
+
+  ProjectionBuilder projectionBuilder;
+  bool needsProjection = false;
+
+  downstreamColumns.forEach<Column>([&](auto column) {
+    if (column == probe.markColumn) {
+      mark = column;
+      return;
+    }
+
+    if (auto it = joinColumnMapping.find(column);
+        it != joinColumnMapping.end()) {
+      projectionBuilder.add(column, it->second);
+      needsProjection = true;
+      return;
+    }
+
+    if (!buildColumns.contains(column) &&
+        (buildOnly || !probeColumns.contains(column))) {
+      return;
+    }
+
+    projectionBuilder.add(column, column);
+  });
+
+  tryOptimizeSemiProject(rightJoinType, mark, state);
+
+  if (mark) {
+    projectionBuilder.add(mark, mark);
+  }
+
+  const auto buildCost = state.cost;
+
+  state.replaceColumns(projectionBuilder.outputColumns());
+  state.cost = probeState.cost;
+  state.cost.cost = add(state.cost.cost, buildCost.cost);
+
+  if (!isSingleWorker_) {
+    // The build gets shuffled to align with probe. If probe is not
+    // partitioned on its keys, shuffle the probe too.
+    // In the right-join variant, probeInput is the subquery side (originally
+    // the right/build side). For null-aware IN/NOT IN, it needs
+    // replicateNullsAndAny.
+    alignJoinSides(
+        probeInput,
+        probeKeys,
+        probeState,
+        buildInput,
+        buildKeys,
+        state,
+        candidate.join->isNullAwareIn());
+  }
+
+  auto* buildOp = make<HashBuild>(buildInput, buildKeys, nullptr);
+  state.addCost(*buildOp);
+
+  RelationOp* join = make<Join>(
+      JoinMethod::kHash,
+      rightJoinType,
+      candidate.join->isNullAwareIn(),
+      candidate.join->isNullAsValue(),
+      probeInput,
+      buildOp,
+      std::move(probeKeys),
+      std::move(buildKeys),
+      candidate.join->filter(),
+      candidate.join->rlFanout(),
+      candidate.fanout,
+      projectionBuilder.inputColumns());
+  state.addCost(*join);
+  mergeFragmentMaps(
+      state.mutableCurrentGroupedLeaves(),
+      std::move(probeState.mutableCurrentGroupedLeaves()));
+
+  if (needsProjection) {
+    join = projectionBuilder.build(join);
+  }
+
+  state.addNextJoin(&candidate, join, toTry);
+}
+
+void Optimization::crossJoin(
+    const RelationOpPtr& plan,
+    const JoinCandidate& candidate,
+    PlanState& state,
+    std::vector<NextJoin>& toTry) {
+  VELOX_CHECK_EQ(candidate.tables.size(), 1);
+  VELOX_CHECK_EQ(candidate.existences.size(), 0);
+
+  PlanStateSaver save(state, candidate);
+
+  const auto* table = candidate.tables[0];
+  state.place(table);
+
+  const auto downstreamColumns = state.downstreamColumns();
+
+  RelationOpPtr extendedPlan = candidate.join
+      ? placeSingleRowDtsForJoinFilter(plan, candidate, state)
+      : plan;
+
+  auto buildColumns = availableColumns(table);
+  auto probeColumns = PlanObjectSet::fromObjects(extendedPlan->columns());
+
+  // Columns from the filter that belong to each side.
+  PlanObjectSet probeFilterColumns;
+  PlanObjectSet buildFilterColumns;
+
+  folly::F14FastMap<PlanObjectCP, ExprCP> joinColumnMapping;
+  if (candidate.join != nullptr) {
+    joinColumnMapping = makeJoinColumnMapping(candidate.join);
+
+    std::tie(probeFilterColumns, buildFilterColumns) = computeJoinFilterColumns(
+        candidate.join->filter(), probeColumns, buildColumns);
+
+    buildColumns.intersect(
+        translateToJoinInput(downstreamColumns, joinColumnMapping));
+    buildColumns.unionSet(buildFilterColumns);
+  }
+
+  PlanObjectSet buildTables = PlanObjectSet::single(table);
+  MemoKey memoKey =
+      MemoKey::create(table, buildColumns, buildTables, candidate.existences);
+
+  bool needsShuffle = false;
+  auto buildPlan = makePlan(
+      *state.dt, memoKey, std::nullopt, candidate.existsFanout, needsShuffle);
+
+  PlanState buildState(state.optimization, state.dt, buildPlan);
+
+  RelationOpPtr buildInput = buildPlan->op;
+
+  if (!isSingleWorker_) {
+    auto* broadcast = make<Repartition>(
+        buildInput, Distribution::broadcast(), buildInput->columns());
+    buildState.addCost(*broadcast);
+    commitGroupedLeavesForRepartition(buildState, broadcast);
+    buildInput = broadcast;
+  }
+
+  state.cost.cost = add(state.cost.cost, buildState.cost.cost);
+  mergeFragmentMaps(
+      state.mutableCurrentGroupedLeaves(),
+      std::move(buildState.mutableCurrentGroupedLeaves()));
+
+  if (candidate.join) {
+    auto [build, probe] = candidate.joinSides();
+
+    auto mark = build.markColumn;
+    if (mark != nullptr) {
+      VELOX_CHECK(downstreamColumns.contains(mark));
+    }
+
+    auto precomputed = [&]() {
+      auto probeOutputColumns = computeJoinSideOutputColumns(
+          probeColumns, probe, downstreamColumns, probeFilterColumns);
+      auto buildOutputColumns = computeJoinSideOutputColumns(
+          buildColumns, build, downstreamColumns, buildFilterColumns);
+
+      return precomputeJoinInputs(
+          extendedPlan,
+          buildInput,
+          probe,
+          build,
+          state.dt,
+          probeOutputColumns,
+          buildOutputColumns,
+          joinColumnMapping);
+    }();
+
+    auto probeInput = std::move(precomputed.probeInput);
+    buildInput = std::move(precomputed.buildInput);
+    joinColumnMapping = std::move(precomputed.joinColumnMapping);
+
+    // Add AssignUniqueId for correlated scalar subquery decorrelation.
+    // For non-equi correlation with aggregation: rowNumberColumn is set,
+    // multipleMatchesError is null. For equi-correlation without aggregation:
+    // rowNumberColumn is set and multipleMatchesError is set.
+    ColumnCP enforceDistinctColumn = nullptr;
+    if (auto* rowNumColumn = candidate.join->rowNumberColumn()) {
+      probeInput = make<AssignUniqueId>(probeInput, rowNumColumn);
+      probeColumns.add(rowNumColumn);
+
+      if (candidate.join->multipleMatchesError()) {
+        enforceDistinctColumn = rowNumColumn;
+      }
+    }
+
+    ProjectionBuilder projectionBuilder;
+    bool needsProjection = false;
+
+    downstreamColumns.forEach<Column>([&](auto column) {
+      if (column == mark) {
+        // Defer mark to the end. NestedLoopJoinNode requires the existence
+        // flag to be the rightmost output column for left semi project.
+        return;
+      }
+
+      if (auto it = joinColumnMapping.find(column);
+          it != joinColumnMapping.end()) {
+        projectionBuilder.add(column, it->second);
+        needsProjection = true;
+        return;
+      }
+
+      if (!buildColumns.contains(column) && !probeColumns.contains(column)) {
+        return;
+      }
+
+      projectionBuilder.add(column, column);
+    });
+
+    if (mark) {
+      projectionBuilder.add(mark, mark);
+    }
+
+    // Add the row-number column for EnforceDistinct. It is not part of
+    // downstreamColumns, so we need to add it explicitly.
+    if (enforceDistinctColumn &&
+        !downstreamColumns.contains(enforceDistinctColumn)) {
+      projectionBuilder.add(enforceDistinctColumn, enforceDistinctColumn);
+    }
+
+    auto joinType = build.leftJoinType();
+
+    VELOX_CHECK(
+        joinType == velox::core::JoinType::kInner ||
+            joinType == velox::core::JoinType::kLeft ||
+            joinType == velox::core::JoinType::kRight ||
+            joinType == velox::core::JoinType::kFull ||
+            joinType == velox::core::JoinType::kLeftSemiProject,
+        "Unsupported cross join type: {}",
+        velox::core::JoinTypeName::toName(joinType));
+
+    RelationOp* join = Join::makeCrossJoin(
+        probeInput,
+        buildInput,
+        joinType,
+        candidate.join->filter(),
+        projectionBuilder.inputColumns());
+
+    state.replaceColumns(projectionBuilder.outputColumns());
+    state.addCost(*join);
+
+    if (enforceDistinctColumn != nullptr) {
+      join = make<EnforceDistinct>(
+          join,
+          ExprVector{enforceDistinctColumn},
+          ExprVector{enforceDistinctColumn},
+          candidate.join->multipleMatchesError());
+      state.addCost(*join);
+    }
+
+    if (needsProjection) {
+      join = projectionBuilder.build(join);
+    }
+
+    state.addNextJoin(&candidate, std::move(join), toTry);
+  } else {
+    // No join edge - simple cross join.
+    PlanObjectSet resultColumns;
+    resultColumns.unionObjects(extendedPlan->columns());
+    resultColumns.unionObjects(buildInput->columns());
+    resultColumns.intersect(downstreamColumns);
+
+    RelationOp* join = Join::makeCrossJoin(
+        extendedPlan,
+        buildInput,
+        velox::core::JoinType::kInner,
+        {},
+        resultColumns.toObjects<Column>());
+
+    state.replaceColumns(std::move(resultColumns));
+    state.addCost(*join);
+
+    state.addNextJoin(&candidate, std::move(join), toTry);
+  }
+}
+
+void Optimization::crossJoinUnnest(
+    RelationOpPtr plan,
+    const JoinCandidate& candidate,
+    PlanState& state,
+    std::vector<NextJoin>& toTry) {
+  PlanStateSaver save(state, candidate);
+  for (const auto* table : candidate.tables) {
+    VELOX_CHECK(table->is(PlanType::kUnnestTableNode));
+    // We add unnest table before compute downstream columns because
+    // we're not interested in the replicating columns needed only for unnest.
+    state.place(table);
+
+    PrecomputeProjection precompute(plan, state.dt, /*projectAllInputs=*/false);
+
+    ExprVector replicateColumns;
+    auto downstreamColumns = state.downstreamColumns();
+    downstreamColumns.forEach<Column>([&](auto column) {
+      if (state.columns().contains(column)) {
+        replicateColumns.push_back(precompute.toColumn(column));
+      }
+    });
+
+    const auto* unnestTable = table->as<UnnestTable>();
+    auto ordinalityColumn = unnestTable->ordinalityColumn;
+
+    // TODO: Revisit here if there is pruning of ordinality
+    // column in optimizer.
+    if (ordinalityColumn) {
+      VELOX_CHECK(
+          downstreamColumns.contains(ordinalityColumn),
+          "Ordinality column must be present");
+    }
+
+    // We don't use downstreamColumns() for unnestExprs.
+    // Because 'unnest-column' should be unnested even when it isn't used.
+    // Because it can change cardinality of the all output.
+    const auto& unnestExprs = candidate.join->leftKeys();
+
+    // Plan is updated here,
+    // because we can have multiple unnest joins in single JoinCandidate.
+
+    auto unnestColumns = precompute.toColumns(unnestExprs);
+    plan = std::move(precompute).maybeProject();
+
+    plan = make<Unnest>(
+        std::move(plan),
+        std::move(replicateColumns),
+        std::move(unnestColumns),
+        unnestTable);
+
+    state.replaceColumns(PlanObjectSet::fromObjects(plan->columns()));
+    state.addCost(*plan);
+  }
+  state.addNextJoin(&candidate, std::move(plan), toTry);
+}
+
+void Optimization::addJoin(
+    const JoinCandidate& candidate,
+    const RelationOpPtr& plan,
+    PlanState& state,
+    std::vector<NextJoin>& result) {
+  // If either no join or join without equalities, make cross
+  // join. Revisit for index joins when adding index capable
+  // connectors.
+  if (!candidate.join || candidate.join->leftKeys().empty()) {
+    crossJoin(plan, candidate, state, result);
+    return;
+  }
+
+  // If this candidate has multiple Unnest they all will be handled at once.
+  if (candidate.tables.size() >= 1 &&
+      candidate.tables[0]->is(PlanType::kUnnestTableNode)) {
+    crossJoinUnnest(plan, candidate, state, result);
+    return;
+  }
+
+  std::vector<NextJoin> toTry;
+
+  if (state.syntacticJoinOrder() &&
+      candidate.join->originalJoinType().has_value() &&
+      candidate.join->originalJoinType().value() ==
+          logical_plan::JoinType::kRight) {
+    joinByHashRight(plan, candidate, state, toTry);
+  } else {
+    joinByIndex(plan, candidate, state, toTry);
+
+    const auto sizeAfterIndex = toTry.size();
+    joinByHash(plan, candidate, state, toTry);
+
+    if (!state.syntacticJoinOrder() && toTry.size() > sizeAfterIndex &&
+        candidate.join->isNonCommutative() &&
+        candidate.join->hasRightHashVariant()) {
+      // There is a hash based candidate with a non-commutative join. Try a
+      // right join variant.
+      joinByHashRight(plan, candidate, state, toTry);
+    }
+  }
+
+  // If one is much better do not try the other.
+  // TODO: NextJoin::isWorse accounts for probe-side shuffle cost but not for
+  // build-side distribution changes. Flipping a LEFT SEMI to RIGHT SEMI can
+  // turn a cheap broadcast into an expensive shuffle (e.g., when the existence
+  // table is small enough to broadcast as LEFT SEMI build, but RIGHT SEMI
+  // forces both sides to be shuffled). Consider build-side distribution cost
+  // in isWorse() or skip the right variant when the left build is
+  // broadcastable.
+  if (toTry.size() == 2 && candidate.tables.size() == 1) {
+    if (toTry[0].isWorse(toTry[1])) {
+      toTry.erase(toTry.begin());
+    } else if (toTry[1].isWorse(toTry[0])) {
+      toTry.erase(toTry.begin() + 1);
+    }
+  }
+  result.insert(result.end(), toTry.begin(), toTry.end());
+}
+
+void Optimization::tryNextJoins(
+    PlanState& state,
+    const std::vector<NextJoin>& nextJoins) {
+  for (auto& next : nextJoins) {
+    PlanStateSaver save(state);
+    state.restore(next);
+    makeJoins(next.plan, state);
+  }
+}
+
+RelationOpPtr Optimization::placeSingleRowDt(
+    RelationOpPtr plan,
+    DerivedTableCP subquery,
+    PlanState& state) {
+  MemoKey memoKey = MemoKey::create(
+      subquery,
+      PlanObjectSet::fromObjects(subquery->columns),
+      PlanObjectSet::single(subquery));
+
+  bool needsShuffle = false;
+  auto rightPlan = makePlan(*state.dt, memoKey, std::nullopt, 1, needsShuffle);
+
+  PlanState rightState(state.optimization, state.dt, rightPlan);
+
+  auto rightOp = rightPlan->op;
+
+  if (!isSingleWorker_) {
+    auto* broadcast = make<Repartition>(
+        rightOp, Distribution::broadcast(), rightOp->columns());
+    rightState.addCost(*broadcast);
+    commitGroupedLeavesForRepartition(rightState, broadcast);
+    rightOp = broadcast;
+  }
+
+  state.cost.cost = add(state.cost.cost, rightState.cost.cost);
+  mergeFragmentMaps(
+      state.mutableCurrentGroupedLeaves(),
+      std::move(rightState.mutableCurrentGroupedLeaves()));
+
+  auto resultColumns = plan->columns();
+  resultColumns.insert(
+      resultColumns.end(),
+      rightOp->columns().begin(),
+      rightOp->columns().end());
+
+  // The cross join exposes the right side's columns to downstream
+  // operators; register them with PlanState so state.columns() reflects
+  // what is now available.
+  state.placeColumns(rightOp->columns());
+
+  auto* join = Join::makeCrossJoin(
+      std::move(plan),
+      std::move(rightOp),
+      velox::core::JoinType::kInner,
+      ExprVector{},
+      std::move(resultColumns));
+
+  state.place(subquery);
+  state.addCost(*join);
+  return join;
+}
+
+RelationOpPtr Optimization::placeSingleRowDtsForJoinFilter(
+    RelationOpPtr plan,
+    const JoinCandidate& candidate,
+    PlanState& state) {
+  const auto& join = *candidate.join;
+  if (join.filter().empty()) {
+    return plan;
+  }
+
+  PlanObjectSet referencedTables;
+  for (auto* conjunct : join.filter()) {
+    referencedTables.unionSet(conjunct->allTables());
+  }
+  referencedTables.except(PlanObjectSet::fromObjects(candidate.tables));
+  referencedTables.erase(state.dt);
+
+  // Place any unplaced single-row DT via cross join into 'plan' so its
+  // column is in scope when the join evaluates. Tables that the join
+  // itself will place (candidate.tables) and the enclosing DT were
+  // already excluded above. Any other unplaced non-single-row table
+  // indicates a graph that violates the DT composition rules, in which
+  // case VELOX_FAIL surfaces it loudly.
+  referencedTables.forEach([&](PlanObjectCP table) {
+    if (state.isPlaced(table)) {
+      return;
+    }
+    if (table->is(PlanType::kDerivedTableNode)) {
+      auto* subquery = table->as<DerivedTable>();
+      if (subquery->isSingleRow()) {
+        plan = placeSingleRowDt(plan, subquery, state);
+        return;
+      }
+    }
+    VELOX_FAIL(
+        "Join filter references column from unplaced non-single-row table: {}",
+        cname(table));
+  });
+  return plan;
+}
+
+RelationOpPtr Optimization::planDtAsLeaf(
+    DerivedTableCP from,
+    PlanState& state) {
+  state.place(from);
+
+  auto dtColumns = PlanObjectSet::fromObjects(from->columns);
+  dtColumns.intersect(state.downstreamColumns());
+  state.placeColumns(dtColumns);
+
+  MemoKey key =
+      MemoKey::create(from, std::move(dtColumns), PlanObjectSet::single(from));
+
+  auto plan = makePlan(*state.dt, key, std::nullopt, 1);
+  state.cost = plan->cost;
+  // Inherit the DT's per-leaf bucketed map so subsequent operators planned
+  // atop this DT see its scans as fragment leaves. Copy: 'plan' may be the
+  // input to multiple parents, so each consumer needs its own starting map.
+  auto it = planGroupedLeaves_.find(plan);
+  if (it != planGroupedLeaves_.end()) {
+    // @lint-ignore CLANGTIDY PULSE_UNNECESSARY_COPY
+    GroupedLeaves leaves = it->second;
+    mergeFragmentMaps(state.mutableCurrentGroupedLeaves(), std::move(leaves));
+  }
+  return plan->op;
+}
+
+void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
+  PlanStateSaver save(state);
+
+  auto planOp = planDtAsLeaf(from, state);
+
+  // Make plans based on the dt alone as first.
+  makeJoins(std::move(planOp), state);
+
+  importReducingJoinsAndPlan(from, state);
+}
+
+void Optimization::importReducingJoinsAndPlan(
+    DerivedTableCP from,
+    PlanState& state) {
+  // Look for reducing joins to import inside the DT. Bushy joins are
+  // only allowed when the primary table is a base table — when it is a
+  // subquery DT, bushy tables would be placed inside the MemoKey alongside
+  // the subquery, but they need to join above the subquery's
+  // aggregation/window boundary. The >= 3 threshold requires at least 2
+  // unplaced tables besides 'from' to form a meaningful bushy build side.
+  auto result = findReducingJoins(
+      state,
+      from,
+      state.dt->importedExistences,
+      /*allowBushyJoins=*/!from->is(PlanType::kDerivedTableNode) &&
+          state.dt->tables.size() >= 3);
+
+  if (result.bushyTables.empty() && result.existences.empty()) {
+    return;
+  }
+
+  auto reducingTables = result.bushyTables.empty()
+      ? PlanObjectSet::single(from)
+      : PlanObjectSet::fromObjects(result.bushyTables);
+  MemoKey reducingKey = MemoKey::create(
+      from,
+      state.downstreamColumns(),
+      std::move(reducingTables),
+      std::move(result.existences));
+  auto reducingPlan = makePlan(
+      *state.dt,
+      reducingKey,
+      /*distribution=*/std::nullopt,
+      /*existsFanout=*/result.existenceReduction);
+  state.cost = reducingPlan->cost;
+  makeJoins(reducingPlan->op, state);
+}
+
+bool Optimization::placeConjuncts(
+    RelationOpPtr plan,
+    PlanState& state,
+    bool allowNondeterministic) {
+  PlanStateSaver save(state);
+
+  PlanObjectSet columnsAndSingles = state.columns();
+  state.dt->singleRowDts.forEach<DerivedTable>(
+      [&](auto dt) { columnsAndSingles.unionObjects(dt->columns); });
+
+  // Phase 1: place all already-evaluable conjuncts (every column available)
+  // as a single Filter, before phase 2 places any subquery-dependent
+  // conjunct, so these filters land as low as possible in the plan.
+  {
+    ExprVector filters;
+    for (auto& conjunct : state.dt->conjuncts) {
+      if (!allowNondeterministic && conjunct->containsNonDeterministic()) {
+        continue;
+      }
+      if (state.isPlaced(conjunct)) {
+        continue;
+      }
+      if (conjunct->columns().isSubset(state.columns())) {
+        state.placeColumn(conjunct);
+        filters.push_back(conjunct);
+      }
+    }
+
+    if (!filters.empty()) {
+      for (auto& filter : filters) {
+        state.place(filter);
+      }
+      auto* filter = make<Filter>(plan, std::move(filters));
+      state.addCost(*filter);
+      makeJoins(filter, state);
+      return true;
+    }
+  }
+
+  // Phase 2: place a conjunct that depends on placed tables and non-correlated
+  // single row subqueries.
+  for (auto& conjunct : state.dt->conjuncts) {
+    if (!allowNondeterministic && conjunct->containsNonDeterministic()) {
+      continue;
+    }
+    if (state.isPlaced(conjunct)) {
+      continue;
+    }
+    if (conjunct->columns().isSubset(columnsAndSingles)) {
+      std::vector<DerivedTableCP> placeable;
+      state.dt->singleRowDts.forEach<DerivedTable>([&](auto subquery) {
+        // If the subquery provides columns for the filter, place it.
+        const auto& conjunctColumns = conjunct->columns();
+        for (auto subqColumn : subquery->columns) {
+          if (conjunctColumns.contains(subqColumn)) {
+            placeable.push_back(subquery);
+            break;
+          }
+        }
+      });
+
+      if (!placeable.empty()) {
+        state.place(conjunct);
+        for (auto* subquery : placeable) {
+          plan = placeSingleRowDt(plan, subquery, state);
+        }
+
+        plan = make<Filter>(plan, ExprVector{conjunct});
+        state.addCost(*plan);
+
+        makeJoins(plan, state);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+namespace {
+
+// Restricts dt->outputColumns to only those present in 'needed'.
+void pruneOutputColumns(DerivedTableP dt, const PlanObjectSet& needed) {
+  if (!dt->outputColumns.has_value()) {
+    return;
+  }
+  ColumnVector output;
+  for (auto* column : *dt->outputColumns) {
+    if (needed.contains(column)) {
+      output.push_back(column);
+    }
+  }
+  dt->outputColumns = std::move(output);
+}
+
+// Returns a subset of 'downstream' that exist in 'index' of 'table'.
+ColumnVector indexColumns(
+    const PlanObjectSet& downstream,
+    BaseTableCP table,
+    ColumnGroupCP index) {
+  ColumnVector result;
+  downstream.forEach<Column>([&](auto column) {
+    if (!column->schemaColumn()) {
+      return;
+    }
+    if (table != column->relation()) {
+      return;
+    }
+    if (position(index->columns, *column->schemaColumn()) != kNotFound) {
+      result.push_back(column);
+    }
+  });
+  return result;
+}
+
+// Adds the costs in the input states to the first state. Also merges the
+// per-leaf currentGroupedLeaves_ from each input state into the first so the
+// resulting Plan.map carries every UnionAll input's bucketed leaves.
+PlanP unionPlan(std::vector<PlanState>& states, const RelationOpPtr& result) {
+  auto& firstState = states[0];
+
+  for (auto i = 1; i < states.size(); ++i) {
+    const auto& otherCost = states[i].cost;
+
+    firstState.cost.cost = add(firstState.cost.cost, otherCost.cost);
+    firstState.cost.cardinality =
+        add(firstState.cost.cardinality, otherCost.cardinality);
+
+    mergeFragmentMaps(
+        firstState.mutableCurrentGroupedLeaves(),
+        std::move(states[i].mutableCurrentGroupedLeaves()));
+  }
+  return make<Plan>(result, states[0]);
+}
+
+std::optional<float> startingScore(PlanObjectCP table) {
+  if (table->is(PlanType::kUnnestTableNode)) {
+    VELOX_FAIL("UnnestTable cannot be a starting table");
+    // Because it's rigth side of directed inner (cross) join edge.
+    // Directed edges are non-commutative, so right side cannot be starting.
+  }
+
+  if (table->is(PlanType::kTableNode) ||
+      table->is(PlanType::kValuesTableNode)) {
+    return table->as<TableObject>()->cardinality();
+  }
+
+  return 10;
+}
+
+std::vector<int32_t> sortByStartingScore(const PlanObjectVector& tables) {
+  std::vector<std::optional<float>> scores;
+  scores.reserve(tables.size());
+  for (auto table : tables) {
+    scores.emplace_back(startingScore(table));
+  }
+
+  std::vector<int32_t> indices(tables.size());
+  std::iota(indices.begin(), indices.end(), 0);
+  std::ranges::sort(indices, [&](int32_t left, int32_t right) {
+    // Larger starting score first; an unknown score sorts last.
+    if (!scores[left].has_value()) {
+      return false;
+    }
+    if (!scores[right].has_value()) {
+      return true;
+    }
+    return *scores[left] > *scores[right];
+  });
+
+  return indices;
+}
+
+} // namespace
+
+PlanP Optimization::finalizePlanWithSingleRowDts(
+    RelationOpPtr& plan,
+    PlanState& state) {
+  const auto downstream = state.downstreamColumns();
+  std::vector<DerivedTableCP> singleRowDtsToPlace;
+  state.dt->singleRowDts.forEach<DerivedTable>([&](DerivedTableCP subquery) {
+    if (!state.isPlaced(subquery)) {
+      if (!downstream.containsAny(subquery->columns)) {
+        state.place(subquery);
+      } else {
+        singleRowDtsToPlace.push_back(subquery);
+      }
+    }
+  });
+
+  for (const auto* singleRowDt : singleRowDtsToPlace) {
+    plan = placeSingleRowDt(plan, singleRowDt, state);
+  }
+
+  addPostprocess(state.dt, plan, state);
+  return state.plans.addPlan(plan, state);
+}
+
+void Optimization::greedyJoinChainDescend(
+    RelationOpPtr plan,
+    PlanState& state) {
+  VELOX_CHECK_NOT_NULL(plan);
+
+  // Greedy descends in place, so restore 'state' on return to keep the
+  // invariant that makeJoins leaves it unchanged for the caller.
+  PlanStateSaver save(state);
+
+  // An unknown-cost partial plan cannot be ranked, so greedy cannot pick a
+  // meaningful chain. Bail so the syntactic fallback in
+  // makeJoinsWithSyntacticFallback re-enumerates this DT.
+  if (!state.cost.cost.has_value()) {
+    return;
+  }
+
+  if (placeConjuncts(plan, state, false)) {
+    return;
+  }
+
+  auto candidates = nextJoins(state);
+  if (candidates.empty()) {
+    if (placeConjuncts(plan, state, true)) {
+      return;
+    }
+    finalizePlanWithSingleRowDts(plan, state);
+    return;
+  }
+
+  std::vector<NextJoin> extensions;
+  extensions.reserve(candidates.size());
+  for (auto& candidate : candidates) {
+    addJoin(candidate, plan, state, extensions);
+  }
+  if (extensions.empty()) {
+    return;
+  }
+
+  auto cheaper = [](const NextJoin* best, const NextJoin& next) {
+    return best == nullptr || next.cost.cardinality < best->cost.cardinality ||
+        (next.cost.cardinality == best->cost.cardinality &&
+         next.cost.cost < best->cost.cost);
+  };
+  const NextJoin* bestEqui = nullptr;
+  const NextJoin* bestCross = nullptr;
+  for (const auto& next : extensions) {
+    const NextJoin*& best = next.isEquiJoin() ? bestEqui : bestCross;
+    if (cheaper(best, next)) {
+      best = &next;
+    }
+  }
+  const NextJoin* chosen = bestEqui != nullptr ? bestEqui : bestCross;
+  VELOX_CHECK_NOT_NULL(chosen);
+
+  state.restore(*chosen);
+  greedyJoinChainDescend(chosen->plan, state);
+}
+
+void Optimization::makeJoins(PlanState& state) {
+  // Sanity check that there are no RIGHT joins.
+  for (auto join : state.dt->joins) {
+    if (join->leftOptional()) {
+      VELOX_CHECK(
+          join->rightOptional(), "Unexpected RIGHT join: {}", join->toString());
+    }
+  }
+
+  PlanObjectVector firstTables;
+
+  if (state.syntacticJoinOrder()) {
+    // Single-row derived tables keep their syntactic position but are not valid
+    // starting tables. They are appended after the driving table as cross
+    // products.
+    const auto firstStartTableIt =
+        std::ranges::find_if(state.dt->joinOrder, [&](int32_t tableId) {
+          return state.dt->startTables.BitSet::contains(tableId);
+        });
+    VELOX_CHECK(
+        firstStartTableIt != state.dt->joinOrder.end(),
+        "Syntactic join order has no start table");
+
+    firstTables.push_back(queryCtx()->objectAt(*firstStartTableIt));
+  } else {
+    firstTables = state.dt->startTables.toObjects();
+
+#ifndef NDEBUG
+    for (auto table : firstTables) {
+      state.debugSetFirstTable(table->id());
+    }
+#endif
+  }
+
+  auto sortedIndices = sortByStartingScore(firstTables);
+
+  for (auto index : sortedIndices) {
+    auto from = firstTables.at(index);
+    if (from->is(PlanType::kTableNode)) {
+      auto table = from->as<BaseTable>();
+      auto indices = table->chooseLeafIndex();
+      // Make plan starting with each relevant index of the table.
+      const auto downstream = state.downstreamColumns();
+      for (auto index : indices) {
+        auto columns = indexColumns(downstream, table, index);
+
+        PlanStateSaver save(state);
+        state.place(table);
+        state.placeColumns(columns);
+
+        auto* scan = make<TableScan>(table, index, columns);
+        state.addCost(*scan);
+        if (auto partitionType = index->layout->partitionType()) {
+          state.mutableCurrentGroupedLeaves().emplace(
+              scan, std::move(partitionType));
+        }
+        makeJoins(scan, state);
+      }
+    } else if (from->is(PlanType::kValuesTableNode)) {
+      const auto* valuesTable = from->as<ValuesTable>();
+      ColumnVector columns;
+      state.downstreamColumns().forEach<Column>([&](auto column) {
+        if (valuesTable == column->relation()) {
+          columns.push_back(column);
+        }
+      });
+
+      PlanStateSaver save{state};
+      state.place(valuesTable);
+      state.placeColumns(columns);
+      auto* scan = make<Values>(*valuesTable, std::move(columns));
+      state.addCost(*scan);
+      makeJoins(scan, state);
+    } else if (from->is(PlanType::kUnnestTableNode)) {
+      VELOX_FAIL("UnnestTable cannot be a starting table");
+      // Because it's rigth side of directed inner (cross) join edge.
+      // Directed edges are non-commutative, so right side cannot be starting.
+    } else {
+      // Start with a derived table.
+      placeDerivedTable(from->as<const DerivedTable>(), state);
+    }
+  }
+}
+
+void Optimization::makeJoinsWithSyntacticFallback(PlanState& state) {
+  makeJoins(state);
+  if (state.syntacticJoinOrder()) {
+    return;
+  }
+
+  // Cost-based enumeration drops every partial plan whose cost is unknown, so
+  // an empty plan set means the DT has no costable plan. Re-enumerate it from a
+  // clean state forced to syntactic order.
+  if (state.plans.plans.empty()) {
+    PlanState syntacticState(*this, state.dt, /*syntacticJoinOrder=*/true);
+    syntacticState.targetExprs = state.targetExprs;
+    makeJoins(syntacticState);
+    state.plans = std::move(syntacticState.plans);
+  }
+}
+
+void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
+  VELOX_CHECK_NOT_NULL(plan);
+
+  if (state.greedyJoinOrder() && !state.syntacticJoinOrder()) {
+    greedyJoinChainDescend(plan, state);
+    return;
+  }
+
+  auto dt = state.dt;
+
+  // An unknown-cost partial plan cannot be ranked, so cost-based enumeration
+  // drops it. Syntactic-order enumeration ranks nothing and keeps it.
+  if (!state.syntacticJoinOrder() && !state.cost.cost.has_value()) {
+    return;
+  }
+
+  if (state.isOverBest()) {
+    trace(OptimizerOptions::kExceededBest, dt->id(), state.cost, *plan);
+    return;
+  }
+
+  // Add multitable filters not associated to a non-inner join.
+  if (placeConjuncts(plan, state, false)) {
+    return;
+  }
+
+  auto candidates = nextJoins(state);
+  if (candidates.empty()) {
+    if (placeConjuncts(plan, state, true)) {
+      return;
+    }
+
+    auto kept = finalizePlanWithSingleRowDts(plan, state);
+    trace(
+        kept ? OptimizerOptions::kRetained : OptimizerOptions::kExceededBest,
+        dt->id(),
+        state.cost,
+        *plan);
+    return;
+  }
+
+  std::vector<NextJoin> nextJoins;
+  nextJoins.reserve(candidates.size());
+  for (auto& candidate : candidates) {
+    addJoin(candidate, plan, state, nextJoins);
+  }
+
+  tryNextJoins(state, nextJoins);
+}
+
+RelationOpPtr Optimization::makeInitialPlan(const DerivedTable& dt) {
+  const auto key = dt.memoKey();
+  PlanState state(*this, &dt, options().syntacticJoinOrder);
+  RelationOpPtr result;
+
+  if (dt.isUnion()) {
+    // Union: assemble from already-planned children.
+    RelationOpPtrVector childOps;
+    for (auto* childDt : dt.unionInputs) {
+      auto* plans = memo_.find(childDt->memoKey());
+      VELOX_CHECK(
+          plans != nullptr, "Expecting to find a plan for union branch");
+      childOps.push_back(plans->best()->op);
+    }
+
+    result = make<UnionAll>(std::move(childOps));
+    if (dt.aggregation) {
+      addAggregation(&dt, result, state);
+    }
+
+    state.plans.addPlan(result, state);
+  } else {
+    // Non-union.
+    state.targetExprs.unionObjects(dt.exprs);
+    makeJoinsWithSyntacticFallback(state);
+    result = state.plans.best()->op;
+  }
+
+  memo_.insert(key, std::move(state.plans));
+  return result;
+}
+
+PlanP Optimization::makePlan(
+    const DerivedTable& dt,
+    const MemoKey& key,
+    const std::optional<DesiredDistribution>& distribution,
+    float existsFanout,
+    bool& needsShuffle) {
+  needsShuffle = false;
+  if (key.firstTable->is(PlanType::kDerivedTableNode) &&
+      key.firstTable->as<DerivedTable>()->isUnion()) {
+    return makeUnionPlan(key, distribution);
+  }
+  return makeDtPlan(dt, key, distribution, existsFanout, needsShuffle);
+}
+
+PlanP Optimization::makePlan(
+    const DerivedTable& dt,
+    const MemoKey& key,
+    const std::optional<DesiredDistribution>& distribution,
+    float existsFanout) {
+  bool needsShuffle = false;
+  return makePlan(dt, key, distribution, existsFanout, needsShuffle);
+}
+
+PlanP Optimization::makeUnionPlan(
+    const MemoKey& key,
+    const std::optional<DesiredDistribution>& distribution) {
+  const auto* setDt = key.firstTable->as<DerivedTable>();
+
+  RelationOpPtrVector inputs;
+  std::vector<PlanP> inputPlans;
+  std::vector<PlanState> inputStates;
+  std::vector<bool> inputNeedsShuffle;
+
+  // When the union has an aggregation (e.g., UNION DISTINCT lowered to
+  // UNION ALL + GROUP BY all columns), the dedup requires all the UNION's
+  // output columns. Ensure the needed columns include at least these, even
+  // if the consumer doesn't reference them (e.g., COUNT(*) needs no
+  // specific columns). Without this, pruneOutputColumns can prune children
+  // inconsistently, causing UnionAll::initConstraints to crash.
+  PlanObjectSet childColumns{key.columns};
+  if (setDt->aggregation) {
+    childColumns.unionObjects(setDt->columns);
+  }
+
+  for (auto* inputDt : setDt->unionInputs) {
+    // Only include the child DT in the input tables. Extra tables from
+    // the parent key (e.g., reducing bushy join tables) reference joins
+    // against the UNION ALL DT which don't exist for individual children.
+    auto inputKey =
+        MemoKey::create(inputDt, childColumns, PlanObjectSet::single(inputDt));
+
+    PlanP inputPlan;
+    bool inputShuffle = false;
+    if (inputDt->isUnion()) {
+      // Nested union (e.g., UNION ALL of UNION ALL).
+      // TODO: Flatten nested unions in ToGraph.
+      inputPlan = makeUnionPlan(inputKey, distribution);
+    } else {
+      PlanSet* plans = memo_.find(inputKey);
+      if (plans == nullptr) {
+        auto tmpDt = make<DerivedTable>();
+        tmpDt->cname = newCName("tmp_dt");
+        tmpDt->importUnionChild(inputDt);
+
+        // Restrict outputColumns to only the columns needed by the
+        // parent. The child DT inherits all union columns in
+        // outputColumns, but the parent may need only a subset.
+        // Without this, addPostprocess creates a Project that
+        // references columns pruned from the scan.
+        pruneOutputColumns(tmpDt, inputKey.columns);
+
+        PlanState inner(*this, tmpDt, options().syntacticJoinOrder);
+        inner.setTargetExprsForDt(inputKey.columns);
+
+        makeJoinsWithSyntacticFallback(inner);
+        memo_.insert(inputKey, std::move(inner.plans));
+        plans = memo_.find(inputKey);
+      }
+      inputPlan = plans->best(distribution, inputShuffle);
+    }
+    inputPlans.push_back(inputPlan);
+    inputStates.emplace_back(*this, setDt, inputPlans.back());
+    inputs.push_back(inputPlan->op);
+    inputNeedsShuffle.push_back(inputShuffle);
+  }
+
+  auto finishUnionPlan = [&](RelationOpPtrVector finalInputs) {
+    RelationOpPtr result = make<UnionAll>(std::move(finalInputs));
+    if (setDt->aggregation) {
+      addAggregation(setDt, result, inputStates[0]);
+    }
+    return unionPlan(inputStates, result);
+  };
+
+  if (isSingleWorker_) {
+    return finishUnionPlan(std::move(inputs));
+  }
+
+  // Treat the parent's desired distribution as a hint, not a requirement.
+  // UNION ALL has finer-grained knowledge than the parent: the parent can
+  // only add a single shuffle above the union (which would re-shuffle
+  // naturally-matching inputs unnecessarily); UNION ALL can shuffle only
+  // the inputs that need it. So if at least one input already produces the
+  // desired distribution natively, honor the request and shuffle only the
+  // inputs that don't. Otherwise drop the request — the parent's blanket
+  // shuffle is no worse than per-input shuffles in that case.
+  //
+  // Wrinkle: this assumes the parent commits to the desired distribution it
+  // requested. A parent that later switches strategy (e.g., a hash join that
+  // requests hash(K) for the build, then chooses to broadcast it instead)
+  // leaves the per-input shuffles in place even though they're now wasted.
+  // Such mis-specification is the parent's bug to fix, not UNION ALL's.
+  std::optional<DesiredDistribution> effectiveDistribution = distribution;
+  if (effectiveDistribution.has_value() &&
+      std::ranges::all_of(inputNeedsShuffle, std::identity{})) {
+    effectiveDistribution.reset();
+  }
+
+  if (effectiveDistribution.has_value()) {
+    // Some inputs need a shuffle to reach the parent's desired distribution;
+    // wrap those.
+    const auto* unionPartType = scaleDownPartitionType(
+        effectiveDistribution->partitionType,
+        runnerOptions_.maxRemotePartitions,
+        derivedPartitionTypes_);
+    for (auto i = 0; i < inputs.size(); ++i) {
+      if (inputNeedsShuffle[i]) {
+        auto* repartition = make<Repartition>(
+            inputs[i],
+            Distribution{unionPartType, effectiveDistribution->partitionKeys},
+            inputs[i]->columns());
+        inputStates[i].addCost(*repartition);
+        commitGroupedLeavesForRepartition(inputStates[i], repartition);
+        inputs[i] = repartition;
+      }
+    }
+  } else {
+    // No parent distribution requirement. kSingle (gather-distributed)
+    // inputs cannot co-locate with parallel inputs in the consumer fragment
+    // — they would be multiplied across the parallel tasks. Group all
+    // kSingle inputs into one sub-union and wrap in arbitrary so they feed
+    // the parallel consumer fragment via a single exchange. Compatible
+    // parallel inputs (kSource and kFixed N) co-locate without wrapping.
+    RelationOpPtrVector singleInputs;
+    bool hasParallel = false;
+    for (const auto& input : inputs) {
+      if (input->distribution().isGather()) {
+        singleInputs.push_back(input);
+      } else {
+        hasParallel = true;
+      }
+    }
+
+    if (hasParallel && !singleInputs.empty()) {
+      RelationOpPtr singleSubUnion = singleInputs.size() == 1
+          ? singleInputs[0]
+          : make<UnionAll>(singleInputs);
+      auto* wrapped = make<Repartition>(
+          singleSubUnion, Distribution::arbitrary(), singleSubUnion->columns());
+
+      // Rebuild inputs: keep parallel inputs in place, replace the first
+      // kSingle input with the wrapped sub-union, drop the rest. inputStates
+      // is not 1:1 with inputs (unionPlan only sums costs across states),
+      // so we add the wrap's cost to one of the kSingle states and leave
+      // the state vector size unchanged.
+      RelationOpPtrVector newInputs;
+      newInputs.reserve(inputs.size());
+      bool wrapEmitted = false;
+      size_t firstSingleIndex = 0;
+      for (size_t i = 0; i < inputs.size(); ++i) {
+        if (!inputs[i]->distribution().isGather()) {
+          newInputs.emplace_back(inputs[i]);
+          continue;
+        }
+        if (wrapEmitted) {
+          continue;
+        }
+        wrapEmitted = true;
+        firstSingleIndex = i;
+        newInputs.emplace_back(wrapped);
+      }
+      inputs = std::move(newInputs);
+      VELOX_CHECK(wrapEmitted);
+      VELOX_CHECK_LT(firstSingleIndex, inputStates.size());
+      inputStates.at(firstSingleIndex).addCost(*wrapped);
+      commitGroupedLeavesForRepartition(
+          inputStates.at(firstSingleIndex), wrapped);
+    }
+  }
+
+  return finishUnionPlan(std::move(inputs));
+}
+
+PlanP Optimization::makeDtPlan(
+    const DerivedTable& dt,
+    const MemoKey& key,
+    const std::optional<DesiredDistribution>& distribution,
+    float existsFanout,
+    bool& needsShuffle) {
+  PlanSet* plans = memo_.find(key);
+  if (plans == nullptr) {
+    // Allocate temp DT in the arena. The DT may get flattened and then
+    // PrecomputeProjection may create columns that reference that DT. Hence,
+    // the DT's lifetime must extend to the lifetime of the optimization.
+    auto tmpDt = make<DerivedTable>();
+    tmpDt->cname = newCName("tmp_dt");
+    tmpDt->import(dt, key.tables, key.firstTable, key.existences, existsFanout);
+
+    PlanState inner(*this, tmpDt, options().syntacticJoinOrder);
+    if (key.firstTable->is(PlanType::kDerivedTableNode) &&
+        !tmpDt->columns.empty()) {
+      // tmpDt wraps a subquery DT and has output columns from flattening.
+      // Prune output columns and translate target expressions through the
+      // tmpDt's column-to-expression mapping.
+      pruneOutputColumns(tmpDt, key.columns);
+      inner.setTargetExprsForDt(key.columns);
+    } else {
+      inner.targetExprs = key.columns;
+    }
+
+    makeJoinsWithSyntacticFallback(inner);
+    memo_.insert(key, std::move(inner.plans));
+    plans = memo_.find(key);
+  }
+  return plans->best(distribution, needsShuffle);
+}
+
+ExprCP Optimization::combineLeftDeep(Name func, const ExprVector& exprs) {
+  VELOX_CHECK(!exprs.empty());
+  ExprVector copy = exprs;
+  std::ranges::sort(copy, [&](ExprCP left, ExprCP right) {
+    return left->id() < right->id();
+  });
+  ExprCP result = copy[0];
+  const bool specialForm = SpecialFormCallNames::isSpecialForm(func);
+  for (auto i = 1; i < copy.size(); ++i) {
+    result = toGraph_.deduppedCall(
+        func, result->value(), ExprVector{result, copy[i]}, specialForm);
+  }
+  return result;
+}
+
+ExprCP Optimization::tryFoldConstant(ExprCP expr) {
+  if (expr->is(PlanType::kLiteralExpr)) {
+    return expr;
+  }
+
+  if (!expr->columns().empty()) {
+    return nullptr;
+  }
+
+  velox::Variant variant;
+  velox::TypePtr type;
+  try {
+    auto typedExpr = toTypedExpr(expr);
+    auto exprSet = evaluator()->compile(typedExpr);
+    const auto& first = *exprSet->exprs().front();
+    if (!first.isConstant()) {
+      return nullptr;
+    }
+    const auto& constantExpr =
+        static_cast<const velox::exec::ConstantExpr&>(first);
+    variant = constantExpr.value()->variantAt(0);
+    type = constantExpr.type();
+  } catch (const std::exception&) {
+    return nullptr;
+  }
+
+  return make<Literal>(
+      Value(toType(type), 1), registerVariant(std::move(variant)));
+}
+
+velox::Variant Optimization::evaluate(ExprCP expr) {
+  if (expr->is(PlanType::kLiteralExpr)) {
+    return expr->as<Literal>()->literal();
+  }
+  VELOX_CHECK(
+      expr->columns().empty(),
+      "Expression to evaluate must not reference columns");
+  if (emptyInput_ == nullptr) {
+    emptyInput_ = std::make_shared<velox::RowVector>(
+        evaluator()->pool(),
+        velox::ROW({}),
+        /*nulls=*/nullptr,
+        /*length=*/1,
+        std::vector<velox::VectorPtr>{});
+  }
+
+  auto typedExpr = toTypedExpr(expr);
+  auto exprSet = evaluator()->compile(typedExpr);
+  velox::SelectivityVector rows(1);
+  velox::VectorPtr result;
+  evaluator()->evaluate(exprSet.get(), rows, *emptyInput_, result);
+  return result->variantAt(0);
+}
+
+} // namespace facebook::axiom::optimizer::v1

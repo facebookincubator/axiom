@@ -291,7 +291,7 @@ buck test axiom/optimizer/tests:tpch_result
 
 ### v1 plan tests and snapshots
 
-`axiom/optimizer/tests:tpch_plan` asserts the v1 plan shapes. Its
+`axiom/optimizer/v1/tests:tpch_plan` asserts the v1 plan shapes. Its
 `DISABLED_makePlans` regenerates the v1 plan snapshots in the `tpch/plans`
 directory, which are for reviewing plan shapes and are not used by the tests.
 Each `.plans` file contains:
@@ -305,7 +305,7 @@ To regenerate them, run from the `fbcode` directory:
 
 ```bash
 cd fbcode
-buck run axiom/optimizer/tests:tpch_plan -- \
+buck run axiom/optimizer/v1/tests:tpch_plan -- \
   --gtest_filter="TpchPlanTest.DISABLED_makePlans" \
   --gtest_also_run_disabled_tests
 ```
