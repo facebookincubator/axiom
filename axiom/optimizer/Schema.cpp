@@ -18,7 +18,6 @@
 
 #include <fmt/format.h>
 #include "axiom/optimizer/Cost.h"
-#include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/OptimizerMetrics.h"
 #include "axiom/optimizer/PlanUtils.h"

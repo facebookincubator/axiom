@@ -16,6 +16,7 @@
 
 #include <folly/ScopeGuard.h>
 #include <folly/coro/BlockingWait.h>
+#include "axiom/optimizer/CostV1.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/runner/LocalRunner.h"
