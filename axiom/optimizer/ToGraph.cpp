@@ -2262,8 +2262,10 @@ void ToGraph::translateJoin(
           continue;
         }
       } else if (rightTable->is(PlanType::kTableNode)) {
-        const_cast<BaseTable*>(rightTable->as<BaseTable>())
-            ->addFilter(conjunct);
+        auto* baseTable = const_cast<BaseTable*>(rightTable->as<BaseTable>());
+        if (baseTable->addFilter(conjunct)) {
+          queryCtx()->optimization()->filterUpdated(baseTable);
+        }
       } else {
         // TODO: Support ValuesTable and UnnestTable.
         ++it;

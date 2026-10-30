@@ -2625,7 +2625,10 @@ bool DerivedTable::tryPushdownConjunct(ExprCP conjunct, PlanObjectP table) {
   }
 
   VELOX_CHECK(table->is(PlanType::kTableNode));
-  table->as<BaseTable>()->addFilter(conjunct);
+  auto* baseTable = table->as<BaseTable>();
+  if (baseTable->addFilter(conjunct)) {
+    queryCtx()->optimization()->filterUpdated(baseTable);
+  }
   return true;
 }
 

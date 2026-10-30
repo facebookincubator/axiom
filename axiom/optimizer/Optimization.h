@@ -175,16 +175,6 @@ class Optimization {
     return history_;
   }
 
-  /// If false, correlation names are not included in Column::toString(). Used
-  /// for canonicalizing join cache keys.
-  bool& cnamesInExpr() {
-    return cnamesInExpr_;
-  }
-
-  bool cnamesInExpr() const {
-    return cnamesInExpr_;
-  }
-
   /// Tries to evaluate a constant expression (one with no column references).
   /// Returns the result as a Literal, or nullptr if the expression is not
   /// constant or evaluation fails.
@@ -482,8 +472,6 @@ class Optimization {
 
   // Controls tracing.
   int32_t traceFlags_{0};
-
-  bool cnamesInExpr_{true};
 
   AggregationPlanner aggregationPlanner_;
 

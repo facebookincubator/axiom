@@ -359,8 +359,7 @@ const QGString& TableScan::historyKey() const {
   }
   std::stringstream out;
   out << "scan " << baseTable->schemaTable->name() << "(";
-  auto* opt = queryCtx()->optimization();
-  velox::ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
+  velox::ScopedVarSetter cnames(&queryCtx()->cnamesInExpr(), false);
   for (auto& key : keys) {
     out << "lookup " << key->toString() << ", ";
   }
@@ -663,8 +662,7 @@ std::pair<std::string, std::string> joinKeysString(
     const ExprVector& right) {
   std::vector<int32_t> indices(left.size());
   std::iota(indices.begin(), indices.end(), 0);
-  auto* opt = queryCtx()->optimization();
-  velox::ScopedVarSetter cname(&opt->cnamesInExpr(), false);
+  velox::ScopedVarSetter cname(&queryCtx()->cnamesInExpr(), false);
   std::vector<std::string> strings;
   for (auto& k : left) {
     strings.push_back(k->toString());
@@ -1261,8 +1259,7 @@ const QGString& Aggregation::historyKey() const {
   std::stringstream out;
   out << input_->historyKey();
   out << " group by ";
-  auto* opt = queryCtx()->optimization();
-  velox::ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
+  velox::ScopedVarSetter cnames(&queryCtx()->cnamesInExpr(), false);
   std::vector<std::string> strings;
   for (auto& key : groupingKeys) {
     strings.push_back(key->toString());
@@ -1341,8 +1338,7 @@ const QGString& Filter::historyKey() const {
     return key_;
   }
   std::stringstream out;
-  auto* opt = queryCtx()->optimization();
-  velox::ScopedVarSetter cname(&opt->cnamesInExpr(), false);
+  velox::ScopedVarSetter cname(&queryCtx()->cnamesInExpr(), false);
   out << input_->historyKey() << " filter " << "(";
   std::vector<std::string> strings;
   for (auto& e : exprs_) {
@@ -1784,8 +1780,7 @@ const QGString& Window::historyKey() const {
   std::stringstream out;
   out << input_->historyKey();
   out << " window";
-  auto* opt = queryCtx()->optimization();
-  velox::ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
+  velox::ScopedVarSetter cnames(&queryCtx()->cnamesInExpr(), false);
   if (!partitionKeys.empty()) {
     out << " partition by ";
     std::vector<std::string> strings;
@@ -1840,8 +1835,7 @@ const QGString& RowNumber::historyKey() const {
   std::stringstream out;
   out << input_->historyKey();
   out << " row_number";
-  auto* opt = queryCtx()->optimization();
-  velox::ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
+  velox::ScopedVarSetter cnames(&queryCtx()->cnamesInExpr(), false);
   if (!partitionKeys.empty()) {
     out << " partition by ";
     std::vector<std::string> strings;
@@ -1909,8 +1903,7 @@ const QGString& TopNRowNumber::historyKey() const {
   std::stringstream out;
   out << input_->historyKey();
   out << " topn_row_number";
-  auto* opt = queryCtx()->optimization();
-  velox::ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
+  velox::ScopedVarSetter cnames(&queryCtx()->cnamesInExpr(), false);
   if (!partitionKeys.empty()) {
     out << " partition by ";
     std::vector<std::string> strings;
