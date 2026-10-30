@@ -69,9 +69,11 @@ struct TypeComparer {
 /// arena allocated const chars.
 Name toName(std::string_view string);
 
+namespace v1 {
 struct Plan;
 using PlanP = Plan*;
 class Optimization;
+} // namespace v1
 
 /// STL compatible allocator that manages std:: containers allocated in the
 /// QueryGraphContext arena.
@@ -469,13 +471,19 @@ class QueryGraphContext {
 
   /// Returns the top level plan being processed when printing operator trees.
   /// If non-null, allows showing percentages.
-  PlanP& contextPlan() {
+  v1::PlanP& contextPlan() {
     return contextPlan_;
   }
 
   /// The top level Optimization instance.
-  Optimization*& optimization() {
+  v1::Optimization*& optimization() {
     return optimization_;
+  }
+
+  /// If false, correlation names are not included in Column::toString(). Used
+  /// for canonicalizing join cache keys.
+  bool& cnamesInExpr() {
+    return cnamesInExpr_;
   }
 
   /// Returns the function names used for expression analysis.
@@ -599,8 +607,9 @@ class QueryGraphContext {
 
   std::vector<PathCP> pathById_;
 
-  PlanP contextPlan_{nullptr};
-  Optimization* optimization_{nullptr};
+  v1::PlanP contextPlan_{nullptr};
+  v1::Optimization* optimization_{nullptr};
+  bool cnamesInExpr_{true};
   FunctionNames functionNames_;
   InternalFunctionNames internalFunctionNames_;
 

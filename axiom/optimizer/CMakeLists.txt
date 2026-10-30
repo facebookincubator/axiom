@@ -33,57 +33,43 @@ target_link_libraries(
 )
 
 add_library(
-  axiom_optimizer
-  AggregationPlanner.cpp
+  axiom_optimizer_core
   BitSet.cpp
   ConstantExprEvaluator.cpp
   ConstantFold.cpp
   Cost.cpp
-  DerivedTable.cpp
-  DerivedTableFlattener.cpp
-  DerivedTablePrinter.cpp
   Domain.cpp
   ExplainIo.cpp
   ExprEstimator.cpp
   Filters.cpp
   FunctionRegistry.cpp
   JoinConstraints.cpp
-  JoinSample.cpp
-  MemoKey.cpp
-  Model.cpp
-  Optimization.cpp
   OptimizerOptions.cpp
-  ParallelExpr.cpp
-  Plan.cpp
+  PlanAndStats.cpp
   PlanObject.cpp
   PlanUtils.cpp
-  PrecomputeProjection.cpp
   QueryGraph.cpp
   QueryGraphContext.cpp
-  RelationOp.cpp
-  RelationOpPrinter.cpp
   Schema.cpp
   SelectivityEngine.cpp
   StatsFilterSelectivityEstimator.cpp
-  SubfieldTracker.cpp
-  ToGraph.cpp
   ToSubfield.cpp
-  ToVelox.cpp
   UnionConstraints.cpp
-  VeloxHistory.cpp
   WriteStatsBuilder.cpp
 )
 
 target_link_libraries(
-  axiom_optimizer
+  axiom_optimizer_core
   velox_core
+  velox_exec
   axiom_common
   axiom_connectors
   axiom_logical_plan
   axiom_optimizer_multifragment_plan
-  axiom_runner_local_runner
   velox_async_rpc_function_registry
   velox_connector
+  velox_function_registry
 )
 
+add_subdirectory(v1)
 add_subdirectory(v2)

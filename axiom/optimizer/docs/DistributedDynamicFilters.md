@@ -185,7 +185,7 @@ of the marking decision.
 At any hash join whose placement walk (§4.2) crosses an exchange — broadcast or
 partitioned — and that clears the cost gate above, record a candidate DF **per join
 key** from the physical plan (`Join` carries `leftKeys`/`rightKeys` **[verified:
-RelationOp.h:536-609]**); v1 builds no composite-tuple DF (§7):
+v1/RelationOp.h:536-609]**); v1 builds no composite-tuple DF (§7):
 - per key `i`: the build key (`rightKeys[i]`), the probe key (`leftKeys[i]`), a DF id;
 - the **build distribution** (broadcast vs partitioned), which sets the
   aggregator's completeness condition (§5.2);

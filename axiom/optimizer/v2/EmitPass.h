@@ -18,7 +18,7 @@
 
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/optimizer/OptimizerSession.h"
-#include "axiom/optimizer/ToVelox.h"
+#include "axiom/optimizer/PlanAndStats.h"
 #include "axiom/optimizer/v2/EstimateProvider.h"
 #include "axiom/optimizer/v2/Node.h"
 #include "velox/core/Expressions.h"

@@ -238,7 +238,7 @@ builds the modified DerivedTable with existence semijoins pushed inside.
 ### Discovery: findReducingJoins
 
 The optimizer discovers reducing joins using `findReducingJoins` in
-`Optimization.cpp`, which runs two passes:
+`v1/Optimization.cpp`, which runs two passes:
 
 1. **Bushy reducing inner joins** (`findReducingBushyJoins`) — DFS from a
    start table over unplaced neighbors. If the cumulative fanout is below

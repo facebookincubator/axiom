@@ -19,7 +19,6 @@
 #include <gtest/gtest.h>
 #include <cmath>
 #include <tuple>
-#include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/OptimizerMetrics.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 

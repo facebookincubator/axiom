@@ -14,4 +14,4 @@
 
 add_library(axiom_functions_prestosql PrestoFunctions.cpp)
 
-target_link_libraries(axiom_functions_prestosql axiom_optimizer fmt::fmt)
+target_link_libraries(axiom_functions_prestosql axiom_optimizer_core fmt::fmt)
