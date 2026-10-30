@@ -16,6 +16,9 @@
 
 #pragma once
 
+#include <optional>
+#include <variant>
+
 #include <folly/container/F14Map.h>
 #include "axiom/common/Enums.h"
 #include "axiom/connectors/ConnectorMetadata.h"
@@ -84,9 +87,9 @@ class FinishWrite {
  public:
   FinishWrite() = default;
   FinishWrite(const FinishWrite&) = delete;
-  FinishWrite(FinishWrite&& other) noexcept = default;
+  FinishWrite(FinishWrite&& other) noexcept;
   FinishWrite& operator=(const FinishWrite&) = delete;
-  FinishWrite& operator=(FinishWrite&& other) noexcept = default;
+  FinishWrite& operator=(FinishWrite&& other) noexcept;
 
   FinishWrite(
       std::shared_ptr<connector::ConnectorMetadata> metadata,
@@ -95,15 +98,22 @@ class FinishWrite {
       connector::ConnectorWriteHandlePtr handle,
       WriteStatsMapping statsMapping = {});
 
+  /// Commits a DELETE through finishDelete and aborts it through abortDelete.
+  FinishWrite(
+      std::shared_ptr<connector::ConnectorMetadata> metadata,
+      std::string connectorId,
+      connector::ConnectorSessionPtr session,
+      connector::ConnectorDeleteHandlePtr handle);
+
   /// Best-effort abort if not already committed or aborted.
   ~FinishWrite();
 
   explicit operator bool() const {
-    return handle_ != nullptr;
+    return operation_.has_value();
   }
 
-  /// Commits the write by extracting stats from write results and calling
-  /// ConnectorMetadata::finishWrite. Returns the number of rows written.
+  /// Commits a CREATE or INSERT through finishWrite, or a DELETE through
+  /// finishDelete. Returns the number of rows written or removed.
   [[nodiscard]] connector::RowsFuture commit(
       const std::vector<velox::RowVectorPtr>& writeResults) &&;
 
@@ -115,11 +125,21 @@ class FinishWrite {
   std::string toString() const;
 
  private:
+  struct WriteOperation {
+    connector::ConnectorWriteHandlePtr handle;
+    WriteStatsMapping statsMapping;
+  };
+
+  struct DeleteOperation {
+    connector::ConnectorDeleteHandlePtr handle;
+  };
+
+  using Operation = std::variant<WriteOperation, DeleteOperation>;
+
   std::shared_ptr<connector::ConnectorMetadata> metadata_;
   std::string connectorId_;
   connector::ConnectorSessionPtr session_;
-  connector::ConnectorWriteHandlePtr handle_;
-  WriteStatsMapping statsMapping_;
+  std::optional<Operation> operation_;
 };
 
 /// Describes how a fragment's tasks are scheduled.

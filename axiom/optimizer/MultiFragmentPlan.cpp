@@ -23,6 +23,7 @@
 #include <folly/container/F14Set.h>
 
 #include <cmath>
+#include <utility>
 
 namespace facebook::axiom::optimizer {
 
@@ -393,6 +394,26 @@ const auto& fragmentTypeNames() {
 
 AXIOM_DEFINE_ENUM_NAME(FragmentType, fragmentTypeNames);
 
+FinishWrite::FinishWrite(FinishWrite&& other) noexcept
+    : metadata_{std::move(other.metadata_)},
+      connectorId_{std::move(other.connectorId_)},
+      session_{std::move(other.session_)},
+      operation_{std::exchange(other.operation_, std::nullopt)} {}
+
+FinishWrite& FinishWrite::operator=(FinishWrite&& other) noexcept {
+  if (this == &other) {
+    return *this;
+  }
+  if (*this) {
+    std::ignore = std::move(*this).abort();
+  }
+  metadata_ = std::move(other.metadata_);
+  connectorId_ = std::move(other.connectorId_);
+  session_ = std::move(other.session_);
+  operation_ = std::exchange(other.operation_, std::nullopt);
+  return *this;
+}
+
 FinishWrite::FinishWrite(
     std::shared_ptr<connector::ConnectorMetadata> metadata,
     std::string connectorId,
@@ -402,21 +423,38 @@ FinishWrite::FinishWrite(
     : metadata_{std::move(metadata)},
       connectorId_{std::move(connectorId)},
       session_{std::move(session)},
-      handle_{std::move(handle)},
-      statsMapping_{std::move(statsMapping)} {
+      operation_{WriteOperation{
+          .handle = std::move(handle),
+          .statsMapping = std::move(statsMapping)}} {
   VELOX_CHECK_NOT_NULL(metadata_);
   VELOX_CHECK_NOT_NULL(session_);
-  VELOX_CHECK_NOT_NULL(handle_);
+  VELOX_CHECK_NOT_NULL(std::get<WriteOperation>(*operation_).handle);
+}
+
+FinishWrite::FinishWrite(
+    std::shared_ptr<connector::ConnectorMetadata> metadata,
+    std::string connectorId,
+    connector::ConnectorSessionPtr session,
+    connector::ConnectorDeleteHandlePtr handle)
+    : metadata_{std::move(metadata)},
+      connectorId_{std::move(connectorId)},
+      session_{std::move(session)},
+      operation_{DeleteOperation{.handle = std::move(handle)}} {
+  VELOX_CHECK_NOT_NULL(metadata_);
+  VELOX_CHECK_NOT_NULL(session_);
+  VELOX_CHECK_NOT_NULL(std::get<DeleteOperation>(*operation_).handle);
 }
 
 std::string FinishWrite::toString() const {
-  if (handle_ == nullptr) {
+  if (!*this) {
     return "";
   }
   return fmt::format(
       "Metadata write via connector '{}': {}",
       connectorId_,
-      handle_->toString());
+      std::visit(
+          [](const auto& operation) { return operation.handle->toString(); },
+          *operation_));
 }
 
 FinishWrite::~FinishWrite() {
@@ -429,25 +467,34 @@ connector::RowsFuture FinishWrite::commit(
     const std::vector<velox::RowVectorPtr>& writeResults) && {
   VELOX_CHECK(*this);
   SCOPE_EXIT {
-    *this = {};
+    operation_.reset();
   };
 
-  if (statsMapping_.columns.empty()) {
-    return metadata_->finishWrite(session_, handle_, writeResults, nullptr, {});
+  if (auto* operation = std::get_if<DeleteOperation>(&*operation_)) {
+    return metadata_->finishDelete(session_, operation->handle, writeResults);
+  }
+
+  auto& operation = std::get<WriteOperation>(*operation_);
+  if (operation.statsMapping.columns.empty()) {
+    return metadata_->finishWrite(
+        session_, operation.handle, writeResults, nullptr, {});
   }
 
   auto [statsRows, dataRows] = splitWriteResults(
-      writeResults, handle_->resultType()->size(), handle_->resultType());
+      writeResults,
+      operation.handle->resultType()->size(),
+      operation.handle->resultType());
 
   if (statsRows.empty()) {
-    return metadata_->finishWrite(session_, handle_, dataRows, nullptr, {});
+    return metadata_->finishWrite(
+        session_, operation.handle, dataRows, nullptr, {});
   }
 
   auto [partitionKeys, partitionStats] =
-      extractStats(statsMapping_, statsRows, dataRows);
+      extractStats(operation.statsMapping, statsRows, dataRows);
   return metadata_->finishWrite(
       session_,
-      handle_,
+      operation.handle,
       dataRows,
       std::move(partitionKeys),
       std::move(partitionStats));
@@ -456,9 +503,13 @@ connector::RowsFuture FinishWrite::commit(
 velox::ContinueFuture FinishWrite::abort() && noexcept {
   VELOX_CHECK(*this);
   SCOPE_EXIT {
-    *this = {};
+    operation_.reset();
   };
-  return metadata_->abortWrite(session_, handle_);
+  if (auto* operation = std::get_if<DeleteOperation>(&*operation_)) {
+    return metadata_->abortDelete(session_, operation->handle);
+  }
+  return metadata_->abortWrite(
+      session_, std::get<WriteOperation>(*operation_).handle);
 }
 
 namespace {

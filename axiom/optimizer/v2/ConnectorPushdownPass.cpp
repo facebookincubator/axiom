@@ -341,9 +341,14 @@ NodeCP ConnectorPushdownPass::run(
     const connector::SchemaResolver& schemaResolver,
     const OptimizerSession& session,
     velox::core::ExpressionEvaluator& evaluator) {
-  // A TableWrite is a root sink, so only its input can be offered.
-  const NodeCP offerRoot =
-      root->is(NodeType::kTableWrite) ? root->as<TableWrite>()->input() : root;
+  // A TableWrite is a root sink, so only its input can be offered. Keep the
+  // DELETE target as context while deciding which accepted roots may be
+  // replaced.
+  const auto* tableWrite =
+      root->is(NodeType::kTableWrite) ? root->as<TableWrite>() : nullptr;
+  const NodeCP offerRoot = tableWrite == nullptr ? root : tableWrite->input();
+  const BaseTableCP deleteTarget =
+      tableWrite == nullptr ? nullptr : tableWrite->deleteTarget();
 
   // Partition the plan into maximal connector subtrees. For one connector:
   //
@@ -387,6 +392,12 @@ NodeCP ConnectorPushdownPass::run(
         response.offer.subtree,
         response.offer.connectorId);
     for (const auto& acceptedRoot : response.acceptedRoots) {
+      // A virtual scan can preserve the rows but not the table DELETE mutates.
+      if (deleteTarget != nullptr &&
+          TableWrite::findTargetScan(acceptedRoot.root, deleteTarget) !=
+              nullptr) {
+        continue;
+      }
       replacements.emplace(
           acceptedRoot.root,
           makeReplacementScan(

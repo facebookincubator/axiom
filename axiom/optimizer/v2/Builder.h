@@ -19,7 +19,9 @@
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 #include <deque>
+#include <memory>
 #include <numeric>
+#include <vector>
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/v2/Node.h"
@@ -205,6 +207,12 @@ class Builder {
     return &tableAccessHandles_.emplace_back(std::move(handle));
   }
 
+  /// Takes ownership of 'layout' and returns the stable pointer a
+  /// `TableWrite` carries through physical planning. `TableWrite` nodes live
+  /// in an arena that does not run destructors.
+  const connector::DeleteLayout* takeDeleteLayout(
+      connector::DeleteLayout layout);
+
  private:
   // For a binary `Call` whose 'name' is in `reversibleFunctions_`,
   // swaps 'args' (and renames to the reverse) when `args[0]` should
@@ -335,6 +343,10 @@ class Builder {
   // Owns the connector handles table-access nodes point at. A deque keeps
   // their pointers valid as more are added.
   std::deque<TableAccessHandle> tableAccessHandles_;
+
+  // Owns the connector layouts the IR's `TableWrite`s point at. A deque keeps
+  // their addresses stable as this collection grows.
+  std::deque<connector::DeleteLayout> deleteLayouts_;
 };
 
 } // namespace facebook::axiom::optimizer::v2

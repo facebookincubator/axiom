@@ -166,9 +166,29 @@ class Translator {
   // read all of them.
   Translated translateNode(const logical_plan::LogicalPlanNode& node);
 
+  // The scan a delete removes rows from, and the columns that scan must
+  // produce to identify them. The columns are empty when the connector cannot
+  // delete row by row; the scan is set for every delete.
+  struct DeleteTarget {
+    const logical_plan::TableScanNode* scan{nullptr};
+    std::vector<Name> rowIdColumns;
+  };
+
+  // Finds the target scan under the optional DELETE filter.
+  DeleteTarget resolveDeleteTarget(
+      const logical_plan::TableWriteNode& tableWrite,
+      const connector::Table& connectorTable) const;
+
   Translated translateScan(
       const logical_plan::TableScanNode& scan,
       const LpNameSet& required);
+  // Translates the DELETE target and returns its row identity in connector
+  // order through 'rowIdColumns'.
+  Translated translateDeleteScan(
+      const logical_plan::TableScanNode& scan,
+      const LpNameSet& required,
+      const std::vector<Name>& rowIdColumnNames,
+      ColumnVector& rowIdColumns);
 
   // A column a scan reads: the name of the column in the table, and the name
   // the scan's scope binds it to.
@@ -186,6 +206,11 @@ class Translator {
   Translated translateFilter(
       const logical_plan::FilterNode& filter,
       const LpNameSet& required);
+  // Translates the condition of 'filter' over 'input', the translation of its
+  // input.
+  Translated translateFilter(
+      const logical_plan::FilterNode& filter,
+      Translated input);
   Translated translateProject(
       const logical_plan::ProjectNode& project,
       const LpNameSet& required);

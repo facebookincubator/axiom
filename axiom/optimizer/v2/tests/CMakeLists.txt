@@ -22,6 +22,7 @@ add_executable(
   RelationalPropertiesTest.cpp
   RelationSetTest.cpp
   TpchPlanTest.cpp
+  VeloxExprImporterTest.cpp
 )
 
 add_test(

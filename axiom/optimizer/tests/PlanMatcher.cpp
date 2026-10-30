@@ -2213,6 +2213,32 @@ class TopNRowNumberMatcher : public PlanMatcherImpl<TopNRowNumberNode> {
   const int32_t limit_;
 };
 
+// Matches a TableWriteNode and verifies the names the connector receives the
+// written columns under, in order.
+class TableWriteColumnNamesMatcher : public PlanMatcherImpl<TableWriteNode> {
+ public:
+  TableWriteColumnNamesMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      std::vector<std::string> columnNames)
+      : PlanMatcherImpl<TableWriteNode>({matcher}),
+        columnNames_{std::move(columnNames)} {}
+
+  MatchResult matchDetails(
+      const TableWriteNode& plan,
+      const std::unordered_map<std::string, std::string>& /*symbols*/)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
+    EXPECT_EQ(plan.columnNames(), columnNames_);
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    return MatchResult::success();
+  }
+
+ private:
+  const std::vector<std::string> columnNames_;
+};
+
 // Matches a LocalPartitionNode and verifies its type (gather or repartition)
 // and optionally partition keys.
 class LocalPartitionTypeMatcher : public PlanMatcherImpl<LocalPartitionNode> {
@@ -2220,10 +2246,13 @@ class LocalPartitionTypeMatcher : public PlanMatcherImpl<LocalPartitionNode> {
   LocalPartitionTypeMatcher(
       const std::shared_ptr<PlanMatcher>& matcher,
       LocalPartitionNode::Type expectedType,
-      std::vector<std::string> partitionKeys = {})
+      std::vector<std::string> partitionKeys = {},
+      std::shared_ptr<const axiom::connector::PartitionType> partitionType =
+          nullptr)
       : PlanMatcherImpl<LocalPartitionNode>({matcher}),
         expectedType_{expectedType},
-        partitionKeys_{std::move(partitionKeys)} {}
+        partitionKeys_{std::move(partitionKeys)},
+        partitionType_{std::move(partitionType)} {}
 
   MatchResult matchDetails(
       const LocalPartitionNode& plan,
@@ -2251,8 +2280,10 @@ class LocalPartitionTypeMatcher : public PlanMatcherImpl<LocalPartitionNode> {
         keyChannels.push_back(outputType->getChildIdx(name));
       }
 
-      auto expected =
-          exec::HashPartitionFunctionSpec(outputType, keyChannels).toString();
+      const auto expected = partitionType_ != nullptr
+          ? partitionType_->makeSpec(keyChannels, {}, /*isLocal=*/true)
+                ->toString()
+          : exec::HashPartitionFunctionSpec(outputType, keyChannels).toString();
       EXPECT_EQ(plan.partitionFunctionSpec().toString(), expected);
       AXIOM_TEST_RETURN_IF_FAILURE
     }
@@ -2263,6 +2294,9 @@ class LocalPartitionTypeMatcher : public PlanMatcherImpl<LocalPartitionNode> {
  private:
   const LocalPartitionNode::Type expectedType_;
   const std::vector<std::string> partitionKeys_;
+  // When set, the partition type whose local spec is expected; a hash on the
+  // keys otherwise.
+  const std::shared_ptr<const axiom::connector::PartitionType> partitionType_;
 };
 
 class MarkDistinctMatcher : public PlanMatcherImpl<MarkDistinctNode> {
@@ -2827,6 +2861,19 @@ PlanMatcherBuilder& PlanMatcherBuilder::localPartition(
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::localPartition(
+    const std::vector<std::string>& partitionKeys,
+    std::shared_ptr<const axiom::connector::PartitionType> partitionType) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  VELOX_USER_CHECK_NOT_NULL(partitionType);
+  matcher_ = std::make_shared<LocalPartitionTypeMatcher>(
+      matcher_,
+      LocalPartitionNode::Type::kRepartition,
+      partitionKeys,
+      std::move(partitionType));
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::localPartition(
     std::initializer_list<PlanMatcherBuilder> sources) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   std::vector<std::shared_ptr<PlanMatcher>> sourceMatchers{matcher_};
@@ -3053,6 +3100,14 @@ PlanMatcherBuilder& PlanMatcherBuilder::orderBy() {
   return *this;
 }
 
+PlanMatcherBuilder& PlanMatcherBuilder::partialOrderBy(
+    const std::vector<std::string>& ordering) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ =
+      std::make_shared<OrderByMatcher>(matcher_, ordering, /*partial=*/true);
+  return *this;
+}
+
 PlanMatcherBuilder& PlanMatcherBuilder::orderBy(
     const std::vector<std::string>& ordering) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
@@ -3063,6 +3118,14 @@ PlanMatcherBuilder& PlanMatcherBuilder::orderBy(
 PlanMatcherBuilder& PlanMatcherBuilder::tableWrite() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<PlanMatcherImpl<TableWriteNode>>(matcher_);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::tableWrite(
+    const std::vector<std::string>& columnNames) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ =
+      std::make_shared<TableWriteColumnNamesMatcher>(matcher_, columnNames);
   return *this;
 }
 

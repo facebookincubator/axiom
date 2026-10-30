@@ -266,6 +266,7 @@ NodeCP Optimizer::planTo(
       builder_,
       evaluator_,
       estimateProvider_,
+      session_,
       session_.options(),
       planOptions_.maxRemotePartitions,
       planOptions_.maxLocalPartitions);

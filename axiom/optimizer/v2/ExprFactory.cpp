@@ -16,10 +16,12 @@
 
 #include "axiom/optimizer/v2/ExprFactory.h"
 
+#include <algorithm>
+
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 
-#include <algorithm>
+#include "axiom/optimizer/FunctionRegistry.h"
 
 namespace facebook::axiom::optimizer::v2 {
 

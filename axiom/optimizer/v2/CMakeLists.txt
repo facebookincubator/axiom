@@ -69,6 +69,7 @@ add_library(
   GraphMatchLowering.cpp
   TranslatePass.cpp
   Translator.cpp
+  VeloxExprImporter.cpp
 )
 
 target_link_libraries(

@@ -34,6 +34,7 @@ EmitPass::Result physicalPlanAndEmit(
       builder,
       evaluator,
       estimateProvider,
+      session,
       session.options(),
       options.maxRemotePartitions,
       options.maxLocalPartitions);

@@ -3784,6 +3784,21 @@ Partitioning TableWrite::globalPartition(
   return {};
 }
 
+ScanCP FOLLY_NULLABLE
+TableWrite::findTargetScan(NodeCP input, BaseTableCP target) {
+  if (input->is(NodeType::kScan) && input->as<Scan>()->baseTable() == target) {
+    return input->as<Scan>();
+  }
+  ScanCP found = nullptr;
+  for (NodeCP child : input->inputs()) {
+    if (ScanCP scan = findTargetScan(child, target)) {
+      VELOX_CHECK_NULL(found, "Two scans read a delete's target table");
+      found = scan;
+    }
+  }
+  return found;
+}
+
 TableWrite::TableWrite(Key key)
     : Node(
           NodeType::kTableWrite,
@@ -3795,12 +3810,83 @@ TableWrite::TableWrite(Key key)
       input_(key.input),
       table_(key.table),
       kind_(key.kind),
-      columnExprs_(std::move(key.columnExprs)) {
+      columnExprs_(std::move(key.columnExprs)),
+      rowIdColumns_(std::move(key.rowIdColumns)),
+      deleteTarget_(key.deleteTarget),
+      deleteLayout_(key.deleteLayout) {
   VELOX_CHECK_NOT_NULL(input_);
   VELOX_CHECK_NOT_NULL(table_);
   if (kind_ == connector::WriteKind::kDelete) {
-    VELOX_CHECK(columnExprs_.empty(), "Delete writes no columns");
+    if (deleteLayout_ == nullptr || !deleteLayout_->hasWriter()) {
+      VELOX_CHECK(
+          columnExprs_.empty(), "Only a row-level delete writes columns");
+    } else {
+      const auto& computed = deleteLayout_->computedColumns();
+      VELOX_CHECK_EQ(
+          columnExprs_.size(),
+          rowIdColumns_.size() + computed.size(),
+          "A row-level delete writes its row identity and computed columns");
+      checkColumns(columnExprs_, "TableWrite column");
+      for (size_t i = 0; i < rowIdColumns_.size(); ++i) {
+        VELOX_CHECK(
+            columnExprs_[i] == rowIdColumns_[i],
+            "A row-level delete writes its row identity first");
+      }
+      for (size_t i = 0; i < computed.size(); ++i) {
+        VELOX_CHECK_EQ(
+            columnExprs_[rowIdColumns_.size() + i]->as<Column>()->outputName(),
+            computed[i].name,
+            "A row-level delete writes the computed columns in layout order");
+      }
+      VELOX_CHECK(
+          std::ranges::equal(columnExprs_, input_->outputColumns()),
+          "TableWrite input does not produce exactly the written columns");
+    }
+    VELOX_CHECK_NOT_NULL(deleteTarget_, "A delete has a target table");
+    VELOX_CHECK(
+        deleteTarget_->schemaTable->connectorTable == table_,
+        "DELETE target does not refer to the table being mutated");
+    const bool zeroRows = input_->is(NodeType::kValues) &&
+        input_->as<Values>()->cardinality() == 0;
+    const ScanCP targetScan =
+        zeroRows ? nullptr : findTargetScan(input_, deleteTarget_);
+    VELOX_CHECK(
+        zeroRows || targetScan != nullptr,
+        "A delete's input does not read its target table");
+    const auto expectedRowIdColumns =
+        table_->rowIdColumns(connector::WriteKind::kDelete);
+    VELOX_CHECK_EQ(
+        rowIdColumns_.size(),
+        expectedRowIdColumns.size(),
+        "A delete carries the row identity its table names");
+    for (size_t i = 0; i < rowIdColumns_.size(); ++i) {
+      VELOX_CHECK_EQ(
+          rowIdColumns_[i]->schemaName(),
+          expectedRowIdColumns[i],
+          "A delete carries its table's row identity in order");
+      VELOX_CHECK(
+          rowIdColumns_[i]->relation() == deleteTarget_,
+          "A delete's row identity column does not belong to its target: {}",
+          expectedRowIdColumns[i]);
+      VELOX_CHECK(
+          targetScan == nullptr ||
+              std::ranges::find(
+                  targetScan->outputColumns(), rowIdColumns_[i]) !=
+                  targetScan->outputColumns().end(),
+          "A delete's target scan does not produce row identity column: {}",
+          expectedRowIdColumns[i]);
+      VELOX_CHECK(
+          std::ranges::find(input_->outputColumns(), rowIdColumns_[i]) !=
+              input_->outputColumns().end(),
+          "A delete's input does not produce row identity column: {}",
+          expectedRowIdColumns[i]);
+    }
   } else {
+    VELOX_CHECK_NULL(deleteTarget_, "Only a delete has a target table");
+    VELOX_CHECK_NULL(
+        deleteLayout_, "Only a delete carries a connector delete layout");
+    VELOX_CHECK(
+        rowIdColumns_.empty(), "Only a delete identifies the rows it writes");
     VELOX_CHECK(
         !columnExprs_.empty(), "TableWrite must write at least one column");
     VELOX_CHECK_EQ(columnExprs_.size(), table_->type()->size());
@@ -3822,12 +3908,21 @@ size_t TableWrite::KeyHash::operator()(const TableWrite* node) const {
       node->input(),
       node->table(),
       static_cast<uint8_t>(node->kind()),
-      node->columnExprs());
+      node->columnExprs(),
+      node->rowIdColumns(),
+      node->deleteTarget(),
+      node->deleteLayout());
 }
 
 size_t TableWrite::KeyHash::operator()(const Key& key) const {
   return hashOf(
-      key.input, key.table, static_cast<uint8_t>(key.kind), key.columnExprs);
+      key.input,
+      key.table,
+      static_cast<uint8_t>(key.kind),
+      key.columnExprs,
+      key.rowIdColumns,
+      key.deleteTarget,
+      key.deleteLayout);
 }
 
 bool TableWrite::KeyEq::operator()(
@@ -3835,13 +3930,19 @@ bool TableWrite::KeyEq::operator()(
     const TableWrite* right) const {
   return left->input() == right->input() && left->table() == right->table() &&
       left->kind() == right->kind() &&
-      left->columnExprs() == right->columnExprs();
+      left->columnExprs() == right->columnExprs() &&
+      left->rowIdColumns() == right->rowIdColumns() &&
+      left->deleteTarget() == right->deleteTarget() &&
+      left->deleteLayout() == right->deleteLayout();
 }
 
 bool TableWrite::KeyEq::operator()(const Key& key, const TableWrite* node)
     const {
   return key.input == node->input() && key.table == node->table() &&
-      key.kind == node->kind() && key.columnExprs == node->columnExprs();
+      key.kind == node->kind() && key.columnExprs == node->columnExprs() &&
+      key.rowIdColumns == node->rowIdColumns() &&
+      key.deleteTarget == node->deleteTarget() &&
+      key.deleteLayout == node->deleteLayout();
 }
 
 bool TableWrite::KeyEq::operator()(const TableWrite* node, const Key& key)

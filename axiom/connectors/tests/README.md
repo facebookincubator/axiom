@@ -34,6 +34,7 @@ The Test connector is designed for three use cases:
 - `CREATE TABLE`.
 - `CREATE TABLE AS SELECT`.
 - `INSERT INTO`.
+- Row-level `DELETE`.
 - `DROP TABLE`.
 - Automatic statistics collection: per-column NDV, min/max, null percentage,
   max and average length, and average size in bytes of variable-width values
@@ -178,13 +179,18 @@ auto table = connector->addTable(
     TestBucketSpec{{"customer_id"}, 16});    // 16 buckets on customer_id
 ```
 
-`TestBucketSpec::bucketColumns` lists the column names that compose the bucket
-key (must reference visible columns); `numBuckets` is the fixed bucket count.
+`TestBucketSpec::bucketColumns` lists the stored column names that compose the
+bucket key (visible columns or the generated `$row_id`); `numBuckets` is the
+fixed bucket count.
 
 ### Hidden Columns
 
 Tables can have hidden columns that are not included in `SELECT *`, `DESC`,
 or `SHOW CREATE TABLE` output but can be queried explicitly by name.
+
+Every table has a hidden BIGINT `$row_id` by default. The connector assigns
+monotonically increasing values as rows are appended and never reuses an ID,
+including after a delete.
 
 Hidden columns can be defined via SQL using the `hidden` property:
 
@@ -194,7 +200,8 @@ CREATE TABLE events (event_id BIGINT, payload VARCHAR)
 ```
 
 Hidden column names must not conflict with schema column names. All hidden
-columns are created with type VARCHAR.
+columns created through the `hidden` property are VARCHAR. `$row_id` is
+reserved and cannot be declared through that property or in the visible schema.
 
 Hidden columns can also be defined via the C++ API with explicit types:
 
@@ -212,6 +219,32 @@ SELECT * FROM events;
 -- Hidden columns must be referenced explicitly.
 SELECT event_id, "$timestamp" FROM events;
 ```
+
+### Row-Level DELETE
+
+`DELETE` reads the `$row_id` of each matching row and hands the IDs to a
+writer, which stages them; the rows are removed when the DELETE commits. By
+default a table's DELETE layout asks for no shuffle and no sort, so each writer
+receives whatever rows reach it. To make the optimizer distribute or order the
+rows, set a row-level layout on the table. This one spreads the rows over 4
+writers by `$row_id` and sorts each writer's rows by it:
+
+```cpp
+table->setRowLevelDeleteLayout(DeleteLayout::rowLevel(
+    /*computedColumns=*/{},
+    /*shuffleKeys=*/{"$row_id"},
+    std::make_shared<TestPartitionType>(
+        4, std::vector<TypePtr>{BIGINT()}, ROW("$row_id", BIGINT())),
+    /*sortKeys=*/{"$row_id"},
+    /*sortOrders=*/{{/*isAscending=*/true, /*isNullsFirst=*/false}}));
+```
+
+The layout must have a writer: TestConnector deletes rows only through one, so
+`DeleteLayout::metadata()` is rejected.
+
+Tests observe a DELETE through callbacks on the connector:
+`setOnFinishDelete` receives the row IDs each writer staged, once per DELETE
+that runs its writers, and `setOnAbortDelete` runs once per aborted DELETE.
 
 ### Discrete Predicate Values
 

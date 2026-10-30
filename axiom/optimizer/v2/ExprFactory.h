@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/container/F14Map.h>
+
 #include "axiom/optimizer/v2/Builder.h"
 
 namespace facebook::axiom::optimizer::v2 {
@@ -102,6 +104,12 @@ class ExprFactory {
 
   /// Builds a literal of 'type'.
   ExprCP makeLiteral(velox::Variant value, TypeCP type);
+
+  /// Builds a call named `name` over `arguments` that returns `value`, seeding
+  /// the `FunctionSet` from the function's own bits (`specialForm` selects
+  /// special-form vs registered-function lookup) and its arguments.
+  ExprCP
+  makeCall(Name name, Value value, ExprVector arguments, bool specialForm);
 
   /// Builds `lhs <= rhs`.
   ExprCP makeLessThanOrEqual(ExprCP lhs, ExprCP rhs);
@@ -238,12 +246,6 @@ class ExprFactory {
   }
 
  private:
-  // Builds a call named `name` over `arguments` that returns `value`, seeding
-  // the `FunctionSet` from the function's own bits (`specialForm` selects
-  // special-form vs registered-function lookup) OR'd with each argument's.
-  ExprCP
-  makeCall(Name name, Value value, ExprVector arguments, bool specialForm);
-
   // Builds a BOOLEAN-typed (cardinality 2) call; see makeCall.
   ExprCP makeBooleanCall(Name name, ExprVector arguments, bool specialForm);
 

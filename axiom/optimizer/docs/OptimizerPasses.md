@@ -257,7 +257,10 @@ Other physical planning:
   gather.
 - Preserves compatible bucketing through scans and unions where it avoids a
   shuffle.
-- Repartitions table writes on the target layout when required.
+- Repartitions table writes on the target layout when required. For a
+  row-level DELETE, asks the connector for its layout, adds the columns it
+  computes from row IDs, and sorts each writer's rows when the layout requires
+  an order.
 
 See [Distributed execution](DistributedExecution.md) and
 [Join enumeration scaling](JoinEnumerationScaling.md).

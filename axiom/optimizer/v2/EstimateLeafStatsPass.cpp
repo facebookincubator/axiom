@@ -434,7 +434,13 @@ class EmptyScanSimplifier : public NodeRewriter<SimplifiedNodeContext> {
     return unary(node, context, [&](auto input) {
       return simplifier_.make(
           TableWrite::Key{
-              node->input(), node->table(), node->kind(), node->columnExprs()},
+              node->input(),
+              node->table(),
+              node->kind(),
+              node->columnExprs(),
+              node->rowIdColumns(),
+              node->deleteTarget(),
+              node->deleteLayout()},
           std::move(input),
           node->outputColumns());
     });
