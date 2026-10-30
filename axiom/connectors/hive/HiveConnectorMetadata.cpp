@@ -294,6 +294,15 @@ HiveTable::HiveTable(
               std::move(columnComments)),
           std::move(options)) {}
 
+std::vector<std::string> HiveTable::statsGroupingKeys() const {
+  std::vector<std::string> names;
+  for (const auto* column :
+       layouts()[0]->asChecked<HiveTableLayout>()->hivePartitionColumns()) {
+    names.push_back(column->name());
+  }
+  return names;
+}
+
 std::vector<std::string> HiveTable::ioColumnPriority() const {
   const auto* hiveLayout = layouts()[0]->asChecked<HiveTableLayout>();
 
@@ -839,11 +848,11 @@ ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
     const TablePtr& table,
     WriteKind kind,
     bool explain) {
+  if (kind != WriteKind::kCreate && kind != WriteKind::kInsert) {
+    // The default refuses the kind as a user error.
+    return ConnectorMetadata::beginWrite(session, table, kind, explain);
+  }
   ensureInitialized();
-  VELOX_CHECK(
-      kind == WriteKind::kCreate || kind == WriteKind::kInsert,
-      "Only CREATE/INSERT supported, not {}",
-      WriteKindName::toName(kind));
   checkTableWritable(*table);
   const auto* hiveLayout = table->layouts()[0]->asChecked<HiveTableLayout>();
   auto storageFormat = hiveLayout->fileFormat();

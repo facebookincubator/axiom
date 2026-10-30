@@ -2344,7 +2344,12 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
                                              : 1);
 
   WriteStatsBuilder statsBuilder(
-      table, inputType, *handle, numDrivers, numTasks);
+      table,
+      table.type()->names(),
+      inputType,
+      write.kind(),
+      numDrivers,
+      numTasks);
 
   std::optional<velox::core::ColumnStatsSpec> writeStatsSpec;
   if (statsBuilder.hasStats()) {

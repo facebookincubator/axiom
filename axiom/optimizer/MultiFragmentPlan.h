@@ -51,16 +51,18 @@ struct ColumnStatMapping {
   std::vector<ColumnStatField> fields;
 };
 
-/// Describes how to extract column statistics from Velox write results.
-/// Built by the optimizer alongside ColumnStatsSpec and stored on FinishWrite.
+/// Describes how to extract column statistics from the results of a write or
+/// ANALYZE. Built by the optimizer alongside ColumnStatsSpec and stored on
+/// FinishWrite.
 struct WriteStatsMapping {
   /// Per-column stat mappings. The aggregate channels appear in this order
   /// in the stats output, after any grouping key columns.
   std::vector<ColumnStatMapping> columns;
 
   /// Number of grouping key columns in the stats aggregation. These appear
-  /// as the first stats columns (after row_count, fragment, context). Zero
-  /// when there are no grouping keys.
+  /// as the first stats columns: after row_count, fragment and context in a
+  /// write, and first in ANALYZE's output. Zero when there are no grouping
+  /// keys.
   uint32_t numGroupingKeys{0};
 
   /// Table-level names for the grouping key columns, in the same order as
@@ -69,6 +71,15 @@ struct WriteStatsMapping {
   /// finishWrite must use table column names (e.g. "pk"). Empty when there
   /// are no grouping keys.
   std::vector<std::string> groupingKeyNames;
+
+  /// True when a "$row_count" column with each group's row count follows the
+  /// grouping keys. Set when there are grouping keys, and always for ANALYZE,
+  /// which has no writer to count the rows.
+  bool hasRowCount{false};
+
+  /// True for ANALYZE. Its statistics replace the stored ones, so each column
+  /// carries its null percentage, computed from the group's row count.
+  bool setsNullPct{false};
 };
 
 /// Describes an exchange source for an ExchangeNode a non-leaf stage.
@@ -96,7 +107,7 @@ class FinishWrite {
       std::string connectorId,
       connector::ConnectorSessionPtr session,
       connector::ConnectorWriteHandlePtr handle,
-      WriteStatsMapping statsMapping = {});
+      std::optional<WriteStatsMapping> statsMapping = std::nullopt);
 
   /// Commits a DELETE through finishDelete and aborts it through abortDelete.
   FinishWrite(
@@ -112,8 +123,10 @@ class FinishWrite {
     return operation_.has_value();
   }
 
-  /// Commits a CREATE or INSERT through finishWrite, or a DELETE through
-  /// finishDelete. Returns the number of rows written or removed.
+  /// Commits a CREATE, INSERT or ANALYZE through finishWrite, extracting the
+  /// statistics from the results, or a DELETE through finishDelete. Returns
+  /// the number of rows written or removed, or for ANALYZE the number of rows
+  /// analyzed.
   [[nodiscard]] connector::RowsFuture commit(
       const std::vector<velox::RowVectorPtr>& writeResults) &&;
 
@@ -127,7 +140,8 @@ class FinishWrite {
  private:
   struct WriteOperation {
     connector::ConnectorWriteHandlePtr handle;
-    WriteStatsMapping statsMapping;
+    // Set when the write collects statistics.
+    std::optional<WriteStatsMapping> statsMapping;
   };
 
   struct DeleteOperation {

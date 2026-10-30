@@ -169,6 +169,12 @@ class TestTableLayout : public TableLayout {
 
   std::span<const Column* const> discretePredicateColumns() const override;
 
+  /// Returns the values given to setDiscreteValues. Each is a ROW with one
+  /// field per column in discretePredicateColumns().
+  const std::vector<velox::Variant>& discreteValues() const {
+    return discreteValues_;
+  }
+
   std::unique_ptr<DiscretePredicates> discretePredicates(
       const ConnectorSessionPtr& session,
       const std::vector<const Column*>& columns,
@@ -217,7 +223,8 @@ class TestTable : public Table {
       TestConnector* connector,
       const folly::F14FastMap<std::string, velox::Variant>& options,
       std::optional<TestBucketSpec> bucketSpec = std::nullopt,
-      folly::F14FastMap<std::string, std::string> columnComments = {});
+      folly::F14FastMap<std::string, std::string> columnComments = {},
+      std::shared_ptr<velox::memory::MemoryPool> dataPool = nullptr);
 
   const std::vector<const TableLayout*>& layouts() const override {
     return layouts_;
@@ -287,6 +294,21 @@ class TestTable : public Table {
     return rowLevelDeleteLayout_;
   }
 
+  /// Returns a copy of this table that shares its data and replaces the
+  /// statistics of the given columns. Code that still holds this table keeps
+  /// seeing the old statistics. No data is copied.
+  std::shared_ptr<TestTable> withAnalyzedStatistics(
+      const std::vector<ColumnStatistics>& statistics) const;
+
+  /// Groups the statistics that writes and ANALYZE collect by 'keys'.
+  void setStatsGroupingKeys(std::vector<std::string> keys) {
+    statsGroupingKeys_ = std::move(keys);
+  }
+
+  std::vector<std::string> statsGroupingKeys() const override {
+    return statsGroupingKeys_;
+  }
+
   TestTableLayout* mutableLayout() {
     return exportedLayout_.get();
   }
@@ -336,7 +358,10 @@ class TestTable : public Table {
   bool collectStatistics_{true};
   // True once column statistics have been collected; deletes recompute them.
   bool hasColumnStatistics_{false};
+  // True while the column trackers have seen every row added.
+  bool tracksAllRows_{true};
   std::vector<ColumnTracker> columnTrackers_;
+  std::vector<std::string> statsGroupingKeys_;
 
   std::optional<TestBucketSpec> bucketSpec_;
   std::unique_ptr<velox::core::PartitionFunction> partitionFunction_;
@@ -751,6 +776,9 @@ class TestConnectorMetadata : public ConnectorMetadata {
       bool ifNotExists,
       bool explain) override;
 
+  /// For ANALYZE, refuses a table that reports no statistics, and one whose
+  /// statistics were set without data: the first has no row count to check
+  /// the results against, and the second has no data for ANALYZE to read.
   ConnectorWriteHandlePtr beginWrite(
       const ConnectorSessionPtr& session,
       const TablePtr& table,
@@ -772,6 +800,38 @@ class TestConnectorMetadata : public ConnectorMetadata {
       const DeleteLayout& layout,
       bool explain) override;
 
+  /// Called by finishWrite with the arguments it received. If it throws,
+  /// nothing is stored.
+  std::function<void(
+      const std::vector<velox::RowVectorPtr>& writeResults,
+      const velox::RowVectorPtr& groupingKeys,
+      const std::vector<std::vector<ColumnStatistics>>& groupStats)>
+      onFinishWrite;
+
+  /// The statistics an ANALYZE committed, as finishWrite received them.
+  struct AnalyzedStatistics {
+    /// The grouping keys, then $row_count. Null when there were no groups.
+    velox::RowVectorPtr groupingKeys;
+
+    /// Per-group column statistics, aligned with the rows of 'groupingKeys'.
+    std::vector<std::vector<ColumnStatistics>> groupStats;
+
+    /// Returns the number of rows in all groups.
+    int64_t numRows() const;
+  };
+
+  /// Memory for the stored ANALYZE results, which must outlive the query that
+  /// computed them.
+  std::shared_ptr<velox::memory::MemoryPool> analyzePool;
+
+  /// The results of the last ANALYZE that committed.
+  std::optional<AnalyzedStatistics> analyzedStatistics;
+
+  /// For ANALYZE, keeps the results in analyzedStatistics. Ungrouped results
+  /// also replace the table with a copy that carries the new column
+  /// statistics, so later queries plan with them. Grouped results leave the
+  /// table unchanged: it has no partitions to hold statistics per group.
+  /// Fails if the table changed while the statistics were computed.
   RowsFuture finishWrite(
       const ConnectorSessionPtr& session,
       const ConnectorWriteHandlePtr& handle,

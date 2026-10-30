@@ -247,6 +247,28 @@ class RelationPlanner : public AstVisitor {
     builder_->tableDelete(connectorId, table.schema, table.table);
   }
 
+  // Scans 'table' and computes statistics over 'columns'.
+  void planAnalyze(
+      const Analyze& node,
+      const std::string& connectorId,
+      const facebook::axiom::SchemaTableName& table,
+      const std::vector<std::string>& columns) {
+    processTable(node.location(), *node.tableName());
+
+    std::vector<lp::ExprApi> columnExprs;
+    columnExprs.reserve(columns.size());
+    for (const auto& column : columns) {
+      columnExprs.push_back(lp::Col(column));
+    }
+    tableWrite(
+        connectorId,
+        table.schema,
+        table.table,
+        lp::WriteKind::kAnalyze,
+        columns,
+        columnExprs);
+  }
+
   const ViewMap& views() const {
     return views_;
   }
@@ -2869,6 +2891,84 @@ SqlStatementPtr parseDelete(
       });
 }
 
+// Returns the columns ANALYZE computes statistics for: the ones in
+// WITH (columns = ARRAY[...]), or else every column of 'table'. 'columns' is
+// the only property ANALYZE takes.
+std::vector<std::string> analyzedColumns(
+    const Analyze& analyze,
+    const facebook::axiom::connector::Table& table) {
+  std::optional<std::vector<std::string>> columns;
+  for (const auto& property : analyze.properties()) {
+    const auto name = canonicalizeIdentifier(*property->name());
+    AXIOM_PRESTO_SEMANTIC_CHECK(
+        name == "columns",
+        property->location(),
+        name,
+        "Unknown ANALYZE property: {}",
+        name);
+    AXIOM_PRESTO_SEMANTIC_CHECK(
+        !columns.has_value(), property->location(), name, "Duplicate property");
+
+    const auto& value = property->value();
+    AXIOM_PRESTO_SEMANTIC_CHECK(
+        value->is(NodeType::kArrayConstructor),
+        value->location(),
+        name,
+        "ANALYZE property columns must be an array of column names");
+    columns.emplace();
+    for (const auto& element : value->as<ArrayConstructor>()->values()) {
+      AXIOM_PRESTO_SEMANTIC_CHECK(
+          element->is(NodeType::kStringLiteral),
+          element->location(),
+          name,
+          "ANALYZE property columns must be an array of column names");
+      const auto& column = element->as<StringLiteral>()->value();
+      AXIOM_PRESTO_SEMANTIC_CHECK(
+          table.type()->containsChild(column),
+          element->location(),
+          column,
+          "Unknown ANALYZE column: {}",
+          column);
+      AXIOM_PRESTO_SEMANTIC_CHECK(
+          std::ranges::find(*columns, column) == columns->end(),
+          element->location(),
+          column,
+          "Duplicate ANALYZE column: {}",
+          column);
+      columns->push_back(column);
+    }
+  }
+  return columns.value_or(table.type()->names());
+}
+
+SqlStatementPtr parseAnalyze(
+    const ParserSessionPtr& session,
+    const Analyze& analyze,
+    const std::string& defaultConnectorId,
+    const std::string& defaultSchema,
+    const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
+        std::string_view /*sql*/)>& parseSql) {
+  const auto [connectorId, connectorTable] =
+      toConnectorTable(*analyze.tableName(), defaultConnectorId, defaultSchema);
+
+  // Reject a missing target before planning the scan, which would otherwise
+  // resolve a view of that name.
+  const auto table =
+      findTable(session, *analyze.tableName(), connectorId, connectorTable);
+
+  RelationPlanner planner(session, defaultConnectorId, defaultSchema, parseSql);
+  planner.planAnalyze(
+      analyze, connectorId, connectorTable, analyzedColumns(analyze, *table));
+
+  return std::make_shared<AnalyzeStatement>(
+      planner.plan(),
+      planner.views(),
+      lp::ReferencedTables{
+          planner.inputTables(),
+          facebook::axiom::CatalogSchemaTableName{connectorId, connectorTable},
+      });
+}
+
 std::unordered_map<std::string, lp::ExprPtr> parseTableProperties(
     const ParserSessionPtr& session,
     const std::vector<std::shared_ptr<Property>>& props) {
@@ -3507,6 +3607,15 @@ SqlStatementPtr doPlan(
     return parseCreateTableAsSelect(
         parserSession,
         *query->as<CreateTableAsSelect>(),
+        defaultConnectorId,
+        defaultSchema,
+        parseSql);
+  }
+
+  if (query->is(NodeType::kAnalyze)) {
+    return parseAnalyze(
+        parserSession,
+        *query->as<Analyze>(),
         defaultConnectorId,
         defaultSchema,
         parseSql);

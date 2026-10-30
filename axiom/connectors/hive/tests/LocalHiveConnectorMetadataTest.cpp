@@ -809,13 +809,19 @@ TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
       /*partitionKeys=*/{},
       dwio::common::FileFormat::DWRF);
 
-  VELOX_ASSERT_THROW(
+  VELOX_ASSERT_USER_THROW(
       metadata_->beginWrite(
           session,
           created,
           WriteKind::kUpdate,
           /*explain=*/false),
-      "Only CREATE/INSERT supported, not UPDATE");
+      "Unsupported write kind for connector test-hive: UPDATE");
+  // Local Hive adds ANALYZE in its own beginWrite. The generic Hive metadata
+  // that other Hive connectors build on refuses it.
+  VELOX_ASSERT_USER_THROW(
+      metadata_->HiveConnectorMetadata::beginWrite(
+          session, created, WriteKind::kAnalyze, /*explain=*/false),
+      "Unsupported write kind for connector test-hive: ANALYZE");
   VELOX_ASSERT_THROW(
       metadata_->deleteLayout(session, /*scanHandle=*/nullptr, /*exact=*/true),
       "DELETE requires a scan of the table");

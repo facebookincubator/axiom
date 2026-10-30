@@ -430,6 +430,7 @@ class NodeRewriter {
         {newInput,
          node->table(),
          node->kind(),
+         node->columnNames(),
          node->columnExprs(),
          node->rowIdColumns(),
          node->deleteTarget(),

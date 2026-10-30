@@ -43,6 +43,7 @@ const auto& statementKindNames() {
       {SqlStatementKind::kUse, "USE"},
       {SqlStatementKind::kAddColumn, "ALTER TABLE ADD COLUMN"},
       {SqlStatementKind::kCall, "CALL"},
+      {SqlStatementKind::kAnalyze, "ANALYZE"},
   };
 
   return kNames;

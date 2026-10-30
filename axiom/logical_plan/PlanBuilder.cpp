@@ -1842,7 +1842,7 @@ PlanBuilder& PlanBuilder::tableWrite(
   VELOX_USER_CHECK_EQ(columnNames.size(), columnExprs.size());
   if (kind == WriteKind::kDelete) {
     VELOX_USER_CHECK_EQ(columnNames.size(), 0, "Delete writes no columns");
-  } else {
+  } else if (kind != WriteKind::kAnalyze) {
     VELOX_USER_CHECK_GT(columnNames.size(), 0);
   }
 
@@ -1854,13 +1854,14 @@ PlanBuilder& PlanBuilder::tableWrite(
     columnExpressions.push_back(resolveScalarTypes(expr.expr()));
   }
 
-  if (kind == WriteKind::kInsert || kind == WriteKind::kDelete) {
+  if (kind == WriteKind::kInsert || kind == WriteKind::kDelete ||
+      kind == WriteKind::kAnalyze) {
     auto metadata = findMetadata(connectorId);
     auto table = metadata->findTable(schemaTableName);
     VELOX_USER_CHECK_NOT_NULL(
         table, "Table not found: {}", schemaTableName.toString());
 
-    if (kind == WriteKind::kInsert) {
+    if (kind == WriteKind::kInsert || kind == WriteKind::kAnalyze) {
       // Check input types.
       const auto& schema = table->type();
 
@@ -1894,6 +1895,17 @@ PlanBuilder& PlanBuilder::tableWrite(
                 name,
                 schemaTableName.toString());
           }
+        }
+      }
+    }
+
+    if (kind == WriteKind::kAnalyze) {
+      // The statistics are grouped by these columns, so ANALYZE reads them.
+      for (const auto& key : table->statsGroupingKeys()) {
+        if (std::find(columnNames.begin(), columnNames.end(), key) ==
+            columnNames.end()) {
+          columnNames.push_back(key);
+          columnExpressions.push_back(resolveScalarTypes(Col(key).expr()));
         }
       }
     }

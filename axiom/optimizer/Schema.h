@@ -489,6 +489,8 @@ struct SchemaTable {
 /// added to 'this' on first use. The Schema feeds from a
 /// SchemaResolver which interfaces to a local/remote metadata
 /// repository.
+/// Each query reads connector statistics fresh. A cache shared across queries,
+/// if one is added, must drop statistics when a connector publishes new ones.
 class Schema {
  public:
   /// Constructs a Schema for producing executable plans, backed by 'source'.

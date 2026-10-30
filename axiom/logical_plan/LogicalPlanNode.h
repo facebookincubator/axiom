@@ -923,25 +923,34 @@ enum class WriteKind {
   // for the columns being changed. The new values may overlap with the row id
   // if the row id is a set of primary key columns.
   kUpdate = 4,
+
+  // No rows change. The optimizer computes the statistics that a write
+  // collects, over the named columns, and the connector replaces its stored
+  // statistics with them.
+  kAnalyze = 5,
 };
 
 AXIOM_DECLARE_ENUM_NAME(WriteKind);
 
-/// Implements create/insert/delete/update as per 'writeKind'.
+/// Implements create/insert/delete/update/analyze as per 'writeKind'.
 ///
 /// The output schema contains a single BIGINT column named 'rows'. The value of
-/// 'rows' is the total number of rows written. The output has exactly one row.
+/// 'rows' is the total number of rows written, or for kAnalyze the number of
+/// rows analyzed. The output has exactly one row.
 class TableWriteNode : public LogicalPlanNode {
  public:
   /// @param id Unique ID of the plan node.
   /// @param input The child plan node providing data to write.
   /// @param tableName Table name with catalog and schema.
-  /// @param writeKind The type of write (create/insert/delete/update).
+  /// @param writeKind The type of write (create/insert/delete/update/analyze).
   /// @param columnNames A subset of columns in the table being written.
   /// Correspond 1:1 to 'columnExpressions'. 'columnNames' must refer to columns
   /// in the table but their number or order does not have to correspond to the
   /// table. Missing columns get their default from the table schema. Column
-  /// names must be unique. Must be empty for 'kDelete'.
+  /// names must be unique. Must be empty for 'kDelete'. For 'kAnalyze', the
+  /// columns to compute statistics for. They must include the table's
+  /// statistics grouping keys. With no columns, ANALYZE computes only the row
+  /// count.
   /// @param columnExpressions Expressions producing the values to write.
   /// Correspond 1:1 to 'columnNames'.
   /// @param options Writer dependent options. May specify compression or

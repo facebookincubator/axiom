@@ -590,7 +590,8 @@ class PlanBuilder {
   PlanBuilder& offset(int64_t offset);
 
   /// Adds a TableWrite node that writes the current plan's output into the
-  /// specified table.
+  /// specified table. For ANALYZE, adds the table's statistics grouping keys
+  /// that 'columnNames' leaves out, read from the current plan's output.
   PlanBuilder& tableWrite(
       std::string connectorId,
       std::string schemaName,

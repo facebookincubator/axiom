@@ -22,7 +22,18 @@
 
 namespace facebook::axiom::optimizer {
 
-/// Builds ColumnStatsSpec instances for TableWrite and TableWriteMerge nodes.
+/// Builds the column statistics aggregation of a write or ANALYZE as
+/// ColumnStatsSpecs. A write computes it in its TableWrite and
+/// TableWriteMerge nodes. ANALYZE has no writer and computes the same
+/// statistics in Aggregation nodes over the table scan, in the same steps.
+///
+///   WriteStatsBuilder builder(
+///       table, columnNames, inputType, kind, numDrivers, numWorkers);
+///   if (builder.hasStats()) {
+///     auto spec = builder.writeSpec(); // The first step, over the input.
+///   }
+///   FinishWrite finishWrite{..., builder.statsMapping()};
+///
 /// Determines the topology (1, 2, or 3 specs) based on driver/worker counts:
 ///   - Single driver, single worker: writeSpec (kSingle)
 ///   - Multi driver, single worker: writeSpec (kPartial) + localMergeSpec
@@ -31,13 +42,20 @@ namespace facebook::axiom::optimizer {
 ///     + finalMergeSpec (kFinal)
 class WriteStatsBuilder {
  public:
+  /// 'columnNames' are the table columns that the columns of 'inputType'
+  /// hold, by position: every column of the table for a write, the analyzed
+  /// ones for ANALYZE. They must include 'table.statsGroupingKeys()'. Throws
+  /// for ANALYZE if the statistics aggregates are not registered.
   WriteStatsBuilder(
       const connector::Table& table,
+      const std::vector<std::string>& columnNames,
       const velox::RowTypePtr& inputType,
-      const connector::ConnectorWriteHandle& writeHandle,
+      connector::WriteKind kind,
       int32_t numDrivers,
       int32_t numWorkers);
 
+  /// True when the plan computes statistics. Always true for ANALYZE, which
+  /// counts the rows even with no columns to analyze.
   bool hasStats() const {
     return hasStats_;
   }
@@ -50,21 +68,24 @@ class WriteStatsBuilder {
     return hasStats_ && needsFinalMerge_;
   }
 
-  WriteStatsMapping statsMapping() const {
-    return statsMapping_;
-  }
+  /// Returns how to read the statistics from the plan's output, or
+  /// std::nullopt when there are none.
+  std::optional<WriteStatsMapping> statsMapping() const;
 
-  /// Spec for the TableWriteNode. kSingle when no merge needed, kPartial
-  /// with intermediate output types otherwise.
+  /// Spec for the TableWriteNode, or for ANALYZE the first Aggregation.
+  /// kSingle when no merge needed, kPartial with intermediate output types
+  /// otherwise.
   velox::core::ColumnStatsSpec writeSpec() const;
 
-  /// Spec for the local TableWriteMergeNode. kFinal (single worker) or
-  /// kIntermediate (multi worker). Reads intermediate state from sourceType.
+  /// Spec for the local TableWriteMergeNode, or Aggregation for ANALYZE.
+  /// kFinal (single worker) or kIntermediate (multi worker). Reads
+  /// intermediate state from sourceType.
   velox::core::ColumnStatsSpec localMergeSpec(
       const velox::RowTypePtr& sourceType) const;
 
-  /// Spec for the final TableWriteMergeNode in multi-worker writes. Always
-  /// kFinal. Reads intermediate state from sourceType.
+  /// Spec for the final TableWriteMergeNode, or Aggregation for ANALYZE, in
+  /// multi-worker plans. Always kFinal. Reads intermediate state from
+  /// sourceType.
   velox::core::ColumnStatsSpec finalMergeSpec(
       const velox::RowTypePtr& sourceType) const;
 

@@ -2607,18 +2607,22 @@ class Exchange : public Node {
 using ExchangeCP = const Exchange*;
 
 /// Writes rows for CREATE or INSERT, or the identity of the rows a DELETE
-/// removes. A root sink: its single BIGINT output column is the written or
-/// removed row count, consumed by no node. UPDATE is deferred.
+/// removes. ANALYZE writes no rows: it computes the statistics of the columns
+/// it reads. A root sink: its single BIGINT output column is the written,
+/// removed or analyzed row count, consumed by no node. UPDATE is deferred.
 ///
 /// Example:
 ///   builder.make<TableWrite>(
-///       {input, table, WriteKind::kInsert, inputColumns, {}, nullptr,
-///       nullptr});
+///       {input, table, WriteKind::kInsert, tableColumnNames, inputColumns, {},
+///       nullptr, nullptr});
 ///
 /// Invariants checked at construction:
-/// - CREATE or INSERT: `columnExprs` are columns of `input`, one per table
-///   column, and `input` produces exactly them, in order. `rowIdColumns`,
-///   `deleteTarget` and `deleteLayout` are empty.
+/// - CREATE or INSERT: `columnNames` are the table's columns, in order, and
+///   `columnExprs` are columns of `input`, one per table column. `input`
+///   produces exactly them, in order. `rowIdColumns`, `deleteTarget` and
+///   `deleteLayout` are empty.
+/// - ANALYZE: as for CREATE or INSERT, except that `columnNames` are any of
+///   the table's columns, possibly none.
 /// - DELETE: `deleteTarget` is an instance of `table`, and `input` reads it
 ///   through exactly one scan unless `input` has no rows. `rowIdColumns` are
 ///   the table's row-ID columns, in order, produced by that scan and by
@@ -2635,11 +2639,15 @@ class TableWrite : public Node {
     const connector::Table* table;
     /// Write form (INSERT / CTAS / ...).
     connector::WriteKind kind;
-    /// Per-target-column values, 1:1 with the table schema (`table->type()`).
-    /// Each is a column of `input`, which produces exactly these, in order.
-    /// For a row-level DELETE, the row-ID columns followed by the connector's
-    /// computed columns, set during physical planning. Empty for a DELETE
-    /// before that and for a metadata-only DELETE.
+    /// The table column each of `columnExprs` is for. A write names every
+    /// column of the table, in schema order. ANALYZE names the columns it
+    /// computes statistics for, and may name none. A delete names none.
+    QGVector<Name> columnNames;
+    /// Per-target-column values. Each is a column of `input`, which produces
+    /// exactly these, in order. For a write or ANALYZE, 1:1 with
+    /// `columnNames`. For a row-level DELETE, the row-ID columns followed by
+    /// the connector's computed columns, set during physical planning. Empty
+    /// for a DELETE before that and for a metadata-only DELETE.
     ExprVector columnExprs;
 
     /// The columns identifying the rows a delete removes, in the order
@@ -2688,6 +2696,10 @@ class TableWrite : public Node {
     return kind_;
   }
 
+  const QGVector<Name>& columnNames() const {
+    return columnNames_;
+  }
+
   const ExprVector& columnExprs() const {
     return columnExprs_;
   }
@@ -2730,6 +2742,7 @@ class TableWrite : public Node {
   const NodeCP input_;
   const connector::Table* const table_;
   const connector::WriteKind kind_;
+  const QGVector<Name> columnNames_;
   const ExprVector columnExprs_;
   const ColumnVector rowIdColumns_;
   const BaseTableCP deleteTarget_;

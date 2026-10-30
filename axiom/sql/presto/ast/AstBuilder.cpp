@@ -909,7 +909,12 @@ std::any AstBuilder::visitSetTableProperties(
 
 std::any AstBuilder::visitAnalyze(PrestoSqlParser::AnalyzeContext* ctx) {
   trace("visitAnalyze");
-  return visitChildren("visitAnalyze", ctx);
+  std::vector<std::shared_ptr<Property>> properties;
+  if (ctx->properties() != nullptr) {
+    properties = visitTyped<Property>(ctx->properties()->property());
+  }
+  return std::static_pointer_cast<Statement>(std::make_shared<Analyze>(
+      getLocation(ctx), getQualifiedName(ctx->qualifiedName()), properties));
 }
 
 std::any AstBuilder::visitCreateType(PrestoSqlParser::CreateTypeContext* ctx) {
