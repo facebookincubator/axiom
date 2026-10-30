@@ -1,0 +1,4009 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "axiom/optimizer/Translator.h"
+
+#include <tuple>
+#include <utility>
+
+#include <folly/ScopeGuard.h>
+#include <folly/container/F14Map.h>
+#include "axiom/connectors/SchemaResolver.h"
+#include "axiom/optimizer/AppendAll.h"
+#include "axiom/optimizer/Builder.h"
+#include "axiom/optimizer/ConstantFold.h"
+#include "axiom/optimizer/EmitPass.h"
+#include "axiom/optimizer/EstimateMath.h"
+#include "axiom/optimizer/ExprFactory.h"
+#include "axiom/optimizer/ExprSimplifier.h"
+#include "axiom/optimizer/Filters.h"
+#include "axiom/optimizer/FunctionRegistry.h"
+#include "axiom/optimizer/JoinCondition.h"
+#include "axiom/optimizer/MultiFragmentPlan.h"
+#include "axiom/optimizer/NodeExpressions.h"
+#include "axiom/optimizer/NodeSimplifier.h"
+#include "axiom/optimizer/OptimizerMetrics.h"
+#include "axiom/optimizer/OptimizerSession.h"
+#include "axiom/optimizer/PhysicalPlanAndEmit.h"
+#include "axiom/optimizer/PlanUtils.h"
+#include "axiom/optimizer/PrecomputeProjections.h"
+#include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/RedundantKeys.h"
+#include "axiom/optimizer/Schema.h"
+#include "axiom/optimizer/TableAccessHandle.h"
+#include "velox/exec/Aggregate.h"
+#include "velox/exec/AggregateFunctionRegistry.h"
+
+namespace facebook::axiom::optimizer {
+namespace lp = logical_plan;
+
+namespace {
+
+using LpNameSet = Translator::LpNameSet;
+using LiftTarget = Translator::LiftTarget;
+using Scope = Translator::Scope;
+using Translated = Translator::Translated;
+
+// Returns the set of every column name in `rowType`. Used as the "everything"
+// required-set when the consumer hasn't (yet) narrowed it.
+LpNameSet allNames(const velox::RowType& rowType) {
+  const auto& names = rowType.names();
+  return LpNameSet{names.begin(), names.end()};
+}
+
+void collectUsedNames(const logical_plan::Expr& expr, LpNameSet& out);
+void collectUsedNames(
+    const std::vector<logical_plan::ExprPtr>& exprs,
+    LpNameSet& out);
+
+// Walks every expression carried by `node` and its descendants and adds
+// every referenced `InputReferenceExpr::name` to `out`. Used to capture
+// correlated outer-column references inside subquery bodies — those names
+// are the ones the outer node must preserve in its child's required-set.
+void collectUsedNamesInPlan(
+    const logical_plan::LogicalPlanNode& node,
+    LpNameSet& out) {
+  switch (node.kind()) {
+    case lp::NodeKind::kFilter:
+      collectUsedNames(*node.as<lp::FilterNode>()->predicate(), out);
+      break;
+    case lp::NodeKind::kProject:
+      collectUsedNames(node.as<lp::ProjectNode>()->expressions(), out);
+      break;
+    case lp::NodeKind::kAggregate: {
+      const auto* agg = node.as<lp::AggregateNode>();
+      collectUsedNames(agg->groupingKeys(), out);
+      for (const auto& aggExpr : agg->aggregates()) {
+        collectUsedNames(*aggExpr, out);
+      }
+      break;
+    }
+    case lp::NodeKind::kJoin: {
+      const auto* join = node.as<lp::JoinNode>();
+      if (join->condition() != nullptr) {
+        collectUsedNames(*join->condition(), out);
+      }
+      break;
+    }
+    case lp::NodeKind::kLateralJoin: {
+      const auto* join = node.as<lp::LateralJoinNode>();
+      if (join->condition() != nullptr) {
+        collectUsedNames(*join->condition(), out);
+      }
+      break;
+    }
+    case lp::NodeKind::kSort:
+      for (const auto& field : node.as<lp::SortNode>()->ordering()) {
+        collectUsedNames(*field.expression, out);
+      }
+      break;
+    case lp::NodeKind::kUnnest:
+      collectUsedNames(node.as<lp::UnnestNode>()->unnestExpressions(), out);
+      break;
+    default:
+      // Scan, Limit, Values, Set, Output: no expression-bearing fields that
+      // could reference outer columns.
+      break;
+  }
+  for (const auto& input : node.inputs()) {
+    collectUsedNamesInPlan(*input, out);
+  }
+  for (const auto& nested : node.nestedPlans()) {
+    collectUsedNamesInPlan(*nested, out);
+  }
+}
+
+// Returns the single Scan leaf reached through single-input nodes (Filter,
+// Project, ...), or nullptr if the subtree branches (join, set) or bottoms out
+// in a non-Scan leaf. SYSTEM sampling requires exactly one scan to sample.
+ScanCP soleScan(NodeCP node) {
+  const auto inputs = node->inputs();
+  if (inputs.empty()) {
+    return node->is(NodeType::kScan) ? node->as<Scan>() : nullptr;
+  }
+  if (inputs.size() != 1) {
+    return nullptr;
+  }
+  return soleScan(inputs[0]);
+}
+
+// Collects every `InputReferenceExpr::name` referenced anywhere in `expr`.
+// Used by translate functions to compute the required-set their input must
+// supply, given the expressions the node itself reads. `WindowExpr`,
+// `AggregateExpr`, `LambdaExpr`, and `SubqueryExpr` carry sub-expressions
+// in side fields outside `inputs()`, so they need explicit handling.
+void collectUsedNames(const logical_plan::Expr& expr, LpNameSet& out) {
+  if (expr.isInputReference()) {
+    out.insert(expr.as<lp::InputReferenceExpr>()->name());
+    return;
+  }
+  for (const auto& child : expr.inputs()) {
+    collectUsedNames(*child, out);
+  }
+  if (expr.isWindow()) {
+    const auto* window = expr.as<lp::WindowExpr>();
+    for (const auto& key : window->partitionKeys()) {
+      collectUsedNames(*key, out);
+    }
+    for (const auto& field : window->ordering()) {
+      collectUsedNames(*field.expression, out);
+    }
+    if (window->frame().startValue != nullptr) {
+      collectUsedNames(*window->frame().startValue, out);
+    }
+    if (window->frame().endValue != nullptr) {
+      collectUsedNames(*window->frame().endValue, out);
+    }
+  } else if (expr.isAggregate()) {
+    const auto* agg = expr.as<lp::AggregateExpr>();
+    if (agg->filter() != nullptr) {
+      collectUsedNames(*agg->filter(), out);
+    }
+    for (const auto& field : agg->ordering()) {
+      collectUsedNames(*field.expression, out);
+    }
+  } else if (expr.kind() == lp::ExprKind::kLambda) {
+    // Lambda body may reference outer columns (captures). Recurse into the
+    // body, then subtract the lambda's signature names (those are
+    // introduced by the lambda itself, not consumed from the outer scope).
+    const auto* lambda = expr.as<lp::LambdaExpr>();
+    LpNameSet bodyNames;
+    collectUsedNames(*lambda->body(), bodyNames);
+    for (const auto& name : lambda->signature()->names()) {
+      bodyNames.erase(name);
+    }
+    out.insert(bodyNames.begin(), bodyNames.end());
+  } else if (expr.kind() == lp::ExprKind::kSubquery) {
+    // Walk the subquery body to surface any correlated outer-column
+    // references. Names not in the outer's outputType are silently ignored
+    // by the consumer (existing policy); names that match outer columns
+    // are the correlations the outer must keep so the body's translate
+    // can resolve them.
+    const auto* subquery = expr.as<lp::SubqueryExpr>();
+    collectUsedNamesInPlan(*subquery->subquery(), out);
+  }
+}
+
+void collectUsedNames(
+    const std::vector<logical_plan::ExprPtr>& exprs,
+    LpNameSet& out) {
+  for (const auto& expr : exprs) {
+    collectUsedNames(*expr, out);
+  }
+}
+
+// Appends columns from `extra` to `base`, skipping any that already
+// appear in `base` (by Column* identity).
+void appendUnique(ColumnVector& base, const ColumnVector& extra) {
+  PlanObjectSet seen = PlanObjectSet::fromObjects(base);
+  for (ColumnCP column : extra) {
+    if (!seen.contains(column)) {
+      seen.add(column);
+      base.push_back(column);
+    }
+  }
+}
+
+// True if 'expr' is or transitively contains an `lp::SubqueryExpr`.
+// Used to decide whether a parent node's IR shape needs adjusting to
+// give the subquery a relational input above which to lift Apply.
+//
+// TODO: walk side-channel children carried by Lambda body / Window
+// partition+order+frame / Aggregate filter+ordering — currently this
+// recursion only follows `Expr::inputs()`, so a subquery buried inside
+// `filter(arr, x -> x = (SELECT ...))` (or similar HOF) is missed. A
+// miss is safe — control falls through to the non-split path with
+// `liftTarget=nullptr` and `liftSubquery` throws NYI rather than
+// silently miscompiling — but coverage is incomplete.
+bool containsSubquery(const logical_plan::Expr& expr) {
+  if (expr.kind() == logical_plan::ExprKind::kSubquery) {
+    return true;
+  }
+  for (const auto& child : expr.inputs()) {
+    if (containsSubquery(*child)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// True if 'column' is one of 'node's output columns (by identity).
+bool outputContains(NodeCP node, ColumnCP column) {
+  for (ColumnCP candidate : node->outputColumns()) {
+    if (candidate == column) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Walks 'expr' as a top-level AND chain and appends each non-AND leaf
+// to 'out'.
+void flattenAndConjuncts(
+    const logical_plan::Expr& expr,
+    std::vector<const logical_plan::Expr*>& out) {
+  if (expr.isSpecialForm() &&
+      expr.as<logical_plan::SpecialFormExpr>()->form() ==
+          logical_plan::SpecialForm::kAnd) {
+    for (const auto& child : expr.inputs()) {
+      flattenAndConjuncts(*child, out);
+    }
+    return;
+  }
+  out.push_back(&expr);
+}
+
+// Populates 'scope' with one entry per field of 'rowType' pointing at the
+// matching Column in 'columns'. 'columns' must align 1:1 with 'rowType'.
+void populateScope(
+    const velox::RowType& rowType,
+    const ColumnVector& columns,
+    Scope& scope) {
+  VELOX_CHECK_EQ(
+      rowType.size(), columns.size(), "Scope row type / columns mismatch");
+  for (size_t i = 0; i < rowType.size(); ++i) {
+    scope[rowType.nameOf(i)] = columns[i];
+  }
+}
+
+} // namespace
+
+void Translator::SubqueryContext::recordCorrelation(ExprCP expr, size_t level) {
+  VELOX_CHECK_LT(level, correlationsStack_.size());
+  // An outer name resolving to an expression correlates on the columns it
+  // reads; the body evaluates the expression over them.
+  expr->columns().forEach<Column>([&](ColumnCP column) {
+    // Every body in flight between the scope holding the column and the
+    // innermost carries it, so each intermediate Apply passes it inwards.
+    for (size_t i = level; i < correlationsStack_.size(); ++i) {
+      correlationsStack_[i].push_back(column);
+    }
+  });
+}
+
+bool Translator::SubqueryContext::hasCorrelations() const {
+  return !correlationsStack_.empty() && !correlationsStack_.back().empty();
+}
+
+ExprCP Translator::SubqueryContext::correlateOuter(std::string_view name) {
+  for (size_t i = outerScopes_.size(); i > 0; --i) {
+    const Scope& scope = *outerScopes_[i - 1];
+    auto found = scope.find(name);
+    if (found == scope.end()) {
+      continue;
+    }
+    recordCorrelation(found->second, i - 1);
+    return found->second;
+  }
+  return nullptr;
+}
+
+bool Translator::SubqueryContext::correlateLifted(ColumnCP column) {
+  const size_t firstVisibleLevel = liftedCorrelationBarriers_.empty()
+      ? 0
+      : liftedCorrelationBarriers_.back();
+  for (size_t i = liftTargets_.size(); i > firstVisibleLevel; --i) {
+    if (!liftTargets_[i - 1]->outputs(column)) {
+      continue;
+    }
+    recordCorrelation(column, i - 1);
+    return true;
+  }
+  return false;
+}
+
+void Translator::SubqueryContext::pushLiftedCorrelationBarrier() {
+  liftedCorrelationBarriers_.push_back(liftTargets_.size());
+}
+
+void Translator::SubqueryContext::popLiftedCorrelationBarrier() {
+  liftedCorrelationBarriers_.pop_back();
+}
+
+void Translator::SubqueryContext::push(
+    const Scope& outerScope,
+    LiftTarget* liftTarget) {
+  outerScopes_.push_back(&outerScope);
+  liftTargets_.push_back(liftTarget);
+  correlationsStack_.emplace_back();
+}
+
+ColumnVector Translator::SubqueryContext::pop() {
+  ColumnVector deduped;
+  folly::F14FastSet<ColumnCP> seen;
+  for (ColumnCP column : correlationsStack_.back()) {
+    if (seen.insert(column).second) {
+      deduped.push_back(column);
+    }
+  }
+  correlationsStack_.pop_back();
+  outerScopes_.pop_back();
+  liftTargets_.pop_back();
+  return deduped;
+}
+
+bool Translator::LiftTarget::outputs(ColumnCP column) const {
+  return outputContains(node, column) ||
+      (pendingLifts != nullptr && outputContains(pendingLifts, column));
+}
+
+TranslatePass::Result Translator::run(const lp::LogicalPlanNode& plan) {
+  plan.forEachNode([](const auto& node) {
+    queryCtx()->reserveNames(node.outputType()->names());
+  });
+
+  // The query output is a list of (sourceName, outputName) pairs, one per
+  // output position. An OutputNode names them explicitly and may repeat a
+  // source column under several output names; a bare plan (no OutputNode)
+  // uses its own outputType field names for both. Each position resolves by
+  // name through the translated scope: identical output expressions collapse
+  // to one Column, so the scope -- not the node's column list -- carries
+  // every output position.
+  const lp::LogicalPlanNode* node;
+  std::vector<std::pair<std::string, std::string>> outputSpec;
+  if (plan.is(lp::NodeKind::kOutput)) {
+    const auto& output = *plan.as<lp::OutputNode>();
+    node = &*output.onlyInput();
+    const auto& childOutputType = *node->outputType();
+    outputSpec.reserve(output.entries().size());
+    for (const auto& entry : output.entries()) {
+      VELOX_CHECK_LT(entry.index, childOutputType.size());
+      outputSpec.emplace_back(childOutputType.nameOf(entry.index), entry.name);
+    }
+  } else {
+    node = &plan;
+    const auto& outputType = *plan.outputType();
+    outputSpec.reserve(outputType.size());
+    for (size_t i = 0; i < outputType.size(); ++i) {
+      outputSpec.emplace_back(outputType.nameOf(i), outputType.nameOf(i));
+    }
+  }
+
+  // Request only the referenced source names; unreferenced names flow through
+  // as unused and get pruned where producers honor the required-set.
+  LpNameSet required;
+  required.reserve(outputSpec.size());
+  for (const auto& [sourceName, outputName] : outputSpec) {
+    required.insert(sourceName);
+  }
+
+  Translated translated = translateNode(*node, required);
+
+  ColumnVector outputColumns;
+  std::vector<std::string> outputNames;
+  outputColumns.reserve(outputSpec.size());
+  outputNames.reserve(outputSpec.size());
+  for (const auto& [sourceName, outputName] : outputSpec) {
+    auto it = translated.scope.find(sourceName);
+    VELOX_CHECK(
+        it != translated.scope.end(),
+        "Output name not found in scope: {}",
+        sourceName);
+    outputColumns.push_back(
+        materializeColumn(&translated.node, it->second, sourceName));
+    outputNames.push_back(outputName);
+  }
+  return {
+      translated.node,
+      std::move(outputColumns),
+      std::move(outputNames),
+      connectorPushdownSupported_,
+      hasRepeat_,
+  };
+}
+
+Translated Translator::translateNode(const lp::LogicalPlanNode& node) {
+  return translateNode(node, allNames(*node.outputType()));
+}
+
+Translator::DeleteTarget Translator::resolveDeleteTarget(
+    const lp::TableWriteNode& tableWrite,
+    const connector::Table& connectorTable) const {
+  const lp::LogicalPlanNode* input = tableWrite.onlyInput().get();
+  if (input->kind() == lp::NodeKind::kFilter) {
+    input = input->onlyInput().get();
+  }
+  VELOX_USER_CHECK(
+      input->kind() == lp::NodeKind::kTableScan,
+      "DELETE requires a scan with an optional filter");
+
+  const auto* scan = input->as<lp::TableScanNode>();
+  VELOX_USER_CHECK_EQ(
+      scan->connectorId(),
+      tableWrite.connectorId(),
+      "DELETE scans a table of another connector");
+  VELOX_USER_CHECK(
+      scan->tableName() == tableWrite.tableName(),
+      "DELETE scans the wrong table: deletes {}, scans {}",
+      tableWrite.tableName().toString(),
+      scan->tableName().toString());
+
+  // Empty row identity leaves only the metadata-delete path.
+  const auto columnNames =
+      connectorTable.rowIdColumns(connector::WriteKind::kDelete);
+  if (columnNames.empty()) {
+    return {scan, {}};
+  }
+
+  std::vector<Name> rowIdColumns;
+  rowIdColumns.reserve(columnNames.size());
+  for (const auto& columnName : columnNames) {
+    rowIdColumns.push_back(toName(columnName));
+  }
+  return {scan, std::move(rowIdColumns)};
+}
+
+Translated Translator::translateTableWrite(
+    const lp::TableWriteNode& tableWrite,
+    const LpNameSet& /*required*/) {
+  const auto kind = static_cast<connector::WriteKind>(tableWrite.writeKind());
+  if (kind != connector::WriteKind::kCreate &&
+      kind != connector::WriteKind::kInsert &&
+      kind != connector::WriteKind::kDelete) {
+    VELOX_NYI(
+        "TableWrite does not support {}",
+        connector::WriteKindName::toName(kind));
+  }
+
+  const auto* schemaTable =
+      schema_.findTable(tableWrite.connectorId(), tableWrite.tableName());
+  VELOX_CHECK_NOT_NULL(
+      schemaTable,
+      "Table not found: {} via connector {}",
+      tableWrite.tableName().toString(),
+      tableWrite.connectorId());
+  const auto* connectorTable = schemaTable->connectorTable;
+  VELOX_CHECK_NOT_NULL(connectorTable);
+  const auto& tableSchema = *connectorTable->type();
+
+  LpNameSet childRequired;
+  for (const auto& columnExpr : tableWrite.columnExpressions()) {
+    collectUsedNames(*columnExpr, childRequired);
+  }
+  ColumnVector deleteRowIdColumns;
+  BaseTableCP deleteTarget{nullptr};
+  Translated input;
+  if (kind == connector::WriteKind::kDelete) {
+    const auto resolved = resolveDeleteTarget(tableWrite, *connectorTable);
+    for (auto column : resolved.rowIdColumns) {
+      childRequired.insert(column);
+    }
+    if (tableWrite.onlyInput()->kind() == lp::NodeKind::kFilter) {
+      const auto& filter = *tableWrite.onlyInput()->as<lp::FilterNode>();
+      collectUsedNames(*filter.predicate(), childRequired);
+    }
+    auto translatedTarget = translateDeleteScan(
+        *resolved.scan,
+        childRequired,
+        resolved.rowIdColumns,
+        deleteRowIdColumns);
+    deleteTarget = translatedTarget.node->as<Scan>()->baseTable();
+    input = tableWrite.onlyInput()->kind() == lp::NodeKind::kFilter
+        ? translateFilter(
+              *tableWrite.onlyInput()->as<lp::FilterNode>(),
+              std::move(translatedTarget))
+        : std::move(translatedTarget);
+  } else {
+    input = translateNode(*tableWrite.onlyInput(), childRequired);
+  }
+  NodeCP currentInput = input.node;
+
+  // One expression per target column, in table-schema order: the statement's
+  // expression where the column is written, else the column's schema default.
+  const auto& writtenNames = tableWrite.columnNames();
+  ExprVector columnExprs;
+  const uint32_t numColumns =
+      kind == connector::WriteKind::kDelete ? 0 : tableSchema.size();
+  columnExprs.reserve(numColumns);
+  for (uint32_t i = 0; i < numColumns; ++i) {
+    const auto& columnName = tableSchema.nameOf(i);
+    auto it = std::find(writtenNames.begin(), writtenNames.end(), columnName);
+    if (it != writtenNames.end()) {
+      const auto nth = it - writtenNames.begin();
+      currentInput = withLiftTarget(currentInput, [&](LiftTarget& target) {
+        columnExprs.push_back(translateExpr(
+            *tableWrite.columnExpressions()[nth], input.scope, &target));
+      });
+    } else {
+      const auto* tableColumn = connectorTable->findColumn(columnName);
+      VELOX_CHECK_NOT_NULL(tableColumn);
+      columnExprs.push_back(builder_.makeLiteral(
+          velox::Variant(tableColumn->defaultValue()),
+          toType(tableColumn->type())));
+    }
+    VELOX_DCHECK(
+        *tableSchema.childAt(i) == *toTypePtr(columnExprs.back()->value().type),
+        "TableWrite column type does not match schema: column {}, schema {}, expr {}",
+        columnName,
+        tableSchema.childAt(i)->toString(),
+        toTypePtr(columnExprs.back()->value().type)->toString());
+  }
+
+  // Velox's TableWriteNode writes the columns of its input, positionally, so
+  // the input produces exactly the written values, in table-schema order. Two
+  // positions writing one value each get their own column.
+  // A delete writes no columns.
+  if (!columnExprs.empty()) {
+    ColumnVector writeColumns;
+    writeColumns.reserve(columnExprs.size());
+    PlanObjectSet taken;
+    for (ExprCP columnExpr : columnExprs) {
+      ColumnCP column;
+      if (columnExpr->is(PlanType::kColumnExpr) &&
+          !taken.contains(columnExpr)) {
+        column = columnExpr->as<Column>();
+        taken.add(column);
+      } else {
+        column = Column::create("__write", columnExpr->value());
+      }
+      writeColumns.push_back(column);
+    }
+    if (writeColumns != currentInput->outputColumns()) {
+      currentInput = PrecomputeProjections::makeProject(
+          currentInput, columnExprs, writeColumns, builder_, simplifier_);
+    }
+    columnExprs.assign(writeColumns.begin(), writeColumns.end());
+  }
+
+  auto write = nodeSimplifier_.make(
+      TableWrite::Key{
+          currentInput,
+          connectorTable,
+          kind,
+          std::move(columnExprs),
+          std::move(deleteRowIdColumns),
+          deleteTarget,
+          /*deleteLayout=*/nullptr},
+      {currentInput, {}},
+      /*originalOutputs=*/{});
+  VELOX_CHECK(!write.empty());
+  NodeCP writeNode = write.node;
+
+  // The single output column is the written row count.
+  Scope scope;
+  const auto& outputType = *tableWrite.outputType();
+  if (outputType.size() == 1) {
+    scope[outputType.nameOf(0)] = writeNode->outputColumns()[0];
+  }
+  return {writeNode, std::move(scope)};
+}
+
+Translated Translator::translateFixedPoint(
+    const lp::FixedPointNode& fixedPoint,
+    const LpNameSet& /*required*/) {
+  VELOX_USER_CHECK(
+      !activeFixedPoint_.has_value(),
+      "Nested FixedPoint translation is not yet implemented");
+  const bool replace =
+      fixedPoint.outputMode() == lp::FixedPointNode::OutputMode::kReplace;
+
+  // Every read presents all of the state's columns, aligned with the
+  // FixedPoint output. Pruning must therefore choose one ordered subset and
+  // rewrite the fixed-point output, step, and every WorkingTable
+  // consistently, while retaining the aligned anchor sources.
+  // TODO: Implement this coordinated FixedPoint state-schema pruning.
+  const auto& anchorType = fixedPoint.anchor()->outputType();
+  Translated anchor =
+      translateNode(*fixedPoint.anchor(), allNames(*anchorType));
+
+  ColumnVector anchorColumns =
+      narrowToNames(&anchor.node, anchor.scope, anchorType->names());
+  ColumnVector stateColumns;
+  stateColumns.reserve(anchorColumns.size());
+  Scope anchorScope;
+  for (size_t i = 0; i < anchorType->size(); ++i) {
+    stateColumns.push_back(Column::createWithUnknownValue(anchorColumns[i]));
+    anchorScope[anchorType->nameOf(static_cast<uint32_t>(i))] = stateColumns[i];
+  }
+
+  const auto* recursionName = toName(fixedPoint.name());
+  auto previousFixedPoint = std::exchange(
+      activeFixedPoint_,
+      ActiveFixedPoint{
+          .stateName = recursionName,
+          .stateColumns = stateColumns,
+      });
+  SCOPE_EXIT {
+    activeFixedPoint_ = std::move(previousFixedPoint);
+  };
+
+  // Recursive-reference field names may differ from anchor field names.
+  Translated step = translateNode(
+      *fixedPoint.step(), allNames(*fixedPoint.step()->outputType()));
+  // The step's own output columns are the next iteration's state, so what it
+  // projects is materialized here rather than carried in the scope.
+  narrowToNames(
+      &step.node, step.scope, fixedPoint.step()->outputType()->names());
+  // A loop that appends reads the latest delta once: two reads would compute
+  // delta joined with delta, which semi-naive evaluation does not define.
+  const auto checkOneReference = [&](std::string_view branch) {
+    VELOX_USER_CHECK(
+        replace || activeFixedPoint_->numReferences == 1,
+        "Optimizer v2 supports exactly one RecursiveReferenceNode per FixedPoint {} in append mode: found {}",
+        branch,
+        activeFixedPoint_->numReferences);
+  };
+  checkOneReference("step");
+
+  Translated convergence;
+  if (fixedPoint.convergence() != nullptr) {
+    activeFixedPoint_->numReferences = 0;
+    const auto& convergenceType = fixedPoint.convergence()->outputType();
+    convergence =
+        translateNode(*fixedPoint.convergence(), allNames(*convergenceType));
+    narrowToNames(
+        &convergence.node, convergence.scope, convergenceType->names());
+    checkOneReference("convergence");
+  }
+
+  auto result = nodeSimplifier_.make(
+      FixedPoint::Key{
+          .anchor = anchor.node,
+          .step = step.node,
+          .name = recursionName,
+          .outputColumns = std::move(stateColumns),
+          .sourceColumns = std::move(anchorColumns),
+          .maxIterations = fixedPoint.maxIterations().value_or(
+              session_.options().recursionLimit),
+          .failAtBound = fixedPoint.failAtBound(),
+          .mode = replace ? FixedPointMode::kReplace : FixedPointMode::kAppend,
+          .recursiveNumDrivers = std::nullopt,
+          .convergence = convergence.node,
+      },
+      {anchor.node, {}},
+      {step.node, {}},
+      {convergence.node, {}});
+  applySubstitutions(result.substitutions, anchorScope);
+  return {nodeSimplifier_.materialize(result), std::move(anchorScope)};
+}
+
+Translated Translator::translateRecursiveRef(
+    const lp::RecursiveReferenceNode& ref,
+    const LpNameSet& /*required*/) {
+  const auto* recursionName = toName(ref.name());
+  VELOX_USER_CHECK(
+      activeFixedPoint_.has_value(),
+      "RecursiveReferenceNode outside any enclosing FixedPoint: {}",
+      ref.name());
+  auto& enclosing = *activeFixedPoint_;
+  VELOX_USER_CHECK_EQ(
+      enclosing.stateName,
+      recursionName,
+      "RecursiveReferenceNode name does not match enclosing FixedPoint");
+  ++enclosing.numReferences;
+
+  const auto& schema = ref.outputType();
+  VELOX_CHECK_EQ(
+      schema->size(),
+      enclosing.stateColumns.size(),
+      "RecursiveReference schema size mismatches enclosing FixedPoint anchor");
+
+  // Scope names come from the reference schema. Each read presents the
+  // enclosing state's columns under fresh ones.
+  Scope newScope;
+  ColumnVector readColumns;
+  readColumns.reserve(schema->size());
+  for (size_t i = 0; i < schema->size(); ++i) {
+    ColumnCP stateColumn = enclosing.stateColumns[i];
+    const auto& refType = schema->childAt(static_cast<uint32_t>(i));
+    VELOX_USER_CHECK(
+        refType->equivalent(*stateColumn->value().type),
+        "RecursiveReference column {} type does not match enclosing FixedPoint anchor: ref={}, anchor={}",
+        i,
+        refType->toString(),
+        stateColumn->value().type->toString());
+    readColumns.push_back(Column::createWithUnknownValue(stateColumn));
+    newScope[schema->nameOf(static_cast<uint32_t>(i))] = readColumns.back();
+  }
+
+  NodeCP read = nodeSimplifier_
+                    .make(
+                        WorkingTable::Key{
+                            .name = enclosing.stateName,
+                            .stateColumns = enclosing.stateColumns,
+                            .outputColumns = std::move(readColumns),
+                            .readMode = WorkingTableReadMode::kLatestDelta,
+                        })
+                    .node;
+  return {read, std::move(newScope)};
+}
+
+Translated Translator::translateNode(
+    const lp::LogicalPlanNode& node,
+    const LpNameSet& required) {
+  switch (node.kind()) {
+    case lp::NodeKind::kTableScan:
+      return translateScan(*node.as<lp::TableScanNode>(), required);
+    case lp::NodeKind::kFilter:
+      return translateFilter(*node.as<lp::FilterNode>(), required);
+    case lp::NodeKind::kProject:
+      return translateProject(*node.as<lp::ProjectNode>(), required);
+    case lp::NodeKind::kLimit:
+      return translateLimit(*node.as<lp::LimitNode>(), required);
+    case lp::NodeKind::kSort:
+      return translateSort(*node.as<lp::SortNode>(), required);
+    case lp::NodeKind::kSample:
+      return translateSample(*node.as<lp::SampleNode>(), required);
+    case lp::NodeKind::kAggregate:
+      return translateAggregate(*node.as<lp::AggregateNode>(), required);
+    case lp::NodeKind::kValues:
+      return translateValues(*node.as<lp::ValuesNode>(), required);
+    case lp::NodeKind::kUnnest:
+      return translateUnnest(*node.as<lp::UnnestNode>(), required);
+    case lp::NodeKind::kSet:
+      return translateSet(*node.as<lp::SetNode>(), required);
+    case lp::NodeKind::kJoin:
+      return translateJoin(*node.as<lp::JoinNode>(), required);
+    case lp::NodeKind::kLateralJoin:
+      return translateLateralJoin(*node.as<lp::LateralJoinNode>(), required);
+    case lp::NodeKind::kTableWrite:
+      return translateTableWrite(*node.as<lp::TableWriteNode>(), required);
+    case lp::NodeKind::kOutput:
+      VELOX_UNREACHABLE();
+    case lp::NodeKind::kFixedPoint:
+      return translateFixedPoint(*node.as<lp::FixedPointNode>(), required);
+    case lp::NodeKind::kRecursiveReference:
+      return translateRecursiveRef(
+          *node.as<lp::RecursiveReferenceNode>(), required);
+    case lp::NodeKind::kGraphMatch:
+      return translateGraphMatch(*node.as<lp::GraphMatchNode>(), required);
+    default:
+      VELOX_NYI(
+          "Unsupported logical plan node kind: {}",
+          lp::NodeKindName::toName(node.kind()));
+  }
+}
+
+Translated Translator::translateScan(
+    const lp::TableScanNode& scan,
+    const LpNameSet& required) {
+  std::vector<ScanColumn> columns;
+  for (size_t i = 0; i < scan.columnNames().size(); ++i) {
+    const auto& name = scan.outputType()->nameOf(i);
+    if (required.contains(name)) {
+      columns.push_back(
+          {.schemaName = scan.columnNames()[i], .outputName = name});
+    }
+  }
+  return translateScan(scan.connectorId(), scan.tableName(), columns);
+}
+
+Translated Translator::translateDeleteScan(
+    const lp::TableScanNode& scan,
+    const LpNameSet& required,
+    const std::vector<Name>& rowIdColumnNames,
+    ColumnVector& rowIdColumns) {
+  const auto* schemaTable =
+      schema_.findTable(scan.connectorId(), scan.tableName());
+  VELOX_CHECK_NOT_NULL(schemaTable);
+
+  // Each column the scan reads, under its output name. Row identity columns
+  // the query does not read get fresh query-wide symbols.
+  std::vector<ScanColumn> columns;
+  folly::F14FastMap<std::string, std::string> outputNames;
+  for (uint32_t i = 0; i < scan.columnNames().size(); ++i) {
+    const auto& name = scan.outputType()->nameOf(i);
+    if (required.contains(name)) {
+      columns.push_back(
+          {.schemaName = scan.columnNames()[i], .outputName = name});
+      outputNames.emplace(scan.columnNames()[i], name);
+    }
+  }
+  for (auto name : rowIdColumnNames) {
+    VELOX_CHECK(
+        schemaTable->columns.contains(name),
+        "Connector asked a delete to read a column the table does not "
+        "have: {}, {}",
+        name,
+        scan.tableName());
+    auto [it, inserted] =
+        outputNames.emplace(name, std::string{queryCtx()->newName(name)});
+    if (inserted) {
+      columns.push_back({.schemaName = name, .outputName = it->second});
+    }
+  }
+
+  auto translated =
+      translateScan(scan.connectorId(), scan.tableName(), columns);
+  rowIdColumns.reserve(rowIdColumnNames.size());
+  for (auto name : rowIdColumnNames) {
+    rowIdColumns.push_back(
+        translated.scope.at(outputNames.at(name))->as<Column>());
+  }
+  return translated;
+}
+
+Translated Translator::translateScan(
+    const std::string& connectorId,
+    const SchemaTableName& tableName,
+    const std::vector<ScanColumn>& columns) {
+  const auto* schemaTable = schema_.findTable(connectorId, tableName);
+  VELOX_CHECK_NOT_NULL(schemaTable);
+  connectorPushdownSupported_ = connectorPushdownSupported_ ||
+      schemaResolver_.findMetadata(schemaTable->metadataId())
+          ->isPushdownSupported();
+
+  auto* baseTable = make<BaseTable>(
+      toName(fmt::format("t{}", baseTableCounter_++)), schemaTable);
+  // filteredCardinality stays 0 until estimateLeafStats populates it from
+  // connector stats; cardinality estimation falls back to constraint-based
+  // selectivity while it is unset.
+
+  ColumnVector outputColumns;
+  outputColumns.reserve(columns.size());
+  Scope scope;
+  for (const auto& [schemaName, outName] : columns) {
+    Name inTableName = toName(schemaName);
+    Name outNameInterned = toName(outName);
+    ColumnCP schemaColumn = schemaTable->findColumn(inTableName);
+    VELOX_CHECK_NOT_NULL(schemaColumn);
+    // Give each duplicate scan distinct optimizer symbols while retaining the
+    // schema identity used by connector-facing operations.
+    const Name columnName = translatingDuplicate_
+        ? queryCtx()->newName(outNameInterned)
+        : inTableName;
+    const Name outputAlias = translatingDuplicate_ ? nullptr : outNameInterned;
+    auto* column = make<Column>(
+        columnName,
+        baseTable,
+        schemaColumn->value(),
+        outputAlias,
+        schemaColumn->name());
+    baseTable->columns.push_back(column);
+    outputColumns.push_back(column);
+    scope[outName] = column;
+  }
+  auto simplified =
+      nodeSimplifier_.make(Scan::Key{baseTable, std::move(outputColumns)});
+  applySubstitutions(simplified.substitutions, scope);
+  return {simplified.node, std::move(scope)};
+}
+
+Translated Translator::translateFilter(
+    const lp::FilterNode& filter,
+    const LpNameSet& required) {
+  // Filter is a pass-through: its outputType equals the child's. Forward
+  // `required` plus the names the predicate reads from the child.
+  LpNameSet childRequired = required;
+  collectUsedNames(*filter.predicate(), childRequired);
+  return translateFilter(
+      filter, translateNode(*filter.onlyInput(), childRequired));
+}
+
+Translated Translator::translateFilter(
+    const lp::FilterNode& filter,
+    Translated input) {
+  // Split conjuncts so no-subquery ones land in a Filter below the
+  // Apply, where PushdownAndPrune can carry them into the input
+  // subtree. Subquery-bearing conjuncts must stay above the Apply
+  // (and any decorrelation aggregate atop it).
+  std::vector<const lp::Expr*> conjuncts;
+  flattenAndConjuncts(*filter.predicate(), conjuncts);
+  std::vector<const lp::Expr*> noSubquery;
+  std::vector<const lp::Expr*> withSubquery;
+  noSubquery.reserve(conjuncts.size());
+  withSubquery.reserve(conjuncts.size());
+  for (const auto* conjunct : conjuncts) {
+    if (containsSubquery(*conjunct)) {
+      withSubquery.push_back(conjunct);
+    } else {
+      noSubquery.push_back(conjunct);
+    }
+  }
+  if (noSubquery.empty() || withSubquery.empty()) {
+    return maybeWrapInFilter(
+        input.node,
+        *filter.predicate(),
+        std::move(input.scope),
+        /*propagateConstants=*/true);
+  }
+
+  // Translates 'conjuncts' and accumulates simplified results.
+  // Returns nullopt if any conjunct simplifies to constant false.
+  auto translateConjuncts =
+      [&](const std::vector<const lp::Expr*>& conjuncts,
+          const Scope& scope,
+          LiftTarget* liftTarget) -> std::optional<ExprVector> {
+    ExprVector result;
+    result.reserve(conjuncts.size());
+    for (const auto* conjunct : conjuncts) {
+      ExprCP translated = translateExpr(*conjunct, scope, liftTarget);
+      if (simplifier_.simplifyFilter(translated, result)) {
+        return std::nullopt;
+      }
+    }
+    return result;
+  };
+
+  auto innerConjuncts =
+      translateConjuncts(noSubquery, input.scope, /*liftTarget=*/nullptr);
+  if (!innerConjuncts.has_value()) {
+    return {
+        builder_.makeEmptyValues(input.node->outputColumns()),
+        std::move(input.scope)};
+  }
+  Translated inner = simplifyFilter(
+      input.node,
+      std::move(*innerConjuncts),
+      std::move(input.scope),
+      /*propagateConstants=*/true);
+
+  std::optional<ExprVector> outerConjuncts;
+  inner.node = withLiftTarget(inner.node, [&](LiftTarget& target) {
+    outerConjuncts = translateConjuncts(withSubquery, inner.scope, &target);
+  });
+  if (!outerConjuncts.has_value()) {
+    return {
+        builder_.makeEmptyValues(inner.node->outputColumns()),
+        std::move(inner.scope)};
+  }
+  return simplifyFilter(
+      inner.node,
+      std::move(*outerConjuncts),
+      std::move(inner.scope),
+      /*propagateConstants=*/true);
+}
+
+Translated Translator::maybeWrapInFilter(
+    NodeCP input,
+    const lp::Expr& predicateExpr,
+    Scope scope,
+    bool propagateConstants) {
+  ExprCP predicate{nullptr};
+  input = withLiftTarget(input, [&](LiftTarget& target) {
+    predicate = translateExpr(predicateExpr, scope, &target);
+  });
+
+  return simplifyFilter(
+      input, {predicate}, std::move(scope), propagateConstants);
+}
+
+Translated Translator::simplifyFilter(
+    NodeCP input,
+    ExprVector predicates,
+    Scope scope,
+    bool propagateConstants) {
+  auto simplified = nodeSimplifier_.make(
+      Filter::Key{input, std::move(predicates)}, {input, {}});
+  applySubstitutions(simplified.substitutions, scope);
+  if (simplified.empty()) {
+    return {builder_.makeEmptyValues(input->outputColumns()), std::move(scope)};
+  }
+  if (propagateConstants && simplified.node->is(NodeType::kFilter)) {
+    propagateFilterConstants(
+        simplified.node->as<Filter>()->predicates(), scope);
+  }
+  return {simplified.node, std::move(scope)};
+}
+
+void Translator::propagateFilterConstants(
+    const ExprVector& predicates,
+    Scope& scope) {
+  for (ExprCP predicate : predicates) {
+    const auto equality = exprFactory_.literalEquality(predicate);
+    if (!equality.has_value()) {
+      continue;
+    }
+    for (auto& entry : scope) {
+      if (entry.second == equality->first) {
+        entry.second = equality->second;
+      }
+    }
+  }
+}
+
+Translated Translator::translateProject(
+    const lp::ProjectNode& project,
+    const LpNameSet& required) {
+  const auto& names = project.names();
+  const auto& exprs = project.expressions();
+  VELOX_CHECK_EQ(names.size(), exprs.size());
+
+  // The names the kept expressions read from the child.
+  LpNameSet childRequired;
+  for (size_t i = 0; i < names.size(); ++i) {
+    if (required.contains(names[i])) {
+      collectUsedNames(*exprs[i], childRequired);
+    }
+  }
+  return translateProject(
+      project, required, translateNode(*project.onlyInput(), childRequired));
+}
+
+Translated Translator::translateProject(
+    const lp::ProjectNode& project,
+    const LpNameSet& required,
+    Translated input) {
+  const auto& names = project.names();
+  const auto& exprs = project.expressions();
+
+  // Drop output positions not in `required`.
+  std::vector<size_t> keptIndices;
+  keptIndices.reserve(names.size());
+  for (size_t i = 0; i < names.size(); ++i) {
+    if (required.contains(names[i])) {
+      keptIndices.push_back(i);
+    }
+  }
+
+  // maybeWrapInWindow only needs the kept window-function exprs.
+  std::vector<lp::ExprPtr> keptExprs;
+  std::vector<std::string> keptNames;
+  keptExprs.reserve(keptIndices.size());
+  keptNames.reserve(keptIndices.size());
+  for (size_t idx : keptIndices) {
+    keptExprs.push_back(exprs[idx]);
+    keptNames.push_back(names[idx]);
+  }
+  Scope windowScope = input.scope;
+  NodeCP currentInput = maybeWrapInWindow(
+      input.node, input.scope, keptExprs, keptNames, windowScope);
+
+  Scope newScope;
+  for (size_t idx : keptIndices) {
+    const auto& name = names[idx];
+    ExprCP translatedExpr;
+    if (exprs[idx]->isWindow()) {
+      auto it = windowScope.find(name);
+      VELOX_CHECK(it != windowScope.end());
+      translatedExpr = it->second;
+    } else {
+      currentInput = withLiftTarget(currentInput, [&](LiftTarget& target) {
+        translatedExpr = translateExpr(*exprs[idx], input.scope, &target);
+      });
+    }
+    // A name binds to its expression, so a chain of projections collapses and
+    // the expression is materialized where a consumer needs a column. A
+    // non-deterministic one materializes here instead: every reference to the
+    // name must read one evaluation.
+    newScope[name] = translatedExpr->containsNonDeterministic()
+        ? materializeColumn(&currentInput, translatedExpr, name)
+        : translatedExpr;
+  }
+
+  return {currentInput, std::move(newScope)};
+}
+
+namespace {
+
+OrderType toOrderType(const logical_plan::SortOrder& order) {
+  if (order.isAscending()) {
+    return order.isNullsFirst() ? OrderType::kAscNullsFirst
+                                : OrderType::kAscNullsLast;
+  }
+  return order.isNullsFirst() ? OrderType::kDescNullsFirst
+                              : OrderType::kDescNullsLast;
+}
+
+// Max NDV across 'exprs', propagating unknown: if any operand's NDV is
+// unknown, the derived NDV is unknown (nullopt) rather than a fabricated
+// floor. An empty input has no operand to derive from and is treated as a
+// known 1 (the prior floor), matching a nullary call's degenerate NDV.
+std::optional<float> maxCardinality(const ExprVector& exprs) {
+  std::optional<float> result{1.0f};
+  for (const auto* expr : exprs) {
+    result = optimizer::maxOf(result, expr->value().cardinality);
+  }
+  return result;
+}
+
+} // namespace
+
+ExprVector Translator::translateAll(
+    const std::vector<lp::ExprPtr>& expressions,
+    const Scope& scope,
+    LiftTarget* liftTarget) {
+  ExprVector result;
+  result.reserve(expressions.size());
+  for (const auto& expression : expressions) {
+    result.push_back(translateExpr(*expression, scope, liftTarget));
+  }
+  return result;
+}
+
+Frame Translator::toFrame(
+    const lp::WindowExpr::Frame& frame,
+    const Scope& scope) {
+  // Frame bounds are scalar literals (rows/range offsets); no subquery
+  // can appear here, so no lift target needed.
+  return Frame{
+      frame.type,
+      frame.startType,
+      frame.startValue ? translateExpr(*frame.startValue, scope, nullptr)
+                       : nullptr,
+      frame.endType,
+      frame.endValue ? translateExpr(*frame.endValue, scope, nullptr) : nullptr,
+  };
+}
+
+namespace {
+
+// Returns 'expr' as IF(condition, value[, NULL]), or nullptr for any other
+// expression.
+CallCP ifValueOrNull(ExprCP expr) {
+  if (!expr->is(PlanType::kCallExpr)) {
+    return nullptr;
+  }
+  CallCP call = expr->as<Call>();
+  if (call->name() != SpecialFormCallNames::kIf) {
+    return nullptr;
+  }
+  const auto& args = call->args();
+  const auto numArgs = args.size();
+  if (numArgs == 2) {
+    return call;
+  }
+  VELOX_DCHECK_EQ(numArgs, 3);
+  ExprCP elseExpr = args[2];
+  return elseExpr->is(PlanType::kLiteralExpr) &&
+          elseExpr->as<Literal>()->literal().isNull()
+      ? call
+      : nullptr;
+}
+
+} // namespace
+
+const optimizer::Aggregate* Translator::toAggregateCall(
+    const lp::AggregateExpr& aggregateExpr,
+    const Scope& scope,
+    LiftTarget* liftTarget) {
+  ExprVector arguments =
+      translateAll(aggregateExpr.inputs(), scope, liftTarget);
+
+  if (aggregateExpr.isSpecialFormAgg()) {
+    const auto& special = *aggregateExpr.as<lp::SpecialFormAggExpr>();
+    // A metadata aggregate does not support these modifiers. ORDER BY is
+    // allowed but ignored (order-insensitive), so it is not checked.
+    VELOX_USER_CHECK(
+        !special.isDistinct(),
+        "Metadata aggregate does not support DISTINCT: {}",
+        aggregateExpr.name());
+    VELOX_USER_CHECK_NULL(
+        special.filter(),
+        "Metadata aggregate does not support FILTER: {}",
+        aggregateExpr.name());
+    // The kind name is not a registered Velox aggregate, so skip the registry
+    // lookup and carry the kind and translated fallback for the fold pass.
+    // Result and intermediate types are BIGINT.
+    const optimizer::Aggregate* fallback = special.fallback() != nullptr
+        ? toAggregateCall(*special.fallback(), scope, liftTarget)
+        : nullptr;
+    FunctionSet funcs = Call::unionArgFunctions(FunctionSet{}, arguments);
+    return builder_.makeAggregate(
+        toName(aggregateExpr.name()),
+        Value(toType(aggregateExpr.type())),
+        std::move(arguments),
+        funcs,
+        /*isDistinct=*/false,
+        /*condition=*/nullptr,
+        toType(velox::BIGINT()),
+        /*orderKeys=*/{},
+        /*orderTypes=*/{},
+        special.kind(),
+        fallback);
+  }
+
+  std::vector<velox::TypePtr> argTypes;
+  argTypes.reserve(aggregateExpr.inputs().size());
+  for (const auto& input : aggregateExpr.inputs()) {
+    argTypes.push_back(input->type());
+  }
+
+  TypeCP intermediateType = toType(
+      velox::exec::resolveIntermediateType(aggregateExpr.name(), argTypes));
+
+  ExprCP condition = aggregateExpr.filter() != nullptr
+      ? translateExpr(*aggregateExpr.filter(), scope, liftTarget)
+      : nullptr;
+
+  Value value(toType(aggregateExpr.type()));
+
+  Name aggName = toName(aggregateExpr.name());
+  const auto& metadata =
+      velox::exec::getAggregateFunctionMetadata(aggregateExpr.name());
+
+  // An aggregate that ignores rows with a null argument can consume the
+  // selected value directly and use the IF condition as its mask. Translated
+  // arguments include expressions bound through projection aliases.
+  if (metadata.ignoreNullInputs) {
+    for (ExprCP& argument : arguments) {
+      CallCP ifCall = ifValueOrNull(argument);
+      if (ifCall == nullptr) {
+        continue;
+      }
+      condition = condition == nullptr
+          ? ifCall->args()[0]
+          : exprFactory_.makeAnd(condition, ifCall->args()[0]);
+      argument = ifCall->args()[1];
+    }
+    if (condition != nullptr) {
+      condition = simplifier_.simplify(condition);
+    }
+  }
+
+  // Drop a constant-true FILTER (it masks nothing). A false or null mask stays
+  // as a literal condition, folded to the empty-set result during assembly.
+  if (condition != nullptr && isConstantTrue(condition)) {
+    condition = nullptr;
+  }
+
+  // Only an order-sensitive aggregate reads its ORDER BY, so only that ordering
+  // is translated.
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
+  if (metadata.orderSensitive) {
+    std::tie(orderKeys, orderTypes) =
+        translateOrdering(aggregateExpr.ordering(), scope, liftTarget);
+  }
+
+  FunctionSet funcs = Call::unionArgFunctions(FunctionSet{}, arguments);
+  if (metadata.ignoreDuplicates) {
+    funcs = funcs | FunctionSet::kIgnoreDuplicatesAggregate;
+  } else if (
+      (aggName == toName("min") || aggName == toName("max")) &&
+      arguments.size() == 1) {
+    // min(x)/max(x) ignore duplicates; min(x, n)/max(x, n) do not.
+    // TODO: Push this distinction into per-signature metadata.
+    funcs = funcs | FunctionSet::kIgnoreDuplicatesAggregate;
+  }
+  if (metadata.orderSensitive) {
+    funcs = funcs | FunctionSet::kOrderSensitiveAggregate;
+  }
+
+  const bool isDistinct =
+      !metadata.ignoreDuplicates && aggregateExpr.isDistinct();
+
+  return builder_.makeAggregate(
+      aggName,
+      value,
+      std::move(arguments),
+      funcs,
+      isDistinct,
+      condition,
+      intermediateType,
+      std::move(orderKeys),
+      std::move(orderTypes));
+}
+
+NodeCP Translator::maybeWrapInWindow(
+    NodeCP input,
+    const Scope& inputScope,
+    const std::vector<lp::ExprPtr>& projectExprs,
+    const std::vector<std::string>& projectNames,
+    Scope& windowScope) {
+  std::vector<size_t> windowIndices;
+  for (size_t i = 0; i < projectExprs.size(); ++i) {
+    if (projectExprs[i]->isWindow()) {
+      windowIndices.push_back(i);
+    }
+  }
+  if (windowIndices.empty()) {
+    return input;
+  }
+
+  // Pre-translate each lp WindowExpr into its effective spec: its partition
+  // and order keys without those that change no result.
+  struct Spec {
+    ExprVector partitionKeys;
+    ExprVector orderKeys;
+    OrderTypeVector orderTypes;
+
+    bool operator==(const Spec&) const = default;
+  };
+  std::vector<Spec> specs(windowIndices.size());
+  // A key may hold a subquery or an inference call, which lift onto the
+  // Window's input.
+  input = withLiftTarget(input, [&](LiftTarget& target) {
+    for (size_t i = 0; i < windowIndices.size(); ++i) {
+      const auto* windowExpr =
+          projectExprs[windowIndices[i]]->as<lp::WindowExpr>();
+      Spec& spec = specs[i];
+      spec.partitionKeys.reserve(windowExpr->partitionKeys().size());
+      for (const auto& partitionKey : windowExpr->partitionKeys()) {
+        spec.partitionKeys.push_back(
+            translateExpr(*partitionKey, inputScope, &target));
+      }
+      RedundantKeys::dropFromPartitionKeys(spec.partitionKeys);
+
+      spec.orderKeys.reserve(windowExpr->ordering().size());
+      spec.orderTypes.reserve(windowExpr->ordering().size());
+      for (const auto& field : windowExpr->ordering()) {
+        spec.orderKeys.push_back(
+            translateExpr(*field.expression, inputScope, &target));
+        spec.orderTypes.push_back(toOrderType(field.order));
+      }
+      // A RANGE frame that measures a bound on its ORDER BY key needs the key,
+      // so the spec keeps it.
+      if (!windowExpr->frame().isKRangeFrame()) {
+        RedundantKeys::dropFromSortKeys(
+            spec.partitionKeys, spec.orderKeys, spec.orderTypes);
+      }
+    }
+  });
+
+  // Group windows by their effective spec so each group produces one
+  // `Window` node. Multiple groups are chained.
+  std::vector<std::vector<size_t>> groups;
+  for (size_t i = 0; i < windowIndices.size(); ++i) {
+    auto it = std::ranges::find_if(groups, [&](const auto& group) {
+      return specs[group.front()] == specs[i];
+    });
+    if (it == groups.end()) {
+      groups.push_back({i});
+    } else {
+      it->push_back(i);
+    }
+  }
+
+  // Evaluate groups sharing a partition adjacently so the physical plan
+  // shuffles once for them, longer ORDER BY first so a later group's sort is a
+  // prefix of an earlier one, and unpartitioned groups last so the gather they
+  // force happens after the partitioned groups have run distributed. Reordering
+  // is safe because the groups here come from one projection, where no window's
+  // input can be another's output -- that needs a nested query, hence a
+  // separate Window chain.
+  std::sort(
+      groups.begin(), groups.end(), [&](const auto& lhs, const auto& rhs) {
+        const Spec& lhsSpec = specs[lhs.front()];
+        const Spec& rhsSpec = specs[rhs.front()];
+        if (lhsSpec.partitionKeys.empty() != rhsSpec.partitionKeys.empty()) {
+          return !lhsSpec.partitionKeys.empty();
+        }
+        if (lhsSpec.partitionKeys != rhsSpec.partitionKeys) {
+          return lhsSpec.partitionKeys < rhsSpec.partitionKeys;
+        }
+        return lhsSpec.orderKeys.size() > rhsSpec.orderKeys.size();
+      });
+
+  NodeCP current = input;
+  for (const auto& group : groups) {
+    const Spec& spec = specs[group.front()];
+
+    // Velox reads a window's keys, its function arguments and a RANGE frame
+    // bound as columns of the input, so they are computed below the Window.
+    PrecomputeProjections precompute{current, builder_, simplifier_};
+    ExprVector partitionKeys = spec.partitionKeys;
+    ExprVector orderKeys = spec.orderKeys;
+    OrderTypeVector orderTypes = spec.orderTypes;
+
+    // A ROWS bound is an offset in rows, which Velox reads as a constant. A
+    // RANGE bound is the boundary value for each row, which it reads from a
+    // column, so that stays a column even when it folds to a literal.
+    auto liftBound = [&](ExprCP value, bool allowConstant) -> ExprCP {
+      return value != nullptr
+          ? materializeInto(precompute, value, allowConstant)
+          : nullptr;
+    };
+
+    Window::Functions functions;
+    functions.reserve(group.size());
+    ColumnVector functionColumns;
+    functionColumns.reserve(group.size());
+    for (size_t i : group) {
+      const size_t projectIndex = windowIndices[i];
+      const auto* windowExpr = projectExprs[projectIndex]->as<lp::WindowExpr>();
+      Value value(toType(windowExpr->type()));
+      Name windowName = toName(windowExpr->name());
+      // A subquery or inference call here would have to lift onto the
+      // Window's input, which 'precompute' is already assembling.
+      ExprVector windowArgs = translateAll(
+          windowExpr->inputs(), inputScope, /*liftTarget=*/nullptr);
+      for (ExprCP& arg : windowArgs) {
+        arg = precompute.toColumn(
+            arg,
+            /*alias=*/nullptr, /*allowConstant=*/
+            true);
+      }
+      // Window functions are non-deterministic with non-default null behavior.
+      FunctionSet windowFuncs =
+          Call::unionArgFunctions(FunctionSet{}, windowArgs) |
+          FunctionSet::kNonDeterministic | FunctionSet::kNonDefaultNullBehavior;
+      auto* call = builder_.makeCall(
+          windowName, value, std::move(windowArgs), windowFuncs);
+      Frame frame = toFrame(windowExpr->frame(), inputScope);
+      const bool allowConstant =
+          frame.type == lp::WindowExpr::WindowType::kRows;
+      frame.startValue = liftBound(frame.startValue, allowConstant);
+      frame.endValue = liftBound(frame.endValue, allowConstant);
+      functions.push_back(
+          Window::Function{call, frame, windowExpr->ignoreNulls()});
+
+      const auto& name = projectNames[projectIndex];
+      auto* column = columnForSymbol(toName(name), value);
+      functionColumns.push_back(column);
+      windowScope[name] = column;
+    }
+
+    // A Window emits its input's columns followed by its function results, so
+    // the prefix is read after the keys and bounds have been materialized.
+    current = std::move(precompute).node();
+    ColumnVector outputColumns = current->outputColumns();
+    outputColumns.reserve(outputColumns.size() + functionColumns.size());
+    for (ColumnCP column : functionColumns) {
+      outputColumns.push_back(column);
+    }
+
+    auto simplified = nodeSimplifier_.make(
+        Window::Key{
+            current,
+            std::move(functions),
+            std::move(partitionKeys),
+            std::move(orderKeys),
+            std::move(orderTypes),
+            std::move(outputColumns)},
+        {current, {}});
+    applySubstitutions(simplified.substitutions, windowScope);
+    current = nodeSimplifier_.materialize(simplified);
+  }
+  return current;
+}
+
+Translated Translator::translateLimit(
+    const lp::LimitNode& limit,
+    const LpNameSet& required) {
+  if (limit.count() == 0) {
+    // LIMIT 0 returns no rows. Skip translating the input entirely and
+    // replace with an empty `Values` carrying the same schema.
+    return makeEmptyResult(*limit.outputType());
+  }
+  // Limit is a pass-through with no expressions of its own.
+  Translated input = translateNode(*limit.onlyInput(), required);
+  auto simplified = nodeSimplifier_.make(
+      Limit::Key{input.node, limit.offset(), limit.count()}, {input.node, {}});
+  applySubstitutions(simplified.substitutions, input.scope);
+  return {nodeSimplifier_.materialize(simplified), std::move(input.scope)};
+}
+
+std::pair<ExprVector, OrderTypeVector> Translator::translateOrdering(
+    const std::vector<lp::SortingField>& ordering,
+    const Scope& scope,
+    LiftTarget* liftTarget) {
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
+  orderKeys.reserve(ordering.size());
+  orderTypes.reserve(ordering.size());
+  for (const auto& field : ordering) {
+    orderKeys.push_back(translateExpr(*field.expression, scope, liftTarget));
+    orderTypes.push_back(toOrderType(field.order));
+  }
+  RedundantKeys::dropFromSortKeys(/*partitionKeys=*/{}, orderKeys, orderTypes);
+  return {std::move(orderKeys), std::move(orderTypes)};
+}
+
+// Materializes 'expr' through 'precompute' and records the column, so a later
+// boundary reading the same expression reuses it rather than recomputing.
+// Returns 'expr' as a column of '*node', extending '*node' with a `Project`
+// computing it when it is not already a column. A column already materialized
+// for the same expression is reused while it is still in '*node''s output, so
+// a second boundary reading that expression does not compute it again.
+// Successive calls share one `Project`, which `makeProject` folds as each is
+// built over the last.
+ColumnCP Translator::materializeColumn(
+    NodeCP* node,
+    ExprCP expr,
+    std::string_view name) {
+  if (expr->is(PlanType::kColumnExpr)) {
+    return expr->as<Column>();
+  }
+  if (auto it = materialized_.find(expr); it != materialized_.end()) {
+    const auto& outputs = (*node)->outputColumns();
+    if (std::find(outputs.begin(), outputs.end(), it->second) !=
+        outputs.end()) {
+      return it->second;
+    }
+  }
+  PrecomputeProjections precompute{*node, builder_, simplifier_};
+  Name outName = toName(std::string{name});
+  auto* column = columnForSymbol(outName, expr->value());
+  precompute.toColumn(expr, column);
+  *node = std::move(precompute).node();
+  materialized_.insert_or_assign(expr, column);
+  return column;
+}
+
+void Translator::applySubstitutions(
+    const PlanSubstitutions& substitutions,
+    Scope& scope) {
+  if (substitutions.empty()) {
+    return;
+  }
+  for (auto& [name, expression] : scope) {
+    expression = substitute(substitutions, expression);
+  }
+}
+
+void Translator::applySubstitutions(
+    const PlanSubstitutions& substitutions,
+    ExprVector& exprs) {
+  if (substitutions.empty()) {
+    return;
+  }
+  for (auto& expression : exprs) {
+    expression = substitute(substitutions, expression);
+  }
+}
+
+ExprCP Translator::substitute(
+    const PlanSubstitutions& substitutions,
+    ExprCP expr) {
+  return simplifier_.simplify(substitutions.apply(expr, exprFactory_));
+}
+
+// Restricts '*node' to what 'names' resolve to in 'scope', materializing any
+// expressions. For a node whose own `outputColumns` are read as its result --
+// a subquery body, a `UnionAll` leg -- the columns have to be there, not just
+// reachable through the scope.
+ColumnVector Translator::narrowToNames(
+    NodeCP* node,
+    const Scope& scope,
+    const std::vector<std::string>& names) {
+  // An empty input stays an empty Values with the narrowed columns.
+  const bool empty = Values::isEmpty(*node);
+  ColumnVector columns;
+  ExprVector exprs;
+  columns.reserve(names.size());
+  exprs.reserve(names.size());
+  PlanObjectSet seen;
+  for (const auto& name : names) {
+    auto it = scope.find(name);
+    VELOX_CHECK(it != scope.end(), "Name not in scope: {}", name);
+    ColumnCP column = empty && !it->second->isColumn()
+        ? columnForSymbol(toName(name), it->second->value())
+        : materializeColumn(node, it->second, name);
+    exprs.push_back(column);
+    // Names bound to one column still need distinct output columns, and so does
+    // a column the node does not produce, such as an outer column a subquery
+    // body returns unchanged.
+    if (seen.contains(column) || !outputContains(*node, column)) {
+      column = columnForSymbol(toName(name), column->value());
+    }
+    seen.add(column);
+    columns.push_back(column);
+  }
+  if (columns != (*node)->outputColumns()) {
+    *node = empty
+        ? builder_.makeEmptyValues(columns)
+        : PrecomputeProjections::makeProject(
+              *node, std::move(exprs), columns, builder_, simplifier_);
+  }
+  return columns;
+}
+
+void Translator::narrowToColumns(NodeCP* node, const ColumnVector& columns) {
+  if (columns == (*node)->outputColumns()) {
+    return;
+  }
+  ExprVector exprs(columns.begin(), columns.end());
+  *node = PrecomputeProjections::makeProject(
+      *node, std::move(exprs), columns, builder_, simplifier_);
+}
+
+// Materializes every expression 'scope' binds, in 'type' order so the new
+// names do not depend on map iteration order.
+void Translator::materializeScope(
+    NodeCP* node,
+    Scope& scope,
+    const velox::RowType& type) {
+  for (const auto& name : type.names()) {
+    auto it = scope.find(name);
+    if (it == scope.end() || it->second->is(PlanType::kColumnExpr)) {
+      continue;
+    }
+    it->second = materializeColumn(node, it->second, name);
+  }
+}
+
+void Translator::rebindScope(
+    Scope& scope,
+    const ColumnVector& sources,
+    const ColumnVector& outputs) {
+  VELOX_CHECK_EQ(sources.size(), outputs.size());
+  for (auto& [name, expr] : scope) {
+    if (!expr->isColumn()) {
+      continue;
+    }
+    const auto it = std::ranges::find(sources, expr->as<Column>());
+    if (it != sources.end()) {
+      expr = outputs[it - sources.begin()];
+    }
+  }
+}
+
+// The Column a leg's scope binds 'name' to. A leg's scope covers every name of
+// its LP outputType, so a miss is a translation bug.
+ColumnCP Translator::columnInScope(
+    NodeCP* node,
+    const Scope& scope,
+    const std::string& name) {
+  auto it = scope.find(name);
+  VELOX_CHECK(it != scope.end(), "Leg scope missing column: {}", name);
+  return materializeColumn(node, it->second, name);
+}
+
+ExprCP Translator::materializeInto(
+    PrecomputeProjections& precompute,
+    ExprCP expr,
+    bool allowConstant) {
+  ExprCP result = precompute.toColumn(expr, /*alias=*/nullptr, allowConstant);
+  if (result != expr && result->is(PlanType::kColumnExpr)) {
+    materialized_.insert_or_assign(expr, result->as<Column>());
+  }
+  return result;
+}
+
+Translated Translator::translateSort(
+    const lp::SortNode& sort,
+    const LpNameSet& required) {
+  // Sort is a pass-through; forward `required` plus the names its order keys
+  // read from the child.
+  LpNameSet childRequired = required;
+  for (const auto& field : sort.ordering()) {
+    collectUsedNames(*field.expression, childRequired);
+  }
+  Translated input = translateNode(*sort.onlyInput(), childRequired);
+
+  NodeCP currentInput = input.node;
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
+  currentInput = withLiftTarget(currentInput, [&](LiftTarget& target) {
+    std::tie(orderKeys, orderTypes) =
+        translateOrdering(sort.ordering(), input.scope, &target);
+  });
+
+  auto simplified = nodeSimplifier_.make(
+      Sort::Key{currentInput, std::move(orderKeys), std::move(orderTypes)},
+      {currentInput, {}});
+  applySubstitutions(simplified.substitutions, input.scope);
+  return {simplified.node, std::move(input.scope)};
+}
+
+double Translator::extractSamplePercentage(const lp::Expr& percentage) {
+  Scope emptyScope;
+  ExprCP folded =
+      simplifier_.simplify(translateExpr(percentage, emptyScope, nullptr));
+  VELOX_USER_CHECK(
+      folded->is(PlanType::kLiteralExpr),
+      "Sampling percentage must be constant: {}",
+      percentage.toString());
+  const velox::Variant& value = folded->as<Literal>()->literal();
+  VELOX_USER_CHECK(!value.isNull(), "Sampling percentage must not be null");
+  VELOX_USER_CHECK_EQ(
+      value.kind(),
+      velox::TypeKind::DOUBLE,
+      "Sampling percentage must be a double");
+  const double result = value.value<double>();
+  VELOX_USER_CHECK_GE(result, 0, "Sampling percentage must be >= 0");
+  VELOX_USER_CHECK_LE(result, 100, "Sampling percentage must be <= 100");
+  return result;
+}
+
+Translated Translator::makeEmptyResult(const velox::RowType& outputType) {
+  Scope scope;
+  ColumnVector outputColumns =
+      makeOutputColumns(outputType, /*cardinality=*/0, scope);
+  ValuesCP valuesNode =
+      builder_.makeValues(nullptr, nullptr, std::move(outputColumns));
+  return {valuesNode, std::move(scope)};
+}
+
+Translated Translator::translateSample(
+    const lp::SampleNode& sample,
+    const LpNameSet& required) {
+  const double percentage = extractSamplePercentage(*sample.percentage());
+
+  // Handle the endpoints here so the switch below only sees a percentage in
+  // the open interval (0, 100).
+  if (percentage == 100) {
+    return translateNode(*sample.onlyInput(), required);
+  }
+  if (percentage == 0) {
+    return makeEmptyResult(*sample.outputType());
+  }
+
+  Translated input = translateNode(*sample.onlyInput(), required);
+
+  switch (sample.sampleMethod()) {
+    case lp::SampleNode::SampleMethod::kSystem: {
+      // SYSTEM sampling drops whole splits, so it needs a single scan to
+      // sample.
+      ScanCP scan = soleScan(input.node);
+      VELOX_USER_CHECK_NOT_NULL(
+          scan, "TABLESAMPLE SYSTEM is only supported directly over a table");
+      const_cast<BaseTable*>(scan->baseTable())->sampledPercentage =
+          static_cast<float>(percentage);
+      return input;
+    }
+    case lp::SampleNode::SampleMethod::kBernoulli: {
+      ExprCP predicate = exprFactory_.makeSamplePredicate(percentage / 100.0);
+      return simplifyFilter(
+          input.node,
+          {predicate},
+          std::move(input.scope),
+          /*propagateConstants=*/false);
+    }
+  }
+  VELOX_UNREACHABLE();
+}
+
+void Translator::translateGroupingKeys(
+    const lp::AggregateNode& aggregate,
+    const Scope& inputScope,
+    NodeCP& currentInput,
+    ExprVector& keys,
+    ColumnVector& columns,
+    Scope& scope) {
+  const auto& names = aggregate.outputNames();
+  const auto& keyExpressions = aggregate.groupingKeys();
+  const bool hasGroupingSets = !aggregate.groupingSets().empty();
+
+  ExprVector translatedKeys;
+  translatedKeys.reserve(keyExpressions.size());
+  for (const auto& keyExpression : keyExpressions) {
+    ExprCP key{nullptr};
+    currentInput = withLiftTarget(currentInput, [&](LiftTarget& target) {
+      key = translateExpr(*keyExpression, inputScope, &target);
+    });
+    translatedKeys.push_back(key);
+  }
+
+  folly::F14FastMap<ExprCP, ColumnCP> keyToOutput;
+  if (!hasGroupingSets) {
+    keyToOutput.reserve(keyExpressions.size());
+  }
+
+  for (size_t i = 0; i < translatedKeys.size(); ++i) {
+    ExprCP keyExpr = translatedKeys[i];
+    if (!hasGroupingSets) {
+      const auto it = keyToOutput.find(keyExpr);
+      if (it != keyToOutput.end()) {
+        scope[names[i]] =
+            keyExpr->is(PlanType::kLiteralExpr) ? keyExpr : it->second;
+        keys.push_back(keyExpr);
+        columns.push_back(it->second);
+        continue;
+      }
+    }
+    // For grouping sets, `GroupIdNode` requires output names distinct from the
+    // input columns for the NULL-padded copies, so mint a fresh column rather
+    // than reusing the (possibly colliding) LP symbol.
+    ColumnCP column;
+    if (hasGroupingSets) {
+      column = Column::create(toName(names[i]), keyExpr->value());
+    } else {
+      column = groupingKeyOutput(translatedKeys, i, names[i]);
+      if (column == nullptr) {
+        scope[names[i]] = keyExpr;
+        continue;
+      }
+      keyToOutput.emplace(keyExpr, column);
+    }
+    const bool constantAboveAggregation = keyExpr->is(PlanType::kLiteralExpr) &&
+        (!hasGroupingSets ||
+         std::ranges::all_of(aggregate.groupingSets(), [&](const auto& set) {
+           return std::ranges::find(set, i) != set.end();
+         }));
+    scope[names[i]] = constantAboveAggregation ? keyExpr : column;
+    keys.push_back(keyExpr);
+    columns.push_back(column);
+  }
+}
+
+ColumnCP Translator::groupingKeyOutput(
+    const ExprVector& keys,
+    size_t index,
+    std::string_view name) {
+  if (!NodeSimplifier::keepsGroupingKey(keys, index)) {
+    return nullptr;
+  }
+  ExprCP key = keys[index];
+  return key->is(PlanType::kColumnExpr)
+      ? key->as<Column>()
+      : columnForSymbol(toName(name), key->value());
+}
+
+Translated Translator::translateAggregate(
+    const lp::AggregateNode& aggregate,
+    const LpNameSet& required) {
+  const auto& names = aggregate.outputNames();
+  const auto& groupingKeyExpressions = aggregate.groupingKeys();
+  const auto numGroupingKeys = groupingKeyExpressions.size();
+  const auto& groupingSets = aggregate.groupingSets();
+  const auto& aggregateExpressions = aggregate.aggregates();
+  const size_t groupIdSlots = groupingSets.empty() ? 0 : 1;
+  VELOX_CHECK_EQ(
+      names.size(),
+      numGroupingKeys + aggregateExpressions.size() + groupIdSlots);
+
+  // Decide which aggregates to keep (output not in `required`). Grouping keys
+  // and groupId always stay: dropping them would change group cardinality.
+  std::vector<size_t> keptAggregateIndices;
+  keptAggregateIndices.reserve(aggregateExpressions.size());
+  for (size_t i = 0; i < aggregateExpressions.size(); ++i) {
+    if (required.contains(names[numGroupingKeys + i])) {
+      keptAggregateIndices.push_back(i);
+    }
+  }
+
+  // Child must supply: every column read by the grouping keys, plus every
+  // column read by the kept aggregates (args, FILTER, ORDER BY).
+  LpNameSet childRequired;
+  collectUsedNames(groupingKeyExpressions, childRequired);
+  for (size_t idx : keptAggregateIndices) {
+    collectUsedNames(*aggregateExpressions[idx], childRequired);
+  }
+  Translated input = translateNode(*aggregate.onlyInput(), childRequired);
+
+  ExprVector groupingKeys;
+  groupingKeys.reserve(numGroupingKeys);
+  ColumnVector outputColumns;
+  outputColumns.reserve(
+      numGroupingKeys + keptAggregateIndices.size() + groupIdSlots);
+  Scope newScope;
+
+  NodeCP currentInput = input.node;
+  translateGroupingKeys(
+      aggregate,
+      input.scope,
+      currentInput,
+      groupingKeys,
+      outputColumns,
+      newScope);
+
+  // Aggregates whose FILTER folded to constant false/null see the empty set;
+  // their output is the aggregate's empty-input value, materialized by a
+  // Project above the aggregation.
+  AggregateCallVector aggregates;
+  aggregates.reserve(keptAggregateIndices.size());
+  folly::F14FastMap<const optimizer::Aggregate*, ColumnCP> aggregateToOutput;
+  aggregateToOutput.reserve(keptAggregateIndices.size());
+  for (size_t idx : keptAggregateIndices) {
+    const optimizer::Aggregate* aggregateCall{nullptr};
+    currentInput = withLiftTarget(currentInput, [&](LiftTarget& target) {
+      aggregateCall =
+          toAggregateCall(*aggregateExpressions[idx], input.scope, &target);
+    });
+    const auto& aggregateName = names[numGroupingKeys + idx];
+    // A remaining literal condition can only be false or null: fold to the
+    // empty-set result.
+    if (aggregateCall->condition() != nullptr &&
+        aggregateCall->condition()->is(PlanType::kLiteralExpr)) {
+      newScope[aggregateName] = builder_.makeLiteral(
+          aggregateCall->emptyInputResult(), aggregateCall->value().type);
+      continue;
+    }
+    if (auto it = aggregateToOutput.find(aggregateCall);
+        it != aggregateToOutput.end()) {
+      newScope[aggregateName] = it->second;
+      continue;
+    }
+    aggregates.push_back(aggregateCall);
+    auto* column =
+        columnForSymbol(toName(aggregateName), aggregateCall->value());
+    aggregateToOutput.emplace(aggregateCall, column);
+    outputColumns.push_back(column);
+    newScope[aggregateName] = column;
+  }
+
+  if (groupingSets.empty()) {
+    // A global aggregate with no aggregate calls emits one empty row for any
+    // input, including no rows at all, so the input is dead.
+    if (groupingKeys.empty() && keptAggregateIndices.empty()) {
+      return {
+          builder_.makeSingleRowValues({}, ColumnVector{}),
+          std::move(newScope)};
+    }
+
+    auto simplified = nodeSimplifier_.make(
+        Aggregation::Key{
+            .input = currentInput,
+            .groupingKeys = std::move(groupingKeys),
+            .aggregates = std::move(aggregates),
+            .outputColumns = std::move(outputColumns)},
+        {currentInput, {}});
+    applySubstitutions(simplified.substitutions, newScope);
+    if (simplified.empty() || !simplified.node->is(NodeType::kAggregate)) {
+      return {nodeSimplifier_.materialize(simplified), std::move(newScope)};
+    }
+    NodeCP node = simplified.node;
+    const auto* aggNode = node->as<Aggregation>();
+    if (auto rows = tryEvaluateOverDiscreteValues(aggNode)) {
+      const Values* valuesNode =
+          builder_.makeValues(std::move(*rows), aggNode->outputColumns());
+      auto valuesResult = nodeSimplifier_.make(
+          Values::Key{
+              valuesNode->source(),
+              valuesNode->rows(),
+              valuesNode->outputColumns(),
+              valuesNode->channels(),
+          });
+      applySubstitutions(valuesResult.substitutions, newScope);
+      node = valuesResult.empty()
+          ? static_cast<NodeCP>(
+                builder_.makeEmptyValues(aggNode->outputColumns()))
+          : valuesResult.node;
+    }
+    return {node, std::move(newScope)};
+  }
+
+  NodeCP aggNode = lowerGroupingSets(
+      aggregate,
+      groupingKeys,
+      std::move(aggregates),
+      outputColumns,
+      currentInput,
+      newScope);
+  return {aggNode, std::move(newScope)};
+}
+
+NodeCP Translator::lowerGroupingSets(
+    const lp::AggregateNode& aggregate,
+    const ExprVector& groupingKeys,
+    AggregateCallVector aggregates,
+    const ColumnVector& outputColumns,
+    NodeCP currentInput,
+    Scope& newScope) {
+  const auto& names = aggregate.outputNames();
+  const auto& groupingSets = aggregate.groupingSets();
+
+  // GROUPING SETS / ROLLUP / CUBE lower to GroupId + a plain aggregate keyed on
+  // an explicit group-id column: a mechanical translation that lets physical
+  // planning treat the aggregate like any other.
+  // Grouping sets keep positional alignment with the set indices (no key
+  // dedup), so `outputColumns` is exactly the key output columns followed by
+  // the aggregate result columns.
+  const size_t numKeys = groupingKeys.size();
+  ColumnVector keyOutputColumns(
+      outputColumns.begin(), outputColumns.begin() + numKeys);
+  ColumnVector aggResultColumns(
+      outputColumns.begin() + numKeys, outputColumns.end());
+
+  // Columns the aggregates read pass through GroupId unchanged.
+  PlanObjectSet aggInputSet;
+  for (const auto* call : aggregates) {
+    for (ExprCP arg : call->args()) {
+      aggInputSet.unionSet(arg->columns());
+    }
+    if (call->condition() != nullptr) {
+      aggInputSet.unionSet(call->condition()->columns());
+    }
+    for (ExprCP orderKey : call->orderKeys()) {
+      aggInputSet.unionSet(orderKey->columns());
+    }
+  }
+
+  // GroupId groups on columns; materialize any non-column key into a Project.
+  ExprVector groupIdInputKeys;
+  groupIdInputKeys.reserve(numKeys);
+  ColumnVector materializedColumns;
+  ExprVector materializedExprs;
+  for (ExprCP keyExpr : groupingKeys) {
+    if (keyExpr->is(PlanType::kColumnExpr)) {
+      groupIdInputKeys.push_back(keyExpr);
+    } else {
+      ColumnCP keyColumn = Column::create("groupingKey", keyExpr->value());
+      materializedColumns.push_back(keyColumn);
+      materializedExprs.push_back(keyExpr);
+      groupIdInputKeys.push_back(keyColumn);
+    }
+  }
+
+  NodeSimplifier::SimplifiedNode groupIdInput{currentInput, {}};
+  if (!materializedExprs.empty()) {
+    PlanObjectSet passthrough = aggInputSet;
+    for (ExprCP keyExpr : groupingKeys) {
+      if (keyExpr->is(PlanType::kColumnExpr)) {
+        passthrough.add(keyExpr->as<Column>());
+      }
+    }
+    ExprVector projectExprs = passthrough.toObjects<Expr>();
+    ColumnVector projectColumns;
+    projectColumns.reserve(projectExprs.size() + materializedColumns.size());
+    for (ExprCP expr : projectExprs) {
+      projectColumns.push_back(expr->as<Column>());
+    }
+    appendAll(projectExprs, materializedExprs);
+    appendAll(projectColumns, materializedColumns);
+    groupIdInput = nodeSimplifier_.make(
+        Project::Key{
+            currentInput, std::move(projectExprs), std::move(projectColumns)},
+        {currentInput, {}});
+  }
+
+  ExprVector aggregationInputs = aggInputSet.toObjects<Expr>();
+
+  const auto& groupIdName = names.back();
+  Value groupIdValue(
+      toType(aggregate.outputType()->childAt(names.size() - 1)),
+      static_cast<float>(groupingSets.size()));
+  ColumnCP groupIdColumn = columnForSymbol(toName(groupIdName), groupIdValue);
+  newScope[groupIdName] = groupIdColumn;
+
+  ColumnVector groupIdOutputs;
+  groupIdOutputs.reserve(
+      keyOutputColumns.size() + aggregationInputs.size() + 1);
+  appendAll(groupIdOutputs, keyOutputColumns);
+  for (ExprCP expr : aggregationInputs) {
+    groupIdOutputs.push_back(expr->as<Column>());
+  }
+  groupIdOutputs.push_back(groupIdColumn);
+
+  QGVector<QGVector<int32_t>> setsCopy;
+  setsCopy.reserve(groupingSets.size());
+  for (const auto& set : groupingSets) {
+    setsCopy.emplace_back(set.begin(), set.end());
+  }
+
+  NodeCP groupIdInputNode = groupIdInput.node;
+  auto simplifiedGroupId = nodeSimplifier_.make(
+      GroupId::Key{
+          groupIdInputNode,
+          groupIdInputKeys,
+          aggregationInputs,
+          setsCopy,
+          keyOutputColumns,
+          groupIdColumn,
+          groupIdOutputs},
+      std::move(groupIdInput));
+
+  // Aggregate keys: the GroupId key output columns plus the group-id column.
+  ExprVector aggGroupingKeys;
+  aggGroupingKeys.reserve(numKeys + 1);
+  appendAll(aggGroupingKeys, keyOutputColumns);
+  aggGroupingKeys.push_back(groupIdColumn);
+
+  // Empty sets are the global () sets whose group-id values must emit a default
+  // row over empty input; groupId is coupled with them (set together or not).
+  QGVector<int32_t> globalGroupingSets;
+  for (size_t i = 0; i < setsCopy.size(); ++i) {
+    if (setsCopy[i].empty()) {
+      globalGroupingSets.push_back(static_cast<int32_t>(i));
+    }
+  }
+  ColumnCP aggGroupId = globalGroupingSets.empty() ? nullptr : groupIdColumn;
+
+  // Physical output order: keys, group-id, aggregate results.
+  ColumnVector aggOutputColumns;
+  aggOutputColumns.reserve(numKeys + 1 + aggResultColumns.size());
+  appendAll(aggOutputColumns, keyOutputColumns);
+  aggOutputColumns.push_back(groupIdColumn);
+  appendAll(aggOutputColumns, aggResultColumns);
+
+  NodeCP groupIdNode = simplifiedGroupId.node;
+  auto simplifiedAggregate = nodeSimplifier_.make(
+      Aggregation::Key{
+          .input = groupIdNode,
+          .groupingKeys = std::move(aggGroupingKeys),
+          .aggregates = std::move(aggregates),
+          .outputColumns = std::move(aggOutputColumns),
+          .step = AggregateStep::kSingle,
+          .groupId = aggGroupId,
+          .globalGroupingSets = std::move(globalGroupingSets)},
+      std::move(simplifiedGroupId));
+  applySubstitutions(simplifiedAggregate.substitutions, newScope);
+  return nodeSimplifier_.materialize(simplifiedAggregate);
+}
+
+std::vector<velox::Variant> Translator::evaluateExprRowsToVariants(
+    const lp::ValuesNode::Exprs& exprRows) {
+  Scope emptyScope;
+  std::vector<velox::Variant> rows;
+  rows.reserve(exprRows.size());
+  for (const auto& exprRow : exprRows) {
+    std::vector<velox::Variant> rowValues;
+    rowValues.reserve(exprRow.size());
+    for (const auto& expr : exprRow) {
+      rowValues.emplace_back(simplifier_.evaluate(
+          translateExpr(*expr, emptyScope, /*liftTarget=*/nullptr)));
+    }
+    rows.emplace_back(velox::Variant::row(std::move(rowValues)));
+  }
+  return rows;
+}
+
+Translated Translator::translateValues(
+    const lp::ValuesNode& values,
+    const LpNameSet& /*required*/) {
+  Scope scope;
+  ColumnVector outputColumns =
+      makeOutputColumns(*values.outputType(), values.cardinality(), scope);
+
+  // Evaluate `Exprs` data to a single `Variant::array(rows)` at translate time.
+  // Other data shapes (constant `Variants` / `Vectors`) pass the source
+  // through.
+  const velox::Variant* evaluatedRows = nullptr;
+  if (const auto* exprRows =
+          std::get_if<lp::ValuesNode::Exprs>(&values.data())) {
+    evaluatedRows = queryCtx()->registerVariant(
+        std::make_unique<velox::Variant>(
+            velox::Variant::array(evaluateExprRowsToVariants(*exprRows))));
+  }
+
+  const lp::ValuesNode* passthrough =
+      evaluatedRows == nullptr ? &values : nullptr;
+  QGVector<velox::column_index_t> channels(outputColumns.size());
+  std::iota(channels.begin(), channels.end(), 0);
+  auto simplified = nodeSimplifier_.make(
+      Values::Key{
+          passthrough, evaluatedRows, outputColumns, std::move(channels)});
+  applySubstitutions(simplified.substitutions, scope);
+
+  // TranslatePass callers do not propagate a null node yet. Preserve the
+  // established concrete representation at this boundary until they do.
+  if (simplified.empty()) {
+    simplified.node = builder_.makeEmptyValues(std::move(outputColumns));
+  }
+  return {simplified.node, std::move(scope)};
+}
+
+Translated Translator::translateUnnest(
+    const lp::UnnestNode& unnest,
+    const LpNameSet& required) {
+  // Child must supply: every column the unnest expressions read, plus any
+  // replicated input column the consumer still needs.
+  LpNameSet childRequired;
+  collectUsedNames(unnest.unnestExpressions(), childRequired);
+  const auto& inputType = *unnest.onlyInput()->outputType();
+  for (size_t i = 0; i < inputType.size(); ++i) {
+    const auto& name = inputType.nameOf(i);
+    if (required.contains(name)) {
+      childRequired.insert(name);
+    }
+  }
+  Translated input = translateNode(*unnest.onlyInput(), childRequired);
+
+  NodeCP currentInput = input.node;
+  ExprVector unnestExprs;
+  currentInput = withLiftTarget(currentInput, [&](LiftTarget& target) {
+    unnestExprs =
+        translateAll(unnest.unnestExpressions(), input.scope, &target);
+  });
+
+  // TODO: Cardinality of unnested columns also should be multiplied by the
+  // average expected number of elements per unnested row. Other Value
+  // properties also should be computed.
+  const std::optional<float> unnestCardinality = maxCardinality(unnestExprs);
+  const auto& outputType = unnest.outputType();
+  Scope newScope;
+
+  // LP UnnestNode's outputType layout is
+  // [input.outputType ⊕ per-expression unnested-names ⊕ optional ordinality].
+  // Walk in that order, dropping replicated input columns the consumer
+  // doesn't need; always emit unnest-expression outputs and ordinality.
+  ColumnVector replicatedColumns;
+  replicatedColumns.reserve(inputType.size());
+  PlanSubstitutions inputSubstitutions;
+
+  PlanObjectSet replicated;
+  for (size_t i = 0; i < inputType.size(); ++i) {
+    const auto& name = inputType.nameOf(i);
+    if (!required.contains(name)) {
+      continue;
+    }
+    auto it = input.scope.find(name);
+    VELOX_CHECK(it != input.scope.end());
+
+    ExprCP expression = it->second;
+    ColumnCP column = materializeColumn(&currentInput, expression, name);
+    if (expression->is(PlanType::kLiteralExpr)) {
+      inputSubstitutions.add(column, expression);
+    }
+    if (!replicated.contains(column)) {
+      replicated.add(column);
+      replicatedColumns.push_back(column);
+    }
+    newScope[name] = column;
+  }
+
+  QGVector<ColumnVector> unnestColumns;
+  unnestColumns.reserve(unnest.unnestExpressions().size());
+  size_t outputIndex = inputType.size();
+  for (const auto& names : unnest.unnestedNames()) {
+    ColumnVector perExpr;
+    perExpr.reserve(names.size());
+    for (const auto& name : names) {
+      Value value = clampCardinality(
+          Value{toType(outputType->childAt(outputIndex)), unnestCardinality});
+      auto* column = columnForSymbol(toName(name), value);
+      perExpr.push_back(column);
+      newScope[name] = column;
+      ++outputIndex;
+    }
+    unnestColumns.push_back(std::move(perExpr));
+  }
+
+  ColumnCP ordinalityColumn = nullptr;
+  if (unnest.ordinalityName().has_value()) {
+    const auto& name = unnest.ordinalityName().value();
+    Value value(toType(outputType->childAt(outputIndex)), unnestCardinality);
+    ordinalityColumn = columnForSymbol(toName(name), value);
+    newScope[name] = ordinalityColumn;
+  }
+
+  ColumnVector outputColumns = replicatedColumns;
+  for (const auto& perExpr : unnestColumns) {
+    for (ColumnCP column : perExpr) {
+      outputColumns.push_back(column);
+    }
+  }
+  if (ordinalityColumn != nullptr) {
+    outputColumns.push_back(ordinalityColumn);
+  }
+
+  auto simplified = nodeSimplifier_.make(
+      Unnest::Key{
+          currentInput,
+          std::move(unnestExprs),
+          std::move(replicatedColumns),
+          std::move(unnestColumns),
+          ordinalityColumn,
+          /*markerColumn=*/nullptr,
+          std::move(outputColumns)},
+      {currentInput, std::move(inputSubstitutions)});
+  applySubstitutions(simplified.substitutions, newScope);
+  return {nodeSimplifier_.materialize(simplified), std::move(newScope)};
+}
+
+std::vector<lp::LogicalPlanNodePtr> Translator::flattenUnionInputs(
+    const std::vector<lp::LogicalPlanNodePtr>& inputs,
+    bool dedupAbove) const {
+  // Legs align positionally with the union's outputType at every level, so a
+  // flattened leg maps to the same kept positions as a direct one.
+  std::vector<lp::LogicalPlanNodePtr> result;
+  std::function<void(const lp::LogicalPlanNodePtr&)> collect =
+      [&](const lp::LogicalPlanNodePtr& node) {
+        if (node->kind() == lp::NodeKind::kSet) {
+          const auto operation = node->as<lp::SetNode>()->operation();
+          if (operation == lp::SetOperation::kUnionAll ||
+              (dedupAbove && operation == lp::SetOperation::kUnion)) {
+            for (const auto& child : node->inputs()) {
+              collect(child);
+            }
+            return;
+          }
+        }
+        result.push_back(node);
+      };
+  for (const auto& input : inputs) {
+    collect(input);
+  }
+  return result;
+}
+
+std::vector<Translated> Translator::translateUnionInputs(
+    const std::vector<lp::LogicalPlanNodePtr>& inputs,
+    const std::vector<size_t>& keptPositions) {
+  std::vector<Translated> result;
+  result.reserve(inputs.size());
+  for (const auto& input : inputs) {
+    // Each leg's required-set is the kept union output names, mapped to that
+    // leg's positional outputType names (legs align 1:1 with the union's
+    // outputType by SQL semantics).
+    LpNameSet legRequired;
+    legRequired.reserve(keptPositions.size());
+    for (size_t position : keptPositions) {
+      legRequired.insert(input->outputType()->nameOf(position));
+    }
+    result.push_back(translateNode(*input, legRequired));
+  }
+  return result;
+}
+
+Translated Translator::buildUnionAll(
+    const std::vector<lp::LogicalPlanNodePtr>& inputs,
+    const velox::RowTypePtr& outputType,
+    const LpNameSet& required,
+    bool dedupAbove) {
+  const auto flatInputs = flattenUnionInputs(inputs, dedupAbove);
+
+  std::vector<size_t> keptPositions;
+  keptPositions.reserve(outputType->size());
+  for (size_t i = 0; i < outputType->size(); ++i) {
+    if (required.contains(outputType->nameOf(i))) {
+      keptPositions.push_back(i);
+    }
+  }
+
+  // Keep scalar-subquery reuse within each union leg. Reusing an enclosing
+  // lift would introduce an outer reference into the leg.
+  subqueries_.pushLiftedCorrelationBarrier();
+  SCOPE_EXIT {
+    subqueries_.popLiftedCorrelationBarrier();
+  };
+  auto translatedInputs = translateUnionInputs(flatInputs, keptPositions);
+
+  std::vector<NodeCP> legs;
+  std::vector<ExprVector> legExprs(flatInputs.size());
+  std::vector<std::vector<std::string>> legNames(flatInputs.size());
+  for (size_t i = 0; i < translatedInputs.size(); ++i) {
+    legs.push_back(translatedInputs[i].node);
+    for (size_t j : keptPositions) {
+      // Resolve LP-name → IR expression via the leg's scope; the leg's IR
+      // `outputColumns` may be narrower than its LP outputType after
+      // dup-collapse.
+      const auto& name = flatInputs[i]->outputType()->nameOf(j);
+      const auto it = translatedInputs[i].scope.find(name);
+      VELOX_CHECK(it != translatedInputs[i].scope.end());
+      legExprs[i].push_back(it->second);
+      legNames[i].push_back(name);
+    }
+  }
+
+  std::vector<std::string> names;
+  std::vector<velox::TypePtr> types;
+  for (size_t j : keptPositions) {
+    names.push_back(outputType->nameOf(j));
+    types.push_back(outputType->childAt(j));
+  }
+  return makeUnionAll(
+      std::move(legs),
+      legExprs,
+      legNames,
+      names,
+      types,
+      [&](std::string_view name, const Value& value) {
+        return columnForSymbol(toName(std::string{name}), value);
+      });
+}
+
+Translated Translator::makeUnionAll(
+    std::vector<NodeCP> legs,
+    const std::vector<ExprVector>& legExprs,
+    const std::vector<std::vector<std::string>>& legNames,
+    const std::vector<std::string>& names,
+    const std::vector<velox::TypePtr>& types,
+    folly::FunctionRef<ColumnCP(std::string_view name, const Value& value)>
+        makeColumn) {
+  QGVector<ColumnVector> legColumns(legs.size());
+  std::vector<PlanSubstitutions> legSubstitutions(legs.size());
+  Scope scope;
+  ColumnVector outputColumns;
+  outputColumns.reserve(names.size());
+  for (size_t j = 0; j < names.size(); ++j) {
+    for (size_t i = 0; i < legs.size(); ++i) {
+      ExprCP expression = legExprs[i][j];
+      ColumnCP column = materializeColumn(&legs[i], expression, legNames[i][j]);
+      legColumns[i].push_back(column);
+      if (expression->is(PlanType::kLiteralExpr)) {
+        legSubstitutions[i].add(column, expression);
+      }
+    }
+
+    // The union output NDV is the max of the legs' NDVs: a lower bound on the
+    // true union NDV (which can be up to their sum), order-independent, and
+    // known as long as any leg has an NDV. A known NDV lets the cost model rank
+    // a join on a union key instead of dropping it as uncostable.
+    std::optional<float> cardinality;
+    for (const auto& legCols : legColumns) {
+      const auto legNdv = legCols.back()->value().cardinality;
+      if (legNdv.has_value()) {
+        cardinality =
+            cardinality.has_value() ? std::max(*cardinality, *legNdv) : *legNdv;
+      }
+    }
+    auto* column = makeColumn(names[j], Value(toType(types[j]), cardinality));
+    outputColumns.push_back(column);
+    scope[names[j]] = column;
+  }
+
+  std::vector<NodeSimplifier::SimplifiedNode> simplifiedInputs;
+  simplifiedInputs.reserve(legs.size());
+  for (size_t i = 0; i < legs.size(); ++i) {
+    simplifiedInputs.push_back({legs[i], std::move(legSubstitutions[i])});
+  }
+  ColumnVector emptyOutputColumns = outputColumns;
+  auto simplified = nodeSimplifier_.make(
+      UnionAll::Key{
+          NodeVector(legs.begin(), legs.end()),
+          std::move(legColumns),
+          std::move(outputColumns)},
+      std::move(simplifiedInputs));
+  applySubstitutions(simplified.substitutions, scope);
+  if (simplified.empty()) {
+    simplified.node = builder_.makeEmptyValues(std::move(emptyOutputColumns));
+  }
+  return {simplified.node, std::move(scope)};
+}
+
+// Set-op outputs reuse the upstream `Column*`s (left side for
+// INTERSECT/EXCEPT, UnionAll for UNION). Two distinct nodes' `outputColumns`
+// can share Column identity; downstream passes must not assume freshness.
+Translated Translator::translateSet(
+    const lp::SetNode& set,
+    const LpNameSet& required) {
+  switch (set.operation()) {
+    case lp::SetOperation::kUnionAll:
+      return buildUnionAll(
+          set.inputs(), set.outputType(), required, /*dedupAbove=*/false);
+    case lp::SetOperation::kUnion: {
+      Translated all = buildUnionAll(
+          set.inputs(),
+          set.outputType(),
+          allNames(*set.outputType()),
+          /*dedupAbove=*/true);
+      return dedupSetOutputs(all.node, std::move(all.scope), *set.outputType());
+    }
+    case lp::SetOperation::kIntersect:
+    case lp::SetOperation::kIntersectAll:
+    case lp::SetOperation::kExcept:
+    case lp::SetOperation::kExceptAll: {
+      const bool isAnti = set.operation() == lp::SetOperation::kExcept ||
+          set.operation() == lp::SetOperation::kExceptAll;
+      const bool isDistinct = set.operation() == lp::SetOperation::kIntersect ||
+          set.operation() == lp::SetOperation::kExcept;
+      const velox::core::JoinType joinType = isAnti
+          ? (isDistinct ? velox::core::JoinType::kAnti
+                        : velox::core::JoinType::kCountingAnti)
+          : (isDistinct ? velox::core::JoinType::kLeftSemiFilter
+                        : velox::core::JoinType::kCountingLeftSemiFilter);
+
+      // Set-op via Join: each leg's columns become join keys, so a leg drops
+      // anything else it carries. A counting semi join requires its keys to
+      // cover its inputs' columns, and the distinct variants dedup on the
+      // join's output.
+      //
+      // A leg that projects one expression under two names holds one Column for
+      // both (see translateProject), so a leg can have fewer columns than
+      // outputType positions and the same Column can legitimately be a key
+      // twice.
+      auto narrowLeg = [&](Translated& leg, const velox::RowType& type) {
+        ColumnVector columns;
+        PlanObjectSet seen;
+        PlanSubstitutions substitutions;
+        for (const auto& name : type.names()) {
+          const auto it = leg.scope.find(name);
+          VELOX_CHECK(it != leg.scope.end());
+          ExprCP expression = it->second;
+          ColumnCP column = materializeColumn(&leg.node, expression, name);
+          if (expression->is(PlanType::kLiteralExpr)) {
+            substitutions.add(column, expression);
+          }
+          // Every name of the leg's type now binds to a column of 'leg.node'.
+          leg.scope[name] = column;
+          if (!seen.contains(column)) {
+            seen.add(column);
+            columns.push_back(column);
+          }
+        }
+        narrowToColumns(&leg.node, columns);
+        return NodeSimplifier::SimplifiedNode{
+            leg.node, std::move(substitutions)};
+      };
+
+      Translated first = translateNode(*set.inputs().front());
+      const auto& firstType = *set.inputs().front()->outputType();
+      auto simplified = narrowLeg(first, firstType);
+      const ColumnVector setOutputColumns = first.node->outputColumns();
+      for (size_t i = 1; i < set.inputs().size(); ++i) {
+        Translated other = translateNode(*set.inputs()[i]);
+        const auto& otherType = *set.inputs()[i]->outputType();
+        VELOX_CHECK_EQ(firstType.size(), otherType.size());
+        auto otherSimplified = narrowLeg(other, otherType);
+        ExprVector leftKeys;
+        ExprVector rightKeys;
+        leftKeys.reserve(firstType.size());
+        rightKeys.reserve(firstType.size());
+        for (size_t columnIndex = 0; columnIndex < firstType.size();
+             ++columnIndex) {
+          leftKeys.push_back(columnInScope(
+              &first.node, first.scope, firstType.nameOf(columnIndex)));
+          rightKeys.push_back(columnInScope(
+              &other.node, other.scope, otherType.nameOf(columnIndex)));
+        }
+        NodeCP joinedNode = simplified.node;
+        simplified = nodeSimplifier_.make(
+            Join::Key{
+                joinedNode,
+                other.node,
+                joinType,
+                std::move(leftKeys),
+                std::move(rightKeys),
+                /*filter=*/ExprVector{},
+                /*nullAware=*/false,
+                /*nullAsValue=*/true,
+                setOutputColumns},
+            std::move(simplified),
+            std::move(otherSimplified));
+      }
+
+      Scope scope;
+      for (size_t i = 0; i < set.outputType()->size(); ++i) {
+        scope[set.outputType()->nameOf(i)] =
+            first.scope.at(firstType.nameOf(i));
+      }
+      applySubstitutions(simplified.substitutions, scope);
+
+      if (simplified.empty()) {
+        return {builder_.makeEmptyValues(setOutputColumns), std::move(scope)};
+      }
+
+      if (isDistinct) {
+        return dedupSetOutputs(
+            simplified.node, std::move(scope), *set.outputType());
+      }
+      return {simplified.node, std::move(scope)};
+    }
+  }
+  VELOX_UNREACHABLE();
+}
+
+Translated Translator::dedupSetOutputs(
+    NodeCP node,
+    Scope scope,
+    const velox::RowType& outputType) {
+  ExprVector keys;
+  keys.reserve(outputType.size());
+  for (const auto& name : outputType.names()) {
+    keys.push_back(scope.at(name));
+  }
+
+  ExprVector keptKeys;
+  ColumnVector outputs;
+  for (size_t i = 0; i < keys.size(); ++i) {
+    if (ColumnCP output = groupingKeyOutput(keys, i, outputType.nameOf(i))) {
+      keptKeys.push_back(keys[i]);
+      outputs.push_back(output);
+    }
+  }
+  auto simplified = nodeSimplifier_.make(
+      Aggregation::Key{
+          node, std::move(keptKeys), AggregateCallVector{}, std::move(outputs)},
+      {node, {}});
+  applySubstitutions(simplified.substitutions, scope);
+  return {nodeSimplifier_.materialize(simplified), std::move(scope)};
+}
+
+namespace {
+
+velox::core::JoinType toVeloxJoinType(lp::JoinType type) {
+  switch (type) {
+    case lp::JoinType::kInner:
+      return velox::core::JoinType::kInner;
+    case lp::JoinType::kLeft:
+      return velox::core::JoinType::kLeft;
+    case lp::JoinType::kRight:
+      return velox::core::JoinType::kRight;
+    case lp::JoinType::kFull:
+      return velox::core::JoinType::kFull;
+  }
+  VELOX_UNREACHABLE();
+}
+
+// True when every conjunct of 'condition' that carries a subquery reads
+// columns of the right input and none of the left, which makes the right the
+// only input the subquery can be lifted onto.
+bool subqueryReadsOnlyRight(
+    const logical_plan::Expr& condition,
+    const velox::RowType& leftType,
+    const velox::RowType& rightType) {
+  std::vector<const logical_plan::Expr*> conjuncts;
+  flattenAndConjuncts(condition, conjuncts);
+
+  LpNameSet names;
+  for (const auto* conjunct : conjuncts) {
+    if (containsSubquery(*conjunct)) {
+      collectUsedNames(*conjunct, names);
+    }
+  }
+
+  bool readsRight = false;
+  for (const auto& name : names) {
+    if (leftType.containsChild(name)) {
+      return false;
+    }
+    readsRight |= rightType.containsChild(name);
+  }
+  return readsRight;
+}
+
+// True when the Apply chain 'lifted' added on top of 'beforeLift' correlates
+// to 'otherSide', whose columns it cannot read from where it now sits.
+bool correlatesToOtherSide(NodeCP lifted, NodeCP beforeLift, NodeCP otherSide) {
+  const PlanObjectSet otherSideColumns =
+      PlanObjectSet::fromObjects(otherSide->outputColumns());
+  for (NodeCP node = lifted; node != beforeLift; node = node->inputs()[0]) {
+    if (node->nodeType() != NodeType::kApply) {
+      continue;
+    }
+    for (ColumnCP column : node->as<Apply>()->correlationColumns()) {
+      if (otherSideColumns.contains(column)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+} // namespace
+
+Translated Translator::translateJoin(
+    const lp::JoinNode& join,
+    const LpNameSet& required) {
+  // Names the join condition reads need to be in both side's scopes; partition
+  // them by which side each name belongs to.
+  LpNameSet conditionNames;
+  if (join.condition() != nullptr) {
+    collectUsedNames(*join.condition(), conditionNames);
+  }
+  const auto& leftType = *join.left()->outputType();
+  const auto& rightType = *join.right()->outputType();
+  LpNameSet leftRequired;
+  LpNameSet rightRequired;
+  for (size_t i = 0; i < leftType.size(); ++i) {
+    const auto& name = leftType.nameOf(i);
+    if (required.contains(name) || conditionNames.contains(name)) {
+      leftRequired.insert(name);
+    }
+  }
+  for (size_t i = 0; i < rightType.size(); ++i) {
+    const auto& name = rightType.nameOf(i);
+    if (required.contains(name) || conditionNames.contains(name)) {
+      rightRequired.insert(name);
+    }
+  }
+  Translated left = translateNode(*join.left(), leftRequired);
+  Translated right = translateNode(*join.right(), rightRequired);
+
+  const velox::core::JoinType joinType = toVeloxJoinType(join.joinType());
+
+  // A null-extended side's expressions are computed below the join. Above it
+  // their inputs read NULL on a padded row, which is not the same as the
+  // expression itself being NULL: `ARRAY[a, b]` would read `ARRAY[NULL, NULL]`
+  // where the row should carry NULL. The join's own condition is evaluated
+  // before padding, so it is free to read the expression inline.
+  if (joinType == velox::core::JoinType::kRight ||
+      joinType == velox::core::JoinType::kFull) {
+    materializeScope(&left.node, left.scope, leftType);
+  }
+  if (joinType == velox::core::JoinType::kLeft ||
+      joinType == velox::core::JoinType::kFull) {
+    materializeScope(&right.node, right.scope, rightType);
+  }
+
+  Scope merged = left.scope;
+  for (auto& [name, expr] : right.scope) {
+    merged[name] = expr;
+  }
+
+  const bool isInner = joinType == velox::core::JoinType::kInner;
+  const bool conditionHasSubquery =
+      join.condition() != nullptr && containsSubquery(*join.condition());
+
+  // A subquery in the condition can't run inside the join operator;
+  // lift it into a Filter above the join. The lifted Filter reads
+  // condition columns from the join's output, so when lifting keep
+  // the full left+right union as `outputColumns`.
+  const bool liftConditionAbove = isInner && conditionHasSubquery;
+
+  PlanObjectSet requiredColumns;
+  if (!liftConditionAbove) {
+    auto collect = [&](const velox::RowType& type, const Scope& scope) {
+      for (size_t i = 0; i < type.size(); ++i) {
+        const auto& name = type.nameOf(i);
+        if (!required.contains(name)) {
+          continue;
+        }
+        auto it = scope.find(name);
+        VELOX_DCHECK(it != scope.end());
+        // A name binds to an expression, so the join must output what that
+        // expression reads, not the expression.
+        it->second->columns().forEach<Column>(
+            [&](ColumnCP column) { requiredColumns.add(column); });
+      }
+    };
+    collect(leftType, left.scope);
+    collect(rightType, right.scope);
+  }
+
+  ColumnVector outputColumns;
+  ColumnVector sourceColumns;
+  ColumnVector boundarySources;
+  ColumnVector boundaryOutputs;
+  const auto preserved = Join::preservedSides(joinType);
+  const bool extendsLeft = !preserved.left;
+  const bool extendsRight = !preserved.right;
+  auto appendOutput = [&](ColumnCP source, bool nullExtended) {
+    sourceColumns.push_back(source);
+    if (nullExtended) {
+      ColumnCP output = Column::createForNullExtendedValue(source);
+      outputColumns.push_back(output);
+      boundarySources.push_back(source);
+      boundaryOutputs.push_back(output);
+    } else {
+      outputColumns.push_back(source);
+    }
+  };
+  for (ColumnCP column : left.node->outputColumns()) {
+    if (liftConditionAbove || requiredColumns.contains(column)) {
+      appendOutput(column, extendsLeft);
+    }
+  }
+  for (ColumnCP column : right.node->outputColumns()) {
+    if (liftConditionAbove || requiredColumns.contains(column)) {
+      appendOutput(column, extendsRight);
+    }
+  }
+
+  if (liftConditionAbove) {
+    Translated joined = simplifyJoin(
+        {left.node,
+         right.node,
+         joinType,
+         /*leftKeys=*/ExprVector{},
+         /*rightKeys=*/ExprVector{},
+         /*filter=*/ExprVector{},
+         /*nullAware=*/false,
+         /*nullAsValue=*/false,
+         std::move(outputColumns),
+         std::move(sourceColumns)},
+        std::move(merged));
+    return maybeWrapInFilter(
+        joined.node,
+        *join.condition(),
+        std::move(joined.scope),
+        /*propagateConstants=*/true);
+  }
+
+  JoinCondition::Split split;
+  if (join.condition() != nullptr) {
+    // Lift a subquery in the condition onto one input; the condition then
+    // references the lifted result column. It goes on the side whose columns
+    // the subquery reads -- `r.name IN (...)` reads the right input, and an
+    // Apply on the left could not key on `r.name`.
+    const bool liftOntoRight = conditionHasSubquery &&
+        subqueryReadsOnlyRight(*join.condition(), leftType, rightType);
+    NodeCP& liftTarget = liftOntoRight ? right.node : left.node;
+    NodeCP otherSide = liftOntoRight ? left.node : right.node;
+
+    NodeCP beforeLift = liftTarget;
+    ExprCP condition{nullptr};
+    liftTarget = withLiftTarget(liftTarget, [&](LiftTarget& target) {
+      condition =
+          translateExpr(*join.condition(), merged, /*liftTarget=*/&target);
+    });
+    // A subquery correlated to the input it was not lifted onto references a
+    // column that input cannot provide.
+    if (correlatesToOtherSide(liftTarget, beforeLift, otherSide)) {
+      VELOX_NYI(
+          "Subquery in an outer join's ON clause referencing both inputs is "
+          "not supported");
+    }
+
+    auto conjuncts = ExprFactory::flattenAnd(condition);
+    if (isInner) {
+      propagateFilterConstants(conjuncts, merged);
+    }
+    split = JoinCondition::splitEquiKeys(
+        std::move(conjuncts),
+        PlanObjectSet::fromObjects(left.node->outputColumns()),
+        PlanObjectSet::fromObjects(right.node->outputColumns()));
+  }
+
+  rebindScope(merged, boundarySources, boundaryOutputs);
+
+  return simplifyJoin(
+      {left.node,
+       right.node,
+       joinType,
+       std::move(split.leftKeys),
+       std::move(split.rightKeys),
+       std::move(split.residual),
+       /*nullAware=*/false,
+       /*nullAsValue=*/false,
+       std::move(outputColumns),
+       std::move(sourceColumns)},
+      std::move(merged));
+}
+
+Translated Translator::simplifyJoin(Join::Key key, Scope scope) {
+  NodeCP left = key.left;
+  NodeCP right = key.right;
+  ColumnVector emptyOutputColumns = key.outputColumns;
+  auto simplified =
+      nodeSimplifier_.make(std::move(key), {left, {}}, {right, {}});
+  applySubstitutions(simplified.substitutions, scope);
+  if (simplified.empty()) {
+    simplified.node = builder_.makeEmptyValues(std::move(emptyOutputColumns));
+  }
+  return {simplified.node, std::move(scope)};
+}
+
+Translated Translator::translateLateralJoin(
+    const lp::LateralJoinNode& join,
+    const LpNameSet& /*required*/) {
+  // Keep all columns of both sides: the body may correlate on any left
+  // column, and the Apply output is input.columns ++ body.columns. Unused
+  // columns are pruned in a later pass.
+  Translated left = translateNode(*join.left());
+
+  // With the left scope pushed, the body's references to left columns are
+  // captured as the Apply's correlation.
+  Translated right;
+  ColumnVector correlationColumns;
+  left.node = withLiftTarget(left.node, [&](LiftTarget& target) {
+    subqueries_.push(left.scope, &target);
+    right = translateNode(*join.right());
+    correlationColumns = subqueries_.pop();
+  });
+
+  // CROSS / INNER JOIN LATERAL -> kInner (outers with no body row are
+  // dropped, no pad rows). LEFT JOIN LATERAL -> kLeft (NULL-padded).
+  const velox::core::JoinType kind = join.joinType() == lp::JoinType::kLeft
+      ? velox::core::JoinType::kLeft
+      : velox::core::JoinType::kInner;
+  if (kind == velox::core::JoinType::kLeft) {
+    materializeScope(&right.node, right.scope, *join.right()->outputType());
+  }
+
+  // The ON condition may read either side.
+  Scope merged = left.scope;
+  for (auto& [name, expr] : right.scope) {
+    merged[name] = expr;
+  }
+
+  ExprVector filter;
+  if (join.condition() != nullptr) {
+    if (containsSubquery(*join.condition())) {
+      VELOX_NYI("Subquery in a LATERAL join ON condition is not supported");
+    }
+    ExprCP condition =
+        translateExpr(*join.condition(), merged, /*liftTarget=*/nullptr);
+    filter = ExprFactory::flattenAnd(condition);
+  }
+
+  ColumnVector outputColumns = left.node->outputColumns();
+  ColumnVector sourceColumns = outputColumns;
+  ColumnVector boundarySources;
+  ColumnVector boundaryOutputs;
+  PlanObjectSet seen = PlanObjectSet::fromObjects(outputColumns);
+  for (ColumnCP source : right.node->outputColumns()) {
+    if (seen.contains(source)) {
+      continue;
+    }
+    seen.add(source);
+    sourceColumns.push_back(source);
+    ColumnCP output = kind == velox::core::JoinType::kLeft
+        ? Column::createForNullExtendedValue(source)
+        : source;
+    outputColumns.push_back(output);
+    if (output != source) {
+      boundarySources.push_back(source);
+      boundaryOutputs.push_back(output);
+    }
+  }
+  ColumnCP includeMarker = nullptr;
+  if (kind == velox::core::JoinType::kLeft) {
+    includeMarker = Column::createBoolean("_include");
+    outputColumns.push_back(includeMarker);
+    sourceColumns.push_back(includeMarker);
+  }
+  rebindScope(merged, boundarySources, boundaryOutputs);
+
+  const ColumnVector emptyOutputColumns = outputColumns;
+  auto simplified = nodeSimplifier_.make(
+      Apply::Key{
+          left.node,
+          right.node,
+          std::move(correlationColumns),
+          kind,
+          std::move(filter),
+          /*enforceSingleRow=*/false,
+          /*markColumn=*/nullptr,
+          /*inLhs=*/nullptr,
+          /*inBodyKey=*/nullptr,
+          includeMarker,
+          std::move(outputColumns),
+          std::move(sourceColumns),
+      },
+      {left.node, {}},
+      {right.node, {}});
+  applySubstitutions(simplified.substitutions, merged);
+  if (simplified.empty()) {
+    simplified.node = builder_.makeEmptyValues(emptyOutputColumns);
+  }
+  return {simplified.node, std::move(merged)};
+}
+
+namespace {
+
+// Returns true if 'node' provably produces exactly one row. An EnforceSingleRow
+// over such a node is a no-op: the >1-row assertion can never fire, and the
+// empty-input null row it would synthesize can never be produced. Conservative
+// — returns false when it cannot prove exactly one row.
+bool producesExactlyOneRow(NodeCP node) {
+  switch (node->nodeType()) {
+    case NodeType::kAggregate: {
+      // A global (ungrouped) aggregate emits exactly one row, even over empty
+      // input. A grouping-set aggregate keys on the group-id column, so its
+      // grouping keys are non-empty and it is excluded here.
+      const auto* aggregate = node->as<Aggregation>();
+      return aggregate->groupingKeys().empty();
+    }
+    case NodeType::kEnforceSingleRow:
+      return true;
+    case NodeType::kValues:
+      return node->as<Values>()->cardinality() == 1;
+    case NodeType::kProject:
+      return producesExactlyOneRow(node->as<Project>()->input());
+    default:
+      return false;
+  }
+}
+
+// True if 'node' or any node below it reads a column in 'columns'.
+bool readsAny(NodeCP node, const PlanObjectSet& columns) {
+  bool found = false;
+  auto walk = [&](auto& self, NodeCP current) -> void {
+    if (found) {
+      return;
+    }
+    forEachExpressionInNode(current, [&](ExprCP expr) {
+      found = found || columns.hasIntersection(expr->columns());
+    });
+    if (found) {
+      return;
+    }
+    for (NodeCP child : current->inputs()) {
+      self(self, child);
+    }
+  };
+  walk(walk, node);
+  return found;
+}
+
+// True if a body with these correlations can be lifted onto the target's
+// pending lifts: it reads them and reads nothing else from outside. An IN is
+// excluded because its 'inLhs' is read from the lift target and this does not
+// check it against the pending lifts.
+bool readsOnlyPendingLifts(
+    const LiftTarget& target,
+    const ColumnVector& correlationColumns,
+    bool isIn) {
+  // A body reading nothing from outside has no reason to join the lifts.
+  if (target.pendingLifts == nullptr || correlationColumns.empty()) {
+    return false;
+  }
+  if (isIn) {
+    return false;
+  }
+  return std::all_of(
+      correlationColumns.begin(),
+      correlationColumns.end(),
+      [&](ColumnCP column) {
+        return outputContains(target.pendingLifts, column);
+      });
+}
+
+// Checks that 'applyInput' produces the IN left-hand side of an Apply built
+// over it. 'inLhs' is translated in the scope being lifted from, so this input
+// has to supply it.
+//
+// Correlations are not checked: a body deeper than one level records them on
+// every body in flight, so an inner Apply's correlations include columns an
+// enclosing Apply supplies rather than this input.
+void checkApplyInput(NodeCP applyInput, ExprCP inLhs) {
+  if (inLhs == nullptr) {
+    return;
+  }
+  const auto inputColumns =
+      PlanObjectSet::fromObjects(applyInput->outputColumns());
+  VELOX_CHECK(
+      inputColumns.containsColumns(inLhs),
+      "Apply input does not produce the IN left-hand side: {}",
+      inLhs->toString());
+}
+
+} // namespace
+
+ColumnCP Translator::tryJoinIntoPendingLifts(
+    NodeCP body,
+    ColumnCP returnedColumn,
+    LiftTarget& target) {
+  if (!body->is(NodeType::kFilter)) {
+    return nullptr;
+  }
+
+  const Filter* filter = body->as<Filter>();
+  NodeCP child = filter->input();
+  const auto pendingLiftColumns =
+      PlanObjectSet::fromObjects(target.pendingLifts->outputColumns());
+  // The join cannot supply a pending-lift value read below its right input's
+  // filter.
+  if (readsAny(child, pendingLiftColumns)) {
+    return nullptr;
+  }
+
+  auto split = JoinCondition::splitEquiKeys(
+      filter->predicates(),
+      pendingLiftColumns,
+      PlanObjectSet::fromObjects(child->outputColumns()));
+  ColumnVector sourceColumns = target.pendingLifts->outputColumns();
+  appendUnique(sourceColumns, child->outputColumns());
+  ColumnVector outputColumns = target.pendingLifts->outputColumns();
+  outputColumns.reserve(sourceColumns.size());
+  ColumnCP boundaryResult = nullptr;
+  size_t boundaryResultIndex{0};
+  for (ColumnCP source : sourceColumns) {
+    if (pendingLiftColumns.contains(source)) {
+      continue;
+    }
+    ColumnCP output = Column::createForNullExtendedValue(source);
+    outputColumns.push_back(output);
+    if (source == returnedColumn) {
+      boundaryResult = output;
+      boundaryResultIndex = outputColumns.size() - 1;
+    }
+  }
+  VELOX_CHECK_NOT_NULL(boundaryResult);
+  // Preserve the single pending-lift row when the scalar body has no match.
+  auto simplified = nodeSimplifier_.make(
+      Join::Key{
+          target.pendingLifts,
+          child,
+          velox::core::JoinType::kLeft,
+          std::move(split.leftKeys),
+          std::move(split.rightKeys),
+          std::move(split.residual),
+          /*nullAware=*/false,
+          /*nullAsValue=*/false,
+          outputColumns,
+          std::move(sourceColumns),
+      },
+      {target.pendingLifts, {}},
+      {child, {}});
+  VELOX_CHECK(!simplified.empty());
+  nodeSimplifier_.restoreOutputLayout(
+      simplified.node, outputColumns, simplified.substitutions);
+  boundaryResult = outputColumns[boundaryResultIndex];
+  auto distinct = nodeSimplifier_.make(
+      EnforceDistinct::Key{
+          simplified.node,
+          ExprVector{builder_.makeBoolean(true)},
+          toName("Scalar sub-query has returned multiple rows"),
+      },
+      {simplified.node, {}});
+  VELOX_CHECK(!distinct.empty());
+  target.pendingLifts = distinct.node;
+  return boundaryResult;
+}
+
+ColumnVector Translator::makeOutputColumns(
+    const velox::RowType& rowType,
+    float cardinality,
+    Scope& scope) {
+  ColumnVector columns;
+  columns.reserve(rowType.size());
+  for (size_t i = 0; i < rowType.size(); ++i) {
+    Value value(toType(rowType.childAt(i)), cardinality);
+    columns.push_back(columnForSymbol(toName(rowType.nameOf(i)), value));
+  }
+  populateScope(rowType, columns, scope);
+  return columns;
+}
+
+ColumnCP Translator::columnForSymbol(Name symbol, const Value& value) {
+  return translatingDuplicate_ ? Column::create(symbol, value)
+                               : Column::createForSymbol(symbol, value);
+}
+
+NodeCP Translator::crossJoin(NodeCP left, NodeCP right) {
+  return nodeSimplifier_.materialize(innerJoin(left, right, {}, {}));
+}
+
+NodeSimplifier::SimplifiedNode Translator::innerJoin(
+    NodeCP left,
+    NodeCP right,
+    ExprVector leftKeys,
+    ExprVector rightKeys) {
+  ColumnVector output = left->outputColumns();
+  appendUnique(output, right->outputColumns());
+  return nodeSimplifier_.make(
+      Join::Key{
+          left,
+          right,
+          velox::core::JoinType::kInner,
+          std::move(leftKeys),
+          std::move(rightKeys),
+          /*filter=*/ExprVector{},
+          /*nullAware=*/false,
+          /*nullAsValue=*/false,
+          std::move(output),
+      },
+      {left, {}},
+      {right, {}});
+}
+
+void Translator::flushLifts(LiftTarget& target) {
+  if (target.pendingLifts == nullptr) {
+    return;
+  }
+  // A cross join is only equivalent to the lift because the pending lifts
+  // yield one row; more would multiply the node's rows.
+  target.node = crossJoin(target.node, target.pendingLifts);
+  target.pendingLifts = nullptr;
+}
+
+ExprCP Translator::reuseScalarSubquery(
+    const lp::LogicalPlanNode* plan,
+    const LiftTarget& liftTarget) {
+  auto it = scalarSubqueryColumns_.find(plan);
+  if (it == scalarSubqueryColumns_.end()) {
+    return nullptr;
+  }
+  // A lift this target already outputs is read as is. Taken before the
+  // correlated ones so that entry order does not decide between a plain
+  // column read and a correlation.
+  for (ExprCP lifted : it->second) {
+    if (!lifted->isColumn() || liftTarget.outputs(lifted->as<Column>())) {
+      return lifted;
+    }
+  }
+  for (ExprCP lifted : it->second) {
+    if (subqueries_.correlateLifted(lifted->as<Column>())) {
+      return lifted;
+    }
+  }
+  return nullptr;
+}
+
+ExprCP Translator::translateExpr(
+    const lp::Expr& expr,
+    const Scope& scope,
+    LiftTarget* liftTarget) {
+  switch (expr.kind()) {
+    case lp::ExprKind::kInputReference:
+      return translateInputReference(*expr.as<lp::InputReferenceExpr>(), scope);
+    case lp::ExprKind::kConstant:
+      return translateConstant(*expr.as<lp::ConstantExpr>());
+    case lp::ExprKind::kCall:
+      return translateCall(*expr.as<lp::CallExpr>(), scope, liftTarget);
+    case lp::ExprKind::kSpecialForm:
+      return translateSpecialForm(
+          *expr.as<lp::SpecialFormExpr>(), scope, liftTarget);
+    case lp::ExprKind::kLambda:
+      return translateLambda(*expr.as<lp::LambdaExpr>(), scope, liftTarget);
+    case lp::ExprKind::kSubquery: {
+      // Bare subquery in scalar position. `liftSubquery` decides the
+      // lowered shape: uncorrelated → cross-join + EnforceSingleRow
+      // (no Apply), correlated → kLeft Apply. Scalar shape is signaled
+      // by a null `inLhs` (no IN equi to build).
+      const auto& subquery = *expr.as<lp::SubqueryExpr>();
+      const auto* innerPlan = subquery.subquery().get();
+      if (liftTarget != nullptr) {
+        if (ExprCP reused = reuseScalarSubquery(innerPlan, *liftTarget)) {
+          return reused;
+        }
+      }
+      ExprCP result = liftSubquery(
+          subquery,
+          velox::core::JoinType::kLeft,
+          /*inLhs=*/nullptr,
+          scope,
+          liftTarget);
+      if (liftTarget != nullptr) {
+        scalarSubqueryColumns_[innerPlan].push_back(result);
+      }
+      return result;
+    }
+    default:
+      VELOX_NYI(
+          "Unsupported expression kind: {}", static_cast<int>(expr.kind()));
+  }
+}
+
+ExprCP Translator::translateInputReference(
+    const lp::InputReferenceExpr& expr,
+    const Scope& scope) {
+  const auto& name = expr.name();
+  auto it = scope.find(name);
+  if (it != scope.end()) {
+    return it->second;
+  }
+  if (ExprCP outer = subqueries_.correlateOuter(name)) {
+    return outer;
+  }
+  VELOX_FAIL("Column not found in scope or outer scopes: {}", name);
+}
+
+ExprCP Translator::translateConstant(const lp::ConstantExpr& expr) {
+  auto* variant = queryCtx()->registerVariant(
+      std::make_unique<velox::Variant>(*expr.value()));
+  Value value(toType(expr.type()), 1);
+  return builder_.makeLiteral(value, variant);
+}
+
+ExprCP Translator::translateCall(
+    const lp::CallExpr& expr,
+    const Scope& scope,
+    LiftTarget* liftTarget) {
+  ExprVector args = translateAll(expr.inputs(), scope, liftTarget);
+  Value value =
+      clampCardinality(Value{toType(expr.type()), maxCardinality(args)});
+  Name name = toName(expr.name());
+  FunctionSet ownFunctions = functionBits(name, /*specialForm=*/false);
+  FunctionSet funcs = Call::unionArgFunctions(ownFunctions, args);
+  auto* call = builder_.makeCall(name, value, std::move(args), funcs);
+  if (ownFunctions.contains(FunctionSet::kInference)) {
+    return liftInferenceCall(call, liftTarget);
+  }
+  return simplifier_.simplify(call);
+}
+
+ExprCP Translator::liftInferenceCall(const Call* call, LiftTarget* liftTarget) {
+  VELOX_USER_CHECK_EQ(
+      lambdaDepth_,
+      0,
+      "Inference function is not supported inside a lambda: {}",
+      call->name());
+  VELOX_USER_CHECK_NOT_NULL(
+      liftTarget,
+      "Inference function is not supported in this position: {}",
+      call->name());
+
+  auto it = inferenceColumns_.find(call);
+  if (it != inferenceColumns_.end() && liftTarget->outputs(it->second)) {
+    return it->second;
+  }
+
+  // A pending lift may supply an argument, so it has to be attached before
+  // the node that reads it.
+  flushLifts(*liftTarget);
+
+  // Velox reads the call's arguments as columns of the node's input, so they
+  // are computed below it.
+  PrecomputeProjections precompute{liftTarget->node, builder_, simplifier_};
+  ExprVector args;
+  args.reserve(call->args().size());
+  for (ExprCP arg : call->args()) {
+    args.push_back(
+        precompute.toColumn(arg, /*alias=*/nullptr, /*allowConstant=*/true));
+  }
+  ExprCP lifted = exprFactory_.rebuildCall(call, args);
+  liftTarget->node = std::move(precompute).node();
+
+  auto* result = make<Column>(
+      queryCtx()->newName(call->name()),
+      /*relation=*/nullptr,
+      lifted->value(),
+      /*alias=*/nullptr);
+
+  ColumnVector outputColumns = liftTarget->node->outputColumns();
+  outputColumns.push_back(result);
+  auto inference = nodeSimplifier_.make(
+      Inference::Key{
+          liftTarget->node, lifted, result, std::move(outputColumns)},
+      {liftTarget->node, {}});
+  liftTarget->node = nodeSimplifier_.materialize(inference);
+
+  inferenceColumns_[call] = result;
+  return result;
+}
+
+namespace {
+
+// True if 'expr' is `lp::SpecialFormExpr(kIn, [value, SubqueryExpr])` —
+// i.e., the IN-subquery form that lifts to Apply, distinguished from
+// `IN (literal_list)` which lowers as an ordinary in-list expression.
+bool isInSubqueryForm(const lp::Expr& expr) {
+  if (!expr.isSpecialForm()) {
+    return false;
+  }
+  const auto& sf = *expr.as<lp::SpecialFormExpr>();
+  return sf.form() == lp::SpecialForm::kIn && sf.inputs().size() == 2 &&
+      sf.inputAt(1)->isSubquery();
+}
+
+} // namespace
+
+namespace {
+
+// True if 'expr' calls a remote inference function anywhere.
+bool hasInferenceCall(const lp::ExprPtr& expr) {
+  if (expr->isCall() &&
+      isInferenceFunction(toName(expr->as<lp::CallExpr>()->name()))) {
+    return true;
+  }
+  return std::ranges::any_of(expr->inputs(), hasInferenceCall);
+}
+
+// Index of the first input 'form' does not evaluate for every row with its
+// errors surfacing: a branch it may skip, or a body whose errors it swallows.
+// Inputs before it are evaluated like any other expression.
+size_t firstGuardedInput(lp::SpecialForm form) {
+  switch (form) {
+    // The condition, and COALESCE's first alternative, always evaluate.
+    case lp::SpecialForm::kCoalesce:
+    case lp::SpecialForm::kIf:
+    case lp::SpecialForm::kSwitch:
+      return 1;
+    case lp::SpecialForm::kTry:
+      return 0;
+    default:
+      return std::numeric_limits<size_t>::max();
+  }
+}
+
+} // namespace
+
+ExprCP Translator::translateSpecialForm(
+    const lp::SpecialFormExpr& expr,
+    const Scope& scope,
+    LiftTarget* liftTarget) {
+  // An inference call becomes a node that runs for every row of its input and
+  // fails the query if it errors, so it cannot sit under a guarded input.
+  for (size_t i = firstGuardedInput(expr.form()); i < expr.inputs().size();
+       ++i) {
+    VELOX_USER_CHECK(
+        !hasInferenceCall(expr.inputAt(i)),
+        "Inference function is not supported under {}: {}",
+        lp::SpecialFormName::toName(expr.form()),
+        expr.inputAt(i)->toString());
+  }
+
+  if (expr.form() == lp::SpecialForm::kExists) {
+    return translateExists(expr, scope, liftTarget);
+  }
+
+  // IN (subquery): translate the lhs, then lift
+  // `Apply(kLeftSemiProject)` passing the lhs — `liftSubquery` records
+  // the lhs and the body's single output column as `Apply.inLhs` /
+  // `Apply.inBodyKey`. `Apply.nullAware()` returns true from
+  // their presence. Plain `IN (literals...)` flows through the
+  // generic path below.
+  if (isInSubqueryForm(expr)) {
+    ExprCP lhs = translateExpr(*expr.inputAt(0), scope, liftTarget);
+    const auto& subquery = *expr.inputAt(1)->as<lp::SubqueryExpr>();
+    return liftSubquery(
+        subquery,
+        velox::core::JoinType::kLeftSemiProject,
+        /*inLhs=*/lhs,
+        scope,
+        liftTarget);
+  }
+
+  // NOT EXISTS / NOT IN come through as `lp::Call("not", [kExists|kIn])`,
+  // not as a `SpecialForm::kNot`. The Call recursion handles the wrap:
+  // translateCall translates the EXISTS/IN arg (which lifts Apply and
+  // returns its mark), then builds `Call("not", [mark])`. The Apply
+  // shape is identical for IN vs NOT IN — null-aware semi-project both
+  // ways; the surrounding NOT inverts the mark.
+
+  ExprVector args = translateAll(expr.inputs(), scope, liftTarget);
+  Value value =
+      clampCardinality(Value{toType(expr.type()), maxCardinality(args)});
+
+  // Drop a redundant cast: CAST(x AS t) => x when typeof(x) == t. TRY_CAST too,
+  // since a same-type cast never errors. Pointer equality on interned types is
+  // exact, so a row-renaming cast (distinct interned type) is kept.
+  if (expr.form() == lp::SpecialForm::kCast ||
+      expr.form() == lp::SpecialForm::kTryCast) {
+    VELOX_CHECK_EQ(args.size(), 1);
+    if (args[0]->value().type == value.type) {
+      return args[0];
+    }
+  }
+
+  if (expr.form() == lp::SpecialForm::kInArray) {
+    VELOX_CHECK_EQ(args.size(), 2);
+    return makeConstantIn(args[0], args[1]->as<Literal>()->literal().array());
+  }
+
+  if (expr.form() == lp::SpecialForm::kIn) {
+    if (ExprCP folded = normalizeInList(args)) {
+      return folded;
+    }
+  }
+
+  // `SpecialFormCallNames::toCallName` returns a static literal that is
+  // pointer-compared in `tryFromCallName`. Do not re-intern via `toName`,
+  // which would allocate a fresh arena copy and break the comparison.
+  Name callName = SpecialFormCallNames::toCallName(expr.form());
+
+  if (expr.form() == lp::SpecialForm::kDereference) {
+    return translateDereference(std::move(args), callName, value);
+  }
+
+  FunctionSet funcs = Call::unionArgFunctions(
+      functionBits(callName, /*specialForm=*/true), args);
+  auto* call = builder_.makeCall(callName, value, std::move(args), funcs);
+  return simplifier_.simplify(call);
+}
+
+ExprCP Translator::translateExists(
+    const lp::SpecialFormExpr& expr,
+    const Scope& scope,
+    LiftTarget* liftTarget) {
+  VELOX_CHECK_EQ(expr.inputs().size(), 1);
+  const auto& subquery = *expr.inputs()[0]->as<lp::SubqueryExpr>();
+
+  // Fast path — EXISTS over a scalar (non-grouping) Aggregate with no
+  // HAVING above it is provably TRUE per SQL: scalar aggregates always
+  // emit exactly one row, so EXISTS sees that one row regardless of
+  // input cardinality. Fold to a constant before constructing Apply,
+  // matching Presto / modern DuckDB on shapes like
+  // `EXISTS (SELECT count(*) FROM t WHERE p)`. HAVING is the only
+  // operator that can make EXISTS-over-scalar-Agg evaluate to FALSE;
+  // when present (Filter above Aggregate), the root is a FilterNode
+  // and this fast path doesn't fire — Decorrelate's Rule B-EXISTS
+  // Path 1 handles it correctly.
+  //
+  // Walk past output-shaping Project chains (parser typically wraps
+  // `SELECT count(*) FROM ...` as `Project(Aggregate(...))`).
+  const lp::LogicalPlanNode* root = subquery.subquery().get();
+  while (root != nullptr && root->kind() == lp::NodeKind::kProject) {
+    root = root->onlyInput().get();
+  }
+  if (root != nullptr && root->kind() == lp::NodeKind::kAggregate) {
+    const auto* aggNode = root->as<lp::AggregateNode>();
+    if (aggNode->groupingKeys().empty() && aggNode->groupingSets().empty()) {
+      return builder_.makeLiteral(
+          velox::Variant(true), toType(velox::BOOLEAN()));
+    }
+  }
+  return liftSubquery(
+      subquery,
+      velox::core::JoinType::kLeftSemiProject,
+      /*inLhs=*/nullptr,
+      scope,
+      liftTarget);
+}
+
+namespace {
+
+// Returns the field of a one-field row constructor, or nullptr for any other
+// expression.
+ExprCP singleRowConstructorField(ExprCP expr) {
+  if (!expr->is(PlanType::kCallExpr)) {
+    return nullptr;
+  }
+  const auto* call = expr->as<Call>();
+  if (call->args().size() != 1 || !call->isRowConstructor()) {
+    return nullptr;
+  }
+  return call->args()[0];
+}
+
+// Returns the field of a one-field row value. A NULL row has a NULL field.
+velox::Variant singleFieldValue(
+    const velox::Variant& row,
+    velox::TypeKind fieldKind) {
+  return row.isNull() ? velox::Variant::null(fieldKind) : row.row()[0];
+}
+
+} // namespace
+
+ExprCP Translator::normalizeInList(ExprVector& args) {
+  VELOX_CHECK_GE(args.size(), 2);
+  if (std::all_of(args.begin() + 1, args.end(), [](ExprCP arg) {
+        return arg->is(PlanType::kLiteralExpr);
+      })) {
+    std::vector<velox::Variant> values;
+    values.reserve(args.size() - 1);
+    for (size_t i = 1; i < args.size(); ++i) {
+      values.push_back(args[i]->as<Literal>()->literal());
+    }
+    return makeConstantIn(args[0], std::move(values));
+  }
+
+  if (auto scalarArgs = unwrapSingleFieldRowIn(args)) {
+    args = std::move(*scalarArgs);
+    return normalizeInList(args);
+  }
+
+  // A single element has equality's semantics.
+  if (args.size() == 2) {
+    return simplifier_.simplify(exprFactory_.makeEq(args[0], args[1]));
+  }
+  return nullptr;
+}
+
+ExprCP Translator::makeConstantIn(
+    ExprCP value,
+    std::vector<velox::Variant> values) {
+  if (ExprCP field = singleRowConstructorField(value)) {
+    value = field;
+    const auto fieldKind = value->value().type->kind();
+    for (auto& element : values) {
+      element = singleFieldValue(element, fieldKind);
+    }
+  }
+  return simplifier_.simplify(exprFactory_.makeIn(value, std::move(values)));
+}
+
+std::optional<ExprVector> Translator::unwrapSingleFieldRowIn(
+    const ExprVector& args) {
+  ExprCP field = singleRowConstructorField(args[0]);
+  if (field == nullptr) {
+    return std::nullopt;
+  }
+
+  const TypeCP fieldType = field->value().type;
+  ExprVector scalarArgs{field};
+  scalarArgs.reserve(args.size());
+  for (size_t i = 1; i < args.size(); ++i) {
+    if (args[i]->is(PlanType::kLiteralExpr)) {
+      scalarArgs.push_back(builder_.makeLiteral(
+          singleFieldValue(
+              args[i]->as<Literal>()->literal(), fieldType->kind()),
+          fieldType));
+      continue;
+    }
+
+    ExprCP candidate = singleRowConstructorField(args[i]);
+    if (candidate == nullptr) {
+      return std::nullopt;
+    }
+    scalarArgs.push_back(candidate);
+  }
+  return scalarArgs;
+}
+
+ExprCP Translator::translateDereference(
+    ExprVector args,
+    Name callName,
+    const Value& value) {
+  // Resolve a varchar field name to a numeric field index against the input row
+  // type, so emit only ever sees an integer selector.
+  VELOX_CHECK_EQ(args.size(), 2);
+  VELOX_CHECK(args[1]->is(PlanType::kLiteralExpr));
+  const auto* selector = args[1]->as<Literal>();
+  const auto* baseType = args[0]->value().type;
+  VELOX_CHECK(baseType->isRow());
+  int32_t index;
+  if (selector->literal().kind() == velox::TypeKind::VARCHAR) {
+    const auto& name = selector->literal().value<velox::TypeKind::VARCHAR>();
+    index = baseType->asRow().getChildIdx(name);
+  } else {
+    const int64_t raw = integerValue(&selector->literal());
+    VELOX_CHECK_GE(raw, 0);
+    VELOX_CHECK_LT(raw, baseType->size());
+    index = static_cast<int32_t>(raw);
+  }
+  auto* indexLiteral =
+      builder_.makeLiteral(velox::Variant(index), toType(velox::INTEGER()));
+  ExprVector resolved{args[0], indexLiteral};
+  FunctionSet funcs = Call::unionArgFunctions(
+      functionBits(callName, /*specialForm=*/true), resolved);
+  auto* call = builder_.makeCall(callName, value, std::move(resolved), funcs);
+  return simplifier_.simplify(call);
+}
+
+ExprCP Translator::translateLambda(
+    const lp::LambdaExpr& expr,
+    const Scope& scope,
+    LiftTarget* liftTarget) {
+  const auto& signature = expr.signature();
+
+  // TODO: mint canonical `Column*` per `(arg position, arg type)` so
+  // structurally-equal lambdas share one `Lambda*` (and their bodies share
+  // one `Call*` via Call hash-cons). Today each occurrence mints fresh arg
+  // Columns, defeating pointer-keyed dedup.
+  Scope bodyScope = scope;
+  ColumnVector args;
+  args.reserve(signature->size());
+  for (size_t i = 0; i < signature->size(); ++i) {
+    Name argName = toName(signature->nameOf(i));
+    Value argValue(toType(signature->childAt(i)), 1);
+    auto* column = Column::create(argName, argValue);
+    args.push_back(column);
+    bodyScope[signature->nameOf(i)] = column;
+  }
+
+  ++lambdaDepth_;
+  SCOPE_EXIT {
+    --lambdaDepth_;
+  };
+
+  // A subquery in the body lifts onto the same target as the higher-order
+  // call itself: it is evaluated once per row, and the body reads the result
+  // as a capture. The arguments are not in scope inside such a subquery, so
+  // it cannot correlate to a value that varies per element.
+  ExprCP body = translateExpr(*expr.body(), bodyScope, liftTarget);
+  return make<Lambda>(std::move(args), toType(expr.type()), body);
+}
+
+ExprCP Translator::liftSubquery(
+    const lp::SubqueryExpr& subqueryExpr,
+    velox::core::JoinType kind,
+    ExprCP inLhs,
+    const Scope& outerScope,
+    LiftTarget* liftTarget) {
+  VELOX_USER_CHECK_NOT_NULL(
+      liftTarget,
+      "Subquery encountered in an expression position with no relational "
+      "input above which to lift Apply");
+
+  const bool isSemi = kind == velox::core::JoinType::kLeftSemiProject;
+  // IN is the semi shape that has a non-null `inLhs`. EXISTS is semi
+  // without one. Scalar is non-semi (kInner or kLeft).
+  const bool isIn = isSemi && inLhs != nullptr;
+  const bool isExists = isSemi && !isIn;
+  // EXISTS reads only row presence — empty required-set lets the body
+  // prune all output columns. IN and scalar both need every body
+  // output column kept (IN reads it for the equi predicate; scalar
+  // reads it as the value).
+  const LpNameSet required =
+      isExists ? LpNameSet{} : allNames(*subqueryExpr.subquery()->outputType());
+
+  // A subquery's plan is never shared between references: each reference
+  // translates it again.
+  auto planGuard = translatingPlan(*subqueryExpr.subquery());
+
+  subqueries_.push(outerScope, liftTarget);
+  // Reading a lift from an enclosing scope is an outer reference, which
+  // correlates a body the query left uncorrelated. The body lifts its own
+  // copy instead.
+  Translated inner = [&] {
+    subqueries_.pushLiftedCorrelationBarrier();
+    SCOPE_EXIT {
+      subqueries_.popLiftedCorrelationBarrier();
+    };
+    return translateNode(*subqueryExpr.subquery(), required);
+  }();
+  ColumnVector correlationColumns = subqueries_.pop();
+
+  NodeCP body = inner.node;
+  if (!isExists) {
+    // The body's own output columns are its result, so they must be exactly
+    // what the subquery projects.
+    narrowToNames(
+        &body, inner.scope, subqueryExpr.subquery()->outputType()->names());
+  }
+  ColumnCP markColumn = nullptr;
+  ColumnCP returnedColumn = nullptr;
+  bool enforceSingleRow = false;
+
+  if (isSemi) {
+    // EXISTS / IN: synthesize a fresh BOOLEAN mark. Apply emits it via
+    // `markColumn`; the parent expression site references it.
+    // `enforceSingleRow` is meaningless for semi (cardinality assertion
+    // doesn't apply); kept false.
+    markColumn = Column::createBoolean("mark");
+    returnedColumn = markColumn;
+  } else {
+    // Scalar: body must produce exactly one column. The single body
+    // output col IS the value the parent expression references.
+    const auto& bodyOut = body->outputColumns();
+    VELOX_USER_CHECK_EQ(
+        bodyOut.size(), 1, "Scalar subquery must produce exactly one column");
+    returnedColumn = bodyOut[0];
+
+    // A scalar subquery over a constant body is that constant; translating the
+    // body already reduced a foldable aggregation (e.g. `max(ds)` over
+    // partition metadata) to a one-row Values. The constant then flows into the
+    // outer predicate, where pushdown can prune the outer scan.
+    if (correlationColumns.empty()) {
+      if (ExprCP folded = tryScalarFromValues(body)) {
+        return folded;
+      }
+    }
+
+    if (correlationColumns.empty()) {
+      // Uncorrelated scalar: cross-join with the body, which must yield a
+      // single row. Wrap it in EnforceSingleRow unless it already provably
+      // produces exactly one row, in which case the guard is a no-op.
+      NodeCP wrapped = body;
+      if (!producesExactlyOneRow(body)) {
+        const ColumnVector sourceColumns{returnedColumn};
+        returnedColumn = Column::createForNullExtendedValue(returnedColumn);
+        auto singleRow = nodeSimplifier_.make(
+            EnforceSingleRow::Key{body, ColumnVector{returnedColumn}},
+            {body, {}, sourceColumns});
+        VELOX_CHECK(!singleRow.empty());
+        wrapped = singleRow.node;
+      }
+
+      liftTarget->pendingLifts = liftTarget->pendingLifts == nullptr
+          ? wrapped
+          : crossJoin(liftTarget->pendingLifts, wrapped);
+      return returnedColumn;
+    }
+
+    // Correlated scalar: kLeft Apply with enforceSingleRow=true.
+    enforceSingleRow = true;
+  }
+
+  // For IN: capture the equi pair `(lhs, body.col)` directly. Apply
+  // stores it as `inLhs` / `inBodyKey`; downstream consumers either
+  // read the pair (decorrelate's semi-recovery extracts the equi-key
+  // pair directly) or reconstruct an `eq` Call (uncorrelated IN
+  // collapse uses it as the resulting Join's filter).
+  ExprCP inBodyKey = nullptr;
+  if (isIn) {
+    const auto& bodyOut = body->outputColumns();
+    VELOX_USER_CHECK_EQ(
+        bodyOut.size(), 1, "IN subquery body must produce exactly one column");
+    inBodyKey = bodyOut[0];
+  }
+
+  const bool ontoPendingLifts =
+      readsOnlyPendingLifts(*liftTarget, correlationColumns, isIn);
+  if (ontoPendingLifts && enforceSingleRow) {
+    if (ColumnCP boundaryResult =
+            tryJoinIntoPendingLifts(body, returnedColumn, *liftTarget)) {
+      return boundaryResult;
+    }
+  }
+  if (!ontoPendingLifts) {
+    flushLifts(*liftTarget);
+  }
+
+  // The Apply replaces whichever of the two it is built over.
+  NodeCP& applyInput =
+      ontoPendingLifts ? liftTarget->pendingLifts : liftTarget->node;
+  checkApplyInput(applyInput, inLhs);
+
+  // Apply.outputColumns per kind:
+  //   kLeft            : input.outputColumns
+  //                      ++ unique(body.outputColumns) ++ includeMarker
+  //   kLeftSemiProject : input.outputColumns ++ markColumn
+  ColumnVector outputColumns = applyInput->outputColumns();
+  ColumnVector sourceColumns = outputColumns;
+  if (isSemi) {
+    outputColumns.push_back(markColumn);
+    sourceColumns.push_back(markColumn);
+  } else {
+    PlanObjectSet seen = PlanObjectSet::fromObjects(outputColumns);
+    for (ColumnCP source : body->outputColumns()) {
+      if (seen.contains(source)) {
+        continue;
+      }
+      seen.add(source);
+      sourceColumns.push_back(source);
+      ColumnCP output = Column::createForNullExtendedValue(source);
+      outputColumns.push_back(output);
+      if (source == returnedColumn) {
+        returnedColumn = output;
+      }
+    }
+  }
+
+  ColumnCP includeMarker = nullptr;
+  if (kind == velox::core::JoinType::kLeft) {
+    includeMarker = Column::createBoolean("_include");
+    outputColumns.push_back(includeMarker);
+    sourceColumns.push_back(includeMarker);
+  }
+
+  auto simplified = nodeSimplifier_.make(
+      Apply::Key{
+          applyInput,
+          body,
+          std::move(correlationColumns),
+          kind,
+          /*filter=*/ExprVector{},
+          enforceSingleRow,
+          markColumn,
+          inLhs,
+          inBodyKey,
+          includeMarker,
+          std::move(outputColumns),
+          std::move(sourceColumns),
+      },
+      {applyInput, {}},
+      {body, {}});
+  applyInput = nodeSimplifier_.materialize(simplified);
+  return simplified.substitutions.apply(returnedColumn, exprFactory_);
+}
+
+ExprCP Translator::tryScalarFromValues(NodeCP body) {
+  VELOX_CHECK_EQ(body->outputColumns().size(), 1);
+  const TypeCP type = body->outputColumns()[0]->value().type;
+
+  // A Project that computes a constant over a one-row body is that constant,
+  // whatever the body reads.
+  if (body->is(NodeType::kProject)) {
+    const auto* project = body->as<Project>();
+    const NodeCP input = project->input();
+    if (!input->is(NodeType::kValues)) {
+      return nullptr;
+    }
+
+    const size_t numRows = input->as<Values>()->cardinality();
+    if (numRows == 0) {
+      return builder_.makeNull(type);
+    }
+
+    VELOX_USER_CHECK_EQ(
+        numRows, 1, "Scalar subquery produced more than one row");
+
+    const ExprCP expr = project->exprs()[0];
+    if (expr->is(PlanType::kLiteralExpr)) {
+      return expr;
+    }
+    return nullptr;
+  }
+
+  if (!body->is(NodeType::kValues)) {
+    return nullptr;
+  }
+
+  const auto* values = body->as<Values>();
+  const size_t numRows = values->cardinality();
+  if (numRows == 0) {
+    // A scalar subquery over no rows is SQL NULL.
+    return builder_.makeNull(type);
+  }
+
+  VELOX_USER_CHECK_EQ(numRows, 1, "Scalar subquery produced more than one row");
+
+  // TODO: Read the value from a pass-through `lp::ValuesNode` too; only
+  // translate-time folded rows are handled here.
+  if (values->rows() == nullptr) {
+    return nullptr;
+  }
+
+  const auto& row = values->rows()->array()[0].row();
+  return builder_.makeLiteral(velox::Variant(row[values->channels()[0]]), type);
+}
+
+std::optional<std::vector<velox::Variant>>
+Translator::tryEvaluateOverDiscreteValues(const Aggregation* aggregate) {
+  // A correlated body reads columns of an enclosing scope, which the listing
+  // does not produce.
+  if (subqueries_.hasCorrelations()) {
+    return std::nullopt;
+  }
+
+  // The fold aggregates a per-partition value list, so each aggregate must
+  // ignore duplicate inputs (e.g. max/min) or be over distinct inputs.
+  // Grouping itself also ignores duplicate input rows.
+  for (const optimizer::Aggregate* call : aggregate->aggregates()) {
+    if (!call->functions().contains(FunctionSet::kIgnoreDuplicatesAggregate) &&
+        !call->isDistinct()) {
+      return std::nullopt;
+    }
+  }
+
+  NodeCP input = aggregate->input();
+  const Filter* filter = nullptr;
+  if (input->is(NodeType::kFilter)) {
+    filter = input->as<Filter>();
+    input = filter->input();
+  }
+  if (!input->is(NodeType::kScan)) {
+    return std::nullopt;
+  }
+  const auto* scan = input->as<Scan>();
+  if (scan->outputColumns().empty()) {
+    return std::nullopt;
+  }
+
+  // The fold works only when every scanned column is a discrete-predicate
+  // column; then the subquery's filters reference only those and can narrow the
+  // listing.
+  auto discreteLayout =
+      findDiscreteLayout(scan->outputColumns(), *scan->baseTable());
+  if (discreteLayout.layout == nullptr) {
+    return std::nullopt;
+  }
+
+  // Offer the filters to the connector so it narrows the listing. Which of
+  // them it takes does not matter: the Filter over the listed values re-applies
+  // all of them, so 'rejected' is not read.
+  const ExprVector& filters =
+      filter != nullptr ? filter->predicates() : ExprVector{};
+  ExprVector rejected;
+  // This handle only asks the connector for its discrete values; nothing reads
+  // through it, so it requests no subfields.
+  TableAccessHandle handle = TableAccessHandle::buildScan(
+      *scan->baseTable(),
+      scan->outputColumns(),
+      filters,
+      [](ColumnCP) { return std::vector<velox::common::Subfield>{}; },
+      session_,
+      evaluator_,
+      rejected);
+
+  auto connectorSession =
+      session_.context()->sessionFor(discreteLayout.layout->connectorId());
+  const auto listingStart = std::chrono::steady_clock::now();
+  auto discretePredicates = discreteLayout.layout->discretePredicates(
+      connectorSession, discreteLayout.connectorColumns, handle.tableHandle);
+  session_.statsWriter().addTiming(
+      OptimizerMetrics::kDiscretePredicatesWallNanos,
+      std::chrono::steady_clock::now() - listingStart);
+  if (discretePredicates == nullptr) {
+    return std::nullopt;
+  }
+
+  // Build a small plan that aggregates the listed partition values:
+  // Values(tuples) -> [Filter] -> Aggregate, reusing the subquery's own Filter
+  // and Aggregate specs. The Filter re-applies every conjunct; one the listing
+  // already reflects removes nothing the second time.
+  auto values = toValues(*discretePredicates);
+  const Values* valuesNode =
+      builder_.makeValues(std::move(values), scan->outputColumns());
+
+  auto foldInput = nodeSimplifier_.make(
+      Values::Key{
+          valuesNode->source(),
+          valuesNode->rows(),
+          valuesNode->outputColumns(),
+          valuesNode->channels(),
+      });
+  if (filter != nullptr) {
+    foldInput = nodeSimplifier_.make(
+        Filter::Key{valuesNode, filter->predicates()}, std::move(foldInput));
+  }
+  NodeCP foldInputNode = foldInput.node;
+  auto foldAggregate = nodeSimplifier_.make(
+      Aggregation::Key{
+          .input = foldInputNode,
+          .groupingKeys = aggregate->groupingKeys(),
+          .aggregates = aggregate->aggregates(),
+          .outputColumns = aggregate->outputColumns(),
+          .step = aggregate->step(),
+          .groupId = aggregate->groupId(),
+          .globalGroupingSets = aggregate->globalGroupingSets(),
+      },
+      std::move(foldInput));
+  const ColumnVector outputColumns = aggregate->outputColumns();
+  NodeCP foldPlan = foldAggregate.empty()
+      ? builder_.makeEmptyValues(outputColumns)
+      : foldAggregate.substitutions.restore(
+            foldAggregate.node,
+            outputColumns,
+            exprFactory_,
+            builder_,
+            simplifier_);
+  std::vector<std::string> outputNames;
+  outputNames.reserve(outputColumns.size());
+  for (ColumnCP column : outputColumns) {
+    outputNames.emplace_back(column->name());
+  }
+
+  // Lower the mini-plan through the shared physical-planning and emit passes,
+  // then run it. It has a Values source and no Scan, so single-node options
+  // suffice.
+  EmitPass::Result emitted = physicalPlanAndEmit(
+      foldPlan,
+      outputColumns,
+      outputNames,
+      builder_,
+      session_,
+      evaluator_,
+      MultiFragmentPlan::Options::singleNode());
+  VELOX_CHECK_EQ(
+      emitted.fragments.size(), 1, "Constant fold must produce one fragment");
+
+  auto rows = constantPlanRunner_.run(emitted.fragments.front().fragment);
+  if (aggregate->groupingKeys().empty()) {
+    VELOX_CHECK_EQ(rows.size(), 1, "Global aggregation must produce one row");
+  }
+  return rows;
+}
+
+} // namespace facebook::axiom::optimizer

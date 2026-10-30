@@ -2,7 +2,7 @@
 
 ## The gap this addresses
 
-Today's `v2/DecorrelatePass.cpp` pulls correlation **predicates** out (via
+Today's `DecorrelatePass.cpp` pulls correlation **predicates** out (via
 `PushDown.runFilter`) and builds a recovery skeleton for **Aggregate**
 body shapes. It does NOT resolve outer-column references that appear in
 body **expressions** outside of those two contexts:

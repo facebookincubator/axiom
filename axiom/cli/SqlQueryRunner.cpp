@@ -50,6 +50,8 @@
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/optimizer/ConstantExprEvaluator.h"
 #include "axiom/optimizer/MultiFragmentPlanPrinter.h"
+#include "axiom/optimizer/NodePrinter.h"
+#include "axiom/optimizer/Optimize.h"
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/v1/DerivedTable.h"
 #include "axiom/optimizer/v1/DerivedTablePrinter.h"
@@ -59,8 +61,6 @@
 #include "axiom/optimizer/v1/RelationOp.h"
 #include "axiom/optimizer/v1/RelationOpPrinter.h"
 #include "axiom/optimizer/v1/VeloxHistory.h"
-#include "axiom/optimizer/v2/NodePrinter.h"
-#include "axiom/optimizer/v2/Optimize.h"
 #include "axiom/runner/ProgressReporter.h"
 #include "axiom/sql/presto/PrestoParser.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
@@ -1429,7 +1429,7 @@ auto SqlQueryRunner::withOptimizerV2(
   velox::exec::SimpleExpressionEvaluator evaluator(
       queryCtx.get(), optimizerPool_.get());
 
-  optimizer::v2::Optimizer optimizer(
+  optimizer::Optimizer optimizer(
       logicalPlan, *resolver, *session, evaluator, queryCtx);
   return operation(optimizer);
 }
@@ -1483,7 +1483,7 @@ std::string SqlQueryRunner::runExplainIo(
 namespace {
 // Reads the pass named by the `last_pass` EXPLAIN setting, or nullopt when
 // there is none. Pass names are matched ignoring case.
-std::optional<optimizer::v2::Optimizer::Pass> explainLastPass(
+std::optional<optimizer::Optimizer::Pass> explainLastPass(
     const presto::ExplainStatement::Settings& settings) {
   static constexpr std::string_view kLastPass = "last_pass";
 
@@ -1505,13 +1505,13 @@ std::optional<optimizer::v2::Optimizer::Pass> explainLastPass(
     return std::toupper(ch);
   });
 
-  const auto pass = optimizer::v2::Optimizer::tryToPass(name);
+  const auto pass = optimizer::Optimizer::tryToPass(name);
   VELOX_USER_CHECK(
       pass.has_value(),
       "Invalid {} value: {}. Expected one of (case insensitive): {}",
       kLastPass,
       it->second,
-      optimizer::v2::Optimizer::allPassNames());
+      optimizer::Optimizer::allPassNames());
   return pass;
 }
 
@@ -1664,7 +1664,7 @@ std::string SqlQueryRunner::runExplain(
             explain,
             [&](auto& optimizer) {
               const auto plan = optimizer.debugPlanTo(opts, lastPass);
-              return optimizer::v2::NodePrinter::toText(
+              return optimizer::NodePrinter::toText(
                   plan.root, {.estimates = plan.estimates});
             });
       }
@@ -2047,7 +2047,7 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
     VELOX_USER_CHECK(
         checkDerivedTable == nullptr && checkBestPlan == nullptr,
         "DerivedTable / RelationOp inspection hooks are not supported by the v2 optimizer");
-    return optimizer::v2::Optimizer(
+    return optimizer::Optimizer(
                *logicalPlan,
                *schemaResolver,
                *optimizerSession,

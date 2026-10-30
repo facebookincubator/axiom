@@ -40,7 +40,7 @@ target_link_libraries(
   axiom_optimizer_v1
   velox_functions_axiom
   axiom_functions_prestosql
-  axiom_optimizer_v2
+  axiom_optimizer
   axiom_sql_presto_parser
   axiom_test_connector
   velox_tpch_gen
@@ -90,7 +90,7 @@ target_link_libraries(
 add_subdirectory(utils)
 
 if(AXIOM_BUILD_TESTING)
-  add_executable(axiom_optimizer_tpch_plan_test TpchResultTest.cpp)
+  add_executable(axiom_optimizer_tpch_plan_test TpchPlanTest.cpp TpchResultTest.cpp)
 
   add_test(
     NAME axiom_optimizer_tpch_plan_test
@@ -165,6 +165,14 @@ if(AXIOM_BUILD_TESTING)
     ValuesTest.cpp
     WindowTest.cpp
     WriteTest.cpp
+    AlgebraicPropertiesTest.cpp
+    EstimateProviderTest.cpp
+    FilterSimplificationTest.cpp
+    JoinHypergraphTest.cpp
+    NodePrinterTest.cpp
+    RelationSetTest.cpp
+    RelationalPropertiesTest.cpp
+    VeloxExprImporterTest.cpp
   )
 
   add_test(
@@ -176,6 +184,7 @@ if(AXIOM_BUILD_TESTING)
   target_link_libraries(
     axiom_optimizer_tests
     axiom_optimizer_test_utils
+    axiom_optimizer
     axiom_optimizer_core
     axiom_logical_plan_builder
     axiom_optimizer_tests_hive_queries_test_base
@@ -220,7 +229,7 @@ target_link_libraries(
   axiom_optimizer_core
   axiom_optimizer_v1
   axiom_functions_prestosql
-  axiom_optimizer_v2
+  axiom_optimizer
   axiom_runner_local_runner
   axiom_sql_presto_parser
   axiom_test_connector

@@ -1,0 +1,537 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "axiom/optimizer/NodePrinter.h"
+#include "axiom/optimizer/TableAccessHandle.h"
+
+#include <fmt/format.h>
+#include <fmt/ranges.h>
+#include <ranges>
+#include <sstream>
+#include "axiom/optimizer/EstimateMath.h"
+#include "axiom/optimizer/NodeVisitor.h"
+
+namespace facebook::axiom::optimizer {
+
+namespace {
+
+std::string spaces(size_t depth) {
+  return std::string(depth, ' ');
+}
+
+std::string formatExpr(ExprCP expr) {
+  if (expr == nullptr) {
+    return "<null>";
+  }
+  return expr->toString();
+}
+
+std::string formatColumns(const ColumnVector& columns) {
+  auto formatted =
+      columns | std::views::transform([](ColumnCP c) {
+        return fmt::format("{}:{}", c->toString(), c->value().type->toString());
+      });
+  return fmt::to_string(fmt::join(formatted, ", "));
+}
+
+// Templated so any range of Expr-derived pointers (ExprVector,
+// AggregateCallVector, etc.) formats the same way.
+template <typename Range>
+std::string formatExprs(const Range& exprs) {
+  auto texts = exprs |
+      std::views::transform([](const auto* expr) { return formatExpr(expr); });
+  return fmt::to_string(fmt::join(texts, ", "));
+}
+
+class Printer : public NodeVisitor {
+ public:
+  struct Context : public NodeVisitorContext {
+    std::stringstream out;
+    size_t indent{0};
+    const NodePrinter::Options* options{nullptr};
+  };
+
+  // Bumps `ctx.indent` by 2 on construction, restores on destruction.
+  class IndentGuard {
+   public:
+    explicit IndentGuard(Context& ctx) : ctx_(ctx) {
+      ctx_.indent += 2;
+    }
+    ~IndentGuard() {
+      ctx_.indent -= 2;
+    }
+    IndentGuard(const IndentGuard&) = delete;
+    IndentGuard& operator=(const IndentGuard&) = delete;
+
+   private:
+    Context& ctx_;
+  };
+
+  void visit(const Scan& node, NodeVisitorContext& context) const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(
+        ctx, node, fmt::format("[{}]", node.baseTable()->schemaTable->name()));
+    const auto pad = spaces(ctx.indent + 2);
+    if (const TableAccessHandle* handle = node.scanHandle();
+        handle != nullptr) {
+      ctx.out << pad << "handle: " << handle->tableHandle->toString() << '\n';
+    }
+    visitInputs(node, ctx);
+  }
+
+  void visit(const Filter& node, NodeVisitorContext& context) const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(ctx, node);
+    const auto pad = spaces(ctx.indent + 2);
+    for (ExprCP pred : node.predicates()) {
+      ctx.out << pad << "predicate: " << formatExpr(pred) << '\n';
+    }
+    visitInputs(node, ctx);
+  }
+
+  void visit(const Project& node, NodeVisitorContext& context) const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(ctx, node);
+    const auto pad = spaces(ctx.indent + 2);
+    const auto& cols = node.outputColumns();
+    const auto& exprs = node.exprs();
+    for (size_t i = 0; i < cols.size(); ++i) {
+      ctx.out << pad << cols[i]->toString() << " := " << formatExpr(exprs[i])
+              << '\n';
+    }
+    visitInputs(node, ctx);
+  }
+
+  void visit(const Limit& node, NodeVisitorContext& context) const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(
+        ctx,
+        node,
+        node.isPartial()
+            ? fmt::format("[PARTIAL, {}, {}]", node.offset(), node.count())
+            : fmt::format("[{}, {}]", node.offset(), node.count()));
+    visitInputs(node, ctx);
+  }
+
+  void visit(const Sort& node, NodeVisitorContext& context) const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(ctx, node, node.isPartial() ? "[PARTIAL]" : "");
+    ctx.out << spaces(ctx.indent + 2)
+            << "orderKeys: " << formatExprs(node.orderKeys()) << '\n';
+    visitInputs(node, ctx);
+  }
+
+  void visit(const TopN& node, NodeVisitorContext& context) const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(
+        ctx,
+        node,
+        node.isPartial()
+            ? fmt::format("[PARTIAL, {}, {}]", node.offset(), node.count())
+            : fmt::format("[{}, {}]", node.offset(), node.count()));
+    ctx.out << spaces(ctx.indent + 2)
+            << "orderKeys: " << formatExprs(node.orderKeys()) << '\n';
+    visitInputs(node, ctx);
+  }
+
+  void visit(const Aggregation& node, NodeVisitorContext& context)
+      const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(
+        ctx,
+        node,
+        fmt::format("[{}]", velox::core::AggregationNode::toName(node.step())));
+    const auto pad = spaces(ctx.indent + 2);
+    if (!node.groupingKeys().empty()) {
+      ctx.out << pad << "groupingKeys: " << formatExprs(node.groupingKeys())
+              << '\n';
+    }
+    if (!node.aggregates().empty()) {
+      ctx.out << pad << "aggregates: " << formatExprs(node.aggregates())
+              << '\n';
+    }
+    if (!node.globalGroupingSets().empty()) {
+      ctx.out << pad << "globalGroupingSets: "
+              << folly::join(", ", node.globalGroupingSets()) << '\n';
+    }
+    visitInputs(node, ctx);
+  }
+
+  void visit(const GroupId& node, NodeVisitorContext& context) const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(ctx, node);
+    const auto pad = spaces(ctx.indent + 2);
+    ctx.out << pad << "groupingKeys: " << formatExprs(node.groupingKeys())
+            << '\n';
+    if (!node.aggregationInputs().empty()) {
+      ctx.out << pad
+              << "aggregationInputs: " << formatExprs(node.aggregationInputs())
+              << '\n';
+    }
+    ctx.out << pad << "groupingSets: " << node.groupingSets().size()
+            << " set(s)\n";
+    visitInputs(node, ctx);
+  }
+
+  void visit(const MarkDistinct& node, NodeVisitorContext& context)
+      const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(ctx, node);
+    const auto pad = spaces(ctx.indent + 2);
+    ctx.out << pad << "distinctKeys: " << formatExprs(node.distinctKeys())
+            << '\n';
+    if (!node.masks().empty()) {
+      ctx.out << pad << "masks: " << formatExprs(node.masks()) << '\n';
+    }
+    ctx.out << pad << "markers: " << formatExprs(node.markers()) << '\n';
+    visitInputs(node, ctx);
+  }
+
+  void visit(const Values& node, NodeVisitorContext& context) const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(ctx, node);
+    visitInputs(node, ctx);
+  }
+
+  void visit(const Unnest& node, NodeVisitorContext& context) const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(ctx, node);
+    const auto pad = spaces(ctx.indent + 2);
+    ctx.out << pad
+            << "unnestExpressions: " << formatExprs(node.unnestExpressions())
+            << '\n';
+    if (node.withOrdinality()) {
+      ctx.out << pad << "withOrdinality: true\n";
+    }
+    visitInputs(node, ctx);
+  }
+
+  void visit(const UnionAll& node, NodeVisitorContext& context) const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(ctx, node);
+    const auto pad = spaces(ctx.indent + 2);
+    const auto& legColumns = node.legColumns();
+    for (size_t i = 0; i < legColumns.size(); ++i) {
+      ctx.out << pad << "leg[" << i << "] columns: "
+              << formatExprs(
+                     ExprVector(legColumns[i].begin(), legColumns[i].end()))
+              << '\n';
+    }
+    visitInputs(node, ctx);
+  }
+
+  void visit(const Join& node, NodeVisitorContext& context) const override {
+    auto& ctx = static_cast<Context&>(context);
+    std::string details = std::string{"["} + std::string{node.joinTypeName()};
+    if (node.nullAware()) {
+      details += ", nullAware";
+    }
+    if (node.buildIsLoopInvariant()) {
+      details += ", loop-invariant build";
+    }
+    details += ']';
+    header(ctx, node, details);
+    const auto pad = spaces(ctx.indent + 2);
+    if (!node.leftKeys().empty()) {
+      ctx.out << pad << "leftKeys: " << formatExprs(node.leftKeys()) << '\n';
+      ctx.out << pad << "rightKeys: " << formatExprs(node.rightKeys()) << '\n';
+    }
+    if (!node.filter().empty()) {
+      ctx.out << pad << "filter: " << formatExprs(node.filter()) << '\n';
+    }
+    visitInputs(node, ctx);
+  }
+
+  void visit(const IndexLookupJoin& node, NodeVisitorContext& context)
+      const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(
+        ctx,
+        node,
+        fmt::format(
+            "[{}, {}]",
+            velox::core::JoinTypeName::toName(node.joinType()),
+            node.lookupTable()->schemaTable->name()));
+    const auto pad = spaces(ctx.indent + 2);
+    ctx.out << pad << "probeKeys: " << formatExprs(node.probeKeys()) << '\n';
+    ctx.out << pad << "lookupKeys: " << formatExprs(node.lookupKeys()) << '\n';
+    if (!node.filter().empty()) {
+      ctx.out << pad << "filter: " << formatExprs(node.filter()) << '\n';
+    }
+    visitInputs(node, ctx);
+  }
+
+  void visit(const Window& node, NodeVisitorContext& context) const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(ctx, node);
+    const auto pad = spaces(ctx.indent + 2);
+    if (!node.partitionKeys().empty()) {
+      ctx.out << pad << "partitionKeys: " << formatExprs(node.partitionKeys())
+              << '\n';
+    }
+    if (!node.orderKeys().empty()) {
+      ctx.out << pad << "orderKeys: " << formatExprs(node.orderKeys()) << '\n';
+    }
+    visitInputs(node, ctx);
+  }
+
+  void visit(const Inference& node, NodeVisitorContext& context)
+      const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(ctx, node);
+    ctx.out << spaces(ctx.indent + 2) << node.result()->toString()
+            << " := " << node.call()->toString() << '\n';
+    visitInputs(node, ctx);
+  }
+
+  void visit(const RowNumber& node, NodeVisitorContext& context)
+      const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(
+        ctx,
+        node,
+        node.limit().has_value() ? fmt::format("[limit {}]", *node.limit())
+                                 : "");
+    if (!node.partitionKeys().empty()) {
+      ctx.out << spaces(ctx.indent + 2)
+              << "partitionKeys: " << formatExprs(node.partitionKeys()) << '\n';
+    }
+    visitInputs(node, ctx);
+  }
+
+  void visit(const TopNRowNumber& node, NodeVisitorContext& context)
+      const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(ctx, node, fmt::format("[limit {}]", node.limit()));
+    const auto pad = spaces(ctx.indent + 2);
+    if (!node.partitionKeys().empty()) {
+      ctx.out << pad << "partitionKeys: " << formatExprs(node.partitionKeys())
+              << '\n';
+    }
+    ctx.out << pad << "orderKeys: " << formatExprs(node.orderKeys()) << '\n';
+    visitInputs(node, ctx);
+  }
+
+  void visit(const Apply& node, NodeVisitorContext& context) const override {
+    auto& ctx = static_cast<Context&>(context);
+    std::string details = std::string{"["} + std::string{node.kindName()};
+    if (node.enforceSingleRow()) {
+      details += ", enforceSingleRow";
+    }
+    if (node.nullAware()) {
+      details += ", nullAware";
+    }
+    details += ']';
+    header(ctx, node, details);
+    const auto pad = spaces(ctx.indent + 2);
+    if (!node.correlationColumns().empty()) {
+      ctx.out << pad
+              << "correlation: " << formatColumns(node.correlationColumns())
+              << '\n';
+    }
+    if (!node.filter().empty()) {
+      ctx.out << pad << "filter: " << formatExprs(node.filter()) << '\n';
+    }
+    if (node.markColumn() != nullptr) {
+      ctx.out << pad << "mark: " << node.markColumn()->toString() << '\n';
+    }
+    if (node.inLhs() != nullptr) {
+      ctx.out << pad << "inLhs: " << formatExpr(node.inLhs()) << '\n';
+      ctx.out << pad << "inBodyKey: " << formatExpr(node.inBodyKey()) << '\n';
+    }
+    visitInputs(node, ctx);
+  }
+
+  void visit(const EnforceSingleRow& node, NodeVisitorContext& context)
+      const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(ctx, node);
+    visitInputs(node, ctx);
+  }
+
+  void visit(const AssignUniqueId& node, NodeVisitorContext& context)
+      const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(ctx, node);
+    ctx.out << spaces(ctx.indent + 2)
+            << "idColumn: " << node.idColumn()->toString() << '\n';
+    visitInputs(node, ctx);
+  }
+
+  void visit(const EnforceDistinct& node, NodeVisitorContext& context)
+      const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(ctx, node);
+    const auto pad = spaces(ctx.indent + 2);
+    ctx.out << pad << "distinctKeys: " << formatExprs(node.distinctKeys())
+            << '\n';
+    if (node.errorMessage() != nullptr) {
+      ctx.out << pad << "errorMessage: " << node.errorMessage() << '\n';
+    }
+    visitInputs(node, ctx);
+  }
+
+  void visit(const Exchange& node, NodeVisitorContext& context) const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(ctx, node);
+    const auto& partitioning = node.partitioning();
+    const auto pad = spaces(ctx.indent + 2);
+    ctx.out << pad << "partitioning: " << partitioning.scope << ' '
+            << partitioning.kind << '\n';
+    if (!partitioning.keys.empty()) {
+      ctx.out << pad << "partitionKeys: " << formatExprs(partitioning.keys)
+              << '\n';
+    }
+    if (!partitioning.orderKeys.empty()) {
+      ctx.out << pad << "orderKeys: " << formatExprs(partitioning.orderKeys)
+              << '\n';
+      auto orderTypes =
+          partitioning.orderTypes | std::views::transform([](OrderType type) {
+            return OrderTypeName::toName(type);
+          });
+      ctx.out << pad << "orderTypes: "
+              << fmt::format("{}", fmt::join(orderTypes, ", ")) << '\n';
+    }
+    visitInputs(node, ctx);
+  }
+
+  void visit(const TableWrite& node, NodeVisitorContext& context)
+      const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(ctx, node);
+    ctx.out << spaces(ctx.indent + 2)
+            << "columnExprs: " << formatExprs(node.columnExprs()) << '\n';
+    visitInputs(node, ctx);
+  }
+
+  void visit(const WorkingTable& node, NodeVisitorContext& context)
+      const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(
+        ctx,
+        node,
+        fmt::format("[name={}, readMode={}]", node.name(), node.readMode()));
+    visitInputs(node, ctx);
+  }
+
+  void visit(const FixedPoint& node, NodeVisitorContext& context)
+      const override {
+    auto& ctx = static_cast<Context&>(context);
+    std::string details = fmt::format("[name={}", node.name());
+    if (node.mode() != FixedPointMode::kAppend) {
+      details += fmt::format(", mode={}", node.mode());
+    }
+    details += fmt::format(", maxIterations={}", node.maxIterations());
+    if (!node.failAtBound()) {
+      details += ", failAtBound=false";
+    }
+    details += fmt::format(
+        ", recursiveNumDrivers={}]",
+        node.recursiveNumDrivers().has_value()
+            ? fmt::to_string(*node.recursiveNumDrivers())
+            : "unplanned");
+    header(ctx, node, details);
+    IndentGuard guard(ctx);
+    ctx.out << spaces(ctx.indent) << "anchor:\n";
+    node.anchor()->accept(*this, ctx);
+    ctx.out << spaces(ctx.indent) << "step:\n";
+    node.step()->accept(*this, ctx);
+    if (node.convergence() != nullptr) {
+      ctx.out << spaces(ctx.indent) << "convergence:\n";
+      node.convergence()->accept(*this, ctx);
+    }
+  }
+
+  void visit(const Repeat& node, NodeVisitorContext& context) const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(ctx, node, fmt::format("[{}..{}]", node.minHops(), node.maxHops()));
+    const auto pad = spaces(ctx.indent + 2);
+    ctx.out << pad << "startKeys: " << formatExprs(node.startKeys()) << '\n';
+    ctx.out << pad << "hopSourceKeys: " << formatExprs(node.hopSourceKeys())
+            << '\n';
+    ctx.out << pad
+            << "hopDestinationKeys: " << formatExprs(node.hopDestinationKeys())
+            << '\n';
+    ctx.out << pad << "endKeys: " << formatExprs(node.endKeys()) << '\n';
+    IndentGuard guard(ctx);
+    ctx.out << spaces(ctx.indent) << "start:\n";
+    node.start()->accept(*this, ctx);
+    ctx.out << spaces(ctx.indent) << "hop:\n";
+    node.hop()->accept(*this, ctx);
+    if (node.end() != nullptr) {
+      ctx.out << spaces(ctx.indent) << "end:\n";
+      node.end()->accept(*this, ctx);
+    }
+  }
+
+ private:
+  void header(Context& ctx, const Node& node, std::string_view extra = {})
+      const {
+    ctx.out << spaces(ctx.indent) << "- "
+            << NodeTypeName::toName(node.nodeType());
+    if (!extra.empty()) {
+      ctx.out << extra;
+    }
+    ctx.out << " -> " << formatColumns(node.outputColumns()) << '\n';
+
+    if (ctx.options->estimates) {
+      const auto estimate = ctx.options->estimates(&node);
+      ctx.out << spaces(ctx.indent + 2) << "Estimate: ";
+      if (!estimate.cardinality.has_value()) {
+        ctx.out << "unknown\n";
+        return;
+      }
+
+      ctx.out << *estimate.cardinality << " rows";
+      if (node.is(NodeType::kFilter)) {
+        appendRatio(ctx, "selectivity", estimate.cardinality, node.onlyInput());
+      } else if (node.is(NodeType::kJoin)) {
+        const auto* join = node.as<Join>();
+        appendRatio(ctx, "left fanout", estimate.cardinality, join->left());
+        appendRatio(ctx, "right fanout", estimate.cardinality, join->right());
+      }
+      ctx.out << '\n';
+    }
+  }
+
+  void appendRatio(
+      Context& ctx,
+      std::string_view label,
+      std::optional<float> outputCardinality,
+      NodeCP input) const {
+    const auto inputEstimate = ctx.options->estimates(input);
+    if (const auto ratio =
+            divide(outputCardinality, inputEstimate.cardinality)) {
+      ctx.out << ", " << label << ": " << *ratio;
+    }
+  }
+
+  void visitInputs(const Node& node, Context& ctx) const {
+    IndentGuard guard(ctx);
+    NodeVisitor::visitInputs(node, ctx);
+  }
+};
+
+} // namespace
+
+std::string NodePrinter::toText(NodeCP root, const Options& options) {
+  Printer::Context ctx;
+  ctx.options = &options;
+  root->accept(Printer{}, ctx);
+  return ctx.out.str();
+}
+
+} // namespace facebook::axiom::optimizer

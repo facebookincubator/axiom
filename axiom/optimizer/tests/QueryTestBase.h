@@ -21,11 +21,11 @@
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/PlanBuilder.h"
+#include "axiom/optimizer/Optimize.h"
 #include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/v1/RelationOp.h"
 #include "axiom/optimizer/v1/VeloxHistory.h"
-#include "axiom/optimizer/v2/Optimize.h"
 #include "axiom/runner/LocalRunner.h"
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -262,8 +262,8 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
   /// and its QueryGraphContext remain alive.
   void verifyOptimization(
       const logical_plan::LogicalPlanNode& logicalPlan,
-      v2::Optimizer::Pass pass,
-      const std::function<void(v2::NodeCP)>& callback,
+      Optimizer::Pass pass,
+      const std::function<void(NodeCP)>& callback,
       const std::optional<OptimizerOptions>& optimizerOptions = std::nullopt);
 
   std::shared_ptr<velox::core::QueryCtx>& getQueryCtx();
@@ -399,7 +399,7 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
 
   // When set, called after each v2 optimizer pass in every planVelox call of
   // the test. Set it while debugging to inspect the IR between passes.
-  v2::Optimizer::PassCallback afterPass_;
+  Optimizer::PassCallback afterPass_;
 
   // Connector used by parseSelect(sql). Subclasses may change it in SetUp.
   std::string defaultConnectorId_{kTestConnectorId};

@@ -218,7 +218,7 @@ The decision lives in **`PlanPhysical`** (`PhysicalPlanRewriter`), which has all
 three inputs it needs: join selectivity and build-size estimates (the memo / cost
 model) and the placed `ir.Exchange` nodes (so the walk can tell whether the path
 from join to scan crosses one) **[verified: exchange
-placement and rewrites are in `v2/PlanPhysicalPass.cpp`'s `PhysicalPlanRewriter`]**. It
+placement and rewrites are in `PlanPhysicalPass.cpp`'s `PhysicalPlanRewriter`]**. It
 decides at IR-node granularity: producer node (the join), consumer node (the scan),
 key-column mapping, build distribution, selectivity gate. Emit is then mechanical —
 it translates those chosen IR nodes to their emitted Velox `PlanNodeId`s + fragment

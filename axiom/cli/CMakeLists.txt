@@ -48,7 +48,7 @@ target_link_libraries(
   axiom_optimizer_core
   axiom_optimizer_v1
   axiom_functions_prestosql
-  axiom_optimizer_v2
+  axiom_optimizer
   axiom_graphviz_printers
   axiom_hive_connector_metadata
   axiom_tpch_connector_metadata

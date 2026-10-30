@@ -412,7 +412,7 @@ TEST_F(RowLevelDeleteTest, virtualTablePushdown) {
     auto replacement =
         testConnector_->addTable("u", ROW({"value", "row_id"}, BIGINT()));
     testConnector_->metadata()->setPushdownMatcher(
-        [replacement = std::move(replacement)](const v2::Node& subtree) {
+        [replacement = std::move(replacement)](const Node& subtree) {
           return std::vector<connector::PushdownRoot>{{&subtree, replacement}};
         });
 
@@ -437,9 +437,9 @@ TEST_F(RowLevelDeleteTest, virtualTablePushdown) {
     auto replacement = testConnector_->addTable("u", ROW("row_id", BIGINT()));
     replacement->addData(makeRowVector({makeFlatVector<int64_t>({1, 3})}));
     testConnector_->metadata()->setPushdownMatcher(
-        [replacement = std::move(replacement)](const v2::Node& subtree) {
-          const std::function<bool(v2::NodeCP)> readsId = [&](v2::NodeCP node) {
-            if (node->is(v2::NodeType::kScan) &&
+        [replacement = std::move(replacement)](const Node& subtree) {
+          const std::function<bool(NodeCP)> readsId = [&](NodeCP node) {
+            if (node->is(NodeType::kScan) &&
                 std::ranges::any_of(node->outputColumns(), [](ColumnCP column) {
                   return std::string_view{column->name()} == "id";
                 })) {
@@ -447,10 +447,10 @@ TEST_F(RowLevelDeleteTest, virtualTablePushdown) {
             }
             return std::ranges::any_of(node->inputs(), readsId);
           };
-          std::function<v2::NodeCP(v2::NodeCP)> findNonTargetRoot =
-              [&](v2::NodeCP node) -> v2::NodeCP {
-            for (v2::NodeCP input : node->inputs()) {
-              if (!input->is(v2::NodeType::kScan) &&
+          std::function<NodeCP(NodeCP)> findNonTargetRoot =
+              [&](NodeCP node) -> NodeCP {
+            for (NodeCP input : node->inputs()) {
+              if (!input->is(NodeType::kScan) &&
                   input->outputColumns().size() == 1 && readsId(input)) {
                 return input;
               }

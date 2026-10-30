@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 namespace facebook::axiom::optimizer {
 
@@ -86,6 +87,30 @@ struct Costs {
   /// Minimal per-row cost for operators that do trivial per-row work (e.g.,
   /// passing rows through, generating a unique ID).
   static constexpr double kMinimalUnitCost = 0.01;
+};
+
+/// Default per-input-row fanout assumed for an UNNEST when per-array
+/// size statistics are unavailable. The cardinality of an Unnest
+/// relation and the cost of expanding a plan by it must use the same
+/// value so the two estimates agree.
+constexpr float kDefaultUnnestFanout = 10;
+
+/// Cost of a candidate physical plan or subplan, used to score memo
+/// entries during cost-based planning. The comparable score lives in
+/// 'cost'; 'cardinality' propagates into the cost of consumers above.
+struct Cost {
+  /// Total estimated cost, or nullopt when unknown. Lower is better; used to
+  /// compare memo entries with equivalent logical content. Unknown propagates:
+  /// a cost derived from an unknown cardinality is itself unknown, so candidate
+  /// ranking must treat unknown as not-comparable rather than substituting a
+  /// concrete fallback.
+  std::optional<float> cost;
+
+  /// Estimated output row count, or nullopt when unknown (a missing
+  /// input statistic propagates rather than being replaced by a concrete
+  /// fallback). Feeds into 'cost' of consumers that scan or process this
+  /// subplan's output.
+  std::optional<float> cardinality;
 };
 
 } // namespace facebook::axiom::optimizer

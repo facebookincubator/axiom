@@ -1,0 +1,3231 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include <array>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <span>
+#include <variant>
+#include <vector>
+
+#include <folly/CppAttributes.h>
+#include <folly/Function.h>
+
+#include "axiom/logical_plan/LogicalPlanNode.h"
+#include "axiom/optimizer/PhysicalProperties.h"
+#include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/RelationalProperties.h"
+#include "velox/core/PlanNode.h"
+
+/// Tree-IR for the optimizer.
+///
+/// Nodes are immutable and, like all `PlanObject`s, arena-allocated from the
+/// shared `QueryGraphContext`.
+namespace facebook::axiom::optimizer {
+
+struct TableAccessHandle;
+class Builder;
+
+/// Discriminator for Node subtypes.
+enum class NodeType : uint8_t {
+  kScan,
+  kFilter,
+  kProject,
+  kLimit,
+  kSort,
+  kTopN,
+  kAggregate,
+  kGroupId,
+  kMarkDistinct,
+  kValues,
+  kUnnest,
+  kUnionAll,
+  kJoin,
+  kIndexLookupJoin,
+  kWindow,
+  kInference,
+  kRowNumber,
+  kTopNRowNumber,
+  kApply,
+  kEnforceSingleRow,
+  kAssignUniqueId,
+  kEnforceDistinct,
+  kExchange,
+  kTableWrite,
+  kFixedPoint,
+  kWorkingTable,
+  kRepeat,
+};
+
+AXIOM_DECLARE_ENUM_NAME(NodeType);
+
+/// How the rows after a node that starts them run: a leaf, or an exchange.
+/// Rows on one task are gathered across tasks, and rows on one driver per task
+/// are gathered across drivers.
+enum class Placement : uint8_t {
+  /// Before PlanPhysical: the node carries relational properties.
+  kUnplaced,
+  /// Several tasks, multiple drivers per task.
+  kDistributed,
+  /// One task with several drivers.
+  kSingleTask,
+  /// Several tasks with one driver each.
+  kOneDriverPerTask,
+  /// One task with one driver.
+  kSingleThread,
+};
+
+AXIOM_DECLARE_ENUM_NAME(Placement);
+
+class Node;
+class NodeVisitor;
+class NodeVisitorContext;
+using NodeCP = const Node*;
+using NodeVector = QGVector<NodeCP>;
+
+/// What a subtree's reads of one recursive state present: the state's columns,
+/// which are the enclosing fixed point's output columns, and how the state is
+/// placed across workers, over those columns. Every read of one state presents
+/// the same.
+struct StateRead {
+  ColumnVector columns;
+  Partitioning partitioning;
+
+  bool operator==(const StateRead&) const = default;
+};
+
+/// The recursive states a subtree reads, as carried by
+/// `Node::requiredStates()`: state name to what the reads present. Names are
+/// interned, so hashing the pointer is equivalent to hashing the text. In a
+/// valid plan this holds at most one entry; a branch that accumulates more is
+/// rejected by the enclosing `FixedPoint`.
+using RequiredStates = QGF14FastMap<Name, StateRead>;
+
+/// Base class for tree-IR operator nodes. Immutable: every member describing
+/// the node is const and initialized via the constructor. The one exception is
+/// `requiredStates()`, a pure function of those members that `Builder::make`
+/// fills in once construction is complete.
+/// Abstract — instantiate via a subclass.
+///
+/// Cross-node references — predicates, join/grouping/sort keys, expression
+/// operands, per-leg layouts — bind by pointer identity, and keys may be
+/// arbitrary expressions, not just columns: `GROUP BY mod(a, 2)` carries a
+/// `Call` grouping key, and sort and partition keys are the same. Positional
+/// indices into a producer's `outputColumns()` are never used: pruning,
+/// duplicate-column collapse, and any other rewrite that reshapes a producer's
+/// `outputColumns` would then force rewiring at every consumer. Same-node
+/// sub-vector indices (e.g., `GroupId::groupingSets` into `groupingKeyColumns`)
+/// are positional and OK — they reference structure internal to the node, not a
+/// producer. The IR never binds by column name; names on `Column::name_` /
+/// `alias_` exist only as display labels for EXPLAIN.
+///
+/// A node's properties, by contrast, always reference this node's own output
+/// columns — an invariant each derivation upholds and the base constructor
+/// verifies (`checkReferencesColumns`). Velox's column-key
+/// requirement for aggregation / ordering / windowing / exchange is a separate,
+/// emit-time concern that `PrecomputeProjections` materializes.
+///
+/// A node carries one kind of properties. Before PlanPhysical a node computes a
+/// relation, and carries `RelationalProperties`. PlanPhysical rebuilds every
+/// node it places, leaves included, and those nodes are operators in a
+/// distributed plan that carry `PhysicalProperties`. A leaf's `Key` says
+/// whether PlanPhysical placed it; every other node is placed exactly when its
+/// inputs are.
+///
+/// Each node kind enforces its own column-identity contract: outputs contain no
+/// duplicate columns, and each kind extends or transforms its input schema in a
+/// specific way. See each subclass's docblock for the exact rules.
+///
+/// The IR is a tree: every node has one parent, and a traversal from the root
+/// reaches each node once. A node reached from two parents is a bug in whatever
+/// produced it.
+///
+/// Instantiate nodes only through a `Builder` (`builder.make<T>(key)`), never
+/// by constructing a subclass directly: `make` hash-conses on the subclass's
+/// nested `Key` struct (its identity — two nodes of a kind intern to the same
+/// instance iff their `Key`s compare equal: input pointer(s) plus the node's
+/// parameter expression / column pointers). Direct construction bypasses
+/// interning. See `Builder.h`.
+class Node : public PlanObject {
+ public:
+  NodeType nodeType() const {
+    return nodeType_;
+  }
+
+  bool is(NodeType nodeType) const {
+    return nodeType_ == nodeType;
+  }
+
+  std::string_view nodeTypeName() const {
+    return NodeTypeName::toName(nodeType_);
+  }
+
+  /// True when the node emits its input's columns alongside anything it adds,
+  /// so a column it reads but its consumers do not -- a sort key, a window
+  /// function's argument -- cannot be dropped by the node itself. Only a
+  /// `Project` above it can drop one.
+  bool emitsInputColumns() const;
+
+  /// Columns produced by this node, in output order.
+  const ColumnVector& outputColumns() const {
+    return outputColumns_;
+  }
+
+  /// Returns the entries of 'columns' this node produces, in their order.
+  ColumnVector outputsAmong(const ColumnVector& columns) const;
+
+  /// The one kind of properties a node carries.
+  using Properties = std::variant<RelationalProperties, PhysicalProperties>;
+
+  /// True when PlanPhysical placed this node: it carries
+  /// `physicalProperties()`. Otherwise it carries `relationalProperties()`.
+  bool placed() const {
+    return std::holds_alternative<PhysicalProperties>(properties_);
+  }
+
+  /// Physical properties of this node's output: per-driver ordering /
+  /// grouping, distribution, and uniqueness at global or driver scope. Derived
+  /// from the inputs at construction and immutable. Requires `placed()`.
+  ///
+  /// Placement does not change the relation a subtree computes, so a placed
+  /// node states at global scope every unique key its relational counterpart
+  /// states. A node that exists only once placed, such as an `Exchange` or a
+  /// partial aggregation, has no counterpart.
+  const PhysicalProperties& physicalProperties() const;
+
+  /// Facts about the relation this node computes, derived from the inputs at
+  /// construction and immutable. Requires `!placed()`.
+  const RelationalProperties& relationalProperties() const;
+
+  /// Inputs in dependency order; empty for leaves. Returns a view into
+  /// node-owned storage; callers must not retain it past the node's
+  /// lifetime.
+  virtual std::span<const NodeCP> inputs() const = 0;
+
+  /// Returns the only input. Throws if there is not exactly one.
+  NodeCP onlyInput() const {
+    const auto nodeInputs = inputs();
+    VELOX_CHECK_EQ(1, nodeInputs.size());
+    return nodeInputs[0];
+  }
+
+  /// Returns the first node in `root`'s subtree that satisfies `predicate`, or
+  /// nullptr when none does.
+  static NodeCP FOLLY_NULLABLE
+  findFirstNode(NodeCP root, const std::function<bool(NodeCP)>& predicate);
+
+  /// The global partitionings of 'nodes', in order.
+  static std::vector<Partitioning> globalPartitions(
+      std::span<const NodeCP> nodes);
+
+  /// Global partitioning this node's output would have if its inputs had
+  /// 'inputPartitions', positional with `inputs()`, with the node's own keys,
+  /// expressions and columns. Applied to the inputs' own partitionings it gives
+  /// `physicalProperties().globalPartition`. 'builder' interns any expression
+  /// the partitioning keys need.
+  virtual Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const = 0;
+
+  /// Double-dispatch hook for `NodeVisitor`.
+  virtual void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const = 0;
+
+  /// Recursive states this subtree needs an enclosing `FixedPoint` to provide,
+  /// each mapped to the columns its reads present. Empty for a self-contained
+  /// subtree, so for every node outside a recursive query. Lets a `FixedPoint`
+  /// check both that a branch reads its state and that the read agrees with the
+  /// state schema, with one lookup rather than a subtree search. Primed by
+  /// `Builder::make`, which is the only way to construct a node.
+  const RequiredStates& requiredStates() const {
+    return *requiredStates_;
+  }
+
+  /// Computes and caches `requiredStates()`. Called by `Builder::make` once the
+  /// node is fully constructed, so the set allocates in the same
+  /// `QueryGraphContext` as the rest of the node.
+  void primeRequiredStates() const {
+    requiredStates_ = deriveRequiredStates();
+  }
+
+  std::string toString() const override;
+
+ protected:
+  Node(NodeType nodeType, ColumnVector outputColumns, Properties properties);
+
+  // Unions the inputs' entries, rejecting two reads of one state that disagree
+  // on columns. `WorkingTable` requires the state it reads and `FixedPoint`
+  // satisfies the one it binds.
+  virtual RequiredStates deriveRequiredStates() const;
+
+ private:
+  const NodeType nodeType_;
+  const ColumnVector outputColumns_;
+  const Properties properties_;
+  // Set by `primeRequiredStates()`. Mutable because that runs after
+  // construction, from `Builder::make` on an already-const node; safe under the
+  // single-threaded planning assumption (see `QueryGraphContext`). A pure
+  // function of the node's structure, so interning cannot make it stale.
+  mutable std::optional<RequiredStates> requiredStates_;
+};
+
+/// Reads rows from a connector-backed table (`BaseTable`).
+class Scan : public Node {
+ public:
+  struct Key {
+    /// The table instance this scan reads. A pass that rebuilds the scan keeps
+    /// it; a new `BaseTable` is a different instance, even of the same table.
+    BaseTableCP baseTable;
+
+    /// Strict consumer-required output columns; may be empty (e.g.
+    /// `SELECT count(1) FROM t` needs no column values from the table).
+    /// Distinct by pointer; both `outputName()` and the underlying `name()`
+    /// are unique within the vector. A column read only by a predicate the
+    /// connector evaluates is not here: the connector reads it without
+    /// projecting it.
+    ColumnVector outputColumns;
+
+    /// How the connector reads this table: the table and column handles, and
+    /// with them the predicates the connector took responsibility for. One
+    /// handle per base table, made by the pushdown pass. Null before that pass,
+    /// and after it only when the pass ran with `ConnectorPushdown::kSkip`,
+    /// whose result describes IO and cannot be emitted. Part of the scan's
+    /// identity.
+    const TableAccessHandle* scanHandle{nullptr};
+
+    /// The partitioning this scan is read with, when physical planning chose to
+    /// read the table one bucket-group at a time, already coarsened to the
+    /// worker count. Null for an ordinary read, which produces no partitioning
+    /// the plan can rely on. Part of the scan's identity: a grouped and an
+    /// ungrouped read of the same table are different plans with different
+    /// execution properties.
+    const connector::PartitionType* groupedPartitionType{nullptr};
+
+    /// Where PlanPhysical placed this scan. Part of the scan's identity.
+    Placement placement{Placement::kUnplaced};
+  };
+
+  /// Transparent hasher for interning `Scan`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const Scan* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `Scan`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const Scan* left, const Scan* right) const;
+    bool operator()(const Key& key, const Scan* node) const;
+    bool operator()(const Scan* node, const Key& key) const;
+  };
+
+  explicit Scan(Key key);
+
+  BaseTableCP baseTable() const {
+    return baseTable_;
+  }
+
+  /// The connector's read specification for this scan, including the filters
+  /// it evaluates. Null as described on `Key::scanHandle`.
+  const TableAccessHandle* scanHandle() const {
+    return scanHandle_;
+  }
+
+  /// The partitioning this scan is read with; null for an ordinary read.
+  const connector::PartitionType* groupedPartitionType() const {
+    return groupedPartitionType_;
+  }
+
+  /// See `Key::placement`.
+  Placement placement() const {
+    return placement_;
+  }
+
+  /// The bucketing of this scan's table that a plan can exploit, expressed over
+  /// the columns this scan outputs. Returns an unspecified partitioning when
+  /// the table carries no bucketing, when a bucketing column is not among the
+  /// outputs and the partitioning therefore cannot be stated over them, or when
+  /// the table has a single bucket, which holds every row and so co-locates
+  /// nothing an ordinary read would not. Of what this offers,
+  /// `groupedPartitionType` is the one the plan chose.
+  Partitioning storageBucketing() const;
+
+  /// Global partitioning this scan has when read one bucket-group at a time by
+  /// 'partitionType', a coarsening of its table's bucketing.
+  Partitioning groupedPartition(
+      const connector::PartitionType* partitionType) const;
+
+  std::span<const NodeCP> inputs() const override {
+    return {};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const BaseTableCP baseTable_;
+  const TableAccessHandle* const scanHandle_;
+  const connector::PartitionType* const groupedPartitionType_;
+  const Placement placement_;
+};
+
+using ScanCP = const Scan*;
+
+/// Selects rows from its input that match all of its predicates (joined with
+/// AND). Does not change the schema: `outputColumns()` are the input's columns
+/// unchanged (the same `Column` pointers).
+class Filter : public Node {
+ public:
+  struct Key {
+    /// Input node whose rows are filtered.
+    NodeCP input;
+    /// Predicates joined with AND; non-empty.
+    ExprVector predicates;
+  };
+
+  /// Transparent hasher for interning `Filter`s by identity (input +
+  /// predicates), read from either a stored `Filter*` or a lookup `Key`.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const Filter* filter) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `Filter`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const Filter* left, const Filter* right) const;
+    bool operator()(const Key& key, const Filter* filter) const;
+    bool operator()(const Filter* filter, const Key& key) const;
+  };
+
+  explicit Filter(Key key);
+
+  NodeCP input() const {
+    return input_;
+  }
+
+  /// Predicates joined with AND. Non-empty.
+  const ExprVector& predicates() const {
+    return predicates_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return {&input_, 1};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeCP input_;
+  const ExprVector predicates_;
+};
+
+using FilterCP = const Filter*;
+
+/// Computes output columns from input expressions. Output schema is
+/// `outputColumns`; the i-th output column is produced by `exprs[i]`.
+///
+/// Example: `SELECT a, b + 1 AS c FROM t` translates to:
+///
+///     Project(input=t, exprs=[t.a, t.b + 1], outputColumns=[t.a, c])
+///
+/// where `t.a` is a pass-through (same `Column*` as the input), and
+/// `c` is a fresh `Column*` for the computed expression.
+class Project : public Node {
+ public:
+  struct Key {
+    /// Input node.
+    NodeCP input;
+    /// Output expressions, positional with `outputColumns`.
+    ExprVector exprs;
+    /// Output columns, positional with `exprs` (see the class docblock for the
+    /// pass-through vs fresh-column rule).
+    ColumnVector outputColumns;
+  };
+
+  /// Transparent hasher for interning `Project`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const Project* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `Project`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const Project* left, const Project* right) const;
+    bool operator()(const Key& key, const Project* node) const;
+    bool operator()(const Project* node, const Key& key) const;
+  };
+
+  explicit Project(Key key);
+
+  NodeCP input() const {
+    return input_;
+  }
+
+  const ExprVector& exprs() const {
+    return exprs_;
+  }
+
+  /// True if no output expression contains a non-deterministic function, so an
+  /// output can be substituted (inlined) into a consumer without changing
+  /// semantics.
+  bool isDeterministic() const;
+
+  /// True when this computes one constant row: every expression is a literal
+  /// and the input is a Values with one row.
+  bool isConstantRow() const;
+
+  std::span<const NodeCP> inputs() const override {
+    return {&input_, 1};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeCP input_;
+  const ExprVector exprs_;
+};
+
+using ProjectCP = const Project*;
+
+/// Returns up to `count` rows starting from `offset`. Does not change the
+/// schema: `outputColumns()` are the input's columns unchanged (the same
+/// `Column` pointers).
+class Limit : public Node {
+ public:
+  struct Key {
+    /// Input node.
+    NodeCP input;
+    /// Number of leading rows to skip; >= 0.
+    int64_t offset;
+    /// Maximum number of rows to return; >= 0.
+    /// `std::numeric_limits<int64_t>::max()` means no limit (e.g. `OFFSET n`
+    /// with no `LIMIT`), 0 means empty result.
+    int64_t count;
+    /// True for a per-driver pre-limit; false for the exact task result.
+    bool partial{false};
+  };
+
+  /// Transparent hasher for interning `Limit`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const Limit* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `Limit`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const Limit* left, const Limit* right) const;
+    bool operator()(const Key& key, const Limit* node) const;
+    bool operator()(const Limit* node, const Key& key) const;
+  };
+
+  explicit Limit(Key key);
+
+  NodeCP input() const {
+    return input_;
+  }
+
+  int64_t offset() const {
+    return offset_;
+  }
+
+  int64_t count() const {
+    return count_;
+  }
+
+  bool isPartial() const {
+    return partial_;
+  }
+
+  /// Returns offset + count, saturated at INT64_MAX so a no-limit count
+  /// (INT64_MAX) does not overflow. The '>=' matches the no-limit boundary used
+  /// by RelationOp's isNoLimit.
+  int64_t offsetPlusCount() const {
+    return count_ >= INT64_MAX - offset_ ? INT64_MAX : offset_ + count_;
+  }
+
+  /// True when offsetPlusCount() is finite, so a partial Limit can keep that
+  /// many rows per task.
+  bool isBounded() const {
+    return offsetPlusCount() != INT64_MAX;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return {&input_, 1};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeCP input_;
+  const int64_t offset_;
+  const int64_t count_;
+  const bool partial_;
+};
+
+using LimitCP = const Limit*;
+
+/// Sorts rows by `orderKeys` with directions in `orderTypes`. A regular sort
+/// merges the local drivers into one task-wide sorted stream; a per-driver sort
+/// keeps one sorted stream per driver, for consumers such as parallel writers.
+/// Does not change the schema: `outputColumns()` are the input's columns
+/// unchanged (the same `Column` pointers).
+///
+/// Example: `Sort({input, {key}, {OrderType::kAscNullsLast}})` produces one
+/// task-wide stream ordered by `key`.
+///
+/// Invariants:
+///   - `orderKeys` is non-empty and contains only input columns.
+///   - `orderKeys` and `orderTypes` have equal size.
+class Sort : public Node {
+ public:
+  struct Key {
+    /// Input node.
+    NodeCP input;
+    /// Sort keys, outermost first; positional with `orderTypes`, non-empty.
+    ExprVector orderKeys;
+    /// Sort direction per key; positional with `orderKeys`.
+    OrderTypeVector orderTypes;
+    /// True for a per-driver sort: each driver keeps its own sorted stream.
+    bool partial{false};
+  };
+
+  /// Transparent hasher for interning `Sort`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const Sort* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `Sort`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const Sort* left, const Sort* right) const;
+    bool operator()(const Key& key, const Sort* node) const;
+    bool operator()(const Sort* node, const Key& key) const;
+  };
+
+  explicit Sort(Key key);
+
+  NodeCP input() const {
+    return input_;
+  }
+
+  const ExprVector& orderKeys() const {
+    return orderKeys_;
+  }
+
+  const OrderTypeVector& orderTypes() const {
+    return orderTypes_;
+  }
+
+  bool isPartial() const {
+    return partial_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return {&input_, 1};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeCP input_;
+  const ExprVector orderKeys_;
+  const OrderTypeVector orderTypes_;
+  const bool partial_;
+};
+
+using SortCP = const Sort*;
+
+/// Sorts rows by `orderKeys` / `orderTypes` and returns up to `count` rows
+/// starting from `offset` — a bounded Sort. A Limit directly over a Sort fuses
+/// into this. Does not change the schema:
+/// `outputColumns()` are the input's columns unchanged (the same `Column`
+/// pointers).
+class TopN : public Node {
+ public:
+  struct Key {
+    /// Input node.
+    NodeCP input;
+    /// Sort keys, outermost first; positional with `orderTypes`, non-empty.
+    ExprVector orderKeys;
+    /// Sort direction per key; positional with `orderKeys`.
+    OrderTypeVector orderTypes;
+    /// Number of leading rows to skip; >= 0.
+    int64_t offset;
+    /// Maximum number of rows to return; >= 0. A real bound: an `ORDER BY`
+    /// with no `LIMIT` is a `Sort`, so `Limit`'s no-limit sentinel never
+    /// reaches here and `offsetPlusCount()` saturates only on overflow.
+    int64_t count;
+    /// True when this is one driver-local input to a merge.
+    bool partial{false};
+  };
+
+  /// Transparent hasher for interning `TopN`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const TopN* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `TopN`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const TopN* left, const TopN* right) const;
+    bool operator()(const Key& key, const TopN* node) const;
+    bool operator()(const TopN* node, const Key& key) const;
+  };
+
+  explicit TopN(Key key);
+
+  NodeCP input() const {
+    return input_;
+  }
+
+  const ExprVector& orderKeys() const {
+    return orderKeys_;
+  }
+
+  const OrderTypeVector& orderTypes() const {
+    return orderTypes_;
+  }
+
+  int64_t offset() const {
+    return offset_;
+  }
+
+  int64_t count() const {
+    return count_;
+  }
+
+  bool isPartial() const {
+    return partial_;
+  }
+
+  /// Returns offset + count, saturated at INT64_MAX so a no-limit count does
+  /// not overflow.
+  int64_t offsetPlusCount() const {
+    return count_ >= std::numeric_limits<int64_t>::max() - offset_
+        ? std::numeric_limits<int64_t>::max()
+        : offset_ + count_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return {&input_, 1};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeCP input_;
+  const ExprVector orderKeys_;
+  const OrderTypeVector orderTypes_;
+  const int64_t offset_;
+  const int64_t count_;
+  const bool partial_;
+};
+
+using TopNCP = const TopN*;
+
+/// Vector of `optimizer::Aggregate*` (an aggregate-function Call). The
+/// type is distinct from `ExprVector` so consumers don't need to
+/// downcast each element to access aggregate-specific accessors
+/// (`condition`, `orderKeys`, etc.); the `Aggregation` node carries
+/// this type directly.
+using AggregateCallVector = QGVector<const optimizer::Aggregate*>;
+
+/// Stage of a (possibly distributed) aggregation, reusing Velox's enum.
+/// `kSingle` computes the complete result in one pass. `kPartial`
+/// pre-aggregates its input and emits intermediate accumulators (one per
+/// aggregate, typed by `optimizer::Aggregate::intermediateType()`); `kFinal`
+/// consumes those accumulators and emits the final result. A two-stage
+/// distributed aggregate is `kFinal` over a remote `Exchange` over `kPartial`.
+///
+/// A `kFinal` aggregate's call arguments still name the partial's raw inputs,
+/// which its own input does not produce: it reads the accumulator positionally,
+/// and emit takes only the argument types and any lambda among them, because
+/// the partial may be in another fragment.
+///
+/// TODO: Represent that explicitly rather than leaving arguments that cannot be
+/// evaluated over the node's input.
+using AggregateStep = velox::core::AggregationNode::Step;
+
+/// Groups input rows by `groupingKeys` and computes `aggregates` per
+/// group. Output schema is `groupingKeys` followed by `aggregates`
+/// (one output column each).
+///
+/// Example: `SELECT a, sum(b) FROM t GROUP BY a` translates to:
+///
+///     Aggregate(input=t, groupingKeys=[t.a], aggregates=[sum(t.b)],
+///               outputColumns=[t.a, sum_b])
+///
+/// One output row per distinct value of `t.a`, with `sum_b` the sum
+/// of `t.b` within that group.
+///
+/// GROUPING SETS / ROLLUP / CUBE have no dedicated representation here: they
+/// are lowered to a `GroupId` input plus a plain aggregate keyed on an explicit
+/// group-id column, so this node has no grouping-set concept of its own. That
+/// group-id column, when present, is also recorded in `groupId` (with
+/// `globalGroupingSets`).
+class Aggregation : public Node {
+ public:
+  struct Key {
+    /// Input node.
+    NodeCP input;
+    /// Grouping keys; empty for a global aggregate.
+    ExprVector groupingKeys;
+    /// Aggregate functions, one per output aggregate column.
+    AggregateCallVector aggregates;
+    /// Output columns: the `groupingKeys`, then the `aggregates`, positionally.
+    ColumnVector outputColumns;
+    /// Aggregation stage. For a `kPartial` step, `outputColumns`' aggregate
+    /// positions hold intermediate accumulators (typed by
+    /// `intermediateType()`), not final results.
+    AggregateStep step{AggregateStep::kSingle};
+
+    /// Group-id column from the upstream `GroupId`, or null for a plain
+    /// aggregate. Set iff `globalGroupingSets` is non-empty; when set it also
+    /// appears in `groupingKeys`.
+    ColumnCP groupId{nullptr};
+    /// Group-id values of the global (empty) grouping sets. Non-empty only for
+    /// a GROUPING SETS / ROLLUP / CUBE aggregate with a global `()` set; drives
+    /// Velox's default-row-per-global-set behavior over empty input.
+    QGVector<int32_t> globalGroupingSets;
+  };
+
+  /// Transparent hasher for interning `Aggregation`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const Aggregation* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `Aggregation`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const Aggregation* left, const Aggregation* right) const;
+    bool operator()(const Key& key, const Aggregation* node) const;
+    bool operator()(const Aggregation* node, const Key& key) const;
+  };
+
+  explicit Aggregation(Key key);
+
+  NodeCP input() const {
+    return input_;
+  }
+
+  const ExprVector& groupingKeys() const {
+    return groupingKeys_;
+  }
+
+  const AggregateCallVector& aggregates() const {
+    return aggregates_;
+  }
+
+  AggregateStep step() const {
+    return step_;
+  }
+
+  ColumnCP groupId() const {
+    return groupId_;
+  }
+
+  const QGVector<int32_t>& globalGroupingSets() const {
+    return globalGroupingSets_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return {&input_, 1};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeCP input_;
+  const ExprVector groupingKeys_;
+  const AggregateCallVector aggregates_;
+  const AggregateStep step_;
+  const ColumnCP groupId_;
+  const QGVector<int32_t> globalGroupingSets_;
+};
+
+using AggregationCP = const Aggregation*;
+
+/// Replicates each input row once per grouping set, emitting NULL for keys
+/// inactive in that set and tagging the copy with the set's index. The
+/// downstream `Aggregation` then groups by
+/// `groupingKeyColumns ++ [groupId]` and runs the aggregates over the
+/// replicated rows; the SQL `GROUPING SETS` / `ROLLUP` / `CUBE` semantics
+/// fall out of that grouping.
+///
+/// `outputColumns` = `groupingKeyColumns ++ aggregationInputs' columns ++
+/// [groupId]`. Velox `GroupingKeyInfo` maps each `groupingKeys` expression to
+/// the corresponding `groupingKeyColumns` output name; both vectors are
+/// positionally aligned.
+class GroupId : public Node {
+ public:
+  struct Key {
+    /// Input node.
+    NodeCP input;
+    /// Input-side expressions whose values populate each replicated grouping
+    /// key; positionally aligned with `groupingKeyColumns`.
+    ExprVector groupingKeys;
+    /// Input columns referenced by the downstream `Aggregation`'s aggregate
+    /// functions; passed through to the output unchanged.
+    ExprVector aggregationInputs;
+    /// Non-empty; each entry lists the `groupingKeyColumns` indices active for
+    /// that set. Inactive keys are emitted as NULL in that set's output rows.
+    QGVector<QGVector<int32_t>> groupingSets;
+    /// Fresh output columns for the (possibly NULL-padded) grouping keys.
+    ColumnVector groupingKeyColumns;
+    /// Output column holding the grouping-set index (BIGINT, zero-based).
+    ColumnCP groupId;
+    /// Output columns: `groupingKeyColumns`, then `aggregationInputs`' columns,
+    /// then `groupId`.
+    ColumnVector outputColumns;
+  };
+
+  /// Transparent hasher for interning `GroupId`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const GroupId* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `GroupId`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const GroupId* left, const GroupId* right) const;
+    bool operator()(const Key& key, const GroupId* node) const;
+    bool operator()(const GroupId* node, const Key& key) const;
+  };
+
+  explicit GroupId(Key key);
+
+  NodeCP input() const {
+    return input_;
+  }
+
+  const ExprVector& groupingKeys() const {
+    return groupingKeys_;
+  }
+
+  const ExprVector& aggregationInputs() const {
+    return aggregationInputs_;
+  }
+
+  const QGVector<QGVector<int32_t>>& groupingSets() const {
+    return groupingSets_;
+  }
+
+  const ColumnVector& groupingKeyColumns() const {
+    return groupingKeyColumns_;
+  }
+
+  ColumnCP groupId() const {
+    return groupId_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return {&input_, 1};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeCP input_;
+  const ExprVector groupingKeys_;
+  const ExprVector aggregationInputs_;
+  const QGVector<QGVector<int32_t>> groupingSets_;
+  const ColumnVector groupingKeyColumns_;
+  const ColumnCP groupId_;
+};
+
+using GroupIdCP = const GroupId*;
+
+/// Marks the first occurrence of each `(distinctKeys)` tuple from `input`
+/// with `true` and subsequent occurrences with `false`. Used to lower
+/// `DISTINCT` aggregates to non-distinct ones with a FILTER mask: a
+/// downstream `Aggregation` reads `agg(x) FILTER (marker)` and sees each
+/// `(group, x)` tuple at most once.
+///
+/// One `MarkDistinct` serves all distinct aggregates over the same key set.
+/// `markers[0]` is the no-mask marker: true on the first occurrence of each
+/// tuple overall, read by the unfiltered distinct aggregates. Each `masks[i]`
+/// is the `FILTER` condition of a filtered distinct aggregate, paired with
+/// `markers[i+1]`, which is true on the first occurrence of each tuple among
+/// the rows where `masks[i]` holds. `masks` is empty when no distinct aggregate
+/// over this key set carries a `FILTER`.
+///
+/// `outputColumns` = `input.outputColumns ++ markers` (input columns pass
+/// through unchanged).
+class MarkDistinct : public Node {
+ public:
+  struct Key {
+    /// Input node.
+    NodeCP input;
+    /// Output marker columns (BOOLEAN); `markers[0]` is the no-mask marker.
+    /// See the class doc.
+    ColumnVector markers;
+    /// Columns / expressions tested for distinctness, in positional order.
+    ExprVector distinctKeys;
+    /// FILTER condition per filtered distinct aggregate, positionally aligned
+    /// with `markers[1..]`. Empty when no distinct aggregate over the key set
+    /// carries a FILTER.
+    ColumnVector masks;
+    /// Output columns: `input`'s columns, then `markers`.
+    ColumnVector outputColumns;
+  };
+
+  /// Transparent hasher for interning `MarkDistinct`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const MarkDistinct* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `MarkDistinct`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const MarkDistinct* left, const MarkDistinct* right) const;
+    bool operator()(const Key& key, const MarkDistinct* node) const;
+    bool operator()(const MarkDistinct* node, const Key& key) const;
+  };
+
+  explicit MarkDistinct(Key key);
+
+  NodeCP input() const {
+    return input_;
+  }
+
+  const ColumnVector& markers() const {
+    return markers_;
+  }
+
+  const ExprVector& distinctKeys() const {
+    return distinctKeys_;
+  }
+
+  const ColumnVector& masks() const {
+    return masks_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return {&input_, 1};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeCP input_;
+  const ColumnVector markers_;
+  const ExprVector distinctKeys_;
+  const ColumnVector masks_;
+};
+
+using MarkDistinctCP = const MarkDistinct*;
+
+/// Embeds a constant table in the plan. `outputColumns` defines the schema
+/// in all three cases. At most one of `source` / `rows` is non-null:
+///   - `source != nullptr, rows == nullptr`: pass through a
+///     `logical_plan::ValuesNode` whose `Variants` or `Vectors` data is
+///     read when building the final Velox plan.
+///   - `source == nullptr, rows != nullptr`: an arena-allocated
+///     `Variant::array(...)` of row `Variant`s (each element is
+///     `Variant::row(...)`). Produced by translate-time folding of
+///     `lp::ValuesNode::Exprs`.
+///   - `source == nullptr, rows == nullptr`: empty table — zero rows with
+///     schema from `outputColumns`. Used for the `LIMIT 0` rewrite.
+class Values : public Node {
+ public:
+  struct Key {
+    /// Set to pass through a logical-plan `ValuesNode` (see class doc).
+    const logical_plan::ValuesNode* source;
+    /// Set to embed arena-folded row `Variant`s (see class doc).
+    const velox::Variant* rows;
+    /// Output schema (defines the columns in all cases).
+    ColumnVector outputColumns;
+    /// For each output column, its index into the underlying data (`source`
+    /// schema / `rows` fields). Identity `0..n-1` when the Values emits every
+    /// data column; pushdown pruning removes entries, leaving holes so a
+    /// dropped data column is never materialized. Must have one entry per
+    /// output column — Builder::makeValues fills identity for the emit-all
+    /// case.
+    QGVector<velox::column_index_t> channels;
+    /// Where PlanPhysical placed this node. Part of its identity.
+    Placement placement{Placement::kUnplaced};
+  };
+
+  /// Transparent hasher for interning `Values`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const Values* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `Values`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const Values* left, const Values* right) const;
+    bool operator()(const Key& key, const Values* node) const;
+    bool operator()(const Values* node, const Key& key) const;
+  };
+
+  explicit Values(Key key);
+
+  const logical_plan::ValuesNode* source() const {
+    return source_;
+  }
+
+  const velox::Variant* rows() const {
+    return rows_;
+  }
+
+  /// For each output column, its index into the underlying data. See Key.
+  const QGVector<velox::column_index_t>& channels() const {
+    return channels_;
+  }
+
+  /// See `Key::placement`.
+  Placement placement() const {
+    return placement_;
+  }
+
+  /// Number of rows this produces, whether they are held as folded row
+  /// `Variant`s or by the logical node.
+  size_t cardinality() const;
+
+  /// Returns whether 'node' is a Values node containing one row and no
+  /// columns.
+  static bool isSingleRowNoColumns(NodeCP node);
+
+  /// True if 'node' is a Values with no rows.
+  static bool isEmpty(NodeCP node);
+
+  /// Value of `outputColumns()[column]` in row 'row'. Only for folded rows,
+  /// i.e. when `rows()` is set.
+  const velox::Variant& valueAt(size_t row, size_t column) const;
+
+  std::span<const NodeCP> inputs() const override {
+    return {};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const logical_plan::ValuesNode* const source_;
+  const velox::Variant* const rows_;
+  const QGVector<velox::column_index_t> channels_;
+  const Placement placement_;
+};
+
+using ValuesCP = const Values*;
+
+/// Expands array / map expressions row-wise. The output has four disjoint
+/// kinds of columns, exposed as separate accessors so consumers never need
+/// positional decoding: `replicatedColumns` (pass-through input columns),
+/// `unnestColumns[i]` (per-expression result columns), the optional
+/// `ordinalityColumn`, and the optional `markerColumn`, which keeps an input
+/// row whose unnested value is empty. `outputColumns()` returns the
+/// concatenation in that order, for downstream consumers that need a single
+/// vector view.
+class Unnest : public Node {
+ public:
+  struct Key {
+    /// Input node.
+    NodeCP input;
+    /// Array / map expressions expanded row-wise, in positional order.
+    ExprVector unnestExpressions;
+    /// Subset of `input->outputColumns()` to pass through; may be empty.
+    ColumnVector replicatedColumns;
+    /// One `ColumnVector` per `unnestExpressions[i]`: the result columns
+    /// produced by that expression (1 for ARRAY, 2 for MAP — key, value).
+    QGVector<ColumnVector> unnestColumns;
+    /// Optional ordinality column; null when this node does not produce
+    /// ordinality.
+    ColumnCP ordinalityColumn;
+    /// Optional BOOLEAN marker column. When set, an input row whose unnested
+    /// value is empty or NULL still produces one output row, with the marker
+    /// false and every unnest result column NULL; the marker is true on rows
+    /// that came from a value. When null, such an input row produces no
+    /// output row.
+    ColumnCP markerColumn;
+    /// Visible schema. Every `Column*` here is a `replicatedColumns` column, a
+    /// column in some `unnestColumns[i]`, `ordinalityColumn`, or
+    /// `markerColumn`. All `replicatedColumns`, `ordinalityColumn` and
+    /// `markerColumn` must appear; only per-expression `unnestColumns` may be
+    /// pruned out.
+    ColumnVector outputColumns;
+  };
+
+  /// Transparent hasher for interning `Unnest`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const Unnest* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `Unnest`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const Unnest* left, const Unnest* right) const;
+    bool operator()(const Key& key, const Unnest* node) const;
+    bool operator()(const Unnest* node, const Key& key) const;
+  };
+
+  explicit Unnest(Key key);
+
+  NodeCP input() const {
+    return input_;
+  }
+
+  const ExprVector& unnestExpressions() const {
+    return unnestExpressions_;
+  }
+
+  const ColumnVector& replicatedColumns() const {
+    return replicatedColumns_;
+  }
+
+  const QGVector<ColumnVector>& unnestColumns() const {
+    return unnestColumns_;
+  }
+
+  /// Returns columns created by expansion, including optional ordinality and
+  /// marker columns, and excluding replicated input columns.
+  PlanObjectSet generatedColumns() const;
+
+  ColumnCP ordinalityColumn() const {
+    return ordinalityColumn_;
+  }
+
+  bool withOrdinality() const {
+    return ordinalityColumn_ != nullptr;
+  }
+
+  ColumnCP markerColumn() const {
+    return markerColumn_;
+  }
+
+  /// True if an input row with an empty or NULL unnested value still
+  /// produces an output row. See `Key::markerColumn`.
+  bool isOuter() const {
+    return markerColumn_ != nullptr;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return {&input_, 1};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeCP input_;
+  const ExprVector unnestExpressions_;
+  const ColumnVector replicatedColumns_;
+  const QGVector<ColumnVector> unnestColumns_;
+  const ColumnCP ordinalityColumn_;
+  const ColumnCP markerColumn_;
+};
+
+using UnnestCP = const Unnest*;
+
+/// Concatenates rows from all inputs (UNION ALL semantics).
+/// `outputColumns` is a fresh duplicate-free output schema; `legColumns[i]`
+/// maps each output position to a `Column*` from `inputs[i]`.
+///
+/// Example: `SELECT a, b FROM t UNION ALL SELECT x, y FROM u` translates to:
+///
+///     UnionAll(inputs=[t, u],
+///              legColumns=[[t.a, t.b],  // leg 0: which t columns feed outputs
+///                          [u.x, u.y]], // leg 1: which u columns feed outputs
+///              outputColumns=[union_col_0, union_col_1])
+///
+/// `legColumns[i][j]` is the `Column*` from `inputs[i]->outputColumns()`
+/// that supplies values for union output position `j`. The same
+/// `Column*` may repeat within a leg to fan one input column into
+/// multiple union positions (e.g., `SELECT a, a FROM t` after the
+/// translate-time deduplication collapses both selected `a`s to one input
+/// column).
+class UnionAll : public Node {
+ public:
+  struct Key {
+    /// Inputs to concatenate; >= 2.
+    NodeVector inputs;
+    /// Per input, the `Column*`s (from that input's `outputColumns()`) that
+    /// feed each output position: one entry per input, each sized like
+    /// `outputColumns`. See the class doc.
+    QGVector<ColumnVector> legColumns;
+    /// Fresh, duplicate-free output schema.
+    ColumnVector outputColumns;
+  };
+
+  /// Transparent hasher for interning `UnionAll`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const UnionAll* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `UnionAll`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const UnionAll* left, const UnionAll* right) const;
+    bool operator()(const Key& key, const UnionAll* node) const;
+    bool operator()(const UnionAll* node, const Key& key) const;
+  };
+
+  explicit UnionAll(Key key);
+
+  std::span<const NodeCP> inputs() const override {
+    return inputs_;
+  }
+
+  const QGVector<ColumnVector>& legColumns() const {
+    return legColumns_;
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeVector inputs_;
+  const QGVector<ColumnVector> legColumns_;
+};
+
+using UnionAllCP = const UnionAll*;
+
+/// Joins two inputs by `joinType` with paired equi-keys plus an optional
+/// residual `filter`. `sourceColumns[i]` supplies `outputColumns[i]`. They are
+/// normally the same identity. A null-extended input instead has fresh output
+/// identities so facts about its input values cannot escape above the join.
+///
+/// Example: `SELECT * FROM t INNER JOIN u ON t.a = u.a AND t.b > u.b`
+/// translates to:
+///
+///     Join(left=t, right=u, joinType=kInner,
+///          leftKeys=[t.a], rightKeys=[u.a],
+///          filter=(t.b > u.b),
+///          outputColumns=[t.a, t.b, u.a, u.b])
+///
+/// `leftKeys[i]` joins against `rightKeys[i]` via equality; the two
+/// vectors must have the same size. The match condition is
+/// `AND(leftKeys[i] = rightKeys[i] for all i) AND AND(filter)`.
+/// `filter` is a flat vector of predicates joined with AND (the producer is
+/// responsible for flattening and for lifting any equi-pairs into the key
+/// vectors).
+///
+/// Lowering depends on key presence:
+///   - `leftKeys` non-empty → `HashJoinNode`, with `filter` as the
+///     optional residual non-equi predicate.
+///   - `leftKeys` empty, `filter` empty → `NestedLoopJoinNode` cross
+///     product.
+///   - `leftKeys` empty, `filter` non-empty → `NestedLoopJoinNode`
+///     filter-only join.
+///
+/// `nullAware` (semi / anti only) enables NULL-aware semantics for
+/// `IN` / `NOT IN`. `nullAsValue` (set ops INTERSECT / EXCEPT) treats
+/// `NULL == NULL` as true on equi-keys. Mutually exclusive.
+class Join : public Node {
+ public:
+  struct Key {
+    /// Left input.
+    NodeCP left;
+    /// Right input.
+    NodeCP right;
+    /// Join type (inner / left / full / semi / anti / ...).
+    velox::core::JoinType joinType;
+    /// Left equi-keys; positional with `rightKeys` and the same size.
+    ExprVector leftKeys;
+    /// Right equi-keys; positional with `leftKeys`.
+    ExprVector rightKeys;
+    /// Residual non-equi predicates joined with AND; may be empty.
+    ExprVector filter;
+    /// NULL-aware semantics for IN / NOT IN (semi / anti only).
+    bool nullAware{false};
+    /// Treats NULL == NULL as true on equi-keys (INTERSECT / EXCEPT).
+    bool nullAsValue{false};
+    /// Output schema, pruned to what consumers need. Preserved inputs normally
+    /// keep their column identities; null-extended inputs use fresh columns.
+    ColumnVector outputColumns;
+    /// Input columns supplying `outputColumns`, positionally aligned. Empty is
+    /// shorthand for `outputColumns` when every output passes through.
+    ColumnVector sourceColumns;
+    /// True when the right input is loop-invariant: it reads no state of the
+    /// enclosing loop, so its hash table is built once before the first
+    /// iteration and every iteration probes it. Requires
+    /// `canBuildLoopInvariant`. Set by physical planning.
+    ///
+    /// Stands in for modeling loop-invariant inputs explicitly: the
+    /// `FixedPoint` would list them, and the step would read them through a
+    /// node, as it reads the loop's state through `WorkingTable`. Move to that
+    /// model when a loop-invariant input needs more than a join's build side,
+    /// such as a second reader or a join type other than inner.
+    bool buildIsLoopInvariant{false};
+
+    /// Returns the explicit sources, or the outputs for a pass-through schema.
+    const ColumnVector& effectiveSourceColumns() const {
+      return sourceColumns.empty() ? outputColumns : sourceColumns;
+    }
+
+    /// Exchanges the left and right inputs, equi-keys, and join type of an
+    /// inner or outer join. Preserves the filter, null semantics, and output.
+    void swapInputs();
+  };
+
+  /// Transparent hasher for interning `Join`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const Join* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `Join`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const Join* left, const Join* right) const;
+    bool operator()(const Key& key, const Join* node) const;
+    bool operator()(const Join* node, const Key& key) const;
+  };
+
+  Join(Key key, Builder& builder);
+
+  NodeCP left() const {
+    return inputs_[0];
+  }
+
+  NodeCP right() const {
+    return inputs_[1];
+  }
+
+  velox::core::JoinType joinType() const {
+    return joinType_;
+  }
+
+  std::string_view joinTypeName() const {
+    return velox::core::JoinTypeName::toName(joinType_);
+  }
+
+  bool isInner() const {
+    return joinType_ == velox::core::JoinType::kInner;
+  }
+
+  bool isLeft() const {
+    return joinType_ == velox::core::JoinType::kLeft;
+  }
+
+  bool isFull() const {
+    return joinType_ == velox::core::JoinType::kFull;
+  }
+
+  bool isLeftSemiProject() const {
+    return joinType_ == velox::core::JoinType::kLeftSemiProject;
+  }
+
+  /// Input columns supplying the output columns, positionally aligned.
+  const ColumnVector& sourceColumns() const {
+    return sourceColumns_;
+  }
+
+  /// A flag for each of a join's inputs.
+  struct Sides {
+    bool left{false};
+    bool right{false};
+  };
+
+  /// Returns the inputs whose rows reach the output unchanged. The join may
+  /// drop such a row, but it never nulls its columns or invents one.
+  ///   - Inner: both inputs.
+  ///   - Left, left semi, anti and their counting forms: the left input.
+  ///   - Right, right semi and right anti: the right input.
+  ///   - Full: neither.
+  static Sides preservedSides(velox::core::JoinType joinType);
+
+  /// Returns the inputs whose unique keys hold for the join's output: each row
+  /// of the input appears at most once, and no other output row carries its
+  /// columns. An input qualifies when:
+  ///   - the other input has at most one row per join key: in an inner join,
+  ///     or for the kept input of a left or right join;
+  ///   - or the join emits only that input's rows: semi and anti joins.
+  /// Full and counting joins qualify neither input.
+  static Sides emittedOnceSides(
+      velox::core::JoinType joinType,
+      NodeCP left,
+      NodeCP right,
+      const ExprVector& leftKeys,
+      const ExprVector& rightKeys);
+
+  /// Returns whether a row holding a NULL key can match: in a NULL-aware
+  /// semi or anti join, or one that treats NULL keys as equal. An equality
+  /// derived from the keys is plain `=`, which drops such a row, so it must
+  /// not be derived for these joins.
+  static bool nullKeysMatch(bool nullAware, bool nullAsValue) {
+    return nullAware || nullAsValue;
+  }
+
+  /// Returns whether `source` comes from an input preserved by `joinType`.
+  static bool preservesSource(
+      velox::core::JoinType joinType,
+      ColumnCP source,
+      const PlanObjectSet& leftColumns,
+      const PlanObjectSet& rightColumns);
+
+  /// Returns the equivalent join type when the left and right inputs are
+  /// exchanged. Fails for join types that have no mirrored representation.
+  static velox::core::JoinType swapType(velox::core::JoinType joinType);
+
+  /// True when `Key::swapInputs` can exchange the inputs of a join of
+  /// 'joinType' while preserving its output: an inner or outer join.
+  static bool canSwapInputs(velox::core::JoinType joinType);
+
+  /// Returns the input of a join in a loop's step that can be loop-invariant
+  /// (see `Key::buildIsLoopInvariant`): in an inner join with keys that treats
+  /// no NULL keys as equal, the input that reads no loop state when the other
+  /// one does. `readsState` says which inputs read a loop's state. At most one
+  /// side is set.
+  ///
+  /// Such an input belongs on the build side: built once, it costs nothing per
+  /// iteration, which no orientation by size beats.
+  static Sides loopInvariantSide(
+      velox::core::JoinType joinType,
+      bool hasKeys,
+      bool nullAsValue,
+      Sides readsState);
+
+  /// Returns whether a join can have `Key::buildIsLoopInvariant`: its right
+  /// input is the side `loopInvariantSide` sets, and its right keys are
+  /// distinct columns, as a hash table's keys are.
+  static bool canBuildLoopInvariant(
+      velox::core::JoinType joinType,
+      const ExprVector& rightKeys,
+      bool nullAsValue,
+      NodeCP left,
+      NodeCP right);
+
+  /// Returns whether replicating the right input while leaving the left input
+  /// partitioned preserves results. Output rows must be tied to individual
+  /// left rows, and counting joins are excluded because their build counts
+  /// must be consumed once across all left partitions.
+  static bool canBroadcastBuild(velox::core::JoinType joinType);
+
+  /// Returns whether replicating the left input while leaving the right input
+  /// partitioned preserves results, the mirror of `canBroadcastBuild`. Output
+  /// rows must be tied to individual right rows, as in inner, right, right semi
+  /// and right anti joins. A left semi or anti join decides each left row from
+  /// all right rows, which no one worker holds.
+  static bool canBroadcastProbe(velox::core::JoinType joinType);
+
+  /// Returns whether empty inputs imply an empty join result.
+  static bool isKnownEmpty(
+      velox::core::JoinType joinType,
+      bool leftIsKnownEmpty,
+      bool rightIsKnownEmpty);
+
+  /// Returns whether a join adds a boolean match column to its preserved side.
+  static bool projectsMark(velox::core::JoinType joinType);
+
+  /// Derives a join's output partitioning from both inputs. Inputs that both
+  /// sit on one task keep that, whatever the join type. Otherwise a join keeps
+  /// a preserved side's partitioning when every output row carries that side's
+  /// column values unchanged; when both sides qualify (an inner join), it uses
+  /// the left.
+  ///
+  /// A full join preserves neither side, but every output row still carries the
+  /// value that placed it in the coalesce of each equi-key pair: matched rows
+  /// agree on the pair, and an unmatched row's null side falls through to the
+  /// key from the side it came from. Co-partitioned inputs therefore yield a
+  /// partitioning on those coalesces. Output derivation and consumer rewrites
+  /// use the same canonical operand order, so either physical join orientation
+  /// and either consumer spelling describe the same partitioning.
+  ///
+  /// Non-hash partitioning is inherited without its merge order. For hash
+  /// partitioning, compatible connector bucket types are folded and every key
+  /// must remain expressible on the output. An inner join can replace a dropped
+  /// column key with a surviving member of its equality class.
+  /// `joinOutputColumns` maps `joinSourceColumns` into the identities visible
+  /// above a NULL-extending join.
+  static Partitioning outputPartitioning(
+      velox::core::JoinType joinType,
+      const Partitioning& leftPartitioning,
+      const Partitioning& rightPartitioning,
+      const ExprVector& leftKeys,
+      const ExprVector& rightKeys,
+      const PlanObjectSet& outputColumns,
+      const ColumnVector& joinOutputColumns,
+      const ColumnVector& joinSourceColumns,
+      Builder& builder);
+
+  /// Returns the BOOLEAN mark this semi-project join adds to the preserved
+  /// side's columns, which is its last output column. Only semi-project joins
+  /// project one.
+  ColumnCP markColumn() const;
+
+  const ExprVector& leftKeys() const {
+    return leftKeys_;
+  }
+
+  const ExprVector& rightKeys() const {
+    return rightKeys_;
+  }
+
+  const ExprVector& filter() const {
+    return filter_;
+  }
+
+  bool nullAware() const {
+    return nullAware_;
+  }
+
+  bool nullAsValue() const {
+    return nullAsValue_;
+  }
+
+  /// See `Key::buildIsLoopInvariant`.
+  bool buildIsLoopInvariant() const {
+    return buildIsLoopInvariant_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return inputs_;
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const std::array<NodeCP, 2> inputs_;
+  const velox::core::JoinType joinType_;
+  const ExprVector leftKeys_;
+  const ExprVector rightKeys_;
+  const ExprVector filter_;
+  const bool nullAware_;
+  const bool nullAsValue_;
+  const bool buildIsLoopInvariant_;
+  const ColumnVector sourceColumns_;
+};
+
+using JoinCP = const Join*;
+
+/// Looks up rows from an indexed table for each row produced by `probe`.
+/// The lookup source is connector access metadata, not an executable input.
+class IndexLookupJoin : public Node {
+ public:
+  struct Key {
+    NodeCP probe;
+    BaseTableCP lookupTable;
+    ColumnGroupCP index;
+    ColumnVector lookupOutputColumns;
+    const TableAccessHandle* lookupHandle;
+    velox::core::JoinType joinType;
+    ExprVector probeKeys;
+    ColumnVector lookupKeys;
+    ExprVector filter;
+    ColumnVector outputColumns;
+    ColumnVector sourceColumns;
+  };
+
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const IndexLookupJoin* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const IndexLookupJoin* left, const IndexLookupJoin* right)
+        const;
+    bool operator()(const Key& key, const IndexLookupJoin* node) const;
+    bool operator()(const IndexLookupJoin* node, const Key& key) const;
+  };
+
+  explicit IndexLookupJoin(Key key);
+
+  NodeCP probe() const {
+    return probe_;
+  }
+
+  BaseTableCP lookupTable() const {
+    return lookupTable_;
+  }
+
+  ColumnGroupCP index() const {
+    return index_;
+  }
+
+  const ColumnVector& lookupOutputColumns() const {
+    return lookupOutputColumns_;
+  }
+
+  const TableAccessHandle* lookupHandle() const {
+    return lookupHandle_;
+  }
+
+  velox::core::JoinType joinType() const {
+    return joinType_;
+  }
+
+  const ExprVector& probeKeys() const {
+    return probeKeys_;
+  }
+
+  const ColumnVector& lookupKeys() const {
+    return lookupKeys_;
+  }
+
+  const ExprVector& filter() const {
+    return filter_;
+  }
+
+  const ColumnVector& sourceColumns() const {
+    return sourceColumns_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return {&probe_, 1};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeCP probe_;
+  const BaseTableCP lookupTable_;
+  const ColumnGroupCP index_;
+  const ColumnVector lookupOutputColumns_;
+  const TableAccessHandle* const lookupHandle_;
+  const velox::core::JoinType joinType_;
+  const ExprVector probeKeys_;
+  const ColumnVector lookupKeys_;
+  const ExprVector filter_;
+  const ColumnVector sourceColumns_;
+};
+
+using IndexLookupJoinCP = const IndexLookupJoin*;
+
+/// Evaluates one remote inference call -- an LLM completion, an embedding, a
+/// model prediction -- for every input row. Velox runs such a call in its own
+/// operator, so it cannot stay inside a `Project`. Output schema is the input
+/// columns followed by the call's result column.
+///
+///   Inference(call: text_embedding(comment), result: embedding)
+///
+/// Invariants:
+/// - `call` names a function registered as an inference function, and its
+///   arguments are columns of `input` or literals.
+/// - `outputColumns` is `input`'s columns followed by `result`.
+class Inference : public Node {
+ public:
+  struct Key {
+    /// Input node.
+    NodeCP input;
+    /// The inference call. Arguments are columns of `input` or literals.
+    ExprCP call;
+    /// Column carrying the call's result.
+    ColumnCP result;
+    /// Output columns: `input`'s columns, then `result`.
+    ColumnVector outputColumns;
+  };
+
+  /// Transparent hasher for interning `Inference`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const Inference* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `Inference`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const Inference* left, const Inference* right) const;
+    bool operator()(const Key& key, const Inference* node) const;
+    bool operator()(const Inference* node, const Key& key) const;
+  };
+
+  explicit Inference(Key key);
+
+  NodeCP input() const {
+    return input_;
+  }
+
+  ExprCP call() const {
+    return call_;
+  }
+
+  ColumnCP result() const {
+    return result_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return {&input_, 1};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeCP input_;
+  const ExprCP call_;
+  const ColumnCP result_;
+};
+
+/// Evaluates one or more window function calls. Output schema is input
+/// columns followed by one output column per window function.
+class Window : public Node {
+ public:
+  /// One window function invocation. Frame is per-function (as in Velox
+  /// `WindowNode::Function`), so functions sharing a partition / order but
+  /// differing only in frame still group under a single `Window` node.
+  struct Function {
+    /// The window function and its arguments.
+    ExprCP call;
+
+    /// The row/range window over which this function is evaluated.
+    Frame frame;
+
+    /// When true, NULL inputs are skipped when evaluating the function
+    /// (e.g. the `IGNORE NULLS` option in SQL frontends).
+    bool ignoreNulls;
+
+    bool operator==(const Function&) const = default;
+  };
+
+  using Functions = QGVector<Function>;
+
+  struct Key {
+    /// Input node.
+    NodeCP input;
+    /// Window function invocations sharing this partition / order; non-empty.
+    /// Each carries its own frame.
+    Functions functions;
+    /// Partition-by keys, distinct columns; empty for a single global
+    /// partition.
+    ExprVector partitionKeys;
+    /// Order-by keys, distinct columns that are not partition keys;
+    /// positional with `orderTypes`.
+    ExprVector orderKeys;
+    /// Sort direction per order key; positional with `orderKeys`.
+    OrderTypeVector orderTypes;
+    /// Output columns: `input`'s columns, then one per window function.
+    ColumnVector outputColumns;
+  };
+
+  /// Transparent hasher for interning `Window`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const Window* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `Window`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const Window* left, const Window* right) const;
+    bool operator()(const Key& key, const Window* node) const;
+    bool operator()(const Window* node, const Key& key) const;
+  };
+
+  explicit Window(Key key);
+
+  NodeCP input() const {
+    return input_;
+  }
+
+  const Functions& functions() const {
+    return functions_;
+  }
+
+  const ExprVector& partitionKeys() const {
+    return partitionKeys_;
+  }
+
+  const ExprVector& orderKeys() const {
+    return orderKeys_;
+  }
+
+  const OrderTypeVector& orderTypes() const {
+    return orderTypes_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return {&input_, 1};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeCP input_;
+  const Functions functions_;
+  const ExprVector partitionKeys_;
+  const ExprVector orderKeys_;
+  const OrderTypeVector orderTypes_;
+};
+
+using WindowCP = const Window*;
+
+/// Numbers the rows of each partition in arrival order, optionally keeping only
+/// the first 'limit' of them. Needs no ordering, so it streams: one counter per
+/// partition key, no per-partition buffer. Computes `row_number` only.
+class RowNumber : public Node {
+ public:
+  struct Key {
+    /// Input node.
+    NodeCP input;
+    /// Partition-by keys, distinct columns; empty for a single global
+    /// partition.
+    ExprVector partitionKeys;
+    /// Per-partition row cap; > 0 when set, absent for no cap.
+    std::optional<int32_t> limit;
+    /// Column carrying the row number in the output, or null to omit it (the
+    /// output is then just the input columns).
+    ColumnCP rankColumn;
+    /// Output columns: `input`'s columns, plus `rankColumn` when set.
+    ColumnVector outputColumns;
+  };
+
+  /// Transparent hasher for interning `RowNumber`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const RowNumber* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `RowNumber`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const RowNumber* left, const RowNumber* right) const;
+    bool operator()(const Key& key, const RowNumber* node) const;
+    bool operator()(const RowNumber* node, const Key& key) const;
+  };
+
+  explicit RowNumber(Key key);
+
+  NodeCP input() const {
+    return input_;
+  }
+
+  const ExprVector& partitionKeys() const {
+    return partitionKeys_;
+  }
+
+  std::optional<int32_t> limit() const {
+    return limit_;
+  }
+
+  ColumnCP rankColumn() const {
+    return rankColumn_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return {&input_, 1};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeCP input_;
+  const ExprVector partitionKeys_;
+  const std::optional<int32_t> limit_;
+  const ColumnCP rankColumn_;
+};
+
+using RowNumberCP = const RowNumber*;
+
+/// Per-partition top-`limit` rows ranked by a ranking function (row_number /
+/// rank / dense_rank). Produced by fusing
+/// a `Filter(rankColumn <op> n)` over a single-ranking-function `Window`. The
+/// rank column is emitted only when `rankColumn` is set; otherwise the output
+/// is just the input columns.
+class TopNRowNumber : public Node {
+ public:
+  using RankFunction = velox::core::TopNRowNumberNode::RankFunction;
+
+  struct Key {
+    /// Input node.
+    NodeCP input;
+    /// Ranking function (row_number / rank / dense_rank).
+    RankFunction rankFunction;
+    /// Partition-by keys, distinct columns; empty for a single global
+    /// partition.
+    ExprVector partitionKeys;
+    /// Order-by keys, distinct columns that are not partition keys;
+    /// positional with `orderTypes`, non-empty.
+    ExprVector orderKeys;
+    /// Sort direction per order key; positional with `orderKeys`.
+    OrderTypeVector orderTypes;
+    /// Per-partition row cap; > 0.
+    int32_t limit;
+    /// Column carrying the ranking-function result in the output, or null to
+    /// omit it (the output is then just the input columns).
+    ColumnCP rankColumn;
+    /// Output columns: `input`'s columns, plus `rankColumn` when set.
+    ColumnVector outputColumns;
+  };
+
+  /// Transparent hasher for interning `TopNRowNumber`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const TopNRowNumber* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `TopNRowNumber`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const TopNRowNumber* left, const TopNRowNumber* right)
+        const;
+    bool operator()(const Key& key, const TopNRowNumber* node) const;
+    bool operator()(const TopNRowNumber* node, const Key& key) const;
+  };
+
+  explicit TopNRowNumber(Key key);
+
+  NodeCP input() const {
+    return input_;
+  }
+
+  RankFunction rankFunction() const {
+    return rankFunction_;
+  }
+
+  const ExprVector& partitionKeys() const {
+    return partitionKeys_;
+  }
+
+  const ExprVector& orderKeys() const {
+    return orderKeys_;
+  }
+
+  const OrderTypeVector& orderTypes() const {
+    return orderTypes_;
+  }
+
+  int32_t limit() const {
+    return limit_;
+  }
+
+  ColumnCP rankColumn() const {
+    return rankColumn_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return {&input_, 1};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeCP input_;
+  const RankFunction rankFunction_;
+  const ExprVector partitionKeys_;
+  const ExprVector orderKeys_;
+  const OrderTypeVector orderTypes_;
+  const int32_t limit_;
+  const ColumnCP rankColumn_;
+};
+
+using TopNRowNumberCP = const TopNRowNumber*;
+
+/// Apply is a "true dependent join" — a relational join whose right side
+/// (`body`, conceptually evaluated per `input` row) may reference `input`'s
+/// columns.
+///
+/// "Body" rather than "subquery": at translate time Apply's right side IS
+/// the translated subquery, but as decorrelate iterates it peels operators
+/// off and `body` evolves. The decorrelate pass and downstream consumers
+/// reason about Apply as a generic dependent-join node whose right side is
+/// `body`; only Translate uses the SQL term "subquery" in its prose.
+///
+/// Example: `SELECT (SELECT max(u.b) FROM u WHERE u.a = t.a) FROM t`
+/// translates to:
+///
+///     Apply(kLeft, input=t,
+///           body=Aggregate(Filter(u.a=t.a, u), max(u.b)),
+///           correlationColumns=[t.a],
+///           filter=null,
+///           enforceSingleRow=false)
+///
+/// Apply is transient: produced by `translate` at every `lp::SubqueryExpr`
+/// site, eliminated by `pass.decorrelate` before any later pass.
+///
+/// Per-kind semantics:
+///
+///   kLeft             Correlated scalar / LEFT JOIN LATERAL. Left-outer-join
+///                     semantics. Body may produce N rows per outer. Output:
+///                     `input.outputColumns ++ unique(body.outputColumns)
+///                     ++ [includeMarker]` — a body column already in input
+///                     occupies a single output slot. (NULL-padded for
+///                     outers with no match; `includeMarker` is `true`
+///                     on real rows, NULL on pad rows.)
+///   kInner            CROSS / INNER JOIN LATERAL. Inner-join semantics: no
+///                     NULL-padded rows and hence no `includeMarker`; outers
+///                     with no matching body row are dropped. Body may produce
+///                     N rows per outer. Output:
+///                     `input.outputColumns ++ unique(body.outputColumns)`.
+///   kLeftSemiProject  EXISTS / IN. Output:
+///                     `input.outputColumns ++ markColumn` — a fresh BOOLEAN
+///                     true iff any body row exists for the outer
+///                     matching `filter` AND (for IN) `inLhs = inBodyKey`.
+///                     NULL-aware for IN.
+///
+/// `kLeftSemiFilter` and `kAnti` never appear at Apply — they emerge only
+/// from a post-decorrelate peephole that recognizes
+/// `Filter(mark, Join(kLeftSemiProject, ..., mark))`.
+class Apply : public Node {
+ public:
+  struct Key {
+    /// Left ("outer") input.
+    NodeCP input;
+    /// Right side, evaluated per `input` row; may reference `input`'s columns.
+    NodeCP body;
+    /// `input` columns the current `body` still references; recomputed by
+    /// decorrelate after each peel. Empty at terminus, where Apply becomes a
+    /// Join.
+    ColumnVector correlationColumns;
+    /// `kLeft` (correlated scalar / lateral) or `kLeftSemiProject` (EXISTS /
+    /// IN).
+    velox::core::JoinType kind;
+    /// Residual predicates joined with AND; become `Join.filter` at terminus.
+    ExprVector filter;
+    /// Assert the body returns 0-or-1 row per outer (>1 rows errors);
+    /// correlated scalar subqueries only.
+    bool enforceSingleRow;
+    /// `kLeftSemiProject` mark output (BOOLEAN); null for `kLeft`.
+    ColumnCP markColumn;
+    /// IN equi-pair left side (the `lhs` of `lhs IN (SELECT ...)`), kept as a
+    /// pair rather than `eq(inLhs, inBodyKey)` so consumers read each side
+    /// directly; drives `nullAware()`. Null unless an IN subquery.
+    ExprCP inLhs;
+    /// IN equi-pair body side; see `inLhs`. Null unless an IN subquery.
+    ExprCP inBodyKey;
+    /// `kLeft` pad-row marker (BOOLEAN); null for `kLeftSemiProject`.
+    ColumnCP includeMarker;
+    /// Output columns; per-kind layout in the class doc.
+    ColumnVector outputColumns;
+    /// Columns supplying `outputColumns`, positionally aligned. Body columns
+    /// padded by `kLeft` map to fresh output identities. Empty is shorthand
+    /// for `outputColumns`.
+    ColumnVector sourceColumns;
+
+    /// Returns the explicit sources, or the outputs for a pass-through schema.
+    const ColumnVector& effectiveSourceColumns() const {
+      return sourceColumns.empty() ? outputColumns : sourceColumns;
+    }
+  };
+
+  /// Transparent hasher for interning `Apply`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const Apply* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `Apply`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const Apply* left, const Apply* right) const;
+    bool operator()(const Key& key, const Apply* node) const;
+    bool operator()(const Apply* node, const Key& key) const;
+  };
+
+  explicit Apply(Key key);
+
+  NodeCP input() const {
+    return inputs_[0];
+  }
+
+  NodeCP body() const {
+    return inputs_[1];
+  }
+
+  const ColumnVector& correlationColumns() const {
+    return correlationColumns_;
+  }
+
+  velox::core::JoinType kind() const {
+    return kind_;
+  }
+
+  std::string_view kindName() const {
+    return velox::core::JoinTypeName::toName(kind_);
+  }
+
+  bool isLeft() const {
+    return kind_ == velox::core::JoinType::kLeft;
+  }
+
+  bool isInner() const {
+    return kind_ == velox::core::JoinType::kInner;
+  }
+
+  bool isLeftSemiProject() const {
+    return kind_ == velox::core::JoinType::kLeftSemiProject;
+  }
+
+  const ExprVector& filter() const {
+    return filter_;
+  }
+
+  bool enforceSingleRow() const {
+    return enforceSingleRow_;
+  }
+
+  ColumnCP markColumn() const {
+    return markColumn_;
+  }
+
+  ExprCP inLhs() const {
+    return inLhs_;
+  }
+
+  ExprCP inBodyKey() const {
+    return inBodyKey_;
+  }
+
+  ColumnCP includeMarker() const {
+    return includeMarker_;
+  }
+
+  bool nullAware() const {
+    return inLhs_ != nullptr;
+  }
+
+  /// Columns supplying the output columns, positionally aligned.
+  const ColumnVector& sourceColumns() const {
+    return sourceColumns_;
+  }
+
+  /// Returns the output positionally supplied by `source`.
+  ColumnCP outputForSource(ColumnCP source) const;
+
+  std::span<const NodeCP> inputs() const override {
+    return inputs_;
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const std::array<NodeCP, 2> inputs_;
+  const ColumnVector correlationColumns_;
+  const velox::core::JoinType kind_;
+  const ExprVector filter_;
+  const bool enforceSingleRow_;
+  const ColumnCP markColumn_;
+  const ExprCP inLhs_;
+  const ExprCP inBodyKey_;
+  const ColumnCP includeMarker_;
+  const ColumnVector sourceColumns_;
+};
+
+using ApplyCP = const Apply*;
+
+/// Asserts the input contains at most one row. An empty input yields a single
+/// all-NULL row, so its outputs have fresh identities mapped positionally to
+/// the input columns. More than one row raises an error. Used to enforce the
+/// 0-or-1-row cardinality of an uncorrelated scalar subquery.
+class EnforceSingleRow : public Node {
+ public:
+  struct Key {
+    /// Input node.
+    NodeCP input;
+    /// Fresh outputs, positionally aligned with the input.
+    ColumnVector outputColumns;
+  };
+
+  /// Transparent hasher for interning `EnforceSingleRow`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const EnforceSingleRow* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `EnforceSingleRow`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const EnforceSingleRow* left, const EnforceSingleRow* right)
+        const;
+    bool operator()(const Key& key, const EnforceSingleRow* node) const;
+    bool operator()(const EnforceSingleRow* node, const Key& key) const;
+  };
+
+  explicit EnforceSingleRow(Key key);
+
+  NodeCP input() const {
+    return input_;
+  }
+
+  /// Input columns supplying the output columns, positionally aligned.
+  const ColumnVector& sourceColumns() const {
+    return input_->outputColumns();
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return {&input_, 1};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeCP input_;
+};
+
+using EnforceSingleRowCP = const EnforceSingleRow*;
+
+/// Emits each input row unchanged, appending `idColumn` — a value unique across
+/// all output rows.
+class AssignUniqueId : public Node {
+ public:
+  struct Key {
+    /// Input node.
+    NodeCP input;
+    /// Appended id column (BIGINT).
+    ColumnCP idColumn;
+  };
+
+  /// Transparent hasher for interning `AssignUniqueId`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const AssignUniqueId* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `AssignUniqueId`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const AssignUniqueId* left, const AssignUniqueId* right)
+        const;
+    bool operator()(const Key& key, const AssignUniqueId* node) const;
+    bool operator()(const AssignUniqueId* node, const Key& key) const;
+  };
+
+  explicit AssignUniqueId(Key key);
+
+  NodeCP input() const {
+    return input_;
+  }
+
+  ColumnCP idColumn() const {
+    return idColumn_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return {&input_, 1};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeCP input_;
+  const ColumnCP idColumn_;
+};
+
+using AssignUniqueIdCP = const AssignUniqueId*;
+
+/// Asserts that `distinctKeys` are unique across the input — at most one row
+/// per distinct combination of their values — raising a runtime error carrying
+/// `errorMessage` on the first duplicate. Does not change the schema:
+/// `outputColumns()` are the input's columns unchanged (the same `Column`
+/// pointers). Used to enforce the 0-or-1-row cardinality of a correlated scalar
+/// subquery.
+class EnforceDistinct : public Node {
+ public:
+  struct Key {
+    /// Input node.
+    NodeCP input;
+    /// Keys asserted unique across the input; non-empty.
+    ExprVector distinctKeys;
+    /// Error message raised on the first duplicate.
+    Name errorMessage;
+  };
+
+  /// Transparent hasher for interning `EnforceDistinct`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const EnforceDistinct* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `EnforceDistinct`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const EnforceDistinct* left, const EnforceDistinct* right)
+        const;
+    bool operator()(const Key& key, const EnforceDistinct* node) const;
+    bool operator()(const EnforceDistinct* node, const Key& key) const;
+  };
+
+  explicit EnforceDistinct(Key key);
+
+  NodeCP input() const {
+    return input_;
+  }
+
+  const ExprVector& distinctKeys() const {
+    return distinctKeys_;
+  }
+
+  Name errorMessage() const {
+    return errorMessage_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return {&input_, 1};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeCP input_;
+  const ExprVector distinctKeys_;
+  const Name errorMessage_;
+};
+
+using EnforceDistinctCP = const EnforceDistinct*;
+
+/// Redistributes input rows at the scope specified by `partitioning`. A global
+/// exchange lowers to a `PartitionedOutput`/`Exchange` pair across a fragment
+/// boundary. A driver exchange stays within its fragment and lowers to a Velox
+/// local partition or merge. Does not change the schema: `outputColumns()` are
+/// the input's columns unchanged (the same `Column` pointers).
+///
+/// Invariants:
+///   - `input` is non-null.
+///   - `partitioning.kind` is not `kUnspecified`.
+///   - A driver exchange is `kPartitioned` or `kGather`.
+///   - `partitioning.keys` is non-empty exactly when `kind` is `kPartitioned`.
+///   - `partitioning.orderKeys` and `orderTypes` have equal size and are
+///     non-empty only for `kGather`.
+///   - `partitioning.partitionType` is set only for `kPartitioned`.
+///   - `partitioning.replicateNullsAndAny` is set only for a global
+///     `kPartitioned` exchange.
+///   - Every key in `partitioning.keys` is a `Column`.
+///   - Every key in `partitioning.orderKeys` is a `Column`.
+///   - `placement` is what `placementAfter` returns for `input` and
+///     `partitioning`.
+///   - A gather's `input` is not already gathered at the exchange's scope.
+///   - A global exchange's `input` is not broadcast: its copies would merge.
+///
+/// For example, a driver hash exchange co-locates equal keys before a local
+/// aggregate.
+class Exchange : public Node {
+ public:
+  struct Key {
+    /// Input node.
+    NodeCP input;
+    /// Partitioning imposed on the output by this exchange.
+    Partitioning partitioning;
+    /// How the rows after this exchange run; see `placementAfter`.
+    Placement placement{Placement::kUnplaced};
+  };
+
+  /// Transparent hasher for interning `Exchange`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const Exchange* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `Exchange`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const Exchange* left, const Exchange* right) const;
+    bool operator()(const Key& key, const Exchange* node) const;
+    bool operator()(const Exchange* node, const Key& key) const;
+  };
+
+  explicit Exchange(Key key);
+
+  NodeCP input() const {
+    return input_;
+  }
+
+  const Partitioning& partitioning() const {
+    return partitioning_;
+  }
+
+  /// See `Key::placement`.
+  Placement placement() const {
+    return placement_;
+  }
+
+  /// Returns how the rows after an exchange of 'input' by 'partitioning' run.
+  /// 'oneDriverPerTask' says whether the stage runs one driver per task.
+  /// A global exchange decides the tasks: a gather runs on one task, any other
+  /// partitioning on several; it takes the drivers from 'oneDriverPerTask'. A
+  /// driver exchange keeps its input's tasks, one when the input is gathered,
+  /// and decides the drivers: a gather runs on one. A driver exchange requires
+  /// a stage with several drivers per task.
+  static Placement placementAfter(
+      NodeCP input,
+      const Partitioning& partitioning,
+      bool oneDriverPerTask);
+
+  std::span<const NodeCP> inputs() const override {
+    return {&input_, 1};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeCP input_;
+  const Partitioning partitioning_;
+  const Placement placement_;
+};
+
+using ExchangeCP = const Exchange*;
+
+/// Writes rows for CREATE or INSERT, or the identity of the rows a DELETE
+/// removes. A root sink: its single BIGINT output column is the written or
+/// removed row count, consumed by no node. UPDATE is deferred.
+///
+/// Example:
+///   builder.make<TableWrite>(
+///       {input, table, WriteKind::kInsert, inputColumns, {}, nullptr,
+///       nullptr});
+///
+/// Invariants checked at construction:
+/// - CREATE or INSERT: `columnExprs` are columns of `input`, one per table
+///   column, and `input` produces exactly them, in order. `rowIdColumns`,
+///   `deleteTarget` and `deleteLayout` are empty.
+/// - DELETE: `deleteTarget` is an instance of `table`, and `input` reads it
+///   through exactly one scan unless `input` has no rows. `rowIdColumns` are
+///   the table's row-ID columns, in order, produced by that scan and by
+///   `input`.
+/// - Row-level DELETE: `columnExprs` are the row-ID columns followed by the
+///   computed columns, and `input` produces exactly them. Any other DELETE has
+///   no `columnExprs`.
+class TableWrite : public Node {
+ public:
+  struct Key {
+    /// Input node (rows to write).
+    NodeCP input;
+    /// Target table used to build the connector's write or delete handle.
+    const connector::Table* table;
+    /// Write form (INSERT / CTAS / ...).
+    connector::WriteKind kind;
+    /// Per-target-column values, 1:1 with the table schema (`table->type()`).
+    /// Each is a column of `input`, which produces exactly these, in order.
+    /// For a row-level DELETE, the row-ID columns followed by the connector's
+    /// computed columns, set during physical planning. Empty for a DELETE
+    /// before that and for a metadata-only DELETE.
+    ExprVector columnExprs;
+
+    /// The columns identifying the rows a delete removes, in the order
+    /// `Table::rowIdColumns()` names them. A delete evaluates no value
+    /// expressions, so these are the whole of what it reads. Empty for every
+    /// other write kind.
+    ColumnVector rowIdColumns;
+
+    /// The table instance whose rows this DELETE removes: the `BaseTable` of
+    /// the scan in 'input' that reads them, or of the scan a proven-empty input
+    /// replaced. Non-null for DELETE and null for every other write kind.
+    BaseTableCP deleteTarget;
+
+    /// Non-owning connector DELETE layout, negotiated during physical planning
+    /// and read at emission. `Builder` owns it. Null before physical planning
+    /// and for every other write kind.
+    const connector::DeleteLayout* deleteLayout;
+  };
+
+  /// Transparent hasher for interning `TableWrite`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const TableWrite* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `TableWrite`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const TableWrite* left, const TableWrite* right) const;
+    bool operator()(const Key& key, const TableWrite* node) const;
+    bool operator()(const TableWrite* node, const Key& key) const;
+  };
+
+  explicit TableWrite(Key key);
+
+  NodeCP input() const {
+    return input_;
+  }
+
+  const connector::Table* table() const {
+    return table_;
+  }
+
+  connector::WriteKind kind() const {
+    return kind_;
+  }
+
+  const ExprVector& columnExprs() const {
+    return columnExprs_;
+  }
+
+  /// The columns a delete reads to identify the rows it removes, in the order
+  /// `Table::rowIdColumns()` names them. Resolved while the scan producing
+  /// them is translated.
+  const ColumnVector& rowIdColumns() const {
+    return rowIdColumns_;
+  }
+
+  /// Returns the table instance whose rows this DELETE removes, or null for
+  /// other write kinds.
+  BaseTableCP deleteTarget() const {
+    return deleteTarget_;
+  }
+
+  /// Returns the scan in 'input' that reads 'target', or null when 'input' has
+  /// none. Fails when two scans read it.
+  static ScanCP FOLLY_NULLABLE findTargetScan(NodeCP input, BaseTableCP target);
+
+  /// Returns the connector DELETE layout negotiated during physical planning,
+  /// or null before that pass and for non-DELETE writes.
+  const connector::DeleteLayout* deleteLayout() const {
+    return deleteLayout_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return {&input_, 1};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeCP input_;
+  const connector::Table* const table_;
+  const connector::WriteKind kind_;
+  const ExprVector columnExprs_;
+  const ColumnVector rowIdColumns_;
+  const BaseTableCP deleteTarget_;
+  const connector::DeleteLayout* const deleteLayout_;
+};
+
+using TableWriteCP = const TableWrite*;
+
+/// Selects which rows a `WorkingTable` reads from recursive state.
+enum class WorkingTableReadMode : uint8_t {
+  /// Rows produced by the immediately preceding anchor or step evaluation.
+  kLatestDelta,
+  /// All rows accumulated since the anchor initialized the state.
+  kAccumulated,
+};
+
+AXIOM_DECLARE_ENUM_NAME(WorkingTableReadMode);
+
+/// Reads recursive state inside a `FixedPoint` branch.
+///
+/// A latest-delta read returns the rows produced by the immediately preceding
+/// anchor or step evaluation, not every row accumulated so far. An accumulated
+/// read returns the full recursive result produced through that iteration. In
+/// a loop that replaces its state, both return the state. `name` identifies
+/// which enclosing fixed-point state to read.
+///
+/// `stateColumns` are the fixed point's output columns. Each read presents
+/// them under its own fresh `outputColumns`, aligned by position, so two reads
+/// of one state are distinct nodes with distinct columns, as two scans of one
+/// table are.
+///
+/// `partitioning` says where the state lives across workers (see
+/// `FixedPoint`), over `stateColumns`. The read's own placement is the same,
+/// over `outputColumns`.
+///
+/// Requires:
+/// - `name` is non-null and identifies the enclosing fixed-point state.
+/// - `stateColumns` share pointer identity with the fixed-point output.
+/// - `outputColumns` are fresh, as many as `stateColumns`, with equivalent
+///   types.
+/// - The keys of `partitioning` are among `stateColumns`.
+class WorkingTable : public Node {
+ public:
+  struct Key {
+    /// Identifies the enclosing fixed-point state.
+    Name name;
+    /// Shares `Column*` identity with the enclosing `FixedPoint` output.
+    ColumnVector stateColumns;
+    /// The columns this read presents, aligned with `stateColumns`.
+    ColumnVector outputColumns;
+    /// Selects the latest iteration's rows or all accumulated rows.
+    WorkingTableReadMode readMode;
+    /// Where the state lives across workers, over `stateColumns`: gathered
+    /// when the loop runs on one task, hash-partitioned in a loop partitioned
+    /// on its state's columns, unspecified otherwise. Set by physical planning.
+    Partitioning partitioning;
+    /// Where PlanPhysical placed this read. Part of its identity.
+    Placement placement{Placement::kUnplaced};
+  };
+
+  /// Transparent hasher for interning `WorkingTable`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const WorkingTable* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `WorkingTable`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const WorkingTable* left, const WorkingTable* right) const;
+    bool operator()(const Key& key, const WorkingTable* node) const;
+    bool operator()(const WorkingTable* node, const Key& key) const;
+  };
+
+  explicit WorkingTable(const Key& key);
+
+  Name name() const {
+    return name_;
+  }
+
+  /// The fixed point's output columns, which `outputColumns()` present by
+  /// position.
+  const ColumnVector& stateColumns() const {
+    return stateColumns_;
+  }
+
+  WorkingTableReadMode readMode() const {
+    return readMode_;
+  }
+
+  /// Where the state lives across workers, over `stateColumns()`. The read's
+  /// own placement, `physicalProperties().globalPartition`, is the same over
+  /// `outputColumns()`.
+  const Partitioning& partitioning() const {
+    return partitioning_;
+  }
+
+  /// See `Key::placement`.
+  Placement placement() const {
+    return placement_;
+  }
+
+  /// Invokes 'visit' for each read of state 'name' under 'node'.
+  static void forEachRead(
+      NodeCP node,
+      Name name,
+      folly::FunctionRef<void(const WorkingTable&)> visit);
+
+  std::span<const NodeCP> inputs() const override {
+    return {};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ protected:
+  RequiredStates deriveRequiredStates() const override;
+
+ private:
+  const Name name_;
+  const ColumnVector stateColumns_;
+  const WorkingTableReadMode readMode_;
+  const Partitioning partitioning_;
+  const Placement placement_;
+};
+
+using WorkingTableCP = const WorkingTable*;
+
+/// What a `FixedPoint` returns.
+enum class FixedPointMode : uint8_t {
+  /// The anchor's rows and every iteration's rows, as a recursive CTE does.
+  kAppend,
+  /// The state after the last iteration, as PageRank or k-means do.
+  kReplace,
+};
+
+AXIOM_DECLARE_ENUM_NAME(FixedPointMode);
+
+/// Represents a loop whose `anchor` seeds recursive state and whose `step`
+/// computes the next state from it. `mode` selects one of two loops.
+///
+/// kAppend returns every iteration's rows, as a recursive CTE does:
+///
+///   delta = anchor(); result = delta;
+///   for (iteration = 0; iteration < maxIterations; ++iteration) {
+///     delta = step(delta);
+///     result += delta;
+///     if (stop(delta)) return result;
+///   }
+///   if (failAtBound) fail;
+///   return result;
+///
+/// kReplace returns the last state, as PageRank or k-means do:
+///
+///   state = anchor();
+///   for (iteration = 0; iteration < maxIterations; ++iteration) {
+///     state = step(state);
+///     if (stop(state)) return state;
+///   }
+///   if (failAtBound) fail;
+///   return state;
+///
+/// stop(x) is `convergence` over x, or 'x is empty' without one.
+///
+/// For example:
+///
+///   WITH RECURSIVE counter(n) AS (
+///     VALUES 1
+///     UNION ALL
+///     SELECT n + 1 FROM counter WHERE n < 10)
+///
+/// translates to `VALUES 1` as the anchor and `n + 1 WHERE n < 10` over a
+/// latest-delta `WorkingTable[counter]` as the step. The fixed point outputs
+/// all rows accumulated from the anchor and successive step deltas.
+///
+/// With several workers the loop runs in one of three ways:
+/// - Independent loops: each task that runs the anchor loops over its own
+///   anchor rows and stops when its own delta is empty.
+/// - One partitioned loop: the step repartitions rows across all workers, which
+///   run in lockstep and stop together, on the loop's `convergence`.
+/// - One loop with the state replicated on every worker: the step runs on all
+///   workers in lockstep and replicates its output. Worker 0 evaluates the
+///   `convergence` over its own replica and decides for all workers, and only
+///   worker 0 emits the output.
+/// The step's `WorkingTable`s say where the state lives. The output is
+/// partitioned as `UnionAll` would be over the anchor's rows and the step's,
+/// except that a replicated state, emitted on worker 0 only, claims no
+/// placement.
+///
+/// `convergence` reads the latest delta, which in kReplace is the state, and
+/// produces one BOOLEAN row. A partitioned loop needs it: its workers stop
+/// together, on one answer computed from every worker's delta.
+///
+/// Requires:
+/// - `anchor`, `step`, and `name` are non-null.
+/// - `outputColumns` is non-empty.
+/// - `sourceColumns` equal `anchor->outputColumns()` by pointer identity.
+/// - `outputColumns` are fresh and positionally type-compatible with
+///   `sourceColumns`.
+/// - `step` has as many output columns as `anchor`, positionally
+///   type-compatible.
+/// - `anchor->requiredStates()` is empty: the anchor reads no recursive state.
+/// - `step` requires exactly `name`, with state columns pointer-identical to
+///   `outputColumns`. In kAppend, it reads the state through one
+///   `WorkingTable`.
+/// - `maxIterations` is at least one.
+/// - `recursiveNumDrivers`, when set by physical planning, is one.
+/// - When the step's `WorkingTable`s are gathered or hash-partitioned, `anchor`
+///   and `step` arrive partitioned the same way, on their columns at the
+///   positions of the state's keys. When they are replicated, `anchor` and
+///   `step` arrive replicated.
+/// - `convergence`, when set, reads this fixed point's state as the step does
+///   and outputs one BOOLEAN column. In kAppend, it reads the state through one
+///   `WorkingTable`.
+/// - A step with an `Exchange` on its path from a `WorkingTable` has a
+///   `convergence`.
+class FixedPoint : public Node {
+ public:
+  struct Key {
+    /// Runs once to seed the working table.
+    NodeCP anchor;
+    /// Runs iteratively over the working table.
+    NodeCP step;
+    /// Identifies the recursive state represented by this fixed point.
+    Name name;
+    /// Fresh recursive-state output columns.
+    ColumnVector outputColumns;
+    /// Anchor columns supplying the initial state, positionally aligned with
+    /// `outputColumns`.
+    ColumnVector sourceColumns;
+    /// Maximum number of recursive iterations.
+    int32_t maxIterations;
+    /// Whether reaching `maxIterations` before the loop stops fails the query,
+    /// or returns the current result.
+    bool failAtBound{true};
+    /// Whether the loop returns every iteration's rows or the last state.
+    FixedPointMode mode{FixedPointMode::kAppend};
+    /// Driver width chosen by physical planning for the step.
+    /// Unset in logical IR; currently only one is valid, and emission requires
+    /// the physically planned value.
+    std::optional<int32_t> recursiveNumDrivers;
+    /// Decides after each iteration whether the loop stops; null to stop once
+    /// an iteration produces no rows.
+    NodeCP convergence{nullptr};
+  };
+
+  /// Transparent hasher for interning `FixedPoint`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const FixedPoint* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `FixedPoint`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const FixedPoint* left, const FixedPoint* right) const;
+    bool operator()(const Key& key, const FixedPoint* node) const;
+    bool operator()(const FixedPoint* node, const Key& key) const;
+  };
+
+  explicit FixedPoint(const Key& key);
+
+  NodeCP anchor() const {
+    return inputs_[0];
+  }
+
+  NodeCP step() const {
+    return inputs_[1];
+  }
+
+  /// Null when the loop stops once an iteration adds no rows.
+  NodeCP convergence() const {
+    return inputs_.size() > 2 ? inputs_[2] : nullptr;
+  }
+
+  Name name() const {
+    return name_;
+  }
+
+  /// Anchor columns supplying the initial recursive state.
+  const ColumnVector& sourceColumns() const {
+    return sourceColumns_;
+  }
+
+  int32_t maxIterations() const {
+    return maxIterations_;
+  }
+
+  bool failAtBound() const {
+    return failAtBound_;
+  }
+
+  FixedPointMode mode() const {
+    return mode_;
+  }
+
+  /// True when every worker holds all of the state: the step's
+  /// `WorkingTable`s are replicated.
+  bool replicatesState() const;
+
+  /// True when 'node' has an Exchange on its path from a read of recursive
+  /// state: the rows of the state move between workers.
+  static bool movesState(NodeCP node);
+
+  std::optional<int32_t> recursiveNumDrivers() const {
+    return recursiveNumDrivers_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return inputs_;
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ protected:
+  RequiredStates deriveRequiredStates() const override;
+
+ private:
+  // The anchor, the step, and the convergence when set.
+  const NodeVector inputs_;
+  const Name name_;
+  const ColumnVector sourceColumns_;
+  const int32_t maxIterations_;
+  const bool failAtBound_;
+  const FixedPointMode mode_;
+  const std::optional<int32_t> recursiveNumDrivers_;
+};
+
+using FixedPointCP = const FixedPoint*;
+
+/// Returns one row per walk of between `minHops` and `maxHops` hops from a row
+/// of `start` to a row of `end`. A walk leaves from the vertex `startKeys`
+/// identify. Each hop is a row of `hop`, from the vertex `hopSourceKeys`
+/// identify to the one `hopDestinationKeys` identify, leaving from the vertex
+/// the previous hop reached. The walk reaches the vertex `endKeys` identify.
+/// Walks that differ only in their hops are distinct rows. A walk of zero hops
+/// reaches the vertex it leaves from: it pairs a start row and an end row whose
+/// identities are equal.
+///
+/// For example, the graph pattern `(a IS Person) -[IS Knows]->{1,3} (b)`
+/// becomes a `Repeat` with `a`'s rows as `start`, the Knows rows as `hop`, and
+/// `b`'s rows as `end`, keyed on the person identities.
+///
+/// When the walk ends at a row of `start`, as in `(a) -[e]->{1,3} (a)`, `end`
+/// is null and `endKeys` are columns of `start`.
+///
+/// Requires:
+/// - `start` and `hop` are non-null.
+/// - The four key lists have one entry per identity column and line up by
+///   position. `startKeys` read `start`, the hop keys read `hop`, and `endKeys`
+///   read `end`, or `start` when `end` is null.
+/// - `0 <= minHops <= maxHops`, and not `minHops = maxHops = 1`: exactly one
+///   hop is a plain join.
+/// - `outputColumns` carry `effectiveSourceColumns()` by position. A source
+///   from `start` or `end` keeps its identity. A source from `hop` gives a
+///   fresh output of one of two kinds:
+///   - an array of the source's type: the source's values on the walk's
+///     hops, in order from `start` to `end`, empty for a walk of zero hops, as
+///     for a property of a repeated pattern;
+///   - the source's type, only when `maxHops` is at most one: NULL for a walk
+///     of zero hops, as for a property of an optional subpath.
+/// - `hopCount`, when set, is an output that supplies itself: the walk's number
+///   of hops, a BIGINT.
+class Repeat : public Node {
+ public:
+  struct Key {
+    NodeCP start;
+    NodeCP hop;
+    /// Null when the walk ends at a row of `start`.
+    NodeCP end;
+    ExprVector startKeys;
+    ExprVector hopSourceKeys;
+    ExprVector hopDestinationKeys;
+    ExprVector endKeys;
+    int32_t minHops;
+    int32_t maxHops;
+    ColumnVector outputColumns;
+    /// Columns of `start`, `end` or `hop` that `outputColumns` carry, by
+    /// position. Empty when each output is a column of `start` or `end`.
+    ColumnVector sourceColumns;
+    /// The output that holds the walk's number of hops, if any.
+    ColumnCP hopCount{nullptr};
+
+    /// Returns the explicit sources, or the outputs for a pass-through schema.
+    const ColumnVector& effectiveSourceColumns() const {
+      return sourceColumns.empty() ? outputColumns : sourceColumns;
+    }
+  };
+
+  /// Transparent hasher for interning `Repeat`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const Repeat* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `Repeat`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const Repeat* left, const Repeat* right) const;
+    bool operator()(const Key& key, const Repeat* node) const;
+    bool operator()(const Repeat* node, const Key& key) const;
+  };
+
+  explicit Repeat(const Key& key);
+
+  NodeCP start() const {
+    return inputs_[0];
+  }
+
+  NodeCP hop() const {
+    return inputs_[1];
+  }
+
+  /// Null when the walk ends at a row of `start`.
+  NodeCP end() const {
+    return inputs_.size() == 3 ? inputs_[2] : nullptr;
+  }
+
+  const ExprVector& startKeys() const {
+    return startKeys_;
+  }
+
+  const ExprVector& hopSourceKeys() const {
+    return hopSourceKeys_;
+  }
+
+  const ExprVector& hopDestinationKeys() const {
+    return hopDestinationKeys_;
+  }
+
+  const ExprVector& endKeys() const {
+    return endKeys_;
+  }
+
+  int32_t minHops() const {
+    return minHops_;
+  }
+
+  /// Columns of the inputs that `outputColumns()` carry; see `Key`.
+  const ColumnVector& sourceColumns() const {
+    return sourceColumns_;
+  }
+
+  const ColumnVector& effectiveSourceColumns() const {
+    return sourceColumns_.empty() ? outputColumns() : sourceColumns_;
+  }
+
+  int32_t maxHops() const {
+    return maxHops_;
+  }
+
+  /// The output that holds the walk's number of hops, or null.
+  ColumnCP hopCount() const {
+    return hopCount_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return inputs_;
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeVector inputs_;
+  const ExprVector startKeys_;
+  const ExprVector hopSourceKeys_;
+  const ExprVector hopDestinationKeys_;
+  const ExprVector endKeys_;
+  const int32_t minHops_;
+  const int32_t maxHops_;
+  const ColumnVector sourceColumns_;
+  const ColumnCP hopCount_;
+};
+
+using RepeatCP = const Repeat*;
+
+} // namespace facebook::axiom::optimizer
+
+AXIOM_ENUM_FORMATTER(facebook::axiom::optimizer::NodeType);
+AXIOM_ENUM_FORMATTER(facebook::axiom::optimizer::WorkingTableReadMode);
+AXIOM_ENUM_FORMATTER(facebook::axiom::optimizer::FixedPointMode);
+AXIOM_ENUM_FORMATTER(facebook::axiom::optimizer::Placement);

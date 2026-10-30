@@ -25,10 +25,10 @@
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
+#include "axiom/optimizer/Node.h"
 #include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
-#include "axiom/optimizer/v2/Node.h"
 #include "axiom/sql/presto/PrestoParser.h"
 #include "axiom/sql/presto/SqlStatement.h"
 #include "folly/coro/CurrentExecutor.h"
@@ -39,7 +39,6 @@ namespace facebook::axiom::optimizer::test {
 namespace {
 
 using namespace facebook::velox;
-using namespace facebook::axiom::optimizer::v2;
 using connector::PushdownRoot;
 
 NodeCP requireNodeOfType(NodeCP root, NodeType target) {

@@ -23,11 +23,11 @@
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/functions/prestosql/PrestoFunctions.h"
+#include "axiom/optimizer/Optimize.h"
 #include "axiom/optimizer/tests/TestDataPath.h"
 #include "axiom/optimizer/v1/Optimization.h"
 #include "axiom/optimizer/v1/Plan.h"
 #include "axiom/optimizer/v1/VeloxHistory.h"
-#include "axiom/optimizer/v2/Optimize.h"
 #include "axiom/sql/presto/PrestoParser.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
@@ -352,8 +352,8 @@ void QueryTestBase::verifyOptimization(
 
 void QueryTestBase::verifyOptimization(
     const logical_plan::LogicalPlanNode& logicalPlan,
-    v2::Optimizer::Pass pass,
-    const std::function<void(v2::NodeCP)>& callback,
+    Optimizer::Pass pass,
+    const std::function<void(NodeCP)>& callback,
     const std::optional<OptimizerOptions>& optimizerOptions) {
   auto& veloxQueryCtx = getQueryCtx();
 
@@ -375,7 +375,7 @@ void QueryTestBase::verifyOptimization(
       functionRegistry_,
       optimizerOptions.value_or(optimizerOptions_),
       statsWriter_);
-  v2::Optimizer optimizer{
+  Optimizer optimizer{
       logicalPlan, schemaResolver, *session, evaluator, veloxQueryCtx};
   const auto debugPlan = optimizer.debugPlanTo(
       {.maxRemotePartitions = 1, .maxLocalPartitions = 1}, pass);
@@ -448,7 +448,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
   optimizer::PlanAndStats planAndStats;
   if (useV2_) {
     planAndStats =
-        v2::Optimizer(*plan, schemaResolver, *session, evaluator, queryCtx)
+        Optimizer(*plan, schemaResolver, *session, evaluator, queryCtx)
             .optimize(options, afterPass_);
   } else {
     optimizer::v1::Optimization opt(

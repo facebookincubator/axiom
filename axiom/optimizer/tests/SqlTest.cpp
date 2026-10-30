@@ -280,7 +280,7 @@ class SqlTest : public SqlTestBase {
           {defaultSchema(), pushdownTable.value()});
       VELOX_CHECK_NOT_NULL(replacement);
       testMetadata->setPushdownMatcher([replacement = std::move(replacement)](
-                                           const optimizer::v2::Node& subtree) {
+                                           const optimizer::Node& subtree) {
         return std::vector<connector::PushdownRoot>{{&subtree, replacement}};
       });
     }

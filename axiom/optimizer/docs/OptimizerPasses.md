@@ -1,7 +1,7 @@
 # Optimizer v2 Pass Cheat Sheet
 
 This page maps an optimization to the pass that owns it. The source of truth
-for pass order is `Optimizer::planTo` in `v2/Optimize.cpp`.
+for pass order is `Optimizer::planTo` in `Optimize.cpp`.
 
 ## Pipeline
 
