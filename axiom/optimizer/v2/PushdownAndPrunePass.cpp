@@ -2746,6 +2746,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
             newInput,
             node->table(),
             node->kind(),
+            node->columnNames(),
             node->columnExprs(),
             node->rowIdColumns(),
             node->deleteTarget(),

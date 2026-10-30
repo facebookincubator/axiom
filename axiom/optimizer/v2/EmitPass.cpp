@@ -514,7 +514,8 @@ class Emitter {
   };
 
   WriteConnector writeConnector(const connector::Table& table) const;
-  // Starts and emits a CREATE or INSERT writer.
+  // Starts and emits a CREATE or INSERT writer. For ANALYZE, which has no
+  // writer, emits the statistics aggregation in its place.
   velox::core::PlanNodePtr emitInsert(const TableWrite& tableWrite);
   // Starts a DELETE and retains its handle for exactly one finish or abort.
   velox::core::PlanNodePtr emitDelete(const TableWrite& tableWrite);
@@ -2667,6 +2668,7 @@ velox::core::PlanNodePtr Emitter::emitDelete(const TableWrite& tableWrite) {
 }
 
 velox::core::PlanNodePtr Emitter::emitInsert(const TableWrite& tableWrite) {
+  const bool isAnalyze = tableWrite.kind() == connector::WriteKind::kAnalyze;
   const auto& table = *tableWrite.table();
   auto connection = writeConnector(table);
 
@@ -2690,26 +2692,42 @@ velox::core::PlanNodePtr Emitter::emitInsert(const TableWrite& tableWrite) {
       ? 1
       : options_.maxLocalPartitions;
   const auto inputType = input->outputType();
+  const std::vector<std::string> columnNames(
+      tableWrite.columnNames().begin(), tableWrite.columnNames().end());
   WriteStatsBuilder statsBuilder(
       table,
+      columnNames,
       inputType,
-      *writeHandle,
+      tableWrite.kind(),
       writerNumDrivers,
       distributed ? options_.maxRemotePartitions : 1);
-  std::optional<velox::core::ColumnStatsSpec> writeStatsSpec;
-  if (statsBuilder.hasStats()) {
-    writeStatsSpec = statsBuilder.writeSpec();
-  }
-  auto writeOutputType = writeStatsSpec.has_value()
-      ? velox::core::TableWriteTraits::outputType(writeStatsSpec)
-      : writeHandle->resultType();
 
-  auto insertTableHandle =
-      std::make_shared<const velox::core::InsertTableHandle>(
-          connection.id,
-          writeHandle->veloxHandle(),
-          /*notNullColumns=*/folly::F14FastSet<std::string>{});
+  // Returns the node that combines the statistics 'source' computed, as
+  // 'spec' says. ANALYZE has no writer, so an Aggregation does it.
+  auto mergeStats =
+      [&](velox::core::ColumnStatsSpec spec,
+          velox::core::PlanNodePtr source) -> velox::core::PlanNodePtr {
+    if (isAnalyze) {
+      return std::make_shared<velox::core::AggregationNode>(
+          nextId(),
+          spec.aggregationStep,
+          spec.groupingKeys,
+          /*preGroupedKeys=*/
+          std::vector<velox::core::FieldAccessTypedExprPtr>{},
+          spec.aggregateNames,
+          spec.aggregates,
+          /*ignoreNullKeys=*/false,
+          /*noGroupsSpanBatches=*/false,
+          std::move(source));
+    }
+    auto outputType = velox::core::TableWriteTraits::outputType(spec);
+    return std::make_shared<velox::core::TableWriteMergeNode>(
+        nextId(), std::move(outputType), std::move(spec), std::move(source));
+  };
+
   VELOX_CHECK(!finishWrite_, "Only one TableWrite per query is supported");
+  auto veloxHandle = writeHandle->veloxHandle();
+  auto resultType = writeHandle->resultType();
   finishWrite_ = FinishWrite{
       connection.metadata,
       connection.id,
@@ -2717,30 +2735,38 @@ velox::core::PlanNodePtr Emitter::emitInsert(const TableWrite& tableWrite) {
       std::move(writeHandle),
       statsBuilder.statsMapping()};
 
-  velox::core::PlanNodePtr result =
-      std::make_shared<velox::core::TableWriteNode>(
-          nextId(),
-          inputType,
-          table.type()->names(),
-          std::move(writeStatsSpec),
-          std::move(insertTableHandle),
-          /*hasPartitioningScheme=*/false,
-          std::move(writeOutputType),
-          velox::connector::CommitStrategy::kNoCommit,
-          std::move(input));
+  velox::core::PlanNodePtr result;
+  if (isAnalyze) {
+    result = mergeStats(statsBuilder.writeSpec(), std::move(input));
+  } else {
+    std::optional<velox::core::ColumnStatsSpec> writeStatsSpec;
+    if (statsBuilder.hasStats()) {
+      writeStatsSpec = statsBuilder.writeSpec();
+    }
+    auto writeOutputType = writeStatsSpec.has_value()
+        ? velox::core::TableWriteTraits::outputType(writeStatsSpec)
+        : std::move(resultType);
+    result = std::make_shared<velox::core::TableWriteNode>(
+        nextId(),
+        inputType,
+        columnNames,
+        std::move(writeStatsSpec),
+        std::make_shared<const velox::core::InsertTableHandle>(
+            connection.id,
+            std::move(veloxHandle),
+            /*notNullColumns=*/folly::F14FastSet<std::string>{}),
+        /*hasPartitioningScheme=*/false,
+        std::move(writeOutputType),
+        velox::connector::CommitStrategy::kNoCommit,
+        std::move(input));
+  }
 
   // Combine the per-driver write stats within a worker.
   if (statsBuilder.needsMerge()) {
     result = velox::core::LocalPartitionNode::gather(
         nextId(), std::vector<velox::core::PlanNodePtr>{result});
-    auto localMergeSpec = statsBuilder.localMergeSpec(result->outputType());
-    auto localMergeOutputType =
-        velox::core::TableWriteTraits::outputType(localMergeSpec);
-    result = std::make_shared<velox::core::TableWriteMergeNode>(
-        nextId(),
-        std::move(localMergeOutputType),
-        std::move(localMergeSpec),
-        std::move(result));
+    result = mergeStats(
+        statsBuilder.localMergeSpec(result->outputType()), std::move(result));
   }
 
   result =
@@ -2750,15 +2776,14 @@ velox::core::PlanNodePtr Emitter::emitInsert(const TableWrite& tableWrite) {
   }
 
   // The coordinator merges the per-worker intermediates into final scalar
-  // stats.
-  auto finalMergeSpec = statsBuilder.finalMergeSpec(result->outputType());
-  auto finalMergeOutputType =
-      velox::core::TableWriteTraits::outputType(finalMergeSpec);
-  return std::make_shared<velox::core::TableWriteMergeNode>(
-      nextId(),
-      std::move(finalMergeOutputType),
-      std::move(finalMergeSpec),
-      std::move(result));
+  // stats. A TableWriteMerge runs on one driver; an Aggregation runs on every
+  // driver of the fragment, so ANALYZE gathers them first.
+  if (isAnalyze) {
+    result = velox::core::LocalPartitionNode::gather(
+        nextId(), std::vector<velox::core::PlanNodePtr>{std::move(result)});
+  }
+  return mergeStats(
+      statsBuilder.finalMergeSpec(result->outputType()), std::move(result));
 }
 
 velox::core::PlanNodePtr Emitter::emitFixedPoint(const FixedPoint& fixedPoint) {

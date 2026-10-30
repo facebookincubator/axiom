@@ -329,6 +329,15 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
       bool ifNotExists,
       bool explain) override;
 
+  /// Supports ANALYZE as well as the writes HiveConnectorMetadata supports.
+  /// ANALYZE replaces the statistics in the '.stats' files: the table's, or
+  /// for a partitioned table each analyzed partition's.
+  ConnectorWriteHandlePtr beginWrite(
+      const ConnectorSessionPtr& session,
+      const TablePtr& table,
+      WriteKind kind,
+      bool explain) override;
+
   RowsFuture finishWrite(
       const ConnectorSessionPtr& session,
       const ConnectorWriteHandlePtr& handle,
@@ -411,6 +420,14 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   // number of rows they held. Every filter is on a partition column, so either
   // all rows of a partition match or none do.
   std::optional<int64_t> removePartitions(const HiveDeleteWriteHandle& handle);
+
+  // Replaces the statistics of 'table', or of each of its partitions that
+  // 'groupingKeys' lists, with the ones ANALYZE computed. Returns the number
+  // of rows analyzed. Fails if the table changed while ANALYZE ran.
+  int64_t replaceStatistics(
+      const TablePtr& table,
+      const velox::RowVectorPtr& groupingKeys,
+      std::vector<std::vector<ColumnStatistics>> groupStats);
 
   mutable std::mutex mutex_;
   mutable bool initialized_{false};

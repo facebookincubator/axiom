@@ -54,20 +54,19 @@ bool supportsAggregateInputType(
 
 WriteStatsBuilder::WriteStatsBuilder(
     const connector::Table& table,
+    const std::vector<std::string>& columnNames,
     const velox::RowTypePtr& inputType,
-    const connector::ConnectorWriteHandle& writeHandle,
+    connector::WriteKind kind,
     int32_t numDrivers,
     int32_t numWorkers) {
-  // Statistics are read positionally, so the input's columns are the table's.
-  VELOX_CHECK_EQ(
-      inputType->size(),
-      table.type()->size(),
-      "A write's input is the table's columns, in order");
-
+  VELOX_CHECK_EQ(columnNames.size(), inputType->size());
+  const bool analyze = kind == connector::WriteKind::kAnalyze;
   const auto& registry = queryCtx()->functionRegistry();
   const auto& statsAggs = registry.statsAggregates();
   const auto& countName = registry.count();
   if (!statsAggs.has_value() || !countName.has_value()) {
+    VELOX_USER_CHECK(
+        !analyze, "ANALYZE needs statistics aggregates, none are registered");
     return;
   }
 
@@ -84,9 +83,10 @@ WriteStatsBuilder::WriteStatsBuilder(
 
   // When there are grouping keys, add a count(*) aggregate (no input
   // columns) as the first stats channel to provide exact per-group row
-  // counts.
-  const bool hasGroupingKeys = !writeHandle.statsGroupingKeys().empty();
-  if (hasGroupingKeys) {
+  // counts. ANALYZE always adds it, since it has no writer to count the rows.
+  const auto groupingKeyNames = table.statsGroupingKeys();
+  const bool hasRowCount = !groupingKeyNames.empty() || analyze;
+  if (hasRowCount) {
     static constexpr auto kRowCount = "$row_count";
 
     velox::core::AggregationNode::Aggregate agg;
@@ -103,7 +103,7 @@ WriteStatsBuilder::WriteStatsBuilder(
         colType, inputType->nameOf(i));
 
     ColumnStatMapping mapping;
-    mapping.columnName = table.type()->nameOf(i);
+    mapping.columnName = columnNames[i];
 
     auto addAggregate = [&](const std::string& funcName,
                             const velox::TypePtr& returnType) {
@@ -113,8 +113,7 @@ WriteStatsBuilder::WriteStatsBuilder(
       agg.rawInputTypes = {colType};
       aggregates_.push_back(std::move(agg));
 
-      aggregateNames_.push_back(
-          fmt::format("{}.{}", table.type()->nameOf(i), funcName));
+      aggregateNames_.push_back(fmt::format("{}.{}", columnNames[i], funcName));
     };
 
     auto addAggregateIfSupported = [&](const AggregateSignatures& signatures,
@@ -174,22 +173,28 @@ WriteStatsBuilder::WriteStatsBuilder(
     statsMapping_.columns.push_back(std::move(mapping));
   }
 
-  if (aggregates_.empty() || (hasGroupingKeys && aggregates_.size() == 1)) {
-    // No per-column stats (or only $row_count with no column stats).
+  // A write with no per-column stats (or only $row_count with no column
+  // stats) collects nothing. ANALYZE still reports the row count.
+  if (!analyze &&
+      (aggregates_.empty() || (hasRowCount && aggregates_.size() == 1))) {
     aggregates_.clear();
     aggregateNames_.clear();
     statsMapping_.columns.clear();
     return;
   }
 
-  // Build grouping keys. The write handle specifies which table columns to
-  // group by (e.g. partition columns). Column names come from the table
-  // schema (e.g. "pk") but inputType uses write input names from the query
-  // output (e.g. "expr_0"). Look up by position in the table schema to
-  // find the matching input column.
-  const auto& groupingKeyNames = writeHandle.statsGroupingKeys();
+  // Build grouping keys. The table specifies which of its columns to group
+  // by (e.g. partition columns). Column names come from the table schema
+  // (e.g. "pk") but inputType uses write input names from the query output
+  // (e.g. "expr_0"). Look up the table column in 'columnNames' to find the
+  // matching input column.
   for (const auto& keyName : groupingKeyNames) {
-    auto idx = table.type()->getChildIdx(keyName);
+    const auto it = std::find(columnNames.begin(), columnNames.end(), keyName);
+    VELOX_CHECK(
+        it != columnNames.end(),
+        "Statistics grouping key is not an input column: {}",
+        keyName);
+    const auto idx = it - columnNames.begin();
     groupingKeys_.push_back(
         std::make_shared<velox::core::FieldAccessTypedExpr>(
             inputType->childAt(idx), inputType->nameOf(idx)));
@@ -198,8 +203,17 @@ WriteStatsBuilder::WriteStatsBuilder(
   statsMapping_.numGroupingKeys =
       static_cast<uint32_t>(groupingKeyNames.size());
   statsMapping_.groupingKeyNames = groupingKeyNames;
+  statsMapping_.hasRowCount = hasRowCount;
+  statsMapping_.setsNullPct = analyze;
 
   hasStats_ = true;
+}
+
+std::optional<WriteStatsMapping> WriteStatsBuilder::statsMapping() const {
+  if (!hasStats_) {
+    return std::nullopt;
+  }
+  return statsMapping_;
 }
 
 velox::core::ColumnStatsSpec WriteStatsBuilder::writeSpec() const {

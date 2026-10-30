@@ -55,10 +55,10 @@ using PermissionCheck =
 /// expressions the optimizer would later constant-fold away.
 ///
 /// Offered every statement that executes a plan the user wrote: SELECT,
-/// INSERT, DELETE, CREATE TABLE AS SELECT, and EXPLAIN ANALYZE. Not offered
-/// EXPLAIN in any other form, which does not execute and stays usable for
-/// diagnosing a rejected query, nor SHOW SESSION, whose plan the runner builds
-/// from the session config rather than parsing it from the statement.
+/// INSERT, DELETE, ANALYZE, CREATE TABLE AS SELECT, and EXPLAIN ANALYZE. Not
+/// offered EXPLAIN in any other form, which does not execute and stays usable
+/// for diagnosing a rejected query, nor SHOW SESSION, whose plan the runner
+/// builds from the session config rather than parsing it from the statement.
 ///
 /// An empty value disables checking. A single instance serves every query and
 /// is called from planner threads, so implementations must be thread-safe.

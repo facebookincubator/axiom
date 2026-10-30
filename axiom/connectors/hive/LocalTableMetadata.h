@@ -81,6 +81,15 @@ struct PersistedStats {
   /// Writes stats to a .stats file in 'directory', merging with any existing
   /// stats from prior writes.
   static void write(const std::string& directory, PersistedStats stats);
+
+  /// Replaces the row count and the statistics of 'columns' in the .stats
+  /// file in 'directory', creating the file if there is none. The other
+  /// columns keep their statistics, with their non-null and distinct counts
+  /// scaled to the new row count, so their null percentages hold.
+  static void replace(
+      const std::string& directory,
+      uint64_t numRows,
+      std::vector<ColumnStatistics> columns);
 };
 
 /// Returns the path to the .schema file in the given directory.

@@ -16,6 +16,7 @@
 
 #include "axiom/connectors/hive/LocalTableMetadata.h"
 
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 
@@ -223,19 +224,59 @@ std::optional<PersistedStats> PersistedStats::read(
   }
 }
 
-void PersistedStats::write(const std::string& directory, PersistedStats stats) {
-  auto existing = PersistedStats::read(directory);
-  if (existing.has_value()) {
-    existing->merge(stats.numRows, stats.columns);
-    stats = std::move(existing.value());
-  }
+namespace {
 
+// Writes 'stats' to the .stats file in 'directory', replacing its contents.
+void writeStatsFile(const std::string& directory, const PersistedStats& stats) {
   const auto file = statsPath(directory);
   std::ofstream outputFile(file);
   VELOX_CHECK(outputFile.is_open(), "Failed to open stats file: {}", file);
   outputFile << folly::toPrettyJson(persistedStatsToJson(stats));
   outputFile.close();
   VELOX_CHECK(!outputFile.fail(), "Failed to write stats file: {}", file);
+}
+
+} // namespace
+
+void PersistedStats::write(const std::string& directory, PersistedStats stats) {
+  auto existing = PersistedStats::read(directory);
+  if (existing.has_value()) {
+    existing->merge(stats.numRows, stats.columns);
+    stats = std::move(existing.value());
+  }
+  writeStatsFile(directory, stats);
+}
+
+void PersistedStats::replace(
+    const std::string& directory,
+    uint64_t numRows,
+    std::vector<ColumnStatistics> columns) {
+  auto stats = PersistedStats::read(directory).value_or(PersistedStats{});
+  if (stats.numRows != numRows) {
+    for (auto& column : stats.columns) {
+      column.numValues = stats.numRows == 0
+          ? 0
+          : std::llround(
+                static_cast<double>(column.numValues) * numRows /
+                stats.numRows);
+      if (column.numDistinct.has_value()) {
+        column.numDistinct = std::min(*column.numDistinct, column.numValues);
+      }
+    }
+  }
+  stats.numRows = numRows;
+  for (auto& column : columns) {
+    auto it = std::find_if(
+        stats.columns.begin(), stats.columns.end(), [&](const auto& existing) {
+          return existing.name == column.name;
+        });
+    if (it == stats.columns.end()) {
+      stats.columns.push_back(std::move(column));
+    } else {
+      *it = std::move(column);
+    }
+  }
+  writeStatsFile(directory, stats);
 }
 
 void FileInfo::listFiles(

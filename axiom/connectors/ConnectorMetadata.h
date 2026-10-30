@@ -895,6 +895,11 @@ enum class WriteKind {
   /// for the columns being changed. The new values may overlap with the row
   /// id if the row id is a set of primary key columns.
   kUpdate = 4,
+
+  /// No rows change. The engine computes the statistics that a write collects,
+  /// over the rows already in the table, and finishWrite replaces the stored
+  /// statistics with them. The write handle has no 'veloxHandle'.
+  kAnalyze = 5,
 };
 
 AXIOM_DECLARE_ENUM_NAME(WriteKind);
@@ -975,6 +980,13 @@ class Table : public std::enable_shared_from_this<Table> {
   /// their column granularity.
   virtual std::vector<std::string> ioColumnPriority() const;
 
+  /// Returns the columns that group the column statistics that writes and
+  /// ANALYZE collect, such as partition columns. finishWrite gets one set of
+  /// statistics per group. Empty means one set for the whole table.
+  virtual std::vector<std::string> statsGroupingKeys() const {
+    return {};
+  }
+
   /// Returns the columns a row-level write of 'kind' reads from this table,
   /// beyond those its expressions name. Empty means the table does not support
   /// row-level writes of 'kind'.
@@ -1043,7 +1055,8 @@ class View {
 
 using ViewPtr = std::shared_ptr<const View>;
 
-/// Contains the information needed to finish or abort CREATE or INSERT.
+/// Contains the information needed to finish or abort CREATE, INSERT or
+/// ANALYZE.
 class ConnectorWriteHandle {
  public:
   /// Creates a write backed by a Velox table writer.
@@ -1058,27 +1071,25 @@ class ConnectorWriteHandle {
 
   virtual ~ConnectorWriteHandle() = default;
 
-  /// Handle passed to the Velox table writer.
+  /// Handle passed to the Velox table writer. Null for ANALYZE, whose plan
+  /// only computes statistics.
   const velox::connector::ConnectorInsertTableHandlePtr& veloxHandle() const {
     return veloxHandle_;
   }
 
-  /// Schema of each writer result passed to finishWrite.
+  /// Schema of each writer result passed to finishWrite. Null whenever
+  /// 'veloxHandle' is null.
   const velox::RowTypePtr& resultType() const {
     return resultType_;
   }
 
-  /// Returns the column names to use as grouping keys for column statistics
-  /// collection. Stats are aggregated per group and passed to finishWrite
-  /// alongside a grouping keys RowVector. Returns empty if stats should not
-  /// be grouped (e.g. unpartitioned tables produce a single set of stats).
-  virtual const std::vector<std::string>& statsGroupingKeys() const {
-    static const std::vector<std::string> kEmpty;
-    return kEmpty;
-  }
-
-  /// Returns what the connector will do, for EXPLAIN.
+  /// Returns what the connector will do, for EXPLAIN. A handle with no
+  /// 'veloxHandle' must override this, since there is no Velox writer to
+  /// describe.
   virtual std::string toString() const {
+    VELOX_CHECK_NOT_NULL(
+        veloxHandle_,
+        "A write with no writer must describe itself for EXPLAIN");
     return "carried out by the Velox writer";
   }
 
@@ -1092,6 +1103,11 @@ class ConnectorWriteHandle {
   const T* asChecked() const {
     return velox::checkedPointerCast<const T>(this);
   }
+
+ protected:
+  // Creates a handle with no 'veloxHandle', for ANALYZE. The derived class
+  // must carry the description of the write.
+  ConnectorWriteHandle() = default;
 
  private:
   const velox::connector::ConnectorInsertTableHandlePtr veloxHandle_;
@@ -1510,18 +1526,20 @@ class ConnectorMetadata {
   /// do not require it. The optimizer sends every row for a target partition to
   /// one writer, but does not sort INSERT rows. A connector that stores sorted
   /// data must configure its writer to sort according to the table layout.
+  /// The default fails: the connector supports no write.
+  ///
+  /// For ANALYZE, the handle has no 'veloxHandle'. A connector that cannot
+  /// store statistics for 'table' fails here, before anything runs.
   ///
   /// When 'explain' is true, the connector must build and return a valid
   /// ConnectorWriteHandle for plan display, but must leave nothing behind: no
   /// state allocated, reserved or recorded outside the handle, and nothing
   /// that needs cleanup. The handle's location is not read on this path.
   virtual ConnectorWriteHandlePtr beginWrite(
-      [[maybe_unused]] const ConnectorSessionPtr& session,
-      [[maybe_unused]] const TablePtr& table,
-      [[maybe_unused]] WriteKind kind,
-      [[maybe_unused]] bool explain) {
-    VELOX_UNSUPPORTED();
-  }
+      const ConnectorSessionPtr& session,
+      const TablePtr& table,
+      WriteKind kind,
+      bool explain);
 
   /// Describes how to delete rows selected by 'scanHandle'. 'exact' is true
   /// when the DELETE reads that scan directly, with no operator above it. This
@@ -1553,22 +1571,30 @@ class ConnectorMetadata {
   }
 
   /// Finalizes the table write operation represented by the provided handle.
-  /// Returns a future containing the number of rows written.
+  /// Returns a future containing the number of rows written, or for ANALYZE
+  /// the number of rows analyzed.
   ///
   /// @param session Connector session.
   /// @param handle Write handle returned by beginWrite.
   /// @param writeResults Result sets from the table writer fragments. Contains
   /// only data rows (row counts and file fragments). Stats rows are stripped
-  /// by the runner before calling finishWrite.
+  /// by the runner before calling finishWrite. Empty for ANALYZE, which writes
+  /// nothing.
   /// @param groupingKeys A RowVector with one row per stats group. Contains
-  /// one column per grouping key from ConnectorWriteHandle::statsGroupingKeys,
-  /// followed by a "$row_count" BIGINT column with the exact row count per
-  /// group. nullptr when there are no grouping keys.
+  /// one column per grouping key from Table::statsGroupingKeys, followed by a
+  /// "$row_count" BIGINT column with the exact row count per group. nullptr
+  /// when there are no groups. A write without grouping keys has none here,
+  /// since 'writeResults' count its rows. ANALYZE without grouping keys has
+  /// one group, with only "$row_count".
   /// @param groupStats Per-group column statistics. groupStats[i] contains
   /// per-column statistics for group i, aligned with rows in groupingKeys.
   /// Empty if no stats were collected. Each ColumnStatistics has a 'name'
   /// field identifying the table column it describes. Use
-  /// Table::findColumn(stats.name) to match stats to columns.
+  /// Table::findColumn(stats.name) to match stats to columns. ANALYZE
+  /// replaces the stored row count and the stored statistics of these
+  /// columns, and the other columns keep theirs. When an ANALYZE returns, the
+  /// next query must see the new statistics through findTable and
+  /// co_estimateStats.
   virtual RowsFuture finishWrite(
       [[maybe_unused]] const ConnectorSessionPtr& session,
       [[maybe_unused]] const ConnectorWriteHandlePtr& handle,

@@ -105,6 +105,39 @@ TEST_F(DdlParserTest, deleteFromTable) {
       parseSql("DELETE FROM no_such_table"), "Table not found: no_such_table");
 }
 
+TEST_F(DdlParserTest, analyzeTable) {
+  testAnalyze(
+      "ANALYZE nation",
+      "nation",
+      {"n_nationkey", "n_name", "n_regionkey", "n_comment"});
+  testAnalyze(
+      "ANALYZE nation WITH (columns = ARRAY['n_name', 'n_nationkey'])",
+      "nation",
+      {"n_name", "n_nationkey"});
+  testAnalyze("ANALYZE nation WITH (columns = ARRAY[])", "nation", {});
+
+  for (const auto& [sql, error] :
+       std::vector<std::pair<std::string, std::string>>{
+           {"ANALYZE no_such_table", "Table not found: no_such_table"},
+           {"ANALYZE nation WITH (columns = ARRAY['bad'])",
+            "Unknown ANALYZE column: bad"},
+           {"ANALYZE nation WITH (columns = ARRAY['n_name', 'n_name'])",
+            "Duplicate ANALYZE column: n_name"},
+           {"ANALYZE nation WITH (columns = 1)",
+            "ANALYZE property columns must be an array of column names"},
+           {"ANALYZE nation WITH (columns = ARRAY[NULL])",
+            "ANALYZE property columns must be an array of column names"},
+           {"ANALYZE nation WITH (unknown = 1)",
+            "Unknown ANALYZE property: unknown"},
+           {"ANALYZE nation WITH (columns = ARRAY['n_name'], "
+            "columns = ARRAY['n_nationkey'])",
+            "Duplicate property"},
+       }) {
+    SCOPED_TRACE(sql);
+    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(parseSql(sql), error);
+  }
+}
+
 TEST_F(DdlParserTest, createTableAsSelect) {
   {
     auto ctasMetadata =

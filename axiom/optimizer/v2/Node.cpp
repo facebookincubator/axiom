@@ -3810,6 +3810,7 @@ TableWrite::TableWrite(Key key)
       input_(key.input),
       table_(key.table),
       kind_(key.kind),
+      columnNames_(std::move(key.columnNames)),
       columnExprs_(std::move(key.columnExprs)),
       rowIdColumns_(std::move(key.rowIdColumns)),
       deleteTarget_(key.deleteTarget),
@@ -3817,6 +3818,7 @@ TableWrite::TableWrite(Key key)
   VELOX_CHECK_NOT_NULL(input_);
   VELOX_CHECK_NOT_NULL(table_);
   if (kind_ == connector::WriteKind::kDelete) {
+    VELOX_CHECK(columnNames_.empty(), "A delete names no table columns");
     if (deleteLayout_ == nullptr || !deleteLayout_->hasWriter()) {
       VELOX_CHECK(
           columnExprs_.empty(), "Only a row-level delete writes columns");
@@ -3887,9 +3889,21 @@ TableWrite::TableWrite(Key key)
         deleteLayout_, "Only a delete carries a connector delete layout");
     VELOX_CHECK(
         rowIdColumns_.empty(), "Only a delete identifies the rows it writes");
-    VELOX_CHECK(
-        !columnExprs_.empty(), "TableWrite must write at least one column");
-    VELOX_CHECK_EQ(columnExprs_.size(), table_->type()->size());
+    VELOX_CHECK_EQ(columnNames_.size(), columnExprs_.size());
+    if (kind_ == connector::WriteKind::kAnalyze) {
+      for (const auto name : columnNames_) {
+        VELOX_CHECK(
+            table_->type()->containsChild(name),
+            "TableWrite analyzes a column not in the table: {}",
+            name);
+      }
+    } else {
+      VELOX_CHECK(
+          !columnExprs_.empty(), "TableWrite must write at least one column");
+      VELOX_CHECK(
+          std::ranges::equal(columnNames_, table_->type()->names()),
+          "TableWrite must write every column of the table, in order");
+    }
     checkColumns(columnExprs_, "TableWrite column");
     // Velox reads the input positionally, so a reordering or widening of the
     // input silently writes the wrong columns.
@@ -3908,6 +3922,7 @@ size_t TableWrite::KeyHash::operator()(const TableWrite* node) const {
       node->input(),
       node->table(),
       static_cast<uint8_t>(node->kind()),
+      node->columnNames(),
       node->columnExprs(),
       node->rowIdColumns(),
       node->deleteTarget(),
@@ -3919,6 +3934,7 @@ size_t TableWrite::KeyHash::operator()(const Key& key) const {
       key.input,
       key.table,
       static_cast<uint8_t>(key.kind),
+      key.columnNames,
       key.columnExprs,
       key.rowIdColumns,
       key.deleteTarget,
@@ -3930,6 +3946,7 @@ bool TableWrite::KeyEq::operator()(
     const TableWrite* right) const {
   return left->input() == right->input() && left->table() == right->table() &&
       left->kind() == right->kind() &&
+      left->columnNames() == right->columnNames() &&
       left->columnExprs() == right->columnExprs() &&
       left->rowIdColumns() == right->rowIdColumns() &&
       left->deleteTarget() == right->deleteTarget() &&
@@ -3939,7 +3956,8 @@ bool TableWrite::KeyEq::operator()(
 bool TableWrite::KeyEq::operator()(const Key& key, const TableWrite* node)
     const {
   return key.input == node->input() && key.table == node->table() &&
-      key.kind == node->kind() && key.columnExprs == node->columnExprs() &&
+      key.kind == node->kind() && key.columnNames == node->columnNames() &&
+      key.columnExprs == node->columnExprs() &&
       key.rowIdColumns == node->rowIdColumns() &&
       key.deleteTarget == node->deleteTarget() &&
       key.deleteLayout == node->deleteLayout();

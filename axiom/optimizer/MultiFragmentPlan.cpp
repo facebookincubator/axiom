@@ -235,26 +235,39 @@ std::vector<std::vector<connector::ColumnStatistics>> extractPerGroupStats(
     }
   }
 
+  if (statsMapping.setsNullPct) {
+    for (size_t group = 0; group < result.size(); ++group) {
+      const auto numGroupRows = rowCounts[group];
+      for (auto& stats : result[group]) {
+        stats.nullPct = numGroupRows == 0
+            ? 0
+            : 100.0f * static_cast<float>(numGroupRows - stats.numValues) /
+                static_cast<float>(numGroupRows);
+      }
+    }
+  }
+
   return result;
 }
 
 // Builds a grouping keys RowVector by projecting and concatenating grouping
-// key columns from all stats rows. Uses 'tableColumnNames' for the output
-// column names (the stats output may use write-input names like "expr_0",
-// but finishWrite needs table column names like "pk").
+// key columns, which start at 'firstChannel', from all stats rows. Uses
+// 'tableColumnNames' for the output column names (the stats output may use
+// write-input names like "expr_0", but finishWrite needs table column names
+// like "pk").
 velox::RowVectorPtr extractGroupingKeys(
     const std::vector<velox::RowVectorPtr>& statsRows,
+    velox::column_index_t firstChannel,
     uint32_t numGroupingKeys,
     const std::vector<std::string>& tableColumnNames) {
   VELOX_CHECK(!statsRows.empty());
 
-  constexpr auto kFirstChannel = velox::core::TableWriteTraits::kStatsChannel;
-  const auto lastChannel = kFirstChannel + numGroupingKeys;
+  const auto lastChannel = firstChannel + numGroupingKeys;
 
   auto resultType = velox::ROW(
       tableColumnNames,
       sliceToVector(
-          statsRows[0]->rowType()->children(), kFirstChannel, lastChannel));
+          statsRows[0]->rowType()->children(), firstChannel, lastChannel));
 
   // Fast path: single vector, just project columns without copying data.
   if (statsRows.size() == 1) {
@@ -263,7 +276,7 @@ velox::RowVectorPtr extractGroupingKeys(
         resultType,
         /*nulls=*/nullptr,
         statsRows[0]->size(),
-        sliceToVector(statsRows[0]->children(), kFirstChannel, lastChannel));
+        sliceToVector(statsRows[0]->children(), firstChannel, lastChannel));
   }
 
   // Multiple vectors: allocate and copy.
@@ -272,8 +285,8 @@ velox::RowVectorPtr extractGroupingKeys(
 
   velox::vector_size_t offset = 0;
   for (const auto& statsRow : statsRows) {
-    for (auto channel = kFirstChannel; channel < lastChannel; ++channel) {
-      result->childAt(channel - kFirstChannel)
+    for (auto channel = firstChannel; channel < lastChannel; ++channel) {
+      result->childAt(channel - firstChannel)
           ->copy(statsRow->childAt(channel).get(), offset, 0, statsRow->size());
     }
     offset += statsRow->size();
@@ -322,39 +335,42 @@ std::pair<
 extractStats(
     const WriteStatsMapping& statsMapping,
     const std::vector<velox::RowVectorPtr>& statsRows,
-    const std::vector<velox::RowVectorPtr>& dataRows) {
+    const std::vector<velox::RowVectorPtr>& dataRows,
+    velox::column_index_t firstChannel) {
   VELOX_CHECK(!statsRows.empty());
 
   // The stats output layout is:
   //   [row_count, fragment, context, groupingKey0, ..., groupingKeyN,
   //    [$row_count,] stat0, stat1, ...]
-  // When there are grouping keys, a count(*) aggregate occupies the first
-  // stats channel (right after grouping keys) providing exact per-group
-  // row counts. This channel is included in groupingKeys (not in
-  // per-column stats). Without grouping keys there is a single group, whose
-  // row count is the number of rows written.
-  constexpr auto kStatsChannel = velox::core::TableWriteTraits::kStatsChannel;
-
-  if (statsMapping.numGroupingKeys == 0) {
+  // ANALYZE has no writer, so its output starts at groupingKey0.
+  // When there are grouping keys, and always for ANALYZE, a count(*)
+  // aggregate occupies the first stats channel (right after grouping keys)
+  // providing exact per-group row counts. This channel is included in
+  // groupingKeys (not in per-column stats). Otherwise there is a single
+  // group, whose row count is the number of rows written.
+  if (!statsMapping.hasRowCount) {
     VELOX_CHECK_EQ(countRows(statsRows), 1);
     return {
         nullptr,
         extractPerGroupStats(
             statsMapping,
             statsRows,
-            kStatsChannel,
+            firstChannel,
             {countWrittenRows(dataRows)})};
   }
 
   const auto rowCountChannel =
-      kStatsChannel + static_cast<int32_t>(statsMapping.numGroupingKeys);
+      firstChannel + static_cast<int32_t>(statsMapping.numGroupingKeys);
 
   auto groupingKeyNames = statsMapping.groupingKeyNames;
   groupingKeyNames.push_back("$row_count");
 
   return {
       extractGroupingKeys(
-          statsRows, statsMapping.numGroupingKeys + 1, groupingKeyNames),
+          statsRows,
+          firstChannel,
+          statsMapping.numGroupingKeys + 1,
+          groupingKeyNames),
       extractPerGroupStats(
           statsMapping,
           statsRows,
@@ -419,7 +435,7 @@ FinishWrite::FinishWrite(
     std::string connectorId,
     connector::ConnectorSessionPtr session,
     connector::ConnectorWriteHandlePtr handle,
-    WriteStatsMapping statsMapping)
+    std::optional<WriteStatsMapping> statsMapping)
     : metadata_{std::move(metadata)},
       connectorId_{std::move(connectorId)},
       session_{std::move(session)},
@@ -475,23 +491,32 @@ connector::RowsFuture FinishWrite::commit(
   }
 
   auto& operation = std::get<WriteOperation>(*operation_);
-  if (operation.statsMapping.columns.empty()) {
+  if (!operation.statsMapping.has_value()) {
     return metadata_->finishWrite(
         session_, operation.handle, writeResults, nullptr, {});
   }
 
-  auto [statsRows, dataRows] = splitWriteResults(
-      writeResults,
-      operation.handle->resultType()->size(),
-      operation.handle->resultType());
+  // With no writer, as in ANALYZE, the plan computes only the statistics.
+  SplitWriteResults split;
+  velox::column_index_t firstChannel{0};
+  if (operation.handle->veloxHandle() == nullptr) {
+    split.statsRows = writeResults;
+  } else {
+    split = splitWriteResults(
+        writeResults,
+        operation.handle->resultType()->size(),
+        operation.handle->resultType());
+    firstChannel = velox::core::TableWriteTraits::kStatsChannel;
+  }
+  auto& [statsRows, dataRows] = split;
 
-  if (statsRows.empty()) {
+  if (countRows(statsRows) == 0) {
     return metadata_->finishWrite(
         session_, operation.handle, dataRows, nullptr, {});
   }
 
   auto [partitionKeys, partitionStats] =
-      extractStats(operation.statsMapping, statsRows, dataRows);
+      extractStats(*operation.statsMapping, statsRows, dataRows, firstChannel);
   return metadata_->finishWrite(
       session_,
       operation.handle,

@@ -168,6 +168,29 @@ void PrestoParserTestBase::testDelete(
   EXPECT_THAT(write->columnExpressions(), testing::IsEmpty());
 }
 
+void PrestoParserTestBase::testAnalyze(
+    std::string_view sql,
+    std::string_view tableName,
+    const std::vector<std::string>& columnNames) {
+  SCOPED_TRACE(sql);
+  auto parser = makeParser();
+
+  auto statement = parser.parse(sql);
+  ASSERT_TRUE(statement->isAnalyze());
+
+  auto logicalPlan = statement->as<AnalyzeStatement>()->plan();
+  ASSERT_TRUE(matchScan(std::string(tableName))
+                  .tableWrite()
+                  .build()
+                  ->match(logicalPlan))
+      << logicalPlan->toString();
+
+  const auto* write = logicalPlan->as<lp::TableWriteNode>();
+  EXPECT_EQ(lp::WriteKind::kAnalyze, write->writeKind());
+  EXPECT_EQ(tableName, write->tableName().table);
+  EXPECT_EQ(columnNames, write->columnNames());
+}
+
 void PrestoParserTestBase::testCtas(
     std::string_view sql,
     const std::string& tableName,

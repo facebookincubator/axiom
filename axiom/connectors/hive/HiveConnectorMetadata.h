@@ -172,6 +172,10 @@ class HiveTable : public Table {
   /// Recognizes the ds/ts partition convention and returns those columns
   /// finest-grained first (ts before ds).
   std::vector<std::string> ioColumnPriority() const override;
+
+  /// Returns the Hive partition columns: each partition stores its own
+  /// statistics.
+  std::vector<std::string> statsGroupingKeys() const override;
 };
 
 /// Describes a Hive table layout. Adds a file format and a list of
@@ -327,14 +331,7 @@ class HiveConnectorWriteHandle : public ConnectorWriteHandle {
       WriteKind kind)
       : ConnectorWriteHandle{std::move(veloxHandle), std::move(resultType)},
         table_{std::move(table)},
-        kind_{kind} {
-    for (const auto* column : table_->layouts()
-                                  .at(0)
-                                  ->as<HiveTableLayout>()
-                                  ->hivePartitionColumns()) {
-      statsGroupingKeys_.push_back(column->name());
-    }
-  }
+        kind_{kind} {}
 
   const TablePtr& table() const {
     return table_;
@@ -344,14 +341,9 @@ class HiveConnectorWriteHandle : public ConnectorWriteHandle {
     return kind_;
   }
 
-  const std::vector<std::string>& statsGroupingKeys() const override {
-    return statsGroupingKeys_;
-  }
-
  private:
   const TablePtr table_;
   const WriteKind kind_;
-  std::vector<std::string> statsGroupingKeys_;
 };
 
 /// A key the rows of a bucket are sorted by. A `sorted_by` entry names the

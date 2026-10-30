@@ -87,6 +87,13 @@ class PrestoParserTestBase : public testing::Test {
       std::string_view sql,
       facebook::axiom::logical_plan::test::LogicalPlanMatcherBuilder& matcher);
 
+  /// Parses an ANALYZE statement and verifies that its plan scans the table
+  /// and ends in a kAnalyze write of 'columnNames'.
+  void testAnalyze(
+      std::string_view sql,
+      std::string_view tableName,
+      const std::vector<std::string>& columnNames);
+
   /// Parses a CREATE TABLE AS SELECT statement and verifies the table name,
   /// schema, logical plan, and optional table properties.
   void testCtas(

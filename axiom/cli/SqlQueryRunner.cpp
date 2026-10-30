@@ -1012,6 +1012,8 @@ SqlQueryRunner::co_runExplainStatement(
     logicalPlan = statement->as<presto::InsertStatement>()->plan();
   } else if (statement->isDelete()) {
     logicalPlan = statement->as<presto::DeleteStatement>()->plan();
+  } else if (statement->isAnalyze()) {
+    logicalPlan = statement->as<presto::AnalyzeStatement>()->plan();
   } else if (statement->isCreateTableAsSelect()) {
     ctas = statement->as<presto::CreateTableAsSelectStatement>();
     logicalPlan = ctas->plan();
@@ -1156,6 +1158,8 @@ SqlQueryRunner::co_runPlanStatement(
     logicalPlan = sqlStatement.as<presto::InsertStatement>()->plan();
   } else if (sqlStatement.isDelete()) {
     logicalPlan = sqlStatement.as<presto::DeleteStatement>()->plan();
+  } else if (sqlStatement.isAnalyze()) {
+    logicalPlan = sqlStatement.as<presto::AnalyzeStatement>()->plan();
   } else if (sqlStatement.isSelect()) {
     logicalPlan = sqlStatement.as<presto::SelectStatement>()->plan();
     emptyResultType = logicalPlan->outputType();
@@ -1306,7 +1310,7 @@ SqlQueryRunner::co_runUnchecked(
   }
 
   if (sqlStatement.isCreateTableAsSelect() || sqlStatement.isInsert() ||
-      sqlStatement.isDelete()) {
+      sqlStatement.isDelete() || sqlStatement.isAnalyze()) {
     auto&& [generator] = co_await folly::coro::co_scope_exit(
         folly::coro::co_cleanup,
         co_runPlanStatement(

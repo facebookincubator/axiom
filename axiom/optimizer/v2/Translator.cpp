@@ -472,7 +472,8 @@ Translated Translator::translateTableWrite(
   const auto kind = static_cast<connector::WriteKind>(tableWrite.writeKind());
   if (kind != connector::WriteKind::kCreate &&
       kind != connector::WriteKind::kInsert &&
-      kind != connector::WriteKind::kDelete) {
+      kind != connector::WriteKind::kDelete &&
+      kind != connector::WriteKind::kAnalyze) {
     VELOX_NYI(
         "TableWrite does not support {}",
         connector::WriteKindName::toName(kind));
@@ -521,41 +522,55 @@ Translated Translator::translateTableWrite(
   }
   NodeCP currentInput = input.node;
 
-  // One expression per target column, in table-schema order: the statement's
-  // expression where the column is written, else the column's schema default.
   const auto& writtenNames = tableWrite.columnNames();
+  QGVector<Name> columnNames;
   ExprVector columnExprs;
-  const uint32_t numColumns =
-      kind == connector::WriteKind::kDelete ? 0 : tableSchema.size();
-  columnExprs.reserve(numColumns);
-  for (uint32_t i = 0; i < numColumns; ++i) {
-    const auto& columnName = tableSchema.nameOf(i);
-    auto it = std::find(writtenNames.begin(), writtenNames.end(), columnName);
-    if (it != writtenNames.end()) {
-      const auto nth = it - writtenNames.begin();
-      currentInput = withLiftTarget(currentInput, [&](LiftTarget& target) {
-        columnExprs.push_back(translateExpr(
-            *tableWrite.columnExpressions()[nth], input.scope, &target));
-      });
-    } else {
-      const auto* tableColumn = connectorTable->findColumn(columnName);
-      VELOX_CHECK_NOT_NULL(tableColumn);
-      columnExprs.push_back(builder_.makeLiteral(
-          velox::Variant(tableColumn->defaultValue()),
-          toType(tableColumn->type())));
+  auto translateColumn = [&](size_t nth) {
+    currentInput = withLiftTarget(currentInput, [&](LiftTarget& target) {
+      columnExprs.push_back(translateExpr(
+          *tableWrite.columnExpressions()[nth], input.scope, &target));
+    });
+  };
+  if (kind == connector::WriteKind::kAnalyze) {
+    // ANALYZE reads only the columns it computes statistics for, in the
+    // statement's order.
+    for (size_t i = 0; i < writtenNames.size(); ++i) {
+      columnNames.push_back(toName(writtenNames[i]));
+      translateColumn(i);
     }
-    VELOX_DCHECK(
-        *tableSchema.childAt(i) == *toTypePtr(columnExprs.back()->value().type),
-        "TableWrite column type does not match schema: column {}, schema {}, expr {}",
-        columnName,
-        tableSchema.childAt(i)->toString(),
-        toTypePtr(columnExprs.back()->value().type)->toString());
+  } else if (kind != connector::WriteKind::kDelete) {
+    // One expression per target column, in table-schema order: the
+    // statement's expression where the column is written, else the column's
+    // schema default.
+    columnNames.reserve(tableSchema.size());
+    columnExprs.reserve(tableSchema.size());
+    for (uint32_t i = 0; i < tableSchema.size(); ++i) {
+      const auto& columnName = tableSchema.nameOf(i);
+      columnNames.push_back(toName(columnName));
+      auto it = std::find(writtenNames.begin(), writtenNames.end(), columnName);
+      if (it != writtenNames.end()) {
+        translateColumn(it - writtenNames.begin());
+      } else {
+        const auto* tableColumn = connectorTable->findColumn(columnName);
+        VELOX_CHECK_NOT_NULL(tableColumn);
+        columnExprs.push_back(builder_.makeLiteral(
+            velox::Variant(tableColumn->defaultValue()),
+            toType(tableColumn->type())));
+      }
+      VELOX_DCHECK(
+          *tableSchema.childAt(i) ==
+              *toTypePtr(columnExprs.back()->value().type),
+          "TableWrite column type does not match schema: column {}, schema {}, expr {}",
+          columnName,
+          tableSchema.childAt(i)->toString(),
+          toTypePtr(columnExprs.back()->value().type)->toString());
+    }
   }
 
-  // Velox's TableWriteNode writes the columns of its input, positionally, so
-  // the input produces exactly the written values, in table-schema order. Two
-  // positions writing one value each get their own column.
-  // A delete writes no columns.
+  // Velox's TableWriteNode writes the columns of its input, positionally, and
+  // ANALYZE's statistics aggregation reads them the same way, so the input
+  // produces exactly these values, in order. Two positions writing one value
+  // each get their own column. A delete writes no columns.
   if (!columnExprs.empty()) {
     ColumnVector writeColumns;
     writeColumns.reserve(columnExprs.size());
@@ -583,6 +598,7 @@ Translated Translator::translateTableWrite(
           currentInput,
           connectorTable,
           kind,
+          std::move(columnNames),
           std::move(columnExprs),
           std::move(deleteRowIdColumns),
           deleteTarget,

@@ -437,6 +437,7 @@ class EmptyScanSimplifier : public NodeRewriter<SimplifiedNodeContext> {
               node->input(),
               node->table(),
               node->kind(),
+              node->columnNames(),
               node->columnExprs(),
               node->rowIdColumns(),
               node->deleteTarget(),

@@ -52,6 +52,7 @@ enum class SqlStatementKind {
   kUse,
   kAddColumn,
   kCall,
+  kAnalyze,
 };
 
 AXIOM_DECLARE_ENUM_NAME(SqlStatementKind);
@@ -124,6 +125,10 @@ class SqlStatement {
 
   bool isAddColumn() const {
     return kind_ == SqlStatementKind::kAddColumn;
+  }
+
+  bool isAnalyze() const {
+    return kind_ == SqlStatementKind::kAnalyze;
   }
 
   bool isCall() const {
@@ -221,6 +226,28 @@ class DeleteStatement : public SqlStatement {
       facebook::axiom::logical_plan::ReferencedTables referencedTables)
       : SqlStatement(
             SqlStatementKind::kDelete,
+            std::move(views),
+            std::move(referencedTables)),
+        plan_{std::move(plan)} {}
+
+  const facebook::axiom::logical_plan::LogicalPlanNodePtr& plan() const {
+    return plan_;
+  }
+
+ private:
+  const facebook::axiom::logical_plan::LogicalPlanNodePtr plan_;
+};
+
+/// ANALYZE statement. 'plan' is a TableWriteNode with WriteKind::kAnalyze over
+/// a scan of the analyzed columns of the target table.
+class AnalyzeStatement : public SqlStatement {
+ public:
+  AnalyzeStatement(
+      facebook::axiom::logical_plan::LogicalPlanNodePtr plan,
+      ViewMap views,
+      facebook::axiom::logical_plan::ReferencedTables referencedTables)
+      : SqlStatement(
+            SqlStatementKind::kAnalyze,
             std::move(views),
             std::move(referencedTables)),
         plan_{std::move(plan)} {}

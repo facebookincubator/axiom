@@ -1300,6 +1300,7 @@ const auto& writeKindNames() {
       {WriteKind::kInsert, "INSERT"},
       {WriteKind::kUpdate, "UPDATE"},
       {WriteKind::kDelete, "DELETE"},
+      {WriteKind::kAnalyze, "ANALYZE"},
   };
 
   return kNames;
