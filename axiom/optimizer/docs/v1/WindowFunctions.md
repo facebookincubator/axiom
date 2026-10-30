@@ -183,7 +183,7 @@ For each group, add:
    partitions with different `b` values. Also skip if running on a single
    worker. If partition keys are empty, gather to a single node.
    This logic already exists for aggregation in `repartitionForAgg`
-   (`Optimization.cpp` ~line 584) — reuse the same subset check for window
+   (`v1/Optimization.cpp` ~line 584) — reuse the same subset check for window
    partition keys.
 2. **Window operator**: computes all window functions in the group. Takes
    partition keys, order keys, and a list of (function, frame) pairs.
@@ -543,7 +543,7 @@ with it.
 When adding window functions to a DT that already has `orderKeys` (from a child
 Sort node that was folded in), clear the `orderKeys` if the window will
 invalidate the existing sort order. This is analogous to how aggregation clears
-`orderKeys` in `ToGraph.cpp`.
+`orderKeys` in `v1/ToGraph.cpp`.
 
 Cases where the existing sort is invalidated:
 - Non-empty partition keys that require repartition: hash repartition destroys
@@ -811,7 +811,7 @@ separate Limit.
 
 ### ToVelox Translation
 
-The new RelationOps need corresponding `make` functions in `ToVelox.cpp` to
+The new RelationOps need corresponding `make` functions in `v1/ToVelox.cpp` to
 translate to Velox plan nodes:
 
 - `Window` → `velox::core::WindowNode`: map partition keys, order keys,
@@ -821,7 +821,7 @@ translate to Velox plan nodes:
 - `TopNRowNumber` → `velox::core::TopNRowNumberNode`: map partition keys,
   order keys, ranking function enum, limit, and output column.
 
-Follow the existing `makeAggregation` pattern in `ToVelox.cpp`. The mapping is
+Follow the existing `makeAggregation` pattern in `v1/ToVelox.cpp`. The mapping is
 straightforward — the Axiom RelationOps are designed to mirror the Velox node
 interfaces.
 

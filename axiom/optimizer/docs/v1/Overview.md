@@ -464,4 +464,4 @@ When a nested DT is needed, there are two patterns:
 
 - **`finalizeDt`**: Completes `currentDt_` by setting its output columns, nests it inside an outer DT, and updates `currentDt_` to point to the outer DT. Called from `wrapInDt`, but also called directly in cases like adding an aggregation when one already exists, adding a sort when a limit already exists, or when `processSubqueries` detects that the DT has non-inner joins, aggregation, or unnest tables before adding new subquery joins.
 
-See `ToGraph::makeQueryGraph` in `ToGraph.cpp` for the full implementation.
+See `ToGraph::makeQueryGraph` in `v1/ToGraph.cpp` for the full implementation.

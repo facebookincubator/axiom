@@ -22,9 +22,9 @@
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/OptimizerSession.h"
-#include "axiom/optimizer/RelationOp.h"
-#include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
+#include "axiom/optimizer/v1/RelationOp.h"
+#include "axiom/optimizer/v1/VeloxHistory.h"
 #include "axiom/optimizer/v2/Optimize.h"
 #include "axiom/runner/LocalRunner.h"
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
@@ -38,9 +38,9 @@ namespace facebook::axiom {
 namespace logical_plan {
 class LogicalPlanNode;
 } // namespace logical_plan
-namespace optimizer {
+namespace optimizer::v1 {
 class Optimization;
-} // namespace optimizer
+} // namespace optimizer::v1
 } // namespace facebook::axiom
 
 namespace facebook::axiom::optimizer::test {
@@ -242,7 +242,7 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
 
   /// Returns the optimizer's total cost for the best plan. Useful for verifying
   /// that cost tracking includes specific operators (e.g., projections).
-  optimizer::PlanCost optimizationCost(
+  optimizer::v1::PlanCost optimizationCost(
       const logical_plan::LogicalPlanNodePtr& logicalPlan,
       const MultiFragmentPlan::Options& options =
           {
@@ -255,7 +255,7 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
   /// Optimization instance stays alive for the duration of the callback.
   void verifyOptimization(
       const logical_plan::LogicalPlanNode& logicalPlan,
-      const std::function<void(Optimization&)>& callback,
+      const std::function<void(v1::Optimization&)>& callback,
       const std::optional<OptimizerOptions>& optimizerOptions = std::nullopt);
 
   /// Runs v2 through 'pass' and invokes 'callback' while the resulting tree IR
@@ -272,7 +272,7 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
   /// current query.
   const connector::ConnectorContextPtr& getConnectorContext();
 
-  static VeloxHistory& suiteHistory() {
+  static v1::VeloxHistory& suiteHistory() {
     return *gSuiteHistory;
   }
 
@@ -448,10 +448,10 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
 
   // Connector context shared by planning and execution of that query.
   connector::ConnectorContextPtr connectorContext_;
-  std::unique_ptr<optimizer::VeloxHistory> history_;
+  std::unique_ptr<optimizer::v1::VeloxHistory> history_;
 
   inline static int32_t gQueryCounter{0};
-  inline static std::unique_ptr<VeloxHistory> gSuiteHistory;
+  inline static std::unique_ptr<v1::VeloxHistory> gSuiteHistory;
   inline static std::unique_ptr<folly::CPUThreadPoolExecutor> executor_;
   inline static std::shared_ptr<optimizer::FunctionRegistry> functionRegistry_;
 };

@@ -643,9 +643,11 @@ struct Equivalence {
   ColumnVector columns;
 };
 
+namespace v1 {
 class JoinEdge;
 using JoinEdgeP = JoinEdge*;
 using JoinEdgeVector = QGVector<JoinEdgeP>;
+} // namespace v1
 
 /// Polymorphic base for the table-shaped query-graph nodes. Callers
 /// iterating over `DerivedTable::tables` reach for `columns`, `cardinality`,
@@ -668,7 +670,7 @@ class TableObject : public PlanObject {
   ColumnVector columns;
 
   /// Joins where this table is an end point.
-  JoinEdgeVector joinedBy;
+  QGVector<v1::JoinEdge*> joinedBy;
 
   bool isTable() const final override {
     return true;

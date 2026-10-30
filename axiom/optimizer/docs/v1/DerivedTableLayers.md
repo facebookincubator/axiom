@@ -71,4 +71,4 @@ processing layers bottom-up:
 2. For expression-only layers (Filters, Having, Projection, Order By):
    rewrite expressions using the accumulated column mapping.
 
-See `DerivedTableFlattener.h` for the API.
+See `v1/DerivedTableFlattener.h` for the API.
