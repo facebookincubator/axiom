@@ -17,7 +17,7 @@
 
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/optimizer/AggregationPlanner.h"
-#include "axiom/optimizer/Cost.h"
+#include "axiom/optimizer/CostV1.h"
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/Plan.h"

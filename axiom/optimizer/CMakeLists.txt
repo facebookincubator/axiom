@@ -39,11 +39,13 @@ add_library(
   ConstantExprEvaluator.cpp
   ConstantFold.cpp
   Cost.cpp
+  CostV1.cpp
   DerivedTable.cpp
   DerivedTableFlattener.cpp
   DerivedTablePrinter.cpp
   Domain.cpp
   ExplainIo.cpp
+  ExplainIoV1.cpp
   ExprEstimator.cpp
   Filters.cpp
   FunctionRegistry.cpp
@@ -55,6 +57,7 @@ add_library(
   OptimizerOptions.cpp
   ParallelExpr.cpp
   Plan.cpp
+  PlanAndStats.cpp
   PlanObject.cpp
   PlanUtils.cpp
   PrecomputeProjection.cpp

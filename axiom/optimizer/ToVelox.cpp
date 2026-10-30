@@ -32,26 +32,6 @@ namespace lp = facebook::axiom::logical_plan;
 
 namespace facebook::axiom::optimizer {
 
-std::string PlanAndStats::toString() const {
-  if (plan->fragments().empty()) {
-    // The connector carries out the write itself, so the handle's description
-    // is all there is to show.
-    return finishWrite.toString();
-  }
-
-  return plan->toString(
-      true,
-      [&](const velox::core::PlanNodeId& planNodeId,
-          std::string_view indentation,
-          std::ostream& out) {
-        auto it = prediction.find(planNodeId);
-        if (it != prediction.end()) {
-          out << indentation << "Estimate: " << it->second.toString()
-              << std::endl;
-        }
-      });
-}
-
 ToVelox::ToVelox(
     OptimizerSessionPtr optimizerSession,
     const MultiFragmentPlan::Options& options)
