@@ -145,6 +145,19 @@ class EstimateProviderTest : public optimizer::test::QueryTestBase {
     VELOX_FAIL(
         "No output column: {}; outputs are {}", name, folly::join(", ", names));
   }
+
+  // Returns the first node of 'type' in the tree under 'root', depth first.
+  static NodeCP findNode(NodeCP root, NodeType type) {
+    if (root->is(type)) {
+      return root;
+    }
+    for (NodeCP input : root->inputs()) {
+      if (NodeCP found = findNode(input, type)) {
+        return found;
+      }
+    }
+    return nullptr;
+  }
 };
 
 TEST_F(EstimateProviderTest, scan) {
@@ -557,6 +570,8 @@ TEST_F(EstimateProviderTest, rowNumber) {
       });
 }
 
+// An unnested array's elements, and an unnested map's keys and values, take
+// the statistics of the values they are drawn from.
 TEST_F(EstimateProviderTest, unnest) {
   // An array of unknown size has 10 elements: 10'000 * 10 = 100'000 rows.
   verifyEstimate(
@@ -568,6 +583,77 @@ TEST_F(EstimateProviderTest, unnest) {
         const Value& x = column(root, estimate, "x");
         EXPECT_EQ(x.cardinality, 1'000);
         AXIOM_ASSERT_NORANGE(x);
+        EXPECT_EQ(x.nullFraction, std::nullopt);
+      });
+
+  // array_agg draws its elements from 'a', and map_agg its keys from 'a' and
+  // its values from 'b'. One row of 10 elements caps each NDV at 10.
+  verifyEstimate(
+      "SELECT x FROM (SELECT array_agg(a) AS arr FROM t) "
+      "CROSS JOIN UNNEST(arr) AS r(x)",
+      10,
+      [&](NodeCP root, const Estimate& estimate) {
+        const Value& x = column(root, estimate, "x");
+        EXPECT_EQ(x.cardinality, 10);
+        AXIOM_ASSERT_RANGE(x, 0, 999);
+      });
+
+  verifyEstimate(
+      "SELECT k, v FROM (SELECT map_agg(a, b) AS m FROM t) "
+      "CROSS JOIN UNNEST(m) AS r(k, v)",
+      10,
+      [&](NodeCP root, const Estimate& estimate) {
+        const Value& k = column(root, estimate, "k");
+        EXPECT_EQ(k.cardinality, 10);
+        AXIOM_ASSERT_RANGE(k, 0, 999);
+        const Value& v = column(root, estimate, "v");
+        EXPECT_EQ(v.cardinality, 10);
+        AXIOM_ASSERT_NORANGE(v);
+      });
+
+  // EXISTS over a row's array unnests it keeping the rows with an empty
+  // array, whose element is NULL. The element's bounds and NDV still hold, and
+  // the share of NULLs is unknown.
+  testConnector_
+      ->addTable("w", velox::ROW("arr", velox::ARRAY(velox::BIGINT())))
+      ->setStats(
+          100,
+          {{"arr",
+            {.children = {{
+                 .min = velox::Variant(int64_t{0}),
+                 .max = velox::Variant(int64_t{9}),
+                 .numDistinct = 10,
+             }}}}});
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("w");
+  };
+  verifyEstimate(
+      "SELECT 1 FROM w "
+      "WHERE EXISTS (SELECT 1 FROM UNNEST(w.arr) AS u(x) WHERE x > 5)",
+      50,
+      [&](NodeCP root, const Estimate& /*estimate*/) {
+        NodeCP node = findNode(root, NodeType::kUnnest);
+        ASSERT_NE(node, nullptr);
+        const auto* unnest = node->as<Unnest>();
+        ASSERT_NE(unnest->markerColumn(), nullptr);
+        EstimateProvider estimateProvider;
+        const Value& x = value(
+            estimateProvider.estimate(unnest).constraints,
+            unnest->unnestColumns()[0][0]);
+        EXPECT_EQ(x.cardinality, 10);
+        AXIOM_ASSERT_RANGE(x, 0, 9);
+        EXPECT_EQ(x.nullFraction, std::nullopt);
+      });
+
+  // Unnesting two arrays pads the shorter one with NULL: x is NULL past the
+  // end of a row's array.
+  verifyEstimate(
+      "SELECT x, y FROM w CROSS JOIN UNNEST(w.arr, ARRAY[1, 2, 3]) AS r(x, y)",
+      1'000,
+      [&](NodeCP root, const Estimate& estimate) {
+        const Value& x = column(root, estimate, "x");
+        EXPECT_EQ(x.cardinality, 10);
+        AXIOM_ASSERT_RANGE(x, 0, 9);
         EXPECT_EQ(x.nullFraction, std::nullopt);
       });
 }
