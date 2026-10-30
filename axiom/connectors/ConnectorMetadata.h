@@ -281,8 +281,8 @@ class Column {
 
   /// Returns true if this column should appear in EXPLAIN IO output.
   /// Set by connectors for columns relevant to IO (e.g., partition columns).
-  /// Only VARCHAR and integer types (TINYINT, SMALLINT, INTEGER, BIGINT) are
-  /// supported.
+  /// Only VARCHAR, BOOLEAN, and integer types (TINYINT, SMALLINT, INTEGER,
+  /// BIGINT) are supported.
   bool includeInExplainIo() const {
     return includeInExplainIo_;
   }
