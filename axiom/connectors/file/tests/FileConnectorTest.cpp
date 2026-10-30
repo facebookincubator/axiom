@@ -23,11 +23,13 @@
 
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/SqlQueryRunner.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/file/tests/FaultyFileSystemOperations.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -49,25 +51,19 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
   }
 
   void SetUp() override {
-    connectors_ = std::make_unique<Connectors>(
-        velox::connector::ConnectorRegistry::global(),
-        connector::ConnectorMetadataRegistry::global());
-    runner_ = std::make_unique<::axiom::sql::SqlQueryRunner>("test_user");
-    runner_->initialize([this]() {
-      connectors_->registerFileConnector(kConnectorId);
+    connectorRegistry_ = velox::connector::ConnectorRegistry::create();
+    metadataRegistry_ = ConnectorMetadataRegistry::create();
+    runner_ = std::make_unique<::axiom::sql::SqlQueryRunner>(
+        "test_user", *connectorRegistry_, *metadataRegistry_);
+    runner_->initialize([&]() {
+      Connectors connectors{*connectorRegistry_, *metadataRegistry_};
+      connectors.registerFileConnector(kConnectorId);
       return std::make_pair(std::string(kConnectorId), std::string("parquet"));
     });
 
     tempDir_ = velox::common::testutil::TempDirectoryPath::create();
     parquetPath_ = fmt::format("{}/test.parquet", tempDir_->getPath());
     writeTestParquetFile(parquetPath_);
-  }
-
-  void TearDown() override {
-    runner_.reset();
-    connectors_.reset();
-    connector::ConnectorMetadataRegistry::global().erase(kConnectorId);
-    velox::connector::ConnectorRegistry::global().erase(kConnectorId);
   }
 
   // Writes 'data' to 'path' as a Parquet file. A positive 'rowsInRowGroup'
@@ -227,7 +223,11 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
             {"Schema"}, {makeFlatVector<std::string>(expectedSchemas)}));
   }
 
-  std::unique_ptr<Connectors> connectors_;
+  // Supplies execution connectors to runner_.
+  std::shared_ptr<velox::connector::ConnectorRegistry::Registry>
+      connectorRegistry_;
+  // Supplies catalog metadata to runner_.
+  std::shared_ptr<ConnectorMetadataRegistry::Registry> metadataRegistry_;
   std::unique_ptr<::axiom::sql::SqlQueryRunner> runner_;
   // Temp directory holding all Parquet files; its destructor removes the
   // directory and everything written into it.

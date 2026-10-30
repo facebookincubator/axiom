@@ -30,6 +30,7 @@
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestTableJson.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/connectors/ConnectorRegistry.h"
 
 DEFINE_string(
     catalog,
@@ -48,13 +49,19 @@ int main(int argc, char** argv) {
   facebook::velox::memory::MemoryManager::initialize(
       facebook::velox::memory::MemoryManager::Options{});
 
-  facebook::axiom::Connectors connectors{
-      facebook::velox::connector::ConnectorRegistry::global(),
-      facebook::axiom::connector::ConnectorMetadataRegistry::global()};
+  auto connectorRegistry =
+      facebook::velox::connector::ConnectorRegistry::create();
+  auto metadataRegistry =
+      facebook::axiom::connector::ConnectorMetadataRegistry::create();
+  facebook::axiom::Connectors connectors{*connectorRegistry, *metadataRegistry};
   // Progress-polling scheduler for the console's live progress bar.
   folly::FunctionScheduler progressScheduler;
   axiom::sql::SqlQueryRunner runner{
-      axiom::sql::SystemUser::resolve(), &progressScheduler, !FLAGS_v1};
+      axiom::sql::SystemUser::resolve(),
+      *connectorRegistry,
+      *metadataRegistry,
+      &progressScheduler,
+      !FLAGS_v1};
   auto initializeConnectors = [&]() {
     VELOX_USER_CHECK(
         FLAGS_data_path.empty() || FLAGS_etc_dir.empty(),
@@ -148,9 +155,7 @@ int main(int argc, char** argv) {
     // registered above, after the connectors the flag usually names.
     const auto& catalog = runner.defaultConnectorId();
     VELOX_USER_CHECK_NOT_NULL(
-        facebook::axiom::connector::ConnectorMetadataRegistry::tryGet(catalog),
-        "Catalog does not exist: {}",
-        catalog);
+        metadataRegistry->find(catalog), "Catalog does not exist: {}", catalog);
 
     axiom::sql::Console console{runner};
     console.initialize();

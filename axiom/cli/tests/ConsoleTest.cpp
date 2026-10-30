@@ -26,9 +26,8 @@
 #include <chrono>
 #include <optional>
 #include <thread>
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/cli/tests/SqlQueryRunnerTestHandle.h"
 #include "axiom/connectors/tests/TestConnector.h"
-#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 DECLARE_string(query);
@@ -94,29 +93,17 @@ class ConsoleTest : public ::testing::Test, public test::VectorTestBase {
   void TearDown() override {
     // Restore FLAGS_query to avoid polluting other tests.
     FLAGS_query = "";
-    for (const auto& id : connectorIds_) {
-      facebook::axiom::connector::ConnectorMetadataRegistry::global().erase(id);
-      facebook::velox::connector::ConnectorRegistry::global().erase(id);
-    }
   }
 
   template <typename RunnerT = SqlQueryRunner>
-  std::unique_ptr<RunnerT> makeRunner(PermissionCheck permissionCheck = {}) {
-    auto runner = std::make_unique<RunnerT>("test_user");
+  SqlQueryRunnerTestHandle<RunnerT> makeRunner(
+      PermissionCheck permissionCheck = {}) {
+    SqlQueryRunnerTestHandle<RunnerT> runner{"test_user"};
+    auto& connectors = runner.connectors();
 
     runner->initialize(
         [&]() {
-          static int32_t kCounter = 0;
-
-          auto testConnector =
-              std::make_shared<facebook::axiom::connector::TestConnector>(
-                  fmt::format("console_test{}", kCounter++));
-          facebook::velox::connector::ConnectorRegistry::global().insert(
-              testConnector->connectorId(), testConnector);
-          facebook::axiom::connector::ConnectorMetadataRegistry::global()
-              .insert(testConnector->connectorId(), testConnector->metadata());
-
-          connectorIds_.emplace_back(testConnector->connectorId());
+          auto testConnector = connectors.registerTestConnector();
 
           return std::make_pair(
               testConnector->connectorId(),
@@ -127,9 +114,6 @@ class ConsoleTest : public ::testing::Test, public test::VectorTestBase {
 
     return runner;
   }
-
- private:
-  std::vector<std::string> connectorIds_;
 };
 
 TEST_F(ConsoleTest, permissionCheckCalledBeforeExecution) {
@@ -167,7 +151,6 @@ TEST_F(ConsoleTest, permissionCheckCalledBeforeExecution) {
 // so the signal is delivered at a deterministic point (no retry loop).
 TEST_F(ConsoleTest, sigintCancelsRunningQuery) {
   auto runner = makeRunner<FakeCancelRunner>();
-  ASSERT_TRUE(runner);
 
   Console console{*runner};
   console.initialize();

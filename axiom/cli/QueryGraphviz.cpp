@@ -49,6 +49,8 @@
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/SqlQueryRunner.h"
 #include "axiom/cli/SystemUser.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "velox/connectors/ConnectorRegistry.h"
 
 DEFINE_string(
     query,
@@ -170,11 +172,15 @@ int main(int argc, char** argv) {
   facebook::velox::memory::MemoryManager::initialize(
       facebook::velox::memory::MemoryManager::Options{});
 
-  facebook::axiom::Connectors connectors{
-      facebook::velox::connector::ConnectorRegistry::global(),
-      facebook::axiom::connector::ConnectorMetadataRegistry::global()};
-  axiom::sql::SqlQueryRunner runner{axiom::sql::SystemUser::resolve()};
+  auto connectorRegistry =
+      facebook::velox::connector::ConnectorRegistry::create();
+  auto metadataRegistry =
+      facebook::axiom::connector::ConnectorMetadataRegistry::create();
+  axiom::sql::SqlQueryRunner runner{
+      axiom::sql::SystemUser::resolve(), *connectorRegistry, *metadataRegistry};
   runner.initialize([&]() {
+    facebook::axiom::Connectors connectors{
+        *connectorRegistry, *metadataRegistry};
     auto defaultConnector = connectors.registerTpchConnector();
     auto defaultSchema = "tiny";
     if (!FLAGS_data_path.empty()) {

@@ -29,6 +29,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <stdexcept>
+#include "axiom/cli/Connectors.h"
 #include "axiom/cli/QueryIdGenerator.h"
 #include "axiom/cli/common/ComponentMetrics.h"
 #include "axiom/cli/common/QueryRuntimeStats.h"
@@ -112,6 +113,72 @@ class SqlQueryRunnerTest : public SqlQueryRunnerTestBase {
         expectedDefault);
   }
 };
+
+// Runners with the same catalog name resolve their own metadata and execution
+// connector.
+TEST_F(SqlQueryRunnerTest, independentCatalogs) {
+  std::shared_ptr<facebook::axiom::connector::TestConnector> firstConnector;
+  auto first = makeRunner([&](facebook::axiom::Connectors& connectors) {
+    firstConnector =
+        std::dynamic_pointer_cast<facebook::axiom::connector::TestConnector>(
+            connectors.registerTestConnector("test"));
+    connectors.registerTestConnector("first_only");
+    return std::make_pair(std::string{"test"}, kDefaultSchema);
+  });
+  first.connectors().registerSystemConnector(first->sessionConfig());
+  ASSERT_NE(firstConnector, nullptr);
+  firstConnector->addTable("t", ROW("a", BIGINT()))
+      ->addData(makeRowVector({makeFlatVector<int64_t>({11})}));
+
+  std::shared_ptr<facebook::axiom::connector::TestConnector> secondConnector;
+  auto second = makeRunner([&](facebook::axiom::Connectors& connectors) {
+    secondConnector =
+        std::dynamic_pointer_cast<facebook::axiom::connector::TestConnector>(
+            connectors.registerTestConnector("test"));
+    connectors.registerTestConnector("second_only");
+    return std::make_pair(std::string{"test"}, kDefaultSchema);
+  });
+  second.connectors().registerSystemConnector(second->sessionConfig());
+  ASSERT_NE(secondConnector, nullptr);
+  secondConnector->addTable("u", ROW("a", BIGINT()))
+      ->addData(makeRowVector({makeFlatVector<int64_t>({22})}));
+
+  test::assertEqualVectors(
+      first->run("SELECT a FROM t", {}).results.at(0),
+      makeRowVector({makeFlatVector<int64_t>({11})}));
+  test::assertEqualVectors(
+      second->run("SELECT a FROM u", {}).results.at(0),
+      makeRowVector({makeFlatVector<int64_t>({22})}));
+
+  test::assertEqualVectors(
+      first
+          ->run(
+              "SELECT catalog_name FROM "
+              "first_only.information_schema.schemata "
+              "WHERE schema_name = 'information_schema'",
+              {})
+          .results.at(0),
+      makeRowVector({makeFlatVector<std::string>({"first_only"})}));
+  test::assertEqualVectors(
+      second
+          ->run(
+              "SELECT catalog_name FROM "
+              "second_only.information_schema.schemata "
+              "WHERE schema_name = 'information_schema'",
+              {})
+          .results.at(0),
+      makeRowVector({makeFlatVector<std::string>({"second_only"})}));
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      second->run(
+          "SELECT catalog_name FROM "
+          "first_only.information_schema.schemata",
+          {}),
+      "Table not found: first_only.information_schema.schemata");
+  first.reset();
+  test::assertEqualVectors(
+      second->run("SELECT a FROM u", {}).results.at(0),
+      makeRowVector({makeFlatVector<int64_t>({22})}));
+}
 
 TEST_F(SqlQueryRunnerTest, runSingleStatement) {
   {

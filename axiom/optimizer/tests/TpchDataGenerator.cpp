@@ -17,6 +17,8 @@
 #include "axiom/optimizer/tests/TpchDataGenerator.h"
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/SqlQueryRunner.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "velox/connectors/ConnectorRegistry.h"
 
 using namespace facebook::velox;
 
@@ -30,11 +32,12 @@ void TpchDataGenerator::createTables(
     dwio::common::FileFormat format,
     const TableStartingCallback& onTableStarting,
     const TableCreatedCallback& onTableCreated) {
-  Connectors connectors{
-      velox::connector::ConnectorRegistry::global(),
-      connector::ConnectorMetadataRegistry::global()};
-  ::axiom::sql::SqlQueryRunner runner{"tpch_data_generator"};
+  auto connectorRegistry = velox::connector::ConnectorRegistry::create();
+  auto metadataRegistry = connector::ConnectorMetadataRegistry::create();
+  ::axiom::sql::SqlQueryRunner runner{
+      "tpch_data_generator", *connectorRegistry, *metadataRegistry};
   runner.initialize([&]() {
+    Connectors connectors{*connectorRegistry, *metadataRegistry};
     connectors.registerTpchConnector();
     connectors.registerLocalHiveConnector(
         std::string(path),
@@ -76,15 +79,6 @@ void TpchDataGenerator::createTables(
       onTableCreated(tableName, numRows);
     }
   }
-
-  connector::ConnectorMetadataRegistry::global().erase(
-      Connectors::kTpchConnectorId);
-  connector::ConnectorMetadataRegistry::global().erase(
-      Connectors::kLocalHiveConnectorId);
-  velox::connector::ConnectorRegistry::global().erase(
-      Connectors::kTpchConnectorId);
-  velox::connector::ConnectorRegistry::global().erase(
-      Connectors::kLocalHiveConnectorId);
 }
 
 } // namespace facebook::axiom::optimizer::test

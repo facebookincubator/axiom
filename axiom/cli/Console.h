@@ -39,8 +39,12 @@ class QueryInterruptHandler;
 /// captured runs). `--init` and `--repeat` never draw it.
 ///
 /// @code
+///   auto connectorRegistry = velox::connector::ConnectorRegistry::create();
+///   auto metadataRegistry =
+///       connector::ConnectorMetadataRegistry::create();
 ///   folly::FunctionScheduler scheduler;  // enables progress reporting
-///   SqlQueryRunner runner{user, &scheduler};
+///   SqlQueryRunner runner{
+///       user, *connectorRegistry, *metadataRegistry, &scheduler};
 ///   Console console{runner};
 ///   console.initialize();
 ///   const Console::Outcome outcome = console.run();

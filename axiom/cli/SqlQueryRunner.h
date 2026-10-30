@@ -24,9 +24,11 @@
 #include <chrono>
 #include <exception>
 #include <functional>
+#include <memory>
 #include <vector>
 #include "axiom/common/ConfigRegistry.h"
 #include "axiom/common/SessionConfig.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/ToVelox.h"
@@ -35,6 +37,7 @@
 #include "axiom/runner/QueryProgress.h"
 #include "axiom/sql/presto/SqlStatement.h"
 #include "velox/common/file/TokenProvider.h"
+#include "velox/connectors/ConnectorRegistry.h"
 
 namespace axiom::sql {
 
@@ -197,27 +200,26 @@ class SqlQueryRunner {
   /// "execution.session_timezone").
   static constexpr const char* kExecutionPrefix = "execution";
 
-  /// Constructs the runner with the given session user identity. The user
-  /// must be non-empty; it is exposed by the SQL `CURRENT_USER` function and
-  /// used as the default table owner in DDL.
-  ///
-  /// `progressScheduler` (not owned, must outlive this runner) drives progress
-  /// polling for queries that set RunOptions::onProgress. If null, such a query
-  /// fails loudly rather than running without the progress it asked for.
-  /// @param useOptimizerV2 Routes all queries through the v2 optimizer, the
-  /// default. EXPLAIN (type graph) is supported only under v1, because it
-  /// inspects optimizer internals the v2 pipeline does not expose.
-  explicit SqlQueryRunner(
+  /// Constructs a runner that resolves catalogs only through the given
+  /// registries. Both registries must outlive this runner. The connector
+  /// registry is installed on every Velox query context the runner creates.
+  /// @param user Non-empty identity exposed by `CURRENT_USER` and used as the
+  /// default table owner in DDL.
+  /// @param connectorRegistry Execution connectors available to queries.
+  /// @param metadataRegistry Catalog metadata available during planning.
+  /// @param progressScheduler Optional, non-owned scheduler for queries that
+  /// set `RunOptions::onProgress`. It must outlive this runner. Such queries
+  /// fail if the scheduler is null.
+  /// @param useOptimizerV2 Routes all queries through the v2 optimizer by
+  /// default. `EXPLAIN (TYPE GRAPH)` is supported only under v1.
+  SqlQueryRunner(
       std::string user,
+      facebook::velox::connector::ConnectorRegistry::Registry&
+          connectorRegistry,
+      const facebook::axiom::connector::ConnectorMetadataRegistry::Registry&
+          metadataRegistry,
       folly::FunctionScheduler* progressScheduler = nullptr,
-      bool useOptimizerV2 = true)
-      : executor_{std::make_shared<folly::CPUThreadPoolExecutor>(
-            folly::available_concurrency() * 2)},
-        user_{std::move(user)},
-        useOptimizerV2_{useOptimizerV2},
-        progressScheduler_{progressScheduler} {
-    VELOX_USER_CHECK(!user_.empty(), "SqlQueryRunner user must be non-empty");
-  }
+      bool useOptimizerV2 = true);
 
   virtual ~SqlQueryRunner() = default;
 
@@ -580,6 +582,8 @@ class SqlQueryRunner {
       const presto::CreateTableAsSelectStatement& ctas,
       bool explain);
 
+  // Creates a query context over this runner's execution state. The context
+  // must not outlive the runner.
   std::shared_ptr<facebook::velox::core::QueryCtx> newQuery(
       const RunOptions& options);
 
@@ -784,6 +788,13 @@ class SqlQueryRunner {
   // Progress-polling scheduler (see constructor). Started idempotently before
   // each progress-reporting query.
   folly::FunctionScheduler* const progressScheduler_;
+
+  // Execution connectors installed on each QueryCtx.
+  facebook::velox::connector::ConnectorRegistry::Registry& connectorRegistry_;
+
+  // Catalog metadata used by ConnectorContext.
+  const facebook::axiom::connector::ConnectorMetadataRegistry::Registry&
+      metadataRegistry_;
 };
 
 } // namespace axiom::sql
