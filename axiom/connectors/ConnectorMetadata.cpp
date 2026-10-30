@@ -95,6 +95,7 @@ const auto& writeKindNames() {
       {WriteKind::kInsert, "INSERT"},
       {WriteKind::kUpdate, "UPDATE"},
       {WriteKind::kDelete, "DELETE"},
+      {WriteKind::kAnalyze, "ANALYZE"},
   };
   return kNames;
 }
@@ -162,6 +163,17 @@ ConnectorDeleteHandle::ConnectorDeleteHandle(
     : veloxHandle_{std::move(veloxHandle)}, resultType_{std::move(resultType)} {
   VELOX_CHECK_NOT_NULL(veloxHandle_, "Delete writer handle must not be null");
   VELOX_CHECK_NOT_NULL(resultType_, "Delete result type must not be null");
+}
+
+ConnectorWriteHandlePtr ConnectorMetadata::beginWrite(
+    const ConnectorSessionPtr& /*session*/,
+    const TablePtr& table,
+    WriteKind kind,
+    bool /*explain*/) {
+  VELOX_UNSUPPORTED(
+      "Unsupported write kind for connector {}: {}",
+      table->layouts().front()->connectorId(),
+      kind);
 }
 
 void MetadataCountGroup::checkConsistency() const {
