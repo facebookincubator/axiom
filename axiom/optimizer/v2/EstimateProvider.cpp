@@ -333,6 +333,12 @@ Estimate EstimateProvider::compute(NodeCP node) {
         estimator.estimate(key);
       }
       Estimate result;
+      // The partial passes its input's statistics on, so the final step
+      // estimates its results from its arguments (see `AggregateStep`), as the
+      // aggregate before the split does.
+      if (aggregate->step() == AggregateStep::kPartial) {
+        result.constraints = input.constraints;
+      }
       if (groupingKeys.empty()) {
         result.cardinality = 1;
       } else {

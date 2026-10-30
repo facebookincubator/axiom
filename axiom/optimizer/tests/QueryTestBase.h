@@ -259,11 +259,17 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
       const std::optional<OptimizerOptions>& optimizerOptions = std::nullopt);
 
   /// Runs v2 through 'pass' and invokes 'callback' while the resulting tree IR
-  /// and its QueryGraphContext remain alive.
+  /// and its QueryGraphContext remain alive. Physical planning places the plan
+  /// on the workers and drivers of 'options'.
   void verifyOptimization(
       const logical_plan::LogicalPlanNode& logicalPlan,
       v2::Optimizer::Pass pass,
       const std::function<void(v2::NodeCP)>& callback,
+      const MultiFragmentPlan::Options& options =
+          {
+              .maxRemotePartitions = 1,
+              .maxLocalPartitions = 1,
+          },
       const std::optional<OptimizerOptions>& optimizerOptions = std::nullopt);
 
   std::shared_ptr<velox::core::QueryCtx>& getQueryCtx();

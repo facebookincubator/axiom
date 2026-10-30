@@ -108,11 +108,35 @@ class EstimateProviderTest : public optimizer::test::QueryTestBase {
     verifyEstimate(*parseSelect(sql), cardinality, check);
   }
 
+  // Same as the overload below, for the plan 'sql' parses to.
+  void verifyEstimate(
+      std::string_view sql,
+      const MultiFragmentPlan::Options& options,
+      std::optional<float> cardinality,
+      const std::function<void(NodeCP root, const Estimate& estimate)>& check) {
+    SCOPED_TRACE(sql);
+    verifyEstimate(*parseSelect(sql), options, cardinality, check);
+  }
+
+  // Same as the overload below, on one worker with one driver.
+  void verifyEstimate(
+      const logical_plan::LogicalPlanNode& plan,
+      std::optional<float> cardinality,
+      const std::function<void(NodeCP root, const Estimate& estimate)>& check) {
+    verifyEstimate(
+        plan,
+        {.maxRemotePartitions = 1, .maxLocalPartitions = 1},
+        cardinality,
+        check);
+  }
+
   // Plans 'plan' to just before and just after physical planning, checks that
   // the plan's root has 'cardinality' rows at both, and calls 'check' with the
   // root and its estimate at both: an estimate does not depend on placement.
+  // Physical planning places the plan on the workers and drivers of 'options'.
   void verifyEstimate(
       const logical_plan::LogicalPlanNode& plan,
+      const MultiFragmentPlan::Options& options,
       std::optional<float> cardinality,
       const std::function<void(NodeCP root, const Estimate& estimate)>& check) {
     for (const auto pass :
@@ -120,12 +144,16 @@ class EstimateProviderTest : public optimizer::test::QueryTestBase {
       SCOPED_TRACE(
           pass == Optimizer::Pass::kLowerRepeat ? "before placement"
                                                 : "after placement");
-      verifyOptimization(plan, pass, [&](NodeCP root) {
-        EstimateProvider estimateProvider;
-        const Estimate& estimate = estimateProvider.estimate(root);
-        EXPECT_EQ(estimate.cardinality, cardinality);
-        check(root, estimate);
-      });
+      verifyOptimization(
+          plan,
+          pass,
+          [&](NodeCP root) {
+            EstimateProvider estimateProvider;
+            const Estimate& estimate = estimateProvider.estimate(root);
+            EXPECT_EQ(estimate.cardinality, cardinality);
+            check(root, estimate);
+          },
+          options);
     }
   }
 
@@ -373,6 +401,37 @@ TEST_F(EstimateProviderTest, aggregate) {
         EXPECT_EQ(n.cardinality, std::nullopt);
         AXIOM_ASSERT_NORANGE(n);
         EXPECT_EQ(n.nullFraction, std::nullopt);
+      });
+}
+
+// With several drivers, an aggregation splits into a partial step and a final
+// one. The final step's results have the statistics the aggregation has before
+// the split: max(a) is one of the filtered values of 'a', and so are the keys
+// of map_agg(a, b).
+TEST_F(EstimateProviderTest, finalAggregate) {
+  const MultiFragmentPlan::Options fourDrivers{
+      .maxRemotePartitions = 1,
+      .maxLocalPartitions = 4,
+  };
+  verifyEstimate(
+      "SELECT max(a) AS m FROM t WHERE a < 100",
+      fourDrivers,
+      1,
+      [&](NodeCP root, const Estimate& estimate) {
+        const Value& m = column(root, estimate, "m");
+        EXPECT_EQ(m.cardinality, 1);
+        AXIOM_ASSERT_RANGE(m, 0, 99);
+      });
+
+  verifyEstimate(
+      "SELECT k FROM (SELECT map_agg(a, b) AS m FROM t WHERE a < 100) "
+      "CROSS JOIN UNNEST(m) AS r(k, v)",
+      fourDrivers,
+      10,
+      [&](NodeCP root, const Estimate& estimate) {
+        const Value& k = column(root, estimate, "k");
+        EXPECT_EQ(k.cardinality, 10);
+        AXIOM_ASSERT_RANGE(k, 0, 99);
       });
 }
 

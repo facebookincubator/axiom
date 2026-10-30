@@ -354,6 +354,7 @@ void QueryTestBase::verifyOptimization(
     const logical_plan::LogicalPlanNode& logicalPlan,
     v2::Optimizer::Pass pass,
     const std::function<void(v2::NodeCP)>& callback,
+    const MultiFragmentPlan::Options& options,
     const std::optional<OptimizerOptions>& optimizerOptions) {
   auto& veloxQueryCtx = getQueryCtx();
 
@@ -377,8 +378,7 @@ void QueryTestBase::verifyOptimization(
       statsWriter_);
   v2::Optimizer optimizer{
       logicalPlan, schemaResolver, *session, evaluator, veloxQueryCtx};
-  const auto debugPlan = optimizer.debugPlanTo(
-      {.maxRemotePartitions = 1, .maxLocalPartitions = 1}, pass);
+  const auto debugPlan = optimizer.debugPlanTo(options, pass);
   callback(debugPlan.root);
 }
 
