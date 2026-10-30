@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "axiom/optimizer/Cost.h"
+#include "axiom/optimizer/CostV1.h"
 #include "axiom/optimizer/ToVelox.h"
 #include "velox/exec/TaskStats.h"
 

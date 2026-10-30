@@ -16,6 +16,7 @@
 
 #include <algorithm>
 
+#include "axiom/optimizer/CostV1.h"
 #include "axiom/optimizer/ExprEstimator.h"
 #include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/JoinConstraints.h"

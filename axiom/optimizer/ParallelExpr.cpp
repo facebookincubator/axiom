@@ -16,6 +16,7 @@
 
 #include <ranges>
 
+#include "axiom/optimizer/CostV1.h"
 #include "axiom/optimizer/ToVelox.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"

@@ -49,12 +49,14 @@
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/optimizer/ConstantExprEvaluator.h"
+#include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/DerivedTablePrinter.h"
-#include "axiom/optimizer/ExplainIo.h"
+#include "axiom/optimizer/ExplainIoV1.h"
 #include "axiom/optimizer/MultiFragmentPlanPrinter.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/Plan.h"
+#include "axiom/optimizer/RelationOp.h"
 #include "axiom/optimizer/RelationOpPrinter.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/optimizer/v2/NodePrinter.h"
@@ -2034,7 +2036,6 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
   velox::exec::SimpleExpressionEvaluator evaluator(
       queryCtx.get(), optimizerPool_.get());
 
-  auto history = std::make_unique<optimizer::VeloxHistory>();
   schemaResolver = orDefaultSchemaResolver(std::move(schemaResolver));
   auto runnerSession = std::make_shared<runner::RunnerSession>(
       context,
@@ -2055,6 +2056,7 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
         .optimize(opts);
   }
 
+  auto history = std::make_unique<optimizer::VeloxHistory>();
   optimizer::Optimization optimization(
       std::move(optimizerSession),
       std::move(runnerSession),

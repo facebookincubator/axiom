@@ -17,7 +17,7 @@
 
 #include <ostream>
 #include "axiom/optimizer/MultiFragmentPlan.h"
-#include "axiom/optimizer/ToVelox.h"
+#include "axiom/optimizer/NodePrediction.h"
 
 namespace facebook::axiom::graphviz {
 
