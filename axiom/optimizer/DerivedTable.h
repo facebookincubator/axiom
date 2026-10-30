@@ -20,6 +20,7 @@
 #include "axiom/optimizer/MemoKey.h"
 #include "axiom/optimizer/PlanObject.h"
 #include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/QueryGraphV1.h" // IWYU pragma: export
 
 namespace facebook::axiom::optimizer {
 
@@ -86,9 +87,6 @@ struct DerivedTable : public TableObject {
   std::optional<float> cardinality() const override {
     return cardinality_;
   }
-
-  /// Correlation name.
-  Name cname{nullptr};
 
   /// Exprs projected out. 1:1 to 'columns' or empty if 'this' is a UNION
   /// ALL (isUnion is true).

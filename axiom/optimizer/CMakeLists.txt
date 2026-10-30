@@ -63,6 +63,7 @@ add_library(
   PrecomputeProjection.cpp
   QueryGraph.cpp
   QueryGraphContext.cpp
+  QueryGraphV1.cpp
   RelationOp.cpp
   RelationOpPrinter.cpp
   Schema.cpp
