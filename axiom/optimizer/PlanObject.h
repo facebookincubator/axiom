@@ -41,7 +41,7 @@ enum class PlanType : uint32_t {
   kAggregationNode,
   kWindowPlanNode,
   kWriteNode,
-  // Node from the v2 tree IR. See axiom/optimizer/v2/Node.h.
+  // Node from the v2 tree IR. See axiom/optimizer/Node.h.
   kV2Node,
 };
 

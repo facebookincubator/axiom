@@ -1241,10 +1241,10 @@ directly.
 
 | File | Purpose |
 |------|---------|
-| `ToGraph.cpp` | Core subquery processing (`processSubqueries`, `translateSubquery`, `extractDecorrelatedJoin`) |
-| `ToGraph.h` | Interface definitions, correlation state fields, `DecorrelatedJoin` struct |
-| `QueryGraph.h` | `JoinEdge` representation including `makeExists` factory |
-| `DerivedTable.h` | Query graph nodes, `singleRowDts` for non-correlated scalars |
+| `v1/ToGraph.cpp` | Core subquery processing (`processSubqueries`, `translateSubquery`, `extractDecorrelatedJoin`) |
+| `v1/ToGraph.h` | Interface definitions, correlation state fields, `DecorrelatedJoin` struct |
+| `v1/QueryGraph.h` | `JoinEdge` representation including `makeExists` factory |
+| `v1/DerivedTable.h` | Query graph nodes, `singleRowDts` for non-correlated scalars |
 | `tests/SubqueryTest.cpp` | Test suite for scalar, EXISTS, and uncorrelated subqueries |
 | `tests/JoinTest.cpp` | Test suite including correlated IN subqueries |
 

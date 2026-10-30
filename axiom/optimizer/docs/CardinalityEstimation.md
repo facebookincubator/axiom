@@ -362,7 +362,7 @@ join keys and keeps the row only if the hash falls within a deterministic range
 matching keys on both sides are guaranteed to fall in the same range — ensuring
 they are either both sampled or both excluded.
 
-The process (`JoinSample.cpp`):
+The process (`v1/JoinSample.cpp`):
 - For each side, build a pipeline that scans the base table, hashes join keys
   into a single `int64` value per row, and keeps only rows whose hash falls
   within the sample range (`(hash % mod) < limit`). Both pipelines run in

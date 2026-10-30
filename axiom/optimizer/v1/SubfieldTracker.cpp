@@ -1,0 +1,827 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "axiom/optimizer/v1/SubfieldTracker.h"
+#include <ranges>
+#include "axiom/logical_plan/ExprPrinter.h"
+#include "axiom/optimizer/FunctionRegistry.h"
+#include "axiom/optimizer/PlanUtils.h"
+
+namespace lp = facebook::axiom::logical_plan;
+
+namespace facebook::axiom::optimizer::v1 {
+
+bool SubfieldTracker::trySetSubscript(
+    Step& step,
+    const velox::Variant& variant) {
+  if (variant.isNull()) {
+    return false;
+  }
+  switch (variant.kind()) {
+    case velox::TypeKind::VARCHAR:
+      step.field = toName(variant.value<velox::TypeKind::VARCHAR>());
+      return true;
+    case velox::TypeKind::BIGINT:
+    case velox::TypeKind::INTEGER:
+    case velox::TypeKind::SMALLINT:
+    case velox::TypeKind::TINYINT:
+      step.id = integerValue(&variant);
+      return true;
+    default:
+      return false;
+  }
+}
+
+SubfieldTracker::SubfieldTracker(
+    std::function<logical_plan::ConstantExprPtr(const logical_plan::ExprPtr&)>
+        tryFoldConstant)
+    : tryFoldConstant_(std::move(tryFoldConstant)) {
+  const auto& registry = queryCtx()->functionRegistry();
+
+  if (auto elementAt = registry.elementAt()) {
+    elementAt_ = toName(elementAt.value());
+  }
+
+  if (auto subscript = registry.subscript()) {
+    subscript_ = toName(subscript.value());
+  }
+}
+
+SubfieldTracker::MarkAllResult SubfieldTracker::markAll(
+    const lp::LogicalPlanNode& node) && {
+  markAllSubfields(node, {});
+  const auto* planRoot =
+      node.is(lp::NodeKind::kOutput) ? node.onlyInput().get() : &node;
+  return {std::move(controlSubfields_), std::move(payloadSubfields_), planRoot};
+}
+
+namespace {
+
+PathCP stepsToPath(std::span<const Step> steps) {
+  return toPath(steps, true);
+}
+
+struct MarkFieldsAccessedContextVector {
+  std::vector<const velox::RowType*> rowTypes;
+  std::vector<LogicalContextSource> sources;
+
+  MarkFieldsAccessedContext toCtx() const {
+    return MarkFieldsAccessedContext{rowTypes, sources};
+  }
+
+  MarkFieldsAccessedContextVector& append(
+      const MarkFieldsAccessedContext& other) {
+    for (const auto& type : other.rowTypes) {
+      rowTypes.push_back(type);
+    }
+
+    for (const auto& source : other.sources) {
+      sources.push_back(source);
+    }
+
+    return *this;
+  }
+};
+
+struct MarkFieldsAccessedContextArray {
+  std::array<const velox::RowType* const, 1> rowTypes;
+  std::array<const LogicalContextSource, 1> sources;
+
+  MarkFieldsAccessedContext toCtx() const {
+    return MarkFieldsAccessedContext{rowTypes, sources};
+  }
+
+  MarkFieldsAccessedContextVector append(
+      const MarkFieldsAccessedContext& other) {
+    std::vector<const velox::RowType*> combinedRowTypes = {rowTypes.front()};
+    std::vector<LogicalContextSource> combinedSources = {sources.front()};
+
+    for (const auto& type : other.rowTypes) {
+      combinedRowTypes.push_back(type);
+    }
+
+    for (const auto& source : other.sources) {
+      combinedSources.push_back(source);
+    }
+
+    return {combinedRowTypes, combinedSources};
+  }
+};
+
+MarkFieldsAccessedContextArray fromNode(const lp::LogicalPlanNodePtr& node) {
+  return {
+      {node->outputType().get()},
+      {LogicalContextSource{.planNode = node.get()}}};
+}
+
+MarkFieldsAccessedContextVector fromNodes(
+    const std::vector<lp::LogicalPlanNodePtr>& nodes) {
+  std::vector<const velox::RowType*> rowTypes;
+  std::vector<LogicalContextSource> sources;
+  rowTypes.reserve(nodes.size());
+  sources.reserve(nodes.size());
+  for (const auto& node : nodes) {
+    rowTypes.push_back(node->outputType().get());
+    sources.push_back(LogicalContextSource{.planNode = node.get()});
+  }
+  return {std::move(rowTypes), std::move(sources)};
+}
+
+} // namespace
+
+void SubfieldTracker::markFieldAccessed(
+    const lp::ProjectNode& project,
+    int32_t ordinal,
+    std::vector<Step>& steps,
+    bool isControl,
+    const MarkFieldsAccessedContext& context) {
+  const auto& input = project.onlyInput();
+  const auto ctx = fromNode(input).append(context);
+  markSubfields(project.expressionAt(ordinal), steps, isControl, ctx.toCtx());
+}
+
+void SubfieldTracker::markFieldAccessed(
+    const lp::UnnestNode& unnest,
+    int32_t ordinal,
+    std::vector<Step>& steps,
+    bool isControl,
+    const MarkFieldsAccessedContext& context) {
+  const auto& input = unnest.onlyInput();
+  if (ordinal < input->outputType()->size()) {
+    const auto ctx = fromNode(input).append(context);
+    markFieldAccessed(ctx.sources[0], ordinal, steps, isControl, ctx.toCtx());
+  }
+}
+
+namespace {
+MarkFieldsAccessedContextVector makeContextForLambdaArg(
+    const lp::LambdaExpr& lambda,
+    const LogicalContextSource& source,
+    const MarkFieldsAccessedContext& context) {
+  const auto& argType = lambda.signature();
+
+  std::vector<const velox::RowType*> newRowTypes;
+  newRowTypes.reserve(context.rowTypes.size() + 1);
+  newRowTypes.push_back(argType.get());
+  newRowTypes.insert(
+      newRowTypes.end(), context.rowTypes.begin(), context.rowTypes.end());
+
+  std::vector<LogicalContextSource> newSources;
+  newSources.reserve(context.sources.size() + 1);
+  newSources.push_back(source);
+  newSources.insert(
+      newSources.end(), context.sources.begin(), context.sources.end());
+
+  return {newRowTypes, newSources};
+}
+} // namespace
+
+void SubfieldTracker::markFieldAccessed(
+    const lp::AggregateNode& agg,
+    int32_t ordinal,
+    std::vector<Step>& steps,
+    bool isControl,
+    const MarkFieldsAccessedContext& context) {
+  const auto& input = agg.onlyInput();
+
+  std::vector<Step> subSteps;
+  const auto ctx = fromNode(input).append(context);
+  auto mark = [&](const lp::ExprPtr& expr) {
+    markSubfields(expr, subSteps, isControl, ctx.toCtx());
+  };
+
+  const auto& keys = agg.groupingKeys();
+  if (ordinal < keys.size()) {
+    mark(keys[ordinal]);
+    return;
+  }
+
+  const auto numKeys = keys.size();
+  if (ordinal >= numKeys + agg.aggregates().size()) {
+    return;
+  }
+
+  const auto& aggregate = agg.aggregates()[ordinal - numKeys];
+
+  for (auto i = 0; i < aggregate->inputs().size(); ++i) {
+    const auto& aggregateInput = aggregate->inputAt(i);
+    if (aggregateInput->isLambda()) {
+      const auto* lambda = aggregateInput->as<lp::LambdaExpr>();
+      auto lambdaContext = makeContextForLambdaArg(
+          *lambda,
+          {.callName = aggregate->name(),
+           .callExpr = aggregate.get(),
+           .lambdaOrdinal = static_cast<int32_t>(i)},
+          ctx.toCtx());
+
+      std::vector<Step> lambdaSteps;
+      markSubfields(
+          lambda->body(), lambdaSteps, isControl, lambdaContext.toCtx());
+      VELOX_DCHECK(lambdaSteps.empty());
+      continue;
+    }
+    mark(aggregateInput);
+  }
+
+  if (aggregate->filter()) {
+    mark(aggregate->filter());
+  }
+
+  for (const auto& sortingField : aggregate->ordering()) {
+    mark(sortingField.expression);
+  }
+}
+
+void SubfieldTracker::markFieldAccessed(
+    const lp::SetNode& set,
+    int32_t ordinal,
+    std::vector<Step>& steps,
+    bool isControl,
+    const MarkFieldsAccessedContext& context) {
+  for (const auto& input : set.inputs()) {
+    const auto ctx = fromNode(input).append(context);
+    markFieldAccessed(ctx.sources[0], ordinal, steps, isControl, ctx.toCtx());
+  }
+}
+
+void SubfieldTracker::markFieldAccessed(
+    const LogicalContextSource& source,
+    int32_t ordinal,
+    std::vector<Step>& steps,
+    bool isControl,
+    const MarkFieldsAccessedContext& context) {
+  if (!source.planNode) {
+    // The source is a lambda arg. We apply the path to the corresponding
+    // container arg of the 2nd order function call that has the lambda.
+    const auto* metadata = functionMetadata(toName(source.callName));
+    const auto* lambdaInfo = metadata != nullptr
+        ? metadata->lambdaInfo(source.lambdaOrdinal)
+        : nullptr;
+    if (lambdaInfo != nullptr) {
+      const auto nth = lambdaInfo->argOrdinal[ordinal];
+
+      markSubfields(
+          source.callExpr->inputAt(nth),
+          steps,
+          isControl,
+          {context.rowTypes.subspan(1), context.sources.subspan(1)});
+    }
+    return;
+  }
+
+  auto* fields = isControl ? &controlSubfields_ : &payloadSubfields_;
+
+  const auto* path = stepsToPath(steps);
+  auto& paths = fields->nodeFields[source.planNode].resultPaths[ordinal];
+  if (paths.contains(path->id())) {
+    // Already marked.
+    return;
+  }
+  paths.add(path->id());
+
+  const auto kind = source.planNode->kind();
+  if (kind == lp::NodeKind::kProject) {
+    const auto* project = source.planNode->as<lp::ProjectNode>();
+    markFieldAccessed(*project, ordinal, steps, isControl, context);
+    return;
+  }
+
+  if (kind == lp::NodeKind::kUnnest) {
+    const auto* unnest = source.planNode->as<lp::UnnestNode>();
+    markFieldAccessed(*unnest, ordinal, steps, isControl, context);
+    return;
+  }
+
+  if (kind == lp::NodeKind::kTableWrite) {
+    // We cannout pushdown subfield access to TableWriteNode output.
+    return;
+  }
+
+  if (kind == lp::NodeKind::kAggregate) {
+    const auto* agg = source.planNode->as<lp::AggregateNode>();
+    markFieldAccessed(*agg, ordinal, steps, isControl, context);
+    return;
+  }
+
+  if (kind == lp::NodeKind::kSet) {
+    const auto* set = source.planNode->as<lp::SetNode>();
+    markFieldAccessed(*set, ordinal, steps, isControl, context);
+    return;
+  }
+
+  if (kind == lp::NodeKind::kLateralJoin) {
+    VELOX_NYI("Unsupported PlanNode {}", lp::NodeKindName::toName(kind));
+  }
+
+  const auto& sourceInputs = source.planNode->inputs();
+  if (sourceInputs.empty()) {
+    return;
+  }
+
+  const auto& fieldName = source.planNode->outputType()->nameOf(ordinal);
+  for (const auto& sourceInput : sourceInputs) {
+    const auto& type = sourceInput->outputType();
+    if (auto maybeIdx = type->getChildIdxIfExists(fieldName)) {
+      markFieldAccessed(
+          {.planNode = sourceInput.get()},
+          static_cast<int32_t>(maybeIdx.value()),
+          steps,
+          isControl,
+          context);
+      return;
+    }
+  }
+  VELOX_FAIL("Should have found source for expr {}", fieldName);
+}
+
+// static
+std::optional<int32_t> SubfieldTracker::stepToArg(
+    const Step& step,
+    const FunctionMetadata* metadata) {
+  const auto begin = metadata->fieldIndexForArg.begin();
+  const auto end = metadata->fieldIndexForArg.end();
+  auto it = std::find(begin, end, step.id);
+  if (it != end) {
+    // The arg corresponding to the step is accessed.
+    return metadata->argOrdinal[it - begin];
+  }
+  return std::nullopt;
+}
+
+void SubfieldTracker::markSubfields(
+    const lp::ExprPtr& expr,
+    std::vector<Step>& steps,
+    bool isControl,
+    const MarkFieldsAccessedContext& context) {
+  if (expr->isInputReference()) {
+    const auto& name = expr->as<lp::InputReferenceExpr>()->name();
+    for (auto i = 0; i < context.sources.size(); ++i) {
+      if (auto maybeIdx = context.rowTypes[i]->getChildIdxIfExists(name)) {
+        markFieldAccessed(
+            context.sources[i],
+            static_cast<int32_t>(maybeIdx.value()),
+            steps,
+            isControl,
+            context);
+        return;
+      }
+    }
+    VELOX_FAIL("Field not found {}", name);
+  }
+
+  if (isSpecialForm(expr, lp::SpecialForm::kDereference)) {
+    VELOX_CHECK(expr->inputAt(1)->isConstant());
+    auto step = extractDereferenceStep(expr);
+    steps.push_back(step);
+    markSubfields(expr->inputAt(0), steps, isControl, context);
+    steps.pop_back();
+    return;
+  }
+
+  // A field of a constructed row is one of its inputs. Without a path, every
+  // input is read whole.
+  if (isSpecialForm(expr, lp::SpecialForm::kRowConstructor)) {
+    const auto* path = stepsToPath(steps);
+    auto* fields = isControl ? &controlSubfields_ : &payloadSubfields_;
+    auto& paths =
+        fields->argFields[expr.get()].resultPaths[ResultAccess::kSelf];
+    if (paths.contains(path->id())) {
+      return;
+    }
+    paths.add(path->id());
+
+    if (!steps.empty()) {
+      const auto step = steps.back();
+      const auto index = step.fieldIndex(expr->type()->asRow());
+      steps.pop_back();
+      markSubfields(expr->inputAt(index), steps, isControl, context);
+      steps.push_back(step);
+      return;
+    }
+    for (const auto& input : expr->inputs()) {
+      markSubfields(input, steps, isControl, context);
+    }
+    return;
+  }
+
+  if (expr->isCall()) {
+    auto name = toName(expr->as<lp::CallExpr>()->name());
+    if (name == subscript_ || name == elementAt_) {
+      const auto stepKind =
+          (name == elementAt_) ? StepKind::kElementAt : StepKind::kSubscript;
+      auto constant = tryFoldConstant_(expr->inputAt(1));
+      if (!constant) {
+        std::vector<Step> subSteps;
+        markSubfields(expr->inputAt(1), subSteps, isControl, context);
+
+        steps.push_back({.kind = stepKind, .allFields = true});
+        markSubfields(expr->inputAt(0), steps, isControl, context);
+        steps.pop_back();
+        return;
+      }
+
+      Step step{.kind = stepKind};
+      if (!trySetSubscript(step, *constant->value())) {
+        step.allFields = true;
+      }
+      steps.push_back(step);
+
+      markSubfields(expr->inputAt(0), steps, isControl, context);
+      steps.pop_back();
+      return;
+    }
+
+    const auto* metadata = functionMetadata(toName(name));
+    if (!metadata || !metadata->processSubfields()) {
+      std::vector<Step> argumentSteps;
+      const auto* call = expr->as<lp::CallExpr>();
+      for (auto i = 0; i < expr->inputs().size(); ++i) {
+        const auto& input = expr->inputAt(i);
+        if (input->isLambda()) {
+          const auto* lambda = input->as<lp::LambdaExpr>();
+          auto lambdaContext = makeContextForLambdaArg(
+              *lambda,
+              {.callName = call->name(), .callExpr = call, .lambdaOrdinal = i},
+              context);
+
+          std::vector<Step> lambdaSteps;
+          markSubfields(
+              lambda->body(), lambdaSteps, isControl, lambdaContext.toCtx());
+          VELOX_DCHECK(lambdaSteps.empty());
+          continue;
+        }
+
+        markSubfields(input, argumentSteps, isControl, context);
+        VELOX_DCHECK(argumentSteps.empty());
+      }
+      return;
+    }
+
+    // The function has non-default metadata. Record subfields.
+    const auto* call = expr->as<lp::CallExpr>();
+    const auto* path = stepsToPath(steps);
+    auto* fields = isControl ? &controlSubfields_ : &payloadSubfields_;
+    auto& paths = fields->argFields[call].resultPaths[ResultAccess::kSelf];
+    if (paths.contains(path->id())) {
+      // Already marked.
+      return;
+    }
+    paths.add(path->id());
+
+    // If the function is some kind of constructor, like
+    // make_row_from_map or make_named_row, then a path over it
+    // selects one argument. If there is no path, all arguments are
+    // implicitly accessed.
+    if (metadata->valuePathToArgPath && !steps.empty()) {
+      auto pair = metadata->valuePathToArgPath(steps, *call);
+      markSubfields(expr->inputAt(pair.second), pair.first, isControl, context);
+      return;
+    }
+    for (auto i = 0; i < expr->inputs().size(); ++i) {
+      if (metadata->subfieldArg == i) {
+        // A subfield of func is a subfield of one arg.
+        markSubfields(expr->inputAt(i), steps, isControl, context);
+        continue;
+      }
+
+      if (!steps.empty() && steps.back().kind == StepKind::kField) {
+        const auto maybeNth = stepToArg(steps.back(), metadata);
+        if (maybeNth.has_value() && maybeNth.value() == i) {
+          auto newSteps = steps;
+          const auto* argPath = stepsToPath(newSteps);
+          fields->argFields[expr.get()].resultPaths[maybeNth.value()].add(
+              argPath->id());
+          newSteps.pop_back();
+          markSubfields(
+              expr->inputs()[maybeNth.value()], newSteps, isControl, context);
+          continue;
+        }
+
+        if (std::find(
+                metadata->fieldIndexForArg.begin(),
+                metadata->fieldIndexForArg.end(),
+                i) != metadata->fieldIndexForArg.end()) {
+          // The ith argument corresponds to some subfield field index
+          // other than the one in path, so this argument is not
+          // referenced.
+          continue;
+        }
+      }
+
+      if (metadata->lambdaInfo(i)) {
+        const auto* lambda = expr->inputAt(i)->as<lp::LambdaExpr>();
+        auto lambdaContext = makeContextForLambdaArg(
+            *lambda,
+            {.callName = call->name(), .callExpr = call, .lambdaOrdinal = i},
+            context);
+
+        std::vector<Step> lambdaSteps;
+        markSubfields(
+            lambda->body(), lambdaSteps, isControl, lambdaContext.toCtx());
+        VELOX_DCHECK(lambdaSteps.empty());
+        continue;
+      }
+
+      // The argument is not special, just mark through without path.
+      std::vector<Step> argumentSteps;
+      markSubfields(expr->inputAt(i), argumentSteps, isControl, context);
+      VELOX_DCHECK(argumentSteps.empty());
+    }
+    return;
+  }
+
+  if (expr->isConstant()) {
+    return;
+  }
+
+  if (expr->isSpecialForm()) {
+    const auto& specialForm = expr->as<lp::SpecialFormExpr>();
+    if (specialForm->form() == lp::SpecialForm::kExists) {
+      const auto& subquery =
+          specialForm->inputAt(0)->as<lp::SubqueryExpr>()->subquery();
+      markControl(*subquery, context);
+      return;
+    }
+
+    std::vector<Step> specialFormSteps;
+    for (const auto& input : expr->inputs()) {
+      markSubfields(input, specialFormSteps, isControl, context);
+      VELOX_DCHECK(specialFormSteps.empty());
+    }
+    return;
+  }
+
+  if (expr->isSubquery()) {
+    markAllSubfields(*expr->as<lp::SubqueryExpr>()->subquery(), context);
+    return;
+  }
+
+  if (expr->isWindow()) {
+    const auto* window = expr->as<lp::WindowExpr>();
+    std::vector<Step> windowSteps;
+    for (const auto& key : window->partitionKeys()) {
+      markSubfields(key, windowSteps, /*isControl=*/true, context);
+      VELOX_DCHECK(windowSteps.empty());
+    }
+    for (const auto& field : window->ordering()) {
+      markSubfields(field.expression, windowSteps, /*isControl=*/true, context);
+      VELOX_DCHECK(windowSteps.empty());
+    }
+    for (const auto& input : expr->inputs()) {
+      markSubfields(input, windowSteps, isControl, context);
+      VELOX_DCHECK(windowSteps.empty());
+    }
+    const auto& frame = window->frame();
+    if (frame.startValue) {
+      markSubfields(frame.startValue, windowSteps, isControl, context);
+      VELOX_DCHECK(windowSteps.empty());
+    }
+    if (frame.endValue) {
+      markSubfields(frame.endValue, windowSteps, isControl, context);
+      VELOX_DCHECK(windowSteps.empty());
+    }
+    return;
+  }
+
+  VELOX_UNREACHABLE("Unhandled expr: {}", lp::ExprPrinter::toText(*expr));
+}
+
+void SubfieldTracker::markColumnSubfields(
+    const lp::LogicalPlanNodePtr& source,
+    std::span<const lp::ExprPtr> columns,
+    bool isControl,
+    const MarkFieldsAccessedContext& context) {
+  const auto ctx = fromNode(source).append(context);
+  std::vector<Step> steps;
+  for (const auto& column : columns) {
+    markSubfields(column, steps, isControl, ctx.toCtx());
+    VELOX_DCHECK(steps.empty());
+  }
+}
+
+void SubfieldTracker::markControl(
+    const lp::LogicalPlanNode& node,
+    const MarkFieldsAccessedContext& context) {
+  const auto kind = node.kind();
+
+  if (kind == lp::NodeKind::kLateralJoin) {
+    VELOX_NYI("Unsupported PlanNode {}", lp::NodeKindName::toName(kind));
+  }
+
+  if (kind == lp::NodeKind::kJoin) {
+    const auto* join = node.as<lp::JoinNode>();
+    if (const auto& condition = join->condition()) {
+      std::vector<Step> steps;
+      markSubfields(
+          condition,
+          steps,
+          true,
+          fromNodes(join->inputs()).append(context).toCtx());
+    }
+
+  } else if (kind == lp::NodeKind::kUnnest) {
+    const auto& unnest = node.as<lp::UnnestNode>();
+    markColumnSubfields(
+        node.onlyInput(),
+        unnest->unnestExpressions(),
+        /*isControl=*/true,
+        context);
+
+  } else if (kind == lp::NodeKind::kFilter) {
+    const auto& filter = node.as<lp::FilterNode>();
+    markColumnSubfields(
+        node.onlyInput(),
+        std::array{filter->predicate()},
+        /*isControl=*/true,
+        context);
+
+  } else if (kind == lp::NodeKind::kTableWrite) {
+    const auto& write = *node.as<lp::TableWriteNode>();
+    // All columns are needed for write, but they are all not control columns.
+    markColumnSubfields(
+        node.onlyInput(),
+        write.columnExpressions(),
+        /*isControl=*/false,
+        context);
+
+  } else if (kind == lp::NodeKind::kAggregate) {
+    const auto& agg = *node.as<lp::AggregateNode>();
+    markColumnSubfields(
+        node.onlyInput(), agg.groupingKeys(), /*isControl=*/true, context);
+
+  } else if (kind == lp::NodeKind::kSort) {
+    const auto& order = *node.as<lp::SortNode>();
+    const auto ctx = fromNode(node.onlyInput()).append(context);
+    std::vector<Step> steps;
+    for (const auto& key : order.ordering()) {
+      markSubfields(key.expression, steps, /*isControl=*/true, ctx.toCtx());
+      VELOX_DCHECK(steps.empty());
+    }
+
+  } else if (kind == lp::NodeKind::kSet) {
+    const auto& set = *node.as<lp::SetNode>();
+    // If this is with a distinct every column is a control column.
+    if (set.operation() != lp::SetOperation::kUnionAll) {
+      std::vector<Step> steps;
+      for (auto i = 0; i < set.outputType()->size(); ++i) {
+        for (const auto& input : set.inputs()) {
+          const auto ctx = fromNode(input);
+          markFieldAccessed(
+              ctx.sources[0], i, steps, /*isControl=*/true, ctx.toCtx());
+          VELOX_CHECK(steps.empty());
+        }
+      }
+    }
+  }
+
+  for (const auto& source : node.inputs()) {
+    markControl(*source, context);
+  }
+}
+
+void SubfieldTracker::markAllSubfields(
+    const lp::LogicalPlanNode& node,
+    const MarkFieldsAccessedContext& context) {
+  // Mark only the source ordinals OutputNode exports on its input,
+  // enabling pruning of columns the OutputNode does not list.
+  if (node.is(lp::NodeKind::kOutput)) {
+    const auto& output = *node.as<lp::OutputNode>();
+    const auto& input = *output.onlyInput();
+    markControl(input, context);
+
+    LogicalContextSource source = {.planNode = &input};
+    std::vector<Step> steps;
+    for (const auto& entry : output.entries()) {
+      markFieldAccessed(
+          source, entry.index, steps, /*isControl=*/false, context);
+      VELOX_CHECK(
+          steps.empty(),
+          "OutputNode entry at ordinal {} must be a top-level column",
+          entry.index);
+    }
+    return;
+  }
+
+  markControl(node, context);
+
+  LogicalContextSource source = {.planNode = &node};
+  std::vector<Step> steps;
+  for (auto i = 0; i < node.outputType()->size(); ++i) {
+    markFieldAccessed(source, i, steps, /*isControl=*/false, context);
+    VELOX_CHECK(steps.empty());
+  }
+}
+
+bool PlanSubfields::hasColumn(
+    const logical_plan::LogicalPlanNode* node,
+    int32_t ordinal) const {
+  auto it = nodeFields.find(node);
+  if (it == nodeFields.end()) {
+    return false;
+  }
+  return it->second.resultPaths.contains(ordinal);
+}
+
+std::optional<PathSet> PlanSubfields::findSubfields(
+    const logical_plan::Expr* expr) const {
+  auto it = argFields.find(expr);
+  if (it == argFields.end()) {
+    return std::nullopt;
+  }
+
+  const auto& paths = it->second.resultPaths;
+  auto pathIt = paths.find(ResultAccess::kSelf);
+  if (pathIt == paths.end()) {
+    return std::nullopt;
+  }
+  return pathIt->second;
+}
+
+namespace {
+
+std::string pathsToString(const PathSet& pathIds) {
+  std::stringstream out;
+  size_t i = 0;
+  pathIds.forEachPath([&](PathCP path) {
+    if (i > 0) {
+      out << ", ";
+    }
+    i++;
+    out << path->toString();
+  });
+
+  return out.str();
+}
+
+bool hasNonEmptyPath(const BitSet& pathIds) {
+  if (pathIds.empty()) {
+    return false;
+  }
+
+  if (pathIds.size() == 1) {
+    bool empty = false;
+    pathIds.forEach(
+        [&](auto id) { empty = queryCtx()->pathById(id)->steps().empty(); });
+
+    return !empty;
+  }
+
+  return true;
+}
+} // namespace
+
+std::string PlanSubfields::toString() const {
+  std::stringstream out;
+
+  out << "Plan nodes: " << nodeFields.size() << "\n";
+  for (const auto& [node, access] : nodeFields) {
+    const auto& names = node->outputType()->names();
+
+    out << "  " << node->kindName() << " #" << node->id() << ": "
+        << access.resultPaths.size() << " out of " << names.size() << "\n";
+
+    for (const auto& [index, paths] : access.resultPaths) {
+      out << "    " << names[index] << " #" << index;
+      if (hasNonEmptyPath(paths)) {
+        out << ", " << paths.size() << " paths: " << pathsToString(paths);
+      }
+      out << "\n";
+    }
+  }
+
+  if (!argFields.empty()) {
+    out << "Functions: " << argFields.size() << "\n";
+    for (const auto& [expr, access] : argFields) {
+      out << "  " << expr->toString() << ": " << access.resultPaths.size()
+          << "\n";
+
+      for (const auto& [index, paths] : access.resultPaths) {
+        if (index == ResultAccess::kSelf) {
+          out << "    self";
+        } else {
+          out << "    arg #" << index;
+        }
+        if (hasNonEmptyPath(paths)) {
+          out << ", " << paths.size() << " paths: " << pathsToString(paths);
+        }
+        out << "\n";
+      }
+    }
+  }
+  return out.str();
+}
+
+} // namespace facebook::axiom::optimizer::v1

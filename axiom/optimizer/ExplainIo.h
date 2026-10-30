@@ -21,7 +21,7 @@
 #include <vector>
 
 #include "axiom/common/CatalogSchemaTableName.h"
-#include "axiom/optimizer/DerivedTable.h"
+#include "axiom/optimizer/QueryGraph.h"
 
 namespace facebook::axiom::optimizer {
 
@@ -34,13 +34,6 @@ namespace facebook::axiom::optimizer {
 /// core used by both the v1 (DerivedTable) and v2 (Scan tree) optimizers.
 std::string explainIo(
     const std::vector<std::pair<BaseTableCP, ExprVector>>& tableFilters,
-    std::optional<CatalogSchemaTableName> outputTable = std::nullopt);
-
-/// Generates EXPLAIN IO JSON from the v1 query graph by walking the
-/// DerivedTable tree to find input tables and reading each table's
-/// columnFilters.
-std::string explainIo(
-    DerivedTableCP rootDt,
     std::optional<CatalogSchemaTableName> outputTable = std::nullopt);
 
 } // namespace facebook::axiom::optimizer

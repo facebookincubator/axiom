@@ -47,7 +47,7 @@ paper" for the full constraint analysis.
 
 ## Apply IR shape
 
-Authoritative contract: `v2/Node.h` `Apply` class doc. Summary:
+Authoritative contract: `Node.h` `Apply` class doc. Summary:
 
 - 11 fields: `input`, `body`, `correlationColumns`, `kind`, `filter`,
   `enforceSingleRow`, `markColumn`, `inLhs`, `inBodyKey`,

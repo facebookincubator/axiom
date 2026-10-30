@@ -554,7 +554,7 @@ Invariants. These hold across the optimizer. Rely on them. Do not write code tha
 against their violation, and do not ask for such code in designs or reviews. A
 violation is a bug in the code that owns the invariant; fix it there.
 
-- `Builder::canonicalizeCall` (`axiom/optimizer/v2/Builder.h`) puts every
+- `Builder::canonicalizeCall` (`axiom/optimizer/Builder.h`) puts every
   binary call in `reversibleFunctions_` into canonical order when it is built:
   a literal goes on the right; otherwise the lower-id expression goes on the
   left. Match `column = literal`; do not also check `literal = column`.

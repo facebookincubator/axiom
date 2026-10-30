@@ -33,57 +33,112 @@ target_link_libraries(
 )
 
 add_library(
-  axiom_optimizer
-  AggregationPlanner.cpp
+  axiom_optimizer_core
   BitSet.cpp
   ConstantExprEvaluator.cpp
   ConstantFold.cpp
   Cost.cpp
-  DerivedTable.cpp
-  DerivedTableFlattener.cpp
-  DerivedTablePrinter.cpp
   Domain.cpp
   ExplainIo.cpp
   ExprEstimator.cpp
   Filters.cpp
   FunctionRegistry.cpp
   JoinConstraints.cpp
-  JoinSample.cpp
-  MemoKey.cpp
-  Model.cpp
-  Optimization.cpp
   OptimizerOptions.cpp
-  ParallelExpr.cpp
-  Plan.cpp
+  PlanAndStats.cpp
   PlanObject.cpp
   PlanUtils.cpp
-  PrecomputeProjection.cpp
   QueryGraph.cpp
   QueryGraphContext.cpp
-  RelationOp.cpp
-  RelationOpPrinter.cpp
   Schema.cpp
   SelectivityEngine.cpp
   StatsFilterSelectivityEstimator.cpp
-  SubfieldTracker.cpp
-  ToGraph.cpp
   ToSubfield.cpp
-  ToVelox.cpp
   UnionConstraints.cpp
-  VeloxHistory.cpp
   WriteStatsBuilder.cpp
 )
 
 target_link_libraries(
-  axiom_optimizer
+  axiom_optimizer_core
   velox_core
+  velox_exec
   axiom_common
   axiom_connectors
   axiom_logical_plan
   axiom_optimizer_multifragment_plan
-  axiom_runner_local_runner
   velox_async_rpc_function_registry
   velox_connector
+  velox_function_registry
 )
 
-add_subdirectory(v2)
+add_library(
+  axiom_optimizer
+  AggregateRecovery.cpp
+  AlgebraicProperties.cpp
+  Builder.cpp
+  ColumnAccess.cpp
+  ConnectorPushdownPass.cpp
+  CostModel.cpp
+  DecorrelatePass.cpp
+  DPhyp.cpp
+  EmitPass.cpp
+  EstimateLeafStatsPass.cpp
+  EstimateProvider.cpp
+  ExprEmitter.cpp
+  ExprFactory.cpp
+  ExprSimplifier.cpp
+  FallbackJoinPlanner.cpp
+  FoldMetadataAggregatePass.cpp
+  GroupedRead.cpp
+  HypergraphBuilder.cpp
+  ImpliedFilters.cpp
+  JoinCondition.cpp
+  JoinFanout.cpp
+  JoinFilterRewriter.cpp
+  JoinHypergraph.cpp
+  JoinPartitioning.cpp
+  JoinPredicatePlacement.cpp
+  JoinSimplifier.cpp
+  JoinTreeEmitter.cpp
+  LimitAndOrderPass.cpp
+  LowerRepeatPass.cpp
+  MarkFilterFusion.cpp
+  MemoOp.cpp
+  Node.cpp
+  NodePrinter.cpp
+  NodeSimplifier.cpp
+  NonNullOutput.cpp
+  Optimize.cpp
+  OuterJoinReduction.cpp
+  PhysicalJoin.cpp
+  PhysicalPlanAndEmit.cpp
+  PhysicalProperties.cpp
+  PlanPhysicalPass.cpp
+  PlanSet.cpp
+  PlanSubstitutions.cpp
+  PrecomputeProjections.cpp
+  PushdownAndPrunePass.cpp
+  RedundantKeys.cpp
+  RelationalProperties.cpp
+  TableAccessHandle.cpp
+  GraphMatchLowering.cpp
+  TranslatePass.cpp
+  Translator.cpp
+  VeloxExprImporter.cpp
+)
+
+target_link_libraries(
+  axiom_optimizer
+  axiom_common
+  axiom_connectors
+  axiom_logical_plan
+  axiom_optimizer_core
+  velox_common_base
+  velox_core
+  velox_exec
+  velox_expression
+  velox_type
+  velox_vector
+)
+
+add_subdirectory(v1)

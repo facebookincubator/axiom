@@ -1,0 +1,352 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
+#include <deque>
+#include <memory>
+#include <numeric>
+#include <vector>
+#include "axiom/optimizer/Node.h"
+#include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/QueryGraphContext.h"
+#include "axiom/optimizer/TableAccessHandle.h"
+
+namespace facebook::axiom::optimizer {
+
+/// Hash-consing factory for tree-IR nodes and selected Expr leaves. A node's
+/// identity is its kind, its child pointers and its parameters, so the lookup
+/// compares children by pointer rather than walking them. Two sub-trees in
+/// different positions hold different children, so they never collide; a hit
+/// means a rewrite rebuilt a node over the children it already had. See `Node`.
+///
+/// Everything is interned by pointer: each dedup set stores `const T*` and
+/// recovers identity via `T::KeyHash` / `T::KeyEq`, so a cache hit allocates
+/// nothing. Nodes are constructed from an owning `Key` (e.g. `Scan::Key`)
+/// passed to `make<T>`; the `Expr` leaves `Literal`, `Call`, and
+/// `optimizer::Aggregate` use `makeLiteral` / `makeCall` / `makeAggregate`
+/// (their `KeyHash` / `KeyEq` live on the `Expr` classes themselves). `Column`
+/// is intentionally NOT hash-consed: `Column::equivalence_` is mutable state
+/// mutated by `Column::equals()`, and dedup would leak equivalence classes
+/// across unrelated subtrees.
+class Builder {
+ public:
+  /// Snapshots `queryCtx()` and the function registry; the resulting
+  /// `Builder` is bound to that `QueryGraphContext` for its lifetime.
+  Builder();
+
+  /// Returns a canonical node `T` for 'key', constructing one if not already
+  /// present. Interned by pointer: the dedup set stores `const T*` and recovers
+  /// identity via `T::KeyHash` / `T::KeyEq`. Looks up by the in-flight `key`
+  /// (transparent, no allocation on a hit); on a miss, moves the key into the
+  /// newly constructed node. `Expr` leaves use `makeLiteral` / `makeCall` /
+  /// `makeAggregate`.
+  ///
+  /// A `Join` or `Filter` key is normalized first. A join drops repeated and
+  /// implied equi-key pairs and may gain a filter on an input, so the node's
+  /// keys can be fewer than 'key' holds and joins differing only in a repeated
+  /// equality are one node. A filter drops repeated predicates. A `Join` also
+  /// receives this `Builder`, so the partition keys it derives are interned
+  /// alongside the rest of the query's expressions.
+  template <typename T>
+  const T* make(typename T::Key key) {
+    if constexpr (std::is_same_v<T, Join> || std::is_same_v<T, Filter>) {
+      normalizeKey(key);
+    }
+    auto& dedup = setFor<T>();
+    if (auto it = dedup.find(key); it != dedup.end()) {
+      return *it;
+    }
+    const T* node = [&] {
+      if constexpr (std::is_same_v<T, Join>) {
+        return optimizer::make<T>(std::move(key), *this);
+      } else {
+        return optimizer::make<T>(std::move(key));
+      }
+    }();
+    // After construction, so `inputs()` is available and the set allocates in
+    // this node's `QueryGraphContext`.
+    node->primeRequiredStates();
+    checkGlobalPartition(node);
+    dedup.insert(node);
+    return node;
+  }
+
+  /// Registers 'variant' in the `QueryGraphContext` arena and returns a
+  /// canonical `Literal` of 'type' carrying it. Cardinality defaults to
+  /// 1 (a single distinct value — appropriate for literal constants).
+  const Literal*
+  makeLiteral(velox::Variant&& variant, TypeCP type, float cardinality = 1);
+
+  /// Returns a canonical `Literal` of 'value' carrying the already-registered
+  /// 'variant' (owned by the `QueryGraphContext` arena).
+  const Literal* makeLiteral(const Value& value, const velox::Variant* variant);
+
+  /// Returns a canonical `Call`. Non-deterministic calls are never deduped —
+  /// two textually identical `random()` invocations must stay distinct objects
+  /// because each produces an independent value. Reversible binary calls (e.g.
+  /// `lt`/`gt`, `eq`, `plus`) are canonicalized before dedup so equivalent
+  /// forms share one `Call*` (e.g. `2 > a` is rewritten to `a < 2`).
+  /// 'functions' is the call's own bits OR-ed with each arg's `functions()`.
+  const Call* makeCall(
+      Name name,
+      const Value& value,
+      ExprVector args,
+      FunctionSet functions);
+
+  /// Returns `coalesce(a, b)` with its operands in canonical order. This may
+  /// reorder the operands and therefore requires that 'a' and 'b' are equal
+  /// whenever both are non-null, as with equi-join keys above a full join.
+  ExprCP canonicalizeCoalesce(ExprCP a, ExprCP b);
+
+  /// Returns a canonical aggregate `Call`. Result type and 'intermediateType'
+  /// are determined by (name, args), so identity excludes them. 'specialKind'
+  /// and 'fallback' mark a metadata aggregate (see optimizer::Aggregate); they
+  /// are also excluded from identity (determined by 'name').
+  const optimizer::Aggregate* makeAggregate(
+      Name name,
+      const Value& value,
+      ExprVector args,
+      FunctionSet functions,
+      bool isDistinct,
+      ExprCP condition,
+      TypeCP intermediateType,
+      ExprVector orderKeys,
+      OrderTypeVector orderTypes,
+      std::optional<logical_plan::SpecialAggregateKind> specialKind =
+          std::nullopt,
+      const optimizer::Aggregate* fallback = nullptr);
+
+  /// Canonical `Literal` for boolean constant 'value'.
+  const Literal* makeBoolean(bool value) {
+    return makeLiteral(velox::Variant(value), toType(velox::BOOLEAN()));
+  }
+
+  /// Canonical `Literal` for SQL NULL of 'type'.
+  const Literal* makeNull(TypeCP type) {
+    return makeLiteral(velox::Variant::null(type->kind()), type);
+  }
+
+  /// Canonical `Literal` for an empty array of 'arrayType'.
+  const Literal* makeEmptyArray(TypeCP arrayType) {
+    return makeLiteral(
+        velox::Variant::array(std::vector<velox::Variant>{}), arrayType);
+  }
+
+  /// Returns expressions that project `inputColumns` to `outputColumns`.
+  /// Missing outputs are false when `falsePadding` is true and typed nulls
+  /// otherwise.
+  ExprVector paddedExpressions(
+      const ColumnVector& inputColumns,
+      const ColumnVector& outputColumns,
+      bool falsePadding);
+
+  /// `Values` that emits every column of its underlying data, i.e. with
+  /// identity channels (see `Values::Key`). Pruning is done only in
+  /// PushdownAndPrunePass, which builds the narrowed channels directly.
+  const Values* makeValues(
+      const logical_plan::ValuesNode* source,
+      const velox::Variant* rows,
+      ColumnVector outputColumns) {
+    QGVector<velox::column_index_t> channels(outputColumns.size());
+    std::iota(channels.begin(), channels.end(), 0);
+    return make<Values>(
+        {source, rows, std::move(outputColumns), std::move(channels)});
+  }
+
+  /// Source-less `Values` carrying the given row Variants.
+  const Values* makeValues(
+      std::vector<velox::Variant> rows,
+      ColumnVector outputColumns);
+
+  /// Source-less `Values` carrying 'row' as its only row.
+  const Values* makeSingleRowValues(
+      std::vector<velox::Variant> row,
+      ColumnVector outputColumns);
+
+  /// `Values` node carrying zero rows with the given output schema.
+  /// Used to replace subtrees a rewrite proved produce no rows.
+  const Values* makeEmptyValues(ColumnVector outputColumns) {
+    return makeValues(
+        /*source=*/nullptr, /*rows=*/nullptr, std::move(outputColumns));
+  }
+
+  /// Interned `Name`s for well-known functions, snapshotted from the
+  /// active `QueryGraphContext` at construction so callers can compare
+  /// or build calls against well-known operator names by pointer
+  /// equality, without repeated registry lookups.
+  const FunctionNames& functionNames() const {
+    return functionNames_;
+  }
+
+  /// Interned `Name`s of the internal functions, snapshotted like
+  /// `functionNames()`.
+  const InternalFunctionNames& internalFunctionNames() const {
+    return internalFunctionNames_;
+  }
+
+  /// Takes ownership of 'handle' and returns a stable pointer to it, for a
+  /// `Scan` to point at. Handles are not interned: each one is a separate
+  /// negotiation with the connector.
+  const TableAccessHandle* takeTableAccessHandle(TableAccessHandle handle) {
+    return &tableAccessHandles_.emplace_back(std::move(handle));
+  }
+
+  /// Takes ownership of 'layout' and returns the stable pointer a
+  /// `TableWrite` carries through physical planning. `TableWrite` nodes live
+  /// in an arena that does not run destructors.
+  const connector::DeleteLayout* takeDeleteLayout(
+      connector::DeleteLayout layout);
+
+ private:
+  // For a binary `Call` whose 'name' is in `reversibleFunctions_`,
+  // swaps 'args' (and renames to the reverse) when `args[0]` should
+  // come second per the canonical order: literal-on-right, lower-id
+  // expr on left when neither is a literal. No-op otherwise.
+  void canonicalizeCall(Name& name, ExprVector& args) const;
+
+  // Rewrites 'key' to the canonical form of the node it describes, so two keys
+  // that describe one node reach one entry in the dedup set. Runs before the
+  // lookup, and for a join before construction too, since the `Join` ctor
+  // reads the equivalence classes this records.
+  void normalizeKey(Join::Key& key);
+  void normalizeKey(Filter::Key& key);
+
+  // In debug builds, checks that a placed 'node's partitioning rule applied to
+  // its inputs' partitionings reproduces the partitioning it was constructed
+  // with.
+  void checkGlobalPartition(NodeCP node);
+
+  template <typename T>
+  auto& setFor() {
+    if constexpr (std::is_same_v<T, Scan>) {
+      return scans_;
+    } else if constexpr (std::is_same_v<T, Filter>) {
+      return filters_;
+    } else if constexpr (std::is_same_v<T, Project>) {
+      return projects_;
+    } else if constexpr (std::is_same_v<T, Limit>) {
+      return limits_;
+    } else if constexpr (std::is_same_v<T, Sort>) {
+      return sorts_;
+    } else if constexpr (std::is_same_v<T, TopN>) {
+      return topNs_;
+    } else if constexpr (std::is_same_v<T, Aggregation>) {
+      return aggregates_;
+    } else if constexpr (std::is_same_v<T, GroupId>) {
+      return groupIds_;
+    } else if constexpr (std::is_same_v<T, MarkDistinct>) {
+      return markDistincts_;
+    } else if constexpr (std::is_same_v<T, Values>) {
+      return values_;
+    } else if constexpr (std::is_same_v<T, Unnest>) {
+      return unnests_;
+    } else if constexpr (std::is_same_v<T, UnionAll>) {
+      return unions_;
+    } else if constexpr (std::is_same_v<T, Join>) {
+      return joins_;
+    } else if constexpr (std::is_same_v<T, Window>) {
+      return windows_;
+    } else if constexpr (std::is_same_v<T, Inference>) {
+      return inferences_;
+    } else if constexpr (std::is_same_v<T, RowNumber>) {
+      return rowNumbers_;
+    } else if constexpr (std::is_same_v<T, TopNRowNumber>) {
+      return topNRowNumbers_;
+    } else if constexpr (std::is_same_v<T, Apply>) {
+      return applies_;
+    } else if constexpr (std::is_same_v<T, EnforceSingleRow>) {
+      return enforceSingleRows_;
+    } else if constexpr (std::is_same_v<T, AssignUniqueId>) {
+      return assignUniqueIds_;
+    } else if constexpr (std::is_same_v<T, EnforceDistinct>) {
+      return enforceDistincts_;
+    } else if constexpr (std::is_same_v<T, Exchange>) {
+      return exchanges_;
+    } else if constexpr (std::is_same_v<T, TableWrite>) {
+      return tableWrites_;
+    } else if constexpr (std::is_same_v<T, WorkingTable>) {
+      return workingTables_;
+    } else if constexpr (std::is_same_v<T, FixedPoint>) {
+      return fixedPoints_;
+    } else if constexpr (std::is_same_v<T, Repeat>) {
+      return repeats_;
+    } else if constexpr (std::is_same_v<T, IndexLookupJoin>) {
+      return indexLookupJoins_;
+    } else {
+      static_assert(sizeof(T) == 0, "No dedup map for this node type");
+    }
+  }
+
+  const FunctionNames functionNames_;
+  const InternalFunctionNames internalFunctionNames_;
+
+  // Maps a reversible binary function name to its reverse name.
+  // Symmetric reversibles (e.g. `eq`) map to themselves; asymmetric
+  // ones (e.g. `lt` → `gt`) map across.
+  folly::F14FastMap<Name, Name> reversibleFunctions_;
+
+  // Dedup container for hash-consed `T`: stores canonical `const T*`, keyed by
+  // the node/expr's own identity via transparent `T::KeyHash` / `T::KeyEq`.
+  template <typename T>
+  using DedupSet =
+      folly::F14FastSet<const T*, typename T::KeyHash, typename T::KeyEq>;
+
+  DedupSet<Scan> scans_;
+  DedupSet<Filter> filters_;
+  DedupSet<Project> projects_;
+  DedupSet<Limit> limits_;
+  DedupSet<Sort> sorts_;
+  DedupSet<TopN> topNs_;
+  DedupSet<Aggregation> aggregates_;
+  DedupSet<GroupId> groupIds_;
+  DedupSet<MarkDistinct> markDistincts_;
+  DedupSet<Values> values_;
+  DedupSet<Unnest> unnests_;
+  DedupSet<UnionAll> unions_;
+  DedupSet<Join> joins_;
+  DedupSet<IndexLookupJoin> indexLookupJoins_;
+  DedupSet<Window> windows_;
+  DedupSet<Inference> inferences_;
+  DedupSet<RowNumber> rowNumbers_;
+  DedupSet<TopNRowNumber> topNRowNumbers_;
+  DedupSet<Apply> applies_;
+  DedupSet<EnforceSingleRow> enforceSingleRows_;
+  DedupSet<AssignUniqueId> assignUniqueIds_;
+  DedupSet<EnforceDistinct> enforceDistincts_;
+  DedupSet<Exchange> exchanges_;
+  DedupSet<TableWrite> tableWrites_;
+  DedupSet<WorkingTable> workingTables_;
+  DedupSet<FixedPoint> fixedPoints_;
+  DedupSet<Repeat> repeats_;
+
+  // Expr leaves, interned via `makeLiteral` / `makeCall` / `makeAggregate`.
+  DedupSet<Literal> literals_;
+  DedupSet<Call> calls_;
+  DedupSet<optimizer::Aggregate> aggregateCalls_;
+
+  // Owns the connector handles table-access nodes point at. A deque keeps
+  // their pointers valid as more are added.
+  std::deque<TableAccessHandle> tableAccessHandles_;
+
+  // Owns the connector layouts the IR's `TableWrite`s point at. A deque keeps
+  // their addresses stable as this collection grows.
+  std::deque<connector::DeleteLayout> deleteLayouts_;
+};
+
+} // namespace facebook::axiom::optimizer

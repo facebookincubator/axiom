@@ -18,7 +18,7 @@ target_link_libraries(
   axiom_optimizer_tests_tpch_data_generator
   axiom_cli
   axiom_logical_plan_builder
-  axiom_optimizer
+  axiom_optimizer_core
   velox_tpch_gen
   axiom_tpch_connector_metadata
   axiom_hive_connector_metadata
@@ -36,10 +36,11 @@ add_library(axiom_optimizer_tests_query_test_base QueryTestBase.cpp)
 
 target_link_libraries(
   axiom_optimizer_tests_query_test_base
-  axiom_optimizer
+  axiom_optimizer_core
+  axiom_optimizer_v1
   velox_functions_axiom
   axiom_functions_prestosql
-  axiom_optimizer_v2
+  axiom_optimizer
   axiom_sql_presto_parser
   axiom_test_connector
   velox_tpch_gen
@@ -115,12 +116,10 @@ if(AXIOM_BUILD_TESTING)
     BitSetTest.cpp
     DistinctAggregationTest.cpp
     OutputNodeTest.cpp
-    CardinalityEstimationTest.cpp
     ConnectorPushdownPassTest.cpp
     ConnectorPushdownTest.cpp
     CsvReadWriteTest.cpp
     DeleteTest.cpp
-    DerivedTablePrinterTest.cpp
     DomainTest.cpp
     ExchangeSerdeTest.cpp
     ExprMatcherTest.cpp
@@ -137,17 +136,14 @@ if(AXIOM_BUILD_TESTING)
     LimitTest.cpp
     MetadataCountsTest.cpp
     MultiFragmentPlanTest.cpp
-    NonDeterministicFlagTest.cpp
     OptimizerOptionsTest.cpp
     OrderByTest.cpp
     TpchDataGenerator.cpp
-    PrecomputeProjectionTest.cpp
     PlanTest.cpp
     RemoteOutputTest.cpp
     QueryGraphContextTest.cpp
     QueryWidthTest.cpp
     RankingTest.cpp
-    RelationOpPrinterTest.cpp
     RowLevelDeleteTest.cpp
     SetTest.cpp
     SubfieldTest.cpp
@@ -169,6 +165,14 @@ if(AXIOM_BUILD_TESTING)
     ValuesTest.cpp
     WindowTest.cpp
     WriteTest.cpp
+    AlgebraicPropertiesTest.cpp
+    EstimateProviderTest.cpp
+    FilterSimplificationTest.cpp
+    JoinHypergraphTest.cpp
+    NodePrinterTest.cpp
+    RelationSetTest.cpp
+    RelationalPropertiesTest.cpp
+    VeloxExprImporterTest.cpp
   )
 
   add_test(
@@ -181,6 +185,7 @@ if(AXIOM_BUILD_TESTING)
     axiom_optimizer_tests
     axiom_optimizer_test_utils
     axiom_optimizer
+    axiom_optimizer_core
     axiom_logical_plan_builder
     axiom_optimizer_tests_hive_queries_test_base
     axiom_optimizer_tests_tpch_data_generator
@@ -221,9 +226,10 @@ add_library(axiom_optimizer_tests_sql_test_base SqlTestBase.cpp)
 target_link_libraries(
   axiom_optimizer_tests_sql_test_base
   axiom_common
-  axiom_optimizer
+  axiom_optimizer_core
+  axiom_optimizer_v1
   axiom_functions_prestosql
-  axiom_optimizer_v2
+  axiom_optimizer
   axiom_runner_local_runner
   axiom_sql_presto_parser
   axiom_test_connector
@@ -276,19 +282,5 @@ if(AXIOM_BUILD_TESTING)
     velox_dwio_common_test_utils
     velox_presto_types
     GTest::gtest
-  )
-
-  add_executable(axiom_model_test ModelTest.cpp)
-
-  add_test(axiom_model_test axiom_model_test)
-
-  target_link_libraries(
-    axiom_model_test
-    axiom_optimizer
-    Boost::headers
-    glog::glog
-    GTest::gtest
-    GTest::gtest_main
-    pthread
   )
 endif()

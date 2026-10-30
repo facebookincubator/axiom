@@ -43,8 +43,8 @@ target_link_libraries(
   axiom_common
   axiom_connectors
   axiom_logical_plan
+  axiom_optimizer_core
   axiom_optimizer
-  axiom_optimizer_v2
   velox_exec
   velox_expression
   velox_function_registry
@@ -62,7 +62,7 @@ target_link_libraries(
   collagen_converter
   collagen_proto
   collagen_runners
-  axiom_optimizer
+  axiom_optimizer_core
   velox_memory
   Folly::folly
   gRPC::grpc++
@@ -78,7 +78,7 @@ target_link_libraries(
   axiom_hive_connector_metadata
   axiom_tpch_connector_metadata
   axiom_test_connector
-  axiom_optimizer
+  axiom_optimizer_core
   axiom_functions_prestosql
   velox_connector_registry
   velox_hive_connector

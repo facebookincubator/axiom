@@ -95,7 +95,7 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
       bool syntacticJoinOrder = false);
 
   /// Like makeLocalRunner, but optimizes 'logicalPlan' through the v2
-  /// optimizer pipeline (axiom/optimizer/v2) instead of v1.
+  /// optimizer pipeline (axiom/optimizer) instead of v1.
   static std::shared_ptr<runner::LocalRunner> makeLocalRunnerV2(
       const logical_plan::LogicalPlanNodePtr& logicalPlan,
       folly::Executor* executor,
@@ -140,7 +140,7 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
   bool syntacticJoinOrder_{false};
 
   // When true, makeRunner routes queries through the v2 optimizer
-  // (axiom/optimizer/v2) instead of v1.
+  // (axiom/optimizer) instead of v1.
   bool useV2_{true};
 
   // Returns the DuckDbQueryRunner used for table installation and result

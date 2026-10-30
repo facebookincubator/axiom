@@ -49,16 +49,18 @@
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/optimizer/ConstantExprEvaluator.h"
-#include "axiom/optimizer/DerivedTablePrinter.h"
-#include "axiom/optimizer/ExplainIo.h"
 #include "axiom/optimizer/MultiFragmentPlanPrinter.h"
-#include "axiom/optimizer/Optimization.h"
+#include "axiom/optimizer/NodePrinter.h"
+#include "axiom/optimizer/Optimize.h"
 #include "axiom/optimizer/OptimizerOptions.h"
-#include "axiom/optimizer/Plan.h"
-#include "axiom/optimizer/RelationOpPrinter.h"
-#include "axiom/optimizer/VeloxHistory.h"
-#include "axiom/optimizer/v2/NodePrinter.h"
-#include "axiom/optimizer/v2/Optimize.h"
+#include "axiom/optimizer/v1/DerivedTable.h"
+#include "axiom/optimizer/v1/DerivedTablePrinter.h"
+#include "axiom/optimizer/v1/ExplainIo.h"
+#include "axiom/optimizer/v1/Optimization.h"
+#include "axiom/optimizer/v1/Plan.h"
+#include "axiom/optimizer/v1/RelationOp.h"
+#include "axiom/optimizer/v1/RelationOpPrinter.h"
+#include "axiom/optimizer/v1/VeloxHistory.h"
 #include "axiom/runner/ProgressReporter.h"
 #include "axiom/sql/presto/PrestoParser.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
@@ -1427,7 +1429,7 @@ auto SqlQueryRunner::withOptimizerV2(
   velox::exec::SimpleExpressionEvaluator evaluator(
       queryCtx.get(), optimizerPool_.get());
 
-  optimizer::v2::Optimizer optimizer(
+  optimizer::Optimizer optimizer(
       logicalPlan, *resolver, *session, evaluator, queryCtx);
   return operation(optimizer);
 }
@@ -1469,7 +1471,7 @@ std::string SqlQueryRunner::runExplainIo(
       options,
       context,
       [&](const auto& dt) {
-        text = optimizer::explainIo(&dt, outputTable);
+        text = optimizer::v1::explainIo(&dt, outputTable);
         return false; // Stop optimization.
       },
       nullptr,
@@ -1481,7 +1483,7 @@ std::string SqlQueryRunner::runExplainIo(
 namespace {
 // Reads the pass named by the `last_pass` EXPLAIN setting, or nullopt when
 // there is none. Pass names are matched ignoring case.
-std::optional<optimizer::v2::Optimizer::Pass> explainLastPass(
+std::optional<optimizer::Optimizer::Pass> explainLastPass(
     const presto::ExplainStatement::Settings& settings) {
   static constexpr std::string_view kLastPass = "last_pass";
 
@@ -1503,13 +1505,13 @@ std::optional<optimizer::v2::Optimizer::Pass> explainLastPass(
     return std::toupper(ch);
   });
 
-  const auto pass = optimizer::v2::Optimizer::tryToPass(name);
+  const auto pass = optimizer::Optimizer::tryToPass(name);
   VELOX_USER_CHECK(
       pass.has_value(),
       "Invalid {} value: {}. Expected one of (case insensitive): {}",
       kLastPass,
       it->second,
-      optimizer::v2::Optimizer::allPassNames());
+      optimizer::Optimizer::allPassNames());
   return pass;
 }
 
@@ -1629,7 +1631,7 @@ std::string SqlQueryRunner::runExplain(
                 graphviz::DerivedTableDotPrinter::print(dt, out);
                 text = out.str();
               } else {
-                text = optimizer::DerivedTablePrinter::toText(dt);
+                text = optimizer::v1::DerivedTablePrinter::toText(dt);
               }
               return false; // Stop optimization.
             },
@@ -1662,7 +1664,7 @@ std::string SqlQueryRunner::runExplain(
             explain,
             [&](auto& optimizer) {
               const auto plan = optimizer.debugPlanTo(opts, lastPass);
-              return optimizer::v2::NodePrinter::toText(
+              return optimizer::NodePrinter::toText(
                   plan.root, {.estimates = plan.estimates});
             });
       }
@@ -1684,7 +1686,7 @@ std::string SqlQueryRunner::runExplain(
             context,
             nullptr,
             [&](const auto& plan) {
-              text = optimizer::RelationOpPrinter::toText(
+              text = optimizer::v1::RelationOpPrinter::toText(
                   plan,
                   {
                       .includeCost = true,
@@ -2015,9 +2017,9 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
     const std::shared_ptr<velox::core::QueryCtx>& queryCtx,
     const RunOptions& options,
     const connector::ConnectorContextPtr& context,
-    const std::function<bool(const optimizer::DerivedTable&)>&
+    const std::function<bool(const optimizer::v1::DerivedTable&)>&
         checkDerivedTable,
-    const std::function<bool(const optimizer::RelationOp&)>& checkBestPlan,
+    const std::function<bool(const optimizer::v1::RelationOp&)>& checkBestPlan,
     std::shared_ptr<facebook::axiom::connector::SchemaResolver> schemaResolver,
     bool explain) {
   optimizer::MultiFragmentPlan::Options opts;
@@ -2034,7 +2036,6 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
   velox::exec::SimpleExpressionEvaluator evaluator(
       queryCtx.get(), optimizerPool_.get());
 
-  auto history = std::make_unique<optimizer::VeloxHistory>();
   schemaResolver = orDefaultSchemaResolver(std::move(schemaResolver));
   auto runnerSession = std::make_shared<runner::RunnerSession>(
       context,
@@ -2046,7 +2047,7 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
     VELOX_USER_CHECK(
         checkDerivedTable == nullptr && checkBestPlan == nullptr,
         "DerivedTable / RelationOp inspection hooks are not supported by the v2 optimizer");
-    return optimizer::v2::Optimizer(
+    return optimizer::Optimizer(
                *logicalPlan,
                *schemaResolver,
                *optimizerSession,
@@ -2055,7 +2056,8 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
         .optimize(opts);
   }
 
-  optimizer::Optimization optimization(
+  auto history = std::make_unique<optimizer::v1::VeloxHistory>();
+  optimizer::v1::Optimization optimization(
       std::move(optimizerSession),
       std::move(runnerSession),
       *logicalPlan,
@@ -2239,7 +2241,7 @@ std::vector<velox::RowVectorPtr> SqlQueryRunner::runShowStatsForQuery(
         newQuery(options),
         options,
         context,
-        [&](const optimizer::DerivedTable& rootDt) {
+        [&](const optimizer::v1::DerivedTable& rootDt) {
           presto::ShowStatsBuilder builder(roundEstimate(rootDt.cardinality()));
 
           for (const auto* column : rootDt.columns) {

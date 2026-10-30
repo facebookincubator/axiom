@@ -185,7 +185,7 @@ of the marking decision.
 At any hash join whose placement walk (§4.2) crosses an exchange — broadcast or
 partitioned — and that clears the cost gate above, record a candidate DF **per join
 key** from the physical plan (`Join` carries `leftKeys`/`rightKeys` **[verified:
-RelationOp.h:536-609]**); v1 builds no composite-tuple DF (§7):
+v1/RelationOp.h:536-609]**); v1 builds no composite-tuple DF (§7):
 - per key `i`: the build key (`rightKeys[i]`), the probe key (`leftKeys[i]`), a DF id;
 - the **build distribution** (broadcast vs partitioned), which sets the
   aggregator's completeness condition (§5.2);
@@ -218,7 +218,7 @@ The decision lives in **`PlanPhysical`** (`PhysicalPlanRewriter`), which has all
 three inputs it needs: join selectivity and build-size estimates (the memo / cost
 model) and the placed `ir.Exchange` nodes (so the walk can tell whether the path
 from join to scan crosses one) **[verified: exchange
-placement and rewrites are in `v2/PlanPhysicalPass.cpp`'s `PhysicalPlanRewriter`]**. It
+placement and rewrites are in `PlanPhysicalPass.cpp`'s `PhysicalPlanRewriter`]**. It
 decides at IR-node granularity: producer node (the join), consumer node (the scan),
 key-column mapping, build distribution, selectivity gate. Emit is then mechanical —
 it translates those chosen IR nodes to their emitted Velox `PlanNodeId`s + fragment

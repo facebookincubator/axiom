@@ -47,9 +47,9 @@ namespace facebook::velox::common {
 class Filter;
 } // namespace facebook::velox::common
 
-namespace facebook::axiom::optimizer::v2 {
+namespace facebook::axiom::optimizer {
 class Node;
-} // namespace facebook::axiom::optimizer::v2
+} // namespace facebook::axiom::optimizer
 
 /// Base classes for schema elements used in execution. A ConnectorMetadata
 /// provides access to table information. A Table has a TableLayout for each of
@@ -1260,7 +1260,7 @@ using ConnectorDeleteHandlePtr = std::shared_ptr<ConnectorDeleteHandle>;
 struct PushdownRoot {
   /// Non-owning pointer into the offered subtree. Valid until the
   /// `co_pushdown` task completes and must not be retained afterward.
-  const optimizer::v2::Node* root{nullptr};
+  const optimizer::Node* root{nullptr};
 
   /// Shared ownership of the virtual table representing the pushed-down
   /// subtree. The optimizer retains it for the duration of optimization.
@@ -1451,7 +1451,7 @@ class ConnectorMetadata {
   /// pushdown. Called only when `isPushdownSupported()` returns true.
   virtual folly::coro::Task<std::vector<PushdownRoot>> co_pushdown(
       [[maybe_unused]] ConnectorSessionPtr session,
-      [[maybe_unused]] const optimizer::v2::Node& offeredSubtree) const {
+      [[maybe_unused]] const optimizer::Node& offeredSubtree) const {
     co_return {};
   }
 
