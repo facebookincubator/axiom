@@ -19,7 +19,7 @@
 #include <folly/json.h>
 #include <glog/logging.h>
 
-#include "axiom/optimizer/ToVelox.h"
+#include "axiom/optimizer/PlanAndStats.h"
 #include "axiom/pyspark/ArrowIpcLib.h"
 #include "axiom/pyspark/Exception.h"
 #include "axiom/pyspark/Optimizer.h"

@@ -17,7 +17,7 @@
 
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/optimizer/AggregationPlanner.h"
-#include "axiom/optimizer/Cost.h"
+#include "axiom/optimizer/CostV1.h"
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/Plan.h"
@@ -173,16 +173,6 @@ class Optimization {
 
   History& history() const {
     return history_;
-  }
-
-  /// If false, correlation names are not included in Column::toString(). Used
-  /// for canonicalizing join cache keys.
-  bool& cnamesInExpr() {
-    return cnamesInExpr_;
-  }
-
-  bool cnamesInExpr() const {
-    return cnamesInExpr_;
   }
 
   /// Tries to evaluate a constant expression (one with no column references).
@@ -482,8 +472,6 @@ class Optimization {
 
   // Controls tracing.
   int32_t traceFlags_{0};
-
-  bool cnamesInExpr_{true};
 
   AggregationPlanner aggregationPlanner_;
 

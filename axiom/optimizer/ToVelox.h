@@ -16,19 +16,14 @@
 
 #pragma once
 
-#include "axiom/optimizer/Cost.h"
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/optimizer/OptimizerSession.h"
+#include "axiom/optimizer/PlanAndStats.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/RelationOp.h"
 #include "velox/serializers/PrestoSerializer.h"
 
 namespace facebook::axiom::optimizer {
-
-/// A map from PlanNodeId of an executable plan to a key for
-/// recording the execution for use in cost model. The key is a
-/// canonical summary of the node and its inputs.
-using NodeHistoryMap = folly::F14FastMap<velox::core::PlanNodeId, std::string>;
 
 /// Maps a source column name to its user-requested output name for the
 /// final projection in toVeloxPlan. Resolved eagerly because column
@@ -38,19 +33,6 @@ struct OutputColumnNameMapping {
   std::string sourceName;
   /// Output column name from OutputNode entry.
   std::string outputName;
-};
-
-/// Plan and specification for recording execution history amd planning ttime
-/// predictions.
-struct PlanAndStats {
-  MultiFragmentPlanPtr plan;
-  NodeHistoryMap history;
-  NodePredictionMap prediction;
-  FinishWrite finishWrite;
-
-  /// Returns a string representation of the plan annotated with estimates from
-  /// 'prediction'.
-  std::string toString() const;
 };
 
 /// Per-fragment leaf-PartitionType maps produced by the optimizer and consumed

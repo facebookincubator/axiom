@@ -15,7 +15,7 @@
  */
 
 #include "axiom/optimizer/Plan.h"
-#include "axiom/optimizer/Cost.h"
+#include "axiom/optimizer/CostV1.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/RelationOpPrinter.h"
 

@@ -77,7 +77,7 @@ target_link_libraries(
   axiom_common
   axiom_connectors
   axiom_logical_plan
-  axiom_optimizer
+  axiom_optimizer_core
   velox_common_base
   velox_core
   velox_exec

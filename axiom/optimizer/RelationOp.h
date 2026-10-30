@@ -19,6 +19,7 @@
 #include "axiom/optimizer/EstimateMath.h"
 #include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/QueryGraphV1.h" // IWYU pragma: export
 #include "axiom/optimizer/Schema.h"
 
 /// Plan candidates.
