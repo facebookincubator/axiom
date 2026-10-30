@@ -390,6 +390,31 @@ Estimate EstimateProvider::compute(NodeCP node) {
       result.constraints = input.constraints;
       result.cardinality =
           maxOf(1.0f, mul(input.cardinality, kDefaultUnnestFanout));
+      // Each unnested column takes the statistics of the array elements, or
+      // of the map keys or values, it comes from. An Unnest also emits NULL
+      // for each empty value it keeps with a marker, and past the end of a
+      // shorter value when it unnests several: in a share of the rows the
+      // estimate does not know.
+      const bool padsWithNull = unnest->markerColumn() != nullptr ||
+          unnest->unnestExpressions().size() > 1;
+      ConstraintMap expressions = input.constraints;
+      ExprEstimator estimator{expressions};
+      for (size_t i = 0; i < unnest->unnestExpressions().size(); ++i) {
+        const Value expanded =
+            estimator.estimate(unnest->unnestExpressions()[i]);
+        const auto& columns = unnest->unnestColumns()[i];
+        for (size_t j = 0; j < columns.size(); ++j) {
+          if (const Value* child = expanded.child(static_cast<uint32_t>(j))) {
+            Value unnested = *child;
+            if (padsWithNull) {
+              unnested.nullable = true;
+              unnested.nullFraction = std::nullopt;
+            }
+            result.constraints.insert_or_assign(
+                columns[j]->id(), std::move(unnested));
+          }
+        }
+      }
       return result;
     }
 
