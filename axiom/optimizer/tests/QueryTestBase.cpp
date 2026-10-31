@@ -370,7 +370,7 @@ void QueryTestBase::verifyOptimization(
       veloxQueryCtx.get(), optimizerPool_.get());
   connector::SchemaResolver schemaResolver{
       connector::ConnectorMetadataRegistry::global()};
-  auto connectorContext = makeConnectorContext(veloxQueryCtx->queryId());
+  const auto& connectorContext = getConnectorContext();
   auto session = makeOptimizerSession(
       connectorContext,
       functionRegistry_,
