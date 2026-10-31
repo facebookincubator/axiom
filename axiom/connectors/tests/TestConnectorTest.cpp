@@ -24,7 +24,10 @@
 #include <folly/init/Init.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <array>
+#include <barrier>
 #include <numeric>
+#include <thread>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/HashPartitionFunction.h"
@@ -60,11 +63,7 @@ class TestConnectorTest : public ::testing::Test, public test::VectorTestBase {
   }
 
   ConnectorSessionPtr makeSession() {
-    return std::make_shared<ConnectorSession>(
-        /*queryId=*/"test",
-        /*user=*/"test",
-        Properties{},
-        makeTestStatWriter());
+    return makeTestContext("test")->sessionFor(connector_->connectorId());
   }
 
   std::shared_ptr<TestConnector> connector_;
@@ -132,7 +131,10 @@ TEST_F(TestConnectorTest, table) {
     }
   }
   EXPECT_THAT(rowIds, testing::ElementsAre(0, 1, 2, 3, 4));
-  EXPECT_EQ(testTable->deleteRows(folly::F14FastSet<int64_t>{1}), 1);
+  EXPECT_EQ(
+      testTable->deleteRows(
+          folly::F14FastSet<int64_t>{1}, testTable->version()),
+      1);
   connector_->appendData(
       "table",
       makeRowVector(
@@ -219,10 +221,10 @@ CO_TEST_F(TestConnectorTest, splitManager) {
   columns.push_back(layout.createColumnHandle(nullptr, "a"));
   std::vector<core::TypedExprPtr> empty;
   std::vector<int32_t> rejectedFilterIndices;
-  auto tableHandle = layout.createTableHandle(
-      nullptr, std::move(columns), *evaluator, empty, rejectedFilterIndices);
-
   auto session = makeSession();
+  auto tableHandle = layout.createTableHandle(
+      session, std::move(columns), *evaluator, empty, rejectedFilterIndices);
+
   auto partitions = co_await splitManager->co_listPartitions(
       session, tableHandle, *evaluator);
   auto splitSource = splitManager->getSplitSource(
@@ -332,13 +334,9 @@ TEST_F(TestConnectorTest, dataSource) {
       std::make_unique<exec::SimpleExpressionEvaluator>(nullptr, nullptr);
   std::vector<core::TypedExprPtr> empty;
   std::vector<int32_t> rejectedFilterIndices;
+  auto session = makeSession();
   auto tableHandle = layout.createTableHandle(
-      /*session=*/nullptr,
-
-      std::move(columns),
-      *evaluator,
-      empty,
-      rejectedFilterIndices);
+      session, std::move(columns), *evaluator, empty, rejectedFilterIndices);
 
   auto vector1 = makeRowVector(
       {makeFlatVector<int>({0, 1}), makeFlatVector<StringView>({"a", "b"})});
@@ -680,7 +678,8 @@ std::vector<uint32_t> referenceBucketIds(
 
 velox::connector::ConnectorTableHandlePtr makeScanHandle(
     const TableLayout& layout,
-    const std::vector<std::string>& columnNames) {
+    const std::vector<std::string>& columnNames,
+    const ConnectorSessionPtr& session) {
   auto evaluator =
       std::make_unique<exec::SimpleExpressionEvaluator>(nullptr, nullptr);
   std::vector<velox::connector::ColumnHandlePtr> columns;
@@ -691,10 +690,62 @@ velox::connector::ConnectorTableHandlePtr makeScanHandle(
   std::vector<core::TypedExprPtr> empty;
   std::vector<int32_t> rejectedFilterIndices;
   return layout.createTableHandle(
-      nullptr, std::move(columns), *evaluator, empty, rejectedFilterIndices);
+      session, std::move(columns), *evaluator, empty, rejectedFilterIndices);
 }
 
 } // namespace
+
+// One query rejects two planning observations of different table versions.
+TEST_F(TestConnectorTest, versionConsistency) {
+  auto table = connector_->addTable("versioned", ROW("a", BIGINT()));
+  auto session = makeSession();
+  makeScanHandle(*table->layouts()[0], {"a"}, session);
+  table->addData(makeRowVector({makeFlatVector<int64_t>({1})}));
+
+  VELOX_ASSERT_THROW(
+      makeScanHandle(*table->layouts()[0], {"a"}, session),
+      "Table changed during planning");
+}
+
+// Concurrent deletes planned at the same version allow exactly one mutation.
+TEST_F(TestConnectorTest, versionAtomicity) {
+  auto table = connector_->addTable("versioned", ROW("a", BIGINT()));
+  table->addData(makeRowVector({makeFlatVector<int64_t>({1, 2})}));
+  const auto version = table->version();
+  std::barrier start{2};
+  std::array<int64_t, 2> deleted{};
+  std::array<std::exception_ptr, 2> errors;
+  std::array<std::thread, 2> threads;
+  for (size_t i = 0; i < threads.size(); ++i) {
+    threads[i] = std::thread([&, i] {
+      start.arrive_and_wait();
+      try {
+        deleted[i] = table->deleteRows(
+            folly::F14FastSet<int64_t>{static_cast<int64_t>(i)}, version);
+      } catch (...) {
+        errors[i] = std::current_exception();
+      }
+    });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  EXPECT_EQ(std::ranges::count(errors, nullptr), 1);
+  EXPECT_EQ(std::ranges::count(deleted, 1), 1);
+  for (const auto& error : errors) {
+    if (error != nullptr) {
+      try {
+        std::rethrow_exception(error);
+      } catch (const std::exception& exception) {
+        EXPECT_THAT(
+            exception.what(),
+            testing::HasSubstr("DELETE target changed after planning"));
+      }
+    }
+  }
+  EXPECT_EQ(table->numRows(), 1);
+}
 
 CO_TEST_F(TestConnectorTest, bucketedTable) {
   constexpr int32_t kNumBuckets = 4;
@@ -715,9 +766,9 @@ CO_TEST_F(TestConnectorTest, bucketedTable) {
     EXPECT_EQ(expected[firstKey], table->dataBucketIds()[i]);
   }
 
-  auto tableHandle = makeScanHandle(*table->layouts()[0], {"key"});
   auto* splitManager = metadata_->splitManager();
   auto session = makeSession();
+  auto tableHandle = makeScanHandle(*table->layouts()[0], {"key"}, session);
   exec::SimpleExpressionEvaluator evaluator{nullptr, nullptr};
   auto partitions =
       co_await splitManager->co_listPartitions(session, tableHandle, evaluator);
@@ -785,10 +836,11 @@ CO_TEST_F(TestConnectorTest, bucketedTableNumBucketsExceedsNumRows) {
     EXPECT_GT(vector->size(), 0);
   }
 
-  auto tableHandle = makeScanHandle(*table->layouts()[0], {"key"});
+  auto session = makeSession();
+  auto tableHandle = makeScanHandle(*table->layouts()[0], {"key"}, session);
   exec::SimpleExpressionEvaluator evaluator{nullptr, nullptr};
   auto partitions = co_await metadata_->splitManager()->co_listPartitions(
-      makeSession(), tableHandle, evaluator);
+      session, tableHandle, evaluator);
   EXPECT_EQ(partitions.size(), kNumBuckets);
 }
 

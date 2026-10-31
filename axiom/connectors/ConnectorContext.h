@@ -41,8 +41,9 @@ using ConnectorContextPtr = std::shared_ptr<ConnectorContext>;
 /// A per-query factory and cache for `ConnectorSession`, parameterized by a
 /// properties map and a writer provider. Also refers to the registry of
 /// catalogs the query sees, which the application owns. `sessionFor()` slices
-/// the properties by connector id, asks the provider for that id's writer, and
-/// builds the session once. The application makes one when a query begins,
+/// the properties by connector id, asks the provider for that id's writer,
+/// lets connector metadata initialize optional query state, and builds the
+/// session once. The application makes one when a query begins,
 /// drops it when the query is finished with, and gives every component session
 /// of that query the same one.
 ///
@@ -59,7 +60,7 @@ using ConnectorContextPtr = std::shared_ptr<ConnectorContext>;
 ///
 /// Invariants:
 ///   - `statWriterProvider` is non-empty.
-///   - `metadataRegistry` outlives this context.
+///   - `metadataRegistry` and its catalog registrations outlive this context.
 ///   - One session per connector id, and the same one for the life of this
 ///     context.
 class ConnectorContext {
@@ -94,7 +95,9 @@ class ConnectorContext {
   }
 
   /// Returns 'connectorId's session, made on first use. Concurrent callers get
-  /// the same one, and it is the same one for the life of this context. The
+  /// the same one after its query state is initialized, and it is the same one
+  /// for the life of this context. Fails if connector metadata is not
+  /// registered. Concurrent callers wait for initialization to finish. The
   /// writer provider is called at most once per successful build; a throw from
   /// the build runs it again, and the writer it returns is shared by every
   /// thread that connector runs on.
