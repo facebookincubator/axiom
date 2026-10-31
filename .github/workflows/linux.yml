@@ -48,6 +48,9 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/ccache
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       ICU_SOURCE: SYSTEM
+      # The image's FAISS 1.11.0 does not install faiss/impl/zerocopy_io.h,
+      # which Velox's vector index needs, so build FAISS from source.
+      faiss_SOURCE: BUNDLED
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
