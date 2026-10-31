@@ -250,6 +250,10 @@ class LimitAndOrderRewriter : public NodeRewriter<LimitContext> {
   LIMIT_BARRIER(WorkingTable, rewriteWorkingTable, true)
   LIMIT_BARRIER(FixedPoint, rewriteFixedPoint, false)
   LIMIT_BARRIER(Repeat, rewriteRepeat, false)
+  // A probe row gives up to 'k' rows per matching index, and none for an inner
+  // search that matches nothing, so a bound on the output does not bound an
+  // input.
+  LIMIT_BARRIER(VectorSearch, rewriteVectorSearch, false)
 
 #undef LIMIT_BARRIER
 

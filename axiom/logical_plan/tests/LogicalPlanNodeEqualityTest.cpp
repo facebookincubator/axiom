@@ -300,6 +300,57 @@ TEST_F(LogicalPlanNodeEqualityTest, lateralJoin) {
   EXPECT_NE(*makeLateral(), *regularJoin);
 }
 
+TEST_F(LogicalPlanNodeEqualityTest, vectorSearch) {
+  const PlanBuilder::VectorSearch search{
+      .probeKeys = {"c"},
+      .buildKeys = {"d"},
+      .probeEmbedding = "b",
+      .buildIndex = "e",
+      .metric = common::vectorindex::VectorIndexMetric::kCosine,
+      .k = 1,
+      .idName = "id",
+      .scoreName = "score"};
+  auto makeSearch = [](const PlanBuilder::VectorSearch& search) {
+    return PlanBuilder()
+        .values(
+            ROW({"a", "b", "c"}, {BIGINT(), ARRAY(REAL()), VARCHAR()}),
+            std::vector<Variant>{})
+        .vectorSearch(
+            PlanBuilder().values(
+                ROW({"d", "e"}, {VARCHAR(), VARBINARY()}),
+                std::vector<Variant>{}),
+            search)
+        .planNode();
+  };
+
+  EXPECT_EQ(*makeSearch(search), *makeSearch(search));
+
+  auto other = search;
+  other.joinType = JoinType::kLeft;
+  EXPECT_NE(*makeSearch(search), *makeSearch(other));
+
+  other = search;
+  other.k = 2;
+  EXPECT_NE(*makeSearch(search), *makeSearch(other));
+
+  other = search;
+  other.probeKeys = {};
+  other.buildKeys = {};
+  EXPECT_NE(*makeSearch(search), *makeSearch(other));
+
+  other = search;
+  other.searchOptions = {{"ivf.nprobe", "4"}};
+  EXPECT_NE(*makeSearch(search), *makeSearch(other));
+
+  other = search;
+  other.idName = "x";
+  EXPECT_NE(*makeSearch(search), *makeSearch(other));
+
+  other = search;
+  other.scoreName = "x";
+  EXPECT_NE(*makeSearch(search), *makeSearch(other));
+}
+
 TEST_F(LogicalPlanNodeEqualityTest, sort) {
   std::vector<std::vector<std::string>> rows = {{"1", "10"}, {"2", "20"}};
   auto makeNode = [&rows] {

@@ -71,6 +71,7 @@ enum class NodeType : uint8_t {
   kFixedPoint,
   kWorkingTable,
   kRepeat,
+  kVectorSearch,
 };
 
 AXIOM_DECLARE_ENUM_NAME(NodeType);
@@ -1599,6 +1600,15 @@ class Join : public Node {
   /// all right rows, which no one worker holds.
   static bool canBroadcastProbe(velox::core::JoinType joinType);
 
+  /// Returns whether a join of 'joinType' preserves results with its inputs
+  /// where they are, when 'leftReplicated' and 'rightReplicated' say which of
+  /// them every worker holds: both or neither, a replicated right input when
+  /// `canBroadcastBuild`, or a replicated left input when `canBroadcastProbe`.
+  static bool keepsReplicatedInputs(
+      velox::core::JoinType joinType,
+      bool leftReplicated,
+      bool rightReplicated);
+
   /// Returns whether empty inputs imply an empty join result.
   static bool isKnownEmpty(
       velox::core::JoinType joinType,
@@ -1793,6 +1803,168 @@ class IndexLookupJoin : public Node {
 };
 
 using IndexLookupJoinCP = const IndexLookupJoin*;
+
+/// Joins each probe row with the entries of vector indexes nearest to its
+/// embedding: the vector search join of the logical plan (see
+/// logical_plan::VectorSearchNode). Each row of `build`, the build side, holds
+/// a packed vector index in `buildIndex`.
+///
+///     VectorSearch(probe=queries, build=codecs, joinType=kInner,
+///                  probeKeys=[q.ds], buildKeys=[c.ds],
+///                  probeEmbedding=q.embedding, buildIndex=c.codec, k=1,
+///                  id=cluster_id, score=score)
+///
+/// The equality of `probeKeys` and `buildKeys` matches each probe row to build
+/// rows. Each match's index is searched for the `k` entries nearest to the
+/// probe row's embedding, and each entry gives an output row with its `id` and
+/// `score`. A left join outputs a probe row with no entries once, with nulls
+/// for the build columns, `id` and `score`.
+///
+/// `sourceColumns[i]` supplies `outputColumns[i]`. A probe column supplies
+/// itself, as do `id` and `score`. A build column supplies itself in an inner
+/// search and a fresh identity in a left one, so facts about its values do not
+/// escape above the search.
+///
+/// Invariants:
+/// - `joinType` is kInner or kLeft.
+/// - `probeKeys` read only `probe`'s columns, `buildKeys` only `build`'s. Both
+///   may be empty: every probe row then matches every build row.
+/// - `probeEmbedding` is a column of `probe`, `buildIndex` a column of `build`.
+/// - `k` is at least 1.
+/// - `sourceColumns` and `outputColumns` have the same size, and `buildIndex`
+///   is not a source.
+/// - Once placed, its inputs satisfy `Join::keepsReplicatedInputs`.
+class VectorSearch : public Node {
+ public:
+  struct Key {
+    /// The rows with embeddings to search for.
+    NodeCP probe;
+    /// The rows with the indexes to search in.
+    NodeCP build;
+    /// kInner or kLeft.
+    velox::core::JoinType joinType;
+    /// Probe keys, positional with `buildKeys`.
+    ExprVector probeKeys;
+    /// Build keys, positional with `probeKeys`.
+    ExprVector buildKeys;
+    /// The ARRAY(REAL) probe column to search for.
+    ColumnCP probeEmbedding;
+    /// The VARBINARY build column with a packed vector index.
+    ColumnCP buildIndex;
+    /// The metric the indexes were built for.
+    velox::common::vectorindex::VectorIndexMetric metric;
+    /// The number of entries to find in each matching index.
+    int64_t k;
+    /// Search settings that override the ones recorded in the indexes.
+    std::vector<std::pair<std::string, std::string>> searchOptions;
+    /// The BIGINT id of each entry found.
+    ColumnCP id;
+    /// The REAL score of each entry found.
+    ColumnCP score;
+    /// Output schema, pruned to what consumers need.
+    ColumnVector outputColumns;
+    /// Columns supplying `outputColumns`, positionally aligned.
+    ColumnVector sourceColumns;
+  };
+
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const VectorSearch* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const VectorSearch* lhs, const VectorSearch* rhs) const;
+    bool operator()(const Key& key, const VectorSearch* node) const;
+    bool operator()(const VectorSearch* node, const Key& key) const;
+  };
+
+  VectorSearch(Key key, Builder& builder);
+
+  /// Returns the key this node was built from.
+  Key key() const;
+
+  NodeCP probe() const {
+    return inputs_[0];
+  }
+
+  NodeCP build() const {
+    return inputs_[1];
+  }
+
+  velox::core::JoinType joinType() const {
+    return joinType_;
+  }
+
+  const ExprVector& probeKeys() const {
+    return probeKeys_;
+  }
+
+  const ExprVector& buildKeys() const {
+    return buildKeys_;
+  }
+
+  ColumnCP probeEmbedding() const {
+    return probeEmbedding_;
+  }
+
+  ColumnCP buildIndex() const {
+    return buildIndex_;
+  }
+
+  velox::common::vectorindex::VectorIndexMetric metric() const {
+    return metric_;
+  }
+
+  int64_t k() const {
+    return k_;
+  }
+
+  const std::vector<std::pair<std::string, std::string>>& searchOptions()
+      const {
+    return searchOptions_;
+  }
+
+  ColumnCP id() const {
+    return id_;
+  }
+
+  ColumnCP score() const {
+    return score_;
+  }
+
+  const ColumnVector& sourceColumns() const {
+    return sourceColumns_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return inputs_;
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const std::array<NodeCP, 2> inputs_;
+  const velox::core::JoinType joinType_;
+  const ExprVector probeKeys_;
+  const ExprVector buildKeys_;
+  const ColumnCP probeEmbedding_;
+  const ColumnCP buildIndex_;
+  const velox::common::vectorindex::VectorIndexMetric metric_;
+  const int64_t k_;
+  const std::vector<std::pair<std::string, std::string>> searchOptions_;
+  const ColumnCP id_;
+  const ColumnCP score_;
+  const ColumnVector sourceColumns_;
+};
+
+using VectorSearchCP = const VectorSearch*;
 
 /// One window function invocation. Frame is per-function (as in Velox
 /// `WindowNode::Function`), so functions sharing a partition / order but

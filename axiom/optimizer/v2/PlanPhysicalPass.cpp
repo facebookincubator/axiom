@@ -1509,71 +1509,86 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
 
   // Adds the exchanges required by a join outside DPhyp and translates it.
   NodeCP makePhysicalJoin(Join::Key join) {
-    if (numWorkers_ > 1 &&
-        (isReplicated(join.left) || isReplicated(join.right))) {
-      return makeDriverPhysicalJoin(placeReplicatedJoin(std::move(join)));
-    }
-    if (numWorkers_ > 1) {
-      if (!join.leftKeys.empty()) {
-        // An already partitioned side can co-locate the join without a full
-        // shuffle. Not for null-aware anti/semi: an existence side confines a
-        // null key to one partition, so it must shuffle-replicate.
-        if (join.nullAware ||
-            !coPartitionJoinSides(
-                join.left,
-                join.right,
-                join.leftKeys,
-                join.rightKeys,
-                Join::canBroadcastBuild(join.joinType))) {
-          std::tie(join.left, join.leftKeys) =
-              PrecomputeProjections::materializeKeys(
-                  join.left, join.leftKeys, builder(), simplifier_);
-          std::tie(join.right, join.rightKeys) =
-              PrecomputeProjections::materializeKeys(
-                  join.right, join.rightKeys, builder(), simplifier_);
-          const bool useBroadcast = Join::canBroadcastBuild(join.joinType) &&
-              broadcastFits(join.right);
-          if (useBroadcast) {
-            join.right = replicate(join.right, join.left);
-          } else {
-            // A partitioned null-aware anti/semi join sends null keys from its
-            // existence side to every probe partition.
-            const bool rightIsBuild = Join::canBroadcastBuild(join.joinType);
-            join.left = partition(
-                join.left, join.leftKeys, join.nullAware && !rightIsBuild);
-            join.right = partition(
-                join.right, join.rightKeys, join.nullAware && rightIsBuild);
-          }
-        }
-      } else {
-        if (Join::canBroadcastBuild(join.joinType)) {
-          join.right = replicate(join.right, join.left);
-        } else {
-          join.left = ensureGathered(join.left);
-          join.right = ensureGathered(join.right);
-        }
-      }
-    }
+    placeJoinInputs(
+        join.joinType,
+        join.nullAware,
+        join.left,
+        join.right,
+        join.leftKeys,
+        join.rightKeys);
     return makeDriverPhysicalJoin(std::move(join));
   }
 
-  // Places a join with an input replicated on every worker. A replicated
-  // build joins a probe where the probe's rows are, when the join preserves no
-  // build rows, and a replicated probe joins a scattered build where the
-  // build's rows are, when the join allows it (see
+  // Adds the exchanges that bring the rows a join of 'joinType' matches to the
+  // same worker: the inputs of a join and of a vector search, whose output
+  // rows are each tied to one row of each input.
+  void placeJoinInputs(
+      velox::core::JoinType joinType,
+      bool nullAware,
+      NodeCP& left,
+      NodeCP& right,
+      ExprVector& leftKeys,
+      ExprVector& rightKeys) {
+    if (numWorkers_ <= 1) {
+      return;
+    }
+    if (isReplicated(left) || isReplicated(right)) {
+      placeReplicatedInputs(joinType, left, right);
+      return;
+    }
+    if (leftKeys.empty()) {
+      if (Join::canBroadcastBuild(joinType)) {
+        right = replicate(right, left);
+      } else {
+        left = ensureGathered(left);
+        right = ensureGathered(right);
+      }
+      return;
+    }
+    // An already partitioned side can co-locate the join without a full
+    // shuffle. Not for null-aware anti/semi: an existence side confines a
+    // null key to one partition, so it must shuffle-replicate.
+    if (!nullAware &&
+        coPartitionJoinSides(
+            left,
+            right,
+            leftKeys,
+            rightKeys,
+            Join::canBroadcastBuild(joinType))) {
+      return;
+    }
+    std::tie(left, leftKeys) = PrecomputeProjections::materializeKeys(
+        left, leftKeys, builder(), simplifier_);
+    std::tie(right, rightKeys) = PrecomputeProjections::materializeKeys(
+        right, rightKeys, builder(), simplifier_);
+    const bool rightIsBuild = Join::canBroadcastBuild(joinType);
+    if (rightIsBuild && broadcastFits(right)) {
+      right = replicate(right, left);
+      return;
+    }
+    // A partitioned null-aware anti/semi join sends null keys from its
+    // existence side to every probe partition.
+    left = partition(left, leftKeys, nullAware && !rightIsBuild);
+    right = partition(right, rightKeys, nullAware && rightIsBuild);
+  }
+
+  // Places the inputs of a join with an input replicated on every worker. A
+  // replicated build joins a probe where the probe's rows are, when the join
+  // preserves no build rows, and a replicated probe joins a scattered build
+  // where the build's rows are, when the join allows it (see
   // `Join::canBroadcastProbe`). Otherwise the other input is broadcast too
   // and the join runs on each worker over both copies.
-  Join::Key placeReplicatedJoin(Join::Key join) {
-    const bool leftReplicated = isReplicated(join.left);
-    const bool rightReplicated = isReplicated(join.right);
-    if ((leftReplicated && rightReplicated) ||
-        (rightReplicated && Join::canBroadcastBuild(join.joinType)) ||
-        (leftReplicated && Join::canBroadcastProbe(join.joinType))) {
-      return join;
+  void placeReplicatedInputs(
+      velox::core::JoinType joinType,
+      NodeCP& left,
+      NodeCP& right) {
+    const bool leftReplicated = isReplicated(left);
+    if (Join::keepsReplicatedInputs(
+            joinType, leftReplicated, isReplicated(right))) {
+      return;
     }
-    NodeCP& scattered = leftReplicated ? join.right : join.left;
+    NodeCP& scattered = leftReplicated ? right : left;
     scattered = exchange({scattered, Partitioning::globalBroadcast()});
-    return join;
   }
 
   // True when every task holds all of 'input'.
@@ -2499,6 +2514,27 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       return sorted;
     }
     return gatherMerge(sorted, node->orderKeys(), node->orderTypes());
+  }
+
+  // A vector search places its inputs as a join of its type does.
+  NodeCP rewriteVectorSearch(const VectorSearch* node, NoContext& context)
+      override {
+    VectorSearch::Key key = node->key();
+    key.probe = rewrite(node->probe(), context);
+    key.build = rewrite(node->build(), context);
+    placeJoinInputs(
+        key.joinType,
+        /*nullAware=*/false,
+        key.probe,
+        key.build,
+        key.probeKeys,
+        key.buildKeys);
+    // Velox reads the keys as columns.
+    std::tie(key.probe, key.probeKeys) = PrecomputeProjections::materializeKeys(
+        key.probe, key.probeKeys, builder(), simplifier_);
+    std::tie(key.build, key.buildKeys) = PrecomputeProjections::materializeKeys(
+        key.build, key.buildKeys, builder(), simplifier_);
+    return builder().make<VectorSearch>(std::move(key));
   }
 
   // An Unnest outside any join cluster.

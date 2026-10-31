@@ -671,6 +671,19 @@ class PlanMatcherBuilder {
       const std::vector<std::string>& keys,
       std::optional<std::string> filter = std::nullopt);
 
+  /// Matches a VectorSearchJoinNode: the current plan is its probe side.
+  /// @param buildMatcher Matcher for the build side, which holds the indexes.
+  /// @param keys Equality expressions mapping probe keys to build keys.
+  /// @param probeEmbedding The probe's embedding column.
+  /// @param buildIndex The build's index column.
+  PlanMatcherBuilder& vectorSearchJoin(
+      PlanMatcherBuilder buildMatcher,
+      JoinType joinType,
+      const std::vector<std::string>& keys,
+      const std::string& probeEmbedding,
+      const std::string& buildIndex,
+      int64_t k);
+
   /// Matches a NestedLoopJoin node with the specified right side matcher and
   /// join type.
   /// @param rightMatcher Matcher for the right side of the join.

@@ -32,6 +32,7 @@ target_link_libraries(
   velox_type
   velox_serialization
   velox_common_base
+  velox_vector_index_settings
   Boost::headers
 )
 

@@ -21,6 +21,7 @@
 #include "axiom/logical_plan/GraphPattern.h"
 #include "axiom/logical_plan/PropertyGraph.h"
 #include "velox/common/serialization/Serializable.h"
+#include "velox/common/vectorindex/VectorIndexMetric.h"
 #include "velox/type/Variant.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -44,6 +45,7 @@ enum class NodeKind {
   kRecursiveReference = 14,
   kLateralJoin = 15,
   kGraphMatch = 16,
+  kVectorSearch = 17,
 };
 
 AXIOM_DECLARE_ENUM_NAME(NodeKind)
@@ -657,6 +659,129 @@ class LateralJoinNode : public LogicalPlanNode {
 };
 
 using LateralJoinNodePtr = std::shared_ptr<const LateralJoinNode>;
+
+/// A vector search join: joins each probe row with the entries of vector
+/// indexes that are nearest to its embedding. The probe input holds the rows
+/// to search for. Each row of the build input holds a packed vector index (see
+/// velox::common::vectorindex::LocalVectorIndex).
+///
+/// The join matches each probe row to the build rows with equal keys, then
+/// searches each match's index for the 'k' entries it returns as nearest to the
+/// probe row's embedding. A probe row matching several build rows gets up to
+/// 'k' entries from each. Exactness is the index's: a flat index returns the
+/// nearest entries, IVF and HNSW indexes return approximate ones.
+///
+///   probe: (query_id, embedding, ds)        build: (codec_ds, codec)
+///   VectorSearch INNER: ds = codec_ds, nearest codec to embedding, k = 1
+///   output: (query_id, embedding, ds, codec_ds, cluster_id, score)
+///
+/// Each entry found gives an output row of the probe columns, the build
+/// columns except the index, the entry's id and its score: the similarity the
+/// metric defines, where larger is nearer. A left join outputs a probe row
+/// that finds no entries once, with nulls for the build columns, the id and
+/// the score. Rows with a null key, probe rows with a null embedding and build
+/// rows with a null index match nothing.
+///
+/// Invariants:
+/// - 'joinType' is kInner or kLeft.
+/// - 'probeKeys' name probe columns and 'buildKeys' name build columns,
+/// pairwise
+///   of the same type. Both may be empty: every probe row then matches every
+///   build row.
+/// - 'probeEmbedding' names an ARRAY(REAL) probe column.
+/// - 'buildIndex' names a VARBINARY build column.
+/// - 'k' is at least 1.
+class VectorSearchNode : public LogicalPlanNode {
+ public:
+  /// @param searchOptions Search settings that override the ones recorded in
+  /// the indexes (see velox::common::vectorindex::LocalVectorIndexOptions).
+  VectorSearchNode(
+      std::string id,
+      const LogicalPlanNodePtr& probe,
+      const LogicalPlanNodePtr& build,
+      JoinType joinType,
+      std::vector<std::string> probeKeys,
+      std::vector<std::string> buildKeys,
+      std::string probeEmbedding,
+      std::string buildIndex,
+      velox::common::vectorindex::VectorIndexMetric metric,
+      int64_t k,
+      std::vector<std::pair<std::string, std::string>> searchOptions,
+      std::string idName,
+      std::string scoreName);
+
+  const LogicalPlanNodePtr& probe() const {
+    return inputAt(0);
+  }
+
+  const LogicalPlanNodePtr& build() const {
+    return inputAt(1);
+  }
+
+  JoinType joinType() const {
+    return joinType_;
+  }
+
+  const std::vector<std::string>& probeKeys() const {
+    return probeKeys_;
+  }
+
+  const std::vector<std::string>& buildKeys() const {
+    return buildKeys_;
+  }
+
+  const std::string& probeEmbedding() const {
+    return probeEmbedding_;
+  }
+
+  const std::string& buildIndex() const {
+    return buildIndex_;
+  }
+
+  velox::common::vectorindex::VectorIndexMetric metric() const {
+    return metric_;
+  }
+
+  int64_t k() const {
+    return k_;
+  }
+
+  const std::vector<std::pair<std::string, std::string>>& searchOptions()
+      const {
+    return searchOptions_;
+  }
+
+  const std::string& idName() const {
+    return idName_;
+  }
+
+  const std::string& scoreName() const {
+    return scoreName_;
+  }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
+  folly::dynamic serialize() const override;
+
+  static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  bool equalTo(const LogicalPlanNode& other) const override;
+
+  const JoinType joinType_;
+  const std::vector<std::string> probeKeys_;
+  const std::vector<std::string> buildKeys_;
+  const std::string probeEmbedding_;
+  const std::string buildIndex_;
+  const velox::common::vectorindex::VectorIndexMetric metric_;
+  const int64_t k_;
+  const std::vector<std::pair<std::string, std::string>> searchOptions_;
+  const std::string idName_;
+  const std::string scoreName_;
+};
+
+using VectorSearchNodePtr = std::shared_ptr<const VectorSearchNode>;
 
 /// Sort rows based on one or more sort fields. The output schema for this node
 /// matches the input. This node doesn't change the cardinality of the dataset.

@@ -770,6 +770,8 @@ Translated Translator::translateNode(
       return translateJoin(*node.as<lp::JoinNode>(), required);
     case lp::NodeKind::kLateralJoin:
       return translateLateralJoin(*node.as<lp::LateralJoinNode>(), required);
+    case lp::NodeKind::kVectorSearch:
+      return translateVectorSearch(*node.as<lp::VectorSearchNode>(), required);
     case lp::NodeKind::kTableWrite:
       return translateTableWrite(*node.as<lp::TableWriteNode>(), required);
     case lp::NodeKind::kOutput:
@@ -1643,14 +1645,15 @@ void Translator::rebindScope(
   }
 }
 
-// The Column a leg's scope binds 'name' to. A leg's scope covers every name of
-// its LP outputType, so a miss is a translation bug.
+// The Column 'scope' binds 'name' to, materialized onto 'node' when 'name'
+// binds an expression. A scope covers every name of its LP node's outputType,
+// so a miss is a translation bug.
 ColumnCP Translator::columnInScope(
     NodeCP* node,
     const Scope& scope,
     const std::string& name) {
   auto it = scope.find(name);
-  VELOX_CHECK(it != scope.end(), "Leg scope missing column: {}", name);
+  VELOX_CHECK(it != scope.end(), "Scope missing column: {}", name);
   return materializeColumn(node, it->second, name);
 }
 
@@ -2648,6 +2651,125 @@ bool correlatesToOtherSide(NodeCP lifted, NodeCP beforeLift, NodeCP otherSide) {
 }
 
 } // namespace
+
+Translated Translator::translateVectorSearch(
+    const lp::VectorSearchNode& search,
+    const LpNameSet& required) {
+  const auto& probeType = *search.probe()->outputType();
+  const auto& buildType = *search.build()->outputType();
+
+  // Each input supplies what the search reads from it and the outputs the
+  // consumer reads.
+  LpNameSet probeRequired{search.probeKeys().begin(), search.probeKeys().end()};
+  probeRequired.insert(search.probeEmbedding());
+  LpNameSet buildRequired{search.buildKeys().begin(), search.buildKeys().end()};
+  buildRequired.insert(search.buildIndex());
+  for (const auto& name : probeType.names()) {
+    if (required.contains(name)) {
+      probeRequired.insert(name);
+    }
+  }
+  for (const auto& name : buildType.names()) {
+    if (required.contains(name)) {
+      buildRequired.insert(name);
+    }
+  }
+  Translated probe = translateNode(*search.probe(), probeRequired);
+  Translated build = translateNode(*search.build(), buildRequired);
+
+  const velox::core::JoinType joinType = toVeloxJoinType(search.joinType());
+
+  // The build side of a left search is null-extended. Its expressions are
+  // computed below the search: above it, a padded row would read their inputs
+  // as NULL rather than the expressions themselves.
+  if (joinType == velox::core::JoinType::kLeft) {
+    materializeScope(&build.node, build.scope, buildType);
+  }
+
+  ExprVector probeKeys;
+  for (const auto& name : search.probeKeys()) {
+    probeKeys.push_back(columnInScope(&probe.node, probe.scope, name));
+  }
+  ExprVector buildKeys;
+  for (const auto& name : search.buildKeys()) {
+    buildKeys.push_back(columnInScope(&build.node, build.scope, name));
+  }
+  ColumnCP probeEmbedding =
+      columnInScope(&probe.node, probe.scope, search.probeEmbedding());
+  ColumnCP buildIndex =
+      columnInScope(&build.node, build.scope, search.buildIndex());
+
+  // A name binds to an expression, so the search outputs what the expressions
+  // of the required names read.
+  PlanObjectSet requiredColumns;
+  Scope scope;
+  for (const auto* side : {&probe, &build}) {
+    for (const auto& [name, expr] : side->scope) {
+      if (required.contains(name)) {
+        requiredColumns.unionColumns(expr);
+        scope[name] = expr;
+      }
+    }
+  }
+
+  ColumnVector outputColumns;
+  ColumnVector sourceColumns;
+  ColumnVector nullExtendedSources;
+  ColumnVector nullExtendedOutputs;
+  for (ColumnCP column : probe.node->outputColumns()) {
+    if (requiredColumns.contains(column)) {
+      sourceColumns.push_back(column);
+      outputColumns.push_back(column);
+    }
+  }
+  for (ColumnCP column : build.node->outputColumns()) {
+    if (requiredColumns.contains(column)) {
+      sourceColumns.push_back(column);
+      if (joinType == velox::core::JoinType::kLeft) {
+        nullExtendedSources.push_back(column);
+        nullExtendedOutputs.push_back(
+            Column::createForNullExtendedValue(column));
+        outputColumns.push_back(nullExtendedOutputs.back());
+      } else {
+        outputColumns.push_back(column);
+      }
+    }
+  }
+  rebindScope(scope, nullExtendedSources, nullExtendedOutputs);
+
+  ColumnCP id =
+      columnForSymbol(toName(search.idName()), Value(toType(velox::BIGINT())));
+  ColumnCP score =
+      columnForSymbol(toName(search.scoreName()), Value(toType(velox::REAL())));
+  if (required.contains(search.idName())) {
+    sourceColumns.push_back(id);
+    outputColumns.push_back(id);
+    scope[search.idName()] = id;
+  }
+  if (required.contains(search.scoreName())) {
+    sourceColumns.push_back(score);
+    outputColumns.push_back(score);
+    scope[search.scoreName()] = score;
+  }
+
+  NodeCP node = builder_.make<VectorSearch>({
+      .probe = probe.node,
+      .build = build.node,
+      .joinType = joinType,
+      .probeKeys = std::move(probeKeys),
+      .buildKeys = std::move(buildKeys),
+      .probeEmbedding = probeEmbedding,
+      .buildIndex = buildIndex,
+      .metric = search.metric(),
+      .k = search.k(),
+      .searchOptions = search.searchOptions(),
+      .id = id,
+      .score = score,
+      .outputColumns = std::move(outputColumns),
+      .sourceColumns = std::move(sourceColumns),
+  });
+  return {node, std::move(scope)};
+}
 
 Translated Translator::translateJoin(
     const lp::JoinNode& join,
