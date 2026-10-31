@@ -208,6 +208,18 @@ SELECT a, b FROM (SELECT a, b, dense_rank() OVER (PARTITION BY a, b ORDER BY a) 
 -- Same as above but with rank().
 SELECT a, b FROM (SELECT a, b, rank() OVER (PARTITION BY a, b ORDER BY a) AS r FROM t) WHERE r = 1
 ----
+-- A rank() filter keeps every row tied at the limit. Ordered by b % 30, the
+-- five rows of the odd partition with b % 30 = 0 tie at rank 1, and so do all
+-- five rows of the even partition.
+SELECT a, b
+FROM (SELECT a, b, rank() OVER (PARTITION BY a % 2 ORDER BY b % 30) AS r FROM t)
+WHERE r = 1
+----
+-- Same as above but with dense_rank().
+SELECT a, b
+FROM (SELECT a, b, dense_rank() OVER (PARTITION BY a % 2 ORDER BY b % 30) AS dr FROM t)
+WHERE dr = 1
+----
 -- row_number without ORDER BY: which rows get which numbers is arbitrary, so
 -- the query checks how many rows each partition keeps, not their numbers.
 SELECT a, count(*) AS kept FROM (SELECT a, row_number() OVER (PARTITION BY a) AS rn FROM t) WHERE rn <= 2 GROUP BY a

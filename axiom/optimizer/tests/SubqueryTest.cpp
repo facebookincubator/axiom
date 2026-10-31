@@ -719,7 +719,7 @@ TEST_P(SubqueryTest, correlatedTopNPerOuter) {
     AXIOM_ASSERT_PLAN_V2(
         plan,
         matchScan("u")
-            .topNRowNumber({"y"}, {"z"}, 1)
+            .topNRowNumber({"y"}, {"z"}, 1, /*rankColumn=*/false)
             .project()
             .hashJoinRight(matchScan("t"), {.keys = {{"y = b"}}})
             .build());
@@ -760,7 +760,8 @@ TEST_P(SubqueryTest, correlatedTopNPerOuter) {
             .hashJoinInner(
                 matchScan("u")
                     .singleAggregation({"y", "x"}, {"sum(z) as total"})
-                    .topNRowNumber({"y"}, {"total DESC"}, 2),
+                    .topNRowNumber(
+                        {"y"}, {"total DESC"}, 2, /*rankColumn=*/false),
                 {.keys = {{"b = y"}}})
             .build());
   }

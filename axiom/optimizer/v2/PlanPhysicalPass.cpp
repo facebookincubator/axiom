@@ -2131,19 +2131,30 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     return distributeAggregate(node, rewrite(node->input(), context));
   }
 
+  // Returns 'input' read grouped when that co-locates 'keys' across tasks, and
+  // whether a remote exchange must still co-locate them.
+  std::pair<NodeCP, bool> coLocateByGroupedRead(
+      NodeCP input,
+      const ExprVector& keys) {
+    if (numWorkers_ == 1 || !needsShuffle(input, keys)) {
+      return {input, false};
+    }
+    if (NodeCP grouped = groupedRead(input, keys, Alignment::kCoLocated)) {
+      return {grouped, false};
+    }
+    return {input, true};
+  }
+
   // Distributes 'node' over 'input', its physically planned input.
   NodeCP distributeAggregate(const Aggregate* node, NodeCP input) {
     if (isSplittableAggregate(node)) {
       // Remote two-stage: the input must shuffle across workers to co-locate
       // its groups, so the partial reduces rows before that remote exchange.
-      if (numWorkers_ > 1 && needsShuffle(input, node->groupingKeys())) {
-        // Reading the input grouped co-locates the groups without a shuffle.
-        if (NodeCP grouped = groupedRead(
-                input, node->groupingKeys(), Alignment::kCoLocated)) {
-          input = grouped;
-        } else {
-          return rewriteAggregateSplit(node, input, /*remoteExchange=*/true);
-        }
+      bool needsRemoteExchange{false};
+      std::tie(input, needsRemoteExchange) =
+          coLocateByGroupedRead(input, node->groupingKeys());
+      if (needsRemoteExchange) {
+        return rewriteAggregateSplit(node, input, /*remoteExchange=*/true);
       }
       // A single stage is safe when input properties already prove each group
       // stays on one driver.
@@ -2427,26 +2438,46 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
          outputFollowingInput(node, input)});
   }
 
-  // Distributes a per-partition top-n (row_number / rank): like a window, its
-  // input must be partitioned on the PARTITION BY keys (gather when none).
+  // Distributes a per-partition top-n (row_number / rank): its input must be
+  // partitioned on the PARTITION BY keys (gather when none). The rows each
+  // driver ranks within the limit among its own rows still hold a top-n of the
+  // whole partition: for rank and dense_rank, every row within the limit is
+  // within it among its driver's rows, and row_number keeps a valid choice of
+  // tied rows. So when an exchange co-locates the keys, each driver first drops
+  // the rows outside its limit and the node runs as the final step.
   NodeCP rewriteTopNRowNumber(const TopNRowNumber* node, NoContext& context)
       override {
-    auto [input, partitionKeys] =
-        ensureCoLocated(rewrite(node->input(), context), node->partitionKeys());
-    std::tie(input, partitionKeys) =
-        ensureDriverCoLocated(input, partitionKeys);
-    if (input == node->input()) {
+    const auto& keys = node->partitionKeys();
+    auto [input, needsRemoteExchange] =
+        coLocateByGroupedRead(rewrite(node->input(), context), keys);
+    const bool needsDriverExchange = numDrivers_ > 1 &&
+        !input->physicalProperties().coLocates(PropertyScope::kDriver, keys);
+    if (needsRemoteExchange || needsDriverExchange) {
+      input = builder().make<TopNRowNumber>(
+          {input,
+           node->rankFunction(),
+           keys,
+           node->orderKeys(),
+           node->orderTypes(),
+           node->limit(),
+           /*rankColumn=*/nullptr,
+           input->outputColumns()});
+    }
+    auto [coLocated, partitionKeys] = ensureCoLocated(input, keys);
+    std::tie(coLocated, partitionKeys) =
+        ensureDriverCoLocated(coLocated, partitionKeys);
+    if (coLocated == node->input()) {
       return node;
     }
     return builder().make<TopNRowNumber>(
-        {input,
+        {coLocated,
          node->rankFunction(),
          partitionKeys,
          node->orderKeys(),
          node->orderTypes(),
          node->limit(),
          node->rankColumn(),
-         outputFollowingInput(node, input)});
+         outputFollowingInput(node, coLocated)});
   }
 
   // Distributes a global ORDER BY at both scopes. Multiple drivers sort in

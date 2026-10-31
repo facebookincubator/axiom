@@ -2174,18 +2174,20 @@ class RowNumberMatcher : public PlanMatcherImpl<RowNumberNode> {
 };
 
 // Matches a TopNRowNumberNode and verifies partition keys, sorting keys and
-// their orders, and limit.
+// their orders, limit, and whether it outputs its ranking column.
 class TopNRowNumberMatcher : public PlanMatcherImpl<TopNRowNumberNode> {
  public:
   TopNRowNumberMatcher(
       const std::shared_ptr<PlanMatcher>& matcher,
       std::vector<std::string> partitionKeys,
       std::vector<std::string> sortingKeys,
-      int32_t limit)
+      int32_t limit,
+      bool rankColumn)
       : PlanMatcherImpl<TopNRowNumberNode>({matcher}),
         partitionKeys_{std::move(partitionKeys)},
         sortingKeys_{std::move(sortingKeys)},
-        limit_{limit} {}
+        limit_{limit},
+        rankColumn_{rankColumn} {}
 
   MatchResult matchDetails(
       const TopNRowNumberNode& plan,
@@ -2204,6 +2206,10 @@ class TopNRowNumberMatcher : public PlanMatcherImpl<TopNRowNumberNode> {
     EXPECT_EQ(plan.limit(), limit_) << "Limit mismatch";
     AXIOM_TEST_RETURN_IF_FAILURE
 
+    EXPECT_EQ(plan.generateRowNumber(), rankColumn_)
+        << "Ranking column mismatch";
+    AXIOM_TEST_RETURN_IF_FAILURE
+
     return MatchResult::success(symbols);
   }
 
@@ -2211,6 +2217,8 @@ class TopNRowNumberMatcher : public PlanMatcherImpl<TopNRowNumberNode> {
   const std::vector<std::string> partitionKeys_;
   const std::vector<std::string> sortingKeys_;
   const int32_t limit_;
+  // Whether the node outputs its ranking column.
+  const bool rankColumn_;
 };
 
 // Matches a TableWriteNode and verifies the names the connector receives the
@@ -3219,18 +3227,28 @@ PlanMatcherBuilder& PlanMatcherBuilder::rowNumber(
 
 PlanMatcherBuilder& PlanMatcherBuilder::topNRowNumber() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
-  matcher_ = std::make_shared<TopNRowNumberMatcher>(
-      matcher_, std::vector<std::string>{}, std::vector<std::string>{}, 0);
+  matcher_ = std::make_shared<PlanMatcherImpl<TopNRowNumberNode>>(matcher_);
   return *this;
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::topNRowNumber(
     const std::vector<std::string>& partitionKeys,
     const std::vector<std::string>& sortingKeys,
+    int32_t limit,
+    bool rankColumn) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<TopNRowNumberMatcher>(
+      matcher_, partitionKeys, sortingKeys, limit, rankColumn);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::partialTopNRowNumber(
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
     int32_t limit) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<TopNRowNumberMatcher>(
-      matcher_, partitionKeys, sortingKeys, limit);
+      matcher_, partitionKeys, sortingKeys, limit, /*rankColumn=*/false);
   return *this;
 }
 

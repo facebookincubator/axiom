@@ -1502,7 +1502,7 @@ TEST_P(JoinTest, coalescePropagation) {
             .hashJoinLeft(matchScan("u"), {.keys = {{"t_k = u_k"}}})
             .assignUniqueId("row_id")
             .hashJoinLeft(matchScan("v"), {.keys = {{"t_k = k"}}})
-            .topNRowNumber({"row_id"}, {"k"}, 2)
+            .topNRowNumber({"row_id"}, {"k"}, 2, /*rankColumn=*/false)
             .enforceDistinct({"row_id"})
             .project({"t_k", "k"})
             .build();

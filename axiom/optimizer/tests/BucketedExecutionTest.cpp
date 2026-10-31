@@ -813,20 +813,42 @@ TEST_P(BucketedExecutionTest, mixedJoinOneBucketedTwoNot) {
 
 TEST_P(BucketedExecutionTest, windowOnBucketKey) {
   addBucketedTable("w_orders", {"customer_id"}, 16);
-  auto plan = planDistributed(parseSelect(
-      "SELECT customer_id, amount, "
-      "row_number() OVER (PARTITION BY customer_id ORDER BY amount) AS rn "
-      "FROM w_orders"));
   // The window partitions by the bucket key, so each partition is already
   // whole on one task.
-  AXIOM_ASSERT_DISTRIBUTED_PLAN(
-      plan.plan,
-      matchScan("w_orders")
-          .localPartition({"customer_id"})
-          .window()
-          .fragment({.width = 4, .bucketedScans = 1})
-          .gather()
-          .build());
+  {
+    auto plan = planDistributed(parseSelect(
+        "SELECT customer_id, amount, "
+        "row_number() OVER (PARTITION BY customer_id ORDER BY amount) AS rn "
+        "FROM w_orders"));
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchScan("w_orders")
+            .localPartition({"customer_id"})
+            .window()
+            .fragment({.width = 4, .bucketedScans = 1})
+            .gather()
+            .build());
+  }
+
+  // A bounded ranking needs no shuffle either. Each driver keeps its top rows
+  // per partition before the exchange that co-locates them across drivers.
+  {
+    auto plan = planDistributed(parseSelect(
+        "SELECT * FROM ("
+        "  SELECT customer_id, amount, "
+        "    row_number() OVER (PARTITION BY customer_id ORDER BY amount) AS rn "
+        "  FROM w_orders"
+        ") WHERE rn <= 2"));
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        plan.plan,
+        matchScan("w_orders")
+            .partialTopNRowNumber({"customer_id"}, {"amount"}, 2)
+            .localPartition({"customer_id"})
+            .topNRowNumber({"customer_id"}, {"amount"}, 2)
+            .fragment({.width = 4, .bucketedScans = 1})
+            .gather()
+            .build());
+  }
 }
 
 TEST_P(BucketedExecutionTest, threeWayCoBucketed) {

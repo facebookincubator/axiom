@@ -1020,14 +1020,24 @@ class PlanMatcherBuilder {
   PlanMatcherBuilder& topNRowNumber();
 
   /// Matches a TopNRowNumber node with the specified partition keys, sorting
-  /// keys, and limit.
+  /// keys, and limit, and whether it outputs its ranking column.
   /// @param partitionKeys Expected partition key column names.
   /// @param sortingKeys List of sort keys (e.g., {"a ASC", "b DESC"}). Parsed
   /// by the DuckDB SQL parser: an omitted direction defaults to `ASC` and an
   /// omitted null ordering to `NULLS LAST`. So "c" means "c ASC NULLS LAST" and
   /// "c DESC" means "c DESC NULLS LAST".
   /// @param limit Expected per-partition row limit.
+  /// @param rankColumn Whether the node outputs its ranking column. A final
+  /// node omits it when no later node reads it.
   PlanMatcherBuilder& topNRowNumber(
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& sortingKeys,
+      int32_t limit,
+      bool rankColumn = true);
+
+  /// Matches a partial TopNRowNumber node: one with the specified partition
+  /// keys, sorting keys, and limit that outputs no ranking column.
+  PlanMatcherBuilder& partialTopNRowNumber(
       const std::vector<std::string>& partitionKeys,
       const std::vector<std::string>& sortingKeys,
       int32_t limit);
