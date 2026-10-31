@@ -461,7 +461,6 @@ class NodeRewriter {
         .maxIterations = node->maxIterations(),
         .failAtBound = node->failAtBound(),
         .mode = node->mode(),
-        .recursiveNumDrivers = node->recursiveNumDrivers(),
         .convergence = newConvergence,
     });
   }

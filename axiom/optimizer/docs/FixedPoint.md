@@ -179,7 +179,7 @@ yet — Translate introduces it.
 The IR tracks internal details that change over time.
 
 ```
-- FixedPoint[name=counter, maxIterations=1000, recursiveNumDrivers=unplanned] -> c01:INTEGER
+- FixedPoint[name=counter, maxIterations=1000] -> c01:INTEGER
   anchor:
   - Values -> c01:INTEGER
   step:
@@ -322,8 +322,11 @@ In pipeline order:
   ([GraphTable-repetition.md](GraphTable-repetition.md)).
 
 - **PlanPhysical** — plans the anchor with the query's workers, and the step
-  with one driver, recorded as `recursiveNumDrivers` (first version; see
-  [Follow-ups](#follow-ups)). With several workers it places the loop as
+  with the query's drivers per task. A step's driver-level planning adds the
+  local exchanges it needs, as for any subtree. Velox runs the last plan of a
+  `convergence` on one driver, so PlanPhysical plans that plan for one: the
+  whole `convergence` of a loop on one task or over a replicated state, and in
+  a partitioned loop the part after its gather. With several workers it places the loop as
   independent loops, as one partitioned loop, or with its state replicated on
   every worker — see [Distributed execution](#distributed-execution). A partitioned loop plans its
   `convergence` with the query's workers, split at a gather into per-worker
@@ -337,8 +340,9 @@ In pipeline order:
 
 - **Emit** — emits `ConvergenceConfig::whenDeltaEmpty(maxIterations)` for a
   fixed point without `convergence`: Velox stops on the row count of the delta
-  it already holds. Emit cuts the step at each `Exchange` on its path from the
-  `WorkingTable` into the next body plan, and the `convergence` the same way:
+  it already holds. Emit cuts the step at each `Exchange` between workers on its
+  path from the `WorkingTable` into the next body plan, and the `convergence`
+  the same way:
   the plans before its gather run on every worker, and the last one on worker
   0, which shares its answer (`ConvergenceConfig::globalVerdict`); the
   convergence of a loop on one task runs there
@@ -349,8 +353,9 @@ In pipeline order:
   first to read exactly one exchange, as its primary input. PlanPhysical placed
   every exchange, and Emit translates them. Emit declares the state append or
   replace as the fixed point's mode says, and emits each `WorkingTable` as its
-  own `StateSourceNode`. Emit gives the step one driver; the surrounding query
-  keeps its own parallelism.
+  own `StateSourceNode`. An exchange across the drivers of a task stays inside
+  its body plan as a `LocalPartition`. The runner gives each iteration's plans
+  the query's drivers per task (`FixedPointOptions::iterationMaxDrivers`).
 
   A fixed point's fragment takes its type from its anchor alone, since the step
   and the convergence run in sub-tasks of the anchor's tasks:
@@ -494,8 +499,6 @@ Each of these is rejected with a specific error.
   on columns the step passes through unchanged gives the same answer for a row
   and for every row derived from it, so it can also apply inside the anchor
   and the step.
-- **Parallelism inside an iteration.** Each task runs the step with one
-  driver. Running it with the task's drivers speeds up each iteration.
 - **Costing a loop's placement.** PlanPhysical partitions a loop by fixed
   rules, on the keys the step needs first. A cost model can weigh one shuffle
   per iteration against broadcasting a join input or gathering the anchor, and

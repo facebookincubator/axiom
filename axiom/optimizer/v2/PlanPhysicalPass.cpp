@@ -17,6 +17,7 @@
 #include "axiom/optimizer/v2/PlanPhysicalPass.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <numeric>
 #include <vector>
@@ -37,6 +38,7 @@
 #include "axiom/optimizer/v2/GroupedRead.h"
 #include "axiom/optimizer/v2/HypergraphBuilder.h"
 #include "axiom/optimizer/v2/JoinCluster.h"
+#include "axiom/optimizer/v2/JoinInputRewriter.h"
 #include "axiom/optimizer/v2/JoinPartitioning.h"
 #include "axiom/optimizer/v2/JoinTreeEmitter.h"
 #include "axiom/optimizer/v2/NodeRewriter.h"
@@ -785,9 +787,6 @@ bool satisfies(
   VELOX_UNREACHABLE();
 }
 
-// A fixed point's step runs on one driver per task.
-constexpr int32_t kRecursiveNumDrivers = 1;
-
 // How rows run on one task or several, with one driver per task or several.
 Placement placementOf(bool oneTask, bool oneDriverPerTask) {
   if (oneTask) {
@@ -844,6 +843,395 @@ class ExchangeProbeRewriter : public NodeRewriter<> {
   bool unswappable_{false};
 };
 
+// The cluster join planning orders under a join, and the joins it keeps as
+// leaves because the cluster reads values they produce.
+struct PlannedCluster {
+  CollectedJoinCluster collected;
+  folly::F14FastSet<const Join*> opaqueJoins;
+};
+
+// Returns the cluster join planning orders under 'join', or nullopt when it
+// plans 'join' with its inputs in written order. 'stopAtStateFree' carries the
+// meaning it has in `ClusterCollector`.
+std::optional<PlannedCluster>
+planCluster(const Join* join, bool syntacticJoinOrder, bool stopAtStateFree) {
+  if (syntacticJoinOrder || !isClusterable(join)) {
+    return std::nullopt;
+  }
+  CollectedJoinCluster collected = collectJoinCluster(
+      join,
+      /*dissolveCrossJoins=*/true,
+      /*opaqueJoins=*/{},
+      stopAtStateFree);
+  if (collected.cluster.joins.empty()) {
+    return std::nullopt;
+  }
+  folly::F14FastSet<const Join*> opaqueJoins =
+      valueProducersReadInCluster(collected.cluster);
+  if (!opaqueJoins.empty()) {
+    collected = collectJoinCluster(
+        join, /*dissolveCrossJoins=*/true, opaqueJoins, stopAtStateFree);
+  }
+  // A RelationSet holds `kMaxRelations` relations, so a larger cluster has no
+  // hypergraph to enumerate over. Join planning keeps the join tree and plans
+  // what is below it again, so joins come off the top until the rest fits.
+  if (!collected.fitsRelationSet()) {
+    return std::nullopt;
+  }
+  return PlannedCluster{std::move(collected), std::move(opaqueJoins)};
+}
+
+// Returns every expression an aggregation evaluates over its input rows: the
+// grouping keys, and each aggregate's arguments, FILTER and ORDER BY keys.
+ExprVector aggregateExpressions(const Aggregate& aggregate) {
+  ExprVector expressions = aggregate.groupingKeys();
+  for (const auto* call : aggregate.aggregates()) {
+    appendAll(expressions, call->args());
+    if (call->condition() != nullptr) {
+      expressions.push_back(call->condition());
+    }
+    appendAll(expressions, call->orderKeys());
+  }
+  return expressions;
+}
+
+// True when 'node' is a join, or a Filter or Unnest over one.
+bool startsJoins(NodeCP node) {
+  while (node->is(NodeType::kFilter) || node->is(NodeType::kUnnest)) {
+    node = node->is(NodeType::kFilter) ? node->as<Filter>()->input()
+                                       : node->as<Unnest>()->input();
+  }
+  return node->is(NodeType::kJoin);
+}
+
+// True when 'join' outputs each column of 'side' it passes on under the
+// column's own identity.
+bool passesThrough(const Join& join, NodeCP side) {
+  const auto sideColumns = PlanObjectSet::fromObjects(side->outputColumns());
+  for (size_t i = 0; i < join.outputColumns().size(); ++i) {
+    if (sideColumns.contains(join.sourceColumns()[i]) &&
+        join.outputColumns()[i] != join.sourceColumns()[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// True when the walk over the relations of a join tree enters 'side' of
+// 'join': the join preserves the side and outputs its columns unchanged.
+bool entersSide(const Join& join, NodeCP side) {
+  const Join::Sides preserved = Join::preservedSides(join.joinType());
+  const bool preservesSide =
+      side == join.left() ? preserved.left : preserved.right;
+  return preservesSide && passesThrough(join, side);
+}
+
+// Computes the parts of a consumer's expressions that read a single relation
+// of the join tree below the consumer at that relation, when the relation has
+// fewer rows than the tree's output, so each part runs once per row of the
+// relation.
+//
+//   SELECT t_k + array_max(a) * 2
+//   FROM t, (SELECT array_agg(u_k) AS a FROM u), v
+//
+//   Project t_k + array_max(a) * 2       Project t_k + m
+//     Join                                 Join
+//       Join                                 Join
+//         Scan t                    ->         Scan t
+//         Aggregate a                          Project m := array_max(a) * 2
+//       Scan v                                   Aggregate a
+//                                            Scan v
+//
+// The relations are those join planning orders, from `planCluster`: the
+// leaves of the cluster it plans for a join, or the inputs of a join it plans
+// in written order. A relation that is itself planned as a join, alone or
+// under a Filter or Unnest, contributes the relations it is planned with. A
+// Project over a relation leaves every join in place, so join planning orders
+// the same relations as before. Only relations that every join above
+// preserves, and whose columns it passes on unchanged, take parts: their
+// columns reach the consumer as they produce them. `JoinInputRewriter` decides
+// which parts move, and moves only those that do not widen the data.
+class SmallRelationExpressions {
+ public:
+  // 'syntacticJoinOrder' and 'stopAtStateFree' are what join planning plans
+  // with.
+  SmallRelationExpressions(
+      Builder& builder,
+      ExprSimplifier& simplifier,
+      EstimateProvider& estimateProvider,
+      bool syntacticJoinOrder,
+      bool stopAtStateFree)
+      : builder_{builder},
+        simplifier_{simplifier},
+        estimateProvider_{estimateProvider},
+        syntacticJoinOrder_{syntacticJoinOrder},
+        stopAtStateFree_{stopAtStateFree} {}
+
+  // Returns 'input' with the parts of 'exprs' that read only a small relation
+  // computed at that relation, and every node above it passing on what the
+  // consumer then reads, and sets 'moved' to the column each part became.
+  // 'exprs' are what the consumer evaluates over 'input'. Returns 'input'
+  // unchanged, with 'moved' empty, when nothing moves.
+  NodeCP
+  rewrite(NodeCP input, const ExprVector& exprs, PlanSubstitutions& moved) {
+    if (!startsJoins(input)) {
+      return input;
+    }
+    std::vector<NodeCP> relations;
+    collectRelations(input, relations);
+    const std::optional<float> outputRows =
+        estimateProvider_.estimate(input).cardinality;
+    std::vector<NodeCP> small;
+    for (NodeCP relation : relations) {
+      if (hasFewerRows(relation, outputRows)) {
+        small.push_back(relation);
+      }
+    }
+    if (small.empty()) {
+      return input;
+    }
+
+    // An F14NodeMap keeps each value in place, so the rewriter's pointers into
+    // it stay valid.
+    Precomputes precomputes;
+    std::vector<JoinInputRewriter::Input> inputs;
+    for (NodeCP relation : small) {
+      auto& precompute =
+          precomputes
+              .try_emplace(
+                  relation,
+                  PrecomputeProjections{
+                      relation,
+                      builder_,
+                      simplifier_,
+                      /*projectAllInputs=*/false},
+                  PlanObjectSet::fromObjects(relation->outputColumns()))
+              .first->second;
+      inputs.push_back({&precompute.projections, &precompute.columns});
+    }
+    JoinInputRewriter rewriter{std::move(inputs), builder_};
+    rewriter.moveOnlyNarrowing();
+    const ExprVector rewritten = rewriter.rewrite(exprs);
+    if (rewriter.moved().empty()) {
+      return input;
+    }
+
+    PlanObjectSet needed;
+    needed.unionColumns(rewritten);
+    moved = rewriter.moved();
+    return rebuild(input, needed, precomputes, rewriter);
+  }
+
+ private:
+  // A small relation's projection and the columns the relation outputs.
+  struct Precompute {
+    PrecomputeProjections projections;
+    PlanObjectSet columns;
+  };
+
+  using Precomputes = folly::F14NodeMap<NodeCP, Precompute>;
+
+  // Appends to 'relations' the relations join planning plans 'node' with, and
+  // adds to 'path_' each node between 'node' and them.
+  void collectRelations(NodeCP node, std::vector<NodeCP>& relations) {
+    if ((stopAtStateFree_ && node->requiredStates().empty()) ||
+        !startsJoins(node)) {
+      relations.push_back(node);
+      return;
+    }
+    path_.insert(node);
+    if (!node->is(NodeType::kJoin)) {
+      collectRelations(singleInput(node), relations);
+      return;
+    }
+    const auto* join = node->as<Join>();
+    std::optional<PlannedCluster> planned =
+        planCluster(join, syntacticJoinOrder_, stopAtStateFree_);
+    if (!planned.has_value()) {
+      for (NodeCP side : {join->left(), join->right()}) {
+        if (entersSide(*join, side)) {
+          collectRelations(side, relations);
+        }
+      }
+      return;
+    }
+    const folly::F14FastSet<NodeCP> leaves{
+        planned->collected.cluster.leaves.begin(),
+        planned->collected.cluster.leaves.end()};
+    collectClusterRelations(join, leaves, relations);
+  }
+
+  // Walks the part of a cluster below 'node', which every node of the cluster
+  // that is not one of its 'leaves' is: a join, a Filter or an Unnest.
+  void collectClusterRelations(
+      NodeCP node,
+      const folly::F14FastSet<NodeCP>& leaves,
+      std::vector<NodeCP>& relations) {
+    if (leaves.contains(node)) {
+      collectRelations(node, relations);
+      return;
+    }
+    path_.insert(node);
+    if (node->is(NodeType::kJoin)) {
+      const auto* join = node->as<Join>();
+      for (NodeCP side : {join->left(), join->right()}) {
+        if (entersSide(*join, side)) {
+          collectClusterRelations(side, leaves, relations);
+        }
+      }
+      return;
+    }
+    collectClusterRelations(singleInput(node), leaves, relations);
+  }
+
+  // The input of 'node', a Filter or an Unnest.
+  static NodeCP singleInput(NodeCP node) {
+    if (node->is(NodeType::kFilter)) {
+      return node->as<Filter>()->input();
+    }
+    VELOX_CHECK(node->is(NodeType::kUnnest));
+    return node->as<Unnest>()->input();
+  }
+
+  // True when 'relation' has fewer rows than 'outputRows', the rows of the
+  // tree over it, or has at most one row.
+  bool hasFewerRows(NodeCP relation, std::optional<float> outputRows) {
+    if (relation->atMostOneRow()) {
+      return true;
+    }
+    const std::optional<float> rows =
+        estimateProvider_.estimate(relation).cardinality;
+    return rows.has_value() && outputRows.has_value() && *rows < *outputRows;
+  }
+
+  // Returns 'node' outputting the columns in 'needed' that it produces, each
+  // small relation under it replaced by its projection. A small relation keeps
+  // the columns 'needed' reads from it.
+  NodeCP rebuild(
+      NodeCP node,
+      const PlanObjectSet& needed,
+      Precomputes& precomputes,
+      JoinInputRewriter& rewriter) {
+    if (const auto it = precomputes.find(node); it != precomputes.end()) {
+      for (ColumnCP column : node->outputColumns()) {
+        if (needed.contains(column)) {
+          rewriter.keep(column);
+        }
+      }
+      return std::move(it->second.projections).node();
+    }
+    if (!path_.contains(node)) {
+      return node;
+    }
+    if (node->is(NodeType::kJoin)) {
+      return rebuildJoin(node->as<Join>(), needed, precomputes, rewriter);
+    }
+    if (node->is(NodeType::kFilter)) {
+      const auto* filter = node->as<Filter>();
+      PlanObjectSet inputNeeded = needed;
+      inputNeeded.unionColumns(filter->predicates());
+      NodeCP input =
+          rebuild(filter->input(), inputNeeded, precomputes, rewriter);
+      return builder_.make<Filter>({input, filter->predicates()});
+    }
+    return rebuildUnnest(node->as<Unnest>(), needed, precomputes, rewriter);
+  }
+
+  NodeCP rebuildJoin(
+      const Join* join,
+      const PlanObjectSet& needed,
+      Precomputes& precomputes,
+      JoinInputRewriter& rewriter) {
+    PlanObjectSet inputNeeded = needed;
+    inputNeeded.unionColumns(join->leftKeys());
+    inputNeeded.unionColumns(join->rightKeys());
+    inputNeeded.unionColumns(join->filter());
+    ColumnVector outputColumns;
+    ColumnVector sourceColumns;
+    for (size_t i = 0; i < join->outputColumns().size(); ++i) {
+      if (needed.contains(join->outputColumns()[i])) {
+        outputColumns.push_back(join->outputColumns()[i]);
+        sourceColumns.push_back(join->sourceColumns()[i]);
+        inputNeeded.add(join->sourceColumns()[i]);
+      }
+    }
+    std::array<NodeCP, 2> sides{join->left(), join->right()};
+    for (NodeCP& side : sides) {
+      side = rebuild(side, inputNeeded, precomputes, rewriter);
+    }
+    // The parts computed below reach the consumer through this join.
+    const auto outputs = PlanObjectSet::fromObjects(outputColumns);
+    for (NodeCP side : sides) {
+      for (ColumnCP column : side->outputColumns()) {
+        if (needed.contains(column) && !outputs.contains(column)) {
+          outputColumns.push_back(column);
+          sourceColumns.push_back(column);
+        }
+      }
+    }
+    return builder_.make<Join>({
+        .left = sides[0],
+        .right = sides[1],
+        .joinType = join->joinType(),
+        .leftKeys = join->leftKeys(),
+        .rightKeys = join->rightKeys(),
+        .filter = join->filter(),
+        .nullAware = join->nullAware(),
+        .nullAsValue = join->nullAsValue(),
+        .outputColumns = std::move(outputColumns),
+        .sourceColumns = std::move(sourceColumns),
+        .buildIsLoopInvariant = join->buildIsLoopInvariant(),
+    });
+  }
+
+  NodeCP rebuildUnnest(
+      const Unnest* unnest,
+      const PlanObjectSet& needed,
+      Precomputes& precomputes,
+      JoinInputRewriter& rewriter) {
+    PlanObjectSet inputNeeded = needed;
+    inputNeeded.unionColumns(unnest->unnestExpressions());
+    NodeCP input = rebuild(unnest->input(), inputNeeded, precomputes, rewriter);
+    const auto replicated =
+        PlanObjectSet::fromObjects(unnest->replicatedColumns());
+    ColumnVector replicatedColumns;
+    ColumnVector outputColumns;
+    for (ColumnCP column : unnest->outputColumns()) {
+      if (!replicated.contains(column)) {
+        outputColumns.push_back(column);
+      } else if (needed.contains(column)) {
+        replicatedColumns.push_back(column);
+        outputColumns.push_back(column);
+      }
+    }
+    // The parts computed below reach the consumer through this unnest.
+    for (ColumnCP column : input->outputColumns()) {
+      if (needed.contains(column) && !replicated.contains(column)) {
+        replicatedColumns.push_back(column);
+        outputColumns.push_back(column);
+      }
+    }
+    return builder_.make<Unnest>({
+        .input = input,
+        .unnestExpressions = unnest->unnestExpressions(),
+        .replicatedColumns = std::move(replicatedColumns),
+        .unnestColumns = unnest->unnestColumns(),
+        .ordinalityColumn = unnest->ordinalityColumn(),
+        .markerColumn = unnest->markerColumn(),
+        .outputColumns = std::move(outputColumns),
+    });
+  }
+
+  Builder& builder_;
+  ExprSimplifier& simplifier_;
+  EstimateProvider& estimateProvider_;
+  const bool syntacticJoinOrder_;
+  const bool stopAtStateFree_;
+  // The nodes between the consumer's input and the relations, which pass the
+  // moved parts on.
+  folly::F14FastSet<NodeCP> path_;
+};
+
 class PhysicalPlanRewriter : public NodeRewriter<> {
  public:
   // 'oneTask' says whether the plan runs on one task. A fixed point's step
@@ -852,7 +1240,9 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   // set, plans each subtree that reads no recursive state: a fixed point's
   // step uses it to place such inputs where the loop needs them.
   // 'statePartitioning' says where a fixed point's state lives, which every
-  // read of the state in its step carries.
+  // read of the state in its step carries. 'gatherOntoOneDriver' puts the rows
+  // of each gather between workers on one driver: the gather starts the last
+  // plan of a fixed point's convergence, which Velox runs on one driver.
   PhysicalPlanRewriter(
       Builder& builder,
       ExprSimplifier& simplifier,
@@ -863,7 +1253,8 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       int32_t numDrivers,
       bool oneTask,
       std::function<NodeCP(NodeCP)> replicate = nullptr,
-      Partitioning statePartitioning = {})
+      Partitioning statePartitioning = {},
+      bool gatherOntoOneDriver = false)
       : NodeRewriter(builder),
         session_{session},
         options_{options},
@@ -872,6 +1263,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         oneTask_{oneTask},
         replicate_{std::move(replicate)},
         statePartitioning_{std::move(statePartitioning)},
+        gatherOntoOneDriver_{gatherOntoOneDriver},
         exprFactory_{builder},
         simplifier_{simplifier},
         estimateProvider_{estimateProvider} {}
@@ -894,12 +1286,25 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   }
 
   NodeCP rewriteProject(const Project* node, NoContext& context) override {
-    NodeCP input = rewrite(node->input(), context);
+    PlanSubstitutions moved;
+    NodeCP logicalInput =
+        SmallRelationExpressions{
+            builder(),
+            simplifier_,
+            estimateProvider_,
+            options_.syntacticJoinOrder,
+            /*stopAtStateFree=*/replicate_ != nullptr}
+            .rewrite(node->input(), node->exprs(), moved);
+    NodeCP input = rewrite(logicalInput, context);
     if (input == node->input()) {
       return node;
     }
     return PrecomputeProjections::makeProject(
-        input, node->exprs(), node->outputColumns(), builder(), simplifier_);
+        input,
+        moved.apply(node->exprs(), exprFactory_),
+        node->outputColumns(),
+        builder(),
+        simplifier_);
   }
 
  protected:
@@ -1002,8 +1407,6 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         anchor = ensureGathered(anchor);
       }
       const bool gathered = isGathered(anchor);
-      // The exchange feeds the step, which runs 'kRecursiveNumDrivers'
-      // drivers per task.
       replicate = [this, gathered](NodeCP input) {
         NodeCP planned = rewrite(input);
         // Inlined into the step, the input runs on the step's drivers but is
@@ -1014,32 +1417,44 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         return exchange(
             {planned,
              gathered ? Partitioning::gather(PropertyScope::kGlobal)
-                      : Partitioning::globalBroadcast()},
-            /*oneDriverPerTask=*/kRecursiveNumDrivers == 1);
+                      : Partitioning::globalBroadcast()});
       };
       if (gathered) {
         statePartitioning = Partitioning::gather(PropertyScope::kGlobal);
       }
     }
 
-    PhysicalPlanRewriter singleThreaded{
+    PhysicalPlanRewriter taskLocal{
         builder(),
         simplifier_,
         estimateProvider_,
         session_,
         options_,
         /*numWorkers=*/1,
-        /*numDrivers=*/kRecursiveNumDrivers,
+        numDrivers_,
         oneTask_,
-        std::move(replicate),
-        std::move(statePartitioning)};
-    NodeCP step = singleThreaded.rewrite(node->step());
-    NodeCP convergence = node->convergence() != nullptr
-        ? singleThreaded.rewrite(node->convergence())
-        : nullptr;
+        replicate,
+        statePartitioning};
+    NodeCP step = taskLocal.rewrite(node->step());
+    NodeCP convergence = nullptr;
+    if (node->convergence() != nullptr) {
+      // The convergence of a loop on one task is one plan, which Velox runs on
+      // one driver.
+      PhysicalPlanRewriter oneDriver{
+          builder(),
+          simplifier_,
+          estimateProvider_,
+          session_,
+          options_,
+          /*numWorkers=*/1,
+          /*numDrivers=*/1,
+          oneTask_,
+          std::move(replicate),
+          std::move(statePartitioning)};
+      convergence = oneDriver.rewrite(node->convergence());
+    }
     if (anchor == node->anchor() && step == node->step() &&
-        convergence == node->convergence() &&
-        node->recursiveNumDrivers() == kRecursiveNumDrivers) {
+        convergence == node->convergence()) {
       return node;
     }
     return builder().make<FixedPoint>({
@@ -1051,7 +1466,6 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         .maxIterations = node->maxIterations(),
         .failAtBound = node->failAtBound(),
         .mode = node->mode(),
-        .recursiveNumDrivers = kRecursiveNumDrivers,
         .convergence = convergence,
     });
   }
@@ -1082,6 +1496,9 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
 
     const bool keyedState = std::ranges::all_of(
         keys, [](ExprCP key) { return key->is(PlanType::kColumnExpr); });
+    const Partitioning statePartitioning = keyedState
+        ? Partitioning::hash(PropertyScope::kGlobal, keys)
+        : Partitioning{};
     PhysicalPlanRewriter partitioned{
         builder(),
         simplifier_,
@@ -1089,11 +1506,10 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         session_,
         options_,
         numWorkers_,
-        /*numDrivers=*/kRecursiveNumDrivers,
+        numDrivers_,
         oneTask_,
         [this](NodeCP input) { return rewrite(input); },
-        keyedState ? Partitioning::hash(PropertyScope::kGlobal, keys)
-                   : Partitioning{}};
+        statePartitioning};
     NodeCP step = partitioned.rewrite(node->step());
     if (keyedState) {
       step = ensurePartitionedOn(step, keysOver(step->outputColumns()));
@@ -1101,11 +1517,26 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     if (!movesStateByHash(step)) {
       return nullptr;
     }
+
     // The convergence is gathered, so the loop's workers stop on one answer.
+    // Velox gathers only in the last link of a convergence's chain, and runs
+    // the plan after it on one driver.
+    PhysicalPlanRewriter partitionedConvergence{
+        builder(),
+        simplifier_,
+        estimateProvider_,
+        session_,
+        options_,
+        numWorkers_,
+        numDrivers_,
+        oneTask_,
+        [this](NodeCP input) { return rewrite(input); },
+        statePartitioning,
+        /*gatherOntoOneDriver=*/true};
     ExchangeProbeRewriter probeRewriter{builder()};
     step = probeRewriter.rewrite(step);
-    NodeCP convergence =
-        probeRewriter.rewrite(ensureGathered(partitioned.rewrite(
+    NodeCP convergence = probeRewriter.rewrite(
+        partitionedConvergence.ensureGathered(partitionedConvergence.rewrite(
             node->convergence() != nullptr ? node->convergence()
                                            : emptyDeltaCheck(node))));
     if (probeRewriter.unswappable()) {
@@ -1121,7 +1552,6 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         .maxIterations = node->maxIterations(),
         .failAtBound = node->failAtBound(),
         .mode = node->mode(),
-        .recursiveNumDrivers = kRecursiveNumDrivers,
         .convergence = convergence,
     });
   }
@@ -1148,18 +1578,29 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         session_,
         options_,
         numWorkers_,
-        /*numDrivers=*/kRecursiveNumDrivers,
+        numDrivers_,
         oneTask_,
         [this](NodeCP input) { return rewrite(input); },
         Partitioning::globalBroadcast()};
     NodeCP step = replicated.rewrite(node->step());
     if (!step->physicalProperties().globalPartition.is(
             PartitionKind::kBroadcast)) {
-      step = exchange(
-          {step, Partitioning::globalBroadcast()},
-          /*oneDriverPerTask=*/kRecursiveNumDrivers == 1);
+      step = exchange({step, Partitioning::globalBroadcast()});
     }
-    NodeCP convergence = replicated.rewrite(
+    // A convergence that moves no state is one plan, which Velox runs on one
+    // driver.
+    PhysicalPlanRewriter oneDriver{
+        builder(),
+        simplifier_,
+        estimateProvider_,
+        session_,
+        options_,
+        numWorkers_,
+        /*numDrivers=*/1,
+        oneTask_,
+        [this](NodeCP input) { return rewrite(input); },
+        Partitioning::globalBroadcast()};
+    NodeCP convergence = oneDriver.rewrite(
         node->convergence() != nullptr ? node->convergence()
                                        : emptyDeltaCheck(node));
     if (!FixedPoint::movesState(step) || !broadcastsFit(step) ||
@@ -1181,22 +1622,22 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         .maxIterations = node->maxIterations(),
         .failAtBound = node->failAtBound(),
         .mode = node->mode(),
-        .recursiveNumDrivers = kRecursiveNumDrivers,
         .convergence = convergence,
     });
   }
 
   // Returns the bytes the step and the convergence of 'loop', a placed fixed
-  // point, move between workers in each iteration: each exchange of rows
-  // derived from the state moves its input's estimated size, once per worker
-  // for a broadcast. Exchanges of inputs that read no state run once and are
-  // left out. Unknown when an exchanged input's size is.
+  // point, move between workers in each iteration: each exchange between
+  // workers of rows derived from the state moves its input's estimated size,
+  // once per worker for a broadcast. Exchanges of inputs that read no state
+  // run once and are left out. Unknown when an exchanged input's size is.
   std::optional<float> bytesPerIteration(NodeCP loop) {
     std::optional<float> total = 0;
     std::function<void(NodeCP)> visit = [&](NodeCP node) {
       if (node->is(NodeType::kExchange)) {
         const auto* exchange = node->as<Exchange>();
-        if (!exchange->input()->requiredStates().empty()) {
+        if (!exchange->partitioning().isDriver() &&
+            !exchange->input()->requiredStates().empty()) {
           const auto size = estimatedSize(exchange->input());
           if (!size.has_value() || !total.has_value()) {
             total = std::nullopt;
@@ -1347,16 +1788,17 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     return false;
   }
 
-  // True when every exchange of 'node' that moves rows derived from the state
-  // is a standard hash repartition.
+  // True when every exchange between workers in 'node' that moves rows
+  // derived from the state is a standard hash repartition.
   static bool movesStateByHash(NodeCP node) {
     if (node->requiredStates().empty()) {
       return true;
     }
     if (node->is(NodeType::kExchange)) {
       const auto& partitioning = node->as<Exchange>()->partitioning();
-      if (!partitioning.is(PartitionKind::kPartitioned) ||
-          partitioning.partitionType != nullptr) {
+      if (!partitioning.isDriver() &&
+          (!partitioning.is(PartitionKind::kPartitioned) ||
+           partitioning.partitionType != nullptr)) {
         return false;
       }
     }
@@ -1641,34 +2083,14 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     if (options_.syntacticJoinOrder) {
       return makePhysicalJoin(rewriteJoinInputs(node, context));
     }
-    if (!isClusterable(node)) {
-      return rewriteFallbackJoin(node, context);
-    }
-
     const bool stopAtStateFree = replicate_ != nullptr;
-    CollectedJoinCluster collected = collectJoinCluster(
-        node,
-        /*dissolveCrossJoins=*/true,
-        /*opaqueJoins=*/{},
-        stopAtStateFree);
-    if (collected.cluster.joins.empty()) {
+    std::optional<PlannedCluster> planned =
+        planCluster(node, /*syntacticJoinOrder=*/false, stopAtStateFree);
+    if (!planned.has_value()) {
       return rewriteFallbackJoin(node, context);
     }
-
-    const folly::F14FastSet<const Join*> opaqueJoins =
-        valueProducersReadInCluster(collected.cluster);
-    if (!opaqueJoins.empty()) {
-      collected = collectJoinCluster(
-          node, /*dissolveCrossJoins=*/true, opaqueJoins, stopAtStateFree);
-    }
-
-    // A RelationSet holds `kMaxRelations` relations, so a larger cluster has
-    // no hypergraph to enumerate over. Keep this join tree and let the
-    // recursion re-examine what is below it: joins come off the top until the
-    // rest fits, and that part is enumerated under the usual budget.
-    if (!collected.fitsRelationSet()) {
-      return rewriteFallbackJoin(node, context);
-    }
+    CollectedJoinCluster& collected = planned->collected;
+    const folly::F14FastSet<const Join*>& opaqueJoins = planned->opaqueJoins;
 
     std::vector<NodeCP> rewrittenLeaves;
     auto buildGraph = [&]() {
@@ -1720,9 +2142,13 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     return builder().make<Exchange>(std::move(key));
   }
 
-  // An exchange by 'key' whose rows run this rewriter's drivers per task.
+  // An exchange by 'key' whose rows run this rewriter's drivers per task, or
+  // one driver after a gather between workers with 'gatherOntoOneDriver_'.
   NodeCP exchange(Exchange::Key key) {
-    return exchange(std::move(key), /*oneDriverPerTask=*/numDrivers_ == 1);
+    const bool oneDriverPerTask = numDrivers_ == 1 ||
+        (gatherOntoOneDriver_ && key.partitioning.isGlobal() &&
+         key.partitioning.is(PartitionKind::kGather));
+    return exchange(std::move(key), oneDriverPerTask);
   }
 
   // Remote exchanges that unconditionally establish a partitioning on 'input'.
@@ -2086,7 +2512,32 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   }
 
   NodeCP rewriteAggregate(const Aggregate* node, NoContext& context) override {
-    return distributeAggregate(node, rewrite(node->input(), context));
+    PlanSubstitutions moved;
+    NodeCP logicalInput =
+        SmallRelationExpressions{
+            builder(),
+            simplifier_,
+            estimateProvider_,
+            options_.syntacticJoinOrder,
+            /*stopAtStateFree=*/replicate_ != nullptr}
+            .rewrite(node->input(), aggregateExpressions(*node), moved);
+    if (moved.empty()) {
+      return distributeAggregate(node, rewrite(node->input(), context));
+    }
+    const auto* aggregate =
+        builder()
+            .make<Aggregate>({
+                .input = logicalInput,
+                .groupingKeys = moved.apply(node->groupingKeys(), exprFactory_),
+                .aggregates =
+                    moved.apply(node->aggregates(), exprFactory_, builder()),
+                .outputColumns = node->outputColumns(),
+                .step = node->step(),
+                .groupId = node->groupId(),
+                .globalGroupingSets = node->globalGroupingSets(),
+            })
+            ->as<Aggregate>();
+    return distributeAggregate(aggregate, rewrite(logicalInput, context));
   }
 
   // Distributes 'node' over 'input', its physically planned input.
@@ -2972,6 +3423,8 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   const bool oneTask_;
   const std::function<NodeCP(NodeCP)> replicate_;
   const Partitioning statePartitioning_;
+  // True when a gather between workers starts a plan that runs on one driver.
+  const bool gatherOntoOneDriver_;
   ExprFactory exprFactory_;
   ExprSimplifier& simplifier_;
 

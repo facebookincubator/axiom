@@ -511,6 +511,8 @@ const velox::exec::FixedPointOptions* LocalRunner::prepareFixedPointOptions() {
 
   fixedPointOptions_ = std::make_unique<velox::exec::FixedPointOptions>();
   if (!params_.serialExecution) {
+    fixedPointOptions_->iterationMaxDrivers =
+        plan_->options().maxLocalPartitions;
     fixedPointExecutor_ =
         std::make_unique<folly::CPUThreadPoolExecutor>(/*numThreads=*/1);
     fixedPointOptions_->orchestrationExecutor = fixedPointExecutor_.get();

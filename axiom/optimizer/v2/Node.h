@@ -213,6 +213,11 @@ class Node : public PlanObject {
   /// construction and immutable. Requires `!placed()`.
   const RelationalProperties& relationalProperties() const;
 
+  /// True when this node has at most one row: it has a unique key with no
+  /// columns. Reads the relational unique keys before placement and the
+  /// global ones after.
+  bool atMostOneRow() const;
+
   /// Inputs in dependency order; empty for leaves. Returns a view into
   /// node-owned storage; callers must not retain it past the node's
   /// lifetime.
@@ -2944,7 +2949,6 @@ AXIOM_DECLARE_ENUM_NAME(FixedPointMode);
 ///   `outputColumns`. In kAppend, it reads the state through one
 ///   `WorkingTable`.
 /// - `maxIterations` is at least one.
-/// - `recursiveNumDrivers`, when set by physical planning, is one.
 /// - When the step's `WorkingTable`s are gathered or hash-partitioned, `anchor`
 ///   and `step` arrive partitioned the same way, on their columns at the
 ///   positions of the state's keys. When they are replicated, `anchor` and
@@ -2975,10 +2979,6 @@ class FixedPoint : public Node {
     bool failAtBound{true};
     /// Whether the loop returns every iteration's rows or the last state.
     FixedPointMode mode{FixedPointMode::kAppend};
-    /// Driver width chosen by physical planning for the step.
-    /// Unset in logical IR; currently only one is valid, and emission requires
-    /// the physically planned value.
-    std::optional<int32_t> recursiveNumDrivers;
     /// Decides after each iteration whether the loop stops; null to stop once
     /// an iteration produces no rows.
     NodeCP convergence{nullptr};
@@ -3039,13 +3039,9 @@ class FixedPoint : public Node {
   /// `WorkingTable`s are replicated.
   bool replicatesState() const;
 
-  /// True when 'node' has an Exchange on its path from a read of recursive
-  /// state: the rows of the state move between workers.
+  /// True when 'node' has an Exchange between workers on its path from a read
+  /// of recursive state: the rows of the state move between workers.
   static bool movesState(NodeCP node);
-
-  std::optional<int32_t> recursiveNumDrivers() const {
-    return recursiveNumDrivers_;
-  }
 
   std::span<const NodeCP> inputs() const override {
     return inputs_;
@@ -3069,7 +3065,6 @@ class FixedPoint : public Node {
   const int32_t maxIterations_;
   const bool failAtBound_;
   const FixedPointMode mode_;
-  const std::optional<int32_t> recursiveNumDrivers_;
 };
 
 using FixedPointCP = const FixedPoint*;

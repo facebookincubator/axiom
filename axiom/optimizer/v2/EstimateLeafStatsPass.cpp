@@ -531,7 +531,6 @@ class EmptyScanSimplifier : public NodeRewriter<SimplifiedNodeContext> {
                 .maxIterations = node->maxIterations(),
                 .failAtBound = node->failAtBound(),
                 .mode = node->mode(),
-                .recursiveNumDrivers = node->recursiveNumDrivers(),
                 .convergence = node->convergence(),
             },
             std::move(anchor),

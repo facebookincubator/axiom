@@ -297,7 +297,8 @@ TEST_F(TpchPlanTest, q08) {
   // subtrees build, and the second nation (supplying the supplier's nation
   // name) joins last. part (`p_type`) and region (`r_name`) are filtered; the
   // selective part build reduces the lineitem fact scan at runtime via dynamic
-  // filtering.
+  // filtering. The second nation has 25 rows, so it evaluates the CASE's
+  // `n_name = 'BRAZIL'` once per nation instead of once per joined row.
   auto matcher =
       matchScan("supplier")
           .hashJoinInner(
@@ -316,7 +317,11 @@ TEST_F(TpchPlanTest, q08) {
                               matchScan("region")
                                   .filter("r_name = 'AMERICA'")
                                   .project({"r_regionkey"})))))
-          .hashJoinInner(matchScan("nation"))
+          .hashJoinInner(
+              matchScan("nation")
+                  .aliases({"supp_nationkey", "supp_nation"})
+                  .project(
+                      {"supp_nation = 'BRAZIL' as brazil", "supp_nationkey"}))
           .project()
           .aggregation()
           .orderBy()
