@@ -2271,12 +2271,6 @@ bool anyUniqueKey(NodeCP node, Predicate matches) {
   return std::ranges::any_of(node->relationalProperties().unique, matches);
 }
 
-// True when 'node' has at most one row: a unique key with no columns.
-bool atMostOneRow(NodeCP node) {
-  return anyUniqueKey(
-      node, [](const PlanObjectSet& unique) { return unique.empty(); });
-}
-
 // True when 'node' has at most one row for each value of 'keys': some unique
 // key is a subset of the column keys. Keys that are not columns only refine
 // the values, so they are ignored.
@@ -2294,6 +2288,11 @@ bool uniqueOn(NodeCP node, const ExprVector& keys) {
 }
 } // namespace
 
+bool Node::atMostOneRow() const {
+  return anyUniqueKey(
+      this, [](const PlanObjectSet& unique) { return unique.empty(); });
+}
+
 Join::Sides Join::emittedOnceSides(
     velox::core::JoinType joinType,
     NodeCP left,
@@ -2304,7 +2303,7 @@ Join::Sides Join::emittedOnceSides(
   // True when 'side' has at most one row for each value of 'keys'. A cross
   // join has no keys and matches every row of 'side'.
   const auto matchesAtMostOne = [](NodeCP side, const ExprVector& keys) {
-    return keys.empty() ? atMostOneRow(side) : uniqueOn(side, keys);
+    return keys.empty() ? side->atMostOneRow() : uniqueOn(side, keys);
   };
   switch (joinType) {
     case JoinType::kInner:

@@ -1176,7 +1176,9 @@ TEST_F(FixedPointTest, pageRank) {
                               .project()
                               .project()
                               .singleAggregation())
-                      .nestedLoopJoin(ranks().project().singleAggregation())
+                      .nestedLoopJoin(
+                          ranks().project().singleAggregation().project(
+                              {"dangling / 4.0"}))
                       .project())
               .converge(
                   ranks()
@@ -1222,7 +1224,8 @@ TEST_F(FixedPointTest, pageRank) {
                               .project()
                               .partialAggregation()
                               .localGather()
-                              .finalAggregation())
+                              .finalAggregation()
+                              .project({"dangling / 4.0"}))
                       .project())
               .convergeOnWorkerZero(
                   ranks()

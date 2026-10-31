@@ -755,6 +755,50 @@ SELECT t1.a, t2.a FROM t t1, t t2 WHERE if(t1.b > 0, true, 1000 / (150 - t2.b) >
 SELECT t1.b, t2.a FROM (VALUES (150), (100)) AS t1(b), (VALUES (1), (2)) AS t2(a)
 WHERE try(1000 / (150 - t1.b) > t2.a)
 ----
+-- An expression over a relation of one row, written above the join, has that
+-- relation's one value on every row.
+SELECT t1.a + s * 2 FROM t t1, (SELECT sum(b) AS s FROM t)
+----
+-- The same with the relation of one row under a second join.
+SELECT t1.a + s * 2 + t3.b FROM t t1, (SELECT sum(b) AS s FROM t), t t3
+----
+-- The same with the relation of one row inside a cross join of two
+-- aggregations, joined on a key.
+SELECT t1.a + s * 2
+FROM t t1
+JOIN (
+  SELECT s, m FROM (SELECT sum(b) AS s FROM t), (SELECT max(a) AS m FROM t)
+) ON t1.a = m
+----
+-- The same above a left join that the WHERE makes inner.
+SELECT t1.a + s * 2
+FROM t t1
+LEFT JOIN (SELECT sum(b) AS s FROM t) ON t1.a < s
+WHERE s > 0
+----
+-- The same in an aggregate's argument.
+SELECT sum(t1.a * (s + 1)) FROM t t1, (SELECT max(b) AS s FROM t)
+----
+-- An expression over a relation of one row is computed at that relation, where
+-- it runs even when the join returns no rows. 10 / s fails although no row of
+-- t1 has a > 5.
+-- count 0
+-- error_v2: division by zero
+SELECT t1.a + 10 / s FROM t t1, (SELECT min(b - 10 * a) AS s FROM t) WHERE t1.a > 5
+----
+-- A left join pads the rows it does not match with NULL, which the expression
+-- above it reads.
+SELECT t1.a, coalesce(s, -1) * 2
+FROM t t1
+LEFT JOIN (SELECT max(a) AS s FROM t) ON t1.a > 1
+----
+-- An array built from a relation of one row stays above the join, and a value
+-- computed from it moves there.
+-- duckdb: SELECT t1.a, t1.a BETWEEN 1 AND s, s
+--   FROM t t1, (SELECT max(a) AS s FROM t)
+SELECT t1.a, contains(sequence(1, s), t1.a), cardinality(sequence(1, s))
+FROM t t1, (SELECT max(a) AS s FROM t)
+----
 -- A self-join must enforce every equality after reordering.
 WITH ids (id) AS (VALUES (1)),
      labels (id, label) AS (VALUES (1, 'a'), (1, 'b')),

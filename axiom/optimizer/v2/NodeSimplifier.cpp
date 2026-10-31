@@ -20,7 +20,7 @@
 
 #include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/v2/AppendAll.h"
-#include "axiom/optimizer/v2/JoinFilterRewriter.h"
+#include "axiom/optimizer/v2/JoinInputRewriter.h"
 #include "axiom/optimizer/v2/NonNullOutput.h"
 #include "axiom/optimizer/v2/PrecomputeProjections.h"
 #include "axiom/optimizer/v2/RedundantKeys.h"
@@ -1375,8 +1375,9 @@ void NodeSimplifier::precomputeCrossJoinFilter(
     }
   }
 
-  JoinFilterRewriter rewriter{
-      leftPrecompute, rightPrecompute, leftColumns, rightColumns, builder_};
+  JoinInputRewriter rewriter{
+      {{&leftPrecompute, &leftColumns}, {&rightPrecompute, &rightColumns}},
+      builder_};
   filter = rewriter.rewrite(filter);
   left = std::move(leftPrecompute).node();
   right = std::move(rightPrecompute).node();

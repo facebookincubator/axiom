@@ -213,6 +213,11 @@ class Node : public PlanObject {
   /// construction and immutable. Requires `!placed()`.
   const RelationalProperties& relationalProperties() const;
 
+  /// True when this node has at most one row: it has a unique key with no
+  /// columns. Reads the relational unique keys before placement and the
+  /// global ones after.
+  bool atMostOneRow() const;
+
   /// Inputs in dependency order; empty for leaves. Returns a view into
   /// node-owned storage; callers must not retain it past the node's
   /// lifetime.
