@@ -405,7 +405,7 @@ std::optional<ExprApi> GraphMatchBuilder::parse(std::string_view sql) const {
     return std::nullopt;
   }
   return ExprApi(
-      builder_.sqlParser_->parseScalarOrWindowExpr(std::string(sql)));
+      builder_.context_.sqlParser->parseScalarOrWindowExpr(std::string(sql)));
 }
 
 ExprPtr GraphMatchBuilder::resolve(
