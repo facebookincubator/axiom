@@ -4304,16 +4304,12 @@ FixedPoint::FixedPoint(const Key& key)
       sourceColumns_(key.sourceColumns),
       maxIterations_(key.maxIterations),
       failAtBound_(key.failAtBound),
-      mode_(key.mode),
-      recursiveNumDrivers_(key.recursiveNumDrivers) {
+      mode_(key.mode) {
   VELOX_CHECK_NOT_NULL(name_);
   VELOX_CHECK(
       !outputColumns().empty(), "FixedPoint must have an output column");
   VELOX_CHECK_GE(
       maxIterations_, 1, "FixedPoint maxIterations must be at least one");
-  VELOX_CHECK(
-      !recursiveNumDrivers_.has_value() || *recursiveNumDrivers_ == 1,
-      "FixedPoint recursiveNumDrivers must be one when set");
   VELOX_CHECK(
       inputs_[0]->requiredStates().empty(),
       "FixedPoint anchor must not read its working table");
@@ -4373,7 +4369,9 @@ bool FixedPoint::movesState(NodeCP node) {
   if (node->requiredStates().empty()) {
     return false;
   }
-  return node->is(NodeType::kExchange) ||
+  // An exchange across the drivers of a task moves no rows between workers.
+  return (node->is(NodeType::kExchange) &&
+          !node->as<Exchange>()->partitioning().isDriver()) ||
       std::ranges::any_of(node->inputs(), movesState);
 }
 
@@ -4393,8 +4391,6 @@ size_t FixedPoint::KeyHash::operator()(const FixedPoint* node) const {
       node->maxIterations(),
       node->failAtBound(),
       node->mode(),
-      node->recursiveNumDrivers().has_value(),
-      node->recursiveNumDrivers().value_or(0),
       node->convergence());
 }
 
@@ -4408,8 +4404,6 @@ size_t FixedPoint::KeyHash::operator()(const Key& key) const {
       key.maxIterations,
       key.failAtBound,
       key.mode,
-      key.recursiveNumDrivers.has_value(),
-      key.recursiveNumDrivers.value_or(0),
       key.convergence);
 }
 
@@ -4423,7 +4417,6 @@ bool FixedPoint::KeyEq::operator()(
       left->maxIterations() == right->maxIterations() &&
       left->failAtBound() == right->failAtBound() &&
       left->mode() == right->mode() &&
-      left->recursiveNumDrivers() == right->recursiveNumDrivers() &&
       left->convergence() == right->convergence();
 }
 
@@ -4434,7 +4427,6 @@ bool FixedPoint::KeyEq::operator()(const Key& key, const FixedPoint* node)
       key.sourceColumns == node->sourceColumns() &&
       key.maxIterations == node->maxIterations() &&
       key.failAtBound == node->failAtBound() && key.mode == node->mode() &&
-      key.recursiveNumDrivers == node->recursiveNumDrivers() &&
       key.convergence == node->convergence();
 }
 

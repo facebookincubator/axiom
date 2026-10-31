@@ -785,9 +785,6 @@ bool satisfies(
   VELOX_UNREACHABLE();
 }
 
-// A fixed point's step runs on one driver per task.
-constexpr int32_t kRecursiveNumDrivers = 1;
-
 // How rows run on one task or several, with one driver per task or several.
 Placement placementOf(bool oneTask, bool oneDriverPerTask) {
   if (oneTask) {
@@ -852,7 +849,9 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   // set, plans each subtree that reads no recursive state: a fixed point's
   // step uses it to place such inputs where the loop needs them.
   // 'statePartitioning' says where a fixed point's state lives, which every
-  // read of the state in its step carries.
+  // read of the state in its step carries. 'gatherOntoOneDriver' puts the rows
+  // of each gather between workers on one driver: the gather starts the last
+  // plan of a fixed point's convergence, which Velox runs on one driver.
   PhysicalPlanRewriter(
       Builder& builder,
       ExprSimplifier& simplifier,
@@ -863,7 +862,8 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       int32_t numDrivers,
       bool oneTask,
       std::function<NodeCP(NodeCP)> replicate = nullptr,
-      Partitioning statePartitioning = {})
+      Partitioning statePartitioning = {},
+      bool gatherOntoOneDriver = false)
       : NodeRewriter(builder),
         session_{session},
         options_{options},
@@ -872,6 +872,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         oneTask_{oneTask},
         replicate_{std::move(replicate)},
         statePartitioning_{std::move(statePartitioning)},
+        gatherOntoOneDriver_{gatherOntoOneDriver},
         exprFactory_{builder},
         simplifier_{simplifier},
         estimateProvider_{estimateProvider} {}
@@ -1002,8 +1003,6 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         anchor = ensureGathered(anchor);
       }
       const bool gathered = isGathered(anchor);
-      // The exchange feeds the step, which runs 'kRecursiveNumDrivers'
-      // drivers per task.
       replicate = [this, gathered](NodeCP input) {
         NodeCP planned = rewrite(input);
         // Inlined into the step, the input runs on the step's drivers but is
@@ -1014,32 +1013,44 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         return exchange(
             {planned,
              gathered ? Partitioning::gather(PropertyScope::kGlobal)
-                      : Partitioning::globalBroadcast()},
-            /*oneDriverPerTask=*/kRecursiveNumDrivers == 1);
+                      : Partitioning::globalBroadcast()});
       };
       if (gathered) {
         statePartitioning = Partitioning::gather(PropertyScope::kGlobal);
       }
     }
 
-    PhysicalPlanRewriter singleThreaded{
+    PhysicalPlanRewriter taskLocal{
         builder(),
         simplifier_,
         estimateProvider_,
         session_,
         options_,
         /*numWorkers=*/1,
-        /*numDrivers=*/kRecursiveNumDrivers,
+        numDrivers_,
         oneTask_,
-        std::move(replicate),
-        std::move(statePartitioning)};
-    NodeCP step = singleThreaded.rewrite(node->step());
-    NodeCP convergence = node->convergence() != nullptr
-        ? singleThreaded.rewrite(node->convergence())
-        : nullptr;
+        replicate,
+        statePartitioning};
+    NodeCP step = taskLocal.rewrite(node->step());
+    NodeCP convergence = nullptr;
+    if (node->convergence() != nullptr) {
+      // The convergence of a loop on one task is one plan, which Velox runs on
+      // one driver.
+      PhysicalPlanRewriter oneDriver{
+          builder(),
+          simplifier_,
+          estimateProvider_,
+          session_,
+          options_,
+          /*numWorkers=*/1,
+          /*numDrivers=*/1,
+          oneTask_,
+          std::move(replicate),
+          std::move(statePartitioning)};
+      convergence = oneDriver.rewrite(node->convergence());
+    }
     if (anchor == node->anchor() && step == node->step() &&
-        convergence == node->convergence() &&
-        node->recursiveNumDrivers() == kRecursiveNumDrivers) {
+        convergence == node->convergence()) {
       return node;
     }
     return builder().make<FixedPoint>({
@@ -1051,7 +1062,6 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         .maxIterations = node->maxIterations(),
         .failAtBound = node->failAtBound(),
         .mode = node->mode(),
-        .recursiveNumDrivers = kRecursiveNumDrivers,
         .convergence = convergence,
     });
   }
@@ -1082,6 +1092,9 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
 
     const bool keyedState = std::ranges::all_of(
         keys, [](ExprCP key) { return key->is(PlanType::kColumnExpr); });
+    const Partitioning statePartitioning = keyedState
+        ? Partitioning::hash(PropertyScope::kGlobal, keys)
+        : Partitioning{};
     PhysicalPlanRewriter partitioned{
         builder(),
         simplifier_,
@@ -1089,11 +1102,10 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         session_,
         options_,
         numWorkers_,
-        /*numDrivers=*/kRecursiveNumDrivers,
+        numDrivers_,
         oneTask_,
         [this](NodeCP input) { return rewrite(input); },
-        keyedState ? Partitioning::hash(PropertyScope::kGlobal, keys)
-                   : Partitioning{}};
+        statePartitioning};
     NodeCP step = partitioned.rewrite(node->step());
     if (keyedState) {
       step = ensurePartitionedOn(step, keysOver(step->outputColumns()));
@@ -1101,11 +1113,26 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     if (!movesStateByHash(step)) {
       return nullptr;
     }
+
     // The convergence is gathered, so the loop's workers stop on one answer.
+    // Velox gathers only in the last link of a convergence's chain, and runs
+    // the plan after it on one driver.
+    PhysicalPlanRewriter partitionedConvergence{
+        builder(),
+        simplifier_,
+        estimateProvider_,
+        session_,
+        options_,
+        numWorkers_,
+        numDrivers_,
+        oneTask_,
+        [this](NodeCP input) { return rewrite(input); },
+        statePartitioning,
+        /*gatherOntoOneDriver=*/true};
     ExchangeProbeRewriter probeRewriter{builder()};
     step = probeRewriter.rewrite(step);
-    NodeCP convergence =
-        probeRewriter.rewrite(ensureGathered(partitioned.rewrite(
+    NodeCP convergence = probeRewriter.rewrite(
+        partitionedConvergence.ensureGathered(partitionedConvergence.rewrite(
             node->convergence() != nullptr ? node->convergence()
                                            : emptyDeltaCheck(node))));
     if (probeRewriter.unswappable()) {
@@ -1121,7 +1148,6 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         .maxIterations = node->maxIterations(),
         .failAtBound = node->failAtBound(),
         .mode = node->mode(),
-        .recursiveNumDrivers = kRecursiveNumDrivers,
         .convergence = convergence,
     });
   }
@@ -1148,18 +1174,29 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         session_,
         options_,
         numWorkers_,
-        /*numDrivers=*/kRecursiveNumDrivers,
+        numDrivers_,
         oneTask_,
         [this](NodeCP input) { return rewrite(input); },
         Partitioning::globalBroadcast()};
     NodeCP step = replicated.rewrite(node->step());
     if (!step->physicalProperties().globalPartition.is(
             PartitionKind::kBroadcast)) {
-      step = exchange(
-          {step, Partitioning::globalBroadcast()},
-          /*oneDriverPerTask=*/kRecursiveNumDrivers == 1);
+      step = exchange({step, Partitioning::globalBroadcast()});
     }
-    NodeCP convergence = replicated.rewrite(
+    // A convergence that moves no state is one plan, which Velox runs on one
+    // driver.
+    PhysicalPlanRewriter oneDriver{
+        builder(),
+        simplifier_,
+        estimateProvider_,
+        session_,
+        options_,
+        numWorkers_,
+        /*numDrivers=*/1,
+        oneTask_,
+        [this](NodeCP input) { return rewrite(input); },
+        Partitioning::globalBroadcast()};
+    NodeCP convergence = oneDriver.rewrite(
         node->convergence() != nullptr ? node->convergence()
                                        : emptyDeltaCheck(node));
     if (!FixedPoint::movesState(step) || !broadcastsFit(step) ||
@@ -1181,22 +1218,22 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         .maxIterations = node->maxIterations(),
         .failAtBound = node->failAtBound(),
         .mode = node->mode(),
-        .recursiveNumDrivers = kRecursiveNumDrivers,
         .convergence = convergence,
     });
   }
 
   // Returns the bytes the step and the convergence of 'loop', a placed fixed
-  // point, move between workers in each iteration: each exchange of rows
-  // derived from the state moves its input's estimated size, once per worker
-  // for a broadcast. Exchanges of inputs that read no state run once and are
-  // left out. Unknown when an exchanged input's size is.
+  // point, move between workers in each iteration: each exchange between
+  // workers of rows derived from the state moves its input's estimated size,
+  // once per worker for a broadcast. Exchanges of inputs that read no state
+  // run once and are left out. Unknown when an exchanged input's size is.
   std::optional<float> bytesPerIteration(NodeCP loop) {
     std::optional<float> total = 0;
     std::function<void(NodeCP)> visit = [&](NodeCP node) {
       if (node->is(NodeType::kExchange)) {
         const auto* exchange = node->as<Exchange>();
-        if (!exchange->input()->requiredStates().empty()) {
+        if (!exchange->partitioning().isDriver() &&
+            !exchange->input()->requiredStates().empty()) {
           const auto size = estimatedSize(exchange->input());
           if (!size.has_value() || !total.has_value()) {
             total = std::nullopt;
@@ -1347,16 +1384,17 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     return false;
   }
 
-  // True when every exchange of 'node' that moves rows derived from the state
-  // is a standard hash repartition.
+  // True when every exchange between workers in 'node' that moves rows
+  // derived from the state is a standard hash repartition.
   static bool movesStateByHash(NodeCP node) {
     if (node->requiredStates().empty()) {
       return true;
     }
     if (node->is(NodeType::kExchange)) {
       const auto& partitioning = node->as<Exchange>()->partitioning();
-      if (!partitioning.is(PartitionKind::kPartitioned) ||
-          partitioning.partitionType != nullptr) {
+      if (!partitioning.isDriver() &&
+          (!partitioning.is(PartitionKind::kPartitioned) ||
+           partitioning.partitionType != nullptr)) {
         return false;
       }
     }
@@ -1720,9 +1758,13 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     return builder().make<Exchange>(std::move(key));
   }
 
-  // An exchange by 'key' whose rows run this rewriter's drivers per task.
+  // An exchange by 'key' whose rows run this rewriter's drivers per task, or
+  // one driver after a gather between workers with 'gatherOntoOneDriver_'.
   NodeCP exchange(Exchange::Key key) {
-    return exchange(std::move(key), /*oneDriverPerTask=*/numDrivers_ == 1);
+    const bool oneDriverPerTask = numDrivers_ == 1 ||
+        (gatherOntoOneDriver_ && key.partitioning.isGlobal() &&
+         key.partitioning.is(PartitionKind::kGather));
+    return exchange(std::move(key), oneDriverPerTask);
   }
 
   // Remote exchanges that unconditionally establish a partitioning on 'input'.
@@ -2972,6 +3014,8 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   const bool oneTask_;
   const std::function<NodeCP(NodeCP)> replicate_;
   const Partitioning statePartitioning_;
+  // True when a gather between workers starts a plan that runs on one driver.
+  const bool gatherOntoOneDriver_;
   ExprFactory exprFactory_;
   ExprSimplifier& simplifier_;
 

@@ -680,7 +680,6 @@ Translated Translator::translateFixedPoint(
               session_.options().recursionLimit),
           .failAtBound = fixedPoint.failAtBound(),
           .mode = replace ? FixedPointMode::kReplace : FixedPointMode::kAppend,
-          .recursiveNumDrivers = std::nullopt,
           .convergence = convergence.node,
       },
       {anchor.node, {}},

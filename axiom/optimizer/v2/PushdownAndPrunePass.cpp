@@ -2807,7 +2807,6 @@ class Pushdown : public NodeRewriter<PushdownContext> {
             .maxIterations = node->maxIterations(),
             .failAtBound = node->failAtBound(),
             .mode = node->mode(),
-            .recursiveNumDrivers = node->recursiveNumDrivers(),
             .convergence = node->convergence(),
         },
         {newAnchor, std::move(anchorContext.outputSubstitutions)},
