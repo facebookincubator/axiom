@@ -438,11 +438,7 @@ class Printer : public NodeVisitor {
     if (!node.failAtBound()) {
       details += ", failAtBound=false";
     }
-    details += fmt::format(
-        ", recursiveNumDrivers={}]",
-        node.recursiveNumDrivers().has_value()
-            ? fmt::to_string(*node.recursiveNumDrivers())
-            : "unplanned");
+    details += "]";
     header(ctx, node, details);
     IndentGuard guard(ctx);
     ctx.out << spaces(ctx.indent) << "anchor:\n";

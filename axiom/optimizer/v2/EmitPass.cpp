@@ -606,9 +606,7 @@ class Emitter {
   const OptimizerSession& session_;
   velox::core::ExpressionEvaluator& evaluator_;
   ExprEmitter exprEmitter_;
-  // A copy, not a reference: emitting a fixed point lowers
-  // `maxLocalPartitions` for the recursive subtree and restores it afterwards.
-  MultiFragmentPlan::Options options_;
+  const MultiFragmentPlan::Options options_;
   int32_t nextNodeId_{0};
 
   // The fixed point whose step or convergence is being emitted, with the
@@ -2422,10 +2420,12 @@ velox::core::PlanNodePtr Emitter::emitStepExchange(const Exchange& exchange) {
 }
 
 velox::core::PlanNodePtr Emitter::emitExchange(const Exchange& exchange) {
-  if (fixedPoint_ != nullptr) {
+  const auto& partitioning = exchange.partitioning();
+  // In a loop, an exchange between workers ends one plan of the chain and
+  // starts the next. One across the drivers of a task stays in the plan.
+  if (fixedPoint_ != nullptr && !partitioning.isDriver()) {
     return emitStepExchange(exchange);
   }
-  const auto& partitioning = exchange.partitioning();
 
   if (partitioning.isDriver()) {
     velox::core::PlanNodePtr input = emit(exchange.input());
@@ -2764,15 +2764,6 @@ velox::core::PlanNodePtr Emitter::emitInsert(const TableWrite& tableWrite) {
 velox::core::PlanNodePtr Emitter::emitFixedPoint(const FixedPoint& fixedPoint) {
   auto anchorPlan = emit(fixedPoint.anchor());
 
-  VELOX_CHECK_EQ(
-      fixedPoint.recursiveNumDrivers().value_or(0),
-      1,
-      "FixedPoint must be physically planned for one recursive driver before emission");
-  const int32_t previousMaxLocalPartitions = std::exchange(
-      options_.maxLocalPartitions, *fixedPoint.recursiveNumDrivers());
-  SCOPE_EXIT {
-    options_.maxLocalPartitions = previousMaxLocalPartitions;
-  };
   const std::string stateName{fixedPoint.name()};
   FixedPointEmission emission{.stateName = stateName};
   std::vector<velox::core::PlanNodePtr> plans;

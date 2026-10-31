@@ -58,8 +58,7 @@ TEST_F(NodePrinterTest, fixedPoint) {
     EXPECT_THAT(
         toLines(root),
         ElementsAre(
-            StartsWith(
-                "- FixedPoint[name=counter, maxIterations=1000, recursiveNumDrivers=unplanned] ->"),
+            StartsWith("- FixedPoint[name=counter, maxIterations=1000] ->"),
             Eq("  anchor:"),
             StartsWith("  - Values ->"),
             Eq("  step:"),

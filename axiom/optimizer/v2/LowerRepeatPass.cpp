@@ -347,7 +347,6 @@ class Lowering : public NodeRewriter<NoContext> {
         // The step adds no rows once every walk has 'maxHops' hops, which
         // the loop sees one iteration later.
         .maxIterations = repeat.maxHops() + 1,
-        .recursiveNumDrivers = std::nullopt,
     });
   }
 

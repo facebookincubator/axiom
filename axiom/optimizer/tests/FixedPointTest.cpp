@@ -165,7 +165,9 @@ TEST_F(FixedPointTest, selfJoinInStep) {
       })});
 }
 
-TEST_F(FixedPointTest, singleDriverStep) {
+// A loop's step runs with the task's drivers, as any other subtree does: its
+// aggregation splits into a partial and a final step around a local gather.
+TEST_F(FixedPointTest, stepDrivers) {
   auto counter = singleRow("n", 1);
   auto recursiveStep = lp::PlanBuilder(context_)
                            .fixedPointState("counter", counter)
@@ -180,7 +182,7 @@ TEST_F(FixedPointTest, singleDriverStep) {
                           .outputState(/*append=*/true, matchValues())
                           .plan(matchDelta("counter", {"n"})
                                     .filter("n < 10")
-                                    .singleAggregation({}, {"count(*)"}))
+                                    .localAggregation({}, {"count(*)"}))
                           .convergeOnEmpty())
           .localAggregation({}, {"count(*)"})
           .build();
@@ -267,7 +269,9 @@ TEST_F(FixedPointTest, distributed) {
                          /*append=*/true, matchScan("t").gatherIf(distributed))
                      .plan(matchDelta("r", {"n"})
                                .filter("n < 10")
-                               .singleAggregation({}, {"max(n) AS m"})
+                               .singleAggregationIf(
+                                   !distributed, {}, {"max(n) AS m"})
+                               .localAggregationIf(distributed, {}, {"max(n)"})
                                .project({"m + 1"})))
           .project({"a AS n"})
           .build();
@@ -316,7 +320,7 @@ TEST_F(FixedPointTest, partitionedLoop) {
                                 /*append=*/true, matchScan("t").shuffle({"a"}))
                             .plan(matchDelta("r", {"n"})
                                       .filter("n < 10")
-                                      .singleAggregation({"n"}, {})
+                                      .localAggregation({"n"}, {})
                                       .project({"n + 1 AS m"})
                                       .shuffle({"m"}))
                             .convergeOnEmptyEverywhere())
@@ -450,8 +454,11 @@ TEST_F(FixedPointTest, partitionedLoop) {
                      .outputState(
                          /*append=*/true, matchScan("t").gatherIf(distributed))
                      .plan(matchDelta("r", {"n"})
-                               .singleAggregation({"n"}, {})
-                               .singleAggregation({}, {"max(n) AS m"})
+                               .singleAggregationIf(!distributed, {"n"}, {})
+                               .localAggregationIf(distributed, {"n"}, {})
+                               .singleAggregationIf(
+                                   !distributed, {}, {"max(n) AS m"})
+                               .localAggregationIf(distributed, {}, {"max(n)"})
                                .project({"m + 1"}))
                      .convergeOnEmpty())
           .project({"a AS n"})
@@ -1189,7 +1196,8 @@ TEST_F(FixedPointTest, pageRank) {
   // With edges too large to broadcast, every worker holds all the ranks and
   // joins them with its own share of the edges. The inbound sums are shuffled
   // on the destination, and their totals are broadcast to every worker. Worker
-  // 0 decides when to stop and emits the result.
+  // 0 decides when to stop and emits the result. Each step runs with all of a
+  // worker's drivers, so its aggregations split around local exchanges.
   AXIOM_ASSERT_DISTRIBUTED_PLAN(
       planVelox(pageRank("large_edges")).plan,
       matchFixedPoint(
@@ -1205,10 +1213,16 @@ TEST_F(FixedPointTest, pageRank) {
                       .project()
                       .partialAggregation()
                       .shuffle()
+                      .localPartition()
                       .finalAggregation()
                       .broadcast()
                       .hashJoinRight(ranks())
-                      .nestedLoopJoin(ranks().project().singleAggregation())
+                      .nestedLoopJoin(
+                          ranks()
+                              .project()
+                              .partialAggregation()
+                              .localGather()
+                              .finalAggregation())
                       .project())
               .convergeOnWorkerZero(
                   ranks()
@@ -1353,6 +1367,7 @@ TEST_F(FixedPointTest, connectedComponents) {
                         .project()
                         .partialAggregation({"dst"}, {"min(label)"})
                         .shuffle({"dst"})
+                        .localPartition()
                         .finalAggregation()
                         .hashJoinRight(labels())
                         .project())
@@ -1511,7 +1526,8 @@ TEST_F(FixedPointTest, kMeans) {
   // With several workers, every worker holds all the centroids. Each assigns
   // the points it scanned and sums them per cluster; the sums are shuffled on
   // the cluster, and the new means are broadcast to every worker. Worker 0
-  // decides when to stop and emits the result.
+  // decides when to stop and emits the result. Each step runs with all of a
+  // worker's drivers, so its aggregations split around local exchanges.
   AXIOM_ASSERT_DISTRIBUTED_PLAN(
       planVelox(logicalPlan).plan,
       matchFixedPoint(
@@ -1522,10 +1538,16 @@ TEST_F(FixedPointTest, kMeans) {
               .plan(
                   core::PlanMatcherBuilder()
                       .stateSource("points", /*delta=*/false)
-                      .nestedLoopJoin(centroids().project().singleAggregation())
+                      .nestedLoopJoin(
+                          centroids()
+                              .project()
+                              .partialAggregation()
+                              .localGather()
+                              .finalAggregation())
                       .project()
                       .partialAggregation()
                       .shuffle()
+                      .localPartition()
                       .finalAggregation()
                       .project()
                       .broadcast()
