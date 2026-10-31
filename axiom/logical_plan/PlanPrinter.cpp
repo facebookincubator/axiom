@@ -134,6 +134,28 @@ std::string toText(const GraphPathPattern& path) {
   return folly::join(" ", prefix);
 }
 
+// Describes a vector search: its keys, then the index searched for the
+// embedding, 'k' and the metric.
+std::string describeVectorSearch(const VectorSearchNode& node) {
+  std::vector<std::string> keys;
+  keys.reserve(node.probeKeys().size());
+  for (size_t i = 0; i < node.probeKeys().size(); ++i) {
+    keys.push_back(
+        fmt::format("{} = {}", node.probeKeys()[i], node.buildKeys()[i]));
+  }
+  auto text = fmt::format(
+      "{}nearest {} to {}, k = {}, {}",
+      keys.empty() ? "" : folly::join(" AND ", keys) + ", ",
+      node.buildIndex(),
+      node.probeEmbedding(),
+      node.k(),
+      velox::common::vectorindex::VectorIndexMetricName::toName(node.metric()));
+  for (const auto& [name, value] : node.searchOptions()) {
+    text += fmt::format(", {} = {}", name, value);
+  }
+  return text;
+}
+
 class ToTextVisitor : public PlanNodeVisitor {
  public:
   struct Context : public PlanNodeVisitorContext {
@@ -243,6 +265,15 @@ class ToTextVisitor : public PlanNodeVisitor {
         node,
         node.condition() != nullptr ? ExprPrinter::toText(*node.condition())
                                     : "",
+        context);
+  }
+
+  void visit(const VectorSearchNode& node, PlanNodeVisitorContext& context)
+      const override {
+    appendNode(
+        fmt::format("VectorSearch {}", JoinTypeName::toName(node.joinType())),
+        node,
+        describeVectorSearch(node),
         context);
   }
 
@@ -586,6 +617,11 @@ class CollectExprStatsPlanNodeVisitor : public PlanNodeVisitor {
     visitInputs(node, context);
   }
 
+  void visit(const VectorSearchNode& node, PlanNodeVisitorContext& context)
+      const override {
+    visitInputs(node, context);
+  }
+
   void visit(const LateralJoinNode& node, PlanNodeVisitorContext& context)
       const override {
     auto& stats = static_cast<Context&>(context).stats;
@@ -913,6 +949,25 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
         myContext.appendExpression(*node.condition());
         myContext.out << std::endl;
       }
+    }
+
+    appendInputs(node, myContext);
+  }
+
+  void visit(const VectorSearchNode& node, PlanNodeVisitorContext& context)
+      const override {
+    auto& myContext = static_cast<Context&>(context);
+    appendHeader(
+        fmt::format(
+            "{} {}",
+            NodeKindName::toName(node.kind()),
+            JoinTypeName::toName(node.joinType())),
+        node,
+        myContext);
+
+    if (!myContext.skeletonOnly) {
+      myContext.out << makeIndent(myContext.indent + 3)
+                    << "search: " << describeVectorSearch(node) << std::endl;
     }
 
     appendInputs(node, myContext);

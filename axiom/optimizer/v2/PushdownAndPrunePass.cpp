@@ -585,6 +585,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     switch (node->nodeType()) {
       case NodeType::kScan:
       case NodeType::kIndexLookupJoin:
+      case NodeType::kVectorSearch:
       case NodeType::kWorkingTable:
         return;
       case NodeType::kValues:
@@ -1846,6 +1847,102 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     rewritten.outputSubstitutions.merge(simplified.substitutions);
     pruned.above = rewritten.outputSubstitutions.apply(pruned.above, exprs_);
     return finishJoin(replacement, rewritten, pruned, context);
+  }
+
+  // VectorSearch: a deterministic conjunct on probe columns pushes to the
+  // probe side, and on build columns to the build side of an inner search. A
+  // conjunct on the id or score, on the null-extended build columns of a probe
+  // search, or on both sides stays above. A nondeterministic conjunct stays
+  // above too: below, it would decide once for all the rows of a probe row.
+  NodeCP rewriteVectorSearch(const VectorSearch* node, PushdownContext& context)
+      override {
+    for (size_t i = 0; i < node->outputColumns().size(); ++i) {
+      if (node->outputColumns()[i] != node->sourceColumns()[i]) {
+        access_.addProducing(
+            node->sourceColumns()[i], node->outputColumns()[i]);
+      }
+    }
+
+    const PlanObjectSet probeColumns =
+        PlanObjectSet::fromObjects(node->probe()->outputColumns());
+    const PlanObjectSet buildColumns =
+        PlanObjectSet::fromObjects(node->build()->outputColumns());
+    const bool inner = node->joinType() == velox::core::JoinType::kInner;
+
+    ExprVector probePending;
+    ExprVector buildPending;
+    ExprVector blocked;
+    for (ExprCP conjunct : context.pending) {
+      if (conjunct->containsNonDeterministic()) {
+        blocked.push_back(conjunct);
+      } else if (conjunct->columns().isSubset(probeColumns)) {
+        probePending.push_back(conjunct);
+      } else if (inner && conjunct->columns().isSubset(buildColumns)) {
+        buildPending.push_back(conjunct);
+      } else {
+        blocked.push_back(conjunct);
+      }
+    }
+    context.pending.clear();
+
+    PlanObjectSet requiredOutputs = context.required;
+    requiredOutputs.unionColumns(blocked);
+    ColumnVector outputColumns;
+    ColumnVector sourceColumns;
+    for (size_t i = 0; i < node->outputColumns().size(); ++i) {
+      if (requiredOutputs.contains(node->outputColumns()[i])) {
+        outputColumns.push_back(node->outputColumns()[i]);
+        sourceColumns.push_back(node->sourceColumns()[i]);
+      }
+    }
+
+    // Each input supplies what the search reads from it and the outputs it
+    // sources, in the input's own column order.
+    auto readColumns =
+        [&](NodeCP input, const ExprVector& keys, ColumnCP searchColumn) {
+          PlanObjectSet read;
+          read.unionColumns(keys);
+          read.add(searchColumn);
+          for (ColumnCP source : sourceColumns) {
+            read.add(source);
+          }
+          ColumnVector columns;
+          for (ColumnCP column : input->outputColumns()) {
+            if (read.contains(column)) {
+              columns.push_back(column);
+            }
+          }
+          return columns;
+        };
+    ColumnVector probeRead =
+        readColumns(node->probe(), node->probeKeys(), node->probeEmbedding());
+    ColumnVector buildRead =
+        readColumns(node->build(), node->buildKeys(), node->buildIndex());
+
+    auto rewriteSide =
+        [&](NodeCP input, ExprVector pending, const ColumnVector& read) {
+          PushdownContext child = makeChildContext(std::move(pending), context);
+          child.required = PlanObjectSet::fromObjects(read);
+          child.required.unionColumns(child.pending);
+          child.requiredAbove = PlanObjectSet::fromObjects(read);
+          NodeCP rewritten = rewrite(input, child);
+          return NodeSimplifier::SimplifiedNode{
+              rewritten, std::move(child.outputSubstitutions), read};
+        };
+    NodeSimplifier::SimplifiedNode probe =
+        rewriteSide(node->probe(), std::move(probePending), probeRead);
+    NodeSimplifier::SimplifiedNode build =
+        rewriteSide(node->build(), std::move(buildPending), buildRead);
+
+    VectorSearch::Key key = node->key();
+    key.probe = probe.node;
+    key.build = build.node;
+    key.outputColumns = std::move(outputColumns);
+    key.sourceColumns = std::move(sourceColumns);
+    NodeSimplifier::SimplifiedNode simplified = nodeSimplifier_.make(
+        std::move(key), std::move(probe), std::move(build));
+    return finishSimplifiedNode(
+        std::move(simplified), std::move(blocked), context);
   }
 
   // Scan: pending conjuncts reach the table, and the connector decides which

@@ -91,6 +91,12 @@ class PlanNodeVisitor {
     VELOX_NYI("PlanNodeVisitor does not support GraphMatchNode");
   }
 
+  virtual void visit(
+      const VectorSearchNode& /*node*/,
+      PlanNodeVisitorContext& /*context*/) const {
+    VELOX_NYI("PlanNodeVisitor does not support VectorSearchNode");
+  }
+
  protected:
   void visitInputs(const LogicalPlanNode& node, PlanNodeVisitorContext& ctx)
       const {

@@ -184,6 +184,13 @@ class NodeSimplifier {
   /// Builds an IndexLookupJoin after restoring the probe's positional layout.
   SimplifiedNode make(IndexLookupJoin::Key key, SimplifiedNode probe);
 
+  /// Builds a VectorSearch after restoring each input's layout: to its
+  /// `originalColumns` when set, and to the output of the key's input
+  /// otherwise. An empty probe side, or an empty build side of an inner search,
+  /// gives an empty result.
+  SimplifiedNode
+  make(VectorSearch::Key key, SimplifiedNode probe, SimplifiedNode build);
+
   /// Builds an Apply after simplifying its residual filter and fixed body
   /// positions.
   SimplifiedNode

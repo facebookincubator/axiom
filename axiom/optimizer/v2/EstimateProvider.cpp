@@ -526,6 +526,33 @@ Estimate EstimateProvider::compute(NodeCP node) {
       return result;
     }
 
+    case NodeType::kVectorSearch: {
+      // Each matching pair of a probe row and a build row gives up to 'k'
+      // rows, and a left search keeps every probe row.
+      const auto* search = node->as<VectorSearch>();
+      const auto& probe = estimate(search->probe());
+      const auto& build = estimate(search->build());
+      Estimate result;
+      mergeConstraints(probe.constraints, result.constraints);
+      mergeConstraints(build.constraints, result.constraints);
+      const std::optional<float> matched = JoinFanout::estimateJoinCardinality(
+          probe.cardinality,
+          build.cardinality,
+          search->probeKeys(),
+          search->buildKeys(),
+          result.constraints);
+      result.cardinality = mul(matched, static_cast<float>(search->k()));
+      if (search->joinType() == velox::core::JoinType::kLeft) {
+        result.cardinality = maxOf(probe.cardinality, result.cardinality);
+      }
+      JoinConstraints::refineInnerKeys(
+          search->joinType(),
+          search->probeKeys(),
+          search->buildKeys(),
+          result.constraints);
+      return result;
+    }
+
     case NodeType::kTableWrite: {
       // A table write emits a single row-count row.
       Estimate result;

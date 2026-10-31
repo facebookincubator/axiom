@@ -1247,6 +1247,27 @@ NodeSimplifier::SimplifiedNode NodeSimplifier::make(
 }
 
 NodeSimplifier::SimplifiedNode NodeSimplifier::make(
+    VectorSearch::Key key,
+    SimplifiedNode probe,
+    SimplifiedNode build) {
+  if (probe.empty() ||
+      (build.empty() && key.joinType == velox::core::JoinType::kInner)) {
+    return emptyResult(std::move(key.outputColumns));
+  }
+  const ColumnVector& probeLayout = probe.originalColumns.empty()
+      ? key.probe->outputColumns()
+      : probe.originalColumns;
+  const ColumnVector& buildLayout = build.originalColumns.empty()
+      ? key.build->outputColumns()
+      : build.originalColumns;
+  key.probe = restoreExactLayout(probe.node, probeLayout, probe.substitutions);
+  key.build = build.empty()
+      ? builder_.makeEmptyValues(buildLayout)
+      : restoreExactLayout(build.node, buildLayout, build.substitutions);
+  return {builder_.make<VectorSearch>(std::move(key)), {}};
+}
+
+NodeSimplifier::SimplifiedNode NodeSimplifier::make(
     Apply::Key key,
     SimplifiedNode input,
     SimplifiedNode body) {

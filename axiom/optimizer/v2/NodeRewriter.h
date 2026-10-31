@@ -82,6 +82,8 @@ class NodeRewriter {
         return rewriteJoin(node->as<Join>(), context);
       case NodeType::kIndexLookupJoin:
         return rewriteIndexLookupJoin(node->as<IndexLookupJoin>(), context);
+      case NodeType::kVectorSearch:
+        return rewriteVectorSearch(node->as<VectorSearch>(), context);
       case NodeType::kWindow:
         return rewriteWindow(node->as<Window>(), context);
       case NodeType::kInference:
@@ -278,6 +280,18 @@ class NodeRewriter {
          node->outputColumns(),
          node->sourceColumns(),
          node->buildIsLoopInvariant()});
+  }
+
+  virtual NodeCP rewriteVectorSearch(
+      const VectorSearch* node,
+      TContext& context) {
+    VectorSearch::Key key = node->key();
+    key.probe = rewrite(node->probe(), context);
+    key.build = rewrite(node->build(), context);
+    if (key.probe == node->probe() && key.build == node->build()) {
+      return node;
+    }
+    return builder_.template make<VectorSearch>(std::move(key));
   }
 
   virtual NodeCP rewriteIndexLookupJoin(

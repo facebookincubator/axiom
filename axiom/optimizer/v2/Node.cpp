@@ -58,6 +58,7 @@ const auto& nodeTypeNames() {
       {NodeType::kFixedPoint, "FixedPoint"},
       {NodeType::kWorkingTable, "WorkingTable"},
       {NodeType::kRepeat, "Repeat"},
+      {NodeType::kVectorSearch, "VectorSearch"},
   };
   return kNames;
 }
@@ -2168,9 +2169,7 @@ Join::Join(Key key, Builder& builder)
         inputs_[1]->physicalProperties().globalPartition.is(
             PartitionKind::kBroadcast);
     VELOX_CHECK(
-        leftReplicated == rightReplicated ||
-            (rightReplicated && canBroadcastBuild(joinType_)) ||
-            (leftReplicated && canBroadcastProbe(joinType_)),
+        keepsReplicatedInputs(joinType_, leftReplicated, rightReplicated),
         "Join cannot keep rows of an input replicated on every worker: {}",
         joinTypeName());
   }
@@ -2476,6 +2475,233 @@ bool IndexLookupJoin::KeyEq::operator()(
   return (*this)(key, node);
 }
 
+namespace {
+
+// A vector search keeps each probe row's columns unchanged in every row it
+// outputs for it, as an inner or left join does, so it places its output as
+// such a join places its own.
+Partitioning vectorSearchPartitioning(
+    velox::core::JoinType joinType,
+    const Partitioning& probePartitioning,
+    const Partitioning& buildPartitioning,
+    const ExprVector& probeKeys,
+    const ExprVector& buildKeys,
+    const ColumnVector& outputColumns,
+    const ColumnVector& sourceColumns,
+    Builder& builder) {
+  return Join::outputPartitioning(
+      joinType,
+      probePartitioning,
+      buildPartitioning,
+      probeKeys,
+      buildKeys,
+      PlanObjectSet::fromObjects(outputColumns),
+      outputColumns,
+      sourceColumns,
+      builder);
+}
+
+} // namespace
+
+Partitioning VectorSearch::globalPartition(
+    std::span<const Partitioning> inputPartitions,
+    Builder& builder) const {
+  return vectorSearchPartitioning(
+      joinType_,
+      inputPartitions[0],
+      inputPartitions[1],
+      probeKeys_,
+      buildKeys_,
+      outputColumns(),
+      sourceColumns_,
+      builder);
+}
+
+VectorSearch::VectorSearch(Key key, Builder& builder)
+    : Node(
+          NodeType::kVectorSearch,
+          ColumnVector{key.outputColumns},
+          derivedProperties(
+              {key.probe, key.build},
+              [&] {
+                return PhysicalProperties{
+                    .globalPartition = vectorSearchPartitioning(
+                        key.joinType,
+                        key.probe->physicalProperties().globalPartition,
+                        key.build->physicalProperties().globalPartition,
+                        key.probeKeys,
+                        key.buildKeys,
+                        key.outputColumns,
+                        key.sourceColumns,
+                        builder),
+                    // The search outputs the entries of one index at a time,
+                    // so rows leave in no particular order or driver.
+                    .driverPartition =
+                        Partitioning::unspecified(PropertyScope::kDriver)};
+              },
+              [] { return RelationalProperties{}; })),
+      inputs_{key.probe, key.build},
+      joinType_(key.joinType),
+      probeKeys_(std::move(key.probeKeys)),
+      buildKeys_(std::move(key.buildKeys)),
+      probeEmbedding_(key.probeEmbedding),
+      buildIndex_(key.buildIndex),
+      metric_(key.metric),
+      k_(key.k),
+      searchOptions_(std::move(key.searchOptions)),
+      id_(key.id),
+      score_(key.score),
+      sourceColumns_(std::move(key.sourceColumns)) {
+  VELOX_CHECK(
+      joinType_ == velox::core::JoinType::kInner ||
+          joinType_ == velox::core::JoinType::kLeft,
+      "Vector search supports only inner and left joins: {}",
+      joinType_);
+  VELOX_CHECK_EQ(probeKeys_.size(), buildKeys_.size());
+  VELOX_CHECK_GE(k_, 1);
+  VELOX_CHECK_EQ(sourceColumns_.size(), outputColumns().size());
+
+  const auto probeColumns =
+      PlanObjectSet::fromObjects(inputs_[0]->outputColumns());
+  const auto buildColumns =
+      PlanObjectSet::fromObjects(inputs_[1]->outputColumns());
+  for (ExprCP key : probeKeys_) {
+    VELOX_CHECK(key->columns().isSubset(probeColumns));
+  }
+  for (ExprCP key : buildKeys_) {
+    VELOX_CHECK(key->columns().isSubset(buildColumns));
+  }
+  VELOX_CHECK(probeColumns.contains(probeEmbedding_));
+  VELOX_CHECK(buildColumns.contains(buildIndex_));
+
+  if (placed()) {
+    // Each output row is tied to one probe row and one build row, as in a join
+    // of the same type, so the search replicates an input as such a join does.
+    const bool probeReplicated =
+        inputs_[0]->physicalProperties().globalPartition.is(
+            PartitionKind::kBroadcast);
+    const bool buildReplicated =
+        inputs_[1]->physicalProperties().globalPartition.is(
+            PartitionKind::kBroadcast);
+    VELOX_CHECK(
+        Join::keepsReplicatedInputs(
+            joinType_, probeReplicated, buildReplicated),
+        "Vector search cannot keep rows of an input replicated on every worker: {}",
+        joinType_);
+  }
+
+  for (size_t i = 0; i < sourceColumns_.size(); ++i) {
+    ColumnCP source = sourceColumns_[i];
+    if (source == id_ || source == score_) {
+      VELOX_CHECK(
+          outputColumns()[i] == source,
+          "Vector search id and score must supply themselves: {}",
+          source->toString());
+      continue;
+    }
+    VELOX_CHECK(
+        probeColumns.contains(source) || buildColumns.contains(source),
+        "Vector search source column must come from an input: {}",
+        source->toString());
+    VELOX_CHECK(
+        source != buildIndex_,
+        "Vector search cannot output its build index: {}",
+        source->toString());
+    VELOX_CHECK(
+        joinType_ == velox::core::JoinType::kInner ||
+            probeColumns.contains(source) || outputColumns()[i] != source,
+        "A null-extended vector search output must have a fresh identity: {}",
+        outputColumns()[i]->toString());
+  }
+}
+
+VectorSearch::Key VectorSearch::key() const {
+  return {
+      .probe = probe(),
+      .build = build(),
+      .joinType = joinType_,
+      .probeKeys = probeKeys_,
+      .buildKeys = buildKeys_,
+      .probeEmbedding = probeEmbedding_,
+      .buildIndex = buildIndex_,
+      .metric = metric_,
+      .k = k_,
+      .searchOptions = searchOptions_,
+      .id = id_,
+      .score = score_,
+      .outputColumns = outputColumns(),
+      .sourceColumns = sourceColumns_,
+  };
+}
+
+size_t VectorSearch::KeyHash::operator()(const VectorSearch* node) const {
+  return hashOf(
+      node->probe(),
+      node->build(),
+      node->joinType(),
+      node->probeKeys(),
+      node->buildKeys(),
+      node->probeEmbedding(),
+      node->buildIndex(),
+      node->metric(),
+      node->k(),
+      node->id(),
+      node->score(),
+      node->outputColumns(),
+      node->sourceColumns());
+}
+
+size_t VectorSearch::KeyHash::operator()(const Key& key) const {
+  return hashOf(
+      key.probe,
+      key.build,
+      key.joinType,
+      key.probeKeys,
+      key.buildKeys,
+      key.probeEmbedding,
+      key.buildIndex,
+      key.metric,
+      key.k,
+      key.id,
+      key.score,
+      key.outputColumns,
+      key.sourceColumns);
+}
+
+bool VectorSearch::KeyEq::operator()(
+    const VectorSearch* lhs,
+    const VectorSearch* rhs) const {
+  return lhs->probe() == rhs->probe() && lhs->build() == rhs->build() &&
+      lhs->joinType() == rhs->joinType() &&
+      lhs->probeKeys() == rhs->probeKeys() &&
+      lhs->buildKeys() == rhs->buildKeys() &&
+      lhs->probeEmbedding() == rhs->probeEmbedding() &&
+      lhs->buildIndex() == rhs->buildIndex() &&
+      lhs->metric() == rhs->metric() && lhs->k() == rhs->k() &&
+      lhs->searchOptions() == rhs->searchOptions() && lhs->id() == rhs->id() &&
+      lhs->score() == rhs->score() &&
+      lhs->outputColumns() == rhs->outputColumns() &&
+      lhs->sourceColumns() == rhs->sourceColumns();
+}
+
+bool VectorSearch::KeyEq::operator()(const Key& key, const VectorSearch* node)
+    const {
+  return key.probe == node->probe() && key.build == node->build() &&
+      key.joinType == node->joinType() && key.probeKeys == node->probeKeys() &&
+      key.buildKeys == node->buildKeys() &&
+      key.probeEmbedding == node->probeEmbedding() &&
+      key.buildIndex == node->buildIndex() && key.metric == node->metric() &&
+      key.k == node->k() && key.searchOptions == node->searchOptions() &&
+      key.id == node->id() && key.score == node->score() &&
+      key.outputColumns == node->outputColumns() &&
+      key.sourceColumns == node->sourceColumns();
+}
+
+bool VectorSearch::KeyEq::operator()(const VectorSearch* node, const Key& key)
+    const {
+  return (*this)(key, node);
+}
+
 // static
 bool Join::canSwapInputs(velox::core::JoinType joinType) {
   return joinType == velox::core::JoinType::kInner ||
@@ -2569,6 +2795,16 @@ bool Join::canBroadcastProbe(velox::core::JoinType joinType) {
       joinType == JoinType::kRightSemiFilter ||
       joinType == JoinType::kRightSemiProject ||
       joinType == JoinType::kRightAnti;
+}
+
+// static
+bool Join::keepsReplicatedInputs(
+    velox::core::JoinType joinType,
+    bool leftReplicated,
+    bool rightReplicated) {
+  return leftReplicated == rightReplicated ||
+      (rightReplicated && canBroadcastBuild(joinType)) ||
+      (leftReplicated && canBroadcastProbe(joinType));
 }
 
 bool Join::isKnownEmpty(
@@ -4645,6 +4881,7 @@ V2_DEFINE_ACCEPT(TableWrite)
 V2_DEFINE_ACCEPT(WorkingTable)
 V2_DEFINE_ACCEPT(FixedPoint)
 V2_DEFINE_ACCEPT(Repeat)
+V2_DEFINE_ACCEPT(VectorSearch)
 
 #undef V2_DEFINE_ACCEPT
 

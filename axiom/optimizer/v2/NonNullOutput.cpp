@@ -18,6 +18,20 @@
 
 namespace facebook::axiom::optimizer::v2 {
 
+namespace {
+
+// Adds the columns of each of 'keys' that a NULL makes NULL: an equi-key of
+// default null behavior, which no NULL matches.
+void addMatchedKeyColumns(const ExprVector& keys, PlanObjectSet& columns) {
+  for (ExprCP key : keys) {
+    if (!key->containsNonDefaultNullBehavior()) {
+      columns.unionColumns(key);
+    }
+  }
+}
+
+} // namespace
+
 const PlanObjectSet& NonNullOutput::get(NodeCP node) {
   if (const auto it = cache_.find(node); it != cache_.end()) {
     return it->second;
@@ -66,6 +80,29 @@ const PlanObjectSet& NonNullOutput::get(NodeCP node) {
     return save(node, std::move(result));
   }
 
+  if (node->is(NodeType::kVectorSearch)) {
+    const auto* search = node->as<VectorSearch>();
+    const auto preserved = Join::preservedSides(search->joinType());
+    if (preserved.left) {
+      propagate(get(search->probe()), search->outputColumns(), result);
+    }
+    if (preserved.right) {
+      propagate(get(search->build()), search->outputColumns(), result);
+    }
+    // An inner search outputs only matched rows: their keys, embedding and
+    // index are non-null, and each has an entry with an id and a score.
+    if (search->joinType() == velox::core::JoinType::kInner) {
+      PlanObjectSet matched;
+      addMatchedKeyColumns(search->probeKeys(), matched);
+      addMatchedKeyColumns(search->buildKeys(), matched);
+      matched.add(search->probeEmbedding());
+      matched.add(search->id());
+      matched.add(search->score());
+      propagate(matched, search->outputColumns(), result);
+    }
+    return save(node, std::move(result));
+  }
+
   if (node->is(NodeType::kJoin)) {
     const auto* join = node->as<Join>();
     const auto preserved = Join::preservedSides(join->joinType());
@@ -77,16 +114,8 @@ const PlanObjectSet& NonNullOutput::get(NodeCP node) {
     }
     if (join->isInner() && !join->nullAsValue()) {
       PlanObjectSet equiColumns;
-      for (ExprCP key : join->leftKeys()) {
-        if (!key->containsNonDefaultNullBehavior()) {
-          equiColumns.unionColumns(key);
-        }
-      }
-      for (ExprCP key : join->rightKeys()) {
-        if (!key->containsNonDefaultNullBehavior()) {
-          equiColumns.unionColumns(key);
-        }
-      }
+      addMatchedKeyColumns(join->leftKeys(), equiColumns);
+      addMatchedKeyColumns(join->rightKeys(), equiColumns);
       propagate(equiColumns, join->outputColumns(), result);
     }
     return save(node, std::move(result));
