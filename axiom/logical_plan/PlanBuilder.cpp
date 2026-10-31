@@ -167,7 +167,7 @@ PlanBuilder& PlanBuilder::values(
     }
   }
 
-  if (coercer_ != nullptr) {
+  if (context_.coercer != nullptr) {
     for (auto i = 1; i < numRows; ++i) {
       for (auto j = 0; j < numColumns; ++j) {
         const auto& colType = exprs[i][j]->type();
@@ -175,7 +175,7 @@ PlanBuilder& PlanBuilder::values(
           continue;
         }
 
-        auto common = coercer_->leastCommonSuperType(types[j], colType);
+        auto common = context_.coercer->leastCommonSuperType(types[j], colType);
         VELOX_USER_CHECK_NOT_NULL(
             common,
             "Incompatible types in VALUES row {}, column {}: expected {}, got {}",
@@ -208,11 +208,11 @@ PlanBuilder& PlanBuilder::values(
 PlanBuilder& PlanBuilder::tableScan(
     const std::string& tableName,
     bool includeHiddenColumns) {
-  VELOX_USER_CHECK(defaultConnectorId_.has_value());
-  VELOX_USER_CHECK(defaultSchema_.has_value());
+  VELOX_USER_CHECK(context_.defaultConnectorId.has_value());
+  VELOX_USER_CHECK(context_.defaultSchema.has_value());
   return tableScan(
-      defaultConnectorId_.value(),
-      defaultSchema_.value(),
+      context_.defaultConnectorId.value(),
+      context_.defaultSchema.value(),
       tableName,
       includeHiddenColumns);
 }
@@ -220,10 +220,10 @@ PlanBuilder& PlanBuilder::tableScan(
 std::shared_ptr<connector::ConnectorMetadata> PlanBuilder::findMetadata(
     const std::string& connectorId) const {
   VELOX_USER_CHECK_NOT_NULL(
-      connectorContext_,
+      context_.connectorContext,
       "PlanBuilder::Context::connectorContext is required to look up tables: {}",
       connectorId);
-  return connectorContext_->metadataRegistry().get(connectorId);
+  return context_.connectorContext->metadataRegistry().get(connectorId);
 }
 
 PlanBuilder& PlanBuilder::from(const std::vector<std::string>& tableNames) {
@@ -232,13 +232,8 @@ PlanBuilder& PlanBuilder::from(const std::vector<std::string>& tableNames) {
 
   tableScan(tableNames.front());
 
-  Context context{defaultConnectorId_, defaultSchema_};
-  context.planNodeIdGenerator = planNodeIdGenerator_;
-  context.nameAllocator = nameAllocator_;
-  context.connectorContext = connectorContext_;
-
   for (auto i = 1; i < tableNames.size(); ++i) {
-    crossJoin(PlanBuilder(context).tableScan(tableNames.at(i)));
+    crossJoin(newPlan().tableScan(tableNames.at(i)));
   }
 
   return *this;
@@ -282,7 +277,9 @@ PlanBuilder& PlanBuilder::tableScan(
     originalNames.push_back(name);
     outputNames.push_back(newName(name));
     outputMapping_->add(
-        identifierCanonicalizer_ ? identifierCanonicalizer_(name) : name,
+        context_.identifierCanonicalizer
+            ? context_.identifierCanonicalizer(name)
+            : name,
         outputNames.back());
   };
 
@@ -313,19 +310,22 @@ PlanBuilder& PlanBuilder::tableScan(
     const std::string& schemaName,
     const std::string& tableName,
     bool includeHiddenColumns) {
-  VELOX_USER_CHECK(defaultConnectorId_.has_value());
+  VELOX_USER_CHECK(context_.defaultConnectorId.has_value());
   return tableScan(
-      defaultConnectorId_.value(), schemaName, tableName, includeHiddenColumns);
+      context_.defaultConnectorId.value(),
+      schemaName,
+      tableName,
+      includeHiddenColumns);
 }
 
 PlanBuilder& PlanBuilder::tableScan(
     const std::string& tableName,
     const std::vector<std::string>& columnNames) {
-  VELOX_USER_CHECK(defaultConnectorId_.has_value());
-  VELOX_USER_CHECK(defaultSchema_.has_value());
+  VELOX_USER_CHECK(context_.defaultConnectorId.has_value());
+  VELOX_USER_CHECK(context_.defaultSchema.has_value());
   return tableScan(
-      defaultConnectorId_.value(),
-      defaultSchema_.value(),
+      context_.defaultConnectorId.value(),
+      context_.defaultSchema.value(),
       tableName,
       columnNames);
 }
@@ -334,9 +334,9 @@ PlanBuilder& PlanBuilder::tableScan(
     const std::string& schemaName,
     const std::string& tableName,
     const std::vector<std::string>& columnNames) {
-  VELOX_USER_CHECK(defaultConnectorId_.has_value());
+  VELOX_USER_CHECK(context_.defaultConnectorId.has_value());
   return tableScan(
-      defaultConnectorId_.value(), schemaName, tableName, columnNames);
+      context_.defaultConnectorId.value(), schemaName, tableName, columnNames);
 }
 
 PlanBuilder& PlanBuilder::tableScan(
@@ -435,7 +435,7 @@ PlanBuilder& PlanBuilder::dropHiddenColumns() {
 PlanBuilder& PlanBuilder::filter(const std::string& predicate) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Filter node cannot be a leaf node");
 
-  auto untypedExpr = sqlParser_->parseExpr(predicate);
+  auto untypedExpr = context_.sqlParser->parseExpr(predicate);
   return filter(untypedExpr);
 }
 
@@ -467,7 +467,9 @@ ExprPtr coerceToBoolean(
 
 PlanBuilder& PlanBuilder::filter(const ExprApi& predicate) {
   auto expr = coerceToBoolean(
-      resolveScalarTypes(predicate.expr()), coercer_, "Filter predicate");
+      resolveScalarTypes(predicate.expr()),
+      context_.coercer,
+      "Filter predicate");
 
   node_ = std::make_shared<FilterNode>(nextId(), node_, std::move(expr));
 
@@ -478,7 +480,7 @@ std::vector<ExprApi> PlanBuilder::parse(const std::vector<std::string>& exprs) {
   std::vector<ExprApi> untypedExprs;
   untypedExprs.reserve(exprs.size());
   for (const auto& sql : exprs) {
-    untypedExprs.emplace_back(sqlParser_->parseScalarOrWindowExpr(sql));
+    untypedExprs.emplace_back(context_.sqlParser->parseScalarOrWindowExpr(sql));
   }
   return untypedExprs;
 }
@@ -844,7 +846,7 @@ PlanBuilder& PlanBuilder::aggregate(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates) {
   std::vector<ExprApi> parsedAggregates;
-  parseAggregates(*sqlParser_, aggregates, parsedAggregates);
+  parseAggregates(*context_.sqlParser, aggregates, parsedAggregates);
 
   return aggregate(parse(groupingKeys), parsedAggregates);
 }
@@ -927,7 +929,7 @@ PlanBuilder& PlanBuilder::aggregate(
   }
 
   std::vector<ExprApi> parsedAggregates;
-  parseAggregates(*sqlParser_, aggregates, parsedAggregates);
+  parseAggregates(*context_.sqlParser, aggregates, parsedAggregates);
 
   return aggregate(exprGroupingSets, parsedAggregates, groupingSetIndexName);
 }
@@ -938,7 +940,7 @@ PlanBuilder& PlanBuilder::aggregate(
     const std::vector<std::string>& aggregates,
     const std::string& groupingSetIndexName) {
   std::vector<ExprApi> parsedAggregates;
-  parseAggregates(*sqlParser_, aggregates, parsedAggregates);
+  parseAggregates(*context_.sqlParser, aggregates, parsedAggregates);
 
   return aggregate(
       parse(groupingKeys),
@@ -1072,7 +1074,7 @@ PlanBuilder& PlanBuilder::rollup(
     const std::vector<std::string>& aggregates,
     const std::string& groupingSetIndexName) {
   std::vector<ExprApi> parsedAggregates;
-  parseAggregates(*sqlParser_, aggregates, parsedAggregates);
+  parseAggregates(*context_.sqlParser, aggregates, parsedAggregates);
 
   return rollup(parse(groupingKeys), parsedAggregates, groupingSetIndexName);
 }
@@ -1108,7 +1110,7 @@ PlanBuilder& PlanBuilder::cube(
     const std::vector<std::string>& aggregates,
     const std::string& groupingSetIndexName) {
   std::vector<ExprApi> parsedAggregates;
-  parseAggregates(*sqlParser_, aggregates, parsedAggregates);
+  parseAggregates(*context_.sqlParser, aggregates, parsedAggregates);
 
   return cube(parse(groupingKeys), parsedAggregates, groupingSetIndexName);
 }
@@ -1295,7 +1297,7 @@ PlanBuilder& PlanBuilder::join(
     JoinType joinType) {
   std::optional<ExprApi> conditionExpr;
   if (!condition.empty()) {
-    conditionExpr = sqlParser_->parseExpr(condition);
+    conditionExpr = context_.sqlParser->parseExpr(condition);
   }
 
   return join(right, conditionExpr, joinType);
@@ -1362,7 +1364,7 @@ PlanBuilder& PlanBuilder::join(
               return resolveJoinInputName(
                   alias, name, *outputMapping_, inputRowType, outerScope_);
             }),
-        coercer_,
+        context_.coercer,
         "Join condition");
   }
 
@@ -1378,7 +1380,7 @@ PlanBuilder& PlanBuilder::lateralJoin(
     JoinType joinType) {
   std::optional<ExprApi> conditionExpr;
   if (!condition.empty()) {
-    conditionExpr = sqlParser_->parseExpr(condition);
+    conditionExpr = context_.sqlParser->parseExpr(condition);
   }
 
   return lateralJoin(right, conditionExpr, joinType);
@@ -1404,7 +1406,7 @@ PlanBuilder& PlanBuilder::lateralJoin(
               return resolveJoinInputName(
                   alias, name, *outputMapping_, inputRowType, outerScope_);
             }),
-        coercer_,
+        context_.coercer,
         "Join condition");
   }
 
@@ -1495,7 +1497,7 @@ std::vector<velox::TypePtr> PlanBuilder::computeCommonTypes(
       continue;
     }
 
-    if (coercer_ == nullptr) {
+    if (context_.coercer == nullptr) {
       VELOX_USER_FAIL(
           "USING column has different types on left and right sides of the join: ({} vs {}) for {}",
           leftColumnType->toString(),
@@ -1504,7 +1506,7 @@ std::vector<velox::TypePtr> PlanBuilder::computeCommonTypes(
     }
 
     auto commonType =
-        coercer_->leastCommonSuperType(leftColumnType, rightColumnType);
+        context_.coercer->leastCommonSuperType(leftColumnType, rightColumnType);
     VELOX_USER_CHECK_NOT_NULL(
         commonType,
         "USING column has incompatible types on left and right sides of the join: ({} vs {}) for {}",
@@ -1632,7 +1634,7 @@ PlanBuilder& PlanBuilder::setOperation(
     SetOperation op,
     const PlanBuilder& other) {
   // Do not use std::move(*this) — that invalidates resolver_ members
-  // (e.g. planNodeIdGenerator_ becomes null), causing crashes when the
+  // (e.g. context_.planNodeIdGenerator becomes null), causing crashes when the
   // builder is used for expression resolution after the set operation.
   VELOX_CHECK_NOT_NULL(node_);
   VELOX_CHECK_NOT_NULL(other.node_);
@@ -1715,7 +1717,8 @@ void PlanBuilder::coerceSetInputs(std::vector<LogicalPlanNodePtr>& nodes) {
         continue;
       }
 
-      auto commonType = coercer_->leastCommonSuperType(currentType, nextType);
+      auto commonType =
+          context_.coercer->leastCommonSuperType(currentType, nextType);
       VELOX_USER_CHECK_NOT_NULL(
           commonType,
           "Output schemas of all inputs to a Set operation must match: {} vs. {} at {}.{}",
@@ -1763,7 +1766,7 @@ void PlanBuilder::setOperationImpl(
   // coercion may replace some.
   const auto firstBranchIds = nodes[0]->outputType()->names();
 
-  if (coercer_ != nullptr) {
+  if (context_.coercer != nullptr) {
     coerceSetInputs(nodes);
   }
 
@@ -1780,7 +1783,7 @@ PlanBuilder& PlanBuilder::sort(const std::vector<std::string>& sortingKeys) {
   sortingFields.reserve(sortingKeys.size());
 
   for (const auto& key : sortingKeys) {
-    auto orderBy = sqlParser_->parseOrderByExpr(key);
+    auto orderBy = context_.sqlParser->parseOrderByExpr(key);
     auto expr = resolveScalarTypes(orderBy.expr);
 
     sortingFields.push_back(
@@ -1870,7 +1873,9 @@ PlanBuilder& PlanBuilder::tableWrite(
       for (auto i = 0; i < columnNames.size(); i++) {
         auto& name = columnNames[i];
         const auto index = schema->getChildIdxIfExists(
-            identifierCanonicalizer_ ? identifierCanonicalizer_(name) : name);
+            context_.identifierCanonicalizer
+                ? context_.identifierCanonicalizer(name)
+                : name);
         VELOX_USER_CHECK(
             index.has_value(),
             "Column not found: '{}' in table {}",
@@ -1883,7 +1888,8 @@ PlanBuilder& PlanBuilder::tableWrite(
         const auto& schemaType = schema->childAt(index.value());
 
         if (!schemaType->equivalent(*inputType)) {
-          if (coercer_ != nullptr && coercer_->coerce(inputType, schemaType)) {
+          if (context_.coercer != nullptr &&
+              context_.coercer->coerce(inputType, schemaType)) {
             columnExpressions[i] =
                 applyCoercion(columnExpressions[i], schemaType);
           } else {
@@ -1918,8 +1924,8 @@ PlanBuilder& PlanBuilder::tableWrite(
     std::vector<std::string> columnNames,
     folly::F14FastMap<std::string, std::string> options) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Table write node cannot be a leaf node");
-  VELOX_USER_CHECK(defaultConnectorId_.has_value());
-  VELOX_USER_CHECK(defaultSchema_.has_value());
+  VELOX_USER_CHECK(context_.defaultConnectorId.has_value());
+  VELOX_USER_CHECK(context_.defaultSchema.has_value());
 
   auto outputColumns = findOrAssignOutputNames();
   std::vector<ExprApi> columnExprs;
@@ -1929,8 +1935,8 @@ PlanBuilder& PlanBuilder::tableWrite(
   }
 
   return tableWrite(
-      defaultConnectorId_.value(),
-      defaultSchema_.value(),
+      context_.defaultConnectorId.value(),
+      context_.defaultSchema.value(),
       std::move(tableName),
       kind,
       std::move(columnNames),
@@ -1952,11 +1958,11 @@ PlanBuilder& PlanBuilder::tableDelete(
 }
 
 PlanBuilder& PlanBuilder::tableDelete(std::string tableName) {
-  VELOX_USER_CHECK(defaultConnectorId_.has_value());
-  VELOX_USER_CHECK(defaultSchema_.has_value());
+  VELOX_USER_CHECK(context_.defaultConnectorId.has_value());
+  VELOX_USER_CHECK(context_.defaultSchema.has_value());
   return tableDelete(
-      defaultConnectorId_.value(),
-      defaultSchema_.value(),
+      context_.defaultConnectorId.value(),
+      context_.defaultSchema.value(),
       std::move(tableName));
 }
 
@@ -1985,8 +1991,8 @@ PlanBuilder& PlanBuilder::sample(
   auto expr = resolveScalarTypes(percentage.expr());
 
   if (!expr->type()->isDouble()) {
-    if (coercer_ != nullptr) {
-      if (coercer_->coerce(expr->type(), velox::DOUBLE())) {
+    if (context_.coercer != nullptr) {
+      if (context_.coercer->coerce(expr->type(), velox::DOUBLE())) {
         expr = applyCoercion(expr, velox::DOUBLE());
       } else {
         VELOX_USER_FAIL(
@@ -2087,7 +2093,7 @@ PlanBuilder& PlanBuilder::clearAliases() {
 }
 
 std::string PlanBuilder::newName(const std::string& hint) {
-  return nameAllocator_->newName(hint);
+  return context_.nameAllocator->newName(hint);
 }
 
 size_t PlanBuilder::numOutput() const {
@@ -2194,7 +2200,7 @@ PlanBuilder::OutputColumnName PlanBuilder::findOrAssignOutputNameAt(
 
   if (names.empty()) {
     if (const auto* userName = outputMapping_->userName(id)) {
-      auto resolutionName = nameAllocator_->newName(id);
+      auto resolutionName = context_.nameAllocator->newName(id);
       outputMapping_->add(resolutionName, id);
       return OutputColumnName{
           std::nullopt, std::move(resolutionName), *userName};
@@ -2205,7 +2211,7 @@ PlanBuilder::OutputColumnName PlanBuilder::findOrAssignOutputNameAt(
     outputMapping_->add(id, id);
     std::string resolutionName{id};
     if (outputMapping_->lookup(id) != id) {
-      resolutionName = nameAllocator_->newName(id);
+      resolutionName = context_.nameAllocator->newName(id);
       outputMapping_->add(resolutionName, id);
     }
 

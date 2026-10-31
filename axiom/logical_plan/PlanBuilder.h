@@ -222,16 +222,9 @@ class PlanBuilder {
       const Context& context,
       bool allowAmbiguousOutputNames = false,
       Scope outerScope = nullptr)
-      : defaultConnectorId_{context.defaultConnectorId},
-        defaultSchema_{context.defaultSchema},
-        planNodeIdGenerator_{context.planNodeIdGenerator},
-        nameAllocator_{context.nameAllocator},
+      : context_{context},
         outerScope_{std::move(outerScope)},
-        sqlParser_{context.sqlParser},
         allowAmbiguousOutputNames_{allowAmbiguousOutputNames},
-        coercer_{context.coercer},
-        identifierCanonicalizer_{context.identifierCanonicalizer},
-        connectorContext_{context.connectorContext},
         resolver_{
             context.queryCtx,
             context.coercer,
@@ -239,8 +232,15 @@ class PlanBuilder {
             context.pool,
             context.planNodeIdGenerator,
             context.sqlFunctionResolver} {
-    VELOX_CHECK_NOT_NULL(planNodeIdGenerator_);
-    VELOX_CHECK_NOT_NULL(nameAllocator_);
+    VELOX_CHECK_NOT_NULL(context_.planNodeIdGenerator);
+    VELOX_CHECK_NOT_NULL(context_.nameAllocator);
+  }
+
+  /// Returns an empty PlanBuilder that shares this builder's context, to build
+  /// another input of the same plan, e.g. a join's build side. The two
+  /// builders' plans get distinct plan-node ids and column names.
+  PlanBuilder newPlan() const {
+    return PlanBuilder{context_, allowAmbiguousOutputNames_};
   }
 
   /// Adds a leaf Values node producing literal rows. Must be the first node
@@ -329,10 +329,10 @@ class PlanBuilder {
   ///
   /// Shortcut for
   ///
-  ///   PlanBuilder(context)
+  ///   builder
   ///     .tableScan(t1)
-  ///     .crossJoin(PlanBuilder(context).tableScan(t2))
-  ///     .crossJoin(PlanBuilder(context).tableScan(t3))
+  ///     .crossJoin(builder.newPlan().tableScan(t2))
+  ///     .crossJoin(builder.newPlan().tableScan(t3))
   ///     ...
   ///     .build();
   PlanBuilder& from(const std::vector<std::string>& tableNames);
@@ -646,11 +646,11 @@ class PlanBuilder {
       std::vector<std::string> columnNames,
       const std::initializer_list<std::string>& columnExprs,
       folly::F14FastMap<std::string, std::string> options = {}) {
-    VELOX_USER_CHECK(defaultConnectorId_.has_value());
-    VELOX_USER_CHECK(defaultSchema_.has_value());
+    VELOX_USER_CHECK(context_.defaultConnectorId.has_value());
+    VELOX_USER_CHECK(context_.defaultSchema.has_value());
     return tableWrite(
-        defaultConnectorId_.value(),
-        defaultSchema_.value(),
+        context_.defaultConnectorId.value(),
+        context_.defaultSchema.value(),
         std::move(tableName),
         kind,
         std::move(columnNames),
@@ -665,11 +665,11 @@ class PlanBuilder {
       std::vector<std::string> columnNames,
       const std::vector<std::string>& columnExprs,
       folly::F14FastMap<std::string, std::string> options = {}) {
-    VELOX_USER_CHECK(defaultConnectorId_.has_value());
-    VELOX_USER_CHECK(defaultSchema_.has_value());
+    VELOX_USER_CHECK(context_.defaultConnectorId.has_value());
+    VELOX_USER_CHECK(context_.defaultSchema.has_value());
     return tableWrite(
-        defaultConnectorId_.value(),
-        defaultSchema_.value(),
+        context_.defaultConnectorId.value(),
+        context_.defaultSchema.value(),
         std::move(tableName),
         kind,
         std::move(columnNames),
@@ -962,7 +962,7 @@ class PlanBuilder {
   void coerceSetInputs(std::vector<LogicalPlanNodePtr>& nodes);
 
   std::string nextId() {
-    return planNodeIdGenerator_->next();
+    return context_.planNodeIdGenerator->next();
   }
 
   std::string newName(const std::string& hint);
@@ -998,40 +998,14 @@ class PlanBuilder {
   std::shared_ptr<connector::ConnectorMetadata> findMetadata(
       const std::string& connectorId) const;
 
-  // Connector ID used when table names omit the catalog prefix.
-  const std::optional<std::string> defaultConnectorId_;
-
-  // Schema used when table names omit the schema prefix.
-  const std::optional<std::string> defaultSchema_;
-
-  // Generates unique plan-node IDs (shared across builders via Context).
-  const std::shared_ptr<velox::core::PlanNodeIdGenerator> planNodeIdGenerator_;
-
-  // Allocates unique internal column names (shared across builders via
-  // Context).
-  const std::shared_ptr<NameAllocator> nameAllocator_;
+  // Shared state this builder was created with. See Context.
+  const Context context_;
 
   // Resolves column references from the enclosing query for correlated
   // subqueries. Null for top-level queries.
   Scope outerScope_;
 
-  // Parses SQL expression strings into Velox expression trees.
-  const std::shared_ptr<velox::parse::SqlExpressionsParser> sqlParser_;
-
   const bool allowAmbiguousOutputNames_;
-
-  // Coercion rule set used during planning, or nullptr to disable implicit
-  // coercions. The referenced TypeCoercer must outlive this PlanBuilder;
-  // in practice it's a static singleton (TypeCoercer::defaults() or a
-  // dialect's coercer).
-  const velox::TypeCoercer* coercer_;
-
-  // Optional transform applied to user-facing column names. See
-  // Context::identifierCanonicalizer.
-  std::function<std::string(const std::string&)> identifierCanonicalizer_;
-
-  // See Context::connectorContext.
-  const connector::ConnectorContextPtr connectorContext_;
 
   // Root of the plan tree built so far. Null before the first leaf node
   // (values or tableScan) is added.
