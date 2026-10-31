@@ -274,6 +274,29 @@ class Printer : public NodeVisitor {
     visitInputs(node, ctx);
   }
 
+  void visit(const VectorSearch& node, NodeVisitorContext& context)
+      const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(
+        ctx,
+        node,
+        fmt::format(
+            "[{}]", velox::core::JoinTypeName::toName(node.joinType())));
+    const auto pad = spaces(ctx.indent + 2);
+    if (!node.probeKeys().empty()) {
+      ctx.out << pad << "probeKeys: " << formatExprs(node.probeKeys()) << '\n';
+      ctx.out << pad << "buildKeys: " << formatExprs(node.buildKeys()) << '\n';
+    }
+    ctx.out << pad << "nearest: " << node.buildIndex()->name() << " to "
+            << node.probeEmbedding()->name() << ", k = " << node.k() << ", "
+            << velox::common::vectorindex::VectorIndexMetricName::toName(
+                   node.metric())
+            << '\n';
+    ctx.out << pad << "id: " << node.id()->name()
+            << ", score: " << node.score()->name() << '\n';
+    visitInputs(node, ctx);
+  }
+
   void visit(const Window& node, NodeVisitorContext& context) const override {
     auto& ctx = static_cast<Context&>(context);
     header(ctx, node);

@@ -43,6 +43,12 @@ list(
 include(ResolveDependency)
 
 set(VELOX_ENABLE_PARQUET ON)
+set(VELOX_ENABLE_FAISS ON)
+# The FAISS that Velox's setup scripts install (1.11.0) can't build Velox's
+# vector index, so build it from source.
+# TODO: Remove once Velox requires FAISS 1.12.0
+# (https://github.com/facebookincubator/velox/pull/19958).
+set(faiss_SOURCE BUNDLED)
 set(VELOX_ENABLE_SPARK_FUNCTIONS OFF CACHE BOOL "Build Velox Spark SQL functions.")
 set(VELOX_BUILD_TEST_UTILS ON)
 set(VELOX_BUILD_TESTING OFF)

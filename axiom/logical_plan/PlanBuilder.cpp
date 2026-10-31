@@ -1416,6 +1416,79 @@ PlanBuilder& PlanBuilder::lateralJoin(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::vectorSearch(
+    const PlanBuilder& build,
+    const VectorSearch& search) {
+  VELOX_USER_CHECK_NOT_NULL(node_, "Vector search node cannot be a leaf node");
+  VELOX_USER_CHECK_NOT_NULL(build.node_);
+  VELOX_USER_CHECK(
+      !search.idName.empty(), "Vector search needs a name for the id column");
+  VELOX_USER_CHECK(
+      !search.scoreName.empty(),
+      "Vector search needs a name for the score column");
+
+  auto resolve = [](const NameMappings& mapping,
+                    const std::string& name,
+                    std::string_view side) {
+    auto resolved = mapping.lookup(name);
+    VELOX_USER_CHECK(
+        resolved.has_value(),
+        "Cannot resolve column in vector search {} input: {} not found in [{}]",
+        side,
+        name,
+        mapping.toString());
+    return std::move(resolved.value());
+  };
+
+  std::vector<std::string> probeKeys;
+  probeKeys.reserve(search.probeKeys.size());
+  for (const auto& name : search.probeKeys) {
+    probeKeys.push_back(resolve(*outputMapping_, name, "probe"));
+  }
+  std::vector<std::string> buildKeys;
+  buildKeys.reserve(search.buildKeys.size());
+  for (const auto& name : search.buildKeys) {
+    buildKeys.push_back(resolve(*build.outputMapping_, name, "build"));
+  }
+  auto probeEmbedding =
+      resolve(*outputMapping_, search.probeEmbedding, "probe");
+  auto buildIndex = resolve(*build.outputMapping_, search.buildIndex, "build");
+  auto idName = newName(search.idName);
+  auto scoreName = newName(search.scoreName);
+
+  node_ = std::make_shared<VectorSearchNode>(
+      nextId(),
+      std::move(node_),
+      build.node_,
+      search.joinType,
+      std::move(probeKeys),
+      std::move(buildKeys),
+      std::move(probeEmbedding),
+      std::move(buildIndex),
+      search.metric,
+      search.k,
+      search.searchOptions,
+      idName,
+      scoreName);
+
+  // The output drops the build's index column, so the names of both inputs are
+  // carried over only for the columns the node outputs.
+  NameMappings inputs{*outputMapping_};
+  inputs.merge(*build.outputMapping_);
+  auto mapping = std::make_shared<NameMappings>();
+  for (const auto& id : node_->outputType()->names()) {
+    for (const auto& name : inputs.reverseLookup(id)) {
+      mapping->add(name, id);
+    }
+    mapping->copyUserName(id, inputs);
+  }
+  mapping->add(search.idName, idName);
+  mapping->add(search.scoreName, scoreName);
+  outputMapping_ = std::move(mapping);
+
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::joinUsing(
     const PlanBuilder& right,
     const std::vector<std::string>& columns,

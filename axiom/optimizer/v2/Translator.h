@@ -343,6 +343,9 @@ class Translator {
   Translated translateLateralJoin(
       const logical_plan::LateralJoinNode& join,
       const LpNameSet& required);
+  Translated translateVectorSearch(
+      const logical_plan::VectorSearchNode& search,
+      const LpNameSet& required);
   Translated translateTableWrite(
       const logical_plan::TableWriteNode& tableWrite,
       const LpNameSet& required);

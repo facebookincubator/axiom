@@ -268,6 +268,8 @@ class Emitter {
         return emitJoin(*node->as<Join>());
       case NodeType::kIndexLookupJoin:
         return emitIndexLookupJoin(*node->as<IndexLookupJoin>());
+      case NodeType::kVectorSearch:
+        return emitVectorSearch(*node->as<VectorSearch>());
       case NodeType::kSort:
         return emitSort(*node->as<Sort>());
       case NodeType::kTopN:
@@ -460,6 +462,7 @@ class Emitter {
   // emitted. It runs once, before the first iteration.
   velox::core::PlanNodePtr emitInitialPlan(NodeCP node);
   velox::core::PlanNodePtr emitIndexLookupJoin(const IndexLookupJoin& join);
+  velox::core::PlanNodePtr emitVectorSearch(const VectorSearch& search);
   velox::core::PlanNodePtr emitSort(const Sort& sort);
   velox::core::PlanNodePtr emitTopN(const TopN& topN);
   velox::core::PlanNodePtr emitLimit(const Limit& limit);
@@ -1655,6 +1658,44 @@ velox::core::PlanNodePtr Emitter::emitIndexLookupJoin(
             std::move(result),
             join.sourceColumns(),
             namesOf(join.outputColumns()));
+}
+
+velox::core::PlanNodePtr Emitter::emitVectorSearch(const VectorSearch& search) {
+  velox::core::PlanNodePtr probe = emit(search.probe());
+  velox::core::PlanNodePtr build = emit(search.build());
+
+  std::optional<std::string> idName;
+  std::optional<std::string> scoreName;
+  for (ColumnCP source : search.sourceColumns()) {
+    if (source == search.id()) {
+      idName = source->outputName();
+    } else if (source == search.score()) {
+      scoreName = source->outputName();
+    }
+  }
+
+  auto result = std::make_shared<velox::core::VectorSearchJoinNode>(
+      nextId(),
+      search.joinType(),
+      toFieldAccessList(search.probeKeys(), "VectorSearch probeKey"),
+      toFieldAccessList(search.buildKeys(), "VectorSearch buildKey"),
+      toFieldAccess(search.probeEmbedding()),
+      toFieldAccess(search.buildIndex()),
+      search.metric(),
+      search.k(),
+      search.searchOptions(),
+      std::move(idName),
+      std::move(scoreName),
+      std::move(probe),
+      std::move(build),
+      makeRowType(search.sourceColumns()));
+
+  return search.sourceColumns() == search.outputColumns()
+      ? std::move(result)
+      : wrapWithRenameProject(
+            std::move(result),
+            search.sourceColumns(),
+            namesOf(search.outputColumns()));
 }
 
 velox::core::PlanNodePtr Emitter::emitSemiAntiViaLeftSemiProject(

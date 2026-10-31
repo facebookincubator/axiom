@@ -322,7 +322,8 @@ void SubfieldTracker::markFieldAccessed(
     return;
   }
 
-  if (kind == lp::NodeKind::kLateralJoin) {
+  if (kind == lp::NodeKind::kLateralJoin ||
+      kind == lp::NodeKind::kVectorSearch) {
     VELOX_NYI("Unsupported PlanNode {}", lp::NodeKindName::toName(kind));
   }
 
@@ -617,7 +618,8 @@ void SubfieldTracker::markControl(
     const MarkFieldsAccessedContext& context) {
   const auto kind = node.kind();
 
-  if (kind == lp::NodeKind::kLateralJoin) {
+  if (kind == lp::NodeKind::kLateralJoin ||
+      kind == lp::NodeKind::kVectorSearch) {
     VELOX_NYI("Unsupported PlanNode {}", lp::NodeKindName::toName(kind));
   }
 

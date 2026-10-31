@@ -167,6 +167,7 @@ if(AXIOM_BUILD_TESTING)
     UnnestTest.cpp
     UnknownStatsJoinTest.cpp
     ValuesTest.cpp
+    VectorSearchTest.cpp
     WindowTest.cpp
     WriteTest.cpp
   )

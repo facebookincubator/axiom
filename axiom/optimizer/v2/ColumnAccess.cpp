@@ -417,6 +417,14 @@ class Collector : public NodeVisitor {
     addAll(context, node.filter());
   }
 
+  void visit(const VectorSearch& node, NodeVisitorContext& context)
+      const override {
+    addAll(context, node.probeKeys());
+    addAll(context, node.buildKeys());
+    add(context, node.probeEmbedding());
+    add(context, node.buildIndex());
+  }
+
   void visit(const Window& node, NodeVisitorContext& context) const override {
     addAll(context, node.partitionKeys());
     addAll(context, node.orderKeys());

@@ -110,6 +110,18 @@ void forEachExpressionInNode(NodeCP node, Visit&& visit) {
       }
       break;
     }
+    case NodeType::kVectorSearch: {
+      const VectorSearch* search = node->as<VectorSearch>();
+      for (ExprCP key : search->probeKeys()) {
+        visit(key);
+      }
+      for (ExprCP key : search->buildKeys()) {
+        visit(key);
+      }
+      visit(search->probeEmbedding());
+      visit(search->buildIndex());
+      break;
+    }
     case NodeType::kIndexLookupJoin: {
       const IndexLookupJoin* join = node->as<IndexLookupJoin>();
       for (ExprCP key : join->probeKeys()) {

@@ -438,6 +438,79 @@ TEST_F(PlanBuilderTest, setOperationTypeCoercion) {
   }
 }
 
+// A vector search rejects a join type other than inner and left, keys that do
+// not pair up, a probe embedding that is not an ARRAY(REAL), a build index that
+// is not a VARBINARY, a 'k' below 1, a column of neither input and an unnamed
+// output column.
+TEST_F(PlanBuilderTest, vectorSearchErrors) {
+  const PlanBuilder::VectorSearch valid{
+      .probeKeys = {"c"},
+      .buildKeys = {"d"},
+      .probeEmbedding = "b",
+      .buildIndex = "e",
+      .k = 1,
+      .idName = "id",
+      .scoreName = "score"};
+  auto searchWith = [](const PlanBuilder::VectorSearch& search) {
+    PlanBuilder::Context context;
+    PlanBuilder(context)
+        .values(
+            ROW({"a", "b", "c"}, {BIGINT(), ARRAY(REAL()), VARCHAR()}),
+            std::vector<Variant>{})
+        .vectorSearch(
+            PlanBuilder(context).values(
+                ROW({"d", "e"}, {VARCHAR(), VARBINARY()}),
+                std::vector<Variant>{}),
+            search);
+  };
+  searchWith(valid);
+
+  auto search = valid;
+  search.joinType = JoinType::kRight;
+  VELOX_ASSERT_THROW(
+      searchWith(search),
+      "Vector search supports only INNER and LEFT join types: RIGHT");
+
+  search = valid;
+  search.buildKeys = {};
+  VELOX_ASSERT_THROW(
+      searchWith(search),
+      "Vector search needs as many probe keys as build keys");
+
+  search = valid;
+  search.probeKeys = {"a"};
+  VELOX_ASSERT_THROW(
+      searchWith(search),
+      "Vector search key types differ: a BIGINT, d VARCHAR");
+
+  search = valid;
+  search.probeEmbedding = "a";
+  VELOX_ASSERT_THROW(
+      searchWith(search),
+      "Vector search probe embedding must be an ARRAY(REAL): a BIGINT");
+
+  search = valid;
+  search.buildIndex = "d";
+  VELOX_ASSERT_THROW(
+      searchWith(search),
+      "Vector search build index must be a VARBINARY: d VARCHAR");
+
+  search = valid;
+  search.k = 0;
+  VELOX_ASSERT_THROW(searchWith(search), "Vector search k must be at least 1");
+
+  search = valid;
+  search.probeEmbedding = "e";
+  VELOX_ASSERT_THROW(
+      searchWith(search),
+      "Cannot resolve column in vector search probe input: e");
+
+  search = valid;
+  search.idName = "";
+  VELOX_ASSERT_THROW(
+      searchWith(search), "Vector search needs a name for the id column");
+}
+
 TEST_F(PlanBuilderTest, joinUsingTypeCoercion) {
   auto startMatcher = [] { return test::LogicalPlanMatcherBuilder().values(); };
 

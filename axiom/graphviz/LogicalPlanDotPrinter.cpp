@@ -219,6 +219,27 @@ class DotPrinterVisitor : public PlanNodeVisitor {
     visitInputs(node, ctx);
   }
 
+  void visit(const VectorSearchNode& node, PlanNodeVisitorContext& ctx)
+      const override {
+    auto& context = static_cast<Context&>(ctx);
+    printNodeStart(
+        context.out,
+        node,
+        fmt::format("Vector Search {}", JoinTypeName::toName(node.joinType())),
+        kPalette.header);
+    printHighlightedRow(
+        context.out,
+        fmt::format(
+            "nearest {} to {}, k = {}",
+            escapeHtml(node.buildIndex()),
+            escapeHtml(node.probeEmbedding()),
+            node.k()));
+    printNodeEnd(context.out);
+
+    printEdgeToInputs(context.out, node);
+    visitInputs(node, ctx);
+  }
+
   void visit(const LateralJoinNode& node, PlanNodeVisitorContext& ctx)
       const override {
     auto& context = static_cast<Context&>(ctx);

@@ -1260,6 +1260,49 @@ TEST_F(PlanPrinterTest, join) {
           testing::Eq("")));
 }
 
+TEST_F(PlanPrinterTest, vectorSearch) {
+  PlanBuilder::Context context;
+  auto plan =
+      PlanBuilder(context)
+          .values(
+              ROW({"a", "b", "c"}, {BIGINT(), ARRAY(REAL()), VARCHAR()}),
+              std::vector<Variant>{})
+          .vectorSearch(
+              PlanBuilder(context).values(
+                  ROW({"d", "e"}, {VARCHAR(), VARBINARY()}),
+                  std::vector<Variant>{}),
+              {.joinType = JoinType::kLeft,
+               .probeKeys = {"c"},
+               .buildKeys = {"d"},
+               .probeEmbedding = "b",
+               .buildIndex = "e",
+               .metric = common::vectorindex::VectorIndexMetric::kCosine,
+               .k = 2,
+               .searchOptions = {{"ivf.nprobe", "4"}},
+               .idName = "id",
+               .scoreName = "score"})
+          .build();
+
+  EXPECT_THAT(
+      toLines(plan),
+      testing::ElementsAre(
+          testing::Eq(
+              "- VectorSearch LEFT: c = d, nearest e to b, k = 2, cosine, "
+              "ivf.nprobe = 4 -> ROW<a:BIGINT,b:ARRAY<REAL>,c:VARCHAR,"
+              "d:VARCHAR,id:BIGINT,score:REAL>"),
+          testing::StartsWith("  - Values: 0 rows"),
+          testing::StartsWith("  - Values: 0 rows"),
+          testing::Eq("")));
+
+  EXPECT_THAT(
+      toSkeletonLines(plan),
+      testing::ElementsAre(
+          testing::Eq("- VECTOR_SEARCH LEFT [2]: 6 fields"),
+          testing::Eq("  - VALUES [0]: 3 fields"),
+          testing::Eq("  - VALUES [1]: 2 fields"),
+          testing::Eq("")));
+}
+
 TEST_F(PlanPrinterTest, crossJoin) {
   auto leftType = ROW({"key", "v"}, {INTEGER(), INTEGER()});
   std::vector<Variant> leftData{

@@ -545,6 +545,48 @@ class PlanBuilder {
       const std::vector<std::string>& columns,
       JoinType joinType);
 
+  /// Specifies a vector search join (see VectorSearchNode). Column names are
+  /// the user-facing names of the input they belong to.
+  struct VectorSearch {
+    /// kInner or kLeft.
+    JoinType joinType{JoinType::kInner};
+
+    /// Probe columns, pairwise equal to 'buildKeys'.
+    std::vector<std::string> probeKeys;
+
+    /// Build columns, pairwise equal to 'probeKeys'.
+    std::vector<std::string> buildKeys;
+
+    /// The probe's ARRAY(REAL) embedding column.
+    std::string probeEmbedding;
+
+    /// The build's VARBINARY column with packed vector indexes.
+    std::string buildIndex;
+
+    /// The metric the indexes were built for.
+    velox::common::vectorindex::VectorIndexMetric metric{
+        velox::common::vectorindex::VectorIndexMetric::kCosine};
+
+    /// The number of entries to find in each matching index.
+    int64_t k{1};
+
+    /// Search settings that override the ones recorded in the indexes.
+    std::vector<std::pair<std::string, std::string>> searchOptions;
+
+    /// Names the output column with each entry's id.
+    std::string idName;
+
+    /// Names the output column with each entry's score.
+    std::string scoreName;
+  };
+
+  /// Adds a vector search join of the current plan, the probe side, with
+  /// 'build', the build side. The output has the probe columns, the build
+  /// columns except the index, then the id and score columns.
+  PlanBuilder& vectorSearch(
+      const PlanBuilder& build,
+      const VectorSearch& search);
+
   /// Adds a cross join (cartesian product) with the 'right' plan.
   PlanBuilder& crossJoin(const PlanBuilder& right) {
     return join(right, /* condition */ std::nullopt, JoinType::kInner);

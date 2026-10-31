@@ -43,6 +43,7 @@ const auto& nodeKindNames() {
       {NodeKind::kRecursiveReference, "RECURSIVE_REFERENCE"},
       {NodeKind::kLateralJoin, "LATERAL_JOIN"},
       {NodeKind::kGraphMatch, "GRAPH_MATCH"},
+      {NodeKind::kVectorSearch, "VECTOR_SEARCH"},
   };
   return kNames;
 }
@@ -96,6 +97,9 @@ class SubqueryPlanVisitor : public PlanNodeVisitor {
       const override {
     visitOptionalExpression(node.condition(), context);
   }
+
+  void visit(const VectorSearchNode& node, PlanNodeVisitorContext& context)
+      const override {}
 
   void visit(const SortNode& node, PlanNodeVisitorContext& context)
       const override {
@@ -340,6 +344,7 @@ void LogicalPlanNode::registerSerDe() {
   registry.Register("LogicalAggregateNode", AggregateNode::create);
   registry.Register("LogicalJoinNode", JoinNode::create);
   registry.Register("LogicalLateralJoinNode", LateralJoinNode::create);
+  registry.Register("LogicalVectorSearchNode", VectorSearchNode::create);
   registry.Register("LogicalSortNode", SortNode::create);
   registry.Register("LogicalLimitNode", LimitNode::create);
   registry.Register("LogicalSetNode", SetNode::create);
@@ -1081,6 +1086,181 @@ bool LateralJoinNode::equalTo(const LogicalPlanNode& other) const {
   return equalNodeVectors(nestedPlans(), rhs->nestedPlans()) &&
       joinType_ == rhs->joinType_ &&
       Expr::equalNullableExprs(condition_, rhs->condition_);
+}
+
+namespace {
+
+// Returns the probe columns, the build columns except 'buildIndex', then the
+// BIGINT 'idName' and the REAL 'scoreName' columns.
+velox::RowTypePtr makeVectorSearchOutputType(
+    const LogicalPlanNodePtr& probe,
+    const LogicalPlanNodePtr& build,
+    std::string_view buildIndex,
+    std::string_view idName,
+    std::string_view scoreName) {
+  auto names = probe->outputType()->names();
+  auto types = probe->outputType()->children();
+  const auto& buildType = build->outputType();
+  for (uint32_t i = 0; i < buildType->size(); ++i) {
+    if (buildType->nameOf(i) != buildIndex) {
+      names.push_back(buildType->nameOf(i));
+      types.push_back(buildType->childAt(i));
+    }
+  }
+  names.emplace_back(idName);
+  types.push_back(velox::BIGINT());
+  names.emplace_back(scoreName);
+  types.push_back(velox::REAL());
+
+  UniqueNameChecker::check(names);
+  return velox::ROW(std::move(names), std::move(types));
+}
+
+// Returns the type of 'column', which must be a column of 'node'.
+const velox::TypePtr& vectorSearchColumnType(
+    const LogicalPlanNodePtr& node,
+    std::string_view column,
+    std::string_view side) {
+  const auto& type = node->outputType();
+  VELOX_USER_CHECK(
+      type->containsChild(column),
+      "Vector search {} column not found: {}",
+      side,
+      column);
+  return type->findChild(column);
+}
+
+} // namespace
+
+VectorSearchNode::VectorSearchNode(
+    std::string id,
+    const LogicalPlanNodePtr& probe,
+    const LogicalPlanNodePtr& build,
+    JoinType joinType,
+    std::vector<std::string> probeKeys,
+    std::vector<std::string> buildKeys,
+    std::string probeEmbedding,
+    std::string buildIndex,
+    velox::common::vectorindex::VectorIndexMetric metric,
+    int64_t k,
+    std::vector<std::pair<std::string, std::string>> searchOptions,
+    std::string idName,
+    std::string scoreName)
+    : LogicalPlanNode{NodeKind::kVectorSearch, std::move(id), {probe, build}, makeVectorSearchOutputType(probe, build, buildIndex, idName, scoreName)},
+      joinType_{joinType},
+      probeKeys_{std::move(probeKeys)},
+      buildKeys_{std::move(buildKeys)},
+      probeEmbedding_{std::move(probeEmbedding)},
+      buildIndex_{std::move(buildIndex)},
+      metric_{metric},
+      k_{k},
+      searchOptions_{std::move(searchOptions)},
+      idName_{std::move(idName)},
+      scoreName_{std::move(scoreName)} {
+  VELOX_USER_CHECK(
+      joinType_ == JoinType::kInner || joinType_ == JoinType::kLeft,
+      "Vector search supports only INNER and LEFT join types: {}",
+      JoinTypeName::toName(joinType_));
+  VELOX_USER_CHECK_EQ(
+      probeKeys_.size(),
+      buildKeys_.size(),
+      "Vector search needs as many probe keys as build keys");
+  for (size_t i = 0; i < probeKeys_.size(); ++i) {
+    const auto& probeType =
+        vectorSearchColumnType(probe, probeKeys_[i], "probe key");
+    const auto& buildType =
+        vectorSearchColumnType(build, buildKeys_[i], "build key");
+    VELOX_USER_CHECK(
+        probeType->equivalent(*buildType),
+        "Vector search key types differ: {} {}, {} {}",
+        probeKeys_[i],
+        probeType->toString(),
+        buildKeys_[i],
+        buildType->toString());
+  }
+
+  const auto& embeddingType =
+      vectorSearchColumnType(probe, probeEmbedding_, "probe embedding");
+  VELOX_USER_CHECK(
+      embeddingType->equivalent(*velox::ARRAY(velox::REAL())),
+      "Vector search probe embedding must be an ARRAY(REAL): {} {}",
+      probeEmbedding_,
+      embeddingType->toString());
+
+  const auto& indexType =
+      vectorSearchColumnType(build, buildIndex_, "build index");
+  VELOX_USER_CHECK(
+      indexType->isVarbinary(),
+      "Vector search build index must be a VARBINARY: {} {}",
+      buildIndex_,
+      indexType->toString());
+
+  VELOX_USER_CHECK_GE(k_, 1, "Vector search k must be at least 1");
+}
+
+folly::dynamic VectorSearchNode::serialize() const {
+  auto obj = serializeBase("LogicalVectorSearchNode");
+  obj["joinType"] = JoinTypeName::toName(joinType_);
+  obj["probeKeys"] = velox::ISerializable::serialize(probeKeys_);
+  obj["buildKeys"] = velox::ISerializable::serialize(buildKeys_);
+  obj["probeEmbedding"] = probeEmbedding_;
+  obj["buildIndex"] = buildIndex_;
+  obj["metric"] = std::string{
+      velox::common::vectorindex::VectorIndexMetricName::toName(metric_)};
+  obj["k"] = k_;
+  folly::dynamic options = folly::dynamic::array;
+  for (const auto& [name, value] : searchOptions_) {
+    options.push_back(folly::dynamic::array(name, value));
+  }
+  obj["searchOptions"] = std::move(options);
+  obj["idName"] = idName_;
+  obj["scoreName"] = scoreName_;
+  return obj;
+}
+
+// static
+LogicalPlanNodePtr VectorSearchNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto inputs = deserializeNodeInputs(obj, context);
+  VELOX_CHECK_EQ(inputs.size(), 2);
+  std::vector<std::pair<std::string, std::string>> searchOptions;
+  for (const auto& option : obj["searchOptions"]) {
+    searchOptions.emplace_back(option[0].asString(), option[1].asString());
+  }
+  return std::make_shared<VectorSearchNode>(
+      obj["id"].asString(),
+      inputs[0],
+      inputs[1],
+      JoinTypeName::toJoinType(obj["joinType"].asString()),
+      velox::ISerializable::deserialize<std::vector<std::string>>(
+          obj["probeKeys"]),
+      velox::ISerializable::deserialize<std::vector<std::string>>(
+          obj["buildKeys"]),
+      obj["probeEmbedding"].asString(),
+      obj["buildIndex"].asString(),
+      velox::common::vectorindex::VectorIndexMetricName::toVectorIndexMetric(
+          obj["metric"].asString()),
+      obj["k"].asInt(),
+      std::move(searchOptions),
+      obj["idName"].asString(),
+      obj["scoreName"].asString());
+}
+
+void VectorSearchNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+bool VectorSearchNode::equalTo(const LogicalPlanNode& other) const {
+  const auto* rhs = other.as<VectorSearchNode>();
+  return joinType_ == rhs->joinType_ && probeKeys_ == rhs->probeKeys_ &&
+      buildKeys_ == rhs->buildKeys_ &&
+      probeEmbedding_ == rhs->probeEmbedding_ &&
+      buildIndex_ == rhs->buildIndex_ && metric_ == rhs->metric_ &&
+      k_ == rhs->k_ && searchOptions_ == rhs->searchOptions_ &&
+      idName_ == rhs->idName_ && scoreName_ == rhs->scoreName_;
 }
 
 void SortNode::accept(

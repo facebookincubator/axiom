@@ -247,6 +247,34 @@ TEST_F(LogicalPlanNodeSerdeTest, lateralJoinNodeCross) {
   testRoundTrip(plan);
 }
 
+TEST_F(LogicalPlanNodeSerdeTest, vectorSearchNode) {
+  auto build = PlanBuilder().values(
+      ROW({"d", "e"}, {VARCHAR(), VARBINARY()}), std::vector<Variant>{});
+
+  for (const auto joinType : {JoinType::kInner, JoinType::kLeft}) {
+    SCOPED_TRACE(JoinTypeName::toName(joinType));
+    auto plan =
+        PlanBuilder()
+            .values(
+                ROW({"a", "b", "c"}, {BIGINT(), ARRAY(REAL()), VARCHAR()}),
+                std::vector<Variant>{})
+            .vectorSearch(
+                build,
+                {.joinType = joinType,
+                 .probeKeys = {"c"},
+                 .buildKeys = {"d"},
+                 .probeEmbedding = "b",
+                 .buildIndex = "e",
+                 .metric = common::vectorindex::VectorIndexMetric::kCosine,
+                 .k = 3,
+                 .searchOptions = {{"ivf.nprobe", "4"}},
+                 .idName = "id",
+                 .scoreName = "score"})
+            .build();
+    testRoundTrip(plan);
+  }
+}
+
 TEST_F(LogicalPlanNodeSerdeTest, sortNode) {
   auto plan = PlanBuilder()
                   .values(

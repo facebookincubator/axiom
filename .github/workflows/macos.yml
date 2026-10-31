@@ -107,6 +107,8 @@ jobs:
           install_wangle
           install_mvfst
           install_fbthrift
+          # OpenMP and BLAS for the FAISS build.
+          install_faiss_deps
 
           echo "NJOBS=$(sysctl -n hw.ncpu)" >> $GITHUB_ENV
           echo "$INSTALL_PREFIX/bin" >> $GITHUB_PATH

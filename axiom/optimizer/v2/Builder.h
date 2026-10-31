@@ -73,7 +73,8 @@ class Builder {
       return *it;
     }
     const T* node = [&] {
-      if constexpr (std::is_same_v<T, Join>) {
+      if constexpr (
+          std::is_same_v<T, Join> || std::is_same_v<T, VectorSearch>) {
         return optimizer::make<T>(std::move(key), *this);
       } else {
         return optimizer::make<T>(std::move(key));
@@ -288,6 +289,8 @@ class Builder {
       return repeats_;
     } else if constexpr (std::is_same_v<T, IndexLookupJoin>) {
       return indexLookupJoins_;
+    } else if constexpr (std::is_same_v<T, VectorSearch>) {
+      return vectorSearches_;
     } else {
       static_assert(sizeof(T) == 0, "No dedup map for this node type");
     }
@@ -321,6 +324,7 @@ class Builder {
   DedupSet<UnionAll> unions_;
   DedupSet<Join> joins_;
   DedupSet<IndexLookupJoin> indexLookupJoins_;
+  DedupSet<VectorSearch> vectorSearches_;
   DedupSet<Window> windows_;
   DedupSet<Inference> inferences_;
   DedupSet<RowNumber> rowNumbers_;
