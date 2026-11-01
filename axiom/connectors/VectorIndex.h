@@ -25,8 +25,8 @@
 
 #include "axiom/common/Enums.h"
 #include "axiom/common/SchemaTableName.h"
+#include "velox/common/vectorindex/VectorIndexKind.h"
 #include "velox/common/vectorindex/VectorIndexMetric.h"
-#include "velox/common/vectorindex/VectorIndexType.h"
 #include "velox/type/Variant.h"
 
 namespace facebook::axiom::connector {
@@ -60,7 +60,7 @@ struct VectorIndexProperties {
   velox::common::vectorindex::VectorIndexMetric metric{};
 
   /// The kind of each local index.
-  velox::common::vectorindex::VectorIndexType indexType{};
+  velox::common::vectorindex::VectorIndexKind indexKind{};
 
   /// The number of clusters of each codec. Positive.
   int64_t numClusters{0};
@@ -69,7 +69,7 @@ struct VectorIndexProperties {
   VectorIndexCodecPolicy codecPolicy{VectorIndexCodecPolicy::kPerPartition};
 
   /// Settings of each local index, such as 'ivf.nlist', by key.
-  /// Valid for 'indexType' (see velox::common::vectorindex::
+  /// Valid for 'indexKind' (see velox::common::vectorindex::
   /// LocalVectorIndexOptions).
   std::map<std::string, std::string> indexOptions;
 

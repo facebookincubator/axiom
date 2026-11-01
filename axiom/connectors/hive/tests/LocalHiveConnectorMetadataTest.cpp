@@ -302,7 +302,7 @@ class LocalHiveConnectorMetadataTest
   static VectorIndexProperties vectorIndexProperties() {
     return {
         .metric = common::vectorindex::VectorIndexMetric::kCosine,
-        .indexType = common::vectorindex::VectorIndexType::kIvfFlat,
+        .indexKind = common::vectorindex::VectorIndexKind::kIvfFlat,
         .numClusters = 10,
         .codecPolicy = VectorIndexCodecPolicy::kShared,
         .indexOptions = {{"ivf.nlist", "4"}, {"ivf.nprobe", "2"}},
