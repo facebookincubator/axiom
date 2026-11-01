@@ -101,10 +101,10 @@ VectorIndexProperties VectorIndexProperties::extract(
 
   const auto typeName =
       toString(takeRequired(properties, kIndexType), kIndexType);
-  const auto indexType =
-      vectorindex::VectorIndexTypeName::tryToVectorIndexType(typeName);
+  const auto indexKind =
+      vectorindex::VectorIndexKindName::tryToVectorIndexKind(typeName);
   VELOX_USER_CHECK(
-      indexType.has_value(), "Unsupported index type: {}", typeName);
+      indexKind.has_value(), "Unsupported index type: {}", typeName);
 
   const auto numClusters =
       toInteger(takeRequired(properties, kNumClusters), kNumClusters);
@@ -142,11 +142,11 @@ VectorIndexProperties VectorIndexProperties::extract(
 
   std::vector<std::pair<std::string_view, std::string_view>> optionViews(
       indexOptions.begin(), indexOptions.end());
-  vectorindex::LocalVectorIndexOptions::parse(*indexType, optionViews);
+  vectorindex::LocalVectorIndexOptions::parse(*indexKind, optionViews);
 
   return {
       .metric = *metric,
-      .indexType = *indexType,
+      .indexKind = *indexKind,
       .numClusters = numClusters,
       .codecPolicy = codecPolicy,
       .indexOptions = std::move(indexOptions),

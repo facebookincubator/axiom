@@ -2077,8 +2077,8 @@ folly::dynamic toVectorIndexJson(const VectorIndex& index) {
       velox::common::vectorindex::VectorIndexMetricName::toName(
           index.properties.metric))(
       "indexType",
-      velox::common::vectorindex::VectorIndexTypeName::toName(
-          index.properties.indexType))(
+      velox::common::vectorindex::VectorIndexKindName::toName(
+          index.properties.indexKind))(
       "numClusters", index.properties.numClusters)(
       "codecPolicy",
       VectorIndexCodecPolicyName::toName(index.properties.codecPolicy))(
@@ -2102,8 +2102,8 @@ VectorIndexPtr fromVectorIndexJson(
           {
               .metric = velox::common::vectorindex::VectorIndexMetricName::
                   toVectorIndexMetric(json["distanceMetric"].asString()),
-              .indexType = velox::common::vectorindex::VectorIndexTypeName::
-                  toVectorIndexType(json["indexType"].asString()),
+              .indexKind = velox::common::vectorindex::VectorIndexKindName::
+                  toVectorIndexKind(json["indexType"].asString()),
               .numClusters = json["numClusters"].asInt(),
               .codecPolicy =
                   VectorIndexCodecPolicyName::toVectorIndexCodecPolicy(

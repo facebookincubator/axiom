@@ -59,7 +59,7 @@ TEST(VectorIndexTest, extract) {
   EXPECT_EQ(
       (VectorIndexProperties{
           .metric = common::vectorindex::VectorIndexMetric::kCosine,
-          .indexType = common::vectorindex::VectorIndexType::kIvfFlat,
+          .indexKind = common::vectorindex::VectorIndexKind::kIvfFlat,
           .numClusters = 10,
           .codecPolicy = VectorIndexCodecPolicy::kShared,
           .indexOptions = {{"ivf.nlist", "4"}},
