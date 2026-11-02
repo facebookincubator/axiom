@@ -152,7 +152,8 @@ int main(int argc, char** argv) {
     // Skip tables that already have .schema and .stats metadata unless --force.
     if (!FLAGS_force &&
         std::filesystem::exists(
-            facebook::axiom::connector::hive::schemaPath(tableDir.string()))) {
+            facebook::axiom::connector::hive::SchemaFile::path(
+                tableDir.string()))) {
       fmt::print(
           stderr,
           "  {} ... skipped (already imported, use --force to re-import)\n",

@@ -324,6 +324,15 @@ std::vector<velox::TypePtr> extractPartitionKeyTypes(
   }
   return types;
 }
+
+velox::RowTypePtr toRowType(const std::vector<const Column*>& columns) {
+  std::vector<std::string> names;
+  names.reserve(columns.size());
+  for (const auto* column : columns) {
+    names.push_back(column->name());
+  }
+  return velox::ROW(std::move(names), extractPartitionKeyTypes(columns));
+}
 } // namespace
 
 HiveTableLayout::HiveTableLayout(
@@ -350,6 +359,7 @@ HiveTableLayout::HiveTableLayout(
           /*supportsScan=*/true),
       fileFormat_(fileFormat),
       hivePartitionColumns_(std::move(hivePartitionedByColumns)),
+      hivePartitionColumnsType_(toRowType(hivePartitionColumns_)),
       numBuckets_(numPartitions),
       partitionType_{
           numPartitions.has_value()

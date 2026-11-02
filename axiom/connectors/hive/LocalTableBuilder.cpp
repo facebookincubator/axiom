@@ -187,27 +187,6 @@ void populateFileColumnStats(
   }
 }
 
-velox::RowTypePtr parseSchema(const folly::dynamic& obj) {
-  std::vector<std::string> names;
-  std::vector<velox::TypePtr> types;
-
-  auto parseColumn = [&](const auto& column) {
-    names.push_back(column["name"].asString());
-    types.push_back(
-        velox::ISerializable::deserialize<velox::Type>(column["type"]));
-  };
-
-  for (const auto& column : obj["dataColumns"]) {
-    parseColumn(column);
-  }
-
-  for (const auto& column : obj["partitionColumns"]) {
-    parseColumn(column);
-  }
-
-  return velox::ROW(std::move(names), std::move(types));
-}
-
 bool isMixedOrder(const ColumnStatistics& stats) {
   return stats.ascendingPct.has_value() && stats.descendingPct.has_value() &&
       stats.ascendingPct.value() > 0 && stats.descendingPct.value() > 0;
@@ -261,12 +240,12 @@ void LocalTableBuilder::build(const std::string& tablePath) {
   velox::RowTypePtr tableType;
 
   // Check if .schema already exists and read it.
-  const auto schemaFile = schemaPath(tablePath);
+  const auto schemaFile = SchemaFile::path(tablePath);
   const bool hasSchema = std::filesystem::exists(schemaFile);
   if (hasSchema) {
     auto dynamics = readConcatenatedDynamicsFromFile(schemaFile);
     VELOX_CHECK(!dynamics.empty(), "Empty schema file: {}", schemaFile);
-    tableType = parseSchema(dynamics[0]);
+    tableType = SchemaFile::parseRowType(dynamics[0]);
   }
 
   // List all data files.
@@ -331,7 +310,7 @@ void LocalTableBuilder::build(const std::string& tablePath) {
 
   // Write .schema if it doesn't exist.
   if (!hasSchema) {
-    writeSchemaFile(tablePath, tableType, fileFormat_);
+    SchemaFile::write(tablePath, tableType, fileFormat_);
   }
 
   // Build ordered column stats vector matching the schema column order.

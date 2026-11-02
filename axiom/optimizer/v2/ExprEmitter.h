@@ -75,6 +75,9 @@ class ExprEmitter {
       const ExprVector& predicates,
       ColumnNaming naming = ColumnNaming::kOutputName);
 
+  /// Returns a ROW type with the output name and type of each column.
+  static velox::RowTypePtr toRowType(const ColumnVector& columns);
+
  private:
   // Memoizes each Expr's lowered form for the duration of one conversion, so a
   // shared subexpression DAG lowers in linear rather than exponential time.

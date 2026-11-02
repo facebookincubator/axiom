@@ -86,21 +86,6 @@ velox::core::TypedExprPtr tryLowerConstantIn(
               pool)));
 }
 
-velox::core::TypedExprPtr lambdaToTypedExpr(
-    const Lambda* lambda,
-    const velox::core::TypedExprPtr& body) {
-  std::vector<std::string> names;
-  std::vector<velox::TypePtr> types;
-  names.reserve(lambda->args().size());
-  types.reserve(lambda->args().size());
-  for (ColumnCP arg : lambda->args()) {
-    names.push_back(arg->outputName());
-    types.push_back(toTypePtr(arg->value().type));
-  }
-  return std::make_shared<velox::core::LambdaTypedExpr>(
-      velox::ROW(std::move(names), std::move(types)), body);
-}
-
 } // namespace
 
 AXIOM_DEFINE_ENUM_NAME(ColumnNaming, columnNamingNames);
@@ -190,8 +175,9 @@ velox::core::TypedExprPtr ExprEmitter::toTypedExpr(
     }
     case PlanType::kLambdaExpr: {
       const auto* lambda = expr->as<Lambda>();
-      result = lambdaToTypedExpr(
-          lambda, toTypedExpr(lambda->body(), naming, cache, replacements));
+      result = std::make_shared<velox::core::LambdaTypedExpr>(
+          toRowType(lambda->args()),
+          toTypedExpr(lambda->body(), naming, cache, replacements));
       break;
     }
     default:
@@ -232,6 +218,19 @@ velox::core::TypedExprPtr ExprEmitter::makeAnd(
       velox::BOOLEAN(),
       toTypedExprs(predicates, naming),
       velox::expression::kAnd);
+}
+
+// static
+velox::RowTypePtr ExprEmitter::toRowType(const ColumnVector& columns) {
+  std::vector<std::string> names;
+  std::vector<velox::TypePtr> types;
+  names.reserve(columns.size());
+  types.reserve(columns.size());
+  for (ColumnCP column : columns) {
+    names.push_back(column->outputName());
+    types.push_back(toTypePtr(column->value().type));
+  }
+  return velox::ROW(std::move(names), std::move(types));
 }
 
 } // namespace facebook::axiom::optimizer::v2

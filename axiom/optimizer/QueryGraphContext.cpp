@@ -163,14 +163,9 @@ velox::TypePtr QueryGraphContext::dedupType(const velox::TypePtr& type) {
   }
   velox::TypePtr newType;
   switch (type->kind()) {
-    case velox::TypeKind::ROW: {
-      std::vector<std::string> names;
-      names.reserve(size);
-      for (auto i = 0; i < size; ++i) {
-        names.push_back(type->as<velox::TypeKind::ROW>().nameOf(i));
-      }
-      newType = ROW(std::move(names), std::move(children));
-    } break;
+    case velox::TypeKind::ROW:
+      newType = ROW(type->asRow().names(), std::move(children));
+      break;
     case velox::TypeKind::ARRAY:
       newType = ARRAY(children[0]);
       break;

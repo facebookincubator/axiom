@@ -120,7 +120,7 @@ void LocalRunnerTestBase::makeTables(const std::vector<TableSpec>& specs) {
   // LocalHiveConnectorMetadata can load them.
   for (const auto& spec : specs) {
     const auto tablePath = fmt::format("{}/{}", dataPath, spec.name);
-    connector::hive::writeSchemaFile(
+    connector::hive::SchemaFile::write(
         tablePath, spec.columns, velox::dwio::common::FileFormat::DWRF);
 
     const uint64_t totalRows = static_cast<uint64_t>(spec.rowsPerVector) *

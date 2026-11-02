@@ -83,18 +83,27 @@ struct PersistedStats {
   static void write(const std::string& directory, PersistedStats stats);
 };
 
-/// Returns the path to the .schema file in the given directory.
-std::string schemaPath(std::string_view path);
+/// The .schema file that describes the columns of a local table.
+struct SchemaFile {
+  /// Returns the path to the .schema file in the given directory.
+  static std::string path(std::string_view directory);
 
-/// Writes a minimal .schema file for the given row type and file format.
-/// All columns are treated as data columns (no partitioning or bucketing).
-void writeSchemaFile(
-    const std::string& tablePath,
-    const velox::RowTypePtr& rowType,
-    velox::dwio::common::FileFormat fileFormat);
+  /// Writes a minimal .schema file for the given row type and file format.
+  /// All columns are treated as data columns (no partitioning or bucketing).
+  static void write(
+      const std::string& tablePath,
+      const velox::RowTypePtr& rowType,
+      velox::dwio::common::FileFormat fileFormat);
 
-/// Builds the {"name": ..., "type": ...} JSON object used in .schema files for
-/// a single column.
-folly::dynamic columnToJson(std::string_view name, const velox::TypePtr& type);
+  /// Builds the {"name": ..., "type": ...} JSON object used in .schema files
+  /// for a single column.
+  static folly::dynamic columnToJson(
+      std::string_view name,
+      const velox::TypePtr& type);
+
+  /// Returns the table's row type from the parsed .schema JSON: the data
+  /// columns followed by the partition columns.
+  static velox::RowTypePtr parseRowType(const folly::dynamic& schema);
+};
 
 } // namespace facebook::axiom::connector::hive

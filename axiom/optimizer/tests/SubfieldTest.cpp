@@ -323,7 +323,7 @@ class SubfieldTest : public HiveQueriesTestBase,
 
     // Write .schema and .stats metadata so that
     // LocalHiveConnectorMetadata::loadTable() can load the table.
-    connector::hive::writeSchemaFile(
+    connector::hive::SchemaFile::write(
         tablePath, vectors[0]->rowType(), dwio::common::FileFormat::DWRF);
 
     uint64_t totalRows = 0;

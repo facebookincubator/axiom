@@ -165,11 +165,7 @@ bool extractCollectStatistics(
 }
 
 velox::RowTypePtr makeTestTableDataType(const velox::RowTypePtr& schema) {
-  auto names = schema->names();
-  auto types = schema->children();
-  names.emplace_back(TestTable::kRowId);
-  types.push_back(velox::BIGINT());
-  return velox::ROW(std::move(names), std::move(types));
+  return schema->unionWith(TestTable::kRowId, velox::BIGINT());
 }
 } // namespace
 
@@ -1240,11 +1236,7 @@ std::optional<bool> TestConnectorMetadata::addColumn(
     return true;
   }
 
-  auto names = existingType->names();
-  auto types = existingType->children();
-  names.push_back(columnName);
-  types.push_back(columnType);
-  auto newType = velox::ROW(std::move(names), std::move(types));
+  auto newType = existingType->unionWith(columnName, columnType);
 
   std::vector<std::string> hiddenNames;
   std::vector<velox::TypePtr> hiddenTypes;
