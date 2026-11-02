@@ -16,13 +16,13 @@
 
 #include <ranges>
 
-#include "axiom/optimizer/DerivedTable.h"
-#include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/PlanUtils.h"
+#include "axiom/optimizer/v1/DerivedTable.h"
+#include "axiom/optimizer/v1/Optimization.h"
 #include "axiom/optimizer/v1/QueryGraph.h"
 #include "velox/expression/ScopedVarSetter.h"
 
-namespace facebook::axiom::optimizer {
+namespace facebook::axiom::optimizer::v1 {
 
 const WindowPlan* WindowPlan::withFunctions(
     QGVector<WindowFunctionCP> functions,
@@ -527,4 +527,4 @@ void JoinEdge::guessFanout() {
   }
 }
 
-} // namespace facebook::axiom::optimizer
+} // namespace facebook::axiom::optimizer::v1

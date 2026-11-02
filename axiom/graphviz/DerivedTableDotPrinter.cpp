@@ -108,7 +108,7 @@ void printSection(
   }
 }
 
-std::string joinTypeLabel(const JoinEdge& edge) {
+std::string joinTypeLabel(const v1::JoinEdge& edge) {
   if (edge.isSemi()) {
     return "SEMI";
   } else if (edge.isAnti()) {
@@ -126,7 +126,7 @@ std::string joinTypeLabel(const JoinEdge& edge) {
   }
 }
 
-std::string joinCondition(const JoinEdge& edge) {
+std::string joinCondition(const v1::JoinEdge& edge) {
   std::string keys;
   for (size_t i = 0; i < edge.leftKeys().size(); ++i) {
     if (i > 0) {
@@ -163,7 +163,7 @@ void printBaseTable(const BaseTable& table, std::ostream& out) {
   printTableEnd(out);
 }
 
-void printValuesTable(const ValuesTable& table, std::ostream& out) {
+void printValuesTable(const v1::ValuesTable& table, std::ostream& out) {
   printTableStart(out, &table, std::string(table.cname) + " (VALUES)");
 
   for (auto* col : table.columns) {
@@ -178,7 +178,7 @@ void printValuesTable(const ValuesTable& table, std::ostream& out) {
   printTableEnd(out);
 }
 
-void printUnnestTable(const UnnestTable& table, std::ostream& out) {
+void printUnnestTable(const v1::UnnestTable& table, std::ostream& out) {
   printTableStart(out, &table, std::string(table.cname) + " (UNNEST)");
 
   for (auto* col : table.columns) {
@@ -208,7 +208,7 @@ void printUnnestTable(const UnnestTable& table, std::ostream& out) {
 //
 // Join edges connect table ID nodes with ordinal numbers matching the
 // JOINS list in the header.
-void printJoinEdges(const DerivedTable& dt, std::ostream& out) {
+void printJoinEdges(const v1::DerivedTable& dt, std::ostream& out) {
   // Table ID nodes arranged horizontally.
   out << "    {rank=same;";
   for (auto* table : dt.tables) {
@@ -280,7 +280,7 @@ void printJoinEdges(const DerivedTable& dt, std::ostream& out) {
 }
 
 void printDerivedTableCluster(
-    const DerivedTable& dt,
+    const v1::DerivedTable& dt,
     bool isRoot,
     std::ostream& out) {
   out << "  // DerivedTable cluster for " << dt.cname << "\n";
@@ -394,7 +394,7 @@ void printAllTables(PlanObjectCP table, std::ostream& out);
 //   clusters cannot be directly referenced in edge constraints.
 std::string layoutId(PlanObjectCP table) {
   if (table->type() == PlanType::kDerivedTableNode) {
-    auto* dt = table->as<DerivedTable>();
+    auto* dt = table->as<v1::DerivedTable>();
     return fmt::format("dt{}_header", dt->id());
   }
   return nodeId(table);
@@ -456,7 +456,7 @@ void printTableLayout(
 }
 
 void printDerivedTableWithChildren(
-    const DerivedTable& dt,
+    const v1::DerivedTable& dt,
     bool isRoot,
     std::ostream& out) {
   // Print the DerivedTable as a cluster.
@@ -485,16 +485,16 @@ void printAllTables(PlanObjectCP table, std::ostream& out) {
     case PlanType::kDerivedTableNode:
       // Nested DerivedTables are not root.
       printDerivedTableWithChildren(
-          *table->as<DerivedTable>(), /*isRoot=*/false, out);
+          *table->as<v1::DerivedTable>(), /*isRoot=*/false, out);
       break;
     case PlanType::kTableNode:
       printBaseTable(*table->as<BaseTable>(), out);
       break;
     case PlanType::kValuesTableNode:
-      printValuesTable(*table->as<ValuesTable>(), out);
+      printValuesTable(*table->as<v1::ValuesTable>(), out);
       break;
     case PlanType::kUnnestTableNode:
-      printUnnestTable(*table->as<UnnestTable>(), out);
+      printUnnestTable(*table->as<v1::UnnestTable>(), out);
       break;
     default:
       VELOX_UNREACHABLE("Unknown table type: {}", table->typeName());
@@ -503,7 +503,7 @@ void printAllTables(PlanObjectCP table, std::ostream& out) {
 
 // static
 void DerivedTableDotPrinter::print(
-    const DerivedTable& root,
+    const v1::DerivedTable& root,
     std::ostream& out) {
   out << "digraph QueryGraph {\n";
   out << "  newrank=true;\n";

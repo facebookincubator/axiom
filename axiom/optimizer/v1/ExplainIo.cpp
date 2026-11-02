@@ -18,7 +18,7 @@
 
 #include "axiom/optimizer/ExplainIo.h"
 
-namespace facebook::axiom::optimizer {
+namespace facebook::axiom::optimizer::v1 {
 
 namespace {
 // Recursively collects all BaseTables from a DerivedTable tree.
@@ -55,7 +55,7 @@ std::string explainIo(
     }
     tableFilters.emplace_back(baseTable, std::move(filters));
   }
-  return explainIo(tableFilters, std::move(outputTable));
+  return optimizer::explainIo(tableFilters, std::move(outputTable));
 }
 
-} // namespace facebook::axiom::optimizer
+} // namespace facebook::axiom::optimizer::v1

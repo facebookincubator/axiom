@@ -1,0 +1,48 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#pragma once
+
+#include "axiom/optimizer/v1/RelationOp.h"
+
+namespace facebook::axiom::optimizer::v1 {
+
+struct RelationOpToTextOptions {
+  /// Include the estimate of the cardinality, fanout and cost of each plan
+  /// node.
+  bool includeCost{false};
+
+  /// Include statistical constraints on output columns: data type, estimated
+  /// number of distinct values, min/max bounds and null fraction.
+  bool includeConstraints{false};
+
+  /// Maximum depth of the plan tree to print. 0 means print only the root node.
+  /// Default is unlimited.
+  std::optional<int32_t> maxDepth;
+};
+
+class RelationOpPrinter {
+ public:
+  /// Returns a multi-line text representatino of the plan tree.
+  static std::string toText(
+      const RelationOp& root,
+      const RelationOpToTextOptions& options = {});
+
+  /// Returns a one-line summary of the plan. Includes tables, joins and
+  /// aggregations. Useful for debugging join order.
+  static std::string toOneline(const RelationOp& root);
+};
+
+} // namespace facebook::axiom::optimizer::v1

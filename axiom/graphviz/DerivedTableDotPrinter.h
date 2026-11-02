@@ -16,7 +16,7 @@
 #pragma once
 
 #include <ostream>
-#include "axiom/optimizer/DerivedTable.h"
+#include "axiom/optimizer/v1/DerivedTable.h"
 
 namespace facebook::axiom::graphviz {
 
@@ -30,7 +30,7 @@ namespace facebook::axiom::graphviz {
 /// Then render with: dot -Tsvg query_graph.dot -o query_graph.svg
 class DerivedTableDotPrinter {
  public:
-  static void print(const optimizer::DerivedTable& root, std::ostream& out);
+  static void print(const optimizer::v1::DerivedTable& root, std::ostream& out);
 };
 
 } // namespace facebook::axiom::graphviz

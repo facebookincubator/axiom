@@ -19,9 +19,9 @@
 #include <string>
 
 #include "axiom/common/CatalogSchemaTableName.h"
-#include "axiom/optimizer/DerivedTable.h"
+#include "axiom/optimizer/v1/DerivedTable.h"
 
-namespace facebook::axiom::optimizer {
+namespace facebook::axiom::optimizer::v1 {
 
 /// Generates EXPLAIN IO JSON from the v1 query graph by walking the
 /// DerivedTable tree to find input tables and reading each table's
@@ -30,4 +30,4 @@ std::string explainIo(
     DerivedTableCP rootDt,
     std::optional<CatalogSchemaTableName> outputTable = std::nullopt);
 
-} // namespace facebook::axiom::optimizer
+} // namespace facebook::axiom::optimizer::v1
