@@ -142,6 +142,7 @@ if(AXIOM_BUILD_TESTING)
     OrderByTest.cpp
     TpchDataGenerator.cpp
     PrecomputeProjectionTest.cpp
+    PlaceholderTest.cpp
     PlanTest.cpp
     RemoteOutputTest.cpp
     QueryGraphContextTest.cpp

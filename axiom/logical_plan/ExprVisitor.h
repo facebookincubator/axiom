@@ -57,6 +57,14 @@ class ExprVisitor {
   virtual void visit(const SubqueryExpr& expr, ExprVisitorContext& context)
       const = 0;
 
+  /// A plan holds placeholders until the caller binds them, so a visitor of
+  /// bound plans need not handle them.
+  virtual void visit(
+      const PlaceholderExpr& expr,
+      ExprVisitorContext& /*context*/) const {
+    VELOX_USER_FAIL("Unbound placeholder: {}", expr.toString());
+  }
+
  protected:
   void visitInputs(const Expr& expr, ExprVisitorContext& ctx) const {
     for (const auto& input : expr.inputs()) {

@@ -134,13 +134,15 @@ class Translator {
   };
 
   Translator(
+      const std::vector<velox::Variant>& placeholderValues,
       optimizer::Schema& schema,
       const connector::SchemaResolver& schemaResolver,
       velox::core::ExpressionEvaluator& evaluator,
       Builder& builder,
       const OptimizerSession& session,
       const ConstantPlanRunner& constantPlanRunner)
-      : schema_(schema),
+      : placeholderValues_(placeholderValues),
+        schema_(schema),
         schemaResolver_(schemaResolver),
         builder_(builder),
         exprFactory_(builder),
@@ -468,6 +470,7 @@ class Translator {
       const logical_plan::InputReferenceExpr& expr,
       const Scope& scope);
   ExprCP translateConstant(const logical_plan::ConstantExpr& expr);
+  ExprCP translatePlaceholder(const logical_plan::PlaceholderExpr& expr);
   ExprCP translateCall(
       const logical_plan::CallExpr& expr,
       const Scope& scope,
@@ -639,6 +642,8 @@ class Translator {
       const logical_plan::ValuesNode::Exprs& exprRows);
 
   SubqueryContext subqueries_;
+  // The values of the plan's placeholders, in order of position.
+  const std::vector<velox::Variant>& placeholderValues_;
   Schema& schema_;
   const connector::SchemaResolver& schemaResolver_;
   bool connectorPushdownSupported_{false};

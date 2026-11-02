@@ -157,6 +157,11 @@ class ToTextVisitor : public ExprVisitor {
     toOut(context) << expr.value()->toString(expr.type());
   }
 
+  void visit(const PlaceholderExpr& expr, ExprVisitorContext& context)
+      const override {
+    toOut(context) << "?" << expr.position();
+  }
+
   void visit(const LambdaExpr& expr, ExprVisitorContext& context)
       const override {
     auto& out = toOut(context);

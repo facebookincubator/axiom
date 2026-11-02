@@ -171,6 +171,11 @@ ExprApi Exists(const ExprApi& input) {
       "exists", std::vector<velox::core::ExprPtr>{input.expr()}, kNoAlias)};
 }
 
+ExprApi Placeholder(velox::TypePtr type, int32_t position) {
+  return ExprApi{std::make_shared<velox::core::PlaceholderExpr>(
+      std::move(type), position, std::nullopt)};
+}
+
 ExprApi MetadataRowCount() {
   return ExprApi{std::make_shared<velox::core::SpecialFormAggCallExpr>(
       SpecialAggregateKind::kMetadataRowCount,

@@ -117,6 +117,12 @@ class ExprTranslator : public lp::ExprVisitor {
       const {
     VELOX_NYI();
   }
+
+  void visit(
+      const lp::PlaceholderExpr& /*expr*/,
+      lp::ExprVisitorContext& /*context*/) const override {
+    VELOX_NYI();
+  }
 };
 
 } // namespace

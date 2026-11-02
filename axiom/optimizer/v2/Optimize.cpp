@@ -178,6 +178,7 @@ NodeCP Optimizer::planTo(
   ConstantPlanRunner constantPlanRunner{queryCtx_};
   auto translated = TranslatePass::run(
       plan_,
+      placeholderValues_,
       schema_,
       schemaResolver_,
       evaluator_,

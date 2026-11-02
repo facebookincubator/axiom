@@ -68,12 +68,16 @@ class TranslatePass {
   /// can allocate vectors on the evaluator's pool that are then referenced
   /// from downstream `emit` outputs.
   ///
+  /// 'placeholderValues' are the values of the plan's placeholders, in
+  /// order of position (see logical_plan::PlaceholderExpr).
+  ///
   /// 'session' and 'constantPlanRunner' enable folding an uncorrelated scalar
   /// subquery over a table's discrete-predicate (e.g. partition) columns to a
   /// constant: the subquery's filters build a narrowed listing, which is
   /// aggregated by running a small Velox plan via 'constantPlanRunner'.
   static Result run(
       const logical_plan::LogicalPlanNode& plan,
+      const std::vector<velox::Variant>& placeholderValues,
       optimizer::Schema& schema,
       const connector::SchemaResolver& schemaResolver,
       velox::core::ExpressionEvaluator& evaluator,

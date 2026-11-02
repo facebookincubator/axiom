@@ -75,7 +75,25 @@ class Optimizer {
       const OptimizerSession& session,
       velox::core::ExpressionEvaluator& evaluator,
       std::shared_ptr<velox::core::QueryCtx> queryCtx)
+      : Optimizer{
+            plan,
+            /*placeholderValues=*/{},
+            schemaResolver,
+            session,
+            evaluator,
+            std::move(queryCtx)} {}
+
+  /// @param placeholderValues The values of the plan's placeholders, in
+  /// order of position (see logical_plan::PlaceholderExpr).
+  Optimizer(
+      const logical_plan::LogicalPlanNode& plan,
+      std::vector<velox::Variant> placeholderValues,
+      const connector::SchemaResolver& schemaResolver,
+      const OptimizerSession& session,
+      velox::core::ExpressionEvaluator& evaluator,
+      std::shared_ptr<velox::core::QueryCtx> queryCtx)
       : plan_{plan},
+        placeholderValues_{std::move(placeholderValues)},
         schemaResolver_{schemaResolver},
         session_{session},
         evaluator_{evaluator},
@@ -221,6 +239,7 @@ class Optimizer {
   }
 
   const logical_plan::LogicalPlanNode& plan_;
+  const std::vector<velox::Variant> placeholderValues_;
   const connector::SchemaResolver& schemaResolver_;
   const OptimizerSession& session_;
   velox::core::ExpressionEvaluator& evaluator_;

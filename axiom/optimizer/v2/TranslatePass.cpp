@@ -22,6 +22,7 @@ namespace facebook::axiom::optimizer::v2 {
 
 TranslatePass::Result TranslatePass::run(
     const logical_plan::LogicalPlanNode& plan,
+    const std::vector<velox::Variant>& placeholderValues,
     optimizer::Schema& schema,
     const connector::SchemaResolver& schemaResolver,
     velox::core::ExpressionEvaluator& evaluator,
@@ -29,7 +30,13 @@ TranslatePass::Result TranslatePass::run(
     const OptimizerSession& session,
     const ConstantPlanRunner& constantPlanRunner) {
   Translator translator(
-      schema, schemaResolver, evaluator, builder, session, constantPlanRunner);
+      placeholderValues,
+      schema,
+      schemaResolver,
+      evaluator,
+      builder,
+      session,
+      constantPlanRunner);
   return translator.run(plan);
 }
 
