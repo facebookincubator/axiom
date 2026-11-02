@@ -419,8 +419,8 @@ LogicalPlanNodePtr ValuesNode::create(
       for (const auto& v : batch) {
         variants.push_back(velox::Variant::create(v));
       }
-      auto vector = std::dynamic_pointer_cast<velox::RowVector>(
-          velox::BaseVector::createFromVariants(outputType, variants, pool));
+      auto vector = velox::BaseVector::createFromVariants<velox::RowVector>(
+          outputType, variants, pool);
       vectors.push_back(std::move(vector));
     }
     return std::make_shared<ValuesNode>(std::move(id), std::move(vectors));

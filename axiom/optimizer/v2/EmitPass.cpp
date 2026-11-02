@@ -963,11 +963,10 @@ velox::core::PlanNodePtr Emitter::emitProject(const Project& project) {
       row.push_back(expr->as<Literal>()->literal());
     }
     std::vector<velox::RowVectorPtr> rowVectors{
-        std::static_pointer_cast<velox::RowVector>(
-            velox::BaseVector::createFromVariants(
-                makeRowType(project.outputColumns()),
-                {velox::Variant::row(std::move(row))},
-                evaluator_.pool()))};
+        velox::BaseVector::createFromVariants<velox::RowVector>(
+            makeRowType(project.outputColumns()),
+            {velox::Variant::row(std::move(row))},
+            evaluator_.pool())};
     return std::make_shared<velox::core::ValuesNode>(
         nextId(), std::move(rowVectors));
   }
@@ -1826,8 +1825,8 @@ velox::core::PlanNodePtr Emitter::emitValues(const Values& values) {
       rows = &prunedRows;
     }
     rowVectors.emplace_back(
-        std::static_pointer_cast<velox::RowVector>(
-            velox::BaseVector::createFromVariants(rowType, *rows, pool)));
+        velox::BaseVector::createFromVariants<velox::RowVector>(
+            rowType, *rows, pool));
     return std::make_shared<velox::core::ValuesNode>(
         nextId(), std::move(rowVectors));
   }
@@ -1845,8 +1844,8 @@ velox::core::PlanNodePtr Emitter::emitValues(const Values& values) {
   const auto& data = source->data();
   if (const auto* variants =
           std::get_if<logical_plan::ValuesNode::Variants>(&data)) {
-    auto full = std::static_pointer_cast<velox::RowVector>(
-        velox::BaseVector::createFromVariants(sourceRowType, *variants, pool));
+    auto full = velox::BaseVector::createFromVariants<velox::RowVector>(
+        sourceRowType, *variants, pool);
     rowVectors.emplace_back(
         identity ? full : selectChannels(full, rowType, channels));
   } else if (
@@ -2630,11 +2629,10 @@ velox::core::PlanNodePtr Emitter::emitDelete(const TableWrite& tableWrite) {
     return std::make_shared<velox::core::ValuesNode>(
         nextId(),
         std::vector<velox::RowVectorPtr>{
-            std::static_pointer_cast<velox::RowVector>(
-                velox::BaseVector::createFromVariants(
-                    makeRowType(tableWrite.outputColumns()),
-                    {velox::Variant::row({velox::Variant(int64_t{0})})},
-                    evaluator_.pool()))});
+            velox::BaseVector::createFromVariants<velox::RowVector>(
+                makeRowType(tableWrite.outputColumns()),
+                {velox::Variant::row({velox::Variant(int64_t{0})})},
+                evaluator_.pool())});
   }
 
   auto connection = writeConnector(*tableWrite.table());
