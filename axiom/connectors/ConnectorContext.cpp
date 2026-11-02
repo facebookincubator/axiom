@@ -71,11 +71,14 @@ ConnectorSessionPtr ConnectorContext::sessionFor(std::string_view connectorId) {
     VELOX_CHECK_NOT_NULL(
         statsWriter, "Stat writer provider returned null for {}", connectorId);
 
-    entry->session = std::make_shared<ConnectorSession>(
+    auto metadata = metadataRegistry_.get(std::string{connectorId});
+    auto session = std::make_shared<ConnectorSession>(
         queryId_,
         user_,
         propertiesFor(properties_, connectorId),
         std::move(statsWriter));
+    session->setQueryState(metadata->makeQueryState(*session));
+    entry->session = std::move(session);
   });
 
   return entry->session;

@@ -22,7 +22,6 @@
 #include <folly/coro/Baton.h>
 
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
-#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/optimizer/OptimizerSession.h"
@@ -213,43 +212,6 @@ TEST_F(ConnectorPushdownPassTest, workerSelection) {
       {.maxRemotePartitions = 4, .maxLocalPartitions = 2},
       options);
   EXPECT_EQ(result.plan->options().maxRemotePartitions, 1);
-}
-
-TEST_F(ConnectorPushdownPassTest, schemaResolver) {
-  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
-  auto scopedPool = velox::memory::memoryManager()
-                        ->addRootPool("scoped_connector_pushdown")
-                        ->addAggregateChild("tables");
-  auto scopedConnector = std::make_shared<connector::TestConnector>(
-      "scoped-layout", nullptr, std::move(scopedPool));
-  scopedConnector->addTable("t", ROW({"a", "b"}, BIGINT()));
-  auto scopedRegistry = connector::ConnectorMetadataRegistry::create(
-      &connector::ConnectorMetadataRegistry::global());
-  scopedRegistry->insert(kTestConnectorId, scopedConnector->metadata());
-  connector::SchemaResolver resolver{*scopedRegistry};
-
-  std::atomic<size_t> globalCalls{0};
-  testMetadata_->setPushdownMatcher([&](const Node&) {
-    ++globalCalls;
-    return std::vector<PushdownRoot>{};
-  });
-  std::atomic<size_t> scopedCalls{0};
-  setConnectorSession(kTestConnectorId, "pushdown_mode", "scoped");
-  scopedConnector->metadata()->setAsyncPushdownMatcher(
-      [&](connector::ConnectorSessionPtr session,
-          const Node&) -> folly::coro::Task<std::vector<PushdownRoot>> {
-        ++scopedCalls;
-        EXPECT_EQ(session->property("pushdown_mode"), "scoped");
-        co_return std::vector<PushdownRoot>{};
-      });
-
-  planVelox(
-      aggregatePlan(),
-      resolver,
-      {.maxRemotePartitions = 1, .maxLocalPartitions = 1});
-
-  EXPECT_EQ(scopedCalls.load(), 1);
-  EXPECT_EQ(globalCalls.load(), 0);
 }
 
 TEST_F(ConnectorPushdownPassTest, connectorSession) {

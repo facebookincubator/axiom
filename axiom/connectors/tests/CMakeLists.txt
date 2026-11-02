@@ -32,6 +32,7 @@ if(AXIOM_BUILD_TESTING)
     TestConnectorTest.cpp
     ConnectorContextTest.cpp
     ConnectorMetadataRegistryTest.cpp
+    ConnectorSessionTest.cpp
   )
 
   add_test(axiom_test_connector_test axiom_test_connector_test)

@@ -215,6 +215,60 @@ TEST_F(RowLevelDeleteTest, executionFailure) {
   EXPECT_TRUE(finishedDeletes_.empty());
 }
 
+// A failing finish inspector leaves the table unchanged.
+TEST_F(RowLevelDeleteTest, inspectorFailure) {
+  addRows("t");
+  testConnector_->setOnFinishDelete(
+      [](const auto&) { VELOX_FAIL("Injected inspector failure"); });
+
+  VELOX_ASSERT_THROW(
+      runDelete("DELETE FROM t WHERE value >= 30"),
+      "Injected inspector failure");
+
+  EXPECT_EQ(runCount("FROM t"), 4);
+}
+
+// A DELETE rejects a table that changed after planning and removes no rows.
+TEST_F(RowLevelDeleteTest, tableVersion) {
+  {
+    SCOPED_TRACE("appended rows");
+    auto table = addRows("t");
+    auto plan = planVelox(parseDelete("DELETE FROM t WHERE value >= 30"));
+    table->addData(makeRowVector(
+        {makeFlatVector<int64_t>({4, 5}), makeFlatVector<int64_t>({50, 60})}));
+
+    VELOX_ASSERT_THROW(
+        runFragmentedPlan(plan), "DELETE target changed after planning");
+
+    EXPECT_EQ(runCount("FROM t"), 6);
+  }
+
+  {
+    SCOPED_TRACE("deleted rows");
+    auto table = addRows("t");
+    auto plan = planVelox(parseDelete("DELETE FROM t WHERE value >= 30"));
+    EXPECT_EQ(
+        table->deleteRows(folly::F14FastSet<int64_t>{0}, table->version()), 1);
+
+    VELOX_ASSERT_THROW(
+        runFragmentedPlan(plan), "DELETE target changed after planning");
+
+    EXPECT_EQ(runCount("FROM t"), 3);
+  }
+
+  {
+    SCOPED_TRACE("recreated table");
+    addRows("t");
+    auto plan = planVelox(parseDelete("DELETE FROM t WHERE value >= 30"));
+    addRows("t");
+
+    VELOX_ASSERT_THROW(
+        runFragmentedPlan(plan), "DELETE target changed after planning");
+
+    EXPECT_EQ(runCount("FROM t"), 4);
+  }
+}
+
 // A layout whose shuffle key type differs from the partition type's key type is
 // rejected.
 TEST_F(RowLevelDeleteTest, shuffleKeyType) {
@@ -235,28 +289,28 @@ TEST_F(RowLevelDeleteTest, shuffleKeyType) {
       "Delete shuffle key type does not match the partition type: $row_id");
 }
 
+// An unconstrained DELETE writer gathers its output on a single fragment.
+TEST_F(RowLevelDeleteTest, unconstrainedWriter) {
+  addRows("t");
+  auto plan = planVelox(
+      parseDelete("DELETE FROM t WHERE value > 0"),
+      {.maxRemotePartitions = 4,
+       .maxLocalPartitions = 2,
+       .remoteOutput = true});
+
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      plan.plan,
+      matchScan("t")
+          .filter("value > 0")
+          .project({"\"$row_id\""})
+          .tableWrite({std::string{connector::TestTable::kRowId}})
+          .gather()
+          .partitionedOutputSingle()
+          .output(FragmentType::kSingle)
+          .build());
+}
+
 TEST_F(RowLevelDeleteTest, writerRequirements) {
-  {
-    SCOPED_TRACE("unconstrained");
-    addRows("t");
-    auto plan = planVelox(
-        parseDelete("DELETE FROM t WHERE value > 0"),
-        {.maxRemotePartitions = 4,
-         .maxLocalPartitions = 2,
-         .remoteOutput = true});
-
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(
-        plan.plan,
-        matchScan("t")
-            .filter("value > 0")
-            .project({"\"$row_id\""})
-            .tableWrite({std::string{connector::TestTable::kRowId}})
-            .gather()
-            .partitionedOutputSingle()
-            .output(FragmentType::kSingle)
-            .build());
-  }
-
   {
     SCOPED_TRACE("distributed and sorted");
     auto table = addRows("t");
