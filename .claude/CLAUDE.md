@@ -184,6 +184,9 @@ would-I-say-this-aloud test to each):
 - Put runtime information (names, values, types) at the **end** of error messages, after the static description.
   - ❌ `VELOX_USER_FAIL("Column '{}' is ambiguous", name);`
   - ✅ `VELOX_USER_FAIL("Column is ambiguous: {}", name);`
+- Name the mistake in an error message, or the requirement it broke with "must"; a sentence describing only the correct state reads as documentation.
+  - ❌ `VELOX_USER_FAIL("A placeholder's type is declared with CAST, not TRY_CAST: {}", name);`
+  - ✅ `VELOX_USER_FAIL("TRY_CAST of a placeholder is not supported: {}", name);`
 - Use precise terminology when describing errors:
   - **crash**: unrecoverable error — segfault, `VELOX_UNREACHABLE()`, abort, or similar.
   - **fail**: controlled error — `VELOX_CHECK`, `VELOX_USER_CHECK`, thrown exception, or returned error code.
