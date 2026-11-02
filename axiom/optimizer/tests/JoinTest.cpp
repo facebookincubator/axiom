@@ -294,6 +294,110 @@ TEST_P(JoinTest, repeatedJoinKey) {
           .build());
 }
 
+// A part of an expression that reads one relation of a join tree is computed
+// at that relation when the relation has fewer rows than the tree: wherever the
+// query writes it, under any join of the tree, and with every join of a group
+// the planner orders left in that group. Only a part whose result is no wider
+// than what it reads moves: a fixed-width primitive, or a value no more nested
+// than a complex column it reads.
+TEST_P(JoinTest, smallRelationExpression) {
+  if (!useV2_) {
+    return;
+  }
+  addTableWithStats("t", {"t_k"}, 150'000);
+  addTableWithStats("u", {"u_k"}, 25);
+  addTableWithStats("v", {"v_k"}, 1'000);
+
+  const auto arrayAgg = [] {
+    return matchScan("u").singleAggregation({}, {"array_agg(u_k) as a"});
+  };
+  const std::vector<std::pair<std::string, std::shared_ptr<core::PlanMatcher>>>
+      cases = {
+          {"SELECT t_k + m "
+           "FROM t, (SELECT array_max(array_agg(u_k)) * 2 AS m FROM u)",
+           matchScan("t")
+               .nestedLoopJoin(arrayAgg().project({"array_max(a) * 2 as m"}))
+               .project({"t_k + m"})
+               .build()},
+          {"SELECT t_k + array_max(a) * 2 "
+           "FROM t, (SELECT array_agg(u_k) AS a FROM u)",
+           matchScan("t")
+               .nestedLoopJoin(arrayAgg().project({"array_max(a) * 2 as m"}))
+               .project({"t_k + m"})
+               .build()},
+          {"SELECT t_k * 2 + array_max(a) "
+           "FROM t, (SELECT array_agg(u_k) AS a FROM u)",
+           matchScan("t")
+               .nestedLoopJoin(arrayAgg().project({"array_max(a) as m"}))
+               .project({"t_k * 2 + m"})
+               .build()},
+          {"SELECT t_k + v_k + array_max(a) * 2 "
+           "FROM t, (SELECT array_agg(u_k) AS a FROM u), v",
+           matchScan("t")
+               .nestedLoopJoin(arrayAgg().project({"array_max(a) * 2 as m"}))
+               .nestedLoopJoin(matchScan("v"))
+               .project({"t_k + v_k + m"})
+               .build()},
+          {"SELECT t_k + array_max(a) * 2 "
+           "FROM t JOIN ("
+           "  SELECT a, b "
+           "  FROM (SELECT array_agg(u_k) AS a FROM u), "
+           "    (SELECT max(u_k) AS b FROM u)"
+           ") ON t_k = b",
+           matchScan("t")
+               .hashJoinInner(
+                   matchScan("u").aliases({"k"}).singleAggregation(
+                       {}, {"max(k) as b"}),
+                   {.keys = {{"t_k = b"}}})
+               .nestedLoopJoin(arrayAgg().project({"array_max(a) * 2 as m"}))
+               .project({"t_k + m"})
+               .build()},
+          {"SELECT t_k + array_max(a) * 2 "
+           "FROM t LEFT JOIN (SELECT array_agg(u_k) AS a FROM u) ON true "
+           "WHERE array_max(a) > 0",
+           matchScan("t")
+               .nestedLoopJoin(
+                   arrayAgg()
+                       .filter("array_max(a) > 0")
+                       .project({"array_max(a) * 2 as m"}))
+               .project({"t_k + m"})
+               .build()},
+          {"SELECT sum(t_k * array_max(a)) "
+           "FROM t, (SELECT array_agg(u_k) AS a FROM u)",
+           matchScan("t")
+               .nestedLoopJoin(arrayAgg().project({"array_max(a) as m"}))
+               .project({"t_k * m as p"})
+               .singleAggregation({}, {"sum(p)"})
+               .build()},
+          {"SELECT contains(array_sort(a), t_k) "
+           "FROM t, (SELECT array_agg(u_k) AS a FROM u)",
+           matchScan("t")
+               .nestedLoopJoin(arrayAgg().project({"array_sort(a) as s"}))
+               .project({"contains(s, t_k)"})
+               .build()},
+          {"SELECT t_k + cardinality(sequence(1, m)) "
+           "FROM t, (SELECT max(u_k) AS m FROM u)",
+           matchScan("t")
+               .nestedLoopJoin(
+                   matchScan("u")
+                       .singleAggregation({}, {"max(u_k) as m"})
+                       .project({"cardinality(sequence(1, m)) as c"}))
+               .project({"t_k + c"})
+               .build()},
+          {"SELECT contains(sequence(1, m), t_k) "
+           "FROM t, (SELECT max(u_k) AS m FROM u)",
+           matchScan("t")
+               .nestedLoopJoin(
+                   matchScan("u").singleAggregation({}, {"max(u_k) as m"}))
+               .project({"contains(sequence(1, m), t_k)"})
+               .build()},
+      };
+  for (const auto& [query, matcher] : cases) {
+    SCOPED_TRACE(query);
+    AXIOM_ASSERT_PLAN_V2(toSingleNodePlan(parseSelect(query)), matcher);
+  }
+}
+
 // A key expression over a null-extended side is reevaluated above the join.
 TEST_P(JoinTest, nullExtendedJoinKey) {
   addTableWithStats("t", {"t_k"}, 150'000);
