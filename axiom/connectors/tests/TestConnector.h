@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <mutex>
+
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 #include <functional>
@@ -207,6 +209,16 @@ class TestTableLayout : public TableLayout {
 /// a table the metastore has no statistics for. setStats() is then rejected.
 class TestTable : public Table {
  public:
+  /// Identifies one TestTable instance and one version of its data.
+  struct Version {
+    /// Identity that changes when a table is dropped and recreated.
+    uint64_t tableId;
+    /// Version that advances when this table's data changes.
+    uint64_t dataVersion;
+
+    bool operator==(const Version&) const = default;
+  };
+
   /// Name of the stable hidden row identifier stored with each row.
   static constexpr std::string_view kRowId = "$row_id";
 
@@ -255,6 +267,9 @@ class TestTable : public Table {
     return bucketSpec_;
   }
 
+  /// Returns the identity and version of the table's data.
+  Version version() const;
+
   /// Appends a RowVector to the table's data. Each appended vector generates
   /// a separate TestConnectorSplit. Data is copied into the table's internal
   /// memory pool. When 'collectColumnStatistics' is true, computes per-column
@@ -271,8 +286,11 @@ class TestTable : public Table {
   /// Removes the rows whose stable identifiers appear in 'rowIds' and returns
   /// how many it removed. An identifier with no live row, such as one an
   /// earlier DELETE removed, removes nothing, so the count can be less than
-  /// 'rowIds.size()'.
-  int64_t deleteRows(const folly::F14FastSet<int64_t>& rowIds);
+  /// 'rowIds.size()'. Fails if 'expectedVersion' does not identify the current
+  /// table data.
+  int64_t deleteRows(
+      const folly::F14FastSet<int64_t>& rowIds,
+      Version expectedVersion);
 
   /// Sets how a row-level DELETE on this table distributes and orders the rows
   /// its writers receive. 'layout' must have a writer: TestConnector deletes
@@ -326,6 +344,12 @@ class TestTable : public Table {
   velox::RowTypePtr dataType_;
   std::vector<velox::RowVectorPtr> data_;
   std::vector<int32_t> dataBucketIds_;
+  // Distinguishes a table from a later table created with the same name.
+  const uint64_t tableId_;
+  // Serializes table mutations with version validation.
+  mutable std::mutex mutationMutex_;
+  // Advances after each mutation of this table's data.
+  uint64_t dataVersion_{0};
   // Assigns each appended row an identifier that survives later deletions.
   int64_t nextRowId_{0};
   // Row-level DELETE layout; the default asks for no shuffle and no sort.
@@ -676,6 +700,11 @@ class TestConnectorMetadata : public ConnectorMetadata {
     static const TestMetadataConfigProvider kProvider;
     return &kProvider;
   }
+
+  /// Creates state that validates a table has not changed between planning and
+  /// committing a row-level DELETE.
+  std::unique_ptr<ConnectorQueryState> makeQueryState(
+      const ConnectorSession& session) const override;
 
   /// Signature of a matcher that, for a given plan subtree, returns
   /// the pushdown roots this connector wants to absorb.

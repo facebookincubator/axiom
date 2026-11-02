@@ -17,7 +17,9 @@
 #include "axiom/connectors/tests/TestConnector.h"
 
 #include <folly/String.h>
+#include <folly/Synchronized.h>
 #include <algorithm>
+#include <atomic>
 #include <numeric>
 #include <random>
 #include <utility>
@@ -30,6 +32,42 @@
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::axiom::connector {
+
+namespace {
+
+// Keeps the table versions observed while planning one query.
+class TestConnectorQueryState : public ConnectorQueryState {
+ public:
+  // Records the table's current version, or verifies it matches an earlier
+  // observation in this query.
+  void recordTableVersion(const TestTable& table) {
+    const auto version = table.version();
+    auto versions = versions_.wlock();
+    const auto [it, inserted] = versions->try_emplace(table.name(), version);
+    VELOX_USER_CHECK(
+        inserted || it->second == version,
+        "Table changed during planning: {}",
+        table.name().toString());
+  }
+
+  // Returns the table version recorded during planning.
+  TestTable::Version tableVersion(const TestTable& table) const {
+    auto versions = versions_.rlock();
+    const auto it = versions->find(table.name());
+    VELOX_CHECK(
+        it != versions->end(),
+        "DELETE target was not read during planning: {}",
+        table.name().toString());
+    return it->second;
+  }
+
+ private:
+  // Table versions captured during planning.
+  folly::Synchronized<folly::F14FastMap<SchemaTableName, TestTable::Version>>
+      versions_;
+};
+
+} // namespace
 
 std::shared_ptr<PartitionType> TestPartitionType::copartition(
     const PartitionType& other) const {
@@ -171,6 +209,11 @@ velox::RowTypePtr makeTestTableDataType(const velox::RowTypePtr& schema) {
   types.push_back(velox::BIGINT());
   return velox::ROW(std::move(names), std::move(types));
 }
+
+uint64_t nextTestTableId() {
+  static std::atomic<uint64_t> nextId{0};
+  return nextId.fetch_add(1, std::memory_order_relaxed);
+}
 } // namespace
 
 TestTable::TestTable(
@@ -191,6 +234,7 @@ TestTable::TestTable(
           options),
       connector_(connector),
       dataType_(makeTestTableDataType(schema)),
+      tableId_(nextTestTableId()),
       collectStatistics_(extractCollectStatistics(options)),
       bucketSpec_(std::move(bucketSpec)) {
   VELOX_CHECK_NOT_NULL(connector);
@@ -362,6 +406,7 @@ std::vector<BucketedRows> splitByBucket(
 void TestTable::addData(
     const velox::RowVectorPtr& data,
     bool collectColumnStatistics) {
+  std::lock_guard lock{mutationMutex_};
   VELOX_CHECK_EQ(
       numRows_,
       0,
@@ -394,6 +439,7 @@ void TestTable::addData(
     data_.push_back(std::move(copy));
   }
   dataRows_ += data->size();
+  ++dataVersion_;
 
   if (!collectColumnStatistics || !collectStatistics_) {
     return;
@@ -413,7 +459,20 @@ void TestTable::addData(
   }
 }
 
-int64_t TestTable::deleteRows(const folly::F14FastSet<int64_t>& rowIds) {
+TestTable::Version TestTable::version() const {
+  std::lock_guard lock{mutationMutex_};
+  return {tableId_, dataVersion_};
+}
+
+int64_t TestTable::deleteRows(
+    const folly::F14FastSet<int64_t>& rowIds,
+    Version expectedVersion) {
+  std::lock_guard lock{mutationMutex_};
+  const Version currentVersion{tableId_, dataVersion_};
+  VELOX_USER_CHECK(
+      expectedVersion == currentVersion,
+      "DELETE target changed after planning: {}",
+      name().toString());
   std::vector<velox::RowVectorPtr> keptData;
   std::vector<int32_t> keptBucketIds;
   int64_t numDeletedRows{0};
@@ -469,6 +528,9 @@ int64_t TestTable::deleteRows(const folly::F14FastSet<int64_t>& rowIds) {
   data_ = std::move(keptData);
   dataBucketIds_ = std::move(keptBucketIds);
   dataRows_ -= numDeletedRows;
+  if (numDeletedRows > 0) {
+    ++dataVersion_;
+  }
 
   if (hasColumnStatistics_) {
     columnTrackers_.assign(type()->size(), {});
@@ -696,6 +758,11 @@ std::shared_ptr<Table> TestConnectorMetadata::findTableInternal(
     return nullptr;
   }
   return it->second;
+}
+
+std::unique_ptr<ConnectorQueryState> TestConnectorMetadata::makeQueryState(
+    const ConnectorSession& /*session*/) const {
+  return std::make_unique<TestConnectorQueryState>();
 }
 
 TablePtr TestConnectorMetadata::findTable(const SchemaTableName& tableName) {
@@ -936,7 +1003,7 @@ velox::connector::ColumnHandlePtr TestTableLayout::createColumnHandle(
 }
 
 velox::connector::ConnectorTableHandlePtr TestTableLayout::createTableHandle(
-    const ConnectorSessionPtr& /*session*/,
+    const ConnectorSessionPtr& session,
     std::vector<velox::connector::ColumnHandlePtr> columnHandles,
     velox::core::ExpressionEvaluator& /* evaluator */,
     std::vector<velox::core::TypedExprPtr> filters,
@@ -947,6 +1014,12 @@ velox::connector::ConnectorTableHandlePtr TestTableLayout::createTableHandle(
       supportsScan() || lookupKeys.has_value(),
       "Lookup-only table layout requires lookup keys: {}",
       label());
+  VELOX_CHECK_NOT_NULL(session);
+  auto* queryState = session->queryStateAs<TestConnectorQueryState>();
+  VELOX_CHECK_NOT_NULL(queryState);
+  const auto* testTable = dynamic_cast<const TestTable*>(&table());
+  VELOX_CHECK_NOT_NULL(testTable);
+  queryState->recordTableVersion(*testTable);
   auto* testConnector = dynamic_cast<TestConnector*>(connector());
   VELOX_CHECK_NOT_NULL(testConnector);
   if (const auto& inspector = testConnector->onCreateTableHandle()) {
@@ -1124,11 +1197,22 @@ RowsFuture TestConnectorMetadata::finishWrite(
 }
 
 RowsFuture TestConnectorMetadata::finishDelete(
-    const ConnectorSessionPtr& /*session*/,
+    const ConnectorSessionPtr& session,
     const ConnectorDeleteHandlePtr& handle,
     const std::vector<velox::RowVectorPtr>& deleteResults) {
+  VELOX_CHECK_NOT_NULL(session);
   const auto* deleteHandle =
       handle->veloxHandle()->asChecked<TestDeleteTableHandle>();
+  auto table = std::dynamic_pointer_cast<TestTable>(
+      findTableInternal(deleteHandle->tableName()));
+  VELOX_CHECK_NOT_NULL(
+      table,
+      "DELETE target does not exist: {}",
+      deleteHandle->tableName().toString());
+  auto* queryState = session->queryStateAs<TestConnectorQueryState>();
+  VELOX_CHECK_NOT_NULL(queryState);
+  const auto expectedVersion = queryState->tableVersion(*table);
+
   folly::F14FastSet<int64_t> rowIds;
   std::vector<std::vector<int64_t>> writerRows;
   velox::DecodedVector decoded;
@@ -1160,16 +1244,10 @@ RowsFuture TestConnectorMetadata::finishDelete(
       writerRows.push_back(std::move(staged));
     }
   }
-  auto table = std::dynamic_pointer_cast<TestTable>(
-      findTableInternal(deleteHandle->tableName()));
-  VELOX_CHECK_NOT_NULL(
-      table,
-      "DELETE target does not exist: {}",
-      deleteHandle->tableName().toString());
   if (const auto& inspector = connector_->onFinishDelete()) {
     inspector(writerRows);
   }
-  const auto numDeletedRows = table->deleteRows(rowIds);
+  const auto numDeletedRows = table->deleteRows(rowIds, expectedVersion);
   return folly::makeSemiFuture(std::optional<int64_t>{numDeletedRows});
 }
 
