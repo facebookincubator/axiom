@@ -67,6 +67,14 @@ void NameMappings::markAmbiguous(const QualifiedName& name) {
   mappings_.erase(it);
 }
 
+void NameMappings::copyAmbiguousNames(const NameMappings& source) {
+  for (const auto& name : source.ambiguousNames_) {
+    if (!mappings_.contains(name)) {
+      ambiguousNames_.insert(name);
+    }
+  }
+}
+
 void NameMappings::markHidden(const std::string& id) {
   hiddenIds_.emplace(id);
 }

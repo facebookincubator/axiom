@@ -51,6 +51,12 @@ class NameMappings {
   /// by their other names. The mark lasts until 'reset'.
   void markAmbiguous(const QualifiedName& name);
 
+  /// Marks ambiguous each name that 'source' marks ambiguous and this mapping
+  /// does not map. A projection that passes columns through keeps its input's
+  /// scope: a name that named several input columns names none of them, even
+  /// when only one of them keeps a name in this mapping.
+  void copyAmbiguousNames(const NameMappings& source);
+
   /// Marks the specified 'id' as hidden. The 'id' must have been added earlier
   /// via 'add' API.
   void markHidden(const std::string& id);
