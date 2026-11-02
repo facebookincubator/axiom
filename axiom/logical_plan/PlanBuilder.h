@@ -325,6 +325,11 @@ class PlanBuilder {
   /// Removes hidden columns (e.g. $row_id) from the output.
   PlanBuilder& dropHiddenColumns();
 
+  /// Keeps the output columns at 'positions', in that order. The columns keep
+  /// their names, and a name that resolves to no column, because it names
+  /// several, still resolves to none.
+  PlanBuilder& keepColumns(const std::vector<size_t>& positions);
+
   /// Equivalent to SELECT * FROM t1, t2, t3...
   ///
   /// Shortcut for

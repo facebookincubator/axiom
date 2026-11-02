@@ -1023,6 +1023,12 @@ TEST_F(PrestoParserTest, joinUsing) {
                        .output({"id", "a", "b"});
     testSelect("SELECT * FROM t_int JOIN t_big USING (id)", matcher);
   }
+
+  // A column name both sides have, other than a USING column, stays
+  // ambiguous, also when only one side has an alias.
+  VELOX_ASSERT_THROW(
+      parseSql("SELECT a FROM (SELECT id, a FROM t1) JOIN t1 AS s USING (id)"),
+      "Cannot resolve column: a");
 }
 
 // A scalar subquery (subquery used as an expression) must return

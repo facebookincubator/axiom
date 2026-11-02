@@ -381,51 +381,57 @@ PlanBuilder& PlanBuilder::tableScan(
 }
 
 PlanBuilder& PlanBuilder::dropHiddenColumns() {
-  const auto size = numOutput();
   const auto& inputType = node_->outputType();
-
-  bool hasHiddenColumns = false;
-  for (const auto& name : inputType->names()) {
-    if (outputMapping_->isHidden(name)) {
-      hasHiddenColumns = true;
-      break;
+  std::vector<size_t> positions;
+  positions.reserve(inputType->size());
+  for (size_t i = 0; i < inputType->size(); ++i) {
+    if (!outputMapping_->isHidden(inputType->nameOf(i))) {
+      positions.push_back(i);
     }
   }
 
-  if (!hasHiddenColumns) {
+  if (positions.size() == inputType->size()) {
     return *this;
   }
+  return keepColumns(positions);
+}
+
+PlanBuilder& PlanBuilder::keepColumns(const std::vector<size_t>& positions) {
+  VELOX_USER_CHECK_NOT_NULL(node_);
+  const auto& inputType = node_->outputType();
 
   std::vector<std::string> outputNames;
-  outputNames.reserve(size);
+  outputNames.reserve(positions.size());
 
   std::vector<ExprPtr> exprs;
-  exprs.reserve(size);
+  exprs.reserve(positions.size());
 
   auto newOutputMapping = std::make_shared<NameMappings>();
 
-  for (auto i = 0; i < inputType->size(); i++) {
-    const auto& id = inputType->nameOf(i);
-
-    if (outputMapping_->isHidden(id)) {
-      continue;
-    }
+  for (const auto position : positions) {
+    VELOX_USER_CHECK_LT(position, inputType->size());
+    const auto& id = inputType->nameOf(position);
+    VELOX_USER_CHECK(
+        std::find(outputNames.begin(), outputNames.end(), id) ==
+            outputNames.end(),
+        "Duplicate column position: {}",
+        position);
 
     outputNames.push_back(id);
 
-    const auto names = outputMapping_->reverseLookup(id);
-    for (const auto& name : names) {
+    for (const auto& name : outputMapping_->reverseLookup(id)) {
       newOutputMapping->add(name, id);
     }
 
     newOutputMapping->copyUserName(id, *outputMapping_);
 
-    exprs.push_back(makeInputRef(inputType->childAt(i), id));
+    exprs.push_back(makeInputRef(inputType->childAt(position), id));
   }
 
   node_ = std::make_shared<ProjectNode>(
       nextId(), std::move(node_), std::move(outputNames), std::move(exprs));
 
+  newOutputMapping->copyAmbiguousNames(*outputMapping_);
   newOutputMapping->enableUnqualifiedAccess();
   outputMapping_ = std::move(newOutputMapping);
 
@@ -820,6 +826,7 @@ PlanBuilder& PlanBuilder::with(const std::vector<ExprApi>& projections) {
   node_ = std::make_shared<ProjectNode>(
       nextId(), std::move(node_), std::move(outputNames), std::move(exprs));
 
+  newOutputMapping->copyAmbiguousNames(*outputMapping_);
   newOutputMapping->enableUnqualifiedAccess();
   outputMapping_ = std::move(newOutputMapping);
 
@@ -1663,6 +1670,7 @@ void PlanBuilder::addJoinUsingProjection(
   node_ = std::make_shared<ProjectNode>(
       nextId(), std::move(node_), std::move(outputNames), std::move(exprs));
 
+  newOutputMapping->copyAmbiguousNames(*outputMapping_);
   newOutputMapping->enableUnqualifiedAccess();
   outputMapping_ = std::move(newOutputMapping);
 }
