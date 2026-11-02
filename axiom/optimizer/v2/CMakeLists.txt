@@ -39,7 +39,7 @@ add_library(
   ImpliedFilters.cpp
   JoinCondition.cpp
   JoinFanout.cpp
-  JoinFilterRewriter.cpp
+  JoinInputRewriter.cpp
   JoinHypergraph.cpp
   JoinPartitioning.cpp
   JoinPredicatePlacement.cpp
