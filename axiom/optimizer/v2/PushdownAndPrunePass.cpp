@@ -1900,8 +1900,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     // sources, in the input's own column order.
     auto readColumns =
         [&](NodeCP input, const ExprVector& keys, ColumnCP searchColumn) {
-          PlanObjectSet read;
-          read.unionColumns(keys);
+          auto read = PlanObjectSet::columnsOf(keys);
           read.add(searchColumn);
           for (ColumnCP source : sourceColumns) {
             read.add(source);
@@ -2001,8 +2000,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
 
     // The rejected conjuncts are evaluated above the scan, so the scan must
     // read what they reference.
-    PlanObjectSet rejectedColumns;
-    rejectedColumns.unionColumns(rejected);
+    const auto rejectedColumns = PlanObjectSet::columnsOf(rejected);
     ColumnVector scanOutputs = survivingOutputs;
     for (ColumnCP column : node->baseTable()->columns) {
       if (rejectedColumns.contains(column) &&

@@ -143,10 +143,8 @@ RelationOpPtr addGather(
 void ToVelox::filterUpdated(
     BaseTableCP table,
     std::optional<connector::LookupKeys> lookupKeys) {
-  PlanObjectSet columnSet;
-  columnSet.unionColumns(table->columnFilters);
-
-  auto leafColumns = columnSet.toObjects<Column>();
+  auto leafColumns =
+      PlanObjectSet::columnsOf(table->columnFilters).toObjects<Column>();
 
   columnAlteredTypes_.clear();
 

@@ -607,8 +607,7 @@ Emitted buildJoin(
   // reads both, and both are emitted by the children — the collapse spans the
   // two child covers, so neither child applied it — so keep them here.
   if (!aboveJoin.empty()) {
-    PlanObjectSet extraColumns;
-    extraColumns.unionColumns(aboveJoin);
+    const auto extraColumns = PlanObjectSet::columnsOf(aboveJoin);
     PlanObjectSet present;
     for (ColumnCP column : outputColumns) {
       present.add(column);
