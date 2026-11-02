@@ -152,7 +152,7 @@ void addImpliedSemiEdge(
 // keys. Consistent with maxGroups(). Returns nullopt if the table cardinality
 // or any key NDV is unknown.
 std::optional<float> compositeNdv(PlanObjectCP table, const ExprVector& keys) {
-  const auto maxOpt = table->as<TableObject>()->cardinality();
+  const auto maxOpt = TableObject::cardinalityOf(table);
   if (!maxOpt.has_value()) {
     return std::nullopt;
   }
@@ -397,7 +397,7 @@ void DerivedTable::checkConsistency() const {
   }
 
   // Each entry in joinedBy must have 'this' as an end point.
-  for (auto* join : joinedBy) {
+  for (auto* join : queryCtx()->optimization()->joinedBy(this)) {
     VELOX_CHECK(
         join->leftTable() == this || join->rightTable() == this,
         "joinedBy entry does not reference this: {}, {}",
@@ -480,7 +480,7 @@ void DerivedTable::checkConsistency() const {
 
   // Layer 1: Base table columns are available.
   for (auto* table : tables) {
-    availableColumns.unionObjects(table->as<TableObject>()->columns);
+    availableColumns.unionObjects(TableObject::columnsOf(table));
   }
 
   auto checkExprAvailable = [&](ExprCP expr, const char* layerName) {
@@ -802,7 +802,7 @@ void collectImpliedSameTableEqualities(
     if (!table->isTable()) {
       continue;
     }
-    for (auto* column : table->as<TableObject>()->columns) {
+    for (auto* column : TableObject::columnsOf(table)) {
       if (auto* equivalence = column->equivalence()) {
         processEquivalence(equivalence);
       }
@@ -1085,9 +1085,9 @@ void DerivedTable::linkTablesToJoins() {
         tables.add(join->leftTable());
       }
     }
-    tables.forEachMutable([&](PlanObjectP table) {
+    tables.forEach([&](PlanObjectCP table) {
       VELOX_CHECK(table->isTable());
-      pushBackUnique(table->as<TableObject>()->joinedBy, join);
+      queryCtx()->optimization()->addJoinedBy(table, join);
     });
   }
 }
@@ -2619,7 +2619,10 @@ bool DerivedTable::tryPushdownConjunct(ExprCP conjunct, PlanObjectP table) {
   }
 
   VELOX_CHECK(table->is(PlanType::kTableNode));
-  table->as<BaseTable>()->addFilter(conjunct);
+  auto* baseTable = table->as<BaseTable>();
+  if (baseTable->addFilter(conjunct)) {
+    queryCtx()->optimization()->filterUpdated(baseTable);
+  }
   return true;
 }
 

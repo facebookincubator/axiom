@@ -175,16 +175,6 @@ class Optimization {
     return history_;
   }
 
-  /// If false, correlation names are not included in Column::toString(). Used
-  /// for canonicalizing join cache keys.
-  bool& cnamesInExpr() {
-    return cnamesInExpr_;
-  }
-
-  bool cnamesInExpr() const {
-    return cnamesInExpr_;
-  }
-
   /// Tries to evaluate a constant expression (one with no column references).
   /// Returns the result as a Literal, or nullptr if the expression is not
   /// constant or evaluation fails.
@@ -240,6 +230,12 @@ class Optimization {
       const {
     return planGroupedLeaves_;
   }
+
+  /// Joins where 'table' is an end point. Empty if 'table' is in no join.
+  const JoinEdgeVector& joinedBy(PlanObjectCP table) const;
+
+  /// Records that 'join' has 'table' as an end point. Records each join once.
+  void addJoinedBy(PlanObjectCP table, JoinEdgeP join);
 
  private:
   // Lists the possible joins based on 'state.placed' and adds each on top of
@@ -483,8 +479,6 @@ class Optimization {
   // Controls tracing.
   int32_t traceFlags_{0};
 
-  bool cnamesInExpr_{true};
-
   AggregationPlanner aggregationPlanner_;
 
   ToGraph toGraph_;
@@ -520,6 +514,11 @@ class Optimization {
   // Per-Plan map from leaf RelationOp to its scaled-down PartitionType,
   // captured at Plan construction. See planGroupedLeaves() doc.
   folly::F14FastMap<const Plan*, GroupedLeaves> planGroupedLeaves_;
+
+  // Joins where each table is an end point, filled in while the query graph is
+  // built. A node map, so references that joinedBy() returns stay valid while
+  // joins are added.
+  folly::F14NodeMap<PlanObjectCP, JoinEdgeVector> joinedBy_;
 };
 
 /// Captures the producer-side fragment commit. Moves
