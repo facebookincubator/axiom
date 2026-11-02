@@ -410,6 +410,22 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
     const MultiFragmentPlan::Options& options,
     const std::optional<OptimizerOptions>& optimizerOptions,
     const std::optional<std::string>& planFilePathPrefix) {
+  return planVelox(
+      plan,
+      /*placeholderValues=*/{},
+      schemaResolver,
+      options,
+      optimizerOptions,
+      planFilePathPrefix);
+}
+
+optimizer::PlanAndStats QueryTestBase::planVelox(
+    const logical_plan::LogicalPlanNodePtr& plan,
+    const std::vector<velox::Variant>& placeholderValues,
+    const connector::SchemaResolver& schemaResolver,
+    const MultiFragmentPlan::Options& options,
+    const std::optional<OptimizerOptions>& optimizerOptions,
+    const std::optional<std::string>& planFilePathPrefix) {
   auto& queryCtx = getQueryCtx();
 
   auto allocator = std::make_unique<HashStringAllocator>(optimizerPool_.get());
@@ -447,10 +463,17 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
 
   optimizer::PlanAndStats planAndStats;
   if (useV2_) {
-    planAndStats =
-        v2::Optimizer(*plan, schemaResolver, *session, evaluator, queryCtx)
-            .optimize(options, afterPass_);
+    planAndStats = v2::Optimizer(
+                       *plan,
+                       placeholderValues,
+                       schemaResolver,
+                       *session,
+                       evaluator,
+                       queryCtx)
+                       .optimize(options, afterPass_);
   } else {
+    VELOX_CHECK(
+        placeholderValues.empty(), "Placeholders require the v2 optimizer");
     optimizer::Optimization opt(
         session,
         makeRunnerSession(connectorContext, statsWriter_),
@@ -566,12 +589,18 @@ void QueryTestBase::checkSame(
 
 velox::core::PlanNodePtr QueryTestBase::toSingleNodePlan(
     const logical_plan::LogicalPlanNodePtr& logicalPlan,
+    const std::vector<velox::Variant>& placeholderValues,
     int32_t numDrivers) {
+  connector::SchemaResolver schemaResolver{
+      connector::ConnectorMetadataRegistry::global()};
   auto plan = planVelox(
                   logicalPlan,
-                  {.maxRemotePartitions = 1, .maxLocalPartitions = numDrivers})
+                  placeholderValues,
+                  schemaResolver,
+                  {.maxRemotePartitions = 1, .maxLocalPartitions = numDrivers},
+                  std::nullopt,
+                  std::nullopt)
                   .plan;
-
   EXPECT_EQ(1, plan->fragments().size());
   return plan->fragments().at(0).fragment.planNode;
 }

@@ -114,6 +114,10 @@ TEST_F(ExprSerdeTest, constantArray) {
       velox::ARRAY(velox::INTEGER()), velox::Variant::array({1, 2, 3}));
 }
 
+TEST_F(ExprSerdeTest, placeholder) {
+  testRoundTrip(std::make_shared<PlaceholderExpr>(velox::BIGINT(), 1));
+}
+
 TEST_F(ExprSerdeTest, inputReference) {
   auto schema = velox::ROW({{"column_name", velox::BIGINT()}});
   testRoundTrip(Col("column_name"), schema);

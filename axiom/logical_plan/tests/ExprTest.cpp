@@ -87,6 +87,10 @@ TEST_F(ExprTest, looksConstant) {
 
   testLooksConstant(Cast(DOUBLE(), Lit(1LL)), true);
   testLooksConstant(Cast(DOUBLE(), Col("a")), false);
+
+  // A placeholder has no value until the plan is optimized.
+  testLooksConstant(Placeholder(BIGINT(), 1), false);
+  testLooksConstant(Call("plus", Placeholder(BIGINT(), 1), Lit(1LL)), false);
 }
 
 TEST_F(ExprTest, conjunctInputTypes) {

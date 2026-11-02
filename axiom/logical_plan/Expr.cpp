@@ -49,6 +49,11 @@ class SubqueryVisitor : public ExprVisitor {
     visitInputs(expr, context);
   }
 
+  void visit(const PlaceholderExpr& expr, ExprVisitorContext& context)
+      const override {
+    visitInputs(expr, context);
+  }
+
   void visit(const CallExpr& expr, ExprVisitorContext& context) const override {
     visitInputs(expr, context);
   }
@@ -127,6 +132,7 @@ const auto& exprKindNames() {
       {ExprKind::kLambda, "Lambda"},
       {ExprKind::kSubquery, "Subquery"},
       {ExprKind::kSpecialFormAgg, "SpecialFormAgg"},
+      {ExprKind::kPlaceholder, "Placeholder"},
   };
   return kNames;
 }
@@ -183,6 +189,10 @@ bool InputReferenceExpr::equalTo(const Expr& other) const {
 
 bool ConstantExpr::equalTo(const Expr& other) const {
   return *value_ == *other.as<ConstantExpr>()->value_;
+}
+
+bool PlaceholderExpr::equalTo(const Expr& other) const {
+  return position_ == other.as<PlaceholderExpr>()->position_;
 }
 
 namespace {
@@ -464,6 +474,19 @@ void Expr::registerSerDe() {
   registry.Register("WindowExpr", WindowExpr::create);
   registry.Register("LambdaExpr", LambdaExpr::create);
   registry.Register("SubqueryExpr", SubqueryExpr::create);
+  registry.Register("PlaceholderExpr", PlaceholderExpr::create);
+}
+
+folly::dynamic PlaceholderExpr::serialize() const {
+  auto obj = serializeBase("PlaceholderExpr");
+  obj["position"] = position_;
+  return obj;
+}
+
+// static
+ExprPtr PlaceholderExpr::create(const folly::dynamic& obj, void* /*context*/) {
+  return std::make_shared<PlaceholderExpr>(
+      deserializeTypeField(obj), obj["position"].asInt());
 }
 
 folly::dynamic ConstantExpr::serialize() const {
@@ -716,6 +739,12 @@ void InputReferenceExpr::accept(
 }
 
 void ConstantExpr::accept(
+    const ExprVisitor& visitor,
+    ExprVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+void PlaceholderExpr::accept(
     const ExprVisitor& visitor,
     ExprVisitorContext& context) const {
   visitor.visit(*this, context);

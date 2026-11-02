@@ -458,6 +458,19 @@ bool matchImpl(const ExprPtr& actual, const velox::core::ExprPtr& expected) {
       return !::testing::Test::HasNonfatalFailure();
     }
 
+    case ExprKind::kPlaceholder: {
+      EXPECT_TRUE(expected->is(velox::core::IExpr::Kind::kPlaceholder))
+          << "Expected PlaceholderExpr.";
+      AXIOM_RETURN_FALSE_IF_FAILURE
+
+      const auto* placeholder = actual->as<PlaceholderExpr>();
+      const auto* expectedPlaceholder =
+          expected->as<velox::core::PlaceholderExpr>();
+      EXPECT_EQ(placeholder->position(), expectedPlaceholder->position());
+      EXPECT_EQ(*placeholder->type(), *expectedPlaceholder->type());
+      return !::testing::Test::HasNonfatalFailure();
+    }
+
     case ExprKind::kCall: {
       const auto* call = actual->as<CallExpr>();
 

@@ -775,6 +775,11 @@ class SummarizeExprVisitor : public ExprVisitor {
     myCtx.constantCounts()[expr.type()]++;
   }
 
+  void visit(const PlaceholderExpr& /*expr*/, ExprVisitorContext& ctx)
+      const override {
+    static_cast<Context&>(ctx).expressionCounts()["placeholder"]++;
+  }
+
   void visit(const LambdaExpr& expr, ExprVisitorContext& ctx) const override {
     auto& myCtx = static_cast<Context&>(ctx);
     myCtx.expressionCounts()["lambda"]++;

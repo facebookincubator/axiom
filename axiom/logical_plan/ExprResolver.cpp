@@ -1202,6 +1202,12 @@ ExprPtr ExprResolver::resolveScalarTypes(
     return std::make_shared<SubqueryExpr>(subquery->subquery());
   }
 
+  if (const auto* placeholder =
+          dynamic_cast<const velox::core::PlaceholderExpr*>(expr.get())) {
+    return std::make_shared<PlaceholderExpr>(
+        placeholder->type(), placeholder->position());
+  }
+
   // Named ROW constructor: ROW(expr1 AS f1, expr2 AS f2, ...).
   if (const auto* concat =
           dynamic_cast<const velox::core::ConcatExpr*>(expr.get())) {

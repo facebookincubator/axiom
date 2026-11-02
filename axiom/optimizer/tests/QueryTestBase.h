@@ -152,6 +152,16 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
       const std::optional<OptimizerOptions>& optimizerOptions = std::nullopt,
       const std::optional<std::string>& planFilePathPrefix = std::nullopt);
 
+  /// Plans 'plan' with 'placeholderValues', the values of its placeholders in
+  /// order of position. Only the v2 optimizer binds placeholders.
+  optimizer::PlanAndStats planVelox(
+      const logical_plan::LogicalPlanNodePtr& plan,
+      const std::vector<velox::Variant>& placeholderValues,
+      const connector::SchemaResolver& schemaResolver,
+      const MultiFragmentPlan::Options& options,
+      const std::optional<OptimizerOptions>& optimizerOptions,
+      const std::optional<std::string>& planFilePathPrefix);
+
   TestResult runVelox(
       const logical_plan::LogicalPlanNodePtr& plan,
       const MultiFragmentPlan::Options& options = {
@@ -207,6 +217,15 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
 
   velox::core::PlanNodePtr toSingleNodePlan(
       const logical_plan::LogicalPlanNodePtr& logicalPlan,
+      int32_t numDrivers = 1) {
+    return toSingleNodePlan(logicalPlan, {}, numDrivers);
+  }
+
+  /// Plans 'logicalPlan' with 'placeholderValues', the values of its
+  /// placeholders in order of position (see logical_plan::PlaceholderExpr).
+  velox::core::PlanNodePtr toSingleNodePlan(
+      const logical_plan::LogicalPlanNodePtr& logicalPlan,
+      const std::vector<velox::Variant>& placeholderValues,
       int32_t numDrivers = 1);
 
   void checkSameSingleNode(

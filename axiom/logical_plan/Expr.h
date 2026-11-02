@@ -35,6 +35,7 @@ enum class ExprKind {
   kLambda = 6,
   kSubquery = 7,
   kSpecialFormAgg = 8,
+  kPlaceholder = 9,
 };
 
 AXIOM_DECLARE_ENUM_NAME(ExprKind);
@@ -125,6 +126,10 @@ class Expr : public velox::ISerializable {
     return kind_ == ExprKind::kSpecialFormAgg;
   }
 
+  bool isPlaceholder() const {
+    return kind_ == ExprKind::kPlaceholder;
+  }
+
   /// Returns true if the expression appears constant such that it can be
   /// evaluated without any runtime dependencies. Literals and some calls
   /// with constant inputs are constant foldable while input references,
@@ -133,7 +138,7 @@ class Expr : public velox::ISerializable {
     if (isConstant()) {
       return true;
     }
-    if (isInputReference()) {
+    if (isInputReference() || isPlaceholder()) {
       return false;
     }
     for (const auto& input : inputs_) {
@@ -292,6 +297,33 @@ class ConstantExpr : public Expr {
 };
 
 using ConstantExprPtr = std::shared_ptr<const ConstantExpr>;
+
+/// A value bound when the plan is optimized: the value at 'position', 1-based,
+/// of the values the optimizer is given with the plan. Not constant until
+/// then, so it is never folded.
+class PlaceholderExpr : public Expr {
+ public:
+  PlaceholderExpr(velox::TypePtr type, int32_t position)
+      : Expr{ExprKind::kPlaceholder, std::move(type), {}}, position_{position} {
+    VELOX_USER_CHECK_GE(position_, 1, "Placeholder position must be positive");
+  }
+
+  int32_t position() const {
+    return position_;
+  }
+
+  void accept(const ExprVisitor& visitor, ExprVisitorContext& context)
+      const override;
+
+  folly::dynamic serialize() const override;
+
+  static ExprPtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  bool equalTo(const Expr& other) const override;
+
+  const int32_t position_;
+};
 
 /// Scalar function call.
 class CallExpr : public Expr {

@@ -30,6 +30,7 @@
 /// - Cast(<type>, arg) - cast expression
 /// - Lambda({<args>}, <body>) - lambda expression
 /// - Subquery(<plan>) - correlated (or not) subquery expression
+/// - Placeholder(<type>, <position>) - value bound when the plan is optimized
 ///
 /// The API supports basic arithmetic and comparison operations:
 /// - Col("a") + Col("b")
@@ -404,6 +405,10 @@ inline ExprApi Cast(velox::TypePtr type, const velox::Variant& value) {
 ExprApi Lambda(std::vector<std::string> names, const ExprApi& body);
 
 ExprApi Subquery(std::shared_ptr<const LogicalPlanNode> subquery);
+
+/// Returns a placeholder of 'type' for the value at 'position', 1-based, of the
+/// values the optimizer is given (see PlaceholderExpr).
+ExprApi Placeholder(velox::TypePtr type, int32_t position);
 
 ExprApi Exists(const ExprApi& input);
 

@@ -92,6 +92,15 @@ TEST_F(ExprEqualityTest, constant) {
   EXPECT_NE(*literalOne, *resolve(Lit(1.0)));
 }
 
+TEST_F(ExprEqualityTest, placeholder) {
+  auto placeholder = resolve(Placeholder(BIGINT(), 1));
+  EXPECT_EQ(placeholder->toString(), "?1");
+  EXPECT_EQ(*placeholder, *resolve(Placeholder(BIGINT(), 1)));
+  EXPECT_NE(*placeholder, *resolve(Placeholder(BIGINT(), 2)));
+  EXPECT_NE(*placeholder, *resolve(Placeholder(VARCHAR(), 1)));
+  EXPECT_NE(*placeholder, *resolve(Lit(0LL)));
+}
+
 TEST_F(ExprEqualityTest, call) {
   auto plus = resolve(Call("plus", Col("a"), Col("b")));
   auto plusCopy = resolve(Call("plus", Col("a"), Col("b")));

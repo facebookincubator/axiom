@@ -3310,6 +3310,8 @@ ExprCP Translator::translateExpr(
       return translateInputReference(*expr.as<lp::InputReferenceExpr>(), scope);
     case lp::ExprKind::kConstant:
       return translateConstant(*expr.as<lp::ConstantExpr>());
+    case lp::ExprKind::kPlaceholder:
+      return translatePlaceholder(*expr.as<lp::PlaceholderExpr>());
     case lp::ExprKind::kCall:
       return translateCall(*expr.as<lp::CallExpr>(), scope, liftTarget);
     case lp::ExprKind::kSpecialForm:
@@ -3358,6 +3360,16 @@ ExprCP Translator::translateInputReference(
     return outer;
   }
   VELOX_FAIL("Column not found in scope or outer scopes: {}", name);
+}
+
+ExprCP Translator::translatePlaceholder(const lp::PlaceholderExpr& expr) {
+  VELOX_USER_CHECK_LE(
+      expr.position(), placeholderValues_.size(), "Placeholder has no value");
+  return translateConstant(
+      lp::ConstantExpr(
+          expr.type(),
+          std::make_shared<velox::Variant>(
+              placeholderValues_[expr.position() - 1])));
 }
 
 ExprCP Translator::translateConstant(const lp::ConstantExpr& expr) {

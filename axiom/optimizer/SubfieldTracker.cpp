@@ -548,6 +548,9 @@ void SubfieldTracker::markSubfields(
     return;
   }
 
+  VELOX_USER_CHECK(
+      !expr->isPlaceholder(), "Placeholders require the v2 optimizer");
+
   if (expr->isSpecialForm()) {
     const auto& specialForm = expr->as<lp::SpecialFormExpr>();
     if (specialForm->form() == lp::SpecialForm::kExists) {
