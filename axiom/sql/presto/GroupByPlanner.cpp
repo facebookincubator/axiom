@@ -188,6 +188,7 @@ void findAggregates(
           expr->as<core::CastExpr>()->input(), aggregates, aggregateSet);
       return;
     case core::IExpr::Kind::kConstant:
+    case core::IExpr::Kind::kPlaceholder:
       return;
     case core::IExpr::Kind::kLambda:
       // TODO: Reject aggregates in lambda expressions.
