@@ -1137,6 +1137,9 @@ class SmallRelationExpressions {
     return rebuildUnnest(node->as<Unnest>(), needed, precomputes, rewriter);
   }
 
+  // Returns 'join' over its sides rebuilt for the columns it reads and the
+  // columns in 'needed'. The join keeps its outputs that 'needed' contains and
+  // passes through the columns in 'needed' that its sides now produce.
   NodeCP rebuildJoin(
       const Join* join,
       const PlanObjectSet& needed,
@@ -1184,6 +1187,10 @@ class SmallRelationExpressions {
     });
   }
 
+  // Returns 'unnest' over its input rebuilt for the expressions it unnests and
+  // the columns in 'needed'. The unnest keeps the columns it produces and the
+  // replicated columns that 'needed' contains, and replicates the columns in
+  // 'needed' that its input now produces.
   NodeCP rebuildUnnest(
       const Unnest* unnest,
       const PlanObjectSet& needed,
