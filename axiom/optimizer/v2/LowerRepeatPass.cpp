@@ -111,8 +111,7 @@ struct WalkState {
 
 // Appends the columns 'exprs' read that 'columns' does not hold yet.
 void appendColumnsRead(const ExprVector& exprs, ColumnVector& columns) {
-  PlanObjectSet read;
-  read.unionColumns(exprs);
+  auto read = PlanObjectSet::columnsOf(exprs);
   read.eraseAll(columns);
   read.forEach<Column>([&](ColumnCP column) { columns.push_back(column); });
 }

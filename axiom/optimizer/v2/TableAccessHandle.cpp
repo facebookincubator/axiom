@@ -43,9 +43,7 @@ TableAccessHandle buildTableAccess(
     seenSchemaNames.insert(column->schemaName());
   }
   ColumnVector filterOnlyColumns;
-  PlanObjectSet filterColumns;
-  filterColumns.unionColumns(filters);
-  filterColumns.forEach<Column>([&](ColumnCP column) {
+  PlanObjectSet::columnsOf(filters).forEach<Column>([&](ColumnCP column) {
     if (seenSchemaNames.insert(column->schemaName()).second) {
       filterOnlyColumns.push_back(column);
     }
@@ -110,8 +108,7 @@ TableAccessHandle buildTableAccess(
     rejected.push_back(filters[index]);
   }
 
-  PlanObjectSet rejectedColumns;
-  rejectedColumns.unionColumns(rejected);
+  const auto rejectedColumns = PlanObjectSet::columnsOf(rejected);
   for (auto& [column, handle] : filterOnlyHandles) {
     if (rejectedColumns.contains(column)) {
       columnHandles.emplace(column, std::move(handle));
