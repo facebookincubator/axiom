@@ -112,8 +112,8 @@ TEST_F(LogicalPlanNodeSerdeTest, valuesNodeWithVectors) {
       Variant::row({2LL, "bar"}),
       Variant::row({3LL, "baz"}),
   };
-  auto vector = std::dynamic_pointer_cast<RowVector>(
-      BaseVector::createFromVariants(rowType, rows, pool_.get()));
+  auto vector =
+      BaseVector::createFromVariants<RowVector>(rowType, rows, pool_.get());
 
   auto plan =
       std::make_shared<ValuesNode>("values_0", ValuesNode::Vectors{vector});
@@ -128,15 +128,15 @@ TEST_F(LogicalPlanNodeSerdeTest, valuesNodeWithMultipleVectors) {
       Variant::row({1LL, "foo"}),
       Variant::row({2LL, "bar"}),
   };
-  auto vector1 = std::dynamic_pointer_cast<RowVector>(
-      BaseVector::createFromVariants(rowType, rows1, pool_.get()));
+  auto vector1 =
+      BaseVector::createFromVariants<RowVector>(rowType, rows1, pool_.get());
 
   // Create second batch
   std::vector<Variant> rows2 = {
       Variant::row({3LL, "baz"}),
   };
-  auto vector2 = std::dynamic_pointer_cast<RowVector>(
-      BaseVector::createFromVariants(rowType, rows2, pool_.get()));
+  auto vector2 =
+      BaseVector::createFromVariants<RowVector>(rowType, rows2, pool_.get());
 
   auto plan = std::make_shared<ValuesNode>(
       "values_0", ValuesNode::Vectors{vector1, vector2});
@@ -435,11 +435,8 @@ TEST_F(LogicalPlanNodeSerdeTest, recursiveReferenceNode) {
 // test here, since SetUpTestSuite registers both.
 TEST_F(LogicalPlanNodeSerdeTest, coexistsWithPhysicalPlanSerde) {
   auto rowType = ROW({"a", "b"}, {BIGINT(), VARCHAR()});
-  auto vector =
-      std::dynamic_pointer_cast<RowVector>(BaseVector::createFromVariants(
-          rowType,
-          std::vector<Variant>{Variant::row({1LL, "x"})},
-          pool_.get()));
+  auto vector = BaseVector::createFromVariants<RowVector>(
+      rowType, std::vector<Variant>{Variant::row({1LL, "x"})}, pool_.get());
   // ValuesNode is one of the names the two registries would otherwise fight
   // over.
   core::PlanNodePtr physicalPlan = std::make_shared<core::ValuesNode>(

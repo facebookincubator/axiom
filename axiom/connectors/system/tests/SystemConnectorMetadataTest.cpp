@@ -683,62 +683,61 @@ TEST_F(SystemConnectorMetadataTest, functionsDataSource) {
           "default_null_behavior", true),
       opts);
 
-  auto expected = std::dynamic_pointer_cast<velox::RowVector>(
-      velox::BaseVector::createFromVariants(
-          functionsTableSchema(),
-          {
-              // __plus(integer, integer, integer...) -> integer.
-              velox::Variant::row({
-                  "__plus",
-                  "scalar",
-                  "integer",
-                  velox::Variant::array({"integer", "integer", "integer"}),
-                  true,
-                  "",
-                  kDeterministic,
-              }),
-              // __plus(real, real, real...) -> real.
-              velox::Variant::row({
-                  "__plus",
-                  "scalar",
-                  "real",
-                  velox::Variant::array({"real", "real", "real"}),
-                  true,
-                  "",
-                  kDeterministic,
-              }),
-              // __roll() -> integer.
-              velox::Variant::row({
-                  "__roll",
-                  "scalar",
-                  "integer",
-                  velox::Variant::array({}),
-                  false,
-                  "",
-                  kNonDeterministic,
-              }),
-              // __roll(integer) -> integer.
-              velox::Variant::row({
-                  "__roll",
-                  "scalar",
-                  "integer",
-                  velox::Variant::array({"integer"}),
-                  false,
-                  "",
-                  kNonDeterministic,
-              }),
-              // __toss() -> boolean.
-              velox::Variant::row({
-                  "__toss",
-                  "scalar",
-                  "boolean",
-                  velox::Variant::array({}),
-                  false,
-                  "",
-                  kNonDeterministic,
-              }),
-          },
-          pool_.get()));
+  auto expected = velox::BaseVector::createFromVariants<velox::RowVector>(
+      functionsTableSchema(),
+      {
+          // __plus(integer, integer, integer...) -> integer.
+          velox::Variant::row({
+              "__plus",
+              "scalar",
+              "integer",
+              velox::Variant::array({"integer", "integer", "integer"}),
+              true,
+              "",
+              kDeterministic,
+          }),
+          // __plus(real, real, real...) -> real.
+          velox::Variant::row({
+              "__plus",
+              "scalar",
+              "real",
+              velox::Variant::array({"real", "real", "real"}),
+              true,
+              "",
+              kDeterministic,
+          }),
+          // __roll() -> integer.
+          velox::Variant::row({
+              "__roll",
+              "scalar",
+              "integer",
+              velox::Variant::array({}),
+              false,
+              "",
+              kNonDeterministic,
+          }),
+          // __roll(integer) -> integer.
+          velox::Variant::row({
+              "__roll",
+              "scalar",
+              "integer",
+              velox::Variant::array({"integer"}),
+              false,
+              "",
+              kNonDeterministic,
+          }),
+          // __toss() -> boolean.
+          velox::Variant::row({
+              "__toss",
+              "scalar",
+              "boolean",
+              velox::Variant::array({}),
+              false,
+              "",
+              kNonDeterministic,
+          }),
+      },
+      pool_.get());
 
   velox::exec::test::assertEqualResults({expected}, {actual});
 }

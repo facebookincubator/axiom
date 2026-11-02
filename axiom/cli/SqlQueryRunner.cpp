@@ -1049,11 +1049,10 @@ SqlQueryRunner::co_runExplainStatement(
     // An invalid query has already failed: parsing resolved it and the caller
     // checked permissions. Presto reports the outcome the same way for every
     // statement kind, and does not resolve a DDL target.
-    auto result = std::dynamic_pointer_cast<velox::RowVector>(
-        velox::BaseVector::createFromVariants(
-            velox::ROW("result", velox::BOOLEAN()),
-            {velox::Variant::row({velox::Variant(true)})},
-            optimizerPool_.get()));
+    auto result = velox::BaseVector::createFromVariants<velox::RowVector>(
+        velox::ROW("result", velox::BOOLEAN()),
+        {velox::Variant::row({velox::Variant(true)})},
+        optimizerPool_.get());
     co_yield SqlResultChunk{std::move(result)};
     co_return;
   }
@@ -2356,9 +2355,8 @@ std::vector<velox::RowVectorPtr> SqlQueryRunner::runShowStatsForQuery(
         });
   }
 
-  auto result = std::dynamic_pointer_cast<velox::RowVector>(
-      velox::BaseVector::createFromVariants(
-          presto::ShowStatsBuilder::outputType(), data, optimizerPool_.get()));
+  auto result = velox::BaseVector::createFromVariants<velox::RowVector>(
+      presto::ShowStatsBuilder::outputType(), data, optimizerPool_.get());
   return {result};
 }
 
