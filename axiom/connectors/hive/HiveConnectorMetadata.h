@@ -225,6 +225,11 @@ class HiveTableLayout : public TableLayout {
     return hivePartitionColumns_;
   }
 
+  /// Returns the names and types of hivePartitionColumns().
+  const velox::RowTypePtr& hivePartitionColumnsType() const {
+    return hivePartitionColumnsType_;
+  }
+
   /// Returns the columns stored in data files: rowType() without the Hive
   /// partition columns.
   velox::RowTypePtr dataColumns() const;
@@ -310,6 +315,7 @@ class HiveTableLayout : public TableLayout {
 
   const velox::dwio::common::FileFormat fileFormat_;
   const std::vector<const Column*> hivePartitionColumns_;
+  const velox::RowTypePtr hivePartitionColumnsType_;
   const std::optional<int32_t> numBuckets_;
   const std::shared_ptr<const HivePartitionType> partitionType_;
 };
@@ -327,14 +333,12 @@ class HiveConnectorWriteHandle : public ConnectorWriteHandle {
       WriteKind kind)
       : ConnectorWriteHandle{std::move(veloxHandle), std::move(resultType)},
         table_{std::move(table)},
-        kind_{kind} {
-    for (const auto* column : table_->layouts()
-                                  .at(0)
-                                  ->as<HiveTableLayout>()
-                                  ->hivePartitionColumns()) {
-      statsGroupingKeys_.push_back(column->name());
-    }
-  }
+        kind_{kind},
+        statsGroupingKeys_{table_->layouts()
+                               .at(0)
+                               ->as<HiveTableLayout>()
+                               ->hivePartitionColumnsType()
+                               ->names()} {}
 
   const TablePtr& table() const {
     return table_;

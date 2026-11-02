@@ -1044,27 +1044,6 @@ CreateTableOptions parseCreateTableOptions(
   return result;
 }
 
-velox::RowTypePtr parseSchema(const folly::dynamic& obj) {
-  std::vector<std::string> names;
-  std::vector<velox::TypePtr> types;
-
-  auto parseColumn = [&](const auto& column) {
-    names.push_back(column["name"].asString());
-    types.push_back(
-        velox::ISerializable::deserialize<velox::Type>(column["type"]));
-  };
-
-  for (const auto& column : obj["dataColumns"]) {
-    parseColumn(column);
-  }
-
-  for (const auto& column : obj["partitionColumns"]) {
-    parseColumn(column);
-  }
-
-  return velox::ROW(std::move(names), std::move(types));
-}
-
 CreateTableOptions parseCreateTableOptions(
     const folly::dynamic& obj,
     velox::dwio::common::FileFormat defaultFileFormat) {
@@ -1170,7 +1149,7 @@ folly::dynamic toSchemaJson(
   bool isPartition = false;
   for (auto i = 0; i < rowType->size(); ++i) {
     const auto& name = rowType->nameOf(i);
-    auto column = columnToJson(name, rowType->childAt(i));
+    auto column = SchemaFile::columnToJson(name, rowType->childAt(i));
 
     if (partitionedByColumns.contains(name)) {
       partitionColumns.push_back(std::move(column));
@@ -1313,7 +1292,7 @@ std::shared_ptr<LocalTable> createTableFromSchema(
     std::string_view name,
     std::string_view path,
     const LocalHiveConnectorMetadata& metadata) {
-  auto jsons = readConcatenatedDynamicsFromFile(schemaPath(path));
+  auto jsons = readConcatenatedDynamicsFromFile(SchemaFile::path(path));
   if (jsons.empty()) {
     return nullptr;
   }
@@ -1322,7 +1301,7 @@ std::shared_ptr<LocalTable> createTableFromSchema(
   const auto& json = jsons[0];
 
   const auto options = parseCreateTableOptions(json, metadata.fileFormat());
-  const auto schema = parseSchema(json);
+  const auto schema = SchemaFile::parseRowType(json);
 
   return createLocalTable(name, schema, options, metadata);
 }
@@ -1687,7 +1666,7 @@ TablePtr LocalHiveConnectorMetadata::createTable(
 
   const std::string jsonStr =
       folly::toPrettyJson(toSchemaJson(rowType, createTableOptions));
-  const std::string filePath = schemaPath(path);
+  const std::string filePath = SchemaFile::path(path);
 
   std::lock_guard<std::mutex> l(mutex_);
   if (findTableLocked(tableName.table)) {
@@ -1751,7 +1730,7 @@ std::optional<int64_t> LocalHiveConnectorMetadata::removePartitions(
 
     // Collected before removing any: removing an entry invalidates an open
     // directory iterator.
-    const auto schemaFile = schemaPath(path.string());
+    const auto schemaFile = SchemaFile::path(path.string());
     std::vector<fs::path> entries;
     for (const auto& entry : fs::directory_iterator(path)) {
       if (entry.path().string() != schemaFile) {
@@ -1995,7 +1974,7 @@ std::optional<bool> LocalHiveConnectorMetadata::addColumn(
   }
 
   auto path = tablePath(tableName);
-  auto schemaFile = schemaPath(path);
+  auto schemaFile = SchemaFile::path(path);
   VELOX_CHECK(
       std::filesystem::exists(schemaFile),
       "Schema file is missing for table {}: {}",
@@ -2010,7 +1989,8 @@ std::optional<bool> LocalHiveConnectorMetadata::addColumn(
       schemaFile);
 
   auto& schema = jsons[0];
-  schema["dataColumns"].push_back(columnToJson(columnName, columnType));
+  schema["dataColumns"].push_back(
+      SchemaFile::columnToJson(columnName, columnType));
 
   std::ofstream outputFile(schemaFile);
   VELOX_CHECK(outputFile.is_open());

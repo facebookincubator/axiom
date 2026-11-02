@@ -26,8 +26,9 @@
 
 namespace facebook::axiom::connector::hive {
 
-std::string schemaPath(std::string_view path) {
-  return fmt::format("{}/.schema", path);
+// static
+std::string SchemaFile::path(std::string_view directory) {
+  return fmt::format("{}/.schema", directory);
 }
 
 namespace {
@@ -277,14 +278,18 @@ void FileInfo::listFiles(
   }
 }
 
-folly::dynamic columnToJson(std::string_view name, const velox::TypePtr& type) {
+// static
+folly::dynamic SchemaFile::columnToJson(
+    std::string_view name,
+    const velox::TypePtr& type) {
   folly::dynamic column = folly::dynamic::object;
   column["name"] = std::string(name);
   column["type"] = type->serialize();
   return column;
 }
 
-void writeSchemaFile(
+// static
+void SchemaFile::write(
     const std::string& tablePath,
     const velox::RowTypePtr& rowType,
     velox::dwio::common::FileFormat fileFormat) {
@@ -300,12 +305,34 @@ void writeSchemaFile(
   schema["fileFormat"] =
       std::string(velox::dwio::common::FileFormatName::toName(fileFormat));
 
-  const auto file = schemaPath(tablePath);
+  const auto file = path(tablePath);
   std::ofstream outputFile(file);
   VELOX_CHECK(outputFile.is_open(), "Failed to open schema file: {}", file);
   outputFile << folly::toPrettyJson(schema);
   outputFile.close();
   VELOX_CHECK(!outputFile.fail(), "Failed to write schema file: {}", file);
+}
+
+// static
+velox::RowTypePtr SchemaFile::parseRowType(const folly::dynamic& schema) {
+  std::vector<std::string> names;
+  std::vector<velox::TypePtr> types;
+
+  auto parseColumn = [&](const auto& column) {
+    names.push_back(column["name"].asString());
+    types.push_back(
+        velox::ISerializable::deserialize<velox::Type>(column["type"]));
+  };
+
+  for (const auto& column : schema["dataColumns"]) {
+    parseColumn(column);
+  }
+
+  for (const auto& column : schema["partitionColumns"]) {
+    parseColumn(column);
+  }
+
+  return velox::ROW(std::move(names), std::move(types));
 }
 
 } // namespace facebook::axiom::connector::hive

@@ -491,8 +491,6 @@ class Emitter {
       const ColumnVector& keepColumns,
       velox::core::PlanNodePtr input);
 
-  velox::RowTypePtr makeRowType(const ColumnVector& columns) const;
-
   const std::string& chooseExchangeSerdeKind(
       const velox::RowType& outputType) const {
     return velox::serializer::presto::PrestoVectorSerde::
@@ -733,18 +731,6 @@ velox::core::PlanNodePtr Emitter::projectToColumns(
       std::move(input), keepColumns, namesOf(keepColumns));
 }
 
-velox::RowTypePtr Emitter::makeRowType(const ColumnVector& columns) const {
-  std::vector<std::string> names;
-  std::vector<velox::TypePtr> types;
-  names.reserve(columns.size());
-  types.reserve(columns.size());
-  for (ColumnCP column : columns) {
-    names.push_back(column->outputName());
-    types.push_back(toTypePtr(column->value().type));
-  }
-  return velox::ROW(std::move(names), std::move(types));
-}
-
 velox::core::PlanNodePtr Emitter::emitScan(const Scan& scan) {
   VELOX_CHECK_NOT_NULL(
       scan.scanHandle(), "Scan reaches emit without a connector handle");
@@ -964,7 +950,7 @@ velox::core::PlanNodePtr Emitter::emitProject(const Project& project) {
     }
     std::vector<velox::RowVectorPtr> rowVectors{
         velox::BaseVector::createFromVariants<velox::RowVector>(
-            makeRowType(project.outputColumns()),
+            ExprEmitter::toRowType(project.outputColumns()),
             {velox::Variant::row(std::move(row))},
             evaluator_.pool())};
     return std::make_shared<velox::core::ValuesNode>(
@@ -1491,7 +1477,7 @@ std::string Emitter::declareHashTable(
   fixedPoint_->states.push_back(
       velox::core::HashTableState(
           stateName,
-          makeRowType(columns),
+          ExprEmitter::toRowType(columns),
           std::vector<std::string>(names.begin(), names.begin() + numKeys))
           .initial(std::move(plan)));
   return stateName;
@@ -1589,7 +1575,7 @@ velox::core::PlanNodePtr Emitter::emitJoin(const Join& join) {
             filter,
             std::move(left),
             std::move(right),
-            makeRowType(join.sourceColumns()),
+            ExprEmitter::toRowType(join.sourceColumns()),
             /*useHashTableCache=*/false,
             join.nullAsValue()));
   }
@@ -1615,7 +1601,7 @@ velox::core::PlanNodePtr Emitter::emitJoin(const Join& join) {
           filter,
           std::move(left),
           std::move(right),
-          makeRowType(join.sourceColumns())));
+          ExprEmitter::toRowType(join.sourceColumns())));
 }
 
 velox::core::PlanNodePtr Emitter::emitIndexLookupJoin(
@@ -1629,7 +1615,7 @@ velox::core::PlanNodePtr Emitter::emitIndexLookupJoin(
   }
   auto lookupSource = std::make_shared<velox::core::TableScanNode>(
       nextId(),
-      makeRowType(join.lookupOutputColumns()),
+      ExprEmitter::toRowType(join.lookupOutputColumns()),
       handle.tableHandle,
       std::move(assignments));
 
@@ -1649,7 +1635,7 @@ velox::core::PlanNodePtr Emitter::emitIndexLookupJoin(
       /*splitOutput=*/std::nullopt,
       std::move(probe),
       std::move(lookupSource),
-      makeRowType(join.sourceColumns()));
+      ExprEmitter::toRowType(join.sourceColumns()));
 
   return join.sourceColumns() == join.outputColumns()
       ? std::move(result)
@@ -1687,7 +1673,7 @@ velox::core::PlanNodePtr Emitter::emitVectorSearch(const VectorSearch& search) {
       std::move(scoreName),
       std::move(probe),
       std::move(build),
-      makeRowType(search.sourceColumns()));
+      ExprEmitter::toRowType(search.sourceColumns()));
 
   return search.sourceColumns() == search.outputColumns()
       ? std::move(result)
@@ -1705,19 +1691,8 @@ velox::core::PlanNodePtr Emitter::emitSemiAntiViaLeftSemiProject(
   const std::string markName = fmt::format("__nlj_mark_{}", nextNodeId_);
   const auto& outputColumns = join.outputColumns();
 
-  auto outputType = [&]() {
-    std::vector<std::string> innerNames;
-    std::vector<velox::TypePtr> innerTypes;
-    innerNames.reserve(outputColumns.size() + 1);
-    innerTypes.reserve(outputColumns.size() + 1);
-    for (ColumnCP column : outputColumns) {
-      innerNames.emplace_back(column->outputName());
-      innerTypes.push_back(toTypePtr(column->value().type));
-    }
-    innerNames.push_back(markName);
-    innerTypes.push_back(velox::BOOLEAN());
-    return velox::ROW(std::move(innerNames), std::move(innerTypes));
-  }();
+  auto outputType = ExprEmitter::toRowType(outputColumns)
+                        ->unionWith(markName, velox::BOOLEAN());
 
   auto joinNode = std::make_shared<velox::core::NestedLoopJoinNode>(
       nextId(),
@@ -1801,7 +1776,7 @@ velox::core::PlanNodePtr Emitter::emitLimit(const Limit& limit) {
 velox::core::PlanNodePtr Emitter::emitValues(const Values& values) {
   auto* pool = evaluator_.pool();
   const auto& channels = values.channels();
-  const auto rowType = makeRowType(values.outputColumns());
+  const auto rowType = ExprEmitter::toRowType(values.outputColumns());
   std::vector<velox::RowVectorPtr> rowVectors;
 
   if (values.rows() != nullptr) {
@@ -1939,7 +1914,7 @@ velox::core::PlanNodePtr Emitter::emitInference(const Inference& node) {
       std::move(input),
       std::move(call),
       node.result()->outputName(),
-      makeRowType(node.outputColumns()));
+      ExprEmitter::toRowType(node.outputColumns()));
 }
 
 velox::core::PlanNodePtr Emitter::emitRowNumber(const RowNumber& node) {
@@ -2630,7 +2605,7 @@ velox::core::PlanNodePtr Emitter::emitDelete(const TableWrite& tableWrite) {
         nextId(),
         std::vector<velox::RowVectorPtr>{
             velox::BaseVector::createFromVariants<velox::RowVector>(
-                makeRowType(tableWrite.outputColumns()),
+                ExprEmitter::toRowType(tableWrite.outputColumns()),
                 {velox::Variant::row({velox::Variant(int64_t{0})})},
                 evaluator_.pool())});
   }
@@ -2822,7 +2797,7 @@ velox::core::PlanNodePtr Emitter::emitFixedPoint(const FixedPoint& fixedPoint) {
     }
   }
 
-  auto schema = makeRowType(fixedPoint.outputColumns());
+  auto schema = ExprEmitter::toRowType(fixedPoint.outputColumns());
 
   // A convergence cut at a gather runs its last plan on worker 0 and shares
   // the answer. Over a replicated state, worker 0 runs the convergence over
@@ -2861,7 +2836,7 @@ velox::core::PlanNodePtr Emitter::emitFixedPoint(const FixedPoint& fixedPoint) {
 
 velox::core::PlanNodePtr Emitter::emitWorkingTable(
     const WorkingTable& workingTable) {
-  auto schema = makeRowType(workingTable.outputColumns());
+  auto schema = ExprEmitter::toRowType(workingTable.outputColumns());
   const bool delta =
       workingTable.readMode() == WorkingTableReadMode::kLatestDelta;
   return std::make_shared<velox::core::StateSourceNode>(
