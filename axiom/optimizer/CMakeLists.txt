@@ -55,6 +55,7 @@ add_library(
   OptimizerOptions.cpp
   ParallelExpr.cpp
   Plan.cpp
+  PlanAndStats.cpp
   PlanObject.cpp
   PlanUtils.cpp
   PrecomputeProjection.cpp
@@ -72,6 +73,8 @@ add_library(
   UnionConstraints.cpp
   VeloxHistory.cpp
   WriteStatsBuilder.cpp
+  v1/History.cpp
+  v1/ExplainIo.cpp
 )
 
 target_link_libraries(

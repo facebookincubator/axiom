@@ -26,6 +26,7 @@
 #include "axiom/optimizer/RelationOpPrinter.h"
 #include "axiom/optimizer/RelationOpVisitor.h"
 #include "axiom/optimizer/UnionConstraints.h"
+#include "axiom/optimizer/v1/History.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/expression/ScopedVarSetter.h"
 

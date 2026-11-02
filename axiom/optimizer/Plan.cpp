@@ -15,9 +15,9 @@
  */
 
 #include "axiom/optimizer/Plan.h"
-#include "axiom/optimizer/Cost.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/RelationOpPrinter.h"
+#include "axiom/optimizer/v1/History.h"
 
 namespace facebook::axiom::optimizer {
 
