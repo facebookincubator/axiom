@@ -1106,12 +1106,9 @@ std::pair<DerivedTableCP, JoinEdgeP> makeExistsDtAndJoin(
     auto firstExistsTable = rightKeys[0]->singleTable();
     VELOX_CHECK(firstExistsTable);
 
-    PlanObjectSet existsDtColumns;
-    existsDtColumns.unionColumns(rightKeys);
-
     return MemoKey::create(
         firstExistsTable,
-        std::move(existsDtColumns),
+        PlanObjectSet::columnsOf(rightKeys),
         PlanObjectSet::fromObjects(existsTables));
   }();
 
@@ -1556,9 +1553,7 @@ bool DerivedTable::validatePushdown(
         windowKeys.unionColumns(func->partitionKeys());
         first = false;
       } else {
-        PlanObjectSet funcColumns;
-        funcColumns.unionColumns(func->partitionKeys());
-        windowKeys.intersect(funcColumns);
+        windowKeys.intersect(PlanObjectSet::columnsOf(func->partitionKeys()));
       }
     }
     if (subquery.hasAggregation()) {
@@ -2204,9 +2199,8 @@ bool DerivedTable::isPartitionKeyFilter(ExprCP imported) const {
     if (func->partitionKeys().empty()) {
       return false;
     }
-    PlanObjectSet partitionKeyColumns;
-    partitionKeyColumns.unionColumns(func->partitionKeys());
-    if (!imported->columns().isSubset(partitionKeyColumns)) {
+    if (!imported->columns().isSubset(
+            PlanObjectSet::columnsOf(func->partitionKeys()))) {
       return false;
     }
   }

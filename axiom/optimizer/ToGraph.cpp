@@ -5001,8 +5001,8 @@ void ToGraph::makeQueryGraph(
         // Grouped aggregate with correlation. Inner-side columns
         // referenced by a lifted predicate must be in `groupingKeys` so
         // they survive to the outer as join keys.
-        PlanObjectSet groupingKeyColumns;
-        groupingKeyColumns.unionColumns(agg->groupingKeys());
+        const auto groupingKeyColumns =
+            PlanObjectSet::columnsOf(agg->groupingKeys());
         for (ExprCP predicate : applyContext_.lifted.predicates) {
           predicate->columns().forEach([&](PlanObjectCP column) {
             if (isOutsideDt(column->as<Column>()->relation(), currentDt_)) {

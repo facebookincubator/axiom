@@ -168,6 +168,13 @@ class PlanObjectSet : public BitSet {
     return set;
   }
 
+  /// Creates a PlanObjectSet of the columns 'exprs' read.
+  static PlanObjectSet columnsOf(const ExprVector& exprs) {
+    PlanObjectSet set;
+    set.unionColumns(exprs);
+    return set;
+  }
+
   /// True if id of 'object' is in 'this'.
   bool contains(PlanObjectCP object) const {
     return object->id() < bits_.size() * 64 &&

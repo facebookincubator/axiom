@@ -2152,8 +2152,7 @@ std::pair<PlanObjectSet, PlanObjectSet> computeJoinFilterColumns(
     const ExprVector& filter,
     const PlanObjectSet& sideAColumns,
     const PlanObjectSet& sideBColumns) {
-  PlanObjectSet allFilterColumns;
-  allFilterColumns.unionColumns(filter);
+  const auto allFilterColumns = PlanObjectSet::columnsOf(filter);
 
   auto a = allFilterColumns;
   a.intersect(sideAColumns);
