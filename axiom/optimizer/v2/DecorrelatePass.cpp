@@ -516,21 +516,19 @@ class Decorrelator : public NodeRewriter<> {
     if (node->isLeftSemiProject() && !isInSubquery) {
       return limitPeelDropForExists(node, input, limitBody, accumulatedFilter);
     }
-    if (isInSubquery) {
-      VELOX_NYI(
-          "Decorrelate: kLeftSemiProject IN over Limit with count >= 1 "
-          "not yet implemented (LIMIT must precede the IN equi check)");
-    }
+    VELOX_NYI_CHECK(
+        !isInSubquery,
+        "Decorrelate: kLeftSemiProject IN over Limit with count >= 1 "
+        "not yet implemented (LIMIT must precede the IN equi check)");
     if (node->isInner() || node->isLeft()) {
       if (auto equi =
               limitPeelEqui(node, input, limitBody, count, accumulatedFilter)) {
         return *equi;
       }
-      if (node->isInner()) {
-        VELOX_NYI(
-            "Decorrelate: INNER LATERAL over a Limit body is not yet "
-            "supported for this shape");
-      }
+      VELOX_NYI_CHECK(
+          !node->isInner(),
+          "Decorrelate: INNER LATERAL over a Limit body is not yet "
+          "supported for this shape");
     }
     VELOX_USER_CHECK(
         node->isLeft(),
@@ -810,12 +808,11 @@ class Decorrelator : public NodeRewriter<> {
     }
 
     auto order = takeSortOrder(beneathLimit);
-    if (!order.has_value()) {
-      VELOX_NYI(
-          "Decorrelate Limit peel: a Sort under {} does not reach the "
-          "window's ordering",
-          beneathLimit->nodeType());
-    }
+    VELOX_NYI_CHECK(
+        order.has_value(),
+        "Decorrelate Limit peel: a Sort under {} does not reach the "
+        "window's ordering",
+        beneathLimit->nodeType());
     // Where there was no Sort the Projects descended through above still
     // belong to the body.
     NodeCP newBody =
@@ -1048,12 +1045,11 @@ class Decorrelator : public NodeRewriter<> {
 
     ExprVector joinPredicate = flattenJoinPredicate(joinBody);
 
-    if (joinBody->isFull()) {
-      VELOX_NYI(
-          "Decorrelate: Apply over kFull Join in body is not yet "
-          "supported (tree-only execution can't preserve both sides' "
-          "unmatched rows without DAG support)");
-    }
+    VELOX_NYI_CHECK(
+        !joinBody->isFull(),
+        "Decorrelate: Apply over kFull Join in body is not yet "
+        "supported (tree-only execution can't preserve both sides' "
+        "unmatched rows without DAG support)");
 
     if (node->isLeft()) {
       return joinPeelLeft(
@@ -1073,10 +1069,9 @@ class Decorrelator : public NodeRewriter<> {
           std::move(accumulatedFilter));
     }
 
-    if (node->isInner()) {
-      VELOX_NYI(
-          "Decorrelate: INNER LATERAL over a Join body is not yet supported");
-    }
+    VELOX_NYI_CHECK(
+        !node->isInner(),
+        "Decorrelate: INNER LATERAL over a Join body is not yet supported");
 
     VELOX_FAIL(
         "Decorrelate joinPeel: unexpected outer Apply kind {}", node->kind());
@@ -1109,12 +1104,11 @@ class Decorrelator : public NodeRewriter<> {
           node, input, joinBody, std::move(accumulatedFilter));
     }
 
-    if (!joinBody->isInner() && !joinBody->isLeft()) {
-      VELOX_NYI(
-          "Decorrelate joinPeel: outer kLeft over this body Join kind is not "
-          "yet implemented: {}",
-          joinBody->joinTypeName());
-    }
+    VELOX_NYI_CHECK(
+        joinBody->isInner() || joinBody->isLeft(),
+        "Decorrelate joinPeel: outer kLeft over this body Join kind is not "
+        "yet implemented: {}",
+        joinBody->joinTypeName());
 
     if (joinBody->isInner()) {
       // A row the join predicate rejects is not a body row, and neither is
@@ -1229,12 +1223,12 @@ class Decorrelator : public NodeRewriter<> {
     if (joinBody->nullAware()) {
       // A body whose IN key reads outer columns carries the equality in its
       // filter instead, leaving nothing to hand applyB as the null-aware pair.
-      if (joinBody->leftKeys().size() != 1) {
-        VELOX_NYI(
-            "Decorrelate joinPeel: outer kLeft over a null-aware "
-            "kLeftSemiProject Join without a single equi-pair is not yet "
-            "implemented");
-      }
+      VELOX_NYI_CHECK_EQ(
+          joinBody->leftKeys().size(),
+          1,
+          "Decorrelate joinPeel: outer kLeft over a null-aware "
+          "kLeftSemiProject Join without a single equi-pair is not yet "
+          "implemented");
       inLhs = joinBody->leftKeys()[0];
       inBodyKey = joinBody->rightKeys()[0];
       appendAll(applyBFilter, joinBody->filter());
@@ -1801,12 +1795,11 @@ class Decorrelator : public NodeRewriter<> {
           std::move(joinPredicate),
           std::move(accumulatedFilter));
     }
-    if (!joinBody->isInner()) {
-      VELOX_NYI(
-          "Decorrelate joinPeel: outer kLeftSemiProject EXISTS requires a "
-          "kInner, kLeft, or kLeftSemiProject body: joinType={}",
-          joinBody->joinTypeName());
-    }
+    VELOX_NYI_CHECK(
+        joinBody->isInner(),
+        "Decorrelate joinPeel: outer kLeftSemiProject EXISTS requires a "
+        "kInner, kLeft, or kLeftSemiProject body: joinType={}",
+        joinBody->joinTypeName());
 
     // A predicate ties the two sides together, so existence is not the
     // conjunction of each side's own. Anything accumulated above the body join
@@ -1873,12 +1866,11 @@ class Decorrelator : public NodeRewriter<> {
       JoinCP joinBody,
       ExprVector joinPredicate,
       const ExprVector& accumulatedFilter) {
-    if (!joinBody->isInner()) {
-      VELOX_NYI(
-          "Decorrelate joinPeel: outer kLeftSemiProject IN requires a "
-          "kInner body: joinType={}",
-          joinBody->joinTypeName());
-    }
+    VELOX_NYI_CHECK(
+        joinBody->isInner(),
+        "Decorrelate joinPeel: outer kLeftSemiProject IN requires a "
+        "kInner body: joinType={}",
+        joinBody->joinTypeName());
 
     // applyB resolves the IN key against its body, the Join's right input. A
     // key reading anything else resolves on the input side, where the pair is
@@ -1886,11 +1878,10 @@ class Decorrelator : public NodeRewriter<> {
     // unknown case depends on.
     PlanObjectSet rightColumns =
         PlanObjectSet::fromObjects(joinBody->right()->outputColumns());
-    if (!rightColumns.containsColumns(node->inBodyKey())) {
-      VELOX_NYI(
-          "Decorrelate joinPeel: outer kLeftSemiProject IN over a Join body "
-          "requires a body key reading only the Join's right input");
-    }
+    VELOX_NYI_CHECK(
+        rightColumns.containsColumns(node->inBodyKey()),
+        "Decorrelate joinPeel: outer kLeftSemiProject IN over a Join body "
+        "requires a body key reading only the Join's right input");
 
     JoinChainFilterSplit filterSplit =
         splitJoinChainFilters(accumulatedFilter, joinBody);
@@ -1966,11 +1957,10 @@ class Decorrelator : public NodeRewriter<> {
       // match result through the body's mark.
       ColumnCP bodyMark = joinBody->markColumn();
       VELOX_CHECK_NOT_NULL(bodyMark);
-      if (joinBody->nullAware()) {
-        VELOX_NYI(
-            "Decorrelate joinPeel: outer kLeftSemiProject EXISTS over a "
-            "null-aware kLeftSemiProject Join is not yet implemented");
-      }
+      VELOX_NYI_CHECK(
+          !joinBody->nullAware(),
+          "Decorrelate joinPeel: outer kLeftSemiProject EXISTS over a "
+          "null-aware kLeftSemiProject Join is not yet implemented");
       applyB = makeSemiLeg(
           chain.leftApply,
           joinBody->right(),
@@ -2086,12 +2076,11 @@ class Decorrelator : public NodeRewriter<> {
     if (node->isLeftSemiProject()) {
       return unnestPeelSemi(node, input, body, accumulatedFilter);
     }
-    if (!node->isInner()) {
-      VELOX_NYI(
-          "Decorrelate unnestPeel: a {} Apply over an Unnest body is not yet "
-          "implemented",
-          node->isLeft() ? "kLeft" : "semi-filter or anti");
-    }
+    VELOX_NYI_CHECK(
+        node->isInner(),
+        "Decorrelate unnestPeel: a {} Apply over an Unnest body is not yet "
+        "implemented",
+        node->isLeft() ? "kLeft" : "semi-filter or anti");
     const Unnest* unnestBody = body->as<Unnest>();
     NodeCP newBody = unnestBody->input();
 
@@ -2176,11 +2165,10 @@ class Decorrelator : public NodeRewriter<> {
         "A kLeftSemiProject Apply does not assert a single row");
 
     const Unnest* unnestBody = body->as<Unnest>();
-    if (!Values::isSingleRowNoColumns(unnestBody->input())) {
-      VELOX_NYI(
-          "Decorrelate unnestPeel: EXISTS over an Unnest of a relation is not "
-          "yet implemented; only over the subquery's own row is");
-    }
+    VELOX_NYI_CHECK(
+        Values::isSingleRowNoColumns(unnestBody->input()),
+        "Decorrelate unnestPeel: EXISTS over an Unnest of a relation is not "
+        "yet implemented; only over the subquery's own row is");
 
     ColumnCP rowId = makeIdColumn();
     NodeCP tagged = tagOuterRows(input, rowId);
@@ -2220,11 +2208,10 @@ class Decorrelator : public NodeRewriter<> {
       NodeCP input,
       NodeCP body,
       ExprVector accumulatedFilter) {
-    if (node->isInner()) {
-      VELOX_NYI(
-          "Decorrelate: INNER LATERAL over an AssignUniqueId body is not "
-          "yet supported");
-    }
+    VELOX_NYI_CHECK(
+        !node->isInner(),
+        "Decorrelate: INNER LATERAL over an AssignUniqueId body is not "
+        "yet supported");
     AssignUniqueIdCP assignUniqueIdBody = body->as<AssignUniqueId>();
     NodeCP newBody = assignUniqueIdBody->input();
     ColumnCP idColumn = assignUniqueIdBody->idColumn();
@@ -2294,12 +2281,11 @@ class Decorrelator : public NodeRewriter<> {
       NodeCP input,
       NodeCP body,
       ExprVector accumulatedFilter) {
-    if (!node->isLeft()) {
-      VELOX_NYI(
-          "Decorrelate: Apply over an EnforceDistinct body is not yet "
-          "supported for kind: {}",
-          node->kindName());
-    }
+    VELOX_NYI_CHECK(
+        node->isLeft(),
+        "Decorrelate: Apply over an EnforceDistinct body is not yet "
+        "supported for kind: {}",
+        node->kindName());
     EnforceDistinctCP enforceDistinct = body->as<EnforceDistinct>();
     NodeCP newBody = enforceDistinct->input();
 
@@ -2431,20 +2417,18 @@ class Decorrelator : public NodeRewriter<> {
     if (node->isLeftSemiProject()) {
       return aggregatePeelSemi(node, input, body, accumulatedFilter);
     }
-    if (node->isInner() &&
-        (!aggregate->groupingKeys().empty() || !accumulatedFilter.empty())) {
-      VELOX_NYI(
-          "Decorrelate: INNER LATERAL over an Aggregate body is not yet "
-          "supported");
-    }
-    if (!node->isLeft() && !node->isInner()) {
-      VELOX_NYI(
-          "Decorrelate: Aggregate peel for kind={} not yet supported",
-          node->kind());
-    }
-    if (aggregate->input()->is(NodeType::kGroupId)) {
-      VELOX_NYI("Decorrelate: Aggregate peel over GROUPING SETS NYI");
-    }
+    VELOX_NYI_CHECK(
+        !node->isInner() ||
+            (aggregate->groupingKeys().empty() && accumulatedFilter.empty()),
+        "Decorrelate: INNER LATERAL over an Aggregate body is not yet "
+        "supported");
+    VELOX_NYI_CHECK(
+        node->isLeft() || node->isInner(),
+        "Decorrelate: Aggregate peel for kind={} not yet supported",
+        node->kind());
+    VELOX_NYI_CHECK(
+        !aggregate->input()->is(NodeType::kGroupId),
+        "Decorrelate: Aggregate peel over GROUPING SETS NYI");
 
     const size_t numGroupingKeys = aggregate->groupingKeys().size();
     auto [filterPreConjuncts, filterPostConjuncts] =
@@ -3502,11 +3486,10 @@ class Decorrelator : public NodeRewriter<> {
       ExprVector accumulatedFilter) {
     AggregateCP aggregate = body->as<Aggregate>();
 
-    if (aggregate->input()->is(NodeType::kGroupId)) {
-      VELOX_NYI(
-          "Decorrelate: Aggregate peel for kLeftSemiProject over GROUPING "
-          "SETS NYI");
-    }
+    VELOX_NYI_CHECK(
+        !aggregate->input()->is(NodeType::kGroupId),
+        "Decorrelate: Aggregate peel for kLeftSemiProject over GROUPING "
+        "SETS NYI");
 
     if (canElideBodyAggregate(node, aggregate, accumulatedFilter)) {
       return aggregatePeelSemiDropAggregate(

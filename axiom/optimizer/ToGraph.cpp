@@ -2172,10 +2172,9 @@ lp::ExprPtr ToGraph::processLeftJoinSubqueries(
   makeQueryGraph(right, kAllAllowedInDt, /*orderObservedAbove=*/false);
   addFilter(right, combineConjuncts(std::move(subqueryConjuncts)));
 
-  if (!applyContext_.lifted.predicates.empty()) {
-    VELOX_NYI(
-        "Unsupported subqueries in the ON clause of a LEFT or RIGHT join");
-  }
+  VELOX_NYI_CHECK(
+      applyContext_.lifted.predicates.empty(),
+      "Unsupported subqueries in the ON clause of a LEFT or RIGHT join");
   finalizeDt(right, outerDt);
 
   return combineConjuncts(std::move(conjuncts));
@@ -3687,10 +3686,9 @@ ExprCP ToGraph::buildCorrelatedAggregation(
       aggScope.hasLocal |= argScope.hasLocal;
       aggScope.hasCorrelation |= argScope.hasCorrelation;
     }
-    if (aggScope.hasCorrelation && !aggScope.hasLocal) {
-      VELOX_NYI(
-          "Correlated subquery with an aggregate whose arguments reference only outer columns is not supported yet");
-    }
+    VELOX_NYI_CHECK(
+        !aggScope.hasCorrelation || aggScope.hasLocal,
+        "Correlated subquery with an aggregate whose arguments reference only outer columns is not supported yet");
   }
 
   // Outer table for AssignUniqueId: prefer the one identified from
@@ -3812,10 +3810,9 @@ ExprCP ToGraph::processProjectionCorrelatedScalarSubquery(
       applyContext_.lifted.predicates.clear();
       column = wrapScalarInGuards(std::move(conjuncts), column);
     }
-    if (applyContext_.lifted.aggregation != nullptr) {
-      VELOX_NYI(
-          "Correlated aggregate in a no-FROM subquery body is not supported yet");
-    }
+    VELOX_NYI_CHECK_NULL(
+        applyContext_.lifted.aggregation,
+        "Correlated aggregate in a no-FROM subquery body is not supported yet");
     if (subqueryDt->hasNoPostprocess()) {
       // The residual references no columns of subqueryDt; the DT can be
       // dropped and the residual evaluated in the outer scope alone.
@@ -3893,10 +3890,9 @@ void ToGraph::processInPredicates(
     auto subqueryDt = translateSubquery(
         *predicate->inputAt(1)->as<lp::SubqueryExpr>()->subquery(),
         /*finalize=*/false);
-    if (applyContext_.lifted.aggregation != nullptr) {
-      VELOX_NYI(
-          "Outer-column reference in the aggregate body of an IN subquery is not supported yet");
-    }
+    VELOX_NYI_CHECK_NULL(
+        applyContext_.lifted.aggregation,
+        "Outer-column reference in the aggregate body of an IN subquery is not supported yet");
     // The correlation rewrite for a global aggregate promotes the
     // correlation column to a grouping key, leaving the inner subquery
     // with one extra output column the IN consumer cannot place. Catch
@@ -4137,14 +4133,12 @@ void ToGraph::processExistsSubqueries(
     auto subqueryDt = translateSubquery(
         *existsExpr->inputAt(0)->as<lp::SubqueryExpr>()->subquery(),
         /*finalize=*/false);
-    if (!applyContext_.lifted.projections.empty()) {
-      VELOX_NYI(
-          "Outer-column reference in the SELECT of an EXISTS subquery is not supported yet");
-    }
-    if (applyContext_.lifted.aggregation != nullptr) {
-      VELOX_NYI(
-          "Outer-column reference in the aggregate body of an EXISTS subquery is not supported yet");
-    }
+    VELOX_NYI_CHECK(
+        applyContext_.lifted.projections.empty(),
+        "Outer-column reference in the SELECT of an EXISTS subquery is not supported yet");
+    VELOX_NYI_CHECK_NULL(
+        applyContext_.lifted.aggregation,
+        "Outer-column reference in the aggregate body of an EXISTS subquery is not supported yet");
 
     auto outerGuards = std::move(applyContext_.lifted.outerGuards);
     applyContext_.lifted.outerGuards.clear();
@@ -4533,10 +4527,10 @@ void ToGraph::makeEmptyValuesTable(const lp::LogicalPlanNode& node) {
 void ToGraph::addWrite(const lp::TableWriteNode& tableWrite) {
   const auto writeKind =
       static_cast<connector::WriteKind>(tableWrite.writeKind());
-  if (writeKind != connector::WriteKind::kInsert &&
-      writeKind != connector::WriteKind::kCreate) {
-    VELOX_NYI("Only INSERT supported for TableWrite");
-  }
+  VELOX_NYI_CHECK(
+      writeKind == connector::WriteKind::kInsert ||
+          writeKind == connector::WriteKind::kCreate,
+      "Only INSERT supported for TableWrite");
   VELOX_CHECK_NULL(
       currentDt_->write, "Only one TableWrite per DerivedTable is allowed");
   const auto* schemaTable =
@@ -4727,10 +4721,9 @@ void ToGraph::translateUnion(const lp::SetNode& set) {
       subqueries_ = std::move(savedSubqueries);
     };
     makeQueryGraph(input, kAllAllowedInDt, /*orderObservedAbove=*/false);
-    if (!applyContext_.lifted.empty()) {
-      VELOX_NYI(
-          "Correlated reference inside a UNION ALL branch is not supported yet");
-    }
+    VELOX_NYI_CHECK(
+        applyContext_.lifted.empty(),
+        "Correlated reference inside a UNION ALL branch is not supported yet");
     auto* newDt = std::exchange(currentDt_, setDt);
 
     const auto& type = input.outputType();

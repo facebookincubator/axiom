@@ -470,13 +470,12 @@ Translated Translator::translateTableWrite(
     const lp::TableWriteNode& tableWrite,
     const LpNameSet& /*required*/) {
   const auto kind = static_cast<connector::WriteKind>(tableWrite.writeKind());
-  if (kind != connector::WriteKind::kCreate &&
-      kind != connector::WriteKind::kInsert &&
-      kind != connector::WriteKind::kDelete) {
-    VELOX_NYI(
-        "TableWrite does not support {}",
-        connector::WriteKindName::toName(kind));
-  }
+  VELOX_NYI_CHECK(
+      kind == connector::WriteKind::kCreate ||
+          kind == connector::WriteKind::kInsert ||
+          kind == connector::WriteKind::kDelete,
+      "TableWrite does not support {}",
+      connector::WriteKindName::toName(kind));
 
   const auto* schemaTable =
       schema_.findTable(tableWrite.connectorId(), tableWrite.tableName());
@@ -2918,11 +2917,10 @@ Translated Translator::translateJoin(
     });
     // A subquery correlated to the input it was not lifted onto references a
     // column that input cannot provide.
-    if (correlatesToOtherSide(liftTarget, beforeLift, otherSide)) {
-      VELOX_NYI(
-          "Subquery in an outer join's ON clause referencing both inputs is "
-          "not supported");
-    }
+    VELOX_NYI_CHECK(
+        !correlatesToOtherSide(liftTarget, beforeLift, otherSide),
+        "Subquery in an outer join's ON clause referencing both inputs is "
+        "not supported");
 
     auto conjuncts = ExprFactory::flattenAnd(condition);
     if (isInner) {
@@ -2998,9 +2996,9 @@ Translated Translator::translateLateralJoin(
 
   ExprVector filter;
   if (join.condition() != nullptr) {
-    if (containsSubquery(*join.condition())) {
-      VELOX_NYI("Subquery in a LATERAL join ON condition is not supported");
-    }
+    VELOX_NYI_CHECK(
+        !containsSubquery(*join.condition()),
+        "Subquery in a LATERAL join ON condition is not supported");
     ExprCP condition =
         translateExpr(*join.condition(), merged, /*liftTarget=*/nullptr);
     filter = ExprFactory::flattenAnd(condition);
