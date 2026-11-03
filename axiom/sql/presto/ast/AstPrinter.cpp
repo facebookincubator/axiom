@@ -851,6 +851,38 @@ void AstPrinter::visitLateral(Lateral* node) {
   indent_--;
 }
 
+void AstPrinter::visitTableFunctionInvocation(TableFunctionInvocation* node) {
+  printHeader("TableFunctionInvocation", node, [&](std::ostream& out) {
+    out << node->name()->fullyQualifiedName();
+  });
+
+  indent_++;
+  for (const auto& argument : node->arguments()) {
+    argument->accept(this);
+  }
+  indent_--;
+}
+
+void AstPrinter::visitTableFunctionArgument(TableFunctionArgument* node) {
+  printHeader("TableFunctionArgument", node, [&](std::ostream& out) {
+    if (node->name() != nullptr) {
+      out << node->name()->value();
+    }
+  });
+
+  indent_++;
+  if (node->table() != nullptr) {
+    node->table()->accept(this);
+  } else if (node->expression() != nullptr) {
+    node->expression()->accept(this);
+  } else {
+    for (const auto& column : node->descriptor()) {
+      column->accept(this);
+    }
+  }
+  indent_--;
+}
+
 void AstPrinter::visitUnnest(Unnest* node) {
   printHeader("Unnest", node, [&](std::ostream& out) {
     if (node->isWithOrdinality()) {

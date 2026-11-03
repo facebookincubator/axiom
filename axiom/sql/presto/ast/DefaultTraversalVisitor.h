@@ -265,6 +265,27 @@ class DefaultTraversalVisitor : public AstVisitor {
     }
   }
 
+  void visitTableFunctionInvocation(TableFunctionInvocation* node) override {
+    node->name()->accept(this);
+    for (const auto& argument : node->arguments()) {
+      argument->accept(this);
+    }
+  }
+
+  void visitTableFunctionArgument(TableFunctionArgument* node) override {
+    if (node->name()) {
+      node->name()->accept(this);
+    }
+    if (node->table()) {
+      node->table()->accept(this);
+    } else if (node->expression()) {
+      node->expression()->accept(this);
+    }
+    for (const auto& column : node->descriptor()) {
+      column->accept(this);
+    }
+  }
+
   void visitUnnest(Unnest* node) override {
     for (const auto& expr : node->expressions()) {
       expr->accept(this);

@@ -1321,6 +1321,48 @@ TEST(AstEqualityTest, aliasedRelationNotEqualAlias) {
   EXPECT_FALSE(*a == *b);
 }
 
+TEST(AstEqualityTest, tableFunctionInvocationEquals) {
+  auto call = [](NodeLocation location,
+                 const std::string& function,
+                 const std::shared_ptr<TableFunctionArgument>& argument) {
+    return std::make_shared<TableFunctionInvocation>(
+        location,
+        std::make_shared<QualifiedName>(
+            loc(), std::vector<std::string>{function}),
+        std::vector<std::shared_ptr<TableFunctionArgument>>{argument});
+  };
+  auto x = std::make_shared<Identifier>(loc(), "x", false);
+  auto table = std::make_shared<TableFunctionArgument>(
+      loc(), x, RelationPtr{makeTable("t")});
+  auto expression = std::make_shared<TableFunctionArgument>(
+      loc(), x, ExpressionPtr{longLit(1)});
+  auto positional = std::make_shared<TableFunctionArgument>(
+      loc(), nullptr, ExpressionPtr{longLit(1)});
+  auto descriptor = [&](const std::string& column) {
+    return std::make_shared<TableFunctionArgument>(
+        loc(),
+        x,
+        std::vector<IdentifierPtr>{
+            std::make_shared<Identifier>(loc(), column, false)});
+  };
+
+  auto a = call(loc(0, 0), "f", table);
+  auto b = call(loc(5, 5), "f", table);
+  EXPECT_TRUE(*a == *b);
+  EXPECT_EQ(a->hash(), b->hash());
+
+  EXPECT_FALSE(*a == *call(loc(), "g", table));
+  EXPECT_FALSE(*a == *call(loc(), "f", expression));
+  EXPECT_FALSE(*call(loc(), "f", expression) == *call(loc(), "f", positional));
+  auto c = call(loc(0, 0), "f", descriptor("a"));
+  auto d = call(loc(5, 5), "f", descriptor("a"));
+  EXPECT_TRUE(*c == *d);
+  EXPECT_EQ(c->hash(), d->hash());
+  EXPECT_FALSE(
+      *call(loc(), "f", descriptor("a")) == *call(loc(), "f", descriptor("b")));
+  EXPECT_FALSE(*a == *call(loc(), "f", descriptor("a")));
+}
+
 TEST(AstEqualityTest, sampledRelationEquals) {
   auto a = std::make_shared<SampledRelation>(
       loc(0, 0),

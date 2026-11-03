@@ -535,18 +535,11 @@ std::any AstBuilder::visitSampledRelation(
 std::any AstBuilder::visitAliasedRelation(
     PrestoSqlParser::AliasedRelationContext* ctx) {
   trace("visitAliasedRelation");
-  auto child = visitTyped<Relation>(ctx->relationPrimary());
-  if (!ctx->identifier()) {
-    return child;
-  }
-
-  std::vector<IdentifierPtr> aliases;
-  if (ctx->columnAliases() != nullptr) {
-    aliases = visitTyped<Identifier>(ctx->columnAliases()->identifier());
-  }
-
-  return std::static_pointer_cast<Relation>(std::make_shared<AliasedRelation>(
-      getLocation(ctx), child, visitIdentifier(ctx->identifier()), aliases));
+  return withAlias(
+      visitTyped<Relation>(ctx->relationPrimary()),
+      getLocation(ctx),
+      ctx->identifier(),
+      ctx->columnAliases());
 }
 
 std::any AstBuilder::visitTableName(PrestoSqlParser::TableNameContext* ctx) {
@@ -2013,6 +2006,89 @@ std::any AstBuilder::visitLateral(PrestoSqlParser::LateralContext* ctx) {
   trace("visitLateral");
   return std::static_pointer_cast<Relation>(std::make_shared<Lateral>(
       getLocation(ctx), visitTyped<Statement>(ctx->query())));
+}
+
+std::any AstBuilder::visitTableFunctionInvocation(
+    PrestoSqlParser::TableFunctionInvocationContext* ctx) {
+  trace("visitTableFunctionInvocation");
+  return visit(ctx->tableFunctionCall());
+}
+
+std::any AstBuilder::visitTableFunctionCall(
+    PrestoSqlParser::TableFunctionCallContext* ctx) {
+  trace("visitTableFunctionCall");
+  return std::static_pointer_cast<Relation>(
+      std::make_shared<TableFunctionInvocation>(
+          getLocation(ctx),
+          getQualifiedName(ctx->qualifiedName()),
+          visitTyped<TableFunctionArgument>(ctx->tableFunctionArgument())));
+}
+
+std::any AstBuilder::visitTableFunctionArgument(
+    PrestoSqlParser::TableFunctionArgumentContext* ctx) {
+  trace("visitTableFunctionArgument");
+  auto name = ctx->identifier() != nullptr
+      ? visitTyped<Identifier>(ctx->identifier())
+      : nullptr;
+  if (ctx->tableArgument() != nullptr) {
+    return std::make_shared<TableFunctionArgument>(
+        getLocation(ctx), name, visitTyped<Relation>(ctx->tableArgument()));
+  }
+  if (ctx->descriptorArgument() != nullptr) {
+    return std::make_shared<TableFunctionArgument>(
+        getLocation(ctx),
+        name,
+        visitTyped<Identifier>(ctx->descriptorArgument()->identifier()));
+  }
+  return std::make_shared<TableFunctionArgument>(
+      getLocation(ctx), name, visitTyped<Expression>(ctx->expression()));
+}
+
+RelationPtr AstBuilder::withAlias(
+    RelationPtr relation,
+    NodeLocation location,
+    PrestoSqlParser::IdentifierContext* alias,
+    PrestoSqlParser::ColumnAliasesContext* columnAliases) {
+  if (alias == nullptr) {
+    return relation;
+  }
+  std::vector<IdentifierPtr> columnNames;
+  if (columnAliases != nullptr) {
+    columnNames = visitTyped<Identifier>(columnAliases->identifier());
+  }
+  return std::make_shared<AliasedRelation>(
+      location,
+      std::move(relation),
+      visitIdentifier(alias),
+      std::move(columnNames));
+}
+
+std::any AstBuilder::visitTableArgumentTable(
+    PrestoSqlParser::TableArgumentTableContext* ctx) {
+  trace("visitTableArgumentTable");
+  return withAlias(
+      std::make_shared<Table>(
+          getLocation(ctx), getQualifiedName(ctx->qualifiedName())),
+      getLocation(ctx),
+      ctx->identifier(),
+      ctx->columnAliases());
+}
+
+std::any AstBuilder::visitTableArgumentQuery(
+    PrestoSqlParser::TableArgumentQueryContext* ctx) {
+  trace("visitTableArgumentQuery");
+  return withAlias(
+      std::make_shared<TableSubquery>(
+          getLocation(ctx), visitTyped<Statement>(ctx->query())),
+      getLocation(ctx),
+      ctx->identifier(),
+      ctx->columnAliases());
+}
+
+std::any AstBuilder::visitDescriptorArgument(
+    PrestoSqlParser::DescriptorArgumentContext* ctx) {
+  trace("visitDescriptorArgument");
+  return visitChildren("visitDescriptorArgument", ctx);
 }
 
 namespace {

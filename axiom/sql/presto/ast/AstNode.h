@@ -134,6 +134,8 @@ enum class NodeType {
   kUnnest,
   kValues,
   kGraphTable,
+  kTableFunctionInvocation,
+  kTableFunctionArgument,
 
   // Graph queries
   kPathPattern,

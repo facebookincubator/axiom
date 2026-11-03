@@ -376,6 +376,24 @@ class AstBuilder : public PrestoSqlVisitor {
 
   std::any visitLateral(PrestoSqlParser::LateralContext* ctx) override;
 
+  std::any visitTableFunctionInvocation(
+      PrestoSqlParser::TableFunctionInvocationContext* ctx) override;
+
+  std::any visitTableFunctionCall(
+      PrestoSqlParser::TableFunctionCallContext* ctx) override;
+
+  std::any visitTableFunctionArgument(
+      PrestoSqlParser::TableFunctionArgumentContext* ctx) override;
+
+  std::any visitTableArgumentTable(
+      PrestoSqlParser::TableArgumentTableContext* ctx) override;
+
+  std::any visitTableArgumentQuery(
+      PrestoSqlParser::TableArgumentQueryContext* ctx) override;
+
+  std::any visitDescriptorArgument(
+      PrestoSqlParser::DescriptorArgumentContext* ctx) override;
+
   std::any visitGraphTable(PrestoSqlParser::GraphTableContext* ctx) override;
 
   std::any visitGraphColumn(PrestoSqlParser::GraphColumnContext* ctx) override;
@@ -824,6 +842,14 @@ class AstBuilder : public PrestoSqlVisitor {
   IdentifierPtr visitIdentifier(PrestoSqlParser::IdentifierContext* ctx) {
     return visitTyped<Identifier>(ctx);
   }
+
+  // Returns 'relation' under 'alias' and 'columnAliases', an AliasedRelation
+  // at 'location', if 'alias' is set.
+  RelationPtr withAlias(
+      RelationPtr relation,
+      NodeLocation location,
+      PrestoSqlParser::IdentifierContext* alias,
+      PrestoSqlParser::ColumnAliasesContext* columnAliases);
 
   std::any aggregateResult(std::any aggregate, std::any nextResult) override {
     if (aggregate.has_value()) {

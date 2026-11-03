@@ -360,6 +360,14 @@ class AstVisitor {
     defaultVisit(node);
   }
 
+  virtual void visitTableFunctionInvocation(TableFunctionInvocation* node) {
+    defaultVisit(node);
+  }
+
+  virtual void visitTableFunctionArgument(TableFunctionArgument* node) {
+    defaultVisit(node);
+  }
+
   // Graph queries
   virtual void visitPathPattern(PathPattern* node) {
     defaultVisit(node);

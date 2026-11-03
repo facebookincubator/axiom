@@ -685,10 +685,40 @@ class PrestoSqlBaseListener : public PrestoSqlListener {
   virtual void exitGraphTable(
       PrestoSqlParser::GraphTableContext* /*ctx*/) override {}
 
+  virtual void enterTableFunctionInvocation(
+      PrestoSqlParser::TableFunctionInvocationContext* /*ctx*/) override {}
+  virtual void exitTableFunctionInvocation(
+      PrestoSqlParser::TableFunctionInvocationContext* /*ctx*/) override {}
+
   virtual void enterParenthesizedRelation(
       PrestoSqlParser::ParenthesizedRelationContext* /*ctx*/) override {}
   virtual void exitParenthesizedRelation(
       PrestoSqlParser::ParenthesizedRelationContext* /*ctx*/) override {}
+
+  virtual void enterTableFunctionCall(
+      PrestoSqlParser::TableFunctionCallContext* /*ctx*/) override {}
+  virtual void exitTableFunctionCall(
+      PrestoSqlParser::TableFunctionCallContext* /*ctx*/) override {}
+
+  virtual void enterTableFunctionArgument(
+      PrestoSqlParser::TableFunctionArgumentContext* /*ctx*/) override {}
+  virtual void exitTableFunctionArgument(
+      PrestoSqlParser::TableFunctionArgumentContext* /*ctx*/) override {}
+
+  virtual void enterTableArgumentTable(
+      PrestoSqlParser::TableArgumentTableContext* /*ctx*/) override {}
+  virtual void exitTableArgumentTable(
+      PrestoSqlParser::TableArgumentTableContext* /*ctx*/) override {}
+
+  virtual void enterTableArgumentQuery(
+      PrestoSqlParser::TableArgumentQueryContext* /*ctx*/) override {}
+  virtual void exitTableArgumentQuery(
+      PrestoSqlParser::TableArgumentQueryContext* /*ctx*/) override {}
+
+  virtual void enterDescriptorArgument(
+      PrestoSqlParser::DescriptorArgumentContext* /*ctx*/) override {}
+  virtual void exitDescriptorArgument(
+      PrestoSqlParser::DescriptorArgumentContext* /*ctx*/) override {}
 
   virtual void enterGraphColumn(
       PrestoSqlParser::GraphColumnContext* /*ctx*/) override {}
