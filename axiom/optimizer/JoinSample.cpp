@@ -18,6 +18,7 @@
 #include <folly/coro/BlockingWait.h>
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
+#include "axiom/optimizer/v1/History.h"
 #include "axiom/runner/LocalRunner.h"
 #include "velox/common/base/AsyncSource.h"
 #include "velox/functions/Macros.h"

@@ -17,12 +17,12 @@
 
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/optimizer/AggregationPlanner.h"
-#include "axiom/optimizer/Cost.h"
 #include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/optimizer/OptimizerSession.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/ToGraph.h"
 #include "axiom/optimizer/ToVelox.h"
+#include "axiom/optimizer/v1/History.h"
 #include "axiom/runner/RunnerSession.h"
 #include "velox/core/QueryCtx.h"
 
