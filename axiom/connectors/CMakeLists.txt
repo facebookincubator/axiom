@@ -18,6 +18,7 @@ add_library(
   ConnectorMetadata.cpp
   ConnectorMetadataRegistry.cpp
   SchemaResolver.cpp
+  TableDefinition.cpp
   VectorIndex.cpp
 )
 

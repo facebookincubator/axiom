@@ -188,6 +188,13 @@ ok
 
 ```
 
+## CREATE TABLE fails for a clause the connector does not store
+
+```scrut
+$ $CLI --catalog test --schema default --query "CREATE TABLE t(a bigint NOT NULL)" 2>&1 | grep Reason
+Reason: NOT NULL is not supported by this connector: a
+```
+
 ## Drop non-existent table with IF EXISTS
 
 ```scrut

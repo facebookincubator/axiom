@@ -74,7 +74,7 @@ std::unordered_set<std::string> checkUniqueColumns(const RowTypePtr& schema) {
 // Checks that all properties appear constant such that
 // they can be evaluated without any runtime dependencies.
 void checkPropertiesLookConstant(
-    const std::unordered_map<std::string, lp::ExprPtr>& properties) {
+    const folly::F14FastMap<std::string, lp::ExprPtr>& properties) {
   for (const auto& [name, expr] : properties) {
     VELOX_USER_CHECK(
         expr->looksConstant(),
@@ -121,7 +121,7 @@ CreateVectorIndexStatement::CreateVectorIndexStatement(
     std::string connectorId,
     facebook::axiom::SchemaTableName indexName,
     RowTypePtr columns,
-    std::unordered_map<std::string, lp::ExprPtr> properties,
+    folly::F14FastMap<std::string, lp::ExprPtr> properties,
     bool ifNotExists)
     : SqlStatement(
           SqlStatementKind::kCreateVectorIndex,
@@ -138,13 +138,39 @@ CreateVectorIndexStatement::CreateVectorIndexStatement(
   checkPropertiesLookConstant(properties_);
 }
 
+namespace {
+RowTypePtr toRowType(const std::vector<ColumnDeclaration>& columns) {
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+  names.reserve(columns.size());
+  types.reserve(columns.size());
+  for (const auto& column : columns) {
+    names.push_back(column.name);
+    types.push_back(column.type);
+  }
+  return ROW(std::move(names), std::move(types));
+}
+} // namespace
+
+facebook::axiom::connector::ColumnDefinition ColumnDeclaration::definition(
+    const PropertyEvaluator& evaluate) const {
+  return {
+      .name = name,
+      .type = type,
+      .nullable = nullable,
+      .comment = comment,
+      .properties = evaluate(properties),
+  };
+}
+
 CreateTableStatement::CreateTableStatement(
     std::string connectorId,
     facebook::axiom::SchemaTableName tableName,
-    RowTypePtr tableSchema,
-    std::unordered_map<std::string, lp::ExprPtr> properties,
-    bool ifNotExists,
-    std::vector<Constraint> constraints)
+    std::vector<ColumnDeclaration> columns,
+    std::optional<std::string> comment,
+    folly::F14FastMap<std::string, lp::ExprPtr> properties,
+    std::vector<std::string> primaryKey,
+    bool ifNotExists)
     : SqlStatement(
           SqlStatementKind::kCreateTable,
           /*views=*/{},
@@ -153,35 +179,51 @@ CreateTableStatement::CreateTableStatement(
               facebook::axiom::CatalogSchemaTableName{connectorId, tableName}}),
       connectorId_{std::move(connectorId)},
       tableName_{std::move(tableName)},
-      tableSchema_{std::move(tableSchema)},
+      columns_{std::move(columns)},
+      tableSchema_{toRowType(columns_)},
+      comment_{std::move(comment)},
       properties_{std::move(properties)},
-      ifNotExists_{ifNotExists},
-      constraints_{std::move(constraints)} {
+      primaryKey_{std::move(primaryKey)},
+      ifNotExists_{ifNotExists} {
   VELOX_CHECK_GT(tableSchema_->size(), 0);
 
-  auto columns = checkUniqueColumns(tableSchema_);
-  for (const auto& constraint : constraints_) {
-    VELOX_CHECK_GT(constraint.columns.size(), 0);
-
-    std::unordered_set<std::string> constraintColumns;
-    for (const auto& col : constraint.columns) {
-      auto lower = toLower(col);
-      VELOX_USER_CHECK(
-          columns.count(lower) > 0, "Constraint on unknown column: {}", col);
-      VELOX_USER_CHECK(
-          constraintColumns.insert(lower).second,
-          "Duplicate constraint column: {}",
-          col);
-    }
+  const auto names = checkUniqueColumns(tableSchema_);
+  std::unordered_set<std::string> keyColumns;
+  for (const auto& column : primaryKey_) {
+    const auto lower = toLower(column);
+    VELOX_USER_CHECK(
+        names.contains(lower), "Constraint on unknown column: {}", column);
+    VELOX_USER_CHECK(
+        keyColumns.insert(lower).second,
+        "Duplicate constraint column: {}",
+        column);
   }
   checkPropertiesLookConstant(properties_);
+  for (const auto& column : columns_) {
+    checkPropertiesLookConstant(column.properties);
+  }
+}
+
+facebook::axiom::connector::TableDefinition CreateTableStatement::definition(
+    const PropertyEvaluator& evaluate) const {
+  facebook::axiom::connector::TableDefinition definition{
+      .comment = comment_,
+      .properties = evaluate(properties_),
+      .primaryKey = primaryKey_,
+  };
+  definition.columns.reserve(columns_.size());
+  for (const auto& column : columns_) {
+    definition.columns.push_back(column.definition(evaluate));
+  }
+  return definition;
 }
 
 CreateTableAsSelectStatement::CreateTableAsSelectStatement(
     std::string connectorId,
     facebook::axiom::SchemaTableName tableName,
     RowTypePtr tableSchema,
-    std::unordered_map<std::string, lp::ExprPtr> properties,
+    std::optional<std::string> comment,
+    folly::F14FastMap<std::string, lp::ExprPtr> properties,
     lp::LogicalPlanNodePtr plan,
     ViewMap views,
     std::unordered_set<facebook::axiom::CatalogSchemaTableName> inputTables)
@@ -194,11 +236,21 @@ CreateTableAsSelectStatement::CreateTableAsSelectStatement(
       connectorId_{std::move(connectorId)},
       tableName_{std::move(tableName)},
       tableSchema_{std::move(tableSchema)},
+      comment_{std::move(comment)},
       properties_{std::move(properties)},
       plan_{std::move(plan)} {
   VELOX_CHECK_GT(tableSchema_->size(), 0);
   checkUniqueColumns(tableSchema_);
   checkPropertiesLookConstant(properties_);
+}
+
+facebook::axiom::connector::TableDefinition
+CreateTableAsSelectStatement::definition(
+    const PropertyEvaluator& evaluate) const {
+  auto definition = facebook::axiom::connector::TableDefinition::create(
+      tableSchema_, evaluate(properties_));
+  definition.comment = comment_;
+  return definition;
 }
 
 } // namespace axiom::sql::presto

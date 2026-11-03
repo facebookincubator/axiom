@@ -20,6 +20,7 @@
 #include "axiom/common/CatalogSchemaTableName.h"
 #include "axiom/common/Enums.h"
 #include "axiom/common/SchemaProcedureName.h"
+#include "axiom/connectors/TableDefinition.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/logical_plan/ReferencedTables.h"
 #include "velox/type/Variant.h"
@@ -243,39 +244,51 @@ class DeleteStatement : public SqlStatement {
   const facebook::axiom::logical_plan::LogicalPlanNodePtr plan_;
 };
 
+/// Evaluates table or column properties, expressions that look constant, to
+/// their values.
+using PropertyEvaluator =
+    std::function<folly::F14FastMap<std::string, facebook::velox::Variant>(
+        const folly::
+            F14FastMap<std::string, facebook::axiom::logical_plan::ExprPtr>&)>;
+
+/// A column CREATE TABLE or ADD COLUMN declares. Its properties are
+/// unevaluated, as a table's are (see CreateTableStatement::properties()).
+struct ColumnDeclaration {
+  /// The column's name.
+  std::string name;
+
+  /// The column's type.
+  facebook::velox::TypePtr type;
+
+  /// False for a column declared NOT NULL.
+  bool nullable{true};
+
+  /// Nullopt when the column has no COMMENT.
+  std::optional<std::string> comment;
+
+  /// The column's WITH properties, by name, as constant expressions.
+  folly::F14FastMap<std::string, facebook::axiom::logical_plan::ExprPtr>
+      properties;
+
+  /// Returns the definition to create the column with, its properties
+  /// evaluated by 'evaluate'.
+  facebook::axiom::connector::ColumnDefinition definition(
+      const PropertyEvaluator& evaluate) const;
+};
+
 class CreateTableStatement : public SqlStatement {
  public:
-  /// A unique or primary key constraint. 'name' is the optional constraint
-  /// name. 'columns' is a list of columns that the constraint applies to.
-  /// 'type' specifies the constraint type, Unique or Primary Key.
-  ///
-  /// A primary key constraint ensures that the specified column(s) contain
-  /// unique, non-null values. A unique constraint ensures that the specified
-  /// column(s) contain only unique values. A table can have only one primary
-  /// key but multiple unique constraints. The handling of column constraints
-  /// is connector-specific and not all implementations may support them.
-  struct Constraint {
-    enum class Type {
-      /// e.g., 'CONSTRAINT constraint_name UNIQUE(col)'
-      kUnique,
-
-      /// e.g., 'PRIMARY KEY (col)'
-      kPrimaryKey
-    };
-
-    std::string name;
-    std::vector<std::string> columns;
-    Type type;
-  };
-
+  /// @param primaryKey The columns of PRIMARY KEY, each a column of 'columns'
+  /// once. Empty without PRIMARY KEY.
   CreateTableStatement(
       std::string connectorId,
       facebook::axiom::SchemaTableName tableName,
-      facebook::velox::RowTypePtr tableSchema,
-      std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>
+      std::vector<ColumnDeclaration> columns,
+      std::optional<std::string> comment,
+      folly::F14FastMap<std::string, facebook::axiom::logical_plan::ExprPtr>
           properties,
-      bool ifNotExists,
-      std::vector<Constraint> constraints = {});
+      std::vector<std::string> primaryKey,
+      bool ifNotExists);
 
   const std::string& connectorId() const {
     return connectorId_;
@@ -285,19 +298,34 @@ class CreateTableStatement : public SqlStatement {
     return tableName_;
   }
 
-  /// Returns the table layout. Columns are case-insensitively checked for
-  /// duplicates, e.g., a schema with columns 'ID' and 'id' is not permitted.
+  /// Returns the columns. Their names are case-insensitively unique: 'ID' and
+  /// 'id' are not permitted together.
+  const std::vector<ColumnDeclaration>& columns() const {
+    return columns_;
+  }
+
+  /// Returns the columns' names and types.
   const facebook::velox::RowTypePtr& tableSchema() const {
     return tableSchema_;
+  }
+
+  /// Nullopt when the table has no COMMENT.
+  const std::optional<std::string>& comment() const {
+    return comment_;
   }
 
   /// Returns the table properties as a map from property name to expression.
   /// Properties are connector-specific settings (e.g., partitioned_by, format)
   /// which set additional table attributes. An expression type is used because
-  /// because some properties (e.g., ARRAY['ds']) require runtime evaluation.
-  const std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>&
+  /// some properties (e.g., ARRAY['ds']) require runtime evaluation.
+  const folly::F14FastMap<std::string, facebook::axiom::logical_plan::ExprPtr>&
   properties() const {
     return properties_;
+  }
+
+  /// Returns the columns of PRIMARY KEY. Empty without PRIMARY KEY.
+  const std::vector<std::string>& primaryKey() const {
+    return primaryKey_;
   }
 
   /// Create the table only if a table of the same name does not exist.
@@ -305,20 +333,21 @@ class CreateTableStatement : public SqlStatement {
     return ifNotExists_;
   }
 
-  /// Returns the list of constraints (primary key, unique) on table columns.
-  /// See CreateTableStatement::Constraint documentation for contents.
-  const std::vector<Constraint>& constraints() const {
-    return constraints_;
-  }
+  /// Returns the definition to create the table with, its properties and its
+  /// columns' properties evaluated by 'evaluate'.
+  facebook::axiom::connector::TableDefinition definition(
+      const PropertyEvaluator& evaluate) const;
 
  private:
   const std::string connectorId_;
   const facebook::axiom::SchemaTableName tableName_;
+  const std::vector<ColumnDeclaration> columns_;
   const facebook::velox::RowTypePtr tableSchema_;
-  std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>
+  const std::optional<std::string> comment_;
+  folly::F14FastMap<std::string, facebook::axiom::logical_plan::ExprPtr>
       properties_;
+  const std::vector<std::string> primaryKey_;
   const bool ifNotExists_;
-  const std::vector<Constraint> constraints_;
 };
 
 class CreateTableAsSelectStatement : public SqlStatement {
@@ -327,7 +356,8 @@ class CreateTableAsSelectStatement : public SqlStatement {
       std::string connectorId,
       facebook::axiom::SchemaTableName tableName,
       facebook::velox::RowTypePtr tableSchema,
-      std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>
+      std::optional<std::string> comment,
+      folly::F14FastMap<std::string, facebook::axiom::logical_plan::ExprPtr>
           properties,
       facebook::axiom::logical_plan::LogicalPlanNodePtr plan,
       ViewMap views,
@@ -345,8 +375,13 @@ class CreateTableAsSelectStatement : public SqlStatement {
     return tableSchema_;
   }
 
+  /// Nullopt when the table has no COMMENT.
+  const std::optional<std::string>& comment() const {
+    return comment_;
+  }
+
   /// See CreateTableStatement::properties() for usage.
-  const std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>&
+  const folly::F14FastMap<std::string, facebook::axiom::logical_plan::ExprPtr>&
   properties() const {
     return properties_;
   }
@@ -355,11 +390,17 @@ class CreateTableAsSelectStatement : public SqlStatement {
     return plan_;
   }
 
+  /// Returns the definition to create the table with: the query's columns,
+  /// nullable, and the comment and properties, evaluated by 'evaluate'.
+  facebook::axiom::connector::TableDefinition definition(
+      const PropertyEvaluator& evaluate) const;
+
  private:
   const std::string connectorId_;
   const facebook::axiom::SchemaTableName tableName_;
   const facebook::velox::RowTypePtr tableSchema_;
-  std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>
+  const std::optional<std::string> comment_;
+  folly::F14FastMap<std::string, facebook::axiom::logical_plan::ExprPtr>
       properties_;
   const facebook::axiom::logical_plan::LogicalPlanNodePtr plan_;
 };
@@ -408,7 +449,7 @@ class CreateVectorIndexStatement : public SqlStatement {
       std::string connectorId,
       facebook::axiom::SchemaTableName indexName,
       facebook::velox::RowTypePtr columns,
-      std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>
+      folly::F14FastMap<std::string, facebook::axiom::logical_plan::ExprPtr>
           properties,
       bool ifNotExists);
 
@@ -426,7 +467,7 @@ class CreateVectorIndexStatement : public SqlStatement {
 
   /// Properties of the index and of its tables, unevaluated. See
   /// CreateTableStatement::properties().
-  const std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>&
+  const folly::F14FastMap<std::string, facebook::axiom::logical_plan::ExprPtr>&
   properties() const {
     return properties_;
   }
@@ -439,7 +480,7 @@ class CreateVectorIndexStatement : public SqlStatement {
   const std::string connectorId_;
   const facebook::axiom::SchemaTableName indexName_;
   const facebook::velox::RowTypePtr columns_;
-  const std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>
+  const folly::F14FastMap<std::string, facebook::axiom::logical_plan::ExprPtr>
       properties_;
   const bool ifNotExists_;
 };
@@ -486,8 +527,7 @@ class AddColumnStatement : public SqlStatement {
   AddColumnStatement(
       std::string connectorId,
       facebook::axiom::SchemaTableName tableName,
-      std::string columnName,
-      facebook::velox::TypePtr columnType,
+      ColumnDeclaration column,
       bool ifTableExists,
       bool ifNotExists)
       : SqlStatement(
@@ -500,8 +540,7 @@ class AddColumnStatement : public SqlStatement {
                     tableName}}),
         connectorId_{std::move(connectorId)},
         tableName_{std::move(tableName)},
-        columnName_{std::move(columnName)},
-        columnType_{std::move(columnType)},
+        column_{std::move(column)},
         ifTableExists_{ifTableExists},
         ifNotExists_{ifNotExists} {}
 
@@ -513,12 +552,9 @@ class AddColumnStatement : public SqlStatement {
     return tableName_;
   }
 
-  const std::string& columnName() const {
-    return columnName_;
-  }
-
-  const facebook::velox::TypePtr& columnType() const {
-    return columnType_;
+  /// Returns the column to add.
+  const ColumnDeclaration& column() const {
+    return column_;
   }
 
   bool ifTableExists() const {
@@ -532,8 +568,7 @@ class AddColumnStatement : public SqlStatement {
  private:
   const std::string connectorId_;
   const facebook::axiom::SchemaTableName tableName_;
-  const std::string columnName_;
-  const facebook::velox::TypePtr columnType_;
+  const ColumnDeclaration column_;
   const bool ifTableExists_;
   const bool ifNotExists_;
 };
@@ -587,7 +622,7 @@ class CreateSchemaStatement : public SqlStatement {
       std::string connectorId,
       std::string schemaName,
       bool ifNotExists,
-      std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>
+      folly::F14FastMap<std::string, facebook::axiom::logical_plan::ExprPtr>
           properties)
       : SqlStatement(SqlStatementKind::kCreateSchema),
         connectorId_{std::move(connectorId)},
@@ -607,7 +642,7 @@ class CreateSchemaStatement : public SqlStatement {
     return ifNotExists_;
   }
 
-  const std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>&
+  const folly::F14FastMap<std::string, facebook::axiom::logical_plan::ExprPtr>&
   properties() const {
     return properties_;
   }
@@ -616,7 +651,7 @@ class CreateSchemaStatement : public SqlStatement {
   const std::string connectorId_;
   const std::string schemaName_;
   const bool ifNotExists_;
-  const std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>
+  const folly::F14FastMap<std::string, facebook::axiom::logical_plan::ExprPtr>
       properties_;
 };
 

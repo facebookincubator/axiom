@@ -23,6 +23,7 @@
 #include "axiom/common/SchemaTypeName.h"
 #include "axiom/connectors/ConnectorSession.h"
 #include "axiom/connectors/ConnectorSplitManager.h"
+#include "axiom/connectors/TableDefinition.h"
 #include "axiom/connectors/VectorIndex.h"
 #include "folly/CppAttributes.h"
 #include "folly/coro/Task.h"
@@ -1460,45 +1461,40 @@ class ConnectorMetadata {
   /// through 'this'.
   virtual ConnectorSplitManager* splitManager() = 0;
 
-  /// Creates a table. The table properties are in 'options'. All options must
-  /// be understood by the connector. To create a table, first make a
-  /// ConnectorSession in a connector dependent manner, then call createTable
-  /// to retrieve a Table object. Any transaction semantics are
-  /// connector-dependent, and the ConnectorSession may be null for connectors
-  /// which do not require it. finishWrite should be called to commit the new
-  /// table and any writes even if no data is added. To create an empty table,
-  /// call createTable, then beginWrite/finishWrite with the generated table
-  /// object. To create the table with data, call createTable to generate a
-  /// Table, call beginWrite with the Table object, perform writes against the
-  /// table using the returned insert handle, then finishWrite to commit the
-  /// changes. The table is not available via the findTable interface until
-  /// after finishWrite completes.
+  /// Creates table 'tableName' as 'definition' declares. Checks that the
+  /// connector creates tables and supports every part of 'definition' (see
+  /// supportsCreateTable()), then calls co_doCreateTable.
+  ///
+  /// Any transaction semantics are connector-dependent, and 'session' may be
+  /// null for connectors which do not require it. The table is not available
+  /// via findTable until finishWrite completes, so callers call beginWrite and
+  /// finishWrite with the returned table even when they add no data.
   ///
   /// When 'ifNotExists' is true and the table already exists, returns nullptr.
   /// When 'ifNotExists' is false and the table already exists, raises an
-  /// error. When 'explain' is true, the connector must interpret properties
-  /// and return a valid Table with correct layout metadata, but must not
-  /// create directories, write files, or register the table. No cleanup is
-  /// needed after an explain call.
-  virtual TablePtr createTable(
-      [[maybe_unused]] const ConnectorSessionPtr& session,
-      [[maybe_unused]] const SchemaTableName& tableName,
-      [[maybe_unused]] const velox::RowTypePtr& rowType,
-      [[maybe_unused]] const folly::F14FastMap<std::string, velox::Variant>&
-          options,
-      [[maybe_unused]] bool ifNotExists,
-      [[maybe_unused]] bool explain) {
-    VELOX_UNSUPPORTED();
+  /// error. When 'explain' is true, returns the table without creating it (see
+  /// co_doCreateTable).
+  folly::coro::Task<TablePtr> co_createTable(
+      ConnectorSessionPtr session,
+      SchemaTableName tableName,
+      TableDefinition definition,
+      bool ifNotExists,
+      bool explain);
+
+  /// Returns the parts of CREATE TABLE the connector stores beyond columns'
+  /// names and types and table properties. Nullopt when it does not create
+  /// tables, in which case it does not add columns either.
+  virtual std::optional<TableDefinitionSupport> supportsCreateTable() const {
+    return std::nullopt;
   }
 
-  /// Creates 'tableName' with no rows and commits it: createTable, then an
+  /// Creates 'tableName' with no rows and commits it: co_createTable, then an
   /// empty create write. Aborts the write if the commit fails. Returns nullptr
   /// if the table exists and 'ifNotExists' is true.
   folly::coro::Task<TablePtr> co_createEmptyTable(
       ConnectorSessionPtr session,
       SchemaTableName tableName,
-      velox::RowTypePtr rowType,
-      folly::F14FastMap<std::string, velox::Variant> options,
+      TableDefinition definition,
       bool ifNotExists);
 
   /// Begins the process of a write operation by creating an associated write
@@ -1667,7 +1663,9 @@ class ConnectorMetadata {
     VELOX_USER_FAIL("Vector indexes are not supported by this connector");
   }
 
-  /// Adds 'columnName' of 'columnType' to an existing table.
+  /// Adds 'column' to an existing table. Checks that the connector creates
+  /// tables and supports every part of 'column' (see supportsCreateTable()),
+  /// then calls co_doAddColumn.
   ///
   /// Outcomes (combinations of inputs and table state):
   ///   - Table missing, ifTableExists=false: throws "table missing".
@@ -1686,16 +1684,13 @@ class ConnectorMetadata {
   ///   - true:         column was added (or would be added when 'explain' is
   ///                   true).
   ///   - false:        column already existed and 'ifNotExists' is true.
-  virtual std::optional<bool> addColumn(
-      [[maybe_unused]] const ConnectorSessionPtr& session,
-      [[maybe_unused]] const SchemaTableName& tableName,
-      [[maybe_unused]] const std::string& columnName,
-      [[maybe_unused]] const velox::TypePtr& columnType,
-      [[maybe_unused]] bool ifTableExists,
-      [[maybe_unused]] bool ifNotExists,
-      [[maybe_unused]] bool explain) {
-    VELOX_UNSUPPORTED();
-  }
+  folly::coro::Task<std::optional<bool>> co_addColumn(
+      ConnectorSessionPtr session,
+      SchemaTableName tableName,
+      ColumnDefinition column,
+      bool ifTableExists,
+      bool ifNotExists,
+      bool explain);
 
   /// Returns the list of schema names available in this connector. Some
   /// connectors may return only a representative subset of schemas (e.g.,
@@ -1753,6 +1748,38 @@ class ConnectorMetadata {
   template <typename T>
   const T* asChecked() const {
     return velox::checkedPointerCast<const T>(this);
+  }
+
+ protected:
+  /// Creates 'tableName' as co_createTable describes. 'definition' holds only
+  /// parts supportsCreateTable() includes. All table properties must be
+  /// understood by the connector. When 'explain' is true, interprets the
+  /// properties and returns a valid Table with correct layout metadata, but
+  /// creates no directories, writes no files and registers nothing, so no
+  /// cleanup is needed. A connector that sets supportsCreateTable() implements
+  /// it.
+  virtual folly::coro::Task<TablePtr> co_doCreateTable(
+      [[maybe_unused]] ConnectorSessionPtr session,
+      [[maybe_unused]] SchemaTableName tableName,
+      [[maybe_unused]] TableDefinition definition,
+      [[maybe_unused]] bool ifNotExists,
+      [[maybe_unused]] bool explain) {
+    VELOX_FAIL(
+        "A connector that creates tables must implement co_doCreateTable");
+    co_return nullptr;
+  }
+
+  /// Adds 'column' as co_addColumn describes. 'column' holds only parts
+  /// supportsCreateTable() includes.
+  virtual folly::coro::Task<std::optional<bool>> co_doAddColumn(
+      [[maybe_unused]] ConnectorSessionPtr session,
+      [[maybe_unused]] SchemaTableName tableName,
+      [[maybe_unused]] ColumnDefinition column,
+      [[maybe_unused]] bool ifTableExists,
+      [[maybe_unused]] bool ifNotExists,
+      [[maybe_unused]] bool explain) {
+    VELOX_UNSUPPORTED("Connector does not support ADD COLUMN");
+    co_return std::nullopt;
   }
 };
 

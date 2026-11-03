@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <folly/coro/BlockingWait.h>
+#include <gmock/gmock.h>
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
@@ -127,6 +129,12 @@ TEST_F(DdlParserTest, createTableAsSelect) {
       "t",
       ROW({"a", "b"}, {BIGINT(), VARCHAR()}),
       matcher);
+
+  EXPECT_EQ(
+      "table",
+      parseSql("CREATE TABLE t COMMENT 'table' AS SELECT 1 AS a")
+          ->as<CreateTableAsSelectStatement>()
+          ->comment());
 
   // Missing column names.
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
@@ -282,32 +290,35 @@ TEST_F(DdlParserTest, createTable) {
         ROW(std::move(names), std::move(types)));
   }
 
-  // primary key constraint
+  // NOT NULL, comments, column properties and the primary key reach the
+  // statement.
   {
-    std::vector<CreateTableStatement::Constraint> constraints = {
-        {.columns = {"id"},
-         .type = CreateTableStatement::Constraint::Type::kPrimaryKey}};
-    testCreateTable(
-        "CREATE TABLE t (id INTEGER, PRIMARY KEY (id))",
-        "t",
-        ROW({"id"}, {INTEGER()}),
-        /*properties=*/{},
-        constraints);
+    auto statement = parseSql(
+        "CREATE TABLE t (id BIGINT NOT NULL COMMENT 'key', "
+        "v VARCHAR WITH (x = 1), PRIMARY KEY (id)) COMMENT 'table'");
+    const auto* create = statement->as<CreateTableStatement>();
+    const auto& columns = create->columns();
+    ASSERT_EQ(2, columns.size());
+    EXPECT_FALSE(columns[0].nullable);
+    EXPECT_EQ("key", columns[0].comment);
+    EXPECT_TRUE(columns[0].properties.empty());
+    EXPECT_TRUE(columns[1].nullable);
+    EXPECT_EQ(std::nullopt, columns[1].comment);
+    assertProperties(columns[1].properties, {{"x", "1"}});
+    EXPECT_EQ("table", create->comment());
+    EXPECT_THAT(create->primaryKey(), testing::ElementsAre("id"));
   }
 
-  // unique key constraint
-  {
-    std::vector<CreateTableStatement::Constraint> constraints = {
-        {.name = "unique_name",
-         .columns = {"name"},
-         .type = CreateTableStatement::Constraint::Type::kUnique}};
-    testCreateTable(
-        "CREATE TABLE t (id INTEGER, name VARCHAR, CONSTRAINT unique_name UNIQUE (name))",
-        "t",
-        ROW({"id", "name"}, {INTEGER(), VARCHAR()}),
-        /*properties=*/{},
-        constraints);
-  }
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("CREATE TABLE t (id INTEGER, UNIQUE (id))"),
+      "UNIQUE is not supported yet");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("CREATE TABLE t (id INTEGER, CONSTRAINT pk PRIMARY KEY (id))"),
+      "Constraint names are not supported yet: pk");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(
+          "CREATE TABLE t (id INTEGER, PRIMARY KEY (id), PRIMARY KEY (id))"),
+      "Table has more than one PRIMARY KEY");
 
   // duplicate column names
   VELOX_ASSERT_THROW(
@@ -353,16 +364,16 @@ TEST_F(DdlParserTest, createTableLikeProperties) {
   const auto rowType = ROW({"a", "b"}, INTEGER());
 
   // Register a source table that carries a table property.
-  metadata->createTable(
+  folly::coro::blockingWait(metadata->co_createTable(
       /*session=*/nullptr,
       facebook::axiom::SchemaTableName{"default", "src"},
-      rowType,
-      /*options=*/
-      {{std::string(
-            facebook::axiom::connector::TestConnectorMetadata::kExplainIo),
-        Variant::array(std::vector<Variant>{Variant("a")})}},
+      facebook::axiom::connector::TableDefinition::create(
+          rowType,
+          {{std::string(
+                facebook::axiom::connector::TestConnectorMetadata::kExplainIo),
+            Variant::array(std::vector<Variant>{Variant("a")})}}),
       /*ifNotExists=*/false,
-      /*explain=*/false);
+      /*explain=*/false));
 
   // LIKE ... INCLUDING PROPERTIES carries the source table's properties.
   testCreateTable(
@@ -518,10 +529,19 @@ TEST_F(DdlParserTest, addColumn) {
 
     const auto* add = statement->as<AddColumnStatement>();
     ASSERT_EQ("t", add->tableName().table);
-    ASSERT_EQ("c", add->columnName());
-    ASSERT_EQ(*BIGINT(), *add->columnType());
+    ASSERT_EQ("c", add->column().name);
+    ASSERT_EQ(*BIGINT(), *add->column().type);
     ASSERT_FALSE(add->ifTableExists());
     ASSERT_FALSE(add->ifNotExists());
+  }
+
+  // NOT NULL and a comment reach the statement.
+  {
+    auto statement =
+        parseSql("ALTER TABLE t ADD COLUMN c BIGINT NOT NULL COMMENT 'x'");
+    const auto& column = statement->as<AddColumnStatement>()->column();
+    EXPECT_FALSE(column.nullable);
+    EXPECT_EQ("x", column.comment);
   }
 
   // IF NOT EXISTS on the column.
@@ -554,19 +574,19 @@ TEST_F(DdlParserTest, addColumn) {
   {
     auto statement = parseSql("ALTER TABLE t ADD COLUMN c ARRAY<INTEGER>");
     const auto* add = statement->as<AddColumnStatement>();
-    ASSERT_EQ(*ARRAY(INTEGER()), *add->columnType());
+    ASSERT_EQ(*ARRAY(INTEGER()), *add->column().type);
   }
   {
     auto statement =
         parseSql("ALTER TABLE t ADD COLUMN c MAP<VARCHAR, BIGINT>");
     const auto* add = statement->as<AddColumnStatement>();
-    ASSERT_EQ(*MAP(VARCHAR(), BIGINT()), *add->columnType());
+    ASSERT_EQ(*MAP(VARCHAR(), BIGINT()), *add->column().type);
   }
   {
     auto statement =
         parseSql("ALTER TABLE t ADD COLUMN c ROW(a INTEGER, b VARCHAR)");
     const auto* add = statement->as<AddColumnStatement>();
-    ASSERT_EQ(*ROW({"a", "b"}, {INTEGER(), VARCHAR()}), *add->columnType());
+    ASSERT_EQ(*ROW({"a", "b"}, {INTEGER(), VARCHAR()}), *add->column().type);
   }
 
   // Schema-qualified table name.

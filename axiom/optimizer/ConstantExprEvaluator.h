@@ -16,6 +16,10 @@
 
 #pragma once
 
+#include <string>
+
+#include <folly/container/F14Map.h>
+
 #include "axiom/logical_plan/Expr.h"
 
 namespace facebook::axiom::optimizer {
@@ -27,5 +31,10 @@ class ConstantExprEvaluator {
   /// occurred during evaluation (e.g. evaluating "5 / 0" expression fails with
   /// division by zero error).
   static velox::Variant evaluateConstantExpr(const logical_plan::Expr& expr);
+
+  /// Evaluates each of 'properties', table or column properties by name, as
+  /// evaluateConstantExpr does.
+  static folly::F14FastMap<std::string, velox::Variant> evaluateProperties(
+      const folly::F14FastMap<std::string, logical_plan::ExprPtr>& properties);
 };
 } // namespace facebook::axiom::optimizer

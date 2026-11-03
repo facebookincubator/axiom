@@ -1625,13 +1625,14 @@ void createDir(const std::string& path) {
 
 } // namespace
 
-TablePtr LocalHiveConnectorMetadata::createTable(
-    const ConnectorSessionPtr& /*session*/,
-    const SchemaTableName& tableName,
-    const velox::RowTypePtr& rowType,
-    const folly::F14FastMap<std::string, velox::Variant>& options,
+folly::coro::Task<TablePtr> LocalHiveConnectorMetadata::co_doCreateTable(
+    ConnectorSessionPtr /*session*/,
+    SchemaTableName tableName,
+    TableDefinition definition,
     bool ifNotExists,
     bool explain) {
+  const auto rowType = definition.rowType();
+  const auto& options = definition.properties;
   VELOX_USER_CHECK(
       schemaExists(nullptr, tableName.schema),
       "Schema does not exist: {}",
@@ -1645,19 +1646,19 @@ TablePtr LocalHiveConnectorMetadata::createTable(
       std::lock_guard<std::mutex> l(mutex_);
       if (findTableLocked(tableName.table)) {
         if (ifNotExists) {
-          return nullptr;
+          co_return nullptr;
         }
         VELOX_USER_FAIL("Table already exists: {}", tableName.toString());
       }
     }
-    return createLocalTable(
+    co_return createLocalTable(
         tableName.table, rowType, createTableOptions, *this);
   }
 
   auto path = tablePath(tableName);
   if (dirExists(path)) {
     if (ifNotExists) {
-      return nullptr;
+      co_return nullptr;
     }
     VELOX_USER_FAIL("Table already exists: {}", tableName.toString());
   } else {
@@ -1672,7 +1673,7 @@ TablePtr LocalHiveConnectorMetadata::createTable(
   if (findTableLocked(tableName.table)) {
     deleteDirectoryRecursive(path);
     if (ifNotExists) {
-      return nullptr;
+      co_return nullptr;
     }
     VELOX_USER_FAIL("Table already exists: {}", tableName.toString());
   }
@@ -1686,7 +1687,7 @@ TablePtr LocalHiveConnectorMetadata::createTable(
   auto table =
       createLocalTable(tableName.table, rowType, createTableOptions, *this);
   tables_[tableName.table] = table;
-  return table;
+  co_return table;
 }
 
 namespace {
@@ -1939,21 +1940,23 @@ bool LocalHiveConnectorMetadata::dropTable(
   return tables_.erase(tableName.table) == 1;
 }
 
-std::optional<bool> LocalHiveConnectorMetadata::addColumn(
-    const ConnectorSessionPtr& /* session */,
-    const SchemaTableName& tableName,
-    const std::string& columnName,
-    const velox::TypePtr& columnType,
+folly::coro::Task<std::optional<bool>>
+LocalHiveConnectorMetadata::co_doAddColumn(
+    ConnectorSessionPtr /* session */,
+    SchemaTableName tableName,
+    ColumnDefinition column,
     bool ifTableExists,
     bool ifNotExists,
     bool explain) {
+  const auto& columnName = column.name;
+  const auto& columnType = column.type;
   ensureInitialized();
 
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = tables_.find(tableName.table);
   if (it == tables_.end()) {
     if (ifTableExists) {
-      return std::nullopt;
+      co_return std::nullopt;
     }
     VELOX_USER_FAIL("Table does not exist: {}", tableName);
   }
@@ -1963,14 +1966,14 @@ std::optional<bool> LocalHiveConnectorMetadata::addColumn(
 
   if (existingType->containsChild(columnName)) {
     if (ifNotExists) {
-      return false;
+      co_return false;
     }
     VELOX_USER_FAIL(
         "Column already exists in table {}: {}", tableName, columnName);
   }
 
   if (explain) {
-    return true;
+    co_return true;
   }
 
   auto path = tablePath(tableName);
@@ -1998,7 +2001,7 @@ std::optional<bool> LocalHiveConnectorMetadata::addColumn(
   outputFile.close();
 
   loadTable(tableName.table, path);
-  return true;
+  co_return true;
 }
 
 namespace {
@@ -2173,19 +2176,19 @@ folly::coro::Task<bool> LocalHiveConnectorMetadata::co_createVectorIndex(
       std::vector<velox::Variant>(
           codecPartitions.begin(), codecPartitions.end()));
 
-  struct TableDefinition {
+  struct StorageTable {
     SchemaTableName name;
-    velox::RowTypePtr columns;
-    folly::F14FastMap<std::string, velox::Variant> properties;
+    TableDefinition definition;
   };
   const auto [codecTableName, indexTableName] = vectorIndexTables(indexName);
-  const std::array<TableDefinition, 2> tables{{
+  const std::array<StorageTable, 2> tables{{
       {codecTableName,
-       VectorIndex::codecTableType(partitionRow),
-       std::move(codecProperties)},
+       TableDefinition::create(
+           VectorIndex::codecTableType(partitionRow),
+           std::move(codecProperties))},
       {indexTableName,
-       VectorIndex::indexTableType(partitionRow),
-       tableProperties},
+       TableDefinition::create(
+           VectorIndex::indexTableType(partitionRow), tableProperties)},
   }};
 
   for (const auto& table : tables) {
@@ -2197,11 +2200,10 @@ folly::coro::Task<bool> LocalHiveConnectorMetadata::co_createVectorIndex(
 
   if (explain) {
     for (const auto& table : tables) {
-      createTable(
+      co_await co_createTable(
           session,
           table.name,
-          table.columns,
-          table.properties,
+          table.definition,
           /*ifNotExists=*/false,
           /*explain=*/true);
     }
@@ -2222,8 +2224,7 @@ folly::coro::Task<bool> LocalHiveConnectorMetadata::co_createVectorIndex(
       co_await co_createEmptyTable(
           session,
           table.name,
-          table.columns,
-          table.properties,
+          table.definition,
           /*ifNotExists=*/false);
       createdTables.push_back(table.name);
     }

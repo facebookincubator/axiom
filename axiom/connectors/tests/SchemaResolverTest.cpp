@@ -21,6 +21,8 @@
 #include "axiom/connectors/tests/TestConnector.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
+#include <folly/coro/BlockingWait.h>
+
 using namespace facebook::velox;
 
 namespace facebook::axiom::connector {
@@ -71,13 +73,12 @@ class SchemaResolverTest : public ::testing::Test {
 
 TEST_F(SchemaResolverTest, findTable) {
   auto metadata = ConnectorMetadataRegistry::get("base");
-  metadata->createTable(
+  folly::coro::blockingWait(metadata->co_createTable(
       nullptr,
       {"baseschema", "table"},
-      ROW({}),
-      {},
+      TableDefinition::create(ROW({}), {}),
       /*ifNotExists=*/false,
-      /*explain=*/false);
+      /*explain=*/false));
 
   auto table = resolver_->findTable("base", {"baseschema", "table"});
   ASSERT_NE(table, nullptr);
@@ -86,13 +87,12 @@ TEST_F(SchemaResolverTest, findTable) {
 TEST_F(SchemaResolverTest, findTableInNonDefaultSchema) {
   auto metadata = ConnectorMetadataRegistry::get("base");
   metadata->createSchema(nullptr, "newschema", /*ifNotExists=*/false, {});
-  metadata->createTable(
+  folly::coro::blockingWait(metadata->co_createTable(
       nullptr,
       {"newschema", "table"},
-      ROW({}),
-      {},
+      TableDefinition::create(ROW({}), {}),
       /*ifNotExists=*/false,
-      /*explain=*/false);
+      /*explain=*/false));
 
   auto table = resolver_->findTable("base", {"newschema", "table"});
   ASSERT_NE(table, nullptr);
@@ -108,13 +108,12 @@ TEST_F(SchemaResolverTest, tableNotFound) {
 TEST_F(SchemaResolverTest, wrongCatalog) {
   // Table exists in "other" catalog but lookup is routed through "base".
   auto metadata = ConnectorMetadataRegistry::get("other");
-  metadata->createTable(
+  folly::coro::blockingWait(metadata->co_createTable(
       /*session=*/nullptr,
       {"otherschema", "table"},
-      ROW({}),
-      {},
+      TableDefinition::create(ROW({}), {}),
       /*ifNotExists=*/false,
-      /*explain=*/false);
+      /*explain=*/false));
   auto table = resolver_->findTable("base", {"otherschema", "table"});
   ASSERT_EQ(table, nullptr);
 }
@@ -135,13 +134,12 @@ TEST_F(SchemaResolverTest, scopedRegistryLookup) {
   const auto& scopedMetadata = scopedConnector->metadata();
   scopedMetadata->createSchema(
       nullptr, "scopedschema", /*ifNotExists=*/false, {});
-  scopedMetadata->createTable(
+  folly::coro::blockingWait(scopedMetadata->co_createTable(
       nullptr,
       {"scopedschema", "scoped_orders"},
-      ROW({}),
-      {},
+      TableDefinition::create(ROW({}), {}),
       /*ifNotExists=*/false,
-      /*explain=*/false);
+      /*explain=*/false));
   scopedRegistry->insert("scoped", scopedMetadata);
 
   auto resolver{SchemaResolver{*scopedRegistry, "scopedschema"}};
@@ -159,13 +157,12 @@ TEST_F(SchemaResolverTest, scopedRegistryFallsBackToParent) {
 
   // Register a table in the globally-registered "base" catalog.
   auto metadata = ConnectorMetadataRegistry::get("base");
-  metadata->createTable(
+  folly::coro::blockingWait(metadata->co_createTable(
       nullptr,
       {"baseschema", "parent_table"},
-      ROW({}),
-      {},
+      TableDefinition::create(ROW({}), {}),
       /*ifNotExists=*/false,
-      /*explain=*/false);
+      /*explain=*/false));
 
   // Resolver using scoped registry should still find the global table.
   auto resolver{SchemaResolver{*scopedRegistry, "baseschema"}};

@@ -18,6 +18,7 @@
 #include "axiom/optimizer/OptimizerOptions.h"
 
 #include <folly/ScopeGuard.h>
+#include <folly/coro/BlockingWait.h>
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
@@ -82,13 +83,12 @@ facebook::axiom::connector::TablePtr createTable(
   auto tableSchema = velox::ROW(std::move(schemaNames), std::move(schemaTypes));
 
   auto session = connectorContext->sessionFor(connectorId);
-  auto table = metadata->createTable(
+  auto table = folly::coro::blockingWait(metadata->co_createTable(
       session,
       writeNode.tableName(),
-      tableSchema,
-      options,
+      facebook::axiom::connector::TableDefinition::create(tableSchema, options),
       /*ifNotExists=*/false,
-      /*explain=*/false);
+      /*explain=*/false));
   VELOX_CHECK_NOT_NULL(table);
   return table;
 }

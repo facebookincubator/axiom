@@ -455,13 +455,12 @@ TEST_F(LocalHiveConnectorMetadataTest, createTable) {
       {HiveWriteOptions::kCompressionKind, "zstd"}};
 
   auto session = makeSession();
-  auto table = metadata_->createTable(
+  auto table = folly::coro::blockingWait(metadata_->co_createTable(
       session,
       qualifiedName("test"),
-      tableType,
-      options,
+      TableDefinition::create(tableType, options),
       /*ifNotExists=*/false,
-      /*explain=*/false);
+      /*explain=*/false));
 
   // Table should be findable immediately after createTable, before
   // beginWrite/finishWrite. This is the flow for plain CREATE TABLE (no data).
@@ -546,13 +545,12 @@ TEST_F(LocalHiveConnectorMetadataTest, invalidSortedBy) {
 
   auto create =
       [&](const folly::F14FastMap<std::string, velox::Variant>& options) {
-        metadata_->createTable(
+        folly::coro::blockingWait(metadata_->co_createTable(
             makeSession(),
             qualifiedName("test"),
-            tableType,
-            options,
+            TableDefinition::create(tableType, options),
             /*ifNotExists=*/false,
-            /*explain=*/false);
+            /*explain=*/false));
       };
 
   VELOX_ASSERT_USER_THROW(
@@ -577,13 +575,12 @@ TEST_F(LocalHiveConnectorMetadataTest, addColumn) {
       {HiveWriteOptions::kFormat, "parquet"}};
 
   auto session = makeSession();
-  auto table = metadata_->createTable(
+  auto table = folly::coro::blockingWait(metadata_->co_createTable(
       session,
       qualifiedName("add_col_test"),
-      tableType,
-      options,
+      TableDefinition::create(tableType, options),
       /*ifNotExists=*/false,
-      /*explain=*/false);
+      /*explain=*/false));
 
   // Write some data before adding the column.
   auto data = makeRowVector(
@@ -598,14 +595,13 @@ TEST_F(LocalHiveConnectorMetadataTest, addColumn) {
       table, data, WriteKind::kCreate, dwio::common::FileFormat::PARQUET);
 
   // Add a column.
-  auto added = metadata_->addColumn(
+  auto added = folly::coro::blockingWait(metadata_->co_addColumn(
       session,
       qualifiedName("add_col_test"),
-      "score",
-      DOUBLE(),
+      {.name = "score", .type = DOUBLE()},
       /*ifTableExists=*/false,
       /*ifNotExists=*/false,
-      /*explain=*/false);
+      /*explain=*/false));
   ASSERT_TRUE(added.has_value());
   EXPECT_TRUE(*added);
 
@@ -628,25 +624,23 @@ TEST_F(LocalHiveConnectorMetadataTest, addColumn) {
 
   // Duplicate column without IF NOT EXISTS throws.
   VELOX_ASSERT_THROW(
-      metadata_->addColumn(
+      folly::coro::blockingWait(metadata_->co_addColumn(
           session,
           qualifiedName("add_col_test"),
-          "score",
-          INTEGER(),
+          {.name = "score", .type = INTEGER()},
           /*ifTableExists=*/false,
           /*ifNotExists=*/false,
-          /*explain=*/false),
+          /*explain=*/false)),
       "already exists");
 
   // IF NOT EXISTS on existing column is a no-op.
-  auto noOp = metadata_->addColumn(
+  auto noOp = folly::coro::blockingWait(metadata_->co_addColumn(
       session,
       qualifiedName("add_col_test"),
-      "score",
-      INTEGER(),
+      {.name = "score", .type = INTEGER()},
       /*ifTableExists=*/false,
       /*ifNotExists=*/true,
-      /*explain=*/false);
+      /*explain=*/false));
   ASSERT_TRUE(noOp.has_value());
   EXPECT_FALSE(*noOp);
   VELOX_EXPECT_EQ_TYPES(
@@ -656,25 +650,23 @@ TEST_F(LocalHiveConnectorMetadataTest, addColumn) {
 
   // Non-existent table throws.
   VELOX_ASSERT_THROW(
-      metadata_->addColumn(
+      folly::coro::blockingWait(metadata_->co_addColumn(
           session,
           qualifiedName("no_such_table"),
-          "col",
-          BIGINT(),
+          {.name = "col", .type = BIGINT()},
           /*ifTableExists=*/false,
           /*ifNotExists=*/false,
-          /*explain=*/false),
+          /*explain=*/false)),
       "does not exist");
 
   // IF TABLE EXISTS on missing table returns nullopt.
-  auto missing = metadata_->addColumn(
+  auto missing = folly::coro::blockingWait(metadata_->co_addColumn(
       session,
       qualifiedName("no_such_table"),
-      "col",
-      BIGINT(),
+      {.name = "col", .type = BIGINT()},
       /*ifTableExists=*/true,
       /*ifNotExists=*/false,
-      /*explain=*/false);
+      /*explain=*/false));
   EXPECT_FALSE(missing.has_value());
 
   // Schema persists after reload.
@@ -694,13 +686,12 @@ TEST_F(LocalHiveConnectorMetadataTest, addColumnExplain) {
       {HiveWriteOptions::kFormat, "parquet"}};
 
   auto session = makeSession();
-  metadata_->createTable(
+  folly::coro::blockingWait(metadata_->co_createTable(
       session,
       qualifiedName("explain_add_col_test"),
-      tableType,
-      options,
+      TableDefinition::create(tableType, options),
       /*ifNotExists=*/false,
-      /*explain=*/false);
+      /*explain=*/false));
 
   const auto tableName = qualifiedName("explain_add_col_test");
 
@@ -708,14 +699,13 @@ TEST_F(LocalHiveConnectorMetadataTest, addColumnExplain) {
 
   // Explain mode for a valid add returns true and does not mutate the schema
   // in memory or on disk.
-  auto wouldAdd = metadata_->addColumn(
+  auto wouldAdd = folly::coro::blockingWait(metadata_->co_addColumn(
       session,
       tableName,
-      "score",
-      DOUBLE(),
+      {.name = "score", .type = DOUBLE()},
       /*ifTableExists=*/false,
       /*ifNotExists=*/false,
-      /*explain=*/true);
+      /*explain=*/true));
   ASSERT_TRUE(wouldAdd.has_value());
   EXPECT_TRUE(*wouldAdd);
 
@@ -732,52 +722,48 @@ TEST_F(LocalHiveConnectorMetadataTest, addColumnExplain) {
   // Explain mode raises the same user error as a real call when a duplicate
   // column is added without IF NOT EXISTS.
   VELOX_ASSERT_THROW(
-      metadata_->addColumn(
+      folly::coro::blockingWait(metadata_->co_addColumn(
           session,
           tableName,
-          "id",
-          INTEGER(),
+          {.name = "id", .type = INTEGER()},
           /*ifTableExists=*/false,
           /*ifNotExists=*/false,
-          /*explain=*/true),
+          /*explain=*/true)),
       "already exists");
 
   // Explain mode honors IF NOT EXISTS for an existing column: returns false
   // (no-op) without mutating state.
-  auto explainNoOp = metadata_->addColumn(
+  auto explainNoOp = folly::coro::blockingWait(metadata_->co_addColumn(
       session,
       tableName,
-      "id",
-      INTEGER(),
+      {.name = "id", .type = INTEGER()},
       /*ifTableExists=*/false,
       /*ifNotExists=*/true,
-      /*explain=*/true);
+      /*explain=*/true));
   ASSERT_TRUE(explainNoOp.has_value());
   EXPECT_FALSE(*explainNoOp);
 
   // Explain mode raises the same user error for a missing table when
   // IF EXISTS is not set.
   VELOX_ASSERT_THROW(
-      metadata_->addColumn(
+      folly::coro::blockingWait(metadata_->co_addColumn(
           session,
           qualifiedName("no_such_table"),
-          "col",
-          BIGINT(),
+          {.name = "col", .type = BIGINT()},
           /*ifTableExists=*/false,
           /*ifNotExists=*/false,
-          /*explain=*/true),
+          /*explain=*/true)),
       "does not exist");
 
   // Explain mode honors IF EXISTS on a missing table: returns nullopt
   // (no-op).
-  auto explainMissing = metadata_->addColumn(
+  auto explainMissing = folly::coro::blockingWait(metadata_->co_addColumn(
       session,
       qualifiedName("no_such_table"),
-      "col",
-      BIGINT(),
+      {.name = "col", .type = BIGINT()},
       /*ifTableExists=*/true,
       /*ifNotExists=*/false,
-      /*explain=*/true);
+      /*explain=*/true));
   EXPECT_FALSE(explainMissing.has_value());
 }
 
@@ -811,13 +797,12 @@ TEST_F(LocalHiveConnectorMetadataTest, createEmptyTable) {
        {"ds", VARCHAR()}});
 
   auto session = makeSession();
-  auto table = metadata_->createTable(
+  auto table = folly::coro::blockingWait(metadata_->co_createTable(
       session,
       qualifiedName("test_empty"),
-      tableType,
-      /*options=*/{},
+      TableDefinition::create(tableType, /*properties=*/{}),
       /*ifNotExists=*/false,
-      /*explain=*/false);
+      /*explain=*/false));
 
   auto emptyData = makeRowVector(tableType, 0);
   EXPECT_EQ(emptyData->size(), 0);
@@ -871,8 +856,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
     auto staged = folly::coro::blockingWait(metadata_->co_createEmptyTable(
         session,
         qualifiedName(name),
-        tableType,
-        options,
+        TableDefinition::create(tableType, options),
         /*ifNotExists=*/false));
     created = metadata_->findTable(qualifiedName(name));
     compareTableLayout(staged, created);
@@ -911,13 +895,12 @@ TEST_F(LocalHiveConnectorMetadataTest, abortCreateWithRetry) {
   auto session = makeSession();
   std::string tablePath = localTablePath(qualifiedName("test_abort"));
 
-  auto table = metadata_->createTable(
+  auto table = folly::coro::blockingWait(metadata_->co_createTable(
       session,
       qualifiedName("test_abort"),
-      tableType,
-      /*options=*/{},
+      TableDefinition::create(tableType, /*properties=*/{}),
       /*ifNotExists=*/false,
-      /*explain=*/false);
+      /*explain=*/false));
   auto handle = metadata_->beginWrite(
       session,
       table,
@@ -926,24 +909,22 @@ TEST_F(LocalHiveConnectorMetadataTest, abortCreateWithRetry) {
   EXPECT_TRUE(std::filesystem::exists(tablePath));
 
   VELOX_ASSERT_THROW(
-      metadata_->createTable(
+      folly::coro::blockingWait(metadata_->co_createTable(
           session,
           qualifiedName("test_abort"),
-          tableType,
-          /*options=*/{},
+          TableDefinition::create(tableType, /*properties=*/{}),
           /*ifNotExists=*/false,
-          /*explain=*/false),
+          /*explain=*/false)),
       "Table already exists: \"default\".\"test_abort\"");
   metadata_->abortWrite(session, handle).get();
   EXPECT_FALSE(std::filesystem::exists(tablePath));
 
-  table = metadata_->createTable(
+  table = folly::coro::blockingWait(metadata_->co_createTable(
       session,
       qualifiedName("test_abort"),
-      tableType,
-      /*options=*/{},
+      TableDefinition::create(tableType, /*properties=*/{}),
       /*ifNotExists=*/false,
-      /*explain=*/false);
+      /*explain=*/false));
   handle = metadata_->beginWrite(
       session,
       table,
@@ -960,32 +941,29 @@ TEST_F(LocalHiveConnectorMetadataTest, createTableIfNotExists) {
   auto tableType = ROW({{"col1", BIGINT()}, {"col2", VARCHAR()}});
   auto session = makeSession();
 
-  auto table = metadata_->createTable(
+  auto table = folly::coro::blockingWait(metadata_->co_createTable(
       session,
       qualifiedName("test_ine"),
-      tableType,
-      /*options=*/{},
+      TableDefinition::create(tableType, /*properties=*/{}),
       /*ifNotExists=*/false,
-      /*explain=*/false);
+      /*explain=*/false));
   ASSERT_NE(table, nullptr);
 
-  auto table2 = metadata_->createTable(
+  auto table2 = folly::coro::blockingWait(metadata_->co_createTable(
       session,
       qualifiedName("test_ine"),
-      tableType,
-      /*options=*/{},
+      TableDefinition::create(tableType, /*properties=*/{}),
       /*ifNotExists=*/true,
-      /*explain=*/false);
+      /*explain=*/false));
   ASSERT_EQ(table2, nullptr);
 
   VELOX_ASSERT_THROW(
-      metadata_->createTable(
+      folly::coro::blockingWait(metadata_->co_createTable(
           session,
           qualifiedName("test_ine"),
-          tableType,
-          /*options=*/{},
+          TableDefinition::create(tableType, /*properties=*/{}),
           /*ifNotExists=*/false,
-          /*explain=*/false),
+          /*explain=*/false)),
       "Table already exists: \"default\".\"test_ine\"");
 }
 
@@ -993,13 +971,12 @@ TEST_F(LocalHiveConnectorMetadataTest, createTableIfNotExistsNewTable) {
   auto tableType = ROW({{"col1", BIGINT()}});
   auto session = makeSession();
 
-  auto table = metadata_->createTable(
+  auto table = folly::coro::blockingWait(metadata_->co_createTable(
       session,
       qualifiedName("test_ine_new"),
-      tableType,
-      /*options=*/{},
+      TableDefinition::create(tableType, /*properties=*/{}),
       /*ifNotExists=*/true,
-      /*explain=*/false);
+      /*explain=*/false));
   ASSERT_NE(table, nullptr);
 
   auto found = metadata_->findTable(qualifiedName("test_ine_new"));
@@ -1010,32 +987,29 @@ TEST_F(LocalHiveConnectorMetadataTest, createTableIfNotExistsExplain) {
   auto tableType = ROW({{"col1", BIGINT()}});
   auto session = makeSession();
 
-  auto table = metadata_->createTable(
+  auto table = folly::coro::blockingWait(metadata_->co_createTable(
       session,
       qualifiedName("test_ine_explain"),
-      tableType,
-      /*options=*/{},
+      TableDefinition::create(tableType, /*properties=*/{}),
       /*ifNotExists=*/false,
-      /*explain=*/false);
+      /*explain=*/false));
   ASSERT_NE(table, nullptr);
 
-  auto explained = metadata_->createTable(
+  auto explained = folly::coro::blockingWait(metadata_->co_createTable(
       session,
       qualifiedName("test_ine_explain"),
-      tableType,
-      /*options=*/{},
+      TableDefinition::create(tableType, /*properties=*/{}),
       /*ifNotExists=*/true,
-      /*explain=*/true);
+      /*explain=*/true));
   ASSERT_EQ(explained, nullptr);
 
   VELOX_ASSERT_THROW(
-      metadata_->createTable(
+      folly::coro::blockingWait(metadata_->co_createTable(
           session,
           qualifiedName("test_ine_explain"),
-          tableType,
-          /*options=*/{},
+          TableDefinition::create(tableType, /*properties=*/{}),
           /*ifNotExists=*/false,
-          /*explain=*/true),
+          /*explain=*/true)),
       "Table already exists: \"default\".\"test_ine_explain\"");
 
   ASSERT_NE(metadata_->findTable(qualifiedName("test_ine_explain")), nullptr);
@@ -1045,13 +1019,12 @@ TEST_F(LocalHiveConnectorMetadataTest, dropTableIfExists) {
   auto tableType = ROW({{"col1", BIGINT()}});
   auto session = makeSession();
 
-  auto table = metadata_->createTable(
+  auto table = folly::coro::blockingWait(metadata_->co_createTable(
       session,
       qualifiedName("test_drop"),
-      tableType,
-      /*options=*/{},
+      TableDefinition::create(tableType, /*properties=*/{}),
       /*ifNotExists=*/false,
-      /*explain=*/false);
+      /*explain=*/false));
   ASSERT_NE(table, nullptr);
 
   ASSERT_TRUE(metadata_->dropTable(
@@ -1080,13 +1053,12 @@ TEST_F(LocalHiveConnectorMetadataTest, dropTableExplain) {
   auto tableType = ROW({{"col1", BIGINT()}});
   auto session = makeSession();
 
-  auto table = metadata_->createTable(
+  auto table = folly::coro::blockingWait(metadata_->co_createTable(
       session,
       qualifiedName("test_drop_explain"),
-      tableType,
-      /*options=*/{},
+      TableDefinition::create(tableType, /*properties=*/{}),
       /*ifNotExists=*/false,
-      /*explain=*/false);
+      /*explain=*/false));
   ASSERT_NE(table, nullptr);
 
   ASSERT_TRUE(metadata_->dropTable(
@@ -1170,13 +1142,12 @@ TEST_F(LocalHiveConnectorMetadataTest, createVectorIndex) {
 // left as it is.
 TEST_F(LocalHiveConnectorMetadataTest, createVectorIndexTableExists) {
   const auto codecTableName = qualifiedName("test_index_exists__codecs");
-  metadata_->createTable(
+  folly::coro::blockingWait(metadata_->co_createTable(
       makeSession(),
       codecTableName,
-      ROW("x", BIGINT()),
-      /*options=*/{},
+      TableDefinition::create(ROW("x", BIGINT()), /*properties=*/{}),
       /*ifNotExists=*/false,
-      /*explain=*/false);
+      /*explain=*/false));
   auto table = metadata_->findTable(codecTableName);
   ASSERT_NE(table, nullptr);
 

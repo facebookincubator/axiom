@@ -17,6 +17,7 @@
 #include "axiom/connectors/tests/TestConnector.h"
 
 #include <folly/String.h>
+#include <folly/coro/BlockingWait.h>
 #include <algorithm>
 #include <numeric>
 #include <random>
@@ -1000,13 +1001,14 @@ std::shared_ptr<TestTable> TestConnectorMetadata::addTable(
   return it->second;
 }
 
-TablePtr TestConnectorMetadata::createTable(
-    const ConnectorSessionPtr& /*session*/,
-    const SchemaTableName& tableName,
-    const velox::RowTypePtr& rowType,
-    const folly::F14FastMap<std::string, velox::Variant>& options,
+folly::coro::Task<TablePtr> TestConnectorMetadata::co_doCreateTable(
+    ConnectorSessionPtr /*session*/,
+    SchemaTableName tableName,
+    TableDefinition definition,
     bool ifNotExists,
     bool explain) {
+  const auto rowType = definition.rowType();
+  const auto& options = definition.properties;
   VELOX_USER_CHECK(
       schemas_.contains(tableName.schema),
       "Schema does not exist: {}",
@@ -1014,7 +1016,7 @@ TablePtr TestConnectorMetadata::createTable(
 
   if (tables_.contains(tableName)) {
     if (ifNotExists) {
-      return nullptr;
+      co_return nullptr;
     }
     VELOX_USER_FAIL("Table already exists: {}", tableName.toString());
   }
@@ -1050,11 +1052,11 @@ TablePtr TestConnectorMetadata::createTable(
   auto table = std::make_shared<TestTable>(
       tableName, rowType, hiddenColumns, connector_, options);
   if (explain) {
-    return table;
+    co_return table;
   }
   auto [it, ok] = tables_.emplace(tableName, std::move(table));
   VELOX_CHECK(ok);
-  return it->second;
+  co_return it->second;
 }
 
 ConnectorWriteHandlePtr TestConnectorMetadata::beginWrite(
@@ -1200,18 +1202,19 @@ bool TestConnectorMetadata::dropTable(
   return dropped;
 }
 
-std::optional<bool> TestConnectorMetadata::addColumn(
-    const ConnectorSessionPtr& /* session */,
-    const SchemaTableName& tableName,
-    const std::string& columnName,
-    const velox::TypePtr& columnType,
+folly::coro::Task<std::optional<bool>> TestConnectorMetadata::co_doAddColumn(
+    ConnectorSessionPtr /* session */,
+    SchemaTableName tableName,
+    ColumnDefinition column,
     bool ifTableExists,
     bool ifNotExists,
     bool explain) {
+  const auto& columnName = column.name;
+  const auto& columnType = column.type;
   auto it = tables_.find(tableName);
   if (it == tables_.end()) {
     if (ifTableExists) {
-      return std::nullopt;
+      co_return std::nullopt;
     }
     VELOX_USER_FAIL("Table does not exist: {}", tableName.toString());
   }
@@ -1219,7 +1222,7 @@ std::optional<bool> TestConnectorMetadata::addColumn(
   auto existingType = it->second->type();
   if (it->second->columnMap().contains(columnName)) {
     if (ifNotExists) {
-      return false;
+      co_return false;
     }
     VELOX_USER_FAIL(
         "Column already exists in table {}: {}",
@@ -1233,7 +1236,7 @@ std::optional<bool> TestConnectorMetadata::addColumn(
       tableName.toString());
 
   if (explain) {
-    return true;
+    co_return true;
   }
 
   auto newType = existingType->unionWith(columnName, columnType);
@@ -1259,7 +1262,7 @@ std::optional<bool> TestConnectorMetadata::addColumn(
       connector_,
       std::move(savedOptions));
   tables_[tableName] = std::move(newTable);
-  return true;
+  co_return true;
 }
 
 void TestConnectorMetadata::appendData(
@@ -1414,13 +1417,12 @@ std::shared_ptr<TestTable> TestConnector::addTable(
     const velox::RowTypePtr& schema,
     const folly::F14FastMap<std::string, velox::Variant>& options) {
   const SchemaTableName tableName{std::string(kDefaultSchema), name};
-  metadata_->createTable(
+  folly::coro::blockingWait(metadata_->co_createTable(
       nullptr,
       tableName,
-      schema,
-      options,
+      TableDefinition::create(schema, options),
       /*ifNotExists=*/false,
-      /*explain=*/false);
+      /*explain=*/false));
   return std::static_pointer_cast<TestTable>(
       metadata_->findTableInternal(tableName));
 }
