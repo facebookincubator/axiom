@@ -52,11 +52,15 @@ class AstBuilderTest : public testing::Test {
     return item->as<SingleColumn>()->expression();
   }
 
+  // Returns the FROM clause of 'sql'.
+  static RelationPtr parseFrom(std::string_view sql) {
+    auto query = std::dynamic_pointer_cast<Query>(parse(sql));
+    return query->queryBody()->as<QuerySpecification>()->from();
+  }
+
   // Returns the GRAPH_TABLE in the FROM clause of 'sql'.
   static std::shared_ptr<GraphTable> parseGraphTable(std::string_view sql) {
-    auto query = std::dynamic_pointer_cast<Query>(parse(sql));
-    auto graphTable = std::dynamic_pointer_cast<GraphTable>(
-        query->queryBody()->as<QuerySpecification>()->from());
+    auto graphTable = std::dynamic_pointer_cast<GraphTable>(parseFrom(sql));
     VELOX_CHECK_NOT_NULL(graphTable);
     return graphTable;
   }
@@ -146,6 +150,61 @@ TEST_F(AstBuilderTest, graphTable) {
   EXPECT_EQ(
       EdgePattern::Direction::kLeft, second[1]->as<EdgePattern>()->direction());
   EXPECT_EQ("c", second[2]->as<NodePattern>()->variable()->value());
+}
+
+std::vector<std::string> names(const std::vector<IdentifierPtr>& identifiers) {
+  std::vector<std::string> values;
+  values.reserve(identifiers.size());
+  for (const auto& identifier : identifiers) {
+    values.push_back(identifier->value());
+  }
+  return values;
+}
+
+TEST_F(AstBuilderTest, tableFunction) {
+  auto from = parseFrom(
+      "SELECT * FROM TABLE(s.f("
+      "q => TABLE(SELECT a FROM t) AS x, i => TABLE(u) v(b, c), "
+      "d => DESCRIPTOR(a, b), k => 10, 1 + 2)) AS r");
+  const auto* aliased = from->as<AliasedRelation>();
+  ASSERT_NE(nullptr, aliased);
+  EXPECT_EQ("r", aliased->alias()->value());
+
+  const auto* call = aliased->relation()->as<TableFunctionInvocation>();
+  ASSERT_NE(nullptr, call);
+  EXPECT_EQ("s.f", call->name()->fullyQualifiedName());
+
+  const auto& arguments = call->arguments();
+  ASSERT_EQ(5, arguments.size());
+
+  EXPECT_EQ("q", arguments[0]->name()->value());
+  const auto* query = arguments[0]->table()->as<AliasedRelation>();
+  ASSERT_NE(nullptr, query);
+  EXPECT_EQ("x", query->alias()->value());
+  EXPECT_TRUE(query->columnNames().empty());
+  EXPECT_TRUE(query->relation()->is(NodeType::kTableSubquery));
+  EXPECT_EQ(nullptr, arguments[0]->expression());
+
+  EXPECT_EQ("i", arguments[1]->name()->value());
+  const auto* table = arguments[1]->table()->as<AliasedRelation>();
+  ASSERT_NE(nullptr, table);
+  EXPECT_EQ("v", table->alias()->value());
+  EXPECT_THAT(names(table->columnNames()), testing::ElementsAre("b", "c"));
+  EXPECT_EQ("u", table->relation()->as<Table>()->name()->fullyQualifiedName());
+
+  EXPECT_EQ("d", arguments[2]->name()->value());
+  EXPECT_EQ(nullptr, arguments[2]->table());
+  EXPECT_EQ(nullptr, arguments[2]->expression());
+  EXPECT_THAT(
+      names(arguments[2]->descriptor()), testing::ElementsAre("a", "b"));
+
+  EXPECT_EQ("k", arguments[3]->name()->value());
+  EXPECT_EQ(nullptr, arguments[3]->table());
+  EXPECT_TRUE(arguments[3]->descriptor().empty());
+  EXPECT_EQ(*parseExpression("10"), *arguments[3]->expression());
+
+  EXPECT_EQ(nullptr, arguments[4]->name());
+  EXPECT_EQ(*parseExpression("1 + 2"), *arguments[4]->expression());
 }
 
 TEST_F(AstBuilderTest, edgeDirections) {

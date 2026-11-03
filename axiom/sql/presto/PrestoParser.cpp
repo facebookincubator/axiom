@@ -533,6 +533,14 @@ class RelationPlanner : public AstVisitor {
         return processJoin(*relation->as<Join>());
       case NodeType::kGraphTable:
         return processGraphTable(*relation->as<GraphTable>());
+      case NodeType::kTableFunctionInvocation: {
+        const auto& name = *relation->as<TableFunctionInvocation>()->name();
+        AXIOM_PRESTO_SEMANTIC_FAIL(
+            relation->location(),
+            name.suffix(),
+            "Table function not found: {}",
+            name.fullyQualifiedName());
+      }
       default:
         AXIOM_PRESTO_SYNTAX_FAIL(
             relation->location(),

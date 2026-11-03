@@ -24,6 +24,8 @@
  *   underscores in numeric literals.
  * - Graph queries: GRAPH_TABLE (SQL/PGQ) in FROM and query-scoped graph
  *   definitions in WITH (WITH GRAPH name AS (...)).
+ * - Table function calls in FROM: TABLE(name(arg => value, ...)), where a
+ *   value is TABLE(name), TABLE(query) or an expression.
  */
 
 grammar PrestoSql;
@@ -439,7 +441,25 @@ relationPrimary
     | LATERAL '(' query ')'                                           #lateral
     | GRAPH_TABLE '(' qualifiedName MATCH graphPattern
       COLUMNS '(' graphColumn (',' graphColumn)* ')' ')'              #graphTable
+    | TABLE '(' tableFunctionCall ')'                                 #tableFunctionInvocation
     | '(' relation ')'                                                #parenthesizedRelation
+    ;
+
+tableFunctionCall
+    : qualifiedName '(' (tableFunctionArgument (',' tableFunctionArgument)*)? ')'
+    ;
+
+tableFunctionArgument
+    : (identifier '=>')? (tableArgument | descriptorArgument | expression)
+    ;
+
+tableArgument
+    : TABLE '(' qualifiedName ')' (AS? identifier columnAliases?)?    #tableArgumentTable
+    | TABLE '(' query ')' (AS? identifier columnAliases?)?            #tableArgumentQuery
+    ;
+
+descriptorArgument
+    : DESCRIPTOR '(' identifier (',' identifier)* ')'
     ;
 
 graphColumn
@@ -822,7 +842,7 @@ nonReserved
     : ACYCLIC | ADD | ADMIN | ALL | ANALYZE | ANY | ARRAY | ASC | AT
     | BEFORE | BERNOULLI
     | CALL | CALLED | CASCADE | CATALOGS | COLUMN | COLUMNS | COMMENT | COMMIT | COMMITTED | CURRENT | CURRENT_ROLE
-    | DATA | DATE | DAY | DEFINER | DESC | DESTINATION | DETERMINISTIC | DISABLED | DISTRIBUTED
+    | DATA | DATE | DAY | DEFINER | DESC | DESCRIPTOR | DESTINATION | DETERMINISTIC | DISABLED | DISTRIBUTED
     | EDGE | ENABLED | ENFORCED | EXECUTABLE | EXCLUDE | EXCLUDING | EXPLAIN | EXTERNAL
     | FETCH | FILTER | FIRST | FOLLOWING | FORMAT | FUNCTION | FUNCTIONS
     | GRANT | GRANTED | GRANTS | GRAPH | GRAPH_TABLE | GRAPHVIZ | GROUPS
@@ -890,6 +910,7 @@ DEALLOCATE: 'DEALLOCATE';
 DEFINER: 'DEFINER';
 DELETE: 'DELETE';
 DESC: 'DESC';
+DESCRIPTOR: 'DESCRIPTOR';
 DESCRIBE: 'DESCRIBE';
 DESTINATION: 'DESTINATION';
 DETERMINISTIC: 'DETERMINISTIC';

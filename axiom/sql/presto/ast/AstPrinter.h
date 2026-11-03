@@ -186,6 +186,10 @@ class AstPrinter : public AstVisitor {
 
   void visitLateral(Lateral* node) override;
 
+  void visitTableFunctionInvocation(TableFunctionInvocation* node) override;
+
+  void visitTableFunctionArgument(TableFunctionArgument* node) override;
+
   void visitUnnest(Unnest* node) override;
 
   void visitValues(Values* node) override;

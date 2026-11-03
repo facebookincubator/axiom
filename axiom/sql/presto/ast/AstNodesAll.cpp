@@ -131,6 +131,8 @@ const auto& nodeTypeNames() {
       {NodeType::kUnnest, "Unnest"},
       {NodeType::kValues, "Values"},
       {NodeType::kGraphTable, "GraphTable"},
+      {NodeType::kTableFunctionInvocation, "TableFunctionInvocation"},
+      {NodeType::kTableFunctionArgument, "TableFunctionArgument"},
 
       // Graph queries
       {NodeType::kPathPattern, "PathPattern"},
@@ -661,6 +663,14 @@ void TableSubquery::accept(AstVisitor* visitor) {
 
 void Lateral::accept(AstVisitor* visitor) {
   visitor->visitLateral(this);
+}
+
+void TableFunctionInvocation::accept(AstVisitor* visitor) {
+  visitor->visitTableFunctionInvocation(this);
+}
+
+void TableFunctionArgument::accept(AstVisitor* visitor) {
+  visitor->visitTableFunctionArgument(this);
 }
 
 void Unnest::accept(AstVisitor* visitor) {

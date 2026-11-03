@@ -416,8 +416,26 @@ class PrestoSqlVisitor : public antlr4::tree::AbstractParseTreeVisitor {
   virtual std::any visitGraphTable(
       PrestoSqlParser::GraphTableContext* context) = 0;
 
+  virtual std::any visitTableFunctionInvocation(
+      PrestoSqlParser::TableFunctionInvocationContext* context) = 0;
+
   virtual std::any visitParenthesizedRelation(
       PrestoSqlParser::ParenthesizedRelationContext* context) = 0;
+
+  virtual std::any visitTableFunctionCall(
+      PrestoSqlParser::TableFunctionCallContext* context) = 0;
+
+  virtual std::any visitTableFunctionArgument(
+      PrestoSqlParser::TableFunctionArgumentContext* context) = 0;
+
+  virtual std::any visitTableArgumentTable(
+      PrestoSqlParser::TableArgumentTableContext* context) = 0;
+
+  virtual std::any visitTableArgumentQuery(
+      PrestoSqlParser::TableArgumentQueryContext* context) = 0;
+
+  virtual std::any visitDescriptorArgument(
+      PrestoSqlParser::DescriptorArgumentContext* context) = 0;
 
   virtual std::any visitGraphColumn(
       PrestoSqlParser::GraphColumnContext* context) = 0;

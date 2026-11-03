@@ -613,6 +613,121 @@ class Lateral : public Relation {
   StatementPtr query_;
 };
 
+/// An argument of a table function call: a table, written TABLE(name) or
+/// TABLE(query), optionally followed by an alias; a descriptor, written
+/// DESCRIPTOR(column, ...); or an expression. Exactly one of table(),
+/// descriptor() and expression() is set. 'name' is null for a positional
+/// argument.
+class TableFunctionArgument : public Node {
+ public:
+  TableFunctionArgument(
+      NodeLocation location,
+      const std::shared_ptr<Identifier>& name,
+      const RelationPtr& table)
+      : Node(NodeType::kTableFunctionArgument, location),
+        name_(name),
+        table_(table) {}
+
+  TableFunctionArgument(
+      NodeLocation location,
+      const std::shared_ptr<Identifier>& name,
+      const ExpressionPtr& expression)
+      : Node(NodeType::kTableFunctionArgument, location),
+        name_(name),
+        expression_(expression) {}
+
+  TableFunctionArgument(
+      NodeLocation location,
+      const std::shared_ptr<Identifier>& name,
+      const std::vector<IdentifierPtr>& descriptor)
+      : Node(NodeType::kTableFunctionArgument, location),
+        name_(name),
+        descriptor_(descriptor) {}
+
+  const std::shared_ptr<Identifier>& name() const {
+    return name_;
+  }
+
+  /// A Table or a TableSubquery, possibly under an AliasedRelation, or null
+  /// for another argument.
+  const RelationPtr& table() const {
+    return table_;
+  }
+
+  /// The column names of a descriptor argument, or empty for another argument.
+  const std::vector<IdentifierPtr>& descriptor() const {
+    return descriptor_;
+  }
+
+  /// Null for a table or a descriptor argument.
+  const ExpressionPtr& expression() const {
+    return expression_;
+  }
+
+  void accept(AstVisitor* visitor) override;
+
+  size_t hash() const override {
+    return folly::hash::hash_combine(
+        Node::deepHash(name_),
+        Node::deepHash(table_),
+        Node::deepHashAll(descriptor_),
+        Node::deepHash(expression_));
+  }
+
+ protected:
+  bool equals(const Node& other) const override {
+    const auto& o = *other.as<TableFunctionArgument>();
+    return Node::deepEqual(name_, o.name_) &&
+        Node::deepEqual(table_, o.table_) &&
+        Node::deepEqualAll(descriptor_, o.descriptor_) &&
+        Node::deepEqual(expression_, o.expression_);
+  }
+
+ private:
+  std::shared_ptr<Identifier> name_;
+  RelationPtr table_;
+  std::vector<IdentifierPtr> descriptor_;
+  ExpressionPtr expression_;
+};
+
+/// A call of a table function in FROM: TABLE(name(argument, ...)).
+class TableFunctionInvocation : public Relation {
+ public:
+  TableFunctionInvocation(
+      NodeLocation location,
+      const std::shared_ptr<QualifiedName>& name,
+      const std::vector<std::shared_ptr<TableFunctionArgument>>& arguments)
+      : Relation(NodeType::kTableFunctionInvocation, location),
+        name_(name),
+        arguments_(arguments) {}
+
+  const std::shared_ptr<QualifiedName>& name() const {
+    return name_;
+  }
+
+  const std::vector<std::shared_ptr<TableFunctionArgument>>& arguments() const {
+    return arguments_;
+  }
+
+  void accept(AstVisitor* visitor) override;
+
+  size_t hash() const override {
+    return folly::hash::hash_combine(
+        Node::deepHash(name_), Node::deepHashAll(arguments_));
+  }
+
+ protected:
+  bool equals(const Node& other) const override {
+    const auto& o = *other.as<TableFunctionInvocation>();
+    return Node::deepEqual(name_, o.name_) &&
+        Node::deepEqualAll(arguments_, o.arguments_);
+  }
+
+ private:
+  std::shared_ptr<QualifiedName> name_;
+  std::vector<std::shared_ptr<TableFunctionArgument>> arguments_;
+};
+
 class Unnest : public Relation {
  public:
   Unnest(

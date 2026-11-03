@@ -559,10 +559,40 @@ class PrestoSqlListener : public antlr4::tree::ParseTreeListener {
   virtual void enterGraphTable(PrestoSqlParser::GraphTableContext* ctx) = 0;
   virtual void exitGraphTable(PrestoSqlParser::GraphTableContext* ctx) = 0;
 
+  virtual void enterTableFunctionInvocation(
+      PrestoSqlParser::TableFunctionInvocationContext* ctx) = 0;
+  virtual void exitTableFunctionInvocation(
+      PrestoSqlParser::TableFunctionInvocationContext* ctx) = 0;
+
   virtual void enterParenthesizedRelation(
       PrestoSqlParser::ParenthesizedRelationContext* ctx) = 0;
   virtual void exitParenthesizedRelation(
       PrestoSqlParser::ParenthesizedRelationContext* ctx) = 0;
+
+  virtual void enterTableFunctionCall(
+      PrestoSqlParser::TableFunctionCallContext* ctx) = 0;
+  virtual void exitTableFunctionCall(
+      PrestoSqlParser::TableFunctionCallContext* ctx) = 0;
+
+  virtual void enterTableFunctionArgument(
+      PrestoSqlParser::TableFunctionArgumentContext* ctx) = 0;
+  virtual void exitTableFunctionArgument(
+      PrestoSqlParser::TableFunctionArgumentContext* ctx) = 0;
+
+  virtual void enterTableArgumentTable(
+      PrestoSqlParser::TableArgumentTableContext* ctx) = 0;
+  virtual void exitTableArgumentTable(
+      PrestoSqlParser::TableArgumentTableContext* ctx) = 0;
+
+  virtual void enterTableArgumentQuery(
+      PrestoSqlParser::TableArgumentQueryContext* ctx) = 0;
+  virtual void exitTableArgumentQuery(
+      PrestoSqlParser::TableArgumentQueryContext* ctx) = 0;
+
+  virtual void enterDescriptorArgument(
+      PrestoSqlParser::DescriptorArgumentContext* ctx) = 0;
+  virtual void exitDescriptorArgument(
+      PrestoSqlParser::DescriptorArgumentContext* ctx) = 0;
 
   virtual void enterGraphColumn(PrestoSqlParser::GraphColumnContext* ctx) = 0;
   virtual void exitGraphColumn(PrestoSqlParser::GraphColumnContext* ctx) = 0;

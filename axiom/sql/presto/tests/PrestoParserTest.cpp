@@ -204,6 +204,12 @@ TEST_F(PrestoParserTest, unnest) {
   }
 }
 
+TEST_F(PrestoParserTest, tableFunction) {
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("SELECT * FROM TABLE(f(x => 1))"),
+      "Table function not found: f");
+}
+
 TEST_F(PrestoParserTest, lateralJoin) {
   // CROSS JOIN LATERAL over a body with no FROM (the body references the left
   // side) builds a LateralJoinNode whose right side is the body.

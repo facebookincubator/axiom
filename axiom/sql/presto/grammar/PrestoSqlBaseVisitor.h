@@ -698,8 +698,38 @@ class PrestoSqlBaseVisitor : public PrestoSqlVisitor {
     return visitChildren(ctx);
   }
 
+  virtual std::any visitTableFunctionInvocation(
+      PrestoSqlParser::TableFunctionInvocationContext* ctx) override {
+    return visitChildren(ctx);
+  }
+
   virtual std::any visitParenthesizedRelation(
       PrestoSqlParser::ParenthesizedRelationContext* ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitTableFunctionCall(
+      PrestoSqlParser::TableFunctionCallContext* ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitTableFunctionArgument(
+      PrestoSqlParser::TableFunctionArgumentContext* ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitTableArgumentTable(
+      PrestoSqlParser::TableArgumentTableContext* ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitTableArgumentQuery(
+      PrestoSqlParser::TableArgumentQueryContext* ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitDescriptorArgument(
+      PrestoSqlParser::DescriptorArgumentContext* ctx) override {
     return visitChildren(ctx);
   }
 
