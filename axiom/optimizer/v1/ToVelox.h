@@ -1,0 +1,439 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include "axiom/optimizer/MultiFragmentPlan.h"
+#include "axiom/optimizer/OptimizerSession.h"
+#include "axiom/optimizer/PlanAndStats.h"
+#include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/v1/RelationOp.h"
+#include "velox/serializers/PrestoSerializer.h"
+
+namespace facebook::axiom::optimizer::v1 {
+
+/// Maps a source column name to its user-requested output name for the
+/// final projection in toVeloxPlan. Resolved eagerly because column
+/// pruning invalidates the original ordinals.
+struct OutputColumnNameMapping {
+  /// Column name in the plan below OutputNode.
+  std::string sourceName;
+  /// Output column name from OutputNode entry.
+  std::string outputName;
+};
+
+/// Per-fragment leaf-PartitionType maps produced by the optimizer and consumed
+/// by ToVelox to populate ExecutableFragment::groupedNodes.
+struct GroupedLeavesBundle {
+  /// One entry per Repartition (fragment boundary).
+  folly::F14FastMap<const Repartition*, GroupedLeaves> perRepartition;
+
+  /// For the root fragment, captured after planning completes.
+  GroupedLeaves root;
+};
+
+class ToVelox {
+ public:
+  ToVelox(
+      OptimizerSessionPtr optimizerSession,
+      const MultiFragmentPlan::Options& options);
+
+  /// Converts physical plan (a tree of RelationOp) to an executable
+  /// multi-fragment Velox plan. If outputNames is non-empty, adds a
+  /// final projection to rename or reorder output columns. Pass {} for
+  /// 'groupedLeaves' on plans that don't use bucketed execution.
+  PlanAndStats toVeloxPlan(
+      RelationOpPtr plan,
+      const MultiFragmentPlan::Options& options,
+      const std::vector<OutputColumnNameMapping>& outputNames,
+      const GroupedLeavesBundle& groupedLeaves);
+
+  /// Per-leaf-table data produced by filterUpdated().
+  struct LeafTableData {
+    /// Table handle with filters pushed into the connector.
+    velox::connector::ConnectorTableHandlePtr handle;
+
+    /// Filters rejected by createTableHandle, to be evaluated post-scan.
+    std::vector<velox::core::TypedExprPtr> extraFilters;
+
+    /// The createTableHandle-rejected filters as ExprCP. The connector accounts
+    /// for the accepted filters in its estimate; the optimizer post-applies
+    /// selectivity for these.
+    ExprVector rejectedExprs;
+  };
+
+  /// Builds the connector table handle for 'baseTable' from its current
+  /// filters and column handles. Populates leafData for the base table.
+  /// 'lookupKeys' is set when the handle drives an index lookup rather than a
+  /// scan; the connector then returns a lookup-capable handle.
+  void filterUpdated(
+      BaseTableCP baseTable,
+      std::optional<connector::LookupKeys> lookupKeys = std::nullopt);
+
+  /// Returns the leaf data for 'id' populated by filterUpdated, or nullptr
+  /// if filterUpdated has not been called for this id.
+  const LeafTableData* leafData(int32_t id) const {
+    auto it = leafData_.find(id);
+    return it != leafData_.end() ? &it->second : nullptr;
+  }
+
+  velox::core::TypedExprPtr toTypedExpr(ExprCP expr);
+
+  velox::RowTypePtr subfieldPushdownScanType(
+      BaseTableCP baseTable,
+      const ColumnVector& leafColumns,
+      ColumnVector& topColumns,
+      folly::F14FastMap<ColumnCP, velox::TypePtr>& typeMap);
+
+  // Returns a new PlanNodeId.
+  velox::core::PlanNodeId nextId() {
+    return fmt::format("{}", nodeCounter_++);
+  }
+
+ private:
+  // Adds a Velox ProjectNode that selects 'outputNames' from 'input' by
+  // source name and renames them per outputName. Returns 'input' unchanged
+  // when all names and positions already match. input->outputType() may contain
+  // more columns than outputNames; extra columns are dropped by the projection.
+  velox::core::PlanNodePtr addOutputRenames(
+      velox::core::PlanNodePtr input,
+      const std::vector<OutputColumnNameMapping>& outputNames);
+
+  velox::core::FieldAccessTypedExprPtr toFieldRef(ExprCP expr);
+
+  std::vector<velox::core::FieldAccessTypedExprPtr> toFieldRefs(
+      const ExprVector& exprs);
+
+  std::vector<velox::core::TypedExprPtr> toTypedExprs(const ExprVector& exprs);
+
+  // Memoizes each Expr's lowered form for the duration of one conversion, so a
+  // shared subexpression DAG lowers in linear rather than exponential time.
+  using ExprCache = folly::F14FastMap<ExprCP, velox::core::TypedExprPtr>;
+
+  // Lowers 'expr', reusing 'cache' for already-lowered subexpressions.
+  velox::core::TypedExprPtr toTypedExpr(ExprCP expr, ExprCache& cache);
+
+  // Lowers 'expr' without consulting 'cache' (the caller memoizes the result);
+  // recurses into subexpressions through the caching toTypedExpr(expr, cache).
+  velox::core::TypedExprPtr toTypedExprUncached(ExprCP expr, ExprCache& cache);
+
+  void setLeafData(
+      int32_t id,
+      velox::connector::ConnectorTableHandlePtr handle,
+      std::vector<velox::core::TypedExprPtr> extraFilters,
+      ExprVector rejectedExprs) {
+    leafData_[id] = {
+        std::move(handle), std::move(extraFilters), std::move(rejectedExprs)};
+  }
+
+  /// True if a scan should expose 'column' of 'table' as a struct only
+  /// containing the accessed keys. 'column' must be a top level map column.
+  bool isMapAsStruct(
+      const SchemaTableName& tableName,
+      std::string_view column) {
+    return optimizerSession_->options().isMapAsStruct(tableName, column);
+  }
+
+  // Makes an output type for use in PlanNode et al. If 'columnType' is set,
+  // only considers base relation columns of the given type.
+  velox::RowTypePtr makeOutputType(const ColumnVector& columns) const;
+
+  // Makes a getter path over a top level column and can convert the top
+  // map getter into struct getter if maps extracted as structs.
+  velox::core::TypedExprPtr
+  pathToGetter(ColumnCP column, PathCP path, velox::core::TypedExprPtr field);
+
+  // Returns a filter expr that ands 'exprs'. nullptr if 'exprs' is empty.
+  velox::core::TypedExprPtr toAnd(const ExprVector& exprs);
+
+  // Translates 'exprs' and returns them in 'result'. If an expr is
+  // other than a column, adds a projection node to evaluate the
+  // expression. The projection is added on top of 'source' and
+  // returned. If no projection is added, 'source' is returned.
+  velox::core::PlanNodePtr maybeProject(
+      const ExprVector& exprs,
+      velox::core::PlanNodePtr source,
+      std::vector<velox::core::FieldAccessTypedExprPtr>& result);
+
+  // Makes a Velox UnnestNode for a RelationOp.
+  velox::core::PlanNodePtr makeUnnest(
+      const Unnest& op,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  // Makes a Velox AggregationNode for a RelationOp.
+  velox::core::PlanNodePtr makeAggregation(
+      const Aggregation& op,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  // Makes partial + final order by fragments for order by with and without
+  // limit.
+  velox::core::PlanNodePtr makeOrderBy(
+      const OrderBy& op,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  // Makes partial + final limit fragments.
+  velox::core::PlanNodePtr makeLimit(
+      const Limit& op,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  // @pre op.sNoLimit() is true.
+  velox::core::PlanNodePtr makeOffset(
+      const Limit& op,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  velox::core::PlanNodePtr makeScan(
+      const TableScan& scan,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  // Joins 'scan's probe-side input to 'lookupSource' by index lookup. Only
+  // called for a TableScan carrying lookup keys.
+  velox::core::PlanNodePtr makeIndexLookupJoin(
+      const TableScan& scan,
+      const velox::core::TableScanNodePtr& lookupSource,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  velox::core::PlanNodePtr makeFilter(
+      const Filter& filter,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  velox::core::PlanNodePtr makeProject(
+      const Project& project,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  velox::core::PlanNodePtr makeJoin(
+      const Join& join,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  velox::core::PlanNodePtr makeRepartition(
+      const Repartition& repartition,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages,
+      std::shared_ptr<velox::core::ExchangeNode>& exchange);
+
+  // Makes a union all with a mix of remote and local inputs. Combines all
+  // remote inputs into one ExchangeNode.
+  velox::core::PlanNodePtr makeUnionAll(
+      const UnionAll& unionAll,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  velox::core::PlanNodePtr makeValues(
+      const Values& values,
+      ExecutableFragment& fragment);
+
+  velox::core::PlanNodePtr makeWrite(
+      const TableWrite& write,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  velox::core::PlanNodePtr makeEnforceSingleRow(
+      const EnforceSingleRow& op,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  velox::core::PlanNodePtr makeAssignUniqueId(
+      const AssignUniqueId& op,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  velox::core::PlanNodePtr makeEnforceDistinct(
+      const EnforceDistinct& op,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  // Makes a Velox WindowNode for a RelationOp.
+  velox::core::PlanNodePtr makeWindow(
+      const Window& op,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  // Makes a Velox RowNumberNode for a RelationOp.
+  velox::core::PlanNodePtr makeRowNumber(
+      const RowNumber& op,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  // Makes a Velox TopNRowNumberNode for a RelationOp.
+  velox::core::PlanNodePtr makeTopNRowNumber(
+      const TopNRowNumber& op,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  // Adds a ProjectNode to trim extra columns from 'input' if it has more
+  // columns than 'inputOp' expects. A scan with a rejected filter emits the
+  // filter's columns so the FilterNode can evaluate them; consumers that pass
+  // all input columns through (e.g. the root fragment or a WindowNode) would
+  // otherwise leak those columns into the output.
+  velox::core::PlanNodePtr maybeTrimColumns(
+      velox::core::PlanNodePtr input,
+      const RelationOpPtr& inputOp);
+
+  // Prepares the input for a partitioned operator (Window, RowNumber,
+  // TopNRowNumber): trims extra columns and adds a local partition exchange
+  // when running with multiple drivers.
+  velox::core::PlanNodePtr makeWindowInput(
+      const RelationOp& op,
+      const ExprVector& partitionKeys,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  // Converts a single WindowFunction to a Velox WindowNode::Function.
+  velox::core::WindowNode::Function toVeloxWindowFunction(
+      WindowFunctionCP windowFunc,
+      ColumnCP outputColumn);
+
+  // Makes a Velox MarkDistinctNode for a RelationOp.
+  velox::core::PlanNodePtr makeMarkDistinct(
+      const MarkDistinct& op,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  // Converts a GroupId operator to a Velox GroupIdNode.
+  velox::core::PlanNodePtr makeGroupId(
+      const GroupId& op,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  // Makes a tree of PlanNode for a tree of
+  // RelationOp. 'fragment' is the fragment that 'op'
+  // belongs to. If op or children are repartitions then the
+  // source of each makes a separate fragment. These
+  // fragments are referenced from 'fragment' via
+  // 'inputStages' and are returned in 'stages'.
+  velox::core::PlanNodePtr makeFragment(
+      const RelationOpPtr& op,
+      ExecutableFragment& fragment,
+      std::vector<ExecutableFragment>& stages);
+
+  // Records the prediction for 'node' and a history key to update history
+  // after the plan is executed.
+  void makePredictionAndHistory(
+      const velox::core::PlanNodeId& id,
+      const RelationOp* op);
+
+  // Returns a stack of parallel project nodes if parallelization makes sense.
+  // nullptr means use regular ProjectNode in output.
+  velox::core::PlanNodePtr maybeParallelProject(
+      const Project* project,
+      velox::core::PlanNodePtr input);
+
+  velox::core::PlanNodePtr makeParallelProject(
+      const velox::core::PlanNodePtr& input,
+      const PlanObjectSet& topExprs,
+      const PlanObjectSet& placed,
+      const PlanObjectSet& extraColumns);
+
+  // Makes projections for subfields as top level columns.
+  // @param scanNode TableScan or Filter input node.
+  velox::core::PlanNodePtr makeSubfieldProjections(
+      const TableScan& scan,
+      const velox::core::PlanNodePtr& scanNode);
+
+  ExecutableFragment newFragment();
+
+  // TODO: Move this into MultiFragmentPlan::Options.
+  const std::string exchangeSerdeKind_{
+      velox::serializer::presto::PrestoVectorSerde::name()};
+
+  const OptimizerSessionPtr optimizerSession_;
+
+  MultiFragmentPlan::Options options_;
+
+  const bool isSingle_;
+
+  // Map filled in with a PlanNodeId and history key for measurement points
+  // for
+  // history recording.
+  NodeHistoryMap nodeHistory_;
+
+  // Predicted cardinality for nodes to record in history.
+  NodePredictionMap prediction_;
+
+  // On when producing a remaining filter for table scan, where columns must
+  // correspond 1:1 to the schema.
+  bool makeVeloxExprWithNoAlias_{false};
+
+  bool getterForPushdownSubfield_{false};
+
+  // Map from top level map column  accessed as struct to the struct type.
+  // Used only when generating a leaf scan for result Velox plan.
+  folly::F14FastMap<ColumnCP, velox::TypePtr> columnAlteredTypes_;
+
+  // When generating parallel projections with intermediate assignment for
+  // common subexpressions, maps from ExprCP to the FieldAccessTypedExppr with
+  // the value.
+  folly::F14FastMap<ExprCP, velox::core::TypedExprPtr> projectedExprs_;
+
+  folly::F14FastMap<int32_t, LeafTableData> leafData_;
+
+  // Serial number for plan nodes in executable plan.
+  int32_t nodeCounter_{0};
+
+  // Serial number for stages in executable plan.
+  int32_t stageCounter_{0};
+
+  const std::optional<std::string> subscript_;
+  const std::optional<std::string> elementAt_;
+
+  FinishWrite finishWrite_;
+
+  // Pending final merge spec for multi-worker writes. Set by makeWrite
+  // when maxRemotePartitions > 1, consumed by toVeloxPlan to add a
+  // TableWriteMerge(kFinal) after the gather exchange.
+  std::optional<velox::core::ColumnStatsSpec> finalMergeSpec_;
+
+  // Translates 'groupedLeaves' (keyed by const RelationOp*) into entries in
+  // 'fragment.groupedNodes' (keyed by Velox PlanNodeId) using
+  // 'relationOpToNodeId_'. After translation, if any non-null PartitionType
+  // entry is present, sets fragment.type = kFixed and
+  // fragment.numRemotePartitions = numPartitions().
+  void applyGroupedLeaves(
+      ExecutableFragment& fragment,
+      const GroupedLeaves& groupedLeaves);
+
+  // RelationOp identity → minted Velox PlanNodeId. Cleared at the top of
+  // toVeloxPlan.
+  folly::F14FastMap<const RelationOp*, velox::core::PlanNodeId>
+      relationOpToNodeId_;
+
+  // GroupedLeaves of the fragment consuming the Repartition currently being
+  // emitted; read to size that Repartition's PartitionedOutputNode.
+  // Saved/restored across nested makeRepartition calls.
+  const GroupedLeaves* currentConsumerGroupedLeaves_{nullptr};
+
+  // Per-call bundle of optimizer-produced grouped-leaf maps. Set at the top
+  // of toVeloxPlan from the explicit parameter; cleared on exit.
+  const GroupedLeavesBundle* groupedLeaves_{nullptr};
+
+  // The synthetic gather Repartition that addGather inserts at the top of
+  // the plan tree, when applicable. Set by toVeloxPlan. makeRepartition
+  // treats this as carrying the same GroupedLeaves as the root fragment;
+  // it is not present in groupedLeaves_->perRepartition because
+  // it was not in the plan at optimization time.
+  const Repartition* gatherRepartition_{nullptr};
+};
+
+} // namespace facebook::axiom::optimizer::v1

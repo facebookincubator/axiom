@@ -8,8 +8,8 @@ data distribution, and emits executable fragments. The
 that owns it.
 
 The optimizer's code is under `v2/`. The previous optimizer, built on
-`DerivedTable`, is legacy; its design is documented under
-[docs/v1](docs/v1/Overview.md).
+`DerivedTable`, is legacy; its code is under `v1/` and its design is
+documented under [docs/v1](docs/v1/Overview.md).
 
 ## Documentation
 

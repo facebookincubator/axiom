@@ -22,7 +22,8 @@ add_library(
 target_link_libraries(
   axiom_graphviz_printers
   axiom_logical_plan
-  axiom_optimizer
+  axiom_optimizer_core
+  axiom_optimizer_v1
   axiom_optimizer_multifragment_plan
   velox_core
 )
