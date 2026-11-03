@@ -45,6 +45,12 @@ class FileConnectorMetadata : public ConnectorMetadata {
       : connector_(connector),
         pool_(velox::memory::memoryManager()->addLeafPool("file_metadata")) {}
 
+  /// Returns 'identifier' unchanged: a table name is a file path, which is
+  /// case-sensitive.
+  std::string normalizeIdentifier(std::string_view identifier) const override {
+    return std::string(identifier);
+  }
+
   /// Resolves a table from a schema name (format) and file path.
   TablePtr findTable(const SchemaTableName& tableName) override;
 

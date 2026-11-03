@@ -279,7 +279,7 @@ struct ColumnDeclaration {
 class CreateTableStatement : public SqlStatement {
  public:
   /// @param primaryKey The columns of PRIMARY KEY, each a column of 'columns'
-  /// once, matched ignoring case. Empty without PRIMARY KEY.
+  /// once. Empty without PRIMARY KEY.
   CreateTableStatement(
       std::string connectorId,
       facebook::axiom::SchemaTableName tableName,

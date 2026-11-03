@@ -291,14 +291,18 @@ TEST_F(DdlParserTest, createTable) {
   }
 
   // NOT NULL, comments, column properties and the primary key reach the
-  // statement. The primary key names its columns as they are declared.
+  // statement. The table and its columns are named as the connector stores
+  // them: lowercase.
   {
     auto statement = parseSql(
-        "CREATE TABLE t (id BIGINT NOT NULL COMMENT 'key', "
-        "v VARCHAR WITH (x = 1), PRIMARY KEY (ID)) COMMENT 'table'");
+        "CREATE TABLE MyT (Id BIGINT NOT NULL COMMENT 'key', "
+        "V VARCHAR WITH (x = 1), PRIMARY KEY (ID)) COMMENT 'table'");
     const auto* create = statement->as<CreateTableStatement>();
+    EXPECT_EQ("myt", create->tableName().table);
     const auto& columns = create->columns();
     ASSERT_EQ(2, columns.size());
+    EXPECT_EQ("id", columns[0].name);
+    EXPECT_EQ("v", columns[1].name);
     EXPECT_FALSE(columns[0].nullable);
     EXPECT_EQ("key", columns[0].comment);
     EXPECT_TRUE(columns[0].properties.empty());
@@ -320,11 +324,11 @@ TEST_F(DdlParserTest, createTable) {
           "CREATE TABLE t (id INTEGER, PRIMARY KEY (id), PRIMARY KEY (id))"),
       "Table has more than one PRIMARY KEY");
 
-  // duplicate column names
-  VELOX_ASSERT_THROW(
+  // duplicate column names, matched ignoring case and named as written
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("CREATE TABLE t (id INTEGER, id VARCHAR)"),
       "Duplicate column name: id");
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("CREATE TABLE t (id INTEGER, ID VARCHAR)"),
       "Duplicate column name: ID");
 
@@ -348,7 +352,7 @@ TEST_F(DdlParserTest, createTable) {
       "Duplicate constraint column: id");
   VELOX_ASSERT_THROW(
       parseSql("CREATE TABLE t (id INTEGER, PRIMARY KEY (id, ID))"),
-      "Duplicate constraint column: ID");
+      "Duplicate constraint column: id");
 
   // duplicate table property
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
@@ -470,7 +474,7 @@ TEST_F(DdlParserTest, vectorIndex) {
 
   VELOX_ASSERT_THROW(
       parseSql("CREATE VECTOR INDEX t (id BIGINT, ID ARRAY(REAL))"),
-      "Duplicate column name: ID");
+      "Duplicate column name: id");
 }
 
 TEST_F(DdlParserTest, view) {

@@ -579,11 +579,12 @@ TEST_F(SqlQueryRunnerTest, createTableRunsWritePath) {
 TEST_F(SqlQueryRunnerTest, createAndDropSchema) {
   assertSchemas({kDefaultSchema, "information_schema"});
 
-  auto createResult = run("CREATE SCHEMA foo");
+  // Schema names match ignoring case.
+  auto createResult = run("CREATE SCHEMA Foo");
   EXPECT_EQ("Created schema: foo", createResult.message);
   assertSchemas({kDefaultSchema, "foo", "information_schema"});
 
-  auto dropResult = run("DROP SCHEMA foo");
+  auto dropResult = run("DROP SCHEMA FOO");
   EXPECT_EQ("Dropped schema: foo", dropResult.message);
   assertSchemas({kDefaultSchema, "information_schema"});
 }
@@ -650,6 +651,17 @@ TEST_F(SqlQueryRunnerTest, showTables) {
 
   assertTables({"alpha", "beta"});
   assertTables({"alpha"}, "SHOW TABLES LIKE 'a%'");
+
+  // SHOW TABLES lists the tables of a default schema USE spells in any case.
+  run("CREATE SCHEMA Dev");
+  run("USE Dev");
+  run("CREATE TABLE gamma AS SELECT 3 AS z");
+  SCOPE_EXIT {
+    run("DROP TABLE IF EXISTS gamma");
+    run("USE default");
+    run("DROP SCHEMA IF EXISTS dev");
+  };
+  assertTables({"gamma"});
 }
 
 TEST_F(SqlQueryRunnerTest, showCreateTable) {
@@ -1518,9 +1530,11 @@ TEST_F(SqlQueryRunnerTest, addColumn) {
       ROW({"x", "y", "z", "w"},
           {BIGINT(), VARCHAR(), DOUBLE(), ARRAY(INTEGER())}));
 
-  // Duplicate column without IF NOT EXISTS throws.
+  // Duplicate column without IF NOT EXISTS throws. Names match ignoring case.
   VELOX_ASSERT_THROW(
       run("ALTER TABLE t ADD COLUMN x INTEGER"), "already exists");
+  VELOX_ASSERT_THROW(
+      run("ALTER TABLE T ADD COLUMN X INTEGER"), "already exists");
 
   // IF NOT EXISTS is idempotent: only the name is checked, and a type mismatch
   // is ignored.
@@ -1575,7 +1589,8 @@ TEST_F(SqlQueryRunnerTest, call) {
   EXPECT_EQ(result.message, "CALL");
   EXPECT_EQ((*counters)["foo"], 1);
 
-  run("CALL increment('bar')");
+  // Procedure names match ignoring case.
+  run("CALL INCREMENT('bar')");
   EXPECT_EQ((*counters)["bar"], 1);
 
   // Explicit 'step' is coerced to BIGINT and applied.

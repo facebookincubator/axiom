@@ -63,27 +63,36 @@ bool isInformationSchema(std::string_view schema) {
   return boost::iequals(schema, InformationSchema::kInformationSchema);
 }
 
+// Returns 'identifier' as the catalog of 'connectorId' stores it (see
+// connector::ConnectorMetadata::normalizeIdentifier()), or as written if no
+// such connector is registered: the lookup then fails on the connector.
+std::string normalizeIdentifier(
+    const ParserSessionPtr& session,
+    const std::string& connectorId,
+    std::string_view identifier) {
+  const auto metadata = session->tryConnectorMetadata(connectorId);
+  return metadata != nullptr ? metadata->normalizeIdentifier(identifier)
+                             : std::string(identifier);
+}
+
 std::pair<std::string, facebook::axiom::SchemaTableName>
 toConnectorTableInCatalog(
+    const ParserSessionPtr& session,
     const QualifiedName& name,
     const std::string& defaultConnectorId,
     const std::string& defaultSchema) {
   const auto& parts = name.parts();
   VELOX_CHECK(!parts.empty(), "Table name cannot be empty");
+  VELOX_CHECK_LE(parts.size(), 3);
 
-  if (parts.size() == 1) {
-    // name
-    return {defaultConnectorId, {defaultSchema, parts[0]}};
-  }
-
-  if (parts.size() == 2) {
-    // schema.name
-    return {defaultConnectorId, {parts[0], parts[1]}};
-  }
-
-  // connector.schema.name
-  VELOX_CHECK_EQ(3, parts.size());
-  return {parts[0], {parts[1], parts[2]}};
+  // [[connector.]schema.]name
+  const auto& connectorId = parts.size() == 3 ? parts[0] : defaultConnectorId;
+  const auto& schema =
+      parts.size() >= 2 ? parts[parts.size() - 2] : defaultSchema;
+  return {
+      connectorId,
+      {normalizeIdentifier(session, connectorId, schema),
+       normalizeIdentifier(session, connectorId, parts.back())}};
 }
 
 // The information_schema relations describe a catalog but are served by one
@@ -91,12 +100,13 @@ toConnectorTableInCatalog(
 // '<that connector>."$info_schema@<catalog>".<relation>'. The catalog travels
 // in the schema, which is where the relation reads its metadata from.
 std::pair<std::string, facebook::axiom::SchemaTableName> toConnectorTable(
+    const ParserSessionPtr& session,
     const QualifiedName& name,
     const std::string& defaultConnectorId,
     const std::string& defaultSchema,
     std::string_view informationSchemaConnectorId) {
-  auto [connectorId, table] =
-      toConnectorTableInCatalog(name, defaultConnectorId, defaultSchema);
+  auto [connectorId, table] = toConnectorTableInCatalog(
+      session, name, defaultConnectorId, defaultSchema);
 
   if (!isInformationSchema(table.schema)) {
     return {std::move(connectorId), std::move(table)};
@@ -112,10 +122,12 @@ std::pair<std::string, facebook::axiom::SchemaTableName> toConnectorTable(
 // deployment-wide setting, so a session that overrides it changes where a
 // SELECT resolves, not where DESCRIBE does.
 std::pair<std::string, facebook::axiom::SchemaTableName> toConnectorTable(
+    const ParserSessionPtr& session,
     const QualifiedName& name,
     const std::string& defaultConnectorId,
     const std::string& defaultSchema) {
   return toConnectorTable(
+      session,
       name,
       defaultConnectorId,
       defaultSchema,
@@ -646,6 +658,7 @@ class RelationPlanner : public AstVisitor {
 
     // Regular base-table reference.
     const auto [connectorId, connectorTable] = toConnectorTable(
+        session_,
         name,
         context_.defaultConnectorId.value(),
         defaultSchema_,
@@ -2392,7 +2405,7 @@ static facebook::axiom::connector::TablePtr findTable(
     const std::string& defaultConnectorId,
     const std::string& defaultSchema) {
   const auto [connectorId, connectorTable] =
-      toConnectorTable(name, defaultConnectorId, defaultSchema);
+      toConnectorTable(session, name, defaultConnectorId, defaultSchema);
 
   auto metadata = session->connectorMetadata(connectorId);
 
@@ -2473,8 +2486,8 @@ SqlStatementPtr parseShowColumns(
     const ShowColumns& showColumns,
     const std::string& defaultConnectorId,
     const std::string& defaultSchema) {
-  const auto [connectorId, connectorTable] =
-      toConnectorTable(*showColumns.table(), defaultConnectorId, defaultSchema);
+  const auto [connectorId, connectorTable] = toConnectorTable(
+      session, *showColumns.table(), defaultConnectorId, defaultSchema);
 
   const auto metadata = session->connectorMetadata(connectorId);
 
@@ -2568,7 +2581,7 @@ SqlStatementPtr parseShowCreateTable(
   using facebook::velox::PrestoTypes;
 
   const auto [connectorId, schemaTableName] = toConnectorTable(
-      *showCreateTable.name(), defaultConnectorId, defaultSchema);
+      session, *showCreateTable.name(), defaultConnectorId, defaultSchema);
 
   const auto table =
       findTable(session, *showCreateTable.name(), connectorId, schemaTableName);
@@ -2639,7 +2652,7 @@ SqlStatementPtr parseShowCreateView(
     const std::string& defaultConnectorId,
     const std::string& defaultSchema) {
   const auto [connectorId, schemaTableName] = toConnectorTable(
-      *showCreateView.name(), defaultConnectorId, defaultSchema);
+      session, *showCreateView.name(), defaultConnectorId, defaultSchema);
 
   const auto view =
       session->connectorMetadata(connectorId)->findView(schemaTableName);
@@ -2670,8 +2683,8 @@ SqlStatementPtr parseShowStats(
     const ShowStats& showStats,
     const std::string& defaultConnectorId,
     const std::string& defaultSchema) {
-  const auto [connectorId, connectorTable] =
-      toConnectorTable(*showStats.table(), defaultConnectorId, defaultSchema);
+  const auto [connectorId, connectorTable] = toConnectorTable(
+      session, *showStats.table(), defaultConnectorId, defaultSchema);
 
   const auto table =
       findTable(session, *showStats.table(), connectorId, connectorTable);
@@ -2819,8 +2832,8 @@ SqlStatementPtr parseInsert(
     const std::string& defaultSchema,
     const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
         std::string_view /*sql*/)>& parseSql) {
-  const auto [connectorId, connectorTable] =
-      toConnectorTable(*insert.target(), defaultConnectorId, defaultSchema);
+  const auto [connectorId, connectorTable] = toConnectorTable(
+      session, *insert.target(), defaultConnectorId, defaultSchema);
 
   auto insertMetadata = session->connectorMetadata(connectorId);
 
@@ -2885,8 +2898,8 @@ SqlStatementPtr parseDelete(
     const std::string& defaultSchema,
     const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
         std::string_view /*sql*/)>& parseSql) {
-  const auto [connectorId, connectorTable] =
-      toConnectorTable(*deleteNode.table(), defaultConnectorId, defaultSchema);
+  const auto [connectorId, connectorTable] = toConnectorTable(
+      session, *deleteNode.table(), defaultConnectorId, defaultSchema);
 
   // Reject a missing target before planning the scan, which would otherwise
   // resolve a view of that name and write to a table that does not exist.
@@ -2932,8 +2945,8 @@ SqlStatementPtr parseCreateTableAsSelect(
     const std::string& defaultSchema,
     const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
         std::string_view /*sql*/)>& parseSql) {
-  auto [connectorId, connectorTable] =
-      toConnectorTable(*ctas.name(), defaultConnectorId, defaultSchema);
+  auto [connectorId, connectorTable] = toConnectorTable(
+      session, *ctas.name(), defaultConnectorId, defaultSchema);
 
   RelationPlanner planner(session, defaultConnectorId, defaultSchema, parseSql);
   ctas.query()->accept(&planner);
@@ -2958,7 +2971,8 @@ SqlStatementPtr parseCreateTableAsSelect(
           std::to_string(i + 1),
           "Column name not specified at position {}",
           i + 1);
-      columnNames.emplace_back(name.value());
+      columnNames.emplace_back(
+          normalizeIdentifier(session, connectorId, name.value()));
     }
 
     planner.tableWrite(
@@ -2978,7 +2992,8 @@ SqlStatementPtr parseCreateTableAsSelect(
 
     columnNames.reserve(numInputColumns);
     for (const auto& column : ctas.columns()) {
-      columnNames.emplace_back(column->value());
+      columnNames.emplace_back(
+          normalizeIdentifier(session, connectorId, column->value()));
     }
 
     planner.tableWrite(
@@ -3001,9 +3016,10 @@ SqlStatementPtr parseCreateTableAsSelect(
       planner.inputTables());
 }
 
-// Returns what 'column' declares.
+// Returns what 'column', a column of a table of 'connectorId', declares.
 ColumnDeclaration parseColumnDefinition(
     const ParserSessionPtr& session,
+    const std::string& connectorId,
     const ColumnDefinition& column) {
   auto type = parseType(column.columnType());
   AXIOM_PRESTO_SEMANTIC_CHECK(
@@ -3012,7 +3028,7 @@ ColumnDeclaration parseColumnDefinition(
       column.columnType()->baseName(),
       "Unknown type specifier");
   return {
-      .name = column.name()->value(),
+      .name = normalizeIdentifier(session, connectorId, column.name()->value()),
       .type = std::move(type),
       .nullable = column.isNullable(),
       .comment = column.comment(),
@@ -3025,8 +3041,8 @@ SqlStatementPtr parseCreateTable(
     const CreateTable& createTable,
     const std::string& defaultConnectorId,
     const std::string& defaultSchema) {
-  auto [connectorId, connectorTable] =
-      toConnectorTable(*createTable.name(), defaultConnectorId, defaultSchema);
+  auto [connectorId, connectorTable] = toConnectorTable(
+      session, *createTable.name(), defaultConnectorId, defaultSchema);
 
   auto properties = parseTableProperties(session, createTable.properties());
 
@@ -3036,8 +3052,17 @@ SqlStatementPtr parseCreateTable(
   for (const auto& element : createTable.elements()) {
     switch (element->type()) {
       case NodeType::kColumnDefinition: {
-        columns.push_back(
-            parseColumnDefinition(session, *element->as<ColumnDefinition>()));
+        const auto* definition = element->as<ColumnDefinition>();
+        auto column = parseColumnDefinition(session, connectorId, *definition);
+        AXIOM_PRESTO_SEMANTIC_CHECK(
+            std::ranges::none_of(
+                columns,
+                [&](const auto& other) { return other.name == column.name; }),
+            definition->location(),
+            definition->name()->value(),
+            "Duplicate column name: {}",
+            definition->name()->value());
+        columns.push_back(std::move(column));
         break;
       }
       case NodeType::kLikeClause: {
@@ -3085,7 +3110,8 @@ SqlStatementPtr parseCreateTable(
             "PRIMARY KEY",
             "Table has more than one PRIMARY KEY");
         for (const auto& column : constraint->columns()) {
-          primaryKey.push_back(column->value());
+          primaryKey.push_back(
+              normalizeIdentifier(session, connectorId, column->value()));
         }
         break;
       }
@@ -3107,11 +3133,12 @@ SqlStatementPtr parseCreateTable(
 }
 
 SqlStatementPtr parseDropTable(
+    const ParserSessionPtr& session,
     const DropTable& dropTable,
     const std::string& defaultConnectorId,
     const std::string& defaultSchema) {
   auto [connectorId, connectorTable] = toConnectorTable(
-      *dropTable.tableName(), defaultConnectorId, defaultSchema);
+      session, *dropTable.tableName(), defaultConnectorId, defaultSchema);
 
   return std::make_shared<DropTableStatement>(
       std::move(connectorId), std::move(connectorTable), dropTable.isExists());
@@ -3122,13 +3149,13 @@ SqlStatementPtr parseCreateVectorIndex(
     const CreateVectorIndex& createIndex,
     const std::string& defaultConnectorId,
     const std::string& defaultSchema) {
-  auto [connectorId, indexName] =
-      toConnectorTable(*createIndex.name(), defaultConnectorId, defaultSchema);
+  auto [connectorId, indexName] = toConnectorTable(
+      session, *createIndex.name(), defaultConnectorId, defaultSchema);
 
   std::vector<std::string> names;
   std::vector<TypePtr> types;
   for (const auto& column : createIndex.columns()) {
-    auto definition = parseColumnDefinition(session, *column);
+    auto definition = parseColumnDefinition(session, connectorId, *column);
     names.push_back(std::move(definition.name));
     types.push_back(std::move(definition.type));
   }
@@ -3142,11 +3169,12 @@ SqlStatementPtr parseCreateVectorIndex(
 }
 
 SqlStatementPtr parseDropVectorIndex(
+    const ParserSessionPtr& session,
     const DropVectorIndex& dropIndex,
     const std::string& defaultConnectorId,
     const std::string& defaultSchema) {
-  auto [connectorId, indexName] =
-      toConnectorTable(*dropIndex.name(), defaultConnectorId, defaultSchema);
+  auto [connectorId, indexName] = toConnectorTable(
+      session, *dropIndex.name(), defaultConnectorId, defaultSchema);
 
   return std::make_shared<DropVectorIndexStatement>(
       std::move(connectorId), std::move(indexName), dropIndex.isExists());
@@ -3158,11 +3186,11 @@ SqlStatementPtr parseAddColumn(
     const std::string& defaultConnectorId,
     const std::string& defaultSchema) {
   auto [connectorId, connectorTable] = toConnectorTable(
-      *addColumn.tableName(), defaultConnectorId, defaultSchema);
+      session, *addColumn.tableName(), defaultConnectorId, defaultSchema);
   return std::make_shared<AddColumnStatement>(
       std::move(connectorId),
       std::move(connectorTable),
-      parseColumnDefinition(session, *addColumn.column()),
+      parseColumnDefinition(session, connectorId, *addColumn.column()),
       addColumn.isTableExists(),
       addColumn.isColumnNotExists());
 }
@@ -3182,7 +3210,8 @@ SqlStatementPtr parseCreateSchema(
       createSchema.schemaName()->fullyQualifiedName());
 
   std::string connectorId = parts.size() == 2 ? parts[0] : defaultConnectorId;
-  std::string schemaName = parts.size() == 2 ? parts[1] : parts[0];
+  std::string schemaName =
+      normalizeIdentifier(session, connectorId, parts.back());
 
   auto properties = parseTableProperties(session, createSchema.properties());
 
@@ -3194,6 +3223,7 @@ SqlStatementPtr parseCreateSchema(
 }
 
 SqlStatementPtr parseDropSchema(
+    const ParserSessionPtr& session,
     const DropSchema& dropSchema,
     const std::string& defaultConnectorId) {
   const auto& parts = dropSchema.schemaName()->parts();
@@ -3213,7 +3243,8 @@ SqlStatementPtr parseDropSchema(
       "DROP SCHEMA CASCADE is not supported");
 
   std::string connectorId = parts.size() == 2 ? parts[0] : defaultConnectorId;
-  std::string schemaName = parts.size() == 2 ? parts[1] : parts[0];
+  std::string schemaName =
+      normalizeIdentifier(session, connectorId, parts.back());
 
   return std::make_shared<DropSchemaStatement>(
       std::move(connectorId), std::move(schemaName), dropSchema.isExists());
@@ -3266,13 +3297,12 @@ SqlStatementPtr parseShowTables(
         2,
         "Invalid schema reference: {}",
         showTables.schemaName()->fullyQualifiedName());
-    if (parts.size() == 1) {
-      schema = parts[0];
-    } else if (parts.size() == 2) {
+    if (parts.size() == 2) {
       connectorId = parts[0];
-      schema = parts[1];
     }
+    schema = parts.back();
   }
+  schema = normalizeIdentifier(parserSession, connectorId, schema);
 
   // A catalog's information_schema is served by another connector, with the
   // catalog carried in the schema.
@@ -3361,28 +3391,19 @@ SqlStatementPtr parseSetSession(const SetSession* setSession) {
 }
 
 // Resolves a procedure's qualified name into a connector id and
-// schema-qualified procedure name.
+// schema-qualified procedure name, named as the connector's catalog stores
+// them.
 std::pair<std::string, facebook::axiom::SchemaProcedureName>
 toConnectorProcedure(
+    const ParserSessionPtr& session,
     const QualifiedName& name,
     const std::string& defaultConnectorId,
     const std::string& defaultSchema) {
-  const auto& parts = name.parts();
-  VELOX_CHECK(!parts.empty(), "Procedure name cannot be empty");
-
-  if (parts.size() == 1) {
-    // name
-    return {defaultConnectorId, {defaultSchema, parts[0]}};
-  }
-
-  if (parts.size() == 2) {
-    // schema.name
-    return {defaultConnectorId, {parts[0], parts[1]}};
-  }
-
-  // connector.schema.name
-  VELOX_CHECK_EQ(3, parts.size());
-  return {parts[0], {parts[1], parts[2]}};
+  auto [connectorId, schemaName] = toConnectorTableInCatalog(
+      session, name, defaultConnectorId, defaultSchema);
+  return {
+      std::move(connectorId),
+      {std::move(schemaName.schema), std::move(schemaName.table)}};
 }
 
 // Resolves a single CALL argument to a constant expression coerced to the
@@ -3422,8 +3443,8 @@ SqlStatementPtr parseCall(
     const Call& call,
     const std::string& defaultConnectorId,
     const std::string& defaultSchema) {
-  auto [connectorId, procedureName] =
-      toConnectorProcedure(*call.name(), defaultConnectorId, defaultSchema);
+  auto [connectorId, procedureName] = toConnectorProcedure(
+      session, *call.name(), defaultConnectorId, defaultSchema);
 
   auto metadata = session->tryConnectorMetadata(connectorId);
   AXIOM_PRESTO_SEMANTIC_CHECK(
@@ -3597,7 +3618,10 @@ SqlStatementPtr doPlan(
 
   if (query->is(NodeType::kDropTable)) {
     return parseDropTable(
-        *query->as<DropTable>(), defaultConnectorId, defaultSchema);
+        parserSession,
+        *query->as<DropTable>(),
+        defaultConnectorId,
+        defaultSchema);
   }
 
   if (query->is(NodeType::kCreateVectorIndex)) {
@@ -3610,7 +3634,10 @@ SqlStatementPtr doPlan(
 
   if (query->is(NodeType::kDropVectorIndex)) {
     return parseDropVectorIndex(
-        *query->as<DropVectorIndex>(), defaultConnectorId, defaultSchema);
+        parserSession,
+        *query->as<DropVectorIndex>(),
+        defaultConnectorId,
+        defaultSchema);
   }
 
   if (query->is(NodeType::kAddColumn)) {
@@ -3627,7 +3654,8 @@ SqlStatementPtr doPlan(
   }
 
   if (query->is(NodeType::kDropSchema)) {
-    return parseDropSchema(*query->as<DropSchema>(), defaultConnectorId);
+    return parseDropSchema(
+        parserSession, *query->as<DropSchema>(), defaultConnectorId);
   }
 
   if (query->is(NodeType::kCall)) {
