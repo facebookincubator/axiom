@@ -105,6 +105,16 @@ std::vector<const FileInfo*> filterFilesByTableHandle(
   return selectedFiles;
 }
 
+// Returns 'value', a partition value, as a Variant of 'type': a null for a NULL
+// value.
+velox::Variant nullablePartitionValueToVariant(
+    const std::optional<std::string>& value,
+    const velox::Type& type) {
+  return value.has_value()
+      ? HiveTableLayout::partitionValueToVariant(value.value(), type)
+      : velox::Variant::null(type.kind());
+}
+
 // Tests a partition key value against a filter. 'value' is the string from the
 // directory name (e.g. "2" from "k=2"). 'type' determines how to convert the
 // string before testing.
@@ -761,11 +771,11 @@ LocalHiveTableLayout::co_metadataCounts(
         // answered from partition metadata.
         co_return std::nullopt;
       }
-      groupKey += it->second;
+      // A NULL value and each value get distinct keys.
+      groupKey += it->second.has_value() ? 'v' + *it->second : "n";
       groupKey += '\0';
       keyValues.push_back(
-          HiveTableLayout::partitionValueToVariant(
-              it->second, *column->type()));
+          nullablePartitionValueToVariant(it->second, *column->type()));
     }
 
     auto [it, inserted] = groupIndex.try_emplace(groupKey, groups.size());
@@ -863,8 +873,7 @@ std::unique_ptr<DiscretePredicates> LocalHiveTableLayout::discretePredicates(
           "Partition is missing a value for partition column '{}'",
           column->name());
       values.push_back(
-          HiveTableLayout::partitionValueToVariant(
-              valueIt->second, *column->type()));
+          nullablePartitionValueToVariant(valueIt->second, *column->type()));
     }
     rows.push_back(velox::Variant::row(std::move(values)));
 
@@ -1333,8 +1342,8 @@ std::shared_ptr<LocalTable> createTableFromSchema(
 }
 
 // Parses a Hive partition directory named '<expectedColumn>=<value>'. Returns
-// the value.
-std::string parsePartitionValue(
+// the value (see FileInfo::parsePartitionValue()).
+std::optional<std::string> parsePartitionValue(
     const fs::path& dir,
     std::string_view expectedColumn) {
   const auto dirName = dir.filename().string();
@@ -1344,11 +1353,12 @@ std::string parsePartitionValue(
       "Expected a '{}=<value>' partition directory, found: {}",
       expectedColumn,
       dirName);
-  return dirName.substr(prefix.size());
+  return FileInfo::parsePartitionValue(dirName.substr(prefix.size()));
 }
 
 // Partition key values of one partition, keyed by column name.
-using PartitionKeys = folly::F14FastMap<std::string, std::string>;
+using PartitionKeys =
+    folly::F14FastMap<std::string, std::optional<std::string>>;
 
 // Visits the leaves of the partition directory tree rooted at 'dir', which
 // nests one level per entry in 'partitionColumnNames'. Descends into a
@@ -1360,7 +1370,8 @@ void visitPartitions(
     const fs::path& dir,
     size_t level,
     PartitionKeys partitionKeys,
-    const std::function<bool(size_t level, const std::string& value)>& accept,
+    const std::function<
+        bool(size_t level, const std::optional<std::string>& value)>& accept,
     const std::function<void(const fs::path& leaf, PartitionKeys keys)>&
         onLeaf) {
   if (level == partitionColumnNames.size()) {
@@ -1454,7 +1465,9 @@ void LocalHiveConnectorMetadata::loadTableWithWriteTimeStats(
         tablePath,
         /*level=*/0,
         /*partitionKeys=*/{},
-        [](size_t /*level*/, const std::string& /*value*/) { return true; },
+        [](size_t /*level*/, const std::optional<std::string>& /*value*/) {
+          return true;
+        },
         [&](const fs::path& leaf, PartitionKeys keys) {
           auto persisted = readPartitionStats(leaf);
           table->incrementNumRows(persisted.numRows);
@@ -1799,7 +1812,7 @@ std::optional<int64_t> LocalHiveConnectorMetadata::removePartitions(
       path,
       /*level=*/0,
       /*partitionKeys=*/{},
-      [&](size_t level, const std::string& value) {
+      [&](size_t level, const std::optional<std::string>& value) {
         const auto* filter = filters[level];
         return filter == nullptr ||
             testPartitionValue(
