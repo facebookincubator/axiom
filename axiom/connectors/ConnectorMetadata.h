@@ -562,9 +562,9 @@ struct MetadataCountGroup {
   void checkConsistency() const;
 };
 
-/// Represents a physical manifestation of a table. There is at least
-/// one layout but for tables that have multiple sort orders, partitionings,
-/// indices, column groups, etc. there is a separate layout for each. The layout
+/// Represents a physical manifestation of a table. A table that has multiple
+/// sort orders, partitionings, indices, column groups, etc. has a separate
+/// layout for each. The layout
 /// represents data at rest. The ConnectorTableHandle represents the query's
 /// constraints on the layout a scan or lookup is accessing.
 class TableLayout {
@@ -959,7 +959,18 @@ class Table : public std::enable_shared_from_this<Table> {
     return it == map.end() ? nullptr : it->second;
   }
 
+  /// Returns the table's layouts. There is at least one.
   virtual const std::vector<const TableLayout*>& layouts() const = 0;
+
+  /// The layout that holds all of the table's columns, one of layouts(). Every
+  /// other layout is an additional access path to the same rows, such as an
+  /// index. Whether it supports scans or writes is up to the connector, as for
+  /// any layout. Defaults to the table's only layout; a connector whose tables
+  /// have several layouts overrides it.
+  virtual const TableLayout* primaryLayout() const;
+
+  /// The ID of the connector the table belongs to.
+  const std::string& connectorId() const;
 
   /// Returns an estimate of the number of rows in 'this'. `nullopt`
   /// if the connector has no estimate; downstream cost-based decisions

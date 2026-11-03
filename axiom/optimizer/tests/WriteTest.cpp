@@ -210,7 +210,7 @@ class WriteTest : public test::HiveQueriesTestBase,
 
     VELOX_CHECK_EQ(1, table->layouts().size());
 
-    return *table->layouts().at(0)->as<connector::hive::LocalHiveTableLayout>();
+    return *table->primaryLayout()->as<connector::hive::LocalHiveTableLayout>();
   }
 
   static std::vector<const connector::hive::FileInfo*> sortFilesByBucket(
@@ -855,7 +855,7 @@ TEST_P(WriteTest, ctasPartitionedSql) {
   ASSERT_EQ(1, table->layouts().size());
 
   auto layout =
-      table->layouts().at(0)->as<connector::hive::LocalHiveTableLayout>();
+      table->primaryLayout()->as<connector::hive::LocalHiveTableLayout>();
   ASSERT_EQ(1, layout->hivePartitionColumns().size());
   ASSERT_EQ("pk", layout->hivePartitionColumns().at(0)->name());
 

@@ -156,7 +156,7 @@ void ToVelox::filterUpdated(
   columnAlteredTypes_.clear();
 
   const auto& allColumns = table->schemaTable->connectorTable->allColumns();
-  auto* layout = table->schemaTable->columnGroups[0]->layout;
+  auto* layout = table->schemaTable->connectorTable->primaryLayout();
 
   auto connectorSession =
       optimizerSession_->context()->sessionFor(layout->connectorId());
@@ -2269,7 +2269,7 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
     inputTypes.push_back(toTypePtr(column->value().type));
   }
 
-  auto* layout = table.layouts().front();
+  auto* layout = table.primaryLayout();
 
   if (options_.maxLocalPartitions > 1) {
     const auto& partitionColumns = layout->partitionColumns();

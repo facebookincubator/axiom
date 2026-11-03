@@ -73,7 +73,7 @@ class Folder : public NodeRewriter<NoContext> {
   NodeCP tryFold(AggregationCP node) {
     const auto* scan = node->input()->as<Scan>();
     const auto* layout =
-        scan->baseTable()->schemaTable->columnGroups[0]->layout;
+        scan->baseTable()->schemaTable->connectorTable->primaryLayout();
 
     // Grouping keys and null-count arguments must be base-table columns so they
     // can be named for the connector (via their SchemaTable column); the

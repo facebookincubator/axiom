@@ -734,20 +734,18 @@ struct BaseTable : public PlanObject {
   PathSet columnSubfields(int32_t id) const;
 
   /// Returns possible indices for driving table scan of 'table'. Empty when
-  /// every layout is lookup-only, which leaves index lookup as the sole way
-  /// to reach the table.
+  /// the primary layout is lookup-only, which leaves index lookup as the sole
+  /// way to reach the table.
   std::vector<ColumnGroupCP> chooseLeafIndex() const {
-    VELOX_DCHECK(!schemaTable->columnGroups.empty());
-    auto* group = schemaTable->columnGroups[0];
+    auto* group = schemaTable->primaryColumnGroup();
     if (!group->layout->supportsScan()) {
       return {};
     }
     return {group};
   }
 
-  /// The connector table layout backing this scan. A BaseTable always has
-  /// backing, so the schema table, its first column group, and the layout are
-  /// all present.
+  /// The connector table layout backing this scan: the table's primary
+  /// layout.
   const connector::TableLayout* layout() const;
 
   std::string toString() const override;

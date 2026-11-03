@@ -349,7 +349,7 @@ TEST_F(LocalHiveConnectorMetadataTest, basic) {
   auto column = table->findColumn("c0");
   ASSERT_TRUE(column != nullptr);
   EXPECT_EQ(250'000, table->numRows());
-  auto* layout = table->layouts()[0];
+  auto* layout = table->primaryLayout();
   auto columnHandle = layout->createColumnHandle(/*session=*/nullptr, "c0");
   std::vector<velox::connector::ColumnHandlePtr> columns = {columnHandle};
   std::vector<core::TypedExprPtr> filters;
@@ -394,7 +394,7 @@ TEST_F(LocalHiveConnectorMetadataTest, basic) {
 TEST_F(LocalHiveConnectorMetadataTest, sampleWithPathFilter) {
   auto table = metadata_->findTable(qualifiedName("t"));
   ASSERT_TRUE(table != nullptr);
-  const auto* layout = table->layouts()[0]->as<LocalHiveTableLayout>();
+  const auto* layout = table->primaryLayout()->as<LocalHiveTableLayout>();
   ASSERT_TRUE(layout != nullptr);
   const auto& files = layout->files();
   ASSERT_GT(files.size(), 1);
@@ -617,7 +617,7 @@ TEST_F(LocalHiveConnectorMetadataTest, addColumn) {
   ASSERT_FALSE(updated->layouts().empty());
 
   // Partition columns should be preserved.
-  const auto* layout = updated->layouts()[0]->as<LocalHiveTableLayout>();
+  const auto* layout = updated->primaryLayout()->as<LocalHiveTableLayout>();
   ASSERT_NE(layout, nullptr);
   EXPECT_EQ(1, layout->hivePartitionColumns().size());
   EXPECT_EQ("ds", layout->hivePartitionColumns()[0]->name());

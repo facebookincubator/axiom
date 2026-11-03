@@ -33,7 +33,16 @@ TableAccessHandle buildTableAccess(
     velox::core::ExpressionEvaluator& evaluator,
     ExprVector& rejected,
     std::optional<connector::LookupKeys> lookupKeys) {
-  const auto* layout = baseTable.schemaTable->columnGroups[0]->layout;
+  const auto* schemaTable = baseTable.schemaTable;
+  if (lookupKeys.has_value()) {
+    // TODO: Choose the layout whose lookup keys cover the lookup's keys.
+    VELOX_NYI_CHECK_EQ(
+        schemaTable->columnGroups.size(),
+        1,
+        "Index lookup into a table with several layouts is not supported yet: {}",
+        schemaTable->name().toString());
+  }
+  const auto* layout = schemaTable->connectorTable->primaryLayout();
   auto connectorSession = session.context()->sessionFor(layout->connectorId());
 
   // Read schema is the consumer output columns plus the columns referenced

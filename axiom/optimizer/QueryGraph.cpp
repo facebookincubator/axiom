@@ -522,9 +522,8 @@ PathSet BaseTable::columnSubfields(int32_t id) const {
 
 const connector::TableLayout* BaseTable::layout() const {
   VELOX_CHECK_NOT_NULL(schemaTable);
-  VELOX_CHECK(!schemaTable->columnGroups.empty());
 
-  const auto* layout = schemaTable->columnGroups[0]->layout;
+  const auto* layout = schemaTable->connectorTable->primaryLayout();
   VELOX_CHECK_NOT_NULL(layout);
   return layout;
 }

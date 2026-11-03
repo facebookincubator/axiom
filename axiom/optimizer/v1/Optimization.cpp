@@ -1322,14 +1322,7 @@ RelationOpPtr repartitionForWrite(const RelationOpPtr& plan, PlanState& state) {
 
   const auto* write = state.dt->write;
 
-  // TODO Introduce layout-for-write or primary layout to remove the assumption
-  // that first layout is the right one.
-  VELOX_CHECK_EQ(
-      1,
-      write->table().layouts().size(),
-      "Writes to tables with multiple-layouts are not supported yet");
-
-  const auto* layout = write->table().layouts().at(0);
+  const auto* layout = write->table().primaryLayout();
   const auto& partitionColumns = layout->partitionColumns();
   if (partitionColumns.empty()) {
     // Unpartitioned write.

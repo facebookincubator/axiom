@@ -2514,7 +2514,7 @@ velox::core::PlanNodePtr Emitter::emitExchange(const Exchange& exchange) {
 
 Emitter::WriteConnector Emitter::writeConnector(
     const connector::Table& table) const {
-  const auto& connectorId = table.layouts().front()->connector()->connectorId();
+  const auto& connectorId = table.connectorId();
   const auto& context = session_.context();
   VELOX_CHECK_NOT_NULL(context, "Optimizer session requires a context");
   return {

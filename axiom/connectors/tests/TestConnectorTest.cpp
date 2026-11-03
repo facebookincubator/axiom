@@ -186,7 +186,7 @@ TEST_F(TestConnectorTest, columnHandle) {
   connector_->addTable("table", schema);
 
   auto table = metadata_->findTable({kDefaultSchema, "table"});
-  auto& layout = *table->layouts()[0];
+  auto& layout = *table->primaryLayout();
 
   auto columnHandle = layout.createColumnHandle(/*session=*/nullptr, "a");
   EXPECT_NE(columnHandle, nullptr);
@@ -208,7 +208,7 @@ CO_TEST_F(TestConnectorTest, splitManager) {
     connector_->appendData("test_table", vector);
   }
 
-  auto& layout = *table->layouts()[0];
+  auto& layout = *table->primaryLayout();
 
   auto splitManager = metadata_->splitManager();
   EXPECT_NE(splitManager, nullptr);
@@ -320,7 +320,7 @@ TEST_F(TestConnectorTest, dataSink) {
 TEST_F(TestConnectorTest, dataSource) {
   auto schema = ROW({"a", "b"}, {INTEGER(), VARCHAR()});
   auto table = connector_->addTable("table", schema);
-  auto& layout = *table->layouts()[0];
+  auto& layout = *table->primaryLayout();
 
   std::vector<velox::connector::ColumnHandlePtr> columns;
   columns.push_back(layout.createColumnHandle(/*session=*/nullptr, "a"));
@@ -411,7 +411,7 @@ TEST_F(TestConnectorTest, tableLayout) {
   auto schema = ROW({"a", "b"}, {INTEGER(), VARCHAR()});
   auto table = connector_->addTable("table", schema);
 
-  auto& layout = *table->layouts()[0];
+  auto& layout = *table->primaryLayout();
   EXPECT_EQ(layout.label(), "table");
 
   const auto& columnMap = table->columnMap();
@@ -715,7 +715,7 @@ CO_TEST_F(TestConnectorTest, bucketedTable) {
     EXPECT_EQ(expected[firstKey], table->dataBucketIds()[i]);
   }
 
-  auto tableHandle = makeScanHandle(*table->layouts()[0], {"key"});
+  auto tableHandle = makeScanHandle(*table->primaryLayout(), {"key"});
   auto* splitManager = metadata_->splitManager();
   auto session = makeSession();
   exec::SimpleExpressionEvaluator evaluator{nullptr, nullptr};
@@ -785,7 +785,7 @@ CO_TEST_F(TestConnectorTest, bucketedTableNumBucketsExceedsNumRows) {
     EXPECT_GT(vector->size(), 0);
   }
 
-  auto tableHandle = makeScanHandle(*table->layouts()[0], {"key"});
+  auto tableHandle = makeScanHandle(*table->primaryLayout(), {"key"});
   exec::SimpleExpressionEvaluator evaluator{nullptr, nullptr};
   auto partitions = co_await metadata_->splitManager()->co_listPartitions(
       makeSession(), tableHandle, evaluator);
@@ -802,7 +802,7 @@ TEST_F(TestConnectorTest, bucketedTableMultiColumnKeys) {
       velox::ROW({}),
       TestBucketSpec{{"k1", "k2"}, kNumBuckets});
 
-  auto& layout = *table->layouts()[0];
+  auto& layout = *table->primaryLayout();
   EXPECT_NE(layout.partitionType(), nullptr);
   EXPECT_EQ(layout.partitionColumns().size(), 2);
 
