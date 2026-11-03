@@ -101,6 +101,19 @@ Optimization::Optimization(
   root_->initializePlans();
 }
 
+const JoinEdgeVector& Optimization::joinedBy(PlanObjectCP table) const {
+  static const JoinEdgeVector kNoJoins;
+  auto it = joinedBy_.find(table);
+  return it == joinedBy_.end() ? kNoJoins : it->second;
+}
+
+void Optimization::addJoinedBy(PlanObjectCP table, JoinEdgeP join) {
+  auto& joins = joinedBy_[table];
+  if (std::find(joins.begin(), joins.end(), join) == joins.end()) {
+    joins.push_back(join);
+  }
+}
+
 void Optimization::estimateLeafSelectivity(BaseTable& baseTable) {
   if (!estimatedBaseTables_.insert(baseTable.id()).second) {
     return;
@@ -991,7 +1004,7 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
     state.dt->startTables.forEach([&](PlanObjectCP object) {
       if (!state.isPlaced(object) && state.mayConsiderNext(object)) {
         candidates.emplace_back(
-            nullptr, object, object->as<TableObject>()->cardinality());
+            nullptr, object, TableObject::cardinalityOf(object));
       }
     });
 
@@ -1189,7 +1202,7 @@ RelationOpPtr repartitionForIndex(
 PlanObjectSet availableColumns(PlanObjectCP object) {
   PlanObjectSet set;
   VELOX_CHECK(object->isTable(), "Joinable must be a table or derived table");
-  set.unionObjects(object->as<TableObject>()->columns);
+  set.unionObjects(TableObject::columnsOf(object));
   return set;
 }
 
@@ -3394,7 +3407,7 @@ std::optional<float> startingScore(PlanObjectCP table) {
 
   if (table->is(PlanType::kTableNode) ||
       table->is(PlanType::kValuesTableNode)) {
-    return table->as<TableObject>()->cardinality();
+    return TableObject::cardinalityOf(table);
   }
 
   return 10;

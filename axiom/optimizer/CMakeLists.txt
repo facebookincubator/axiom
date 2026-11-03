@@ -73,8 +73,9 @@ add_library(
   UnionConstraints.cpp
   VeloxHistory.cpp
   WriteStatsBuilder.cpp
-  v1/History.cpp
   v1/ExplainIo.cpp
+  v1/History.cpp
+  v1/QueryGraph.cpp
 )
 
 target_link_libraries(
