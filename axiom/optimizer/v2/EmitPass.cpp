@@ -2858,11 +2858,11 @@ void validateFixedPointLeaves(const ExecutableFragment& fragment) {
       ++numFixedPoints;
     }
   }
-  if (numFixedPoints > 1) {
-    VELOX_NYI(
-        "Multiple FixedPoint nodes in one execution fragment are not yet supported: {}",
-        numFixedPoints);
-  }
+  VELOX_NYI_CHECK_LE(
+      numFixedPoints,
+      1,
+      "Multiple FixedPoint nodes in one execution fragment are not yet supported: {}",
+      numFixedPoints);
 }
 
 } // namespace

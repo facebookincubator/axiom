@@ -40,15 +40,14 @@ void checkPropertyReads(const lp::Expr& expr) {
       expr.inputAt(0)->isInputReference()) {
     return;
   }
-  if (expr.isInputReference()) {
-    VELOX_NYI(
-        "Graph pattern name outside a property reference is not supported "
-        "yet: {}",
-        expr.as<lp::InputReferenceExpr>()->name());
-  }
-  if (expr.isSubquery()) {
-    VELOX_NYI("Subquery in a graph pattern predicate is not supported yet");
-  }
+  VELOX_NYI_CHECK(
+      !expr.isInputReference(),
+      "Graph pattern name outside a property reference is not supported "
+      "yet: {}",
+      expr.as<lp::InputReferenceExpr>()->name());
+  VELOX_NYI_CHECK(
+      !expr.isSubquery(),
+      "Subquery in a graph pattern predicate is not supported yet");
   if (expr.isLambda()) {
     checkPropertyReads(*expr.as<lp::LambdaExpr>()->body());
     return;
@@ -410,12 +409,11 @@ void Translator::GraphMatchLowering::bindAdjacent(
     return;
   }
   const auto [it, inserted] = elementByName_.emplace(name, index);
-  if (!inserted && it->second != index) {
-    VELOX_NYI(
-        "Adjacent graph vertex patterns whose names bind different vertices "
-        "are not supported yet: {}",
-        name);
-  }
+  VELOX_NYI_CHECK(
+      inserted || it->second == index,
+      "Adjacent graph vertex patterns whose names bind different vertices "
+      "are not supported yet: {}",
+      name);
   if (element.name.empty()) {
     element.name = name;
   }
@@ -427,17 +425,15 @@ void Translator::GraphMatchLowering::addPath(
   Path& pathInfo = paths_.emplace_back();
   pathInfo.limit = selectorLimit(path.selector);
   const bool repeats = hasWalkRepetition(path.terms);
-  if (repeats && path.selector.kind != lp::GraphPathSelector::Kind::kAny &&
-      path.selector.kind != lp::GraphPathSelector::Kind::kAll) {
-    VELOX_NYI(
-        "Shortest-path selector on a path with repetition is not supported "
-        "yet");
-  }
-  if (repeats && path.mode != lp::GraphPathMode::kWalk) {
-    VELOX_NYI(
-        "Graph path mode on a path with repetition is not supported yet: {}",
-        lp::GraphPathModeName::toName(path.mode));
-  }
+  VELOX_NYI_CHECK(
+      !repeats || path.selector.kind == lp::GraphPathSelector::Kind::kAny ||
+          path.selector.kind == lp::GraphPathSelector::Kind::kAll,
+      "Shortest-path selector on a path with repetition is not supported "
+      "yet");
+  VELOX_NYI_CHECK(
+      !repeats || path.mode == lp::GraphPathMode::kWalk,
+      "Graph path mode on a path with repetition is not supported yet: {}",
+      lp::GraphPathModeName::toName(path.mode));
   pathInfo.mode = path.mode;
 
   TermCursor cursor{.path = pathIndex, .predicates = &pathInfo.predicates};
@@ -445,11 +441,14 @@ void Translator::GraphMatchLowering::addPath(
     cursor.lengthNames.push_back(path.name);
   }
   addTerms(path.terms, cursor);
-  if (cursor.pendingEdge.has_value() || cursor.pendingRepetition.has_value()) {
-    VELOX_NYI(
-        "Graph edge pattern without a vertex pattern after it is not "
-        "supported yet");
-  }
+  VELOX_NYI_CHECK(
+      !cursor.pendingEdge.has_value(),
+      "Graph edge pattern without a vertex pattern after it is not "
+      "supported yet");
+  VELOX_NYI_CHECK(
+      !cursor.pendingRepetition.has_value(),
+      "Graph edge pattern without a vertex pattern after it is not "
+      "supported yet");
   pathInfo.first = cursor.first.value();
   pathInfo.last = cursor.vertex.value();
   if (!path.name.empty()) {
@@ -462,9 +461,9 @@ void Translator::GraphMatchLowering::addTerms(
     TermCursor& cursor) {
   for (const auto& term : terms) {
     const auto* repetition = walkRepetitionOf(*term);
-    if (repetition != nullptr && !repetition->max.has_value()) {
-      VELOX_NYI("Graph repetition without an upper bound is not supported yet");
-    }
+    VELOX_NYI_CHECK(
+        repetition == nullptr || repetition->max.has_value(),
+        "Graph repetition without an upper bound is not supported yet");
     if (term->predicate() != nullptr) {
       checkPropertyReads(*term->predicate());
       // A repeated pattern's predicate applies to each hop, and an optional
@@ -520,23 +519,21 @@ void Translator::GraphMatchLowering::addEdge(
     TermCursor& cursor) {
   using Direction = lp::GraphEdgePattern::Direction;
 
-  if (!cursor.atVertex()) {
-    VELOX_NYI(
-        "Graph edge pattern without a vertex pattern before it is not "
-        "supported yet");
-  }
+  VELOX_NYI_CHECK(
+      cursor.atVertex(),
+      "Graph edge pattern without a vertex pattern before it is not "
+      "supported yet");
 
   const bool undirected = edge.direction() == Direction::kAnyDirection;
   const bool reused = elementByName_.contains(edge.name());
   const auto index = bind(edge);
   elements_[index].paths.insert(cursor.path);
 
-  if (reused && (undirected || edgeAt(index).undirected)) {
-    VELOX_NYI(
-        "Undirected graph edge pattern with a reused name is not supported "
-        "yet: {}",
-        edge.name());
-  }
+  VELOX_NYI_CHECK(
+      !reused || (!undirected && !edgeAt(index).undirected),
+      "Undirected graph edge pattern with a reused name is not supported "
+      "yet: {}",
+      edge.name());
 
   edgeAt(index).undirected = undirected;
   const bool pointsRight = edge.direction() != Direction::kLeft;
@@ -570,11 +567,10 @@ void Translator::GraphMatchLowering::addSubpath(
     const lp::GraphSubpathPattern& subpath,
     const lp::GraphRepetition* repetition,
     TermCursor& cursor) {
-  if (subpath.mode() != lp::GraphPathMode::kWalk) {
-    VELOX_NYI(
-        "Graph subpath mode is not supported yet: {}",
-        lp::GraphPathModeName::toName(subpath.mode()));
-  }
+  VELOX_NYI_CHECK(
+      subpath.mode() == lp::GraphPathMode::kWalk,
+      "Graph subpath mode is not supported yet: {}",
+      lp::GraphPathModeName::toName(subpath.mode()));
 
   // An optional subpath walks zero or one hop.
   if (subpath.optional()) {
@@ -606,25 +602,26 @@ void Translator::GraphMatchLowering::addRepeatedSubpath(
     TermCursor& cursor) {
   const auto& terms = subpath.terms();
   const std::string_view kind = subpath.optional() ? "Optional" : "Repeated";
-  if (!cursor.atVertex()) {
-    VELOX_NYI(
-        "{} graph subpath pattern without a vertex pattern before it is not "
-        "supported yet",
-        kind);
-  }
-  if (!terms.front()->is(lp::GraphPatternTerm::Kind::kVertex) ||
-      !terms.back()->is(lp::GraphPatternTerm::Kind::kVertex)) {
-    VELOX_NYI(
-        "{} graph subpath pattern that starts or ends with an edge pattern is "
-        "not supported yet",
-        kind);
-  }
-  if (hasWalkRepetition(terms)) {
-    VELOX_NYI(
-        "{} graph subpath pattern that holds a repetition or an optional "
-        "subpath is not supported yet",
-        kind);
-  }
+  VELOX_NYI_CHECK(
+      cursor.atVertex(),
+      "{} graph subpath pattern without a vertex pattern before it is not "
+      "supported yet",
+      kind);
+  VELOX_NYI_CHECK(
+      terms.front()->is(lp::GraphPatternTerm::Kind::kVertex),
+      "{} graph subpath pattern that starts or ends with an edge pattern is "
+      "not supported yet",
+      kind);
+  VELOX_NYI_CHECK(
+      terms.back()->is(lp::GraphPatternTerm::Kind::kVertex),
+      "{} graph subpath pattern that starts or ends with an edge pattern is "
+      "not supported yet",
+      kind);
+  VELOX_NYI_CHECK(
+      !hasWalkRepetition(terms),
+      "{} graph subpath pattern that holds a repetition or an optional "
+      "subpath is not supported yet",
+      kind);
   // The patterns inside appear once in the match, so they bind new elements.
   Repetition pending{
       .from = *cursor.vertex,
@@ -856,13 +853,17 @@ void appendIdentitySchema(
     const auto type = columnType(*first.table, firstColumns[i]);
     for (const auto& leg : element.legs) {
       const auto& columns = leg.keyColumns(end);
-      if (columns.size() != firstColumns.size() ||
-          !columnType(*leg.table, columns[i])->equivalent(*type)) {
-        VELOX_NYI(
-            "Graph pattern whose identity is compared and that matches tables "
-            "with keys of different types is not supported yet: {}",
-            element.name);
-      }
+      VELOX_NYI_CHECK_EQ(
+          columns.size(),
+          firstColumns.size(),
+          "Graph pattern whose identity is compared and that matches tables "
+          "with keys of different types is not supported yet: {}",
+          element.name);
+      VELOX_NYI_CHECK(
+          columnType(*leg.table, columns[i])->equivalent(*type),
+          "Graph pattern whose identity is compared and that matches tables "
+          "with keys of different types is not supported yet: {}",
+          element.name);
     }
     names.push_back(ColumnNames::key(end, i));
     types.push_back(type);
@@ -1878,12 +1879,10 @@ Translator::GraphMatchLowering::walkKeys(const Repetition& repetition) const {
     }
     VELOX_CHECK_EQ(other->size(), keys.start.size());
     for (size_t i = 0; i < keys.start.size(); ++i) {
-      if (!(*other)[i]->value().type->equivalent(
-              *keys.start[i]->value().type)) {
-        VELOX_NYI(
-            "Repeated graph pattern whose vertices have keys of different "
-            "types is not supported yet");
-      }
+      VELOX_NYI_CHECK(
+          (*other)[i]->value().type->equivalent(*keys.start[i]->value().type),
+          "Repeated graph pattern whose vertices have keys of different "
+          "types is not supported yet");
     }
   }
   return keys;
@@ -2007,11 +2006,10 @@ Scope Translator::GraphMatchLowering::outputs(const LpNameSet& required) {
     const auto& output = *outputs[i];
     if (output.is(lp::GraphMatchOutput::Kind::kPathLength)) {
       const auto length = pathLengths_.find(output.pattern());
-      if (length == pathLengths_.end()) {
-        VELOX_NYI(
-            "Path length of an optional subpath is not supported yet: {}",
-            output.pattern());
-      }
+      VELOX_NYI_CHECK(
+          length != pathLengths_.end(),
+          "Path length of an optional subpath is not supported yet: {}",
+          output.pattern());
       scope[names[i]] = pathLength(length->second);
       continue;
     }
