@@ -17,7 +17,8 @@
 #pragma once
 
 #include "axiom/logical_plan/LogicalPlanNode.h"
-#include "axiom/optimizer/ToVelox.h"
+#include "axiom/optimizer/FunctionRegistry.h"
+#include "axiom/optimizer/PlanAndStats.h"
 #include "velox/common/memory/Memory.h"
 
 namespace axiom::collagen {

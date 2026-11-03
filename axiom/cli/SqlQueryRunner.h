@@ -29,15 +29,20 @@
 #include "axiom/common/ConfigRegistry.h"
 #include "axiom/common/SessionConfig.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
-#include "axiom/optimizer/DerivedTable.h"
+#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/OptimizerSession.h"
-#include "axiom/optimizer/ToVelox.h"
+#include "axiom/optimizer/PlanAndStats.h"
 #include "axiom/runner/LocalRunner.h"
 #include "axiom/runner/ProgressReporter.h"
 #include "axiom/runner/QueryProgress.h"
 #include "axiom/sql/presto/SqlStatement.h"
 #include "velox/common/file/TokenProvider.h"
 #include "velox/connectors/ConnectorRegistry.h"
+
+namespace facebook::axiom::optimizer {
+struct DerivedTable;
+class RelationOp;
+} // namespace facebook::axiom::optimizer
 
 namespace axiom::sql {
 

@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include "axiom/optimizer/Cost.h"
 #include "axiom/optimizer/ToVelox.h"
+#include "axiom/optimizer/v1/History.h"
 #include "velox/exec/TaskStats.h"
 
 namespace facebook::axiom::optimizer {
