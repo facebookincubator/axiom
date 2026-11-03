@@ -17,10 +17,10 @@
 #pragma once
 
 #include "axiom/optimizer/Cost.h"
-#include "axiom/optimizer/RelationOp.h"
+#include "axiom/optimizer/v1/RelationOp.h"
 #include "velox/connectors/Connector.h"
 
-namespace facebook::axiom::optimizer {
+namespace facebook::axiom::optimizer::v1 {
 
 /// Interface to historical query cost and cardinality
 /// information. There is one long lived instance per
@@ -123,4 +123,4 @@ std::pair<float, float> sampleJoin(
     SchemaTableCP right,
     const ExprVector& rightKeys);
 
-} // namespace facebook::axiom::optimizer
+} // namespace facebook::axiom::optimizer::v1

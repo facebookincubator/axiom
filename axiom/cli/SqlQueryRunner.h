@@ -39,10 +39,10 @@
 #include "velox/common/file/TokenProvider.h"
 #include "velox/connectors/ConnectorRegistry.h"
 
-namespace facebook::axiom::optimizer {
+namespace facebook::axiom::optimizer::v1 {
 struct DerivedTable;
 class RelationOp;
-} // namespace facebook::axiom::optimizer
+} // namespace facebook::axiom::optimizer::v1
 
 namespace axiom::sql {
 
@@ -673,11 +673,12 @@ class SqlQueryRunner {
       const std::shared_ptr<facebook::velox::core::QueryCtx>& queryCtx,
       const RunOptions& options,
       const facebook::axiom::connector::ConnectorContextPtr& context,
+      const std::function<
+          bool(const facebook::axiom::optimizer::v1::DerivedTable&)>&
+          checkDerivedTable = nullptr,
       const std::function<bool(
-          const facebook::axiom::optimizer::DerivedTable&)>& checkDerivedTable =
+          const facebook::axiom::optimizer::v1::RelationOp&)>& checkBestPlan =
           nullptr,
-      const std::function<bool(const facebook::axiom::optimizer::RelationOp&)>&
-          checkBestPlan = nullptr,
       std::shared_ptr<facebook::axiom::connector::SchemaResolver>
           schemaResolver = nullptr,
       bool explain = false);

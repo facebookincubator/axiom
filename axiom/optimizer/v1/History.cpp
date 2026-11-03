@@ -19,7 +19,7 @@
 #include "axiom/optimizer/JsonUtil.h"
 #include "axiom/optimizer/PlanUtils.h"
 
-namespace facebook::axiom::optimizer {
+namespace facebook::axiom::optimizer::v1 {
 
 void History::saveToFile(const std::string& path) {
   auto json = serialize();
@@ -101,4 +101,4 @@ float costWithChildren(ExprCP expr, const PlanObjectSet& notCounting) {
   }
 }
 
-} // namespace facebook::axiom::optimizer
+} // namespace facebook::axiom::optimizer::v1

@@ -21,7 +21,7 @@
 
 /// Query graph types that only the v1 optimizer uses. The shared ones are in
 /// axiom/optimizer/QueryGraph.h.
-namespace facebook::axiom::optimizer {
+namespace facebook::axiom::optimizer::v1 {
 
 struct DerivedTable;
 class JoinEdge;
@@ -836,4 +836,4 @@ class WritePlan : public PlanObject {
 
 using WritePlanCP = const WritePlan*;
 
-} // namespace facebook::axiom::optimizer
+} // namespace facebook::axiom::optimizer::v1
