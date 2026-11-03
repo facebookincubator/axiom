@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <functional>
+
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/logical_plan/PlanBuilder.h"
@@ -939,7 +941,7 @@ TEST_P(WriteTest, ctasRepeatedValue) {
       "CREATE TABLE test(a, b) AS SELECT n_nationkey, n_nationkey FROM nation",
       25);
 
-  auto nationKeys = makeFlatVector<int64_t>(25, folly::identity);
+  auto nationKeys = makeFlatVector<int64_t>(25, std::identity{});
   checkTableData("test", {makeRowVector({"a", "b"}, {nationKeys, nationKeys})});
 }
 
