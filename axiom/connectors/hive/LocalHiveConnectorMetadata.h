@@ -99,7 +99,7 @@ class LocalHiveSplitManager : public ConnectorSplitManager {
 // unpartitioned). Loaded from persisted .stats files during loadTable.
 struct PartitionStats {
   // Partition key=value pairs. Empty for unpartitioned tables.
-  folly::F14FastMap<std::string, std::string> partitionKeys;
+  folly::F14FastMap<std::string, std::optional<std::string>> partitionKeys;
 
   // Total number of rows in this partition.
   uint64_t numRows{0};

@@ -23,6 +23,7 @@
 #include <folly/json.h>
 
 #include "velox/common/base/Fs.h"
+#include "velox/dwio/catalog/fbhive/FileUtils.h"
 
 namespace facebook::axiom::connector::hive {
 
@@ -239,6 +240,16 @@ void PersistedStats::write(const std::string& directory, PersistedStats stats) {
   VELOX_CHECK(!outputFile.fail(), "Failed to write stats file: {}", file);
 }
 
+// static
+std::optional<std::string> FileInfo::parsePartitionValue(
+    const std::string& value) {
+  using velox::dwio::catalog::fbhive::FileUtils;
+  if (value == FileUtils::kDefaultPartitionValue) {
+    return std::nullopt;
+  }
+  return FileUtils::unescapePathName(value);
+}
+
 void FileInfo::listFiles(
     std::string_view path,
     const std::function<int32_t(std::string_view)>& parseBucketNumber,
@@ -271,7 +282,7 @@ void FileInfo::listFiles(
       std::vector<std::string> parts;
       folly::split('=', dir, parts);
       if (parts.size() == 2) {
-        file->partitionKeys[parts.at(0)] = parts.at(1);
+        file->partitionKeys[parts.at(0)] = parsePartitionValue(parts.at(1));
       }
     }
     result.push_back(std::move(file));

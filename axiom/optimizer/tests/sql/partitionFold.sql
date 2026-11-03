@@ -19,6 +19,12 @@ INSERT INTO t VALUES
 CREATE TABLE u (d VARCHAR)
 ----
 INSERT INTO u VALUES ('2025-01-01'), ('2025-01-02'), ('2025-01-03')
+----
+-- Partitions whose directory names Hive encodes: a NULL value and a value with
+-- characters a path escapes.
+CREATE TABLE v (a BIGINT, ds VARCHAR) WITH (partitioned_by = ARRAY['ds'])
+----
+INSERT INTO v VALUES (1, NULL), (2, 'a/b=c'), (3, '2025-01-01')
 -- end_setup
 
 -- An aggregate reading only a partition column is answered from the listing.
@@ -129,3 +135,13 @@ SELECT a FROM t WHERE ds = (SELECT max(ds) FROM t HAVING max(ds) > '2030-01-01')
 ----
 -- A correlated predicate reads a column the listing does not have.
 SELECT d, (SELECT max(ds) FROM t WHERE t.ds > u.d) AS m FROM u
+----
+-- Partition values read back as written: NULL, and the value with characters
+-- a path escapes.
+SELECT a, ds FROM v
+----
+SELECT DISTINCT ds FROM v
+----
+SELECT a FROM v WHERE ds IS NULL
+----
+SELECT ds, count(*) FROM v GROUP BY ds

@@ -37,7 +37,8 @@ struct FileInfo {
   /// Absolute path to the data file.
   std::string path;
 
-  /// Partition key=value pairs parsed from parent directory names.
+  /// Partition key=value pairs parsed from parent directory names (see
+  /// parsePartitionValue()).
   folly::F14FastMap<std::string, std::optional<std::string>> partitionKeys;
 
   /// Bucket number extracted from the file name, if bucketed.
@@ -48,6 +49,11 @@ struct FileInfo {
 
   /// Per-column stats from file header metadata, keyed by column name.
   folly::F14FastMap<std::string, ColumnStatistics> columnStats;
+
+  /// Returns the partition value a directory name holds after '=': NULL for
+  /// the Hive default partition, else the value, unescaped.
+  static std::optional<std::string> parsePartitionValue(
+      const std::string& value);
 
   /// Recursively lists files under 'path', populating FileInfo entries with
   /// partition keys parsed from directory names (key=value format) and optional
