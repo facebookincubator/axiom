@@ -44,6 +44,17 @@ velox::RowTypePtr TableDefinition::rowType() const {
   return velox::ROW(std::move(names), std::move(types));
 }
 
+folly::F14FastMap<std::string, std::string> TableDefinition::columnComments()
+    const {
+  folly::F14FastMap<std::string, std::string> comments;
+  for (const auto& column : columns) {
+    if (column.comment.has_value()) {
+      comments.emplace(column.name, column.comment.value());
+    }
+  }
+  return comments;
+}
+
 void TableDefinitionSupport::check(const ColumnDefinition& column) const {
   if (!column.nullable) {
     VELOX_USER_CHECK(

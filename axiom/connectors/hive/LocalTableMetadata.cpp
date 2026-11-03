@@ -281,10 +281,14 @@ void FileInfo::listFiles(
 // static
 folly::dynamic SchemaFile::columnToJson(
     std::string_view name,
-    const velox::TypePtr& type) {
+    const velox::TypePtr& type,
+    const std::optional<std::string>& comment) {
   folly::dynamic column = folly::dynamic::object;
   column["name"] = std::string(name);
   column["type"] = type->serialize();
+  if (comment.has_value()) {
+    column["comment"] = comment.value();
+  }
   return column;
 }
 
@@ -314,25 +318,28 @@ void SchemaFile::write(
 }
 
 // static
+std::vector<ColumnDefinition> SchemaFile::parseColumns(
+    const folly::dynamic& schema) {
+  std::vector<ColumnDefinition> columns;
+  for (const auto* group :
+       {&schema["dataColumns"], &schema["partitionColumns"]}) {
+    for (const auto& column : *group) {
+      columns.push_back({
+          .name = column["name"].asString(),
+          .type =
+              velox::ISerializable::deserialize<velox::Type>(column["type"]),
+          .comment = column.count("comment")
+              ? std::optional<std::string>(column["comment"].asString())
+              : std::nullopt,
+      });
+    }
+  }
+  return columns;
+}
+
+// static
 velox::RowTypePtr SchemaFile::parseRowType(const folly::dynamic& schema) {
-  std::vector<std::string> names;
-  std::vector<velox::TypePtr> types;
-
-  auto parseColumn = [&](const auto& column) {
-    names.push_back(column["name"].asString());
-    types.push_back(
-        velox::ISerializable::deserialize<velox::Type>(column["type"]));
-  };
-
-  for (const auto& column : schema["dataColumns"]) {
-    parseColumn(column);
-  }
-
-  for (const auto& column : schema["partitionColumns"]) {
-    parseColumn(column);
-  }
-
-  return velox::ROW(std::move(names), std::move(types));
+  return TableDefinition{.columns = parseColumns(schema)}.rowType();
 }
 
 } // namespace facebook::axiom::connector::hive

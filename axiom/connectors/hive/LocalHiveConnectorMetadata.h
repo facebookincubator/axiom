@@ -213,7 +213,10 @@ class LocalTable : public HiveTable {
       velox::RowTypePtr type,
       bool bucketed,
       folly::F14FastMap<std::string, velox::Variant> options,
-      std::vector<std::string> partitionColumnNames = {});
+      std::vector<std::string> partitionColumnNames,
+      folly::F14FastMap<std::string, std::string> columnComments,
+      std::optional<std::string> comment,
+      std::vector<std::string> primaryKey);
 
   const std::vector<const TableLayout*>& layouts() const override {
     return exportedLayouts_;
@@ -389,7 +392,11 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   void reloadTableFromPath(const SchemaTableName& tableName);
 
   std::optional<TableDefinitionSupport> supportsCreateTable() const override {
-    return TableDefinitionSupport{};
+    return TableDefinitionSupport{
+        .columnComments = true,
+        .tableComment = true,
+        .primaryKey = true,
+    };
   }
 
  protected:

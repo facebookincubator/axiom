@@ -825,6 +825,44 @@ TEST_F(LocalHiveConnectorMetadataTest, createEmptyTable) {
       dwio::common::FileFormat::DWRF);
 }
 
+// Table and column comments, including the comment of a column added later,
+// and the primary key persist in the table's '.schema'.
+TEST_F(LocalHiveConnectorMetadataTest, commentsAndPrimaryKey) {
+  auto session = makeSession();
+  const auto tableName = qualifiedName("commented");
+  folly::coro::blockingWait(metadata_->co_createEmptyTable(
+      session,
+      tableName,
+      TableDefinition{
+          .columns =
+              {{.name = "id", .type = BIGINT(), .comment = "the key"},
+               {.name = "ds", .type = VARCHAR()}},
+          .comment = "a table",
+          .properties = {{"partitioned_by", Variant::array({Variant("ds")})}},
+          .primaryKey = {"id"},
+      },
+      /*ifNotExists=*/false));
+  folly::coro::blockingWait(metadata_->co_addColumn(
+      session,
+      tableName,
+      {.name = "note", .type = VARCHAR(), .comment = "free-form remarks"},
+      /*ifTableExists=*/false,
+      /*ifNotExists=*/false,
+      /*explain=*/false));
+
+  metadata_->reloadTableFromPath(tableName);
+  auto table = metadata_->findTable(tableName);
+  ASSERT_NE(table, nullptr);
+  VELOX_EXPECT_EQ_TYPES(
+      table->type(),
+      ROW({"id", "note", "ds"}, {BIGINT(), VARCHAR(), VARCHAR()}));
+  EXPECT_EQ("a table", table->comment());
+  EXPECT_THAT(table->primaryKey(), testing::ElementsAre("id"));
+  EXPECT_EQ("the key", table->findColumn("id")->comment());
+  EXPECT_EQ("free-form remarks", table->findColumn("note")->comment());
+  EXPECT_EQ(std::nullopt, table->findColumn("ds")->comment());
+}
+
 // A table created empty and then inserted into holds and reports the inserted
 // rows, partitioned or not.
 TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {

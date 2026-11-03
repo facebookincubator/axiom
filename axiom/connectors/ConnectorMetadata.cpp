@@ -232,16 +232,24 @@ folly::F14FastMap<std::string, const Column*> toMap(
 Table::Table(
     SchemaTableName name,
     std::vector<std::unique_ptr<const Column>> columns,
-    folly::F14FastMap<std::string, velox::Variant> options)
+    folly::F14FastMap<std::string, velox::Variant> options,
+    std::optional<std::string> comment,
+    std::vector<std::string> primaryKey)
     : name_(std::move(name)),
       type_(toSchema(columns)),
       columns_(std::move(columns)),
       columnPtrs_(toPtrs(columns_)),
       columnMap_(toMap(columns_)),
-      options_(std::move(options)) {
+      options_(std::move(options)),
+      comment_(std::move(comment)),
+      primaryKey_(std::move(primaryKey)) {
   VELOX_CHECK(!name_.schema.empty());
   VELOX_CHECK(!name_.table.empty());
   VELOX_CHECK_NOT_NULL(type_);
+  for (const auto& column : primaryKey_) {
+    VELOX_CHECK_NOT_NULL(
+        findColumn(column), "Primary key column not found: {}", column);
+  }
 }
 
 // static

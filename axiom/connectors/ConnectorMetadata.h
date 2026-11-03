@@ -913,10 +913,15 @@ class Table : public std::enable_shared_from_this<Table> {
  public:
   /// @param columns List of all columns, including hidden. Column names must be
   /// non-empty and unique.
+  /// @param comment The table's description. Nullopt when it has none.
+  /// @param primaryKey The primary key's columns, each one of 'columns'. Empty
+  /// when the table has no primary key.
   Table(
       SchemaTableName name,
       std::vector<std::unique_ptr<const Column>> columns,
-      folly::F14FastMap<std::string, velox::Variant> options = {});
+      folly::F14FastMap<std::string, velox::Variant> options = {},
+      std::optional<std::string> comment = std::nullopt,
+      std::vector<std::string> primaryKey = {});
 
   /// Given table schema (a list of column names and types), creates a list
   /// 'Column' objects. Useful for connectors that do not use custom 'Column'
@@ -970,6 +975,16 @@ class Table : public std::enable_shared_from_this<Table> {
     return options_;
   }
 
+  /// The table's description. Nullopt when it has none.
+  const std::optional<std::string>& comment() const {
+    return comment_;
+  }
+
+  /// The primary key's columns. Empty when the table has no primary key.
+  const std::vector<std::string>& primaryKey() const {
+    return primaryKey_;
+  }
+
   /// Returns this table's `includeInExplainIo` columns ordered finest- to
   /// coarsest-grained (e.g. an hourly ts before a daily ds). A best-effort
   /// estimate, not a guarantee, so a wrong order costs tightness, never
@@ -1005,6 +1020,8 @@ class Table : public std::enable_shared_from_this<Table> {
   const std::vector<const Column*> columnPtrs_;
   const folly::F14FastMap<std::string, const Column*> columnMap_;
   const folly::F14FastMap<std::string, velox::Variant> options_;
+  const std::optional<std::string> comment_;
+  const std::vector<std::string> primaryKey_;
 };
 
 using TablePtr = std::shared_ptr<const Table>;
