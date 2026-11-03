@@ -19,12 +19,12 @@
 #include <gtest/gtest.h>
 #include <functional>
 #include <type_traits>
+#include "axiom/optimizer/ExprEmitter.h"
+#include "axiom/optimizer/Node.h"
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/StatsFilterSelectivityEstimator.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
-#include "axiom/optimizer/v2/ExprEmitter.h"
-#include "axiom/optimizer/v2/Node.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/Filter.h"
@@ -111,26 +111,24 @@ class FiltersTest : public test::QueryTestBase {
   // Parses SQL, translates it to the v2 tree IR and invokes 'callback'.
   void verifyTranslation(
       std::string_view sql,
-      const std::function<void(v2::NodeCP)>& callback,
+      const std::function<void(NodeCP)>& callback,
       const std::string& connectorId = kTestConnectorId) {
     auto logicalPlan = parseSelect(sql, connectorId);
-    verifyOptimization(*logicalPlan, v2::Optimizer::Pass::kTranslate, callback);
+    verifyOptimization(*logicalPlan, Optimizer::Pass::kTranslate, callback);
   }
 
-  static bool collectFilters(
-      v2::NodeCP node,
-      std::string_view tableName,
-      ExprVector& filters) {
-    if (node->is(v2::NodeType::kScan)) {
-      const auto* table = node->as<v2::Scan>()->baseTable();
+  static bool
+  collectFilters(NodeCP node, std::string_view tableName, ExprVector& filters) {
+    if (node->is(NodeType::kScan)) {
+      const auto* table = node->as<Scan>()->baseTable();
       return table->schemaTable &&
           table->schemaTable->name().table == tableName;
     }
 
-    for (v2::NodeCP input : node->inputs()) {
+    for (NodeCP input : node->inputs()) {
       if (collectFilters(input, tableName, filters)) {
-        if (node->is(v2::NodeType::kFilter)) {
-          const auto& predicates = node->as<v2::Filter>()->predicates();
+        if (node->is(NodeType::kFilter)) {
+          const auto& predicates = node->as<Filter>()->predicates();
           filters.insert(filters.end(), predicates.begin(), predicates.end());
         }
         return true;
@@ -139,7 +137,7 @@ class FiltersTest : public test::QueryTestBase {
     return false;
   }
 
-  static ExprVector getAllFilters(v2::NodeCP root, std::string_view tableName) {
+  static ExprVector getAllFilters(NodeCP root, std::string_view tableName) {
     ExprVector filters;
     VELOX_CHECK(
         collectFilters(root, tableName, filters),
@@ -192,7 +190,7 @@ class FiltersTest : public test::QueryTestBase {
       const ExprVector& filters,
       const Selectivity& expectedSelectivity,
       const ConstraintMap& refinedConstraints) {
-    v2::ExprEmitter emitter{&optimizerPool()};
+    ExprEmitter emitter{&optimizerPool()};
     std::vector<velox::core::TypedExprPtr> typedFilters;
     folly::F14FastMap<std::string, connector::TypedColumnStatistics>
         columnStats;
@@ -255,7 +253,7 @@ class FiltersTest : public test::QueryTestBase {
 
     auto logicalPlan = parseSelect(sql, std::string{connectorId});
     verifyOptimization(
-        *logicalPlan, v2::Optimizer::Pass::kTranslate, [&](v2::NodeCP root) {
+        *logicalPlan, Optimizer::Pass::kTranslate, [&](NodeCP root) {
           auto allFilters = getAllFilters(root, tableName);
           ASSERT_FALSE(allFilters.empty());
 
@@ -1125,7 +1123,7 @@ TEST_F(FiltersTest, multiColumnConjuncts) {
 TEST_F(FiltersTest, equalityConstraintPropagation) {
   verifyTranslation(
       "SELECT n_regionkey FROM nation WHERE n_regionkey = n_nationkey",
-      [](v2::NodeCP root) {
+      [](NodeCP root) {
         auto allFilters = getAllFilters(root, "nation");
         ASSERT_EQ(allFilters.size(), 1);
 
@@ -1156,7 +1154,7 @@ TEST_F(FiltersTest, equalityConstraintPropagation) {
 TEST_F(FiltersTest, isNullSelectivity) {
   // n_comment is VARCHAR and nullable.
   verifyTranslation(
-      "SELECT * FROM nation WHERE n_comment IS NULL", [](v2::NodeCP root) {
+      "SELECT * FROM nation WHERE n_comment IS NULL", [](NodeCP root) {
         auto allFilters = getAllFilters(root, "nation");
         ASSERT_FALSE(allFilters.empty());
 
@@ -1284,7 +1282,7 @@ TEST_F(FiltersTest, cardinalityBasedSelectivity) {
     auto sql = fmt::format("SELECT * FROM t WHERE {}", condition);
     verifyTranslation(
         sql,
-        [&](v2::NodeCP root) {
+        [&](NodeCP root) {
           auto allFilters = getAllFilters(root, "t");
           ASSERT_EQ(1, allFilters.size());
 

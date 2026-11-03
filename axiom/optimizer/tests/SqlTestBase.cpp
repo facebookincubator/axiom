@@ -21,10 +21,10 @@
 #include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/functions/prestosql/PrestoFunctions.h"
 #include "axiom/optimizer/FunctionRegistry.h"
+#include "axiom/optimizer/Optimize.h"
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/v1/Optimization.h"
 #include "axiom/optimizer/v1/VeloxHistory.h"
-#include "axiom/optimizer/v2/Optimize.h"
 #include "axiom/runner/LocalRunner.h"
 #include "axiom/sql/presto/PrestoParser.h"
 #include "axiom/sql/presto/SqlStatement.h"
@@ -231,7 +231,7 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunnerV2(
          const std::shared_ptr<OptimizerSession>& optimizerSession,
          const std::shared_ptr<runner::RunnerSession>& /*runnerSession*/,
          const std::shared_ptr<core::QueryCtx>& queryCtx) {
-        return v2::Optimizer(
+        return Optimizer(
                    logicalPlan,
                    schemaResolver,
                    *optimizerSession,

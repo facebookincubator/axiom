@@ -710,7 +710,7 @@ void TestConnectorMetadata::setPushdownMatcher(PushdownMatcher matcher) {
   }
   asyncPushdownMatcher_ = [matcher = std::move(matcher)](
                               ConnectorSessionPtr,
-                              const optimizer::v2::Node& offeredSubtree)
+                              const optimizer::Node& offeredSubtree)
       -> folly::coro::Task<std::vector<PushdownRoot>> {
     co_return matcher(offeredSubtree);
   };
@@ -727,7 +727,7 @@ bool TestConnectorMetadata::isPushdownSupported() const {
 
 folly::coro::Task<std::vector<PushdownRoot>> TestConnectorMetadata::co_pushdown(
     ConnectorSessionPtr session,
-    const optimizer::v2::Node& offeredSubtree) const {
+    const optimizer::Node& offeredSubtree) const {
   if (asyncPushdownMatcher_ != nullptr) {
     co_return co_await asyncPushdownMatcher_(
         std::move(session), offeredSubtree);

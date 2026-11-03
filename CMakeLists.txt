@@ -214,6 +214,7 @@ target_link_libraries(
   axiom_mono
   INTERFACE
     axiom_connector_metadata
+    axiom_optimizer
     axiom_optimizer_core
     axiom_optimizer_v1
     axiom_runner_local_runner
