@@ -283,7 +283,9 @@ HiveTable::HiveTable(
     bool includeHiddenColumns,
     folly::F14FastMap<std::string, velox::Variant> options,
     std::vector<std::string> partitionColumnNames,
-    folly::F14FastMap<std::string, std::string> columnComments)
+    folly::F14FastMap<std::string, std::string> columnComments,
+    std::optional<std::string> comment,
+    std::vector<std::string> primaryKey)
     : Table(
           std::move(name),
           hive::makeColumns(
@@ -292,7 +294,9 @@ HiveTable::HiveTable(
               includeHiddenColumns,
               partitionColumnNames,
               std::move(columnComments)),
-          std::move(options)) {}
+          std::move(options),
+          std::move(comment),
+          std::move(primaryKey)) {}
 
 std::vector<std::string> HiveTable::ioColumnPriority() const {
   const auto* hiveLayout = layouts()[0]->asChecked<HiveTableLayout>();

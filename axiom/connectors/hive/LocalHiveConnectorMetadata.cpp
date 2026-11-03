@@ -1107,10 +1107,20 @@ folly::dynamic toJsonArray(const std::vector<std::string>& values) {
   return json;
 }
 
+// Returns the '.schema' JSON for a table with the columns, comment and primary
+// key of 'definition' and the properties in 'options'.
 folly::dynamic toSchemaJson(
-    const velox::RowTypePtr& rowType,
+    const TableDefinition& definition,
     const CreateTableOptions& options) {
   folly::dynamic schema = folly::dynamic::object;
+
+  if (definition.comment.has_value()) {
+    schema["comment"] = definition.comment.value();
+  }
+
+  if (!definition.primaryKey.empty()) {
+    schema["primaryKey"] = toJsonArray(definition.primaryKey);
+  }
 
   if (options.compressionKind.has_value()) {
     schema["compressionKind"] =
@@ -1147,9 +1157,10 @@ folly::dynamic toSchemaJson(
   auto partitionColumns = folly::dynamic::array();
 
   bool isPartition = false;
-  for (auto i = 0; i < rowType->size(); ++i) {
-    const auto& name = rowType->nameOf(i);
-    auto column = SchemaFile::columnToJson(name, rowType->childAt(i));
+  for (const auto& columnDefinition : definition.columns) {
+    const auto& name = columnDefinition.name;
+    auto column = SchemaFile::columnToJson(
+        name, columnDefinition.type, columnDefinition.comment);
 
     if (partitionedByColumns.contains(name)) {
       partitionColumns.push_back(std::move(column));
@@ -1166,9 +1177,11 @@ folly::dynamic toSchemaJson(
   return schema;
 }
 
+// Returns a table with the columns, comment and primary key of 'definition' and
+// the properties in 'createTableOptions'.
 std::shared_ptr<LocalTable> createLocalTable(
     std::string_view name,
-    const velox::RowTypePtr& schema,
+    const TableDefinition& definition,
     const CreateTableOptions& createTableOptions,
     const LocalHiveConnectorMetadata& metadata) {
   folly::F14FastMap<std::string, velox::Variant> options;
@@ -1227,10 +1240,13 @@ std::shared_ptr<LocalTable> createLocalTable(
       SchemaTableName{
           std::string(LocalHiveConnectorMetadata::kDefaultSchema),
           std::string{name}},
-      schema,
+      definition.rowType(),
       numBuckets.has_value(),
       std::move(options),
-      createTableOptions.partitionedByColumns);
+      createTableOptions.partitionedByColumns,
+      definition.columnComments(),
+      definition.comment,
+      definition.primaryKey);
 
   std::vector<const Column*> partitionedBy;
   for (const auto& columnName : createTableOptions.partitionedByColumns) {
@@ -1301,9 +1317,18 @@ std::shared_ptr<LocalTable> createTableFromSchema(
   const auto& json = jsons[0];
 
   const auto options = parseCreateTableOptions(json, metadata.fileFormat());
-  const auto schema = SchemaFile::parseRowType(json);
 
-  return createLocalTable(name, schema, options, metadata);
+  TableDefinition definition{.columns = SchemaFile::parseColumns(json)};
+  if (json.count("comment")) {
+    definition.comment = json["comment"].asString();
+  }
+  if (json.count("primaryKey")) {
+    for (const auto& column : json["primaryKey"]) {
+      definition.primaryKey.push_back(column.asString());
+    }
+  }
+
+  return createLocalTable(name, definition, options, metadata);
 }
 
 // Parses a Hive partition directory named '<expectedColumn>=<value>'. Returns
@@ -1475,14 +1500,20 @@ LocalTable::LocalTable(
     velox::RowTypePtr type,
     bool bucketed,
     folly::F14FastMap<std::string, velox::Variant> options,
-    std::vector<std::string> partitionColumnNames)
+    std::vector<std::string> partitionColumnNames,
+    folly::F14FastMap<std::string, std::string> columnComments,
+    std::optional<std::string> comment,
+    std::vector<std::string> primaryKey)
     : HiveTable(
           std::move(name),
           std::move(type),
           bucketed,
           /*includeHiddenColumns=*/true,
           std::move(options),
-          std::move(partitionColumnNames)) {}
+          std::move(partitionColumnNames),
+          std::move(columnComments),
+          std::move(comment),
+          std::move(primaryKey)) {}
 
 TablePtr LocalHiveConnectorMetadata::findTable(
     const SchemaTableName& tableName) {
@@ -1631,7 +1662,6 @@ folly::coro::Task<TablePtr> LocalHiveConnectorMetadata::co_doCreateTable(
     TableDefinition definition,
     bool ifNotExists,
     bool explain) {
-  const auto rowType = definition.rowType();
   const auto& options = definition.properties;
   VELOX_USER_CHECK(
       schemaExists(nullptr, tableName.schema),
@@ -1652,7 +1682,7 @@ folly::coro::Task<TablePtr> LocalHiveConnectorMetadata::co_doCreateTable(
       }
     }
     co_return createLocalTable(
-        tableName.table, rowType, createTableOptions, *this);
+        tableName.table, definition, createTableOptions, *this);
   }
 
   auto path = tablePath(tableName);
@@ -1666,7 +1696,7 @@ folly::coro::Task<TablePtr> LocalHiveConnectorMetadata::co_doCreateTable(
   }
 
   const std::string jsonStr =
-      folly::toPrettyJson(toSchemaJson(rowType, createTableOptions));
+      folly::toPrettyJson(toSchemaJson(definition, createTableOptions));
   const std::string filePath = SchemaFile::path(path);
 
   std::lock_guard<std::mutex> l(mutex_);
@@ -1685,7 +1715,7 @@ folly::coro::Task<TablePtr> LocalHiveConnectorMetadata::co_doCreateTable(
     outputFile.close();
   }
   auto table =
-      createLocalTable(tableName.table, rowType, createTableOptions, *this);
+      createLocalTable(tableName.table, definition, createTableOptions, *this);
   tables_[tableName.table] = table;
   co_return table;
 }
@@ -1949,7 +1979,6 @@ LocalHiveConnectorMetadata::co_doAddColumn(
     bool ifNotExists,
     bool explain) {
   const auto& columnName = column.name;
-  const auto& columnType = column.type;
   ensureInitialized();
 
   std::lock_guard<std::mutex> lock(mutex_);
@@ -1993,7 +2022,7 @@ LocalHiveConnectorMetadata::co_doAddColumn(
 
   auto& schema = jsons[0];
   schema["dataColumns"].push_back(
-      SchemaFile::columnToJson(columnName, columnType));
+      SchemaFile::columnToJson(columnName, column.type, column.comment));
 
   std::ofstream outputFile(schemaFile);
   VELOX_CHECK(outputFile.is_open());

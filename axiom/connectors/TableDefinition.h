@@ -76,6 +76,9 @@ struct TableDefinition {
 
   /// Returns the names and types of the columns.
   velox::RowTypePtr rowType() const;
+
+  /// Returns the comments of the columns that have one, by column name.
+  folly::F14FastMap<std::string, std::string> columnComments() const;
 };
 
 /// The parts of a TableDefinition a connector stores beyond its columns' names

@@ -291,11 +291,11 @@ TEST_F(DdlParserTest, createTable) {
   }
 
   // NOT NULL, comments, column properties and the primary key reach the
-  // statement.
+  // statement. The primary key names its columns as they are declared.
   {
     auto statement = parseSql(
         "CREATE TABLE t (id BIGINT NOT NULL COMMENT 'key', "
-        "v VARCHAR WITH (x = 1), PRIMARY KEY (id)) COMMENT 'table'");
+        "v VARCHAR WITH (x = 1), PRIMARY KEY (ID)) COMMENT 'table'");
     const auto* create = statement->as<CreateTableStatement>();
     const auto& columns = create->columns();
     ASSERT_EQ(2, columns.size());

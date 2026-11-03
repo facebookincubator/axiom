@@ -177,7 +177,9 @@ TestTable::TestTable(
     TestConnector* connector,
     const folly::F14FastMap<std::string, velox::Variant>& options,
     std::optional<TestBucketSpec> bucketSpec,
-    folly::F14FastMap<std::string, std::string> columnComments)
+    folly::F14FastMap<std::string, std::string> columnComments,
+    std::optional<std::string> comment,
+    std::vector<std::string> primaryKey)
     : Table(
           std::move(name),
           makeTestTableColumns(
@@ -185,7 +187,9 @@ TestTable::TestTable(
               hiddenColumns,
               options,
               std::move(columnComments)),
-          options),
+          options,
+          std::move(comment),
+          std::move(primaryKey)),
       connector_(connector),
       dataType_(makeTestTableDataType(schema)),
       collectStatistics_(extractCollectStatistics(options)),
@@ -1050,7 +1054,15 @@ folly::coro::Task<TablePtr> TestConnectorMetadata::co_doCreateTable(
   }
 
   auto table = std::make_shared<TestTable>(
-      tableName, rowType, hiddenColumns, connector_, options);
+      tableName,
+      rowType,
+      hiddenColumns,
+      connector_,
+      options,
+      /*bucketSpec=*/std::nullopt,
+      definition.columnComments(),
+      std::move(definition.comment),
+      std::move(definition.primaryKey));
   if (explain) {
     co_return table;
   }
@@ -1243,16 +1255,26 @@ folly::coro::Task<std::optional<bool>> TestConnectorMetadata::co_doAddColumn(
 
   std::vector<std::string> hiddenNames;
   std::vector<velox::TypePtr> hiddenTypes;
+  folly::F14FastMap<std::string, std::string> columnComments;
   for (const auto* col : it->second->allColumns()) {
     if (col->hidden() && col->name() != TestTable::kRowId) {
       hiddenNames.push_back(col->name());
       hiddenTypes.push_back(col->type());
     }
+    if (col->comment().has_value()) {
+      columnComments.emplace(col->name(), col->comment().value());
+    }
+  }
+  if (column.comment.has_value()) {
+    columnComments.emplace(columnName, column.comment.value());
   }
   auto hiddenColumns =
       velox::ROW(std::move(hiddenNames), std::move(hiddenTypes));
 
   auto savedOptions = it->second->options();
+  auto comment = it->second->comment();
+  auto primaryKey = it->second->primaryKey();
+  auto bucketSpec = it->second->bucketSpec();
   tables_.erase(it);
 
   auto newTable = std::make_shared<TestTable>(
@@ -1260,7 +1282,11 @@ folly::coro::Task<std::optional<bool>> TestConnectorMetadata::co_doAddColumn(
       std::move(newType),
       std::move(hiddenColumns),
       connector_,
-      std::move(savedOptions));
+      std::move(savedOptions),
+      std::move(bucketSpec),
+      std::move(columnComments),
+      std::move(comment),
+      std::move(primaryKey));
   tables_[tableName] = std::move(newTable);
   co_return true;
 }

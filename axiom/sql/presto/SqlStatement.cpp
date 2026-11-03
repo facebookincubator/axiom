@@ -139,6 +139,32 @@ CreateVectorIndexStatement::CreateVectorIndexStatement(
 }
 
 namespace {
+// Returns 'primaryKey' with each column spelled as 'schema' declares it.
+// Matches column names ignoring case.
+std::vector<std::string> resolvePrimaryKey(
+    const std::vector<std::string>& primaryKey,
+    const RowTypePtr& schema) {
+  std::unordered_map<std::string, std::string> declaredNames;
+  for (const auto& name : schema->names()) {
+    declaredNames.emplace(toLower(name), name);
+  }
+  std::unordered_set<std::string> keyColumns;
+  std::vector<std::string> resolved;
+  resolved.reserve(primaryKey.size());
+  for (const auto& column : primaryKey) {
+    const auto lower = toLower(column);
+    const auto it = declaredNames.find(lower);
+    VELOX_USER_CHECK(
+        it != declaredNames.end(), "Constraint on unknown column: {}", column);
+    VELOX_USER_CHECK(
+        keyColumns.insert(lower).second,
+        "Duplicate constraint column: {}",
+        column);
+    resolved.push_back(it->second);
+  }
+  return resolved;
+}
+
 RowTypePtr toRowType(const std::vector<ColumnDeclaration>& columns) {
   std::vector<std::string> names;
   std::vector<TypePtr> types;
@@ -183,21 +209,10 @@ CreateTableStatement::CreateTableStatement(
       tableSchema_{toRowType(columns_)},
       comment_{std::move(comment)},
       properties_{std::move(properties)},
-      primaryKey_{std::move(primaryKey)},
+      primaryKey_{resolvePrimaryKey(primaryKey, tableSchema_)},
       ifNotExists_{ifNotExists} {
   VELOX_CHECK_GT(tableSchema_->size(), 0);
-
-  const auto names = checkUniqueColumns(tableSchema_);
-  std::unordered_set<std::string> keyColumns;
-  for (const auto& column : primaryKey_) {
-    const auto lower = toLower(column);
-    VELOX_USER_CHECK(
-        names.contains(lower), "Constraint on unknown column: {}", column);
-    VELOX_USER_CHECK(
-        keyColumns.insert(lower).second,
-        "Duplicate constraint column: {}",
-        column);
-  }
+  checkUniqueColumns(tableSchema_);
   checkPropertiesLookConstant(properties_);
   for (const auto& column : columns_) {
     checkPropertiesLookConstant(column.properties);

@@ -2477,8 +2477,17 @@ SqlStatementPtr parseShowColumns(
       toConnectorTable(*showColumns.table(), defaultConnectorId, defaultSchema);
 
   const auto metadata = session->connectorMetadata(connectorId);
+
+  // Returns 'value' as a VARCHAR Variant, null when unset.
+  auto toVariant = [](const std::optional<std::string>& value) {
+    return value.has_value() ? Variant(value.value())
+                             : Variant::null(TypeKind::VARCHAR);
+  };
+
+  // A view's columns have no extra info or comments.
+  const auto table = metadata->findTable(connectorTable);
   facebook::velox::RowTypePtr schema;
-  if (const auto table = metadata->findTable(connectorTable)) {
+  if (table != nullptr) {
     schema = table->type();
   } else if (const auto view = metadata->findView(connectorTable)) {
     schema = view->type();
@@ -2492,15 +2501,21 @@ SqlStatementPtr parseShowColumns(
 
   std::vector<Variant> data;
   data.reserve(schema->size());
-  for (auto i = 0; i < schema->size(); ++i) {
+  for (uint32_t i = 0; i < schema->size(); ++i) {
+    const auto* column =
+        table != nullptr ? table->findColumn(schema->nameOf(i)) : nullptr;
     data.emplace_back(
-        Variant::row({schema->nameOf(i), schema->childAt(i)->toString()}));
+        Variant::row(
+            {schema->nameOf(i),
+             schema->childAt(i)->toString(),
+             toVariant(column != nullptr ? column->extraInfo() : std::nullopt),
+             toVariant(column != nullptr ? column->comment() : std::nullopt)}));
   }
 
   lp::PlanBuilder::Context ctx(defaultConnectorId);
   return std::make_shared<SelectStatement>(
       lp::PlanBuilder(ctx)
-          .values(ROW({"column", "type"}, VARCHAR()), data)
+          .values(ROW({"column", "type", "extra", "comment"}, VARCHAR()), data)
           .build(),
       ViewMap{},
       lp::ReferencedTables{
@@ -2571,8 +2586,20 @@ SqlStatementPtr parseShowCreateTable(
     }
     ddl << "   " << schema->nameOf(i) << " "
         << PrestoTypes::displayName(*schema->childAt(i));
+    const auto& comment = table->findColumn(schema->nameOf(i))->comment();
+    if (comment.has_value()) {
+      ddl << " COMMENT " << variantToSql(Variant(comment.value()));
+    }
+  }
+  if (!table->primaryKey().empty()) {
+    ddl << ",\n   PRIMARY KEY (" << folly::join(", ", table->primaryKey())
+        << ")";
   }
   ddl << "\n)";
+
+  if (table->comment().has_value()) {
+    ddl << "\nCOMMENT " << variantToSql(Variant(table->comment().value()));
+  }
 
   // WITH clause from table options, sorted by key for deterministic output.
   if (!options.empty()) {

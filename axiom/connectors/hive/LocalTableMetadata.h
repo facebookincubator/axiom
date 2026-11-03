@@ -95,14 +95,21 @@ struct SchemaFile {
       const velox::RowTypePtr& rowType,
       velox::dwio::common::FileFormat fileFormat);
 
-  /// Builds the {"name": ..., "type": ...} JSON object used in .schema files
-  /// for a single column.
+  /// Builds the {"name": ..., "type": ..., "comment": ...} JSON object used in
+  /// .schema files for a single column. Leaves out "comment" when 'comment' is
+  /// nullopt.
   static folly::dynamic columnToJson(
       std::string_view name,
-      const velox::TypePtr& type);
+      const velox::TypePtr& type,
+      const std::optional<std::string>& comment = std::nullopt);
 
-  /// Returns the table's row type from the parsed .schema JSON: the data
-  /// columns followed by the partition columns.
+  /// Returns the table's columns from the parsed .schema JSON: the data
+  /// columns followed by the partition columns, with their names, types and
+  /// comments.
+  static std::vector<ColumnDefinition> parseColumns(
+      const folly::dynamic& schema);
+
+  /// Returns the names and types of parseColumns('schema').
   static velox::RowTypePtr parseRowType(const folly::dynamic& schema);
 };
 

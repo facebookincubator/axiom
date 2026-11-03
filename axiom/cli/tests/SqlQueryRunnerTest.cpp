@@ -682,9 +682,42 @@ TEST_F(SqlQueryRunnerTest, showCreateTable) {
         ")");
   }
 
+  {
+    // Table and column comments, including the comment of a column added
+    // later, and the primary key are stored and shown.
+    run("CREATE TABLE t3 (id INTEGER COMMENT 'the key', name VARCHAR, "
+        "PRIMARY KEY (id)) COMMENT 'it''s a table'");
+    run("ALTER TABLE t3 ADD COLUMN note VARCHAR COMMENT 'free-form remarks'");
+    auto ddl = fetchSingleValue<std::string>("SHOW CREATE TABLE t3");
+    EXPECT_EQ(
+        ddl,
+        "CREATE TABLE test.\"default\".\"t3\" (\n"
+        "   id integer COMMENT 'the key',\n"
+        "   name varchar,\n"
+        "   note varchar COMMENT 'free-form remarks',\n"
+        "   PRIMARY KEY (id)\n"
+        ")\n"
+        "COMMENT 'it''s a table'");
+  }
+
   // Non-existent table.
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       run("SHOW CREATE TABLE no_such_table"), "Table not found");
+}
+
+TEST_F(SqlQueryRunnerTest, describe) {
+  run("CREATE TABLE t (id INTEGER COMMENT 'the key', name VARCHAR)");
+  auto result = run("DESCRIBE t");
+  ASSERT_EQ(1, result.results.size());
+  test::assertEqualVectors(
+      result.results[0],
+      makeNamedRowVector({
+          {"column", makeFlatVector<std::string>({"id", "name"})},
+          {"type", makeFlatVector<std::string>({"INTEGER", "VARCHAR"})},
+          {"extra", makeAllNullFlatVector<StringView>(2)},
+          {"comment",
+           makeNullableFlatVector<std::string>({"the key", std::nullopt})},
+      }));
 }
 
 TEST_F(SqlQueryRunnerTest, showCreateView) {

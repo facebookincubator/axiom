@@ -217,7 +217,9 @@ class TestTable : public Table {
       TestConnector* connector,
       const folly::F14FastMap<std::string, velox::Variant>& options,
       std::optional<TestBucketSpec> bucketSpec = std::nullopt,
-      folly::F14FastMap<std::string, std::string> columnComments = {});
+      folly::F14FastMap<std::string, std::string> columnComments = {},
+      std::optional<std::string> comment = std::nullopt,
+      std::vector<std::string> primaryKey = {});
 
   const std::vector<const TableLayout*>& layouts() const override {
     return layouts_;
@@ -852,7 +854,11 @@ class TestConnectorMetadata : public ConnectorMetadata {
       bool ifExists) override;
 
   std::optional<TableDefinitionSupport> supportsCreateTable() const override {
-    return TableDefinitionSupport{};
+    return TableDefinitionSupport{
+        .columnComments = true,
+        .tableComment = true,
+        .primaryKey = true,
+    };
   }
 
  protected:

@@ -192,14 +192,13 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
     return fmt::format("file.\"parquet\".\"{}${}\"", parquetPath_, suffix);
   }
 
-  // Runs DESC on 'name' and returns its (column, type) result.
   RowVectorPtr describeTable(const std::string& name) {
     return query(fmt::format("DESC {}", name));
   }
 
   // Asserts DESC on 'name' reports 'schema' as (column, type) rows in schema
-  // order. Expected type strings are derived from 'schema' via
-  // Type::toString(), matching how DESC renders them.
+  // order, with no extra info or comments. Expected type strings are derived
+  // from 'schema' via Type::toString(), matching how DESC renders them.
   void assertDescribeTable(const std::string& name, const RowTypePtr& schema) {
     std::vector<std::string> types;
     for (const auto& child : schema->children()) {
@@ -207,9 +206,12 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
     }
     test::assertEqualVectors(
         describeTable(name),
-        makeRowVector(
-            {"column", "type"},
-            {makeFlatVector(schema->names()), makeFlatVector(types)}));
+        makeNamedRowVector({
+            {"column", makeFlatVector(schema->names())},
+            {"type", makeFlatVector(types)},
+            {"extra", makeAllNullFlatVector<StringView>(schema->size())},
+            {"comment", makeAllNullFlatVector<StringView>(schema->size())},
+        }));
   }
 
   // Asserts SHOW SCHEMAS via 'sql' returns exactly 'expectedSchemas' in the
