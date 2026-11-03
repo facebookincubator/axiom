@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "axiom/connectors/tests/TestConnector.h"
@@ -97,19 +98,18 @@ class PrestoParserTestBase : public testing::Test {
       const std::unordered_map<std::string, std::string>& properties = {});
 
   /// Parses a CREATE TABLE statement and verifies the table name, schema,
-  /// optional properties, and optional constraints.
+  /// and optional properties.
   void testCreateTable(
       std::string_view sql,
       const std::string& tableName,
       const facebook::velox::RowTypePtr& tableSchema,
-      const std::unordered_map<std::string, std::string>& properties = {},
-      const std::vector<CreateTableStatement::Constraint>& constraints = {});
+      const std::unordered_map<std::string, std::string>& properties = {});
 
  protected:
   // Checks that 'actual' has exactly the properties in 'expected', each
   // printed as its expression text.
   static void assertProperties(
-      const std::unordered_map<
+      const folly::F14FastMap<
           std::string,
           facebook::axiom::logical_plan::ExprPtr>& actual,
       const std::unordered_map<std::string, std::string>& expected);

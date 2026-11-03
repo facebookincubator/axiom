@@ -21,6 +21,8 @@
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
+#include <folly/coro/BlockingWait.h>
+
 namespace facebook::axiom::optimizer {
 namespace {
 
@@ -74,18 +76,6 @@ class WriteTest : public test::HiveQueriesTestBase,
     hiveMetadata().dropTableIfExists({kDefaultSchema, std::string(name)});
   }
 
-  // Evaluates CREATE TABLE 'WITH' properties into connector table options.
-  static folly::F14FastMap<std::string, velox::Variant> toOptions(
-      const std::unordered_map<
-          std::string,
-          facebook::axiom::logical_plan::ExprPtr>& properties) {
-    folly::F14FastMap<std::string, velox::Variant> options;
-    for (const auto& [key, value] : properties) {
-      options[key] = ConstantExprEvaluator::evaluateConstantExpr(*value);
-    }
-    return options;
-  }
-
   // Creates and commits an empty table so it is findable by a later INSERT. Per
   // the ConnectorMetadata contract a new table is not visible via findTable
   // until finishWrite completes, so an empty create still commits.
@@ -98,13 +88,12 @@ class WriteTest : public test::HiveQueriesTestBase,
     metadata.dropTableIfExists({schema, std::string(name)});
 
     auto session = makeSession();
-    auto table = metadata.createTable(
+    auto table = folly::coro::blockingWait(metadata.co_createTable(
         session,
         {schema, name},
-        tableType,
-        options,
+        connector::TableDefinition::create(tableType, options),
         /*ifNotExists=*/false,
-        /*explain=*/false);
+        /*explain=*/false));
     VELOX_CHECK_NOT_NULL(table);
     auto handle = metadata.beginWrite(
         session,
@@ -118,11 +107,14 @@ class WriteTest : public test::HiveQueriesTestBase,
   connector::TablePtr createTable(
       const facebook::axiom::SchemaTableName& tableName,
       const RowTypePtr& schema,
-      const std::unordered_map<
+      const folly::F14FastMap<
           std::string,
           facebook::axiom::logical_plan::ExprPtr>& properties) {
     return createTable(
-        tableName.schema, tableName.table, schema, toOptions(properties));
+        tableName.schema,
+        tableName.table,
+        schema,
+        ConstantExprEvaluator::evaluateProperties(properties));
   }
 
   connector::TablePtr createTable(
@@ -140,13 +132,12 @@ class WriteTest : public test::HiveQueriesTestBase,
       const ::axiom::sql::presto::CreateTableAsSelectStatement& statement) {
     auto& metadata = hiveMetadata();
     metadata.dropTableIfExists(statement.tableName());
-    auto table = metadata.createTable(
+    auto table = folly::coro::blockingWait(metadata.co_createTable(
         makeSession(),
         statement.tableName(),
-        statement.tableSchema(),
-        toOptions(statement.properties()),
+        statement.definition(ConstantExprEvaluator::evaluateProperties),
         /*ifNotExists=*/false,
-        /*explain=*/false);
+        /*explain=*/false));
     VELOX_CHECK_NOT_NULL(table);
     return table;
   }

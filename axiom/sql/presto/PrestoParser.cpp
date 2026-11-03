@@ -2877,10 +2877,10 @@ SqlStatementPtr parseDelete(
       });
 }
 
-std::unordered_map<std::string, lp::ExprPtr> parseTableProperties(
+folly::F14FastMap<std::string, lp::ExprPtr> parseTableProperties(
     const ParserSessionPtr& session,
     const std::vector<std::shared_ptr<Property>>& props) {
-  std::unordered_map<std::string, lp::ExprPtr> properties;
+  folly::F14FastMap<std::string, lp::ExprPtr> properties;
   for (const auto& p : props) {
     // Property names are identifiers; canonicalize so connectors receive
     // canonical option keys regardless of the case or quoting the user wrote.
@@ -2967,14 +2967,16 @@ SqlStatementPtr parseCreateTableAsSelect(
       std::move(connectorId),
       std::move(connectorTable),
       ROW(std::move(columnNames), std::move(columnTypes)),
+      ctas.comment(),
       std::move(properties),
       planner.plan(),
       planner.views(),
       planner.inputTables());
 }
 
-// Returns the name and type of the column 'column' defines.
-std::pair<std::string, TypePtr> parseColumnDefinition(
+// Returns what 'column' declares.
+ColumnDeclaration parseColumnDefinition(
+    const ParserSessionPtr& session,
     const ColumnDefinition& column) {
   auto type = parseType(column.columnType());
   AXIOM_PRESTO_SEMANTIC_CHECK(
@@ -2982,7 +2984,13 @@ std::pair<std::string, TypePtr> parseColumnDefinition(
       column.location(),
       column.columnType()->baseName(),
       "Unknown type specifier");
-  return {column.name()->value(), std::move(type)};
+  return {
+      .name = column.name()->value(),
+      .type = std::move(type),
+      .nullable = column.isNullable(),
+      .comment = column.comment(),
+      .properties = parseTableProperties(session, column.properties()),
+  };
 }
 
 SqlStatementPtr parseCreateTable(
@@ -2995,17 +3003,14 @@ SqlStatementPtr parseCreateTable(
 
   auto properties = parseTableProperties(session, createTable.properties());
 
-  std::vector<std::string> names;
-  std::vector<TypePtr> types;
-  std::vector<CreateTableStatement::Constraint> constraints;
+  std::vector<ColumnDeclaration> columns;
+  std::vector<std::string> primaryKey;
 
   for (const auto& element : createTable.elements()) {
     switch (element->type()) {
       case NodeType::kColumnDefinition: {
-        auto [name, type] =
-            parseColumnDefinition(*element->as<ColumnDefinition>());
-        names.push_back(std::move(name));
-        types.push_back(std::move(type));
+        columns.push_back(
+            parseColumnDefinition(session, *element->as<ColumnDefinition>()));
         break;
       }
       case NodeType::kLikeClause: {
@@ -3018,8 +3023,8 @@ SqlStatementPtr parseCreateTable(
 
         auto schema = table->type();
         for (auto i = 0; i < schema->size(); ++i) {
-          names.push_back(schema->nameOf(i));
-          types.push_back(schema->childAt(i));
+          columns.push_back(
+              {.name = schema->nameOf(i), .type = schema->childAt(i)});
         }
 
         // For INCLUDING PROPERTIES, copy the source table's properties;
@@ -3033,28 +3038,28 @@ SqlStatementPtr parseCreateTable(
         break;
       }
       case NodeType::kConstraintSpecification: {
-        auto* constraintSpec = element->as<ConstraintSpecification>();
-
-        CreateTableStatement::Constraint constraint;
-        if (constraintSpec->name()) {
-          constraint.name = constraintSpec->name()->value();
+        const auto* constraint = element->as<ConstraintSpecification>();
+        AXIOM_PRESTO_SEMANTIC_CHECK(
+            constraint->constraintType() ==
+                ConstraintSpecification::ConstraintType::kPrimaryKey,
+            constraint->location(),
+            "UNIQUE",
+            "UNIQUE is not supported yet");
+        if (constraint->name() != nullptr) {
+          AXIOM_PRESTO_SEMANTIC_FAIL(
+              constraint->location(),
+              constraint->name()->value(),
+              "Constraint names are not supported yet: {}",
+              constraint->name()->value());
         }
-
-        for (const auto& col : constraintSpec->columns()) {
-          constraint.columns.push_back(col->value());
+        AXIOM_PRESTO_SEMANTIC_CHECK(
+            primaryKey.empty(),
+            constraint->location(),
+            "PRIMARY KEY",
+            "Table has more than one PRIMARY KEY");
+        for (const auto& column : constraint->columns()) {
+          primaryKey.push_back(column->value());
         }
-
-        switch (constraintSpec->constraintType()) {
-          case ConstraintSpecification::ConstraintType::kPrimaryKey:
-            constraint.type =
-                CreateTableStatement::Constraint::Type::kPrimaryKey;
-            break;
-          case ConstraintSpecification::ConstraintType::kUnique:
-            constraint.type = CreateTableStatement::Constraint::Type::kUnique;
-            break;
-        }
-
-        constraints.push_back(std::move(constraint));
         break;
       }
       default:
@@ -3067,10 +3072,11 @@ SqlStatementPtr parseCreateTable(
   return std::make_shared<CreateTableStatement>(
       std::move(connectorId),
       std::move(connectorTable),
-      ROW(std::move(names), std::move(types)),
+      std::move(columns),
+      createTable.comment(),
       std::move(properties),
-      createTable.isNotExists(),
-      std::move(constraints));
+      std::move(primaryKey),
+      createTable.isNotExists());
 }
 
 SqlStatementPtr parseDropTable(
@@ -3095,9 +3101,9 @@ SqlStatementPtr parseCreateVectorIndex(
   std::vector<std::string> names;
   std::vector<TypePtr> types;
   for (const auto& column : createIndex.columns()) {
-    auto [name, type] = parseColumnDefinition(*column);
-    names.push_back(std::move(name));
-    types.push_back(std::move(type));
+    auto definition = parseColumnDefinition(session, *column);
+    names.push_back(std::move(definition.name));
+    types.push_back(std::move(definition.type));
   }
 
   return std::make_shared<CreateVectorIndexStatement>(
@@ -3120,23 +3126,16 @@ SqlStatementPtr parseDropVectorIndex(
 }
 
 SqlStatementPtr parseAddColumn(
+    const ParserSessionPtr& session,
     const AddColumn& addColumn,
     const std::string& defaultConnectorId,
     const std::string& defaultSchema) {
   auto [connectorId, connectorTable] = toConnectorTable(
       *addColumn.tableName(), defaultConnectorId, defaultSchema);
-  auto* colDef = addColumn.column();
-  auto columnType = parseType(colDef->columnType());
-  AXIOM_PRESTO_SEMANTIC_CHECK(
-      columnType != nullptr,
-      colDef->location(),
-      colDef->columnType()->baseName(),
-      "Unknown type specifier");
   return std::make_shared<AddColumnStatement>(
       std::move(connectorId),
       std::move(connectorTable),
-      colDef->name()->value(),
-      std::move(columnType),
+      parseColumnDefinition(session, *addColumn.column()),
       addColumn.isTableExists(),
       addColumn.isColumnNotExists());
 }
@@ -3589,7 +3588,10 @@ SqlStatementPtr doPlan(
 
   if (query->is(NodeType::kAddColumn)) {
     return parseAddColumn(
-        *query->as<AddColumn>(), defaultConnectorId, defaultSchema);
+        parserSession,
+        *query->as<AddColumn>(),
+        defaultConnectorId,
+        defaultSchema);
   }
 
   if (query->is(NodeType::kCreateSchema)) {

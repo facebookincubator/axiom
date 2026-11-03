@@ -27,6 +27,8 @@
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 
+#include <folly/coro/BlockingWait.h>
+
 DEFINE_string(
     tpch_data_path,
     "",
@@ -186,13 +188,13 @@ void HiveQueriesTestBase::createEmptyTable(
   hiveMetadata().dropTableIfExists({kDefaultSchema, name});
 
   auto session = makeSession();
-  auto table = hiveMetadata().createTable(
-      session,
-      {kDefaultSchema, name},
-      tableType,
-      options,
-      /*ifNotExists=*/false,
-      /*explain=*/false);
+  auto table = folly::coro::blockingWait(
+      hiveMetadata().co_createTable(
+          session,
+          {kDefaultSchema, name},
+          connector::TableDefinition::create(tableType, options),
+          /*ifNotExists=*/false,
+          /*explain=*/false));
   VELOX_CHECK_NOT_NULL(table);
   auto handle = hiveMetadata().beginWrite(
       session,
@@ -222,13 +224,13 @@ void HiveQueriesTestBase::createTableFromFiles(
   }
 
   auto session = makeSession();
-  hiveMetadata().createTable(
-      session,
-      {kDefaultSchema, tableName},
-      tableType,
-      options,
-      /*ifNotExists=*/false,
-      /*explain=*/false);
+  folly::coro::blockingWait(
+      hiveMetadata().co_createTable(
+          session,
+          {kDefaultSchema, tableName},
+          connector::TableDefinition::create(tableType, options),
+          /*ifNotExists=*/false,
+          /*explain=*/false));
 
   auto tablePath = localTablePath(tableName);
   for (const auto& filePath : filePaths) {
@@ -256,19 +258,14 @@ void HiveQueriesTestBase::runCtas(const std::string& sql) {
 
   hiveMetadata().dropTableIfExists(ctasStatement->tableName());
 
-  folly::F14FastMap<std::string, Variant> options;
-  for (const auto& [key, value] : ctasStatement->properties()) {
-    options[key] = ConstantExprEvaluator::evaluateConstantExpr(*value);
-  }
-
   auto session = makeSession();
-  auto table = hiveMetadata().createTable(
-      session,
-      ctasStatement->tableName(),
-      ctasStatement->tableSchema(),
-      options,
-      /*ifNotExists=*/false,
-      /*explain=*/false);
+  auto table = folly::coro::blockingWait(
+      hiveMetadata().co_createTable(
+          session,
+          ctasStatement->tableName(),
+          ctasStatement->definition(ConstantExprEvaluator::evaluateProperties),
+          /*ifNotExists=*/false,
+          /*explain=*/false));
   VELOX_CHECK_NOT_NULL(table);
 
   connector::SchemaResolver schemaResolver{

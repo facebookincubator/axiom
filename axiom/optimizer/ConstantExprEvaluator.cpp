@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/ConstantExprEvaluator.h"
+#include <folly/container/F14Map.h>
 #include "axiom/logical_plan/ExprVisitor.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/core/Expressions.h"
@@ -143,4 +144,15 @@ velox::Variant ConstantExprEvaluator::evaluateConstantExpr(
 
   return result->variantAt(0);
 }
+// static
+folly::F14FastMap<std::string, velox::Variant>
+ConstantExprEvaluator::evaluateProperties(
+    const folly::F14FastMap<std::string, logical_plan::ExprPtr>& properties) {
+  folly::F14FastMap<std::string, velox::Variant> values;
+  for (const auto& [name, expr] : properties) {
+    values[name] = evaluateConstantExpr(*expr);
+  }
+  return values;
+}
+
 } // namespace facebook::axiom::optimizer
