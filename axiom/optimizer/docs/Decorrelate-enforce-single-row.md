@@ -40,7 +40,7 @@ over Aggregate" for the rejected body-operator alternatives.
 Body is per-outer; the assertion needs per-outer scope. Velox's global
 `EnforceSingleRow` doesn't suffice — and there's no `single_value()`
 aggregate. The substrate already has the right primitive:
-`EnforceDistinct` (`v2/Node.h` / lowers to Velox
+`EnforceDistinct` (`Node.h` / lowers to Velox
 `EnforceDistinctNode`) — asserts ≤1 row per distinct key.
 
 Lowering shape:

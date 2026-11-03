@@ -46,7 +46,7 @@ class Optimization {
 
   /// Simplified API for usage in testing and tooling.
   ///
-  /// Deprecated. Plan with `v2::Optimizer::optimize()` instead.
+  /// Deprecated. Plan with `optimizer::Optimizer::optimize()` instead.
   static PlanAndStats deprecatedToVeloxPlan(
       OptimizerSessionPtr optimizerSession,
       runner::RunnerSessionPtr runnerSession,
@@ -59,7 +59,7 @@ class Optimization {
 
   /// Returns the optimized RelationOp plan for 'plan' given at construction.
   ///
-  /// Deprecated. Plan with `v2::Optimizer::optimize()` instead.
+  /// Deprecated. Plan with `optimizer::Optimizer::optimize()` instead.
   PlanP deprecatedBestPlan();
 
   /// Returns a set of per-stage Velox PlanNode trees.

@@ -1,0 +1,234 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include <cstdint>
+#include <optional>
+#include <vector>
+
+#include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
+#include <folly/small_vector.h>
+
+#include "axiom/optimizer/JoinEdge.h"
+#include "axiom/optimizer/Node.h"
+#include "axiom/optimizer/PlanObject.h"
+#include "axiom/optimizer/QueryGraphContext.h"
+#include "axiom/optimizer/Relation.h"
+#include "axiom/optimizer/RelationSet.h"
+
+namespace facebook::axiom::optimizer {
+
+/// A single boolean predicate that must be evaluated somewhere in
+/// the chosen join tree. `relations` is the set of cluster leaves
+/// whose columns the predicate references; the emitter places the
+/// conjunct at the lowest join whose cover ⊇ `relations`. `expr` is
+/// required at construction; default-null is only the
+/// aggregate-init placeholder. Only free (inner-join / WHERE) conjuncts
+/// live here; outer-join ON-clause conjuncts are edge-pinned via
+/// `JoinEdge::filter` instead.
+struct FilterConjunct {
+  ExprCP expr{nullptr};
+  RelationSet relations;
+};
+
+/// The hypergraph DPhyp enumerates over: a set of relations
+/// (atomic join inputs) connected by hyperedges (predicates).
+///
+/// Each edge's eligibility sides form its Total Eligibility Set (TES) — the
+/// relations that must already be in the joined set before the edge can fire.
+///
+/// Typical use: call `addRelation` once for each base input, then
+/// `addEdge` once for each predicate, then pass the result to DPhyp for plan
+/// enumeration.
+///
+/// Invariants (maintained across construction):
+///   - `relations()[i].id() == i`.
+///   - Every relation id referenced by an edge is in
+///     `[0, relations().size())`.
+class JoinHypergraph {
+ public:
+  struct CrossingEdge {
+    /// Index into `edges()`.
+    size_t index;
+    /// True when the edge's left eligibility side is in the left input.
+    bool leftToRight;
+  };
+
+  struct CrossingEdges {
+    /// Edges whose eligibility sides split cleanly across the two inputs.
+    folly::small_vector<CrossingEdge, 4> joinEdges;
+    /// Inner edges covered by both inputs that must be applied as filters.
+    std::vector<size_t> filterEdges;
+  };
+
+  /// Constructs a Relation with the next assigned id and adds it
+  /// to the hypergraph. Returns the assigned id.
+  int8_t addRelation(
+      NodeCP node,
+      std::optional<float> cardinality,
+      PlanObjectSet columns);
+
+  /// Registers an Unnest IR node as its own relation and tracks its id
+  /// for connectivity checks. `node` must be an Unnest. Returns the
+  /// assigned id.
+  int8_t addUnnestRelation(
+      NodeCP node,
+      std::optional<float> cardinality,
+      PlanObjectSet columns);
+
+  /// Relations an unnest edge expands. These produce rows only for the
+  /// relations they expand, so they have no plan of their own and enumeration
+  /// reaches them only by applying the edge. An Unnest of a constant expands
+  /// nothing, carries no edge, and is an ordinary source rather than one of
+  /// these.
+  const RelationSet& expandedRelationIds() const {
+    return expandedRelationIds_;
+  }
+
+  /// Appends an edge whose endpoints and eligibility sides must reference only
+  /// relations already in `relations()`. Throws if this invariant is violated.
+  void addEdge(JoinEdge edge);
+
+  /// Throws unless `appliedEdges` — the edges a finished plan applies, indexed
+  /// into `edges()` — enforce every edge's equalities. A plan that drops one
+  /// returns rows the query excludes.
+  ///
+  /// An edge need not appear in `appliedEdges` itself: equality is transitive,
+  /// so applying `a = b` and `b = c` enforces `a = c`. Equalities already
+  /// enforced within an atomic relation also participate in this closure.
+  ///
+  /// The closure is position-insensitive, so an edge applied under the
+  /// null-padding side of an outer join is credited even though its equality
+  /// does not hold on the padded rows.
+  void checkEdgesEnforced(const folly::F14FastSet<size_t>& appliedEdges) const;
+
+  /// Appends a filter conjunct. `conjunct.relations` must be
+  /// a subset of the relations already in `relations()`.
+  void addFilterConjunct(FilterConjunct conjunct);
+
+  const std::vector<FilterConjunct>& filterConjuncts() const {
+    return filterConjuncts_;
+  }
+
+  /// Columns the cluster's plan must output (the cluster root's output
+  /// columns). Used to decide which of a subplan's columns survive past it: a
+  /// cover's output columns are its columns that are either targets or
+  /// referenced by a not-yet-applied edge / filter.
+  void setTargetColumns(PlanObjectSet targetColumns);
+
+  const PlanObjectSet& targetColumns() const {
+    return targetColumns_;
+  }
+
+  /// The columns a subplan over `cover` can supply: the output columns of every
+  /// relation in `cover`, plus each output of an edge within `cover` that
+  /// differs from its source column, the copy a join makes of a column it
+  /// null-extends.
+  PlanObjectSet coverColumns(const RelationSet& cover) const;
+
+  /// Maps each column of `cover` to the representative of its equivalence group
+  /// under the equi-join keys of the INNER-join edges lying entirely within
+  /// `cover` — only an inner join makes its keys equal in the output (an outer
+  /// join's null-padded key is not). Columns equated to nothing map to
+  /// themselves. The representative is the group's target column if any, else
+  /// the column with the smallest name, with id breaking final ties; name
+  /// rather than id because ids come from a process-global counter, which would
+  /// make the choice non-reproducible across runs and query forms. The order is
+  /// total, so `best(A∪B) = best(best A, best B)`: a join's representative is
+  /// always one of its children's representatives, hence present in a child's
+  /// output, independent of join order. Where a child emits one side only, the
+  /// representative is made present by the projection the emitter places above
+  /// it.
+  /// Used to collapse provably-equal columns to one, consistently for costing
+  /// (row width) and emission (output columns and key/filter references).
+  folly::F14FastMap<ColumnCP, ColumnCP> coverColumnReps(
+      const RelationSet& cover) const;
+
+  /// The columns a subplan over `cover` must output: its `coverColumns` that
+  /// are either target columns or referenced by an edge / filter conjunct
+  /// crossing the cover boundary. This demand depends only on `cover`'s
+  /// boundary, not on the internal join order, so it is the precise output
+  /// set both for costing a candidate (row width) and for setting the emitted
+  /// join's output columns.
+  PlanObjectSet coverOutputColumns(const RelationSet& cover) const;
+
+  const std::vector<Relation>& relations() const {
+    return relations_;
+  }
+
+  /// Looks up a relation by id.
+  const Relation& relation(int32_t id) const {
+    return relations_[id];
+  }
+
+  const std::vector<JoinEdge>& edges() const {
+    return edges_;
+  }
+
+  /// Classifies the edges covered by `left` and `right` that cross their
+  /// boundary. Returns nullopt when an edge straddles the boundary and cannot
+  /// be applied as an inner filter above the join.
+  std::optional<CrossingEdges> crossingEdges(
+      const RelationSet& left,
+      const RelationSet& right) const;
+
+  /// Returns `edgeIndices` in edge-index order after removing inner equi-join
+  /// edges whose key equalities are already implied by earlier edges. Each
+  /// input must have already applied the first edge for every equivalence class
+  /// it contains, making same-class columns within that input equal.
+  std::vector<size_t> canonicalKeyEdges(std::vector<size_t> edgeIndices) const;
+
+  /// Returns the set of relations reachable from `seed` by repeatedly
+  /// following edges whose eligibility sides are entirely within `bound`.
+  RelationSet connectedComponent(RelationSet seed, RelationSet bound) const;
+
+  /// Checks that all relations are connected to each other via
+  /// edges. DPhyp's main enumeration loop requires a connected
+  /// hypergraph.
+  void checkConsistency() const;
+
+ private:
+  // Empties the cover-derived memo caches. Called by every builder mutation so
+  // the caches never outlive the graph state they were computed from.
+  void invalidateCoverCaches();
+
+  // Indexed by relation id.
+  std::vector<Relation> relations_;
+  std::vector<JoinEdge> edges_;
+  std::vector<FilterConjunct> filterConjuncts_;
+  // Bitset of every relation id currently in the hypergraph.
+  RelationSet relationIds_;
+  // Bitset of relations registered via `addUnnestRelation`.
+  RelationSet unnestRelationIds_;
+  // Unnest relations an unnest edge expands; see `expandedRelationIds()`.
+  RelationSet expandedRelationIds_;
+  // Columns the cluster's plan must output. See setTargetColumns().
+  PlanObjectSet targetColumns_;
+
+  // Memoized coverOutputColumns() results, keyed by cover. coverOutputColumns
+  // is a pure function of the frozen graph but the cost model queries it once
+  // per join candidate during enumeration; caching collapses the per-candidate
+  // recomputation (a union-find over all inner edges) that otherwise dominates
+  // planning a many-relation same-key join. Invalidated by
+  // invalidateCoverCaches(). Assumes single-threaded planning (the mutable
+  // cache makes the const method non-thread-safe).
+  mutable folly::F14FastMap<RelationSet, PlanObjectSet>
+      coverOutputColumnsCache_;
+};
+
+} // namespace facebook::axiom::optimizer

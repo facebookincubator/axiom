@@ -22,7 +22,7 @@
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
-#include "axiom/optimizer/v2/Optimize.h"
+#include "axiom/optimizer/Optimize.h"
 #include "velox/expression/Expr.h"
 
 using namespace facebook;
@@ -148,7 +148,7 @@ facebook::axiom::optimizer::PlanAndStats optimize(
           std::make_shared<velox::NoopRuntimeStatWriter>(),
           facebook::axiom::connector::Properties{},
           std::move(optimizerOptions));
-  return facebook::axiom::optimizer::v2::Optimizer(
+  return facebook::axiom::optimizer::Optimizer(
              *logicalPlan,
              *schemaResolver,
              *optimizerSession,

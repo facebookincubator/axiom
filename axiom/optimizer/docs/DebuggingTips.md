@@ -59,7 +59,7 @@ The CLI uses the v2 optimizer by default; `--v1` selects v1. `EXPLAIN (TYPE
 | `EXPLAIN (TYPE VALIDATE) <query>` | Succeeds when the query parses and resolves |
 | `EXPLAIN ANALYZE <query>` | Runs the query and shows the Velox plan with runtime statistics (row counts, timings, custom operator stats). Use `--debug` for custom operator stats |
 
-The v2 passes, in the order `Optimizer::planTo` (`v2/Optimize.cpp`) runs them:
+The v2 passes, in the order `Optimizer::planTo` (`Optimize.cpp`) runs them:
 
 1. `TRANSLATE`
 2. `DECORRELATE`
@@ -240,7 +240,7 @@ are always visible regardless of logging configuration.
 To see logs for passing tests, use `--print-passing-details`:
 
 ```bash
-buck test axiom/optimizer/v2/tests:tpch_plan -- q05 --print-passing-details
+buck test axiom/optimizer/tests:tpch_plan -- q05 --print-passing-details
 ```
 
 **Warning:** Remove all debug logging before committing!
@@ -252,8 +252,8 @@ test built on `QueryTestBase`. Every `planVelox` call in that test, including
 the ones behind `toSingleNodePlan`, then calls it after each pass that runs:
 
 ```cpp
-afterPass_ = [](v2::Optimizer::Pass pass, v2::NodeCP root) {
-  LOG(ERROR) << "After " << v2::Optimizer::toName(pass) << ":\n"
+afterPass_ = [](Optimizer::Pass pass, NodeCP root) {
+  LOG(ERROR) << "After " << Optimizer::toName(pass) << ":\n"
              << root->toString();
 };
 ```
@@ -268,7 +268,7 @@ stage in one run.
 
 Two tests cover the 22 TPC-H queries:
 
-- **`axiom/optimizer/v2/tests:tpch_plan`** asserts the single-node plan shape
+- **`axiom/optimizer/tests:tpch_plan`** asserts the single-node plan shape
   the v2 optimizer produces. It injects statistics through
   `TestConnector::addTpchTables`, so it generates no data and plans at any
   scale instantly. Queries whose v2 plan does not yet match v1's assert only
@@ -280,10 +280,10 @@ Two tests cover the 22 TPC-H queries:
 
 ```bash
 # Plan shapes under v2.
-buck test axiom/optimizer/v2/tests:tpch_plan
+buck test axiom/optimizer/tests:tpch_plan
 
 # One query.
-buck test axiom/optimizer/v2/tests:tpch_plan -- q05
+buck test axiom/optimizer/tests:tpch_plan -- q05
 
 # Results under both optimizers.
 buck test axiom/optimizer/tests:tpch_result
