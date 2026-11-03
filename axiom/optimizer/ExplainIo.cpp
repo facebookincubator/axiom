@@ -341,8 +341,8 @@ std::string explainIo(
           return false;
         }
         // Connector ID comes from the table's layouts.
-        const auto& lhsId = lhs->layouts()[0]->connectorId();
-        const auto& rhsId = rhs->layouts()[0]->connectorId();
+        const auto& lhsId = lhs->connectorId();
+        const auto& rhsId = rhs->connectorId();
         if (lhsId != rhsId) {
           return lhsId < rhsId;
         }
@@ -356,8 +356,8 @@ std::string explainIo(
 
   for (auto* connectorTable : tableOrder) {
     folly::dynamic tableInfo = folly::dynamic::object;
-    tableInfo["table"] = tableToJson(
-        connectorTable->layouts()[0]->connectorId(), connectorTable->name());
+    tableInfo["table"] =
+        tableToJson(connectorTable->connectorId(), connectorTable->name());
     tableInfo["columnConstraints"] =
         columnDomainsToJson(mergedDomains[connectorTable], *connectorTable);
     tableInfos.push_back(std::move(tableInfo));

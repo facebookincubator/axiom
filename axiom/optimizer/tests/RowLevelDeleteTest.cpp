@@ -377,7 +377,7 @@ TEST_F(RowLevelDeleteTest, writerRequirements) {
     table->addData(makeRowVector(
         {makeFlatVector<int64_t>({4, 5, 6, 7}),
          makeFlatVector<int64_t>({50, 60, 70, 80})}));
-    const auto bucketing = table->layouts().front()->partitionType();
+    const auto bucketing = table->primaryLayout()->partitionType();
     table->setRowLevelDeleteLayout(
         connector::DeleteLayout::rowLevel(
             {},

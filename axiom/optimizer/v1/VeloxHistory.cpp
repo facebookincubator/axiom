@@ -138,7 +138,7 @@ void VeloxHistory::estimateLeafSelectivity(
   VELOX_DCHECK_NOT_NULL(runnerTable);
 
   if (!options.sampleFilters ||
-      !runnerTable->layouts()[0]->supportsSampling()) {
+      !runnerTable->primaryLayout()->supportsSampling()) {
     table.filteredCardinality =
         mul(table.schemaTable->cardinality, conjunctsSelectivityValue);
     return;
@@ -156,7 +156,7 @@ void VeloxHistory::estimateLeafSelectivity(
   // Determine and cache leaf selectivity for the table handle
   // by sampling the layout for the physical table.
   const uint64_t start = velox::getCurrentTimeMicro();
-  auto sample = runnerTable->layouts()[0]->sample(tableHandle);
+  auto sample = runnerTable->primaryLayout()->sample(tableHandle);
   VELOX_CHECK_GE(sample.numSampled, 0);
   VELOX_CHECK_GE(sample.numMatched, 0);
   VELOX_CHECK_GE(sample.numSampled, sample.numMatched);

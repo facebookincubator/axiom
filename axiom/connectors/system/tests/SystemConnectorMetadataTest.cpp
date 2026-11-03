@@ -189,14 +189,14 @@ class SystemConnectorMetadataTest : public ::testing::Test {
     velox::connector::ColumnHandleMap columnHandles;
     std::vector<velox::connector::ColumnHandlePtr> handleList;
     for (const auto& name : outputType->names()) {
-      auto handle = table->layouts()[0]->createColumnHandle(session, name);
+      auto handle = table->primaryLayout()->createColumnHandle(session, name);
       columnHandles[name] = handle;
       handleList.push_back(handle);
     }
 
     std::vector<velox::core::TypedExprPtr> filters;
     std::vector<int32_t> rejectedFilterIndices;
-    auto tableHandle = table->layouts()[0]->createTableHandle(
+    auto tableHandle = table->primaryLayout()->createTableHandle(
         session,
         std::move(handleList),
         evaluator,
@@ -341,7 +341,7 @@ TEST_F(SystemConnectorMetadataTest, splitSource) {
 
   std::vector<velox::core::TypedExprPtr> filters;
   std::vector<int32_t> rejectedFilterIndices;
-  auto tableHandle = table->layouts()[0]->createTableHandle(
+  auto tableHandle = table->primaryLayout()->createTableHandle(
       session, {}, evaluator, std::move(filters), rejectedFilterIndices);
 
   auto* splitManager = metadata_->splitManager();
@@ -576,7 +576,7 @@ TEST_F(SystemConnectorMetadataTest, informationSchema) {
           "length"));
 
   // The rows come from catalog metadata, which only the coordinator reads.
-  EXPECT_TRUE(table->layouts().at(0)->runsOnCoordinator());
+  EXPECT_TRUE(table->primaryLayout()->runsOnCoordinator());
 
   const auto schemata =
       metadata_->findTable(SchemaTableName{schema, std::string("schemata")});

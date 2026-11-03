@@ -3242,7 +3242,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   connector::DeleteLayout
   deleteLayout(const TableWrite& write, const Scan& scan, bool exact) {
     const auto& table = *write.table();
-    const auto& connectorId = table.layouts().front()->connectorId();
+    const auto& connectorId = table.connectorId();
     const auto& connectorContext = session_.context();
     VELOX_CHECK_NOT_NULL(
         connectorContext, "Optimizer session requires a context");
@@ -3337,7 +3337,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
 
   // Resolves target-layout column names into INSERT input expressions.
   WriterRequirements resolveInsertRequirements(const TableWrite& write) {
-    const auto* layout = write.table()->layouts().front();
+    const auto* layout = write.table()->primaryLayout();
     const auto& schema = write.table()->type();
     const auto resolveColumns =
         [&](const std::vector<const connector::Column*>& columns) {

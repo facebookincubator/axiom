@@ -456,8 +456,12 @@ struct SchemaTable {
 
   /// Returns the execution connector ID used by this table's layouts.
   const std::string& connectorId() const {
-    return columnGroups[0]->layout->connectorId();
+    return connectorTable->connectorId();
   }
+
+  /// Returns the column group of the connector table's primary layout (see
+  /// connector::Table::primaryLayout()).
+  ColumnGroupCP primaryColumnGroup() const;
 
   /// Returns the metadata registry ID used to resolve this table.
   std::string_view metadataId() const {

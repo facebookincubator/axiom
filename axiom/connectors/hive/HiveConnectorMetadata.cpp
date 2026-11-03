@@ -299,7 +299,7 @@ HiveTable::HiveTable(
           std::move(primaryKey)) {}
 
 std::vector<std::string> HiveTable::ioColumnPriority() const {
-  const auto* hiveLayout = layouts()[0]->asChecked<HiveTableLayout>();
+  const auto* hiveLayout = primaryLayout()->asChecked<HiveTableLayout>();
 
   bool hasDs = false;
   bool hasTs = false;
@@ -811,7 +811,7 @@ DeleteLayout HiveConnectorMetadata::deleteLayout(
   auto table = tableFromScanHandle(scanHandle);
   VELOX_CHECK_NOT_NULL(table, "DELETE scan identifies an unknown table");
   checkTableWritable(*table);
-  const auto* hiveLayout = table->layouts()[0]->asChecked<HiveTableLayout>();
+  const auto* hiveLayout = table->primaryLayout()->asChecked<HiveTableLayout>();
   auto filters = partitionDeleteFilters(*hiveLayout, scanHandle);
   if (exact && filters.hasValue()) {
     return DeleteLayout::metadata();
@@ -836,7 +836,8 @@ ConnectorDeleteHandlePtr HiveConnectorMetadata::beginDelete(
   auto table = tableFromScanHandle(scanHandle);
   VELOX_CHECK_NOT_NULL(table, "DELETE scan identifies an unknown table");
   if (!layout.hasWriter()) {
-    const auto* hiveLayout = table->layouts()[0]->asChecked<HiveTableLayout>();
+    const auto* hiveLayout =
+        table->primaryLayout()->asChecked<HiveTableLayout>();
     auto filters = partitionDeleteFilters(*hiveLayout, scanHandle);
     VELOX_CHECK(filters.hasValue());
     return makeDeleteWriteHandle(table, std::move(filters.value()));
@@ -859,7 +860,7 @@ ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
       "Only CREATE/INSERT supported, not {}",
       WriteKindName::toName(kind));
   checkTableWritable(*table);
-  const auto* hiveLayout = table->layouts()[0]->asChecked<HiveTableLayout>();
+  const auto* hiveLayout = table->primaryLayout()->asChecked<HiveTableLayout>();
   auto storageFormat = hiveLayout->fileFormat();
 
   const auto& serdeParameters = hiveLayout->serdeParameters();

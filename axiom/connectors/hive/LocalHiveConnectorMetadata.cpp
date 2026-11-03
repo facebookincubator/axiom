@@ -267,7 +267,8 @@ std::shared_ptr<SplitSource> LocalHiveSplitManager::getSplitSource(
        tableHandle->name()});
   VELOX_CHECK_NOT_NULL(
       table, "Could not find {} in its ConnectorMetadata", tableHandle->name());
-  const auto* layout = table->layouts()[0]->asChecked<LocalHiveTableLayout>();
+  const auto* layout =
+      table->primaryLayout()->asChecked<LocalHiveTableLayout>();
 
   const auto* hiveTableHandle =
       tableHandle->asChecked<velox::connector::hive::HiveTableHandle>();
@@ -1483,7 +1484,7 @@ void LocalHiveConnectorMetadata::loadTable(
   tables_[tableName] = table;
 
   std::function<int32_t(std::string_view)> parseBucketNumber = nullptr;
-  if (!table->layouts()[0]->partitionColumns().empty()) {
+  if (!table->primaryLayout()->partitionColumns().empty()) {
     parseBucketNumber = extractDigitsAfterLastSlash;
   }
 
@@ -1750,7 +1751,7 @@ std::optional<int64_t> LocalHiveConnectorMetadata::removePartitions(
   // no reader sees the table between the two.
   std::lock_guard<std::mutex> l(mutex_);
   const auto& table = *handle.table();
-  const auto* layout = table.layouts().at(0)->asChecked<HiveTableLayout>();
+  const auto* layout = table.primaryLayout()->asChecked<HiveTableLayout>();
   const fs::path path = tablePath(table.name());
 
   const auto& partitionColumns = layout->hivePartitionColumns();
@@ -1851,7 +1852,7 @@ RowsFuture LocalHiveConnectorMetadata::finishWrite(
   // write a single .stats file in the table directory. Merges with existing
   // stats from prior writes.
   const bool partitioned = !hiveHandle->table()
-                                ->layouts()[0]
+                                ->primaryLayout()
                                 ->asChecked<HiveTableLayout>()
                                 ->hivePartitionColumns()
                                 .empty();

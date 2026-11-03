@@ -609,7 +609,8 @@ NodeCP EstimateLeafStatsPass::run(
     VELOX_CHECK_NOT_NULL(
         handle, "Filtered-table stats need the connector's read handle");
 
-    const auto* layout = baseTable->schemaTable->columnGroups[0]->layout;
+    const auto* layout =
+        baseTable->schemaTable->connectorTable->primaryLayout();
     auto connectorSession =
         session.context()->sessionFor(layout->connectorId());
 

@@ -252,6 +252,20 @@ Table::Table(
   }
 }
 
+const TableLayout* Table::primaryLayout() const {
+  const auto& allLayouts = layouts();
+  VELOX_CHECK_EQ(
+      allLayouts.size(),
+      1,
+      "A table with several layouts must name its primary layout: {}",
+      name_.toString());
+  return allLayouts.front();
+}
+
+const std::string& Table::connectorId() const {
+  return primaryLayout()->connectorId();
+}
+
 // static
 std::vector<std::unique_ptr<const Column>> Table::makeColumns(
     const velox::RowTypePtr& rowType) {

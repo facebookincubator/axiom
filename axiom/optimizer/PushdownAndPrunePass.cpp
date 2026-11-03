@@ -1518,8 +1518,14 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     for (ExprCP key : sides.lookupKeyExpressions) {
       lookupKeys.push_back(key->as<Column>());
     }
-    const ColumnGroupCP index =
-        sides.lookupScan->baseTable()->schemaTable->columnGroups[0];
+    const auto* schemaTable = sides.lookupScan->baseTable()->schemaTable;
+    // TODO: Choose the layout whose lookup keys cover the lookup's keys.
+    VELOX_NYI_CHECK_EQ(
+        schemaTable->columnGroups.size(),
+        1,
+        "Index lookup into a table with several layouts is not supported yet: {}",
+        schemaTable->name().toString());
+    const ColumnGroupCP index = schemaTable->primaryColumnGroup();
     VELOX_USER_CHECK(
         index->distribution.partitionKeys().empty(),
         "Partitioned index lookup is unsupported: {}",

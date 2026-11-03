@@ -66,7 +66,7 @@ class HiveBucketedExecutionTest : public test::HiveQueriesTestBase,
     ASSERT_NE(table, nullptr);
     ASSERT_FALSE(table->layouts().empty());
     const auto* layout =
-        table->layouts().at(0)->as<connector::hive::HiveTableLayout>();
+        table->primaryLayout()->as<connector::hive::HiveTableLayout>();
     ASSERT_NE(layout, nullptr);
     const auto partitionType = layout->partitionType();
     ASSERT_NE(partitionType, nullptr);

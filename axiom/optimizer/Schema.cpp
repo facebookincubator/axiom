@@ -171,6 +171,16 @@ ColumnGroupCP SchemaTable::addIndex(
           *this, layout, std::move(distribution), std::move(columns)));
 }
 
+ColumnGroupCP SchemaTable::primaryColumnGroup() const {
+  const auto* primaryLayout = connectorTable->primaryLayout();
+  for (auto* group : columnGroups) {
+    if (group->layout == primaryLayout) {
+      return group;
+    }
+  }
+  VELOX_FAIL("Primary layout has no column group: {}", name().toString());
+}
+
 ColumnCP SchemaTable::findColumn(Name name) const {
   auto it = columns.find(name);
   VELOX_CHECK(it != columns.end(), "Column not found: {}", name);
@@ -190,11 +200,6 @@ std::optional<float> connectorCardinality(
   return std::max<float>(1, static_cast<float>(*numRows));
 }
 
-const std::string& tableConnectorId(const connector::Table& connectorTable) {
-  VELOX_CHECK(!connectorTable.layouts().empty());
-  VELOX_CHECK_NOT_NULL(connectorTable.layouts().front());
-  return connectorTable.layouts().front()->connectorId();
-}
 } // namespace
 
 Value Value::fromColumnStatistics(
@@ -242,7 +247,7 @@ Value Value::fromColumnStatistics(
 }
 
 SchemaTable::SchemaTable(const connector::Table& connectorTable)
-    : SchemaTable(connectorTable, tableConnectorId(connectorTable)) {}
+    : SchemaTable(connectorTable, connectorTable.connectorId()) {}
 
 SchemaTable::SchemaTable(
     const connector::Table& connectorTable,
@@ -323,7 +328,7 @@ SchemaTableCP Schema::adoptConnectorTable(
     connector::TablePtr connectorTable) const {
   VELOX_CHECK_NOT_NULL(connectorTable);
   auto* schemaTable =
-      buildSchemaTable(*connectorTable, tableConnectorId(*connectorTable));
+      buildSchemaTable(*connectorTable, connectorTable->connectorId());
   adoptedConnectorTables_.push_back(std::move(connectorTable));
   return schemaTable;
 }
