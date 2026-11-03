@@ -20,6 +20,7 @@
 #include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/Schema.h"
+#include "axiom/optimizer/v1/QueryGraph.h" // IWYU pragma: export
 
 /// Plan candidates.
 /// A candidate plan is constructed based on the join graph/derived table tree.

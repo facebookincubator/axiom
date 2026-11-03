@@ -478,6 +478,12 @@ class QueryGraphContext {
     return optimization_;
   }
 
+  /// If false, correlation names are not included in Column::toString(). Used
+  /// for canonicalizing join cache keys.
+  bool& cnamesInExpr() {
+    return cnamesInExpr_;
+  }
+
   /// Returns the function names used for expression analysis.
   const FunctionNames& functionNames() const {
     return functionNames_;
@@ -601,6 +607,7 @@ class QueryGraphContext {
 
   PlanP contextPlan_{nullptr};
   Optimization* optimization_{nullptr};
+  bool cnamesInExpr_{true};
   FunctionNames functionNames_;
   InternalFunctionNames internalFunctionNames_;
 

@@ -128,6 +128,12 @@ class PlanObject {
     return false;
   }
 
+  /// Correlation name of a table, which distinguishes uses of the same table.
+  /// Null for objects that are not tables.
+  virtual const char* correlationName() const {
+    return nullptr;
+  }
+
   /// Returns true if 'this' is a function call or aggregate function call.
   virtual bool isFunction() const {
     return false;

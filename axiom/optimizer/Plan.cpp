@@ -582,7 +582,7 @@ PlanP PlanSet::best(
 
 const JoinEdgeVector& joinedBy(PlanObjectCP table) {
   VELOX_DCHECK(table->isTable());
-  return table->as<TableObject>()->joinedBy;
+  return queryCtx()->optimization()->joinedBy(table);
 }
 
 std::pair<JoinSide, JoinSide> JoinCandidate::joinSides() const {
