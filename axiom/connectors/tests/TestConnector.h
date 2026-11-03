@@ -743,14 +743,6 @@ class TestConnectorMetadata : public ConnectorMetadata {
       uint64_t numRows,
       const std::unordered_map<std::string, ColumnStatistics>& columnStats);
 
-  TablePtr createTable(
-      const ConnectorSessionPtr& session,
-      const SchemaTableName& tableName,
-      const velox::RowTypePtr& rowType,
-      const folly::F14FastMap<std::string, velox::Variant>& options,
-      bool ifNotExists,
-      bool explain) override;
-
   ConnectorWriteHandlePtr beginWrite(
       const ConnectorSessionPtr& session,
       const TablePtr& table,
@@ -796,15 +788,6 @@ class TestConnectorMetadata : public ConnectorMetadata {
       const ConnectorSessionPtr& session,
       const SchemaTableName& tableName,
       bool ifExists,
-      bool explain) override;
-
-  std::optional<bool> addColumn(
-      const ConnectorSessionPtr& session,
-      const SchemaTableName& tableName,
-      const std::string& columnName,
-      const velox::TypePtr& columnType,
-      bool ifTableExists,
-      bool ifNotExists,
       bool explain) override;
 
   /// Shortcut for dropTable(session, tableName, true, false).
@@ -867,6 +850,26 @@ class TestConnectorMetadata : public ConnectorMetadata {
       const ConnectorSessionPtr& session,
       const std::string& schemaName,
       bool ifExists) override;
+
+  std::optional<TableDefinitionSupport> supportsCreateTable() const override {
+    return TableDefinitionSupport{};
+  }
+
+ protected:
+  folly::coro::Task<std::optional<bool>> co_doAddColumn(
+      ConnectorSessionPtr session,
+      SchemaTableName tableName,
+      ColumnDefinition column,
+      bool ifTableExists,
+      bool ifNotExists,
+      bool explain) override;
+
+  folly::coro::Task<TablePtr> co_doCreateTable(
+      ConnectorSessionPtr session,
+      SchemaTableName tableName,
+      TableDefinition definition,
+      bool ifNotExists,
+      bool explain) override;
 
  private:
   TestConnector* connector_;

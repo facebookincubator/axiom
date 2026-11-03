@@ -506,19 +506,19 @@ class SqlQueryRunner {
       const presto::CreateTableStatement& statement,
       bool explain);
 
-  facebook::axiom::connector::TablePtr createTable(
+  folly::coro::Task<facebook::axiom::connector::TablePtr> co_createTable(
       const facebook::axiom::connector::ConnectorContextPtr& context,
       const presto::CreateTableAsSelectStatement& statement,
-      bool explain = false);
+      bool explain);
 
   std::string dropTable(
       const facebook::axiom::connector::ConnectorContextPtr& context,
       const presto::DropTableStatement& statement);
 
-  std::string addColumn(
+  folly::coro::Task<std::string> co_addColumn(
       const facebook::axiom::connector::ConnectorContextPtr& context,
       const presto::AddColumnStatement& statement,
-      bool explain = false);
+      bool explain);
 
   /// Runs CREATE VECTOR INDEX and returns the message to show. With 'explain',
   /// checks the statement without creating the index.
@@ -577,7 +577,8 @@ class SqlQueryRunner {
   // 'explain' makes the creation a dry run, for the EXPLAIN forms that do not
   // run the query. Callers that execute must call checkLogicalPlan() first: a
   // rejected CTAS must not leave an empty table behind.
-  std::shared_ptr<facebook::axiom::connector::SchemaResolver> createTargetTable(
+  folly::coro::Task<std::shared_ptr<facebook::axiom::connector::SchemaResolver>>
+  co_createTargetTable(
       const facebook::axiom::connector::ConnectorContextPtr& context,
       const presto::CreateTableAsSelectStatement& ctas,
       bool explain);

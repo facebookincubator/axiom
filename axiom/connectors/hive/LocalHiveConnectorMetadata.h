@@ -321,14 +321,6 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   std::shared_ptr<velox::core::QueryCtx> makeQueryCtx(
       const std::string& queryId);
 
-  TablePtr createTable(
-      const ConnectorSessionPtr& session,
-      const SchemaTableName& tableName,
-      const velox::RowTypePtr& rowType,
-      const folly::F14FastMap<std::string, velox::Variant>& options,
-      bool ifNotExists,
-      bool explain) override;
-
   RowsFuture finishWrite(
       const ConnectorSessionPtr& session,
       const ConnectorWriteHandlePtr& handle,
@@ -358,15 +350,6 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
       const ConnectorSessionPtr& session,
       const SchemaTableName& tableName,
       bool ifExists,
-      bool explain) override;
-
-  std::optional<bool> addColumn(
-      const ConnectorSessionPtr& session,
-      const SchemaTableName& tableName,
-      const std::string& columnName,
-      const velox::TypePtr& columnType,
-      bool ifTableExists,
-      bool ifNotExists,
       bool explain) override;
 
   /// Keeps the index's record as a JSON file next to the tables'
@@ -404,6 +387,26 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   /// Loads or reloads a table from disk, discovering any new files.
   /// This is useful when files are manually added to a table directory.
   void reloadTableFromPath(const SchemaTableName& tableName);
+
+  std::optional<TableDefinitionSupport> supportsCreateTable() const override {
+    return TableDefinitionSupport{};
+  }
+
+ protected:
+  folly::coro::Task<std::optional<bool>> co_doAddColumn(
+      ConnectorSessionPtr session,
+      SchemaTableName tableName,
+      ColumnDefinition column,
+      bool ifTableExists,
+      bool ifNotExists,
+      bool explain) override;
+
+  folly::coro::Task<TablePtr> co_doCreateTable(
+      ConnectorSessionPtr session,
+      SchemaTableName tableName,
+      TableDefinition definition,
+      bool ifNotExists,
+      bool explain) override;
 
  private:
   std::string tablePath(const SchemaTableName& tableName) const {

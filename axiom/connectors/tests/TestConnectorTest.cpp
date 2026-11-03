@@ -15,6 +15,7 @@
  */
 
 #include "axiom/connectors/tests/TestConnector.h"
+#include <folly/coro/BlockingWait.h>
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
@@ -155,14 +156,13 @@ TEST_F(TestConnectorTest, table) {
   EXPECT_TRUE(table->columnMap().contains(TestTable::kRowId));
 
   VELOX_ASSERT_THROW(
-      metadata_->addColumn(
+      folly::coro::blockingWait(metadata_->co_addColumn(
           makeSession(),
           {kDefaultSchema, "noschema"},
-          std::string{TestTable::kRowId},
-          BIGINT(),
+          {.name = std::string{TestTable::kRowId}, .type = BIGINT()},
           /*ifTableExists=*/false,
           /*ifNotExists=*/false,
-          /*explain=*/false),
+          /*explain=*/false)),
       "Column already exists");
   EXPECT_EQ(metadata_->findTable({kDefaultSchema, "noschema"}), table);
 

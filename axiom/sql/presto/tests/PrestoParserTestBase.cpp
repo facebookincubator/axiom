@@ -15,6 +15,7 @@
  */
 
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
+#include <folly/container/F14Map.h>
 #include <gmock/gmock.h>
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/logical_plan/ExprPrinter.h"
@@ -195,8 +196,7 @@ void PrestoParserTestBase::testCreateTable(
     std::string_view sql,
     const std::string& tableName,
     const RowTypePtr& tableSchema,
-    const std::unordered_map<std::string, std::string>& properties,
-    const std::vector<CreateTableStatement::Constraint>& constraints) {
+    const std::unordered_map<std::string, std::string>& properties) {
   SCOPED_TRACE(sql);
   auto parser = makeParser();
 
@@ -209,19 +209,11 @@ void PrestoParserTestBase::testCreateTable(
   ASSERT_TRUE(*createTable->tableSchema() == *tableSchema);
 
   assertProperties(createTable->properties(), properties);
-
-  const auto& actualConstraints = createTable->constraints();
-  ASSERT_EQ(constraints.size(), actualConstraints.size());
-  for (size_t i = 0; i < constraints.size(); ++i) {
-    ASSERT_EQ(constraints[i].name, actualConstraints[i].name);
-    ASSERT_EQ(constraints[i].type, actualConstraints[i].type);
-    ASSERT_EQ(constraints[i].columns, actualConstraints[i].columns);
-  }
 }
 
 // static
 void PrestoParserTestBase::assertProperties(
-    const std::unordered_map<std::string, lp::ExprPtr>& actual,
+    const folly::F14FastMap<std::string, lp::ExprPtr>& actual,
     const std::unordered_map<std::string, std::string>& expected) {
   ASSERT_EQ(expected.size(), actual.size());
   for (const auto& [key, value] : expected) {

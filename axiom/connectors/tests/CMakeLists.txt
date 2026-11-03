@@ -65,7 +65,12 @@ if(AXIOM_BUILD_TESTING)
     GTest::gtest_main
   )
 
-  add_executable(axiom_connectors_tests SchemaResolverTest.cpp VectorIndexTest.cpp)
+  add_executable(
+    axiom_connectors_tests
+    SchemaResolverTest.cpp
+    TableDefinitionTest.cpp
+    VectorIndexTest.cpp
+  )
 
   add_test(axiom_connectors_tests axiom_connectors_tests)
 

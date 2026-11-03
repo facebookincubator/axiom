@@ -423,17 +423,6 @@ void onComplete(
   }
 }
 
-// Evaluates each property, an expression that looks constant, to its value.
-folly::F14FastMap<std::string, velox::Variant> evaluateProperties(
-    const std::unordered_map<std::string, logical_plan::ExprPtr>& properties) {
-  folly::F14FastMap<std::string, velox::Variant> values;
-  for (const auto& [key, value] : properties) {
-    values[key] =
-        optimizer::ConstantExprEvaluator::evaluateConstantExpr(*value);
-  }
-  return values;
-}
-
 } // namespace
 
 folly::coro::Task<connector::TablePtr> SqlQueryRunner::co_createTable(
@@ -442,45 +431,41 @@ folly::coro::Task<connector::TablePtr> SqlQueryRunner::co_createTable(
     bool explain) {
   auto metadata = context->metadataRegistry().get(statement.connectorId());
 
-  auto options = evaluateProperties(statement.properties());
-
   auto session = makeConnectorSession(context, statement.connectorId());
   if (explain) {
-    co_return metadata->createTable(
+    co_return co_await metadata->co_createTable(
         session,
         statement.tableName(),
-        statement.tableSchema(),
-        options,
+        statement.definition(
+            optimizer::ConstantExprEvaluator::evaluateProperties),
         statement.ifNotExists(),
         /*explain=*/true);
   }
   auto table = co_await metadata->co_createEmptyTable(
       session,
       statement.tableName(),
-      statement.tableSchema(),
-      std::move(options),
+      statement.definition(
+          optimizer::ConstantExprEvaluator::evaluateProperties),
       statement.ifNotExists());
   VELOX_CHECK(table != nullptr || statement.ifNotExists());
   co_return table;
 }
 
-connector::TablePtr SqlQueryRunner::createTable(
+folly::coro::Task<connector::TablePtr> SqlQueryRunner::co_createTable(
     const facebook::axiom::connector::ConnectorContextPtr& context,
     const presto::CreateTableAsSelectStatement& statement,
     bool explain) {
   auto metadata = context->metadataRegistry().get(statement.connectorId());
 
-  auto options = evaluateProperties(statement.properties());
-
-  auto table = metadata->createTable(
+  auto table = co_await metadata->co_createTable(
       makeConnectorSession(context, statement.connectorId()),
       statement.tableName(),
-      statement.tableSchema(),
-      options,
+      statement.definition(
+          optimizer::ConstantExprEvaluator::evaluateProperties),
       /*ifNotExists=*/false,
       explain);
   VELOX_CHECK_NOT_NULL(table);
-  return table;
+  co_return table;
 }
 
 folly::coro::Task<std::string> SqlQueryRunner::co_createVectorIndex(
@@ -489,7 +474,8 @@ folly::coro::Task<std::string> SqlQueryRunner::co_createVectorIndex(
     bool explain) {
   auto metadata = context->metadataRegistry().get(statement.connectorId());
 
-  auto tableProperties = evaluateProperties(statement.properties());
+  auto tableProperties = optimizer::ConstantExprEvaluator::evaluateProperties(
+      statement.properties());
   auto indexProperties =
       connector::VectorIndexProperties::extract(tableProperties);
 
@@ -566,35 +552,37 @@ folly::coro::Task<std::string> SqlQueryRunner::co_call(
   co_return "CALL";
 }
 
-std::string SqlQueryRunner::addColumn(
+folly::coro::Task<std::string> SqlQueryRunner::co_addColumn(
     const facebook::axiom::connector::ConnectorContextPtr& context,
     const presto::AddColumnStatement& statement,
     bool explain) {
   auto metadata = context->metadataRegistry().get(statement.connectorId());
 
-  auto result = metadata->addColumn(
+  auto result = co_await metadata->co_addColumn(
       makeConnectorSession(context, statement.connectorId()),
       statement.tableName(),
-      statement.columnName(),
-      statement.columnType(),
+      statement.column().definition(
+          optimizer::ConstantExprEvaluator::evaluateProperties),
       statement.ifTableExists(),
       statement.ifNotExists(),
       explain);
 
   if (!result.has_value()) {
-    return fmt::format(
+    co_return fmt::format(
         "Table does not exist: {}.{}",
         statement.connectorId(),
         statement.tableName());
   }
   if (!result.value()) {
-    return fmt::format(
+    co_return fmt::format(
         "Column '{}' already exists in {} (no-op)",
-        statement.columnName(),
+        statement.column().name,
         statement.tableName());
   }
-  return fmt::format(
-      "Added column '{}' to {}", statement.columnName(), statement.tableName());
+  co_return fmt::format(
+      "Added column '{}' to {}",
+      statement.column().name,
+      statement.tableName());
 }
 
 std::string SqlQueryRunner::createSchema(
@@ -602,7 +590,8 @@ std::string SqlQueryRunner::createSchema(
     const presto::CreateSchemaStatement& statement) {
   auto metadata = context->metadataRegistry().get(statement.connectorId());
 
-  auto properties = evaluateProperties(statement.properties());
+  auto properties = optimizer::ConstantExprEvaluator::evaluateProperties(
+      statement.properties());
 
   metadata->createSchema(
       makeConnectorSession(context, statement.connectorId()),
@@ -1115,15 +1104,15 @@ SqlQueryRunner::co_runExplainStatement(
     co_return;
   } else if (statement->isAddColumn()) {
     const auto* add = statement->as<presto::AddColumnStatement>();
-    addColumn(context, *add, /*explain=*/true);
+    co_await co_addColumn(context, *add, /*explain=*/true);
     co_yield SqlResultChunk{fmt::format(
         "ALTER TABLE {}{}.{} ADD COLUMN {}{} {}",
         add->ifTableExists() ? "IF EXISTS " : "",
         add->connectorId(),
         add->tableName(),
         add->ifNotExists() ? "IF NOT EXISTS " : "",
-        add->columnName(),
-        add->columnType()->toString())};
+        add->column().name,
+        add->column().type->toString())};
     co_return;
   } else if (statement->isShowSession()) {
     logicalPlan = showSessionPlan(
@@ -1188,8 +1177,8 @@ SqlQueryRunner::co_runExplainStatement(
   }
 
   if (ctas != nullptr) {
-    schemaResolver =
-        createTargetTable(context, *ctas, /*explain=*/!explain.isAnalyze());
+    schemaResolver = co_await co_createTargetTable(
+        context, *ctas, /*explain=*/!explain.isAnalyze());
   }
 
   if (explain.type() == presto::ExplainStatement::Type::kIo) {
@@ -1241,7 +1230,8 @@ SqlQueryRunner::co_runPlanStatement(
   checkLogicalPlan(*logicalPlan);
 
   if (ctas != nullptr) {
-    schemaResolver = createTargetTable(context, *ctas, /*explain=*/false);
+    schemaResolver =
+        co_await co_createTargetTable(context, *ctas, /*explain=*/false);
   }
 
   auto&& [generator] = co_await folly::coro::co_scope_exit(
@@ -1294,7 +1284,7 @@ folly::coro::Task<std::string> SqlQueryRunner::co_runDataDefinitionStatement(
 
   if (sqlStatement.isAddColumn()) {
     const auto* add = sqlStatement.as<presto::AddColumnStatement>();
-    co_return addColumn(context, *add);
+    co_return co_await co_addColumn(context, *add, /*explain=*/false);
   }
 
   if (sqlStatement.isCreateSchema()) {
@@ -2093,15 +2083,16 @@ void SqlQueryRunner::checkLogicalPlan(
   }
 }
 
-std::shared_ptr<connector::SchemaResolver> SqlQueryRunner::createTargetTable(
+folly::coro::Task<std::shared_ptr<connector::SchemaResolver>>
+SqlQueryRunner::co_createTargetTable(
     const facebook::axiom::connector::ConnectorContextPtr& context,
     const presto::CreateTableAsSelectStatement& ctas,
     bool explain) {
-  auto table = createTable(context, ctas, explain);
+  auto table = co_await co_createTable(context, ctas, explain);
   auto schemaResolver =
       std::make_shared<connector::SchemaResolver>(context->metadataRegistry());
   schemaResolver->setTargetTable(ctas.connectorId(), ctas.tableName(), table);
-  return schemaResolver;
+  co_return schemaResolver;
 }
 
 optimizer::PlanAndStats SqlQueryRunner::optimize(

@@ -393,14 +393,57 @@ std::vector<std::string> ConnectorMetadata::allMetadataIds() {
   return ids;
 }
 
+folly::coro::Task<TablePtr> ConnectorMetadata::co_createTable(
+    ConnectorSessionPtr session,
+    SchemaTableName tableName,
+    TableDefinition definition,
+    bool ifNotExists,
+    bool explain) {
+  const auto support = supportsCreateTable();
+  if (!support.has_value()) {
+    VELOX_UNSUPPORTED("Connector does not support CREATE TABLE");
+  }
+  support->check(definition);
+  co_return co_await co_doCreateTable(
+      std::move(session),
+      std::move(tableName),
+      std::move(definition),
+      ifNotExists,
+      explain);
+}
+
+folly::coro::Task<std::optional<bool>> ConnectorMetadata::co_addColumn(
+    ConnectorSessionPtr session,
+    SchemaTableName tableName,
+    ColumnDefinition column,
+    bool ifTableExists,
+    bool ifNotExists,
+    bool explain) {
+  const auto support = supportsCreateTable();
+  if (!support.has_value()) {
+    VELOX_UNSUPPORTED("Connector does not support ADD COLUMN");
+  }
+  support->check(column);
+  co_return co_await co_doAddColumn(
+      std::move(session),
+      std::move(tableName),
+      std::move(column),
+      ifTableExists,
+      ifNotExists,
+      explain);
+}
+
 folly::coro::Task<TablePtr> ConnectorMetadata::co_createEmptyTable(
     ConnectorSessionPtr session,
     SchemaTableName tableName,
-    velox::RowTypePtr rowType,
-    folly::F14FastMap<std::string, velox::Variant> options,
+    TableDefinition definition,
     bool ifNotExists) {
-  auto table = createTable(
-      session, tableName, rowType, options, ifNotExists, /*explain=*/false);
+  auto table = co_await co_createTable(
+      session,
+      std::move(tableName),
+      std::move(definition),
+      ifNotExists,
+      /*explain=*/false);
   if (table == nullptr) {
     co_return nullptr;
   }

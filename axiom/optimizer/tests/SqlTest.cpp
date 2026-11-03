@@ -15,6 +15,7 @@
  */
 
 #include <folly/FileUtil.h>
+#include <folly/coro/BlockingWait.h>
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 #include <algorithm>
@@ -139,25 +140,15 @@ void runSetupStatement(
       connector::Properties{},
       connector::makeTestStatWriter());
 
-  auto evalOptions = [](const auto& properties) {
-    folly::F14FastMap<std::string, velox::Variant> options;
-    for (const auto& [key, value] : properties) {
-      options[key] =
-          optimizer::ConstantExprEvaluator::evaluateConstantExpr(*value);
-    }
-    return options;
-  };
-
   if (stmt->isCreateTable()) {
     const auto& create =
         *stmt->as<::axiom::sql::presto::CreateTableStatement>();
-    metadata.createTable(
+    folly::coro::blockingWait(metadata.co_createTable(
         session,
         create.tableName(),
-        create.tableSchema(),
-        evalOptions(create.properties()),
+        create.definition(optimizer::ConstantExprEvaluator::evaluateProperties),
         /*ifNotExists=*/false,
-        /*explain=*/false);
+        /*explain=*/false));
     return;
   }
 
@@ -167,13 +158,12 @@ void runSetupStatement(
   } else if (stmt->isCreateTableAsSelect()) {
     const auto& ctas =
         *stmt->as<::axiom::sql::presto::CreateTableAsSelectStatement>();
-    metadata.createTable(
+    folly::coro::blockingWait(metadata.co_createTable(
         session,
         ctas.tableName(),
-        ctas.tableSchema(),
-        evalOptions(ctas.properties()),
+        ctas.definition(optimizer::ConstantExprEvaluator::evaluateProperties),
         /*ifNotExists=*/false,
-        /*explain=*/false);
+        /*explain=*/false));
     plan = ctas.plan();
   } else {
     VELOX_USER_FAIL("Unsupported setup statement: {}", sql);
