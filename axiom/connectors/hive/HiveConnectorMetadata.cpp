@@ -37,13 +37,13 @@
 namespace facebook::axiom::connector::hive {
 
 PartitionValueParsingOptions HiveTableLayout::partitionValueParsingOptions(
-    const velox::connector::hive::FileConfig& config,
+    const velox::connector::FileConfig& config,
     const velox::config::ConfigBase* session) {
   return {
       .timestampMode = config.readTimestampPartitionValueAsLocalTime(session)
-          ? velox::connector::hive::PartitionValue::TimestampMode::kLocalTime
-          : velox::connector::hive::PartitionValue::TimestampMode::kUtc,
-      .dateMode = velox::connector::hive::PartitionValue::DateMode::kIsoString,
+          ? velox::connector::PartitionValue::TimestampMode::kLocalTime
+          : velox::connector::PartitionValue::TimestampMode::kUtc,
+      .dateMode = velox::connector::PartitionValue::DateMode::kIsoString,
   };
 }
 
@@ -53,8 +53,8 @@ template <velox::TypeKind kind>
 velox::VectorPtr makePartitionVector(
     const velox::TypePtr& type,
     const std::vector<std::optional<std::string_view>>& values,
-    velox::connector::hive::PartitionValue::TimestampMode timestampMode,
-    velox::connector::hive::PartitionValue::DateMode dateMode,
+    velox::connector::PartitionValue::TimestampMode timestampMode,
+    velox::connector::PartitionValue::DateMode dateMode,
     velox::memory::MemoryPool* pool) {
   using NativeType = typename velox::TypeTraits<kind>::NativeType;
   auto vector = velox::BaseVector::create<velox::FlatVector<NativeType>>(
@@ -69,7 +69,7 @@ velox::VectorPtr makePartitionVector(
     } else {
       vector->set(
           i,
-          velox::connector::hive::PartitionValue::fromString(
+          velox::connector::PartitionValue::fromString(
               *values[i], *type, timestampMode, dateMode)
               .value<NativeType>());
     }
@@ -516,7 +516,7 @@ velox::connector::ConnectorTableHandlePtr HiveTableLayout::createTableHandle(
   velox::common::SubfieldFilters subfieldFilters;
   double sampleRate = 1.0;
   for (auto& typedExpr : filters) {
-    auto remaining = velox::connector::hive::extractFiltersFromRemainingFilter(
+    auto remaining = velox::connector::extractFiltersFromRemainingFilter(
         typedExpr, &evaluator, subfieldFilters, sampleRate);
 
     if (remaining != nullptr) {
