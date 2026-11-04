@@ -16,6 +16,8 @@
 
 #include "axiom/connectors/VectorIndex.h"
 
+#include <fmt/format.h>
+
 #include <vector>
 
 #include "velox/common/vectorindex/LocalVectorIndexOptions.h"
@@ -153,10 +155,33 @@ VectorIndexProperties VectorIndexProperties::extract(
   };
 }
 
+namespace {
+
+// Checks that no partition column takes the name of a column the codec or
+// index table adds.
+void checkPartitionColumnNames(const velox::RowTypePtr& partitionColumns) {
+  for (const auto& name : partitionColumns->names()) {
+    for (const auto reserved :
+         {VectorIndex::kCodec,
+          VectorIndex::kCodecId,
+          VectorIndex::kClusterId,
+          VectorIndex::kGroupId,
+          VectorIndex::kLocalIndex}) {
+      VELOX_USER_CHECK(
+          name != reserved,
+          "Vector index partition column name is reserved: {}",
+          name);
+    }
+  }
+}
+
+} // namespace
+
 // static
 velox::RowTypePtr VectorIndex::codecTableType(
     const velox::RowTypePtr& partitionColumns) {
-  return velox::ROW(std::string(kCodec), velox::VARBINARY())
+  checkPartitionColumnNames(partitionColumns);
+  return velox::ROW(std::string(kCodec), velox::VECTOR_INDEX())
       ->unionWith(partitionColumns)
       ->unionWith(velox::ROW(std::string(kCodecId), velox::BIGINT()));
 }
@@ -164,10 +189,11 @@ velox::RowTypePtr VectorIndex::codecTableType(
 // static
 velox::RowTypePtr VectorIndex::indexTableType(
     const velox::RowTypePtr& partitionColumns) {
+  checkPartitionColumnNames(partitionColumns);
   return velox::ROW({{std::string(kCodecId), velox::BIGINT()},
                      {std::string(kClusterId), velox::BIGINT()},
                      {std::string(kGroupId), velox::BIGINT()},
-                     {std::string(kLocalIndex), velox::VARBINARY()}})
+                     {std::string(kLocalIndex), velox::VECTOR_INDEX()}})
       ->unionWith(partitionColumns);
 }
 

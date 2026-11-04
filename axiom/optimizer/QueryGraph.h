@@ -729,6 +729,11 @@ struct BaseTable : public PlanObject {
   /// 'expr', false if 'filter' already had it.
   bool addFilter(ExprCP expr);
 
+  /// Adds to 'columns' a column of this table for its schema column
+  /// 'nameInTable', named 'name', with 'alias' if set. Fails if the table has
+  /// no such schema column.
+  ColumnCP addColumn(Name nameInTable, Name name, Name alias);
+
   std::optional<int32_t> columnId(Name column) const;
 
   PathSet columnSubfields(int32_t id) const;

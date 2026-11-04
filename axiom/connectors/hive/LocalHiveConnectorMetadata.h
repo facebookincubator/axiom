@@ -117,7 +117,7 @@ class LocalHiveTableLayout : public HiveTableLayout {
   LocalHiveTableLayout(
       const std::string& label,
       const Table* table,
-      const LocalHiveConnectorMetadata& metadata,
+      LocalHiveConnectorMetadata& metadata,
       std::vector<const Column*> columns,
       std::optional<int32_t> numBuckets,
       const std::vector<const Column*>& partitioning,
@@ -185,6 +185,14 @@ class LocalHiveTableLayout : public HiveTableLayout {
       std::vector<std::string> groupingColumns,
       std::vector<std::string> columns) const override;
 
+  /// Reads the partitions of this layout's files and of the index table's
+  /// files.
+  folly::coro::Task<void> co_checkVectorIndexCoverage(
+      ConnectorSessionPtr session,
+      velox::connector::ConnectorTableHandlePtr tableHandle,
+      velox::core::ExpressionEvaluator& evaluator,
+      VectorIndexPtr index) const override;
+
   std::span<const Column* const> discretePredicateColumns() const override;
 
   /// Enumerates the partition-key tuples of 'columns' from persisted partition
@@ -197,7 +205,7 @@ class LocalHiveTableLayout : public HiveTableLayout {
 
  private:
   // The metadata that owns this layout's table.
-  const LocalHiveConnectorMetadata& metadata_;
+  LocalHiveConnectorMetadata& metadata_;
   std::vector<std::unique_ptr<const FileInfo>> files_;
   std::vector<std::unique_ptr<const FileInfo>> ownedFiles_;
   // Per-partition (or per-table for unpartitioned) write-time stats loaded
@@ -227,6 +235,16 @@ class LocalTable : public HiveTable {
     layouts_.push_back(std::move(layout));
   }
 
+  const std::vector<VectorIndexPtr>& vectorIndexes() const override {
+    return vectorIndexes_;
+  }
+
+  /// Records that the table has 'index', whose storage tables the metadata
+  /// created.
+  void linkVectorIndex(VectorIndexPtr index) {
+    vectorIndexes_.push_back(std::move(index));
+  }
+
   // Creates or updates the default layout with the given files. Returns the
   // layout pointer.
   LocalHiveTableLayout* makeDefaultLayout(
@@ -251,6 +269,9 @@ class LocalTable : public HiveTable {
 
   // Copy of 'layouts_' for use in layouts().
   std::vector<const TableLayout*> exportedLayouts_;
+
+  // The table's vector indexes (see vectorIndexes()).
+  std::vector<VectorIndexPtr> vectorIndexes_;
 
   int64_t numRows_{0};
 };
@@ -355,28 +376,6 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
       bool ifExists,
       bool explain) override;
 
-  /// Keeps the index's record as a JSON file next to the tables'
-  /// directories, '<index>.vector_index', and names the tables
-  /// '<index>__codecs' and '<index>__index'.
-  folly::coro::Task<bool> co_createVectorIndex(
-      ConnectorSessionPtr session,
-      SchemaTableName indexName,
-      velox::RowTypePtr columns,
-      VectorIndexProperties properties,
-      folly::F14FastMap<std::string, velox::Variant> tableProperties,
-      bool ifNotExists,
-      bool explain) override;
-
-  VectorIndexPtr findVectorIndex(
-      const ConnectorSessionPtr& session,
-      const SchemaTableName& indexName) override;
-
-  bool dropVectorIndex(
-      const ConnectorSessionPtr& session,
-      const SchemaTableName& indexName,
-      bool ifExists,
-      bool explain) override;
-
   /// Shortcut for dropTable(session, tableName, true, false).
   bool dropTableIfExists(const SchemaTableName& tableName) {
     return dropTable(nullptr, tableName, true, /*explain=*/false);
@@ -396,6 +395,7 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
         .columnComments = true,
         .tableComment = true,
         .primaryKey = true,
+        .vectorIndexes = true,
     };
   }
 
@@ -408,10 +408,29 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
       bool ifNotExists,
       bool explain) override;
 
+  /// Keeps the index's record in its table's '.schema'. The index's
+  /// partitions are the table's: its properties may not include
+  /// partitioned_by. Its properties beyond its own apply to its storage tables
+  /// named after the table and the index, e.g. products__i__codecs.
+  folly::coro::Task<bool> co_doAddVectorIndex(
+      ConnectorSessionPtr session,
+      TablePtr table,
+      ResolvedVectorIndex resolved,
+      bool ifNotExists,
+      bool explain) override;
+
+  bool doDropVectorIndex(
+      const ConnectorSessionPtr& session,
+      const TablePtr& table,
+      std::string_view name,
+      bool ifExists,
+      bool explain) override;
+
   folly::coro::Task<TablePtr> co_doCreateTable(
       ConnectorSessionPtr session,
       SchemaTableName tableName,
       TableDefinition definition,
+      std::vector<ResolvedVectorIndex> vectorIndexes,
       bool ifNotExists,
       bool explain) override;
 
@@ -438,6 +457,28 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
       const fs::path& tablePath);
 
   std::shared_ptr<LocalTable> findTableLocked(std::string_view name) const;
+
+  // Creates the vector index storage tables 'storageTables' declares, then
+  // calls 'publish' to record them, and returns their names. Drops the tables
+  // it created if creating one or 'publish' fails. With 'explain', performs
+  // the checks of creating them, creates nothing and returns no names.
+  folly::coro::Task<std::vector<SchemaTableName>> co_createStorageTables(
+      ConnectorSessionPtr session,
+      std::vector<std::pair<SchemaTableName, TableDefinition>> storageTables,
+      bool explain,
+      const std::function<void()>& publish);
+
+  // Removes the partitions 'partitions', directories under the table
+  // directory of 'table', from the storage tables of each vector index of
+  // 'table'. Removes all of each index's data when 'table' has no partition
+  // columns. Requires 'mutex_'.
+  void removeFromVectorIndexes(
+      const Table& table,
+      const std::vector<std::filesystem::path>& partitions);
+
+  // Throws a user error if 'tableName' is a storage table of a vector index:
+  // it goes only with its index. Requires 'mutex_' held.
+  void checkNotVectorIndexStorage(const SchemaTableName& tableName) const;
 
   // Removes the partitions selected by 'handle's filters and returns the
   // number of rows they held. Every filter is on a partition column, so either

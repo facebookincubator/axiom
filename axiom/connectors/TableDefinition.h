@@ -44,8 +44,27 @@ struct ColumnDefinition {
   folly::F14FastMap<std::string, velox::Variant> properties;
 };
 
+/// A vector index CREATE TABLE or ADD VECTOR INDEX declares (see
+/// connector::VectorIndex).
+struct VectorIndexDefinition {
+  /// The index's name, unique within its table.
+  std::string name;
+
+  /// The ARRAY(REAL) column the index indexes.
+  std::string column;
+
+  /// The columns a search returns for each match, which find the row it came
+  /// from, from KEY. Empty when the statement leaves it out: the table's
+  /// primary key.
+  std::vector<std::string> key;
+
+  /// The index's properties, from its WITH clause, by name: the index's own
+  /// (see VectorIndexProperties) and those of its storage tables.
+  folly::F14FastMap<std::string, velox::Variant> properties;
+};
+
 /// What CREATE TABLE declares about a new table: its columns, comment,
-/// properties and primary key.
+/// properties, primary key and vector indexes.
 ///
 ///   TableDefinition definition{
 ///       .columns = {{.name = "id", .type = BIGINT()}},
@@ -66,6 +85,9 @@ struct TableDefinition {
   /// The primary key's columns, each a column of 'columns'. Empty: the table
   /// has no primary key.
   std::vector<std::string> primaryKey;
+
+  /// The table's vector indexes, each on a column of 'columns'.
+  std::vector<VectorIndexDefinition> vectorIndexes;
 
   /// Returns a minimal definition: columns with the names and types of
   /// 'rowType', nullable, no comments or properties, and the table properties
@@ -99,12 +121,18 @@ struct TableDefinitionSupport {
   /// The primary key: TableDefinition::primaryKey.
   bool primaryKey{false};
 
+  /// Vector indexes: TableDefinition::vectorIndexes, and ADD VECTOR INDEX.
+  bool vectorIndexes{false};
+
   /// Throws a user error for the first part of 'definition' this does not
   /// include.
   void check(const TableDefinition& definition) const;
 
   /// Throws a user error for the first part of 'column' this does not include.
   void check(const ColumnDefinition& column) const;
+
+  /// Throws a user error if this does not include vector indexes.
+  void check(const VectorIndexDefinition& index) const;
 };
 
 } // namespace facebook::axiom::connector

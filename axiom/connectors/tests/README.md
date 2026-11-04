@@ -36,6 +36,9 @@ The Test connector is designed for three use cases:
 - `INSERT INTO`.
 - Row-level `DELETE`.
 - `DROP TABLE`.
+- Vector indexes: `VECTOR INDEX` elements of `CREATE TABLE`, and
+  `ALTER TABLE ADD/DROP VECTOR INDEX` (see
+  [Partitioned Tables and Vector Indexes](#partitioned-tables-and-vector-indexes)).
 - Automatic statistics collection: per-column NDV, min/max, null percentage,
   max and average length, and average size in bytes of variable-width values
   are computed incrementally as data is added.
@@ -57,7 +60,9 @@ The Test connector is designed for three use cases:
 
 **Not supported:**
 - Filter pushdown.
-- Hive-style directory partitioning.
+- Partitions of data. A table may declare partition columns, but they are
+  metadata only (see
+  [Partitioned Tables and Vector Indexes](#partitioned-tables-and-vector-indexes)).
 - Sort-within-bucket.
 - Persistence. All data is lost when the process exits.
 
@@ -257,9 +262,58 @@ The example below specifies that the `status` column of the `orders`
 table has exactly three possible values: `"O"`, `"F"`, and `"P"`:
 
 ```cpp
-connector->setDiscreteValues("orders", {"status"}, {
-    Variant("O"), Variant("F"), Variant("P"),
+connector->addTable("orders", ...)->setDiscreteValues({"status"}, {
+    Variant::row({Variant("O")}),
+    Variant::row({Variant("F")}),
+    Variant::row({Variant("P")}),
 });
+```
+
+A table already added takes `connector->setDiscreteValues("orders", ...)`.
+
+### Partitioned Tables and Vector Indexes
+
+A table may declare partition columns with the `partitioned_by` property, or
+`addPartitionedTable` in C++. They
+are metadata: the table holds no partitions of data, and `setDiscreteValues`
+records the partitions it has. A vector index of the table is partitioned by
+the same columns. Adding an index creates its codec table and index table,
+named after the table and the index, e.g. `products__i__codecs` and
+`products__i__index`. Dropping the table or the index drops them; dropping a
+storage table directly fails.
+
+The index covers a partition of the table once the partitions recorded for its
+index table include it. A table without partition columns is covered once its
+index table has rows. A search fails when the index does not cover every
+partition of the table; coverage does not prune by the search's filters.
+
+The example below adds a partitioned `products` table with an index that
+covers both of its partitions, and gives the index table a row count:
+
+```cpp
+const std::vector<Variant> partitions{
+    Variant::row({Variant("2026-01-01")}),
+    Variant::row({Variant("2026-01-02")}),
+};
+connector
+    ->addPartitionedTable(
+        "products",
+        ROW({"id", "embedding", "ds"}, {BIGINT(), ARRAY(REAL()), VARCHAR()}),
+        {"ds"})
+    ->setDiscreteValues({"ds"}, partitions);
+
+connector->addVectorIndex(
+    "products",
+    {.name = "i",
+     .column = "embedding",
+     .key = {"id"},
+     .properties = {
+         {"distance_metric", Variant("cosine")},
+         {"index_type", Variant("flat")},
+         {"num_clusters", Variant(int64_t{4})},
+     }});
+connector->setDiscreteValues("products__i__index", {"ds"}, partitions);
+connector->setStats("products__i__index", 1'000'000, {});
 ```
 
 ### TPC-H Tables

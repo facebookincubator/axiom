@@ -795,6 +795,16 @@ LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::join(
   return *this;
 }
 
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::vectorSearch(
+    const std::shared_ptr<LogicalPlanMatcher>& buildMatcher,
+    OnMatchCallback onMatch) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<LogicalPlanMatcherImpl<VectorSearchNode>>(
+      std::vector<std::shared_ptr<LogicalPlanMatcher>>{matcher_, buildMatcher},
+      std::move(onMatch));
+  return *this;
+}
+
 namespace {
 // Matches 'plan', a node's nested plan, starting from the symbols its input
 // captured. Symbols from 'plan' overwrite those of the same name.

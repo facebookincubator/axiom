@@ -46,6 +46,7 @@ add_library(
   ShowStatsBuilder.cpp
   SpecialAggregates.cpp
   SqlStatement.cpp
+  VectorSearchPlanner.cpp
 )
 
 target_link_libraries(
@@ -61,6 +62,7 @@ target_link_libraries(
   velox_presto_types
   antlr4_shared
   re2::re2
+  velox_vector_index_settings
 )
 
 if(AXIOM_BUILD_TESTING OR AXIOM_BUILD_TEST_UTILS)

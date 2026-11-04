@@ -802,6 +802,49 @@ class ColumnDefinition : public TableElement {
   std::optional<std::string> comment_;
 };
 
+/// VECTOR INDEX name (column) KEY (key, ...) WITH (properties): a vector index
+/// declared in CREATE TABLE or added by ALTER TABLE ADD VECTOR INDEX.
+class VectorIndexDefinition : public TableElement {
+ public:
+  /// @param key The KEY columns, empty without KEY.
+  VectorIndexDefinition(
+      NodeLocation location,
+      const std::shared_ptr<Identifier>& name,
+      const std::shared_ptr<Identifier>& column,
+      const std::vector<std::shared_ptr<Identifier>>& key,
+      const std::vector<std::shared_ptr<Property>>& properties)
+      : TableElement(NodeType::kVectorIndexDefinition, location),
+        name_(name),
+        column_(column),
+        key_(key),
+        properties_(properties) {}
+
+  const std::shared_ptr<Identifier>& name() const {
+    return name_;
+  }
+
+  const std::shared_ptr<Identifier>& column() const {
+    return column_;
+  }
+
+  /// The KEY columns, empty without KEY.
+  const std::vector<std::shared_ptr<Identifier>>& key() const {
+    return key_;
+  }
+
+  const std::vector<std::shared_ptr<Property>>& properties() const {
+    return properties_;
+  }
+
+  void accept(AstVisitor* visitor) override;
+
+ private:
+  std::shared_ptr<Identifier> name_;
+  std::shared_ptr<Identifier> column_;
+  std::vector<std::shared_ptr<Identifier>> key_;
+  std::vector<std::shared_ptr<Property>> properties_;
+};
+
 class LikeClause : public TableElement {
  public:
   enum class PropertiesOption { kIncluding, kExcluding };

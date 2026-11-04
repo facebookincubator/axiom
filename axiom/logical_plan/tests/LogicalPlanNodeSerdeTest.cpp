@@ -249,30 +249,46 @@ TEST_F(LogicalPlanNodeSerdeTest, lateralJoinNodeCross) {
 
 TEST_F(LogicalPlanNodeSerdeTest, vectorSearchNode) {
   auto build = PlanBuilder().values(
-      ROW({"d", "e"}, {VARCHAR(), VARBINARY()}), std::vector<Variant>{});
+      ROW({{"d", VARCHAR()}, {"e", ARRAY(REAL())}}), std::vector<Variant>{});
 
   for (const auto joinType : {JoinType::kInner, JoinType::kLeft}) {
-    SCOPED_TRACE(JoinTypeName::toName(joinType));
-    auto plan =
-        PlanBuilder()
-            .values(
-                ROW({"a", "b", "c"}, {BIGINT(), ARRAY(REAL()), VARCHAR()}),
-                std::vector<Variant>{})
-            .vectorSearch(
-                build,
-                {.joinType = joinType,
-                 .probeKeys = {"c"},
-                 .buildKeys = {"d"},
-                 .probeEmbedding = "b",
-                 .buildIndex = "e",
-                 .metric = common::vectorindex::VectorIndexMetric::kCosine,
-                 .k = 3,
-                 .searchOptions = {{"ivf.nprobe", "4"}},
-                 .idName = "id",
-                 .scoreName = "score"})
-            .build();
-    testRoundTrip(plan);
+    for (const auto& hints :
+         {std::vector<std::pair<std::string, std::string>>{},
+          {{"num_probes", "4"}, {"ivf.nprobe", "4"}}}) {
+      SCOPED_TRACE(
+          fmt::format(
+              "{}, {} hints", JoinTypeName::toName(joinType), hints.size()));
+      auto plan = PlanBuilder()
+                      .values(
+                          ROW(
+                              {{"a", BIGINT()},
+                               {"b", ARRAY(REAL())},
+                               {"c", VARCHAR()}}),
+                          std::vector<Variant>{})
+                      .vectorSearch(
+                          build,
+                          "c = d",
+                          joinType,
+                          {.probeEmbedding = "b",
+                           .buildEmbedding = "e",
+                           .k = 3,
+                           .scoreName = "score",
+                           .hints = hints})
+                      .build();
+      testRoundTrip(plan);
+    }
   }
+
+  // A search without a condition or a score.
+  testRoundTrip(
+      PlanBuilder()
+          .values(ROW("b", ARRAY(REAL())), std::vector<Variant>{})
+          .vectorSearch(
+              build,
+              /*condition=*/"",
+              JoinType::kInner,
+              {.probeEmbedding = "b", .buildEmbedding = "e"})
+          .build());
 }
 
 TEST_F(LogicalPlanNodeSerdeTest, sortNode) {

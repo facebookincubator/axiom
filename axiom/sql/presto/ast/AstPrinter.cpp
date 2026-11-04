@@ -1253,22 +1253,43 @@ void AstPrinter::visitDropTable(DropTable* node) {
   });
 }
 
-void AstPrinter::visitCreateVectorIndex(CreateVectorIndex* node) {
-  printHeader("CreateVectorIndex", node, [&](std::ostream& out) {
-    out << node->name()->suffix();
+void AstPrinter::visitAddVectorIndex(AddVectorIndex* node) {
+  printHeader("AddVectorIndex", node, [&](std::ostream& out) {
+    out << node->tableName()->suffix();
   });
 
   indent_++;
-  for (const auto& column : node->columns()) {
-    column->accept(this);
-  }
+  node->definition()->accept(this);
   indent_--;
+}
+
+void AstPrinter::visitVectorIndexDefinition(VectorIndexDefinition* node) {
+  printHeader("VectorIndexDefinition", node, [&](std::ostream& out) {
+    out << node->name()->value() << " (" << node->column()->value() << ")";
+    if (!node->key().empty()) {
+      out << " KEY (";
+      for (size_t i = 0; i < node->key().size(); ++i) {
+        out << (i > 0 ? ", " : "") << node->key()[i]->value();
+      }
+      out << ")";
+    }
+  });
 }
 
 void AstPrinter::visitDropVectorIndex(DropVectorIndex* node) {
   printHeader("DropVectorIndex", node, [&](std::ostream& out) {
-    out << node->name()->suffix();
+    out << node->tableName()->suffix() << " " << node->name()->value();
   });
+}
+
+void AstPrinter::visitRefreshVectorIndex(RefreshVectorIndex* node) {
+  printHeader("RefreshVectorIndex", node, [&](std::ostream& out) {
+    out << node->name()->value() << " ON " << node->tableName()->suffix();
+  });
+
+  indent_++;
+  node->where()->accept(this);
+  indent_--;
 }
 
 void AstPrinter::visitDropView(DropView* node) {

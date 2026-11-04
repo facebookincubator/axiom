@@ -206,16 +206,8 @@ NodeCP makeReplacementScan(
   scanColumns.reserve(tableType->size());
   for (uint32_t i = 0; i < tableType->size(); ++i) {
     const Name nameInTable = toName(tableType->nameOf(i));
-    const ColumnCP schemaColumn = schemaTable->findColumn(nameInTable);
-    VELOX_CHECK_NOT_NULL(schemaColumn);
-    auto* column = make<Column>(
-        nameInTable,
-        baseTable,
-        schemaColumn->value(),
-        queryCtx()->newName("c"),
-        schemaColumn->name());
-    baseTable->columns.push_back(column);
-    scanColumns.push_back(column);
+    scanColumns.push_back(baseTable->addColumn(
+        nameInTable, nameInTable, queryCtx()->newName("c")));
   }
 
   ExprVector rejected;

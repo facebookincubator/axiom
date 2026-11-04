@@ -33,7 +33,7 @@ const auto& statementKindNames() {
       {SqlStatementKind::kInsert, "INSERT"},
       {SqlStatementKind::kDelete, "DELETE"},
       {SqlStatementKind::kDropTable, "DROP TABLE"},
-      {SqlStatementKind::kCreateVectorIndex, "CREATE VECTOR INDEX"},
+      {SqlStatementKind::kAddVectorIndex, "ADD VECTOR INDEX"},
       {SqlStatementKind::kDropVectorIndex, "DROP VECTOR INDEX"},
       {SqlStatementKind::kCreateSchema, "CREATE SCHEMA"},
       {SqlStatementKind::kDropSchema, "DROP SCHEMA"},
@@ -105,25 +105,34 @@ std::string_view SqlStatement::kindName() const {
   return SqlStatementKindName::toName(kind_);
 }
 
-CreateVectorIndexStatement::CreateVectorIndexStatement(
+facebook::axiom::connector::VectorIndexDefinition
+VectorIndexDeclaration::definition(const PropertyEvaluator& evaluate) const {
+  return {
+      .name = name,
+      .column = column,
+      .key = key,
+      .properties = evaluate(properties),
+  };
+}
+
+AddVectorIndexStatement::AddVectorIndexStatement(
     std::string connectorId,
-    facebook::axiom::SchemaTableName indexName,
-    RowTypePtr columns,
-    folly::F14FastMap<std::string, lp::ExprPtr> properties,
+    facebook::axiom::SchemaTableName tableName,
+    VectorIndexDeclaration index,
+    bool ifTableExists,
     bool ifNotExists)
     : SqlStatement(
-          SqlStatementKind::kCreateVectorIndex,
+          SqlStatementKind::kAddVectorIndex,
           /*views=*/{},
           lp::ReferencedTables{
               /*inputTables=*/{},
-              facebook::axiom::CatalogSchemaTableName{connectorId, indexName}}),
+              facebook::axiom::CatalogSchemaTableName{connectorId, tableName}}),
       connectorId_{std::move(connectorId)},
-      indexName_{std::move(indexName)},
-      columns_{std::move(columns)},
-      properties_{std::move(properties)},
+      tableName_{std::move(tableName)},
+      index_{std::move(index)},
+      ifTableExists_{ifTableExists},
       ifNotExists_{ifNotExists} {
-  checkUniqueColumns(columns_);
-  checkPropertiesLookConstant(properties_);
+  checkPropertiesLookConstant(index_.properties);
 }
 
 namespace {
@@ -177,6 +186,7 @@ CreateTableStatement::CreateTableStatement(
     std::optional<std::string> comment,
     folly::F14FastMap<std::string, lp::ExprPtr> properties,
     std::vector<std::string> primaryKey,
+    std::vector<VectorIndexDeclaration> vectorIndexes,
     bool ifNotExists)
     : SqlStatement(
           SqlStatementKind::kCreateTable,
@@ -191,12 +201,16 @@ CreateTableStatement::CreateTableStatement(
       comment_{std::move(comment)},
       properties_{std::move(properties)},
       primaryKey_{checkPrimaryKey(std::move(primaryKey), tableSchema_)},
+      vectorIndexes_{std::move(vectorIndexes)},
       ifNotExists_{ifNotExists} {
   VELOX_CHECK_GT(tableSchema_->size(), 0);
   checkUniqueColumns(tableSchema_);
   checkPropertiesLookConstant(properties_);
   for (const auto& column : columns_) {
     checkPropertiesLookConstant(column.properties);
+  }
+  for (const auto& index : vectorIndexes_) {
+    checkPropertiesLookConstant(index.properties);
   }
 }
 
@@ -210,6 +224,10 @@ facebook::axiom::connector::TableDefinition CreateTableStatement::definition(
   definition.columns.reserve(columns_.size());
   for (const auto& column : columns_) {
     definition.columns.push_back(column.definition(evaluate));
+  }
+  definition.vectorIndexes.reserve(vectorIndexes_.size());
+  for (const auto& index : vectorIndexes_) {
+    definition.vectorIndexes.push_back(index.definition(evaluate));
   }
   return definition;
 }

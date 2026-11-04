@@ -66,18 +66,17 @@ class SubqueryFoldTest : public test::HiveQueriesTestBase,
 // Folds a scalar aggregate over a TestConnector table's discrete-predicate
 // columns, and declines when a filter references a non-discrete column.
 TEST_P(SubqueryFoldTest, foldable) {
-  testConnector_->addTable("t", ROW({"a", "ds"}, {INTEGER(), VARCHAR()}));
-  testConnector_->setDiscreteValues(
-      "t",
-      {"ds"},
-      {
-          Variant::row({"2025-10-29"}),
-          Variant::row({"2025-10-30"}),
-          Variant::row({"2025-10-31"}),
-          Variant::row({"2025-11-01"}),
-          Variant::row({"2025-11-02"}),
-          Variant::row({"2025-11-03"}),
-      });
+  testConnector_->addTable("t", ROW({"a", "ds"}, {INTEGER(), VARCHAR()}))
+      ->setDiscreteValues(
+          {"ds"},
+          {
+              Variant::row({"2025-10-29"}),
+              Variant::row({"2025-10-30"}),
+              Variant::row({"2025-10-31"}),
+              Variant::row({"2025-11-01"}),
+              Variant::row({"2025-11-02"}),
+              Variant::row({"2025-11-03"}),
+          });
 
   auto parseSql = [&](const std::string& sql) {
     return parseSelect(sql, kTestConnectorId);

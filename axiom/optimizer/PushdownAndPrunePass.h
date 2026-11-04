@@ -108,10 +108,13 @@ class PushdownAndPrunePass {
   /// @param outputColumns The user-visible output layout. `root` may produce
   /// more columns than this -- Emit trims them -- and pruning uses this, not
   /// `root`'s schema, to decide what the query actually needs.
+  /// @param schema Resolves the storage tables a search through a vector index
+  /// reads (see connector::Table::vectorIndexes()).
   static Result run(
       NodeCP root,
       const ColumnVector& outputColumns,
       Builder& builder,
+      const Schema& schema,
       velox::core::ExpressionEvaluator& evaluator,
       const OptimizerSession& session,
       ConnectorPushdown connectorPushdown);

@@ -498,6 +498,19 @@ std::optional<PathSet> SubfieldSet::findSubfields(int32_t id) const {
   return std::nullopt;
 }
 
+ColumnCP BaseTable::addColumn(Name nameInTable, Name name, Name alias) {
+  ColumnCP schemaColumn = schemaTable->findColumn(nameInTable);
+  VELOX_CHECK_NOT_NULL(
+      schemaColumn,
+      "Table has no column: {}.{}",
+      schemaTable->name(),
+      nameInTable);
+  auto* column = make<Column>(
+      name, this, schemaColumn->value(), alias, schemaColumn->name());
+  columns.push_back(column);
+  return column;
+}
+
 std::optional<int32_t> BaseTable::columnId(Name column) const {
   for (auto i = 0; i < columns.size(); ++i) {
     if (columns[i]->name() == column) {

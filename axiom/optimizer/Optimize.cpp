@@ -208,6 +208,7 @@ NodeCP Optimizer::planTo(
       node,
       translated.outputColumns,
       builder_,
+      schema_,
       evaluator_,
       session_,
       connectorPushdown);

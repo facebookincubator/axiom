@@ -553,43 +553,45 @@ class PlanBuilder {
   /// Specifies a vector search join (see VectorSearchNode). Column names are
   /// the user-facing names of the input they belong to.
   struct VectorSearch {
-    /// kInner or kLeft.
-    JoinType joinType{JoinType::kInner};
-
-    /// Probe columns, pairwise equal to 'buildKeys'.
-    std::vector<std::string> probeKeys;
-
-    /// Build columns, pairwise equal to 'probeKeys'.
-    std::vector<std::string> buildKeys;
-
     /// The probe's ARRAY(REAL) embedding column.
     std::string probeEmbedding;
 
-    /// The build's VARBINARY column with packed vector indexes.
-    std::string buildIndex;
+    /// The build's ARRAY(REAL) embedding column.
+    std::string buildEmbedding;
 
-    /// The metric the indexes were built for.
+    /// How the search compares embeddings.
     velox::common::vectorindex::VectorIndexMetric metric{
         velox::common::vectorindex::VectorIndexMetric::kCosine};
 
-    /// The number of entries to find in each matching index.
+    /// The number of build rows to find for each probe row.
     int64_t k{1};
 
-    /// Search settings that override the ones recorded in the indexes.
-    std::vector<std::pair<std::string, std::string>> searchOptions;
+    /// Names the output column with each match's score. Unset: the output has
+    /// no score.
+    std::optional<std::string> scoreName;
 
-    /// Names the output column with each entry's id.
-    std::string idName;
-
-    /// Names the output column with each entry's score.
-    std::string scoreName;
+    /// How much of the index the search reads (see VectorSearchNode).
+    std::vector<std::pair<std::string, std::string>> hints;
   };
 
   /// Adds a vector search join of the current plan, the probe side, with
   /// 'build', the build side. The output has the probe columns, the build
-  /// columns except the index, then the id and score columns.
+  /// columns, then the score column.
+  /// @param condition The condition a build row must satisfy to match a probe
+  /// row, over the columns of both, as SQL. Empty: every build row satisfies
+  /// it.
+  /// @param joinType kInner or kLeft.
   PlanBuilder& vectorSearch(
       const PlanBuilder& build,
+      const std::string& condition,
+      JoinType joinType,
+      const VectorSearch& search);
+
+  /// Like the above, with the condition as an expression.
+  PlanBuilder& vectorSearch(
+      const PlanBuilder& build,
+      const std::optional<ExprApi>& condition,
+      JoinType joinType,
       const VectorSearch& search);
 
   /// Adds a cross join (cartesian product) with the 'right' plan.

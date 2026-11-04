@@ -81,16 +81,6 @@ class PrestoSqlBaseListener : public PrestoSqlListener {
   virtual void exitDropTable(
       PrestoSqlParser::DropTableContext* /*ctx*/) override {}
 
-  virtual void enterCreateVectorIndex(
-      PrestoSqlParser::CreateVectorIndexContext* /*ctx*/) override {}
-  virtual void exitCreateVectorIndex(
-      PrestoSqlParser::CreateVectorIndexContext* /*ctx*/) override {}
-
-  virtual void enterDropVectorIndex(
-      PrestoSqlParser::DropVectorIndexContext* /*ctx*/) override {}
-  virtual void exitDropVectorIndex(
-      PrestoSqlParser::DropVectorIndexContext* /*ctx*/) override {}
-
   virtual void enterInsertInto(
       PrestoSqlParser::InsertIntoContext* /*ctx*/) override {}
   virtual void exitInsertInto(
@@ -123,6 +113,16 @@ class PrestoSqlBaseListener : public PrestoSqlListener {
       PrestoSqlParser::AddColumnContext* /*ctx*/) override {}
   virtual void exitAddColumn(
       PrestoSqlParser::AddColumnContext* /*ctx*/) override {}
+
+  virtual void enterAddVectorIndex(
+      PrestoSqlParser::AddVectorIndexContext* /*ctx*/) override {}
+  virtual void exitAddVectorIndex(
+      PrestoSqlParser::AddVectorIndexContext* /*ctx*/) override {}
+
+  virtual void enterDropVectorIndex(
+      PrestoSqlParser::DropVectorIndexContext* /*ctx*/) override {}
+  virtual void exitDropVectorIndex(
+      PrestoSqlParser::DropVectorIndexContext* /*ctx*/) override {}
 
   virtual void enterAddConstraint(
       PrestoSqlParser::AddConstraintContext* /*ctx*/) override {}
@@ -187,6 +187,11 @@ class PrestoSqlBaseListener : public PrestoSqlListener {
       PrestoSqlParser::RefreshMaterializedViewContext* /*ctx*/) override {}
   virtual void exitRefreshMaterializedView(
       PrestoSqlParser::RefreshMaterializedViewContext* /*ctx*/) override {}
+
+  virtual void enterRefreshVectorIndex(
+      PrestoSqlParser::RefreshVectorIndexContext* /*ctx*/) override {}
+  virtual void exitRefreshVectorIndex(
+      PrestoSqlParser::RefreshVectorIndexContext* /*ctx*/) override {}
 
   virtual void enterCreateFunction(
       PrestoSqlParser::CreateFunctionContext* /*ctx*/) override {}
@@ -379,6 +384,11 @@ class PrestoSqlBaseListener : public PrestoSqlListener {
       PrestoSqlParser::TableElementContext* /*ctx*/) override {}
   virtual void exitTableElement(
       PrestoSqlParser::TableElementContext* /*ctx*/) override {}
+
+  virtual void enterVectorIndexDefinition(
+      PrestoSqlParser::VectorIndexDefinitionContext* /*ctx*/) override {}
+  virtual void exitVectorIndexDefinition(
+      PrestoSqlParser::VectorIndexDefinitionContext* /*ctx*/) override {}
 
   virtual void enterColumnDefinition(
       PrestoSqlParser::ColumnDefinitionContext* /*ctx*/) override {}

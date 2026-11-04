@@ -99,7 +99,7 @@ row_count | column_name | nulls_fraction | distinct_values_count | avg_length | 
 
 ```
 
-## Create and drop a vector index using local Hive
+## Add and drop a vector index of a table using local Hive
 
 ```scrut
 $ export D=$(mktemp -d)
@@ -107,45 +107,46 @@ $ export D=$(mktemp -d)
 
 ```scrut
 $ $CLI --data_path $D --query "
-> CREATE VECTOR INDEX products (id BIGINT, embedding ARRAY(REAL), ds VARCHAR)
-> WITH (
->   distance_metric = 'cosine',
->   index_type = 'flat',
->   num_clusters = 10,
->   partitioned_by = ARRAY['ds'])" 2>/dev/null
-Created vector index: "default"."products"
+> CREATE TABLE products (id BIGINT, embedding ARRAY(REAL), ds VARCHAR)
+> WITH (partitioned_by = ARRAY['ds'])" 2>/dev/null
+Created table: "default"."products"
+```
+
+```scrut
+$ $CLI --data_path $D --query "
+> ALTER TABLE products ADD VECTOR INDEX product_index (embedding) KEY (id)
+> WITH (distance_metric = 'cosine', index_type = 'flat', num_clusters = 10)" 2>/dev/null
+Added vector index 'product_index' to "default"."products"
 ```
 
 ```scrut
 $ $CLI --data_path $D --query "SHOW TABLES" 2>/dev/null
-----------------
+-------------------------------
 Table
-----------------
-products__codecs
-products__index
-(2 rows in 1 batches)
+-------------------------------
+products
+products__product_index__codecs
+products__product_index__index
+(3 rows in 1 batches)
 
 ```
 
 ```scrut
 $ $CLI --data_path $D --query "
-> CREATE VECTOR INDEX IF NOT EXISTS products (id BIGINT, embedding ARRAY(REAL), ds VARCHAR)
-> WITH (
->   distance_metric = 'cosine',
->   index_type = 'flat',
->   num_clusters = 10,
->   partitioned_by = ARRAY['ds'])" 2>/dev/null
-Vector index already exists: "default"."products"
+> ALTER TABLE products ADD VECTOR INDEX IF NOT EXISTS product_index (embedding) KEY (id)
+> WITH (distance_metric = 'cosine', index_type = 'flat', num_clusters = 10)" 2>/dev/null
+Vector index 'product_index' already exists in "default"."products" (no-op)
 ```
 
 ```scrut
-$ $CLI --data_path $D --query "DROP VECTOR INDEX products" 2>/dev/null; ls $D
-Dropped vector index: "default"."products"
+$ $CLI --data_path $D --query "ALTER TABLE products DROP VECTOR INDEX product_index" 2>/dev/null; ls $D
+Dropped vector index 'product_index' from "default"."products"
+products
 ```
 
 ```scrut
-$ $CLI --data_path $D --query "DROP VECTOR INDEX IF EXISTS products" 2>/dev/null
-Vector index doesn't exist: "default"."products"
+$ $CLI --data_path $D --query "ALTER TABLE products DROP VECTOR INDEX IF EXISTS product_index" 2>/dev/null
+Vector index 'product_index' does not exist in "default"."products" (no-op)
 ```
 
 ## Use --catalog and --schema flags

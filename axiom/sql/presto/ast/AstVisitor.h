@@ -464,7 +464,11 @@ class AstVisitor {
     defaultVisit(node);
   }
 
-  virtual void visitCreateVectorIndex(CreateVectorIndex* node) {
+  virtual void visitAddVectorIndex(AddVectorIndex* node) {
+    defaultVisit(node);
+  }
+
+  virtual void visitRefreshVectorIndex(RefreshVectorIndex* node) {
     defaultVisit(node);
   }
 
@@ -533,6 +537,10 @@ class AstVisitor {
 
   // Table Elements
   virtual void visitColumnDefinition(ColumnDefinition* node) {
+    defaultVisit(node);
+  }
+
+  virtual void visitVectorIndexDefinition(VectorIndexDefinition* node) {
     defaultVisit(node);
   }
 
