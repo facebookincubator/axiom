@@ -1416,6 +1416,13 @@ class ConnectorMetadata {
     return nullptr;
   }
 
+  /// Returns 'identifier', a schema, table or column name as a statement spells
+  /// it, as this connector's catalog stores it. Callers pass every name through
+  /// it before they look it up or store it. The default lowercases, so names
+  /// match ignoring case; a connector whose names are case-sensitive overrides
+  /// it.
+  virtual std::string normalizeIdentifier(std::string_view identifier) const;
+
   /// Return a TablePtr given the table name. The returned Table object is
   /// immutable. If updates to the Table object are required, the
   /// ConnectorMetadata is required to drop its reference to the existing Table

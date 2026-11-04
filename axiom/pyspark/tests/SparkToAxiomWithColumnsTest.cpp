@@ -79,7 +79,8 @@ TEST_F(SparkToAxiomWithColumnsTest, AddNewColumn) {
   input->mutable_common()->set_plan_id(2);
   auto* read = input->mutable_read();
   auto* namedTable = read->mutable_named_table();
-  namedTable->set_unparsed_identifier("training_table");
+  // Table names match ignoring case.
+  namedTable->set_unparsed_identifier("Training_Table");
 
   // Add a new column: new_col = 42 (literal)
   auto* alias = withColumns->add_aliases();

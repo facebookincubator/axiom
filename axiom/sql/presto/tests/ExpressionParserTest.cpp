@@ -1400,17 +1400,17 @@ TEST_F(ExpressionParserTest, unknownToDecimal) {
   VELOX_EXPECT_EQ_TYPES(withNull->type(), DECIMAL(11, 2));
 }
 
-// SQL identifiers are case-insensitive: a column declared with mixed case
-// in the table schema must resolve when referenced with any case.
+// SQL identifiers are case-insensitive: a table resolves when named with any
+// case, and so does a column declared with mixed case in the table schema.
 TEST_F(ExpressionParserTest, mixedCaseColumnName) {
-  connector_->addTable("mixedCase", ROW({"orderingId"}, {BIGINT()}));
+  connector_->addTable("t", ROW({"orderingId"}, {BIGINT()}));
 
-  ASSERT_NO_THROW(testSelect(
-      "SELECT orderingId FROM mixedCase", matchScan().project().output()));
-  ASSERT_NO_THROW(testSelect(
-      "SELECT orderingid FROM mixedCase", matchScan().project().output()));
-  ASSERT_NO_THROW(testSelect(
-      "SELECT ORDERINGID FROM mixedCase", matchScan().project().output()));
+  ASSERT_NO_THROW(
+      testSelect("SELECT orderingId FROM t", matchScan().project().output()));
+  ASSERT_NO_THROW(
+      testSelect("SELECT orderingid FROM t", matchScan().project().output()));
+  ASSERT_NO_THROW(
+      testSelect("SELECT ORDERINGID FROM T", matchScan().project().output()));
 }
 
 TEST_F(ExpressionParserTest, nestingDepthCapped) {

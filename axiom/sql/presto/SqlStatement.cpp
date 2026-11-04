@@ -50,23 +50,11 @@ const auto& statementKindNames() {
   return kNames;
 }
 
-std::string toLower(const std::string& s) {
-  std::string result = s;
-  std::transform(
-      result.begin(), result.end(), result.begin(), [](unsigned char c) {
-        return std::tolower(c);
-      });
-  return result;
-}
-
-// Duplicate column checks are performed case-insensitively, so
-// a schema with 'COL0' and 'col0' will be considered non-unique.
 std::unordered_set<std::string> checkUniqueColumns(const RowTypePtr& schema) {
   std::unordered_set<std::string> columns;
   for (const auto& name : schema->names()) {
-    auto lower = toLower(name);
     VELOX_USER_CHECK(
-        columns.insert(lower).second, "Duplicate column name: {}", name);
+        columns.insert(name).second, "Duplicate column name: {}", name);
   }
   return columns;
 }
@@ -139,30 +127,23 @@ CreateVectorIndexStatement::CreateVectorIndexStatement(
 }
 
 namespace {
-// Returns 'primaryKey' with each column spelled as 'schema' declares it.
-// Matches column names ignoring case.
-std::vector<std::string> resolvePrimaryKey(
-    const std::vector<std::string>& primaryKey,
+// Checks that each column of 'primaryKey' is a column of 'schema', once, and
+// returns 'primaryKey'.
+std::vector<std::string> checkPrimaryKey(
+    std::vector<std::string> primaryKey,
     const RowTypePtr& schema) {
-  std::unordered_map<std::string, std::string> declaredNames;
-  for (const auto& name : schema->names()) {
-    declaredNames.emplace(toLower(name), name);
-  }
   std::unordered_set<std::string> keyColumns;
-  std::vector<std::string> resolved;
-  resolved.reserve(primaryKey.size());
   for (const auto& column : primaryKey) {
-    const auto lower = toLower(column);
-    const auto it = declaredNames.find(lower);
     VELOX_USER_CHECK(
-        it != declaredNames.end(), "Constraint on unknown column: {}", column);
+        schema->containsChild(column),
+        "Constraint on unknown column: {}",
+        column);
     VELOX_USER_CHECK(
-        keyColumns.insert(lower).second,
+        keyColumns.insert(column).second,
         "Duplicate constraint column: {}",
         column);
-    resolved.push_back(it->second);
   }
-  return resolved;
+  return primaryKey;
 }
 
 RowTypePtr toRowType(const std::vector<ColumnDeclaration>& columns) {
@@ -209,7 +190,7 @@ CreateTableStatement::CreateTableStatement(
       tableSchema_{toRowType(columns_)},
       comment_{std::move(comment)},
       properties_{std::move(properties)},
-      primaryKey_{resolvePrimaryKey(primaryKey, tableSchema_)},
+      primaryKey_{checkPrimaryKey(std::move(primaryKey), tableSchema_)},
       ifNotExists_{ifNotExists} {
   VELOX_CHECK_GT(tableSchema_->size(), 0);
   checkUniqueColumns(tableSchema_);

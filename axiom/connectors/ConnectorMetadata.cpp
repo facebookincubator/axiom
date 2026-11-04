@@ -16,6 +16,8 @@
 
 #include "axiom/connectors/ConnectorMetadata.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
@@ -413,6 +415,15 @@ std::vector<std::string> ConnectorMetadata::allMetadataIds() {
     ids.emplace_back(id);
   }
   return ids;
+}
+
+std::string ConnectorMetadata::normalizeIdentifier(
+    std::string_view identifier) const {
+  std::string normalized(identifier);
+  std::ranges::transform(normalized, normalized.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  return normalized;
 }
 
 folly::coro::Task<TablePtr> ConnectorMetadata::co_createTable(

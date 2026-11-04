@@ -19,6 +19,7 @@
 
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/PlanPrinter.h"
@@ -166,14 +167,16 @@ void SparkToAxiom::visit(
       "Schema-qualified table names are not supported: {}",
       identifier);
 
-  facebook::axiom::SchemaTableName tableName{schema_, identifier};
+  const auto metadata =
+      facebook::axiom::connector::ConnectorMetadataRegistry::global().get(
+          catalog_);
+  const facebook::axiom::SchemaTableName tableName{
+      metadata->normalizeIdentifier(schema_),
+      metadata->normalizeIdentifier(identifier)};
 
   LOG(INFO) << "Creating table scan node [" << context.planId << "] for '"
             << tableName.toString() << "'.";
 
-  // Lookup table metadata on the connector.
-  auto* metadata =
-      facebook::axiom::connector::ConnectorMetadata::metadata(catalog_);
   auto table = metadata->findTable(tableName);
 
   COLLAGEN_CHECK_NOT_NULL(table);
@@ -641,7 +644,12 @@ void SparkToAxiom::visit(
       "Schema-qualified table names are not supported: {}",
       rawTableName);
 
-  facebook::axiom::SchemaTableName tableName{schema_, rawTableName};
+  const auto metadata =
+      facebook::axiom::connector::ConnectorMetadataRegistry::global().get(
+          catalog_);
+  facebook::axiom::SchemaTableName tableName{
+      metadata->normalizeIdentifier(schema_),
+      metadata->normalizeIdentifier(rawTableName)};
 
   LOG(INFO) << "Creating table write node [" << context.planId
             << "] for table '" << tableName.toString() << "'";
@@ -683,7 +691,7 @@ void SparkToAxiom::visit(
     const auto& columnName = inputType->nameOf(i);
     auto columnType = inputType->childAt(i);
 
-    columnNames.push_back(columnName);
+    columnNames.push_back(metadata->normalizeIdentifier(columnName));
     columnExpressions.push_back(
         std::make_shared<facebook::axiom::logical_plan::InputReferenceExpr>(
             columnType, columnName));
