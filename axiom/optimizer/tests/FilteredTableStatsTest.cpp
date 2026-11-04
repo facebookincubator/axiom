@@ -74,7 +74,7 @@ class FilteredTableStatsTest : public test::HiveQueriesTestBase,
   // Returns the cardinality the optimizer estimates for 'sql'.
   float estimatedCardinality(const std::string& sql) {
     auto planAndStats = plan(sql);
-    const auto& root = planAndStats.plan->fragments().back().fragment.planNode;
+    const auto& root = planAndStats.plan->stages().back().plan;
     auto it = planAndStats.prediction.find(root->id());
     VELOX_CHECK(
         it != planAndStats.prediction.end(),

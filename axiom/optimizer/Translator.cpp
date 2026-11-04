@@ -4171,9 +4171,10 @@ Translator::tryEvaluateOverDiscreteValues(const Aggregation::Key& aggregate) {
       evaluator_,
       MultiFragmentPlan::Options::singleNode());
   VELOX_CHECK_EQ(
-      emitted.fragments.size(), 1, "Constant fold must produce one fragment");
+      emitted.stages.size(), 1, "Constant fold must produce one fragment");
 
-  auto rows = constantPlanRunner_.run(emitted.fragments.front().fragment);
+  auto rows = constantPlanRunner_.run(
+      velox::core::PlanFragment{emitted.stages.front().plan});
   if (aggregate.groupingKeys.empty()) {
     VELOX_CHECK_EQ(rows.size(), 1, "Global aggregation must produce one row");
   }

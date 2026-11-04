@@ -26,10 +26,10 @@
 
 namespace facebook::axiom::graphviz {
 
-using optimizer::ExecutableFragment;
-using optimizer::FragmentTypeName;
 using optimizer::MultiFragmentPlan;
 using optimizer::NodePredictionMap;
+using velox::core::Stage;
+using velox::core::StageTypeName;
 
 namespace {
 
@@ -147,16 +147,16 @@ OutputDistribution outputDistribution(const velox::core::PlanNodePtr& root) {
   VELOX_UNREACHABLE();
 }
 
-std::string formatFragmentHeader(const ExecutableFragment& fragment) {
+std::string formatFragmentHeader(const Stage& fragment) {
   if (fragment.numRemotePartitions.has_value()) {
     return fmt::format(
         "{} — {} × {}",
-        fragment.fragmentId,
-        FragmentTypeName::toName(fragment.type),
+        fragment.id,
+        StageTypeName::toName(fragment.type),
         fragment.numRemotePartitions.value());
   }
   return fmt::format(
-      "{} — {}", fragment.fragmentId, FragmentTypeName::toName(fragment.type));
+      "{} — {}", fragment.id, StageTypeName::toName(fragment.type));
 }
 
 // Returns true if 'node' should be omitted from the body. The root
@@ -261,29 +261,29 @@ void walkBody(
 void printFragment(
     std::ostream& out,
     int32_t fragmentIndex,
-    const ExecutableFragment& fragment,
+    const Stage& fragment,
     const folly::F14FastMap<int32_t, std::string>& producerDistribution,
     const NodePredictionMap& prediction) {
   ExchangeProducerMap exchangeProducers;
-  for (const auto& input : fragment.inputStages) {
-    auto it = producerDistribution.find(input.producerFragmentId);
+  for (const auto& input : fragment.inputs) {
+    auto it = producerDistribution.find(input.producerStageId);
     std::string distribution =
         it != producerDistribution.end() ? it->second : std::string{};
     exchangeProducers.emplace(
-        input.consumerNodeId,
+        input.exchangeId,
         ExchangeProducer{
-            .fragmentId = input.producerFragmentId,
+            .fragmentId = input.producerStageId,
             .distribution = std::move(distribution),
         });
   }
 
-  const auto distribution = outputDistribution(fragment.fragment.planNode);
+  const auto distribution = outputDistribution(fragment.plan);
   const auto header = formatFragmentHeader(fragment);
 
   printTableStart(out, fragmentIndex);
   if (!distribution.label.empty()) {
     auto label = "out: " + distribution.label;
-    const auto it = prediction.find(fragment.fragment.planNode->id());
+    const auto it = prediction.find(fragment.plan->id());
     if (it != prediction.end()) {
       label += fmt::format(
           commaLocale(), "&nbsp;&nbsp;~{:.0Lf} rows", it->second.cardinality);
@@ -296,7 +296,7 @@ void printFragment(
   printRow(out, escapeHtml(header), kPalette.header, /*bold=*/true);
   walkBody(
       out,
-      fragment.fragment.planNode,
+      fragment.plan,
       /*indent=*/0,
       /*isRoot=*/true,
       exchangeProducers);
@@ -317,15 +317,14 @@ void MultiFragmentPlanDotPrinter::print(
 
   folly::F14FastMap<int32_t, int32_t> fragmentIdToIndex;
   folly::F14FastMap<int32_t, std::string> producerDistribution;
-  const auto& fragments = plan.fragments();
+  const auto& fragments = plan.stages();
   fragmentIdToIndex.reserve(fragments.size());
   producerDistribution.reserve(fragments.size());
   for (int32_t index = 0; index < static_cast<int32_t>(fragments.size());
        ++index) {
     const auto& fragment = fragments[index];
-    fragmentIdToIndex[fragment.fragmentId] = index;
-    producerDistribution[fragment.fragmentId] =
-        outputDistribution(fragment.fragment.planNode).kind;
+    fragmentIdToIndex[fragment.id] = index;
+    producerDistribution[fragment.id] = outputDistribution(fragment.plan).kind;
   }
 
   for (int32_t index = 0; index < static_cast<int32_t>(fragments.size());
@@ -337,12 +336,12 @@ void MultiFragmentPlanDotPrinter::print(
   for (int32_t index = 0; index < static_cast<int32_t>(fragments.size());
        ++index) {
     const auto& fragment = fragments[index];
-    for (const auto& input : fragment.inputStages) {
-      const auto producerIt = fragmentIdToIndex.find(input.producerFragmentId);
+    for (const auto& input : fragment.inputs) {
+      const auto producerIt = fragmentIdToIndex.find(input.producerStageId);
       VELOX_CHECK(
           producerIt != fragmentIdToIndex.end(),
           "Unknown producer fragment id: {}",
-          input.producerFragmentId);
+          input.producerStageId);
       out << "  fragment_" << producerIt->second << " -> fragment_" << index
           << ";\n";
     }

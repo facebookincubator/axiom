@@ -51,7 +51,7 @@ ProgressReporter::ProgressReporter(
   if (!onProgress_) {
     return;
   }
-  stages_ = QueryProgressBuilder::toStageTopology(runner_.fragments());
+  stages_ = QueryProgressBuilder::toStageTopology(runner_.stages());
   const auto interval = std::chrono::milliseconds(
       std::max(intervalMs, kMinProgressReportIntervalMs));
   auto name = nextName();

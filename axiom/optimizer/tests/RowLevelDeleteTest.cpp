@@ -81,9 +81,9 @@ TEST_F(RowLevelDeleteTest, selectedRows) {
         parseDelete("DELETE FROM t WHERE value >= 30"),
         {.maxRemotePartitions = 1, .maxLocalPartitions = 1});
 
-    ASSERT_EQ(plan.plan->fragments().size(), 1);
+    ASSERT_EQ(plan.plan->stages().size(), 1);
     AXIOM_ASSERT_PLAN(
-        plan.plan->fragments().front().fragment.planNode,
+        plan.plan->stages().front().plan,
         matchScan("t")
             .filter("value >= 30")
             .project({"\"$row_id\""})
@@ -116,9 +116,9 @@ TEST_F(RowLevelDeleteTest, selectedRows) {
             "    SELECT \"$row_id\" FROM t WHERE id IN (1, 3))"),
         {.maxRemotePartitions = 1, .maxLocalPartitions = 1});
 
-    ASSERT_EQ(plan.plan->fragments().size(), 1);
+    ASSERT_EQ(plan.plan->stages().size(), 1);
     AXIOM_ASSERT_PLAN(
-        plan.plan->fragments().front().fragment.planNode,
+        plan.plan->stages().front().plan,
         matchScan("t")
             .aliases({"target_row_id"})
             .hashJoin(
@@ -253,7 +253,7 @@ TEST_F(RowLevelDeleteTest, writerRequirements) {
             .tableWrite({std::string{connector::TestTable::kRowId}})
             .gather()
             .partitionedOutputSingle()
-            .output(FragmentType::kSingle)
+            .output(velox::core::StageType::kSingle)
             .build());
   }
 

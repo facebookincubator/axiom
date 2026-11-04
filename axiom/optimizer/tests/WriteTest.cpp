@@ -36,14 +36,14 @@ namespace lp = facebook::axiom::logical_plan;
 void verifyPlanSerde(
     const MultiFragmentPlan& plan,
     velox::memory::MemoryPool* pool) {
-  for (const auto& fragment : plan.fragments()) {
-    SCOPED_TRACE(fragment.fragmentId);
-    auto serialized = fragment.fragment.planNode->serialize();
+  for (const auto& fragment : plan.stages()) {
+    SCOPED_TRACE(fragment.id);
+    auto serialized = fragment.plan->serialize();
     auto deserialized =
         velox::ISerializable::deserialize<velox::core::PlanNode>(
             serialized, pool);
     ASSERT_EQ(
-        fragment.fragment.planNode->toString(true, true),
+        fragment.plan->toString(true, true),
         deserialized->toString(true, true));
   }
 }
@@ -867,7 +867,7 @@ TEST_P(WriteTest, ctasPartitionedSql) {
 const velox::core::PlanNodePtr nodeAt(
     const MultiFragmentPlan& plan,
     size_t index) {
-  return plan.fragments().at(index).fragment.planNode;
+  return plan.stages().at(index).plan;
 }
 
 // Verify that distributed plan has exchange before table write and
@@ -923,7 +923,7 @@ TEST_P(WriteTest, ctasValuesNoMerge) {
       "CREATE TABLE test(a, b, c) AS SELECT 1, 0.123, 'foo'",
       1,
       [this](const auto& plan) {
-        ASSERT_EQ(1, plan.fragments().size());
+        ASSERT_EQ(1, plan.stages().size());
 
         auto matcher = matchValues().projectIf(!useV2_).tableWrite().build();
         AXIOM_ASSERT_PLAN(nodeAt(plan, 0), matcher);
@@ -1023,7 +1023,7 @@ TEST_P(WriteTest, ctasBucketedSingleNode) {
       "SELECT rand() as key, l_orderkey, l_partkey, l_linenumber FROM lineitem",
       600'572,
       [](const auto& plan) {
-        const auto& fragments = plan.fragments();
+        const auto& fragments = plan.stages();
         ASSERT_EQ(1, fragments.size());
 
         auto matcher = core::PlanMatcherBuilder()
@@ -1051,7 +1051,7 @@ TEST_P(WriteTest, ctasBucketedSingleThreaded) {
       "SELECT rand() as key, l_orderkey, l_partkey, l_linenumber FROM lineitem",
       600'572,
       [](const auto& plan) {
-        const auto& fragments = plan.fragments();
+        const auto& fragments = plan.stages();
         ASSERT_EQ(1, fragments.size());
 
         auto matcher = core::PlanMatcherBuilder()

@@ -188,9 +188,9 @@ namespace {
 const velox::core::TableScanNode* findScan(
     const velox::core::PlanNodeId& id,
     const MultiFragmentPlanPtr& plan) {
-  for (const auto& fragment : plan->fragments()) {
+  for (const auto& fragment : plan->stages()) {
     if (auto node = velox::core::PlanNode::findFirstNode(
-            fragment.fragment.planNode.get(),
+            fragment.plan.get(),
             [&](const auto* node) { return node->id() == id; })) {
       return dynamic_cast<const velox::core::TableScanNode*>(node);
     }

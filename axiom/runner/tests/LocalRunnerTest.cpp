@@ -265,7 +265,7 @@ class BlockingRunner : public Runner {
     VELOX_UNREACHABLE();
   }
 
-  const std::vector<optimizer::ExecutableFragment>& fragments() const override {
+  const std::vector<velox::core::Stage>& stages() const override {
     VELOX_UNREACHABLE();
   }
 
@@ -315,7 +315,7 @@ class ControlledTerminalRunner : public Runner {
     VELOX_UNREACHABLE();
   }
 
-  const std::vector<optimizer::ExecutableFragment>& fragments() const override {
+  const std::vector<velox::core::Stage>& stages() const override {
     VELOX_UNREACHABLE();
   }
 

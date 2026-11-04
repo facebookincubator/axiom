@@ -30,6 +30,7 @@
 #include "velox/common/time/Timer.h"
 #include "velox/core/FixedPointPlanNodes.h"
 #include "velox/exec/Exchange.h"
+#include "velox/exec/ExchangeWiring.h"
 #include "velox/exec/FixedPointOptions.h"
 #include "velox/exec/FixedPointSplit.h"
 #include "velox/exec/FixedPointVerdicts.h"
@@ -215,17 +216,17 @@ folly::coro::Task<void> co_generateAndDistributeSplits(
 }
 
 void getTopologicalOrder(
-    const std::vector<optimizer::ExecutableFragment>& fragments,
+    const std::vector<velox::core::Stage>& fragments,
     int32_t index,
     const folly::F14FastMap<int32_t, int32_t>& fragmentIdToIndex,
     std::vector<bool>& visited,
     std::stack<int32_t>& indices) {
   visited[index] = true;
-  for (const auto& input : fragments.at(index).inputStages) {
-    if (!visited[fragmentIdToIndex.at(input.producerFragmentId)]) {
+  for (const auto& input : fragments.at(index).inputs) {
+    if (!visited[fragmentIdToIndex.at(input.producerStageId)]) {
       getTopologicalOrder(
           fragments,
-          fragmentIdToIndex.at(input.producerFragmentId),
+          fragmentIdToIndex.at(input.producerStageId),
           fragmentIdToIndex,
           visited,
           indices);
@@ -234,11 +235,11 @@ void getTopologicalOrder(
   indices.push(index);
 }
 
-std::vector<optimizer::ExecutableFragment> topologicalSort(
-    const std::vector<optimizer::ExecutableFragment>& fragments) {
+std::vector<velox::core::Stage> topologicalSort(
+    const std::vector<velox::core::Stage>& fragments) {
   folly::F14FastMap<int32_t, int32_t> fragmentIdToIndex;
   for (auto i = 0; i < fragments.size(); ++i) {
-    fragmentIdToIndex[fragments[i].fragmentId] = i;
+    fragmentIdToIndex[fragments[i].id] = i;
   }
 
   std::stack<int32_t> indices;
@@ -250,7 +251,7 @@ std::vector<optimizer::ExecutableFragment> topologicalSort(
   }
 
   VELOX_CHECK_EQ(indices.size(), fragments.size());
-  std::vector<optimizer::ExecutableFragment> result;
+  std::vector<velox::core::Stage> result;
   result.reserve(indices.size());
   while (!indices.empty()) {
     result.push_back(fragments[indices.top()]);
@@ -271,7 +272,7 @@ LocalRunner::LocalRunner(
     std::string baseSpillDirectory)
     : session_{std::move(session)},
       plan_{std::move(plan)},
-      fragments_{topologicalSort(plan_->fragments())},
+      fragments_{topologicalSort(plan_->stages())},
       finishWrite_{std::move(finishWrite)},
       splitSourceFactory_{std::move(splitSourceFactory)},
       baseSpillDirectory_{std::move(baseSpillDirectory)} {
@@ -503,8 +504,8 @@ const velox::exec::FixedPointOptions* LocalRunner::prepareFixedPointOptions() {
   if (std::none_of(
           fragments_.begin(), fragments_.end(), [](const auto& fragment) {
             return velox::core::PlanNode::findFirstNode<
-                       velox::core::FixedPointNode>(
-                       fragment.fragment.planNode.get()) != nullptr;
+                       velox::core::FixedPointNode>(fragment.plan.get()) !=
+                nullptr;
           })) {
     return nullptr;
   }
@@ -565,7 +566,7 @@ void LocalRunner::start() {
   }
 
   params_.maxDrivers = plan_->options().maxLocalPartitions;
-  params_.planNode = fragments_.back().fragment.planNode;
+  params_.planNode = fragments_.back().plan;
   params_.serialExecution = !params_.queryCtx->isExecutorSupplied();
 
   params_.fixedPointOptions = prepareFixedPointOptions();
@@ -754,29 +755,14 @@ folly::coro::Task<void> LocalRunner::co_cleanupImpl() {
 }
 
 namespace {
-// Returns true if the producer needs updateOutputBuffers to be called with the
-// number of consumer tasks. Broadcast and arbitrary outputs need this because
-// the producer doesn't know the consumer count from the plan alone.
-bool needsOutputBufferUpdate(const velox::core::PlanFragment& fragment) {
-  auto partitionedOutputNode =
-      std::dynamic_pointer_cast<const velox::core::PartitionedOutputNode>(
-          fragment.planNode);
-  if (!partitionedOutputNode) {
-    return false;
-  }
-  return partitionedOutputNode->isBroadcast() ||
-      partitionedOutputNode->isArbitrary();
-}
-
 // The tasks of a partitioned loop's stage are its workers, each reading the
 // others' shuffles every iteration: names them, by their task ids, with a
 // FixedPointSplit on each task's FixedPointNode.
 void addFixedPointSplits(
-    const velox::core::PlanFragment& fragment,
+    const velox::core::PlanNode& plan,
     const std::vector<std::shared_ptr<velox::exec::Task>>& stage) {
   const auto* fixedPoint =
-      velox::core::PlanNode::findFirstNode<velox::core::FixedPointNode>(
-          fragment.planNode.get());
+      velox::core::PlanNode::findFirstNode<velox::core::FixedPointNode>(&plan);
   if (fixedPoint == nullptr || !fixedPoint->readsPeers()) {
     return;
   }
@@ -855,8 +841,9 @@ void LocalRunner::makeStages(
     self->cancelTasks();
   };
 
-  // Mapping from fragment id to the stage index and whether it is a broadcast.
-  folly::F14FastMap<int32_t, std::pair<int32_t, bool>> stageMap;
+  // Mapping from fragment id to the index of its stage, which is also its index
+  // in fragments_.
+  folly::F14FastMap<int32_t, int32_t> stageMap;
   for (auto fragmentIndex = 0; fragmentIndex < fragments_.size() - 1;
        ++fragmentIndex) {
     const auto& fragment = fragments_[fragmentIndex];
@@ -866,25 +853,21 @@ void LocalRunner::makeStages(
       // fire onError before makeStages() finishes building the rest of
       // stages_).
       std::lock_guard<std::mutex> lock(mutex_);
-      stageMap[fragment.fragmentId] = {
-          stages_.size(), needsOutputBufferUpdate(fragment.fragment)};
+      stageMap[fragment.id] = static_cast<int32_t>(stages_.size());
       stages_.emplace_back();
     }
 
-    auto numTasks = fragment.numRemotePartitions.value_or(
-        fragment.type == optimizer::FragmentType::kSource
-            ? plan_->options().maxRemotePartitions
-            : 1);
+    const auto numTasks =
+        fragment.numTasks(plan_->options().maxRemotePartitions);
     for (auto i = 0; i < numTasks; ++i) {
       auto taskId = fmt::format(
           "local://{}/fragment{}.{}",
           params_.queryCtx->queryId(),
-          fragment.fragmentId,
+          fragment.id,
           i);
       // Each task in the stage gets a distinct taskUniqueId so AssignUniqueId
-      // operators across tasks produce non-overlapping ids. Copy the shared
-      // fragment so the per-task value does not leak to sibling tasks.
-      auto taskFragment = fragment.fragment;
+      // operators across tasks produce non-overlapping ids.
+      velox::core::PlanFragment taskFragment{fragment.plan};
       taskFragment.taskUniqueId = i;
       auto task = velox::exec::Task::create(
           taskId,
@@ -917,17 +900,18 @@ void LocalRunner::makeStages(
       const auto& stage = stages_[fragmentIndex];
 
       std::vector<velox::core::TableScanNodePtr> scans;
-      gatherScans(fragment.fragment.planNode, scans);
+      gatherScans(fragment.plan, scans);
 
+      const auto& fragmentScans = plan_->scans(fragment.id);
       for (const auto& scan : scans) {
         std::shared_ptr<connector::PartitionType> partitionType;
-        if (auto it = fragment.groupedNodes.find(scan->id());
-            it != fragment.groupedNodes.end()) {
+        if (auto it = fragmentScans.groupedNodes.find(scan->id());
+            it != fragmentScans.groupedNodes.end()) {
           partitionType = it->second;
         }
         std::optional<double> samplePercentage;
-        if (auto it = fragment.sampledScans.find(scan->id());
-            it != fragment.sampledScans.end()) {
+        if (auto it = fragmentScans.sampledScans.find(scan->id());
+            it != fragmentScans.sampledScans.end()) {
           samplePercentage = it->second;
         }
         auto source = splitSourceForScan(
@@ -944,34 +928,31 @@ void LocalRunner::makeStages(
                     session_->statsWriter())));
       }
 
-      for (const auto& input : fragment.inputStages) {
-        const auto [sourceStage, needsUpdate] =
-            stageMap[input.producerFragmentId];
-
-        std::vector<std::shared_ptr<velox::exec::RemoteConnectorSplit>>
-            sourceSplits;
+      for (const auto& input : fragment.inputs) {
+        const auto sourceStage = stageMap.at(input.producerStageId);
         for (const auto& task : stages_[sourceStage]) {
-          sourceSplits.push_back(remoteSplit(task->taskId()));
-
-          if (needsUpdate) {
-            task->updateOutputBuffers(static_cast<int>(stage.size()), true);
-          }
-        }
-
-        for (auto& task : stage) {
-          for (const auto& remote : sourceSplits) {
-            task->addSplit(input.consumerNodeId, velox::exec::Split(remote));
-          }
+          velox::exec::ExchangeWiring::updateOutputBuffers(
+              *task,
+              *fragments_[sourceStage].plan,
+              static_cast<int32_t>(stage.size()));
         }
       }
 
-      for (const auto& input : fragment.inputStages) {
-        for (auto& task : stage) {
-          task->noMoreSplits(input.consumerNodeId);
-        }
+      for (const auto& task : stage) {
+        velox::exec::ExchangeWiring::addInputSplits(
+            *task,
+            fragment,
+            [&](int32_t producerStageId) {
+              return static_cast<int32_t>(
+                  stages_[stageMap.at(producerStageId)].size());
+            },
+            [&](int32_t producerStageId, int32_t producer) {
+              return velox::exec::Split(remoteSplit(
+                  stages_[stageMap.at(producerStageId)][producer]->taskId()));
+            });
       }
 
-      addFixedPointSplits(fragment.fragment, stage);
+      addFixedPointSplits(*fragment.plan, stage);
     }
   } catch (const std::exception&) {
     onError(std::current_exception());
@@ -1043,7 +1024,7 @@ std::string LocalRunner::printPlanWithStats(
         std::ostream& out)>& addContext) const {
   folly::F14FastSet<velox::core::PlanNodeId> leafNodeIds;
   for (const auto& fragment : fragments_) {
-    for (const auto& nodeId : fragment.fragment.planNode->leafPlanNodeIds()) {
+    for (const auto& nodeId : fragment.plan->leafPlanNodeIds()) {
       leafNodeIds.insert(nodeId);
     }
   }

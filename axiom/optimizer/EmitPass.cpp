@@ -502,7 +502,7 @@ class Emitter {
 
   // Emits 'exchange's input as a producer fragment ending in a
   // `PartitionedOutput`, and returns the consumer-side `ExchangeNode` for the
-  // current fragment, wiring the `InputStage` between them.
+  // current fragment, wiring the `StageInput` between them.
   velox::core::PlanNodePtr emitExchange(const Exchange& exchange);
   // Dispatches writes to the operation-specific emission path.
   velox::core::PlanNodePtr emitTableWrite(const TableWrite& tableWrite);
@@ -559,10 +559,10 @@ class Emitter {
       const Partitioning& partitioning,
       const velox::RowTypePtr& outputType);
 
-  // Turns the accumulated grouped leaves into `fragment.groupedNodes` using
+  // Turns the accumulated grouped leaves into `fragment`'s groupedNodes using
   // the fragment's common connector partitioning. A fragment with no bucketed
   // scan is left non-grouped.
-  void finalizeGroupedLeaves(ExecutableFragment& fragment);
+  void finalizeGroupedLeaves(velox::core::Stage& fragment);
 
   // Runs 'emitFn' with 'fragment' as the current fragment and its common
   // connector partitioning available to every exchange. Finalizes its grouped
@@ -570,7 +570,7 @@ class Emitter {
   // fragment that is finalized after further building, does this inline.
   template <typename EmitFn>
   velox::core::PlanNodePtr
-  emitInFragment(NodeCP root, ExecutableFragment& fragment, EmitFn&& emitFn) {
+  emitInFragment(NodeCP root, velox::core::Stage& fragment, EmitFn&& emitFn) {
     auto outerState = std::move(fragmentState_);
     SCOPE_EXIT {
       fragmentState_ = std::move(outerState);
@@ -587,7 +587,7 @@ class Emitter {
   // Emits 'node' as the root of child fragment 'fragment'.
   velox::core::PlanNodePtr emitChildFragment(
       NodeCP node,
-      ExecutableFragment& fragment);
+      velox::core::Stage& fragment);
 
   // Emits 'root' below a gather that collects the distributed output onto the
   // single-task output fragment 'top'. The output-column layout applies above
@@ -597,11 +597,13 @@ class Emitter {
       NodeCP root,
       const ColumnVector& outputColumns,
       const std::vector<std::string>& outputNames,
-      ExecutableFragment& top);
+      velox::core::Stage& top);
 
   // A fresh producer/consumer fragment with a unique id.
-  ExecutableFragment newFragment() {
-    return ExecutableFragment{.fragmentId = ++fragmentCounter_};
+  velox::core::Stage newFragment() {
+    velox::core::Stage fragment;
+    fragment.id = ++fragmentCounter_;
+    return fragment;
   }
 
   const OptimizerSession& session_;
@@ -629,8 +631,11 @@ class Emitter {
 
   // Producer fragments collected as `ir.Exchange`es are lowered; the root
   // fragment is appended last by `emitFragments`.
-  std::vector<ExecutableFragment> stages_;
+  std::vector<velox::core::Stage> stages_;
   int32_t fragmentCounter_{0};
+
+  // What the scans of each fragment need, by fragment id.
+  folly::F14FastMap<int32_t, FragmentScans> scans_;
 
   // A grouped leaf of the fragment currently being built: a source that runs
   // per bucket-group under grouped execution. `partitionType` is the
@@ -655,16 +660,10 @@ class Emitter {
     void addInputStage(
         const velox::core::PlanNodeId& nodeId,
         int32_t fragmentId) {
-      fragment->inputStages.emplace_back(nodeId, fragmentId);
+      fragment->inputs.emplace_back(nodeId, fragmentId);
     }
 
-    void addSampledScan(
-        const velox::core::PlanNodeId& nodeId,
-        double sampledPercentage) {
-      fragment->sampledScans.emplace(nodeId, sampledPercentage);
-    }
-
-    ExecutableFragment* fragment{nullptr};
+    velox::core::Stage* fragment{nullptr};
     std::vector<PendingGroupedLeaf> groupedLeaves;
     const connector::PartitionType* groupedPartitionType{nullptr};
   };
@@ -676,7 +675,7 @@ class Emitter {
     // Enclosing state restored after a split writer is finalized.
     std::optional<FragmentState> rootState;
     // Caller-owned storage that keeps `fragmentState_` pointers stable.
-    ExecutableFragment fragment;
+    velox::core::Stage fragment;
   };
 
   // Installs the prepared input's writer-fragment state. Splits the writer into
@@ -705,10 +704,15 @@ class Emitter {
  public:
   // Lowers 'root' (plus the output rename to 'outputNames') into fragments,
   // returning them with the root fragment last.
-  std::vector<ExecutableFragment> emitFragments(
+  std::vector<velox::core::Stage> emitFragments(
       NodeCP root,
       const ColumnVector& outputColumns,
       const std::vector<std::string>& outputNames);
+
+  // Transfers what the scans of the emitted fragments need to the caller.
+  folly::F14FastMap<int32_t, FragmentScans> takeScans() {
+    return std::move(scans_);
+  }
 
   // Transfers the write-finalization handle produced by a TableWrite emit, if
   // any, to the caller. Empty for read-only queries.
@@ -773,7 +777,7 @@ velox::core::PlanNodePtr Emitter::emitScan(const Scan& scan) {
   // TABLESAMPLE SYSTEM: the split source emits each split with this
   // probability. Recorded per scan so split generation can sample.
   if (scan.baseTable()->sampledPercentage.has_value()) {
-    fragmentState_.addSampledScan(
+    scans_[fragmentState_.fragment->id].sampledScans.emplace(
         scanNode->id(), *scan.baseTable()->sampledPercentage);
   }
 
@@ -2141,9 +2145,9 @@ velox::core::PlanNodePtr Emitter::emitEnforceDistinct(
 // single); equal types merge to themselves; nullopt is "no constraint". A
 // kCoordinator with a parallel source (kSource/kFixed) is an invariant
 // violation.
-std::optional<FragmentType> mergeFragmentTypes(
-    std::optional<FragmentType> lhs,
-    std::optional<FragmentType> rhs) {
+std::optional<velox::core::StageType> mergeFragmentTypes(
+    std::optional<velox::core::StageType> lhs,
+    std::optional<velox::core::StageType> rhs) {
   if (!lhs.has_value()) {
     return rhs;
   }
@@ -2153,13 +2157,17 @@ std::optional<FragmentType> mergeFragmentTypes(
   if (*lhs == *rhs) {
     return lhs;
   }
-  if ((*lhs == FragmentType::kSource && *rhs == FragmentType::kFixed) ||
-      (*lhs == FragmentType::kFixed && *rhs == FragmentType::kSource)) {
-    return FragmentType::kFixed;
+  if ((*lhs == velox::core::StageType::kSource &&
+       *rhs == velox::core::StageType::kFixed) ||
+      (*lhs == velox::core::StageType::kFixed &&
+       *rhs == velox::core::StageType::kSource)) {
+    return velox::core::StageType::kFixed;
   }
-  if ((*lhs == FragmentType::kCoordinator && *rhs == FragmentType::kSingle) ||
-      (*lhs == FragmentType::kSingle && *rhs == FragmentType::kCoordinator)) {
-    return FragmentType::kCoordinator;
+  if ((*lhs == velox::core::StageType::kCoordinator &&
+       *rhs == velox::core::StageType::kSingle) ||
+      (*lhs == velox::core::StageType::kSingle &&
+       *rhs == velox::core::StageType::kCoordinator)) {
+    return velox::core::StageType::kCoordinator;
   }
   VELOX_FAIL(
       "Incompatible fragment-type contributions in one fragment: {} + {}",
@@ -2172,7 +2180,7 @@ std::optional<FragmentType> mergeFragmentTypes(
 // (partitioned → kFixed, gather → kSingle, broadcast/arbitrary → no
 // constraint); a scan yields kSource, or kCoordinator when it reads a
 // coordinator-only layout.
-std::optional<FragmentType> fragmentTypeContribution(NodeCP node) {
+std::optional<velox::core::StageType> fragmentTypeContribution(NodeCP node) {
   if (node->is(NodeType::kExchange)) {
     const auto& partitioning = node->as<Exchange>()->partitioning();
     if (partitioning.isDriver()) {
@@ -2180,9 +2188,9 @@ std::optional<FragmentType> fragmentTypeContribution(NodeCP node) {
     }
     switch (partitioning.kind) {
       case PartitionKind::kPartitioned:
-        return FragmentType::kFixed;
+        return velox::core::StageType::kFixed;
       case PartitionKind::kGather:
-        return FragmentType::kSingle;
+        return velox::core::StageType::kSingle;
       case PartitionKind::kBroadcast:
       case PartitionKind::kArbitrary:
       case PartitionKind::kUnspecified:
@@ -2192,20 +2200,20 @@ std::optional<FragmentType> fragmentTypeContribution(NodeCP node) {
   switch (node->nodeType()) {
     case NodeType::kScan:
       return node->as<Scan>()->baseTable()->layout()->runsOnCoordinator()
-          ? FragmentType::kCoordinator
-          : FragmentType::kSource;
+          ? velox::core::StageType::kCoordinator
+          : velox::core::StageType::kSource;
     case NodeType::kValues:
-      return FragmentType::kSingle;
+      return velox::core::StageType::kSingle;
     case NodeType::kFixedPoint:
       // The loop runs on the tasks that run its anchor; its step and
       // convergence run in sub-tasks of those tasks. A loop over a replicated
       // state runs on as many tasks as its step's shuffles address.
       if (node->as<FixedPoint>()->replicatesState()) {
-        return FragmentType::kFixed;
+        return velox::core::StageType::kFixed;
       }
       return fragmentTypeContribution(node->as<FixedPoint>()->anchor());
     default: {
-      std::optional<FragmentType> result;
+      std::optional<velox::core::StageType> result;
       for (NodeCP input : node->inputs()) {
         result = mergeFragmentTypes(result, fragmentTypeContribution(input));
       }
@@ -2223,16 +2231,16 @@ std::optional<FragmentType> fragmentTypeContribution(NodeCP node) {
 // and runs 'hashPartitionCount' tasks; a grouped fragment's bucket count
 // replaces it later.
 void decideFragmentType(
-    std::optional<FragmentType> contribution,
+    std::optional<velox::core::StageType> contribution,
     int32_t maxRemotePartitions,
     int32_t hashPartitionCount,
-    ExecutableFragment& fragment) {
+    velox::core::Stage& fragment) {
   if (maxRemotePartitions == 1) {
-    fragment.type = FragmentType::kSingle;
+    fragment.type = velox::core::StageType::kSingle;
     return;
   }
-  fragment.type = contribution.value_or(FragmentType::kSingle);
-  if (fragment.type == FragmentType::kFixed) {
+  fragment.type = contribution.value_or(velox::core::StageType::kSingle);
+  if (fragment.type == velox::core::StageType::kFixed) {
     fragment.numRemotePartitions = hashPartitionCount;
   }
 }
@@ -2243,7 +2251,7 @@ void decideFragmentType(
     NodeCP node,
     int32_t maxRemotePartitions,
     int32_t hashPartitionCount,
-    ExecutableFragment& fragment) {
+    velox::core::Stage& fragment) {
   decideFragmentType(
       maxRemotePartitions == 1 ? std::nullopt : fragmentTypeContribution(node),
       maxRemotePartitions,
@@ -2279,7 +2287,7 @@ const connector::PartitionType* commonFragmentPartitionType(NodeCP node) {
   return result;
 }
 
-void Emitter::finalizeGroupedLeaves(ExecutableFragment& fragment) {
+void Emitter::finalizeGroupedLeaves(velox::core::Stage& fragment) {
   if (fragmentState_.groupedPartitionType == nullptr) {
     return;
   }
@@ -2289,21 +2297,22 @@ void Emitter::finalizeGroupedLeaves(ExecutableFragment& fragment) {
       queryCtx()->sharedPartitionType(fragmentState_.groupedPartitionType);
   VELOX_CHECK_NOT_NULL(
       owned, "A grouped leaf's PartitionType must be owned by the context");
+  auto& groupedNodes = scans_[fragment.id].groupedNodes;
   for (const auto& leaf : fragmentState_.groupedLeaves) {
-    fragment.groupedNodes.emplace(
+    groupedNodes.emplace(
         leaf.nodeId,
         leaf.partitionType != nullptr
             ? std::const_pointer_cast<connector::PartitionType>(owned)
             : nullptr);
   }
-  fragment.type = FragmentType::kFixed;
+  fragment.type = velox::core::StageType::kFixed;
   fragment.numRemotePartitions =
       fragmentState_.groupedPartitionType->numPartitions();
 }
 
 velox::core::PlanNodePtr Emitter::emitChildFragment(
     NodeCP node,
-    ExecutableFragment& fragment) {
+    velox::core::Stage& fragment) {
   return emitInFragment(node, fragment, [&] { return emit(node); });
 }
 
@@ -2311,14 +2320,14 @@ void Emitter::emitGatheredOutput(
     NodeCP root,
     const ColumnVector& outputColumns,
     const std::vector<std::string>& outputNames,
-    ExecutableFragment& top) {
+    velox::core::Stage& top) {
   const bool layoutAboveGather = hasDuplicateNames(outputNames);
   const Project* rootProject =
       root->is(NodeType::kProject) ? root->as<Project>() : nullptr;
   NodeCP belowRoot =
       layoutAboveGather && rootProject != nullptr ? rootProject->input() : root;
 
-  ExecutableFragment source = newFragment();
+  velox::core::Stage source = newFragment();
   decideFragmentType(
       belowRoot, options_.maxRemotePartitions, hashPartitionCount(), source);
   velox::core::PlanNodePtr sourcePlan = layoutAboveGather
@@ -2329,21 +2338,20 @@ void Emitter::emitGatheredOutput(
   fragmentState_.fragment = &top;
 
   const auto& serdeKind = chooseExchangeSerdeKind(*sourcePlan->outputType());
-  source.fragment.planNode =
+  source.plan =
       makeSingleOutput(sourcePlan->outputType(), sourcePlan, serdeKind);
   auto gather = std::make_shared<velox::core::ExchangeNode>(
       nextId(), sourcePlan->outputType(), serdeKind);
-  top.inputStages.emplace_back(gather->id(), source.fragmentId);
+  top.inputs.emplace_back(gather->id(), source.id);
   stages_.push_back(std::move(source));
 
   if (!layoutAboveGather) {
-    top.fragment.planNode = gather;
+    top.plan = gather;
   } else if (rootProject != nullptr) {
-    top.fragment.planNode =
+    top.plan =
         emitRootProjectOver(gather, *rootProject, outputColumns, outputNames);
   } else {
-    top.fragment.planNode =
-        wrapWithRenameProject(gather, outputColumns, outputNames);
+    top.plan = wrapWithRenameProject(gather, outputColumns, outputNames);
   }
 }
 
@@ -2485,7 +2493,7 @@ velox::core::PlanNodePtr Emitter::emitExchange(const Exchange& exchange) {
   }
 
   // Producer fragment: the exchange's input, capped with a PartitionedOutput.
-  ExecutableFragment source = newFragment();
+  velox::core::Stage source = newFragment();
   decideFragmentType(
       exchange.input(),
       options_.maxRemotePartitions,
@@ -2493,11 +2501,11 @@ velox::core::PlanNodePtr Emitter::emitExchange(const Exchange& exchange) {
       source);
   velox::core::PlanNodePtr sourcePlan =
       emitChildFragment(exchange.input(), source);
-  source.fragment.planNode = makeExchangeProducer(partitioning, sourcePlan);
+  source.plan = makeExchangeProducer(partitioning, sourcePlan);
 
   velox::core::PlanNodePtr consumer =
       makeExchangeConsumer(partitioning, sourcePlan->outputType());
-  fragmentState_.addInputStage(consumer->id(), source.fragmentId);
+  fragmentState_.addInputStage(consumer->id(), source.id);
 
   // A partitioned exchange feeding the outer fragment is a group-routed leaf
   // there: if that fragment turns out bucketed, the exchange delivers per
@@ -2536,7 +2544,7 @@ void Emitter::openWriterFragment(NodeCP input, WriterFragmentState& state) {
   // Gathering an input that already runs as a single task would add a
   // redundant exchange.
   state.split = options_.maxRemotePartitions > 1 &&
-      fragmentTypeContribution(input) != FragmentType::kSingle;
+      fragmentTypeContribution(input) != velox::core::StageType::kSingle;
   if (state.split) {
     state.fragment = newFragment();
     decideFragmentType(
@@ -2579,12 +2587,12 @@ velox::core::PlanNodePtr Emitter::closeWriterFragment(
   // A connector-partitioned input runs one writer task per partition.
   if (const auto* partitionType =
           input->physicalProperties().globalPartition.partitionType) {
-    state.fragment.type = FragmentType::kFixed;
+    state.fragment.type = velox::core::StageType::kFixed;
     state.fragment.numRemotePartitions = partitionType->numPartitions();
   }
   finalizeGroupedLeaves(state.fragment);
   const auto& serdeKind = chooseExchangeSerdeKind(*result->outputType());
-  state.fragment.fragment.planNode =
+  state.fragment.plan =
       makeSingleOutput(result->outputType(), result, serdeKind);
   fragmentState_ = std::move(*state.rootState);
   VELOX_CHECK_NOT_NULL(
@@ -2592,7 +2600,7 @@ velox::core::PlanNodePtr Emitter::closeWriterFragment(
       "Restored writer fragment state has no enclosing fragment");
   auto gather = std::make_shared<velox::core::ExchangeNode>(
       nextId(), result->outputType(), serdeKind);
-  fragmentState_.addInputStage(gather->id(), state.fragment.fragmentId);
+  fragmentState_.addInputStage(gather->id(), state.fragment.id);
   stages_.push_back(std::move(state.fragment));
   return gather;
 }
@@ -2849,8 +2857,8 @@ namespace {
 // Rejects fragments that would require one task to orchestrate multiple
 // independent fixed points. Fixed points isolated in separate fragments remain
 // valid.
-void validateFixedPointLeaves(const ExecutableFragment& fragment) {
-  const auto& root = fragment.fragment.planNode;
+void validateFixedPointLeaves(const velox::core::Stage& fragment) {
+  const auto& root = fragment.plan;
   int32_t numFixedPoints{0};
   for (const auto& leafId : root->leafPlanNodeIds()) {
     const auto* leaf = velox::core::PlanNode::findNodeById(root.get(), leafId);
@@ -2868,12 +2876,12 @@ void validateFixedPointLeaves(const ExecutableFragment& fragment) {
 
 } // namespace
 
-std::vector<ExecutableFragment> Emitter::emitFragments(
+std::vector<velox::core::Stage> Emitter::emitFragments(
     NodeCP root,
     const ColumnVector& outputColumns,
     const std::vector<std::string>& outputNames) {
-  ExecutableFragment top = newFragment();
-  top.type = FragmentType::kSingle;
+  velox::core::Stage top = newFragment();
+  top.type = velox::core::StageType::kSingle;
 
   // The output fragment's root for the consistency check, whose output names
   // (the query's) may repeat for user aliases and so are validated as the plan
@@ -2899,9 +2907,9 @@ std::vector<ExecutableFragment> Emitter::emitFragments(
     }
     if (options_.remoteOutput) {
       outputProjection = writePlan;
-      top.fragment.planNode = makeClientOutput(writePlan);
+      top.plan = makeClientOutput(writePlan);
     } else {
-      top.fragment.planNode = writePlan;
+      top.plan = writePlan;
     }
   } else {
     // A root whose subtree already runs on one task needs no output gather and
@@ -2910,13 +2918,13 @@ std::vector<ExecutableFragment> Emitter::emitFragments(
     // multi-task root is gathered to a single task for the query output.
     // The root's fragment-type contribution drives both the output-gather
     // decision and the root fragment's type; compute it once and reuse it.
-    std::optional<FragmentType> rootType;
+    std::optional<velox::core::StageType> rootType;
     if (options_.maxRemotePartitions > 1) {
       rootType = fragmentTypeContribution(root);
     }
     const bool gatherForOutput = options_.maxRemotePartitions > 1 &&
-        rootType != FragmentType::kSingle &&
-        rootType != FragmentType::kCoordinator;
+        rootType != velox::core::StageType::kSingle &&
+        rootType != velox::core::StageType::kCoordinator;
 
     if (options_.remoteOutput) {
       // Results stay distributed: emit the root as a single fragment capped by
@@ -2931,7 +2939,7 @@ std::vector<ExecutableFragment> Emitter::emitFragments(
       decideFragmentType(
           rootType, options_.maxRemotePartitions, hashPartitionCount(), top);
       outputProjection = emitRoot(root, outputColumns, outputNames);
-      top.fragment.planNode = makeClientOutput(outputProjection);
+      top.plan = makeClientOutput(outputProjection);
     } else if (gatherForOutput) {
       fragmentState_ = {.fragment = &top};
       emitGatheredOutput(root, outputColumns, outputNames, top);
@@ -2942,7 +2950,7 @@ std::vector<ExecutableFragment> Emitter::emitFragments(
       };
       decideFragmentType(
           rootType, options_.maxRemotePartitions, hashPartitionCount(), top);
-      top.fragment.planNode = emitRoot(root, outputColumns, outputNames);
+      top.plan = emitRoot(root, outputColumns, outputNames);
     }
   }
 
@@ -2953,12 +2961,12 @@ std::vector<ExecutableFragment> Emitter::emitFragments(
   // fragment is validated at 'outputProjection' so its output names, which may
   // repeat for user aliases, are allowed as the plan root.
   if (outputProjection == nullptr) {
-    outputProjection = top.fragment.planNode;
+    outputProjection = top.plan;
   }
 
   for (const auto& fragment : stages_) {
     validateFixedPointLeaves(fragment);
-    velox::core::PlanConsistencyChecker::check(fragment.fragment.planNode);
+    velox::core::PlanConsistencyChecker::check(fragment.plan);
   }
   validateFixedPointLeaves(top);
   velox::core::PlanConsistencyChecker::check(outputProjection);
@@ -2979,9 +2987,10 @@ EmitPass::Result EmitPass::run(
     const MultiFragmentPlan::Options& options) {
   VELOX_CHECK_EQ(outputColumns.size(), outputNames.size());
   Emitter emitter(session, evaluator, estimateProvider, options);
-  auto fragments = emitter.emitFragments(root, outputColumns, outputNames);
+  auto stages = emitter.emitFragments(root, outputColumns, outputNames);
   return Result{
-      std::move(fragments),
+      std::move(stages),
+      emitter.takeScans(),
       emitter.takeFinishWrite(),
       emitter.takePrediction()};
 }

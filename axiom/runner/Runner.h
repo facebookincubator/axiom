@@ -26,9 +26,9 @@
 #include "axiom/common/Enums.h"
 #include "velox/exec/TaskStats.h"
 
-namespace facebook::axiom::optimizer {
-struct ExecutableFragment;
-} // namespace facebook::axiom::optimizer
+namespace facebook::velox::core {
+struct Stage;
+} // namespace facebook::velox::core
 
 /// Base classes for multifragment Velox query execution.
 namespace facebook::axiom::runner {
@@ -95,10 +95,9 @@ class Runner {
   /// cleanup has finished it returns the final stats.
   virtual std::vector<velox::exec::TaskStats> stats() const = 0;
 
-  /// Returns the executable fragments of the plan being run, ordered so that
-  /// fragments()[i] corresponds to stats()[i].
-  virtual const std::vector<optimizer::ExecutableFragment>& fragments()
-      const = 0;
+  /// Returns the stages of the plan being run, ordered so that stages()[i]
+  /// corresponds to stats()[i].
+  virtual const std::vector<velox::core::Stage>& stages() const = 0;
 
   /// Returns the state of execution.
   virtual State state() const = 0;

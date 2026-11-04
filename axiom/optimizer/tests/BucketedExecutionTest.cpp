@@ -80,16 +80,17 @@ class BucketedExecutionTest : public test::QueryTestBase,
       int32_t expectedBucketedScans = -1,
       int32_t expectedHashExchanges = -1) {
     bool found = false;
-    for (const auto& fragment : plan.fragments()) {
-      if (fragment.groupedNodes.empty()) {
+    for (const auto& fragment : plan.stages()) {
+      const auto& groupedNodes = plan.scans(fragment.id).groupedNodes;
+      if (groupedNodes.empty()) {
         continue;
       }
-      EXPECT_EQ(fragment.type, FragmentType::kFixed);
+      EXPECT_EQ(fragment.type, velox::core::StageType::kFixed);
       ASSERT_TRUE(fragment.numRemotePartitions.has_value());
       EXPECT_EQ(*fragment.numRemotePartitions, expectedWidth);
       int32_t bucketedScans = 0;
       int32_t hashExchanges = 0;
-      for (const auto& [_, partitionType] : fragment.groupedNodes) {
+      for (const auto& [_, partitionType] : groupedNodes) {
         if (partitionType == nullptr) {
           ++hashExchanges;
         } else {
@@ -1291,7 +1292,7 @@ TEST_P(BucketedExecutionTest, incompatibleBucketingOnOneWorker) {
           .hashJoinInner(matchScan("w1_u"))
           .projectIf(useV2_)
           .notBucketed()
-          .output(FragmentType::kSingle)
+          .output(velox::core::StageType::kSingle)
           .build());
 }
 

@@ -22,7 +22,7 @@
 #include <folly/container/F14Map.h>
 #include "axiom/common/Enums.h"
 #include "axiom/connectors/ConnectorMetadata.h"
-#include "velox/core/PlanFragment.h"
+#include "velox/core/MultiStagePlan.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/SimpleVector.h"
 
@@ -69,15 +69,6 @@ struct WriteStatsMapping {
   /// finishWrite must use table column names (e.g. "pk"). Empty when there
   /// are no grouping keys.
   std::vector<std::string> groupingKeyNames;
-};
-
-/// Describes an exchange source for an ExchangeNode a non-leaf stage.
-struct InputStage {
-  // Id of ExchangeNode in the consumer fragment.
-  velox::core::PlanNodeId consumerNodeId;
-
-  /// Id of the fragment producing the input.
-  int32_t producerFragmentId;
 };
 
 /// Callbacks to finalize writing to a connector after the query completes.
@@ -142,58 +133,17 @@ class FinishWrite {
   std::optional<Operation> operation_;
 };
 
-/// Describes how a fragment's tasks are scheduled.
-enum class FragmentType {
-  /// Parallelism determined by the data source (number of splits).
-  kSource,
-  /// Exactly `numRemotePartitions` tasks.
-  kFixed,
-  /// Exactly 1 task, any worker.
-  kSingle,
-  /// Exactly 1 task, on coordinator.
-  kCoordinator,
-};
-
-AXIOM_DECLARE_ENUM_NAME(FragmentType);
-
-/// Describes a fragment of a distributed plan. This allows a run
-/// time to distribute fragments across workers and to set up
-/// exchanges. A complete plan is a vector of these with the last
-/// being the fragment that gathers results from the complete
-/// plan. Different runtimes, e.g. local, streaming or
-/// materialized shuffle can use this to describe exchange
-/// parallel execution. Decisions on number of workers, location
-/// of workers and mode of exchange are up to the runtime.
-struct ExecutableFragment {
-  /// Identifies the fragment within its plan. Ids run from 1 to the number of
-  /// fragments, in no relation to the order of 'fragments()'.
-  int32_t fragmentId;
-
-  /// Scheduling type for this fragment.
-  FragmentType type;
-
-  /// Number of remote partitions, i.e. the number of tasks the scheduler
-  /// must run for this fragment. Required for kFixed. std::nullopt for
-  /// kSource (runtime decides actual count), kSingle, and kCoordinator.
-  /// Splits tagged with a remotePartition in [0, numRemotePartitions) are
-  /// routed to the task with that index; the scheduler must obey this
-  /// decision.
-  std::optional<int32_t> numRemotePartitions;
-
-  velox::core::PlanFragment fragment;
-
-  /// Source fragments and Exchange node ids for remote shuffles producing input
-  /// for 'this'.
-  std::vector<InputStage> inputStages;
-
-  /// The leaf nodes of a fragment that runs one bucket group at a time. A scan
+/// Describes what a runner needs to read the scans of one stage of a
+/// MultiFragmentPlan: which leaves run one bucket group at a time, and which
+/// scans sample. Empty for most stages.
+struct FragmentScans {
+  /// The leaf nodes of a stage that runs one bucket group at a time. A scan
   /// read that way maps to the partitioning it is read by, already coarsened to
   /// the worker count, and the connector tags each emitted Split with a
-  /// remotePartition the runtime routes by. An exchange feeding the same
-  /// fragment maps to null: its partitions line up with those groups by
-  /// construction. All non-null entries share numPartitions(), which is the
-  /// fragment's numRemotePartitions. Empty when the fragment does not run
-  /// grouped.
+  /// remotePartition the runtime routes by. An exchange feeding the same stage
+  /// maps to null: its partitions line up with those groups by construction.
+  /// All non-null entries share numPartitions(), which is the stage's
+  /// numRemotePartitions. Empty when the stage does not run grouped.
   folly::F14FastMap<
       velox::core::PlanNodeId,
       std::shared_ptr<connector::PartitionType>>
@@ -201,15 +151,22 @@ struct ExecutableFragment {
 
   /// Sample percentage per scan node for TABLESAMPLE SYSTEM. The split source
   /// for the scan emits each split with this probability, in the open interval
-  /// (0, 100). Empty when no scan in this fragment is sampled.
+  /// (0, 100). Empty when no scan in this stage is sampled.
   folly::F14FastMap<velox::core::PlanNodeId, double> sampledScans;
 };
 
 /// Describes a distributed plan handed to a Runner for parallel/distributed
-/// execution. The last element of 'fragments' is by convention the stage that
-/// gathers the query result. Otherwise the order of 'fragments' is not
-/// important since the producer-consumer relations are given by 'inputStages'
-/// in each fragment.
+/// execution: a velox::core::MultiStagePlan, what Axiom adds about reading the
+/// scans of its stages, and the options the plan was made for. A write the
+/// connector performs through metadata alone runs no stage, so its plan is
+/// empty.
+///
+///   MultiFragmentPlan plan(std::move(stages), std::move(scans), options);
+///   for (const auto& stage : plan.stages()) {
+///     const auto& scans = plan.scans(stage.id);
+///     ...
+///   }
+///   plan.stagePlan().root();  // produces the query result
 class MultiFragmentPlan {
  public:
   /// Describes options for running a MultiFragmentPlan.
@@ -223,21 +180,21 @@ class MultiFragmentPlan {
     /// for rather than the count available.
     int32_t maxRemotePartitions{1};
 
-    /// Maximum number of local partitions, i.e. threads in a fragment in a
+    /// Maximum number of local partitions, i.e. threads in a stage in a
     /// worker. If 1, there are no local exchanges.
     int32_t maxLocalPartitions{4};
 
-    /// Controls how query results are delivered from the final plan fragment.
+    /// Controls how query results are delivered from the root stage.
     ///
-    /// When true, wraps the root of the final fragment in a
-    /// PartitionedOutputNode that serializes results for remote consumption
-    /// via exchange. With multiple workers, results remain distributed across
-    /// worker nodes — no gather is added, so the caller must read from each
-    /// worker independently. Even with a single worker, the
-    /// PartitionedOutputNode is added to enable remote consumption.
+    /// When true, wraps the root of the root stage in a PartitionedOutputNode
+    /// that serializes results for remote consumption via exchange. With
+    /// multiple workers, results remain distributed across worker nodes — no
+    /// gather is added, so the caller must read from each worker
+    /// independently. Even with a single worker, the PartitionedOutputNode is
+    /// added to enable remote consumption.
     ///
-    /// When false (default), results are consumed locally from the final
-    /// fragment. With multiple workers, the planner adds a gather stage to
+    /// When false (default), results are consumed locally from the root
+    /// stage. With multiple workers, the planner adds a gather stage to
     /// collect results onto a single node. With a single worker, no
     /// additional nodes are added.
     bool remoteOutput{false};
@@ -253,12 +210,28 @@ class MultiFragmentPlan {
     }
   };
 
-  MultiFragmentPlan(std::vector<ExecutableFragment> fragments, Options options)
-      : fragments_{std::move(fragments)}, options_{std::move(options)} {}
+  /// Makes a plan of 'stages', which form a velox::core::MultiStagePlan unless
+  /// empty; the constructor throws a user error if they do not. 'scans' maps a
+  /// stage id to what its scans need, for the stages that need anything.
+  MultiFragmentPlan(
+      std::vector<velox::core::Stage> stages,
+      folly::F14FastMap<int32_t, FragmentScans> scans,
+      Options options);
 
-  const std::vector<ExecutableFragment>& fragments() const {
-    return fragments_;
+  /// Returns true for a plan that runs no stage.
+  bool empty() const {
+    return !stagePlan_.has_value();
   }
+
+  /// Returns the stages. Requires !empty().
+  const velox::core::MultiStagePlan& stagePlan() const;
+
+  /// Returns the stages in the order they were given; empty when empty().
+  const std::vector<velox::core::Stage>& stages() const;
+
+  /// Returns what the scans of stage 'stageId' need; empty for a stage
+  /// without grouped or sampled scans.
+  const FragmentScans& scans(int32_t stageId) const;
 
   const Options& options() const {
     return options_;
@@ -281,20 +254,12 @@ class MultiFragmentPlan {
   std::string toSummaryString(
       velox::core::PlanSummaryOptions options = {}) const;
 
-  /// Validates structural consistency of the plan. Checks fragment types,
-  /// numRemotePartitions, producer-consumer linkage, and partition count
-  /// alignment.
-  /// 'mayBeEmpty' allows a plan with no fragments, which is what a write the
-  /// connector performs through metadata alone produces.
-  void checkConsistency(bool mayBeEmpty) const;
-
  private:
-  const std::vector<ExecutableFragment> fragments_;
+  const std::optional<velox::core::MultiStagePlan> stagePlan_;
+  const folly::F14FastMap<int32_t, FragmentScans> scans_;
   const Options options_;
 };
 
 using MultiFragmentPlanPtr = std::shared_ptr<const MultiFragmentPlan>;
 
 } // namespace facebook::axiom::optimizer
-
-AXIOM_ENUM_FORMATTER(facebook::axiom::optimizer::FragmentType);

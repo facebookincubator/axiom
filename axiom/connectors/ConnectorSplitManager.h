@@ -39,7 +39,7 @@ struct Split {
 
   /// Remote partition for bucketed routing. This is a number in
   /// [0, numRemotePartitions), where numRemotePartitions is the
-  /// ExecutableFragment's numRemotePartitions the split is read by. Splits
+  /// Stage's numRemotePartitions the split is read by. Splits
   /// sharing a remotePartition are routed to the same task; the scheduler
   /// must obey this decision. Absent means any task may handle this split.
   std::optional<int32_t> remotePartition{std::nullopt};

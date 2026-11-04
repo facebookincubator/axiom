@@ -85,7 +85,7 @@ PlanAndStats CollagenService::plan(
       optimize(converter.planNode(), catalog_, pool_.get(), functionRegistry_);
 
   LOG(INFO) << "Generated Velox physical plan with "
-            << veloxPlanAndStats.plan->fragments().size() << " fragments:\n"
+            << veloxPlanAndStats.plan->stages().size() << " fragments:\n"
             << veloxPlanAndStats.plan->toString();
 
   LOG(INFO) << "Plan generation took "
@@ -193,10 +193,9 @@ grpc::Status CollagenService::AnalyzePlan(
       fullExplainStr += "\n\n== Velox Physical Plan (MultiFragmentPlan) ==\n";
       fullExplainStr += veloxPlanStr;
 
-      for (const auto& execFragment : veloxPlanStats.plan->fragments()) {
+      for (const auto& stage : veloxPlanStats.plan->stages()) {
         fullExplainStr += "\n\n== Velox Plan JSON ==\n";
-        fullExplainStr +=
-            folly::toJson(execFragment.fragment.planNode->serialize());
+        fullExplainStr += folly::toJson(stage.plan->serialize());
       }
 
       // Also set the separate field for programmatic access

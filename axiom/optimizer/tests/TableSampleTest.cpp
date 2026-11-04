@@ -66,9 +66,10 @@ TEST_P(TableSampleTest, system) {
     auto result = planVelox(
         parseSampledScan(sample),
         {.maxRemotePartitions = 1, .maxLocalPartitions = 1});
-    EXPECT_EQ(result.plan->fragments().size(), 1);
-    const auto& fragment = result.plan->fragments().at(0);
-    return std::make_pair(fragment.fragment.planNode, fragment.sampledScans);
+    EXPECT_EQ(result.plan->stages().size(), 1);
+    const auto& fragment = result.plan->stages().at(0);
+    return std::make_pair(
+        fragment.plan, result.plan->scans(fragment.id).sampledScans);
   };
 
   // SYSTEM samples whole splits, so the percentage rides on the scan's split

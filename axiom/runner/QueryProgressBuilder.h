@@ -26,18 +26,18 @@ namespace facebook::velox::exec {
 struct TaskStats;
 } // namespace facebook::velox::exec
 
-namespace facebook::axiom::optimizer {
-struct ExecutableFragment;
-} // namespace facebook::axiom::optimizer
+namespace facebook::velox::core {
+struct Stage;
+} // namespace facebook::velox::core
 
 namespace facebook::axiom::runner {
 
-/// Stateless functions that build a QueryProgress from a runner's plan
-/// fragments and a task-stats snapshot. Derive the stage topology once, then
+/// Stateless functions that build a QueryProgress from a runner's plan stages
+/// and a task-stats snapshot. Derive the stage topology once, then
 /// combine it with each stats snapshot:
 ///
 /// @code
-///   auto stages = QueryProgressBuilder::toStageTopology(runner.fragments());
+///   auto stages = QueryProgressBuilder::toStageTopology(runner.stages());
 ///   auto progress = QueryProgressBuilder::computeProgress(
 ///       stages, runner.stats(), queryId, wallMicros, finished);
 /// @endcode
@@ -51,15 +51,14 @@ class QueryProgressBuilder {
     std::vector<int32_t> producers;
   };
 
-  /// Converts the plan's fragments to per-stage topology, where stage i
-  /// corresponds to fragments[i] and to stats()[i]. Every exchange input must
-  /// name a known producer fragment; an unresolved prefix throws.
+  /// Converts the plan's stages to per-stage topology, where stage i
+  /// corresponds to stages[i] and to stats()[i]. Every exchange input must
+  /// name a known producer stage; an unresolved prefix throws.
   static std::vector<StageTopology> toStageTopology(
-      const std::vector<facebook::axiom::optimizer::ExecutableFragment>&
-          fragments);
+      const std::vector<velox::core::Stage>& stages);
 
   /// Combines the stage topology with a task-stats snapshot into a
-  /// QueryProgress. `stages` is positionally 1:1 with `taskStats` by fragment
+  /// QueryProgress. `stages` is positionally 1:1 with `taskStats` by stage
   /// order; a size mismatch throws. `wallMicros` is elapsed time since query
   /// start. `finished` is whether the runner has completed; on a clean finish
   /// the counters are normalized to a consistent completed frame.

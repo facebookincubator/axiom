@@ -67,9 +67,12 @@ class PlanMatcher {
   // Context for distributed plan matching. Passed through the match() method
   // to provide fragment information needed by ShuffleBoundaryMatcher.
   struct DistributedMatchContext {
-    const std::vector<axiom::optimizer::ExecutableFragment>* fragments;
-    const axiom::optimizer::ExecutableFragment* currentFragment;
+    const std::vector<Stage>* fragments;
+    const Stage* currentFragment;
     const std::unordered_map<int32_t, int32_t>* fragmentIdToIndex;
+    // The plan 'fragments' belong to, for what their scans need; null when
+    // they are not a MultiFragmentPlan's.
+    const axiom::optimizer::MultiFragmentPlan* plan;
   };
 
   struct MatchResult {
@@ -808,7 +811,7 @@ class PlanMatcherBuilder {
   /// fragment this boundary closes.
   PlanMatcherBuilder& shuffle(
       const std::vector<std::string>& keys,
-      axiom::optimizer::FragmentType producer);
+      StageType producer);
 
   /// Marks a shuffle boundary with partition keys (see shuffle(keys,
   /// replicateNullsAndAny)) only when 'condition' is true; otherwise a no-op.
@@ -828,7 +831,7 @@ class PlanMatcherBuilder {
 
   /// Like shuffleMerge(), additionally asserting the type of the producer
   /// fragment this boundary closes.
-  PlanMatcherBuilder& shuffleMerge(axiom::optimizer::FragmentType producer);
+  PlanMatcherBuilder& shuffleMerge(StageType producer);
 
   /// Like `shuffleMerge()`, additionally verifying the MergeExchange's sort
   /// ordering. Each entry is an ORDER BY expression with optional direction,
@@ -841,13 +844,13 @@ class PlanMatcherBuilder {
   /// 'producer' is set, also asserts the type of the producer fragment this
   /// boundary closes.
   PlanMatcherBuilder& broadcast(
-      std::optional<axiom::optimizer::FragmentType> producer = std::nullopt);
+      std::optional<StageType> producer = std::nullopt);
 
   /// Matches a broadcast shuffle boundary (see broadcast()) only when
   /// 'condition' is true; otherwise a no-op.
   PlanMatcherBuilder& broadcastIf(
       bool condition,
-      std::optional<axiom::optimizer::FragmentType> producer = std::nullopt) {
+      std::optional<StageType> producer = std::nullopt) {
     return condition ? broadcast(producer) : *this;
   }
 
@@ -856,7 +859,7 @@ class PlanMatcherBuilder {
   /// 'producer' is set, also asserts the type of the producer fragment this
   /// boundary closes.
   PlanMatcherBuilder& arbitrary(
-      std::optional<axiom::optimizer::FragmentType> producer = std::nullopt);
+      std::optional<StageType> producer = std::nullopt);
 
   /// Matches a gather shuffle boundary in a distributed plan.
   /// Verifies that PartitionedOutputNode::numPartitions() == 1. When 'producer'
@@ -864,14 +867,13 @@ class PlanMatcherBuilder {
   /// closes. A gather collapses multiple producer tasks to one, so a
   /// single-task producer (kSingle / kCoordinator) is a redundant funnel and is
   /// rejected.
-  PlanMatcherBuilder& gather(
-      std::optional<axiom::optimizer::FragmentType> producer = std::nullopt);
+  PlanMatcherBuilder& gather(std::optional<StageType> producer = std::nullopt);
 
   /// Matches a gather shuffle boundary (see gather()) only when 'condition' is
   /// true; otherwise a no-op.
   PlanMatcherBuilder& gatherIf(
       bool condition,
-      std::optional<axiom::optimizer::FragmentType> producer = std::nullopt) {
+      std::optional<StageType> producer = std::nullopt) {
     return condition ? gather(producer) : *this;
   }
 
@@ -1197,7 +1199,7 @@ class PlanMatcherBuilder {
   /// the chain: it binds to the plan's output fragment, which has no closing
   /// boundary to carry the type. Producer fragments carry their type on the
   /// boundary that closes them (see gather / arbitrary / broadcast / shuffle).
-  PlanMatcherBuilder& output(axiom::optimizer::FragmentType type);
+  PlanMatcherBuilder& output(StageType type);
 
   /// Builds and returns the constructed PlanMatcher.
   /// @throws VeloxUserError if matcher is empty.

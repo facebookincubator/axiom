@@ -557,12 +557,10 @@ class FixedPointMatcher : public PlanMatcherImpl<FixedPointNode> {
       const std::vector<PlanNodePtr>& plans,
       const PlanMatcher& chain,
       const std::unordered_map<std::string, std::string>& symbols) {
-    std::vector<axiom::optimizer::ExecutableFragment> fragments;
+    std::vector<Stage> fragments;
     std::unordered_map<int32_t, int32_t> fragmentIdToIndex;
     for (int32_t i = 0; i < plans.size(); ++i) {
-      axiom::optimizer::ExecutableFragment fragment{
-          .fragmentId = i, .type = axiom::optimizer::FragmentType::kFixed};
-      fragment.fragment.planNode = plans[i];
+      Stage fragment{.id = i, .type = StageType::kFixed, .plan = plans[i]};
       if (i > 0) {
         const auto* exchange =
             PlanNode::findFirstNode<ExchangeNode>(plans[i].get());
@@ -572,14 +570,14 @@ class FixedPointMatcher : public PlanMatcherImpl<FixedPointNode> {
         if (exchange == nullptr) {
           return false;
         }
-        fragment.inputStages.push_back(
-            {.consumerNodeId = exchange->id(), .producerFragmentId = i - 1});
+        fragment.inputs.push_back(
+            {.exchangeId = exchange->id(), .producerStageId = i - 1});
       }
       fragmentIdToIndex[i] = i;
       fragments.push_back(std::move(fragment));
     }
     const DistributedMatchContext context{
-        &fragments, &fragments.back(), &fragmentIdToIndex};
+        &fragments, &fragments.back(), &fragmentIdToIndex, /*plan=*/nullptr};
     return chain.match(plans.back(), symbols, &context).match;
   }
 
@@ -1573,7 +1571,7 @@ class ShuffleBoundaryMatcher : public PlanMatcher {
       std::optional<ShuffleType> type = std::nullopt,
       std::vector<std::string> keys = {},
       std::optional<bool> replicateNullsAndAny = std::nullopt,
-      std::optional<axiom::optimizer::FragmentType> producerType = std::nullopt,
+      std::optional<StageType> producerType = std::nullopt,
       std::optional<std::string> serdeKind = std::nullopt)
       : producerMatcher_(std::move(producerMatcher)),
         type_(type),
@@ -1610,19 +1608,19 @@ class ShuffleBoundaryMatcher : public PlanMatcher {
   // Set only for kPartitioned (enforced by the constructor).
   const std::optional<bool> replicateNullsAndAny_;
   // When set, the expected type of the producer fragment this boundary closes.
-  const std::optional<axiom::optimizer::FragmentType> producerType_;
+  const std::optional<StageType> producerType_;
   // When set, the serialization format on both sides of the boundary.
   const std::optional<std::string> serdeKind_;
 };
 
 // Returns the producer fragment for the given Exchange node, or nullptr if not
 // found.
-const axiom::optimizer::ExecutableFragment* findProducerFragment(
+const Stage* findProducerFragment(
     const PlanNodeId& exchangeNodeId,
     const PlanMatcher::DistributedMatchContext& context) {
-  for (const auto& inputStage : context.currentFragment->inputStages) {
-    if (inputStage.consumerNodeId == exchangeNodeId) {
-      auto it = context.fragmentIdToIndex->find(inputStage.producerFragmentId);
+  for (const auto& input : context.currentFragment->inputs) {
+    if (input.exchangeId == exchangeNodeId) {
+      auto it = context.fragmentIdToIndex->find(input.producerStageId);
       if (it != context.fragmentIdToIndex->end()) {
         return &context.fragments->at(it->second);
       }
@@ -1755,7 +1753,7 @@ PlanMatcher::MatchResult ShuffleBoundaryMatcher::match(
     AXIOM_TEST_RETURN_IF_FAILURE
   }
 
-  const auto& fragmentPlan = producerFragment->fragment.planNode;
+  const auto& fragmentPlan = producerFragment->plan;
   const auto* partitionedOutput = fragmentPlan->as<PartitionedOutputNode>();
   EXPECT_TRUE(partitionedOutput != nullptr)
       << "Expected PartitionedOutput at fragment root, but got "
@@ -1769,7 +1767,10 @@ PlanMatcher::MatchResult ShuffleBoundaryMatcher::match(
   // Match the producer first so its symbols are available for the key lookups
   // below (keys reference producer-fragment column names).
   DistributedMatchContext producerContext{
-      context->fragments, producerFragment, context->fragmentIdToIndex};
+      context->fragments,
+      producerFragment,
+      context->fragmentIdToIndex,
+      context->plan};
   auto producerResult = producerMatcher_->match(
       partitionedOutput->sources()[0], symbols, &producerContext);
   if (!producerResult.match) {
@@ -1801,8 +1802,9 @@ PlanMatcher::MatchResult ShuffleBoundaryMatcher::match(
 // PlanNode.
 class BucketedAssertionMatcher : public PlanMatcher {
  public:
-  using AssertionFn =
-      std::function<void(const axiom::optimizer::ExecutableFragment& fragment)>;
+  using AssertionFn = std::function<void(
+      const Stage& fragment,
+      const axiom::optimizer::FragmentScans& scans)>;
 
   BucketedAssertionMatcher(
       const std::shared_ptr<PlanMatcher>& sourceMatcher,
@@ -1820,7 +1822,12 @@ class BucketedAssertionMatcher : public PlanMatcher {
     EXPECT_TRUE(context->currentFragment != nullptr)
         << "Bucketed assertions require currentFragment to be set in context.";
     AXIOM_TEST_RETURN_IF_FAILURE
-    assertion_(*context->currentFragment);
+    static const axiom::optimizer::FragmentScans kNoScans;
+    const auto& fragment = *context->currentFragment;
+    assertion_(
+        fragment,
+        context->plan != nullptr ? context->plan->scans(fragment.id)
+                                 : kNoScans);
     AXIOM_TEST_RETURN_IF_FAILURE
     return sourceMatcher_->match(plan, symbols, context);
   }
@@ -3038,7 +3045,7 @@ PlanMatcherBuilder& PlanMatcherBuilder::shuffle(
 
 PlanMatcherBuilder& PlanMatcherBuilder::shuffle(
     const std::vector<std::string>& keys,
-    axiom::optimizer::FragmentType producer) {
+    StageType producer) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<ShuffleBoundaryMatcher>(
       matcher_, ShuffleType::kPartitioned, keys, std::nullopt, producer);
@@ -3052,8 +3059,7 @@ PlanMatcherBuilder& PlanMatcherBuilder::shuffleMerge() {
   return *this;
 }
 
-PlanMatcherBuilder& PlanMatcherBuilder::shuffleMerge(
-    axiom::optimizer::FragmentType producer) {
+PlanMatcherBuilder& PlanMatcherBuilder::shuffleMerge(StageType producer) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<ShuffleBoundaryMatcher>(
       matcher_,
@@ -3073,7 +3079,7 @@ PlanMatcherBuilder& PlanMatcherBuilder::shuffleMerge(
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::broadcast(
-    std::optional<axiom::optimizer::FragmentType> producer) {
+    std::optional<StageType> producer) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<ShuffleBoundaryMatcher>(
       matcher_,
@@ -3085,7 +3091,7 @@ PlanMatcherBuilder& PlanMatcherBuilder::broadcast(
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::arbitrary(
-    std::optional<axiom::optimizer::FragmentType> producer) {
+    std::optional<StageType> producer) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<ShuffleBoundaryMatcher>(
       matcher_,
@@ -3097,11 +3103,10 @@ PlanMatcherBuilder& PlanMatcherBuilder::arbitrary(
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::gather(
-    std::optional<axiom::optimizer::FragmentType> producer) {
+    std::optional<StageType> producer) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   VELOX_USER_CHECK(
-      producer != axiom::optimizer::FragmentType::kSingle &&
-          producer != axiom::optimizer::FragmentType::kCoordinator,
+      producer != StageType::kSingle && producer != StageType::kCoordinator,
       "A gather collapses multiple producer tasks to one; a single-task "
       "producer (kSingle / kCoordinator) indicates a redundant funnel");
   matcher_ = std::make_shared<ShuffleBoundaryMatcher>(
@@ -3433,8 +3438,10 @@ PlanMatcherBuilder& PlanMatcherBuilder::groupId(
 PlanMatcherBuilder& PlanMatcherBuilder::bucketed() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<BucketedAssertionMatcher>(
-      matcher_, [](const axiom::optimizer::ExecutableFragment& fragment) {
-        EXPECT_FALSE(fragment.groupedNodes.empty())
+      matcher_,
+      [](const Stage& /*fragment*/,
+         const axiom::optimizer::FragmentScans& scans) {
+        EXPECT_FALSE(scans.groupedNodes.empty())
             << "fragment does not run grouped";
       });
   return *this;
@@ -3443,9 +3450,11 @@ PlanMatcherBuilder& PlanMatcherBuilder::bucketed() {
 PlanMatcherBuilder& PlanMatcherBuilder::notBucketed() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<BucketedAssertionMatcher>(
-      matcher_, [](const axiom::optimizer::ExecutableFragment& fragment) {
-        EXPECT_TRUE(fragment.groupedNodes.empty())
-            << "fragment runs grouped over " << fragment.groupedNodes.size()
+      matcher_,
+      [](const Stage& /*fragment*/,
+         const axiom::optimizer::FragmentScans& scans) {
+        EXPECT_TRUE(scans.groupedNodes.empty())
+            << "fragment runs grouped over " << scans.groupedNodes.size()
             << " nodes";
       });
   return *this;
@@ -3459,7 +3468,9 @@ PlanMatcherBuilder& PlanMatcherBuilder::fragment(FragmentDetails details) {
   }
   matcher_ = std::make_shared<BucketedAssertionMatcher>(
       matcher_,
-      [details](const axiom::optimizer::ExecutableFragment& fragment) {
+      [details](
+          const Stage& fragment,
+          const axiom::optimizer::FragmentScans& fragmentScans) {
         if (details.width.has_value()) {
           ASSERT_TRUE(fragment.numRemotePartitions.has_value())
               << "fragment numRemotePartitions is not set";
@@ -3472,9 +3483,9 @@ PlanMatcherBuilder& PlanMatcherBuilder::fragment(FragmentDetails details) {
         }
         int32_t scans = 0;
         int32_t exchanges = 0;
-        for (const auto& [nodeId, partitionType] : fragment.groupedNodes) {
-          const auto* node = velox::core::PlanNode::findNodeById(
-              fragment.fragment.planNode.get(), nodeId);
+        for (const auto& [nodeId, partitionType] : fragmentScans.groupedNodes) {
+          const auto* node =
+              velox::core::PlanNode::findNodeById(fragment.plan.get(), nodeId);
           ASSERT_TRUE(node != nullptr)
               << "grouped leaf " << nodeId << " is not in this fragment";
           if (partitionType != nullptr) {
@@ -3503,18 +3514,20 @@ PlanMatcherBuilder& PlanMatcherBuilder::fragment(FragmentDetails details) {
   return *this;
 }
 
-PlanMatcherBuilder& PlanMatcherBuilder::output(
-    axiom::optimizer::FragmentType type) {
+PlanMatcherBuilder& PlanMatcherBuilder::output(StageType type) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<BucketedAssertionMatcher>(
-      matcher_, [type](const axiom::optimizer::ExecutableFragment& fragment) {
+      matcher_,
+      [type](
+          const Stage& fragment,
+          const axiom::optimizer::FragmentScans& /*scans*/) {
         EXPECT_EQ(fragment.type, type) << "output fragment type";
       });
   return *this;
 }
 
 bool PlanMatcher::match(const axiom::optimizer::MultiFragmentPlan& plan) const {
-  const auto& fragments = plan.fragments();
+  const auto& fragments = plan.stages();
   EXPECT_FALSE(fragments.empty()) << "MultiFragmentPlan has no fragments";
   if (testing::Test::HasNonfatalFailure()) {
     return false;
@@ -3535,18 +3548,17 @@ bool PlanMatcher::match(const axiom::optimizer::MultiFragmentPlan& plan) const {
   // Build mapping from fragment id to fragment index.
   std::unordered_map<int32_t, int32_t> fragmentIdToIndex;
   for (int32_t i = 0; i < fragments.size(); ++i) {
-    fragmentIdToIndex[fragments[i].fragmentId] = i;
+    fragmentIdToIndex[fragments[i].id] = i;
   }
 
-  // The root fragment is the last one by convention.
-  const auto& rootFragment = fragments.back();
+  const auto& rootFragment = plan.stagePlan().root();
 
   // Set up the distributed match context.
   DistributedMatchContext context{
-      &fragments, &rootFragment, &fragmentIdToIndex};
+      &fragments, &rootFragment, &fragmentIdToIndex, &plan};
 
   // Match the root fragment against the matcher.
-  return this->match(rootFragment.fragment.planNode, {}, &context).match;
+  return this->match(rootFragment.plan, {}, &context).match;
 }
 
 } // namespace facebook::velox::core
