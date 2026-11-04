@@ -21,9 +21,9 @@
 
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "folly/CppAttributes.h"
+#include "velox/connectors/common/PartitionValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveDataSink.h"
-#include "velox/connectors/hive/PartitionValue.h"
 #include "velox/dwio/common/Options.h"
 
 namespace facebook::axiom::connector::hive {
@@ -33,8 +33,8 @@ using PartitionKeyValues =
 
 /// Parsing modes for Hive partition values in the current query.
 struct PartitionValueParsingOptions {
-  velox::connector::hive::PartitionValue::TimestampMode timestampMode;
-  velox::connector::hive::PartitionValue::DateMode dateMode;
+  velox::connector::PartitionValue::TimestampMode timestampMode;
+  velox::connector::PartitionValue::DateMode dateMode;
 };
 
 /// Supplies a compiled partition filter and its engine-owned evaluator.
@@ -216,7 +216,7 @@ class HiveTableLayout : public TableLayout {
   /// Resolves partition-value parsing modes with the same FileConfig accessors
   /// as the file reader.
   static PartitionValueParsingOptions partitionValueParsingOptions(
-      const velox::connector::hive::FileConfig& config,
+      const velox::connector::FileConfig& config,
       const velox::config::ConfigBase* session);
 
   velox::dwio::common::FileFormat fileFormat() const {
