@@ -54,7 +54,6 @@ void QueryTestBase::SetUpTestCase() {
   HiveConnectorTestBase::SetUpTestCase();
   velox::window::prestosql::registerAllWindowFunctions();
 
-  executor_ = std::make_unique<folly::CPUThreadPoolExecutor>(4);
   functionRegistry_ = functions::prestosql::PrestoFunctions::makeRegistry();
   velox::functions::axiom::registerFunctions("axiom_");
   functionRegistry_->registerInternalPrefix("axiom_");
@@ -62,13 +61,14 @@ void QueryTestBase::SetUpTestCase() {
 
 // static
 void QueryTestBase::TearDownTestCase() {
-  executor_.reset();
   functionRegistry_.reset();
   HiveConnectorTestBase::TearDownTestCase();
 }
 
 void QueryTestBase::SetUp() {
   HiveConnectorTestBase::SetUp();
+
+  executor_ = std::make_unique<folly::CPUThreadPoolExecutor>(4);
 
   velox::exec::ExchangeSource::factories().clear();
   velox::exec::ExchangeSource::registerFactory(
@@ -122,6 +122,11 @@ void QueryTestBase::TearDown() {
   }
   queryCtx_.reset();
   connectorContext_.reset();
+  velox::exec::test::waitForAllTasksToBeDeleted();
+  // Exchange callbacks can retain query pools after their Tasks are deleted.
+  // Drain them before the base fixture resets the memory manager.
+  executor_->join();
+  executor_.reset();
   optimizerPool_.reset();
   connector::ConnectorMetadataRegistry::global().erase(kTestConnectorId);
   velox::connector::unregisterConnector(kTestConnectorId);
