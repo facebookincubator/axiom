@@ -1017,6 +1017,15 @@ FROM t outer_table
 WHERE outer_table.a NOT IN (SELECT k FROM t_large)
 GROUP BY outer_table.a
 ----
+-- A semi-project mark remains available beside expressions computed on a
+-- one-row relation below the join.
+SELECT t.a + abs(u.b), t.a IN (SELECT k FROM t_large)
+FROM t CROSS JOIN (SELECT sum(b) AS b FROM t) u
+----
+-- The same outputs remain available to an aggregation.
+SELECT sum(t.a + abs(u.b)), count_if(t.a IN (SELECT k FROM t_large))
+FROM t CROSS JOIN (SELECT sum(b) AS b FROM t) u
+----
 -- A right join with an empty null-supplying side emits every preserved row,
 -- padded with nulls, before the aggregation.
 SELECT preserved.a, missing.y, count(*)
